@@ -36,8 +36,18 @@ type Server struct {
 	local router.LocalRouter
 	peer  router.Router
 
+	// listenerModels maps a listen address to the set of real model IDs it
+	// exposes. Empty when no listeners are configured (single --listen mode).
+	// See listener.go.
+	listenerModels map[string]map[string]bool
+
 	mux     *http.ServeMux
 	handler http.Handler
+
+	// autogen, when set, enables the UI model-config endpoints (cogwheel
+	// override editor + variant creation). nil when the server was not started
+	// with -generate. See configapi.go.
+	autogen *AutogenAdmin
 
 	shutdownCtx  context.Context
 	shutdownFn   context.CancelFunc
@@ -120,18 +130,19 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 
 	shutdownCtx, shutdownFn := context.WithCancel(context.Background())
 	s := &Server{
-		cfg:         cfg,
-		muxlog:      muxlog,
-		proxylog:    proxylog,
-		upstreamlog: upstreamlog,
-		perf:        perfMon,
-		inflight:    &inflightCounter{},
-		metrics:     newMetricsMonitor(proxylog, cfg.MetricsMaxInMemory, cfg.CaptureBuffer),
-		build:       build,
-		local:       local,
-		peer:        peer,
-		shutdownCtx: shutdownCtx,
-		shutdownFn:  shutdownFn,
+		cfg:            cfg,
+		muxlog:         muxlog,
+		proxylog:       proxylog,
+		upstreamlog:    upstreamlog,
+		perf:           perfMon,
+		inflight:       &inflightCounter{},
+		metrics:        newMetricsMonitor(proxylog, cfg.MetricsMaxInMemory, cfg.CaptureBuffer),
+		build:          build,
+		local:          local,
+		peer:           peer,
+		listenerModels: cfg.ListenerModelSets(),
+		shutdownCtx:    shutdownCtx,
+		shutdownFn:     shutdownFn,
 	}
 	s.routes()
 	s.startPreload()
@@ -146,6 +157,14 @@ func (s *Server) localPeerHandler(w http.ResponseWriter, r *http.Request) {
 	data, err := shared.FetchContext(r, s.cfg)
 	if err != nil {
 		shared.SendError(w, r, shared.ErrNoModelInContext)
+		return
+	}
+
+	// Reject models that this listener does not expose. Peer models are not in
+	// any local group, so a restricted listener never routes to them.
+	if models, scoped := listenerModelSet(r); scoped && !models[data.ModelID] {
+		s.proxylog.Debugf("dispatch: model %q not exposed on this listener", data.ModelID)
+		shared.SendResponse(w, r, http.StatusNotFound, fmt.Sprintf("model %q is not available on this listener", data.Model))
 		return
 	}
 
@@ -231,6 +250,14 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/performance", apiChain.ThenFunc(s.handleAPIPerformance))
 	mux.Handle("GET /api/version", apiChain.ThenFunc(s.handleAPIVersion))
 	mux.Handle("GET /api/captures/{id}", apiChain.ThenFunc(s.handleAPICapture))
+
+	// Per-model config editor (cogwheel) — read launch params + effective
+	// override, save curated overrides, reset to autogen default, add named
+	// variants. All no-op with 501 when -generate is not in use (s.autogen nil).
+	mux.Handle("GET /api/models/{model}/config", apiChain.ThenFunc(s.handleAPIModelConfigGet))
+	mux.Handle("PUT /api/models/{model}/override", apiChain.ThenFunc(s.handleAPIModelOverridePut))
+	mux.Handle("DELETE /api/models/{model}/override", apiChain.ThenFunc(s.handleAPIModelOverrideDelete))
+	mux.Handle("PUT /api/models/{model}/variant", apiChain.ThenFunc(s.handleAPIModelVariantPost))
 
 	s.mux = mux
 	s.handler = chain.New(CreateRequestLogMiddleware(s.proxylog), CreateCORSMiddleware()).Then(mux)

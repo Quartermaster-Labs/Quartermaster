@@ -1,0 +1,37 @@
+[Unit]
+Description=llama-quartermaster (llama-swap fork) — model proxy with startup config autogen
+Documentation=https://github.com/mostlygeek/llama-swap
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run as a dedicated unprivileged user (create with: useradd --system --no-create-home llama)
+User=llama
+Group=llama
+WorkingDirectory=/opt/llama-quartermaster
+
+# Edit paths/ports to match the install. -generate makes the proxy build its
+# config from the local GGUF tree on startup (hash-gated, so an unchanged models
+# folder skips the scan). Drop -generate to load a static -config instead.
+ExecStart=/opt/llama-quartermaster/llama-swap \
+  -config /etc/llama-quartermaster/config.yaml \
+  -generate /etc/llama-quartermaster/quartermaster-generate.yaml \
+  -listen 0.0.0.0:1250 \
+  -watch-config
+
+# Autogen scans every GGUF header on first start (tens of seconds for a large
+# models folder); keep the start timeout generous.
+TimeoutStartSec=180
+Restart=on-failure
+RestartSec=5
+
+# Hardening — relax if the models/config live outside the paths below.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/etc/llama-quartermaster
+
+[Install]
+WantedBy=multi-user.target

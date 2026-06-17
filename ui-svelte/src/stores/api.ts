@@ -194,6 +194,82 @@ export async function loadModel(model: string, signal?: AbortSignal): Promise<vo
   }
 }
 
+// ---- Per-model config editor (cogwheel) ----
+
+export interface ModelVariant {
+  name: string;
+  ctx?: number;
+  vramTargetGB?: number;
+  kvK?: string;
+  kvV?: string;
+  spec?: string;
+  reasoningFmt?: string;
+  unlisted?: boolean;
+  aliases?: string[];
+}
+
+export interface ModelOverride {
+  ctx?: number;
+  kvK?: string;
+  kvV?: string;
+  kvInRam?: boolean;
+  spec?: string;
+  reasoningFmt?: string;
+  aliases?: string[];
+  unlisted?: boolean;
+  skip?: boolean;
+  variants?: ModelVariant[];
+}
+
+export interface ModelConfig {
+  id: string;
+  gguf: string;
+  cmd: string;
+  maxCtx: number;
+  isMTP: boolean;
+  hasOverride: boolean;
+  override: ModelOverride | null;
+}
+
+export async function getModelConfig(model: string): Promise<ModelConfig> {
+  const response = await fetch(`/api/models/${encodeURIComponent(model)}/config`);
+  if (!response.ok) {
+    throw new Error(`Failed to load model config: ${response.status} ${await response.text()}`);
+  }
+  return await response.json();
+}
+
+export async function putModelOverride(model: string, override: ModelOverride): Promise<void> {
+  const response = await fetch(`/api/models/${encodeURIComponent(model)}/override`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(override),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to save override: ${response.status} ${await response.text()}`);
+  }
+}
+
+export async function resetModelOverride(model: string): Promise<void> {
+  const response = await fetch(`/api/models/${encodeURIComponent(model)}/override`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to reset override: ${response.status} ${await response.text()}`);
+  }
+}
+
+export async function putModelVariant(model: string, variant: ModelVariant): Promise<void> {
+  const response = await fetch(`/api/models/${encodeURIComponent(model)}/variant`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(variant),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to save variant: ${response.status} ${await response.text()}`);
+  }
+}
+
 export async function getCapture(id: number): Promise<ReqRespCapture | null> {
   try {
     const response = await fetch(`/api/captures/${id}`);

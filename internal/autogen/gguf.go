@@ -1,0 +1,733 @@
+// Package autogen discovers local GGUF models, reads their headers, computes a
+// llama-server load plan (-ngl / --n-cpu-moe / context) from a VRAM budget, and
+// emits a llama-swap config. It is a Go port of the domina-llm-eval PowerShell
+// planner (Read-GgufMetadata / Get-LlamaLoadPlan / Pick-LocalGguf) plus the
+// Generate-Config orchestration. Fork-specific; kept separable for upstreaming.
+package autogen
+
+import (
+	"encoding/binary"
+	"fmt"
+	"io"
+	"math"
+	"os"
+	"strings"
+)
+
+// GGUF metadata value type tags (spec v2/v3).
+const (
+	ggufU8 = iota
+	ggufI8
+	ggufU16
+	ggufI16
+	ggufU32
+	ggufI32
+	ggufF32
+	ggufBool
+	ggufString
+	ggufArray
+	ggufU64
+	ggufI64
+	ggufF64
+)
+
+// isIntType reports whether a value type tag is an integer scalar (the set the
+// PowerShell reader accepted for count/dim keys).
+func isIntType(t uint32) bool {
+	switch t {
+	case ggufU8, ggufI8, ggufU16, ggufI16, ggufU32, ggufI32, ggufU64, ggufI64:
+		return true
+	}
+	return false
+}
+
+// Metadata is the parsed subset of a GGUF header needed for load planning. A
+// zero value for an optional numeric field means "absent in the header"; every
+// downstream consumer guards on > 0, matching the PowerShell $null checks.
+type Metadata struct {
+	Path       string
+	FileSizeGB float64
+
+	Architecture string
+	BlockCount   int64
+	ExpertCount  int64
+	ExpertUsed   int64
+
+	ContextLength   int64
+	EmbeddingLength int64
+	HeadCount       int64
+	HeadCountKv     int64   // representative per-attn-layer KV heads
+	HeadCountKvSum  int64   // KV heads summed over all layers (hybrid-aware)
+	HeadCountKvArr  []int64 // per-layer KV heads (nil = uniform); 0 = no-KV layer
+	AttnLayerCount  int64   // layers with KV (0 = uniform/all layers)
+	KeyLength       int64
+	ValueLength     int64
+
+	RopeScalingType   string // "none"|"linear"|"yarn"|"" (absent)
+	RopeScalingFactor float64
+	RopeOrigCtxLen    int64
+	RopeFreqBase      float64
+
+	SlidingWindow     int64
+	SlidingWinPattern int64
+	KeyLengthSwa      int64
+	ValueLengthSwa    int64
+
+	FullAttnInterval int64 // hybrid SSM: full-attn layer every Nth; 0 = not hybrid
+	SsmInnerSize     int64
+	SsmConvKernel    int64
+	SsmStateSize     int64
+
+	IsMoE bool
+
+	// IsMTP is true when the model carries multi-token-prediction / nextn
+	// layers (gguf key "<arch>.num_nextn_predict_layers" > 0). Only such models
+	// can use --spec-type draft-mtp.
+	IsMTP bool
+
+	// ExpertWeightShare is the fraction of on-disk weight bytes in expert
+	// tensors (*_exps.weight), derived from the tensor section. 0 when not MoE
+	// or the tensor section could not be sized. Replaces the per-arch heuristic.
+	ExpertWeightShare float64
+}
+
+// ggmlTypeSize maps a ggml tensor type to (block size in elements, bytes per
+// block). bytes(tensor) = n_elements / blockElems * blockBytes. Covers the
+// quants seen in local ggufs; unknown types make a tensor unsizable.
+var ggmlTypeSize = map[uint32][2]int64{
+	0:  {1, 4},     // F32
+	1:  {1, 2},     // F16
+	2:  {32, 18},   // Q4_0
+	3:  {32, 20},   // Q4_1
+	6:  {32, 22},   // Q5_0
+	7:  {32, 24},   // Q5_1
+	8:  {32, 34},   // Q8_0
+	9:  {32, 36},   // Q8_1
+	10: {256, 84},  // Q2_K
+	11: {256, 110}, // Q3_K
+	12: {256, 144}, // Q4_K
+	13: {256, 176}, // Q5_K
+	14: {256, 210}, // Q6_K
+	15: {256, 292}, // Q8_K
+	16: {256, 66},  // IQ2_XXS
+	17: {256, 74},  // IQ2_XS
+	18: {256, 98},  // IQ3_XXS
+	19: {256, 50},  // IQ1_S
+	20: {32, 18},   // IQ4_NL
+	21: {256, 110}, // IQ3_S
+	22: {256, 82},  // IQ2_S
+	23: {256, 136}, // IQ4_XS
+	24: {1, 1},     // I8
+	25: {1, 2},     // I16
+	26: {1, 4},     // I32
+	27: {1, 8},     // I64
+	28: {1, 8},     // F64
+	29: {256, 56},  // IQ1_M
+	30: {1, 2},     // BF16
+}
+
+// ggufReader reads little-endian GGUF primitives from a seekable file.
+type ggufReader struct {
+	f   *os.File
+	pos int64
+}
+
+func (r *ggufReader) read(n int64) ([]byte, error) {
+	buf := make([]byte, n)
+	if _, err := io.ReadFull(r.f, buf); err != nil {
+		return nil, err
+	}
+	r.pos += n
+	return buf, nil
+}
+
+func (r *ggufReader) u32() (uint32, error) {
+	b, err := r.read(4)
+	if err != nil {
+		return 0, err
+	}
+	return binary.LittleEndian.Uint32(b), nil
+}
+
+func (r *ggufReader) u64() (uint64, error) {
+	b, err := r.read(8)
+	if err != nil {
+		return 0, err
+	}
+	return binary.LittleEndian.Uint64(b), nil
+}
+
+func (r *ggufReader) seek(delta int64) error {
+	np, err := r.f.Seek(delta, io.SeekCurrent)
+	if err != nil {
+		return err
+	}
+	r.pos = np
+	return nil
+}
+
+// str reads a GGUF string (uint64 length + UTF-8 bytes).
+func (r *ggufReader) str() (string, error) {
+	n, err := r.u64()
+	if err != nil {
+		return "", err
+	}
+	if n > 1<<20 {
+		return "", fmt.Errorf("gguf string length absurd (%d) at offset %d", n, r.pos-8)
+	}
+	b, err := r.read(int64(n))
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// scalarWidth returns the byte width of a fixed-width scalar type, or 0 for
+// variable-width (string) / unknown types.
+func scalarWidth(t uint32) int64 {
+	switch t {
+	case ggufU8, ggufI8, ggufBool:
+		return 1
+	case ggufU16, ggufI16:
+		return 2
+	case ggufU32, ggufI32, ggufF32:
+		return 4
+	case ggufU64, ggufI64, ggufF64:
+		return 8
+	}
+	return 0
+}
+
+// readScalar reads a value of type t as int64 (integers/bool) or float64
+// (f32/f64) or string. Returns an error for array/unknown types.
+func (r *ggufReader) readScalar(t uint32) (i int64, f float64, s string, err error) {
+	switch t {
+	case ggufU8:
+		b, e := r.read(1)
+		return int64(b[0]), 0, "", e
+	case ggufI8:
+		b, e := r.read(1)
+		return int64(int8(b[0])), 0, "", e
+	case ggufU16:
+		b, e := r.read(2)
+		if e != nil {
+			return 0, 0, "", e
+		}
+		return int64(binary.LittleEndian.Uint16(b)), 0, "", nil
+	case ggufI16:
+		b, e := r.read(2)
+		if e != nil {
+			return 0, 0, "", e
+		}
+		return int64(int16(binary.LittleEndian.Uint16(b))), 0, "", nil
+	case ggufU32:
+		v, e := r.u32()
+		return int64(v), 0, "", e
+	case ggufI32:
+		v, e := r.u32()
+		return int64(int32(v)), 0, "", e
+	case ggufF32:
+		b, e := r.read(4)
+		if e != nil {
+			return 0, 0, "", e
+		}
+		return 0, float64(math.Float32frombits(binary.LittleEndian.Uint32(b))), "", nil
+	case ggufBool:
+		b, e := r.read(1)
+		if e != nil {
+			return 0, 0, "", e
+		}
+		if b[0] != 0 {
+			return 1, 0, "", nil
+		}
+		return 0, 0, "", nil
+	case ggufString:
+		s, e := r.str()
+		return 0, 0, s, e
+	case ggufU64:
+		v, e := r.u64()
+		return int64(v), 0, "", e
+	case ggufI64:
+		v, e := r.u64()
+		return int64(v), 0, "", e
+	case ggufF64:
+		b, e := r.read(8)
+		if e != nil {
+			return 0, 0, "", e
+		}
+		return 0, math.Float64frombits(binary.LittleEndian.Uint64(b)), "", nil
+	}
+	return 0, 0, "", fmt.Errorf("scalar requested but type=%d (array or unknown)", t)
+}
+
+// skipValue advances past a value of type t without decoding it. Arrays of
+// fixed-width elements seek past the whole block in one move.
+func (r *ggufReader) skipValue(t uint32) error {
+	if w := scalarWidth(t); w > 0 {
+		return r.seek(w)
+	}
+	switch t {
+	case ggufString:
+		_, err := r.str()
+		return err
+	case ggufArray:
+		elemType, err := r.u32()
+		if err != nil {
+			return err
+		}
+		count, err := r.u64()
+		if err != nil {
+			return err
+		}
+		if w := scalarWidth(elemType); w > 0 {
+			return r.seek(int64(count) * w)
+		}
+		if elemType == ggufString {
+			for i := uint64(0); i < count; i++ {
+				if _, err := r.str(); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		for i := uint64(0); i < count; i++ {
+			if err := r.skipValue(elemType); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("unknown gguf value type=%d at offset %d", t, r.pos-4)
+}
+
+// readIntArray reads a type-9 array of numeric elements into an int64 slice.
+func (r *ggufReader) readIntArray() ([]int64, error) {
+	elemType, err := r.u32()
+	if err != nil {
+		return nil, err
+	}
+	count, err := r.u64()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]int64, 0, count)
+	for i := uint64(0); i < count; i++ {
+		v, _, _, err := r.readScalar(elemType)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// ReadGgufMetadata parses the metadata KV section of a GGUF file. Tensor
+// descriptors are not read, so the work is bounded to the header.
+func ReadGgufMetadata(path string) (Metadata, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return Metadata{}, fmt.Errorf("gguf not found: %s", path)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return Metadata{}, err
+	}
+	defer f.Close()
+
+	r := &ggufReader{f: f}
+	magic, err := r.read(4)
+	if err != nil {
+		return Metadata{}, err
+	}
+	if string(magic) != "GGUF" {
+		return Metadata{}, fmt.Errorf("not a gguf file (magic=%q): %s", string(magic), path)
+	}
+	// version (v2/v3 share this layout); newer minor revisions stay compatible.
+	if _, err := r.u32(); err != nil {
+		return Metadata{}, err
+	}
+	tensorCount, err := r.u64()
+	if err != nil {
+		return Metadata{}, err
+	}
+	kvCount, err := r.u64()
+	if err != nil {
+		return Metadata{}, err
+	}
+
+	// Optional fields tracked via pointers so absence is distinguishable from a
+	// real zero, exactly like the PowerShell $null checks.
+	var arch string
+	var blockCount, expertCount, expertUsed *int64
+	var contextLength, embeddingLength, headCount, headCountKv *int64
+	var headCountKvArr []int64
+	var keyLength, valueLength *int64
+	var ropeScalingType *string
+	var ropeScalingFactor *float64
+	var ropeOrigCtxLen *int64
+	var ropeFreqBase *float64
+	var slidingWindow, slidingWinPattern, keyLengthSwa, valueLengthSwa *int64
+	var fullAttnInterval, ssmInnerSize, ssmConvKernel, ssmStateSize *int64
+	var nextnLayers *int64
+
+	pi := func(v int64) *int64 { return &v }
+	pf := func(v float64) *float64 { return &v }
+	ps := func(v string) *string { return &v }
+
+	for i := uint64(0); i < kvCount; i++ {
+		key, err := r.str()
+		if err != nil {
+			return Metadata{}, err
+		}
+		t, err := r.u32()
+		if err != nil {
+			return Metadata{}, err
+		}
+		matched := false
+
+		if key == "general.architecture" && t == ggufString {
+			_, _, s, err := r.readScalar(t)
+			if err != nil {
+				return Metadata{}, err
+			}
+			arch = s
+			matched = true
+		} else if arch != "" {
+			pfx := arch + "."
+			readInt := func() (int64, error) { v, _, _, err := r.readScalar(t); return v, err }
+			readFloat := func() (float64, error) { _, v, _, err := r.readScalar(t); return v, err }
+			readStr := func() (string, error) { _, _, v, err := r.readScalar(t); return v, err }
+
+			switch {
+			case key == pfx+"block_count" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				blockCount = pi(v)
+				matched = true
+			case key == pfx+"expert_count" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				expertCount = pi(v)
+				matched = true
+			case key == pfx+"expert_used_count" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				expertUsed = pi(v)
+				matched = true
+			case key == pfx+"context_length" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				contextLength = pi(v)
+				matched = true
+			case key == pfx+"embedding_length" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				embeddingLength = pi(v)
+				matched = true
+			case key == pfx+"attention.head_count" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				headCount = pi(v)
+				matched = true
+			case key == pfx+"attention.head_count_kv" && t == ggufArray:
+				arr, err := r.readIntArray()
+				if err != nil {
+					return Metadata{}, err
+				}
+				headCountKvArr = arr
+				matched = true
+			case key == pfx+"attention.head_count_kv" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				headCountKv = pi(v)
+				matched = true
+			case key == pfx+"attention.key_length" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				keyLength = pi(v)
+				matched = true
+			case key == pfx+"attention.value_length" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				valueLength = pi(v)
+				matched = true
+			case key == pfx+"rope.scaling.type" && t == ggufString:
+				v, err := readStr()
+				if err != nil {
+					return Metadata{}, err
+				}
+				ropeScalingType = ps(v)
+				matched = true
+			case key == pfx+"rope.scaling.factor" && (t == ggufF32 || t == ggufF64):
+				v, err := readFloat()
+				if err != nil {
+					return Metadata{}, err
+				}
+				ropeScalingFactor = pf(v)
+				matched = true
+			case key == pfx+"rope.scaling.original_context_length" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				ropeOrigCtxLen = pi(v)
+				matched = true
+			case key == pfx+"rope.freq_base" && (t == ggufF32 || t == ggufF64):
+				v, err := readFloat()
+				if err != nil {
+					return Metadata{}, err
+				}
+				ropeFreqBase = pf(v)
+				matched = true
+			case key == pfx+"attention.sliding_window" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				slidingWindow = pi(v)
+				matched = true
+			case key == pfx+"attention.sliding_window_pattern" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				slidingWinPattern = pi(v)
+				matched = true
+			case key == pfx+"attention.key_length_swa" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				keyLengthSwa = pi(v)
+				matched = true
+			case key == pfx+"attention.value_length_swa" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				valueLengthSwa = pi(v)
+				matched = true
+			case key == pfx+"full_attention_interval" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				fullAttnInterval = pi(v)
+				matched = true
+			case key == pfx+"ssm.inner_size" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				ssmInnerSize = pi(v)
+				matched = true
+			case key == pfx+"ssm.conv_kernel" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				ssmConvKernel = pi(v)
+				matched = true
+			case key == pfx+"ssm.state_size" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				ssmStateSize = pi(v)
+				matched = true
+			case key == pfx+"num_nextn_predict_layers" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				nextnLayers = pi(v)
+				matched = true
+			}
+		}
+
+		if !matched {
+			if err := r.skipValue(t); err != nil {
+				return Metadata{}, err
+			}
+		}
+	}
+
+	// Tensor section: sum on-disk weight bytes of expert tensors vs all tensors
+	// to derive the expert-weight share exactly (replaces the per-arch heuristic).
+	// The reader is now positioned at the first tensor info. Failures leave the
+	// share at 0 so the caller falls back to the arch table.
+	expertShare, _ := readExpertShare(r, tensorCount)
+
+	// Derive per-head dim when key/value_length absent: head_dim =
+	// embedding_length / head_count. K and V share it unless stated.
+	if (keyLength == nil || valueLength == nil) && embeddingLength != nil && headCount != nil && *headCount > 0 {
+		derived := int64(math.Floor(float64(*embeddingLength) / float64(*headCount)))
+		if keyLength == nil {
+			keyLength = pi(derived)
+		}
+		if valueLength == nil {
+			valueLength = pi(derived)
+		}
+	}
+
+	// Hybrid conv+attn archs give head_count_kv as a per-layer array: conv
+	// layers report 0. Sum across layers = total KV heads; non-zero = attn layers.
+	var kvHeadSum *int64
+	var attnLayers *int64
+	if len(headCountKvArr) > 0 {
+		var sum int64
+		var nz int64
+		for _, h := range headCountKvArr {
+			sum += h
+			if h > 0 {
+				nz++
+			}
+		}
+		kvHeadSum = pi(sum)
+		attnLayers = pi(nz)
+		if headCountKv == nil {
+			for _, h := range headCountKvArr {
+				if h > 0 {
+					headCountKv = pi(h)
+					break
+				}
+			}
+		}
+	}
+	// GQA: KV heads default to attention heads when head_count_kv is absent (MHA).
+	if headCountKv == nil {
+		headCountKv = headCount
+	}
+	// Uniform model: layer-summed KV heads = blocks * per-layer KV heads.
+	if kvHeadSum == nil && blockCount != nil && headCountKv != nil {
+		kvHeadSum = pi(*blockCount * *headCountKv)
+	}
+
+	deref := func(p *int64) int64 {
+		if p == nil {
+			return 0
+		}
+		return *p
+	}
+	derefF := func(p *float64) float64 {
+		if p == nil {
+			return 0
+		}
+		return *p
+	}
+	derefS := func(p *string) string {
+		if p == nil {
+			return ""
+		}
+		return *p
+	}
+
+	m := Metadata{
+		Path:              path,
+		FileSizeGB:        round(float64(fi.Size())/gib, 3),
+		Architecture:      arch,
+		BlockCount:        deref(blockCount),
+		ExpertCount:       deref(expertCount),
+		ExpertUsed:        deref(expertUsed),
+		ContextLength:     deref(contextLength),
+		EmbeddingLength:   deref(embeddingLength),
+		HeadCount:         deref(headCount),
+		HeadCountKv:       deref(headCountKv),
+		HeadCountKvSum:    deref(kvHeadSum),
+		HeadCountKvArr:    headCountKvArr,
+		AttnLayerCount:    deref(attnLayers),
+		KeyLength:         deref(keyLength),
+		ValueLength:       deref(valueLength),
+		RopeScalingType:   derefS(ropeScalingType),
+		RopeScalingFactor: derefF(ropeScalingFactor),
+		RopeOrigCtxLen:    deref(ropeOrigCtxLen),
+		RopeFreqBase:      derefF(ropeFreqBase),
+		SlidingWindow:     deref(slidingWindow),
+		SlidingWinPattern: deref(slidingWinPattern),
+		KeyLengthSwa:      deref(keyLengthSwa),
+		ValueLengthSwa:    deref(valueLengthSwa),
+		FullAttnInterval:  deref(fullAttnInterval),
+		SsmInnerSize:      deref(ssmInnerSize),
+		SsmConvKernel:     deref(ssmConvKernel),
+		SsmStateSize:      deref(ssmStateSize),
+		IsMoE:             expertCount != nil && *expertCount > 0,
+		IsMTP:             nextnLayers != nil && *nextnLayers > 0,
+		ExpertWeightShare: expertShare,
+	}
+	return m, nil
+}
+
+// readExpertShare parses the GGUF tensor info section (the reader must be
+// positioned at the first tensor info) and returns the fraction of on-disk
+// weight bytes held by expert tensors (name contains "_exps"). Returns 0 when
+// no expert tensors are found or any tensor uses an unknown ggml type.
+func readExpertShare(r *ggufReader, tensorCount uint64) (float64, error) {
+	var expertBytes, totalBytes int64
+	var sawExpert bool
+	for i := uint64(0); i < tensorCount; i++ {
+		name, err := r.str()
+		if err != nil {
+			return 0, err
+		}
+		nDims, err := r.u32()
+		if err != nil {
+			return 0, err
+		}
+		elems := int64(1)
+		for d := uint32(0); d < nDims; d++ {
+			dim, err := r.u64()
+			if err != nil {
+				return 0, err
+			}
+			elems *= int64(dim)
+		}
+		typ, err := r.u32()
+		if err != nil {
+			return 0, err
+		}
+		if _, err := r.u64(); err != nil { // offset (unused)
+			return 0, err
+		}
+		ts, ok := ggmlTypeSize[typ]
+		if !ok {
+			return 0, fmt.Errorf("unknown ggml type %d for tensor %q", typ, name)
+		}
+		bytes := elems / ts[0] * ts[1]
+		totalBytes += bytes
+		if strings.Contains(name, "_exps") {
+			expertBytes += bytes
+			sawExpert = true
+		}
+	}
+	if !sawExpert || totalBytes <= 0 {
+		return 0, nil
+	}
+	return float64(expertBytes) / float64(totalBytes), nil
+}
+
+const gib = 1024 * 1024 * 1024
+
+// round mirrors PowerShell [math]::Round (banker's rounding is not required for
+// these display/size values; standard half-away rounding matches in practice).
+func round(v float64, places int) float64 {
+	p := math.Pow(10, float64(places))
+	return math.Round(v*p) / p
+}

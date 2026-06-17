@@ -1,0 +1,64 @@
+# Quartermaster autogen control file — Go port of Generate-Config.ps1 params + $Overrides.
+# settings: global tuning knobs (CLI --models-dir overrides settings.modelsRoot).
+# overrides: per-model tweaks gguf metadata can't supply; first match wins.
+settings:
+  modelsRoot: E:/Apps/LLM/Models
+  serverExe: E:/Apps/LLM/llama-cpp/llama-server.exe
+  targetVramGB: 7
+  # autoVram: measure free VRAM at startup and use it as targetVramGB (minus
+  # vramOverheadGB). Forces a regen each boot so the snapshot stays current.
+  # Leave false to use the static targetVramGB above.
+  autoVram: false
+  vramOverheadGB: 1.0
+  gameTargetVramGB: 5.5
+  gameCtxTarget: 16384
+  noGameProfile: false
+  maxRamGB: 24
+  moeCtxTarget: 65536
+  denseCtxLadder: [131072, 65536, 32768]
+  denseMinCtx: 32768
+  threads: 7
+  ttlSec: 600
+  healthCheckTimeout: 300
+  # groups: split emitted models across named groups, each optionally bound to a
+  # separate listen address. Membership is by model-name glob (first match wins,
+  # so list specific groups before a "*" catch-all). Models matching nothing go
+  # to an implicit "default" group (no listener). All groups are exclusive swap
+  # groups, so loading on any port evicts the others (one GPU, VRAM-exclusive).
+  # Omit entirely for one group on one port. Example — variants on a second port:
+  # groups:
+  #   - { name: variants,  listen: 0.0.0.0:1251, match: ["*-game", "*-judge"] }
+  #   - { name: assistant, listen: 0.0.0.0:1250, match: ["*"] }
+
+overrides:
+  - { match: "*-draft-*", skip: true }
+  - { match: "*Qwen3.6-27B-MTP-GGUF*", quant: IQ4_NL, aliases: [qwen3.6-27b-mtp], spec: draft-mtp, ctxVariants: [4096, 32768, 65536] }
+  - { match: "*Qwen3.6-35B-A3B-MTP-GGUF*", quant: IQ4_NL, aliases: [qwen3.6-35b-a3b-mtp], spec: draft-mtp, ctxVariants: [4096, 32768, 65536] }
+  - { match: "*Qwen3.6-27B-GGUF*", quant: Q4_K_M, aliases: [qwen3.6-27b], ctxVariants: [4096, 32768, 65536] }
+  - { match: "*Qwen3.6-35B-A3B-GGUF*", quant: Q4_K_M, aliases: [qwen3.6-35b-a3b], ctxVariants: [4096, 32768, 65536] }
+  - { match: "*Qwen3-30B-A3B-MP-GGUF*", quant: Q4_K_H, aliases: [qwen3-30b-a3b-mp], ctxVariants: [4096, 32768, 65536] }
+  - { match: "*Qwen3-8B-GGUF*", quant: Q6_K, aliases: [qwen3-8b] }
+  - { match: "*Qwen3-4B-Instruct-2507-GGUF*", quant: Q6_K, aliases: [qwen3-4b-instruct] }
+  - { match: "*Qwen3-4B-Thinking-2507-GGUF*", quant: Q8_0, aliases: [qwen3-4b-thinking] }
+  - { match: "*p-e-w_Qwen3-4B-Instruct-2507-heretic-GGUF*", quant: Q6_K_L, aliases: [qwen3-4b-heretic] }
+  - { match: "*Qwen3.5-4B-GGUF*", quant: Q6_K, aliases: [qwen3.5-4b] }
+  - { match: "*Qwen3.5-9B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF*", quant: Q4_K_M, aliases: [qwen3.5-9b-opus-distill], ctxVariants: [32768, 65536, 131072], reasoningFmt: auto }
+  - { match: "*Qwen3.5-9B-MTP-GGUF*", quant: IQ4_NL, aliases: [qwen3.5-9b-mtp], spec: draft-mtp, ctxVariants: [32768, 65536, 131072], reasoningFmt: auto }
+  - { match: "*Qwen3.5-9B-GGUF*", aliases: [qwen3.5-9b], ctxVariants: [32768, 65536, 131072], reasoningFmt: auto }
+  - { match: "*DeepSeek-R1-0528-Qwen3-8B-GGUF*", quant: Q4_K_M, aliases: [deepseek-r1-qwen3-8b] }
+  - { match: "*Qwen3-Coder-30B-A3B-Instruct-GGUF*", quant: Q4_K_S, aliases: [qwen3-coder-30b-a3b] }
+  - { match: "*gemma-4-E2B-it-GGUF*", quant: Q6_K, aliases: [gemma-4-e2b-it] }
+  - { match: "*Gemma-4-E2B-Uncensored-HauhauCS-Aggressive*", quant: Q4_K_P, aliases: [gemma-4-e2b-uncensored] }
+  - { match: "*gemma-4-E4B-it-GGUF*", quant: Q6_K, aliases: [gemma-4-e4b-it] }
+  - { match: "*gemma-4-E4B-Agentic-Opus-Reasoning-GeminiCLI-GGUF*", quant: Q4_K_M, aliases: [gemma-4-e4b-agentic] }
+  - { match: "*gemma-4-E4B-it-heretic-QAT-GGUF*", quant: Q4_K_XL, aliases: [gemma-4-e4b-heretic] }
+  - { match: "*gemma-4-12B-it-QAT-GGUF*", quant: Q4_K_XL, aliases: [gemma-4-12b-qat], reasoningFmt: auto, ctxVariants: [4096, 32768, 65536, 131072] }
+  - { match: "*gemma-4-26B-A4B-it-GGUF*", quant: IQ4_NL, aliases: [gemma-4-26b-a4b], reasoningFmt: auto, ctxVariants: [4096, 32768, 65536] }
+  - { match: "*Hermes-3-Llama-3.1-8B-GGUF*", quant: Q4_K_M, aliases: [hermes-3-llama-3.1-8b] }
+  - { match: "*L3-8B-Stheno-v3.2-GGUF-IQ-Imatrix*", quant: Q4_K_M, aliases: [l3-8b-stheno] }
+  - { match: "*Mistral-Nemo-12B-ArliAI-RPMax-v1.1-GGUF*", quant: Q4_K_S, aliases: [mistral-nemo-12b-rpmax] }
+  - { match: "*mistralai_Ministral-3-14B-Reasoning-2512-GGUF*", quant: IQ4_NL, aliases: [ministral-3-14b-reasoning], reasoningFmt: auto, ctxVariants: [32768, 65536, 131072] }
+  - { match: "*mistralai_Ministral-3-14B-Instruct-2512-GGUF*", quant: IQ4_NL, aliases: [ministral-3-14b-instruct], ctxVariants: [4096, 32768, 65536, 131072] }
+  - { match: "*Ministral-3-3B-Instruct-2512-GGUF*", quant: Q6_K, aliases: [ministral-3-3b] }
+  - { match: "*mistralai_Devstral-Small-2-24B-Instruct-2512-GGUF*", quant: IQ4_NL, aliases: [devstral-small-2-24b], ctxVariants: [32768, 65536, 131072] }
+  - { match: "*LFM2.5-8B-A1B-Uncensored-Gaston-GGUF*", quant: Q4_K_M, aliases: [lfm2.5-8b-a1b] }

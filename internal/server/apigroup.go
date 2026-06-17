@@ -25,6 +25,9 @@ type apiModel struct {
 	PeerID       string         `json:"peerID"`
 	Aliases      []string       `json:"aliases,omitempty"`
 	Capabilities map[string]any `json:"capabilities,omitempty"`
+	// Family is the gguf path shared by a model's variants (ctx tiers, game,
+	// judge); the UI groups rows by it. Empty when the cmd has no model path.
+	Family string `json:"family,omitempty"`
 }
 
 // modelStatus returns every configured model joined with its current process
@@ -54,6 +57,7 @@ func (s *Server) modelStatus() []apiModel {
 			Unlisted:     mc.Unlisted,
 			Aliases:      mc.Aliases,
 			Capabilities: capsMap,
+			Family:       modelFamily(mc.Cmd),
 		})
 	}
 

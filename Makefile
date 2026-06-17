@@ -60,6 +60,25 @@ windows: ui
 	@echo "Building Windows binary..."
 	GOOS=windows GOARCH=amd64 go build -ldflags="-X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE}" -o $(BUILD_DIR)/$(APP_NAME)-windows-amd64.exe
 
+# Assemble a runnable Windows folder + zip (binary, configs, launcher, service files).
+# NOTE: llama-server.exe (llama.cpp) and GGUF models are NOT bundled — separate
+# projects/licensing. Edit quartermaster-generate.yaml (modelsRoot, serverExe) before use.
+PKG_WIN_DIR = $(BUILD_DIR)/llama-quartermaster-windows
+package-windows: windows
+	@echo "Packaging Windows bundle..."
+	rm -rf $(PKG_WIN_DIR)
+	mkdir -p $(PKG_WIN_DIR)
+	cp $(BUILD_DIR)/$(APP_NAME)-windows-amd64.exe $(PKG_WIN_DIR)/
+	cp quartermaster-generate.yaml $(PKG_WIN_DIR)/
+	cp config.example.yaml $(PKG_WIN_DIR)/config.example.yaml
+	cp packaging/windows/start.cmd $(PKG_WIN_DIR)/start.cmd
+	cp -r packaging $(PKG_WIN_DIR)/packaging
+	@echo "$(APP_NAME) $(GIT_HASH) built $(BUILD_DATE)" > $(PKG_WIN_DIR)/VERSION.txt
+	cd $(BUILD_DIR) && ( zip -qr llama-quartermaster-windows.zip llama-quartermaster-windows \
+		|| tar -a -c -f llama-quartermaster-windows.zip llama-quartermaster-windows \
+		|| echo "WARN: no zip/tar found — folder left unarchived at $(PKG_WIN_DIR)" )
+	@echo "Done: $(PKG_WIN_DIR)  (+ $(BUILD_DIR)/llama-quartermaster-windows.zip)"
+
 # for testing with real external processes
 simple-responder:
 	@echo "Building simple responder"
@@ -98,5 +117,5 @@ test-ui:
 	cd ui-svelte && npm ci && npm run check && npm test
 
 # Phony targets
-.PHONY: all clean ui mac windows simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy
+.PHONY: all clean ui mac windows package-windows simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy
 .PHONE: linux linux-arm64 linux-amd64

@@ -163,6 +163,13 @@ type Config struct {
 
 	// support remote peers, see issue #433, #296
 	Peers PeerDictionaryConfig `yaml:"peers"`
+
+	// Listeners maps a listen address (e.g. ":1250") to the set of groups it
+	// exposes. When non-empty, llama-swap binds one HTTP server per address,
+	// all sharing the single router/scheduler, and each address's catalog and
+	// request routing are restricted to the models of its groups. Empty =>
+	// legacy single --listen behaviour. See internal/config/listeners.go.
+	Listeners map[string]ListenerConfig `yaml:"listeners"` /* key is listen address */
 }
 
 // RoutingConfig is the canonical, normalized routing/scheduling configuration.
@@ -634,6 +641,10 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 			}
 		}
 		config.Peers[peerName] = peerConfig
+	}
+
+	if err := config.validateListeners(); err != nil {
+		return Config{}, err
 	}
 
 	return config, nil

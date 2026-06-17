@@ -1,0 +1,35 @@
+# Throwaway config to verify the multi-listener feature.
+# Catalog + gating checks need NO GPU / real upstream (they happen before spawn).
+# For the eviction check, swap the dummy `cmd`s below for your real eval
+# llama-server commands, then follow step 4.
+
+healthCheckTimeout: 15
+
+models:
+  assistant-a:
+    # dummy cmd — never spawned by the catalog/gating checks
+    cmd: cmd /c "echo assistant-a && pause"
+    proxy: "http://127.0.0.1:9401"
+  assistant-b:
+    cmd: cmd /c "echo assistant-b && pause"
+    proxy: "http://127.0.0.1:9402"
+  game-a:
+    cmd: cmd /c "echo game-a && pause"
+    proxy: "http://127.0.0.1:9403"
+  judge-a:
+    cmd: cmd /c "echo judge-a && pause"
+    proxy: "http://127.0.0.1:9404"
+
+groups:
+  assistant:
+    members: ["assistant-a", "assistant-b"]
+  game:
+    members: ["game-a"]
+  judge:
+    members: ["judge-a"]
+
+listeners:
+  ":1250":
+    groups: ["assistant"]
+  ":1251":
+    groups: ["game", "judge"]

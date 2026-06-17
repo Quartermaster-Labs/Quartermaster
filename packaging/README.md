@@ -1,0 +1,71 @@
+# Running llama-quartermaster as a service
+
+The proxy is a plain console binary. Linux uses a native systemd unit; Windows
+needs a tiny wrapper (NSSM or WinSW) because the binary has no SCM handler.
+
+All examples use `-generate`, which builds the config from the local GGUF tree on
+startup (hash-gated — an unchanged models folder skips the scan). Drop `-generate`
+to load a static `-config` instead.
+
+## Linux (systemd)
+
+```sh
+# 1. Build + place the binary
+make build                                  # or: go build -o llama-swap .
+sudo install -D -m755 build/llama-swap-linux-amd64 /opt/llama-quartermaster/llama-swap
+
+# 2. Config dir + control file
+sudo mkdir -p /etc/llama-quartermaster
+sudo cp quartermaster-generate.yaml /etc/llama-quartermaster/
+
+# 3. Dedicated user
+sudo useradd --system --no-create-home llama || true
+
+# 4. Install + enable the unit (edit paths/ports/models root first)
+sudo cp packaging/systemd/llama-quartermaster.service /etc/systemd/system/
+sudoedit /etc/systemd/system/llama-quartermaster.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now llama-quartermaster
+
+# Logs / status
+systemctl status llama-quartermaster
+journalctl -u llama-quartermaster -f
+```
+
+Set the models root in `quartermaster-generate.yaml` (`settings.modelsRoot`) or
+pass `-models-dir` in `ExecStart`. The unit's `TimeoutStartSec=180` covers the
+first-start GGUF scan.
+
+## Windows
+
+Pick one wrapper.
+
+### Option A — NSSM (script provided)
+
+```powershell
+# Elevated PowerShell. nssm must be on PATH (https://nssm.cc).
+.\packaging\windows\install-service.ps1 `
+  -ExePath  C:\llama-qm\llama-swap-windows-amd64.exe `
+  -Config   C:\llama-qm\config.yaml `
+  -Generate C:\llama-qm\quartermaster-generate.yaml `
+  -Listen   0.0.0.0:1250
+
+# Remove
+.\packaging\windows\install-service.ps1 -Uninstall
+```
+
+### Option B — WinSW (no PATH dependency)
+
+1. Download `WinSW-x64.exe` from https://github.com/winsw/winsw/releases.
+2. Rename it `llama-quartermaster-service.exe`; put it next to the proxy binary
+   and `packaging/windows/llama-quartermaster-service.xml`.
+3. Edit the xml's `<arguments>` (ports/paths), then from an elevated prompt:
+
+```powershell
+.\llama-quartermaster-service.exe install
+.\llama-quartermaster-service.exe start
+# Uninstall: .\llama-quartermaster-service.exe stop ; .\llama-quartermaster-service.exe uninstall
+```
+
+Both wrappers set the service to auto-start and capture stdout/stderr to log
+files beside the binary.

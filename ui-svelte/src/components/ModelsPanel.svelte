@@ -3,14 +3,36 @@
   import { isNarrow } from "../stores/theme";
   import { persistentStore } from "../stores/persistent";
   import type { Model } from "../lib/types";
+  import ModelConfigModal from "./ModelConfigModal.svelte";
 
   let isUnloading = $state(false);
   let menuOpen = $state(false);
   let pendingLoads = $state<Record<string, boolean>>({});
   const loadControllers = new Map<string, AbortController>();
 
+  // Per-model config editor (cogwheel) state.
+  let configModelId = $state<string | null>(null);
+  let configOpen = $state(false);
+  function openConfig(id: string): void {
+    configModelId = id;
+    configOpen = true;
+  }
+  function closeConfig(): void {
+    configOpen = false;
+  }
+
   const showUnlistedStore = persistentStore<boolean>("showUnlisted", true);
   const showIdorNameStore = persistentStore<"id" | "name">("showIdorName", "id");
+
+  // A variant group: models sharing one gguf (family). primary is the base
+  // entry (shortest id, i.e. no ctx/game/judge suffix); variants are the rest.
+  type ModelGroup = { key: string; primary: Model; variants: Model[] };
+
+  // Per-family expand/collapse state (collapsed by default).
+  let expandedFamilies = $state<Record<string, boolean>>({});
+  function toggleFamily(key: string): void {
+    expandedFamilies[key] = !expandedFamilies[key];
+  }
 
   let filteredModels = $derived.by(() => {
     const filtered = $models.filter((model) => $showUnlistedStore || !model.unlisted);
@@ -27,11 +49,47 @@
       {} as Record<string, Model[]>
     );
 
+    // Group local models by gguf family. A family with a single member stays a
+    // standalone row; 2+ members collapse under the base (shortest-id) entry.
+    const byFamily = new Map<string, Model[]>();
+    const standalone: Model[] = [];
+    for (const m of filtered.filter((x) => !x.peerID)) {
+      if (!m.family) {
+        standalone.push(m);
+        continue;
+      }
+      const arr = byFamily.get(m.family) ?? [];
+      arr.push(m);
+      byFamily.set(m.family, arr);
+    }
+
+    const groups: ModelGroup[] = [];
+    for (const [key, members] of byFamily) {
+      if (members.length === 1) {
+        standalone.push(members[0]);
+        continue;
+      }
+      const sorted = [...members].sort((a, b) => a.id.length - b.id.length || a.id.localeCompare(b.id));
+      groups.push({
+        key,
+        primary: sorted[0],
+        variants: sorted.slice(1).sort((a, b) => a.id.localeCompare(b.id)),
+      });
+    }
+    groups.sort((a, b) => a.primary.id.localeCompare(b.primary.id));
+    standalone.sort((a, b) => a.id.localeCompare(b.id));
+
     return {
-      regularModels: filtered.filter((m) => !m.peerID),
+      groups,
+      standaloneModels: standalone,
       peerModelsByPeerId: grouped,
     };
   });
+
+  // Count of a group's variants (incl. primary) that are not stopped.
+  function activeCount(group: ModelGroup): number {
+    return [group.primary, ...group.variants].filter((m) => m.state !== "stopped").length;
+  }
 
   async function handleUnloadAllModels(): Promise<void> {
     isUnloading = true;
@@ -71,8 +129,18 @@
     showUnlistedStore.update((prev) => !prev);
   }
 
+  // prettify turns a raw model id/name into a display label: dashes become
+  // spaces and each word is capitalized ("gemma-4-12b-it" -> "Gemma 4 12b It").
+  // Cosmetic only — model.id is still used for links and load/unload calls.
+  function prettify(s: string): string {
+    return s
+      .split("-")
+      .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+      .join(" ");
+  }
+
   function getModelDisplay(model: Model): string {
-    return $showIdorNameStore === "id" ? model.id : (model.name || model.id);
+    return prettify($showIdorNameStore === "id" ? model.id : (model.name || model.id));
   }
 </script>
 
@@ -167,46 +235,104 @@
     {/if}
   </div>
 
+  {#snippet modelRow(model: Model, group: ModelGroup | null, variant: boolean)}
+    <tr class="border-b hover:bg-secondary-hover border-gray-200">
+      <td class="{variant ? 'pl-8 ' : ''}{model.unlisted ? 'text-txtsecondary' : ''}">
+        <div class="flex items-center gap-2">
+          {#if group}
+            <button
+              class="text-txtsecondary hover:text-txt"
+              onclick={() => toggleFamily(group.key)}
+              aria-label="Toggle variants"
+              aria-expanded={!!expandedFamilies[group.key]}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 20 20"
+                fill="currentColor"
+                class="w-4 h-4 transition-transform {expandedFamilies[group.key] ? 'rotate-90' : ''}"
+              >
+                <path
+                  fill-rule="evenodd"
+                  d="M7.21 14.77a.75.75 0 0 1 .02-1.06L11.168 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06-.02Z"
+                  clip-rule="evenodd"
+                />
+              </svg>
+            </button>
+          {/if}
+          <a href="/upstream/{model.id}/" class="font-semibold" target="_blank">
+            {getModelDisplay(model)}
+          </a>
+          {#if group}
+            <button class="text-xs text-txtsecondary hover:underline" onclick={() => toggleFamily(group.key)}>
+              {group.variants.length + 1} variants
+            </button>
+            {#if activeCount(group) > 0}
+              <span class="text-xs status status--ready px-1.5">{activeCount(group)} on</span>
+            {/if}
+          {/if}
+        </div>
+        {#if model.description}
+          <p class={model.unlisted ? "text-opacity-70" : ""}><em>{model.description}</em></p>
+        {/if}
+        {#if model.aliases && model.aliases.length > 0}
+          <p class="text-xs text-txtsecondary">Aliases: {model.aliases.join(", ")}</p>
+        {/if}
+      </td>
+      <td class="w-10 align-middle text-center">
+        {#if !variant}
+          <button
+            class="inline-flex items-center justify-center p-1.5 rounded-md border border-card-border text-txtsecondary hover:text-txtmain hover:bg-background transition-colors"
+            onclick={() => openConfig(model.id)}
+            aria-label="Edit model parameters"
+            title="Edit parameters / create variant"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+              <path fill-rule="evenodd" d="M8.34 1.804A1 1 0 0 1 9.32 1h1.36a1 1 0 0 1 .98.804l.295 1.473c.497.144.97.342 1.41.587l1.25-.834a1 1 0 0 1 1.262.125l.962.962a1 1 0 0 1 .125 1.262l-.834 1.25c.245.44.443.913.587 1.41l1.473.294a1 1 0 0 1 .804.98v1.361a1 1 0 0 1-.804.98l-1.473.295a6.95 6.95 0 0 1-.587 1.41l.834 1.25a1 1 0 0 1-.125 1.262l-.962.962a1 1 0 0 1-1.262.125l-1.25-.834c-.44.245-.913.443-1.41.587l-.294 1.473a1 1 0 0 1-.98.804H9.32a1 1 0 0 1-.98-.804l-.295-1.473a6.95 6.95 0 0 1-1.41-.587l-1.25.834a1 1 0 0 1-1.262-.125l-.962-.962a1 1 0 0 1-.125-1.262l.834-1.25a6.95 6.95 0 0 1-.587-1.41l-1.473-.294A1 1 0 0 1 1 10.68V9.32a1 1 0 0 1 .804-.98l1.473-.295c.144-.497.342-.97.587-1.41l-.834-1.25a1 1 0 0 1 .125-1.262l.962-.962A1 1 0 0 1 5.38 3.03l1.25.834c.44-.245.913-.443 1.41-.587l.294-1.473ZM10 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" clip-rule="evenodd" />
+            </svg>
+          </button>
+        {/if}
+      </td>
+      <td class="w-12 align-middle">
+        {#if model.state === "stopped" && pendingLoads[model.id]}
+          <button class="btn btn--sm" onclick={() => cancelLoad(model.id)}>Cancel</button>
+        {:else if model.state === "stopped"}
+          <button class="btn btn--sm" onclick={() => handleLoadModel(model.id)}>Load</button>
+        {:else}
+          <button class="btn btn--sm" onclick={() => unloadSingleModel(model.id)} disabled={model.state !== "ready"}>Unload</button>
+        {/if}
+      </td>
+      <td class="w-20">
+        {#if model.state === "stopped" && pendingLoads[model.id]}
+          <span class="w-16 text-center status status--queued">queued</span>
+        {:else}
+          <span class="w-16 text-center status status--{model.state}">{model.state}</span>
+        {/if}
+      </td>
+    </tr>
+  {/snippet}
+
   <div class="flex-1 overflow-y-auto">
     <table class="w-full">
       <thead class="sticky top-0 bg-card z-10">
         <tr class="text-left border-b border-gray-200 dark:border-white/10 bg-surface">
           <th>{$showIdorNameStore === "id" ? "Model ID" : "Name"}</th>
           <th></th>
+          <th></th>
           <th>State</th>
         </tr>
       </thead>
       <tbody>
-        {#each filteredModels.regularModels as model (model.id)}
-          <tr class="border-b hover:bg-secondary-hover border-gray-200">
-            <td class={model.unlisted ? "text-txtsecondary" : ""}>
-              <a href="/upstream/{model.id}/" class="font-semibold" target="_blank">
-                {getModelDisplay(model)}
-              </a>
-              {#if model.description}
-                <p class={model.unlisted ? "text-opacity-70" : ""}><em>{model.description}</em></p>
-              {/if}
-              {#if model.aliases && model.aliases.length > 0}
-                <p class="text-xs text-txtsecondary">Aliases: {model.aliases.join(", ")}</p>
-              {/if}
-            </td>
-            <td class="w-12">
-              {#if model.state === "stopped" && pendingLoads[model.id]}
-                <button class="btn btn--sm" onclick={() => cancelLoad(model.id)}>Cancel</button>
-              {:else if model.state === "stopped"}
-                <button class="btn btn--sm" onclick={() => handleLoadModel(model.id)}>Load</button>
-              {:else}
-                <button class="btn btn--sm" onclick={() => unloadSingleModel(model.id)} disabled={model.state !== "ready"}>Unload</button>
-              {/if}
-            </td>
-            <td class="w-20">
-              {#if model.state === "stopped" && pendingLoads[model.id]}
-                <span class="w-16 text-center status status--queued">queued</span>
-              {:else}
-                <span class="w-16 text-center status status--{model.state}">{model.state}</span>
-              {/if}
-            </td>
-          </tr>
+        {#each filteredModels.standaloneModels as model (model.id)}
+          {@render modelRow(model, null, false)}
+        {/each}
+        {#each filteredModels.groups as group (group.key)}
+          {@render modelRow(group.primary, group, false)}
+          {#if expandedFamilies[group.key]}
+            {#each group.variants as model (model.id)}
+              {@render modelRow(model, null, true)}
+            {/each}
+          {/if}
         {/each}
       </tbody>
     </table>
@@ -236,3 +362,5 @@
     {/if}
   </div>
 </div>
+
+<ModelConfigModal modelId={configModelId} open={configOpen} onclose={closeConfig} />

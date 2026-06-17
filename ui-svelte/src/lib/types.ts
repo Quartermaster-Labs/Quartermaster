@@ -21,6 +21,9 @@ export interface Model {
   peerID: string;
   aliases?: string[];
   capabilities?: ModelCapabilities;
+  // Gguf path shared by a model's variants (ctx tiers, game, judge). Rows with
+  // the same family are collapsed into one group. Empty => ungrouped.
+  family?: string;
 }
 
 export interface TokenMetrics {

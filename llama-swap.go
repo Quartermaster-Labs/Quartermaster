@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mostlygeek/llama-swap/internal/autogen"
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/event"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
@@ -61,6 +62,8 @@ func main() {
 	flagKeyFile := flag.String("tls-key-file", "", "TLS key file")
 	flagVersion := flag.Bool("version", false, "show version and exit")
 	flagWatchConfig := flag.Bool("watch-config", false, "reload config on file change")
+	flagGenerate := flag.String("generate", "", "path to autogen control file (settings + overrides); generates -config from local GGUFs on startup (hash-gated)")
+	flagModelsDir := flag.String("models-dir", "", "models root for -generate (overrides settings.modelsRoot)")
 	flag.Parse()
 
 	if *flagVersion {
@@ -89,6 +92,17 @@ func main() {
 	}
 
 	configPath := *flagConfig
+
+	// Autogen: when -generate is set, (re)generate -config from the local GGUF
+	// tree before loading. Hash-gated, so an unchanged models folder + control
+	// file skips the scan. -config is the output path here.
+	if *flagGenerate != "" {
+		if _, err := autogen.EnsureConfig(*flagGenerate, configPath, *flagModelsDir, func(m string) { slog.Info(m) }); err != nil {
+			slog.Error("autogen failed", "error", err)
+			os.Exit(1)
+		}
+	}
+
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
 		slog.Error("failed to load config", "path", configPath, "error", err)
@@ -156,15 +170,40 @@ func main() {
 	var activeMu sync.RWMutex
 	activeSrv := initialSrv
 
-	httpServer := &http.Server{
-		Addr: listenAddr,
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			activeMu.RLock()
-			srv := activeSrv
-			activeMu.RUnlock()
-			srv.ServeHTTP(w, r)
-		}),
+	// listenAddrs is the set of addresses to bind. When the config declares a
+	// `listeners:` block we bind one server per address, all sharing the single
+	// activeSrv (and therefore one router/scheduler) — the invariant that keeps
+	// cross-listener VRAM accounting and eviction correct. Otherwise we fall
+	// back to the single --listen address.
+	var listenAddrs []string
+	if len(cfg.Listeners) > 0 {
+		if *flagListen != "" {
+			proxyLog.Warn("ignoring --listen because the config file declares a 'listeners' block")
+		}
+		listenAddrs = cfg.ListenerAddrs()
+	} else {
+		listenAddrs = []string{listenAddr}
 	}
+
+	httpServers := make([]*http.Server, 0, len(listenAddrs))
+	for _, addr := range listenAddrs {
+		addr := addr
+		httpServers = append(httpServers, &http.Server{
+			Addr: addr,
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				activeMu.RLock()
+				srv := activeSrv
+				activeMu.RUnlock()
+				srv.ServeListener(addr, w, r)
+			}),
+		})
+	}
+
+	// autogenAdmin enables the UI per-model config editor endpoints. Declared
+	// before reload so the closure can re-attach it to each rebuilt server;
+	// constructed after reload (it captures the reload func). nil unless
+	// -generate is in use.
+	var autogenAdmin *server.AutogenAdmin
 
 	// reload guards against overlapping reloads triggered by concurrent signals
 	// or file-watcher callbacks.
@@ -207,6 +246,10 @@ func main() {
 			return
 		}
 
+		if autogenAdmin != nil {
+			newSrv.SetAutogenAdmin(autogenAdmin)
+		}
+
 		activeMu.Lock()
 		old := activeSrv
 		activeSrv = newSrv
@@ -224,6 +267,19 @@ func main() {
 		})
 
 		proxyLog.Info("configuration reloaded")
+	}
+
+	// Enable the UI model-config editor only when generating from a control
+	// file: it edits the sidecar next to -generate, regenerates -config, and
+	// hot-reloads via the closure above.
+	if *flagGenerate != "" {
+		autogenAdmin = &server.AutogenAdmin{
+			GeneratePath: *flagGenerate,
+			ConfigPath:   configPath,
+			ModelsDir:    *flagModelsDir,
+			Reload:       reload,
+		}
+		initialSrv.SetAutogenAdmin(autogenAdmin)
 	}
 
 	watcherCtx, watcherCancel := context.WithCancel(context.Background())
@@ -248,24 +304,27 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
-	go func() {
-		var startErr error
-		if useTLS {
-			proxyLog.Infof("llama-swap listening with TLS on https://%s", listenAddr)
-			startErr = httpServer.ListenAndServeTLS(*flagCertFile, *flagKeyFile)
-		} else {
-			proxyLog.Infof("llama-swap listening on http://%s", listenAddr)
-			startErr = httpServer.ListenAndServe()
-		}
-		if startErr != nil && !errors.Is(startErr, http.ErrServerClosed) {
-			slog.Error("http server error", "error", startErr)
-			os.Exit(1)
-		}
-	}()
+	for _, hs := range httpServers {
+		hs := hs
+		go func() {
+			var startErr error
+			if useTLS {
+				proxyLog.Infof("llama-swap listening with TLS on https://%s", hs.Addr)
+				startErr = hs.ListenAndServeTLS(*flagCertFile, *flagKeyFile)
+			} else {
+				proxyLog.Infof("llama-swap listening on http://%s", hs.Addr)
+				startErr = hs.ListenAndServe()
+			}
+			if startErr != nil && !errors.Is(startErr, http.ErrServerClosed) {
+				slog.Error("http server error", "addr", hs.Addr, "error", startErr)
+				os.Exit(1)
+			}
+		}()
 
-	if !shared.IsLoopbackAddr(listenAddr) {
-		_, port, _ := net.SplitHostPort(listenAddr)
-		proxyLog.Infof("llama-swap is reachable by all hosts on the network, use -listen localhost:%s to restrict to loopback only", port)
+		if !shared.IsLoopbackAddr(hs.Addr) {
+			_, port, _ := net.SplitHostPort(hs.Addr)
+			proxyLog.Infof("llama-swap is reachable by all hosts on the network, use loopback (e.g. localhost:%s) to restrict to this host only", port)
+		}
 	}
 
 	exitChan := make(chan struct{})
@@ -304,9 +363,17 @@ func main() {
 				deadline := time.Now().Add(shutdownTimeout)
 				shutdownCtx, cancel := context.WithDeadline(context.Background(), deadline)
 				defer cancel()
-				if err := httpServer.Shutdown(shutdownCtx); err != nil {
-					proxyLog.Warnf("http server shutdown error: %v", err)
+				var hsWG sync.WaitGroup
+				for _, hs := range httpServers {
+					hsWG.Add(1)
+					go func(hs *http.Server) {
+						defer hsWG.Done()
+						if err := hs.Shutdown(shutdownCtx); err != nil {
+							proxyLog.Warnf("http server (%s) shutdown error: %v", hs.Addr, err)
+						}
+					}(hs)
 				}
+				hsWG.Wait()
 
 				// Clamp the remaining budget to a small positive value: a
 				// non-positive timeout makes the router fall back to its own

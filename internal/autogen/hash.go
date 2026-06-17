@@ -1,0 +1,134 @@
+package autogen
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+// hashCacheSuffix is appended to the output config path to store the digest of
+// the inputs that produced it.
+const hashCacheSuffix = ".modelhash"
+
+// InputsHash digests everything that can change the generated config: the set of
+// gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the
+// generate control file. A stable hash means a regen would produce the same
+// config, so it can be skipped.
+func InputsHash(modelsRoot string, generateFileBytes []byte) (string, error) {
+	type entry struct {
+		rel   string
+		size  int64
+		mtime int64
+	}
+	var entries []entry
+	if strings.TrimSpace(modelsRoot) != "" {
+		err := filepath.WalkDir(modelsRoot, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if d.IsDir() || !strings.EqualFold(filepath.Ext(path), ".gguf") {
+				return nil
+			}
+			fi, e := d.Info()
+			if e != nil {
+				return nil
+			}
+			rel, e := filepath.Rel(modelsRoot, path)
+			if e != nil {
+				rel = path
+			}
+			entries = append(entries, entry{filepath.ToSlash(rel), fi.Size(), fi.ModTime().UnixNano()})
+			return nil
+		})
+		if err != nil {
+			return "", err
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].rel < entries[j].rel })
+
+	h := sha256.New()
+	for _, e := range entries {
+		fmt.Fprintf(h, "%s\x00%d\x00%d\n", e.rel, e.size, e.mtime)
+	}
+	h.Write([]byte("\x00generate\x00"))
+	h.Write(generateFileBytes)
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// readHashCache returns the stored inputs hash, or "" when absent/unreadable.
+func readHashCache(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// EnsureConfig generates outConfigPath from the generate control file when the
+// inputs changed (or the config is missing), and skips regeneration otherwise.
+// modelsDirOverride (from --models-dir) wins over the file's settings.modelsRoot.
+// logf receives one human-readable status line. Returns whether a regen ran.
+func EnsureConfig(generatePath, outConfigPath, modelsDirOverride string, logf func(string)) (regenerated bool, err error) {
+	rawGenerate, err := os.ReadFile(generatePath)
+	if err != nil {
+		return false, fmt.Errorf("reading generate file: %w", err)
+	}
+	gf, err := LoadGenerateFile(generatePath, modelsDirOverride)
+	if err != nil {
+		return false, err
+	}
+
+	// The hash covers the resolved modelsRoot too, so a --models-dir change
+	// triggers a regen even when the file is unchanged. It also folds in the
+	// UI-owned sidecar so editing an override there forces a regen.
+	sidecarBytes, _ := os.ReadFile(SidecarPath(generatePath))
+	hashInput := append([]byte(gf.Settings.ModelsRoot+"\x00"), rawGenerate...)
+	hashInput = append(append(hashInput, "\x00sidecar\x00"...), sidecarBytes...)
+	hash, err := InputsHash(gf.Settings.ModelsRoot, hashInput)
+	if err != nil {
+		return false, fmt.Errorf("hashing models: %w", err)
+	}
+
+	// AutoVram bakes a live VRAM snapshot into the config, which the inputs hash
+	// can't see — so never short-circuit on the hash when it's enabled; always
+	// regen so each boot re-measures available VRAM.
+	cachePath := outConfigPath + hashCacheSuffix
+	_, statErr := os.Stat(outConfigPath)
+	if statErr == nil && !gf.Settings.AutoVram && readHashCache(cachePath) == hash {
+		if logf != nil {
+			logf(fmt.Sprintf("config up to date (models + generate file unchanged); using %s", outConfigPath))
+		}
+		return false, nil
+	}
+
+	if gf.Settings.AutoVram {
+		resolveAutoVram(&gf.Settings, logf)
+	}
+
+	if logf != nil {
+		if strings.TrimSpace(gf.Settings.ModelsRoot) == "" {
+			logf(fmt.Sprintf("no modelsRoot set; generating %s with an empty catalog (set settings.modelsRoot or --models-dir, or pick a folder in the setup UI)", outConfigPath))
+		} else {
+			logf(fmt.Sprintf("generating %s from %s (models root %s)", outConfigPath, generatePath, gf.Settings.ModelsRoot))
+		}
+	}
+	out, err := Generate(gf, DefaultNow())
+	if err != nil {
+		return false, fmt.Errorf("generating config: %w", err)
+	}
+	if err := os.WriteFile(outConfigPath, []byte(out), 0o644); err != nil {
+		return false, fmt.Errorf("writing %s: %w", outConfigPath, err)
+	}
+	if err := os.WriteFile(cachePath, []byte(hash), 0o644); err != nil {
+		return false, fmt.Errorf("writing hash cache: %w", err)
+	}
+	if logf != nil {
+		logf(fmt.Sprintf("wrote %s", outConfigPath))
+	}
+	return true, nil
+}
