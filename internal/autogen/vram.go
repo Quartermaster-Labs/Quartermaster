@@ -42,8 +42,7 @@ const autoVramFloorGB = 1.0
 
 // resolveAutoVram replaces s.TargetVramGB with the live free VRAM (minus
 // s.VramOverheadGB) when a GPU reading is available and sane. On any failure it
-// leaves the configured TargetVramGB untouched. Only the solo target is
-// adjusted; GameTargetVramGB stays as configured (a deliberate game reserve).
+// leaves the configured TargetVramGB untouched.
 func resolveAutoVram(s *Settings, logf func(string)) {
 	freeGB, ok := SampleFreeVramGB(autoVramSampleTimeout)
 	if !ok {

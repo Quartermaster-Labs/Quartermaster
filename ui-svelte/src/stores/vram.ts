@@ -1,0 +1,127 @@
+import { derived, writable } from "svelte/store";
+import { latestGpu } from "./perf";
+import { models, estimatePlan, type PlanEstimate } from "./api";
+
+// VRAM split: "system" (OS + other apps + game) vs the loaded llama-server. We
+// can't query per-process VRAM portably, so we sample an idle baseline: whenever
+// no model is loaded, the live used VRAM IS the system floor. Once a model loads,
+// model usage ≈ live used − baseline. Before the first idle sample the baseline
+// is unknown, so everything is attributed to system (safe under-report).
+//
+// When a single model is loaded we further break its slice into model weights /
+// KV cache / CUDA-runtime overhead using the load-plan estimate (the only source
+// we have for the component split — the driver only reports a single total).
+let baselineMb: number | null = null;
+
+export interface VramSegment {
+  label: string;
+  mb: number;
+  /** Tailwind bg-* class for the bar segment. */
+  class: string;
+  /** Hover detail: what occupies this slice. */
+  detail: string;
+}
+
+export interface VramBreakdown {
+  usedMb: number;
+  totalMb: number;
+  segments: VramSegment[];
+}
+
+// Plan estimate for the currently loaded model, refreshed when the active model
+// changes. Drives the weights/KV/overhead component split.
+const activeEstimate = writable<{ id: string; est: PlanEstimate } | null>(null);
+let estFetchId: string | null = null;
+
+models.subscribe(($models) => {
+  const ready = $models.filter((m) => m.state === "ready");
+  if (ready.length === 1) {
+    const id = ready[0].id;
+    if (estFetchId !== id) {
+      estFetchId = id;
+      estimatePlan(id, {})
+        .then((est) => activeEstimate.set({ id, est }))
+        .catch(() => activeEstimate.set(null));
+    }
+  } else {
+    estFetchId = null;
+    activeEstimate.set(null);
+  }
+});
+
+export const vramBreakdown = derived(
+  [latestGpu, models, activeEstimate],
+  ([$gpu, $models, $est]): VramBreakdown | null => {
+    if (!$gpu) return null;
+
+    const live = $models.filter(
+      (m) => m.state === "ready" || m.state === "starting" || m.state === "stopping",
+    );
+    // Capture the idle floor. Side effect in a derived is fine here — it only
+    // records the latest idle reading; the emitted value is pure of it.
+    if (live.length === 0) {
+      baselineMb = $gpu.mem_used_mb;
+    }
+
+    const used = $gpu.mem_used_mb;
+    const sysFloor = baselineMb === null ? used : Math.min(baselineMb, used);
+    const modelMb = Math.max(0, used - sysFloor);
+
+    const systemSeg: VramSegment = {
+      label: "System",
+      mb: sysFloor,
+      class: "bg-info",
+      detail: "OS, other apps" + (baselineMb === null ? " (model share not yet measured)" : ""),
+    };
+
+    // Component split when we have a fresh estimate for the single loaded model.
+    if (modelMb > 0 && $est && live.length === 1 && live[0].id === $est.id) {
+      const estTotalMb = $est.est.estVramGB * 1024;
+      const kvEstMb = Math.max(0, $est.est.kvReserveGB * 1024);
+      const weightsEstMb = Math.max(0, estTotalMb - kvEstMb);
+
+      // Fit the estimated components inside the measured model slice. If the
+      // measurement exceeds the estimate, the surplus is CUDA context + compute
+      // buffers. If it's under, scale the components down proportionally.
+      let weightsMb: number;
+      let kvMb: number;
+      let overheadMb: number;
+      if (estTotalMb <= modelMb) {
+        weightsMb = weightsEstMb;
+        kvMb = kvEstMb;
+        overheadMb = modelMb - estTotalMb;
+      } else {
+        const scale = estTotalMb > 0 ? modelMb / estTotalMb : 0;
+        weightsMb = weightsEstMb * scale;
+        kvMb = kvEstMb * scale;
+        overheadMb = 0;
+      }
+
+      const name = live[0].name || live[0].id;
+      const segments: VramSegment[] = [systemSeg];
+      if (weightsMb > 0)
+        segments.push({ label: "Weights", mb: weightsMb, class: "bg-primary", detail: `${name} model weights on GPU` });
+      if (kvMb > 0)
+        segments.push({ label: "KV cache", mb: kvMb, class: "bg-warning", detail: `${name} attention cache (ctx ${$est.est.ctx})` });
+      if (overheadMb > 0)
+        segments.push({ label: "CUDA", mb: overheadMb, class: "bg-success", detail: "CUDA context + compute buffers" });
+      return { usedMb: used, totalMb: $gpu.mem_total_mb, segments };
+    }
+
+    // Fallback: undifferentiated model slice (no estimate, or >1 model).
+    const modelNames = live.map((m) => m.name || m.id);
+    return {
+      usedMb: used,
+      totalMb: $gpu.mem_total_mb,
+      segments: [
+        systemSeg,
+        {
+          label: "Model(s)",
+          mb: modelMb,
+          class: "bg-primary",
+          detail: modelNames.length ? modelNames.join(", ") : "none loaded",
+        },
+      ],
+    };
+  },
+);

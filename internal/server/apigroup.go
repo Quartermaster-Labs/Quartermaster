@@ -28,6 +28,35 @@ type apiModel struct {
 	// Family is the gguf path shared by a model's variants (ctx tiers, game,
 	// judge); the UI groups rows by it. Empty when the cmd has no model path.
 	Family string `json:"family,omitempty"`
+	// Group is the model's swap group; Listeners are the listen addresses that
+	// expose that group (its catalog/port). The UI sections the catalog by these
+	// so each port shows only its own models. Empty when ungrouped/unrestricted.
+	Group     string   `json:"group,omitempty"`
+	Listeners []string `json:"listeners,omitempty"`
+}
+
+// groupIndex maps each model ID to its group name (first group listing it as a
+// member), and each group to the sorted listen addresses that expose it. Used
+// to tag the modelStatus payload so the UI can section the catalog by port.
+func (s *Server) groupIndex() (modelGroup map[string]string, groupListeners map[string][]string) {
+	modelGroup = make(map[string]string)
+	for gid, gc := range s.cfg.Groups {
+		for _, mid := range gc.Members {
+			if _, exists := modelGroup[mid]; !exists {
+				modelGroup[mid] = gid
+			}
+		}
+	}
+	groupListeners = make(map[string][]string)
+	for addr, lc := range s.cfg.Listeners {
+		for _, gid := range lc.Groups {
+			groupListeners[gid] = append(groupListeners[gid], addr)
+		}
+	}
+	for gid := range groupListeners {
+		sort.Strings(groupListeners[gid])
+	}
+	return modelGroup, groupListeners
 }
 
 // modelStatus returns every configured model joined with its current process
@@ -41,6 +70,8 @@ func (s *Server) modelStatus() []apiModel {
 	}
 	sort.Strings(ids)
 
+	modelGroup, groupListeners := s.groupIndex()
+
 	models := make([]apiModel, 0, len(ids))
 	for _, id := range ids {
 		mc := s.cfg.Models[id]
@@ -49,6 +80,7 @@ func (s *Server) modelStatus() []apiModel {
 			state = string(st)
 		}
 		_, capsMap, _, _ := renderCapabilities(mc.Capabilities)
+		gid := modelGroup[id]
 		models = append(models, apiModel{
 			Id:           id,
 			Name:         mc.Name,
@@ -58,6 +90,8 @@ func (s *Server) modelStatus() []apiModel {
 			Aliases:      mc.Aliases,
 			Capabilities: capsMap,
 			Family:       modelFamily(mc.Cmd),
+			Group:        gid,
+			Listeners:    groupListeners[gid],
 		})
 	}
 

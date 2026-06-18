@@ -24,6 +24,10 @@ export interface Model {
   // Gguf path shared by a model's variants (ctx tiers, game, judge). Rows with
   // the same family are collapsed into one group. Empty => ungrouped.
   family?: string;
+  // Swap group the model belongs to, and the listen addresses (ports) that
+  // expose that group's catalog. The Models page sections by these.
+  group?: string;
+  listeners?: string[];
 }
 
 export interface TokenMetrics {

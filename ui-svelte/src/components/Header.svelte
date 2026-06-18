@@ -38,7 +38,7 @@
   {#if $screenWidth !== "xs" && $screenWidth !== "sm"}
     <h1
       contenteditable="true"
-      class="p-0 outline-none hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+      class="!text-xl !pb-0 p-0 outline-none hover:bg-secondary rounded px-1"
       onblur={handleBlur}
       onkeydown={handleKeyDown}
     >
@@ -46,54 +46,42 @@
     </h1>
   {/if}
 
+  {#snippet navItem(path: string, label: string)}
+    <a
+      href={path}
+      use:link
+      class="font-mono text-xs uppercase tracking-wider px-1 py-1 whitespace-nowrap border-b-2 transition-colors {isActive(
+        path,
+        $currentRoute,
+      )
+        ? 'text-primary font-semibold border-primary'
+        : 'text-txtsecondary hover:text-txtmain border-transparent'}"
+    >
+      {label}
+    </a>
+  {/snippet}
+
   <menu class="flex items-center gap-4 overflow-x-auto">
     <a
       href="/"
       use:link
-      class="p-1 whitespace-nowrap {isActive('/', $currentRoute) ? 'font-semibold underline underline-offset-4' : ''} {$playgroundActivity ? 'activity-link' : 'text-gray-600 hover:text-black dark:text-gray-300 dark:hover:text-gray-100'}"
+      class="font-mono text-xs uppercase tracking-wider px-1 py-1 whitespace-nowrap border-b-2 transition-colors {isActive(
+        '/',
+        $currentRoute,
+      )
+        ? 'border-primary'
+        : 'border-transparent'} {$playgroundActivity
+        ? 'activity-link'
+        : isActive('/', $currentRoute)
+          ? 'text-primary font-semibold'
+          : 'text-txtsecondary hover:text-txtmain'}"
     >
       Playground
     </a>
-    <a
-      href="/models"
-      use:link
-      class="text-gray-600 hover:text-black dark:text-gray-300 dark:hover:text-gray-100 p-1 whitespace-nowrap"
-      class:font-semibold={isActive("/models", $currentRoute)}
-      class:underline={isActive("/models", $currentRoute)}
-      class:underline-offset-4={isActive("/models", $currentRoute)}
-    >
-      Models
-    </a>
-    <a
-      href="/activity"
-      use:link
-      class="text-gray-600 hover:text-black dark:text-gray-300 dark:hover:text-gray-100 p-1 whitespace-nowrap"
-      class:font-semibold={isActive("/activity", $currentRoute)}
-      class:underline={isActive("/activity", $currentRoute)}
-      class:underline-offset-4={isActive("/activity", $currentRoute)}
-    >
-      Activity
-    </a>
-    <a
-      href="/logs"
-      use:link
-      class="text-gray-600 hover:text-black dark:text-gray-300 dark:hover:text-gray-100 p-1 whitespace-nowrap"
-      class:font-semibold={isActive("/logs", $currentRoute)}
-      class:underline={isActive("/logs", $currentRoute)}
-      class:underline-offset-4={isActive("/logs", $currentRoute)}
-    >
-      Logs
-    </a>
-    <a
-      href="/performance"
-      use:link
-      class="text-gray-600 hover:text-black dark:text-gray-300 dark:hover:text-gray-100 p-1 whitespace-nowrap"
-      class:font-semibold={isActive("/performance", $currentRoute)}
-      class:underline={isActive("/performance", $currentRoute)}
-      class:underline-offset-4={isActive("/performance", $currentRoute)}
-    >
-      Performance
-    </a>
+    {@render navItem("/models", "Models")}
+    {@render navItem("/activity", "Activity")}
+    {@render navItem("/logs", "Logs")}
+    {@render navItem("/performance", "Performance")}
     <button onclick={toggleTheme} title="Toggle theme (current: {$themeMode})">
       {#if $themeMode === "system"}
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5">
@@ -122,7 +110,7 @@
 
 <style>
   .activity-link {
-    background: linear-gradient(90deg, #6366f1, #8b5cf6, #a855f7, #8b5cf6, #6366f1);
+    background: linear-gradient(90deg, #fa500f, #ff8205, #ffb020, #ff8205, #fa500f);
     background-size: 200% 100%;
     -webkit-background-clip: text;
     background-clip: text;

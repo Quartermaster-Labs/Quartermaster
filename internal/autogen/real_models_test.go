@@ -63,14 +63,14 @@ var refModels = []ref{
 		rel:  `Jackrong\Qwen3.5-9B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF\Qwen3.5-9B.Q4_K_M.gguf`,
 		arch: "qwen35", blocks: 32, sizeGB: 5.243, moe: false, ctxLen: 262144,
 		hcKv: 4, kLen: 256, vLen: 256, fullAttn: 4,
-		ngl: 30, ncpuMoe: 0, estVramGB: 6.92, estRamGB: 0.33,
+		ngl: 30, ncpuMoe: 0, estVramGB: 6.85, estRamGB: 0.39,
 		kvSlope: 1.621e-05, kvConst: 0.047974, kvGlobal: 8, kvLocal: 0, kvSsm: 24,
 	},
 	{
 		rel:  `bartowski\mistralai_Ministral-3-14B-Instruct-2512-GGUF\mistralai_Ministral-3-14B-Instruct-2512-IQ4_NL.gguf`,
 		arch: "mistral3", blocks: 40, sizeGB: 7.27, moe: false, ctxLen: 262144,
 		hcKv: 8, kLen: 128, vLen: 128,
-		ngl: 27, ncpuMoe: 0, estVramGB: 6.91, estRamGB: 2.36,
+		ngl: 29, ncpuMoe: 0, estVramGB: 7.00, estRamGB: 2.27,
 		kvSlope: 8.106e-05, kvConst: 0, kvGlobal: 40, kvLocal: 0, kvSsm: 0,
 	},
 }

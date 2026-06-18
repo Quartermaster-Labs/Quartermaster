@@ -3,10 +3,13 @@
     getModelConfig,
     putModelOverride,
     resetModelOverride,
+    estimatePlan,
     type ModelConfig,
     type ModelOverride,
     type ModelVariant,
+    type PlanEstimate,
   } from "../stores/api";
+  import VramGauge from "./VramGauge.svelte";
 
   interface Props {
     modelId: string | null;
@@ -37,6 +40,11 @@
   let skip = $state(false);
   let variants = $state<ModelVariant[]>([]);
 
+  // Live load-plan estimate for the current (unsaved) curated fields.
+  let estimate = $state<PlanEstimate | null>(null);
+  let estimateError = $state<string | null>(null);
+  let estTimer: ReturnType<typeof setTimeout> | undefined;
+
   // New-variant draft.
   let vName = $state("");
   let vCtx = $state<number | "">("");
@@ -58,10 +66,12 @@
   const maxCtx = $derived(config?.maxCtx && config.maxCtx > CTX_MIN ? config.maxCtx : 32768);
 
   // Speculative options: draft-mtp only offered when the model has MTP layers.
+  // MTP models auto-default to draft-mtp (matches generator); others default to ngram-mod.
   const specOpts = $derived([
-    { value: "", label: "default (ngram-mod)" },
+    { value: "", label: config?.isMTP ? "default (draft-mtp)" : "default (ngram-mod)" },
     { value: "none", label: "none (disable)" },
     ...(config?.isMTP ? [{ value: "draft-mtp", label: "draft-mtp" }] : []),
+    ...(config?.isMTP ? [{ value: "ngram-mod", label: "ngram-mod" }] : []),
   ]);
 
   function fmtCtx(n: number): string {
@@ -108,6 +118,33 @@
       error = e instanceof Error ? e.message : String(e);
     } finally {
       loading = false;
+    }
+  }
+
+  // Re-estimate (debounced) whenever a memory-affecting field changes while open.
+  // Reads each dep synchronously so Svelte tracks them.
+  $effect(() => {
+    const deps = [open, config, ctx, ctxAuto, kvK, kvV, kvInRam, spec];
+    void deps;
+    if (!open || !config || !modelId) return;
+    clearTimeout(estTimer);
+    estTimer = setTimeout(runEstimate, 100);
+  });
+
+  async function runEstimate() {
+    if (!modelId || !config) return;
+    estimateError = null;
+    try {
+      estimate = await estimatePlan(modelId, {
+        ctx: ctxAuto ? undefined : Number(ctx),
+        kvK: kvK || undefined,
+        kvV: kvV || undefined,
+        kvInRam,
+        spec: spec || undefined,
+      });
+    } catch (e) {
+      estimateError = e instanceof Error ? e.message : String(e);
+      estimate = null;
     }
   }
 
@@ -310,6 +347,43 @@
               {@render hint("Exclude this model from the generated config entirely.")}
             </span>
           </label>
+        </div>
+
+        <!-- Live memory estimate for the unsaved tuning above -->
+        <div class="rounded border border-card-border bg-background p-3">
+          <div class="flex items-center justify-between mb-2">
+            <span class="font-mono text-xs uppercase tracking-wider text-txtsecondary">Estimated load</span>
+          </div>
+          {#if estimateError}
+            <p class="font-mono text-xs text-error">{estimateError}</p>
+          {:else if estimate}
+            <VramGauge usedMb={estimate.estVramGB * 1024} totalMb={estimate.targetVramGB * 1024} height="0.6rem" />
+            <div class="mt-3 grid grid-cols-4 gap-2 font-mono text-xs">
+              <div>
+                <div class="text-txtsecondary uppercase tracking-wide">Ctx</div>
+                <div class="text-txtmain tabular-nums">{fmtCtx(estimate.ctx)}</div>
+              </div>
+              <div>
+                <div class="text-txtsecondary uppercase tracking-wide">RAM</div>
+                <div class="text-txtmain tabular-nums {estimate.ramExceeded ? 'text-error' : ''}">
+                  {estimate.estRamGB.toFixed(1)}{estimate.maxRamGB ? `/${estimate.maxRamGB.toFixed(0)}` : ""}G
+                </div>
+              </div>
+              <div>
+                <div class="text-txtsecondary uppercase tracking-wide">-ngl</div>
+                <div class="text-txtmain tabular-nums">{estimate.ngl}</div>
+              </div>
+              <div>
+                <div class="text-txtsecondary uppercase tracking-wide">cpu-moe</div>
+                <div class="text-txtmain tabular-nums">{estimate.nCpuMoe}</div>
+              </div>
+            </div>
+            {#if estimate.ramExceeded}
+              <p class="mt-2 font-mono text-xs text-error">⚠ Estimated RAM exceeds the configured ceiling.</p>
+            {/if}
+          {:else}
+            <p class="font-mono text-xs text-txtsecondary">—</p>
+          {/if}
         </div>
 
         <!-- Variants -->

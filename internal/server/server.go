@@ -258,6 +258,13 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/models/{model}/override", apiChain.ThenFunc(s.handleAPIModelOverridePut))
 	mux.Handle("DELETE /api/models/{model}/override", apiChain.ThenFunc(s.handleAPIModelOverrideDelete))
 	mux.Handle("PUT /api/models/{model}/variant", apiChain.ThenFunc(s.handleAPIModelVariantPost))
+	mux.Handle("GET /api/models/{model}/estimate", apiChain.ThenFunc(s.handleAPIModelEstimate))
+
+	// Global settings editor (dashboard GPU-memory card): read effective
+	// settings + defaults, save a manual VRAM target/headroom patch, reset it.
+	mux.Handle("GET /api/settings", apiChain.ThenFunc(s.handleAPISettingsGet))
+	mux.Handle("PUT /api/settings", apiChain.ThenFunc(s.handleAPISettingsPut))
+	mux.Handle("DELETE /api/settings", apiChain.ThenFunc(s.handleAPISettingsDelete))
 
 	s.mux = mux
 	s.handler = chain.New(CreateRequestLogMiddleware(s.proxylog), CreateCORSMiddleware()).Then(mux)

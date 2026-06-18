@@ -21,25 +21,58 @@ type GenerateFile struct {
 // Settings are the global generation knobs. Defaults mirror the PowerShell
 // Generate-Config.ps1 parameter defaults; applyDefaults fills any zero value.
 type Settings struct {
-	ModelsRoot       string  `yaml:"modelsRoot"`
-	ServerExe        string  `yaml:"serverExe"`
-	TargetVramGB     float64 `yaml:"targetVramGB"`
-	AutoVram         bool    `yaml:"autoVram"` // measure free VRAM at gen time, use it as TargetVramGB (minus VramOverheadGB)
-	VramOverheadGB   float64 `yaml:"vramOverheadGB"`
-	GameTargetVramGB float64 `yaml:"gameTargetVramGB"`
-	GameCtxTarget    int     `yaml:"gameCtxTarget"`
+	ModelsRoot     string  `yaml:"modelsRoot"`
+	ServerExe      string  `yaml:"serverExe"`
+	TargetVramGB   float64 `yaml:"targetVramGB"`
+	AutoVram       bool    `yaml:"autoVram"` // measure free VRAM at gen time, use it as TargetVramGB (minus VramOverheadGB)
+	VramOverheadGB float64 `yaml:"vramOverheadGB"`
 	// Groups optionally split the emitted models across named groups bound to
 	// separate listen addresses (use-case agnostic: membership is by model-name
 	// glob, first match wins). Empty => one group, one port (upstream default).
-	Groups             []GroupSpec `yaml:"groups"`
-	NoGameProfile      bool        `yaml:"noGameProfile"`
-	MaxRamGB           float64     `yaml:"maxRamGB"`
-	MoeCtxTarget       int         `yaml:"moeCtxTarget"`
-	DenseCtxLadder     []int       `yaml:"denseCtxLadder"`
-	DenseMinCtx        int         `yaml:"denseMinCtx"`
-	Threads            int         `yaml:"threads"`
-	TtlSec             int         `yaml:"ttlSec"`
-	HealthCheckTimeout int         `yaml:"healthCheckTimeout"`
+	Groups       []GroupSpec `yaml:"groups"`
+	MaxRamGB     float64     `yaml:"maxRamGB"`
+	MoeCtxTarget int         `yaml:"moeCtxTarget"`
+	// DefaultVariants are named custom variants emitted for EVERY non-skip model,
+	// in addition to any per-override variants (use-case agnostic). Lets a config
+	// apply a fleet-wide spawn shape (e.g. a low-VRAM coexistence variant) without
+	// repeating it on each row. Same VariantSpec semantics as Override.Variants.
+	DefaultVariants    []VariantSpec `yaml:"defaultVariants"`
+	DenseCtxLadder     []int         `yaml:"denseCtxLadder"`
+	DenseMinCtx        int           `yaml:"denseMinCtx"`
+	Threads            int           `yaml:"threads"`
+	TtlSec             int           `yaml:"ttlSec"`
+	HealthCheckTimeout int           `yaml:"healthCheckTimeout"`
+}
+
+// SettingsPatch is a partial Settings override written by the dashboard's
+// "GPU memory" editor and stored in the UI sidecar. Only non-nil fields apply,
+// so the hand-authored generate file keeps owning everything not touched in the
+// UI. Setting a manual TargetVramGB pairs with AutoVram=false so the live-VRAM
+// sampler doesn't clobber the user's choice.
+type SettingsPatch struct {
+	TargetVramGB   *float64 `yaml:"targetVramGB,omitempty"`
+	VramOverheadGB *float64 `yaml:"vramOverheadGB,omitempty"`
+	MaxRamGB       *float64 `yaml:"maxRamGB,omitempty"`
+	AutoVram       *bool    `yaml:"autoVram,omitempty"`
+}
+
+// apply overlays the patch's set fields onto s.
+func (p *SettingsPatch) apply(s *Settings) {
+	if p == nil {
+		return
+	}
+	if p.TargetVramGB != nil {
+		s.TargetVramGB = *p.TargetVramGB
+	}
+	if p.VramOverheadGB != nil {
+		s.VramOverheadGB = *p.VramOverheadGB
+	}
+	if p.MaxRamGB != nil {
+		s.MaxRamGB = *p.MaxRamGB
+	}
+	if p.AutoVram != nil {
+		s.AutoVram = *p.AutoVram
+	}
 }
 
 // GroupSpec defines one output group and (optionally) the listen address that
@@ -78,6 +111,13 @@ type Override struct {
 // fields inherit: VramTargetGB => settings.TargetVramGB, KvK/KvV/Spec/
 // ReasoningFmt => the model-wide override. Name is the suffix appended after
 // the model id ("<model>-<name>").
+//
+// Ub and Dry are use-case-agnostic serving knobs that let a variant reproduce
+// any spawn shape (e.g. a low-VRAM "game" coexistence variant, or a short-ctx
+// "judge" variant with greedy sampling) without the engine knowing those names:
+//   - Ub: physical batch size (-ub/-b). 0 => default (1024, or 512 for >=64k ctx).
+//   - Dry: when non-nil and false, omit the DRY sampler flags. nil => DRY on.
+// ReasoningFmt: "off" emits "--reasoning off" (plus --reasoning-format none).
 type VariantSpec struct {
 	Name         string   `yaml:"name"`
 	Ctx          int      `yaml:"ctx"`
@@ -86,6 +126,8 @@ type VariantSpec struct {
 	KvV          string   `yaml:"kvV"`
 	Spec         string   `yaml:"spec"`
 	ReasoningFmt string   `yaml:"reasoningFmt"`
+	Ub           int      `yaml:"ub"`
+	Dry          *bool    `yaml:"dry"`
 	Unlisted     bool     `yaml:"unlisted"`
 	Aliases      []string `yaml:"aliases"`
 }
@@ -99,13 +141,7 @@ func (s *Settings) applyDefaults() {
 		s.TargetVramGB = 7
 	}
 	if s.VramOverheadGB == 0 {
-		s.VramOverheadGB = 1.0
-	}
-	if s.GameTargetVramGB == 0 {
-		s.GameTargetVramGB = 5.5
-	}
-	if s.GameCtxTarget == 0 {
-		s.GameCtxTarget = 16384
+		s.VramOverheadGB = 0.5
 	}
 	if s.MaxRamGB == 0 {
 		s.MaxRamGB = 24
@@ -143,6 +179,13 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 		return GenerateFile{}, fmt.Errorf("parsing %s: %w", path, err)
 	}
 	gf.Settings.applyDefaults()
+	// Overlay the UI-owned settings patch (dashboard VRAM/headroom edits) ahead of
+	// modelsDir resolution. Absent => no-op.
+	patch, err := LoadSidecarSettings(path)
+	if err != nil {
+		return GenerateFile{}, err
+	}
+	patch.apply(&gf.Settings)
 	if modelsDirOverride != "" {
 		gf.Settings.ModelsRoot = modelsDirOverride
 	}
@@ -166,6 +209,25 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 		}
 	}
 	return gf, nil
+}
+
+// LoadBaseSettings returns the generate file's settings with defaults applied
+// but WITHOUT the UI sidecar patch — i.e. the values a dashboard "reset to
+// default" reverts to.
+func LoadBaseSettings(path, modelsDirOverride string) (Settings, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Settings{}, err
+	}
+	var gf GenerateFile
+	if err := yaml.Unmarshal(data, &gf); err != nil {
+		return Settings{}, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	gf.Settings.applyDefaults()
+	if modelsDirOverride != "" {
+		gf.Settings.ModelsRoot = modelsDirOverride
+	}
+	return gf.Settings, nil
 }
 
 // ResolveOverride returns the first override whose Match globs the gguf path and

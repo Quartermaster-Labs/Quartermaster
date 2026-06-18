@@ -29,9 +29,9 @@ func genMoeShareFor(arch string) float64 {
 	return 0.85
 }
 
-// profile is one emitted llama-swap entry for a model: the solo variant, an
-// optional ctx-tier variant, or the unlisted game variant. Target/Overhead are
-// the VRAM budget the sizing math uses; the suffix flags drive ub/spec/reasoning.
+// profile is one emitted llama-swap entry for a model: the solo variant or an
+// optional ctx-tier variant. Target/Overhead are the VRAM budget the sizing math
+// uses; the flags drive ub/spec/reasoning.
 type profile struct {
 	Name     string
 	Target   float64
@@ -39,8 +39,6 @@ type profile struct {
 	Unlisted bool
 	Ctx      int // 0 = auto-size; >0 forces that ctx via the manual-cap path
 	Aliases  []string
-	IsGame   bool
-	IsJudge  bool
 	IsLong   bool // ctx-tier rung >= 64k (drops -ub to 512)
 	// Per-variant overrides. Empty/zero => inherit the model-wide override. Set
 	// only by named custom variants (Override.Variants); emitProfile and the
@@ -48,6 +46,8 @@ type profile struct {
 	KvK, KvV     string
 	Spec         string
 	ReasoningFmt string
+	Ub           int   // physical batch size override (0 => default)
+	Dry          *bool // nil => DRY on; non-nil false => omit DRY sampler
 }
 
 // Generate discovers models under gf.Settings.ModelsRoot and returns a complete
@@ -67,12 +67,8 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 	})
 
 	var b strings.Builder
-	gameNote := fmt.Sprintf("%gGB (unlisted '<name>-game')", s.GameTargetVramGB)
-	if s.NoGameProfile {
-		gameNote = "none"
-	}
 	fmt.Fprintf(&b, "# llama-swap config - generated %s\n", nowRFC)
-	fmt.Fprintf(&b, "# solo TargetVramGB=%g  game=%s  MaxRamGB=%g  Threads=%d\n", s.TargetVramGB, gameNote, s.MaxRamGB, s.Threads)
+	fmt.Fprintf(&b, "# TargetVramGB=%g  MaxRamGB=%g  Threads=%d\n", s.TargetVramGB, s.MaxRamGB, s.Threads)
 	b.WriteString("# Regen: quartermaster startup (hash-gated)\n\n")
 	fmt.Fprintf(&b, "healthCheckTimeout: %d\n\n", s.HealthCheckTimeout)
 	b.WriteString("models:\n")
@@ -223,8 +219,10 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	}
 	kvInRam := ov != nil && ov.KvInRam
 
+	modelSpec := effectiveSpec(meta, ov)
+
 	specOh := 0.0
-	if ov != nil && ov.Spec == "draft-mtp" {
+	if modelSpec == "draft-mtp" {
 		specOh = 0.34
 	}
 	const ubSoloOh = 0.17
@@ -238,7 +236,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		ctxVariants = ov.CtxVariants
 	}
 
-	// Build the profile set: solo + optional ctx tiers + optional game.
+	// Build the profile set: solo + optional ctx tiers.
 	profiles := []profile{{
 		Name:     name,
 		Target:   s.TargetVramGB,
@@ -252,45 +250,21 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		if cv >= 65536 {
 			cvTarget = s.TargetVramGB - 0.5
 		}
-		cvUnlisted := cv <= 4096
-		cvTag := formatCtxTag(cv)
-		if cv <= 4096 {
-			cvTag = "judge"
-		}
 		profiles = append(profiles, profile{
-			Name:     fmt.Sprintf("%s-%s", name, cvTag),
+			Name:     fmt.Sprintf("%s-%s", name, formatCtxTag(cv)),
 			Target:   cvTarget,
 			Overhead: s.VramOverheadGB + ubSoloOh + specOh,
-			Unlisted: cvUnlisted,
 			Ctx:      cv,
-			IsJudge:  cv <= 4096,
 			IsLong:   cv >= 65536,
 		})
 	}
-	if !s.NoGameProfile {
-		gameCtx := s.GameCtxTarget
-		if override.Ctx != 0 {
-			gameCtx = override.Ctx
-		}
-		var gameAliases []string
-		for _, a := range aliases {
-			gameAliases = append(gameAliases, a+"-game")
-		}
-		profiles = append(profiles, profile{
-			Name:     name + "-game",
-			Target:   s.GameTargetVramGB,
-			Overhead: s.VramOverheadGB + specOh,
-			Unlisted: true,
-			Ctx:      gameCtx,
-			Aliases:  gameAliases,
-			IsGame:   true,
-		})
-	}
 
-	// Named custom variants (UI-created): each emits "<model>-<slug>" with its
-	// own ctx/VRAM/kv/spec; zero fields inherit. Spec affects the VRAM overhead,
-	// so bake the per-variant overhead here.
-	for _, v := range override.Variants {
+	// Named custom variants: per-override ones plus the fleet-wide
+	// settings.DefaultVariants, each emitting "<model>-<slug>" with its own
+	// ctx/VRAM/kv/spec; zero fields inherit. Spec affects the VRAM overhead, so
+	// bake the per-variant overhead here.
+	variantSpecs := append(append([]VariantSpec{}, override.Variants...), s.DefaultVariants...)
+	for _, v := range variantSpecs {
 		if strings.TrimSpace(v.Name) == "" {
 			continue
 		}
@@ -314,6 +288,8 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			KvV:          v.KvV,
 			Spec:         v.Spec,
 			ReasoningFmt: v.ReasoningFmt,
+			Ub:           v.Ub,
+			Dry:          v.Dry,
 		})
 	}
 
@@ -504,21 +480,28 @@ func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, pro
 	}
 
 	ub := 1024
-	if prof.IsGame || prof.IsLong {
+	if prof.IsLong {
 		ub = 512
 	}
-
-	spec := "ngram-mod"
-	if ov != nil && ov.Spec != "" {
-		spec = ov.Spec
+	if prof.Ub > 0 {
+		ub = prof.Ub
 	}
 
+	spec := effectiveSpec(meta, ov)
+	if prof.Spec != "" {
+		spec = prof.Spec
+	}
+
+	// Reasoning: a variant's "off" emits the explicit --reasoning off switch; any
+	// other non-empty value (variant or model-wide) sets --reasoning-format.
 	rfmt := "none"
 	reasoningFlag := ""
-	if prof.IsGame {
-		rfmt = "none"
+	switch {
+	case prof.ReasoningFmt == "off":
 		reasoningFlag = " --reasoning off"
-	} else if ov != nil && ov.ReasoningFmt != "" {
+	case prof.ReasoningFmt != "":
+		rfmt = prof.ReasoningFmt
+	case ov != nil && ov.ReasoningFmt != "":
 		rfmt = ov.ReasoningFmt
 	}
 
@@ -542,7 +525,7 @@ func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, pro
 		b.WriteString("      --spec-draft-n-max 2\n")
 	}
 	fmt.Fprintf(b, "      --jinja --reasoning-format %s%s\n", rfmt, reasoningFlag)
-	if !prof.IsJudge {
+	if prof.Dry == nil || *prof.Dry {
 		b.WriteString("      --dry-multiplier 0.8 --dry-base 1.75 --dry-allowed-length 3\n")
 	}
 	fmt.Fprintf(b, "      -t %d%s\n", s.Threads, cpuMoeFlag)
@@ -559,6 +542,19 @@ func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, pro
 }
 
 // formatCtxTag renders a short ctx tag: 8192->"8k", 131072->"128k", 1048576->"1m".
+// effectiveSpec resolves the spec-type: MTP-capable models default to draft-mtp, others to
+// ngram-mod. An explicit override spec wins (set spec: "ngram-mod" to force ngram on an MTP model).
+func effectiveSpec(meta Metadata, ov *Override) string {
+	spec := "ngram-mod"
+	if meta.IsMTP {
+		spec = "draft-mtp"
+	}
+	if ov != nil && ov.Spec != "" {
+		spec = ov.Spec
+	}
+	return spec
+}
+
 func formatCtxTag(ctx int) string {
 	if ctx >= 1048576 && ctx%1048576 == 0 {
 		return fmt.Sprintf("%dm", ctx/1048576)

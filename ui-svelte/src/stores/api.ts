@@ -1,4 +1,5 @@
 import { writable } from "svelte/store";
+import { persistentStore } from "./persistent";
 import type {
   Model,
   ActivityLogEntry,
@@ -176,6 +177,13 @@ export async function unloadSingleModel(model: string): Promise<void> {
   }
 }
 
+// Per-model load tally, persisted. Powers "most-loaded first" ordering in the
+// dashboard quick-load picker.
+export const loadCounts = persistentStore<Record<string, number>>("loadCounts", {});
+function recordLoad(model: string): void {
+  loadCounts.update((c) => ({ ...c, [model]: (c[model] ?? 0) + 1 }));
+}
+
 export async function loadModel(model: string, signal?: AbortSignal): Promise<void> {
   try {
     const response = await fetch(`/upstream/${model}/?_=${Date.now()}`, {
@@ -185,6 +193,7 @@ export async function loadModel(model: string, signal?: AbortSignal): Promise<vo
     if (!response.ok) {
       throw new Error(`Failed to load model: ${response.status}`);
     }
+    recordLoad(model);
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
       return;
@@ -267,6 +276,86 @@ export async function putModelVariant(model: string, variant: ModelVariant): Pro
   });
   if (!response.ok) {
     throw new Error(`Failed to save variant: ${response.status} ${await response.text()}`);
+  }
+}
+
+// Live load-plan preview for a candidate tuning (no persistence). Powers the
+// editor's VRAM/RAM estimate.
+export interface PlanEstimate {
+  ctx: number;
+  ngl: number;
+  nCpuMoe: number;
+  estVramGB: number;
+  estRamGB: number;
+  targetVramGB: number;
+  maxRamGB: number;
+  kvReserveGB: number;
+  ramExceeded: boolean;
+  isMoE: boolean;
+}
+
+export interface EstimateParams {
+  ctx?: number;
+  kvK?: string;
+  kvV?: string;
+  kvInRam?: boolean;
+  spec?: string;
+  vram?: number;
+}
+
+export async function estimatePlan(model: string, p: EstimateParams): Promise<PlanEstimate> {
+  const q = new URLSearchParams();
+  if (p.ctx) q.set("ctx", String(p.ctx));
+  if (p.kvK) q.set("kvK", p.kvK);
+  if (p.kvV) q.set("kvV", p.kvV);
+  if (p.kvInRam) q.set("kvInRam", "true");
+  if (p.spec) q.set("spec", p.spec);
+  if (p.vram) q.set("vram", String(p.vram));
+  const response = await fetch(`/api/models/${encodeURIComponent(model)}/estimate?${q.toString()}`);
+  if (!response.ok) {
+    throw new Error(`Failed to estimate plan: ${response.status} ${await response.text()}`);
+  }
+  return await response.json();
+}
+
+// ---- Global settings (dashboard GPU-memory card) ----
+
+export interface AppSettings {
+  targetVramGB: number;
+  vramOverheadGB: number;
+  maxRamGB: number;
+  autoVram: boolean;
+  overridden: boolean;
+  defaults: { targetVramGB: number; vramOverheadGB: number; maxRamGB: number };
+}
+
+export async function getSettings(): Promise<AppSettings> {
+  const response = await fetch("/api/settings");
+  if (!response.ok) {
+    throw new Error(`Failed to load settings: ${response.status} ${await response.text()}`);
+  }
+  return await response.json();
+}
+
+export async function putSettings(p: {
+  targetVramGB: number;
+  vramOverheadGB: number;
+  maxRamGB: number;
+}): Promise<void> {
+  const response = await fetch("/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(p),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to save settings: ${response.status} ${await response.text()}`);
+  }
+}
+
+export async function resetSettings(): Promise<void> {
+  const response = await fetch("/api/settings", { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error(`Failed to reset settings: ${response.status} ${await response.text()}`);
   }
 }
 

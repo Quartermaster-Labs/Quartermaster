@@ -1,0 +1,48 @@
+# Quartermaster autogen control file — Go port of Generate-Config.ps1 params + $Overrides.
+# settings: global tuning knobs (CLI --models-dir overrides settings.modelsRoot).
+# overrides: per-model tweaks gguf metadata can't supply; first match wins.
+#
+# Copy this to quartermaster-generate.yaml and edit modelsRoot / serverExe for
+# your machine, then add overrides for your own models. The server auto-discovers
+# every *.gguf under modelsRoot; overrides are optional tweaks on top.
+settings:
+  # Folder scanned recursively for *.gguf models. Leave blank to start with an
+  # empty catalog and pick a folder later in the setup UI.
+  modelsRoot: ""
+  # Path to llama.cpp's llama-server executable.
+  serverExe: llama-server
+  targetVramGB: 7
+  # autoVram: measure free VRAM at startup and use it as targetVramGB (minus
+  # vramOverheadGB). Forces a regen each boot so the snapshot stays current.
+  # Leave false to use the static targetVramGB above.
+  autoVram: false
+  # vramOverheadGB: small slack held back from targetVramGB for allocator
+  # fragmentation / CUDA spikes. targetVramGB already accounts for system/desktop
+  # VRAM, so this does NOT need to reserve room for the OS — keep it small.
+  vramOverheadGB: 0.5
+  maxRamGB: 24
+  moeCtxTarget: 65536
+  denseCtxLadder: [131072, 65536, 32768]
+  denseMinCtx: 32768
+  threads: 7
+  ttlSec: 600
+  healthCheckTimeout: 300
+  # groups: split emitted models across named groups, each optionally bound to a
+  # separate listen address. Membership is by model-name glob (first match wins,
+  # so list specific groups before a "*" catch-all). Models matching nothing go
+  # to an implicit "default" group (no listener). All groups are exclusive swap
+  # groups, so loading on any port evicts the others (one GPU, VRAM-exclusive).
+  # Omit entirely for one group on one port. Example — variants on a second port:
+  # groups:
+  #   - { name: variants,  listen: 0.0.0.0:1251, match: ["*-game", "*-judge"] }
+  #   - { name: assistant, listen: 0.0.0.0:1250, match: ["*"] }
+
+# Per-model overrides — optional. Each entry matches discovered gguf paths by
+# glob (first match wins). Fields: quant (pick a quant when several exist),
+# aliases (extra model IDs), spec (e.g. draft-mtp), reasoningFmt, ctxVariants
+# (emit extra context-size variants), skip (exclude a match). Examples:
+# overrides:
+#   - { match: "*-draft-*", skip: true }
+#   - { match: "*Qwen3-8B-GGUF*", quant: Q6_K, aliases: [qwen3-8b] }
+#   - { match: "*Gemma-12B-it-GGUF*", quant: Q4_K_M, reasoningFmt: auto, ctxVariants: [4096, 32768, 65536, 131072] }
+overrides: []

@@ -5,6 +5,7 @@
   import MetadataTooltip from "../components/MetadataTooltip.svelte";
   import CaptureDialog from "../components/CaptureDialog.svelte";
   import { persistentStore } from "../stores/persistent";
+  import { observeWindowIdx, OBSERVE_WINDOWS } from "../stores/observe";
   import { onMount } from "svelte";
   import type { ReqRespCapture } from "../lib/types";
 
@@ -189,7 +190,13 @@
     return "a while ago";
   }
 
-  let sortedMetrics = $derived([...$metrics].sort((a, b) => b.id - a.id));
+  let sortedMetrics = $derived.by(() => {
+    const ms = OBSERVE_WINDOWS[$observeWindowIdx]?.ms ?? 0;
+    const cutoff = ms <= 0 ? 0 : Date.now() - ms;
+    return [...$metrics]
+      .filter((m) => cutoff === 0 || new Date(m.timestamp).getTime() >= cutoff)
+      .sort((a, b) => b.id - a.id);
+  });
 
   let selectedCapture = $state<ReqRespCapture | null>(null);
   let dialogOpen = $state(false);

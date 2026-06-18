@@ -3,88 +3,125 @@
 @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 
 @theme {
-  --color-background: rgba(252, 252, 249, 1);
-  --color-surface: rgba(255, 255, 253, 1);
+  /* Fonts — mono-accent retro look. Local stacks, no webfont fetch (offline-safe). */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "IBM Plex Mono", "Cascadia Code", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+
+  /* Light — warm cream + Mistral flame orange. */
+  --color-background: rgba(250, 248, 243, 1);
+  --color-surface: rgba(255, 254, 251, 1);
 
   /* text colors */
-  --color-txtmain: rgba(19, 52, 59, 1);
-  --color-txtsecondary: rgba(98, 108, 113, 1);
-  --color-navlink-active: rgba(245, 245, 245, 1);
+  --color-txtmain: rgba(26, 23, 20, 1);
+  --color-txtsecondary: rgba(107, 98, 89, 1);
+  --color-navlink-active: rgba(250, 248, 243, 1);
 
-  --color-primary: rgba(50, 184, 198, 1);
-
-  --color-primary-hover: rgba(29, 116, 128, 1);
-  --color-primary-active: rgba(26, 104, 115, 1);
-  --color-secondary: rgba(94, 82, 64, 0.12);
-  --color-secondary-hover: rgba(94, 82, 64, 0.2);
-  --color-secondary-active: rgba(94, 82, 64, 0.25);
-  --color-border: rgba(94, 82, 64, 0.3);
-  --color-btn-primary-text: rgba(252, 252, 249, 1);
-  --color-card-border: rgba(94, 82, 64, 0.12);
-  --color-card-border-inner: rgba(94, 82, 64, 0.12);
+  --color-primary: rgba(250, 80, 15, 1);
+  --color-primary-hover: rgba(210, 58, 0, 1);
+  --color-primary-active: rgba(178, 46, 0, 1);
+  --color-secondary: rgba(180, 120, 60, 0.1);
+  --color-secondary-hover: rgba(180, 120, 60, 0.18);
+  --color-secondary-active: rgba(180, 120, 60, 0.24);
+  --color-border: rgba(40, 30, 20, 0.18);
+  --color-btn-primary-text: rgba(250, 248, 243, 1);
+  --color-card-border: rgba(40, 30, 20, 0.1);
+  --color-card-border-inner: rgba(40, 30, 20, 0.1);
   --color-error: rgba(192, 21, 47, 1);
-  --color-success: rgba(33, 128, 141, 1);
-  --color-warning: rgb(244, 155, 0);
-  --color-info: rgba(98, 108, 113, 1);
-  --color-focus-ring: rgba(33, 128, 141, 0.4);
-  --color-select-caret: rgba(19, 52, 59, 0.8);
-  --color-btn-border: rgba(94, 82, 64, 0.7);
+  --color-success: rgba(42, 122, 76, 1);
+  --color-warning: rgb(218, 134, 0);
+  --color-info: rgba(107, 98, 89, 1);
+  --color-focus-ring: rgba(250, 80, 15, 0.4);
+  --color-select-caret: rgba(26, 23, 20, 0.8);
+  --color-btn-border: rgba(40, 30, 20, 0.25);
 }
 
 @layer theme {
   /* over ride theme for dark mode */
   [data-theme="dark"] {
-    --color-background: rgba(31, 33, 33, 1);
-    --color-surface: rgba(38, 40, 40, 1);
+    /* Dark — neutral near-black (~#18181a) + flame accent. */
+    --color-background: rgba(24, 24, 26, 1);
+    --color-surface: rgba(33, 33, 36, 1);
     /* text colors */
-    --color-txtmain: rgba(245, 245, 245, 1);
-    --color-txtsecondary: rgba(167, 169, 169, 0.7);
+    --color-txtmain: rgba(237, 237, 238, 1);
+    --color-txtsecondary: rgba(161, 161, 166, 0.85);
 
-    --color-navlink-active: rgba(245, 245, 245, 1);
+    --color-navlink-active: rgba(24, 24, 26, 1);
 
-    --color-primary: rgba(33, 128, 141, 1);
-    --color-primary-hover: rgba(45, 166, 178, 1);
-    --color-primary-active: rgba(41, 150, 161, 1);
-    --color-secondary: rgba(119, 124, 124, 0.15);
-    --color-secondary-hover: rgba(119, 124, 124, 0.25);
-    --color-secondary-active: rgba(119, 124, 124, 0.3);
-    --color-border: rgba(119, 124, 124, 0.3);
-    --color-error: rgba(255, 84, 89, 1);
-    --color-success: rgba(50, 184, 198, 1);
+    --color-primary: rgba(255, 106, 43, 1);
+    --color-primary-hover: rgba(255, 130, 69, 1);
+    --color-primary-active: rgba(255, 150, 90, 1);
+    --color-secondary: rgba(168, 168, 176, 0.12);
+    --color-secondary-hover: rgba(168, 168, 176, 0.2);
+    --color-secondary-active: rgba(168, 168, 176, 0.26);
+    --color-border: rgba(168, 168, 176, 0.2);
+    --color-error: rgba(255, 99, 99, 1);
+    --color-success: rgba(74, 198, 138, 1);
     --color-warning: rgb(244, 155, 0);
-    --color-info: rgba(167, 169, 169, 1);
-    --color-focus-ring: rgba(50, 184, 198, 0.4);
-    --color-btn-primary-text: rgba(19, 52, 59, 1);
-    --color-card-border: rgba(119, 124, 124, 0.2);
-    --color-card-border-inner: rgba(119, 124, 124, 0.15);
-    --shadow-inset-sm: inset 0 1px 0 rgba(255, 255, 255, 0.1), inset 0 -1px 0 rgba(0, 0, 0, 0.15);
-    --button-border-secondary: rgba(119, 124, 124, 0.2);
+    --color-info: rgba(161, 161, 166, 1);
+    --color-focus-ring: rgba(255, 106, 43, 0.45);
+    --color-btn-primary-text: rgba(24, 24, 26, 1);
+    --color-card-border: rgba(168, 168, 176, 0.15);
+    --color-card-border-inner: rgba(168, 168, 176, 0.11);
+    --shadow-inset-sm: inset 0 1px 0 rgba(255, 255, 255, 0.06), inset 0 -1px 0 rgba(0, 0, 0, 0.25);
+    --button-border-secondary: rgba(168, 168, 176, 0.18);
   }
 }
 
 @layer base {
   body {
-    /* example of how colors using theme colors*/
-    @apply bg-background text-txtmain;
+    /* Retro look: mono everywhere by default. */
+    @apply bg-background text-txtmain font-mono;
   }
 
+  /* Form controls don't inherit font-family by default — force them onto the
+     app stack so inputs/buttons/selects match body text. */
+  input,
+  textarea,
+  select,
+  button,
+  optgroup,
+  option {
+    font-family: inherit;
+  }
+
+  /* Kill the native number-input spinner buttons — they show ugly default
+     up/down arrows on hover. We step with explicit controls instead. */
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+
+  /* Headings carry the retro mono accent + tight tracking. */
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-mono tracking-tight text-txtmain font-bold pb-4;
+  }
   h1 {
-    @apply text-4xl text-txtmain font-bold pb-4;
+    @apply text-4xl;
   }
   h2 {
-    @apply text-3xl text-txtmain font-bold pb-4;
+    @apply text-3xl;
   }
   h3 {
-    @apply text-2xl text-txtmain font-bold pb-4;
+    @apply text-2xl;
   }
   h4 {
-    @apply text-xl text-txtmain font-bold pb-4;
+    @apply text-xl;
   }
   h5 {
-    @apply text-lg text-txtmain font-bold pb-4;
+    @apply text-lg;
   }
   h6 {
-    @apply text-base text-txtmain font-bold pb-4;
+    @apply text-base;
   }
 }
 
@@ -105,19 +142,19 @@
   /* Navigation Header */
 
   .navlink {
-    @apply text-txtsecondary hover:bg-secondary hover:text-txtmain rounded-lg p-2;
+    @apply font-mono text-xs uppercase tracking-wider text-txtsecondary hover:bg-secondary hover:text-txtmain rounded-md px-2.5 py-1.5 transition-colors;
   }
   .navlink.active {
     @apply bg-primary text-navlink-active;
   }
 
-  /* Card component */
+  /* Card component — flat retro: hairline border, no resting shadow. */
   .card {
-    @apply bg-surface rounded-lg border border-card-border shadow-sm overflow-hidden p-4;
+    @apply bg-surface rounded-md border border-card-border overflow-hidden p-4;
   }
 
   .card:hover {
-    @apply shadow-md;
+    @apply border-border;
   }
 
   .card__body {
@@ -131,7 +168,7 @@
 
   /* Status Badges */
   .status {
-    @apply inline-block px-2 py-1 text-xs font-medium rounded-lg;
+    @apply inline-block font-mono uppercase tracking-wide px-2 py-1 text-xs font-medium rounded;
   }
 
   .status--ready {
@@ -161,6 +198,13 @@
     @apply px-2 py-0.5 text-xs;
   }
 
+  .btn--primary {
+    @apply bg-primary text-btn-primary-text border-primary;
+  }
+  .btn--primary:hover {
+    @apply bg-primary-hover border-primary-hover;
+  }
+
   .btn:disabled {
     @apply opacity-50 cursor-not-allowed;
   }
@@ -174,5 +218,32 @@
   .my-8 {
     margin-top: 2rem;
     margin-bottom: 2rem;
+  }
+
+  /* Slim, themed scrollbar — replaces the chunky native one on scroll areas. */
+  .pretty-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-card-border) transparent;
+  }
+  .pretty-scroll::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .pretty-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .pretty-scroll::-webkit-scrollbar-thumb {
+    background: var(--color-card-border);
+    border-radius: 9999px;
+  }
+  .pretty-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--color-txtsecondary);
+  }
+
+  /* Soft fade at the top/bottom edges of a vertical scroll area, so content
+     dissolves instead of getting hard-cut as it scrolls past the bounds. */
+  .scroll-fade-y {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 1.25rem, #000 calc(100% - 1.25rem), transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 1.25rem, #000 calc(100% - 1.25rem), transparent 100%);
   }
 }

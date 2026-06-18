@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { fetchPerformance } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
+  import { observeWindowIdx, OBSERVE_WINDOWS } from "../stores/observe";
   import type { SysStat, GpuStat } from "../lib/types";
   import PerformanceChart from "../components/PerformanceChart.svelte";
 
@@ -24,12 +25,6 @@
     "#22d3ee",
   ];
 
-  const WINDOWS = [
-    { label: "5 min", ms: 5 * 60 * 1000 },
-    { label: "15 min", ms: 15 * 60 * 1000 },
-    { label: "1 hr", ms: 60 * 60 * 1000 },
-  ] as const;
-
   const INTERVALS = [
     { label: "Off", ms: 0 },
     { label: "5s", ms: 5000 },
@@ -38,7 +33,6 @@
     { label: "60s", ms: 60000 },
   ] as const;
 
-  let selectedWindow = persistentStore("perf-window", 0);
   let selectedInterval = persistentStore("perf-refresh-interval", 0);
   let sysData = $state<SysStat[]>([]);
   let gpuData = $state<GpuStat[]>([]);
@@ -49,7 +43,8 @@
   let mounted = $state(false);
 
   function cutoffTime(): number {
-    return Date.now() - WINDOWS[$selectedWindow].ms;
+    const ms = OBSERVE_WINDOWS[$observeWindowIdx]?.ms ?? 0;
+    return ms <= 0 ? 0 : Date.now() - ms;
   }
 
   function formatDelta(ts: string, refTime: number): string {
@@ -352,20 +347,8 @@
 
 <div class="space-y-6">
   <div class="flex items-center justify-between">
-    <h2 class="text-xl font-semibold text-txtmain">Performance (Experimental)</h2>
+    <h3 class="text-sm font-medium text-txtsecondary">Performance (Experimental)</h3>
     <div class="flex items-center gap-4">
-      <div class="flex items-center gap-1">
-        {#each WINDOWS as win, i}
-          <button
-            class="btn btn--sm"
-            class:bg-primary={$selectedWindow === i}
-            class:text-btn-primary-text={$selectedWindow === i}
-            onclick={() => ($selectedWindow = i)}
-          >
-            {win.label}
-          </button>
-        {/each}
-      </div>
       <div class="flex items-center gap-1">
         <span class="text-xs text-txtsecondary mr-1">Refresh:</span>
         {#each INTERVALS as intv, i}

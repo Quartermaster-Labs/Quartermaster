@@ -62,14 +62,26 @@ windows: ui
 
 # Assemble a runnable Windows folder + zip (binary, configs, launcher, service files).
 # NOTE: llama-server.exe (llama.cpp) and GGUF models are NOT bundled — separate
-# projects/licensing. Edit quartermaster-generate.yaml (modelsRoot, serverExe) before use.
+# projects/licensing. Copy quartermaster-generate.example.yaml to
+# quartermaster-generate.yaml and edit modelsRoot / serverExe before use.
 PKG_WIN_DIR = $(BUILD_DIR)/llama-quartermaster-windows
 package-windows: windows
 	@echo "Packaging Windows bundle..."
+	# Preserve an existing personal generate file across the bundle rebuild.
+	@if [ -f $(PKG_WIN_DIR)/quartermaster-generate.yaml ]; then \
+		cp $(PKG_WIN_DIR)/quartermaster-generate.yaml $(BUILD_DIR)/.qm-generate.keep; fi
 	rm -rf $(PKG_WIN_DIR)
 	mkdir -p $(PKG_WIN_DIR)
 	cp $(BUILD_DIR)/$(APP_NAME)-windows-amd64.exe $(PKG_WIN_DIR)/
-	cp quartermaster-generate.yaml $(PKG_WIN_DIR)/
+	cp quartermaster-generate.example.yaml $(PKG_WIN_DIR)/quartermaster-generate.example.yaml
+	# Seed the runtime generate file from the example only when none exists yet,
+	# so a re-package never clobbers the user's edited quartermaster-generate.yaml.
+	@if [ -f $(BUILD_DIR)/.qm-generate.keep ]; then \
+		mv $(BUILD_DIR)/.qm-generate.keep $(PKG_WIN_DIR)/quartermaster-generate.yaml; \
+		echo "  preserved existing quartermaster-generate.yaml"; \
+	else \
+		cp quartermaster-generate.example.yaml $(PKG_WIN_DIR)/quartermaster-generate.yaml; \
+		echo "  seeded quartermaster-generate.yaml from example"; fi
 	cp config.example.yaml $(PKG_WIN_DIR)/config.example.yaml
 	cp packaging/windows/start.cmd $(PKG_WIN_DIR)/start.cmd
 	cp -r packaging $(PKG_WIN_DIR)/packaging

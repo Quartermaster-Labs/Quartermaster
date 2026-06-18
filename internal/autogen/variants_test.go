@@ -14,7 +14,7 @@ func TestAutogen_Generate_namedVariant(t *testing.T) {
 		t.Skipf("models root %s absent", realModelsRoot)
 	}
 	gf := GenerateFile{
-		Settings: Settings{ModelsRoot: realModelsRoot, NoGameProfile: true},
+		Settings: Settings{ModelsRoot: realModelsRoot},
 		Overrides: []Override{{
 			Match:    "*",
 			Variants: []VariantSpec{{Name: "My Tiny", Ctx: 8192, KvK: "q4_0", KvV: "q4_0"}},

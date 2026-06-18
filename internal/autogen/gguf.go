@@ -6,6 +6,7 @@
 package autogen
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -81,7 +82,8 @@ type Metadata struct {
 	IsMoE bool
 
 	// IsMTP is true when the model carries multi-token-prediction / nextn
-	// layers (gguf key "<arch>.num_nextn_predict_layers" > 0). Only such models
+	// layers (gguf key "<arch>.num_nextn_predict_layers" or "<arch>.nextn_predict_layers" > 0).
+	// Converters disagree on the spelling; accept both. Only such models
 	// can use --spec-type draft-mtp.
 	IsMTP bool
 
@@ -129,16 +131,25 @@ var ggmlTypeSize = map[uint32][2]int64{
 // ggufReader reads little-endian GGUF primitives from a seekable file.
 type ggufReader struct {
 	f   *os.File
+	br  *bufio.Reader
 	pos int64
 }
 
 func (r *ggufReader) read(n int64) ([]byte, error) {
 	buf := make([]byte, n)
-	if _, err := io.ReadFull(r.f, buf); err != nil {
+	if _, err := io.ReadFull(r.br, buf); err != nil {
 		return nil, err
 	}
 	r.pos += n
 	return buf, nil
+}
+
+// discard advances past n bytes without allocating, keeping the read buffer warm.
+// Used to skip string/array payloads (e.g. the tokenizer vocab) we don't decode.
+func (r *ggufReader) discard(n int64) error {
+	d, err := io.CopyN(io.Discard, r.br, n)
+	r.pos += d
+	return err
 }
 
 func (r *ggufReader) u32() (uint32, error) {
@@ -158,11 +169,14 @@ func (r *ggufReader) u64() (uint64, error) {
 }
 
 func (r *ggufReader) seek(delta int64) error {
-	np, err := r.f.Seek(delta, io.SeekCurrent)
+	// br has buffered ahead, so the file offset is past r.pos. Seek to the absolute
+	// logical target and reset the buffer rather than seeking the file relatively.
+	np, err := r.f.Seek(r.pos+delta, io.SeekStart)
 	if err != nil {
 		return err
 	}
 	r.pos = np
+	r.br.Reset(r.f)
 	return nil
 }
 
@@ -180,6 +194,15 @@ func (r *ggufReader) str() (string, error) {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// skipStr advances past a GGUF string (uint64 length + bytes) without decoding it.
+func (r *ggufReader) skipStr() error {
+	n, err := r.u64()
+	if err != nil {
+		return err
+	}
+	return r.discard(int64(n))
 }
 
 // scalarWidth returns the byte width of a fixed-width scalar type, or 0 for
@@ -264,12 +287,11 @@ func (r *ggufReader) readScalar(t uint32) (i int64, f float64, s string, err err
 // fixed-width elements seek past the whole block in one move.
 func (r *ggufReader) skipValue(t uint32) error {
 	if w := scalarWidth(t); w > 0 {
-		return r.seek(w)
+		return r.discard(w)
 	}
 	switch t {
 	case ggufString:
-		_, err := r.str()
-		return err
+		return r.skipStr()
 	case ggufArray:
 		elemType, err := r.u32()
 		if err != nil {
@@ -283,8 +305,10 @@ func (r *ggufReader) skipValue(t uint32) error {
 			return r.seek(int64(count) * w)
 		}
 		if elemType == ggufString {
+			// Skip each string's bytes via the buffer (no alloc, no per-string seek);
+			// large vocab arrays would otherwise cost ~2 syscalls per entry.
 			for i := uint64(0); i < count; i++ {
-				if _, err := r.str(); err != nil {
+				if err := r.skipStr(); err != nil {
 					return err
 				}
 			}
@@ -334,7 +358,7 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 	}
 	defer f.Close()
 
-	r := &ggufReader{f: f}
+	r := &ggufReader{f: f, br: bufio.NewReaderSize(f, 1<<20)}
 	magic, err := r.read(4)
 	if err != nil {
 		return Metadata{}, err
@@ -553,7 +577,7 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 				}
 				ssmStateSize = pi(v)
 				matched = true
-			case key == pfx+"num_nextn_predict_layers" && isIntType(t):
+			case (key == pfx+"num_nextn_predict_layers" || key == pfx+"nextn_predict_layers") && isIntType(t):
 				v, err := readInt()
 				if err != nil {
 					return Metadata{}, err

@@ -1,37 +1,38 @@
 <#
 .SYNOPSIS
-  Install/uninstall llama-quartermaster as a Windows service via NSSM.
+  Install llama-quartermaster as a Windows service via NSSM. Self-elevating.
 
 .DESCRIPTION
   The proxy binary has no Service Control Manager handler, so it can't be run by
   `sc create` directly (SCM would kill it for "not responding to start"). This
   script wraps it with NSSM (https://nssm.cc), the de-facto tool for turning a
-  console exe into a service. For a no-extra-tool option, use the WinSW xml in
-  this folder instead (see llama-quartermaster-service.xml).
+  console exe into a service.
 
-  Run from an ELEVATED PowerShell prompt.
+  Double-click or run from any PowerShell prompt: the script relaunches itself
+  elevated (UAC) if not already admin. With no arguments it uses the bundle
+  layout: exe, config.yaml and quartermaster-generate.yaml sit two levels up
+  from this script (the release-bundle root).
+
+  To remove: run uninstall-service.ps1 in this folder.
 
 .PARAMETER ExePath
-  Path to the proxy binary (e.g. build\llama-swap-windows-amd64.exe).
+  Path to the proxy binary. Defaults to <bundle>\llama-swap-windows-amd64.exe.
 
 .PARAMETER Config
-  Output config path (-config). Generated here when -Generate is set.
+  Config path (-config). Defaults to <bundle>\config.yaml.
 
 .PARAMETER Generate
-  Autogen control file (-generate). Omit to load a static -config.
+  Autogen control file (-generate). Defaults to <bundle>\quartermaster-generate.yaml
+  when present; omit/clear to load a static -config only.
 
 .PARAMETER Listen
   Listen address (-listen). Default 0.0.0.0:1250.
 
-.PARAMETER Uninstall
-  Remove the service instead of installing.
+.EXAMPLE
+  .\install-service.ps1
 
 .EXAMPLE
-  .\install-service.ps1 -ExePath C:\llama-qm\llama-swap-windows-amd64.exe `
-    -Config C:\llama-qm\config.yaml -Generate C:\llama-qm\quartermaster-generate.yaml
-
-.EXAMPLE
-  .\install-service.ps1 -Uninstall
+  .\install-service.ps1 -Listen 0.0.0.0:1300 -Generate ''
 #>
 [CmdletBinding()]
 param(
@@ -41,17 +42,35 @@ param(
     [string]$Generate,
     [string]$Listen = '0.0.0.0:1250',
     [switch]$WatchConfig = $true,
-    [switch]$Uninstall
+    [switch]$NoPause
 )
 
 $ErrorActionPreference = 'Stop'
 
-function Require-Admin {
+function Test-Admin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $p = New-Object Security.Principal.WindowsPrincipal($id)
-    if (-not $p.IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
-        throw "Run this script from an elevated (Administrator) PowerShell prompt."
+    (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
+        [Security.Principal.WindowsBuiltinRole]::Administrator)
+}
+
+# Self-elevate: relaunch this exact script with the same bound parameters under UAC.
+if (-not (Test-Admin)) {
+    Write-Host "Requesting administrator elevation..." -ForegroundColor Cyan
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
+    foreach ($k in $PSBoundParameters.Keys) {
+        $v = $PSBoundParameters[$k]
+        if ($v -is [System.Management.Automation.SwitchParameter]) {
+            if ($v.IsPresent) { $argList += "-$k" }
+        } else {
+            $argList += "-$k"; $argList += "`"$v`""
+        }
     }
+    try {
+        Start-Process powershell.exe -Verb RunAs -ArgumentList $argList
+    } catch {
+        throw "Elevation cancelled or failed: $($_.Exception.Message)"
+    }
+    return
 }
 
 function Get-Nssm {
@@ -60,24 +79,24 @@ function Get-Nssm {
     throw "nssm not found on PATH. Install it (https://nssm.cc) or use the WinSW xml in this folder."
 }
 
-Require-Admin
+# Resolve bundle root (two levels up: <root>\packaging\windows\install-service.ps1).
+$scriptDir = $PSScriptRoot
+if (-not $scriptDir) { $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition }
+$root = Split-Path -Parent (Split-Path -Parent $scriptDir)
+
+# Default paths from the bundle layout when not supplied.
+if (-not $ExePath)  { $ExePath = Join-Path $root 'llama-swap-windows-amd64.exe' }
+if (-not $Config)   { $Config  = Join-Path $root 'config.yaml' }
+if (-not $PSBoundParameters.ContainsKey('Generate')) {
+    $g = Join-Path $root 'quartermaster-generate.yaml'
+    if (Test-Path -LiteralPath $g) { $Generate = $g }
+}
+
 $nssm = Get-Nssm
 
-if ($Uninstall) {
-    Write-Host "Stopping and removing service '$ServiceName'..."
-    & $nssm stop $ServiceName confirm 2>$null | Out-Null
-    & $nssm remove $ServiceName confirm
-    Write-Host "Removed."
-    return
-}
-
-if (-not $ExePath -or -not (Test-Path -LiteralPath $ExePath)) {
-    throw "-ExePath is required and must exist: '$ExePath'"
-}
-if (-not $Config) { throw "-Config is required (the config path to load / generate to)." }
-
-$ExePath  = (Resolve-Path -LiteralPath $ExePath).Path
-$workDir  = Split-Path -Parent $ExePath
+if (-not (Test-Path -LiteralPath $ExePath)) { throw "-ExePath not found: '$ExePath'" }
+$ExePath = (Resolve-Path -LiteralPath $ExePath).Path
+$workDir = Split-Path -Parent $ExePath
 
 # Build argument string.
 $argList = @('-config', "`"$Config`"")
@@ -93,6 +112,13 @@ Write-Host "Installing service '$ServiceName'"
 Write-Host "  exe : $ExePath"
 Write-Host "  args: $arguments"
 
+# Replace any existing instance cleanly.
+if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
+    Write-Host "Existing service found; removing first..." -ForegroundColor DarkGray
+    & $nssm stop $ServiceName confirm 2>$null | Out-Null
+    & $nssm remove $ServiceName confirm | Out-Null
+}
+
 & $nssm install $ServiceName $ExePath
 & $nssm set $ServiceName AppParameters $arguments
 & $nssm set $ServiceName AppDirectory $workDir
@@ -104,4 +130,6 @@ Write-Host "  args: $arguments"
 
 Write-Host "Starting..."
 & $nssm start $ServiceName
-Write-Host "Done. Manage with: nssm {start|stop|restart|status} $ServiceName"
+Write-Host "Done. Manage with: nssm {start|stop|restart|status} $ServiceName" -ForegroundColor Green
+
+if (-not $NoPause) { Write-Host "`nPress any key to close..."; [void][System.Console]::ReadKey($true) }

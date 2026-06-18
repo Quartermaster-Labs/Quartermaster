@@ -6,6 +6,16 @@ export interface GroupedModels {
   peersByProvider: Record<string, Model[]>;
 }
 
+// prettifyModelName turns a raw model id ("gemma-3-12b-it") into a display label
+// ("Gemma 3 12b It"): dashes/underscores become spaces, each word capitalized.
+// Cosmetic only — callers keep model.id for load/unload/links.
+export function prettifyModelName(s: string): string {
+  return s
+    .split(/[-_]/)
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
+}
+
 export function matchesCapabilities(model: Model, required: string[], matchAny = false): boolean {
   if (!required.length) return true;
   if (!model.capabilities) return false;

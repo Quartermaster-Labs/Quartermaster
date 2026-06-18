@@ -64,6 +64,36 @@ type PlanOptions struct {
 	cudaSet          bool
 }
 
+// densePlacement chooses -ngl for a model placed layer-by-layer. Each
+// GPU-resident layer carries BOTH its weight slice and its KV-cache slice in
+// VRAM; layers left on the CPU keep their KV in RAM. So the full-ctx KV reserve
+// is spread across blocks (kvReserve/blocks per layer) rather than subtracted
+// whole from the VRAM budget up front. The old "usableVram = target - kvReserve"
+// form reserved every layer's KV in VRAM even for CPU-resident layers, which
+// drove ngl toward 0 while the reserved VRAM sat unused (e.g. a 24B dense at 64k
+// ctx pinned to -ngl 0 on a 7GB budget). Diverges from the PowerShell
+// Get-LlamaLoadPlan, which shares the same flaw.
+func densePlacement(size, kvReserve float64, blocks int, target, cudaOverhead float64) (ngl int, estVram, estRam float64) {
+	perLayer := (size + kvReserve) / float64(blocks)
+	budget := target - cudaOverhead
+	if perLayer > 0 && budget > 0 {
+		ngl = int(math.Floor(budget / perLayer))
+	}
+	if ngl > blocks+1 {
+		ngl = blocks + 1
+	}
+	if ngl < 0 {
+		ngl = 0
+	}
+	gpuFrac := float64(ngl) / float64(blocks)
+	if gpuFrac > 1 {
+		gpuFrac = 1
+	}
+	estVram = gpuFrac*(size+kvReserve) + cudaOverhead
+	estRam = (1 - gpuFrac) * (size + kvReserve)
+	return
+}
+
 // GetLoadPlan derives -ngl and --n-cpu-moe from a VRAM budget and gguf metadata.
 // Port of Get-LlamaLoadPlan.ps1.
 func GetLoadPlan(meta Metadata, opt PlanOptions) (LoadPlan, error) {
@@ -110,18 +140,9 @@ func GetLoadPlan(meta Metadata, opt PlanOptions) (LoadPlan, error) {
 		usableForExperts := usableVram - nonExpertTotal
 		if usableForExperts <= 0 {
 			// Dense path can't even fit; fall back to -ngl reduction.
-			perLayer := size / float64(blocks)
-			ngl = int(math.Floor(usableVram / perLayer))
-			if ngl > blocks+1 {
-				ngl = blocks + 1
-			}
-			if ngl < 0 {
-				ngl = 0
-			}
+			ngl, estVram, estRam = densePlacement(size, kvReserve, blocks, opt.TargetVramGB, cudaOverhead)
 			ncpuMoe = 0
 			reasons = append(reasons, fmt.Sprintf("MoE share=%.2f but non-expert weight %.2fGB exceeds usable VRAM -> dense fallback -ngl=%d", share, nonExpertTotal, ngl))
-			estVram = (float64(ngl)/float64(blocks))*size + kvReserve + cudaOverhead
-			estRam = size - (float64(ngl)/float64(blocks))*size
 		} else {
 			perMoeLayer := (size * share) / float64(blocks)
 			moeLayersOnGpu := math.Floor(usableForExperts / perMoeLayer)
@@ -135,17 +156,8 @@ func GetLoadPlan(meta Metadata, opt PlanOptions) (LoadPlan, error) {
 			// naive -ngl (one boundary transition) wins.
 			crossoverFrac := 0.5
 			if float64(ncpuMoeCandidate) > float64(blocks)*crossoverFrac {
-				perLayer := size / float64(blocks)
-				ngl = int(math.Floor(usableVram / perLayer))
-				if ngl > blocks+1 {
-					ngl = blocks + 1
-				}
-				if ngl < 0 {
-					ngl = 0
-				}
+				ngl, estVram, estRam = densePlacement(size, kvReserve, blocks, opt.TargetVramGB, cudaOverhead)
 				ncpuMoe = 0
-				estVram = (float64(ngl)/float64(blocks))*size + kvReserve + cudaOverhead
-				estRam = size - (float64(ngl)/float64(blocks))*size
 				reasons = append(reasons, fmt.Sprintf("MoE share=%.2f but ncpumoe candidate %d/%d exceeds %.0f%% crossover -> naive -ngl=%d (avoid PCIe thrash)", share, ncpuMoeCandidate, blocks, crossoverFrac*100, ngl))
 			} else {
 				ncpuMoe = ncpuMoeCandidate
@@ -158,18 +170,9 @@ func GetLoadPlan(meta Metadata, opt PlanOptions) (LoadPlan, error) {
 		}
 
 	default:
-		perLayer := size / float64(blocks)
-		ngl = int(math.Floor(usableVram / perLayer))
-		if ngl > blocks+1 {
-			ngl = blocks + 1
-		}
-		if ngl < 0 {
-			ngl = 0
-		}
+		ngl, estVram, estRam = densePlacement(size, kvReserve, blocks, opt.TargetVramGB, cudaOverhead)
 		ncpuMoe = 0
-		estVram = (float64(ngl)/float64(blocks))*size + kvReserve + cudaOverhead
-		estRam = size - (float64(ngl)/float64(blocks))*size
-		reasons = append(reasons, fmt.Sprintf("dense per_layer=%.3fGB -> -ngl=%d/%d", perLayer, ngl, blocks))
+		reasons = append(reasons, fmt.Sprintf("dense per_layer=%.3fGB(w)+%.3fGB(kv) -> -ngl=%d/%d", size/float64(blocks), kvReserve/float64(blocks), ngl, blocks))
 	}
 
 	ramExceeded := false
