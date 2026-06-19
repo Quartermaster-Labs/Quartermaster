@@ -11,8 +11,8 @@ to load a static `-config` instead.
 
 ```sh
 # 1. Build + place the binary
-make build                                  # or: go build -o llama-swap .
-sudo install -D -m755 build/llama-swap-linux-amd64 /opt/llama-quartermaster/llama-swap
+make build                                  # or: go build -o llama-quartermaster .
+sudo install -D -m755 build/llama-quartermaster-linux-amd64 /opt/llama-quartermaster/llama-quartermaster
 
 # 2. Config dir + control file
 sudo mkdir -p /etc/llama-quartermaster
@@ -45,7 +45,7 @@ Pick one wrapper.
 ```powershell
 # Elevated PowerShell. nssm must be on PATH (https://nssm.cc).
 .\packaging\windows\install-service.ps1 `
-  -ExePath  C:\llama-qm\llama-swap-windows-amd64.exe `
+  -ExePath  C:\llama-qm\llama-quartermaster-windows-amd64.exe `
   -Config   C:\llama-qm\config.yaml `
   -Generate C:\llama-qm\quartermaster-generate.yaml `
   -Listen   0.0.0.0:1250

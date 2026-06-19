@@ -73,7 +73,7 @@ func newLoadingWriter(logger *logmon.Monitor, modelName string, w http.ResponseW
 	s.Header().Set("Connection", "keep-alive")
 	s.WriteHeader(http.StatusOK)
 	s.sendLine("━━━━━")
-	s.sendLine(fmt.Sprintf("llama-swap loading model: %s", modelName))
+	s.sendLine(fmt.Sprintf("llama-quartermaster loading model: %s", modelName))
 	return s
 }
 

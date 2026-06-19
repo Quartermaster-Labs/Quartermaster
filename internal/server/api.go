@@ -142,7 +142,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 			ID:          id,
 			Object:      "model",
 			Created:     created,
-			OwnedBy:     "llama-swap",
+			OwnedBy:     "llama-quartermaster",
 			Name:        strings.TrimSpace(name),
 			Description: strings.TrimSpace(description),
 		}

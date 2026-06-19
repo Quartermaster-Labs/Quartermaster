@@ -165,7 +165,7 @@ type Config struct {
 	Peers PeerDictionaryConfig `yaml:"peers"`
 
 	// Listeners maps a listen address (e.g. ":1250") to the set of groups it
-	// exposes. When non-empty, llama-swap binds one HTTP server per address,
+	// exposes. When non-empty, llama-quartermaster binds one HTTP server per address,
 	// all sharing the single router/scheduler, and each address's catalog and
 	// request routing are restricted to the models of its groups. Empty =>
 	// legacy single --listen behaviour. See internal/config/listeners.go.

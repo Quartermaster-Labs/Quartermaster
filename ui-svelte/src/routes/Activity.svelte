@@ -234,8 +234,8 @@
           </svg>
         </button>
         {#if columnsMenuOpen}
-          <div class="absolute right-0 top-full mt-1 bg-surface border border-gray-200 dark:border-white/10 rounded shadow-lg z-10 py-1 min-w-[16rem]" role="list">
-            <div class="px-3 py-2 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-white/10" role="presentation">
+          <div class="absolute right-0 top-full mt-1 bg-surface border border-card-border rounded shadow-lg z-10 py-1 min-w-[16rem]" role="list">
+            <div class="px-3 py-2 text-xs font-medium uppercase tracking-wider text-txtsecondary border-b border-card-border" role="presentation">
               Columns
             </div>
             {#each orderedColumns as col (col.key)}
@@ -272,7 +272,7 @@
     </div>
 
     <table class="min-w-full divide-y">
-      <thead class="border-gray-200 dark:border-white/10">
+      <thead class="border-card-border">
         <tr class="text-left text-xs uppercase tracking-wider">
           {#each activeVisibleColumns as key (key)}
             <th class="px-6 py-3">
@@ -290,13 +290,13 @@
       <tbody class="divide-y">
         {#if sortedMetrics.length === 0}
           <tr>
-            <td colspan={activeVisibleColumns.length} class="px-6 py-8 text-center text-sm text-gray-500 dark:text-gray-400">
+            <td colspan={activeVisibleColumns.length} class="px-6 py-8 text-center text-sm text-txtsecondary">
               No activity recorded
             </td>
           </tr>
         {:else}
           {#each sortedMetrics as metric (metric.id)}
-            <tr class="whitespace-nowrap text-sm border-gray-200 dark:border-white/10">
+            <tr class="whitespace-nowrap text-sm border-card-border">
               {#each activeVisibleColumns as key (key)}
                 <td class="px-6 py-4">
                   {#if key === "id"}

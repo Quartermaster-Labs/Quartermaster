@@ -123,7 +123,7 @@
     };
   }
 
-  // Detect and split the llama-swap loading block (wrapped in ━━━━━ markers,
+  // Detect and split the llama-quartermaster loading block (wrapped in ━━━━━ markers,
   // delivered as reasoning_content) from the model's own reasoning tokens.
   function ingestReasoning(
     prev: RunState,
@@ -389,11 +389,11 @@
       <div class="text-xs font-medium text-txtsecondary mb-1">
         Models <span class="text-[10px] font-normal">— click to queue (add the same model more than once to test parallel requests)</span>
       </div>
-      <div class="flex-1 border border-gray-200 dark:border-white/10 rounded overflow-y-auto min-h-0">
+      <div class="flex-1 border border-card-border rounded overflow-y-auto min-h-0">
         {#if !hasModels}
           <div class="p-3 text-sm text-txtsecondary text-center">No models configured.</div>
         {:else}
-          <ul class="divide-y divide-gray-100 dark:divide-white/5">
+          <ul class="divide-y divide-card-border">
             {#each availableModels as m (m.id)}
               <li>
                 <button
@@ -413,7 +413,7 @@
     </div>
 
     <!-- Settings -->
-    <div class="flex flex-col gap-2 border-t border-gray-200 dark:border-white/10 pt-3">
+    <div class="flex flex-col gap-2 border-t border-card-border pt-3">
       <div class="flex items-center justify-between">
         <label for="concurrency-prompt" class="text-xs font-medium text-txtsecondary">Prompt</label>
         <button
@@ -426,7 +426,7 @@
       </div>
       <textarea
         id="concurrency-prompt"
-        class="w-full px-2 py-1.5 text-sm rounded border border-gray-200 dark:border-white/10 bg-surface focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+        class="w-full px-2 py-1.5 text-sm rounded border border-card-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary resize-none"
         rows="3"
         bind:value={$promptStore}
         disabled={isRunning}
@@ -436,7 +436,7 @@
         id="concurrency-max-tokens"
         type="number"
         min="1"
-        class="w-full px-2 py-1.5 text-sm rounded border border-gray-200 dark:border-white/10 bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
+        class="w-full px-2 py-1.5 text-sm rounded border border-card-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
         bind:value={$maxTokensStore}
         disabled={isRunning}
       />
@@ -450,7 +450,7 @@
         <div class="max-w-md text-sm text-txtsecondary space-y-4">
           <h4 class="text-base font-semibold text-txtmain pb-0">Load Test</h4>
           <p>
-            Fire several streaming chat completions at llama-swap at the same time to see how it handles parallel
+            Fire several streaming chat completions at llama-quartermaster at the same time to see how it handles parallel
             loading and concurrent inference. Each request streams into its own panel with a live timer and status.
           </p>
           <ol class="list-decimal list-inside space-y-1">
@@ -463,9 +463,9 @@
       </div>
     {:else}
       <!-- Gantt-style timeline -->
-      <div class="mb-3 border border-gray-200 dark:border-white/10 rounded">
+      <div class="mb-3 border border-card-border rounded">
           <button
-            class="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-medium text-txtsecondary hover:bg-secondary-hover transition-colors {$timelineCollapsedStore ? 'rounded' : 'rounded-t border-b border-gray-200 dark:border-white/10'}"
+            class="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-medium text-txtsecondary hover:bg-secondary-hover transition-colors {$timelineCollapsedStore ? 'rounded' : 'rounded-t border-b border-card-border'}"
             onclick={() => timelineCollapsedStore.update((v) => !v)}
             aria-expanded={!$timelineCollapsedStore}
           >
@@ -481,7 +481,7 @@
             <span>Timeline</span>
             {#if !$timelineCollapsedStore}
               <span class="flex items-center gap-3 text-[10px] text-txtsecondary font-normal ml-3" aria-hidden="true">
-                <span class="flex items-center gap-1"><span class="inline-block w-2.5 h-2.5 rounded-sm bg-slate-200 dark:bg-white/10 border border-gray-300 dark:border-white/10"></span>waiting</span>
+                <span class="flex items-center gap-1"><span class="inline-block w-2.5 h-2.5 rounded-sm bg-slate-200 dark:bg-white/10 border border-card-border"></span>waiting</span>
                 <span class="flex items-center gap-1"><span class="inline-block w-2.5 h-2.5 rounded-sm bg-slate-400 dark:bg-slate-500"></span>loading</span>
                 <span class="flex items-center gap-1"><span class="inline-block w-2.5 h-2.5 rounded-sm bg-purple-500"></span>reasoning</span>
                 <span class="flex items-center gap-1"><span class="inline-block w-2.5 h-2.5 rounded-sm bg-amber-400 dark:bg-amber-500"></span>streaming</span>
@@ -498,10 +498,10 @@
               <!-- X axis ticks -->
               <div class="flex" aria-hidden="true">
                 <div class="w-40 shrink-0"></div>
-                <div class="relative flex-1 h-4 border-b border-gray-200 dark:border-white/10">
+                <div class="relative flex-1 h-4 border-b border-card-border">
                   {#each timelineTicks as t (t)}
                     <div
-                      class="absolute top-0 bottom-0 border-l border-gray-200 dark:border-white/10"
+                      class="absolute top-0 bottom-0 border-l border-card-border"
                       style="left: {(t / timelineMaxMs) * 100}%;"
                     >
                       <span class="absolute -top-0.5 left-1 text-[10px] text-txtsecondary tabular-nums">{formatTickMs(t)}</span>
@@ -526,7 +526,7 @@
                     <div class="relative flex-1 h-4">
                       {#each timelineTicks as t (t)}
                         <div
-                          class="absolute top-0 bottom-0 border-l border-gray-100 dark:border-white/5"
+                          class="absolute top-0 bottom-0 border-l border-card-border"
                           style="left: {(t / timelineMaxMs) * 100}%;"
                           aria-hidden="true"
                         ></div>
@@ -576,14 +576,14 @@
           <div
             class="border rounded flex flex-col min-h-0 transition-colors {dragOverIndex === i && dragIndex !== i
               ? 'border-primary ring-2 ring-primary/40'
-              : 'border-gray-200 dark:border-white/10'} {dragIndex === i ? 'opacity-40' : ''}"
+              : 'border-card-border'} {dragIndex === i ? 'opacity-40' : ''}"
             style="height: 280px;"
             role="listitem"
             ondragover={(e) => onDragOver(i, e)}
             ondrop={(e) => onDrop(i, e)}
           >
             <div
-              class="shrink-0 flex items-center gap-2 px-2 py-1.5 border-b border-gray-200 dark:border-white/10 bg-secondary/40 rounded-t"
+              class="shrink-0 flex items-center gap-2 px-2 py-1.5 border-b border-card-border bg-secondary/40 rounded-t"
               draggable={!isRunning}
               role="button"
               tabindex="-1"

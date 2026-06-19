@@ -5,7 +5,7 @@ sub-package.
 
 ## Intro
 
-A llama-swap router is the component that sits behind the proxy and answers one
+A llama-quartermaster router is the component that sits behind the proxy and answers one
 question for every incoming request: _can this model serve right now, and if
 not, what has to happen first?_ Answering it means juggling three concerns that
 used to live tangled together in one type:

@@ -13,6 +13,7 @@ type EstimateInput struct {
 	KvInRam      bool
 	Spec         string
 	TargetVramGB float64
+	CpuOffload   int // >0 pins layers offloaded to CPU, overriding the sizer
 }
 
 // EstimateResult is the previewed load plan for a candidate tuning.
@@ -85,6 +86,11 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		return EstimateResult{}, err
 	}
 	ngl, ncpuMoe := forceLowActiveMoE(meta, plan, prof, kvReserve)
+	if in.CpuOffload > 0 {
+		ngl, ncpuMoe = applyForcedOffload(meta, in.CpuOffload)
+		plan.EstVramGB, plan.EstRamGB = estForOffload(meta, prof, kvReserve, ngl, ncpuMoe)
+		plan.RamExceeded = s.MaxRamGB > 0 && plan.EstRamGB > s.MaxRamGB
+	}
 
 	return EstimateResult{
 		Ctx:          ctx,

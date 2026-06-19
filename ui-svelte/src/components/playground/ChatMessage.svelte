@@ -163,13 +163,13 @@
   <div
     class="relative group rounded-lg px-4 py-2 {role === 'user'
       ? 'max-w-[85%] bg-primary text-btn-primary-text'
-      : 'w-full sm:w-4/5 bg-surface border border-gray-200 dark:border-white/10'}"
+      : 'w-full sm:w-4/5 bg-surface border border-card-border'}"
   >
     {#if role === "assistant"}
       {#if reasoning_content || isReasoning}
-        <div class="mb-3 border border-gray-200 dark:border-white/10 rounded overflow-hidden">
+        <div class="mb-3 border border-card-border rounded overflow-hidden">
           <button
-            class="w-full flex items-center gap-2 px-3 py-2 bg-gray-50 dark:bg-white/5 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors text-sm"
+            class="w-full flex items-center gap-2 px-3 py-2 bg-secondary hover:bg-secondary-hover transition-colors text-sm"
             onclick={() => showReasoning = !showReasoning}
           >
             {#if showReasoning}
@@ -190,7 +190,7 @@
             {/if}
           </button>
           {#if showReasoning}
-            <div class="px-3 py-2 bg-gray-50/50 dark:bg-white/[0.02] text-sm text-txtsecondary whitespace-pre-wrap font-mono">
+            <div class="px-3 py-2 bg-secondary/50 text-sm text-txtsecondary whitespace-pre-wrap font-mono">
               {reasoning_content}{#if isReasoning}<span class="inline-block w-1.5 h-4 bg-current animate-pulse ml-0.5"></span>{/if}
             </div>
           {/if}
@@ -201,7 +201,7 @@
           {#each imageUrls as imageUrl, idx (idx)}
             <button
               onclick={() => openModal(imageUrl)}
-              class="cursor-pointer rounded border border-gray-200 dark:border-white/10 hover:opacity-80 transition-opacity"
+              class="cursor-pointer rounded border border-card-border hover:opacity-80 transition-opacity"
             >
               <img
                 src={imageUrl}
@@ -226,7 +226,7 @@
         </div>
       {/if}
       {#if !isStreaming}
-        <div class="flex gap-1 mt-2 pt-1 border-t border-gray-200 dark:border-white/10">
+        <div class="flex gap-1 mt-2 pt-1 border-t border-card-border">
           {#if onRegenerate}
             <button
               class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary"
@@ -260,7 +260,7 @@
       {#if isEditing}
         <div class="flex flex-col gap-2 min-w-[300px]">
           <textarea
-            class="w-full px-3 py-2 rounded border border-gray-200 dark:border-white/10 bg-surface text-txtmain focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+            class="w-full px-3 py-2 rounded border border-card-border bg-surface text-txtmain focus:outline-none focus:ring-2 focus:ring-primary resize-none"
             rows="3"
             bind:value={editContent}
             onkeydown={handleKeyDown}

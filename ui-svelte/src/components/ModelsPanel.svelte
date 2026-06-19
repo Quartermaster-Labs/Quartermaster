@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { models, upstreamLogs, loadModel, unloadAllModels, unloadSingleModel, getModelConfig, putModelOverride, type ModelConfig, type ModelOverride } from "../stores/api";
+  import { models, loadModel, unloadSingleModel, getModelConfig, putModelOverride, type ModelConfig, type ModelOverride } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
   import { prettifyModelName } from "../lib/modelUtils";
+  import { scrollFade } from "../lib/scrollFade";
   import type { Model } from "../lib/types";
   import ModelConfigModal from "./ModelConfigModal.svelte";
-  import LogPanel from "./LogPanel.svelte";
+  import InferenceFeedback from "./InferenceFeedback.svelte";
 
-  let isUnloading = $state(false);
   let pendingLoads = $state<Record<string, boolean>>({});
   const loadControllers = new Map<string, AbortController>();
 
@@ -220,6 +220,9 @@
     "--cache-type-k": "kvK",
     "-ctv": "kvV",
     "--cache-type-v": "kvV",
+    "--spec-type": "spec",
+    "--reasoning-format": "reasoningFmt",
+    "--reasoning": "reasoning", // captures the `--reasoning off` switch
   };
   function parseFlags(cmd: string): Record<string, string> {
     const out: Record<string, string> = {};
@@ -231,15 +234,22 @@
     return out;
   }
 
-  async function handleUnloadAllModels(): Promise<void> {
-    isUnloading = true;
-    try {
-      await unloadAllModels();
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setTimeout(() => (isUnloading = false), 1000);
-    }
+  // Effective (resolved) values the empty "inherit" option falls back to, parsed
+  // from the actual launch command, so the dropdown shows what "default" means.
+  function specDefault(f: Record<string, string>): string {
+    return f.spec || "auto";
+  }
+  function reasonDefault(f: Record<string, string>): string {
+    return f.reasoning === "off" ? "off" : f.reasoningFmt || "auto";
+  }
+  // GPU layers as value/max (max = transformer blocks). -ngl 99 is the "all
+  // layers" sentinel, so clamp to the block count. Falls back to the raw value
+  // when the block count is unknown (0).
+  function nglDisplay(ngl: string | undefined, blocks: number): string {
+    if (ngl == null) return "—";
+    const n = Number(ngl);
+    if (!blocks || !Number.isFinite(n)) return ngl;
+    return `${Math.min(n, blocks)}/${blocks}`;
   }
 
   async function handleLoadModel(modelId: string): Promise<void> {
@@ -279,10 +289,19 @@
     return "bg-txtsecondary";
   }
 
-  // Per-card variant expansion (load individual variants).
+  // Per-card variant expansion (load individual variants). dropUp flips the
+  // popup above the trigger when a bottom-row card lacks room below, so it stays
+  // in view instead of being clipped by the scroll container.
   let expanded = $state<Record<string, boolean>>({});
-  function toggleExpand(key: string): void {
-    expanded[key] = !expanded[key];
+  let dropUp = $state<Record<string, boolean>>({});
+  const POPUP_H = 260; // ~max-h-60 (240px) + margin
+  function toggleExpand(key: string, e?: MouseEvent): void {
+    const opening = !expanded[key];
+    if (opening && e) {
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      dropUp[key] = window.innerHeight - rect.bottom < POPUP_H && rect.top > POPUP_H;
+    }
+    expanded[key] = opening;
   }
 </script>
 
@@ -292,6 +311,12 @@
   {/snippet}
   {#snippet stopIcon()}
     <svg viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3 shrink-0" aria-hidden="true"><rect x="5" y="5" width="10" height="10" rx="1.5" /></svg>
+  {/snippet}
+  {#snippet hint(text: string)}
+    <span
+      class="inline-flex items-center justify-center w-3 h-3 shrink-0 rounded-full border border-card-border text-txtsecondary text-[0.5rem] leading-none cursor-help normal-case hover:text-txtmain hover:border-txtmain"
+      title={text}
+      aria-label={text}>?</span>
   {/snippet}
 
   <!-- Header / toolbar -->
@@ -311,13 +336,6 @@
         title="Show or hide unlisted models"
       >
         {$showUnlistedStore ? "Hide unlisted" : "Show unlisted"}
-      </button>
-      <button
-        class="btn btn--sm uppercase tracking-wide hover:border-error hover:text-error"
-        onclick={handleUnloadAllModels}
-        disabled={isUnloading}
-      >
-        {isUnloading ? "Unloading…" : "Unload all"}
       </button>
     </div>
   </div>
@@ -397,13 +415,13 @@
                   {/if}
                 </div>
               </div>
-              <div class="mt-1.5 font-mono text-sm font-bold text-txtmain break-words" title={m.id}>{display(m)}</div>
+              <div class="mt-1.5 font-mono text-sm uppercase tracking-widest text-txtsecondary break-words" title={m.id}>{display(m)}</div>
 
               <!-- Editable launch params (apply via Reload) -->
               {#if d}
                 <div class="mt-2 grid grid-cols-3 gap-x-3 gap-y-2 font-mono text-xs">
                   <label class="flex flex-col gap-0.5">
-                    <span class="text-txtsecondary uppercase tracking-wide">Ctx</span>
+                    <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">Ctx {@render hint("Context window (tokens) this model loads with. Empty = the size the autogen sizer picked to fit free VRAM. Applies on Reload.")}</span>
                     <input
                       type="number" min="0" step="1024" placeholder="auto" bind:value={d.ctx}
                       onwheel={(e) => {
@@ -415,35 +433,35 @@
                     />
                   </label>
                   <div>
-                    <div class="text-txtsecondary uppercase tracking-wide">GPU layers</div>
-                    <div class="text-txtmain tabular-nums pt-1.5">{flags.ngl ?? "—"}</div>
+                    <div class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">GPU layers {@render hint("Layers resident on the GPU (-ngl), as chosen by the sizer for the current plan. Read-only here; pin it via the cogwheel's offload setting.")}</div>
+                    <div class="text-txtmain tabular-nums pt-1.5">{nglDisplay(flags.ngl, cfg?.blockCount ?? 0)}</div>
                   </div>
                   <div>
-                    <div class="text-txtsecondary uppercase tracking-wide">CPU MoE</div>
+                    <div class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">CPU MoE {@render hint("Expert layers offloaded to the CPU (--n-cpu-moe) for MoE models. Read-only here; pin it via the cogwheel's offload setting.")}</div>
                     <div class="text-txtmain tabular-nums pt-1.5">{flags.cpuMoe ?? "—"}</div>
                   </div>
                   <label class="flex flex-col gap-0.5">
-                    <span class="text-txtsecondary uppercase tracking-wide">KV K</span>
+                    <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">KV K {@render hint("Quantization of the attention key cache (-ctk). Lower bits = less VRAM, slightly less accuracy. auto = q8_0. Must match KV V for flash-attention.")}</span>
                     <select bind:value={d.kvK} class="w-full rounded border border-card-border bg-background px-1.5 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary">
                       {#each KV_OPTS as o (o)}<option value={o}>{o === "" ? "auto" : o}</option>{/each}
                     </select>
                   </label>
                   <label class="flex flex-col gap-0.5">
-                    <span class="text-txtsecondary uppercase tracking-wide">KV V</span>
+                    <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">KV V {@render hint("Quantization of the attention value cache (-ctv). Lower bits = less VRAM. auto = q8_0. Must match KV K for flash-attention.")}</span>
                     <select bind:value={d.kvV} class="w-full rounded border border-card-border bg-background px-1.5 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary">
                       {#each KV_OPTS as o (o)}<option value={o}>{o === "" ? "auto" : o}</option>{/each}
                     </select>
                   </label>
                   <label class="flex flex-col gap-0.5">
-                    <span class="text-txtsecondary uppercase tracking-wide">Spec</span>
+                    <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">Spec {@render hint("Speculative decoding to speed up generation (--spec-type). ngram-mod is the default; draft-mtp needs a model with MTP layers; none disables it.")}</span>
                     <select bind:value={d.spec} class="w-full rounded border border-card-border bg-background px-1.5 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary">
-                      {#each SPEC_OPTS as o (o)}<option value={o}>{o === "" ? "default" : o}</option>{/each}
+                      {#each SPEC_OPTS as o (o)}<option value={o}>{o === "" ? specDefault(flags) : o}</option>{/each}
                     </select>
                   </label>
                   <label class="flex flex-col gap-0.5">
-                    <span class="text-txtsecondary uppercase tracking-wide">Reasoning</span>
+                    <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">Reasoning {@render hint("How the model's chain-of-thought is parsed (--reasoning-format). auto lets llama.cpp detect it (reasoning stays on); off disables reasoning.")}</span>
                     <select bind:value={d.reasoningFmt} class="w-full rounded border border-card-border bg-background px-1.5 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary">
-                      {#each REASON_OPTS as o (o)}<option value={o}>{o === "" ? "default" : o}</option>{/each}
+                      {#each REASON_OPTS as o (o)}<option value={o}>{o === "" ? reasonDefault(flags) : o}</option>{/each}
                     </select>
                   </label>
                 </div>
@@ -459,16 +477,16 @@
           {/each}
         </div>
 
-        <!-- Upstream log -->
+        <!-- Live inference feedback (replaces the upstream log here) -->
         <div class="h-full min-h-0">
-          <LogPanel id="modelsupstream" title="Upstream log" logData={$upstreamLogs} />
+          <InferenceFeedback models={topMembers} />
         </div>
       </div>
     {/if}
   </div>
 
   <!-- BOTTOM: flat card grid of other models -->
-  <div class="flex-1 overflow-y-auto min-h-0 pretty-scroll scroll-fade-y px-0.5 py-1">
+  <div class="flex-1 overflow-y-auto min-h-0 pretty-scroll scroll-fade-y px-0.5 py-1" use:scrollFade>
     {#if view.idleCards.length > 0}
       <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {#each view.idleCards as card (card.key)}
@@ -498,7 +516,7 @@
             </div>
 
             <!-- Name -->
-            <span class="font-mono text-sm font-semibold text-txtmain truncate {m.unlisted ? 'opacity-70' : ''}" title={m.id}>
+            <span class="font-mono text-[0.7rem] uppercase tracking-widest text-txtsecondary truncate {m.unlisted ? 'opacity-70' : ''}" title={m.id}>
               {display(m)}
             </span>
 
@@ -507,7 +525,7 @@
               {#if variantCount > 1}
                 <button
                   class="font-mono text-[0.65rem] text-txtsecondary hover:text-txtmain border border-card-border rounded px-1.5 py-0.5 tabular-nums"
-                  onclick={() => toggleExpand(card.key)}
+                  onclick={(e) => toggleExpand(card.key, e)}
                   title="Show variants"
                 >
                   {variantCount} variants {expanded[card.key] ? "▴" : "▾"}
@@ -528,18 +546,30 @@
               {#if expanded[card.key] && card.variants.length > 0}
                 <!-- click-catcher: closes the menu on outside click -->
                 <button class="fixed inset-0 z-10 cursor-default" aria-label="Close variants" onclick={() => toggleExpand(card.key)}></button>
-                <div class="absolute z-20 left-0 right-0 top-full mt-1 rounded-md border border-card-border bg-surface shadow-lg p-1.5 flex flex-col gap-0.5 max-h-60 overflow-y-auto pretty-scroll">
+                <div class="absolute z-20 left-0 right-0 {dropUp[card.key] ? 'bottom-full mb-1' : 'top-full mt-1'} rounded-md border border-card-border bg-surface shadow-lg p-1.5 flex flex-col gap-0.5 max-h-60 overflow-y-auto pretty-scroll">
                   <div class="px-1.5 pb-1 font-mono text-[0.55rem] uppercase tracking-wide text-txtsecondary">Open in editor</div>
                   {#each [card.primary, ...card.variants] as v (v.id)}
-                    <button
-                      class="w-full text-left flex items-start gap-2 rounded px-1.5 py-1 hover:bg-background transition-colors {stagedId === v.id ? 'bg-background' : ''}"
-                      onclick={() => stageModel(v.id)}
-                      title={v.id}
-                    >
-                      <span class="inline-block w-1.5 h-1.5 rounded-full mt-1 shrink-0 {dotClass(v.state)}"></span>
-                      <span class="font-mono text-xs text-txtmain break-words whitespace-normal">{display(v)}</span>
-                      {#if isLive(v)}<span class="ml-auto shrink-0 font-mono text-[0.55rem] uppercase text-txtsecondary">{v.state}</span>{/if}
-                    </button>
+                    <div class="flex items-center gap-1 rounded hover:bg-background transition-colors {stagedId === v.id ? 'bg-background' : ''}">
+                      <button
+                        class="flex-1 min-w-0 text-left flex items-start gap-2 px-1.5 py-1"
+                        onclick={() => stageModel(v.id)}
+                        title={v.id}
+                      >
+                        <span class="inline-block w-1.5 h-1.5 rounded-full mt-1 shrink-0 {dotClass(v.state)}"></span>
+                        <span class="font-mono text-xs text-txtmain break-words whitespace-normal">{display(v)}</span>
+                        {#if isLive(v)}<span class="ml-auto shrink-0 font-mono text-[0.55rem] uppercase text-txtsecondary">{v.state}</span>{/if}
+                      </button>
+                      <button
+                        class="shrink-0 inline-flex items-center justify-center p-1 mr-0.5 rounded border border-card-border text-txtsecondary hover:text-txtmain hover:bg-card-border/40 transition-colors"
+                        onclick={(e) => { e.stopPropagation(); openConfig(card.primary.id); }}
+                        aria-label="Edit parameters"
+                        title="Edit parameters / variants"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3">
+                          <path fill-rule="evenodd" d="M8.34 1.804A1 1 0 0 1 9.32 1h1.36a1 1 0 0 1 .98.804l.295 1.473c.497.144.97.342 1.41.587l1.25-.834a1 1 0 0 1 1.262.125l.962.962a1 1 0 0 1 .125 1.262l-.834 1.25c.245.44.443.913.587 1.41l1.473.294a1 1 0 0 1 .804.98v1.361a1 1 0 0 1-.804.98l-1.473.295a6.95 6.95 0 0 1-.587 1.41l.834 1.25a1 1 0 0 1-.125 1.262l-.962.962a1 1 0 0 1-1.262.125l-1.25-.834c-.44.245-.913.443-1.41.587l-.294 1.473a1 1 0 0 1-.98.804H9.32a1 1 0 0 1-.98-.804l-.295-1.473a6.95 6.95 0 0 1-1.41-.587l-1.25.834a1 1 0 0 1-1.262-.125l-.962-.962a1 1 0 0 1-.125-1.262l.834-1.25a6.95 6.95 0 0 1-.587-1.41l-1.473-.294A1 1 0 0 1 1 10.68V9.32a1 1 0 0 1 .804-.98l1.473-.295c.144-.497.342-.97.587-1.41l-.834-1.25a1 1 0 0 1 .125-1.262l.962-.962A1 1 0 0 1 5.38 3.03l1.25.834c.44-.245.913-.443 1.41-.587l.294-1.473ZM10 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" clip-rule="evenodd" />
+                        </svg>
+                      </button>
+                    </div>
                   {/each}
                 </div>
               {/if}

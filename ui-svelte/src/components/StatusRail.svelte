@@ -2,6 +2,7 @@
   import { models, inFlightRequests, unloadAllModels } from "../stores/api";
   import { latestGpu, latestSys } from "../stores/perf";
   import { vramBreakdown } from "../stores/vram";
+  import { prettifyModelName } from "../lib/modelUtils";
   import VramGauge from "./VramGauge.svelte";
 
   // Models currently occupying the GPU (or about to). The whole tool is
@@ -29,7 +30,7 @@
 </script>
 
 <div
-  class="flex items-center gap-4 border-b border-border bg-surface px-4 py-2 font-mono text-xs overflow-x-auto whitespace-nowrap"
+  class="flex items-center gap-4 border-b border-border bg-surface px-4 h-10 shrink-0 font-mono text-xs overflow-x-auto whitespace-nowrap"
 >
   <!-- Loaded model(s) -->
   <div class="flex items-center gap-2 min-w-0">
@@ -38,9 +39,9 @@
       <span class="text-txtsecondary uppercase tracking-wide">No model loaded</span>
     {:else}
       {#each liveModels as m (m.id)}
-        <span class="flex items-center gap-1.5">
-          <span class="inline-block w-2 h-2 rounded-full {dotClass(m.state)}"></span>
-          <span class="text-txtmain truncate max-w-[16rem]" title={m.id}>{m.id}</span>
+        <span class="flex items-center gap-1.5 min-w-0">
+          <span class="inline-block w-2 h-2 rounded-full shrink-0 {dotClass(m.state)}"></span>
+          <span class="text-[0.6rem] uppercase tracking-widest text-txtsecondary truncate min-w-0 max-w-[14rem]" title={m.id}>{prettifyModelName(m.name || m.id)}</span>
         </span>
       {/each}
     {/if}

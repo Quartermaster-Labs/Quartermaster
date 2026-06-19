@@ -209,7 +209,7 @@
     <ModelSelector bind:value={$selectedModelStore} placeholder="Select a speech model..." disabled={isGenerating} capabilities={["audio_speech"]} />
     <div class="flex gap-2">
       <select
-        class="shrink-0 px-3 py-2 rounded border border-gray-200 dark:border-white/10 bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
+        class="shrink-0 px-3 py-2 rounded border border-card-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
         value={$selectedVoiceStore}
         onchange={handleVoiceChange}
         disabled={isGenerating || isLoadingVoices || !$selectedModelStore}
@@ -248,7 +248,7 @@
     </div>
   {:else}
     <!-- Audio display area -->
-    <div class="shrink-0 mb-4 bg-surface border border-gray-200 dark:border-white/10 rounded p-4 md:p-6">
+    <div class="shrink-0 mb-4 bg-surface border border-card-border rounded p-4 md:p-6">
       {#if isGenerating}
         <div class="flex items-center justify-center text-txtsecondary py-8">
           <div class="text-center">

@@ -19,9 +19,9 @@
 <service>
   <id>llama-quartermaster</id>
   <name>llama-quartermaster</name>
-  <description>llama-swap fork — model proxy with startup config autogen.</description>
+  <description>llama-quartermaster fork — model proxy with startup config autogen.</description>
 
-  <executable>%BASE%\llama-swap-windows-amd64.exe</executable>
+  <executable>%BASE%\llama-quartermaster-windows-amd64.exe</executable>
   <arguments>-config "%BASE%\config.yaml" -generate "%BASE%\quartermaster-generate.yaml" -listen 0.0.0.0:1250 -watch-config</arguments>
   <workingdirectory>%BASE%</workingdirectory>
 

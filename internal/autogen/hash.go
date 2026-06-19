@@ -69,6 +69,37 @@ func readHashCache(path string) string {
 	return strings.TrimSpace(string(b))
 }
 
+// buildHashInput assembles the byte blob whose digest gates regeneration:
+// resolved modelsRoot + raw generate file + UI sidecar. Kept in one place so
+// EnsureConfig and CurrentInputsHash always hash identical inputs.
+func buildHashInput(modelsRoot string, rawGenerate, sidecarBytes []byte) []byte {
+	out := append([]byte(modelsRoot+"\x00"), rawGenerate...)
+	return append(append(out, "\x00sidecar\x00"...), sidecarBytes...)
+}
+
+// CurrentInputsHash computes the inputs hash for the generate file's present
+// state (models folder + generate bytes + sidecar). It is the same value
+// EnsureConfig compares against its cache, so callers can cheaply detect whether
+// a regen would produce a different config without running one.
+func CurrentInputsHash(generatePath, modelsDirOverride string) (string, error) {
+	rawGenerate, err := os.ReadFile(generatePath)
+	if err != nil {
+		return "", fmt.Errorf("reading generate file: %w", err)
+	}
+	gf, err := LoadGenerateFile(generatePath, modelsDirOverride)
+	if err != nil {
+		return "", err
+	}
+	sidecarBytes, _ := os.ReadFile(SidecarPath(generatePath))
+	return InputsHash(gf.Settings.ModelsRoot, buildHashInput(gf.Settings.ModelsRoot, rawGenerate, sidecarBytes))
+}
+
+// CachedConfigHash returns the inputs hash recorded alongside the last generated
+// config, or "" when no config has been generated yet.
+func CachedConfigHash(outConfigPath string) string {
+	return readHashCache(outConfigPath + hashCacheSuffix)
+}
+
 // EnsureConfig generates outConfigPath from the generate control file when the
 // inputs changed (or the config is missing), and skips regeneration otherwise.
 // modelsDirOverride (from --models-dir) wins over the file's settings.modelsRoot.
@@ -87,8 +118,7 @@ func EnsureConfig(generatePath, outConfigPath, modelsDirOverride string, logf fu
 	// triggers a regen even when the file is unchanged. It also folds in the
 	// UI-owned sidecar so editing an override there forces a regen.
 	sidecarBytes, _ := os.ReadFile(SidecarPath(generatePath))
-	hashInput := append([]byte(gf.Settings.ModelsRoot+"\x00"), rawGenerate...)
-	hashInput = append(append(hashInput, "\x00sidecar\x00"...), sidecarBytes...)
+	hashInput := buildHashInput(gf.Settings.ModelsRoot, rawGenerate, sidecarBytes)
 	hash, err := InputsHash(gf.Settings.ModelsRoot, hashInput)
 	if err != nil {
 		return false, fmt.Errorf("hashing models: %w", err)

@@ -100,7 +100,7 @@ The metadata will be schemaless, allowing users to define any key-value pairs th
       "id": "llama",
       "object": "model",
       "created": 1234567890,
-      "owned_by": "llama-swap",
+      "owned_by": "llama-quartermaster",
       "name": "llama 3.1 8B",
       "description": "A small but capable model",
       "llamaswap_meta": {
@@ -277,7 +277,7 @@ None identified. The plan references the correct existing example in [config.exa
 1. **Why `llamaswap_meta` instead of merging into record?**
 
    - Avoids potential collisions with OpenAI API standard fields
-   - Makes it clear this is llama-swap specific metadata
+   - Makes it clear this is llama-quartermaster specific metadata
    - Easier for clients to distinguish standard vs. custom fields
 
 2. **Why support nested structures?**

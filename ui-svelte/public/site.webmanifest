@@ -1,6 +1,6 @@
 {
-  "name": "llama-swap",
-  "short_name": "llama-swap",
+  "name": "llama-quartermaster",
+  "short_name": "llama-quartermaster",
   "icons": [
     {
       "src": "/web-app-manifest-192x192.png",

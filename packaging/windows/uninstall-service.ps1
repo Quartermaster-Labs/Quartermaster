@@ -10,8 +10,8 @@
   Service to remove. Default llama-quartermaster.
 
 .PARAMETER RemoveLegacyTask
-  Also unregister the old 'llama-swap' scheduled task (the pre-fork startup
-  service) and kill any running llama-swap.exe.
+  Also unregister the old 'llama-quartermaster' scheduled task (the pre-fork startup
+  service) and kill any running llama-quartermaster.exe.
 
 .EXAMPLE
   .\uninstall-service.ps1
@@ -22,7 +22,7 @@
 [CmdletBinding()]
 param(
     [string]$ServiceName = 'llama-quartermaster',
-    [string]$LegacyTaskName = 'llama-swap',
+    [string]$LegacyTaskName = 'llama-quartermaster',
     [switch]$RemoveLegacyTask,
     [switch]$NoPause
 )
@@ -61,7 +61,7 @@ if ($RemoveLegacyTask) {
     } else {
         Write-Host "Legacy task '$LegacyTaskName' not present." -ForegroundColor DarkGray
     }
-    Stop-Process -Name 'llama-swap' -Force -ErrorAction SilentlyContinue
+    Stop-Process -Name 'llama-quartermaster' -Force -ErrorAction SilentlyContinue
 }
 
 $nssm = Get-Command nssm -ErrorAction SilentlyContinue
@@ -73,8 +73,8 @@ if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
     & $nssm stop $ServiceName confirm 2>$null | Out-Null
     & $nssm remove $ServiceName confirm
     # Ensure the proxy is actually dead (nssm stop can leave a detached child).
-    Stop-Process -Name 'llama-swap-windows-amd64' -Force -ErrorAction SilentlyContinue
-    Stop-Process -Name 'llama-swap' -Force -ErrorAction SilentlyContinue
+    Stop-Process -Name 'llama-quartermaster-windows-amd64' -Force -ErrorAction SilentlyContinue
+    Stop-Process -Name 'llama-quartermaster' -Force -ErrorAction SilentlyContinue
     Write-Host "Removed and stopped." -ForegroundColor Green
 } else {
     Write-Host "Service '$ServiceName' not installed." -ForegroundColor DarkGray

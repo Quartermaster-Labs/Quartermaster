@@ -219,6 +219,7 @@ const (
 	msgTypeLogData     messageType = "logData"
 	msgTypeMetrics     messageType = "metrics"
 	msgTypeInFlight    messageType = "inflight"
+	msgTypeLiveTokens  messageType = "liveTokens"
 )
 
 type messageEnvelope struct {
@@ -277,6 +278,15 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 			send(messageEnvelope{Type: msgTypeInFlight, Data: string(j)})
 		}
 	}
+	sendLiveTokens := func(e shared.LiveTokensEvent) {
+		if j, err := json.Marshal(map[string]any{
+			"model":         e.Model,
+			"output_tokens": e.OutputTokens,
+			"elapsed_ms":    e.ElapsedMs,
+		}); err == nil {
+			send(messageEnvelope{Type: msgTypeLiveTokens, Data: string(j)})
+		}
+	}
 
 	defer event.On(func(e shared.ProcessStateChangeEvent) { sendModels() })()
 	defer event.On(func(e shared.ConfigFileChangedEvent) { sendModels() })()
@@ -284,6 +294,7 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 	defer s.upstreamlog.OnLogData(func(data []byte) { sendLogData("upstream", data) })()
 	defer event.On(func(e ActivityLogEvent) { sendMetrics([]ActivityLogEntry{e.Metrics}) })()
 	defer event.On(func(e shared.InFlightRequestsEvent) { sendInFlight(e.Total) })()
+	defer event.On(func(e shared.LiveTokensEvent) { sendLiveTokens(e) })()
 
 	// initial payload
 	sendLogData("proxy", s.proxylog.GetHistory())

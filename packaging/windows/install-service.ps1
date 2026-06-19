@@ -16,7 +16,7 @@
   To remove: run uninstall-service.ps1 in this folder.
 
 .PARAMETER ExePath
-  Path to the proxy binary. Defaults to <bundle>\llama-swap-windows-amd64.exe.
+  Path to the proxy binary. Defaults to <bundle>\llama-quartermaster-windows-amd64.exe.
 
 .PARAMETER Config
   Config path (-config). Defaults to <bundle>\config.yaml.
@@ -85,7 +85,7 @@ if (-not $scriptDir) { $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.D
 $root = Split-Path -Parent (Split-Path -Parent $scriptDir)
 
 # Default paths from the bundle layout when not supplied.
-if (-not $ExePath)  { $ExePath = Join-Path $root 'llama-swap-windows-amd64.exe' }
+if (-not $ExePath)  { $ExePath = Join-Path $root 'llama-quartermaster-windows-amd64.exe' }
 if (-not $Config)   { $Config  = Join-Path $root 'config.yaml' }
 if (-not $PSBoundParameters.ContainsKey('Generate')) {
     $g = Join-Path $root 'quartermaster-generate.yaml'

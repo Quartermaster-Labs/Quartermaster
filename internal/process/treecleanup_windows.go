@@ -11,7 +11,7 @@ import (
 
 // SetupTreeCleanup assigns the current process to a Windows Job Object
 // configured with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE. Upstream processes
-// spawned afterwards are associated with the same job, so when llama-swap exits
+// spawned afterwards are associated with the same job, so when llama-quartermaster exits
 // for any reason — graceful shutdown, a forced second Ctrl+C, or a crash — the
 // OS terminates the whole job and reaps every child instead of leaving orphans
 // behind. It is the parent-side complement to the per-process teardown in

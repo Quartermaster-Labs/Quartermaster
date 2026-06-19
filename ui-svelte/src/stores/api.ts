@@ -8,6 +8,7 @@ import type {
   APIEventEnvelope,
   ReqRespCapture,
   InFlightStats,
+  LiveTokens,
   PerformanceResponse,
 } from "../lib/types";
 import { connectionState } from "./theme";
@@ -20,6 +21,8 @@ export const proxyLogs = writable<string>("");
 export const upstreamLogs = writable<string>("");
 export const metrics = writable<ActivityLogEntry[]>([]);
 export const inFlightRequests = writable<number>(0);
+// Live generation progress for the in-flight streaming request (null when idle).
+export const liveTokens = writable<LiveTokens | null>(null);
 export const versionInfo = writable<VersionInfo>({
   build_date: "unknown",
   commit: "unknown",
@@ -41,6 +44,7 @@ export function enableAPIEvents(enabled: boolean): void {
     apiEventSource = null;
     metrics.set([]);
     inFlightRequests.set(0);
+    liveTokens.set(null);
     return;
   }
 
@@ -59,6 +63,7 @@ export function enableAPIEvents(enabled: boolean): void {
       upstreamLogs.set("");
       metrics.set([]);
       inFlightRequests.set(0);
+      liveTokens.set(null);
       models.set([]);
       retryCount = 0;
       connectionState.set("connected");
@@ -98,7 +103,14 @@ export function enableAPIEvents(enabled: boolean): void {
           }
           case "inflight": {
             const stats = JSON.parse(message.data) as InFlightStats;
-            inFlightRequests.set(stats.total ?? 0);
+            const total = stats.total ?? 0;
+            inFlightRequests.set(total);
+            // No requests in flight => clear any stale live-token readout.
+            if (total <= 0) liveTokens.set(null);
+            break;
+          }
+          case "liveTokens": {
+            liveTokens.set(JSON.parse(message.data) as LiveTokens);
             break;
           }
         }
@@ -222,6 +234,8 @@ export interface ModelOverride {
   kvK?: string;
   kvV?: string;
   kvInRam?: boolean;
+  vramTargetGB?: number;
+  cpuOffload?: number;
   spec?: string;
   reasoningFmt?: string;
   aliases?: string[];
@@ -235,6 +249,7 @@ export interface ModelConfig {
   gguf: string;
   cmd: string;
   maxCtx: number;
+  blockCount: number;
   isMTP: boolean;
   hasOverride: boolean;
   override: ModelOverride | null;
@@ -301,6 +316,7 @@ export interface EstimateParams {
   kvInRam?: boolean;
   spec?: string;
   vram?: number;
+  cpuOffload?: number;
 }
 
 export async function estimatePlan(model: string, p: EstimateParams): Promise<PlanEstimate> {
@@ -311,6 +327,7 @@ export async function estimatePlan(model: string, p: EstimateParams): Promise<Pl
   if (p.kvInRam) q.set("kvInRam", "true");
   if (p.spec) q.set("spec", p.spec);
   if (p.vram) q.set("vram", String(p.vram));
+  if (p.cpuOffload) q.set("cpuOffload", String(p.cpuOffload));
   const response = await fetch(`/api/models/${encodeURIComponent(model)}/estimate?${q.toString()}`);
   if (!response.ok) {
     throw new Error(`Failed to estimate plan: ${response.status} ${await response.text()}`);

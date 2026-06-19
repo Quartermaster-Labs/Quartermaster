@@ -196,7 +196,7 @@
     <ModelSelector bind:value={$selectedModelStore} placeholder="Select an image model..." disabled={isGenerating} capabilities={["image_generation", "image_to_image"]} matchAny={true} />
 
     <select
-      class="px-3 py-2 rounded border border-gray-200 dark:border-white/10 bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
+      class="px-3 py-2 rounded border border-card-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
       bind:value={$apiModeStore}
       disabled={isGenerating}
     >
@@ -205,7 +205,7 @@
     </select>
 
     <select
-      class="px-3 py-2 rounded border border-gray-200 dark:border-white/10 bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
+      class="px-3 py-2 rounded border border-card-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
       bind:value={$selectedSizeStore}
       disabled={isGenerating}
     >
@@ -227,7 +227,7 @@
 
     {#if isSdapi}
       <button
-        class="px-3 py-2 rounded border border-gray-200 dark:border-white/10 bg-surface hover:bg-secondary-hover transition-colors"
+        class="px-3 py-2 rounded border border-card-border bg-surface hover:bg-secondary-hover transition-colors"
         onclick={() => showSettings = !showSettings}
       >
         {showSettings ? "Hide Settings" : "Settings"}
@@ -237,13 +237,13 @@
 
   <!-- SDAPI Settings Panel -->
   {#if isSdapi && showSettings}
-    <div class="shrink-0 mb-4 p-4 rounded border border-gray-200 dark:border-white/10 bg-surface">
+    <div class="shrink-0 mb-4 p-4 rounded border border-card-border bg-surface">
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
         <label class="flex flex-col gap-1">
           <span class="text-xs text-txtsecondary">Steps</span>
           <input
             type="number"
-            class="px-2 py-1 rounded border border-gray-200 dark:border-white/10 bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
+            class="px-2 py-1 rounded border border-card-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
             bind:value={$sdStepsStore}
             min="1"
             max="150"
@@ -253,7 +253,7 @@
           <span class="text-xs text-txtsecondary">CFG Scale</span>
           <input
             type="number"
-            class="px-2 py-1 rounded border border-gray-200 dark:border-white/10 bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
+            class="px-2 py-1 rounded border border-card-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
             bind:value={$sdCfgScaleStore}
             min="1"
             max="30"
@@ -264,7 +264,7 @@
           <span class="text-xs text-txtsecondary">Seed (-1 = random)</span>
           <input
             type="number"
-            class="px-2 py-1 rounded border border-gray-200 dark:border-white/10 bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
+            class="px-2 py-1 rounded border border-card-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
             bind:value={$sdSeedStore}
             min="-1"
           />
@@ -273,7 +273,7 @@
           <span class="text-xs text-txtsecondary">Batch Size</span>
           <input
             type="number"
-            class="px-2 py-1 rounded border border-gray-200 dark:border-white/10 bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
+            class="px-2 py-1 rounded border border-card-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
             bind:value={$sdBatchSizeStore}
             min="1"
             max="8"
@@ -282,7 +282,7 @@
         <label class="flex flex-col gap-1">
           <span class="text-xs text-txtsecondary">Sampler</span>
           <select
-            class="px-2 py-1 rounded border border-gray-200 dark:border-white/10 bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
+            class="px-2 py-1 rounded border border-card-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
             bind:value={$sdSamplerStore}
           >
             <option value="">Default</option>
@@ -303,7 +303,7 @@
         <label class="flex flex-col gap-1">
           <span class="text-xs text-txtsecondary">Scheduler</span>
           <select
-            class="px-2 py-1 rounded border border-gray-200 dark:border-white/10 bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
+            class="px-2 py-1 rounded border border-card-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
             bind:value={$sdSchedulerStore}
           >
             <option value="">Auto for model</option>
@@ -319,7 +319,7 @@
       <label class="flex flex-col gap-1 mb-3">
         <span class="text-xs text-txtsecondary">Negative Prompt</span>
         <textarea
-          class="px-2 py-1 rounded border border-gray-200 dark:border-white/10 bg-surface focus:outline-none focus:ring-2 focus:ring-primary resize-y text-sm"
+          class="px-2 py-1 rounded border border-card-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary resize-y text-sm"
           bind:value={$sdNegativePromptStore}
           rows="2"
           placeholder="Elements to avoid..."
@@ -331,7 +331,7 @@
         <span class="text-xs text-txtsecondary block mb-1">LoRAs</span>
         <div class="flex items-center gap-2 mb-2">
           <button
-            class="px-3 py-1.5 text-sm rounded border border-gray-200 dark:border-white/10 bg-surface hover:bg-secondary-hover transition-colors disabled:opacity-50"
+            class="px-3 py-1.5 text-sm rounded border border-card-border bg-surface hover:bg-secondary-hover transition-colors disabled:opacity-50"
             onclick={loadLoras}
             disabled={!$selectedModelStore || isLoadingLoras}
           >
@@ -339,7 +339,7 @@
           </button>
           {#if lorasLoaded && availableLoras.length > 0}
             <select
-              class="flex-1 px-2 py-1.5 text-sm rounded border border-gray-200 dark:border-white/10 bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
+              class="flex-1 px-2 py-1.5 text-sm rounded border border-card-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
               onchange={addLora}
             >
               <option value="">Add a LoRA...</option>
@@ -362,7 +362,7 @@
                 <span class="flex-1 truncate">{getLoraName(lora.path)}</span>
                 <input
                   type="number"
-                  class="w-20 px-1.5 py-1 text-xs rounded border border-gray-200 dark:border-white/10 bg-surface focus:outline-none focus:ring-1 focus:ring-primary"
+                  class="w-20 px-1.5 py-1 text-xs rounded border border-card-border bg-surface focus:outline-none focus:ring-1 focus:ring-primary"
                   value={lora.multiplier}
                   oninput={(e) => updateLoraMultiplier(lora.path, parseFloat((e.target as HTMLInputElement).value) || 1)}
                   min="0"
@@ -370,7 +370,7 @@
                   step="0.1"
                 />
                 <button
-                  class="px-1.5 py-0.5 text-xs rounded border border-gray-200 dark:border-white/10 hover:bg-red-500 hover:text-white hover:border-red-500 transition-colors"
+                  class="px-1.5 py-0.5 text-xs rounded border border-card-border hover:bg-red-500 hover:text-white hover:border-red-500 transition-colors"
                   onclick={() => removeLora(lora.path)}
                   aria-label="Remove LoRA"
                 >
@@ -391,7 +391,7 @@
     </div>
   {:else}
     <!-- Image display area -->
-    <div class="flex-1 overflow-auto mb-4 flex items-center justify-center bg-surface border border-gray-200 dark:border-white/10 rounded">
+    <div class="flex-1 overflow-auto mb-4 flex items-center justify-center bg-surface border border-card-border rounded">
       {#if isGenerating}
         <div class="text-center text-txtsecondary">
           <div class="inline-block w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin mb-2"></div>

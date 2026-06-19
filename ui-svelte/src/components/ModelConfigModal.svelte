@@ -33,6 +33,8 @@
   let kvK = $state("");
   let kvV = $state("");
   let kvInRam = $state(false);
+  let vramTarget = $state<number | "">(""); // "" = inherit global target VRAM
+  let cpuOffload = $state<number | "">(""); // "" = auto (sizer picks the offload)
   let spec = $state("");
   let reasoningFmt = $state("");
   let aliasesText = $state("");
@@ -57,8 +59,9 @@
 
   const KV_OPTS = ["", "q8_0", "q4_0", "q5_1", "f16", "bf16"];
   const REASON_OPTS = [
-    { value: "", label: "default (none)" },
+    { value: "", label: "default (auto)" },
     { value: "auto", label: "auto" },
+    { value: "off", label: "off (disable)" },
   ];
 
   // Slider ceiling = trained context length (fallback 32k). Floor 4k.
@@ -76,6 +79,13 @@
 
   function fmtCtx(n: number): string {
     return n % 1024 === 0 ? `${n / 1024}k` : `${n}`;
+  }
+
+  // GPU layers as value/max (max = transformer blocks). -ngl 99 is the "all
+  // layers" sentinel, so clamp to the block count; fall back to the raw value
+  // when the block count is unknown.
+  function nglDisplay(ngl: number, blocks: number): string {
+    return blocks > 0 ? `${Math.min(ngl, blocks)}/${blocks}` : String(ngl);
   }
 
   // Effective context the autogen sizer baked into the launch command (-c N).
@@ -108,6 +118,8 @@
       kvK = o?.kvK ?? "";
       kvV = o?.kvV ?? "";
       kvInRam = o?.kvInRam ?? false;
+      vramTarget = o?.vramTargetGB ? o.vramTargetGB : "";
+      cpuOffload = o?.cpuOffload ? o.cpuOffload : "";
       spec = o?.spec ?? "";
       reasoningFmt = o?.reasoningFmt ?? "";
       aliasesText = (o?.aliases ?? []).join(", ");
@@ -124,7 +136,7 @@
   // Re-estimate (debounced) whenever a memory-affecting field changes while open.
   // Reads each dep synchronously so Svelte tracks them.
   $effect(() => {
-    const deps = [open, config, ctx, ctxAuto, kvK, kvV, kvInRam, spec];
+    const deps = [open, config, ctx, ctxAuto, kvK, kvV, kvInRam, spec, vramTarget, cpuOffload];
     void deps;
     if (!open || !config || !modelId) return;
     clearTimeout(estTimer);
@@ -141,6 +153,8 @@
         kvV: kvV || undefined,
         kvInRam,
         spec: spec || undefined,
+        vram: vramTarget === "" ? undefined : Number(vramTarget),
+        cpuOffload: cpuOffload === "" ? undefined : Number(cpuOffload),
       });
     } catch (e) {
       estimateError = e instanceof Error ? e.message : String(e);
@@ -161,6 +175,8 @@
       kvK,
       kvV,
       kvInRam,
+      vramTargetGB: vramTarget === "" ? 0 : Number(vramTarget),
+      cpuOffload: cpuOffload === "" ? 0 : Number(cpuOffload),
       spec,
       reasoningFmt,
       aliases: parseAliases(aliasesText),
@@ -303,6 +319,20 @@
           </label>
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
+              Target VRAM (GB)
+              {@render hint("How much VRAM to size this model against. Empty = use the global target. Lower it to leave headroom for other apps (e.g. a game); the sizer recomputes the offload to fit.")}
+            </span>
+            <input type="number" min="0" step="0.5" bind:value={vramTarget} class="cfg-input" placeholder="global default" />
+          </label>
+          <label class="flex flex-col gap-1 text-sm">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Offloaded layers
+              {@render hint("Force how many layers run on the CPU, overriding the auto sizer. Empty = auto. MoE models offload expert layers (--n-cpu-moe); dense models drop GPU layers. More offload = less VRAM, slower.")}
+            </span>
+            <input type="number" min="0" step="1" bind:value={cpuOffload} class="cfg-input" placeholder="auto" />
+          </label>
+          <label class="flex flex-col gap-1 text-sm">
+            <span class="text-txtsecondary flex items-center gap-1">
               Speculative
               {@render hint("Speculative decoding to speed up generation. ngram-mod is the default; draft-mtp needs a model with MTP layers.")}
             </span>
@@ -313,7 +343,7 @@
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               Reasoning format
-              {@render hint("How the model's chain-of-thought is parsed/exposed. 'auto' lets llama.cpp detect it; default emits none.")}
+              {@render hint("How the model's chain-of-thought is parsed/exposed. 'auto' lets llama.cpp detect it (default, reasoning stays on); 'off' disables reasoning.")}
             </span>
             <select bind:value={reasoningFmt} class="cfg-input">
               {#each REASON_OPTS as o}<option value={o.value}>{o.label}</option>{/each}
@@ -370,8 +400,8 @@
                 </div>
               </div>
               <div>
-                <div class="text-txtsecondary uppercase tracking-wide">-ngl</div>
-                <div class="text-txtmain tabular-nums">{estimate.ngl}</div>
+                <div class="text-txtsecondary uppercase tracking-wide">GPU layers</div>
+                <div class="text-txtmain tabular-nums">{nglDisplay(estimate.ngl, config.blockCount)}</div>
               </div>
               <div>
                 <div class="text-txtsecondary uppercase tracking-wide">cpu-moe</div>

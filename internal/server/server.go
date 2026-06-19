@@ -217,7 +217,7 @@ func (s *Server) routes() {
 		mux.Handle("GET "+path, modelChain.Then(dispatch))
 	}
 
-	// llama-swap API + custom endpoints.
+	// llama-quartermaster API + custom endpoints.
 	mux.Handle("GET /v1/models", apiChain.ThenFunc(s.handleListModels))
 	mux.Handle("GET /logs", apiChain.ThenFunc(s.handleLogs))
 	mux.Handle("GET /logs/stream", apiChain.ThenFunc(s.handleLogStream))

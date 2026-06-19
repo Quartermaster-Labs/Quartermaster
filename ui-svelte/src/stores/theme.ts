@@ -22,7 +22,7 @@ function getInitialThemeMode(): ThemeMode {
 
 // Persistent stores
 export const themeMode = persistentStore<ThemeMode>("theme-mode", getInitialThemeMode());
-export const appTitle = persistentStore<string>("app-title", "llama-swap");
+export const appTitle = persistentStore<string>("app-title", "llama-quartermaster");
 
 const prefersDarkQuery = "(prefers-color-scheme: dark)";
 

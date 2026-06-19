@@ -81,7 +81,7 @@
   });
 </script>
 
-<div class="rounded-lg overflow-hidden flex flex-col bg-gray-950/5 dark:bg-white/10 h-full w-full p-1">
+<div class="rounded-lg overflow-hidden flex flex-col bg-surface h-full w-full p-1">
   <div class="p-4">
     <div class="flex items-center justify-between">
       <h3 class="m-0 text-lg p-0">{title}</h3>
@@ -121,7 +121,7 @@
       <div class="mt-2 flex gap-2 items-center w-full">
         <input
           type="text"
-          class="w-full text-sm border border-gray-950/10 dark:border-white/5 p-2 rounded outline-none"
+          class="w-full text-sm border border-card-border p-2 rounded outline-none"
           placeholder="Filter logs (regex)..."
           bind:value={filterRegex}
         />

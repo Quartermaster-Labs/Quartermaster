@@ -19,7 +19,7 @@
   }
 
   function handleTitleChange(newTitle: string): void {
-    appTitle.set(newTitle.replace(/\n/g, "").trim().substring(0, 64) || "llama-swap");
+    appTitle.set(newTitle.replace(/\n/g, "").trim().substring(0, 64) || "llama-quartermaster");
   }
   function handleKeyDown(e: KeyboardEvent): void {
     if (e.key === "Enter") {

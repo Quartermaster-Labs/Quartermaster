@@ -320,12 +320,12 @@
 
   <!-- Settings panel -->
   {#if showSettings}
-    <div class="shrink-0 mb-4 p-4 bg-surface border border-gray-200 dark:border-white/10 rounded">
+    <div class="shrink-0 mb-4 p-4 bg-surface border border-card-border rounded">
       <div class="mb-4">
         <label class="block text-sm font-medium mb-1" for="endpoint">Endpoint</label>
         <select
           id="endpoint"
-          class="w-full px-3 py-2 rounded border border-gray-200 dark:border-white/10 bg-card focus:outline-none focus:ring-2 focus:ring-primary"
+          class="w-full px-3 py-2 rounded border border-card-border bg-card focus:outline-none focus:ring-2 focus:ring-primary"
           bind:value={$endpointStore}
           disabled={isStreaming}
         >
@@ -338,7 +338,7 @@
         <label class="block text-sm font-medium mb-1" for="system-prompt">System Prompt</label>
         <textarea
           id="system-prompt"
-          class="w-full px-3 py-2 rounded border border-gray-200 dark:border-white/10 bg-card focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+          class="w-full px-3 py-2 rounded border border-card-border bg-card focus:outline-none focus:ring-2 focus:ring-primary resize-none"
           placeholder="You are a helpful assistant..."
           rows="3"
           bind:value={$systemPromptStore}
@@ -370,7 +370,7 @@
           id="max-tokens"
           type="number"
           min="1"
-          class="w-full px-3 py-2 rounded border border-gray-200 dark:border-white/10 bg-card focus:outline-none focus:ring-2 focus:ring-primary"
+          class="w-full px-3 py-2 rounded border border-card-border bg-card focus:outline-none focus:ring-2 focus:ring-primary"
           bind:value={$maxTokensStore}
           disabled={isStreaming}
         />
@@ -423,7 +423,7 @@
               <img
                 src={imageUrl}
                 alt="Attached image {idx + 1}"
-                class="w-20 h-20 object-cover rounded border border-gray-200 dark:border-white/10"
+                class="w-20 h-20 object-cover rounded border border-card-border"
               />
               <button
                 class="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"

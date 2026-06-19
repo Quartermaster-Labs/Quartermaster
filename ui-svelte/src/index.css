@@ -96,6 +96,21 @@
     appearance: textfield;
   }
 
+  /* Strip the native select chrome — on Windows the OS draws a focus/active
+     accent (a stray red underline with some system themes) we can't theme.
+     Replace it with our own chevron caret so selects match the retro inputs. */
+  select {
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none' stroke='%238a8a8a' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='M4 6l4 4 4-4'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 0.35rem center;
+    background-size: 0.7rem;
+    /* !important so per-element Tailwind px-* utilities don't reclaim the caret gutter. */
+    padding-right: 1.3rem !important;
+  }
+
   /* Headings carry the retro mono accent + tight tracking. */
   h1,
   h2,
@@ -241,9 +256,14 @@
   }
 
   /* Soft fade at the top/bottom edges of a vertical scroll area, so content
-     dissolves instead of getting hard-cut as it scrolls past the bounds. */
+     dissolves instead of getting hard-cut as it scrolls past the bounds. The
+     edge fade sizes are driven by --fade-top/--fade-bottom: the `scrollFade`
+     action zeroes the relevant one when the area is scrolled to that edge, so a
+     fully-scrolled list reveals its last row completely (no permanent fade). */
   .scroll-fade-y {
-    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 1.25rem, #000 calc(100% - 1.25rem), transparent 100%);
-    mask-image: linear-gradient(to bottom, transparent 0, #000 1.25rem, #000 calc(100% - 1.25rem), transparent 100%);
+    --fade-top: 1.25rem;
+    --fade-bottom: 1.25rem;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent 100%);
   }
 }

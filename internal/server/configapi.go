@@ -45,6 +45,8 @@ type overrideDTO struct {
 	KvK          string       `json:"kvK"`
 	KvV          string       `json:"kvV"`
 	KvInRam      bool         `json:"kvInRam"`
+	VramTargetGB float64      `json:"vramTargetGB"`
+	CpuOffload   int          `json:"cpuOffload"`
 	Spec         string       `json:"spec"`
 	ReasoningFmt string       `json:"reasoningFmt"`
 	Aliases      []string     `json:"aliases"`
@@ -57,8 +59,9 @@ type modelConfigResp struct {
 	Id          string       `json:"id"`
 	Gguf        string       `json:"gguf"`
 	Cmd         string       `json:"cmd"`
-	MaxCtx      int          `json:"maxCtx"` // trained context length (slider ceiling); 0 if unknown
-	IsMTP       bool         `json:"isMTP"`  // model has nextn/MTP layers => draft-mtp usable
+	MaxCtx      int          `json:"maxCtx"`     // trained context length (slider ceiling); 0 if unknown
+	BlockCount  int          `json:"blockCount"` // transformer layers (denominator for -ngl); 0 if unknown
+	IsMTP       bool         `json:"isMTP"`      // model has nextn/MTP layers => draft-mtp usable
 	HasOverride bool         `json:"hasOverride"`
 	Override    *overrideDTO `json:"override"`
 }
@@ -66,6 +69,7 @@ type modelConfigResp struct {
 func toOverrideDTO(o autogen.Override) *overrideDTO {
 	dto := &overrideDTO{
 		Ctx: o.Ctx, KvK: o.KvK, KvV: o.KvV, KvInRam: o.KvInRam,
+		VramTargetGB: o.VramTargetGB, CpuOffload: o.CpuOffload,
 		Spec: o.Spec, ReasoningFmt: o.ReasoningFmt,
 		Aliases: o.Aliases, Unlisted: o.Unlisted, Skip: o.Skip,
 	}
@@ -157,8 +161,9 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 	}
 	// Read trained ctx + MTP capability from the gguf header (cheap; header only).
 	// Non-fatal: a missing/unreadable gguf just leaves the slider ceiling at 0.
-	if meta, err := autogen.ReadGgufMetadata(gguf); err == nil {
+	if meta, err := autogen.ReadGgufMetadataCached(gguf); err == nil {
 		resp.MaxCtx = int(meta.ContextLength)
+		resp.BlockCount = int(meta.BlockCount)
 		resp.IsMTP = meta.IsMTP
 	}
 	writeJSON(w, resp)
@@ -190,6 +195,8 @@ func (s *Server) handleAPIModelOverridePut(w http.ResponseWriter, r *http.Reques
 	ov.KvK = body.KvK
 	ov.KvV = body.KvV
 	ov.KvInRam = body.KvInRam
+	ov.VramTargetGB = body.VramTargetGB
+	ov.CpuOffload = body.CpuOffload
 	ov.Spec = body.Spec
 	ov.ReasoningFmt = body.ReasoningFmt
 	ov.Aliases = body.Aliases
@@ -272,7 +279,8 @@ func (s *Server) handleAPIModelVariantPost(w http.ResponseWriter, r *http.Reques
 
 // handleAPIModelEstimate previews the load plan (VRAM/RAM, ngl, n_cpu_moe,
 // chosen ctx) for a candidate tuning without persisting anything. Query params:
-// ctx, kvK, kvV, spec (strings/int), kvInRam (bool), vram (float target GB).
+// ctx, kvK, kvV, spec (strings/int), kvInRam (bool), vram (float target GB),
+// cpuOffload (int layers pinned to CPU).
 // Powers the editor's live memory estimate.
 func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) {
 	_, gguf, _, ok := s.resolveModelGguf(w, r)
@@ -284,7 +292,7 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 		shared.SendResponse(w, r, http.StatusInternalServerError, "loading settings failed: "+err.Error())
 		return
 	}
-	meta, err := autogen.ReadGgufMetadata(gguf)
+	meta, err := autogen.ReadGgufMetadataCached(gguf)
 	if err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, "reading gguf metadata failed: "+err.Error())
 		return
@@ -302,6 +310,9 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 	}
 	if v := q.Get("vram"); v != "" {
 		in.TargetVramGB, _ = strconv.ParseFloat(v, 64)
+	}
+	if v := q.Get("cpuOffload"); v != "" {
+		in.CpuOffload, _ = strconv.Atoi(v)
 	}
 
 	res, err := autogen.EstimatePlan(gf.Settings, meta, in)

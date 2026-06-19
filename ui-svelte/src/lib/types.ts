@@ -69,6 +69,12 @@ export interface InFlightStats {
   total: number;
 }
 
+export interface LiveTokens {
+  model: string;
+  output_tokens: number;
+  elapsed_ms: number;
+}
+
 export interface NetIOStat {
   name: string;
   bytes_recv: number;
@@ -110,7 +116,7 @@ export interface PerformanceResponse {
 }
 
 export interface APIEventEnvelope {
-  type: "modelStatus" | "logData" | "metrics" | "inflight" | "perfsys" | "perfgpu";
+  type: "modelStatus" | "logData" | "metrics" | "inflight" | "liveTokens" | "perfsys" | "perfgpu";
   data: string;
 }
 

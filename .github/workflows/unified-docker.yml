@@ -23,7 +23,7 @@ on:
         required: false
         default: "main"
       llama_swap_version:
-        description: "llama-swap version (e.g. v198, latest, main)"
+        description: "llama-quartermaster version (e.g. v198, latest, main)"
         required: false
         default: "main"
       build_cuda:
@@ -91,7 +91,7 @@ jobs:
 
       # On GitHub Actions runners, create a fresh builder.
       # When running locally under act, skip this and reuse the existing
-      # llama-swap-builder (which has ccache warm) to avoid exhausting disk.
+      # llama-quartermaster-builder (which has ccache warm) to avoid exhausting disk.
       - name: Set up Docker Buildx
         if: ${{ !env.ACT }}
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd #v4.0.0
@@ -115,7 +115,7 @@ jobs:
           # When running under act, use the local builder that has warm ccache.
           # On GitHub Actions, BUILDX_BUILDER is unset so docker uses the builder
           # created by setup-buildx-action above.
-          BUILDX_BUILDER: ${{ env.ACT == 'true' && 'llama-swap-builder' || '' }}
+          BUILDX_BUILDER: ${{ env.ACT == 'true' && 'llama-quartermaster-builder' || '' }}
         run: |
           chmod +x docker/unified/build-image.sh
           docker/unified/build-image.sh --${{ matrix.backend }}

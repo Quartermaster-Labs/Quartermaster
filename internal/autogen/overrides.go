@@ -93,14 +93,22 @@ type Override struct {
 	Quant        string   `yaml:"quant"`
 	Aliases      []string `yaml:"aliases"`
 	Spec         string   `yaml:"spec"`         // "draft-mtp" | "" (=> ngram-mod)
-	ReasoningFmt string   `yaml:"reasoningFmt"` // "auto" | "" (=> none)
+	ReasoningFmt string   `yaml:"reasoningFmt"` // "auto" | "off" | "" (=> auto)
 	CtxVariants  []int    `yaml:"ctxVariants"`
 	Ctx          int      `yaml:"ctx"`
 	KvK          string   `yaml:"kvK"`
 	KvV          string   `yaml:"kvV"`
 	KvInRam      bool     `yaml:"kvInRam"`
-	Unlisted     bool     `yaml:"unlisted"`
-	Skip         bool     `yaml:"skip"`
+	// VramTargetGB caps how much VRAM this model is sized against. 0 => inherit
+	// settings.TargetVramGB (the global budget). Lets one model run leaner than
+	// the fleet default without a separate variant.
+	VramTargetGB float64 `yaml:"vramTargetGB"`
+	// CpuOffload pins how many layers are pushed to CPU, overriding the auto
+	// sizer. 0 => auto. MoE models offload expert layers (--n-cpu-moe N); dense
+	// models drop GPU layers (-ngl = blocks-N).
+	CpuOffload int  `yaml:"cpuOffload"`
+	Unlisted   bool `yaml:"unlisted"`
+	Skip       bool `yaml:"skip"`
 	// Variants are named custom profiles emitted in addition to the solo model:
 	// each becomes "<model>-<name>" with its own ctx/VRAM/kv/spec. Use-case
 	// agnostic — the UI's "create variant" flow writes these.
@@ -117,6 +125,7 @@ type Override struct {
 // "judge" variant with greedy sampling) without the engine knowing those names:
 //   - Ub: physical batch size (-ub/-b). 0 => default (1024, or 512 for >=64k ctx).
 //   - Dry: when non-nil and false, omit the DRY sampler flags. nil => DRY on.
+//
 // ReasoningFmt: "off" emits "--reasoning off" (plus --reasoning-format none).
 type VariantSpec struct {
 	Name         string   `yaml:"name"`

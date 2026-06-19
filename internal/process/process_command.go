@@ -439,7 +439,7 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 			// Expected: we force-terminated the process. A forced kill exits
 			// the child with a non-zero code (e.g. taskkill /f on Windows
 			// yields exit status 1), so this is not an error.
-			p.proxyLogger.Debugf("<%s> process stopped by llama-swap: %v", p.id, waitErr)
+			p.proxyLogger.Debugf("<%s> process stopped by llama-quartermaster: %v", p.id, waitErr)
 		default:
 			if exitErr, ok := waitErr.(*exec.ExitError); ok {
 				p.proxyLogger.Debugf("<%s> process exited: code=%d, err=%v", p.id, exitErr.ExitCode(), waitErr)
@@ -672,7 +672,7 @@ func (p *ProcessCommand) State() ProcessState {
 func (p *ProcessCommand) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fn := p.handler.Load()
 	if fn == nil {
-		http.Error(w, fmt.Sprintf("llama-swap-error: [%s] process is not ready", p.id), http.StatusServiceUnavailable)
+		http.Error(w, fmt.Sprintf("llama-quartermaster-error: [%s] process is not ready", p.id), http.StatusServiceUnavailable)
 		return
 	}
 	p.inflight.Add(1)

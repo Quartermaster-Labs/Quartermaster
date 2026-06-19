@@ -29,7 +29,7 @@ func genMoeShareFor(arch string) float64 {
 	return 0.85
 }
 
-// profile is one emitted llama-swap entry for a model: the solo variant or an
+// profile is one emitted llama-quartermaster entry for a model: the solo variant or an
 // optional ctx-tier variant. Target/Overhead are the VRAM budget the sizing math
 // uses; the flags drive ub/spec/reasoning.
 type profile struct {
@@ -48,10 +48,11 @@ type profile struct {
 	ReasoningFmt string
 	Ub           int   // physical batch size override (0 => default)
 	Dry          *bool // nil => DRY on; non-nil false => omit DRY sampler
+	CpuOffload   int   // >0 pins layers offloaded to CPU, overriding the sizer
 }
 
 // Generate discovers models under gf.Settings.ModelsRoot and returns a complete
-// llama-swap config YAML. Port of Generate-Config.ps1. nowRFC is stamped into
+// llama-quartermaster config YAML. Port of Generate-Config.ps1. nowRFC is stamped into
 // the header comment (passed in so the function stays deterministic/testable).
 func Generate(gf GenerateFile, nowRFC string) (string, error) {
 	s := gf.Settings
@@ -67,7 +68,7 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 	})
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "# llama-swap config - generated %s\n", nowRFC)
+	fmt.Fprintf(&b, "# llama-quartermaster config - generated %s\n", nowRFC)
 	fmt.Fprintf(&b, "# TargetVramGB=%g  MaxRamGB=%g  Threads=%d\n", s.TargetVramGB, s.MaxRamGB, s.Threads)
 	b.WriteString("# Regen: quartermaster startup (hash-gated)\n\n")
 	fmt.Fprintf(&b, "healthCheckTimeout: %d\n\n", s.HealthCheckTimeout)
@@ -188,7 +189,7 @@ func writeGroup(b *strings.Builder, name string, members []string) {
 // emitModel reads metadata once and emits every profile (solo, ctx tiers, game)
 // for one discovered gguf.
 func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov *Override, name string, emitted *[]string) error {
-	meta, err := ReadGgufMetadata(row.FullPath)
+	meta, err := ReadGgufMetadataCached(row.FullPath)
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
@@ -237,13 +238,19 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	}
 
 	// Build the profile set: solo + optional ctx tiers.
+	// Per-model VRAM budget: an override caps it below the fleet default.
+	soloTarget := s.TargetVramGB
+	if override.VramTargetGB > 0 {
+		soloTarget = override.VramTargetGB
+	}
 	profiles := []profile{{
-		Name:     name,
-		Target:   s.TargetVramGB,
-		Overhead: s.VramOverheadGB + ubSoloOh + specOh,
-		Unlisted: override.Unlisted,
-		Ctx:      override.Ctx,
-		Aliases:  aliases,
+		Name:       name,
+		Target:     soloTarget,
+		Overhead:   s.VramOverheadGB + ubSoloOh + specOh,
+		Unlisted:   override.Unlisted,
+		Ctx:        override.Ctx,
+		Aliases:    aliases,
+		CpuOffload: override.CpuOffload,
 	}}
 	for _, cv := range ctxVariants {
 		cvTarget := s.TargetVramGB
@@ -319,6 +326,10 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			return err
 		}
 		ngl, ncpuMoe := forceLowActiveMoE(meta, plan, prof, kvReserve)
+		if prof.CpuOffload > 0 {
+			ngl, ncpuMoe = applyForcedOffload(meta, prof.CpuOffload)
+			plan.EstVramGB, plan.EstRamGB = estForOffload(meta, prof, kvReserve, ngl, ncpuMoe)
+		}
 
 		// Per-variant spec/reasoning override the model-wide values for emit.
 		effOv := override
@@ -462,6 +473,55 @@ func forceLowActiveMoE(meta Metadata, plan LoadPlan, prof profile, kvReserve flo
 	return
 }
 
+// applyForcedOffload overrides the auto placement with a user-pinned number of
+// layers pushed to CPU (Override.CpuOffload). MoE models offload expert layers
+// (--n-cpu-moe n, GPU stays -ngl 99); dense models drop GPU layers
+// (-ngl = blocks-n). n is clamped to [0, blockCount].
+func applyForcedOffload(meta Metadata, n int) (ngl, ncpuMoe int) {
+	blocks := int(meta.BlockCount)
+	if n < 0 {
+		n = 0
+	}
+	if blocks > 0 && n > blocks {
+		n = blocks
+	}
+	if meta.IsMoE {
+		return 99, n
+	}
+	ngl = blocks - n
+	if ngl < 0 {
+		ngl = 0
+	}
+	return ngl, 0
+}
+
+// estForOffload recomputes the VRAM/RAM estimate for a forced placement so the
+// generated header comment (and the editor preview) reflect the pinned offload
+// rather than the auto sizer's numbers. Mirrors the cost model in plan.go.
+func estForOffload(meta Metadata, prof profile, kvReserve float64, ngl, ncpuMoe int) (estVram, estRam float64) {
+	size := meta.FileSizeGB
+	blocks := float64(meta.BlockCount)
+	overhead := prof.Overhead
+	if blocks <= 0 {
+		return prof.Target, 0
+	}
+	if meta.IsMoE {
+		share := effectiveShare(meta, genMoeShareFor)
+		nonExpert := size * (1.0 - share)
+		expertGpuFrac := (blocks - float64(ncpuMoe)) / blocks
+		estVram = nonExpert + size*share*expertGpuFrac + kvReserve + overhead
+		estRam = size * share * (float64(ncpuMoe) / blocks)
+		return round(estVram, 2), round(estRam, 2)
+	}
+	gpuFrac := float64(ngl) / blocks
+	if gpuFrac > 1 {
+		gpuFrac = 1
+	}
+	estVram = gpuFrac*(size+kvReserve) + overhead
+	estRam = (1 - gpuFrac) * (size + kvReserve)
+	return round(estVram, 2), round(estRam, 2)
+}
+
 // emitProfile writes one model entry's YAML block.
 func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, prof profile, ctx, ngl, ncpuMoe int, plan LoadPlan, kvK, kvV string, kvInRam bool, ov *Override) {
 	cpuMoeFlag := ""
@@ -492,17 +552,22 @@ func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, pro
 		spec = prof.Spec
 	}
 
-	// Reasoning: a variant's "off" emits the explicit --reasoning off switch; any
-	// other non-empty value (variant or model-wide) sets --reasoning-format.
-	rfmt := "none"
+	// Reasoning: the variant value wins over the model-wide override. "off" emits
+	// the explicit --reasoning off switch (plus --reasoning-format none); any other
+	// non-empty value sets --reasoning-format. Default is "auto" — reasoning stays
+	// enabled unless explicitly turned off.
+	reason := prof.ReasoningFmt
+	if reason == "" && ov != nil {
+		reason = ov.ReasoningFmt
+	}
+	rfmt := "auto"
 	reasoningFlag := ""
 	switch {
-	case prof.ReasoningFmt == "off":
+	case reason == "off":
+		rfmt = "none"
 		reasoningFlag = " --reasoning off"
-	case prof.ReasoningFmt != "":
-		rfmt = prof.ReasoningFmt
-	case ov != nil && ov.ReasoningFmt != "":
-		rfmt = ov.ReasoningFmt
+	case reason != "":
+		rfmt = reason
 	}
 
 	modelPath := strings.ReplaceAll(row.FullPath, "\\", "/")

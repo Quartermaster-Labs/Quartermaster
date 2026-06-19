@@ -268,7 +268,7 @@
     {#if editorMode === "table"}
       <input
         type="text"
-        class="min-w-0 flex-1 basis-48 px-3 py-2 rounded border border-gray-200 dark:border-white/10 bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
+        class="min-w-0 flex-1 basis-48 px-3 py-2 rounded border border-card-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
         placeholder="Query..."
         bind:value={query}
         disabled={isLoading}
@@ -276,7 +276,7 @@
       />
     {/if}
     <!-- Table / JSON toggle -->
-    <div class="flex rounded border border-gray-200 dark:border-white/10 overflow-hidden shrink-0">
+    <div class="flex rounded border border-card-border overflow-hidden shrink-0">
       <button
         class="px-3 py-1.5 text-sm transition-colors {editorMode === 'table'
           ? 'bg-primary text-btn-primary-text'
@@ -287,7 +287,7 @@
         Table
       </button>
       <button
-        class="px-3 py-1.5 text-sm border-l border-gray-200 dark:border-white/10 transition-colors {editorMode === 'json'
+        class="px-3 py-1.5 text-sm border-l border-card-border transition-colors {editorMode === 'json'
           ? 'bg-primary text-btn-primary-text'
           : 'bg-surface hover:bg-secondary-hover'}"
         onclick={switchToJson}
@@ -306,7 +306,7 @@
     <!-- JSON editor -->
     <div class="flex-1 flex flex-col min-h-0 mb-4">
       <textarea
-        class="flex-1 w-full font-mono text-sm px-3 py-2 rounded border border-gray-200 dark:border-white/10 bg-surface focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+        class="flex-1 w-full font-mono text-sm px-3 py-2 rounded border border-card-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary resize-none"
         bind:value={jsonText}
         disabled={isLoading}
         placeholder={'{\n  "query": "your search query",\n  "documents": [\n    "document one",\n    "document two"\n  ]\n}'}
@@ -318,14 +318,14 @@
     </div>
   {:else}
     <!-- Document table -->
-    <div class="flex-1 overflow-y-auto mb-4 border border-gray-200 dark:border-white/10 rounded">
+    <div class="flex-1 overflow-y-auto mb-4 border border-card-border rounded">
       <table class="w-full border-collapse table-fixed">
         <colgroup>
           <col class="w-auto" />
           <col style="width: 120px" />
           <col style="width: 40px" />
         </colgroup>
-        <thead class="sticky top-0 bg-surface border-b border-gray-200 dark:border-white/10">
+        <thead class="sticky top-0 bg-surface border-b border-card-border">
           <tr>
             <th class="px-3 py-2 text-left text-sm font-medium text-txtsecondary">Document</th>
             <th
@@ -339,7 +339,7 @@
         </thead>
         <tbody>
           {#each displayRows as { row, i } (i)}
-            <tr class="border-b border-gray-100 dark:border-white/5 last:border-0">
+            <tr class="border-b border-card-border last:border-0">
               <td class="px-3 py-1.5">
                 <input
                   type="text"

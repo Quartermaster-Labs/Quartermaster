@@ -1,0 +1,68 @@
+# internal/autogen
+
+## Purpose
+
+`autogen` generates a complete llama-quartermaster config YAML by discovering local GGUF
+models, reading their headers, and computing a per-model llama-server load plan
+(`-ngl` / `--n-cpu-moe` / context window / KV quant) from a VRAM budget. It is a
+fork-specific Go port of the `domina-llm-eval` PowerShell planner
+(`Read-GgufMetadata` / `Get-LlamaLoadPlan` / `Get-DenseCtx` / `Get-KvCostModel`)
+plus the `Generate-Config.ps1` orchestration, letting the harness stop
+pre-generating config variants by hand. Kept deliberately separable for clean
+upstreaming.
+
+## Key files
+
+| File | Role |
+|---|---|
+| `gguf.go` | GGUF header parser (`ReadGgufMetadata`): decodes the metadata KV section and the tensor section into `Metadata`; package doc lives here. |
+| `discover.go` | Walks `modelsRoot` for `.gguf` files, derives model IDs/quants/publishers, collapses split shards, skips mmproj projectors (`DiscoverGgufModels`). |
+| `metacache.go` | In-memory cache of parsed metadata keyed by file size+mtime (`ReadGgufMetadataCached`) so repeated regens skip header re-parsing. |
+| `kvcost.go` | KV-cache cost model (`GetKvCostModel`) plus context-budget math (`MaxCtxForBudget`, `KvReserveGB`, `RoundedCtx`, `GetDenseCtx`). |
+| `plan.go` | VRAM budget → placement: chooses `-ngl`/`--n-cpu-moe` for dense and MoE models (`GetLoadPlan`, `densePlacement`); MoE expert-share table + `effectiveShare`. |
+| `generate.go` | Top-level orchestration (`Generate`): builds per-model profiles (solo, ctx tiers, named variants), sizes each, and emits the YAML (models, groups, listeners). |
+| `estimate.go` | One-shot preview (`EstimatePlan`) of a candidate tuning for the web editor; reuses the solo-profile sizing path without writing config. |
+| `overrides.go` | Control-file types (`GenerateFile`, `Settings`, `Override`, `VariantSpec`, `GroupSpec`), defaults, loading/merging, and `globLike` (PowerShell `-like`). |
+| `sidecar.go` | UI-owned overrides file (`quartermaster-overrides.yaml`): read/upsert/delete per-model overrides and the global settings patch. |
+| `hash.go` | Inputs hashing + hash-gated regen (`InputsHash`, `EnsureConfig`, `CurrentInputsHash`) so a config is only rebuilt when models/settings change. |
+| `vram.go` | Live free-VRAM sampling via `internal/perf` (`SampleFreeVramGB`, `resolveAutoVram`) for the `autoVram` setting. |
+
+## Important types & functions
+
+- `Metadata` (`gguf.go:48`) — parsed subset of a GGUF header (arch, block count, expert count, attention dims, RoPE/SWA/SSM fields, `IsMoE`, `IsMTP`, `ExpertWeightShare`). Optional fields are 0 when absent; consumers guard on `> 0`.
+- `ReadGgufMetadata` (`gguf.go:350`) — parses the metadata KV section, then `readExpertShare` (`gguf.go:706`) sums tensor bytes to derive the exact expert-weight share.
+- `ReadGgufMetadataCached` (`metacache.go:31`) — size+mtime-keyed cache wrapper; this is what `Generate`/`emitModel` and the API actually call.
+- `GgufRow` (`discover.go:13`) / `DiscoverGgufModels` (`discover.go:35`) — one served-model row per gguf (shard-1 only), with derived `ID = baseID-quant`.
+- `GetLoadPlan` (`plan.go:99`) — derives `-ngl`/`--n-cpu-moe` from a VRAM budget; MoE path uses a 0.5 PCIe-thrash crossover, falling back to naive `-ngl` (`densePlacement`, `plan.go:76`) past it.
+- `GetKvCostModel` (`kvcost.go:40`) — KV size as `Slope*ctx + Const` GB, SWA/hybrid-SSM aware; `Const` is 0 for plain attention.
+- `GetDenseCtx` (`kvcost.go:165`) — speed-first dense context picker (avoid offloading just to grow ctx).
+- `Generate` (`generate.go:57`) — the entry point: discover → per-model `emitModel` → `emitGroupsAndListeners`. `sizeProfile` (`generate.go:350`) holds the dense/MoE/kv-in-ram/no-attn branches; `forceLowActiveMoE` (`generate.go:451`) repairs the planner's crossover fallback for low-active MoE.
+- `EstimatePlan` (`estimate.go:37`) — preview load plan for the editor, mirroring the solo profile.
+- `GenerateFile`/`Settings`/`Override`/`VariantSpec`/`GroupSpec` (`overrides.go`) — the YAML control surface; `LoadGenerateFile` (`overrides.go:181`) applies defaults and merges the sidecar.
+- `EnsureConfig` (`hash.go:107`) — hash-gated generate; `CurrentInputsHash` (`hash.go:84`) lets callers detect a would-be-different config cheaply.
+- Sidecar API (`sidecar.go`) — `LoadSidecarOverrides`, `UpsertSidecarOverride`, `DeleteSidecarOverride`, `UpsertSidecarSettings`, `ClearSidecarSettings`.
+
+## Data flow / how it works
+
+1. **Load** — `LoadGenerateFile` reads the hand-authored generate control file, applies PowerShell-default settings, then overlays the UI-owned sidecar: first the `SettingsPatch` (dashboard VRAM/headroom edits), then the sidecar overrides *ahead* of the file's overrides (so UI edits win under first-match resolution). `--models-dir` overrides `settings.modelsRoot`.
+2. **Gate** — `EnsureConfig` hashes the resolved models root, raw generate bytes, and sidecar bytes (`InputsHash`). If the stored `.modelhash` matches and the output exists, regeneration is skipped. `autoVram` always forces a regen (the live VRAM snapshot isn't visible to the hash) and re-samples free VRAM via `resolveAutoVram`.
+3. **Discover** — `DiscoverGgufModels` walks the models root; `Generate` sorts rows and resolves each row's `Override` by path glob (+ optional quant).
+4. **Size** — for each model `emitModel` reads metadata (cached), resolves KV quant (forced matched `q8_0` unless a valid override), derives the KV cost model, then builds a profile set: solo + ctx-tier variants + named custom variants (`Override.Variants` + `settings.defaultVariants`). Each profile runs through `sizeProfile` → `GetLoadPlan` → `forceLowActiveMoE` (or `applyForcedOffload` when `cpuOffload` is pinned).
+5. **Emit** — `emitProfile` writes each model's YAML `cmd` block (flags for `-ngl`, `-c`, `-ub/-b`, `-fa`/`-ctk`/`-ctv`, spec-type, reasoning, DRY, threads, `--n-cpu-moe`). `emitGroupsAndListeners` assigns models to groups by name-glob (first match wins) and binds listen addresses; every group is an exclusive swap group.
+
+## Gotchas / conventions
+
+- **PowerShell parity is the spec.** Most functions are direct ports and call that out in their doc comments. `real_models_test.go` asserts parity against real ggufs (`TestReadGgufMetadata_VsPowerShell`, `TestGetLoadPlan_VsPowerShell`, `TestGetKvCostModel_VsPowerShell`). `plan.go`'s `densePlacement` *intentionally diverges* from the PowerShell version (it fixes a per-layer KV-reserve bug) — see the comment at `plan.go:76`.
+- **Two MoE share tables.** `plan.go` has `moeExpertShare` (planner) and `generate.go` has `genMoeShare` (generation-side ctx sizing + `forceLowActiveMoE`); the latter adds `qwen35moe`. Both are only a *fallback*: `effectiveShare` prefers the exact `Metadata.ExpertWeightShare` derived from the tensor section, using the arch table only when that is 0.
+- **KV quant is forced to matched `q8_0`.** Mismatched K/V or `iq4_nl` is rejected and reset (flash-attention requires matched K/V); a per-model/variant override only takes effect if it is itself valid and matched.
+- **Empty `modelsRoot` is valid, not an error** — the server boots with an empty catalog so a setup UI can point it at a folder later; discovery and hashing short-circuit on blank.
+- **Determinism for tests** — `Generate` takes the timestamp as an argument (`DefaultNow()` is separate) so output is reproducible.
+- **Caching** — metadata is cached by size+mtime (`metacache.go`); replacing a gguf invalidates its entry. The config itself is cached via the `.modelhash` sidecar digest.
+- **Sidecar ownership** — `quartermaster-overrides.yaml` is fully owned by the UI and rewritten whole on any edit, kept separate from the comment-rich hand-authored generate file.
+- `gguf.go` parses the tensor section too (for expert share); a tensor of unknown ggml type leaves the share at 0 (arch-table fallback) rather than erroring the whole read.
+
+## Connections
+
+- **Depends on:** `internal/perf` and `internal/logmon` (live GPU/VRAM telemetry in `vram.go`); `gopkg.in/yaml.v3`.
+- **Called by:** `llama-quartermaster.go` at startup — `EnsureConfig` regenerates the config before the router loads it, and `-watch-models`/reload paths use `CachedConfigHash`/`CurrentInputsHash` to detect changes. `internal/server/configapi.go` is the web-UI config API: it reads/writes sidecar overrides and settings, previews tunings via `EstimatePlan` + `ReadGgufMetadataCached`, and triggers `EnsureConfig` on save.
+- Produces the YAML config consumed by `internal/config` / the router/scheduler; its `groups`/`listeners` output backs the fork's multi-listener + cross-port eviction features.

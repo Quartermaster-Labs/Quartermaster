@@ -420,6 +420,11 @@ type responseBodyCopier struct {
 	status      int
 	wroteHeader bool
 	start       time.Time
+
+	// liveModel, when non-empty, enables live token counting for streaming
+	// responses; live is created lazily once the response is known to be SSE.
+	liveModel string
+	live      *liveTokenCounter
 }
 
 func newBodyCopier(w http.ResponseWriter) *responseBodyCopier {
@@ -443,7 +448,11 @@ func (w *responseBodyCopier) Write(b []byte) (int, error) {
 	if w.status == http.StatusSwitchingProtocols {
 		return w.ResponseWriter.Write(b)
 	}
-	return w.tee.Write(b)
+	n, err := w.tee.Write(b)
+	if w.live != nil {
+		w.live.feed(b)
+	}
+	return n, err
 }
 
 func (w *responseBodyCopier) WriteHeader(statusCode int) {
@@ -452,6 +461,12 @@ func (w *responseBodyCopier) WriteHeader(statusCode int) {
 	}
 	w.wroteHeader = true
 	w.status = statusCode
+	// Enable live token counting once we know this is a successful streaming
+	// response and a model was resolved upstream.
+	if w.liveModel != "" && statusCode == http.StatusOK &&
+		strings.Contains(w.Header().Get("Content-Type"), "text/event-stream") {
+		w.live = newLiveTokenCounter(w.liveModel, w.start)
+	}
 	w.ResponseWriter.WriteHeader(statusCode)
 }
 

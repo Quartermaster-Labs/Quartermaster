@@ -5,6 +5,7 @@ const ConfigFileChangedEventID = 0x03
 const ActivityLogEventID = 0x05
 const ModelPreloadedEventID = 0x06
 const InFlightRequestsEventID = 0x07
+const LiveTokensEventID = 0x08
 
 // ProcessStateChangeEvent is emitted whenever a process transitions between
 // lifecycle states. States are carried as strings so this package stays a leaf
@@ -49,4 +50,18 @@ type InFlightRequestsEvent struct {
 
 func (e InFlightRequestsEvent) Type() uint32 {
 	return InFlightRequestsEventID
+}
+
+// LiveTokensEvent reports in-progress generation for a streaming request: the
+// number of completion tokens emitted so far and the elapsed time since the
+// upstream started responding. Emitted (throttled) while the stream is open so
+// the UI can show a live tokens/sec readout before the final metrics land.
+type LiveTokensEvent struct {
+	Model        string
+	OutputTokens int
+	ElapsedMs    int
+}
+
+func (e LiveTokensEvent) Type() uint32 {
+	return LiveTokensEventID
 }

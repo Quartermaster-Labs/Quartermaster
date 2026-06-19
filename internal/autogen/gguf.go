@@ -1,6 +1,6 @@
 // Package autogen discovers local GGUF models, reads their headers, computes a
 // llama-server load plan (-ngl / --n-cpu-moe / context) from a VRAM budget, and
-// emits a llama-swap config. It is a Go port of the domina-llm-eval PowerShell
+// emits a llama-quartermaster config. It is a Go port of the domina-llm-eval PowerShell
 // planner (Read-GgufMetadata / Get-LlamaLoadPlan / Pick-LocalGguf) plus the
 // Generate-Config orchestration. Fork-specific; kept separable for upstreaming.
 package autogen

@@ -37,7 +37,7 @@
     <!-- Mobile: Dropdown menu (hidden on md and up) -->
     <div class="block md:hidden relative">
       <button
-        class="w-full px-4 py-2 rounded font-medium transition-colors flex items-center justify-between bg-surface hover:bg-secondary-hover border border-gray-200 dark:border-white/10"
+        class="w-full px-4 py-2 rounded font-medium transition-colors flex items-center justify-between bg-surface hover:bg-secondary-hover border border-card-border"
         onclick={() => (mobileMenuOpen = !mobileMenuOpen)}
       >
         <span>{getTabLabel($selectedTabStore)}</span>
@@ -52,7 +52,7 @@
       </button>
       {#if mobileMenuOpen}
         <div
-          class="absolute top-full left-0 right-0 mt-1 bg-surface border border-gray-200 dark:border-white/10 rounded shadow-lg z-10"
+          class="absolute top-full left-0 right-0 mt-1 bg-surface border border-card-border rounded shadow-lg z-10"
         >
           {#each tabs as tab (tab.id)}
             <button
@@ -75,7 +75,7 @@
         <button
           class="px-4 py-2 rounded font-medium transition-colors {$selectedTabStore === tab.id
             ? 'bg-primary text-btn-primary-text'
-            : 'bg-surface hover:bg-secondary-hover border border-gray-200 dark:border-white/10'}"
+            : 'bg-surface hover:bg-secondary-hover border border-card-border'}"
           onclick={() => selectTab(tab.id)}
         >
           {tab.label}

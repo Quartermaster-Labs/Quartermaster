@@ -1,5 +1,5 @@
 [Unit]
-Description=llama-quartermaster (llama-swap fork) — model proxy with startup config autogen
+Description=llama-quartermaster (llama-quartermaster fork) — model proxy with startup config autogen
 Documentation=https://github.com/mostlygeek/llama-swap
 After=network-online.target
 Wants=network-online.target
@@ -14,7 +14,7 @@ WorkingDirectory=/opt/llama-quartermaster
 # Edit paths/ports to match the install. -generate makes the proxy build its
 # config from the local GGUF tree on startup (hash-gated, so an unchanged models
 # folder skips the scan). Drop -generate to load a static -config instead.
-ExecStart=/opt/llama-quartermaster/llama-swap \
+ExecStart=/opt/llama-quartermaster/llama-quartermaster \
   -config /etc/llama-quartermaster/config.yaml \
   -generate /etc/llama-quartermaster/quartermaster-generate.yaml \
   -listen 0.0.0.0:1250 \

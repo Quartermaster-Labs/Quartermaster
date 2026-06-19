@@ -55,6 +55,7 @@ func CreateMetricsMiddleware(mm *metricsMonitor, cfg config.Config) chain.Middle
 			}
 
 			recorder := newBodyCopier(w)
+			recorder.liveModel = data.ModelID
 			next.ServeHTTP(recorder, r)
 			mm.record(data.ModelID, r, recorder, cf, reqBody, reqHeaders)
 		})

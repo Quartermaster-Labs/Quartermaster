@@ -1306,7 +1306,7 @@
     "timezone": "browser",
     "to": "now"
   },
-  "title": "llama-swap resource monitor",
+  "title": "llama-quartermaster resource monitor",
   "variables": [
     {
       "kind": "QueryVariable",

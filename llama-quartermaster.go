@@ -64,6 +64,8 @@ func main() {
 	flagWatchConfig := flag.Bool("watch-config", false, "reload config on file change")
 	flagGenerate := flag.String("generate", "", "path to autogen control file (settings + overrides); generates -config from local GGUFs on startup (hash-gated)")
 	flagModelsDir := flag.String("models-dir", "", "models root for -generate (overrides settings.modelsRoot)")
+	flagWatchModels := flag.Bool("watch-models", false, "periodically re-scan the models folder and hot-reload when it changes (requires -generate)")
+	flagWatchModelsInterval := flag.Duration("watch-models-interval", 30*time.Second, "poll interval for -watch-models")
 	flag.Parse()
 
 	if *flagVersion {
@@ -139,7 +141,7 @@ func main() {
 	proxyLog.Debugf("PID: %d", os.Getpid())
 
 	// On Windows, bind the process tree to a Job Object so every upstream
-	// process is reaped when llama-swap exits — even on a forced kill. No-op
+	// process is reaped when llama-quartermaster exits — even on a forced kill. No-op
 	// elsewhere. Non-fatal: a failure just falls back to per-process teardown.
 	if err := process.SetupTreeCleanup(); err != nil {
 		proxyLog.Warnf("failed to set up process tree cleanup: %v", err)
@@ -301,6 +303,56 @@ func main() {
 		}()
 	}
 
+	// Periodically re-scan the models folder: when a GGUF is added/removed (or the
+	// generate file / sidecar changes), regenerate -config and hot-reload. Gated on
+	// the autogen inputs hash (same one EnsureConfig caches), so unchanged models —
+	// and AutoVram's VRAM drift, which the hash ignores — never trigger a needless
+	// reload that would evict the loaded model. Requires -generate.
+	if *flagWatchModels {
+		switch {
+		case *flagGenerate == "":
+			proxyLog.Warn("-watch-models ignored: it requires -generate")
+		default:
+			if *flagWatchConfig {
+				proxyLog.Warn("-watch-models and -watch-config are both set: a models-triggered regen will reload twice (once per watcher)")
+			}
+			interval := *flagWatchModelsInterval
+			if interval < time.Second {
+				interval = time.Second
+			}
+			proxyLog.Infof("watching models folder for changes (poll-based, %s interval)", interval)
+			go func() {
+				ticker := time.NewTicker(interval)
+				defer ticker.Stop()
+				// Seed from the hash EnsureConfig wrote at startup so the first
+				// tick doesn't regen an already-current config.
+				last := autogen.CachedConfigHash(configPath)
+				for {
+					select {
+					case <-watcherCtx.Done():
+						return
+					case <-ticker.C:
+						cur, err := autogen.CurrentInputsHash(*flagGenerate, *flagModelsDir)
+						if err != nil {
+							proxyLog.Warnf("watch-models: hashing inputs failed: %v", err)
+							continue
+						}
+						if cur == last {
+							continue
+						}
+						proxyLog.Info("watch-models: inputs changed, regenerating config")
+						if _, err := autogen.EnsureConfig(*flagGenerate, configPath, *flagModelsDir, func(m string) { proxyLog.Info(m) }); err != nil {
+							proxyLog.Warnf("watch-models: regen failed: %v", err)
+							continue
+						}
+						last = cur
+						reload()
+					}
+				}
+			}()
+		}
+	}
+
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
@@ -309,10 +361,10 @@ func main() {
 		go func() {
 			var startErr error
 			if useTLS {
-				proxyLog.Infof("llama-swap listening with TLS on https://%s", hs.Addr)
+				proxyLog.Infof("llama-quartermaster listening with TLS on https://%s", hs.Addr)
 				startErr = hs.ListenAndServeTLS(*flagCertFile, *flagKeyFile)
 			} else {
-				proxyLog.Infof("llama-swap listening on http://%s", hs.Addr)
+				proxyLog.Infof("llama-quartermaster listening on http://%s", hs.Addr)
 				startErr = hs.ListenAndServe()
 			}
 			if startErr != nil && !errors.Is(startErr, http.ErrServerClosed) {
@@ -323,7 +375,7 @@ func main() {
 
 		if !shared.IsLoopbackAddr(hs.Addr) {
 			_, port, _ := net.SplitHostPort(hs.Addr)
-			proxyLog.Infof("llama-swap is reachable by all hosts on the network, use loopback (e.g. localhost:%s) to restrict to this host only", port)
+			proxyLog.Infof("llama-quartermaster is reachable by all hosts on the network, use loopback (e.g. localhost:%s) to restrict to this host only", port)
 		}
 	}
 
