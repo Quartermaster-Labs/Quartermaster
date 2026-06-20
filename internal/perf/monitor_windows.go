@@ -15,18 +15,22 @@ import (
 )
 
 func getGpuStats(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuStat, error) {
-	if ch, err := tryNvidiaSmiWindows(ctx, every, logger); err == nil {
-		logger.Info("using nvidia-smi for GPU monitoring")
-		return ch, nil
-	} else {
-		logger.Debugf("nvidia-smi: %s", err.Error())
-	}
-
+	// D3DKMT first: it reads VRAM via a lightweight kernel thunk (gdi32) and so
+	// does not stall a fully-loaded GPU mid-generation the way an nvidia-smi
+	// driver sample (utilization.gpu/power.draw) can. nvidia-smi stays as the
+	// fallback for hosts where the D3DKMT path can't initialize.
 	if ch, err := tryD3DKMT(ctx, every, logger); err == nil {
 		logger.Info("using D3DKMT for GPU monitoring")
 		return ch, nil
 	} else {
 		logger.Debugf("D3DKMT: %s", err.Error())
+	}
+
+	if ch, err := tryNvidiaSmiWindows(ctx, every, logger); err == nil {
+		logger.Info("using nvidia-smi for GPU monitoring")
+		return ch, nil
+	} else {
+		logger.Debugf("nvidia-smi: %s", err.Error())
 	}
 
 	return nil, ErrNoGpuTool

@@ -7,13 +7,14 @@ package autogen
 // EstimateInput is the subset of editor fields that affect placement/memory.
 // Zero Ctx means "let the sizer pick". Zero TargetVramGB uses settings.
 type EstimateInput struct {
-	Ctx          int
-	KvK          string
-	KvV          string
-	KvInRam      bool
-	Spec         string
-	TargetVramGB float64
-	CpuOffload   int // >0 pins layers offloaded to CPU, overriding the sizer
+	Ctx            int
+	KvK            string
+	KvV            string
+	KvInRam        bool
+	Spec           string
+	TargetVramGB   float64
+	CpuOffload     int  // >0 pins layers offloaded to CPU, overriding the sizer
+	CtxCheckpoints *int // nil => llama default (32); 0 disables; reserves checkpoint VRAM
 }
 
 // EstimateResult is the previewed load plan for a candidate tuning.
@@ -26,6 +27,10 @@ type EstimateResult struct {
 	TargetVramGB float64 `json:"targetVramGB"`
 	MaxRamGB     float64 `json:"maxRamGB"`
 	KvReserveGB  float64 `json:"kvReserveGB"`
+	// CheckpointGB is the VRAM reserved for context checkpoints (included in
+	// EstVramGB via overhead, broken out so the UI can attribute it separately
+	// from model weights).
+	CheckpointGB float64 `json:"checkpointGB"`
 	RamExceeded  bool    `json:"ramExceeded"`
 	IsMoE        bool    `json:"isMoE"`
 }
@@ -79,12 +84,26 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		KvK:      kvK,
 		KvV:      kvV,
 		IsLong:   in.Ctx >= 65536,
+
+		CtxCheckpoints: in.CtxCheckpoints,
 	}
 
 	ctx, plan, kvReserve, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, in.KvInRam)
 	if err != nil {
 		return EstimateResult{}, err
 	}
+	// Checkpoints live wherever the KV cache does. When KV is in RAM they cost
+	// no VRAM, so report 0 to stay consistent with EstVramGB (which sizeProfile
+	// only inflates in the VRAM-KV branch).
+	checkpointGB := 0.0
+	if !in.KvInRam {
+		ckptCtxCeil := modelMax
+		if prof.Ctx != 0 {
+			ckptCtxCeil = minInt(ckptCtxCeil, prof.Ctx)
+		}
+		checkpointGB = checkpointReserveGB(prof, perTokGB, kvConstGB, ckptCtxCeil)
+	}
+
 	ngl, ncpuMoe := forceLowActiveMoE(meta, plan, prof, kvReserve)
 	if in.CpuOffload > 0 {
 		ngl, ncpuMoe = applyForcedOffload(meta, in.CpuOffload)
@@ -101,6 +120,7 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		TargetVramGB: target,
 		MaxRamGB:     s.MaxRamGB,
 		KvReserveGB:  kvReserve,
+		CheckpointGB: checkpointGB,
 		RamExceeded:  plan.RamExceeded,
 		IsMoE:        meta.IsMoE,
 	}, nil

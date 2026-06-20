@@ -81,6 +81,12 @@ type Effects interface {
 	RunningModels() map[string]process.ProcessState
 	// StartSwap launches the swap goroutine for modelID, stopping evict first.
 	StartSwap(modelID string, evict []string)
+	// AbortSwap stops an in-flight swap's target process so its load does not
+	// run to completion. Best-effort and asynchronous: it makes the swap
+	// goroutine's WaitReady return an error, which arrives as a SwapDone. The
+	// scheduler uses it to cancel an abandoned load (one whose waiters all left)
+	// when a queued request needs that model's slot.
+	AbortSwap(modelID string)
 	// GrantError responds to a caller with an error.
 	GrantError(req HandlerReq, err error)
 	// GrantServe hands a caller the wrapped handler for modelID and reports

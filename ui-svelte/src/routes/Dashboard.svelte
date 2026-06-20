@@ -169,7 +169,7 @@
         <div class="mt-3 grid grid-cols-3 gap-2 font-mono text-xs">
           <div>
             <div class="text-txtsecondary uppercase tracking-wide">Util</div>
-            <div class="text-txtmain tabular-nums">{$latestGpu.gpu_util_pct}%</div>
+            <div class="text-txtmain tabular-nums">{$latestGpu.gpu_util_pct.toFixed(1)}%</div>
           </div>
           <div>
             <div class="text-txtsecondary uppercase tracking-wide">Temp</div>

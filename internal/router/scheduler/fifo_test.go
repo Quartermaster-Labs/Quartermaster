@@ -62,6 +62,7 @@ type fakeEffects struct {
 	starts []startRec
 	grants []grantRec
 	stops  []stopRec
+	aborts []string
 }
 
 func newFakeEffects() *fakeEffects {
@@ -107,6 +108,10 @@ func (f *fakeEffects) GrantServe(req HandlerReq, modelID string) bool {
 
 func (f *fakeEffects) StopProcesses(timeout time.Duration, ids []string) {
 	f.stops = append(f.stops, stopRec{timeout: timeout, ids: ids})
+}
+
+func (f *fakeEffects) AbortSwap(modelID string) {
+	f.aborts = append(f.aborts, modelID)
 }
 
 // served counts grants that handed modelID a handler and were received.
@@ -169,6 +174,59 @@ func TestFIFO_FastPath(t *testing.T) {
 	}
 	if got := eff.served("a"); got != 1 {
 		t.Errorf("served(a)=%d want 1", got)
+	}
+}
+
+// An in-flight swap whose waiters all disconnected is aborted when another
+// request queues behind it needing its slot — rather than loading to completion
+// only to be evicted. After the abort's SwapDone, the queued request proceeds.
+func TestFIFO_AbortsAbandonedSwapForQueuedRequest(t *testing.T) {
+	eff := newFakeEffects()
+	eff.states["a"] = process.StateStopped
+	eff.states["b"] = process.StateStopped
+	planner := &stubPlanner{evict: map[string][]string{"a": {"b"}, "b": {"a"}}}
+	s := newFIFO(planner, eff)
+
+	// (1) Request a — starts a swap; mark it loading.
+	rA := reqCh("a")
+	s.OnRequest(rA)
+	eff.states["a"] = process.StateStarting
+
+	// (2) a's client disconnects. Nothing queued needs its slot yet, so no abort.
+	s.OnCancel(rA)
+	if len(eff.aborts) != 0 {
+		t.Fatalf("aborts=%v want none (nothing waiting on a's slot yet)", eff.aborts)
+	}
+
+	// (3) Request b — collides with a's (now abandoned) swap, so a is aborted.
+	s.OnRequest(reqCh("b"))
+	if len(eff.aborts) != 1 || eff.aborts[0] != "a" {
+		t.Fatalf("aborts=%v want [a]", eff.aborts)
+	}
+
+	// (4) Abort lands: a's swap completes with an error; b then starts.
+	eff.states["a"] = process.StateStopped
+	s.OnSwapDone(SwapDone{ModelID: "a", Err: errors.New("aborted")})
+	if got := eff.startsFor("b"); got != 1 {
+		t.Errorf("startsFor(b)=%d want 1 (queued request proceeds after abort)", got)
+	}
+}
+
+// A swap that still has a waiter is never aborted by a queued request — its
+// caller wants that model, so aborting would be wrong.
+func TestFIFO_DoesNotAbortWantedSwap(t *testing.T) {
+	eff := newFakeEffects()
+	eff.states["a"] = process.StateStopped
+	eff.states["b"] = process.StateStopped
+	planner := &stubPlanner{evict: map[string][]string{"a": {"b"}, "b": {"a"}}}
+	s := newFIFO(planner, eff)
+
+	s.OnRequest(reqCh("a")) // a loading, waiter still present
+	eff.states["a"] = process.StateStarting
+	s.OnRequest(reqCh("b")) // queues behind a
+
+	if len(eff.aborts) != 0 {
+		t.Errorf("aborts=%v want none (a still has a waiter)", eff.aborts)
 	}
 }
 

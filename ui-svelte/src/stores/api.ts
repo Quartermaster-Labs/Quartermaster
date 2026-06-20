@@ -225,8 +225,20 @@ export interface ModelVariant {
   kvV?: string;
   spec?: string;
   reasoningFmt?: string;
+  ub?: number;
+  dry?: boolean | null;
+  ctxCheckpoints?: number | null; // null/undefined => inherit model-wide
   unlisted?: boolean;
   aliases?: string[];
+  // Engine knobs (variant carries the full launch shape; zero/empty => inherit).
+  kvInRam?: boolean;
+  cpuOffload?: number;
+  flashAttn?: string; // "" (inherit/on) | "on" | "off"
+  mmap?: string; // "" (inherit) | "on" | "off"
+  mlock?: boolean;
+  threads?: number;
+  parallel?: number;
+  extraArgs?: string;
 }
 
 export interface ModelOverride {
@@ -238,6 +250,13 @@ export interface ModelOverride {
   cpuOffload?: number;
   spec?: string;
   reasoningFmt?: string;
+  flashAttn?: string; // "" (on) | "on" | "off" | "auto"
+  mmap?: string; // "" (auto) | "on" | "off"
+  mlock?: boolean;
+  threads?: number; // 0 => global default
+  parallel?: number; // 0 => 1
+  ub?: number; // 0 => auto (physical batch -ub/-b)
+  extraArgs?: string; // extra llama-server flags appended verbatim (passthrough)
   aliases?: string[];
   unlisted?: boolean;
   skip?: boolean;
@@ -305,6 +324,7 @@ export interface PlanEstimate {
   targetVramGB: number;
   maxRamGB: number;
   kvReserveGB: number;
+  checkpointGB: number;
   ramExceeded: boolean;
   isMoE: boolean;
 }
@@ -317,6 +337,26 @@ export interface EstimateParams {
   spec?: string;
   vram?: number;
   cpuOffload?: number;
+  /** null/undefined => llama default (32); 0 disables. */
+  ctxCheckpoints?: number | null;
+  /** Seed the estimate from the model's loaded command (the running variant)
+   * instead of re-sizing the solo profile with defaults. */
+  actual?: boolean;
+}
+
+// Render the full launch command for a candidate override (no persistence).
+// Powers the editor's two-way launch-parameters box: form edits call this to
+// refresh the command text (computed -ngl/-c/--n-cpu-moe included).
+export async function previewCmd(model: string, override: ModelOverride): Promise<string> {
+  const response = await fetch(`/api/models/${encodeURIComponent(model)}/preview`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(override),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to preview command: ${response.status} ${await response.text()}`);
+  }
+  return (await response.json()).cmd as string;
 }
 
 export async function estimatePlan(model: string, p: EstimateParams): Promise<PlanEstimate> {
@@ -328,6 +368,8 @@ export async function estimatePlan(model: string, p: EstimateParams): Promise<Pl
   if (p.spec) q.set("spec", p.spec);
   if (p.vram) q.set("vram", String(p.vram));
   if (p.cpuOffload) q.set("cpuOffload", String(p.cpuOffload));
+  if (p.ctxCheckpoints != null) q.set("ctxCheckpoints", String(p.ctxCheckpoints));
+  if (p.actual) q.set("actual", "true");
   const response = await fetch(`/api/models/${encodeURIComponent(model)}/estimate?${q.toString()}`);
   if (!response.ok) {
     throw new Error(`Failed to estimate plan: ${response.status} ${await response.text()}`);

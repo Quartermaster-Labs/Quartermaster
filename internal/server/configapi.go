@@ -25,17 +25,31 @@ type AutogenAdmin struct {
 // after every reload-time rebuild.
 func (s *Server) SetAutogenAdmin(a *AutogenAdmin) { s.autogen = a }
 
-// variantDTO is the JSON shape of one named custom variant.
+// variantDTO is the JSON shape of one named custom variant. It carries every
+// VariantSpec field the UI can edit so a save round-trips them instead of
+// dropping file-defined knobs (e.g. judge's ctxCheckpoints:0 / dry:false).
 type variantDTO struct {
-	Name         string   `json:"name"`
-	Ctx          int      `json:"ctx"`
-	VramTargetGB float64  `json:"vramTargetGB"`
-	KvK          string   `json:"kvK"`
-	KvV          string   `json:"kvV"`
-	Spec         string   `json:"spec"`
-	ReasoningFmt string   `json:"reasoningFmt"`
-	Unlisted     bool     `json:"unlisted"`
-	Aliases      []string `json:"aliases"`
+	Name           string   `json:"name"`
+	Ctx            int      `json:"ctx"`
+	VramTargetGB   float64  `json:"vramTargetGB"`
+	KvK            string   `json:"kvK"`
+	KvV            string   `json:"kvV"`
+	Spec           string   `json:"spec"`
+	ReasoningFmt   string   `json:"reasoningFmt"`
+	Ub             int      `json:"ub"`
+	Dry            *bool    `json:"dry"`
+	CtxCheckpoints *int     `json:"ctxCheckpoints"`
+	Unlisted       bool     `json:"unlisted"`
+	Aliases        []string `json:"aliases"`
+	// Engine knobs (variant carries the full launch shape; zero/empty => inherit).
+	KvInRam    bool   `json:"kvInRam"`
+	CpuOffload int    `json:"cpuOffload"`
+	FlashAttn  string `json:"flashAttn"`
+	Mmap       string `json:"mmap"`
+	Mlock      bool   `json:"mlock"`
+	Threads    int    `json:"threads"`
+	Parallel   int    `json:"parallel"`
+	ExtraArgs  string `json:"extraArgs"`
 }
 
 // overrideDTO is the curated JSON shape of a per-model override (the cogwheel
@@ -49,6 +63,13 @@ type overrideDTO struct {
 	CpuOffload   int          `json:"cpuOffload"`
 	Spec         string       `json:"spec"`
 	ReasoningFmt string       `json:"reasoningFmt"`
+	FlashAttn    string       `json:"flashAttn"`
+	Mmap         string       `json:"mmap"`
+	Mlock        bool         `json:"mlock"`
+	Threads      int          `json:"threads"`
+	Parallel     int          `json:"parallel"`
+	Ub           int          `json:"ub"`
+	ExtraArgs    string       `json:"extraArgs"`
 	Aliases      []string     `json:"aliases"`
 	Unlisted     bool         `json:"unlisted"`
 	Skip         bool         `json:"skip"`
@@ -71,13 +92,20 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		Ctx: o.Ctx, KvK: o.KvK, KvV: o.KvV, KvInRam: o.KvInRam,
 		VramTargetGB: o.VramTargetGB, CpuOffload: o.CpuOffload,
 		Spec: o.Spec, ReasoningFmt: o.ReasoningFmt,
-		Aliases: o.Aliases, Unlisted: o.Unlisted, Skip: o.Skip,
+		FlashAttn: o.FlashAttn, Mmap: o.Mmap, Mlock: o.Mlock,
+		Threads: o.Threads, Parallel: o.Parallel, Ub: o.Ub,
+		ExtraArgs: o.ExtraArgs,
+		Aliases:   o.Aliases, Unlisted: o.Unlisted, Skip: o.Skip,
 	}
 	for _, v := range o.Variants {
 		dto.Variants = append(dto.Variants, variantDTO{
 			Name: v.Name, Ctx: v.Ctx, VramTargetGB: v.VramTargetGB,
 			KvK: v.KvK, KvV: v.KvV, Spec: v.Spec, ReasoningFmt: v.ReasoningFmt,
+			Ub: v.Ub, Dry: v.Dry, CtxCheckpoints: v.CtxCheckpoints,
 			Unlisted: v.Unlisted, Aliases: v.Aliases,
+			KvInRam: v.KvInRam, CpuOffload: v.CpuOffload,
+			FlashAttn: v.FlashAttn, Mmap: v.Mmap, Mlock: v.Mlock,
+			Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
 		})
 	}
 	return dto
@@ -87,7 +115,11 @@ func toVariantSpec(v variantDTO) autogen.VariantSpec {
 	return autogen.VariantSpec{
 		Name: v.Name, Ctx: v.Ctx, VramTargetGB: v.VramTargetGB,
 		KvK: v.KvK, KvV: v.KvV, Spec: v.Spec, ReasoningFmt: v.ReasoningFmt,
+		Ub: v.Ub, Dry: v.Dry, CtxCheckpoints: v.CtxCheckpoints,
 		Unlisted: v.Unlisted, Aliases: v.Aliases,
+		KvInRam: v.KvInRam, CpuOffload: v.CpuOffload,
+		FlashAttn: v.FlashAttn, Mmap: v.Mmap, Mlock: v.Mlock,
+		Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
 	}
 }
 
@@ -156,8 +188,16 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	resp := modelConfigResp{Id: realID, Gguf: gguf, Cmd: strings.TrimSpace(cmd), HasOverride: existing != nil}
+	// Show the EFFECTIVE override so the editor has the complete picture. The
+	// sidecar wins when present (a UI save writes a superset that already carries
+	// the file's fields); otherwise surface the hand-authored file override so its
+	// ctx tiers / file-defined variants (e.g. judge) appear and round-trip on save
+	// instead of being dropped. HasOverride still reflects only the sidecar (it
+	// gates the "reset to default" action).
 	if existing != nil {
 		resp.Override = toOverrideDTO(*existing)
+	} else if fileOv, found, ferr := autogen.ResolveFileOverride(s.autogen.GeneratePath, gguf); ferr == nil && found {
+		resp.Override = toOverrideDTO(fileOv)
 	}
 	// Read trained ctx + MTP capability from the gguf header (cheap; header only).
 	// Non-fatal: a missing/unreadable gguf just leaves the slider ceiling at 0.
@@ -181,31 +221,19 @@ func (s *Server) handleAPIModelOverridePut(w http.ResponseWriter, r *http.Reques
 		shared.SendResponse(w, r, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	_, ov, err := s.findSidecarOverride(gguf)
+	// Base the sidecar row on the hand-authored FILE override so its file-only
+	// fields (ctxVariants, quant) survive — the sidecar row shadows the file row
+	// wholesale, so anything the editor doesn't carry would otherwise be lost. The
+	// editor loaded the effective override via GET, so the body is authoritative
+	// for every UI-modeled field (curated knobs + the full variants list); the
+	// incremental variant endpoint remains for API callers that only add one.
+	ov, _, err := autogen.ResolveFileOverride(s.autogen.GeneratePath, gguf)
 	if err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// Replace the whole override from the body: the editor owns the complete
-	// picture (it loaded the current state via GET), so curated fields and the
-	// variants list are both authoritative here. The incremental variant
-	// endpoint remains for API callers that only want to add one.
 	ov.Match = gguf
-	ov.Ctx = body.Ctx
-	ov.KvK = body.KvK
-	ov.KvV = body.KvV
-	ov.KvInRam = body.KvInRam
-	ov.VramTargetGB = body.VramTargetGB
-	ov.CpuOffload = body.CpuOffload
-	ov.Spec = body.Spec
-	ov.ReasoningFmt = body.ReasoningFmt
-	ov.Aliases = body.Aliases
-	ov.Unlisted = body.Unlisted
-	ov.Skip = body.Skip
-	ov.Variants = ov.Variants[:0]
-	for _, v := range body.Variants {
-		ov.Variants = append(ov.Variants, toVariantSpec(v))
-	}
+	applyOverrideDTO(&ov, body)
 	if _, err := autogen.UpsertSidecarOverride(s.autogen.GeneratePath, ov); err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
@@ -249,10 +277,18 @@ func (s *Server) handleAPIModelVariantPost(w http.ResponseWriter, r *http.Reques
 		shared.SendResponse(w, r, http.StatusBadRequest, "variant name is required")
 		return
 	}
-	_, ov, err := s.findSidecarOverride(gguf)
+	side, ov, err := s.findSidecarOverride(gguf)
 	if err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
+	}
+	// First sidecar write: seed from the file override so its ctxVariants/quant/
+	// file-defined variants aren't lost when the new sidecar row shadows the file
+	// row. An existing sidecar is already a superset, so keep editing it in place.
+	if side == nil {
+		if fileOv, found, ferr := autogen.ResolveFileOverride(s.autogen.GeneratePath, gguf); ferr == nil && found {
+			ov = fileOv
+		}
 	}
 	ov.Match = gguf
 	spec := toVariantSpec(v)
@@ -282,8 +318,52 @@ func (s *Server) handleAPIModelVariantPost(w http.ResponseWriter, r *http.Reques
 // ctx, kvK, kvV, spec (strings/int), kvInRam (bool), vram (float target GB),
 // cpuOffload (int layers pinned to CPU).
 // Powers the editor's live memory estimate.
+// estimateInputFromCmd reconstructs the placement-relevant inputs from a
+// model's rendered llama-server command so an estimate reflects the actually
+// loaded variant (ctx, checkpoints, spec, kv) instead of re-sizing the solo
+// profile with defaults. Tokens are whitespace-split; unknown flags are ignored.
+func estimateInputFromCmd(cmd string) autogen.EstimateInput {
+	in := autogen.EstimateInput{}
+	toks := strings.Fields(cmd)
+	for i := 0; i < len(toks); i++ {
+		next := func() (string, bool) {
+			if i+1 < len(toks) {
+				return toks[i+1], true
+			}
+			return "", false
+		}
+		switch toks[i] {
+		case "-c", "--ctx-size":
+			if v, ok := next(); ok {
+				in.Ctx, _ = strconv.Atoi(v)
+			}
+		case "--ctx-checkpoints":
+			if v, ok := next(); ok {
+				if n, err := strconv.Atoi(v); err == nil {
+					in.CtxCheckpoints = &n
+				}
+			}
+		case "--spec-type":
+			if v, ok := next(); ok {
+				in.Spec = v
+			}
+		case "-ctk":
+			if v, ok := next(); ok {
+				in.KvK = v
+			}
+		case "-ctv":
+			if v, ok := next(); ok {
+				in.KvV = v
+			}
+		case "--no-kv-offload":
+			in.KvInRam = true
+		}
+	}
+	return in
+}
+
 func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) {
-	_, gguf, _, ok := s.resolveModelGguf(w, r)
+	_, gguf, cmd, ok := s.resolveModelGguf(w, r)
 	if !ok {
 		return
 	}
@@ -299,11 +379,30 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 	}
 
 	q := r.URL.Query()
-	in := autogen.EstimateInput{
-		KvK:     q.Get("kvK"),
-		KvV:     q.Get("kvV"),
-		Spec:    q.Get("spec"),
-		KvInRam: q.Get("kvInRam") == "true",
+	// actual=true: seed from the loaded command so the status rail breaks down
+	// the variant that's really running. Otherwise (config editor) start blank so
+	// omitted fields fall back to the sizer's auto choices.
+	var in autogen.EstimateInput
+	if q.Get("actual") == "true" {
+		in = estimateInputFromCmd(cmd)
+	}
+	// Explicit query params override the seed (the config editor's form fields).
+	if v := q.Get("kvK"); v != "" {
+		in.KvK = v
+	}
+	if v := q.Get("kvV"); v != "" {
+		in.KvV = v
+	}
+	if v := q.Get("spec"); v != "" {
+		in.Spec = v
+	}
+	if v := q.Get("kvInRam"); v != "" {
+		in.KvInRam = v == "true"
+	}
+	if v := q.Get("ctxCheckpoints"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			in.CtxCheckpoints = &n
+		}
 	}
 	if v := q.Get("ctx"); v != "" {
 		in.Ctx, _ = strconv.Atoi(v)
@@ -440,6 +539,67 @@ func (s *Server) handleAPISettingsDelete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "reset"})
+}
+
+// applyOverrideDTO copies the editor's curated fields (and variants) from the
+// JSON body onto an Override, leaving Match untouched. Shared by the override PUT
+// and the command-preview endpoint.
+func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
+	ov.Ctx = body.Ctx
+	ov.KvK = body.KvK
+	ov.KvV = body.KvV
+	ov.KvInRam = body.KvInRam
+	ov.VramTargetGB = body.VramTargetGB
+	ov.CpuOffload = body.CpuOffload
+	ov.Spec = body.Spec
+	ov.ReasoningFmt = body.ReasoningFmt
+	ov.FlashAttn = body.FlashAttn
+	ov.Mmap = body.Mmap
+	ov.Mlock = body.Mlock
+	ov.Threads = body.Threads
+	ov.Parallel = body.Parallel
+	ov.Ub = body.Ub
+	ov.ExtraArgs = strings.TrimSpace(body.ExtraArgs)
+	ov.Aliases = body.Aliases
+	ov.Unlisted = body.Unlisted
+	ov.Skip = body.Skip
+	ov.Variants = ov.Variants[:0]
+	for _, v := range body.Variants {
+		ov.Variants = append(ov.Variants, toVariantSpec(v))
+	}
+}
+
+// handleAPIModelCmdPreview renders the full launch command for a candidate
+// override (the editor's current form state) without persisting anything. Powers
+// the two-way launch-parameters box: form edits POST here to refresh the command.
+func (s *Server) handleAPIModelCmdPreview(w http.ResponseWriter, r *http.Request) {
+	_, gguf, _, ok := s.resolveModelGguf(w, r)
+	if !ok {
+		return
+	}
+	var body overrideDTO
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		shared.SendResponse(w, r, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	gf, err := autogen.LoadGenerateFile(s.autogen.GeneratePath, s.autogen.ModelsDir)
+	if err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, "loading settings failed: "+err.Error())
+		return
+	}
+	meta, err := autogen.ReadGgufMetadataCached(gguf)
+	if err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, "reading gguf metadata failed: "+err.Error())
+		return
+	}
+	ov := autogen.Override{Match: gguf}
+	applyOverrideDTO(&ov, body)
+	cmd, err := autogen.RenderSoloCmd(gf.Settings, meta, autogen.GgufRow{FullPath: gguf}, ov)
+	if err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, "rendering command failed: "+err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"cmd": cmd})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

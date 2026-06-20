@@ -29,6 +29,15 @@ var (
 	ggufSuffixRe = regexp.MustCompile(`(?i)-GGUF$`)
 )
 
+// quantFromName extracts the quant token (upper-cased) from a gguf file name,
+// or "" when none is present.
+func quantFromName(name string) string {
+	if mm := quantRe.FindStringSubmatch(name); mm != nil {
+		return strings.ToUpper(mm[1])
+	}
+	return ""
+}
+
 // DiscoverGgufModels walks modelsRoot for *.gguf files and returns one row per
 // served model. mmproj projector files and non-first split shards are skipped.
 // skipPatterns are filename globs (default {"mmproj-*"}).
@@ -74,10 +83,7 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 			return nil
 		}
 
-		quant := ""
-		if mm := quantRe.FindStringSubmatch(name); mm != nil {
-			quant = strings.ToUpper(mm[1])
-		}
+		quant := quantFromName(name)
 
 		repoDir := filepath.Dir(path)
 		repoName := filepath.Base(repoDir)

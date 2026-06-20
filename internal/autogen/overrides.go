@@ -3,6 +3,7 @@ package autogen
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -106,9 +107,35 @@ type Override struct {
 	// CpuOffload pins how many layers are pushed to CPU, overriding the auto
 	// sizer. 0 => auto. MoE models offload expert layers (--n-cpu-moe N); dense
 	// models drop GPU layers (-ngl = blocks-N).
-	CpuOffload int  `yaml:"cpuOffload"`
-	Unlisted   bool `yaml:"unlisted"`
-	Skip       bool `yaml:"skip"`
+	CpuOffload int `yaml:"cpuOffload"`
+	// Engine knobs surfaced from llama-server. Zero/empty => the generator's
+	// default (shown in parentheses):
+	//   FlashAttn: "" (on) | "on" | "off" | "auto"  (-fa; required for quantized KV)
+	//   Mmap:      "" (auto) | "on" | "off"          (force/suppress --no-mmap)
+	//   Mlock:     false => no --mlock; true => --mlock (lock weights in RAM)
+	//   Threads:   0 => settings.Threads             (-t)
+	//   Parallel:  0 => 1                            (--parallel, concurrent slots)
+	//   Ub:        0 => auto (1024, 512 for >=64k ctx) (-ub/-b physical batch)
+	FlashAttn string `yaml:"flashAttn"`
+	Mmap      string `yaml:"mmap"`
+	Mlock     bool   `yaml:"mlock"`
+	Threads   int    `yaml:"threads"`
+	Parallel  int    `yaml:"parallel"`
+	Ub        int    `yaml:"ub"`
+	// CtxCheckpoints, when non-nil, emits --ctx-checkpoints N. 0 disables the KV
+	// prompt-prefix checkpoint cache (llama-server default is 32, each a full KV
+	// snapshot — costly in VRAM and rarely reused for short/divergent prompts).
+	// nil => omit the flag (llama default). Variants inherit this unless they set
+	// their own.
+	CtxCheckpoints *int `yaml:"ctxCheckpoints"`
+	// ExtraArgs are additional llama-server flags appended verbatim to the emitted
+	// command, for knobs autogen doesn't model (e.g. --rope-freq-scale,
+	// --override-kv). The structured fields above still own the computed flags;
+	// these are pure passthrough. The UI captures anything it can't map from the
+	// editable launch-parameters box into here.
+	ExtraArgs string `yaml:"extraArgs"`
+	Unlisted  bool   `yaml:"unlisted"`
+	Skip      bool   `yaml:"skip"`
 	// Variants are named custom profiles emitted in addition to the solo model:
 	// each becomes "<model>-<name>" with its own ctx/VRAM/kv/spec. Use-case
 	// agnostic — the UI's "create variant" flow writes these.
@@ -128,17 +155,31 @@ type Override struct {
 //
 // ReasoningFmt: "off" emits "--reasoning off" (plus --reasoning-format none).
 type VariantSpec struct {
-	Name         string   `yaml:"name"`
-	Ctx          int      `yaml:"ctx"`
-	VramTargetGB float64  `yaml:"vramTargetGB"`
-	KvK          string   `yaml:"kvK"`
-	KvV          string   `yaml:"kvV"`
-	Spec         string   `yaml:"spec"`
-	ReasoningFmt string   `yaml:"reasoningFmt"`
-	Ub           int      `yaml:"ub"`
-	Dry          *bool    `yaml:"dry"`
-	Unlisted     bool     `yaml:"unlisted"`
-	Aliases      []string `yaml:"aliases"`
+	Name         string  `yaml:"name"`
+	Ctx          int     `yaml:"ctx"`
+	VramTargetGB float64 `yaml:"vramTargetGB"`
+	KvK          string  `yaml:"kvK"`
+	KvV          string  `yaml:"kvV"`
+	Spec         string  `yaml:"spec"`
+	ReasoningFmt string  `yaml:"reasoningFmt"`
+	Ub           int     `yaml:"ub"`
+	Dry          *bool   `yaml:"dry"`
+	// CtxCheckpoints, when non-nil, emits --ctx-checkpoints N (0 disables). nil =>
+	// inherit the model-wide Override.CtxCheckpoints.
+	CtxCheckpoints *int     `yaml:"ctxCheckpoints"`
+	Unlisted       bool     `yaml:"unlisted"`
+	Aliases        []string `yaml:"aliases"`
+	// Engine knobs mirroring Override, so a variant can carry the full launch
+	// shape (the UI's "full settings page" for a variant). Zero/empty => inherit
+	// the model-wide Override value. Semantics match the Override fields above.
+	KvInRam    bool   `yaml:"kvInRam"`
+	CpuOffload int    `yaml:"cpuOffload"`
+	FlashAttn  string `yaml:"flashAttn"`
+	Mmap       string `yaml:"mmap"`
+	Mlock      bool   `yaml:"mlock"`
+	Threads    int    `yaml:"threads"`
+	Parallel   int    `yaml:"parallel"`
+	ExtraArgs  string `yaml:"extraArgs"`
 }
 
 // applyDefaults fills zero-valued settings with the PowerShell defaults.
@@ -237,6 +278,28 @@ func LoadBaseSettings(path, modelsDirOverride string) (Settings, error) {
 		gf.Settings.ModelsRoot = modelsDirOverride
 	}
 	return gf.Settings, nil
+}
+
+// ResolveFileOverride returns the hand-authored generate FILE override (the UI
+// sidecar is EXCLUDED) that the generator resolves for ggufPath, matched by path
+// glob + detected quant. The config editor uses this as the base for a UI save so
+// file-only fields the editor doesn't model (ctxVariants, quant, file-defined
+// variants) are carried into the sidecar row instead of being silently lost when
+// the sidecar shadows the file row. ok=false (zero Override) when nothing matches.
+func ResolveFileOverride(generatePath, ggufPath string) (Override, bool, error) {
+	data, err := os.ReadFile(generatePath)
+	if err != nil {
+		return Override{}, false, err
+	}
+	var gf GenerateFile
+	if err := yaml.Unmarshal(data, &gf); err != nil {
+		return Override{}, false, fmt.Errorf("parsing %s: %w", generatePath, err)
+	}
+	row := GgufRow{FullPath: ggufPath, Quant: quantFromName(filepath.Base(ggufPath))}
+	if o := ResolveOverride(row, gf.Overrides); o != nil {
+		return *o, true, nil
+	}
+	return Override{}, false, nil
 }
 
 // ResolveOverride returns the first override whose Match globs the gguf path and

@@ -49,6 +49,15 @@ type profile struct {
 	Ub           int   // physical batch size override (0 => default)
 	Dry          *bool // nil => DRY on; non-nil false => omit DRY sampler
 	CpuOffload   int   // >0 pins layers offloaded to CPU, overriding the sizer
+	// CtxCheckpoints, when non-nil, emits --ctx-checkpoints N (0 disables the KV
+	// prompt-prefix checkpoint cache). nil => inherit the model-wide value, else
+	// the llama-server default (32). See effectiveCtxCheckpoints.
+	CtxCheckpoints *int
+	// Variant, when non-nil, is the named-variant source this profile was built
+	// from. Its engine knobs (kvInRam/flash/mmap/mlock/threads/parallel/extraArgs)
+	// layer over the model-wide override at emit so a variant carries the full
+	// launch shape. Solo/ctx-tier profiles leave this nil and use the override.
+	Variant *VariantSpec
 }
 
 // Generate discovers models under gf.Settings.ModelsRoot and returns a complete
@@ -244,13 +253,14 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		soloTarget = override.VramTargetGB
 	}
 	profiles := []profile{{
-		Name:       name,
-		Target:     soloTarget,
-		Overhead:   s.VramOverheadGB + ubSoloOh + specOh,
-		Unlisted:   override.Unlisted,
-		Ctx:        override.Ctx,
-		Aliases:    aliases,
-		CpuOffload: override.CpuOffload,
+		Name:           name,
+		Target:         soloTarget,
+		Overhead:       s.VramOverheadGB + ubSoloOh + specOh,
+		Unlisted:       override.Unlisted,
+		Ctx:            override.Ctx,
+		Aliases:        aliases,
+		CpuOffload:     override.CpuOffload,
+		CtxCheckpoints: override.CtxCheckpoints,
 	}}
 	for _, cv := range ctxVariants {
 		cvTarget := s.TargetVramGB
@@ -258,11 +268,12 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			cvTarget = s.TargetVramGB - 0.5
 		}
 		profiles = append(profiles, profile{
-			Name:     fmt.Sprintf("%s-%s", name, formatCtxTag(cv)),
-			Target:   cvTarget,
-			Overhead: s.VramOverheadGB + ubSoloOh + specOh,
-			Ctx:      cv,
-			IsLong:   cv >= 65536,
+			Name:           fmt.Sprintf("%s-%s", name, formatCtxTag(cv)),
+			Target:         cvTarget,
+			Overhead:       s.VramOverheadGB + ubSoloOh + specOh,
+			Ctx:            cv,
+			IsLong:         cv >= 65536,
+			CtxCheckpoints: override.CtxCheckpoints,
 		})
 	}
 
@@ -271,7 +282,8 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	// ctx/VRAM/kv/spec; zero fields inherit. Spec affects the VRAM overhead, so
 	// bake the per-variant overhead here.
 	variantSpecs := append(append([]VariantSpec{}, override.Variants...), s.DefaultVariants...)
-	for _, v := range variantSpecs {
+	for i := range variantSpecs {
+		v := variantSpecs[i]
 		if strings.TrimSpace(v.Name) == "" {
 			continue
 		}
@@ -283,20 +295,27 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		if v.Spec == "draft-mtp" {
 			vSpecOh = 0.34
 		}
+		vCheckpoints := v.CtxCheckpoints
+		if vCheckpoints == nil {
+			vCheckpoints = override.CtxCheckpoints
+		}
 		profiles = append(profiles, profile{
-			Name:         fmt.Sprintf("%s-%s", name, slugify(v.Name)),
-			Target:       vTarget,
-			Overhead:     s.VramOverheadGB + ubSoloOh + vSpecOh,
-			Unlisted:     v.Unlisted,
-			Ctx:          v.Ctx,
-			Aliases:      v.Aliases,
-			IsLong:       v.Ctx >= 65536,
-			KvK:          v.KvK,
-			KvV:          v.KvV,
-			Spec:         v.Spec,
-			ReasoningFmt: v.ReasoningFmt,
-			Ub:           v.Ub,
-			Dry:          v.Dry,
+			Name:           fmt.Sprintf("%s-%s", name, slugify(v.Name)),
+			Target:         vTarget,
+			Overhead:       s.VramOverheadGB + ubSoloOh + vSpecOh,
+			Unlisted:       v.Unlisted,
+			Ctx:            v.Ctx,
+			Aliases:        v.Aliases,
+			IsLong:         v.Ctx >= 65536,
+			KvK:            v.KvK,
+			KvV:            v.KvV,
+			Spec:           v.Spec,
+			ReasoningFmt:   v.ReasoningFmt,
+			Ub:             v.Ub,
+			Dry:            v.Dry,
+			CpuOffload:     v.CpuOffload,
+			CtxCheckpoints: vCheckpoints,
+			Variant:        &variantSpecs[i],
 		})
 	}
 
@@ -321,7 +340,14 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			}
 		}
 
-		ctx, plan, kvReserve, err := sizeProfile(meta, s, prof, ptg, kcg, modelMax, kvInRam)
+		// A variant may force KV in/out of RAM; otherwise inherit the model-wide
+		// setting. Affects sizing, so resolve before sizeProfile.
+		pkvInRam := kvInRam
+		if prof.Variant != nil {
+			pkvInRam = prof.Variant.KvInRam
+		}
+
+		ctx, plan, kvReserve, err := sizeProfile(meta, s, prof, ptg, kcg, modelMax, pkvInRam)
 		if err != nil {
 			return err
 		}
@@ -339,7 +365,29 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		if prof.ReasoningFmt != "" {
 			effOv.ReasoningFmt = prof.ReasoningFmt
 		}
-		emitProfile(b, s, meta, row, prof, ctx, ngl, ncpuMoe, plan, ekvK, ekvV, kvInRam, &effOv)
+		// A named variant carries the full launch shape: layer its engine knobs
+		// over the model-wide override (zero/empty => inherit the override value).
+		if v := prof.Variant; v != nil {
+			if v.FlashAttn != "" {
+				effOv.FlashAttn = v.FlashAttn
+			}
+			if v.Mmap != "" {
+				effOv.Mmap = v.Mmap
+			}
+			if v.Mlock {
+				effOv.Mlock = true
+			}
+			if v.Threads > 0 {
+				effOv.Threads = v.Threads
+			}
+			if v.Parallel > 0 {
+				effOv.Parallel = v.Parallel
+			}
+			if strings.TrimSpace(v.ExtraArgs) != "" {
+				effOv.ExtraArgs = v.ExtraArgs
+			}
+		}
+		emitProfile(b, s, meta, row, prof, ctx, ngl, ncpuMoe, plan, ekvK, ekvV, pkvInRam, &effOv)
 		*emitted = append(*emitted, prof.Name)
 	}
 	return nil
@@ -370,6 +418,14 @@ func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB fl
 		kvReserve = KvReserveGB(ctx, perTokGB, kvConstGB)
 
 	case perTokGB > 0:
+		// Context checkpoints live in the KV (VRAM) buffer alongside the cache.
+		// Reserve their VRAM up front so ctx sizing + layer placement don't
+		// overcommit and spill into sysmem (which tanks decode speed).
+		ckptCtxCeil := modelMax
+		if prof.Ctx != 0 {
+			ckptCtxCeil = minInt(ckptCtxCeil, prof.Ctx)
+		}
+		overhead += checkpointReserveGB(prof, perTokGB, kvConstGB, ckptCtxCeil)
 		if meta.IsMoE {
 			share := effectiveShare(meta, genMoeShareFor)
 			nonExpert := meta.FileSizeGB * (1.0 - share)
@@ -431,6 +487,54 @@ func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB fl
 		}
 	}
 	return
+}
+
+// llamaDefaultCtxCheckpoints is llama-server's --ctx-checkpoints default when
+// the flag is omitted (PR #15293).
+const llamaDefaultCtxCheckpoints = 32
+
+// checkpointMinStep mirrors llama-server's --checkpoint-min-step default — the
+// minimum prompt-token spacing between context checkpoints. We don't model the
+// flag, so the default is assumed for the per-checkpoint global-KV term.
+const checkpointMinStep = 256
+
+// effectiveCtxCheckpoints resolves the checkpoint count a profile will actually
+// run with: an explicit value (incl. 0 = disabled) when set, else the
+// llama-server default.
+func effectiveCtxCheckpoints(prof profile) int {
+	if prof.CtxCheckpoints != nil {
+		return *prof.CtxCheckpoints
+	}
+	return llamaDefaultCtxCheckpoints
+}
+
+// checkpointReserveGB estimates the extra VRAM a profile's context checkpoints
+// consume. llama-server keeps up to --ctx-checkpoints KV snapshots so a diverging
+// prompt can be restored instead of reprocessed. Each snapshot holds the
+// ctx-independent window/recurrent state (kvConstGB) plus roughly one
+// checkpoint-min-step worth of global KV. Left unaccounted, the default 32
+// snapshots silently overflow VRAM into sysmem and tank decode speed.
+//
+// The count is capped by how many checkpoints can actually exist: at min-step
+// spacing a context of ctxCeil tokens holds at most ctxCeil/checkpointMinStep
+// snapshots, so a small pinned ctx (e.g. a 4k judge) reserves far fewer than the
+// 32 default. Returns 0 when checkpoints are disabled or the model has no
+// VRAM-resident KV.
+func checkpointReserveGB(prof profile, perTokGB, kvConstGB float64, ctxCeil int) float64 {
+	n := effectiveCtxCheckpoints(prof)
+	if n <= 0 || (perTokGB <= 0 && kvConstGB <= 0) {
+		return 0
+	}
+	if ctxCeil > 0 {
+		if maxN := ctxCeil / checkpointMinStep; maxN < n {
+			n = maxN
+		}
+	}
+	if n <= 0 {
+		return 0
+	}
+	perCheckpoint := kvConstGB + perTokGB*float64(checkpointMinStep)
+	return float64(n) * perCheckpoint
 }
 
 // planOpt builds PlanOptions with explicit reserve + overhead set.
@@ -522,26 +626,54 @@ func estForOffload(meta Metadata, prof profile, kvReserve float64, ngl, ncpuMoe 
 	return round(estVram, 2), round(estRam, 2)
 }
 
-// emitProfile writes one model entry's YAML block.
-func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, prof profile, ctx, ngl, ncpuMoe int, plan LoadPlan, kvK, kvV string, kvInRam bool, ov *Override) {
+// buildCmdLines returns the launch command as a list of flag lines (no leading
+// indentation), shared by emitProfile (which writes them as a YAML `cmd: >`
+// block) and RenderSoloCmd (which joins them for the editor preview). Any
+// Override.ExtraArgs are appended verbatim as a final line.
+func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ngl, ncpuMoe int, kvK, kvV string, kvInRam bool, ov *Override) []string {
 	cpuMoeFlag := ""
 	if ncpuMoe > 0 {
 		cpuMoeFlag = fmt.Sprintf(" --n-cpu-moe %d", ncpuMoe)
 	}
 	cpuOverride := ncpuMoe > 0
 	fullGpu := ncpuMoe == 0 && ngl >= int(meta.BlockCount)
+
+	mmap := ""
+	if ov != nil {
+		mmap = ov.Mmap
+	}
 	noMmapFlag := ""
-	if fullGpu || cpuOverride {
+	if mmap == "off" || (mmap != "on" && (fullGpu || cpuOverride)) {
 		noMmapFlag = "--no-mmap "
+	}
+	mlockFlag := ""
+	if ov != nil && ov.Mlock {
+		mlockFlag = "--mlock "
 	}
 	kvoFlag := ""
 	if kvInRam {
 		kvoFlag = "--no-kv-offload "
 	}
 
+	fa := "on"
+	if ov != nil && ov.FlashAttn != "" {
+		fa = ov.FlashAttn
+	}
+	parallel := 1
+	if ov != nil && ov.Parallel > 0 {
+		parallel = ov.Parallel
+	}
+	threads := s.Threads
+	if ov != nil && ov.Threads > 0 {
+		threads = ov.Threads
+	}
+
 	ub := 1024
 	if prof.IsLong {
 		ub = 512
+	}
+	if ov != nil && ov.Ub > 0 {
+		ub = ov.Ub
 	}
 	if prof.Ub > 0 {
 		ub = prof.Ub
@@ -552,10 +684,6 @@ func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, pro
 		spec = prof.Spec
 	}
 
-	// Reasoning: the variant value wins over the model-wide override. "off" emits
-	// the explicit --reasoning off switch (plus --reasoning-format none); any other
-	// non-empty value sets --reasoning-format. Default is "auto" — reasoning stays
-	// enabled unless explicitly turned off.
 	reason := prof.ReasoningFmt
 	if reason == "" && ov != nil {
 		reason = ov.ReasoningFmt
@@ -572,28 +700,95 @@ func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, pro
 
 	modelPath := strings.ReplaceAll(row.FullPath, "\\", "/")
 
+	lines := []string{
+		s.ServerExe,
+		fmt.Sprintf("-m %s", modelPath),
+		"--port ${PORT}",
+		"--host 127.0.0.1",
+		fmt.Sprintf("-ngl %d", ngl),
+		fmt.Sprintf("-c %d", ctx),
+		fmt.Sprintf("-ub %d -b %d", ub, ub),
+		fmt.Sprintf("-fa %s -ctk %s -ctv %s", fa, kvK, kvV),
+		fmt.Sprintf("--parallel %d %s%s%s--kv-unified --no-warmup --no-webui", parallel, noMmapFlag, mlockFlag, kvoFlag),
+		fmt.Sprintf("--spec-type %s", spec),
+	}
+	if spec == "draft-mtp" {
+		lines = append(lines, "--spec-draft-n-max 2")
+	}
+	lines = append(lines, fmt.Sprintf("--jinja --reasoning-format %s%s", rfmt, reasoningFlag))
+	if prof.CtxCheckpoints != nil {
+		lines = append(lines, fmt.Sprintf("--ctx-checkpoints %d", *prof.CtxCheckpoints))
+	}
+	if prof.Dry == nil || *prof.Dry {
+		lines = append(lines, "--dry-multiplier 0.8 --dry-base 1.75 --dry-allowed-length 3")
+	}
+	lines = append(lines, fmt.Sprintf("-t %d%s", threads, cpuMoeFlag))
+	if ov != nil {
+		if extra := strings.TrimSpace(ov.ExtraArgs); extra != "" {
+			lines = append(lines, extra)
+		}
+	}
+	return lines
+}
+
+// RenderSoloCmd previews the full launch command for a candidate override,
+// reusing the solo-profile sizer so the editor's launch-parameters box matches
+// what a save would emit. Returns the command on one line (with `${PORT}` intact).
+func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string, error) {
+	kvK, kvV := "q8_0", "q8_0"
+	if ov.KvK != "" {
+		kvK = ov.KvK
+	}
+	if ov.KvV != "" {
+		kvV = ov.KvV
+	}
+	if kvK != kvV || kvK == "iq4_nl" || kvV == "iq4_nl" {
+		kvK, kvV = "q8_0", "q8_0"
+	}
+	perTokGB, kvConstGB := 0.0, 0.0
+	if m := GetKvCostModel(meta, kvK, kvV); m.OK {
+		perTokGB, kvConstGB = m.SlopeGB, m.ConstGB
+	}
+	modelMax := 32768
+	if meta.ContextLength > 0 {
+		modelMax = int(meta.ContextLength)
+	}
+	target := s.TargetVramGB
+	if ov.VramTargetGB > 0 {
+		target = ov.VramTargetGB
+	}
+	specOh := 0.0
+	if effectiveSpec(meta, &ov) == "draft-mtp" {
+		specOh = 0.34
+	}
+	const ubSoloOh = 0.17
+	prof := profile{
+		Name:       "preview",
+		Target:     target,
+		Overhead:   s.VramOverheadGB + ubSoloOh + specOh,
+		Ctx:        ov.Ctx,
+		CpuOffload: ov.CpuOffload,
+	}
+	ctx, plan, kvReserve, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, ov.KvInRam)
+	if err != nil {
+		return "", err
+	}
+	ngl, ncpuMoe := forceLowActiveMoE(meta, plan, prof, kvReserve)
+	if ov.CpuOffload > 0 {
+		ngl, ncpuMoe = applyForcedOffload(meta, ov.CpuOffload)
+	}
+	return strings.Join(buildCmdLines(s, meta, row, prof, ctx, ngl, ncpuMoe, kvK, kvV, ov.KvInRam, &ov), " "), nil
+}
+
+// emitProfile writes one model entry's YAML block.
+func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, prof profile, ctx, ngl, ncpuMoe int, plan LoadPlan, kvK, kvV string, kvInRam bool, ov *Override) {
 	fmt.Fprintf(b, "\n  # arch=%s size=%gGB blocks=%d moe=%v\n", meta.Architecture, meta.FileSizeGB, meta.BlockCount, meta.IsMoE)
 	fmt.Fprintf(b, "  # est vram=%gGB ram=%gGB\n", plan.EstVramGB, plan.EstRamGB)
 	fmt.Fprintf(b, "  %q:\n", prof.Name)
 	b.WriteString("    cmd: >\n")
-	fmt.Fprintf(b, "      %s\n", s.ServerExe)
-	fmt.Fprintf(b, "      -m %s\n", modelPath)
-	b.WriteString("      --port ${PORT}\n")
-	b.WriteString("      --host 127.0.0.1\n")
-	fmt.Fprintf(b, "      -ngl %d\n", ngl)
-	fmt.Fprintf(b, "      -c %d\n", ctx)
-	fmt.Fprintf(b, "      -ub %d -b %d\n", ub, ub)
-	fmt.Fprintf(b, "      -fa on -ctk %s -ctv %s\n", kvK, kvV)
-	fmt.Fprintf(b, "      --parallel 1 %s%s--kv-unified --no-warmup --no-webui\n", noMmapFlag, kvoFlag)
-	fmt.Fprintf(b, "      --spec-type %s\n", spec)
-	if spec == "draft-mtp" {
-		b.WriteString("      --spec-draft-n-max 2\n")
+	for _, line := range buildCmdLines(s, meta, row, prof, ctx, ngl, ncpuMoe, kvK, kvV, kvInRam, ov) {
+		fmt.Fprintf(b, "      %s\n", line)
 	}
-	fmt.Fprintf(b, "      --jinja --reasoning-format %s%s\n", rfmt, reasoningFlag)
-	if prof.Dry == nil || *prof.Dry {
-		b.WriteString("      --dry-multiplier 0.8 --dry-base 1.75 --dry-allowed-length 3\n")
-	}
-	fmt.Fprintf(b, "      -t %d%s\n", s.Threads, cpuMoeFlag)
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
 	if prof.Unlisted {
 		b.WriteString("    unlisted: true\n")

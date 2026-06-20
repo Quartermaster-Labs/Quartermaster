@@ -180,6 +180,24 @@ func (b *baseRouter) StartSwap(modelID string, evict []string) {
 	go b.doSwap(modelID, evict)
 }
 
+// AbortSwap implements scheduler.Effects. It stops the target of an in-flight
+// swap asynchronously so we don't finish loading a model nobody is waiting for
+// just to evict it immediately for a queued model. Stopping a StateStarting
+// process aborts its start (ErrStartAborted); doSwap's WaitReady then returns
+// that error and posts a SwapDone, after which OnSwapDone clears the swap and
+// re-drains the queue. Done in a goroutine so the run loop never blocks on Stop.
+func (b *baseRouter) AbortSwap(modelID string) {
+	p, ok := b.processes[modelID]
+	if !ok {
+		return
+	}
+	go func() {
+		if err := p.Stop(b.healthCheckTimeout()); err != nil {
+			b.logger.Warnf("%s: aborting swap for %s failed: %v", b.name, modelID, err)
+		}
+	}()
+}
+
 // GrantError implements scheduler.Effects.
 func (b *baseRouter) GrantError(req scheduler.HandlerReq, err error) {
 	b.grant(req, scheduler.HandlerResp{Err: err})

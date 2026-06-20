@@ -71,12 +71,21 @@ func (c *liveTokenCounter) consumeLine(line []byte) {
 		}
 	}
 
-	// Otherwise count any chunk that carried generated text (content or
-	// reasoning) as one token.
+	// Otherwise count any chunk that carried generated output as one token.
+	// Chat deltas: visible content, reasoning, OR streamed tool-call arguments
+	// (agentic tool calls emit arguments here, not in `content` — without this
+	// the rate decays to zero while the model is writing a tool call).
 	if d := parsed.Get("choices.0.delta"); d.Exists() {
-		if d.Get("content").String() != "" || d.Get("reasoning_content").String() != "" {
+		if d.Get("content").String() != "" ||
+			d.Get("reasoning_content").String() != "" ||
+			d.Get("tool_calls").Exists() {
 			c.tokens++
+			return
 		}
+	}
+	// Legacy completions API streams generated text at choices.0.text.
+	if t := parsed.Get("choices.0.text"); t.Exists() && t.String() != "" {
+		c.tokens++
 	}
 }
 

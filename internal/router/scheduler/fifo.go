@@ -21,6 +21,9 @@ type activeSwap struct {
 	modelID string
 	evict   []string
 	waiters []HandlerReq
+	// aborting is set once we've asked Effects to abort this (abandoned) swap,
+	// so repeated reap passes don't fire AbortSwap again before its SwapDone.
+	aborting bool
 }
 
 // FIFO is the default scheduler. Requests are handled in a first-in, first-out order.
@@ -115,10 +118,13 @@ func (s *FIFO) OnRequest(req HandlerReq) {
 		return
 	}
 
-	// (4) Collision with an in-flight swap — queue.
+	// (4) Collision with an in-flight swap — queue. If a colliding swap has been
+	// abandoned (its waiters all disconnected), abort it now rather than letting
+	// it load to completion only to be evicted for this request.
 	if collidesWith(req.Model, evict, s.active) {
 		s.logger.Debugf("%s: queuing request for model %s (collides with in-flight swap)", s.name, req.Model)
 		s.enqueue(req)
+		s.reapAbandonedSwaps()
 		return
 	}
 
@@ -171,6 +177,9 @@ func (s *FIFO) OnCancel(req HandlerReq) {
 	if removed {
 		s.logger.Debugf("%s: cancelled request for model %s pruned from scheduler", s.name, req.Model)
 		broadcastQueuePositions(s.queued)
+		// A cancel may have emptied an active swap's waiters while a queued
+		// request still needs that model's slot — abort the now-abandoned load.
+		s.reapAbandonedSwaps()
 	}
 }
 
@@ -371,6 +380,40 @@ func (s *FIFO) drainQueue() {
 	}
 	s.queued = remaining
 	broadcastQueuePositions(s.queued)
+	s.reapAbandonedSwaps()
+}
+
+// reapAbandonedSwaps aborts any in-flight swap that has lost all its waiters
+// (its client(s) disconnected) while a queued request is waiting to evict it.
+// Finishing such a load wastes time: it loads a model nobody wants only to stop
+// it immediately for the queued model. Aborting makes the swap goroutine post a
+// SwapDone, after which OnSwapDone clears it and drainQueue lets the waiting
+// request proceed. Swaps that still have waiters are left alone — their callers
+// want that model — so this never preempts a wanted load.
+func (s *FIFO) reapAbandonedSwaps() {
+	for id, sw := range s.active {
+		if len(sw.waiters) != 0 || sw.aborting {
+			continue
+		}
+		if !s.queueNeedsEvict(id) {
+			continue
+		}
+		s.logger.Infof("%s: aborting abandoned swap for model %s; a queued request needs its slot", s.name, id)
+		sw.aborting = true
+		s.effects.AbortSwap(id)
+	}
+}
+
+// queueNeedsEvict reports whether any queued request's eviction set includes
+// modelID — i.e. some waiting request can only proceed once modelID is gone.
+func (s *FIFO) queueNeedsEvict(modelID string) bool {
+	for _, req := range s.queued {
+		running := s.runningSet(req.Model)
+		if containsString(s.planner.EvictionFor(req.Model, running), modelID) {
+			return true
+		}
+	}
+	return false
 }
 
 // runningSet is the live model set handed to the Swapper: every process the

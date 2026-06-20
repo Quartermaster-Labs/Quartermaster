@@ -28,6 +28,26 @@ export interface VramBreakdown {
   segments: VramSegment[];
 }
 
+// estimateSegments splits a load-plan estimate into the canonical VRAM
+// components (weights / KV / checkpoints) using the SAME labels + colors as the
+// live status-rail breakdown, so the config-editor preview and the rail read as
+// one consistent widget. estVramGB folds the checkpoint reserve into overhead,
+// so subtract both KV and checkpoints to leave the true weights share. When KV
+// lives in RAM it (and its checkpoints) cost no VRAM.
+export function estimateSegments(est: PlanEstimate, kvInRam = false): VramSegment[] {
+  const kvMb = Math.max(0, (kvInRam ? 0 : est.kvReserveGB) * 1024);
+  const ckptMb = Math.max(0, (kvInRam ? 0 : est.checkpointGB ?? 0) * 1024);
+  const weightsMb = Math.max(0, est.estVramGB * 1024 - kvMb - ckptMb);
+  const segs: VramSegment[] = [];
+  if (weightsMb > 0)
+    segs.push({ label: "Weights", mb: weightsMb, class: "bg-primary", detail: "model weights + compute on GPU" });
+  if (kvMb > 0)
+    segs.push({ label: "KV cache", mb: kvMb, class: "bg-warning", detail: `attention cache (ctx ${est.ctx})` });
+  if (ckptMb > 0)
+    segs.push({ label: "Checkpoints", mb: ckptMb, class: "bg-error", detail: "context-checkpoint KV snapshots" });
+  return segs;
+}
+
 // Plan estimate for the currently loaded model, refreshed when the active model
 // changes. Drives the weights/KV/overhead component split.
 const activeEstimate = writable<{ id: string; est: PlanEstimate } | null>(null);
@@ -39,7 +59,7 @@ models.subscribe(($models) => {
     const id = ready[0].id;
     if (estFetchId !== id) {
       estFetchId = id;
-      estimatePlan(id, {})
+      estimatePlan(id, { actual: true })
         .then((est) => activeEstimate.set({ id, est }))
         .catch(() => activeEstimate.set(null));
     }
@@ -78,22 +98,28 @@ export const vramBreakdown = derived(
     if (modelMb > 0 && $est && live.length === 1 && live[0].id === $est.id) {
       const estTotalMb = $est.est.estVramGB * 1024;
       const kvEstMb = Math.max(0, $est.est.kvReserveGB * 1024);
-      const weightsEstMb = Math.max(0, estTotalMb - kvEstMb);
+      const ckptEstMb = Math.max(0, ($est.est.checkpointGB ?? 0) * 1024);
+      // estVramGB folds the checkpoint reserve into overhead, so subtract both
+      // KV and checkpoints to leave the true weights share.
+      const weightsEstMb = Math.max(0, estTotalMb - kvEstMb - ckptEstMb);
 
       // Fit the estimated components inside the measured model slice. If the
       // measurement exceeds the estimate, the surplus is CUDA context + compute
       // buffers. If it's under, scale the components down proportionally.
       let weightsMb: number;
       let kvMb: number;
+      let ckptMb: number;
       let overheadMb: number;
       if (estTotalMb <= modelMb) {
         weightsMb = weightsEstMb;
         kvMb = kvEstMb;
+        ckptMb = ckptEstMb;
         overheadMb = modelMb - estTotalMb;
       } else {
         const scale = estTotalMb > 0 ? modelMb / estTotalMb : 0;
         weightsMb = weightsEstMb * scale;
         kvMb = kvEstMb * scale;
+        ckptMb = ckptEstMb * scale;
         overheadMb = 0;
       }
 
@@ -103,6 +129,8 @@ export const vramBreakdown = derived(
         segments.push({ label: "Weights", mb: weightsMb, class: "bg-primary", detail: `${name} model weights on GPU` });
       if (kvMb > 0)
         segments.push({ label: "KV cache", mb: kvMb, class: "bg-warning", detail: `${name} attention cache (ctx ${$est.est.ctx})` });
+      if (ckptMb > 0)
+        segments.push({ label: "Checkpoints", mb: ckptMb, class: "bg-error", detail: `${name} context-checkpoint KV snapshots` });
       if (overheadMb > 0)
         segments.push({ label: "CUDA", mb: overheadMb, class: "bg-success", detail: "CUDA context + compute buffers" });
       return { usedMb: used, totalMb: $gpu.mem_total_mb, segments };

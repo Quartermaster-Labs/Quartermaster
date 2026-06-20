@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { inFlightRequests, metrics, liveTokens } from "../stores/api";
+  import { inFlightRequests, metrics, liveTokens, upstreamLogs } from "../stores/api";
+  import { persistentStore } from "../stores/persistent";
   import type { Model, ActivityLogEntry } from "../lib/types";
 
   interface Props {
@@ -28,6 +29,15 @@
   const BUSY_GRACE_MS = 600;
   let activeHold = $state(false);
   let holdTimer: ReturnType<typeof setTimeout> | null = null;
+  // Track whether the current active window ever saw a real in-flight request.
+  // A pure model load (e.g. UI load via /upstream/, preload) flips state
+  // starting→ready with no in-flight generation behind it; without this guard
+  // the grace hold below would carry over into `busy` and flash "Inferencing"
+  // for BUSY_GRACE_MS between load completing and the panel settling to idle.
+  let sawInflight = $state(false);
+  $effect(() => {
+    if ($inFlightRequests > 0) sawInflight = true;
+  });
   $effect(() => {
     const active = loading || $inFlightRequests > 0;
     if (active) {
@@ -39,17 +49,19 @@
     } else if (activeHold && !holdTimer) {
       holdTimer = setTimeout(() => {
         activeHold = false;
+        sawInflight = false;
         holdTimer = null;
       }, BUSY_GRACE_MS);
     }
   });
-  // Generating = held-active but not in the model-loading phase.
-  const busy = $derived(activeHold && !loading);
+  // Generating = held-active, not in the model-loading phase, and actually
+  // backed by an in-flight request (not just a model load winding down).
+  const busy = $derived(activeHold && !loading && sawInflight);
 
-  // Animated ASCII wave: a strip of block glyphs whose heights shift each tick,
-  // reading like a live activity trace while the model generates.
-  const BLOCKS = "▁▂▃▄▅▆▇█";
-  const WIDTH = 30;
+  // Width of the single-line idle scanner. Kept a touch under the data-stream
+  // footprint (STREAM_W=26) so the wider ●/• marker glyphs don't overrun the
+  // card and clip at the edges.
+  const WIDTH = 22;
   let phase = $state(0);
   let elapsedMs = $state(0);
   let startMs = $state(0);
@@ -75,17 +87,72 @@
     return () => clearInterval(t);
   });
 
-  function waveAt(p: number): string {
-    let s = "";
-    for (let i = 0; i < WIDTH; i++) {
-      // Two summed sines give a non-repetitive, organic-looking trace.
-      const v = (Math.sin(i * 0.5 + p * 0.3) + Math.sin(i * 0.23 - p * 0.17)) / 2; // -1..1
-      const idx = Math.min(BLOCKS.length - 1, Math.max(0, Math.floor(((v + 1) / 2) * BLOCKS.length)));
-      s += BLOCKS[idx];
+  // ---- Loading progress bar ----
+  // llama.cpp exposes no real load-progress signal, so estimate it from a
+  // learned per-model load time: record each successful load's duration (EMA)
+  // and render elapsed/expected as a percentage. With no history yet, fall back
+  // to an indeterminate sweeping bar.
+  const loadMsStore = persistentStore<Record<string, number>>("modelLoadMs", {});
+  const loadingModelId = $derived(models.find((m) => m.state === "starting")?.id ?? null);
+
+  let loadStart = 0;
+  let trackedLoadId: string | null = null;
+  let prevLoading = false;
+  $effect(() => {
+    const nowLoading = loading; // tracked
+    const startingId = loadingModelId; // tracked
+    if (nowLoading && !prevLoading) {
+      loadStart = Date.now();
+      trackedLoadId = startingId;
+    } else if (nowLoading && !trackedLoadId && startingId) {
+      trackedLoadId = startingId; // id only known once the process flips to "starting"
+    } else if (!nowLoading && prevLoading) {
+      const dur = Date.now() - loadStart;
+      const id = trackedLoadId;
+      const ready = id !== null && models.some((m) => m.id === id && m.state === "ready");
+      if (id && ready && dur > 500 && dur < 10 * 60 * 1000) {
+        loadMsStore.update((prev) => ({ ...prev, [id]: Math.round(prev[id] ? prev[id] * 0.6 + dur * 0.4 : dur) }));
+      }
+      trackedLoadId = null;
     }
+    prevLoading = nowLoading;
+  });
+
+  const expLoadMs = $derived(loadingModelId ? ($loadMsStore[loadingModelId] ?? 0) : 0);
+  // -1 => indeterminate (no history); otherwise clamped 3..99 while loading.
+  const loadPct = $derived.by<number>(() => {
+    if (!loading || expLoadMs <= 0) return -1;
+    return Math.min(99, Math.max(3, (elapsedMs / expLoadMs) * 100));
+  });
+
+  // Bar width tracks the data-stream footprint so loading reads at the same size
+  // as the generating animation.
+  const BAR_W = 24;
+  const PARTIAL = " ▏▎▍▌▋▊▉█";
+  // Indeterminate (no learned time): a 4-cell block sweeping over a dim track.
+  function sweepAt(p: number): string {
+    const span = 4;
+    const pos = Math.round(((Math.sin(p * 0.12) + 1) / 2) * (BAR_W - span));
+    let s = "";
+    for (let i = 0; i < BAR_W; i++) s += i >= pos && i < pos + span ? "█" : "░";
     return s;
   }
-  const wave = $derived(waveAt(phase));
+  const loadSweep = $derived(sweepAt(phase));
+  // Determinate: split bright fill from dim track so the two render in different
+  // colours (filled = primary, track = muted) rather than one flat band.
+  const loadFilled = $derived.by<string>(() => {
+    if (loadPct < 0) return "";
+    const filled = (loadPct / 100) * BAR_W;
+    const full = Math.floor(filled);
+    let s = "█".repeat(Math.min(full, BAR_W));
+    if (full < BAR_W) s += PARTIAL[Math.floor((filled - full) * 8)];
+    return s;
+  });
+  const loadTrack = $derived.by<string>(() => {
+    if (loadPct < 0) return "";
+    const used = loadFilled.length;
+    return "░".repeat(Math.max(0, BAR_W - used));
+  });
 
   // Idle "standby" scanner: a single marker drifting slowly back and forth over
   // a dim dotted track. Distinct from the loading wave so idle never reads as a
@@ -141,11 +208,67 @@
   }
   const stream = $derived(streamAt(phase));
 
-  // Live tokens/sec for the in-flight stream (server-pushed, throttled).
-  const liveTps = $derived.by<number>(() => {
+  // Live tokens/sec for the in-flight stream. The server pushes CUMULATIVE
+  // tokens + elapsed-since-start, so tokens/elapsed is a lifetime average that
+  // decays whenever generation slows (and includes prompt-processing time). For
+  // a "current speed" readout, derive an instantaneous rate from the delta
+  // between consecutive samples, lightly EMA-smoothed against the 200ms cadence.
+  let liveTps = $state(0);
+  let prevSample: { tokens: number; ms: number } | null = null;
+  $effect(() => {
     const lt = $liveTokens;
-    if (!lt || lt.elapsed_ms <= 0) return 0;
-    return (lt.output_tokens / lt.elapsed_ms) * 1000;
+    if (!lt) {
+      prevSample = null;
+      liveTps = 0;
+      return;
+    }
+    // New request (elapsed/tokens reset) — start a fresh window.
+    if (prevSample && (lt.elapsed_ms < prevSample.ms || lt.output_tokens < prevSample.tokens)) {
+      prevSample = null;
+      liveTps = 0;
+    }
+    if (prevSample) {
+      const dT = lt.output_tokens - prevSample.tokens;
+      const dMs = lt.elapsed_ms - prevSample.ms;
+      if (dMs > 0) {
+        const inst = (dT / dMs) * 1000;
+        liveTps = liveTps > 0 ? liveTps * 0.4 + inst * 0.6 : inst;
+      }
+    }
+    prevSample = { tokens: lt.output_tokens, ms: lt.elapsed_ms };
+  });
+
+  // ---- Prompt-processing progress ----
+  // Prefill is the one generation phase with a determinate progress signal:
+  // llama-server logs "...prompt processing... progress = 0.46..." to stderr as it
+  // chews through the prompt (captured into upstreamLogs). Decode (token streaming)
+  // has no such signal. Parse the latest value from the log tail and surface it in
+  // the header while prefilling; -1 => unknown/indeterminate.
+  const PROMPT_PROGRESS_RE = /progress\s*=\s*([01](?:\.\d+)?)/g;
+  let promptProgress = $state(-1);
+  let prevBusyForProg = false;
+  $effect(() => {
+    const logs = $upstreamLogs; // tracked: re-run as new log lines stream in
+    const decoding = ($liveTokens?.output_tokens ?? 0) > 0; // first token => prefill done
+    if (!busy) {
+      promptProgress = -1;
+      prevBusyForProg = false;
+      return;
+    }
+    if (!prevBusyForProg) {
+      promptProgress = -1; // new active window: drop any stale value until a fresh line lands
+      prevBusyForProg = true;
+    }
+    if (decoding) {
+      promptProgress = -1; // no determinate progress once tokens are flowing
+      return;
+    }
+    const tail = logs.slice(-4000);
+    const matches = tail.match(PROMPT_PROGRESS_RE);
+    if (matches && matches.length) {
+      const v = parseFloat(matches[matches.length - 1].split("=")[1]);
+      if (!Number.isNaN(v)) promptProgress = v;
+    }
   });
 
   // Unified stat readout: always show all six values. While generating, the
@@ -209,8 +332,14 @@
     <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary">
       {statusText}{#if busy || loading}<span class="inline-block w-3 text-left text-primary">{dots}</span>{/if}
     </span>
-    {#if busy || loading}
-      <span class="ml-auto font-mono text-[0.6rem] tabular-nums text-primary">{fmtDur(elapsedMs)}</span>
+    <!-- Progress %: model load while loading, prompt-processing (prefill) while
+         generating. Decode has no determinate signal, so the corner clears once
+         tokens stream — the elapsed duration lives in the stat grid (shown once,
+         not duplicated here). -->
+    {#if loading}
+      <span class="ml-auto font-mono text-[0.6rem] tabular-nums text-primary">{loadPct >= 0 ? `${loadPct.toFixed(0)}%` : "…"}</span>
+    {:else if busy && promptProgress >= 0}
+      <span class="ml-auto font-mono text-[0.6rem] tabular-nums text-primary" title="Prompt processing">{Math.round(promptProgress * 100)}%</span>
     {/if}
   </div>
 
@@ -219,11 +348,14 @@
          Fixed-height box keeps the multi-row flame from being clipped. -->
     <div class="flex items-center justify-center h-24 shrink-0">
       {#if loading}
-        <pre class="font-mono text-primary/70 text-base leading-none tracking-tight select-none m-0 whitespace-pre">{wave}</pre>
+        <div class="flex flex-col items-center justify-center gap-2 select-none">
+          <pre class="font-mono text-2xl leading-none tracking-tight m-0 whitespace-pre">{#if loadPct < 0}<span class="text-primary">{loadSweep}</span>{:else}<span class="text-primary">{loadFilled}</span><span class="text-txtsecondary/30">{loadTrack}</span>{/if}</pre>
+          <span class="font-mono text-primary text-sm tabular-nums">{loadPct >= 0 ? `${loadPct.toFixed(0)}%` : "loading…"}</span>
+        </div>
       {:else if busy}
         <pre class="font-mono text-3xl leading-tight tracking-tight select-none m-0 whitespace-pre">{#each stream as row, ri (ri)}{#if ri > 0}{"\n"}{/if}{#each row as cell, ci (ci)}<span class={cell.cls}>{cell.ch}</span>{/each}{/each}</pre>
       {:else}
-        <pre class="font-mono text-txtsecondary/50 text-base leading-none tracking-tight select-none m-0 whitespace-pre">{idleScan}</pre>
+        <pre class="font-mono text-txtsecondary/50 text-3xl leading-tight tracking-tight select-none m-0 whitespace-pre">{idleScan}</pre>
       {/if}
     </div>
 

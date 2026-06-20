@@ -16,8 +16,12 @@ func TestAutogen_Generate_namedVariant(t *testing.T) {
 	gf := GenerateFile{
 		Settings: Settings{ModelsRoot: realModelsRoot},
 		Overrides: []Override{{
-			Match:    "*",
-			Variants: []VariantSpec{{Name: "My Tiny", Ctx: 8192, KvK: "q4_0", KvV: "q4_0"}},
+			Match: "*",
+			Variants: []VariantSpec{{
+				Name: "My Tiny", Ctx: 8192, KvK: "q4_0", KvV: "q4_0",
+				// Engine knobs: the variant carries the full launch shape.
+				KvInRam: true, ExtraArgs: "--zzz-variant-marker 1",
+			}},
 		}},
 	}
 	gf.Settings.applyDefaults()
@@ -32,5 +36,13 @@ func TestAutogen_Generate_namedVariant(t *testing.T) {
 	// the variant forces ctx 8192
 	if !strings.Contains(out, "-c 8192") {
 		t.Fatalf("expected variant ctx -c 8192 in output")
+	}
+	// engine knobs flow through: kvInRam => --no-kv-offload, extraArgs verbatim.
+	// Both tokens are unique to this variant so a plain contains proves carriage.
+	if !strings.Contains(out, "--no-kv-offload") {
+		t.Fatalf("expected variant kvInRam to emit --no-kv-offload")
+	}
+	if !strings.Contains(out, "--zzz-variant-marker 1") {
+		t.Fatalf("expected variant extraArgs appended verbatim")
 	}
 }

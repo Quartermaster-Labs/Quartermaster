@@ -179,11 +179,18 @@ func init() {
 }
 
 const (
-	qsoffsetNbSegments        = 0
-	qsoffsetNodeCount         = 4
-	qsoffsetCommitLimit       = 0
-	qsoffsetBytesCommitted    = 8
-	qsoffsetBytesResident     = 16
+	qsoffsetNbSegments     = 0
+	qsoffsetNodeCount      = 4
+	qsoffsetCommitLimit    = 0
+	qsoffsetBytesCommitted = 8
+	qsoffsetBytesResident  = 16
+	// Aperture is a UINT boolean inside D3DKMT_QUERYSTATISTICS_SEGMENT_INFORMATION,
+	// sitting right after the 16-byte D3DKMT_QUERYSTATISTICS_MEMORY block:
+	//   CommitLimit(0) BytesCommitted(8) BytesResident(16) Memory(24..40) Aperture(40)
+	// Non-zero => the segment is system/shared memory mapped through the GPU
+	// aperture (WDDM "Shared GPU memory"), not dedicated VRAM. Summing aperture
+	// segments inflates total VRAM by ~half of system RAM (the 93GB bug).
+	qsoffsetAperture          = 40
 	qsoffsetRunningTime       = 0
 	qsoffsetSystemRunningTime = 272
 )
@@ -204,22 +211,25 @@ func d3dkmQueryAdapterStats(luid LUID) (nbSegments uint32, nodeCount uint32, err
 }
 
 // d3dkmQuerySegmentStats returns the commit limit (total) and resident
-// (used) bytes for the given memory segment of an adapter.
-func d3dkmQuerySegmentStats(luid LUID, segmentID uint32) (commitLimit uint64, bytesResident uint64, err error) {
+// (used) bytes for the given memory segment of an adapter, plus the aperture
+// flag and a copy of the first 64 result bytes for offset diagnostics.
+func d3dkmQuerySegmentStats(luid LUID, segmentID uint32) (commitLimit uint64, bytesResident uint64, aperture bool, head [64]byte, err error) {
 	buf := queryStatsBuffer{
 		Type:        int32(D3DKMT_QUERYSTATISTICS_SEGMENT),
 		AdapterLuid: luid,
 		QueryId:     int32(segmentID),
 	}
 	if err := ntstatusCall(procQueryStatistics, unsafe.Pointer(&buf)); err != nil {
-		return 0, 0, fmt.Errorf("QueryStatistics(SEGMENT %d): %w", segmentID, err)
+		return 0, 0, false, head, fmt.Errorf("QueryStatistics(SEGMENT %d): %w", segmentID, err)
 	}
+	copy(head[:], buf._result[:64])
 	commitLimit = binary.LittleEndian.Uint64(buf._result[qsoffsetCommitLimit : qsoffsetCommitLimit+8])
 	bytesResident = binary.LittleEndian.Uint64(buf._result[qsoffsetBytesResident : qsoffsetBytesResident+8])
 	if bytesResident == 0 {
 		bytesResident = binary.LittleEndian.Uint64(buf._result[qsoffsetBytesCommitted : qsoffsetBytesCommitted+8])
 	}
-	return commitLimit, bytesResident, nil
+	aperture = binary.LittleEndian.Uint32(buf._result[qsoffsetAperture:qsoffsetAperture+4]) != 0
+	return commitLimit, bytesResident, aperture, head, nil
 }
 
 // d3dkmQueryNodeStats returns the global and system running time counters
@@ -446,14 +456,34 @@ func tryD3DKMT(ctx context.Context, every time.Duration, logger *logmon.Monitor)
 						continue
 					}
 
-					var memUsedMB, memTotalMB int
+					// Sum dedicated (local) segments and all segments separately.
+					// Aperture segments are system RAM shared through the GPU, not
+					// dedicated VRAM — counting them inflates total to tens of GB.
+					// But the aperture-flag offset is driver/ABI sensitive, so if the
+					// local-only sum comes out empty we fall back to all segments
+					// rather than report 0GB.
+					var localUsedMB, localTotalMB, allUsedMB, allTotalMB int
 					for seg := uint32(0); seg < a.nbSegments; seg++ {
-						limit, resident, err := d3dkmQuerySegmentStats(a.luid, seg)
+						limit, resident, aperture, head, err := d3dkmQuerySegmentStats(a.luid, seg)
 						if err != nil {
 							continue
 						}
-						memUsedMB += int(resident / (1024 * 1024))
-						memTotalMB += int(limit / (1024 * 1024))
+						limMB := int(limit / (1024 * 1024))
+						resMB := int(resident / (1024 * 1024))
+						allTotalMB += limMB
+						allUsedMB += resMB
+						if !aperture {
+							localTotalMB += limMB
+							localUsedMB += resMB
+						}
+						logger.Infof("DIAG adapter %d seg %d: aperture=%v limit=%dMB resident=%dMB head=% x", i, seg, aperture, limMB, resMB, head[:48])
+					}
+					memUsedMB, memTotalMB := localUsedMB, localTotalMB
+					if memTotalMB == 0 {
+						// Aperture detection failed (or no local segment) — don't
+						// report 0GB; use the all-segment totals instead.
+						memUsedMB, memTotalMB = allUsedMB, allTotalMB
+						logger.Debugf("adapter %d: local-only total was 0, falling back to all segments (total=%dMB used=%dMB)", i, memTotalMB, memUsedMB)
 					}
 
 					var gpuUtil float64
@@ -490,6 +520,11 @@ func tryD3DKMT(ctx context.Context, every time.Duration, logger *logmon.Monitor)
 
 						a.prevTime = now
 					}
+
+					// Raw perf fields, unscaled — needed to confirm the correct unit
+					// interpretation (D3DKMT Power is documented as tenths-of-a-percent
+					// of TDP, not watts; Temperature/FanRPM scaling also vary by driver).
+					logger.Infof("DIAG adapter %d perfdata raw: power=%d temp=%d fanRPM=%d maxFanRPM=%d usedMB=%d totalMB=%d", i, perfData.Power, perfData.Temperature, perfData.FanRPM, a.maxFanRPM, memUsedMB, memTotalMB)
 
 					tempC := d3dkmtTempC(perfData.Temperature)
 

@@ -12,9 +12,13 @@
 
   // Per-model config editor (cogwheel) state.
   let configModelId = $state<string | null>(null);
+  let configOpenFor = $state(""); // full id of the clicked row (selects its variant)
   let configOpen = $state(false);
-  function openConfig(id: string): void {
-    configModelId = id;
+  // family = the model whose override holds the variants (the card's base);
+  // openFor = the actual row clicked, so the modal lands on its variant.
+  function openConfig(family: string, openFor = ""): void {
+    configModelId = family;
+    configOpenFor = openFor || family;
     configOpen = true;
   }
   function closeConfig(): void {
@@ -101,10 +105,6 @@
 
   // --- Staged selection: a model placed into the top card to edit then load ---
   let stagedId = $state<string | null>(null);
-  function stageModel(id: string): void {
-    stagedId = id;
-    expanded = {};
-  }
   function unstage(): void {
     stagedId = null;
   }
@@ -423,7 +423,7 @@
                   <label class="flex flex-col gap-0.5">
                     <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">Ctx {@render hint("Context window (tokens) this model loads with. Empty = the size the autogen sizer picked to fit free VRAM. Applies on Reload.")}</span>
                     <input
-                      type="number" min="0" step="1024" placeholder="auto" bind:value={d.ctx}
+                      type="number" min="0" step="1024" placeholder={flags.ctx ? `sized ${flags.ctx}` : "auto"} bind:value={d.ctx}
                       onwheel={(e) => {
                         if (document.activeElement !== e.currentTarget) return;
                         e.preventDefault();
@@ -443,25 +443,25 @@
                   <label class="flex flex-col gap-0.5">
                     <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">KV K {@render hint("Quantization of the attention key cache (-ctk). Lower bits = less VRAM, slightly less accuracy. auto = q8_0. Must match KV V for flash-attention.")}</span>
                     <select bind:value={d.kvK} class="w-full rounded border border-card-border bg-background px-1.5 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary">
-                      {#each KV_OPTS as o (o)}<option value={o}>{o === "" ? "auto" : o}</option>{/each}
+                      {#each KV_OPTS as o (o)}<option value={o}>{o === "" ? `default (${flags.kvK || "q8_0"})` : o}</option>{/each}
                     </select>
                   </label>
                   <label class="flex flex-col gap-0.5">
                     <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">KV V {@render hint("Quantization of the attention value cache (-ctv). Lower bits = less VRAM. auto = q8_0. Must match KV K for flash-attention.")}</span>
                     <select bind:value={d.kvV} class="w-full rounded border border-card-border bg-background px-1.5 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary">
-                      {#each KV_OPTS as o (o)}<option value={o}>{o === "" ? "auto" : o}</option>{/each}
+                      {#each KV_OPTS as o (o)}<option value={o}>{o === "" ? `default (${flags.kvV || "q8_0"})` : o}</option>{/each}
                     </select>
                   </label>
                   <label class="flex flex-col gap-0.5">
                     <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">Spec {@render hint("Speculative decoding to speed up generation (--spec-type). ngram-mod is the default; draft-mtp needs a model with MTP layers; none disables it.")}</span>
                     <select bind:value={d.spec} class="w-full rounded border border-card-border bg-background px-1.5 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary">
-                      {#each SPEC_OPTS as o (o)}<option value={o}>{o === "" ? specDefault(flags) : o}</option>{/each}
+                      {#each SPEC_OPTS as o (o)}<option value={o}>{o === "" ? `default (${specDefault(flags)})` : o}</option>{/each}
                     </select>
                   </label>
                   <label class="flex flex-col gap-0.5">
                     <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">Reasoning {@render hint("How the model's chain-of-thought is parsed (--reasoning-format). auto lets llama.cpp detect it (reasoning stays on); off disables reasoning.")}</span>
                     <select bind:value={d.reasoningFmt} class="w-full rounded border border-card-border bg-background px-1.5 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary">
-                      {#each REASON_OPTS as o (o)}<option value={o}>{o === "" ? reasonDefault(flags) : o}</option>{/each}
+                      {#each REASON_OPTS as o (o)}<option value={o}>{o === "" ? `default (${reasonDefault(flags)})` : o}</option>{/each}
                     </select>
                   </label>
                 </div>
@@ -547,13 +547,13 @@
                 <!-- click-catcher: closes the menu on outside click -->
                 <button class="fixed inset-0 z-10 cursor-default" aria-label="Close variants" onclick={() => toggleExpand(card.key)}></button>
                 <div class="absolute z-20 left-0 right-0 {dropUp[card.key] ? 'bottom-full mb-1' : 'top-full mt-1'} rounded-md border border-card-border bg-surface shadow-lg p-1.5 flex flex-col gap-0.5 max-h-60 overflow-y-auto pretty-scroll">
-                  <div class="px-1.5 pb-1 font-mono text-[0.55rem] uppercase tracking-wide text-txtsecondary">Open in editor</div>
+                  <div class="px-1.5 pb-1 font-mono text-[0.55rem] uppercase tracking-wide text-txtsecondary">Load a variant</div>
                   {#each [card.primary, ...card.variants] as v (v.id)}
                     <div class="flex items-center gap-1 rounded hover:bg-background transition-colors {stagedId === v.id ? 'bg-background' : ''}">
                       <button
                         class="flex-1 min-w-0 text-left flex items-start gap-2 px-1.5 py-1"
-                        onclick={() => stageModel(v.id)}
-                        title={v.id}
+                        onclick={() => { toggleExpand(card.key); handleLoadModel(v.id); }}
+                        title="Load {v.id}"
                       >
                         <span class="inline-block w-1.5 h-1.5 rounded-full mt-1 shrink-0 {dotClass(v.state)}"></span>
                         <span class="font-mono text-xs text-txtmain break-words whitespace-normal">{display(v)}</span>
@@ -561,7 +561,7 @@
                       </button>
                       <button
                         class="shrink-0 inline-flex items-center justify-center p-1 mr-0.5 rounded border border-card-border text-txtsecondary hover:text-txtmain hover:bg-card-border/40 transition-colors"
-                        onclick={(e) => { e.stopPropagation(); openConfig(card.primary.id); }}
+                        onclick={(e) => { e.stopPropagation(); openConfig(card.primary.id, v.id); }}
                         aria-label="Edit parameters"
                         title="Edit parameters / variants"
                       >
@@ -600,4 +600,4 @@
   </div>
 </div>
 
-<ModelConfigModal modelId={configModelId} open={configOpen} onclose={closeConfig} />
+<ModelConfigModal modelId={configModelId} openForId={configOpenFor} open={configOpen} onclose={closeConfig} />
