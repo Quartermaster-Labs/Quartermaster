@@ -99,7 +99,7 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 	if !in.KvInRam {
 		ckptCtxCeil := modelMax
 		if prof.Ctx != 0 {
-			ckptCtxCeil = minInt(ckptCtxCeil, prof.Ctx)
+			ckptCtxCeil = min(ckptCtxCeil, prof.Ctx)
 		}
 		checkpointGB = checkpointReserveGB(prof, perTokGB, kvConstGB, ckptCtxCeil)
 	}
@@ -109,6 +109,17 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		ngl, ncpuMoe = applyForcedOffload(meta, in.CpuOffload)
 		plan.EstVramGB, plan.EstRamGB = estForOffload(meta, prof, kvReserve, ngl, ncpuMoe)
 		plan.RamExceeded = s.MaxRamGB > 0 && plan.EstRamGB > s.MaxRamGB
+	}
+
+	// Dense checkpoints are split GPU/RAM by the layer placement (see sizeProfile),
+	// so the VRAM portion is only the GPU-resident fraction. Scale the reported
+	// figure to match EstVramGB. MoE keeps KV (and checkpoints) fully in VRAM.
+	if checkpointGB > 0 && !meta.IsMoE && meta.BlockCount > 0 {
+		gpuFrac := float64(min(ngl, int(meta.BlockCount))) / float64(meta.BlockCount)
+		if gpuFrac < 0 {
+			gpuFrac = 0
+		}
+		checkpointGB *= gpuFrac
 	}
 
 	return EstimateResult{

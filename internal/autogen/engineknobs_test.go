@@ -60,10 +60,12 @@ func TestEmitProfile_ReasoningOffAndCtxCheckpoints(t *testing.T) {
 		}
 	}
 
+	// nil CtxCheckpoints => emit the arch-aware default (3 for plain attention)
+	// rather than letting llama-server fall back to its 32.
 	var off strings.Builder
 	emitProfile(&off, s, meta, row, profile{Name: "foo"}, 4096, 10, 0, LoadPlan{}, "q8_0", "q8_0", false, nil)
-	if strings.Contains(off.String(), "--ctx-checkpoints") {
-		t.Errorf("nil CtxCheckpoints should omit the flag:\n%s", off.String())
+	if !strings.Contains(off.String(), "--ctx-checkpoints 3") {
+		t.Errorf("nil CtxCheckpoints should emit the plain-attn default 3:\n%s", off.String())
 	}
 }
 

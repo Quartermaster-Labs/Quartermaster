@@ -236,6 +236,14 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 		return GenerateFile{}, err
 	}
 	patch.apply(&gf.Settings)
+	// UI-owned fleet-wide default variants replace the file's list wholesale.
+	sideDV, err := LoadSidecarDefaultVariants(path)
+	if err != nil {
+		return GenerateFile{}, err
+	}
+	if sideDV != nil {
+		gf.Settings.DefaultVariants = sideDV
+	}
 	if modelsDirOverride != "" {
 		gf.Settings.ModelsRoot = modelsDirOverride
 	}

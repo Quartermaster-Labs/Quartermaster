@@ -12,13 +12,12 @@ import "net/http"
 // modify the request/response around it, or short-circuit.
 type Middleware func(next http.Handler) http.Handler
 
-// Chain is a reusable middleware stack. Build it once with New (and optionally
-// extend per-route with Append), then call Then to wrap each terminal handler
-// when registering routes against an http.ServeMux:
+// Chain is a reusable middleware stack. Build it once with New, then call Then
+// to wrap each terminal handler when registering routes against an
+// http.ServeMux:
 //
 //	api := chain.New(authMW, corsMW)
 //	mux.Handle("/v1/chat/completions", api.Then(dispatch))
-//	mux.Handle("/v1/embeddings",       api.Append(filters).Then(dispatch))
 //
 // Middlewares execute left-to-right: mws[0] runs first and may call into
 // mws[1], and so on, with the terminal handler invoked last. A middleware
@@ -34,16 +33,6 @@ func New(mws ...Middleware) Chain {
 	cp := make([]Middleware, len(mws))
 	copy(cp, mws)
 	return Chain{mws: cp}
-}
-
-// Append returns a new Chain with mws added after the existing middleware.
-// The receiver is not modified, so a base Chain can be safely reused across
-// multiple routes that each need different per-route additions.
-func (c Chain) Append(mws ...Middleware) Chain {
-	out := make([]Middleware, 0, len(c.mws)+len(mws))
-	out = append(out, c.mws...)
-	out = append(out, mws...)
-	return Chain{mws: out}
 }
 
 // Then wraps final with the chain's middleware and returns the resulting

@@ -20,8 +20,15 @@ const SidecarName = "quartermaster-overrides.yaml"
 // optional global settings patch (targetVramGB / headroom edits from the
 // dashboard). Both are UI-managed, so the file is rewritten whole on any change.
 type sidecar struct {
-	Settings  *SettingsPatch `yaml:"settings,omitempty"`
-	Overrides []Override     `yaml:"overrides"`
+	Settings *SettingsPatch `yaml:"settings,omitempty"`
+	// DefaultVariants, when non-nil, replaces the generate file's fleet-wide
+	// settings.defaultVariants wholesale (the UI sends the full list). Kept at the
+	// top level rather than inside SettingsPatch so a dashboard VRAM "reset" can't
+	// wipe it. ponytail: omitempty means an empty list isn't persisted, so removing
+	// the last fleet-wide variant from the UI reverts to the file — edit the
+	// generate file to delete one entirely.
+	DefaultVariants []VariantSpec `yaml:"defaultVariants,omitempty"`
+	Overrides       []Override    `yaml:"overrides"`
 }
 
 // loadSidecar reads the whole sidecar, returning a zero value when absent.
@@ -122,6 +129,27 @@ func DeleteSidecarOverride(generatePath, match string) (removed bool, err error)
 		return false, err
 	}
 	return true, nil
+}
+
+// LoadSidecarDefaultVariants returns the sidecar's fleet-wide default-variant
+// list, or nil when none is set (inherit the generate file's).
+func LoadSidecarDefaultVariants(generatePath string) ([]VariantSpec, error) {
+	sc, err := loadSidecar(generatePath)
+	if err != nil {
+		return nil, err
+	}
+	return sc.DefaultVariants, nil
+}
+
+// UpsertSidecarDefaultVariants replaces the fleet-wide default-variant list in
+// the sidecar (UI sends the full list), preserving overrides + settings patch.
+func UpsertSidecarDefaultVariants(generatePath string, vs []VariantSpec) error {
+	sc, err := loadSidecar(generatePath)
+	if err != nil {
+		return err
+	}
+	sc.DefaultVariants = vs
+	return writeSidecar(generatePath, sc)
 }
 
 // UpsertSidecarSettings stores the global settings patch (dashboard edits),

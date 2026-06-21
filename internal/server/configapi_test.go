@@ -34,23 +34,28 @@ func TestApplyOverrideDTO(t *testing.T) {
 }
 
 // The override PUT seeds from the hand-authored file override (ResolveFileOverride)
-// so file-only fields the editor doesn't model — ctxVariants, quant — survive into
-// the sidecar row. applyOverrideDTO must leave them untouched; the regression was
-// the saved sidecar shadowing the file row and dropping its ctx tiers.
+// so file-only fields the editor still doesn't model — quant — survive into the
+// sidecar row; applyOverrideDTO must leave Quant untouched. CtxVariants is now
+// editor-modeled, so the body is authoritative for it (the GET returns the tiers,
+// the editor round-trips them) and applyOverrideDTO rebuilds it from the body.
 func TestApplyOverrideDTO_PreservesFileOnlyFields(t *testing.T) {
 	ov := autogen.Override{
 		Match:       "/m/foo.gguf",
 		Quant:       "IQ4_NL",
-		CtxVariants: []int{32768, 65536},
+		CtxVariants: []int{131072}, // stale file value; the body should replace it
 	}
-	body := overrideDTO{Ctx: 8192, Variants: []variantDTO{{Name: "judge", Ctx: 4096}}}
+	body := overrideDTO{
+		Ctx:         8192,
+		CtxVariants: []int{32768, 65536},
+		Variants:    []variantDTO{{Name: "judge", Ctx: 4096}},
+	}
 	applyOverrideDTO(&ov, body)
 
 	if ov.Quant != "IQ4_NL" {
 		t.Errorf("Quant dropped: %q", ov.Quant)
 	}
 	if len(ov.CtxVariants) != 2 || ov.CtxVariants[0] != 32768 || ov.CtxVariants[1] != 65536 {
-		t.Errorf("CtxVariants dropped: %v", ov.CtxVariants)
+		t.Errorf("CtxVariants = %v, want [32768 65536] from body", ov.CtxVariants)
 	}
 	if len(ov.Variants) != 1 || ov.Variants[0].Name != "judge" {
 		t.Errorf("variants = %+v, want [judge]", ov.Variants)

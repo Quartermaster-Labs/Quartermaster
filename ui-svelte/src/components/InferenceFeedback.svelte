@@ -1,3 +1,15 @@
+<script module lang="ts">
+  // Load-tracking state lives at MODULE scope so it survives this component
+  // unmounting when the user navigates away from the Models page mid-load.
+  // Instance-local state resets on remount, which restarted the progress bar at
+  // 0% (looking like a slower/restarted load) and recorded a too-short duration
+  // into the load-time EMA. Module scope persists for the page's lifetime; a
+  // full reload resetting it is fine (the load is usually finished by then).
+  let gLoadStart = 0;
+  let gLoadId: string | null = null;
+  let gPrevLoading = false;
+</script>
+
 <script lang="ts">
   import { inFlightRequests, metrics, liveTokens, upstreamLogs } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
@@ -65,6 +77,9 @@
   let phase = $state(0);
   let elapsedMs = $state(0);
   let startMs = $state(0);
+  // Elapsed since the load began, derived from the module-scoped start so it is
+  // correct immediately on remount (survives navigation mid-load).
+  let loadElapsedMs = $state(0);
 
   // Track when an active window begins so the tick can compute elapsed time.
   $effect(() => {
@@ -83,6 +98,7 @@
     const t = setInterval(() => {
       phase = (phase + 1) % 1_000_000;
       elapsedMs = busy || loading ? Date.now() - startMs : 0;
+      loadElapsedMs = loading && gLoadStart ? Date.now() - gLoadStart : 0;
     }, 90);
     return () => clearInterval(t);
   });
@@ -95,34 +111,32 @@
   const loadMsStore = persistentStore<Record<string, number>>("modelLoadMs", {});
   const loadingModelId = $derived(models.find((m) => m.state === "starting")?.id ?? null);
 
-  let loadStart = 0;
-  let trackedLoadId: string | null = null;
-  let prevLoading = false;
   $effect(() => {
     const nowLoading = loading; // tracked
     const startingId = loadingModelId; // tracked
-    if (nowLoading && !prevLoading) {
-      loadStart = Date.now();
-      trackedLoadId = startingId;
-    } else if (nowLoading && !trackedLoadId && startingId) {
-      trackedLoadId = startingId; // id only known once the process flips to "starting"
-    } else if (!nowLoading && prevLoading) {
-      const dur = Date.now() - loadStart;
-      const id = trackedLoadId;
-      const ready = id !== null && models.some((m) => m.id === id && m.state === "ready");
-      if (id && ready && dur > 500 && dur < 10 * 60 * 1000) {
+    if (nowLoading && !gPrevLoading) {
+      gLoadStart = Date.now();
+      gLoadId = startingId;
+    } else if (nowLoading && !gLoadId && startingId) {
+      gLoadId = startingId; // id only known once the process flips to "starting"
+    } else if (!nowLoading && gPrevLoading) {
+      const dur = Date.now() - gLoadStart;
+      const id = gLoadId;
+      const isReady = id !== null && models.some((m) => m.id === id && m.state === "ready");
+      if (id && isReady && dur > 500 && dur < 10 * 60 * 1000) {
         loadMsStore.update((prev) => ({ ...prev, [id]: Math.round(prev[id] ? prev[id] * 0.6 + dur * 0.4 : dur) }));
       }
-      trackedLoadId = null;
+      gLoadId = null;
+      gLoadStart = 0;
     }
-    prevLoading = nowLoading;
+    gPrevLoading = nowLoading;
   });
 
   const expLoadMs = $derived(loadingModelId ? ($loadMsStore[loadingModelId] ?? 0) : 0);
   // -1 => indeterminate (no history); otherwise clamped 3..99 while loading.
   const loadPct = $derived.by<number>(() => {
     if (!loading || expLoadMs <= 0) return -1;
-    return Math.min(99, Math.max(3, (elapsedMs / expLoadMs) * 100));
+    return Math.min(99, Math.max(3, (loadElapsedMs / expLoadMs) * 100));
   });
 
   // Bar width tracks the data-stream footprint so loading reads at the same size

@@ -2,6 +2,7 @@
   import {
     getModelConfig,
     putModelOverride,
+    putDefaultVariants,
     resetModelOverride,
     estimatePlan,
     previewCmd,
@@ -61,7 +62,18 @@
   let aliasesText = $state("");
   let unlisted = $state(false);
   let skip = $state(false);
+  // Model-wide --ctx-checkpoints default; null => auto (sizer/llama default),
+  // explicit (incl. 0) pins it. Variants inherit this unless they set their own.
+  let ctxCheckpoints = $state<number | null>(null);
   let variants = $state<ModelVariant[]>([]);
+  // Per-model ctx tiers (32k/64k…), seeded from override.ctxVariants ints as
+  // editable variant entries. On save, tiers that only set ctx collapse back to
+  // ctxVariants ints; tiers given extra knobs promote to named variants.
+  let ctxTiers = $state<ModelVariant[]>([]);
+  // Fleet-wide default variants (e.g. game) shared by every model. Editable here
+  // but saved globally; a snapshot detects edits so we only PUT when changed.
+  let defaultVariants = $state<ModelVariant[]>([]);
+  let origDefaultVariants = $state("");
 
   // Two-way launch-parameters box. cmdDraft is the editable command text. Form
   // edits re-render it from the backend (renderCmd); editing the box parses known
@@ -204,7 +216,7 @@
   $effect(() => {
     const deps = [
       open, config, selectedVariant,
-      ctx, ctxAuto, kvK, kvV, kvInRam, spec, reasoningOn, flashOn, mmapOn, mlock, threads, parallel, ub, vramTarget, vramAuto, cpuOffload, cpuAuto, extraArgs,
+      ctx, ctxAuto, kvK, kvV, kvInRam, spec, reasoningOn, flashOn, mmapOn, mlock, threads, parallel, ub, vramTarget, vramAuto, cpuOffload, cpuAuto, extraArgs, ctxCheckpoints,
       selectedV?.ctx, selectedV?.kvK, selectedV?.kvV, selectedV?.kvInRam, selectedV?.spec,
       selectedV?.reasoningFmt, selectedV?.flashAttn, selectedV?.mmap, selectedV?.mlock,
       selectedV?.threads, selectedV?.parallel, selectedV?.ub, selectedV?.vramTargetGB,
@@ -259,7 +271,13 @@
   // here with that variant selected.
   let selectedVariant = $state("");
   const selectedV = $derived(
-    selectedVariant ? (variants.find((v) => v.name === selectedVariant) ?? null) : null,
+    selectedVariant
+      ? ([...variants, ...ctxTiers, ...defaultVariants].find((v) => v.name === selectedVariant) ?? null)
+      : null,
+  );
+  // The selected tab is a fleet-wide default variant (game) => edits save globally.
+  const selectedIsDefault = $derived(
+    !!selectedVariant && defaultVariants.some((v) => v.name === selectedVariant),
   );
 
   const KV_OPTS = ["", "q8_0", "q4_0", "q5_1", "f16", "bf16"];
@@ -332,7 +350,31 @@
     aliasesText = (o?.aliases ?? []).join(", ");
     unlisted = o?.unlisted ?? false;
     skip = o?.skip ?? false;
+    ctxCheckpoints = o?.ctxCheckpoints ?? null;
     variants = (o?.variants ?? []).map((v) => ({ ...v }));
+    ctxTiers = (o?.ctxVariants ?? []).map((n) => blankVariant(fmtCtx(n), n));
+  }
+
+  // A ModelVariant with every field at its inherit/default value except name+ctx.
+  // Used to render a ctx tier (or a fresh variant) through the variant editor.
+  function blankVariant(name: string, ctx: number): ModelVariant {
+    return {
+      name, ctx, vramTargetGB: 0, kvK: "", kvV: "", spec: "", ub: 0,
+      reasoningFmt: "", unlisted: false, aliases: [], ctxCheckpoints: null, dry: null,
+      kvInRam: false, cpuOffload: 0, flashAttn: "", mmap: "", mlock: false,
+      threads: 0, parallel: 0, extraArgs: "",
+    };
+  }
+
+  // True when a ctx tier carries nothing but its ctx value, so it round-trips as
+  // a compact ctxVariants int instead of a full named variant.
+  function ctxTierIsPure(v: ModelVariant): boolean {
+    return (
+      !v.vramTargetGB && !v.kvK && !v.kvV && !v.spec && !v.ub &&
+      !v.reasoningFmt && !v.unlisted && (v.aliases?.length ?? 0) === 0 &&
+      v.ctxCheckpoints == null && v.dry == null && !v.kvInRam && !v.cpuOffload &&
+      !v.flashAttn && !v.mmap && !v.mlock && !v.threads && !v.parallel && !v.extraArgs
+    );
   }
 
   async function load() {
@@ -352,12 +394,14 @@
       autoCtx = parseCtx(cfg.cmd);
       cmdDraft = cfg.cmd; // render effect refreshes this to the canonical (${PORT}) form
       seedFromOverride(o);
+      defaultVariants = (cfg.defaultVariants ?? []).map((v) => ({ ...v }));
+      origDefaultVariants = JSON.stringify(defaultVariants);
       // Land on the clicked row's variant: the model id ends with "-<name>" for
-      // a variant, or is the bare base for Default. Match the longest name so a
+      // a variant/tier, or is the bare base for Default. Match the longest name so a
       // name that's a suffix of another doesn't win.
       let chosen = "";
       if (openForId) {
-        for (const v of variants) {
+        for (const v of [...variants, ...ctxTiers, ...defaultVariants]) {
           if (openForId.endsWith("-" + v.name) && v.name.length > chosen.length) chosen = v.name;
         }
       }
@@ -374,7 +418,7 @@
   $effect(() => {
     const deps = [
       open, config, selectedVariant,
-      ctx, ctxAuto, kvK, kvV, kvInRam, spec, vramTarget, vramAuto, cpuOffload, cpuAuto,
+      ctx, ctxAuto, kvK, kvV, kvInRam, spec, vramTarget, vramAuto, cpuOffload, cpuAuto, ctxCheckpoints,
       selectedV?.ctx, selectedV?.kvK, selectedV?.kvV, selectedV?.spec,
       selectedV?.vramTargetGB, selectedV?.ub, selectedV?.ctxCheckpoints,
       selectedV?.kvInRam, selectedV?.cpuOffload,
@@ -411,6 +455,7 @@
             spec: spec || undefined,
             vram: vramAuto ? undefined : Number(vramTarget),
             cpuOffload: cpuAuto ? undefined : Number(cpuOffload),
+            ctxCheckpoints: ctxCheckpoints ?? undefined,
           };
       estimate = await estimatePlan(modelId, params);
     } catch (e) {
@@ -466,7 +511,11 @@
       aliases: parseAliases(aliasesText),
       unlisted,
       skip,
-      variants,
+      ctxCheckpoints,
+      // ctx tiers with nothing but a ctx stay compact ints; any with extra knobs
+      // promote to named variants alongside the explicit ones.
+      ctxVariants: ctxTiers.filter(ctxTierIsPure).map((v) => v.ctx ?? 0).filter((n) => n > 0),
+      variants: [...variants, ...ctxTiers.filter((v) => !ctxTierIsPure(v))],
     };
   }
 
@@ -474,21 +523,31 @@
   function addVariantEntry() {
     let n = 1;
     let name = "variant";
-    while (variants.some((v) => v.name.toLowerCase() === name.toLowerCase())) name = `variant${++n}`;
-    variants = [
-      ...variants,
-      {
-        name, ctx: 0, vramTargetGB: 0, kvK: "", kvV: "", spec: "", ub: 0,
-        reasoningFmt: "", unlisted: false, aliases: [], ctxCheckpoints: null, dry: null,
-        kvInRam: false, cpuOffload: 0, flashAttn: "", mmap: "", mlock: false,
-        threads: 0, parallel: 0, extraArgs: "",
-      },
-    ];
+    const taken = (nm: string) =>
+      [...variants, ...ctxTiers, ...defaultVariants].some((v) => v.name.toLowerCase() === nm.toLowerCase());
+    while (taken(name)) name = `variant${++n}`;
+    variants = [...variants, blankVariant(name, 0)];
     selectedVariant = name;
   }
 
+  // Add a fresh fleet-wide variant (shared by every model) and select it. Saved
+  // globally via putDefaultVariants; the snapshot compare in save() detects it.
+  function addDefaultVariantEntry() {
+    let n = 1;
+    let name = "fleet";
+    const taken = (nm: string) =>
+      [...variants, ...ctxTiers, ...defaultVariants].some((v) => v.name.toLowerCase() === nm.toLowerCase());
+    while (taken(name)) name = `fleet${++n}`;
+    defaultVariants = [...defaultVariants, blankVariant(name, 0)];
+    selectedVariant = name;
+  }
+
+  // Remove a tab from whichever bucket holds it (per-model variant, ctx tier, or
+  // fleet-wide default variant). Fleet-wide removals save globally.
   function removeVariantEntry(name: string) {
     variants = variants.filter((v) => v.name !== name);
+    ctxTiers = ctxTiers.filter((v) => v.name !== name);
+    defaultVariants = defaultVariants.filter((v) => v.name !== name);
     if (selectedVariant === name) selectedVariant = "";
   }
 
@@ -535,6 +594,10 @@
     error = null;
     try {
       await putModelOverride(modelId, buildOverride());
+      // Fleet-wide default variants saved separately (global) only when edited.
+      if (JSON.stringify(defaultVariants) !== origDefaultVariants) {
+        await putDefaultVariants(defaultVariants);
+      }
       onclose();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -568,7 +631,7 @@
     <div class="flex justify-between items-center p-4 border-b border-card-border">
       <h2 class="text-xl font-bold pb-0">
         Model parameters
-        {#if config}<span class="text-base font-mono font-normal text-txtsecondary">{config.id}</span>{/if}
+        {#if config}<span class="text-base font-mono font-normal text-txtsecondary">{config.id}{selectedVariant ? `-${selectedVariant}` : ""}</span>{/if}
       </h2>
       <button onclick={() => dialogEl?.close()} class="text-txtsecondary hover:text-txtmain text-2xl leading-none">&times;</button>
     </div>
@@ -657,14 +720,65 @@
                 type="button"
                 title="Remove variant"
                 aria-label="Remove variant {v.name}"
-                class="px-1.5 py-1 text-xs {selectedVariant === v.name ? 'bg-primary text-white' : 'text-txtsecondary'} hover:text-error"
+                class="px-1.5 py-1 text-xs {selectedVariant === v.name ? 'bg-primary text-white hover:bg-black/25' : 'text-txtsecondary hover:text-error'}"
+                onclick={() => removeVariantEntry(v.name)}>×</button>
+            </span>
+          {/each}
+          <!-- Ctx tiers (32k/64k…): per-model, removable like variants. -->
+          {#each ctxTiers as v (v.name)}
+            <span
+              class="inline-flex items-center rounded border overflow-hidden {selectedVariant === v.name
+                ? 'border-primary'
+                : 'border-card-border'}"
+            >
+              <button
+                type="button"
+                title="Context tier"
+                class="px-2.5 py-1 text-xs font-mono transition-colors {selectedVariant === v.name
+                  ? 'bg-primary text-white'
+                  : 'text-txtsecondary hover:text-txtmain'}"
+                onclick={() => (selectedVariant = v.name)}>{v.name || "(unnamed)"}</button>
+              <button
+                type="button"
+                title="Remove ctx tier"
+                aria-label="Remove ctx tier {v.name}"
+                class="px-1.5 py-1 text-xs {selectedVariant === v.name ? 'bg-primary text-white hover:bg-black/25' : 'text-txtsecondary hover:text-error'}"
+                onclick={() => removeVariantEntry(v.name)}>×</button>
+            </span>
+          {/each}
+          <!-- Fleet-wide default variants (e.g. game): shared by every model.
+               Adding/removing/editing one writes them globally on save. -->
+          {#each defaultVariants as v (v.name)}
+            <span
+              class="inline-flex items-center rounded border overflow-hidden {selectedVariant === v.name
+                ? 'border-primary'
+                : 'border-card-border'}"
+            >
+              <button
+                type="button"
+                title="Fleet-wide variant (shared by all models)"
+                class="px-2.5 py-1 text-xs font-mono transition-colors {selectedVariant === v.name
+                  ? 'bg-primary text-white'
+                  : 'text-txtsecondary hover:text-txtmain'}"
+                onclick={() => (selectedVariant = v.name)}>{v.name || "(unnamed)"} <span class="opacity-60">⊕</span></button>
+              <button
+                type="button"
+                title="Remove fleet-wide variant"
+                aria-label="Remove fleet-wide variant {v.name}"
+                class="px-1.5 py-1 text-xs {selectedVariant === v.name ? 'bg-primary text-white hover:bg-black/25' : 'text-txtsecondary hover:text-error'}"
                 onclick={() => removeVariantEntry(v.name)}>×</button>
             </span>
           {/each}
           <button
             type="button"
-            class="px-2 py-1 rounded text-xs border border-dashed border-card-border text-txtsecondary hover:text-txtmain"
+            title="Add a per-model variant (only this model)"
+            class="px-2.5 py-1 rounded text-xs font-semibold border border-dashed border-info text-info hover:bg-info hover:text-white transition-colors"
             onclick={addVariantEntry}>+ variant</button>
+          <button
+            type="button"
+            title="Add a fleet-wide variant shared by every model (e.g. a 32k ctx tier or a low-VRAM coexistence variant)"
+            class="px-2.5 py-1 rounded text-xs font-semibold border border-dashed border-success text-success hover:bg-success hover:text-white transition-colors"
+            onclick={addDefaultVariantEntry}>+ fleet variant ⊕</button>
         </div>
 
         {#if selectedVariant === ""}
@@ -779,6 +893,21 @@
             <input type="number" min="0" step="64" bind:value={ub} use:wheelAdjust class="cfg-input" placeholder="auto" />
           </label>
 
+          <label class="flex flex-col gap-1 text-sm">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Context checkpoints
+              {@render hint("--ctx-checkpoints. KV snapshots kept to restore a diverging prompt instead of reprocessing. Auto = the sizer's pick (llama default 32). 0 disables and reserves no checkpoint VRAM. Variants inherit this unless they set their own.")}
+            </span>
+            <div class="flex items-center gap-2">
+              <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
+                <input type="checkbox" checked={ctxCheckpoints == null} onchange={(e) => (ctxCheckpoints = (e.currentTarget as HTMLInputElement).checked ? null : 0)} /> Auto
+              </label>
+              {#if ctxCheckpoints != null}
+                <input type="number" min="0" step="1" bind:value={ctxCheckpoints} use:wheelAdjust class="cfg-input flex-1" />
+              {/if}
+            </div>
+          </label>
+
           <label class="flex flex-col gap-1 text-sm col-span-2">
             <span class="text-txtsecondary flex items-center gap-1">
               Aliases (comma-separated)
@@ -871,6 +1000,11 @@
             Editing variant <span class="font-mono text-txtmain">{config.id}-{sv.name || "(unnamed)"}</span>.
             Anything left unset inherits from <button type="button" class="underline hover:text-txtmain" onclick={() => (selectedVariant = "")}>Default</button>.
           </p>
+          {#if selectedIsDefault}
+            <p class="text-xs text-warning bg-warning/10 border border-warning/30 rounded px-2 py-1.5">
+              ⚠ Fleet-wide variant — shared by <strong>every</strong> model. Saving rewrites it globally, not just for {config.id}.
+            </p>
+          {/if}
           <div class="grid grid-cols-2 gap-3">
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-txtsecondary flex items-center gap-1">

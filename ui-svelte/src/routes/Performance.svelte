@@ -343,6 +343,9 @@
   const gpuVramTempDatasets = $derived(buildGpuDatasets(filteredGpuStats, "vram_temp_c"));
   const gpuPowerDatasets = $derived(buildGpuDatasets(filteredGpuStats, "power_draw_w"));
   const hasVramTemp = $derived(filteredGpuStats.some((g) => g.vram_temp_c > 0));
+  // Windows nvidia-smi path no longer queries power.draw (avoids WDDM stalls),
+  // so only show the power chart when some backend actually reports it.
+  const hasPower = $derived(filteredGpuStats.some((g) => g.power_draw_w > 0));
 </script>
 
 <div class="space-y-6">
@@ -428,13 +431,15 @@
             yLabel="°C"
           />
         {/if}
-        <PerformanceChart
-          title="GPU Power Draw (W)"
-          labels={gpuLabels}
-          datasets={gpuPowerDatasets}
-          yMin={0}
-          yLabel="W"
-        />
+        {#if hasPower}
+          <PerformanceChart
+            title="GPU Power Draw (W)"
+            labels={gpuLabels}
+            datasets={gpuPowerDatasets}
+            yMin={0}
+            yLabel="W"
+          />
+        {/if}
       </div>
     {/if}
   </section>

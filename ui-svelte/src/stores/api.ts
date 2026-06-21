@@ -260,6 +260,8 @@ export interface ModelOverride {
   aliases?: string[];
   unlisted?: boolean;
   skip?: boolean;
+  ctxVariants?: number[]; // per-model ctx tiers (e.g. 32768, 65536)
+  ctxCheckpoints?: number | null; // model-wide --ctx-checkpoints; null/undefined => auto, 0 disables
   variants?: ModelVariant[];
 }
 
@@ -272,6 +274,8 @@ export interface ModelConfig {
   isMTP: boolean;
   hasOverride: boolean;
   override: ModelOverride | null;
+  /** Fleet-wide variants (e.g. game), shared by every model; saved globally. */
+  defaultVariants?: ModelVariant[];
 }
 
 export async function getModelConfig(model: string): Promise<ModelConfig> {
@@ -310,6 +314,19 @@ export async function putModelVariant(model: string, variant: ModelVariant): Pro
   });
   if (!response.ok) {
     throw new Error(`Failed to save variant: ${response.status} ${await response.text()}`);
+  }
+}
+
+// Replace the fleet-wide default variants (e.g. game). Shared by every model, so
+// this is a global save distinct from a per-model override.
+export async function putDefaultVariants(variants: ModelVariant[]): Promise<void> {
+  const response = await fetch(`/api/default-variants`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(variants),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to save default variants: ${response.status} ${await response.text()}`);
   }
 }
 

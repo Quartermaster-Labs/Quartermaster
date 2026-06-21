@@ -411,22 +411,28 @@ func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB fl
 			ctxBudgetRam = 0.5
 		}
 		maxCtxRam := MaxCtxForBudget(ctxBudgetRam, perTokGB, kvConstGB)
-		ctx = RoundedCtx(float64(minInt(modelMax, maxCtxRam)))
+		ctx = RoundedCtx(float64(min(modelMax, maxCtxRam)))
 		if prof.Ctx != 0 {
-			ctx = minInt(ctx, prof.Ctx)
+			ctx = min(ctx, prof.Ctx)
 		}
 		kvReserve = KvReserveGB(ctx, perTokGB, kvConstGB)
 
 	case perTokGB > 0:
-		// Context checkpoints live in the KV (VRAM) buffer alongside the cache.
-		// Reserve their VRAM up front so ctx sizing + layer placement don't
-		// overcommit and spill into sysmem (which tanks decode speed).
 		ckptCtxCeil := modelMax
 		if prof.Ctx != 0 {
-			ckptCtxCeil = minInt(ckptCtxCeil, prof.Ctx)
+			ckptCtxCeil = min(ckptCtxCeil, prof.Ctx)
 		}
-		overhead += checkpointReserveGB(prof, perTokGB, kvConstGB, ckptCtxCeil)
+		ckpt := checkpointReserveGB(prof, perTokGB, kvConstGB, ckptCtxCeil)
+		// Checkpoints live wherever the KV cache does. MoE keeps KV (and thus its
+		// checkpoints) VRAM-resident even when expert weights spill to CPU via
+		// --n-cpu-moe, so they're a flat VRAM overhead. Dense models keep the KV
+		// of any CPU-offloaded layer in RAM, so the checkpoint cost is folded into
+		// the per-layer KV reserve (placementCkpt) and split across the GPU/CPU
+		// layers by densePlacement instead of charged whole to VRAM up front
+		// (which drove -ngl toward 0 at partial offload).
+		placementCkpt := 0.0
 		if meta.IsMoE {
+			overhead += ckpt
 			share := effectiveShare(meta, genMoeShareFor)
 			nonExpert := meta.FileSizeGB * (1.0 - share)
 			usableBase := target - 0.25 - overhead
@@ -435,7 +441,7 @@ func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB fl
 				if kvBudget < 0.1 {
 					kvBudget = 0.1
 				}
-				ctx = RoundedCtx(float64(minInt(modelMax, MaxCtxForBudget(kvBudget, perTokGB, kvConstGB))))
+				ctx = RoundedCtx(float64(min(modelMax, MaxCtxForBudget(kvBudget, perTokGB, kvConstGB))))
 			} else {
 				desiredCtx := s.MoeCtxTarget
 				if prof.Ctx != 0 {
@@ -446,10 +452,10 @@ func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB fl
 					maxKvVram = 0.1
 				}
 				maxCtxVram := MaxCtxForBudget(maxKvVram, perTokGB, kvConstGB)
-				ctx = RoundedCtx(float64(minInt(minInt(modelMax, desiredCtx), maxCtxVram)))
+				ctx = RoundedCtx(float64(min(min(modelMax, desiredCtx), maxCtxVram)))
 			}
 			if prof.Ctx != 0 {
-				ctx = minInt(ctx, prof.Ctx)
+				ctx = min(ctx, prof.Ctx)
 			}
 		} else {
 			ladder := s.DenseCtxLadder
@@ -458,26 +464,29 @@ func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB fl
 				ladder = []int{prof.Ctx}
 				minCtx = prof.Ctx
 			}
+			// Size ctx conservatively against the checkpoint cost (overhead+ckpt),
+			// but keep ckpt out of overhead so placement can split it per-layer.
 			d := GetDenseCtx(DenseCtxParams{
 				ModelMax: modelMax, PerTokGB: perTokGB, KvConstGB: kvConstGB,
-				FileSizeGB: meta.FileSizeGB, TargetVramGB: target, Overhead: overhead,
+				FileSizeGB: meta.FileSizeGB, TargetVramGB: target, Overhead: overhead + ckpt,
 				Ladder: ladder, MinCtx: minCtx, AllowOffload: prof.Ctx != 0,
 			})
 			ctx = d.Ctx
 			if prof.Ctx != 0 {
-				ctx = minInt(ctx, prof.Ctx)
+				ctx = min(ctx, prof.Ctx)
 			}
+			placementCkpt = ckpt
 		}
 		kvReserve = KvReserveGB(ctx, perTokGB, kvConstGB)
-		plan, err = GetLoadPlan(meta, planOpt(target, s.MaxRamGB, kvReserve, overhead))
+		plan, err = GetLoadPlan(meta, planOpt(target, s.MaxRamGB, kvReserve+placementCkpt, overhead))
 		if err != nil {
 			return
 		}
 
 	default:
-		ctx = RoundedCtx(float64(minInt(modelMax, 32768)))
+		ctx = RoundedCtx(float64(min(modelMax, 32768)))
 		if prof.Ctx != 0 {
-			ctx = minInt(ctx, prof.Ctx)
+			ctx = min(ctx, prof.Ctx)
 		}
 		kvReserve = 0
 		// No attention dims: planner uses its flat 1.0GB KV reserve default.
@@ -490,10 +499,24 @@ func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB fl
 }
 
 // llamaDefaultCtxCheckpoints is llama-server's --ctx-checkpoints default when
-// the flag is omitted (PR #15293).
+// the flag is omitted (PR #15293). Tuned for a multi-slot server; overkill for
+// local single-user serving, so we override it with defaultCtxCheckpoints.
 const llamaDefaultCtxCheckpoints = 32
 
-// checkpointMinStep mirrors llama-server's --checkpoint-min-step default — the
+// defaultCtxCheckpoints picks a sane checkpoint count for a model that doesn't
+// set ctxCheckpoints itself. kvConstGB > 0 means SWA or recurrent/SSM: the KV is
+// rolling, so prefix-cache reuse breaks on any context shift and checkpoints are
+// the only reuse path â€” worth a few, though each is pricey (full window/state).
+// Plain full-attention models keep a persistent KV that already covers linear
+// chat, so they need only a couple for the occasional edit/branch.
+func defaultCtxCheckpoints(kvConstGB float64) int {
+	if kvConstGB > 0 {
+		return 6
+	}
+	return 3
+}
+
+// checkpointMinStep mirrors llama-server's --checkpoint-min-step default â€” the
 // minimum prompt-token spacing between context checkpoints. We don't model the
 // flag, so the default is assumed for the per-checkpoint global-KV term.
 const checkpointMinStep = 256
@@ -501,11 +524,11 @@ const checkpointMinStep = 256
 // effectiveCtxCheckpoints resolves the checkpoint count a profile will actually
 // run with: an explicit value (incl. 0 = disabled) when set, else the
 // llama-server default.
-func effectiveCtxCheckpoints(prof profile) int {
+func effectiveCtxCheckpoints(prof profile, def int) int {
 	if prof.CtxCheckpoints != nil {
 		return *prof.CtxCheckpoints
 	}
-	return llamaDefaultCtxCheckpoints
+	return def
 }
 
 // checkpointReserveGB estimates the extra VRAM a profile's context checkpoints
@@ -521,7 +544,7 @@ func effectiveCtxCheckpoints(prof profile) int {
 // 32 default. Returns 0 when checkpoints are disabled or the model has no
 // VRAM-resident KV.
 func checkpointReserveGB(prof profile, perTokGB, kvConstGB float64, ctxCeil int) float64 {
-	n := effectiveCtxCheckpoints(prof)
+	n := effectiveCtxCheckpoints(prof, defaultCtxCheckpoints(kvConstGB))
 	if n <= 0 || (perTokGB <= 0 && kvConstGB <= 0) {
 		return 0
 	}
@@ -716,9 +739,9 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		lines = append(lines, "--spec-draft-n-max 2")
 	}
 	lines = append(lines, fmt.Sprintf("--jinja --reasoning-format %s%s", rfmt, reasoningFlag))
-	if prof.CtxCheckpoints != nil {
-		lines = append(lines, fmt.Sprintf("--ctx-checkpoints %d", *prof.CtxCheckpoints))
-	}
+	// Always emit so runtime matches our reserve (else llama-server defaults to 32).
+	ckpts := effectiveCtxCheckpoints(prof, defaultCtxCheckpoints(GetKvCostModel(meta, kvK, kvV).ConstGB))
+	lines = append(lines, fmt.Sprintf("--ctx-checkpoints %d", ckpts))
 	if prof.Dry == nil || *prof.Dry {
 		lines = append(lines, "--dry-multiplier 0.8 --dry-base 1.75 --dry-allowed-length 3")
 	}

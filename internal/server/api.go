@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -69,21 +70,21 @@ func renderCapabilities(caps config.ModelCapConfig) (arch map[string]any, capsMa
 	}
 
 	if hasIn {
-		if contains(caps.In, "image") {
+		if slices.Contains(caps.In, "image") {
 			capsMap["vision"] = true
 		}
 	}
 	if hasIn && hasOut {
-		if contains(caps.In, "audio") && contains(caps.Out, "text") {
+		if slices.Contains(caps.In, "audio") && slices.Contains(caps.Out, "text") {
 			capsMap["audio_transcriptions"] = true
 		}
-		if contains(caps.In, "text") && contains(caps.Out, "audio") {
+		if slices.Contains(caps.In, "text") && slices.Contains(caps.Out, "audio") {
 			capsMap["audio_speech"] = true
 		}
-		if contains(caps.In, "text") && contains(caps.Out, "image") {
+		if slices.Contains(caps.In, "text") && slices.Contains(caps.Out, "image") {
 			capsMap["image_generation"] = true
 		}
-		if contains(caps.In, "image") && contains(caps.Out, "image") {
+		if slices.Contains(caps.In, "image") && slices.Contains(caps.Out, "image") {
 			capsMap["image_to_image"] = true
 		}
 	}
@@ -102,16 +103,6 @@ func renderCapabilities(caps config.ModelCapConfig) (arch map[string]any, capsMa
 	}
 
 	return
-}
-
-// contains reports whether s is present in ss.
-func contains(ss []string, s string) bool {
-	for _, v := range ss {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }
 
 // filterCappedMetadata returns metadata with renderer-owned keys removed.

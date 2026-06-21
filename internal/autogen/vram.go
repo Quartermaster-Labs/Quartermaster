@@ -32,8 +32,8 @@ func SampleFreeVramGB(timeout time.Duration) (gb float64, ok bool) {
 	}
 }
 
-// autoVramSampleTimeout bounds the one-shot probe; some backends (D3DKMT,
-// nvidia-smi) need a tick before the first sample lands.
+// autoVramSampleTimeout bounds the one-shot probe; some backends (nvidia-smi)
+// need a tick before the first sample lands.
 const autoVramSampleTimeout = 8 * time.Second
 
 // autoVramFloorGB is the smallest usable target we'll accept from a live

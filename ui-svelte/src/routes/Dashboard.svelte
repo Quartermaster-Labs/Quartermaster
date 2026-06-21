@@ -166,7 +166,7 @@
           segments={$vramBreakdown?.segments}
           height="0.75rem"
         />
-        <div class="mt-3 grid grid-cols-3 gap-2 font-mono text-xs">
+        <div class="mt-3 grid grid-cols-2 gap-2 font-mono text-xs">
           <div>
             <div class="text-txtsecondary uppercase tracking-wide">Util</div>
             <div class="text-txtmain tabular-nums">{$latestGpu.gpu_util_pct.toFixed(1)}%</div>
@@ -174,10 +174,6 @@
           <div>
             <div class="text-txtsecondary uppercase tracking-wide">Temp</div>
             <div class="text-txtmain tabular-nums">{$latestGpu.temp_c}°C</div>
-          </div>
-          <div>
-            <div class="text-txtsecondary uppercase tracking-wide">Power</div>
-            <div class="text-txtmain tabular-nums">{$latestGpu.power_draw_w.toFixed(0)}W</div>
           </div>
         </div>
       {:else}

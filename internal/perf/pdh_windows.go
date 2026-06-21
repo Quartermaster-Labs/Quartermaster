@@ -11,6 +11,13 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// LUID identifies a graphics adapter. PDH GPU Engine instance names embed it;
+// it is the only thing that lets us group engine counters by physical adapter.
+type LUID struct {
+	LowPart  uint32
+	HighPart int32
+}
+
 var (
 	pdhDLL                          = windows.NewLazySystemDLL("pdh.dll")
 	procPdhOpenQuery                = pdhDLL.NewProc("PdhOpenQueryW")
@@ -43,6 +50,10 @@ func init() {
 	}
 }
 
+// pdhGpuUtil reads the Windows "GPU Engine" utilization counters — the same
+// WDDM-scheduler accounting Task Manager shows. Unlike nvidia-smi's
+// utilization.gpu, reading these does not sample the GPU's hardware perf
+// counters and so does not stall an in-flight generation.
 type pdhGpuUtil struct {
 	query   uintptr
 	counter uintptr
@@ -132,6 +143,25 @@ func (p *pdhGpuUtil) collect() map[LUID]float64 {
 	}
 
 	return result
+}
+
+// busiest returns the utilization of the most-active adapter, or -1 if no
+// counter data is available. With a discrete GPU + iGPU, the active GPU during
+// inference is the busiest one, so its value best represents "GPU util". (The
+// nvidia-smi path is single-stat-per-GPU; mapping PDH LUIDs to nvidia indices
+// is not attempted, so this is reported for the primary GPU.)
+func (p *pdhGpuUtil) busiest() float64 {
+	m := p.collect()
+	if len(m) == 0 {
+		return -1
+	}
+	max := -1.0
+	for _, v := range m {
+		if v > max {
+			max = v
+		}
+	}
+	return max
 }
 
 // parsePdhLuid extracts the adapter LUID (high and low parts) from a PDH

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,18 +15,47 @@ import (
 	"github.com/shirou/gopsutil/v4/net"
 )
 
-func getGpuStats(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuStat, error) {
-	// D3DKMT first: it reads VRAM via a lightweight kernel thunk (gdi32) and so
-	// does not stall a fully-loaded GPU mid-generation the way an nvidia-smi
-	// driver sample (utilization.gpu/power.draw) can. nvidia-smi stays as the
-	// fallback for hosts where the D3DKMT path can't initialize.
-	if ch, err := tryD3DKMT(ctx, every, logger); err == nil {
-		logger.Info("using D3DKMT for GPU monitoring")
-		return ch, nil
-	} else {
-		logger.Debugf("D3DKMT: %s", err.Error())
+// parseNvidiaSmiLineLite parses the trimmed Windows nvidia-smi query that omits
+// utilization.gpu and power.draw (see getGpuStats for why). GpuUtilPct and
+// PowerDrawW are left at zero; MemUtilPct is still derived from used/total.
+// Format: index,name,uuid,temperature.gpu,memory.used,memory.total,fan.speed
+func parseNvidiaSmiLineLite(line string) *GpuStat {
+	fields := strings.Split(line, ",")
+	if len(fields) < 7 {
+		return nil
 	}
 
+	id, _ := strconv.Atoi(strings.TrimSpace(fields[0]))
+	name := strings.TrimSpace(fields[1])
+	uuid := strings.TrimSpace(fields[2])
+	tempC, _ := strconv.Atoi(strings.TrimSpace(fields[3]))
+	memUsed, _ := strconv.Atoi(strings.TrimSpace(fields[4]))
+	memTotal, _ := strconv.Atoi(strings.TrimSpace(fields[5]))
+	fanSpeed, _ := strconv.ParseFloat(strings.TrimSpace(fields[6]), 64)
+
+	var memUtil float64
+	if memTotal > 0 {
+		memUtil = float64(memUsed) / float64(memTotal) * 100
+	}
+
+	return &GpuStat{
+		Timestamp:   time.Now(),
+		ID:          id,
+		Name:        name,
+		UUID:        uuid,
+		TempC:       tempC,
+		MemUtilPct:  memUtil,
+		MemUsedMB:   memUsed,
+		MemTotalMB:  memTotal,
+		FanSpeedPct: fanSpeed,
+	}
+}
+
+func getGpuStats(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuStat, error) {
+	// nvidia-smi reads NVML directly and reports dedicated VRAM/power correctly,
+	// including on Optimus/hybrid laptops where the discrete GPU's memory is
+	// routed through the WDDM aperture and is invisible to D3DKMT segment
+	// queries. The D3DKMT backend was removed for that reason.
 	if ch, err := tryNvidiaSmiWindows(ctx, every, logger); err == nil {
 		logger.Info("using nvidia-smi for GPU monitoring")
 		return ch, nil
@@ -49,8 +79,13 @@ func tryNvidiaSmiWindows(ctx context.Context, every time.Duration, logger *logmo
 		sec = 1
 	}
 
+	// utilization.gpu and power.draw are deliberately omitted: on Windows/WDDM
+	// those two fields force the driver to sample the GPU's hardware perf
+	// counters, which preempts an in-flight llama.cpp generation and shows up as
+	// token-stream stalls / late requests. memory/temperature/fan are cheap
+	// driver bookkeeping + sensor reads and do not stall. (See parseNvidiaSmiLineLite.)
 	cmd := exec.CommandContext(ctx, "nvidia-smi",
-		"--query-gpu=index,name,uuid,temperature.gpu,utilization.gpu,memory.used,memory.total,fan.speed,power.draw",
+		"--query-gpu=index,name,uuid,temperature.gpu,memory.used,memory.total,fan.speed",
 		"--format=csv,noheader,nounits",
 		"--loop", fmt.Sprintf("%d", sec),
 	)
@@ -64,10 +99,23 @@ func tryNvidiaSmiWindows(ctx context.Context, every time.Duration, logger *logmo
 		return nil, fmt.Errorf("nvidia-smi start failed: %w", err)
 	}
 
+	// GPU utilization comes from PDH "GPU Engine" counters (Task Manager's
+	// source) rather than nvidia-smi's utilization.gpu, which would reintroduce
+	// the WDDM perf-counter stall. Best-effort: if PDH is unavailable, util stays 0.
+	pdhUtil, pdhErr := initPdhGpuUtil()
+	if pdhErr != nil {
+		logger.Debugf("PDH GPU utilization not available: %s", pdhErr.Error())
+	} else {
+		logger.Info("using PDH performance counters for GPU utilization")
+	}
+
 	ch := make(chan []GpuStat, 1)
 
 	go func() {
 		defer close(ch)
+		if pdhUtil != nil {
+			defer pdhUtil.close()
+		}
 
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
@@ -76,8 +124,13 @@ func tryNvidiaSmiWindows(ctx context.Context, every time.Duration, logger *logmo
 				continue
 			}
 
-			stat := ParseNvidiaSmiLine(line)
+			stat := parseNvidiaSmiLineLite(line)
 			if stat != nil {
+				if pdhUtil != nil {
+					if util := pdhUtil.busiest(); util >= 0 {
+						stat.GpuUtilPct = util
+					}
+				}
 				select {
 				case ch <- []GpuStat{*stat}:
 				default:

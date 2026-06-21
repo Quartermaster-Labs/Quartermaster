@@ -55,25 +55,29 @@ type variantDTO struct {
 // overrideDTO is the curated JSON shape of a per-model override (the cogwheel
 // fields) plus its named variants.
 type overrideDTO struct {
-	Ctx          int          `json:"ctx"`
-	KvK          string       `json:"kvK"`
-	KvV          string       `json:"kvV"`
-	KvInRam      bool         `json:"kvInRam"`
-	VramTargetGB float64      `json:"vramTargetGB"`
-	CpuOffload   int          `json:"cpuOffload"`
-	Spec         string       `json:"spec"`
-	ReasoningFmt string       `json:"reasoningFmt"`
-	FlashAttn    string       `json:"flashAttn"`
-	Mmap         string       `json:"mmap"`
-	Mlock        bool         `json:"mlock"`
-	Threads      int          `json:"threads"`
-	Parallel     int          `json:"parallel"`
-	Ub           int          `json:"ub"`
-	ExtraArgs    string       `json:"extraArgs"`
-	Aliases      []string     `json:"aliases"`
-	Unlisted     bool         `json:"unlisted"`
-	Skip         bool         `json:"skip"`
-	Variants     []variantDTO `json:"variants"`
+	Ctx          int      `json:"ctx"`
+	KvK          string   `json:"kvK"`
+	KvV          string   `json:"kvV"`
+	KvInRam      bool     `json:"kvInRam"`
+	VramTargetGB float64  `json:"vramTargetGB"`
+	CpuOffload   int      `json:"cpuOffload"`
+	Spec         string   `json:"spec"`
+	ReasoningFmt string   `json:"reasoningFmt"`
+	FlashAttn    string   `json:"flashAttn"`
+	Mmap         string   `json:"mmap"`
+	Mlock        bool     `json:"mlock"`
+	Threads      int      `json:"threads"`
+	Parallel     int      `json:"parallel"`
+	Ub           int      `json:"ub"`
+	ExtraArgs    string   `json:"extraArgs"`
+	Aliases      []string `json:"aliases"`
+	Unlisted     bool     `json:"unlisted"`
+	Skip         bool     `json:"skip"`
+	CtxVariants  []int    `json:"ctxVariants"` // per-model ctx tiers (e.g. 32768, 65536)
+	// CtxCheckpoints is the model-wide --ctx-checkpoints default. nil => omit
+	// (auto); 0 disables. Variants inherit it unless they set their own.
+	CtxCheckpoints *int         `json:"ctxCheckpoints"`
+	Variants       []variantDTO `json:"variants"`
 }
 
 type modelConfigResp struct {
@@ -85,6 +89,21 @@ type modelConfigResp struct {
 	IsMTP       bool         `json:"isMTP"`      // model has nextn/MTP layers => draft-mtp usable
 	HasOverride bool         `json:"hasOverride"`
 	Override    *overrideDTO `json:"override"`
+	// DefaultVariants are the fleet-wide settings.defaultVariants (e.g. game),
+	// shared by every model. Editable here but saved globally (PUT /api/default-variants).
+	DefaultVariants []variantDTO `json:"defaultVariants"`
+}
+
+func variantToDTO(v autogen.VariantSpec) variantDTO {
+	return variantDTO{
+		Name: v.Name, Ctx: v.Ctx, VramTargetGB: v.VramTargetGB,
+		KvK: v.KvK, KvV: v.KvV, Spec: v.Spec, ReasoningFmt: v.ReasoningFmt,
+		Ub: v.Ub, Dry: v.Dry, CtxCheckpoints: v.CtxCheckpoints,
+		Unlisted: v.Unlisted, Aliases: v.Aliases,
+		KvInRam: v.KvInRam, CpuOffload: v.CpuOffload,
+		FlashAttn: v.FlashAttn, Mmap: v.Mmap, Mlock: v.Mlock,
+		Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
+	}
 }
 
 func toOverrideDTO(o autogen.Override) *overrideDTO {
@@ -96,17 +115,10 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		Threads: o.Threads, Parallel: o.Parallel, Ub: o.Ub,
 		ExtraArgs: o.ExtraArgs,
 		Aliases:   o.Aliases, Unlisted: o.Unlisted, Skip: o.Skip,
+		CtxVariants: o.CtxVariants, CtxCheckpoints: o.CtxCheckpoints,
 	}
 	for _, v := range o.Variants {
-		dto.Variants = append(dto.Variants, variantDTO{
-			Name: v.Name, Ctx: v.Ctx, VramTargetGB: v.VramTargetGB,
-			KvK: v.KvK, KvV: v.KvV, Spec: v.Spec, ReasoningFmt: v.ReasoningFmt,
-			Ub: v.Ub, Dry: v.Dry, CtxCheckpoints: v.CtxCheckpoints,
-			Unlisted: v.Unlisted, Aliases: v.Aliases,
-			KvInRam: v.KvInRam, CpuOffload: v.CpuOffload,
-			FlashAttn: v.FlashAttn, Mmap: v.Mmap, Mlock: v.Mlock,
-			Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
-		})
+		dto.Variants = append(dto.Variants, variantToDTO(v))
 	}
 	return dto
 }
@@ -206,7 +218,44 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 		resp.BlockCount = int(meta.BlockCount)
 		resp.IsMTP = meta.IsMTP
 	}
+	// Fleet-wide default variants (e.g. game) so the editor can surface + edit them.
+	if gf, err := autogen.LoadGenerateFile(s.autogen.GeneratePath, s.autogen.ModelsDir); err == nil {
+		for _, v := range gf.Settings.DefaultVariants {
+			resp.DefaultVariants = append(resp.DefaultVariants, variantToDTO(v))
+		}
+	}
 	writeJSON(w, resp)
+}
+
+// handleAPIDefaultVariantsPut replaces the fleet-wide settings.defaultVariants
+// (shared by every model) with the posted list, then regenerates + reloads. The
+// per-model config editor surfaces these for editing; saving one writes the
+// whole list globally.
+func (s *Server) handleAPIDefaultVariantsPut(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAutogen(w, r) {
+		return
+	}
+	var body []variantDTO
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		shared.SendResponse(w, r, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	vs := make([]autogen.VariantSpec, 0, len(body))
+	for _, v := range body {
+		if strings.TrimSpace(v.Name) == "" {
+			shared.SendResponse(w, r, http.StatusBadRequest, "every default variant needs a name")
+			return
+		}
+		vs = append(vs, toVariantSpec(v))
+	}
+	if err := autogen.UpsertSidecarDefaultVariants(s.autogen.GeneratePath, vs); err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !s.regenAndReload(w, r) {
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 // handleAPIModelOverridePut upserts the curated override fields, preserving any
@@ -563,6 +612,8 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.Aliases = body.Aliases
 	ov.Unlisted = body.Unlisted
 	ov.Skip = body.Skip
+	ov.CtxVariants = body.CtxVariants
+	ov.CtxCheckpoints = body.CtxCheckpoints
 	ov.Variants = ov.Variants[:0]
 	for _, v := range body.Variants {
 		ov.Variants = append(ov.Variants, toVariantSpec(v))

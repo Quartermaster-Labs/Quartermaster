@@ -12,12 +12,10 @@ Live system and GPU/VRAM monitoring for the serving host. It samples CPU, memory
 | `monitor.go` | `Monitor` type, ring buffers, listener fan-out, `New`/`Start`/`Stop`/`UpdateConfig`/`Subscribe`/`Current`. Platform-agnostic; delegates to per-OS `getGpuStats`/`readSysStats`. |
 | `gpu_parse.go` | Pure parsers reused across platforms: `ParseNvidiaSmiLine` (nvidia-smi CSV), `ParseIoregOutput` / `ParseMactopLine` (Apple Silicon). No build tag. |
 | `prometheus.go` | `Monitor.MetricsHandler()` and the Prometheus text-format writers (`llamaswap_*` gauges/counters). No build tag. |
-| `monitor_windows.go` | `//go:build` via filename. Windows `getGpuStats` (nvidia-smi loop → D3DKMT fallback) and `readSysStats`. |
+| `monitor_windows.go` | `//go:build` via filename. Windows `getGpuStats` (nvidia-smi loop, trimmed query) and `readSysStats`; `parseNvidiaSmiLineLite` (Windows-only CSV parser) overlays PDH util. |
 | `monitor_darwin.go` | macOS `getGpuStats` (mactop → ioreg fallback) and `readSysStats`. Filename-tagged for darwin. |
 | `monitor_unix.go` | `//go:build unix && !darwin`. Linux/BSD `getGpuStats` (LACT → nvidia-smi → rocm-smi → sysfs) and `readSysStats`; LACT socket protocol and rocm-smi CSV parsing. |
-| `d3dkmt_windows.go` | `//go:build windows`. D3DKMT GPU backend: gdi32 proc loading, adapter enumeration, segment/node/perf queries, util/fan/power/temp derivation, optional PDH overlay. |
-| `d3dkmt_types.go` | D3DKMT struct/enum/LUID definitions mirroring the Windows kernel-mode thunk ABI. No build tag (struct defs are inert on other OSes). |
-| `pdh_windows.go` | `//go:build windows`. PDH (`pdh.dll`) GPU Engine utilization counter: query setup, collection, LUID parsing from instance names. |
+| `pdh_windows.go` | `//go:build windows`. PDH (`pdh.dll`) "GPU Engine" utilization counter — Task Manager's source, non-stalling. Provides `GpuUtilPct` for the Windows nvidia-smi path; defines `LUID`. |
 
 ## Important types & functions
 
@@ -28,15 +26,14 @@ Live system and GPU/VRAM monitoring for the serving host. It samples CPU, memory
   - `Start` (`monitor.go:114`) — spins two goroutines: a sys ticker and a GPU reader fed by `getGpuStats`.
   - `Subscribe` (`monitor.go:95`) — returns `(sysChan, gpuChan, unsub)`; non-blocking sends (drops if a listener is slow).
   - `Current` (`monitor.go:186`) — returns a copy of buffered `[]SysStat` and a flattened `[]GpuStat` snapshot history. This is the read path for offload math and the UI.
-- D3DKMT access (`d3dkmt_windows.go`):
-  - `initD3DKMT` (`:30`) — `sync.Once` lazy-load of `gdi32.dll` and resolution of the `D3DKMT*` procs.
-  - `tryD3DKMT` (`:312`) — enumerates adapters, opens handles, and streams `[]GpuStat`; VRAM comes from per-segment `d3dkmQuerySegmentStats` (`:208`), utilization from PDH if available else node running-time deltas (`d3dkmtNodeUtil` `:248`).
+
+> **Windows GPU backend = nvidia-smi (VRAM/temp/fan) + PDH (util).** A full D3DKMT backend (raw gdi32 syscalls) was tried and removed: on Optimus/hybrid laptops the discrete GPU's dedicated VRAM is routed through the WDDM aperture and is invisible to D3DKMT segment queries (it reports phantom shared-memory totals and only the iGPU). nvidia-smi reads NVML directly and reports correct VRAM. Two NVML fields were also dropped from the query: `utilization.gpu` and `power.draw` force the driver to sample hardware perf counters, which preempts an in-flight llama.cpp generation and shows up as token-stream stalls / late requests. Util is recovered from PDH "GPU Engine" counters (WDDM scheduler accounting, no stall); **power is not reported on Windows** (no cheap non-stalling source). If non-NVIDIA Windows GPU support is needed, a fresh backend is required.
 
 ## Platform matrix
 
 | OS | Primary → fallbacks | Files |
 |---|---|---|
-| Windows | nvidia-smi (loop) → **D3DKMT** (gdi32) + **PDH** (pdh.dll) for util | `monitor_windows.go`, `d3dkmt_windows.go`, `d3dkmt_types.go`, `pdh_windows.go` |
+| Windows | nvidia-smi (loop; VRAM/temp/fan) + PDH (util) | `monitor_windows.go`, `pdh_windows.go` |
 | darwin (Apple Silicon) | mactop (headless JSON) → ioreg (`IOGPU`) | `monitor_darwin.go`, `gpu_parse.go` |
 | unix (Linux/BSD) | LACT (unix socket) → nvidia-smi → rocm-smi → sysfs (unimplemented) | `monitor_unix.go`, `gpu_parse.go` |
 
@@ -44,9 +41,8 @@ When no backend works, `getGpuStats` returns `ErrNoGpuTool` and the monitor logs
 
 ## Gotchas / conventions
 
-- **Build tags.** Each `getGpuStats`/`readSysStats` lives in exactly one OS file, selected either by `_windows.go`/`_darwin.go` filename suffix or an explicit `//go:build` line (`monitor_unix.go`, `d3dkmt_windows.go`, `pdh_windows.go`). `types.go`, `gpu_parse.go`, `prometheus.go`, and `d3dkmt_types.go` are platform-neutral and compile everywhere.
-- **D3DKMT is raw syscall, not cgo.** Functions are resolved off `gdi32.dll` via `windows.LazyDLL`/`LazyProc` and invoked with `unsafe.Pointer` arg structs; results are NTSTATUS codes (non-zero = error). The struct layouts are ABI-exact for x64 — `d3dkmt_windows.go` has `init()` size/offset assertions (`queryStatsBuffer` must be 808 bytes with `QueryId` at offset 804; the offset-804 bug history is documented inline) that **panic** on mismatch. Do not reorder or repad these structs.
-- **PDH overlay.** When the PDH GPU Engine counter is available, its per-LUID utilization (summed across engine instances, clamped to 100%) takes precedence over D3DKMT node running-time deltas. `pdh_windows.go` also has an `init()` size assertion (`pdhCounterValueItem` == 24 bytes).
+- **Build tags.** Each `getGpuStats`/`readSysStats` lives in exactly one OS file, selected either by `_windows.go`/`_darwin.go` filename suffix or an explicit `//go:build` line (`monitor_unix.go`, `pdh_windows.go`). `types.go`, `gpu_parse.go`, and `prometheus.go` are platform-neutral and compile everywhere.
+- **PDH util (Windows).** `pdh_windows.go` reads `\GPU Engine(*)\Utilization Percentage`, groups per adapter `LUID` (parsed from the instance name), and `busiest()` returns the most-active adapter's util — during inference that's the discrete GPU. It is best-effort: if PDH init fails, `GpuUtilPct` stays 0. It has an `init()` size assertion (`pdhCounterValueItem` == 24 bytes); util is a rate counter so the first sample is 0 until a second collect lands. **Don't add `utilization.gpu`/`power.draw` back to the nvidia-smi query** — that's what caused the WDDM stalls.
 - **Non-blocking fan-out.** Channels are buffered size 1 and every send uses `select { ... default: }` — slow consumers drop samples rather than block the sampler. `Subscribe` callers must call the returned `unsub` to avoid leaking listeners.
 - **Prometheus export.** `MetricsHandler` (`prometheus.go:14`) reads `Current()`, emits the latest `SysStat` plus `latestPerGPU` de-duplicated GPU rows as `llamaswap_*` metrics; label values go through `sanitizeLabel`. MB fields are converted to bytes via `mbToBytes`.
 - **mactop memory caveat.** mactop reports whole-system memory, so the darwin path overlays ioreg's GPU-attributed unified memory (`overlayIoregMem`) so both backends report consistent `MemUsedMB`/`MemTotalMB`.

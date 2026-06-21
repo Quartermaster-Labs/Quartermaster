@@ -267,6 +267,10 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/settings", apiChain.ThenFunc(s.handleAPISettingsPut))
 	mux.Handle("DELETE /api/settings", apiChain.ThenFunc(s.handleAPISettingsDelete))
 
+	// Fleet-wide default variants (e.g. game) — surfaced per-model in the editor
+	// but saved globally to settings.defaultVariants.
+	mux.Handle("PUT /api/default-variants", apiChain.ThenFunc(s.handleAPIDefaultVariantsPut))
+
 	s.mux = mux
 	s.handler = chain.New(CreateRequestLogMiddleware(s.proxylog), CreateCORSMiddleware()).Then(mux)
 }

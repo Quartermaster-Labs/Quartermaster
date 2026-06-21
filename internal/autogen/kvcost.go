@@ -168,11 +168,11 @@ func GetDenseCtx(p DenseCtxParams) DenseCtxResult {
 		kvAt99 = 0.1
 	}
 	ctxAt99 := MaxCtxForBudget(kvAt99, p.PerTokGB, p.KvConstGB)
-	top := minInt(p.ModelMax, p.Ladder[0])
+	top := min(p.ModelMax, p.Ladder[0])
 
 	// 1. Reaches the floor fully on GPU -> max ctx up to the ladder top. Fast.
 	if ctxAt99 >= p.MinCtx {
-		c := RoundedCtx(float64(minInt(minInt(p.ModelMax, top), ctxAt99)))
+		c := RoundedCtx(float64(min(min(p.ModelMax, top), ctxAt99)))
 		note := "max-ctx (full gpu)"
 		switch {
 		case c >= p.ModelMax:
@@ -187,18 +187,11 @@ func GetDenseCtx(p DenseCtxParams) DenseCtxResult {
 
 	// 3 / manual opt-in: offload to reach the target window.
 	if p.AllowOffload || !weightsFitGpu {
-		c := RoundedCtx(float64(minInt(p.ModelMax, p.MinCtx)))
+		c := RoundedCtx(float64(min(p.ModelMax, p.MinCtx)))
 		return DenseCtxResult{Ctx: c, Note: "vram-limited (offload for ctx)"}
 	}
 
 	// 2. Weights fit but KV can't reach MinCtx on GPU -> stay full GPU, smaller ctx.
-	c := RoundedCtx(float64(minInt(p.ModelMax, ctxAt99)))
+	c := RoundedCtx(float64(min(p.ModelMax, ctxAt99)))
 	return DenseCtxResult{Ctx: c, Note: "max-ctx (full gpu, under min)"}
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

@@ -144,31 +144,6 @@ func TestChain_ReusableAcrossRoutesViaThen(t *testing.T) {
 	}
 }
 
-func TestChain_AppendDoesNotMutateReceiver(t *testing.T) {
-	var log []string
-	base := New(recordingMiddleware("base", &log))
-	extended := base.Append(recordingMiddleware("extra", &log))
-
-	final := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log = append(log, "final")
-	})
-
-	// Run extended first to surface any aliasing of the underlying slice.
-	rec := httptest.NewRecorder()
-	extended.Then(final).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-
-	rec = httptest.NewRecorder()
-	base.Then(final).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-
-	want := []string{
-		"base", "extra", "final", "after-extra", "after-base",
-		"base", "final", "after-base",
-	}
-	if !equal(log, want) {
-		t.Fatalf("Append must not mutate the receiver:\n got: %v\nwant: %v", log, want)
-	}
-}
-
 func TestChain_ZeroValueAndEmptyThenAreIdentity(t *testing.T) {
 	final := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
