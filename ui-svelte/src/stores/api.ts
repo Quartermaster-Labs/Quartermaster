@@ -250,6 +250,7 @@ export interface ModelOverride {
   cpuOffload?: number;
   spec?: string;
   reasoningFmt?: string;
+  preserveThinking?: boolean; // keep prior-turn <think> in history (Qwen3.6+); needs reasoning on
   flashAttn?: string; // "" (on) | "on" | "off" | "auto"
   mmap?: string; // "" (auto) | "on" | "off"
   mlock?: boolean;

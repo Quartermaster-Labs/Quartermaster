@@ -74,6 +74,9 @@ type overrideDTO struct {
 	Unlisted     bool     `json:"unlisted"`
 	Skip         bool     `json:"skip"`
 	CtxVariants  []int    `json:"ctxVariants"` // per-model ctx tiers (e.g. 32768, 65536)
+	// PreserveThinking keeps prior-turn <think> in chat history (Qwen3.6+); only
+	// meaningful when reasoning is on.
+	PreserveThinking bool `json:"preserveThinking"`
 	// CtxCheckpoints is the model-wide --ctx-checkpoints default. nil => omit
 	// (auto); 0 disables. Variants inherit it unless they set their own.
 	CtxCheckpoints *int         `json:"ctxCheckpoints"`
@@ -116,6 +119,7 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		ExtraArgs: o.ExtraArgs,
 		Aliases:   o.Aliases, Unlisted: o.Unlisted, Skip: o.Skip,
 		CtxVariants: o.CtxVariants, CtxCheckpoints: o.CtxCheckpoints,
+		PreserveThinking: o.PreserveThinking,
 	}
 	for _, v := range o.Variants {
 		dto.Variants = append(dto.Variants, variantToDTO(v))
@@ -614,6 +618,7 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.Skip = body.Skip
 	ov.CtxVariants = body.CtxVariants
 	ov.CtxCheckpoints = body.CtxCheckpoints
+	ov.PreserveThinking = body.PreserveThinking
 	ov.Variants = ov.Variants[:0]
 	for _, v := range body.Variants {
 		ov.Variants = append(ov.Variants, toVariantSpec(v))

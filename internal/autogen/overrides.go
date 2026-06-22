@@ -27,6 +27,10 @@ type Settings struct {
 	TargetVramGB   float64 `yaml:"targetVramGB"`
 	AutoVram       bool    `yaml:"autoVram"` // measure free VRAM at gen time, use it as TargetVramGB (minus VramOverheadGB)
 	VramOverheadGB float64 `yaml:"vramOverheadGB"`
+	// ComputeBufFactor scales the modeled compute buffer (logits + activations).
+	// 1.0 = the analytic estimate; tune against the "compute buffer size" llama
+	// prints at load if your build/arch differs. 0 => default 1.0.
+	ComputeBufFactor float64 `yaml:"computeBufFactor"`
 	// Groups optionally split the emitted models across named groups bound to
 	// separate listen addresses (use-case agnostic: membership is by model-name
 	// glob, first match wins). Empty => one group, one port (upstream default).
@@ -111,7 +115,7 @@ type Override struct {
 	// Engine knobs surfaced from llama-server. Zero/empty => the generator's
 	// default (shown in parentheses):
 	//   FlashAttn: "" (on) | "on" | "off" | "auto"  (-fa; required for quantized KV)
-	//   Mmap:      "" (auto) | "on" | "off"          (force/suppress --no-mmap)
+	//   Mmap:      "" (on) | "on" | "off"            (off => --no-mmap; default mmap on)
 	//   Mlock:     false => no --mlock; true => --mlock (lock weights in RAM)
 	//   Threads:   0 => settings.Threads             (-t)
 	//   Parallel:  0 => 1                            (--parallel, concurrent slots)
@@ -128,6 +132,11 @@ type Override struct {
 	// nil => omit the flag (llama default). Variants inherit this unless they set
 	// their own.
 	CtxCheckpoints *int `yaml:"ctxCheckpoints"`
+	// PreserveThinking emits --chat-template-kwargs '{"preserve_thinking":true}'
+	// so the chat template keeps prior-turn <think> blocks in history instead of
+	// stripping them (Qwen3.6+). No-op when reasoning is off. Requires the client
+	// to send reasoning_content back on assistant messages.
+	PreserveThinking bool `yaml:"preserveThinking"`
 	// ExtraArgs are additional llama-server flags appended verbatim to the emitted
 	// command, for knobs autogen doesn't model (e.g. --rope-freq-scale,
 	// --override-kv). The structured fields above still own the computed flags;
@@ -191,7 +200,10 @@ func (s *Settings) applyDefaults() {
 		s.TargetVramGB = 7
 	}
 	if s.VramOverheadGB == 0 {
-		s.VramOverheadGB = 0.5
+		s.VramOverheadGB = 1.0
+	}
+	if s.ComputeBufFactor == 0 {
+		s.ComputeBufFactor = 1.0
 	}
 	if s.MaxRamGB == 0 {
 		s.MaxRamGB = 24

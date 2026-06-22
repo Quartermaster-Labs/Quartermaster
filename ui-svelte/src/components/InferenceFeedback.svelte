@@ -132,7 +132,14 @@
     gPrevLoading = nowLoading;
   });
 
-  const expLoadMs = $derived(loadingModelId ? ($loadMsStore[loadingModelId] ?? 0) : 0);
+  // Mean of every learned load time — a cross-model fallback so a model with no
+  // history of its own (or the pre-spawn gap where the id isn't known yet) still
+  // gets a determinate bar instead of flipping to the indeterminate sweep.
+  const avgLoadMs = $derived.by<number>(() => {
+    const vals = Object.values($loadMsStore);
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+  });
+  const expLoadMs = $derived((loadingModelId ? $loadMsStore[loadingModelId] : 0) || avgLoadMs);
   // -1 => indeterminate (no history); otherwise clamped 3..99 while loading.
   const loadPct = $derived.by<number>(() => {
     if (!loading || expLoadMs <= 0) return -1;
@@ -350,9 +357,7 @@
          generating. Decode has no determinate signal, so the corner clears once
          tokens stream — the elapsed duration lives in the stat grid (shown once,
          not duplicated here). -->
-    {#if loading}
-      <span class="ml-auto font-mono text-[0.6rem] tabular-nums text-primary">{loadPct >= 0 ? `${loadPct.toFixed(0)}%` : "…"}</span>
-    {:else if busy && promptProgress >= 0}
+    {#if busy && promptProgress >= 0}
       <span class="ml-auto font-mono text-[0.6rem] tabular-nums text-primary" title="Prompt processing">{Math.round(promptProgress * 100)}%</span>
     {/if}
   </div>

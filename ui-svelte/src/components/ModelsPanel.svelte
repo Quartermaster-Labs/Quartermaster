@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { push } from "svelte-spa-router";
   import { models, loadModel, unloadSingleModel, getModelConfig, putModelOverride, type ModelConfig, type ModelOverride } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
+  import { selectedTabStore as chatTabStore, selectedModelStore as chatModelStore } from "../stores/playground";
   import { prettifyModelName } from "../lib/modelUtils";
   import { scrollFade } from "../lib/scrollFade";
   import type { Model } from "../lib/types";
@@ -27,6 +29,13 @@
 
   const showUnlistedStore = persistentStore<boolean>("showUnlisted", true);
   const showIdorNameStore = persistentStore<"id" | "name">("showIdorName", "name");
+
+  // Shared playground singletons — set them, then jump to /test.
+  function chatWith(id: string): void {
+    chatModelStore.set(id);
+    chatTabStore.set("chat");
+    push("/test");
+  }
 
   // A card: one gguf family. primary is the base entry; variants are the rest.
   // group/ports come off the primary (members share a swap group). active = any
@@ -376,7 +385,7 @@
                   </button>
                   {#if live && dirty}
                     <button
-                      class="btn btn--sm btn--primary inline-flex items-center gap-1.5 uppercase tracking-wide"
+                      class="btn btn--sm btn--primary py-1.5 inline-flex items-center gap-1.5 uppercase tracking-wide"
                       onclick={() => applyDraftAndLoad(m)}
                       disabled={reloading[m.id]}
                       title="Apply edited parameters and restart this model"
@@ -387,7 +396,16 @@
                   {/if}
                   {#if live}
                     <button
-                      class="btn btn--sm inline-flex items-center gap-1.5 uppercase tracking-wide hover:border-error hover:text-error"
+                      class="btn btn--sm py-1.5 inline-flex items-center gap-1.5 uppercase tracking-wide hover:border-primary hover:text-primary"
+                      onclick={() => chatWith(m.id)}
+                      disabled={m.state !== "ready"}
+                      title="Open this model in the chat playground"
+                    >
+                      <svg viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3 shrink-0" aria-hidden="true"><path fill-rule="evenodd" d="M10 3c-4.418 0-8 2.91-8 6.5 0 1.66.77 3.17 2.03 4.32-.1.9-.42 1.78-.95 2.5a.5.5 0 0 0 .5.78c1.46-.25 2.7-.78 3.66-1.42.86.21 1.78.32 2.76.32 4.418 0 8-2.91 8-6.5S14.418 3 10 3Z" clip-rule="evenodd" /></svg>
+                      Chat
+                    </button>
+                    <button
+                      class="btn btn--sm py-1.5 inline-flex items-center gap-1.5 uppercase tracking-wide hover:border-error hover:text-error"
                       onclick={() => unloadSingleModel(m.id)}
                       disabled={m.state !== "ready"}
                     >
@@ -396,7 +414,7 @@
                     </button>
                   {:else}
                     <button
-                      class="btn btn--sm btn--primary inline-flex items-center gap-1.5 uppercase tracking-wide"
+                      class="btn btn--sm btn--primary py-1.5 inline-flex items-center gap-1.5 uppercase tracking-wide"
                       onclick={() => applyDraftAndLoad(m)}
                       disabled={reloading[m.id]}
                       title="Load this model with the parameters above"

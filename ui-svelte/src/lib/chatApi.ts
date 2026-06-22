@@ -44,9 +44,14 @@ function splitSystemMessages(messages: ChatMessage[]): { system: string; rest: C
 function buildChatCompletionsBody(model: string, messages: ChatMessage[], options?: ChatOptions): object {
   return {
     model,
+    // Resend assistant reasoning_content so preserve_thinking templates (Qwen3.6+)
+    // can keep prior-turn <think> in history; harmless to models that ignore it.
     messages: messages.map((m) => ({
       role: m.role,
       content: m.content,
+      ...(m.role === "assistant" && m.reasoning_content
+        ? { reasoning_content: m.reasoning_content }
+        : {}),
     })),
     stream: true,
     temperature: options?.temperature,

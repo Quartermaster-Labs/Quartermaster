@@ -1,6 +1,7 @@
 <script lang="ts">
   import { models } from "../../stores/api";
   import { persistentStore } from "../../stores/persistent";
+  import { selectedModelStore } from "../../stores/playground";
   import { streamChatCompletion, type Endpoint } from "../../lib/chatApi";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import type { ChatMessage, ContentPart } from "../../lib/types";
@@ -8,7 +9,6 @@
   import ModelSelector from "./ModelSelector.svelte";
   import ExpandableTextarea from "./ExpandableTextarea.svelte";
 
-  const selectedModelStore = persistentStore<string>("playground-selected-model", "");
   const systemPromptStore = persistentStore<string>("playground-system-prompt", "");
   const temperatureStore = persistentStore<number>("playground-temperature", 0.7);
   const endpointStore = persistentStore<Endpoint>("playground-endpoint", "v1/chat/completions");

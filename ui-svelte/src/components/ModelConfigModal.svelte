@@ -53,6 +53,7 @@
   // Boolean toggles. Stored as strings on the override ("" = default-on, "off" =
   // forced off); surfaced here as plain on/off checkboxes (auto state dropped).
   let reasoningOn = $state(true); // false => reasoningFmt "off"
+  let preserveThinking = $state(false); // keep prior-turn <think> in history (needs reasoning on)
   let flashOn = $state(true); // false => flashAttn "off"
   let mmapOn = $state(true); // false => mmap "off" (--no-mmap)
   let mlock = $state(false);
@@ -216,7 +217,7 @@
   $effect(() => {
     const deps = [
       open, config, selectedVariant,
-      ctx, ctxAuto, kvK, kvV, kvInRam, spec, reasoningOn, flashOn, mmapOn, mlock, threads, parallel, ub, vramTarget, vramAuto, cpuOffload, cpuAuto, extraArgs, ctxCheckpoints,
+      ctx, ctxAuto, kvK, kvV, kvInRam, spec, reasoningOn, preserveThinking, flashOn, mmapOn, mlock, threads, parallel, ub, vramTarget, vramAuto, cpuOffload, cpuAuto, extraArgs, ctxCheckpoints,
       selectedV?.ctx, selectedV?.kvK, selectedV?.kvV, selectedV?.kvInRam, selectedV?.spec,
       selectedV?.reasoningFmt, selectedV?.flashAttn, selectedV?.mmap, selectedV?.mlock,
       selectedV?.threads, selectedV?.parallel, selectedV?.ub, selectedV?.vramTargetGB,
@@ -340,6 +341,7 @@
     cpuOffload = o?.cpuOffload || 0;
     spec = o?.spec ?? "";
     reasoningOn = (o?.reasoningFmt ?? "") !== "off";
+    preserveThinking = o?.preserveThinking ?? false;
     flashOn = (o?.flashAttn ?? "") !== "off";
     mmapOn = (o?.mmap ?? "") !== "off";
     mlock = o?.mlock ?? false;
@@ -501,6 +503,7 @@
       cpuOffload: cpuAuto ? 0 : Number(cpuOffload),
       spec,
       reasoningFmt: reasoningOn ? "" : "off",
+      preserveThinking: reasoningOn && preserveThinking,
       flashAttn: flashOn ? "" : "off",
       mmap: mmapOn ? "" : "off",
       mlock,
@@ -631,7 +634,7 @@
     <div class="flex justify-between items-center p-4 border-b border-card-border">
       <h2 class="text-xl font-bold pb-0">
         Model parameters
-        {#if config}<span class="text-base font-mono font-normal text-txtsecondary">{config.id}{selectedVariant ? `-${selectedVariant}` : ""}</span>{/if}
+        {#if config}<span class="text-base font-mono font-normal text-txtsecondary">{config.id}{selectedVariant && !config.id.endsWith(`-${selectedVariant}`) ? `-${selectedVariant}` : ""}</span>{/if}
       </h2>
       <button onclick={() => dialogEl?.close()} class="text-txtsecondary hover:text-txtmain text-2xl leading-none">&times;</button>
     </div>
@@ -926,6 +929,13 @@
               <span class="text-txtsecondary flex items-center gap-1">
                 Reasoning
                 {@render hint("Chain-of-thought reasoning. On = llama.cpp auto-detects and exposes it (default). Off disables reasoning (--reasoning-format none).")}
+              </span>
+            </label>
+            <label class="flex items-center gap-2 text-sm" class:opacity-40={!reasoningOn}>
+              <input type="checkbox" bind:checked={preserveThinking} disabled={!reasoningOn} />
+              <span class="text-txtsecondary flex items-center gap-1">
+                Preserve thinking
+                {@render hint("Keep prior-turn <think> blocks in chat history instead of stripping them (Qwen3.6+ via --chat-template-kwargs preserve_thinking). Avoids reasoning amnesia in multi-turn/agentic loops. Needs reasoning on, and the client must send reasoning_content back.")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">

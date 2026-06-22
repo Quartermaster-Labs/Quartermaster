@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { persistentStore } from "../stores/persistent";
+  import { selectedTabStore, type PlaygroundTab } from "../stores/playground";
   import ChatInterface from "../components/playground/ChatInterface.svelte";
   import ImageInterface from "../components/playground/ImageInterface.svelte";
   import AudioInterface from "../components/playground/AudioInterface.svelte";
@@ -7,9 +7,8 @@
   import RerankInterface from "../components/playground/RerankInterface.svelte";
   import ConcurrencyInterface from "../components/playground/ConcurrencyInterface.svelte";
 
-  type Tab = "chat" | "images" | "speech" | "audio" | "rerank" | "concurrency";
+  type Tab = PlaygroundTab;
 
-  const selectedTabStore = persistentStore<Tab>("playground-selected-tab", "chat");
   let mobileMenuOpen = $state(false);
 
   const tabs: { id: Tab; label: string }[] = [

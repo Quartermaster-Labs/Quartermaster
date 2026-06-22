@@ -79,6 +79,11 @@ type Metadata struct {
 	SsmConvKernel    int64
 	SsmStateSize     int64
 
+	// VocabSize is the token vocabulary size, derived from the token_embd.weight
+	// (or output.weight) tensor shape / embedding_length. 0 when unsizable. Used
+	// to size the logits/output compute buffer in the VRAM estimate.
+	VocabSize int64
+
 	IsMoE bool
 
 	// IsMTP is true when the model carries multi-token-prediction / nextn
@@ -598,7 +603,11 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 	// to derive the expert-weight share exactly (replaces the per-arch heuristic).
 	// The reader is now positioned at the first tensor info. Failures leave the
 	// share at 0 so the caller falls back to the arch table.
-	expertShare, _ := readExpertShare(r, tensorCount)
+	expertShare, vocabElems, _ := readExpertShare(r, tensorCount)
+	var vocab int64
+	if vocabElems > 0 && embeddingLength != nil && *embeddingLength > 0 {
+		vocab = vocabElems / *embeddingLength
+	}
 
 	// Derive per-head dim when key/value_length absent: head_dim =
 	// embedding_length / head_count. K and V share it unless stated.
@@ -692,6 +701,7 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 		SsmInnerSize:      deref(ssmInnerSize),
 		SsmConvKernel:     deref(ssmConvKernel),
 		SsmStateSize:      deref(ssmStateSize),
+		VocabSize:         vocab,
 		IsMoE:             expertCount != nil && *expertCount > 0,
 		IsMTP:             nextnLayers != nil && *nextnLayers > 0,
 		ExpertWeightShare: expertShare,
@@ -701,38 +711,40 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 
 // readExpertShare parses the GGUF tensor info section (the reader must be
 // positioned at the first tensor info) and returns the fraction of on-disk
-// weight bytes held by expert tensors (name contains "_exps"). Returns 0 when
-// no expert tensors are found or any tensor uses an unknown ggml type.
-func readExpertShare(r *ggufReader, tensorCount uint64) (float64, error) {
+// weight bytes held by expert tensors (name contains "_exps"), plus the element
+// count of the token_embd.weight (or output.weight) tensor (= n_embd*n_vocab,
+// for vocab sizing). Share is 0 when no expert tensors are found or any tensor
+// uses an unknown ggml type; vocabElems is 0 when neither tensor is present.
+func readExpertShare(r *ggufReader, tensorCount uint64) (share float64, vocabElems int64, err error) {
 	var expertBytes, totalBytes int64
 	var sawExpert bool
 	for i := uint64(0); i < tensorCount; i++ {
 		name, err := r.str()
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		nDims, err := r.u32()
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		elems := int64(1)
 		for d := uint32(0); d < nDims; d++ {
 			dim, err := r.u64()
 			if err != nil {
-				return 0, err
+				return 0, 0, err
 			}
 			elems *= int64(dim)
 		}
 		typ, err := r.u32()
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		if _, err := r.u64(); err != nil { // offset (unused)
-			return 0, err
+			return 0, 0, err
 		}
 		ts, ok := ggmlTypeSize[typ]
 		if !ok {
-			return 0, fmt.Errorf("unknown ggml type %d for tensor %q", typ, name)
+			return 0, 0, fmt.Errorf("unknown ggml type %d for tensor %q", typ, name)
 		}
 		bytes := elems / ts[0] * ts[1]
 		totalBytes += bytes
@@ -740,11 +752,16 @@ func readExpertShare(r *ggufReader, tensorCount uint64) (float64, error) {
 			expertBytes += bytes
 			sawExpert = true
 		}
+		// token_embd.weight is the canonical vocab×embd tensor; output.weight is
+		// the tied/untied fallback (some models omit token_embd in the count).
+		if name == "token_embd.weight" || (vocabElems == 0 && name == "output.weight") {
+			vocabElems = elems
+		}
 	}
 	if !sawExpert || totalBytes <= 0 {
-		return 0, nil
+		return 0, vocabElems, nil
 	}
-	return float64(expertBytes) / float64(totalBytes), nil
+	return float64(expertBytes) / float64(totalBytes), vocabElems, nil
 }
 
 const gib = 1024 * 1024 * 1024

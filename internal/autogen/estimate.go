@@ -68,17 +68,15 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		target = in.TargetVramGB
 	}
 
-	const ubSoloOh = 0.17
 	specOh := 0.0
 	if in.Spec == "draft-mtp" {
 		specOh = 0.34
 	}
-	overhead := s.VramOverheadGB + ubSoloOh + specOh
 
 	prof := profile{
 		Name:     "estimate",
 		Target:   target,
-		Overhead: overhead,
+		Overhead: s.VramOverheadGB + specOh,
 		Ctx:      in.Ctx,
 		Spec:     in.Spec,
 		KvK:      kvK,
@@ -87,6 +85,7 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 
 		CtxCheckpoints: in.CtxCheckpoints,
 	}
+	prof.Overhead += computeBufferGB(meta, effectiveUb(prof, nil), s.ComputeBufFactor)
 
 	ctx, plan, kvReserve, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, in.KvInRam)
 	if err != nil {

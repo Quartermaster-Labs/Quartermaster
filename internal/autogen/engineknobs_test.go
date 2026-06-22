@@ -26,6 +26,56 @@ func TestEmitProfile_EngineKnobs(t *testing.T) {
 	}
 }
 
+// computeBufferGB models logits (vocab*ub) + activations (ub*embd) + CUDA ctx,
+// scaled by factor; falls back to a flat estimate when dims are missing.
+func TestComputeBufferGB(t *testing.T) {
+	meta := Metadata{EmbeddingLength: 4096, VocabSize: 151936}
+
+	got := computeBufferGB(meta, 1024, 1.0)
+	if got < 0.95 || got > 1.06 {
+		t.Errorf("ub=1024 factor=1: got %.3f, want ~1.0 GB", got)
+	}
+
+	// Halving ub roughly halves the analytic term (CUDA ctx const aside).
+	half := computeBufferGB(meta, 512, 1.0)
+	if half >= got || half < 0.6 {
+		t.Errorf("ub=512 should be smaller but still sizable: got %.3f (ub1024=%.3f)", half, got)
+	}
+
+	// factor scales the analytic term above the fixed CUDA ctx.
+	if d := computeBufferGB(meta, 1024, 2.0) - got; d < 0.65 {
+		t.Errorf("factor=2 should add ~one analytic term (~0.7 GB), added %.3f", d)
+	}
+
+	// Missing dims => flat fallback.
+	if fb := computeBufferGB(Metadata{}, 1024, 1.0); fb != computeFallbackGB {
+		t.Errorf("missing dims: got %.3f, want fallback %.3f", fb, computeFallbackGB)
+	}
+}
+
+// mmap is on by default — even on the CPU-offload path (--n-cpu-moe). Only an
+// explicit Mmap:"off" override emits --no-mmap.
+func TestEmitProfile_MmapDefaultOn(t *testing.T) {
+	s := Settings{ServerExe: "llama-server", Threads: 7, TtlSec: 600, MaxRamGB: 32}
+	meta := Metadata{Architecture: "qwen3moe", BlockCount: 48, IsMoE: true}
+	row := GgufRow{FullPath: "/models/foo.gguf"}
+	prof := profile{Name: "foo"}
+
+	// CPU offload, no override: mmap stays on (no --no-mmap).
+	var def strings.Builder
+	emitProfile(&def, s, meta, row, prof, 8192, 99, 20, LoadPlan{EstRamGB: 18}, "q8_0", "q8_0", false, nil)
+	if strings.Contains(def.String(), "--no-mmap") {
+		t.Errorf("mmap should default on even with CPU offload:\n%s", def.String())
+	}
+
+	// Explicit Mmap:"off" emits --no-mmap.
+	var off strings.Builder
+	emitProfile(&off, s, meta, row, prof, 8192, 99, 20, LoadPlan{EstRamGB: 18}, "q8_0", "q8_0", false, &Override{Mmap: "off"})
+	if !strings.Contains(off.String(), "--no-mmap") {
+		t.Errorf("explicit Mmap:off should emit --no-mmap:\n%s", off.String())
+	}
+}
+
 // ExtraArgs are appended verbatim to the emitted command (passthrough for flags
 // autogen doesn't model), after the computed flags.
 func TestEmitProfile_ExtraArgs(t *testing.T) {
@@ -40,6 +90,28 @@ func TestEmitProfile_ExtraArgs(t *testing.T) {
 
 	if !strings.Contains(out, "--rope-freq-scale 0.5 --override-kv x=int:1") {
 		t.Errorf("missing extra args in emit:\n%s", out)
+	}
+}
+
+// PreserveThinking emits the chat-template-kwargs flag when thinking is on, and
+// suppresses it when reasoning is off (pointless without thinking).
+func TestEmitProfile_PreserveThinking(t *testing.T) {
+	s := Settings{ServerExe: "llama-server", Threads: 7, TtlSec: 600}
+	meta := Metadata{Architecture: "qwen3", BlockCount: 32}
+	row := GgufRow{FullPath: "/models/foo.gguf"}
+	want := `--chat-template-kwargs "{\"preserve_thinking\":true}"`
+
+	var on strings.Builder
+	emitProfile(&on, s, meta, row, profile{Name: "foo"}, 8192, 10, 0, LoadPlan{}, "q8_0", "q8_0", false, &Override{PreserveThinking: true})
+	if !strings.Contains(on.String(), want) {
+		t.Errorf("missing preserve_thinking flag:\n%s", on.String())
+	}
+
+	// reasoning off => no preserve_thinking (nothing to preserve).
+	var off strings.Builder
+	emitProfile(&off, s, meta, row, profile{Name: "judge", ReasoningFmt: "off"}, 8192, 10, 0, LoadPlan{}, "q8_0", "q8_0", false, &Override{PreserveThinking: true})
+	if strings.Contains(off.String(), "preserve_thinking") {
+		t.Errorf("preserve_thinking emitted despite reasoning off:\n%s", off.String())
 	}
 }
 

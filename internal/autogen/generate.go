@@ -235,8 +235,6 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	if modelSpec == "draft-mtp" {
 		specOh = 0.34
 	}
-	const ubSoloOh = 0.17
-
 	var aliases []string
 	var ctxVariants []int
 	override := Override{}
@@ -255,7 +253,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	profiles := []profile{{
 		Name:           name,
 		Target:         soloTarget,
-		Overhead:       s.VramOverheadGB + ubSoloOh + specOh,
+		Overhead:       s.VramOverheadGB + specOh,
 		Unlisted:       override.Unlisted,
 		Ctx:            override.Ctx,
 		Aliases:        aliases,
@@ -270,7 +268,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		profiles = append(profiles, profile{
 			Name:           fmt.Sprintf("%s-%s", name, formatCtxTag(cv)),
 			Target:         cvTarget,
-			Overhead:       s.VramOverheadGB + ubSoloOh + specOh,
+			Overhead:       s.VramOverheadGB + specOh,
 			Ctx:            cv,
 			IsLong:         cv >= 65536,
 			CtxCheckpoints: override.CtxCheckpoints,
@@ -302,7 +300,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		profiles = append(profiles, profile{
 			Name:           fmt.Sprintf("%s-%s", name, slugify(v.Name)),
 			Target:         vTarget,
-			Overhead:       s.VramOverheadGB + ubSoloOh + vSpecOh,
+			Overhead:       s.VramOverheadGB + vSpecOh,
 			Unlisted:       v.Unlisted,
 			Ctx:            v.Ctx,
 			Aliases:        v.Aliases,
@@ -317,6 +315,14 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			CtxCheckpoints: vCheckpoints,
 			Variant:        &variantSpecs[i],
 		})
+	}
+
+	// Charge the GPU compute buffer (logits + activations + CUDA runtime) per
+	// profile; it scales with the physical batch and lives on the GPU regardless
+	// of CPU expert offload, so it's flat VRAM overhead. Replaces the old flat
+	// 0.17 GB ubSoloOh fudge.
+	for i := range profiles {
+		profiles[i].Overhead += computeBufferGB(meta, effectiveUb(profiles[i], ov), s.ComputeBufFactor)
 	}
 
 	for _, prof := range profiles {
@@ -649,6 +655,52 @@ func estForOffload(meta Metadata, prof profile, kvReserve float64, ngl, ncpuMoe 
 	return round(estVram, 2), round(estRam, 2)
 }
 
+// Empirical compute-graph constants. With flash attention on (the default), the
+// CUDA compute buffer is dominated by the logits/output tensor (n_vocab*n_ubatch
+// floats) plus a handful of n_ubatch*n_embd activation copies; computeCudaCtxGB
+// covers the fixed CUDA runtime + cuBLAS workspace. The activation-copy count is
+// a coarse fit, so Settings.ComputeBufFactor scales the whole analytic term for
+// per-build/arch calibration against the "compute buffer size" llama logs.
+const (
+	computeActCopies  = 8.0
+	computeCudaCtxGB  = 0.3
+	computeFallbackGB = 0.17 // vocab/embd dims missing => prior flat estimate
+)
+
+// computeBufferGB estimates the GPU compute buffer (logits + activations + CUDA
+// runtime) for a given physical batch (ub). This lives on the GPU regardless of
+// CPU expert offload, so it is charged as flat VRAM overhead.
+func computeBufferGB(meta Metadata, ub int, factor float64) float64 {
+	if factor <= 0 {
+		factor = 1.0
+	}
+	embd := float64(meta.EmbeddingLength)
+	vocab := float64(meta.VocabSize)
+	if embd <= 0 || vocab <= 0 || ub <= 0 {
+		return computeFallbackGB
+	}
+	logits := vocab * float64(ub) * 4.0
+	acts := float64(ub) * embd * computeActCopies * 4.0
+	return computeCudaCtxGB + factor*(logits+acts)/gib
+}
+
+// effectiveUb resolves the physical batch (-ub/-b) for a profile, matching the
+// flag emitted by buildCmdLines: 1024 default, 512 for long ctx, overridden by
+// ov.Ub then the profile's own Ub.
+func effectiveUb(prof profile, ov *Override) int {
+	ub := 1024
+	if prof.IsLong {
+		ub = 512
+	}
+	if ov != nil && ov.Ub > 0 {
+		ub = ov.Ub
+	}
+	if prof.Ub > 0 {
+		ub = prof.Ub
+	}
+	return ub
+}
+
 // buildCmdLines returns the launch command as a list of flag lines (no leading
 // indentation), shared by emitProfile (which writes them as a YAML `cmd: >`
 // block) and RenderSoloCmd (which joins them for the editor preview). Any
@@ -658,15 +710,12 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	if ncpuMoe > 0 {
 		cpuMoeFlag = fmt.Sprintf(" --n-cpu-moe %d", ncpuMoe)
 	}
-	cpuOverride := ncpuMoe > 0
-	fullGpu := ncpuMoe == 0 && ngl >= int(meta.BlockCount)
 
-	mmap := ""
-	if ov != nil {
-		mmap = ov.Mmap
-	}
+	// mmap on by default: lazy demand-paging → snappy load, OS caches naturally.
+	// --no-mmap only on explicit Mmap:"off" (forces fully-resident anon RAM,
+	// resists eviction under pressure at the cost of a full upfront read).
 	noMmapFlag := ""
-	if mmap == "off" || (mmap != "on" && (fullGpu || cpuOverride)) {
+	if ov != nil && ov.Mmap == "off" {
 		noMmapFlag = "--no-mmap "
 	}
 	mlockFlag := ""
@@ -691,16 +740,7 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		threads = ov.Threads
 	}
 
-	ub := 1024
-	if prof.IsLong {
-		ub = 512
-	}
-	if ov != nil && ov.Ub > 0 {
-		ub = ov.Ub
-	}
-	if prof.Ub > 0 {
-		ub = prof.Ub
-	}
+	ub := effectiveUb(prof, ov)
 
 	spec := effectiveSpec(meta, ov)
 	if prof.Spec != "" {
@@ -739,6 +779,11 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		lines = append(lines, "--spec-draft-n-max 2")
 	}
 	lines = append(lines, fmt.Sprintf("--jinja --reasoning-format %s%s", rfmt, reasoningFlag))
+	// preserve_thinking keeps prior-turn <think> in history (Qwen3.6+); pointless
+	// when thinking is off. Escaped double-quotes survive both Windows + POSIX shlex.
+	if ov != nil && ov.PreserveThinking && reason != "off" {
+		lines = append(lines, `--chat-template-kwargs "{\"preserve_thinking\":true}"`)
+	}
 	// Always emit so runtime matches our reserve (else llama-server defaults to 32).
 	ckpts := effectiveCtxCheckpoints(prof, defaultCtxCheckpoints(GetKvCostModel(meta, kvK, kvV).ConstGB))
 	lines = append(lines, fmt.Sprintf("--ctx-checkpoints %d", ckpts))
@@ -784,14 +829,14 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 	if effectiveSpec(meta, &ov) == "draft-mtp" {
 		specOh = 0.34
 	}
-	const ubSoloOh = 0.17
 	prof := profile{
 		Name:       "preview",
 		Target:     target,
-		Overhead:   s.VramOverheadGB + ubSoloOh + specOh,
+		Overhead:   s.VramOverheadGB + specOh,
 		Ctx:        ov.Ctx,
 		CpuOffload: ov.CpuOffload,
 	}
+	prof.Overhead += computeBufferGB(meta, effectiveUb(prof, &ov), s.ComputeBufFactor)
 	ctx, plan, kvReserve, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, ov.KvInRam)
 	if err != nil {
 		return "", err
