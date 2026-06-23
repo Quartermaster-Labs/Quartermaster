@@ -150,11 +150,24 @@ export type ImageContentPart = {
 
 export type ContentPart = TextContentPart | ImageContentPart;
 
+export interface ToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+export interface ToolDef {
+  type: "function";
+  function: { name: string; description: string; parameters: object };
+}
+
 export interface ChatMessage {
-  role: "user" | "assistant" | "system";
+  role: "user" | "assistant" | "system" | "tool";
   content: string | ContentPart[];
   reasoning_content?: string;
   reasoningTimeMs?: number;
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
 }
 
 export function getTextContent(content: string | ContentPart[]): string {
@@ -229,6 +242,20 @@ export interface SdApiResponse {
   images: string[];
   parameters: Record<string, unknown>;
   info: string;
+}
+
+// A saved style: the params that keep a batch of placeholders visually
+// consistent. Stored in localStorage (no backend). size is "WxH".
+export interface ImageStylePreset {
+  name: string;
+  suffix: string;
+  negativePrompt: string;
+  steps: number;
+  cfgScale: number;
+  sampler: string;
+  scheduler: string;
+  size: string;
+  loras: SdApiLoraRef[];
 }
 
 export interface AudioTranscriptionRequest {

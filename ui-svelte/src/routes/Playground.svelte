@@ -1,5 +1,6 @@
 <script lang="ts">
   import { selectedTabStore, type PlaygroundTab } from "../stores/playground";
+  import { MessageSquare, Image, Volume2, Mic, ListOrdered, Zap } from "lucide-svelte";
   import ChatInterface from "../components/playground/ChatInterface.svelte";
   import ImageInterface from "../components/playground/ImageInterface.svelte";
   import AudioInterface from "../components/playground/AudioInterface.svelte";
@@ -9,74 +10,29 @@
 
   type Tab = PlaygroundTab;
 
-  let mobileMenuOpen = $state(false);
-
-  const tabs: { id: Tab; label: string }[] = [
-    { id: "chat", label: "Chat" },
-    { id: "images", label: "Images" },
-    { id: "speech", label: "Speech" },
-    { id: "audio", label: "Transcription" },
-    { id: "rerank", label: "Rerank" },
-    { id: "concurrency", label: "Load Test" },
+  const tabs: { id: Tab; label: string; icon: typeof MessageSquare }[] = [
+    { id: "chat", label: "Chat", icon: MessageSquare },
+    { id: "images", label: "Images", icon: Image },
+    { id: "speech", label: "Speech", icon: Volume2 },
+    { id: "audio", label: "Transcription", icon: Mic },
+    { id: "rerank", label: "Rerank", icon: ListOrdered },
+    { id: "concurrency", label: "Load Test", icon: Zap },
   ];
-
-  function selectTab(tab: Tab) {
-    selectedTabStore.set(tab);
-    mobileMenuOpen = false;
-  }
-
-  function getTabLabel(tabId: Tab): string {
-    return tabs.find((t) => t.id === tabId)?.label || "";
-  }
 </script>
 
-<div class="card h-full flex flex-col">
-  <!-- Tab navigation -->
-  <div class="shrink-0 mb-4">
-    <!-- Mobile: Dropdown menu (hidden on md and up) -->
-    <div class="block md:hidden relative">
-      <button
-        class="w-full px-4 py-2 rounded font-medium transition-colors flex items-center justify-between bg-surface hover:bg-secondary-hover border border-card-border"
-        onclick={() => (mobileMenuOpen = !mobileMenuOpen)}
-      >
-        <span>{getTabLabel($selectedTabStore)}</span>
-        <svg
-          class="w-5 h-5 transition-transform {mobileMenuOpen ? 'rotate-180' : ''}"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
-        </svg>
-      </button>
-      {#if mobileMenuOpen}
-        <div
-          class="absolute top-full left-0 right-0 mt-1 bg-surface border border-card-border rounded shadow-lg z-10"
-        >
-          {#each tabs as tab (tab.id)}
-            <button
-              class="w-full px-4 py-2 text-left hover:bg-secondary-hover transition-colors first:rounded-t last:rounded-b {$selectedTabStore ===
-              tab.id
-                ? 'bg-primary/10 font-medium'
-                : ''}"
-              onclick={() => selectTab(tab.id)}
-            >
-              {tab.label}
-            </button>
-          {/each}
-        </div>
-      {/if}
-    </div>
-
-    <!-- Desktop: Tab buttons (shown on md and up) -->
-    <div class="hidden md:flex flex-wrap gap-2">
+<div class="h-full flex flex-col gap-3">
+  <!-- Tab navigation banner -->
+  <div class="card !py-2 shrink-0">
+    <div class="flex items-center gap-1 overflow-x-auto">
       {#each tabs as tab (tab.id)}
+        {@const active = $selectedTabStore === tab.id}
         <button
-          class="px-4 py-2 rounded font-medium transition-colors {$selectedTabStore === tab.id
-            ? 'bg-primary text-btn-primary-text'
-            : 'bg-surface hover:bg-secondary-hover border border-card-border'}"
-          onclick={() => selectTab(tab.id)}
+          class="flex items-center gap-2 px-3 py-1.5 rounded font-mono text-sm whitespace-nowrap transition-colors {active
+            ? 'bg-primary/10 text-primary'
+            : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
+          onclick={() => selectedTabStore.set(tab.id)}
         >
+          <tab.icon size={15} strokeWidth={active ? 2.4 : 1.8} />
           {tab.label}
         </button>
       {/each}
@@ -84,7 +40,7 @@
   </div>
 
   <!-- Tab content -->
-  <div class="flex-1 overflow-hidden relative">
+  <div class="flex-1 overflow-hidden relative min-h-0">
     <div class="h-full" class:tab-hidden={$selectedTabStore !== "chat"}>
       <ChatInterface />
     </div>

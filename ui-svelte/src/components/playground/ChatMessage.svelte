@@ -1,22 +1,31 @@
 <script lang="ts">
   import { renderMarkdown, escapeHtml, renderStreamingMarkdown, createStreamingCache } from "../../lib/markdown";
   import type { RenderedBlock } from "../../lib/markdown";
-  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronDown, ChevronRight, Brain, Code } from "lucide-svelte";
+  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronDown, ChevronRight, Brain, Code, Search } from "lucide-svelte";
   import { getTextContent, getImageUrls } from "../../lib/types";
-  import type { ContentPart } from "../../lib/types";
+  import type { ContentPart, ToolCall } from "../../lib/types";
 
   interface Props {
-    role: "user" | "assistant" | "system";
+    role: "user" | "assistant" | "system" | "tool";
     content: string | ContentPart[];
     reasoning_content?: string;
     reasoningTimeMs?: number;
+    tool_calls?: ToolCall[];
     isStreaming?: boolean;
     isReasoning?: boolean;
     onEdit?: (newContent: string) => void;
     onRegenerate?: () => void;
   }
 
-  let { role, content, reasoning_content = "", reasoningTimeMs = 0, isStreaming = false, isReasoning = false, onEdit, onRegenerate }: Props = $props();
+  let { role, content, reasoning_content = "", reasoningTimeMs = 0, tool_calls, isStreaming = false, isReasoning = false, onEdit, onRegenerate }: Props = $props();
+
+  function toolQuery(tc: ToolCall): string {
+    try {
+      return JSON.parse(tc.function.arguments || "{}").query ?? tc.function.name;
+    } catch {
+      return tc.function.name;
+    }
+  }
 
   let textContent = $derived(getTextContent(content));
   let imageUrls = $derived(getImageUrls(content));
@@ -159,13 +168,32 @@
   }
 </script>
 
+{#if role === "tool"}
+  <details class="mb-4 rounded-lg border border-card-border bg-surface/50 text-[0.8125rem]">
+    <summary class="flex items-center gap-2 px-3 py-2 cursor-pointer text-txtsecondary select-none">
+      <Search class="w-3.5 h-3.5" />
+      Search results
+    </summary>
+    <div class="px-3 pb-2 whitespace-pre-wrap font-mono text-xs text-txtsecondary">{textContent}</div>
+  </details>
+{:else}
 <div class="flex {role === 'user' ? 'justify-end' : 'justify-start'} mb-4">
   <div
-    class="relative group rounded-lg px-4 py-2 {role === 'user'
-      ? 'max-w-[85%] bg-primary text-btn-primary-text'
-      : 'w-full sm:w-4/5 bg-surface border border-card-border'}"
+    class="relative group rounded-lg px-3 py-2 text-[0.8125rem] {role === 'user'
+      ? 'max-w-[85%] bg-primary text-white rounded-br-sm'
+      : 'w-full sm:w-4/5 bg-surface border border-card-border rounded-bl-sm'}"
   >
     {#if role === "assistant"}
+      {#if tool_calls && tool_calls.length > 0}
+        <div class="mb-2 flex flex-wrap gap-1.5">
+          {#each tool_calls as tc (tc.id)}
+            <span class="inline-flex items-center gap-1.5 rounded-full border border-card-border bg-secondary px-2.5 py-1 text-xs text-txtsecondary">
+              <Search class="w-3 h-3" />
+              {toolQuery(tc)}
+            </span>
+          {/each}
+        </div>
+      {/if}
       {#if reasoning_content || isReasoning}
         <div class="mb-3 border border-card-border rounded overflow-hidden">
           <button
@@ -215,7 +243,7 @@
       {#if showRaw}
         <div class="whitespace-pre-wrap font-mono text-sm">{textContent}</div>
       {:else}
-        <div class="prose prose-sm dark:prose-invert max-w-none" use:codeBlockCopy>
+        <div class="prose prose-sm dark:prose-invert max-w-none chat-prose" use:codeBlockCopy>
           {#each renderedParts.blocks as block (block.id)}
             {@html block.html}
           {/each}
@@ -225,7 +253,7 @@
           {/if}
         </div>
       {/if}
-      {#if !isStreaming}
+      {#if !isStreaming && textContent}
         <div class="flex gap-1 mt-2 pt-1 border-t border-card-border">
           {#if onRegenerate}
             <button
@@ -313,6 +341,7 @@
     {/if}
   </div>
 </div>
+{/if}
 
 <!-- Full-size image modal -->
 {#if modalImageUrl}
@@ -339,6 +368,11 @@
 {/if}
 
 <style>
+  .chat-prose {
+    font-size: 0.8125rem;
+    line-height: 1.55;
+  }
+
   .prose :global(pre) {
     position: relative;
     background-color: var(--color-surface);
@@ -415,13 +449,26 @@
     margin: 0.25rem 0;
   }
 
+  /* Models lean on huge markdown headers; flatten them to a slight size bump
+     + primary color instead of the prose defaults. */
   .prose :global(h1),
   .prose :global(h2),
   .prose :global(h3),
-  .prose :global(h4) {
-    margin: 1rem 0 0.5rem 0;
+  .prose :global(h4),
+  .prose :global(h5),
+  .prose :global(h6) {
+    margin: 0.9rem 0 0.4rem 0;
     font-weight: 600;
+    color: var(--color-primary);
+    line-height: 1.3;
   }
+
+  .prose :global(h1) { font-size: 1.15em; }
+  .prose :global(h2) { font-size: 1.08em; }
+  .prose :global(h3),
+  .prose :global(h4),
+  .prose :global(h5),
+  .prose :global(h6) { font-size: 1em; }
 
   .prose :global(h1:first-child),
   .prose :global(h2:first-child),

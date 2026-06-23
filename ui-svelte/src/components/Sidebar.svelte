@@ -1,18 +1,22 @@
 <script lang="ts">
-  import { link } from "svelte-spa-router";
-  import { LayoutDashboard, Boxes, FlaskConical, Activity, Sun, Moon, MonitorCog } from "lucide-svelte";
+  import { link, location } from "svelte-spa-router";
+  import { LayoutDashboard, Boxes, FlaskConical, Activity, Sun, Moon, MonitorCog, ChevronRight } from "lucide-svelte";
   import { toggleTheme, themeMode, appTitle } from "../stores/theme";
   import { currentRoute } from "../stores/route";
   import { playgroundActivity } from "../stores/playgroundActivity";
   import { versionInfo } from "../stores/api";
+  import { MODEL_CATEGORIES } from "../lib/modelUtils";
   import ConnectionStatus from "./ConnectionStatus.svelte";
 
   const pages = [
     { path: "/", label: "Dashboard", icon: LayoutDashboard },
-    { path: "/models", label: "Models", icon: Boxes },
+    { path: "/models", label: "Models", icon: Boxes, children: MODEL_CATEGORIES.map((c) => ({ path: `/models/${c.id}`, label: c.label })) },
     { path: "/test", label: "Test", icon: FlaskConical },
     { path: "/observe", label: "Observe", icon: Activity },
   ];
+
+  // Models sub-menu open when on any /models route, toggleable otherwise.
+  let modelsOpen = $state($currentRoute.startsWith("/models"));
 
   function isActive(path: string, current: string): boolean {
     return path === "/" ? current === "/" : current.startsWith(path);
@@ -35,9 +39,9 @@
   }
 </script>
 
-<aside class="flex flex-col h-full w-52 shrink-0 border-r border-border bg-surface">
+<aside class="flex flex-col h-full w-44 shrink-0 border-r border-border bg-surface">
   <!-- Brand + editable instance title -->
-  <div class="px-4 pt-4 pb-3 border-b border-card-border-inner">
+  <div class="px-3 pt-4 pb-3 border-b border-card-border-inner">
     <div class="font-mono text-[0.65rem] uppercase tracking-[0.2em] text-primary">Quartermaster</div>
     <div
       contenteditable="true"
@@ -57,24 +61,53 @@
   <nav class="flex-1 overflow-y-auto py-2">
     {#each pages as p (p.path)}
       {@const active = isActive(p.path, $currentRoute)}
-      <a
-        href={p.path}
-        use:link
-        class="flex items-center gap-3 px-4 py-2 font-mono text-sm border-l-2 transition-colors {active
-          ? 'border-primary text-primary bg-secondary/60'
-          : 'border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40'}"
-      >
-        <p.icon size={16} strokeWidth={active ? 2.4 : 1.8} />
-        <span class="tracking-wide">{p.label}</span>
-        {#if p.path === "/test" && $playgroundActivity}
-          <span class="ml-auto w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+      {#if p.children}
+        <!-- Models: expandable parent. Clicking toggles the sub-menu. -->
+        <button
+          type="button"
+          onclick={() => (modelsOpen = !modelsOpen)}
+          class="w-full flex items-center gap-3 px-3 py-2 font-mono text-sm border-l-2 transition-colors {active
+            ? 'border-primary text-primary bg-secondary/60'
+            : 'border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40'}"
+        >
+          <p.icon size={16} strokeWidth={active ? 2.4 : 1.8} />
+          <span class="tracking-wide">{p.label}</span>
+          <ChevronRight size={14} class="ml-auto transition-transform {modelsOpen ? 'rotate-90' : ''}" />
+        </button>
+        {#if modelsOpen}
+          {#each p.children as c (c.path)}
+            {@const cActive = $location === c.path || (c.path === "/models/llm" && $location === "/models")}
+            <a
+              href={c.path}
+              use:link
+              class="flex items-center gap-3 pl-11 pr-3 py-1.5 font-mono text-[0.8rem] border-l-2 transition-colors {cActive
+                ? 'border-primary text-primary bg-secondary/60'
+                : 'border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40'}"
+            >
+              <span class="tracking-wide">{c.label}</span>
+            </a>
+          {/each}
         {/if}
-      </a>
+      {:else}
+        <a
+          href={p.path}
+          use:link
+          class="flex items-center gap-3 px-3 py-2 font-mono text-sm border-l-2 transition-colors {active
+            ? 'border-primary text-primary bg-secondary/60'
+            : 'border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40'}"
+        >
+          <p.icon size={16} strokeWidth={active ? 2.4 : 1.8} />
+          <span class="tracking-wide">{p.label}</span>
+          {#if p.path === "/test" && $playgroundActivity}
+            <span class="ml-auto w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+          {/if}
+        </a>
+      {/if}
     {/each}
   </nav>
 
   <!-- Footer: theme, connection, version -->
-  <div class="border-t border-card-border-inner px-4 py-3 flex items-center justify-between">
+  <div class="border-t border-card-border-inner px-3 py-3 flex items-center justify-between">
     <button
       class="text-txtsecondary hover:text-txtmain transition-colors"
       onclick={toggleTheme}

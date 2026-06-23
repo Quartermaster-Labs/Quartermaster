@@ -18,6 +18,7 @@
   const routes = {
     "/": Dashboard,
     "/models": Models,
+    "/models/:category": Models,
     "/observe": Observe,
     "/logs": Observe,
     "/activity": Observe,

@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
@@ -220,7 +221,9 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 	if meta, err := autogen.ReadGgufMetadataCached(gguf); err == nil {
 		resp.MaxCtx = int(meta.ContextLength)
 		resp.BlockCount = int(meta.BlockCount)
-		resp.IsMTP = meta.IsMTP
+		// MTP-capable via baked-in nextn layers OR a separate draft file paired in
+		// the cmd (-md, e.g. Gemma-4). Either makes draft-mtp a valid spec choice.
+		resp.IsMTP = meta.IsMTP || strings.Contains(cmd, "--spec-type draft-mtp") || strings.Contains(cmd, "-md ")
 	}
 	// Fleet-wide default variants (e.g. game) so the editor can surface + edit them.
 	if gf, err := autogen.LoadGenerateFile(s.autogen.GeneratePath, s.autogen.ModelsDir); err == nil {
@@ -410,6 +413,12 @@ func estimateInputFromCmd(cmd string) autogen.EstimateInput {
 			}
 		case "--no-kv-offload":
 			in.KvInRam = true
+		case "-md", "--model-draft", "--spec-draft-model":
+			if v, ok := next(); ok {
+				if fi, err := os.Stat(v); err == nil {
+					in.DraftGB = float64(fi.Size()) / (1 << 30)
+				}
+			}
 		}
 	}
 	return in

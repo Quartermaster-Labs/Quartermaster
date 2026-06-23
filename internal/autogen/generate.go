@@ -203,6 +203,15 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		return fmt.Errorf("%s: %w", name, err)
 	}
 
+	// Diffusion GGUFs go to sd-server, not llama-server: no KV cache / -ngl
+	// sizing applies. Detect by arch and emit a separate block. Unknown image
+	// archs fall through to the llama path, where the YAML "# arch=..." comment
+	// reveals the real arch name to add to imageArchs.
+	if isImageArch(meta.Architecture) {
+		emitImageModel(b, s, row, ov, name, meta.Architecture, emitted)
+		return nil
+	}
+
 	// KV quant: forced q8_0 for all archs (per-model override still wins). Fast
 	// flash-attention needs matched K/V and never iq4_nl.
 	kvK, kvV := "q8_0", "q8_0"
@@ -229,7 +238,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	}
 	kvInRam := ov != nil && ov.KvInRam
 
-	modelSpec := effectiveSpec(meta, ov)
+	modelSpec := effectiveSpec(meta, ov, row.DraftPath != "")
 
 	specOh := 0.0
 	if modelSpec == "draft-mtp" {
@@ -742,7 +751,7 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 
 	ub := effectiveUb(prof, ov)
 
-	spec := effectiveSpec(meta, ov)
+	spec := effectiveSpec(meta, ov, row.DraftPath != "")
 	if prof.Spec != "" {
 		spec = prof.Spec
 	}
@@ -777,6 +786,10 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	}
 	if spec == "draft-mtp" {
 		lines = append(lines, "--spec-draft-n-max 2")
+		// Separate MTP draft file (e.g. Gemma-4): baked-in MTP models need no -md.
+		if row.DraftPath != "" {
+			lines = append(lines, fmt.Sprintf("-md %s", strings.ReplaceAll(row.DraftPath, "\\", "/")))
+		}
 	}
 	lines = append(lines, fmt.Sprintf("--jinja --reasoning-format %s%s", rfmt, reasoningFlag))
 	// preserve_thinking keeps prior-turn <think> in history (Qwen3.6+); pointless
@@ -826,7 +839,7 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 		target = ov.VramTargetGB
 	}
 	specOh := 0.0
-	if effectiveSpec(meta, &ov) == "draft-mtp" {
+	if effectiveSpec(meta, &ov, row.DraftPath != "") == "draft-mtp" {
 		specOh = 0.34
 	}
 	prof := profile{
@@ -872,9 +885,9 @@ func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, pro
 // formatCtxTag renders a short ctx tag: 8192->"8k", 131072->"128k", 1048576->"1m".
 // effectiveSpec resolves the spec-type: MTP-capable models default to draft-mtp, others to
 // ngram-mod. An explicit override spec wins (set spec: "ngram-mod" to force ngram on an MTP model).
-func effectiveSpec(meta Metadata, ov *Override) string {
+func effectiveSpec(meta Metadata, ov *Override, hasDraft bool) string {
 	spec := "ngram-mod"
-	if meta.IsMTP {
+	if meta.IsMTP || hasDraft {
 		spec = "draft-mtp"
 	}
 	if ov != nil && ov.Spec != "" {

@@ -16,6 +16,26 @@ export function prettifyModelName(s: string): string {
     .join(" ");
 }
 
+export type ModelCategory = "llm" | "image" | "tts" | "transcribe";
+
+// Sub-menu order under the Models tab. LLM is the catch-all default.
+export const MODEL_CATEGORIES: { id: ModelCategory; label: string }[] = [
+  { id: "llm", label: "LLM" },
+  { id: "image", label: "Image" },
+  { id: "tts", label: "TTS" },
+  { id: "transcribe", label: "Transcribe" },
+];
+
+// Bucket a model by its declared capabilities. Anything that isn't clearly an
+// image/audio/rerank model falls through to "llm".
+export function modelCategory(m: Model): ModelCategory {
+  const c = m.capabilities;
+  if (c?.image_generation || c?.image_to_image) return "image";
+  if (c?.audio_speech) return "tts";
+  if (c?.audio_transcriptions) return "transcribe";
+  return "llm";
+}
+
 export function matchesCapabilities(model: Model, required: string[], matchAny = false): boolean {
   if (!required.length) return true;
   if (!model.capabilities) return false;

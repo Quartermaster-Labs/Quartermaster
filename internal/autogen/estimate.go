@@ -13,8 +13,9 @@ type EstimateInput struct {
 	KvInRam        bool
 	Spec           string
 	TargetVramGB   float64
-	CpuOffload     int  // >0 pins layers offloaded to CPU, overriding the sizer
-	CtxCheckpoints *int // nil => llama default (32); 0 disables; reserves checkpoint VRAM
+	CpuOffload     int     // >0 pins layers offloaded to CPU, overriding the sizer
+	CtxCheckpoints *int    // nil => llama default (32); 0 disables; reserves checkpoint VRAM
+	DraftGB        float64 // separate MTP/draft gguf weights (GB); 0 => baked-in or none
 }
 
 // EstimateResult is the previewed load plan for a candidate tuning.
@@ -68,9 +69,15 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		target = in.TargetVramGB
 	}
 
+	// Draft overhead: baked-in MTP nextn layer ~0.34 GB (KV+compute). A separate
+	// draft file (Gemma-4) instead charges its real on-disk weights + a small
+	// KV/compute pad, so big drafts scale up rather than under-counting at 0.34.
 	specOh := 0.0
 	if in.Spec == "draft-mtp" {
 		specOh = 0.34
+		if in.DraftGB > 0 {
+			specOh = in.DraftGB + 0.1
+		}
 	}
 
 	prof := profile{

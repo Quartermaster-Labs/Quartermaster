@@ -1,4 +1,4 @@
-import type { ChatMessage, ContentPart } from "./types";
+import type { ChatMessage, ContentPart, ToolCall, ToolDef } from "./types";
 
 export type Endpoint = "v1/chat/completions" | "v1/messages" | "v1/responses";
 
@@ -6,12 +6,16 @@ export interface StreamChunk {
   content: string;
   reasoning_content?: string;
   done: boolean;
+  // Accumulated tool calls, only present on the terminating chunk when the
+  // model requested tools. Only the chat/completions endpoint emits these.
+  tool_calls?: ToolCall[];
 }
 
 export interface ChatOptions {
   temperature?: number;
   endpoint?: Endpoint;
   max_tokens?: number;
+  tools?: ToolDef[];
 }
 
 function parseDataUrl(url: string): { media_type: string; data: string } {
@@ -46,16 +50,21 @@ function buildChatCompletionsBody(model: string, messages: ChatMessage[], option
     model,
     // Resend assistant reasoning_content so preserve_thinking templates (Qwen3.6+)
     // can keep prior-turn <think> in history; harmless to models that ignore it.
+    // tool_calls (assistant) and tool_call_id (tool role) are passed through so
+    // the model sees its own tool requests + the results on the next round.
     messages: messages.map((m) => ({
       role: m.role,
       content: m.content,
       ...(m.role === "assistant" && m.reasoning_content
         ? { reasoning_content: m.reasoning_content }
         : {}),
+      ...(m.role === "assistant" && m.tool_calls ? { tool_calls: m.tool_calls } : {}),
+      ...(m.role === "tool" && m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
     })),
     stream: true,
     temperature: options?.temperature,
     ...(options?.max_tokens ? { max_tokens: options.max_tokens } : {}),
+    ...(options?.tools && options.tools.length > 0 ? { tools: options.tools } : {}),
   };
 }
 
@@ -160,11 +169,52 @@ function parseChatCompletionsLine(line: string): StreamChunk | null {
   }
 }
 
+// Tool-call deltas arrive fragmented: each chunk carries a partial slice keyed
+// by `index`, with name + arguments streamed piecemeal. Accumulate by index.
+type ToolAcc = Record<number, { id: string; name: string; args: string }>;
+
+function accumulateToolCalls(acc: ToolAcc, line: string): void {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("data: ")) return;
+  const data = trimmed.slice(6);
+  if (data === "[DONE]") return;
+  try {
+    const calls = JSON.parse(data).choices?.[0]?.delta?.tool_calls;
+    if (!Array.isArray(calls)) return;
+    for (const tc of calls) {
+      const idx = tc.index ?? 0;
+      acc[idx] ??= { id: "", name: "", args: "" };
+      if (tc.id) acc[idx].id = tc.id;
+      if (tc.function?.name) acc[idx].name += tc.function.name;
+      if (tc.function?.arguments) acc[idx].args += tc.function.arguments;
+    }
+  } catch {
+    // ignore malformed line
+  }
+}
+
+function buildToolCalls(acc: ToolAcc): ToolCall[] {
+  return Object.keys(acc)
+    .map(Number)
+    .sort((a, b) => a - b)
+    .map((i) => ({
+      id: acc[i].id || `call_${i}`,
+      type: "function" as const,
+      function: { name: acc[i].name, arguments: acc[i].args },
+    }));
+}
+
 async function* parseChatCompletionsStream(
   reader: ReadableStreamDefaultReader<Uint8Array>
 ): AsyncGenerator<StreamChunk> {
   const decoder = new TextDecoder();
   let buffer = "";
+  const toolAcc: ToolAcc = {};
+
+  const finish = (): StreamChunk => {
+    const tcs = buildToolCalls(toolAcc);
+    return { content: "", done: true, ...(tcs.length > 0 ? { tool_calls: tcs } : {}) };
+  };
 
   while (true) {
     const { done, value } = await reader.read();
@@ -175,9 +225,10 @@ async function* parseChatCompletionsStream(
     buffer = lines.pop() || "";
 
     for (const line of lines) {
+      accumulateToolCalls(toolAcc, line);
       const result = parseChatCompletionsLine(line);
       if (result?.done) {
-        yield result;
+        yield finish();
         return;
       }
       if (result) {
@@ -186,10 +237,12 @@ async function* parseChatCompletionsStream(
     }
   }
 
+  accumulateToolCalls(toolAcc, buffer);
   const result = parseChatCompletionsLine(buffer);
   if (result && !result.done) {
     yield result;
   }
+  yield finish();
 }
 
 function parseSSEEventBlock(block: string): { event: string; data: string } | null {

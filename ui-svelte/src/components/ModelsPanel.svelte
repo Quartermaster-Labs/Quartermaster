@@ -1,13 +1,16 @@
 <script lang="ts">
   import { push } from "svelte-spa-router";
+  import { slide } from "svelte/transition";
   import { models, loadModel, unloadSingleModel, getModelConfig, putModelOverride, type ModelConfig, type ModelOverride } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
   import { selectedTabStore as chatTabStore, selectedModelStore as chatModelStore } from "../stores/playground";
-  import { prettifyModelName } from "../lib/modelUtils";
+  import { prettifyModelName, modelCategory, MODEL_CATEGORIES, type ModelCategory } from "../lib/modelUtils";
   import { scrollFade } from "../lib/scrollFade";
   import type { Model } from "../lib/types";
   import ModelConfigModal from "./ModelConfigModal.svelte";
   import InferenceFeedback from "./InferenceFeedback.svelte";
+
+  let { category = "llm" as ModelCategory }: { category?: ModelCategory } = $props();
 
   let pendingLoads = $state<Record<string, boolean>>({});
   const loadControllers = new Map<string, AbortController>();
@@ -85,7 +88,7 @@
   }
 
   let view = $derived.by(() => {
-    const listed = $models.filter((m) => $showUnlistedStore || !m.unlisted);
+    const listed = $models.filter((m) => modelCategory(m) === category && ($showUnlistedStore || !m.unlisted));
     const local = listed.filter((m) => !m.peerID);
     const peers = listed.filter((m) => m.peerID);
 
@@ -330,7 +333,7 @@
 
   <!-- Header / toolbar -->
   <div class="flex items-center justify-between shrink-0">
-    <h2 class="!pb-0">Models</h2>
+    <h2 class="!pb-0">{MODEL_CATEGORIES.find((c) => c.id === category)?.label ?? "Models"}</h2>
     <div class="flex items-center gap-2">
       <button
         class="btn btn--sm uppercase tracking-wide"
@@ -349,16 +352,11 @@
     </div>
   </div>
 
-  <!-- TOP: active model(s) — mini launch params + upstream log -->
-  <div class="shrink-0 h-72 min-h-[14rem]">
-    {#if topMembers.length === 0}
-      <div class="card h-full flex items-center justify-center text-center">
-        <div>
-          <p class="font-mono text-sm text-txtsecondary">No model loaded.</p>
-          <p class="font-mono text-xs text-txtsecondary mt-1">Pick one from the grid below — or open a variant — to load it onto the GPU.</p>
-        </div>
-      </div>
-    {:else}
+  <!-- TOP: active model(s) — mini launch params + inference feedback. Absent
+       when nothing is loaded so the card grid fills the screen; slides in (and
+       pushes the grid down) once a model is staged/live. -->
+  {#if topMembers.length > 0}
+    <div class="shrink-0 h-72 min-h-[14rem]" transition:slide={{ duration: 250 }}>
       <div class="grid h-full grid-cols-1 lg:grid-cols-2 gap-3">
         <!-- Active model settings -->
         <div class="card h-full overflow-auto pretty-scroll">
@@ -500,8 +498,8 @@
           <InferenceFeedback models={topMembers} />
         </div>
       </div>
-    {/if}
-  </div>
+    </div>
+  {/if}
 
   <!-- BOTTOM: flat card grid of other models -->
   <div class="flex-1 overflow-y-auto min-h-0 pretty-scroll scroll-fade-y px-0.5 py-1" use:scrollFade>

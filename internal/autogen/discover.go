@@ -19,6 +19,7 @@ type GgufRow struct {
 	SizeGB    float64
 	Publisher string
 	Repo      string
+	DraftPath string // separate MTP/draft gguf in the same dir (mtp-*.gguf), "" if none
 }
 
 var (
@@ -27,6 +28,9 @@ var (
 	// a separator before and a separator / .gguf after.
 	quantRe      = regexp.MustCompile(`(?i)[-_.](IQ\d+(?:_[A-Z0-9]+)*|Q\d+(?:_[A-Z0-9]+)*|F16|BF16|F32)(?:[._-]|\.gguf$)`)
 	ggufSuffixRe = regexp.MustCompile(`(?i)-GGUF$`)
+	// Separate MTP/draft sidecar (e.g. Gemma-4 ships "mtp-gemma-4-12B-it.gguf"
+	// alongside the main model). Loaded via -md + --spec-type draft-mtp, not served alone.
+	mtpFileRe = regexp.MustCompile(`(?i)^mtp[-_.]`)
 )
 
 // quantFromName extracts the quant token (upper-cased) from a gguf file name,
@@ -55,6 +59,7 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 	modelsRoot = info
 
 	var rows []GgufRow
+	mtpByDir := map[string]string{} // dir -> separate MTP draft gguf
 	walkErr := filepath.WalkDir(modelsRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable entries, matching -ErrorAction SilentlyContinue
@@ -63,6 +68,11 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 			return nil
 		}
 		name := d.Name()
+		// Separate MTP draft: record it for pairing, don't serve it as its own model.
+		if mtpFileRe.MatchString(name) {
+			mtpByDir[filepath.Dir(path)] = path
+			return nil
+		}
 		for _, p := range skipPatterns {
 			if ok, _ := filepath.Match(p, name); ok {
 				return nil
@@ -115,6 +125,13 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 	})
 	if walkErr != nil {
 		return nil, fmt.Errorf("walking %s: %w", modelsRoot, walkErr)
+	}
+	// Pair each model with the MTP draft sitting in its own dir (typically one
+	// model per dir). Enables --spec-type draft-mtp + -md without hand config.
+	for i := range rows {
+		if d := mtpByDir[filepath.Dir(rows[i].FullPath)]; d != "" {
+			rows[i].DraftPath = d
+		}
 	}
 	return rows, nil
 }

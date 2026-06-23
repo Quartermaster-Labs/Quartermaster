@@ -22,8 +22,11 @@ type GenerateFile struct {
 // Settings are the global generation knobs. Defaults mirror the PowerShell
 // Generate-Config.ps1 parameter defaults; applyDefaults fills any zero value.
 type Settings struct {
-	ModelsRoot     string  `yaml:"modelsRoot"`
-	ServerExe      string  `yaml:"serverExe"`
+	ModelsRoot string `yaml:"modelsRoot"`
+	ServerExe  string `yaml:"serverExe"`
+	// SdServerExe runs all-in-one diffusion GGUFs (stable-diffusion.cpp's
+	// sd-server). Empty => a sibling "sd-server" of ServerExe, else bare on PATH.
+	SdServerExe    string  `yaml:"sdServerExe"`
 	TargetVramGB   float64 `yaml:"targetVramGB"`
 	AutoVram       bool    `yaml:"autoVram"` // measure free VRAM at gen time, use it as TargetVramGB (minus VramOverheadGB)
 	VramOverheadGB float64 `yaml:"vramOverheadGB"`
@@ -195,6 +198,13 @@ type VariantSpec struct {
 func (s *Settings) applyDefaults() {
 	if s.ServerExe == "" {
 		s.ServerExe = "llama-server"
+	}
+	if s.SdServerExe == "" {
+		if strings.ContainsAny(s.ServerExe, `/\`) {
+			s.SdServerExe = filepath.Join(filepath.Dir(s.ServerExe), "sd-server")
+		} else {
+			s.SdServerExe = "sd-server"
+		}
 	}
 	if s.TargetVramGB == 0 {
 		s.TargetVramGB = 7
