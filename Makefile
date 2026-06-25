@@ -120,39 +120,29 @@ $(BUILD_DIR):
 # GitHub repo for `gh` (avoids "no default remote" when multiple remotes exist).
 RELEASE_REPO ?= Radu0120/llama-quartermaster
 
-# Run the full build pipeline (goreleaser + Windows installer) on CI for a semver
-# tag, via workflow_dispatch.
-#   make release                       -> releases the latest existing vX.Y.Z tag (DRAFT)
-#   make release-public                -> same, but PUBLIC
-#   make release VERSION=v0.5.1        -> creates that tag first, then releases it
-# Needs the `gh` CLI authenticated. The workflow is dispatch-only, so pushing a
-# tag does not trigger a second build.
+# Build the Windows binary + installer LOCALLY and upload the .exe to a GitHub
+# release (private-repo Actions minutes are metered; local build is free).
+#   make release                  -> latest existing vX.Y.Z tag, DRAFT
+#   make release-public           -> same, but PUBLIC
+#   make release VERSION=v0.5.1   -> creates that tag first, then releases it
+# Needs go, npm, gh (authed), and Inno Setup 6 (ISCC) installed locally.
 release:
-	@$(MAKE) --no-print-directory _dispatch-release DRAFT=true
+	@$(MAKE) --no-print-directory _build-release DRAFT=true
 
 release-public:
-	@$(MAKE) --no-print-directory _dispatch-release DRAFT=false
+	@$(MAKE) --no-print-directory _build-release DRAFT=false
 
-_dispatch-release:
-	@if [ -n "$$(git status --porcelain)" ]; then \
-		echo "Error: uncommitted changes. Commit or stash before releasing." >&2; exit 1; \
-	fi
-	@command -v gh >/dev/null || { echo "Error: gh CLI not found." >&2; exit 1; }
-	@tag="$(VERSION)"; \
-	if [ -n "$$tag" ]; then \
-		echo "$$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$$' || { \
+_build-release:
+	@targ=""; \
+	if [ -n "$(VERSION)" ]; then \
+		echo "$(VERSION)" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$$' || { \
 			echo "Error: VERSION must be vMAJOR.MINOR.PATCH (e.g. v0.5.1)" >&2; exit 1; }; \
-		git rev-parse "$$tag" >/dev/null 2>&1 || git tag "$$tag"; \
-	else \
-		tag=$$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -n 1); \
-		if [ -z "$$tag" ]; then \
-			echo "Error: no vX.Y.Z tag found. Create one or pass VERSION=vX.Y.Z" >&2; exit 1; \
-		fi; \
+		git rev-parse "$(VERSION)" >/dev/null 2>&1 || git tag "$(VERSION)"; \
+		targ="-Tag $(VERSION)"; \
 	fi; \
-	echo "releasing $$tag (draft=$(DRAFT))"; \
-	git push origin "$$tag"; \
-	gh workflow run release.yml -R $(RELEASE_REPO) -f tag="$$tag" -f draft=$(DRAFT); \
-	echo "Dispatched. Watch: gh run watch -R $(RELEASE_REPO) \$$(gh run list -R $(RELEASE_REPO) --workflow=release.yml -L1 --json databaseId -q '.[0].databaseId')"
+	if [ "$(DRAFT)" = "true" ]; then draft='$$true'; else draft='$$false'; fi; \
+	powershell -NoProfile -ExecutionPolicy Bypass \
+		-File packaging/windows/build-release.ps1 $$targ -Draft:$$draft -Repo $(RELEASE_REPO)
 
 GOOS ?= $(shell go env GOOS 2>/dev/null || echo linux)
 GOARCH ?= $(shell go env GOARCH 2>/dev/null || echo amd64)
@@ -164,5 +154,5 @@ test-ui:
 	cd ui-svelte && npm ci && npm run check && npm test
 
 # Phony targets
-.PHONY: all clean ui mac windows package-windows simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy release release-public _dispatch-release
+.PHONY: all clean ui mac windows package-windows simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy release release-public _build-release
 .PHONE: linux linux-arm64 linux-amd64

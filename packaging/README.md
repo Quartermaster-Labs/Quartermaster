@@ -1,9 +1,13 @@
-# Windows installer (release CI)
+# Windows installer (local build)
 
-Tagging a release (`make release && git push origin vN`) builds, besides the
-goreleaser archives, a per-user Windows installer
-(`llama-quartermaster-setup-vN.exe`) via Inno Setup and attaches it to the
-GitHub Release. See `windows/installer.iss` + `.github/workflows/release.yml`.
+`make release` builds a per-user Windows installer
+(`llama-quartermaster-setup-vX.Y.Z.exe`) via Inno Setup **locally** and uploads
+it to a GitHub Release (draft). `make release-public` publishes it. Needs go,
+npm, `gh` (authed), and Inno Setup 6 (`choco install innosetup -y`). Bare
+`make release` uses the latest `vX.Y.Z` tag; `make release VERSION=v0.5.1`
+creates that tag first. See `windows/installer.iss` + `windows/build-release.ps1`.
+
+Build runs locally because the repo is private (CI Actions minutes are metered).
 
 The wizard optionally downloads `llama-server` (llama.cpp) and `sd-server`
 (stable-diffusion.cpp) for a chosen backend (Vulkan/CUDA/CPU) into `bin\` and
