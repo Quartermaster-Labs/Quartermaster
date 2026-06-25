@@ -53,6 +53,9 @@ jobs:
     needs: goreleaser
     permissions:
       contents: write
+    # `secrets` can't be used in `if:`; expose it as env so steps can gate on it.
+    env:
+      SIGN_PFX_BASE64: ${{ secrets.SIGN_PFX_BASE64 }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
@@ -89,7 +92,7 @@ jobs:
           "llama-quartermaster $tag built $date" | Out-File -Encoding utf8 staging\VERSION.txt
 
       - name: Sign binary (optional)
-        if: ${{ secrets.SIGN_PFX_BASE64 != '' }}
+        if: ${{ env.SIGN_PFX_BASE64 != '' }}
         shell: pwsh
         env:
           PFX_B64: ${{ secrets.SIGN_PFX_BASE64 }}
@@ -107,7 +110,7 @@ jobs:
           & $iscc "/DMyAppVersion=$tag" "/DStagingDir=$staging" "/DOutputDir=$outdir" packaging\windows\installer.iss
 
       - name: Sign installer (optional)
-        if: ${{ secrets.SIGN_PFX_BASE64 != '' }}
+        if: ${{ env.SIGN_PFX_BASE64 != '' }}
         shell: pwsh
         env:
           PFX_B64: ${{ secrets.SIGN_PFX_BASE64 }}
