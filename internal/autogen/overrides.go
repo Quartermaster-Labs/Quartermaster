@@ -23,7 +23,13 @@ type GenerateFile struct {
 // Generate-Config.ps1 parameter defaults; applyDefaults fills any zero value.
 type Settings struct {
 	ModelsRoot string `yaml:"modelsRoot"`
-	ServerExe  string `yaml:"serverExe"`
+	// CategoryRoots are optional per-UI-category extra scan folders
+	// ("llm"|"image"|"tts"|"transcribe" -> path). Discovery scans the union of
+	// ModelsRoot + these; capability detection still decides each model's
+	// category/engine, so a root is just additional scan scope (organizational),
+	// not a hard tag. Empty/absent => only ModelsRoot is scanned.
+	CategoryRoots map[string]string `yaml:"categoryRoots"`
+	ServerExe     string            `yaml:"serverExe"`
 	// SdServerExe runs all-in-one diffusion GGUFs (stable-diffusion.cpp's
 	// sd-server). Empty => a sibling "sd-server" of ServerExe, else bare on PATH.
 	SdServerExe    string  `yaml:"sdServerExe"`
@@ -50,6 +56,51 @@ type Settings struct {
 	Threads            int           `yaml:"threads"`
 	TtlSec             int           `yaml:"ttlSec"`
 	HealthCheckTimeout int           `yaml:"healthCheckTimeout"`
+	// DryDefault is the fleet-wide DRY-sampler default. nil => on (legacy
+	// behavior); set false to make DRY opt-in (a model turns it on via Override.Dry).
+	DryDefault *bool `yaml:"dryDefault"`
+	// APIKeys are the UI-managed API keys emitted into the generated config's
+	// apiKeys / apiKeyModels blocks. Owned by the web UI (sidecar), not the
+	// hand-authored generate file. Empty Models on an entry => full access.
+	APIKeys []APIKeyEntry `yaml:"apiKeys"`
+}
+
+// APIKeyEntry is one named API key plus the model IDs it may reach. Name is a
+// UI label only; Key is the secret; empty Models => unrestricted (full access,
+// and admin rights over the management endpoints).
+type APIKeyEntry struct {
+	Name   string   `yaml:"name"`
+	Key    string   `yaml:"key"`
+	Models []string `yaml:"models"`
+}
+
+// CategoryOrder is the canonical UI-category order; RootList walks CategoryRoots
+// in this order for deterministic scanning + hashing.
+var CategoryOrder = []string{"llm", "image", "tts", "transcribe"}
+
+// RootList returns the ordered, de-duplicated set of folders to scan: ModelsRoot
+// first, then each CategoryRoots value in CategoryOrder. Blank entries are
+// dropped; duplicates (case/separator-insensitive) collapse to the first.
+func (s Settings) RootList() []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(p string) {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			return
+		}
+		key := strings.ToLower(filepath.ToSlash(p))
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, p)
+	}
+	add(s.ModelsRoot)
+	for _, c := range CategoryOrder {
+		add(s.CategoryRoots[c])
+	}
+	return out
 }
 
 // SettingsPatch is a partial Settings override written by the dashboard's
@@ -62,6 +113,7 @@ type SettingsPatch struct {
 	VramOverheadGB *float64 `yaml:"vramOverheadGB,omitempty"`
 	MaxRamGB       *float64 `yaml:"maxRamGB,omitempty"`
 	AutoVram       *bool    `yaml:"autoVram,omitempty"`
+	DryDefault     *bool    `yaml:"dryDefault,omitempty"`
 }
 
 // apply overlays the patch's set fields onto s.
@@ -80,6 +132,9 @@ func (p *SettingsPatch) apply(s *Settings) {
 	}
 	if p.AutoVram != nil {
 		s.AutoVram = *p.AutoVram
+	}
+	if p.DryDefault != nil {
+		s.DryDefault = p.DryDefault
 	}
 }
 
@@ -100,13 +155,16 @@ type Override struct {
 	Match        string   `yaml:"match"`
 	Quant        string   `yaml:"quant"`
 	Aliases      []string `yaml:"aliases"`
-	Spec         string   `yaml:"spec"`         // "draft-mtp" | "" (=> ngram-mod)
+	Spec         string   `yaml:"spec"`         // "draft-mtp" | "" (=> ngram-mod); chainable with "+"
 	ReasoningFmt string   `yaml:"reasoningFmt"` // "auto" | "off" | "" (=> auto)
-	CtxVariants  []int    `yaml:"ctxVariants"`
-	Ctx          int      `yaml:"ctx"`
-	KvK          string   `yaml:"kvK"`
-	KvV          string   `yaml:"kvV"`
-	KvInRam      bool     `yaml:"kvInRam"`
+	// ReasoningBudget caps thinking tokens (--reasoning-budget N). 0 => omit (no
+	// cap). Inherited by ctx-tier variants; named variants are standalone.
+	ReasoningBudget int    `yaml:"reasoningBudget"`
+	CtxVariants     []int  `yaml:"ctxVariants"`
+	Ctx             int    `yaml:"ctx"`
+	KvK             string `yaml:"kvK"`
+	KvV             string `yaml:"kvV"`
+	KvInRam         bool   `yaml:"kvInRam"`
 	// VramTargetGB caps how much VRAM this model is sized against. 0 => inherit
 	// settings.TargetVramGB (the global budget). Lets one model run leaner than
 	// the fleet default without a separate variant.
@@ -140,14 +198,56 @@ type Override struct {
 	// stripping them (Qwen3.6+). No-op when reasoning is off. Requires the client
 	// to send reasoning_content back on assistant messages.
 	PreserveThinking bool `yaml:"preserveThinking"`
+	// Dry sampler (repetition penalty). Dry==nil => on with defaults; *Dry==false
+	// omits the flags. DryMultiplier/DryBase/DryAllowedLength override the defaults
+	// (0.8 / 1.75 / 3); 0 => default. Mirrored on VariantSpec.
+	Dry              *bool   `yaml:"dry"`
+	DryMultiplier    float64 `yaml:"dryMultiplier"`
+	DryBase          float64 `yaml:"dryBase"`
+	DryAllowedLength int     `yaml:"dryAllowedLength"`
+	// Speculative-decode sub-knobs, emitted only for the matching Spec backend;
+	// 0/false => omit (llama-server default). SpecDraftNMax defaults to 2 for
+	// draft-mtp; the SpecNgram* knobs apply to the ngram-map-k4v backend.
+	SpecDraftNMax    int  `yaml:"specDraftNMax"`
+	SpecDefault      bool `yaml:"specDefault"`
+	SpecNgramSizeN   int  `yaml:"specNgramSizeN"`
+	SpecNgramSizeM   int  `yaml:"specNgramSizeM"`
+	SpecNgramMinHits int  `yaml:"specNgramMinHits"`
 	// ExtraArgs are additional llama-server flags appended verbatim to the emitted
 	// command, for knobs autogen doesn't model (e.g. --rope-freq-scale,
 	// --override-kv). The structured fields above still own the computed flags;
 	// these are pure passthrough. The UI captures anything it can't map from the
 	// editable launch-parameters box into here.
 	ExtraArgs string `yaml:"extraArgs"`
-	Unlisted  bool   `yaml:"unlisted"`
-	Skip      bool   `yaml:"skip"`
+	// --- Image (diffusion / sd-server) knobs ---
+	// Only consumed for image-arch models (emitImageModel / imageCmdLines); ignored
+	// by the llama-server path. The component paths are the external VAE + text
+	// encoder(s) a diffusion-only GGUF needs (it loads via --diffusion-model, not an
+	// all-in-one checkpoint). Empty => omit the flag.
+	VaePath         string `yaml:"vaePath"`         // --vae
+	ClipLPath       string `yaml:"clipLPath"`       // --clip_l
+	ClipGPath       string `yaml:"clipGPath"`       // --clip_g
+	T5Path          string `yaml:"t5Path"`          // --t5xxl
+	TextEncoderPath string `yaml:"textEncoderPath"` // --llm (Z-Image / Lumina text encoder)
+	// Placement tri-states: "" => the generator default (shown), "on"/"off" pin it.
+	//   OffloadToCpu: "" => auto (sizer offloads when weights+compute don't fit)
+	//   TeOnCpu:      "" => on  (--backend te=cpu); "off" keeps the encoder on GPU
+	//   VaeTiling:    "" => on  (--vae-tiling, caps the VAE decode VRAM spike)
+	//   DiffusionFa:  "" => on  (--diffusion-fa)
+	OffloadToCpu string `yaml:"offloadToCpu"`
+	TeOnCpu      string `yaml:"teOnCpu"`
+	VaeTiling    string `yaml:"vaeTiling"`
+	DiffusionFa  string `yaml:"diffusionFa"`
+	// Generation defaults baked into the sd-server command (applied when a request
+	// omits them). 0/empty => omit (sd-server's own default). DefaultCfg matters:
+	// Z-Image-Turbo blurs unless cfg-scale is pinned to 1.0.
+	DefaultSteps   int     `yaml:"defaultSteps"`   // --steps
+	DefaultCfg     float64 `yaml:"defaultCfg"`     // --cfg-scale
+	DefaultSampler string  `yaml:"defaultSampler"` // --sampling-method
+	DefaultWidth   int     `yaml:"defaultWidth"`   // --width
+	DefaultHeight  int     `yaml:"defaultHeight"`  // --height
+	Unlisted       bool    `yaml:"unlisted"`
+	Skip           bool    `yaml:"skip"`
 	// Variants are named custom profiles emitted in addition to the solo model:
 	// each becomes "<model>-<name>" with its own ctx/VRAM/kv/spec. Use-case
 	// agnostic — the UI's "create variant" flow writes these.
@@ -181,9 +281,13 @@ type VariantSpec struct {
 	CtxCheckpoints *int     `yaml:"ctxCheckpoints"`
 	Unlisted       bool     `yaml:"unlisted"`
 	Aliases        []string `yaml:"aliases"`
+	// PreserveThinking is *bool so a standalone variant defaults preserve-on
+	// (nil => emit, matching the Qwen3.6 reasoning default); false disables it.
+	PreserveThinking *bool `yaml:"preserveThinking"`
 	// Engine knobs mirroring Override, so a variant can carry the full launch
-	// shape (the UI's "full settings page" for a variant). Zero/empty => inherit
-	// the model-wide Override value. Semantics match the Override fields above.
+	// shape (the UI's "full settings page" for a variant). Named variants are
+	// STANDALONE: zero/empty => the generator default, NOT the model-wide Override
+	// (the Default tab and a variant are independent profiles).
 	KvInRam    bool   `yaml:"kvInRam"`
 	CpuOffload int    `yaml:"cpuOffload"`
 	FlashAttn  string `yaml:"flashAttn"`
@@ -192,6 +296,35 @@ type VariantSpec struct {
 	Threads    int    `yaml:"threads"`
 	Parallel   int    `yaml:"parallel"`
 	ExtraArgs  string `yaml:"extraArgs"`
+	// Sampler / speculative sub-knobs mirroring Override; 0/empty => inherit the
+	// model-wide value. (Dry on/off is the *bool field above.)
+	DryMultiplier    float64 `yaml:"dryMultiplier"`
+	DryBase          float64 `yaml:"dryBase"`
+	DryAllowedLength int     `yaml:"dryAllowedLength"`
+	SpecDraftNMax    int     `yaml:"specDraftNMax"`
+	SpecDefault      bool    `yaml:"specDefault"`
+	SpecNgramSizeN   int     `yaml:"specNgramSizeN"`
+	SpecNgramSizeM   int     `yaml:"specNgramSizeM"`
+	SpecNgramMinHits int     `yaml:"specNgramMinHits"`
+	// Image (sd-server) knobs. Unlike the llama knobs above, an image variant
+	// INHERITS the model-wide Override for anything it leaves empty (component
+	// paths + placement) and overrides only what it sets — the natural use is a
+	// generation preset (e.g. "fast" 8-step cfg 1 vs "quality" 30-step) on the
+	// same model + encoders. See mergeImageVariant.
+	VaePath         string  `yaml:"vaePath"`
+	ClipLPath       string  `yaml:"clipLPath"`
+	ClipGPath       string  `yaml:"clipGPath"`
+	T5Path          string  `yaml:"t5Path"`
+	TextEncoderPath string  `yaml:"textEncoderPath"`
+	OffloadToCpu    string  `yaml:"offloadToCpu"`
+	TeOnCpu         string  `yaml:"teOnCpu"`
+	VaeTiling       string  `yaml:"vaeTiling"`
+	DiffusionFa     string  `yaml:"diffusionFa"`
+	DefaultSteps    int     `yaml:"defaultSteps"`
+	DefaultCfg      float64 `yaml:"defaultCfg"`
+	DefaultSampler  string  `yaml:"defaultSampler"`
+	DefaultWidth    int     `yaml:"defaultWidth"`
+	DefaultHeight   int     `yaml:"defaultHeight"`
 }
 
 // applyDefaults fills zero-valued settings with the PowerShell defaults.
@@ -266,6 +399,20 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 	if sideDV != nil {
 		gf.Settings.DefaultVariants = sideDV
 	}
+	// UI-owned per-category scan folders overlay the file's (the folder picker
+	// writes these). Stored at the sidecar top level so a VRAM reset can't wipe them.
+	sideRoots, err := LoadSidecarCategoryRoots(path)
+	if err != nil {
+		return GenerateFile{}, err
+	}
+	if len(sideRoots) > 0 {
+		if gf.Settings.CategoryRoots == nil {
+			gf.Settings.CategoryRoots = map[string]string{}
+		}
+		for k, v := range sideRoots {
+			gf.Settings.CategoryRoots[k] = v
+		}
+	}
 	if modelsDirOverride != "" {
 		gf.Settings.ModelsRoot = modelsDirOverride
 	}
@@ -279,6 +426,15 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 	}
 	if len(sideRows) > 0 {
 		gf.Overrides = append(append([]Override{}, sideRows...), gf.Overrides...)
+	}
+	// UI-owned API keys replace the file's list wholesale (the UI sends the full
+	// list). nil => inherit the generate file's apiKeys.
+	sideKeys, err := LoadSidecarAPIKeys(path)
+	if err != nil {
+		return GenerateFile{}, err
+	}
+	if sideKeys != nil {
+		gf.Settings.APIKeys = sideKeys
 	}
 	// A blank modelsRoot is not an error: the server boots with an empty catalog
 	// so a setup UI can point it at a models folder later. Discovery/hashing

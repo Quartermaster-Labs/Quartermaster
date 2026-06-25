@@ -151,12 +151,18 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	// to the models that listener exposes (scoped=true). Peer models are not in
 	// any local group, so they are omitted from restricted listeners.
 	allowed, scoped := listenerModelSet(r)
+	// An API key may further restrict the catalog to a subset of models. Both
+	// scopes apply: a model must pass the listener AND the key to be listed.
+	keyAllowed, keyScoped := apiKeyModelSet(r)
 
 	for id, mc := range s.cfg.Models {
 		if mc.Unlisted {
 			continue
 		}
 		if scoped && !allowed[id] {
+			continue
+		}
+		if keyScoped && !keyAllowed[id] {
 			continue
 		}
 		data = append(data, newRecord(id, mc.Name, mc.Description, mc.Metadata, mc.Capabilities))
@@ -170,7 +176,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if !scoped {
+	if !scoped && !keyScoped {
 		for peerID, peer := range s.cfg.Peers {
 			for _, modelID := range peer.Models {
 				data = append(data, newRecord(modelID, peerID+": "+modelID, "", map[string]any{"peerID": peerID}, config.ModelCapConfig{}))

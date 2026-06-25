@@ -1,7 +1,7 @@
 <script lang="ts">
   import { push } from "svelte-spa-router";
   import { slide } from "svelte/transition";
-  import { models, loadModel, unloadSingleModel, getModelConfig, putModelOverride, type ModelConfig, type ModelOverride } from "../stores/api";
+  import { models, loadModel, unloadSingleModel, getModelConfig, getSettings, pickModelsFolder, type ModelConfig } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
   import { selectedTabStore as chatTabStore, selectedModelStore as chatModelStore } from "../stores/playground";
   import { prettifyModelName, modelCategory, MODEL_CATEGORIES, type ModelCategory } from "../lib/modelUtils";
@@ -33,10 +33,40 @@
   const showUnlistedStore = persistentStore<boolean>("showUnlisted", true);
   const showIdorNameStore = persistentStore<"id" | "name">("showIdorName", "name");
 
-  // Shared playground singletons — set them, then jump to /test.
-  function chatWith(id: string): void {
-    chatModelStore.set(id);
-    chatTabStore.set("chat");
+  // Per-category scan folder (folder icon in the toolbar). Loaded for the
+  // tooltip; effective path falls back to the shared modelsRoot when unset.
+  let folderPath = $state("");
+  let picking = $state(false);
+  async function refreshFolder(): Promise<void> {
+    try {
+      const s = await getSettings();
+      folderPath = s.categoryRoots?.[category] || s.modelsRoot || "";
+    } catch {
+      folderPath = "";
+    }
+  }
+  $effect(() => {
+    category; // re-run when the tab changes
+    refreshFolder();
+  });
+  async function pickFolder(): Promise<void> {
+    if (picking) return;
+    picking = true;
+    try {
+      const path = await pickModelsFolder(category);
+      if (path) folderPath = path; // null => user cancelled; regen+reload already ran
+    } catch (e) {
+      console.error(e);
+    } finally {
+      picking = false;
+    }
+  }
+
+  // Shared playground singletons — set them, then jump to /test. Image models
+  // open the Images tab (generate), everything else the Chat tab.
+  function chatWith(m: Model): void {
+    chatModelStore.set(m.id);
+    chatTabStore.set(m.capabilities?.image_generation ? "images" : "chat");
     push("/test");
   }
 
@@ -148,78 +178,6 @@
     }
   });
 
-  // --- Inline param editing for the active model (apply via Reload) ---
-  type Draft = { ctx: string; kvK: string; kvV: string; spec: string; reasoningFmt: string };
-  let drafts = $state<Record<string, Draft>>({});
-  let baselines = $state<Record<string, Draft>>({});
-  let reloading = $state<Record<string, boolean>>({});
-
-  const KV_OPTS = ["", "q8_0", "q4_0", "q5_1", "f16", "bf16"];
-  const SPEC_OPTS = ["", "none", "draft-mtp", "ngram-mod"];
-  const REASON_OPTS = ["", "auto"];
-
-  function draftFrom(cfg: ModelConfig): Draft {
-    const f = parseFlags(cfg.cmd);
-    const o = cfg.override;
-    return {
-      ctx: String(o?.ctx || f.ctx || ""),
-      kvK: o?.kvK ?? f.kvK ?? "",
-      kvV: o?.kvV ?? f.kvV ?? "",
-      spec: o?.spec ?? "",
-      reasoningFmt: o?.reasoningFmt ?? "",
-    };
-  }
-
-  // Seed a draft + baseline once per fetched config.
-  $effect(() => {
-    for (const [id, cfg] of Object.entries(configs)) {
-      if (drafts[id]) continue;
-      const d = draftFrom(cfg);
-      drafts = { ...drafts, [id]: { ...d } };
-      baselines = { ...baselines, [id]: { ...d } };
-    }
-  });
-
-  function draftDirty(id: string): boolean {
-    const a = drafts[id];
-    const b = baselines[id];
-    if (!a || !b) return false;
-    return a.ctx !== b.ctx || a.kvK !== b.kvK || a.kvV !== b.kvV || a.spec !== b.spec || a.reasoningFmt !== b.reasoningFmt;
-  }
-
-  // Apply any edited params (regen + hot-reload config) then (re)load the model.
-  // Used for both "Reload" (live, dirty) and "Load" (staged) from the top card.
-  async function applyDraftAndLoad(m: Model): Promise<void> {
-    if (reloading[m.id]) return;
-    reloading[m.id] = true;
-    try {
-      if (draftDirty(m.id)) {
-        const cfg = configs[m.id];
-        const d = drafts[m.id];
-        if (cfg && d) {
-          const override: ModelOverride = {
-            ...(cfg.override ?? {}),
-            ctx: d.ctx ? Number(d.ctx) : 0,
-            kvK: d.kvK,
-            kvV: d.kvV,
-            spec: d.spec,
-            reasoningFmt: d.reasoningFmt,
-          };
-          await putModelOverride(m.id, override);
-          // Drop caches so they re-seed from the freshly generated command.
-          configs = Object.fromEntries(Object.entries(configs).filter(([k]) => k !== m.id));
-          drafts = Object.fromEntries(Object.entries(drafts).filter(([k]) => k !== m.id));
-          baselines = Object.fromEntries(Object.entries(baselines).filter(([k]) => k !== m.id));
-        }
-      }
-      await loadModel(m.id);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      reloading[m.id] = false;
-    }
-  }
-
   // Pull a curated set of effective launch flags straight off the run command,
   // so the panel reflects what's actually running.
   const FLAG_MAP: Record<string, string> = {
@@ -235,6 +193,12 @@
     "--spec-type": "spec",
     "--reasoning-format": "reasoningFmt",
     "--reasoning": "reasoning", // captures the `--reasoning off` switch
+    // sd-server image generation defaults
+    "--steps": "steps",
+    "--cfg-scale": "cfg",
+    "--sampling-method": "sampler",
+    "--width": "width",
+    "--height": "height",
   };
   function parseFlags(cmd: string): Record<string, string> {
     const out: Record<string, string> = {};
@@ -248,8 +212,15 @@
 
   // Effective (resolved) values the empty "inherit" option falls back to, parsed
   // from the actual launch command, so the dropdown shows what "default" means.
-  function specDefault(f: Record<string, string>): string {
-    return f.spec || "auto";
+  // parseFlags collapses repeated --spec-type to the last one; the spec chain
+  // emits one per backend, so collect them all for an honest readout.
+  function specList(cmd: string): string {
+    const toks = cmd.split(/\s+/).filter(Boolean);
+    const specs: string[] = [];
+    for (let i = 0; i < toks.length - 1; i++) {
+      if (toks[i] === "--spec-type") specs.push(toks[i + 1]);
+    }
+    return specs.length ? specs.join(" + ") : "none";
   }
   function reasonDefault(f: Record<string, string>): string {
     return f.reasoning === "off" ? "off" : f.reasoningFmt || "auto";
@@ -330,11 +301,26 @@
       title={text}
       aria-label={text}>?</span>
   {/snippet}
+  {#snippet roField(label: string, value: string, tip: string)}
+    <div>
+      <div class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">{label} {@render hint(tip)}</div>
+      <div class="text-txtmain tabular-nums pt-1.5 break-all">{value}</div>
+    </div>
+  {/snippet}
 
   <!-- Header / toolbar -->
   <div class="flex items-center justify-between shrink-0">
     <h2 class="!pb-0">{MODEL_CATEGORIES.find((c) => c.id === category)?.label ?? "Models"}</h2>
     <div class="flex items-center gap-2">
+      <button
+        class="btn btn--sm inline-flex items-center justify-center disabled:opacity-50"
+        onclick={pickFolder}
+        disabled={picking}
+        aria-label="Set models folder"
+        title={`Models folder${folderPath ? ": " + folderPath : ""} — click to choose`}
+      >
+        <svg viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5" aria-hidden="true"><path d="M3.5 4A1.5 1.5 0 0 0 2 5.5v9A1.5 1.5 0 0 0 3.5 16h13a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 16.5 6H10L8.4 4.4A1.5 1.5 0 0 0 7.35 4H3.5Z" /></svg>
+      </button>
       <button
         class="btn btn--sm uppercase tracking-wide"
         onclick={() => showIdorNameStore.update((p) => (p === "name" ? "id" : "name"))}
@@ -363,8 +349,6 @@
           {#each topMembers as m (m.id)}
             {@const cfg = configs[m.id]}
             {@const flags = cfg ? parseFlags(cfg.cmd) : {}}
-            {@const d = drafts[m.id]}
-            {@const dirty = draftDirty(m.id)}
             {@const live = isLive(m)}
             <div class="mb-3 last:mb-0">
               <div class="flex items-center gap-2">
@@ -381,26 +365,22 @@
                       <path fill-rule="evenodd" d="M8.34 1.804A1 1 0 0 1 9.32 1h1.36a1 1 0 0 1 .98.804l.295 1.473c.497.144.97.342 1.41.587l1.25-.834a1 1 0 0 1 1.262.125l.962.962a1 1 0 0 1 .125 1.262l-.834 1.25c.245.44.443.913.587 1.41l1.473.294a1 1 0 0 1 .804.98v1.361a1 1 0 0 1-.804.98l-1.473.295a6.95 6.95 0 0 1-.587 1.41l.834 1.25a1 1 0 0 1-.125 1.262l-.962.962a1 1 0 0 1-1.262.125l-1.25-.834c-.44.245-.913.443-1.41.587l-.294 1.473a1 1 0 0 1-.98.804H9.32a1 1 0 0 1-.98-.804l-.295-1.473a6.95 6.95 0 0 1-1.41-.587l-1.25.834a1 1 0 0 1-1.262-.125l-.962-.962a1 1 0 0 1-.125-1.262l.834-1.25a6.95 6.95 0 0 1-.587-1.41l-1.473-.294A1 1 0 0 1 1 10.68V9.32a1 1 0 0 1 .804-.98l1.473-.295c.144-.497.342-.97.587-1.41l-.834-1.25a1 1 0 0 1 .125-1.262l.962-.962A1 1 0 0 1 5.38 3.03l1.25.834c.44-.245.913-.443 1.41-.587l.294-1.473ZM10 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" clip-rule="evenodd" />
                     </svg>
                   </button>
-                  {#if live && dirty}
-                    <button
-                      class="btn btn--sm btn--primary py-1.5 inline-flex items-center gap-1.5 uppercase tracking-wide"
-                      onclick={() => applyDraftAndLoad(m)}
-                      disabled={reloading[m.id]}
-                      title="Apply edited parameters and restart this model"
-                    >
-                      {@render playIcon()}
-                      {reloading[m.id] ? "Reloading…" : "Reload"}
-                    </button>
-                  {/if}
                   {#if live}
                     <button
                       class="btn btn--sm py-1.5 inline-flex items-center gap-1.5 uppercase tracking-wide hover:border-primary hover:text-primary"
-                      onclick={() => chatWith(m.id)}
+                      onclick={() => chatWith(m)}
                       disabled={m.state !== "ready"}
-                      title="Open this model in the chat playground"
+                      title={m.capabilities?.image_generation
+                        ? "Open this model in the image playground"
+                        : "Open this model in the chat playground"}
                     >
-                      <svg viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3 shrink-0" aria-hidden="true"><path fill-rule="evenodd" d="M10 3c-4.418 0-8 2.91-8 6.5 0 1.66.77 3.17 2.03 4.32-.1.9-.42 1.78-.95 2.5a.5.5 0 0 0 .5.78c1.46-.25 2.7-.78 3.66-1.42.86.21 1.78.32 2.76.32 4.418 0 8-2.91 8-6.5S14.418 3 10 3Z" clip-rule="evenodd" /></svg>
-                      Chat
+                      {#if m.capabilities?.image_generation}
+                        <svg viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3 shrink-0" aria-hidden="true"><path fill-rule="evenodd" d="M1 5.25A2.25 2.25 0 0 1 3.25 3h13.5A2.25 2.25 0 0 1 19 5.25v9.5A2.25 2.25 0 0 1 16.75 17H3.25A2.25 2.25 0 0 1 1 14.75v-9.5Zm1.5 5.81v3.69c0 .414.336.75.75.75h13.5a.75.75 0 0 0 .75-.75v-2.69l-2.22-2.219a.75.75 0 0 0-1.06 0l-1.91 1.909.47.47a.75.75 0 1 1-1.06 1.06L6.53 8.091a.75.75 0 0 0-1.06 0l-2.97 2.97ZM12 7a1 1 0 1 1 2 0 1 1 0 0 1-2 0Z" clip-rule="evenodd" /></svg>
+                        Generate
+                      {:else}
+                        <svg viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3 shrink-0" aria-hidden="true"><path fill-rule="evenodd" d="M10 3c-4.418 0-8 2.91-8 6.5 0 1.66.77 3.17 2.03 4.32-.1.9-.42 1.78-.95 2.5a.5.5 0 0 0 .5.78c1.46-.25 2.7-.78 3.66-1.42.86.21 1.78.32 2.76.32 4.418 0 8-2.91 8-6.5S14.418 3 10 3Z" clip-rule="evenodd" /></svg>
+                        Chat
+                      {/if}
                     </button>
                     <button
                       class="btn btn--sm py-1.5 inline-flex items-center gap-1.5 uppercase tracking-wide hover:border-error hover:text-error"
@@ -413,12 +393,12 @@
                   {:else}
                     <button
                       class="btn btn--sm btn--primary py-1.5 inline-flex items-center gap-1.5 uppercase tracking-wide"
-                      onclick={() => applyDraftAndLoad(m)}
-                      disabled={reloading[m.id]}
-                      title="Load this model with the parameters above"
+                      onclick={() => handleLoadModel(m.id)}
+                      disabled={pendingLoads[m.id]}
+                      title="Load this model with the parameters shown"
                     >
                       {@render playIcon()}
-                      {reloading[m.id] ? "Loading…" : "Load"}
+                      {pendingLoads[m.id] ? "Loading…" : "Load"}
                     </button>
                     <button
                       class="inline-flex items-center justify-center p-1.5 rounded-md border border-card-border text-txtsecondary hover:text-error hover:border-error transition-colors"
@@ -433,53 +413,27 @@
               </div>
               <div class="mt-1.5 font-mono text-sm uppercase tracking-widest text-txtsecondary break-words" title={m.id}>{display(m)}</div>
 
-              <!-- Editable launch params (apply via Reload) -->
-              {#if d}
+              <!-- Effective launch params, read off the run command (view only;
+                   edit via the cogwheel). -->
+              {#if cfg?.isImage}
+                <!-- Image (sd-server) generation defaults -->
                 <div class="mt-2 grid grid-cols-3 gap-x-3 gap-y-2 font-mono text-xs">
-                  <label class="flex flex-col gap-0.5">
-                    <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">Ctx {@render hint("Context window (tokens) this model loads with. Empty = the size the autogen sizer picked to fit free VRAM. Applies on Reload.")}</span>
-                    <input
-                      type="number" min="0" step="1024" placeholder={flags.ctx ? `sized ${flags.ctx}` : "auto"} bind:value={d.ctx}
-                      onwheel={(e) => {
-                        if (document.activeElement !== e.currentTarget) return;
-                        e.preventDefault();
-                        d.ctx = String(Math.max(0, (Number(d.ctx) || 0) + (e.deltaY < 0 ? 1024 : -1024)));
-                      }}
-                      class="w-full rounded border border-card-border bg-background px-1.5 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary"
-                    />
-                  </label>
-                  <div>
-                    <div class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">GPU layers {@render hint("Layers resident on the GPU (-ngl), as chosen by the sizer for the current plan. Read-only here; pin it via the cogwheel's offload setting.")}</div>
-                    <div class="text-txtmain tabular-nums pt-1.5">{nglDisplay(flags.ngl, cfg?.blockCount ?? 0)}</div>
-                  </div>
-                  <div>
-                    <div class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">CPU MoE {@render hint("Expert layers offloaded to the CPU (--n-cpu-moe) for MoE models. Read-only here; pin it via the cogwheel's offload setting.")}</div>
-                    <div class="text-txtmain tabular-nums pt-1.5">{flags.cpuMoe ?? "—"}</div>
-                  </div>
-                  <label class="flex flex-col gap-0.5">
-                    <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">KV K {@render hint("Quantization of the attention key cache (-ctk). Lower bits = less VRAM, slightly less accuracy. auto = q8_0. Must match KV V for flash-attention.")}</span>
-                    <select bind:value={d.kvK} class="w-full rounded border border-card-border bg-background px-1.5 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary">
-                      {#each KV_OPTS as o (o)}<option value={o}>{o === "" ? `default (${flags.kvK || "q8_0"})` : o}</option>{/each}
-                    </select>
-                  </label>
-                  <label class="flex flex-col gap-0.5">
-                    <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">KV V {@render hint("Quantization of the attention value cache (-ctv). Lower bits = less VRAM. auto = q8_0. Must match KV K for flash-attention.")}</span>
-                    <select bind:value={d.kvV} class="w-full rounded border border-card-border bg-background px-1.5 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary">
-                      {#each KV_OPTS as o (o)}<option value={o}>{o === "" ? `default (${flags.kvV || "q8_0"})` : o}</option>{/each}
-                    </select>
-                  </label>
-                  <label class="flex flex-col gap-0.5">
-                    <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">Spec {@render hint("Speculative decoding to speed up generation (--spec-type). ngram-mod is the default; draft-mtp needs a model with MTP layers; none disables it.")}</span>
-                    <select bind:value={d.spec} class="w-full rounded border border-card-border bg-background px-1.5 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary">
-                      {#each SPEC_OPTS as o (o)}<option value={o}>{o === "" ? `default (${specDefault(flags)})` : o}</option>{/each}
-                    </select>
-                  </label>
-                  <label class="flex flex-col gap-0.5">
-                    <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">Reasoning {@render hint("How the model's chain-of-thought is parsed (--reasoning-format). auto lets llama.cpp detect it (reasoning stays on); off disables reasoning.")}</span>
-                    <select bind:value={d.reasoningFmt} class="w-full rounded border border-card-border bg-background px-1.5 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary">
-                      {#each REASON_OPTS as o (o)}<option value={o}>{o === "" ? `default (${reasonDefault(flags)})` : o}</option>{/each}
-                    </select>
-                  </label>
+                  {@render roField("Steps", flags.steps ?? "—", "Sampling steps per image (--steps). More = slower, usually higher quality. Distilled/Turbo models want few (4–8).")}
+                  {@render roField("CFG", flags.cfg ?? "—", "Classifier-free guidance scale (--cfg-scale). Turbo/distilled models REQUIRE 1.0 — higher blurs. Standard models use ~7.")}
+                  {@render roField("Sampler", flags.sampler ?? "—", "Sampling method (--sampling-method). euler / euler_a are safe defaults; lcm pairs with low-step distilled models.")}
+                  {@render roField("Width", flags.width ?? "—", "Default image width in px (--width). Per-request width still overrides this.")}
+                  {@render roField("Height", flags.height ?? "—", "Default image height in px (--height). Per-request height still overrides this.")}
+                  {@render roField("CPU offload", cfg.cmd.includes("--offload-to-cpu") ? "on" : "off", "Page diffusion weights to RAM (--offload-to-cpu): saves VRAM, slower per step.")}
+                </div>
+              {:else if cfg}
+                <div class="mt-2 grid grid-cols-3 gap-x-3 gap-y-2 font-mono text-xs">
+                  {@render roField("Ctx", flags.ctx ?? "—", "Context window (tokens) this model loaded with (-c), as sized by the autogen sizer to fit free VRAM.")}
+                  {@render roField("GPU layers", nglDisplay(flags.ngl, cfg.blockCount ?? 0), "Layers resident on the GPU (-ngl), as chosen by the sizer for the current plan.")}
+                  {@render roField("CPU MoE", flags.cpuMoe ?? "—", "Expert layers offloaded to the CPU (--n-cpu-moe) for MoE models.")}
+                  {@render roField("KV K", flags.kvK ?? "—", "Quantization of the attention key cache (-ctk). Lower bits = less VRAM, slightly less accuracy.")}
+                  {@render roField("KV V", flags.kvV ?? "—", "Quantization of the attention value cache (-ctv). Lower bits = less VRAM.")}
+                  {@render roField("Spec", specList(cfg.cmd), "Speculative decoding chain (--spec-type), one entry per backend. none = disabled.")}
+                  {@render roField("Reasoning", reasonDefault(flags), "How the model's chain-of-thought is parsed (--reasoning-format). auto = llama.cpp detects it; off = reasoning disabled.")}
                 </div>
               {/if}
 

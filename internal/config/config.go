@@ -152,6 +152,12 @@ type Config struct {
 	// support API keys, see issue #433, #50, #251
 	RequiredAPIKeys []string `yaml:"apiKeys"`
 
+	// APIKeyModels scopes a key to a subset of model IDs (key => allowed IDs).
+	// A key absent from this map (or mapped to an empty list) has full access.
+	// Used by the auth middleware to filter the catalog and reject dispatch for
+	// models the key may not reach. Fork addition.
+	APIKeyModels map[string][]string `yaml:"apiKeyModels"`
+
 	// support remote peers, see issue #433, #296
 	Peers PeerDictionaryConfig `yaml:"peers"`
 

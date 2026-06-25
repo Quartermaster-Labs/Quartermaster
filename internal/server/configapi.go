@@ -42,6 +42,8 @@ type variantDTO struct {
 	CtxCheckpoints *int     `json:"ctxCheckpoints"`
 	Unlisted       bool     `json:"unlisted"`
 	Aliases        []string `json:"aliases"`
+	// PreserveThinking: nil => on (Qwen3.6 default), false => disabled.
+	PreserveThinking *bool `json:"preserveThinking"`
 	// Engine knobs (variant carries the full launch shape; zero/empty => inherit).
 	KvInRam    bool   `json:"kvInRam"`
 	CpuOffload int    `json:"cpuOffload"`
@@ -51,30 +53,55 @@ type variantDTO struct {
 	Threads    int    `json:"threads"`
 	Parallel   int    `json:"parallel"`
 	ExtraArgs  string `json:"extraArgs"`
+	// Sampler / speculative sub-knobs (Dry on/off is the *bool field above).
+	DryMultiplier    float64 `json:"dryMultiplier"`
+	DryBase          float64 `json:"dryBase"`
+	DryAllowedLength int     `json:"dryAllowedLength"`
+	SpecDraftNMax    int     `json:"specDraftNMax"`
+	SpecDefault      bool    `json:"specDefault"`
+	SpecNgramSizeN   int     `json:"specNgramSizeN"`
+	SpecNgramSizeM   int     `json:"specNgramSizeM"`
+	SpecNgramMinHits int     `json:"specNgramMinHits"`
+	// Image (sd-server) knobs; empty => inherit the model-wide override.
+	VaePath         string  `json:"vaePath"`
+	ClipLPath       string  `json:"clipLPath"`
+	ClipGPath       string  `json:"clipGPath"`
+	T5Path          string  `json:"t5Path"`
+	TextEncoderPath string  `json:"textEncoderPath"`
+	OffloadToCpu    string  `json:"offloadToCpu"`
+	TeOnCpu         string  `json:"teOnCpu"`
+	VaeTiling       string  `json:"vaeTiling"`
+	DiffusionFa     string  `json:"diffusionFa"`
+	DefaultSteps    int     `json:"defaultSteps"`
+	DefaultCfg      float64 `json:"defaultCfg"`
+	DefaultSampler  string  `json:"defaultSampler"`
+	DefaultWidth    int     `json:"defaultWidth"`
+	DefaultHeight   int     `json:"defaultHeight"`
 }
 
 // overrideDTO is the curated JSON shape of a per-model override (the cogwheel
 // fields) plus its named variants.
 type overrideDTO struct {
-	Ctx          int      `json:"ctx"`
-	KvK          string   `json:"kvK"`
-	KvV          string   `json:"kvV"`
-	KvInRam      bool     `json:"kvInRam"`
-	VramTargetGB float64  `json:"vramTargetGB"`
-	CpuOffload   int      `json:"cpuOffload"`
-	Spec         string   `json:"spec"`
-	ReasoningFmt string   `json:"reasoningFmt"`
-	FlashAttn    string   `json:"flashAttn"`
-	Mmap         string   `json:"mmap"`
-	Mlock        bool     `json:"mlock"`
-	Threads      int      `json:"threads"`
-	Parallel     int      `json:"parallel"`
-	Ub           int      `json:"ub"`
-	ExtraArgs    string   `json:"extraArgs"`
-	Aliases      []string `json:"aliases"`
-	Unlisted     bool     `json:"unlisted"`
-	Skip         bool     `json:"skip"`
-	CtxVariants  []int    `json:"ctxVariants"` // per-model ctx tiers (e.g. 32768, 65536)
+	Ctx             int      `json:"ctx"`
+	KvK             string   `json:"kvK"`
+	KvV             string   `json:"kvV"`
+	KvInRam         bool     `json:"kvInRam"`
+	VramTargetGB    float64  `json:"vramTargetGB"`
+	CpuOffload      int      `json:"cpuOffload"`
+	Spec            string   `json:"spec"`
+	ReasoningFmt    string   `json:"reasoningFmt"`
+	ReasoningBudget int      `json:"reasoningBudget"`
+	FlashAttn       string   `json:"flashAttn"`
+	Mmap            string   `json:"mmap"`
+	Mlock           bool     `json:"mlock"`
+	Threads         int      `json:"threads"`
+	Parallel        int      `json:"parallel"`
+	Ub              int      `json:"ub"`
+	ExtraArgs       string   `json:"extraArgs"`
+	Aliases         []string `json:"aliases"`
+	Unlisted        bool     `json:"unlisted"`
+	Skip            bool     `json:"skip"`
+	CtxVariants     []int    `json:"ctxVariants"` // per-model ctx tiers (e.g. 32768, 65536)
 	// PreserveThinking keeps prior-turn <think> in chat history (Qwen3.6+); only
 	// meaningful when reasoning is on.
 	PreserveThinking bool `json:"preserveThinking"`
@@ -82,6 +109,32 @@ type overrideDTO struct {
 	// (auto); 0 disables. Variants inherit it unless they set their own.
 	CtxCheckpoints *int         `json:"ctxCheckpoints"`
 	Variants       []variantDTO `json:"variants"`
+	// Dry sampler: nil => on with defaults, false => disabled. Values 0 => default.
+	Dry              *bool   `json:"dry"`
+	DryMultiplier    float64 `json:"dryMultiplier"`
+	DryBase          float64 `json:"dryBase"`
+	DryAllowedLength int     `json:"dryAllowedLength"`
+	// Speculative-decode sub-knobs, emitted per Spec backend; 0/false => omit.
+	SpecDraftNMax    int  `json:"specDraftNMax"`
+	SpecDefault      bool `json:"specDefault"`
+	SpecNgramSizeN   int  `json:"specNgramSizeN"`
+	SpecNgramSizeM   int  `json:"specNgramSizeM"`
+	SpecNgramMinHits int  `json:"specNgramMinHits"`
+	// Image (sd-server) knobs; ignored for llama models.
+	VaePath         string  `json:"vaePath"`
+	ClipLPath       string  `json:"clipLPath"`
+	ClipGPath       string  `json:"clipGPath"`
+	T5Path          string  `json:"t5Path"`
+	TextEncoderPath string  `json:"textEncoderPath"`
+	OffloadToCpu    string  `json:"offloadToCpu"`
+	TeOnCpu         string  `json:"teOnCpu"`
+	VaeTiling       string  `json:"vaeTiling"`
+	DiffusionFa     string  `json:"diffusionFa"`
+	DefaultSteps    int     `json:"defaultSteps"`
+	DefaultCfg      float64 `json:"defaultCfg"`
+	DefaultSampler  string  `json:"defaultSampler"`
+	DefaultWidth    int     `json:"defaultWidth"`
+	DefaultHeight   int     `json:"defaultHeight"`
 }
 
 type modelConfigResp struct {
@@ -91,6 +144,7 @@ type modelConfigResp struct {
 	MaxCtx      int          `json:"maxCtx"`     // trained context length (slider ceiling); 0 if unknown
 	BlockCount  int          `json:"blockCount"` // transformer layers (denominator for -ngl); 0 if unknown
 	IsMTP       bool         `json:"isMTP"`      // model has nextn/MTP layers => draft-mtp usable
+	IsImage     bool         `json:"isImage"`    // diffusion model (sd-server) => image config form
 	HasOverride bool         `json:"hasOverride"`
 	Override    *overrideDTO `json:"override"`
 	// DefaultVariants are the fleet-wide settings.defaultVariants (e.g. game),
@@ -103,10 +157,18 @@ func variantToDTO(v autogen.VariantSpec) variantDTO {
 		Name: v.Name, Ctx: v.Ctx, VramTargetGB: v.VramTargetGB,
 		KvK: v.KvK, KvV: v.KvV, Spec: v.Spec, ReasoningFmt: v.ReasoningFmt,
 		Ub: v.Ub, Dry: v.Dry, CtxCheckpoints: v.CtxCheckpoints,
-		Unlisted: v.Unlisted, Aliases: v.Aliases,
+		Unlisted: v.Unlisted, Aliases: v.Aliases, PreserveThinking: v.PreserveThinking,
 		KvInRam: v.KvInRam, CpuOffload: v.CpuOffload,
 		FlashAttn: v.FlashAttn, Mmap: v.Mmap, Mlock: v.Mlock,
 		Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
+		DryMultiplier: v.DryMultiplier, DryBase: v.DryBase, DryAllowedLength: v.DryAllowedLength,
+		SpecDraftNMax: v.SpecDraftNMax, SpecDefault: v.SpecDefault,
+		SpecNgramSizeN: v.SpecNgramSizeN, SpecNgramSizeM: v.SpecNgramSizeM, SpecNgramMinHits: v.SpecNgramMinHits,
+		VaePath: v.VaePath, ClipLPath: v.ClipLPath, ClipGPath: v.ClipGPath,
+		T5Path: v.T5Path, TextEncoderPath: v.TextEncoderPath,
+		OffloadToCpu: v.OffloadToCpu, TeOnCpu: v.TeOnCpu, VaeTiling: v.VaeTiling, DiffusionFa: v.DiffusionFa,
+		DefaultSteps: v.DefaultSteps, DefaultCfg: v.DefaultCfg, DefaultSampler: v.DefaultSampler,
+		DefaultWidth: v.DefaultWidth, DefaultHeight: v.DefaultHeight,
 	}
 }
 
@@ -114,13 +176,22 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 	dto := &overrideDTO{
 		Ctx: o.Ctx, KvK: o.KvK, KvV: o.KvV, KvInRam: o.KvInRam,
 		VramTargetGB: o.VramTargetGB, CpuOffload: o.CpuOffload,
-		Spec: o.Spec, ReasoningFmt: o.ReasoningFmt,
+		Spec: o.Spec, ReasoningFmt: o.ReasoningFmt, ReasoningBudget: o.ReasoningBudget,
 		FlashAttn: o.FlashAttn, Mmap: o.Mmap, Mlock: o.Mlock,
 		Threads: o.Threads, Parallel: o.Parallel, Ub: o.Ub,
 		ExtraArgs: o.ExtraArgs,
 		Aliases:   o.Aliases, Unlisted: o.Unlisted, Skip: o.Skip,
 		CtxVariants: o.CtxVariants, CtxCheckpoints: o.CtxCheckpoints,
 		PreserveThinking: o.PreserveThinking,
+		Dry:              o.Dry,
+		DryMultiplier:    o.DryMultiplier, DryBase: o.DryBase, DryAllowedLength: o.DryAllowedLength,
+		SpecDraftNMax: o.SpecDraftNMax, SpecDefault: o.SpecDefault,
+		SpecNgramSizeN: o.SpecNgramSizeN, SpecNgramSizeM: o.SpecNgramSizeM, SpecNgramMinHits: o.SpecNgramMinHits,
+		VaePath: o.VaePath, ClipLPath: o.ClipLPath, ClipGPath: o.ClipGPath,
+		T5Path: o.T5Path, TextEncoderPath: o.TextEncoderPath,
+		OffloadToCpu: o.OffloadToCpu, TeOnCpu: o.TeOnCpu, VaeTiling: o.VaeTiling, DiffusionFa: o.DiffusionFa,
+		DefaultSteps: o.DefaultSteps, DefaultCfg: o.DefaultCfg, DefaultSampler: o.DefaultSampler,
+		DefaultWidth: o.DefaultWidth, DefaultHeight: o.DefaultHeight,
 	}
 	for _, v := range o.Variants {
 		dto.Variants = append(dto.Variants, variantToDTO(v))
@@ -133,10 +204,18 @@ func toVariantSpec(v variantDTO) autogen.VariantSpec {
 		Name: v.Name, Ctx: v.Ctx, VramTargetGB: v.VramTargetGB,
 		KvK: v.KvK, KvV: v.KvV, Spec: v.Spec, ReasoningFmt: v.ReasoningFmt,
 		Ub: v.Ub, Dry: v.Dry, CtxCheckpoints: v.CtxCheckpoints,
-		Unlisted: v.Unlisted, Aliases: v.Aliases,
+		Unlisted: v.Unlisted, Aliases: v.Aliases, PreserveThinking: v.PreserveThinking,
 		KvInRam: v.KvInRam, CpuOffload: v.CpuOffload,
 		FlashAttn: v.FlashAttn, Mmap: v.Mmap, Mlock: v.Mlock,
 		Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
+		DryMultiplier: v.DryMultiplier, DryBase: v.DryBase, DryAllowedLength: v.DryAllowedLength,
+		SpecDraftNMax: v.SpecDraftNMax, SpecDefault: v.SpecDefault,
+		SpecNgramSizeN: v.SpecNgramSizeN, SpecNgramSizeM: v.SpecNgramSizeM, SpecNgramMinHits: v.SpecNgramMinHits,
+		VaePath: v.VaePath, ClipLPath: v.ClipLPath, ClipGPath: v.ClipGPath,
+		T5Path: v.T5Path, TextEncoderPath: v.TextEncoderPath,
+		OffloadToCpu: v.OffloadToCpu, TeOnCpu: v.TeOnCpu, VaeTiling: v.VaeTiling, DiffusionFa: v.DiffusionFa,
+		DefaultSteps: v.DefaultSteps, DefaultCfg: v.DefaultCfg, DefaultSampler: v.DefaultSampler,
+		DefaultWidth: v.DefaultWidth, DefaultHeight: v.DefaultHeight,
 	}
 }
 
@@ -204,7 +283,10 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
-	resp := modelConfigResp{Id: realID, Gguf: gguf, Cmd: strings.TrimSpace(cmd), HasOverride: existing != nil}
+	// Diffusion models (sd-server) get the image config form, not the llama one.
+	// Detect from the rendered command — the sd-server path always carries it.
+	isImage := strings.Contains(cmd, "--diffusion-model")
+	resp := modelConfigResp{Id: realID, Gguf: gguf, Cmd: strings.TrimSpace(cmd), IsImage: isImage, HasOverride: existing != nil}
 	// Show the EFFECTIVE override so the editor has the complete picture. The
 	// sidecar wins when present (a UI save writes a superset that already carries
 	// the file's fields); otherwise surface the hand-authored file override so its
@@ -400,8 +482,14 @@ func estimateInputFromCmd(cmd string) autogen.EstimateInput {
 				}
 			}
 		case "--spec-type":
+			// Chained spec backends (draft-mtp + ngram-map-k4v) appear as repeated
+			// --spec-type; accumulate into the "+"-joined list the sizer expects.
 			if v, ok := next(); ok {
-				in.Spec = v
+				if in.Spec == "" {
+					in.Spec = v
+				} else {
+					in.Spec += "+" + v
+				}
 			}
 		case "-ctk":
 			if v, ok := next(); ok {
@@ -499,6 +587,9 @@ type settingsResp struct {
 	AutoVram       bool             `json:"autoVram"`
 	Overridden     bool             `json:"overridden"` // a UI sidecar patch is active
 	Defaults       settingsDefaults `json:"defaults"`   // values a reset reverts to
+	ModelsRoot     string           `json:"modelsRoot"` // the shared/fallback scan folder
+	// CategoryRoots is the effective per-category scan folder ("" => uses ModelsRoot).
+	CategoryRoots map[string]string `json:"categoryRoots"`
 }
 
 type settingsPutDTO struct {
@@ -551,7 +642,42 @@ func (s *Server) handleAPISettingsGet(w http.ResponseWriter, r *http.Request) {
 			VramOverheadGB: base.VramOverheadGB,
 			MaxRamGB:       base.MaxRamGB,
 		},
+		ModelsRoot:    gf.Settings.ModelsRoot,
+		CategoryRoots: gf.Settings.CategoryRoots,
 	})
+}
+
+// handleAPISettingsRootPick opens the host's native folder dialog and, when the
+// user picks a folder, sets it as the scan folder for the given UI category
+// (body {category}), then regenerates + reloads. 204 when the user cancels.
+func (s *Server) handleAPISettingsRootPick(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAutogen(w, r) {
+		return
+	}
+	var body struct {
+		Category string `json:"category"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Category) == "" {
+		shared.SendResponse(w, r, http.StatusBadRequest, "body must be {category: <non-empty>}")
+		return
+	}
+	path, err := pickFolder()
+	if err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, "folder picker failed: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(path) == "" {
+		w.WriteHeader(http.StatusNoContent) // user cancelled
+		return
+	}
+	if _, err := autogen.UpsertSidecarRoot(s.autogen.GeneratePath, body.Category, path); err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !s.regenAndReload(w, r) {
+		return
+	}
+	writeJSON(w, map[string]string{"path": path})
 }
 
 // handleAPISettingsPut writes the UI settings patch (manual VRAM target +
@@ -615,6 +741,7 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.CpuOffload = body.CpuOffload
 	ov.Spec = body.Spec
 	ov.ReasoningFmt = body.ReasoningFmt
+	ov.ReasoningBudget = body.ReasoningBudget
 	ov.FlashAttn = body.FlashAttn
 	ov.Mmap = body.Mmap
 	ov.Mlock = body.Mlock
@@ -628,6 +755,29 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.CtxVariants = body.CtxVariants
 	ov.CtxCheckpoints = body.CtxCheckpoints
 	ov.PreserveThinking = body.PreserveThinking
+	ov.Dry = body.Dry
+	ov.DryMultiplier = body.DryMultiplier
+	ov.DryBase = body.DryBase
+	ov.DryAllowedLength = body.DryAllowedLength
+	ov.SpecDraftNMax = body.SpecDraftNMax
+	ov.SpecDefault = body.SpecDefault
+	ov.SpecNgramSizeN = body.SpecNgramSizeN
+	ov.SpecNgramSizeM = body.SpecNgramSizeM
+	ov.SpecNgramMinHits = body.SpecNgramMinHits
+	ov.VaePath = strings.TrimSpace(body.VaePath)
+	ov.ClipLPath = strings.TrimSpace(body.ClipLPath)
+	ov.ClipGPath = strings.TrimSpace(body.ClipGPath)
+	ov.T5Path = strings.TrimSpace(body.T5Path)
+	ov.TextEncoderPath = strings.TrimSpace(body.TextEncoderPath)
+	ov.OffloadToCpu = body.OffloadToCpu
+	ov.TeOnCpu = body.TeOnCpu
+	ov.VaeTiling = body.VaeTiling
+	ov.DiffusionFa = body.DiffusionFa
+	ov.DefaultSteps = body.DefaultSteps
+	ov.DefaultCfg = body.DefaultCfg
+	ov.DefaultSampler = strings.TrimSpace(body.DefaultSampler)
+	ov.DefaultWidth = body.DefaultWidth
+	ov.DefaultHeight = body.DefaultHeight
 	ov.Variants = ov.Variants[:0]
 	for _, v := range body.Variants {
 		ov.Variants = append(ov.Variants, toVariantSpec(v))

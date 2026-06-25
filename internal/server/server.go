@@ -167,6 +167,12 @@ func (s *Server) localPeerHandler(w http.ResponseWriter, r *http.Request) {
 		shared.SendResponse(w, r, http.StatusNotFound, fmt.Sprintf("model %q is not available on this listener", data.Model))
 		return
 	}
+	// Reject models the request's API key is not scoped to reach.
+	if models, scoped := apiKeyModelSet(r); scoped && !models[data.ModelID] {
+		s.proxylog.Debugf("dispatch: model %q not permitted for this API key", data.ModelID)
+		shared.SendResponse(w, r, http.StatusForbidden, fmt.Sprintf("model %q is not available for this API key", data.Model))
+		return
+	}
 
 	switch {
 	case s.local.Handles(data.ModelID):
@@ -201,8 +207,13 @@ func (s *Server) routes() {
 		CreateInflightMiddleware(s.inflight),
 		CreateMetricsMiddleware(s.metrics, s.cfg),
 	)
-	// Custom endpoints only need auth.
-	apiChain := chain.New(authMW)
+	// API keys gate the external inference API only — they let other apps reach
+	// the models. The local dashboard / admin / SSE endpoints stay open (apiChain
+	// has no auth), so enabling keys never locks the operator out of their own UI.
+	apiChain := chain.New()
+	// Discovery (/v1/models) is part of what an external app uses, so it carries
+	// auth + per-key model scoping like the inference routes.
+	discoveryChain := chain.New(authMW)
 
 	mux := http.NewServeMux()
 	dispatch := http.HandlerFunc(s.localPeerHandler)
@@ -218,7 +229,7 @@ func (s *Server) routes() {
 	}
 
 	// llama-quartermaster API + custom endpoints.
-	mux.Handle("GET /v1/models", apiChain.ThenFunc(s.handleListModels))
+	mux.Handle("GET /v1/models", discoveryChain.ThenFunc(s.handleListModels))
 	mux.Handle("GET /logs", apiChain.ThenFunc(s.handleLogs))
 	mux.Handle("GET /logs/stream", apiChain.ThenFunc(s.handleLogStream))
 	mux.Handle("GET /logs/stream/{logMonitorID...}", apiChain.ThenFunc(s.handleLogStream))
@@ -228,7 +239,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /{$}", handleRootRedirect)
 
 	// Embedded UI.
-	mux.Handle("GET /ui/", chain.New(authMW).ThenFunc(s.handleUI))
+	mux.Handle("GET /ui/", apiChain.ThenFunc(s.handleUI))
 	mux.HandleFunc("GET /favicon.ico", s.handleFavicon)
 
 	// Prometheus metrics (wrapped by apiChain, matches the legacy endpoint).
@@ -267,10 +278,19 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/settings", apiChain.ThenFunc(s.handleAPISettingsGet))
 	mux.Handle("PUT /api/settings", apiChain.ThenFunc(s.handleAPISettingsPut))
 	mux.Handle("DELETE /api/settings", apiChain.ThenFunc(s.handleAPISettingsDelete))
+	// Per-category scan folder (Models tab folder icon) — opens the host's native
+	// folder dialog, then sets settings.categoryRoots[category].
+	mux.Handle("POST /api/settings/root/pick", apiChain.ThenFunc(s.handleAPISettingsRootPick))
 
 	// Fleet-wide default variants (e.g. game) — surfaced per-model in the editor
 	// but saved globally to settings.defaultVariants.
 	mux.Handle("PUT /api/default-variants", apiChain.ThenFunc(s.handleAPIDefaultVariantsPut))
+
+	// API-key manager (admin-only): list/create/delete named keys with optional
+	// per-model scoping. 501 without -generate.
+	mux.Handle("GET /api/apikeys", apiChain.ThenFunc(s.handleAPIKeysGet))
+	mux.Handle("POST /api/apikeys", apiChain.ThenFunc(s.handleAPIKeyUpsert))
+	mux.Handle("DELETE /api/apikeys/{name}", apiChain.ThenFunc(s.handleAPIKeyDelete))
 
 	s.mux = mux
 	s.handler = chain.New(CreateRequestLogMiddleware(s.proxylog), CreateCORSMiddleware()).Then(mux)

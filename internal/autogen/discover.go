@@ -42,6 +42,29 @@ func quantFromName(name string) string {
 	return ""
 }
 
+// DiscoverGgufModelsMulti walks each root and returns the union of rows,
+// de-duplicated by full path (a model reachable from two overlapping roots is
+// served once). Roots are scanned in order; the first occurrence wins.
+func DiscoverGgufModelsMulti(roots []string, skipPatterns ...string) ([]GgufRow, error) {
+	seen := map[string]bool{}
+	var all []GgufRow
+	for _, root := range roots {
+		rows, err := DiscoverGgufModels(root, skipPatterns...)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			key := strings.ToLower(filepath.ToSlash(row.FullPath))
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			all = append(all, row)
+		}
+	}
+	return all, nil
+}
+
 // DiscoverGgufModels walks modelsRoot for *.gguf files and returns one row per
 // served model. mmproj projector files and non-first split shards are skipped.
 // skipPatterns are filename globs (default {"mmproj-*"}).

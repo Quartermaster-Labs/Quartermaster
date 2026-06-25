@@ -8,7 +8,9 @@
   import Observe from "./routes/Observe.svelte";
   import Playground from "./routes/Playground.svelte";
   import PlaygroundStub from "./routes/PlaygroundStub.svelte";
+  import ApiKeys from "./routes/ApiKeys.svelte";
   import { enableAPIEvents } from "./stores/api";
+  import { refreshInferenceKey } from "./lib/inferenceAuth";
   import { startPerfPolling } from "./stores/perf";
   import { initScreenWidth, initSystemThemeListener, isDarkMode, appTitle, connectionState } from "./stores/theme";
   import { currentRoute } from "./stores/route";
@@ -24,6 +26,7 @@
     "/activity": Observe,
     "/performance": Observe,
     "/test": PlaygroundStub,
+    "/api-keys": ApiKeys,
     "*": Dashboard,
   };
 
@@ -47,6 +50,7 @@
     const cleanupScreenWidth = initScreenWidth();
     const cleanupSystemTheme = initSystemThemeListener();
     enableAPIEvents(true);
+    refreshInferenceKey(); // auto-attach a key to Playground inference when keys are on
     const cleanupPerf = startPerfPolling();
 
     return () => {

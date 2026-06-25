@@ -1,3 +1,21 @@
+# Windows installer (release CI)
+
+Tagging a release (`make release && git push origin vN`) builds, besides the
+goreleaser archives, a per-user Windows installer
+(`llama-quartermaster-setup-vN.exe`) via Inno Setup and attaches it to the
+GitHub Release. See `windows/installer.iss` + `.github/workflows/release.yml`.
+
+The wizard optionally downloads `llama-server` (llama.cpp) and `sd-server`
+(stable-diffusion.cpp) for a chosen backend (Vulkan/CUDA/CPU) into `bin\` and
+points `quartermaster-generate.yaml` at them — see `windows/fetch-backend.ps1`
+(self-test: `fetch-backend.ps1 -Test`). It can also add a logon-autostart
+shortcut. Installs per-user (no UAC) under `%LocalAppData%\Programs`.
+
+**Code signing** is off until you add repo secrets `SIGN_PFX_BASE64` (base64 of
+a `.pfx`) and `SIGN_PFX_PASSWORD`; CI then signs the binary + installer
+(`windows/sign.ps1`). For a free OSS cert, apply to SignPath Foundation and swap
+the sign step for their action. Unsigned builds trip SmartScreen until then.
+
 # Running llama-quartermaster as a service
 
 The proxy is a plain console binary. Linux uses a native systemd unit; Windows

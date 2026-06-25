@@ -20,13 +20,23 @@ const hashCacheSuffix = ".modelhash"
 // generate control file. A stable hash means a regen would produce the same
 // config, so it can be skipped.
 func InputsHash(modelsRoot string, generateFileBytes []byte) (string, error) {
+	return InputsHashRoots([]string{modelsRoot}, generateFileBytes)
+}
+
+// InputsHashRoots is InputsHash over multiple scan folders (settings.RootList).
+// Each gguf's hash key is prefixed by its root index so identically-named files
+// in different roots don't collide.
+func InputsHashRoots(roots []string, generateFileBytes []byte) (string, error) {
 	type entry struct {
 		rel   string
 		size  int64
 		mtime int64
 	}
 	var entries []entry
-	if strings.TrimSpace(modelsRoot) != "" {
+	for ri, modelsRoot := range roots {
+		if strings.TrimSpace(modelsRoot) == "" {
+			continue
+		}
 		err := filepath.WalkDir(modelsRoot, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return nil
@@ -42,7 +52,7 @@ func InputsHash(modelsRoot string, generateFileBytes []byte) (string, error) {
 			if e != nil {
 				rel = path
 			}
-			entries = append(entries, entry{filepath.ToSlash(rel), fi.Size(), fi.ModTime().UnixNano()})
+			entries = append(entries, entry{fmt.Sprintf("%d\x00%s", ri, filepath.ToSlash(rel)), fi.Size(), fi.ModTime().UnixNano()})
 			return nil
 		})
 		if err != nil {
@@ -72,8 +82,8 @@ func readHashCache(path string) string {
 // buildHashInput assembles the byte blob whose digest gates regeneration:
 // resolved modelsRoot + raw generate file + UI sidecar. Kept in one place so
 // EnsureConfig and CurrentInputsHash always hash identical inputs.
-func buildHashInput(modelsRoot string, rawGenerate, sidecarBytes []byte) []byte {
-	out := append([]byte(modelsRoot+"\x00"), rawGenerate...)
+func buildHashInput(roots []string, rawGenerate, sidecarBytes []byte) []byte {
+	out := append([]byte(strings.Join(roots, "\x00")+"\x00"), rawGenerate...)
 	return append(append(out, "\x00sidecar\x00"...), sidecarBytes...)
 }
 
@@ -91,7 +101,8 @@ func CurrentInputsHash(generatePath, modelsDirOverride string) (string, error) {
 		return "", err
 	}
 	sidecarBytes, _ := os.ReadFile(SidecarPath(generatePath))
-	return InputsHash(gf.Settings.ModelsRoot, buildHashInput(gf.Settings.ModelsRoot, rawGenerate, sidecarBytes))
+	roots := gf.Settings.RootList()
+	return InputsHashRoots(roots, buildHashInput(roots, rawGenerate, sidecarBytes))
 }
 
 // CachedConfigHash returns the inputs hash recorded alongside the last generated
@@ -109,6 +120,15 @@ func EnsureConfig(generatePath, outConfigPath, modelsDirOverride string, logf fu
 	if err != nil {
 		return false, fmt.Errorf("reading generate file: %w", err)
 	}
+
+	// Reap per-model overrides whose gguf was deleted, before hashing — a pruned
+	// sidecar changes the hash, so the trim itself triggers the regen below.
+	if pruned, err := PruneSidecar(generatePath); err != nil {
+		return false, fmt.Errorf("pruning sidecar: %w", err)
+	} else if len(pruned) > 0 && logf != nil {
+		logf(fmt.Sprintf("pruned %d override(s) for deleted models: %s", len(pruned), strings.Join(pruned, ", ")))
+	}
+
 	gf, err := LoadGenerateFile(generatePath, modelsDirOverride)
 	if err != nil {
 		return false, err
@@ -118,8 +138,9 @@ func EnsureConfig(generatePath, outConfigPath, modelsDirOverride string, logf fu
 	// triggers a regen even when the file is unchanged. It also folds in the
 	// UI-owned sidecar so editing an override there forces a regen.
 	sidecarBytes, _ := os.ReadFile(SidecarPath(generatePath))
-	hashInput := buildHashInput(gf.Settings.ModelsRoot, rawGenerate, sidecarBytes)
-	hash, err := InputsHash(gf.Settings.ModelsRoot, hashInput)
+	roots := gf.Settings.RootList()
+	hashInput := buildHashInput(roots, rawGenerate, sidecarBytes)
+	hash, err := InputsHashRoots(roots, hashInput)
 	if err != nil {
 		return false, fmt.Errorf("hashing models: %w", err)
 	}

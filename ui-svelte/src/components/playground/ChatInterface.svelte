@@ -1,12 +1,20 @@
 <script lang="ts">
+  import { get } from "svelte/store";
   import { models } from "../../stores/api";
   import { persistentStore } from "../../stores/persistent";
-  import { selectedModelStore } from "../../stores/playground";
+  import { selectedModelStore, selectedTabStore } from "../../stores/playground";
+  import {
+    chatSessions,
+    activeChatId,
+    newChatId,
+    deriveTitle,
+    type ChatSession,
+  } from "../../stores/chatHistory";
   import { streamChatCompletion, type Endpoint } from "../../lib/chatApi";
   import { WEB_SEARCH_TOOL, searxngSearch, formatSearchResults } from "../../lib/webSearch";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import type { ChatMessage, ContentPart, ToolCall } from "../../lib/types";
-  import { Settings, Paperclip, Send, Square, Plus, MessagesSquare, X } from "lucide-svelte";
+  import { Settings, Paperclip, Send, Square, Plus, MessagesSquare, X, Search, PanelLeft, Trash2 } from "lucide-svelte";
   import ChatMessageComponent from "./ChatMessage.svelte";
   import ModelSelector from "./ModelSelector.svelte";
   import Select from "./Select.svelte";
@@ -16,19 +24,85 @@
   const temperatureStore = persistentStore<number>("playground-temperature", 0.7);
   const endpointStore = persistentStore<Endpoint>("playground-endpoint", "v1/chat/completions");
   const maxTokensStore = persistentStore<number>("playground-max-tokens", 4096);
-  const webSearchStore = persistentStore<boolean>("playground-websearch", false);
+  const webSearchStore = persistentStore<boolean>("playground-websearch", true);
   const searxngUrlStore = persistentStore<string>("playground-searxng-url", "http://localhost:8888");
+  const sidebarCollapsedStore = persistentStore<boolean>("playground-chat-sidebar-collapsed", false);
 
-  function loadMessages(): ChatMessage[] {
-    try {
-      const saved = localStorage.getItem("playground-messages");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
+  // Load (or create) the active conversation, migrating the legacy single-chat
+  // store the first time. Returns the messages for the active session.
+  function initChats(): ChatMessage[] {
+    let sessions = get(chatSessions);
+    if (sessions.length === 0) {
+      try {
+        const legacy = localStorage.getItem("playground-messages");
+        const msgs = legacy ? JSON.parse(legacy) : [];
+        if (Array.isArray(msgs) && msgs.length > 0) {
+          const s: ChatSession = { id: newChatId(), title: deriveTitle(msgs), messages: msgs, updatedAt: Date.now() };
+          sessions = [s];
+          chatSessions.set(sessions);
+          activeChatId.set(s.id);
+        }
+        localStorage.removeItem("playground-messages");
+      } catch {}
     }
+    let id = get(activeChatId);
+    if (!sessions.some((s) => s.id === id)) {
+      if (sessions.length > 0) {
+        id = sessions[0].id;
+      } else {
+        const s: ChatSession = { id: newChatId(), title: "New chat", messages: [], updatedAt: Date.now() };
+        chatSessions.set([s]);
+        id = s.id;
+      }
+      activeChatId.set(id);
+    }
+    return get(chatSessions).find((s) => s.id === id)?.messages ?? [];
   }
 
-  let messages = $state<ChatMessage[]>(loadMessages());
+  let messages = $state<ChatMessage[]>(initChats());
+  let sortedSessions = $derived([...$chatSessions].sort((a, b) => b.updatedAt - a.updatedAt));
+
+  // Write the working `messages` back into its session in the history store.
+  function persistCurrent() {
+    const id = get(activeChatId);
+    const snapshot = $state.snapshot(messages) as ChatMessage[];
+    chatSessions.update((sessions) => {
+      const idx = sessions.findIndex((s) => s.id === id);
+      const updated: ChatSession = { id, title: deriveTitle(snapshot), messages: snapshot, updatedAt: Date.now() };
+      if (idx === -1) return [updated, ...sessions];
+      const copy = [...sessions];
+      copy[idx] = updated;
+      return copy;
+    });
+  }
+
+  function selectChat(id: string) {
+    if (id === get(activeChatId)) return;
+    if (isStreaming) cancelStreaming();
+    persistCurrent();
+    activeChatId.set(id);
+    const s = get(chatSessions).find((x) => x.id === id);
+    messages = s ? (structuredClone($state.snapshot(s.messages)) as ChatMessage[]) : [];
+    isReasoning = false;
+    reasoningStartTime = 0;
+    userScrolledUp = false;
+  }
+
+  function deleteChat(id: string, e: MouseEvent) {
+    e.stopPropagation();
+    const remaining = get(chatSessions).filter((s) => s.id !== id);
+    chatSessions.set(remaining);
+    if (id !== get(activeChatId)) return;
+    if (remaining.length > 0) {
+      activeChatId.set(remaining[0].id);
+      messages = structuredClone($state.snapshot(remaining[0].messages)) as ChatMessage[];
+    } else {
+      const s: ChatSession = { id: newChatId(), title: "New chat", messages: [], updatedAt: Date.now() };
+      chatSessions.set([s]);
+      activeChatId.set(s.id);
+      messages = [];
+    }
+  }
   let userInput = $state("");
   let isStreaming = $state(false);
   let isReasoning = $state(false);
@@ -57,17 +131,22 @@
   let hasModels = $derived($models.some((m) => !m.unlisted));
   let userScrolledUp = $state(false);
 
-  // Mirror the currently loaded (ready) model. Snap to it whenever the selection
-  // isn't itself ready, unless the user explicitly picked another from the
-  // dropdown (userPinned) — once their pick loads it becomes ready and sticks.
+  // Keep a valid model selected so the composer is never stuck disabled.
+  // If the selection isn't a listed model, fall back to the loaded (ready) one,
+  // or the first listed model (sending it triggers a swap/load). Once the user
+  // picks from the dropdown (userPinned), don't snap away from their choice.
   let userPinned = $state(false);
   $effect(() => {
-    const ready = $models.find((m) => m.state === "ready" && !m.unlisted);
-    if (!ready) return;
-    const selectionReady = $models.some(
-      (m) => m.id === $selectedModelStore && m.state === "ready" && !m.unlisted
-    );
-    if (!selectionReady && !userPinned) selectedModelStore.set(ready.id);
+    const listed = $models.filter((m) => !m.unlisted);
+    if (listed.length === 0) return;
+    const ready = listed.find((m) => m.state === "ready");
+    const selectionValid = listed.some((m) => m.id === $selectedModelStore);
+    if (!selectionValid) {
+      selectedModelStore.set((ready ?? listed[0]).id);
+      return;
+    }
+    const selectionReady = listed.some((m) => m.id === $selectedModelStore && m.state === "ready");
+    if (ready && !selectionReady && !userPinned) selectedModelStore.set(ready.id);
   });
 
   $effect(() => {
@@ -75,12 +154,17 @@
   });
 
   // Auto-grow the composer textarea; tracks userInput so it also shrinks back
-  // after a send clears the value.
+  // after a send clears the value. Guard scrollHeight === 0 (tab is display:none
+  // at mount) — otherwise the height locks at 0px and never recovers when the
+  // tab is shown, leaving an invisible, untypeable textarea.
   $effect(() => {
     userInput;
+    $selectedTabStore; // re-run when this tab becomes visible again
     if (inputEl) {
       inputEl.style.height = "auto";
-      inputEl.style.height = Math.min(inputEl.scrollHeight, 192) + "px";
+      if (inputEl.scrollHeight > 0) {
+        inputEl.style.height = Math.min(inputEl.scrollHeight, 192) + "px";
+      }
     }
   });
 
@@ -101,20 +185,20 @@
     }
   });
 
-  // Persist messages to localStorage (throttled to once per 2s)
+  // Persist the active conversation into the history store (throttled to 1.5s).
   let lastSaveTime = 0;
   $effect(() => {
-    const json = JSON.stringify(messages);
+    messages; // track
     const elapsed = Date.now() - lastSaveTime;
-    const save = () => {
-      try { localStorage.setItem("playground-messages", json); } catch {}
+    if (elapsed >= 1500) {
+      persistCurrent();
       lastSaveTime = Date.now();
-    };
-    if (elapsed >= 2000) {
-      save();
       return;
     }
-    const timer = setTimeout(save, 2000 - elapsed);
+    const timer = setTimeout(() => {
+      persistCurrent();
+      lastSaveTime = Date.now();
+    }, 1500 - elapsed);
     return () => clearTimeout(timer);
   });
 
@@ -157,9 +241,18 @@
     if (isStreaming) {
       cancelStreaming();
     }
+    persistCurrent();
+    // Reuse the current chat if it's already empty instead of stacking blanks.
+    const cur = get(chatSessions).find((s) => s.id === get(activeChatId));
+    if (!cur || cur.messages.length > 0) {
+      const s: ChatSession = { id: newChatId(), title: "New chat", messages: [], updatedAt: Date.now() };
+      chatSessions.update((ss) => [s, ...ss]);
+      activeChatId.set(s.id);
+    }
     messages = [];
     isReasoning = false;
     reasoningStartTime = 0;
+    userScrolledUp = false;
   }
 
   // Web search runs as OpenAI tool-calling, which only the chat/completions
@@ -380,9 +473,58 @@
       <p>No models configured. Add models to your configuration to start chatting.</p>
     </div>
   {:else}
+    <div class="flex flex-1 gap-3 min-h-0">
+    <!-- History sidebar -->
+    <aside
+      class="shrink-0 flex flex-col gap-2 overflow-hidden transition-all duration-200 {$sidebarCollapsedStore ? 'w-0 p-0 border-0' : 'w-56 p-2 border border-card-border'} rounded-lg bg-surface"
+    >
+      <button
+        class="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg bg-primary text-white text-sm font-medium hover:opacity-90 transition-opacity"
+        onclick={newChat}
+        title="Start a new chat"
+      >
+        <Plus class="w-4 h-4" />
+        New Chat
+      </button>
+      <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll flex flex-col gap-0.5 -mx-1 px-1">
+        {#each sortedSessions as session (session.id)}
+          {@const active = session.id === $activeChatId}
+          <div
+            class="group flex items-center gap-2 w-full px-2.5 py-1.5 rounded-md text-[0.8125rem] transition-colors {active
+              ? 'bg-secondary text-txtmain'
+              : 'text-txtsecondary hover:text-txtmain hover:bg-secondary/60'}"
+          >
+            <MessagesSquare class="w-3.5 h-3.5 shrink-0 opacity-60" />
+            <button class="flex-1 min-w-0 text-left truncate" onclick={() => selectChat(session.id)}>
+              {session.title || "New chat"}
+            </button>
+            <button
+              class="shrink-0 p-0.5 rounded text-txtsecondary opacity-0 group-hover:opacity-100 hover:text-red-500 transition-opacity"
+              onclick={(e) => deleteChat(session.id, e)}
+              title="Delete chat"
+            >
+              <Trash2 class="w-3.5 h-3.5" />
+            </button>
+          </div>
+        {/each}
+      </div>
+    </aside>
+
+    <!-- Chat column -->
+    <div class="flex-1 flex flex-col min-w-0 min-h-0">
+    <!-- Column header -->
+    <div class="flex items-center gap-2 mb-2 shrink-0">
+      <button
+        class="inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
+        onclick={() => sidebarCollapsedStore.set(!$sidebarCollapsedStore)}
+        title={$sidebarCollapsedStore ? "Show history" : "Hide history"}
+      >
+        <PanelLeft class="w-[1.125rem] h-[1.125rem]" />
+      </button>
+    </div>
     <!-- Messages area -->
     <div
-      class="flex-1 overflow-y-auto pretty-scroll scroll-fade-y mb-4 px-2"
+      class="flex-1 min-h-0 overflow-y-auto pretty-scroll scroll-fade-y mb-4 px-2"
       bind:this={messagesContainer}
       onscroll={handleMessagesScroll}
       use:scrollFade
@@ -587,7 +729,7 @@
           placeholder="Type a message..."
           bind:value={userInput}
           onkeydown={handleKeyDown}
-          disabled={isStreaming || !$selectedModelStore}
+          disabled={isStreaming}
         ></textarea>
 
         <div class="flex items-center justify-between">
@@ -602,19 +744,18 @@
 
           <div class="flex items-center gap-1">
             <button
+              class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors {$webSearchStore ? 'bg-primary/10 text-primary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
+              onclick={() => webSearchStore.set(!$webSearchStore)}
+              title={$webSearchStore ? "Web search on" : "Web search off"}
+            >
+              <Search class="w-[1.125rem] h-[1.125rem]" />
+            </button>
+            <button
               class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors {showSettings ? 'bg-secondary text-txtmain shadow-inner' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
               onclick={() => (showSettings = !showSettings)}
               title="Settings"
             >
               <Settings class="w-[1.125rem] h-[1.125rem]" />
-            </button>
-            <button
-              class="inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
-              onclick={newChat}
-              disabled={messages.length === 0 && !isStreaming}
-              title="New chat"
-            >
-              <Plus class="w-[1.125rem] h-[1.125rem]" />
             </button>
 
             {#if isStreaming}
@@ -638,6 +779,8 @@
           </div>
         </div>
       </div>
+    </div>
+    </div>
     </div>
   {/if}
 </div>

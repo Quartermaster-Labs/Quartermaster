@@ -23,7 +23,7 @@ upstreaming.
 | `generate.go` | Top-level orchestration (`Generate`): builds per-model profiles (solo, ctx tiers, named variants), sizes each, and emits the YAML (models, groups, listeners). |
 | `estimate.go` | One-shot preview (`EstimatePlan`) of a candidate tuning for the web editor; reuses the solo-profile sizing path without writing config. |
 | `overrides.go` | Control-file types (`GenerateFile`, `Settings`, `Override`, `VariantSpec`, `GroupSpec`), defaults, loading/merging, and `globLike` (PowerShell `-like`). |
-| `sidecar.go` | UI-owned overrides file (`quartermaster-overrides.yaml`): read/upsert/delete per-model overrides and the global settings patch. |
+| `sidecar.go` | UI-owned overrides file (`quartermaster-overrides.yaml`): read/upsert/delete per-model overrides, the global settings patch, and the managed API keys (`LoadSidecarAPIKeys`/`UpsertSidecarAPIKey`/`DeleteSidecarAPIKey`). |
 | `hash.go` | Inputs hashing + hash-gated regen (`InputsHash`, `EnsureConfig`, `CurrentInputsHash`) so a config is only rebuilt when models/settings change. |
 | `vram.go` | Live free-VRAM sampling via `internal/perf` (`SampleFreeVramGB`, `resolveAutoVram`) for the `autoVram` setting. |
 
@@ -62,6 +62,7 @@ upstreaming.
 - **Caching** — metadata is cached by size+mtime (`metacache.go`); replacing a gguf invalidates its entry. The config itself is cached via the `.modelhash` sidecar digest.
 - **Sidecar ownership** — `quartermaster-overrides.yaml` is fully owned by the UI and rewritten whole on any edit, kept separate from the comment-rich hand-authored generate file.
 - **Sidecar SHADOWS the file row, it does not field-merge.** Override resolution is row-level first-match (sidecar rows prepended), so a sidecar row replaces the matching file row wholesale. A UI save must therefore write a *superset*: the config editor seeds the sidecar row from `ResolveFileOverride` (the matched FILE override, sidecar excluded) before applying the edited fields, so file-only knobs the UI doesn't model (`ctxVariants`, `quant`, file-defined variants like `judge`) aren't dropped. Fleet-wide `settings.defaultVariants` (e.g. `game`) are emitted independently of overrides, so they survive regardless — which is why a buggy save used to lose the ctx tiers + `judge` but keep `game`.
+- **Named variants INHERIT the model-wide override.** Each `<model>-<variant>` profile layers its engine knobs over a copy of the resolved model override (`generate.go` ~line 428), so the spec/draft chain, kv quant, reasoning budget, preserve-thinking, etc. flow down at generate time; a variant's own non-blank/non-zero field still wins (sidecar edits drift per-variant freely). Was previously *standalone* over `Override{}`, which dropped the draft chain + kv on every variant but the one the user hand-edited.
 - `gguf.go` parses the tensor section too (for expert share); a tensor of unknown ggml type leaves the share at 0 (arch-table fallback) rather than erroring the whole read.
 
 ## Connections

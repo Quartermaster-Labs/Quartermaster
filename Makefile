@@ -67,11 +67,18 @@ windows: ui
 PKG_WIN_DIR = $(BUILD_DIR)/llama-quartermaster-windows
 package-windows: windows
 	@echo "Packaging Windows bundle..."
-	# Preserve an existing personal generate file across the bundle rebuild.
+	# Preserve the personal runtime files (hand-authored generate file + the
+	# UI-owned overrides sidecar) across the bundle rebuild.
 	@if [ -f $(PKG_WIN_DIR)/quartermaster-generate.yaml ]; then \
 		cp $(PKG_WIN_DIR)/quartermaster-generate.yaml $(BUILD_DIR)/.qm-generate.keep; fi
-	rm -rf $(PKG_WIN_DIR)
+	@if [ -f $(PKG_WIN_DIR)/quartermaster-overrides.yaml ]; then \
+		cp $(PKG_WIN_DIR)/quartermaster-overrides.yaml $(BUILD_DIR)/.qm-overrides.keep; fi
+	# Clear the bundle CONTENTS in place rather than `rm -rf`-ing the directory:
+	# on Windows an editor/file-watcher (or this build's own git tracking) often
+	# holds a handle on the dir, which makes removing the dir itself fail with
+	# "Device or resource busy" — but deleting the files inside is still allowed.
 	mkdir -p $(PKG_WIN_DIR)
+	find $(PKG_WIN_DIR) -mindepth 1 -delete 2>/dev/null || true
 	cp $(BUILD_DIR)/$(APP_NAME)-windows-amd64.exe $(PKG_WIN_DIR)/
 	cp quartermaster-generate.example.yaml $(PKG_WIN_DIR)/quartermaster-generate.example.yaml
 	# Seed the runtime generate file from the example only when none exists yet,
@@ -82,6 +89,11 @@ package-windows: windows
 	else \
 		cp quartermaster-generate.example.yaml $(PKG_WIN_DIR)/quartermaster-generate.yaml; \
 		echo "  seeded quartermaster-generate.yaml from example"; fi
+	# Restore the UI-owned overrides sidecar if the user had one (no example seed —
+	# it's created at runtime by the config editor; absence just means no overrides).
+	@if [ -f $(BUILD_DIR)/.qm-overrides.keep ]; then \
+		mv $(BUILD_DIR)/.qm-overrides.keep $(PKG_WIN_DIR)/quartermaster-overrides.yaml; \
+		echo "  preserved existing quartermaster-overrides.yaml"; fi
 	cp config.example.yaml $(PKG_WIN_DIR)/config.example.yaml
 	cp packaging/windows/start.cmd $(PKG_WIN_DIR)/start.cmd
 	cp -r packaging $(PKG_WIN_DIR)/packaging
@@ -105,19 +117,30 @@ simple-responder-windows:
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-# Create a new release tag
+# Tag the next version, push it, and run the full build pipeline (goreleaser +
+# Windows installer) on CI via workflow_dispatch.
+#   make release         -> publishes a DRAFT GitHub release
+#   make release-public  -> publishes a PUBLIC GitHub release
+# Both need the `gh` CLI authenticated. The CI workflow is dispatch-only, so the
+# tag push itself does not trigger a second build.
 release:
-	@echo "Checking for unstaged changes..."
-	@if [ -n "$(shell git status --porcelain)" ]; then \
-		echo "Error: There are unstaged changes. Please commit or stash your changes before creating a release tag." >&2; \
-		exit 1; \
-	fi
+	@$(MAKE) --no-print-directory _dispatch-release DRAFT=true
 
-# Get the highest tag in v{number} format, increment it, and create a new tag
+release-public:
+	@$(MAKE) --no-print-directory _dispatch-release DRAFT=false
+
+_dispatch-release:
+	@if [ -n "$$(git status --porcelain)" ]; then \
+		echo "Error: uncommitted changes. Commit or stash before releasing." >&2; exit 1; \
+	fi
+	@command -v gh >/dev/null || { echo "Error: gh CLI not found." >&2; exit 1; }
 	@highest_tag=$$(git tag --sort=-v:refname | grep -E '^v[0-9]+$$' | head -n 1 || echo "v0"); \
 	new_tag="v$$(( $${highest_tag#v} + 1 ))"; \
-	echo "tagging new version: $$new_tag"; \
-	git tag "$$new_tag";
+	echo "tagging $$new_tag (draft=$(DRAFT))"; \
+	git tag "$$new_tag"; \
+	git push origin "$$new_tag"; \
+	gh workflow run release.yml -f tag="$$new_tag" -f draft=$(DRAFT); \
+	echo "Dispatched. Watch: gh run watch \$$(gh run list --workflow=release.yml -L1 --json databaseId -q '.[0].databaseId')"
 
 GOOS ?= $(shell go env GOOS 2>/dev/null || echo linux)
 GOARCH ?= $(shell go env GOARCH 2>/dev/null || echo amd64)
@@ -129,5 +152,5 @@ test-ui:
 	cd ui-svelte && npm ci && npm run check && npm test
 
 # Phony targets
-.PHONY: all clean ui mac windows package-windows simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy
+.PHONY: all clean ui mac windows package-windows simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy release release-public _dispatch-release
 .PHONE: linux linux-arm64 linux-amd64

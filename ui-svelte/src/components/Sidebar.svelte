@@ -1,6 +1,6 @@
 <script lang="ts">
   import { link, location } from "svelte-spa-router";
-  import { LayoutDashboard, Boxes, FlaskConical, Activity, Sun, Moon, MonitorCog, ChevronRight } from "lucide-svelte";
+  import { LayoutDashboard, Boxes, FlaskConical, Activity, KeyRound, Sun, Moon, MonitorCog, ChevronRight } from "lucide-svelte";
   import { toggleTheme, themeMode, appTitle } from "../stores/theme";
   import { currentRoute } from "../stores/route";
   import { playgroundActivity } from "../stores/playgroundActivity";
@@ -13,6 +13,7 @@
     { path: "/models", label: "Models", icon: Boxes, children: MODEL_CATEGORIES.map((c) => ({ path: `/models/${c.id}`, label: c.label })) },
     { path: "/test", label: "Test", icon: FlaskConical },
     { path: "/observe", label: "Observe", icon: Activity },
+    { path: "/api-keys", label: "API Keys", icon: KeyRound },
   ];
 
   // Models sub-menu open when on any /models route, toggleable otherwise.

@@ -54,12 +54,26 @@
   // forced off); surfaced here as plain on/off checkboxes (auto state dropped).
   let reasoningOn = $state(true); // false => reasoningFmt "off"
   let preserveThinking = $state(false); // keep prior-turn <think> in history (needs reasoning on)
+  let reasoningBudget = $state<number | "">(""); // --reasoning-budget token cap; "" => no cap
   let flashOn = $state(true); // false => flashAttn "off"
   let mmapOn = $state(true); // false => mmap "off" (--no-mmap)
   let mlock = $state(false);
   let threads = $state<number | "">(""); // "" = global default
   let parallel = $state<number | "">(""); // "" = 1
   let ub = $state<number | "">(""); // "" = auto physical batch
+  // DRY sampler (Default). dryOn drives on/off; values "" => generator default
+  // (0.8 / 1.75 / 3).
+  let dryOn = $state(true);
+  let dryMultiplier = $state<number | "">("");
+  let dryBase = $state<number | "">("");
+  let dryAllowedLength = $state<number | "">("");
+  // Speculative-decode sub-knobs (Default), emitted per spec backend; "" / false
+  // => omit (llama-server default).
+  let specDraftNMax = $state<number | "">(""); // draft-mtp; "" => 2
+  let specDefault = $state(false);
+  let specNgramSizeN = $state<number | "">("");
+  let specNgramSizeM = $state<number | "">("");
+  let specNgramMinHits = $state<number | "">("");
   let aliasesText = $state("");
   let unlisted = $state(false);
   let skip = $state(false);
@@ -83,9 +97,37 @@
   let cmdDraft = $state("");
   let extraArgs = $state("");
 
+  // --- Image (diffusion / sd-server) fields. Only used when config.isImage. ---
+  // Component paths (external VAE + text encoders); "" => omit the flag.
+  let vaePath = $state("");
+  let clipLPath = $state("");
+  let clipGPath = $state("");
+  let t5Path = $state("");
+  let textEncoderPath = $state("");
+  // Placement: offload is tri-state (auto/on/off); the rest default-on ("" => on,
+  // "off" => omit the flag), surfaced as plain on/off checkboxes.
+  let offloadToCpu = $state(""); // "" auto | "on" | "off"
+  let teOnCpu = $state(""); // "" on | "off"
+  let vaeTiling = $state(""); // "" on | "off"
+  let diffusionFa = $state(""); // "" on | "off"
+  // Generation defaults baked into the launch cmd; "" => sd-server default.
+  let defaultSteps = $state<number | "">("");
+  let defaultCfg = $state<number | "">("");
+  let defaultSampler = $state("");
+  let defaultWidth = $state<number | "">("");
+  let defaultHeight = $state<number | "">("");
+
+  const imageMode = $derived(config?.isImage ?? false);
+  // sd.cpp sampling methods (mirrors the playground's SAMPLER_OPTIONS).
+  const IMG_SAMPLERS = ["", "euler_a", "euler", "heun", "dpm2", "dpmpp2s_a", "dpmpp2m", "dpmpp2mv2", "ipndm", "ipndm_v", "lcm", "ddim_trailing", "tcd"];
+
   // Flags autogen always emits and OWNS (computed or fixed): ignored when parsing
   // the box so editing them never flips a form "auto" toggle or pins a value.
-  const IGNORE_VALUE = new Set(["-m", "--port", "--host", "--spec-draft-n-max", "--dry-multiplier", "--dry-base", "--dry-allowed-length", "-c", "-ngl", "--n-cpu-moe", "-b"]);
+  // Value-flags owned by other controls (sliders / toggles / sizer), swallowed
+  // when parsing so they never bleed into extraArgs and double-emit:
+  //   -c/-ngl/--n-cpu-moe/-b  sizer; --ctx-checkpoints  its own field;
+  //   --chat-template-kwargs  the preserve-thinking toggle; -md  draft path.
+  const IGNORE_VALUE = new Set(["-m", "--port", "--host", "-c", "-ngl", "--n-cpu-moe", "-b", "--ctx-checkpoints", "--chat-template-kwargs", "-md"]);
   const IGNORE_BOOL = new Set(["--kv-unified", "--no-warmup", "--no-webui", "--jinja"]);
 
   // Parsed launch-flag bundle shared by the Default form and a variant. Booleans
@@ -96,6 +138,7 @@
     mlock: boolean;
     kvInRam: boolean;
     reasoningOn: boolean;
+    reasoningBudget: number | "";
     kvK: string;
     kvV: string;
     spec: string;
@@ -103,6 +146,17 @@
     parallel: number | "";
     ub: number | "";
     extraArgs: string;
+    // DRY: presence of any --dry-* flag => on; absence => off. Values "" => default.
+    dryOn: boolean;
+    dryMultiplier: number | "";
+    dryBase: number | "";
+    dryAllowedLength: number | "";
+    // Speculative sub-knobs (value "" / false => omit).
+    specDraftNMax: number | "";
+    specDefault: boolean;
+    specNgramSizeN: number | "";
+    specNgramSizeM: number | "";
+    specNgramMinHits: number | "";
   }
 
   // Parse a launch command into form fields + extraArgs passthrough. Computed
@@ -119,10 +173,19 @@
       par: string | null = null,
       u: string | null = null,
       sp: string | null = null,
-      reason: string | null = null;
+      reason: string | null = null,
+      rBudget: string | null = null;
     let noMmap = false,
       mlockF = false,
-      noKv = false;
+      noKv = false,
+      specDef = false;
+    let dMult: string | null = null,
+      dBase: string | null = null,
+      dAllow: string | null = null,
+      sNMax: string | null = null,
+      sNgN: string | null = null,
+      sNgM: string | null = null,
+      sNgHits: string | null = null;
     const extras: string[] = [];
     for (; i < toks.length; i++) {
       const tk = toks[i];
@@ -133,12 +196,21 @@
         case "-t": t = val(); break;
         case "--parallel": par = val(); break;
         case "-ub": u = val(); break;
-        case "--spec-type": sp = val(); break;
+        case "--spec-type": { const t = val(); sp = sp ? `${sp}+${t}` : t; break; } // chained backends accumulate
         case "--reasoning-format": reason = val(); break;
+        case "--reasoning-budget": rBudget = val(); break;
         case "--reasoning": if (val() === "off") reason = "off"; break;
         case "--no-mmap": noMmap = true; break;
         case "--mlock": mlockF = true; break;
         case "--no-kv-offload": noKv = true; break;
+        case "--dry-multiplier": dMult = val(); break;
+        case "--dry-base": dBase = val(); break;
+        case "--dry-allowed-length": dAllow = val(); break;
+        case "--spec-draft-n-max": sNMax = val(); break;
+        case "--spec-default": specDef = true; break;
+        case "--spec-ngram-map-k4v-size-n": sNgN = val(); break;
+        case "--spec-ngram-map-k4v-size-m": sNgM = val(); break;
+        case "--spec-ngram-map-k4v-min-hits": sNgHits = val(); break;
         default:
           if (IGNORE_VALUE.has(tk)) val();
           else if (IGNORE_BOOL.has(tk)) break;
@@ -155,6 +227,7 @@
       mlock: mlockF,
       kvInRam: noKv,
       reasoningOn: reason !== "none" && reason !== "off",
+      reasoningBudget: rBudget !== null && rBudget !== "" ? Number(rBudget) : "",
       kvK: ctk ?? "",
       kvV: ctv ?? "",
       spec: sp ?? "",
@@ -162,6 +235,16 @@
       parallel: par !== null ? Number(par) : "",
       ub: u !== null ? Number(u) : "",
       extraArgs: extras.join(" "),
+      // DRY is on iff any --dry-* flag survived in the box.
+      dryOn: dMult !== null || dBase !== null || dAllow !== null,
+      dryMultiplier: dMult !== null && dMult !== "" ? Number(dMult) : "",
+      dryBase: dBase !== null && dBase !== "" ? Number(dBase) : "",
+      dryAllowedLength: dAllow !== null && dAllow !== "" ? Number(dAllow) : "",
+      specDraftNMax: sNMax !== null && sNMax !== "" ? Number(sNMax) : "",
+      specDefault: specDef,
+      specNgramSizeN: sNgN !== null && sNgN !== "" ? Number(sNgN) : "",
+      specNgramSizeM: sNgM !== null && sNgM !== "" ? Number(sNgM) : "",
+      specNgramMinHits: sNgHits !== null && sNgHits !== "" ? Number(sNgHits) : "",
     };
   }
 
@@ -172,30 +255,57 @@
     mlock = p.mlock;
     kvInRam = p.kvInRam;
     reasoningOn = p.reasoningOn;
+    reasoningBudget = p.reasoningBudget;
     kvK = p.kvK;
     kvV = p.kvV;
     spec = p.spec;
     threads = p.threads;
     parallel = p.parallel;
     ub = p.ub;
+    dryOn = p.dryOn;
+    dryMultiplier = p.dryMultiplier;
+    dryBase = p.dryBase;
+    dryAllowedLength = p.dryAllowedLength;
+    specDraftNMax = p.specDraftNMax;
+    specDefault = p.specDefault;
+    specNgramSizeN = p.specNgramSizeN;
+    specNgramSizeM = p.specNgramSizeM;
+    specNgramMinHits = p.specNgramMinHits;
     extraArgs = p.extraArgs;
   }
 
   // Apply parsed flags to the selected variant (string on/off knobs mirror the
   // override encoding: "" = inherit/on, "off" = forced off).
   function applyParsedToVariant(v: ModelVariant, p: ParsedCmd) {
+    // A variant is standalone, so the box renders generator-default base + the
+    // variant's fields. Model-specific flags (-ngl/-c/--n-cpu-moe/-m...) are
+    // skipped by IGNORE_VALUE, so nothing model-bound leaks. The only fields that
+    // would wrongly bake into a fleet-wide variant are kv and spec at their
+    // generator defaults (q8_0 / draft-mtp|ngram-mod): capture those as a delta vs
+    // the generator default so an unchanged value stays "inherit" ("").
+    const genSpec = config?.isMTP ? "draft-mtp" : "ngram-mod";
     v.flashAttn = p.flashOn ? "" : "off";
     v.mmap = p.mmapOn ? "" : "off";
     v.mlock = p.mlock;
     v.kvInRam = p.kvInRam;
     v.reasoningFmt = p.reasoningOn ? "" : "off";
-    v.kvK = p.kvK;
-    v.kvV = p.kvV;
-    v.spec = p.spec;
+    v.kvK = p.kvK === "q8_0" ? "" : p.kvK;
+    v.kvV = p.kvV === "q8_0" ? "" : p.kvV;
+    v.spec = p.spec === genSpec ? "" : p.spec;
     v.threads = p.threads === "" ? 0 : Number(p.threads);
     v.parallel = p.parallel === "" ? 0 : Number(p.parallel);
     v.ub = p.ub === "" ? 0 : Number(p.ub);
-    v.extraArgs = p.extraArgs;
+    // Box edit is explicit: any --dry-* present => on, none => off (loses inherit).
+    v.dry = p.dryOn;
+    v.dryMultiplier = p.dryMultiplier === "" ? 0 : Number(p.dryMultiplier);
+    v.dryBase = p.dryBase === "" ? 0 : Number(p.dryBase);
+    v.dryAllowedLength = p.dryAllowedLength === "" ? 0 : Number(p.dryAllowedLength);
+    v.specDraftNMax = p.specDraftNMax === "" ? 0 : Number(p.specDraftNMax);
+    v.specDefault = p.specDefault;
+    v.specNgramSizeN = p.specNgramSizeN === "" ? 0 : Number(p.specNgramSizeN);
+    v.specNgramSizeM = p.specNgramSizeM === "" ? 0 : Number(p.specNgramSizeM);
+    v.specNgramMinHits = p.specNgramMinHits === "" ? 0 : Number(p.specNgramMinHits);
+    v.extraArgs = p.extraArgs.trim();
   }
 
   function onCmdInput(e: Event) {
@@ -217,11 +327,16 @@
   $effect(() => {
     const deps = [
       open, config, selectedVariant,
-      ctx, ctxAuto, kvK, kvV, kvInRam, spec, reasoningOn, preserveThinking, flashOn, mmapOn, mlock, threads, parallel, ub, vramTarget, vramAuto, cpuOffload, cpuAuto, extraArgs, ctxCheckpoints,
+      ctx, ctxAuto, kvK, kvV, kvInRam, spec, reasoningOn, reasoningBudget, preserveThinking, flashOn, mmapOn, mlock, threads, parallel, ub, vramTarget, vramAuto, cpuOffload, cpuAuto, extraArgs, ctxCheckpoints,
+      dryOn, dryMultiplier, dryBase, dryAllowedLength, specDraftNMax, specDefault, specNgramSizeN, specNgramSizeM, specNgramMinHits,
+      vaePath, clipLPath, clipGPath, t5Path, textEncoderPath, offloadToCpu, teOnCpu, vaeTiling, diffusionFa,
+      defaultSteps, defaultCfg, defaultSampler, defaultWidth, defaultHeight,
       selectedV?.ctx, selectedV?.kvK, selectedV?.kvV, selectedV?.kvInRam, selectedV?.spec,
       selectedV?.reasoningFmt, selectedV?.flashAttn, selectedV?.mmap, selectedV?.mlock,
       selectedV?.threads, selectedV?.parallel, selectedV?.ub, selectedV?.vramTargetGB,
-      selectedV?.cpuOffload, selectedV?.ctxCheckpoints, selectedV?.dry, selectedV?.extraArgs,
+      selectedV?.cpuOffload, selectedV?.ctxCheckpoints, selectedV?.dry, selectedV?.extraArgs, selectedV?.preserveThinking,
+      selectedV?.dryMultiplier, selectedV?.dryBase, selectedV?.dryAllowedLength,
+      selectedV?.specDraftNMax, selectedV?.specDefault, selectedV?.specNgramSizeN, selectedV?.specNgramSizeM, selectedV?.specNgramMinHits,
     ];
     void deps;
     if (!open || !config || !modelId) return;
@@ -236,28 +351,76 @@
     }, 150);
   });
 
-  // Build a full ModelOverride from a variant so the launch-command preview and
-  // estimate treat it as a standalone model (zero/empty fields still inherit at
-  // the backend, but here they render as the generator defaults).
+  // A named variant INHERITS the model-wide override (the Default tab) and layers
+  // its own non-blank fields on top — same as the generate path. So the preview
+  // override is the base merged with the variant's set fields, NOT a standalone
+  // render. aliases/unlisted/variants stay variant-local (never inherited).
   function variantToOverride(v: ModelVariant): ModelOverride {
+    // Image variants inherit the model-wide base (component paths + placement) and
+    // override only their preset; preview merges base + variant so the cmd is real.
+    if (imageMode) {
+      const base = buildOverride();
+      return {
+        ...base,
+        vaePath: v.vaePath || base.vaePath,
+        clipLPath: v.clipLPath || base.clipLPath,
+        clipGPath: v.clipGPath || base.clipGPath,
+        t5Path: v.t5Path || base.t5Path,
+        textEncoderPath: v.textEncoderPath || base.textEncoderPath,
+        offloadToCpu: v.offloadToCpu || base.offloadToCpu,
+        teOnCpu: v.teOnCpu || base.teOnCpu,
+        vaeTiling: v.vaeTiling || base.vaeTiling,
+        diffusionFa: v.diffusionFa || base.diffusionFa,
+        vramTargetGB: v.vramTargetGB || base.vramTargetGB,
+        threads: v.threads || base.threads,
+        defaultSteps: v.defaultSteps || base.defaultSteps,
+        defaultCfg: v.defaultCfg || base.defaultCfg,
+        defaultSampler: v.defaultSampler || base.defaultSampler,
+        defaultWidth: v.defaultWidth || base.defaultWidth,
+        defaultHeight: v.defaultHeight || base.defaultHeight,
+        extraArgs: v.extraArgs || base.extraArgs,
+        aliases: v.aliases ?? [],
+        unlisted: v.unlisted ?? false,
+        variants: [],
+      };
+    }
+    const base = buildOverride();
     return {
-      ctx: v.ctx || 0,
-      kvK: v.kvK ?? "",
-      kvV: v.kvV ?? "",
-      kvInRam: v.kvInRam ?? false,
-      vramTargetGB: v.vramTargetGB || 0,
-      cpuOffload: v.cpuOffload || 0,
-      spec: v.spec ?? "",
-      reasoningFmt: v.reasoningFmt ?? "",
-      flashAttn: v.flashAttn ?? "",
-      mmap: v.mmap ?? "",
-      mlock: v.mlock ?? false,
-      threads: v.threads || 0,
-      parallel: v.parallel || 0,
-      ub: v.ub || 0,
-      extraArgs: v.extraArgs ?? "",
+      ...base,
+      ctx: v.ctx || base.ctx || 0,
+      kvK: v.kvK || base.kvK || "",
+      kvV: v.kvV || base.kvV || "",
+      kvInRam: v.kvInRam ?? base.kvInRam ?? false,
+      vramTargetGB: v.vramTargetGB || base.vramTargetGB || 0,
+      cpuOffload: v.cpuOffload || base.cpuOffload || 0,
+      spec: v.spec || base.spec || "",
+      reasoningFmt: v.reasoningFmt || base.reasoningFmt || "",
+      // preserve-thinking defaults on for reasoning variants; off when reasoning off.
+      preserveThinking: v.reasoningFmt !== "off" && (v.preserveThinking ?? true),
+      flashAttn: v.flashAttn || base.flashAttn || "",
+      mmap: v.mmap || base.mmap || "",
+      mlock: v.mlock ?? base.mlock ?? false,
+      threads: v.threads || base.threads || 0,
+      parallel: v.parallel || base.parallel || 0,
+      ub: v.ub || base.ub || 0,
+      extraArgs: v.extraArgs || base.extraArgs || "",
+      dry: v.dry ?? base.dry ?? null,
+      dryMultiplier: v.dryMultiplier || base.dryMultiplier || 0,
+      dryBase: v.dryBase || base.dryBase || 0,
+      dryAllowedLength: v.dryAllowedLength || base.dryAllowedLength || 0,
+      specDraftNMax: v.specDraftNMax || base.specDraftNMax || 0,
+      specDefault: v.specDefault || base.specDefault || false,
+      specNgramSizeN: v.specNgramSizeN || base.specNgramSizeN || 0,
+      specNgramSizeM: v.specNgramSizeM || base.specNgramSizeM || 0,
+      specNgramMinHits: v.specNgramMinHits || base.specNgramMinHits || 0,
+      ctxCheckpoints: v.ctxCheckpoints ?? null,
+      // variant-local: never inherited from the base.
       aliases: v.aliases ?? [],
       unlisted: v.unlisted ?? false,
+      skip: false,
+      // single-variant preview: don't fan nested variants/tiers back in.
+      variants: [],
+      ctxVariants: [],
     };
   }
 
@@ -291,14 +454,41 @@
   // VRAM slider ceiling = the global budget (fallback 24 GB until settings load).
   const maxVram = $derived(globalTargetGB > 0 ? globalTargetGB : 24);
 
-  // Speculative options: draft-mtp only offered when the model has MTP layers.
-  // MTP models auto-default to draft-mtp (matches generator); others default to ngram-mod.
-  const specOpts = $derived([
-    { value: "", label: config?.isMTP ? "default (draft-mtp)" : "default (ngram-mod)" },
-    { value: "none", label: "none (disable)" },
-    ...(config?.isMTP ? [{ value: "draft-mtp", label: "draft-mtp" }] : []),
-    ...(config?.isMTP ? [{ value: "ngram-mod", label: "ngram-mod" }] : []),
+  // Speculative backends are chainable (e.g. draft-mtp + ngram-map-k4v), so spec
+  // is a "+"-joined list. draft-mtp is only offered when the model has MTP layers.
+  const specBackends = $derived([
+    ...(config?.isMTP ? ["draft-mtp"] : []),
+    "ngram-mod",
+    "ngram-map-k4v",
   ]);
+
+  // Does spec list s contain backend b?
+  function specHas(s: string | undefined, b: string): boolean {
+    return (s ?? "").split("+").includes(b);
+  }
+  // Toggle backend b in the "+"-joined list s. "none" is exclusive (clears the
+  // rest); checking a real backend clears "none".
+  function specToggle(s: string | undefined, b: string, on: boolean): string {
+    if (b === "none") return on ? "none" : "";
+    let parts = (s ?? "").split("+").filter(Boolean).filter((x) => x !== "none" && x !== b);
+    if (on) parts.push(b);
+    // Unchecking the last backend means "off" — store explicit "none" rather
+    // than "" (empty would fall back to the MTP/ngram auto-default at emit).
+    if (!on && parts.length === 0) return "none";
+    return parts.join("+");
+  }
+  // Resolved active backends (""/unset => the generator default) so the form can
+  // show only the sub-knobs the chosen backends actually emit.
+  function activeSpecs(s: string | undefined): string[] {
+    const raw = (s ?? "").split("+").filter(Boolean);
+    if (raw.length === 0) return [config?.isMTP ? "draft-mtp" : "ngram-mod"];
+    if (raw.includes("none")) return [];
+    return raw;
+  }
+  const effSpecs = $derived(activeSpecs(spec)); // Default tab
+  // Variant tab: own spec list, else the generator default (standalone — does NOT
+  // inherit the Default tab's spec).
+  const vEffSpecs = $derived(activeSpecs(selectedV?.spec));
 
   function fmtCtx(n: number): string {
     return n % 1024 === 0 ? `${n / 1024}k` : `${n}`;
@@ -341,6 +531,7 @@
     cpuOffload = o?.cpuOffload || 0;
     spec = o?.spec ?? "";
     reasoningOn = (o?.reasoningFmt ?? "") !== "off";
+    reasoningBudget = o?.reasoningBudget ? o.reasoningBudget : "";
     preserveThinking = o?.preserveThinking ?? false;
     flashOn = (o?.flashAttn ?? "") !== "off";
     mmapOn = (o?.mmap ?? "") !== "off";
@@ -348,6 +539,15 @@
     threads = o?.threads ? o.threads : "";
     parallel = o?.parallel ? o.parallel : "";
     ub = o?.ub ? o.ub : "";
+    dryOn = o?.dry ?? true; // null/undefined => on
+    dryMultiplier = o?.dryMultiplier ? o.dryMultiplier : "";
+    dryBase = o?.dryBase ? o.dryBase : "";
+    dryAllowedLength = o?.dryAllowedLength ? o.dryAllowedLength : "";
+    specDraftNMax = o?.specDraftNMax ? o.specDraftNMax : "";
+    specDefault = o?.specDefault ?? false;
+    specNgramSizeN = o?.specNgramSizeN ? o.specNgramSizeN : "";
+    specNgramSizeM = o?.specNgramSizeM ? o.specNgramSizeM : "";
+    specNgramMinHits = o?.specNgramMinHits ? o.specNgramMinHits : "";
     extraArgs = o?.extraArgs ?? "";
     aliasesText = (o?.aliases ?? []).join(", ");
     unlisted = o?.unlisted ?? false;
@@ -355,6 +555,21 @@
     ctxCheckpoints = o?.ctxCheckpoints ?? null;
     variants = (o?.variants ?? []).map((v) => ({ ...v }));
     ctxTiers = (o?.ctxVariants ?? []).map((n) => blankVariant(fmtCtx(n), n));
+    // Image fields (no-op for llama models — left at "").
+    vaePath = o?.vaePath ?? "";
+    clipLPath = o?.clipLPath ?? "";
+    clipGPath = o?.clipGPath ?? "";
+    t5Path = o?.t5Path ?? "";
+    textEncoderPath = o?.textEncoderPath ?? "";
+    offloadToCpu = o?.offloadToCpu ?? "";
+    teOnCpu = o?.teOnCpu ?? "";
+    vaeTiling = o?.vaeTiling ?? "";
+    diffusionFa = o?.diffusionFa ?? "";
+    defaultSteps = o?.defaultSteps ? o.defaultSteps : "";
+    defaultCfg = o?.defaultCfg ? o.defaultCfg : "";
+    defaultSampler = o?.defaultSampler ?? "";
+    defaultWidth = o?.defaultWidth ? o.defaultWidth : "";
+    defaultHeight = o?.defaultHeight ? o.defaultHeight : "";
   }
 
   // A ModelVariant with every field at its inherit/default value except name+ctx.
@@ -362,10 +577,26 @@
   function blankVariant(name: string, ctx: number): ModelVariant {
     return {
       name, ctx, vramTargetGB: 0, kvK: "", kvV: "", spec: "", ub: 0,
-      reasoningFmt: "", unlisted: false, aliases: [], ctxCheckpoints: null, dry: null,
+      reasoningFmt: "", unlisted: false, aliases: [], ctxCheckpoints: null, dry: null, preserveThinking: null,
       kvInRam: false, cpuOffload: 0, flashAttn: "", mmap: "", mlock: false,
       threads: 0, parallel: 0, extraArgs: "",
+      dryMultiplier: 0, dryBase: 0, dryAllowedLength: 0,
+      specDraftNMax: 0, specDefault: false, specNgramSizeN: 0, specNgramSizeM: 0, specNgramMinHits: 0,
+      vaePath: "", clipLPath: "", clipGPath: "", t5Path: "", textEncoderPath: "",
+      offloadToCpu: "", teOnCpu: "", vaeTiling: "", diffusionFa: "",
+      defaultSteps: 0, defaultCfg: 0, defaultSampler: "", defaultWidth: 0, defaultHeight: 0,
     };
+  }
+
+  // Add a fresh image variant (inherits the model's paths/placement; overrides
+  // only its generation preset) and select it.
+  function addImageVariantEntry() {
+    let n = 1;
+    let name = "preset";
+    const taken = (nm: string) => variants.some((v) => v.name.toLowerCase() === nm.toLowerCase());
+    while (taken(name)) name = `preset${++n}`;
+    variants = [...variants, blankVariant(name, 0)];
+    selectedVariant = name;
   }
 
   // True when a ctx tier carries nothing but its ctx value, so it round-trips as
@@ -374,8 +605,10 @@
     return (
       !v.vramTargetGB && !v.kvK && !v.kvV && !v.spec && !v.ub &&
       !v.reasoningFmt && !v.unlisted && (v.aliases?.length ?? 0) === 0 &&
-      v.ctxCheckpoints == null && v.dry == null && !v.kvInRam && !v.cpuOffload &&
-      !v.flashAttn && !v.mmap && !v.mlock && !v.threads && !v.parallel && !v.extraArgs
+      v.ctxCheckpoints == null && v.dry == null && v.preserveThinking == null && !v.kvInRam && !v.cpuOffload &&
+      !v.flashAttn && !v.mmap && !v.mlock && !v.threads && !v.parallel && !v.extraArgs &&
+      !v.dryMultiplier && !v.dryBase && !v.dryAllowedLength &&
+      !v.specDraftNMax && !v.specDefault && !v.specNgramSizeN && !v.specNgramSizeM && !v.specNgramMinHits
     );
   }
 
@@ -426,7 +659,8 @@
       selectedV?.kvInRam, selectedV?.cpuOffload,
     ];
     void deps;
-    if (!open || !config || !modelId) return;
+    // Diffusion sizing isn't modeled by the llama sizer; skip the estimate.
+    if (!open || !config || !modelId || imageMode) return;
     clearTimeout(estTimer);
     estTimer = setTimeout(runEstimate, 100);
   });
@@ -435,18 +669,19 @@
     if (!modelId || !config) return;
     estimateError = null;
     try {
-      // A variant carries its own full launch shape (ctx / kv / spec / vram /
-      // offload / kv-in-ram / checkpoints). The Default entry uses the top-level
-      // form fields. Zero/empty still inherits at the backend on save.
+      // A variant INHERITS the model-wide override (Default form fields) and
+      // overrides with its own non-blank fields — same as the generate path. So a
+      // blank kv/spec/vram falls back to the Default values, not the bare backend
+      // default, keeping the preview estimate in step with the emitted config.
       const params = selectedV
         ? {
-            ctx: selectedV.ctx ? Number(selectedV.ctx) : undefined,
-            kvK: selectedV.kvK || undefined,
-            kvV: selectedV.kvV || undefined,
-            kvInRam: selectedV.kvInRam ?? false,
-            spec: selectedV.spec || undefined,
-            vram: selectedV.vramTargetGB ? Number(selectedV.vramTargetGB) : undefined,
-            cpuOffload: selectedV.cpuOffload ? Number(selectedV.cpuOffload) : undefined,
+            ctx: selectedV.ctx ? Number(selectedV.ctx) : ctxAuto ? undefined : Number(ctx),
+            kvK: selectedV.kvK || kvK || undefined,
+            kvV: selectedV.kvV || kvV || undefined,
+            kvInRam: selectedV.kvInRam ?? kvInRam,
+            spec: selectedV.spec || spec || undefined,
+            vram: selectedV.vramTargetGB ? Number(selectedV.vramTargetGB) : vramAuto ? undefined : Number(vramTarget),
+            cpuOffload: selectedV.cpuOffload ? Number(selectedV.cpuOffload) : cpuAuto ? undefined : Number(cpuOffload),
             ctxCheckpoints: selectedV.ctxCheckpoints ?? undefined,
           }
         : {
@@ -472,6 +707,8 @@
   function wheelAdjust(node: HTMLInputElement) {
     function onwheel(e: WheelEvent) {
       if (node.disabled) return;
+      // Only adjust when the field is focused; otherwise let the page scroll.
+      if (document.activeElement !== node) return;
       e.preventDefault();
       const step = Number(node.step) || 1;
       const dir = e.deltaY < 0 ? 1 : -1;
@@ -503,6 +740,7 @@
       cpuOffload: cpuAuto ? 0 : Number(cpuOffload),
       spec,
       reasoningFmt: reasoningOn ? "" : "off",
+      reasoningBudget: reasoningBudget === "" ? 0 : Number(reasoningBudget),
       preserveThinking: reasoningOn && preserveThinking,
       flashAttn: flashOn ? "" : "off",
       mmap: mmapOn ? "" : "off",
@@ -510,6 +748,15 @@
       threads: threads === "" ? 0 : Number(threads),
       parallel: parallel === "" ? 0 : Number(parallel),
       ub: ub === "" ? 0 : Number(ub),
+      dry: dryOn ? null : false, // on => inherit/default-on; off => explicit false
+      dryMultiplier: dryMultiplier === "" ? 0 : Number(dryMultiplier),
+      dryBase: dryBase === "" ? 0 : Number(dryBase),
+      dryAllowedLength: dryAllowedLength === "" ? 0 : Number(dryAllowedLength),
+      specDraftNMax: specDraftNMax === "" ? 0 : Number(specDraftNMax),
+      specDefault,
+      specNgramSizeN: specNgramSizeN === "" ? 0 : Number(specNgramSizeN),
+      specNgramSizeM: specNgramSizeM === "" ? 0 : Number(specNgramSizeM),
+      specNgramMinHits: specNgramMinHits === "" ? 0 : Number(specNgramMinHits),
       extraArgs,
       aliases: parseAliases(aliasesText),
       unlisted,
@@ -519,6 +766,44 @@
       // promote to named variants alongside the explicit ones.
       ctxVariants: ctxTiers.filter(ctxTierIsPure).map((v) => v.ctx ?? 0).filter((n) => n > 0),
       variants: [...variants, ...ctxTiers.filter((v) => !ctxTierIsPure(v))],
+      // Image fields (zero/empty for llama models => emit nothing).
+      vaePath,
+      clipLPath,
+      clipGPath,
+      t5Path,
+      textEncoderPath,
+      offloadToCpu,
+      teOnCpu,
+      vaeTiling,
+      diffusionFa,
+      defaultSteps: defaultSteps === "" ? 0 : Number(defaultSteps),
+      defaultCfg: defaultCfg === "" ? 0 : Number(defaultCfg),
+      defaultSampler,
+      defaultWidth: defaultWidth === "" ? 0 : Number(defaultWidth),
+      defaultHeight: defaultHeight === "" ? 0 : Number(defaultHeight),
+    };
+  }
+
+  // Snapshot the current Default tab into a standalone variant. A new per-model
+  // variant copies the Default's launch knobs ONCE at creation (so it starts
+  // matching what the model launches with); afterwards it is fully independent —
+  // later Default edits don't touch it. Sizing fields (ctx/vram/cpuOffload) stay
+  // auto so the variant sizes itself. Model-specific, so only used for per-model
+  // variants, never fleet-wide ones.
+  function variantFromDefault(name: string): ModelVariant {
+    const o = buildOverride();
+    return {
+      name, ctx: 0, vramTargetGB: 0, cpuOffload: 0,
+      kvK: o.kvK ?? "", kvV: o.kvV ?? "", kvInRam: o.kvInRam ?? false, spec: o.spec ?? "",
+      reasoningFmt: o.reasoningFmt ?? "",
+      preserveThinking: o.preserveThinking ? null : false,
+      flashAttn: o.flashAttn ?? "", mmap: o.mmap ?? "", mlock: o.mlock ?? false,
+      threads: o.threads ?? 0, parallel: o.parallel ?? 0, ub: o.ub ?? 0,
+      dry: o.dry ?? null,
+      dryMultiplier: o.dryMultiplier ?? 0, dryBase: o.dryBase ?? 0, dryAllowedLength: o.dryAllowedLength ?? 0,
+      specDraftNMax: o.specDraftNMax ?? 0, specDefault: o.specDefault ?? false,
+      specNgramSizeN: o.specNgramSizeN ?? 0, specNgramSizeM: o.specNgramSizeM ?? 0, specNgramMinHits: o.specNgramMinHits ?? 0,
+      extraArgs: o.extraArgs ?? "", unlisted: false, aliases: [], ctxCheckpoints: o.ctxCheckpoints ?? null,
     };
   }
 
@@ -529,7 +814,7 @@
     const taken = (nm: string) =>
       [...variants, ...ctxTiers, ...defaultVariants].some((v) => v.name.toLowerCase() === nm.toLowerCase());
     while (taken(name)) name = `variant${++n}`;
-    variants = [...variants, blankVariant(name, 0)];
+    variants = [...variants, variantFromDefault(name)];
     selectedVariant = name;
   }
 
@@ -541,7 +826,9 @@
     const taken = (nm: string) =>
       [...variants, ...ctxTiers, ...defaultVariants].some((v) => v.name.toLowerCase() === nm.toLowerCase());
     while (taken(name)) name = `fleet${++n}`;
-    defaultVariants = [...defaultVariants, blankVariant(name, 0)];
+    // Seed from the current Default (spec, kv, engine knobs) like a per-model
+    // variant: it inherits at creation, then drifts independently (standalone).
+    defaultVariants = [...defaultVariants, variantFromDefault(name)];
     selectedVariant = name;
   }
 
@@ -641,7 +928,7 @@
 
     <!-- Sticky live estimate: stays pinned above the scrolling form so the memory
          cost of the current tuning is always visible while editing. -->
-    {#if config && !loading}
+    {#if config && !loading && !imageMode}
       <div class="px-4 py-2 border-b border-card-border bg-background/60 shrink-0">
         {#if estimateError}
           <p class="font-mono text-xs text-error">{estimateError}</p>
@@ -684,7 +971,7 @@
       </div>
     {/if}
 
-    <div class="overflow-y-auto flex-1 p-4 space-y-4">
+    <div class="overflow-y-auto flex-1 p-4 space-y-4 pretty-scroll">
       {#if loading}
         <p class="text-txtsecondary">Loading…</p>
       {:else if error}
@@ -696,6 +983,312 @@
       {/snippet}
 
       {#if config}
+        {#if imageMode}
+        <!-- Image (diffusion / sd-server) form. Mirrors the Default tab's design
+             but with diffusion-relevant knobs: external component paths, placement,
+             and per-model generation defaults. No KV/ctx/spec; no estimate. Variants
+             are generation presets (steps/cfg/size) inheriting the model's paths. -->
+        <div class="flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            class="px-2.5 py-1 rounded text-xs font-mono border transition-colors {selectedVariant === ''
+              ? 'bg-primary text-white border-primary'
+              : 'border-card-border text-txtsecondary hover:text-txtmain'}"
+            onclick={() => (selectedVariant = "")}
+          >default</button>
+          {#each variants as v (v.name)}
+            <span class="inline-flex items-center rounded border overflow-hidden {selectedVariant === v.name ? 'border-primary' : 'border-card-border'}">
+              <button
+                type="button"
+                class="px-2.5 py-1 text-xs font-mono transition-colors {selectedVariant === v.name ? 'bg-primary text-white' : 'text-txtsecondary hover:text-txtmain'}"
+                onclick={() => (selectedVariant = v.name)}>{v.name || "(unnamed)"}</button>
+              <button
+                type="button"
+                title="Remove preset"
+                aria-label="Remove preset {v.name}"
+                class="px-1.5 py-1 text-xs {selectedVariant === v.name ? 'bg-primary text-white hover:bg-black/25' : 'text-txtsecondary hover:text-error'}"
+                onclick={() => removeVariantEntry(v.name)}>×</button>
+            </span>
+          {/each}
+          <button
+            type="button"
+            title="Add a generation preset (steps / cfg / size), inheriting this model's paths"
+            class="px-2.5 py-1 rounded text-xs font-semibold border border-dashed border-info text-info hover:bg-info hover:text-white transition-colors"
+            onclick={addImageVariantEntry}>+ preset</button>
+        </div>
+
+        {#if selectedVariant === ""}
+        <div class="grid grid-cols-2 gap-3">
+          <div class="col-span-2 font-mono text-[0.6rem] uppercase tracking-wider text-txtsecondary">Component paths</div>
+          <label class="flex flex-col gap-1 text-sm col-span-2">
+            <span class="text-txtsecondary flex items-center gap-1">
+              VAE
+              {@render hint("--vae. External VAE file (decodes the latent to pixels). A diffusion-only GGUF needs this supplied separately.")}
+            </span>
+            <input type="text" bind:value={vaePath} class="cfg-input" placeholder="e.g. /models/ae.safetensors" spellcheck="false" />
+          </label>
+          <label class="flex flex-col gap-1 text-sm col-span-2">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Text encoder (LLM)
+              {@render hint("--llm. Text-encoder model for Z-Image / Lumina-family diffusion (e.g. a Qwen3 GGUF). Use this OR the CLIP/T5 encoders below, per the model family.")}
+            </span>
+            <input type="text" bind:value={textEncoderPath} class="cfg-input" placeholder="e.g. /models/qwen3-4b-q8_0.gguf" spellcheck="false" />
+          </label>
+          <label class="flex flex-col gap-1 text-sm">
+            <span class="text-txtsecondary flex items-center gap-1">
+              CLIP-L
+              {@render hint("--clip_l. CLIP-L text encoder (SD/SDXL/Flux).")}
+            </span>
+            <input type="text" bind:value={clipLPath} class="cfg-input" placeholder="clip_l.safetensors" spellcheck="false" />
+          </label>
+          <label class="flex flex-col gap-1 text-sm">
+            <span class="text-txtsecondary flex items-center gap-1">
+              CLIP-G
+              {@render hint("--clip_g. CLIP-G text encoder (SDXL).")}
+            </span>
+            <input type="text" bind:value={clipGPath} class="cfg-input" placeholder="clip_g.safetensors" spellcheck="false" />
+          </label>
+          <label class="flex flex-col gap-1 text-sm col-span-2">
+            <span class="text-txtsecondary flex items-center gap-1">
+              T5-XXL
+              {@render hint("--t5xxl. T5-XXL text encoder (Flux / SD3).")}
+            </span>
+            <input type="text" bind:value={t5Path} class="cfg-input" placeholder="t5xxl.safetensors" spellcheck="false" />
+          </label>
+
+          <label class="flex flex-col gap-1 text-sm col-span-2">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Target VRAM
+              {@render hint("How much VRAM to size this model against (--max-vram). Auto = the global target. sd.cpp graph-cuts to fit it; lower it to leave headroom for other apps.")}
+              <span class="ml-auto font-mono text-txtmain">
+                {vramAuto ? (globalTargetGB ? `auto · ${globalTargetGB.toFixed(1)} GB` : "auto") : `${Number(vramTarget).toFixed(1)} GB`}
+              </span>
+            </span>
+            <div class="flex items-center gap-3">
+              <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
+                <input type="checkbox" bind:checked={vramAuto} /> Auto
+              </label>
+              <input type="range" min="0" max={maxVram} step="0.5" bind:value={vramTarget} disabled={vramAuto} use:wheelAdjust class="flex-1 disabled:opacity-40" />
+              <span class="text-xs text-txtsecondary font-mono whitespace-nowrap">max {maxVram.toFixed(0)}G</span>
+            </div>
+          </label>
+
+          <div class="col-span-2 font-mono text-[0.6rem] uppercase tracking-wider text-txtsecondary mt-1">Generation defaults</div>
+          <label class="flex flex-col gap-1 text-sm">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Steps
+              {@render hint("--steps. Default sampling steps when a request omits it. Turbo/LCM models need few (e.g. 8); standard models 20-30. Empty = sd-server default.")}
+            </span>
+            <input type="number" min="0" step="1" bind:value={defaultSteps} use:wheelAdjust class="cfg-input" placeholder="default" />
+          </label>
+          <label class="flex flex-col gap-1 text-sm">
+            <span class="text-txtsecondary flex items-center gap-1">
+              CFG scale
+              {@render hint("--cfg-scale. Prompt-adherence strength. Turbo/distilled models REQUIRE 1.0 (higher blurs output); standard models ~7. Empty = sd-server default.")}
+            </span>
+            <input type="number" min="0" step="0.5" bind:value={defaultCfg} use:wheelAdjust class="cfg-input" placeholder="default" />
+          </label>
+          <label class="flex flex-col gap-1 text-sm col-span-2">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Sampler
+              {@render hint("--sampling-method. Default sampling method when a request omits it. Empty = sd-server default.")}
+            </span>
+            <select bind:value={defaultSampler} class="cfg-input">
+              {#each IMG_SAMPLERS as o}<option value={o}>{o === "" ? "default" : o}</option>{/each}
+            </select>
+          </label>
+          <label class="flex flex-col gap-1 text-sm">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Default width
+              {@render hint("--width. Default image width in px when a request omits it. Empty = sd-server default (512).")}
+            </span>
+            <input type="number" min="0" step="64" bind:value={defaultWidth} use:wheelAdjust class="cfg-input" placeholder="default" />
+          </label>
+          <label class="flex flex-col gap-1 text-sm">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Default height
+              {@render hint("--height. Default image height in px when a request omits it. Empty = sd-server default (512).")}
+            </span>
+            <input type="number" min="0" step="64" bind:value={defaultHeight} use:wheelAdjust class="cfg-input" placeholder="default" />
+          </label>
+
+          <label class="flex flex-col gap-1 text-sm col-span-2">
+            <span class="text-txtsecondary flex items-center gap-1">
+              CPU offload
+              {@render hint("--offload-to-cpu. Page the diffusion weights to RAM (loaded to VRAM on use) to fit a tight budget. Auto = the sizer offloads when weights + compute don't fit the target.")}
+            </span>
+            <select bind:value={offloadToCpu} class="cfg-input">
+              <option value="">auto (sizer decides)</option>
+              <option value="on">on (force offload)</option>
+              <option value="off">off (keep on GPU)</option>
+            </select>
+          </label>
+
+          <label class="flex flex-col gap-1 text-sm">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Threads
+              {@render hint("-t. CPU threads. Empty = the global default. Matters for the CPU-side text encoder / offloaded weights.")}
+            </span>
+            <input type="number" min="0" step="1" bind:value={threads} use:wheelAdjust class="cfg-input" placeholder="global default" />
+          </label>
+          <label class="flex flex-col gap-1 text-sm col-span-2">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Aliases (comma-separated)
+              {@render hint("Extra names this model answers to in the /v1/models API (e.g. map dall-e-3 to this model).")}
+            </span>
+            <input type="text" bind:value={aliasesText} class="cfg-input" placeholder="e.g. dall-e-3, gpt-image-1" />
+          </label>
+        </div>
+
+        <!-- Toggles: the on/off knobs, grouped at the bottom (mirrors the LLM tab). -->
+        <div>
+          <div class="font-mono text-[0.6rem] uppercase tracking-wider text-txtsecondary mb-2">Toggles</div>
+          <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+            <label class="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={teOnCpu !== "off"} onchange={(e) => (teOnCpu = (e.currentTarget as HTMLInputElement).checked ? "" : "off")} />
+              <span class="text-txtsecondary flex items-center gap-1">
+                Text encoder on CPU
+                {@render hint("--backend te=cpu. Run the text encoder on the CPU (on by default). It runs once per generation, so it's the cheapest component to keep off the GPU. Turn off only if you have VRAM headroom.")}
+              </span>
+            </label>
+            <label class="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={vaeTiling !== "off"} onchange={(e) => (vaeTiling = (e.currentTarget as HTMLInputElement).checked ? "" : "off")} />
+              <span class="text-txtsecondary flex items-center gap-1">
+                VAE tiling
+                {@render hint("--vae-tiling. Tile the VAE decode to cap its VRAM spike (on by default). Decoding a full latent whole can OOM on a tight card. Quality is steps/cfg, not this.")}
+              </span>
+            </label>
+            <label class="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={diffusionFa !== "off"} onchange={(e) => (diffusionFa = (e.currentTarget as HTMLInputElement).checked ? "" : "off")} />
+              <span class="text-txtsecondary flex items-center gap-1">
+                Diffusion flash-attn
+                {@render hint("--diffusion-fa. Flash attention for the diffusion model (on by default). Near-free VRAM saver.")}
+              </span>
+            </label>
+            <label class="flex items-center gap-2 text-sm">
+              <input type="checkbox" bind:checked={unlisted} />
+              <span class="text-txtsecondary flex items-center gap-1">
+                Unlisted
+                {@render hint("Hide from /v1/models listings, but still loadable by exact id.")}
+              </span>
+            </label>
+            <label class="flex items-center gap-2 text-sm">
+              <input type="checkbox" bind:checked={skip} />
+              <span class="text-txtsecondary flex items-center gap-1">
+                Skip (don't emit)
+                {@render hint("Exclude this model from the generated config entirely.")}
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Launch command (read-only preview; re-renders live from the fields). The
+             image cmd has no two-way parse-back — use the fields above + extraArgs. -->
+        <details class="group">
+          <summary class="cursor-pointer font-semibold text-sm uppercase tracking-wider text-txtsecondary hover:text-txtmain">
+            Launch parameters {config.hasOverride ? "(custom)" : "(autogen default)"}
+          </summary>
+          <textarea
+            value={cmdDraft}
+            readonly
+            spellcheck="false"
+            rows="6"
+            class="mt-2 w-full bg-background rounded border border-card-border p-3 text-xs font-mono whitespace-pre-wrap break-all resize-y text-txtmain opacity-90"
+          ></textarea>
+          <p class="text-xs text-txtsecondary mt-1">
+            Re-renders from the fields above. For flags not modelled here, add them in <code>extraArgs</code> via the generate file.
+          </p>
+          <p class="text-xs text-txtsecondary mt-1 font-mono break-all">{config.gguf}</p>
+        </details>
+        {:else if selectedV}
+          {@const sv = selectedV}
+          <p class="text-xs text-txtsecondary -mt-1">
+            Editing preset <span class="font-mono text-txtmain">{config.id}-{sv.name || "(unnamed)"}</span>.
+            Inherits this model's component paths + placement; set only what differs.
+          </p>
+          <div class="grid grid-cols-2 gap-3">
+            <label class="flex flex-col gap-1 text-sm col-span-2">
+              <span class="text-txtsecondary flex items-center gap-1">
+                Name (suffix)
+                {@render hint("The preset's id suffix. Loads as <base-id>-<name>.")}
+              </span>
+              <input type="text" value={sv.name} oninput={renameSelectedVariant} class="cfg-input" placeholder="e.g. fast, quality, hd" />
+            </label>
+
+            <div class="col-span-2 font-mono text-[0.6rem] uppercase tracking-wider text-txtsecondary mt-1">Generation defaults</div>
+            <label class="flex flex-col gap-1 text-sm">
+              <span class="text-txtsecondary flex items-center gap-1">Steps{@render hint("--steps for this preset. Empty / 0 = inherit the model default.")}</span>
+              <input type="number" min="0" step="1" bind:value={sv.defaultSteps} use:wheelAdjust class="cfg-input" placeholder="inherit" />
+            </label>
+            <label class="flex flex-col gap-1 text-sm">
+              <span class="text-txtsecondary flex items-center gap-1">CFG scale{@render hint("--cfg-scale for this preset. Empty / 0 = inherit. Turbo/distilled need 1.0.")}</span>
+              <input type="number" min="0" step="0.5" bind:value={sv.defaultCfg} use:wheelAdjust class="cfg-input" placeholder="inherit" />
+            </label>
+            <label class="flex flex-col gap-1 text-sm col-span-2">
+              <span class="text-txtsecondary flex items-center gap-1">Sampler{@render hint("--sampling-method for this preset. 'inherit' = the model default.")}</span>
+              <select bind:value={sv.defaultSampler} class="cfg-input">
+                {#each IMG_SAMPLERS as o}<option value={o}>{o === "" ? "inherit" : o}</option>{/each}
+              </select>
+            </label>
+            <label class="flex flex-col gap-1 text-sm">
+              <span class="text-txtsecondary flex items-center gap-1">Width{@render hint("--width for this preset. Empty / 0 = inherit.")}</span>
+              <input type="number" min="0" step="64" bind:value={sv.defaultWidth} use:wheelAdjust class="cfg-input" placeholder="inherit" />
+            </label>
+            <label class="flex flex-col gap-1 text-sm">
+              <span class="text-txtsecondary flex items-center gap-1">Height{@render hint("--height for this preset. Empty / 0 = inherit.")}</span>
+              <input type="number" min="0" step="64" bind:value={sv.defaultHeight} use:wheelAdjust class="cfg-input" placeholder="inherit" />
+            </label>
+
+            <label class="flex flex-col gap-1 text-sm col-span-2">
+              <span class="text-txtsecondary flex items-center gap-1">
+                Target VRAM
+                {@render hint("Size this preset against this VRAM budget (--max-vram). Auto = inherit the model/global target.")}
+                <span class="ml-auto font-mono text-txtmain">{sv.vramTargetGB ? `${Number(sv.vramTargetGB).toFixed(1)} GB` : "inherit"}</span>
+              </span>
+              <div class="flex items-center gap-3">
+                <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
+                  <input type="checkbox" checked={!sv.vramTargetGB} onchange={(e) => setVVramAuto((e.currentTarget as HTMLInputElement).checked)} /> Auto
+                </label>
+                <input type="range" min="0" max={maxVram} step="0.5" value={sv.vramTargetGB || 0} oninput={(e) => (sv.vramTargetGB = Number((e.currentTarget as HTMLInputElement).value))} disabled={!sv.vramTargetGB} use:wheelAdjust class="flex-1 disabled:opacity-40" />
+                <span class="text-xs text-txtsecondary font-mono whitespace-nowrap">max {maxVram.toFixed(0)}G</span>
+              </div>
+            </label>
+            <label class="flex flex-col gap-1 text-sm col-span-2">
+              <span class="text-txtsecondary flex items-center gap-1">
+                CPU offload
+                {@render hint("--offload-to-cpu for this preset. Inherit = use the model's setting.")}
+              </span>
+              <select bind:value={sv.offloadToCpu} class="cfg-input">
+                <option value="">inherit</option>
+                <option value="on">on (force offload)</option>
+                <option value="off">off (keep on GPU)</option>
+              </select>
+            </label>
+            <label class="flex flex-col gap-1 text-sm col-span-2">
+              <span class="text-txtsecondary flex items-center gap-1">
+                Aliases (comma-separated)
+                {@render hint("Extra names this preset answers to in the /v1/models API.")}
+              </span>
+              <input type="text" value={(sv.aliases ?? []).join(", ")} oninput={setVAliases} class="cfg-input" placeholder="e.g. dall-e-3-hd" />
+            </label>
+            <label class="flex items-center gap-2 text-sm col-span-2">
+              <input type="checkbox" bind:checked={sv.unlisted} />
+              <span class="text-txtsecondary flex items-center gap-1">
+                Unlisted
+                {@render hint("Hide this preset from /v1/models, but keep it loadable by exact id.")}
+              </span>
+            </label>
+          </div>
+
+          <details class="group">
+            <summary class="cursor-pointer font-semibold text-sm uppercase tracking-wider text-txtsecondary hover:text-txtmain">
+              Launch parameters (preset)
+            </summary>
+            <textarea value={cmdDraft} readonly spellcheck="false" rows="6" class="mt-2 w-full bg-background rounded border border-card-border p-3 text-xs font-mono whitespace-pre-wrap break-all resize-y text-txtmain opacity-90"></textarea>
+            <p class="text-xs text-txtsecondary mt-1">Re-renders from the fields above; empty fields inherit the model default.</p>
+          </details>
+        {/if}
+        {:else}
         <!-- Entry selector: Default is a pinned, non-deletable entry; variants
              follow. Editing one shows its fields below — everything a variant
              doesn't set inherits from Default. -->
@@ -864,14 +1457,68 @@
             </select>
           </label>
 
-          <label class="flex flex-col gap-1 text-sm">
+          <div class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               Speculative
-              {@render hint("Speculative decoding to speed up generation. ngram-mod is the default; draft-mtp needs a model with MTP layers.")}
+              {@render hint("Speculative decoding backends. Chainable (e.g. draft-mtp + ngram-map-k4v). None checked = generator default; draft-mtp needs a model with MTP layers.")}
             </span>
-            <select bind:value={spec} class="cfg-input">
-              {#each specOpts as o}<option value={o.value}>{o.label}</option>{/each}
-            </select>
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+              {#each specBackends as b}
+                <label class="flex items-center gap-1"><input type="checkbox" checked={effSpecs.includes(b)} onchange={(e) => (spec = specToggle(spec, b, e.currentTarget.checked))} />{b}</label>
+              {/each}
+              <label class="flex items-center gap-1"><input type="checkbox" checked={specHas(spec, "none")} onchange={(e) => (spec = specToggle(spec, "none", e.currentTarget.checked))} />none</label>
+            </div>
+          </div>
+
+          {#if effSpecs.includes("draft-mtp")}
+            <label class="flex flex-col gap-1 text-sm">
+              <span class="text-txtsecondary flex items-center gap-1">
+                Draft n-max
+                {@render hint("--spec-draft-n-max. Max draft tokens proposed per step (draft-mtp). Empty = 2.")}
+              </span>
+              <input type="number" min="0" step="1" bind:value={specDraftNMax} use:wheelAdjust class="cfg-input" placeholder="2" />
+            </label>
+          {/if}
+          {#if effSpecs.includes("ngram-map-k4v")}
+            <label class="flex flex-col gap-1 text-sm">
+              <span class="text-txtsecondary flex items-center gap-1">
+                ngram size-n / size-m
+                {@render hint("--spec-ngram-map-k4v-size-n / -size-m. ngram map dimensions. Empty = llama-server default.")}
+              </span>
+              <div class="flex items-end gap-2">
+                <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">size-n<input type="number" min="0" step="1" bind:value={specNgramSizeN} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="n" /></span>
+                <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">size-m<input type="number" min="0" step="1" bind:value={specNgramSizeM} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="m" /></span>
+              </div>
+            </label>
+            <label class="flex flex-col gap-1 text-sm">
+              <span class="text-txtsecondary flex items-center gap-1">
+                ngram min-hits
+                {@render hint("--spec-ngram-map-k4v-min-hits. Min ngram hits before drafting. Empty = default.")}
+              </span>
+              <input type="number" min="0" step="1" bind:value={specNgramMinHits} use:wheelAdjust class="cfg-input" placeholder="default" />
+            </label>
+            <label class="flex items-center gap-2 text-sm self-end">
+              <input type="checkbox" bind:checked={specDefault} />
+              <span class="text-txtsecondary flex items-center gap-1">
+                spec-default
+                {@render hint("--spec-default. Apply llama-server's built-in default speculative parameters.")}
+              </span>
+            </label>
+          {/if}
+
+          <label class="flex flex-col gap-1 text-sm col-span-2">
+            <span class="text-txtsecondary flex items-center gap-1">
+              <input type="checkbox" bind:checked={dryOn} />
+              DRY sampler
+              {@render hint("--dry-* repetition penalty. On by default. Multiplier / base / allowed-length: empty = 0.8 / 1.75 / 3.")}
+            </span>
+            {#if dryOn}
+              <div class="flex items-end gap-2">
+                <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">multiplier<input type="number" min="0" step="0.05" bind:value={dryMultiplier} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="0.8" /></span>
+                <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">base<input type="number" min="0" step="0.05" bind:value={dryBase} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="1.75" /></span>
+                <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">allowed-len<input type="number" min="0" step="1" bind:value={dryAllowedLength} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="3" /></span>
+              </div>
+            {/if}
           </label>
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
@@ -937,6 +1584,13 @@
                 Preserve thinking
                 {@render hint("Keep prior-turn <think> blocks in chat history instead of stripping them (Qwen3.6+ via --chat-template-kwargs preserve_thinking). Avoids reasoning amnesia in multi-turn/agentic loops. Needs reasoning on, and the client must send reasoning_content back.")}
               </span>
+            </label>
+            <label class="flex items-center gap-2 text-sm" class:opacity-40={!reasoningOn}>
+              <span class="text-txtsecondary flex items-center gap-1">
+                Reasoning budget
+                {@render hint("--reasoning-budget. Max thinking tokens before the model is forced to answer. Empty = no cap. Needs reasoning on.")}
+              </span>
+              <input type="number" min="0" step="1000" bind:value={reasoningBudget} use:wheelAdjust disabled={!reasoningOn} class="cfg-input w-24 ml-auto" placeholder="none" />
             </label>
             <label class="flex items-center gap-2 text-sm">
               <input type="checkbox" bind:checked={kvInRam} />
@@ -1007,7 +1661,7 @@
         {:else if selectedV}
           {@const sv = selectedV}
           <p class="text-xs text-txtsecondary -mt-1">
-            Editing variant <span class="font-mono text-txtmain">{config.id}-{sv.name || "(unnamed)"}</span>.
+            Editing variant <span class="font-mono text-txtmain">{config.id}{config.id.endsWith(`-${sv.name}`) ? "" : `-${sv.name || "(unnamed)"}`}</span>.
             Anything left unset inherits from <button type="button" class="underline hover:text-txtmain" onclick={() => (selectedVariant = "")}>Default</button>.
           </p>
           {#if selectedIsDefault}
@@ -1070,17 +1724,58 @@
 
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-txtsecondary">KV cache K</span>
-              <select bind:value={sv.kvK} class="cfg-input">{#each KV_OPTS as o}<option value={o}>{o === "" ? "inherit (q8_0)" : o}</option>{/each}</select>
+              <select bind:value={sv.kvK} class="cfg-input">{#each KV_OPTS as o}<option value={o}>{o === "" ? "inherit" : o}</option>{/each}</select>
             </label>
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-txtsecondary">KV cache V</span>
-              <select bind:value={sv.kvV} class="cfg-input">{#each KV_OPTS as o}<option value={o}>{o === "" ? "inherit (q8_0)" : o}</option>{/each}</select>
+              <select bind:value={sv.kvV} class="cfg-input">{#each KV_OPTS as o}<option value={o}>{o === "" ? "inherit" : o}</option>{/each}</select>
             </label>
 
-            <label class="flex flex-col gap-1 text-sm">
+            <div class="flex flex-col gap-1 text-sm">
               <span class="text-txtsecondary">Speculative</span>
-              <select bind:value={sv.spec} class="cfg-input">{#each specOpts as o}<option value={o.value}>{o.label}</option>{/each}</select>
-            </label>
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                {#each specBackends as b}
+                  <label class="flex items-center gap-1"><input type="checkbox" checked={vEffSpecs.includes(b)} onchange={(e) => (sv.spec = specToggle(sv.spec, b, e.currentTarget.checked))} />{b}</label>
+                {/each}
+                <label class="flex items-center gap-1"><input type="checkbox" checked={specHas(sv.spec, "none")} onchange={(e) => (sv.spec = specToggle(sv.spec, "none", e.currentTarget.checked))} />none</label>
+              </div>
+            </div>
+
+            {#if vEffSpecs.includes("draft-mtp")}
+              <label class="flex flex-col gap-1 text-sm">
+                <span class="text-txtsecondary flex items-center gap-1">
+                  Draft n-max
+                  {@render hint("--spec-draft-n-max for this variant. Empty / 0 = inherit (2).")}
+                </span>
+                <input type="number" min="0" step="1" bind:value={sv.specDraftNMax} use:wheelAdjust class="cfg-input" placeholder="inherit" />
+              </label>
+            {/if}
+            {#if vEffSpecs.includes("ngram-map-k4v")}
+              <label class="flex flex-col gap-1 text-sm">
+                <span class="text-txtsecondary flex items-center gap-1">
+                  ngram size-n / size-m
+                  {@render hint("--spec-ngram-map-k4v-size-n / -size-m for this variant. Empty / 0 = inherit.")}
+                </span>
+                <div class="flex items-end gap-2">
+                  <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">size-n<input type="number" min="0" step="1" bind:value={sv.specNgramSizeN} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="n" /></span>
+                  <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">size-m<input type="number" min="0" step="1" bind:value={sv.specNgramSizeM} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="m" /></span>
+                </div>
+              </label>
+              <label class="flex flex-col gap-1 text-sm">
+                <span class="text-txtsecondary flex items-center gap-1">
+                  ngram min-hits
+                  {@render hint("--spec-ngram-map-k4v-min-hits for this variant. Empty / 0 = inherit.")}
+                </span>
+                <input type="number" min="0" step="1" bind:value={sv.specNgramMinHits} use:wheelAdjust class="cfg-input" placeholder="inherit" />
+              </label>
+              <label class="flex items-center gap-2 text-sm self-end">
+                <input type="checkbox" bind:checked={sv.specDefault} />
+                <span class="text-txtsecondary flex items-center gap-1">
+                  spec-default
+                  {@render hint("--spec-default for this variant.")}
+                </span>
+              </label>
+            {/if}
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-txtsecondary flex items-center gap-1">
                 Batch size
@@ -1128,6 +1823,13 @@
                 <option value="on">on</option>
                 <option value="off">off</option>
               </select>
+              {#if vDryValue() !== "off"}
+                <div class="flex items-end gap-2">
+                  <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">multiplier<input type="number" min="0" step="0.05" bind:value={sv.dryMultiplier} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="0.8" /></span>
+                  <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">base<input type="number" min="0" step="0.05" bind:value={sv.dryBase} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="1.75" /></span>
+                  <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">allowed-len<input type="number" min="0" step="1" bind:value={sv.dryAllowedLength} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="3" /></span>
+                </div>
+              {/if}
             </label>
 
             <label class="flex flex-col gap-1 text-sm col-span-2">
@@ -1148,6 +1850,13 @@
                 <span class="text-txtsecondary flex items-center gap-1">
                   Reasoning
                   {@render hint("Chain-of-thought reasoning. Off disables it (--reasoning-format none) for this variant.")}
+                </span>
+              </label>
+              <label class="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={sv.preserveThinking !== false} disabled={sv.reasoningFmt === "off"} onchange={(e) => (sv.preserveThinking = (e.currentTarget as HTMLInputElement).checked ? null : false)} />
+                <span class="text-txtsecondary flex items-center gap-1">
+                  Preserve thinking
+                  {@render hint("Keep prior-turn <think> blocks in chat history (Qwen3.6+). On by default for this variant; needs reasoning on.")}
                 </span>
               </label>
               <label class="flex items-center gap-2 text-sm">
@@ -1207,6 +1916,7 @@
             </p>
           </details>
         {/if}
+        {/if}
       {/if}
     </div>
 
@@ -1214,7 +1924,7 @@
       <button onclick={reset} class="btn btn--sm" disabled={saving || !config?.hasOverride}>Reset to default</button>
       <div class="flex gap-2">
         <button onclick={() => dialogEl?.close()} class="btn btn--sm">Cancel</button>
-        <button onclick={save} class="btn btn--sm btn--primary" disabled={saving || loading}>
+        <button onclick={save} class="btn btn--sm btn--primary !text-white" disabled={saving || loading}>
           {saving ? "Saving…" : "Save & reload"}
         </button>
       </div>

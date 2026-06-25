@@ -10,6 +10,7 @@ import type {
   InFlightStats,
   LiveTokens,
   PerformanceResponse,
+  ApiKey,
 } from "../lib/types";
 import { connectionState } from "./theme";
 
@@ -227,10 +228,11 @@ export interface ModelVariant {
   reasoningFmt?: string;
   ub?: number;
   dry?: boolean | null;
-  ctxCheckpoints?: number | null; // null/undefined => inherit model-wide
+  ctxCheckpoints?: number | null; // null/undefined => generator default
   unlisted?: boolean;
   aliases?: string[];
-  // Engine knobs (variant carries the full launch shape; zero/empty => inherit).
+  preserveThinking?: boolean | null; // null/undefined => on (Qwen3.6 default)
+  // Engine knobs (variant carries the full launch shape; zero/empty => generator default).
   kvInRam?: boolean;
   cpuOffload?: number;
   flashAttn?: string; // "" (inherit/on) | "on" | "off"
@@ -239,6 +241,30 @@ export interface ModelVariant {
   threads?: number;
   parallel?: number;
   extraArgs?: string;
+  // Sampler / speculative sub-knobs (0/empty => inherit model-wide).
+  dryMultiplier?: number;
+  dryBase?: number;
+  dryAllowedLength?: number;
+  specDraftNMax?: number;
+  specDefault?: boolean;
+  specNgramSizeN?: number;
+  specNgramSizeM?: number;
+  specNgramMinHits?: number;
+  // Image (sd-server) knobs; empty/0 => inherit the model-wide override.
+  vaePath?: string;
+  clipLPath?: string;
+  clipGPath?: string;
+  t5Path?: string;
+  textEncoderPath?: string;
+  offloadToCpu?: string;
+  teOnCpu?: string;
+  vaeTiling?: string;
+  diffusionFa?: string;
+  defaultSteps?: number;
+  defaultCfg?: number;
+  defaultSampler?: string;
+  defaultWidth?: number;
+  defaultHeight?: number;
 }
 
 export interface ModelOverride {
@@ -250,6 +276,7 @@ export interface ModelOverride {
   cpuOffload?: number;
   spec?: string;
   reasoningFmt?: string;
+  reasoningBudget?: number; // --reasoning-budget token cap; 0/undefined => no cap
   preserveThinking?: boolean; // keep prior-turn <think> in history (Qwen3.6+); needs reasoning on
   flashAttn?: string; // "" (on) | "on" | "off" | "auto"
   mmap?: string; // "" (auto) | "on" | "off"
@@ -264,6 +291,34 @@ export interface ModelOverride {
   ctxVariants?: number[]; // per-model ctx tiers (e.g. 32768, 65536)
   ctxCheckpoints?: number | null; // model-wide --ctx-checkpoints; null/undefined => auto, 0 disables
   variants?: ModelVariant[];
+  // Dry sampler: null/undefined => on with defaults, false => disabled.
+  dry?: boolean | null;
+  dryMultiplier?: number; // 0/undefined => 0.8
+  dryBase?: number; // 0/undefined => 1.75
+  dryAllowedLength?: number; // 0/undefined => 3
+  // Speculative-decode sub-knobs (emitted per spec backend; 0/false => omit).
+  specDraftNMax?: number; // draft-mtp; 0 => 2
+  specDefault?: boolean;
+  specNgramSizeN?: number;
+  specNgramSizeM?: number;
+  specNgramMinHits?: number;
+  // Image (sd-server) knobs; ignored for llama models. Component paths empty => omit.
+  vaePath?: string;
+  clipLPath?: string;
+  clipGPath?: string;
+  t5Path?: string;
+  textEncoderPath?: string;
+  // Placement tri-states: "" => generator default, "on"/"off" pin it.
+  offloadToCpu?: string;
+  teOnCpu?: string;
+  vaeTiling?: string;
+  diffusionFa?: string;
+  // Generation defaults (0/empty => sd-server default).
+  defaultSteps?: number;
+  defaultCfg?: number;
+  defaultSampler?: string;
+  defaultWidth?: number;
+  defaultHeight?: number;
 }
 
 export interface ModelConfig {
@@ -273,6 +328,7 @@ export interface ModelConfig {
   maxCtx: number;
   blockCount: number;
   isMTP: boolean;
+  isImage: boolean; // diffusion model => image config form
   hasOverride: boolean;
   override: ModelOverride | null;
   /** Fleet-wide variants (e.g. game), shared by every model; saved globally. */
@@ -328,6 +384,39 @@ export async function putDefaultVariants(variants: ModelVariant[]): Promise<void
   });
   if (!response.ok) {
     throw new Error(`Failed to save default variants: ${response.status} ${await response.text()}`);
+  }
+}
+
+// --- API key manager (admin-only, local) ---
+
+// List the managed API keys. Secrets are included; the UI hides them behind a
+// per-row visibility toggle.
+export async function listApiKeys(): Promise<ApiKey[]> {
+  const response = await fetch("/api/apikeys");
+  if (!response.ok) {
+    throw new Error(`Failed to load API keys: ${response.status} ${await response.text()}`);
+  }
+  return (await response.json()) || [];
+}
+
+// Create (new name) or update (existing name keeps its secret) an API key.
+// `models` empty => full access. Returns the resulting key incl. its secret.
+export async function upsertApiKey(name: string, models: string[]): Promise<ApiKey> {
+  const response = await fetch("/api/apikeys", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, models }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to save API key: ${response.status} ${await response.text()}`);
+  }
+  return await response.json();
+}
+
+export async function deleteApiKey(name: string): Promise<void> {
+  const response = await fetch(`/api/apikeys/${encodeURIComponent(name)}`, { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error(`Failed to delete API key: ${response.status} ${await response.text()}`);
   }
 }
 
@@ -404,6 +493,8 @@ export interface AppSettings {
   autoVram: boolean;
   overridden: boolean;
   defaults: { targetVramGB: number; vramOverheadGB: number; maxRamGB: number };
+  modelsRoot: string;
+  categoryRoots: Record<string, string> | null;
 }
 
 export async function getSettings(): Promise<AppSettings> {
@@ -427,6 +518,22 @@ export async function putSettings(p: {
   if (!response.ok) {
     throw new Error(`Failed to save settings: ${response.status} ${await response.text()}`);
   }
+}
+
+// Opens the host's native folder dialog and sets the scan folder for one
+// category. Returns the chosen path, or null when the user cancelled (204).
+export async function pickModelsFolder(category: string): Promise<string | null> {
+  const response = await fetch("/api/settings/root/pick", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category }),
+  });
+  if (response.status === 204) return null;
+  if (!response.ok) {
+    throw new Error(`Failed to set models folder: ${response.status} ${await response.text()}`);
+  }
+  const body = (await response.json()) as { path: string };
+  return body.path;
 }
 
 export async function resetSettings(): Promise<void> {

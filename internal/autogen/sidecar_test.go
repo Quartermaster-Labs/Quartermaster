@@ -16,6 +16,45 @@ func writeGen(t *testing.T) string {
 	return p
 }
 
+func TestAutogen_Sidecar_pruneDeadPaths(t *testing.T) {
+	gen := writeGen(t)
+	dir := filepath.Dir(gen)
+	live := filepath.Join(dir, "live.gguf")
+	if err := os.WriteFile(live, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dead := filepath.Join(dir, "gone.gguf")
+
+	for _, ov := range []Override{
+		{Match: live, Ctx: 1},        // explicit path, exists -> keep
+		{Match: dead, Ctx: 2},        // explicit path, missing -> prune
+		{Match: "*Qwen*", Ctx: 3},    // glob -> keep (never pruned)
+		{Match: "bare-name", Ctx: 4}, // non-path fragment -> keep
+	} {
+		if _, err := UpsertSidecarOverride(gen, ov); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	removed, err := PruneSidecar(gen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 1 || removed[0] != dead {
+		t.Fatalf("expected only %q pruned, got %v", dead, removed)
+	}
+	rows, _ := LoadSidecarOverrides(gen)
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 kept, got %d: %+v", len(rows), rows)
+	}
+
+	// Idempotent: nothing left to prune.
+	again, err := PruneSidecar(gen)
+	if err != nil || again != nil {
+		t.Fatalf("second prune should be a no-op, got %v err=%v", again, err)
+	}
+}
+
 func TestAutogen_Sidecar_upsertReplaceDelete(t *testing.T) {
 	gen := writeGen(t)
 

@@ -36,6 +36,29 @@ func TestEmitImageModel(t *testing.T) {
 		t.Errorf("emitted = %v, want [flux-q4]", emitted)
 	}
 
+	// Override knobs: component paths + gen defaults emit, toggled-off savers omit,
+	// offload pinned off wins over the auto "fits" decision.
+	var b3 strings.Builder
+	var em3 []string
+	ov := &Override{
+		VaePath: `C:\models\ae.safetensors`, ClipLPath: "clip_l.gguf", T5Path: "t5xxl.gguf",
+		TextEncoderPath: "qwen3.gguf", VaeTiling: "off", DiffusionFa: "off", TeOnCpu: "off",
+		OffloadToCpu: "off", DefaultSteps: 8, DefaultCfg: 1.0, DefaultSampler: "euler",
+		DefaultWidth: 768, DefaultHeight: 512, ExtraArgs: "--clip-on-cpu",
+	}
+	emitImageModel(&b3, s, big, ov, "flux-tuned", "flux", &em3)
+	out3 := b3.String()
+	for _, want := range []string{"--vae C:/models/ae.safetensors", "--clip_l clip_l.gguf", "--t5xxl t5xxl.gguf", "--llm qwen3.gguf", "--steps 8", "--cfg-scale 1", "--sampling-method euler", "--width 768", "--height 512", "--clip-on-cpu", "offload=false"} {
+		if !strings.Contains(out3, want) {
+			t.Errorf("tuned emit missing %q:\n%s", want, out3)
+		}
+	}
+	for _, unwant := range []string{"--vae-tiling", "--diffusion-fa", "--backend te=cpu", "--offload-to-cpu"} {
+		if strings.Contains(out3, unwant) {
+			t.Errorf("tuned emit should omit %q:\n%s", unwant, out3)
+		}
+	}
+
 	// Small model (2GB + 1.5 < 6.5 budget) → fits resident, no offload flags.
 	var b2 strings.Builder
 	var em2 []string
@@ -53,5 +76,30 @@ func TestEmitImageModel(t *testing.T) {
 	// diffusion weights fit resident.
 	if !strings.Contains(out2, "--backend te=cpu") {
 		t.Errorf("small model should still set te=cpu:\n%s", out2)
+	}
+}
+
+func TestMergeImageVariant(t *testing.T) {
+	base := Override{
+		VaePath: "ae.safetensors", TextEncoderPath: "qwen3.gguf",
+		DefaultSteps: 30, DefaultCfg: 7, VramTargetGB: 6, Aliases: []string{"base"},
+	}
+	// A "fast" preset overrides only steps/cfg + its own aliases.
+	v := VariantSpec{Name: "fast", DefaultSteps: 8, DefaultCfg: 1, Aliases: []string{"turbo"}}
+	got := mergeImageVariant(base, v)
+	if got.VaePath != "ae.safetensors" || got.TextEncoderPath != "qwen3.gguf" {
+		t.Errorf("preset should inherit component paths, got %+v", got)
+	}
+	if got.DefaultSteps != 8 || got.DefaultCfg != 1 {
+		t.Errorf("preset should override steps/cfg, got steps=%d cfg=%g", got.DefaultSteps, got.DefaultCfg)
+	}
+	if got.VramTargetGB != 6 {
+		t.Errorf("preset should inherit vram budget, got %g", got.VramTargetGB)
+	}
+	if len(got.Aliases) != 1 || got.Aliases[0] != "turbo" {
+		t.Errorf("preset aliases are its own, got %v", got.Aliases)
+	}
+	if got.Variants != nil {
+		t.Errorf("merged override must clear Variants to avoid re-emit")
 	}
 }

@@ -1,16 +1,17 @@
 name: goreleaser
 
 on:
-  push:
-    tags:
-      - "*"
-
-  # Allows manual triggering of the workflow
+  # Driven by `make release` / `make release-public` (which push the tag, then
+  # dispatch this). No push-tags trigger, so a tag push alone won't double-build.
   workflow_dispatch:
     inputs:
       tag:
         description: "Tag version to release (e.g. v144)"
         required: true
+      draft:
+        description: "Keep the release as a draft (true) or publish it (false)"
+        required: true
+        default: "true"
 
 permissions:
   contents: write
@@ -47,28 +48,83 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  trigger-tap-update:
-    runs-on: ubuntu-latest
+  windows-installer:
+    runs-on: windows-latest
     needs: goreleaser
+    permissions:
+      contents: write
     steps:
-      - name: "Resolve tag to dispatch"
-        id: tag
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: "Trigger tap repository update"
-        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 #4.0.1
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
         with:
-          token: ${{ secrets.TAP_REPO_PAT }}
-          repository: mostlygeek/homebrew-llama-quartermaster
-          event-type: new-release
-          client-payload: |
-            {
-              "release": {
-                "tag_name": "${{ steps.tag.outputs.tag }}"
-              }
-            }
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c #6.4.0
+        with:
+          go-version-file: go.mod
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # 6.4.0
+        with:
+          node-version: "24"
+
+      - name: Build UI
+        working-directory: ui-svelte
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build binary + stage bundle
+        shell: pwsh
+        run: |
+          $tag    = "${{ github.event.inputs.tag || github.ref_name }}"
+          $commit = (git rev-parse --short HEAD).Trim()
+          $date   = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+          New-Item -ItemType Directory -Force staging | Out-Null
+          go build -ldflags "-X main.commit=$commit -X main.version=$tag -X main.date=$date" `
+            -o staging\llama-quartermaster-windows-amd64.exe .
+          Copy-Item config.example.yaml,quartermaster-generate.example.yaml,LICENSE.md,README.md staging\
+          Copy-Item packaging\windows\start.cmd staging\start.cmd
+          Copy-Item -Recurse packaging staging\packaging
+          "llama-quartermaster $tag built $date" | Out-File -Encoding utf8 staging\VERSION.txt
+
+      - name: Sign binary (optional)
+        if: ${{ secrets.SIGN_PFX_BASE64 != '' }}
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.SIGN_PFX_BASE64 }}
+          PFX_PASS: ${{ secrets.SIGN_PFX_PASSWORD }}
+        run: '& packaging\windows\sign.ps1 staging\llama-quartermaster-windows-amd64.exe'
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $tag     = "${{ github.event.inputs.tag || github.ref_name }}"
+          $staging = (Resolve-Path staging).Path
+          $outdir  = Join-Path $PWD "Output"
+          $iscc    = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc "/DMyAppVersion=$tag" "/DStagingDir=$staging" "/DOutputDir=$outdir" packaging\windows\installer.iss
+
+      - name: Sign installer (optional)
+        if: ${{ secrets.SIGN_PFX_BASE64 != '' }}
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.SIGN_PFX_BASE64 }}
+          PFX_PASS: ${{ secrets.SIGN_PFX_PASSWORD }}
+        run: '& packaging\windows\sign.ps1 (Resolve-Path Output\*.exe)'
+
+      - name: Upload installer to release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          gh release upload $tag (Resolve-Path Output\*.exe) --clobber
+
+      - name: Publish release
+        if: ${{ github.event.inputs.draft == 'false' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ github.event.inputs.tag }}" --draft=false

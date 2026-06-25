@@ -136,6 +136,14 @@ export interface VersionInfo {
   version: string;
 }
 
+// A managed API key. `models` empty => the key may reach every model (full
+// access); otherwise it is scoped to that subset. `key` is the secret.
+export interface ApiKey {
+  name: string;
+  key: string;
+  models: string[];
+}
+
 export type ScreenWidth = "xs" | "sm" | "md" | "lg" | "xl" | "2xl";
 
 export type TextContentPart = {
@@ -212,6 +220,8 @@ export interface ImageGenerationResponse {
 
 // SDAPI types (stable-diffusion.cpp)
 export type ImageApiMode = "openai" | "sdapi";
+// Generation mode in the Images playground. img2img needs a source image.
+export type ImageGenMode = "txt2img" | "img2img";
 
 export interface SdApiLora {
   name: string;
@@ -236,6 +246,19 @@ export interface SdApiTxt2ImgRequest {
   sampler_name?: string;
   scheduler?: string;
   lora?: SdApiLoraRef[];
+}
+
+// img2img reuses every txt2img field plus a source image (base64, no data-URI
+// prefix) and a denoise strength (0 = keep source, 1 = ignore it).
+export interface SdApiImg2ImgRequest extends SdApiTxt2ImgRequest {
+  init_images: string[];
+  denoising_strength?: number;
+  // Flux Kontext reference image (base64, no data-URI prefix). The model edits
+  // the reference per the prompt while preserving subject identity — the "same
+  // person, new pose" route. sd-server exposes this field (and -r/--ref-image);
+  // exact JSON shape unverified — confirm with a curl once a Kontext model is
+  // loaded, then tighten if it wants an array / empty init_images.
+  ref_image?: string;
 }
 
 export interface SdApiResponse {

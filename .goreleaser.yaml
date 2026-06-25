@@ -1,5 +1,12 @@
 version: 2
 
+project_name: llama-quartermaster
+
+# Always create the GitHub release as a draft; the workflow flips it to public
+# only for `make release-public` (after every asset, incl. the installer, is up).
+release:
+  draft: true
+
 builds:
   - env:
       - CGO_ENABLED=0
@@ -25,6 +32,12 @@ archives:
     builds_info:
       group: root
       owner: root
+    # LICENSE*/README* are bundled by goreleaser defaults; add config examples
+    # and the packaging/ launchers + service files so the archive is runnable.
+    files:
+      - config.example.yaml
+      - quartermaster-generate.example.yaml
+      - packaging/**/*
     format_overrides:
       # use zip format for windows
       - goos: windows

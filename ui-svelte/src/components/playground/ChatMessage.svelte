@@ -457,10 +457,21 @@
   .prose :global(h4),
   .prose :global(h5),
   .prose :global(h6) {
-    margin: 0.9rem 0 0.4rem 0;
+    margin: 0.85rem 0 0.15rem 0;
     font-weight: 600;
     color: var(--color-primary);
     line-height: 1.3;
+  }
+
+  /* Pin the following block tight to its heading — its own top margin would
+     otherwise win the collapse and reopen the gap. */
+  .prose :global(h1 + *),
+  .prose :global(h2 + *),
+  .prose :global(h3 + *),
+  .prose :global(h4 + *),
+  .prose :global(h5 + *),
+  .prose :global(h6 + *) {
+    margin-top: 0;
   }
 
   .prose :global(h1) { font-size: 1.15em; }

@@ -73,7 +73,7 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 	// draft file (Gemma-4) instead charges its real on-disk weights + a small
 	// KV/compute pad, so big drafts scale up rather than under-counting at 0.34.
 	specOh := 0.0
-	if in.Spec == "draft-mtp" {
+	if specHas(in.Spec, "draft-mtp") {
 		specOh = 0.34
 		if in.DraftGB > 0 {
 			specOh = in.DraftGB + 0.1

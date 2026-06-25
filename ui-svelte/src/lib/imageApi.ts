@@ -1,4 +1,5 @@
 import type { ImageGenerationRequest, ImageGenerationResponse } from "./types";
+import { inferenceHeaders } from "./inferenceAuth";
 
 export async function generateImage(
   model: string,
@@ -15,9 +16,7 @@ export async function generateImage(
 
   const response = await fetch("/v1/images/generations", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: inferenceHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(request),
     signal,
   });

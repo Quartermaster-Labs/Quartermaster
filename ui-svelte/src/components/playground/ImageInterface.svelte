@@ -2,16 +2,25 @@
   import { models, upstreamLogs } from "../../stores/api";
   import { persistentStore } from "../../stores/persistent";
   import { generateImage } from "../../lib/imageApi";
-  import { generateSdImage, fetchSdLoras } from "../../lib/sdApi";
+  import { generateSdImage, generateSdImg2Img, fetchSdLoras } from "../../lib/sdApi";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import ModelSelector from "./ModelSelector.svelte";
   import Select from "./Select.svelte";
-  import { Image as ImageIcon, Send, Square, Layers, Trash2, Download, X } from "lucide-svelte";
-  import type { ImageApiMode, SdApiLora, SdApiLoraRef, ImageStylePreset } from "../../lib/types";
+  import { Image as ImageIcon, Send, Square, Layers, Trash2, Download, X, Type, ImagePlus, Wand2, Maximize2 } from "lucide-svelte";
+  import type { ImageApiMode, ImageGenMode, SdApiLora, SdApiLoraRef, ImageStylePreset } from "../../lib/types";
 
   const selectedModelStore = persistentStore<string>("playground-image-model", "");
   const selectedSizeStore = persistentStore<string>("playground-image-size", "1024x1024");
   const apiModeStore = persistentStore<ImageApiMode>("playground-image-api-mode", "openai");
+  // txt2img | img2img. img2img drives sd-server's /sdapi/v1/img2img with a
+  // source image + denoise strength, so it forces the SDAPI param set on.
+  const modeStore = persistentStore<ImageGenMode>("playground-image-mode", "txt2img");
+  const sdDenoiseStore = persistentStore<number>("playground-sdapi-denoise", 0.6);
+  const sdUpscaleStore = persistentStore<number>("playground-sdapi-upscale", 2);
+  // Flux Kontext reference edit: send the source as ref_image (identity-preserving
+  // re-pose / restyle) instead of a plain denoise. Only meaningful with a
+  // Kontext-class model loaded.
+  const sdRefEditStore = persistentStore<boolean>("playground-sdapi-ref-edit", false);
 
   // SDAPI persistent settings
   const sdNegativePromptStore = persistentStore<string>("playground-sdapi-negative-prompt", "");
@@ -29,6 +38,7 @@
   const presetsStore = persistentStore<ImageStylePreset[]>("playground-image-presets", []);
 
   let prompt = $state("");
+  let sourceImage = $state<string | null>(null); // img2img source as a data URL
   let isGenerating = $state(false);
   let generatedImages = $state<string[]>([]);
   let error = $state<string | null>(null);
@@ -111,7 +121,10 @@
   let loraError = $state<string | null>(null);
 
   let hasModels = $derived($models.some((m) => !m.unlisted));
-  let isSdapi = $derived($apiModeStore === "sdapi");
+  let isImg2img = $derived($modeStore === "img2img");
+  // img2img always speaks SDAPI; show the SDAPI param set for either trigger.
+  let showSdSettings = $derived($apiModeStore === "sdapi" || isImg2img);
+  let isSdapi = $derived(showSdSettings);
 
   $effect(() => {
     playgroundStores.imageGenerating.set(isGenerating);
@@ -223,6 +236,36 @@
     return (response.images ?? []).map((img) => `data:image/png;base64,${img}`);
   }
 
+  // One SDAPI img2img generation. Strips the data-URI prefix off the source —
+  // sd-server's sdapi wants raw base64 in init_images (A1111 convention).
+  async function genImg2ImgOne(promptText: string, seed: number, signal: AbortSignal): Promise<string[]> {
+    const [w, h] = $selectedSizeStore.split("x").map(Number);
+    const initB64 = (sourceImage ?? "").replace(/^data:[^,]+,/, "");
+    const response = await generateSdImg2Img(
+      {
+        model: $selectedModelStore,
+        prompt: promptText,
+        negative_prompt: $sdNegativePromptStore || undefined,
+        init_images: [initB64],
+        denoising_strength: $sdDenoiseStore,
+        // Kontext route: also hand the source in as ref_image so the model
+        // preserves the subject while the prompt drives the change.
+        ref_image: $sdRefEditStore ? initB64 : undefined,
+        width: w,
+        height: h,
+        steps: $sdStepsStore,
+        cfg_scale: $sdCfgScaleStore,
+        seed,
+        batch_size: $sdBatchSizeStore,
+        sampler_name: $sdSamplerStore || undefined,
+        scheduler: $sdSchedulerStore || undefined,
+        lora: selectedLoras.length > 0 ? selectedLoras : undefined,
+      },
+      signal
+    );
+    return (response.images ?? []).map((img) => `data:image/png;base64,${img}`);
+  }
+
   // One OpenAI generation → array of data-URI / URL images.
   async function genOpenAiOne(promptText: string, signal: AbortSignal): Promise<string[]> {
     const response = await generateImage($selectedModelStore, promptText, $selectedSizeStore, signal);
@@ -235,13 +278,16 @@
 
   async function generate() {
     const trimmedPrompt = prompt.trim();
-    if (!trimmedPrompt || !$selectedModelStore || isGenerating) return;
+    if (!$selectedModelStore || isGenerating) return;
+    if (isImg2img && !sourceImage) return; // img2img needs a source image
+    if (!isImg2img && !trimmedPrompt) return; // txt2img needs a prompt
 
     // Batch = one prompt per non-empty line; otherwise the whole prompt is one.
+    // img2img with an empty prompt still runs once (denoise the source alone).
     const lines = $batchModeStore
       ? trimmedPrompt.split("\n").map((l) => l.trim()).filter(Boolean)
       : [trimmedPrompt];
-    if (lines.length === 0) return;
+    if (lines.length === 0) lines.push("");
 
     isGenerating = true;
     error = null;
@@ -257,10 +303,12 @@
       const collected: string[] = [];
       for (let i = 0; i < lines.length; i++) {
         const promptText = composePrompt(lines[i]);
+        const seed =
+          $seedModeStore === "random" ? -1 : $seedModeStore === "increment" ? seedBase + i : seedBase;
         let imgs: string[];
-        if (isSdapi) {
-          const seed =
-            $seedModeStore === "random" ? -1 : $seedModeStore === "increment" ? seedBase + i : seedBase;
+        if (isImg2img) {
+          imgs = await genImg2ImgOne(promptText, seed, abortController.signal);
+        } else if (isSdapi) {
           imgs = await genSdOne(promptText, seed, abortController.signal);
         } else {
           imgs = await genOpenAiOne(promptText, abortController.signal);
@@ -289,6 +337,85 @@
     generatedImages = [];
     error = null;
     prompt = "";
+    sourceImage = null;
+  }
+
+  function onSourceFile(event: Event) {
+    const file = (event.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => (sourceImage = reader.result as string);
+    reader.readAsDataURL(file);
+  }
+
+  // Feed a generated tile back in as the img2img source, then switch to img2img.
+  function useAsSource(img: string) {
+    sourceImage = img;
+    $modeStore = "img2img";
+  }
+
+  // Natural pixel size of a data-URL image (for sizing the upscale target).
+  function imgSize(dataUrl: string): Promise<[number, number]> {
+    return new Promise((resolve, reject) => {
+      const im = new window.Image();
+      im.onload = () => resolve([im.naturalWidth, im.naturalHeight]);
+      im.onerror = reject;
+      im.src = dataUrl;
+    });
+  }
+
+  // Diffusion upscale: re-run the image through img2img at N× its own size with a
+  // low denoise, so structure is kept while detail is added at higher res. The
+  // factor comes from the sidebar (sdUpscaleStore).
+  // ponytail: not ESRGAN — that needs the model launched with --upscale-model.
+  // This needs no backend change and is the common "make it bigger" case. The
+  // long edge is capped at 4096 (so a big factor can't OOM) and dims snap to 64,
+  // which sd-server requires.
+  const UPSCALE_DENOISE = 0.4;
+  async function upscaleImage(img: string) {
+    if (isGenerating || !$selectedModelStore) return;
+    isGenerating = true;
+    error = null;
+    abortController = new AbortController();
+    batchTotal = 1;
+    batchDone = 0;
+    try {
+      const [sw, sh] = await imgSize(img);
+      const factor = $sdUpscaleStore > 0 ? $sdUpscaleStore : 2;
+      const scale = Math.min(factor, 4096 / Math.max(sw, sh));
+      const snap = (n: number) => Math.max(64, Math.round((n * scale) / 64) * 64);
+      const w = snap(sw);
+      const h = snap(sh);
+      const initB64 = img.replace(/^data:[^,]+,/, "");
+      const response = await generateSdImg2Img(
+        {
+          model: $selectedModelStore,
+          prompt: composePrompt(prompt.trim()),
+          negative_prompt: $sdNegativePromptStore || undefined,
+          init_images: [initB64],
+          denoising_strength: UPSCALE_DENOISE,
+          width: w,
+          height: h,
+          steps: $sdStepsStore,
+          cfg_scale: $sdCfgScaleStore,
+          seed: -1,
+          batch_size: 1,
+          sampler_name: $sdSamplerStore || undefined,
+          scheduler: $sdSchedulerStore || undefined,
+          lora: selectedLoras.length > 0 ? selectedLoras : undefined,
+        },
+        abortController.signal
+      );
+      const out = (response.images ?? []).map((x) => `data:image/png;base64,${x}`);
+      generatedImages = [...generatedImages, ...out];
+    } catch (err) {
+      if (!(err instanceof Error && err.name === "AbortError")) {
+        error = err instanceof Error ? err.message : "An error occurred";
+      }
+    } finally {
+      isGenerating = false;
+      abortController = null;
+    }
   }
 
   function downloadImage(index: number = 0) {
@@ -329,6 +456,8 @@
       generate();
     }
   }
+
+  let canGenerate = $derived(!!$selectedModelStore && (isImg2img ? !!sourceImage : !!prompt.trim()));
 </script>
 
 <div class="flex flex-col h-full">
@@ -372,17 +501,45 @@
           <!-- Consistent square tiles: object-cover keeps every result the same size. -->
           <div class="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-3 p-3">
             {#each generatedImages as img, i (i)}
-              <button
-                class="group relative aspect-square overflow-hidden rounded-lg border border-card-border bg-secondary cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary"
-                onclick={() => openFullscreen(i)}
-                aria-label="View image {i + 1} fullscreen"
-              >
-                <img
-                  src={img}
-                  alt="AI generated content {i + 1}"
-                  class="w-full h-full object-cover group-hover:opacity-90 transition-opacity"
-                />
-              </button>
+              <div class="group relative aspect-square overflow-hidden rounded-lg border border-card-border bg-secondary">
+                <button
+                  class="absolute inset-0 w-full h-full cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary"
+                  onclick={() => openFullscreen(i)}
+                  aria-label="View image {i + 1} fullscreen"
+                >
+                  <img
+                    src={img}
+                    alt="AI generated content {i + 1}"
+                    class="w-full h-full object-cover group-hover:opacity-90 transition-opacity"
+                  />
+                </button>
+                <!-- Hover actions: edit (img2img from this), upscale, download. -->
+                <div class="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    class="inline-flex items-center justify-center p-1 rounded bg-black/60 text-white hover:bg-black/80 disabled:opacity-40"
+                    onclick={() => useAsSource(img)}
+                    disabled={isGenerating}
+                    title="Edit — use as img2img source"
+                  >
+                    <Wand2 class="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    class="inline-flex items-center justify-center p-1 rounded bg-black/60 text-white hover:bg-black/80 disabled:opacity-40"
+                    onclick={() => upscaleImage(img)}
+                    disabled={isGenerating}
+                    title="Upscale 2× (diffusion)"
+                  >
+                    <Maximize2 class="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    class="inline-flex items-center justify-center p-1 rounded bg-black/60 text-white hover:bg-black/80"
+                    onclick={() => downloadImage(i)}
+                    title="Download"
+                  >
+                    <Download class="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
             {/each}
             {#if isGenerating}
               <div class="aspect-square rounded-lg border border-card-border bg-secondary flex items-center justify-center">
@@ -408,15 +565,19 @@
         <div class="grid grid-cols-2 gap-3">
           <div class="flex flex-col gap-1">
             <span class="text-xs uppercase tracking-wide text-txtsecondary">API</span>
-            <Select
-              bind:value={$apiModeStore}
-              disabled={isGenerating}
-              compact
-              options={[
-                { value: "openai", label: "OpenAI" },
-                { value: "sdapi", label: "SDAPI" },
-              ]}
-            />
+            {#if isImg2img}
+              <div class="px-2.5 py-1.5 rounded-md border border-card-border bg-secondary text-txtsecondary">SDAPI (img2img)</div>
+            {:else}
+              <Select
+                bind:value={$apiModeStore}
+                disabled={isGenerating}
+                compact
+                options={[
+                  { value: "openai", label: "OpenAI" },
+                  { value: "sdapi", label: "SDAPI" },
+                ]}
+              />
+            {/if}
           </div>
           <div class="flex flex-col gap-1">
             <span class="text-xs uppercase tracking-wide text-txtsecondary">Size</span>
@@ -425,6 +586,25 @@
         </div>
 
         {#if isSdapi}
+          {#if isImg2img}
+            <div class="flex flex-col gap-1">
+              <span class="text-xs uppercase tracking-wide text-txtsecondary">Denoising strength · {$sdDenoiseStore.toFixed(2)}</span>
+              <input type="range" min="0" max="1" step="0.05" class="w-full accent-primary" bind:value={$sdDenoiseStore} />
+              <p class="text-xs text-txtsecondary">Low = stay close to the source; high = freer reinterpretation.</p>
+            </div>
+            <div class="flex flex-col gap-1">
+              <span class="text-xs uppercase tracking-wide text-txtsecondary">Upscale factor</span>
+              <input type="number" min="1" max="8" step="0.5" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdUpscaleStore} />
+              <p class="text-xs text-txtsecondary">Upscale target = source × factor (long edge capped at 4096).</p>
+            </div>
+            <div class="flex flex-col gap-1">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" class="accent-primary" bind:checked={$sdRefEditStore} />
+                <span class="text-xs uppercase tracking-wide text-txtsecondary">Reference edit (Kontext)</span>
+              </label>
+              <p class="text-xs text-txtsecondary">Keep the subject (face/identity), change pose or style per the prompt. Needs a Flux Kontext model.</p>
+            </div>
+          {/if}
           <div class="flex flex-col gap-1">
             <span class="text-xs uppercase tracking-wide text-txtsecondary">Style suffix</span>
             <input
@@ -564,13 +744,121 @@
       </aside>
     </div>
 
-    <!-- Composer: positive | negative prompts + action column -->
+    <!-- Toolbar: mode + actions, sitting above the prompt so the icons read
+         clearly instead of stacking as a cryptic column. -->
+    <div class="shrink-0 flex items-center gap-2 mb-2">
+      <!-- Mode: txt2img | img2img -->
+      <div class="inline-flex rounded-md border border-card-border overflow-hidden text-sm font-mono">
+        <button
+          class="flex items-center gap-1.5 px-3 py-1.5 transition-colors {!isImg2img ? 'bg-primary/10 text-primary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
+          onclick={() => ($modeStore = "txt2img")}
+          disabled={isGenerating}
+          title="Generate from a text prompt"
+        >
+          <Type class="w-4 h-4" /> Text → Image
+        </button>
+        <button
+          class="flex items-center gap-1.5 px-3 py-1.5 transition-colors {isImg2img ? 'bg-primary/10 text-primary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
+          onclick={() => ($modeStore = "img2img")}
+          disabled={isGenerating}
+          title="Transform a source image (SDAPI)"
+        >
+          <ImagePlus class="w-4 h-4" /> Image → Image
+        </button>
+      </div>
+
+      <div class="ml-auto flex items-center gap-1.5">
+        <button
+          class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-sm font-mono transition-colors {$batchModeStore ? 'bg-secondary text-txtmain shadow-inner' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
+          onclick={() => ($batchModeStore = !$batchModeStore)}
+          disabled={isGenerating}
+          title="Batch: one prompt per line becomes an asset"
+        >
+          <Layers class="w-4 h-4" /> Batch
+        </button>
+        {#if generatedImages.length > 1}
+          <button
+            class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-sm font-mono text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
+            onclick={downloadAll}
+            title="Download every generated image"
+          >
+            <Download class="w-4 h-4" /> All
+          </button>
+        {/if}
+        <button
+          class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-sm font-mono text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
+          onclick={clearImage}
+          disabled={isGenerating || (generatedImages.length === 0 && !error && !prompt.trim() && !sourceImage)}
+          title="Clear prompt, source and results"
+        >
+          <Trash2 class="w-4 h-4" /> Clear
+        </button>
+        {#if isGenerating}
+          <button
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-mono bg-secondary text-txtmain hover:bg-card-border transition-colors"
+            onclick={cancelGeneration}
+            title="Stop"
+          >
+            <Square class="w-4 h-4" fill="currentColor" /> Stop
+          </button>
+        {:else if isImg2img}
+          <!-- Source loaded: edit (prompt-driven transform) or upscale it. -->
+          <button
+            class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-sm font-mono text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
+            onclick={() => sourceImage && upscaleImage(sourceImage)}
+            disabled={!sourceImage || !$selectedModelStore}
+            title="Upscale the source {$sdUpscaleStore}× (diffusion)"
+          >
+            <Maximize2 class="w-4 h-4" /> Upscale {$sdUpscaleStore}×
+          </button>
+          <button
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-mono bg-primary text-white hover:opacity-90 transition-opacity disabled:opacity-40"
+            onclick={generate}
+            disabled={!canGenerate}
+            title="Edit the source with the prompt (img2img)"
+          >
+            <Wand2 class="w-4 h-4" /> Edit
+          </button>
+        {:else}
+          <button
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-mono bg-primary text-white hover:opacity-90 transition-opacity disabled:opacity-40"
+            onclick={generate}
+            disabled={!canGenerate}
+            title="Generate"
+          >
+            <Send class="w-4 h-4" /> Generate
+          </button>
+        {/if}
+      </div>
+    </div>
+
+    <!-- Composer: source (img2img) | positive | negative prompts -->
     <div class="shrink-0 flex gap-2">
+      {#if isImg2img}
+        <div class="shrink-0 flex flex-col gap-1">
+          <span class="text-xs uppercase tracking-wide text-txtsecondary">Source</span>
+          <label
+            class="relative w-24 h-24 rounded-lg border border-dashed border-card-border bg-surface flex items-center justify-center cursor-pointer hover:border-primary overflow-hidden"
+            title="Choose a source image"
+          >
+            {#if sourceImage}
+              <img src={sourceImage} alt="img2img source" class="w-full h-full object-cover" />
+            {:else}
+              <ImagePlus class="w-6 h-6 text-txtsecondary" />
+            {/if}
+            <input type="file" accept="image/*" class="hidden" onchange={onSourceFile} disabled={isGenerating} />
+          </label>
+          {#if sourceImage}
+            <button class="text-xs text-txtsecondary hover:text-red-500 transition-colors" onclick={() => (sourceImage = null)} disabled={isGenerating}>Remove</button>
+          {/if}
+        </div>
+      {/if}
+
       <div class="flex-1 flex flex-col gap-1">
         <span class="text-xs uppercase tracking-wide text-txtsecondary">Prompt</span>
         <textarea
           class="w-full h-24 px-2.5 py-2 rounded-lg border border-card-border bg-surface text-[0.8125rem] leading-relaxed resize-none focus:outline-none focus:border-primary placeholder:text-txtsecondary"
-          placeholder={$batchModeStore ? "One prompt per line — each becomes an asset…" : "Describe the image you want to generate…"}
+          placeholder={$batchModeStore ? "One prompt per line — each becomes an asset…" : isImg2img ? "Describe the change (optional)…" : "Describe the image you want to generate…"}
           bind:value={prompt}
           onkeydown={handleKeyDown}
           disabled={isGenerating || !$selectedModelStore}
@@ -588,52 +876,6 @@
           ></textarea>
         </div>
       {/if}
-
-      <div class="shrink-0 flex flex-col gap-1.5 justify-end">
-        {#if isGenerating}
-          <button
-            class="inline-flex items-center justify-center p-2 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
-            onclick={cancelGeneration}
-            title="Stop"
-          >
-            <Square class="w-[1.125rem] h-[1.125rem]" fill="currentColor" />
-          </button>
-        {:else}
-          <button
-            class="inline-flex items-center justify-center p-2 rounded-md bg-primary text-white hover:opacity-90 transition-opacity disabled:opacity-40"
-            onclick={generate}
-            disabled={!prompt.trim() || !$selectedModelStore}
-            title="Generate"
-          >
-            <Send class="w-[1.125rem] h-[1.125rem]" />
-          </button>
-        {/if}
-        <button
-          class="inline-flex items-center justify-center p-2 rounded-md transition-colors {$batchModeStore ? 'bg-secondary text-txtmain shadow-inner' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
-          onclick={() => ($batchModeStore = !$batchModeStore)}
-          disabled={isGenerating}
-          title="Batch: one prompt per line"
-        >
-          <Layers class="w-[1.125rem] h-[1.125rem]" />
-        </button>
-        {#if generatedImages.length > 1}
-          <button
-            class="inline-flex items-center justify-center p-2 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
-            onclick={downloadAll}
-            title="Download all"
-          >
-            <Download class="w-[1.125rem] h-[1.125rem]" />
-          </button>
-        {/if}
-        <button
-          class="inline-flex items-center justify-center p-2 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
-          onclick={clearImage}
-          disabled={isGenerating || (generatedImages.length === 0 && !error && !prompt.trim())}
-          title="Clear"
-        >
-          <Trash2 class="w-[1.125rem] h-[1.125rem]" />
-        </button>
-      </div>
     </div>
   {/if}
 </div>

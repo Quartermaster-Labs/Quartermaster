@@ -1,4 +1,5 @@
 import type { ChatMessage, ContentPart, ToolCall, ToolDef } from "./types";
+import { inferenceHeaders } from "./inferenceAuth";
 
 export type Endpoint = "v1/chat/completions" | "v1/messages" | "v1/responses";
 
@@ -361,9 +362,7 @@ export async function* streamChatCompletion(
 
   const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: inferenceHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
     signal,
   });

@@ -15,6 +15,7 @@ import (
 // configured the middleware is a pass-through.
 func CreateAuthMiddleware(cfg config.Config) chain.Middleware {
 	keys := cfg.RequiredAPIKeys
+	scopes := buildKeyScopes(cfg)
 	return func(next http.Handler) http.Handler {
 		if len(keys) == 0 {
 			return next
@@ -35,7 +36,9 @@ func CreateAuthMiddleware(cfg config.Config) chain.Middleware {
 				return
 			}
 
-			next.ServeHTTP(w, r)
+			// Scope the request to the key's allowed models (if any) so the
+			// catalog listing and dispatch can enforce it downstream.
+			next.ServeHTTP(w, withKeyScope(r, scopes[provided]))
 		})
 	}
 }
