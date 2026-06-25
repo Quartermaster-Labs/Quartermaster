@@ -117,6 +117,9 @@ simple-responder-windows:
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
+# GitHub repo for `gh` (avoids "no default remote" when multiple remotes exist).
+RELEASE_REPO ?= Radu0120/llama-quartermaster
+
 # Tag the next version, push it, and run the full build pipeline (goreleaser +
 # Windows installer) on CI via workflow_dispatch.
 #   make release         -> publishes a DRAFT GitHub release
@@ -139,8 +142,8 @@ _dispatch-release:
 	echo "tagging $$new_tag (draft=$(DRAFT))"; \
 	git tag "$$new_tag"; \
 	git push origin "$$new_tag"; \
-	gh workflow run release.yml -f tag="$$new_tag" -f draft=$(DRAFT); \
-	echo "Dispatched. Watch: gh run watch \$$(gh run list --workflow=release.yml -L1 --json databaseId -q '.[0].databaseId')"
+	gh workflow run release.yml -R $(RELEASE_REPO) -f tag="$$new_tag" -f draft=$(DRAFT); \
+	echo "Dispatched. Watch: gh run watch -R $(RELEASE_REPO) \$$(gh run list -R $(RELEASE_REPO) --workflow=release.yml -L1 --json databaseId -q '.[0].databaseId')"
 
 GOOS ?= $(shell go env GOOS 2>/dev/null || echo linux)
 GOARCH ?= $(shell go env GOARCH 2>/dev/null || echo amd64)
