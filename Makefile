@@ -120,12 +120,13 @@ $(BUILD_DIR):
 # GitHub repo for `gh` (avoids "no default remote" when multiple remotes exist).
 RELEASE_REPO ?= Radu0120/llama-quartermaster
 
-# Tag the next version, push it, and run the full build pipeline (goreleaser +
-# Windows installer) on CI via workflow_dispatch.
-#   make release         -> publishes a DRAFT GitHub release
-#   make release-public  -> publishes a PUBLIC GitHub release
-# Both need the `gh` CLI authenticated. The CI workflow is dispatch-only, so the
-# tag push itself does not trigger a second build.
+# Run the full build pipeline (goreleaser + Windows installer) on CI for a semver
+# tag, via workflow_dispatch.
+#   make release                       -> releases the latest existing vX.Y.Z tag (DRAFT)
+#   make release-public                -> same, but PUBLIC
+#   make release VERSION=v0.5.1        -> creates that tag first, then releases it
+# Needs the `gh` CLI authenticated. The workflow is dispatch-only, so pushing a
+# tag does not trigger a second build.
 release:
 	@$(MAKE) --no-print-directory _dispatch-release DRAFT=true
 
@@ -137,12 +138,20 @@ _dispatch-release:
 		echo "Error: uncommitted changes. Commit or stash before releasing." >&2; exit 1; \
 	fi
 	@command -v gh >/dev/null || { echo "Error: gh CLI not found." >&2; exit 1; }
-	@highest_tag=$$(git tag --sort=-v:refname | grep -E '^v[0-9]+$$' | head -n 1 || echo "v0"); \
-	new_tag="v$$(( $${highest_tag#v} + 1 ))"; \
-	echo "tagging $$new_tag (draft=$(DRAFT))"; \
-	git tag "$$new_tag"; \
-	git push origin "$$new_tag"; \
-	gh workflow run release.yml -R $(RELEASE_REPO) -f tag="$$new_tag" -f draft=$(DRAFT); \
+	@tag="$(VERSION)"; \
+	if [ -n "$$tag" ]; then \
+		echo "$$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$$' || { \
+			echo "Error: VERSION must be vMAJOR.MINOR.PATCH (e.g. v0.5.1)" >&2; exit 1; }; \
+		git rev-parse "$$tag" >/dev/null 2>&1 || git tag "$$tag"; \
+	else \
+		tag=$$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -n 1); \
+		if [ -z "$$tag" ]; then \
+			echo "Error: no vX.Y.Z tag found. Create one or pass VERSION=vX.Y.Z" >&2; exit 1; \
+		fi; \
+	fi; \
+	echo "releasing $$tag (draft=$(DRAFT))"; \
+	git push origin "$$tag"; \
+	gh workflow run release.yml -R $(RELEASE_REPO) -f tag="$$tag" -f draft=$(DRAFT); \
 	echo "Dispatched. Watch: gh run watch -R $(RELEASE_REPO) \$$(gh run list -R $(RELEASE_REPO) --workflow=release.yml -L1 --json databaseId -q '.[0].databaseId')"
 
 GOOS ?= $(shell go env GOOS 2>/dev/null || echo linux)
