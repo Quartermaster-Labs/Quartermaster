@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
+	"github.com/radu0120/llama-quartermaster/internal/config"
 )
 
 // apiKeyScopeKey carries the set of model IDs the request's API key is allowed

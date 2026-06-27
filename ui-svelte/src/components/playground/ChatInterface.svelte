@@ -406,6 +406,7 @@
           max_tokens: $maxTokensStore,
           tools: useTools ? [WEB_SEARCH_TOOL] : undefined,
           reasoning: !isRewrite && $reasoningStore,
+          conversationId: $activeChatId,
         });
 
         let toolCalls: ToolCall[] | undefined;

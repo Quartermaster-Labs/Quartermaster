@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
-	"github.com/mostlygeek/llama-swap/internal/event"
-	"github.com/mostlygeek/llama-swap/internal/logmon"
-	"github.com/mostlygeek/llama-swap/internal/process"
-	"github.com/mostlygeek/llama-swap/internal/router"
-	"github.com/mostlygeek/llama-swap/internal/shared"
+	"github.com/radu0120/llama-quartermaster/internal/config"
+	"github.com/radu0120/llama-quartermaster/internal/event"
+	"github.com/radu0120/llama-quartermaster/internal/logmon"
+	"github.com/radu0120/llama-quartermaster/internal/process"
+	"github.com/radu0120/llama-quartermaster/internal/router"
+	"github.com/radu0120/llama-quartermaster/internal/shared"
 )
 
 // stubRouter is a minimal router.LocalRouter for Server dispatch tests.
@@ -46,6 +46,8 @@ func (s *stubRouter) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 
 func (s *stubRouter) RunningModels() map[string]process.ProcessState { return s.running }
 func (s *stubRouter) Unload(_ time.Duration, _ ...string)            { s.unloadCalls.Add(1) }
+func (s *stubRouter) SetPreEvict(_ func(string))                     {}
+func (s *stubRouter) SetPostLoad(_ func(string))                     {}
 func (s *stubRouter) ProcessLogger(modelID string) (*logmon.Monitor, bool) {
 	if s.loggers != nil {
 		if lg, ok := s.loggers[modelID]; ok {

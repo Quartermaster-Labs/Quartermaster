@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/logmon"
+	"github.com/radu0120/llama-quartermaster/internal/logmon"
 )
 
 type ProcessState string
@@ -46,4 +46,16 @@ type Process interface {
 
 	// Logger returns the monitor that captures this process's stdout/stderr.
 	Logger() *logmon.Monitor
+
+	// SetPreStop installs a hook run once just before the process is torn down
+	// (by TTL, eviction, or explicit Stop), while it is still serving. Used to
+	// snapshot live state — e.g. persist the slot KV — before the upstream dies.
+	// Call once before serving; safe for concurrent set via atomic store.
+	SetPreStop(fn func())
+
+	// SetPostStart installs a hook run once each time the process becomes Ready,
+	// before any queued request is granted. Used to prime live state — e.g.
+	// restore a saved slot KV — so the first forwarded request reuses it instead
+	// of reprefilling. Call once before serving; safe for concurrent set.
+	SetPostStart(fn func())
 }

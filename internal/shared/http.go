@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
+	"github.com/radu0120/llama-quartermaster/internal/config"
 	"github.com/tidwall/gjson"
 )
 

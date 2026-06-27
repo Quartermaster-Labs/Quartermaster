@@ -19,6 +19,8 @@ const LOG_LENGTH_LIMIT = 1024 * 100; /* 100KB of log data */
 
 // Stores
 export const models = writable<Model[]>([]);
+// Last modelStatus snapshot, for detecting load-start edges (clear stale stats).
+let prevModelStatus: Model[] = [];
 export const proxyLogs = writable<string>("");
 export const upstreamLogs = writable<string>("");
 export const metrics = writable<ActivityLogEntry[]>([]);
@@ -72,6 +74,7 @@ export function enableAPIEvents(enabled: boolean): void {
       liveTokens.set(null);
       backendMetrics.set({});
       models.set([]);
+      prevModelStatus = [];
       retryCount = 0;
       connectionState.set("connected");
     };
@@ -86,6 +89,20 @@ export function enableAPIEvents(enabled: boolean): void {
             newModels.sort((a, b) => {
               return (a.name + a.id).localeCompare(b.name + b.id, undefined, { numeric: true });
             });
+            // Clear stale inference readout when a model just started loading:
+            // any id newly entering "starting" means a (re)load is underway, so
+            // the previous model's live token/KV stats no longer apply.
+            const prevStarting = new Set(
+              prevModelStatus.filter((m) => m.state === "starting").map((m) => m.id),
+            );
+            const justStarting = newModels.some(
+              (m) => m.state === "starting" && !prevStarting.has(m.id),
+            );
+            if (justStarting) {
+              liveTokens.set(null);
+              backendMetrics.set({});
+            }
+            prevModelStatus = newModels;
             models.set(newModels);
             break;
           }
@@ -603,6 +620,62 @@ export async function getCapture(id: number): Promise<ReqRespCapture | null> {
     return await response.json();
   } catch (error) {
     console.error("Failed to fetch capture:", error);
+    return null;
+  }
+}
+
+// --- Slot KV-cache monitoring (Observe → KV Cache tab) ---
+
+export interface KvCacheCounters {
+  saves: number;
+  restoreHits: number;
+  restoreSeeds: number;
+  misses: number;
+  errors: number;
+  confirmedReuses: number;
+  confirmedMisses: number;
+  cachedTokensSeen: number;
+  preambleMints: number;
+  preambleHits: number;
+}
+
+export interface KvCacheEvent {
+  time: string;
+  model: string;
+  op: string; // save | restore-hit | restore-seed | seed-pending | miss | error
+  key: string;
+  detail?: string;
+  bytes?: number;
+  tokens?: number;
+}
+
+export interface KvCacheFile {
+  model: string;
+  key: string;
+  bytes: number;
+  modAt: string;
+  preamble?: string;
+}
+
+export interface KvCacheStats {
+  enabled: boolean;
+  dir?: string;
+  maxBytes?: number;
+  maxFiles?: number;
+  diskBytes?: number;
+  counters?: KvCacheCounters;
+  files?: KvCacheFile[];
+  preambleFiles?: KvCacheFile[];
+  events?: KvCacheEvent[];
+}
+
+export async function fetchKvCache(): Promise<KvCacheStats | null> {
+  try {
+    const response = await fetch("/api/kvcache");
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to fetch KV cache stats:", error);
     return null;
   }
 }

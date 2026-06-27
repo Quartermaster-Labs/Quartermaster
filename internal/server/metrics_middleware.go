@@ -5,9 +5,9 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/mostlygeek/llama-swap/internal/chain"
-	"github.com/mostlygeek/llama-swap/internal/config"
-	"github.com/mostlygeek/llama-swap/internal/shared"
+	"github.com/radu0120/llama-quartermaster/internal/chain"
+	"github.com/radu0120/llama-quartermaster/internal/config"
+	"github.com/radu0120/llama-quartermaster/internal/shared"
 )
 
 // CreateMetricsMiddleware returns middleware that records token metrics for

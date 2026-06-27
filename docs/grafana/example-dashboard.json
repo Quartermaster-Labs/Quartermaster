@@ -42,7 +42,7 @@
                     "kind": "DataQuery",
                     "spec": {
                       "editorMode": "code",
-                      "expr": "llamaswap_cpu_util_percent{instance=\"$instance\"}",
+                      "expr": "quartermaster_cpu_util_percent{instance=\"$instance\"}",
                       "legendFormat": "core {{core}}",
                       "range": true
                     },
@@ -163,7 +163,7 @@
                     "kind": "DataQuery",
                     "spec": {
                       "editorMode": "code",
-                      "expr": "llamaswap_load_average{instance=\"$instance\"}",
+                      "expr": "quartermaster_load_average{instance=\"$instance\"}",
                       "legendFormat": "{{interval}}",
                       "range": true
                     },
@@ -279,7 +279,7 @@
                     "kind": "DataQuery",
                     "spec": {
                       "editorMode": "code",
-                      "expr": "llamaswap_memory_used_bytes{instance=\"$instance\"}",
+                      "expr": "quartermaster_memory_used_bytes{instance=\"$instance\"}",
                       "legendFormat": "RAM Used",
                       "range": true
                     },
@@ -300,7 +300,7 @@
                     "kind": "DataQuery",
                     "spec": {
                       "editorMode": "code",
-                      "expr": "llamaswap_memory_free_bytes{instance=\"$instance\"}",
+                      "expr": "quartermaster_memory_free_bytes{instance=\"$instance\"}",
                       "legendFormat": "RAM Free",
                       "range": true
                     },
@@ -321,7 +321,7 @@
                     "kind": "DataQuery",
                     "spec": {
                       "editorMode": "code",
-                      "expr": "llamaswap_swap_used_bytes{instance=\"$instance\"}",
+                      "expr": "quartermaster_swap_used_bytes{instance=\"$instance\"}",
                       "legendFormat": "Swap Used",
                       "range": true
                     },
@@ -342,7 +342,7 @@
                     "kind": "DataQuery",
                     "spec": {
                       "editorMode": "code",
-                      "expr": "llamaswap_memory_total_bytes{instance=\"$instance\"}",
+                      "expr": "quartermaster_memory_total_bytes{instance=\"$instance\"}",
                       "legendFormat": "RAM Total",
                       "range": true
                     },
@@ -458,7 +458,7 @@
                     "kind": "DataQuery",
                     "spec": {
                       "editorMode": "code",
-                      "expr": "rate(llamaswap_network_bytes_total{instance=\"$instance\",direction=\"recv\"}[1m])",
+                      "expr": "rate(quartermaster_network_bytes_total{instance=\"$instance\",direction=\"recv\"}[1m])",
                       "legendFormat": "{{interface}} recv",
                       "range": true
                     },
@@ -479,7 +479,7 @@
                     "kind": "DataQuery",
                     "spec": {
                       "editorMode": "code",
-                      "expr": "rate(llamaswap_network_bytes_total{instance=\"$instance\",direction=\"sent\"}[1m])",
+                      "expr": "rate(quartermaster_network_bytes_total{instance=\"$instance\",direction=\"sent\"}[1m])",
                       "legendFormat": "{{interface}} sent",
                       "range": true
                     },
@@ -595,7 +595,7 @@
                     "kind": "DataQuery",
                     "spec": {
                       "editorMode": "code",
-                      "expr": "llamaswap_gpu_util_percent{instance=\"$instance\"}",
+                      "expr": "quartermaster_gpu_util_percent{instance=\"$instance\"}",
                       "legendFormat": "{{name}}",
                       "range": true
                     },
@@ -716,7 +716,7 @@
                     "kind": "DataQuery",
                     "spec": {
                       "editorMode": "code",
-                      "expr": "llamaswap_gpu_memory_util_percent{instance=\"$instance\"}",
+                      "expr": "quartermaster_gpu_memory_util_percent{instance=\"$instance\"}",
                       "legendFormat": "{{name}}",
                       "range": true
                     },
@@ -837,7 +837,7 @@
                     "kind": "DataQuery",
                     "spec": {
                       "editorMode": "code",
-                      "expr": "llamaswap_gpu_temperature_celsius{instance=\"$instance\"}",
+                      "expr": "quartermaster_gpu_temperature_celsius{instance=\"$instance\"}",
                       "legendFormat": "{{name}}",
                       "range": true
                     },
@@ -961,7 +961,7 @@
                     "kind": "DataQuery",
                     "spec": {
                       "editorMode": "code",
-                      "expr": "llamaswap_gpu_power_draw_watts{instance=\"$instance\"}",
+                      "expr": "quartermaster_gpu_power_draw_watts{instance=\"$instance\"}",
                       "legendFormat": "{{name}}",
                       "range": true
                     },
@@ -1077,7 +1077,7 @@
                     "kind": "DataQuery",
                     "spec": {
                       "editorMode": "code",
-                      "expr": "llamaswap_gpu_fan_speed_percent{instance=\"$instance\"}",
+                      "expr": "quartermaster_gpu_fan_speed_percent{instance=\"$instance\"}",
                       "legendFormat": "{{name}}",
                       "range": true
                     },

@@ -11,7 +11,7 @@ Live system and GPU/VRAM monitoring for the serving host. It samples CPU, memory
 | `types.go` | Core data structs: `GpuStat`, `SysStat`, `NetIOStat`. No build tag. |
 | `monitor.go` | `Monitor` type, ring buffers, listener fan-out, `New`/`Start`/`Stop`/`UpdateConfig`/`Subscribe`/`Current`. Platform-agnostic; delegates to per-OS `getGpuStats`/`readSysStats`. |
 | `gpu_parse.go` | Pure parsers reused across platforms: `ParseNvidiaSmiLine` (nvidia-smi CSV), `ParseIoregOutput` / `ParseMactopLine` (Apple Silicon). No build tag. |
-| `prometheus.go` | `Monitor.MetricsHandler()` and the Prometheus text-format writers (`llamaswap_*` gauges/counters). No build tag. |
+| `prometheus.go` | `Monitor.MetricsHandler()` and the Prometheus text-format writers (`quartermaster_*` gauges/counters). No build tag. |
 | `monitor_windows.go` | `//go:build` via filename. Windows `getGpuStats` (nvidia-smi loop, trimmed query) and `readSysStats`; `parseNvidiaSmiLineLite` (Windows-only CSV parser) overlays PDH util. |
 | `monitor_darwin.go` | macOS `getGpuStats` (mactop → ioreg fallback) and `readSysStats`. Filename-tagged for darwin. |
 | `monitor_unix.go` | `//go:build unix && !darwin`. Linux/BSD `getGpuStats` (LACT → nvidia-smi → rocm-smi → sysfs) and `readSysStats`; LACT socket protocol and rocm-smi CSV parsing. |
@@ -44,7 +44,7 @@ When no backend works, `getGpuStats` returns `ErrNoGpuTool` and the monitor logs
 - **Build tags.** Each `getGpuStats`/`readSysStats` lives in exactly one OS file, selected either by `_windows.go`/`_darwin.go` filename suffix or an explicit `//go:build` line (`monitor_unix.go`, `pdh_windows.go`). `types.go`, `gpu_parse.go`, and `prometheus.go` are platform-neutral and compile everywhere.
 - **PDH util (Windows).** `pdh_windows.go` reads `\GPU Engine(*)\Utilization Percentage`, groups per adapter `LUID` (parsed from the instance name), and `busiest()` returns the most-active adapter's util — during inference that's the discrete GPU. It is best-effort: if PDH init fails, `GpuUtilPct` stays 0. It has an `init()` size assertion (`pdhCounterValueItem` == 24 bytes); util is a rate counter so the first sample is 0 until a second collect lands. **Don't add `utilization.gpu`/`power.draw` back to the nvidia-smi query** — that's what caused the WDDM stalls.
 - **Non-blocking fan-out.** Channels are buffered size 1 and every send uses `select { ... default: }` — slow consumers drop samples rather than block the sampler. `Subscribe` callers must call the returned `unsub` to avoid leaking listeners.
-- **Prometheus export.** `MetricsHandler` (`prometheus.go:14`) reads `Current()`, emits the latest `SysStat` plus `latestPerGPU` de-duplicated GPU rows as `llamaswap_*` metrics; label values go through `sanitizeLabel`. MB fields are converted to bytes via `mbToBytes`.
+- **Prometheus export.** `MetricsHandler` (`prometheus.go:14`) reads `Current()`, emits the latest `SysStat` plus `latestPerGPU` de-duplicated GPU rows as `quartermaster_*` metrics; label values go through `sanitizeLabel`. MB fields are converted to bytes via `mbToBytes`.
 - **mactop memory caveat.** mactop reports whole-system memory, so the darwin path overlays ioreg's GPU-attributed unified memory (`overlayIoregMem`) so both backends report consistent `MemUsedMB`/`MemTotalMB`.
 
 ## Connections

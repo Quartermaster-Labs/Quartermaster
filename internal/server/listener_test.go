@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
+	"github.com/radu0120/llama-quartermaster/internal/config"
 )
 
 // listenerTestServer wires a stub-routed Server with a listener model map.

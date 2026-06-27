@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mostlygeek/llama-swap/internal/autogen"
-	"github.com/mostlygeek/llama-swap/internal/config"
-	"github.com/mostlygeek/llama-swap/internal/shared"
+	"github.com/radu0120/llama-quartermaster/internal/autogen"
+	"github.com/radu0120/llama-quartermaster/internal/config"
+	"github.com/radu0120/llama-quartermaster/internal/shared"
 )
 
 // slotCachePathOrDefault echoes p, or resolves the default snapshot dir when
@@ -129,7 +129,7 @@ type overrideDTO struct {
 	Aliases         []string `json:"aliases"`
 	Unlisted        bool     `json:"unlisted"`
 	Skip            bool     `json:"skip"`
-	SlotCache       bool     `json:"slotCache"` // opt this model into on-disk slot KV persistence
+	SlotCache       *bool    `json:"slotCache"` // opt this model into on-disk slot KV persistence; nil => default on
 	CtxVariants     []int    `json:"ctxVariants"` // per-model ctx tiers (e.g. 32768, 65536)
 	// PreserveThinking keeps prior-turn <think> in chat history (Qwen3.6+); only
 	// meaningful when reasoning is on.

@@ -76,10 +76,10 @@
     </div>
   {/if}
   <div class="grid grid-cols-4 gap-x-6 gap-y-1 text-sm">
-    <div class="text-xs uppercase tracking-wider text-txtsecondary">Requests</div>
-    <div class="text-xs uppercase tracking-wider text-txtsecondary">Cached</div>
-    <div class="text-xs uppercase tracking-wider text-txtsecondary">Processed</div>
-    <div class="text-xs uppercase tracking-wider text-txtsecondary">Generated</div>
+    <div class="text-xs uppercase tracking-wide text-txtsecondary">Requests</div>
+    <div class="text-xs uppercase tracking-wide text-txtsecondary">Cached</div>
+    <div class="text-xs uppercase tracking-wide text-txtsecondary">Processed</div>
+    <div class="text-xs uppercase tracking-wide text-txtsecondary">Generated</div>
     <div class="text-sm text-txtmain">
       <span class="font-semibold">{nf.format(stats.totalRequests)}</span> completed,
       <span class="font-semibold">{nf.format(stats.inFlightRequests)}</span> waiting

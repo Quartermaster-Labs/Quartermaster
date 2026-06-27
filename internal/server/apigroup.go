@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/event"
-	"github.com/mostlygeek/llama-swap/internal/perf"
-	"github.com/mostlygeek/llama-swap/internal/shared"
+	"github.com/radu0120/llama-quartermaster/internal/event"
+	"github.com/radu0120/llama-quartermaster/internal/perf"
+	"github.com/radu0120/llama-quartermaster/internal/shared"
 )
 
 // apiModel is one entry in the /api/events modelStatus payload.
@@ -188,12 +188,20 @@ func (s *Server) handleAPIPerformance(w http.ResponseWriter, r *http.Request) {
 
 // handleAPIVersion serves the build metadata.
 func (s *Server) handleAPIVersion(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	out := map[string]any{
 		"version":    s.build.Version,
 		"commit":     s.build.Commit,
 		"build_date": s.build.Date,
-	})
+	}
+	// Surface the update status so the UI can show an "update available" banner.
+	if s.updater != nil && s.updater.Enabled() {
+		st := s.updater.Status()
+		out["update_available"] = st.Available
+		out["latest_version"] = st.Latest
+		out["release_url"] = st.ReleaseURL
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
 }
 
 // handleAPICapture returns the stored request/response capture for a metric ID.

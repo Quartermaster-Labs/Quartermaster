@@ -20,6 +20,10 @@ export interface ChatOptions {
   // undefined = leave to model default; true/false = force on/off via the
   // llama.cpp chat_template_kwargs.enable_thinking switch (Qwen3 etc).
   reasoning?: boolean;
+  // Stable per-chat id sent as X-Conversation-Id so the server's slot KV cache
+  // keys the on-disk snapshot by conversation, not by the (compaction-fragile)
+  // opening message. Same id across a compaction overwrites the stale file.
+  conversationId?: string;
 }
 
 function parseDataUrl(url: string): { media_type: string; data: string } {
@@ -368,7 +372,10 @@ export async function* streamChatCompletion(
 
   const response = await fetch(url, {
     method: "POST",
-    headers: inferenceHeaders({ "Content-Type": "application/json" }),
+    headers: inferenceHeaders({
+      "Content-Type": "application/json",
+      ...(options?.conversationId ? { "X-Conversation-Id": options.conversationId } : {}),
+    }),
     body: JSON.stringify(body),
     signal,
   });

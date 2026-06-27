@@ -485,7 +485,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 				effOv.PreserveThinking = *v.PreserveThinking
 			}
 			if v.SlotCache != nil {
-				effOv.SlotCache = *v.SlotCache
+				effOv.SlotCache = v.SlotCache
 			}
 			if v.FlashAttn != "" {
 				effOv.FlashAttn = v.FlashAttn
@@ -985,8 +985,10 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	lines = append(lines, fmt.Sprintf("-t %d%s", threads, cpuMoeFlag))
 	// Slot KV persistence: expose llama-server's save/restore slot endpoints. Path
 	// is quoted (it lives under a per-user dir that may contain spaces) and matches
-	// the emitted slotCache.path the server's LRU uses.
-	if s.SlotCache.Enable && ov != nil && ov.SlotCache {
+	// the emitted slotCache.path the server's LRU uses. Per-model SlotCache defaults
+	// on (nil), so the master switch alone enables every model; a model opts out
+	// with slotCache:false.
+	if s.SlotCache.Enable && (ov == nil || ov.SlotCache == nil || *ov.SlotCache) {
 		lines = append(lines, fmt.Sprintf("--slot-save-path %q", slotKvPath(s.SlotCache)))
 	}
 	if ov != nil {

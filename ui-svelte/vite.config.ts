@@ -33,7 +33,7 @@ export default defineConfig({
     proxy: Object.fromEntries(
       ["/api", "/logs", "/upstream", "/unload", "/v1", "/sdapi"].map((path) => [
         path,
-        process.env.LLAMA_SWAP_URL ?? "http://localhost:8080",
+        process.env.QUARTERMASTER_URL ?? "http://localhost:8080",
       ]),
     ),
   },

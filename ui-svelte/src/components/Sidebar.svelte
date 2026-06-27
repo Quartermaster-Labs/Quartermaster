@@ -1,6 +1,6 @@
 <script lang="ts">
   import { link, location } from "svelte-spa-router";
-  import { LayoutDashboard, Boxes, FlaskConical, Activity, KeyRound, Sun, Moon, MonitorCog, ChevronRight } from "lucide-svelte";
+  import { LayoutDashboard, Boxes, FlaskConical, Activity, KeyRound, Sun, Moon, MonitorCog, ChevronRight, ArrowUpCircle } from "lucide-svelte";
   import { toggleTheme, themeMode, appTitle } from "../stores/theme";
   import { currentRoute } from "../stores/route";
   import { playgroundActivity } from "../stores/playgroundActivity";
@@ -43,6 +43,27 @@
   function handleBlur(e: FocusEvent): void {
     const t = e.currentTarget as HTMLElement;
     handleTitleChange(t.textContent || "");
+  }
+
+  // Auto-update: launch the installer (server downloads it, then shuts down to
+  // apply). Only shown when the backend reports an available release.
+  let updating = $state(false);
+  async function runUpdate(): Promise<void> {
+    if (updating) return;
+    const latest = $versionInfo.latest_version ?? "the latest version";
+    if (!confirm(`Update to ${latest}?\n\nThe installer will launch and llama-quartermaster will shut down to apply it.`)) return;
+    updating = true;
+    try {
+      const r = await fetch("/api/update", { method: "POST" });
+      if (!r.ok) {
+        alert("Update failed: " + (await r.text()));
+        updating = false;
+      }
+      // On success the server shuts down; keep the spinner until the page drops.
+    } catch (e) {
+      alert("Update failed: " + e);
+      updating = false;
+    }
   }
 </script>
 
@@ -144,6 +165,17 @@
       {/if}
     </button>
     <ConnectionStatus />
+    {#if $versionInfo.update_available}
+      <button
+        class="flex items-center gap-1 rounded px-1.5 py-0.5 text-[0.6rem] font-medium text-primary hover:bg-primary/10 transition-colors disabled:opacity-60"
+        onclick={runUpdate}
+        disabled={updating}
+        title="Update to {$versionInfo.latest_version}"
+      >
+        <ArrowUpCircle size={13} />
+        {updating ? "Updating…" : "Update"}
+      </button>
+    {/if}
     <span class="font-mono text-[0.6rem] text-txtsecondary tabular-nums" title="commit {$versionInfo.commit}">
       {$versionInfo.version}
     </span>

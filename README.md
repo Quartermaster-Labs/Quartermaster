@@ -1,7 +1,7 @@
 ![llama-quartermaster header image](docs/assets/hero3.webp)
-![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/mostlygeek/llama-swap/total)
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/mostlygeek/llama-swap/go-ci.yml)
-![GitHub Repo stars](https://img.shields.io/github/stars/mostlygeek/llama-swap)
+![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/Radu0120/llama-quartermaster/total)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Radu0120/llama-quartermaster/go-ci.yml)
+![GitHub Repo stars](https://img.shields.io/github/stars/Radu0120/llama-quartermaster)
 
 # llama-quartermaster
 
@@ -21,8 +21,8 @@ Built in Go for performance and simplicity, llama-quartermaster has zero depende
   - `v1/responses`
   - `v1/embeddings`
   - `v1/models` - list available models
-  - `v1/audio/speech` ([#36](https://github.com/mostlygeek/llama-swap/issues/36))
-  - `v1/audio/transcriptions` ([docs](https://github.com/mostlygeek/llama-swap/issues/41#issuecomment-2722637867))
+  - `v1/audio/speech`
+  - `v1/audio/transcriptions`
   - `v1/audio/voices`
   - `v1/images/generations`
   - `v1/images/edits`
@@ -39,9 +39,9 @@ Built in Go for performance and simplicity, llama-quartermaster has zero depende
   - `/sdapi/v1/loras` - requires `model` in request body to fetch the correct loras
 - ✅ llama-quartermaster API
   - `/ui` - web UI
-  - `/upstream/:model_id` - direct access to upstream server ([demo](https://github.com/mostlygeek/llama-swap/pull/31))
-  - `/running` - list currently running models ([#61](https://github.com/mostlygeek/llama-swap/issues/61))
-  - `POST /api/models/unload` - manually unload all running models ([#58](https://github.com/mostlygeek/llama-swap/issues/58))
+  - `/upstream/:model_id` - direct access to upstream server
+  - `/running` - list currently running models
+  - `POST /api/models/unload` - manually unload all running models
   - `POST /api/models/unload/:model_id` - unload a specific model
   - `/logs` - remote log monitoring
     - `GET /logs` returns buffered plain text logs.
@@ -55,10 +55,10 @@ Built in Go for performance and simplicity, llama-quartermaster has zero depende
   - `/metrics` - system and GPU metrics for prometheus
 - ✅ API Key support - define keys to restrict access to API endpoints
 - ✅ Customizable
-  - Run concurrent models with a custom DSL swap matrix ([#643](https://github.com/mostlygeek/llama-swap/issues/643))
+  - Run concurrent models with a custom DSL swap matrix
   - Automatic unloading of models after timeout by setting a `ttl`
   - Docker and Podman support using `cmd` and `cmdStop` together
-  - Preload models on startup with `hooks` ([#235](https://github.com/mostlygeek/llama-swap/pull/235))
+  - Preload models on startup with `hooks`
   - Apply filters to requests to control inference with `stripParams`, `setParams` and `setParamsByID`
 
 ### Web UI
@@ -85,104 +85,40 @@ Real time log streaming:
 
 ## Installation
 
-llama-quartermaster can be installed in multiple ways
+llama-quartermaster can be installed in a few ways
 
-1. Docker
-2. Homebrew (macOS and Linux)
-3. MacPorts (macOS)
-4. WinGet
-5. From release binaries
-6. From source
+1. Docker (unified container)
+2. From release binaries
+3. From source
 
-### Docker Install ([download images](https://github.com/mostlygeek/llama-swap/pkgs/container/llama-quartermaster))
+### Docker Install ([download images](https://github.com/Radu0120/llama-quartermaster/pkgs/container/llama-quartermaster))
 
-Two types of container images are built nightly for llama-quartermaster:
-
-1. A unified container with llama-server, ik-llama-server, stable-diffusion.cpp, whisper.cpp and llama-quartermaster built from source. This is only available for cuda and vulkan but has more capabilities. This one is recommended for use.
-2. A legacy image that is based on llama.cpp's images and llama-quartermaster copied into the container. Use this one if you prefer to stay close to llama.cpp's container images.
-
-#### Unified container (Recommended)
+The unified container bundles llama-server, ik-llama-server, stable-diffusion.cpp,
+whisper.cpp and llama-quartermaster. It is built for `cuda` and `vulkan` backends.
 
 ```shell
-$ docker pull ghcr.io/mostlygeek/llama-swap:unified-cuda
+$ docker pull ghcr.io/radu0120/llama-quartermaster:unified-cuda   # or :unified-vulkan
 
 # run with a custom configuration and models directory
 $ docker run -it --rm --runtime nvidia -p 9292:8080 \
  -v /path/to/models:/models \
  -v /path/to/custom/config.yaml:/etc/llama-quartermaster/config/config.yaml \
- ghcr.io/mostlygeek/llama-swap:unified-cuda
+ ghcr.io/radu0120/llama-quartermaster:unified-cuda
 ```
 
-#### Legacy container
+> Images are built on demand from `.github/workflows/unified-docker.yml`
+> (Actions → Build Unified Docker Image → Run workflow), or locally with
+> `docker/unified/build-image.sh --cuda`.
 
-```shell
-$ docker pull ghcr.io/mostlygeek/llama-swap:cuda
+### Release binaries
 
-# run with a custom configuration and models directory
-$ docker run -it --rm --runtime nvidia -p 9292:8080 \
- -v /path/to/models:/models \
- -v /path/to/custom/config.yaml:/app/config.yaml \
- ghcr.io/mostlygeek/llama-swap:cuda
-```
-
-<details>
-<summary>
-more examples
-</summary>
-
-```shell
-# pull latest images per platform
-docker pull ghcr.io/mostlygeek/llama-swap:cpu
-docker pull ghcr.io/mostlygeek/llama-swap:cuda
-docker pull ghcr.io/mostlygeek/llama-swap:vulkan
-docker pull ghcr.io/mostlygeek/llama-swap:intel
-docker pull ghcr.io/mostlygeek/llama-swap:musa
-
-# tagged llama-quartermaster, platform and llama-server version images
-docker pull ghcr.io/mostlygeek/llama-swap:v166-cuda-b6795
-
-# non-root cuda
-docker pull ghcr.io/mostlygeek/llama-swap:cuda-non-root
-
-```
-
-</details>
-
-### Homebrew Install (macOS/Linux)
-
-```shell
-brew tap mostlygeek/llama-swap
-brew install llama-quartermaster
-llama-quartermaster --config path/to/config.yaml --listen localhost:8080
-```
-
-### MacPorts (macOS)
-
-> [!NOTE]
-> Maintained by MacPorts community - [llama-quartermaster port](https://ports.macports.org/port/llama-quartermaster). It is not an official part of llama-quartermaster.
-
-```shell
-sudo port install llama-quartermaster
-llama-quartermaster --config path/to/config.yaml --listen localhost:8080
-```
-
-### WinGet Install (Windows)
-
-> [!NOTE]
-> WinGet is maintained by community contributor [Dvd-Znf](https://github.com/Dvd-Znf) ([#327](https://github.com/mostlygeek/llama-swap/issues/327)). It is not an official part of llama-quartermaster.
-
-```shell
-# install
-C:\> winget install llama-quartermaster
-
-# upgrade
-C:\> winget upgrade llama-quartermaster
-```
+Download the latest Windows build from the
+[Releases page](https://github.com/Radu0120/llama-quartermaster/releases).
 
 ### Building from source
 
 1. Building requires Go and Node.js (for UI).
-1. `git clone https://github.com/mostlygeek/llama-swap.git`
+1. `git clone https://github.com/Radu0120/llama-quartermaster.git`
 1. `make clean all`
 1. look in the `build/` subdirectory for the llama-quartermaster binary
 
@@ -228,7 +164,7 @@ In the most basic configuration llama-quartermaster handles one model at a time.
 
 ## Reverse Proxy Configuration (nginx)
 
-If you deploy llama-quartermaster behind nginx, disable response buffering for streaming endpoints. By default, nginx buffers responses which breaks Server‑Sent Events (SSE) and streaming chat completion. ([#236](https://github.com/mostlygeek/llama-swap/issues/236))
+If you deploy llama-quartermaster behind nginx, disable response buffering for streaming endpoints. By default, nginx buffers responses which breaks Server‑Sent Events (SSE) and streaming chat completion.
 
 Recommended nginx configuration snippets:
 
@@ -286,4 +222,4 @@ For Python based inference servers like vllm or tabbyAPI it is recommended to ru
 > [!NOTE]
 > Thank you to everyone who has given this project a ⭐️!
 
-[![Star History Chart](https://api.star-history.com/svg?repos=mostlygeek/llama-swap&type=Date)](https://www.star-history.com/#mostlygeek/llama-swap&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Radu0120/llama-quartermaster&type=Date)](https://www.star-history.com/#Radu0120/llama-quartermaster&Date)

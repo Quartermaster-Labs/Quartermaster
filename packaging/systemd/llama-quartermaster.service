@@ -1,6 +1,6 @@
 [Unit]
-Description=llama-quartermaster (llama-quartermaster fork) — model proxy with startup config autogen
-Documentation=https://github.com/mostlygeek/llama-swap
+Description=llama-quartermaster — all-in-one local inference engine with startup config autogen
+Documentation=https://github.com/Radu0120/llama-quartermaster
 After=network-online.target
 Wants=network-online.target
 

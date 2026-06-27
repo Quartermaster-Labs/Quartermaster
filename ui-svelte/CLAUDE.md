@@ -17,7 +17,7 @@ Key npm scripts (run from `ui-svelte/`):
 
 | Script | Purpose |
 |---|---|
-| `npm start` | Vite dev server. Proxies `/api`, `/logs`, `/upstream`, `/unload`, `/v1`, `/sdapi` to the Go backend (`LLAMA_SWAP_URL`, default `http://localhost:8080`). |
+| `npm start` | Vite dev server. Proxies `/api`, `/logs`, `/upstream`, `/unload`, `/v1`, `/sdapi` to the Go backend (`QUARTERMASTER_URL`, default `http://localhost:8080`). |
 | `npm run build` | Production build into `ui_dist` (with `--emptyOutDir`). |
 | `npm run check` | `svelte-check` type checking. |
 | `npm test` / `npm run test:watch` | Vitest unit tests (e.g. `histogram.test.ts`, `markdown.test.ts`, `modelUtils.test.ts`). |

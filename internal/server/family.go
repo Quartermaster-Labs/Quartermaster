@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
+	"github.com/radu0120/llama-quartermaster/internal/config"
 )
 
 // modelFamily returns a stable grouping key for a model: the gguf file it loads.

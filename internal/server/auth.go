@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/mostlygeek/llama-swap/internal/chain"
-	"github.com/mostlygeek/llama-swap/internal/config"
-	"github.com/mostlygeek/llama-swap/internal/shared"
+	"github.com/radu0120/llama-quartermaster/internal/chain"
+	"github.com/radu0120/llama-quartermaster/internal/config"
+	"github.com/radu0120/llama-quartermaster/internal/shared"
 )
 
 // CreateAuthMiddleware returns middleware that validates API keys when the

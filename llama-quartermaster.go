@@ -16,15 +16,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/autogen"
-	"github.com/mostlygeek/llama-swap/internal/config"
-	"github.com/mostlygeek/llama-swap/internal/event"
-	"github.com/mostlygeek/llama-swap/internal/logmon"
-	"github.com/mostlygeek/llama-swap/internal/perf"
-	"github.com/mostlygeek/llama-swap/internal/process"
-	"github.com/mostlygeek/llama-swap/internal/server"
-	"github.com/mostlygeek/llama-swap/internal/shared"
-	"github.com/mostlygeek/llama-swap/internal/watcher"
+	"github.com/radu0120/llama-quartermaster/internal/autogen"
+	"github.com/radu0120/llama-quartermaster/internal/config"
+	"github.com/radu0120/llama-quartermaster/internal/event"
+	"github.com/radu0120/llama-quartermaster/internal/logmon"
+	"github.com/radu0120/llama-quartermaster/internal/perf"
+	"github.com/radu0120/llama-quartermaster/internal/process"
+	"github.com/radu0120/llama-quartermaster/internal/server"
+	"github.com/radu0120/llama-quartermaster/internal/shared"
+	"github.com/radu0120/llama-quartermaster/internal/watcher"
 )
 
 var (
@@ -67,7 +67,12 @@ func main() {
 	flagWatchModels := flag.Bool("watch-models", false, "periodically re-scan the models folder and hot-reload when it changes (requires -generate)")
 	flagWatchModelsInterval := flag.Duration("watch-models-interval", 30*time.Second, "poll interval for -watch-models")
 	flagPlaygroundPort := flag.String("playground-port", "", "serve the standalone playground app (per-user login + chat history) on this extra address, e.g. :8081")
+	flagNoUpdateCheck := flag.Bool("no-update-check", false, "disable checking GitHub for new releases (Windows release builds only)")
 	flag.Parse()
+
+	if *flagNoUpdateCheck {
+		os.Setenv("LQ_NO_UPDATE_CHECK", "1")
+	}
 
 	if *flagVersion {
 		fmt.Printf("version: %s (%s), built at %s\n", version, commit, date)
@@ -224,6 +229,12 @@ func main() {
 	// -generate is in use.
 	var autogenAdmin *server.AutogenAdmin
 
+	// triggerShutdown initiates a graceful shutdown from outside the signal
+	// handler (used by the auto-updater after it launches the installer). It is
+	// assigned once sigChan exists; reusing the signal path avoids duplicating
+	// the teardown sequence.
+	var triggerShutdown func()
+
 	// reload guards against overlapping reloads triggered by concurrent signals
 	// or file-watcher callbacks.
 	var reloading bool
@@ -272,6 +283,8 @@ func main() {
 		if playground != nil {
 			newSrv.SetPlayground(playground)
 		}
+
+		newSrv.SetShutdownHook(triggerShutdown)
 
 		activeMu.Lock()
 		old := activeSrv
@@ -376,6 +389,17 @@ func main() {
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+
+	// Route the updater's shutdown request through the same signal path the OS
+	// uses, so the full graceful teardown runs. Non-blocking: a shutdown already
+	// in flight makes the send a no-op.
+	triggerShutdown = func() {
+		select {
+		case sigChan <- syscall.SIGTERM:
+		default:
+		}
+	}
+	activeSrv.SetShutdownHook(triggerShutdown)
 
 	for _, hs := range httpServers {
 		hs := hs

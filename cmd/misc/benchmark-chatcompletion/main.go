@@ -1,6 +1,6 @@
 package main
 
-// created for issue: #252 https://github.com/mostlygeek/llama-swap/issues/252
+// created for issue: #252 https://github.com/radu0120/llama-quartermaster/issues/252
 // this simple benchmark tool sends a lot of small chat completion requests to llama-quartermaster
 // to make sure all the requests are accounted for.
 //

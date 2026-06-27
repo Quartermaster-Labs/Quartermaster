@@ -2,9 +2,9 @@
 # Supports CUDA and Vulkan backends via BACKEND build arg
 #
 # Usage:
-#   docker buildx build --build-arg BACKEND=cuda -t llama-swap:unified-cuda .
-#   docker buildx build --build-arg BACKEND=vulkan -t llama-swap:unified-vulkan .
-#   docker buildx build --build-arg BACKEND=cuda --build-arg CMAKE_CUDA_ARCHITECTURES="86;89" -t llama-swap:unified-cuda .
+#   docker buildx build --build-arg BACKEND=cuda -t llama-quartermaster:unified-cuda .
+#   docker buildx build --build-arg BACKEND=vulkan -t llama-quartermaster:unified-vulkan .
+#   docker buildx build --build-arg BACKEND=cuda --build-arg CMAKE_CUDA_ARCHITECTURES="86;89" -t llama-quartermaster:unified-cuda .
 #
 # Each project has its own install script that handles cloning, building,
 # and installing binaries. Build stages are independent for cache efficiency.
@@ -102,12 +102,12 @@ RUN --mount=type=cache,id=ccache-cuda,target=/ccache \
 ARG BACKEND=cuda
 FROM ik-llama-${BACKEND} AS ik-llama-build
 
-# ── Download llama-swap release binary ────────────────────────────────
+# ── Download llama-quartermaster release binary ────────────────────────────────
 
-FROM builder-base AS llama-swap-download
+FROM builder-base AS llama-quartermaster-download
 ARG LS_VERSION=latest
-COPY install-llama-swap.sh /build/
-RUN bash /build/install-llama-swap.sh "${LS_VERSION}"
+COPY install-llama-quartermaster.sh /build/
+RUN bash /build/install-llama-quartermaster.sh "${LS_VERSION}"
 
 # ── Runtime bases ─────────────────────────────────────────────────────
 
@@ -154,12 +154,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Create non-root user when RUN_UID != 0
 RUN if [ "$RUN_UID" != "0" ]; then \
-      groupadd --system --gid $RUN_UID llama-swap && \
+      groupadd --system --gid $RUN_UID llama-quartermaster && \
       useradd --system --uid $RUN_UID --gid $RUN_UID \
-        --home /app --shell /sbin/nologin llama-swap; \
+        --home /app --shell /sbin/nologin llama-quartermaster; \
     fi && \
-    mkdir -p /etc/llama-swap/config && \
-    chown -R ${RUN_UID}:${RUN_UID} /etc/llama-swap
+    mkdir -p /etc/llama-quartermaster/config && \
+    chown -R ${RUN_UID}:${RUN_UID} /etc/llama-quartermaster
 
 WORKDIR /app
 
@@ -183,25 +183,25 @@ COPY --from=ik-llama-build /install/bin/ /usr/local/bin/
 # Install uv
 RUN pip install uv --break-system-packages
 
-# Copy llama-swap binary
-COPY --from=llama-swap-download /install/bin/llama-swap /usr/local/bin/
-COPY --from=llama-swap-download /install/llama-swap-version /tmp/
+# Copy llama-quartermaster binary
+COPY --from=llama-quartermaster-download /install/bin/llama-quartermaster /usr/local/bin/
+COPY --from=llama-quartermaster-download /install/llama-quartermaster-version /tmp/
 
 RUN ldconfig
 
-COPY config.example.yaml /etc/llama-swap/config/config.yaml
+COPY config.example.yaml /etc/llama-quartermaster/config/config.yaml
 
 # Version tracking
 RUN echo "llama.cpp: ${LLAMA_COMMIT_HASH}" > /versions.txt && \
     echo "whisper.cpp: ${WHISPER_COMMIT_HASH}" >> /versions.txt && \
     echo "stable-diffusion.cpp: ${SD_COMMIT_HASH}" >> /versions.txt && \
     echo "ik_llama.cpp: ${IK_LLAMA_COMMIT_HASH}" >> /versions.txt && \
-    echo "llama-swap: $(cat /tmp/llama-swap-version)" >> /versions.txt && \
+    echo "llama-quartermaster: $(cat /tmp/llama-quartermaster-version)" >> /versions.txt && \
     echo "backend: ${BACKEND}" >> /versions.txt && \
     echo "build_timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /versions.txt
 
 RUN mkdir -p /models && chown ${RUN_UID}:${RUN_UID} /models
 WORKDIR /models
 USER ${RUN_UID}
-ENTRYPOINT ["llama-swap"]
-CMD ["-config", "/etc/llama-swap/config/config.yaml", "-listen", "0.0.0.0:8080"]
+ENTRYPOINT ["llama-quartermaster"]
+CMD ["-config", "/etc/llama-quartermaster/config/config.yaml", "-listen", "0.0.0.0:8080"]

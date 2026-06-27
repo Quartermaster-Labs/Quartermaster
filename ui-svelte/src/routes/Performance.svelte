@@ -350,13 +350,13 @@
 
 <div class="space-y-6">
   <div class="flex items-center justify-between">
-    <h3 class="text-sm font-medium text-txtsecondary">Performance (Experimental)</h3>
+    <h6 class="!pb-0 text-txtsecondary">Performance <span class="text-[0.6rem] uppercase tracking-wide">experimental</span></h6>
     <div class="flex items-center gap-4">
       <div class="flex items-center gap-1">
-        <span class="text-xs text-txtsecondary mr-1">Refresh:</span>
+        <span class="text-xs text-txtsecondary mr-1 uppercase tracking-wide">Refresh:</span>
         {#each INTERVALS as intv, i}
           <button
-            class="btn btn--sm"
+            class="btn btn--sm uppercase tracking-wide"
             class:bg-primary={$selectedInterval === i}
             class:text-btn-primary-text={$selectedInterval === i}
             onclick={() => handleIntervalChange(i)}
@@ -386,15 +386,13 @@
     </div>
   </div>
   <p class="text-sm text-txtsecondary">
-    This is an experimental feature. Please use <a
-      class="underline hover:text-txtmain"
-      href="https://github.com/mostlygeek/llama-swap/discussions/771">discussion #771</a
-    > for instructions and to share feedback.
+    Live system &amp; GPU telemetry. Experimental — sampling cadence and available
+    metrics depend on the platform backend.
   </p>
 
   <!-- GPU Section -->
   <section class="space-y-4">
-    <h3 class="text-lg font-medium text-txtmain">GPU</h3>
+    <h6 class="!pb-0 uppercase tracking-wide text-txtsecondary">GPU</h6>
     {#if !hasGpuData}
       <p class="text-txtsecondary card p-4">No GPU data available</p>
     {:else}
@@ -446,7 +444,7 @@
 
   <!-- System Section -->
   <section class="space-y-4">
-    <h3 class="text-lg font-medium text-txtmain">System</h3>
+    <h6 class="!pb-0 uppercase tracking-wide text-txtsecondary">System</h6>
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <PerformanceChart
         title="CPU Utilization (%)"

@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
-	"github.com/mostlygeek/llama-swap/internal/logmon"
-	"github.com/mostlygeek/llama-swap/internal/process"
+	"github.com/radu0120/llama-quartermaster/internal/config"
+	"github.com/radu0120/llama-quartermaster/internal/logmon"
+	"github.com/radu0120/llama-quartermaster/internal/process"
 )
 
 // groupRouting builds a normalized RoutingConfig for the group router, mirroring
@@ -55,6 +55,9 @@ type fakeProcess struct {
 	// Stop calls can be in flight simultaneously.
 	stopBlock chan struct{}
 
+	preStop   atomic.Pointer[func()]
+	postStart atomic.Pointer[func()]
+
 	runCalls   atomic.Int32
 	stopCalls  atomic.Int32
 	serveCalls atomic.Int32
@@ -81,13 +84,20 @@ func newFakeProcess(id string) *fakeProcess {
 
 func (f *fakeProcess) setState(s process.ProcessState) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.state = s
+	becameReady := false
 	if s == process.StateReady {
 		select {
 		case <-f.readyCh:
 		default:
 			close(f.readyCh)
+			becameReady = true
+		}
+	}
+	f.mu.Unlock()
+	if becameReady {
+		if fp := f.postStart.Load(); fp != nil {
+			(*fp)()
 		}
 	}
 }
@@ -124,8 +134,14 @@ func (f *fakeProcess) Run(_ time.Duration) error {
 	return nil
 }
 
+func (f *fakeProcess) SetPreStop(fn func())   { f.preStop.Store(&fn) }
+func (f *fakeProcess) SetPostStart(fn func()) { f.postStart.Store(&fn) }
+
 func (f *fakeProcess) Stop(_ time.Duration) error {
 	f.stopCalls.Add(1)
+	if fp := f.preStop.Load(); fp != nil {
+		(*fp)()
+	}
 	if f.inFlightServe.Load() > 0 {
 		f.stoppedWhileServing.Store(true)
 	}

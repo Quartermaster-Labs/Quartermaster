@@ -225,7 +225,7 @@
     <div class="flex justify-end px-4" bind:this={dropdownContainer}>
       <div class="relative">
         <button
-          class="w-8 h-8 flex items-center justify-center rounded hover:bg-secondary-hover transition-colors"
+          class="w-8 h-8 flex items-center justify-center rounded text-txtsecondary hover:text-txtmain hover:bg-secondary-hover transition-colors"
           onclick={() => (columnsMenuOpen = !columnsMenuOpen)}
           title="Select columns"
         >
@@ -234,8 +234,8 @@
           </svg>
         </button>
         {#if columnsMenuOpen}
-          <div class="absolute right-0 top-full mt-1 bg-surface border border-card-border rounded shadow-lg z-10 py-1 min-w-[16rem]" role="list">
-            <div class="px-3 py-2 text-xs font-medium uppercase tracking-wider text-txtsecondary border-b border-card-border" role="presentation">
+          <div class="absolute right-0 top-full mt-1 bg-surface border border-card-border rounded-md shadow-lg z-10 py-1 min-w-[16rem]" role="list">
+            <div class="px-3 py-2 text-xs font-medium uppercase tracking-wide text-txtsecondary border-b border-card-border-inner" role="presentation">
               Columns
             </div>
             {#each orderedColumns as col (col.key)}
@@ -271,11 +271,11 @@
       </div>
     </div>
 
-    <table class="min-w-full divide-y">
-      <thead class="border-card-border">
-        <tr class="text-left text-xs uppercase tracking-wider">
+    <table class="min-w-full divide-y divide-card-border-inner">
+      <thead class="border-card-border-inner">
+        <tr class="text-left text-xs uppercase tracking-wide text-txtsecondary">
           {#each activeVisibleColumns as key (key)}
-            <th class="px-6 py-3">
+            <th class="px-4 py-2.5">
               {#if key === "cached"}
                 Cached <Tooltip content="prompt tokens from cache" />
               {:else if key === "prompt"}
@@ -287,18 +287,18 @@
           {/each}
         </tr>
       </thead>
-      <tbody class="divide-y">
+      <tbody class="divide-y divide-card-border-inner">
         {#if sortedMetrics.length === 0}
           <tr>
-            <td colspan={activeVisibleColumns.length} class="px-6 py-8 text-center text-sm text-txtsecondary">
+            <td colspan={activeVisibleColumns.length} class="px-4 py-8 text-center text-sm text-txtsecondary">
               No activity recorded
             </td>
           </tr>
         {:else}
           {#each sortedMetrics as metric (metric.id)}
-            <tr class="whitespace-nowrap text-sm border-card-border">
+            <tr class="whitespace-nowrap text-sm hover:bg-secondary/40 transition-colors">
               {#each activeVisibleColumns as key (key)}
-                <td class="px-6 py-4">
+                <td class="px-4 py-2.5">
                   {#if key === "id"}
                     {metric.id + 1}
                   {:else if key === "time"}
@@ -328,7 +328,7 @@
                       <button
                         onclick={() => viewCapture(metric.id)}
                         disabled={loadingCaptureId === metric.id}
-                        class="btn btn--sm"
+                        class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary"
                       >
                         {loadingCaptureId === metric.id ? "..." : "View"}
                       </button>

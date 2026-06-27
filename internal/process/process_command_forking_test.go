@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
+	"github.com/radu0120/llama-quartermaster/internal/config"
 )
 
 // TestProcessCommand_StopForkingWrapper is a regression for the bug reported

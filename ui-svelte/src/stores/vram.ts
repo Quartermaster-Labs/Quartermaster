@@ -77,21 +77,42 @@ export const vramBreakdown = derived(
     const live = $models.filter(
       (m) => m.state === "ready" || m.state === "starting" || m.state === "stopping",
     );
-    // Capture the idle floor. Side effect in a derived is fine here — it only
-    // records the latest idle reading; the emitted value is pure of it.
+    const used = $gpu.mem_used_mb;
+    // Capture the idle floor, keeping the MINIMUM of idle readings rather than
+    // the latest. Side effect in a derived is fine here — it only records the
+    // floor; the emitted value is pure of it. Taking the min rejects transient
+    // pollution that would otherwise be misread as system usage: unload lag (the
+    // driver hasn't freed the model's VRAM yet) and the load race (llama-server
+    // allocates VRAM before its state flips to "starting") both produce briefly
+    // high "idle" samples. A stale-high baseline would make modelMb collapse to
+    // ~0, dumping the whole model slice into "System".
     if (live.length === 0) {
-      baselineMb = $gpu.mem_used_mb;
+      baselineMb = baselineMb === null ? used : Math.min(baselineMb, used);
     }
 
-    const used = $gpu.mem_used_mb;
-    const sysFloor = baselineMb === null ? used : Math.min(baselineMb, used);
+    // System floor. Prefer the measured idle baseline. If we never caught an
+    // idle sample (e.g. a model was already resident at page load) but we have a
+    // load-plan estimate for the single loaded model, fall back to
+    // used − estimated-model-VRAM so the model slice still shows instead of
+    // being attributed entirely to "System".
+    let sysFloor: number;
+    let measured = true;
+    if (baselineMb !== null) {
+      sysFloor = Math.min(baselineMb, used);
+    } else if ($est && live.length === 1 && live[0].id === $est.id) {
+      sysFloor = Math.max(0, used - $est.est.estVramGB * 1024);
+      measured = false;
+    } else {
+      sysFloor = used;
+      measured = false;
+    }
     const modelMb = Math.max(0, used - sysFloor);
 
     const systemSeg: VramSegment = {
       label: "System",
       mb: sysFloor,
       class: "bg-info",
-      detail: "OS, other apps" + (baselineMb === null ? " (model share not yet measured)" : ""),
+      detail: "OS, other apps" + (measured ? "" : " (estimated — no idle baseline yet)"),
     };
 
     // Component split when we have a fresh estimate for the single loaded model.

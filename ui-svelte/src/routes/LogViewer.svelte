@@ -18,7 +18,7 @@
   <div class="flex items-center gap-1">
     <button
       onclick={() => viewModeStore.set("panels")}
-      class:btn={true}
+      class="btn btn--sm uppercase tracking-wide"
       class:bg-primary={$viewModeStore === "panels"}
       class:text-btn-primary-text={$viewModeStore === "panels"}
     >
@@ -26,7 +26,7 @@
     </button>
     <button
       onclick={() => viewModeStore.set("proxy")}
-      class:btn={true}
+      class="btn btn--sm uppercase tracking-wide"
       class:bg-primary={$viewModeStore === "proxy"}
       class:text-btn-primary-text={$viewModeStore === "proxy"}
     >
@@ -34,7 +34,7 @@
     </button>
     <button
       onclick={() => viewModeStore.set("upstream")}
-      class:btn={true}
+      class="btn btn--sm uppercase tracking-wide"
       class:bg-primary={$viewModeStore === "upstream"}
       class:text-btn-primary-text={$viewModeStore === "upstream"}
     >

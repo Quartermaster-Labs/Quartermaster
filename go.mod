@@ -1,4 +1,4 @@
-module github.com/mostlygeek/llama-swap
+module github.com/radu0120/llama-quartermaster
 
 go 1.26.1
 

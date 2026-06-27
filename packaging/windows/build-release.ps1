@@ -87,7 +87,7 @@ $outdir = Join-Path $root 'Output'
 & $iscc "/DMyAppVersion=$Tag" "/DStagingDir=$staging" "/DOutputDir=$outdir" packaging\windows\installer.iss
 if ($LASTEXITCODE -ne 0) { Die "ISCC failed ($LASTEXITCODE)" }
 
-$setup = (Resolve-Path (Join-Path $outdir '*.exe')).Path
+$setup = (Resolve-Path (Join-Path $outdir "llama-quartermaster-setup-$Tag.exe")).Path
 if ($env:SIGN_PFX_BASE64) { & (Join-Path $PSScriptRoot 'sign.ps1') $setup }
 Write-Host "installer: $setup" -ForegroundColor Green
 

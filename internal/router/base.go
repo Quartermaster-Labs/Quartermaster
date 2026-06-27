@@ -8,11 +8,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
-	"github.com/mostlygeek/llama-swap/internal/logmon"
-	"github.com/mostlygeek/llama-swap/internal/process"
-	"github.com/mostlygeek/llama-swap/internal/router/scheduler"
-	"github.com/mostlygeek/llama-swap/internal/shared"
+	"github.com/radu0120/llama-quartermaster/internal/config"
+	"github.com/radu0120/llama-quartermaster/internal/logmon"
+	"github.com/radu0120/llama-quartermaster/internal/process"
+	"github.com/radu0120/llama-quartermaster/internal/router/scheduler"
+	"github.com/radu0120/llama-quartermaster/internal/shared"
 )
 
 type shutdownReq struct {
@@ -101,6 +101,29 @@ func newBaseRouter(
 	}
 	b.schedule = sched
 	return b, nil
+}
+
+// SetPreEvict installs a save-before-stop hook on every managed process. The
+// process fires it (with its model ID bound) just before tearing down for ANY
+// reason — TTL idle unload, eviction, or explicit Stop — so the slot KV cache
+// can snapshot the conversation before the upstream dies. Call once before
+// serving; the process map is fixed at construction.
+func (b *baseRouter) SetPreEvict(fn func(modelID string)) {
+	for id, p := range b.processes {
+		id := id
+		p.SetPreStop(func() { fn(id) })
+	}
+}
+
+// SetPostLoad installs a restore-after-ready hook on every managed process. The
+// process fires it (model ID bound) each time it reaches Ready, before the
+// triggering request is served — so the slot KV cache can restore a saved
+// conversation on cold load. Call once before serving.
+func (b *baseRouter) SetPostLoad(fn func(modelID string)) {
+	for id, p := range b.processes {
+		id := id
+		p.SetPostStart(func() { fn(id) })
+	}
 }
 
 func (b *baseRouter) notifyProcessed() {

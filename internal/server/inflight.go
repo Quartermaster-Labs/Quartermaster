@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"sync/atomic"
 
-	"github.com/mostlygeek/llama-swap/internal/chain"
-	"github.com/mostlygeek/llama-swap/internal/event"
-	"github.com/mostlygeek/llama-swap/internal/shared"
+	"github.com/radu0120/llama-quartermaster/internal/chain"
+	"github.com/radu0120/llama-quartermaster/internal/event"
+	"github.com/radu0120/llama-quartermaster/internal/shared"
 )
 
 // inflightCounter tracks the number of in-flight model-dispatched requests.

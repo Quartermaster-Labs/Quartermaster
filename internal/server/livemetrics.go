@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/event"
-	"github.com/mostlygeek/llama-swap/internal/shared"
+	"github.com/radu0120/llama-quartermaster/internal/event"
+	"github.com/radu0120/llama-quartermaster/internal/shared"
 	"github.com/tidwall/gjson"
 )
 

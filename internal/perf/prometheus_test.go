@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
+	"github.com/radu0120/llama-quartermaster/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -89,25 +89,25 @@ func TestWriteSysMetrics(t *testing.T) {
 	writeSysMetrics(rec, s)
 	body := rec.Body.String()
 
-	assert.Contains(t, body, `llamaswap_cpu_util_percent{core="0"} 10.5`)
-	assert.Contains(t, body, `llamaswap_cpu_util_percent{core="1"} 20`)
-	assert.Contains(t, body, "llamaswap_memory_total_bytes 8589934592")
-	assert.Contains(t, body, "llamaswap_memory_used_bytes 4294967296")
-	assert.Contains(t, body, "llamaswap_memory_free_bytes 4294967296")
-	assert.Contains(t, body, "llamaswap_swap_total_bytes 2147483648")
-	assert.Contains(t, body, "llamaswap_swap_used_bytes 536870912")
-	assert.Contains(t, body, `llamaswap_load_average{interval="1m"} 1.5`)
-	assert.Contains(t, body, `llamaswap_load_average{interval="5m"} 1.2`)
-	assert.Contains(t, body, `llamaswap_load_average{interval="15m"} 0.9`)
-	assert.Contains(t, body, `llamaswap_network_bytes_total{interface="eth0",direction="recv"} 1000`)
-	assert.Contains(t, body, `llamaswap_network_bytes_total{interface="eth0",direction="sent"} 2000`)
+	assert.Contains(t, body, `quartermaster_cpu_util_percent{core="0"} 10.5`)
+	assert.Contains(t, body, `quartermaster_cpu_util_percent{core="1"} 20`)
+	assert.Contains(t, body, "quartermaster_memory_total_bytes 8589934592")
+	assert.Contains(t, body, "quartermaster_memory_used_bytes 4294967296")
+	assert.Contains(t, body, "quartermaster_memory_free_bytes 4294967296")
+	assert.Contains(t, body, "quartermaster_swap_total_bytes 2147483648")
+	assert.Contains(t, body, "quartermaster_swap_used_bytes 536870912")
+	assert.Contains(t, body, `quartermaster_load_average{interval="1m"} 1.5`)
+	assert.Contains(t, body, `quartermaster_load_average{interval="5m"} 1.2`)
+	assert.Contains(t, body, `quartermaster_load_average{interval="15m"} 0.9`)
+	assert.Contains(t, body, `quartermaster_network_bytes_total{interface="eth0",direction="recv"} 1000`)
+	assert.Contains(t, body, `quartermaster_network_bytes_total{interface="eth0",direction="sent"} 2000`)
 }
 
 func TestWriteSysMetrics_NoNetIO(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeSysMetrics(rec, SysStat{CpuUtilPerCore: []float64{5.0}})
 	body := rec.Body.String()
-	assert.NotContains(t, body, "llamaswap_network_bytes_total")
+	assert.NotContains(t, body, "quartermaster_network_bytes_total")
 }
 
 func TestWriteGpuMetrics_Empty(t *testing.T) {
@@ -136,14 +136,14 @@ func TestWriteGpuMetrics(t *testing.T) {
 	writeGpuMetrics(rec, gpus)
 	body := rec.Body.String()
 
-	assert.Contains(t, body, `llamaswap_gpu_temperature_celsius{id="0",name="NVIDIA RTX 4090",uuid="GPU-1234"} 75`)
-	assert.Contains(t, body, `llamaswap_gpu_vram_temperature_celsius{id="0",name="NVIDIA RTX 4090",uuid="GPU-1234"} 0`)
-	assert.Contains(t, body, `llamaswap_gpu_util_percent{id="0",name="NVIDIA RTX 4090",uuid="GPU-1234"} 85.5`)
-	assert.Contains(t, body, `llamaswap_gpu_memory_util_percent{id="0",name="NVIDIA RTX 4090",uuid="GPU-1234"} 60`)
-	assert.Contains(t, body, `llamaswap_gpu_memory_used_bytes{id="0",name="NVIDIA RTX 4090",uuid="GPU-1234"}`)
-	assert.Contains(t, body, `llamaswap_gpu_memory_total_bytes{id="0",name="NVIDIA RTX 4090",uuid="GPU-1234"}`)
-	assert.Contains(t, body, `llamaswap_gpu_fan_speed_percent{id="0",name="NVIDIA RTX 4090",uuid="GPU-1234"} 55`)
-	assert.Contains(t, body, `llamaswap_gpu_power_draw_watts{id="0",name="NVIDIA RTX 4090",uuid="GPU-1234"} 300.5`)
+	assert.Contains(t, body, `quartermaster_gpu_temperature_celsius{id="0",name="NVIDIA RTX 4090",uuid="GPU-1234"} 75`)
+	assert.Contains(t, body, `quartermaster_gpu_vram_temperature_celsius{id="0",name="NVIDIA RTX 4090",uuid="GPU-1234"} 0`)
+	assert.Contains(t, body, `quartermaster_gpu_util_percent{id="0",name="NVIDIA RTX 4090",uuid="GPU-1234"} 85.5`)
+	assert.Contains(t, body, `quartermaster_gpu_memory_util_percent{id="0",name="NVIDIA RTX 4090",uuid="GPU-1234"} 60`)
+	assert.Contains(t, body, `quartermaster_gpu_memory_used_bytes{id="0",name="NVIDIA RTX 4090",uuid="GPU-1234"}`)
+	assert.Contains(t, body, `quartermaster_gpu_memory_total_bytes{id="0",name="NVIDIA RTX 4090",uuid="GPU-1234"}`)
+	assert.Contains(t, body, `quartermaster_gpu_fan_speed_percent{id="0",name="NVIDIA RTX 4090",uuid="GPU-1234"} 55`)
+	assert.Contains(t, body, `quartermaster_gpu_power_draw_watts{id="0",name="NVIDIA RTX 4090",uuid="GPU-1234"} 300.5`)
 }
 
 func TestWriteGpuMetrics_VramTemp(t *testing.T) {
@@ -153,8 +153,8 @@ func TestWriteGpuMetrics_VramTemp(t *testing.T) {
 	}
 	writeGpuMetrics(rec, gpus)
 	body := rec.Body.String()
-	assert.Contains(t, body, `llamaswap_gpu_temperature_celsius{id="0",name="AMD RX 7900",uuid="GPU-5678"} 70`)
-	assert.Contains(t, body, `llamaswap_gpu_vram_temperature_celsius{id="0",name="AMD RX 7900",uuid="GPU-5678"} 85`)
+	assert.Contains(t, body, `quartermaster_gpu_temperature_celsius{id="0",name="AMD RX 7900",uuid="GPU-5678"} 70`)
+	assert.Contains(t, body, `quartermaster_gpu_vram_temperature_celsius{id="0",name="AMD RX 7900",uuid="GPU-5678"} 85`)
 }
 
 func TestWriteGpuMetrics_EmptyUUID(t *testing.T) {
@@ -211,8 +211,8 @@ func TestMetricsHandler_WithSysStats(t *testing.T) {
 	m.MetricsHandler()(rec, req)
 
 	body := rec.Body.String()
-	assert.Contains(t, body, "llamaswap_cpu_util_percent")
-	assert.Contains(t, body, "llamaswap_memory_total_bytes")
+	assert.Contains(t, body, "quartermaster_cpu_util_percent")
+	assert.Contains(t, body, "quartermaster_memory_total_bytes")
 }
 
 func TestMetricsHandler_UsesLatestSysStat(t *testing.T) {
@@ -229,7 +229,7 @@ func TestMetricsHandler_UsesLatestSysStat(t *testing.T) {
 
 	body := rec.Body.String()
 	// 8192 MB = 8589934592 bytes
-	assert.Contains(t, body, "llamaswap_memory_total_bytes 8589934592")
+	assert.Contains(t, body, "quartermaster_memory_total_bytes 8589934592")
 }
 
 func TestMetricsHandler_WithGpuStats(t *testing.T) {
@@ -243,6 +243,6 @@ func TestMetricsHandler_WithGpuStats(t *testing.T) {
 	m.MetricsHandler()(rec, req)
 
 	body := rec.Body.String()
-	assert.Contains(t, body, "llamaswap_gpu_temperature_celsius")
+	assert.Contains(t, body, "quartermaster_gpu_temperature_celsius")
 	assert.Contains(t, body, `name="TestGPU"`)
 }

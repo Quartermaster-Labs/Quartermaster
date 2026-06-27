@@ -140,14 +140,24 @@ function Set-YamlValue {
     param([string]$File, [string]$Key, [string]$Value)
     if (-not (Test-Path -LiteralPath $File)) { return }
     $val = $Value -replace '\\', '/'
-    $lines = Get-Content -LiteralPath $File
+    # -Encoding UTF8: the example is UTF-8; the default ANSI read mojibakes its
+    # em-dashes/smart-quotes and a round-trip would persist the garbage.
+    $lines = Get-Content -LiteralPath $File -Encoding UTF8
     $re = "^(\s*)$([regex]::Escape($Key)):.*$"
-    $found = $false
-    $out = foreach ($l in $lines) {
-        if ($l -match $re) { $found = $true; "$($Matches[1])${Key}: $val" } else { $l }
+    $exists = [bool]($lines | Where-Object { $_ -match $re })
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($l in $lines) {
+        if ($l -match $re) { $out.Add("$($Matches[1])${Key}: $val") }
+        else {
+            $out.Add($l)
+            # Insert a missing key right under settings:, not at EOF — EOF lands
+            # inside the trailing overrides: block and breaks the YAML.
+            if (-not $exists -and $l -match '^settings:\s*$') { $out.Add("  ${Key}: $val"); $exists = $true }
+        }
     }
-    if (-not $found) { $out = $out + "  ${Key}: $val" }  # under settings: (2-space indent)
-    Set-Content -LiteralPath $File -Value $out -Encoding utf8
+    if (-not $exists) { $out.Add("  ${Key}: $val") }
+    # UTF-8 without BOM (PS 5.1 -Encoding utf8 writes a BOM).
+    [IO.File]::WriteAllLines($File, $out, (New-Object Text.UTF8Encoding $false))
 }
 
 $genYaml = Join-Path $AppDir 'quartermaster-generate.yaml'

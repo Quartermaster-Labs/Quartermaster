@@ -27,45 +27,45 @@ func (m *Monitor) MetricsHandler() http.HandlerFunc {
 }
 
 func writeSysMetrics(w http.ResponseWriter, s SysStat) {
-	fmt.Fprintf(w, "# HELP llamaswap_cpu_util_percent CPU utilization per core (0-100)\n")
-	fmt.Fprintf(w, "# TYPE llamaswap_cpu_util_percent gauge\n")
+	fmt.Fprintf(w, "# HELP quartermaster_cpu_util_percent CPU utilization per core (0-100)\n")
+	fmt.Fprintf(w, "# TYPE quartermaster_cpu_util_percent gauge\n")
 	for i, pct := range s.CpuUtilPerCore {
-		fmt.Fprintf(w, "llamaswap_cpu_util_percent{core=\"%d\"} %g\n", i, pct)
+		fmt.Fprintf(w, "quartermaster_cpu_util_percent{core=\"%d\"} %g\n", i, pct)
 	}
 
-	fmt.Fprintf(w, "# HELP llamaswap_memory_total_bytes Total memory in bytes\n")
-	fmt.Fprintf(w, "# TYPE llamaswap_memory_total_bytes gauge\n")
-	fmt.Fprintf(w, "llamaswap_memory_total_bytes %d\n", int64(s.MemTotalMB)*mbToBytes)
+	fmt.Fprintf(w, "# HELP quartermaster_memory_total_bytes Total memory in bytes\n")
+	fmt.Fprintf(w, "# TYPE quartermaster_memory_total_bytes gauge\n")
+	fmt.Fprintf(w, "quartermaster_memory_total_bytes %d\n", int64(s.MemTotalMB)*mbToBytes)
 
-	fmt.Fprintf(w, "# HELP llamaswap_memory_used_bytes Used memory in bytes\n")
-	fmt.Fprintf(w, "# TYPE llamaswap_memory_used_bytes gauge\n")
-	fmt.Fprintf(w, "llamaswap_memory_used_bytes %d\n", int64(s.MemUsedMB)*mbToBytes)
+	fmt.Fprintf(w, "# HELP quartermaster_memory_used_bytes Used memory in bytes\n")
+	fmt.Fprintf(w, "# TYPE quartermaster_memory_used_bytes gauge\n")
+	fmt.Fprintf(w, "quartermaster_memory_used_bytes %d\n", int64(s.MemUsedMB)*mbToBytes)
 
-	fmt.Fprintf(w, "# HELP llamaswap_memory_free_bytes Free memory in bytes\n")
-	fmt.Fprintf(w, "# TYPE llamaswap_memory_free_bytes gauge\n")
-	fmt.Fprintf(w, "llamaswap_memory_free_bytes %d\n", int64(s.MemFreeMB)*mbToBytes)
+	fmt.Fprintf(w, "# HELP quartermaster_memory_free_bytes Free memory in bytes\n")
+	fmt.Fprintf(w, "# TYPE quartermaster_memory_free_bytes gauge\n")
+	fmt.Fprintf(w, "quartermaster_memory_free_bytes %d\n", int64(s.MemFreeMB)*mbToBytes)
 
-	fmt.Fprintf(w, "# HELP llamaswap_swap_total_bytes Total swap in bytes\n")
-	fmt.Fprintf(w, "# TYPE llamaswap_swap_total_bytes gauge\n")
-	fmt.Fprintf(w, "llamaswap_swap_total_bytes %d\n", int64(s.SwapTotalMB)*mbToBytes)
+	fmt.Fprintf(w, "# HELP quartermaster_swap_total_bytes Total swap in bytes\n")
+	fmt.Fprintf(w, "# TYPE quartermaster_swap_total_bytes gauge\n")
+	fmt.Fprintf(w, "quartermaster_swap_total_bytes %d\n", int64(s.SwapTotalMB)*mbToBytes)
 
-	fmt.Fprintf(w, "# HELP llamaswap_swap_used_bytes Used swap in bytes\n")
-	fmt.Fprintf(w, "# TYPE llamaswap_swap_used_bytes gauge\n")
-	fmt.Fprintf(w, "llamaswap_swap_used_bytes %d\n", int64(s.SwapUsedMB)*mbToBytes)
+	fmt.Fprintf(w, "# HELP quartermaster_swap_used_bytes Used swap in bytes\n")
+	fmt.Fprintf(w, "# TYPE quartermaster_swap_used_bytes gauge\n")
+	fmt.Fprintf(w, "quartermaster_swap_used_bytes %d\n", int64(s.SwapUsedMB)*mbToBytes)
 
-	fmt.Fprintf(w, "# HELP llamaswap_load_average Load average\n")
-	fmt.Fprintf(w, "# TYPE llamaswap_load_average gauge\n")
-	fmt.Fprintf(w, "llamaswap_load_average{interval=\"1m\"} %g\n", s.LoadAvg1)
-	fmt.Fprintf(w, "llamaswap_load_average{interval=\"5m\"} %g\n", s.LoadAvg5)
-	fmt.Fprintf(w, "llamaswap_load_average{interval=\"15m\"} %g\n", s.LoadAvg15)
+	fmt.Fprintf(w, "# HELP quartermaster_load_average Load average\n")
+	fmt.Fprintf(w, "# TYPE quartermaster_load_average gauge\n")
+	fmt.Fprintf(w, "quartermaster_load_average{interval=\"1m\"} %g\n", s.LoadAvg1)
+	fmt.Fprintf(w, "quartermaster_load_average{interval=\"5m\"} %g\n", s.LoadAvg5)
+	fmt.Fprintf(w, "quartermaster_load_average{interval=\"15m\"} %g\n", s.LoadAvg15)
 
 	if len(s.NetIO) > 0 {
-		fmt.Fprintf(w, "# HELP llamaswap_network_bytes_total Total network bytes transferred\n")
-		fmt.Fprintf(w, "# TYPE llamaswap_network_bytes_total counter\n")
+		fmt.Fprintf(w, "# HELP quartermaster_network_bytes_total Total network bytes transferred\n")
+		fmt.Fprintf(w, "# TYPE quartermaster_network_bytes_total counter\n")
 		for _, io := range s.NetIO {
 			iface := sanitizeLabel(io.Name)
-			fmt.Fprintf(w, "llamaswap_network_bytes_total{interface=\"%s\",direction=\"recv\"} %d\n", iface, io.BytesRecv)
-			fmt.Fprintf(w, "llamaswap_network_bytes_total{interface=\"%s\",direction=\"sent\"} %d\n", iface, io.BytesSent)
+			fmt.Fprintf(w, "quartermaster_network_bytes_total{interface=\"%s\",direction=\"recv\"} %d\n", iface, io.BytesRecv)
+			fmt.Fprintf(w, "quartermaster_network_bytes_total{interface=\"%s\",direction=\"sent\"} %d\n", iface, io.BytesSent)
 		}
 	}
 }
@@ -82,14 +82,14 @@ func writeGpuMetrics(w http.ResponseWriter, gpus []GpuStat) {
 	}
 
 	metrics := []gpuMetric{
-		{"GPU temperature in Celsius", "llamaswap_gpu_temperature_celsius", func(g GpuStat) float64 { return float64(g.TempC) }},
-		{"GPU VRAM temperature in Celsius", "llamaswap_gpu_vram_temperature_celsius", func(g GpuStat) float64 { return float64(g.VramTempC) }},
-		{"GPU utilization percent (0-100)", "llamaswap_gpu_util_percent", func(g GpuStat) float64 { return g.GpuUtilPct }},
-		{"GPU memory utilization percent (0-100)", "llamaswap_gpu_memory_util_percent", func(g GpuStat) float64 { return g.MemUtilPct }},
-		{"GPU memory used in bytes", "llamaswap_gpu_memory_used_bytes", func(g GpuStat) float64 { return float64(g.MemUsedMB) * float64(mbToBytes) }},
-		{"GPU memory total in bytes", "llamaswap_gpu_memory_total_bytes", func(g GpuStat) float64 { return float64(g.MemTotalMB) * float64(mbToBytes) }},
-		{"GPU fan speed percent (0-100)", "llamaswap_gpu_fan_speed_percent", func(g GpuStat) float64 { return g.FanSpeedPct }},
-		{"GPU power draw in watts", "llamaswap_gpu_power_draw_watts", func(g GpuStat) float64 { return g.PowerDrawW }},
+		{"GPU temperature in Celsius", "quartermaster_gpu_temperature_celsius", func(g GpuStat) float64 { return float64(g.TempC) }},
+		{"GPU VRAM temperature in Celsius", "quartermaster_gpu_vram_temperature_celsius", func(g GpuStat) float64 { return float64(g.VramTempC) }},
+		{"GPU utilization percent (0-100)", "quartermaster_gpu_util_percent", func(g GpuStat) float64 { return g.GpuUtilPct }},
+		{"GPU memory utilization percent (0-100)", "quartermaster_gpu_memory_util_percent", func(g GpuStat) float64 { return g.MemUtilPct }},
+		{"GPU memory used in bytes", "quartermaster_gpu_memory_used_bytes", func(g GpuStat) float64 { return float64(g.MemUsedMB) * float64(mbToBytes) }},
+		{"GPU memory total in bytes", "quartermaster_gpu_memory_total_bytes", func(g GpuStat) float64 { return float64(g.MemTotalMB) * float64(mbToBytes) }},
+		{"GPU fan speed percent (0-100)", "quartermaster_gpu_fan_speed_percent", func(g GpuStat) float64 { return g.FanSpeedPct }},
+		{"GPU power draw in watts", "quartermaster_gpu_power_draw_watts", func(g GpuStat) float64 { return g.PowerDrawW }},
 	}
 
 	for _, m := range metrics {

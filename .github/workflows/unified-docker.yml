@@ -1,9 +1,8 @@
 name: Build Unified Docker Image
 
 on:
-  schedule:
-    - cron: "37 5 * * *"
-
+  # ponytail: cron removed — daily 2-backend source-compile burned ~400 CI min/day.
+  # Build on demand instead. Re-add `schedule:` if you need nightly images.
   workflow_dispatch:
     inputs:
       llama_cpp_ref:
@@ -22,7 +21,7 @@ on:
         description: "ik_llama.cpp commit hash, tag, or branch (CUDA only)"
         required: false
         default: "main"
-      llama_swap_version:
+      ls_version:
         description: "llama-quartermaster version (e.g. v198, latest, main)"
         required: false
         default: "main"
@@ -110,8 +109,8 @@ jobs:
           WHISPER_REF: ${{ inputs.whisper_ref || 'master' }}
           SD_REF: ${{ inputs.sd_ref || 'master' }}
           IK_LLAMA_REF: ${{ inputs.ik_llama_ref || 'main' }}
-          LS_VERSION: ${{ inputs.llama_swap_version || 'main' }}
-          DOCKER_IMAGE_TAG: ghcr.io/mostlygeek/llama-swap:unified-${{ matrix.backend }}
+          LS_VERSION: ${{ inputs.ls_version || 'main' }}
+          DOCKER_IMAGE_TAG: ghcr.io/radu0120/llama-quartermaster:unified-${{ matrix.backend }}
           # When running under act, use the local builder that has warm ccache.
           # On GitHub Actions, BUILDX_BUILDER is unset so docker uses the builder
           # created by setup-buildx-action above.
@@ -123,7 +122,7 @@ jobs:
       - name: Push to GitHub Container Registry
         if: ${{ !env.ACT && (github.event_name == 'schedule' || inputs.push_to_ghcr == true) }}
         run: |
-          BASE_TAG="ghcr.io/mostlygeek/llama-swap:unified-${{ matrix.backend }}"
+          BASE_TAG="ghcr.io/radu0120/llama-quartermaster:unified-${{ matrix.backend }}"
           DATE_TAG=$(date -u +%Y-%m-%d)
 
           docker push "${BASE_TAG}"

@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/logmon"
-	"github.com/mostlygeek/llama-swap/internal/process"
-	"github.com/mostlygeek/llama-swap/internal/shared"
+	"github.com/radu0120/llama-quartermaster/internal/logmon"
+	"github.com/radu0120/llama-quartermaster/internal/process"
+	"github.com/radu0120/llama-quartermaster/internal/shared"
 )
 
 var (
@@ -49,4 +49,13 @@ type LocalRouter interface {
 	// modelID must be a real (non-alias) config key. Returns false when the
 	// model is not known to this router.
 	ProcessLogger(modelID string) (*logmon.Monitor, bool)
+
+	// SetPreEvict installs a hook called with a model ID just before its process
+	// is stopped for eviction/unload, while still Ready. Call once before serving.
+	SetPreEvict(fn func(modelID string))
+
+	// SetPostLoad installs a hook called with a model ID each time its process
+	// becomes Ready, before the triggering request is served. Call once before
+	// serving. Used to restore a saved slot KV on cold load.
+	SetPostLoad(fn func(modelID string))
 }

@@ -77,9 +77,10 @@
   let aliasesText = $state("");
   let unlisted = $state(false);
   let skip = $state(false);
-  // Opt this model into on-disk slot KV persistence (--slot-save-path). Only
-  // takes effect when the global slot-cache toggle (Dashboard) is also on.
-  let slotCacheOn = $state(false);
+  // Opt this model into on-disk slot KV persistence (--slot-save-path). On by
+  // default so the global slot-cache toggle (Dashboard) alone enables it; only
+  // takes effect when that master switch is also on. Uncheck to opt this model out.
+  let slotCacheOn = $state(true);
   // Model-wide --ctx-checkpoints default; null => auto (sizer/llama default),
   // explicit (incl. 0) pins it. Variants inherit this unless they set their own.
   let ctxCheckpoints = $state<number | null>(null);
@@ -400,7 +401,7 @@
       reasoningFmt: v.reasoningFmt || base.reasoningFmt || "",
       // preserve-thinking defaults on for reasoning variants; off when reasoning off.
       preserveThinking: v.reasoningFmt !== "off" && (v.preserveThinking ?? true),
-      slotCache: v.slotCache ?? base.slotCache ?? false,
+      slotCache: v.slotCache ?? base.slotCache ?? true,
       flashAttn: v.flashAttn || base.flashAttn || "",
       mmap: v.mmap || base.mmap || "",
       mlock: v.mlock ?? base.mlock ?? false,
@@ -437,15 +438,15 @@
   // a variant name = that variant (a subset of fields; the rest inherit Default).
   // Default is a pinned, non-deletable entry — opening any variant's gear lands
   // here with that variant selected.
-  let selectedVariant = $state("");
-  const selectedV = $derived(
-    selectedVariant
-      ? ([...variants, ...ctxTiers, ...defaultVariants].find((v) => v.name === selectedVariant) ?? null)
-      : null,
-  );
+  // Selection is keyed by object REFERENCE, not name: a variant's name can be
+  // momentarily empty while the user retypes its suffix, and an empty name would
+  // otherwise collide with the Default tab's "" sentinel and snap the editor back
+  // to Default. null = Default tab.
+  let selectedV = $state<ModelVariant | null>(null);
+  const selectedVariant = $derived(selectedV?.name ?? "");
   // The selected tab is a fleet-wide default variant (game) => edits save globally.
   const selectedIsDefault = $derived(
-    !!selectedVariant && defaultVariants.some((v) => v.name === selectedVariant),
+    !!selectedV && defaultVariants.includes(selectedV),
   );
 
   const KV_OPTS = ["", "q8_0", "q4_0", "q5_1", "f16", "bf16"];
@@ -556,7 +557,7 @@
     aliasesText = (o?.aliases ?? []).join(", ");
     unlisted = o?.unlisted ?? false;
     skip = o?.skip ?? false;
-    slotCacheOn = o?.slotCache ?? false;
+    slotCacheOn = o?.slotCache ?? true;
     ctxCheckpoints = o?.ctxCheckpoints ?? null;
     variants = (o?.variants ?? []).map((v) => ({ ...v }));
     ctxTiers = (o?.ctxVariants ?? []).map((n) => blankVariant(fmtCtx(n), n));
@@ -601,8 +602,9 @@
     let name = "preset";
     const taken = (nm: string) => variants.some((v) => v.name.toLowerCase() === nm.toLowerCase());
     while (taken(name)) name = `preset${++n}`;
-    variants = [...variants, blankVariant(name, 0)];
-    selectedVariant = name;
+    const nv = blankVariant(name, 0);
+    variants = [...variants, nv];
+    selectedV = nv;
   }
 
   // True when a ctx tier carries nothing but its ctx value, so it round-trips as
@@ -646,7 +648,9 @@
           if (openForId.endsWith("-" + v.name) && v.name.length > chosen.length) chosen = v.name;
         }
       }
-      selectedVariant = chosen;
+      selectedV = chosen
+        ? ([...variants, ...ctxTiers, ...defaultVariants].find((v) => v.name === chosen) ?? null)
+        : null;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -824,8 +828,9 @@
     const taken = (nm: string) =>
       [...variants, ...ctxTiers, ...defaultVariants].some((v) => v.name.toLowerCase() === nm.toLowerCase());
     while (taken(name)) name = `variant${++n}`;
-    variants = [...variants, variantFromDefault(name)];
-    selectedVariant = name;
+    const nv = variantFromDefault(name);
+    variants = [...variants, nv];
+    selectedV = nv;
   }
 
   // Add a fresh fleet-wide variant (shared by every model) and select it. Saved
@@ -838,8 +843,9 @@
     while (taken(name)) name = `fleet${++n}`;
     // Seed from the current Default (spec, kv, engine knobs) like a per-model
     // variant: it inherits at creation, then drifts independently (standalone).
-    defaultVariants = [...defaultVariants, variantFromDefault(name)];
-    selectedVariant = name;
+    const nv = variantFromDefault(name);
+    defaultVariants = [...defaultVariants, nv];
+    selectedV = nv;
   }
 
   // Remove a tab from whichever bucket holds it (per-model variant, ctx tier, or
@@ -848,7 +854,7 @@
     variants = variants.filter((v) => v.name !== name);
     ctxTiers = ctxTiers.filter((v) => v.name !== name);
     defaultVariants = defaultVariants.filter((v) => v.name !== name);
-    if (selectedVariant === name) selectedVariant = "";
+    if (selectedV?.name === name) selectedV = null;
   }
 
   // Variant ctx auto = 0 (sizer picks). Toggling seeds a sane starting value.
@@ -886,11 +892,9 @@
   // Renaming the selected variant must move the selection pointer with it so the
   // derived `selectedV` keeps resolving to the same array element.
   function renameSelectedVariant(e: Event) {
-    const name = (e.currentTarget as HTMLInputElement).value;
-    if (selectedV) {
-      selectedV.name = name;
-      selectedVariant = name;
-    }
+    // Selection follows the object ref, so an empty name no longer drops us to
+    // Default — just write it through.
+    if (selectedV) selectedV.name = (e.currentTarget as HTMLInputElement).value;
   }
   function setVAliases(e: Event) {
     if (selectedV) selectedV.aliases = parseAliases((e.currentTarget as HTMLInputElement).value);
@@ -1015,22 +1019,22 @@
         <div class="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
-            class="px-2.5 py-1 rounded text-xs font-mono border transition-colors {selectedVariant === ''
+            class="px-2.5 py-1 rounded text-xs font-mono border transition-colors {selectedV === null
               ? 'bg-primary text-white border-primary'
               : 'border-card-border text-txtsecondary hover:text-txtmain'}"
-            onclick={() => (selectedVariant = "")}
+            onclick={() => (selectedV = null)}
           >default</button>
           {#each variants as v (v.name)}
-            <span class="inline-flex items-center rounded border overflow-hidden {selectedVariant === v.name ? 'border-primary' : 'border-card-border'}">
+            <span class="inline-flex items-center rounded border overflow-hidden {selectedV === v ? 'border-primary' : 'border-card-border'}">
               <button
                 type="button"
-                class="px-2.5 py-1 text-xs font-mono transition-colors {selectedVariant === v.name ? 'bg-primary text-white' : 'text-txtsecondary hover:text-txtmain'}"
-                onclick={() => (selectedVariant = v.name)}>{v.name || "(unnamed)"}</button>
+                class="px-2.5 py-1 text-xs font-mono transition-colors {selectedV === v ? 'bg-primary text-white' : 'text-txtsecondary hover:text-txtmain'}"
+                onclick={() => (selectedV = v)}>{v.name || "(unnamed)"}</button>
               <button
                 type="button"
                 title="Remove preset"
                 aria-label="Remove preset {v.name}"
-                class="px-1.5 py-1 text-xs {selectedVariant === v.name ? 'bg-primary text-white hover:bg-black/25' : 'text-txtsecondary hover:text-error'}"
+                class="px-1.5 py-1 text-xs {selectedV === v ? 'bg-primary text-white hover:bg-black/25' : 'text-txtsecondary hover:text-error'}"
                 onclick={() => removeVariantEntry(v.name)}>×</button>
             </span>
           {/each}
@@ -1041,7 +1045,7 @@
             onclick={addImageVariantEntry}>+ preset</button>
         </div>
 
-        {#if selectedVariant === ""}
+        {#if selectedV === null}
         <div class="grid grid-cols-2 gap-3">
           <div class="col-span-2 font-mono text-[0.6rem] uppercase tracking-wider text-txtsecondary">Component paths</div>
           <label class="flex flex-col gap-1 text-sm col-span-2">
@@ -1319,50 +1323,50 @@
         <div class="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
-            class="px-2.5 py-1 rounded text-xs font-mono border transition-colors {selectedVariant === ''
+            class="px-2.5 py-1 rounded text-xs font-mono border transition-colors {selectedV === null
               ? 'bg-primary text-white border-primary'
               : 'border-card-border text-txtsecondary hover:text-txtmain'}"
-            onclick={() => (selectedVariant = "")}
+            onclick={() => (selectedV = null)}
           >default</button>
           {#each variants as v (v.name)}
             <span
-              class="inline-flex items-center rounded border overflow-hidden {selectedVariant === v.name
+              class="inline-flex items-center rounded border overflow-hidden {selectedV === v
                 ? 'border-primary'
                 : 'border-card-border'}"
             >
               <button
                 type="button"
-                class="px-2.5 py-1 text-xs font-mono transition-colors {selectedVariant === v.name
+                class="px-2.5 py-1 text-xs font-mono transition-colors {selectedV === v
                   ? 'bg-primary text-white'
                   : 'text-txtsecondary hover:text-txtmain'}"
-                onclick={() => (selectedVariant = v.name)}>{v.name || "(unnamed)"}</button>
+                onclick={() => (selectedV = v)}>{v.name || "(unnamed)"}</button>
               <button
                 type="button"
                 title="Remove variant"
                 aria-label="Remove variant {v.name}"
-                class="px-1.5 py-1 text-xs {selectedVariant === v.name ? 'bg-primary text-white hover:bg-black/25' : 'text-txtsecondary hover:text-error'}"
+                class="px-1.5 py-1 text-xs {selectedV === v ? 'bg-primary text-white hover:bg-black/25' : 'text-txtsecondary hover:text-error'}"
                 onclick={() => removeVariantEntry(v.name)}>×</button>
             </span>
           {/each}
           <!-- Ctx tiers (32k/64k…): per-model, removable like variants. -->
           {#each ctxTiers as v (v.name)}
             <span
-              class="inline-flex items-center rounded border overflow-hidden {selectedVariant === v.name
+              class="inline-flex items-center rounded border overflow-hidden {selectedV === v
                 ? 'border-primary'
                 : 'border-card-border'}"
             >
               <button
                 type="button"
                 title="Context tier"
-                class="px-2.5 py-1 text-xs font-mono transition-colors {selectedVariant === v.name
+                class="px-2.5 py-1 text-xs font-mono transition-colors {selectedV === v
                   ? 'bg-primary text-white'
                   : 'text-txtsecondary hover:text-txtmain'}"
-                onclick={() => (selectedVariant = v.name)}>{v.name || "(unnamed)"}</button>
+                onclick={() => (selectedV = v)}>{v.name || "(unnamed)"}</button>
               <button
                 type="button"
                 title="Remove ctx tier"
                 aria-label="Remove ctx tier {v.name}"
-                class="px-1.5 py-1 text-xs {selectedVariant === v.name ? 'bg-primary text-white hover:bg-black/25' : 'text-txtsecondary hover:text-error'}"
+                class="px-1.5 py-1 text-xs {selectedV === v ? 'bg-primary text-white hover:bg-black/25' : 'text-txtsecondary hover:text-error'}"
                 onclick={() => removeVariantEntry(v.name)}>×</button>
             </span>
           {/each}
@@ -1370,22 +1374,22 @@
                Adding/removing/editing one writes them globally on save. -->
           {#each defaultVariants as v (v.name)}
             <span
-              class="inline-flex items-center rounded border overflow-hidden {selectedVariant === v.name
+              class="inline-flex items-center rounded border overflow-hidden {selectedV === v
                 ? 'border-primary'
                 : 'border-card-border'}"
             >
               <button
                 type="button"
                 title="Fleet-wide variant (shared by all models)"
-                class="px-2.5 py-1 text-xs font-mono transition-colors {selectedVariant === v.name
+                class="px-2.5 py-1 text-xs font-mono transition-colors {selectedV === v
                   ? 'bg-primary text-white'
                   : 'text-txtsecondary hover:text-txtmain'}"
-                onclick={() => (selectedVariant = v.name)}>{v.name || "(unnamed)"} <span class="opacity-60">⊕</span></button>
+                onclick={() => (selectedV = v)}>{v.name || "(unnamed)"} <span class="opacity-60">⊕</span></button>
               <button
                 type="button"
                 title="Remove fleet-wide variant"
                 aria-label="Remove fleet-wide variant {v.name}"
-                class="px-1.5 py-1 text-xs {selectedVariant === v.name ? 'bg-primary text-white hover:bg-black/25' : 'text-txtsecondary hover:text-error'}"
+                class="px-1.5 py-1 text-xs {selectedV === v ? 'bg-primary text-white hover:bg-black/25' : 'text-txtsecondary hover:text-error'}"
                 onclick={() => removeVariantEntry(v.name)}>×</button>
             </span>
           {/each}
@@ -1401,7 +1405,7 @@
             onclick={addDefaultVariantEntry}>+ fleet variant ⊕</button>
         </div>
 
-        {#if selectedVariant === ""}
+        {#if selectedV === null}
         <!-- Curated override fields, ordered most-tinkered (top) to least (bottom). -->
         <div class="grid grid-cols-2 gap-3">
           <label class="flex flex-col gap-1 text-sm col-span-2">
@@ -1693,7 +1697,7 @@
           {@const sv = selectedV}
           <p class="text-xs text-txtsecondary -mt-1">
             Editing variant <span class="font-mono text-txtmain">{config.id}{config.id.endsWith(`-${sv.name}`) ? "" : `-${sv.name || "(unnamed)"}`}</span>.
-            Anything left unset inherits from <button type="button" class="underline hover:text-txtmain" onclick={() => (selectedVariant = "")}>Default</button>.
+            Anything left unset inherits from <button type="button" class="underline hover:text-txtmain" onclick={() => (selectedV = null)}>Default</button>.
           </p>
           {#if selectedIsDefault}
             <p class="text-xs text-warning bg-warning/10 border border-warning/30 rounded px-2 py-1.5">

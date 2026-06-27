@@ -1,11 +1,11 @@
 #!/bin/bash
-# Install llama-swap - download latest release binary from GitHub
-# Usage: ./install-llama-swap.sh [version]
+# Install llama-quartermaster - download latest release binary from GitHub
+# Usage: ./install-llama-quartermaster.sh [version]
 #   version: release version number (e.g., "170") or "latest" (default)
 set -e
 
 VERSION="${1:-latest}"
-REPO="mostlygeek/llama-swap"
+REPO="Radu0120/llama-quartermaster"
 
 mkdir -p /install/bin
 
@@ -28,7 +28,7 @@ VERSION="${VERSION#v}"
 
 # Resolve "latest" to actual version number
 if [ "$VERSION" = "latest" ]; then
-    echo "=== Resolving latest llama-swap release ==="
+    echo "=== Resolving latest llama-quartermaster release ==="
     VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
         | grep '"tag_name"' | head -1 | cut -d'"' -f4 | sed 's/^v//')
     if [ -z "$VERSION" ]; then
@@ -47,21 +47,21 @@ case "$ARCH" in
 esac
 
 # Download and extract
-URL="https://github.com/${REPO}/releases/download/v${VERSION}/llama-swap_${VERSION}_linux_${ARCH}.tar.gz"
-echo "=== Downloading llama-swap v${VERSION} ==="
+URL="https://github.com/${REPO}/releases/download/v${VERSION}/llama-quartermaster_${VERSION}_linux_${ARCH}.tar.gz"
+echo "=== Downloading llama-quartermaster v${VERSION} ==="
 echo "URL: $URL"
-curl -fSL -o /tmp/llama-swap.tar.gz "$URL"
-tar -xzf /tmp/llama-swap.tar.gz -C /install/bin/
-rm /tmp/llama-swap.tar.gz
+curl -fSL -o /tmp/llama-quartermaster.tar.gz "$URL"
+tar -xzf /tmp/llama-quartermaster.tar.gz -C /install/bin/
+rm /tmp/llama-quartermaster.tar.gz
 
 # Validate
-if [ ! -x "/install/bin/llama-swap" ]; then
-    echo "FATAL: llama-swap binary not found or not executable" >&2
+if [ ! -x "/install/bin/llama-quartermaster" ]; then
+    echo "FATAL: llama-quartermaster binary not found or not executable" >&2
     ls -la /install/bin/ >&2
     exit 1
 fi
 
-echo "$VERSION" > /install/llama-swap-version
+echo "$VERSION" > /install/llama-quartermaster-version
 
-echo "=== llama-swap v${VERSION} installed ==="
-ls -la /install/bin/llama-swap
+echo "=== llama-quartermaster v${VERSION} installed ==="
+ls -la /install/bin/llama-quartermaster

@@ -265,8 +265,10 @@ type Override struct {
 	Skip           bool    `yaml:"skip"`
 	// SlotCache opts this model into on-disk slot KV persistence: emits
 	// --slot-save-path so the server's slotCache can save/restore its conversation
-	// KV. No-op unless settings.slotCache.enable is also on (the master switch).
-	SlotCache bool `yaml:"slotCache"`
+	// KV. nil => default on (so the dashboard master switch alone enables it for
+	// every model); false => explicitly opt this model out. No-op unless
+	// settings.slotCache.enable is also on (the master switch).
+	SlotCache *bool `yaml:"slotCache"`
 	// Variants are named custom profiles emitted in addition to the solo model:
 	// each becomes "<model>-<name>" with its own ctx/VRAM/kv/spec. Use-case
 	// agnostic — the UI's "create variant" flow writes these.
@@ -392,14 +394,13 @@ func (s *Settings) applyDefaults() {
 	if s.HealthCheckTimeout == 0 {
 		s.HealthCheckTimeout = 300
 	}
-	// Slot KV-cache persistence is on by default with the server's defaults
-	// pre-filled (so the dashboard shows real numbers, not 0). Per-model opt-in
-	// (Override.SlotCache) still gates whether any cmd gets --slot-save-path, so a
-	// bare global-on is a no-op until a model opts in.
-	// ponytail: Enable defaults true and can't be expressed as false in the
-	// hand-authored generate file (bool zero == unset); turn it off via the
-	// dashboard (writes enable:false to the sidecar, which overlays this).
-	s.SlotCache.Enable = true
+	// Slot KV-cache persistence is OFF by default (the master switch); the
+	// server-default knobs below are still pre-filled so the dashboard shows real
+	// numbers, not 0. Per-model SlotCache defaults ON (nil), so flipping the
+	// single dashboard switch enables persistence for every model at once — a
+	// model opts OUT by setting slotCache:false. Enable's zero value (false) is
+	// the default; turn it on via the dashboard (writes enable:true to the
+	// sidecar, which overlays this).
 	if s.SlotCache.MinSaveTokens == 0 {
 		s.SlotCache.MinSaveTokens = 30000
 	}

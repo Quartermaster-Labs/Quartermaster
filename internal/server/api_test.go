@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
+	"github.com/radu0120/llama-quartermaster/internal/config"
 )
 
 func TestServer_HandleListModels(t *testing.T) {
@@ -352,10 +352,10 @@ func TestServer_HandleListModels_Capabilities(t *testing.T) {
 		if m.Architecture == nil || m.Architecture["input_modalities"] == nil {
 			t.Fatal("architecture should be rendered, not from metadata")
 		}
-		if m.Meta == nil || m.Meta["llamaswap"] == nil {
-			t.Fatal("meta.llamaswap should exist")
+		if m.Meta == nil || m.Meta["quartermaster"] == nil {
+			t.Fatal("meta.quartermaster should exist")
 		}
-		meta := m.Meta["llamaswap"].(map[string]any)
+		meta := m.Meta["quartermaster"].(map[string]any)
 		if _, ok := meta["architecture"]; ok {
 			t.Error("architecture should be filtered from metadata")
 		}
@@ -376,10 +376,10 @@ func TestServer_HandleListModels_Capabilities(t *testing.T) {
 		if m.Architecture != nil {
 			t.Error("should not have architecture when caps is empty")
 		}
-		if m.Meta == nil || m.Meta["llamaswap"] == nil {
-			t.Fatal("meta.llamaswap should exist")
+		if m.Meta == nil || m.Meta["quartermaster"] == nil {
+			t.Fatal("meta.quartermaster should exist")
 		}
-		meta := m.Meta["llamaswap"].(map[string]any)
+		meta := m.Meta["quartermaster"].(map[string]any)
 		if _, ok := meta["architecture"]; !ok {
 			t.Error("architecture should be preserved in metadata when caps is empty")
 		}

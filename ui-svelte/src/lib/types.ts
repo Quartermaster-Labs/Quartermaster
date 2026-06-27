@@ -162,6 +162,10 @@ export interface VersionInfo {
   build_date: string;
   commit: string;
   version: string;
+  // Present only on Windows release builds with update checking enabled.
+  update_available?: boolean;
+  latest_version?: string;
+  release_url?: string;
 }
 
 // A managed API key. `models` empty => the key may reach every model (full

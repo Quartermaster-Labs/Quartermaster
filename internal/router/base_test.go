@@ -5,13 +5,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
-	"github.com/mostlygeek/llama-swap/internal/logmon"
-	"github.com/mostlygeek/llama-swap/internal/process"
-	"github.com/mostlygeek/llama-swap/internal/router/scheduler"
+	"github.com/radu0120/llama-quartermaster/internal/config"
+	"github.com/radu0120/llama-quartermaster/internal/logmon"
+	"github.com/radu0120/llama-quartermaster/internal/process"
+	"github.com/radu0120/llama-quartermaster/internal/router/scheduler"
 )
 
 // These tests cover baseRouter's own machinery — the run loop, process
@@ -41,6 +42,39 @@ func newTestBase(t *testing.T, processes map[string]process.Process, planner sch
 		}
 	})
 	return b
+}
+
+// SetPreEvict must install a hook on every process bound to its own model ID,
+// and that hook must fire when the process is stopped (e.g. Unload/eviction/TTL).
+func TestBaseRouter_SetPreEvict(t *testing.T) {
+	a := newFakeProcess("a")
+	a.markReady()
+	b := newTestBase(t, map[string]process.Process{"a": a}, &stubPlanner{})
+
+	var got atomic.Pointer[string]
+	b.SetPreEvict(func(id string) { got.Store(&id) })
+
+	b.Unload(time.Second, "a")
+
+	if p := got.Load(); p == nil || *p != "a" {
+		t.Fatalf("preEvict hook not fired with model id; got %v", p)
+	}
+}
+
+// SetPostLoad must install a hook on every process bound to its own model ID,
+// fired when the process reaches Ready (cold load), before requests are served.
+func TestBaseRouter_SetPostLoad(t *testing.T) {
+	a := newFakeProcess("a")
+	b := newTestBase(t, map[string]process.Process{"a": a}, &stubPlanner{})
+
+	var got atomic.Pointer[string]
+	b.SetPostLoad(func(id string) { got.Store(&id) })
+
+	a.markReady() // process becomes Ready
+
+	if p := got.Load(); p == nil || *p != "a" {
+		t.Fatalf("postLoad hook not fired with model id; got %v", p)
+	}
 }
 
 func TestBaseRouter_RunningModels(t *testing.T) {

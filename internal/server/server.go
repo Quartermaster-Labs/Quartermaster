@@ -10,13 +10,17 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/chain"
-	"github.com/mostlygeek/llama-swap/internal/config"
-	"github.com/mostlygeek/llama-swap/internal/logmon"
-	"github.com/mostlygeek/llama-swap/internal/perf"
-	"github.com/mostlygeek/llama-swap/internal/router"
-	"github.com/mostlygeek/llama-swap/internal/shared"
+	"github.com/radu0120/llama-quartermaster/internal/chain"
+	"github.com/radu0120/llama-quartermaster/internal/config"
+	"github.com/radu0120/llama-quartermaster/internal/logmon"
+	"github.com/radu0120/llama-quartermaster/internal/perf"
+	"github.com/radu0120/llama-quartermaster/internal/router"
+	"github.com/radu0120/llama-quartermaster/internal/shared"
+	"github.com/radu0120/llama-quartermaster/internal/update"
 )
+
+// updateRepo is the GitHub repo (owner/name) the auto-updater polls for releases.
+const updateRepo = "Radu0120/llama-quartermaster"
 
 // Server owns the HTTP mux, cross-cutting middleware, and the local/peer model
 // dispatch. It supersedes router.Server: it builds the local and peer routers
@@ -50,6 +54,12 @@ type Server struct {
 	// override editor + variant creation). nil when the server was not started
 	// with -generate. See configapi.go.
 	autogen *AutogenAdmin
+
+	// updater polls GitHub releases for a newer build (Windows release builds
+	// only). shutdownHook, when set, triggers a graceful process shutdown so the
+	// downloaded installer can replace the running exe. See update.go.
+	updater      *update.Checker
+	shutdownHook func()
 
 	// playground, when set, enables the standalone playground app (separate
 	// port, per-user login + chat history). nil unless -playground-port is set.
@@ -158,10 +168,19 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		return ok && strings.Contains(mc.Cmd, "--slot-save-path")
 	}
 	s.slotCache = newSlotCache(cfg.SlotCache, s.runningProxies, slotParticipates, proxylog)
+	local.SetPreEvict(s.slotCache.saveOnEvict)    // save slot KV before a swap/unload kills the process
+	local.SetPostLoad(s.slotCache.restoreOnLoad)  // restore slot KV after a cold load, before serving
+	s.metrics.onRecord = s.slotCache.confirmReuse // confirm restores actually reused KV (cached_tokens)
+	s.updater = update.New(updateRepo, build.Version, func(m string) { proxylog.Info(m) })
+	go s.updater.Run(s.shutdownCtx)
 	s.routes()
 	s.startPreload()
 	return s, nil
 }
+
+// SetShutdownHook wires the graceful-shutdown trigger used by the auto-updater
+// after it launches the installer (so the running exe can be replaced).
+func (s *Server) SetShutdownHook(fn func()) { s.shutdownHook = fn }
 
 // runningProxies maps each running local model to its resolved upstream base
 // URL (cfg.Models[id].Proxy has ${PORT} already substituted at config load).
@@ -289,6 +308,7 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/backend-metrics", apiChain.ThenFunc(s.handleAPIBackendMetrics))
 	mux.Handle("GET /api/performance", apiChain.ThenFunc(s.handleAPIPerformance))
 	mux.Handle("GET /api/version", apiChain.ThenFunc(s.handleAPIVersion))
+	mux.Handle("POST /api/update", apiChain.ThenFunc(s.handleAPIUpdate))
 	mux.Handle("GET /api/captures/{id}", apiChain.ThenFunc(s.handleAPICapture))
 	mux.Handle("GET /api/websearch", apiChain.ThenFunc(s.handleAPIWebSearch))
 
@@ -320,6 +340,7 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/settings", apiChain.ThenFunc(s.handleAPISettingsPut))
 	mux.Handle("DELETE /api/settings", apiChain.ThenFunc(s.handleAPISettingsDelete))
 	mux.Handle("PUT /api/settings/slotcache", apiChain.ThenFunc(s.handleAPISlotCachePut))
+	mux.Handle("GET /api/kvcache", apiChain.ThenFunc(s.handleAPIKvCache))
 	// Per-category scan folder (Models tab folder icon) — opens the host's native
 	// folder dialog, then sets settings.categoryRoots[category].
 	mux.Handle("POST /api/settings/root/pick", apiChain.ThenFunc(s.handleAPISettingsRootPick))

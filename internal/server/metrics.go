@@ -14,11 +14,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/cache"
-	"github.com/mostlygeek/llama-swap/internal/event"
-	"github.com/mostlygeek/llama-swap/internal/logmon"
-	"github.com/mostlygeek/llama-swap/internal/ring"
-	"github.com/mostlygeek/llama-swap/internal/shared"
+	"github.com/radu0120/llama-quartermaster/internal/cache"
+	"github.com/radu0120/llama-quartermaster/internal/event"
+	"github.com/radu0120/llama-quartermaster/internal/logmon"
+	"github.com/radu0120/llama-quartermaster/internal/ring"
+	"github.com/radu0120/llama-quartermaster/internal/shared"
 	"github.com/tidwall/gjson"
 )
 
@@ -71,6 +71,11 @@ type metricsMonitor struct {
 
 	enableCaptures bool
 	captureCache   *cache.Cache // zstd-compressed CBOR of ReqRespCapture
+
+	// onRecord, when set, is called with each successful request's prompt and
+	// upstream-reported cached token counts. The slot cache uses it to confirm a
+	// restore actually produced KV reuse (cached_tokens > 0).
+	onRecord func(model string, prompt, cached int)
 }
 
 // newMetricsMonitor creates a metricsMonitor retaining up to maxMetrics entries.
@@ -231,6 +236,9 @@ func (mp *metricsMonitor) record(modelID string, r *http.Request, recorder *resp
 		}
 	}
 	mp.emitMetric(tm)
+	if mp.onRecord != nil {
+		mp.onRecord(modelID, tm.Tokens.InputTokens, tm.Tokens.CachedTokens)
+	}
 }
 
 // usagePaths lists the JSON paths where a per-event usage object can live.

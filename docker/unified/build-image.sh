@@ -10,7 +10,7 @@
 #   LLAMA_REF=v1.2.3 ./build-image.sh --cuda             # Pin llama.cpp to a tag
 #   WHISPER_REF=v1.0.0 ./build-image.sh --vulkan         # Pin whisper.cpp to a tag
 #   SD_REF=master ./build-image.sh --cuda                # Pin stable-diffusion.cpp to a branch
-#   LS_VERSION=170 ./build-image.sh --cuda               # Override llama-swap version
+#   LS_VERSION=170 ./build-image.sh --cuda               # Override llama-quartermaster version
 #   IK_LLAMA_REF=main ./build-image.sh --cuda            # Pin ik_llama.cpp to main branch (CUDA only)
 #
 
@@ -40,12 +40,12 @@ for arg in "$@"; do
             echo "  --help, -h  Show this help message"
             echo ""
             echo "Environment variables:"
-            echo "  DOCKER_IMAGE_TAG     Set custom image tag (default: llama-swap:unified-cuda or llama-swap:unified-vulkan)"
+            echo "  DOCKER_IMAGE_TAG     Set custom image tag (default: llama-quartermaster:unified-cuda or llama-quartermaster:unified-vulkan)"
             echo "  LLAMA_REF            Pin llama.cpp to a commit, tag, or branch"
             echo "  WHISPER_REF          Pin whisper.cpp to a commit, tag, or branch"
             echo "  SD_REF               Pin stable-diffusion.cpp to a commit, tag, or branch"
             echo "  IK_LLAMA_REF         Pin ik_llama.cpp to a commit, tag, or branch (CUDA only)"
-            echo "  LS_VERSION           Override llama-swap version (e.g., '170' or 'latest')"
+            echo "  LS_VERSION           Override llama-quartermaster version (e.g., '170' or 'latest')"
             exit 0
             ;;
     esac
@@ -58,13 +58,13 @@ if [[ -z "$BACKEND" ]]; then
     exit 1
 fi
 
-DOCKER_IMAGE_TAG="${DOCKER_IMAGE_TAG:-llama-swap:unified-${BACKEND}}"
+DOCKER_IMAGE_TAG="${DOCKER_IMAGE_TAG:-llama-quartermaster:unified-${BACKEND}}"
 
 # Git repository URLs
 LLAMA_REPO="https://github.com/ggml-org/llama.cpp.git"
 WHISPER_REPO="https://github.com/ggml-org/whisper.cpp.git"
 SD_REPO="https://github.com/leejet/stable-diffusion.cpp.git"
-LLAMA_SWAP_REPO="https://github.com/mostlygeek/llama-swap.git"
+LQ_REPO="https://github.com/Radu0120/llama-quartermaster.git"
 IK_LLAMA_REPO="https://github.com/ikawrakow/ik_llama.cpp.git"
 
 # Resolve a git ref (commit hash, tag, or branch) to a full commit hash.
@@ -112,7 +112,7 @@ get_latest_hash() {
 }
 
 echo "=========================================="
-echo "llama-swap Unified Build (${BACKEND})"
+echo "llama-quartermaster Unified Build (${BACKEND})"
 echo "=========================================="
 echo ""
 
@@ -173,17 +173,17 @@ else
     echo "ik_llama.cpp: skipped (vulkan build)"
 fi
 
-# Resolve llama-swap ref
+# Resolve llama-quartermaster ref
 if [[ -n "${LS_VERSION:-}" ]]; then
-    LS_HASH=$(resolve_ref "${LLAMA_SWAP_REPO}" "${LS_VERSION}") || exit 1
-    echo "llama-swap: ${LS_VERSION} -> ${LS_HASH}"
+    LS_HASH=$(resolve_ref "${LQ_REPO}" "${LS_VERSION}") || exit 1
+    echo "llama-quartermaster: ${LS_VERSION} -> ${LS_HASH}"
 else
-    LS_HASH=$(get_latest_hash "${LLAMA_SWAP_REPO}")
+    LS_HASH=$(get_latest_hash "${LQ_REPO}")
     if [[ -z "${LS_HASH}" ]]; then
-        echo "ERROR: Could not determine latest commit for llama-swap" >&2
+        echo "ERROR: Could not determine latest commit for llama-quartermaster" >&2
         exit 1
     fi
-    echo "llama-swap: latest HEAD: ${LS_HASH}"
+    echo "llama-quartermaster: latest HEAD: ${LS_HASH}"
 fi
 
 echo ""
@@ -209,7 +209,7 @@ if [[ "$NO_CACHE" == true ]]; then
     BUILD_ARGS+=(--no-cache)
     echo "Note: Building without cache"
 elif [[ "${GITHUB_ACTIONS:-}" == "true" && "${ACT:-}" != "true" ]]; then
-    CACHE_REF="ghcr.io/mostlygeek/llama-swap:unified-${BACKEND}-cache"
+    CACHE_REF="ghcr.io/radu0120/llama-quartermaster:unified-${BACKEND}-cache"
     BUILD_ARGS+=(
         --cache-from "type=registry,ref=${CACHE_REF}"
         --cache-to "type=registry,ref=${CACHE_REF},mode=max"
@@ -225,7 +225,7 @@ echo "Verifying build artifacts..."
 echo "=========================================="
 echo ""
 
-EXPECTED_BINARIES=(llama-server llama-cli whisper-server whisper-cli sd-server sd-cli llama-swap)
+EXPECTED_BINARIES=(llama-server llama-cli whisper-server whisper-cli sd-server sd-cli llama-quartermaster)
 if [[ "$BACKEND" == "cuda" ]]; then
     EXPECTED_BINARIES+=(ik-llama-server)
 fi
@@ -248,7 +248,7 @@ if [[ ${#MISSING_BINARIES[@]} -gt 0 ]]; then
     exit 1
 fi
 
-VERIFIED_LIST="llama-server, llama-cli, whisper-server, whisper-cli, sd-server, sd-cli, llama-swap"
+VERIFIED_LIST="llama-server, llama-cli, whisper-server, whisper-cli, sd-server, sd-cli, llama-quartermaster"
 if [[ "$BACKEND" == "cuda" ]]; then
     VERIFIED_LIST="${VERIFIED_LIST}, ik-llama-server"
 fi
@@ -264,10 +264,10 @@ ROOTLESS_TAG="${DOCKER_IMAGE_TAG}-rootless"
 docker buildx build --load -t "${ROOTLESS_TAG}" - <<EOF
 FROM ${DOCKER_IMAGE_TAG}
 USER root
-RUN groupadd --system --gid 10001 llama-swap && \\
+RUN groupadd --system --gid 10001 llama-quartermaster && \\
     useradd --system --uid 10001 --gid 10001 \\
-      --home /app --shell /sbin/nologin llama-swap && \\
-    chown -R 10001:10001 /etc/llama-swap /models
+      --home /app --shell /sbin/nologin llama-quartermaster && \\
+    chown -R 10001:10001 /etc/llama-quartermaster /models
 USER 10001
 EOF
 
@@ -289,7 +289,7 @@ echo "  stable-diffusion.cpp: ${SD_HASH}"
 if [[ "$BACKEND" == "cuda" ]]; then
     echo "  ik_llama.cpp:         ${IK_LLAMA_HASH}"
 fi
-echo "  llama-swap:           $(docker run --rm --entrypoint cat "${DOCKER_IMAGE_TAG}" /versions.txt | grep llama-swap | cut -d' ' -f2-)"
+echo "  llama-quartermaster:           $(docker run --rm --entrypoint cat "${DOCKER_IMAGE_TAG}" /versions.txt | grep llama-quartermaster | cut -d' ' -f2-)"
 echo ""
 if [[ "$BACKEND" == "vulkan" ]]; then
     echo "Run with:"

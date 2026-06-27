@@ -13,10 +13,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/config"
-	"github.com/mostlygeek/llama-swap/internal/event"
-	"github.com/mostlygeek/llama-swap/internal/logmon"
-	"github.com/mostlygeek/llama-swap/internal/shared"
+	"github.com/radu0120/llama-quartermaster/internal/config"
+	"github.com/radu0120/llama-quartermaster/internal/event"
+	"github.com/radu0120/llama-quartermaster/internal/logmon"
+	"github.com/radu0120/llama-quartermaster/internal/shared"
 )
 
 var ErrStartAborted = fmt.Errorf("aborted")
@@ -85,6 +85,17 @@ type ProcessCommand struct {
 
 	lastUse  atomic.Int64 // unix nano timestamp of last ServeHTTP completion
 	inflight atomic.Int64 // current in-flight ServeHTTP calls
+
+	// preStop, when set, runs once just before a running process is killed by a
+	// Stop (TTL idle, eviction, or explicit). Fired while still StateReady so it
+	// can reach the live upstream (e.g. save its slot KV). Atomic: set from another
+	// goroutine at startup, read by run().
+	preStop atomic.Pointer[func()]
+
+	// postStart, when set, runs once each time the process reaches StateReady,
+	// before WaitReady callers are woken — so it can prime the upstream (e.g.
+	// restore a saved slot KV) before the first request is forwarded.
+	postStart atomic.Pointer[func()]
 }
 
 var _ Process = (*ProcessCommand)(nil)
@@ -115,6 +126,12 @@ func New(
 }
 
 func (p *ProcessCommand) Logger() *logmon.Monitor { return p.processLogger }
+
+// SetPreStop installs the pre-teardown hook. See Process.SetPreStop.
+func (p *ProcessCommand) SetPreStop(fn func()) { p.preStop.Store(&fn) }
+
+// SetPostStart installs the post-ready hook. See Process.SetPostStart.
+func (p *ProcessCommand) SetPostStart(fn func()) { p.postStart.Store(&fn) }
 
 // run is the single-writer goroutine that owns all mutable lifecycle state
 // (current ProcessState, the running *exec.Cmd, the active reverse-proxy
@@ -258,6 +275,11 @@ func (p *ProcessCommand) run() {
 					fn := res.handlerFn
 					p.handler.Store(&fn)
 					setState(StateReady)
+					// Prime the upstream (e.g. restore slot KV) before waking any
+					// WaitReady caller, so the first forwarded request reuses it.
+					if fp := p.postStart.Load(); fp != nil {
+						(*fp)()
+					}
 					notifyWaiters(nil)
 					// Park the Run response — Run blocks until the process
 					// terminates, so we only fire this when Stop, parentCtx,
@@ -338,6 +360,11 @@ func (p *ProcessCommand) run() {
 		// Stop: tear down a running process.
 		case stop := <-p.stopCh:
 			if cmd != nil {
+				// Fire the pre-stop hook while still StateReady so it can reach the
+				// live upstream (e.g. save slot KV) before we kill it.
+				if fp := p.preStop.Load(); fp != nil {
+					(*fp)()
+				}
 				setState(StateStopping)
 				p.killProcess(cmd, cmdCancel, cmdDone, stop.timeout)
 				cmd = nil

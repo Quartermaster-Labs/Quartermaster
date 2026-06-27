@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mostlygeek/llama-swap/internal/event"
+	"github.com/radu0120/llama-quartermaster/internal/event"
 )
 
 const DataEventID = 0x04
