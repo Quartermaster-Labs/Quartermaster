@@ -11,7 +11,7 @@
 </script>
 
 <script lang="ts">
-  import { inFlightRequests, metrics, liveTokens, upstreamLogs } from "../stores/api";
+  import { inFlightRequests, metrics, liveTokens, upstreamLogs, backendMetrics } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
   import type { Model, ActivityLogEntry } from "../lib/types";
 
@@ -229,34 +229,17 @@
   }
   const stream = $derived(streamAt(phase));
 
-  // Live tokens/sec for the in-flight stream. The server pushes CUMULATIVE
-  // tokens + elapsed-since-start, so tokens/elapsed is a lifetime average that
-  // decays whenever generation slows (and includes prompt-processing time). For
-  // a "current speed" readout, derive an instantaneous rate from the delta
-  // between consecutive samples, lightly EMA-smoothed against the 200ms cadence.
-  let liveTps = $state(0);
-  let prevSample: { tokens: number; ms: number } | null = null;
-  $effect(() => {
+  // Live decode tokens/sec. The server pushes CUMULATIVE tokens + elapsed +
+  // measured time-to-first-token. Dividing the post-first-token count by the
+  // decode window (elapsed − TTFT) excludes prompt-processing time, so this
+  // converges to the backend's authoritative predicted_per_second instead of a
+  // prompt-diluted lifetime average. 0 until generation actually starts.
+  const liveTps = $derived.by<number>(() => {
     const lt = $liveTokens;
-    if (!lt) {
-      prevSample = null;
-      liveTps = 0;
-      return;
-    }
-    // New request (elapsed/tokens reset) — start a fresh window.
-    if (prevSample && (lt.elapsed_ms < prevSample.ms || lt.output_tokens < prevSample.tokens)) {
-      prevSample = null;
-      liveTps = 0;
-    }
-    if (prevSample) {
-      const dT = lt.output_tokens - prevSample.tokens;
-      const dMs = lt.elapsed_ms - prevSample.ms;
-      if (dMs > 0) {
-        const inst = (dT / dMs) * 1000;
-        liveTps = liveTps > 0 ? liveTps * 0.4 + inst * 0.6 : inst;
-      }
-    }
-    prevSample = { tokens: lt.output_tokens, ms: lt.elapsed_ms };
+    if (!lt || lt.first_token_ms < 0 || lt.output_tokens <= 1) return 0;
+    const decodeMs = lt.elapsed_ms - lt.first_token_ms;
+    if (decodeMs <= 0) return 0;
+    return ((lt.output_tokens - 1) / decodeMs) * 1000;
   });
 
   // ---- Prompt-processing progress ----
@@ -301,17 +284,23 @@
   // accent and update live; the rest we can't see until completion, so they show
   // "—" while generating (never a stale value from the previous request) and the
   // final figure once idle. Idle => all neutral, all from the last request.
+  // Time-to-first-token: live = the measured TTFT pushed once the first token
+  // lands; final = the backend's prompt-eval time (prefill finishes right before
+  // the first token, so it's the accurate TTFT). -1 => not yet known.
+  const liveTtftMs = $derived($liveTokens && $liveTokens.first_token_ms >= 0 ? $liveTokens.first_token_ms : -1);
+
   type Stat = { label: string; value: string; live: boolean };
   const stats = $derived.by<Stat[]>(() => {
     const lt = $liveTokens;
     const t = last?.tokens;
     return [
-      { label: "Prompt", value: busy ? "—" : fmtSpeed(t?.prompt_per_second ?? -1), live: false },
+      // The three the operator watches: TTFT, prefill rate, decode rate.
+      { label: "TTFT", value: busy ? (liveTtftMs >= 0 ? fmtDur(liveTtftMs) : "—") : t && t.time_to_first_ms >= 0 ? fmtDur(t.time_to_first_ms) : "—", live: true },
+      { label: "Prompt", value: busy ? fmtSpeed(activeBackend?.prompt_tokens_seconds ?? -1) : fmtSpeed(t?.prompt_per_second ?? -1), live: true },
       { label: "Gen", value: fmtSpeed(busy ? liveTps : (t?.tokens_per_second ?? -1)), live: true },
       { label: "Duration", value: busy ? (elapsedMs > 0 ? fmtDur(elapsedMs) : "—") : last ? fmtDur(last.duration_ms) : "—", live: true },
-      { label: "In", value: busy ? "—" : String(t?.input_tokens ?? 0), live: false },
+      { label: "In", value: busy ? (activeBackend?.prompt_tokens ? String(activeBackend.prompt_tokens) : "—") : String(t?.input_tokens ?? 0), live: true },
       { label: "Out", value: busy ? String(lt?.output_tokens ?? 0) : String(t?.output_tokens ?? 0), live: true },
-      { label: "Cached", value: busy ? "—" : String(t?.cache_tokens ?? 0), live: false },
     ];
   });
 
@@ -325,6 +314,39 @@
     }
     return best;
   });
+
+  // Live backend gauges (KV-cache fill, slot/queue saturation) for the active
+  // model, scraped from its llama-server /metrics + /props. Prefer the ready
+  // model; fall back to any running backend with a successful scrape.
+  const activeBackend = $derived.by(() => {
+    const ids = models.filter((m) => m.state === "ready").map((m) => m.id);
+    const order = ids.length ? ids : models.map((m) => m.id);
+    for (const id of order) {
+      const bm = $backendMetrics[id];
+      if (bm && bm.ok) return bm;
+    }
+    return null;
+  });
+  const kvPct = $derived(activeBackend ? Math.min(100, Math.max(0, activeBackend.kv_cache_usage_ratio * 100)) : -1);
+  // Compact partial-block bar for the header row, mirroring the loading bar's
+  // glyph set but narrow enough to sit beside the status label.
+  const HEAD_KV_W = 12;
+  const kvBarHead = $derived.by<string>(() => {
+    if (kvPct < 0) return "";
+    const filled = (kvPct / 100) * HEAD_KV_W;
+    const full = Math.floor(filled);
+    let s = "█".repeat(Math.min(full, HEAD_KV_W));
+    if (full < HEAD_KV_W) s += PARTIAL[Math.floor((filled - full) * 8)];
+    return s + "░".repeat(Math.max(0, HEAD_KV_W - s.length));
+  });
+  const kvHeadFill = $derived(kvPct >= 0 ? Math.round((kvPct / 100) * HEAD_KV_W) : 0);
+  // Token counts, abbreviated: 65536 -> "64k", 1.5M -> "1.5M". Always k once >=1k
+  // so the readout reads "1k/100k", never "1000/100k".
+  function fmtK(n: number): string {
+    if (n >= 1_000_000) return `${(n / 1_048_576).toFixed(1)}M`;
+    if (n >= 1000) return `${Math.round(n / 1024)}k`;
+    return String(n);
+  }
 
   // Header status + animated ellipsis (0–3 dots, ~450ms/step) for active states.
   const statusText = $derived(loading ? "Loading" : busy ? "Inferencing" : "Idle");
@@ -348,7 +370,7 @@
 <div class="card h-full flex flex-col min-h-0">
   <!-- min-h matches the staging card's header row, whose icon buttons make it
        taller than text alone — so the dot/label baselines line up across cards. -->
-  <div class="flex items-center gap-2 shrink-0 min-h-[30px]">
+  <div class="relative flex items-center gap-2 shrink-0 min-h-[30px]">
     <span class="inline-block w-2.5 h-2.5 rounded-full {busy || loading ? 'bg-primary animate-pulse' : 'bg-txtsecondary'}"></span>
     <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary">
       {statusText}{#if busy || loading}<span class="inline-block w-3 text-left text-primary">{dots}</span>{/if}
@@ -359,6 +381,16 @@
          not duplicated here). -->
     {#if busy && promptProgress >= 0}
       <span class="ml-auto font-mono text-[0.6rem] tabular-nums text-primary" title="Prompt processing">{Math.round(promptProgress * 100)}%</span>
+    {/if}
+    <!-- Live backend KV-cache fill (from llama-server /slots): how full the
+         context window is — the "about to evict / truncate" signal the
+         per-request stats can't see. X/Y tok rides on the bar line. -->
+    {#if activeBackend}
+      <div class="absolute left-1/2 -translate-x-1/2 flex items-center gap-1.5 font-mono text-[0.55rem]" title="KV cache fill">
+        <pre class="m-0 leading-none whitespace-pre"><span class="text-primary">{kvBarHead.slice(0, kvHeadFill)}</span><span class="text-txtsecondary/30">{kvBarHead.slice(kvHeadFill)}</span></pre>
+        <span class="tabular-nums text-txtsecondary">{fmtK(activeBackend.kv_cache_tokens)}/{fmtK(activeBackend.n_ctx)} tok</span>
+        {#if activeBackend.requests_deferred > 0}<span class="tabular-nums text-amber-400">· {activeBackend.requests_deferred} q</span>{/if}
+      </div>
     {/if}
   </div>
 

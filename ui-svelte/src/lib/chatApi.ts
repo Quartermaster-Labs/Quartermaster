@@ -17,6 +17,9 @@ export interface ChatOptions {
   endpoint?: Endpoint;
   max_tokens?: number;
   tools?: ToolDef[];
+  // undefined = leave to model default; true/false = force on/off via the
+  // llama.cpp chat_template_kwargs.enable_thinking switch (Qwen3 etc).
+  reasoning?: boolean;
 }
 
 function parseDataUrl(url: string): { media_type: string; data: string } {
@@ -66,6 +69,9 @@ function buildChatCompletionsBody(model: string, messages: ChatMessage[], option
     temperature: options?.temperature,
     ...(options?.max_tokens ? { max_tokens: options.max_tokens } : {}),
     ...(options?.tools && options.tools.length > 0 ? { tools: options.tools } : {}),
+    ...(options?.reasoning !== undefined
+      ? { chat_template_kwargs: { enable_thinking: options.reasoning } }
+      : {}),
   };
 }
 
@@ -91,7 +97,7 @@ function buildMessagesBody(model: string, messages: ChatMessage[], options?: Cha
     model,
     messages: mapped,
     stream: true,
-    max_tokens: options?.max_tokens ?? 4096,
+    max_tokens: options?.max_tokens ?? 8192,
   };
   if (system) body.system = system;
   if (options?.temperature !== undefined) body.temperature = options.temperature;

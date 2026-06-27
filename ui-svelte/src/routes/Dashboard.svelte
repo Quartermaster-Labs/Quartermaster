@@ -10,6 +10,8 @@
     loadCounts,
     getSettings,
     putSettings,
+    putSlotCache,
+    pickFolder,
     resetSettings,
     type AppSettings,
   } from "../stores/api";
@@ -66,6 +68,58 @@
     tVram = s.targetVramGB;
     tHead = s.vramOverheadGB;
     tRam = s.maxRamGB;
+    slotEnable = s.slotCache.enable;
+    slotPath = s.slotCache.path;
+    slotMinTokens = s.slotCache.minSaveTokens;
+    slotMaxDiskGB = s.slotCache.maxDiskGB;
+    slotMaxSessions = s.slotCache.maxSessions;
+  }
+
+  // --- Slot KV-cache persistence (settings.slotCache; global master switch +
+  // shared knobs). Per-model opt-in lives in each model's config editor. ---
+  let slotEnable = $state(false);
+  let slotPath = $state("");
+  let slotMinTokens = $state(0); // 0 => server default (30000)
+  let slotMaxDiskGB = $state(0); // 0 => server default (10)
+  let slotMaxSessions = $state(0); // 0 => server default (20)
+  let savingSlot = $state(false);
+  let slotErr = $state<string | null>(null);
+
+  const slotDirty = $derived(
+    !!settings &&
+      (slotEnable !== settings.slotCache.enable ||
+        slotPath !== settings.slotCache.path ||
+        Number(slotMinTokens) !== settings.slotCache.minSaveTokens ||
+        Number(slotMaxDiskGB) !== settings.slotCache.maxDiskGB ||
+        Number(slotMaxSessions) !== settings.slotCache.maxSessions),
+  );
+
+  async function browseSlotDir(): Promise<void> {
+    try {
+      const picked = await pickFolder();
+      if (picked) slotPath = picked;
+    } catch (e) {
+      slotErr = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function saveSlotCache(): Promise<void> {
+    savingSlot = true;
+    slotErr = null;
+    try {
+      await putSlotCache({
+        enable: slotEnable,
+        path: slotPath.trim(),
+        minSaveTokens: Number(slotMinTokens) || 0,
+        maxDiskGB: Number(slotMaxDiskGB) || 0,
+        maxSessions: Number(slotMaxSessions) || 0,
+      });
+      await loadSettings();
+    } catch (e) {
+      slotErr = e instanceof Error ? e.message : String(e);
+    } finally {
+      savingSlot = false;
+    }
   }
 
   async function loadSettings(): Promise<void> {
@@ -304,6 +358,92 @@
         <span class="font-mono text-[0.65rem] text-txtsecondary">Saving regenerates the config and hot-reloads.</span>
         {#if settingsErr}
           <span class="font-mono text-[0.65rem] text-error">{settingsErr}</span>
+        {/if}
+      </div>
+    </div>
+  {/if}
+
+  <!-- Slot KV-cache persistence -->
+  {#if settingsAvailable}
+    <div class="card mt-4">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+          <h6 class="!pb-0">KV-cache disk save</h6>
+          {@render hint("Persist a long conversation's KV cache to disk so it survives being evicted from the live slot, and is restored instead of reprocessed. Master switch: each model opts in via its config editor (\"Save KV cache to disk\").")}
+        </div>
+        <label class="flex items-center gap-2 text-sm">
+          <input type="checkbox" bind:checked={slotEnable} />
+          <span class="text-txtsecondary uppercase tracking-wide font-mono text-[0.65rem]">Enable</span>
+        </label>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3 font-mono text-xs">
+        <label class="flex flex-col gap-1 col-span-2">
+          <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
+            Directory
+            {@render hint("Folder for the .bin KV snapshots (also passed to llama-server as --slot-save-path). Defaults to a .cache folder next to the quartermaster binary.")}
+          </span>
+          <div class="flex gap-2">
+            <input
+              type="text" bind:value={slotPath} placeholder="(.cache next to quartermaster)" disabled={!slotEnable}
+              class="flex-1 rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+            />
+            <button
+              type="button"
+              class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary disabled:opacity-50"
+              onclick={browseSlotDir}
+              disabled={!slotEnable}
+            >
+              Browse…
+            </button>
+          </div>
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
+            Min context to save
+            {@render hint("Only persist a conversation whose live KV is at least this many tokens — cheap chats aren't worth the disk write.")}
+          </span>
+          <input
+            type="number" min="0" step="1000" bind:value={slotMinTokens} disabled={!slotEnable}
+            class="w-full rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+          />
+          <span class="text-[0.6rem] text-txtsecondary">tokens · default 30000</span>
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
+            Max disk size
+            {@render hint("Total budget for saved snapshots. Oldest are evicted (LRU) once this or the session cap is exceeded.")}
+          </span>
+          <input
+            type="number" min="0" step="1" bind:value={slotMaxDiskGB} disabled={!slotEnable}
+            class="w-full rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+          />
+          <span class="text-[0.6rem] text-txtsecondary">GB · default 10</span>
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
+            Max sessions
+            {@render hint("Cap on the number of saved conversations. Oldest evicted (LRU) past this.")}
+          </span>
+          <input
+            type="number" min="0" step="1" bind:value={slotMaxSessions} disabled={!slotEnable}
+            class="w-full rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+          />
+          <span class="text-[0.6rem] text-txtsecondary">files · default 20</span>
+        </label>
+      </div>
+
+      <div class="mt-3 flex items-center gap-3">
+        <button
+          class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary"
+          onclick={saveSlotCache}
+          disabled={savingSlot || !slotDirty}
+        >
+          {savingSlot ? "Saving…" : "Save & reload"}
+        </button>
+        <span class="font-mono text-[0.65rem] text-txtsecondary">Saving regenerates the config and hot-reloads.</span>
+        {#if slotErr}
+          <span class="font-mono text-[0.65rem] text-error">{slotErr}</span>
         {/if}
       </div>
     </div>

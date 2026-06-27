@@ -1,33 +1,32 @@
 <script lang="ts">
   import { renderMarkdown, escapeHtml, renderStreamingMarkdown, createStreamingCache } from "../../lib/markdown";
   import type { RenderedBlock } from "../../lib/markdown";
-  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronDown, ChevronRight, Brain, Code, Search } from "lucide-svelte";
+  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronDown, ChevronRight, Brain, Code, Search, PenLine } from "lucide-svelte";
   import { getTextContent, getImageUrls } from "../../lib/types";
-  import type { ContentPart, ToolCall } from "../../lib/types";
+  import type { ContentPart } from "../../lib/types";
+  import RewriteDiff from "./RewriteDiff.svelte";
 
   interface Props {
     role: "user" | "assistant" | "system" | "tool";
     content: string | ContentPart[];
     reasoning_content?: string;
     reasoningTimeMs?: number;
-    tool_calls?: ToolCall[];
+    genTimeMs?: number;
+    searches?: { query: string; results: string }[];
+    rewriteInstruction?: string;
+    rewriteOriginal?: string;
     isStreaming?: boolean;
     isReasoning?: boolean;
+    isSearching?: boolean;
+    modelReady?: boolean;
     onEdit?: (newContent: string) => void;
     onRegenerate?: () => void;
   }
 
-  let { role, content, reasoning_content = "", reasoningTimeMs = 0, tool_calls, isStreaming = false, isReasoning = false, onEdit, onRegenerate }: Props = $props();
-
-  function toolQuery(tc: ToolCall): string {
-    try {
-      return JSON.parse(tc.function.arguments || "{}").query ?? tc.function.name;
-    } catch {
-      return tc.function.name;
-    }
-  }
+  let { role, content, reasoning_content = "", reasoningTimeMs = 0, genTimeMs = 0, searches, rewriteInstruction, rewriteOriginal, isStreaming = false, isReasoning = false, isSearching = false, modelReady = false, onEdit, onRegenerate }: Props = $props();
 
   let textContent = $derived(getTextContent(content));
+  let wordCount = $derived(stripThinking(textContent).trim().split(/\s+/).filter(Boolean).length);
   let imageUrls = $derived(getImageUrls(content));
   let hasImages = $derived(imageUrls.length > 0);
   let canEdit = $derived(onEdit !== undefined && !hasImages);
@@ -57,14 +56,30 @@
     return `${(ms / 1000).toFixed(1)}s`;
   }
 
+  // Wall-clock turn time, minute-aware: "2.5s", "1m 30s".
+  function formatTotal(ms: number): string {
+    const s = ms / 1000;
+    if (s < 60) return `${s.toFixed(1)}s`;
+    const m = Math.floor(s / 60);
+    return `${m}m ${Math.round(s - m * 60)}s`;
+  }
+
+  // Strip inline reasoning so copy gets only the answer. Separate
+  // reasoning_content is already excluded; this catches models that emit
+  // <think>…</think> (or <reasoning>…) inline in the content.
+  function stripThinking(text: string): string {
+    return text.replace(/<(think|thinking|reasoning)>[\s\S]*?<\/\1>/gi, "").trimStart();
+  }
+
   async function copyToClipboard() {
+    const copyText = stripThinking(textContent);
     try {
       if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(textContent);
+        await navigator.clipboard.writeText(copyText);
       } else {
         // Fallback for non-secure contexts (HTTP)
         const textarea = document.createElement("textarea");
-        textarea.value = textContent;
+        textarea.value = copyText;
         textarea.style.position = "fixed";
         textarea.style.left = "-9999px";
         document.body.appendChild(textarea);
@@ -179,19 +194,28 @@
 {:else}
 <div class="flex {role === 'user' ? 'justify-end' : 'justify-start'} mb-4">
   <div
-    class="relative group rounded-lg px-3 py-2 text-[0.8125rem] {role === 'user'
-      ? 'max-w-[85%] bg-primary text-white rounded-br-sm'
-      : 'w-full sm:w-4/5 bg-surface border border-card-border rounded-bl-sm'}"
+    class="relative group rounded-2xl px-3 py-2 text-[0.8125rem] {role === 'user'
+      ? 'max-w-[85%] bg-black text-white rounded-br-sm msg-tail-user'
+      : (rewriteOriginal != null ? 'w-full' : 'w-full sm:w-4/5') + ' bg-surface border border-card-border rounded-bl-sm msg-tail-bot'}"
   >
     {#if role === "assistant"}
-      {#if tool_calls && tool_calls.length > 0}
-        <div class="mb-2 flex flex-wrap gap-1.5">
-          {#each tool_calls as tc (tc.id)}
-            <span class="inline-flex items-center gap-1.5 rounded-full border border-card-border bg-secondary px-2.5 py-1 text-xs text-txtsecondary">
-              <Search class="w-3 h-3" />
-              {toolQuery(tc)}
-            </span>
+      {#if searches && searches.length > 0}
+        <div class="mb-3 flex flex-col gap-1.5">
+          {#each searches as s, si (si)}
+            <details class="rounded border border-card-border overflow-hidden">
+              <summary class="flex items-center gap-2 px-3 py-2 bg-secondary hover:bg-secondary-hover transition-colors cursor-pointer select-none text-sm">
+                <Search class="w-3.5 h-3.5 shrink-0" />
+                <span class="font-medium truncate">{s.query || "Web search"}</span>
+              </summary>
+              <div class="px-3 py-2 bg-secondary/50 text-xs text-txtsecondary whitespace-pre-wrap font-mono max-h-72 overflow-y-auto pretty-scroll">{s.results}</div>
+            </details>
           {/each}
+        </div>
+      {/if}
+      {#if isSearching}
+        <div class="mb-3 inline-flex items-center gap-2 text-sm text-txtsecondary italic">
+          <span class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse"></span>
+          Searching the web…
         </div>
       {/if}
       {#if reasoning_content || isReasoning}
@@ -240,7 +264,9 @@
           {/each}
         </div>
       {/if}
-      {#if showRaw}
+      {#if rewriteOriginal != null}
+        <RewriteDiff original={rewriteOriginal} rewritten={stripThinking(textContent)} {isStreaming} {modelReady} />
+      {:else if showRaw}
         <div class="whitespace-pre-wrap font-mono text-sm">{textContent}</div>
       {:else}
         <div class="prose prose-sm dark:prose-invert max-w-none chat-prose" use:codeBlockCopy>
@@ -248,13 +274,21 @@
             {@html block.html}
           {/each}
           {@html renderedParts.pendingHtml}
-          {#if isStreaming && !isReasoning}
-            <span class="inline-block w-2 h-4 bg-current animate-pulse ml-0.5"></span>
+          {#if isStreaming && !isReasoning && !isSearching}
+            {#if !textContent}
+              <!-- No tokens yet — generating if the model is loaded, else swapping in. -->
+              <span class="inline-flex items-center gap-2 text-txtsecondary italic">
+                <span class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse"></span>
+                {modelReady ? "Generating…" : "Loading model…"}
+              </span>
+            {:else}
+              <span class="inline-block w-2 h-4 bg-current animate-pulse ml-0.5"></span>
+            {/if}
           {/if}
         </div>
       {/if}
       {#if !isStreaming && textContent}
-        <div class="flex gap-1 mt-2 pt-1 border-t border-card-border">
+        <div class="flex flex-wrap items-center gap-1 mt-2 pt-1 border-t border-card-border">
           {#if onRegenerate}
             <button
               class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary"
@@ -282,10 +316,22 @@
           >
             <Code class="w-4 h-4" />
           </button>
+          <span class="ml-auto flex items-center gap-2 self-center text-[0.6875rem] text-txtsecondary tabular-nums">
+            <span>{wordCount} {wordCount === 1 ? "word" : "words"}</span>
+            {#if genTimeMs > 0}
+              <span class="opacity-50">·</span>
+              <span>{formatTotal(genTimeMs)}</span>
+            {/if}
+          </span>
         </div>
       {/if}
     {:else}
-      {#if isEditing}
+      {#if rewriteInstruction != null}
+        <div class="flex items-center gap-2 text-xs">
+          <PenLine class="w-3.5 h-3.5 shrink-0 opacity-80" />
+          <span class="opacity-90">{rewriteInstruction || "Rewrite this text"}</span>
+        </div>
+      {:else if isEditing}
         <div class="flex flex-col gap-2 min-w-[300px]">
           <textarea
             class="w-full px-3 py-2 rounded border border-card-border bg-surface text-txtmain focus:outline-none focus:ring-2 focus:ring-primary resize-none"
@@ -330,11 +376,11 @@
         <div class="whitespace-pre-wrap pr-8">{textContent}</div>
         {#if canEdit}
           <button
-            class="absolute top-2 right-2 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity bg-white/20 hover:bg-white/30 shadow-sm"
+            class="absolute top-1.5 right-1.5 p-1 rounded-full opacity-0 group-hover:opacity-100 transition-all bg-white/10 text-white/70 hover:text-white hover:bg-white/25"
             onclick={startEdit}
             title="Edit message"
           >
-            <Pencil class="w-4 h-4" />
+            <Pencil class="w-3 h-3" />
           </button>
         {/if}
       {/if}
@@ -368,6 +414,27 @@
 {/if}
 
 <style>
+  /* Facebook-Messenger-style speech-bubble tail at the bottom corner. The
+     triangle inherits each bubble's fill so it reads as part of the bubble. */
+  .msg-tail-user::after,
+  .msg-tail-bot::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    width: 0;
+    height: 0;
+    border: 6px solid transparent;
+    border-bottom: 0;
+  }
+  .msg-tail-user::after {
+    right: -5px;
+    border-left-color: #000;
+  }
+  .msg-tail-bot::after {
+    left: -5px;
+    border-right-color: var(--color-surface);
+  }
+
   .chat-prose {
     font-size: 0.8125rem;
     line-height: 1.55;

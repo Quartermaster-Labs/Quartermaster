@@ -139,6 +139,13 @@ func (s *Server) handleAPIMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+// handleAPIBackendMetrics serves the latest scraped backend /metrics + /props
+// snapshot (per running llama-server: KV-cache fill, slots, throughput totals).
+func (s *Server) handleAPIBackendMetrics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.backendMetrics.snapshot())
+}
+
 // handleAPIPerformance serves the buffered system/GPU stats, optionally
 // filtered to samples after the ?after=<RFC3339> timestamp.
 func (s *Server) handleAPIPerformance(w http.ResponseWriter, r *http.Request) {
@@ -215,11 +222,12 @@ func (s *Server) handleAPICapture(w http.ResponseWriter, r *http.Request) {
 type messageType string
 
 const (
-	msgTypeModelStatus messageType = "modelStatus"
-	msgTypeLogData     messageType = "logData"
-	msgTypeMetrics     messageType = "metrics"
-	msgTypeInFlight    messageType = "inflight"
-	msgTypeLiveTokens  messageType = "liveTokens"
+	msgTypeModelStatus    messageType = "modelStatus"
+	msgTypeLogData        messageType = "logData"
+	msgTypeMetrics        messageType = "metrics"
+	msgTypeInFlight       messageType = "inflight"
+	msgTypeLiveTokens     messageType = "liveTokens"
+	msgTypeBackendMetrics messageType = "backendMetrics"
 )
 
 type messageEnvelope struct {
@@ -278,11 +286,17 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 			send(messageEnvelope{Type: msgTypeInFlight, Data: string(j)})
 		}
 	}
+	sendBackendMetrics := func(metrics []BackendMetrics) {
+		if j, err := json.Marshal(metrics); err == nil {
+			send(messageEnvelope{Type: msgTypeBackendMetrics, Data: string(j)})
+		}
+	}
 	sendLiveTokens := func(e shared.LiveTokensEvent) {
 		if j, err := json.Marshal(map[string]any{
-			"model":         e.Model,
-			"output_tokens": e.OutputTokens,
-			"elapsed_ms":    e.ElapsedMs,
+			"model":          e.Model,
+			"output_tokens":  e.OutputTokens,
+			"elapsed_ms":     e.ElapsedMs,
+			"first_token_ms": e.FirstTokenMs,
 		}); err == nil {
 			send(messageEnvelope{Type: msgTypeLiveTokens, Data: string(j)})
 		}
@@ -295,6 +309,7 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 	defer event.On(func(e ActivityLogEvent) { sendMetrics([]ActivityLogEntry{e.Metrics}) })()
 	defer event.On(func(e shared.InFlightRequestsEvent) { sendInFlight(e.Total) })()
 	defer event.On(func(e shared.LiveTokensEvent) { sendLiveTokens(e) })()
+	defer event.On(func(e BackendMetricsEvent) { sendBackendMetrics(e.Metrics) })()
 
 	// initial payload
 	sendLogData("proxy", s.proxylog.GetHistory())
@@ -302,6 +317,7 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 	sendModels()
 	sendMetrics(s.metrics.getMetrics())
 	sendInFlight(int(s.inflight.Current()))
+	sendBackendMetrics(s.backendMetrics.snapshot())
 
 	for {
 		select {

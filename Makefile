@@ -67,39 +67,38 @@ windows: ui
 PKG_WIN_DIR = $(BUILD_DIR)/llama-quartermaster-windows
 package-windows: windows
 	@echo "Packaging Windows bundle..."
-	# Preserve the personal runtime files (hand-authored generate file + the
-	# UI-owned overrides sidecar) across the bundle rebuild.
-	@if [ -f $(PKG_WIN_DIR)/quartermaster-generate.yaml ]; then \
-		cp $(PKG_WIN_DIR)/quartermaster-generate.yaml $(BUILD_DIR)/.qm-generate.keep; fi
-	@if [ -f $(PKG_WIN_DIR)/quartermaster-overrides.yaml ]; then \
-		cp $(PKG_WIN_DIR)/quartermaster-overrides.yaml $(BUILD_DIR)/.qm-overrides.keep; fi
-	# Clear the bundle CONTENTS in place rather than `rm -rf`-ing the directory:
-	# on Windows an editor/file-watcher (or this build's own git tracking) often
-	# holds a handle on the dir, which makes removing the dir itself fail with
-	# "Device or resource busy" — but deleting the files inside is still allowed.
+	# Refresh the bundle IN PLACE — overwrite only the shipped artifacts and never
+	# touch user data: playground-data/ (chats/prefs/logins), runtime config.yaml,
+	# the user-edited quartermaster-generate.yaml, and the UI-owned overrides
+	# sidecar (quartermaster-overrides.yaml, holds API keys) all survive untouched.
+	# Only the regenerated packaging/ subtree is removed first, to drop files that
+	# were renamed/removed across versions. (No `rm -rf` of the bundle dir itself:
+	# on Windows a file-watcher often holds a handle and it fails "resource busy".)
 	mkdir -p $(PKG_WIN_DIR)
-	find $(PKG_WIN_DIR) -mindepth 1 -delete 2>/dev/null || true
+	rm -rf $(PKG_WIN_DIR)/packaging
 	cp $(BUILD_DIR)/$(APP_NAME)-windows-amd64.exe $(PKG_WIN_DIR)/
 	cp quartermaster-generate.example.yaml $(PKG_WIN_DIR)/quartermaster-generate.example.yaml
 	# Seed the runtime generate file from the example only when none exists yet,
 	# so a re-package never clobbers the user's edited quartermaster-generate.yaml.
-	@if [ -f $(BUILD_DIR)/.qm-generate.keep ]; then \
-		mv $(BUILD_DIR)/.qm-generate.keep $(PKG_WIN_DIR)/quartermaster-generate.yaml; \
-		echo "  preserved existing quartermaster-generate.yaml"; \
+	@if [ -f $(PKG_WIN_DIR)/quartermaster-generate.yaml ]; then \
+		echo "  kept existing quartermaster-generate.yaml"; \
 	else \
 		cp quartermaster-generate.example.yaml $(PKG_WIN_DIR)/quartermaster-generate.yaml; \
 		echo "  seeded quartermaster-generate.yaml from example"; fi
-	# Restore the UI-owned overrides sidecar if the user had one (no example seed —
-	# it's created at runtime by the config editor; absence just means no overrides).
-	@if [ -f $(BUILD_DIR)/.qm-overrides.keep ]; then \
-		mv $(BUILD_DIR)/.qm-overrides.keep $(PKG_WIN_DIR)/quartermaster-overrides.yaml; \
-		echo "  preserved existing quartermaster-overrides.yaml"; fi
 	cp config.example.yaml $(PKG_WIN_DIR)/config.example.yaml
 	cp packaging/windows/start.cmd $(PKG_WIN_DIR)/start.cmd
 	cp -r packaging $(PKG_WIN_DIR)/packaging
 	@echo "$(APP_NAME) $(GIT_HASH) built $(BUILD_DATE)" > $(PKG_WIN_DIR)/VERSION.txt
-	cd $(BUILD_DIR) && ( zip -qr llama-quartermaster-windows.zip llama-quartermaster-windows \
-		|| tar -a -c -f llama-quartermaster-windows.zip llama-quartermaster-windows \
+	# Zip a CLEAN distributable: exclude the user-data that now lives in the bundle
+	# (private chats + the regenerated-on-launch config.yaml) so it never ships.
+	cd $(BUILD_DIR) && rm -f llama-quartermaster-windows.zip && \
+		( zip -qr llama-quartermaster-windows.zip llama-quartermaster-windows \
+			-x 'llama-quartermaster-windows/playground-data/*' \
+			-x 'llama-quartermaster-windows/config.yaml' \
+		|| tar -a -c -f llama-quartermaster-windows.zip \
+			--exclude='llama-quartermaster-windows/playground-data' \
+			--exclude='llama-quartermaster-windows/config.yaml' \
+			llama-quartermaster-windows \
 		|| echo "WARN: no zip/tar found — folder left unarchived at $(PKG_WIN_DIR)" )
 	@echo "Done: $(PKG_WIN_DIR)  (+ $(BUILD_DIR)/llama-quartermaster-windows.zip)"
 
@@ -140,9 +139,8 @@ _build-release:
 		git rev-parse "$(VERSION)" >/dev/null 2>&1 || git tag "$(VERSION)"; \
 		targ="-Tag $(VERSION)"; \
 	fi; \
-	if [ "$(DRAFT)" = "true" ]; then draft='$$true'; else draft='$$false'; fi; \
 	powershell -NoProfile -ExecutionPolicy Bypass \
-		-File packaging/windows/build-release.ps1 $$targ -Draft:$$draft -Repo $(RELEASE_REPO)
+		-File packaging/windows/build-release.ps1 $$targ -Draft $(DRAFT) -Repo $(RELEASE_REPO)
 
 GOOS ?= $(shell go env GOOS 2>/dev/null || echo linux)
 GOARCH ?= $(shell go env GOARCH 2>/dev/null || echo amd64)

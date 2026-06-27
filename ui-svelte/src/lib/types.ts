@@ -36,6 +36,8 @@ export interface TokenMetrics {
   output_tokens: number;
   prompt_per_second: number;
   tokens_per_second: number;
+  prompt_ms: number;
+  time_to_first_ms: number;
 }
 
 export interface ActivityLogEntry {
@@ -73,6 +75,32 @@ export interface LiveTokens {
   model: string;
   output_tokens: number;
   elapsed_ms: number;
+  // Measured time-to-first-token (ms); -1 until the first token lands.
+  first_token_ms: number;
+}
+
+// BackendMetrics is one running llama-server's live state, scraped from its own
+// /metrics + /props endpoints (server/backendmetrics.go). Keyed by model id.
+export interface BackendMetrics {
+  model: string;
+  timestamp: string;
+  ok: boolean;
+  kv_cache_usage_ratio: number;
+  kv_cache_tokens: number;
+  requests_processing: number;
+  requests_deferred: number;
+  prompt_tokens_total: number;
+  tokens_predicted_total: number;
+  n_decode_total: number;
+  prompt_seconds_total: number;
+  predicted_seconds_total: number;
+  n_ctx: number;
+  total_slots: number;
+  // Live per-request snapshot (from /slots + /metrics gauges): current prompt
+  // size and rolling prompt/gen throughput, surfaced while still streaming.
+  prompt_tokens: number;
+  prompt_tokens_seconds: number;
+  predicted_tokens_seconds: number;
 }
 
 export interface NetIOStat {
@@ -116,7 +144,7 @@ export interface PerformanceResponse {
 }
 
 export interface APIEventEnvelope {
-  type: "modelStatus" | "logData" | "metrics" | "inflight" | "liveTokens" | "perfsys" | "perfgpu";
+  type: "modelStatus" | "logData" | "metrics" | "inflight" | "liveTokens" | "backendMetrics" | "perfsys" | "perfgpu";
   data: string;
 }
 
@@ -142,6 +170,7 @@ export interface ApiKey {
   name: string;
   key: string;
   models: string[];
+  builtin?: boolean; // auto-managed Playground key; hidden from the key list
 }
 
 export type ScreenWidth = "xs" | "sm" | "md" | "lg" | "xl" | "2xl";
@@ -174,8 +203,19 @@ export interface ChatMessage {
   content: string | ContentPart[];
   reasoning_content?: string;
   reasoningTimeMs?: number;
+  // Total wall time of the assistant turn (ms), shown in the message footer.
+  genTimeMs?: number;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
+  // Web searches run during this assistant turn, folded into the one bubble and
+  // shown as collapsible sections (like reasoning). Display-only; the raw tool
+  // plumbing sent to the model is reconstructed separately and not stored here.
+  searches?: { query: string; results: string }[];
+  // Rewrite mode. On a user message: the "how to help" instruction (content is the
+  // prose to rewrite). On the assistant reply: the original text it was asked to
+  // rewrite, so the bubble can render a side-by-side diff against its output.
+  rewriteInstruction?: string;
+  rewriteOriginal?: string;
 }
 
 export function getTextContent(content: string | ContentPart[]): string {

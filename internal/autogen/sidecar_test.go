@@ -55,6 +55,50 @@ func TestAutogen_Sidecar_pruneDeadPaths(t *testing.T) {
 	}
 }
 
+func TestAutogen_Sidecar_ensurePlaygroundKey(t *testing.T) {
+	gen := writeGen(t)
+	has := func() bool {
+		ks, _ := LoadSidecarAPIKeys(gen)
+		for _, k := range ks {
+			if k.Name == BuiltinPlaygroundKeyName {
+				return true
+			}
+		}
+		return false
+	}
+
+	// No user keys -> auth off, no playground key.
+	if _, changed, err := EnsureSidecarPlaygroundKey(gen); err != nil || changed || has() {
+		t.Fatalf("no keys: changed=%v has=%v err=%v", changed, has(), err)
+	}
+
+	// A scoped user key -> playground key minted (full access).
+	UpsertSidecarAPIKey(gen, APIKeyEntry{Name: "scoped", Key: "k1", Models: []string{"m1"}})
+	if _, changed, err := EnsureSidecarPlaygroundKey(gen); err != nil || !changed || !has() {
+		t.Fatalf("scoped key: changed=%v has=%v err=%v", changed, has(), err)
+	}
+	// Idempotent.
+	if _, changed, _ := EnsureSidecarPlaygroundKey(gen); changed {
+		t.Fatal("second ensure should be a no-op")
+	}
+
+	// A user full-access key makes the playground key redundant -> dropped.
+	UpsertSidecarAPIKey(gen, APIKeyEntry{Name: "full", Key: "k2"})
+	if _, changed, err := EnsureSidecarPlaygroundKey(gen); err != nil || !changed || has() {
+		t.Fatalf("full key: changed=%v has=%v err=%v", changed, has(), err)
+	}
+
+	// Remove all user keys -> no playground key (auth off again).
+	DeleteSidecarAPIKey(gen, "scoped")
+	DeleteSidecarAPIKey(gen, "full")
+	if _, _, err := EnsureSidecarPlaygroundKey(gen); err != nil {
+		t.Fatal(err)
+	}
+	if has() {
+		t.Fatal("playground key should be gone with no user keys")
+	}
+}
+
 func TestAutogen_Sidecar_upsertReplaceDelete(t *testing.T) {
 	gen := writeGen(t)
 

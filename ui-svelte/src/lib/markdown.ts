@@ -242,6 +242,10 @@ export function normalizeLatexDelimiters(text: string): string {
   text = text.replace(/\\\[([\s\S]*?)\\\]/g, (_match, inner) => `$$${inner}$$`);
   // Inline math: \(...\) → $...$
   text = text.replace(/\\\(([\s\S]*?)\\\)/g, (_match, inner) => `$${inner}$`);
+  // Escape currency-style "$" (a "$" directly before a digit, not part of a "$$"
+  // display delimiter) so remark-math doesn't pair "$18,000 ... $2,250" into a
+  // bogus inline-math span that swallows the text (and any **bold**) between them.
+  text = text.replace(/(?<![\\$])\$(?=\d)/g, "\\$");
   return text;
 }
 

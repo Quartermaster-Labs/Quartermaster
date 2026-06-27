@@ -3,6 +3,8 @@ package autogen
 import (
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -80,6 +82,7 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 	fmt.Fprintf(&b, "# TargetVramGB=%g  MaxRamGB=%g  Threads=%d\n", s.TargetVramGB, s.MaxRamGB, s.Threads)
 	b.WriteString("# Regen: quartermaster startup (hash-gated)\n\n")
 	fmt.Fprintf(&b, "healthCheckTimeout: %d\n\n", s.HealthCheckTimeout)
+	emitSlotCache(&b, s.SlotCache)
 	emitAPIKeys(&b, s.APIKeys)
 	b.WriteString("models:\n")
 
@@ -105,6 +108,45 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 
 	emitGroupsAndListeners(&b, s, emitted)
 	return b.String(), nil
+}
+
+// slotKvPath resolves the slot-cache snapshot dir as forward-slash text shared
+// by the --slot-save-path flag and the emitted slotCache.path. Blank Path falls
+// back to a ".cache" folder next to the quartermaster binary (kept in sync with
+// config.DefaultSlotCachePath; duplicated here so autogen stays free of an
+// internal/config import).
+func slotKvPath(sc SlotCacheSettings) string {
+	p := sc.Path
+	if p == "" {
+		if exe, err := os.Executable(); err == nil {
+			p = filepath.Join(filepath.Dir(exe), ".cache", "slotkv")
+		} else {
+			p = filepath.Join(os.TempDir(), "llama-quartermaster", "slotkv")
+		}
+	}
+	return strings.ReplaceAll(p, "\\", "/")
+}
+
+// emitSlotCache writes the slotCache config block (consumed by the server) when
+// the feature is enabled. Unset knobs are omitted so the server applies its
+// defaults. The path is always emitted so it matches the --slot-save-path flag.
+func emitSlotCache(b *strings.Builder, sc SlotCacheSettings) {
+	if !sc.Enable {
+		return
+	}
+	b.WriteString("slotCache:\n")
+	b.WriteString("  enable: true\n")
+	fmt.Fprintf(b, "  path: %q\n", slotKvPath(sc))
+	if sc.MinSaveTokens > 0 {
+		fmt.Fprintf(b, "  minSaveTokens: %d\n", sc.MinSaveTokens)
+	}
+	if sc.MaxDiskGB > 0 {
+		fmt.Fprintf(b, "  maxDiskGB: %g\n", sc.MaxDiskGB)
+	}
+	if sc.MaxSessions > 0 {
+		fmt.Fprintf(b, "  maxSessions: %d\n", sc.MaxSessions)
+	}
+	b.WriteString("\n")
 }
 
 // emitAPIKeys writes the apiKeys list and, for any key scoped to a model
@@ -441,6 +483,9 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			// Inherit the model's preserve-thinking; an explicit variant value wins.
 			if v.PreserveThinking != nil {
 				effOv.PreserveThinking = *v.PreserveThinking
+			}
+			if v.SlotCache != nil {
+				effOv.SlotCache = *v.SlotCache
 			}
 			if v.FlashAttn != "" {
 				effOv.FlashAttn = v.FlashAttn
@@ -869,7 +914,7 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		fmt.Sprintf("-c %d", ctx),
 		fmt.Sprintf("-ub %d -b %d", ub, ub),
 		fmt.Sprintf("-fa %s -ctk %s -ctv %s", fa, kvK, kvV),
-		fmt.Sprintf("--parallel %d %s%s%s--kv-unified --no-warmup --no-webui", parallel, noMmapFlag, mlockFlag, kvoFlag),
+		fmt.Sprintf("--parallel %d %s%s%s--kv-unified --no-warmup --no-webui --metrics --props", parallel, noMmapFlag, mlockFlag, kvoFlag),
 	}
 	// spec is a "+"-joined list of backends (draft-mtp / ngram-map-k4v / ngram-mod
 	// / none); llama-server accepts them chained, so emit one --spec-type each and
@@ -915,10 +960,10 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	// Always emit so runtime matches our reserve (else llama-server defaults to 32).
 	ckpts := effectiveCtxCheckpoints(prof, defaultCtxCheckpoints(GetKvCostModel(meta, kvK, kvV).ConstGB))
 	lines = append(lines, fmt.Sprintf("--ctx-checkpoints %d", ckpts))
-	// DRY sampler: defaults to settings.DryDefault (nil => on) and a per-model
+	// DRY sampler: defaults to settings.DryDefault (nil => off) and a per-model
 	// ov.Dry wins (nil => the default, false => off, true => on). Values default
 	// to 0.8 / 1.75 / 3; a non-zero override replaces each independently.
-	dryOn := s.DryDefault == nil || *s.DryDefault
+	dryOn := s.DryDefault != nil && *s.DryDefault
 	if ov != nil && ov.Dry != nil {
 		dryOn = *ov.Dry
 	}
@@ -938,6 +983,12 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		lines = append(lines, fmt.Sprintf("--dry-multiplier %g --dry-base %g --dry-allowed-length %d", mult, base, allow))
 	}
 	lines = append(lines, fmt.Sprintf("-t %d%s", threads, cpuMoeFlag))
+	// Slot KV persistence: expose llama-server's save/restore slot endpoints. Path
+	// is quoted (it lives under a per-user dir that may contain spaces) and matches
+	// the emitted slotCache.path the server's LRU uses.
+	if s.SlotCache.Enable && ov != nil && ov.SlotCache {
+		lines = append(lines, fmt.Sprintf("--slot-save-path %q", slotKvPath(s.SlotCache)))
+	}
 	if ov != nil {
 		if extra := strings.TrimSpace(ov.ExtraArgs); extra != "" {
 			lines = append(lines, extra)

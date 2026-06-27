@@ -24,6 +24,7 @@ func (s *Server) ServeListener(addr string, w http.ResponseWriter, r *http.Reque
 		ctx := context.WithValue(r.Context(), listenerCtxKey{}, models)
 		r = r.WithContext(ctx)
 	}
+	r = s.markPlayground(addr, r)
 	s.handler.ServeHTTP(w, r)
 }
 

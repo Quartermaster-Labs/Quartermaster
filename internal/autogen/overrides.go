@@ -56,13 +56,27 @@ type Settings struct {
 	Threads            int           `yaml:"threads"`
 	TtlSec             int           `yaml:"ttlSec"`
 	HealthCheckTimeout int           `yaml:"healthCheckTimeout"`
-	// DryDefault is the fleet-wide DRY-sampler default. nil => on (legacy
-	// behavior); set false to make DRY opt-in (a model turns it on via Override.Dry).
+	// DryDefault is the fleet-wide DRY-sampler default. nil => off; set true to
+	// make DRY on by default (a model still flips it via Override.Dry).
 	DryDefault *bool `yaml:"dryDefault"`
 	// APIKeys are the UI-managed API keys emitted into the generated config's
 	// apiKeys / apiKeyModels blocks. Owned by the web UI (sidecar), not the
 	// hand-authored generate file. Empty Models on an entry => full access.
 	APIKeys []APIKeyEntry `yaml:"apiKeys"`
+	// SlotCache enables on-disk slot KV persistence: adds --slot-save-path to each
+	// llama-server cmd and emits the matching slotCache config block the server
+	// reads. Off unless Enable.
+	SlotCache SlotCacheSettings `yaml:"slotCache"`
+}
+
+// SlotCacheSettings mirrors config.SlotCacheConfig; zero values fall back to the
+// server's defaults (30k tokens / 10 GB / 20 sessions).
+type SlotCacheSettings struct {
+	Enable        bool    `yaml:"enable"`
+	Path          string  `yaml:"path"`
+	MinSaveTokens int     `yaml:"minSaveTokens"`
+	MaxDiskGB     float64 `yaml:"maxDiskGB"`
+	MaxSessions   int     `yaml:"maxSessions"`
 }
 
 // APIKeyEntry is one named API key plus the model IDs it may reach. Name is a
@@ -198,9 +212,10 @@ type Override struct {
 	// stripping them (Qwen3.6+). No-op when reasoning is off. Requires the client
 	// to send reasoning_content back on assistant messages.
 	PreserveThinking bool `yaml:"preserveThinking"`
-	// Dry sampler (repetition penalty). Dry==nil => on with defaults; *Dry==false
-	// omits the flags. DryMultiplier/DryBase/DryAllowedLength override the defaults
-	// (0.8 / 1.75 / 3); 0 => default. Mirrored on VariantSpec.
+	// Dry sampler (repetition penalty). Dry==nil => the fleet default (off);
+	// *Dry==true emits the flags, *Dry==false omits them. DryMultiplier/DryBase/
+	// DryAllowedLength override the defaults (0.8 / 1.75 / 3); 0 => default.
+	// Mirrored on VariantSpec.
 	Dry              *bool   `yaml:"dry"`
 	DryMultiplier    float64 `yaml:"dryMultiplier"`
 	DryBase          float64 `yaml:"dryBase"`
@@ -248,6 +263,10 @@ type Override struct {
 	DefaultHeight  int     `yaml:"defaultHeight"`  // --height
 	Unlisted       bool    `yaml:"unlisted"`
 	Skip           bool    `yaml:"skip"`
+	// SlotCache opts this model into on-disk slot KV persistence: emits
+	// --slot-save-path so the server's slotCache can save/restore its conversation
+	// KV. No-op unless settings.slotCache.enable is also on (the master switch).
+	SlotCache bool `yaml:"slotCache"`
 	// Variants are named custom profiles emitted in addition to the solo model:
 	// each becomes "<model>-<name>" with its own ctx/VRAM/kv/spec. Use-case
 	// agnostic — the UI's "create variant" flow writes these.
@@ -263,7 +282,7 @@ type Override struct {
 // any spawn shape (e.g. a low-VRAM "game" coexistence variant, or a short-ctx
 // "judge" variant with greedy sampling) without the engine knowing those names:
 //   - Ub: physical batch size (-ub/-b). 0 => default (1024, or 512 for >=64k ctx).
-//   - Dry: when non-nil and false, omit the DRY sampler flags. nil => DRY on.
+//   - Dry: nil => the fleet default (off); *Dry==true emits the flags, false omits.
 //
 // ReasoningFmt: "off" emits "--reasoning off" (plus --reasoning-format none).
 type VariantSpec struct {
@@ -284,6 +303,10 @@ type VariantSpec struct {
 	// PreserveThinking is *bool so a standalone variant defaults preserve-on
 	// (nil => emit, matching the Qwen3.6 reasoning default); false disables it.
 	PreserveThinking *bool `yaml:"preserveThinking"`
+	// SlotCache opts this variant into on-disk slot KV persistence. nil => inherit
+	// the model-wide Override.SlotCache; true/false sets it explicitly. Gated by
+	// settings.slotCache.enable like the model-wide flag.
+	SlotCache *bool `yaml:"slotCache"`
 	// Engine knobs mirroring Override, so a variant can carry the full launch
 	// shape (the UI's "full settings page" for a variant). Named variants are
 	// STANDALONE: zero/empty => the generator default, NOT the model-wide Override
@@ -369,6 +392,23 @@ func (s *Settings) applyDefaults() {
 	if s.HealthCheckTimeout == 0 {
 		s.HealthCheckTimeout = 300
 	}
+	// Slot KV-cache persistence is on by default with the server's defaults
+	// pre-filled (so the dashboard shows real numbers, not 0). Per-model opt-in
+	// (Override.SlotCache) still gates whether any cmd gets --slot-save-path, so a
+	// bare global-on is a no-op until a model opts in.
+	// ponytail: Enable defaults true and can't be expressed as false in the
+	// hand-authored generate file (bool zero == unset); turn it off via the
+	// dashboard (writes enable:false to the sidecar, which overlays this).
+	s.SlotCache.Enable = true
+	if s.SlotCache.MinSaveTokens == 0 {
+		s.SlotCache.MinSaveTokens = 30000
+	}
+	if s.SlotCache.MaxDiskGB == 0 {
+		s.SlotCache.MaxDiskGB = 10
+	}
+	if s.SlotCache.MaxSessions == 0 {
+		s.SlotCache.MaxSessions = 20
+	}
 }
 
 // LoadGenerateFile reads and validates an autogen control file. Settings
@@ -425,7 +465,7 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 		return GenerateFile{}, err
 	}
 	if len(sideRows) > 0 {
-		gf.Overrides = append(append([]Override{}, sideRows...), gf.Overrides...)
+		gf.Overrides = append(sidecarExactFirst(sideRows), gf.Overrides...)
 	}
 	// UI-owned API keys replace the file's list wholesale (the UI sends the full
 	// list). nil => inherit the generate file's apiKeys.
@@ -435,6 +475,14 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 	}
 	if sideKeys != nil {
 		gf.Settings.APIKeys = sideKeys
+	}
+	// UI-owned slot-KV block overlays the generate file's settings.slotCache.
+	sideSlot, err := LoadSidecarSlotCache(path)
+	if err != nil {
+		return GenerateFile{}, err
+	}
+	if sideSlot != nil {
+		gf.Settings.SlotCache = *sideSlot
 	}
 	// A blank modelsRoot is not an error: the server boots with an empty catalog
 	// so a setup UI can point it at a models folder later. Discovery/hashing
@@ -464,6 +512,25 @@ func LoadBaseSettings(path, modelsDirOverride string) (Settings, error) {
 		gf.Settings.ModelsRoot = modelsDirOverride
 	}
 	return gf.Settings, nil
+}
+
+// sidecarExactFirst stably partitions sidecar overrides so exact-path rows (the
+// ones the UI writes) precede glob rows. Override resolution is first-match, so
+// without this a hand-authored glob (e.g. "*35B-MTP-GGUF*") earlier in the file
+// shadows the UI's exact-path row for the same gguf and silently drops the
+// variants the editor still shows (it reads the exact-path row). Returns a fresh
+// slice; the input is not mutated.
+func sidecarExactFirst(rows []Override) []Override {
+	exact := make([]Override, 0, len(rows))
+	var globs []Override
+	for _, r := range rows {
+		if strings.ContainsAny(r.Match, "*?") {
+			globs = append(globs, r)
+		} else {
+			exact = append(exact, r)
+		}
+	}
+	return append(exact, globs...)
 }
 
 // ResolveFileOverride returns the hand-authored generate FILE override (the UI

@@ -20,15 +20,24 @@ const liveEmitInterval = 200 * time.Millisecond
 // each content-bearing chunk counts as one token (llama-server emits one token
 // per chunk), and a streamed usage object, if present, overrides the estimate.
 type liveTokenCounter struct {
-	model    string
-	start    time.Time
-	buf      []byte // carry partial trailing line between Write calls
-	tokens   int
-	lastEmit time.Time
+	model      string
+	start      time.Time
+	buf        []byte // carry partial trailing line between Write calls
+	tokens     int
+	firstToken time.Time // zero until the first generated token lands
+	lastEmit   time.Time
 }
 
 func newLiveTokenCounter(model string, start time.Time) *liveTokenCounter {
 	return &liveTokenCounter{model: model, start: start}
+}
+
+// noteToken records the first-token timestamp the first time a token is seen,
+// so emit can report a measured time-to-first-token.
+func (c *liveTokenCounter) noteToken() {
+	if c.firstToken.IsZero() {
+		c.firstToken = time.Now()
+	}
 }
 
 // feed consumes a chunk of raw SSE body, updating the token count for any
@@ -67,6 +76,7 @@ func (c *liveTokenCounter) consumeLine(line []byte) {
 		if u := parsed.Get(p); u.Exists() {
 			if _, out, _, ok := extractUsageTokens(u); ok && int(out) > c.tokens {
 				c.tokens = int(out)
+				c.noteToken()
 			}
 		}
 	}
@@ -80,20 +90,27 @@ func (c *liveTokenCounter) consumeLine(line []byte) {
 			d.Get("reasoning_content").String() != "" ||
 			d.Get("tool_calls").Exists() {
 			c.tokens++
+			c.noteToken()
 			return
 		}
 	}
 	// Legacy completions API streams generated text at choices.0.text.
 	if t := parsed.Get("choices.0.text"); t.Exists() && t.String() != "" {
 		c.tokens++
+		c.noteToken()
 	}
 }
 
 func (c *liveTokenCounter) emit() {
 	c.lastEmit = time.Now()
+	ttft := -1
+	if !c.firstToken.IsZero() {
+		ttft = int(c.firstToken.Sub(c.start).Milliseconds())
+	}
 	event.Emit(shared.LiveTokensEvent{
 		Model:        c.model,
 		OutputTokens: c.tokens,
 		ElapsedMs:    int(time.Since(c.start).Milliseconds()),
+		FirstTokenMs: ttft,
 	})
 }

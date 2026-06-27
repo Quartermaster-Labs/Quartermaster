@@ -25,12 +25,16 @@
 [CmdletBinding()]
 param(
     [string]$Tag,
-    [bool]$Draft = $true,
+    # 'true' (draft) or 'false' (publish). String, not bool: -File mode passes
+    # args verbatim and can't evaluate $true/$false.
+    [ValidateSet('true', 'false')]
+    [string]$Draft = 'true',
     [string]$Repo = 'Radu0120/llama-quartermaster',
     [switch]$SkipUi
 )
 
 $ErrorActionPreference = 'Stop'
+$isDraft = ($Draft -eq 'true')
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 Set-Location $root
 
@@ -92,10 +96,10 @@ git push origin $Tag
 $exists = $false
 try { gh release view $Tag -R $Repo *> $null; $exists = ($LASTEXITCODE -eq 0) } catch { $exists = $false }
 if (-not $exists) {
-    $draftArg = if ($Draft) { '--draft' } else { '' }
+    $draftArg = if ($isDraft) { '--draft' } else { '' }
     gh release create $Tag -R $Repo --title $Tag --notes "llama-quartermaster $Tag" $draftArg
 }
 gh release upload $Tag $setup -R $Repo --clobber
-if (-not $Draft) { gh release edit $Tag -R $Repo --draft=false }
+if (-not $isDraft) { gh release edit $Tag -R $Repo --draft=false }
 
-Write-Host "Done. $Tag (draft=$Draft) -> https://github.com/$Repo/releases" -ForegroundColor Green
+Write-Host "Done. $Tag (draft=$isDraft) -> https://github.com/$Repo/releases" -ForegroundColor Green

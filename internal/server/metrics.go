@@ -29,6 +29,12 @@ type TokenMetrics struct {
 	OutputTokens    int     `json:"output_tokens"`
 	PromptPerSecond float64 `json:"prompt_per_second"`
 	TokensPerSecond float64 `json:"tokens_per_second"`
+	// PromptMs is the backend's prompt-eval (prefill) time; TimeToFirstMs is the
+	// time-to-first-token. Both come from llama-server's authoritative per-request
+	// timings (prompt_ms): prefill completes just before the first token, so it is
+	// the accurate TTFT. -1 when timings are absent (non-llama upstream).
+	PromptMs      float64 `json:"prompt_ms"`
+	TimeToFirstMs float64 `json:"time_to_first_ms"`
 }
 
 // ActivityLogEntry represents parsed token statistics from llama-server logs.
@@ -345,12 +351,14 @@ func buildMetrics(modelID string, start time.Time, inputTokens, outputTokens, ca
 	durationMs := wallDurationMs
 	tokensPerSecond := -1.0
 	promptPerSecond := -1.0
+	promptMs := -1.0
 
 	if timings.Exists() {
 		inputTokens = timings.Get("prompt_n").Int()
 		outputTokens = timings.Get("predicted_n").Int()
 		promptPerSecond = timings.Get("prompt_per_second").Float()
 		tokensPerSecond = timings.Get("predicted_per_second").Float()
+		promptMs = timings.Get("prompt_ms").Float()
 		timingsDurationMs := int(timings.Get("prompt_ms").Float() + timings.Get("predicted_ms").Float())
 		if timingsDurationMs > durationMs {
 			durationMs = timingsDurationMs
@@ -369,6 +377,8 @@ func buildMetrics(modelID string, start time.Time, inputTokens, outputTokens, ca
 			OutputTokens:    int(outputTokens),
 			PromptPerSecond: promptPerSecond,
 			TokensPerSecond: tokensPerSecond,
+			PromptMs:        promptMs,
+			TimeToFirstMs:   promptMs,
 		},
 		DurationMs: durationMs,
 	}

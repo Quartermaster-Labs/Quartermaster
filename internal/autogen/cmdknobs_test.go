@@ -17,18 +17,18 @@ func joinCmd(s Settings, ov *Override) string {
 	)
 }
 
-// DRY defaults on with the canonical values; Dry=false omits it; custom values
-// replace the defaults independently.
+// DRY defaults off; Dry=true emits the canonical values; custom values replace
+// the defaults independently.
 func TestBuildCmdLines_dry(t *testing.T) {
 	s := Settings{}
 
-	if got := joinCmd(s, &Override{}); !strings.Contains(got, "--dry-multiplier 0.8 --dry-base 1.75 --dry-allowed-length 3") {
-		t.Fatalf("default DRY flags missing: %s", got)
+	if got := joinCmd(s, &Override{}); strings.Contains(got, "--dry-") {
+		t.Fatalf("DRY should be off by default: %s", got)
 	}
-	if got := joinCmd(s, &Override{Dry: boolptr(false)}); strings.Contains(got, "--dry-") {
-		t.Fatalf("Dry=false should omit DRY flags: %s", got)
+	if got := joinCmd(s, &Override{Dry: boolptr(true)}); !strings.Contains(got, "--dry-multiplier 0.8 --dry-base 1.75 --dry-allowed-length 3") {
+		t.Fatalf("Dry=true should emit canonical DRY flags: %s", got)
 	}
-	got := joinCmd(s, &Override{DryMultiplier: 0.5, DryBase: 2, DryAllowedLength: 4})
+	got := joinCmd(s, &Override{Dry: boolptr(true), DryMultiplier: 0.5, DryBase: 2, DryAllowedLength: 4})
 	if !strings.Contains(got, "--dry-multiplier 0.5 --dry-base 2 --dry-allowed-length 4") {
 		t.Fatalf("custom DRY values not emitted: %s", got)
 	}

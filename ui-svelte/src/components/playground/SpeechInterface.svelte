@@ -1,14 +1,14 @@
 <script lang="ts">
   import { models } from "../../stores/api";
-  import { persistentStore } from "../../stores/persistent";
+  import { userPref } from "../../stores/prefs";
   import { generateSpeech } from "../../lib/speechApi";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import ModelSelector from "./ModelSelector.svelte";
   import ExpandableTextarea from "./ExpandableTextarea.svelte";
 
-  const selectedModelStore = persistentStore<string>("playground-speech-model", "");
-  const selectedVoiceStore = persistentStore<string>("playground-speech-voice", "coral");
-  const autoPlayStore = persistentStore<boolean>("playground-speech-autoplay", false);
+  const selectedModelStore = userPref<string>("playground-speech-model", "");
+  const selectedVoiceStore = userPref<string>("playground-speech-voice", "coral");
+  const autoPlayStore = userPref<boolean>("playground-speech-autoplay", false);
 
   let inputText = $state("");
   let isGenerating = $state(false);
@@ -206,7 +206,7 @@
 <div class="flex flex-col h-full">
   <!-- Model and voice selectors -->
   <div class="shrink-0 flex gap-2 mb-4">
-    <ModelSelector bind:value={$selectedModelStore} placeholder="Select a speech model..." disabled={isGenerating} capabilities={["audio_speech"]} />
+    <ModelSelector bind:value={$selectedModelStore} placeholder="Select a speech model..." disabled={isGenerating} category="tts" />
     <div class="flex gap-2">
       <select
         class="shrink-0 px-3 py-2 rounded border border-card-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"

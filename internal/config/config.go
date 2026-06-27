@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
@@ -167,6 +168,38 @@ type Config struct {
 	// request routing are restricted to the models of its groups. Empty =>
 	// legacy single --listen behaviour. See internal/config/listeners.go.
 	Listeners map[string]ListenerConfig `yaml:"listeners"` /* key is listen address */
+
+	// SlotCache persists a llama-server slot's KV-cache to disk so a long-lived
+	// conversation survives eviction from the single live slot and is restored
+	// instead of reprefilled when it returns. Fork addition; off unless Enable.
+	SlotCache SlotCacheConfig `yaml:"slotCache"`
+}
+
+// SlotCacheConfig configures on-disk slot KV persistence. When Enable is set the
+// generated llama-server cmd gets --slot-save-path Path and the server saves the
+// outgoing conversation / restores the incoming one across warm slot switches.
+type SlotCacheConfig struct {
+	Enable bool   `yaml:"enable"`
+	Path   string `yaml:"path"` // dir for .bin snapshots; empty => DefaultSlotCachePath
+	// MinSaveTokens gates saving on KV size — a conversation smaller than this is
+	// cheap to reprefill, not worth a disk write. 0 => 30000.
+	MinSaveTokens int `yaml:"minSaveTokens"`
+	// MaxDiskGB caps total snapshot bytes; MaxSessions caps the file count. The
+	// oldest (LRU) snapshots are evicted on save. 0 => 10 GB / 20 sessions.
+	MaxDiskGB   float64 `yaml:"maxDiskGB"`
+	MaxSessions int     `yaml:"maxSessions"`
+}
+
+// DefaultSlotCachePath is the snapshot dir used when SlotCacheConfig.Path is
+// blank: a ".cache" folder next to the quartermaster binary (gitignored via
+// build/). Absolute so both llama-server (--slot-save-path) and the server's LRU
+// agree regardless of each process's working directory. Kept in sync with
+// autogen.slotKvPath.
+func DefaultSlotCachePath() string {
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Join(filepath.Dir(exe), ".cache", "slotkv")
+	}
+	return filepath.Join(os.TempDir(), "llama-quartermaster", "slotkv")
 }
 
 // RoutingConfig is the canonical, normalized routing/scheduling configuration.

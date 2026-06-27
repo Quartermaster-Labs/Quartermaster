@@ -5,16 +5,22 @@
   import { currentRoute } from "../stores/route";
   import { playgroundActivity } from "../stores/playgroundActivity";
   import { versionInfo } from "../stores/api";
+  import { playgroundPort } from "../stores/playgroundAuth";
   import { MODEL_CATEGORIES } from "../lib/modelUtils";
   import ConnectionStatus from "./ConnectionStatus.svelte";
 
   const pages = [
     { path: "/", label: "Dashboard", icon: LayoutDashboard },
     { path: "/models", label: "Models", icon: Boxes, children: MODEL_CATEGORIES.map((c) => ({ path: `/models/${c.id}`, label: c.label })) },
-    { path: "/test", label: "Test", icon: FlaskConical },
+    { path: "/test", label: "Playground", icon: FlaskConical },
     { path: "/observe", label: "Observe", icon: Activity },
     { path: "/api-keys", label: "API Keys", icon: KeyRound },
   ];
+
+  // The playground runs on its own port; link out to it when configured.
+  const playgroundURL = $derived(
+    $playgroundPort ? `${window.location.protocol}//${window.location.hostname}:${$playgroundPort}/ui/` : ""
+  );
 
   // Models sub-menu open when on any /models route, toggleable otherwise.
   let modelsOpen = $state($currentRoute.startsWith("/models"));
@@ -89,6 +95,20 @@
             </a>
           {/each}
         {/if}
+      {:else if p.path === "/test" && playgroundURL}
+        <!-- Playground is a separate app on its own port: link out to it. -->
+        <a
+          href={playgroundURL}
+          target="_blank"
+          rel="noopener"
+          class="flex items-center gap-3 px-3 py-2 font-mono text-sm border-l-2 border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
+        >
+          <p.icon size={16} strokeWidth={1.8} />
+          <span class="tracking-wide">{p.label}</span>
+          {#if $playgroundActivity}
+            <span class="ml-auto w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+          {/if}
+        </a>
       {:else}
         <a
           href={p.path}

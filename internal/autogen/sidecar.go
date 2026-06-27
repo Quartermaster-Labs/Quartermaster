@@ -1,6 +1,8 @@
 package autogen
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +10,60 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+// BuiltinPlaygroundKeyName is the reserved name of the auto-managed, full-access
+// API key the local Playground uses so it can reach every model even when all
+// user-defined keys are model-scoped. It is hidden from the management UI and
+// reconciled by EnsureSidecarPlaygroundKey.
+const BuiltinPlaygroundKeyName = "playground (built-in)"
+
+// EnsureSidecarPlaygroundKey reconciles the reserved Playground key against the
+// user's keys and persists any change. Rules:
+//   - no user keys           => no playground key (auth stays off)
+//   - user keys, none full   => mint/keep the playground key (full access)
+//   - a user full-access key  => drop the playground key (redundant)
+//
+// Returns the resulting list and whether the sidecar was rewritten.
+func EnsureSidecarPlaygroundKey(generatePath string) (keys []APIKeyEntry, changed bool, err error) {
+	sc, err := loadSidecar(generatePath)
+	if err != nil {
+		return nil, false, err
+	}
+	hasBuiltin, userKeys, userUnscoped := false, 0, false
+	for _, k := range sc.APIKeys {
+		if strings.EqualFold(k.Name, BuiltinPlaygroundKeyName) {
+			hasBuiltin = true
+			continue
+		}
+		userKeys++
+		if len(k.Models) == 0 {
+			userUnscoped = true
+		}
+	}
+	wantBuiltin := userKeys > 0 && !userUnscoped
+	if wantBuiltin == hasBuiltin {
+		return sc.APIKeys, false, nil
+	}
+	if wantBuiltin {
+		b := make([]byte, 24)
+		if _, err := rand.Read(b); err != nil {
+			return nil, false, err
+		}
+		sc.APIKeys = append(sc.APIKeys, APIKeyEntry{Name: BuiltinPlaygroundKeyName, Key: "qm-" + hex.EncodeToString(b)})
+	} else {
+		kept := sc.APIKeys[:0:0]
+		for _, k := range sc.APIKeys {
+			if !strings.EqualFold(k.Name, BuiltinPlaygroundKeyName) {
+				kept = append(kept, k)
+			}
+		}
+		sc.APIKeys = kept
+	}
+	if err := writeSidecar(generatePath, sc); err != nil {
+		return nil, false, err
+	}
+	return sc.APIKeys, true, nil
+}
 
 // SidecarName is the UI-managed overrides file. It sits next to the generate
 // control file and is fully owned by the web UI's per-model editor, so it can
@@ -35,8 +91,13 @@ type sidecar struct {
 	// APIKeys, when non-nil, replaces the generate file's apiKeys wholesale (the
 	// UI sends the full list). omitempty => deleting the last key reverts to the
 	// file's apiKeys.
-	APIKeys   []APIKeyEntry `yaml:"apiKeys,omitempty"`
-	Overrides []Override    `yaml:"overrides"`
+	APIKeys []APIKeyEntry `yaml:"apiKeys,omitempty"`
+	// SlotCache, when non-nil, replaces the generate file's settings.slotCache
+	// block (the dashboard's slot-KV section sends the whole block). Top-level (not
+	// in SettingsPatch) so a VRAM reset can't wipe it. omitempty => never written
+	// until the dashboard saves it.
+	SlotCache *SlotCacheSettings `yaml:"slotCache,omitempty"`
+	Overrides []Override         `yaml:"overrides"`
 }
 
 // loadSidecar reads the whole sidecar, returning a zero value when absent.
@@ -88,6 +149,26 @@ func LoadSidecarSettings(generatePath string) (*SettingsPatch, error) {
 		return nil, err
 	}
 	return sc.Settings, nil
+}
+
+// LoadSidecarSlotCache returns the sidecar's slot-KV block, or nil when unset.
+func LoadSidecarSlotCache(generatePath string) (*SlotCacheSettings, error) {
+	sc, err := loadSidecar(generatePath)
+	if err != nil {
+		return nil, err
+	}
+	return sc.SlotCache, nil
+}
+
+// UpsertSidecarSlotCache stores the dashboard's slot-KV block, preserving the
+// rest of the sidecar.
+func UpsertSidecarSlotCache(generatePath string, s SlotCacheSettings) error {
+	sc, err := loadSidecar(generatePath)
+	if err != nil {
+		return err
+	}
+	sc.SlotCache = &s
+	return writeSidecar(generatePath, sc)
 }
 
 // UpsertSidecarOverride inserts or replaces (by Match, case-insensitive) the

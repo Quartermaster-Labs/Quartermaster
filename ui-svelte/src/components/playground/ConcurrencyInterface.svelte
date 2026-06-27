@@ -1,6 +1,6 @@
 <script lang="ts">
   import { models } from "../../stores/api";
-  import { persistentStore } from "../../stores/persistent";
+  import { userPref } from "../../stores/prefs";
   import { streamChatCompletion } from "../../lib/chatApi";
 
   type Status = "waiting" | "streaming" | "done" | "error";
@@ -26,9 +26,9 @@
   const DEFAULT_PROMPT = "Write a few sentences about the history of computing.";
   const DEFAULT_MAX_TOKENS = 256;
 
-  const promptStore = persistentStore<string>("concurrency-prompt", DEFAULT_PROMPT);
-  const maxTokensStore = persistentStore<number>("concurrency-max-tokens", DEFAULT_MAX_TOKENS);
-  const testListStore = persistentStore<TestEntry[]>("concurrency-test-list", []);
+  const promptStore = userPref<string>("concurrency-prompt", DEFAULT_PROMPT);
+  const maxTokensStore = userPref<number>("concurrency-max-tokens", DEFAULT_MAX_TOKENS);
+  const testListStore = userPref<TestEntry[]>("concurrency-test-list", []);
 
   let runs = $state<Record<string, RunState>>({});
   let isRunning = $state(false);
@@ -36,7 +36,7 @@
   let dragIndex = $state<number | null>(null);
   let dragOverIndex = $state<number | null>(null);
 
-  const timelineCollapsedStore = persistentStore<boolean>("concurrency-timeline-collapsed", false);
+  const timelineCollapsedStore = userPref<boolean>("concurrency-timeline-collapsed", false);
 
   let timelineMaxMs = $derived(Math.max(100, ...Object.values(runs).map((r) => r.elapsedMs)));
 

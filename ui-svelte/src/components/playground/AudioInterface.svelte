@@ -1,11 +1,11 @@
 <script lang="ts">
   import { models } from "../../stores/api";
-  import { persistentStore } from "../../stores/persistent";
+  import { userPref } from "../../stores/prefs";
   import { transcribeAudio } from "../../lib/audioApi";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import ModelSelector from "./ModelSelector.svelte";
 
-  const selectedModelStore = persistentStore<string>("playground-audio-model", "");
+  const selectedModelStore = userPref<string>("playground-audio-model", "");
 
   let selectedFile = $state<File | null>(null);
   let isTranscribing = $state(false);
@@ -145,7 +145,7 @@
 <div class="flex flex-col h-full">
   <!-- Model selector -->
   <div class="shrink-0 flex flex-wrap gap-2 mb-4">
-    <ModelSelector bind:value={$selectedModelStore} placeholder="Select an audio model..." disabled={isTranscribing} capabilities={["audio_transcriptions"]} />
+    <ModelSelector bind:value={$selectedModelStore} placeholder="Select an audio model..." disabled={isTranscribing} category="transcribe" />
   </div>
 
   <!-- Empty state for no models configured -->

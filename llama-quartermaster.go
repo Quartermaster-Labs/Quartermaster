@@ -66,6 +66,7 @@ func main() {
 	flagModelsDir := flag.String("models-dir", "", "models root for -generate (overrides settings.modelsRoot)")
 	flagWatchModels := flag.Bool("watch-models", false, "periodically re-scan the models folder and hot-reload when it changes (requires -generate)")
 	flagWatchModelsInterval := flag.Duration("watch-models-interval", 30*time.Second, "poll interval for -watch-models")
+	flagPlaygroundPort := flag.String("playground-port", "", "serve the standalone playground app (per-user login + chat history) on this extra address, e.g. :8081")
 	flag.Parse()
 
 	if *flagVersion {
@@ -187,6 +188,22 @@ func main() {
 		listenAddrs = []string{listenAddr}
 	}
 
+	// Standalone playground: serve it on an extra listen address. It shares the
+	// single activeSrv (one router/scheduler — the invariant), it's just another
+	// bound address that the server tags as the playground app.
+	var playground *server.Playground
+	if *flagPlaygroundPort != "" {
+		pgAddr := *flagPlaygroundPort
+		if !strings.Contains(pgAddr, ":") {
+			pgAddr = ":" + pgAddr
+		}
+		dataDir := filepath.Join(filepath.Dir(configPath), "playground-data")
+		playground = &server.Playground{Addr: pgAddr, DataDir: dataDir}
+		initialSrv.SetPlayground(playground)
+		listenAddrs = append(listenAddrs, pgAddr)
+		proxyLog.Infof("playground app enabled on %s (data dir: %s)", pgAddr, dataDir)
+	}
+
 	httpServers := make([]*http.Server, 0, len(listenAddrs))
 	for _, addr := range listenAddrs {
 		addr := addr
@@ -250,6 +267,10 @@ func main() {
 
 		if autogenAdmin != nil {
 			newSrv.SetAutogenAdmin(autogenAdmin)
+		}
+
+		if playground != nil {
+			newSrv.SetPlayground(playground)
 		}
 
 		activeMu.Lock()

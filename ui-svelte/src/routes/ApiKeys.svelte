@@ -7,6 +7,9 @@
   import type { ApiKey } from "../lib/types";
 
   let keys = $state<ApiKey[]>([]);
+  // The auto-managed Playground key is hidden from the list; it exists only so
+  // the in-browser Playground can reach every model when user keys are scoped.
+  const visibleKeys = $derived(keys.filter((k) => !k.builtin));
   let loadErr = $state<string | null>(null);
   let available = $state(false); // false => server not running with -generate
 
@@ -178,11 +181,11 @@
     </div>
 
     <!-- List -->
-    {#if keys.length === 0}
+    {#if visibleKeys.length === 0}
       <p class="font-mono text-xs text-txtsecondary">No keys yet. Create one above.</p>
     {:else}
       <ul class="space-y-3">
-        {#each keys as k (k.name)}
+        {#each visibleKeys as k (k.name)}
           <li class="card">
             <div class="flex items-center gap-3">
               <span class="font-mono text-sm font-bold text-txtmain">{k.name}</span>

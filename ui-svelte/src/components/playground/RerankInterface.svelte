@@ -1,6 +1,6 @@
 <script lang="ts">
   import { models } from "../../stores/api";
-  import { persistentStore } from "../../stores/persistent";
+  import { userPref } from "../../stores/prefs";
   import { rerank } from "../../lib/rerankApi";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import ModelSelector from "./ModelSelector.svelte";
@@ -9,7 +9,7 @@
   type SortOrder = "none" | "asc" | "desc";
   type EditorMode = "table" | "json";
 
-  const selectedModelStore = persistentStore<string>("playground-rerank-model", "");
+  const selectedModelStore = userPref<string>("playground-rerank-model", "");
 
   const defaultQuery = "How do LLM's work?";
   const defaultDocs = [

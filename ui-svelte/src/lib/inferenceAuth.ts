@@ -2,8 +2,10 @@
 // in-browser playground keeps working when keys gate the inference API. The
 // dashboard is local/admin, so it reads the key straight from the open
 // /api/apikeys list — preferring a full-access (unscoped) key so the playground
-// can reach every model, falling back to whatever key exists. No keys (or auth
-// off) => no header, requests go through unauthenticated as before.
+// can reach every model. The server auto-manages a hidden built-in full-access
+// key whenever user keys are all scoped, so an unscoped key is always present
+// when auth is on. No keys (or auth off) => no header, requests go through
+// unauthenticated as before.
 
 let key: string | null = null;
 

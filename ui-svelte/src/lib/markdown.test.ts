@@ -113,6 +113,14 @@ More text here.
       expect(result).toContain("$5");
     });
 
+    it("treats currency as text, not inline math (keeps **bold** between $-amounts)", () => {
+      const result = renderMarkdown("**$18,000** for 8x at $2,250 each or $2,000 used.");
+      expect(result).not.toContain("katex"); // no bogus math span
+      expect(result).toContain("<strong>$18,000</strong>"); // bold survives
+      expect(result).toContain("$2,250");
+      expect(result).toContain("$2,000");
+    });
+
     it("handles empty math expressions gracefully", () => {
       // Empty math should not break the renderer
       const result = renderMarkdown("$$$");

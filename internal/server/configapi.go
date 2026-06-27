@@ -8,8 +8,34 @@ import (
 	"strings"
 
 	"github.com/mostlygeek/llama-swap/internal/autogen"
+	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/shared"
 )
+
+// slotCachePathOrDefault echoes p, or resolves the default snapshot dir when
+// blank so the UI displays the real path.
+func slotCachePathOrDefault(p string) string {
+	if strings.TrimSpace(p) != "" {
+		return p
+	}
+	return config.DefaultSlotCachePath()
+}
+
+// handleAPIPickFolder opens the host's native folder dialog and returns the
+// chosen path ({path}); 204 when the user cancels. Unlike the category root
+// picker it does NOT persist — the caller binds the path into a form field.
+func (s *Server) handleAPIPickFolder(w http.ResponseWriter, r *http.Request) {
+	path, err := pickFolder()
+	if err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, "folder picker failed: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(path) == "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	writeJSON(w, map[string]string{"path": path})
+}
 
 // AutogenAdmin carries everything the per-model config endpoints need to edit
 // the UI-owned override sidecar, regenerate the config, and hot-reload. It is
@@ -44,6 +70,8 @@ type variantDTO struct {
 	Aliases        []string `json:"aliases"`
 	// PreserveThinking: nil => on (Qwen3.6 default), false => disabled.
 	PreserveThinking *bool `json:"preserveThinking"`
+	// SlotCache: nil => inherit the model-wide flag, true/false => explicit.
+	SlotCache *bool `json:"slotCache"`
 	// Engine knobs (variant carries the full launch shape; zero/empty => inherit).
 	KvInRam    bool   `json:"kvInRam"`
 	CpuOffload int    `json:"cpuOffload"`
@@ -101,6 +129,7 @@ type overrideDTO struct {
 	Aliases         []string `json:"aliases"`
 	Unlisted        bool     `json:"unlisted"`
 	Skip            bool     `json:"skip"`
+	SlotCache       bool     `json:"slotCache"` // opt this model into on-disk slot KV persistence
 	CtxVariants     []int    `json:"ctxVariants"` // per-model ctx tiers (e.g. 32768, 65536)
 	// PreserveThinking keeps prior-turn <think> in chat history (Qwen3.6+); only
 	// meaningful when reasoning is on.
@@ -157,7 +186,7 @@ func variantToDTO(v autogen.VariantSpec) variantDTO {
 		Name: v.Name, Ctx: v.Ctx, VramTargetGB: v.VramTargetGB,
 		KvK: v.KvK, KvV: v.KvV, Spec: v.Spec, ReasoningFmt: v.ReasoningFmt,
 		Ub: v.Ub, Dry: v.Dry, CtxCheckpoints: v.CtxCheckpoints,
-		Unlisted: v.Unlisted, Aliases: v.Aliases, PreserveThinking: v.PreserveThinking,
+		Unlisted: v.Unlisted, Aliases: v.Aliases, PreserveThinking: v.PreserveThinking, SlotCache: v.SlotCache,
 		KvInRam: v.KvInRam, CpuOffload: v.CpuOffload,
 		FlashAttn: v.FlashAttn, Mmap: v.Mmap, Mlock: v.Mlock,
 		Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
@@ -180,7 +209,7 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		FlashAttn: o.FlashAttn, Mmap: o.Mmap, Mlock: o.Mlock,
 		Threads: o.Threads, Parallel: o.Parallel, Ub: o.Ub,
 		ExtraArgs: o.ExtraArgs,
-		Aliases:   o.Aliases, Unlisted: o.Unlisted, Skip: o.Skip,
+		Aliases:   o.Aliases, Unlisted: o.Unlisted, Skip: o.Skip, SlotCache: o.SlotCache,
 		CtxVariants: o.CtxVariants, CtxCheckpoints: o.CtxCheckpoints,
 		PreserveThinking: o.PreserveThinking,
 		Dry:              o.Dry,
@@ -204,7 +233,7 @@ func toVariantSpec(v variantDTO) autogen.VariantSpec {
 		Name: v.Name, Ctx: v.Ctx, VramTargetGB: v.VramTargetGB,
 		KvK: v.KvK, KvV: v.KvV, Spec: v.Spec, ReasoningFmt: v.ReasoningFmt,
 		Ub: v.Ub, Dry: v.Dry, CtxCheckpoints: v.CtxCheckpoints,
-		Unlisted: v.Unlisted, Aliases: v.Aliases, PreserveThinking: v.PreserveThinking,
+		Unlisted: v.Unlisted, Aliases: v.Aliases, PreserveThinking: v.PreserveThinking, SlotCache: v.SlotCache,
 		KvInRam: v.KvInRam, CpuOffload: v.CpuOffload,
 		FlashAttn: v.FlashAttn, Mmap: v.Mmap, Mlock: v.Mlock,
 		Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
@@ -590,6 +619,17 @@ type settingsResp struct {
 	ModelsRoot     string           `json:"modelsRoot"` // the shared/fallback scan folder
 	// CategoryRoots is the effective per-category scan folder ("" => uses ModelsRoot).
 	CategoryRoots map[string]string `json:"categoryRoots"`
+	SlotCache     slotCacheDTO      `json:"slotCache"` // on-disk slot KV persistence
+}
+
+// slotCacheDTO mirrors autogen.SlotCacheSettings for the dashboard slot-KV
+// section. Zero values fall back to the server's defaults (30k / 10 GB / 20).
+type slotCacheDTO struct {
+	Enable        bool    `json:"enable"`
+	Path          string  `json:"path"`
+	MinSaveTokens int     `json:"minSaveTokens"`
+	MaxDiskGB     float64 `json:"maxDiskGB"`
+	MaxSessions   int     `json:"maxSessions"`
 }
 
 type settingsPutDTO struct {
@@ -644,7 +684,48 @@ func (s *Server) handleAPISettingsGet(w http.ResponseWriter, r *http.Request) {
 		},
 		ModelsRoot:    gf.Settings.ModelsRoot,
 		CategoryRoots: gf.Settings.CategoryRoots,
+		SlotCache: slotCacheDTO{
+			Enable: gf.Settings.SlotCache.Enable,
+			// Surface the resolved default dir (".cache" next to the binary) so the
+			// dashboard shows a real path instead of a blank field.
+			Path:          slotCachePathOrDefault(gf.Settings.SlotCache.Path),
+			MinSaveTokens: gf.Settings.SlotCache.MinSaveTokens,
+			MaxDiskGB:     gf.Settings.SlotCache.MaxDiskGB,
+			MaxSessions:   gf.Settings.SlotCache.MaxSessions,
+		},
 	})
+}
+
+// handleAPISlotCachePut writes the dashboard's slot-KV settings to the sidecar
+// (independent of the VRAM patch), then regenerates + reloads.
+func (s *Server) handleAPISlotCachePut(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAutogen(w, r) {
+		return
+	}
+	var body slotCacheDTO
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		shared.SendResponse(w, r, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if body.MinSaveTokens < 0 || body.MaxDiskGB < 0 || body.MaxSessions < 0 {
+		shared.SendResponse(w, r, http.StatusBadRequest, "minSaveTokens, maxDiskGB, maxSessions must be >= 0")
+		return
+	}
+	err := autogen.UpsertSidecarSlotCache(s.autogen.GeneratePath, autogen.SlotCacheSettings{
+		Enable:        body.Enable,
+		Path:          strings.TrimSpace(body.Path),
+		MinSaveTokens: body.MinSaveTokens,
+		MaxDiskGB:     body.MaxDiskGB,
+		MaxSessions:   body.MaxSessions,
+	})
+	if err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !s.regenAndReload(w, r) {
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 // handleAPISettingsRootPick opens the host's native folder dialog and, when the
@@ -752,6 +833,7 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.Aliases = body.Aliases
 	ov.Unlisted = body.Unlisted
 	ov.Skip = body.Skip
+	ov.SlotCache = body.SlotCache
 	ov.CtxVariants = body.CtxVariants
 	ov.CtxCheckpoints = body.CtxCheckpoints
 	ov.PreserveThinking = body.PreserveThinking

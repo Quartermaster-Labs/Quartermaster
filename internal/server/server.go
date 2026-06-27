@@ -28,10 +28,12 @@ type Server struct {
 	proxylog    *logmon.Monitor
 	upstreamlog *logmon.Monitor
 
-	perf     *perf.Monitor
-	inflight *inflightCounter
-	metrics  *metricsMonitor
-	build    BuildInfo
+	perf           *perf.Monitor
+	inflight       *inflightCounter
+	metrics        *metricsMonitor
+	backendMetrics *backendMetricsMonitor
+	slotCache      *slotCache
+	build          BuildInfo
 
 	local router.LocalRouter
 	peer  router.Router
@@ -48,6 +50,11 @@ type Server struct {
 	// override editor + variant creation). nil when the server was not started
 	// with -generate. See configapi.go.
 	autogen *AutogenAdmin
+
+	// playground, when set, enables the standalone playground app (separate
+	// port, per-user login + chat history). nil unless -playground-port is set.
+	// See playground.go.
+	playground *Playground
 
 	shutdownCtx  context.Context
 	shutdownFn   context.CancelFunc
@@ -144,9 +151,29 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		shutdownCtx:    shutdownCtx,
 		shutdownFn:     shutdownFn,
 	}
+	s.backendMetrics = newBackendMetricsMonitor(s.runningProxies, proxylog)
+	go s.backendMetrics.run(s.shutdownCtx)
+	slotParticipates := func(id string) bool {
+		mc, ok := cfg.Models[id]
+		return ok && strings.Contains(mc.Cmd, "--slot-save-path")
+	}
+	s.slotCache = newSlotCache(cfg.SlotCache, s.runningProxies, slotParticipates, proxylog)
 	s.routes()
 	s.startPreload()
 	return s, nil
+}
+
+// runningProxies maps each running local model to its resolved upstream base
+// URL (cfg.Models[id].Proxy has ${PORT} already substituted at config load).
+func (s *Server) runningProxies() map[string]string {
+	running := s.local.RunningModels()
+	out := make(map[string]string, len(running))
+	for id := range running {
+		if mc, ok := s.cfg.Models[id]; ok && mc.Proxy != "" {
+			out[id] = mc.Proxy
+		}
+	}
+	return out
 }
 
 // localPeerHandler dispatches a model-routed request to the local or peer
@@ -206,6 +233,7 @@ func (s *Server) routes() {
 		CreateFormFilterMiddleware(s.cfg),
 		CreateInflightMiddleware(s.inflight),
 		CreateMetricsMiddleware(s.metrics, s.cfg),
+		s.slotCache.middleware,
 	)
 	// API keys gate the external inference API only — they let other apps reach
 	// the models. The local dashboard / admin / SSE endpoints stay open (apiChain
@@ -258,10 +286,23 @@ func (s *Server) routes() {
 	mux.Handle("POST /api/models/unload/{model...}", apiChain.ThenFunc(s.handleAPIUnloadModel))
 	mux.Handle("GET /api/events", apiChain.ThenFunc(s.handleAPIEvents))
 	mux.Handle("GET /api/metrics", apiChain.ThenFunc(s.handleAPIMetrics))
+	mux.Handle("GET /api/backend-metrics", apiChain.ThenFunc(s.handleAPIBackendMetrics))
 	mux.Handle("GET /api/performance", apiChain.ThenFunc(s.handleAPIPerformance))
 	mux.Handle("GET /api/version", apiChain.ThenFunc(s.handleAPIVersion))
 	mux.Handle("GET /api/captures/{id}", apiChain.ThenFunc(s.handleAPICapture))
 	mux.Handle("GET /api/websearch", apiChain.ThenFunc(s.handleAPIWebSearch))
+
+	// Standalone playground (separate port): which app to render + not-serious
+	// per-user login & chat history. /api/mode is always safe; the rest 501/401
+	// when the playground is disabled or the caller isn't logged in.
+	mux.Handle("GET /api/mode", apiChain.ThenFunc(s.handlePlaygroundMode))
+	mux.Handle("POST /auth/login", apiChain.ThenFunc(s.handlePlaygroundLogin))
+	mux.Handle("POST /auth/logout", apiChain.ThenFunc(s.handlePlaygroundLogout))
+	mux.Handle("GET /auth/me", apiChain.ThenFunc(s.handlePlaygroundMe))
+	mux.Handle("GET /api/chats", apiChain.ThenFunc(s.handlePlaygroundChats))
+	mux.Handle("PUT /api/chats", apiChain.ThenFunc(s.handlePlaygroundChats))
+	mux.Handle("GET /api/prefs", apiChain.ThenFunc(s.handlePlaygroundPrefs))
+	mux.Handle("PUT /api/prefs", apiChain.ThenFunc(s.handlePlaygroundPrefs))
 
 	// Per-model config editor (cogwheel) — read launch params + effective
 	// override, save curated overrides, reset to autogen default, add named
@@ -278,9 +319,13 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/settings", apiChain.ThenFunc(s.handleAPISettingsGet))
 	mux.Handle("PUT /api/settings", apiChain.ThenFunc(s.handleAPISettingsPut))
 	mux.Handle("DELETE /api/settings", apiChain.ThenFunc(s.handleAPISettingsDelete))
+	mux.Handle("PUT /api/settings/slotcache", apiChain.ThenFunc(s.handleAPISlotCachePut))
 	// Per-category scan folder (Models tab folder icon) — opens the host's native
 	// folder dialog, then sets settings.categoryRoots[category].
 	mux.Handle("POST /api/settings/root/pick", apiChain.ThenFunc(s.handleAPISettingsRootPick))
+	// Generic native folder dialog that returns the chosen path without persisting
+	// (slot-cache directory field binds it, then saves on demand).
+	mux.Handle("POST /api/pick-folder", apiChain.ThenFunc(s.handleAPIPickFolder))
 
 	// Fleet-wide default variants (e.g. game) — surfaced per-model in the editor
 	// but saved globally to settings.defaultVariants.

@@ -9,6 +9,7 @@ import type {
   ReqRespCapture,
   InFlightStats,
   LiveTokens,
+  BackendMetrics,
   PerformanceResponse,
   ApiKey,
 } from "../lib/types";
@@ -24,6 +25,9 @@ export const metrics = writable<ActivityLogEntry[]>([]);
 export const inFlightRequests = writable<number>(0);
 // Live generation progress for the in-flight streaming request (null when idle).
 export const liveTokens = writable<LiveTokens | null>(null);
+// Per-running-backend live state scraped from llama-server /metrics + /props,
+// keyed by model id (KV-cache fill, slot/queue saturation, throughput totals).
+export const backendMetrics = writable<Record<string, BackendMetrics>>({});
 export const versionInfo = writable<VersionInfo>({
   build_date: "unknown",
   commit: "unknown",
@@ -46,6 +50,7 @@ export function enableAPIEvents(enabled: boolean): void {
     metrics.set([]);
     inFlightRequests.set(0);
     liveTokens.set(null);
+    backendMetrics.set({});
     return;
   }
 
@@ -65,6 +70,7 @@ export function enableAPIEvents(enabled: boolean): void {
       metrics.set([]);
       inFlightRequests.set(0);
       liveTokens.set(null);
+      backendMetrics.set({});
       models.set([]);
       retryCount = 0;
       connectionState.set("connected");
@@ -112,6 +118,11 @@ export function enableAPIEvents(enabled: boolean): void {
           }
           case "liveTokens": {
             liveTokens.set(JSON.parse(message.data) as LiveTokens);
+            break;
+          }
+          case "backendMetrics": {
+            const snapshot = JSON.parse(message.data) as BackendMetrics[];
+            backendMetrics.set(Object.fromEntries(snapshot.map((m) => [m.model, m])));
             break;
           }
         }
@@ -232,6 +243,7 @@ export interface ModelVariant {
   unlisted?: boolean;
   aliases?: string[];
   preserveThinking?: boolean | null; // null/undefined => on (Qwen3.6 default)
+  slotCache?: boolean | null; // null/undefined => inherit model-wide; true/false explicit
   // Engine knobs (variant carries the full launch shape; zero/empty => generator default).
   kvInRam?: boolean;
   cpuOffload?: number;
@@ -288,10 +300,11 @@ export interface ModelOverride {
   aliases?: string[];
   unlisted?: boolean;
   skip?: boolean;
+  slotCache?: boolean; // opt this model into on-disk slot KV persistence (needs the global toggle on)
   ctxVariants?: number[]; // per-model ctx tiers (e.g. 32768, 65536)
   ctxCheckpoints?: number | null; // model-wide --ctx-checkpoints; null/undefined => auto, 0 disables
   variants?: ModelVariant[];
-  // Dry sampler: null/undefined => on with defaults, false => disabled.
+  // Dry sampler: null/undefined => fleet default (off), true => on, false => off.
   dry?: boolean | null;
   dryMultiplier?: number; // 0/undefined => 0.8
   dryBase?: number; // 0/undefined => 1.75
@@ -495,6 +508,17 @@ export interface AppSettings {
   defaults: { targetVramGB: number; vramOverheadGB: number; maxRamGB: number };
   modelsRoot: string;
   categoryRoots: Record<string, string> | null;
+  slotCache: SlotCacheSettings;
+}
+
+// On-disk slot KV persistence knobs (dashboard slot-KV section). Zero values
+// fall back to the server defaults (30k tokens / 10 GB / 20 sessions).
+export interface SlotCacheSettings {
+  enable: boolean;
+  path: string;
+  minSaveTokens: number;
+  maxDiskGB: number;
+  maxSessions: number;
 }
 
 export async function getSettings(): Promise<AppSettings> {
@@ -520,6 +544,17 @@ export async function putSettings(p: {
   }
 }
 
+export async function putSlotCache(p: SlotCacheSettings): Promise<void> {
+  const response = await fetch("/api/settings/slotcache", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(p),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to save slot-cache settings: ${response.status} ${await response.text()}`);
+  }
+}
+
 // Opens the host's native folder dialog and sets the scan folder for one
 // category. Returns the chosen path, or null when the user cancelled (204).
 export async function pickModelsFolder(category: string): Promise<string | null> {
@@ -531,6 +566,19 @@ export async function pickModelsFolder(category: string): Promise<string | null>
   if (response.status === 204) return null;
   if (!response.ok) {
     throw new Error(`Failed to set models folder: ${response.status} ${await response.text()}`);
+  }
+  const body = (await response.json()) as { path: string };
+  return body.path;
+}
+
+// Opens the host's native folder dialog and returns the chosen path (or null
+// when cancelled). Unlike pickModelsFolder it does not persist — the caller
+// binds the path into a form field.
+export async function pickFolder(): Promise<string | null> {
+  const response = await fetch("/api/pick-folder", { method: "POST" });
+  if (response.status === 204) return null;
+  if (!response.ok) {
+    throw new Error(`Folder picker failed: ${response.status} ${await response.text()}`);
   }
   const body = (await response.json()) as { path: string };
   return body.path;

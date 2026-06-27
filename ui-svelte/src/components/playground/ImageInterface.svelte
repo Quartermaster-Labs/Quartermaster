@@ -1,6 +1,6 @@
 <script lang="ts">
   import { models, upstreamLogs } from "../../stores/api";
-  import { persistentStore } from "../../stores/persistent";
+  import { userPref } from "../../stores/prefs";
   import { generateImage } from "../../lib/imageApi";
   import { generateSdImage, generateSdImg2Img, fetchSdLoras } from "../../lib/sdApi";
   import { playgroundStores } from "../../stores/playgroundActivity";
@@ -9,33 +9,33 @@
   import { Image as ImageIcon, Send, Square, Layers, Trash2, Download, X, Type, ImagePlus, Wand2, Maximize2 } from "lucide-svelte";
   import type { ImageApiMode, ImageGenMode, SdApiLora, SdApiLoraRef, ImageStylePreset } from "../../lib/types";
 
-  const selectedModelStore = persistentStore<string>("playground-image-model", "");
-  const selectedSizeStore = persistentStore<string>("playground-image-size", "1024x1024");
-  const apiModeStore = persistentStore<ImageApiMode>("playground-image-api-mode", "openai");
+  const selectedModelStore = userPref<string>("playground-image-model", "");
+  const selectedSizeStore = userPref<string>("playground-image-size", "1024x1024");
+  const apiModeStore = userPref<ImageApiMode>("playground-image-api-mode", "sdapi");
   // txt2img | img2img. img2img drives sd-server's /sdapi/v1/img2img with a
   // source image + denoise strength, so it forces the SDAPI param set on.
-  const modeStore = persistentStore<ImageGenMode>("playground-image-mode", "txt2img");
-  const sdDenoiseStore = persistentStore<number>("playground-sdapi-denoise", 0.6);
-  const sdUpscaleStore = persistentStore<number>("playground-sdapi-upscale", 2);
+  const modeStore = userPref<ImageGenMode>("playground-image-mode", "txt2img");
+  const sdDenoiseStore = userPref<number>("playground-sdapi-denoise", 0.6);
+  const sdUpscaleStore = userPref<number>("playground-sdapi-upscale", 2);
   // Flux Kontext reference edit: send the source as ref_image (identity-preserving
   // re-pose / restyle) instead of a plain denoise. Only meaningful with a
   // Kontext-class model loaded.
-  const sdRefEditStore = persistentStore<boolean>("playground-sdapi-ref-edit", false);
+  const sdRefEditStore = userPref<boolean>("playground-sdapi-ref-edit", false);
 
   // SDAPI persistent settings
-  const sdNegativePromptStore = persistentStore<string>("playground-sdapi-negative-prompt", "");
-  const sdStepsStore = persistentStore<number>("playground-sdapi-steps", 20);
-  const sdCfgScaleStore = persistentStore<number>("playground-sdapi-cfg-scale", 7);
-  const sdSeedStore = persistentStore<number>("playground-sdapi-seed", -1);
-  const sdSamplerStore = persistentStore<string>("playground-sdapi-sampler", "");
-  const sdSchedulerStore = persistentStore<string>("playground-sdapi-scheduler", "");
-  const sdBatchSizeStore = persistentStore<number>("playground-sdapi-batch-size", 1);
+  const sdNegativePromptStore = userPref<string>("playground-sdapi-negative-prompt", "");
+  const sdStepsStore = userPref<number>("playground-sdapi-steps", 20);
+  const sdCfgScaleStore = userPref<number>("playground-sdapi-cfg-scale", 7);
+  const sdSeedStore = userPref<number>("playground-sdapi-seed", -1);
+  const sdSamplerStore = userPref<string>("playground-sdapi-sampler", "");
+  const sdSchedulerStore = userPref<string>("playground-sdapi-scheduler", "");
+  const sdBatchSizeStore = userPref<number>("playground-sdapi-batch-size", 1);
 
   // Batch / consistency settings (SDAPI only — needs per-request seed/params).
-  const styleSuffixStore = persistentStore<string>("playground-image-style-suffix", "");
-  const batchModeStore = persistentStore<boolean>("playground-image-batch-mode", false);
-  const seedModeStore = persistentStore<"random" | "fixed" | "increment">("playground-image-seed-mode", "random");
-  const presetsStore = persistentStore<ImageStylePreset[]>("playground-image-presets", []);
+  const styleSuffixStore = userPref<string>("playground-image-style-suffix", "");
+  const batchModeStore = userPref<boolean>("playground-image-batch-mode", false);
+  const seedModeStore = userPref<"random" | "fixed" | "increment">("playground-image-seed-mode", "random");
+  const presetsStore = userPref<ImageStylePreset[]>("playground-image-presets", []);
 
   let prompt = $state("");
   let sourceImage = $state<string | null>(null); // img2img source as a data URL
@@ -559,7 +559,7 @@
       <aside class="w-72 shrink-0 overflow-y-auto pretty-scroll flex flex-col gap-3 p-3 rounded-lg border border-card-border bg-surface text-[0.8125rem]">
         <div class="flex flex-col gap-1">
           <span class="text-xs uppercase tracking-wide text-txtsecondary">Model</span>
-          <ModelSelector bind:value={$selectedModelStore} placeholder="Select an image model..." disabled={isGenerating} capabilities={["image_generation", "image_to_image"]} matchAny={true} compact />
+          <ModelSelector bind:value={$selectedModelStore} placeholder="Select an image model..." disabled={isGenerating} category="image" compact />
         </div>
 
         <div class="grid grid-cols-2 gap-3">

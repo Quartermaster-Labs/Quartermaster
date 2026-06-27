@@ -6,17 +6,22 @@
   import Dashboard from "./routes/Dashboard.svelte";
   import Models from "./routes/Models.svelte";
   import Observe from "./routes/Observe.svelte";
-  import Playground from "./routes/Playground.svelte";
   import PlaygroundStub from "./routes/PlaygroundStub.svelte";
+  import PlaygroundApp from "./routes/PlaygroundApp.svelte";
   import ApiKeys from "./routes/ApiKeys.svelte";
   import { enableAPIEvents } from "./stores/api";
   import { refreshInferenceKey } from "./lib/inferenceAuth";
   import { startPerfPolling } from "./stores/perf";
   import { initScreenWidth, initSystemThemeListener, isDarkMode, appTitle, connectionState } from "./stores/theme";
   import { currentRoute } from "./stores/route";
+  import { playgroundPort } from "./stores/playgroundAuth";
 
-  // Playground keeps live state (streaming, attachments), so it is always mounted
-  // and toggled via CSS rather than routed. Everything else is a plain route.
+  // The playground is now a separate app served on its own port. /api/mode tells
+  // us which one to render: the operator dashboard or the standalone playground.
+  let mode = $state<"loading" | "dashboard" | "playground">("loading");
+
+  // Playground moved to its own port; the dashboard /test route is just a stub
+  // that points users to it (the sidebar links out directly).
   const routes = {
     "/": Dashboard,
     "/models": Models,
@@ -29,8 +34,6 @@
     "/api-keys": ApiKeys,
     "*": Dashboard,
   };
-
-  const isTest = $derived($currentRoute === "/test");
 
   function handleRouteLoaded(event: { detail: { route: string | RegExp } }) {
     const route = event.detail.route;
@@ -53,6 +56,18 @@
     refreshInferenceKey(); // auto-attach a key to Playground inference when keys are on
     const cleanupPerf = startPerfPolling();
 
+    // Decide which app this port serves.
+    (async () => {
+      try {
+        const r = await fetch("/api/mode");
+        const j = await r.json();
+        playgroundPort.set(j.playgroundPort ?? "");
+        mode = j.playground ? "playground" : "dashboard";
+      } catch {
+        mode = "dashboard";
+      }
+    })();
+
     return () => {
       cleanupScreenWidth();
       cleanupSystemTheme();
@@ -62,19 +77,22 @@
   });
 </script>
 
-<div class="flex h-screen">
-  <Sidebar />
+{#if mode === "playground"}
+  <PlaygroundApp />
+{:else if mode === "dashboard"}
+  <div class="flex h-screen">
+    <Sidebar />
 
-  <div class="flex flex-col flex-1 min-w-0">
-    <StatusRail />
+    <div class="flex flex-col flex-1 min-w-0">
+      <StatusRail />
 
-    <main class="flex-1 overflow-auto">
-      <div class="h-full p-4" class:hidden={!isTest}>
-        <Playground />
-      </div>
-      <div class="h-full p-4" class:hidden={isTest}>
-        <Router {routes} on:routeLoaded={handleRouteLoaded} />
-      </div>
-    </main>
+      <main class="flex-1 overflow-auto">
+        <div class="h-full p-4">
+          <Router {routes} on:routeLoaded={handleRouteLoaded} />
+        </div>
+      </main>
+    </div>
   </div>
-</div>
+{:else}
+  <div class="h-screen bg-background"></div>
+{/if}

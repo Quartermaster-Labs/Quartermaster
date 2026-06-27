@@ -28,6 +28,11 @@
   }
   function closeConfig(): void {
     configOpen = false;
+    // The editor saves + reloads, re-rendering launch commands. The per-member
+    // config cache is keyed by id and never expires, so drop it to force a
+    // refetch — otherwise the view-only staging card keeps showing the stale
+    // pre-edit params (e.g. spec none after switching it to draft-mtp).
+    configs = {};
   }
 
   const showUnlistedStore = persistentStore<boolean>("showUnlisted", true);

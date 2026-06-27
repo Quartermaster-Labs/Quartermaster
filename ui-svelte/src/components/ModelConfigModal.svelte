@@ -63,7 +63,7 @@
   let ub = $state<number | "">(""); // "" = auto physical batch
   // DRY sampler (Default). dryOn drives on/off; values "" => generator default
   // (0.8 / 1.75 / 3).
-  let dryOn = $state(true);
+  let dryOn = $state(false);
   let dryMultiplier = $state<number | "">("");
   let dryBase = $state<number | "">("");
   let dryAllowedLength = $state<number | "">("");
@@ -77,6 +77,9 @@
   let aliasesText = $state("");
   let unlisted = $state(false);
   let skip = $state(false);
+  // Opt this model into on-disk slot KV persistence (--slot-save-path). Only
+  // takes effect when the global slot-cache toggle (Dashboard) is also on.
+  let slotCacheOn = $state(false);
   // Model-wide --ctx-checkpoints default; null => auto (sizer/llama default),
   // explicit (incl. 0) pins it. Variants inherit this unless they set their own.
   let ctxCheckpoints = $state<number | null>(null);
@@ -397,6 +400,7 @@
       reasoningFmt: v.reasoningFmt || base.reasoningFmt || "",
       // preserve-thinking defaults on for reasoning variants; off when reasoning off.
       preserveThinking: v.reasoningFmt !== "off" && (v.preserveThinking ?? true),
+      slotCache: v.slotCache ?? base.slotCache ?? false,
       flashAttn: v.flashAttn || base.flashAttn || "",
       mmap: v.mmap || base.mmap || "",
       mlock: v.mlock ?? base.mlock ?? false,
@@ -539,7 +543,7 @@
     threads = o?.threads ? o.threads : "";
     parallel = o?.parallel ? o.parallel : "";
     ub = o?.ub ? o.ub : "";
-    dryOn = o?.dry ?? true; // null/undefined => on
+    dryOn = o?.dry ?? false; // null/undefined => off (fleet default)
     dryMultiplier = o?.dryMultiplier ? o.dryMultiplier : "";
     dryBase = o?.dryBase ? o.dryBase : "";
     dryAllowedLength = o?.dryAllowedLength ? o.dryAllowedLength : "";
@@ -552,6 +556,7 @@
     aliasesText = (o?.aliases ?? []).join(", ");
     unlisted = o?.unlisted ?? false;
     skip = o?.skip ?? false;
+    slotCacheOn = o?.slotCache ?? false;
     ctxCheckpoints = o?.ctxCheckpoints ?? null;
     variants = (o?.variants ?? []).map((v) => ({ ...v }));
     ctxTiers = (o?.ctxVariants ?? []).map((n) => blankVariant(fmtCtx(n), n));
@@ -578,6 +583,7 @@
     return {
       name, ctx, vramTargetGB: 0, kvK: "", kvV: "", spec: "", ub: 0,
       reasoningFmt: "", unlisted: false, aliases: [], ctxCheckpoints: null, dry: null, preserveThinking: null,
+      slotCache: null,
       kvInRam: false, cpuOffload: 0, flashAttn: "", mmap: "", mlock: false,
       threads: 0, parallel: 0, extraArgs: "",
       dryMultiplier: 0, dryBase: 0, dryAllowedLength: 0,
@@ -605,7 +611,7 @@
     return (
       !v.vramTargetGB && !v.kvK && !v.kvV && !v.spec && !v.ub &&
       !v.reasoningFmt && !v.unlisted && (v.aliases?.length ?? 0) === 0 &&
-      v.ctxCheckpoints == null && v.dry == null && v.preserveThinking == null && !v.kvInRam && !v.cpuOffload &&
+      v.ctxCheckpoints == null && v.dry == null && v.preserveThinking == null && v.slotCache == null && !v.kvInRam && !v.cpuOffload &&
       !v.flashAttn && !v.mmap && !v.mlock && !v.threads && !v.parallel && !v.extraArgs &&
       !v.dryMultiplier && !v.dryBase && !v.dryAllowedLength &&
       !v.specDraftNMax && !v.specDefault && !v.specNgramSizeN && !v.specNgramSizeM && !v.specNgramMinHits
@@ -748,7 +754,7 @@
       threads: threads === "" ? 0 : Number(threads),
       parallel: parallel === "" ? 0 : Number(parallel),
       ub: ub === "" ? 0 : Number(ub),
-      dry: dryOn ? null : false, // on => inherit/default-on; off => explicit false
+      dry: dryOn, // explicit on/off (fleet default is off, so on must be explicit)
       dryMultiplier: dryMultiplier === "" ? 0 : Number(dryMultiplier),
       dryBase: dryBase === "" ? 0 : Number(dryBase),
       dryAllowedLength: dryAllowedLength === "" ? 0 : Number(dryAllowedLength),
@@ -761,6 +767,7 @@
       aliases: parseAliases(aliasesText),
       unlisted,
       skip,
+      slotCache: slotCacheOn,
       ctxCheckpoints,
       // ctx tiers with nothing but a ctx stay compact ints; any with extra knobs
       // promote to named variants alongside the explicit ones.
@@ -794,7 +801,10 @@
     const o = buildOverride();
     return {
       name, ctx: 0, vramTargetGB: 0, cpuOffload: 0,
-      kvK: o.kvK ?? "", kvV: o.kvV ?? "", kvInRam: o.kvInRam ?? false, spec: o.spec ?? "",
+      // MTP models default a new variant to draft-mtp even when the model-wide
+      // spec is disabled/empty — no reason to leave speculative speed on the table.
+      kvK: o.kvK ?? "", kvV: o.kvV ?? "", kvInRam: o.kvInRam ?? false,
+      spec: config?.isMTP && (!o.spec || o.spec === "none") ? "draft-mtp" : (o.spec ?? ""),
       reasoningFmt: o.reasoningFmt ?? "",
       preserveThinking: o.preserveThinking ? null : false,
       flashAttn: o.flashAttn ?? "", mmap: o.mmap ?? "", mlock: o.mlock ?? false,
@@ -865,6 +875,14 @@
   function setVDry(val: string) {
     if (selectedV) selectedV.dry = val === "inherit" ? null : val === "on";
   }
+  // Variant slot-cache: null/undefined => inherit the model-wide flag; else explicit.
+  function vSlotCacheValue(): string {
+    if (!selectedV || selectedV.slotCache == null) return "inherit";
+    return selectedV.slotCache ? "on" : "off";
+  }
+  function setVSlotCache(val: string) {
+    if (selectedV) selectedV.slotCache = val === "inherit" ? null : val === "on";
+  }
   // Renaming the selected variant must move the selection pointer with it so the
   // derived `selectedV` keeps resolving to the same array element.
   function renameSelectedVariant(e: Event) {
@@ -876,6 +894,12 @@
   }
   function setVAliases(e: Event) {
     if (selectedV) selectedV.aliases = parseAliases((e.currentTarget as HTMLInputElement).value);
+  }
+
+  // A variant's "inherit by zero" number field: show blank for 0 so the
+  // placeholder (the inherited value) surfaces instead of a literal "0".
+  function vnum(n: number | null | undefined): string {
+    return n ? String(n) : "";
   }
 
   async function save() {
@@ -1510,7 +1534,7 @@
             <span class="text-txtsecondary flex items-center gap-1">
               <input type="checkbox" bind:checked={dryOn} />
               DRY sampler
-              {@render hint("--dry-* repetition penalty. On by default. Multiplier / base / allowed-length: empty = 0.8 / 1.75 / 3.")}
+              {@render hint("--dry-* repetition penalty. Off by default. Multiplier / base / allowed-length: empty = 0.8 / 1.75 / 3.")}
             </span>
             {#if dryOn}
               <div class="flex items-end gap-2">
@@ -1634,6 +1658,13 @@
                 {@render hint("Exclude this model from the generated config entirely.")}
               </span>
             </label>
+            <label class="flex items-center gap-2 text-sm">
+              <input type="checkbox" bind:checked={slotCacheOn} />
+              <span class="text-txtsecondary flex items-center gap-1">
+                Save KV cache to disk
+                {@render hint("Persist this conversation's KV cache to disk so a long chat survives being evicted from the slot, and is restored instead of reprocessed. Needs the global slot-cache toggle on (Dashboard).")}
+              </span>
+            </label>
           </div>
         </div>
 
@@ -1747,7 +1778,7 @@
                   Draft n-max
                   {@render hint("--spec-draft-n-max for this variant. Empty / 0 = inherit (2).")}
                 </span>
-                <input type="number" min="0" step="1" bind:value={sv.specDraftNMax} use:wheelAdjust class="cfg-input" placeholder="inherit" />
+                <input type="number" min="0" step="1" value={vnum(sv.specDraftNMax)} oninput={(e) => (sv.specDraftNMax = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input" placeholder="inherit (2)" />
               </label>
             {/if}
             {#if vEffSpecs.includes("ngram-map-k4v")}
@@ -1757,8 +1788,8 @@
                   {@render hint("--spec-ngram-map-k4v-size-n / -size-m for this variant. Empty / 0 = inherit.")}
                 </span>
                 <div class="flex items-end gap-2">
-                  <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">size-n<input type="number" min="0" step="1" bind:value={sv.specNgramSizeN} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="n" /></span>
-                  <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">size-m<input type="number" min="0" step="1" bind:value={sv.specNgramSizeM} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="m" /></span>
+                  <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">size-n<input type="number" min="0" step="1" value={vnum(sv.specNgramSizeN)} oninput={(e) => (sv.specNgramSizeN = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="inherit" /></span>
+                  <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">size-m<input type="number" min="0" step="1" value={vnum(sv.specNgramSizeM)} oninput={(e) => (sv.specNgramSizeM = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="inherit" /></span>
                 </div>
               </label>
               <label class="flex flex-col gap-1 text-sm">
@@ -1766,7 +1797,7 @@
                   ngram min-hits
                   {@render hint("--spec-ngram-map-k4v-min-hits for this variant. Empty / 0 = inherit.")}
                 </span>
-                <input type="number" min="0" step="1" bind:value={sv.specNgramMinHits} use:wheelAdjust class="cfg-input" placeholder="inherit" />
+                <input type="number" min="0" step="1" value={vnum(sv.specNgramMinHits)} oninput={(e) => (sv.specNgramMinHits = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input" placeholder="inherit" />
               </label>
               <label class="flex items-center gap-2 text-sm self-end">
                 <input type="checkbox" bind:checked={sv.specDefault} />
@@ -1781,7 +1812,7 @@
                 Batch size
                 {@render hint("-ub/-b physical batch for this variant. Empty / 0 = inherit.")}
               </span>
-              <input type="number" min="0" step="64" bind:value={sv.ub} use:wheelAdjust class="cfg-input" placeholder="inherit" />
+              <input type="number" min="0" step="64" value={vnum(sv.ub)} oninput={(e) => (sv.ub = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input" placeholder={ub === "" ? "inherit (auto)" : `inherit (${ub})`} />
             </label>
 
             <label class="flex flex-col gap-1 text-sm">
@@ -1789,14 +1820,14 @@
                 Threads
                 {@render hint("-t. CPU threads for this variant. Empty / 0 = inherit.")}
               </span>
-              <input type="number" min="0" step="1" bind:value={sv.threads} use:wheelAdjust class="cfg-input" placeholder="inherit" />
+              <input type="number" min="0" step="1" value={vnum(sv.threads)} oninput={(e) => (sv.threads = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input" placeholder={threads === "" ? "inherit (global)" : `inherit (${threads})`} />
             </label>
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-txtsecondary flex items-center gap-1">
                 Parallel slots
                 {@render hint("--parallel concurrent request slots for this variant. Empty / 0 = inherit (1).")}
               </span>
-              <input type="number" min="0" step="1" bind:value={sv.parallel} use:wheelAdjust class="cfg-input" placeholder="inherit" />
+              <input type="number" min="0" step="1" value={vnum(sv.parallel)} oninput={(e) => (sv.parallel = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input" placeholder={parallel === "" ? "inherit (1)" : `inherit (${parallel})`} />
             </label>
 
             <label class="flex flex-col gap-1 text-sm">
@@ -1819,15 +1850,15 @@
                 {@render hint("DRY repetition penalty. Inherit = model default (on). Off disables it for this variant (the judge variant turns it off).")}
               </span>
               <select value={vDryValue()} onchange={(e) => setVDry((e.currentTarget as HTMLSelectElement).value)} class="cfg-input">
-                <option value="inherit">inherit (on)</option>
+                <option value="inherit">inherit (off)</option>
                 <option value="on">on</option>
                 <option value="off">off</option>
               </select>
               {#if vDryValue() !== "off"}
                 <div class="flex items-end gap-2">
-                  <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">multiplier<input type="number" min="0" step="0.05" bind:value={sv.dryMultiplier} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="0.8" /></span>
-                  <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">base<input type="number" min="0" step="0.05" bind:value={sv.dryBase} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="1.75" /></span>
-                  <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">allowed-len<input type="number" min="0" step="1" bind:value={sv.dryAllowedLength} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="3" /></span>
+                  <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">multiplier<input type="number" min="0" step="0.05" value={vnum(sv.dryMultiplier)} oninput={(e) => (sv.dryMultiplier = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="0.8" /></span>
+                  <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">base<input type="number" min="0" step="0.05" value={vnum(sv.dryBase)} oninput={(e) => (sv.dryBase = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="1.75" /></span>
+                  <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">allowed-len<input type="number" min="0" step="1" value={vnum(sv.dryAllowedLength)} oninput={(e) => (sv.dryAllowedLength = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="3" /></span>
                 </div>
               {/if}
             </label>
@@ -1893,6 +1924,17 @@
                   Unlisted
                   {@render hint("Hide this variant from /v1/models, but keep it loadable by exact id.")}
                 </span>
+              </label>
+              <label class="flex items-center gap-2 text-sm col-span-2">
+                <span class="text-txtsecondary flex items-center gap-1 shrink-0">
+                  Save KV cache to disk
+                  {@render hint("Persist this variant's KV cache to disk so a long chat survives slot eviction and is restored instead of reprocessed. inherit = use the Default tab's setting. Needs the global slot-cache toggle on (Dashboard).")}
+                </span>
+                <select value={vSlotCacheValue()} onchange={(e) => setVSlotCache((e.currentTarget as HTMLSelectElement).value)} class="cfg-input ml-auto">
+                  <option value="inherit">inherit</option>
+                  <option value="on">on</option>
+                  <option value="off">off</option>
+                </select>
               </label>
             </div>
           </div>

@@ -12,11 +12,13 @@ import (
 )
 
 // apiKeyDTO is the JSON shape of one managed API key. Models empty => the key
-// has full access (and admin rights over the management endpoints).
+// has full access (and admin rights over the management endpoints). Builtin
+// marks the auto-managed Playground key the UI hides from its key list.
 type apiKeyDTO struct {
-	Name   string   `json:"name"`
-	Key    string   `json:"key"`
-	Models []string `json:"models"`
+	Name    string   `json:"name"`
+	Key     string   `json:"key"`
+	Models  []string `json:"models"`
+	Builtin bool     `json:"builtin,omitempty"`
 }
 
 // generateAPIKey mints a random secret of the form "qm-<48 hex chars>".
@@ -34,14 +36,24 @@ func (s *Server) handleAPIKeysGet(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAutogen(w, r) {
 		return
 	}
-	keys, err := autogen.LoadSidecarAPIKeys(s.autogen.GeneratePath)
+	keys, changed, err := autogen.EnsureSidecarPlaygroundKey(s.autogen.GeneratePath)
 	if err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// A reconciled key set only takes effect once the config is rebuilt so auth
+	// accepts (or stops accepting) the Playground key.
+	if changed && !s.regenAndReload(w, r) {
+		return
+	}
 	out := make([]apiKeyDTO, 0, len(keys))
 	for _, k := range keys {
-		out = append(out, apiKeyDTO{Name: k.Name, Key: k.Key, Models: k.Models})
+		out = append(out, apiKeyDTO{
+			Name:    k.Name,
+			Key:     k.Key,
+			Models:  k.Models,
+			Builtin: strings.EqualFold(k.Name, autogen.BuiltinPlaygroundKeyName),
+		})
 	}
 	writeJSON(w, out)
 }
@@ -62,6 +74,10 @@ func (s *Server) handleAPIKeyUpsert(w http.ResponseWriter, r *http.Request) {
 	body.Name = strings.TrimSpace(body.Name)
 	if body.Name == "" {
 		shared.SendResponse(w, r, http.StatusBadRequest, "key name is required")
+		return
+	}
+	if strings.EqualFold(body.Name, autogen.BuiltinPlaygroundKeyName) {
+		shared.SendResponse(w, r, http.StatusBadRequest, "that key name is reserved")
 		return
 	}
 
@@ -90,6 +106,12 @@ func (s *Server) handleAPIKeyUpsert(w http.ResponseWriter, r *http.Request) {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Add/drop the built-in Playground key as needed (e.g. first scoped key added,
+	// or a full-access key now makes it redundant) before the single reload.
+	if _, _, err := autogen.EnsureSidecarPlaygroundKey(s.autogen.GeneratePath); err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if !s.regenAndReload(w, r) {
 		return
 	}
@@ -106,6 +128,10 @@ func (s *Server) handleAPIKeyDelete(w http.ResponseWriter, r *http.Request) {
 		shared.SendResponse(w, r, http.StatusBadRequest, "key name is required")
 		return
 	}
+	if strings.EqualFold(name, autogen.BuiltinPlaygroundKeyName) {
+		shared.SendResponse(w, r, http.StatusBadRequest, "that key is managed automatically")
+		return
+	}
 	removed, err := autogen.DeleteSidecarAPIKey(s.autogen.GeneratePath, name)
 	if err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
@@ -113,6 +139,12 @@ func (s *Server) handleAPIKeyDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	if !removed {
 		shared.SendResponse(w, r, http.StatusNotFound, "key not found")
+		return
+	}
+	// Drop the built-in Playground key once the last user key is gone (so auth
+	// turns off), or reconcile it otherwise, before the single reload.
+	if _, _, err := autogen.EnsureSidecarPlaygroundKey(s.autogen.GeneratePath); err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if !s.regenAndReload(w, r) {
