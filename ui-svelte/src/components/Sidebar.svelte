@@ -86,7 +86,7 @@
   </div>
 
   <!-- Flat page list, no section headers -->
-  <nav class="flex-1 overflow-y-auto py-2">
+  <nav class="flex-1 overflow-y-auto py-2 pretty-scroll">
     {#each pages as p (p.path)}
       {@const active = isActive(p.path, $currentRoute)}
       {#if p.children}

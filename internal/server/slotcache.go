@@ -242,7 +242,10 @@ func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble st
 	}
 
 	// Restore the incoming conversation's KV so the forwarded request reuses it
-	// instead of reprefilling from scratch.
+	// instead of reprefilling from scratch. No exact file: seed this agent's
+	// system+tools preamble cache (minting it on first sight) so a brand-new
+	// conversation on a warm model still reuses the shared prefix — the same Tier-1
+	// seed the cold path does, not just cold loads.
 	if sc.fileExists(model, key) {
 		if err := sc.restore(ctx, base, model, key); err != nil {
 			sc.log.Warnf("slotcache: restore %s/%s: %v", model, key, err)
@@ -251,6 +254,8 @@ func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble st
 			sc.record(kvEvent{Model: model, Op: "restore-hit", Key: short(key)})
 			sc.awaitConfirm[model] = "restore-hit" // expect the forwarded request to confirm reuse
 		}
+	} else if sc.ensurePreambleSeed(ctx, base, model, preamble) {
+		sc.awaitConfirm[model] = "preamble"
 	}
 	sc.occupant[model] = &occInfo{key: key, continued: continued, preamble: preamble}
 }
@@ -363,9 +368,16 @@ func (sc *slotCache) restoreOnLoad(model string) {
 // here, right after a cold load, before the triggering request is served.
 func (sc *slotCache) ensurePreambleSeed(ctx context.Context, base, model, preamble string) bool {
 	sysRaw, _ := splitPreamble(preamble)
-	// ponytail: mint only when there's a real system prompt. A tools-only preamble
-	// needs a user turn to render and isn't worth the chat-template edge cases.
+	// ponytail: mint only when there's a real system prompt and the preamble is big
+	// enough to be worth a synth prefill + disk file. A tools-only preamble needs a
+	// user turn to render and isn't worth the chat-template edge cases.
 	// Upgrade path: synthesize a dummy user turn if a tools-only agent needs seeding.
+	//
+	// ponytail: synthPrefill mints via /v1/chat/completions (OpenAI template). A harness
+	// served through a different upstream template (Anthropic-native /v1/messages) may
+	// tokenize the preamble differently, so the restored KV won't prefix-match — visible
+	// as a confirm-miss in the KV Cache tab, no correctness harm. Upgrade path: mint via
+	// the same endpoint the request used if that mismatch shows up in practice.
 	if sysRaw == "" || len(preamble) < seedMinPrefixBytes {
 		return false
 	}
@@ -389,6 +401,7 @@ func (sc *slotCache) ensurePreambleSeed(ctx context.Context, base, model, preamb
 		sc.record(kvEvent{Model: model, Op: "error", Key: short(hash), Detail: "preamble-save"})
 		return false
 	}
+	sc.dropStalePreambles(model, pkey, preamble) // delete this agent's prior date-bumped generations
 	sc.prunePreambleFiles(model)
 	var bytes int64
 	if fi, err := os.Stat(filepath.Join(sc.dir, fileName(model, pkey))); err == nil {
@@ -565,7 +578,10 @@ func (sc *slotCache) save(ctx context.Context, base, model, key, preamble string
 	// match future cold requests against it. Best-effort: a missing .meta just makes
 	// this file ineligible as a seed, never breaks restore.
 	if preamble != "" {
-		if len(preamble) > metaMaxBytes {
+		// Preamble caches store the FULL preamble so supersedesPreamble can match the
+		// real suffix (a truncated tail breaks the daily-refresh detector). Per-
+		// conversation seeds only need a prefix, so they stay capped.
+		if len(preamble) > metaMaxBytes && !isPreambleKey(key) {
 			preamble = preamble[:metaMaxBytes]
 		}
 		_ = os.WriteFile(filepath.Join(sc.dir, metaName(model, key)), []byte(preamble), 0o644)
@@ -700,6 +716,65 @@ func commonPrefixLen(a, b string) int {
 		i++
 	}
 	return i
+}
+
+// commonSuffixLen returns the number of trailing bytes a and b share.
+func commonSuffixLen(a, b string) int {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	i := 0
+	for i < n && a[len(a)-1-i] == b[len(b)-1-i] {
+		i++
+	}
+	return i
+}
+
+// preambleDynDeltaMax bounds the "small dynamic bits" (a date, a session id) that
+// may differ between two generations of the SAME agent's preamble. A larger middle
+// diff means a genuinely different agent, not a daily refresh of the same one.
+const preambleDynDeltaMax = 512
+
+// supersedesPreamble reports whether new and old are the same preamble apart from
+// one short dynamic span — a shared prefix and suffix bracketing a tiny middle
+// diff on both sides. True => old is a stale generation of new's agent, safe to
+// drop. Requires the diff to be small on BOTH sides so a different agent that
+// merely shares identical tools (long common suffix) isn't mistaken for a refresh.
+func supersedesPreamble(new, old string) bool {
+	lcp := commonPrefixLen(new, old)
+	lcs := commonSuffixLen(new[lcp:], old[lcp:]) // beyond the shared prefix, no overlap
+	return len(new)-lcp-lcs <= preambleDynDeltaMax && len(old)-lcp-lcs <= preambleDynDeltaMax
+}
+
+// dropStalePreambles deletes prior preamble caches for the model that are the same
+// agent's preamble as `preamble` apart from a small dynamic span (supersedesPreamble)
+// — e.g. yesterday's date-stamped generation once today's is minted. keepKey is the
+// just-minted file, never a target. Backstop: prunePreambleFiles still caps the rest.
+func (sc *slotCache) dropStalePreambles(model, keepKey, preamble string) {
+	entries, err := os.ReadDir(sc.dir)
+	if err != nil {
+		return
+	}
+	prefix := sanitize(model) + "__"
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".meta") || !strings.HasPrefix(name, prefix+preambleKeyPrefix) {
+			continue
+		}
+		key := strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".meta")
+		if key == keepKey {
+			continue
+		}
+		stored, err := os.ReadFile(filepath.Join(sc.dir, name))
+		if err != nil {
+			continue
+		}
+		if supersedesPreamble(preamble, string(stored)) {
+			_ = os.Remove(filepath.Join(sc.dir, fileName(model, key)))
+			_ = os.Remove(filepath.Join(sc.dir, name))
+		}
+	}
 }
 
 // bestSeed finds the saved session for `model` whose stored preamble shares the
@@ -956,6 +1031,12 @@ func sessionAnchor(r *http.Request) (key string, preamble string, continued bool
 	}
 	if userTurns == 0 {
 		return "", "", false, false
+	}
+	// Anthropic /v1/messages carries the system prompt in a top-level "system" field
+	// (string or content-block array), not a system-role message — fall back to it so
+	// non-OpenAI harnesses get a preamble cache too.
+	if sys == "" {
+		sys = gjson.GetBytes(body, "system").Raw
 	}
 	// preamble = the stable leading prefix shared across turns and across distinct
 	// chats from the same agent: system/developer content + the tool definitions.

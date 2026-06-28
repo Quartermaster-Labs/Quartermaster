@@ -23,6 +23,8 @@ Owns the HTTP layer: it builds the mux, applies cross-cutting middleware (auth, 
 | `metrics.go` | `metricsMonitor` (token-usage parsing, bounded ring buffer, capture storage) and `responseBodyCopier` (tees upstream response for metrics while streaming to client). |
 | `metrics_middleware.go` | Middleware that resolves the model, buffers request body/headers for capture, restricts `Accept-Encoding`, tees the response, and records metrics after dispatch. |
 | `ui.go` | Embedded SPA serving from `ui_dist` (`//go:embed`), pre-compressed (br/gzip) file selection, SPA index.html fallback, favicon. |
+| `slotcache.go` | Fork: slot KV-cache persistence — saves a llama-server slot's KV to disk so an expensive conversation survives eviction, and seeds cold/warm loads from a per-agent system+tools **preamble cache**. See "Slot KV cache" below. |
+| `kvcacheapi.go` | `GET /api/kvcache` — the monitoring snapshot (counters, recent events, on-disk files) for the Observe → KV Cache tab. |
 
 ## Important types & functions
 
@@ -73,6 +75,112 @@ API / operations / UI:
 - **Access-log skips.** `/wol-health`, `/api/performance`, `/metrics` are excluded from the access log to avoid drowning it in poll traffic. Path is captured before `next` runs because `/upstream` rewrites the URL in place.
 - **Versionless routes.** `/v/...` paths are rewritten to `/...` by `stripVersionPrefix` before forwarding (issue #728).
 - **Family / group tagging (fork).** `modelFamily` keys models by their gguf path so the UI can collapse ctx/game/judge variants; `modelStatus` additionally tags each model with its swap group and the listener addresses exposing it.
+
+## Slot KV cache (fork — `slotcache.go`)
+
+Persists a llama-server **slot's KV** to disk so an expensive prefill isn't thrown
+away when the single live slot is reused. llama-server has **one slot (`/slots/0`)**;
+any new request can evict the resident conversation. This subsystem snapshots the KV
+before it's lost and restores it (instead of reprefilling) when that conversation —
+or one sharing its preamble — returns.
+
+**When it's active.** Two gates: `cfg.SlotCache.Enable` (global, with `dir`/
+`minSaveTokens`/`maxDiskGB`/`maxSessions` knobs) **and** the per-model
+`participates(model)` check — true only when the model's generated cmd carries
+`--slot-save-path` (the per-model checkbox). A non-participating model is left
+completely alone. Disabled cache = branchless no-op middleware.
+
+**Wiring.** `slotCache.middleware` sits in the model-dispatch chain. Cross-swap
+persistence also needs two router process hooks: **pre-stop → `saveOnEvict`** (snapshot
+before the process dies) and **post-start → `restoreOnLoad`** (restore once the new
+process is Ready, before the triggering request is served). Without those hooks the
+cold path is dead — if preamble/conversation restore never fires, check they're called.
+
+### Two file categories
+
+1. **Conversation snapshots** — `model__<key>.bin` (+ `.meta` preamble sidecar). One
+   per ongoing chat. Keyed by `sessionAnchor`: the `X-Conversation-Id` header if the
+   client sends one (preferred — survives compaction, no opening collisions), else
+   `sha256(firstSystem + firstUser)`. Bounded by an LRU budget (`enforceCaps`).
+2. **Preamble caches** — `model__preamble_<hash>.bin`. A **new category**: one
+   system+tools-only KV per `(model, preamble)`, i.e. per agent/environment (pi,
+   playground chat, any OpenAI-chat-schema or Anthropic `/v1/messages` harness). Seeds
+   *every* cold/warm load that shares that preamble, so a brand-new conversation reuses
+   the static prefix instead of reprefilling it. `hash = sha256("preamble\x00"+preamble)[:16]`;
+   `preamble = system + "\x00tools\x00" + toolsJSON`. Differentiation is **purely
+   content** — nothing knows which harness sent it; identical bytes share one file.
+
+### Save path (conversation snapshots)
+
+- **WARM** (`onSwitch`, model already loaded): a new conversation arrives → save the
+  outgoing one if worth it, restore the incoming one if on disk.
+- **COLD** (`saveOnEvict`): evicting model A to load B kills A's process with no A
+  request to trigger a save — the pre-stop hook snapshots it.
+
+"Worth saving" = **both** `continued` (the *human* sent ≥2 user messages — counts user
+turns, not assistant/tool turns, so an agentic one-shot `-p` run isn't mistaken for a
+chat) **and** live KV ≥ `minSaveTokens`. `saveOnEvict` drops the turn-count gate (an
+expensive run is worth saving regardless).
+
+### Restore / seed path (preamble caches + Tier-1)
+
+On a load with no exact conversation file, both warm (`onSwitch`) and cold
+(`restoreOnLoad`) try, in order:
+
+1. **`ensurePreambleSeed`** — if this agent's `preamble_<hash>.bin` exists, restore it
+   (`preamble-hit`). Else **mint** it: `synthPrefill` POSTs a system+tools-only
+   `max_tokens:1` chat (llama-server can only save the *whole* live slot, so a clean
+   preamble-only KV needs a synthetic prefill while the slot is safe to clobber), then
+   save the resident KV as the preamble cache (`preamble-mint`). Gated on a non-empty
+   system prompt **and** `len(preamble) ≥ seedMinPrefixBytes` (2 KB).
+2. **`bestSeed`** (Tier-1 fallback) — restore the prior conversation whose `.meta`
+   preamble shares the longest leading prefix ≥2 KB. Handles preambles too short/
+   system-less to mint a clean preamble cache.
+
+After any restore, `awaitConfirm[model]` is set; the **next** request's upstream
+`cached_tokens` (via `confirmReuse`, called from the metrics monitor) is the honest
+proof the KV was actually reused (`confirm` / `confirm-miss`), not just loaded.
+
+### Pruning (three mechanisms)
+
+- **`enforceCaps`** — LRU by mtime to stay within `maxDiskGB` / `maxSessions`.
+  Preamble caches are **exempt** (sticky shared seeds).
+- **`prunePreambleFiles`** — blind backstop: keep newest `maxPreambleGenerations` (3)
+  preamble files per model.
+- **`dropStalePreambles`** — on mint, delete a prior preamble whose stored preamble is
+  the **same agent apart from a small dynamic span** (`supersedesPreamble`: shared
+  prefix + shared suffix, non-matching middle ≤ `preambleDynDeltaMax` 512 B on both
+  sides). Catches a daily date bump (even mid-prompt) without nuking a different agent
+  that merely shares identical tools. Needs the full preamble in `.meta`, so preamble
+  sidecars are stored **uncapped** (conversation `.meta` stays capped at `metaMaxBytes`).
+
+### Gotchas
+
+- **Single slot.** All save/restore hit `/slots/0`. One global `sc.mu` serializes them
+  — a multi-GB save blocks other models' requests for its duration (fine for single-user
+  local inference; upgrade path = per-model locks).
+- **Cold mint template mismatch.** `synthPrefill` always mints via OpenAI
+  `/v1/chat/completions`. A harness served through a *different* upstream template
+  (Anthropic-native `/v1/messages`) may tokenize the preamble differently → restored KV
+  won't prefix-match → shows as `confirm-miss`, no correctness harm. Upgrade path: mint
+  via the request's own endpoint.
+- **Anthropic system.** `sessionAnchor` falls back to the top-level `"system"` field
+  when there's no system-role message, so `/v1/messages` harnesses still get a preamble.
+- **Stats lock.** `record()` uses a separate `statsMu` so it's callable from inside
+  `sc.mu`-held sections without reentrancy.
+- **Hybrid / SWA / recurrent models.** Some families don't use plain full attention:
+  sliding-window (Gemma), linear-hybrid (Qwen3.6-35B-A3B = Gated DeltaNet ×3 : Gated
+  Attention ×1, only ~16 of 64 layers carry KV; Qwen3-Next), recurrent (Mamba, RWKV).
+  The upstream bugs (llama.cpp #21831, #19794, #21468) are about **on-the-fly prefix-cache
+  reuse** (KV-shifting, partial token re-match) — NOT whole-state restore. Recurrent/linear
+  state must be restored *wholesale at a fixed position*, which is exactly what our
+  whole-slot snapshot does → **exact-conversation restore works fine on these models**
+  (e.g. Qwen3.6, the primary model here, hits normally). The one residual risk is the
+  **preamble-reuse + new-suffix** path (restore a preamble snapshot, append a fresh user
+  turn): on hybrid models the server may invalidate the restored state and full-reprocess
+  → shows as `confirm-miss`, no correctness harm. The KV Cache tab's confirm-hit/miss
+  ratio is the ground truth — trust it over architecture guessing. No model-type detection;
+  add a skip-mint guard only if confirm-miss waste actually shows up for a given model.
 
 ## Connections
 

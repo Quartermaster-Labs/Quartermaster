@@ -37,10 +37,14 @@ export interface VramBreakdown {
 export function estimateSegments(est: PlanEstimate, kvInRam = false): VramSegment[] {
   const kvMb = Math.max(0, (kvInRam ? 0 : est.kvReserveGB) * 1024);
   const ckptMb = Math.max(0, (kvInRam ? 0 : est.checkpointGB ?? 0) * 1024);
-  const weightsMb = Math.max(0, est.estVramGB * 1024 - kvMb - ckptMb);
+  // Draft/MTP weights are folded into estVramGB (always in VRAM), not into KV/ckpt.
+  const draftMb = Math.max(0, (est.draftGB ?? 0) * 1024);
+  const weightsMb = Math.max(0, est.estVramGB * 1024 - kvMb - ckptMb - draftMb);
   const segs: VramSegment[] = [];
   if (weightsMb > 0)
     segs.push({ label: "Weights", mb: weightsMb, class: "bg-primary", detail: "model weights + compute on GPU" });
+  if (draftMb > 0)
+    segs.push({ label: "Draft", mb: draftMb, class: "bg-secondary", detail: "speculative draft / MTP model on GPU" });
   if (kvMb > 0)
     segs.push({ label: "KV cache", mb: kvMb, class: "bg-warning", detail: `attention cache (ctx ${est.ctx})` });
   if (ckptMb > 0)
@@ -120,9 +124,10 @@ export const vramBreakdown = derived(
       const estTotalMb = $est.est.estVramGB * 1024;
       const kvEstMb = Math.max(0, $est.est.kvReserveGB * 1024);
       const ckptEstMb = Math.max(0, ($est.est.checkpointGB ?? 0) * 1024);
-      // estVramGB folds the checkpoint reserve into overhead, so subtract both
-      // KV and checkpoints to leave the true weights share.
-      const weightsEstMb = Math.max(0, estTotalMb - kvEstMb - ckptEstMb);
+      const draftEstMb = Math.max(0, ($est.est.draftGB ?? 0) * 1024);
+      // estVramGB folds the checkpoint + draft reserves into overhead, so subtract
+      // KV, checkpoints and draft to leave the true weights share.
+      const weightsEstMb = Math.max(0, estTotalMb - kvEstMb - ckptEstMb - draftEstMb);
 
       // Fit the estimated components inside the measured model slice. If the
       // measurement exceeds the estimate, the surplus is CUDA context + compute
@@ -130,17 +135,20 @@ export const vramBreakdown = derived(
       let weightsMb: number;
       let kvMb: number;
       let ckptMb: number;
+      let draftMb: number;
       let overheadMb: number;
       if (estTotalMb <= modelMb) {
         weightsMb = weightsEstMb;
         kvMb = kvEstMb;
         ckptMb = ckptEstMb;
+        draftMb = draftEstMb;
         overheadMb = modelMb - estTotalMb;
       } else {
         const scale = estTotalMb > 0 ? modelMb / estTotalMb : 0;
         weightsMb = weightsEstMb * scale;
         kvMb = kvEstMb * scale;
         ckptMb = ckptEstMb * scale;
+        draftMb = draftEstMb * scale;
         overheadMb = 0;
       }
 
@@ -148,6 +156,8 @@ export const vramBreakdown = derived(
       const segments: VramSegment[] = [systemSeg];
       if (weightsMb > 0)
         segments.push({ label: "Weights", mb: weightsMb, class: "bg-primary", detail: `${name} model weights on GPU` });
+      if (draftMb > 0)
+        segments.push({ label: "Draft", mb: draftMb, class: "bg-secondary", detail: `${name} speculative draft / MTP model on GPU` });
       if (kvMb > 0)
         segments.push({ label: "KV cache", mb: kvMb, class: "bg-warning", detail: `${name} attention cache (ctx ${$est.est.ctx})` });
       if (ckptMb > 0)

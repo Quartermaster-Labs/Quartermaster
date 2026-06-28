@@ -389,7 +389,7 @@
       <div class="text-xs font-medium text-txtsecondary mb-1">
         Models <span class="text-[10px] font-normal">— click to queue (add the same model more than once to test parallel requests)</span>
       </div>
-      <div class="flex-1 border border-card-border rounded overflow-y-auto min-h-0">
+      <div class="flex-1 border border-card-border rounded overflow-y-auto min-h-0 pretty-scroll">
         {#if !hasModels}
           <div class="p-3 text-sm text-txtsecondary text-center">No models configured.</div>
         {:else}
@@ -444,7 +444,7 @@
   </div>
 
   <!-- Right column: result panels (draggable to reorder) -->
-  <div class="flex-1 min-w-0 min-h-0 overflow-y-auto">
+  <div class="flex-1 min-w-0 min-h-0 overflow-y-auto pretty-scroll">
     {#if $testListStore.length === 0}
       <div class="h-full flex items-center justify-center px-6">
         <div class="max-w-md text-sm text-txtsecondary space-y-4">
@@ -610,7 +610,7 @@
                 ×
               </button>
             </div>
-            <div class="flex-1 min-h-0 overflow-y-auto font-mono text-xs px-2 py-1.5">
+            <div class="flex-1 min-h-0 overflow-y-auto font-mono text-xs px-2 py-1.5 pretty-scroll">
               {#if run?.loadingText}
                 <div class="bg-secondary/40 dark:bg-white/5 text-txtsecondary rounded px-2 py-1 mb-2 whitespace-pre-wrap">{run.loadingText.trim()}</div>
               {/if}

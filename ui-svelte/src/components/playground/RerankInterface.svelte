@@ -318,7 +318,7 @@
     </div>
   {:else}
     <!-- Document table -->
-    <div class="flex-1 overflow-y-auto mb-4 border border-card-border rounded">
+    <div class="flex-1 overflow-y-auto mb-4 border border-card-border rounded pretty-scroll">
       <table class="w-full border-collapse table-fixed">
         <colgroup>
           <col class="w-auto" />

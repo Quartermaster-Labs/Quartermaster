@@ -30,7 +30,7 @@
 </script>
 
 <div
-  class="flex items-center gap-4 border-b border-border bg-surface px-4 h-10 shrink-0 font-mono text-xs overflow-x-auto whitespace-nowrap"
+  class="flex items-center gap-4 border-b border-border bg-surface px-4 h-10 shrink-0 font-mono text-xs overflow-x-auto whitespace-nowrap pretty-scroll"
 >
   <!-- Loaded model(s) -->
   <div class="flex items-center gap-2 min-w-0">

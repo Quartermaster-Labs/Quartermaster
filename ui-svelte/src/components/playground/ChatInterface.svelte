@@ -195,8 +195,16 @@
     }
   });
 
+  // Set right before a programmatic scroll so the onscroll it triggers doesn't
+  // get misread as the user scrolling and clear userScrolledUp (the autoscroll fight).
+  let autoScrolling = false;
+
   function handleMessagesScroll() {
     if (!messagesContainer) return;
+    if (autoScrolling) {
+      autoScrolling = false;
+      return;
+    }
     const { scrollTop, scrollHeight, clientHeight } = messagesContainer;
     // Consider "at bottom" if within 40px of the bottom
     userScrolledUp = scrollHeight - scrollTop - clientHeight > 40;
@@ -205,10 +213,10 @@
   // Auto-scroll when messages change — skip if user scrolled up
   $effect(() => {
     if (messages.length > 0 && messagesContainer && !userScrolledUp) {
-      messagesContainer.scrollTo({
-        top: messagesContainer.scrollHeight,
-        behavior: isStreaming ? "instant" : "smooth",
-      });
+      autoScrolling = true;
+      // Instant + direct so it emits a single onscroll the guard above absorbs;
+      // smooth would fire a stream of events mid-scroll that re-trip the guard.
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
   });
 
@@ -454,13 +462,19 @@
         // Run each requested search; fold the result into the visible bubble and
         // hand the raw text back to the model via apiTail.
         isSearching = true;
+        // Offset in the assistant bubble where these searches land, so the UI
+        // renders them inline after the text written so far (not pinned to top).
+        const lastMsg = messages[messages.length - 1];
+        const at = typeof lastMsg?.content === "string" ? lastMsg.content.length : 0;
         for (const tc of toolCalls) {
           let resultText: string;
+          let sources: { title: string; url: string }[] = [];
           let query = "";
           try {
             query = JSON.parse(tc.function.arguments || "{}").query ?? "";
             const results = await searxngSearch($searxngUrlStore, query, signal);
             resultText = formatSearchResults(query, results);
+            sources = results.filter((r) => r.url).map((r) => ({ title: r.title || r.url, url: r.url }));
           } catch (e) {
             if (e instanceof Error && e.name === "AbortError") throw e;
             resultText = `Search failed: ${e instanceof Error ? e.message : String(e)}`;
@@ -468,7 +482,7 @@
           apiTail.push({ role: "tool", tool_call_id: tc.id, content: resultText });
           messages = messages.map((msg, i) =>
             i === messages.length - 1
-              ? { ...msg, searches: [...(msg.searches ?? []), { query, results: resultText }] }
+              ? { ...msg, searches: [...(msg.searches ?? []), { query, results: resultText, at, sources }] }
               : msg
           );
         }
@@ -671,23 +685,26 @@
       <p>No models configured. Add models to your configuration to start chatting.</p>
     </div>
   {:else}
-    <!-- Chat column — width-constrained and centered, like claude.ai -->
-    <div class="flex-1 flex flex-col min-w-0 min-h-0 w-full max-w-3xl mx-auto">
+    <!-- Chat column — full-width so the whole pane scrolls; the message list and
+         composer are width-constrained and centered inside. -->
+    <div class="flex-1 flex flex-col min-w-0 min-h-0 w-full">
     {#if isCompacting}
-      <div class="flex items-center gap-2 mb-2 shrink-0">
+      <div class="flex items-center gap-2 mb-2 shrink-0 w-full max-w-3xl mx-auto px-2">
         <span class="inline-flex items-center gap-1.5 text-xs text-txtsecondary">
           <span class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse"></span>
           Compacting conversation…
         </span>
       </div>
     {/if}
-    <!-- Messages area -->
+    <!-- Messages area — scrolls across the full width; content centered within. -->
     <div
-      class="flex-1 min-h-0 overflow-y-auto pretty-scroll scroll-fade-y mb-4 px-2"
+      class="flex-1 min-h-0 overflow-y-auto pretty-scroll scroll-fade-y mb-4"
       bind:this={messagesContainer}
       onscroll={handleMessagesScroll}
+      onwheel={(e) => { if (e.deltaY < 0) userScrolledUp = true; }}
       use:scrollFade
     >
+      <div class="w-full max-w-3xl mx-auto px-2">
       {#if messages.length === 0}
         <div class="h-full flex flex-col items-center justify-center gap-3 text-txtsecondary">
           <MessagesSquare class="w-10 h-10 opacity-40" strokeWidth={1.5} />
@@ -722,6 +739,7 @@
           />
         {/each}
       {/if}
+      </div>
     </div>
 
     <!-- Input area — narrower than the message column, taller composer. -->

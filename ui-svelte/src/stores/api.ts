@@ -462,6 +462,7 @@ export interface PlanEstimate {
   maxRamGB: number;
   kvReserveGB: number;
   checkpointGB: number;
+  draftGB: number;
   ramExceeded: boolean;
   isMoE: boolean;
 }

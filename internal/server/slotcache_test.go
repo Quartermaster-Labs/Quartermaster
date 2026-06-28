@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -310,6 +311,78 @@ func TestSlotCache_PreambleCache(t *testing.T) {
 	st := sc.stats()
 	if len(st.PreambleFiles) != 1 || len(st.Files) != 0 {
 		t.Fatalf("expected 1 preamble file and 0 conversation files, got %d/%d", len(st.PreambleFiles), len(st.Files))
+	}
+}
+
+// Warm path: a brand-new conversation on an already-loaded model still mints the
+// agent's preamble cache and reuses it on the next new conversation — not just
+// cold loads.
+func TestSlotCache_PreambleCache_WarmSwitch(t *testing.T) {
+	dir := t.TempDir()
+	srv := fakeBackend(t, 0, dir)
+	sc := newEvictTestCache(dir, srv.URL)
+
+	preamble := strings.Repeat("S", seedMinPrefixBytes+100) + "\x00tools\x00[]"
+
+	sc.onSwitch(context.Background(), "m", srv.URL, "conv1", preamble, true) // warm, new convo
+	if sc.counters.PreambleMints != 1 {
+		t.Fatalf("warm switch should mint preamble, got %+v", sc.counters)
+	}
+	sc.onSwitch(context.Background(), "m", srv.URL, "conv2", preamble, true) // another new convo
+	if sc.counters.PreambleHits != 1 {
+		t.Fatalf("warm switch should reuse preamble, got %+v", sc.counters)
+	}
+}
+
+// supersedesPreamble treats a small middle diff (a date) as the same agent, but
+// not a genuinely different system prompt that merely shares identical tools.
+func TestSlotCache_SupersedesPreamble(t *testing.T) {
+	body := strings.Repeat("S", 4000)
+	tools := "\x00tools\x00" + strings.Repeat("T", 4000)
+	dateA := body + "Today is 2026-06-28." + body + tools
+	dateB := body + "Today is 2026-06-29." + body + tools // same agent, date bumped
+	if !supersedesPreamble(dateB, dateA) {
+		t.Error("a date-only change must be detected as the same agent")
+	}
+
+	other := strings.Repeat("X", 8000) + tools // different system, identical tools
+	if supersedesPreamble(other, dateA) {
+		t.Error("a different system prompt sharing tools must NOT be treated as a refresh")
+	}
+}
+
+// On mint of a refreshed (date-bumped) preamble, the prior generation is deleted.
+func TestSlotCache_PreambleCache_DropsStale(t *testing.T) {
+	dir := t.TempDir()
+	srv := fakeBackend(t, 0, dir)
+	sc := newEvictTestCache(dir, srv.URL)
+
+	body := strings.Repeat("S", seedMinPrefixBytes)
+	day1 := body + "date=2026-06-28" + "\x00tools\x00[]"
+	day2 := body + "date=2026-06-29" + "\x00tools\x00[]"
+	old := fileName("m", preambleKey(preambleHash(day1)))
+
+	sc.onSwitch(context.Background(), "m", srv.URL, "c1", day1, true) // mint day1
+	if _, err := os.Stat(filepath.Join(dir, old)); err != nil {
+		t.Fatalf("day1 preamble not written: %v", err)
+	}
+	sc.onSwitch(context.Background(), "m", srv.URL, "c2", day2, true) // mint day2 -> drops day1
+	if _, err := os.Stat(filepath.Join(dir, old)); !os.IsNotExist(err) {
+		t.Errorf("stale day1 preamble should be deleted, stat err=%v", err)
+	}
+}
+
+// Anthropic /v1/messages: the system prompt lives in a top-level "system" field,
+// not a system-role message — sessionAnchor must still surface it in the preamble.
+func TestSessionAnchor_AnthropicSystem(t *testing.T) {
+	body := `{"system":"you are helpful","tools":[{"name":"x"}],"messages":[{"role":"user","content":"hi"}]}`
+	r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+	_, preamble, _, ok := sessionAnchor(r)
+	if !ok {
+		t.Fatal("expected anchor ok")
+	}
+	if !strings.Contains(preamble, "you are helpful") || !strings.Contains(preamble, `"name":"x"`) {
+		t.Errorf("anthropic system+tools not captured in preamble: %q", preamble)
 	}
 }
 

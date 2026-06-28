@@ -221,7 +221,7 @@
     <ActivityStats />
   </div>
 
-  <div class="card overflow-auto relative min-h-[30rem]">
+  <div class="card overflow-auto relative min-h-[30rem] pretty-scroll">
     <div class="flex justify-end px-4" bind:this={dropdownContainer}>
       <div class="relative">
         <button

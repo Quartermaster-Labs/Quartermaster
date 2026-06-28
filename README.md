@@ -1,7 +1,7 @@
 ![llama-quartermaster header image](docs/assets/hero3.webp)
-![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/Radu0120/llama-quartermaster/total)
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Radu0120/llama-quartermaster/go-ci.yml)
-![GitHub Repo stars](https://img.shields.io/github/stars/Radu0120/llama-quartermaster)
+![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/Quartermaster-Labs/llama-quartermaster/total)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Quartermaster-Labs/llama-quartermaster/go-ci.yml)
+![GitHub Repo stars](https://img.shields.io/github/stars/Quartermaster-Labs/llama-quartermaster)
 
 # llama-quartermaster
 
@@ -91,7 +91,7 @@ llama-quartermaster can be installed in a few ways
 2. From release binaries
 3. From source
 
-### Docker Install ([download images](https://github.com/Radu0120/llama-quartermaster/pkgs/container/llama-quartermaster))
+### Docker Install ([download images](https://github.com/Quartermaster-Labs/llama-quartermaster/pkgs/container/llama-quartermaster))
 
 The unified container bundles llama-server, ik-llama-server, stable-diffusion.cpp,
 whisper.cpp and llama-quartermaster. It is built for `cuda` and `vulkan` backends.
@@ -113,12 +113,12 @@ $ docker run -it --rm --runtime nvidia -p 9292:8080 \
 ### Release binaries
 
 Download the latest Windows build from the
-[Releases page](https://github.com/Radu0120/llama-quartermaster/releases).
+[Releases page](https://github.com/Quartermaster-Labs/llama-quartermaster/releases).
 
 ### Building from source
 
 1. Building requires Go and Node.js (for UI).
-1. `git clone https://github.com/Radu0120/llama-quartermaster.git`
+1. `git clone https://github.com/Quartermaster-Labs/llama-quartermaster.git`
 1. `make clean all`
 1. look in the `build/` subdirectory for the llama-quartermaster binary
 
@@ -222,4 +222,4 @@ For Python based inference servers like vllm or tabbyAPI it is recommended to ru
 > [!NOTE]
 > Thank you to everyone who has given this project a ⭐️!
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Radu0120/llama-quartermaster&type=Date)](https://www.star-history.com/#Radu0120/llama-quartermaster&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Quartermaster-Labs/llama-quartermaster&type=Date)](https://www.star-history.com/#Quartermaster-Labs/llama-quartermaster&Date)

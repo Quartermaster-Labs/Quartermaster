@@ -929,8 +929,12 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		}
 		lines = append(lines, fmt.Sprintf("--spec-draft-n-max %d", nmax))
 		// Separate MTP draft file (e.g. Gemma-4): baked-in MTP models need no -md.
+		// Pin the draft fully to VRAM (-ngld 99): spec decode is serial (draft
+		// proposes, main verifies each step), so a CPU-resident draft stalls the
+		// GPU main model every round and erases the speedup. DraftGB charges this.
 		if row.DraftPath != "" {
 			lines = append(lines, fmt.Sprintf("-md %s", strings.ReplaceAll(row.DraftPath, "\\", "/")))
+			lines = append(lines, "-ngld 99")
 		}
 	}
 	if specHas(spec, "ngram-map-k4v") && ov != nil {

@@ -64,7 +64,7 @@ DOCKER_IMAGE_TAG="${DOCKER_IMAGE_TAG:-llama-quartermaster:unified-${BACKEND}}"
 LLAMA_REPO="https://github.com/ggml-org/llama.cpp.git"
 WHISPER_REPO="https://github.com/ggml-org/whisper.cpp.git"
 SD_REPO="https://github.com/leejet/stable-diffusion.cpp.git"
-LQ_REPO="https://github.com/Radu0120/llama-quartermaster.git"
+LQ_REPO="https://github.com/Quartermaster-Labs/llama-quartermaster.git"
 IK_LLAMA_REPO="https://github.com/ikawrakow/ik_llama.cpp.git"
 
 # Resolve a git ref (commit hash, tag, or branch) to a full commit hash.

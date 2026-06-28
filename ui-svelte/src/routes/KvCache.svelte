@@ -49,6 +49,8 @@
     error: { cls: "text-red-500", label: "error" },
   };
 
+  let kvTab = $state<"sessions" | "preamble">("sessions");
+
   const counters = $derived(stats?.counters);
   // Confirmed reuse is the honest metric: the request after a restore actually
   // reported cached_tokens > 0 from the upstream.
@@ -63,7 +65,7 @@
   }
 </script>
 
-<div class="h-full overflow-auto p-1">
+<div class="h-full overflow-auto p-1 pretty-scroll">
   {#if !stats}
     <div class="text-txtsecondary text-sm">Loading…</div>
   {:else if !stats.enabled}
@@ -116,74 +118,93 @@
       </div>
     </div>
 
-    <!-- Preamble caches: one system+tools seed per agent/environment -->
-    {#if stats.preambleFiles?.length}
-      <div class="card p-3 mb-3">
-        <div class="text-sm font-semibold mb-2">
-          Preamble caches <span class="text-txtsecondary font-normal">· system+tools seeds, reused on cold load</span>
-        </div>
-        <div class="overflow-auto max-h-[16rem]">
-          <table class="w-full text-xs font-mono">
-            <thead class="text-txtsecondary text-left sticky top-0 bg-background">
-              <tr>
-                <th class="py-1 pr-2">Model</th>
-                <th class="py-1 pr-2">Hash</th>
-                <th class="py-1 pr-2 text-right">Size</th>
-                <th class="py-1 pr-2">Minted</th>
-                <th class="py-1">Preamble</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each stats.preambleFiles as f (f.model + f.key)}
-                <tr class="border-t border-border">
-                  <td class="py-1 pr-2">{f.model}</td>
-                  <td class="py-1 pr-2 text-txtsecondary">{f.key}</td>
-                  <td class="py-1 pr-2 text-right">{fmtBytes(f.bytes)}</td>
-                  <td class="py-1 pr-2 text-txtsecondary">{fmtTime(f.modAt)}</td>
-                  <td class="py-1 text-txtsecondary truncate max-w-[20rem]" title={f.preamble}>
-                    {f.preamble ?? ""}
-                  </td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    {/if}
-
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
-      <!-- Persisted sessions -->
+      <!-- Persisted sessions + preamble caches: two tabs of one box -->
       <div class="card p-3 min-h-0">
-        <div class="text-sm font-semibold mb-2">Persisted sessions</div>
-        {#if !stats.files?.length}
-          <div class="text-xs text-txtsecondary">No saved KV files yet.</div>
-        {:else}
-          <div class="overflow-auto max-h-[28rem]">
-            <table class="w-full text-xs font-mono">
-              <thead class="text-txtsecondary text-left sticky top-0 bg-background">
-                <tr>
-                  <th class="py-1 pr-2">Model</th>
-                  <th class="py-1 pr-2">Key</th>
-                  <th class="py-1 pr-2 text-right">Size</th>
-                  <th class="py-1 pr-2">Saved</th>
-                  <th class="py-1">Preamble</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each stats.files as f (f.model + f.key)}
-                  <tr class="border-t border-border">
-                    <td class="py-1 pr-2">{f.model}</td>
-                    <td class="py-1 pr-2 text-txtsecondary">{f.key}</td>
-                    <td class="py-1 pr-2 text-right">{fmtBytes(f.bytes)}</td>
-                    <td class="py-1 pr-2 text-txtsecondary">{fmtTime(f.modAt)}</td>
-                    <td class="py-1 text-txtsecondary truncate max-w-[16rem]" title={f.preamble}>
-                      {f.preamble ?? ""}
-                    </td>
+        <div class="flex items-center gap-1 mb-2 border-b border-border">
+          <button
+            class="px-2 py-1 text-sm font-semibold border-b-2 -mb-px transition-colors {kvTab === 'sessions'
+              ? 'border-primary text-primary'
+              : 'border-transparent text-txtsecondary hover:text-txtmain'}"
+            onclick={() => (kvTab = "sessions")}
+          >
+            Persisted sessions
+            <span class="text-txtsecondary font-normal">{stats.files?.length ?? 0}</span>
+          </button>
+          <button
+            class="px-2 py-1 text-sm font-semibold border-b-2 -mb-px transition-colors {kvTab === 'preamble'
+              ? 'border-primary text-primary'
+              : 'border-transparent text-txtsecondary hover:text-txtmain'}"
+            onclick={() => (kvTab = "preamble")}
+          >
+            Preamble caches
+            <span class="text-txtsecondary font-normal">{stats.preambleFiles?.length ?? 0}</span>
+          </button>
+        </div>
+
+        {#if kvTab === "sessions"}
+          {#if !stats.files?.length}
+            <div class="text-xs text-txtsecondary">No saved KV files yet.</div>
+          {:else}
+            <div class="overflow-auto max-h-[28rem] pretty-scroll">
+              <table class="w-full text-xs font-mono">
+                <thead class="text-txtsecondary text-left sticky top-0 bg-background">
+                  <tr>
+                    <th class="py-1 pr-2">Model</th>
+                    <th class="py-1 pr-2">Key</th>
+                    <th class="py-1 pr-2 text-right">Size</th>
+                    <th class="py-1 pr-2">Saved</th>
+                    <th class="py-1">Preamble</th>
                   </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {#each stats.files as f (f.model + f.key)}
+                    <tr class="border-t border-border">
+                      <td class="py-1 pr-2">{f.model}</td>
+                      <td class="py-1 pr-2 text-txtsecondary">{f.key}</td>
+                      <td class="py-1 pr-2 text-right">{fmtBytes(f.bytes)}</td>
+                      <td class="py-1 pr-2 text-txtsecondary">{fmtTime(f.modAt)}</td>
+                      <td class="py-1 text-txtsecondary truncate max-w-[16rem]" title={f.preamble}>
+                        {f.preamble ?? ""}
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {/if}
+        {:else}
+          <div class="text-xs text-txtsecondary mb-2">system+tools seeds, reused on cold load</div>
+          {#if !stats.preambleFiles?.length}
+            <div class="text-xs text-txtsecondary">No preamble caches yet.</div>
+          {:else}
+            <div class="overflow-auto max-h-[28rem] pretty-scroll">
+              <table class="w-full text-xs font-mono">
+                <thead class="text-txtsecondary text-left sticky top-0 bg-background">
+                  <tr>
+                    <th class="py-1 pr-2">Model</th>
+                    <th class="py-1 pr-2">Hash</th>
+                    <th class="py-1 pr-2 text-right">Size</th>
+                    <th class="py-1 pr-2">Minted</th>
+                    <th class="py-1">Preamble</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each stats.preambleFiles as f (f.model + f.key)}
+                    <tr class="border-t border-border">
+                      <td class="py-1 pr-2">{f.model}</td>
+                      <td class="py-1 pr-2 text-txtsecondary">{f.key}</td>
+                      <td class="py-1 pr-2 text-right">{fmtBytes(f.bytes)}</td>
+                      <td class="py-1 pr-2 text-txtsecondary">{fmtTime(f.modAt)}</td>
+                      <td class="py-1 text-txtsecondary truncate max-w-[16rem]" title={f.preamble}>
+                        {f.preamble ?? ""}
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {/if}
         {/if}
       </div>
 
@@ -193,7 +214,7 @@
         {#if !stats.events?.length}
           <div class="text-xs text-txtsecondary">No activity yet.</div>
         {:else}
-          <div class="overflow-auto max-h-[28rem] font-mono text-xs">
+          <div class="overflow-auto max-h-[28rem] font-mono text-xs pretty-scroll">
             {#each stats.events as e (e.time + e.op + e.key)}
               {@const s = opStyle[e.op] ?? { cls: "text-txtsecondary", label: e.op }}
               <div class="flex items-center gap-2 py-0.5 border-t border-border">

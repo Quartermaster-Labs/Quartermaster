@@ -32,8 +32,13 @@ type EstimateResult struct {
 	// EstVramGB via overhead, broken out so the UI can attribute it separately
 	// from model weights).
 	CheckpointGB float64 `json:"checkpointGB"`
-	RamExceeded  bool    `json:"ramExceeded"`
-	IsMoE        bool    `json:"isMoE"`
+	// DraftGB is the VRAM charged for the speculative draft / MTP nextn layer
+	// (baked-in ~0.34 GB or a separate draft gguf's weights + pad). Folded into
+	// EstVramGB via overhead; broken out so the UI can attribute it separately
+	// from the main model weights. 0 when no draft-mtp spec is active.
+	DraftGB     float64 `json:"draftGB"`
+	RamExceeded bool    `json:"ramExceeded"`
+	IsMoE       bool    `json:"isMoE"`
 }
 
 // EstimatePlan sizes one candidate tuning against the given settings + gguf
@@ -138,6 +143,7 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		MaxRamGB:     s.MaxRamGB,
 		KvReserveGB:  kvReserve,
 		CheckpointGB: checkpointGB,
+		DraftGB:      specOh,
 		RamExceeded:  plan.RamExceeded,
 		IsMoE:        meta.IsMoE,
 	}, nil

@@ -29,7 +29,7 @@ param(
     # args verbatim and can't evaluate $true/$false.
     [ValidateSet('true', 'false')]
     [string]$Draft = 'true',
-    [string]$Repo = 'Radu0120/llama-quartermaster',
+    [string]$Repo = 'Quartermaster-Labs/llama-quartermaster',
     [switch]$SkipUi
 )
 

@@ -1,6 +1,6 @@
 [Unit]
 Description=llama-quartermaster — all-in-one local inference engine with startup config autogen
-Documentation=https://github.com/Radu0120/llama-quartermaster
+Documentation=https://github.com/Quartermaster-Labs/llama-quartermaster
 After=network-online.target
 Wants=network-online.target
 

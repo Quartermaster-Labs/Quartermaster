@@ -209,7 +209,7 @@
         </button>
       </div>
 
-      <div class="overflow-y-auto flex-1 p-4 space-y-4">
+      <div class="overflow-y-auto flex-1 p-4 space-y-4 pretty-scroll">
         <!-- Request Headers -->
         <details class="group" open>
           <summary
@@ -218,7 +218,7 @@
             Request Headers
           </summary>
           <div
-            class="mt-2 bg-background rounded border border-card-border overflow-auto max-h-48"
+            class="mt-2 bg-background rounded border border-card-border overflow-auto max-h-48 pretty-scroll"
           >
             <table class="w-full text-sm">
               <tbody>
@@ -271,14 +271,14 @@
               </button>
             </div>
             <div
-              class="mt-1 bg-background rounded border border-card-border overflow-auto max-h-96"
+              class="mt-1 bg-background rounded border border-card-border overflow-auto max-h-96 pretty-scroll"
             >
               <pre
                 class="p-3 text-sm font-mono whitespace-pre-wrap break-all">{displayedRequestBody}</pre>
             </div>
           {:else}
             <div
-              class="mt-2 bg-background rounded border border-card-border overflow-auto max-h-96"
+              class="mt-2 bg-background rounded border border-card-border overflow-auto max-h-96 pretty-scroll"
             >
               <pre class="p-3 text-sm font-mono whitespace-pre-wrap break-all"
                 >(empty)</pre
@@ -295,7 +295,7 @@
             Response Headers
           </summary>
           <div
-            class="mt-2 bg-background rounded border border-card-border overflow-auto max-h-48"
+            class="mt-2 bg-background rounded border border-card-border overflow-auto max-h-48 pretty-scroll"
           >
             <table class="w-full text-sm">
               <tbody>
@@ -321,7 +321,7 @@
           </summary>
           {#if isResponseImage && capture.resp_body}
             <div
-              class="mt-2 bg-background rounded border border-card-border overflow-auto max-h-96"
+              class="mt-2 bg-background rounded border border-card-border overflow-auto max-h-96 pretty-scroll"
             >
               <div class="p-3 flex justify-center">
                 <img
@@ -368,7 +368,7 @@
               </button>
             </div>
             <div
-              class="mt-1 bg-background rounded border border-card-border overflow-auto max-h-96"
+              class="mt-1 bg-background rounded border border-card-border overflow-auto max-h-96 pretty-scroll"
             >
               {#if respBodyTab === "chat"}
                 <div class="p-3 text-sm space-y-3">
@@ -407,7 +407,7 @@
             </div>
           {:else if responseBodyRaw}
             <div
-              class="mt-2 bg-background rounded border border-card-border overflow-auto max-h-96"
+              class="mt-2 bg-background rounded border border-card-border overflow-auto max-h-96 pretty-scroll"
             >
               <div class="p-3 text-sm text-txtsecondary italic">
                 (binary data - {responseContentType || "unknown content type"})
@@ -415,7 +415,7 @@
             </div>
           {:else}
             <div
-              class="mt-2 bg-background rounded border border-card-border overflow-auto max-h-96"
+              class="mt-2 bg-background rounded border border-card-border overflow-auto max-h-96 pretty-scroll"
             >
               <pre class="p-3 text-sm font-mono">(empty)</pre>
             </div>

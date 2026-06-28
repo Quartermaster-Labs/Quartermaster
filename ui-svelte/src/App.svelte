@@ -86,7 +86,7 @@
     <div class="flex flex-col flex-1 min-w-0">
       <StatusRail />
 
-      <main class="flex-1 overflow-auto">
+      <main class="flex-1 overflow-auto pretty-scroll">
         <div class="h-full p-4">
           <Router {routes} on:routeLoaded={handleRouteLoaded} />
         </div>

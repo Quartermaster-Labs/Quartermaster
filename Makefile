@@ -117,7 +117,7 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 # GitHub repo for `gh` (avoids "no default remote" when multiple remotes exist).
-RELEASE_REPO ?= Radu0120/llama-quartermaster
+RELEASE_REPO ?= Quartermaster-Labs/llama-quartermaster
 
 # Build the Windows binary + installer LOCALLY and upload the .exe to a GitHub
 # release (private-repo Actions minutes are metered; local build is free).

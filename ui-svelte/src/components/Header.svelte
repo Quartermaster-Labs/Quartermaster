@@ -61,7 +61,7 @@
     </a>
   {/snippet}
 
-  <menu class="flex items-center gap-4 overflow-x-auto">
+  <menu class="flex items-center gap-4 overflow-x-auto pretty-scroll">
     <a
       href="/"
       use:link

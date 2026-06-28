@@ -68,7 +68,7 @@
   </div>
 
   <!-- Panels stay mounted so their polling/scroll state survives tab switches. -->
-  <div class="flex-1 overflow-auto min-h-0">
+  <div class="flex-1 overflow-auto min-h-0 pretty-scroll">
     <div class="h-full" class:hidden={$observeTab !== "activity"}>
       <Activity />
     </div>

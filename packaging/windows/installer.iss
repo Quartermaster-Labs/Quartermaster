@@ -29,7 +29,7 @@ AppId={{A7E4C9D2-3B6F-4F1A-9C2E-2D7B8F0A1E55}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher=radu0120
-AppPublisherURL=https://github.com/Radu0120/llama-quartermaster
+AppPublisherURL=https://github.com/Quartermaster-Labs/llama-quartermaster
 DefaultDirName={localappdata}\Programs\{#MyAppName}
 ; Always prompt for the install location (default 'auto' hides it on upgrade).
 DisableDirPage=no

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { renderMarkdown, escapeHtml, renderStreamingMarkdown, createStreamingCache } from "../../lib/markdown";
+  import { renderMarkdown, renderStreamingMarkdown, createStreamingCache } from "../../lib/markdown";
   import type { RenderedBlock } from "../../lib/markdown";
   import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronDown, ChevronRight, Brain, Code, Search, PenLine } from "lucide-svelte";
   import { getTextContent, getImageUrls } from "../../lib/types";
@@ -12,7 +12,7 @@
     reasoning_content?: string;
     reasoningTimeMs?: number;
     genTimeMs?: number;
-    searches?: { query: string; results: string }[];
+    searches?: { query: string; results: string; at?: number; sources?: { title: string; url: string }[] }[];
     rewriteInstruction?: string;
     rewriteOriginal?: string;
     isStreaming?: boolean;
@@ -31,16 +31,132 @@
   let hasImages = $derived(imageUrls.length > 0);
   let canEdit = $derived(onEdit !== undefined && !hasImages);
 
+  // The assistant turn is one string holding, in order: inline <think> blocks
+  // (when the backend emits reasoning inline instead of in reasoning_content),
+  // answer text, and — across tool rounds — more think blocks and answer text.
+  // Searches are recorded separately with the content offset (`at`) where they
+  // ran. Build one ordered timeline so think boxes and search blocks render
+  // inline between the surrounding text, not pinned to the top.
+  type SearchHit = { query: string; results: string; sources?: { title: string; url: string }[] };
+  type SubItem = { type: "text"; text: string } | { type: "search"; search: SearchHit };
+  type Segment =
+    | { kind: "text"; text: string; idx: number }
+    | { kind: "think"; items: SubItem[]; open: boolean }
+    | { kind: "search"; search: SearchHit };
+
+  // Step 1: tokenize content into think / text parts (think tags anywhere, plus
+  // a trailing unclosed tag while streaming). `inner`/`innerStart` give the think
+  // body and its content offset so searches can be nested into it later.
+  // Field-based reasoning_content has no inline tags → a single text part.
+  let parts = $derived.by(() => {
+    const res: { kind: "text" | "think"; text: string; start: number; end: number; innerStart: number; open: boolean }[] = [];
+    if (role !== "assistant") return res;
+    const re = /<(think|thinking|reasoning)>([\s\S]*?)(<\/\1>|$)/gi;
+    let last = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(textContent))) {
+      if (m.index > last) res.push({ kind: "text", text: textContent.slice(last, m.index), start: last, end: m.index, innerStart: last, open: false });
+      const closed = m[3] !== "";
+      res.push({ kind: "think", text: m[2], start: m.index, end: m.index + m[0].length, innerStart: m.index + m[1].length + 2, open: !closed });
+      last = m.index + m[0].length;
+      if (!closed) break; // unclosed think runs to the end of the stream
+    }
+    if (last < textContent.length) res.push({ kind: "text", text: textContent.slice(last), start: last, end: textContent.length, innerStart: last, open: false });
+    return res;
+  });
+
+  // Step 2: merge searches (by offset) into the part stream. A search inside a
+  // think part's range nests inside its reasoning box; one inside a text part
+  // splits that text inline.
+  let timeline = $derived.by<Segment[]>(() => {
+    const out: Segment[] = [];
+    if (role !== "assistant") return out;
+    const list = searches ?? [];
+    const positioned = list.filter((s) => typeof s.at === "number").slice().sort((a, b) => (a.at as number) - (b.at as number));
+    for (const s of list) if (typeof s.at !== "number") out.push({ kind: "search", search: s }); // legacy: top
+    let ti = 0;
+    let si = 0;
+    for (const p of parts) {
+      if (p.kind === "think") {
+        const inner = p.text;
+        const items: SubItem[] = [];
+        let cur = 0;
+        while (si < positioned.length && (positioned[si].at as number) < p.end) {
+          const rel = Math.max(cur, Math.min(inner.length, (positioned[si].at as number) - p.innerStart));
+          if (rel > cur) items.push({ type: "text", text: inner.slice(cur, rel) });
+          items.push({ type: "search", search: positioned[si++] });
+          cur = rel;
+        }
+        if (cur < inner.length) items.push({ type: "text", text: inner.slice(cur) });
+        out.push({ kind: "think", items, open: p.open });
+        continue;
+      }
+      let cur = p.start;
+      while (si < positioned.length && (positioned[si].at as number) < p.end) {
+        const at = Math.max(cur, positioned[si].at as number);
+        if (at > cur) out.push({ kind: "text", text: textContent.slice(cur, at), idx: ti++ });
+        out.push({ kind: "search", search: positioned[si++] });
+        cur = at;
+      }
+      if (cur < p.end) out.push({ kind: "text", text: textContent.slice(cur, p.end), idx: ti++ });
+    }
+    while (si < positioned.length) out.push({ kind: "search", search: positioned[si++] });
+    // Coalesce adjacent think segments into one box. A reasoning model that emits
+    // inline <think> produces a fresh block each tool round (think → search →
+    // think → answer); the rounds sit back-to-back in the stream, so merge them
+    // into a single reasoning box (any search between them is already nested in).
+    const merged: Segment[] = [];
+    for (const seg of out) {
+      const prev = merged[merged.length - 1];
+      if (seg.kind === "think" && prev && prev.kind === "think") {
+        prev.items = [...prev.items, ...seg.items];
+        prev.open = prev.open || seg.open;
+      } else {
+        merged.push(seg.kind === "think" ? { ...seg, items: [...seg.items] } : seg);
+      }
+    }
+    return merged;
+  });
+
+  // Index of the final text segment — the only one that grows while streaming,
+  // so it gets the incremental markdown renderer; earlier ones are static.
+  let lastTextIdx = $derived.by(() => {
+    let n = -1;
+    for (const s of timeline) if (s.kind === "text") n = s.idx;
+    return n;
+  });
+  // All sources gathered across this turn's searches, deduped by URL, for the
+  // "Sources" pill list at the end of the message.
+  let allSources = $derived.by(() => {
+    const seen = new Set<string>();
+    const out: { title: string; url: string }[] = [];
+    for (const s of searches ?? [])
+      for (const src of s.sources ?? [])
+        if (src.url && !seen.has(src.url)) {
+          seen.add(src.url);
+          out.push(src);
+        }
+    return out;
+  });
+  // User open/close override for inline reasoning boxes, keyed by timeline index.
+  // Defaults to the live `seg.open` (auto-open while reasoning streams); once the
+  // user clicks, their choice wins — otherwise the reactive `open` would re-assert
+  // every chunk and the box couldn't be closed mid-stream.
+  let thinkOverride = $state<Record<number, boolean>>({});
+  let openThink = $derived(timeline.some((s) => s.kind === "think" && s.open));
+  let hasBodyText = $derived(timeline.some((s) => s.kind === "text" && s.text.trim().length > 0));
+
   let streamingCache = createStreamingCache();
-  let renderedParts = $derived.by(() => {
-    if (role !== "assistant") {
-      return { blocks: [{ id: -1, html: escapeHtml(textContent).replace(/\n/g, '<br>') }] as RenderedBlock[], pendingHtml: "" };
+  // Render a text segment: incremental (streaming) only for the live last one.
+  function renderTextSeg(seg: { text: string; idx: number }): { blocks: RenderedBlock[]; pendingHtml: string } {
+    if (isStreaming && seg.idx === lastTextIdx) {
+      return renderStreamingMarkdown(seg.text, streamingCache);
     }
-    if (!isStreaming) {
-      streamingCache = createStreamingCache();
-      return { blocks: [{ id: -1, html: renderMarkdown(textContent) }] as RenderedBlock[], pendingHtml: "" };
-    }
-    return renderStreamingMarkdown(textContent, streamingCache);
+    return { blocks: [{ id: -1, html: renderMarkdown(seg.text) }], pendingHtml: "" };
+  }
+  $effect(() => {
+    // Reset the streaming cache when a turn finishes so the next one starts clean.
+    if (!isStreaming) streamingCache = createStreamingCache();
   });
   let copied = $state(false);
   let showRaw = $state(false);
@@ -48,6 +164,25 @@
   let editContent = $state("");
   let showReasoning = $state(false);
   let modalImageUrl = $state<string | null>(null);
+
+  // Vary the source-pill max width so long titles don't all truncate to one
+  // uniform block. Deterministic by title (stable across renders). Classes are
+  // spelled out so Tailwind's JIT keeps them.
+  const PILL_W = ["max-w-[5rem]", "max-w-[7rem]", "max-w-[9rem]", "max-w-[11rem]"];
+  function pillWidth(s: string): string {
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return PILL_W[h % PILL_W.length];
+  }
+
+  // Per-domain favicon for the source pills (DuckDuckGo's icon proxy, no key).
+  function faviconUrl(url: string): string {
+    try {
+      return `https://icons.duckduckgo.com/ip3/${new URL(url).hostname}.ico`;
+    } catch {
+      return "";
+    }
+  }
 
   function formatDuration(ms: number): string {
     if (ms < 1000) {
@@ -192,34 +327,17 @@
     <div class="px-3 pb-2 whitespace-pre-wrap font-mono text-xs text-txtsecondary">{textContent}</div>
   </details>
 {:else}
-<div class="flex {role === 'user' ? 'justify-end' : 'justify-start'} mb-4">
+<div class="flex flex-col {role === 'user' ? 'items-end' : 'items-start'} mb-4">
   <div
     class="relative group rounded-2xl px-3 py-2 text-[0.8125rem] {role === 'user'
       ? 'max-w-[85%] bg-black text-white rounded-br-sm msg-tail-user'
       : (rewriteOriginal != null ? 'w-full' : 'w-full sm:w-4/5') + ' bg-surface border border-card-border rounded-bl-sm msg-tail-bot'}"
   >
     {#if role === "assistant"}
-      {#if searches && searches.length > 0}
-        <div class="mb-3 flex flex-col gap-1.5">
-          {#each searches as s, si (si)}
-            <details class="rounded border border-card-border overflow-hidden">
-              <summary class="flex items-center gap-2 px-3 py-2 bg-secondary hover:bg-secondary-hover transition-colors cursor-pointer select-none text-sm">
-                <Search class="w-3.5 h-3.5 shrink-0" />
-                <span class="font-medium truncate">{s.query || "Web search"}</span>
-              </summary>
-              <div class="px-3 py-2 bg-secondary/50 text-xs text-txtsecondary whitespace-pre-wrap font-mono max-h-72 overflow-y-auto pretty-scroll">{s.results}</div>
-            </details>
-          {/each}
-        </div>
-      {/if}
-      {#if isSearching}
-        <div class="mb-3 inline-flex items-center gap-2 text-sm text-txtsecondary italic">
-          <span class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse"></span>
-          Searching the web…
-        </div>
-      {/if}
+      <!-- Field-based reasoning (backend split it into reasoning_content). Inline
+           <think> blocks render in the timeline below instead. -->
       {#if reasoning_content || isReasoning}
-        <div class="mb-3 border border-card-border rounded overflow-hidden">
+        <div class="mb-3 border border-card-border rounded-xl overflow-hidden">
           <button
             class="w-full flex items-center gap-2 px-3 py-2 bg-secondary hover:bg-secondary-hover transition-colors text-sm"
             onclick={() => showReasoning = !showReasoning}
@@ -229,23 +347,19 @@
             {:else}
               <ChevronRight class="w-4 h-4" />
             {/if}
-            <Brain class="w-4 h-4" />
-            <span class="font-medium">Reasoning</span>
+            <Brain class="w-4 h-4 {isReasoning ? 'reason-glow' : ''}" />
+            <span class="font-medium {isReasoning ? 'reason-shimmer' : ''}">Reasoning</span>
             <span class="text-txtsecondary ml-2">
               ({reasoning_content.length} chars{#if !isReasoning && reasoningTimeMs > 0}, {formatDuration(reasoningTimeMs)}{/if})
             </span>
-            {#if isReasoning}
-              <span class="ml-auto flex items-center gap-1 text-txtsecondary">
-                <span class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse"></span>
-                reasoning...
-              </span>
-            {/if}
           </button>
-          {#if showReasoning}
-            <div class="px-3 py-2 bg-secondary/50 text-sm text-txtsecondary whitespace-pre-wrap font-mono">
-              {reasoning_content}{#if isReasoning}<span class="inline-block w-1.5 h-4 bg-current animate-pulse ml-0.5"></span>{/if}
+          <div class="reveal {showReasoning ? 'open' : ''}">
+            <div class="reveal-inner">
+              <div class="px-3 py-2 bg-secondary/50 text-sm text-txtsecondary prose prose-sm dark:prose-invert max-w-none chat-prose">
+                {@html renderMarkdown(reasoning_content)}
+              </div>
             </div>
-          {/if}
+          </div>
         </div>
       {/if}
       {#if hasImages}
@@ -270,20 +384,71 @@
         <div class="whitespace-pre-wrap font-mono text-sm">{textContent}</div>
       {:else}
         <div class="prose prose-sm dark:prose-invert max-w-none chat-prose" use:codeBlockCopy>
-          {#each renderedParts.blocks as block (block.id)}
-            {@html block.html}
-          {/each}
-          {@html renderedParts.pendingHtml}
-          {#if isStreaming && !isReasoning && !isSearching}
-            {#if !textContent}
-              <!-- No tokens yet — generating if the model is loaded, else swapping in. -->
-              <span class="inline-flex items-center gap-2 text-txtsecondary italic">
-                <span class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse"></span>
-                {modelReady ? "Generating…" : "Loading model…"}
-              </span>
-            {:else}
-              <span class="inline-block w-2 h-4 bg-current animate-pulse ml-0.5"></span>
+          <!-- Ordered timeline: inline think boxes, search blocks, and answer text. -->
+          {#each timeline as seg, si (si)}
+            {#if seg.kind === "search"}
+              <details class="not-prose my-2 rounded-xl border border-card-border overflow-hidden">
+                <summary class="flex items-center gap-2 px-3 py-2 bg-secondary hover:bg-secondary-hover transition-colors cursor-pointer select-none text-sm">
+                  <Search class="w-3.5 h-3.5 shrink-0" />
+                  <span class="font-medium truncate">{seg.search.query || "Web search"}</span>
+                </summary>
+                <div class="reveal">
+                  <div class="reveal-inner">
+                    <div class="px-3 py-2 bg-secondary/50 text-xs text-txtsecondary whitespace-pre-wrap font-mono max-h-72 overflow-y-auto pretty-scroll">{seg.search.results}</div>
+                  </div>
+                </div>
+              </details>
+            {:else if seg.kind === "think"}
+              {@const thinkChars = seg.items.reduce((n, it) => n + (it.type === "text" ? it.text.length : 0), 0)}
+              {@const isOpen = si in thinkOverride ? thinkOverride[si] : seg.open}
+              <details class="not-prose my-2 rounded-xl border border-card-border overflow-hidden" open={isOpen}>
+                <summary
+                  class="flex items-center gap-2 px-3 py-2 bg-secondary hover:bg-secondary-hover transition-colors cursor-pointer select-none text-sm"
+                  onclick={(e) => { e.preventDefault(); thinkOverride[si] = !isOpen; }}
+                >
+                  <Brain class="w-4 h-4 shrink-0 {seg.open ? 'reason-glow' : ''}" />
+                  <span class="font-medium {seg.open ? 'reason-shimmer' : ''}">Reasoning</span>
+                  <span class="text-txtsecondary ml-2">({thinkChars} chars)</span>
+                </summary>
+                <div class="reveal">
+                  <div class="reveal-inner">
+                <div class="px-3 py-2 bg-secondary/50 text-sm text-txtsecondary flex flex-col gap-2">
+                  {#each seg.items as it, ii (ii)}
+                    {#if it.type === "search"}
+                      <details class="not-prose rounded-lg border border-card-border overflow-hidden font-mono">
+                        <summary class="flex items-center gap-2 px-2 py-1.5 bg-secondary hover:bg-secondary-hover transition-colors cursor-pointer select-none text-xs">
+                          <Search class="w-3 h-3 shrink-0" />
+                          <span class="font-medium truncate">{it.search.query || "Web search"}</span>
+                        </summary>
+                        <div class="px-2 py-1.5 bg-background/40 text-xs whitespace-pre-wrap max-h-72 overflow-y-auto pretty-scroll">{it.search.results}</div>
+                      </details>
+                    {:else if it.text}
+                      <div class="prose prose-sm dark:prose-invert max-w-none chat-prose">{@html renderMarkdown(it.text)}</div>
+                    {/if}
+                  {/each}
+                </div>
+                  </div>
+                </div>
+              </details>
+            {:else if seg.text}
+              {@const r = renderTextSeg(seg)}
+              {#each r.blocks as block (block.id)}
+                {@html block.html}
+              {/each}
+              {@html r.pendingHtml}
             {/if}
+          {/each}
+          {#if isSearching}
+            <span class="inline-flex items-center gap-2 text-sm text-txtsecondary italic">
+              <span class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse"></span>
+              Searching the web…
+            </span>
+          {:else if isStreaming && !openThink && !isReasoning && !hasBodyText}
+            <!-- No tokens yet — generating if the model is loaded, else swapping in. -->
+            <span class="inline-flex items-center gap-2 text-txtsecondary italic">
+              <span class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse"></span>
+              {modelReady ? "Generating…" : "Loading model…"}
+            </span>
           {/if}
         </div>
       {/if}
@@ -386,6 +551,24 @@
       {/if}
     {/if}
   </div>
+  {#if allSources.length > 0}
+    <div class="w-full sm:w-4/5 mt-1.5 flex flex-wrap gap-1.5">
+      {#each allSources as src, si (si)}
+        <a
+          href={src.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="inline-flex items-center gap-1.5 {pillWidth(src.title)} px-2 py-0.5 rounded-full border border-card-border bg-secondary/50 hover:bg-secondary text-xs text-txtsecondary hover:text-txtmain transition-colors"
+          title={src.url}
+        >
+          {#if faviconUrl(src.url)}
+            <img src={faviconUrl(src.url)} alt="" class="w-3.5 h-3.5 shrink-0 rounded-sm" loading="lazy" onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")} />
+          {/if}
+          <span class="truncate">{src.title}</span>
+        </a>
+      {/each}
+    </div>
+  {/if}
 </div>
 {/if}
 
@@ -438,6 +621,74 @@
   .chat-prose {
     font-size: 0.8125rem;
     line-height: 1.55;
+  }
+
+  /* Animated expand/reveal for the reasoning + search boxes. grid-rows 0fr→1fr
+     animates height without a fixed pixel target. The `display: grid` override
+     keeps closed <details> content in the DOM so it can transition (the UA would
+     otherwise hide it outright). */
+  .reveal {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.25s ease;
+  }
+  .reveal.open,
+  details[open] > .reveal {
+    grid-template-rows: 1fr;
+  }
+  .reveal > .reveal-inner {
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  /* Active-reasoning feedback: a brighter band sweeps left→right across the
+     "Reasoning" label, and the brain icon pulses a soft glow. */
+  .reason-shimmer {
+    background: linear-gradient(
+      90deg,
+      var(--color-txtsecondary) 0%,
+      var(--color-txtsecondary) 35%,
+      var(--color-primary) 50%,
+      var(--color-txtsecondary) 65%,
+      var(--color-txtsecondary) 100%
+    );
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: reason-sweep 1.8s linear infinite;
+  }
+  @keyframes reason-sweep {
+    0% {
+      background-position: 200% 0;
+    }
+    100% {
+      background-position: -200% 0;
+    }
+  }
+  .reason-glow {
+    color: var(--color-primary);
+    animation: reason-glow-pulse 1.8s ease-in-out infinite;
+  }
+  @keyframes reason-glow-pulse {
+    0%,
+    100% {
+      filter: drop-shadow(0 0 0 transparent);
+      opacity: 0.65;
+    }
+    50% {
+      filter: drop-shadow(0 0 4px var(--color-primary));
+      opacity: 1;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .reveal {
+      transition: none;
+    }
+    .reason-shimmer,
+    .reason-glow {
+      animation: none;
+    }
   }
 
   .prose :global(pre) {
@@ -531,7 +782,7 @@
   }
 
   /* Pin the following block tight to its heading — its own top margin would
-     otherwise win the collapse and reopen the gap. */
+     otherwise win the reveal and reopen the gap. */
   .prose :global(h1 + *),
   .prose :global(h2 + *),
   .prose :global(h3 + *),
@@ -571,6 +822,9 @@
     width: 100%;
     border-collapse: collapse;
     margin: 0.5rem 0;
+    border: 1px solid var(--color-border, rgba(128, 128, 128, 0.2));
+    border-radius: 0.5rem;
+    overflow: hidden;
   }
 
   .prose :global(th),
@@ -580,9 +834,22 @@
     text-align: left;
   }
 
+  .prose :global(thead) {
+    background: #1a1a1a;
+  }
+
   .prose :global(th) {
-    background-color: var(--color-surface);
     font-weight: 600;
+    color: #f5f5f5;
+    border-bottom: 2px solid #000;
+  }
+
+  .prose :global(tbody tr:nth-child(even)) {
+    background: color-mix(in srgb, var(--color-txtsecondary) 7%, transparent);
+  }
+
+  .prose :global(tbody tr:hover) {
+    background: color-mix(in srgb, var(--color-txtsecondary) 12%, transparent);
   }
 
   /* Highlight.js theme overrides for dark mode */

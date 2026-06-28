@@ -5,7 +5,7 @@
 set -e
 
 VERSION="${1:-latest}"
-REPO="Radu0120/llama-quartermaster"
+REPO="Quartermaster-Labs/llama-quartermaster"
 
 mkdir -p /install/bin
 

@@ -20,7 +20,7 @@ import (
 )
 
 // updateRepo is the GitHub repo (owner/name) the auto-updater polls for releases.
-const updateRepo = "Radu0120/llama-quartermaster"
+const updateRepo = "Quartermaster-Labs/llama-quartermaster"
 
 // Server owns the HTTP mux, cross-cutting middleware, and the local/peer model
 // dispatch. It supersedes router.Server: it builds the local and peer routers
