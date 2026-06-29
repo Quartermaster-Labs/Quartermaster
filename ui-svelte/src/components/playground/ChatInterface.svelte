@@ -1,6 +1,6 @@
 <script lang="ts">
   import { get } from "svelte/store";
-  import { models, backendMetrics } from "../../stores/api";
+  import { models, backendMetrics, loadModel } from "../../stores/api";
   import { summarizeConversation, generateTitle, COMPACT_AT, KEEP_RECENT } from "../../lib/chatCompact";
   import {
     selectedModelStore,
@@ -8,6 +8,7 @@
     systemPromptStore,
     temperatureStore,
     maxTokensStore,
+    reasoningBudgetStore,
     webSearchStore,
     reasoningStore,
     searxngUrlStore,
@@ -17,6 +18,7 @@
   import {
     chatSessions,
     activeChatId,
+    generatingChatId,
     newChatId,
     deriveTitle,
     type ChatSession,
@@ -24,7 +26,7 @@
   import { streamChatCompletion } from "../../lib/chatApi";
   import { WEB_SEARCH_TOOL, searxngSearch, formatSearchResults } from "../../lib/webSearch";
   import { playgroundStores } from "../../stores/playgroundActivity";
-  import { getTextContent } from "../../lib/types";
+  import { getTextContent, getImageUrls } from "../../lib/types";
   import type { ChatMessage, ContentPart, ToolCall } from "../../lib/types";
   import { Settings, Paperclip, Square, MessagesSquare, X, Search, Brain, Clock, PenLine } from "lucide-svelte";
   import ChatMessageComponent from "./ChatMessage.svelte";
@@ -32,9 +34,11 @@
   import { modelCategory } from "../../lib/modelUtils";
   import { scrollFade } from "../../lib/scrollFade";
 
-  // Load (or create) the active conversation, migrating the legacy single-chat
-  // store the first time. Returns the messages for the active session.
-  function initChats(): ChatMessage[] {
+  // Ensure a valid active conversation exists, migrating the legacy single-chat
+  // store the first time. The store (chatSessions) is the single source of truth
+  // for messages — the working view below is derived from it, and generation
+  // writes back into it by session id, so a turn survives switching chats.
+  function initChats() {
     let sessions = get(chatSessions);
     if (sessions.length === 0) {
       try {
@@ -51,64 +55,59 @@
     }
     let id = get(activeChatId);
     if (!sessions.some((s) => s.id === id)) {
-      if (sessions.length > 0) {
-        id = sessions[0].id;
-      } else {
+      id = sessions.length > 0 ? sessions[0].id : "";
+      if (!id) {
         const s: ChatSession = { id: newChatId(), title: "New chat", messages: [], updatedAt: Date.now() };
         chatSessions.set([s]);
         id = s.id;
       }
       activeChatId.set(id);
     }
-    return get(chatSessions).find((s) => s.id === id)?.messages ?? [];
   }
+  initChats();
 
-  let messages = $state<ChatMessage[]>(initChats());
-  // Auto-compact state for the active session (see lib/chatCompact). The full
-  // `messages` list is always kept; `compactedCount` marks how many leading
-  // messages are represented by `summary` and therefore NOT resent to the model.
-  const initSession = get(chatSessions).find((s) => s.id === get(activeChatId));
-  let summary = $state<string>(initSession?.summary ?? "");
-  let compactedCount = $state<number>(initSession?.compactedCount ?? 0);
-  let isCompacting = $state(false);
-  // Which session `messages` currently mirrors. The history list (in the nav
-  // rail) drives selection by setting activeChatId; this component reacts by
-  // saving the old session and loading the new one.
-  let loadedId = $state(get(activeChatId));
+  // Session the generation loop is writing to (null = idle). One turn at a time;
+  // it keeps running when the user switches to another chat. Mirrored to the
+  // store so the rail can flag the generating row.
+  let genId = $state<string | null>(null);
+  $effect(() => {
+    generatingChatId.set(genId);
+  });
 
-  // Write the working `messages` back into its session in the history store.
-  function persistCurrent() {
-    const id = loadedId;
-    const snapshot = $state.snapshot(messages) as ChatMessage[];
-    chatSessions.update((sessions) => {
-      const idx = sessions.findIndex((s) => s.id === id);
-      if (idx === -1) return sessions; // session was deleted — don't resurrect it
-      const prev = sessions[idx];
-      const title = prev.titled ? prev.title : deriveTitle(snapshot);
-      const updated: ChatSession = { id, title, messages: snapshot, updatedAt: Date.now(), summary: summary || undefined, compactedCount: compactedCount || undefined, titled: prev.titled };
-      const copy = [...sessions];
-      copy[idx] = updated;
+  // --- store helpers: messages live in chatSessions, keyed by session id ---
+  function sessionById(id: string): ChatSession | undefined {
+    return get(chatSessions).find((s) => s.id === id);
+  }
+  // Patch one session. `bump` stamps updatedAt so the rail sorts the row to the
+  // top — only on real message activity (send / regenerate), NOT on streaming
+  // chunks, title or metadata writes, so a chat never jumps while you read it.
+  function patchSession(id: string, fields: Partial<ChatSession>, bump = false) {
+    chatSessions.update((ss) => {
+      const i = ss.findIndex((s) => s.id === id);
+      if (i === -1) return ss; // session deleted — don't resurrect it
+      const copy = [...ss];
+      copy[i] = { ...copy[i], ...fields, ...(bump ? { updatedAt: Date.now() } : {}) };
       return copy;
     });
   }
+  function appendMessage(id: string, msg: ChatMessage) {
+    const cur = sessionById(id);
+    if (!cur) return;
+    const title = cur.titled ? cur.title : deriveTitle([...cur.messages, msg]);
+    patchSession(id, { messages: [...cur.messages, msg], title }, true);
+  }
+  // Patch the streaming last bubble. No updatedAt bump (chunk-rate writes).
+  function patchLast(id: string, fn: (m: ChatMessage) => ChatMessage) {
+    const cur = sessionById(id);
+    if (!cur) return;
+    patchSession(id, { messages: cur.messages.map((m, i, a) => (i === a.length - 1 ? fn(m) : m)) });
+  }
 
-  // External selection (history list in the rail sets activeChatId): save the
-  // session we're showing, then load the newly-selected one.
-  $effect(() => {
-    const id = $activeChatId;
-    if (id === loadedId) return;
-    if (isStreaming) cancelStreaming();
-    persistCurrent();
-    const s = get(chatSessions).find((x) => x.id === id);
-    messages = s ? (structuredClone($state.snapshot(s.messages)) as ChatMessage[]) : [];
-    summary = s?.summary ?? "";
-    compactedCount = s?.compactedCount ?? 0;
-    isReasoning = false;
-    reasoningStartTime = 0;
-    userScrolledUp = false;
-    queued = [];
-    loadedId = id;
-  });
+  // The active conversation, derived from the store (single source of truth).
+  let activeSession = $derived($chatSessions.find((s) => s.id === $activeChatId));
+  let messages = $derived(activeSession?.messages ?? []);
+  let compactedCount = $derived(activeSession?.compactedCount ?? 0);
+  let isCompacting = $state(false);
 
   let userInput = $state("");
   // Messages typed while a turn is streaming; sent one-by-one once it finishes.
@@ -122,7 +121,7 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => (toast = ""), 1500);
   }
-  let isStreaming = $state(false);
+  let isStreaming = $derived(genId !== null);
   let isReasoning = $state(false);
   let isSearching = $state(false);
   let reasoningStartTime = $state<number>(0);
@@ -138,8 +137,46 @@
   let selectedModelName = $derived(
     $models.find((m) => m.id === $selectedModelStore)?.name || $selectedModelStore
   );
+  // Image input needs a vision-capable model; without one the backend 500s
+  // ("image input is not supported"). Two ways a model can take images:
+  //  - it natively reports vision (single-file multimodal gguf), or
+  //  - it has an mmproj "-vision" twin (same family, unlisted): autogen pairs a
+  //    sibling mmproj projector into a vision variant. Attaching swaps to it so
+  //    the projector loads, then lets the user pick a file.
+  let selectedModel = $derived($models.find((m) => m.id === $selectedModelStore));
+  let selectedModelVision = $derived(selectedModel?.capabilities?.vision ?? false);
+  // The vision twin shares the base model's family (= same gguf path) and is the
+  // sibling that carries vision caps. Family is precise here (one gguf → one
+  // family); caps.vision disambiguates from ctx-tier siblings on the same gguf.
+  let visionTwin = $derived(
+    selectedModelVision
+      ? undefined
+      : $models.find(
+          (m) =>
+            !!m.family &&
+            m.family === selectedModel?.family &&
+            m.id !== selectedModel?.id &&
+            m.capabilities?.vision
+        )
+  );
+  let canAttach = $derived(selectedModelVision || !!visionTwin);
+
+  // Switch to the vision twin (loading its mmproj projector) if needed, then open
+  // the file picker. Warm-loads the twin so the swap overlaps file selection.
+  function attachImage() {
+    if (visionTwin) {
+      selectedModelStore.set(visionTwin.id);
+      void loadModel(visionTwin.id).catch(() => {});
+    }
+    fileInput?.click();
+  }
   // Loaded → an empty stream means the model is generating, not swapping in.
-  let modelReady = $derived(!!$backendMetrics[$selectedModelStore]);
+  // Use the authoritative catalog state (what the dashboard shows), not just the
+  // presence of a metrics row — a stale/early metrics entry made this read true
+  // while the model was still loading, mislabeling the wait as "Processing image".
+  let modelReady = $derived(
+    ($models.find((m) => m.id === $selectedModelStore)?.state) === "ready"
+  );
   let userScrolledUp = $state(false);
 
   // Discrete temperature steps (Precise → Creative), hand-picked to avoid the
@@ -166,11 +203,15 @@
   $effect(() => {
     // Only chat-capable models (peers stay; drop non-llm + rerankers) so the
     // default never lands on an image/audio model. Mirrors ModelSelector's filter.
-    const listed = $models.filter(
-      (m) => !m.unlisted && (m.peerID || (modelCategory(m) === "llm" && !m.capabilities?.reranker))
+    const chatable = $models.filter(
+      (m) => m.peerID || (modelCategory(m) === "llm" && !m.capabilities?.reranker)
     );
+    // Default picks from listed models only; but an already-selected unlisted
+    // chat model (e.g. the vision twin we just swapped to via attach) is valid —
+    // don't snap away from it.
+    const listed = chatable.filter((m) => !m.unlisted);
     if (listed.length === 0) return;
-    if (!listed.some((m) => m.id === $selectedModelStore)) {
+    if (!chatable.some((m) => m.id === $selectedModelStore)) {
       const ready = listed.find((m) => m.state === "ready");
       selectedModelStore.set((ready ?? listed[0]).id);
     }
@@ -178,6 +219,16 @@
 
   $effect(() => {
     playgroundStores.chatStreaming.set(isStreaming);
+  });
+
+  // Drop pending attachments if the user switches to a model that can't take
+  // images at all (no native vision and no vision twin), so a stale image can't
+  // be sent into a backend that will reject it.
+  $effect(() => {
+    if (!canAttach && attachedImages.length > 0) {
+      attachedImages = [];
+      imageError = null;
+    }
   });
 
   // Auto-grow the composer textarea; tracks userInput so it also shrinks back
@@ -220,21 +271,10 @@
     }
   });
 
-  // Persist the active conversation into the history store (throttled to 1.5s).
-  let lastSaveTime = 0;
+  // Follow the bottom again when switching conversations.
   $effect(() => {
-    messages; // track
-    const elapsed = Date.now() - lastSaveTime;
-    if (elapsed >= 1500) {
-      persistCurrent();
-      lastSaveTime = Date.now();
-      return;
-    }
-    const timer = setTimeout(() => {
-      persistCurrent();
-      lastSaveTime = Date.now();
-    }, 1500 - elapsed);
-    return () => clearTimeout(timer);
+    $activeChatId;
+    userScrolledUp = false;
   });
 
   // Rewrite mode: prose (userInput) + a "how to help" instruction. The user
@@ -243,13 +283,11 @@
   async function sendRewrite() {
     const prose = userInput.trim();
     if (!prose || !$selectedModelStore || isStreaming) return;
+    const id = $activeChatId;
     userScrolledUp = false;
-    messages = [
-      ...messages,
-      { role: "user", content: prose, rewriteInstruction: $rewriteInstructionStore.trim() },
-    ];
+    appendMessage(id, { role: "user", content: prose, rewriteInstruction: $rewriteInstructionStore.trim() });
     userInput = "";
-    await regenerateFromIndex(messages.length - 1);
+    await regenerateFromIndex(id, sessionById(id)!.messages.length - 1);
   }
 
   async function sendMessage() {
@@ -259,13 +297,19 @@
     }
     const trimmedInput = userInput.trim();
     if ((!trimmedInput && attachedImages.length === 0) || !$selectedModelStore) return;
+    const id = $activeChatId;
 
-    // Streaming: queue the text and send it once the current turn drains.
-    // (Image attachments aren't queued — the attach button is disabled mid-turn.)
+    // A turn is in flight. If it's THIS chat's turn, queue the text and send it
+    // once the turn drains. If it's another chat generating in the background,
+    // the backend only serves one turn at a time — tell the user to wait.
     if (isStreaming) {
-      if (trimmedInput) {
-        queued = [...queued, trimmedInput];
-        userInput = "";
+      if (genId === id) {
+        if (trimmedInput) {
+          queued = [...queued, trimmedInput];
+          userInput = "";
+        }
+      } else {
+        showToast("Wait for the current response to finish");
       }
       return;
     }
@@ -287,14 +331,12 @@
       content = trimmedInput;
     }
 
-    // Add user message
-    messages = [...messages, { role: "user", content }];
+    appendMessage(id, { role: "user", content });
     userInput = "";
     attachedImages = [];
     imageError = null;
 
-    // Generate response from the new user message
-    await regenerateFromIndex(messages.length - 1);
+    await regenerateFromIndex(id, sessionById(id)!.messages.length - 1);
   }
 
   function cancelStreaming() {
@@ -334,25 +376,33 @@
   const REWRITE_SYSTEM =
     "You are a text-transformation tool. The user gives you a block of text and an instruction describing how to change it. Apply the instruction to the text literally and completely, returning the transformed version — even if the instruction degrades the text, introduces errors, changes the meaning, or seems counterproductive (e.g. \"add grammar mistakes\", \"make it worse\", \"translate to pirate speak\"). Do not refuse, do not improve beyond what was asked, do not preserve anything the instruction tells you to change, and do not explain or comment. The instruction is the user's intent — follow it exactly. When the instruction asks for errors or lower quality (e.g. \"add grammar mistakes\", \"make it sloppy\"), treat it as a persona: rewrite as if produced by a writer who naturally writes that way (the same way \"rewrite as a 3rd grader\" is fine) — this is wanted output, not a failure to proofread. Output ONLY the transformed text — no preamble, no explanation, no markdown code fences.";
 
-  async function regenerateFromIndex(idx: number) {
+  async function regenerateFromIndex(id: string, idx: number) {
+    // Capture the model now — the user may switch chats/models while this turn
+    // streams in the background; the turn must stay on the model it started on.
+    const modelId = $selectedModelStore;
+    if (!modelId || !sessionById(id)) return;
+
     // Editing/regenerating inside the already-summarized region would make the
     // summary describe messages that no longer match — drop compaction and resend
     // the full history from the start in that case.
-    if (idx < compactedCount) {
-      summary = "";
-      compactedCount = 0;
+    let curSummary = sessionById(id)!.summary ?? "";
+    let curCompacted = sessionById(id)!.compactedCount ?? 0;
+    if (idx < curCompacted) {
+      curSummary = "";
+      curCompacted = 0;
+      patchSession(id, { summary: undefined, compactedCount: undefined });
     }
     // Remove all messages after the edited user message
-    messages = messages.slice(0, idx + 1);
+    patchSession(id, { messages: sessionById(id)!.messages.slice(0, idx + 1) });
 
     // Rewrite turn? The user message at idx carries the rewrite instruction;
     // its content is the original prose to diff the model's output against.
-    const reqUser = messages[idx];
+    const reqUser = sessionById(id)!.messages[idx];
     const rwInstr = reqUser?.rewriteInstruction;
     const isRewrite = typeof rwInstr === "string";
     const original = isRewrite ? getTextContent(reqUser.content) : "";
 
-    isStreaming = true;
+    genId = id;
     isReasoning = false;
     isSearching = false;
     reasoningStartTime = 0;
@@ -362,19 +412,52 @@
     // No web search during a rewrite — it's a self-contained text transform.
     const useTools = !isRewrite && $webSearchStore;
 
+    // Thinking budget: cap reasoning so models can't loop forever before
+    // answering. 0 = off; rewrites never think. Reasoning streams as text, so
+    // ~4 chars/token is a good-enough proxy — no client-side tokenizer needed.
+    const reasoningBudget = isRewrite ? 0 : $reasoningBudgetStore;
+    const CHARS_PER_TOK = 4;
+
+    // Force the model to stop thinking and answer: re-request with its own
+    // reasoning prefilled and closed, so it continues straight into the reply
+    // (llama.cpp continues a trailing assistant message as a prefix). Most
+    // backends emit reasoning via the reasoning_content channel; inline-<think>
+    // models leave it empty here and rely on reasoning:false to steer out.
+    // ponytail: covers the common channel path; revisit if an inline model loops.
+    async function finalizeAfterBudget(baseMsgs: ChatMessage[], tail: ChatMessage[], sig: AbortSignal) {
+      if (isReasoning) {
+        const reasoningTimeMs = Date.now() - reasoningStartTime;
+        isReasoning = false;
+        patchLast(id, (m) => ({ ...m, reasoningTimeMs }));
+      }
+      const last = sessionById(id)?.messages.at(-1);
+      const think = (last?.reasoning_content || "").trim();
+      const prefill: ChatMessage = {
+        role: "assistant",
+        content: `<think>\n${think}\n</think>\n\nI've thought enough — here is my answer:\n`,
+      };
+      const stream = streamChatCompletion(modelId, [...baseMsgs, ...tail, prefill], sig, {
+        temperature: $temperatureStore,
+        max_tokens: $maxTokensStore,
+        reasoning: false, // don't reopen thinking
+        conversationId: id,
+      });
+      for await (const chunk of stream) {
+        if (chunk.done) break;
+        if (chunk.content) patchLast(id, (m) => ({ ...m, content: m.content + chunk.content }));
+      }
+    }
+
     // One assistant bubble holds the whole turn: reasoning, any web searches
     // (as collapsible sections), and the final reply. It stays the last message
     // throughout — tool plumbing for the model is kept separately in `apiTail`.
-    messages = [
-      ...messages,
-      { role: "assistant", content: "", ...(isRewrite ? { rewriteOriginal: original } : {}) },
-    ];
+    appendMessage(id, { role: "assistant", content: "", ...(isRewrite ? { rewriteOriginal: original } : {}) });
     const genStart = Date.now();
 
     const sys = [
       basePrompt(useTools),
       $systemPromptStore.trim(),
-      summary && `Summary of earlier conversation:\n${summary}`,
+      curSummary && `Summary of earlier conversation:\n${curSummary}`,
       // Rewrite turns keep the full conversation for context (setting, characters,
       // goals discussed earlier) but add the transform-tool directive on top.
       isRewrite && REWRITE_SYSTEM,
@@ -384,7 +467,7 @@
     const base: ChatMessage[] = [];
     if (sys) base.push({ role: "system", content: sys });
     // History up to (not incl.) the live assistant bubble.
-    const history = messages.slice(compactedCount, -1);
+    const history = sessionById(id)!.messages.slice(curCompacted, -1);
     if (isRewrite && history.length > 0) {
       // Swap the final user message (bare prose) for the augmented instruction so
       // the model gets the explicit "transform this exact text" framing, while all
@@ -409,48 +492,71 @@
       // ponytail: unbounded by request — model→search→model until the model
       // stops calling tools. No round cap; the user hits Stop to break out.
       for (;;) {
-        const stream = streamChatCompletion($selectedModelStore, [...base, ...apiTail], signal, {
-          temperature: $temperatureStore,
-          max_tokens: $maxTokensStore,
-          tools: useTools ? [WEB_SEARCH_TOOL] : undefined,
-          reasoning: !isRewrite && $reasoningStore,
-          conversationId: $activeChatId,
-        });
+        // Per-round abort so a budget-triggered finalize cancels just this
+        // request, not the whole turn (which the user-level `signal` owns).
+        const roundCtrl = new AbortController();
+        const forwardAbort = () => roundCtrl.abort();
+        signal.addEventListener("abort", forwardAbort, { once: true });
 
         let toolCalls: ToolCall[] | undefined;
         let roundContent = "";
+        let reasoningChars = 0;
+        let budgetHit = false;
 
-        for await (const chunk of stream) {
-          if (chunk.tool_calls) toolCalls = chunk.tool_calls;
-          if (chunk.done) break;
+        try {
+          const stream = streamChatCompletion(modelId, [...base, ...apiTail], roundCtrl.signal, {
+            temperature: $temperatureStore,
+            max_tokens: $maxTokensStore,
+            tools: useTools ? [WEB_SEARCH_TOOL] : undefined,
+            reasoning: !isRewrite && $reasoningStore,
+            conversationId: id,
+          });
 
-          // Handle reasoning content
-          if (chunk.reasoning_content) {
-            if (!isReasoning) {
-              isReasoning = true;
-              reasoningStartTime = Date.now();
+          for await (const chunk of stream) {
+            if (chunk.tool_calls) toolCalls = chunk.tool_calls;
+            if (chunk.done) break;
+
+            // Handle reasoning content
+            if (chunk.reasoning_content) {
+              if (!isReasoning) {
+                isReasoning = true;
+                reasoningStartTime = Date.now();
+              }
+              patchLast(id, (m) => ({
+                ...m,
+                reasoning_content: (m.reasoning_content || "") + chunk.reasoning_content,
+              }));
+              // Past the budget with no answer yet → stop and force a conclusion.
+              reasoningChars += chunk.reasoning_content.length;
+              if (reasoningBudget > 0 && !roundContent && reasoningChars > reasoningBudget * CHARS_PER_TOK) {
+                budgetHit = true;
+                roundCtrl.abort();
+                break;
+              }
             }
-            messages = messages.map((msg, i) =>
-              i === messages.length - 1
-                ? { ...msg, reasoning_content: (msg.reasoning_content || "") + chunk.reasoning_content }
-                : msg
-            );
-          }
 
-          // Handle regular content - end reasoning phase when we get content
-          if (chunk.content) {
-            if (isReasoning) {
-              const reasoningTimeMs = Date.now() - reasoningStartTime;
-              isReasoning = false;
-              messages = messages.map((msg, i) =>
-                i === messages.length - 1 ? { ...msg, reasoningTimeMs } : msg
-              );
+            // Handle regular content - end reasoning phase when we get content
+            if (chunk.content) {
+              if (isReasoning) {
+                const reasoningTimeMs = Date.now() - reasoningStartTime;
+                isReasoning = false;
+                patchLast(id, (m) => ({ ...m, reasoningTimeMs }));
+              }
+              roundContent += chunk.content;
+              patchLast(id, (m) => ({ ...m, content: m.content + chunk.content }));
             }
-            roundContent += chunk.content;
-            messages = messages.map((msg, i) =>
-              i === messages.length - 1 ? { ...msg, content: msg.content + chunk.content } : msg
-            );
           }
+        } catch (e) {
+          // A budget-triggered abort is expected — swallow and finalize below.
+          // Anything else (incl. the user's Stop) propagates to the turn handler.
+          if (!(budgetHit && e instanceof Error && e.name === "AbortError")) throw e;
+        } finally {
+          signal.removeEventListener("abort", forwardAbort);
+        }
+
+        if (budgetHit) {
+          await finalizeAfterBudget(base, apiTail, signal);
+          break; // forced answer written — end the turn, skip further tool rounds
         }
 
         // No tool calls (or tools off) → the turn is complete.
@@ -464,8 +570,13 @@
         isSearching = true;
         // Offset in the assistant bubble where these searches land, so the UI
         // renders them inline after the text written so far (not pinned to top).
-        const lastMsg = messages[messages.length - 1];
+        // A search fired mid-think (no answer content yet, still reasoning) is
+        // tagged so the UI nests it inside the reasoning box at its reasoning_content
+        // offset, instead of dropping it below the box.
+        const lastMsg = sessionById(id)?.messages.at(-1);
         const at = typeof lastMsg?.content === "string" ? lastMsg.content.length : 0;
+        const duringReasoning = isReasoning;
+        const reasoningAt = (lastMsg?.reasoning_content || "").length;
         for (const tc of toolCalls) {
           let resultText: string;
           let sources: { title: string; url: string }[] = [];
@@ -480,55 +591,37 @@
             resultText = `Search failed: ${e instanceof Error ? e.message : String(e)}`;
           }
           apiTail.push({ role: "tool", tool_call_id: tc.id, content: resultText });
-          messages = messages.map((msg, i) =>
-            i === messages.length - 1
-              ? { ...msg, searches: [...(msg.searches ?? []), { query, results: resultText, at, sources }] }
-              : msg
-          );
+          patchLast(id, (m) => ({ ...m, searches: [...(m.searches ?? []), { query, results: resultText, at, reasoningAt, duringReasoning, sources }] }));
         }
         isSearching = false;
         // loop: next round lets the model read the results and respond.
       }
       // Turn complete — fold older turns into the summary if near the ctx limit.
-      await maybeCompact(signal);
+      await maybeCompact(id, modelId, signal);
       // First exchange done → let the model name the chat.
-      void maybeTitle(signal);
+      void maybeTitle(id, modelId, signal);
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         // User cancelled, keep partial response
         // If we were still reasoning, record the time
         if (isReasoning && reasoningStartTime > 0) {
           const reasoningTimeMs = Date.now() - reasoningStartTime;
-          messages = messages.map((msg, i) =>
-            i === messages.length - 1
-              ? { ...msg, reasoningTimeMs }
-              : msg
-          );
+          patchLast(id, (m) => ({ ...m, reasoningTimeMs }));
         }
         // Cancelled before the model wrote anything → don't leave an empty bubble.
-        const last = messages[messages.length - 1];
+        const last = sessionById(id)?.messages.at(-1);
         if (last?.role === "assistant" && typeof last.content === "string" && last.content.trim() === "") {
-          messages = messages.map((msg, i) =>
-            i === messages.length - 1
-              ? { ...msg, content: "_Cancelled — what did you want instead?_" }
-              : msg
-          );
+          patchLast(id, (m) => ({ ...m, content: "_Cancelled — what did you want instead?_" }));
         }
       } else {
         // Show error in the assistant message
         const errorMessage = error instanceof Error ? error.message : "An error occurred";
-        messages = messages.map((msg, i) =>
-          i === messages.length - 1
-            ? { ...msg, content: msg.content + `\n\n**Error:** ${errorMessage}` }
-            : msg
-        );
+        patchLast(id, (m) => ({ ...m, content: m.content + `\n\n**Error:** ${errorMessage}` }));
       }
     } finally {
       const genTimeMs = Date.now() - genStart;
-      messages = messages.map((msg, i) =>
-        i === messages.length - 1 && msg.role === "assistant" ? { ...msg, genTimeMs } : msg
-      );
-      isStreaming = false;
+      patchLast(id, (m) => (m.role === "assistant" ? { ...m, genTimeMs } : m));
+      genId = null;
       isReasoning = false;
       isSearching = false;
       abortController = null;
@@ -540,27 +633,20 @@
     if (queued.length > 0 && !signal.aborted) {
       const [next, ...rest] = queued;
       queued = rest;
-      messages = [...messages, { role: "user", content: next }];
-      await regenerateFromIndex(messages.length - 1);
+      appendMessage(id, { role: "user", content: next });
+      await regenerateFromIndex(id, sessionById(id)!.messages.length - 1);
     }
   }
 
   // Name the chat from the opening exchange, once. Best-effort: any failure or
   // empty result leaves the first-message heuristic title in place.
-  async function maybeTitle(signal: AbortSignal) {
-    const id = loadedId;
-    const session = get(chatSessions).find((s) => s.id === id);
+  async function maybeTitle(id: string, modelId: string, signal: AbortSignal) {
+    const session = sessionById(id);
     if (!session || session.titled) return;
-    if (!messages.some((m) => m.role === "assistant" && typeof m.content === "string" && m.content.trim())) return;
-    const title = await generateTitle($selectedModelStore, $state.snapshot(messages) as ChatMessage[], signal);
+    if (!session.messages.some((m) => m.role === "assistant" && typeof m.content === "string" && m.content.trim())) return;
+    const title = await generateTitle(modelId, session.messages as ChatMessage[], signal);
     if (!title) return;
-    chatSessions.update((sessions) => {
-      const idx = sessions.findIndex((s) => s.id === id);
-      if (idx === -1) return sessions;
-      const copy = [...sessions];
-      copy[idx] = { ...copy[idx], title, titled: true };
-      return copy;
-    });
+    patchSession(id, { title, titled: true }); // no bump — a late title shouldn't reorder
   }
 
   // Auto-compact: once the live server KV usage crosses COMPACT_AT, fold every
@@ -568,26 +654,29 @@
   // compaction boundary. The messages stay in the list (UI keeps showing them);
   // they just stop being resent to the model. Best-effort: any failure leaves
   // the conversation untouched.
-  async function maybeCompact(signal: AbortSignal) {
-    const bm = get(backendMetrics)[$selectedModelStore];
+  async function maybeCompact(id: string, modelId: string, signal: AbortSignal) {
+    const bm = get(backendMetrics)[modelId];
     if (!bm || !bm.n_ctx || bm.kv_cache_usage_ratio < COMPACT_AT) return;
+
+    const s = sessionById(id);
+    if (!s) return;
+    const msgs = s.messages;
+    const curCompacted = s.compactedCount ?? 0;
 
     // Snap the boundary forward to a user message so the kept slice starts a
     // clean turn (never an orphaned assistant/tool reply whose tool_calls were
     // summarized away).
-    let boundary = messages.length - KEEP_RECENT;
-    while (boundary < messages.length && messages[boundary].role !== "user") boundary++;
-    if (boundary <= compactedCount) return; // nothing new to summarize
+    let boundary = msgs.length - KEEP_RECENT;
+    while (boundary < msgs.length && msgs[boundary].role !== "user") boundary++;
+    if (boundary <= curCompacted) return; // nothing new to summarize
 
     // Summarize only the newly-folded slice; `summary` already covers the prefix.
-    const fresh = messages.slice(compactedCount, boundary);
+    const fresh = msgs.slice(curCompacted, boundary);
     isCompacting = true;
     try {
-      const next = await summarizeConversation($selectedModelStore, fresh, summary, signal);
+      const next = await summarizeConversation(modelId, fresh, s.summary ?? "", signal);
       if (signal.aborted) return;
-      summary = next;
-      compactedCount = boundary;
-      persistCurrent();
+      patchSession(id, { summary: next, compactedCount: boundary });
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") throw e;
       console.error("auto-compact failed:", e);
@@ -598,14 +687,13 @@
 
   async function editMessage(idx: number, newContent: string) {
     if (isStreaming || !$selectedModelStore) return;
-
+    const id = $activeChatId;
     // Update the user message at the specified index
-    messages = messages.map((msg, i) =>
-      i === idx ? { ...msg, content: newContent } : msg
-    );
-
+    patchSession(id, {
+      messages: sessionById(id)!.messages.map((msg, i) => (i === idx ? { ...msg, content: newContent } : msg)),
+    });
     // Trigger a new chat request with the updated messages
-    await regenerateFromIndex(idx);
+    await regenerateFromIndex(id, idx);
   }
 
   function handleKeyDown(event: KeyboardEvent) {
@@ -675,6 +763,32 @@
     attachedImages = attachedImages.filter((_, i) => i !== idx);
     imageError = null;
   }
+
+  // Paste a screenshot / copied image straight into the composer. Only acts on
+  // image clipboard items — text paste falls through to the default handler.
+  async function handlePaste(event: ClipboardEvent) {
+    const items = event.clipboardData?.items;
+    if (!items) return;
+    const files: File[] = [];
+    for (const it of items) {
+      if (it.kind === "file" && it.type.startsWith("image/")) {
+        const f = it.getAsFile();
+        if (f) files.push(f);
+      }
+    }
+    if (files.length === 0) return; // plain text → let the browser handle it
+    event.preventDefault();
+    if (!canAttach) {
+      imageError = "The selected model can't accept images.";
+      return;
+    }
+    // Mirror attachImage(): swap to the vision twin so its projector loads.
+    if (visionTwin) {
+      selectedModelStore.set(visionTwin.id);
+      void loadModel(visionTwin.id).catch(() => {});
+    }
+    await processImageFiles(files);
+  }
 </script>
 
 <div class="flex flex-col h-full">
@@ -688,11 +802,11 @@
     <!-- Chat column — full-width so the whole pane scrolls; the message list and
          composer are width-constrained and centered inside. -->
     <div class="flex-1 flex flex-col min-w-0 min-h-0 w-full">
-    {#if isCompacting}
+    {#if isCompacting && genId === $activeChatId}
       <div class="flex items-center gap-2 mb-2 shrink-0 w-full max-w-3xl mx-auto px-2">
-        <span class="inline-flex items-center gap-1.5 text-xs text-txtsecondary">
-          <span class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse"></span>
-          Compacting conversation…
+        <span class="inline-flex items-center gap-1.5 text-xs italic">
+          <span class="w-1.5 h-1.5 bg-primary rounded-full reason-glow"></span>
+          <span class="reason-shimmer font-medium">Compacting conversation…</span>
         </span>
       </div>
     {/if}
@@ -704,7 +818,7 @@
       onwheel={(e) => { if (e.deltaY < 0) userScrolledUp = true; }}
       use:scrollFade
     >
-      <div class="w-full max-w-3xl mx-auto px-2">
+      <div class="w-full max-w-3xl mx-auto px-2 {messages.length === 0 ? 'h-full' : ''}">
       {#if messages.length === 0}
         <div class="h-full flex flex-col items-center justify-center gap-3 text-txtsecondary">
           <MessagesSquare class="w-10 h-10 opacity-40" strokeWidth={1.5} />
@@ -728,13 +842,14 @@
             searches={message.searches}
             rewriteInstruction={message.rewriteInstruction}
             rewriteOriginal={message.rewriteOriginal}
-            isStreaming={isStreaming && idx === messages.length - 1 && message.role === "assistant"}
-            isReasoning={isReasoning && idx === messages.length - 1 && message.role === "assistant"}
-            isSearching={isSearching && idx === messages.length - 1 && message.role === "assistant"}
+            isStreaming={genId === $activeChatId && idx === messages.length - 1 && message.role === "assistant"}
+            isReasoning={isReasoning && genId === $activeChatId && idx === messages.length - 1 && message.role === "assistant"}
+            isSearching={isSearching && genId === $activeChatId && idx === messages.length - 1 && message.role === "assistant"}
             modelReady={modelReady}
+            hasVisionInput={message.role === "assistant" && idx > 0 && getImageUrls(messages[idx - 1].content).length > 0}
             onEdit={message.role === "user" && message.rewriteInstruction == null ? (newContent) => editMessage(idx, newContent) : undefined}
             onRegenerate={message.role === "assistant" && idx > 0 && messages[idx - 1].role === "user"
-              ? () => regenerateFromIndex(idx - 1)
+              ? () => regenerateFromIndex($activeChatId, idx - 1)
               : undefined}
           />
         {/each}
@@ -814,18 +929,18 @@
       {#if attachedImages.length > 0}
         <div class="mb-2 flex flex-wrap gap-2">
           {#each attachedImages as imageUrl, idx (idx)}
-            <div class="relative group">
+            <div class="group relative h-16 w-16 overflow-hidden rounded-lg border border-card-border bg-surface shadow-sm">
               <img
                 src={imageUrl}
-                alt="Attached image {idx + 1}"
-                class="w-20 h-20 object-cover rounded border border-card-border"
+                alt="Attachment {idx + 1}"
+                class="h-full w-full object-cover"
               />
               <button
-                class="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                class="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/75"
                 onclick={() => removeImage(idx)}
                 title="Remove image"
               >
-                ×
+                <X class="h-3 w-3" />
               </button>
             </div>
           {/each}
@@ -850,7 +965,7 @@
       />
 
       <!-- Queued messages (typed while a turn is streaming) -->
-      {#if queued.length > 0}
+      {#if queued.length > 0 && genId === $activeChatId}
         <div class="flex flex-col gap-1 mb-2">
           {#each queued as q, qi (qi)}
             <div class="flex items-center gap-2 self-end max-w-[80%] rounded-2xl bg-secondary/60 border border-card-border px-3 py-1.5 text-[0.8125rem]">
@@ -889,17 +1004,22 @@
           placeholder={$rewriteStore ? "Paste the text to rewrite…" : isStreaming ? "Queue a message…" : "Type a message..."}
           bind:value={userInput}
           onkeydown={handleKeyDown}
+          onpaste={handlePaste}
         ></textarea>
 
         <div class="flex items-center justify-between">
-          <button
-            class="inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
-            onclick={() => fileInput?.click()}
-            disabled={isStreaming || !$selectedModelStore}
-            title="Attach image"
-          >
-            <Paperclip class="w-[1.125rem] h-[1.125rem]" />
-          </button>
+          {#if canAttach}
+            <button
+              class="inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
+              onclick={attachImage}
+              disabled={isStreaming || !$selectedModelStore}
+              title={visionTwin ? "Attach image (loads vision projector)" : "Attach image"}
+            >
+              <Paperclip class="w-[1.125rem] h-[1.125rem]" />
+            </button>
+          {:else}
+            <span></span>
+          {/if}
 
           <span class="flex-1 min-w-0 truncate px-2 text-center text-xs font-medium text-txtsecondary" title={selectedModelName}>
             {selectedModelName}

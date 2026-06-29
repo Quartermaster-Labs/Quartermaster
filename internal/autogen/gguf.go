@@ -84,6 +84,11 @@ type Metadata struct {
 	// to size the logits/output compute buffer in the VRAM estimate.
 	VocabSize int64
 
+	// PoolingType is the gguf "<arch>.pooling_type" (0/absent=none, 1=mean,
+	// 2=cls, 3=last). A value > 0 marks an embedding model (it pools token
+	// states into one sentence vector); generative models leave it unset.
+	PoolingType int64
+
 	IsMoE bool
 
 	// IsMTP is true when the model carries multi-token-prediction / nextn
@@ -397,7 +402,7 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 	var ropeFreqBase *float64
 	var slidingWindow, slidingWinPattern, keyLengthSwa, valueLengthSwa *int64
 	var fullAttnInterval, ssmInnerSize, ssmConvKernel, ssmStateSize *int64
-	var nextnLayers *int64
+	var nextnLayers, poolingType *int64
 
 	pi := func(v int64) *int64 { return &v }
 	pf := func(v float64) *float64 { return &v }
@@ -589,6 +594,13 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 				}
 				nextnLayers = pi(v)
 				matched = true
+			case key == pfx+"pooling_type" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				poolingType = pi(v)
+				matched = true
 			}
 		}
 
@@ -702,6 +714,7 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 		SsmConvKernel:     deref(ssmConvKernel),
 		SsmStateSize:      deref(ssmStateSize),
 		VocabSize:         vocab,
+		PoolingType:       deref(poolingType),
 		IsMoE:             expertCount != nil && *expertCount > 0,
 		IsMTP:             nextnLayers != nil && *nextnLayers > 0,
 		ExpertWeightShare: expertShare,

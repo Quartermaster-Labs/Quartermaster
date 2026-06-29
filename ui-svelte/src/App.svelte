@@ -80,7 +80,7 @@
 {#if mode === "playground"}
   <PlaygroundApp />
 {:else if mode === "dashboard"}
-  <div class="flex h-screen">
+  <div class="flex h-screen dot-bg">
     <Sidebar />
 
     <div class="flex flex-col flex-1 min-w-0">

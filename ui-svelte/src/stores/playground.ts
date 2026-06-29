@@ -16,6 +16,9 @@ export const selectedModelStore = userPref<string>("playground-selected-model", 
 export const systemPromptStore = userPref<string>("playground-system-prompt", "");
 export const temperatureStore = userPref<number>("playground-temperature", 0.7);
 export const maxTokensStore = userPref<number>("playground-max-tokens", 8192);
+// Cap on how long a model may "think" before being forced to answer (approx
+// tokens of reasoning). 0 = unlimited. Stops models stuck in reasoning loops.
+export const reasoningBudgetStore = userPref<number>("playground-reasoning-budget", 2500);
 export const webSearchStore = userPref<boolean>("playground-websearch", true);
 export const reasoningStore = userPref<boolean>("playground-reasoning", true);
 // Rewrite mode: composer becomes a two-field (instructions + prose) rewriter

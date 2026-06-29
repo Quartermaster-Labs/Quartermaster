@@ -117,10 +117,13 @@ cold path is dead — if preamble/conversation restore never fires, check they'r
 - **COLD** (`saveOnEvict`): evicting model A to load B kills A's process with no A
   request to trigger a save — the pre-stop hook snapshots it.
 
-"Worth saving" = **both** `continued` (the *human* sent ≥2 user messages — counts user
-turns, not assistant/tool turns, so an agentic one-shot `-p` run isn't mistaken for a
-chat) **and** live KV ≥ `minSaveTokens`. `saveOnEvict` drops the turn-count gate (an
-expensive run is worth saving regardless).
+"Worth saving" = live KV ≥ `minSaveTokens` — **cost is the only gate**, in both `onSwitch`
+and `saveOnEvict`. There is no turn-count gate: a single-turn chat with a long answer (or
+a big restored context) is still expensive to reprefill. An earlier `continued` gate
+(human sent ≥2 user turns) lived only on the warm path, and silently dropped such a
+conversation from occupant tracking when another anchor took the slot (e.g. a title-gen
+request sharing the preamble) — so a later unload's `saveOnEvict` couldn't recover it
+either, and the cold continuation fell back to the preamble (0 reuse on hybrid). Removed.
 
 ### Restore / seed path (preamble caches + Tier-1)
 
@@ -156,6 +159,17 @@ proof the KV was actually reused (`confirm` / `confirm-miss`), not just loaded.
 
 ### Gotchas
 
+- **We mutate the forwarded prompt (timestamp normalization).** `sessionAnchor`
+  strips the time-of-day from any ISO datetime in the **system prompt** (e.g. pi's
+  per-session memory snapshot `session_start at 2026-06-29 12:35:44` → `...2026-06-29`)
+  via `normalizeTimestamps`/`isoTimeOfDay`, and rewrites the body it re-attaches so the
+  upstream sees the date-only form too. Without this, an agent that stamps the wall
+  clock into its preamble changes the preamble hash every run (every `/clear`), forcing
+  a fresh 360 MB preamble-KV mint each time instead of a cache hit. Scope is **system
+  prompt only** — user messages keep their timestamps (pasted logs may need the
+  seconds). Tradeoff: the model sees date granularity, not the exact time. Bare dates
+  (no time-of-day) are untouched. Always on when the slot cache participates; add a
+  config gate only if date-only forwarding ever bites.
 - **Single slot.** All save/restore hit `/slots/0`. One global `sc.mu` serializes them
   — a multi-GB save blocks other models' requests for its duration (fine for single-user
   local inference; upgrade path = per-model locks).
@@ -181,6 +195,16 @@ proof the KV was actually reused (`confirm` / `confirm-miss`), not just loaded.
   → shows as `confirm-miss`, no correctness harm. The KV Cache tab's confirm-hit/miss
   ratio is the ground truth — trust it over architecture guessing. No model-type detection;
   add a skip-mint guard only if confirm-miss waste actually shows up for a given model.
+  - **Warm-slot skip (`preamble-warm`).** `onSwitch` does NOT restore the disk preamble
+    when the slot already holds that exact preamble live (`occupant.preamble == preamble`,
+    a different conversation from the same agent). A disk restore there would clobber valid
+    live state with a worse copy — on hybrid models the restored preamble yields 0 reuse
+    for a new continuation. Skipping lets the upstream reuse the shared prefix natively
+    (full reuse) — and on hybrid models that **warm native reuse is where the win comes
+    from**, not the disk restore. The disk preamble pays off on a genuinely-cold load
+    (fresh process, no live state) **for plain-attention models**, where a restored
+    preamble re-extends cleanly; on hybrid models a cold disk restore still yields ~0
+    reuse for a new suffix (inherent, no correctness harm).
 
 ## Connections
 

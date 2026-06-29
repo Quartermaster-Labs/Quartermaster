@@ -4,6 +4,7 @@
     selectedTabStore,
     type PlaygroundTab,
     maxTokensStore,
+    reasoningBudgetStore,
     webSearchStore,
     searxngUrlStore,
   } from "../stores/playground";
@@ -12,6 +13,7 @@
   import {
     chatSessions,
     activeChatId,
+    generatingChatId,
     newChatId,
     type ChatSession,
   } from "../stores/chatHistory";
@@ -93,15 +95,17 @@
   }
 </script>
 
-<div class="h-screen flex bg-background">
+<div class="h-screen flex bg-background dot-bg">
   <!-- Side rail: icons only at rest; expands on hover. Same width hover or with the chat list open. -->
   <nav
     class="group/rail shrink-0 w-14 hover:w-44 transition-[width] duration-200 overflow-hidden flex flex-col gap-1 p-2 border-r border-border bg-surface"
+    onmouseleave={() => (historyOpen = false)}
   >
     <div class="px-2 pb-2 h-9 font-mono text-[0.6rem] uppercase tracking-[0.2em] text-primary leading-tight">
       <span class="group-hover/rail:hidden">QM</span>
       <span class="hidden group-hover/rail:block">Quartermaster<br />Playground</span>
     </div>
+    <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pretty-scroll flex flex-col gap-1">
     {#each tabs as tab (tab.id)}
       {@const active = $selectedTabStore === tab.id}
       <button
@@ -111,7 +115,12 @@
           ? 'border-primary text-primary bg-secondary/60'
           : 'border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40'}"
       >
-        <tab.icon size={18} strokeWidth={active ? 2.4 : 1.8} class="shrink-0" />
+        <span class="relative shrink-0">
+          <tab.icon size={18} strokeWidth={active ? 2.4 : 1.8} class="shrink-0" />
+          {#if tab.id === "chat" && $generatingChatId}
+            <span class="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary reason-glow" title="A chat is generating"></span>
+          {/if}
+        </span>
         <span class="font-mono text-sm whitespace-nowrap opacity-0 group-hover/rail:opacity-100 transition-opacity">
           {tab.label}
         </span>
@@ -132,7 +141,7 @@
                 <Plus class="w-3.5 h-3.5 shrink-0" />
                 New chat
               </button>
-              <div class="max-h-64 overflow-y-auto pretty-scroll flex flex-col gap-px mt-0.5">
+              <div class="max-h-[40vh] overflow-y-auto pretty-scroll flex flex-col gap-px mt-0.5">
                 {#each sortedSessions as session (session.id)}
                   {@const sActive = session.id === $activeChatId}
                   <div
@@ -140,6 +149,9 @@
                       ? 'text-txtmain bg-white/5'
                       : 'text-txtsecondary hover:text-txtmain hover:bg-white/[0.03]'}"
                   >
+                    {#if session.id === $generatingChatId}
+                      <span class="w-1.5 h-1.5 shrink-0 rounded-full bg-primary reason-glow" title="Generating…"></span>
+                    {/if}
                     <button class="flex-1 min-w-0 text-center truncate text-[0.75rem]" onclick={() => activeChatId.set(session.id)} title={session.title || "New chat"}>
                       {session.title || "New chat"}
                     </button>
@@ -158,13 +170,14 @@
         </div>
       {/if}
     {/each}
+    </div>
 
     <!-- Settings (placeholder for per-user memory mgmt) above logout, each its
          own row like the tabs. -->
     <button
       onclick={() => (showSettings = true)}
       title="Settings"
-      class="mt-auto flex items-center gap-3 px-2.5 py-2 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
+      class="shrink-0 flex items-center gap-3 px-2.5 py-2 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
       <Settings size={18} class="shrink-0" />
       <span class="font-mono text-sm whitespace-nowrap opacity-0 group-hover/rail:opacity-100 transition-opacity">
@@ -327,6 +340,19 @@
           class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary"
           bind:value={$maxTokensStore}
         />
+      </div>
+
+      <div class="flex flex-col gap-1">
+        <label class="text-xs uppercase tracking-wide text-txtsecondary" for="reasoning-budget">Thinking Budget</label>
+        <input
+          id="reasoning-budget"
+          type="number"
+          min="0"
+          step="500"
+          class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary"
+          bind:value={$reasoningBudgetStore}
+        />
+        <p class="text-xs text-txtsecondary">Max reasoning tokens before the model is forced to answer. 0 = unlimited.</p>
       </div>
 
       <p class="text-xs text-txtsecondary border-t border-card-border pt-3">Per-user memory management is coming soon.</p>

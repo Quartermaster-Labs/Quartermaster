@@ -21,6 +21,7 @@ import (
 	"github.com/radu0120/llama-quartermaster/internal/logmon"
 	"github.com/radu0120/llama-quartermaster/internal/shared"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // slotCache persists a llama-server slot's KV-cache to disk so an expensive,
@@ -35,12 +36,12 @@ import (
 // process readies again (via the post-start hook), so a conversation survives a
 // full model swap, not just a same-model conversation switch.
 //
-// "Worth saving" = both gates must hold: the conversation is "continued" — the
-// HUMAN has sent >=2 user messages (an agentic one-shot `-p` run has a single
-// user turn but many assistant/tool turns, so counting assistant turns would
-// wrongly persist it; counting user turns does not) AND its live KV is at least
-// minSaveTokens (cheap conversations aren't worth the disk write). Files are
-// keyed by a stable conversation anchor so the same chat overwrites its own file
+// "Worth saving" = its live KV is at least minSaveTokens (cheap conversations
+// aren't worth the disk write). Cost is the sole gate — a single-turn chat with
+// a long answer or big context is still expensive to reprefill, so there is no
+// turn-count gate (an earlier "continued >=2 user turns" gate silently dropped
+// such conversations from tracking before they could be saved). Files are keyed
+// by a stable conversation anchor so the same chat overwrites its own file
 // across turns, and bounded by an LRU budget.
 type slotCache struct {
 	enabled   bool
@@ -75,9 +76,15 @@ type slotCache struct {
 	// (system+tools), so restoreOnLoad can seed from / mint this agent's preamble
 	// cache once the process is up. Set when a cold request has no exact saved file.
 	pendingPreamble map[string]string
-	// awaitConfirm[model] = the restore op ("restore-hit"/"restore-seed") whose
-	// reuse we expect the NEXT request for that model to confirm via cached_tokens.
-	awaitConfirm map[string]string
+	// awaitConfirm[model] = FIFO of restore/mint ops ("restore-hit"/"restore-seed"/
+	// "preamble") each awaiting confirmation from a subsequent request for that model
+	// via cached_tokens. A queue (not a single slot) because one model can serve many
+	// agents at once (Qwen Code main + memory subagent share a model) — interleaved
+	// requests would otherwise overwrite each other's pending op and lose confirmations.
+	// ponytail: FIFO, so counts are right; under out-of-order completion the per-event
+	// op *label* can still mismatch the request that confirmed it — upgrade to per-
+	// request correlation only if labels (not totals) start mattering.
+	awaitConfirm map[string][]string
 
 	// stats: counters + a bounded ring of recent events, surfaced at /api/kvcache
 	// for the Observe → KV Cache tab. Guarded by its own lock so record() can be
@@ -96,11 +103,16 @@ const (
 	kvEventRing        = 200       // recent-event ring size
 
 	// Preamble cache (a category distinct from per-conversation files): one
-	// preamble-only KV per (model, system+tools), seeding every cold load that
-	// shares it. preambleKeyPrefix tags the file key; keep a few generations per
+	// preamble-only KV per (model, system+tools), seeding every cold/warm load
+	// that shares it. preambleKeyPrefix tags the file key; keep a few generations per
 	// model so a changed preamble (e.g. a daily date bump) overwrites cleanly.
-	preambleKeyPrefix      = "preamble_"
-	maxPreambleGenerations = 3
+	preambleKeyPrefix = "preamble_"
+	// maxPreambleGenerations bounds preamble caches kept per model. Must hold ALL
+	// environments that share a model, not just one: a single Qwen Code session already
+	// mints 3 (main agent + memory subagents), so pi/Cline/etc on the same model need
+	// headroom or switching harnesses evicts the other's preamble. Pruned LRU-by-use
+	// (preamble-hit touches the file), so hot environments survive regardless of age.
+	maxPreambleGenerations = 8
 )
 
 // kvCounters tallies lifetime cache activity for the monitoring tab.
@@ -117,7 +129,8 @@ type kvCounters struct {
 	CachedTokensSeen int64 `json:"cachedTokensSeen"` // sum of confirmed cached_tokens
 	// Preamble cache (system+tools seed) activity.
 	PreambleMints int64 `json:"preambleMints"` // freshly synthesized preamble KV files
-	PreambleHits  int64 `json:"preambleHits"`  // cold load seeded from an existing preamble file
+	PreambleHits  int64 `json:"preambleHits"`  // cold/warm load seeded from an existing preamble file
+	PreambleWarm  int64 `json:"preambleWarm"`  // skipped restore — slot already held the preamble live
 }
 
 // kvEvent is one recent cache action shown in the live event log.
@@ -133,10 +146,9 @@ type kvEvent struct {
 
 // occInfo is the conversation currently resident in a model's slot.
 type occInfo struct {
-	key       string // stable conversation anchor hash
-	continued bool   // human sent >=2 user messages (a real ongoing conversation)
-	dirty     bool   // has run (generated) since its last save
-	preamble  string // system + tools prefix, persisted as a .meta sidecar for seed matching
+	key      string // stable conversation anchor hash
+	dirty    bool   // has run (generated) since its last save
+	preamble string // system + tools prefix, persisted as a .meta sidecar for seed matching
 }
 
 // newSlotCache builds the cache from config, applying defaults for unset knobs.
@@ -153,7 +165,7 @@ func newSlotCache(cfg config.SlotCacheConfig, running func() map[string]string, 
 		pending:         map[string]string{},
 		pendingSeed:     map[string]bool{},
 		pendingPreamble: map[string]string{},
-		awaitConfirm:    map[string]string{},
+		awaitConfirm:    map[string][]string{},
 	}
 	if !sc.enabled {
 		return sc
@@ -189,7 +201,7 @@ func (sc *slotCache) middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		key, preamble, continued, ok := sessionAnchor(r)
+		key, preamble, ok := sessionAnchor(r)
 		if !ok {
 			next.ServeHTTP(w, r)
 			return
@@ -201,7 +213,7 @@ func (sc *slotCache) middleware(next http.Handler) http.Handler {
 			return
 		}
 		if base, running := sc.running()[model]; running {
-			sc.onSwitch(r.Context(), model, base, key, preamble, continued)
+			sc.onSwitch(r.Context(), model, base, key, preamble)
 		} else {
 			// Cold: model not loaded. The forwarded request will trigger a router
 			// load; arrange for its KV to be restored (exact match) or seeded from a
@@ -210,14 +222,14 @@ func (sc *slotCache) middleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 		// The request generated (or at least ran), so the resident KV changed.
-		sc.markResident(model, key, preamble, continued)
+		sc.markResident(model, key, preamble)
 	})
 }
 
 // onSwitch handles the moment a (possibly) different conversation arrives for a
 // warm model: save the outgoing one if worth it, restore the incoming one if we
 // have it on disk, then mark the incoming as resident.
-func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble string, continued bool) {
+func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble string) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 
@@ -226,9 +238,13 @@ func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble st
 		return // same conversation continuing — nothing to swap
 	}
 
-	if occ != nil && occ.dirty && occ.continued {
+	if occ != nil && occ.dirty {
 		// Read the live slot occupancy; only persist a conversation big enough to
-		// be expensive to reprefill.
+		// be expensive to reprefill. No turn-count gate: a single-turn chat with a
+		// long answer (or big context) is still expensive — and if we skip it here,
+		// the outgoing conversation is dropped from occupant tracking unsaved, so a
+		// later unload's saveOnEvict can't recover it either (it only sees whatever
+		// anchor took the slot next). The toks>=minTokens check is the worth-it gate.
 		if toks := sc.slotTokens(ctx, base); toks >= sc.minTokens {
 			if err := sc.save(ctx, base, model, occ.key, occ.preamble); err != nil {
 				sc.log.Warnf("slotcache: save %s/%s: %v", model, occ.key, err)
@@ -252,12 +268,19 @@ func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble st
 			sc.record(kvEvent{Model: model, Op: "error", Key: short(key), Detail: "restore"})
 		} else {
 			sc.record(kvEvent{Model: model, Op: "restore-hit", Key: short(key)})
-			sc.awaitConfirm[model] = "restore-hit" // expect the forwarded request to confirm reuse
+			sc.pushAwait(model, "restore-hit") // expect a forwarded request to confirm reuse
 		}
+	} else if occ != nil && occ.preamble == preamble && preamble != "" {
+		// Slot already holds this exact preamble live (a different conversation from
+		// the same agent). Restoring the disk copy would clobber valid live state with
+		// a worse one — and on hybrid/linear-attn models (Qwen3.6) a disk-restored
+		// preamble doesn't re-extend for a new continuation (confirm-miss, 0 reused).
+		// Leave the warm slot; the request reuses the shared prefix natively.
+		sc.record(kvEvent{Model: model, Op: "preamble-warm"})
 	} else if sc.ensurePreambleSeed(ctx, base, model, preamble) {
-		sc.awaitConfirm[model] = "preamble"
+		sc.pushAwait(model, "preamble")
 	}
-	sc.occupant[model] = &occInfo{key: key, continued: continued, preamble: preamble}
+	sc.occupant[model] = &occInfo{key: key, preamble: preamble}
 }
 
 // markPendingRestore records that, when `model` next reaches Ready, its slot
@@ -321,7 +344,7 @@ func (sc *slotCache) restoreOnLoad(model string) {
 		sc.record(kvEvent{Model: model, Op: "restore-hit", Key: short(key)})
 		sc.mu.Lock()
 		sc.occupant[model] = &occInfo{key: key} // resident, not yet dirty (nothing ran)
-		sc.awaitConfirm[model] = "restore-hit"
+		sc.pushAwait(model, "restore-hit")
 		sc.mu.Unlock()
 		return
 	}
@@ -331,7 +354,7 @@ func (sc *slotCache) restoreOnLoad(model string) {
 	// markResident once the triggering request runs, so don't claim occupancy here.
 	if sc.ensurePreambleSeed(ctx, base, model, preamble) {
 		sc.mu.Lock()
-		sc.awaitConfirm[model] = "preamble"
+		sc.pushAwait(model, "preamble")
 		sc.mu.Unlock()
 		return
 	}
@@ -345,7 +368,7 @@ func (sc *slotCache) restoreOnLoad(model string) {
 		}
 		sc.record(kvEvent{Model: model, Op: "restore-seed", Key: short(seedKey)})
 		sc.mu.Lock()
-		sc.awaitConfirm[model] = "restore-seed"
+		sc.pushAwait(model, "restore-seed")
 		sc.mu.Unlock()
 		return
 	}
@@ -355,7 +378,7 @@ func (sc *slotCache) restoreOnLoad(model string) {
 // ensurePreambleSeed makes this agent's preamble (system+tools) KV resident in the
 // model's slot and persisted as a reusable "preamble cache" — a category distinct
 // from per-conversation files: one preamble-only KV per (model, system+tools),
-// minted once and reused by every cold load that shares it. A changed preamble
+// minted once and reused by every cold/warm load that shares it. A changed preamble
 // (e.g. a daily date bump) hashes differently, so it mints a fresh file and the
 // old generation is pruned (one rewrite/day in the common case).
 //
@@ -389,6 +412,11 @@ func (sc *slotCache) ensurePreambleSeed(ctx context.Context, base, model, preamb
 			return false
 		}
 		sc.record(kvEvent{Model: model, Op: "preamble-hit", Key: short(hash)})
+		// Touch mtime so prunePreambleFiles is LRU-by-use, not LRU-by-mint: a preamble
+		// minted once but restored often (pi's stable prompt) must not look "oldest" and
+		// get evicted when another environment mints on the same model.
+		now := time.Now()
+		_ = os.Chtimes(filepath.Join(sc.dir, fileName(model, pkey)), now, now)
 		return true
 	}
 	// Mint: a synthetic system+tools-only prefill leaves the preamble KV in the
@@ -457,6 +485,17 @@ func splitPreamble(p string) (sysRaw, toolsRaw string) {
 	return p, ""
 }
 
+// isoTimeOfDay matches an ISO date immediately followed by a time-of-day, e.g.
+// "2026-06-29 12:35:44", "2026-06-29T12:35:44.123Z", "2026-06-29 12:35+02:00".
+// Group 1 is the date; the time (and any fraction/offset) is dropped.
+var isoTimeOfDay = regexp.MustCompile(`(\d{4}-\d{2}-\d{2})[ T]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?`)
+
+// normalizeTimestamps reduces any ISO datetime in s to date granularity. A bare
+// date (no time-of-day) is left untouched. See sessionAnchor for why.
+func normalizeTimestamps(s string) string {
+	return isoTimeOfDay.ReplaceAllString(s, "$1")
+}
+
 func preambleHash(preamble string) string {
 	sum := sha256.Sum256([]byte("preamble\x00" + preamble))
 	return hex.EncodeToString(sum[:16])
@@ -466,9 +505,10 @@ func preambleKey(hash string) string { return preambleKeyPrefix + hash }
 
 func isPreambleKey(key string) bool { return strings.HasPrefix(key, preambleKeyPrefix) }
 
-// prunePreambleFiles keeps only the newest maxPreambleGenerations preamble caches
-// per model, deleting older generations (and their .meta) — e.g. yesterday's
-// date-stamped preamble once today's has been minted.
+// prunePreambleFiles keeps only the most-recently-used maxPreambleGenerations
+// preamble caches per model, deleting the rest (and their .meta). "Used" = mtime,
+// which preamble-hit touches — so this is LRU by access, not by mint time, and a
+// hot but old preamble (pi's stable prompt) survives while a stale one is evicted.
 func (sc *slotCache) prunePreambleFiles(model string) {
 	entries, err := os.ReadDir(sc.dir)
 	if err != nil {
@@ -505,9 +545,9 @@ func (sc *slotCache) prunePreambleFiles(model string) {
 // SAME warm model, but evicting model A to load model B kills A's process (slot
 // gone) without any A request to trigger a save. The router calls this first.
 //
-// Gated on cost only (slotTokens >= minTokens), not the "continued" turn count:
-// an expensive-to-reprefill conversation is worth saving regardless of whether
-// it's an interactive chat or an agentic run with a single user turn.
+// Gated on cost only (slotTokens >= minTokens): an expensive-to-reprefill
+// conversation is worth saving regardless of whether it's an interactive chat or
+// an agentic run with a single user turn. (onSwitch uses the same cost-only gate.)
 func (sc *slotCache) saveOnEvict(model string) {
 	if sc == nil || !sc.enabled || model == "" {
 		return
@@ -543,7 +583,7 @@ func (sc *slotCache) saveOnEvict(model string) {
 }
 
 // markResident records that `key` now holds the model's slot and has run.
-func (sc *slotCache) markResident(model, key, preamble string, continued bool) {
+func (sc *slotCache) markResident(model, key, preamble string) {
 	if model == "" {
 		return
 	}
@@ -551,10 +591,9 @@ func (sc *slotCache) markResident(model, key, preamble string, continued bool) {
 	defer sc.mu.Unlock()
 	occ := sc.occupant[model]
 	if occ == nil || occ.key != key {
-		occ = &occInfo{key: key, continued: continued}
+		occ = &occInfo{key: key}
 		sc.occupant[model] = occ
 	}
-	occ.continued = continued
 	occ.preamble = preamble
 	occ.dirty = true
 }
@@ -608,10 +647,11 @@ func (sc *slotCache) slotAction(ctx context.Context, base, action, filename stri
 		return err
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s -> %s", action, resp.Status)
+		rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+		return fmt.Errorf("%s -> %s: %s", action, resp.Status, string(rb))
 	}
+	io.Copy(io.Discard, resp.Body)
 	return nil
 }
 
@@ -845,12 +885,27 @@ func (sc *slotCache) record(ev kvEvent) {
 		sc.counters.PreambleMints++
 	case "preamble-hit":
 		sc.counters.PreambleHits++
+	case "preamble-warm":
+		sc.counters.PreambleWarm++
 	}
 	sc.events = append(sc.events, ev)
 	if len(sc.events) > kvEventRing {
 		sc.events = sc.events[len(sc.events)-kvEventRing:]
 	}
 	sc.statsMu.Unlock()
+}
+
+// awaitConfirmMax bounds the per-model pending-op FIFO so a model that mints/
+// restores but never receives a confirming request can't grow unbounded.
+const awaitConfirmMax = 16
+
+// pushAwait queues an op for the next request on model to confirm. Caller holds sc.mu.
+func (sc *slotCache) pushAwait(model, op string) {
+	q := append(sc.awaitConfirm[model], op)
+	if len(q) > awaitConfirmMax {
+		q = q[len(q)-awaitConfirmMax:]
+	}
+	sc.awaitConfirm[model] = q
 }
 
 // confirmReuse is called by the metrics monitor after each successful request
@@ -863,12 +918,18 @@ func (sc *slotCache) confirmReuse(model string, prompt, cached int) {
 		return
 	}
 	sc.mu.Lock()
-	op, ok := sc.awaitConfirm[model]
-	delete(sc.awaitConfirm, model)
-	sc.mu.Unlock()
-	if !ok {
+	q := sc.awaitConfirm[model]
+	if len(q) == 0 {
+		sc.mu.Unlock()
 		return // not a post-restore request; warm-slot reuse isn't ours to claim
 	}
+	op := q[0] // FIFO: oldest pending op confirmed first
+	if len(q) == 1 {
+		delete(sc.awaitConfirm, model)
+	} else {
+		sc.awaitConfirm[model] = q[1:]
+	}
+	sc.mu.Unlock()
 	if cached > 0 {
 		sc.record(kvEvent{
 			Model:  model,
@@ -891,7 +952,7 @@ type KVCacheStats struct {
 	Counters  kvCounters  `json:"counters"`
 	Files     []kvFileRow `json:"files"`
 	// PreambleFiles are the system+tools seed caches (distinct from per-conversation
-	// Files): one per agent/environment, reused to seed cold loads.
+	// Files): one per agent/environment, reused to seed cold/warm loads.
 	PreambleFiles []kvFileRow `json:"preambleFiles"`
 	Events        []kvEvent   `json:"events"` // newest first
 }
@@ -989,38 +1050,38 @@ func preambleSnippet(s string) string {
 // per-conversation ID (e.g. the playground) should send it.
 const sessionConvHeader = "X-Conversation-Id"
 
-// sessionAnchor derives a stable per-conversation key and the "continued" flag
+// sessionAnchor derives a stable per-conversation key and the shared preamble
 // from a chat-style request, restoring the body for downstream handlers.
 //
 // Key = the X-Conversation-Id header when the client sends one (preferred:
 // survives compaction, no opening collisions); otherwise sha256(first system
 // message + first user message) — invariant across a conversation's turns
 // (history grows, the opening doesn't), so a chat maps to one file, but fragile
-// if the opening is rewritten (compaction). continued = the human sent >=2 user
-// messages — an agentic one-shot run has a single user turn but many
-// assistant/tool turns, so we count USER turns, not assistant turns, to tell an
-// ongoing chat from a throwaway. ok=false when the body has no user message.
-func sessionAnchor(r *http.Request) (key string, preamble string, continued bool, ok bool) {
+// if the opening is rewritten (compaction). ok=false when the body has no user
+// message.
+func sessionAnchor(r *http.Request) (key string, preamble string, ok bool) {
 	if r.Body == nil {
-		return "", "", false, false
+		return "", "", false
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
 	if err != nil {
-		return "", "", false, false
+		return "", "", false
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body)) // restore for the next handler
 
 	msgs := gjson.GetBytes(body, "messages")
 	if !msgs.IsArray() {
-		return "", "", false, false
+		return "", "", false
 	}
 	var sys, firstUser string
 	var userTurns int
-	for _, m := range msgs.Array() {
+	sysIdx := -1
+	for i, m := range msgs.Array() {
 		switch m.Get("role").String() {
 		case "system", "developer":
 			if sys == "" {
 				sys = m.Get("content").Raw
+				sysIdx = i
 			}
 		case "user":
 			if userTurns == 0 {
@@ -1030,13 +1091,41 @@ func sessionAnchor(r *http.Request) (key string, preamble string, continued bool
 		}
 	}
 	if userTurns == 0 {
-		return "", "", false, false
+		return "", "", false
 	}
 	// Anthropic /v1/messages carries the system prompt in a top-level "system" field
 	// (string or content-block array), not a system-role message — fall back to it so
 	// non-OpenAI harnesses get a preamble cache too.
+	sysFromTop := false
 	if sys == "" {
 		sys = gjson.GetBytes(body, "system").Raw
+		sysFromTop = true
+	}
+	// Strip sub-day timestamps from the system prompt. Agents that stamp the
+	// wall-clock time into their preamble (pi's per-session memory snapshot:
+	// "session_start at 2026-06-29 12:35:44") otherwise change the preamble hash
+	// every run, forcing a fresh preamble-KV mint on each /clear. Rewriting the
+	// forwarded body too keeps the upstream prefill byte-identical to the date-only
+	// KV we cache, so it actually prefix-matches on restore.
+	// ponytail: system prompt only — user messages may carry timestamps that matter
+	// (pasted logs). Add a config gate only if the date-only forward ever bites.
+	if sys != "" {
+		if norm := normalizeTimestamps(sys); norm != sys {
+			path := "system"
+			if !sysFromTop && sysIdx >= 0 {
+				path = "messages." + strconv.Itoa(sysIdx) + ".content"
+			}
+			if nb, err := sjson.SetRawBytes(body, path, []byte(norm)); err == nil {
+				body = nb
+				// Forward the normalized (shorter) body — fix Content-Length too, or the
+				// reverse proxy advertises the stale length and the upstream stalls (502).
+				r.Body = io.NopCloser(bytes.NewReader(body))
+				r.Header.Del("Transfer-Encoding")
+				r.Header.Set("Content-Length", strconv.Itoa(len(body)))
+				r.ContentLength = int64(len(body))
+				sys = norm
+			}
+		}
 	}
 	// preamble = the stable leading prefix shared across turns and across distinct
 	// chats from the same agent: system/developer content + the tool definitions.
@@ -1047,8 +1136,8 @@ func sessionAnchor(r *http.Request) (key string, preamble string, continued bool
 	// compaction => same file => the stale KV is overwritten on the next save.
 	if id := strings.TrimSpace(r.Header.Get(sessionConvHeader)); id != "" {
 		sum := sha256.Sum256([]byte("id\x00" + id))
-		return hex.EncodeToString(sum[:16]), preamble, userTurns >= 2, true
+		return hex.EncodeToString(sum[:16]), preamble, true
 	}
 	sum := sha256.Sum256([]byte(sys + "\x00" + firstUser))
-	return hex.EncodeToString(sum[:16]), preamble, userTurns >= 2, true
+	return hex.EncodeToString(sum[:16]), preamble, true
 }

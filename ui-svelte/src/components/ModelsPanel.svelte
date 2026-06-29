@@ -1,9 +1,10 @@
 <script lang="ts">
   import { push } from "svelte-spa-router";
+  import { get } from "svelte/store";
   import { slide } from "svelte/transition";
   import { models, loadModel, unloadSingleModel, getModelConfig, getSettings, pickModelsFolder, type ModelConfig } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
-  import { selectedTabStore as chatTabStore, selectedModelStore as chatModelStore } from "../stores/playground";
+  import { playgroundPort } from "../stores/playgroundAuth";
   import { prettifyModelName, modelCategory, MODEL_CATEGORIES, type ModelCategory } from "../lib/modelUtils";
   import { scrollFade } from "../lib/scrollFade";
   import type { Model } from "../lib/types";
@@ -67,12 +68,34 @@
     }
   }
 
-  // Shared playground singletons — set them, then jump to /test. Image models
-  // open the Images tab (generate), everything else the Chat tab.
+  // Every category except embed has a playground tab (chat/images/speech/
+  // audio/rerank). Embedders have no interactive UI, so they get no button.
+  function playable(m: Model): boolean {
+    return modelCategory(m) !== "embed";
+  }
+
+  // Pick the playground tab for a model from its capabilities. Rerankers ride the
+  // llm category but open the Rerank tab, not Chat.
+  function playgroundTab(m: Model): string {
+    const c = m.capabilities;
+    if (c?.image_generation) return "images";
+    if (c?.audio_speech) return "speech";
+    if (c?.audio_transcriptions) return "audio";
+    if (c?.reranker) return "rerank";
+    return "chat";
+  }
+
+  // Playground is a separate app on its own port — open it with the model + tab
+  // as launch params (different origin, so stores can't be shared directly).
   function chatWith(m: Model): void {
-    chatModelStore.set(m.id);
-    chatTabStore.set(m.capabilities?.image_generation ? "images" : "chat");
-    push("/test");
+    const tab = playgroundTab(m);
+    const port = get(playgroundPort);
+    if (!port) {
+      push("/test"); // no playground port configured — show the stub
+      return;
+    }
+    const u = `${window.location.protocol}//${window.location.hostname}:${port}/ui/?model=${encodeURIComponent(m.id)}&tab=${tab}`;
+    window.open(u, "_blank", "noopener");
   }
 
   // A card: one gguf family. primary is the base entry; variants are the rest.
@@ -370,21 +393,19 @@
                       <path fill-rule="evenodd" d="M8.34 1.804A1 1 0 0 1 9.32 1h1.36a1 1 0 0 1 .98.804l.295 1.473c.497.144.97.342 1.41.587l1.25-.834a1 1 0 0 1 1.262.125l.962.962a1 1 0 0 1 .125 1.262l-.834 1.25c.245.44.443.913.587 1.41l1.473.294a1 1 0 0 1 .804.98v1.361a1 1 0 0 1-.804.98l-1.473.295a6.95 6.95 0 0 1-.587 1.41l.834 1.25a1 1 0 0 1-.125 1.262l-.962.962a1 1 0 0 1-1.262.125l-1.25-.834c-.44.245-.913.443-1.41.587l-.294 1.473a1 1 0 0 1-.98.804H9.32a1 1 0 0 1-.98-.804l-.295-1.473a6.95 6.95 0 0 1-1.41-.587l-1.25.834a1 1 0 0 1-1.262-.125l-.962-.962a1 1 0 0 1-.125-1.262l.834-1.25a6.95 6.95 0 0 1-.587-1.41l-1.473-.294A1 1 0 0 1 1 10.68V9.32a1 1 0 0 1 .804-.98l1.473-.295c.144-.497.342-.97.587-1.41l-.834-1.25a1 1 0 0 1 .125-1.262l.962-.962A1 1 0 0 1 5.38 3.03l1.25.834c.44-.245.913-.443 1.41-.587l.294-1.473ZM10 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" clip-rule="evenodd" />
                     </svg>
                   </button>
-                  {#if live}
+                  {#if live && playable(m)}
                     <button
                       class="btn btn--sm py-1.5 inline-flex items-center gap-1.5 uppercase tracking-wide hover:border-primary hover:text-primary"
                       onclick={() => chatWith(m)}
                       disabled={m.state !== "ready"}
-                      title={m.capabilities?.image_generation
-                        ? "Open this model in the image playground"
-                        : "Open this model in the chat playground"}
+                      title="Open this model in the {playgroundTab(m)} playground"
                     >
                       {#if m.capabilities?.image_generation}
                         <svg viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3 shrink-0" aria-hidden="true"><path fill-rule="evenodd" d="M1 5.25A2.25 2.25 0 0 1 3.25 3h13.5A2.25 2.25 0 0 1 19 5.25v9.5A2.25 2.25 0 0 1 16.75 17H3.25A2.25 2.25 0 0 1 1 14.75v-9.5Zm1.5 5.81v3.69c0 .414.336.75.75.75h13.5a.75.75 0 0 0 .75-.75v-2.69l-2.22-2.219a.75.75 0 0 0-1.06 0l-1.91 1.909.47.47a.75.75 0 1 1-1.06 1.06L6.53 8.091a.75.75 0 0 0-1.06 0l-2.97 2.97ZM12 7a1 1 0 1 1 2 0 1 1 0 0 1-2 0Z" clip-rule="evenodd" /></svg>
                         Generate
                       {:else}
                         <svg viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3 shrink-0" aria-hidden="true"><path fill-rule="evenodd" d="M10 3c-4.418 0-8 2.91-8 6.5 0 1.66.77 3.17 2.03 4.32-.1.9-.42 1.78-.95 2.5a.5.5 0 0 0 .5.78c1.46-.25 2.7-.78 3.66-1.42.86.21 1.78.32 2.76.32 4.418 0 8-2.91 8-6.5S14.418 3 10 3Z" clip-rule="evenodd" /></svg>
-                        Chat
+                        {m.capabilities?.audio_speech ? "Speak" : m.capabilities?.audio_transcriptions ? "Transcribe" : m.capabilities?.reranker ? "Rerank" : "Chat"}
                       {/if}
                     </button>
                     <button

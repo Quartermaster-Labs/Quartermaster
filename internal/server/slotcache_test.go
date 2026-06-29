@@ -16,36 +16,83 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func anchorOf(t *testing.T, body string) (key string, continued, ok bool) {
+func anchorOf(t *testing.T, body string) (key string, ok bool) {
 	t.Helper()
 	r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
-	k, _, c, o := sessionAnchor(r)
-	return k, c, o
+	k, _, o := sessionAnchor(r)
+	return k, o
+}
+
+func TestNormalizeTimestamps(t *testing.T) {
+	cases := map[string]string{
+		"session_start at 2026-06-29 12:35:44.": "session_start at 2026-06-29.",
+		"2026-06-27T18:29:21Z":                  "2026-06-27",
+		"2026-06-29 12:35+02:00 done":           "2026-06-29 done",
+		"Current date: 2026-06-29":              "Current date: 2026-06-29", // bare date untouched
+		"no timestamp here":                     "no timestamp here",
+	}
+	for in, want := range cases {
+		if got := normalizeTimestamps(in); got != want {
+			t.Errorf("normalizeTimestamps(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// An agent that stamps the wall-clock time into its system prompt (pi's memory
+// snapshot) must map to one stable preamble across runs, and the forwarded body
+// must carry the date-only system so the cached KV prefix-matches upstream.
+func TestSessionAnchor_NormalizeTimestamps(t *testing.T) {
+	mk := func(ts string) (key, preamble, fwd string) {
+		body := `{"messages":[{"role":"system","content":"You are pi. session_start at ` + ts + ` done"},{"role":"user","content":"hi"}]}`
+		r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+		k, p, _ := sessionAnchor(r)
+		b, _ := io.ReadAll(r.Body) // body sessionAnchor re-attached for downstream
+		// Content-Length must track the rewritten (shorter) body, or the reverse
+		// proxy advertises a stale length and the upstream stalls (502).
+		if r.ContentLength != int64(len(b)) {
+			t.Errorf("ContentLength %d != forwarded body len %d", r.ContentLength, len(b))
+		}
+		return k, p, string(b)
+	}
+	k1, p1, f1 := mk("2026-06-29 12:35:44")
+	k2, p2, _ := mk("2026-06-29 18:02:09")
+	if k1 != k2 {
+		t.Errorf("same-day different-time system must share a key: %s vs %s", k1, k2)
+	}
+	if p1 != p2 {
+		t.Error("preamble must be timestamp-stable across runs")
+	}
+	if strings.Contains(f1, "12:35:44") {
+		t.Errorf("forwarded body still carries the time-of-day:\n%s", f1)
+	}
+	if !strings.Contains(f1, "session_start at 2026-06-29 done") {
+		t.Errorf("forwarded body lost the date:\n%s", f1)
+	}
 }
 
 // X-Conversation-Id keys the file: stable even when the opening is rewritten
 // (compaction), and distinct ids never collide despite an identical opening.
 func TestSessionAnchor_ConversationIDHeader(t *testing.T) {
-	mk := func(id, body string) (string, bool, bool) {
+	mk := func(id, body string) (string, bool) {
 		r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
 		if id != "" {
 			r.Header.Set("X-Conversation-Id", id)
 		}
-		k, _, c, o := sessionAnchor(r)
-		return k, c, o
+		k, _, o := sessionAnchor(r)
+		return k, o
 	}
 	orig := `{"messages":[{"role":"system","content":"sys"},{"role":"user","content":"hello"}]}`
 	compacted := `{"messages":[{"role":"user","content":"SUMMARY: ...different opening..."}]}`
 
-	kOrig, _, _ := mk("chat-1", orig)
-	kCompacted, _, _ := mk("chat-1", compacted) // same id, rewritten opening
+	kOrig, _ := mk("chat-1", orig)
+	kCompacted, _ := mk("chat-1", compacted) // same id, rewritten opening
 	if kOrig != kCompacted {
 		t.Errorf("same conversation id must yield same key across compaction: %s vs %s", kOrig, kCompacted)
 	}
 
 	// Two different chats with an IDENTICAL opening must not collide when ids differ.
-	kA, _, _ := mk("chat-A", orig)
-	kB, _, _ := mk("chat-B", orig)
+	kA, _ := mk("chat-A", orig)
+	kB, _ := mk("chat-B", orig)
 	if kA == kB {
 		t.Error("distinct conversation ids with same opening must not collide")
 	}
@@ -60,55 +107,29 @@ func TestSessionAnchor_StableAcrossTurns(t *testing.T) {
 	turn1 := `{"messages":[{"role":"system","content":"sys"},{"role":"user","content":"hello"}]}`
 	turn2 := `{"messages":[{"role":"system","content":"sys"},{"role":"user","content":"hello"},{"role":"assistant","content":"hi"},{"role":"user","content":"more"}]}`
 
-	k1, cont1, ok1 := anchorOf(t, turn1)
-	k2, cont2, ok2 := anchorOf(t, turn2)
+	k1, ok1 := anchorOf(t, turn1)
+	k2, ok2 := anchorOf(t, turn2)
 	if !ok1 || !ok2 {
 		t.Fatalf("expected ok for both turns, got %v %v", ok1, ok2)
 	}
 	if k1 != k2 {
 		t.Errorf("key not stable across turns: %s vs %s", k1, k2)
 	}
-	if cont1 {
-		t.Errorf("turn1 (1 user msg) should not be 'continued'")
-	}
-	if !cont2 {
-		t.Errorf("turn2 (2 user msgs) should be 'continued'")
-	}
-}
-
-// An agentic one-shot has a single user turn but many assistant/tool turns; it
-// must NOT count as continued (else throwaway -p runs would persist).
-func TestSessionAnchor_AgenticOneShotNotContinued(t *testing.T) {
-	body := `{"messages":[
-	  {"role":"user","content":"do a task"},
-	  {"role":"assistant","content":"step 1"},
-	  {"role":"tool","content":"result"},
-	  {"role":"assistant","content":"step 2"},
-	  {"role":"tool","content":"result"},
-	  {"role":"assistant","content":"done"}
-	]}`
-	_, continued, ok := anchorOf(t, body)
-	if !ok {
-		t.Fatal("expected ok")
-	}
-	if continued {
-		t.Error("agentic one-shot (1 user turn) must not be 'continued'")
-	}
 }
 
 func TestSessionAnchor_DistinctConversations(t *testing.T) {
-	a, _, _ := anchorOf(t, `{"messages":[{"role":"user","content":"alpha"}]}`)
-	b, _, _ := anchorOf(t, `{"messages":[{"role":"user","content":"beta"}]}`)
+	a, _ := anchorOf(t, `{"messages":[{"role":"user","content":"alpha"}]}`)
+	b, _ := anchorOf(t, `{"messages":[{"role":"user","content":"beta"}]}`)
 	if a == b {
 		t.Error("different first user messages should yield different keys")
 	}
 }
 
 func TestSessionAnchor_NoUserSkips(t *testing.T) {
-	if _, _, ok := anchorOf(t, `{"messages":[{"role":"system","content":"only system"}]}`); ok {
+	if _, ok := anchorOf(t, `{"messages":[{"role":"system","content":"only system"}]}`); ok {
 		t.Error("body with no user message must be skipped (ok=false)")
 	}
-	if _, _, ok := anchorOf(t, `{"prompt":"not a chat"}`); ok {
+	if _, ok := anchorOf(t, `{"prompt":"not a chat"}`); ok {
 		t.Error("non-chat body must be skipped (ok=false)")
 	}
 }
@@ -154,7 +175,7 @@ func newEvictTestCache(dir, base string) *slotCache {
 		pending:         map[string]string{},
 		pendingSeed:     map[string]bool{},
 		pendingPreamble: map[string]string{},
-		awaitConfirm:    map[string]string{},
+		awaitConfirm:    map[string][]string{},
 	}
 	return sc
 }
@@ -163,7 +184,7 @@ func TestSlotCache_SaveOnEvict(t *testing.T) {
 	dir := t.TempDir()
 	srv := fakeBackend(t, 35000, dir) // above 30k threshold
 	sc := newEvictTestCache(dir, srv.URL)
-	sc.occupant["m"] = &occInfo{key: "abc", continued: false, dirty: true} // 1-user-turn pi run
+	sc.occupant["m"] = &occInfo{key: "abc", dirty: true} // 1-user-turn pi run
 
 	sc.saveOnEvict("m")
 
@@ -265,7 +286,7 @@ func TestSlotCache_ConfirmReuse(t *testing.T) {
 	}
 
 	// Restore happened and the next request reused KV.
-	sc.awaitConfirm["m"] = "restore-hit"
+	sc.pushAwait("m", "restore-hit")
 	sc.confirmReuse("m", 5000, 2680)
 	if sc.counters.ConfirmedReuses != 1 || sc.counters.CachedTokensSeen != 2680 {
 		t.Fatalf("confirmed reuse not recorded: %+v", sc.counters)
@@ -275,10 +296,60 @@ func TestSlotCache_ConfirmReuse(t *testing.T) {
 	}
 
 	// Restore happened but upstream cached nothing => confirm-miss.
-	sc.awaitConfirm["m"] = "restore-seed"
+	sc.pushAwait("m", "restore-seed")
 	sc.confirmReuse("m", 5000, 0)
 	if sc.counters.ConfirmedMisses != 1 || sc.counters.ConfirmedReuses != 1 {
 		t.Fatalf("confirm-miss not recorded: %+v", sc.counters)
+	}
+
+	// Two agents on one model interleave: both ops queue, both confirm (FIFO),
+	// neither overwrites the other.
+	sc.pushAwait("m", "preamble")
+	sc.pushAwait("m", "restore-hit")
+	sc.confirmReuse("m", 5000, 1000)
+	sc.confirmReuse("m", 5000, 2000)
+	if sc.counters.ConfirmedReuses != 3 || sc.counters.CachedTokensSeen != 2680+1000+2000 {
+		t.Fatalf("FIFO confirms not both counted: %+v", sc.counters)
+	}
+}
+
+// prunePreambleFiles is LRU-by-use: a touched (recently restored) preamble survives
+// pruning even if it was minted earliest, while a stale untouched one is evicted.
+func TestSlotCache_PrunePreambleLRU(t *testing.T) {
+	dir := t.TempDir()
+	sc := newEvictTestCache(dir, "")
+
+	// One more preamble than the cap, oldest mtime first.
+	base := time.Now().Add(-time.Hour)
+	var keys []string
+	for i := 0; i < maxPreambleGenerations+1; i++ {
+		key := preambleKey(fmt.Sprintf("env%02d", i))
+		keys = append(keys, key)
+		bin := filepath.Join(dir, fileName("m", key))
+		meta := filepath.Join(dir, metaName("m", key))
+		if err := os.WriteFile(bin, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(meta, []byte("p"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		mt := base.Add(time.Duration(i) * time.Minute) // env00 oldest
+		os.Chtimes(bin, mt, mt)
+	}
+
+	// env00 is the oldest by mint, but it's actively used → touch it to now.
+	oldest := filepath.Join(dir, fileName("m", keys[0]))
+	now := time.Now()
+	os.Chtimes(oldest, now, now)
+
+	sc.prunePreambleFiles("m")
+
+	// env00 (touched) must survive; env01 (now the oldest untouched) must be gone.
+	if _, err := os.Stat(oldest); err != nil {
+		t.Errorf("touched preamble env00 was pruned: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, fileName("m", keys[1]))); !os.IsNotExist(err) {
+		t.Errorf("stale preamble env01 should have been pruned, err=%v", err)
 	}
 }
 
@@ -314,9 +385,12 @@ func TestSlotCache_PreambleCache(t *testing.T) {
 	}
 }
 
-// Warm path: a brand-new conversation on an already-loaded model still mints the
-// agent's preamble cache and reuses it on the next new conversation — not just
-// cold loads.
+// Warm path: a brand-new conversation on an already-loaded model mints the
+// agent's preamble cache on first sight. A SECOND new conversation with the same
+// preamble must NOT re-restore from disk — the slot already holds the preamble
+// live, so we skip (preamble-warm) and let the upstream reuse the prefix natively.
+// Restoring the disk copy would clobber valid live state (and yields 0 reuse on
+// hybrid/linear-attn models).
 func TestSlotCache_PreambleCache_WarmSwitch(t *testing.T) {
 	dir := t.TempDir()
 	srv := fakeBackend(t, 0, dir)
@@ -324,13 +398,13 @@ func TestSlotCache_PreambleCache_WarmSwitch(t *testing.T) {
 
 	preamble := strings.Repeat("S", seedMinPrefixBytes+100) + "\x00tools\x00[]"
 
-	sc.onSwitch(context.Background(), "m", srv.URL, "conv1", preamble, true) // warm, new convo
+	sc.onSwitch(context.Background(), "m", srv.URL, "conv1", preamble) // warm, new convo
 	if sc.counters.PreambleMints != 1 {
 		t.Fatalf("warm switch should mint preamble, got %+v", sc.counters)
 	}
-	sc.onSwitch(context.Background(), "m", srv.URL, "conv2", preamble, true) // another new convo
-	if sc.counters.PreambleHits != 1 {
-		t.Fatalf("warm switch should reuse preamble, got %+v", sc.counters)
+	sc.onSwitch(context.Background(), "m", srv.URL, "conv2", preamble) // same preamble, new convo
+	if sc.counters.PreambleWarm != 1 || sc.counters.PreambleHits != 0 {
+		t.Fatalf("same-preamble warm switch should skip restore (warm=1 hit=0), got %+v", sc.counters)
 	}
 }
 
@@ -362,11 +436,11 @@ func TestSlotCache_PreambleCache_DropsStale(t *testing.T) {
 	day2 := body + "date=2026-06-29" + "\x00tools\x00[]"
 	old := fileName("m", preambleKey(preambleHash(day1)))
 
-	sc.onSwitch(context.Background(), "m", srv.URL, "c1", day1, true) // mint day1
+	sc.onSwitch(context.Background(), "m", srv.URL, "c1", day1) // mint day1
 	if _, err := os.Stat(filepath.Join(dir, old)); err != nil {
 		t.Fatalf("day1 preamble not written: %v", err)
 	}
-	sc.onSwitch(context.Background(), "m", srv.URL, "c2", day2, true) // mint day2 -> drops day1
+	sc.onSwitch(context.Background(), "m", srv.URL, "c2", day2) // mint day2 -> drops day1
 	if _, err := os.Stat(filepath.Join(dir, old)); !os.IsNotExist(err) {
 		t.Errorf("stale day1 preamble should be deleted, stat err=%v", err)
 	}
@@ -377,7 +451,7 @@ func TestSlotCache_PreambleCache_DropsStale(t *testing.T) {
 func TestSessionAnchor_AnthropicSystem(t *testing.T) {
 	body := `{"system":"you are helpful","tools":[{"name":"x"}],"messages":[{"role":"user","content":"hi"}]}`
 	r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
-	_, preamble, _, ok := sessionAnchor(r)
+	_, preamble, ok := sessionAnchor(r)
 	if !ok {
 		t.Fatal("expected anchor ok")
 	}

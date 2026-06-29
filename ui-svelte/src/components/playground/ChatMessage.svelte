@@ -3,6 +3,7 @@
   import type { RenderedBlock } from "../../lib/markdown";
   import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronDown, ChevronRight, Brain, Code, Search, PenLine } from "lucide-svelte";
   import { getTextContent, getImageUrls } from "../../lib/types";
+  import { harmonyToThink } from "../../lib/reasoning";
   import type { ContentPart } from "../../lib/types";
   import RewriteDiff from "./RewriteDiff.svelte";
 
@@ -12,21 +13,28 @@
     reasoning_content?: string;
     reasoningTimeMs?: number;
     genTimeMs?: number;
-    searches?: { query: string; results: string; at?: number; sources?: { title: string; url: string }[] }[];
+    searches?: { query: string; results: string; at?: number; reasoningAt?: number; duringReasoning?: boolean; sources?: { title: string; url: string }[] }[];
     rewriteInstruction?: string;
     rewriteOriginal?: string;
     isStreaming?: boolean;
     isReasoning?: boolean;
     isSearching?: boolean;
     modelReady?: boolean;
+    hasVisionInput?: boolean;
     onEdit?: (newContent: string) => void;
     onRegenerate?: () => void;
   }
 
-  let { role, content, reasoning_content = "", reasoningTimeMs = 0, genTimeMs = 0, searches, rewriteInstruction, rewriteOriginal, isStreaming = false, isReasoning = false, isSearching = false, modelReady = false, onEdit, onRegenerate }: Props = $props();
+  let { role, content, reasoning_content = "", reasoningTimeMs = 0, genTimeMs = 0, searches, rewriteInstruction, rewriteOriginal, isStreaming = false, isReasoning = false, isSearching = false, modelReady = false, hasVisionInput = false, onEdit, onRegenerate }: Props = $props();
 
   let textContent = $derived(getTextContent(content));
-  let wordCount = $derived(stripThinking(textContent).trim().split(/\s+/).filter(Boolean).length);
+  // Some models (gpt-oss harmony et al.) emit reasoning as channel markup
+  // (`<|channel|>analysis<|message|>…<|end|>…<|channel|>final<|message|>…`)
+  // that llama.cpp's `--reasoning-format auto` doesn't parse, so it leaks raw
+  // into content. Rewrite non-final channels into <think> so the timeline picks
+  // them up as reasoning boxes. No-op when no channel markup is present.
+  let displayContent = $derived(role === "assistant" ? harmonyToThink(textContent) : textContent);
+  let wordCount = $derived(stripThinking(displayContent).trim().split(/\s+/).filter(Boolean).length);
   let imageUrls = $derived(getImageUrls(content));
   let hasImages = $derived(imageUrls.length > 0);
   let canEdit = $derived(onEdit !== undefined && !hasImages);
@@ -54,14 +62,14 @@
     const re = /<(think|thinking|reasoning)>([\s\S]*?)(<\/\1>|$)/gi;
     let last = 0;
     let m: RegExpExecArray | null;
-    while ((m = re.exec(textContent))) {
-      if (m.index > last) res.push({ kind: "text", text: textContent.slice(last, m.index), start: last, end: m.index, innerStart: last, open: false });
+    while ((m = re.exec(displayContent))) {
+      if (m.index > last) res.push({ kind: "text", text: displayContent.slice(last, m.index), start: last, end: m.index, innerStart: last, open: false });
       const closed = m[3] !== "";
       res.push({ kind: "think", text: m[2], start: m.index, end: m.index + m[0].length, innerStart: m.index + m[1].length + 2, open: !closed });
       last = m.index + m[0].length;
       if (!closed) break; // unclosed think runs to the end of the stream
     }
-    if (last < textContent.length) res.push({ kind: "text", text: textContent.slice(last), start: last, end: textContent.length, innerStart: last, open: false });
+    if (last < displayContent.length) res.push({ kind: "text", text: displayContent.slice(last), start: last, end: displayContent.length, innerStart: last, open: false });
     return res;
   });
 
@@ -71,7 +79,9 @@
   let timeline = $derived.by<Segment[]>(() => {
     const out: Segment[] = [];
     if (role !== "assistant") return out;
-    const list = searches ?? [];
+    // Searches fired mid-think nest into the field-based reasoning box (see
+    // reasoningItems), not the content timeline — drop them here.
+    const list = (searches ?? []).filter((s) => !s.duringReasoning);
     const positioned = list.filter((s) => typeof s.at === "number").slice().sort((a, b) => (a.at as number) - (b.at as number));
     for (const s of list) if (typeof s.at !== "number") out.push({ kind: "search", search: s }); // legacy: top
     let ti = 0;
@@ -94,27 +104,41 @@
       let cur = p.start;
       while (si < positioned.length && (positioned[si].at as number) < p.end) {
         const at = Math.max(cur, positioned[si].at as number);
-        if (at > cur) out.push({ kind: "text", text: textContent.slice(cur, at), idx: ti++ });
+        if (at > cur) out.push({ kind: "text", text: displayContent.slice(cur, at), idx: ti++ });
         out.push({ kind: "search", search: positioned[si++] });
         cur = at;
       }
-      if (cur < p.end) out.push({ kind: "text", text: textContent.slice(cur, p.end), idx: ti++ });
+      if (cur < p.end) out.push({ kind: "text", text: displayContent.slice(cur, p.end), idx: ti++ });
     }
     while (si < positioned.length) out.push({ kind: "search", search: positioned[si++] });
-    // Coalesce adjacent think segments into one box. A reasoning model that emits
-    // inline <think> produces a fresh block each tool round (think → search →
-    // think → answer); the rounds sit back-to-back in the stream, so merge them
-    // into a single reasoning box (any search between them is already nested in).
+    // Coalesce think rounds into one box. A reasoning model that emits inline
+    // <think> produces a fresh block each tool round (think → search → think →
+    // answer). The rounds sit back-to-back, but a search whose offset lands in
+    // the text gap between them surfaces as a top-level segment that would split
+    // the boxes. Hold such searches: if another think follows, fold them into
+    // the box (so it reads think → search → think as one); if answer text
+    // follows, flush them ahead of it so post-reasoning searches stay outside.
     const merged: Segment[] = [];
+    let pending: Extract<Segment, { kind: "search" }>[] = [];
     for (const seg of out) {
       const prev = merged[merged.length - 1];
-      if (seg.kind === "think" && prev && prev.kind === "think") {
-        prev.items = [...prev.items, ...seg.items];
-        prev.open = prev.open || seg.open;
+      if (seg.kind === "think") {
+        if (prev && prev.kind === "think") {
+          for (const ps of pending) prev.items.push({ type: "search", search: ps.search });
+          prev.items = [...prev.items, ...seg.items];
+          prev.open = prev.open || seg.open;
+        } else {
+          merged.push(...pending, { ...seg, items: [...seg.items] });
+        }
+        pending = [];
+      } else if (seg.kind === "search" && prev && prev.kind === "think") {
+        pending.push(seg); // might be sandwiched between think rounds
       } else {
-        merged.push(seg.kind === "think" ? { ...seg, items: [...seg.items] } : seg);
+        merged.push(...pending, seg);
+        pending = [];
       }
     }
+    merged.push(...pending);
     return merged;
   });
 
@@ -138,6 +162,28 @@
         }
     return out;
   });
+  // Field-based reasoning (reasoning_content) with any mid-think searches nested
+  // in by their reasoning_content offset, so a search the model ran while it was
+  // still thinking renders inside the reasoning box at the right spot — not below
+  // it. No searches → a single text item (plain reasoning render).
+  let reasoningItems = $derived.by<SubItem[]>(() => {
+    const text = reasoning_content;
+    const hits = (searches ?? [])
+      .filter((s) => s.duringReasoning)
+      .slice()
+      .sort((a, b) => (a.reasoningAt ?? 0) - (b.reasoningAt ?? 0));
+    const items: SubItem[] = [];
+    let cur = 0;
+    for (const s of hits) {
+      const rel = Math.max(cur, Math.min(text.length, s.reasoningAt ?? text.length));
+      if (rel > cur) items.push({ type: "text", text: text.slice(cur, rel) });
+      items.push({ type: "search", search: s });
+      cur = rel;
+    }
+    if (cur < text.length) items.push({ type: "text", text: text.slice(cur) });
+    return items;
+  });
+
   // User open/close override for inline reasoning boxes, keyed by timeline index.
   // Defaults to the live `seg.open` (auto-open while reasoning streams); once the
   // user clicks, their choice wins — otherwise the reactive `open` would re-assert
@@ -207,7 +253,7 @@
   }
 
   async function copyToClipboard() {
-    const copyText = stripThinking(textContent);
+    const copyText = stripThinking(displayContent);
     try {
       if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(copyText);
@@ -347,16 +393,33 @@
             {:else}
               <ChevronRight class="w-4 h-4" />
             {/if}
-            <Brain class="w-4 h-4 {isReasoning ? 'reason-glow' : ''}" />
-            <span class="font-medium {isReasoning ? 'reason-shimmer' : ''}">Reasoning</span>
+            {#if isSearching}
+              <Search class="w-4 h-4 reason-glow" />
+              <span class="font-medium reason-shimmer">Searching</span>
+            {:else}
+              <Brain class="w-4 h-4 {isReasoning ? 'reason-glow' : ''}" />
+              <span class="font-medium {isReasoning ? 'reason-shimmer' : ''}">Reasoning</span>
+            {/if}
             <span class="text-txtsecondary ml-2">
               ({reasoning_content.length} chars{#if !isReasoning && reasoningTimeMs > 0}, {formatDuration(reasoningTimeMs)}{/if})
             </span>
           </button>
           <div class="reveal {showReasoning ? 'open' : ''}">
             <div class="reveal-inner">
-              <div class="px-3 py-2 bg-secondary/50 text-sm text-txtsecondary prose prose-sm dark:prose-invert max-w-none chat-prose">
-                {@html renderMarkdown(reasoning_content)}
+              <div class="px-3 py-2 bg-secondary/50 text-sm text-txtsecondary flex flex-col gap-2">
+                {#each reasoningItems as it, ii (ii)}
+                  {#if it.type === "search"}
+                    <details class="not-prose rounded-lg border border-card-border overflow-hidden font-mono">
+                      <summary class="flex items-center gap-2 px-2 py-1.5 bg-secondary hover:bg-secondary-hover transition-colors cursor-pointer select-none text-xs">
+                        <Search class="w-3 h-3 shrink-0" />
+                        <span class="font-medium truncate">{it.search.query || "Web search"}</span>
+                      </summary>
+                      <div class="px-2 py-1.5 bg-background/40 text-xs whitespace-pre-wrap max-h-72 overflow-y-auto pretty-scroll">{it.search.results}</div>
+                    </details>
+                  {:else if it.text}
+                    <div class="prose prose-sm dark:prose-invert max-w-none chat-prose">{@html renderMarkdown(it.text)}</div>
+                  {/if}
+                {/each}
               </div>
             </div>
           </div>
@@ -379,7 +442,7 @@
         </div>
       {/if}
       {#if rewriteOriginal != null}
-        <RewriteDiff original={rewriteOriginal} rewritten={stripThinking(textContent)} {isStreaming} {modelReady} />
+        <RewriteDiff original={rewriteOriginal} rewritten={stripThinking(displayContent)} {isStreaming} {modelReady} />
       {:else if showRaw}
         <div class="whitespace-pre-wrap font-mono text-sm">{textContent}</div>
       {:else}
@@ -406,8 +469,13 @@
                   class="flex items-center gap-2 px-3 py-2 bg-secondary hover:bg-secondary-hover transition-colors cursor-pointer select-none text-sm"
                   onclick={(e) => { e.preventDefault(); thinkOverride[si] = !isOpen; }}
                 >
-                  <Brain class="w-4 h-4 shrink-0 {seg.open ? 'reason-glow' : ''}" />
-                  <span class="font-medium {seg.open ? 'reason-shimmer' : ''}">Reasoning</span>
+                  {#if isSearching && seg.open}
+                    <Search class="w-4 h-4 shrink-0 reason-glow" />
+                    <span class="font-medium reason-shimmer">Searching</span>
+                  {:else}
+                    <Brain class="w-4 h-4 shrink-0 {seg.open ? 'reason-glow' : ''}" />
+                    <span class="font-medium {seg.open ? 'reason-shimmer' : ''}">Reasoning</span>
+                  {/if}
                   <span class="text-txtsecondary ml-2">({thinkChars} chars)</span>
                 </summary>
                 <div class="reveal">
@@ -438,16 +506,23 @@
               {@html r.pendingHtml}
             {/if}
           {/each}
-          {#if isSearching}
-            <span class="inline-flex items-center gap-2 text-sm text-txtsecondary italic">
-              <span class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse"></span>
-              Searching the web…
+          {#if isSearching && !isReasoning && !openThink}
+            <!-- Post-reasoning search (answer phase). A mid-think search instead
+                 shows its "Searching" label on the reasoning box itself. -->
+            <span class="inline-flex items-center gap-2 text-sm italic">
+              <span class="w-1.5 h-1.5 bg-primary rounded-full reason-glow"></span>
+              <span class="reason-shimmer font-medium">Searching the web…</span>
             </span>
-          {:else if isStreaming && !openThink && !isReasoning && !hasBodyText}
-            <!-- No tokens yet — generating if the model is loaded, else swapping in. -->
-            <span class="inline-flex items-center gap-2 text-txtsecondary italic">
-              <span class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse"></span>
-              {modelReady ? "Generating…" : "Loading model…"}
+          {:else if isStreaming && !openThink && !isReasoning && !hasBodyText && !isSearching}
+            <!-- No tokens yet. Order of waits: swap the model in, encode the image
+                 (vision turns only), then generate. We get no explicit "encoding"
+                 signal from the backend, so infer the vision phase from a
+                 loaded-but-silent vision turn.
+                 ponytail: heuristic — no real encode event; revisit if llama.cpp
+                 ever surfaces one. -->
+            <span class="inline-flex items-center gap-2 italic">
+              <span class="w-1.5 h-1.5 bg-primary rounded-full reason-glow"></span>
+              <span class="reason-shimmer font-medium">{!modelReady ? "Loading model…" : hasVisionInput ? "Processing image…" : "Generating…"}</span>
             </span>
           {/if}
         </div>
@@ -641,53 +716,11 @@
     min-height: 0;
   }
 
-  /* Active-reasoning feedback: a brighter band sweeps left→right across the
-     "Reasoning" label, and the brain icon pulses a soft glow. */
-  .reason-shimmer {
-    background: linear-gradient(
-      90deg,
-      var(--color-txtsecondary) 0%,
-      var(--color-txtsecondary) 35%,
-      var(--color-primary) 50%,
-      var(--color-txtsecondary) 65%,
-      var(--color-txtsecondary) 100%
-    );
-    background-size: 200% 100%;
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    animation: reason-sweep 1.8s linear infinite;
-  }
-  @keyframes reason-sweep {
-    0% {
-      background-position: 200% 0;
-    }
-    100% {
-      background-position: -200% 0;
-    }
-  }
-  .reason-glow {
-    color: var(--color-primary);
-    animation: reason-glow-pulse 1.8s ease-in-out infinite;
-  }
-  @keyframes reason-glow-pulse {
-    0%,
-    100% {
-      filter: drop-shadow(0 0 0 transparent);
-      opacity: 0.65;
-    }
-    50% {
-      filter: drop-shadow(0 0 4px var(--color-primary));
-      opacity: 1;
-    }
-  }
+  /* .reason-shimmer / .reason-glow live globally in index.css (shared by every
+     live chat status label). */
   @media (prefers-reduced-motion: reduce) {
     .reveal {
       transition: none;
-    }
-    .reason-shimmer,
-    .reason-glow {
-      animation: none;
     }
   }
 

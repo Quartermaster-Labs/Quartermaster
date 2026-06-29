@@ -3,8 +3,26 @@
   import { me, checkMe } from "../stores/playgroundAuth";
   import { loadChats, clearChats } from "../stores/chatHistory";
   import { loadPrefs, clearPrefs } from "../stores/prefs";
+  import { selectedTabStore, selectedModelStore, type PlaygroundTab } from "../stores/playground";
+  import { userPref } from "../stores/prefs";
   import Login from "./Login.svelte";
   import PlaygroundShell from "./PlaygroundShell.svelte";
+
+  // Launched from the dashboard's "Chat" button: ?model=<id>&tab=<tab>. Applied
+  // after prefs load so it wins over the stored selection, then stripped from the
+  // URL so a refresh doesn't re-pin. Each tab has its own model store — chat uses
+  // the shared one, images its own per-user pref.
+  function applyLaunchParams(): void {
+    const p = new URLSearchParams(window.location.search);
+    const model = p.get("model");
+    const tab = p.get("tab") as PlaygroundTab | null;
+    if (tab) selectedTabStore.set(tab);
+    if (model) {
+      if (tab === "images") userPref<string>("playground-image-model", "").set(model);
+      else selectedModelStore.set(model);
+    }
+    if (model || tab) history.replaceState(null, "", window.location.pathname + window.location.hash);
+  }
 
   let ready = $state(false); // initial /auth/me check done
   let chatsLoaded = $state(false);
@@ -20,7 +38,10 @@
   $effect(() => {
     if ($me) {
       chatsLoaded = false;
-      Promise.all([loadChats(), loadPrefs()]).then(() => (chatsLoaded = true));
+      Promise.all([loadChats(), loadPrefs()]).then(() => {
+        applyLaunchParams();
+        chatsLoaded = true;
+      });
     } else {
       clearChats();
       clearPrefs();

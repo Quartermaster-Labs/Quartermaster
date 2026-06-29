@@ -369,7 +369,8 @@
       <div class="flex items-center justify-between mb-3">
         <div class="flex items-center gap-2">
           <h6 class="!pb-0">KV-cache disk save</h6>
-          {@render hint("Persist a long conversation's KV cache to disk so it survives being evicted from the live slot, and is restored instead of reprocessed. Master switch: each model opts in via its config editor (\"Save KV cache to disk\").")}
+          <span class="status bg-warning/10 text-warning text-[0.6rem] !px-1.5 !py-0.5">Experimental</span>
+          {@render hint("Persist a long conversation's KV cache to disk so it survives being evicted from the live slot, and is restored instead of reprocessed. Master switch: each model opts in via its config editor (\"Save KV cache to disk\").\n\nExperimental: reliable for standard transformer models. Hybrid/recurrent models (e.g. Qwen3.5/3.6 GatedDeltaNet) don't yet restore across a process swap — pending upstream llama.cpp (#20819); they still get warm same-process reuse.")}
         </div>
         <label class="flex items-center gap-2 text-sm">
           <input type="checkbox" bind:checked={slotEnable} />

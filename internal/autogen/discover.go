@@ -20,6 +20,10 @@ type GgufRow struct {
 	Publisher string
 	Repo      string
 	DraftPath string // separate MTP/draft gguf in the same dir (mtp-*.gguf), "" if none
+	// Vision projector (clip-arch gguf) sitting in the same dir, if any. Loaded via
+	// --mmproj to enable image input; drives the auto-generated "-vision" variant.
+	MmprojPath   string
+	MmprojSizeGB float64
 }
 
 var (
@@ -66,14 +70,12 @@ func DiscoverGgufModelsMulti(roots []string, skipPatterns ...string) ([]GgufRow,
 }
 
 // DiscoverGgufModels walks modelsRoot for *.gguf files and returns one row per
-// served model. mmproj projector files and non-first split shards are skipped.
-// skipPatterns are filename globs (default {"mmproj-*"}).
+// served model. Vision projectors (clip-arch ggufs) and non-first split shards
+// are skipped (projectors are paired to their model dir instead). skipPatterns
+// are optional filename globs to exclude.
 func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, error) {
 	if strings.TrimSpace(modelsRoot) == "" {
 		return nil, nil // no models root configured yet => empty catalog
-	}
-	if len(skipPatterns) == 0 {
-		skipPatterns = []string{"mmproj-*"}
 	}
 	info, err := filepath.Abs(modelsRoot)
 	if err != nil {
@@ -82,7 +84,8 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 	modelsRoot = info
 
 	var rows []GgufRow
-	mtpByDir := map[string]string{} // dir -> separate MTP draft gguf
+	mtpByDir := map[string]string{}           // dir -> separate MTP draft gguf
+	mmprojByDir := map[string]mmprojSidecar{} // dir -> vision projector gguf
 	walkErr := filepath.WalkDir(modelsRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable entries, matching -ErrorAction SilentlyContinue
@@ -113,6 +116,20 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 
 		fi, statErr := d.Info()
 		if statErr != nil {
+			return nil
+		}
+
+		// Vision projector detection by header arch, not filename — projector
+		// naming varies by publisher (mmproj-*, <model>-mmproj-*, clip-*, bare).
+		// A clip-arch gguf is paired to its model dir, never served alone. The
+		// cached read is reused by the later VRAM planning pass, so it's not an
+		// extra parse. A parse error falls through and the file is treated as a
+		// normal model candidate.
+		if meta, e := ReadGgufMetadataCached(path); e == nil && meta.Architecture == "clip" {
+			mmprojByDir[filepath.Dir(path)] = mmprojSidecar{
+				path:   path,
+				sizeGB: round(float64(fi.Size())/gib, 2),
+			}
 			return nil
 		}
 
@@ -152,9 +169,20 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 	// Pair each model with the MTP draft sitting in its own dir (typically one
 	// model per dir). Enables --spec-type draft-mtp + -md without hand config.
 	for i := range rows {
-		if d := mtpByDir[filepath.Dir(rows[i].FullPath)]; d != "" {
+		dir := filepath.Dir(rows[i].FullPath)
+		if d := mtpByDir[dir]; d != "" {
 			rows[i].DraftPath = d
+		}
+		if m, ok := mmprojByDir[dir]; ok {
+			rows[i].MmprojPath = m.path
+			rows[i].MmprojSizeGB = m.sizeGB
 		}
 	}
 	return rows, nil
+}
+
+// mmprojSidecar is a discovered vision projector paired to a model dir.
+type mmprojSidecar struct {
+	path   string
+	sizeGB float64
 }

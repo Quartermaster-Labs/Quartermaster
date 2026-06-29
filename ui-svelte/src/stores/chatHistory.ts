@@ -24,6 +24,10 @@ export interface ChatSession {
 export const chatSessions = writable<ChatSession[]>([]);
 export const activeChatId = writable<string>("");
 
+// Id of the session whose turn is currently streaming (null = idle). One turn at
+// a time; set by ChatInterface so the rail can flag the generating row.
+export const generatingChatId = writable<string | null>(null);
+
 // synced gates the auto-save subscriber: it must not fire (and overwrite the
 // server) during/before the initial load.
 let synced = false;

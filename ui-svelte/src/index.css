@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "katex/dist/katex.min.css";
+@plugin "@tailwindcss/typography";
 @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 
 @theme {
@@ -33,6 +34,7 @@
   --color-focus-ring: rgba(250, 80, 15, 0.4);
   --color-select-caret: rgba(26, 23, 20, 0.8);
   --color-btn-border: rgba(40, 30, 20, 0.25);
+  --color-dot: rgba(40, 30, 20, 0.06);
 }
 
 @layer theme {
@@ -64,6 +66,7 @@
     --color-card-border-inner: rgba(168, 168, 176, 0.11);
     --shadow-inset-sm: inset 0 1px 0 rgba(255, 255, 255, 0.06), inset 0 -1px 0 rgba(0, 0, 0, 0.25);
     --button-border-secondary: rgba(168, 168, 176, 0.18);
+    --color-dot: rgba(180, 180, 190, 0.09);
   }
 }
 
@@ -71,6 +74,16 @@
   body {
     /* Retro look: mono everywhere by default. */
     @apply bg-background text-txtmain font-mono;
+  }
+
+  /* Evenly-spaced dot grid over the app background. Slightly lighter than the
+     base fill; layered so the solid color still backs it. Apply to full-screen
+     root layouts (playground, dashboard). */
+  .dot-bg {
+    background-color: var(--color-background);
+    background-image: radial-gradient(var(--color-dot) 1px, transparent 1px);
+    background-size: 22px 22px;
+    background-position: -1px -1px;
   }
 
   /* Form controls don't inherit font-family by default — force them onto the
@@ -265,5 +278,54 @@
     --fade-bottom: 1.25rem;
     -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent 100%);
     mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent 100%);
+  }
+
+  /* Active-status feedback, shared by every "live" chat label (reasoning,
+     generating, loading model, processing image, searching, compacting). A
+     brighter band sweeps across the text; .reason-glow pulses a soft halo on the
+     leading icon/dot. */
+  .reason-shimmer {
+    background: linear-gradient(
+      90deg,
+      var(--color-txtsecondary) 0%,
+      var(--color-txtsecondary) 35%,
+      var(--color-primary) 50%,
+      var(--color-txtsecondary) 65%,
+      var(--color-txtsecondary) 100%
+    );
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: reason-sweep 1.8s linear infinite;
+  }
+  @keyframes reason-sweep {
+    0% {
+      background-position: 200% 0;
+    }
+    100% {
+      background-position: -200% 0;
+    }
+  }
+  .reason-glow {
+    color: var(--color-primary);
+    animation: reason-glow-pulse 1.8s ease-in-out infinite;
+  }
+  @keyframes reason-glow-pulse {
+    0%,
+    100% {
+      filter: drop-shadow(0 0 0 transparent);
+      opacity: 0.65;
+    }
+    50% {
+      filter: drop-shadow(0 0 4px var(--color-primary));
+      opacity: 1;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .reason-shimmer,
+    .reason-glow {
+      animation: none;
+    }
   }
 }

@@ -5,54 +5,63 @@
 
 # llama-quartermaster
 
-Run multiple generative AI models on your machine and hot-swap between them on demand. llama-quartermaster works with any OpenAI and Anthropic API compatible server and is used by thousands of people to power their local AI workflows.
+> **Fork of [llama-swap](https://github.com/mostlygeek/llama-swap) (MIT).** llama-quartermaster
+> started as a fork and has since diverged into its own project — it does **not** track upstream
+> and has no plan to merge back. It keeps llama-swap's core (on-demand model swapping, OpenAI-compatible
+> proxy, text/image/audio support, Anthropic API, single Go binary) and layers on automatic config
+> generation, VRAM-aware load planning, multi-port catalogs with cross-port eviction, and a
+> redesigned web UI with a standalone playground.
 
-Built in Go for performance and simplicity, llama-quartermaster has zero dependencies and is incredibly easy to set up. Get started in minutes - just one binary and one configuration file.
+Run **any** generative AI model on your machine — text, image, audio — and hot-swap between them on
+demand. llama-quartermaster works with any OpenAI- or Anthropic-API-compatible server.
 
-## Features:
+A **hassle-free yet fully customizable inference engine**: point it at your models folder and it
+auto-generates a near-optimal setup — VRAM-aware context, GPU offload, and KV sizing computed per
+model — so a less technical user gets a great config out of the box, while power users can tune every
+knob.
 
-- ✅ Easy to deploy and configure: one binary, one configuration file. no external dependencies
+Built in Go for performance and simplicity — a single binary and one config file. It orchestrates
+your inference backends (llama-server, stable-diffusion.cpp, etc.); the Windows installer and unified
+Docker image bundle them for you.
+
+## Features
+
+> 🆕 marks additions made in this fork; the rest is inherited from llama-swap.
+
+- 🆕 **Automatic config generation** — discovers your GGUFs and emits a working config at startup
+  (`-generate`). Kills hand-baked per-model config variants: ctx, GPU offload, CPU-MoE split, and
+  KV-cache sizing are computed at runtime per model and per architecture (Gemma SWA, Qwen3.5/3.6 SSM,
+  LFM2, etc.).
+- 🆕 **VRAM-aware load planning** — samples free VRAM at startup and sizes models to fit. Per-arch
+  KV math, derived MoE expert byte fractions, and a compute-buffer estimate keep large-vocab models
+  from spilling.
+- 🆕 **KV-cache persistence to disk** — snapshots a llama-server slot's KV-cache before
+  eviction and restores it (instead of re-prefilling) when the conversation returns, so an expensive
+  long chat survives being swapped out by a throwaway request. Also seeds brand-new conversations
+  from a per-agent system+tools preamble cache to skip re-prefilling the static prefix.
+- 🆕 **Multi-port catalogs + cross-port eviction** — bind N listeners on one shared
+  router/scheduler, each with its own `/v1/models` view; loading a model on one port evicts a
+  VRAM-exclusive model on another. One process, one GPU accounting.
+- 🆕 **Live model reload** — watches the models folder and hot-reloads on add/remove without a
+  restart (`-watch-models`).
+- 🆕 **Redesigned web UI** — LM Studio-style per-model parameter editor (edit ctx/KV/spec, create
+  named variants, reset to autogen default), collapsible variant groups, segmented VRAM/RAM gauges
+  (system vs model), and a unified Observe page (activity + logs + performance).
+- 🆕 **Standalone playground** — split onto its own port (`-playground-port`) with per-user login,
+  server-side chat history, and a side-rail for Chat / Images / Speech / Transcription / Rerank /
+  Load Test.
+- 🆕 **Per-key model scoping** — API keys can be restricted to specific models, not just all-or-nothing.
+- ✅ Easy to deploy and configure: one binary, one configuration file; orchestrates your inference backends (llama-server, stable-diffusion.cpp, …)
 - ✅ On-demand model switching
 - ✅ Use any local OpenAI compatible server (llama.cpp, vllm, tabbyAPI, stable-diffusion.cpp, etc.)
   - future proof, upgrade your inference servers at any time.
-- ✅ OpenAI API supported endpoints:
-  - `v1/completions`
-  - `v1/chat/completions`
-  - `v1/responses`
-  - `v1/embeddings`
-  - `v1/models` - list available models
-  - `v1/audio/speech`
-  - `v1/audio/transcriptions`
-  - `v1/audio/voices`
-  - `v1/images/generations`
-  - `v1/images/edits`
-- ✅ Anthropic API supported endpoints:
-  - `v1/messages`
-  - `v1/messages/count_tokens`
-- ✅ llama-server (llama.cpp) supported endpoints
-  - `v1/rerank`, `v1/reranking`, `/rerank`
-  - `/infill` - for code infilling
-  - `/completion` - for completion endpoint
-- ✅ SDAPI via [stable-diffusion.cpp's server](https://github.com/leejet/stable-diffusion.cpp/tree/master/examples/server)
-  - `/sdapi/v1/txt2img`
-  - `/sdapi/v1/img2img`
-  - `/sdapi/v1/loras` - requires `model` in request body to fetch the correct loras
-- ✅ llama-quartermaster API
-  - `/ui` - web UI
-  - `/upstream/:model_id` - direct access to upstream server
-  - `/running` - list currently running models
-  - `POST /api/models/unload` - manually unload all running models
-  - `POST /api/models/unload/:model_id` - unload a specific model
-  - `/logs` - remote log monitoring
-    - `GET /logs` returns buffered plain text logs.
-      - If `Accept: text/html` is sent, `/logs` redirects to `/ui/`.
-    - `GET /logs/stream` keeps the connection open for live log streaming.
-      - Stream endpoints send buffered history first by default; add `?no-history` to stream only new lines.
-    - `GET /logs/stream/proxy` streams proxy logs only.
-    - `GET /logs/stream/upstream` streams upstream process logs only.
-    - `GET /logs/stream/{model_id}` streams logs for one model (including IDs with slashes, like `author/model`).
-  - `/health` - just returns "OK"
-  - `/metrics` - system and GPU metrics for prometheus
+- ✅ Broad API coverage:
+  - **OpenAI** — chat/completions, responses, embeddings, models, audio (speech/transcription/voices), images (generation/edits)
+  - **Anthropic** — messages, count_tokens
+  - **llama-server** — rerank, infill, completion
+  - **Stable Diffusion** — SDAPI txt2img / img2img / loras
+  - **Ops** — `/upstream/:model`, `/running`, unload, `/logs[/stream]`, `/health`, `/metrics` (Prometheus)
+  - See the [configuration docs](docs/configuration.md) for the full endpoint list.
 - ✅ API Key support - define keys to restrict access to API endpoints
 - ✅ Customizable
   - Run concurrent models with a custom DSL swap matrix
@@ -83,13 +92,46 @@ Real time log streaming:
 
 <img width="1107" height="559" alt="image" src="https://github.com/user-attachments/assets/39669a10-cff2-409e-836a-5bad8bd0140c" />
 
+## Playground
+
+The built-in playground is a full chat client over your local models (plus Images, Speech,
+Transcription, Rerank, and Load Test tabs). It can run on its own port with per-user login
+(`-playground-port`). Fork additions to the chat experience:
+
+- **Web search** — toggle a `web_search` tool the model can call mid-conversation. Results come from
+  your own [SearXNG](https://github.com/searxng/searxng) instance via a same-origin proxy
+  (`/api/websearch`), so no third-party search key and no browser CORS headaches.
+- **Clean reasoning toggle** — reasoning ("thinking") models stream their thought process into a
+  collapsible block, kept out of the final answer. Flip it off to hide thinking entirely.
+- **Rewrite tool** — a text-transformation mode: paste prose + an instruction ("make it formal",
+  "translate to pirate"), and the result renders as a side-by-side **word-level diff** against the
+  original so you see exactly what changed.
+- **Chat sessions** — conversations are saved server-side per user (not just localStorage), with a
+  history flyout to switch between and delete past chats.
+
 ## Installation
 
-llama-quartermaster can be installed in a few ways
+Pick whichever fits you:
 
-1. Docker (unified container)
-2. From release binaries
-3. From source
+1. **Windows installer** — easiest; bundles/fetches the inference backends
+2. Docker (unified container)
+3. Release binary (any OS)
+4. From source
+
+### Windows installer (recommended)
+
+Download the latest `llama-quartermaster-setup-*.exe` from the
+[Releases page](https://github.com/Quartermaster-Labs/llama-quartermaster/releases) and run it.
+
+It's a per-user install (no admin/UAC needed). The wizard:
+
+- downloads the inference backends (`llama-server` / `sd-server`) for your chosen acceleration
+  (vulkan / cuda / cpu) — so you don't hunt them down yourself,
+- seeds a starter `quartermaster-generate.yaml` you can edit, and
+- optionally adds a logon-autostart shortcut.
+
+On first run it discovers your GGUFs and auto-generates a config — point it at your models folder and
+go.
 
 ### Docker Install ([download images](https://github.com/Quartermaster-Labs/llama-quartermaster/pkgs/container/llama-quartermaster))
 
@@ -110,17 +152,20 @@ $ docker run -it --rm --runtime nvidia -p 9292:8080 \
 > (Actions → Build Unified Docker Image → Run workflow), or locally with
 > `docker/unified/build-image.sh --cuda`.
 
-### Release binaries
+### Release binary
 
-Download the latest Windows build from the
-[Releases page](https://github.com/Quartermaster-Labs/llama-quartermaster/releases).
+Prefer a bare binary (or not on Windows)? Grab the archive for your OS from the
+[Releases page](https://github.com/Quartermaster-Labs/llama-quartermaster/releases). You supply your
+own inference backends (`llama-server`, `sd-server`) and point your config at them.
 
 ### Building from source
 
-1. Building requires Go and Node.js (for UI).
-1. `git clone https://github.com/Quartermaster-Labs/llama-quartermaster.git`
-1. `make clean all`
-1. look in the `build/` subdirectory for the llama-quartermaster binary
+1. Building requires Go and Node.js (for the UI).
+2. `git clone https://github.com/Quartermaster-Labs/llama-quartermaster.git`
+3. Build for your platform: `make windows`, `make mac`, or `make linux` (each builds the UI first).
+   - Or build a runnable bundle (binary + example configs + launcher/service files) plus an archive
+     under `build/`: `make package-windows` (zip), `make package-linux` / `make package-mac` (tar.gz).
+4. Look in `build/` for the binary.
 
 ## Configuration
 
@@ -158,9 +203,21 @@ See the [configuration documentation](docs/configuration.md) for all options.
 
 ## How does llama-quartermaster work?
 
-When a request is made to an OpenAI compatible endpoint, llama-quartermaster will extract the `model` value and load the appropriate server configuration to serve it. If the wrong upstream server is running, it will be replaced with the correct one. This is where the "swap" part comes in. The upstream server is automatically swapped to handle the request correctly.
+When a request hits an OpenAI- or Anthropic-compatible endpoint, llama-quartermaster reads the
+`model` value and loads the right upstream server to serve it. If the wrong server is running, it's
+replaced with the correct one — that's the "swap." The upstream is spawned on demand and torn down on
+a `ttl`, so only what you're using holds VRAM.
 
-In the most basic configuration llama-quartermaster handles one model at a time. For more advanced use cases, using a `matrix` allows multiple models to be loaded at the same time. You have complete control over how your system resources are used.
+Most setups never write that upstream command by hand. With `-generate`, llama-quartermaster discovers
+your GGUFs at startup and emits a config for them: it reads each model's metadata, estimates its VRAM
+footprint, and computes a near-optimal context length, GPU/CPU layer split, and KV-cache sizing to fit
+your hardware. You can then tune any of it — per model, or as named variants — from the web UI or by
+editing `quartermaster-generate.yaml`; changes hot-reload.
+
+In the most basic configuration llama-quartermaster handles one model at a time. For more advanced use
+cases, a `matrix` runs multiple models concurrently, and multi-port listeners give each a scoped
+catalog while a single shared scheduler keeps VRAM accounting honest across ports. You have complete
+control over how your system resources are used.
 
 ## Reverse Proxy Configuration (nginx)
 

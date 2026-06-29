@@ -46,9 +46,13 @@ type EstimateResult struct {
 // reuses sizeProfile/forceLowActiveMoE so the preview matches what a save would
 // actually emit for the solo profile.
 func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, error) {
-	// KV quant: forced matched q8_0 unless a valid matched override is given
-	// (mirrors emitModel).
+	// KV quant: dense defaults to q8_0, MoE to f16, unless a valid matched
+	// override is given (mirrors emitModel).
 	kvK, kvV := "q8_0", "q8_0"
+	if meta.IsMoE {
+		kvK, kvV = "f16", "f16"
+	}
+	kvDefK, kvDefV := kvK, kvV
 	if in.KvK != "" {
 		kvK = in.KvK
 	}
@@ -56,7 +60,7 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		kvV = in.KvV
 	}
 	if kvK != kvV || kvK == "iq4_nl" || kvV == "iq4_nl" {
-		kvK, kvV = "q8_0", "q8_0"
+		kvK, kvV = kvDefK, kvDefV
 	}
 
 	perTokGB, kvConstGB := 0.0, 0.0

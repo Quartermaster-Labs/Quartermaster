@@ -78,9 +78,9 @@
       if (!groups.has(r)) groups.set(r, { base: { value: r, label: r }, variants: [] });
       if (m.id !== r) groups.get(r)!.variants.push({ value: m.id, label: suffix(m.id, r) });
     }
-    for (const m of arr) {
-      for (const a of m.aliases ?? []) groups.get(rootId(m.id))?.variants.push({ value: a, label: a });
-    }
+    // Aliases are alternate ids for a model already listed by its real id —
+    // selecting one is identical to selecting the base, so don't list them as
+    // separate "variants" (that's how an alias like "gemma4-12b-qat" leaked in).
     const out = [...groups.values()];
     for (const g of out) g.variants.sort((a, b) => a.value.localeCompare(b.value));
     return out.sort((a, b) => a.base.value.localeCompare(b.base.value));

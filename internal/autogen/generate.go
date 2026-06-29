@@ -59,6 +59,9 @@ type profile struct {
 	// layer over the model-wide override at emit so a variant carries the full
 	// launch shape. Solo/ctx-tier profiles leave this nil and use the override.
 	Variant *VariantSpec
+	// Vision marks the auto-generated "-vision" twin: emits --mmproj <projector>
+	// and an image-input capabilities block so the playground can attach images.
+	Vision bool
 }
 
 // Generate discovers models under gf.Settings.ModelsRoot and returns a complete
@@ -300,9 +303,24 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		return nil
 	}
 
-	// KV quant: forced q8_0 for all archs (per-model override still wins). Fast
-	// flash-attention needs matched K/V and never iq4_nl.
+	// Text embedders (BERT-family or any model baking a pooling_type) go to
+	// llama-server with --embeddings: no KV/ctx-tier/spec sizing, and the
+	// embedding capability buckets them out of the chat-able LLM catalog.
+	if IsEmbeddingModel(meta) {
+		emitEmbeddingModel(b, s, row, ov, name, meta, emitted)
+		return nil
+	}
+
+	// KV quant: dense archs default to q8_0; MoE defaults to f16. A low number of
+	// active params means each token's KV carries more of the model's signal, so
+	// MoE tends to degrade more under a quantized cache — keep it full precision.
+	// Per-model override still wins. Fast flash-attention needs matched K/V and
+	// never iq4_nl.
 	kvK, kvV := "q8_0", "q8_0"
+	if meta.IsMoE {
+		kvK, kvV = "f16", "f16"
+	}
+	kvDefK, kvDefV := kvK, kvV
 	if ov != nil && ov.KvK != "" {
 		kvK = ov.KvK
 	}
@@ -310,7 +328,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		kvV = ov.KvV
 	}
 	if kvK != kvV || kvK == "iq4_nl" || kvV == "iq4_nl" {
-		kvK, kvV = "q8_0", "q8_0"
+		kvK, kvV = kvDefK, kvDefV
 	}
 
 	kvModel := GetKvCostModel(meta, kvK, kvV)
@@ -377,9 +395,16 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	// ctx/VRAM/kv/spec; zero fields inherit. Spec affects the VRAM overhead, so
 	// bake the per-variant overhead here.
 	variantSpecs := append(append([]VariantSpec{}, override.Variants...), s.DefaultVariants...)
+	var visionSpec *VariantSpec
 	for i := range variantSpecs {
 		v := variantSpecs[i]
 		if strings.TrimSpace(v.Name) == "" {
+			continue
+		}
+		// "vision" is reserved: it tunes the auto-generated vision twin below in
+		// place (ctx/vram/unlisted/kv/spec/…) instead of spawning its own profile.
+		if strings.EqualFold(v.Name, "vision") {
+			visionSpec = &variantSpecs[i]
 			continue
 		}
 		vTarget := s.TargetVramGB
@@ -418,6 +443,53 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		})
 	}
 
+	// Vision twin: a model shipping a sibling mmproj projector gets an extra
+	// "-vision" profile that loads it (--mmproj) and declares image input. Kept
+	// unlisted (reached via the playground's attach toggle, not the model picker)
+	// and charged the projector's file size as flat VRAM overhead.
+	if row.MmprojPath != "" {
+		vp := profile{
+			Name:     fmt.Sprintf("%s-vision", name),
+			Target:   soloTarget,
+			Overhead: s.VramOverheadGB + specOh + row.MmprojSizeGB,
+			Unlisted: true,
+			Ctx:      override.Ctx,
+			Vision:   true,
+		}
+		// A reserved "vision" variant (from the config editor) tunes the twin in
+		// place; blank fields keep the auto defaults, so an untouched seed emits
+		// the same profile as before. Engine knobs layer over the model override
+		// at emit via Variant.
+		if v := visionSpec; v != nil {
+			if v.VramTargetGB > 0 {
+				vp.Target = v.VramTargetGB
+			}
+			if v.Ctx > 0 {
+				vp.Ctx = v.Ctx
+				vp.IsLong = v.Ctx >= 65536
+			}
+			// Spec changes the draft overhead; recharge off the variant's spec.
+			if v.Spec != "" {
+				vSpecOh := 0.0
+				if specHas(v.Spec, "draft-mtp") {
+					vSpecOh = 0.34
+				}
+				vp.Overhead = s.VramOverheadGB + vSpecOh + row.MmprojSizeGB
+			}
+			vp.Unlisted = v.Unlisted
+			vp.Aliases = v.Aliases
+			vp.KvK = v.KvK
+			vp.KvV = v.KvV
+			vp.Spec = v.Spec
+			vp.ReasoningFmt = v.ReasoningFmt
+			vp.Ub = v.Ub
+			vp.CpuOffload = v.CpuOffload
+			vp.CtxCheckpoints = v.CtxCheckpoints
+			vp.Variant = v
+		}
+		profiles = append(profiles, vp)
+	}
+
 	// Charge the GPU compute buffer (logits + activations + CUDA runtime) per
 	// profile; it scales with the physical batch and lives on the GPU regardless
 	// of CPU expert offload, so it's flat VRAM overhead. Replaces the old flat
@@ -439,7 +511,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			ekvV = prof.KvV
 		}
 		if ekvK != ekvV || ekvK == "iq4_nl" || ekvV == "iq4_nl" {
-			ekvK, ekvV = "q8_0", "q8_0"
+			ekvK, ekvV = kvK, kvV // fall back to the model-wide quant (f16 for MoE)
 		}
 		ptg, kcg := perTokGB, kvConstGB
 		if ekvK != kvK || ekvV != kvV {
@@ -873,6 +945,11 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	if ov != nil && ov.FlashAttn != "" {
 		fa = ov.FlashAttn
 	}
+	// One slot by default. Multi-agent harnesses (Qwen Code = main + memory subagent)
+	// would benefit from 2 slots to avoid preamble thrash, but our disk save/restore
+	// hardcodes /slots/0 — with 2 slots, restores race the other slot's live generation
+	// (preamble-restore errors) and may target the wrong slot. Per-model override still
+	// available for anyone who wants more slots and accepts that tradeoff.
 	parallel := 1
 	if ov != nil && ov.Parallel > 0 {
 		parallel = ov.Parallel
@@ -915,6 +992,10 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		fmt.Sprintf("-ub %d -b %d", ub, ub),
 		fmt.Sprintf("-fa %s -ctk %s -ctv %s", fa, kvK, kvV),
 		fmt.Sprintf("--parallel %d %s%s%s--kv-unified --no-warmup --no-webui --metrics --props", parallel, noMmapFlag, mlockFlag, kvoFlag),
+	}
+	// Vision twin loads the projector for image input.
+	if prof.Vision && row.MmprojPath != "" {
+		lines = append(lines, fmt.Sprintf("--mmproj %s", strings.ReplaceAll(row.MmprojPath, "\\", "/")))
 	}
 	// spec is a "+"-joined list of backends (draft-mtp / ngram-map-k4v / ngram-mod
 	// / none); llama-server accepts them chained, so emit one --spec-type each and
@@ -1012,6 +1093,10 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 		lines, _, _ := imageCmdLines(s, row, &ov)
 		return strings.Join(lines, " "), nil
 	}
+	// Embedders render a minimal --embeddings command (no KV/spec sizing).
+	if IsEmbeddingModel(meta) {
+		return strings.Join(embeddingCmdLines(s, row, &ov, meta), " "), nil
+	}
 	kvK, kvV := "q8_0", "q8_0"
 	if ov.KvK != "" {
 		kvK = ov.KvK
@@ -1073,6 +1158,11 @@ func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, pro
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
 	if prof.Unlisted {
 		b.WriteString("    unlisted: true\n")
+	}
+	if prof.Vision {
+		b.WriteString("    capabilities:\n")
+		b.WriteString("      in: [text, image]\n")
+		b.WriteString("      out: [text]\n")
 	}
 	if len(prof.Aliases) > 0 {
 		b.WriteString("    aliases:\n")

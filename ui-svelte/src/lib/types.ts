@@ -10,6 +10,7 @@ export interface ModelCapabilities {
   image_to_image?: boolean;
   function_calling?: boolean;
   reranker?: boolean;
+  embeddings?: boolean;
 }
 
 export interface Model {
@@ -216,8 +217,11 @@ export interface ChatMessage {
   // plumbing sent to the model is reconstructed separately and not stored here.
   // `at` is the assistant content offset where this search ran, so the UI can
   // render the block inline between the surrounding text (legacy items lack it
-  // and fall back to the top of the bubble).
-  searches?: { query: string; results: string; at?: number; sources?: { title: string; url: string }[] }[];
+  // and fall back to the top of the bubble). `duringReasoning` marks a search the
+  // model ran mid-think (field-based reasoning_content); `reasoningAt` is its
+  // offset into reasoning_content, so the UI nests it inside the reasoning box
+  // instead of dropping it below.
+  searches?: { query: string; results: string; at?: number; reasoningAt?: number; duringReasoning?: boolean; sources?: { title: string; url: string }[] }[];
   // Rewrite mode. On a user message: the "how to help" instruction (content is the
   // prose to rewrite). On the assistant reply: the original text it was asked to
   // rewrite, so the bubble can render a side-by-side diff against its output.

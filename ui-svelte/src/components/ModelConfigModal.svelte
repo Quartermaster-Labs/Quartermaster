@@ -11,7 +11,9 @@
     type ModelOverride,
     type ModelVariant,
     type PlanEstimate,
+    models,
   } from "../stores/api";
+  import { get } from "svelte/store";
   import VramGauge from "./VramGauge.svelte";
   import { estimateSegments } from "../stores/vram";
 
@@ -639,6 +641,15 @@
       seedFromOverride(o);
       defaultVariants = (cfg.defaultVariants ?? []).map((v) => ({ ...v }));
       origDefaultVariants = JSON.stringify(defaultVariants);
+      // Vision twin: models shipping an mmproj projector get an auto-generated
+      // "<id>-vision" profile. Surface it as an editable "vision" variant tab —
+      // generate.go merges a "vision" variant back into that twin in place. Seed
+      // a blank (unlisted, matching the auto default) when none is saved yet.
+      if (get(models).some((m) => m.id === `${modelId}-vision`) && !variants.some((v) => v.name === "vision")) {
+        const nv = blankVariant("vision", 0);
+        nv.unlisted = true;
+        variants = [...variants, nv];
+      }
       // Land on the clicked row's variant: the model id ends with "-<name>" for
       // a variant/tier, or is the bare base for Default. Match the longest name so a
       // name that's a suffix of another doesn't win.
@@ -1710,7 +1721,11 @@
                 Name (suffix)
                 {@render hint("The variant's id suffix and listen-name. The model loads as <base-id>-<name>.")}
               </span>
-              <input type="text" value={sv.name} oninput={renameSelectedVariant} class="cfg-input" placeholder="e.g. game, long, judge" />
+              {#if sv.name === "vision"}
+                <input type="text" value="vision" readonly class="cfg-input opacity-70" title="Reserved: the auto-generated vision twin that loads the mmproj image projector. Tune its ctx/VRAM/visibility here; uncheck Unlisted to surface it in the model picker." />
+              {:else}
+                <input type="text" value={sv.name} oninput={renameSelectedVariant} class="cfg-input" placeholder="e.g. game, long, judge" />
+              {/if}
             </label>
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-txtsecondary flex items-center gap-1">

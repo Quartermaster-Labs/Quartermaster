@@ -44,7 +44,7 @@ export function estimateSegments(est: PlanEstimate, kvInRam = false): VramSegmen
   if (weightsMb > 0)
     segs.push({ label: "Weights", mb: weightsMb, class: "bg-primary", detail: "model weights + compute on GPU" });
   if (draftMb > 0)
-    segs.push({ label: "Draft", mb: draftMb, class: "bg-secondary", detail: "speculative draft / MTP model on GPU" });
+    segs.push({ label: "Draft", mb: draftMb, class: "bg-primary/40", detail: "speculative draft / MTP model on GPU" });
   if (kvMb > 0)
     segs.push({ label: "KV cache", mb: kvMb, class: "bg-warning", detail: `attention cache (ctx ${est.ctx})` });
   if (ckptMb > 0)
@@ -157,7 +157,7 @@ export const vramBreakdown = derived(
       if (weightsMb > 0)
         segments.push({ label: "Weights", mb: weightsMb, class: "bg-primary", detail: `${name} model weights on GPU` });
       if (draftMb > 0)
-        segments.push({ label: "Draft", mb: draftMb, class: "bg-secondary", detail: `${name} speculative draft / MTP model on GPU` });
+        segments.push({ label: "Draft", mb: draftMb, class: "bg-primary/40", detail: `${name} speculative draft / MTP model on GPU` });
       if (kvMb > 0)
         segments.push({ label: "KV cache", mb: kvMb, class: "bg-warning", detail: `${name} attention cache (ctx ${$est.est.ctx})` });
       if (ckptMb > 0)

@@ -102,6 +102,39 @@ package-windows: windows
 		|| echo "WARN: no zip/tar found — folder left unarchived at $(PKG_WIN_DIR)" )
 	@echo "Done: $(PKG_WIN_DIR)  (+ $(BUILD_DIR)/llama-quartermaster-windows.zip)"
 
+# Assemble a runnable Linux/Mac folder + tar.gz. Same in-place, user-data-preserving
+# refresh as package-windows; no launcher .cmd (the binary runs directly), but the
+# systemd unit ships under packaging/. ponytail: amd64 linux / arm64 mac only — add
+# more arches here if a release ever needs them.
+PKG_NIX_BIN_linux = $(APP_NAME)-linux-amd64
+PKG_NIX_BIN_mac   = $(APP_NAME)-darwin-arm64
+package-linux: linux-amd64
+	@$(MAKE) --no-print-directory _package-nix NIX_OS=linux NIX_BIN=$(PKG_NIX_BIN_linux)
+package-mac: mac
+	@$(MAKE) --no-print-directory _package-nix NIX_OS=mac NIX_BIN=$(PKG_NIX_BIN_mac)
+
+# NIX_OS = linux|mac, NIX_BIN = built binary filename in $(BUILD_DIR)
+_package-nix:
+	@echo "Packaging $(NIX_OS) bundle..."
+	$(eval PKG_NIX_DIR := $(BUILD_DIR)/$(APP_NAME)-$(NIX_OS))
+	mkdir -p $(PKG_NIX_DIR)
+	rm -rf $(PKG_NIX_DIR)/packaging
+	cp $(BUILD_DIR)/$(NIX_BIN) $(PKG_NIX_DIR)/
+	cp quartermaster-generate.example.yaml $(PKG_NIX_DIR)/quartermaster-generate.example.yaml
+	@if [ -f $(PKG_NIX_DIR)/quartermaster-generate.yaml ]; then \
+		echo "  kept existing quartermaster-generate.yaml"; \
+	else \
+		cp quartermaster-generate.example.yaml $(PKG_NIX_DIR)/quartermaster-generate.yaml; \
+		echo "  seeded quartermaster-generate.yaml from example"; fi
+	cp config.example.yaml $(PKG_NIX_DIR)/config.example.yaml
+	cp -r packaging $(PKG_NIX_DIR)/packaging
+	@echo "$(APP_NAME) $(GIT_HASH) built $(BUILD_DATE)" > $(PKG_NIX_DIR)/VERSION.txt
+	cd $(BUILD_DIR) && rm -f $(APP_NAME)-$(NIX_OS).tar.gz && \
+		tar --exclude='$(APP_NAME)-$(NIX_OS)/playground-data' \
+			--exclude='$(APP_NAME)-$(NIX_OS)/config.yaml' \
+			-czf $(APP_NAME)-$(NIX_OS).tar.gz $(APP_NAME)-$(NIX_OS)
+	@echo "Done: $(PKG_NIX_DIR)  (+ $(BUILD_DIR)/$(APP_NAME)-$(NIX_OS).tar.gz)"
+
 # for testing with real external processes
 simple-responder:
 	@echo "Building simple responder"
@@ -152,5 +185,5 @@ test-ui:
 	cd ui-svelte && npm ci && npm run check && npm test
 
 # Phony targets
-.PHONY: all clean ui mac windows package-windows simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy release release-public _build-release
+.PHONY: all clean ui mac windows package-windows package-linux package-mac _package-nix simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy release release-public _build-release
 .PHONE: linux linux-arm64 linux-amd64
