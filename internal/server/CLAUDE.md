@@ -136,9 +136,27 @@ On a load with no exact conversation file, both warm (`onSwitch`) and cold
    preamble-only KV needs a synthetic prefill while the slot is safe to clobber), then
    save the resident KV as the preamble cache (`preamble-mint`). Gated on a non-empty
    system prompt **and** `len(preamble) ≥ seedMinPrefixBytes` (2 KB).
-2. **`bestSeed`** (Tier-1 fallback) — restore the prior conversation whose `.meta`
-   preamble shares the longest leading prefix ≥2 KB. Handles preambles too short/
-   system-less to mint a clean preamble cache.
+2. **`bestSeed`** (Tier-1 fallback) — restore a prior session sharing a ≥2 KB
+   leading preamble prefix, chosen to **minimize over-restore** (KV beyond the
+   shared prefix): tail-free preamble caches first, then longest shared prefix,
+   then smallest `.bin`. Handles preambles too short/system-less to mint a clean
+   preamble cache. **Why minimize over-restore:** restoring a long sibling
+   *conversation* whose tail diverges from the new prompt is wasted I/O on
+   plain-attention models and actively harmful on hybrid/recurrent ones — the
+   restored state sits at the sibling's full length, the new prompt matches only
+   the shared preamble, and the un-rewindable layers emit llama.cpp's
+   `non-consecutive token position N after M` + full reprocess (0 reuse). A
+   preamble cache has no conversation tail so it never over-restores.
+   - **Recurrent/hybrid models skip BOTH partial-prefix paths** (preamble cache +
+     Tier-1 seed) entirely. Even an exactly-length-matched preamble lands a
+     GatedDeltaNet/SSM model's recurrent state at the wrong position (it can only
+     restore at the exact saved length), producing the same `non-consecutive
+     token position` loop with ~0 reuse (upstream llama.cpp #21831). The exact
+     whole-slot **restore-hit** still runs (works on hybrid); only the partial
+     paths are gated. Detection: `newSlotCache`'s `recurrent` predicate reads the
+     model's gguf (`autogen.ReadGgufMetadataCached`, memoized per gguf) and treats
+     `FullAttnInterval > 0` as recurrent. Gate hit → a `miss` event tagged
+     `recurrent-skip-seed`.
 
 After any restore, `awaitConfirm[model]` is set; the **next** request's upstream
 `cached_tokens` (via `confirmReuse`, called from the metrics monitor) is the honest

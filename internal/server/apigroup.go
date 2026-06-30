@@ -183,7 +183,46 @@ func (s *Server) handleAPIPerformance(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"sys_stats": sysStats,
 		"gpu_stats": gpuStats,
+		"foreign":   s.foreignGPU(r.Context()),
 	})
+}
+
+// foreignVram is the current-snapshot tally of GPU memory held by llama-server /
+// sd-server processes that this instance did NOT spawn — i.e. a stray llama.cpp
+// left running elsewhere. The UI shows MB as a red gauge segment.
+type foreignVram struct {
+	MB    int            `json:"mb"`
+	Procs []perf.GpuProc `json:"procs,omitempty"`
+}
+
+// isInferenceProc reports whether a GPU process name looks like a llama.cpp /
+// stable-diffusion server. ponytail: substring heuristic; widen if other
+// backends with distinct binary names show up.
+func isInferenceProc(name string) bool {
+	n := strings.ToLower(name)
+	return strings.Contains(n, "llama-server") || strings.Contains(n, "sd-server")
+}
+
+// foreignGPU lists inference processes using GPU memory whose pid is not one of
+// our managed children. nvidia-smi-only; returns a zero tally on non-NVIDIA.
+func (s *Server) foreignGPU(ctx context.Context) foreignVram {
+	procs := perf.QueryComputeApps(ctx)
+	if len(procs) == 0 {
+		return foreignVram{}
+	}
+	ours := make(map[int]bool)
+	for _, pid := range s.local.RunningPIDs() {
+		ours[pid] = true
+	}
+	out := foreignVram{}
+	for _, p := range procs {
+		if ours[p.PID] || !isInferenceProc(p.Name) {
+			continue
+		}
+		out.MB += p.MemMB
+		out.Procs = append(out.Procs, p)
+	}
+	return out
 }
 
 // handleAPIVersion serves the build metadata.

@@ -139,9 +139,18 @@ export interface GpuStat {
   power_draw_w: number;
 }
 
+export interface ForeignGpuProc {
+  pid: number;
+  name: string;
+  mem_mb: number;
+}
+
 export interface PerformanceResponse {
   sys_stats: SysStat[];
   gpu_stats: GpuStat[];
+  // Current-snapshot tally of GPU memory held by llama-server/sd-server
+  // processes we did not spawn (a stray llama.cpp). Always present.
+  foreign?: { mb: number; procs?: ForeignGpuProc[] };
 }
 
 export interface APIEventEnvelope {

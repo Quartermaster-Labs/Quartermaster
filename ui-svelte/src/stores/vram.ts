@@ -1,5 +1,5 @@
 import { derived, writable } from "svelte/store";
-import { latestGpu } from "./perf";
+import { latestGpu, foreignVram } from "./perf";
 import { models, estimatePlan, type PlanEstimate } from "./api";
 
 // VRAM split: "system" (OS + other apps + game) vs the loaded llama-server. We
@@ -73,15 +73,35 @@ models.subscribe(($models) => {
   }
 });
 
+// foreignSeg builds the red "Foreign" segment for VRAM held by a llama-server
+// we didn't spawn. Returns [] when none detected.
+function foreignSeg(mb: number, procs?: { name: string }[]): VramSegment[] {
+  if (mb <= 0) return [];
+  const names = (procs ?? []).map((p) => p.name).join(", ");
+  return [
+    {
+      label: "Foreign",
+      mb,
+      class: "bg-error",
+      detail: "llama-server not owned by us" + (names ? ` — ${names}` : ""),
+    },
+  ];
+}
+
 export const vramBreakdown = derived(
-  [latestGpu, models, activeEstimate],
-  ([$gpu, $models, $est]): VramBreakdown | null => {
+  [latestGpu, models, activeEstimate, foreignVram],
+  ([$gpu, $models, $est, $foreign]): VramBreakdown | null => {
     if (!$gpu) return null;
 
     const live = $models.filter(
       (m) => m.state === "ready" || m.state === "starting" || m.state === "stopping",
     );
-    const used = $gpu.mem_used_mb;
+    const rawUsed = $gpu.mem_used_mb;
+    // Carve foreign VRAM out of the total before splitting the rest into
+    // system / model components; it gets its own red segment.
+    const foreignMb = Math.min(Math.max(0, $foreign?.mb ?? 0), rawUsed);
+    const foreign = foreignSeg(foreignMb, $foreign?.procs);
+    const used = rawUsed - foreignMb;
     // Capture the idle floor, keeping the MINIMUM of idle readings rather than
     // the latest. Side effect in a derived is fine here — it only records the
     // floor; the emitted value is pure of it. Taking the min rejects transient
@@ -92,6 +112,15 @@ export const vramBreakdown = derived(
     // ~0, dumping the whole model slice into "System".
     if (live.length === 0) {
       baselineMb = baselineMb === null ? used : Math.min(baselineMb, used);
+      // No model loaded: ALL live VRAM is system by definition. Don't subtract
+      // the (possibly stale-low) baseline floor — VRAM that grew since the
+      // baseline was sampled (a game/app opening) would otherwise leak into a
+      // "Model(s)" slice even though nothing is loaded.
+      return {
+        usedMb: rawUsed,
+        totalMb: $gpu.mem_total_mb,
+        segments: [{ label: "System", mb: used, class: "bg-info", detail: "OS, other apps" }, ...foreign],
+      };
     }
 
     // System floor. Prefer the measured idle baseline. If we never caught an
@@ -164,13 +193,14 @@ export const vramBreakdown = derived(
         segments.push({ label: "Checkpoints", mb: ckptMb, class: "bg-error", detail: `${name} context-checkpoint KV snapshots` });
       if (overheadMb > 0)
         segments.push({ label: "CUDA", mb: overheadMb, class: "bg-success", detail: "CUDA context + compute buffers" });
-      return { usedMb: used, totalMb: $gpu.mem_total_mb, segments };
+      segments.push(...foreign);
+      return { usedMb: rawUsed, totalMb: $gpu.mem_total_mb, segments };
     }
 
     // Fallback: undifferentiated model slice (no estimate, or >1 model).
     const modelNames = live.map((m) => m.name || m.id);
     return {
-      usedMb: used,
+      usedMb: rawUsed,
       totalMb: $gpu.mem_total_mb,
       segments: [
         systemSeg,
@@ -180,6 +210,7 @@ export const vramBreakdown = derived(
           class: "bg-primary",
           detail: modelNames.length ? modelNames.join(", ") : "none loaded",
         },
+        ...foreign,
       ],
     };
   },

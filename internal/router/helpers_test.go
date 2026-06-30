@@ -108,6 +108,8 @@ func (f *fakeProcess) State() process.ProcessState {
 	return f.state
 }
 
+func (f *fakeProcess) PID() int { return 0 }
+
 func (f *fakeProcess) markReady() { f.setState(process.StateReady) }
 
 func (f *fakeProcess) Run(_ time.Duration) error {
@@ -136,6 +138,8 @@ func (f *fakeProcess) Run(_ time.Duration) error {
 
 func (f *fakeProcess) SetPreStop(fn func())   { f.preStop.Store(&fn) }
 func (f *fakeProcess) SetPostStart(fn func()) { f.postStart.Store(&fn) }
+
+func (f *fakeProcess) SetSpawnArgs(_ func([]string) ([]string, error)) {}
 
 func (f *fakeProcess) Stop(_ time.Duration) error {
 	f.stopCalls.Add(1)

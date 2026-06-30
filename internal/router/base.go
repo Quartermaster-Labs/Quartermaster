@@ -126,6 +126,17 @@ func (b *baseRouter) SetPostLoad(fn func(modelID string)) {
 	}
 }
 
+// SetSpawnArgs installs a spawn-time argv rewriter on every managed process,
+// binding each process's model ID. The process fires it at doStart to re-derive
+// flags (e.g. GPU/CPU layer placement from live free VRAM) before exec. Call
+// once before serving; the process map is fixed at construction.
+func (b *baseRouter) SetSpawnArgs(fn func(modelID string, args []string) ([]string, error)) {
+	for id, p := range b.processes {
+		id := id
+		p.SetSpawnArgs(func(args []string) ([]string, error) { return fn(id, args) })
+	}
+}
+
 func (b *baseRouter) notifyProcessed() {
 	if b.testProcessed != nil {
 		b.testProcessed <- struct{}{}
@@ -399,6 +410,24 @@ func (b *baseRouter) RunningModels() map[string]process.ProcessState {
 		running[id] = st
 	}
 	return running
+}
+
+// RunningPIDs returns the OS pids of every non-stopped local process. Used to
+// distinguish our own llama-server children from foreign ones when accounting
+// GPU memory. State() is a snapshot and PID() reads an atomic, so this is safe
+// to call without the run loop.
+func (b *baseRouter) RunningPIDs() []int {
+	var pids []int
+	for _, p := range b.processes {
+		switch p.State() {
+		case process.StateStopped, process.StateShutdown:
+			continue
+		}
+		if pid := p.PID(); pid > 0 {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
 }
 
 // Unload stops the named models, or every running model when none are named.

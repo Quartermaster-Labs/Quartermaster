@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/radu0120/llama-quartermaster/internal/autogen"
 	"github.com/radu0120/llama-quartermaster/internal/chain"
 	"github.com/radu0120/llama-quartermaster/internal/config"
 	"github.com/radu0120/llama-quartermaster/internal/logmon"
@@ -167,7 +168,32 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		mc, ok := cfg.Models[id]
 		return ok && strings.Contains(mc.Cmd, "--slot-save-path")
 	}
-	s.slotCache = newSlotCache(cfg.SlotCache, s.runningProxies, slotParticipates, proxylog)
+	// slotRecurrent reports whether a model loads a hybrid/recurrent gguf
+	// (GatedDeltaNet/SSM, full_attention_interval>0). Memoized per gguf path —
+	// ReadGgufMetadataCached is itself size+mtime cached, but skip even that for
+	// models whose family we've already classified.
+	var recurMu sync.Mutex
+	recurCache := map[string]bool{}
+	slotRecurrent := func(id string) bool {
+		mc, ok := cfg.Models[id]
+		if !ok {
+			return false
+		}
+		gguf := modelFamily(mc.Cmd)
+		if gguf == "" {
+			return false
+		}
+		recurMu.Lock()
+		defer recurMu.Unlock()
+		if v, seen := recurCache[gguf]; seen {
+			return v
+		}
+		meta, err := autogen.ReadGgufMetadataCached(gguf)
+		v := err == nil && meta.FullAttnInterval > 0
+		recurCache[gguf] = v
+		return v
+	}
+	s.slotCache = newSlotCache(cfg.SlotCache, s.runningProxies, slotParticipates, slotRecurrent, proxylog)
 	local.SetPreEvict(s.slotCache.saveOnEvict)    // save slot KV before a swap/unload kills the process
 	local.SetPostLoad(s.slotCache.restoreOnLoad)  // restore slot KV after a cold load, before serving
 	s.metrics.onRecord = s.slotCache.confirmReuse // confirm restores actually reused KV (cached_tokens)
@@ -181,6 +207,58 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 // SetShutdownHook wires the graceful-shutdown trigger used by the auto-updater
 // after it launches the installer (so the running exe can be replaced).
 func (s *Server) SetShutdownHook(fn func()) { s.shutdownHook = fn }
+
+// WireDynamicOffload installs the spawn-time argv rewriter that re-derives each
+// model's GPU/CPU layer placement from the VRAM free RIGHT NOW (via the perf
+// monitor), so a config plan sized when more VRAM was free can't OOM. It only
+// ever offloads more than the baked plan, and refuses a spawn outright when a
+// model can't fit even fully offloaded. No-op without a perf monitor (no live
+// reading to act on). Call once after New (and after each hot-reload re-New).
+func (s *Server) WireDynamicOffload(settings autogen.Settings) {
+	if s.perf == nil {
+		return
+	}
+	s.local.SetSpawnArgs(func(modelID string, args []string) ([]string, error) {
+		freeGB, ok := s.freeVramGB()
+		return autogen.LiveOffloadArgs(settings, args, freeGB, ok, func(m string) {
+			s.proxylog.Infof("<%s> %s", modelID, m)
+		})
+	})
+}
+
+// freeVramGB returns the free VRAM (GB) of the largest GPU from the most recent
+// perf sample. ok is false when there's no GPU telemetry yet.
+func (s *Server) freeVramGB() (float64, bool) {
+	if s.perf == nil {
+		return 0, false
+	}
+	_, gpus := s.perf.Current()
+	latest := make(map[int]perf.GpuStat)
+	for _, g := range gpus {
+		if prev, seen := latest[g.ID]; !seen || g.Timestamp.After(prev.Timestamp) {
+			latest[g.ID] = g
+		}
+	}
+	best := -1
+	var bestStat perf.GpuStat
+	for _, g := range latest {
+		if g.MemTotalMB <= 0 {
+			continue
+		}
+		if best < 0 || g.MemTotalMB > bestStat.MemTotalMB {
+			best = g.ID
+			bestStat = g
+		}
+	}
+	if best < 0 {
+		return 0, false
+	}
+	free := bestStat.MemTotalMB - bestStat.MemUsedMB
+	if free < 0 {
+		free = 0
+	}
+	return float64(free) / 1024.0, true
+}
 
 // runningProxies maps each running local model to its resolved upstream base
 // URL (cfg.Models[id].Proxy has ${PORT} already substituted at config load).

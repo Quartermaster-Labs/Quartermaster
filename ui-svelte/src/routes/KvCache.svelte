@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onDestroy } from "svelte";
   import { fetchKvCache, type KvCacheStats } from "../stores/api";
+  import { observeTab } from "../stores/observe";
 
   let stats = $state<KvCacheStats | null>(null);
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -10,9 +11,15 @@
     if (s) stats = s;
   }
 
-  onMount(() => {
+  // Panel stays mounted across tab switches; only poll while it's the active tab.
+  $effect(() => {
+    if ($observeTab !== "kvcache") return;
     void tick();
     timer = setInterval(() => void tick(), 2000);
+    return () => {
+      if (timer) clearInterval(timer);
+      timer = null;
+    };
   });
   onDestroy(() => {
     if (timer) clearInterval(timer);

@@ -41,6 +41,11 @@ type LocalRouter interface {
 	// stopped or shut down, keyed by model ID.
 	RunningModels() map[string]process.ProcessState
 
+	// RunningPIDs returns the OS pids of every non-stopped local process, so
+	// callers can tell our own llama-server children apart from foreign GPU
+	// processes.
+	RunningPIDs() []int
+
 	// Unload stops the named models, or every running model when none are
 	// named. It blocks until each targeted process has stopped.
 	Unload(timeout time.Duration, models ...string)
@@ -58,4 +63,10 @@ type LocalRouter interface {
 	// becomes Ready, before the triggering request is served. Call once before
 	// serving. Used to restore a saved slot KV on cold load.
 	SetPostLoad(fn func(modelID string))
+
+	// SetSpawnArgs installs a hook that rewrites a model's upstream argv at each
+	// spawn (after sanitization, before exec) — e.g. recompute -ngl/--n-cpu-moe
+	// from live free VRAM. Returning an error refuses that spawn. Call once
+	// before serving.
+	SetSpawnArgs(fn func(modelID string, args []string) ([]string, error))
 }

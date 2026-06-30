@@ -116,7 +116,7 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		if prof.Ctx != 0 {
 			ckptCtxCeil = min(ckptCtxCeil, prof.Ctx)
 		}
-		checkpointGB = checkpointReserveGB(prof, perTokGB, kvConstGB, ckptCtxCeil)
+		checkpointGB = checkpointReserveGB(prof, perTokGB, kvConstGB, ckptCtxCeil, meta.FullAttnInterval > 0)
 	}
 
 	ngl, ncpuMoe := forceLowActiveMoE(meta, plan, prof, kvReserve)

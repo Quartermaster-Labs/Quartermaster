@@ -45,9 +45,11 @@ func (s *stubRouter) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *stubRouter) RunningModels() map[string]process.ProcessState { return s.running }
+func (s *stubRouter) RunningPIDs() []int                             { return nil }
 func (s *stubRouter) Unload(_ time.Duration, _ ...string)            { s.unloadCalls.Add(1) }
 func (s *stubRouter) SetPreEvict(_ func(string))                     {}
 func (s *stubRouter) SetPostLoad(_ func(string))                     {}
+func (s *stubRouter) SetSpawnArgs(_ func(string, []string) ([]string, error)) {}
 func (s *stubRouter) ProcessLogger(modelID string) (*logmon.Monitor, bool) {
 	if s.loggers != nil {
 		if lg, ok := s.loggers[modelID]; ok {

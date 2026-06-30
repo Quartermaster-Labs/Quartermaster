@@ -85,6 +85,7 @@ type ProcessCommand struct {
 
 	lastUse  atomic.Int64 // unix nano timestamp of last ServeHTTP completion
 	inflight atomic.Int64 // current in-flight ServeHTTP calls
+	pid      atomic.Int32 // OS pid of the live upstream; 0 when not running
 
 	// preStop, when set, runs once just before a running process is killed by a
 	// Stop (TTL idle, eviction, or explicit). Fired while still StateReady so it
@@ -96,6 +97,12 @@ type ProcessCommand struct {
 	// before WaitReady callers are woken — so it can prime the upstream (e.g.
 	// restore a saved slot KV) before the first request is forwarded.
 	postStart atomic.Pointer[func()]
+
+	// spawnArgs, when set, rewrites the upstream argv at each doStart (after
+	// sanitization, before exec) — e.g. recompute -ngl/--n-cpu-moe from live free
+	// VRAM. An error aborts the start. Atomic: set from another goroutine at
+	// startup, read by doStart.
+	spawnArgs atomic.Pointer[func(args []string) ([]string, error)]
 }
 
 var _ Process = (*ProcessCommand)(nil)
@@ -132,6 +139,11 @@ func (p *ProcessCommand) SetPreStop(fn func()) { p.preStop.Store(&fn) }
 
 // SetPostStart installs the post-ready hook. See Process.SetPostStart.
 func (p *ProcessCommand) SetPostStart(fn func()) { p.postStart.Store(&fn) }
+
+// SetSpawnArgs installs the spawn-time argv rewriter. See Process.SetSpawnArgs.
+func (p *ProcessCommand) SetSpawnArgs(fn func(args []string) ([]string, error)) {
+	p.spawnArgs.Store(&fn)
+}
 
 // run is the single-writer goroutine that owns all mutable lifecycle state
 // (current ProcessState, the running *exec.Cmd, the active reverse-proxy
@@ -391,6 +403,16 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		return startResult{err: fmt.Errorf("unable to get sanitized command: %w", err)}
 	}
 
+	// Rewrite the argv against live conditions (e.g. recompute GPU/CPU layer
+	// placement from free VRAM). An error here refuses the start rather than
+	// letting a stale plan OOM.
+	if fp := p.spawnArgs.Load(); fp != nil {
+		args, err = (*fp)(args)
+		if err != nil {
+			return startResult{err: err}
+		}
+	}
+
 	proxyURL, err := url.Parse(p.config.Proxy)
 	if err != nil {
 		return startResult{err: fmt.Errorf("invalid proxy URL %q: %w", p.config.Proxy, err)}
@@ -456,9 +478,11 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		cmdCancel()
 		return startResult{err: fmt.Errorf("failed to start command '%s': %w", strings.Join(args, " "), err)}
 	}
+	p.pid.Store(int32(cmd.Process.Pid))
 
 	go func() {
 		waitErr := cmd.Wait()
+		p.pid.Store(0)
 		switch st := p.State(); {
 		case waitErr == nil:
 			p.proxyLogger.Debugf("<%s> process exited cleanly", p.id)
@@ -694,6 +718,11 @@ func (p *ProcessCommand) State() ProcessState {
 		return s
 	}
 	return StateStopped
+}
+
+// PID returns the OS pid of the live upstream process, or 0 when not running.
+func (p *ProcessCommand) PID() int {
+	return int(p.pid.Load())
 }
 
 func (p *ProcessCommand) ServeHTTP(w http.ResponseWriter, r *http.Request) {

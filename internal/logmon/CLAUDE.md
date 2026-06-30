@@ -31,5 +31,5 @@ A log monitor that doubles as an `io.Writer`: it tees everything written to it t
 ## Gotchas
 
 - `DataEventID` (`0x04`) is part of the shared event-ID number space — see `internal/shared/events.go` for the other reserved IDs (`0x01`, `0x03`, `0x05`–`0x08`); avoid collisions.
-- The dispatcher queue is only 1000 deep; a slow `OnLogData` consumer applies back-pressure and can block `Write` (and therefore the process whose output is being teed).
+- **`Write` never blocks on subscribers.** `Write` does a non-blocking send onto an internal `broadcastCh` (cap 1024); a dedicated `broadcastLoop` goroutine owns the back-pressuring `event.Publish`. If subscribers stall, the publish blocks the loop goroutine — not `Write` — so a slow UI log stream can never stall the upstream process's stdout drain (would stall llama.cpp). Overflow drops the live chunk and accumulates a byte count emitted as an in-stream `— N bytes dropped —` marker when delivery resumes; `GetHistory()` still holds the data for reconnecting clients. The loop goroutine lives for the Monitor's lifetime (no `Close`); per-model `procLog` Monitors are created once at router construction, so the count is bounded.
 - `circularBuffer` is unsynchronized on its own; the `Monitor` guards it with `bufferMu`.

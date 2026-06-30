@@ -39,6 +39,11 @@ type Process interface {
 	// and may change at any time after the call returns.
 	State() ProcessState
 
+	// PID returns the OS pid of the live upstream process, or 0 when it is
+	// not running. Used to tell our own llama-server children apart from
+	// foreign ones when accounting GPU memory.
+	PID() int
+
 	// ServeHTTP forwards requests to the underlying process
 	// Calling it when the process is not ready will result in a
 	// 503 response with a body indicating it is a llama-quartermaster-error
@@ -58,4 +63,11 @@ type Process interface {
 	// restore a saved slot KV — so the first forwarded request reuses it instead
 	// of reprefilling. Call once before serving; safe for concurrent set.
 	SetPostStart(fn func())
+
+	// SetSpawnArgs installs a hook that rewrites the upstream argv at each spawn,
+	// after sanitization and before exec. Used to re-derive GPU/CPU placement
+	// from live free VRAM so a stale baked plan can't OOM. Returning an error
+	// aborts the start (the caller refuses rather than crashing). nil hook = the
+	// argv is used verbatim. Call once before serving; safe for concurrent set.
+	SetSpawnArgs(fn func(args []string) ([]string, error))
 }

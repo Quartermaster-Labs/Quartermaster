@@ -55,8 +55,14 @@ type slotCache struct {
 	// generated cmd carries --slot-save-path). Without it the per-model checkbox
 	// is off and llama-server can't save/restore, so the cache stays out of its way.
 	participates func(model string) bool
-	client       *http.Client
-	log          *logmon.Monitor
+	// recurrent reports whether a model's gguf is a hybrid/recurrent arch
+	// (GatedDeltaNet/SSM, FullAttnInterval>0). Such models can only restore their
+	// recurrent state at its exact saved length, so we run the exact whole-slot
+	// restore-hit but skip the partial-prefix paths (preamble cache + Tier-1 seed)
+	// for them — see restoreOnLoad. nil => treat all models as plain attention.
+	recurrent func(model string) bool
+	client    *http.Client
+	log       *logmon.Monitor
 
 	// ponytail: one global lock guards the occupant map AND serializes the
 	// save/restore HTTP calls. A multi-GB save blocks other models' requests for
@@ -153,12 +159,13 @@ type occInfo struct {
 
 // newSlotCache builds the cache from config, applying defaults for unset knobs.
 // Returns a disabled cache when the feature is off so callers can stay branchless.
-func newSlotCache(cfg config.SlotCacheConfig, running func() map[string]string, participates func(string) bool, log *logmon.Monitor) *slotCache {
+func newSlotCache(cfg config.SlotCacheConfig, running func() map[string]string, participates func(string) bool, recurrent func(string) bool, log *logmon.Monitor) *slotCache {
 	sc := &slotCache{
 		enabled:         cfg.Enable,
 		dir:             cfg.Path,
 		running:         running,
 		participates:    participates,
+		recurrent:       recurrent,
 		log:             log,
 		client:          &http.Client{Timeout: 60 * time.Second}, // a large save/restore can be slow
 		occupant:        map[string]*occInfo{},
@@ -346,6 +353,17 @@ func (sc *slotCache) restoreOnLoad(model string) {
 		sc.occupant[model] = &occInfo{key: key} // resident, not yet dirty (nothing ran)
 		sc.pushAwait(model, "restore-hit")
 		sc.mu.Unlock()
+		return
+	}
+
+	// Hybrid/recurrent models (GatedDeltaNet/SSM) can only restore their recurrent
+	// state at the exact saved length. The partial-prefix paths below (preamble
+	// cache + Tier-1 seed) land that state at the wrong position, so llama-server
+	// logs "non-consecutive token position" and reprocesses the whole prompt in a
+	// loop (0 reuse, slow). The exact restore-hit above already returned for this
+	// model; skip the partial paths entirely for recurrent archs.
+	if sc.recurrent != nil && sc.recurrent(model) {
+		sc.record(kvEvent{Model: model, Op: "miss", Detail: "recurrent-skip-seed"})
 		return
 	}
 
@@ -817,13 +835,21 @@ func (sc *slotCache) dropStalePreambles(model, keepKey, preamble string) {
 	}
 }
 
-// bestSeed finds the saved session for `model` whose stored preamble shares the
-// longest leading prefix with the incoming `preamble`. Returns its key and the
-// .bin size when the shared prefix clears seedMinPrefixBytes and the file is
-// small enough that restoring it to salvage the prefix is worthwhile. This is
-// the Tier-1 lookup: it lets a cold, never-seen conversation reuse the static
-// system+tools preamble of a similar prior session via llama-server's own
-// prefix matching after restore.
+// bestSeed finds the saved session for `model` to seed a cold slot from. Among
+// candidates whose stored preamble shares >= seedMinPrefixBytes with the incoming
+// `preamble`, it minimizes *over-restore* — KV restored beyond the shared prefix.
+// Restoring a long sibling CONVERSATION whose tail diverges from the new prompt
+// is wasted I/O on plain-attention models and actively harmful on hybrid/recurrent
+// ones: the restored state sits at the sibling's full length, the new prompt
+// matches only the shared preamble, and the layers that can't be rewound emit
+// "non-consecutive token position" + full reprocess (0 reuse). A preamble-cache
+// file has no conversation tail, so restoring it never exceeds the prefix — prefer
+// it. We don't store seed token-length, so the proxy is: tail-free first, then
+// longest shared prefix, then smallest .bin (least excess tail).
+//
+// Returns its key and the .bin size; this is the Tier-1 lookup that lets a cold,
+// never-seen conversation reuse a similar prior session's static system+tools
+// preamble via llama-server's own prefix matching after restore.
 func (sc *slotCache) bestSeed(model, preamble string) (key string, bytes int64, ok bool) {
 	if preamble == "" {
 		return "", 0, false
@@ -834,6 +860,7 @@ func (sc *slotCache) bestSeed(model, preamble string) (key string, bytes int64, 
 	}
 	prefix := sanitize(model) + "__"
 	bestLen := 0
+	var bestPreamble bool
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".meta") || !strings.HasPrefix(name, prefix) {
@@ -848,11 +875,29 @@ func (sc *slotCache) bestSeed(model, preamble string) (key string, bytes int64, 
 		if err != nil {
 			continue
 		}
-		if n := commonPrefixLen(preamble, string(stored)); n > bestLen {
-			bestLen, key, bytes = n, k, fi.Size()
+		n := commonPrefixLen(preamble, string(stored))
+		if n < seedMinPrefixBytes {
+			continue
+		}
+		isPre := isPreambleKey(k)
+		// Preference order: tail-free (preamble cache) beats a tailed conversation;
+		// then longer shared prefix; then smaller .bin (least excess KV to restore).
+		better := false
+		switch {
+		case key == "":
+			better = true
+		case isPre != bestPreamble:
+			better = isPre
+		case n != bestLen:
+			better = n > bestLen
+		default:
+			better = fi.Size() < bytes
+		}
+		if better {
+			bestLen, bestPreamble, key, bytes = n, isPre, k, fi.Size()
 		}
 	}
-	if bestLen >= seedMinPrefixBytes {
+	if key != "" {
 		return key, bytes, true
 	}
 	return "", 0, false

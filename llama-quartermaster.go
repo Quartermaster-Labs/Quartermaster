@@ -174,6 +174,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	// wireDynOffload installs spawn-time live-VRAM offload recompute on a server.
+	// Only in -generate mode: the placement flags are autogen's to re-derive, and
+	// settings (overhead/compute-buffer) come from the control file. Off for a
+	// hand-written -config, where the operator owns the flags.
+	wireDynOffload := func(srv *server.Server) {
+		if *flagGenerate == "" {
+			return
+		}
+		gf, gerr := autogen.LoadGenerateFile(*flagGenerate, *flagModelsDir)
+		if gerr != nil {
+			proxyLog.Warnf("dynamic offload disabled: %v", gerr)
+			return
+		}
+		srv.WireDynamicOffload(gf.Settings)
+	}
+	wireDynOffload(initialSrv)
+
 	// activeSrv is swapped atomically during hot reload.
 	var activeMu sync.RWMutex
 	activeSrv := initialSrv
@@ -279,6 +296,8 @@ func main() {
 		if autogenAdmin != nil {
 			newSrv.SetAutogenAdmin(autogenAdmin)
 		}
+
+		wireDynOffload(newSrv)
 
 		if playground != nil {
 			newSrv.SetPlayground(playground)

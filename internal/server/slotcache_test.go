@@ -274,6 +274,40 @@ func TestSlotCache_BestSeed(t *testing.T) {
 	}
 }
 
+// A tail-free preamble cache is preferred over a longer-prefix conversation seed:
+// restoring the conversation's diverging tail over-restores KV (wasted on plain
+// models, "non-consecutive token position" + reprocess on hybrid). Among equal
+// kinds, the smaller .bin (less excess tail) wins.
+func TestSlotCache_BestSeed_MinimizesOverRestore(t *testing.T) {
+	shared := strings.Repeat("S", seedMinPrefixBytes+500)
+	write := func(dir, key, meta string, binSize int) {
+		os.WriteFile(filepath.Join(dir, fileName("m", key)), make([]byte, binSize), 0o644)
+		os.WriteFile(filepath.Join(dir, metaName("m", key)), []byte(meta), 0o644)
+	}
+
+	t.Run("prefers tail-free preamble over longer-prefix conversation", func(t *testing.T) {
+		dir := t.TempDir()
+		sc := &slotCache{dir: dir, occupant: map[string]*occInfo{}}
+		write(dir, "convo", shared+"_AAAA", 4096)   // 1 byte longer shared prefix, big tail
+		write(dir, preambleKey("zz"), shared, 2048) // tail-free, 1 byte shorter prefix
+		key, _, ok := sc.bestSeed("m", shared+"_CCCC_tail")
+		if !ok || key != preambleKey("zz") {
+			t.Fatalf("bestSeed = (%q,%v), want tail-free preamble seed", key, ok)
+		}
+	})
+
+	t.Run("among equals prefers the smaller .bin", func(t *testing.T) {
+		dir := t.TempDir()
+		sc := &slotCache{dir: dir, occupant: map[string]*occInfo{}}
+		write(dir, "big", shared+"_X", 8192)
+		write(dir, "small", shared+"_X", 1024) // same shared prefix, less excess tail
+		key, _, ok := sc.bestSeed("m", shared+"_X_then_diverge")
+		if !ok || key != "small" {
+			t.Fatalf("bestSeed = (%q,%v), want small", key, ok)
+		}
+	})
+}
+
 // confirmReuse only counts when a restore is awaiting confirmation, and splits
 // on whether the upstream actually reported cached tokens.
 func TestSlotCache_ConfirmReuse(t *testing.T) {
@@ -350,6 +384,31 @@ func TestSlotCache_PrunePreambleLRU(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, fileName("m", keys[1]))); !os.IsNotExist(err) {
 		t.Errorf("stale preamble env01 should have been pruned, err=%v", err)
+	}
+}
+
+// Recurrent/hybrid models must skip the partial-prefix paths: a cold load with no
+// exact file does NOT mint a preamble (which would land recurrent state at the
+// wrong position -> "non-consecutive token position" + reprocess loop). It records
+// a plain miss instead.
+func TestSlotCache_RecurrentSkipsPreambleSeed(t *testing.T) {
+	dir := t.TempDir()
+	srv := fakeBackend(t, 0, dir)
+	sc := newEvictTestCache(dir, srv.URL)
+	sc.recurrent = func(string) bool { return true }
+
+	preamble := strings.Repeat("S", seedMinPrefixBytes+100) + "\x00tools\x00[]"
+	sc.markPendingRestore("m", "conv1", preamble) // cold, no exact file
+	sc.restoreOnLoad("m")
+
+	if sc.counters.PreambleMints != 0 {
+		t.Fatalf("recurrent model must not mint a preamble, got %+v", sc.counters)
+	}
+	if sc.counters.Misses != 1 {
+		t.Fatalf("expected 1 miss, got %+v", sc.counters)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("no KV files should be written for recurrent seed-skip, got %d", len(entries))
 	}
 }
 

@@ -135,6 +135,7 @@
   let abortController = $state<AbortController | null>(null);
   let messagesContainer: HTMLDivElement | undefined = $state();
   let inputEl: HTMLTextAreaElement | undefined = $state();
+  let rewriteEl: HTMLTextAreaElement | undefined = $state();
   let showSettings = $state(false);
   let attachedImages = $state<string[]>([]);
   let fileInput = $state<HTMLInputElement | null>(null);
@@ -248,7 +249,19 @@
     if (inputEl) {
       inputEl.style.height = "auto";
       if (inputEl.scrollHeight > 0) {
-        inputEl.style.height = Math.min(inputEl.scrollHeight, 320) + "px";
+        inputEl.style.height = Math.min(inputEl.scrollHeight, 480) + "px";
+      }
+    }
+  });
+
+  // Auto-grow the rewrite-instruction bar the same way (rewrite mode only).
+  $effect(() => {
+    $rewriteInstructionStore;
+    $selectedTabStore;
+    if (rewriteEl) {
+      rewriteEl.style.height = "auto";
+      if (rewriteEl.scrollHeight > 0) {
+        rewriteEl.style.height = Math.min(rewriteEl.scrollHeight, 240) + "px";
       }
     }
   });
@@ -1071,7 +1084,8 @@
           <div class="flex items-start gap-2 pb-2 border-b border-card-border">
             <PenLine class="w-3.5 h-3.5 mt-1.5 shrink-0 text-primary" />
             <textarea
-              class="w-full bg-transparent text-[0.8125rem] leading-relaxed resize-none focus:outline-none placeholder:text-txtsecondary min-h-[1.5rem] max-h-32 pretty-scroll"
+              bind:this={rewriteEl}
+              class="w-full bg-transparent text-[0.8125rem] leading-relaxed resize-none focus:outline-none placeholder:text-txtsecondary min-h-[1.5rem] max-h-60 pretty-scroll"
               rows="1"
               placeholder="How should I help? e.g. make it more concise and formal"
               bind:value={$rewriteInstructionStore}
@@ -1081,7 +1095,7 @@
         {/if}
         <textarea
           bind:this={inputEl}
-          class="w-full bg-transparent text-[0.8125rem] leading-relaxed resize-none focus:outline-none placeholder:text-txtsecondary pretty-scroll min-h-[3rem] max-h-80"
+          class="w-full bg-transparent text-[0.8125rem] leading-relaxed resize-none focus:outline-none placeholder:text-txtsecondary pretty-scroll min-h-[3rem] max-h-[30rem]"
           rows="2"
           placeholder={$rewriteStore ? "Paste the text to rewrite…" : isStreaming ? "Queue a message…" : "Type a message..."}
           bind:value={userInput}

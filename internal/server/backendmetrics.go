@@ -76,9 +76,14 @@ type backendMetricsMonitor struct {
 
 func newBackendMetricsMonitor(running func() map[string]string, log *logmon.Monitor) *backendMetricsMonitor {
 	return &backendMetricsMonitor{
-		latest:   map[string]BackendMetrics{},
-		running:  running,
-		client:   &http.Client{Timeout: 2 * time.Second},
+		latest:  map[string]BackendMetrics{},
+		running: running,
+		// Timeout MUST exceed interval: a busy llama-server services /slots and
+		// /metrics through the same task queue as token generation, so a poll can
+		// wait several seconds under load. If timeout == interval the client cancels
+		// mid-decode every tick -> upstream "stop: cancel task" spam + wasted loop
+		// iterations. Give the poll room to wait its turn instead.
+		client:   &http.Client{Timeout: 10 * time.Second},
 		log:      log,
 		interval: 2 * time.Second,
 	}

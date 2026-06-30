@@ -641,7 +641,7 @@ func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB fl
 		if prof.Ctx != 0 {
 			ckptCtxCeil = min(ckptCtxCeil, prof.Ctx)
 		}
-		ckpt := checkpointReserveGB(prof, perTokGB, kvConstGB, ckptCtxCeil)
+		ckpt := checkpointReserveGB(prof, perTokGB, kvConstGB, ckptCtxCeil, meta.FullAttnInterval > 0)
 		// Checkpoints live wherever the KV cache does. MoE keeps KV (and thus its
 		// checkpoints) VRAM-resident even when expert weights spill to CPU via
 		// --n-cpu-moe, so they're a flat VRAM overhead. Dense models keep the KV
@@ -724,12 +724,23 @@ func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB fl
 const llamaDefaultCtxCheckpoints = 32
 
 // defaultCtxCheckpoints picks a sane checkpoint count for a model that doesn't
-// set ctxCheckpoints itself. kvConstGB > 0 means SWA or recurrent/SSM: the KV is
-// rolling, so prefix-cache reuse breaks on any context shift and checkpoints are
-// the only reuse path â€” worth a few, though each is pricey (full window/state).
-// Plain full-attention models keep a persistent KV that already covers linear
-// chat, so they need only a couple for the occasional edit/branch.
-func defaultCtxCheckpoints(kvConstGB float64) int {
+// set ctxCheckpoints itself.
+//
+// recurrent (FullAttnInterval>0: GatedDeltaNet/SSM hybrids) => 0: their recurrent
+// state can only be restored at its exact saved length, so a checkpoint restore
+// lands it at the wrong position and llama-server spams "non-consecutive token
+// position" + reprocesses the whole prompt (0 reuse, upstream llama.cpp #21831).
+// Checkpoints cost VRAM and buy nothing on this arch, so disable them.
+//
+// Otherwise kvConstGB > 0 means SWA: the KV window rolls, so prefix-cache reuse
+// breaks on a context shift and checkpoints (which DO restore on SWA) are the
+// only reuse path — worth a few, though each is pricey. Plain full-attention
+// models keep a persistent KV that already covers linear chat, so they need only
+// a couple for the occasional edit/branch.
+func defaultCtxCheckpoints(kvConstGB float64, recurrent bool) int {
+	if recurrent {
+		return 0
+	}
 	if kvConstGB > 0 {
 		return 6
 	}
@@ -763,8 +774,8 @@ func effectiveCtxCheckpoints(prof profile, def int) int {
 // snapshots, so a small pinned ctx (e.g. a 4k judge) reserves far fewer than the
 // 32 default. Returns 0 when checkpoints are disabled or the model has no
 // VRAM-resident KV.
-func checkpointReserveGB(prof profile, perTokGB, kvConstGB float64, ctxCeil int) float64 {
-	n := effectiveCtxCheckpoints(prof, defaultCtxCheckpoints(kvConstGB))
+func checkpointReserveGB(prof profile, perTokGB, kvConstGB float64, ctxCeil int, recurrent bool) float64 {
+	n := effectiveCtxCheckpoints(prof, defaultCtxCheckpoints(kvConstGB, recurrent))
 	if n <= 0 || (perTokGB <= 0 && kvConstGB <= 0) {
 		return 0
 	}
@@ -1043,7 +1054,7 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		lines = append(lines, `--chat-template-kwargs "{\"preserve_thinking\":true}"`)
 	}
 	// Always emit so runtime matches our reserve (else llama-server defaults to 32).
-	ckpts := effectiveCtxCheckpoints(prof, defaultCtxCheckpoints(GetKvCostModel(meta, kvK, kvV).ConstGB))
+	ckpts := effectiveCtxCheckpoints(prof, defaultCtxCheckpoints(GetKvCostModel(meta, kvK, kvV).ConstGB, meta.FullAttnInterval > 0))
 	lines = append(lines, fmt.Sprintf("--ctx-checkpoints %d", ckpts))
 	// DRY sampler: defaults to settings.DryDefault (nil => off) and a per-model
 	// ov.Dry wins (nil => the default, false => off, true => on). Values default
