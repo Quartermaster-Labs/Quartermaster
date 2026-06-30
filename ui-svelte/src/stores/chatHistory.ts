@@ -22,7 +22,24 @@ export interface ChatSession {
 // the logged-in playground user. Hydrated by loadChats() before the chat UI
 // mounts; changes are pushed back to the server (debounced).
 export const chatSessions = writable<ChatSession[]>([]);
-export const activeChatId = writable<string>("");
+
+// Which chat reopens with the tab. Persisted to localStorage (per browser) so a
+// reload/reopen returns to the chat you were on instead of an arbitrary one.
+const LAST_ACTIVE_KEY = "playground-active-chat";
+let lastActive = "";
+try {
+  lastActive = localStorage.getItem(LAST_ACTIVE_KEY) ?? "";
+} catch {
+  // ignore (private mode / storage disabled)
+}
+export const activeChatId = writable<string>(lastActive);
+activeChatId.subscribe((id) => {
+  try {
+    localStorage.setItem(LAST_ACTIVE_KEY, id);
+  } catch {
+    // ignore
+  }
+});
 
 // Id of the session whose turn is currently streaming (null = idle). One turn at
 // a time; set by ChatInterface so the rail can flag the generating row.

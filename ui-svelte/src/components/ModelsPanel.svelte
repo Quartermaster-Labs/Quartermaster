@@ -300,17 +300,22 @@
     return "bg-txtsecondary";
   }
 
-  // Per-card variant expansion (load individual variants). dropUp flips the
-  // popup above the trigger when a bottom-row card lacks room below, so it stays
-  // in view instead of being clipped by the scroll container.
+  // Per-card variant expansion (load individual variants). The popup is
+  // position:fixed (anchored to the trigger rect) so it escapes the bottom
+  // grid's overflow-y-auto clip — top-row cards no longer get cut off. dropUp
+  // flips it above the trigger when there's no room below.
   let expanded = $state<Record<string, boolean>>({});
   let dropUp = $state<Record<string, boolean>>({});
+  let menuPos = $state<Record<string, { left: number; top: number; bottom: number; width: number }>>({});
   const POPUP_H = 260; // ~max-h-60 (240px) + margin
   function toggleExpand(key: string, e?: MouseEvent): void {
     const opening = !expanded[key];
     if (opening && e) {
-      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      dropUp[key] = window.innerHeight - rect.bottom < POPUP_H && rect.top > POPUP_H;
+      const card = (e.currentTarget as HTMLElement).closest(".card") as HTMLElement | null;
+      const rect = (card ?? (e.currentTarget as HTMLElement)).getBoundingClientRect();
+      const roomBelow = window.innerHeight - rect.bottom;
+      dropUp[key] = roomBelow < POPUP_H && rect.top > roomBelow;
+      menuPos[key] = { left: rect.left, top: rect.bottom, bottom: window.innerHeight - rect.top, width: rect.width };
     }
     expanded[key] = opening;
   }
@@ -542,7 +547,10 @@
               {#if expanded[card.key] && card.variants.length > 0}
                 <!-- click-catcher: closes the menu on outside click -->
                 <button class="fixed inset-0 z-10 cursor-default" aria-label="Close variants" onclick={() => toggleExpand(card.key)}></button>
-                <div class="absolute z-20 left-0 right-0 {dropUp[card.key] ? 'bottom-full mb-1' : 'top-full mt-1'} rounded-md border border-card-border bg-surface shadow-lg p-1.5 flex flex-col gap-0.5 max-h-60 overflow-y-auto pretty-scroll">
+                <div
+                  class="fixed z-20 rounded-md border border-card-border bg-surface shadow-lg p-1.5 flex flex-col gap-0.5 max-h-60 overflow-y-auto pretty-scroll"
+                  style="left: {menuPos[card.key]?.left ?? 0}px; width: {menuPos[card.key]?.width ?? 200}px; {dropUp[card.key] ? `bottom: ${menuPos[card.key]?.bottom ?? 0}px; margin-bottom: 0.25rem;` : `top: ${menuPos[card.key]?.top ?? 0}px; margin-top: 0.25rem;`}"
+                >
                   <div class="px-1.5 pb-1 font-mono text-[0.55rem] uppercase tracking-wide text-txtsecondary">Load a variant</div>
                   {#each [card.primary, ...card.variants] as v (v.id)}
                     <div class="flex items-center gap-1 rounded hover:bg-background transition-colors {stagedId === v.id ? 'bg-background' : ''}">

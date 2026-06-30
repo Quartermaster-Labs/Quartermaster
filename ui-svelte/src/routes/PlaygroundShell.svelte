@@ -17,7 +17,7 @@
     newChatId,
     type ChatSession,
   } from "../stores/chatHistory";
-  import { MessageSquare, Image, Volume2, Mic, ListOrdered, Zap, LogOut, Plus, Trash2, Settings } from "lucide-svelte";
+  import { MessageSquare, Image, Volume2, Mic, ListOrdered, Zap, LogOut, Plus, Trash2, Settings, HelpCircle } from "lucide-svelte";
   import ChatInterface from "../components/playground/ChatInterface.svelte";
   import ImageInterface from "../components/playground/ImageInterface.svelte";
   import AudioInterface from "../components/playground/AudioInterface.svelte";
@@ -293,6 +293,11 @@
       role="dialog"
       tabindex="-1"
     >
+      {#snippet tip(text: string)}
+        <span class="inline-flex shrink-0 cursor-help text-txtsecondary/70 hover:text-txtsecondary" title={text}>
+          <HelpCircle class="w-3.5 h-3.5" />
+        </span>
+      {/snippet}
       <div class="flex items-center gap-2 text-txtmain">
         <Settings size={16} />
         <span class="text-sm font-medium">Settings</span>
@@ -300,7 +305,7 @@
 
       <div class="flex flex-col gap-1.5">
         <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="websearch">
-          <span>Web Search</span>
+          <span class="flex items-center gap-1.5">Web Search {@render tip("Let the model search the web (via SearXNG) for fresh facts. Needs a tool-calling model.")}</span>
           <input id="websearch" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$webSearchStore} />
         </label>
         {#if $webSearchStore}
@@ -332,7 +337,7 @@
       </div>
 
       <div class="flex flex-col gap-1">
-        <label class="text-xs uppercase tracking-wide text-txtsecondary" for="max-tokens">Max Tokens</label>
+        <label class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary" for="max-tokens">Max Tokens {@render tip("Cap on how long a single response can be. Higher = longer possible replies.")}</label>
         <input
           id="max-tokens"
           type="number"
@@ -343,7 +348,7 @@
       </div>
 
       <div class="flex flex-col gap-1">
-        <label class="text-xs uppercase tracking-wide text-txtsecondary" for="reasoning-budget">Thinking Budget</label>
+        <label class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary" for="reasoning-budget">Thinking Budget {@render tip("Max reasoning tokens before the model is forced to answer. Stops it overthinking. 0 = unlimited.")}</label>
         <input
           id="reasoning-budget"
           type="number"

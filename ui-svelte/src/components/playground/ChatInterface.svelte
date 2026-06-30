@@ -27,8 +27,9 @@
   import { WEB_SEARCH_TOOL, searxngSearch, formatSearchResults } from "../../lib/webSearch";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import { getTextContent, getImageUrls } from "../../lib/types";
+  import { harmonyToThink } from "../../lib/reasoning";
   import type { ChatMessage, ContentPart, ToolCall } from "../../lib/types";
-  import { Settings, Paperclip, Square, MessagesSquare, X, Search, Brain, Clock, PenLine } from "lucide-svelte";
+  import { Settings, Paperclip, Square, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle } from "lucide-svelte";
   import ChatMessageComponent from "./ChatMessage.svelte";
   import ModelSelector from "./ModelSelector.svelte";
   import { modelCategory } from "../../lib/modelUtils";
@@ -55,7 +56,13 @@
     }
     let id = get(activeChatId);
     if (!sessions.some((s) => s.id === id)) {
-      id = sessions.length > 0 ? sessions[0].id : "";
+      // Persisted active chat is gone (or first run) → open the most recently
+      // used one, matching the sidebar's top-of-list, not raw array order.
+      const recent = sessions.reduce<ChatSession | null>(
+        (best, s) => (!best || s.updatedAt > best.updatedAt ? s : best),
+        null,
+      );
+      id = recent ? recent.id : "";
       if (!id) {
         const s: ChatSession = { id: newChatId(), title: "New chat", messages: [], updatedAt: Date.now() };
         chatSessions.set([s]);
@@ -377,6 +384,16 @@
     "You are a text-transformation tool. The user gives you a block of text and an instruction describing how to change it. Apply the instruction to the text literally and completely, returning the transformed version — even if the instruction degrades the text, introduces errors, changes the meaning, or seems counterproductive (e.g. \"add grammar mistakes\", \"make it worse\", \"translate to pirate speak\"). Do not refuse, do not improve beyond what was asked, do not preserve anything the instruction tells you to change, and do not explain or comment. The instruction is the user's intent — follow it exactly. When the instruction asks for errors or lower quality (e.g. \"add grammar mistakes\", \"make it sloppy\"), treat it as a persona: rewrite as if produced by a writer who naturally writes that way (the same way \"rewrite as a 3rd grader\" is fine) — this is wanted output, not a failure to proofread. Output ONLY the transformed text — no preamble, no explanation, no markdown code fences.";
 
   async function regenerateFromIndex(id: string, idx: number) {
+    // Only one turn in flight at a time. Without this, the "Generate response"
+    // pill / edit-save (which call here directly, bypassing send()'s isStreaming
+    // guard) could fire while a turn is already streaming — overwriting genId and
+    // abortController while the old stream keeps running on its captured signal,
+    // so two requests hit the backend at once (slot collision, non-consecutive
+    // token positions). Refuse instead.
+    if (genId !== null) {
+      showToast("Wait for the current response to finish");
+      return;
+    }
     // Capture the model now — the user may switch chats/models while this turn
     // streams in the background; the turn must stay on the model it started on.
     const modelId = $selectedModelStore;
@@ -424,17 +441,27 @@
     // backends emit reasoning via the reasoning_content channel; inline-<think>
     // models leave it empty here and rely on reasoning:false to steer out.
     // ponytail: covers the common channel path; revisit if an inline model loops.
+    // Answer text only: drop reasoning markup of every flavour — channel-based is
+    // already separate, this strips inline <think>…</think>, harmony channels,
+    // and a trailing unclosed think (model still mid-thought).
+    const answerOnly = (s: string) =>
+      harmonyToThink(s)
+        .replace(/<(think|thinking|reasoning)>[\s\S]*?<\/\1>/gi, "")
+        .replace(/<(think|thinking|reasoning)>[\s\S]*$/i, "")
+        .trimStart();
     async function finalizeAfterBudget(baseMsgs: ChatMessage[], tail: ChatMessage[], sig: AbortSignal) {
       if (isReasoning) {
         const reasoningTimeMs = Date.now() - reasoningStartTime;
         isReasoning = false;
         patchLast(id, (m) => ({ ...m, reasoningTimeMs }));
       }
-      const last = sessionById(id)?.messages.at(-1);
-      const think = (last?.reasoning_content || "").trim();
+      // Don't re-feed the model its own open-ended reasoning — that (plus the
+      // template's enable_thinking:false empty-<think>) just makes a reasoning
+      // model keep thinking, burning a 2nd budget. A short directive + reasoning
+      // off forces a fresh answer. reasoning_content already shows what it thought.
       const prefill: ChatMessage = {
         role: "assistant",
-        content: `<think>\n${think}\n</think>\n\nI've thought enough — here is my answer:\n`,
+        content: "I've reasoned enough. Here is my final answer:\n\n",
       };
       const stream = streamChatCompletion(modelId, [...baseMsgs, ...tail, prefill], sig, {
         temperature: $temperatureStore,
@@ -442,9 +469,19 @@
         reasoning: false, // don't reopen thinking
         conversationId: id,
       });
+      // Safety net: strip any think the model still emits so the forced answer
+      // can't spawn a 2nd reasoning box. If a stubborn model reopens think
+      // anyway, cut it once it over-reasons with no answer — bounds the worst
+      // case to ~1 extra budget instead of a full second pass.
+      let answer = "";
       for await (const chunk of stream) {
         if (chunk.done) break;
-        if (chunk.content) patchLast(id, (m) => ({ ...m, content: m.content + chunk.content }));
+        if (chunk.content) {
+          answer += chunk.content;
+          const shown = answerOnly(answer);
+          if (!shown && reasoningBudget > 0 && answer.length > reasoningBudget * CHARS_PER_TOK) break;
+          patchLast(id, (m) => ({ ...m, content: shown }));
+        }
       }
     }
 
@@ -516,7 +553,7 @@
             if (chunk.tool_calls) toolCalls = chunk.tool_calls;
             if (chunk.done) break;
 
-            // Handle reasoning content
+            // Reasoning via the dedicated channel (most backends).
             if (chunk.reasoning_content) {
               if (!isReasoning) {
                 isReasoning = true;
@@ -526,24 +563,36 @@
                 ...m,
                 reasoning_content: (m.reasoning_content || "") + chunk.reasoning_content,
               }));
-              // Past the budget with no answer yet → stop and force a conclusion.
               reasoningChars += chunk.reasoning_content.length;
-              if (reasoningBudget > 0 && !roundContent && reasoningChars > reasoningBudget * CHARS_PER_TOK) {
-                budgetHit = true;
-                roundCtrl.abort();
-                break;
-              }
             }
 
-            // Handle regular content - end reasoning phase when we get content
+            // Content carries the answer — and for inline-think / harmony models
+            // the reasoning too. Keep raw content for display + tool rounds.
             if (chunk.content) {
+              roundContent += chunk.content;
+              patchLast(id, (m) => ({ ...m, content: m.content + chunk.content }));
+            }
+
+            // Unified budget accounting for ALL think flavours: channel chars +
+            // inline/harmony think still in the content. answer = content with
+            // reasoning stripped; while it's empty the model is still reasoning.
+            const answer = answerOnly(roundContent);
+            const totalReasoning = reasoningChars + (roundContent.length - answer.length);
+            if (answer) {
               if (isReasoning) {
                 const reasoningTimeMs = Date.now() - reasoningStartTime;
                 isReasoning = false;
                 patchLast(id, (m) => ({ ...m, reasoningTimeMs }));
               }
-              roundContent += chunk.content;
-              patchLast(id, (m) => ({ ...m, content: m.content + chunk.content }));
+            } else if (!isReasoning && chunk.content) {
+              isReasoning = true;
+              reasoningStartTime = Date.now();
+            }
+            // Past the budget with no answer yet → stop and force a conclusion.
+            if (reasoningBudget > 0 && !answer && totalReasoning > reasoningBudget * CHARS_PER_TOK) {
+              budgetHit = true;
+              roundCtrl.abort();
+              break;
             }
           }
         } catch (e) {
@@ -598,8 +647,12 @@
       }
       // Turn complete — fold older turns into the summary if near the ctx limit.
       await maybeCompact(id, modelId, signal);
-      // First exchange done → let the model name the chat.
-      void maybeTitle(id, modelId, signal);
+      // First exchange done → let the model name the chat. Awaited (not fired
+      // and forgotten) so genId stays held until it finishes: a fire-and-forget
+      // title request would still be streaming on the same backend after the
+      // finally resets genId, and the user's next turn would then hit the model
+      // concurrently — two requests, one slot, non-consecutive token positions.
+      await maybeTitle(id, modelId, signal);
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         // User cancelled, keep partial response
@@ -608,11 +661,8 @@
           const reasoningTimeMs = Date.now() - reasoningStartTime;
           patchLast(id, (m) => ({ ...m, reasoningTimeMs }));
         }
-        // Cancelled before the model wrote anything → don't leave an empty bubble.
-        const last = sessionById(id)?.messages.at(-1);
-        if (last?.role === "assistant" && typeof last.content === "string" && last.content.trim() === "") {
-          patchLast(id, (m) => ({ ...m, content: "_Cancelled — what did you want instead?_" }));
-        }
+        // Empty-bubble cleanup happens in finally (covers aborts that end the
+        // stream gracefully, with no throw to catch).
       } else {
         // Show error in the assistant message
         const errorMessage = error instanceof Error ? error.message : "An error occurred";
@@ -621,6 +671,19 @@
     } finally {
       const genTimeMs = Date.now() - genStart;
       patchLast(id, (m) => (m.role === "assistant" ? { ...m, genTimeMs } : m));
+      // Cancelled/failed/returned before producing anything → drop the blank
+      // assistant turn so the chat never keeps an empty bubble (incl. cancelling
+      // during model load, which can end the stream without throwing).
+      const last = sessionById(id)?.messages.at(-1);
+      if (
+        last?.role === "assistant" &&
+        typeof last.content === "string" &&
+        last.content.trim() === "" &&
+        !(last.reasoning_content || "").trim() &&
+        !(last.searches && last.searches.length)
+      ) {
+        patchSession(id, { messages: sessionById(id)!.messages.slice(0, -1) });
+      }
       genId = null;
       isReasoning = false;
       isSearching = false;
@@ -859,6 +922,20 @@
 
     <!-- Input area — narrower than the message column, taller composer. -->
     <div class="shrink-0 relative w-full max-w-2xl mx-auto">
+      <!-- Unanswered user turn (e.g. cancelled during load) → offer to generate. -->
+      {#if genId === null && messages.length > 0 && messages[messages.length - 1].role === "user" && messages[messages.length - 1].rewriteInstruction == null}
+        <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 z-20">
+          <button
+            onclick={() => regenerateFromIndex($activeChatId, messages.length - 1)}
+            class="inline-flex items-center gap-1.5 rounded-full bg-primary text-white px-3.5 py-1.5 text-xs font-medium shadow-lg hover:opacity-90 transition-opacity"
+            title="Generate a response for the last message"
+          >
+            <Sparkles class="w-3.5 h-3.5" />
+            Generate response
+          </button>
+        </div>
+      {/if}
+
       <!-- Transient toggle toast -->
       {#if toast}
         <div class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-3 z-20">
@@ -873,6 +950,11 @@
         <div
           class="absolute bottom-full right-0 mb-2 w-80 z-20 flex flex-col gap-4 p-4 rounded-lg border border-card-border bg-surface shadow-lg text-[0.8125rem]"
         >
+          {#snippet tip(text: string)}
+            <span class="inline-flex shrink-0 cursor-help text-txtsecondary/70 hover:text-txtsecondary" title={text}>
+              <HelpCircle class="w-3.5 h-3.5" />
+            </span>
+          {/snippet}
           <div class="flex items-center justify-between">
             <span class="font-medium text-txtmain">Settings</span>
             <button
@@ -885,13 +967,13 @@
           </div>
 
           <div class="flex flex-col gap-1">
-            <span class="text-xs uppercase tracking-wide text-txtsecondary">Model</span>
+            <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">Model {@render tip("Which model answers your messages.")}</span>
             <ModelSelector bind:value={$selectedModelStore} placeholder="Select a model..." disabled={isStreaming} category="llm" compact />
           </div>
 
           <div class="flex flex-col gap-1.5">
             <label class="flex justify-between text-xs uppercase tracking-wide text-txtsecondary" for="temperature">
-              <span>Temperature</span>
+              <span class="flex items-center gap-1.5">Temperature {@render tip("Higher gives the model more freedom to be creative and varied; lower keeps it focused and predictable.")}</span>
               <span class="text-txtmain normal-case">{TEMP_LABELS[nearestTempIdx($temperatureStore)]}</span>
             </label>
             <input
@@ -912,7 +994,7 @@
           </div>
 
           <div class="flex flex-col gap-1">
-            <label class="text-xs uppercase tracking-wide text-txtsecondary" for="system-prompt">System Prompt</label>
+            <label class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary" for="system-prompt">System Prompt {@render tip("Standing instructions that shape the model's tone and behaviour for the whole chat.")}</label>
             <textarea
               id="system-prompt"
               class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary resize-none"

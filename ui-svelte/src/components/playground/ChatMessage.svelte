@@ -286,9 +286,9 @@
   }
 
   function saveEdit() {
-    if (onEdit && editContent.trim() !== textContent) {
-      onEdit(editContent.trim());
-    }
+    // Save = re-prompt: editMessage slices off later turns and regenerates from
+    // here. Always fire (even unchanged text → a retry), never a silent no-op.
+    if (onEdit) onEdit(editContent.trim());
     isEditing = false;
     editContent = "";
   }
