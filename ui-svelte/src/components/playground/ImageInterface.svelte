@@ -1,12 +1,13 @@
 <script lang="ts">
-  import { models, upstreamLogs } from "../../stores/api";
+  import { models, upstreamLogs, unloadSingleModel } from "../../stores/api";
   import { userPref } from "../../stores/prefs";
   import { generateImage } from "../../lib/imageApi";
   import { generateSdImage, generateSdImg2Img, fetchSdLoras } from "../../lib/sdApi";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import ModelSelector from "./ModelSelector.svelte";
   import Select from "./Select.svelte";
-  import { Image as ImageIcon, Send, Square, Layers, Trash2, Download, X, Type, ImagePlus, Wand2, Maximize2 } from "lucide-svelte";
+  import MaskEditor from "./MaskEditor.svelte";
+  import { Image as ImageIcon, Send, Square, Layers, Trash2, Download, X, Type, ImagePlus, Wand2, Maximize2, ChevronDown } from "lucide-svelte";
   import type { ImageApiMode, ImageGenMode, SdApiLora, SdApiLoraRef, ImageStylePreset } from "../../lib/types";
 
   const selectedModelStore = userPref<string>("playground-image-model", "");
@@ -17,10 +18,9 @@
   const modeStore = userPref<ImageGenMode>("playground-image-mode", "txt2img");
   const sdDenoiseStore = userPref<number>("playground-sdapi-denoise", 0.6);
   const sdUpscaleStore = userPref<number>("playground-sdapi-upscale", 2);
-  // Flux Kontext reference edit: send the source as ref_image (identity-preserving
-  // re-pose / restyle) instead of a plain denoise. Only meaningful with a
-  // Kontext-class model loaded.
-  const sdRefEditStore = userPref<boolean>("playground-sdapi-ref-edit", false);
+  // Inpaint mask polarity flip — the calibration knob if white/black is reversed
+  // for this model/build (sd-server mask convention unverified live).
+  const maskInvertStore = userPref<boolean>("playground-sdapi-mask-invert", false);
 
   // SDAPI persistent settings
   const sdNegativePromptStore = userPref<string>("playground-sdapi-negative-prompt", "");
@@ -31,6 +31,15 @@
   const sdSchedulerStore = userPref<string>("playground-sdapi-scheduler", "");
   const sdBatchSizeStore = userPref<number>("playground-sdapi-batch-size", 1);
 
+  // Hires fix (txt2img only): a second upscaled diffusion pass. sd-server honors
+  // the A1111 enable_hr/hr_* fields on txt2img (verified f440ad9); img2img ignores
+  // them, so these controls only show in txt2img mode.
+  const hiresEnabledStore = userPref<boolean>("playground-sdapi-hires", false);
+  const hiresUpscalerStore = userPref<string>("playground-sdapi-hires-upscaler", "Latent");
+  const hiresScaleStore = userPref<number>("playground-sdapi-hires-scale", 2);
+  const hiresStepsStore = userPref<number>("playground-sdapi-hires-steps", 0);
+  const hiresDenoiseStore = userPref<number>("playground-sdapi-hires-denoise", 0.5);
+
   // Batch / consistency settings (SDAPI only — needs per-request seed/params).
   const styleSuffixStore = userPref<string>("playground-image-style-suffix", "");
   const batchModeStore = userPref<boolean>("playground-image-batch-mode", false);
@@ -39,6 +48,13 @@
 
   let prompt = $state("");
   let sourceImage = $state<string | null>(null); // img2img source as a data URL
+  // Reference images (data URLs) for Kontext-class models → sent as extra_images.
+  // Distinct from the img2img source: these condition the model (subject/style)
+  // while the prompt drives the edit. Works in txt2img and img2img.
+  let refImages = $state<string[]>([]);
+  // Inpaint mask (data URL) painted over the source, plus editor visibility.
+  let maskImage = $state<string | null>(null);
+  let showMaskEditor = $state(false);
   let isGenerating = $state(false);
   let generatedImages = $state<string[]>([]);
   let error = $state<string | null>(null);
@@ -70,6 +86,42 @@
   const SCHEDULER_OPTIONS = ["", "discrete", "karras", "exponential", "ays", "gits"].map(
     (v) => ({ value: v, label: v || "Auto for model" })
   );
+  // Built-in hires upscalers (no model file needed). Latent re-diffuses in latent
+  // space; Lanczos/Nearest are pixel resamples fed back through the second pass.
+  const UPSCALER_OPTIONS = ["Latent", "Lanczos", "Nearest"].map((v) => ({ value: v, label: v }));
+
+  // Sensible per-model gen defaults, matched by id substring. Applied only when
+  // the user switches models (not on reload) so manual tweaks survive a refresh.
+  // ponytail: substring match, no backend "recommended params" field exists.
+  const IMAGE_DEFAULTS: { match: string; steps: number; cfg: number; sampler: string; scheduler: string }[] = [
+    // Z-Image Turbo: distilled, cfg MUST be 1.0 (blur otherwise), few steps.
+    { match: "z-image", steps: 10, cfg: 1.0, sampler: "euler", scheduler: "discrete" },
+    // Flux Kontext dev: cfg ~2.5 (SDXL-era 7 → blur), ~24 steps.
+    { match: "kontext", steps: 24, cfg: 2.5, sampler: "euler", scheduler: "discrete" },
+  ];
+  function defaultsFor(id: string) {
+    const l = id.toLowerCase();
+    return IMAGE_DEFAULTS.find((d) => l.includes(d.match));
+  }
+
+  // Apply a model's defaults on switch. Skips the first run (initial mount) so a
+  // reload keeps whatever the user last set.
+  let lastModelForDefaults: string | null = null;
+  $effect(() => {
+    const id = $selectedModelStore;
+    if (lastModelForDefaults === null) {
+      lastModelForDefaults = id;
+      return;
+    }
+    if (id === lastModelForDefaults) return;
+    lastModelForDefaults = id;
+    const d = defaultsFor(id);
+    if (!d) return;
+    $sdStepsStore = d.steps;
+    $sdCfgScaleStore = d.cfg;
+    $sdSamplerStore = d.sampler;
+    $sdSchedulerStore = d.scheduler;
+  });
 
   // Elapsed-seconds tick so a slow (offloaded) generation looks alive, since the
   // blocking /v1/images endpoint returns no progress.
@@ -125,6 +177,15 @@
   // img2img always speaks SDAPI; show the SDAPI param set for either trigger.
   let showSdSettings = $derived($apiModeStore === "sdapi" || isImg2img);
   let isSdapi = $derived(showSdSettings);
+  // Only Kontext-class models accept reference images (extra_images → ref_images).
+  // Sending them to a non-ref arch (e.g. Z-Image) 500s sd-server at generation.
+  // ponytail: id-substring heuristic; no per-model "supports ref" flag exists.
+  // If a redux/PuLID model lands later, widen this test.
+  let supportsRefImages = $derived($selectedModelStore.toLowerCase().includes("kontext"));
+  // Recommended params for the active model (drives the Basics hint).
+  let modelDefaults = $derived(defaultsFor($selectedModelStore));
+  // Negative-prompt field is hidden until asked for (kept open if it has text).
+  let showNegative = $state(false);
 
   $effect(() => {
     playgroundStores.imageGenerating.set(isGenerating);
@@ -230,6 +291,18 @@
         sampler_name: $sdSamplerStore || undefined,
         scheduler: $sdSchedulerStore || undefined,
         lora: selectedLoras.length > 0 ? selectedLoras : undefined,
+        // Kontext reference images (subject / style), if any.
+        extra_images: refImagesB64(),
+        // Hires fix: second upscaled pass. Only spread when enabled.
+        ...($hiresEnabledStore
+          ? {
+              enable_hr: true,
+              hr_scale: $hiresScaleStore,
+              hr_upscaler: $hiresUpscalerStore,
+              hr_steps: $hiresStepsStore > 0 ? $hiresStepsStore : undefined,
+              denoising_strength: $hiresDenoiseStore,
+            }
+          : {}),
       },
       signal
     );
@@ -248,9 +321,11 @@
         negative_prompt: $sdNegativePromptStore || undefined,
         init_images: [initB64],
         denoising_strength: $sdDenoiseStore,
-        // Kontext route: also hand the source in as ref_image so the model
-        // preserves the subject while the prompt drives the change.
-        ref_image: $sdRefEditStore ? initB64 : undefined,
+        // Kontext reference images (subject / style), if any.
+        extra_images: refImagesB64(),
+        // Inpaint mask, if painted.
+        mask: maskImage ? maskImage.replace(/^data:[^,]+,/, "") : undefined,
+        inpainting_mask_invert: maskImage ? ($maskInvertStore ? 1 : 0) : undefined,
         width: w,
         height: h,
         steps: $sdStepsStore,
@@ -329,8 +404,15 @@
     }
   }
 
+  // Stop = real stop. sd-server has no mid-image interrupt, so aborting the fetch
+  // alone leaves the backend rendering (and the next Generate queues behind it).
+  // Unloading the model kills the process → generation halts now. Cost: next gen
+  // cold-loads the model (~30-60s). Fire-and-forget; the aborted fetch already
+  // freed the UI. ponytail: no interrupt endpoint exists on this backend.
   function cancelGeneration() {
     abortController?.abort();
+    const model = $selectedModelStore;
+    if (model) unloadSingleModel(model).catch(() => {});
   }
 
   function clearImage() {
@@ -338,6 +420,8 @@
     error = null;
     prompt = "";
     sourceImage = null;
+    refImages = [];
+    maskImage = null;
   }
 
   function onSourceFile(event: Event) {
@@ -346,11 +430,36 @@
     const reader = new FileReader();
     reader.onload = () => (sourceImage = reader.result as string);
     reader.readAsDataURL(file);
+    maskImage = null; // mask was for the old source
+  }
+
+  // Reference images → raw base64 (no data-URI prefix) for extra_images, or
+  // undefined when empty so the field is omitted.
+  function refImagesB64(): string[] | undefined {
+    if (!supportsRefImages || refImages.length === 0) return undefined;
+    return refImages.map((r) => r.replace(/^data:[^,]+,/, ""));
+  }
+
+  // Append one or more reference images (multi-select supported).
+  function onRefFiles(event: Event) {
+    const input = event.target as HTMLInputElement;
+    const files = Array.from(input.files ?? []);
+    for (const file of files) {
+      const reader = new FileReader();
+      reader.onload = () => (refImages = [...refImages, reader.result as string]);
+      reader.readAsDataURL(file);
+    }
+    input.value = ""; // allow re-selecting the same file
+  }
+
+  function removeRef(index: number) {
+    refImages = refImages.filter((_, i) => i !== index);
   }
 
   // Feed a generated tile back in as the img2img source, then switch to img2img.
   function useAsSource(img: string) {
     sourceImage = img;
+    maskImage = null;
     $modeStore = "img2img";
   }
 
@@ -586,6 +695,24 @@
         </div>
 
         {#if isSdapi}
+          <!-- Basics: the per-model-defaulted knobs -->
+          <div class="grid grid-cols-2 gap-3">
+            <div class="flex flex-col gap-1">
+              <span class="text-xs uppercase tracking-wide text-txtsecondary">Steps</span>
+              <input type="number" min="1" max="150" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdStepsStore} />
+            </div>
+            <div class="flex flex-col gap-1">
+              <span class="text-xs uppercase tracking-wide text-txtsecondary">CFG Scale</span>
+              <input type="number" min="1" max="30" step="0.5" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdCfgScaleStore} />
+            </div>
+          </div>
+          {#if modelDefaults}
+            <p class="text-xs text-txtsecondary -mt-1">Model default · {modelDefaults.steps} steps · cfg {modelDefaults.cfg} · {modelDefaults.sampler}</p>
+          {/if}
+
+          <!-- Enhance -->
+          <div class="flex flex-col gap-3 pt-3 border-t border-card-border">
+            <span class="text-xs uppercase tracking-wide text-txtsecondary font-medium">Enhance</span>
           {#if isImg2img}
             <div class="flex flex-col gap-1">
               <span class="text-xs uppercase tracking-wide text-txtsecondary">Denoising strength · {$sdDenoiseStore.toFixed(2)}</span>
@@ -597,14 +724,44 @@
               <input type="number" min="1" max="8" step="0.5" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdUpscaleStore} />
               <p class="text-xs text-txtsecondary">Upscale target = source × factor (long edge capped at 4096).</p>
             </div>
+          {:else}
             <div class="flex flex-col gap-1">
               <label class="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" class="accent-primary" bind:checked={$sdRefEditStore} />
-                <span class="text-xs uppercase tracking-wide text-txtsecondary">Reference edit (Kontext)</span>
+                <input type="checkbox" class="accent-primary" bind:checked={$hiresEnabledStore} />
+                <span class="text-xs uppercase tracking-wide text-txtsecondary">Hires fix (HD)</span>
               </label>
-              <p class="text-xs text-txtsecondary">Keep the subject (face/identity), change pose or style per the prompt. Needs a Flux Kontext model.</p>
+              <p class="text-xs text-txtsecondary">Adds a second upscaled diffusion pass — sharper detail than generating at size alone.</p>
             </div>
+            {#if $hiresEnabledStore}
+              <div class="grid grid-cols-2 gap-3">
+                <div class="flex flex-col gap-1">
+                  <span class="text-xs uppercase tracking-wide text-txtsecondary">Upscaler</span>
+                  <Select bind:value={$hiresUpscalerStore} disabled={isGenerating} compact options={UPSCALER_OPTIONS} />
+                </div>
+                <div class="flex flex-col gap-1">
+                  <span class="text-xs uppercase tracking-wide text-txtsecondary">HR scale</span>
+                  <input type="number" min="1" max="4" step="0.5" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$hiresScaleStore} />
+                </div>
+                <div class="flex flex-col gap-1">
+                  <span class="text-xs uppercase tracking-wide text-txtsecondary">HR steps (0=reuse)</span>
+                  <input type="number" min="0" max="150" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$hiresStepsStore} />
+                </div>
+                <div class="flex flex-col gap-1">
+                  <span class="text-xs uppercase tracking-wide text-txtsecondary">HR denoise · {$hiresDenoiseStore.toFixed(2)}</span>
+                  <input type="range" min="0" max="1" step="0.05" class="w-full accent-primary" bind:value={$hiresDenoiseStore} />
+                </div>
+              </div>
+            {/if}
           {/if}
+          </div>
+
+          <!-- Advanced (folded) -->
+          <details class="group border-t border-card-border pt-2">
+            <summary class="cursor-pointer list-none [&::-webkit-details-marker]:hidden flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary hover:text-txtmain py-1">
+              Advanced
+              <ChevronDown class="w-4 h-4 transition-transform group-open:rotate-180" />
+            </summary>
+            <div class="flex flex-col gap-3 pt-2">
           <div class="flex flex-col gap-1">
             <span class="text-xs uppercase tracking-wide text-txtsecondary">Style suffix</span>
             <input
@@ -617,14 +774,6 @@
           </div>
 
           <div class="grid grid-cols-2 gap-3">
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">Steps</span>
-              <input type="number" min="1" max="150" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdStepsStore} />
-            </div>
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">CFG Scale</span>
-              <input type="number" min="1" max="30" step="0.5" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdCfgScaleStore} />
-            </div>
             <div class="flex flex-col gap-1">
               <span class="text-xs uppercase tracking-wide text-txtsecondary">Seed (-1 random)</span>
               <input type="number" min="-1" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdSeedStore} />
@@ -654,10 +803,16 @@
             <span class="text-xs uppercase tracking-wide text-txtsecondary">Scheduler</span>
             <Select bind:value={$sdSchedulerStore} compact options={SCHEDULER_OPTIONS} />
           </div>
+            </div>
+          </details>
 
-          <!-- Presets -->
-          <div class="flex flex-col gap-1.5">
-            <span class="text-xs uppercase tracking-wide text-txtsecondary">Style presets</span>
+          <!-- Presets (folded) -->
+          <details class="group border-t border-card-border pt-2">
+            <summary class="cursor-pointer list-none [&::-webkit-details-marker]:hidden flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary hover:text-txtmain py-1">
+              Style presets
+              <ChevronDown class="w-4 h-4 transition-transform group-open:rotate-180" />
+            </summary>
+          <div class="flex flex-col gap-1.5 pt-2">
             <div class="flex gap-1.5">
               <input
                 type="text"
@@ -684,10 +839,15 @@
               </div>
             {/if}
           </div>
+          </details>
 
-          <!-- LoRAs -->
-          <div class="flex flex-col gap-1.5">
-            <span class="text-xs uppercase tracking-wide text-txtsecondary">LoRAs</span>
+          <!-- LoRAs (folded) -->
+          <details class="group border-t border-card-border pt-2">
+            <summary class="cursor-pointer list-none [&::-webkit-details-marker]:hidden flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary hover:text-txtmain py-1">
+              LoRAs
+              <ChevronDown class="w-4 h-4 transition-transform group-open:rotate-180" />
+            </summary>
+          <div class="flex flex-col gap-1.5 pt-2">
             <div class="flex gap-1.5">
               <button
                 class="shrink-0 px-2.5 py-1.5 rounded-md border border-card-border bg-surface text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
@@ -740,6 +900,7 @@
               </div>
             {/if}
           </div>
+          </details>
         {/if}
       </aside>
     </div>
@@ -788,8 +949,8 @@
         <button
           class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-sm font-mono text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
           onclick={clearImage}
-          disabled={isGenerating || (generatedImages.length === 0 && !error && !prompt.trim() && !sourceImage)}
-          title="Clear prompt, source and results"
+          disabled={isGenerating || (generatedImages.length === 0 && !error && !prompt.trim() && !sourceImage && refImages.length === 0)}
+          title="Clear prompt, source, references and results"
         >
           <Trash2 class="w-4 h-4" /> Clear
         </button>
@@ -843,14 +1004,61 @@
           >
             {#if sourceImage}
               <img src={sourceImage} alt="img2img source" class="w-full h-full object-cover" />
+              {#if maskImage}
+                <img src={maskImage} alt="mask" class="absolute inset-0 w-full h-full object-cover opacity-50 mix-blend-screen pointer-events-none" />
+              {/if}
             {:else}
               <ImagePlus class="w-6 h-6 text-txtsecondary" />
             {/if}
             <input type="file" accept="image/*" class="hidden" onchange={onSourceFile} disabled={isGenerating} />
           </label>
           {#if sourceImage}
-            <button class="text-xs text-txtsecondary hover:text-red-500 transition-colors" onclick={() => (sourceImage = null)} disabled={isGenerating}>Remove</button>
+            <div class="flex items-center gap-2">
+              <button
+                class="text-xs {maskImage ? 'text-primary' : 'text-txtsecondary'} hover:text-txtmain transition-colors"
+                onclick={() => (showMaskEditor = true)}
+                disabled={isGenerating}
+                title="Paint an inpaint mask on the source"
+              >{maskImage ? "Mask ✓" : "Mask"}</button>
+              <button class="text-xs text-txtsecondary hover:text-red-500 transition-colors" onclick={() => { sourceImage = null; maskImage = null; }} disabled={isGenerating}>Remove</button>
+            </div>
+            {#if maskImage}
+              <label class="flex items-center gap-1.5 text-xs text-txtsecondary cursor-pointer" title="Flip mask polarity if the wrong region regenerates">
+                <input type="checkbox" class="accent-primary" bind:checked={$maskInvertStore} disabled={isGenerating} />
+                Invert
+              </label>
+            {/if}
           {/if}
+        </div>
+      {/if}
+
+      {#if isSdapi && supportsRefImages}
+        <!-- Reference images (Kontext only): subject / style refs sent as extra_images.
+             Hidden for non-Kontext models — they 500 sd-server on ref conditioning. -->
+        <div class="shrink-0 flex flex-col gap-1">
+          <span class="text-xs uppercase tracking-wide text-txtsecondary" title="Reference images for Kontext-class models — e.g. one subject + one style. Sent as extra_images.">
+            Reference{#if refImages.length} · {refImages.length}{/if}
+          </span>
+          <div class="flex flex-wrap gap-1 content-start w-[12.5rem]">
+            {#each refImages as ref, i (i)}
+              <div class="relative {refTileSize} rounded-lg border border-card-border overflow-hidden bg-secondary group/ref">
+                <img src={ref} alt="reference {i + 1}" class="w-full h-full object-cover" />
+                <button
+                  class="absolute top-0 right-0 w-5 h-5 flex items-center justify-center bg-black/60 text-white text-sm rounded-bl opacity-0 group-hover/ref:opacity-100 transition-opacity"
+                  onclick={() => removeRef(i)}
+                  disabled={isGenerating}
+                  aria-label="Remove reference {i + 1}"
+                >×</button>
+              </div>
+            {/each}
+            <label
+              class="{refTileSize} rounded-lg border border-dashed border-card-border bg-surface flex items-center justify-center cursor-pointer hover:border-primary"
+              title="Add reference image(s)"
+            >
+              <ImagePlus class="w-6 h-6 text-txtsecondary" />
+              <input type="file" accept="image/*" multiple class="hidden" onchange={onRefFiles} disabled={isGenerating} />
+            </label>
+          </div>
         </div>
       {/if}
 
@@ -861,7 +1069,7 @@
           placeholder={$batchModeStore ? "One prompt per line — each becomes an asset…" : isImg2img ? "Describe the change (optional)…" : "Describe the image you want to generate…"}
           bind:value={prompt}
           onkeydown={handleKeyDown}
-          disabled={isGenerating || !$selectedModelStore}
+          disabled={isGenerating}
         ></textarea>
       </div>
 
@@ -872,13 +1080,23 @@
             class="w-full h-24 px-2.5 py-2 rounded-lg border border-card-border bg-surface text-[0.8125rem] leading-relaxed resize-none focus:outline-none focus:border-primary placeholder:text-txtsecondary"
             placeholder="Elements to avoid…"
             bind:value={$sdNegativePromptStore}
-            disabled={isGenerating || !$selectedModelStore}
+            disabled={isGenerating}
           ></textarea>
         </div>
       {/if}
     </div>
   {/if}
 </div>
+
+<!-- Inpaint mask editor -->
+{#if showMaskEditor && sourceImage}
+  <MaskEditor
+    source={sourceImage}
+    initialMask={maskImage}
+    onCancel={() => (showMaskEditor = false)}
+    onDone={(m) => { maskImage = m; showMaskEditor = false; }}
+  />
+{/if}
 
 <!-- Fullscreen dialog -->
 {#if showFullscreen && generatedImages[fullscreenIndex]}

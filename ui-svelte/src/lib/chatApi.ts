@@ -10,6 +10,11 @@ export interface StreamChunk {
   // Accumulated tool calls, only present on the terminating chunk when the
   // model requested tools. Only the chat/completions endpoint emits these.
   tool_calls?: ToolCall[];
+  // Why the model stopped: "stop" (natural end), "length" (hit max_tokens),
+  // "tool_calls". Only set on the terminating chunk. Used by the reasoning-budget
+  // path to tell a clean length-cut (continue via prefill → warm KV reuse) apart
+  // from a natural finish. Only chat/completions surfaces it.
+  finish_reason?: string;
 }
 
 export interface ChatOptions {
@@ -215,16 +220,34 @@ function buildToolCalls(acc: ToolAcc): ToolCall[] {
     }));
 }
 
+function parseFinishReason(line: string): string | undefined {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("data: ")) return undefined;
+  const data = trimmed.slice(6);
+  if (data === "[DONE]") return undefined;
+  try {
+    return JSON.parse(data).choices?.[0]?.finish_reason ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function* parseChatCompletionsStream(
   reader: ReadableStreamDefaultReader<Uint8Array>
 ): AsyncGenerator<StreamChunk> {
   const decoder = new TextDecoder();
   let buffer = "";
   const toolAcc: ToolAcc = {};
+  let finishReason: string | undefined;
 
   const finish = (): StreamChunk => {
     const tcs = buildToolCalls(toolAcc);
-    return { content: "", done: true, ...(tcs.length > 0 ? { tool_calls: tcs } : {}) };
+    return {
+      content: "",
+      done: true,
+      ...(tcs.length > 0 ? { tool_calls: tcs } : {}),
+      ...(finishReason ? { finish_reason: finishReason } : {}),
+    };
   };
 
   while (true) {
@@ -237,6 +260,7 @@ async function* parseChatCompletionsStream(
 
     for (const line of lines) {
       accumulateToolCalls(toolAcc, line);
+      finishReason = parseFinishReason(line) ?? finishReason;
       const result = parseChatCompletionsLine(line);
       if (result?.done) {
         yield finish();
@@ -249,6 +273,7 @@ async function* parseChatCompletionsStream(
   }
 
   accumulateToolCalls(toolAcc, buffer);
+  finishReason = parseFinishReason(buffer) ?? finishReason;
   const result = parseChatCompletionsLine(buffer);
   if (result && !result.done) {
     yield result;

@@ -14,6 +14,11 @@ export const foreignVram = writable<{ mb: number; procs?: { pid: number; name: s
   mb: 0,
 });
 
+// Idle system-VRAM floor (MiB) measured server-side (min used while no model
+// running), captured regardless of whether a dashboard tab is open. 0 = not yet
+// observed. The VRAM gauge prefers this over its own browser-only baseline.
+export const systemVram = writable<number>(0);
+
 let timer: ReturnType<typeof setInterval> | null = null;
 let lastTs: string | undefined;
 
@@ -22,6 +27,7 @@ export function startPerfPolling(intervalMs = 2000): () => void {
     const data = await fetchPerformance(lastTs);
     if (!data) return;
     foreignVram.set(data.foreign ?? { mb: 0 });
+    if (typeof data.system_mb === "number") systemVram.set(data.system_mb);
     if (data.gpu_stats?.length) {
       const g = data.gpu_stats[data.gpu_stats.length - 1];
       latestGpu.set(g);

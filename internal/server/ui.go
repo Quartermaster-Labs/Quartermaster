@@ -92,11 +92,22 @@ func serveUI(fsys http.FileSystem, w http.ResponseWriter, r *http.Request) {
 		name = "index.html"
 	}
 
+	// The HTML shell references hash-named asset bundles, so it MUST be
+	// revalidated every load — otherwise a browser (or an open SPA tab) keeps
+	// serving a stale index.html that points at the previous build's bundle, and
+	// a server restart never reaches the client. no-cache = "always revalidate",
+	// cheap for a 774-byte file. Hashed assets under /assets/ stay implicitly
+	// cacheable (their name changes on every build, so they can't go stale).
+	if name == "index.html" {
+		w.Header().Set("Cache-Control", "no-cache")
+	}
+
 	if err := serveCompressedFile(fsys, w, r, name); err != nil {
 		if strings.Contains(path.Base(name), ".") {
 			http.NotFound(w, r)
 			return
 		}
+		w.Header().Set("Cache-Control", "no-cache") // SPA fallback also serves index.html
 		if err := serveCompressedFile(fsys, w, r, "index.html"); err != nil {
 			http.NotFound(w, r)
 		}

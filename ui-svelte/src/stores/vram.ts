@@ -1,5 +1,5 @@
 import { derived, writable } from "svelte/store";
-import { latestGpu, foreignVram } from "./perf";
+import { latestGpu, foreignVram, systemVram } from "./perf";
 import { models, estimatePlan, type PlanEstimate } from "./api";
 
 // VRAM split: "system" (OS + other apps + game) vs the loaded llama-server. We
@@ -89,8 +89,8 @@ function foreignSeg(mb: number, procs?: { name: string }[]): VramSegment[] {
 }
 
 export const vramBreakdown = derived(
-  [latestGpu, models, activeEstimate, foreignVram],
-  ([$gpu, $models, $est, $foreign]): VramBreakdown | null => {
+  [latestGpu, models, activeEstimate, foreignVram, systemVram],
+  ([$gpu, $models, $est, $foreign, $sysVram]): VramBreakdown | null => {
     if (!$gpu) return null;
 
     const live = $models.filter(
@@ -123,14 +123,17 @@ export const vramBreakdown = derived(
       };
     }
 
-    // System floor. Prefer the measured idle baseline. If we never caught an
+    // System floor. Prefer the server-measured idle floor (sampled even with no
+    // dashboard open), then the browser's own idle baseline. If neither caught an
     // idle sample (e.g. a model was already resident at page load) but we have a
     // load-plan estimate for the single loaded model, fall back to
     // used − estimated-model-VRAM so the model slice still shows instead of
     // being attributed entirely to "System".
     let sysFloor: number;
     let measured = true;
-    if (baselineMb !== null) {
+    if ($sysVram > 0) {
+      sysFloor = Math.min($sysVram, used);
+    } else if (baselineMb !== null) {
       sysFloor = Math.min(baselineMb, used);
     } else if ($est && live.length === 1 && live[0].id === $est.id) {
       sysFloor = Math.max(0, used - $est.est.estVramGB * 1024);

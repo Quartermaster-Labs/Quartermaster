@@ -184,6 +184,8 @@ func (s *Server) handleAPIPerformance(w http.ResponseWriter, r *http.Request) {
 		"sys_stats": sysStats,
 		"gpu_stats": gpuStats,
 		"foreign":   s.foreignGPU(r.Context()),
+		// Idle system-VRAM floor (MiB) sampled server-side; 0 = not observed yet.
+		"system_mb": s.systemVramMB.Load(),
 	})
 }
 

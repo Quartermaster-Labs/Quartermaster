@@ -881,15 +881,25 @@ func estForOffload(meta Metadata, prof profile, kvReserve float64, ngl, ncpuMoe 
 }
 
 // Empirical compute-graph constants. With flash attention on (the default), the
-// CUDA compute buffer is dominated by the logits/output tensor (n_vocab*n_ubatch
-// floats) plus a handful of n_ubatch*n_embd activation copies; computeCudaCtxGB
-// covers the fixed CUDA runtime + cuBLAS workspace. The activation-copy count is
-// a coarse fit, so Settings.ComputeBufFactor scales the whole analytic term for
-// per-build/arch calibration against the "compute buffer size" llama logs.
+// CUDA compute buffer is dominated by the logits/output tensor plus a handful of
+// n_ubatch*n_embd activation copies; computeCudaCtxGB covers the fixed CUDA
+// runtime + cuBLAS workspace. The activation-copy count is a coarse fit, so
+// Settings.ComputeBufFactor scales the whole analytic term for per-build/arch
+// calibration against the "compute buffer size" llama logs.
+//
+// computeLogitsTokens caps the logits/output tensor at n_vocab*THIS*4 rather than
+// n_vocab*n_ubatch. Current llama.cpp sizes the output buffer by n_outputs (the
+// tokens it actually emits logits for — ~parallel slots during decode, the final
+// chunk during prefill), NOT the full physical batch. Charging n_ubatch (e.g.
+// 1024) overcounted the buffer by ~ub/256x on large-vocab models (~0.5GB on a
+// 150k-vocab MoE at ub=1024), which made the sizer over-offload experts to CPU
+// and waste live VRAM. 256 keeps a conservative reserve above the true decode
+// footprint while still scaling with vocab so large-vocab spillover stays caught.
 const (
-	computeActCopies  = 8.0
-	computeCudaCtxGB  = 0.3
-	computeFallbackGB = 0.17 // vocab/embd dims missing => prior flat estimate
+	computeActCopies    = 8.0
+	computeCudaCtxGB    = 0.3
+	computeLogitsTokens = 256.0
+	computeFallbackGB   = 0.17 // vocab/embd dims missing => prior flat estimate
 )
 
 // computeBufferGB estimates the GPU compute buffer (logits + activations + CUDA
@@ -904,7 +914,7 @@ func computeBufferGB(meta Metadata, ub int, factor float64) float64 {
 	if embd <= 0 || vocab <= 0 || ub <= 0 {
 		return computeFallbackGB
 	}
-	logits := vocab * float64(ub) * 4.0
+	logits := vocab * math.Min(float64(ub), computeLogitsTokens) * 4.0
 	acts := float64(ub) * embd * computeActCopies * 4.0
 	return computeCudaCtxGB + factor*(logits+acts)/gib
 }

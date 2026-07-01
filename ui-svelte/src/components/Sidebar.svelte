@@ -1,17 +1,25 @@
 <script lang="ts">
   import { link, location } from "svelte-spa-router";
-  import { LayoutDashboard, Boxes, FlaskConical, Activity, KeyRound, Sun, Moon, MonitorCog, ChevronRight, ArrowUpCircle } from "lucide-svelte";
+  import { LayoutDashboard, Boxes, FlaskConical, Activity, KeyRound, Sun, Moon, MonitorCog, ChevronRight, ArrowUpCircle, MessageSquare, Image, Volume2, Mic, Binary } from "lucide-svelte";
   import { toggleTheme, themeMode, appTitle } from "../stores/theme";
   import { currentRoute } from "../stores/route";
   import { playgroundActivity } from "../stores/playgroundActivity";
   import { versionInfo } from "../stores/api";
   import { playgroundPort } from "../stores/playgroundAuth";
-  import { MODEL_CATEGORIES } from "../lib/modelUtils";
+  import { MODEL_CATEGORIES, type ModelCategory } from "../lib/modelUtils";
   import ConnectionStatus from "./ConnectionStatus.svelte";
+
+  const CATEGORY_ICONS: Record<ModelCategory, typeof MessageSquare> = {
+    llm: MessageSquare,
+    image: Image,
+    tts: Volume2,
+    transcribe: Mic,
+    embed: Binary,
+  };
 
   const pages = [
     { path: "/", label: "Dashboard", icon: LayoutDashboard },
-    { path: "/models", label: "Models", icon: Boxes, children: MODEL_CATEGORIES.map((c) => ({ path: `/models/${c.id}`, label: c.label })) },
+    { path: "/models", label: "Models", icon: Boxes, children: MODEL_CATEGORIES.map((c) => ({ path: `/models/${c.id}`, label: c.label, icon: CATEGORY_ICONS[c.id] })) },
     { path: "/test", label: "Playground", icon: FlaskConical },
     { path: "/observe", label: "Observe", icon: Activity },
     { path: "/api-keys", label: "API Keys", icon: KeyRound },
@@ -108,10 +116,11 @@
             <a
               href={c.path}
               use:link
-              class="flex items-center gap-3 pl-11 pr-3 py-1.5 font-mono text-[0.8rem] border-l-2 transition-colors {cActive
+              class="flex items-center gap-2.5 pl-8 pr-3 py-1.5 font-mono text-[0.8rem] border-l-2 transition-colors {cActive
                 ? 'border-primary text-primary bg-secondary/60'
                 : 'border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40'}"
             >
+              <c.icon size={14} strokeWidth={cActive ? 2.4 : 1.8} />
               <span class="tracking-wide">{c.label}</span>
             </a>
           {/each}

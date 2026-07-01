@@ -29,7 +29,7 @@
   import { getTextContent, getImageUrls } from "../../lib/types";
   import { harmonyToThink } from "../../lib/reasoning";
   import type { ChatMessage, ContentPart, ToolCall } from "../../lib/types";
-  import { Settings, Paperclip, Square, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle } from "lucide-svelte";
+  import { Settings, Paperclip, Square, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle, Eye } from "lucide-svelte";
   import ChatMessageComponent from "./ChatMessage.svelte";
   import ModelSelector from "./ModelSelector.svelte";
   import { modelCategory } from "../../lib/modelUtils";
@@ -116,6 +116,16 @@
   let compactedCount = $derived(activeSession?.compactedCount ?? 0);
   let isCompacting = $state(false);
 
+  // Live context-window usage for the selected model (from backend KV metrics).
+  // The bar fills with kv_cache_usage_ratio; colour steps yellow → orange → red
+  // as it nears COMPACT_AT (the auto-compaction threshold).
+  let ctxMetrics = $derived($backendMetrics[$selectedModelStore]);
+  let ctxN = $derived(ctxMetrics?.n_ctx ?? 0);
+  let ctxRatio = $derived(ctxN ? Math.min(1, ctxMetrics!.kv_cache_usage_ratio) : 0);
+  let ctxColor = $derived(
+    ctxRatio >= COMPACT_AT ? "#ef4444" : ctxRatio >= 0.6 ? "#f97316" : "#eab308",
+  );
+
   let userInput = $state("");
   // Messages typed while a turn is streaming; sent one-by-one once it finishes.
   let queued = $state<string[]>([]);
@@ -135,6 +145,8 @@
   let abortController = $state<AbortController | null>(null);
   let messagesContainer: HTMLDivElement | undefined = $state();
   let inputEl: HTMLTextAreaElement | undefined = $state();
+  // Composer only grows while focused; blur collapses it back to normal size.
+  let inputFocused = $state(false);
   let rewriteEl: HTMLTextAreaElement | undefined = $state();
   let showSettings = $state(false);
   let attachedImages = $state<string[]>([]);
@@ -169,6 +181,25 @@
   );
   let canAttach = $derived(selectedModelVision || !!visionTwin);
 
+  // The non-vision sibling to swap back to when turning vision off. Only exists
+  // when we're currently on a twin that has a text-only base (native-vision
+  // models have no base, so the toggle can't disable them).
+  let visionBase = $derived(
+    selectedModelVision
+      ? $models.find(
+          (m) =>
+            !!m.family &&
+            m.family === selectedModel?.family &&
+            m.id !== selectedModel?.id &&
+            !m.capabilities?.vision
+        )
+      : undefined
+  );
+  // Vision toggle: lit when on the vision twin (auto-lights after attach, which
+  // swaps to it). Shown only when a swap target exists in either direction.
+  let visionActive = $derived(selectedModelVision && !!visionBase);
+  let showVisionToggle = $derived(!!visionTwin || !!visionBase);
+
   // Switch to the vision twin (loading its mmproj projector) if needed, then open
   // the file picker. Warm-loads the twin so the swap overlaps file selection.
   function attachImage() {
@@ -177,6 +208,20 @@
       void loadModel(visionTwin.id).catch(() => {});
     }
     fileInput?.click();
+  }
+
+  // Swap between the text base and its vision twin. Disabling clears any pending
+  // images — the base model 500s on image input.
+  function toggleVision() {
+    const target = visionActive ? visionBase : visionTwin;
+    if (!target) return;
+    if (visionActive) {
+      attachedImages = [];
+      imageError = null;
+    }
+    selectedModelStore.set(target.id);
+    void loadModel(target.id).catch(() => {});
+    showToast(visionActive ? "Vision disabled" : "Vision enabled");
   }
   // Loaded → an empty stream means the model is generating, not swapping in.
   // Use the authoritative catalog state (what the dashboard shows), not just the
@@ -245,8 +290,15 @@
   // tab is shown, leaving an invisible, untypeable textarea.
   $effect(() => {
     userInput;
+    inputFocused;
     $selectedTabStore; // re-run when this tab becomes visible again
     if (inputEl) {
+      // Collapse to normal size when the user clicks away; grow to fit content
+      // (up to the max) only while actively editing. CSS transitions the height.
+      if (!inputFocused) {
+        inputEl.style.height = "3rem";
+        return;
+      }
       inputEl.style.height = "auto";
       if (inputEl.scrollHeight > 0) {
         inputEl.style.height = Math.min(inputEl.scrollHeight, 480) + "px";
@@ -452,18 +504,19 @@
     // No web search during a rewrite — it's a self-contained text transform.
     const useTools = !isRewrite && $webSearchStore;
 
-    // Thinking budget: cap reasoning so models can't loop forever before
-    // answering. 0 = off; rewrites never think. Reasoning streams as text, so
-    // ~4 chars/token is a good-enough proxy — no client-side tokenizer needed.
+    // Thinking budget: hard token cap so models can't loop forever before
+    // answering. 0 = off; rewrites never think. Enforced server-side as the
+    // round's max_tokens (a clean "length" stop, NOT a client disconnect — a
+    // disconnect resets the recurrent slot KV and forces a full reprocess).
     const reasoningBudget = isRewrite ? 0 : $reasoningBudgetStore;
+    // Only the finalize safety-net still needs a char proxy (bounding a stubborn
+    // model that reopens <think>); the budget itself is now real tokens.
     const CHARS_PER_TOK = 4;
 
     // Force the model to stop thinking and answer: re-request with its own
-    // reasoning prefilled and closed, so it continues straight into the reply
-    // (llama.cpp continues a trailing assistant message as a prefix). Most
-    // backends emit reasoning via the reasoning_content channel; inline-<think>
-    // models leave it empty here and rely on reasoning:false to steer out.
-    // ponytail: covers the common channel path; revisit if an inline model loops.
+    // reasoning prefilled (via reasoning_content, template re-renders + closes it)
+    // so it continues straight into the reply (llama.cpp continues a trailing
+    // assistant message as a prefix). Format-agnostic — see finalizeAfterBudget.
     // Answer text only: drop reasoning markup of every flavour — channel-based is
     // already separate, this strips inline <think>…</think>, harmony channels,
     // and a trailing unclosed think (model still mid-thought).
@@ -478,18 +531,62 @@
         isReasoning = false;
         patchLast(id, (m) => ({ ...m, reasoningTimeMs }));
       }
-      // Don't re-feed the model its own open-ended reasoning — that (plus the
-      // template's enable_thinking:false empty-<think>) just makes a reasoning
-      // model keep thinking, burning a 2nd budget. A short directive + reasoning
-      // off forces a fresh answer. reasoning_content already shows what it thought.
+      // Hand the model's reasoning back via reasoning_content — NOT hardcoded
+      // <think> markup. The upstream chat template re-renders it in the model's
+      // OWN reasoning format (<think>, harmony channels, <thinking>, …) and closes
+      // it, reproducing the exact KV-slot prefix regardless of format. The slot
+      // holds `base + <open-reasoning> + reasoning…`, so it prefix-matches and
+      // llama.cpp reuses the cached reasoning, processing only the closing marker
+      // + the answer. buildChatCompletionsBody already forwards assistant
+      // reasoning_content for preserve_thinking templates. Keeping the round-1
+      // reasoning flag (not flipping enable_thinking) leaves the prefix identical;
+      // the old path flipped reasoning:false + dropped the reasoning for a fixed
+      // directive, so nothing matched and the whole prompt was reprocessed.
+      //
+      // EXACTNESS IS LOAD-BEARING on hybrid/recurrent models (Qwen3.6 GatedDeltaNet):
+      // their live prefix cache is exact-prefix-ONLY — a single divergent token
+      // reprocesses the whole context (measured: 47.8 s / 24k tokens). So:
+      //   - do NOT trim the reasoning — the slot holds the raw bytes verbatim;
+      //     trimming leading/trailing whitespace breaks the match at the <think> block.
+      //   - forward the SAME tools as round-1 — tool JSON renders into the system
+      //     prefix, so dropping it breaks the match at token ~0 → full reprocess.
+      const last = sessionById(id)?.messages.at(-1);
+      const rawContent = typeof last?.content === "string" ? last.content : "";
+      // Inline models leave reasoning in content as raw markup; channel models put
+      // it in reasoning_content. Normalize inline markup (harmony/<think>/…) to
+      // plain text so the template can re-wrap it canonically.
+      const inlineThink = rawContent.slice(0, rawContent.length - answerOnly(rawContent).length);
+      const inlinePlain = harmonyToThink(inlineThink)
+        .replace(/<\/?(?:think|thinking|reasoning)>/gi, "")
+        .trim();
+      // Channel models: raw untrimmed reasoning_content = byte-exact slot prefix.
+      // Inline fallback (inlinePlain) is reconstructed and may not match exactly.
+      const reasoned = last?.reasoning_content || inlinePlain;
+      // The cap can bite mid-reasoning (no answer yet) OR mid-answer (long reply
+      // cut at the budget). Feed back the partial answer too so the prefill
+      // EXTENDS the warm slot in both cases.
+      //
+      // A NON-EMPTY content field is load-bearing: it makes the chat template
+      // emit the closing </think> and switch to the answer channel. With empty
+      // content the template leaves <think> OPEN, so the model keeps reasoning
+      // past the budget and never answers (measured: reasons to full max_tokens,
+      // finish=length, content stays ""). When the cap bit mid-reasoning there's
+      // no answer yet, so seed a bare newline — it forces the close, appends only
+      // `</think>\n\n\n` to the slot (still an extension → warm reuse), and is
+      // whitespace so answerOnly()/trimStart drop it from the display.
+      const partialAnswer = answerOnly(rawContent);
       const prefill: ChatMessage = {
         role: "assistant",
-        content: "I've reasoned enough. Here is my final answer:\n\n",
+        content: partialAnswer || "\n",
+        reasoning_content: reasoned,
       };
       const stream = streamChatCompletion(modelId, [...baseMsgs, ...tail, prefill], sig, {
         temperature: $temperatureStore,
         max_tokens: $maxTokensStore,
-        reasoning: false, // don't reopen thinking
+        // Match round-1's tool set so the system-prompt prefix is byte-identical
+        // (prefix match, not tool use — the finalize loop ignores tool_calls).
+        tools: useTools ? [WEB_SEARCH_TOOL] : undefined,
+        reasoning: !isRewrite && $reasoningStore, // keep round-1 flag → same prefix, KV reuse
         conversationId: id,
       });
       // Safety net: strip any think the model still emits so the forced answer
@@ -563,13 +660,18 @@
 
         let toolCalls: ToolCall[] | undefined;
         let roundContent = "";
-        let reasoningChars = 0;
         let budgetHit = false;
+        let finishReason: string | undefined;
 
         try {
           const stream = streamChatCompletion(modelId, [...base, ...apiTail], roundCtrl.signal, {
             temperature: $temperatureStore,
-            max_tokens: $maxTokensStore,
+            // Reasoning budget = a hard token cap the SERVER enforces, so the round
+            // ends with a clean "length" stop instead of a client disconnect. A
+            // disconnect resets the recurrent slot KV (hybrid GatedDeltaNet), which
+            // is exactly what forced the full-context reprocess before. A clean stop
+            // leaves the slot warm so the continuation below reuses it. 0 = off.
+            max_tokens: reasoningBudget > 0 ? reasoningBudget : $maxTokensStore,
             tools: useTools ? [WEB_SEARCH_TOOL] : undefined,
             reasoning: !isRewrite && $reasoningStore,
             conversationId: id,
@@ -577,7 +679,10 @@
 
           for await (const chunk of stream) {
             if (chunk.tool_calls) toolCalls = chunk.tool_calls;
-            if (chunk.done) break;
+            if (chunk.done) {
+              finishReason = chunk.finish_reason;
+              break;
+            }
 
             // Reasoning via the dedicated channel (most backends).
             if (chunk.reasoning_content) {
@@ -589,7 +694,6 @@
                 ...m,
                 reasoning_content: (m.reasoning_content || "") + chunk.reasoning_content,
               }));
-              reasoningChars += chunk.reasoning_content.length;
             }
 
             // Content carries the answer — and for inline-think / harmony models
@@ -599,11 +703,10 @@
               patchLast(id, (m) => ({ ...m, content: m.content + chunk.content }));
             }
 
-            // Unified budget accounting for ALL think flavours: channel chars +
-            // inline/harmony think still in the content. answer = content with
-            // reasoning stripped; while it's empty the model is still reasoning.
+            // Track the reasoning box open/close for its live timer: answer =
+            // content with reasoning stripped; while it's empty the model is
+            // still reasoning (channel or inline/harmony).
             const answer = answerOnly(roundContent);
-            const totalReasoning = reasoningChars + (roundContent.length - answer.length);
             if (answer) {
               if (isReasoning) {
                 const reasoningTimeMs = Date.now() - reasoningStartTime;
@@ -614,19 +717,19 @@
               isReasoning = true;
               reasoningStartTime = Date.now();
             }
-            // Past the budget with no answer yet → stop and force a conclusion.
-            if (reasoningBudget > 0 && !answer && totalReasoning > reasoningBudget * CHARS_PER_TOK) {
-              budgetHit = true;
-              roundCtrl.abort();
-              break;
-            }
           }
-        } catch (e) {
-          // A budget-triggered abort is expected — swallow and finalize below.
-          // Anything else (incl. the user's Stop) propagates to the turn handler.
-          if (!(budgetHit && e instanceof Error && e.name === "AbortError")) throw e;
         } finally {
+          // Only the user's Stop aborts a round now (the budget uses a server-side
+          // max_tokens cap, not a disconnect), so nothing to swallow — errors
+          // propagate to the turn handler.
           signal.removeEventListener("abort", forwardAbort);
+        }
+
+        // Server hit the reasoning-token cap (clean "length" stop, slot still warm).
+        // Continue via a prefill that byte-extends the resident KV → warm reuse,
+        // no full reprocess. Skip if the model got a complete tool call out first.
+        if (reasoningBudget > 0 && finishReason === "length" && (!toolCalls || toolCalls.length === 0)) {
+          budgetHit = true;
         }
 
         if (budgetHit) {
@@ -1108,31 +1211,51 @@
         {/if}
         <textarea
           bind:this={inputEl}
-          class="w-full bg-transparent text-[0.8125rem] leading-relaxed resize-none focus:outline-none placeholder:text-txtsecondary pretty-scroll min-h-[3rem] max-h-[30rem]"
+          class="w-full bg-transparent text-[0.8125rem] leading-relaxed resize-none focus:outline-none placeholder:text-txtsecondary pretty-scroll min-h-[3rem] max-h-[30rem] transition-[height] duration-200 ease-out"
           rows="2"
           placeholder={$rewriteStore ? "Paste the text to rewrite…" : isStreaming ? "Queue a message…" : "Type a message..."}
           bind:value={userInput}
+          onfocus={() => (inputFocused = true)}
+          onblur={() => (inputFocused = false)}
           onkeydown={handleKeyDown}
           onpaste={handlePaste}
         ></textarea>
 
         <div class="flex items-center justify-between">
-          {#if canAttach}
-            <button
-              class="inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
-              onclick={attachImage}
-              disabled={isStreaming || !$selectedModelStore}
-              title={visionTwin ? "Attach image (loads vision projector)" : "Attach image"}
-            >
-              <Paperclip class="w-[1.125rem] h-[1.125rem]" />
-            </button>
-          {:else}
-            <span></span>
-          {/if}
+          <div class="flex items-center gap-1">
+            {#if canAttach}
+              <button
+                class="inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
+                onclick={attachImage}
+                disabled={isStreaming || !$selectedModelStore}
+                title={visionTwin ? "Attach image (loads vision projector)" : "Attach image"}
+              >
+                <Paperclip class="w-[1.125rem] h-[1.125rem]" />
+              </button>
+            {/if}
+            {#if showVisionToggle}
+              <button
+                class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors {visionActive ? 'bg-primary/10 text-primary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
+                onclick={toggleVision}
+                disabled={isStreaming}
+                title={visionActive ? "Vision on (image variant loaded)" : "Vision off — switch to image variant"}
+              >
+                <Eye class="w-[1.125rem] h-[1.125rem]" />
+              </button>
+            {/if}
+          </div>
 
-          <span class="flex-1 min-w-0 truncate px-2 text-center text-xs font-medium text-txtsecondary" title={selectedModelName}>
-            {selectedModelName}
-          </span>
+          <div class="flex-1 min-w-0 px-2 flex flex-col items-center gap-1">
+            <span class="max-w-full truncate text-xs font-medium text-txtsecondary" title={selectedModelName}>
+              {selectedModelName}
+            </span>
+            <!-- Context-window usage: thin colour-only line, yellow → orange → red. -->
+            {#if ctxN > 0}
+              <div class="h-0.5 w-16 rounded-full bg-secondary overflow-hidden" title="Context {Math.round(ctxRatio * 100)}%">
+                <div class="h-full rounded-full transition-all" style="width: {Math.max(ctxRatio * 100, 3)}%; background: {ctxColor};"></div>
+              </div>
+            {/if}
+          </div>
 
           <div class="flex items-center gap-1">
             <button

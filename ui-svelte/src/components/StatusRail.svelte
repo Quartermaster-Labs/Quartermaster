@@ -1,8 +1,10 @@
 <script lang="ts">
+  import { push } from "svelte-spa-router";
   import { models, inFlightRequests, unloadAllModels } from "../stores/api";
   import { latestGpu, latestSys } from "../stores/perf";
   import { vramBreakdown } from "../stores/vram";
-  import { prettifyModelName } from "../lib/modelUtils";
+  import { prettifyModelName, modelCategory } from "../lib/modelUtils";
+  import type { Model } from "../lib/types";
   import VramGauge from "./VramGauge.svelte";
 
   // Models currently occupying the GPU (or about to). The whole tool is
@@ -19,6 +21,12 @@
     } finally {
       unloading = false;
     }
+  }
+
+  // Loaded model is already lifted into the Models page top panel, so just route
+  // to its category tab and let it show there.
+  function openInModels(m: Model): void {
+    push(`/models/${modelCategory(m)}`);
   }
 
   function dotClass(state: string): string {
@@ -39,10 +47,14 @@
       <span class="text-txtsecondary uppercase tracking-wide">No model loaded</span>
     {:else}
       {#each liveModels as m (m.id)}
-        <span class="flex items-center gap-1.5 min-w-0">
+        <button
+          class="group flex items-center gap-1.5 min-w-0 transition-colors cursor-pointer"
+          onclick={() => openInModels(m)}
+          title="{m.id} — open in Models"
+        >
           <span class="inline-block w-2 h-2 rounded-full shrink-0 {dotClass(m.state)}"></span>
-          <span class="text-[0.6rem] uppercase tracking-widest text-txtsecondary truncate min-w-0 max-w-[14rem]" title={m.id}>{prettifyModelName(m.name || m.id)}</span>
-        </span>
+          <span class="text-[0.6rem] uppercase tracking-widest text-txtsecondary truncate min-w-0 max-w-[14rem] group-hover:text-txtmain">{prettifyModelName(m.name || m.id)}</span>
+        </button>
       {/each}
     {/if}
   </div>

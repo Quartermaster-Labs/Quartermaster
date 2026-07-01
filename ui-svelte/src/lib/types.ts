@@ -151,6 +151,9 @@ export interface PerformanceResponse {
   // Current-snapshot tally of GPU memory held by llama-server/sd-server
   // processes we did not spawn (a stray llama.cpp). Always present.
   foreign?: { mb: number; procs?: ForeignGpuProc[] };
+  // Idle system-VRAM floor (MiB) sampled server-side (min used while no model
+  // running). 0 = not observed yet. Preferred over the browser-only baseline.
+  system_mb?: number;
 }
 
 export interface APIEventEnvelope {
@@ -306,6 +309,22 @@ export interface SdApiTxt2ImgRequest {
   sampler_name?: string;
   scheduler?: string;
   lora?: SdApiLoraRef[];
+  // Hires fix: generate, then run a second upscaled diffusion pass for sharper
+  // detail at higher res. Only txt2img honors these — img2img ignores enable_hr
+  // (verified against sd-server f440ad9). Upscalers: Latent, Lanczos, Nearest.
+  // denoising_strength here is the second-pass strength.
+  enable_hr?: boolean;
+  hr_scale?: number;
+  hr_upscaler?: string;
+  hr_steps?: number;
+  denoising_strength?: number;
+  // Reference images (base64, no data-URI prefix) for Kontext-class models: the
+  // model conditions on them while the prompt drives the edit — subject + style
+  // refs for reference-driven / style-transfer generation. The /sdapi route reads
+  // this array (→ gen_params.ref_images) on BOTH txt2img and img2img, verified
+  // against stable-diffusion.cpp routes_sdapi.cpp. (The singular `ref_image` the
+  // webui uses is ignored here — it's an array field named extra_images.)
+  extra_images?: string[];
 }
 
 // img2img reuses every txt2img field plus a source image (base64, no data-URI
@@ -313,12 +332,11 @@ export interface SdApiTxt2ImgRequest {
 export interface SdApiImg2ImgRequest extends SdApiTxt2ImgRequest {
   init_images: string[];
   denoising_strength?: number;
-  // Flux Kontext reference image (base64, no data-URI prefix). The model edits
-  // the reference per the prompt while preserving subject identity — the "same
-  // person, new pose" route. sd-server exposes this field (and -r/--ref-image);
-  // exact JSON shape unverified — confirm with a curl once a Kontext model is
-  // loaded, then tighten if it wants an array / empty init_images.
-  ref_image?: string;
+  // Inpaint mask (base64, no data-URI prefix): white = regenerate, black = keep.
+  // inpainting_mask_invert (0/1) flips that polarity. Both on the sdapi img2img
+  // route (verified against sd-server f440ad9). Only sent when a mask is painted.
+  mask?: string;
+  inpainting_mask_invert?: number;
 }
 
 export interface SdApiResponse {

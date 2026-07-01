@@ -1,0 +1,23 @@
+{
+  "worktree": {
+    "bgIsolation": "none"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(npm run check)",
+      "Bash(npm run check:*)",
+      "Bash(svelte-check:*)",
+      "Bash(npx svelte-check:*)",
+      "Bash(npm test)",
+      "Bash(npm test:*)",
+      "Bash(npm run test:*)",
+      "Bash(go build:*)",
+      "Bash(go test:*)",
+      "Bash(go vet:*)",
+      "Bash(gofmt:*)",
+      "Bash(make test-dev:*)",
+      "Bash(make test-all:*)",
+      "Bash(make test-ui:*)"
+    ]
+  }
+}

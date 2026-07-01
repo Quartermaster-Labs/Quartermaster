@@ -33,7 +33,13 @@ type Server struct {
 	proxylog    *logmon.Monitor
 	upstreamlog *logmon.Monitor
 
-	perf           *perf.Monitor
+	perf *perf.Monitor
+	// systemVramMB is the idle system VRAM floor (MiB) on the largest GPU: the
+	// min used-VRAM observed while zero models were running. Sampled by a
+	// background goroutine off the perf monitor so it's captured even when no
+	// dashboard tab is open, and surfaced in /api/performance for the UI gauge.
+	// 0 = never observed an idle moment yet. See trackSystemVram.
+	systemVramMB   atomic.Int64
 	inflight       *inflightCounter
 	metrics        *metricsMonitor
 	backendMetrics *backendMetricsMonitor
@@ -165,6 +171,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	}
 	s.backendMetrics = newBackendMetricsMonitor(s.runningProxies, proxylog)
 	go s.backendMetrics.run(s.shutdownCtx)
+	go s.trackSystemVram(s.shutdownCtx)
 	slotParticipates := func(id string) bool {
 		mc, ok := cfg.Models[id]
 		return ok && strings.Contains(mc.Cmd, "--slot-save-path")
@@ -260,6 +267,53 @@ func (s *Server) freeVramGB() (float64, bool) {
 		free = 0
 	}
 	return float64(free) / 1024.0, true
+}
+
+// trackSystemVram records the idle system-VRAM floor by subscribing to the perf
+// monitor and, on every GPU sample taken while no model is running, keeping the
+// MINIMUM used-VRAM seen on the largest GPU. Runs independent of the dashboard
+// so the floor is captured even with no UI tab open (the old browser-only
+// baseline never ran unless the VRAM widget was mounted). ponytail: ceiling — if
+// a model stays resident from boot with no idle gap, the floor is never sampled
+// and the UI falls back to its estimate; captured on the first unload.
+func (s *Server) trackSystemVram(ctx context.Context) {
+	if s.perf == nil {
+		return
+	}
+	_, gpuCh, unsub := s.perf.Subscribe()
+	defer unsub()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case gpus, ok := <-gpuCh:
+			if !ok {
+				return
+			}
+			if len(s.local.RunningModels()) != 0 {
+				continue
+			}
+			// Largest-GPU used VRAM, matching freeVramGB's GPU choice.
+			best := -1
+			var bestStat perf.GpuStat
+			for _, g := range gpus {
+				if g.MemTotalMB <= 0 {
+					continue
+				}
+				if best < 0 || g.MemTotalMB > bestStat.MemTotalMB {
+					best = g.ID
+					bestStat = g
+				}
+			}
+			if best < 0 {
+				continue
+			}
+			used := int64(bestStat.MemUsedMB)
+			if cur := s.systemVramMB.Load(); cur == 0 || used < cur {
+				s.systemVramMB.Store(used)
+			}
+		}
+	}
 }
 
 // runningProxies maps each running local model to its resolved upstream base

@@ -26,25 +26,29 @@ func TestEmitProfile_EngineKnobs(t *testing.T) {
 	}
 }
 
-// computeBufferGB models logits (vocab*ub) + activations (ub*embd) + CUDA ctx,
-// scaled by factor; falls back to a flat estimate when dims are missing.
+// computeBufferGB models logits (vocab*min(ub,256)) + activations (ub*embd) +
+// CUDA ctx, scaled by factor; falls back to a flat estimate when dims are
+// missing. The logits token count is capped (llama sizes the output buffer by
+// n_outputs, not the physical batch) so large-vocab models aren't over-charged.
 func TestComputeBufferGB(t *testing.T) {
 	meta := Metadata{EmbeddingLength: 4096, VocabSize: 151936}
 
+	// ub=1024: 0.3 CUDA + logits(vocab*256*4 ~0.145) + acts(ub*embd*8*4 ~0.125).
 	got := computeBufferGB(meta, 1024, 1.0)
-	if got < 0.95 || got > 1.06 {
-		t.Errorf("ub=1024 factor=1: got %.3f, want ~1.0 GB", got)
+	if got < 0.52 || got > 0.63 {
+		t.Errorf("ub=1024 factor=1: got %.3f, want ~0.57 GB", got)
 	}
 
-	// Halving ub roughly halves the analytic term (CUDA ctx const aside).
+	// Halving ub shrinks only the activation term now (logits is capped), so the
+	// buffer is smaller but by less than half.
 	half := computeBufferGB(meta, 512, 1.0)
-	if half >= got || half < 0.6 {
-		t.Errorf("ub=512 should be smaller but still sizable: got %.3f (ub1024=%.3f)", half, got)
+	if half >= got || half < 0.45 {
+		t.Errorf("ub=512 should be a bit smaller: got %.3f (ub1024=%.3f)", half, got)
 	}
 
-	// factor scales the analytic term above the fixed CUDA ctx.
-	if d := computeBufferGB(meta, 1024, 2.0) - got; d < 0.65 {
-		t.Errorf("factor=2 should add ~one analytic term (~0.7 GB), added %.3f", d)
+	// factor scales the analytic term (~0.27 GB here) above the fixed CUDA ctx.
+	if d := computeBufferGB(meta, 1024, 2.0) - got; d < 0.2 {
+		t.Errorf("factor=2 should add ~one analytic term (~0.27 GB), added %.3f", d)
 	}
 
 	// Missing dims => flat fallback.
