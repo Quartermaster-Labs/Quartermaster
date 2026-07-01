@@ -681,6 +681,37 @@ export async function fetchKvCache(): Promise<KvCacheStats | null> {
   }
 }
 
+// --- Prompt canonicalization monitoring (Context Management → Canonicalization) ---
+
+export interface CanonCounters {
+  seen: number;
+  rewritten: number;
+  bytesRemoved: number;
+}
+
+export interface CanonEvent {
+  time: string;
+  model: string;
+  rule: string;
+  bytes: number;
+}
+
+export interface CanonStats {
+  counters?: CanonCounters;
+  events?: CanonEvent[];
+}
+
+export async function fetchCanon(): Promise<CanonStats | null> {
+  try {
+    const response = await fetch("/api/canon");
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to fetch canonicalization stats:", error);
+    return null;
+  }
+}
+
 export async function fetchPerformance(after?: string): Promise<PerformanceResponse | null> {
   try {
     const url = after ? `/api/performance?after=${encodeURIComponent(after)}` : "/api/performance";

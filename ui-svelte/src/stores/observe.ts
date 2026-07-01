@@ -4,7 +4,7 @@ import { persistentStore } from "./persistent";
 // selection, and one time window. The window is consumed by Activity (row
 // filtering) and Performance (chart cutoff); Logs ignore it.
 
-export type ObserveTab = "activity" | "logs" | "performance" | "kvcache";
+export type ObserveTab = "activity" | "logs" | "performance" | "context";
 
 export const observeTab = persistentStore<ObserveTab>("observe-tab", "activity");
 

@@ -2,17 +2,17 @@
   import { onMount } from "svelte";
   import { observeTab, observeWindowIdx, OBSERVE_WINDOWS, type ObserveTab } from "../stores/observe";
   import { currentRoute } from "../stores/route";
-  import { Activity as ActivityIcon, ScrollText, Gauge, Database } from "lucide-svelte";
+  import { Activity as ActivityIcon, ScrollText, Gauge, Layers } from "lucide-svelte";
   import Activity from "./Activity.svelte";
   import LogViewer from "./LogViewer.svelte";
   import Performance from "./Performance.svelte";
-  import KvCache from "./KvCache.svelte";
+  import Context from "./Context.svelte";
 
   const tabs = [
     { key: "activity" as ObserveTab, label: "Activity", icon: ActivityIcon },
     { key: "logs" as ObserveTab, label: "Logs", icon: ScrollText },
     { key: "performance" as ObserveTab, label: "Performance", icon: Gauge },
-    { key: "kvcache" as ObserveTab, label: "KV Cache", icon: Database },
+    { key: "context" as ObserveTab, label: "Context", icon: Layers },
   ];
 
   // Legacy deep-links (/activity, /logs, /performance) select the matching tab.
@@ -28,7 +28,7 @@
   });
 
   // The time window only applies to Activity (row filter) and Performance (chart
-  // cutoff). Logs and KV Cache ignore it, so hide the selector there.
+  // cutoff). Logs and Context ignore it, so hide the selector there.
   const showWindow = $derived($observeTab === "activity" || $observeTab === "performance");
 </script>
 
@@ -78,8 +78,8 @@
     <div class="h-full" class:hidden={$observeTab !== "performance"}>
       <Performance />
     </div>
-    <div class="h-full" class:hidden={$observeTab !== "kvcache"}>
-      <KvCache />
+    <div class="h-full" class:hidden={$observeTab !== "context"}>
+      <Context />
     </div>
   </div>
 </div>

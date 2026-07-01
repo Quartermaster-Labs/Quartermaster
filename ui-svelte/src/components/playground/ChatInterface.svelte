@@ -367,18 +367,12 @@
   // endpoint speaks. Other endpoints just chat without the tool.
 
   // Built-in system prompt prepended ahead of the user's own. Grounds the model
-  // with the current date and basic honesty/tool guidance. Always on.
+  // with basic honesty/tool guidance. Always on. The volatile current-date line is
+  // deliberately NOT here — it's appended at the very END of the system block (see
+  // currentDateLine) so this prefix stays byte-identical across a midnight rollover
+  // and the KV cache isn't invalidated once a day.
   function basePrompt(searchAvailable: boolean): string {
-    const date = new Date().toLocaleString(undefined, {
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-      timeZoneName: "short",
-    });
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const lines = [
-      `The current date and time is ${date}${tz ? ` (${tz})` : ""}.`,
       "If you are unsure or do not know something, say so plainly — never fabricate facts, citations, numbers, or URLs.",
       "Keep answers concise; expand only when asked.",
     ];
@@ -387,10 +381,26 @@
         "A web search tool is available to you — use it proactively, without being asked. Search whenever a question touches anything you can't verify from memory: current events, prices, schedules, releases, specs, statistics, names, dates, or any fact that may have changed or that you're not fully certain of. Prefer searching over answering from possibly-stale or half-remembered knowledge, and run a quick check even when you think you know — it's cheap and stops confident mistakes. Default to searching when unsure rather than guessing. Don't claim you searched if you didn't.",
       );
       lines.push(
-        "When a search is time-sensitive (weather, news, prices, \"current\"/\"latest\" anything), put the actual date from above into the query (e.g. \"Copenhagen weather June 27 2026\") instead of vague words like \"current\" or \"today\", which return stale results. You can use the user's timezone above to infer their approximate location and make location-dependent queries more useful.",
+        "When a search is time-sensitive (weather, news, prices, \"current\"/\"latest\" anything), put the actual date (given at the end of this prompt) into the query (e.g. \"Copenhagen weather June 27 2026\") instead of vague words like \"current\" or \"today\", which return stale results. You can use the user's timezone (given at the end) to infer their approximate location and make location-dependent queries more useful.",
       );
     }
     return lines.join(" ");
+  }
+
+  // currentDateLine is the ONLY volatile part of the built-in system prompt.
+  // Appended LAST in the system block so a date change at midnight doesn't rewrite
+  // the stable prefix above it — which would invalidate the whole conversation's
+  // KV cache once a day (the prefix no longer prefix-matches the cached tokens).
+  function currentDateLine(): string {
+    const date = new Date().toLocaleString(undefined, {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      timeZoneName: "short",
+    });
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return `The current date and time is ${date}${tz ? ` (${tz})` : ""}.`;
   }
 
   const REWRITE_SYSTEM =
@@ -511,6 +521,9 @@
       // Rewrite turns keep the full conversation for context (setting, characters,
       // goals discussed earlier) but add the transform-tool directive on top.
       isRewrite && REWRITE_SYSTEM,
+      // Volatile date LAST: everything above stays byte-identical across a midnight
+      // rollover, so the KV cache prefix survives instead of invalidating daily.
+      currentDateLine(),
     ]
       .filter(Boolean)
       .join("\n\n");

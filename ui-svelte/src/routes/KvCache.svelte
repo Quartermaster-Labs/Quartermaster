@@ -11,9 +11,9 @@
     if (s) stats = s;
   }
 
-  // Panel stays mounted across tab switches; only poll while it's the active tab.
+  // Panel stays mounted across tab switches; only poll while Context is active.
   $effect(() => {
-    if ($observeTab !== "kvcache") return;
+    if ($observeTab !== "context") return;
     void tick();
     timer = setInterval(() => void tick(), 2000);
     return () => {

@@ -38,6 +38,7 @@ type Server struct {
 	metrics        *metricsMonitor
 	backendMetrics *backendMetricsMonitor
 	slotCache      *slotCache
+	promptCanon    *promptCanon
 	build          BuildInfo
 
 	local router.LocalRouter
@@ -194,6 +195,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		return v
 	}
 	s.slotCache = newSlotCache(cfg.SlotCache, s.runningProxies, slotParticipates, slotRecurrent, proxylog)
+	s.promptCanon = newPromptCanon()
 	local.SetPreEvict(s.slotCache.saveOnEvict)    // save slot KV before a swap/unload kills the process
 	local.SetPostLoad(s.slotCache.restoreOnLoad)  // restore slot KV after a cold load, before serving
 	s.metrics.onRecord = s.slotCache.confirmReuse // confirm restores actually reused KV (cached_tokens)
@@ -330,6 +332,7 @@ func (s *Server) routes() {
 		CreateFormFilterMiddleware(s.cfg),
 		CreateInflightMiddleware(s.inflight),
 		CreateMetricsMiddleware(s.metrics, s.cfg),
+		s.promptCanon.middleware, // canonicalize the prompt before slotcache/upstream see it
 		s.slotCache.middleware,
 	)
 	// API keys gate the external inference API only — they let other apps reach
@@ -419,6 +422,7 @@ func (s *Server) routes() {
 	mux.Handle("DELETE /api/settings", apiChain.ThenFunc(s.handleAPISettingsDelete))
 	mux.Handle("PUT /api/settings/slotcache", apiChain.ThenFunc(s.handleAPISlotCachePut))
 	mux.Handle("GET /api/kvcache", apiChain.ThenFunc(s.handleAPIKvCache))
+	mux.Handle("GET /api/canon", apiChain.ThenFunc(s.handleAPICanon))
 	// Per-category scan folder (Models tab folder icon) — opens the host's native
 	// folder dialog, then sets settings.categoryRoots[category].
 	mux.Handle("POST /api/settings/root/pick", apiChain.ThenFunc(s.handleAPISettingsRootPick))
