@@ -71,8 +71,11 @@ New-Item -ItemType Directory -Force $staging | Out-Null
 go build -ldflags "-X main.commit=$commit -X main.version=$Tag -X main.date=$date" `
     -o (Join-Path $staging 'llama-quartermaster-windows-amd64.exe') .
 
-# 3. Stage bundle (same set the installer expects).
-Copy-Item config.example.yaml,quartermaster-generate.example.yaml,LICENSE.md,README.md $staging
+# 3. Stage bundle (same set the installer expects). Config yaml lives under config\.
+$stagingConfig = Join-Path $staging 'config'
+New-Item -ItemType Directory -Force $stagingConfig | Out-Null
+Copy-Item config.example.yaml,quartermaster-generate.example.yaml $stagingConfig
+Copy-Item LICENSE.md,README.md $staging
 Copy-Item packaging\windows\start.cmd (Join-Path $staging 'start.cmd')
 Copy-Item -Recurse packaging (Join-Path $staging 'packaging')
 "llama-quartermaster $Tag built $date" | Out-File -Encoding utf8 (Join-Path $staging 'VERSION.txt')

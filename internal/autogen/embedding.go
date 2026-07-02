@@ -110,12 +110,6 @@ func emitEmbeddingModel(b *strings.Builder, s Settings, row GgufRow, ov *Overrid
 	if ov != nil && ov.Unlisted {
 		b.WriteString("    unlisted: true\n")
 	}
-	if ov != nil && len(ov.Aliases) > 0 {
-		b.WriteString("    aliases:\n")
-		for _, al := range ov.Aliases {
-			fmt.Fprintf(b, "      - %q\n", al)
-		}
-	}
 	b.WriteString("    capabilities:\n")
 	b.WriteString("      embedding: true\n")
 	*emitted = append(*emitted, name)

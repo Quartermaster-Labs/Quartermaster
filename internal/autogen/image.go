@@ -165,6 +165,13 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override) (lines []string, budge
 	}
 	if offload {
 		lines = append(lines, "--offload-to-cpu")
+		// VAE decode is a single end-of-generation VRAM spike that --vae-tiling
+		// only caps, not removes. On a tight card (offload=true, ~1.5GB VRAM
+		// headroom) with a token-heavy model like Kontext (reference image ~2x
+		// the sequence), that spike overcommits shared VRAM and hard-hangs
+		// Windows. The VAE runs once per image, so parking it on CPU is nearly
+		// free and removes the crash. te=cpu only moves the text encoders.
+		lines = append(lines, "--vae-on-cpu")
 	}
 	// Generation defaults applied when a request omits them.
 	if ov != nil {
@@ -192,12 +199,11 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override) (lines []string, budge
 
 // mergeImageVariant overlays an image variant onto its base override: the
 // variant inherits every base field it leaves empty (component paths, placement)
-// and overrides only what it sets. Aliases/Unlisted are the variant's own (a
-// variant is a distinct served id). Variants is cleared to avoid re-emitting.
+// and overrides only what it sets. Unlisted is the variant's own (a variant is a
+// distinct served id). Variants is cleared to avoid re-emitting.
 func mergeImageVariant(base Override, v VariantSpec) Override {
 	o := base
 	o.Variants = nil
-	o.Aliases = v.Aliases
 	o.Unlisted = v.Unlisted
 	if v.VaePath != "" {
 		o.VaePath = v.VaePath
@@ -267,12 +273,6 @@ func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, n
 	b.WriteString("    checkEndpoint: /\n")
 	if ov != nil && ov.Unlisted {
 		b.WriteString("    unlisted: true\n")
-	}
-	if ov != nil && len(ov.Aliases) > 0 {
-		b.WriteString("    aliases:\n")
-		for _, al := range ov.Aliases {
-			fmt.Fprintf(b, "      - %q\n", al)
-		}
 	}
 	b.WriteString("    capabilities:\n")
 	b.WriteString("      in: [text]\n")

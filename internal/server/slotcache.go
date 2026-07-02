@@ -208,15 +208,24 @@ func (sc *slotCache) middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		key, preamble, ok := sessionAnchor(r)
-		if !ok {
-			next.ServeHTTP(w, r)
-			return
-		}
+		// Resolve the model first so we can bail before reading/rewriting the body
+		// for models the cache won't touch.
 		data, _ := shared.ReadContext(r.Context())
 		model := data.ModelID
 		if model == "" || sc.participates == nil || !sc.participates(model) {
 			next.ServeHTTP(w, r) // model opted out (no --slot-save-path) — stay out of its way
+			return
+		}
+		if sc.recurrentSkip(model) {
+			// Hybrid/recurrent arch: whole-slot save/restore reuses 0 tokens (see
+			// recurrentSkip). Skip all disk work — promptCanon has already stabilized
+			// the prefix for the native warm reuse that IS the win on these models.
+			next.ServeHTTP(w, r)
+			return
+		}
+		key, preamble, ok := sessionAnchor(r)
+		if !ok {
+			next.ServeHTTP(w, r)
 			return
 		}
 		if base, running := sc.running()[model]; running {
@@ -231,6 +240,20 @@ func (sc *slotCache) middleware(next http.Handler) http.Handler {
 		// The request generated (or at least ran), so the resident KV changed.
 		sc.markResident(model, key, preamble)
 	})
+}
+
+// recurrentSkip reports whether a model is a hybrid/recurrent arch (GatedDeltaNet/
+// SSM, FullAttnInterval>0) for which the slot cache should do NOTHING. These models
+// can only restore their recurrent state at its exact saved length, so llama-server
+// reprocesses the whole prompt on restore — measured on Qwen3.6-35B-A3B: a warm,
+// same-process, exact whole-slot restore of a 31,993-token prompt reused 0 tokens
+// (confirm-miss, prefill 86.1s→85.5s). So save/restore is pure overhead here — a
+// multi-GB write under the global lock for zero benefit. We skip ALL disk work
+// (save + restore + partial-prefix seeding), not just seeding. The native warm
+// prefix reuse (stabilized by promptCanon) is the only win on these archs, and it
+// doesn't need us. Re-enable (drop this guard) if upstream llama.cpp #21831 lands.
+func (sc *slotCache) recurrentSkip(model string) bool {
+	return sc.recurrent != nil && sc.recurrent(model)
 }
 
 // onSwitch handles the moment a (possibly) different conversation arrives for a
@@ -334,6 +357,9 @@ func (sc *slotCache) restoreOnLoad(model string) {
 	if sc.participates == nil || !sc.participates(model) {
 		return
 	}
+	if sc.recurrentSkip(model) {
+		return // hybrid: whole-slot restore yields 0 reuse — skip (see recurrentSkip)
+	}
 	base, running := sc.running()[model]
 	if !running {
 		return // process not actually up (aborted start, etc.)
@@ -353,17 +379,6 @@ func (sc *slotCache) restoreOnLoad(model string) {
 		sc.occupant[model] = &occInfo{key: key} // resident, not yet dirty (nothing ran)
 		sc.pushAwait(model, "restore-hit")
 		sc.mu.Unlock()
-		return
-	}
-
-	// Hybrid/recurrent models (GatedDeltaNet/SSM) can only restore their recurrent
-	// state at the exact saved length. The partial-prefix paths below (preamble
-	// cache + Tier-1 seed) land that state at the wrong position, so llama-server
-	// logs "non-consecutive token position" and reprocesses the whole prompt in a
-	// loop (0 reuse, slow). The exact restore-hit above already returned for this
-	// model; skip the partial paths entirely for recurrent archs.
-	if sc.recurrent != nil && sc.recurrent(model) {
-		sc.record(kvEvent{Model: model, Op: "miss", Detail: "recurrent-skip-seed"})
 		return
 	}
 
@@ -572,6 +587,9 @@ func (sc *slotCache) saveOnEvict(model string) {
 	}
 	if sc.participates == nil || !sc.participates(model) {
 		return
+	}
+	if sc.recurrentSkip(model) {
+		return // hybrid: restore yields 0 reuse, so saving is pure overhead (see recurrentSkip)
 	}
 	sc.mu.Lock()
 	defer sc.mu.Unlock()

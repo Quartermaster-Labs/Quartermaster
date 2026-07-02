@@ -76,7 +76,6 @@
   let specNgramSizeN = $state<number | "">("");
   let specNgramSizeM = $state<number | "">("");
   let specNgramMinHits = $state<number | "">("");
-  let aliasesText = $state("");
   let unlisted = $state(false);
   let skip = $state(false);
   // Opt this model into on-disk slot KV persistence (--slot-save-path). On by
@@ -360,7 +359,7 @@
   // A named variant INHERITS the model-wide override (the Default tab) and layers
   // its own non-blank fields on top — same as the generate path. So the preview
   // override is the base merged with the variant's set fields, NOT a standalone
-  // render. aliases/unlisted/variants stay variant-local (never inherited).
+  // render. unlisted/variants stay variant-local (never inherited).
   function variantToOverride(v: ModelVariant): ModelOverride {
     // Image variants inherit the model-wide base (component paths + placement) and
     // override only their preset; preview merges base + variant so the cmd is real.
@@ -385,7 +384,6 @@
         defaultWidth: v.defaultWidth || base.defaultWidth,
         defaultHeight: v.defaultHeight || base.defaultHeight,
         extraArgs: v.extraArgs || base.extraArgs,
-        aliases: v.aliases ?? [],
         unlisted: v.unlisted ?? false,
         variants: [],
       };
@@ -422,7 +420,6 @@
       specNgramMinHits: v.specNgramMinHits || base.specNgramMinHits || 0,
       ctxCheckpoints: v.ctxCheckpoints ?? null,
       // variant-local: never inherited from the base.
-      aliases: v.aliases ?? [],
       unlisted: v.unlisted ?? false,
       skip: false,
       // single-variant preview: don't fan nested variants/tiers back in.
@@ -556,7 +553,6 @@
     specNgramSizeM = o?.specNgramSizeM ? o.specNgramSizeM : "";
     specNgramMinHits = o?.specNgramMinHits ? o.specNgramMinHits : "";
     extraArgs = o?.extraArgs ?? "";
-    aliasesText = (o?.aliases ?? []).join(", ");
     unlisted = o?.unlisted ?? false;
     skip = o?.skip ?? false;
     slotCacheOn = o?.slotCache ?? true;
@@ -585,7 +581,7 @@
   function blankVariant(name: string, ctx: number): ModelVariant {
     return {
       name, ctx, vramTargetGB: 0, kvK: "", kvV: "", spec: "", ub: 0,
-      reasoningFmt: "", unlisted: false, aliases: [], ctxCheckpoints: null, dry: null, preserveThinking: null,
+      reasoningFmt: "", unlisted: false, ctxCheckpoints: null, dry: null, preserveThinking: null,
       slotCache: null,
       kvInRam: false, cpuOffload: 0, flashAttn: "", mmap: "", mlock: false,
       threads: 0, parallel: 0, extraArgs: "",
@@ -614,7 +610,7 @@
   function ctxTierIsPure(v: ModelVariant): boolean {
     return (
       !v.vramTargetGB && !v.kvK && !v.kvV && !v.spec && !v.ub &&
-      !v.reasoningFmt && !v.unlisted && (v.aliases?.length ?? 0) === 0 &&
+      !v.reasoningFmt && !v.unlisted &&
       v.ctxCheckpoints == null && v.dry == null && v.preserveThinking == null && v.slotCache == null && !v.kvInRam && !v.cpuOffload &&
       !v.flashAttn && !v.mmap && !v.mlock && !v.threads && !v.parallel && !v.extraArgs &&
       !v.dryMultiplier && !v.dryBase && !v.dryAllowedLength &&
@@ -744,13 +740,6 @@
     return { destroy: () => node.removeEventListener("wheel", onwheel) };
   }
 
-  function parseAliases(s: string): string[] {
-    return s
-      .split(",")
-      .map((a) => a.trim())
-      .filter(Boolean);
-  }
-
   function buildOverride(): ModelOverride {
     return {
       ctx: ctxAuto ? 0 : Number(ctx),
@@ -779,7 +768,6 @@
       specNgramSizeM: specNgramSizeM === "" ? 0 : Number(specNgramSizeM),
       specNgramMinHits: specNgramMinHits === "" ? 0 : Number(specNgramMinHits),
       extraArgs,
-      aliases: parseAliases(aliasesText),
       unlisted,
       skip,
       slotCache: slotCacheOn,
@@ -828,7 +816,7 @@
       dryMultiplier: o.dryMultiplier ?? 0, dryBase: o.dryBase ?? 0, dryAllowedLength: o.dryAllowedLength ?? 0,
       specDraftNMax: o.specDraftNMax ?? 0, specDefault: o.specDefault ?? false,
       specNgramSizeN: o.specNgramSizeN ?? 0, specNgramSizeM: o.specNgramSizeM ?? 0, specNgramMinHits: o.specNgramMinHits ?? 0,
-      extraArgs: o.extraArgs ?? "", unlisted: false, aliases: [], ctxCheckpoints: o.ctxCheckpoints ?? null,
+      extraArgs: o.extraArgs ?? "", unlisted: false, ctxCheckpoints: o.ctxCheckpoints ?? null,
     };
   }
 
@@ -907,10 +895,6 @@
     // Default — just write it through.
     if (selectedV) selectedV.name = (e.currentTarget as HTMLInputElement).value;
   }
-  function setVAliases(e: Event) {
-    if (selectedV) selectedV.aliases = parseAliases((e.currentTarget as HTMLInputElement).value);
-  }
-
   // A variant's "inherit by zero" number field: show blank for 0 so the
   // placeholder (the inherited value) surfaces instead of a literal "0".
   function vnum(n: number | null | undefined): string {
@@ -1170,13 +1154,6 @@
             </span>
             <input type="number" min="0" step="1" bind:value={threads} use:wheelAdjust class="cfg-input" placeholder="global default" />
           </label>
-          <label class="flex flex-col gap-1 text-sm col-span-2">
-            <span class="text-txtsecondary flex items-center gap-1">
-              Aliases (comma-separated)
-              {@render hint("Extra names this model answers to in the /v1/models API (e.g. map dall-e-3 to this model).")}
-            </span>
-            <input type="text" bind:value={aliasesText} class="cfg-input" placeholder="e.g. dall-e-3, gpt-image-1" />
-          </label>
         </div>
 
         <!-- Toggles: the on/off knobs, grouped at the bottom (mirrors the LLM tab). -->
@@ -1302,13 +1279,6 @@
                 <option value="on">on (force offload)</option>
                 <option value="off">off (keep on GPU)</option>
               </select>
-            </label>
-            <label class="flex flex-col gap-1 text-sm col-span-2">
-              <span class="text-txtsecondary flex items-center gap-1">
-                Aliases (comma-separated)
-                {@render hint("Extra names this preset answers to in the /v1/models API.")}
-              </span>
-              <input type="text" value={(sv.aliases ?? []).join(", ")} oninput={setVAliases} class="cfg-input" placeholder="e.g. dall-e-3-hd" />
             </label>
             <label class="flex items-center gap-2 text-sm col-span-2">
               <input type="checkbox" bind:checked={sv.unlisted} />
@@ -1597,13 +1567,6 @@
             </div>
           </label>
 
-          <label class="flex flex-col gap-1 text-sm col-span-2">
-            <span class="text-txtsecondary flex items-center gap-1">
-              Aliases (comma-separated)
-              {@render hint("Extra names this model answers to in the /v1/models API (e.g. map gpt-4 to this model).")}
-            </span>
-            <input type="text" bind:value={aliasesText} class="cfg-input" placeholder="e.g. gpt-4, default" />
-          </label>
         </div>
 
         <!-- Toggles: the on/off knobs, least-tinkered, grouped at the bottom. -->
@@ -1882,13 +1845,6 @@
               {/if}
             </label>
 
-            <label class="flex flex-col gap-1 text-sm col-span-2">
-              <span class="text-txtsecondary flex items-center gap-1">
-                Aliases (comma-separated)
-                {@render hint("Extra names this variant answers to in the /v1/models API.")}
-              </span>
-              <input type="text" value={(sv.aliases ?? []).join(", ")} oninput={setVAliases} class="cfg-input" placeholder="e.g. gpt-4" />
-            </label>
           </div>
 
           <!-- Toggles: same knobs as Default, scoped to this variant. -->

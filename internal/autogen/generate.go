@@ -39,8 +39,7 @@ type profile struct {
 	Target   float64
 	Overhead float64
 	Unlisted bool
-	Ctx      int // 0 = auto-size; >0 forces that ctx via the manual-cap path
-	Aliases  []string
+	Ctx      int  // 0 = auto-size; >0 forces that ctx via the manual-cap path
 	IsLong   bool // ctx-tier rung >= 64k (drops -ub to 512)
 	// Per-variant overrides. Empty/zero => inherit the model-wide override. Set
 	// only by named custom variants (Override.Variants); emitProfile and the
@@ -350,12 +349,10 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	if specHas(modelSpec, "draft-mtp") {
 		specOh = 0.34
 	}
-	var aliases []string
 	var ctxVariants []int
 	override := Override{}
 	if ov != nil {
 		override = *ov
-		aliases = ov.Aliases
 		ctxVariants = ov.CtxVariants
 	}
 
@@ -371,7 +368,6 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		Overhead:       s.VramOverheadGB + specOh,
 		Unlisted:       override.Unlisted,
 		Ctx:            override.Ctx,
-		Aliases:        aliases,
 		CpuOffload:     override.CpuOffload,
 		CtxCheckpoints: override.CtxCheckpoints,
 	}}
@@ -430,7 +426,6 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			Overhead:       s.VramOverheadGB + vSpecOh,
 			Unlisted:       v.Unlisted,
 			Ctx:            v.Ctx,
-			Aliases:        v.Aliases,
 			IsLong:         v.Ctx >= 65536,
 			KvK:            v.KvK,
 			KvV:            v.KvV,
@@ -477,7 +472,6 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 				vp.Overhead = s.VramOverheadGB + vSpecOh + row.MmprojSizeGB
 			}
 			vp.Unlisted = v.Unlisted
-			vp.Aliases = v.Aliases
 			vp.KvK = v.KvK
 			vp.KvV = v.KvV
 			vp.Spec = v.Spec
@@ -1184,12 +1178,6 @@ func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, pro
 		b.WriteString("    capabilities:\n")
 		b.WriteString("      in: [text, image]\n")
 		b.WriteString("      out: [text]\n")
-	}
-	if len(prof.Aliases) > 0 {
-		b.WriteString("    aliases:\n")
-		for _, al := range prof.Aliases {
-			fmt.Fprintf(b, "      - %q\n", al)
-		}
 	}
 }
 

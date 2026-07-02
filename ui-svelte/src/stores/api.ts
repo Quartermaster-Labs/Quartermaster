@@ -258,7 +258,6 @@ export interface ModelVariant {
   dry?: boolean | null;
   ctxCheckpoints?: number | null; // null/undefined => generator default
   unlisted?: boolean;
-  aliases?: string[];
   preserveThinking?: boolean | null; // null/undefined => on (Qwen3.6 default)
   slotCache?: boolean | null; // null/undefined => inherit model-wide; true/false explicit
   // Engine knobs (variant carries the full launch shape; zero/empty => generator default).
@@ -314,7 +313,6 @@ export interface ModelOverride {
   parallel?: number; // 0 => 1
   ub?: number; // 0 => auto (physical batch -ub/-b)
   extraArgs?: string; // extra llama-server flags appended verbatim (passthrough)
-  aliases?: string[];
   unlisted?: boolean;
   skip?: boolean;
   slotCache?: boolean; // opt this model into on-disk slot KV persistence (needs the global toggle on)

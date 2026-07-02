@@ -20,7 +20,6 @@ export interface Model {
   description: string;
   unlisted: boolean;
   peerID: string;
-  aliases?: string[];
   capabilities?: ModelCapabilities;
   // Gguf path shared by a model's variants (ctx tiers, game, judge). Rows with
   // the same family are collapsed into one group. Empty => ungrouped.

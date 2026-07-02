@@ -43,6 +43,6 @@ settings:
 # (emit extra context-size variants), skip (exclude a match). Examples:
 # overrides:
 #   - { match: "*-draft-*", skip: true }
-#   - { match: "*Qwen3-8B-GGUF*", quant: Q6_K, aliases: [qwen3-8b] }
+#   - { match: "*Qwen3-8B-GGUF*", quant: Q6_K }
 #   - { match: "*Gemma-12B-it-GGUF*", quant: Q4_K_M, reasoningFmt: auto, ctxVariants: [4096, 32768, 65536, 131072] }
 overrides: []

@@ -10,8 +10,8 @@
 
   Double-click or run from any PowerShell prompt: the script relaunches itself
   elevated (UAC) if not already admin. With no arguments it uses the bundle
-  layout: exe, config.yaml and quartermaster-generate.yaml sit two levels up
-  from this script (the release-bundle root).
+  layout: exe sits two levels up from this script (the release-bundle root),
+  with config\config.yaml and config\quartermaster-generate.yaml under it.
 
   To remove: run uninstall-service.ps1 in this folder.
 
@@ -19,10 +19,10 @@
   Path to the proxy binary. Defaults to <bundle>\llama-quartermaster-windows-amd64.exe.
 
 .PARAMETER Config
-  Config path (-config). Defaults to <bundle>\config.yaml.
+  Config path (-config). Defaults to <bundle>\config\config.yaml.
 
 .PARAMETER Generate
-  Autogen control file (-generate). Defaults to <bundle>\quartermaster-generate.yaml
+  Autogen control file (-generate). Defaults to <bundle>\config\quartermaster-generate.yaml
   when present; omit/clear to load a static -config only.
 
 .PARAMETER Listen
@@ -86,9 +86,9 @@ $root = Split-Path -Parent (Split-Path -Parent $scriptDir)
 
 # Default paths from the bundle layout when not supplied.
 if (-not $ExePath)  { $ExePath = Join-Path $root 'llama-quartermaster-windows-amd64.exe' }
-if (-not $Config)   { $Config  = Join-Path $root 'config.yaml' }
+if (-not $Config)   { $Config  = Join-Path $root 'config\config.yaml' }
 if (-not $PSBoundParameters.ContainsKey('Generate')) {
-    $g = Join-Path $root 'quartermaster-generate.yaml'
+    $g = Join-Path $root 'config\quartermaster-generate.yaml'
     if (Test-Path -LiteralPath $g) { $Generate = $g }
 }
 
@@ -123,8 +123,11 @@ if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
 & $nssm set $ServiceName AppParameters $arguments
 & $nssm set $ServiceName AppDirectory $workDir
 & $nssm set $ServiceName Start SERVICE_AUTO_START
-& $nssm set $ServiceName AppStdout (Join-Path $workDir 'llama-quartermaster.out.log')
-& $nssm set $ServiceName AppStderr (Join-Path $workDir 'llama-quartermaster.err.log')
+# NSSM won't create the log dir; make it first.
+$logDir = Join-Path $workDir 'logs'
+New-Item -ItemType Directory -Force $logDir | Out-Null
+& $nssm set $ServiceName AppStdout (Join-Path $logDir 'llama-quartermaster.out.log')
+& $nssm set $ServiceName AppStderr (Join-Path $logDir 'llama-quartermaster.err.log')
 # Autogen scans GGUF headers on first start; allow time before SCM gives up.
 & $nssm set $ServiceName AppStopMethodConsole 15000
 

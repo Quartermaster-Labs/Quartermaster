@@ -387,28 +387,36 @@ func TestSlotCache_PrunePreambleLRU(t *testing.T) {
 	}
 }
 
-// Recurrent/hybrid models must skip the partial-prefix paths: a cold load with no
-// exact file does NOT mint a preamble (which would land recurrent state at the
-// wrong position -> "non-consecutive token position" + reprocess loop). It records
-// a plain miss instead.
-func TestSlotCache_RecurrentSkipsPreambleSeed(t *testing.T) {
+// Recurrent/hybrid models skip the slot cache entirely (H1): whole-slot restore
+// reuses 0 tokens on GatedDeltaNet/SSM even warm/same-process (measured), so
+// restoreOnLoad is a full no-op — no preamble mint, no partial seed, and no exact
+// restore either. It records nothing (not even a miss) and writes no files.
+func TestSlotCache_RecurrentSkipsAllRestore(t *testing.T) {
 	dir := t.TempDir()
 	srv := fakeBackend(t, 0, dir)
 	sc := newEvictTestCache(dir, srv.URL)
 	sc.recurrent = func(string) bool { return true }
 
+	// Case A: cold, no exact file — must not mint/seed or record anything.
 	preamble := strings.Repeat("S", seedMinPrefixBytes+100) + "\x00tools\x00[]"
-	sc.markPendingRestore("m", "conv1", preamble) // cold, no exact file
+	sc.markPendingRestore("m", "conv1", preamble)
 	sc.restoreOnLoad("m")
 
-	if sc.counters.PreambleMints != 0 {
-		t.Fatalf("recurrent model must not mint a preamble, got %+v", sc.counters)
+	// Case B: an EXACT saved file exists and is pending — a plain-attn model would
+	// restore-hit it; a recurrent model must still skip (0 reuse).
+	exact := "conv2"
+	if err := os.WriteFile(filepath.Join(dir, fileName("m", exact)), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if sc.counters.Misses != 1 {
-		t.Fatalf("expected 1 miss, got %+v", sc.counters)
+	sc.markPendingRestore("m", exact, preamble)
+	sc.restoreOnLoad("m")
+
+	if (sc.counters != kvCounters{}) {
+		t.Fatalf("recurrent model must record no cache activity, got %+v", sc.counters)
 	}
-	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
-		t.Errorf("no KV files should be written for recurrent seed-skip, got %d", len(entries))
+	// Only the exact file we hand-wrote should exist; nothing minted/saved.
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("recurrent skip must write no new files, got %d entries", len(entries))
 	}
 }
 

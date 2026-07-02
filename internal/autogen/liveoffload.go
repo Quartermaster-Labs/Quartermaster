@@ -30,6 +30,16 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 		return args, nil // no reading -> trust the baked plan
 	}
 
+	// sd-server (image gen) has no -m gguf and no -ngl; its only VRAM knob is
+	// --max-vram, a runtime streaming budget. Pin it to live free VRAM minus a
+	// headroom pad so a generation's peak (VAE decode, Kontext ref tokens) can't
+	// overcommit shared VRAM and hang the desktop. Only ever TIGHTEN below the
+	// baked value (never raise): ample free leaves the safe baked budget alone,
+	// and a hand-pinned vramTargetGB stays respected.
+	if maxVram, idx := argVal(args, "--max-vram"); idx >= 0 {
+		return liveMaxVram(args, idx, maxVram, freeGB, logf), nil
+	}
+
 	model, _ := argVal(args, "-m", "--model")
 	if !strings.HasSuffix(strings.ToLower(model), ".gguf") {
 		return args, nil // not a llama.cpp model load (sd-server, custom cmd, …)
@@ -93,6 +103,40 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 			freeGB, bakedNgl, res.Ngl, bakedNcpu, res.NCpuMoe, res.EstVramGB))
 	}
 	return out, nil
+}
+
+// imageVramHeadroomGB is the VRAM kept free above sd-server's --max-vram budget,
+// so the desktop compositor + un-modeled spikes have room and can't hard-hang
+// Windows. imageVramFloorGB is the smallest budget we'll set: below it sd.cpp
+// just pages nearly everything from RAM (slow but safe), never a load failure.
+const (
+	imageVramHeadroomGB = 1.0
+	imageVramFloorGB    = 0.5
+)
+
+// liveMaxVram rewrites the --max-vram value (at index idx) to freeGB minus the
+// headroom pad, but only when that is TIGHTER than the baked budget. Ample free
+// VRAM, an unparseable value, or a baked budget already under the live ceiling
+// all return args unchanged.
+func liveMaxVram(args []string, idx int, baked string, freeGB float64, logf func(string)) []string {
+	bakedGB, err := strconv.ParseFloat(baked, 64)
+	if err != nil {
+		return args // leave a hand-written non-numeric budget alone
+	}
+	budget := freeGB - imageVramHeadroomGB
+	if budget >= bakedGB {
+		return args // enough headroom at the baked budget; don't loosen it
+	}
+	if budget < imageVramFloorGB {
+		budget = imageVramFloorGB
+	}
+	out := append([]string(nil), args...)
+	out[idx] = strconv.FormatFloat(budget, 'f', 1, 64)
+	if logf != nil {
+		logf(fmt.Sprintf("dynoffload: sd --max-vram %s->%s (free=%.1fGB, %.1fGB headroom)",
+			baked, out[idx], freeGB, imageVramHeadroomGB))
+	}
+	return out
 }
 
 // rewriteOffload returns a copy of args with -ngl set to newNgl and --n-cpu-moe

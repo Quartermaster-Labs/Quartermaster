@@ -458,6 +458,8 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/chats", apiChain.ThenFunc(s.handlePlaygroundChats))
 	mux.Handle("GET /api/prefs", apiChain.ThenFunc(s.handlePlaygroundPrefs))
 	mux.Handle("PUT /api/prefs", apiChain.ThenFunc(s.handlePlaygroundPrefs))
+	mux.Handle("GET /api/imagechats", apiChain.ThenFunc(s.handlePlaygroundImageChats))
+	mux.Handle("PUT /api/imagechats", apiChain.ThenFunc(s.handlePlaygroundImageChats))
 
 	// Per-model config editor (cogwheel) — read launch params + effective
 	// override, save curated overrides, reset to autogen default, add named

@@ -27,7 +27,7 @@ func TestEmitImageModel(t *testing.T) {
 	big := GgufRow{FullPath: `C:\models\flux.gguf`, SizeGB: 6.5}
 	emitImageModel(&b, s, big, &Override{}, "flux-q4", "flux", &emitted)
 	out := b.String()
-	for _, want := range []string{"sd-server", "--diffusion-model C:/models/flux.gguf", "--listen-port ${PORT}", "--max-vram 6.5", "--diffusion-fa", "--vae-tiling", "--offload-to-cpu", "--backend te=cpu", "offload=true", "checkEndpoint: /", "out: [image]", "in: [text]", "ttl: 600"} {
+	for _, want := range []string{"sd-server", "--diffusion-model C:/models/flux.gguf", "--listen-port ${PORT}", "--max-vram 6.5", "--diffusion-fa", "--vae-tiling", "--offload-to-cpu", "--vae-on-cpu", "--backend te=cpu", "offload=true", "checkEndpoint: /", "out: [image]", "in: [text]", "ttl: 600"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("emit missing %q:\n%s", want, out)
 		}
@@ -68,6 +68,10 @@ func TestEmitImageModel(t *testing.T) {
 	if strings.Contains(out2, "--offload-to-cpu") || strings.Contains(out2, "offload=true") {
 		t.Errorf("small model should not offload:\n%s", out2)
 	}
+	// --vae-on-cpu rides with offload only; a resident model keeps VAE on GPU.
+	if strings.Contains(out2, "--vae-on-cpu") {
+		t.Errorf("resident model should not force vae-on-cpu:\n%s", out2)
+	}
 	// vae-tiling is always on (caps the VAE decode VRAM spike), even when resident.
 	if !strings.Contains(out2, "--vae-tiling") {
 		t.Errorf("small model should still vae-tile:\n%s", out2)
@@ -82,10 +86,10 @@ func TestEmitImageModel(t *testing.T) {
 func TestMergeImageVariant(t *testing.T) {
 	base := Override{
 		VaePath: "ae.safetensors", TextEncoderPath: "qwen3.gguf",
-		DefaultSteps: 30, DefaultCfg: 7, VramTargetGB: 6, Aliases: []string{"base"},
+		DefaultSteps: 30, DefaultCfg: 7, VramTargetGB: 6,
 	}
-	// A "fast" preset overrides only steps/cfg + its own aliases.
-	v := VariantSpec{Name: "fast", DefaultSteps: 8, DefaultCfg: 1, Aliases: []string{"turbo"}}
+	// A "fast" preset overrides only steps/cfg.
+	v := VariantSpec{Name: "fast", DefaultSteps: 8, DefaultCfg: 1}
 	got := mergeImageVariant(base, v)
 	if got.VaePath != "ae.safetensors" || got.TextEncoderPath != "qwen3.gguf" {
 		t.Errorf("preset should inherit component paths, got %+v", got)
@@ -95,9 +99,6 @@ func TestMergeImageVariant(t *testing.T) {
 	}
 	if got.VramTargetGB != 6 {
 		t.Errorf("preset should inherit vram budget, got %g", got.VramTargetGB)
-	}
-	if len(got.Aliases) != 1 || got.Aliases[0] != "turbo" {
-		t.Errorf("preset aliases are its own, got %v", got.Aliases)
 	}
 	if got.Variants != nil {
 		t.Errorf("merged override must clear Variants to avoid re-emit")

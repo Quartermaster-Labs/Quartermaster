@@ -97,6 +97,10 @@ func (p *Playground) prefsPath(user string) string {
 	return filepath.Join(p.DataDir, "prefs", user+".json")
 }
 
+func (p *Playground) imageChatsPath(user string) string {
+	return filepath.Join(p.DataDir, "imagechats", user+".json")
+}
+
 // POST /auth/login {username,password}. Unknown username registers; known one
 // must match. On success sets the pg_user cookie.
 func (s *Server) handlePlaygroundLogin(w http.ResponseWriter, r *http.Request) {
@@ -183,6 +187,12 @@ func playgroundUser(r *http.Request) string {
 // rename / delete happen client-side), the server just persists it per user.
 func (s *Server) handlePlaygroundChats(w http.ResponseWriter, r *http.Request) {
 	s.serveUserBlob(w, r, (*Playground).chatsPath, "[]")
+}
+
+// GET/PUT /api/imagechats — the user's saved image threads. Same
+// client-owns-the-blob model as /api/chats, just a separate file.
+func (s *Server) handlePlaygroundImageChats(w http.ResponseWriter, r *http.Request) {
+	s.serveUserBlob(w, r, (*Playground).imageChatsPath, "[]")
 }
 
 // GET/PUT /api/prefs — the user's playground settings (opaque JSON object:

@@ -17,6 +17,13 @@
     newChatId,
     type ChatSession,
   } from "../stores/chatHistory";
+  import {
+    imageSessions,
+    activeImageChatId,
+    generatingImageChatId,
+    newImageChatId,
+    type ImageSession,
+  } from "../stores/imageHistory";
   import { MessageSquare, Image, Volume2, Mic, ListOrdered, Zap, LogOut, Plus, Trash2, Settings, HelpCircle } from "lucide-svelte";
   import ChatInterface from "../components/playground/ChatInterface.svelte";
   import ImageInterface from "../components/playground/ImageInterface.svelte";
@@ -37,12 +44,17 @@
   ];
 
   let onChats = $derived($selectedTabStore === "chat");
+  let onImages = $derived($selectedTabStore === "images");
   let historyOpen = $state(false);
   let sortedSessions = $derived([...$chatSessions].sort((a, b) => b.updatedAt - a.updatedAt));
+  let sortedImageSessions = $derived([...$imageSessions].sort((a, b) => b.updatedAt - a.updatedAt));
+
+  // Chat + Images each have a history flyout; both toggle the same panel.
+  const hasHistory = (id: Tab) => id === "chat" || id === "images";
 
   function clickTab(id: Tab) {
-    if (id === "chat") {
-      historyOpen = onChats ? !historyOpen : true;
+    if (hasHistory(id)) {
+      historyOpen = $selectedTabStore === id ? !historyOpen : true;
     }
     selectedTabStore.set(id);
   }
@@ -60,7 +72,21 @@
     activeChatId.set(s.id);
   }
 
+  // Image threads: same pure-store ops as chats. ImageInterface reacts to
+  // activeImageChatId, showing the matching thread's turns.
+  function newImageChat() {
+    const cur = get(imageSessions).find((s) => s.id === get(activeImageChatId));
+    if (cur && cur.turns.length === 0) {
+      activeImageChatId.set(cur.id);
+      return;
+    }
+    const s: ImageSession = { id: newImageChatId(), title: "New image", turns: [], updatedAt: Date.now() };
+    imageSessions.update((ss) => [s, ...ss]);
+    activeImageChatId.set(s.id);
+  }
+
   let confirmDeleteId = $state<string | null>(null);
+  let confirmDeleteImageId = $state<string | null>(null);
   let showSettings = $state(false);
   let confirmLogout = $state(false);
   let searxngProbe = $state<{ state: "idle" | "testing" | "ok" | "fail"; msg: string }>({ state: "idle", msg: "" });
@@ -93,6 +119,23 @@
       activeChatId.set(s.id);
     }
   }
+
+  function deleteImageChat(id: string) {
+    confirmDeleteImageId = null;
+    const remaining = get(imageSessions).filter((s) => s.id !== id);
+    if (id !== get(activeImageChatId)) {
+      imageSessions.set(remaining);
+      return;
+    }
+    if (remaining.length > 0) {
+      imageSessions.set(remaining);
+      activeImageChatId.set(remaining[0].id);
+    } else {
+      const s: ImageSession = { id: newImageChatId(), title: "New image", turns: [], updatedAt: Date.now() };
+      imageSessions.set([s]);
+      activeImageChatId.set(s.id);
+    }
+  }
 </script>
 
 <div class="h-screen flex bg-background dot-bg">
@@ -111,7 +154,7 @@
       <button
         onclick={() => clickTab(tab.id)}
         title={tab.label}
-        class="flex items-center gap-3 px-2.5 py-2 rounded-md border-l-2 transition-colors {tab.id === 'chat' && historyOpen ? 'group-hover/rail:rounded-b-none' : ''} {active
+        class="flex items-center gap-3 px-2.5 py-2 rounded-md border-l-2 transition-colors {hasHistory(tab.id) && historyOpen ? 'group-hover/rail:rounded-b-none' : ''} {active
           ? 'border-primary text-primary bg-secondary/60'
           : 'border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40'}"
       >
@@ -119,6 +162,9 @@
           <tab.icon size={18} strokeWidth={active ? 2.4 : 1.8} class="shrink-0" />
           {#if tab.id === "chat" && $generatingChatId}
             <span class="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary reason-glow" title="A chat is generating"></span>
+          {/if}
+          {#if tab.id === "images" && $generatingImageChatId}
+            <span class="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary reason-glow" title="An image is generating"></span>
           {/if}
         </span>
         <span class="font-mono text-sm whitespace-nowrap opacity-0 group-hover/rail:opacity-100 transition-opacity">
@@ -159,6 +205,48 @@
                       class="shrink-0 p-0.5 rounded text-txtsecondary opacity-0 group-hover/row:opacity-100 hover:text-red-500 transition-opacity"
                       onclick={(e) => { e.stopPropagation(); confirmDeleteId = session.id; }}
                       title="Delete chat"
+                    >
+                      <Trash2 class="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          </div>
+        </div>
+      {/if}
+
+      {#if tab.id === "images" && onImages}
+        <!-- Image threads, nested under Images. Mirrors the chat history flyout. -->
+        <div class="grid {historyOpen ? 'grid-rows-[0fr] group-hover/rail:grid-rows-[1fr]' : 'grid-rows-[0fr]'} transition-[grid-template-rows] duration-200 ease-out -mt-1">
+          <div class="overflow-hidden">
+            <div class="flex flex-col gap-0.5 px-1.5 pt-2 pb-1.5 w-full rounded-b-lg bg-background">
+              <button
+                class="flex items-center justify-center gap-2 w-full px-2.5 py-1.5 rounded-md bg-primary/15 text-primary text-[0.8125rem] font-medium hover:bg-primary/25 transition-colors"
+                onclick={newImageChat}
+                title="Start a new image thread"
+              >
+                <Plus class="w-3.5 h-3.5 shrink-0" />
+                New image
+              </button>
+              <div class="max-h-[40vh] overflow-y-auto pretty-scroll flex flex-col gap-px mt-0.5">
+                {#each sortedImageSessions as session (session.id)}
+                  {@const sActive = session.id === $activeImageChatId}
+                  <div
+                    class="group/row flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-[0.8125rem] transition-colors {sActive
+                      ? 'text-txtmain bg-white/5'
+                      : 'text-txtsecondary hover:text-txtmain hover:bg-white/[0.03]'}"
+                  >
+                    {#if session.id === $generatingImageChatId}
+                      <span class="w-1.5 h-1.5 shrink-0 rounded-full bg-primary reason-glow" title="Generating…"></span>
+                    {/if}
+                    <button class="flex-1 min-w-0 text-center truncate text-[0.75rem]" onclick={() => activeImageChatId.set(session.id)} title={session.title || "New image"}>
+                      {session.title || "New image"}
+                    </button>
+                    <button
+                      class="shrink-0 p-0.5 rounded text-txtsecondary opacity-0 group-hover/row:opacity-100 hover:text-red-500 transition-opacity"
+                      onclick={(e) => { e.stopPropagation(); confirmDeleteImageId = session.id; }}
+                      title="Delete image thread"
                     >
                       <Trash2 class="w-3.5 h-3.5" />
                     </button>
@@ -234,6 +322,41 @@
         <button
           class="px-3 py-1.5 rounded-md text-sm bg-red-500 text-white hover:opacity-90 transition-opacity"
           onclick={() => confirmDeleteId && deleteChat(confirmDeleteId)}
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Delete image thread confirmation -->
+{#if confirmDeleteImageId}
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+    onclick={() => (confirmDeleteImageId = null)}
+    onkeydown={(e) => e.key === "Escape" && (confirmDeleteImageId = null)}
+    role="button"
+    tabindex="-1"
+  >
+    <div
+      class="w-72 flex flex-col gap-3 p-4 rounded-lg border border-card-border bg-surface shadow-lg"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+      role="dialog"
+      tabindex="-1"
+    >
+      <p class="text-sm text-txtmain">Delete this image thread? This can't be undone.</p>
+      <div class="flex justify-end gap-2">
+        <button
+          class="px-3 py-1.5 rounded-md text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
+          onclick={() => (confirmDeleteImageId = null)}
+        >
+          Cancel
+        </button>
+        <button
+          class="px-3 py-1.5 rounded-md text-sm bg-red-500 text-white hover:opacity-90 transition-opacity"
+          onclick={() => confirmDeleteImageId && deleteImageChat(confirmDeleteImageId)}
         >
           Delete
         </button>

@@ -74,18 +74,18 @@ package-windows: windows
 	# Only the regenerated packaging/ subtree is removed first, to drop files that
 	# were renamed/removed across versions. (No `rm -rf` of the bundle dir itself:
 	# on Windows a file-watcher often holds a handle and it fails "resource busy".)
-	mkdir -p $(PKG_WIN_DIR)
+	mkdir -p $(PKG_WIN_DIR)/config
 	rm -rf $(PKG_WIN_DIR)/packaging
 	cp $(BUILD_DIR)/$(APP_NAME)-windows-amd64.exe $(PKG_WIN_DIR)/
-	cp quartermaster-generate.example.yaml $(PKG_WIN_DIR)/quartermaster-generate.example.yaml
+	cp quartermaster-generate.example.yaml $(PKG_WIN_DIR)/config/quartermaster-generate.example.yaml
 	# Seed the runtime generate file from the example only when none exists yet,
 	# so a re-package never clobbers the user's edited quartermaster-generate.yaml.
-	@if [ -f $(PKG_WIN_DIR)/quartermaster-generate.yaml ]; then \
-		echo "  kept existing quartermaster-generate.yaml"; \
+	@if [ -f $(PKG_WIN_DIR)/config/quartermaster-generate.yaml ]; then \
+		echo "  kept existing config/quartermaster-generate.yaml"; \
 	else \
-		cp quartermaster-generate.example.yaml $(PKG_WIN_DIR)/quartermaster-generate.yaml; \
-		echo "  seeded quartermaster-generate.yaml from example"; fi
-	cp config.example.yaml $(PKG_WIN_DIR)/config.example.yaml
+		cp quartermaster-generate.example.yaml $(PKG_WIN_DIR)/config/quartermaster-generate.yaml; \
+		echo "  seeded config/quartermaster-generate.yaml from example"; fi
+	cp config.example.yaml $(PKG_WIN_DIR)/config/config.example.yaml
 	cp packaging/windows/start.cmd $(PKG_WIN_DIR)/start.cmd
 	cp -r packaging $(PKG_WIN_DIR)/packaging
 	@echo "$(APP_NAME) $(GIT_HASH) built $(BUILD_DATE)" > $(PKG_WIN_DIR)/VERSION.txt
@@ -94,10 +94,12 @@ package-windows: windows
 	cd $(BUILD_DIR) && rm -f llama-quartermaster-windows.zip && \
 		( zip -qr llama-quartermaster-windows.zip llama-quartermaster-windows \
 			-x 'llama-quartermaster-windows/playground-data/*' \
-			-x 'llama-quartermaster-windows/config.yaml' \
+			-x 'llama-quartermaster-windows/logs/*' \
+			-x 'llama-quartermaster-windows/config/config.yaml' \
 		|| tar -a -c -f llama-quartermaster-windows.zip \
 			--exclude='llama-quartermaster-windows/playground-data' \
-			--exclude='llama-quartermaster-windows/config.yaml' \
+			--exclude='llama-quartermaster-windows/logs' \
+			--exclude='llama-quartermaster-windows/config/config.yaml' \
 			llama-quartermaster-windows \
 		|| echo "WARN: no zip/tar found — folder left unarchived at $(PKG_WIN_DIR)" )
 	@echo "Done: $(PKG_WIN_DIR)  (+ $(BUILD_DIR)/llama-quartermaster-windows.zip)"
@@ -117,21 +119,22 @@ package-mac: mac
 _package-nix:
 	@echo "Packaging $(NIX_OS) bundle..."
 	$(eval PKG_NIX_DIR := $(BUILD_DIR)/$(APP_NAME)-$(NIX_OS))
-	mkdir -p $(PKG_NIX_DIR)
+	mkdir -p $(PKG_NIX_DIR)/config
 	rm -rf $(PKG_NIX_DIR)/packaging
 	cp $(BUILD_DIR)/$(NIX_BIN) $(PKG_NIX_DIR)/
-	cp quartermaster-generate.example.yaml $(PKG_NIX_DIR)/quartermaster-generate.example.yaml
-	@if [ -f $(PKG_NIX_DIR)/quartermaster-generate.yaml ]; then \
-		echo "  kept existing quartermaster-generate.yaml"; \
+	cp quartermaster-generate.example.yaml $(PKG_NIX_DIR)/config/quartermaster-generate.example.yaml
+	@if [ -f $(PKG_NIX_DIR)/config/quartermaster-generate.yaml ]; then \
+		echo "  kept existing config/quartermaster-generate.yaml"; \
 	else \
-		cp quartermaster-generate.example.yaml $(PKG_NIX_DIR)/quartermaster-generate.yaml; \
-		echo "  seeded quartermaster-generate.yaml from example"; fi
-	cp config.example.yaml $(PKG_NIX_DIR)/config.example.yaml
+		cp quartermaster-generate.example.yaml $(PKG_NIX_DIR)/config/quartermaster-generate.yaml; \
+		echo "  seeded config/quartermaster-generate.yaml from example"; fi
+	cp config.example.yaml $(PKG_NIX_DIR)/config/config.example.yaml
 	cp -r packaging $(PKG_NIX_DIR)/packaging
 	@echo "$(APP_NAME) $(GIT_HASH) built $(BUILD_DATE)" > $(PKG_NIX_DIR)/VERSION.txt
 	cd $(BUILD_DIR) && rm -f $(APP_NAME)-$(NIX_OS).tar.gz && \
 		tar --exclude='$(APP_NAME)-$(NIX_OS)/playground-data' \
-			--exclude='$(APP_NAME)-$(NIX_OS)/config.yaml' \
+			--exclude='$(APP_NAME)-$(NIX_OS)/logs' \
+			--exclude='$(APP_NAME)-$(NIX_OS)/config/config.yaml' \
 			-czf $(APP_NAME)-$(NIX_OS).tar.gz $(APP_NAME)-$(NIX_OS)
 	@echo "Done: $(PKG_NIX_DIR)  (+ $(BUILD_DIR)/$(APP_NAME)-$(NIX_OS).tar.gz)"
 

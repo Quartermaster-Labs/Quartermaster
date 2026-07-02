@@ -219,7 +219,12 @@ func main() {
 		if !strings.Contains(pgAddr, ":") {
 			pgAddr = ":" + pgAddr
 		}
-		dataDir := filepath.Join(filepath.Dir(configPath), "playground-data")
+		// Anchor user data to the bundle root (exe dir), NOT the config path:
+		// config now lives in a config/ subfolder, and playground-data must not
+		// follow it there. os.Executable failure falls back to CWD ("."), which
+		// start.cmd/NSSM already set to the bundle root.
+		exePath, _ := os.Executable()
+		dataDir := filepath.Join(filepath.Dir(exePath), "playground-data")
 		playground = &server.Playground{Addr: pgAddr, DataDir: dataDir}
 		initialSrv.SetPlayground(playground)
 		listenAddrs = append(listenAddrs, pgAddr)

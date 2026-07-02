@@ -1,9 +1,9 @@
 ; Inno Setup 6 script for llama-quartermaster.
 ;
 ; Per-user install (no UAC) into a writable location, because the app generates
-; config.yaml next to the binary at runtime and edits quartermaster-generate.yaml.
-; Layout is flat — start.cmd resolves siblings via %~dp0, so exe + yaml + start.cmd
-; all live in {app}; fetched backends go under {app}\bin\<component>.
+; config\config.yaml at runtime and edits config\quartermaster-generate.yaml.
+; exe + start.cmd live in {app}; all config yaml lives in {app}\config; start.cmd
+; resolves them via %~dp0; fetched backends go under {app}\bin\<component>.
 ;
 ; Compile (CI passes these via /D):
 ;   iscc /DMyAppVersion=v100 /DStagingDir=<abs> /DOutputDir=<abs> installer.iss
@@ -50,14 +50,14 @@ UninstallDisplayIcon={app}\{#MyAppExe}
 Source: "{#StagingDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; Seed the live generate file from the example, but never clobber a user's edits
 ; on upgrade, and leave it behind on uninstall (it holds their settings).
-Source: "{#StagingDir}\quartermaster-generate.example.yaml"; DestDir: "{app}"; DestName: "quartermaster-generate.yaml"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "{#StagingDir}\config\quartermaster-generate.example.yaml"; DestDir: "{app}\config"; DestName: "quartermaster-generate.yaml"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Tasks]
 Name: autostart; Description: "Start llama-quartermaster automatically when I log in"; GroupDescription: "Startup:"; Flags: unchecked
 
 [Icons]
 Name: "{group}\llama-quartermaster"; Filename: "{app}\start.cmd"; WorkingDir: "{app}"
-Name: "{group}\Edit generate config"; Filename: "notepad.exe"; Parameters: """{app}\quartermaster-generate.yaml"""; WorkingDir: "{app}"
+Name: "{group}\Edit generate config"; Filename: "notepad.exe"; Parameters: """{app}\config\quartermaster-generate.yaml"""; WorkingDir: "{app}"
 Name: "{group}\Uninstall llama-quartermaster"; Filename: "{uninstallexe}"
 ; Logon autostart (per-user Startup folder; console window is the live log).
 Name: "{userstartup}\llama-quartermaster"; Filename: "{app}\start.cmd"; WorkingDir: "{app}"; Tasks: autostart

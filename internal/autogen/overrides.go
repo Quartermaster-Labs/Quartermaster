@@ -166,11 +166,10 @@ type GroupSpec struct {
 // gguf's full path (first match wins; optional Quant scopes the match to one
 // quant of a multi-quant repo). Mirrors the PowerShell $Overrides rows.
 type Override struct {
-	Match        string   `yaml:"match"`
-	Quant        string   `yaml:"quant"`
-	Aliases      []string `yaml:"aliases"`
-	Spec         string   `yaml:"spec"`         // "draft-mtp" | "" (=> ngram-mod); chainable with "+"
-	ReasoningFmt string   `yaml:"reasoningFmt"` // "auto" | "off" | "" (=> auto)
+	Match        string `yaml:"match"`
+	Quant        string `yaml:"quant"`
+	Spec         string `yaml:"spec"`         // "draft-mtp" | "" (=> ngram-mod); chainable with "+"
+	ReasoningFmt string `yaml:"reasoningFmt"` // "auto" | "off" | "" (=> auto)
 	// ReasoningBudget caps thinking tokens (--reasoning-budget N). 0 => omit (no
 	// cap). Inherited by ctx-tier variants; named variants are standalone.
 	ReasoningBudget int    `yaml:"reasoningBudget"`
@@ -299,9 +298,8 @@ type VariantSpec struct {
 	Dry          *bool   `yaml:"dry"`
 	// CtxCheckpoints, when non-nil, emits --ctx-checkpoints N (0 disables). nil =>
 	// inherit the model-wide Override.CtxCheckpoints.
-	CtxCheckpoints *int     `yaml:"ctxCheckpoints"`
-	Unlisted       bool     `yaml:"unlisted"`
-	Aliases        []string `yaml:"aliases"`
+	CtxCheckpoints *int `yaml:"ctxCheckpoints"`
+	Unlisted       bool `yaml:"unlisted"`
 	// PreserveThinking is *bool so a standalone variant defaults preserve-on
 	// (nil => emit, matching the Qwen3.6 reasoning default); false disables it.
 	PreserveThinking *bool `yaml:"preserveThinking"`

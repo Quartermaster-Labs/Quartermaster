@@ -25,6 +25,12 @@ Owns the HTTP layer: it builds the mux, applies cross-cutting middleware (auth, 
 | `ui.go` | Embedded SPA serving from `ui_dist` (`//go:embed`), pre-compressed (br/gzip) file selection, SPA index.html fallback, favicon. |
 | `slotcache.go` | Fork: slot KV-cache persistence — saves a llama-server slot's KV to disk so an expensive conversation survives eviction, and seeds cold/warm loads from a per-agent system+tools **preamble cache**. See "Slot KV cache" below. |
 | `kvcacheapi.go` | `GET /api/kvcache` — the monitoring snapshot (counters, recent events, on-disk files) for the Observe → KV Cache tab. |
+| `promptcanon.go` | Fork: **always-on** prompt-canonicalization middleware (`promptCanon.middleware`) — strips sub-day timestamps from every chat request's system prompt so the stable prefix stays byte-identical turn-to-turn (KV reuse for ANY client/model, not just slotcache participants). Non-lossy (date granularity kept), idempotent. `GET /api/canon` snapshot (counters + event ring) for Observe → Context → Prompt Canonicalization. Distinct from the slotcache's own normalization. |
+| `backendmetrics.go` | Fork: `backendMetricsMonitor` — polls each running llama-server's `/metrics`+`/props`+`/slots` on a 2s ticker for KV-fill / slot-saturation / throughput gauges, caches per-model, emits `BackendMetricsEvent` over SSE. `GET /api/backend-metrics` snapshot. |
+| `websearch.go` | Fork: `GET /api/websearch` — same-origin SearXNG proxy (`/search?format=json`) for the playground web-search tool, dodging CORS. |
+| `playground.go` | Fork: standalone playground app on the `-playground-port` listen address. `Playground` struct + `SetPlayground`/`markPlayground`; plaintext per-user login (`/auth/login`,`/auth/logout`,`/auth/me`, `pg_user` cookie, `users.json`), server-backed chat history + prefs (`/api/chats`, `/api/prefs`), and `/api/mode` (`{playground, playgroundPort}`) so one bundle serves dashboard or playground per port. |
+| `update.go` | Fork: `POST /api/update` — downloads + launches the release installer then graceful shutdown (Windows release builds only); `updater` field + `SetShutdownHook`, status surfaced in `handleAPIVersion`. |
+| `pickfolder_{windows,linux,other}.go` | Fork: native folder-picker dialog (`pickFolder()` — WinForms / zenity / unsupported) backing `POST /api/pick-folder` and `POST /api/settings/root/pick` in the `-generate` config editor. |
 
 ## Important types & functions
 
@@ -36,7 +42,7 @@ Owns the HTTP layer: it builds the mux, applies cross-cutting middleware (auth, 
 - `handleListModels` (`api.go:136`) — OpenAI `/v1/models` with capability rendering and per-listener catalog filtering.
 - `renderCapabilities` (`api.go:45`) — maps `ModelCapConfig` into architecture/capabilities/supported_parameters/context_length fields.
 - `modelStatus` (`apigroup.go:64`) + `groupIndex` (`apigroup.go:41`) — per-model UI payload tagged with group + exposing listeners.
-- `handleAPIEvents` (`apigroup.go:232`) — SSE multiplexer (modelStatus, logData, metrics, inflight, liveTokens).
+- `handleAPIEvents` (`apigroup.go:232`) — SSE multiplexer (modelStatus, logData, metrics, inflight, liveTokens, backendMetrics).
 - `AutogenAdmin` (`configapi.go:17`) + `SetAutogenAdmin` (`configapi.go:26`) — gate and wiring for the `-generate` editor endpoints (regen + hot-reload).
 - `metricsMonitor` (`metrics.go:60`) + `responseBodyCopier` (`metrics.go:416`) — metrics capture core.
 - `liveTokenCounter` (`livemetrics.go:22`) — streaming token estimator.
@@ -64,6 +70,10 @@ API / operations / UI:
 - Config editor (501 without `-generate`): `GET /api/models/{model}/config`, `PUT`/`DELETE /api/models/{model}/override`, `PUT /api/models/{model}/variant`, `GET /api/models/{model}/estimate` (`server.go:257-261`).
 - Global settings editor: `GET`/`PUT`/`DELETE /api/settings` (`server.go:265-267`).
 - API-key manager (local admin, `-generate` only): `GET /api/apikeys`, `POST /api/apikeys`, `DELETE /api/apikeys/{name}` (`configapi_apikeys.go`).
+- Context / observe extras: `GET /api/canon` (prompt-canon snapshot, `promptcanon.go`), `GET /api/backend-metrics` (`backendmetrics.go`), `GET /api/websearch` (SearXNG proxy, `websearch.go`).
+- Self-update: `POST /api/update` (`update.go`, Windows release builds only).
+- Config-editor extras (`-generate` only): `PUT /api/models/{model}/preview` (cmd preview), `PUT /api/settings/slotcache`, `PUT /api/default-variants`, `POST /api/pick-folder`, `POST /api/settings/root/pick` (`pickfolder_*.go`).
+- Playground app (on `-playground-port`): `GET /api/mode`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, `GET`/`PUT /api/chats`, `GET`/`PUT /api/prefs` (`playground.go`).
 
 ## Gotchas / conventions
 
@@ -75,6 +85,11 @@ API / operations / UI:
 - **Access-log skips.** `/wol-health`, `/api/performance`, `/metrics` are excluded from the access log to avoid drowning it in poll traffic. Path is captured before `next` runs because `/upstream` rewrites the URL in place.
 - **Versionless routes.** `/v/...` paths are rewritten to `/...` by `stripVersionPrefix` before forwarding (issue #728).
 - **Family / group tagging (fork).** `modelFamily` keys models by their gguf path so the UI can collapse ctx/game/judge variants; `modelStatus` additionally tags each model with its swap group and the listener addresses exposing it.
+- **OOM / VRAM protection (fork).** Three cooperating pieces surfaced through `/api/performance`:
+  - **Foreign VRAM** — `foreignGPU`/`foreignVram`/`isInferenceProc` (`apigroup.go`) tally GPU memory held by `llama-server`/`sd-server` processes this instance did NOT spawn (via `perf.QueryComputeApps` minus `router.RunningPIDs()`), returned as `"foreign"` (red UI gauge) so the sizer knows VRAM it can't reclaim.
+  - **Idle floor** — `trackSystemVram` (`server.go`) keeps the min idle used-VRAM on the largest GPU while no model runs, returned as `"system_mb"` — the baseline non-inference VRAM the budget must reserve.
+  - **Dynamic offload guard** — `WireDynamicOffload`/`freeVramGB` (`server.go`) is the spawn-time argv rewriter (wired into `autogen.LiveOffloadArgs`) that re-derives GPU/CPU layer placement from live free VRAM so a stale baked plan can't OOM, and **refuses** a spawn that can't fit rather than crashing. See `internal/autogen/CLAUDE.md` "Dynamic offload is a spawn-time guard".
+- **Prompt canonicalization is a separate, always-on middleware (fork).** `promptCanon.middleware` (`promptcanon.go`) runs unconditionally *before* slotcache/upstream, stripping sub-day timestamps from the system prompt for every chat request — independent of whether the model participates in the slot cache. Do not confuse it with the slotcache's own `normalizeTimestamps` (that one is scoped to participating models' anchoring). Stats via `GET /api/canon`.
 
 ## Slot KV cache (fork — `slotcache.go`)
 
@@ -147,16 +162,21 @@ On a load with no exact conversation file, both warm (`onSwitch`) and cold
    the shared preamble, and the un-rewindable layers emit llama.cpp's
    `non-consecutive token position N after M` + full reprocess (0 reuse). A
    preamble cache has no conversation tail so it never over-restores.
-   - **Recurrent/hybrid models skip BOTH partial-prefix paths** (preamble cache +
-     Tier-1 seed) entirely. Even an exactly-length-matched preamble lands a
-     GatedDeltaNet/SSM model's recurrent state at the wrong position (it can only
-     restore at the exact saved length), producing the same `non-consecutive
-     token position` loop with ~0 reuse (upstream llama.cpp #21831). The exact
-     whole-slot **restore-hit** still runs (works on hybrid); only the partial
-     paths are gated. Detection: `newSlotCache`'s `recurrent` predicate reads the
-     model's gguf (`autogen.ReadGgufMetadataCached`, memoized per gguf) and treats
-     `FullAttnInterval > 0` as recurrent. Gate hit → a `miss` event tagged
-     `recurrent-skip-seed`.
+   - **Recurrent/hybrid models skip the slot cache ENTIRELY** (`recurrentSkip`, H1)
+     — save, exact restore, AND partial-prefix seeding. Whole-slot restore reuses
+     **0 tokens** on GatedDeltaNet/SSM (they can only restore recurrent state at its
+     exact saved length; llama-server reprocesses the whole prompt otherwise —
+     upstream llama.cpp #21831). This was **measured, not assumed**: on
+     Qwen3.6-35B-A3B a *warm, same-process, exact* whole-slot restore of a
+     31,993-token prompt reused 0 tokens (`confirm-miss`, prefill 86.1s→85.5s, 1.0×).
+     So save/restore was net-negative here — a multi-GB write under the global lock
+     for zero benefit — and is now a clean no-op. The middleware bails before even
+     reading the body (`promptCanon` already stabilizes the prefix for the native
+     warm reuse that IS the win on these archs). Detection: `newSlotCache`'s
+     `recurrent` predicate reads the model's gguf (`autogen.ReadGgufMetadataCached`,
+     memoized per gguf) and treats `FullAttnInterval > 0` as recurrent. Re-enable
+     (drop the `recurrentSkip` guards in `middleware`/`saveOnEvict`/`restoreOnLoad`)
+     only if #21831 lands upstream.
 
 After any restore, `awaitConfirm[model]` is set; the **next** request's upstream
 `cached_tokens` (via `confirmReuse`, called from the metrics monitor) is the honest
@@ -203,16 +223,17 @@ proof the KV was actually reused (`confirm` / `confirm-miss`), not just loaded.
 - **Hybrid / SWA / recurrent models.** Some families don't use plain full attention:
   sliding-window (Gemma), linear-hybrid (Qwen3.6-35B-A3B = Gated DeltaNet ×3 : Gated
   Attention ×1, only ~16 of 64 layers carry KV; Qwen3-Next), recurrent (Mamba, RWKV).
-  The upstream bugs (llama.cpp #21831, #19794, #21468) are about **on-the-fly prefix-cache
-  reuse** (KV-shifting, partial token re-match) — NOT whole-state restore. Recurrent/linear
-  state must be restored *wholesale at a fixed position*, which is exactly what our
-  whole-slot snapshot does → **exact-conversation restore works fine on these models**
-  (e.g. Qwen3.6, the primary model here, hits normally). The one residual risk is the
-  **preamble-reuse + new-suffix** path (restore a preamble snapshot, append a fresh user
-  turn): on hybrid models the server may invalidate the restored state and full-reprocess
-  → shows as `confirm-miss`, no correctness harm. The KV Cache tab's confirm-hit/miss
-  ratio is the ground truth — trust it over architecture guessing. No model-type detection;
-  add a skip-mint guard only if confirm-miss waste actually shows up for a given model.
+  It was long assumed that whole-slot restore (wholesale at a fixed position) sidesteps
+  the upstream prefix-cache bugs (llama.cpp #21831, #19794, #21468) on these archs. **The
+  probe disproved that for GatedDeltaNet** (Qwen3.6): even an exact, warm, same-process
+  whole-slot restore reuses 0 tokens — the server reprocesses the whole prompt (measured
+  86.1s→85.5s on a 32k prompt, `confirm-miss`). So for `FullAttnInterval>0` models the
+  cache is skipped entirely (`recurrentSkip`, H1 above) rather than doing net-negative
+  work. **SWA (Gemma, `kvConstGB>0` non-recurrent) and plain-attention models are NOT
+  gated** — `recurrent()` is false for them and their whole-slot restore does reuse. The
+  KV Cache tab's confirm-hit/miss ratio is the ground truth — if a new arch shows
+  `confirm-miss` waste, extend `recurrent`/`recurrentSkip` to cover it. Repro:
+  `scripts/kvcache_probe.py switch` (warm) or `swap` (cross-process).
   - **Warm-slot skip (`preamble-warm`).** `onSwitch` does NOT restore the disk preamble
     when the slot already holds that exact preamble live (`occupant.preamble == preamble`,
     a different conversation from the same agent). A disk restore there would clobber valid

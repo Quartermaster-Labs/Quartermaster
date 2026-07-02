@@ -56,18 +56,17 @@ func (s *Server) SetAutogenAdmin(a *AutogenAdmin) { s.autogen = a }
 // VariantSpec field the UI can edit so a save round-trips them instead of
 // dropping file-defined knobs (e.g. judge's ctxCheckpoints:0 / dry:false).
 type variantDTO struct {
-	Name           string   `json:"name"`
-	Ctx            int      `json:"ctx"`
-	VramTargetGB   float64  `json:"vramTargetGB"`
-	KvK            string   `json:"kvK"`
-	KvV            string   `json:"kvV"`
-	Spec           string   `json:"spec"`
-	ReasoningFmt   string   `json:"reasoningFmt"`
-	Ub             int      `json:"ub"`
-	Dry            *bool    `json:"dry"`
-	CtxCheckpoints *int     `json:"ctxCheckpoints"`
-	Unlisted       bool     `json:"unlisted"`
-	Aliases        []string `json:"aliases"`
+	Name           string  `json:"name"`
+	Ctx            int     `json:"ctx"`
+	VramTargetGB   float64 `json:"vramTargetGB"`
+	KvK            string  `json:"kvK"`
+	KvV            string  `json:"kvV"`
+	Spec           string  `json:"spec"`
+	ReasoningFmt   string  `json:"reasoningFmt"`
+	Ub             int     `json:"ub"`
+	Dry            *bool   `json:"dry"`
+	CtxCheckpoints *int    `json:"ctxCheckpoints"`
+	Unlisted       bool    `json:"unlisted"`
 	// PreserveThinking: nil => on (Qwen3.6 default), false => disabled.
 	PreserveThinking *bool `json:"preserveThinking"`
 	// SlotCache: nil => inherit the model-wide flag, true/false => explicit.
@@ -110,27 +109,26 @@ type variantDTO struct {
 // overrideDTO is the curated JSON shape of a per-model override (the cogwheel
 // fields) plus its named variants.
 type overrideDTO struct {
-	Ctx             int      `json:"ctx"`
-	KvK             string   `json:"kvK"`
-	KvV             string   `json:"kvV"`
-	KvInRam         bool     `json:"kvInRam"`
-	VramTargetGB    float64  `json:"vramTargetGB"`
-	CpuOffload      int      `json:"cpuOffload"`
-	Spec            string   `json:"spec"`
-	ReasoningFmt    string   `json:"reasoningFmt"`
-	ReasoningBudget int      `json:"reasoningBudget"`
-	FlashAttn       string   `json:"flashAttn"`
-	Mmap            string   `json:"mmap"`
-	Mlock           bool     `json:"mlock"`
-	Threads         int      `json:"threads"`
-	Parallel        int      `json:"parallel"`
-	Ub              int      `json:"ub"`
-	ExtraArgs       string   `json:"extraArgs"`
-	Aliases         []string `json:"aliases"`
-	Unlisted        bool     `json:"unlisted"`
-	Skip            bool     `json:"skip"`
-	SlotCache       *bool    `json:"slotCache"` // opt this model into on-disk slot KV persistence; nil => default on
-	CtxVariants     []int    `json:"ctxVariants"` // per-model ctx tiers (e.g. 32768, 65536)
+	Ctx             int     `json:"ctx"`
+	KvK             string  `json:"kvK"`
+	KvV             string  `json:"kvV"`
+	KvInRam         bool    `json:"kvInRam"`
+	VramTargetGB    float64 `json:"vramTargetGB"`
+	CpuOffload      int     `json:"cpuOffload"`
+	Spec            string  `json:"spec"`
+	ReasoningFmt    string  `json:"reasoningFmt"`
+	ReasoningBudget int     `json:"reasoningBudget"`
+	FlashAttn       string  `json:"flashAttn"`
+	Mmap            string  `json:"mmap"`
+	Mlock           bool    `json:"mlock"`
+	Threads         int     `json:"threads"`
+	Parallel        int     `json:"parallel"`
+	Ub              int     `json:"ub"`
+	ExtraArgs       string  `json:"extraArgs"`
+	Unlisted        bool    `json:"unlisted"`
+	Skip            bool    `json:"skip"`
+	SlotCache       *bool   `json:"slotCache"`   // opt this model into on-disk slot KV persistence; nil => default on
+	CtxVariants     []int   `json:"ctxVariants"` // per-model ctx tiers (e.g. 32768, 65536)
 	// PreserveThinking keeps prior-turn <think> in chat history (Qwen3.6+); only
 	// meaningful when reasoning is on.
 	PreserveThinking bool `json:"preserveThinking"`
@@ -186,7 +184,7 @@ func variantToDTO(v autogen.VariantSpec) variantDTO {
 		Name: v.Name, Ctx: v.Ctx, VramTargetGB: v.VramTargetGB,
 		KvK: v.KvK, KvV: v.KvV, Spec: v.Spec, ReasoningFmt: v.ReasoningFmt,
 		Ub: v.Ub, Dry: v.Dry, CtxCheckpoints: v.CtxCheckpoints,
-		Unlisted: v.Unlisted, Aliases: v.Aliases, PreserveThinking: v.PreserveThinking, SlotCache: v.SlotCache,
+		Unlisted: v.Unlisted, PreserveThinking: v.PreserveThinking, SlotCache: v.SlotCache,
 		KvInRam: v.KvInRam, CpuOffload: v.CpuOffload,
 		FlashAttn: v.FlashAttn, Mmap: v.Mmap, Mlock: v.Mlock,
 		Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
@@ -209,7 +207,7 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		FlashAttn: o.FlashAttn, Mmap: o.Mmap, Mlock: o.Mlock,
 		Threads: o.Threads, Parallel: o.Parallel, Ub: o.Ub,
 		ExtraArgs: o.ExtraArgs,
-		Aliases:   o.Aliases, Unlisted: o.Unlisted, Skip: o.Skip, SlotCache: o.SlotCache,
+		Unlisted:  o.Unlisted, Skip: o.Skip, SlotCache: o.SlotCache,
 		CtxVariants: o.CtxVariants, CtxCheckpoints: o.CtxCheckpoints,
 		PreserveThinking: o.PreserveThinking,
 		Dry:              o.Dry,
@@ -233,7 +231,7 @@ func toVariantSpec(v variantDTO) autogen.VariantSpec {
 		Name: v.Name, Ctx: v.Ctx, VramTargetGB: v.VramTargetGB,
 		KvK: v.KvK, KvV: v.KvV, Spec: v.Spec, ReasoningFmt: v.ReasoningFmt,
 		Ub: v.Ub, Dry: v.Dry, CtxCheckpoints: v.CtxCheckpoints,
-		Unlisted: v.Unlisted, Aliases: v.Aliases, PreserveThinking: v.PreserveThinking, SlotCache: v.SlotCache,
+		Unlisted: v.Unlisted, PreserveThinking: v.PreserveThinking, SlotCache: v.SlotCache,
 		KvInRam: v.KvInRam, CpuOffload: v.CpuOffload,
 		FlashAttn: v.FlashAttn, Mmap: v.Mmap, Mlock: v.Mlock,
 		Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
@@ -830,7 +828,6 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.Parallel = body.Parallel
 	ov.Ub = body.Ub
 	ov.ExtraArgs = strings.TrimSpace(body.ExtraArgs)
-	ov.Aliases = body.Aliases
 	ov.Unlisted = body.Unlisted
 	ov.Skip = body.Skip
 	ov.SlotCache = body.SlotCache

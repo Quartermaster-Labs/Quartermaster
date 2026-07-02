@@ -160,7 +160,7 @@ function Set-YamlValue {
     [IO.File]::WriteAllLines($File, $out, (New-Object Text.UTF8Encoding $false))
 }
 
-$genYaml = Join-Path $AppDir 'quartermaster-generate.yaml'
+$genYaml = Join-Path (Join-Path $AppDir 'config') 'quartermaster-generate.yaml'
 
 # Models folder (independent of server setup; runs may pass this alone).
 if ($ModelsRoot) {

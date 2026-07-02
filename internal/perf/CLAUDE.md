@@ -16,6 +16,7 @@ Live system and GPU/VRAM monitoring for the serving host. It samples CPU, memory
 | `monitor_darwin.go` | macOS `getGpuStats` (mactop → ioreg fallback) and `readSysStats`. Filename-tagged for darwin. |
 | `monitor_unix.go` | `//go:build unix && !darwin`. Linux/BSD `getGpuStats` (LACT → nvidia-smi → rocm-smi → sysfs) and `readSysStats`; LACT socket protocol and rocm-smi CSV parsing. |
 | `pdh_windows.go` | `//go:build windows`. PDH (`pdh.dll`) "GPU Engine" utilization counter — Task Manager's source, non-stalling. Provides `GpuUtilPct` for the Windows nvidia-smi path; defines `LUID`. |
+| `computeapps.go` | Per-process GPU VRAM attribution (`QueryComputeApps`, `parseComputeApps`, `GpuProc`). No build tag. Runs `nvidia-smi --query-compute-apps` to list which PIDs hold VRAM — the data source for the server's foreign-VRAM / OOM protection. |
 
 ## Important types & functions
 
@@ -26,6 +27,8 @@ Live system and GPU/VRAM monitoring for the serving host. It samples CPU, memory
   - `Start` (`monitor.go:114`) — spins two goroutines: a sys ticker and a GPU reader fed by `getGpuStats`.
   - `Subscribe` (`monitor.go:95`) — returns `(sysChan, gpuChan, unsub)`; non-blocking sends (drops if a listener is slow).
   - `Current` (`monitor.go:186`) — returns a copy of buffered `[]SysStat` and a flattened `[]GpuStat` snapshot history. This is the read path for offload math and the UI.
+- `GpuProc` (`computeapps.go:12`) — one process's VRAM snapshot `{PID, Name, MemMB}`, distinct from the per-GPU `GpuStat`.
+- `QueryComputeApps` (`computeapps.go`) — runs `nvidia-smi --query-compute-apps=pid,used_memory,process_name` and parses (via `parseComputeApps`) the CSV into `[]GpuProc`. Uses NVML **process accounting** (not hw perf counters), so it does NOT stall in-flight generation — the same stall concern the D3DKMT/nvidia-smi note calls out for `utilization.gpu`/`power.draw`. Returns `nil` when `nvidia-smi` is absent (non-NVIDIA / darwin) → "no foreign processes".
 
 > **Windows GPU backend = nvidia-smi (VRAM/temp/fan) + PDH (util).** A full D3DKMT backend (raw gdi32 syscalls) was tried and removed: on Optimus/hybrid laptops the discrete GPU's dedicated VRAM is routed through the WDDM aperture and is invisible to D3DKMT segment queries (it reports phantom shared-memory totals and only the iGPU). nvidia-smi reads NVML directly and reports correct VRAM. Two NVML fields were also dropped from the query: `utilization.gpu` and `power.draw` force the driver to sample hardware perf counters, which preempts an in-flight llama.cpp generation and shows up as token-stream stalls / late requests. Util is recovered from PDH "GPU Engine" counters (WDDM scheduler accounting, no stall); **power is not reported on Windows** (no cheap non-stalling source). If non-NVIDIA Windows GPU support is needed, a fresh backend is required.
 
@@ -51,4 +54,5 @@ When no backend works, `getGpuStats` returns `ErrNoGpuTool` and the monitor logs
 
 - **Real-time offload calc / autogen / router.** Consumers read live VRAM via `Monitor.Current()` (or `Subscribe()`), using `GpuStat.MemTotalMB - MemUsedMB` as free VRAM to compute ngl/n_cpu_moe/KV at spawn time. This package is the single data source for that — see the fork notes in the root `CLAUDE.md`.
 - **Prometheus / UI.** `MetricsHandler()` is mounted by the server for `/metrics`; the Svelte UI consumes the same `GpuStat`/`SysStat` JSON shapes.
+- **Foreign-VRAM / OOM protection.** `QueryComputeApps` is the data source for `internal/server`'s foreign-VRAM tally: `apigroup.go` `foreignGPU()` calls it, subtracts the router's own `RunningPIDs()`, and flags stray `llama-server`/`sd-server` VRAM (red UI gauge) so the offload sizer avoids OOM. The consuming policy lives in the server, not here.
 - **Config.** Driven by `config.PerformanceConfig` (`Every`, `Disabled`); `UpdateConfig` restarts the monitor on change.

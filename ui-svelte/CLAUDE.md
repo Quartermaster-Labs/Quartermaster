@@ -2,7 +2,10 @@
 
 ## Purpose
 
-`ui-svelte` is the single-page web dashboard for llama-quartermaster. It is served by the Go server under the `/ui/` path and gives an operator live visibility and control over the model swapper: model catalog and loading, per-model config tuning, live activity/metrics/logs, GPU memory, and an interactive model playground (chat, images, speech, transcription, rerank, load testing).
+`ui-svelte` is the single-page web app for llama-quartermaster, served by the Go server under `/ui/`. **One bundle, port-gated into two apps** (`App.svelte` `onMount` fetches `GET /api/mode`):
+
+- **Operator dashboard** (main listen port): model catalog and loading, per-model config tuning, live activity/metrics/logs, GPU memory, API-key management.
+- **Playground** (separate `-playground-port`): a login-gated, per-user interactive app (chat, images, speech, transcription, rerank, load testing) with **server-backed** chat history + prefs. Rendered by `PlaygroundApp`, NOT mounted inside the dashboard.
 
 ## Tech stack & build
 
@@ -28,7 +31,10 @@ From the repo root, **`make test-ui`** runs `npm ci && npm run check && npm test
 
 | Dir / file | Role |
 |---|---|
-| `src/main.ts`, `src/App.svelte` | Entry point and root layout (Sidebar + StatusRail + Router + always-mounted Playground). |
+| `src/main.ts`, `src/App.svelte` | Entry point + root. `App.svelte` fetches `/api/mode` and renders either the dashboard shell (Sidebar + StatusRail + Router) **or** the standalone `PlaygroundApp` when serving on the playground port. |
+| `src/routes/PlaygroundApp.svelte` | Playground root: gates the whole app behind login (`playgroundAuth` `me`), hydrates server-backed chats/prefs, then mounts `PlaygroundShell`. |
+| `src/routes/PlaygroundShell.svelte` | Playground shell: icon side-rail (Chat / Images / Speech / Transcription / Rerank / Load Test, hover-expand), chat-history flyout toggle, logout + username. |
+| `src/routes/Login.svelte` | Playground username/password login screen (plaintext, registers unknown users). |
 | `src/routes/` | Top-level pages mounted by the router. |
 | `src/components/` | Reusable UI components (panels, modals, gauges, charts, tooltips). |
 | `src/components/playground/` | The model playground's per-mode interfaces and shared playground widgets. |
@@ -42,23 +48,29 @@ From the repo root, **`make test-ui`** runs `npm ci && npm run check && npm test
 Routing is hash-based (`svelte-spa-router`). The router table lives in `App.svelte`:
 
 - **`/` — Dashboard** (`routes/Dashboard.svelte`): landing page; model overview, quick-load picker, GPU-memory / settings card.
-- **`/models` — Models** (`routes/Models.svelte`): full model catalog, sectioned by swap group / listener; load/unload and the per-model config editor (cogwheel → `ModelConfigModal`).
-- **`/observe`, `/logs`, `/activity`, `/performance` — Observe** (`routes/Observe.svelte`): a single tabbed page with **Activity**, **Logs**, and **Performance** tabs (rendered from `Activity.svelte`, `LogViewer.svelte`, `Performance.svelte`). The legacy `/logs`, `/activity`, `/performance` deep-links just preselect the matching tab.
-- **`/test` — Playground** (`routes/Playground.svelte`): the interactive model playground. It is **always mounted** (kept alive via CSS `hidden` toggling, not the router) so streaming state and attachments survive navigation. Tabs: Chat, Images, Speech, Transcription (audio), Rerank, Load Test (concurrency).
+- **`/models`, `/models/:category` — Models** (`routes/Models.svelte`): full model catalog, sectioned by swap group / listener; load/unload and the per-model config editor (cogwheel → `ModelConfigModal`). `:category` filters via `modelUtils` categories (drives the sidebar Models sub-menu).
+- **`/observe`, `/logs`, `/activity`, `/performance` — Observe** (`routes/Observe.svelte`): a single tabbed page with **Activity**, **Logs**, **Performance**, and **Context** tabs. Context (`Context.svelte`) is itself sub-tabbed: **KV Cache** (`KvCache.svelte`) + **Prompt Canonicalization** (`Canon.svelte`). Legacy `/logs`, `/activity`, `/performance` deep-links preselect the matching tab.
+- **`/api-keys` — API Keys** (`routes/ApiKeys.svelte`): create / scope / reveal / delete inference API keys (only when the server runs with `-generate`).
+- **`/test` — Playground stub** (`routes/PlaygroundStub.svelte`): the dashboard no longer hosts the playground; this page links out to the standalone playground app on `playgroundPort`. The real playground is `PlaygroundApp`/`PlaygroundShell` (served on the playground port, see Directory layout).
 
 ## State / API
 
 Backend communication is centralized in `src/stores/api.ts`, with shared types in `src/lib/types.ts`.
 
-- **Live updates use SSE.** `enableAPIEvents()` opens an `EventSource` on `/api/events` with auto-reconnect (exponential backoff). The envelope `type` field is dispatched to writable stores: `modelStatus` → `models`, `logData` → `proxyLogs`/`upstreamLogs`, `metrics` → `metrics`, `inflight` → `inFlightRequests`, `liveTokens` → `liveTokens` (live generation progress). Connection state is tracked in `connectionState` (drives the title-bar status dot).
-- **Polling** is used for performance history: `startPerfPolling()` (`stores/perf.ts`) periodically calls `fetchPerformance()` against `/api/performance`.
-- **Request/response (REST):** model load/unload go to `/upstream/<model>/` and `/api/models/unload[...]`; the config editor uses `/api/models/<id>/config`, `/override`, `/variant`, and a live `/estimate` load-plan preview; global tuning uses `/api/settings`. Playground mode interfaces call the OpenAI-compatible / SD endpoints through their own `lib/*Api.ts` modules (`chatApi`, `imageApi`, `audioApi`, `speechApi`, `rerankApi`, `sdApi`).
-- **Persistence:** `stores/persistent.ts` provides `persistentStore` (localStorage-backed) used for UI prefs and tallies (e.g. per-model `loadCounts`, selected playground tab).
+- **Live updates use SSE.** `enableAPIEvents()` opens an `EventSource` on `/api/events` with auto-reconnect (exponential backoff). The envelope `type` field is dispatched to writable stores: `modelStatus` → `models`, `logData` → `proxyLogs`/`upstreamLogs`, `metrics` → `metrics`, `inflight` → `inFlightRequests`, `liveTokens` → `liveTokens`, `backendMetrics` → backend KV-fill/throughput gauges. Connection state is tracked in `connectionState` (drives the title-bar status dot).
+- **Polling** is used for performance history: `startPerfPolling()` (`stores/perf.ts`) periodically calls `fetchPerformance()` against `/api/performance`; `stores/vram.ts` derives a `vramBreakdown` (System / Weights / Draft / KV / Checkpoints / CUDA / Foreign) via `estimateSegments`.
+- **Request/response (REST):** model load/unload go to `/upstream/<model>/` and `/api/models/unload[...]`; the config editor uses `/api/models/<id>/config`, `/override`, `/variant`, `/preview`, and a live `/estimate` load-plan preview; global tuning uses `/api/settings`. Observe fetches `/api/kvcache` (`fetchKvCache`) + `/api/canon` (`fetchCanon`). API-key page uses `listApiKeys`/`upsertApiKey`/`deleteApiKey`. Sidebar self-update uses `versionInfo` + `/api/update` (`runUpdate`). Playground mode interfaces call the OpenAI-compatible / SD endpoints through their own `lib/*Api.ts` modules (`chatApi`, `imageApi`, `audioApi`, `speechApi`, `rerankApi`, `sdApi`).
+- **Persistence:** `stores/persistent.ts` (`persistentStore`, localStorage) for dashboard prefs/tallies. Playground state is **server-backed**: `stores/chatHistory.ts` (`chatSessions`/`activeChatId`/`generatingChatId`, `loadChats` + debounced PUT `/api/chats`), `stores/prefs.ts` (`userPref()` bound to `/api/prefs`), `stores/playgroundAuth.ts` (`me`/`login`/`logout`/`checkMe` via `/auth/*`, `playgroundPort`). `stores/observe.ts` holds Observe tab/window state; `stores/playgroundActivity.ts` drives the sidebar activity dot.
 
 ## Conventions
 
 - **Svelte 5 runes** throughout — `$state`, `$derived`, `$effect`, `$props`; stores are read with the `$store` auto-subscription. Components are mounted with `mount()` (`main.ts`), not the legacy constructor API.
 - **Component organization:** generic widgets live in `src/components/`; the playground's mode-specific interfaces and helpers are grouped under `src/components/playground/`. Pages live in `src/routes/` and stay thin, delegating to components and stores.
-- **Fork-specific UI** (added on top of upstream llama-quartermaster): the per-model config editor (`ModelConfigModal.svelte`, dynamic ctx / VRAM-target / variant tuning), live metrics & activity (`ActivityStats.svelte`, `StatusRail.svelte`, `InferenceFeedback.svelte`, live-token readout), VRAM gauge, and the multi-mode model playground.
+- **Fork-specific UI** (added on top of upstream llama-quartermaster): the per-model config editor (`ModelConfigModal.svelte`, dynamic ctx / VRAM-target / variant tuning), live metrics & activity (`ActivityStats.svelte`, `StatusRail.svelte`, `InferenceFeedback.svelte`, live-token readout), VRAM gauge, request/response inspector (`CaptureDialog.svelte`), API-key page, and the standalone multi-mode playground.
+- **Playground feature components** (`src/components/playground/`):
+  - `ChatInterface.svelte` — chat with **vision** (paperclip image attach → `ContentPart`/`getImageUrls`), **Rewrite mode** (`sendRewrite` + side-by-side `RewriteDiff.svelte` via `lib/wordDiff.ts`), **web search** (SearXNG tool-calling, `lib/webSearch.ts` → `/api/websearch`), a live KV context-usage bar, and **auto-compaction** (`lib/chatCompact.ts`: `summarizeConversation`/`generateTitle`, `COMPACT_AT`/`KEEP_RECENT`).
+  - `ImageInterface.svelte` — full SD image-gen UI: txt2img/img2img (`ImageGenMode`), denoise/upscale, hires (`enable_hr`), reference images (`extra_images`, Kontext), per-model defaults, style presets, seed modes.
+  - `MaskEditor.svelte` — canvas brush painter producing a PNG mask data URL for sd-server inpainting.
+- **Playground libs** (`src/lib/`): `webSearch.ts` (SearXNG tool), `chatCompact.ts` (auto-compaction + title gen), `wordDiff.ts` (rewrite diff), `reasoning.ts` (Harmony/reasoning parsing), `inferenceAuth.ts` (`refreshInferenceKey`/`inferenceHeaders` — auto-attach API key to playground inference), `modelUtils.ts` (`modelCategory`/`MODEL_CATEGORIES`, drives Models sub-menu + key scoping).
 - **Styling:** Tailwind utility classes plus theme tokens and shared classes defined in `src/index.css` (dark/light via the `data-theme` attribute set in `App.svelte`). The `scrollFade` action (`lib/scrollFade.ts`) backs `.scroll-fade-y` edge-fade containers.
 - **Tests:** pure-logic helpers in `src/lib/` carry colocated `*.test.ts` Vitest specs; keep new utilities testable and add specs there.

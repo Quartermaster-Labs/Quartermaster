@@ -147,6 +147,7 @@
   let inputEl: HTMLTextAreaElement | undefined = $state();
   // Composer only grows while focused; blur collapses it back to normal size.
   let inputFocused = $state(false);
+  let rewriteFocused = $state(false);
   let rewriteEl: HTMLTextAreaElement | undefined = $state();
   let showSettings = $state(false);
   let attachedImages = $state<string[]>([]);
@@ -306,11 +307,17 @@
     }
   });
 
-  // Auto-grow the rewrite-instruction bar the same way (rewrite mode only).
+  // Auto-grow the rewrite-instruction bar the same way (rewrite mode only),
+  // collapsing back to one row when the user clicks away.
   $effect(() => {
     $rewriteInstructionStore;
+    rewriteFocused;
     $selectedTabStore;
     if (rewriteEl) {
+      if (!rewriteFocused) {
+        rewriteEl.style.height = "1.5rem";
+        return;
+      }
       rewriteEl.style.height = "auto";
       if (rewriteEl.scrollHeight > 0) {
         rewriteEl.style.height = Math.min(rewriteEl.scrollHeight, 240) + "px";
@@ -1205,6 +1212,8 @@
               rows="1"
               placeholder="How should I help? e.g. make it more concise and formal"
               bind:value={$rewriteInstructionStore}
+              onfocus={() => (rewriteFocused = true)}
+              onblur={() => (rewriteFocused = false)}
               onkeydown={handleKeyDown}
             ></textarea>
           </div>

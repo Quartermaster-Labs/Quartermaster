@@ -83,7 +83,7 @@ func TestLiveOffload_NoGpuReadingIsNoop(t *testing.T) {
 }
 
 func TestLiveOffload_NonLlamaCmdIsNoop(t *testing.T) {
-	// No .gguf model -> left alone (sd-server / custom cmd).
+	// A custom cmd with no --max-vram and no .gguf model -> left alone.
 	args := []string{"--model", "/models/flux.safetensors", "-ngl", "10"}
 	out, err := LiveOffloadArgs(Settings{}, args, 4, true, nil)
 	if err != nil {
@@ -91,5 +91,39 @@ func TestLiveOffload_NonLlamaCmdIsNoop(t *testing.T) {
 	}
 	if !reflect.DeepEqual(out, args) {
 		t.Fatalf("expected unchanged, got %v", out)
+	}
+}
+
+func TestLiveOffload_SdMaxVram(t *testing.T) {
+	base := []string{"sd-server", "--diffusion-model", "flux.gguf", "--max-vram", "6.5", "--vae-tiling"}
+
+	// Tight live VRAM: 5.5 free - 1.0 headroom = 4.5 < 6.5 baked -> tighten.
+	out, err := LiveOffloadArgs(Settings{}, base, 5.5, true, nil)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if v, _ := argVal(out, "--max-vram"); v != "4.5" {
+		t.Errorf("--max-vram = %q, want 4.5", v)
+	}
+
+	// Ample live VRAM: 8.0 - 1.0 = 7.0 >= 6.5 baked -> leave the baked budget.
+	out, err = LiveOffloadArgs(Settings{}, base, 8.0, true, nil)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if !reflect.DeepEqual(out, base) {
+		t.Errorf("ample VRAM should not loosen baked budget, got %v", out)
+	}
+
+	// Barely any free VRAM: clamps to the floor, never negative, never refused.
+	out, _ = LiveOffloadArgs(Settings{}, base, 1.2, true, nil)
+	if v, _ := argVal(out, "--max-vram"); v != "0.5" {
+		t.Errorf("--max-vram = %q, want floor 0.5", v)
+	}
+
+	// No GPU reading -> baked plan trusted.
+	out, _ = LiveOffloadArgs(Settings{}, base, 0, false, nil)
+	if !reflect.DeepEqual(out, base) {
+		t.Errorf("no reading should be a noop, got %v", out)
 	}
 }
