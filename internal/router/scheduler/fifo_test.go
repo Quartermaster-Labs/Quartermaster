@@ -230,6 +230,40 @@ func TestFIFO_DoesNotAbortWantedSwap(t *testing.T) {
 	}
 }
 
+// While an image (sd-server) model is rendering, no other model may spawn — the
+// render's peak VRAM makes a co-resident load unsafe. The guard fires even when
+// the eviction policy would evict the image model (so it must not be relied on
+// alone): the text request is deferred, then proceeds once the render finishes.
+func TestFIFO_ImageRenderBlocksOtherSpawns(t *testing.T) {
+	eff := newFakeEffects()
+	eff.states["img"] = process.StateReady
+	eff.states["txt"] = process.StateStopped
+	planner := &stubPlanner{evict: map[string][]string{"txt": {"img"}}}
+	models := map[string]config.ModelConfig{
+		"img": {Capabilities: config.ModelCapConfig{Out: []string{"image"}}},
+		"txt": {Capabilities: config.ModelCapConfig{Out: []string{"text"}}},
+	}
+	s := NewFIFO("test", logmon.NewWriter(io.Discard), planner, config.FifoConfig{}, models, eff)
+
+	// img starts rendering (fast path — already ready — so it goes in-flight).
+	s.OnRequest(req("img"))
+	if got := eff.served("img"); got != 1 {
+		t.Fatalf("served(img)=%d want 1", got)
+	}
+
+	// While img renders, a text request must NOT spawn.
+	s.OnRequest(reqCh("txt"))
+	if got := eff.startsFor("txt"); got != 0 {
+		t.Fatalf("startsFor(txt)=%d want 0 (blocked while image renders)", got)
+	}
+
+	// Render completes; the deferred text request now proceeds.
+	s.OnServeDone(ServeDoneEvent{ModelID: "img"})
+	if got := eff.startsFor("txt"); got != 1 {
+		t.Fatalf("startsFor(txt)=%d want 1 (proceeds after image render done)", got)
+	}
+}
+
 func TestFIFO_GrantSetsPriorityMetadata(t *testing.T) {
 	eff := newFakeEffects()
 	eff.states["a"] = process.StateReady

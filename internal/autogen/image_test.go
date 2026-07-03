@@ -21,16 +21,21 @@ func TestIsImageArch(t *testing.T) {
 func TestEmitImageModel(t *testing.T) {
 	var b strings.Builder
 	var emitted []string
-	s := Settings{SdServerExe: "sd-server", TtlSec: 600, TargetVramGB: 7, VramOverheadGB: 0.5, Threads: 7}
+	pool := EncoderSet{FluxVae: "ae.safetensors", ClipL: "clip_l.safetensors", T5: "t5xxl.gguf", ZimageVae: "zae.safetensors", QwenLlm: "qwen3.gguf"}
+	s := Settings{SdServerExe: "sd-server", TtlSec: 600, TargetVramGB: 7, VramOverheadGB: 0.5, Threads: 7, Encoders: pool}
 
-	// Big model (6.5GB + 1.5 compute > 6.5 budget) → offload path.
+	// Big model (6.5GB + 1.5 compute > 6.5 budget) → offload path. No per-model
+	// override: VAE + CLIP-L + T5 must be auto-attached from the arch (flux) pool.
 	big := GgufRow{FullPath: `C:\models\flux.gguf`, SizeGB: 6.5}
 	emitImageModel(&b, s, big, &Override{}, "flux-q4", "flux", &emitted)
 	out := b.String()
-	for _, want := range []string{"sd-server", "--diffusion-model C:/models/flux.gguf", "--listen-port ${PORT}", "--max-vram 6.5", "--diffusion-fa", "--vae-tiling", "--offload-to-cpu", "--vae-on-cpu", "--backend te=cpu", "offload=true", "checkEndpoint: /", "out: [image]", "in: [text]", "ttl: 600"} {
+	for _, want := range []string{"sd-server", "--diffusion-model C:/models/flux.gguf", "--listen-port ${PORT}", "--max-vram 6.5", "--vae ae.safetensors", "--clip_l clip_l.safetensors", "--t5xxl t5xxl.gguf", "--diffusion-fa", "--vae-tiling", "--offload-to-cpu", "--vae-on-cpu", "--backend te=cpu", "offload=true", "checkEndpoint: /", "out: [image]", "in: [text]", "ttl: 600"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("emit missing %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "WARNING") {
+		t.Errorf("complete pool should not warn:\n%s", out)
 	}
 	if len(emitted) != 1 || emitted[0] != "flux-q4" {
 		t.Errorf("emitted = %v, want [flux-q4]", emitted)
@@ -80,6 +85,36 @@ func TestEmitImageModel(t *testing.T) {
 	// diffusion weights fit resident.
 	if !strings.Contains(out2, "--backend te=cpu") {
 		t.Errorf("small model should still set te=cpu:\n%s", out2)
+	}
+}
+
+func TestResolveComponents(t *testing.T) {
+	pool := EncoderSet{FluxVae: "ae", ClipL: "cl", ClipG: "cg", T5: "t5", ZimageVae: "zae", QwenLlm: "qwen"}
+
+	// flux: vae + clip_l + t5, nothing missing.
+	if c, m := resolveComponents(pool, nil, "flux", "flux1-schnell"); c.vae != "ae" || c.clipL != "cl" || c.t5 != "t5" || c.clipG != "" || c.llm != "" || len(m) != 0 {
+		t.Errorf("flux: got %+v missing=%v", c, m)
+	}
+	// chroma (arch flux, name-detected): vae + t5, NO clip_l.
+	if c, m := resolveComponents(pool, nil, "flux", "Chroma1-HD-Q5_K_M"); c.vae != "ae" || c.t5 != "t5" || c.clipL != "" || len(m) != 0 {
+		t.Errorf("chroma should be vae+t5 only: got %+v missing=%v", c, m)
+	}
+	// z-image (arch lumina2): vae + llm.
+	if c, m := resolveComponents(pool, nil, "lumina2", "Z-Image-Turbo"); c.vae != "zae" || c.llm != "qwen" || c.clipL != "" || len(m) != 0 {
+		t.Errorf("z-image should be vae+llm: got %+v missing=%v", c, m)
+	}
+	// sdxl full checkpoint: no SdxlVae declared → nothing attached, nothing missing.
+	if c, m := resolveComponents(pool, nil, "sdxl", "animagineXLV31"); c.vae != "" || len(m) != 0 {
+		t.Errorf("sdxl vae is optional: got %+v missing=%v", c, m)
+	}
+	// empty pool: flux reports every required role missing.
+	if _, m := resolveComponents(EncoderSet{}, nil, "flux", "flux1-fill-dev"); len(m) != 3 {
+		t.Errorf("empty-pool flux should miss 3 roles, got %v", m)
+	}
+	// override supplies what the pool lacks → wins and clears the missing role.
+	ov := &Override{VaePath: "ov-ae", ClipLPath: "ov-cl", T5Path: "ov-t5"}
+	if c, m := resolveComponents(EncoderSet{}, ov, "flux", "flux1-fill-dev"); c.vae != "ov-ae" || c.clipL != "ov-cl" || c.t5 != "ov-t5" || len(m) != 0 {
+		t.Errorf("override should win and clear missing: got %+v missing=%v", c, m)
 	}
 }
 

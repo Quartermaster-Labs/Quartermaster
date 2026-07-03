@@ -94,10 +94,12 @@ package-windows: windows
 	cd $(BUILD_DIR) && rm -f llama-quartermaster-windows.zip && \
 		( zip -qr llama-quartermaster-windows.zip llama-quartermaster-windows \
 			-x 'llama-quartermaster-windows/playground-data/*' \
+			-x 'llama-quartermaster-windows/.cache/*' \
 			-x 'llama-quartermaster-windows/logs/*' \
 			-x 'llama-quartermaster-windows/config/config.yaml' \
 		|| tar -a -c -f llama-quartermaster-windows.zip \
 			--exclude='llama-quartermaster-windows/playground-data' \
+			--exclude='llama-quartermaster-windows/.cache' \
 			--exclude='llama-quartermaster-windows/logs' \
 			--exclude='llama-quartermaster-windows/config/config.yaml' \
 			llama-quartermaster-windows \

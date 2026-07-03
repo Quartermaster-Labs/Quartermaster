@@ -439,17 +439,23 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	}
 
 	// Vision twin: a model shipping a sibling mmproj projector gets an extra
-	// "-vision" profile that loads it (--mmproj) and declares image input. Kept
-	// unlisted (reached via the playground's attach toggle, not the model picker)
-	// and charged the projector's file size as flat VRAM overhead.
+	// "-vision" profile that loads it (--mmproj) and declares image input. Listed
+	// by default (a distinct served id, scopeable by API keys); the config editor's
+	// reserved "vision" variant can still mark it unlisted. Charged the projector's
+	// file size as flat VRAM overhead.
 	if row.MmprojPath != "" {
 		vp := profile{
 			Name:     fmt.Sprintf("%s-vision", name),
 			Target:   soloTarget,
-			Overhead: s.VramOverheadGB + specOh + row.MmprojSizeGB,
-			Unlisted: true,
+			Overhead: s.VramOverheadGB + specOh + mmprojVramGB(row.MmprojSizeGB, s),
 			Ctx:      override.Ctx,
 			Vision:   true,
+		}
+		// Image chats need a small text window; without an explicit override the
+		// twin would inherit the sizer's maxed 32k ctx (~2.5 GB KV, wasted for
+		// vision). Default it small. A model or vision-variant Ctx still wins below.
+		if vp.Ctx == 0 {
+			vp.Ctx = s.VisionCtx
 		}
 		// A reserved "vision" variant (from the config editor) tunes the twin in
 		// place; blank fields keep the auto defaults, so an untouched seed emits
@@ -469,7 +475,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 				if specHas(v.Spec, "draft-mtp") {
 					vSpecOh = 0.34
 				}
-				vp.Overhead = s.VramOverheadGB + vSpecOh + row.MmprojSizeGB
+				vp.Overhead = s.VramOverheadGB + vSpecOh + mmprojVramGB(row.MmprojSizeGB, s)
 			}
 			vp.Unlisted = v.Unlisted
 			vp.KvK = v.KvK
@@ -913,6 +919,17 @@ func computeBufferGB(meta Metadata, ub int, factor float64) float64 {
 	return computeCudaCtxGB + factor*(logits+acts)/gib
 }
 
+// mmprojVramGB is a "-vision" twin's total projector VRAM footprint: the
+// projector gguf's own weights (fileSizeGB — resident on GPU by default) plus
+// s.VisionOverheadGB for the CLIP compute buffer that image processing allocates.
+// Charged at BOTH generate time (baked plan) and spawn time (LiveOffloadArgs via
+// EstimateInput.MmprojGB), so the live guard sizes the twin against the same
+// footprint the config assumed. Without the reserve, the projector's compute
+// buffer is invisible to the sizer and the vision load leaves too little free VRAM.
+func mmprojVramGB(fileSizeGB float64, s Settings) float64 {
+	return fileSizeGB + s.VisionOverheadGB
+}
+
 // effectiveUb resolves the physical batch (-ub/-b) for a profile, matching the
 // flag emitted by buildCmdLines: 1024 default, 512 for long ctx, overridden by
 // ov.Ub then the profile's own Ub.
@@ -1105,7 +1122,7 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string, error) {
 	// Diffusion models render an sd-server command, not a llama-server one.
 	if isImageArch(meta.Architecture) {
-		lines, _, _ := imageCmdLines(s, row, &ov)
+		lines, _, _, _ := imageCmdLines(s, row, &ov, meta.Architecture, row.FullPath)
 		return strings.Join(lines, " "), nil
 	}
 	// Embedders render a minimal --embeddings command (no KV/spec sizing).

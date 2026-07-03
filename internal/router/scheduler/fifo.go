@@ -46,6 +46,12 @@ type FIFO struct {
 	active   map[string]*activeSwap
 	inFlight map[string]int
 	queued   []HandlerReq
+
+	// imageModels is the set of model IDs whose Capabilities.Out includes
+	// "image" (sd-server diffusion models). Their render peak VRAM (sampler +
+	// VAE decode) runs above the steady-state --max-vram cap, so no other model
+	// may spawn alongside an in-flight render — see OnRequest step (3b).
+	imageModels map[string]bool
 }
 
 // NewFIFO builds a FIFO scheduler. Per-model concurrency limits are derived
@@ -53,23 +59,31 @@ type FIFO struct {
 // when set to a value greater than zero.
 func NewFIFO(name string, logger *logmon.Monitor, planner Swapper, cfg config.FifoConfig, models map[string]config.ModelConfig, eff Effects) *FIFO {
 	limits := make(map[string]int, len(models))
+	imageModels := make(map[string]bool)
 	for id, mc := range models {
 		limit := defaultConcurrencyLimit
 		if mc.ConcurrencyLimit > 0 {
 			limit = mc.ConcurrencyLimit
 		}
 		limits[id] = limit
+		for _, out := range mc.Capabilities.Out {
+			if out == "image" {
+				imageModels[id] = true
+				break
+			}
+		}
 	}
 
 	return &FIFO{
-		name:     name,
-		logger:   logger,
-		planner:  planner,
-		cfg:      cfg,
-		effects:  eff,
-		limits:   limits,
-		active:   make(map[string]*activeSwap),
-		inFlight: make(map[string]int),
+		name:        name,
+		logger:      logger,
+		planner:     planner,
+		cfg:         cfg,
+		effects:     eff,
+		limits:      limits,
+		active:      make(map[string]*activeSwap),
+		inFlight:    make(map[string]int),
+		imageModels: imageModels,
 	}
 }
 
@@ -115,6 +129,20 @@ func (s *FIFO) OnRequest(req HandlerReq) {
 	if state == process.StateReady && len(evict) == 0 && !collidesWith(req.Model, evict, s.active) {
 		s.logger.Debugf("%s: fast-path serving model %s (already ready)", s.name, req.Model)
 		s.grantHandler(req, req.Model)
+		return
+	}
+
+	// (3b) An image generation is rendering. It holds the GPU, and its true
+	// peak VRAM (sampler + VAE decode) runs above the steady-state --max-vram
+	// cap, so spawning any other model alongside it can OOM the render
+	// mid-sample. Defer every non-image spawn until the render's serve
+	// completes — independent of what EvictionFor computed, so a policy that
+	// fails to mark the image model for eviction (co-resident set, stale plan)
+	// still can't preempt it. The fast path above is exempt: it serves an
+	// already-ready model without a spawn, adding no VRAM pressure.
+	if s.imageRenderInFlight() && !s.imageModels[req.Model] {
+		s.logger.Debugf("%s: queuing request for model %s (image generation rendering)", s.name, req.Model)
+		s.enqueue(req)
 		return
 	}
 
@@ -367,6 +395,10 @@ func (s *FIFO) drainQueue() {
 			s.grantHandler(req, req.Model)
 			continue
 		}
+		if s.imageRenderInFlight() && !s.imageModels[req.Model] {
+			remaining = append(remaining, req)
+			continue
+		}
 		if collidesWith(req.Model, evict, s.active) {
 			remaining = append(remaining, req)
 			continue
@@ -483,6 +515,18 @@ func collidesWith(target string, evict []string, active map[string]*activeSwap) 
 func slicesOverlap(xs, ys []string) bool {
 	for _, x := range xs {
 		if containsString(ys, x) {
+			return true
+		}
+	}
+	return false
+}
+
+// imageRenderInFlight reports whether any image-output model is currently
+// serving a request. While one is, its GPU/VRAM peak makes co-resident spawns
+// unsafe, so the scheduler defers other models' swaps (OnRequest step 3b).
+func (s *FIFO) imageRenderInFlight() bool {
+	for m, n := range s.inFlight {
+		if n > 0 && s.imageModels[m] {
 			return true
 		}
 	}

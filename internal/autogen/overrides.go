@@ -40,6 +40,20 @@ type Settings struct {
 	// 1.0 = the analytic estimate; tune against the "compute buffer size" llama
 	// prints at load if your build/arch differs. 0 => default 1.0.
 	ComputeBufFactor float64 `yaml:"computeBufFactor"`
+	// VisionOverheadGB is the VRAM reserved for a "-vision" twin's CLIP/vision
+	// compute buffer (image-token activations + patch-embed work), on TOP of the
+	// projector's own weights (its gguf size). llama.cpp allocates this when an
+	// image is processed and it is NOT captured by the text compute-buffer model.
+	// Tune against the "CLIP ... compute buffer size" llama prints for a real
+	// image. 0 => default 1.0. ponytail: flat reserve, not resolution-scaled —
+	// one image at a time here; make it image-size-aware if batched vision lands.
+	VisionOverheadGB float64 `yaml:"visionOverheadGB"`
+	// VisionCtx is the default context window (tokens) for the auto-generated
+	// "-vision" twin. Image chats need a small text window — one image is a few
+	// hundred-to-thousand tokens plus a short prompt — so the twin doesn't inherit
+	// the solo model's maxed 32k ctx (that KV is ~2.5 GB on an 8B and buys nothing
+	// for vision). A per-model/variant Ctx override still wins. 0 => default 8192.
+	VisionCtx int `yaml:"visionCtx"`
 	// Groups optionally split the emitted models across named groups bound to
 	// separate listen addresses (use-case agnostic: membership is by model-name
 	// glob, first match wins). Empty => one group, one port (upstream default).
@@ -67,6 +81,27 @@ type Settings struct {
 	// llama-server cmd and emits the matching slotCache config block the server
 	// reads. Off unless Enable.
 	SlotCache SlotCacheSettings `yaml:"slotCache"`
+	// Encoders declares the shared diffusion component files (VAE / CLIP / T5 /
+	// text-encoder) ONCE, so image models get them auto-attached by architecture
+	// instead of a per-model override each. A bare `--diffusion-model` GGUF carries
+	// none of these; archComponents (image.go) maps each family to the fields it
+	// needs. A per-model Override component path still wins over the pool.
+	Encoders EncoderSet `yaml:"encoders"`
+}
+
+// EncoderSet is the pool of shared diffusion component files, each field one
+// physical file on disk. Models draw from it by architecture (archComponents),
+// so adding another model of an already-declared family is zero-config. An empty
+// field means "not on disk"; a model whose arch requires it emits a WARNING in
+// the generated YAML rather than a silently broken command.
+type EncoderSet struct {
+	FluxVae   string `yaml:"fluxVae"`   // --vae for flux / chroma (the flux "ae.safetensors")
+	ClipL     string `yaml:"clipL"`     // --clip_l (flux, sdxl, sd3)
+	ClipG     string `yaml:"clipG"`     // --clip_g (sdxl, sd3)
+	T5        string `yaml:"t5"`        // --t5xxl (flux, sd3)
+	SdxlVae   string `yaml:"sdxlVae"`   // --vae for sdxl (optional; full checkpoints bake it)
+	ZimageVae string `yaml:"zimageVae"` // --vae for z-image / lumina
+	QwenLlm   string `yaml:"qwenLlm"`   // --llm text encoder (z-image, qwen-image)
 }
 
 // SlotCacheSettings mirrors config.SlotCacheConfig; zero values fall back to the
@@ -370,6 +405,12 @@ func (s *Settings) applyDefaults() {
 	}
 	if s.ComputeBufFactor == 0 {
 		s.ComputeBufFactor = 1.0
+	}
+	if s.VisionOverheadGB == 0 {
+		s.VisionOverheadGB = 1.0
+	}
+	if s.VisionCtx == 0 {
+		s.VisionCtx = 8192
 	}
 	if s.MaxRamGB == 0 {
 		s.MaxRamGB = 24

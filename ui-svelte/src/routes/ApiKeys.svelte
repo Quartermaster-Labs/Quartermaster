@@ -27,8 +27,10 @@
   let editScope = $state<Set<string>>(new Set());
 
   // Listable models grouped by category, in MODEL_CATEGORIES order; empty groups dropped.
+  // Unlisted vision twins ARE included: they're callable model ids a scoped key must be
+  // able to reach, even though they're hidden from the operator model picker.
   const grouped = $derived.by(() => {
-    const listed = ($models || []).filter((m) => !m.unlisted && !m.peerID);
+    const listed = ($models || []).filter((m) => !m.peerID && (!m.unlisted || m.capabilities?.vision));
     return MODEL_CATEGORIES.map((c) => ({
       label: c.label,
       ids: listed.filter((m) => modelCategory(m) === c.id).map((m) => m.id).sort(),

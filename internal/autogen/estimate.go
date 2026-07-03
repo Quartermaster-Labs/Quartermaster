@@ -16,6 +16,7 @@ type EstimateInput struct {
 	CpuOffload     int     // >0 pins layers offloaded to CPU, overriding the sizer
 	CtxCheckpoints *int    // nil => llama default (32); 0 disables; reserves checkpoint VRAM
 	DraftGB        float64 // separate MTP/draft gguf weights (GB); 0 => baked-in or none
+	MmprojGB       float64 // "-vision" twin projector footprint (weights + CLIP reserve); 0 => none
 }
 
 // EstimateResult is the previewed load plan for a candidate tuning.
@@ -102,6 +103,7 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		CtxCheckpoints: in.CtxCheckpoints,
 	}
 	prof.Overhead += computeBufferGB(meta, effectiveUb(prof, nil), s.ComputeBufFactor)
+	prof.Overhead += in.MmprojGB // "-vision" projector weights + CLIP compute reserve
 
 	ctx, plan, kvReserve, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, in.KvInRam)
 	if err != nil {

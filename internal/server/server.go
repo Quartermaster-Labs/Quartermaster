@@ -228,12 +228,65 @@ func (s *Server) WireDynamicOffload(settings autogen.Settings) {
 		return
 	}
 	s.local.SetSpawnArgs(func(modelID string, args []string) ([]string, error) {
+		logf := func(m string) { s.proxylog.Infof("<%s> %s", modelID, m) }
 		freeGB, ok := s.freeVramGB()
-		return autogen.LiveOffloadArgs(settings, args, freeGB, ok, func(m string) {
-			s.proxylog.Infof("<%s> %s", modelID, m)
-		})
+		// offload against a given free reading; sample takes a FRESH probe on retry.
+		offload := func(free float64, freeOK bool) ([]string, error) {
+			return autogen.LiveOffloadArgs(settings, args, free, freeOK, logf)
+		}
+		n := 0
+		sample := func() (float64, bool) {
+			fresh, fok := autogen.SampleFreeVramGB(spawnVramSampleTimeout)
+			if fok {
+				n++
+				logf(fmt.Sprintf("dynoffload: VRAM refusal, retry %d/%d — free now %.1fGB (post-eviction reclaim)",
+					n, spawnVramReclaimTries, fresh))
+			}
+			return fresh, fok
+		}
+		return offloadWithReclaim(freeGB, ok, offload, sample,
+			func() { time.Sleep(spawnVramReclaimDelay) }, spawnVramReclaimTries)
 	})
 }
+
+// offloadWithReclaim runs the offload guard once against the (possibly stale,
+// cached) free reading; if it refuses for lack of VRAM it re-probes a FRESH
+// reading up to `tries` times, `sleep` apart, retrying the guard against each.
+// This absorbs the post-eviction reclaim lag — the cached sample predates the
+// eviction and the driver frees lazily after a killed process — without slowing
+// the common ample-VRAM path (which succeeds on the first call). `!ok` (no GPU
+// telemetry) passes straight through: nothing to re-probe. Pure/injectable so the
+// retry behavior is unit-testable without a GPU.
+func offloadWithReclaim(freeGB float64, ok bool,
+	offload func(free float64, freeOK bool) ([]string, error),
+	sample func() (float64, bool), sleep func(), tries int) ([]string, error) {
+	out, err := offload(freeGB, ok)
+	if err == nil || !ok {
+		return out, err
+	}
+	for i := 0; i < tries; i++ {
+		sleep()
+		fresh, fok := sample()
+		if !fok {
+			continue
+		}
+		if out, err = offload(fresh, true); err == nil {
+			return out, nil
+		}
+	}
+	return out, err
+}
+
+// spawnVram* bound the post-eviction VRAM-reclaim wait in the dynamic-offload
+// spawn guard: up to spawnVramReclaimTries fresh probes, spawnVramReclaimDelay
+// apart, each capped at spawnVramSampleTimeout. ~4s worst case before a genuine
+// no-fit is refused — enough for a large model's VRAM to be reclaimed by the
+// driver, cheap enough not to stall a truly-impossible load for long.
+const (
+	spawnVramReclaimTries  = 6
+	spawnVramReclaimDelay  = 700 * time.Millisecond
+	spawnVramSampleTimeout = 4 * time.Second
+)
 
 // freeVramGB returns the free VRAM (GB) of the largest GPU from the most recent
 // perf sample. ok is false when there's no GPU telemetry yet.

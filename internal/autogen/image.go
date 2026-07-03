@@ -81,11 +81,78 @@ func imageArg(p string) string {
 	return p
 }
 
+// imageComponents are the resolved VAE / text-encoder file paths for one
+// diffusion model. Empty = not attached (the family doesn't need it, or it's
+// missing from the pool — see resolveComponents' missing list).
+type imageComponents struct{ vae, clipL, clipG, t5, llm string }
+
+// resolveComponents decides which component files a bare diffusion GGUF needs
+// from its architecture, draws them from the shared Settings.Encoders pool, then
+// lets an explicit per-model Override path win. It returns the resolved paths
+// plus the role names an arch REQUIRES that neither pool nor override supplied
+// (surfaced as a WARNING so a misconfigured model is visible, not silently broken).
+//
+// name disambiguates families an arch tag can't: Chroma reports arch "flux" but
+// removes the CLIP encoder (T5 only). SDXL/SD1 GGUFs are typically full
+// checkpoints (CLIP+VAE baked), so their VAE is optional (wired only if declared),
+// never required.
+//
+// ponytail: sd3 / qwen_image arms omitted — no such model on disk yet. Add an arm
+// (and any new EncoderSet field) when one lands; the "# arch=..." YAML comment on
+// the fallthrough names the arch to wire.
+func resolveComponents(enc EncoderSet, ov *Override, arch, name string) (c imageComponents, missing []string) {
+	a := strings.ToLower(strings.TrimSpace(arch))
+	n := strings.ToLower(name)
+	req := func(role, path string) string {
+		if path == "" {
+			missing = append(missing, role)
+		}
+		return path
+	}
+	switch {
+	case strings.Contains(n, "chroma"): // flux-derived, CLIP stripped → T5 only
+		c.vae = req("vae", enc.FluxVae)
+		c.t5 = req("t5xxl", enc.T5)
+	case a == "flux" || strings.HasPrefix(a, "flux"):
+		c.vae = req("vae", enc.FluxVae)
+		c.clipL = req("clip_l", enc.ClipL)
+		c.t5 = req("t5xxl", enc.T5)
+	case a == "sdxl" || strings.HasPrefix(a, "sdxl"):
+		c.vae = enc.SdxlVae // optional: full checkpoints bake CLIP+VAE
+	case strings.HasPrefix(a, "lumina") || a == "z_image" || strings.Contains(n, "z-image"):
+		c.vae = req("vae", enc.ZimageVae)
+		c.llm = req("llm", enc.QwenLlm)
+	}
+	// Explicit per-model override wins over the arch-wired pool default, and clears
+	// the role from the missing list (an override can supply what the pool lacks).
+	if ov != nil {
+		set := func(role, ovPath string, dst *string) {
+			if ovPath == "" {
+				return
+			}
+			*dst = ovPath
+			for i, m := range missing {
+				if m == role {
+					missing = append(missing[:i], missing[i+1:]...)
+					break
+				}
+			}
+		}
+		set("vae", ov.VaePath, &c.vae)
+		set("clip_l", ov.ClipLPath, &c.clipL)
+		set("clip_g", ov.ClipGPath, &c.clipG)
+		set("t5xxl", ov.T5Path, &c.t5)
+		set("llm", ov.TextEncoderPath, &c.llm)
+	}
+	return c, missing
+}
+
 // imageCmdLines builds the sd-server argv (exe first) for a diffusion gguf,
-// applying the per-model Override knobs. Shared by emitImageModel (YAML emit) and
-// RenderSoloCmd (editor launch-parameters preview), so the box matches a save.
-// Also returns the resolved VRAM budget and offload decision for the YAML comment.
-func imageCmdLines(s Settings, row GgufRow, ov *Override) (lines []string, budget float64, offload bool) {
+// applying the per-model Override knobs plus the arch-wired component pool. Shared
+// by emitImageModel (YAML emit) and RenderSoloCmd (editor launch-parameters
+// preview), so the box matches a save. Also returns the resolved VRAM budget and
+// offload decision for the YAML comment, and any required-but-missing encoder roles.
+func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string) (lines []string, budget float64, offload bool, missing []string) {
 	modelPath := strings.ReplaceAll(row.FullPath, "\\", "/")
 
 	// Budget mirrors the LLM sizer: target minus headroom. A per-model
@@ -128,22 +195,22 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override) (lines []string, budge
 		"--listen-port ${PORT}",
 		fmt.Sprintf("--max-vram %g", budget),
 	}
-	if ov != nil {
-		if p := imageArg(ov.VaePath); p != "" {
-			lines = append(lines, "--vae "+p)
-		}
-		if p := imageArg(ov.ClipLPath); p != "" {
-			lines = append(lines, "--clip_l "+p)
-		}
-		if p := imageArg(ov.ClipGPath); p != "" {
-			lines = append(lines, "--clip_g "+p)
-		}
-		if p := imageArg(ov.T5Path); p != "" {
-			lines = append(lines, "--t5xxl "+p)
-		}
-		if p := imageArg(ov.TextEncoderPath); p != "" {
-			lines = append(lines, "--llm "+p)
-		}
+	// Component files: arch-wired from the shared pool, per-model override wins.
+	comp, missing := resolveComponents(s.Encoders, ov, arch, name)
+	if p := imageArg(comp.vae); p != "" {
+		lines = append(lines, "--vae "+p)
+	}
+	if p := imageArg(comp.clipL); p != "" {
+		lines = append(lines, "--clip_l "+p)
+	}
+	if p := imageArg(comp.clipG); p != "" {
+		lines = append(lines, "--clip_g "+p)
+	}
+	if p := imageArg(comp.t5); p != "" {
+		lines = append(lines, "--t5xxl "+p)
+	}
+	if p := imageArg(comp.llm); p != "" {
+		lines = append(lines, "--llm "+p)
 	}
 	// --diffusion-fa is a near-free VRAM saver, on unless turned off.
 	if ov == nil || ov.DiffusionFa != "off" {
@@ -194,7 +261,7 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override) (lines []string, budge
 			lines = append(lines, extra)
 		}
 	}
-	return lines, budget, offload
+	return lines, budget, offload, missing
 }
 
 // mergeImageVariant overlays an image variant onto its base override: the
@@ -260,9 +327,12 @@ func mergeImageVariant(base Override, v VariantSpec) Override {
 }
 
 func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, name, arch string, emitted *[]string) {
-	lines, budget, offload := imageCmdLines(s, row, ov)
+	lines, budget, offload, missing := imageCmdLines(s, row, ov, arch, name)
 
 	fmt.Fprintf(b, "\n  # arch=%s size=%gGB (image model, sd-server, max-vram=%gGB, offload=%t)\n", arch, row.SizeGB, budget, offload)
+	if len(missing) > 0 {
+		fmt.Fprintf(b, "  # WARNING: %s needs encoder(s) [%s] that aren't in settings.encoders — generation will fail until declared\n", name, strings.Join(missing, ", "))
+	}
 	fmt.Fprintf(b, "  %q:\n", name)
 	b.WriteString("    cmd: >\n")
 	for _, line := range lines {

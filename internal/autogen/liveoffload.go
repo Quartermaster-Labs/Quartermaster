@@ -9,6 +9,7 @@ package autogen
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -73,6 +74,18 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 	}
 	if c, ok := atoiFlagOK(args, "--ctx-checkpoints"); ok {
 		in.CtxCheckpoints = &c
+	}
+	// A "-vision" twin loads a CLIP projector via --mmproj. The model gguf (-m)
+	// carries no vision info, so EstimatePlan is projector-blind; charge the
+	// projector's weights + CLIP compute reserve here so the live guard sizes the
+	// twin like the baked plan did, instead of under-offloading and leaving too
+	// little free VRAM once the projector + image buffers load.
+	if mm, i := argVal(args, "--mmproj"); i >= 0 {
+		if fi, statErr := os.Stat(mm); statErr == nil {
+			in.MmprojGB = mmprojVramGB(float64(fi.Size())/gib, s)
+		} else if logf != nil {
+			logf(fmt.Sprintf("dynoffload: --mmproj stat failed (%v); projector VRAM uncharged", statErr))
+		}
 	}
 
 	res, err := EstimatePlan(s, meta, in)
