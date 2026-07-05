@@ -27,7 +27,7 @@ func TestEmitImageModel(t *testing.T) {
 	// Big model (6.5GB + 1.5 compute > 6.5 budget) → offload path. No per-model
 	// override: VAE + CLIP-L + T5 must be auto-attached from the arch (flux) pool.
 	big := GgufRow{FullPath: `C:\models\flux.gguf`, SizeGB: 6.5}
-	emitImageModel(&b, s, big, &Override{}, "flux-q4", "flux", &emitted)
+	emitImageModel(&b, s, big, &Override{}, "flux-q4", "flux", false, &emitted)
 	out := b.String()
 	for _, want := range []string{"sd-server", "--diffusion-model C:/models/flux.gguf", "--listen-port ${PORT}", "--max-vram 6.5", "--vae ae.safetensors", "--clip_l clip_l.safetensors", "--t5xxl t5xxl.gguf", "--diffusion-fa", "--vae-tiling", "--offload-to-cpu", "--vae-on-cpu", "--backend te=cpu", "offload=true", "checkEndpoint: /", "out: [image]", "in: [text]", "ttl: 600"} {
 		if !strings.Contains(out, want) {
@@ -51,7 +51,7 @@ func TestEmitImageModel(t *testing.T) {
 		OffloadToCpu: "off", DefaultSteps: 8, DefaultCfg: 1.0, DefaultSampler: "euler",
 		DefaultWidth: 768, DefaultHeight: 512, ExtraArgs: "--clip-on-cpu",
 	}
-	emitImageModel(&b3, s, big, ov, "flux-tuned", "flux", &em3)
+	emitImageModel(&b3, s, big, ov, "flux-tuned", "flux", false, &em3)
 	out3 := b3.String()
 	for _, want := range []string{"--vae C:/models/ae.safetensors", "--clip_l clip_l.gguf", "--t5xxl t5xxl.gguf", "--llm qwen3.gguf", "--steps 8", "--cfg-scale 1", "--sampling-method euler", "--width 768", "--height 512", "--clip-on-cpu", "offload=false"} {
 		if !strings.Contains(out3, want) {
@@ -68,8 +68,12 @@ func TestEmitImageModel(t *testing.T) {
 	var b2 strings.Builder
 	var em2 []string
 	small := GgufRow{FullPath: `C:\models\sd15.gguf`, SizeGB: 2.0}
-	emitImageModel(&b2, s, small, &Override{}, "sd15-q4", "sd1", &em2)
+	emitImageModel(&b2, s, small, &Override{}, "sd15-q4", "sd1", true, &em2)
 	out2 := b2.String()
+	// SD1 is a full-checkpoint arch → -m, no external components.
+	if !strings.Contains(out2, "-m C:/models/sd15.gguf") || strings.Contains(out2, "--diffusion-model") {
+		t.Errorf("sd1 should load via -m, not --diffusion-model:\n%s", out2)
+	}
 	if strings.Contains(out2, "--offload-to-cpu") || strings.Contains(out2, "offload=true") {
 		t.Errorf("small model should not offload:\n%s", out2)
 	}
@@ -88,6 +92,23 @@ func TestEmitImageModel(t *testing.T) {
 	}
 }
 
+func TestFluxGuidance(t *testing.T) {
+	cases := map[string]struct {
+		val float64
+		ok  bool
+	}{
+		"flux1-kontext-dev-Q4_K_M": {2.5, true},
+		"flux1-fill-dev-Q4_K_S":    {30, true},
+		"flux1-schnell-Q4_K_S":     {0, false},
+		"flux1-dev":                {0, false},
+	}
+	for name, want := range cases {
+		if v, ok := fluxGuidance(name); v != want.val || ok != want.ok {
+			t.Errorf("fluxGuidance(%q) = (%g,%t), want (%g,%t)", name, v, ok, want.val, want.ok)
+		}
+	}
+}
+
 func TestResolveComponents(t *testing.T) {
 	pool := EncoderSet{FluxVae: "ae", ClipL: "cl", ClipG: "cg", T5: "t5", ZimageVae: "zae", QwenLlm: "qwen"}
 
@@ -103,9 +124,10 @@ func TestResolveComponents(t *testing.T) {
 	if c, m := resolveComponents(pool, nil, "lumina2", "Z-Image-Turbo"); c.vae != "zae" || c.llm != "qwen" || c.clipL != "" || len(m) != 0 {
 		t.Errorf("z-image should be vae+llm: got %+v missing=%v", c, m)
 	}
-	// sdxl full checkpoint: no SdxlVae declared → nothing attached, nothing missing.
-	if c, m := resolveComponents(pool, nil, "sdxl", "animagineXLV31"); c.vae != "" || len(m) != 0 {
-		t.Errorf("sdxl vae is optional: got %+v missing=%v", c, m)
+	// sdxl: full-checkpoint arch → never resolves external components (loads via -m).
+	// resolveComponents isn't called for it in emit, and falls through to attach nothing.
+	if c, m := resolveComponents(pool, nil, "sdxl", "animagineXLV31"); c.vae != "" || c.clipL != "" || c.clipG != "" || len(m) != 0 {
+		t.Errorf("sdxl should attach nothing (served via -m): got %+v missing=%v", c, m)
 	}
 	// empty pool: flux reports every required role missing.
 	if _, m := resolveComponents(EncoderSet{}, nil, "flux", "flux1-fill-dev"); len(m) != 3 {

@@ -25,9 +25,11 @@ func QueryComputeApps(ctx context.Context) []GpuProc {
 	if _, err := exec.LookPath("nvidia-smi"); err != nil {
 		return nil
 	}
-	out, err := exec.CommandContext(ctx, "nvidia-smi",
+	cmd := exec.CommandContext(ctx, "nvidia-smi",
 		"--query-compute-apps=pid,used_memory,process_name",
-		"--format=csv,noheader,nounits").Output()
+		"--format=csv,noheader,nounits")
+	hideConsole(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return nil
 	}

@@ -58,7 +58,7 @@ linux-arm64: ui
 # Build Windows binary
 windows: ui
 	@echo "Building Windows binary..."
-	GOOS=windows GOARCH=amd64 go build -ldflags="-X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE}" -o $(BUILD_DIR)/$(APP_NAME)-windows-amd64.exe
+	GOOS=windows GOARCH=amd64 go build -ldflags="-H=windowsgui -X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE}" -o $(BUILD_DIR)/$(APP_NAME)-windows-amd64.exe
 
 # Assemble a runnable Windows folder + zip (binary, configs, launcher, service files).
 # NOTE: llama-server.exe (llama.cpp) and GGUF models are NOT bundled — separate

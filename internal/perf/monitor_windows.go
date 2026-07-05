@@ -89,6 +89,7 @@ func tryNvidiaSmiWindows(ctx context.Context, every time.Duration, logger *logmo
 		"--format=csv,noheader,nounits",
 		"--loop", fmt.Sprintf("%d", sec),
 	)
+	hideConsole(cmd)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

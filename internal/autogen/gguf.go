@@ -51,8 +51,22 @@ type Metadata struct {
 
 	Architecture string
 	BlockCount   int64
-	ExpertCount  int64
-	ExpertUsed   int64
+
+	// DiffusionKind is a tensor-name-sniffed diffusion arch ("sdxl"/"sd1") for a
+	// UNet gguf that carries no general.architecture — stable-diffusion.cpp's
+	// `convert` strips the metadata KVs, so a converted SDXL UNet reports
+	// Architecture="" but still has input_blocks/label_emb tensors. Empty when the
+	// tensor section shows no UNet markers (i.e. a normal LLM/embedder).
+	DiffusionKind string
+
+	// HasBakedEncoders is true when a diffusion gguf carries its text encoder(s)
+	// in-file (tensor names under conditioner.embedders/cond_stage_model) — i.e.
+	// it's a full checkpoint, not a bare UNet. SD1/SD2/SDXL can only be
+	// version-detected (and served) as full checkpoints via -m; a UNet-only
+	// export of those has no working sd-server load path.
+	HasBakedEncoders bool
+	ExpertCount      int64
+	ExpertUsed       int64
 
 	ContextLength   int64
 	EmbeddingLength int64
@@ -615,7 +629,7 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 	// to derive the expert-weight share exactly (replaces the per-arch heuristic).
 	// The reader is now positioned at the first tensor info. Failures leave the
 	// share at 0 so the caller falls back to the arch table.
-	expertShare, vocabElems, _ := readExpertShare(r, tensorCount)
+	expertShare, vocabElems, diffKind, bakedEnc, _ := readExpertShare(r, tensorCount)
 	var vocab int64
 	if vocabElems > 0 && embeddingLength != nil && *embeddingLength > 0 {
 		vocab = vocabElems / *embeddingLength
@@ -714,6 +728,8 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 		SsmConvKernel:     deref(ssmConvKernel),
 		SsmStateSize:      deref(ssmStateSize),
 		VocabSize:         vocab,
+		DiffusionKind:     diffKind,
+		HasBakedEncoders:  bakedEnc,
 		PoolingType:       deref(poolingType),
 		IsMoE:             expertCount != nil && *expertCount > 0,
 		IsMTP:             nextnLayers != nil && *nextnLayers > 0,
@@ -728,36 +744,40 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 // count of the token_embd.weight (or output.weight) tensor (= n_embd*n_vocab,
 // for vocab sizing). Share is 0 when no expert tensors are found or any tensor
 // uses an unknown ggml type; vocabElems is 0 when neither tensor is present.
-func readExpertShare(r *ggufReader, tensorCount uint64) (share float64, vocabElems int64, err error) {
+// diffKind is "sdxl"/"sd1" when the tensor names mark a diffusion UNet (a
+// metadata-stripped converted model), else "". bakedEnc is true when the file
+// also carries its text encoder(s) (conditioner.embedders/cond_stage_model),
+// i.e. it's a full checkpoint rather than a bare UNet.
+func readExpertShare(r *ggufReader, tensorCount uint64) (share float64, vocabElems int64, diffKind string, bakedEnc bool, err error) {
 	var expertBytes, totalBytes int64
-	var sawExpert bool
+	var sawExpert, sawInputBlocks, sawLabelEmb bool
 	for i := uint64(0); i < tensorCount; i++ {
 		name, err := r.str()
 		if err != nil {
-			return 0, 0, err
+			return 0, 0, "", false, err
 		}
 		nDims, err := r.u32()
 		if err != nil {
-			return 0, 0, err
+			return 0, 0, "", false, err
 		}
 		elems := int64(1)
 		for d := uint32(0); d < nDims; d++ {
 			dim, err := r.u64()
 			if err != nil {
-				return 0, 0, err
+				return 0, 0, "", false, err
 			}
 			elems *= int64(dim)
 		}
 		typ, err := r.u32()
 		if err != nil {
-			return 0, 0, err
+			return 0, 0, "", false, err
 		}
 		if _, err := r.u64(); err != nil { // offset (unused)
-			return 0, 0, err
+			return 0, 0, "", false, err
 		}
 		ts, ok := ggmlTypeSize[typ]
 		if !ok {
-			return 0, 0, fmt.Errorf("unknown ggml type %d for tensor %q", typ, name)
+			return 0, 0, "", false, fmt.Errorf("unknown ggml type %d for tensor %q", typ, name)
 		}
 		bytes := elems / ts[0] * ts[1]
 		totalBytes += bytes
@@ -770,11 +790,32 @@ func readExpertShare(r *ggufReader, tensorCount uint64) (share float64, vocabEle
 		if name == "token_embd.weight" || (vocabElems == 0 && name == "output.weight") {
 			vocabElems = elems
 		}
+		// SD/SDXL UNet markers, for a converted diffusion gguf that lost its
+		// general.architecture. input_blocks = a UNet; label_emb (the size/crop
+		// conditioning) is SDXL-only, absent in SD1.
+		if strings.Contains(name, "input_blocks.") {
+			sawInputBlocks = true
+		}
+		if strings.Contains(name, "label_emb.") {
+			sawLabelEmb = true
+		}
+		// Baked text encoder = full checkpoint. SDXL bakes both encoders under
+		// conditioner.embedders.{0,1}; older SD1 checkpoints use cond_stage_model.
+		if strings.Contains(name, "conditioner.embedders.") || strings.Contains(name, "cond_stage_model.") {
+			bakedEnc = true
+		}
+	}
+	if sawInputBlocks {
+		if sawLabelEmb {
+			diffKind = "sdxl"
+		} else {
+			diffKind = "sd1"
+		}
 	}
 	if !sawExpert || totalBytes <= 0 {
-		return 0, vocabElems, nil
+		return 0, vocabElems, diffKind, bakedEnc, nil
 	}
-	return float64(expertBytes) / float64(totalBytes), vocabElems, nil
+	return float64(expertBytes) / float64(totalBytes), vocabElems, diffKind, bakedEnc, nil
 }
 
 const gib = 1024 * 1024 * 1024

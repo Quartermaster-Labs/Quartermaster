@@ -18,6 +18,7 @@
   import ModelSelector from "./ModelSelector.svelte";
   import MaskEditor from "./MaskEditor.svelte";
   import Select from "./Select.svelte";
+  import { autogrow } from "../../lib/autogrow";
   import { Image as ImageIcon, Square, X, Settings, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush } from "lucide-svelte";
   import { scrollFade } from "../../lib/scrollFade";
   import type { ImageApiMode } from "../../lib/types";
@@ -123,6 +124,14 @@
   let abortController = $state<AbortController | null>(null);
   let editingIdx = $state<number | null>(null);
   let editText = $state("");
+  // Refs to each turn's rendered prompt span, so startEdit can capture its
+  // actual width (see editWidth below).
+  let promptEls: (HTMLElement | null)[] = $state([]);
+  // A bare textarea has no intrinsic width from its content (only from `cols`,
+  // default 20ch), so it collapses the shrink-to-fit user bubble down to ~5
+  // words wide. Pin the textarea to the rendered prompt's width instead, so
+  // the bubble stays the size it was.
+  let editWidth = $state<number | null>(null);
   let showSettings = $state(false);
   let showNegative = $state(false);
   let fullscreenImg = $state<string | null>(null);
@@ -155,9 +164,22 @@
   // Sensible per-model gen defaults, matched by id substring. Applied only when
   // the user switches models (not on reload) so manual tweaks survive a refresh.
   // ponytail: substring match, no backend "recommended params" field exists.
-  const IMAGE_DEFAULTS: { match: string; steps: number; cfg: number; sampler: string; scheduler: string }[] = [
+  // size/negative optional: SDXL-anime models need 1024 (512 duplicates) + their
+  // booru quality-tag negative; distilled models leave both to the user's prefs.
+  const SDXL_ANIME_NEG =
+    "nsfw, lowres, (bad), text, error, fewer, extra, missing, worst quality, jpeg artifacts, low quality, watermark, unfinished, displeasing, oldest, early, chromatic aberration, signature, extra digits, artistic error, username, scan, [abstract]";
+  // cfg here = sdapi cfg_scale (true CFG / txt_cfg); for flux-dev models keep it 1.0
+  // and the DISTILLED guidance is baked server-side via autogen --guidance (the
+  // /sdapi route has no per-request key for it). denoise = img2img strength.
+  const IMAGE_DEFAULTS: { match: string; steps: number; cfg: number; sampler: string; scheduler: string; size?: string; negative?: string; denoise?: number }[] = [
     { match: "z-image", steps: 10, cfg: 1.0, sampler: "euler", scheduler: "discrete" },
-    { match: "kontext", steps: 24, cfg: 1.0, sampler: "euler", scheduler: "discrete" },
+    // Kontext: surgical edit — low denoise so it doesn't redraw the whole scene.
+    { match: "kontext", steps: 24, cfg: 1.0, sampler: "euler", scheduler: "discrete", denoise: 0.55 },
+    // Fill: inpaint — always fully regenerates the masked area (denoise 1.0).
+    { match: "fill", steps: 20, cfg: 1.0, sampler: "euler", scheduler: "discrete", denoise: 1.0 },
+    // AnimagineXL 3.1 / Illustrious SDXL-anime: Euler a, <30 steps, cfg 5-7, 1024.
+    { match: "animagine", steps: 28, cfg: 7, sampler: "euler_a", scheduler: "discrete", size: "1024x1024", negative: SDXL_ANIME_NEG },
+    { match: "illustrious", steps: 28, cfg: 7, sampler: "euler_a", scheduler: "discrete", size: "1024x1024", negative: SDXL_ANIME_NEG },
   ];
   function defaultsFor(id: string) {
     const l = id.toLowerCase();
@@ -181,6 +203,9 @@
     $sdCfgScaleStore = d.cfg;
     $sdSamplerStore = d.sampler;
     $sdSchedulerStore = d.scheduler;
+    if (d.size) $selectedSizeStore = d.size;
+    if (d.negative) $sdNegativePromptStore = d.negative;
+    if (d.denoise !== undefined) $sdDenoiseStore = d.denoise;
   });
 
   // Elapsed tick so a slow (offloaded) generation looks alive.
@@ -478,6 +503,7 @@
     if (isGenerating) return;
     editingIdx = idx;
     editText = turns[idx].prompt;
+    editWidth = promptEls[idx]?.clientWidth ?? null;
   }
 
   function cancelEdit() {
@@ -595,9 +621,11 @@
                 {#if editingIdx === ti}
                   <div class="flex flex-col gap-2 min-w-[260px]">
                     <textarea
-                      class="w-full px-2.5 py-1.5 rounded-lg bg-white/10 text-white text-[0.8125rem] resize-none focus:outline-none focus:ring-2 focus:ring-white/40"
-                      rows="3"
+                      class="{editWidth ? '' : 'w-full'} px-2.5 py-1.5 rounded-lg bg-white/10 text-white text-[0.8125rem] resize-none overflow-hidden focus:outline-none focus:ring-2 focus:ring-white/40"
+                      style={editWidth ? `width:${editWidth}px` : undefined}
+                      rows="1"
                       bind:value={editText}
+                      use:autogrow
                       onkeydown={editKeyDown}
                     ></textarea>
                     <div class="flex justify-end gap-1.5">
@@ -606,7 +634,7 @@
                     </div>
                   </div>
                 {:else}
-                  <span class="text-[0.8125rem] leading-relaxed whitespace-pre-wrap pr-6">{t.prompt}</span>
+                  <span class="text-[0.8125rem] leading-relaxed whitespace-pre-wrap pr-6" bind:this={promptEls[ti]}>{t.prompt}</span>
                   <button
                     class="absolute top-1.5 right-1.5 p-1 rounded-full opacity-0 group-hover:opacity-100 transition-all bg-white/10 text-white/70 hover:text-white hover:bg-white/25 disabled:hidden"
                     onclick={() => startEdit(ti)}

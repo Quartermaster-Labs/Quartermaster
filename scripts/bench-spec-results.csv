@@ -1,0 +1,22 @@
+timestamp,label,profile,rep,prompt_n,prompt_ms,prompt_per_second,predicted_n,predicted_ms,predicted_per_second,error
+2026-07-05T19:39:11Z,mtp,warmup,0,,,,,,,"HTTP 401: {'error':'unauthorized: invalid or missing API key','src':'llama-quartermaster'}"
+2026-07-05T19:39:55Z,mtp,warmup,0,11,1418.63,7.753959806291985,16,1641.912,9.74473662413089,
+2026-07-05T19:40:32Z,mtp,pp_20k,1,,,,,,,"curl request failed"
+2026-07-05T19:40:32Z,mtp,pp_20k,2,,,,,,,"curl request failed"
+2026-07-05T19:40:32Z,mtp,pp_20k,3,,,,,,,"curl request failed"
+2026-07-05T19:40:32Z,mtp,pp_60k,1,,,,,,,"curl request failed"
+2026-07-05T19:40:32Z,mtp,pp_60k,2,,,,,,,"curl request failed"
+2026-07-05T19:40:33Z,mtp,pp_60k,3,,,,,,,"curl request failed"
+2026-07-05T19:40:33Z,mtp,tg,1,11,198.826,55.32475631959603,256,11496.693,22.267272858377623,
+2026-07-05T19:40:45Z,mtp,tg,2,11,119.96,91.6972324108036,256,6518.918,39.27032062682795,
+2026-07-05T19:40:53Z,mtp,tg,3,11,113.549,96.87447709799294,256,5879.517,43.540991547434935,
+2026-07-05T19:41:43Z,mtp,warmup,0,11,298.534,36.8467243262074,16,332.806,48.07605632109998,
+2026-07-05T19:41:45Z,mtp,pp_20k,1,22501,71599.827,314.2605358529707,1,0.001,1000000.0,
+2026-07-05T19:42:57Z,mtp,pp_20k,2,22501,56221.51,400.2204850065393,1,0.001,1000000.0,
+2026-07-05T19:43:54Z,mtp,pp_20k,3,22501,49942.535,450.5378030970994,1,0.001,1000000.0,
+2026-07-05T19:44:45Z,mtp,pp_60k,1,,,,,,,"HTTP 502: "
+2026-07-05T19:46:00Z,mtp,pp_60k,2,,,,,,,"HTTP 502: "
+2026-07-05T19:46:12Z,mtp,pp_60k,3,,,,,,,"HTTP 500: {'error':'unspecific error: group: model unloaded','src':'llama-quartermaster'}"
+2026-07-05T19:46:15Z,mtp,tg,1,,,,,,,"HTTP 500: {'error':'unspecific error: group: model unloaded','src':'llama-quartermaster'}"
+2026-07-05T19:46:22Z,mtp,tg,2,,,,,,,"HTTP 500: {'error':'unspecific error: group: model unloaded','src':'llama-quartermaster'}"
+2026-07-05T19:46:23Z,mtp,tg,3,,,,,,,"HTTP 500: {'error':'unspecific error: upstream command exited prematurely','src':'llama-quartermaster'}"

@@ -5,6 +5,7 @@ package server
 import (
 	"os/exec"
 	"strings"
+	"syscall"
 )
 
 // pickFolder opens the native Windows folder-browser dialog and returns the
@@ -17,7 +18,11 @@ func pickFolder() (string, error) {
 		`$d = New-Object System.Windows.Forms.FolderBrowserDialog;` +
 		`if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $d.SelectedPath }`
 	// -STA: WinForms dialogs require a single-threaded apartment.
-	out, err := exec.Command("powershell", "-NoProfile", "-STA", "-NonInteractive", "-Command", ps).Output()
+	cmd := exec.Command("powershell", "-NoProfile", "-STA", "-NonInteractive", "-Command", ps)
+	// HideWindow only suppresses powershell's own console; the FolderBrowserDialog
+	// itself is a real window and still shows.
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	out, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}

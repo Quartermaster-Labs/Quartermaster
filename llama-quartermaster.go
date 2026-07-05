@@ -68,6 +68,7 @@ func main() {
 	flagWatchModelsInterval := flag.Duration("watch-models-interval", 30*time.Second, "poll interval for -watch-models")
 	flagPlaygroundPort := flag.String("playground-port", "", "serve the standalone playground app (per-user login + chat history) on this extra address, e.g. :8081")
 	flagNoUpdateCheck := flag.Bool("no-update-check", false, "disable checking GitHub for new releases (Windows release builds only)")
+	flagTray := flag.Bool("tray", false, "run as a desktop app: show a system-tray icon with Open/Exit (Windows only; no-op elsewhere)")
 	flag.Parse()
 
 	if *flagNoUpdateCheck {
@@ -517,6 +518,21 @@ func main() {
 		}
 	}()
 
-	<-exitChan
+	// Desktop mode: hold the main thread with a system-tray icon (Open/Exit)
+	// until shutdown. Without -tray, just wait for exitChan. The tray's "Exit"
+	// routes through triggerShutdown, so teardown is identical either way.
+	if *flagTray {
+		scheme := "http"
+		if useTLS {
+			scheme = "https"
+		}
+		host := "localhost"
+		if _, port, err := net.SplitHostPort(listenAddrs[0]); err == nil && port != "" {
+			host = "localhost:" + port
+		}
+		runTray(scheme+"://"+host, triggerShutdown, exitChan)
+	} else {
+		<-exitChan
+	}
 	proxyLog.Info("shutdown complete")
 }

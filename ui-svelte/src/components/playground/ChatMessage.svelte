@@ -6,6 +6,7 @@
   import { harmonyToThink } from "../../lib/reasoning";
   import type { ContentPart } from "../../lib/types";
   import RewriteDiff from "./RewriteDiff.svelte";
+  import { autogrow } from "../../lib/autogrow";
 
   interface Props {
     role: "user" | "assistant" | "system" | "tool";
@@ -210,6 +211,12 @@
   let editContent = $state("");
   let showReasoning = $state(false);
   let modalImageUrl = $state<string | null>(null);
+  let textEl: HTMLDivElement | undefined = $state();
+  // A bare textarea has no intrinsic width from its content (only from `cols`,
+  // default 20ch), so it collapses the shrink-to-fit user bubble down to ~5
+  // words wide. Capture the rendered text's actual width before switching to
+  // edit mode and pin the textarea to it, so the bubble stays the size it was.
+  let editWidth = $state<number | null>(null);
 
   // Vary the source-pill max width so long titles don't all truncate to one
   // uniform block. Deterministic by title (stable across renders). Classes are
@@ -277,6 +284,7 @@
 
   function startEdit() {
     editContent = textContent;
+    editWidth = textEl?.clientWidth ?? null;
     isEditing = true;
   }
 
@@ -574,9 +582,11 @@
       {:else if isEditing}
         <div class="flex flex-col gap-2 min-w-[300px]">
           <textarea
-            class="w-full px-3 py-2 rounded border border-card-border bg-surface text-txtmain focus:outline-none focus:ring-2 focus:ring-primary resize-none"
-            rows="3"
+            class="{editWidth ? '' : 'w-full'} px-3 py-2 rounded border border-card-border bg-surface text-txtmain focus:outline-none focus:ring-2 focus:ring-primary resize-none overflow-hidden"
+            style={editWidth ? `width:${editWidth}px` : undefined}
+            rows="1"
             bind:value={editContent}
+            use:autogrow
             onkeydown={handleKeyDown}
           ></textarea>
           <div class="flex justify-end gap-2">
@@ -613,7 +623,7 @@
             {/each}
           </div>
         {/if}
-        <div class="whitespace-pre-wrap pr-8">{textContent}</div>
+        <div class="whitespace-pre-wrap pr-8" bind:this={textEl}>{textContent}</div>
         {#if canEdit}
           <button
             class="absolute top-1.5 right-1.5 p-1 rounded-full opacity-0 group-hover:opacity-100 transition-all bg-white/10 text-white/70 hover:text-white hover:bg-white/25"

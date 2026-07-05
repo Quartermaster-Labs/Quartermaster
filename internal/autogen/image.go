@@ -23,6 +23,64 @@ var imageArchs = map[string]bool{
 	"wan":              true,
 }
 
+// effectiveImageArch returns the arch to classify a gguf as a diffusion model:
+// the declared general.architecture when it is a known image arch, else the
+// tensor-name-sniffed DiffusionKind ("sdxl"/"sd1"). stable-diffusion.cpp's
+// `convert` strips metadata KVs, so a converted SDXL UNet reports arch="" but
+// its tensor names still identify it. Falls back to the declared arch (so the
+// llama-path "# arch=..." comment still names an unknown arch).
+func effectiveImageArch(meta Metadata) string {
+	if isImageArch(meta.Architecture) {
+		return meta.Architecture
+	}
+	if meta.DiffusionKind != "" {
+		return meta.DiffusionKind
+	}
+	return meta.Architecture
+}
+
+// fullCheckpointArchs are diffusion families that stable-diffusion.cpp can only
+// load (and version-detect) as an all-in-one checkpoint via -m, NOT as a bare
+// --diffusion-model UNet plus external CLIPs. sd.cpp fixes the model version
+// right after the UNet loads but before the CLIPs (stable-diffusion.cpp ~L650),
+// and SDXL/SD is only recognized when the UNet and its 2nd text encoder are seen
+// together — so a split load never detects them and dies "get sd version failed".
+// Flux/SD3/Qwen/Z-Image self-identify from the UNet alone, so they keep the split
+// path (external encoders wired from the pool).
+var fullCheckpointArchs = map[string]bool{
+	"sd1":              true,
+	"sd2":              true,
+	"sdxl":             true,
+	"stable-diffusion": true,
+}
+
+// fluxGuidance returns the distilled guidance scale (--guidance) BFL recommends
+// for a flux edit model, matched by name. ok=false means "leave the built-in
+// 3.5" (plain flux-dev, schnell, chroma — none need an override).
+func fluxGuidance(name string) (float64, bool) {
+	n := strings.ToLower(name)
+	switch {
+	case strings.Contains(n, "kontext"):
+		return 2.5, true
+	case strings.Contains(n, "fill"):
+		return 30, true
+	}
+	return 0, false
+}
+
+func isFullCheckpointArch(arch string) bool {
+	a := strings.ToLower(strings.TrimSpace(arch))
+	if fullCheckpointArchs[a] {
+		return true
+	}
+	for k := range fullCheckpointArchs {
+		if strings.HasPrefix(a, k) {
+			return true
+		}
+	}
+	return false
+}
+
 // isImageArch reports whether arch identifies a diffusion model. Matches exact
 // names plus a prefix fallback so versioned archs ("flux.1", "sd3.5") still hit.
 func isImageArch(arch string) bool {
@@ -117,8 +175,9 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string) (c image
 		c.vae = req("vae", enc.FluxVae)
 		c.clipL = req("clip_l", enc.ClipL)
 		c.t5 = req("t5xxl", enc.T5)
-	case a == "sdxl" || strings.HasPrefix(a, "sdxl"):
-		c.vae = enc.SdxlVae // optional: full checkpoints bake CLIP+VAE
+	// SD1/SD2/SDXL are NOT handled here: they load as -m full checkpoints
+	// (isFullCheckpointArch), so imageCmdLines never calls resolveComponents for
+	// them — sd.cpp can't version-detect a split SDXL (bare UNet + external CLIPs).
 	case strings.HasPrefix(a, "lumina") || a == "z_image" || strings.Contains(n, "z-image"):
 		c.vae = req("vae", enc.ZimageVae)
 		c.llm = req("llm", enc.QwenLlm)
@@ -184,19 +243,29 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string) (li
 		}
 	}
 
-	// GGUF diffusion quants are standalone diffusion weights, so they load via
-	// --diffusion-model (not -m, which expects an all-in-one checkpoint). The VAE
-	// and text encoder are separate files supplied as component-path overrides
-	// (--vae / --llm / --clip_l / --t5xxl); their names vary per family.
+	// Most diffusion GGUFs are standalone diffusion weights loaded via
+	// --diffusion-model, with VAE/text-encoder supplied as separate component
+	// files (--vae / --llm / --clip_l / --t5xxl). SD1/SD2/SDXL are the exception:
+	// sd.cpp can't version-detect them split, so they must be an all-in-one
+	// checkpoint loaded via -m (encoders + VAE baked in, none wired externally).
+	fullCkpt := isFullCheckpointArch(arch)
+	modelFlag := "--diffusion-model"
+	if fullCkpt {
+		modelFlag = "-m"
+	}
 	lines = []string{
 		s.SdServerExe,
-		fmt.Sprintf("--diffusion-model %s", modelPath),
+		fmt.Sprintf("%s %s", modelFlag, modelPath),
 		"-l 127.0.0.1",
 		"--listen-port ${PORT}",
 		fmt.Sprintf("--max-vram %g", budget),
 	}
-	// Component files: arch-wired from the shared pool, per-model override wins.
-	comp, missing := resolveComponents(s.Encoders, ov, arch, name)
+	// Full-checkpoint archs bake their encoders/VAE — wire nothing external.
+	// Split archs draw component files from the shared pool (per-model override wins).
+	var comp imageComponents
+	if !fullCkpt {
+		comp, missing = resolveComponents(s.Encoders, ov, arch, name)
+	}
 	if p := imageArg(comp.vae); p != "" {
 		lines = append(lines, "--vae "+p)
 	}
@@ -229,6 +298,14 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string) (li
 	// --max-vram. "off" keeps it on the GPU for a model that has the headroom.
 	if ov == nil || ov.TeOnCpu != "off" {
 		lines = append(lines, "--backend te=cpu")
+	}
+	// Distilled guidance for flux edit models. The /sdapi route only reads
+	// cfg_scale (→ guidance.txt_cfg); it has NO per-request key for distilled
+	// guidance, so it stays at whatever the server launched with. Bake BFL's
+	// per-model default here: Kontext=2.5, Fill=30 (plain flux-dev keeps the
+	// built-in 3.5; schnell/chroma are guidance-free → nothing emitted).
+	if g, ok := fluxGuidance(name); ok {
+		lines = append(lines, fmt.Sprintf("--guidance %g", g))
 	}
 	if offload {
 		lines = append(lines, "--offload-to-cpu")
@@ -326,10 +403,15 @@ func mergeImageVariant(base Override, v VariantSpec) Override {
 	return o
 }
 
-func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, name, arch string, emitted *[]string) {
+func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, name, arch string, bakedEnc bool, emitted *[]string) {
 	lines, budget, offload, missing := imageCmdLines(s, row, ov, arch, name)
 
 	fmt.Fprintf(b, "\n  # arch=%s size=%gGB (image model, sd-server, max-vram=%gGB, offload=%t)\n", arch, row.SizeGB, budget, offload)
+	// SD/SDXL served as -m full checkpoints: if this gguf has no baked encoders it
+	// is a bare UNet, which sd.cpp cannot load standalone (no split path for SDXL).
+	if isFullCheckpointArch(arch) && !bakedEnc {
+		fmt.Fprintf(b, "  # WARNING: %s looks UNet-only (no baked text encoder) — sd.cpp can't load SD/SDXL split; supply an all-in-one checkpoint\n", name)
+	}
 	if len(missing) > 0 {
 		fmt.Fprintf(b, "  # WARNING: %s needs encoder(s) [%s] that aren't in settings.encoders — generation will fail until declared\n", name, strings.Join(missing, ", "))
 	}

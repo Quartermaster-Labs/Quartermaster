@@ -103,8 +103,12 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 		}
 		seen[name] = true
 
+		// A single unparseable/misdetected gguf must not nuke the whole config
+		// (and with it startup): note it in-band and skip, keeping every other
+		// model servable.
 		if err := emitModel(&b, s, gf, row, ov, name, &emitted); err != nil {
-			return "", err
+			fmt.Fprintf(&b, "\n  # SKIPPED %q: %v\n", name, err)
+			continue
 		}
 	}
 
@@ -284,8 +288,9 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	// sizing applies. Detect by arch and emit a separate block. Unknown image
 	// archs fall through to the llama path, where the YAML "# arch=..." comment
 	// reveals the real arch name to add to imageArchs.
-	if isImageArch(meta.Architecture) {
-		emitImageModel(b, s, row, ov, name, meta.Architecture, emitted)
+	imgArch := effectiveImageArch(meta)
+	if isImageArch(imgArch) {
+		emitImageModel(b, s, row, ov, name, imgArch, meta.HasBakedEncoders, emitted)
 		// Named variants are emitted as separate "<name>-<variant>" sd-server
 		// entries. Each inherits the model's component paths/placement and overrides
 		// only its own generation preset. Fleet-wide defaultVariants are llama-shaped
@@ -296,7 +301,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 					continue
 				}
 				vov := mergeImageVariant(*ov, v)
-				emitImageModel(b, s, row, &vov, name+"-"+v.Name, meta.Architecture, emitted)
+				emitImageModel(b, s, row, &vov, name+"-"+v.Name, imgArch, meta.HasBakedEncoders, emitted)
 			}
 		}
 		return nil
@@ -451,10 +456,12 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			Ctx:      override.Ctx,
 			Vision:   true,
 		}
-		// Image chats need a small text window; without an explicit override the
-		// twin would inherit the sizer's maxed 32k ctx (~2.5 GB KV, wasted for
-		// vision). Default it small. A model or vision-variant Ctx still wins below.
-		if vp.Ctx == 0 {
+		// Small text window only for dedicated VL models (Qwen-VL, InternVL, …):
+		// their whole purpose is image chat, so the maxed 32k ctx (~2.5 GB KV) is
+		// wasted. A plain LLM that merely ships an mmproj sidecar keeps full context
+		// on its vision twin (ctx 0 → sizer picks the budget max, same as solo).
+		// A model or vision-variant Ctx override still wins below.
+		if vp.Ctx == 0 && isVLModel(name, meta.Architecture) {
 			vp.Ctx = s.VisionCtx
 		}
 		// A reserved "vision" variant (from the config editor) tunes the twin in
@@ -930,6 +937,17 @@ func mmprojVramGB(fileSizeGB float64, s Settings) float64 {
 	return fileSizeGB + s.VisionOverheadGB
 }
 
+// isVLModel reports whether a model is a dedicated vision-language model (its
+// core identity is image chat: Qwen2/3-VL, InternVL, CogVLM), as opposed to a
+// text LLM that merely ships an mmproj sidecar for optional vision. Only the
+// former gets its vision twin's ctx capped to VisionCtx. VL archs carry "vl" in
+// their gguf arch (qwen2vl/qwen3vl/qwen3vlmoe) and such models are conventionally
+// named "*-VL"; a plain LLM-with-vision (gemma3, mllama, mistral) matches neither.
+func isVLModel(name, arch string) bool {
+	return strings.Contains(strings.ToLower(name), "vl") ||
+		strings.Contains(strings.ToLower(arch), "vl")
+}
+
 // effectiveUb resolves the physical batch (-ub/-b) for a profile, matching the
 // flag emitted by buildCmdLines: 1024 default, 512 for long ctx, overridden by
 // ov.Ub then the profile's own Ub.
@@ -1121,8 +1139,8 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 // what a save would emit. Returns the command on one line (with `${PORT}` intact).
 func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string, error) {
 	// Diffusion models render an sd-server command, not a llama-server one.
-	if isImageArch(meta.Architecture) {
-		lines, _, _, _ := imageCmdLines(s, row, &ov, meta.Architecture, row.FullPath)
+	if imgArch := effectiveImageArch(meta); isImageArch(imgArch) {
+		lines, _, _, _ := imageCmdLines(s, row, &ov, imgArch, row.FullPath)
 		return strings.Join(lines, " "), nil
 	}
 	// Embedders render a minimal --embeddings command (no KV/spec sizing).

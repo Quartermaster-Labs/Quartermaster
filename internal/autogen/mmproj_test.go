@@ -5,6 +5,28 @@ import (
 	"testing"
 )
 
+// Only dedicated VL models cap their vision twin ctx; a plain LLM-with-mmproj
+// keeps full context. Detection is by name or gguf arch.
+func TestIsVLModel(t *testing.T) {
+	cases := []struct {
+		name, arch string
+		want       bool
+	}{
+		{"qwen3-vl-30b", "qwen3vlmoe", true},
+		{"qwen2-vl-7b", "qwen2vl", true},
+		{"internvl-8b", "qwen2", true},   // VL by name
+		{"some-model", "cogvlm", true},   // VL by arch
+		{"gemma-3-12b", "gemma3", false}, // LLM-with-vision
+		{"mistral-small", "llama", false},
+		{"llama-3.2-11b-vision", "mllama", false}, // vision LLM, not a "-vl" family
+	}
+	for _, c := range cases {
+		if got := isVLModel(c.name, c.arch); got != c.want {
+			t.Errorf("isVLModel(%q,%q)=%v want %v", c.name, c.arch, got, c.want)
+		}
+	}
+}
+
 // A "-vision" twin's projector footprint (weights + VisionOverheadGB CLIP
 // reserve) must reach EstVramGB via EstimateInput.MmprojGB — this is the charge
 // the spawn-time guard (LiveOffloadArgs) feeds in so it sizes the twin like the
