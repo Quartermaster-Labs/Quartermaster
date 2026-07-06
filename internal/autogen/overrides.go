@@ -203,7 +203,7 @@ type GroupSpec struct {
 type Override struct {
 	Match        string `yaml:"match"`
 	Quant        string `yaml:"quant"`
-	Spec         string `yaml:"spec"`         // "draft-mtp" | "" (=> ngram-mod); chainable with "+"
+	Spec         string `yaml:"spec"`         // "draft-mtp" | "draft-dflash" | "" (=> ngram-mod); chainable with "+"
 	ReasoningFmt string `yaml:"reasoningFmt"` // "auto" | "off" | "" (=> auto)
 	// ReasoningBudget caps thinking tokens (--reasoning-budget N). 0 => omit (no
 	// cap). Inherited by ctx-tier variants; named variants are standalone.
@@ -256,7 +256,10 @@ type Override struct {
 	DryAllowedLength int     `yaml:"dryAllowedLength"`
 	// Speculative-decode sub-knobs, emitted only for the matching Spec backend;
 	// 0/false => omit (llama-server default). SpecDraftNMax defaults to 2 for
-	// draft-mtp; the SpecNgram* knobs apply to the ngram-map-k4v backend.
+	// draft-mtp, 6 for draft-dflash (a diffusion block tolerates a longer draft
+	// chain than single-token MTP; 6 measured optimal, higher over-drafts); the
+	// SpecNgram* knobs apply to the
+	// ngram-map-k4v backend.
 	SpecDraftNMax    int  `yaml:"specDraftNMax"`
 	SpecDefault      bool `yaml:"specDefault"`
 	SpecNgramSizeN   int  `yaml:"specNgramSizeN"`

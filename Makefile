@@ -75,8 +75,9 @@ package-windows: windows
 	# were renamed/removed across versions. (No `rm -rf` of the bundle dir itself:
 	# on Windows a file-watcher often holds a handle and it fails "resource busy".)
 	mkdir -p $(PKG_WIN_DIR)/config
-	rm -rf $(PKG_WIN_DIR)/packaging
+	rm -rf $(PKG_WIN_DIR)/packaging $(PKG_WIN_DIR)/templates
 	cp $(BUILD_DIR)/$(APP_NAME)-windows-amd64.exe $(PKG_WIN_DIR)/
+	cp -r templates $(PKG_WIN_DIR)/templates
 	cp quartermaster-generate.example.yaml $(PKG_WIN_DIR)/config/quartermaster-generate.example.yaml
 	# Seed the runtime generate file from the example only when none exists yet,
 	# so a re-package never clobbers the user's edited quartermaster-generate.yaml.
@@ -122,8 +123,9 @@ _package-nix:
 	@echo "Packaging $(NIX_OS) bundle..."
 	$(eval PKG_NIX_DIR := $(BUILD_DIR)/$(APP_NAME)-$(NIX_OS))
 	mkdir -p $(PKG_NIX_DIR)/config
-	rm -rf $(PKG_NIX_DIR)/packaging
+	rm -rf $(PKG_NIX_DIR)/packaging $(PKG_NIX_DIR)/templates
 	cp $(BUILD_DIR)/$(NIX_BIN) $(PKG_NIX_DIR)/
+	cp -r templates $(PKG_NIX_DIR)/templates
 	cp quartermaster-generate.example.yaml $(PKG_NIX_DIR)/config/quartermaster-generate.example.yaml
 	@if [ -f $(PKG_NIX_DIR)/config/quartermaster-generate.yaml ]; then \
 		echo "  kept existing config/quartermaster-generate.yaml"; \

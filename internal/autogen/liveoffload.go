@@ -87,6 +87,16 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 			logf(fmt.Sprintf("dynoffload: --mmproj stat failed (%v); projector VRAM uncharged", statErr))
 		}
 	}
+	// A separate draft gguf (-md: MTP sidecar or any DFlash drafter) has real
+	// weights on disk; charge its actual size instead of the flat 0.34 GB
+	// baked-in-MTP default so a big drafter doesn't get under-charged here.
+	if md, i := argVal(args, "-md"); i >= 0 {
+		if fi, statErr := os.Stat(md); statErr == nil {
+			in.DraftGB = float64(fi.Size()) / gib
+		} else if logf != nil {
+			logf(fmt.Sprintf("dynoffload: -md stat failed (%v); draft VRAM under-charged", statErr))
+		}
+	}
 
 	res, err := EstimatePlan(s, meta, in)
 	if err != nil {

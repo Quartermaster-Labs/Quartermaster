@@ -15,6 +15,15 @@ import (
 // the inputs that produced it.
 const hashCacheSuffix = ".modelhash"
 
+// genVersion is folded into the inputs hash so a change to the config-emit logic
+// (buildCmdLines/emitProfile output) forces a one-time regen even when the models,
+// generate file, and sidecar are byte-identical. The hash otherwise only tracks
+// inputs, not the generator, so an emit change would silently ship a stale config.
+// Bump this whenever the emitted YAML for unchanged inputs changes.
+//
+//	v2: -b decoupled from -ub (logical batch fixed at 2048, clamped >=ub, <=ctx).
+const genVersion = "v2"
+
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the
 // generate control file. A stable hash means a regen would produce the same
@@ -83,7 +92,8 @@ func readHashCache(path string) string {
 // resolved modelsRoot + raw generate file + UI sidecar. Kept in one place so
 // EnsureConfig and CurrentInputsHash always hash identical inputs.
 func buildHashInput(roots []string, rawGenerate, sidecarBytes []byte) []byte {
-	out := append([]byte(strings.Join(roots, "\x00")+"\x00"), rawGenerate...)
+	out := append([]byte("genver\x00"+genVersion+"\x00"), []byte(strings.Join(roots, "\x00")+"\x00")...)
+	out = append(out, rawGenerate...)
 	return append(append(out, "\x00sidecar\x00"...), sidecarBytes...)
 }
 

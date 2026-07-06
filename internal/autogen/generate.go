@@ -348,12 +348,12 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	}
 	kvInRam := ov != nil && ov.KvInRam
 
-	modelSpec := effectiveSpec(meta, ov, row.DraftPath != "")
-
-	specOh := 0.0
-	if specHas(modelSpec, "draft-mtp") {
-		specOh = 0.34
-	}
+	// Pre-placement (ngl not chosen yet): assume GPU-bound so a dflash sidecar
+	// charges its real draft VRAM. If the model turns out CPU-bound and emit
+	// downgrades to mtp, we've over-reserved by the draft size — conservative,
+	// never an under-count that could OOM.
+	modelSpec := effectiveSpec(meta, ov, row.DraftKind, false)
+	specOh := draftOverheadGB(modelSpec, row.DraftSizeGB)
 	var ctxVariants []int
 	override := Override{}
 	if ov != nil {
@@ -418,10 +418,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		if v.Spec != "" {
 			vEffSpec = v.Spec
 		}
-		vSpecOh := 0.0
-		if specHas(vEffSpec, "draft-mtp") {
-			vSpecOh = 0.34
-		}
+		vSpecOh := draftOverheadGB(vEffSpec, row.DraftSizeGB)
 		// Standalone: a blank ctx-checkpoints uses the generator default, not the
 		// model-wide override value.
 		vCheckpoints := v.CtxCheckpoints
@@ -478,11 +475,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			}
 			// Spec changes the draft overhead; recharge off the variant's spec.
 			if v.Spec != "" {
-				vSpecOh := 0.0
-				if specHas(v.Spec, "draft-mtp") {
-					vSpecOh = 0.34
-				}
-				vp.Overhead = s.VramOverheadGB + vSpecOh + mmprojVramGB(row.MmprojSizeGB, s)
+				vp.Overhead = s.VramOverheadGB + draftOverheadGB(v.Spec, row.DraftSizeGB) + mmprojVramGB(row.MmprojSizeGB, s)
 			}
 			vp.Unlisted = v.Unlisted
 			vp.KvK = v.KvK
@@ -502,7 +495,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	// of CPU expert offload, so it's flat VRAM overhead. Replaces the old flat
 	// 0.17 GB ubSoloOh fudge.
 	for i := range profiles {
-		profiles[i].Overhead += computeBufferGB(meta, effectiveUb(profiles[i], ov), s.ComputeBufFactor)
+		profiles[i].Overhead += computeBufferGB(meta, effectiveUb(profiles[i], ov, profiles[i].Ctx), s.ComputeBufFactor)
 	}
 
 	for _, prof := range profiles {
@@ -894,18 +887,21 @@ func estForOffload(meta Metadata, prof profile, kvReserve float64, ngl, ncpuMoe 
 // Settings.ComputeBufFactor scales the whole analytic term for per-build/arch
 // calibration against the "compute buffer size" llama logs.
 //
-// computeLogitsTokens caps the logits/output tensor at n_vocab*THIS*4 rather than
-// n_vocab*n_ubatch. Current llama.cpp sizes the output buffer by n_outputs (the
-// tokens it actually emits logits for — ~parallel slots during decode, the final
-// chunk during prefill), NOT the full physical batch. Charging n_ubatch (e.g.
-// 1024) overcounted the buffer by ~ub/256x on large-vocab models (~0.5GB on a
-// 150k-vocab MoE at ub=1024), which made the sizer over-offload experts to CPU
-// and waste live VRAM. 256 keeps a conservative reserve above the true decode
-// footprint while still scaling with vocab so large-vocab spillover stays caught.
+// computeLogitsTokens caps the vocab-scaled term at n_vocab*THIS*4. The output
+// TENSOR is sized by n_outputs (~1 in prefill) — but empirically the CUDA compute
+// buffer for a large-vocab model still grows with the physical batch (output-
+// projection / cuBLAS workspace tiled over the ubatch). Measured on Qwen3.6-35B-A3B
+// (vocab 248320, embd 2048) on an 8GB card: at ub=512 the model fits its budget, at
+// ub=1024 it spills ~0.5GB into shared memory. A 256 cap made the estimate nearly
+// ub-blind (+31MB from 512->1024) so the sizer never charged the extra ub cost and
+// over-committed VRAM. Cap at 1024 so the term scales with ub across the useful
+// range (vocab*1024*4 ~1.0GB, giving the observed +0.5GB from 512->1024) and stops
+// the overfill. ponytail: ceiling is 1024 (== the common max ub); revisit if ub>1024
+// is used, and dial Settings.ComputeBufFactor down if it over-offloads other models.
 const (
 	computeActCopies    = 8.0
 	computeCudaCtxGB    = 0.3
-	computeLogitsTokens = 256.0
+	computeLogitsTokens = 1024.0
 	computeFallbackGB   = 0.17 // vocab/embd dims missing => prior flat estimate
 )
 
@@ -948,12 +944,39 @@ func isVLModel(name, arch string) bool {
 		strings.Contains(strings.ToLower(arch), "vl")
 }
 
+// qwenFixedChatTemplateFile is the server-cwd-relative path to froggeric's
+// community chat-template fix for Qwen 3.5/3.6 (Apache-2.0, inherited from
+// Qwen; see templates/CREDITS.md). The official Qwen 3.5/3.6 templates
+// mutate already-rendered history on every turn, so llama.cpp's prefix
+// cache never matches and the whole prompt reprocesses each request; this
+// drop-in template renders history deterministically instead.
+const qwenFixedChatTemplateFile = "templates/qwen-fixed-chat-template.jinja"
+
+// needsQwenFixedChatTemplate reports whether a model's gguf arch identifies it
+// as a Qwen 3.5 or 3.6 variant, which should get qwenFixedChatTemplateFile
+// instead of its baked-in gguf template. llama.cpp has not split out a
+// separate arch for 3.6: both "Qwen3.5" and "Qwen3.6"-branded ggufs report
+// "qwen35" (dense) or "qwen35moe" (MoE) — verified against real local ggufs,
+// since neither is exercised by real_models_test.go's fixture set.
+func needsQwenFixedChatTemplate(arch string) bool {
+	switch strings.ToLower(arch) {
+	case "qwen35", "qwen35moe":
+		return true
+	default:
+		return false
+	}
+}
+
 // effectiveUb resolves the physical batch (-ub/-b) for a profile, matching the
 // flag emitted by buildCmdLines: 1024 default, 512 for long ctx, overridden by
-// ov.Ub then the profile's own Ub.
-func effectiveUb(prof profile, ov *Override) int {
+// ov.Ub then the profile's own Ub. ctx is the resolved context length; a >=64k
+// ctx drops ub to 512 even when prof.IsLong wasn't set upfront — the auto-sized
+// solo profile (Ctx=0) only learns its real ctx after sizing, and at 64k+ the
+// ub=1024 compute buffer won't fit an 8GB card even fully expert-offloaded.
+// Pass 0 pre-sizing to charge the conservative (larger) ub=1024 buffer.
+func effectiveUb(prof profile, ov *Override, ctx int) int {
 	ub := 1024
-	if prof.IsLong {
+	if prof.IsLong || ctx >= 65536 {
 		ub = 512
 	}
 	if ov != nil && ov.Ub > 0 {
@@ -1009,9 +1032,23 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		threads = ov.Threads
 	}
 
-	ub := effectiveUb(prof, ov)
+	ub := effectiveUb(prof, ov, ctx)
+	// -b (logical batch) decoupled from -ub (physical/compute tile). A larger logical
+	// batch pipelines more ub-micro-batches per decode(), overlapping CPU expert-fetch
+	// with GPU compute on MoE offload — measured +38% pp at ub1024, +20% at ub512, for
+	// ZERO extra VRAM (the compute buffer is sized by ub, not b; b only sizes the
+	// token/pos arrays). 2048 is the plateau (bench: b past 2048 flat). Clamp >=ub and
+	// <=ctx. ponytail: fixed 2048, expose a per-model b override only if a model wants
+	// less pipelining depth.
+	bTok := 2048
+	if bTok < ub {
+		bTok = ub
+	}
+	if bTok > ctx {
+		bTok = ctx
+	}
 
-	spec := effectiveSpec(meta, ov, row.DraftPath != "")
+	spec := effectiveSpec(meta, ov, row.DraftKind, cpuBoundDecode(meta, ngl))
 	if prof.Spec != "" {
 		spec = prof.Spec
 	}
@@ -1039,7 +1076,7 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		"--host 127.0.0.1",
 		fmt.Sprintf("-ngl %d", ngl),
 		fmt.Sprintf("-c %d", ctx),
-		fmt.Sprintf("-ub %d -b %d", ub, ub),
+		fmt.Sprintf("-ub %d -b %d", ub, bTok),
 		fmt.Sprintf("-fa %s -ctk %s -ctv %s", fa, kvK, kvV),
 		fmt.Sprintf("--parallel %d %s%s%s--kv-unified --no-warmup --no-webui --metrics --props", parallel, noMmapFlag, mlockFlag, kvoFlag),
 	}
@@ -1047,23 +1084,40 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	if prof.Vision && row.MmprojPath != "" {
 		lines = append(lines, fmt.Sprintf("--mmproj %s", strings.ReplaceAll(row.MmprojPath, "\\", "/")))
 	}
-	// spec is a "+"-joined list of backends (draft-mtp / ngram-map-k4v / ngram-mod
-	// / none); llama-server accepts them chained, so emit one --spec-type each and
-	// the sub-knobs for whichever backends are present.
+	// spec is a "+"-joined list of backends (draft-mtp / draft-dflash / ngram-map-k4v
+	// / ngram-mod / none); llama-server accepts them chained, so emit one --spec-type
+	// each and the sub-knobs for whichever backends are present.
 	for _, st := range strings.Split(spec, "+") {
 		lines = append(lines, fmt.Sprintf("--spec-type %s", st))
 	}
-	if specHas(spec, "draft-mtp") {
+	// draft-mtp and draft-dflash both drive off a draft model checked each step
+	// against the main model, so share the -md/-ngld wiring; only the sane
+	// default draft length differs. DFlash proposes a whole diffusion block per
+	// pass so it tolerates a longer chain than single-token MTP, but 6 is the
+	// measured sweet spot on Qwen3.6-35B (author's recommended default): higher
+	// (12/15) over-drafts — accept rate falls faster than length rises, so the
+	// wasted GPU verify compute makes TG *worse* on every workload we benched.
+	if isDraftSpec := specHas(spec, "draft-mtp") || specHas(spec, "draft-dflash"); isDraftSpec {
 		nmax := 2
+		if specHas(spec, "draft-dflash") {
+			nmax = 6
+		}
 		if ov != nil && ov.SpecDraftNMax > 0 {
 			nmax = ov.SpecDraftNMax
 		}
 		lines = append(lines, fmt.Sprintf("--spec-draft-n-max %d", nmax))
-		// Separate MTP draft file (e.g. Gemma-4): baked-in MTP models need no -md.
-		// Pin the draft fully to VRAM (-ngld 99): spec decode is serial (draft
-		// proposes, main verifies each step), so a CPU-resident draft stalls the
-		// GPU main model every round and erases the speedup. DraftGB charges this.
-		if row.DraftPath != "" {
+		// A separate draft file (MTP sidecar like Gemma-4, or any DFlash drafter —
+		// DFlash has no baked-in variant, it's always separate): baked-in MTP
+		// models need no -md. Only attach the file when its kind matches the active
+		// draft backend — a draft-dflash gguf must NOT be loaded as a draft-mtp
+		// draft (arch mismatch: the sidecar is arch=dflash) and vice versa; a
+		// baked-in MTP layer (DraftKind=="") correctly emits no -md. Pin the draft
+		// fully to VRAM (-ngld 99): spec decode is serial (draft proposes, main
+		// verifies each step), so a CPU-resident draft stalls the GPU main model
+		// every round. DraftSizeGB charges this via draftOverheadGB.
+		mdMatches := (specHas(spec, "draft-mtp") && row.DraftKind == "mtp") ||
+			(specHas(spec, "draft-dflash") && row.DraftKind == "dflash")
+		if row.DraftPath != "" && mdMatches {
 			lines = append(lines, fmt.Sprintf("-md %s", strings.ReplaceAll(row.DraftPath, "\\", "/")))
 			lines = append(lines, "-ngld 99")
 		}
@@ -1126,6 +1180,9 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	if s.SlotCache.Enable && (ov == nil || ov.SlotCache == nil || *ov.SlotCache) {
 		lines = append(lines, fmt.Sprintf("--slot-save-path %q", slotKvPath(s.SlotCache)))
 	}
+	if needsQwenFixedChatTemplate(meta.Architecture) {
+		lines = append(lines, fmt.Sprintf("--chat-template-file %s", qwenFixedChatTemplateFile))
+	}
 	if ov != nil {
 		if extra := strings.TrimSpace(ov.ExtraArgs); extra != "" {
 			lines = append(lines, extra)
@@ -1169,10 +1226,7 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 	if ov.VramTargetGB > 0 {
 		target = ov.VramTargetGB
 	}
-	specOh := 0.0
-	if specHas(effectiveSpec(meta, &ov, row.DraftPath != ""), "draft-mtp") {
-		specOh = 0.34
-	}
+	specOh := draftOverheadGB(effectiveSpec(meta, &ov, row.DraftKind, false), row.DraftSizeGB)
 	prof := profile{
 		Name:           "preview",
 		Target:         target,
@@ -1184,7 +1238,7 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 		IsLong:         ov.Ctx >= 65536,
 		CtxCheckpoints: ov.CtxCheckpoints,
 	}
-	prof.Overhead += computeBufferGB(meta, effectiveUb(prof, &ov), s.ComputeBufFactor)
+	prof.Overhead += computeBufferGB(meta, effectiveUb(prof, &ov, prof.Ctx), s.ComputeBufFactor)
 	ctx, plan, kvReserve, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, ov.KvInRam)
 	if err != nil {
 		return "", err
@@ -1227,17 +1281,67 @@ func specHas(spec, b string) bool {
 }
 
 // formatCtxTag renders a short ctx tag: 8192->"8k", 131072->"128k", 1048576->"1m".
-// effectiveSpec resolves the spec-type: MTP-capable models default to draft-mtp, others to
-// ngram-mod. An explicit override spec wins (set spec: "ngram-mod" to force ngram on an MTP model).
-func effectiveSpec(meta Metadata, ov *Override, hasDraft bool) string {
-	spec := "ngram-mod"
-	if meta.IsMTP || hasDraft {
-		spec = "draft-mtp"
-	}
+// effectiveSpec resolves the spec-type: a paired DFlash drafter defaults to
+// draft-dflash, MTP-capable models (baked-in nextn layer or a paired mtp-*.gguf
+// sidecar) to draft-mtp, everything else to ngram-mod. An explicit override spec
+// wins (set spec: "ngram-mod" to force ngram on a drafted model).
+//
+// A DFlash sidecar sitting in the model's dir is a deliberate choice (the user
+// downloaded it), so it takes priority over a baked-in nextn layer: several
+// unsloth ggufs (Qwen3.6-27B/35B) carry BOTH, and picking draft-mtp there would
+// both ignore the DFlash file and mis-load it as an MTP draft (arch mismatch).
+func effectiveSpec(meta Metadata, ov *Override, draftKind string, cpuBound bool) string {
+	// Explicit override always wins.
 	if ov != nil && ov.Spec != "" {
-		spec = ov.Spec
+		return ov.Spec
 	}
-	return spec
+	// DFlash's payoff — verifying a whole drafted block in one main-model pass —
+	// only holds when decode is GPU-bound. On a CPU-bound model (dense weights
+	// spilled to CPU) that batched verify costs a full forward *per drafted
+	// token*, and the resident draft weights crowd already-scarce VRAM. Measured
+	// on Qwen3.6 (greedy reasoning): MoE-35B (GPU-bound) dflash 62.7 t/s = +17%
+	// vs mtp; dense-27B (16/65 layers on GPU, CPU-bound) dflash only *ties* mtp
+	// (~8 t/s) AND burns 1.43 GB VRAM the baked-MTP head doesn't. So use dflash
+	// only when GPU-bound; on a CPU-bound model prefer the free baked-MTP head,
+	// else model-less ngram. (A dflash sidecar still beats a baked MTP head when
+	// GPU-bound — that's the whole point of downloading it.)
+	if draftKind == "dflash" && !cpuBound {
+		return "draft-dflash"
+	}
+	switch {
+	case meta.IsMTP || draftKind == "mtp":
+		return "draft-mtp"
+	}
+	return "ngram-mod"
+}
+
+// cpuBoundDecode reports whether the model's decode is CPU-bound at this
+// placement: a dense model with layers spilled off the GPU (ngl below its
+// block count). MoE models keep active params tiny (experts stream, ~3B active
+// on Qwen3.6-35B) so they stay GPU-fast even with --n-cpu-moe, and never count
+// as CPU-bound here. Drives effectiveSpec's dflash-vs-mtp choice.
+func cpuBoundDecode(meta Metadata, ngl int) bool {
+	return !meta.IsMoE && int64(ngl) < meta.BlockCount
+}
+
+// draftOverheadGB returns the VRAM overhead to charge for the active spec
+// chain's draft model. A baked-in MTP nextn layer with no separate weights
+// file is a flat ~0.34 GB (KV+compute). A separate draft gguf — an MTP
+// sidecar (Gemma-4) or any DFlash block-diffusion drafter, which is always a
+// separate file — charges its real on-disk weight size plus a small
+// KV/compute pad instead, so large drafts scale up rather than under-counting.
+func draftOverheadGB(spec string, draftSizeGB float64) float64 {
+	switch {
+	case specHas(spec, "draft-dflash"):
+		return draftSizeGB + 0.1
+	case specHas(spec, "draft-mtp"):
+		if draftSizeGB > 0 {
+			return draftSizeGB + 0.1
+		}
+		return 0.34
+	default:
+		return 0
+	}
 }
 
 func formatCtxTag(ctx int) string {

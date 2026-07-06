@@ -356,6 +356,7 @@ export interface ModelConfig {
   maxCtx: number;
   blockCount: number;
   isMTP: boolean;
+  isDflash: boolean; // paired *-dflash-*.gguf sidecar => draft-dflash usable
   isImage: boolean; // diffusion model => image config form
   hasOverride: boolean;
   override: ModelOverride | null;

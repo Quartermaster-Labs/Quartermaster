@@ -3,6 +3,7 @@ package autogen
 import (
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -19,7 +20,12 @@ type GgufRow struct {
 	SizeGB    float64
 	Publisher string
 	Repo      string
-	DraftPath string // separate MTP/draft gguf in the same dir (mtp-*.gguf), "" if none
+	// Separate MTP or DFlash draft gguf sitting in the same dir, "" if none.
+	// MTP sidecars are named "mtp-*.gguf"; DFlash drafters carry "dflash"
+	// anywhere in the name (e.g. "Qwen3.6-35B-A3B-DFlash-Q8_0.gguf").
+	DraftPath   string
+	DraftKind   string  // "mtp" | "dflash"; "" when DraftPath == ""
+	DraftSizeGB float64 // on-disk size of DraftPath; 0 when DraftPath == ""
 	// Vision projector (clip-arch gguf) sitting in the same dir, if any. Loaded via
 	// --mmproj to enable image input; drives the auto-generated "-vision" variant.
 	MmprojPath   string
@@ -35,6 +41,11 @@ var (
 	// Separate MTP/draft sidecar (e.g. Gemma-4 ships "mtp-gemma-4-12B-it.gguf"
 	// alongside the main model). Loaded via -md + --spec-type draft-mtp, not served alone.
 	mtpFileRe = regexp.MustCompile(`(?i)^mtp[-_.]`)
+	// Separate DFlash draft sidecar (block-diffusion drafter, e.g.
+	// "Qwen3.6-35B-A3B-DFlash-Q8_0.gguf"). Unlike the MTP prefix convention,
+	// publishers embed "dflash" as an infix, so match anywhere in the name.
+	// Loaded via -md + --spec-type draft-dflash, not served alone.
+	dflashFileRe = regexp.MustCompile(`(?i)dflash`)
 )
 
 // quantFromName extracts the quant token (upper-cased) from a gguf file name,
@@ -84,7 +95,7 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 	modelsRoot = info
 
 	var rows []GgufRow
-	mtpByDir := map[string]string{}           // dir -> separate MTP draft gguf
+	draftByDir := map[string]draftSidecar{}   // dir -> paired MTP/DFlash draft gguf
 	mmprojByDir := map[string]mmprojSidecar{} // dir -> vision projector gguf
 	walkErr := filepath.WalkDir(modelsRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -94,9 +105,19 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 			return nil
 		}
 		name := d.Name()
-		// Separate MTP draft: record it for pairing, don't serve it as its own model.
+		// Separate MTP or DFlash draft: record it for pairing, don't serve it as
+		// its own model. Checked in this order since an MTP sidecar never also
+		// matches the dflash infix.
 		if mtpFileRe.MatchString(name) {
-			mtpByDir[filepath.Dir(path)] = path
+			if fi, e := d.Info(); e == nil {
+				draftByDir[filepath.Dir(path)] = draftSidecar{path: path, sizeGB: round(float64(fi.Size())/gib, 2), kind: "mtp"}
+			}
+			return nil
+		}
+		if dflashFileRe.MatchString(name) {
+			if fi, e := d.Info(); e == nil {
+				draftByDir[filepath.Dir(path)] = draftSidecar{path: path, sizeGB: round(float64(fi.Size())/gib, 2), kind: "dflash"}
+			}
 			return nil
 		}
 		for _, p := range skipPatterns {
@@ -166,12 +187,15 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 	if walkErr != nil {
 		return nil, fmt.Errorf("walking %s: %w", modelsRoot, walkErr)
 	}
-	// Pair each model with the MTP draft sitting in its own dir (typically one
-	// model per dir). Enables --spec-type draft-mtp + -md without hand config.
+	// Pair each model with the MTP/DFlash draft sitting in its own dir (typically
+	// one model per dir). Enables --spec-type draft-mtp/draft-dflash + -md
+	// without hand config.
 	for i := range rows {
 		dir := filepath.Dir(rows[i].FullPath)
-		if d := mtpByDir[dir]; d != "" {
-			rows[i].DraftPath = d
+		if d, ok := draftByDir[dir]; ok {
+			rows[i].DraftPath = d.path
+			rows[i].DraftKind = d.kind
+			rows[i].DraftSizeGB = d.sizeGB
 		}
 		if m, ok := mmprojByDir[dir]; ok {
 			rows[i].MmprojPath = m.path
@@ -181,8 +205,48 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 	return rows, nil
 }
 
+// DraftSidecarForDir scans one directory (non-recursive) for a paired MTP or
+// DFlash draft gguf, same convention as DiscoverGgufModels' walk. Used by the
+// config-editor API to answer "is draft-dflash/draft-mtp available for this
+// model" without a full models-root walk.
+func DraftSidecarForDir(dir string) (path, kind string, sizeGB float64) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", "", 0
+	}
+	for _, ent := range entries {
+		if ent.IsDir() || !strings.EqualFold(filepath.Ext(ent.Name()), ".gguf") {
+			continue
+		}
+		name := ent.Name()
+		k := ""
+		switch {
+		case mtpFileRe.MatchString(name):
+			k = "mtp"
+		case dflashFileRe.MatchString(name):
+			k = "dflash"
+		default:
+			continue
+		}
+		fi, err := ent.Info()
+		if err != nil {
+			continue
+		}
+		return filepath.Join(dir, name), k, round(float64(fi.Size())/gib, 2)
+	}
+	return "", "", 0
+}
+
 // mmprojSidecar is a discovered vision projector paired to a model dir.
 type mmprojSidecar struct {
 	path   string
 	sizeGB float64
+}
+
+// draftSidecar is a discovered speculative-decoding draft gguf paired to a
+// model dir (either an MTP nextn sidecar or a DFlash block-diffusion drafter).
+type draftSidecar struct {
+	path   string
+	sizeGB float64
+	kind   string // "mtp" | "dflash"
 }

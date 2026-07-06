@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -170,7 +171,8 @@ type modelConfigResp struct {
 	Cmd         string       `json:"cmd"`
 	MaxCtx      int          `json:"maxCtx"`     // trained context length (slider ceiling); 0 if unknown
 	BlockCount  int          `json:"blockCount"` // transformer layers (denominator for -ngl); 0 if unknown
-	IsMTP       bool         `json:"isMTP"`      // model has nextn/MTP layers => draft-mtp usable
+	IsMTP       bool         `json:"isMTP"`      // model has nextn/MTP layers, or an mtp-* sidecar => draft-mtp usable
+	IsDflash    bool         `json:"isDflash"`   // paired *-dflash-*.gguf sidecar in the model's dir => draft-dflash usable
 	IsImage     bool         `json:"isImage"`    // diffusion model (sd-server) => image config form
 	HasOverride bool         `json:"hasOverride"`
 	Override    *overrideDTO `json:"override"`
@@ -330,9 +332,12 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 	if meta, err := autogen.ReadGgufMetadataCached(gguf); err == nil {
 		resp.MaxCtx = int(meta.ContextLength)
 		resp.BlockCount = int(meta.BlockCount)
-		// MTP-capable via baked-in nextn layers OR a separate draft file paired in
-		// the cmd (-md, e.g. Gemma-4). Either makes draft-mtp a valid spec choice.
-		resp.IsMTP = meta.IsMTP || strings.Contains(cmd, "--spec-type draft-mtp") || strings.Contains(cmd, "-md ")
+		// MTP-capable via baked-in nextn layers, a paired mtp-* sidecar, or an
+		// already-active draft-mtp cmd. draft-dflash only via a paired sidecar
+		// (there's no baked-in dflash arch signal) or an already-active cmd.
+		_, draftKind, _ := autogen.DraftSidecarForDir(filepath.Dir(gguf))
+		resp.IsMTP = meta.IsMTP || draftKind == "mtp" || strings.Contains(cmd, "--spec-type draft-mtp")
+		resp.IsDflash = draftKind == "dflash" || strings.Contains(cmd, "--spec-type draft-dflash")
 	}
 	// Fleet-wide default variants (e.g. game) so the editor can surface + edit them.
 	if gf, err := autogen.LoadGenerateFile(s.autogen.GeneratePath, s.autogen.ModelsDir); err == nil {
@@ -589,6 +594,17 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 	}
 	if v := q.Get("cpuOffload"); v != "" {
 		in.CpuOffload, _ = strconv.Atoi(v)
+	}
+	// A paired draft sidecar (MTP/DFlash gguf in the model's dir) costs real VRAM
+	// once the active spec is a draft backend. The config-editor path starts blank
+	// (no -md in the cmd to stat), so seed DraftGB from the sidecar's on-disk size
+	// — otherwise draftOverheadGB charges only its flat 0.1 GB pad and the estimate
+	// bar under-reports the drafter's weights (0.4-1.3 GB here). Harmless for
+	// non-draft specs: draftOverheadGB ignores DraftGB unless spec is draft-*.
+	if in.DraftGB == 0 {
+		if _, _, sizeGB := autogen.DraftSidecarForDir(filepath.Dir(gguf)); sizeGB > 0 {
+			in.DraftGB = sizeGB
+		}
 	}
 
 	res, err := autogen.EstimatePlan(gf.Settings, meta, in)

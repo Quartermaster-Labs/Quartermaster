@@ -131,9 +131,10 @@
   // Value-flags owned by other controls (sliders / toggles / sizer), swallowed
   // when parsing so they never bleed into extraArgs and double-emit:
   //   -c/-ngl/--n-cpu-moe/-b  sizer; --ctx-checkpoints  its own field;
-  //   --chat-template-kwargs  the preserve-thinking toggle; -md  draft path.
-  const IGNORE_VALUE = new Set(["-m", "--port", "--host", "-c", "-ngl", "--n-cpu-moe", "-b", "--ctx-checkpoints", "--chat-template-kwargs", "-md"]);
-  const IGNORE_BOOL = new Set(["--kv-unified", "--no-warmup", "--no-webui", "--jinja"]);
+  //   --chat-template-kwargs  the preserve-thinking toggle; -md  draft path;
+  //   --slot-save-path  the slotCacheOn toggle; --chat-template-file  arch-derived.
+  const IGNORE_VALUE = new Set(["-m", "--port", "--host", "-c", "-ngl", "--n-cpu-moe", "-b", "--ctx-checkpoints", "--chat-template-kwargs", "-md", "--slot-save-path", "--chat-template-file"]);
+  const IGNORE_BOOL = new Set(["--kv-unified", "--no-warmup", "--no-webui", "--jinja", "--metrics", "--props"]);
 
   // Parsed launch-flag bundle shared by the Default form and a variant. Booleans
   // are normalized to the form's on/off sense; computed flags are dropped.
@@ -286,9 +287,9 @@
     // variant's fields. Model-specific flags (-ngl/-c/--n-cpu-moe/-m...) are
     // skipped by IGNORE_VALUE, so nothing model-bound leaks. The only fields that
     // would wrongly bake into a fleet-wide variant are kv and spec at their
-    // generator defaults (q8_0 / draft-mtp|ngram-mod): capture those as a delta vs
-    // the generator default so an unchanged value stays "inherit" ("").
-    const genSpec = config?.isMTP ? "draft-mtp" : "ngram-mod";
+    // generator defaults (q8_0 / draft-mtp|draft-dflash|ngram-mod): capture those
+    // as a delta vs the generator default so an unchanged value stays "inherit" ("").
+    const genSpec = genDefaultSpec(config);
     v.flashAttn = p.flashOn ? "" : "off";
     v.mmap = p.mmapOn ? "" : "off";
     v.mlock = p.mlock;
@@ -459,12 +460,22 @@
   const maxVram = $derived(globalTargetGB > 0 ? globalTargetGB : 24);
 
   // Speculative backends are chainable (e.g. draft-mtp + ngram-map-k4v), so spec
-  // is a "+"-joined list. draft-mtp is only offered when the model has MTP layers.
+  // is a "+"-joined list. draft-mtp/draft-dflash are only offered when the model
+  // has a paired draft (MTP layers/sidecar, or a *-dflash-*.gguf sidecar).
   const specBackends = $derived([
     ...(config?.isMTP ? ["draft-mtp"] : []),
+    ...(config?.isDflash ? ["draft-dflash"] : []),
     "ngram-mod",
     "ngram-map-k4v",
   ]);
+
+  // Matches generate.go's effectiveSpec priority: baked-in/sidecar MTP wins over
+  // a DFlash sidecar (a model only ever pairs one draft), else ngram-mod.
+  function genDefaultSpec(c: ModelConfig | null): string {
+    if (c?.isMTP) return "draft-mtp";
+    if (c?.isDflash) return "draft-dflash";
+    return "ngram-mod";
+  }
 
   // Does spec list s contain backend b?
   function specHas(s: string | undefined, b: string): boolean {
@@ -485,7 +496,7 @@
   // show only the sub-knobs the chosen backends actually emit.
   function activeSpecs(s: string | undefined): string[] {
     const raw = (s ?? "").split("+").filter(Boolean);
-    if (raw.length === 0) return [config?.isMTP ? "draft-mtp" : "ngram-mod"];
+    if (raw.length === 0) return [genDefaultSpec(config)];
     if (raw.includes("none")) return [];
     return raw;
   }
@@ -804,10 +815,11 @@
     const o = buildOverride();
     return {
       name, ctx: 0, vramTargetGB: 0, cpuOffload: 0,
-      // MTP models default a new variant to draft-mtp even when the model-wide
-      // spec is disabled/empty — no reason to leave speculative speed on the table.
+      // MTP/DFlash-paired models default a new variant to the matching draft spec
+      // even when the model-wide spec is disabled/empty — no reason to leave
+      // speculative speed on the table.
       kvK: o.kvK ?? "", kvV: o.kvV ?? "", kvInRam: o.kvInRam ?? false,
-      spec: config?.isMTP && (!o.spec || o.spec === "none") ? "draft-mtp" : (o.spec ?? ""),
+      spec: (config?.isMTP || config?.isDflash) && (!o.spec || o.spec === "none") ? genDefaultSpec(config) : (o.spec ?? ""),
       reasoningFmt: o.reasoningFmt ?? "",
       preserveThinking: o.preserveThinking ? null : false,
       flashAttn: o.flashAttn ?? "", mmap: o.mmap ?? "", mlock: o.mlock ?? false,
@@ -1469,7 +1481,7 @@
           <div class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               Speculative
-              {@render hint("Speculative decoding backends. Chainable (e.g. draft-mtp + ngram-map-k4v). None checked = generator default; draft-mtp needs a model with MTP layers.")}
+              {@render hint("Speculative decoding backends. Chainable (e.g. draft-mtp + ngram-map-k4v). None checked = generator default; draft-mtp needs a model with MTP layers, draft-dflash needs a paired *-dflash-*.gguf sidecar.")}
             </span>
             <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
               {#each specBackends as b}
@@ -1479,13 +1491,13 @@
             </div>
           </div>
 
-          {#if effSpecs.includes("draft-mtp")}
+          {#if effSpecs.includes("draft-mtp") || effSpecs.includes("draft-dflash")}
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-txtsecondary flex items-center gap-1">
                 Draft n-max
-                {@render hint("--spec-draft-n-max. Max draft tokens proposed per step (draft-mtp). Empty = 2.")}
+                {@render hint(`--spec-draft-n-max. Max draft tokens proposed per step. Empty = ${effSpecs.includes("draft-dflash") ? "15 (draft-dflash)" : "2 (draft-mtp)"}.`)}
               </span>
-              <input type="number" min="0" step="1" bind:value={specDraftNMax} use:wheelAdjust class="cfg-input" placeholder="2" />
+              <input type="number" min="0" step="1" bind:value={specDraftNMax} use:wheelAdjust class="cfg-input" placeholder={effSpecs.includes("draft-dflash") ? "15" : "2"} />
             </label>
           {/if}
           {#if effSpecs.includes("ngram-map-k4v")}
@@ -1754,13 +1766,13 @@
               </div>
             </div>
 
-            {#if vEffSpecs.includes("draft-mtp")}
+            {#if vEffSpecs.includes("draft-mtp") || vEffSpecs.includes("draft-dflash")}
               <label class="flex flex-col gap-1 text-sm">
                 <span class="text-txtsecondary flex items-center gap-1">
                   Draft n-max
-                  {@render hint("--spec-draft-n-max for this variant. Empty / 0 = inherit (2).")}
+                  {@render hint(`--spec-draft-n-max for this variant. Empty / 0 = inherit (${vEffSpecs.includes("draft-dflash") ? "15" : "2"}).`)}
                 </span>
-                <input type="number" min="0" step="1" value={vnum(sv.specDraftNMax)} oninput={(e) => (sv.specDraftNMax = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input" placeholder="inherit (2)" />
+                <input type="number" min="0" step="1" value={vnum(sv.specDraftNMax)} oninput={(e) => (sv.specDraftNMax = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input" placeholder={`inherit (${vEffSpecs.includes("draft-dflash") ? "15" : "2"})`} />
               </label>
             {/if}
             {#if vEffSpecs.includes("ngram-map-k4v")}

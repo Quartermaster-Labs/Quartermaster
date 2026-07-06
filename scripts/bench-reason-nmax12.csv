@@ -1,0 +1,4 @@
+timestamp,variant,profile,rep,prompt_n,prompt_ms,prompt_per_second,predicted_n,predicted_ms,predicted_per_second,accept_rate,error
+2026-07-06T16:05:21Z,dflash,warmup,0,19,789.195,24.07516519998226,16,1742.186,9.18386440942586,,
+2026-07-06T16:05:25Z,dflash,reason,1,76,3232.298,23.51268354588593,1024,30322.824,33.76994174421221,,
+2026-07-06T16:05:59Z,dflash,reason,2,76,870.39,87.31717965509715,1024,37825.771,27.071490492553345,,

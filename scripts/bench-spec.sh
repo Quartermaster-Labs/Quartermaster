@@ -46,7 +46,6 @@ build_prompt() {
 }
 
 prompt_pp_20k="$(build_prompt 20000)"
-prompt_pp_60k="$(build_prompt 60000)"
 prompt_tg_short="Write a short story about a robot learning to paint."
 
 run_one() {
@@ -107,10 +106,7 @@ echo "== warmup (cold load if not already loaded) =="
 run_one "warmup" "$prompt_tg_short" 16 0
 
 echo "== PP-heavy 20k =="
-for ((r=1; r<=reps; r++)); do run_one "pp_20k" "$prompt_pp_20k" 8 "$r"; done
-
-echo "== PP-heavy 60k =="
-for ((r=1; r<=reps; r++)); do run_one "pp_60k" "$prompt_pp_60k" 8 "$r"; done
+for ((r=1; r<=2; r++)); do run_one "pp_20k" "$prompt_pp_20k" 8 "$r"; done
 
 echo "== TG-heavy =="
 for ((r=1; r<=reps; r++)); do run_one "tg" "$prompt_tg_short" 256 "$r"; done

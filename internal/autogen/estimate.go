@@ -15,7 +15,7 @@ type EstimateInput struct {
 	TargetVramGB   float64
 	CpuOffload     int     // >0 pins layers offloaded to CPU, overriding the sizer
 	CtxCheckpoints *int    // nil => llama default (32); 0 disables; reserves checkpoint VRAM
-	DraftGB        float64 // separate MTP/draft gguf weights (GB); 0 => baked-in or none
+	DraftGB        float64 // separate MTP/DFlash draft gguf weights (GB); 0 => baked-in or none
 	MmprojGB       float64 // "-vision" twin projector footprint (weights + CLIP reserve); 0 => none
 }
 
@@ -80,15 +80,10 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 	}
 
 	// Draft overhead: baked-in MTP nextn layer ~0.34 GB (KV+compute). A separate
-	// draft file (Gemma-4) instead charges its real on-disk weights + a small
-	// KV/compute pad, so big drafts scale up rather than under-counting at 0.34.
-	specOh := 0.0
-	if specHas(in.Spec, "draft-mtp") {
-		specOh = 0.34
-		if in.DraftGB > 0 {
-			specOh = in.DraftGB + 0.1
-		}
-	}
+	// draft file (Gemma-4's MTP sidecar, or any DFlash drafter — always separate)
+	// instead charges its real on-disk weights + a small KV/compute pad, so big
+	// drafts scale up rather than under-counting at 0.34.
+	specOh := draftOverheadGB(in.Spec, in.DraftGB)
 
 	prof := profile{
 		Name:     "estimate",
@@ -102,7 +97,7 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 
 		CtxCheckpoints: in.CtxCheckpoints,
 	}
-	prof.Overhead += computeBufferGB(meta, effectiveUb(prof, nil), s.ComputeBufFactor)
+	prof.Overhead += computeBufferGB(meta, effectiveUb(prof, nil, prof.Ctx), s.ComputeBufFactor)
 	prof.Overhead += in.MmprojGB // "-vision" projector weights + CLIP compute reserve
 
 	ctx, plan, kvReserve, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, in.KvInRam)
