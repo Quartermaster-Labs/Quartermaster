@@ -1,6 +1,14 @@
 package server
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+
+	"github.com/radu0120/llama-quartermaster/internal/logmon"
+)
 
 func TestParsePrometheusInto(t *testing.T) {
 	body := `# HELP llamacpp:kv_cache_usage_ratio KV-cache usage
@@ -54,5 +62,71 @@ func TestParseSlotsInto(t *testing.T) {
 	want := 1548.0 / 102400.0
 	if bm.KVCacheUsageRatio != want {
 		t.Errorf("kv ratio = %v, want %v", bm.KVCacheUsageRatio, want)
+	}
+}
+
+// TestScrapeOne_SkipsQueuedEndpointsWhenBusy confirms /metrics and /slots
+// (both queue-contending, per server-context.cpp) are skipped while a request
+// is in flight, and that /props is fetched only once per (model, base) --
+// never re-hit on later ticks unless the base URL changes (restart/reload).
+func TestScrapeOne_SkipsQueuedEndpointsWhenBusy(t *testing.T) {
+	var hits struct{ metrics, slots, props atomic.Int64 }
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/metrics":
+			hits.metrics.Add(1)
+			w.Write([]byte("llamacpp:requests_processing 1\n"))
+		case "/slots":
+			hits.slots.Add(1)
+			w.Write([]byte(`[]`))
+		case "/props":
+			hits.props.Add(1)
+			w.Write([]byte(`{"total_slots":1,"default_generation_settings":{"n_ctx":4096}}`))
+		}
+	}))
+	defer srv.Close()
+
+	m := newBackendMetricsMonitor(nil, nil, func(model string) (int64, bool) { return 3, true }, logmon.New())
+	prev := BackendMetrics{RequestsProcessing: 7}
+
+	busy := m.scrapeOne(context.Background(), "m", srv.URL, true, prev, true)
+	if hits.metrics.Load() != 0 || hits.slots.Load() != 0 {
+		t.Errorf("busy scrape hit metrics=%d slots=%d, want 0/0", hits.metrics.Load(), hits.slots.Load())
+	}
+	if hits.props.Load() != 1 {
+		t.Errorf("busy scrape props hits = %d, want 1 (first-ever fetch)", hits.props.Load())
+	}
+	if busy.RequestsProcessing != 3 {
+		t.Errorf("busy scrape RequestsProcessing = %d, want live modelInflight 3 (not carried-forward 7)", busy.RequestsProcessing)
+	}
+	if busy.NCtx != 4096 {
+		t.Errorf("busy scrape NCtx = %d, want fresh 4096 from /props", busy.NCtx)
+	}
+
+	idle := m.scrapeOne(context.Background(), "m", srv.URL, false, prev, true)
+	if hits.metrics.Load() != 1 || hits.slots.Load() != 1 {
+		t.Errorf("idle scrape hit metrics=%d slots=%d, want 1/1", hits.metrics.Load(), hits.slots.Load())
+	}
+	if hits.props.Load() != 1 {
+		t.Errorf("idle scrape props hits = %d, want still 1 (cached, same base)", hits.props.Load())
+	}
+	if idle.RequestsProcessing != 1 {
+		t.Errorf("idle scrape RequestsProcessing = %d, want fresh 1", idle.RequestsProcessing)
+	}
+	if idle.NCtx != 4096 {
+		t.Errorf("idle scrape NCtx = %d, want cached 4096", idle.NCtx)
+	}
+
+	// Base URL change (process restart on a new port) must invalidate the cache.
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/props" {
+			hits.props.Add(1)
+			w.Write([]byte(`{"total_slots":1,"default_generation_settings":{"n_ctx":4096}}`))
+		}
+	}))
+	defer srv2.Close()
+	m.scrapeOne(context.Background(), "m", srv2.URL, false, prev, true)
+	if hits.props.Load() != 2 {
+		t.Errorf("scrape after base change props hits = %d, want 2 (cache invalidated)", hits.props.Load())
 	}
 }

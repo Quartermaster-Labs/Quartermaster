@@ -1495,9 +1495,9 @@
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-txtsecondary flex items-center gap-1">
                 Draft n-max
-                {@render hint(`--spec-draft-n-max. Max draft tokens proposed per step. Empty = ${effSpecs.includes("draft-dflash") ? "15 (draft-dflash)" : "2 (draft-mtp)"}.`)}
+                {@render hint(`--spec-draft-n-max. Max draft tokens proposed per step. Empty = ${effSpecs.includes("draft-dflash") ? "5 (draft-dflash)" : "2 (draft-mtp)"}.`)}
               </span>
-              <input type="number" min="0" step="1" bind:value={specDraftNMax} use:wheelAdjust class="cfg-input" placeholder={effSpecs.includes("draft-dflash") ? "15" : "2"} />
+              <input type="number" min="0" step="1" bind:value={specDraftNMax} use:wheelAdjust class="cfg-input" placeholder={effSpecs.includes("draft-dflash") ? "5" : "2"} />
             </label>
           {/if}
           {#if effSpecs.includes("ngram-map-k4v")}
@@ -1770,9 +1770,9 @@
               <label class="flex flex-col gap-1 text-sm">
                 <span class="text-txtsecondary flex items-center gap-1">
                   Draft n-max
-                  {@render hint(`--spec-draft-n-max for this variant. Empty / 0 = inherit (${vEffSpecs.includes("draft-dflash") ? "15" : "2"}).`)}
+                  {@render hint(`--spec-draft-n-max for this variant. Empty / 0 = inherit (${vEffSpecs.includes("draft-dflash") ? "5" : "2"}).`)}
                 </span>
-                <input type="number" min="0" step="1" value={vnum(sv.specDraftNMax)} oninput={(e) => (sv.specDraftNMax = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input" placeholder={`inherit (${vEffSpecs.includes("draft-dflash") ? "15" : "2"})`} />
+                <input type="number" min="0" step="1" value={vnum(sv.specDraftNMax)} oninput={(e) => (sv.specDraftNMax = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input" placeholder={`inherit (${vEffSpecs.includes("draft-dflash") ? "5" : "2"})`} />
               </label>
             {/if}
             {#if vEffSpecs.includes("ngram-map-k4v")}

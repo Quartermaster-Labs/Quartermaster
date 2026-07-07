@@ -725,6 +725,11 @@ func (p *ProcessCommand) PID() int {
 	return int(p.pid.Load())
 }
 
+// Inflight returns the current number of in-flight ServeHTTP calls.
+func (p *ProcessCommand) Inflight() int64 {
+	return p.inflight.Load()
+}
+
 func (p *ProcessCommand) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fn := p.handler.Load()
 	if fn == nil {

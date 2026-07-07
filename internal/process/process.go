@@ -44,6 +44,12 @@ type Process interface {
 	// foreign ones when accounting GPU memory.
 	PID() int
 
+	// Inflight returns the current number of in-flight ServeHTTP calls this
+	// process is handling. Cheap atomic read -- lets callers (e.g. the backend
+	// metrics monitor) know a model's live request count without asking the
+	// upstream itself.
+	Inflight() int64
+
 	// ServeHTTP forwards requests to the underlying process
 	// Calling it when the process is not ready will result in a
 	// 503 response with a body indicating it is a llama-quartermaster-error

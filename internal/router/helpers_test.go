@@ -110,6 +110,8 @@ func (f *fakeProcess) State() process.ProcessState {
 
 func (f *fakeProcess) PID() int { return 0 }
 
+func (f *fakeProcess) Inflight() int64 { return 0 }
+
 func (f *fakeProcess) markReady() { f.setState(process.StateReady) }
 
 func (f *fakeProcess) Run(_ time.Duration) error {

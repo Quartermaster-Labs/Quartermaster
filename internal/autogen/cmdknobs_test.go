@@ -48,11 +48,11 @@ func TestBuildCmdLines_specKnobs(t *testing.T) {
 		t.Fatalf("draft-n-max override not applied: %s", got)
 	}
 
-	// draft-dflash defaults to a longer draft chain (6, vs mtp's 2) since a
-	// diffusion block proposes many tokens per pass; 6 is the measured optimum
-	// on Qwen3.6-35B (higher over-drafts and slows TG).
+	// draft-dflash defaults to a longer draft chain (5, vs mtp's 2) since a
+	// diffusion block proposes many tokens per pass; 5 is the measured optimum
+	// on Qwen3.6-35B-A3B (own n-max sweep; higher over-drafts and slows TG).
 	got = joinCmd(s, &Override{Spec: "draft-dflash"})
-	if !strings.Contains(got, "--spec-draft-n-max 6") {
+	if !strings.Contains(got, "--spec-draft-n-max 5") {
 		t.Fatalf("draft-dflash default n-max missing: %s", got)
 	}
 	got = joinCmd(s, &Override{Spec: "draft-dflash", SpecDraftNMax: 8})
@@ -90,26 +90,28 @@ func TestBuildCmdLines_specKnobs(t *testing.T) {
 }
 
 // A model carrying BOTH a baked-in MTP nextn layer (IsMTP) and a paired DFlash
-// sidecar (both Qwen3.6-27B/35B do) auto-defaults to draft-dflash — the on-disk
-// drafter wins over the baked layer. A draft-mtp backend must never attach that
-// dflash-kind sidecar as its -md (arch mismatch = broken draft).
-func TestBuildCmdLines_dflashWinsOverBakedMTP(t *testing.T) {
+// sidecar (both Qwen3.6-27B/35B do) auto-defaults to draft-mtp: dflash wins a
+// short flat-prompt bench but craters over a long real session (resident draft
+// weights + own full-context KV crowd VRAM), so it is never auto-picked — only
+// an explicit `spec: draft-dflash` override selects it. A draft-mtp backend
+// must never attach a dflash-kind sidecar as its -md (arch mismatch = broken
+// draft).
+func TestBuildCmdLines_dflashNotAutoDefault(t *testing.T) {
 	meta := Metadata{IsMTP: true}
-	// GPU-bound (cpuBound=false): dflash sidecar wins over the baked MTP head.
-	if got := effectiveSpec(meta, nil, "dflash", false); got != "draft-dflash" {
-		t.Fatalf("effectiveSpec = %q, want draft-dflash (dflash sidecar beats baked MTP when GPU-bound)", got)
+	// Baked MTP head always wins the auto-default, dflash sidecar or not.
+	if got := effectiveSpec(meta, nil, "dflash"); got != "draft-mtp" {
+		t.Fatalf("effectiveSpec = %q, want draft-mtp (dflash never auto-defaults)", got)
 	}
-	// CPU-bound (dense weights on CPU): dflash's batched-verify + resident-draft
-	// cost stops paying off, so fall back to the free baked-MTP head.
-	if got := effectiveSpec(meta, nil, "dflash", true); got != "draft-mtp" {
-		t.Fatalf("effectiveSpec = %q, want draft-mtp (CPU-bound downgrades dflash to baked MTP)", got)
-	}
-	if got := effectiveSpec(meta, nil, "", false); got != "draft-mtp" {
+	if got := effectiveSpec(meta, nil, ""); got != "draft-mtp" {
 		t.Fatalf("effectiveSpec = %q, want draft-mtp (baked, no sidecar)", got)
 	}
-	// CPU-bound with a dflash sidecar but no baked MTP → model-less ngram, never dflash.
-	if got := effectiveSpec(Metadata{}, nil, "dflash", true); got != "ngram-mod" {
-		t.Fatalf("effectiveSpec = %q, want ngram-mod (CPU-bound, no baked MTP)", got)
+	// No baked MTP, dflash sidecar present but not auto-selected → model-less ngram.
+	if got := effectiveSpec(Metadata{}, nil, "dflash"); got != "ngram-mod" {
+		t.Fatalf("effectiveSpec = %q, want ngram-mod (no baked MTP, dflash not auto-picked)", got)
+	}
+	// Explicit override still selects dflash.
+	if got := effectiveSpec(meta, &Override{Spec: "draft-dflash"}, "dflash"); got != "draft-dflash" {
+		t.Fatalf("effectiveSpec = %q, want draft-dflash (explicit override)", got)
 	}
 	s := Settings{}
 	s.applyDefaults()

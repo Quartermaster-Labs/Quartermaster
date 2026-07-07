@@ -22,7 +22,10 @@ const hashCacheSuffix = ".modelhash"
 // Bump this whenever the emitted YAML for unchanged inputs changes.
 //
 //	v2: -b decoupled from -ub (logical batch fixed at 2048, clamped >=ub, <=ctx).
-const genVersion = "v2"
+//	v3: draft-dflash default --spec-draft-n-max 6 -> 5 (own sweep on Qwen3.6-35B-A3B).
+//	v4: draft-dflash no longer auto-defaults (real long-session use craters vs mtp
+//	    on VRAM pressure); only an explicit spec: draft-dflash override selects it.
+const genVersion = "v4"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

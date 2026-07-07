@@ -169,7 +169,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		shutdownCtx:    shutdownCtx,
 		shutdownFn:     shutdownFn,
 	}
-	s.backendMetrics = newBackendMetricsMonitor(s.runningProxies, proxylog)
+	s.backendMetrics = newBackendMetricsMonitor(s.runningProxies, s.inflight.Current, s.local.Inflight, proxylog)
 	go s.backendMetrics.run(s.shutdownCtx)
 	go s.trackSystemVram(s.shutdownCtx)
 	slotParticipates := func(id string) bool {
@@ -523,6 +523,7 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/models/{model}/variant", apiChain.ThenFunc(s.handleAPIModelVariantPost))
 	mux.Handle("GET /api/models/{model}/estimate", apiChain.ThenFunc(s.handleAPIModelEstimate))
 	mux.Handle("PUT /api/models/{model}/preview", apiChain.ThenFunc(s.handleAPIModelCmdPreview))
+	mux.Handle("PUT /api/models/{model}/adhoc-cmd", apiChain.ThenFunc(s.handleAPIModelAdhocCmd))
 
 	// Global settings editor (dashboard GPU-memory card): read effective
 	// settings + defaults, save a manual VRAM target/headroom patch, reset it.

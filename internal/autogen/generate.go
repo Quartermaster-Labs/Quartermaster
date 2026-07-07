@@ -352,7 +352,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	// charges its real draft VRAM. If the model turns out CPU-bound and emit
 	// downgrades to mtp, we've over-reserved by the draft size — conservative,
 	// never an under-count that could OOM.
-	modelSpec := effectiveSpec(meta, ov, row.DraftKind, false)
+	modelSpec := effectiveSpec(meta, ov, row.DraftKind)
 	specOh := draftOverheadGB(modelSpec, row.DraftSizeGB)
 	var ctxVariants []int
 	override := Override{}
@@ -1048,7 +1048,7 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		bTok = ctx
 	}
 
-	spec := effectiveSpec(meta, ov, row.DraftKind, cpuBoundDecode(meta, ngl))
+	spec := effectiveSpec(meta, ov, row.DraftKind)
 	if prof.Spec != "" {
 		spec = prof.Spec
 	}
@@ -1093,14 +1093,15 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	// draft-mtp and draft-dflash both drive off a draft model checked each step
 	// against the main model, so share the -md/-ngld wiring; only the sane
 	// default draft length differs. DFlash proposes a whole diffusion block per
-	// pass so it tolerates a longer chain than single-token MTP, but 6 is the
-	// measured sweet spot on Qwen3.6-35B (author's recommended default): higher
-	// (12/15) over-drafts — accept rate falls faster than length rises, so the
-	// wasted GPU verify compute makes TG *worse* on every workload we benched.
+	// pass so it tolerates a longer chain than single-token MTP, but 5 is the
+	// measured sweet spot on Qwen3.6-35B-A3B (own n-max sweep, 3/4/5/6): reasoning
+	// tg jumps ~15% at n=5 vs n=3/4 and ties n=6, while n=5 also edges out n=6 on
+	// creative tg — higher (6+, 12/15) over-drafts, accept rate falls faster than
+	// length rises, so the wasted GPU verify compute makes TG worse.
 	if isDraftSpec := specHas(spec, "draft-mtp") || specHas(spec, "draft-dflash"); isDraftSpec {
 		nmax := 2
 		if specHas(spec, "draft-dflash") {
-			nmax = 6
+			nmax = 5
 		}
 		if ov != nil && ov.SpecDraftNMax > 0 {
 			nmax = ov.SpecDraftNMax
@@ -1226,7 +1227,7 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 	if ov.VramTargetGB > 0 {
 		target = ov.VramTargetGB
 	}
-	specOh := draftOverheadGB(effectiveSpec(meta, &ov, row.DraftKind, false), row.DraftSizeGB)
+	specOh := draftOverheadGB(effectiveSpec(meta, &ov, row.DraftKind), row.DraftSizeGB)
 	prof := profile{
 		Name:           "preview",
 		Target:         target,
@@ -1281,47 +1282,31 @@ func specHas(spec, b string) bool {
 }
 
 // formatCtxTag renders a short ctx tag: 8192->"8k", 131072->"128k", 1048576->"1m".
-// effectiveSpec resolves the spec-type: a paired DFlash drafter defaults to
-// draft-dflash, MTP-capable models (baked-in nextn layer or a paired mtp-*.gguf
-// sidecar) to draft-mtp, everything else to ngram-mod. An explicit override spec
-// wins (set spec: "ngram-mod" to force ngram on a drafted model).
+// effectiveSpec resolves the spec-type: MTP-capable models (baked-in nextn
+// layer or a paired mtp-*.gguf sidecar) default to draft-mtp, everything else
+// to ngram-mod. A paired DFlash drafter is never auto-selected — see below.
+// An explicit override spec wins (set spec: "ngram-mod" to force ngram on a
+// drafted model, or spec: "draft-dflash" to opt into DFlash).
 //
 // A DFlash sidecar sitting in the model's dir is a deliberate choice (the user
-// downloaded it), so it takes priority over a baked-in nextn layer: several
-// unsloth ggufs (Qwen3.6-27B/35B) carry BOTH, and picking draft-mtp there would
-// both ignore the DFlash file and mis-load it as an MTP draft (arch mismatch).
-func effectiveSpec(meta Metadata, ov *Override, draftKind string, cpuBound bool) string {
+// downloaded it) but is NOT auto-selected: it wins a short flat-prompt bench
+// (GPU-bound: +17% vs mtp) but its resident draft weights + own full-context KV
+// crowd an already-tight VRAM budget over a long real session, cratering to a
+// GPU-mem-oversubscription cliff mtp never hits (mtp is a baked-in head with no
+// separate weights or KV). Confirmed in real multi-turn agent use on
+// Qwen3.6-35B-A3B-100k: switching qwen3.6-35b-a3b-ud-q4_k_s-100k off dflash back
+// to mtp fixed a production slowdown. An explicit `spec: draft-dflash` override
+// still works — this only removes it as the automatic pick.
+func effectiveSpec(meta Metadata, ov *Override, draftKind string) string {
 	// Explicit override always wins.
 	if ov != nil && ov.Spec != "" {
 		return ov.Spec
-	}
-	// DFlash's payoff — verifying a whole drafted block in one main-model pass —
-	// only holds when decode is GPU-bound. On a CPU-bound model (dense weights
-	// spilled to CPU) that batched verify costs a full forward *per drafted
-	// token*, and the resident draft weights crowd already-scarce VRAM. Measured
-	// on Qwen3.6 (greedy reasoning): MoE-35B (GPU-bound) dflash 62.7 t/s = +17%
-	// vs mtp; dense-27B (16/65 layers on GPU, CPU-bound) dflash only *ties* mtp
-	// (~8 t/s) AND burns 1.43 GB VRAM the baked-MTP head doesn't. So use dflash
-	// only when GPU-bound; on a CPU-bound model prefer the free baked-MTP head,
-	// else model-less ngram. (A dflash sidecar still beats a baked MTP head when
-	// GPU-bound — that's the whole point of downloading it.)
-	if draftKind == "dflash" && !cpuBound {
-		return "draft-dflash"
 	}
 	switch {
 	case meta.IsMTP || draftKind == "mtp":
 		return "draft-mtp"
 	}
 	return "ngram-mod"
-}
-
-// cpuBoundDecode reports whether the model's decode is CPU-bound at this
-// placement: a dense model with layers spilled off the GPU (ngl below its
-// block count). MoE models keep active params tiny (experts stream, ~3B active
-// on Qwen3.6-35B) so they stay GPU-fast even with --n-cpu-moe, and never count
-// as CPU-bound here. Drives effectiveSpec's dflash-vs-mtp choice.
-func cpuBoundDecode(meta Metadata, ngl int) bool {
-	return !meta.IsMoE && int64(ngl) < meta.BlockCount
 }
 
 // draftOverheadGB returns the VRAM overhead to charge for the active spec

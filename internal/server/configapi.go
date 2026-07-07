@@ -912,6 +912,186 @@ func (s *Server) handleAPIModelCmdPreview(w http.ResponseWriter, r *http.Request
 	writeJSON(w, map[string]string{"cmd": cmd})
 }
 
+// applyVariantPatch layers only the NON-ZERO fields of a variantDTO patch onto
+// an Override, leaving everything else (already seeded from the model's
+// effective override) untouched. Unlike applyOverrideDTO (a full-snapshot
+// replace), this treats the body as a sparse diff — the same "zero/empty =
+// inherit" convention VariantSpec already uses for named variants.
+func applyVariantPatch(ov *autogen.Override, p variantDTO) {
+	if p.Ctx != 0 {
+		ov.Ctx = p.Ctx
+	}
+	if p.VramTargetGB != 0 {
+		ov.VramTargetGB = p.VramTargetGB
+	}
+	if p.KvK != "" {
+		ov.KvK = p.KvK
+	}
+	if p.KvV != "" {
+		ov.KvV = p.KvV
+	}
+	if p.Spec != "" {
+		ov.Spec = p.Spec
+	}
+	if p.ReasoningFmt != "" {
+		ov.ReasoningFmt = p.ReasoningFmt
+	}
+	if p.Ub != 0 {
+		ov.Ub = p.Ub
+	}
+	if p.Dry != nil {
+		ov.Dry = p.Dry
+	}
+	if p.CtxCheckpoints != nil {
+		ov.CtxCheckpoints = p.CtxCheckpoints
+	}
+	if p.PreserveThinking != nil {
+		ov.PreserveThinking = *p.PreserveThinking
+	}
+	if p.SlotCache != nil {
+		ov.SlotCache = p.SlotCache
+	}
+	if p.KvInRam {
+		ov.KvInRam = true
+	}
+	if p.CpuOffload != 0 {
+		ov.CpuOffload = p.CpuOffload
+	}
+	if p.FlashAttn != "" {
+		ov.FlashAttn = p.FlashAttn
+	}
+	if p.Mmap != "" {
+		ov.Mmap = p.Mmap
+	}
+	if p.Mlock {
+		ov.Mlock = true
+	}
+	if p.Threads != 0 {
+		ov.Threads = p.Threads
+	}
+	if p.Parallel != 0 {
+		ov.Parallel = p.Parallel
+	}
+	if strings.TrimSpace(p.ExtraArgs) != "" {
+		ov.ExtraArgs = strings.TrimSpace(p.ExtraArgs)
+	}
+	if p.DryMultiplier != 0 {
+		ov.DryMultiplier = p.DryMultiplier
+	}
+	if p.DryBase != 0 {
+		ov.DryBase = p.DryBase
+	}
+	if p.DryAllowedLength != 0 {
+		ov.DryAllowedLength = p.DryAllowedLength
+	}
+	if p.SpecDraftNMax != 0 {
+		ov.SpecDraftNMax = p.SpecDraftNMax
+	}
+	if p.SpecDefault {
+		ov.SpecDefault = true
+	}
+	if p.SpecNgramSizeN != 0 {
+		ov.SpecNgramSizeN = p.SpecNgramSizeN
+	}
+	if p.SpecNgramSizeM != 0 {
+		ov.SpecNgramSizeM = p.SpecNgramSizeM
+	}
+	if p.SpecNgramMinHits != 0 {
+		ov.SpecNgramMinHits = p.SpecNgramMinHits
+	}
+	if strings.TrimSpace(p.VaePath) != "" {
+		ov.VaePath = strings.TrimSpace(p.VaePath)
+	}
+	if strings.TrimSpace(p.ClipLPath) != "" {
+		ov.ClipLPath = strings.TrimSpace(p.ClipLPath)
+	}
+	if strings.TrimSpace(p.ClipGPath) != "" {
+		ov.ClipGPath = strings.TrimSpace(p.ClipGPath)
+	}
+	if strings.TrimSpace(p.T5Path) != "" {
+		ov.T5Path = strings.TrimSpace(p.T5Path)
+	}
+	if strings.TrimSpace(p.TextEncoderPath) != "" {
+		ov.TextEncoderPath = strings.TrimSpace(p.TextEncoderPath)
+	}
+	if p.OffloadToCpu != "" {
+		ov.OffloadToCpu = p.OffloadToCpu
+	}
+	if p.TeOnCpu != "" {
+		ov.TeOnCpu = p.TeOnCpu
+	}
+	if p.VaeTiling != "" {
+		ov.VaeTiling = p.VaeTiling
+	}
+	if p.DiffusionFa != "" {
+		ov.DiffusionFa = p.DiffusionFa
+	}
+	if p.DefaultSteps != 0 {
+		ov.DefaultSteps = p.DefaultSteps
+	}
+	if p.DefaultCfg != 0 {
+		ov.DefaultCfg = p.DefaultCfg
+	}
+	if strings.TrimSpace(p.DefaultSampler) != "" {
+		ov.DefaultSampler = strings.TrimSpace(p.DefaultSampler)
+	}
+	if p.DefaultWidth != 0 {
+		ov.DefaultWidth = p.DefaultWidth
+	}
+	if p.DefaultHeight != 0 {
+		ov.DefaultHeight = p.DefaultHeight
+	}
+}
+
+// handleAPIModelAdhocCmd renders a one-time launch command for a model with
+// ad-hoc flag overrides layered on top of its normal effective override (the
+// same auto-compute-unless-given semantics as a named variant). Pure compute:
+// no sidecar write, no EnsureConfig, no reload, nothing persists. Meant for
+// scripts (e.g. bench scripts) that want a properly VRAM-sized command for a
+// one-off flag combo without adding a permanent catalog entry.
+func (s *Server) handleAPIModelAdhocCmd(w http.ResponseWriter, r *http.Request) {
+	_, gguf, _, ok := s.resolveModelGguf(w, r)
+	if !ok {
+		return
+	}
+	var patch variantDTO
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		shared.SendResponse(w, r, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	// Seed from the model's EFFECTIVE override — sidecar wins, else the
+	// hand-authored file override, else blank — same precedence
+	// handleAPIModelConfigGet surfaces to the editor (:325-329).
+	var ov autogen.Override
+	if existing, _, err := s.findSidecarOverride(gguf); err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+		return
+	} else if existing != nil {
+		ov = *existing
+	} else if fileOv, found, ferr := autogen.ResolveFileOverride(s.autogen.GeneratePath, gguf); ferr == nil && found {
+		ov = fileOv
+	} else {
+		ov = autogen.Override{Match: gguf}
+	}
+	applyVariantPatch(&ov, patch)
+	gf, err := autogen.LoadGenerateFile(s.autogen.GeneratePath, s.autogen.ModelsDir)
+	if err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, "loading settings failed: "+err.Error())
+		return
+	}
+	meta, err := autogen.ReadGgufMetadataCached(gguf)
+	if err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, "reading gguf metadata failed: "+err.Error())
+		return
+	}
+	cmd, err := autogen.RenderSoloCmd(gf.Settings, meta, autogen.GgufRow{FullPath: gguf}, ov)
+	if err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, "rendering command failed: "+err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"cmd": cmd})
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)

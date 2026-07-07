@@ -55,6 +55,10 @@ type LocalRouter interface {
 	// model is not known to this router.
 	ProcessLogger(modelID string) (*logmon.Monitor, bool)
 
+	// Inflight returns the named model's current in-flight request count.
+	// Returns false when the model is not known to this router.
+	Inflight(modelID string) (int64, bool)
+
 	// SetPreEvict installs a hook called with a model ID just before its process
 	// is stopped for eviction/unload, while still Ready. Call once before serving.
 	SetPreEvict(fn func(modelID string))

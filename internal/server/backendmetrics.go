@@ -59,25 +59,50 @@ type BackendMetricsEvent struct {
 
 func (e BackendMetricsEvent) Type() uint32 { return shared.BackendMetricsEventID }
 
-// backendMetricsMonitor polls each running backend's /metrics + /props on a
-// ticker, caches the latest snapshot, and emits a BackendMetricsEvent so the
-// dashboard gets live KV/slot/throughput gauges over SSE.
+// backendMetricsMonitor polls each running backend's /metrics + /slots on a
+// ticker (skipped while a request is in flight -- both share llama-server's
+// inference task queue), fetches /props once per process lifetime, caches the
+// latest snapshot, and emits a BackendMetricsEvent so the dashboard gets live
+// KV/slot/throughput gauges over SSE.
 type backendMetricsMonitor struct {
 	mu     sync.RWMutex
 	latest map[string]BackendMetrics
 
+	// props caches the static /props fields (NCtx, TotalSlots) per model, keyed
+	// by base URL -- constant for a process's whole lifetime, so one fetch per
+	// load is enough. A base-URL change (restart, new ${PORT}) invalidates it.
+	propsMu sync.Mutex
+	props   map[string]propsSnapshot
+
 	// running returns model-id -> resolved upstream base URL for every running
 	// local process (${PORT} already substituted in cfg.Models[id].Proxy).
 	running  func() map[string]string
+	inflight func() int64 // current in-flight model-dispatched request count (busy gate, global)
+
+	// modelInflight returns a single model's own in-flight request count
+	// (router.LocalRouter.Inflight). Quartermaster already tracks this for
+	// free per ServeHTTP call -- while busy-skipping /metrics, use it instead
+	// of carrying forward a stale RequestsProcessing from the last scrape.
+	modelInflight func(model string) (int64, bool)
+
 	client   *http.Client
 	log      *logmon.Monitor
 	interval time.Duration
 }
 
-func newBackendMetricsMonitor(running func() map[string]string, log *logmon.Monitor) *backendMetricsMonitor {
+type propsSnapshot struct {
+	base       string
+	nCtx       int64
+	totalSlots int64
+}
+
+func newBackendMetricsMonitor(running func() map[string]string, inflight func() int64, modelInflight func(model string) (int64, bool), log *logmon.Monitor) *backendMetricsMonitor {
 	return &backendMetricsMonitor{
-		latest:  map[string]BackendMetrics{},
-		running: running,
+		latest:        map[string]BackendMetrics{},
+		props:         map[string]propsSnapshot{},
+		running:       running,
+		inflight:      inflight,
+		modelInflight: modelInflight,
 		// Timeout MUST exceed interval: a busy llama-server services /slots and
 		// /metrics through the same task queue as token generation, so a poll can
 		// wait several seconds under load. If timeout == interval the client cancels
@@ -118,6 +143,13 @@ func (m *backendMetricsMonitor) poll(ctx context.Context) {
 		return
 	}
 
+	// /metrics and /slots both post a task onto llama-server's own inference
+	// queue and block for it (server-context.cpp SERVER_TASK_TYPE_METRICS) --
+	// polling them mid-prefill directly contends with the request we're trying
+	// to serve. Skip both while anything is in flight; keep the last snapshot
+	// (stale dashboard numbers beat a slower prefill).
+	busy := m.inflight != nil && m.inflight() > 0
+
 	var wg sync.WaitGroup
 	out := make(map[string]BackendMetrics, len(targets))
 	var mu sync.Mutex
@@ -125,7 +157,8 @@ func (m *backendMetricsMonitor) poll(ctx context.Context) {
 		wg.Add(1)
 		go func(model, base string) {
 			defer wg.Done()
-			bm := m.scrapeOne(ctx, model, base)
+			prev, hadPrev := m.previous(model)
+			bm := m.scrapeOne(ctx, model, base, busy, prev, hadPrev)
 			mu.Lock()
 			out[model] = bm
 			mu.Unlock()
@@ -154,30 +187,88 @@ func (m *backendMetricsMonitor) snapshot() []BackendMetrics {
 	return out
 }
 
-func (m *backendMetricsMonitor) scrapeOne(ctx context.Context, model, base string) BackendMetrics {
+func (m *backendMetricsMonitor) scrapeOne(ctx context.Context, model, base string, busy bool, prev BackendMetrics, hadPrev bool) BackendMetrics {
 	base = strings.TrimRight(base, "/")
 	bm := BackendMetrics{Model: model, Timestamp: time.Now()}
 
-	if body, err := m.get(ctx, base+"/metrics"); err == nil {
-		parsePrometheusInto(&bm, body)
-		bm.OK = true
+	if busy {
+		// /metrics and /slots both post a task onto llama-server's own inference
+		// queue and block for it -- contends directly with the request in flight.
+		// Carry the last known gauges forward instead of hitting the queue.
+		if hadPrev {
+			bm.OK = prev.OK
+			bm.KVCacheUsageRatio, bm.KVCacheTokens = prev.KVCacheUsageRatio, prev.KVCacheTokens
+			bm.RequestsProcessing, bm.RequestsDeferred = prev.RequestsProcessing, prev.RequestsDeferred
+			bm.PromptTokens, bm.PromptTokensSeconds, bm.PredictedTokensSeconds = prev.PromptTokens, prev.PromptTokensSeconds, prev.PredictedTokensSeconds
+			bm.PromptTokensTotal, bm.TokensPredictedTotal, bm.NDecodeTotal = prev.PromptTokensTotal, prev.TokensPredictedTotal, prev.NDecodeTotal
+			bm.PromptSecondsTotal, bm.PredictedSecondsTotal = prev.PromptSecondsTotal, prev.PredictedSecondsTotal
+			bm.NCtx, bm.TotalSlots = prev.NCtx, prev.TotalSlots
+		}
+		// RequestsProcessing doesn't need to be stale: quartermaster already
+		// tracks each model's own in-flight ServeHTTP count for free. Prefer
+		// that live number over the carried-forward gauge.
+		if m.modelInflight != nil {
+			if n, ok := m.modelInflight(model); ok {
+				bm.RequestsProcessing = n
+			}
+		}
 	} else {
-		m.log.Debugf("backend metrics: %s /metrics: %v", model, err)
+		if body, err := m.get(ctx, base+"/metrics"); err == nil {
+			parsePrometheusInto(&bm, body)
+			bm.OK = true
+		} else {
+			m.log.Debugf("backend metrics: %s /metrics: %v", model, err)
+		}
+		// KV-cache fill moved out of /metrics in recent llama.cpp (b9620+ no longer
+		// exports llamacpp:kv_cache_tokens / _usage_ratio), so derive it from /slots:
+		// per-slot prompt size + tokens decoded so far = current context occupancy.
+		if body, err := m.get(ctx, base+"/slots"); err == nil {
+			parseSlotsInto(&bm, body)
+		}
 	}
-	// ponytail: /props is static per load but re-scraped each tick — localhost,
-	// 1-2 backends, negligible. Cache by model if backend count ever grows large.
-	if body, err := m.get(ctx, base+"/props"); err == nil {
+
+	// /props (n_ctx, total_slots) is constant for a process's whole lifetime --
+	// no task queue involved either way (get_props posts no server_task, unlike
+	// get_metrics/get_slots), but re-fetching it every 2s forever was pointless.
+	// Fetch once per (model, base) and cache; a base-URL change means a new
+	// process (restart/reload), so that invalidates the cache naturally.
+	if ps, ok := m.cachedProps(model, base); ok {
+		bm.NCtx, bm.TotalSlots = ps.nCtx, ps.totalSlots
+	} else if body, err := m.get(ctx, base+"/props"); err == nil {
 		j := gjson.ParseBytes(body)
-		bm.NCtx = j.Get("default_generation_settings.n_ctx").Int()
-		bm.TotalSlots = j.Get("total_slots").Int()
-	}
-	// KV-cache fill moved out of /metrics in recent llama.cpp (b9620+ no longer
-	// exports llamacpp:kv_cache_tokens / _usage_ratio), so derive it from /slots:
-	// per-slot prompt size + tokens decoded so far = current context occupancy.
-	if body, err := m.get(ctx, base+"/slots"); err == nil {
-		parseSlotsInto(&bm, body)
+		ps := propsSnapshot{base: base, nCtx: j.Get("default_generation_settings.n_ctx").Int(), totalSlots: j.Get("total_slots").Int()}
+		m.storeProps(model, ps)
+		bm.NCtx, bm.TotalSlots = ps.nCtx, ps.totalSlots
+	} else if hadPrev {
+		bm.NCtx, bm.TotalSlots = prev.NCtx, prev.TotalSlots
 	}
 	return bm
+}
+
+// cachedProps returns the cached /props fields for model if base still
+// matches the process that produced them.
+func (m *backendMetricsMonitor) cachedProps(model, base string) (propsSnapshot, bool) {
+	m.propsMu.Lock()
+	defer m.propsMu.Unlock()
+	ps, ok := m.props[model]
+	if !ok || ps.base != base {
+		return propsSnapshot{}, false
+	}
+	return ps, true
+}
+
+func (m *backendMetricsMonitor) storeProps(model string, ps propsSnapshot) {
+	m.propsMu.Lock()
+	defer m.propsMu.Unlock()
+	m.props[model] = ps
+}
+
+// previous returns the last cached snapshot for model, if any.
+func (m *backendMetricsMonitor) previous(model string) (BackendMetrics, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	bm, ok := m.latest[model]
+	return bm, ok
 }
 
 // parseSlotsInto reads llama-server's /slots array and fills the KV-cache and

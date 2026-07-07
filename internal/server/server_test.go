@@ -44,11 +44,11 @@ func (s *stubRouter) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	w.Write([]byte(s.response))
 }
 
-func (s *stubRouter) RunningModels() map[string]process.ProcessState { return s.running }
-func (s *stubRouter) RunningPIDs() []int                             { return nil }
-func (s *stubRouter) Unload(_ time.Duration, _ ...string)            { s.unloadCalls.Add(1) }
-func (s *stubRouter) SetPreEvict(_ func(string))                     {}
-func (s *stubRouter) SetPostLoad(_ func(string))                     {}
+func (s *stubRouter) RunningModels() map[string]process.ProcessState          { return s.running }
+func (s *stubRouter) RunningPIDs() []int                                      { return nil }
+func (s *stubRouter) Unload(_ time.Duration, _ ...string)                     { s.unloadCalls.Add(1) }
+func (s *stubRouter) SetPreEvict(_ func(string))                              {}
+func (s *stubRouter) SetPostLoad(_ func(string))                              {}
 func (s *stubRouter) SetSpawnArgs(_ func(string, []string) ([]string, error)) {}
 func (s *stubRouter) ProcessLogger(modelID string) (*logmon.Monitor, bool) {
 	if s.loggers != nil {
@@ -58,6 +58,7 @@ func (s *stubRouter) ProcessLogger(modelID string) (*logmon.Monitor, bool) {
 	}
 	return nil, false
 }
+func (s *stubRouter) Inflight(_ string) (int64, bool) { return 0, false }
 
 // newTestServer wires a Server with stub routers and a built mux.
 func newTestServer(local router.LocalRouter, peer router.Router) *Server {

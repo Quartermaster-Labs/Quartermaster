@@ -397,6 +397,16 @@ func (b *baseRouter) ProcessLogger(modelID string) (*logmon.Monitor, bool) {
 	return nil, false
 }
 
+// Inflight returns the named model's current in-flight request count. The
+// processes map keys are fixed at construction and Inflight() reads an
+// atomic, so this is safe to call without the run loop.
+func (b *baseRouter) Inflight(modelID string) (int64, bool) {
+	if p, ok := b.processes[modelID]; ok {
+		return p.Inflight(), true
+	}
+	return 0, false
+}
+
 // RunningModels returns the current state of every process that is not stopped
 // or shut down. The processes map keys are fixed at construction and State()
 // is a snapshot, so this is safe to call without the run loop.
