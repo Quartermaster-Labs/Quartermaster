@@ -171,6 +171,16 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string) (c image
 	case strings.Contains(n, "chroma"): // flux-derived, CLIP stripped → T5 only
 		c.vae = req("vae", enc.FluxVae)
 		c.t5 = req("t5xxl", enc.T5)
+	// Flux.2 Klein reports general.architecture "flux" too (verified against a
+	// real gguf header — sd.cpp didn't give it its own arch tag), so arch alone
+	// can't tell it apart from flux.1; name-detect like chroma. Klein drops
+	// clip_l/t5 for an LLM encoder (Qwen3 — same pool as z-image/qwen-image) and
+	// needs its own 32-ch-latent VAE, incompatible with flux.1's fluxVae.
+	// Flux.2-dev uses a Mistral LLM instead of Qwen3 — not wired, no dev model on
+	// disk yet; add a case here (and an EncoderSet field) when one lands.
+	case strings.Contains(n, "klein") || strings.Contains(n, "flux2") || strings.Contains(n, "flux-2"):
+		c.vae = req("vae", enc.Flux2Vae)
+		c.llm = req("llm", enc.QwenLlm)
 	case a == "flux" || strings.HasPrefix(a, "flux"):
 		c.vae = req("vae", enc.FluxVae)
 		c.clipL = req("clip_l", enc.ClipL)

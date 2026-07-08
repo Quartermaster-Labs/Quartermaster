@@ -95,13 +95,14 @@ type Settings struct {
 // field means "not on disk"; a model whose arch requires it emits a WARNING in
 // the generated YAML rather than a silently broken command.
 type EncoderSet struct {
-	FluxVae   string `yaml:"fluxVae"`   // --vae for flux / chroma (the flux "ae.safetensors")
+	FluxVae   string `yaml:"fluxVae"`   // --vae for flux.1 / chroma (the flux "ae.safetensors")
 	ClipL     string `yaml:"clipL"`     // --clip_l (flux, sdxl, sd3)
 	ClipG     string `yaml:"clipG"`     // --clip_g (sdxl, sd3)
 	T5        string `yaml:"t5"`        // --t5xxl (flux, sd3)
 	SdxlVae   string `yaml:"sdxlVae"`   // --vae for sdxl (optional; full checkpoints bake it)
 	ZimageVae string `yaml:"zimageVae"` // --vae for z-image / lumina
-	QwenLlm   string `yaml:"qwenLlm"`   // --llm text encoder (z-image, qwen-image)
+	QwenLlm   string `yaml:"qwenLlm"`   // --llm text encoder (z-image, qwen-image, flux.2 klein)
+	Flux2Vae  string `yaml:"flux2Vae"`  // --vae for flux.2 (32-ch latent, NOT flux.1's fluxVae)
 }
 
 // SlotCacheSettings mirrors config.SlotCacheConfig; zero values fall back to the
