@@ -55,6 +55,26 @@ var logTimeFormats = map[string]string{
 	"stampnano":   time.StampNano,
 }
 
+// listenerAddrsChanged reports whether two configs declare a different set of
+// listen addresses. The bound sockets are fixed at startup, so a change means
+// the operator must restart to (un)bind them; a live config apply can't.
+func listenerAddrsChanged(a, b config.Config) bool {
+	as, bs := a.ListenerAddrs(), b.ListenerAddrs()
+	if len(as) != len(bs) {
+		return true
+	}
+	set := make(map[string]bool, len(as))
+	for _, x := range as {
+		set[x] = true
+	}
+	for _, y := range bs {
+		if !set[y] {
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
 	flagConfig := flag.String("config", "", "path to config file (required)")
 	flagListen := flag.String("listen", "", "listen address (default :8080 or :8443 for TLS)")
@@ -277,7 +297,7 @@ func main() {
 			reloadMu.Unlock()
 		}()
 
-		proxyLog.Info("reloading configuration")
+		proxyLog.Info("applying configuration")
 
 		newCfg, err := config.LoadConfig(configPath)
 		if err != nil {
@@ -293,41 +313,35 @@ func main() {
 			perfMon.UpdateConfig(newCfg.Performance)
 		}
 
-		newSrv, err := server.New(newCfg, muxLog, proxyLog, upstreamLog, perfMon, buildInfo)
-		if err != nil {
-			proxyLog.Warnf("failed to build new server during reload: %v", err)
+		// Live-patch the ONE long-lived server in place: keep every running model
+		// process alive AND keep the server itself (SSE streams, metrics history,
+		// slotCache, background goroutines) running — only the config pointer and
+		// the cfg-derived handler swap. No reconnect, no state reset, no eviction.
+		// A changed model's new launch args take effect on its next load. An
+		// invalid config leaves the running config fully intact.
+		activeMu.RLock()
+		srv := activeSrv
+		activeMu.RUnlock()
+		if err := srv.ApplyConfig(newCfg); err != nil {
+			proxyLog.Warnf("failed to apply config (keeping running config): %v", err)
 			return
 		}
 
-		if autogenAdmin != nil {
-			newSrv.SetAutogenAdmin(autogenAdmin)
-		}
-
-		wireDynOffload(newSrv)
-
-		if playground != nil {
-			newSrv.SetPlayground(playground)
-		}
-
-		newSrv.SetShutdownHook(triggerShutdown)
-
-		activeMu.Lock()
-		old := activeSrv
-		activeSrv = newSrv
-		activeMu.Unlock()
-
 		applyLogSettings(newCfg)
 
-		if err := old.Shutdown(shutdownTimeout); err != nil {
-			proxyLog.Warnf("error shutting down old server during reload: %v", err)
+		// Per-listener catalog scoping refreshed live via ApplyConfig, but binding/
+		// unbinding a physical listen socket still needs a restart. Warn if the
+		// declared listener set changed (rare for a settings edit).
+		if listenerAddrsChanged(cfg, newCfg) {
+			proxyLog.Warn("listener addresses changed in config; restart to bind/unbind listen sockets (per-listener model scoping already updated live)")
 		}
 
-		// Notify UI after a short delay so it can refresh model state.
-		time.AfterFunc(3*time.Second, func() {
-			event.Emit(shared.ConfigFileChangedEvent{State: shared.ReloadingStateEnd})
-		})
+		// Refresh the UI catalog so a live model add/remove shows up. Cheap and
+		// idempotent: on a plain settings edit the payload is identical to what the
+		// UI already holds (same models/states/launch args), so it repaints nothing.
+		event.Emit(shared.ConfigFileChangedEvent{State: shared.ReloadingStateEnd})
 
-		proxyLog.Info("configuration reloaded")
+		proxyLog.Info("configuration applied")
 	}
 
 	// Enable the UI model-config editor only when generating from a control

@@ -20,12 +20,14 @@ type listenerCtxKey struct{}
 // which is the invariant that makes cross-listener VRAM accounting and eviction
 // correct.
 func (s *Server) ServeListener(addr string, w http.ResponseWriter, r *http.Request) {
-	if models, ok := s.listenerModels[addr]; ok {
-		ctx := context.WithValue(r.Context(), listenerCtxKey{}, models)
-		r = r.WithContext(ctx)
+	if lm := s.listenerModels.Load(); lm != nil {
+		if models, ok := (*lm)[addr]; ok {
+			ctx := context.WithValue(r.Context(), listenerCtxKey{}, models)
+			r = r.WithContext(ctx)
+		}
 	}
 	r = s.markPlayground(addr, r)
-	s.handler.ServeHTTP(w, r)
+	(*s.handler.Load()).ServeHTTP(w, r)
 }
 
 // listenerModelSet returns the restricted model set for the current request and

@@ -66,6 +66,13 @@ type Scheduler interface {
 	// swap waiters and queued requests). Process teardown is the baseRouter's
 	// responsibility.
 	OnShutdown(err error)
+
+	// ApplyConfig live-swaps the config-derived inputs (eviction planner,
+	// per-model concurrency limits, image-model set, and scheduler settings)
+	// from a reloaded config, WITHOUT disturbing in-flight state (active swaps,
+	// queued requests, in-flight counts). Runs on the router's single run
+	// goroutine, so it needs no locking.
+	ApplyConfig(conf config.Config, planner Swapper)
 }
 
 // Effects is implemented by the baseRouter. The scheduler calls back through it

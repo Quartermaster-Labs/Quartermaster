@@ -387,6 +387,11 @@ func UpsertSidecarSettings(generatePath string, patch SettingsPatch) error {
 	if sc.Settings != nil && patch.DryDefault == nil {
 		patch.DryDefault = sc.Settings.DryDefault
 	}
+	// Same carry-forward for the idle-eviction TTL: a VRAM-only save shouldn't
+	// wipe a previously-set TTL patch.
+	if sc.Settings != nil && patch.TtlSec == nil {
+		patch.TtlSec = sc.Settings.TtlSec
+	}
 	sc.Settings = &patch
 	return writeSidecar(generatePath, sc)
 }

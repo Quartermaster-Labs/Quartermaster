@@ -55,8 +55,9 @@ type fakeProcess struct {
 	// Stop calls can be in flight simultaneously.
 	stopBlock chan struct{}
 
-	preStop   atomic.Pointer[func()]
-	postStart atomic.Pointer[func()]
+	preStop    atomic.Pointer[func()]
+	postStart  atomic.Pointer[func()]
+	lastConfig atomic.Pointer[config.ModelConfig] // last SetConfig, for ApplyConfig tests
 
 	runCalls   atomic.Int32
 	stopCalls  atomic.Int32
@@ -142,6 +143,8 @@ func (f *fakeProcess) SetPreStop(fn func())   { f.preStop.Store(&fn) }
 func (f *fakeProcess) SetPostStart(fn func()) { f.postStart.Store(&fn) }
 
 func (f *fakeProcess) SetSpawnArgs(_ func([]string) ([]string, error)) {}
+func (f *fakeProcess) SetConfig(c config.ModelConfig)                  { f.lastConfig.Store(&c) }
+func (f *fakeProcess) LaunchedCmd() string                             { return "" }
 
 func (f *fakeProcess) Stop(_ time.Duration) error {
 	f.stopCalls.Add(1)

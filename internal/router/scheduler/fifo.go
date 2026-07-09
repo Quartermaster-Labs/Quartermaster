@@ -58,8 +58,26 @@ type FIFO struct {
 // from models: each model's ConcurrencyLimit overrides defaultConcurrencyLimit
 // when set to a value greater than zero.
 func NewFIFO(name string, logger *logmon.Monitor, planner Swapper, cfg config.FifoConfig, models map[string]config.ModelConfig, eff Effects) *FIFO {
-	limits := make(map[string]int, len(models))
-	imageModels := make(map[string]bool)
+	limits, imageModels := deriveModelParams(models)
+	return &FIFO{
+		name:        name,
+		logger:      logger,
+		planner:     planner,
+		cfg:         cfg,
+		effects:     eff,
+		limits:      limits,
+		active:      make(map[string]*activeSwap),
+		inFlight:    make(map[string]int),
+		imageModels: imageModels,
+	}
+}
+
+// deriveModelParams computes the per-model concurrency limits and the image-model
+// set from a config's model map — the two purely config-derived lookups FIFO
+// keeps. Shared by NewFIFO and ApplyConfig.
+func deriveModelParams(models map[string]config.ModelConfig) (limits map[string]int, imageModels map[string]bool) {
+	limits = make(map[string]int, len(models))
+	imageModels = make(map[string]bool)
 	for id, mc := range models {
 		limit := defaultConcurrencyLimit
 		if mc.ConcurrencyLimit > 0 {
@@ -73,18 +91,15 @@ func NewFIFO(name string, logger *logmon.Monitor, planner Swapper, cfg config.Fi
 			}
 		}
 	}
+	return limits, imageModels
+}
 
-	return &FIFO{
-		name:        name,
-		logger:      logger,
-		planner:     planner,
-		cfg:         cfg,
-		effects:     eff,
-		limits:      limits,
-		active:      make(map[string]*activeSwap),
-		inFlight:    make(map[string]int),
-		imageModels: imageModels,
-	}
+// ApplyConfig live-swaps the config-derived inputs while leaving active/queued/
+// in-flight state untouched. See Scheduler.ApplyConfig.
+func (s *FIFO) ApplyConfig(conf config.Config, planner Swapper) {
+	s.planner = planner
+	s.cfg = conf.Routing.Scheduler.Settings.Fifo
+	s.limits, s.imageModels = deriveModelParams(conf.Models)
 }
 
 // OnRequest decides what to do with one incoming ServeHTTP request. It never

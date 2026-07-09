@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/radu0120/llama-quartermaster/internal/config"
 	"github.com/radu0120/llama-quartermaster/internal/logmon"
 )
 
@@ -76,4 +77,15 @@ type Process interface {
 	// aborts the start (the caller refuses rather than crashing). nil hook = the
 	// argv is used verbatim. Call once before serving; safe for concurrent set.
 	SetSpawnArgs(fn func(args []string) ([]string, error))
+
+	// SetConfig swaps the model config live (config reload). A running upstream
+	// keeps serving under the config it spawned with; the new command/flags take
+	// effect on the next spawn. Safe for concurrent set via atomic store.
+	SetConfig(config.ModelConfig)
+
+	// LaunchedCmd returns the actual argv the running upstream spawned with
+	// (post argv-rewrite), joined by spaces, or "" when not running. This is what
+	// the process is REALLY serving under — which, after a live SetConfig or a
+	// spawn-time offload rewrite, differs from the current config command.
+	LaunchedCmd() string
 }

@@ -520,9 +520,10 @@ export interface AppSettings {
   targetVramGB: number;
   vramOverheadGB: number;
   maxRamGB: number;
+  ttlSec: number; // idle-eviction timeout baked into every model's ttl (0 = never)
   autoVram: boolean;
   overridden: boolean;
-  defaults: { targetVramGB: number; vramOverheadGB: number; maxRamGB: number };
+  defaults: { targetVramGB: number; vramOverheadGB: number; maxRamGB: number; ttlSec: number };
   modelsRoot: string;
   categoryRoots: Record<string, string> | null;
   slotCache: SlotCacheSettings;
@@ -550,6 +551,7 @@ export async function putSettings(p: {
   targetVramGB: number;
   vramOverheadGB: number;
   maxRamGB: number;
+  ttlSec: number;
 }): Promise<void> {
   const response = await fetch("/api/settings", {
     method: "PUT",

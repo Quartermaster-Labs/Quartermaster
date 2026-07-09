@@ -33,14 +33,20 @@ type apiModel struct {
 	// so each port shows only its own models. Empty when ungrouped/unrestricted.
 	Group     string   `json:"group,omitempty"`
 	Listeners []string `json:"listeners,omitempty"`
+	// RunningCmd is the actual argv the process spawned with, set only while the
+	// model is running. It differs from the config command after a live config
+	// edit (new args apply on next load) or a spawn-time offload rewrite, so the
+	// UI shows what the model is REALLY loaded with, not the pending config.
+	RunningCmd string `json:"runningCmd,omitempty"`
 }
 
 // groupIndex maps each model ID to its group name (first group listing it as a
 // member), and each group to the sorted listen addresses that expose it. Used
 // to tag the modelStatus payload so the UI can section the catalog by port.
 func (s *Server) groupIndex() (modelGroup map[string]string, groupListeners map[string][]string) {
+	cfg := s.config()
 	modelGroup = make(map[string]string)
-	for gid, gc := range s.cfg.Groups {
+	for gid, gc := range cfg.Groups {
 		for _, mid := range gc.Members {
 			if _, exists := modelGroup[mid]; !exists {
 				modelGroup[mid] = gid
@@ -48,7 +54,7 @@ func (s *Server) groupIndex() (modelGroup map[string]string, groupListeners map[
 		}
 	}
 	groupListeners = make(map[string][]string)
-	for addr, lc := range s.cfg.Listeners {
+	for addr, lc := range cfg.Listeners {
 		for _, gid := range lc.Groups {
 			groupListeners[gid] = append(groupListeners[gid], addr)
 		}
@@ -63,9 +69,10 @@ func (s *Server) groupIndex() (modelGroup map[string]string, groupListeners map[
 // state (defaulting to "stopped"), followed by peer models.
 func (s *Server) modelStatus() []apiModel {
 	running := s.local.RunningModels()
+	cfg := s.config()
 
-	ids := make([]string, 0, len(s.cfg.Models))
-	for id := range s.cfg.Models {
+	ids := make([]string, 0, len(cfg.Models))
+	for id := range cfg.Models {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
@@ -74,10 +81,14 @@ func (s *Server) modelStatus() []apiModel {
 
 	models := make([]apiModel, 0, len(ids))
 	for _, id := range ids {
-		mc := s.cfg.Models[id]
+		mc := cfg.Models[id]
 		state := "stopped"
+		var runningCmd string
 		if st, ok := running[id]; ok {
 			state = string(st)
+			// Actual spawned argv — what the model is really serving under, which
+			// differs from mc.Cmd after a live edit or offload rewrite. "" until ready.
+			runningCmd, _ = s.local.LaunchedCmd(id)
 		}
 		_, capsMap, _, _ := renderCapabilities(mc.Capabilities)
 		gid := modelGroup[id]
@@ -92,10 +103,11 @@ func (s *Server) modelStatus() []apiModel {
 			Family:       modelFamily(mc.Cmd),
 			Group:        gid,
 			Listeners:    groupListeners[gid],
+			RunningCmd:   runningCmd,
 		})
 	}
 
-	for peerID, peer := range s.cfg.Peers {
+	for peerID, peer := range cfg.Peers {
 		for _, modelID := range peer.Models {
 			models = append(models, apiModel{Id: modelID, PeerID: peerID})
 		}
@@ -114,7 +126,8 @@ func (s *Server) handleAPIUnloadAll(w http.ResponseWriter, r *http.Request) {
 // handleAPIUnloadModel stops a single named local process.
 func (s *Server) handleAPIUnloadModel(w http.ResponseWriter, r *http.Request) {
 	requested := strings.TrimPrefix(r.PathValue("model"), "/")
-	realName, found := s.cfg.RealModelName(requested)
+	cfg := s.config()
+	realName, found := cfg.RealModelName(requested)
 	if !found {
 		shared.SendResponse(w, r, http.StatusNotFound, "model not found")
 		return

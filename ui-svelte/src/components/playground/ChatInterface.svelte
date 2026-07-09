@@ -12,6 +12,9 @@
     webSearchStore,
     reasoningStore,
     searxngUrlStore,
+    searchMaxPerTurnStore,
+    searchThrottleMsStore,
+    searchDedupeStore,
     rewriteStore,
     rewriteInstructionStore,
   } from "../../stores/playground";
@@ -25,6 +28,7 @@
   } from "../../stores/chatHistory";
   import { streamChatCompletion } from "../../lib/chatApi";
   import { WEB_SEARCH_TOOL, searxngSearch, formatSearchResults } from "../../lib/webSearch";
+  import { WIKI_TOOL, searchWiki, formatWikiResults } from "../../lib/wiki";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import { getTextContent, getImageUrls } from "../../lib/types";
   import { harmonyToThink } from "../../lib/reasoning";
@@ -84,6 +88,22 @@
   // --- store helpers: messages live in chatSessions, keyed by session id ---
   function sessionById(id: string): ChatSession | undefined {
     return get(chatSessions).find((s) => s.id === id);
+  }
+  // Sleep that rejects with an AbortError if the signal fires (so a user Stop
+  // during a search throttle-wait breaks out instead of stalling).
+  function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (signal.aborted) return reject(new DOMException("Aborted", "AbortError"));
+      const t = setTimeout(() => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(t);
+        reject(new DOMException("Aborted", "AbortError"));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
   }
   // Patch one session. `bump` stamps updatedAt so the rail sorts the row to the
   // top — only on real message activity (send / regenerate), NOT on streaming
@@ -150,14 +170,22 @@
   let rewriteFocused = $state(false);
   let rewriteEl: HTMLTextAreaElement | undefined = $state();
   let showSettings = $state(false);
+  // System-prompt editor modal: edit a draft, commit to the store on Save.
+  let showSysPrompt = $state(false);
+  let sysPromptDraft = $state("");
+  function openSysPrompt() {
+    sysPromptDraft = get(systemPromptStore);
+    showSysPrompt = true;
+  }
+  function saveSysPrompt() {
+    systemPromptStore.set(sysPromptDraft);
+    showSysPrompt = false;
+  }
   let attachedImages = $state<string[]>([]);
   let fileInput = $state<HTMLInputElement | null>(null);
   let imageError = $state<string | null>(null);
 
   let hasModels = $derived($models.some((m) => !m.unlisted));
-  let selectedModelName = $derived(
-    $models.find((m) => m.id === $selectedModelStore)?.name || $selectedModelStore
-  );
   // Image input needs a vision-capable model; without one the backend 500s
   // ("image input is not supported"). Two ways a model can take images:
   //  - it natively reports vision (single-file multimodal gguf), or
@@ -430,10 +458,16 @@
   // deliberately NOT here — it's appended at the very END of the system block (see
   // currentDateLine) so this prefix stays byte-identical across a midnight rollover
   // and the KV cache isn't invalidated once a day.
-  function basePrompt(searchAvailable: boolean): string {
+  function basePrompt(searchAvailable: boolean, wikiAvailable: boolean): string {
     const lines = [
-      "If you are unsure or do not know something, say so plainly — never fabricate facts, citations, numbers, or URLs.",
-      "Keep answers concise; expand only when asked.",
+      "You are a capable, knowledgeable assistant running locally on the user's own machine.",
+      "You are served by llama-quartermaster: an all-in-one local inference engine (a llama.cpp/stable-diffusion.cpp front-end) that discovers the user's local model files, auto-computes each model's context/GPU-offload/KV settings, and hot-swaps models in and out of VRAM on demand. The user reaches you through its built-in web playground. There is no cloud service behind you — weights, prompts, and conversations stay on this machine.",
+      "If you are unsure or do not know something, say so plainly — never fabricate facts, citations, numbers, or URLs, and clearly separate what you know from what you're inferring or guessing.",
+      "Answer directly and lead with the point. Keep answers concise and skip filler and boilerplate caveats; expand only when the topic genuinely needs it or the user asks.",
+      "Follow the user's instructions precisely and match their language and tone. If a request is genuinely ambiguous, ask one short clarifying question rather than guessing.",
+      "Work through multi-step or tricky problems carefully before committing to a final answer, and double-check math, logic, and edge cases.",
+      "Default to clear, flowing prose in plain paragraphs, the way a thoughtful person writes — this is your normal voice. Do NOT reflexively reach for bullet points, numbered lists, or headings; most answers read better as a few well-formed sentences. Reserve Markdown structure for when it genuinely earns its place: real step-by-step instructions, comparisons across several items, or content that is inherently a list. Always use fenced code blocks tagged with the language for code, and LaTeX for math. When you write code, make it complete and runnable, and call out any key assumptions in prose.",
+      "Do not moralize, lecture, or refuse reasonable requests; be honest and helpful even on difficult or sensitive topics.",
     ];
     if (searchAvailable) {
       lines.push(
@@ -441,6 +475,11 @@
       );
       lines.push(
         "When a search is time-sensitive (weather, news, prices, \"current\"/\"latest\" anything), put the actual date (given at the end of this prompt) into the query (e.g. \"Copenhagen weather June 27 2026\") instead of vague words like \"current\" or \"today\", which return stale results. You can use the user's timezone (given at the end) to infer their approximate location and make location-dependent queries more useful.",
+      );
+    }
+    if (wikiAvailable) {
+      lines.push(
+        "A wiki_search tool gives you the llama-quartermaster help wiki. Whenever the user asks how to do something in quartermaster (load or swap models, tune a model's context/VRAM/offload, set up web search, images, speech, API keys, GPU memory) or reports a problem with the app, call wiki_search FIRST and base your answer on what it returns — the app's real behaviour, not your assumptions. Don't invent menus, buttons, or settings; if the wiki doesn't cover it, say so.",
       );
     }
     return lines.join(" ");
@@ -508,8 +547,17 @@
     abortController = new AbortController();
     const signal = abortController.signal;
 
-    // No web search during a rewrite — it's a self-contained text transform.
-    const useTools = !isRewrite && $webSearchStore;
+    // No tools during a rewrite — it's a self-contained text transform.
+    // Web search is opt-in (needs SearXNG); the local help wiki is always on so
+    // models can answer quartermaster questions. `useTools` = any tool advertised.
+    const webEnabled = !isRewrite && $webSearchStore;
+    const wikiEnabled = !isRewrite;
+    const useTools = webEnabled || wikiEnabled;
+    // Stable per-turn tool set — same every round AND in the finalize prefill, so
+    // the system-prompt prefix stays byte-identical (KV reuse; see finalize note).
+    const turnTools = [...(webEnabled ? [WEB_SEARCH_TOOL] : []), ...(wikiEnabled ? [WIKI_TOOL] : [])];
+    const maxWiki = 4;
+    let wikiCount = 0;
 
     // Thinking budget: hard token cap so models can't loop forever before
     // answering. 0 = off; rewrites never think. Enforced server-side as the
@@ -592,7 +640,7 @@
         max_tokens: $maxTokensStore,
         // Match round-1's tool set so the system-prompt prefix is byte-identical
         // (prefix match, not tool use — the finalize loop ignores tool_calls).
-        tools: useTools ? [WEB_SEARCH_TOOL] : undefined,
+        tools: turnTools.length ? turnTools : undefined,
         reasoning: !isRewrite && $reasoningStore, // keep round-1 flag → same prefix, KV reuse
         conversationId: id,
       });
@@ -619,7 +667,7 @@
     const genStart = Date.now();
 
     const sys = [
-      basePrompt(useTools),
+      basePrompt(webEnabled, wikiEnabled),
       $systemPromptStore.trim(),
       curSummary && `Summary of earlier conversation:\n${curSummary}`,
       // Rewrite turns keep the full conversation for context (setting, characters,
@@ -655,9 +703,19 @@
     // the assistant message instead).
     const apiTail: ChatMessage[] = [];
 
+    // Web-search rate controls (protect self-hosted SearXNG). Cap total searches
+    // per turn; once hit the tool is dropped so the model must answer. Throttle
+    // spaces requests; dedupe reuses the result for a repeated query in the turn.
+    const maxSearches = $searchMaxPerTurnStore;
+    const throttleMs = $searchThrottleMsStore;
+    const dedupe = $searchDedupeStore;
+    let searchCount = 0;
+    let lastSearchAt = 0;
+    const searchCache = new Map<string, { text: string; sources: { title: string; url: string }[] }>();
+
     try {
-      // ponytail: unbounded by request — model→search→model until the model
-      // stops calling tools. No round cap; the user hits Stop to break out.
+      // model→search→model until the model stops calling tools or the per-turn
+      // search cap is reached. The user hits Stop to break out early.
       for (;;) {
         // Per-round abort so a budget-triggered finalize cancels just this
         // request, not the whole turn (which the user-level `signal` owns).
@@ -679,7 +737,10 @@
             // is exactly what forced the full-context reprocess before. A clean stop
             // leaves the slot warm so the continuation below reuses it. 0 = off.
             max_tokens: reasoningBudget > 0 ? reasoningBudget : $maxTokensStore,
-            tools: useTools ? [WEB_SEARCH_TOOL] : undefined,
+            // Stable tool set every round → the cap is enforced in dispatch (a
+            // "limit reached" tool reply), not by dropping the tool, which would
+            // change the prefix mid-turn and cost a full reprocess on hybrids.
+            tools: turnTools.length ? turnTools : undefined,
             reasoning: !isRewrite && $reasoningStore,
             conversationId: id,
           });
@@ -768,12 +829,39 @@
           let query = "";
           try {
             query = JSON.parse(tc.function.arguments || "{}").query ?? "";
-            const results = await searxngSearch($searxngUrlStore, query, signal);
-            resultText = formatSearchResults(query, results);
-            sources = results.filter((r) => r.url).map((r) => ({ title: r.title || r.url, url: r.url }));
+            if (tc.function.name === "wiki_search") {
+              // Local help lookup — no network, no SearXNG budget. Its own small
+              // cap stops a model looping on it.
+              if (wikiCount >= maxWiki) {
+                resultText = `Wiki lookup limit reached (${maxWiki} per turn). Answer with what you have.`;
+              } else {
+                wikiCount++;
+                resultText = formatWikiResults(query, searchWiki(query));
+              }
+            } else {
+            const cached = dedupe ? searchCache.get(query) : undefined;
+            if (cached) {
+              // Repeated query this turn — reuse the earlier result, no network hit.
+              resultText = cached.text;
+              sources = cached.sources;
+            } else if (searchCount >= maxSearches) {
+              // Cap hit mid-round: tell the model so it answers instead of retrying.
+              resultText = `Search limit reached (${maxSearches} per turn). Answer with the information already gathered.`;
+            } else {
+              // Throttle: space real requests so SearXNG's limiter doesn't trip.
+              const wait = throttleMs - (Date.now() - lastSearchAt);
+              if (wait > 0 && lastSearchAt > 0) await abortableSleep(wait, signal);
+              const results = await searxngSearch($searxngUrlStore, query, signal);
+              lastSearchAt = Date.now();
+              searchCount++;
+              resultText = formatSearchResults(query, results);
+              sources = results.filter((r) => r.url).map((r) => ({ title: r.title || r.url, url: r.url }));
+              if (dedupe) searchCache.set(query, { text: resultText, sources });
+            }
+            }
           } catch (e) {
             if (e instanceof Error && e.name === "AbortError") throw e;
-            resultText = `Search failed: ${e instanceof Error ? e.message : String(e)}`;
+            resultText = `${tc.function.name === "wiki_search" ? "Wiki lookup" : "Search"} failed: ${e instanceof Error ? e.message : String(e)}`;
           }
           apiTail.push({ role: "tool", tool_call_id: tc.id, content: resultText });
           patchLast(id, (m) => ({ ...m, searches: [...(m.searches ?? []), { query, results: resultText, at, reasoningAt, duringReasoning, sources }] }));
@@ -1102,11 +1190,6 @@
             </button>
           </div>
 
-          <div class="flex flex-col gap-1">
-            <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">Model {@render tip("Which model answers your messages.")}</span>
-            <ModelSelector bind:value={$selectedModelStore} placeholder="Select a model..." disabled={isStreaming} category="llm" compact />
-          </div>
-
           <div class="flex flex-col gap-1.5">
             <label class="flex justify-between text-xs uppercase tracking-wide text-txtsecondary" for="temperature">
               <span class="flex items-center gap-1.5">Temperature {@render tip("Higher gives the model more freedom to be creative and varied; lower keeps it focused and predictable.")}</span>
@@ -1130,15 +1213,51 @@
           </div>
 
           <div class="flex flex-col gap-1">
-            <label class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary" for="system-prompt">System Prompt {@render tip("Standing instructions that shape the model's tone and behaviour for the whole chat.")}</label>
+            <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">System Prompt {@render tip("Standing instructions that shape the model's tone and behaviour for the whole chat.")}</span>
+            <button
+              type="button"
+              class="w-full text-left px-2.5 py-1.5 rounded-md border border-card-border bg-surface hover:border-primary transition-colors {$systemPromptStore.trim() ? 'text-txtmain' : 'text-txtsecondary'}"
+              onclick={openSysPrompt}
+            >
+              <span class="line-clamp-2">{$systemPromptStore.trim() || "You are a helpful assistant..."}</span>
+            </button>
+          </div>
+
+          <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-reasoning">
+            <span class="flex items-center gap-1.5"><Brain class="w-3.5 h-3.5" /> Reasoning {@render tip("Let the model think before answering (for reasoning-capable models).")}</span>
+            <input id="chat-reasoning" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$reasoningStore} />
+          </label>
+
+          <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-websearch">
+            <span class="flex items-center gap-1.5"><Search class="w-3.5 h-3.5" /> Web Search {@render tip("Let the model search the web (via SearXNG) for fresh facts. Needs a tool-calling model. URL + rate limits are in the side-rail Settings.")}</span>
+            <input id="chat-websearch" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$webSearchStore} />
+          </label>
+        </div>
+      {/if}
+
+      <!-- System-prompt editor: roomier modal to write/save the standing prompt. -->
+      {#if showSysPrompt}
+        <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4" onclick={() => (showSysPrompt = false)} role="presentation">
+          <div
+            class="flex w-full max-w-xl flex-col gap-3 rounded-lg border border-card-border bg-surface p-4 shadow-xl"
+            onclick={(e) => e.stopPropagation()}
+            role="presentation"
+          >
+            <div class="flex items-center justify-between">
+              <span class="font-medium text-txtmain">System Prompt</span>
+              <button class="inline-flex items-center justify-center p-1 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors" onclick={() => (showSysPrompt = false)} title="Close">
+                <X class="w-4 h-4" />
+              </button>
+            </div>
             <textarea
-              id="system-prompt"
-              class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary resize-none"
+              class="w-full h-64 px-3 py-2 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary resize-none text-sm"
               placeholder="You are a helpful assistant..."
-              rows="3"
-              bind:value={$systemPromptStore}
-              disabled={isStreaming}
+              bind:value={sysPromptDraft}
             ></textarea>
+            <div class="flex justify-end gap-2">
+              <button class="px-3 py-1.5 rounded-md border border-card-border text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors text-sm" onclick={() => (showSysPrompt = false)}>Cancel</button>
+              <button class="px-3 py-1.5 rounded-md bg-primary text-white hover:opacity-90 transition-opacity text-sm" onclick={saveSysPrompt}>Save</button>
+            </div>
           </div>
         </div>
       {/if}
@@ -1202,7 +1321,7 @@
       {/if}
 
       <!-- Composer -->
-      <div class="flex flex-col gap-2 rounded-3xl border border-card-border bg-surface px-4 pt-3 pb-3 focus-within:border-primary transition-colors">
+      <div class="flex flex-col gap-2 rounded-3xl border border-card-border bg-surface px-4 pt-3 pb-3 hover:ring-1 hover:ring-white/15 focus-within:border-primary transition-all">
         {#if $rewriteStore}
           <div class="flex items-start gap-2 pb-2 border-b border-card-border">
             <PenLine class="w-3.5 h-3.5 mt-1.5 shrink-0 text-primary" />
@@ -1252,12 +1371,17 @@
                 <Eye class="w-[1.125rem] h-[1.125rem]" />
               </button>
             {/if}
+            <button
+              class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors {$rewriteStore ? 'bg-primary/10 text-primary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
+              onclick={() => { rewriteStore.set(!$rewriteStore); showToast($rewriteStore ? "Rewrite mode on" : "Rewrite mode off"); }}
+              title={$rewriteStore ? "Rewrite mode on" : "Rewrite mode off"}
+            >
+              <PenLine class="w-[1.125rem] h-[1.125rem]" />
+            </button>
           </div>
 
           <div class="flex-1 min-w-0 px-2 flex flex-col items-center gap-1">
-            <span class="max-w-full truncate text-xs font-medium text-txtsecondary" title={selectedModelName}>
-              {selectedModelName}
-            </span>
+            <ModelSelector bind:value={$selectedModelStore} placeholder="Select a model..." disabled={isStreaming} category="llm" ghost dropUp />
             <!-- Context-window usage: thin colour-only line, yellow → orange → red. -->
             {#if ctxN > 0}
               <div class="h-0.5 w-16 rounded-full bg-secondary overflow-hidden" title="Context {Math.round(ctxRatio * 100)}%">
@@ -1267,27 +1391,6 @@
           </div>
 
           <div class="flex items-center gap-1">
-            <button
-              class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors {$reasoningStore ? 'bg-primary/10 text-primary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
-              onclick={() => { reasoningStore.set(!$reasoningStore); showToast($reasoningStore ? "Reasoning enabled" : "Reasoning disabled"); }}
-              title={$reasoningStore ? "Reasoning on" : "Reasoning off"}
-            >
-              <Brain class="w-[1.125rem] h-[1.125rem]" />
-            </button>
-            <button
-              class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors {$webSearchStore ? 'bg-primary/10 text-primary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
-              onclick={() => { webSearchStore.set(!$webSearchStore); showToast($webSearchStore ? "Web search enabled" : "Web search disabled"); }}
-              title={$webSearchStore ? "Web search on" : "Web search off"}
-            >
-              <Search class="w-[1.125rem] h-[1.125rem]" />
-            </button>
-            <button
-              class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors {$rewriteStore ? 'bg-primary/10 text-primary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
-              onclick={() => { rewriteStore.set(!$rewriteStore); showToast($rewriteStore ? "Rewrite mode on" : "Rewrite mode off"); }}
-              title={$rewriteStore ? "Rewrite mode on" : "Rewrite mode off"}
-            >
-              <PenLine class="w-[1.125rem] h-[1.125rem]" />
-            </button>
             <button
               class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors {showSettings ? 'bg-secondary text-txtmain shadow-inner' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
               onclick={() => (showSettings = !showSettings)}

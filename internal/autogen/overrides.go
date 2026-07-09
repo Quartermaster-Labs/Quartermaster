@@ -164,6 +164,9 @@ type SettingsPatch struct {
 	MaxRamGB       *float64 `yaml:"maxRamGB,omitempty"`
 	AutoVram       *bool    `yaml:"autoVram,omitempty"`
 	DryDefault     *bool    `yaml:"dryDefault,omitempty"`
+	// TtlSec is the idle-eviction timeout (seconds) baked into every model's
+	// `ttl`. 0 => never auto-unload. nil => inherit the generate file / default.
+	TtlSec *int `yaml:"ttlSec,omitempty"`
 }
 
 // apply overlays the patch's set fields onto s.
@@ -185,6 +188,9 @@ func (p *SettingsPatch) apply(s *Settings) {
 	}
 	if p.DryDefault != nil {
 		s.DryDefault = p.DryDefault
+	}
+	if p.TtlSec != nil {
+		s.TtlSec = *p.TtlSec
 	}
 }
 

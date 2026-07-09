@@ -130,7 +130,8 @@ func filterCappedMetadata(md map[string]any) map[string]any {
 // (with optional aliases) plus peer models.
 func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	created := time.Now().Unix()
-	data := make([]modelRecord, 0, len(s.cfg.Models))
+	cfg := s.config()
+	data := make([]modelRecord, 0, len(cfg.Models))
 
 	newRecord := func(id, name, description string, metadata map[string]any, caps config.ModelCapConfig) modelRecord {
 		rec := modelRecord{
@@ -159,7 +160,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	// scopes apply: a model must pass the listener AND the key to be listed.
 	keyAllowed, keyScoped := apiKeyModelSet(r)
 
-	for id, mc := range s.cfg.Models {
+	for id, mc := range cfg.Models {
 		if mc.Unlisted {
 			continue
 		}
@@ -171,7 +172,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		}
 		data = append(data, newRecord(id, mc.Name, mc.Description, mc.Metadata, mc.Capabilities))
 
-		if s.cfg.IncludeAliasesInList {
+		if cfg.IncludeAliasesInList {
 			for _, alias := range mc.Aliases {
 				if alias := strings.TrimSpace(alias); alias != "" {
 					data = append(data, newRecord(alias, mc.Name, mc.Description, mc.Metadata, mc.Capabilities))
@@ -181,7 +182,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !scoped && !keyScoped {
-		for peerID, peer := range s.cfg.Peers {
+		for peerID, peer := range cfg.Peers {
 			for _, modelID := range peer.Models {
 				data = append(data, newRecord(modelID, peerID+": "+modelID, "", map[string]any{"peerID": peerID}, config.ModelCapConfig{}))
 			}
@@ -226,8 +227,9 @@ func (s *Server) handleUnload(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRunning(w http.ResponseWriter, r *http.Request) {
 	states := s.local.RunningModels()
 	list := make([]runningModel, 0, len(states))
+	models := s.config().Models
 	for id, state := range states {
-		mc := s.cfg.Models[id]
+		mc := models[id]
 		list = append(list, runningModel{
 			Model:       id,
 			State:       string(state),
@@ -266,7 +268,7 @@ func (d *discardResponseWriter) WriteHeader(status int) { d.status = status }
 // Hooks.OnStartup.Preload so they are warm before the first real request.
 // Preload names are already resolved to real model IDs by config loading.
 func (s *Server) startPreload() {
-	models := s.cfg.Hooks.OnStartup.Preload
+	models := s.config().Hooks.OnStartup.Preload
 	if len(models) == 0 {
 		return
 	}
@@ -325,7 +327,7 @@ func handleUpstreamRedirect(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUpstream(w http.ResponseWriter, r *http.Request) {
 	upstreamPath := r.PathValue("upstreamPath")
 
-	searchName, modelID, remainingPath, found := findModelInPath(s.cfg, "/"+upstreamPath)
+	searchName, modelID, remainingPath, found := findModelInPath(s.config(), "/"+upstreamPath)
 	if !found {
 		shared.SendResponse(w, r, http.StatusNotFound, "model not found")
 		return

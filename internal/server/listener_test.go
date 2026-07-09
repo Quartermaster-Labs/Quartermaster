@@ -16,7 +16,7 @@ func listenerTestServer(t *testing.T, listenerModels map[string]map[string]bool)
 		newStubRouter([]string{"assistant1", "game1"}, "local response"),
 		newStubRouter(nil, ""),
 	)
-	s.cfg = config.Config{
+	s.cfg.Store(&config.Config{
 		Models: map[string]config.ModelConfig{
 			"assistant1": {Name: "Assistant"},
 			"game1":      {Name: "Game"},
@@ -24,8 +24,8 @@ func listenerTestServer(t *testing.T, listenerModels map[string]map[string]bool)
 		Peers: config.PeerDictionaryConfig{
 			"peer1": {Models: []string{"remote-model"}},
 		},
-	}
-	s.listenerModels = listenerModels
+	})
+	s.listenerModels.Store(&listenerModels)
 	return s
 }
 

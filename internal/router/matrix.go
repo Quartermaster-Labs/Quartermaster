@@ -6,6 +6,7 @@ import (
 	"github.com/radu0120/llama-quartermaster/internal/config"
 	"github.com/radu0120/llama-quartermaster/internal/logmon"
 	"github.com/radu0120/llama-quartermaster/internal/process"
+	"github.com/radu0120/llama-quartermaster/internal/router/scheduler"
 )
 
 type Matrix struct {
@@ -13,27 +14,42 @@ type Matrix struct {
 }
 
 func NewMatrix(conf config.Config, proxylog, upstreamlog *logmon.Monitor) (*Matrix, error) {
-	mtx := conf.Routing.Router.Settings.Matrix
-	if mtx == nil {
-		return nil, fmt.Errorf("matrix router requires a matrix configuration")
+	// plan derives the eviction planner and the desired process set. The matrix
+	// router runs a process for every model in the config — any model can run
+	// alone even if it is not part of a set. Shared by construction + ApplyConfig.
+	plan := func(c config.Config) (scheduler.Swapper, map[string]config.ModelConfig, error) {
+		mtx := c.Routing.Router.Settings.Matrix
+		if mtx == nil {
+			return nil, nil, fmt.Errorf("matrix router requires a matrix configuration")
+		}
+		want := make(map[string]config.ModelConfig, len(c.Models))
+		for mid, mc := range c.Models {
+			want[mid] = mc
+		}
+		swapper := &matrixSwapper{
+			solver: newMatrixSolver(mtx.ExpandedSets, mtx.ResolvedEvictCosts()),
+			logger: proxylog,
+		}
+		return swapper, want, nil
 	}
 
-	swapper := &matrixSwapper{
-		solver: newMatrixSolver(mtx.ExpandedSets, mtx.ResolvedEvictCosts()),
-		logger: proxylog,
+	swapper, want, err := plan(conf)
+	if err != nil {
+		return nil, err
 	}
 
-	// Build a process for every model in the config. Any model can run alone
-	// even if it is not part of a set; this mirrors proxy.NewMatrix.
-	processes := make(map[string]process.Process, len(conf.Models))
+	processes := make(map[string]process.Process, len(want))
 	base, err := newBaseRouter("matrix", conf, processes, proxylog, swapper)
 	if err != nil {
 		return nil, fmt.Errorf("creating base router: %w", err)
 	}
+	base.plan = plan
+	base.makeProcess = func(id string, mc config.ModelConfig) (process.Process, error) {
+		return process.New(base.procCtx, id, mc, logmon.NewWriter(upstreamlog), proxylog)
+	}
 
-	for mid, modelCfg := range conf.Models {
-		procLog := logmon.NewWriter(upstreamlog)
-		p, err := process.New(base.procCtx, mid, modelCfg, procLog, proxylog)
+	for mid, modelCfg := range want {
+		p, err := base.makeProcess(mid, modelCfg)
 		if err != nil {
 			base.shutdownFn()
 			base.procCancel()

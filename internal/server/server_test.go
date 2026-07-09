@@ -50,6 +50,7 @@ func (s *stubRouter) Unload(_ time.Duration, _ ...string)                     { 
 func (s *stubRouter) SetPreEvict(_ func(string))                              {}
 func (s *stubRouter) SetPostLoad(_ func(string))                              {}
 func (s *stubRouter) SetSpawnArgs(_ func(string, []string) ([]string, error)) {}
+func (s *stubRouter) ApplyConfig(_ config.Config) error                       { return nil }
 func (s *stubRouter) ProcessLogger(modelID string) (*logmon.Monitor, bool) {
 	if s.loggers != nil {
 		if lg, ok := s.loggers[modelID]; ok {
@@ -58,14 +59,14 @@ func (s *stubRouter) ProcessLogger(modelID string) (*logmon.Monitor, bool) {
 	}
 	return nil, false
 }
-func (s *stubRouter) Inflight(_ string) (int64, bool) { return 0, false }
+func (s *stubRouter) Inflight(_ string) (int64, bool)     { return 0, false }
+func (s *stubRouter) LaunchedCmd(_ string) (string, bool) { return "", false }
 
 // newTestServer wires a Server with stub routers and a built mux.
 func newTestServer(local router.LocalRouter, peer router.Router) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	proxylog := logmon.NewWriter(io.Discard)
 	s := &Server{
-		cfg:         config.Config{},
 		muxlog:      logmon.NewWriter(io.Discard),
 		proxylog:    proxylog,
 		upstreamlog: logmon.NewWriter(io.Discard),
@@ -76,6 +77,7 @@ func newTestServer(local router.LocalRouter, peer router.Router) *Server {
 		shutdownCtx: ctx,
 		shutdownFn:  cancel,
 	}
+	s.cfg.Store(&config.Config{})
 	s.routes()
 	return s
 }
@@ -117,6 +119,47 @@ func TestServer_New_MatrixConfig(t *testing.T) {
 	}
 	if err := s.Shutdown(time.Second); err != nil {
 		t.Fatalf("Shutdown: %v", err)
+	}
+}
+
+// TestServer_ApplyConfig proves a hot reload swaps the live config and rebuilds
+// the request handler IN PLACE — the same Server keeps serving (no reconstruction,
+// no stream reconnect). A model added by the new config becomes visible via the
+// (freshly rebuilt) /v1/models handler.
+func TestServer_ApplyConfig(t *testing.T) {
+	s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
+
+	// Nothing listed initially.
+	if got := len(s.config().Models); got != 0 {
+		t.Fatalf("initial models=%d want 0", got)
+	}
+
+	newCfg := config.Config{Models: map[string]config.ModelConfig{
+		"added": {Name: "Added"},
+	}}
+	if err := s.ApplyConfig(newCfg); err != nil {
+		t.Fatalf("ApplyConfig: %v", err)
+	}
+
+	// Live config swapped.
+	if _, ok := s.config().Models["added"]; !ok {
+		t.Fatalf("config not swapped: %+v", s.config().Models)
+	}
+
+	// The rebuilt handler serves the new catalog.
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d", w.Code)
+	}
+	var resp struct {
+		Data []modelRecord `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Data) != 1 || resp.Data[0].ID != "added" {
+		t.Errorf("catalog=%+v want [added]", resp.Data)
 	}
 }
 
@@ -225,7 +268,7 @@ func TestServer_Running(t *testing.T) {
 	local := newStubRouter([]string{"m1"}, "")
 	local.running = map[string]process.ProcessState{"m1": process.StateReady}
 	s := newTestServer(local, newStubRouter(nil, ""))
-	s.cfg = config.Config{Models: map[string]config.ModelConfig{
+	s.cfg.Store(&config.Config{Models: map[string]config.ModelConfig{
 		"m1": {
 			Cmd:         "llama-server",
 			Proxy:       "http://localhost:9999",
@@ -233,7 +276,7 @@ func TestServer_Running(t *testing.T) {
 			Name:        "Model One",
 			Description: "the first model",
 		},
-	}}
+	}})
 
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/running", nil))
@@ -268,9 +311,9 @@ func TestServer_Running(t *testing.T) {
 func TestServer_Preload(t *testing.T) {
 	local := newStubRouter([]string{"m1"}, "ok")
 	s := newTestServer(local, newStubRouter(nil, ""))
-	s.cfg = config.Config{Hooks: config.HooksConfig{
+	s.cfg.Store(&config.Config{Hooks: config.HooksConfig{
 		OnStartup: config.HookOnStartup{Preload: []string{"m1"}},
-	}}
+	}})
 
 	got := make(chan shared.ModelPreloadedEvent, 1)
 	cancel := event.On(func(e shared.ModelPreloadedEvent) { got <- e })
@@ -315,7 +358,7 @@ func TestServer_LogStream_ModelID(t *testing.T) {
 	local.loggers = map[string]*logmon.Monitor{"mymodel": buf}
 
 	s := newTestServer(local, newStubRouter(nil, ""))
-	s.cfg = config.Config{Models: map[string]config.ModelConfig{"mymodel": {}}}
+	s.cfg.Store(&config.Config{Models: map[string]config.ModelConfig{"mymodel": {}}})
 
 	// Pre-cancel the context so the streaming loop exits immediately after
 	// flushing history.

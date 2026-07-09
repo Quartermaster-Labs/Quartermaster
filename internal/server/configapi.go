@@ -257,12 +257,13 @@ func (s *Server) resolveModelGguf(w http.ResponseWriter, r *http.Request) (realI
 		return "", "", "", false
 	}
 	requested := strings.TrimPrefix(r.PathValue("model"), "/")
-	realID, found := s.cfg.RealModelName(requested)
+	cfg := s.config()
+	realID, found := cfg.RealModelName(requested)
 	if !found {
 		shared.SendResponse(w, r, http.StatusNotFound, "model not found")
 		return "", "", "", false
 	}
-	cmd = s.cfg.Models[realID].Cmd
+	cmd = cfg.Models[realID].Cmd
 	gguf = modelFamily(cmd)
 	if gguf == "" {
 		shared.SendResponse(w, r, http.StatusBadRequest, "model has no gguf path to override")
@@ -621,12 +622,14 @@ type settingsDefaults struct {
 	TargetVramGB   float64 `json:"targetVramGB"`
 	VramOverheadGB float64 `json:"vramOverheadGB"`
 	MaxRamGB       float64 `json:"maxRamGB"`
+	TtlSec         int     `json:"ttlSec"`
 }
 
 type settingsResp struct {
 	TargetVramGB   float64          `json:"targetVramGB"`
 	VramOverheadGB float64          `json:"vramOverheadGB"`
 	MaxRamGB       float64          `json:"maxRamGB"`
+	TtlSec         int              `json:"ttlSec"` // idle-eviction timeout baked into every model's ttl (0 = never)
 	AutoVram       bool             `json:"autoVram"`
 	Overridden     bool             `json:"overridden"` // a UI sidecar patch is active
 	Defaults       settingsDefaults `json:"defaults"`   // values a reset reverts to
@@ -650,6 +653,7 @@ type settingsPutDTO struct {
 	TargetVramGB   float64 `json:"targetVramGB"`
 	VramOverheadGB float64 `json:"vramOverheadGB"`
 	MaxRamGB       float64 `json:"maxRamGB"`
+	TtlSec         int     `json:"ttlSec"`
 }
 
 // requireAutogen guards the settings endpoints, which need the autogen control
@@ -689,12 +693,14 @@ func (s *Server) handleAPISettingsGet(w http.ResponseWriter, r *http.Request) {
 		TargetVramGB:   gf.Settings.TargetVramGB,
 		VramOverheadGB: gf.Settings.VramOverheadGB,
 		MaxRamGB:       gf.Settings.MaxRamGB,
+		TtlSec:         gf.Settings.TtlSec,
 		AutoVram:       gf.Settings.AutoVram,
 		Overridden:     patch != nil,
 		Defaults: settingsDefaults{
 			TargetVramGB:   base.TargetVramGB,
 			VramOverheadGB: base.VramOverheadGB,
 			MaxRamGB:       base.MaxRamGB,
+			TtlSec:         base.TtlSec,
 		},
 		ModelsRoot:    gf.Settings.ModelsRoot,
 		CategoryRoots: gf.Settings.CategoryRoots,
@@ -791,12 +797,17 @@ func (s *Server) handleAPISettingsPut(w http.ResponseWriter, r *http.Request) {
 		shared.SendResponse(w, r, http.StatusBadRequest, "targetVramGB and maxRamGB must be > 0, vramOverheadGB >= 0")
 		return
 	}
+	if body.TtlSec < 0 {
+		shared.SendResponse(w, r, http.StatusBadRequest, "ttlSec must be >= 0 (0 = never auto-unload)")
+		return
+	}
 	autoOff := false
 	patch := autogen.SettingsPatch{
 		TargetVramGB:   &body.TargetVramGB,
 		VramOverheadGB: &body.VramOverheadGB,
 		MaxRamGB:       &body.MaxRamGB,
 		AutoVram:       &autoOff,
+		TtlSec:         &body.TtlSec,
 	}
 	if err := autogen.UpsertSidecarSettings(s.autogen.GeneratePath, patch); err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())

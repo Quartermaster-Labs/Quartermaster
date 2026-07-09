@@ -26,6 +26,10 @@ export const reasoningStore = userPref<boolean>("playground-reasoning", true);
 export const rewriteStore = userPref<boolean>("playground-rewrite", false);
 export const rewriteInstructionStore = userPref<string>("playground-rewrite-instruction", "");
 export const searxngUrlStore = userPref<string>("playground-searxng-url", "http://localhost:8888");
+// Web-search rate controls (protect self-hosted SearXNG from runaway agents).
+export const searchMaxPerTurnStore = userPref<number>("playground-search-max-per-turn", 10);
+export const searchThrottleMsStore = userPref<number>("playground-search-throttle-ms", 500);
+export const searchDedupeStore = userPref<boolean>("playground-search-dedupe", true);
 
 // Chat history sidebar collapsed state. Shared so the side-rail Chat icon can
 // toggle the ChatInterface's own history panel when chat is already active.

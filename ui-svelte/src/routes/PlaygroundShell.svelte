@@ -7,6 +7,9 @@
     reasoningBudgetStore,
     webSearchStore,
     searxngUrlStore,
+    searchMaxPerTurnStore,
+    searchThrottleMsStore,
+    searchDedupeStore,
   } from "../stores/playground";
   import { searxngSearch } from "../lib/webSearch";
   import { me, logout } from "../stores/playgroundAuth";
@@ -24,7 +27,8 @@
     newImageChatId,
     type ImageSession,
   } from "../stores/imageHistory";
-  import { MessageSquare, Image, Volume2, Mic, ListOrdered, Zap, LogOut, Plus, Trash2, Settings, HelpCircle } from "lucide-svelte";
+  import { MessageSquare, Image, Volume2, Mic, ListOrdered, Zap, LogOut, Plus, Trash2, Settings, HelpCircle, BookOpen } from "lucide-svelte";
+  import WikiModal from "../components/WikiModal.svelte";
   import ChatInterface from "../components/playground/ChatInterface.svelte";
   import ImageInterface from "../components/playground/ImageInterface.svelte";
   import AudioInterface from "../components/playground/AudioInterface.svelte";
@@ -88,6 +92,7 @@
   let confirmDeleteId = $state<string | null>(null);
   let confirmDeleteImageId = $state<string | null>(null);
   let showSettings = $state(false);
+  let showWiki = $state(false);
   let confirmLogout = $state(false);
   let searxngProbe = $state<{ state: "idle" | "testing" | "ok" | "fail"; msg: string }>({ state: "idle", msg: "" });
 
@@ -262,6 +267,16 @@
 
     <!-- Settings (placeholder for per-user memory mgmt) above logout, each its
          own row like the tabs. -->
+    <button
+      onclick={() => (showWiki = true)}
+      title="Help"
+      class="shrink-0 flex items-center gap-3 px-2.5 py-2 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
+    >
+      <BookOpen size={18} class="shrink-0" />
+      <span class="font-mono text-sm whitespace-nowrap opacity-0 group-hover/rail:opacity-100 transition-opacity">
+        Help
+      </span>
+    </button>
     <button
       onclick={() => (showSettings = true)}
       title="Settings"
@@ -456,6 +471,21 @@
           {:else}
             <p class="text-xs text-txtsecondary">Model must support tool calling. SearXNG needs JSON format + CORS enabled.</p>
           {/if}
+
+          <div class="grid grid-cols-2 gap-2">
+            <label class="flex flex-col gap-1 text-xs uppercase tracking-wide text-txtsecondary" for="search-max">
+              <span class="flex items-center gap-1.5">Max / Turn {@render tip("Cap on web searches per message. Once hit, the model must answer with what it found — protects SearXNG from runaway agents.")}</span>
+              <input id="search-max" type="number" min="1" max="50" class="px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$searchMaxPerTurnStore} />
+            </label>
+            <label class="flex flex-col gap-1 text-xs uppercase tracking-wide text-txtsecondary" for="search-throttle">
+              <span class="flex items-center gap-1.5">Throttle ms {@render tip("Minimum gap between searches, so SearXNG's rate limiter doesn't trip. 0 = no delay.")}</span>
+              <input id="search-throttle" type="number" min="0" max="10000" step="100" class="px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$searchThrottleMsStore} />
+            </label>
+          </div>
+          <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="search-dedupe">
+            <span class="flex items-center gap-1.5">Dedupe Queries {@render tip("Reuse the result when the model repeats the same query within a turn, instead of searching again.")}</span>
+            <input id="search-dedupe" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$searchDedupeStore} />
+          </label>
         {/if}
       </div>
 
@@ -496,6 +526,8 @@
     </div>
   </div>
 {/if}
+
+<WikiModal bind:open={showWiki} />
 
 <style>
   .tab-hidden {

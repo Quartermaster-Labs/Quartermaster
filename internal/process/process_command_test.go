@@ -75,9 +75,19 @@ func TestProcessCommand_StartStop(t *testing.T) {
 		t.Errorf("before start: expected body to contain %q, got %q", "llama-quartermaster-error", body)
 	}
 
+	// before start: no launched command
+	if got := p.LaunchedCmd(); got != "" {
+		t.Errorf("before start: LaunchedCmd=%q want empty", got)
+	}
+
 	runErr := runAsync(t, p)
 	if got := p.State(); got != StateReady {
 		t.Errorf("after Run: expected state %s, got %s", StateReady, got)
+	}
+
+	// while ready: LaunchedCmd reports the actual argv it spawned with.
+	if got := p.LaunchedCmd(); !strings.Contains(got, "simple-responder") {
+		t.Errorf("after Run: LaunchedCmd=%q want it to contain the binary", got)
 	}
 
 	rr = httptest.NewRecorder()
@@ -94,6 +104,10 @@ func TestProcessCommand_StartStop(t *testing.T) {
 	}
 	if got := p.State(); got != StateStopped {
 		t.Errorf("after Stop: expected state %s, got %s", StateStopped, got)
+	}
+	// after stop: LaunchedCmd cleared
+	if got := p.LaunchedCmd(); got != "" {
+		t.Errorf("after Stop: LaunchedCmd=%q want empty", got)
 	}
 	select {
 	case err := <-runErr:

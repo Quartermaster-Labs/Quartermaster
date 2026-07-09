@@ -28,6 +28,10 @@ export interface Model {
   // expose that group's catalog. The Models page sections by these.
   group?: string;
   listeners?: string[];
+  // Actual argv the process spawned with, set only while running. Differs from
+  // the config command after a live settings edit (new args apply on next load)
+  // or a spawn-time offload rewrite — so the UI shows what's REALLY loaded.
+  runningCmd?: string;
 }
 
 export interface TokenMetrics {

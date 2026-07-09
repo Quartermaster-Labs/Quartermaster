@@ -56,13 +56,19 @@ type startResult struct {
 	cmdDone   chan struct{}
 	cancel    context.CancelFunc
 	handlerFn http.HandlerFunc
+	args      []string // final argv the process spawned with (post rewrite)
 	err       error
 }
 
 type ProcessCommand struct {
-	id        string
-	config    config.ModelConfig
-	parentCtx context.Context
+	id string
+	// liveConfig holds the model config. SetConfig replaces it for a live config
+	// reload; the next spawn (doStart) picks up the new command/flags while a
+	// running upstream keeps serving with the config it started under. Stored
+	// atomically so SetConfig is callable off the run goroutine; every internal
+	// reader snapshots it once via cfg().
+	liveConfig atomic.Pointer[config.ModelConfig]
+	parentCtx  context.Context
 
 	processLogger *logmon.Monitor
 	proxyLogger   *logmon.Monitor
@@ -82,6 +88,12 @@ type ProcessCommand struct {
 	// stores the active reverse-proxy handler when the process is running.
 	// Written only by run(); read by ServeHTTP via atomic load.
 	handler atomic.Pointer[http.HandlerFunc]
+
+	// launchedArgs holds the actual argv the live process spawned with (post
+	// argv-rewrite). Set on StateReady, cleared on teardown. Read by LaunchedCmd
+	// so the UI can show what a running model is REALLY serving under, which
+	// differs from the current config after a live SetConfig or offload rewrite.
+	launchedArgs atomic.Pointer[[]string]
 
 	lastUse  atomic.Int64 // unix nano timestamp of last ServeHTTP completion
 	inflight atomic.Int64 // current in-flight ServeHTTP calls
@@ -116,7 +128,6 @@ func New(
 ) (*ProcessCommand, error) {
 	p := &ProcessCommand{
 		id:            id,
-		config:        conf,
 		parentCtx:     parentCtx,
 		processLogger: processLogger,
 		proxyLogger:   proxyLogger,
@@ -126,6 +137,7 @@ func New(
 		waitReadyCh: make(chan waitReadyReq),
 		waitDelay:   cmdWaitDelay,
 	}
+	p.liveConfig.Store(&conf)
 	p.state.Store(StateStopped)
 
 	go p.run()
@@ -133,6 +145,25 @@ func New(
 }
 
 func (p *ProcessCommand) Logger() *logmon.Monitor { return p.processLogger }
+
+// cfg snapshots the current model config. Callers that read several fields
+// should call it once and use the returned value so a concurrent SetConfig
+// can't tear a multi-field read.
+func (p *ProcessCommand) cfg() config.ModelConfig { return *p.liveConfig.Load() }
+
+// SetConfig swaps the model config live. A running upstream keeps serving under
+// the config it spawned with; the new config takes effect on the next spawn.
+// See Process.SetConfig.
+func (p *ProcessCommand) SetConfig(c config.ModelConfig) { p.liveConfig.Store(&c) }
+
+// LaunchedCmd returns the actual argv the live process spawned with, or "" when
+// not running. See Process.LaunchedCmd.
+func (p *ProcessCommand) LaunchedCmd() string {
+	if a := p.launchedArgs.Load(); a != nil {
+		return strings.Join(*a, " ")
+	}
+	return ""
+}
 
 // SetPreStop installs the pre-teardown hook. See Process.SetPreStop.
 func (p *ProcessCommand) SetPreStop(fn func()) { p.preStop.Store(&fn) }
@@ -216,6 +247,7 @@ func (p *ProcessCommand) run() {
 			setState(StateShutdown)
 			if cmd != nil {
 				p.handler.Store(nil)
+				p.launchedArgs.Store(nil)
 				p.killProcess(cmd, cmdCancel, cmdDone, parentCancelGraceTimeout)
 				cmd = nil
 				cmdDone = nil
@@ -237,6 +269,7 @@ func (p *ProcessCommand) run() {
 			cmdDone = nil
 			cmdCancel = nil
 			p.handler.Store(nil)
+			p.launchedArgs.Store(nil)
 			setState(StateStopped)
 			respondRun(fmt.Errorf("[%s] upstream exited unexpectedly", p.id))
 
@@ -286,6 +319,8 @@ func (p *ProcessCommand) run() {
 					cmdCancel = res.cancel
 					fn := res.handlerFn
 					p.handler.Store(&fn)
+					la := res.args
+					p.launchedArgs.Store(&la)
 					setState(StateReady)
 					// Prime the upstream (e.g. restore slot KV) before waking any
 					// WaitReady caller, so the first forwarded request reuses it.
@@ -299,9 +334,10 @@ func (p *ProcessCommand) run() {
 					runResp = req.respond
 
 					// Start TTL goroutine if configured — self-terminates
-					// when state leaves StateReady.
-					if p.config.UnloadAfter > 0 {
-						ttlDuration := time.Duration(p.config.UnloadAfter) * time.Second
+					// when state leaves StateReady. Snapshot the TTL at ready
+					// time; a mid-run SetConfig retunes it on the next spawn.
+					if unloadAfter := p.cfg().UnloadAfter; unloadAfter > 0 {
+						ttlDuration := time.Duration(unloadAfter) * time.Second
 						go func() {
 							ticker := time.NewTicker(time.Second)
 							defer ticker.Stop()
@@ -313,7 +349,7 @@ func (p *ProcessCommand) run() {
 									continue
 								}
 								if time.Since(time.Unix(0, p.lastUse.Load())) > ttlDuration {
-									p.proxyLogger.Infof("<%s> Unloading model, TTL of %ds reached", p.id, p.config.UnloadAfter)
+									p.proxyLogger.Infof("<%s> Unloading model, TTL of %ds reached", p.id, unloadAfter)
 									p.Stop(10 * time.Second)
 									return
 								}
@@ -383,6 +419,7 @@ func (p *ProcessCommand) run() {
 				cmdDone = nil
 				cmdCancel = nil
 				p.handler.Store(nil)
+				p.launchedArgs.Store(nil)
 			}
 			// Stop is a no-op (and not an error) when already Stopped — this
 			// is what makes it idempotent for callers that don't track state.
@@ -394,11 +431,12 @@ func (p *ProcessCommand) run() {
 }
 
 func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout time.Duration) startResult {
-	if p.config.Proxy == "" {
+	cfg := p.cfg()
+	if cfg.Proxy == "" {
 		return startResult{err: fmt.Errorf("upstream proxy missing")}
 	}
 
-	args, err := p.config.SanitizedCommand()
+	args, err := cfg.SanitizedCommand()
 	if err != nil {
 		return startResult{err: fmt.Errorf("unable to get sanitized command: %w", err)}
 	}
@@ -413,25 +451,25 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		}
 	}
 
-	proxyURL, err := url.Parse(p.config.Proxy)
+	proxyURL, err := url.Parse(cfg.Proxy)
 	if err != nil {
-		return startResult{err: fmt.Errorf("invalid proxy URL %q: %w", p.config.Proxy, err)}
+		return startResult{err: fmt.Errorf("invalid proxy URL %q: %w", cfg.Proxy, err)}
 	}
 
 	reverseProxy := httputil.NewSingleHostReverseProxy(proxyURL)
 	reverseProxy.Transport = &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
-			Timeout:   time.Duration(p.config.Timeouts.Connect) * time.Second,
-			KeepAlive: time.Duration(p.config.Timeouts.KeepAlive) * time.Second,
+			Timeout:   time.Duration(cfg.Timeouts.Connect) * time.Second,
+			KeepAlive: time.Duration(cfg.Timeouts.KeepAlive) * time.Second,
 		}).DialContext,
-		TLSHandshakeTimeout:   time.Duration(p.config.Timeouts.TLSHandshake) * time.Second,
-		ResponseHeaderTimeout: time.Duration(p.config.Timeouts.ResponseHeader) * time.Second,
-		ExpectContinueTimeout: time.Duration(p.config.Timeouts.ExpectContinue) * time.Second,
+		TLSHandshakeTimeout:   time.Duration(cfg.Timeouts.TLSHandshake) * time.Second,
+		ResponseHeaderTimeout: time.Duration(cfg.Timeouts.ResponseHeader) * time.Second,
+		ExpectContinueTimeout: time.Duration(cfg.Timeouts.ExpectContinue) * time.Second,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		MaxIdleConnsPerHost:   10,
-		IdleConnTimeout:       time.Duration(p.config.Timeouts.IdleConn) * time.Second,
+		IdleConnTimeout:       time.Duration(cfg.Timeouts.IdleConn) * time.Second,
 	}
 	reverseProxy.ModifyResponse = func(resp *http.Response) error {
 		if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
@@ -466,12 +504,12 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 	cmd := exec.CommandContext(cmdCtx, args[0], args[1:]...)
 	cmd.Stderr = p.processLogger
 	cmd.Stdout = p.processLogger
-	cmd.Env = append(cmd.Environ(), p.config.Env...)
+	cmd.Env = append(cmd.Environ(), cfg.Env...)
 	cmd.Cancel = func() error { return p.sendStopSignal(cmd) }
 	cmd.WaitDelay = p.waitDelay
 	setProcAttributes(cmd)
 
-	p.proxyLogger.Debugf("<%s> Executing start command: %s, env: %s", p.id, strings.Join(args, " "), strings.Join(p.config.Env, ", "))
+	p.proxyLogger.Debugf("<%s> Executing start command: %s, env: %s", p.id, strings.Join(args, " "), strings.Join(cfg.Env, ", "))
 
 	cmdDone := make(chan struct{})
 	if err := cmd.Start(); err != nil {
@@ -514,9 +552,9 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		return abort(ErrStartAborted)
 	}
 
-	checkEndpoint := strings.TrimSpace(p.config.CheckEndpoint)
+	checkEndpoint := strings.TrimSpace(cfg.CheckEndpoint)
 	if checkEndpoint == "none" {
-		return startResult{cmd: cmd, cmdDone: cmdDone, cancel: cmdCancel, handlerFn: handlerFn}
+		return startResult{cmd: cmd, cmdDone: cmdDone, cancel: cmdCancel, handlerFn: handlerFn, args: args}
 	}
 
 	// Wait 250ms for the command to start up before health checking
@@ -540,13 +578,13 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 			return abort(fmt.Errorf("health check timed out after %v", healthCheckTimeout))
 		}
 
-		req, _ := http.NewRequestWithContext(startCtx, "GET", p.config.CheckEndpoint, nil)
+		req, _ := http.NewRequestWithContext(startCtx, "GET", cfg.CheckEndpoint, nil)
 		rr := httptest.NewRecorder()
 		reverseProxy.ServeHTTP(rr, req)
 		resp := rr.Result()
 		resp.Body.Close()
 		if resp.StatusCode == http.StatusOK {
-			p.proxyLogger.Infof("<%s> Health check passed on %s%s", p.id, p.config.Proxy, p.config.CheckEndpoint)
+			p.proxyLogger.Infof("<%s> Health check passed on %s%s", p.id, cfg.Proxy, cfg.CheckEndpoint)
 			break
 		} else if startCtx.Err() != nil {
 			return abort(ErrStartAborted)
@@ -561,7 +599,7 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		}
 	}
 
-	return startResult{cmd: cmd, cmdDone: cmdDone, cancel: cmdCancel, handlerFn: handlerFn}
+	return startResult{cmd: cmd, cmdDone: cmdDone, cancel: cmdCancel, handlerFn: handlerFn, args: args}
 }
 
 // sendStopSignal runs the configured CmdStop (if any) or sends SIGTERM to
@@ -573,10 +611,11 @@ func (p *ProcessCommand) sendStopSignal(cmd *exec.Cmd) error {
 		return nil
 	}
 	pid := cmd.Process.Pid
-	if p.config.CmdStop != "" {
-		p.processLogger.Debugf("<%s> sendStopSignal() using CmdStop %q for pid %d", p.id, p.config.CmdStop, pid)
+	cmdStop := p.cfg().CmdStop
+	if cmdStop != "" {
+		p.processLogger.Debugf("<%s> sendStopSignal() using CmdStop %q for pid %d", p.id, cmdStop, pid)
 		stopArgs, err := config.SanitizeCommand(
-			strings.ReplaceAll(p.config.CmdStop, "${PID}", fmt.Sprintf("%d", pid)),
+			strings.ReplaceAll(cmdStop, "${PID}", fmt.Sprintf("%d", pid)),
 		)
 		if err == nil {
 			p.processLogger.Debugf("<%s> sendStopSignal() running stop command: %s", p.id, strings.Join(stopArgs, " "))
@@ -592,7 +631,7 @@ func (p *ProcessCommand) sendStopSignal(cmd *exec.Cmd) error {
 			return runErr
 		}
 		// fall through to SIGTERM if sanitize failed
-		p.processLogger.Errorf("<%s> sendStopSignal() failed to sanitize CmdStop %q: %v, falling back to terminateProcessTree", p.id, p.config.CmdStop, err)
+		p.processLogger.Errorf("<%s> sendStopSignal() failed to sanitize CmdStop %q: %v, falling back to terminateProcessTree", p.id, cmdStop, err)
 	}
 	// On Unix this SIGTERMs the whole process group so a forked grandchild
 	// (e.g. a shell wrapper that backgrounds the real binary) is taken down

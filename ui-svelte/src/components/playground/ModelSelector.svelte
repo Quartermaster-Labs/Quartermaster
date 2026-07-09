@@ -14,10 +14,14 @@
     // Peers are left in — they aren't categorized locally.
     category?: ModelCategory;
     compact?: boolean;
+    // Borderless trigger that reads as a clickable label (name + chevron).
+    ghost?: boolean;
+    // Open the menu upward — for triggers pinned near the viewport bottom.
+    dropUp?: boolean;
     onChange?: (value: string) => void;
   }
 
-  let { value = $bindable(), placeholder = "Select a model...", disabled = false, capabilities, matchAny = false, category, compact = false, onChange }: Props = $props();
+  let { value = $bindable(), placeholder = "Select a model...", disabled = false, capabilities, matchAny = false, category, compact = false, ghost = false, dropUp = false, onChange }: Props = $props();
 
   // Hard-filter local models so non-matching ones don't appear at all. Peers
   // stay in — they aren't categorized locally. For "llm" also drop rerankers
@@ -101,6 +105,14 @@
     onChange?.(v);
   }
 
+  // Variant pill: filled when selected, outlined otherwise.
+  const pillCls = (sel: boolean) =>
+    `rounded-full border px-2.5 py-1 text-xs transition-colors ${
+      sel
+        ? "bg-primary border-primary text-white"
+        : "border-card-border text-txtsecondary hover:text-txtmain hover:border-primary/50"
+    }`;
+
   // ponytail: mouse + Escape only; no arrow-key listbox nav. Add if asked.
   function clickOutside(node: HTMLElement) {
     function onClick(e: MouseEvent) {
@@ -112,48 +124,64 @@
 </script>
 
 {#if hasModels}
-  <div class="relative {compact ? 'w-full' : 'min-w-0 flex-1 basis-48'}" use:clickOutside>
-    <button
-      type="button"
-      {disabled}
-      class="w-full flex items-center justify-between gap-2 rounded border border-card-border bg-surface text-left focus:outline-none focus:border-primary disabled:opacity-50 {compact
-        ? 'px-2.5 py-1.5 text-[0.8125rem]'
-        : 'px-3 py-2'}"
-      onclick={() => (open = !open)}
-      onkeydown={(e) => e.key === "Escape" && (open = false)}
-      title={value || placeholder}
-    >
-      <span class="truncate {value ? '' : 'text-txtsecondary'}">{value || placeholder}</span>
-      <ChevronDown class="w-4 h-4 shrink-0 transition-transform {open ? 'rotate-180' : ''}" />
-    </button>
+  <div class="relative {ghost ? 'inline-block max-w-full' : compact ? 'w-full' : 'min-w-0 flex-1 basis-48'}" use:clickOutside>
+    {#if ghost}
+      <button
+        type="button"
+        {disabled}
+        class="max-w-full flex items-center gap-1 text-xs font-medium text-txtsecondary hover:text-txtmain focus:outline-none disabled:opacity-50 transition-colors"
+        onclick={() => (open = !open)}
+        onkeydown={(e) => e.key === "Escape" && (open = false)}
+        title={value || placeholder}
+      >
+        <span class="truncate {value ? '' : 'text-txtsecondary'}">{value || placeholder}</span>
+        <ChevronDown class="w-3.5 h-3.5 shrink-0 transition-transform {open ? 'rotate-180' : ''}" />
+      </button>
+    {:else}
+      <button
+        type="button"
+        {disabled}
+        class="w-full flex items-center justify-between gap-2 rounded border border-card-border bg-surface text-left focus:outline-none focus:border-primary disabled:opacity-50 {compact
+          ? 'px-2.5 py-1.5 text-[0.8125rem]'
+          : 'px-3 py-2'}"
+        onclick={() => (open = !open)}
+        onkeydown={(e) => e.key === "Escape" && (open = false)}
+        title={value || placeholder}
+      >
+        <span class="truncate {value ? '' : 'text-txtsecondary'}">{value || placeholder}</span>
+        <ChevronDown class="w-4 h-4 shrink-0 transition-transform {open ? 'rotate-180' : ''}" />
+      </button>
+    {/if}
 
     {#if open}
       <div
-        class="absolute left-0 right-0 top-full mt-1 z-30 max-h-64 overflow-y-auto pretty-scroll rounded-md border border-card-border bg-surface shadow-lg py-1 text-[0.8125rem]"
+        class="absolute z-30 max-h-80 overflow-y-auto pretty-scroll rounded-md border border-card-border bg-surface shadow-lg py-1.5 text-[0.8125rem] {ghost
+          ? 'left-1/2 -translate-x-1/2 min-w-[22rem] max-w-[30rem]'
+          : 'left-0 right-0'} {dropUp ? 'bottom-full mb-1' : 'top-full mt-1'}"
       >
         {#each sections as sec (sec.label)}
           <div class="px-2.5 py-1 text-[0.65rem] uppercase tracking-wide text-txtsecondary">{sec.label}</div>
           {#each sec.groups as g (g.base.value)}
-            <button
-              type="button"
-              class="w-full text-left break-words px-2.5 py-1.5 hover:bg-secondary transition-colors {g.base.value === value
-                ? 'text-primary'
-                : 'text-txtmain'} {g.variants.length > 0 ? 'font-medium' : ''}"
-              onclick={() => select(g.base.value)}
-            >
-              {g.base.label}
-            </button>
-            {#each g.variants as v (v.value)}
+            {#if g.variants.length > 0}
+              <!-- Model with variants: name header + Default + variant pills. -->
+              <div class="px-2.5 py-1.5">
+                <div class="break-words font-medium text-txtmain">{g.base.label}</div>
+                <div class="mt-1.5 flex flex-wrap gap-1.5">
+                  <button type="button" class={pillCls(g.base.value === value)} onclick={() => select(g.base.value)}>Default</button>
+                  {#each g.variants as v (v.value)}
+                    <button type="button" class={pillCls(v.value === value)} onclick={() => select(v.value)}>{v.label}</button>
+                  {/each}
+                </div>
+              </div>
+            {:else}
               <button
                 type="button"
-                class="w-full text-left break-words pl-5 pr-2.5 py-1.5 hover:bg-secondary transition-colors {v.value === value
-                  ? 'text-primary'
-                  : 'text-txtsecondary'}"
-                onclick={() => select(v.value)}
+                class="w-full text-left break-words px-2.5 py-1.5 hover:bg-secondary transition-colors {g.base.value === value ? 'text-primary' : 'text-txtmain'}"
+                onclick={() => select(g.base.value)}
               >
-                ↳ {v.label}
+                {g.base.label}
               </button>
-            {/each}
+            {/if}
           {/each}
         {/each}
       </div>

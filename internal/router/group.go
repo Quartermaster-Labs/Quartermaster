@@ -6,6 +6,7 @@ import (
 	"github.com/radu0120/llama-quartermaster/internal/config"
 	"github.com/radu0120/llama-quartermaster/internal/logmon"
 	"github.com/radu0120/llama-quartermaster/internal/process"
+	"github.com/radu0120/llama-quartermaster/internal/router/scheduler"
 )
 
 type Group struct {
@@ -13,36 +14,42 @@ type Group struct {
 }
 
 func NewGroup(conf config.Config, proxylog, upstreamlog *logmon.Monitor) (*Group, error) {
-	modelToGroup := make(map[string]string)
-	for gid, gcfg := range conf.Routing.Router.Settings.Groups {
-		for _, mid := range gcfg.Members {
-			if existing, dup := modelToGroup[mid]; dup {
-				return nil, fmt.Errorf("model %q is in multiple groups: %q and %q", mid, existing, gid)
-			}
-			modelToGroup[mid] = gid
+	// plan derives the eviction planner and the model→config set of every process
+	// the group router should run under a config. Shared by initial construction
+	// and ApplyConfig (live reload).
+	plan := func(c config.Config) (scheduler.Swapper, map[string]config.ModelConfig, error) {
+		modelToGroup, err := buildModelToGroup(c)
+		if err != nil {
+			return nil, nil, err
 		}
+		want := make(map[string]config.ModelConfig, len(modelToGroup))
+		for mid := range modelToGroup {
+			modelCfg, _, ok := c.FindConfig(mid)
+			if !ok {
+				return nil, nil, fmt.Errorf("no model config for %q", mid)
+			}
+			want[mid] = modelCfg
+		}
+		return &groupSwapper{config: c, modelToGroup: modelToGroup}, want, nil
 	}
 
-	swapper := &groupSwapper{
-		config:       conf,
-		modelToGroup: modelToGroup,
+	swapper, want, err := plan(conf)
+	if err != nil {
+		return nil, err
 	}
 
-	processes := make(map[string]process.Process, len(modelToGroup))
+	processes := make(map[string]process.Process, len(want))
 	base, err := newBaseRouter("group", conf, processes, proxylog, swapper)
 	if err != nil {
 		return nil, fmt.Errorf("creating base router: %w", err)
 	}
+	base.plan = plan
+	base.makeProcess = func(id string, mc config.ModelConfig) (process.Process, error) {
+		return process.New(base.procCtx, id, mc, logmon.NewWriter(upstreamlog), proxylog)
+	}
 
-	for mid := range modelToGroup {
-		modelCfg, _, ok := conf.FindConfig(mid)
-		if !ok {
-			base.shutdownFn()
-			base.procCancel()
-			return nil, fmt.Errorf("no model config for %q", mid)
-		}
-		procLog := logmon.NewWriter(upstreamlog)
-		p, err := process.New(base.procCtx, mid, modelCfg, procLog, proxylog)
+	for mid, modelCfg := range want {
+		p, err := base.makeProcess(mid, modelCfg)
 		if err != nil {
 			base.shutdownFn()
 			base.procCancel()
@@ -54,6 +61,21 @@ func NewGroup(conf config.Config, proxylog, upstreamlog *logmon.Monitor) (*Group
 	g := &Group{baseRouter: base}
 	go base.run()
 	return g, nil
+}
+
+// buildModelToGroup maps each grouped model ID to its group, rejecting a model
+// that appears in more than one group.
+func buildModelToGroup(conf config.Config) (map[string]string, error) {
+	modelToGroup := make(map[string]string)
+	for gid, gcfg := range conf.Routing.Router.Settings.Groups {
+		for _, mid := range gcfg.Members {
+			if existing, dup := modelToGroup[mid]; dup {
+				return nil, fmt.Errorf("model %q is in multiple groups: %q and %q", mid, existing, gid)
+			}
+			modelToGroup[mid] = gid
+		}
+	}
+	return modelToGroup, nil
 }
 
 // groupSwapper decides evictions from static group configuration.

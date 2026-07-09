@@ -160,11 +160,21 @@
   }
 
   /* Tables */
+  table {
+    @apply border border-card-border rounded-md border-separate border-spacing-0 overflow-hidden;
+  }
   table th {
-    @apply p-2 font-semibold;
+    @apply p-2 font-semibold border-b border-card-border;
   }
   table td {
-    @apply p-2;
+    @apply p-2 border-b border-card-border;
+  }
+  table tr:last-child td {
+    @apply border-b-0;
+  }
+  table th:not(:last-child),
+  table td:not(:last-child) {
+    @apply border-r border-card-border;
   }
 
   /* Navigation Header */

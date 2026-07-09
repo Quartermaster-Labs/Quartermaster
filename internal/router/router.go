@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/radu0120/llama-quartermaster/internal/config"
 	"github.com/radu0120/llama-quartermaster/internal/logmon"
 	"github.com/radu0120/llama-quartermaster/internal/process"
 	"github.com/radu0120/llama-quartermaster/internal/shared"
@@ -59,6 +60,11 @@ type LocalRouter interface {
 	// Returns false when the model is not known to this router.
 	Inflight(modelID string) (int64, bool)
 
+	// LaunchedCmd returns the actual argv the named model's running process
+	// spawned with (post rewrite), or "" when it is not running. Returns false
+	// when the model is not known to this router.
+	LaunchedCmd(modelID string) (string, bool)
+
 	// SetPreEvict installs a hook called with a model ID just before its process
 	// is stopped for eviction/unload, while still Ready. Call once before serving.
 	SetPreEvict(fn func(modelID string))
@@ -73,4 +79,12 @@ type LocalRouter interface {
 	// from live free VRAM. Returning an error refuses that spawn. Call once
 	// before serving.
 	SetSpawnArgs(fn func(modelID string, args []string) ([]string, error))
+
+	// ApplyConfig live-patches the router to a reloaded config without tearing
+	// down running processes: it rebuilds the eviction planner + scheduler
+	// params, diffs the process set (adds/removes/retunes), and swaps config and
+	// process map atomically. Running upstreams keep serving; a changed model's
+	// new launch args take effect on its next load. Returns an error (leaving the
+	// router untouched) when the config is invalid.
+	ApplyConfig(cfg config.Config) error
 }

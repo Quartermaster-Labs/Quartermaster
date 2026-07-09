@@ -33,7 +33,9 @@
 
   let loading = $state(false);
   let saving = $state(false);
+  let saved = $state(false);
   let error = $state<string | null>(null);
+  let savedTimer: ReturnType<typeof setTimeout> | undefined;
   let config = $state<ModelConfig | null>(null);
 
   // Editable form state (mirrors ModelOverride; "" / 0 means inherit default).
@@ -651,10 +653,9 @@
       // Vision twin: models shipping an mmproj projector get an auto-generated
       // "<id>-vision" profile. Surface it as an editable "vision" variant tab —
       // generate.go merges a "vision" variant back into that twin in place. Seed
-      // a blank (unlisted, matching the auto default) when none is saved yet.
+      // a blank (listed, matching the auto default) when none is saved yet.
       if (get(models).some((m) => m.id === `${modelId}-vision`) && !variants.some((v) => v.name === "vision")) {
         const nv = blankVariant("vision", 0);
-        nv.unlisted = true;
         variants = [...variants, nv];
       }
       // Land on the clicked row's variant: the model id ends with "-<name>" for
@@ -923,7 +924,12 @@
       if (JSON.stringify(defaultVariants) !== origDefaultVariants) {
         await putDefaultVariants(defaultVariants);
       }
-      onclose();
+      // Stay open — the live reload applies in the background. Re-seed from the
+      // regenerated config so the modal reflects what actually got saved.
+      await load();
+      saved = true;
+      clearTimeout(savedTimer);
+      savedTimer = setTimeout(() => (saved = false), 2000);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -1952,9 +1958,9 @@
     <div class="p-4 border-t border-card-border flex justify-between items-center">
       <button onclick={reset} class="btn btn--sm" disabled={saving || !config?.hasOverride}>Reset to default</button>
       <div class="flex gap-2">
-        <button onclick={() => dialogEl?.close()} class="btn btn--sm">Cancel</button>
+        <button onclick={() => dialogEl?.close()} class="btn btn--sm">Close</button>
         <button onclick={save} class="btn btn--sm btn--primary !text-white" disabled={saving || loading}>
-          {saving ? "Saving…" : "Save & reload"}
+          {saving ? "Saving…" : saved ? "Saved ✓" : "Save & reload"}
         </button>
       </div>
     </div>

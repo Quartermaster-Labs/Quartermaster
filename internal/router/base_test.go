@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -114,6 +115,100 @@ func TestBaseRouter_UnloadAll(t *testing.T) {
 
 	if a.State() != process.StateStopped || c.State() != process.StateStopped {
 		t.Fatalf("Unload() should stop every process: a=%q c=%q", a.State(), c.State())
+	}
+}
+
+// ApplyConfig must live-patch the process set without evicting kept models:
+// a running model stays running and is retuned for its next spawn, an added
+// model is created, a removed model is dropped from the map and stopped, and the
+// config is swapped in — all without a teardown.
+func TestBaseRouter_ApplyConfig(t *testing.T) {
+	a := newFakeProcess("a")
+	a.markReady()
+	bproc := newFakeProcess("b")
+	bproc.markReady()
+
+	base := newTestBase(t, map[string]process.Process{"a": a, "b": bproc}, &stubPlanner{})
+
+	// Desired process set = every model in cfg.Models; planner evicts nothing.
+	base.plan = func(c config.Config) (scheduler.Swapper, map[string]config.ModelConfig, error) {
+		want := make(map[string]config.ModelConfig, len(c.Models))
+		for id, mc := range c.Models {
+			want[id] = mc
+		}
+		return &stubPlanner{}, want, nil
+	}
+	created := map[string]*fakeProcess{}
+	base.makeProcess = func(id string, _ config.ModelConfig) (process.Process, error) {
+		p := newFakeProcess(id)
+		created[id] = p
+		return p, nil
+	}
+
+	// Keep a (changed args), remove b, add c. Bump HealthCheckTimeout to prove the
+	// config swaps.
+	newCfg := config.Config{
+		HealthCheckTimeout: 9,
+		Models: map[string]config.ModelConfig{
+			"a": {Cmd: "new-args-for-a"},
+			"c": {Cmd: "args-for-c"},
+		},
+	}
+	if err := base.ApplyConfig(newCfg); err != nil {
+		t.Fatalf("ApplyConfig: %v", err)
+	}
+
+	procs := base.procs()
+	if procs["a"] != a {
+		t.Fatalf("model a must be the same reused process object (not rebuilt)")
+	}
+	if a.stopCalls.Load() != 0 {
+		t.Errorf("kept model a must not be stopped; stopCalls=%d", a.stopCalls.Load())
+	}
+	if lc := a.lastConfig.Load(); lc == nil || lc.Cmd != "new-args-for-a" {
+		t.Errorf("kept model a must be retuned with the new config; got %v", lc)
+	}
+	if procs["c"] == nil || created["c"] == nil {
+		t.Errorf("added model c must be newly created and present in the map")
+	}
+	if _, ok := procs["b"]; ok {
+		t.Errorf("removed model b must be gone from the process map")
+	}
+	select {
+	case <-bproc.stopStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("removed model b must be stopped")
+	}
+	if base.cfg().HealthCheckTimeout != 9 {
+		t.Errorf("config not swapped live; HealthCheckTimeout=%d want 9", base.cfg().HealthCheckTimeout)
+	}
+}
+
+// ApplyConfig must be a clean no-op when the new config is invalid: the router
+// keeps its current processes and config untouched.
+func TestBaseRouter_ApplyConfig_InvalidKeepsState(t *testing.T) {
+	a := newFakeProcess("a")
+	a.markReady()
+	base := newTestBase(t, map[string]process.Process{"a": a}, &stubPlanner{})
+
+	base.plan = func(config.Config) (scheduler.Swapper, map[string]config.ModelConfig, error) {
+		return nil, nil, fmt.Errorf("bad config")
+	}
+	base.makeProcess = func(id string, _ config.ModelConfig) (process.Process, error) {
+		return newFakeProcess(id), nil
+	}
+
+	if err := base.ApplyConfig(config.Config{HealthCheckTimeout: 9}); err == nil {
+		t.Fatalf("ApplyConfig with invalid config should return an error")
+	}
+	if _, ok := base.procs()["a"]; !ok {
+		t.Errorf("model a must survive a rejected ApplyConfig")
+	}
+	if a.stopCalls.Load() != 0 {
+		t.Errorf("no process should be stopped on a rejected ApplyConfig")
+	}
+	if base.cfg().HealthCheckTimeout == 9 {
+		t.Errorf("config must not change on a rejected ApplyConfig")
 	}
 }
 

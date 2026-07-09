@@ -27,7 +27,12 @@ const updateRepo = "Quartermaster-Labs/llama-quartermaster"
 // dispatch. It supersedes router.Server: it builds the local and peer routers
 // directly and dispatches between them itself.
 type Server struct {
-	cfg config.Config
+	// cfg is the live config, swapped atomically by ApplyConfig on a hot reload.
+	// Every reader snapshots it once via config() so a concurrent swap can't tear
+	// a multi-field read. The whole point of the live reload is that this Server
+	// (its SSE streams, metrics history, slotCache, background goroutines) OUTLIVES
+	// a config change — only the config pointer and the cfg-derived handler swap.
+	cfg atomic.Pointer[config.Config]
 
 	muxlog      *logmon.Monitor
 	proxylog    *logmon.Monitor
@@ -52,11 +57,15 @@ type Server struct {
 
 	// listenerModels maps a listen address to the set of real model IDs it
 	// exposes. Empty when no listeners are configured (single --listen mode).
+	// Swapped atomically by ApplyConfig (per-listener scoping refreshes live).
 	// See listener.go.
-	listenerModels map[string]map[string]bool
+	listenerModels atomic.Pointer[map[string]map[string]bool]
 
-	mux     *http.ServeMux
-	handler http.Handler
+	// handler is the fully-wrapped request handler (mux + global middleware),
+	// rebuilt and swapped atomically by routes() on each reload so cfg-derived
+	// middleware (auth/filters/scoping) tracks the live config without dropping
+	// in-flight requests or long-lived SSE streams.
+	handler atomic.Pointer[http.Handler]
 
 	// autogen, when set, enables the UI model-config endpoints (cogwheel
 	// override editor + variant creation). nil when the server was not started
@@ -134,7 +143,6 @@ type BuildInfo struct {
 func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, upstreamlog *logmon.Monitor, perfMon *perf.Monitor, build BuildInfo) (*Server, error) {
 	var local router.LocalRouter
 	var err error
-
 	switch cfg.Routing.Router.Use {
 	case "matrix":
 		local, err = router.NewMatrix(cfg, proxylog, upstreamlog)
@@ -148,6 +156,9 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		}
 	}
 
+	// Peer targets are baked once here. ponytail: a peer host change needs a
+	// restart to take effect (the UI can't edit peers; only a hand-edited config
+	// or control file can) — wire a live rebuild if that ever becomes a real need.
 	peer, err := router.NewPeer(cfg, proxylog)
 	if err != nil {
 		return nil, fmt.Errorf("creating peer router: %w", err)
@@ -155,25 +166,29 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 
 	shutdownCtx, shutdownFn := context.WithCancel(context.Background())
 	s := &Server{
-		cfg:            cfg,
-		muxlog:         muxlog,
-		proxylog:       proxylog,
-		upstreamlog:    upstreamlog,
-		perf:           perfMon,
-		inflight:       &inflightCounter{},
-		metrics:        newMetricsMonitor(proxylog, cfg.MetricsMaxInMemory, cfg.CaptureBuffer),
-		build:          build,
-		local:          local,
-		peer:           peer,
-		listenerModels: cfg.ListenerModelSets(),
-		shutdownCtx:    shutdownCtx,
-		shutdownFn:     shutdownFn,
+		muxlog:      muxlog,
+		proxylog:    proxylog,
+		upstreamlog: upstreamlog,
+		perf:        perfMon,
+		inflight:    &inflightCounter{},
+		metrics:     newMetricsMonitor(proxylog, cfg.MetricsMaxInMemory, cfg.CaptureBuffer),
+		build:       build,
+		local:       local,
+		peer:        peer,
+		shutdownCtx: shutdownCtx,
+		shutdownFn:  shutdownFn,
 	}
+	s.cfg.Store(&cfg)
+	lm := cfg.ListenerModelSets()
+	s.listenerModels.Store(&lm)
 	s.backendMetrics = newBackendMetricsMonitor(s.runningProxies, s.inflight.Current, s.local.Inflight, proxylog)
 	go s.backendMetrics.run(s.shutdownCtx)
 	go s.trackSystemVram(s.shutdownCtx)
+	// slotParticipates/slotRecurrent read the LIVE config (s.config()) so a hot
+	// reload that flips a model's slot-save flag is reflected without rebuilding
+	// the slotCache (which would drop its saved-KV state).
 	slotParticipates := func(id string) bool {
-		mc, ok := cfg.Models[id]
+		mc, ok := s.config().Models[id]
 		return ok && strings.Contains(mc.Cmd, "--slot-save-path")
 	}
 	// slotRecurrent reports whether a model loads a hybrid/recurrent gguf
@@ -183,7 +198,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	var recurMu sync.Mutex
 	recurCache := map[string]bool{}
 	slotRecurrent := func(id string) bool {
-		mc, ok := cfg.Models[id]
+		mc, ok := s.config().Models[id]
 		if !ok {
 			return false
 		}
@@ -212,6 +227,29 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	s.startPreload()
 	return s, nil
 }
+
+// ApplyConfig live-patches the server to a reloaded config WITHOUT tearing it
+// down: the same Server (SSE streams, metrics history, slotCache, background
+// goroutines, running processes) keeps running. It validates + applies the new
+// config to the shared router first (router.ApplyConfig — no process eviction; a
+// changed model's new launch args take effect on its next load), then swaps the
+// config pointer, refreshes per-listener scoping, and rebuilds the cfg-derived
+// handler in place. An invalid config leaves everything untouched. This is what
+// makes a UI settings save non-disruptive — no reconnect, no state reset.
+func (s *Server) ApplyConfig(newCfg config.Config) error {
+	if err := s.local.ApplyConfig(newCfg); err != nil {
+		return err
+	}
+	s.cfg.Store(&newCfg)
+	lm := newCfg.ListenerModelSets()
+	s.listenerModels.Store(&lm)
+	s.routes() // rebuild + atomically swap the handler from the new config
+	return nil
+}
+
+// config snapshots the live config. Callers reading several fields should call
+// it once so a concurrent ApplyConfig swap can't tear a multi-field read.
+func (s *Server) config() config.Config { return *s.cfg.Load() }
 
 // SetShutdownHook wires the graceful-shutdown trigger used by the auto-updater
 // after it launches the installer (so the running exe can be replaced).
@@ -373,9 +411,10 @@ func (s *Server) trackSystemVram(ctx context.Context) {
 // URL (cfg.Models[id].Proxy has ${PORT} already substituted at config load).
 func (s *Server) runningProxies() map[string]string {
 	running := s.local.RunningModels()
+	models := s.config().Models
 	out := make(map[string]string, len(running))
 	for id := range running {
-		if mc, ok := s.cfg.Models[id]; ok && mc.Proxy != "" {
+		if mc, ok := models[id]; ok && mc.Proxy != "" {
 			out[id] = mc.Proxy
 		}
 	}
@@ -387,7 +426,7 @@ func (s *Server) runningProxies() map[string]string {
 func (s *Server) localPeerHandler(w http.ResponseWriter, r *http.Request) {
 	stripVersionPrefix(r)
 
-	data, err := shared.FetchContext(r, s.cfg)
+	data, err := shared.FetchContext(r, s.config())
 	if err != nil {
 		shared.SendError(w, r, shared.ErrNoModelInContext)
 		return
@@ -430,15 +469,16 @@ func stripVersionPrefix(r *http.Request) {
 // routes builds the mux, registers every route, and wraps the mux with the
 // global CORS middleware.
 func (s *Server) routes() {
+	cfg := s.config()
 
-	authMW := CreateAuthMiddleware(s.cfg)
+	authMW := CreateAuthMiddleware(cfg)
 	modelChain := chain.New(
 		authMW,
-		CreateRequestContextMiddleware(s.cfg),
-		CreateFilterMiddleware(s.cfg),
-		CreateFormFilterMiddleware(s.cfg),
+		CreateRequestContextMiddleware(cfg),
+		CreateFilterMiddleware(cfg),
+		CreateFormFilterMiddleware(cfg),
 		CreateInflightMiddleware(s.inflight),
-		CreateMetricsMiddleware(s.metrics, s.cfg),
+		CreateMetricsMiddleware(s.metrics, cfg),
 		s.promptCanon.middleware, // canonicalize the prompt before slotcache/upstream see it
 		s.slotCache.middleware,
 	)
@@ -550,12 +590,12 @@ func (s *Server) routes() {
 	mux.Handle("POST /api/apikeys", apiChain.ThenFunc(s.handleAPIKeyUpsert))
 	mux.Handle("DELETE /api/apikeys/{name}", apiChain.ThenFunc(s.handleAPIKeyDelete))
 
-	s.mux = mux
-	s.handler = chain.New(CreateRequestLogMiddleware(s.proxylog), CreateCORSMiddleware()).Then(mux)
+	var h http.Handler = chain.New(CreateRequestLogMiddleware(s.proxylog), CreateCORSMiddleware()).Then(mux)
+	s.handler.Store(&h)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.handler.ServeHTTP(w, r)
+	(*s.handler.Load()).ServeHTTP(w, r)
 }
 
 // CloseStreams cancels long-lived response streams (Server-Sent Events) so a

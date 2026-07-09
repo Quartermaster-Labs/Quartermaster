@@ -1,0 +1,360 @@
+<script lang="ts">
+  import { onMount } from "svelte";
+  import { getSettings, putSettings, putSlotCache, pickFolder, resetSettings, type AppSettings } from "../stores/api";
+  import { latestGpu, latestSys } from "../stores/perf";
+
+  // --- Global settings (VRAM budget + idle eviction + slot KV) ---
+  let settings = $state<AppSettings | null>(null);
+  let settingsAvailable = $state(true); // false when server lacks -generate (501)
+  let tVram = $state(0);
+  let tHead = $state(0);
+  let tRam = $state(0);
+  let tTtl = $state(0); // idle-eviction seconds; 0 = never auto-unload
+  let savingSettings = $state(false);
+  let settingsErr = $state<string | null>(null);
+
+  function syncSettingsForm(s: AppSettings): void {
+    tVram = s.targetVramGB;
+    tHead = s.vramOverheadGB;
+    tRam = s.maxRamGB;
+    tTtl = s.ttlSec;
+    slotEnable = s.slotCache.enable;
+    slotPath = s.slotCache.path;
+    slotMinTokens = s.slotCache.minSaveTokens;
+    slotMaxDiskGB = s.slotCache.maxDiskGB;
+    slotMaxSessions = s.slotCache.maxSessions;
+  }
+
+  // --- Slot KV-cache persistence (global master switch + shared knobs) ---
+  let slotEnable = $state(false);
+  let slotPath = $state("");
+  let slotMinTokens = $state(0); // 0 => server default (30000)
+  let slotMaxDiskGB = $state(0); // 0 => server default (10)
+  let slotMaxSessions = $state(0); // 0 => server default (20)
+  let savingSlot = $state(false);
+  let slotErr = $state<string | null>(null);
+
+  const slotDirty = $derived(
+    !!settings &&
+      (slotEnable !== settings.slotCache.enable ||
+        slotPath !== settings.slotCache.path ||
+        Number(slotMinTokens) !== settings.slotCache.minSaveTokens ||
+        Number(slotMaxDiskGB) !== settings.slotCache.maxDiskGB ||
+        Number(slotMaxSessions) !== settings.slotCache.maxSessions),
+  );
+
+  async function browseSlotDir(): Promise<void> {
+    try {
+      const picked = await pickFolder();
+      if (picked) slotPath = picked;
+    } catch (e) {
+      slotErr = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function saveSlotCache(): Promise<void> {
+    savingSlot = true;
+    slotErr = null;
+    try {
+      await putSlotCache({
+        enable: slotEnable,
+        path: slotPath.trim(),
+        minSaveTokens: Number(slotMinTokens) || 0,
+        maxDiskGB: Number(slotMaxDiskGB) || 0,
+        maxSessions: Number(slotMaxSessions) || 0,
+      });
+      await loadSettings();
+    } catch (e) {
+      slotErr = e instanceof Error ? e.message : String(e);
+    } finally {
+      savingSlot = false;
+    }
+  }
+
+  async function loadSettings(): Promise<void> {
+    try {
+      const s = await getSettings();
+      settings = s;
+      syncSettingsForm(s);
+    } catch (e) {
+      settingsAvailable = false; // 501 => server without -generate
+      console.warn("settings unavailable", e);
+    }
+  }
+
+  // Physical ceilings from live telemetry. 0 means "telemetry not in yet".
+  const gpuMaxGb = $derived($latestGpu ? Math.floor($latestGpu.mem_total_mb / 1024) : 0);
+  const sysMaxGb = $derived($latestSys ? Math.floor($latestSys.mem_total_mb / 1024) : 0);
+
+  const settingsDirty = $derived(
+    !!settings &&
+      (tVram !== settings.targetVramGB ||
+        tHead !== settings.vramOverheadGB ||
+        tRam !== settings.maxRamGB ||
+        Number(tTtl) !== settings.ttlSec),
+  );
+
+  const settingsOverCapacity = $derived(
+    (gpuMaxGb > 0 && (tVram > gpuMaxGb || tHead > gpuMaxGb)) || (sysMaxGb > 0 && tRam > sysMaxGb),
+  );
+
+  function clampSettingsForm(): void {
+    if (gpuMaxGb > 0) {
+      if (tVram > gpuMaxGb) tVram = gpuMaxGb;
+      if (tHead > gpuMaxGb) tHead = gpuMaxGb;
+    }
+    if (sysMaxGb > 0 && tRam > sysMaxGb) tRam = sysMaxGb;
+    if (tTtl < 0) tTtl = 0;
+  }
+
+  async function saveSettings(): Promise<void> {
+    clampSettingsForm();
+    savingSettings = true;
+    settingsErr = null;
+    try {
+      await putSettings({ targetVramGB: tVram, vramOverheadGB: tHead, maxRamGB: tRam, ttlSec: Number(tTtl) || 0 });
+      await loadSettings();
+    } catch (e) {
+      settingsErr = e instanceof Error ? e.message : String(e);
+    } finally {
+      savingSettings = false;
+    }
+  }
+
+  async function resetSettingsToDefault(): Promise<void> {
+    savingSettings = true;
+    settingsErr = null;
+    try {
+      await resetSettings();
+      await loadSettings();
+    } catch (e) {
+      settingsErr = e instanceof Error ? e.message : String(e);
+    } finally {
+      savingSettings = false;
+    }
+  }
+
+  // Friendly readout for the idle-eviction seconds field.
+  const ttlHuman = $derived(
+    Number(tTtl) <= 0 ? "never auto-unload" : Number(tTtl) % 60 === 0 ? `${Number(tTtl) / 60} min` : `${tTtl}s`,
+  );
+
+  onMount(loadSettings);
+</script>
+
+<div class="max-w-5xl mx-auto">
+  {#snippet hint(text: string)}
+    <span
+      class="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-card-border text-txtsecondary text-[0.55rem] leading-none cursor-help align-middle"
+      title={text}
+      aria-label={text}>?</span>
+  {/snippet}
+
+  <h2 class="mb-4">Settings</h2>
+
+  {#if !settingsAvailable}
+    <div class="card">
+      <p class="font-mono text-xs text-txtsecondary">
+        Settings editing requires the server to run with <span class="text-txtmain">-generate</span>.
+      </p>
+    </div>
+  {:else}
+    <!-- Memory budget + idle eviction -->
+    <div class="card">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+          <h6 class="!pb-0">Memory budget</h6>
+          {#if settings?.overridden}
+            <span class="font-mono text-[0.6rem] uppercase tracking-wide text-primary border border-primary/40 rounded px-1.5 py-0.5">custom</span>
+          {:else}
+            <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary">default</span>
+          {/if}
+          {#if settings?.autoVram}
+            <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary" title="Live free-VRAM is sampled at startup; saving a target disables this.">auto-vram</span>
+          {/if}
+        </div>
+        <button
+          class="btn btn--sm uppercase tracking-wide"
+          onclick={resetSettingsToDefault}
+          disabled={savingSettings || !settings?.overridden}
+          title="Revert to the generate file's values"
+        >
+          Reset
+        </button>
+      </div>
+
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 font-mono text-xs">
+        <label class="flex flex-col gap-1">
+          <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
+            Target VRAM (GB)
+            {@render hint("Total GPU memory the loader may fill. The sizer chooses GPU layers / CPU-MoE offload so the model + KV cache fit under this. Higher = more on GPU = faster, until you risk OOM.")}
+          </span>
+          <input
+            type="number" min="1" step="0.5" max={gpuMaxGb || undefined} bind:value={tVram} onblur={clampSettingsForm}
+            onwheel={(e) => {
+              if (document.activeElement !== e.currentTarget) return;
+              e.preventDefault();
+              tVram = Math.max(1, Math.round((tVram + (e.deltaY < 0 ? 0.5 : -0.5)) * 100) / 100);
+              clampSettingsForm();
+            }}
+            class="w-full rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+          <span class="text-[0.6rem] text-txtsecondary">default {settings?.defaults.targetVramGB}{gpuMaxGb ? ` · max ${gpuMaxGb}` : ""}</span>
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
+            Headroom (GB)
+            {@render hint("Safety margin subtracted from Target VRAM before sizing — covers CUDA context, compute buffers and fragmentation, NOT current desktop/game usage (auto-vram already accounts for that at startup). Raise it if you hit OOM right after load.")}
+          </span>
+          <input
+            type="number" min="0" step="0.25" max={gpuMaxGb || undefined} bind:value={tHead} onblur={clampSettingsForm}
+            onwheel={(e) => {
+              if (document.activeElement !== e.currentTarget) return;
+              e.preventDefault();
+              tHead = Math.max(0, Math.round((tHead + (e.deltaY < 0 ? 0.25 : -0.25)) * 100) / 100);
+              clampSettingsForm();
+            }}
+            class="w-full rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+          <span class="text-[0.6rem] text-txtsecondary">default {settings?.defaults.vramOverheadGB}</span>
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
+            Max RAM (GB)
+            {@render hint("Ceiling on system RAM for CPU-offloaded MoE experts + any KV kept in RAM. A model whose plan needs more than this gets sized down (fewer experts offloaded).")}
+          </span>
+          <input
+            type="number" min="1" step="1" max={sysMaxGb || undefined} bind:value={tRam} onblur={clampSettingsForm}
+            onwheel={(e) => {
+              if (document.activeElement !== e.currentTarget) return;
+              e.preventDefault();
+              tRam = Math.max(1, tRam + (e.deltaY < 0 ? 1 : -1));
+              clampSettingsForm();
+            }}
+            class="w-full rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+          <span class="text-[0.6rem] text-txtsecondary">default {settings?.defaults.maxRamGB}{sysMaxGb ? ` · max ${sysMaxGb}` : ""}</span>
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
+            Idle unload (s)
+            {@render hint("Idle-eviction timeout baked into every model's ttl: a model with no requests for this many seconds is unloaded to free VRAM. 0 = never auto-unload. Saving regenerates the config and applies on each model's next load.")}
+          </span>
+          <input
+            type="number" min="0" step="30" bind:value={tTtl} onblur={clampSettingsForm}
+            onwheel={(e) => {
+              if (document.activeElement !== e.currentTarget) return;
+              e.preventDefault();
+              tTtl = Math.max(0, Number(tTtl) + (e.deltaY < 0 ? 30 : -30));
+            }}
+            class="w-full rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+          <span class="text-[0.6rem] text-txtsecondary">{ttlHuman} · default {settings?.defaults.ttlSec}</span>
+        </label>
+      </div>
+
+      {#if settingsOverCapacity}
+        <p class="mt-2 font-mono text-[0.65rem] text-warning">⚠ Value exceeds installed hardware — will be clamped on save.</p>
+      {/if}
+
+      <div class="mt-3 flex items-center gap-3">
+        <button
+          class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary"
+          onclick={saveSettings}
+          disabled={savingSettings || !settingsDirty}
+        >
+          {savingSettings ? "Saving…" : "Save & reload"}
+        </button>
+        <span class="font-mono text-[0.65rem] text-txtsecondary">Saving regenerates the config and hot-reloads.</span>
+        {#if settingsErr}
+          <span class="font-mono text-[0.65rem] text-error">{settingsErr}</span>
+        {/if}
+      </div>
+    </div>
+
+    <!-- Slot KV-cache persistence -->
+    <div class="card mt-4">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+          <h6 class="!pb-0">KV-cache disk save</h6>
+          <span class="status bg-warning/10 text-warning text-[0.6rem] !px-1.5 !py-0.5">Experimental</span>
+          {@render hint("Persist a long conversation's KV cache to disk so it survives being evicted from the live slot, and is restored instead of reprocessed. Master switch: each model opts in via its config editor (\"Save KV cache to disk\").\n\nExperimental: reliable for standard transformer models. Hybrid/recurrent models (e.g. Qwen3.5/3.6 GatedDeltaNet) don't yet restore across a process swap — pending upstream llama.cpp (#20819); they still get warm same-process reuse.")}
+        </div>
+        <label class="flex items-center gap-2 text-sm">
+          <input type="checkbox" bind:checked={slotEnable} />
+          <span class="text-txtsecondary uppercase tracking-wide font-mono text-[0.65rem]">Enable</span>
+        </label>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3 font-mono text-xs">
+        <label class="flex flex-col gap-1 col-span-2">
+          <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
+            Directory
+            {@render hint("Folder for the .bin KV snapshots (also passed to llama-server as --slot-save-path). Defaults to a .cache folder next to the quartermaster binary.")}
+          </span>
+          <div class="flex gap-2">
+            <input
+              type="text" bind:value={slotPath} placeholder="(.cache next to quartermaster)" disabled={!slotEnable}
+              class="flex-1 rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+            />
+            <button
+              type="button"
+              class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary disabled:opacity-50"
+              onclick={browseSlotDir}
+              disabled={!slotEnable}
+            >
+              Browse…
+            </button>
+          </div>
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
+            Min context to save
+            {@render hint("Only persist a conversation whose live KV is at least this many tokens — cheap chats aren't worth the disk write.")}
+          </span>
+          <input
+            type="number" min="0" step="1000" bind:value={slotMinTokens} disabled={!slotEnable}
+            class="w-full rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+          />
+          <span class="text-[0.6rem] text-txtsecondary">tokens · default 30000</span>
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
+            Max disk size
+            {@render hint("Total budget for saved snapshots. Oldest are evicted (LRU) once this or the session cap is exceeded.")}
+          </span>
+          <input
+            type="number" min="0" step="1" bind:value={slotMaxDiskGB} disabled={!slotEnable}
+            class="w-full rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+          />
+          <span class="text-[0.6rem] text-txtsecondary">GB · default 10</span>
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
+            Max sessions
+            {@render hint("Cap on the number of saved conversations. Oldest evicted (LRU) past this.")}
+          </span>
+          <input
+            type="number" min="0" step="1" bind:value={slotMaxSessions} disabled={!slotEnable}
+            class="w-full rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+          />
+          <span class="text-[0.6rem] text-txtsecondary">files · default 20</span>
+        </label>
+      </div>
+
+      <div class="mt-3 flex items-center gap-3">
+        <button
+          class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary"
+          onclick={saveSlotCache}
+          disabled={savingSlot || !slotDirty}
+        >
+          {savingSlot ? "Saving…" : "Save & reload"}
+        </button>
+        <span class="font-mono text-[0.65rem] text-txtsecondary">Saving regenerates the config and hot-reloads.</span>
+        {#if slotErr}
+          <span class="font-mono text-[0.65rem] text-error">{slotErr}</span>
+        {/if}
+      </div>
+    </div>
+  {/if}
+</div>

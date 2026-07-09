@@ -1,6 +1,7 @@
 <script lang="ts">
   import { link, location } from "svelte-spa-router";
-  import { LayoutDashboard, Boxes, FlaskConical, Activity, KeyRound, Sun, Moon, MonitorCog, ChevronRight, ArrowUpCircle, MessageSquare, Image, Volume2, Mic, Binary } from "lucide-svelte";
+  import { LayoutDashboard, Boxes, FlaskConical, Activity, KeyRound, Sun, Moon, MonitorCog, ChevronRight, ArrowUpCircle, MessageSquare, Image, Volume2, Mic, Binary, BookOpen, SlidersHorizontal } from "lucide-svelte";
+  import WikiModal from "./WikiModal.svelte";
   import { toggleTheme, themeMode, appTitle } from "../stores/theme";
   import { currentRoute } from "../stores/route";
   import { playgroundActivity } from "../stores/playgroundActivity";
@@ -23,6 +24,7 @@
     { path: "/test", label: "Playground", icon: FlaskConical },
     { path: "/observe", label: "Observe", icon: Activity },
     { path: "/api-keys", label: "API Keys", icon: KeyRound },
+    { path: "/settings", label: "Settings", icon: SlidersHorizontal },
   ];
 
   // The playground runs on its own port; link out to it when configured.
@@ -32,6 +34,7 @@
 
   // Models sub-menu open when on any /models route, toggleable otherwise.
   let modelsOpen = $state($currentRoute.startsWith("/models"));
+  let showWiki = $state(false);
 
   function isActive(path: string, current: string): boolean {
     return path === "/" ? current === "/" : current.startsWith(path);
@@ -75,7 +78,7 @@
   }
 </script>
 
-<aside class="flex flex-col h-full w-44 shrink-0 border-r border-border bg-surface">
+<aside class="flex flex-col h-full w-36 shrink-0 border-r border-border bg-surface">
   <!-- Brand + editable instance title -->
   <div class="px-3 pt-4 pb-3 border-b border-card-border-inner">
     <div class="font-mono text-[0.65rem] uppercase tracking-[0.2em] text-primary">Quartermaster</div>
@@ -157,6 +160,17 @@
     {/each}
   </nav>
 
+  <!-- Help: opens the quartermaster wiki modal (not a route). Sits just above
+       the theme/version footer. -->
+  <button
+    type="button"
+    onclick={() => (showWiki = true)}
+    class="w-full flex items-center gap-3 px-3 py-2 font-mono text-sm border-t border-card-border-inner text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
+  >
+    <BookOpen size={16} strokeWidth={1.8} />
+    <span class="tracking-wide">Help</span>
+  </button>
+
   <!-- Footer: theme, connection, version -->
   <div class="border-t border-card-border-inner px-3 py-3 flex items-center justify-between">
     <button
@@ -190,3 +204,5 @@
     </span>
   </div>
 </aside>
+
+<WikiModal bind:open={showWiki} />

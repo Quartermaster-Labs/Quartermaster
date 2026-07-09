@@ -11,7 +11,7 @@ import (
 
 func TestServer_HandleListModels(t *testing.T) {
 	s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
-	s.cfg = config.Config{
+	s.cfg.Store(&config.Config{
 		Models: map[string]config.ModelConfig{
 			"visible": {Name: "Visible", Description: "a model"},
 			"hidden":  {Unlisted: true},
@@ -19,7 +19,7 @@ func TestServer_HandleListModels(t *testing.T) {
 		Peers: config.PeerDictionaryConfig{
 			"peer1": {Models: []string{"remote-model"}},
 		},
-	}
+	})
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
@@ -53,12 +53,12 @@ func TestServer_HandleListModels(t *testing.T) {
 
 func TestServer_HandleListModels_Aliases(t *testing.T) {
 	s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
-	s.cfg = config.Config{
+	s.cfg.Store(&config.Config{
 		IncludeAliasesInList: true,
 		Models: map[string]config.ModelConfig{
 			"real": {Aliases: []string{"nick"}},
 		},
-	}
+	})
 
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
@@ -106,7 +106,7 @@ func TestServer_FindModelInPath(t *testing.T) {
 func TestServer_HandleUpstream(t *testing.T) {
 	local := newStubRouter([]string{"m1"}, "upstream-body")
 	s := newTestServer(local, newStubRouter(nil, ""))
-	s.cfg = config.Config{Models: map[string]config.ModelConfig{"m1": {}}}
+	s.cfg.Store(&config.Config{Models: map[string]config.ModelConfig{"m1": {}}})
 
 	t.Run("proxies to local", func(t *testing.T) {
 		w := httptest.NewRecorder()
@@ -161,7 +161,7 @@ func TestServer_Redirects(t *testing.T) {
 func TestServer_HandleListModels_Capabilities(t *testing.T) {
 	newServer := func(mc config.ModelConfig) *Server {
 		s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
-		s.cfg = config.Config{Models: map[string]config.ModelConfig{"m": mc}}
+		s.cfg.Store(&config.Config{Models: map[string]config.ModelConfig{"m": mc}})
 		return s
 	}
 	getModel := func(t *testing.T, s *Server) modelRecord {

@@ -9,6 +9,7 @@
   import PlaygroundStub from "./routes/PlaygroundStub.svelte";
   import PlaygroundApp from "./routes/PlaygroundApp.svelte";
   import ApiKeys from "./routes/ApiKeys.svelte";
+  import Settings from "./routes/Settings.svelte";
   import { enableAPIEvents } from "./stores/api";
   import { refreshInferenceKey } from "./lib/inferenceAuth";
   import { startPerfPolling } from "./stores/perf";
@@ -32,6 +33,7 @@
     "/performance": Observe,
     "/test": PlaygroundStub,
     "/api-keys": ApiKeys,
+    "/settings": Settings,
     "*": Dashboard,
   };
 
