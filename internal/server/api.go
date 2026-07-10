@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/radu0120/llama-quartermaster/internal/config"
-	"github.com/radu0120/llama-quartermaster/internal/event"
-	"github.com/radu0120/llama-quartermaster/internal/shared"
+	"github.com/quartermaster-labs/quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/event"
+	"github.com/quartermaster-labs/quartermaster/internal/shared"
 )
 
 // apiUnloadTimeout is used by the API endpoints to stop processes
@@ -138,7 +138,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 			ID:          id,
 			Object:      "model",
 			Created:     created,
-			OwnedBy:     "llama-quartermaster",
+			OwnedBy:     "quartermaster",
 			Name:        strings.TrimSpace(name),
 			Description: strings.TrimSpace(description),
 		}

@@ -6,7 +6,7 @@
   import ConnectionStatus from "./ConnectionStatus.svelte";
 
   function handleTitleChange(newTitle: string): void {
-    const sanitized = newTitle.replace(/\n/g, "").trim().substring(0, 64) || "llama-quartermaster";
+    const sanitized = newTitle.replace(/\n/g, "").trim().substring(0, 64) || "Quartermaster";
     appTitle.set(sanitized);
   }
 

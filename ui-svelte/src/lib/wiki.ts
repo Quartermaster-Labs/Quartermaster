@@ -16,9 +16,9 @@ export interface WikiArticle {
 export const WIKI_ARTICLES: WikiArticle[] = [
   {
     id: "overview",
-    title: "What is llama-quartermaster",
+    title: "What is Quartermaster",
     keywords: ["about", "intro", "engine", "what", "swap", "local"],
-    body: `llama-quartermaster is an all-in-one **local inference engine** — a front-end over llama.cpp (text/vision models) and stable-diffusion.cpp (images) that runs entirely on your own machine. Nothing is sent to a cloud service; weights, prompts, and conversations stay local.
+    body: `Quartermaster is an all-in-one **local inference engine** — a front-end over llama.cpp (text/vision models) and stable-diffusion.cpp (images) that runs entirely on your own machine. Nothing is sent to a cloud service; weights, prompts, and conversations stay local.
 
 It discovers the model files you have on disk, works out sensible runtime settings for each one automatically (context length, GPU offload, KV cache), and **hot-swaps** models in and out of VRAM on demand — a request for a model that isn't loaded triggers a load (evicting others if needed).
 
@@ -37,7 +37,7 @@ Two web UIs: the **operator dashboard** (main port — catalog, loading, config,
       "vram",
       "group",
     ],
-    body: `You don't manually start models most of the time — sending a request to a model (from the playground or an API client) **loads it on demand**. If another model occupies the VRAM it needs, quartermaster stops that one first (eviction).
+    body: `You don't manually start models most of the time — sending a request to a model (from the playground or an API client) **loads it on demand**. If another model occupies the VRAM it needs, Quartermaster stops that one first (eviction).
 
 - **Models page** (dashboard): browse the catalog, click a model to load/unload it explicitly.
 - **Idle unload**: a model with an unload timeout stops itself after being idle, freeing VRAM.
@@ -62,7 +62,7 @@ Two web UIs: the **operator dashboard** (main port — catalog, loading, config,
     body: `On the Models page, the cogwheel opens the per-model config editor. It shows the exact launch command and lets you tune:
 
 - **Context size (ctx)**: how many tokens the model can hold. Bigger ctx uses more KV-cache VRAM.
-- **Target VRAM**: a budget; quartermaster computes GPU offload (\`-ngl\` / \`--n-cpu-moe\`) to fit. Lower target = more layers on CPU = slower but fits smaller cards.
+- **Target VRAM**: a budget; Quartermaster computes GPU offload (\`-ngl\` / \`--n-cpu-moe\`) to fit. Lower target = more layers on CPU = slower but fits smaller cards.
 - **Variants**: alternate profiles of the same model (e.g. different ctx tiers) selectable per request.
 
 **Save & reload** applies changes live — a running model keeps serving under its old settings and the new ones take effect on its next load. The staging card shows what a running model is *actually* loaded with, which can differ from the pending config until it reloads.`,
@@ -108,7 +108,7 @@ Autogen can also emit **context-tier variants automatically** from a model's ctx
       "gguf",
       "estimate",
     ],
-    body: `Rather than hand-writing a config per model, quartermaster **auto-generates** one at startup: it scans your model folders for GGUF/checkpoint files, estimates each model's VRAM footprint (weights + KV + compute buffers), and derives runtime flags (context, GPU offload, KV type) that fit your hardware.
+    body: `Rather than hand-writing a config per model, Quartermaster **auto-generates** one at startup: it scans your model folders for GGUF/checkpoint files, estimates each model's VRAM footprint (weights + KV + compute buffers), and derives runtime flags (context, GPU offload, KV type) that fit your hardware.
 
 This means adding a model is usually just dropping the file in the watched folder — no manual YAML. You can still override any of it per-model in the cogwheel editor, and those overrides survive regeneration.`,
   },
@@ -132,7 +132,7 @@ This means adding a model is usually just dropping the file in the watched folde
 - **Vision**: attach an image (paperclip) to a vision-capable model.
 - **Reasoning**: thinking models stream their reasoning into a collapsible box. A **Thinking Budget** (Settings) caps reasoning tokens so a model can't overthink forever.
 - **Web search**: optional — the model searches the web via SearXNG (see the web-search article).
-- **Wiki**: models can look up this help wiki to answer questions about quartermaster.
+- **Wiki**: models can look up this help wiki to answer questions about Quartermaster.
 - **Rewrite mode**: ask the model to rewrite selected text and see a side-by-side diff.
 - **History**: chats are saved server-side per user; long chats auto-compact (older turns summarized) to stay within context.`,
   },
@@ -239,7 +239,7 @@ Both use the same on-demand loading as every other model — the first request l
       "scope",
       "endpoint",
     ],
-    body: `quartermaster serves an **OpenAI-compatible API** (\`/v1/chat/completions\`, \`/v1/embeddings\`, image and audio routes), so existing OpenAI clients work by pointing at your server's URL.
+    body: `Quartermaster serves an **OpenAI-compatible API** (\`/v1/chat/completions\`, \`/v1/embeddings\`, image and audio routes), so existing OpenAI clients work by pointing at your server's URL.
 
 The **API Keys** page (dashboard) creates keys and optionally **scopes** each key to a subset of models. Keys gate inference and model discovery; the dashboard itself stays open. Point any OpenAI SDK at the server base URL and use your key as the API key.`,
   },
@@ -279,9 +279,9 @@ Live metrics stream over SSE, so the page updates in real time while a model gen
       "budget",
       "foreign",
     ],
-    body: `quartermaster tracks GPU memory live and breaks it down (System / Weights / Draft / KV / Checkpoints / CUDA / Foreign). The VRAM budget already accounts for memory the system and other apps hold, so its estimates target *free* VRAM.
+    body: `Quartermaster tracks GPU memory live and breaks it down (System / Weights / Draft / KV / Checkpoints / CUDA / Foreign). The VRAM budget already accounts for memory the system and other apps hold, so its estimates target *free* VRAM.
 
-- **Foreign**: VRAM held by llama-server/sd-server processes quartermaster didn't spawn (a stray llama.cpp) — it counts these so it won't overcommit.
+- **Foreign**: VRAM held by llama-server/sd-server processes Quartermaster didn't spawn (a stray llama.cpp) — it counts these so it won't overcommit.
 - If a model won't load or crashes on load, the usual cause is **not enough free VRAM**. Lower that model's **Target VRAM** (more layers to CPU) or its **context size** in the cogwheel editor, or unload other models.`,
   },
   {
@@ -360,7 +360,7 @@ export const WIKI_TOOL: ToolDef = {
   function: {
     name: "wiki_search",
     description:
-      "Search the llama-quartermaster help wiki for how the platform works — loading/swapping models, per-model config, the playground (chat/images/speech), web search setup, API keys, GPU/VRAM, and troubleshooting. Use this whenever the user asks how to do something in quartermaster or hits a problem with it, so your answer matches the actual app.",
+      "Search the quartermaster help wiki for how the platform works — loading/swapping models, per-model config, the playground (chat/images/speech), web search setup, API keys, GPU/VRAM, and troubleshooting. Use this whenever the user asks how to do something in quartermaster or hits a problem with it, so your answer matches the actual app.",
     parameters: {
       type: "object",
       properties: {
@@ -400,14 +400,20 @@ export function searchWiki(query: string): WikiArticle[] {
 }
 
 // Plain-text tool message fed back to the model. On a miss, list the topics so
-// the model can steer the user or retry with a better query.
+// the model can steer the user or retry with a better query. `numbers[i]` is
+// the citation number for `results[i]` — resolved by the caller so an article
+// repeated across searches in the same turn reuses its earlier number instead
+// of minting a duplicate (a wiki "[n]" opens the Help modal to that article).
 export function formatWikiResults(
   query: string,
   results: WikiArticle[],
+  numbers: number[],
 ): string {
   if (results.length === 0) {
     const topics = WIKI_ARTICLES.map((a) => `- ${a.title}`).join("\n");
     return `No wiki article matched "${query}". Available topics:\n${topics}`;
   }
-  return results.map((a) => `## ${a.title}\n${a.body}`).join("\n\n---\n\n");
+  return results
+    .map((a, i) => `## [${numbers[i]}] ${a.title}\n${a.body}`)
+    .join("\n\n---\n\n");
 }

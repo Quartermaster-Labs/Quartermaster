@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/radu0120/llama-quartermaster/internal/chain"
-	"github.com/radu0120/llama-quartermaster/internal/config"
-	"github.com/radu0120/llama-quartermaster/internal/shared"
+	"github.com/quartermaster-labs/quartermaster/internal/chain"
+	"github.com/quartermaster-labs/quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/shared"
 )
 
 // CreateAuthMiddleware returns middleware that validates API keys when the
@@ -31,7 +31,7 @@ func CreateAuthMiddleware(cfg config.Config) chain.Middleware {
 				}
 			}
 			if !valid {
-				w.Header().Set("WWW-Authenticate", `Basic realm="llama-quartermaster"`)
+				w.Header().Set("WWW-Authenticate", `Basic realm="quartermaster"`)
 				shared.SendResponse(w, r, http.StatusUnauthorized, "unauthorized: invalid or missing API key")
 				return
 			}

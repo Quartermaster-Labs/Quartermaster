@@ -31,7 +31,7 @@ func genMoeShareFor(arch string) float64 {
 	return 0.85
 }
 
-// profile is one emitted llama-quartermaster entry for a model: the solo variant or an
+// profile is one emitted quartermaster entry for a model: the solo variant or an
 // optional ctx-tier variant. Target/Overhead are the VRAM budget the sizing math
 // uses; the flags drive ub/spec/reasoning.
 type profile struct {
@@ -64,7 +64,7 @@ type profile struct {
 }
 
 // Generate discovers models under gf.Settings.ModelsRoot and returns a complete
-// llama-quartermaster config YAML. Port of Generate-Config.ps1. nowRFC is stamped into
+// quartermaster config YAML. Port of Generate-Config.ps1. nowRFC is stamped into
 // the header comment (passed in so the function stays deterministic/testable).
 func Generate(gf GenerateFile, nowRFC string) (string, error) {
 	s := gf.Settings
@@ -80,7 +80,7 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 	})
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "# llama-quartermaster config - generated %s\n", nowRFC)
+	fmt.Fprintf(&b, "# quartermaster config - generated %s\n", nowRFC)
 	fmt.Fprintf(&b, "# TargetVramGB=%g  MaxRamGB=%g  Threads=%d\n", s.TargetVramGB, s.MaxRamGB, s.Threads)
 	b.WriteString("# Regen: quartermaster startup (hash-gated)\n\n")
 	fmt.Fprintf(&b, "healthCheckTimeout: %d\n\n", s.HealthCheckTimeout)
@@ -127,7 +127,7 @@ func slotKvPath(sc SlotCacheSettings) string {
 		if exe, err := os.Executable(); err == nil {
 			p = filepath.Join(filepath.Dir(exe), ".cache", "slotkv")
 		} else {
-			p = filepath.Join(os.TempDir(), "llama-quartermaster", "slotkv")
+			p = filepath.Join(os.TempDir(), "quartermaster", "slotkv")
 		}
 	}
 	return strings.ReplaceAll(p, "\\", "/")

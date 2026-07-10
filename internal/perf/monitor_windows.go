@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/radu0120/llama-quartermaster/internal/logmon"
+	"github.com/quartermaster-labs/quartermaster/internal/logmon"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/shirou/gopsutil/v4/net"

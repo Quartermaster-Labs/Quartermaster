@@ -123,7 +123,7 @@
     };
   }
 
-  // Detect and split the llama-quartermaster loading block (wrapped in ━━━━━ markers,
+  // Detect and split the quartermaster loading block (wrapped in ━━━━━ markers,
   // delivered as reasoning_content) from the model's own reasoning tokens.
   function ingestReasoning(
     prev: RunState,
@@ -450,7 +450,7 @@
         <div class="max-w-md text-sm text-txtsecondary space-y-4">
           <h4 class="text-base font-semibold text-txtmain pb-0">Load Test</h4>
           <p>
-            Fire several streaming chat completions at llama-quartermaster at the same time to see how it handles parallel
+            Fire several streaming chat completions at Quartermaster at the same time to see how it handles parallel
             loading and concurrent inference. Each request streams into its own panel with a live timer and status.
           </p>
           <ol class="list-decimal list-inside space-y-1">

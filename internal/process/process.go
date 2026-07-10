@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/radu0120/llama-quartermaster/internal/config"
-	"github.com/radu0120/llama-quartermaster/internal/logmon"
+	"github.com/quartermaster-labs/quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/logmon"
 )
 
 type ProcessState string
@@ -53,7 +53,7 @@ type Process interface {
 
 	// ServeHTTP forwards requests to the underlying process
 	// Calling it when the process is not ready will result in a
-	// 503 response with a body indicating it is a llama-quartermaster-error
+	// 503 response with a body indicating it is a quartermaster-error
 	ServeHTTP(http.ResponseWriter, *http.Request)
 
 	// Logger returns the monitor that captures this process's stdout/stderr.

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The router is the request-routing and model-swapping core of llama-quartermaster. It sits behind the HTTP listeners and, for every incoming request, decides whether the target model can serve now and, if not, what must be loaded or evicted first. The scheduler inside it is the single state owner that all listeners share — in this fork that shared ownership is what makes cross-port, VRAM-exclusive eviction possible (one scheduler accounting for one GPU; see Gotchas).
+The router is the request-routing and model-swapping core of quartermaster. It sits behind the HTTP listeners and, for every incoming request, decides whether the target model can serve now and, if not, what must be loaded or evicted first. The scheduler inside it is the single state owner that all listeners share — in this fork that shared ownership is what makes cross-port, VRAM-exclusive eviction possible (one scheduler accounting for one GPU; see Gotchas).
 
 A deep developer tutorial lives in `design.md` (same directory) — read it for the full rationale. This file is the quick map.
 

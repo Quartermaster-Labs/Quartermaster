@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Parses, validates, and normalizes the llama-quartermaster YAML config into the in-memory `Config` struct consumed by the rest of the server. It owns macro expansion, `${PORT}` allocation, command sanitization (shlex into argv), group/matrix routing normalization, the swap-matrix DSL, request filters, remote peers, and the fork's per-listener catalogs.
+Parses, validates, and normalizes the quartermaster YAML config into the in-memory `Config` struct consumed by the rest of the server. It owns macro expansion, `${PORT}` allocation, command sanitization (shlex into argv), group/matrix routing normalization, the swap-matrix DSL, request filters, remote peers, and the fork's per-listener catalogs.
 
 ## Key files
 
@@ -62,4 +62,4 @@ Each `models:` entry (`ModelConfig`) carries `cmd`, `cmdStop`, `proxy`, `aliases
 - `internal/process` (`process_command.go`) — reads `ModelConfig` for spawning (`SanitizedCommand`, env, timeouts, `cmdStop`).
 - `internal/server` (routes, `/v1/models`, filters, auth) — uses `Filters`, capabilities, peers, and `ListenerModelSets`/`ListenerAddrs` for per-listener catalogs.
 - `internal/perf` — driven by `PerformanceConfig`.
-- `internal/shared`, `cmd/monitor-test`, and the entry point `llama-quartermaster.go`.
+- `internal/shared`, `cmd/monitor-test`, and the entry point `quartermaster.go`.

@@ -34,9 +34,9 @@
     </div>
     <div class="whitespace-pre-wrap break-words leading-relaxed">
       {#if !rewritten && isStreaming}
-        <span class="inline-flex items-center gap-2 text-txtsecondary italic">
-          <span class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse"></span>
-          {modelReady ? "Rewriting…" : "Loading model…"}
+        <span class="inline-flex items-center gap-2 italic">
+          <span class="w-1.5 h-1.5 bg-primary rounded-full reason-glow"></span>
+          <span class="reason-shimmer-white font-medium">{modelReady ? "Rewriting…" : "Loading model…"}</span>
         </span>
       {:else}
         {#each rightOps as op, i (i)}

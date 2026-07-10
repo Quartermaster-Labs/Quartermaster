@@ -7,7 +7,7 @@ assignees: ''
 
 ---
 > [!IMPORTANT]
-> If you have questions about llama-quartermaster please post in the Q&A in Discussions. Use bug reports when you've found a defect and wish to discuss a fix.
+> If you have questions about quartermaster please post in the Q&A in Discussions. Use bug reports when you've found a defect and wish to discuss a fix.
 
 **Describe the bug**
 A clear and concise description of what the bug is.

@@ -1,27 +1,27 @@
 <!--
-  WinSW service definition for llama-quartermaster.
+  WinSW service definition for quartermaster.
 
   WinSW wraps a non-service-aware exe as a real Windows service (the proxy has no
   SCM handler, so `sc create` directly would be killed for "not responding").
 
   Install:
     1. Download WinSW: https://github.com/winsw/winsw/releases (WinSW-x64.exe)
-    2. Rename it to  llama-quartermaster-service.exe  and place it next to THIS
+    2. Rename it to  quartermaster-service.exe  and place it next to THIS
        xml file and the proxy binary.
     3. From an elevated prompt in that folder:
-         .\llama-quartermaster-service.exe install
-         .\llama-quartermaster-service.exe start
-    Uninstall:  .\llama-quartermaster-service.exe stop ; .\llama-quartermaster-service.exe uninstall
+         .\quartermaster-service.exe install
+         .\quartermaster-service.exe start
+    Uninstall:  .\quartermaster-service.exe stop ; .\quartermaster-service.exe uninstall
 
   %BASE% expands to the folder holding the service exe. Adjust <arguments> ports
   and paths to your layout. Drop -generate to load a static -config instead.
 -->
 <service>
-  <id>llama-quartermaster</id>
-  <name>llama-quartermaster</name>
-  <description>llama-quartermaster fork — model proxy with startup config autogen.</description>
+  <id>quartermaster</id>
+  <name>quartermaster</name>
+  <description>quartermaster fork — model proxy with startup config autogen.</description>
 
-  <executable>%BASE%\llama-quartermaster-windows-amd64.exe</executable>
+  <executable>%BASE%\quartermaster-windows-amd64.exe</executable>
   <arguments>-config "%BASE%\config.yaml" -generate "%BASE%\quartermaster-generate.yaml" -listen 0.0.0.0:1250 -watch-config</arguments>
   <workingdirectory>%BASE%</workingdirectory>
 

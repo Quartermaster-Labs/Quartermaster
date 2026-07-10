@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/radu0120/llama-quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/config"
 )
 
 // TestServer_APIKeyScope checks that the auth middleware attaches a scoped key's

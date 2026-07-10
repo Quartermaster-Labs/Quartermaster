@@ -3,7 +3,7 @@ package server
 import (
 	"testing"
 
-	"github.com/radu0120/llama-quartermaster/internal/autogen"
+	"github.com/quartermaster-labs/quartermaster/internal/autogen"
 )
 
 // applyOverrideDTO copies curated editor fields onto an Override without touching

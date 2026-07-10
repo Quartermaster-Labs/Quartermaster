@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/radu0120/llama-quartermaster/internal/chain"
-	"github.com/radu0120/llama-quartermaster/internal/config"
-	"github.com/radu0120/llama-quartermaster/internal/logmon"
-	"github.com/radu0120/llama-quartermaster/internal/shared"
+	"github.com/quartermaster-labs/quartermaster/internal/chain"
+	"github.com/quartermaster-labs/quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/logmon"
+	"github.com/quartermaster-labs/quartermaster/internal/shared"
 )
 
 // NewLoggers builds the proxy, upstream, and combined (mux) log monitors,

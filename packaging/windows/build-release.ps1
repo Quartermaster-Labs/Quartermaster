@@ -29,7 +29,7 @@ param(
     # args verbatim and can't evaluate $true/$false.
     [ValidateSet('true', 'false')]
     [string]$Draft = 'true',
-    [string]$Repo = 'Quartermaster-Labs/llama-quartermaster',
+    [string]$Repo = 'Quartermaster-Labs/quartermaster',
     [switch]$SkipUi
 )
 
@@ -69,7 +69,7 @@ if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
 New-Item -ItemType Directory -Force $staging | Out-Null
 
 go build -ldflags "-X main.commit=$commit -X main.version=$Tag -X main.date=$date" `
-    -o (Join-Path $staging 'llama-quartermaster-windows-amd64.exe') .
+    -o (Join-Path $staging 'quartermaster-windows-amd64.exe') .
 
 # 3. Stage bundle (same set the installer expects). Config yaml lives under config\.
 $stagingConfig = Join-Path $staging 'config'
@@ -78,11 +78,11 @@ Copy-Item config.example.yaml,quartermaster-generate.example.yaml $stagingConfig
 Copy-Item LICENSE.md,README.md $staging
 Copy-Item packaging\windows\start.cmd (Join-Path $staging 'start.cmd')
 Copy-Item -Recurse packaging (Join-Path $staging 'packaging')
-"llama-quartermaster $Tag built $date" | Out-File -Encoding utf8 (Join-Path $staging 'VERSION.txt')
+"quartermaster $Tag built $date" | Out-File -Encoding utf8 (Join-Path $staging 'VERSION.txt')
 
 # 4. Optional sign (binary) — gated on the pfx env var, same as CI.
 if ($env:SIGN_PFX_BASE64) {
-    & (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $staging 'llama-quartermaster-windows-amd64.exe')
+    & (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $staging 'quartermaster-windows-amd64.exe')
 }
 
 # 5. Compile installer (ISCC wants absolute paths).
@@ -90,7 +90,7 @@ $outdir = Join-Path $root 'Output'
 & $iscc "/DMyAppVersion=$Tag" "/DStagingDir=$staging" "/DOutputDir=$outdir" packaging\windows\installer.iss
 if ($LASTEXITCODE -ne 0) { Die "ISCC failed ($LASTEXITCODE)" }
 
-$setup = (Resolve-Path (Join-Path $outdir "llama-quartermaster-setup-$Tag.exe")).Path
+$setup = (Resolve-Path (Join-Path $outdir "quartermaster-setup-$Tag.exe")).Path
 if ($env:SIGN_PFX_BASE64) { & (Join-Path $PSScriptRoot 'sign.ps1') $setup }
 Write-Host "installer: $setup" -ForegroundColor Green
 
@@ -100,7 +100,7 @@ $exists = $false
 try { gh release view $Tag -R $Repo *> $null; $exists = ($LASTEXITCODE -eq 0) } catch { $exists = $false }
 if (-not $exists) {
     $draftArg = if ($isDraft) { '--draft' } else { '' }
-    gh release create $Tag -R $Repo --title $Tag --notes "llama-quartermaster $Tag" $draftArg
+    gh release create $Tag -R $Repo --title $Tag --notes "quartermaster $Tag" $draftArg
 }
 gh release upload $Tag $setup -R $Repo --clobber
 if (-not $isDraft) { gh release edit $Tag -R $Repo --draft=false }

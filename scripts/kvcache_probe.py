@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""kvcache_probe.py — prove whether llama-quartermaster's on-disk slot KV cache is
+"""kvcache_probe.py — prove whether quartermaster's on-disk slot KV cache is
 actually REUSED (not just written) and measure how much faster it makes prefill.
 
 Ground truth is the upstream-reported cached_tokens, surfaced two ways:

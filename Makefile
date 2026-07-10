@@ -1,5 +1,5 @@
 # Define variables for the application
-APP_NAME = llama-quartermaster
+APP_NAME = quartermaster
 BUILD_DIR = build
 
 # Get the current Git hash
@@ -64,7 +64,7 @@ windows: ui
 # NOTE: llama-server.exe (llama.cpp) and GGUF models are NOT bundled — separate
 # projects/licensing. Copy quartermaster-generate.example.yaml to
 # quartermaster-generate.yaml and edit modelsRoot / serverExe before use.
-PKG_WIN_DIR = $(BUILD_DIR)/llama-quartermaster-windows
+PKG_WIN_DIR = $(BUILD_DIR)/quartermaster-windows
 package-windows: windows
 	@echo "Packaging Windows bundle..."
 	# Refresh the bundle IN PLACE — overwrite only the shipped artifacts and never
@@ -92,20 +92,20 @@ package-windows: windows
 	@echo "$(APP_NAME) $(GIT_HASH) built $(BUILD_DATE)" > $(PKG_WIN_DIR)/VERSION.txt
 	# Zip a CLEAN distributable: exclude the user-data that now lives in the bundle
 	# (private chats + the regenerated-on-launch config.yaml) so it never ships.
-	cd $(BUILD_DIR) && rm -f llama-quartermaster-windows.zip && \
-		( zip -qr llama-quartermaster-windows.zip llama-quartermaster-windows \
-			-x 'llama-quartermaster-windows/playground-data/*' \
-			-x 'llama-quartermaster-windows/.cache/*' \
-			-x 'llama-quartermaster-windows/logs/*' \
-			-x 'llama-quartermaster-windows/config/config.yaml' \
-		|| tar -a -c -f llama-quartermaster-windows.zip \
-			--exclude='llama-quartermaster-windows/playground-data' \
-			--exclude='llama-quartermaster-windows/.cache' \
-			--exclude='llama-quartermaster-windows/logs' \
-			--exclude='llama-quartermaster-windows/config/config.yaml' \
-			llama-quartermaster-windows \
+	cd $(BUILD_DIR) && rm -f quartermaster-windows.zip && \
+		( zip -qr quartermaster-windows.zip quartermaster-windows \
+			-x 'quartermaster-windows/playground-data/*' \
+			-x 'quartermaster-windows/.cache/*' \
+			-x 'quartermaster-windows/logs/*' \
+			-x 'quartermaster-windows/config/config.yaml' \
+		|| tar -a -c -f quartermaster-windows.zip \
+			--exclude='quartermaster-windows/playground-data' \
+			--exclude='quartermaster-windows/.cache' \
+			--exclude='quartermaster-windows/logs' \
+			--exclude='quartermaster-windows/config/config.yaml' \
+			quartermaster-windows \
 		|| echo "WARN: no zip/tar found — folder left unarchived at $(PKG_WIN_DIR)" )
-	@echo "Done: $(PKG_WIN_DIR)  (+ $(BUILD_DIR)/llama-quartermaster-windows.zip)"
+	@echo "Done: $(PKG_WIN_DIR)  (+ $(BUILD_DIR)/quartermaster-windows.zip)"
 
 # Assemble a runnable Linux/Mac folder + tar.gz. Same in-place, user-data-preserving
 # refresh as package-windows; no launcher .cmd (the binary runs directly), but the
@@ -157,7 +157,7 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 # GitHub repo for `gh` (avoids "no default remote" when multiple remotes exist).
-RELEASE_REPO ?= Quartermaster-Labs/llama-quartermaster
+RELEASE_REPO ?= Quartermaster-Labs/quartermaster
 
 # Build the Windows binary + installer LOCALLY and upload the .exe to a GitHub
 # release (private-repo Actions minutes are metered; local build is free).

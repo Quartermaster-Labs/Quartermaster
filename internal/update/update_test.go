@@ -33,7 +33,7 @@ func TestSetupAsset(t *testing.T) {
 	rel.Assets = append(rel.Assets, struct {
 		Name string `json:"name"`
 		URL  string `json:"browser_download_url"`
-	}{Name: "llama-quartermaster-setup-v0.6.1.exe", URL: "https://github.com/x/y/releases/download/v0.6.1/s.exe"})
+	}{Name: "quartermaster-setup-v0.6.1.exe", URL: "https://github.com/x/y/releases/download/v0.6.1/s.exe"})
 
 	if got := setupAsset(rel); got != "https://github.com/x/y/releases/download/v0.6.1/s.exe" {
 		t.Fatalf("setupAsset got %q", got)

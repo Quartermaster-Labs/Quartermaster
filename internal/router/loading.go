@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/radu0120/llama-quartermaster/internal/logmon"
+	"github.com/quartermaster-labs/quartermaster/internal/logmon"
 )
 
 var loadingPaths = []string{
@@ -73,7 +73,7 @@ func newLoadingWriter(logger *logmon.Monitor, modelName string, w http.ResponseW
 	s.Header().Set("Connection", "keep-alive")
 	s.WriteHeader(http.StatusOK)
 	s.sendLine("━━━━━")
-	s.sendLine(fmt.Sprintf("llama-quartermaster loading model: %s", modelName))
+	s.sendLine(fmt.Sprintf("quartermaster loading model: %s", modelName))
 	return s
 }
 

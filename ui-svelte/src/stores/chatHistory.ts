@@ -16,6 +16,10 @@ export interface ChatSession {
   // Set once the model has named the chat (see generateTitle). Until then the
   // title is the first-message heuristic and is recomputed on every save.
   titled?: boolean;
+  // Per-chat standing instructions (the composer's "Instructions" field). Layered
+  // on top of the built-in prompt for this conversation only. Empty/undefined =
+  // none. Persisted with the chat so it follows the conversation, not the user.
+  instructions?: string;
 }
 
 // All saved conversations + which one is currently open. Server-backed, keyed by

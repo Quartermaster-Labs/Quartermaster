@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/radu0120/llama-quartermaster/internal/config"
-	"github.com/radu0120/llama-quartermaster/internal/logmon"
+	"github.com/quartermaster-labs/quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/logmon"
 )
 
 const (
@@ -71,8 +71,8 @@ func TestProcessCommand_StartStop(t *testing.T) {
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Errorf("before start: expected 503, got %d", rr.Code)
 	}
-	if body := rr.Body.String(); !strings.Contains(body, "llama-quartermaster-error") {
-		t.Errorf("before start: expected body to contain %q, got %q", "llama-quartermaster-error", body)
+	if body := rr.Body.String(); !strings.Contains(body, "quartermaster-error") {
+		t.Errorf("before start: expected body to contain %q, got %q", "quartermaster-error", body)
 	}
 
 	// before start: no launched command
@@ -124,8 +124,8 @@ func TestProcessCommand_StartStop(t *testing.T) {
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Errorf("after stop: expected 503, got %d", rr.Code)
 	}
-	if body := rr.Body.String(); !strings.Contains(body, "llama-quartermaster-error") {
-		t.Errorf("after stop: expected body to contain %q, got %q", "llama-quartermaster-error", body)
+	if body := rr.Body.String(); !strings.Contains(body, "quartermaster-error") {
+		t.Errorf("after stop: expected body to contain %q, got %q", "quartermaster-error", body)
 	}
 }
 

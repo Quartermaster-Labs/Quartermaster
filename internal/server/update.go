@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/radu0120/llama-quartermaster/internal/shared"
+	"github.com/quartermaster-labs/quartermaster/internal/shared"
 )
 
 // handleAPIUpdate downloads the latest release installer and launches it, then

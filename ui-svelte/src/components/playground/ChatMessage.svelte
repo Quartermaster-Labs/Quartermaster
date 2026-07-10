@@ -1,12 +1,13 @@
 <script lang="ts">
   import { renderMarkdown, renderStreamingMarkdown, createStreamingCache } from "../../lib/markdown";
   import type { RenderedBlock } from "../../lib/markdown";
-  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronDown, ChevronRight, Brain, Code, Search, PenLine } from "lucide-svelte";
+  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronRight, Code, Search, BookOpen, PenLine } from "lucide-svelte";
   import { getTextContent, getImageUrls } from "../../lib/types";
   import { harmonyToThink } from "../../lib/reasoning";
   import type { ContentPart } from "../../lib/types";
   import RewriteDiff from "./RewriteDiff.svelte";
   import { autogrow } from "../../lib/autogrow";
+  import { openWikiArticle } from "../../stores/wiki";
 
   interface Props {
     role: "user" | "assistant" | "system" | "tool";
@@ -14,7 +15,8 @@
     reasoning_content?: string;
     reasoningTimeMs?: number;
     genTimeMs?: number;
-    searches?: { query: string; results: string; at?: number; reasoningAt?: number; duringReasoning?: boolean; sources?: { title: string; url: string }[] }[];
+    searches?: { query: string; results: string; kind?: "web" | "wiki"; at?: number; reasoningAt?: number; duringReasoning?: boolean; sources?: { title: string; url: string }[] }[];
+    citations?: { n: number; title: string; url: string; wikiId?: string }[];
     rewriteInstruction?: string;
     rewriteOriginal?: string;
     isStreaming?: boolean;
@@ -26,7 +28,7 @@
     onRegenerate?: () => void;
   }
 
-  let { role, content, reasoning_content = "", reasoningTimeMs = 0, genTimeMs = 0, searches, rewriteInstruction, rewriteOriginal, isStreaming = false, isReasoning = false, isSearching = false, modelReady = false, hasVisionInput = false, onEdit, onRegenerate }: Props = $props();
+  let { role, content, reasoning_content = "", reasoningTimeMs = 0, genTimeMs = 0, searches, citations, rewriteInstruction, rewriteOriginal, isStreaming = false, isReasoning = false, isSearching = false, modelReady = false, hasVisionInput = false, onEdit, onRegenerate }: Props = $props();
 
   let textContent = $derived(getTextContent(content));
   // Some models (gpt-oss harmony et al.) emit reasoning as channel markup
@@ -46,7 +48,7 @@
   // Searches are recorded separately with the content offset (`at`) where they
   // ran. Build one ordered timeline so think boxes and search blocks render
   // inline between the surrounding text, not pinned to the top.
-  type SearchHit = { query: string; results: string; sources?: { title: string; url: string }[] };
+  type SearchHit = { query: string; results: string; kind?: "web" | "wiki"; sources?: { title: string; url: string }[] };
   type SubItem = { type: "text"; text: string } | { type: "search"; search: SearchHit };
   type Segment =
     | { kind: "text"; text: string; idx: number }
@@ -81,8 +83,11 @@
     const out: Segment[] = [];
     if (role !== "assistant") return out;
     // Searches fired mid-think nest into the field-based reasoning box (see
-    // reasoningItems), not the content timeline — drop them here.
-    const list = (searches ?? []).filter((s) => !s.duringReasoning);
+    // reasoningItems), not the content timeline — drop them here. But only when
+    // there IS a field-based box: inline-<think> models carry reasoning in the
+    // content, so their mid-think searches nest into the think segment below via
+    // their `at` offset, and dropping them here would lose them entirely.
+    const list = (searches ?? []).filter((s) => !(s.duringReasoning && reasoning_content));
     const positioned = list.filter((s) => typeof s.at === "number").slice().sort((a, b) => (a.at as number) - (b.at as number));
     for (const s of list) if (typeof s.at !== "number") out.push({ kind: "search", search: s }); // legacy: top
     let ti = 0;
@@ -143,6 +148,11 @@
     return merged;
   });
 
+  // Answer-phase tool calls (searches/wiki fired outside reasoning). Collected
+  // into one collapsible "Sources" header below the answer instead of dotted
+  // inline — the in-`Thought` searches still nest in the reasoning trail.
+  let answerSearches = $derived(timeline.filter((s) => s.kind === "search").map((s) => (s as Extract<Segment, { kind: "search" }>).search));
+
   // Index of the final text segment — the only one that grows while streaming,
   // so it gets the incremental markdown renderer; earlier ones are static.
   let lastTextIdx = $derived.by(() => {
@@ -197,9 +207,9 @@
   // Render a text segment: incremental (streaming) only for the live last one.
   function renderTextSeg(seg: { text: string; idx: number }): { blocks: RenderedBlock[]; pendingHtml: string } {
     if (isStreaming && seg.idx === lastTextIdx) {
-      return renderStreamingMarkdown(seg.text, streamingCache);
+      return renderStreamingMarkdown(seg.text, streamingCache, citations ?? []);
     }
-    return { blocks: [{ id: -1, html: renderMarkdown(seg.text) }], pendingHtml: "" };
+    return { blocks: [{ id: -1, html: renderMarkdown(seg.text, citations ?? []) }], pendingHtml: "" };
   }
   $effect(() => {
     // Reset the streaming cache when a turn finishes so the next one starts clean.
@@ -370,6 +380,21 @@
     mo.observe(node, { childList: true, subtree: true });
     return { destroy: () => mo.disconnect() };
   }
+
+  // Wiki citation chips (a.cite-wiki, injected as {@html}) can't carry a Svelte
+  // handler, so delegate: a click on one opens the Help modal to its article id
+  // instead of navigating. Web cites (plain a.cite target=_blank) are untouched.
+  function wikiCiteClick(node: HTMLElement) {
+    function onClick(e: MouseEvent) {
+      const chip = (e.target as HTMLElement | null)?.closest("a.cite-wiki");
+      if (!chip) return;
+      e.preventDefault();
+      const id = chip.getAttribute("data-wiki-id");
+      if (id) openWikiArticle.set(id);
+    }
+    node.addEventListener("click", onClick);
+    return { destroy: () => node.removeEventListener("click", onClick) };
+  }
 </script>
 
 {#if role === "tool"}
@@ -385,50 +410,67 @@
   <div
     class="relative group rounded-2xl px-3 py-2 text-[0.8125rem] {role === 'user'
       ? 'max-w-[85%] bg-black text-white rounded-br-sm msg-tail-user'
-      : (rewriteOriginal != null ? 'w-full' : 'w-full sm:w-4/5') + ' bg-surface border border-card-border rounded-bl-sm msg-tail-bot'}"
+      : (rewriteOriginal != null ? 'w-full' : 'w-full sm:w-4/5') + ' rounded-bl-sm'}"
   >
     {#if role === "assistant"}
+      <!-- A tool step (web search / wiki lookup): a clickable label line that
+           expands its raw results inline — no box, matching the reasoning trail. -->
+      {#snippet searchLine(search: SearchHit)}
+        <details class="not-prose group/s">
+          <summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden text-txtsecondary hover:text-txtmain transition-colors">
+            {#if search.kind === "wiki"}
+              <BookOpen class="w-3 h-3 shrink-0" />
+              <span class="font-medium truncate">Read: {search.query || "help wiki"}</span>
+            {:else}
+              <Search class="w-3 h-3 shrink-0" />
+              <span class="font-medium truncate">Searched: {search.query || "the web"}</span>
+            {/if}
+            <ChevronRight class="w-3 h-3 shrink-0 opacity-60 transition-transform group-open/s:rotate-90" />
+          </summary>
+          <div class="mt-1.5 whitespace-pre-wrap font-mono text-xs bg-background/40 rounded-md px-2 py-1.5 max-h-72 overflow-y-auto pretty-scroll">{search.results}</div>
+        </details>
+      {/snippet}
+      <!-- DeepSeek-style reasoning trail: one dot per step (thought / searched),
+           a gapped connector line between dots, content hanging to the right. -->
+      {#snippet reasoningTrail(items: SubItem[])}
+        <div class="mt-2 flex flex-col text-sm text-txtsecondary">
+          {#each items as it, ii (ii)}
+            <div class="flex gap-2.5">
+              <div class="flex flex-col items-center pt-[0.3rem]">
+                <span class="w-1.5 h-1.5 rounded-full bg-txtsecondary/70 shrink-0"></span>
+                <span class="w-px flex-1 my-1 bg-card-border"></span>
+              </div>
+              <div class="min-w-0 flex-1 {ii < items.length - 1 ? 'pb-3' : ''}">
+                {#if it.type === "search"}
+                  {@render searchLine(it.search)}
+                {:else if it.text}
+                  <div class="prose prose-sm dark:prose-invert max-w-none chat-prose italic bg-background/40 rounded-md px-2 py-1.5">{@html renderMarkdown(it.text)}</div>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/snippet}
       <!-- Field-based reasoning (backend split it into reasoning_content). Inline
            <think> blocks render in the timeline below instead. -->
       {#if reasoning_content || isReasoning}
-        <div class="mb-3 border border-card-border rounded-xl overflow-hidden">
+        <div class="mb-3">
           <button
-            class="w-full flex items-center gap-2 px-3 py-2 bg-secondary hover:bg-secondary-hover transition-colors text-sm"
+            class="flex items-center gap-1.5 text-sm text-txtsecondary hover:text-txtmain transition-colors group"
             onclick={() => showReasoning = !showReasoning}
           >
-            {#if showReasoning}
-              <ChevronDown class="w-4 h-4" />
-            {:else}
-              <ChevronRight class="w-4 h-4" />
-            {/if}
+            <ChevronRight class="w-3.5 h-3.5 transition-transform {showReasoning ? 'rotate-90' : ''}" />
             {#if isSearching}
-              <Search class="w-4 h-4 reason-glow" />
-              <span class="font-medium reason-shimmer">Searching</span>
+              <span class="font-medium reason-shimmer-white thinking-dots">Searching</span>
+            {:else if isReasoning}
+              <span class="font-medium reason-shimmer-white thinking-dots">Thinking</span>
             {:else}
-              <Brain class="w-4 h-4 {isReasoning ? 'reason-glow' : ''}" />
-              <span class="font-medium {isReasoning ? 'reason-shimmer' : ''}">Reasoning</span>
+              <span class="font-medium">{#if reasoningTimeMs > 0}Thought for {formatDuration(reasoningTimeMs)}{:else}Thought{/if}</span>
             {/if}
-            <span class="text-txtsecondary ml-2">
-              ({reasoning_content.length} chars{#if !isReasoning && reasoningTimeMs > 0}, {formatDuration(reasoningTimeMs)}{/if})
-            </span>
           </button>
           <div class="reveal {showReasoning ? 'open' : ''}">
             <div class="reveal-inner">
-              <div class="px-3 py-2 bg-secondary/50 text-sm text-txtsecondary flex flex-col gap-2">
-                {#each reasoningItems as it, ii (ii)}
-                  {#if it.type === "search"}
-                    <details class="not-prose rounded-lg border border-card-border overflow-hidden font-mono">
-                      <summary class="flex items-center gap-2 px-2 py-1.5 bg-secondary hover:bg-secondary-hover transition-colors cursor-pointer select-none text-xs">
-                        <Search class="w-3 h-3 shrink-0" />
-                        <span class="font-medium truncate">{it.search.query || "Web search"}</span>
-                      </summary>
-                      <div class="px-2 py-1.5 bg-background/40 text-xs whitespace-pre-wrap max-h-72 overflow-y-auto pretty-scroll">{it.search.results}</div>
-                    </details>
-                  {:else if it.text}
-                    <div class="prose prose-sm dark:prose-invert max-w-none chat-prose">{@html renderMarkdown(it.text)}</div>
-                  {/if}
-                {/each}
-              </div>
+              {@render reasoningTrail(reasoningItems)}
             </div>
           </div>
         </div>
@@ -454,55 +496,30 @@
       {:else if showRaw}
         <div class="whitespace-pre-wrap font-mono text-sm">{textContent}</div>
       {:else}
-        <div class="prose prose-sm dark:prose-invert max-w-none chat-prose" use:codeBlockCopy>
+        <div class="prose prose-sm dark:prose-invert max-w-none chat-prose" use:codeBlockCopy use:wikiCiteClick>
           <!-- Ordered timeline: inline think boxes, search blocks, and answer text. -->
           {#each timeline as seg, si (si)}
             {#if seg.kind === "search"}
-              <details class="not-prose my-2 rounded-xl border border-card-border overflow-hidden">
-                <summary class="flex items-center gap-2 px-3 py-2 bg-secondary hover:bg-secondary-hover transition-colors cursor-pointer select-none text-sm">
-                  <Search class="w-3.5 h-3.5 shrink-0" />
-                  <span class="font-medium truncate">{seg.search.query || "Web search"}</span>
-                </summary>
-                <div class="reveal">
-                  <div class="reveal-inner">
-                    <div class="px-3 py-2 bg-secondary/50 text-xs text-txtsecondary whitespace-pre-wrap font-mono max-h-72 overflow-y-auto pretty-scroll">{seg.search.results}</div>
-                  </div>
-                </div>
-              </details>
+              <!-- Rendered together under the "Sources" header below, not inline. -->
             {:else if seg.kind === "think"}
-              {@const thinkChars = seg.items.reduce((n, it) => n + (it.type === "text" ? it.text.length : 0), 0)}
               {@const isOpen = si in thinkOverride ? thinkOverride[si] : seg.open}
-              <details class="not-prose my-2 rounded-xl border border-card-border overflow-hidden" open={isOpen}>
+              <details class="not-prose my-2" open={isOpen}>
                 <summary
-                  class="flex items-center gap-2 px-3 py-2 bg-secondary hover:bg-secondary-hover transition-colors cursor-pointer select-none text-sm"
+                  class="flex items-center gap-1.5 text-sm text-txtsecondary hover:text-txtmain transition-colors cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden"
                   onclick={(e) => { e.preventDefault(); thinkOverride[si] = !isOpen; }}
                 >
+                  <ChevronRight class="w-3.5 h-3.5 shrink-0 transition-transform {isOpen ? 'rotate-90' : ''}" />
                   {#if isSearching && seg.open}
-                    <Search class="w-4 h-4 shrink-0 reason-glow" />
-                    <span class="font-medium reason-shimmer">Searching</span>
+                    <span class="font-medium reason-shimmer-white thinking-dots">Searching</span>
+                  {:else if seg.open}
+                    <span class="font-medium reason-shimmer-white thinking-dots">Thinking</span>
                   {:else}
-                    <Brain class="w-4 h-4 shrink-0 {seg.open ? 'reason-glow' : ''}" />
-                    <span class="font-medium {seg.open ? 'reason-shimmer' : ''}">Reasoning</span>
+                    <span class="font-medium">Thought</span>
                   {/if}
-                  <span class="text-txtsecondary ml-2">({thinkChars} chars)</span>
                 </summary>
                 <div class="reveal">
                   <div class="reveal-inner">
-                <div class="px-3 py-2 bg-secondary/50 text-sm text-txtsecondary flex flex-col gap-2">
-                  {#each seg.items as it, ii (ii)}
-                    {#if it.type === "search"}
-                      <details class="not-prose rounded-lg border border-card-border overflow-hidden font-mono">
-                        <summary class="flex items-center gap-2 px-2 py-1.5 bg-secondary hover:bg-secondary-hover transition-colors cursor-pointer select-none text-xs">
-                          <Search class="w-3 h-3 shrink-0" />
-                          <span class="font-medium truncate">{it.search.query || "Web search"}</span>
-                        </summary>
-                        <div class="px-2 py-1.5 bg-background/40 text-xs whitespace-pre-wrap max-h-72 overflow-y-auto pretty-scroll">{it.search.results}</div>
-                      </details>
-                    {:else if it.text}
-                      <div class="prose prose-sm dark:prose-invert max-w-none chat-prose">{@html renderMarkdown(it.text)}</div>
-                    {/if}
-                  {/each}
-                </div>
+                    {@render reasoningTrail(seg.items)}
                   </div>
                 </div>
               </details>
@@ -514,12 +531,26 @@
               {@html r.pendingHtml}
             {/if}
           {/each}
+          {#if answerSearches.length > 0}
+            <details class="not-prose my-2 group/src">
+              <summary class="flex items-center gap-1.5 text-sm text-txtsecondary hover:text-txtmain transition-colors cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+                <ChevronRight class="w-3.5 h-3.5 shrink-0 transition-transform group-open/src:rotate-90" />
+                <span class="font-medium">Sources</span>
+                <span class="opacity-60">({answerSearches.length})</span>
+              </summary>
+              <div class="mt-2 flex flex-col gap-1.5">
+                {#each answerSearches as s, i (i)}
+                  {@render searchLine(s)}
+                {/each}
+              </div>
+            </details>
+          {/if}
           {#if isSearching && !isReasoning && !openThink}
             <!-- Post-reasoning search (answer phase). A mid-think search instead
                  shows its "Searching" label on the reasoning box itself. -->
             <span class="inline-flex items-center gap-2 text-sm italic">
               <span class="w-1.5 h-1.5 bg-primary rounded-full reason-glow"></span>
-              <span class="reason-shimmer font-medium">Searching the web…</span>
+              <span class="reason-shimmer-white font-medium">Searching the web…</span>
             </span>
           {:else if isStreaming && !openThink && !isReasoning && !hasBodyText && !isSearching}
             <!-- No tokens yet. Order of waits: swap the model in, encode the image
@@ -530,7 +561,7 @@
                  ever surfaces one. -->
             <span class="inline-flex items-center gap-2 italic">
               <span class="w-1.5 h-1.5 bg-primary rounded-full reason-glow"></span>
-              <span class="reason-shimmer font-medium">{!modelReady ? "Loading model…" : hasVisionInput ? "Processing image…" : "Generating…"}</span>
+              <span class="reason-shimmer-white font-medium">{!modelReady ? "Loading model…" : hasVisionInput ? "Processing image…" : "Generating…"}</span>
             </span>
           {/if}
         </div>
@@ -623,7 +654,9 @@
             {/each}
           </div>
         {/if}
-        <div class="whitespace-pre-wrap pr-8" bind:this={textEl}>{textContent}</div>
+        <div class="prose prose-sm prose-invert max-w-none chat-prose user-msg-prose pr-8" bind:this={textEl} use:codeBlockCopy>
+          {@html renderMarkdown(textContent)}
+        </div>
         {#if canEdit}
           <button
             class="absolute top-1.5 right-1.5 p-1 rounded-full opacity-0 group-hover:opacity-100 transition-all bg-white/10 text-white/70 hover:text-white hover:bg-white/25"
@@ -637,22 +670,29 @@
     {/if}
   </div>
   {#if allSources.length > 0}
-    <div class="w-full sm:w-4/5 mt-1.5 flex flex-wrap gap-1.5">
-      {#each allSources as src, si (si)}
-        <a
-          href={src.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          class="inline-flex items-center gap-1.5 {pillWidth(src.title)} px-2 py-0.5 rounded-full border border-card-border bg-secondary/50 hover:bg-secondary text-xs text-txtsecondary hover:text-txtmain transition-colors"
-          title={src.url}
-        >
-          {#if faviconUrl(src.url)}
-            <img src={faviconUrl(src.url)} alt="" class="w-3.5 h-3.5 shrink-0 rounded-sm" loading="lazy" onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")} />
-          {/if}
-          <span class="truncate">{src.title}</span>
-        </a>
-      {/each}
-    </div>
+    <details class="w-full sm:w-4/5 mt-1.5 group/pills">
+      <summary class="flex items-center gap-1.5 text-sm text-txtsecondary hover:text-txtmain transition-colors cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+        <ChevronRight class="w-3.5 h-3.5 shrink-0 transition-transform group-open/pills:rotate-90" />
+        <span class="font-medium">Sources</span>
+        <span class="opacity-60">({allSources.length})</span>
+      </summary>
+      <div class="mt-2 flex flex-wrap gap-1.5">
+        {#each allSources as src (src.url)}
+          <a
+            href={src.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="inline-flex items-center gap-1.5 {pillWidth(src.title)} px-2 py-0.5 rounded-full border border-card-border bg-secondary/50 hover:bg-secondary text-xs text-txtsecondary hover:text-txtmain transition-colors"
+            title={src.url}
+          >
+            {#if faviconUrl(src.url)}
+              <img src={faviconUrl(src.url)} alt="" class="w-3.5 h-3.5 shrink-0 rounded-sm" loading="lazy" onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")} />
+            {/if}
+            <span class="truncate">{src.title}</span>
+          </a>
+        {/each}
+      </div>
+    </details>
   {/if}
 </div>
 {/if}
@@ -706,6 +746,28 @@
   .chat-prose {
     font-size: 0.8125rem;
     line-height: 1.55;
+  }
+
+  /* prose-invert assigns a different shade per element kind (body vs bold vs
+     headings vs code…) — on the solid-black user bubble that reads as an
+     uneven "gradient" across a message. Pin every prose color var to one
+     flat white so the whole bubble's ink matches the bg-black/text-white it
+     sits on. */
+  .user-msg-prose {
+    --tw-prose-invert-body: #fff;
+    --tw-prose-invert-headings: #fff;
+    --tw-prose-invert-lead: #fff;
+    --tw-prose-invert-links: #fff;
+    --tw-prose-invert-bold: #fff;
+    --tw-prose-invert-counters: #fff;
+    --tw-prose-invert-bullets: #fff;
+    --tw-prose-invert-hr: #fff;
+    --tw-prose-invert-quotes: #fff;
+    --tw-prose-invert-quote-borders: #fff;
+    --tw-prose-invert-captions: #fff;
+    --tw-prose-invert-code: #fff;
+    --tw-prose-invert-th-borders: #fff;
+    --tw-prose-invert-td-borders: #fff;
   }
 
   /* Animated expand/reveal for the reasoning + search boxes. grid-rows 0fr→1fr
@@ -788,6 +850,14 @@
     border: 1px solid var(--color-border, rgba(128, 128, 128, 0.2));
   }
 
+  /* @tailwindcss/typography wraps inline <code> in literal backtick
+     pseudo-elements (content: "`"). Strip them — the box styling already marks
+     code, and the stray backticks clipped ugly at line ends. */
+  .prose :global(code)::before,
+  .prose :global(code)::after {
+    content: none;
+  }
+
   .prose :global(p) {
     margin: 0.5rem 0;
   }
@@ -856,7 +926,15 @@
     font-style: italic;
   }
 
-  .prose :global(a) {
+  /* Tailwind Typography auto-adds open/close quote marks around blockquote
+     text via ::before/::after content — redundant on top of the border-left
+     indentation, so drop them. */
+  .prose :global(blockquote p:first-of-type::before),
+  .prose :global(blockquote p:last-of-type::after) {
+    content: none;
+  }
+
+  .prose :global(a:not(.cite)) {
     color: var(--color-primary);
     text-decoration: underline;
   }

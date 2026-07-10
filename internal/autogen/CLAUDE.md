@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`autogen` generates a complete llama-quartermaster config YAML by discovering local GGUF
+`autogen` generates a complete quartermaster config YAML by discovering local GGUF
 models, reading their headers, and computing a per-model llama-server load plan
 (`-ngl` / `--n-cpu-moe` / context window / KV quant) from a VRAM budget. It is a
 fork-specific Go port of the `domina-llm-eval` PowerShell planner
@@ -76,5 +76,5 @@ upstreaming.
 ## Connections
 
 - **Depends on:** `internal/perf` and `internal/logmon` (live GPU/VRAM telemetry in `vram.go`); `gopkg.in/yaml.v3`.
-- **Called by:** `llama-quartermaster.go` at startup — `EnsureConfig` regenerates the config before the router loads it, and `-watch-models`/reload paths use `CachedConfigHash`/`CurrentInputsHash` to detect changes. `internal/server/configapi.go` is the web-UI config API: it reads/writes sidecar overrides and settings, previews tunings via `EstimatePlan` + `ReadGgufMetadataCached`, and triggers `EnsureConfig` on save.
+- **Called by:** `quartermaster.go` at startup — `EnsureConfig` regenerates the config before the router loads it, and `-watch-models`/reload paths use `CachedConfigHash`/`CurrentInputsHash` to detect changes. `internal/server/configapi.go` is the web-UI config API: it reads/writes sidecar overrides and settings, previews tunings via `EstimatePlan` + `ReadGgufMetadataCached`, and triggers `EnsureConfig` on save.
 - Produces the YAML config consumed by `internal/config` / the router/scheduler; its `groups`/`listeners` output backs the fork's multi-listener + cross-port eviction features.

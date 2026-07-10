@@ -13,7 +13,7 @@ Manages the lifecycle of a single upstream llama.cpp subprocess: spawning it wit
 | `runtime_unix.go` | (`//go:build !windows`) Per-process teardown via process-group signals (`Setpgid`, SIGTERM/SIGKILL to `-pid`). |
 | `runtime_windows.go` | (`//go:build windows`) Per-process teardown via `taskkill /t` (and `/f`); sets `CREATE_NO_WINDOW`. |
 | `treecleanup_other.go` | (`//go:build !windows`) `SetupTreeCleanup` no-op — orphan cleanup handled by process groups. |
-| `treecleanup_windows.go` | (`//go:build windows`) `SetupTreeCleanup` assigns the process to a Job Object with `KILL_ON_JOB_CLOSE` so children die with llama-quartermaster. |
+| `treecleanup_windows.go` | (`//go:build windows`) `SetupTreeCleanup` assigns the process to a Job Object with `KILL_ON_JOB_CLOSE` so children die with quartermaster. |
 
 ## Important types & functions
 
@@ -26,7 +26,7 @@ Manages the lifecycle of a single upstream llama.cpp subprocess: spawning it wit
 - **TTL handling** (`process_command.go:269-288`) — when `config.UnloadAfter > 0`, a goroutine started on entry to `StateReady` ticks every second and calls `Stop` once the process has been idle (zero `inflight`, `lastUse` older than the TTL) for `UnloadAfter` seconds. Self-terminates when state leaves `StateReady`.
 - **`sendStopSignal`** (`process_command.go:519`) — runs the configured `CmdStop` (with `${PID}` substituted) if set, else calls `terminateProcessTree` (SIGTERM group / `taskkill /t`).
 - **`killProcess`** (`process_command.go:578`) — sends the graceful stop signal directly (not via context cancel, to avoid capping the grace period at `cmd.WaitDelay`), waits up to `gracefulTimeout`, then escalates to `killProcessTree` (SIGKILL group / `taskkill /f /t`), and finally waits on `cmdDone`.
-- **`ServeHTTP`** (`process_command.go:672`) — atomically loads the handler (503 `llama-quartermaster-error` if not ready), increments `inflight`, forwards, and records `lastUse` for TTL.
+- **`ServeHTTP`** (`process_command.go:672`) — atomically loads the handler (503 `quartermaster-error` if not ready), increments `inflight`, forwards, and records `lastUse` for TTL.
 
 ## Lifecycle
 
@@ -39,7 +39,7 @@ Manages the lifecycle of a single upstream llama.cpp subprocess: spawning it wit
 ## Gotchas / conventions
 
 - **Build tags.** `runtime_unix.go`/`treecleanup_other.go` are `!windows`; `runtime_windows.go`/`treecleanup_windows.go` are `windows`. `setProcAttributes`, `terminateProcessTree`, `killProcessTree`, and `SetupTreeCleanup` each have one definition per platform — keep the signatures identical across both.
-- **Process-tree cleanup differs by OS.** Unix puts the child in its own process group (`Setpgid`) and signals `-pid` to reap forked grandchildren. Windows has no process groups, so it shells out to `taskkill /t` (graceful) / `taskkill /f /t` (force). Additionally, `SetupTreeCleanup` on Windows uses a Job Object (`KILL_ON_JOB_CLOSE`) as a parent-side backstop so all children die if llama-quartermaster crashes; on Unix it is a no-op.
+- **Process-tree cleanup differs by OS.** Unix puts the child in its own process group (`Setpgid`) and signals `-pid` to reap forked grandchildren. Windows has no process groups, so it shells out to `taskkill /t` (graceful) / `taskkill /f /t` (force). Additionally, `SetupTreeCleanup` on Windows uses a Job Object (`KILL_ON_JOB_CLOSE`) as a parent-side backstop so all children die if quartermaster crashes; on Unix it is a no-op.
 - **`cmd.WaitDelay`** (default `cmdWaitDelay` = 10s) is the backstop that force-closes inherited stdout/stderr pipes after the process exits, so `cmd.Wait()` returns even when a forked grandchild holds the pipes open (the "v219 hang" bug). `killProcess` deliberately signals directly rather than cancelling the context so this delay is measured from process exit, not from the stop request.
 - **Command sanitization.** Argv comes from `config.ModelConfig.SanitizedCommand()` → shlex split → `[]string` argv (no shell). `CmdStop` is sanitized the same way via `config.SanitizeCommand` after `${PID}` substitution.
 - **Health check polling** waits 250ms before the first probe, then probes once per second through the reverse proxy until 200 or the deadline. `CheckEndpoint == "none"` disables it entirely.
@@ -50,7 +50,7 @@ Manages the lifecycle of a single upstream llama.cpp subprocess: spawning it wit
 - **Depends on `internal/config`** — a `ProcessCommand` is built from a `config.ModelConfig` (`Proxy`, `Cmd`/`SanitizedCommand`, `CmdStop`, `CheckEndpoint`, `Timeouts`, `Env`, `UnloadAfter`). Uses `logmon.Monitor` for process and proxy logging and emits `shared.ProcessStateChangeEvent` on transitions.
 - **Called by the router/scheduler** (`internal/router`, `internal/router/scheduler`) — the scheduler owns the set of `Process` instances and drives `Run`/`WaitReady`/`Stop`/`ServeHTTP`, including eviction.
 
-## Fork notes (llama-quartermaster)
+## Fork notes (quartermaster)
 
 **Live config swap + launched-args readout.** `config` is an `atomic.Pointer[ModelConfig]` (`liveConfig`), read once per use via `p.cfg()`. `SetConfig` swaps it for a hot reload; a running upstream keeps serving under the config it spawned with, and the new command/flags take effect on the next `doStart`. `LaunchedCmd()` returns the ACTUAL argv the live process spawned with (`launchedArgs`, set on `StateReady`, cleared on teardown) — what it's really serving under, which differs from `cfg()` after a `SetConfig` or a spawn-time offload rewrite. Surfaced up through `router.LaunchedCmd` → `modelStatus.runningCmd` so the UI shows the running args, not the pending config.
 

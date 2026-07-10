@@ -23,7 +23,7 @@ function getInitialThemeMode(): ThemeMode {
 // Persistent stores
 export const themeMode = persistentStore<ThemeMode>("theme-mode", getInitialThemeMode());
 // Drop a stale instance title left in localStorage by the old llama-swap builds
-// so the new default ("llama-quartermaster") shows through. A user-chosen title
+// so the new default ("quartermaster") shows through. A user-chosen title
 // is kept — only the old baked-in default is migrated.
 function migrateAppTitle(): void {
   if (typeof window === "undefined") return;
@@ -38,7 +38,7 @@ function migrateAppTitle(): void {
 }
 migrateAppTitle();
 
-export const appTitle = persistentStore<string>("app-title", "llama-quartermaster");
+export const appTitle = persistentStore<string>("app-title", "Quartermaster");
 
 const prefersDarkQuery = "(prefers-color-scheme: dark)";
 

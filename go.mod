@@ -1,4 +1,4 @@
-module github.com/radu0120/llama-quartermaster
+module github.com/quartermaster-labs/quartermaster
 
 go 1.26.1
 

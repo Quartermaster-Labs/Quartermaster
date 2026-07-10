@@ -1,6 +1,6 @@
 # New Router Migration TODO
 
-This document tracks the work needed for [cmd/newrouter/main.go](../cmd/newrouter/main.go) and [internal/router/](../internal/router/) to reach feature parity with the legacy entrypoint at [llama-quartermaster.go](../llama-quartermaster.go) plus [proxy/proxymanager.go](../proxy/proxymanager.go).
+This document tracks the work needed for [cmd/newrouter/main.go](../cmd/newrouter/main.go) and [internal/router/](../internal/router/) to reach feature parity with the legacy entrypoint at [quartermaster.go](../quartermaster.go) plus [proxy/proxymanager.go](../proxy/proxymanager.go).
 
 The work is split into phases so each can land and be tested independently. Earlier phases unblock later ones.
 
@@ -62,7 +62,7 @@ The package is split by concern across stub files already in place:
 | `log.go`     | `muxlog` combined logger; `/logs` handlers      | 4a                     |
 | `auth.go`    | `CreateAuthMiddleware`                          | 4d                     |
 | `filters.go` | request-body filter middleware                  | 4c                     |
-| `api.go`     | llama-quartermaster-specific API handlers                | 4b / Phase 5 / Phase 6 |
+| `api.go`     | quartermaster-specific API handlers                | 4b / Phase 5 / Phase 6 |
 | `ui.go`      | embedded UI serving                             | Phase 7                |
 
 ### Phase 4a — package scaffolding -- Completed.
@@ -213,7 +213,7 @@ The functions previously at 0 % (`handleListModels`, `handleMetrics`,
 ## Phase 8c - Review Part II (entrypoint comparison)
 
 A second pass comparing [cmd/newrouter/main.go](../cmd/newrouter/main.go) against
-the legacy [llama-quartermaster.go](../llama-quartermaster.go) + [proxy.New](../proxy/proxymanager.go#L104)
+the legacy [quartermaster.go](../quartermaster.go) + [proxy.New](../proxy/proxymanager.go#L104)
 surfaced four more gaps, all in logger setup.
 
 **Gap 4 — `LogToStdout` config ignored -- Resolved.**
@@ -242,13 +242,13 @@ priority — left open.
 **Gap 7 — PID debug log missing -- Resolved.**
 
 `cmd/newrouter/main.go` now logs `PID: %d` at debug level after `applyLogSettings`,
-matching [llama-quartermaster.go:71](../llama-quartermaster.go#L71).
+matching [quartermaster.go:71](../quartermaster.go#L71).
 
 ---
 
 ## Phase X (tbd) — Cutover
 
-- [ ] Swap `llama-quartermaster.go` to delegate to `cmd/newrouter` (or rename newrouter to be the primary entrypoint)
+- [ ] Swap `quartermaster.go` to delegate to `cmd/newrouter` (or rename newrouter to be the primary entrypoint)
 - [ ] Update `Makefile` build targets
 - [ ] Update docs / README references to the legacy binary
 - [ ] Remove `proxy/proxymanager*.go` and `gin-gonic` dependency once nothing imports them

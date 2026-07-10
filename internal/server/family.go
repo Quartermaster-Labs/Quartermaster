@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/radu0120/llama-quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/config"
 )
 
 // modelFamily returns a stable grouping key for a model: the gguf file it loads.

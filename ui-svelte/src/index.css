@@ -8,30 +8,30 @@
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: "JetBrains Mono", "IBM Plex Mono", "Cascadia Code", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 
-  /* Light — warm cream + Mistral flame orange. */
-  --color-background: rgba(250, 248, 243, 1);
-  --color-surface: rgba(255, 254, 251, 1);
+  /* Light — warm off-white + light cream surface + brown accent. */
+  --color-background: rgba(240, 230, 214, 1);
+  --color-surface: rgba(248, 240, 226, 1);
 
   /* text colors */
   --color-txtmain: rgba(26, 23, 20, 1);
   --color-txtsecondary: rgba(107, 98, 89, 1);
-  --color-navlink-active: rgba(250, 248, 243, 1);
+  --color-navlink-active: rgba(250, 246, 238, 1);
 
-  --color-primary: rgba(250, 80, 15, 1);
-  --color-primary-hover: rgba(210, 58, 0, 1);
-  --color-primary-active: rgba(178, 46, 0, 1);
-  --color-secondary: rgba(180, 120, 60, 0.1);
-  --color-secondary-hover: rgba(180, 120, 60, 0.18);
-  --color-secondary-active: rgba(180, 120, 60, 0.24);
+  --color-primary: rgba(120, 72, 40, 1);
+  --color-primary-hover: rgba(96, 56, 28, 1);
+  --color-primary-active: rgba(76, 44, 20, 1);
+  --color-secondary: rgba(120, 72, 40, 0.1);
+  --color-secondary-hover: rgba(120, 72, 40, 0.18);
+  --color-secondary-active: rgba(120, 72, 40, 0.24);
   --color-border: rgba(40, 30, 20, 0.18);
-  --color-btn-primary-text: rgba(250, 248, 243, 1);
+  --color-btn-primary-text: rgba(250, 246, 238, 1);
   --color-card-border: rgba(40, 30, 20, 0.1);
   --color-card-border-inner: rgba(40, 30, 20, 0.1);
   --color-error: rgba(192, 21, 47, 1);
   --color-success: rgba(42, 122, 76, 1);
   --color-warning: rgb(218, 134, 0);
   --color-info: rgba(107, 98, 89, 1);
-  --color-focus-ring: rgba(250, 80, 15, 0.4);
+  --color-focus-ring: rgba(120, 72, 40, 0.4);
   --color-select-caret: rgba(26, 23, 20, 0.8);
   --color-btn-border: rgba(40, 30, 20, 0.25);
   --color-dot: rgba(40, 30, 20, 0.06);
@@ -40,9 +40,10 @@
 @layer theme {
   /* over ride theme for dark mode */
   [data-theme="dark"] {
-    /* Dark — neutral near-black (~#18181a) + flame accent. */
-    --color-background: rgba(24, 24, 26, 1);
-    --color-surface: rgba(33, 33, 36, 1);
+    /* Dark — warm near-black (#22201e) + flame accent. Surface (#2c2a26)
+       sits just above the bg for cards/inputs. */
+    --color-background: rgba(34, 32, 30, 1);
+    --color-surface: rgba(44, 42, 38, 1);
     /* text colors */
     --color-txtmain: rgba(237, 237, 238, 1);
     --color-txtsecondary: rgba(161, 161, 166, 0.85);
@@ -74,16 +75,6 @@
   body {
     /* Retro look: mono everywhere by default. */
     @apply bg-background text-txtmain font-mono;
-  }
-
-  /* Evenly-spaced dot grid over the app background. Slightly lighter than the
-     base fill; layered so the solid color still backs it. Apply to full-screen
-     root layouts (playground, dashboard). */
-  .dot-bg {
-    background-color: var(--color-background);
-    background-image: radial-gradient(var(--color-dot) 1px, transparent 1px);
-    background-size: 22px 22px;
-    background-position: -1px -1px;
   }
 
   /* Form controls don't inherit font-family by default — force them onto the
@@ -175,6 +166,35 @@
   table th:not(:last-child),
   table td:not(:last-child) {
     @apply border-r border-card-border;
+  }
+
+  /* Inline citation chips — small superscript badges the chat renders for a
+     model's "[n]" source markers (see markdown.ts rehypeCitations). */
+  a.cite {
+    @apply inline-flex items-center justify-center align-super no-underline;
+    min-width: 1rem;
+    height: 1rem;
+    padding: 0 0.25rem;
+    margin: 0 0.05rem;
+    font-size: 0.6rem;
+    font-weight: 600;
+    line-height: 1;
+    border-radius: 9999px;
+    background: #000;
+    color: #fff;
+    border: 1px solid transparent;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  a.cite:hover {
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+  }
+
+  /* Wiki citation chips share the base `.cite` shape — same black/white look,
+     same orange hover — so an in-app help-article link reads no differently
+     from a web source. */
+  a.cite-wiki {
+    cursor: pointer;
   }
 
   /* Navigation Header */
@@ -289,6 +309,26 @@
     -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent 100%);
     mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent 100%);
   }
+  /* Bottom-only variant (no top fade). Shares the scrollFade action's
+     --fade-bottom; --fade-top is ignored. */
+  .scroll-fade-b {
+    --fade-bottom: 1.25rem;
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--fade-bottom)), transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - var(--fade-bottom)), transparent 100%);
+  }
+
+  /* Shared composer chrome — chat + image tabs both build their input box from
+     these, so a tweak to one (padding, hover ring, icon sizing) lands on both
+     instead of drifting apart. */
+  .composer-shell {
+    @apply flex flex-col gap-2 rounded-3xl border border-card-border bg-surface px-4 pt-3 pb-3 hover:ring-1 hover:ring-white/15 focus-within:border-primary transition-all;
+  }
+  .composer-textarea {
+    @apply w-full bg-transparent text-[0.8125rem] leading-relaxed resize-none focus:outline-none placeholder:text-txtsecondary pt-2 transition-[height] duration-200 ease-out;
+  }
+  .composer-icon-btn {
+    @apply inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40;
+  }
 
   /* Active-status feedback, shared by every "live" chat label (reasoning,
      generating, loading model, processing image, searching, compacting). A
@@ -317,6 +357,43 @@
       background-position: -200% 0;
     }
   }
+  /* White variant of reason-shimmer — for the "Thinking…" reasoning line, which
+     wants a bright-white sweep instead of the orange flame accent. */
+  .reason-shimmer-white {
+    background: linear-gradient(
+      90deg,
+      var(--color-txtsecondary) 0%,
+      var(--color-txtsecondary) 35%,
+      #fff 50%,
+      var(--color-txtsecondary) 65%,
+      var(--color-txtsecondary) 100%
+    );
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: reason-sweep 1.8s linear infinite;
+  }
+  /* Animated "..." after a live status word (Thinking...). Cycles 0→3 dots.
+     Fixed-width, left-aligned box so the growing dots never reflow siblings. */
+  .thinking-dots::after {
+    content: "";
+    display: inline-block;
+    width: 2ch;
+    text-align: left;
+    /* Opt the dots out of the parent shimmer's background-clip:text + transparent
+       fill, else the sweeping gradient makes them fade/vanish. Solid color. */
+    color: var(--color-txtsecondary);
+    -webkit-text-fill-color: var(--color-txtsecondary);
+    animation: thinking-dots 1.4s steps(1, end) infinite;
+  }
+  @keyframes thinking-dots {
+    0% { content: ""; }
+    25% { content: "."; }
+    50% { content: ".."; }
+    75% { content: "..."; }
+    100% { content: ""; }
+  }
   .reason-glow {
     color: var(--color-primary);
     animation: reason-glow-pulse 1.8s ease-in-out infinite;
@@ -334,8 +411,13 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .reason-shimmer,
+    .reason-shimmer-white,
+    .thinking-dots::after,
     .reason-glow {
       animation: none;
+    }
+    .thinking-dots::after {
+      content: "…";
     }
   }
 }

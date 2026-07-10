@@ -3,7 +3,7 @@ package autogen
 import (
 	"testing"
 
-	"github.com/radu0120/llama-quartermaster/internal/perf"
+	"github.com/quartermaster-labs/quartermaster/internal/perf"
 )
 
 func TestAutogen_freeVramGBFromStats(t *testing.T) {

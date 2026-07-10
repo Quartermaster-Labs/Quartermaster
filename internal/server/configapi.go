@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/radu0120/llama-quartermaster/internal/autogen"
-	"github.com/radu0120/llama-quartermaster/internal/config"
-	"github.com/radu0120/llama-quartermaster/internal/shared"
+	"github.com/quartermaster-labs/quartermaster/internal/autogen"
+	"github.com/quartermaster-labs/quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/shared"
 )
 
 // slotCachePathOrDefault echoes p, or resolves the default snapshot dir when
@@ -545,6 +545,18 @@ func estimateInputFromCmd(cmd string) autogen.EstimateInput {
 	return in
 }
 
+// mmprojPathFromCmd returns the "--mmproj" projector path in a rendered command,
+// or "" when the command loads no projector (non-vision model).
+func mmprojPathFromCmd(cmd string) string {
+	toks := strings.Fields(cmd)
+	for i := 0; i+1 < len(toks); i++ {
+		if toks[i] == "--mmproj" {
+			return toks[i+1]
+		}
+	}
+	return ""
+}
+
 func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) {
 	_, gguf, cmd, ok := s.resolveModelGguf(w, r)
 	if !ok {
@@ -605,6 +617,19 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 	if in.DraftGB == 0 {
 		if _, _, sizeGB := autogen.DraftSidecarForDir(filepath.Dir(gguf)); sizeGB > 0 {
 			in.DraftGB = sizeGB
+		}
+	}
+	// A "-vision" twin loads an mmproj projector whose weights + CLIP compute
+	// buffer cost VRAM the bare-LLM sizer is blind to (the -m gguf carries no
+	// vision info). Charge the same footprint generate-time bakes into the twin's
+	// Overhead (mmprojVramGB) so the editor bar and the status-rail breakdown size
+	// the vision load correctly — otherwise the sizer picks an unaffordably large
+	// ctx and the projector's VRAM is misattributed to the CUDA slice.
+	if in.MmprojGB == 0 {
+		if mp := mmprojPathFromCmd(cmd); mp != "" {
+			if fi, err := os.Stat(mp); err == nil {
+				in.MmprojGB = float64(fi.Size())/(1<<30) + gf.Settings.VisionOverheadGB
+			}
 		}
 	}
 

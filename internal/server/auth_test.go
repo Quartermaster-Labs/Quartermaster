@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/radu0120/llama-quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/config"
 )
 
 func TestServer_SanitizeAccessControlRequestHeaders(t *testing.T) {

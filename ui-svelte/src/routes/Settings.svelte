@@ -1,7 +1,16 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { SlidersHorizontal, HardDrive } from "lucide-svelte";
   import { getSettings, putSettings, putSlotCache, pickFolder, resetSettings, type AppSettings } from "../stores/api";
   import { latestGpu, latestSys } from "../stores/perf";
+
+  // Category side-nav — mirrors the playground settings modal's pattern.
+  type SettingsCat = "general" | "kvcache";
+  let cat = $state<SettingsCat>("general");
+  const cats: { id: SettingsCat; label: string; icon: typeof SlidersHorizontal }[] = [
+    { id: "general", label: "Memory & Eviction", icon: SlidersHorizontal },
+    { id: "kvcache", label: "KV Cache", icon: HardDrive },
+  ];
 
   // --- Global settings (VRAM budget + idle eviction + slot KV) ---
   let settings = $state<AppSettings | null>(null);
@@ -142,7 +151,7 @@
   onMount(loadSettings);
 </script>
 
-<div class="max-w-5xl mx-auto">
+<div class="flex flex-1 min-h-0">
   {#snippet hint(text: string)}
     <span
       class="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-card-border text-txtsecondary text-[0.55rem] leading-none cursor-help align-middle"
@@ -150,17 +159,35 @@
       aria-label={text}>?</span>
   {/snippet}
 
-  <h2 class="mb-4">Settings</h2>
-
   {#if !settingsAvailable}
-    <div class="card">
-      <p class="font-mono text-xs text-txtsecondary">
-        Settings editing requires the server to run with <span class="text-txtmain">-generate</span>.
-      </p>
+    <div class="flex-1 p-5">
+      <div class="card">
+        <p class="font-mono text-xs text-txtsecondary">
+          Settings editing requires the server to run with <span class="text-txtmain">-generate</span>.
+        </p>
+      </div>
     </div>
   {:else}
+    <!-- Category side-nav -->
+    <nav class="shrink-0 w-44 flex flex-col gap-0.5 py-3 border-r border-card-border bg-background/40">
+      {#each cats as c (c.id)}
+        {@const active = cat === c.id}
+        <button
+          onclick={() => (cat = c.id)}
+          class="w-full flex items-center gap-2.5 px-3 py-2 border-l-2 text-left transition-colors {active
+            ? 'border-primary text-txtmain bg-secondary/60'
+            : 'border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40'}"
+        >
+          <c.icon size={15} class="shrink-0" />
+          <span class="text-[0.8125rem]">{c.label}</span>
+        </button>
+      {/each}
+    </nav>
+
+    <div class="flex-1 min-w-0 overflow-y-auto pretty-scroll p-4">
+    {#if cat === "general"}
     <!-- Memory budget + idle eviction -->
-    <div class="card">
+    <div>
       <div class="flex items-center justify-between mb-3">
         <div class="flex items-center gap-2">
           <h6 class="!pb-0">Memory budget</h6>
@@ -271,9 +298,9 @@
         {/if}
       </div>
     </div>
-
+    {:else}
     <!-- Slot KV-cache persistence -->
-    <div class="card mt-4">
+    <div>
       <div class="flex items-center justify-between mb-3">
         <div class="flex items-center gap-2">
           <h6 class="!pb-0">KV-cache disk save</h6>
@@ -290,11 +317,11 @@
         <label class="flex flex-col gap-1 col-span-2">
           <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
             Directory
-            {@render hint("Folder for the .bin KV snapshots (also passed to llama-server as --slot-save-path). Defaults to a .cache folder next to the quartermaster binary.")}
+            {@render hint("Folder for the .bin KV snapshots (also passed to llama-server as --slot-save-path). Defaults to a .cache folder next to the Quartermaster binary.")}
           </span>
           <div class="flex gap-2">
             <input
-              type="text" bind:value={slotPath} placeholder="(.cache next to quartermaster)" disabled={!slotEnable}
+              type="text" bind:value={slotPath} placeholder="(.cache next to Quartermaster)" disabled={!slotEnable}
               class="flex-1 rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
             />
             <button
@@ -355,6 +382,8 @@
           <span class="font-mono text-[0.65rem] text-error">{slotErr}</span>
         {/if}
       </div>
+    </div>
+    {/if}
     </div>
   {/if}
 </div>

@@ -99,7 +99,7 @@ var loadingRemarks = []string{
 	"Populating the context with filler while you wait for actual content",
 	"Optimizing for BLEU score, which definitely correlates with making you laugh",
 	"Generating an embedding for each and every letter of the alphabet, individually",
-	"Coming soon: llama-quartermaster v2 with actual performance improvements. Probably.",
+	"Coming soon: quartermaster v2 with actual performance improvements. Probably.",
 	"Loading a model larger than your attention span",
 	"Performing a seance to invoke the spirit of Geoff Hinton",
 	"Did you know loading screens were invented to prevent users from smashing their monitors? Now you do.",

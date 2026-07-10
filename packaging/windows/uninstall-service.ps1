@@ -1,17 +1,17 @@
 <#
 .SYNOPSIS
-  Stop and remove the llama-quartermaster NSSM service. Self-elevating.
+  Stop and remove the quartermaster NSSM service. Self-elevating.
 
 .DESCRIPTION
   Double-click or run from any PowerShell prompt: relaunches itself elevated
   (UAC) if not already admin, then stops and removes the service via NSSM.
 
 .PARAMETER ServiceName
-  Service to remove. Default llama-quartermaster.
+  Service to remove. Default quartermaster.
 
 .PARAMETER RemoveLegacyTask
-  Also unregister the old 'llama-quartermaster' scheduled task (the pre-fork startup
-  service) and kill any running llama-quartermaster.exe.
+  Also unregister the old 'quartermaster' scheduled task (the pre-fork startup
+  service) and kill any running quartermaster.exe.
 
 .EXAMPLE
   .\uninstall-service.ps1
@@ -21,8 +21,8 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$ServiceName = 'llama-quartermaster',
-    [string]$LegacyTaskName = 'llama-quartermaster',
+    [string]$ServiceName = 'quartermaster',
+    [string]$LegacyTaskName = 'quartermaster',
     [switch]$RemoveLegacyTask,
     [switch]$NoPause
 )
@@ -61,7 +61,7 @@ if ($RemoveLegacyTask) {
     } else {
         Write-Host "Legacy task '$LegacyTaskName' not present." -ForegroundColor DarkGray
     }
-    Stop-Process -Name 'llama-quartermaster' -Force -ErrorAction SilentlyContinue
+    Stop-Process -Name 'quartermaster' -Force -ErrorAction SilentlyContinue
 }
 
 $nssm = Get-Command nssm -ErrorAction SilentlyContinue
@@ -73,8 +73,8 @@ if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
     & $nssm stop $ServiceName confirm 2>$null | Out-Null
     & $nssm remove $ServiceName confirm
     # Ensure the proxy is actually dead (nssm stop can leave a detached child).
-    Stop-Process -Name 'llama-quartermaster-windows-amd64' -Force -ErrorAction SilentlyContinue
-    Stop-Process -Name 'llama-quartermaster' -Force -ErrorAction SilentlyContinue
+    Stop-Process -Name 'quartermaster-windows-amd64' -Force -ErrorAction SilentlyContinue
+    Stop-Process -Name 'quartermaster' -Force -ErrorAction SilentlyContinue
     Write-Host "Removed and stopped." -ForegroundColor Green
 } else {
     Write-Host "Service '$ServiceName' not installed." -ForegroundColor DarkGray

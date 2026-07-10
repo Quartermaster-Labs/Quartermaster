@@ -429,3 +429,42 @@ describe("renderStreamingMarkdown", () => {
     expect(pendingHtml).toContain("<strong>bold</strong>");
   });
 });
+
+describe("inline citations", () => {
+  const web = { n: 1, title: "Source One", url: "https://example.com/a" };
+  const wiki = { n: 2, title: "Loading models", url: "", wikiId: "loading-models" };
+
+  it("turns a known web [n] into a target=_blank chip", () => {
+    const html = renderMarkdown("The sky is blue [1].", [web]);
+    expect(html).toContain('class="cite"');
+    expect(html).toContain('href="https://example.com/a"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain(">1</a>");
+  });
+
+  it("turns a known wiki [n] into a data-wiki-id chip, no target", () => {
+    const html = renderMarkdown("Load a model [2].", [wiki]);
+    expect(html).toContain("cite-wiki");
+    expect(html).toContain('data-wiki-id="loading-models"');
+    expect(html).not.toContain('target="_blank"');
+  });
+
+  it("leaves an unknown [n] as literal text", () => {
+    const html = renderMarkdown("Mystery [9] here.", [web]);
+    expect(html).toContain("[9]");
+    expect(html).not.toContain('class="cite"');
+  });
+
+  it("does not rewrite [n] inside code spans", () => {
+    const html = renderMarkdown("Use `arr[1]` here [1].", [web]);
+    // The code span keeps its literal [1]; only the prose one becomes a chip.
+    expect(html).toContain("arr[1]");
+    expect(html).toContain('class="cite"');
+  });
+
+  it("is a no-op when no citations are supplied", () => {
+    const html = renderMarkdown("Plain [1] text.");
+    expect(html).toContain("[1]");
+    expect(html).not.toContain('class="cite"');
+  });
+});

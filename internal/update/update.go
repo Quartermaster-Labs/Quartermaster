@@ -28,7 +28,7 @@ import (
 const (
 	pollInterval = 24 * time.Hour
 	httpTimeout  = 30 * time.Second
-	userAgent    = "llama-quartermaster-updater"
+	userAgent    = "quartermaster-updater"
 )
 
 // Status is the current check result, surfaced to the UI via /api/version.
@@ -180,7 +180,7 @@ func (c *Checker) DownloadAndLaunch(ctx context.Context) error {
 		return err
 	}
 
-	path := filepath.Join(os.TempDir(), fmt.Sprintf("llama-quartermaster-setup-%s.exe", sanitize(st.Latest)))
+	path := filepath.Join(os.TempDir(), fmt.Sprintf("quartermaster-setup-%s.exe", sanitize(st.Latest)))
 	if err := c.download(ctx, st.assetURL, path); err != nil {
 		return fmt.Errorf("download installer: %w", err)
 	}

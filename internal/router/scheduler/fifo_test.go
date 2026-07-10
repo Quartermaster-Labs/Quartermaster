@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/radu0120/llama-quartermaster/internal/config"
-	"github.com/radu0120/llama-quartermaster/internal/logmon"
-	"github.com/radu0120/llama-quartermaster/internal/process"
-	"github.com/radu0120/llama-quartermaster/internal/shared"
+	"github.com/quartermaster-labs/quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/logmon"
+	"github.com/quartermaster-labs/quartermaster/internal/process"
+	"github.com/quartermaster-labs/quartermaster/internal/shared"
 )
 
 // FIFO methods all run on the router's single run-loop goroutine, so these

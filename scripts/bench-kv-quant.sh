@@ -19,7 +19,7 @@
 set -euo pipefail
 
 model_key="qwen3.6-35b-a3b-ud-q4_k_xl-100k"
-config="$(dirname "$0")/../build/llama-quartermaster-windows/config/config.yaml"
+config="$(dirname "$0")/../build/quartermaster-windows/config/config.yaml"
 port="18098"
 words=24000   # ~30-32k tokens on this filler text, matching the real trace depth
 variants="f16 q8_0"

@@ -1,11 +1,11 @@
 #!/bin/bash
-# Install llama-quartermaster - download latest release binary from GitHub
-# Usage: ./install-llama-quartermaster.sh [version]
+# Install quartermaster - download latest release binary from GitHub
+# Usage: ./install-quartermaster.sh [version]
 #   version: release version number (e.g., "170") or "latest" (default)
 set -e
 
 VERSION="${1:-latest}"
-REPO="Quartermaster-Labs/llama-quartermaster"
+REPO="Quartermaster-Labs/quartermaster"
 
 mkdir -p /install/bin
 
@@ -28,7 +28,7 @@ VERSION="${VERSION#v}"
 
 # Resolve "latest" to actual version number
 if [ "$VERSION" = "latest" ]; then
-    echo "=== Resolving latest llama-quartermaster release ==="
+    echo "=== Resolving latest quartermaster release ==="
     VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
         | grep '"tag_name"' | head -1 | cut -d'"' -f4 | sed 's/^v//')
     if [ -z "$VERSION" ]; then
@@ -47,21 +47,21 @@ case "$ARCH" in
 esac
 
 # Download and extract
-URL="https://github.com/${REPO}/releases/download/v${VERSION}/llama-quartermaster_${VERSION}_linux_${ARCH}.tar.gz"
-echo "=== Downloading llama-quartermaster v${VERSION} ==="
+URL="https://github.com/${REPO}/releases/download/v${VERSION}/quartermaster_${VERSION}_linux_${ARCH}.tar.gz"
+echo "=== Downloading quartermaster v${VERSION} ==="
 echo "URL: $URL"
-curl -fSL -o /tmp/llama-quartermaster.tar.gz "$URL"
-tar -xzf /tmp/llama-quartermaster.tar.gz -C /install/bin/
-rm /tmp/llama-quartermaster.tar.gz
+curl -fSL -o /tmp/quartermaster.tar.gz "$URL"
+tar -xzf /tmp/quartermaster.tar.gz -C /install/bin/
+rm /tmp/quartermaster.tar.gz
 
 # Validate
-if [ ! -x "/install/bin/llama-quartermaster" ]; then
-    echo "FATAL: llama-quartermaster binary not found or not executable" >&2
+if [ ! -x "/install/bin/quartermaster" ]; then
+    echo "FATAL: quartermaster binary not found or not executable" >&2
     ls -la /install/bin/ >&2
     exit 1
 fi
 
-echo "$VERSION" > /install/llama-quartermaster-version
+echo "$VERSION" > /install/quartermaster-version
 
-echo "=== llama-quartermaster v${VERSION} installed ==="
-ls -la /install/bin/llama-quartermaster
+echo "=== quartermaster v${VERSION} installed ==="
+ls -la /install/bin/quartermaster

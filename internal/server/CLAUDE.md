@@ -260,4 +260,4 @@ Depends on:
 - `internal/autogen` — sidecar override/settings I/O, gguf metadata, load-plan estimation (config editor only).
 - `internal/cache`, `internal/ring` — capture cache and metrics ring buffer.
 
-Called by: `llama-quartermaster.go` (root entry) constructs the `Server` via `New`, wires `NewLoggers` and `SetAutogenAdmin`, and drives each listen address through `ServeListener`.
+Called by: `quartermaster.go` (root entry) constructs the `Server` via `New`, wires `NewLoggers` and `SetAutogenAdmin`, and drives each listen address through `ServeListener`.

@@ -9,7 +9,6 @@
   import PlaygroundStub from "./routes/PlaygroundStub.svelte";
   import PlaygroundApp from "./routes/PlaygroundApp.svelte";
   import ApiKeys from "./routes/ApiKeys.svelte";
-  import Settings from "./routes/Settings.svelte";
   import { enableAPIEvents } from "./stores/api";
   import { refreshInferenceKey } from "./lib/inferenceAuth";
   import { startPerfPolling } from "./stores/perf";
@@ -33,7 +32,6 @@
     "/performance": Observe,
     "/test": PlaygroundStub,
     "/api-keys": ApiKeys,
-    "/settings": Settings,
     "*": Dashboard,
   };
 
@@ -82,7 +80,7 @@
 {#if mode === "playground"}
   <PlaygroundApp />
 {:else if mode === "dashboard"}
-  <div class="flex h-screen dot-bg">
+  <div class="flex h-screen bg-background">
     <Sidebar />
 
     <div class="flex flex-col flex-1 min-w-0">

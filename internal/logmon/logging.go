@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/radu0120/llama-quartermaster/internal/event"
+	"github.com/quartermaster-labs/quartermaster/internal/event"
 )
 
 const DataEventID = 0x04

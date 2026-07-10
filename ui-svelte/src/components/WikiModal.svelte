@@ -3,10 +3,20 @@
   import { WIKI_ARTICLES, searchWiki, groupWikiArticles, type WikiArticle } from "../lib/wiki";
   import { renderMarkdown } from "../lib/markdown";
 
-  let { open = $bindable(false) }: { open?: boolean } = $props();
+  // `articleId` opens the modal directly to a given article (e.g. a chat wiki
+  // citation chip). Null = default to the first article.
+  let { open = $bindable(false), articleId = null }: { open?: boolean; articleId?: string | null } = $props();
 
   let query = $state("");
   let selectedId = $state(WIKI_ARTICLES[0].id);
+
+  // Jump to the requested article when the modal is opened with an articleId.
+  // Reads only open+articleId, so a later manual topic click won't be re-forced.
+  $effect(() => {
+    if (open && articleId && WIKI_ARTICLES.some((a) => a.id === articleId)) {
+      selectedId = articleId;
+    }
+  });
 
   // Filter the title list by the same scorer the model uses; empty query = all.
   let list = $derived<WikiArticle[]>(query.trim() ? searchWiki(query) : WIKI_ARTICLES);

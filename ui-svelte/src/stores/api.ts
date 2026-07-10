@@ -95,12 +95,16 @@ export function enableAPIEvents(enabled: boolean): void {
             const prevStarting = new Set(
               prevModelStatus.filter((m) => m.state === "starting").map((m) => m.id),
             );
-            const justStarting = newModels.some(
+            const nowStarting = newModels.filter(
               (m) => m.state === "starting" && !prevStarting.has(m.id),
             );
-            if (justStarting) {
+            if (nowStarting.length > 0) {
               liveTokens.set(null);
               backendMetrics.set({});
+              // Tally EVERY real load edge (button, playground, or API-triggered
+              // swap) so the quick-load ranking reflects actual usage, not only
+              // dashboard-button loads.
+              for (const m of nowStarting) recordLoad(m.id);
             }
             prevModelStatus = newModels;
             models.set(newModels);
@@ -234,7 +238,8 @@ export async function loadModel(model: string, signal?: AbortSignal): Promise<vo
     if (!response.ok) {
       throw new Error(`Failed to load model: ${response.status}`);
     }
-    recordLoad(model);
+    // Load tallying happens on the modelStatus "starting" edge (captures
+    // playground + API-swap loads too), so no manual recordLoad here.
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
       return;

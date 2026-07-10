@@ -6,8 +6,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/radu0120/llama-quartermaster/internal/logmon"
-	"github.com/radu0120/llama-quartermaster/internal/perf"
+	"github.com/quartermaster-labs/quartermaster/internal/logmon"
+	"github.com/quartermaster-labs/quartermaster/internal/perf"
 )
 
 // SampleFreeVramGB takes a single GPU telemetry snapshot and returns the free

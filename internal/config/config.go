@@ -163,7 +163,7 @@ type Config struct {
 	Peers PeerDictionaryConfig `yaml:"peers"`
 
 	// Listeners maps a listen address (e.g. ":1250") to the set of groups it
-	// exposes. When non-empty, llama-quartermaster binds one HTTP server per address,
+	// exposes. When non-empty, quartermaster binds one HTTP server per address,
 	// all sharing the single router/scheduler, and each address's catalog and
 	// request routing are restricted to the models of its groups. Empty =>
 	// legacy single --listen behaviour. See internal/config/listeners.go.
@@ -199,7 +199,7 @@ func DefaultSlotCachePath() string {
 	if exe, err := os.Executable(); err == nil {
 		return filepath.Join(filepath.Dir(exe), ".cache", "slotkv")
 	}
-	return filepath.Join(os.TempDir(), "llama-quartermaster", "slotkv")
+	return filepath.Join(os.TempDir(), "quartermaster", "slotkv")
 }
 
 // RoutingConfig is the canonical, normalized routing/scheduling configuration.

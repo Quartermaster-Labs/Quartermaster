@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Install llama-quartermaster as a Windows service via NSSM. Self-elevating.
+  Install quartermaster as a Windows service via NSSM. Self-elevating.
 
 .DESCRIPTION
   The proxy binary has no Service Control Manager handler, so it can't be run by
@@ -16,7 +16,7 @@
   To remove: run uninstall-service.ps1 in this folder.
 
 .PARAMETER ExePath
-  Path to the proxy binary. Defaults to <bundle>\llama-quartermaster-windows-amd64.exe.
+  Path to the proxy binary. Defaults to <bundle>\quartermaster-windows-amd64.exe.
 
 .PARAMETER Config
   Config path (-config). Defaults to <bundle>\config\config.yaml.
@@ -36,7 +36,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$ServiceName = 'llama-quartermaster',
+    [string]$ServiceName = 'quartermaster',
     [string]$ExePath,
     [string]$Config,
     [string]$Generate,
@@ -85,7 +85,7 @@ if (-not $scriptDir) { $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.D
 $root = Split-Path -Parent (Split-Path -Parent $scriptDir)
 
 # Default paths from the bundle layout when not supplied.
-if (-not $ExePath)  { $ExePath = Join-Path $root 'llama-quartermaster-windows-amd64.exe' }
+if (-not $ExePath)  { $ExePath = Join-Path $root 'quartermaster-windows-amd64.exe' }
 if (-not $Config)   { $Config  = Join-Path $root 'config\config.yaml' }
 if (-not $PSBoundParameters.ContainsKey('Generate')) {
     $g = Join-Path $root 'config\quartermaster-generate.yaml'
@@ -126,8 +126,8 @@ if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
 # NSSM won't create the log dir; make it first.
 $logDir = Join-Path $workDir 'logs'
 New-Item -ItemType Directory -Force $logDir | Out-Null
-& $nssm set $ServiceName AppStdout (Join-Path $logDir 'llama-quartermaster.out.log')
-& $nssm set $ServiceName AppStderr (Join-Path $logDir 'llama-quartermaster.err.log')
+& $nssm set $ServiceName AppStdout (Join-Path $logDir 'quartermaster.out.log')
+& $nssm set $ServiceName AppStderr (Join-Path $logDir 'quartermaster.err.log')
 # Autogen scans GGUF headers on first start; allow time before SCM gives up.
 & $nssm set $ServiceName AppStopMethodConsole 15000
 

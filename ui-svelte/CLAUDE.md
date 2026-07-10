@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`ui-svelte` is the single-page web app for llama-quartermaster, served by the Go server under `/ui/`. **One bundle, port-gated into two apps** (`App.svelte` `onMount` fetches `GET /api/mode`):
+`ui-svelte` is the single-page web app for quartermaster, served by the Go server under `/ui/`. **One bundle, port-gated into two apps** (`App.svelte` `onMount` fetches `GET /api/mode`):
 
 - **Operator dashboard** (main listen port): model catalog and loading, per-model config tuning, live activity/metrics/logs, GPU memory, API-key management.
 - **Playground** (separate `-playground-port`): a login-gated, per-user interactive app (chat, images, speech, transcription, rerank, load testing) with **server-backed** chat history + prefs. Rendered by `PlaygroundApp`, NOT mounted inside the dashboard.
@@ -48,7 +48,7 @@ From the repo root, **`make test-ui`** runs `npm ci && npm run check && npm test
 Routing is hash-based (`svelte-spa-router`). The router table lives in `App.svelte`:
 
 - **`/` — Dashboard** (`routes/Dashboard.svelte`): landing page; the shared live-models panel (`components/ActiveModelsPanel.svelte` — launch params + `InferenceFeedback` for whatever is loaded) plus the quick-load picker (ranked by per-**family** load tally, so loading any variant floats the family up). No GPU/activity duplication of the StatusRail/Observe; the config knobs live on `/settings`.
-- **`/settings` — Settings** (`routes/Settings.svelte`): the global config knobs — memory budget (target VRAM / headroom / max RAM), **idle unload (ttl)**, and the experimental slot KV-cache disk-save section. All 501-gated on `-generate`; each save regenerates the config + hot-reloads.
+- **Settings** (`components/SettingsModal.svelte`, wrapping `routes/Settings.svelte`): not a route — opened as a modal from the Sidebar (same pattern as Help/`WikiModal`). Holds the global config knobs — memory budget (target VRAM / headroom / max RAM), **idle unload (ttl)**, and the experimental slot KV-cache disk-save section. All 501-gated on `-generate`; each save regenerates the config + hot-reloads.
 - **`/models`, `/models/:category` — Models** (`routes/Models.svelte`): full model catalog, sectioned by swap group / listener; load/unload and the per-model config editor (cogwheel → `ModelConfigModal`). `:category` filters via `modelUtils` categories (drives the sidebar Models sub-menu).
 - **`/observe`, `/logs`, `/activity`, `/performance` — Observe** (`routes/Observe.svelte`): a single tabbed page with **Activity**, **Logs**, **Performance**, and **Context** tabs. Context (`Context.svelte`) is itself sub-tabbed: **KV Cache** (`KvCache.svelte`) + **Prompt Canonicalization** (`Canon.svelte`). Legacy `/logs`, `/activity`, `/performance` deep-links preselect the matching tab.
 - **`/api-keys` — API Keys** (`routes/ApiKeys.svelte`): create / scope / reveal / delete inference API keys (only when the server runs with `-generate`).
@@ -67,7 +67,7 @@ Backend communication is centralized in `src/stores/api.ts`, with shared types i
 
 - **Svelte 5 runes** throughout — `$state`, `$derived`, `$effect`, `$props`; stores are read with the `$store` auto-subscription. Components are mounted with `mount()` (`main.ts`), not the legacy constructor API.
 - **Component organization:** generic widgets live in `src/components/`; the playground's mode-specific interfaces and helpers are grouped under `src/components/playground/`. Pages live in `src/routes/` and stay thin, delegating to components and stores.
-- **Fork-specific UI** (added on top of upstream llama-quartermaster): the per-model config editor (`ModelConfigModal.svelte`, dynamic ctx / VRAM-target / variant tuning), the shared live-models panel (`ActiveModelsPanel.svelte`, used by both `Dashboard` and `ModelsPanel`), the global Settings page (`Settings.svelte`), live metrics & activity (`ActivityStats.svelte`, `StatusRail.svelte`, `InferenceFeedback.svelte`, live-token readout), VRAM gauge, request/response inspector (`CaptureDialog.svelte`), API-key page, and the standalone multi-mode playground.
+- **Fork-specific UI** (added on top of upstream quartermaster): the per-model config editor (`ModelConfigModal.svelte`, dynamic ctx / VRAM-target / variant tuning), the shared live-models panel (`ActiveModelsPanel.svelte`, used by both `Dashboard` and `ModelsPanel`), the global Settings modal (`SettingsModal.svelte`), live metrics & activity (`ActivityStats.svelte`, `StatusRail.svelte`, `InferenceFeedback.svelte`, live-token readout), VRAM gauge, request/response inspector (`CaptureDialog.svelte`), API-key page, and the standalone multi-mode playground.
 - **Playground feature components** (`src/components/playground/`):
   - `ChatInterface.svelte` — chat with **vision** (paperclip image attach → `ContentPart`/`getImageUrls`), **Rewrite mode** (`sendRewrite` + side-by-side `RewriteDiff.svelte` via `lib/wordDiff.ts`), **web search** (SearXNG tool-calling, `lib/webSearch.ts` → `/api/websearch`), a live KV context-usage bar, and **auto-compaction** (`lib/chatCompact.ts`: `summarizeConversation`/`generateTitle`, `COMPACT_AT`/`KEEP_RECENT`).
   - `ImageInterface.svelte` — full SD image-gen UI: txt2img/img2img (`ImageGenMode`), denoise/upscale, hires (`enable_hr`), reference images (`extra_images`, Kontext), per-model defaults, style presets, seed modes.

@@ -5,7 +5,8 @@
   import {
     selectedModelStore,
     selectedTabStore,
-    systemPromptStore,
+    activeSystemPresetStore,
+    systemPresetsStore,
     temperatureStore,
     maxTokensStore,
     reasoningBudgetStore,
@@ -32,10 +33,11 @@
   import { playgroundStores } from "../../stores/playgroundActivity";
   import { getTextContent, getImageUrls } from "../../lib/types";
   import { harmonyToThink } from "../../lib/reasoning";
+  import { buildBasePrompt } from "../../lib/systemPrompt";
   import type { ChatMessage, ContentPart, ToolCall } from "../../lib/types";
-  import { Settings, Paperclip, Square, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle, Eye } from "lucide-svelte";
+  import { Paperclip, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle, Eye } from "lucide-svelte";
   import ChatMessageComponent from "./ChatMessage.svelte";
-  import ModelSelector from "./ModelSelector.svelte";
+  import Composer from "./Composer.svelte";
   import { modelCategory } from "../../lib/modelUtils";
   import { scrollFade } from "../../lib/scrollFade";
 
@@ -165,20 +167,18 @@
   let abortController = $state<AbortController | null>(null);
   let messagesContainer: HTMLDivElement | undefined = $state();
   let inputEl: HTMLTextAreaElement | undefined = $state();
-  // Composer only grows while focused; blur collapses it back to normal size.
-  let inputFocused = $state(false);
   let rewriteFocused = $state(false);
   let rewriteEl: HTMLTextAreaElement | undefined = $state();
   let showSettings = $state(false);
-  // System-prompt editor modal: edit a draft, commit to the store on Save.
+  // Per-chat instructions editor: edit a draft, commit to the active session on Save.
   let showSysPrompt = $state(false);
   let sysPromptDraft = $state("");
   function openSysPrompt() {
-    sysPromptDraft = get(systemPromptStore);
+    sysPromptDraft = sessionById($activeChatId)?.instructions ?? "";
     showSysPrompt = true;
   }
   function saveSysPrompt() {
-    systemPromptStore.set(sysPromptDraft);
+    patchSession($activeChatId, { instructions: sysPromptDraft });
     showSysPrompt = false;
   }
   let attachedImages = $state<string[]>([]);
@@ -313,21 +313,17 @@
     }
   });
 
-  // Auto-grow the composer textarea; tracks userInput so it also shrinks back
-  // after a send clears the value. Guard scrollHeight === 0 (tab is display:none
-  // at mount) — otherwise the height locks at 0px and never recovers when the
-  // tab is shown, leaving an invisible, untypeable textarea.
+  // Auto-grow the composer textarea by content only — sized on focus/blur made
+  // it visibly jump on click even with no text, which read as a layout glitch.
+  // Tracks userInput so it also shrinks back after a send clears the value.
+  // Guard scrollHeight === 0 (tab is display:none at mount) — otherwise the
+  // height locks at 0px and never recovers when the tab is shown, leaving an
+  // invisible, untypeable textarea. CSS min-h-[3rem] on the textarea keeps it
+  // from ever measuring smaller than the resting size.
   $effect(() => {
     userInput;
-    inputFocused;
     $selectedTabStore; // re-run when this tab becomes visible again
     if (inputEl) {
-      // Collapse to normal size when the user clicks away; grow to fit content
-      // (up to the max) only while actively editing. CSS transitions the height.
-      if (!inputFocused) {
-        inputEl.style.height = "3rem";
-        return;
-      }
       inputEl.style.height = "auto";
       if (inputEl.scrollHeight > 0) {
         inputEl.style.height = Math.min(inputEl.scrollHeight, 480) + "px";
@@ -458,31 +454,16 @@
   // deliberately NOT here — it's appended at the very END of the system block (see
   // currentDateLine) so this prefix stays byte-identical across a midnight rollover
   // and the KV cache isn't invalidated once a day.
-  function basePrompt(searchAvailable: boolean, wikiAvailable: boolean): string {
-    const lines = [
-      "You are a capable, knowledgeable assistant running locally on the user's own machine.",
-      "You are served by llama-quartermaster: an all-in-one local inference engine (a llama.cpp/stable-diffusion.cpp front-end) that discovers the user's local model files, auto-computes each model's context/GPU-offload/KV settings, and hot-swaps models in and out of VRAM on demand. The user reaches you through its built-in web playground. There is no cloud service behind you — weights, prompts, and conversations stay on this machine.",
-      "If you are unsure or do not know something, say so plainly — never fabricate facts, citations, numbers, or URLs, and clearly separate what you know from what you're inferring or guessing.",
-      "Answer directly and lead with the point. Keep answers concise and skip filler and boilerplate caveats; expand only when the topic genuinely needs it or the user asks.",
-      "Follow the user's instructions precisely and match their language and tone. If a request is genuinely ambiguous, ask one short clarifying question rather than guessing.",
-      "Work through multi-step or tricky problems carefully before committing to a final answer, and double-check math, logic, and edge cases.",
-      "Default to clear, flowing prose in plain paragraphs, the way a thoughtful person writes — this is your normal voice. Do NOT reflexively reach for bullet points, numbered lists, or headings; most answers read better as a few well-formed sentences. Reserve Markdown structure for when it genuinely earns its place: real step-by-step instructions, comparisons across several items, or content that is inherently a list. Always use fenced code blocks tagged with the language for code, and LaTeX for math. When you write code, make it complete and runnable, and call out any key assumptions in prose.",
-      "Do not moralize, lecture, or refuse reasonable requests; be honest and helpful even on difficult or sensitive topics.",
-    ];
-    if (searchAvailable) {
-      lines.push(
-        "A web search tool is available to you — use it proactively, without being asked. Search whenever a question touches anything you can't verify from memory: current events, prices, schedules, releases, specs, statistics, names, dates, or any fact that may have changed or that you're not fully certain of. Prefer searching over answering from possibly-stale or half-remembered knowledge, and run a quick check even when you think you know — it's cheap and stops confident mistakes. Default to searching when unsure rather than guessing. Don't claim you searched if you didn't.",
-      );
-      lines.push(
-        "When a search is time-sensitive (weather, news, prices, \"current\"/\"latest\" anything), put the actual date (given at the end of this prompt) into the query (e.g. \"Copenhagen weather June 27 2026\") instead of vague words like \"current\" or \"today\", which return stale results. You can use the user's timezone (given at the end) to infer their approximate location and make location-dependent queries more useful.",
-      );
-    }
-    if (wikiAvailable) {
-      lines.push(
-        "A wiki_search tool gives you the llama-quartermaster help wiki. Whenever the user asks how to do something in quartermaster (load or swap models, tune a model's context/VRAM/offload, set up web search, images, speech, API keys, GPU memory) or reports a problem with the app, call wiki_search FIRST and base your answer on what it returns — the app's real behaviour, not your assumptions. Don't invent menus, buttons, or settings; if the wiki doesn't cover it, say so.",
-      );
-    }
-    return lines.join(" ");
+  function basePrompt(searchAvailable: boolean, wikiAvailable: boolean, modelId: string): string {
+    // Persona + tool sub-prompts, all from the active system-prompt selection
+    // (built-in default, a named preset, or none). A preset bundles its own tool
+    // prompts; fixed options use the shipped defaults. Tool directives are only
+    // appended when the matching tool is on, so the choice never breaks them.
+    return buildBasePrompt(get(activeSystemPresetStore), get(systemPresetsStore), {
+      search: searchAvailable,
+      wiki: wikiAvailable,
+      model: modelId,
+    });
   }
 
   // currentDateLine is the ONLY volatile part of the built-in system prompt.
@@ -667,8 +648,8 @@
     const genStart = Date.now();
 
     const sys = [
-      basePrompt(webEnabled, wikiEnabled),
-      $systemPromptStore.trim(),
+      basePrompt(webEnabled, wikiEnabled, modelId),
+      sessionById(id)?.instructions?.trim(),
       curSummary && `Summary of earlier conversation:\n${curSummary}`,
       // Rewrite turns keep the full conversation for context (setting, characters,
       // goals discussed earlier) but add the transform-tool directive on top.
@@ -712,6 +693,12 @@
     let searchCount = 0;
     let lastSearchAt = 0;
     const searchCache = new Map<string, { text: string; sources: { title: string; url: string }[] }>();
+    // Inline-citation registry: web results are numbered globally across the turn
+    // ([1], [2], …) so the model can cite them; this maps each number to its source.
+    // `citeOffset` counts ALL results fed (even url-less ones) so the numbers stay
+    // aligned with what formatSearchResults printed.
+    const citations: { n: number; title: string; url: string; wikiId?: string }[] = [];
+    let citeOffset = 0;
 
     try {
       // model→search→model until the model stops calling tools or the per-turn
@@ -824,6 +811,7 @@
         const duringReasoning = isReasoning;
         const reasoningAt = (lastMsg?.reasoning_content || "").length;
         for (const tc of toolCalls) {
+          const citesBefore = citeOffset; // did this call add numbered sources?
           let resultText: string;
           let sources: { title: string; url: string }[] = [];
           let query = "";
@@ -836,7 +824,18 @@
                 resultText = `Wiki lookup limit reached (${maxWiki} per turn). Answer with what you have.`;
               } else {
                 wikiCount++;
-                resultText = formatWikiResults(query, searchWiki(query));
+                const wikiResults = searchWiki(query);
+                // Reuse an earlier citation number for an article already cited
+                // this turn (repeat wiki_search hitting the same doc), instead of
+                // minting a second number for the same source.
+                const numbers = wikiResults.map((a) => {
+                  const existing = citations.find((c) => c.wikiId === a.id);
+                  if (existing) return existing.n;
+                  const n = ++citeOffset;
+                  citations.push({ n, title: a.title, url: "", wikiId: a.id });
+                  return n;
+                });
+                resultText = formatWikiResults(query, wikiResults, numbers);
               }
             } else {
             const cached = dedupe ? searchCache.get(query) : undefined;
@@ -854,7 +853,18 @@
               const results = await searxngSearch($searxngUrlStore, query, signal);
               lastSearchAt = Date.now();
               searchCount++;
-              resultText = formatSearchResults(query, results);
+              // Reuse an earlier citation number for a URL already cited this turn
+              // (different queries surfacing the same page), instead of minting a
+              // second number for the same source.
+              const numbers = results.map((r) => {
+                if (!r.url) return ++citeOffset;
+                const existing = citations.find((c) => c.url === r.url);
+                if (existing) return existing.n;
+                const n = ++citeOffset;
+                citations.push({ n, title: r.title || r.url, url: r.url });
+                return n;
+              });
+              resultText = formatSearchResults(query, results, numbers);
               sources = results.filter((r) => r.url).map((r) => ({ title: r.title || r.url, url: r.url }));
               if (dedupe) searchCache.set(query, { text: resultText, sources });
             }
@@ -863,8 +873,15 @@
             if (e instanceof Error && e.name === "AbortError") throw e;
             resultText = `${tc.function.name === "wiki_search" ? "Wiki lookup" : "Search"} failed: ${e instanceof Error ? e.message : String(e)}`;
           }
-          apiTail.push({ role: "tool", tool_call_id: tc.id, content: resultText });
-          patchLast(id, (m) => ({ ...m, searches: [...(m.searches ?? []), { query, results: resultText, at, reasoningAt, duringReasoning, sources }] }));
+          // Cite reminder co-located with the numbered results — far higher
+          // compliance than the lone system-prompt line. Only when this call
+          // actually produced numbered sources. Fed to the model, not shown.
+          const citeHint = citeOffset > citesBefore
+            ? `\n\nWhen you use any of the above in your answer, cite it inline with its bracketed number (e.g. [${citesBefore + 1}]) right after the statement.`
+            : "";
+          apiTail.push({ role: "tool", tool_call_id: tc.id, content: resultText + citeHint });
+          const kind = tc.function.name === "wiki_search" ? "wiki" : "web";
+          patchLast(id, (m) => ({ ...m, citations: [...citations], searches: [...(m.searches ?? []), { query, results: resultText, kind, at, reasoningAt, duringReasoning, sources }] }));
         }
         isSearching = false;
         // loop: next round lets the model read the results and respond.
@@ -1093,19 +1110,19 @@
       <div class="flex items-center gap-2 mb-2 shrink-0 w-full max-w-3xl mx-auto px-2">
         <span class="inline-flex items-center gap-1.5 text-xs italic">
           <span class="w-1.5 h-1.5 bg-primary rounded-full reason-glow"></span>
-          <span class="reason-shimmer font-medium">Compacting conversation…</span>
+          <span class="reason-shimmer-white font-medium">Compacting conversation…</span>
         </span>
       </div>
     {/if}
     <!-- Messages area — scrolls across the full width; content centered within. -->
     <div
-      class="flex-1 min-h-0 overflow-y-auto pretty-scroll scroll-fade-y mb-4"
+      class="flex-1 min-h-0 overflow-y-auto pretty-scroll scroll-fade-b mb-4"
       bind:this={messagesContainer}
       onscroll={handleMessagesScroll}
       onwheel={(e) => { if (e.deltaY < 0) userScrolledUp = true; }}
       use:scrollFade
     >
-      <div class="w-full max-w-3xl mx-auto px-2 {messages.length === 0 ? 'h-full' : ''}">
+      <div class="w-full max-w-3xl mx-auto px-2 pt-4 {messages.length === 0 ? 'h-full' : ''}">
       {#if messages.length === 0}
         <div class="h-full flex flex-col items-center justify-center gap-3 text-txtsecondary">
           <MessagesSquare class="w-10 h-10 opacity-40" strokeWidth={1.5} />
@@ -1127,6 +1144,7 @@
             reasoningTimeMs={message.reasoningTimeMs}
             genTimeMs={message.genTimeMs}
             searches={message.searches}
+            citations={message.citations}
             rewriteInstruction={message.rewriteInstruction}
             rewriteOriginal={message.rewriteOriginal}
             isStreaming={genId === $activeChatId && idx === messages.length - 1 && message.role === "assistant"}
@@ -1169,71 +1187,56 @@
         </div>
       {/if}
 
-      <!-- Settings popover -->
-      {#if showSettings}
-        <div
-          class="absolute bottom-full right-0 mb-2 w-80 z-20 flex flex-col gap-4 p-4 rounded-lg border border-card-border bg-surface shadow-lg text-[0.8125rem]"
-        >
-          {#snippet tip(text: string)}
-            <span class="inline-flex shrink-0 cursor-help text-txtsecondary/70 hover:text-txtsecondary" title={text}>
-              <HelpCircle class="w-3.5 h-3.5" />
-            </span>
-          {/snippet}
-          <div class="flex items-center justify-between">
-            <span class="font-medium text-txtmain">Settings</span>
-            <button
-              class="inline-flex items-center justify-center p-1 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
-              onclick={() => (showSettings = false)}
-              title="Close"
-            >
-              <X class="w-4 h-4" />
-            </button>
-          </div>
+      {#snippet chatSettingsPanel()}
+        {#snippet tip(text: string)}
+          <span class="inline-flex shrink-0 cursor-help text-txtsecondary/70 hover:text-txtsecondary" title={text}>
+            <HelpCircle class="w-3.5 h-3.5" />
+          </span>
+        {/snippet}
 
-          <div class="flex flex-col gap-1.5">
-            <label class="flex justify-between text-xs uppercase tracking-wide text-txtsecondary" for="temperature">
-              <span class="flex items-center gap-1.5">Temperature {@render tip("Higher gives the model more freedom to be creative and varied; lower keeps it focused and predictable.")}</span>
-              <span class="text-txtmain normal-case">{TEMP_LABELS[nearestTempIdx($temperatureStore)]}</span>
-            </label>
-            <input
-              id="temperature"
-              type="range"
-              min="0"
-              max={TEMP_STEPS.length - 1}
-              step="1"
-              class="w-full accent-primary"
-              value={nearestTempIdx($temperatureStore)}
-              oninput={(e) => temperatureStore.set(TEMP_STEPS[+e.currentTarget.value])}
-              disabled={isStreaming}
-            />
-            <div class="flex justify-between text-xs text-txtsecondary">
-              <span>Precise</span>
-              <span>Creative</span>
-            </div>
-          </div>
-
-          <div class="flex flex-col gap-1">
-            <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">System Prompt {@render tip("Standing instructions that shape the model's tone and behaviour for the whole chat.")}</span>
-            <button
-              type="button"
-              class="w-full text-left px-2.5 py-1.5 rounded-md border border-card-border bg-surface hover:border-primary transition-colors {$systemPromptStore.trim() ? 'text-txtmain' : 'text-txtsecondary'}"
-              onclick={openSysPrompt}
-            >
-              <span class="line-clamp-2">{$systemPromptStore.trim() || "You are a helpful assistant..."}</span>
-            </button>
-          </div>
-
-          <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-reasoning">
-            <span class="flex items-center gap-1.5"><Brain class="w-3.5 h-3.5" /> Reasoning {@render tip("Let the model think before answering (for reasoning-capable models).")}</span>
-            <input id="chat-reasoning" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$reasoningStore} />
+        <div class="flex flex-col gap-1.5">
+          <label class="flex justify-between text-xs uppercase tracking-wide text-txtsecondary" for="temperature">
+            <span class="flex items-center gap-1.5">Temperature {@render tip("Higher gives the model more freedom to be creative and varied; lower keeps it focused and predictable.")}</span>
+            <span class="text-txtmain normal-case">{TEMP_LABELS[nearestTempIdx($temperatureStore)]}</span>
           </label>
-
-          <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-websearch">
-            <span class="flex items-center gap-1.5"><Search class="w-3.5 h-3.5" /> Web Search {@render tip("Let the model search the web (via SearXNG) for fresh facts. Needs a tool-calling model. URL + rate limits are in the side-rail Settings.")}</span>
-            <input id="chat-websearch" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$webSearchStore} />
-          </label>
+          <input
+            id="temperature"
+            type="range"
+            min="0"
+            max={TEMP_STEPS.length - 1}
+            step="1"
+            class="w-full accent-primary"
+            value={nearestTempIdx($temperatureStore)}
+            oninput={(e) => temperatureStore.set(TEMP_STEPS[+e.currentTarget.value])}
+            disabled={isStreaming}
+          />
+          <div class="flex justify-between text-xs text-txtsecondary">
+            <span>Precise</span>
+            <span>Creative</span>
+          </div>
         </div>
-      {/if}
+
+        <div class="flex flex-col gap-1">
+          <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">Instructions {@render tip("Standing instructions for THIS chat only, layered on top of the built-in prompt. Saved with the conversation.")}</span>
+          <button
+            type="button"
+            class="w-full text-left px-2.5 py-1.5 rounded-md border border-card-border bg-surface hover:border-primary transition-colors {activeSession?.instructions?.trim() ? 'text-txtmain' : 'text-txtsecondary'}"
+            onclick={openSysPrompt}
+          >
+            <span class="line-clamp-2">{activeSession?.instructions?.trim() || "Add instructions for this chat…"}</span>
+          </button>
+        </div>
+
+        <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-reasoning">
+          <span class="flex items-center gap-1.5"><Brain class="w-3.5 h-3.5" /> Reasoning {@render tip("Let the model think before answering (for reasoning-capable models).")}</span>
+          <input id="chat-reasoning" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$reasoningStore} />
+        </label>
+
+        <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-websearch">
+          <span class="flex items-center gap-1.5"><Search class="w-3.5 h-3.5" /> Web Search {@render tip("Let the model search the web (via SearXNG) for fresh facts. Needs a tool-calling model. URL + rate limits are in the side-rail Settings.")}</span>
+          <input id="chat-websearch" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$webSearchStore} />
+        </label>
+      {/snippet}
 
       <!-- System-prompt editor: roomier modal to write/save the standing prompt. -->
       {#if showSysPrompt}
@@ -1244,14 +1247,15 @@
             role="presentation"
           >
             <div class="flex items-center justify-between">
-              <span class="font-medium text-txtmain">System Prompt</span>
+              <span class="font-medium text-txtmain">Instructions</span>
               <button class="inline-flex items-center justify-center p-1 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors" onclick={() => (showSysPrompt = false)} title="Close">
                 <X class="w-4 h-4" />
               </button>
             </div>
+            <p class="text-xs text-txtsecondary">Standing instructions for this chat only — layered on top of the built-in prompt.</p>
             <textarea
               class="w-full h-64 px-3 py-2 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary resize-none text-sm"
-              placeholder="You are a helpful assistant..."
+              placeholder="e.g. Answer as a senior Rust engineer. Be terse."
               bind:value={sysPromptDraft}
             ></textarea>
             <div class="flex justify-end gap-2">
@@ -1321,7 +1325,7 @@
       {/if}
 
       <!-- Composer -->
-      <div class="flex flex-col gap-2 rounded-3xl border border-card-border bg-surface px-4 pt-3 pb-3 hover:ring-1 hover:ring-white/15 focus-within:border-primary transition-all">
+      {#snippet chatTopExtra()}
         {#if $rewriteStore}
           <div class="flex items-start gap-2 pb-2 border-b border-card-border">
             <PenLine class="w-3.5 h-3.5 mt-1.5 shrink-0 text-primary" />
@@ -1337,80 +1341,65 @@
             ></textarea>
           </div>
         {/if}
-        <textarea
-          bind:this={inputEl}
-          class="w-full bg-transparent text-[0.8125rem] leading-relaxed resize-none focus:outline-none placeholder:text-txtsecondary pretty-scroll min-h-[3rem] max-h-[30rem] transition-[height] duration-200 ease-out"
-          rows="2"
-          placeholder={$rewriteStore ? "Paste the text to rewrite…" : isStreaming ? "Queue a message…" : "Type a message..."}
-          bind:value={userInput}
-          onfocus={() => (inputFocused = true)}
-          onblur={() => (inputFocused = false)}
-          onkeydown={handleKeyDown}
-          onpaste={handlePaste}
-        ></textarea>
+      {/snippet}
 
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-1">
-            {#if canAttach}
-              <button
-                class="inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
-                onclick={attachImage}
-                disabled={isStreaming || !$selectedModelStore}
-                title={visionTwin ? "Attach image (loads vision projector)" : "Attach image"}
-              >
-                <Paperclip class="w-[1.125rem] h-[1.125rem]" />
-              </button>
-            {/if}
-            {#if showVisionToggle}
-              <button
-                class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors {visionActive ? 'bg-primary/10 text-primary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
-                onclick={toggleVision}
-                disabled={isStreaming}
-                title={visionActive ? "Vision on (image variant loaded)" : "Vision off — switch to image variant"}
-              >
-                <Eye class="w-[1.125rem] h-[1.125rem]" />
-              </button>
-            {/if}
-            <button
-              class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors {$rewriteStore ? 'bg-primary/10 text-primary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
-              onclick={() => { rewriteStore.set(!$rewriteStore); showToast($rewriteStore ? "Rewrite mode on" : "Rewrite mode off"); }}
-              title={$rewriteStore ? "Rewrite mode on" : "Rewrite mode off"}
-            >
-              <PenLine class="w-[1.125rem] h-[1.125rem]" />
-            </button>
+      {#snippet chatLeftButtons()}
+        {#if canAttach}
+          <button
+            class="composer-icon-btn"
+            onclick={attachImage}
+            disabled={isStreaming || !$selectedModelStore}
+            title={visionTwin ? "Attach image (loads vision projector)" : "Attach image"}
+          >
+            <Paperclip class="w-[1.125rem] h-[1.125rem]" />
+          </button>
+        {/if}
+        {#if showVisionToggle}
+          <button
+            class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors {visionActive ? 'bg-primary/10 text-primary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
+            onclick={toggleVision}
+            disabled={isStreaming}
+            title={visionActive ? "Vision on (image variant loaded)" : "Vision off — switch to image variant"}
+          >
+            <Eye class="w-[1.125rem] h-[1.125rem]" />
+          </button>
+        {/if}
+        <button
+          class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors {$rewriteStore ? 'bg-primary/10 text-primary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
+          onclick={() => { rewriteStore.set(!$rewriteStore); showToast($rewriteStore ? "Rewrite mode on" : "Rewrite mode off"); }}
+          title={$rewriteStore ? "Rewrite mode on" : "Rewrite mode off"}
+        >
+          <PenLine class="w-[1.125rem] h-[1.125rem]" />
+        </button>
+      {/snippet}
+
+      {#snippet chatCtxBar()}
+        <!-- Context-window usage: thin colour-only line, yellow → orange → red. -->
+        {#if ctxN > 0}
+          <div class="h-0.5 w-16 rounded-full bg-secondary overflow-hidden" title="Context {Math.round(ctxRatio * 100)}%">
+            <div class="h-full rounded-full transition-all" style="width: {Math.max(ctxRatio * 100, 3)}%; background: {ctxColor};"></div>
           </div>
+        {/if}
+      {/snippet}
 
-          <div class="flex-1 min-w-0 px-2 flex flex-col items-center gap-1">
-            <ModelSelector bind:value={$selectedModelStore} placeholder="Select a model..." disabled={isStreaming} category="llm" ghost dropUp />
-            <!-- Context-window usage: thin colour-only line, yellow → orange → red. -->
-            {#if ctxN > 0}
-              <div class="h-0.5 w-16 rounded-full bg-secondary overflow-hidden" title="Context {Math.round(ctxRatio * 100)}%">
-                <div class="h-full rounded-full transition-all" style="width: {Math.max(ctxRatio * 100, 3)}%; background: {ctxColor};"></div>
-              </div>
-            {/if}
-          </div>
-
-          <div class="flex items-center gap-1">
-            <button
-              class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors {showSettings ? 'bg-secondary text-txtmain shadow-inner' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
-              onclick={() => (showSettings = !showSettings)}
-              title="Settings"
-            >
-              <Settings class="w-[1.125rem] h-[1.125rem]" />
-            </button>
-
-            {#if isStreaming}
-              <button
-                class="inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
-                onclick={cancelStreaming}
-                title="Stop"
-              >
-                <Square class="w-[1.125rem] h-[1.125rem]" fill="currentColor" />
-              </button>
-            {/if}
-          </div>
-        </div>
-      </div>
+      <Composer
+        bind:value={userInput}
+        placeholder={$rewriteStore ? "Paste the text to rewrite…" : isStreaming ? "Queue a message…" : "Type a message..."}
+        bind:textareaEl={inputEl}
+        onKeydown={handleKeyDown}
+        onPaste={handlePaste}
+        bind:modelValue={$selectedModelStore}
+        modelPlaceholder="Select a model..."
+        category="llm"
+        busy={isStreaming}
+        onStop={cancelStreaming}
+        bind:showSettings
+        settingsTitle="Configs"
+        topExtra={chatTopExtra}
+        leftButtons={chatLeftButtons}
+        ctxBar={chatCtxBar}
+        settingsPanel={chatSettingsPanel}
+      />
     </div>
     </div>
   {/if}

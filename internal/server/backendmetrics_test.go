@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/radu0120/llama-quartermaster/internal/logmon"
+	"github.com/quartermaster-labs/quartermaster/internal/logmon"
 )
 
 func TestParsePrometheusInto(t *testing.T) {

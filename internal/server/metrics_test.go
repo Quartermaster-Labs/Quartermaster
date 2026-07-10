@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/radu0120/llama-quartermaster/internal/shared"
+	"github.com/quartermaster-labs/quartermaster/internal/shared"
 	"github.com/tidwall/gjson"
 )
 

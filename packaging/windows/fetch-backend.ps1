@@ -109,7 +109,7 @@ $AppDir = (Resolve-Path -LiteralPath $AppDir).Path
 # Latest-release asset list for a repo (name -> download URL).
 function Get-LatestAssets {
     param([string]$Repo)
-    $headers = @{ 'User-Agent' = 'llama-quartermaster-installer'; 'Accept' = 'application/vnd.github+json' }
+    $headers = @{ 'User-Agent' = 'quartermaster-installer'; 'Accept' = 'application/vnd.github+json' }
     if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $env:GITHUB_TOKEN" }
     $rel = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$Repo/releases/latest"
     $map = @{}

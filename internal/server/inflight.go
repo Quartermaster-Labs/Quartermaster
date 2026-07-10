@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"sync/atomic"
 
-	"github.com/radu0120/llama-quartermaster/internal/chain"
-	"github.com/radu0120/llama-quartermaster/internal/event"
-	"github.com/radu0120/llama-quartermaster/internal/shared"
+	"github.com/quartermaster-labs/quartermaster/internal/chain"
+	"github.com/quartermaster-labs/quartermaster/internal/event"
+	"github.com/quartermaster-labs/quartermaster/internal/shared"
 )
 
 // inflightCounter tracks the number of in-flight model-dispatched requests.

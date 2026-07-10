@@ -1,6 +1,6 @@
 [Unit]
-Description=llama-quartermaster — all-in-one local inference engine with startup config autogen
-Documentation=https://github.com/Quartermaster-Labs/llama-quartermaster
+Description=quartermaster — all-in-one local inference engine with startup config autogen
+Documentation=https://github.com/Quartermaster-Labs/quartermaster
 After=network-online.target
 Wants=network-online.target
 
@@ -9,14 +9,14 @@ Type=simple
 # Run as a dedicated unprivileged user (create with: useradd --system --no-create-home llama)
 User=llama
 Group=llama
-WorkingDirectory=/opt/llama-quartermaster
+WorkingDirectory=/opt/quartermaster
 
 # Edit paths/ports to match the install. -generate makes the proxy build its
 # config from the local GGUF tree on startup (hash-gated, so an unchanged models
 # folder skips the scan). Drop -generate to load a static -config instead.
-ExecStart=/opt/llama-quartermaster/llama-quartermaster \
-  -config /etc/llama-quartermaster/config.yaml \
-  -generate /etc/llama-quartermaster/quartermaster-generate.yaml \
+ExecStart=/opt/quartermaster/quartermaster \
+  -config /etc/quartermaster/config.yaml \
+  -generate /etc/quartermaster/quartermaster-generate.yaml \
   -listen 0.0.0.0:1250 \
   -watch-config
 
@@ -31,7 +31,7 @@ NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=read-only
 PrivateTmp=true
-ReadWritePaths=/etc/llama-quartermaster
+ReadWritePaths=/etc/quartermaster
 
 [Install]
 WantedBy=multi-user.target

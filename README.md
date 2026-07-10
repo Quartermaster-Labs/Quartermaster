@@ -1,11 +1,11 @@
-![llama-quartermaster header image](docs/assets/hero3.webp)
-![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/Quartermaster-Labs/llama-quartermaster/total)
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Quartermaster-Labs/llama-quartermaster/go-ci.yml)
-![GitHub Repo stars](https://img.shields.io/github/stars/Quartermaster-Labs/llama-quartermaster)
+![quartermaster header image](docs/assets/hero3.webp)
+![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/Quartermaster-Labs/quartermaster/total)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Quartermaster-Labs/quartermaster/go-ci.yml)
+![GitHub Repo stars](https://img.shields.io/github/stars/Quartermaster-Labs/quartermaster)
 
-# llama-quartermaster
+# quartermaster
 
-> **Fork of [llama-swap](https://github.com/mostlygeek/llama-swap) (MIT).** llama-quartermaster
+> **Fork of [llama-swap](https://github.com/mostlygeek/llama-swap) (MIT).** quartermaster
 > started as a fork and has since diverged into its own project — it does **not** track upstream
 > and has no plan to merge back. It keeps llama-swap's core (on-demand model swapping, OpenAI-compatible
 > proxy, text/image/audio support, Anthropic API, single Go binary) and layers on automatic config
@@ -13,7 +13,7 @@
 > redesigned web UI with a standalone playground.
 
 Run **any** generative AI model on your machine — text, image, audio — and hot-swap between them on
-demand. llama-quartermaster works with any OpenAI- or Anthropic-API-compatible server.
+demand. quartermaster works with any OpenAI- or Anthropic-API-compatible server.
 
 A **hassle-free yet fully customizable inference engine**: point it at your models folder and it
 auto-generates a near-optimal setup — VRAM-aware context, GPU offload, and KV sizing computed per
@@ -72,7 +72,7 @@ Docker image bundle them for you.
 
 ### Web UI
 
-llama-quartermaster includes a real time web interface with a playground for testing out all sorts of local models:
+quartermaster includes a real time web interface with a playground for testing out all sorts of local models:
 
 <img width="1125" height="876" alt="image" src="https://github.com/user-attachments/assets/8ee41947-97af-463d-b0f0-8e9c478fac07" />
 
@@ -120,8 +120,8 @@ Pick whichever fits you:
 
 ### Windows installer (recommended)
 
-Download the latest `llama-quartermaster-setup-*.exe` from the
-[Releases page](https://github.com/Quartermaster-Labs/llama-quartermaster/releases) and run it.
+Download the latest `quartermaster-setup-*.exe` from the
+[Releases page](https://github.com/Quartermaster-Labs/quartermaster/releases) and run it.
 
 It's a per-user install (no admin/UAC needed). The wizard:
 
@@ -133,19 +133,19 @@ It's a per-user install (no admin/UAC needed). The wizard:
 On first run it discovers your GGUFs and auto-generates a config — point it at your models folder and
 go.
 
-### Docker Install ([download images](https://github.com/Quartermaster-Labs/llama-quartermaster/pkgs/container/llama-quartermaster))
+### Docker Install ([download images](https://github.com/Quartermaster-Labs/quartermaster/pkgs/container/quartermaster))
 
 The unified container bundles llama-server, ik-llama-server, stable-diffusion.cpp,
-whisper.cpp and llama-quartermaster. It is built for `cuda` and `vulkan` backends.
+whisper.cpp and quartermaster. It is built for `cuda` and `vulkan` backends.
 
 ```shell
-$ docker pull ghcr.io/radu0120/llama-quartermaster:unified-cuda   # or :unified-vulkan
+$ docker pull ghcr.io/quartermaster-labs/quartermaster:unified-cuda   # or :unified-vulkan
 
 # run with a custom configuration and models directory
 $ docker run -it --rm --runtime nvidia -p 9292:8080 \
  -v /path/to/models:/models \
- -v /path/to/custom/config.yaml:/etc/llama-quartermaster/config/config.yaml \
- ghcr.io/radu0120/llama-quartermaster:unified-cuda
+ -v /path/to/custom/config.yaml:/etc/quartermaster/config/config.yaml \
+ ghcr.io/quartermaster-labs/quartermaster:unified-cuda
 ```
 
 > Images are built on demand from `.github/workflows/unified-docker.yml`
@@ -155,13 +155,13 @@ $ docker run -it --rm --runtime nvidia -p 9292:8080 \
 ### Release binary
 
 Prefer a bare binary (or not on Windows)? Grab the archive for your OS from the
-[Releases page](https://github.com/Quartermaster-Labs/llama-quartermaster/releases). You supply your
+[Releases page](https://github.com/Quartermaster-Labs/quartermaster/releases). You supply your
 own inference backends (`llama-server`, `sd-server`) and point your config at them.
 
 ### Building from source
 
 1. Building requires Go and Node.js (for the UI).
-2. `git clone https://github.com/Quartermaster-Labs/llama-quartermaster.git`
+2. `git clone https://github.com/Quartermaster-Labs/quartermaster.git`
 3. Build for your platform: `make windows`, `make mac`, or `make linux` (each builds the UI first).
    - Or build a runnable bundle (binary + example configs + launcher/service files) plus an archive
      under `build/`: `make package-windows` (zip), `make package-linux` / `make package-mac` (tar.gz).
@@ -201,47 +201,47 @@ Almost all configuration settings are optional and can be added one step at a ti
 
 See the [configuration documentation](docs/configuration.md) for all options.
 
-## How does llama-quartermaster work?
+## How does quartermaster work?
 
-When a request hits an OpenAI- or Anthropic-compatible endpoint, llama-quartermaster reads the
+When a request hits an OpenAI- or Anthropic-compatible endpoint, quartermaster reads the
 `model` value and loads the right upstream server to serve it. If the wrong server is running, it's
 replaced with the correct one — that's the "swap." The upstream is spawned on demand and torn down on
 a `ttl`, so only what you're using holds VRAM.
 
-Most setups never write that upstream command by hand. With `-generate`, llama-quartermaster discovers
+Most setups never write that upstream command by hand. With `-generate`, quartermaster discovers
 your GGUFs at startup and emits a config for them: it reads each model's metadata, estimates its VRAM
 footprint, and computes a near-optimal context length, GPU/CPU layer split, and KV-cache sizing to fit
 your hardware. You can then tune any of it — per model, or as named variants — from the web UI or by
 editing `quartermaster-generate.yaml`; changes hot-reload.
 
-In the most basic configuration llama-quartermaster handles one model at a time. For more advanced use
+In the most basic configuration quartermaster handles one model at a time. For more advanced use
 cases, a `matrix` runs multiple models concurrently, and multi-port listeners give each a scoped
 catalog while a single shared scheduler keeps VRAM accounting honest across ports. You have complete
 control over how your system resources are used.
 
 ## Reverse Proxy Configuration (nginx)
 
-If you deploy llama-quartermaster behind nginx, disable response buffering for streaming endpoints. By default, nginx buffers responses which breaks Server‑Sent Events (SSE) and streaming chat completion.
+If you deploy quartermaster behind nginx, disable response buffering for streaming endpoints. By default, nginx buffers responses which breaks Server‑Sent Events (SSE) and streaming chat completion.
 
 Recommended nginx configuration snippets:
 
 ```nginx
 # SSE for UI events/logs
 location /api/events {
-    proxy_pass http://your-llama-quartermaster-backend;
+    proxy_pass http://your-quartermaster-backend;
     proxy_buffering off;
     proxy_cache off;
 }
 
 # Streaming chat completions (stream=true)
 location /v1/chat/completions {
-    proxy_pass http://your-llama-quartermaster-backend;
+    proxy_pass http://your-quartermaster-backend;
     proxy_buffering off;
     proxy_cache off;
 }
 ```
 
-As a safeguard, llama-quartermaster also sets `X-Accel-Buffering: no` on SSE responses. However, explicitly disabling `proxy_buffering` at your reverse proxy is still recommended for reliable streaming behavior.
+As a safeguard, quartermaster also sets `X-Accel-Buffering: no` on SSE responses. However, explicitly disabling `proxy_buffering` at your reverse proxy is still recommended for reliable streaming behavior.
 
 ## Monitoring Logs on the CLI
 
@@ -252,10 +252,10 @@ $ curl http://host/logs
 # streams combined logs
 curl -Ns http://host/logs/stream
 
-# stream llama-quartermaster's proxy status logs
+# stream quartermaster's proxy status logs
 curl -Ns http://host/logs/stream/proxy
 
-# stream logs from upstream processes that llama-quartermaster loads
+# stream logs from upstream processes that quartermaster loads
 curl -Ns http://host/logs/stream/upstream
 
 # stream logs only from a specific model
@@ -270,7 +270,7 @@ curl -Ns 'http://host/logs/stream?no-history'
 
 ## Do I need to use llama.cpp's server (llama-server)?
 
-Any OpenAI compatible server would work. llama-quartermaster was originally designed for llama-server and it is the best supported.
+Any OpenAI compatible server would work. quartermaster was originally designed for llama-server and it is the best supported.
 
 For Python based inference servers like vllm or tabbyAPI it is recommended to run them via podman or docker. This provides clean environment isolation as well as responding correctly to `SIGTERM` signals for proper shutdown.
 
@@ -279,4 +279,4 @@ For Python based inference servers like vllm or tabbyAPI it is recommended to ru
 > [!NOTE]
 > Thank you to everyone who has given this project a ⭐️!
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Quartermaster-Labs/llama-quartermaster&type=Date)](https://www.star-history.com/#Quartermaster-Labs/llama-quartermaster&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Quartermaster-Labs/quartermaster&type=Date)](https://www.star-history.com/#Quartermaster-Labs/quartermaster&Date)

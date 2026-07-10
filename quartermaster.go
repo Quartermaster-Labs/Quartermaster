@@ -16,15 +16,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/radu0120/llama-quartermaster/internal/autogen"
-	"github.com/radu0120/llama-quartermaster/internal/config"
-	"github.com/radu0120/llama-quartermaster/internal/event"
-	"github.com/radu0120/llama-quartermaster/internal/logmon"
-	"github.com/radu0120/llama-quartermaster/internal/perf"
-	"github.com/radu0120/llama-quartermaster/internal/process"
-	"github.com/radu0120/llama-quartermaster/internal/server"
-	"github.com/radu0120/llama-quartermaster/internal/shared"
-	"github.com/radu0120/llama-quartermaster/internal/watcher"
+	"github.com/quartermaster-labs/quartermaster/internal/autogen"
+	"github.com/quartermaster-labs/quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/event"
+	"github.com/quartermaster-labs/quartermaster/internal/logmon"
+	"github.com/quartermaster-labs/quartermaster/internal/perf"
+	"github.com/quartermaster-labs/quartermaster/internal/process"
+	"github.com/quartermaster-labs/quartermaster/internal/server"
+	"github.com/quartermaster-labs/quartermaster/internal/shared"
+	"github.com/quartermaster-labs/quartermaster/internal/watcher"
 )
 
 var (
@@ -168,7 +168,7 @@ func main() {
 	proxyLog.Debugf("PID: %d", os.Getpid())
 
 	// On Windows, bind the process tree to a Job Object so every upstream
-	// process is reaped when llama-quartermaster exits — even on a forced kill. No-op
+	// process is reaped when quartermaster exits — even on a forced kill. No-op
 	// elsewhere. Non-fatal: a failure just falls back to per-process teardown.
 	if err := process.SetupTreeCleanup(); err != nil {
 		proxyLog.Warnf("failed to set up process tree cleanup: %v", err)
@@ -445,10 +445,10 @@ func main() {
 		go func() {
 			var startErr error
 			if useTLS {
-				proxyLog.Infof("llama-quartermaster listening with TLS on https://%s", hs.Addr)
+				proxyLog.Infof("quartermaster listening with TLS on https://%s", hs.Addr)
 				startErr = hs.ListenAndServeTLS(*flagCertFile, *flagKeyFile)
 			} else {
-				proxyLog.Infof("llama-quartermaster listening on http://%s", hs.Addr)
+				proxyLog.Infof("quartermaster listening on http://%s", hs.Addr)
 				startErr = hs.ListenAndServe()
 			}
 			if startErr != nil && !errors.Is(startErr, http.ErrServerClosed) {
@@ -459,7 +459,7 @@ func main() {
 
 		if !shared.IsLoopbackAddr(hs.Addr) {
 			_, port, _ := net.SplitHostPort(hs.Addr)
-			proxyLog.Infof("llama-quartermaster is reachable by all hosts on the network, use loopback (e.g. localhost:%s) to restrict to this host only", port)
+			proxyLog.Infof("quartermaster is reachable by all hosts on the network, use loopback (e.g. localhost:%s) to restrict to this host only", port)
 		}
 	}
 

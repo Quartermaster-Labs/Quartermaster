@@ -1,12 +1,12 @@
-# aider, QwQ, Qwen-Coder 2.5 and llama-quartermaster
+# aider, QwQ, Qwen-Coder 2.5 and quartermaster
 
-This guide show how to use aider and llama-quartermaster to get a 100% local coding co-pilot setup. The focus is on the trickest part which is configuring aider, llama-quartermaster and llama-server to work together.
+This guide show how to use aider and quartermaster to get a 100% local coding co-pilot setup. The focus is on the trickest part which is configuring aider, quartermaster and llama-server to work together.
 
 ## Here's what you you need:
 
 - aider - [installation docs](https://aider.chat/docs/install.html)
 - llama-server - [download latest release](https://github.com/ggml-org/llama.cpp/releases)
-- llama-quartermaster - build from source (see the main README)
+- quartermaster - build from source (see the main README)
 - [QwQ 32B](https://huggingface.co/bartowski/Qwen_QwQ-32B-GGUF) and [Qwen Coder 2.5 32B](https://huggingface.co/bartowski/Qwen2.5-Coder-32B-Instruct-GGUF) models
 - 24GB VRAM video card
 
@@ -24,7 +24,7 @@ aider --architect \
     --openai-api-base "http://10.0.1.24:8080/v1" \
 ```
 
-Set `--openai-api-base` to the IP and port where your llama-quartermaster is running.
+Set `--openai-api-base` to the IP and port where your quartermaster is running.
 
 ## Create an aider model settings file
 
@@ -32,7 +32,7 @@ Set `--openai-api-base` to the IP and port where your llama-quartermaster is run
 # aider.model.settings.yml
 
 #
-# !!! important: model names must match llama-quartermaster configuration names !!!
+# !!! important: model names must match quartermaster configuration names !!!
 #
 
 - name: "openai/QwQ"
@@ -62,7 +62,7 @@ Set `--openai-api-base` to the IP and port where your llama-quartermaster is run
   editor_model_name: "openai/qwen-coder-32B"
 ```
 
-## llama-quartermaster configuration
+## quartermaster configuration
 
 ```yaml
 # config.yaml
@@ -95,9 +95,9 @@ models:
 
 ## Advanced, Dual GPU Configuration
 
-If you have _dual 24GB GPUs_ you can use llama-quartermaster profiles to avoid swapping between QwQ and Qwen Coder.
+If you have _dual 24GB GPUs_ you can use quartermaster profiles to avoid swapping between QwQ and Qwen Coder.
 
-In llama-quartermaster's configuration file:
+In quartermaster's configuration file:
 
 1. add a `profiles` section with `aider` as the profile name
 2. using the `env` field to specify the GPU IDs for each model

@@ -10,18 +10,18 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/radu0120/llama-quartermaster/internal/autogen"
-	"github.com/radu0120/llama-quartermaster/internal/chain"
-	"github.com/radu0120/llama-quartermaster/internal/config"
-	"github.com/radu0120/llama-quartermaster/internal/logmon"
-	"github.com/radu0120/llama-quartermaster/internal/perf"
-	"github.com/radu0120/llama-quartermaster/internal/router"
-	"github.com/radu0120/llama-quartermaster/internal/shared"
-	"github.com/radu0120/llama-quartermaster/internal/update"
+	"github.com/quartermaster-labs/quartermaster/internal/autogen"
+	"github.com/quartermaster-labs/quartermaster/internal/chain"
+	"github.com/quartermaster-labs/quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/logmon"
+	"github.com/quartermaster-labs/quartermaster/internal/perf"
+	"github.com/quartermaster-labs/quartermaster/internal/router"
+	"github.com/quartermaster-labs/quartermaster/internal/shared"
+	"github.com/quartermaster-labs/quartermaster/internal/update"
 )
 
 // updateRepo is the GitHub repo (owner/name) the auto-updater polls for releases.
-const updateRepo = "Quartermaster-Labs/llama-quartermaster"
+const updateRepo = "Quartermaster-Labs/quartermaster"
 
 // Server owns the HTTP mux, cross-cutting middleware, and the local/peer model
 // dispatch. It supersedes router.Server: it builds the local and peer routers
@@ -503,7 +503,7 @@ func (s *Server) routes() {
 		mux.Handle("GET "+path, modelChain.Then(dispatch))
 	}
 
-	// llama-quartermaster API + custom endpoints.
+	// quartermaster API + custom endpoints.
 	mux.Handle("GET /v1/models", discoveryChain.ThenFunc(s.handleListModels))
 	mux.Handle("GET /logs", apiChain.ThenFunc(s.handleLogs))
 	mux.Handle("GET /logs/stream", apiChain.ThenFunc(s.handleLogStream))

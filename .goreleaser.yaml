@@ -1,6 +1,6 @@
 version: 2
 
-project_name: llama-quartermaster
+project_name: quartermaster
 
 # Always create the GitHub release as a draft; the workflow flips it to public
 # only for `make release-public` (after every asset, incl. the installer, is up).

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/radu0120/llama-quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

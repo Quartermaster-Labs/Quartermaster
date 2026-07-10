@@ -1,7 +1,7 @@
 package main
 
-// created for issue: #252 https://github.com/radu0120/llama-quartermaster/issues/252
-// this simple benchmark tool sends a lot of small chat completion requests to llama-quartermaster
+// created for issue: #252 https://github.com/quartermaster-labs/quartermaster/issues/252
+// this simple benchmark tool sends a lot of small chat completion requests to quartermaster
 // to make sure all the requests are accounted for.
 //
 // requests can be sent in parallel, and the tool will report the results.

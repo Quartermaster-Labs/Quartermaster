@@ -1,7 +1,7 @@
 # Windows installer (local build)
 
 `make release` builds a per-user Windows installer
-(`llama-quartermaster-setup-vX.Y.Z.exe`) via Inno Setup **locally** and uploads
+(`quartermaster-setup-vX.Y.Z.exe`) via Inno Setup **locally** and uploads
 it to a GitHub Release (draft). `make release-public` publishes it. Needs go,
 npm, `gh` (authed), and Inno Setup 6 (`choco install innosetup -y`). Bare
 `make release` uses the latest `vX.Y.Z` tag; `make release VERSION=v0.5.1`
@@ -20,7 +20,7 @@ a `.pfx`) and `SIGN_PFX_PASSWORD`; CI then signs the binary + installer
 (`windows/sign.ps1`). For a free OSS cert, apply to SignPath Foundation and swap
 the sign step for their action. Unsigned builds trip SmartScreen until then.
 
-# Running llama-quartermaster as a service
+# Running quartermaster as a service
 
 The proxy is a plain console binary. Linux uses a native systemd unit; Windows
 needs a tiny wrapper (NSSM or WinSW) because the binary has no SCM handler.
@@ -33,25 +33,25 @@ to load a static `-config` instead.
 
 ```sh
 # 1. Build + place the binary
-make build                                  # or: go build -o llama-quartermaster .
-sudo install -D -m755 build/llama-quartermaster-linux-amd64 /opt/llama-quartermaster/llama-quartermaster
+make build                                  # or: go build -o quartermaster .
+sudo install -D -m755 build/quartermaster-linux-amd64 /opt/quartermaster/quartermaster
 
 # 2. Config dir + control file
-sudo mkdir -p /etc/llama-quartermaster
-sudo cp quartermaster-generate.yaml /etc/llama-quartermaster/
+sudo mkdir -p /etc/quartermaster
+sudo cp quartermaster-generate.yaml /etc/quartermaster/
 
 # 3. Dedicated user
 sudo useradd --system --no-create-home llama || true
 
 # 4. Install + enable the unit (edit paths/ports/models root first)
-sudo cp packaging/systemd/llama-quartermaster.service /etc/systemd/system/
-sudoedit /etc/systemd/system/llama-quartermaster.service
+sudo cp packaging/systemd/quartermaster.service /etc/systemd/system/
+sudoedit /etc/systemd/system/quartermaster.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now llama-quartermaster
+sudo systemctl enable --now quartermaster
 
 # Logs / status
-systemctl status llama-quartermaster
-journalctl -u llama-quartermaster -f
+systemctl status quartermaster
+journalctl -u quartermaster -f
 ```
 
 Set the models root in `quartermaster-generate.yaml` (`settings.modelsRoot`) or
@@ -67,7 +67,7 @@ Pick one wrapper.
 ```powershell
 # Elevated PowerShell. nssm must be on PATH (https://nssm.cc).
 .\packaging\windows\install-service.ps1 `
-  -ExePath  C:\llama-qm\llama-quartermaster-windows-amd64.exe `
+  -ExePath  C:\llama-qm\quartermaster-windows-amd64.exe `
   -Config   C:\llama-qm\config.yaml `
   -Generate C:\llama-qm\quartermaster-generate.yaml `
   -Listen   0.0.0.0:1250
@@ -79,14 +79,14 @@ Pick one wrapper.
 ### Option B — WinSW (no PATH dependency)
 
 1. Download `WinSW-x64.exe` from https://github.com/winsw/winsw/releases.
-2. Rename it `llama-quartermaster-service.exe`; put it next to the proxy binary
-   and `packaging/windows/llama-quartermaster-service.xml`.
+2. Rename it `quartermaster-service.exe`; put it next to the proxy binary
+   and `packaging/windows/quartermaster-service.xml`.
 3. Edit the xml's `<arguments>` (ports/paths), then from an elevated prompt:
 
 ```powershell
-.\llama-quartermaster-service.exe install
-.\llama-quartermaster-service.exe start
-# Uninstall: .\llama-quartermaster-service.exe stop ; .\llama-quartermaster-service.exe uninstall
+.\quartermaster-service.exe install
+.\quartermaster-service.exe start
+# Uninstall: .\quartermaster-service.exe stop ; .\quartermaster-service.exe uninstall
 ```
 
 Both wrappers set the service to auto-start and capture stdout/stderr to log

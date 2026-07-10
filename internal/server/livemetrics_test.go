@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/radu0120/llama-quartermaster/internal/event"
-	"github.com/radu0120/llama-quartermaster/internal/shared"
+	"github.com/quartermaster-labs/quartermaster/internal/event"
+	"github.com/quartermaster-labs/quartermaster/internal/shared"
 )
 
 // TestLiveTokenCounter_CountsContentChunks verifies that content-bearing SSE

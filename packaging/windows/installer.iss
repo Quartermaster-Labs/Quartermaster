@@ -1,4 +1,4 @@
-; Inno Setup 6 script for llama-quartermaster.
+; Inno Setup 6 script for quartermaster.
 ;
 ; Per-user install (no UAC) into a writable location, because the app generates
 ; config\config.yaml at runtime and edits config\quartermaster-generate.yaml.
@@ -11,8 +11,8 @@
 ; Wizard offers to download llama-server / sd-server for a chosen backend
 ; (vulkan/cuda/cpu) and an optional logon-autostart shortcut.
 
-#define MyAppName "llama-quartermaster"
-#define MyAppExe  "llama-quartermaster-windows-amd64.exe"
+#define MyAppName "quartermaster"
+#define MyAppExe  "quartermaster-windows-amd64.exe"
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0"
 #endif
@@ -29,7 +29,7 @@ AppId={{A7E4C9D2-3B6F-4F1A-9C2E-2D7B8F0A1E55}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher=radu0120
-AppPublisherURL=https://github.com/Quartermaster-Labs/llama-quartermaster
+AppPublisherURL=https://github.com/Quartermaster-Labs/quartermaster
 DefaultDirName={localappdata}\Programs\{#MyAppName}
 ; Always prompt for the install location (default 'auto' hides it on upgrade).
 DisableDirPage=no
@@ -37,7 +37,7 @@ DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir={#OutputDir}
-OutputBaseFilename=llama-quartermaster-setup-{#MyAppVersion}
+OutputBaseFilename=quartermaster-setup-{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -53,14 +53,14 @@ Source: "{#StagingDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubd
 Source: "{#StagingDir}\config\quartermaster-generate.example.yaml"; DestDir: "{app}\config"; DestName: "quartermaster-generate.yaml"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Tasks]
-Name: autostart; Description: "Start llama-quartermaster automatically when I log in"; GroupDescription: "Startup:"; Flags: unchecked
+Name: autostart; Description: "Start quartermaster automatically when I log in"; GroupDescription: "Startup:"; Flags: unchecked
 
 [Icons]
-Name: "{group}\llama-quartermaster"; Filename: "{app}\start.cmd"; WorkingDir: "{app}"
+Name: "{group}\quartermaster"; Filename: "{app}\start.cmd"; WorkingDir: "{app}"
 Name: "{group}\Edit generate config"; Filename: "notepad.exe"; Parameters: """{app}\config\quartermaster-generate.yaml"""; WorkingDir: "{app}"
-Name: "{group}\Uninstall llama-quartermaster"; Filename: "{uninstallexe}"
+Name: "{group}\Uninstall quartermaster"; Filename: "{uninstallexe}"
 ; Logon autostart (per-user Startup folder; console window is the live log).
-Name: "{userstartup}\llama-quartermaster"; Filename: "{app}\start.cmd"; WorkingDir: "{app}"; Tasks: autostart
+Name: "{userstartup}\quartermaster"; Filename: "{app}\start.cmd"; WorkingDir: "{app}"; Tasks: autostart
 
 [Run]
 ; Set the models folder in the generate yaml (independent of server setup).
@@ -81,7 +81,7 @@ Filename: "powershell.exe"; \
   StatusMsg: "Configuring existing inference backends..."; \
   Flags: runhidden waituntilterminated; \
   Check: IsExistingMode
-Filename: "{app}\start.cmd"; Description: "Launch llama-quartermaster now"; Flags: postinstall shellexec skipifsilent nowait
+Filename: "{app}\start.cmd"; Description: "Launch quartermaster now"; Flags: postinstall shellexec skipifsilent nowait
 
 [Code]
 var
@@ -103,7 +103,7 @@ begin
 
   ServersPage := CreateInputOptionPage(ModelsPage.ID,
     'Inference backends',
-    'Choose the model servers llama-quartermaster drives.',
+    'Choose the model servers quartermaster drives.',
     'These are separate projects (MIT/Apache). Uncheck both to configure your' + #13#10 +
     'own paths later.',
     False, False);  { ExclusionList=False -> checkboxes }

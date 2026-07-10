@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const generateFilePath = `E:\Apps\LLM\llama-quartermaster\quartermaster-generate.yaml`
+const generateFilePath = `E:\Apps\LLM\quartermaster\quartermaster-generate.yaml`
 
 // TestEnsureConfig_HashGate exercises the full startup path: first call
 // generates the config, second call (inputs unchanged) skips regeneration.

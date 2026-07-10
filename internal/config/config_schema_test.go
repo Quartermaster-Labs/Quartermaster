@@ -28,7 +28,7 @@ func TestConfig_ExampleMatchesSchema(t *testing.T) {
 	}
 
 	resolved, err := schema.Resolve(&jsonschema.ResolveOptions{
-		BaseURI: "https://github.com/radu0120/llama-quartermaster/",
+		BaseURI: "https://github.com/quartermaster-labs/quartermaster/",
 	})
 	if err != nil {
 		t.Fatalf("resolving schema: %v", err)

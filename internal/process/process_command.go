@@ -13,10 +13,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/radu0120/llama-quartermaster/internal/config"
-	"github.com/radu0120/llama-quartermaster/internal/event"
-	"github.com/radu0120/llama-quartermaster/internal/logmon"
-	"github.com/radu0120/llama-quartermaster/internal/shared"
+	"github.com/quartermaster-labs/quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/event"
+	"github.com/quartermaster-labs/quartermaster/internal/logmon"
+	"github.com/quartermaster-labs/quartermaster/internal/shared"
 )
 
 var ErrStartAborted = fmt.Errorf("aborted")
@@ -528,7 +528,7 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 			// Expected: we force-terminated the process. A forced kill exits
 			// the child with a non-zero code (e.g. taskkill /f on Windows
 			// yields exit status 1), so this is not an error.
-			p.proxyLogger.Debugf("<%s> process stopped by llama-quartermaster: %v", p.id, waitErr)
+			p.proxyLogger.Debugf("<%s> process stopped by quartermaster: %v", p.id, waitErr)
 		default:
 			if exitErr, ok := waitErr.(*exec.ExitError); ok {
 				p.proxyLogger.Debugf("<%s> process exited: code=%d, err=%v", p.id, exitErr.ExitCode(), waitErr)
@@ -772,7 +772,7 @@ func (p *ProcessCommand) Inflight() int64 {
 func (p *ProcessCommand) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fn := p.handler.Load()
 	if fn == nil {
-		http.Error(w, fmt.Sprintf("llama-quartermaster-error: [%s] process is not ready", p.id), http.StatusServiceUnavailable)
+		http.Error(w, fmt.Sprintf("quartermaster-error: [%s] process is not ready", p.id), http.StatusServiceUnavailable)
 		return
 	}
 	p.inflight.Add(1)

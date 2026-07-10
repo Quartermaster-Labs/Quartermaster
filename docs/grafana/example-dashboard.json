@@ -1306,7 +1306,7 @@
     "timezone": "browser",
     "to": "now"
   },
-  "title": "llama-quartermaster resource monitor",
+  "title": "quartermaster resource monitor",
   "variables": [
     {
       "kind": "QueryVariable",

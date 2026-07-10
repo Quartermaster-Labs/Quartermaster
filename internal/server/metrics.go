@@ -14,11 +14,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/radu0120/llama-quartermaster/internal/cache"
-	"github.com/radu0120/llama-quartermaster/internal/event"
-	"github.com/radu0120/llama-quartermaster/internal/logmon"
-	"github.com/radu0120/llama-quartermaster/internal/ring"
-	"github.com/radu0120/llama-quartermaster/internal/shared"
+	"github.com/quartermaster-labs/quartermaster/internal/cache"
+	"github.com/quartermaster-labs/quartermaster/internal/event"
+	"github.com/quartermaster-labs/quartermaster/internal/logmon"
+	"github.com/quartermaster-labs/quartermaster/internal/ring"
+	"github.com/quartermaster-labs/quartermaster/internal/shared"
 	"github.com/tidwall/gjson"
 )
 

@@ -236,7 +236,13 @@ export interface ChatMessage {
   // model ran mid-think (field-based reasoning_content); `reasoningAt` is its
   // offset into reasoning_content, so the UI nests it inside the reasoning box
   // instead of dropping it below.
-  searches?: { query: string; results: string; at?: number; reasoningAt?: number; duringReasoning?: boolean; sources?: { title: string; url: string }[] }[];
+  searches?: { query: string; results: string; kind?: "web" | "wiki"; at?: number; reasoningAt?: number; duringReasoning?: boolean; sources?: { title: string; url: string }[] }[];
+  // Inline-citation registry for this turn: the bracketed source numbers the
+  // model was fed (and cites with, e.g. "[3]") mapped to their title + URL, so
+  // the renderer can turn "[3]" in the answer into a clickable chip. A wiki
+  // citation carries `wikiId` (article id) instead of a `url` — its chip opens
+  // the in-app Help modal to that article rather than a browser tab.
+  citations?: { n: number; title: string; url: string; wikiId?: string }[];
   // Rewrite mode. On a user message: the "how to help" instruction (content is the
   // prose to rewrite). On the assistant reply: the original text it was asked to
   // rewrite, so the bubble can render a side-by-side diff against its output.

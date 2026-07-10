@@ -36,14 +36,14 @@ describe("groupWikiArticles", () => {
 
 describe("formatWikiResults", () => {
   it("lists all topics on a miss so the model can steer", () => {
-    const out = formatWikiResults("xyzzy", []);
+    const out = formatWikiResults("xyzzy", [], []);
     expect(out).toContain("No wiki article matched");
     for (const a of WIKI_ARTICLES) expect(out).toContain(a.title);
   });
 
   it("emits each hit's title and body", () => {
     const hits = searchWiki("web search searxng");
-    const out = formatWikiResults("web search", hits);
+    const out = formatWikiResults("web search", hits, hits.map((_, i) => i + 1));
     expect(out).toContain(hits[0].title);
     expect(out).toContain("SearXNG");
   });

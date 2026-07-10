@@ -59,10 +59,13 @@ export async function searxngSearch(
 }
 
 // Render results as the plain-text tool message fed back to the model.
-export function formatSearchResults(query: string, results: SearchResult[]): string {
+// `numbers[i]` is the citation number for `results[i]` — resolved by the
+// caller so a URL repeated across searches in the same turn reuses its
+// earlier number instead of minting a duplicate.
+export function formatSearchResults(query: string, results: SearchResult[], numbers: number[]): string {
   if (results.length === 0) return `No results found for "${query}".`;
   const lines = results.map(
-    (r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${r.content}`
+    (r, i) => `[${numbers[i]}] ${r.title}\n${r.url}\n${r.content}`
   );
   return `Search results for "${query}":\n\n${lines.join("\n\n")}`;
 }

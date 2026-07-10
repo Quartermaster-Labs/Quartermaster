@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/radu0120/llama-quartermaster/internal/autogen"
-	"github.com/radu0120/llama-quartermaster/internal/shared"
+	"github.com/quartermaster-labs/quartermaster/internal/autogen"
+	"github.com/quartermaster-labs/quartermaster/internal/shared"
 )
 
 // apiKeyDTO is the JSON shape of one managed API key. Models empty => the key

@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/radu0120/llama-quartermaster/internal/event"
-	"github.com/radu0120/llama-quartermaster/internal/perf"
-	"github.com/radu0120/llama-quartermaster/internal/shared"
+	"github.com/quartermaster-labs/quartermaster/internal/event"
+	"github.com/quartermaster-labs/quartermaster/internal/perf"
+	"github.com/quartermaster-labs/quartermaster/internal/shared"
 )
 
 // apiModel is one entry in the /api/events modelStatus payload.

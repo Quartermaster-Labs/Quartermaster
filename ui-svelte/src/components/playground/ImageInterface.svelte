@@ -15,11 +15,11 @@
   import { generateSdImage, generateSdImg2Img } from "../../lib/sdApi";
   import { matchColorToRef } from "../../lib/colorMatch";
   import { playgroundStores } from "../../stores/playgroundActivity";
-  import ModelSelector from "./ModelSelector.svelte";
   import MaskEditor from "./MaskEditor.svelte";
   import Select from "./Select.svelte";
+  import Composer from "./Composer.svelte";
   import { autogrow } from "../../lib/autogrow";
-  import { Image as ImageIcon, Square, X, Settings, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush } from "lucide-svelte";
+  import { Image as ImageIcon, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush } from "lucide-svelte";
   import { scrollFade } from "../../lib/scrollFade";
   import type { ImageApiMode } from "../../lib/types";
 
@@ -540,16 +540,36 @@
     activeImageChatId.set(s.id);
   }
 
-  function onAttachFiles(event: Event) {
+  function attachFiles(files: File[]) {
     maskData = null; // base changes → any painted mask is stale
     maskSource = null;
-    const input = event.target as HTMLInputElement;
-    for (const file of Array.from(input.files ?? [])) {
+    for (const file of files) {
       const reader = new FileReader();
       reader.onload = () => (attached = [...attached, reader.result as string]);
       reader.readAsDataURL(file);
     }
+  }
+
+  function onAttachFiles(event: Event) {
+    const input = event.target as HTMLInputElement;
+    attachFiles(Array.from(input.files ?? []));
     input.value = "";
+  }
+
+  // Paste a screenshot / copied image straight into the composer, same as ChatInterface.
+  function handlePaste(event: ClipboardEvent) {
+    const items = event.clipboardData?.items;
+    if (!items) return;
+    const files: File[] = [];
+    for (const it of items) {
+      if (it.kind === "file" && it.type.startsWith("image/")) {
+        const f = it.getAsFile();
+        if (f) files.push(f);
+      }
+    }
+    if (files.length === 0) return; // plain text → let the browser handle it
+    event.preventDefault();
+    attachFiles(files);
   }
 
   // Copy the rendered image to the clipboard as a PNG blob. copiedIdx flashes the
@@ -595,8 +615,8 @@
          width-constrained and centered inside, matching the chat tab. -->
     <div class="flex-1 flex flex-col min-w-0 min-h-0 w-full">
       <!-- Thread -->
-      <div bind:this={threadEl} class="flex-1 min-h-0 overflow-y-auto pretty-scroll scroll-fade-y mb-4" use:scrollFade>
-        <div class="w-full max-w-3xl mx-auto px-2 flex flex-col gap-4 pb-8 {turns.length === 0 && !isGenerating ? 'h-full' : ''}">
+      <div bind:this={threadEl} class="flex-1 min-h-0 overflow-y-auto pretty-scroll scroll-fade-b mb-4" use:scrollFade>
+        <div class="w-full max-w-3xl mx-auto px-2 pt-4 flex flex-col gap-4 pb-8 {turns.length === 0 && !isGenerating ? 'h-full' : ''}">
           {#if turns.length === 0 && !isGenerating}
             <div class="h-full flex flex-col items-center justify-center gap-3 text-txtsecondary">
               <ImageIcon class="w-10 h-10 opacity-40" strokeWidth={1.5} />
@@ -648,7 +668,7 @@
             </div>
             <!-- Image reply (left) — matches chat: surface bubble, no avatar. -->
             <div class="flex flex-col items-start">
-              <div class="relative group rounded-2xl rounded-bl-sm px-3 py-2 text-[0.8125rem] w-fit max-w-full sm:max-w-[60%] bg-surface border border-card-border msg-tail-bot">
+              <div class="relative group rounded-2xl rounded-bl-sm px-3 py-2 text-[0.8125rem] w-fit max-w-full sm:max-w-[60%]">
                 {#if t.error}
                   <div class="text-red-500">{t.error}</div>
                 {:else if t.images.length}
@@ -702,7 +722,7 @@
                       {:else}
                         <span class="inline-block w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></span>
                       {/if}
-                      <span class="reason-shimmer font-medium">{stageLabel || "Generating…"}</span>
+                      <span class="reason-shimmer-white font-medium">{stageLabel || "Generating…"}</span>
                     </div>
                     {#if totalSteps > 0}
                       <div class="h-1.5 w-full rounded bg-card-border overflow-hidden">
@@ -722,71 +742,126 @@
       </div>
 
       <!-- Composer — narrower than the thread, centered. -->
-      <div class="shrink-0 relative w-full max-w-2xl mx-auto">
-        <!-- Settings popover -->
-        {#if showSettings}
-          <div class="absolute bottom-full right-0 mb-2 w-80 z-20 flex flex-col gap-3 p-4 rounded-lg border border-card-border bg-surface shadow-lg text-[0.8125rem]">
+      {#snippet imageSettingsPanel()}
+        <div class="grid grid-cols-2 gap-3">
+          <div class="flex flex-col gap-1">
+            <span class="text-xs uppercase tracking-wide text-txtsecondary">API</span>
+            <Select
+              bind:value={$apiModeStore}
+              disabled={isGenerating}
+              compact
+              options={[
+                { value: "openai", label: "OpenAI" },
+                { value: "sdapi", label: "SDAPI" },
+              ]}
+            />
+          </div>
+          <div class="flex flex-col gap-1">
+            <span class="text-xs uppercase tracking-wide text-txtsecondary">Size</span>
+            <Select bind:value={$selectedSizeStore} disabled={isGenerating} compact options={SIZE_OPTIONS} />
+          </div>
+        </div>
+        {#if isSdapi}
+          <div class="grid grid-cols-2 gap-3">
             <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">Model</span>
-              <ModelSelector bind:value={$selectedModelStore} placeholder="Select an image model..." disabled={isGenerating} category="image" compact />
+              <span class="text-xs uppercase tracking-wide text-txtsecondary">Steps</span>
+              <input type="number" min="1" max="150" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdStepsStore} />
             </div>
-            <div class="grid grid-cols-2 gap-3">
-              <div class="flex flex-col gap-1">
-                <span class="text-xs uppercase tracking-wide text-txtsecondary">API</span>
-                <Select
-                  bind:value={$apiModeStore}
-                  disabled={isGenerating}
-                  compact
-                  options={[
-                    { value: "openai", label: "OpenAI" },
-                    { value: "sdapi", label: "SDAPI" },
-                  ]}
-                />
-              </div>
-              <div class="flex flex-col gap-1">
-                <span class="text-xs uppercase tracking-wide text-txtsecondary">Size</span>
-                <Select bind:value={$selectedSizeStore} disabled={isGenerating} compact options={SIZE_OPTIONS} />
-              </div>
+            <div class="flex flex-col gap-1">
+              <span class="text-xs uppercase tracking-wide text-txtsecondary">CFG Scale</span>
+              <input type="number" min="1" max="30" step="0.5" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdCfgScaleStore} />
             </div>
-            {#if isSdapi}
-              <div class="grid grid-cols-2 gap-3">
-                <div class="flex flex-col gap-1">
-                  <span class="text-xs uppercase tracking-wide text-txtsecondary">Steps</span>
-                  <input type="number" min="1" max="150" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdStepsStore} />
-                </div>
-                <div class="flex flex-col gap-1">
-                  <span class="text-xs uppercase tracking-wide text-txtsecondary">CFG Scale</span>
-                  <input type="number" min="1" max="30" step="0.5" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdCfgScaleStore} />
-                </div>
-              </div>
-              {#if modelDefaults}
-                <p class="text-xs text-txtsecondary -mt-1">Model default · {modelDefaults.steps} steps · cfg {modelDefaults.cfg} · {modelDefaults.sampler}</p>
-              {/if}
-              <div class="flex flex-col gap-1">
-                <span class="text-xs uppercase tracking-wide text-txtsecondary">Tweak strength · {$sdDenoiseStore.toFixed(2)}</span>
-                <input type="range" min="0" max="1" step="0.05" class="w-full accent-primary" bind:value={$sdDenoiseStore} />
-                <p class="text-xs text-txtsecondary">How far each follow-up may stray from the previous image (non-Kontext models).</p>
-              </div>
-              <div class="grid grid-cols-2 gap-3">
-                <div class="flex flex-col gap-1">
-                  <span class="text-xs uppercase tracking-wide text-txtsecondary">Sampler</span>
-                  <Select bind:value={$sdSamplerStore} compact options={SAMPLER_OPTIONS} />
-                </div>
-                <div class="flex flex-col gap-1">
-                  <span class="text-xs uppercase tracking-wide text-txtsecondary">Scheduler</span>
-                  <Select bind:value={$sdSchedulerStore} compact options={SCHEDULER_OPTIONS} />
-                </div>
-              </div>
-              <div class="flex flex-col gap-1">
-                <span class="text-xs uppercase tracking-wide text-txtsecondary">Seed (-1 random)</span>
-                <input type="number" min="-1" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdSeedStore} />
-              </div>
-            {:else}
-              <p class="text-xs text-txtsecondary">OpenAI image route generates fresh each turn — it can't tweak a previous image. Switch to SDAPI for the edit loop.</p>
-            {/if}
+          </div>
+          {#if modelDefaults}
+            <p class="text-xs text-txtsecondary -mt-1">Model default · {modelDefaults.steps} steps · cfg {modelDefaults.cfg} · {modelDefaults.sampler}</p>
+          {/if}
+          <div class="flex flex-col gap-1">
+            <span class="text-xs uppercase tracking-wide text-txtsecondary">Tweak strength · {$sdDenoiseStore.toFixed(2)}</span>
+            <input type="range" min="0" max="1" step="0.05" class="w-full accent-primary" bind:value={$sdDenoiseStore} />
+            <p class="text-xs text-txtsecondary">How far each follow-up may stray from the previous image (non-Kontext models).</p>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div class="flex flex-col gap-1">
+              <span class="text-xs uppercase tracking-wide text-txtsecondary">Sampler</span>
+              <Select bind:value={$sdSamplerStore} compact options={SAMPLER_OPTIONS} />
+            </div>
+            <div class="flex flex-col gap-1">
+              <span class="text-xs uppercase tracking-wide text-txtsecondary">Scheduler</span>
+              <Select bind:value={$sdSchedulerStore} compact options={SCHEDULER_OPTIONS} />
+            </div>
+          </div>
+          <div class="flex flex-col gap-1">
+            <span class="text-xs uppercase tracking-wide text-txtsecondary">Seed (-1 random)</span>
+            <input type="number" min="-1" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdSeedStore} />
+          </div>
+        {:else}
+          <p class="text-xs text-txtsecondary">OpenAI image route generates fresh each turn — it can't tweak a previous image. Switch to SDAPI for the edit loop.</p>
+        {/if}
+      {/snippet}
+
+      {#snippet imageTopExtra()}
+        {#if isSdapi && (showNegative || $sdNegativePromptStore)}
+          <div class="flex items-start gap-2 pb-2 border-b border-card-border">
+            <Ban class="w-3.5 h-3.5 mt-1.5 shrink-0 text-txtsecondary" />
+            <textarea
+              class="w-full bg-transparent text-[0.8125rem] leading-relaxed resize-none focus:outline-none placeholder:text-txtsecondary min-h-[1.5rem] max-h-40 pretty-scroll"
+              rows="1"
+              placeholder="Negative — elements to avoid…"
+              bind:value={$sdNegativePromptStore}
+              disabled={isGenerating}
+            ></textarea>
+            <button
+              class="mt-1 shrink-0 text-txtsecondary hover:text-txtmain transition-colors"
+              onclick={() => { $sdNegativePromptStore = ""; showNegative = false; }}
+              title="Remove negative prompt"
+              aria-label="Remove negative prompt"
+            ><X class="w-3.5 h-3.5" /></button>
           </div>
         {/if}
+      {/snippet}
 
+      {#snippet imageLeftButtons()}
+        <button
+          class="composer-icon-btn"
+          onclick={() => fileInput?.click()}
+          disabled={isGenerating}
+          title={supportsRefImages ? "Attach reference image(s)" : "Attach a source image to edit"}
+        >
+          <Paperclip class="w-[1.125rem] h-[1.125rem]" />
+        </button>
+        {#if isSdapi && !supportsRefImages && baseImage}
+          <button
+            class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {maskData && maskSource === baseImage ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
+            onclick={() => (showMask = true)}
+            disabled={isGenerating}
+            title="Inpaint — mask a region to change (keeps the rest)"
+          >
+            <Brush class="w-[1.125rem] h-[1.125rem]" />
+          </button>
+        {/if}
+        {#if isSdapi && !(showNegative || $sdNegativePromptStore)}
+          <button
+            class="inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
+            onclick={() => (showNegative = true)}
+            title="Add negative prompt"
+          >
+            <Ban class="w-[1.125rem] h-[1.125rem]" />
+          </button>
+        {/if}
+      {/snippet}
+
+      {#snippet imageExtraRightButtons()}
+        <button
+          class="composer-icon-btn"
+          onclick={newThread}
+          disabled={isGenerating || turns.length === 0}
+          title="New thread"
+        >
+          <Plus class="w-[1.125rem] h-[1.125rem]" />
+        </button>
+      {/snippet}
+
+      <div class="shrink-0 relative w-full max-w-2xl mx-auto">
         {#if attached.length}
           <div class="flex flex-wrap gap-2 mb-2">
             {#each attached as img, i (i)}
@@ -814,100 +889,25 @@
 
         <input type="file" accept="image/*" multiple class="hidden" bind:this={fileInput} onchange={onAttachFiles} />
 
-        <div class="flex flex-col gap-2 rounded-3xl border border-card-border bg-surface px-4 pt-3 pb-3 focus-within:border-primary transition-colors">
-          {#if isSdapi && (showNegative || $sdNegativePromptStore)}
-            <div class="flex items-start gap-2 pb-2 border-b border-card-border">
-              <Ban class="w-3.5 h-3.5 mt-1.5 shrink-0 text-txtsecondary" />
-              <textarea
-                class="w-full bg-transparent text-[0.8125rem] leading-relaxed resize-none focus:outline-none placeholder:text-txtsecondary min-h-[1.5rem] max-h-40 pretty-scroll"
-                rows="1"
-                placeholder="Negative — elements to avoid…"
-                bind:value={$sdNegativePromptStore}
-                disabled={isGenerating}
-              ></textarea>
-              <button
-                class="mt-1 shrink-0 text-txtsecondary hover:text-txtmain transition-colors"
-                onclick={() => { $sdNegativePromptStore = ""; showNegative = false; }}
-                title="Remove negative prompt"
-                aria-label="Remove negative prompt"
-              ><X class="w-3.5 h-3.5" /></button>
-            </div>
-          {/if}
-          <textarea
-            class="w-full bg-transparent text-[0.8125rem] leading-relaxed resize-none focus:outline-none placeholder:text-txtsecondary pretty-scroll min-h-[3rem] max-h-[30rem]"
-            rows="2"
-            placeholder={turns.length ? "Describe a change…" : "Describe the image you want…"}
-            bind:value={prompt}
-            onkeydown={handleKeyDown}
-            disabled={isGenerating}
-          ></textarea>
-
-          <div class="flex items-center justify-between">
-            <div class="flex items-center gap-1">
-              <button
-                class="inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
-                onclick={() => fileInput?.click()}
-                disabled={isGenerating}
-                title={supportsRefImages ? "Attach reference image(s)" : "Attach a source image to edit"}
-              >
-                <Paperclip class="w-[1.125rem] h-[1.125rem]" />
-              </button>
-              {#if isSdapi && !supportsRefImages && baseImage}
-                <button
-                  class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {maskData && maskSource === baseImage ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
-                  onclick={() => (showMask = true)}
-                  disabled={isGenerating}
-                  title="Inpaint — mask a region to change (keeps the rest)"
-                >
-                  <Brush class="w-[1.125rem] h-[1.125rem]" />
-                </button>
-              {/if}
-              {#if isSdapi && !(showNegative || $sdNegativePromptStore)}
-                <button
-                  class="inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
-                  onclick={() => (showNegative = true)}
-                  title="Add negative prompt"
-                >
-                  <Ban class="w-[1.125rem] h-[1.125rem]" />
-                </button>
-              {/if}
-            </div>
-
-            <!-- Model name (centered, like chat) -->
-            <div class="flex-1 min-w-0 px-2 flex justify-center">
-              <span class="max-w-full truncate text-xs font-medium text-txtsecondary" title={$selectedModelStore}>
-                {$selectedModelStore || "No model selected"}
-              </span>
-            </div>
-
-            <div class="flex items-center gap-1">
-              <button
-                class="inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
-                onclick={newThread}
-                disabled={isGenerating || turns.length === 0}
-                title="New thread"
-              >
-                <Plus class="w-[1.125rem] h-[1.125rem]" />
-              </button>
-              <button
-                class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors {showSettings ? 'bg-secondary text-txtmain shadow-inner' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
-                onclick={() => (showSettings = !showSettings)}
-                title="Settings"
-              >
-                <Settings class="w-[1.125rem] h-[1.125rem]" />
-              </button>
-              {#if isGenerating}
-                <button
-                  class="inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
-                  onclick={cancelGeneration}
-                  title="Stop (unloads the model to interrupt)"
-                >
-                  <Square class="w-[1.125rem] h-[1.125rem]" fill="currentColor" />
-                </button>
-              {/if}
-            </div>
-          </div>
-        </div>
+        <Composer
+          bind:value={prompt}
+          placeholder={turns.length ? "Describe a change…" : "Describe the image you want…"}
+          textareaDisabled={isGenerating}
+          onKeydown={handleKeyDown}
+          onPaste={handlePaste}
+          bind:modelValue={$selectedModelStore}
+          modelPlaceholder="Select an image model..."
+          category="image"
+          busy={isGenerating}
+          onStop={cancelGeneration}
+          stopTitle="Stop (unloads the model to interrupt)"
+          bind:showSettings
+          settingsTitle="Settings"
+          topExtra={imageTopExtra}
+          leftButtons={imageLeftButtons}
+          extraRightButtons={imageExtraRightButtons}
+          settingsPanel={imageSettingsPanel}
+        />
       </div>
     </div>
   {/if}

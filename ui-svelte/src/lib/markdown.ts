@@ -48,6 +48,79 @@ function rehypeHighlight() {
 }
 
 
+// Inline citations. The chat models are told to append bracketed source numbers
+// (`[1]`, `[2]`) after facts drawn from a web search; this turns those markers
+// into clickable superscript chips linking to the source. Set per-render via a
+// module global — rendering is synchronous and single-threaded, so no reentrancy.
+// ponytail: module-global instead of threading through the shared processor.
+export interface Citation {
+  n: number;
+  title: string;
+  url: string;
+  // Wiki citations set this (article id) instead of a real `url`; their chip
+  // opens the in-app Help modal to the article rather than a browser tab.
+  wikiId?: string;
+}
+let activeCitations: Citation[] = [];
+
+function rehypeCitations() {
+  return (tree: Root) => {
+    if (activeCitations.length === 0) return;
+    const byN = new Map(activeCitations.map((c) => [c.n, c]));
+    visit(tree, "text", (node: { type: "text"; value: string }, index, parent) => {
+      if (!parent || index == null) return;
+      const p = parent as Element;
+      // Don't rewrite inside code spans or existing links.
+      if (p.type === "element" && (p.tagName === "code" || p.tagName === "a")) return;
+      const value = node.value;
+      if (!/\[\d+\]/.test(value)) return;
+
+      const out: (Element | { type: "text"; value: string })[] = [];
+      const re = /\[(\d+)\]/g;
+      let last = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(value))) {
+        const c = byN.get(Number(m[1]));
+        if (!c) continue; // not a known source — leave the literal text alone
+        if (m.index > last) out.push({ type: "text", value: value.slice(last, m.index) });
+        // Wiki citations have no URL — emit a chip the ChatMessage click handler
+        // intercepts (data-wiki-id) to open the Help modal, not a target=_blank link.
+        out.push(
+          c.wikiId
+            ? {
+                type: "element",
+                tagName: "a",
+                properties: {
+                  className: ["cite", "cite-wiki"],
+                  href: "#",
+                  "data-wiki-id": c.wikiId,
+                  title: c.title,
+                },
+                children: [{ type: "text", value: String(c.n) }],
+              }
+            : {
+                type: "element",
+                tagName: "a",
+                properties: {
+                  className: ["cite"],
+                  href: c.url,
+                  title: c.title,
+                  target: "_blank",
+                  rel: "noopener noreferrer",
+                },
+                children: [{ type: "text", value: String(c.n) }],
+              },
+        );
+        last = m.index + m[0].length;
+      }
+      if (out.length === 0) return;
+      if (last < value.length) out.push({ type: "text", value: value.slice(last) });
+      parent.children.splice(index, 1, ...(out as Element[]));
+      return index + out.length; // skip over the nodes we just inserted
+    });
+  };
+}
+
 export function escapeHtml(text: string): string {
   const htmlEntities: Record<string, string> = {
     "&": "&amp;",
@@ -67,6 +140,7 @@ const processor = unified()
   .use(remarkRehype, { allowDangerousHtml: true })
   .use(rehypeKatex)
   .use(rehypeHighlight)
+  .use(rehypeCitations)
   .use(rehypeStringify, { allowDangerousHtml: true });
 
 export function splitCompleteBlocks(text: string): { complete: string; pending: string } {
@@ -207,6 +281,7 @@ export function createStreamingCache(): StreamingCache {
 export function renderStreamingMarkdown(
   text: string,
   cache: StreamingCache,
+  citations: Citation[] = [],
 ): { blocks: RenderedBlock[]; pendingHtml: string } {
   const { complete, pending } = splitCompleteBlocks(text);
 
@@ -215,10 +290,10 @@ export function renderStreamingMarkdown(
       if (complete.startsWith(cache.completeKey) && cache.completeKey.length > 0) {
         // Complete section grew — render only the new part as a new block
         const newPart = complete.slice(cache.completeKey.length);
-        cache.blocks = [...cache.blocks, { id: cache.nextId++, html: renderMarkdown(newPart) }];
+        cache.blocks = [...cache.blocks, { id: cache.nextId++, html: renderMarkdown(newPart, citations) }];
       } else {
         // Complete section changed unexpectedly — re-render as single block
-        cache.blocks = [{ id: cache.nextId++, html: renderMarkdown(complete) }];
+        cache.blocks = [{ id: cache.nextId++, html: renderMarkdown(complete, citations) }];
       }
       cache.completeKey = complete;
     }
@@ -230,7 +305,7 @@ export function renderStreamingMarkdown(
   let pendingHtml = "";
   if (pending) {
     const closed = closePendingBlock(pending);
-    pendingHtml = renderMarkdown(closed);
+    pendingHtml = renderMarkdown(closed, citations);
   }
 
   return { blocks: cache.blocks, pendingHtml };
@@ -249,16 +324,19 @@ export function normalizeLatexDelimiters(text: string): string {
   return text;
 }
 
-export function renderMarkdown(content: string): string {
+export function renderMarkdown(content: string, citations: Citation[] = []): string {
   if (!content) {
     return "";
   }
 
+  activeCitations = citations;
   try {
     const result = processor.processSync(normalizeLatexDelimiters(content));
     return String(result);
   } catch {
     // Fallback to escaped plain text if markdown parsing fails
     return `<p>${escapeHtml(content)}</p>`;
+  } finally {
+    activeCitations = [];
   }
 }

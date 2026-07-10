@@ -20,8 +20,8 @@ var trayIcon []byte
 func runTray(openURL string, onExit func(), exitChan <-chan struct{}) {
 	systray.Run(func() {
 		systray.SetIcon(trayIcon)
-		systray.SetTitle("llama-quartermaster")
-		systray.SetTooltip("llama-quartermaster")
+		systray.SetTitle("quartermaster")
+		systray.SetTooltip("quartermaster")
 
 		mOpen := systray.AddMenuItem("Open dashboard", "Open the dashboard in your browser")
 		systray.AddSeparator()

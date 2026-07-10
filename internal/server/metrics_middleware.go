@@ -5,9 +5,9 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/radu0120/llama-quartermaster/internal/chain"
-	"github.com/radu0120/llama-quartermaster/internal/config"
-	"github.com/radu0120/llama-quartermaster/internal/shared"
+	"github.com/quartermaster-labs/quartermaster/internal/chain"
+	"github.com/quartermaster-labs/quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/shared"
 )
 
 // CreateMetricsMiddleware returns middleware that records token metrics for

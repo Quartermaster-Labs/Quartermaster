@@ -5,7 +5,7 @@ host="127.0.0.1:${port}"
 model_key="qwen3.6-35b-a3b-ud-q4_k_xl-100k"
 words=24000
 
-cmd='E:/Apps/LLM/llama-cpp/llama-server.exe -m E:/Apps/LLM/Models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf --port '"$port"' --host 127.0.0.1 -ngl 99 -c 102400 -ub 1024 -b 2048 -fa on -ctk f16 -ctv f16 --parallel 1 --kv-unified --no-warmup --no-webui --metrics --props --spec-type draft-mtp --spec-draft-n-max 2 --jinja --reasoning-format auto --reasoning-budget 16000 --chat-template-kwargs "{\"preserve_thinking\":true}" --ctx-checkpoints 0 -t 7 --n-cpu-moe 41 --slot-save-path "E:/Apps/LLM/llama-quartermaster/build/llama-quartermaster-windows/.cache/slotkv" --chat-template-file templates/qwen-fixed-chat-template.jinja'
+cmd='E:/Apps/LLM/llama-cpp/llama-server.exe -m E:/Apps/LLM/Models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf --port '"$port"' --host 127.0.0.1 -ngl 99 -c 102400 -ub 1024 -b 2048 -fa on -ctk f16 -ctv f16 --parallel 1 --kv-unified --no-warmup --no-webui --metrics --props --spec-type draft-mtp --spec-draft-n-max 2 --jinja --reasoning-format auto --reasoning-budget 16000 --chat-template-kwargs "{\"preserve_thinking\":true}" --ctx-checkpoints 0 -t 7 --n-cpu-moe 41 --slot-save-path "E:/Apps/LLM/quartermaster/build/quartermaster-windows/.cache/slotkv" --chat-template-file templates/qwen-fixed-chat-template.jinja'
 
 filler="The quick brown fox jumps over the lazy dog near the riverbank while clouds drift slowly across an autumn sky, and the town below hums with the quiet rhythm of everyday life. "
 build_prompt() {

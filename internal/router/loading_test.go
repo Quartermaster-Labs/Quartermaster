@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/radu0120/llama-quartermaster/internal/logmon"
+	"github.com/quartermaster-labs/quartermaster/internal/logmon"
 )
 
 func TestLoadingWriter_SSEHeadersAndInitialMessage(t *testing.T) {
@@ -40,7 +40,7 @@ func TestLoadingWriter_SSEHeadersAndInitialMessage(t *testing.T) {
 	if !strings.Contains(content, "━━━━━\n") {
 		t.Errorf("missing separator in streamed content: %q", content)
 	}
-	if !strings.Contains(content, "llama-quartermaster loading model: test-model\n") {
+	if !strings.Contains(content, "quartermaster loading model: test-model\n") {
 		t.Errorf("missing initial message in streamed content: %q", content)
 	}
 }
