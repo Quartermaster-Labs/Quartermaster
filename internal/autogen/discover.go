@@ -30,6 +30,10 @@ type GgufRow struct {
 	// --mmproj to enable image input; drives the auto-generated "-vision" variant.
 	MmprojPath   string
 	MmprojSizeGB float64
+	// Qwen3-TTS audio codec (the "qwen-tokenizer-*hz" gguf) sitting in the same
+	// dir as a talker, if any. Loaded via tts-server --codec, never served alone.
+	CodecPath   string
+	CodecSizeGB float64
 }
 
 var (
@@ -46,6 +50,10 @@ var (
 	// publishers embed "dflash" as an infix, so match anywhere in the name.
 	// Loaded via -md + --spec-type draft-dflash, not served alone.
 	dflashFileRe = regexp.MustCompile(`(?i)dflash`)
+	// Qwen3-TTS audio codec / tokenizer sidecar (e.g. "qwen-tokenizer-12hz-Q8_0.gguf").
+	// Loaded via tts-server --codec alongside the talker, never served as its own
+	// model. "hz" scopes the tokenizer match so a normal model file can't trip it.
+	ttsCodecFileRe = regexp.MustCompile(`(?i)tokenizer-?\d+hz|codec`)
 )
 
 // quantFromName extracts the quant token (upper-cased) from a gguf file name,
@@ -97,6 +105,7 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 	var rows []GgufRow
 	draftByDir := map[string]draftSidecar{}   // dir -> paired MTP/DFlash draft gguf
 	mmprojByDir := map[string]mmprojSidecar{} // dir -> vision projector gguf
+	codecByDir := map[string]codecSidecar{}   // dir -> Qwen3-TTS audio codec gguf
 	walkErr := filepath.WalkDir(modelsRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable entries, matching -ErrorAction SilentlyContinue
@@ -117,6 +126,13 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 		if dflashFileRe.MatchString(name) {
 			if fi, e := d.Info(); e == nil {
 				draftByDir[filepath.Dir(path)] = draftSidecar{path: path, sizeGB: round(float64(fi.Size())/gib, 2), kind: "dflash"}
+			}
+			return nil
+		}
+		// Qwen3-TTS audio codec: pair it to the talker in its dir, don't serve it.
+		if ttsCodecFileRe.MatchString(name) {
+			if fi, e := d.Info(); e == nil {
+				codecByDir[filepath.Dir(path)] = codecSidecar{path: path, sizeGB: round(float64(fi.Size())/gib, 2)}
 			}
 			return nil
 		}
@@ -201,6 +217,10 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 			rows[i].MmprojPath = m.path
 			rows[i].MmprojSizeGB = m.sizeGB
 		}
+		if c, ok := codecByDir[dir]; ok {
+			rows[i].CodecPath = c.path
+			rows[i].CodecSizeGB = c.sizeGB
+		}
 	}
 	return rows, nil
 }
@@ -239,6 +259,12 @@ func DraftSidecarForDir(dir string) (path, kind string, sizeGB float64) {
 
 // mmprojSidecar is a discovered vision projector paired to a model dir.
 type mmprojSidecar struct {
+	path   string
+	sizeGB float64
+}
+
+// codecSidecar is a discovered Qwen3-TTS audio codec paired to a talker's dir.
+type codecSidecar struct {
 	path   string
 	sizeGB float64
 }

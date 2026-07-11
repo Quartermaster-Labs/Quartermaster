@@ -553,6 +553,16 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/prefs", apiChain.ThenFunc(s.handlePlaygroundPrefs))
 	mux.Handle("GET /api/imagechats", apiChain.ThenFunc(s.handlePlaygroundImageChats))
 	mux.Handle("PUT /api/imagechats", apiChain.ThenFunc(s.handlePlaygroundImageChats))
+	mux.Handle("GET /api/speechchats", apiChain.ThenFunc(s.handlePlaygroundSpeechChats))
+	mux.Handle("PUT /api/speechchats", apiChain.ThenFunc(s.handlePlaygroundSpeechChats))
+
+	// Server-owned turn runner: a chat turn runs as a server goroutine that
+	// streams to disk + SSE, so a closed/refreshed tab no longer loses (or stops)
+	// the answer. See turns_design.md / turns.go.
+	mux.Handle("POST /api/chats/turn", apiChain.ThenFunc(s.handleTurnStart))
+	mux.Handle("GET /api/chats/turn/stream", apiChain.ThenFunc(s.handleTurnStream))
+	mux.Handle("GET /api/chats/turn/state", apiChain.ThenFunc(s.handleTurnState))
+	mux.Handle("DELETE /api/chats/turn", apiChain.ThenFunc(s.handleTurnStop))
 
 	// Per-model config editor (cogwheel) — read launch params + effective
 	// override, save curated overrides, reset to autogen default, add named

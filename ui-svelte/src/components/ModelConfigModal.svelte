@@ -125,6 +125,9 @@
   let defaultHeight = $state<number | "">("");
 
   const imageMode = $derived(config?.isImage ?? false);
+  // Qwen3-TTS talker (tts-server): minimal form, no KV/ctx/spec/estimate. The
+  // talker + codec are tiny and fully resident; voice/temperature are per-request.
+  const audioMode = $derived(config?.isAudio ?? false);
   // sd.cpp sampling methods (mirrors the playground's SAMPLER_OPTIONS).
   const IMG_SAMPLERS = ["", "euler_a", "euler", "heun", "dpm2", "dpmpp2s_a", "dpmpp2m", "dpmpp2mv2", "ipndm", "ipndm_v", "lcm", "ddim_trailing", "tcd"];
 
@@ -688,8 +691,8 @@
       selectedV?.kvInRam, selectedV?.cpuOffload,
     ];
     void deps;
-    // Diffusion sizing isn't modeled by the llama sizer; skip the estimate.
-    if (!open || !config || !modelId || imageMode) return;
+    // Diffusion/TTS sizing isn't modeled by the llama sizer; skip the estimate.
+    if (!open || !config || !modelId || imageMode || audioMode) return;
     clearTimeout(estTimer);
     estTimer = setTimeout(runEstimate, 100);
   });
@@ -969,7 +972,7 @@
 
     <!-- Sticky live estimate: stays pinned above the scrolling form so the memory
          cost of the current tuning is always visible while editing. -->
-    {#if config && !loading && !imageMode}
+    {#if config && !loading && !imageMode && !audioMode}
       <div class="px-4 py-2 border-b border-card-border bg-background/60 shrink-0">
         {#if estimateError}
           <p class="font-mono text-xs text-error">{estimateError}</p>
@@ -1315,6 +1318,47 @@
             <p class="text-xs text-txtsecondary mt-1">Re-renders from the fields above; empty fields inherit the model default.</p>
           </details>
         {/if}
+        {:else if audioMode}
+        <!-- Audio (Qwen3-TTS / qwentts.cpp tts-server) form. No KV/ctx/spec/estimate:
+             the talker + paired codec are tiny and fully resident. Voice, temperature,
+             top_k etc. are per-request (/v1/audio/speech), not launch flags — so the
+             only launch knobs are extraArgs passthrough + listing toggles. No variants
+             (base/customvoice/voicedesign ship as separate ggufs = separate models). -->
+        <div class="grid grid-cols-2 gap-3">
+          <p class="col-span-2 text-xs text-txtsecondary">
+            Served by qwentts.cpp <code>tts-server</code> (OpenAI <code>/v1/audio/speech</code>).
+            The talker loads with its paired codec gguf; voice is chosen per request.
+          </p>
+          <label class="flex flex-col gap-1 text-sm col-span-2">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Extra args
+              {@render hint("Appended verbatim to the tts-server command, for flags autogen doesn't model.")}
+            </span>
+            <input type="text" bind:value={extraArgs} class="cfg-input" placeholder="e.g. --temperature 0.7" spellcheck="false" />
+          </label>
+          <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" bind:checked={unlisted} />
+            <span class="text-txtsecondary flex items-center gap-1">
+              Unlisted
+              {@render hint("Hide from /v1/models listings, but still loadable by exact id.")}
+            </span>
+          </label>
+          <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" bind:checked={skip} />
+            <span class="text-txtsecondary flex items-center gap-1">
+              Skip (don't emit)
+              {@render hint("Exclude this model from the generated config entirely.")}
+            </span>
+          </label>
+        </div>
+
+        <details class="group">
+          <summary class="cursor-pointer font-semibold text-sm uppercase tracking-wider text-txtsecondary hover:text-txtmain">
+            Launch parameters {config.hasOverride ? "(custom)" : "(autogen default)"}
+          </summary>
+          <textarea value={cmdDraft} readonly spellcheck="false" rows="4" class="mt-2 w-full bg-background rounded border border-card-border p-3 text-xs font-mono whitespace-pre-wrap break-all resize-y text-txtmain opacity-90"></textarea>
+          <p class="text-xs text-txtsecondary mt-1 font-mono break-all">{config.gguf}</p>
+        </details>
         {:else}
         <!-- Entry selector: Default is a pinned, non-deletable entry; variants
              follow. Editing one shows its fields below — everything a variant

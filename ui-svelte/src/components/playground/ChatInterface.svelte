@@ -23,18 +23,17 @@
     chatSessions,
     activeChatId,
     generatingChatId,
+    saveChatsNow,
     newChatId,
     deriveTitle,
     type ChatSession,
   } from "../../stores/chatHistory";
-  import { streamChatCompletion } from "../../lib/chatApi";
-  import { WEB_SEARCH_TOOL, searxngSearch, formatSearchResults } from "../../lib/webSearch";
-  import { WIKI_TOOL, searchWiki, formatWikiResults } from "../../lib/wiki";
+  import { WEB_SEARCH_TOOL } from "../../lib/webSearch";
+  import { WIKI_TOOL } from "../../lib/wiki";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import { getTextContent, getImageUrls } from "../../lib/types";
-  import { harmonyToThink } from "../../lib/reasoning";
   import { buildBasePrompt } from "../../lib/systemPrompt";
-  import type { ChatMessage, ContentPart, ToolCall } from "../../lib/types";
+  import type { ChatMessage, ContentPart } from "../../lib/types";
   import { Paperclip, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle, Eye } from "lucide-svelte";
   import ChatMessageComponent from "./ChatMessage.svelte";
   import Composer from "./Composer.svelte";
@@ -87,25 +86,12 @@
     generatingChatId.set(genId);
   });
 
+  // Reconnect to a turn the server is still running (tab was closed mid-answer).
+  attachIfGenerating();
+
   // --- store helpers: messages live in chatSessions, keyed by session id ---
   function sessionById(id: string): ChatSession | undefined {
     return get(chatSessions).find((s) => s.id === id);
-  }
-  // Sleep that rejects with an AbortError if the signal fires (so a user Stop
-  // during a search throttle-wait breaks out instead of stalling).
-  function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (signal.aborted) return reject(new DOMException("Aborted", "AbortError"));
-      const t = setTimeout(() => {
-        signal.removeEventListener("abort", onAbort);
-        resolve();
-      }, ms);
-      const onAbort = () => {
-        clearTimeout(t);
-        reject(new DOMException("Aborted", "AbortError"));
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-    });
   }
   // Patch one session. `bump` stamps updatedAt so the rail sorts the row to the
   // top — only on real message activity (send / regenerate), NOT on streaming
@@ -530,120 +516,22 @@
 
     // No tools during a rewrite — it's a self-contained text transform.
     // Web search is opt-in (needs SearXNG); the local help wiki is always on so
-    // models can answer quartermaster questions. `useTools` = any tool advertised.
+    // models can answer quartermaster questions.
     const webEnabled = !isRewrite && $webSearchStore;
     const wikiEnabled = !isRewrite;
-    const useTools = webEnabled || wikiEnabled;
-    // Stable per-turn tool set — same every round AND in the finalize prefill, so
-    // the system-prompt prefix stays byte-identical (KV reuse; see finalize note).
+    // Stable per-turn tool set the client advertises; the server dispatches them
+    // and enforces the per-turn caps (wiki lookups, web-search rate limits).
     const turnTools = [...(webEnabled ? [WEB_SEARCH_TOOL] : []), ...(wikiEnabled ? [WIKI_TOOL] : [])];
-    const maxWiki = 4;
-    let wikiCount = 0;
 
     // Thinking budget: hard token cap so models can't loop forever before
     // answering. 0 = off; rewrites never think. Enforced server-side as the
     // round's max_tokens (a clean "length" stop, NOT a client disconnect — a
     // disconnect resets the recurrent slot KV and forces a full reprocess).
     const reasoningBudget = isRewrite ? 0 : $reasoningBudgetStore;
-    // Only the finalize safety-net still needs a char proxy (bounding a stubborn
-    // model that reopens <think>); the budget itself is now real tokens.
-    const CHARS_PER_TOK = 4;
-
-    // Force the model to stop thinking and answer: re-request with its own
-    // reasoning prefilled (via reasoning_content, template re-renders + closes it)
-    // so it continues straight into the reply (llama.cpp continues a trailing
-    // assistant message as a prefix). Format-agnostic — see finalizeAfterBudget.
-    // Answer text only: drop reasoning markup of every flavour — channel-based is
-    // already separate, this strips inline <think>…</think>, harmony channels,
-    // and a trailing unclosed think (model still mid-thought).
-    const answerOnly = (s: string) =>
-      harmonyToThink(s)
-        .replace(/<(think|thinking|reasoning)>[\s\S]*?<\/\1>/gi, "")
-        .replace(/<(think|thinking|reasoning)>[\s\S]*$/i, "")
-        .trimStart();
-    async function finalizeAfterBudget(baseMsgs: ChatMessage[], tail: ChatMessage[], sig: AbortSignal) {
-      if (isReasoning) {
-        const reasoningTimeMs = Date.now() - reasoningStartTime;
-        isReasoning = false;
-        patchLast(id, (m) => ({ ...m, reasoningTimeMs }));
-      }
-      // Hand the model's reasoning back via reasoning_content — NOT hardcoded
-      // <think> markup. The upstream chat template re-renders it in the model's
-      // OWN reasoning format (<think>, harmony channels, <thinking>, …) and closes
-      // it, reproducing the exact KV-slot prefix regardless of format. The slot
-      // holds `base + <open-reasoning> + reasoning…`, so it prefix-matches and
-      // llama.cpp reuses the cached reasoning, processing only the closing marker
-      // + the answer. buildChatCompletionsBody already forwards assistant
-      // reasoning_content for preserve_thinking templates. Keeping the round-1
-      // reasoning flag (not flipping enable_thinking) leaves the prefix identical;
-      // the old path flipped reasoning:false + dropped the reasoning for a fixed
-      // directive, so nothing matched and the whole prompt was reprocessed.
-      //
-      // EXACTNESS IS LOAD-BEARING on hybrid/recurrent models (Qwen3.6 GatedDeltaNet):
-      // their live prefix cache is exact-prefix-ONLY — a single divergent token
-      // reprocesses the whole context (measured: 47.8 s / 24k tokens). So:
-      //   - do NOT trim the reasoning — the slot holds the raw bytes verbatim;
-      //     trimming leading/trailing whitespace breaks the match at the <think> block.
-      //   - forward the SAME tools as round-1 — tool JSON renders into the system
-      //     prefix, so dropping it breaks the match at token ~0 → full reprocess.
-      const last = sessionById(id)?.messages.at(-1);
-      const rawContent = typeof last?.content === "string" ? last.content : "";
-      // Inline models leave reasoning in content as raw markup; channel models put
-      // it in reasoning_content. Normalize inline markup (harmony/<think>/…) to
-      // plain text so the template can re-wrap it canonically.
-      const inlineThink = rawContent.slice(0, rawContent.length - answerOnly(rawContent).length);
-      const inlinePlain = harmonyToThink(inlineThink)
-        .replace(/<\/?(?:think|thinking|reasoning)>/gi, "")
-        .trim();
-      // Channel models: raw untrimmed reasoning_content = byte-exact slot prefix.
-      // Inline fallback (inlinePlain) is reconstructed and may not match exactly.
-      const reasoned = last?.reasoning_content || inlinePlain;
-      // The cap can bite mid-reasoning (no answer yet) OR mid-answer (long reply
-      // cut at the budget). Feed back the partial answer too so the prefill
-      // EXTENDS the warm slot in both cases.
-      //
-      // A NON-EMPTY content field is load-bearing: it makes the chat template
-      // emit the closing </think> and switch to the answer channel. With empty
-      // content the template leaves <think> OPEN, so the model keeps reasoning
-      // past the budget and never answers (measured: reasons to full max_tokens,
-      // finish=length, content stays ""). When the cap bit mid-reasoning there's
-      // no answer yet, so seed a bare newline — it forces the close, appends only
-      // `</think>\n\n\n` to the slot (still an extension → warm reuse), and is
-      // whitespace so answerOnly()/trimStart drop it from the display.
-      const partialAnswer = answerOnly(rawContent);
-      const prefill: ChatMessage = {
-        role: "assistant",
-        content: partialAnswer || "\n",
-        reasoning_content: reasoned,
-      };
-      const stream = streamChatCompletion(modelId, [...baseMsgs, ...tail, prefill], sig, {
-        temperature: $temperatureStore,
-        max_tokens: $maxTokensStore,
-        // Match round-1's tool set so the system-prompt prefix is byte-identical
-        // (prefix match, not tool use — the finalize loop ignores tool_calls).
-        tools: turnTools.length ? turnTools : undefined,
-        reasoning: !isRewrite && $reasoningStore, // keep round-1 flag → same prefix, KV reuse
-        conversationId: id,
-      });
-      // Safety net: strip any think the model still emits so the forced answer
-      // can't spawn a 2nd reasoning box. If a stubborn model reopens think
-      // anyway, cut it once it over-reasons with no answer — bounds the worst
-      // case to ~1 extra budget instead of a full second pass.
-      let answer = "";
-      for await (const chunk of stream) {
-        if (chunk.done) break;
-        if (chunk.content) {
-          answer += chunk.content;
-          const shown = answerOnly(answer);
-          if (!shown && reasoningBudget > 0 && answer.length > reasoningBudget * CHARS_PER_TOK) break;
-          patchLast(id, (m) => ({ ...m, content: shown }));
-        }
-      }
-    }
-
     // One assistant bubble holds the whole turn: reasoning, any web searches
-    // (as collapsible sections), and the final reply. It stays the last message
-    // throughout — tool plumbing for the model is kept separately in `apiTail`.
+    // (as collapsible sections), and the final reply. The server writes into
+    // this bubble (last message) as it streams; the tool plumbing it sends to
+    // the model stays server-side and is never shown here.
     appendMessage(id, { role: "assistant", content: "", ...(isRewrite ? { rewriteOriginal: original } : {}) });
     const genStart = Date.now();
 
@@ -679,213 +567,44 @@
       base.push(...history);
     }
 
-    // assistant(tool_calls) + tool results, accumulated across rounds and sent
-    // to the model but NOT shown as separate bubbles (the searches render inside
-    // the assistant message instead).
-    const apiTail: ChatMessage[] = [];
-
-    // Web-search rate controls (protect self-hosted SearXNG). Cap total searches
-    // per turn; once hit the tool is dropped so the model must answer. Throttle
-    // spaces requests; dedupe reuses the result for a repeated query in the turn.
-    const maxSearches = $searchMaxPerTurnStore;
-    const throttleMs = $searchThrottleMsStore;
-    const dedupe = $searchDedupeStore;
-    let searchCount = 0;
-    let lastSearchAt = 0;
-    const searchCache = new Map<string, { text: string; sources: { title: string; url: string }[] }>();
-    // Inline-citation registry: web results are numbered globally across the turn
-    // ([1], [2], …) so the model can cite them; this maps each number to its source.
-    // `citeOffset` counts ALL results fed (even url-less ones) so the numbers stay
-    // aligned with what formatSearchResults printed.
-    const citations: { n: number; title: string; url: string; wikiId?: string }[] = [];
-    let citeOffset = 0;
-
     try {
-      // model→search→model until the model stops calling tools or the per-turn
-      // search cap is reached. The user hits Stop to break out early.
-      for (;;) {
-        // Per-round abort so a budget-triggered finalize cancels just this
-        // request, not the whole turn (which the user-level `signal` owns).
-        const roundCtrl = new AbortController();
-        const forwardAbort = () => roundCtrl.abort();
-        signal.addEventListener("abort", forwardAbort, { once: true });
-
-        let toolCalls: ToolCall[] | undefined;
-        let roundContent = "";
-        let budgetHit = false;
-        let finishReason: string | undefined;
-
-        try {
-          const stream = streamChatCompletion(modelId, [...base, ...apiTail], roundCtrl.signal, {
-            temperature: $temperatureStore,
-            // Reasoning budget = a hard token cap the SERVER enforces, so the round
-            // ends with a clean "length" stop instead of a client disconnect. A
-            // disconnect resets the recurrent slot KV (hybrid GatedDeltaNet), which
-            // is exactly what forced the full-context reprocess before. A clean stop
-            // leaves the slot warm so the continuation below reuses it. 0 = off.
-            max_tokens: reasoningBudget > 0 ? reasoningBudget : $maxTokensStore,
-            // Stable tool set every round → the cap is enforced in dispatch (a
-            // "limit reached" tool reply), not by dropping the tool, which would
-            // change the prefix mid-turn and cost a full reprocess on hybrids.
-            tools: turnTools.length ? turnTools : undefined,
-            reasoning: !isRewrite && $reasoningStore,
-            conversationId: id,
-          });
-
-          for await (const chunk of stream) {
-            if (chunk.tool_calls) toolCalls = chunk.tool_calls;
-            if (chunk.done) {
-              finishReason = chunk.finish_reason;
-              break;
-            }
-
-            // Reasoning via the dedicated channel (most backends).
-            if (chunk.reasoning_content) {
-              if (!isReasoning) {
-                isReasoning = true;
-                reasoningStartTime = Date.now();
-              }
-              patchLast(id, (m) => ({
-                ...m,
-                reasoning_content: (m.reasoning_content || "") + chunk.reasoning_content,
-              }));
-            }
-
-            // Content carries the answer — and for inline-think / harmony models
-            // the reasoning too. Keep raw content for display + tool rounds.
-            if (chunk.content) {
-              roundContent += chunk.content;
-              patchLast(id, (m) => ({ ...m, content: m.content + chunk.content }));
-            }
-
-            // Track the reasoning box open/close for its live timer: answer =
-            // content with reasoning stripped; while it's empty the model is
-            // still reasoning (channel or inline/harmony).
-            const answer = answerOnly(roundContent);
-            if (answer) {
-              if (isReasoning) {
-                const reasoningTimeMs = Date.now() - reasoningStartTime;
-                isReasoning = false;
-                patchLast(id, (m) => ({ ...m, reasoningTimeMs }));
-              }
-            } else if (!isReasoning && chunk.content) {
-              isReasoning = true;
-              reasoningStartTime = Date.now();
-            }
-          }
-        } finally {
-          // Only the user's Stop aborts a round now (the budget uses a server-side
-          // max_tokens cap, not a disconnect), so nothing to swallow — errors
-          // propagate to the turn handler.
-          signal.removeEventListener("abort", forwardAbort);
-        }
-
-        // Server hit the reasoning-token cap (clean "length" stop, slot still warm).
-        // Continue via a prefill that byte-extends the resident KV → warm reuse,
-        // no full reprocess. Skip if the model got a complete tool call out first.
-        if (reasoningBudget > 0 && finishReason === "length" && (!toolCalls || toolCalls.length === 0)) {
-          budgetHit = true;
-        }
-
-        if (budgetHit) {
-          await finalizeAfterBudget(base, apiTail, signal);
-          break; // forced answer written — end the turn, skip further tool rounds
-        }
-
-        // No tool calls (or tools off) → the turn is complete.
-        if (!useTools || !toolCalls || toolCalls.length === 0) break;
-
-        // Record this round's call so the model sees it next round.
-        apiTail.push({ role: "assistant", content: roundContent, tool_calls: toolCalls });
-
-        // Run each requested search; fold the result into the visible bubble and
-        // hand the raw text back to the model via apiTail.
-        isSearching = true;
-        // Offset in the assistant bubble where these searches land, so the UI
-        // renders them inline after the text written so far (not pinned to top).
-        // A search fired mid-think (no answer content yet, still reasoning) is
-        // tagged so the UI nests it inside the reasoning box at its reasoning_content
-        // offset, instead of dropping it below the box.
-        const lastMsg = sessionById(id)?.messages.at(-1);
-        const at = typeof lastMsg?.content === "string" ? lastMsg.content.length : 0;
-        const duringReasoning = isReasoning;
-        const reasoningAt = (lastMsg?.reasoning_content || "").length;
-        for (const tc of toolCalls) {
-          const citesBefore = citeOffset; // did this call add numbered sources?
-          let resultText: string;
-          let sources: { title: string; url: string }[] = [];
-          let query = "";
-          try {
-            query = JSON.parse(tc.function.arguments || "{}").query ?? "";
-            if (tc.function.name === "wiki_search") {
-              // Local help lookup — no network, no SearXNG budget. Its own small
-              // cap stops a model looping on it.
-              if (wikiCount >= maxWiki) {
-                resultText = `Wiki lookup limit reached (${maxWiki} per turn). Answer with what you have.`;
-              } else {
-                wikiCount++;
-                const wikiResults = searchWiki(query);
-                // Reuse an earlier citation number for an article already cited
-                // this turn (repeat wiki_search hitting the same doc), instead of
-                // minting a second number for the same source.
-                const numbers = wikiResults.map((a) => {
-                  const existing = citations.find((c) => c.wikiId === a.id);
-                  if (existing) return existing.n;
-                  const n = ++citeOffset;
-                  citations.push({ n, title: a.title, url: "", wikiId: a.id });
-                  return n;
-                });
-                resultText = formatWikiResults(query, wikiResults, numbers);
-              }
-            } else {
-            const cached = dedupe ? searchCache.get(query) : undefined;
-            if (cached) {
-              // Repeated query this turn — reuse the earlier result, no network hit.
-              resultText = cached.text;
-              sources = cached.sources;
-            } else if (searchCount >= maxSearches) {
-              // Cap hit mid-round: tell the model so it answers instead of retrying.
-              resultText = `Search limit reached (${maxSearches} per turn). Answer with the information already gathered.`;
-            } else {
-              // Throttle: space real requests so SearXNG's limiter doesn't trip.
-              const wait = throttleMs - (Date.now() - lastSearchAt);
-              if (wait > 0 && lastSearchAt > 0) await abortableSleep(wait, signal);
-              const results = await searxngSearch($searxngUrlStore, query, signal);
-              lastSearchAt = Date.now();
-              searchCount++;
-              // Reuse an earlier citation number for a URL already cited this turn
-              // (different queries surfacing the same page), instead of minting a
-              // second number for the same source.
-              const numbers = results.map((r) => {
-                if (!r.url) return ++citeOffset;
-                const existing = citations.find((c) => c.url === r.url);
-                if (existing) return existing.n;
-                const n = ++citeOffset;
-                citations.push({ n, title: r.title || r.url, url: r.url });
-                return n;
-              });
-              resultText = formatSearchResults(query, results, numbers);
-              sources = results.filter((r) => r.url).map((r) => ({ title: r.title || r.url, url: r.url }));
-              if (dedupe) searchCache.set(query, { text: resultText, sources });
-            }
-            }
-          } catch (e) {
-            if (e instanceof Error && e.name === "AbortError") throw e;
-            resultText = `${tc.function.name === "wiki_search" ? "Wiki lookup" : "Search"} failed: ${e instanceof Error ? e.message : String(e)}`;
-          }
-          // Cite reminder co-located with the numbered results — far higher
-          // compliance than the lone system-prompt line. Only when this call
-          // actually produced numbered sources. Fed to the model, not shown.
-          const citeHint = citeOffset > citesBefore
-            ? `\n\nWhen you use any of the above in your answer, cite it inline with its bracketed number (e.g. [${citesBefore + 1}]) right after the statement.`
-            : "";
-          apiTail.push({ role: "tool", tool_call_id: tc.id, content: resultText + citeHint });
-          const kind = tc.function.name === "wiki_search" ? "wiki" : "web";
-          patchLast(id, (m) => ({ ...m, citations: [...citations], searches: [...(m.searches ?? []), { query, results: resultText, kind, at, reasoningAt, duringReasoning, sources }] }));
-        }
-        isSearching = false;
-        // loop: next round lets the model read the results and respond.
+      // Persist the session (user msg + empty assistant bubble) first so the
+      // server-side runner has somewhere to write, then hand off the turn. The
+      // server drives the whole loop (model->tool->model, budget finalize,
+      // citations) and writes into chats.json; this tab is just a viewer of the
+      // SSE deltas and can be closed/refreshed without losing or stopping it.
+      await saveChatsNow();
+      const res = await fetch("/api/chats/turn", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chatId: id,
+          model: modelId,
+          messages: base,
+          tools: turnTools.length ? turnTools : undefined,
+          temperature: $temperatureStore,
+          max_tokens: $maxTokensStore,
+          reasoning: !isRewrite && $reasoningStore,
+          reasoningBudget,
+          webSearch: webEnabled,
+          searxngUrl: $searxngUrlStore,
+          maxSearches: $searchMaxPerTurnStore,
+          throttleMs: $searchThrottleMsStore,
+          dedupe: $searchDedupeStore,
+        }),
+        signal,
+      });
+      if (res.status === 409) {
+        showToast("A response is already generating");
+        return;
       }
+      if (!res.ok) throw new Error((await res.text()) || `turn failed: ${res.status}`);
+
+      // Paint the running turn from the server's SSE stream, then pull the
+      // authoritative persisted copy (the server owns reasoning/gen time,
+      // searches and citations) so the local view matches disk exactly.
+      await viewServerTurn(id, signal);
+      await syncSessionFromServer(id);
       // Turn complete — fold older turns into the summary if near the ctx limit.
       await maybeCompact(id, modelId, signal);
       // First exchange done → let the model name the chat. Awaited (not fired
@@ -939,6 +658,144 @@
       queued = rest;
       appendMessage(id, { role: "user", content: next });
       await regenerateFromIndex(id, sessionById(id)!.messages.length - 1);
+    }
+  }
+
+  // View a server-side turn: stream its SSE deltas onto the assistant bubble
+  // until the server signals done/error. Reconnect-safe — on (re)subscribe the
+  // server first replays a full snapshot (replace=true) then live deltas, so a
+  // refreshed tab syncs and tails. 204 = that chat is no longer generating (the
+  // finished answer already lives in chats.json).
+  async function viewServerTurn(id: string, signal: AbortSignal) {
+    const res = await fetch(`/api/chats/turn/stream?chatId=${encodeURIComponent(id)}`, { signal });
+    if (res.status === 204 || !res.body) return;
+    if (!res.ok) throw new Error(`stream failed: ${res.status}`);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf("\n\n")) >= 0) {
+          const frame = buf.slice(0, nl);
+          buf = buf.slice(nl + 2);
+          const line = frame.split("\n").find((l) => l.startsWith("data:"));
+          if (!line) continue;
+          let d: any;
+          try {
+            d = JSON.parse(line.slice(5).trim());
+          } catch {
+            continue;
+          }
+          applyServerDelta(id, d);
+          if (d.kind === "done" || d.kind === "error") return;
+        }
+      }
+    } finally {
+      try {
+        await reader.cancel();
+      } catch {}
+    }
+  }
+
+  // Apply one SSE delta to the live assistant bubble. replace=true carries a full
+  // snapshot (sent once on subscribe); otherwise it's an incremental append.
+  function applyServerDelta(id: string, d: any) {
+    switch (d.kind) {
+      case "reasoning":
+        if (!isReasoning) {
+          isReasoning = true;
+          reasoningStartTime = Date.now();
+        }
+        patchLast(id, (m) => ({
+          ...m,
+          reasoning_content: d.replace ? d.text || "" : (m.reasoning_content || "") + (d.text || ""),
+        }));
+        break;
+      case "content":
+        if (isReasoning) {
+          const reasoningTimeMs = Date.now() - reasoningStartTime;
+          isReasoning = false;
+          patchLast(id, (m) => ({ ...m, reasoningTimeMs }));
+        }
+        patchLast(id, (m) => ({
+          ...m,
+          content: d.replace ? d.text || "" : (m.content || "") + (d.text || ""),
+        }));
+        break;
+      case "search": {
+        const search = d.data?.search;
+        const citations = d.data?.citations;
+        if (search) {
+          patchLast(id, (m) => ({
+            ...m,
+            ...(citations ? { citations } : {}),
+            searches: [...(m.searches ?? []), search],
+          }));
+        }
+        break;
+      }
+      case "done":
+        if (d.genMs) patchLast(id, (m) => (m.role === "assistant" ? { ...m, genTimeMs: d.genMs } : m));
+        break;
+      case "error":
+        patchLast(id, (m) => ({ ...m, content: (m.content || "") + `\n\n**Error:** ${d.msg || "error"}` }));
+        break;
+    }
+  }
+
+  // Replace one session's messages with the server's authoritative copy after a
+  // turn finishes — the server-owned fields (searches, citations, reasoning/gen
+  // time, compaction boundary) are the truth; the delta view is best-effort.
+  async function syncSessionFromServer(id: string) {
+    try {
+      const r = await fetch("/api/chats");
+      if (!r.ok) return;
+      const arr = await r.json();
+      const sess = Array.isArray(arr) ? arr.find((s: any) => s.id === id) : null;
+      if (sess) patchSession(id, { messages: sess.messages, summary: sess.summary, compactedCount: sess.compactedCount });
+    } catch {}
+  }
+
+  // On (re)mount, reattach to a turn the server is still running for this user —
+  // e.g. the tab was closed/refreshed mid-generation. The turn keeps running
+  // server-side regardless; this just resumes viewing + the post-turn steps.
+  async function attachIfGenerating() {
+    if (genId !== null) return; // this tab already owns a turn
+    let id = "";
+    try {
+      const r = await fetch("/api/chats/turn/state");
+      if (!r.ok) return;
+      const st = await r.json();
+      if (!st.running || !st.chatId) return;
+      id = st.chatId;
+    } catch {
+      return;
+    }
+    genId = id;
+    isReasoning = false;
+    isSearching = false;
+    reasoningStartTime = 0;
+    abortController = new AbortController();
+    const signal = abortController.signal;
+    const modelId = $selectedModelStore;
+    try {
+      await viewServerTurn(id, signal);
+      await syncSessionFromServer(id);
+      if (!signal.aborted && modelId) {
+        await maybeCompact(id, modelId, signal);
+        await maybeTitle(id, modelId, signal);
+      }
+    } catch {
+      // ignore — partial answer is persisted server-side
+    } finally {
+      genId = null;
+      isReasoning = false;
+      isSearching = false;
+      abortController = null;
     }
   }
 

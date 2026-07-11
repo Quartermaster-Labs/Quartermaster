@@ -27,7 +27,8 @@ const hashCacheSuffix = ".modelhash"
 //	    on VRAM pressure); only an explicit spec: draft-dflash override selects it.
 //	v5: flux.2 klein name-detected (arch is "flux", same as flux.1) to wire
 //	    flux2Vae + qwenLlm instead of fluxVae/clip_l/t5.
-const genVersion = "v5"
+//	v7: tts-server checkEndpoint none -> /health (gate readiness, kill 502-on-cold).
+const genVersion = "v7"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the
@@ -94,12 +95,25 @@ func readHashCache(path string) string {
 }
 
 // buildHashInput assembles the byte blob whose digest gates regeneration:
-// resolved modelsRoot + raw generate file + UI sidecar. Kept in one place so
-// EnsureConfig and CurrentInputsHash always hash identical inputs.
+// resolved modelsRoot + raw generate file + UI sidecar + the binary's own
+// directory. Kept in one place so EnsureConfig and CurrentInputsHash always
+// hash identical inputs.
+//
+// The exe dir is folded in because slotKvPath/DefaultSlotCachePath bake an
+// absolute path (next to the binary) into the emitted config at generate
+// time; without this, moving or renaming the install dir leaves the stale
+// config pointing --slot-save-path/slotCache.path at the old location
+// forever, since none of the gguf/generate/sidecar inputs changed.
 func buildHashInput(roots []string, rawGenerate, sidecarBytes []byte) []byte {
 	out := append([]byte("genver\x00"+genVersion+"\x00"), []byte(strings.Join(roots, "\x00")+"\x00")...)
 	out = append(out, rawGenerate...)
-	return append(append(out, "\x00sidecar\x00"...), sidecarBytes...)
+	out = append(out, "\x00sidecar\x00"...)
+	out = append(out, sidecarBytes...)
+	out = append(out, "\x00exedir\x00"...)
+	if exe, err := os.Executable(); err == nil {
+		out = append(out, []byte(filepath.ToSlash(filepath.Dir(exe)))...)
+	}
+	return out
 }
 
 // CurrentInputsHash computes the inputs hash for the generate file's present

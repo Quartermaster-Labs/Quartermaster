@@ -409,7 +409,7 @@
 <div class="flex flex-col {role === 'user' ? 'items-end' : 'items-start'} mb-4">
   <div
     class="relative group rounded-2xl px-3 py-2 text-[0.8125rem] {role === 'user'
-      ? 'max-w-[85%] bg-black text-white rounded-br-sm msg-tail-user'
+      ? 'max-w-[85%] bg-[#141414] text-[#ededee] rounded-br-sm msg-tail-user'
       : (rewriteOriginal != null ? 'w-full' : 'w-full sm:w-4/5') + ' rounded-bl-sm'}"
   >
     {#if role === "assistant"}
@@ -736,7 +736,7 @@
   }
   .msg-tail-user::after {
     right: -5px;
-    border-left-color: #000;
+    border-left-color: #141414;
   }
   .msg-tail-bot::after {
     left: -5px;
@@ -754,20 +754,20 @@
      flat white so the whole bubble's ink matches the bg-black/text-white it
      sits on. */
   .user-msg-prose {
-    --tw-prose-invert-body: #fff;
-    --tw-prose-invert-headings: #fff;
-    --tw-prose-invert-lead: #fff;
-    --tw-prose-invert-links: #fff;
-    --tw-prose-invert-bold: #fff;
-    --tw-prose-invert-counters: #fff;
-    --tw-prose-invert-bullets: #fff;
-    --tw-prose-invert-hr: #fff;
-    --tw-prose-invert-quotes: #fff;
-    --tw-prose-invert-quote-borders: #fff;
-    --tw-prose-invert-captions: #fff;
-    --tw-prose-invert-code: #fff;
-    --tw-prose-invert-th-borders: #fff;
-    --tw-prose-invert-td-borders: #fff;
+    --tw-prose-invert-body: #ededee;
+    --tw-prose-invert-headings: #ededee;
+    --tw-prose-invert-lead: #ededee;
+    --tw-prose-invert-links: #ededee;
+    --tw-prose-invert-bold: #ededee;
+    --tw-prose-invert-counters: #ededee;
+    --tw-prose-invert-bullets: #ededee;
+    --tw-prose-invert-hr: #ededee;
+    --tw-prose-invert-quotes: #ededee;
+    --tw-prose-invert-quote-borders: #ededee;
+    --tw-prose-invert-captions: #ededee;
+    --tw-prose-invert-code: #ededee;
+    --tw-prose-invert-th-borders: #ededee;
+    --tw-prose-invert-td-borders: #ededee;
   }
 
   /* Animated expand/reveal for the reasoning + search boxes. grid-rows 0fr→1fr

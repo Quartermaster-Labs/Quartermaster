@@ -15,12 +15,13 @@
 
   llama-server -> ggml-org/llama.cpp
   sd-server    -> leejet/stable-diffusion.cpp
+  tts-server   -> ServeurpersoCom/qwentts.cpp
 
 .PARAMETER Backend
   vulkan | cuda | cpu
 
 .PARAMETER Components
-  Comma-separated: llama-server,sd-server (any subset).
+  Comma-separated: llama-server,sd-server,tts-server (any subset).
 
 .PARAMETER AppDir
   Bundle root (holds the exe + quartermaster-generate.yaml). Defaults to the
@@ -40,6 +41,7 @@ param(
     # the generate yaml at these exes (Backend/Components are ignored).
     [string]$LlamaExe,
     [string]$SdExe,
+    [string]$TtsExe,
     # Set settings.modelsRoot in the generate yaml (independent of server setup).
     [string]$ModelsRoot,
     [switch]$NoPause,
@@ -65,6 +67,16 @@ $ASSET_PATTERNS = @{
     'sd-server'    = @{
         repo   = 'leejet/stable-diffusion.cpp'
         exe    = 'sd-server.exe'
+        vulkan = @('.*-bin-win-vulkan-x64\.zip$', '.*vulkan.*\.zip$')
+        cuda   = @('.*-bin-win-cuda.*-x64\.zip$', '.*cuda.*\.zip$')
+        cpu    = @('.*-bin-win-avx2-x64\.zip$', '.*-bin-win-cpu-x64\.zip$', '.*avx2.*\.zip$')
+    }
+    # ponytail: qwentts.cpp ships NO GitHub releases yet, so download mode always
+    # warns "no asset" and users must use existing-install mode (-TtsExe). Patterns
+    # are best-guess for when upstream starts publishing win zips — update then.
+    'tts-server'   = @{
+        repo   = 'ServeurpersoCom/qwentts.cpp'
+        exe    = 'tts-server.exe'
         vulkan = @('.*-bin-win-vulkan-x64\.zip$', '.*vulkan.*\.zip$')
         cuda   = @('.*-bin-win-cuda.*-x64\.zip$', '.*cuda.*\.zip$')
         cpu    = @('.*-bin-win-avx2-x64\.zip$', '.*-bin-win-cpu-x64\.zip$', '.*avx2.*\.zip$')
@@ -169,7 +181,7 @@ if ($ModelsRoot) {
 }
 
 # Existing-install mode: point the yaml at user-supplied exes, no download.
-if ($LlamaExe -or $SdExe) {
+if ($LlamaExe -or $SdExe -or $TtsExe) {
     if ($LlamaExe) {
         if (Test-Path -LiteralPath $LlamaExe) {
             $p = (Resolve-Path -LiteralPath $LlamaExe).Path
@@ -181,6 +193,12 @@ if ($LlamaExe -or $SdExe) {
             $p = (Resolve-Path -LiteralPath $SdExe).Path
             Set-YamlValue $genYaml 'sdServerExe' $p; Write-Host "sdServerExe -> $p" -ForegroundColor Green
         } else { Write-Warning "sd-server not found: $SdExe" }
+    }
+    if ($TtsExe) {
+        if (Test-Path -LiteralPath $TtsExe) {
+            $p = (Resolve-Path -LiteralPath $TtsExe).Path
+            Set-YamlValue $genYaml 'ttsServerExe' $p; Write-Host "ttsServerExe -> $p" -ForegroundColor Green
+        } else { Write-Warning "tts-server not found: $TtsExe" }
     }
     Write-Host "Done." -ForegroundColor Green
     if (-not $NoPause -and $Host.Name -eq 'ConsoleHost') { Write-Host "`nPress any key..."; [void][System.Console]::ReadKey($true) }
@@ -216,6 +234,7 @@ foreach ($comp in $wanted) {
 
         if ($comp -eq 'llama-server') { Set-YamlValue $genYaml 'serverExe' $exe }
         elseif ($comp -eq 'sd-server') { Set-YamlValue $genYaml 'sdServerExe' $exe }
+        elseif ($comp -eq 'tts-server') { Set-YamlValue $genYaml 'ttsServerExe' $exe }
     } catch {
         Write-Warning "$comp failed: $($_.Exception.Message)"
     }

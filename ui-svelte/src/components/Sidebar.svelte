@@ -75,10 +75,12 @@
 
 <!-- Icons only at rest; expands on hover (mirrors the playground side rail). -->
 <aside class="group/rail flex flex-col gap-1 h-full w-14 hover:w-44 shrink-0 overflow-hidden transition-[width] duration-200 border-r border-border bg-surface py-2">
-  <!-- Brand: collapses to "QM", expands to "Quartermaster Dashboard". -->
-  <div class="pb-2 h-9 flex items-center font-mono text-xs uppercase tracking-[0.2em] text-primary leading-tight">
+  <!-- Brand: collapses to "QM", expands to "Quartermaster Dashboard". Same
+       fixed-spacer + growing-label pattern as nav rows below, so the label
+       doesn't jump left/up when the rail expands. -->
+  <div class="relative pb-2 h-9 flex items-center font-mono text-xs uppercase tracking-[0.2em] text-primary leading-tight">
     <span class="w-14 shrink-0 flex items-center justify-center group-hover/rail:hidden">QM</span>
-    <span class="hidden group-hover/rail:block whitespace-nowrap">Quartermaster<br />Dashboard</span>
+    <span class="hidden group-hover/rail:block absolute left-0 top-1/2 -translate-y-[0.72rem] whitespace-nowrap pl-[1.2rem] leading-tight">Quartermaster<br />Dashboard</span>
   </div>
 
   <!-- Flat page list, no section headers -->

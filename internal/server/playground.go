@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/quartermaster-labs/quartermaster/internal/logmon"
 )
 
 // Playground holds the config for the standalone playground app: the listen
@@ -22,8 +24,34 @@ import (
 type Playground struct {
 	Addr    string // listen address this app is served on (e.g. ":8081")
 	DataDir string // dir for users.json + chats/<user>.json
+	// SelfBase is quartermaster's own inference loopback (e.g. "http://127.0.0.1:8080"),
+	// where the server-side turn runner POSTs /v1/chat/completions so template /
+	// canon / routing / slotcache all apply. Set at startup from the main listen addr.
+	SelfBase string
 
 	mu sync.Mutex
+
+	// turns owns server-side turn generation (see turns_design.md / turns.go).
+	turns *turnManager
+}
+
+// InitTurns wires the server-side turn runner. Called once at startup, before
+// SetPlayground; the manager is carried on the Playground so it survives a
+// server rebuild on reload (like the rest of the playground config).
+func (p *Playground) InitTurns(log *logmon.Monitor) {
+	if p.turns == nil {
+		p.turns = newTurnManager(p, log)
+	}
+}
+
+// LoopbackBase turns a listen address (":8080", "0.0.0.0:8080", "127.0.0.1:8080")
+// into the loopback base URL the turn runner self-POSTs to.
+func LoopbackBase(listenAddr string) string {
+	_, port, err := net.SplitHostPort(listenAddr)
+	if err != nil || port == "" {
+		return "http://127.0.0.1:8080"
+	}
+	return "http://127.0.0.1:" + port
 }
 
 type playgroundCtxKey struct{}
@@ -101,6 +129,10 @@ func (p *Playground) imageChatsPath(user string) string {
 	return filepath.Join(p.DataDir, "imagechats", user+".json")
 }
 
+func (p *Playground) speechChatsPath(user string) string {
+	return filepath.Join(p.DataDir, "speechchats", user+".json")
+}
+
 // POST /auth/login {username,password}. Unknown username registers; known one
 // must match. On success sets the pg_user cookie.
 func (s *Server) handlePlaygroundLogin(w http.ResponseWriter, r *http.Request) {
@@ -153,6 +185,7 @@ func (s *Server) handlePlaygroundLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
+		MaxAge:   60 * 60 * 24 * 30, // 30d — persist login across tab/browser close (plaintext local auth)
 	})
 	writeJSON(w, map[string]string{"username": body.Username})
 }
@@ -186,6 +219,28 @@ func playgroundUser(r *http.Request) string {
 // PUT /api/chats — overwrite the whole array. The client owns the list (add /
 // rename / delete happen client-side), the server just persists it per user.
 func (s *Server) handlePlaygroundChats(w http.ResponseWriter, r *http.Request) {
+	// PUT is merge-guarded: while a turn is generating, the server owns that
+	// chat's in-flight assistant message, so a whole-array client PUT must not
+	// revert it (see turns.go guardedChatsPut). GET stays a plain blob read.
+	p := s.playground
+	if r.Method == http.MethodPut && p != nil && p.turns != nil {
+		user := playgroundUser(r)
+		if user == "" {
+			http.Error(w, "not logged in", http.StatusUnauthorized)
+			return
+		}
+		var clientArr []map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&clientArr); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		p.mu.Lock()
+		clientArr = p.turns.guardedChatsPut(user, clientArr)
+		p.writeChatsLocked(user, clientArr)
+		p.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	s.serveUserBlob(w, r, (*Playground).chatsPath, "[]")
 }
 
@@ -193,6 +248,12 @@ func (s *Server) handlePlaygroundChats(w http.ResponseWriter, r *http.Request) {
 // client-owns-the-blob model as /api/chats, just a separate file.
 func (s *Server) handlePlaygroundImageChats(w http.ResponseWriter, r *http.Request) {
 	s.serveUserBlob(w, r, (*Playground).imageChatsPath, "[]")
+}
+
+// GET/PUT /api/speechchats — the user's saved speech threads. Same
+// client-owns-the-blob model as /api/chats, just a separate file.
+func (s *Server) handlePlaygroundSpeechChats(w http.ResponseWriter, r *http.Request) {
+	s.serveUserBlob(w, r, (*Playground).speechChatsPath, "[]")
 }
 
 // GET/PUT /api/prefs — the user's playground settings (opaque JSON object:

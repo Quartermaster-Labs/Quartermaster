@@ -315,6 +315,15 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		return nil
 	}
 
+	// Qwen3-TTS "talker" GGUFs go to qwentts.cpp's tts-server (OpenAI
+	// /v1/audio/speech), not llama-server: they emit audio-codec tokens and load
+	// with a paired codec gguf. Detect by arch or the "talker" filename ahead of the
+	// LLM path, since the talker is a small qwen3 LM that would otherwise route to chat.
+	if IsTTSModel(meta, row.FileName) {
+		emitTTSModel(b, s, row, ov, name, meta.Architecture, emitted)
+		return nil
+	}
+
 	// KV quant: dense archs default to q8_0; MoE defaults to f16. A low number of
 	// active params means each token's KV carries more of the model's signal, so
 	// MoE tends to degrade more under a quantized cache — keep it full precision.
@@ -1204,6 +1213,10 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 	// Embedders render a minimal --embeddings command (no KV/spec sizing).
 	if IsEmbeddingModel(meta) {
 		return strings.Join(embeddingCmdLines(s, row, &ov, meta), " "), nil
+	}
+	// Qwen3-TTS talkers render a tts-server command (talker + paired codec).
+	if IsTTSModel(meta, row.FileName) {
+		return strings.Join(ttsCmdLines(s, row, &ov), " "), nil
 	}
 	kvK, kvV := "q8_0", "q8_0"
 	if ov.KvK != "" {

@@ -381,4 +381,7 @@ export interface SpeechGenerationRequest {
   model: string;
   input: string;
   voice: string;
+  // qwentts tts-server defaults to "pcm" (raw headerless s16le) which browsers
+  // can't decode; ask for "wav" so the returned blob is a playable RIFF file.
+  response_format?: "wav" | "pcm";
 }

@@ -8,8 +8,8 @@
 ; Compile (CI passes these via /D):
 ;   iscc /DMyAppVersion=v100 /DStagingDir=<abs> /DOutputDir=<abs> installer.iss
 ;
-; Wizard offers to download llama-server / sd-server for a chosen backend
-; (vulkan/cuda/cpu) and an optional logon-autostart shortcut.
+; Wizard offers to download llama-server / sd-server / tts-server for a chosen
+; backend (vulkan/cuda/cpu) and an optional logon-autostart shortcut.
 
 #define MyAppName "quartermaster"
 #define MyAppExe  "quartermaster-windows-amd64.exe"
@@ -77,7 +77,7 @@ Filename: "powershell.exe"; \
   Check: IsDownloadMode
 ; Point the generate yaml at the user's existing installs (no download).
 Filename: "powershell.exe"; \
-  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\packaging\windows\fetch-backend.ps1"" -LlamaExe ""{code:GetLlamaExe}"" -SdExe ""{code:GetSdExe}"" -AppDir ""{app}"" -NoPause"; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\packaging\windows\fetch-backend.ps1"" -LlamaExe ""{code:GetLlamaExe}"" -SdExe ""{code:GetSdExe}"" -TtsExe ""{code:GetTtsExe}"" -AppDir ""{app}"" -NoPause"; \
   StatusMsg: "Configuring existing inference backends..."; \
   Flags: runhidden waituntilterminated; \
   Check: IsExistingMode
@@ -109,8 +109,12 @@ begin
     False, False);  { ExclusionList=False -> checkboxes }
   ServersPage.Add('llama-server (text models)  - ggml-org/llama.cpp');
   ServersPage.Add('sd-server (image models)    - leejet/stable-diffusion.cpp');
+  ServersPage.Add('tts-server (speech models)  - ServeurpersoCom/qwentts.cpp');
   ServersPage.Values[0] := True;
   ServersPage.Values[1] := True;
+  { tts off by default: niche, and qwentts.cpp has no prebuilt release to
+    download yet, so it is realistically an existing-install (pick .exe) choice. }
+  ServersPage.Values[2] := False;
 
   SourcePage := CreateInputOptionPage(ServersPage.ID,
     'Backend source',
@@ -139,12 +143,13 @@ begin
     'Leave a field blank to skip that server.');
   ExistingPage.Add('llama-server executable:', 'Executable (*.exe)|*.exe', '.exe');
   ExistingPage.Add('sd-server executable:',    'Executable (*.exe)|*.exe', '.exe');
+  ExistingPage.Add('tts-server executable:',   'Executable (*.exe)|*.exe', '.exe');
 end;
 
 { True if the user wants at least one server configured. }
 function WantServers: Boolean;
 begin
-  Result := ServersPage.Values[0] or ServersPage.Values[1];
+  Result := ServersPage.Values[0] or ServersPage.Values[1] or ServersPage.Values[2];
 end;
 
 function IsDownloadMode: Boolean;
@@ -190,6 +195,10 @@ begin
     if parts <> '' then parts := parts + ',';
     parts := parts + 'sd-server';
   end;
+  if ServersPage.Values[2] then begin
+    if parts <> '' then parts := parts + ',';
+    parts := parts + 'tts-server';
+  end;
   Result := parts;
 end;
 
@@ -202,6 +211,11 @@ end;
 function GetSdExe(Param: String): String;
 begin
   if ServersPage.Values[1] then Result := ExistingPage.Values[1] else Result := '';
+end;
+
+function GetTtsExe(Param: String): String;
+begin
+  if ServersPage.Values[2] then Result := ExistingPage.Values[2] else Result := '';
 end;
 
 function GetModelsRoot(Param: String): String;

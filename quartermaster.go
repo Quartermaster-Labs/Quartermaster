@@ -246,7 +246,8 @@ func main() {
 		// start.cmd/NSSM already set to the bundle root.
 		exePath, _ := os.Executable()
 		dataDir := filepath.Join(filepath.Dir(exePath), "playground-data")
-		playground = &server.Playground{Addr: pgAddr, DataDir: dataDir}
+		playground = &server.Playground{Addr: pgAddr, DataDir: dataDir, SelfBase: server.LoopbackBase(listenAddr)}
+		playground.InitTurns(proxyLog)
 		initialSrv.SetPlayground(playground)
 		listenAddrs = append(listenAddrs, pgAddr)
 		proxyLog.Infof("playground app enabled on %s (data dir: %s)", pgAddr, dataDir)

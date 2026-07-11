@@ -174,6 +174,7 @@ type modelConfigResp struct {
 	IsMTP       bool         `json:"isMTP"`      // model has nextn/MTP layers, or an mtp-* sidecar => draft-mtp usable
 	IsDflash    bool         `json:"isDflash"`   // paired *-dflash-*.gguf sidecar in the model's dir => draft-dflash usable
 	IsImage     bool         `json:"isImage"`    // diffusion model (sd-server) => image config form
+	IsAudio     bool         `json:"isAudio"`    // Qwen3-TTS talker (tts-server) => audio config form
 	HasOverride bool         `json:"hasOverride"`
 	Override    *overrideDTO `json:"override"`
 	// DefaultVariants are the fleet-wide settings.defaultVariants (e.g. game),
@@ -316,7 +317,11 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 	// Diffusion models (sd-server) get the image config form, not the llama one.
 	// Detect from the rendered command — the sd-server path always carries it.
 	isImage := strings.Contains(cmd, "--diffusion-model")
-	resp := modelConfigResp{Id: realID, Gguf: gguf, Cmd: strings.TrimSpace(cmd), IsImage: isImage, HasOverride: existing != nil}
+	// Qwen3-TTS talkers (tts-server) get the audio form: no KV/ctx/spec/estimate.
+	// The tts-server cmd uses --model (llama/sd emit -m/--diffusion-model), so that
+	// flag is a clean discriminator on the autogen-rendered command.
+	isAudio := strings.Contains(cmd, "--codec") || strings.Contains(cmd, "--model ")
+	resp := modelConfigResp{Id: realID, Gguf: gguf, Cmd: strings.TrimSpace(cmd), IsImage: isImage, IsAudio: isAudio, HasOverride: existing != nil}
 	// Show the EFFECTIVE override so the editor has the complete picture. The
 	// sidecar wins when present (a UI save writes a superset that already carries
 	// the file's fields); otherwise surface the hand-authored file override so its
@@ -756,9 +761,19 @@ func (s *Server) handleAPISlotCachePut(w http.ResponseWriter, r *http.Request) {
 		shared.SendResponse(w, r, http.StatusBadRequest, "minSaveTokens, maxDiskGB, maxSessions must be >= 0")
 		return
 	}
+	// The UI displays the resolved default path (slotCachePathOrDefault) in the
+	// form, so a plain save round-trips that absolute back here. Persisting it
+	// would freeze an install-relative path into the sidecar: move/rename the
+	// binary dir and slotKvPath keeps emitting the stale old location. Store
+	// blank when the path IS the current default so the exe-dir fallback stays
+	// live and tracks the binary.
+	path := strings.TrimSpace(body.Path)
+	if path == config.DefaultSlotCachePath() {
+		path = ""
+	}
 	err := autogen.UpsertSidecarSlotCache(s.autogen.GeneratePath, autogen.SlotCacheSettings{
 		Enable:        body.Enable,
-		Path:          strings.TrimSpace(body.Path),
+		Path:          path,
 		MinSaveTokens: body.MinSaveTokens,
 		MaxDiskGB:     body.MaxDiskGB,
 		MaxSessions:   body.MaxSessions,

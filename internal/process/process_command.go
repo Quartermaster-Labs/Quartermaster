@@ -457,6 +457,16 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 	}
 
 	reverseProxy := httputil.NewSingleHostReverseProxy(proxyURL)
+	// tts-server exposes GET /v1/voices, but quartermaster's model-routed catalog
+	// uses the OpenAI-style /v1/audio/voices path. Map it so the playground's voice
+	// list reaches the backend. Harmless for other backends — they never get this path.
+	origDirector := reverseProxy.Director
+	reverseProxy.Director = func(r *http.Request) {
+		origDirector(r)
+		if r.URL.Path == "/v1/audio/voices" {
+			r.URL.Path = "/v1/voices"
+		}
+	}
 	reverseProxy.Transport = &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{

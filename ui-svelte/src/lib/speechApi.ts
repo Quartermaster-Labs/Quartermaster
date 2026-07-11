@@ -11,6 +11,7 @@ export async function generateSpeech(
     model,
     input,
     voice,
+    response_format: "wav",
   };
 
   const response = await fetch("/v1/audio/speech", {

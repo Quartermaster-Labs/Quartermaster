@@ -363,6 +363,7 @@ export interface ModelConfig {
   isMTP: boolean;
   isDflash: boolean; // paired *-dflash-*.gguf sidecar => draft-dflash usable
   isImage: boolean; // diffusion model => image config form
+  isAudio: boolean; // Qwen3-TTS talker (tts-server) => audio config form
   hasOverride: boolean;
   override: ModelOverride | null;
   /** Fleet-wide variants (e.g. game), shared by every model; saved globally. */

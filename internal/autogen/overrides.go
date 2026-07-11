@@ -32,7 +32,10 @@ type Settings struct {
 	ServerExe     string            `yaml:"serverExe"`
 	// SdServerExe runs all-in-one diffusion GGUFs (stable-diffusion.cpp's
 	// sd-server). Empty => a sibling "sd-server" of ServerExe, else bare on PATH.
-	SdServerExe    string  `yaml:"sdServerExe"`
+	SdServerExe string `yaml:"sdServerExe"`
+	// TtsServerExe runs Qwen3-TTS talker GGUFs (qwentts.cpp's tts-server). Empty =>
+	// a sibling "tts-server" of ServerExe, else bare on PATH.
+	TtsServerExe   string  `yaml:"ttsServerExe"`
 	TargetVramGB   float64 `yaml:"targetVramGB"`
 	AutoVram       bool    `yaml:"autoVram"` // measure free VRAM at gen time, use it as TargetVramGB (minus VramOverheadGB)
 	VramOverheadGB float64 `yaml:"vramOverheadGB"`
@@ -405,6 +408,13 @@ func (s *Settings) applyDefaults() {
 			s.SdServerExe = filepath.Join(filepath.Dir(s.ServerExe), "sd-server")
 		} else {
 			s.SdServerExe = "sd-server"
+		}
+	}
+	if s.TtsServerExe == "" {
+		if strings.ContainsAny(s.ServerExe, `/\`) {
+			s.TtsServerExe = filepath.Join(filepath.Dir(s.ServerExe), "tts-server")
+		} else {
+			s.TtsServerExe = "tts-server"
 		}
 	}
 	if s.TargetVramGB == 0 {

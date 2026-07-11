@@ -3,6 +3,7 @@
   import { me, checkMe } from "../stores/playgroundAuth";
   import { loadChats, clearChats } from "../stores/chatHistory";
   import { loadImageChats, clearImageChats } from "../stores/imageHistory";
+  import { loadSpeechChats, clearSpeechChats } from "../stores/speechHistory";
   import { loadPrefs, clearPrefs } from "../stores/prefs";
   import { selectedTabStore, selectedModelStore, type PlaygroundTab } from "../stores/playground";
   import { userPref } from "../stores/prefs";
@@ -39,13 +40,14 @@
   $effect(() => {
     if ($me) {
       chatsLoaded = false;
-      Promise.all([loadChats(), loadImageChats(), loadPrefs()]).then(() => {
+      Promise.all([loadChats(), loadImageChats(), loadSpeechChats(), loadPrefs()]).then(() => {
         applyLaunchParams();
         chatsLoaded = true;
       });
     } else {
       clearChats();
       clearImageChats();
+      clearSpeechChats();
       clearPrefs();
       chatsLoaded = false;
     }

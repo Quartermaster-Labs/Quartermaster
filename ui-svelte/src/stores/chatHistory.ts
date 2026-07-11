@@ -1,4 +1,4 @@
-import { writable } from "svelte/store";
+import { get, writable } from "svelte/store";
 import type { ChatMessage } from "../lib/types";
 
 export interface ChatSession {
@@ -73,18 +73,74 @@ export function clearChats(): void {
 
 // Debounced push of the whole list to the server. The client owns the list
 // (add/rename/delete happen client-side); the server just persists it per user.
+//
+// keepalive lets an in-flight PUT survive tab close/unload. A plain debounce
+// starved during streaming: patchLast fires every token, resetting the timer, so
+// the PUT only landed 800 ms AFTER generation ended — close mid-stream and the
+// whole in-progress reply was never persisted. MAX_WAIT caps that: the timer
+// still coalesces bursts, but can only be pushed out to MAX_WAIT from the first
+// pending change, so a long stream flushes every ~5 s and a refresh restores
+// what was generated so far. (Does NOT resume generation — that needs a
+// server-side job; see below.)
+const MAX_WAIT = 5000;
 let timer: ReturnType<typeof setTimeout> | null = null;
+let latest: ChatSession[] | null = null;
+let deadline = 0;
+
+function pushChats(sessions: ChatSession[]): void {
+  fetch("/api/chats", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(sessions),
+    keepalive: true,
+  }).catch(() => {});
+}
+
 chatSessions.subscribe((sessions) => {
   if (!synced) return;
+  latest = sessions;
+  const now = Date.now();
+  if (!timer) deadline = now + MAX_WAIT;
   if (timer) clearTimeout(timer);
-  timer = setTimeout(() => {
-    fetch("/api/chats", {
+  timer = setTimeout(
+    () => {
+      timer = null;
+      pushChats(sessions);
+    },
+    Math.max(0, Math.min(800, deadline - now)),
+  );
+});
+
+// Best-effort tail flush: capture whatever streamed since the last periodic
+// push when the tab is hidden/closed. keepalive bodies are capped ~64 KB, so a
+// very large history may not make it — the periodic flush above is the real
+// guarantee; this just tightens the last few seconds.
+if (typeof window !== "undefined") {
+  const flush = () => {
+    if (synced && latest) pushChats(latest);
+  };
+  window.addEventListener("pagehide", flush);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flush();
+  });
+}
+
+// Synchronous save used before starting a server-side turn: the server writes
+// the in-flight assistant message straight into chats.json, so the session (with
+// the new user message + empty assistant bubble) must be on disk FIRST. Awaited,
+// unlike the debounced auto-save. Merge-guard is a no-op here (no turn running
+// yet), so this writes the full array.
+export async function saveChatsNow(): Promise<void> {
+  try {
+    await fetch("/api/chats", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(sessions),
-    }).catch(() => {});
-  }, 800);
-});
+      body: JSON.stringify(get(chatSessions)),
+    });
+  } catch {
+    // ignore — the turn still runs; periodic flush will reconcile
+  }
+}
 
 export function newChatId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);

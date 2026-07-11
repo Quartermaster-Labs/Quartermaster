@@ -38,6 +38,7 @@ ui/node_modules:
 ui: ui/node_modules
 	cd ui-svelte && npm run build
 	touch internal/server/ui_dist/placeholder.txt
+	cp ui-svelte/src/lib/wikiArticles.json internal/server/wiki_articles.json
 
 # Build OSX binary
 mac: ui

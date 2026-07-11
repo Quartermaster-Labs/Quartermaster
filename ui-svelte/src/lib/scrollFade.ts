@@ -24,8 +24,12 @@ export function scrollFade(node: HTMLElement) {
   // changes — either can flip whether an edge is reached.
   const ro = new ResizeObserver(update);
   ro.observe(node);
+  // childList: cards added/removed. attributeFilter [open]: expanding a nested
+  // <details> (e.g. the Sources pills) grows scrollHeight without adding nodes
+  // or resizing the container, so nothing else notices — the fade would stay
+  // stale and the mask layer wouldn't re-raster (leaving ghost/trail pills).
   const mo = new MutationObserver(update);
-  mo.observe(node, { childList: true, subtree: true });
+  mo.observe(node, { childList: true, subtree: true, attributes: true, attributeFilter: ["open"] });
 
   return {
     destroy() {

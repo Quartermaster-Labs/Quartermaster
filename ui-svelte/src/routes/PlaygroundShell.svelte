@@ -39,6 +39,13 @@
     newImageChatId,
     type ImageSession,
   } from "../stores/imageHistory";
+  import {
+    speechSessions,
+    activeSpeechChatId,
+    generatingSpeechChatId,
+    newSpeechChatId,
+    type SpeechSession,
+  } from "../stores/speechHistory";
   import { MessageSquare, Image, Volume2, Mic, ListOrdered, Zap, LogOut, Plus, Trash2, Settings, HelpCircle, BookOpen, SlidersHorizontal, Search, FileText, Pencil } from "lucide-svelte";
   import WikiModal from "../components/WikiModal.svelte";
   import ChatInterface from "../components/playground/ChatInterface.svelte";
@@ -61,16 +68,20 @@
 
   let onChats = $derived($selectedTabStore === "chat");
   let onImages = $derived($selectedTabStore === "images");
+  let onSpeech = $derived($selectedTabStore === "speech");
   let historyOpen = $state(false);
   let sortedSessions = $derived([...$chatSessions].sort((a, b) => b.updatedAt - a.updatedAt));
   let sortedImageSessions = $derived([...$imageSessions].sort((a, b) => b.updatedAt - a.updatedAt));
+  let sortedSpeechSessions = $derived([...$speechSessions].sort((a, b) => b.updatedAt - a.updatedAt));
 
-  // Chat + Images each have a history flyout; both toggle the same panel.
+  // Chat + Images have a history flyout; Speech manages its own threads inline.
   const hasHistory = (id: Tab) => id === "chat" || id === "images";
 
   function clickTab(id: Tab) {
     if (hasHistory(id)) {
       historyOpen = $selectedTabStore === id ? !historyOpen : true;
+    } else {
+      historyOpen = false; // non-history tab (speech, audio, …) never shows the flyout
     }
     selectedTabStore.set(id);
   }
@@ -101,6 +112,18 @@
     activeImageChatId.set(s.id);
   }
 
+  // Speech threads: same pure-store ops as chats/images.
+  function newSpeechChat() {
+    const cur = get(speechSessions).find((s) => s.id === get(activeSpeechChatId));
+    if (cur && cur.turns.length === 0) {
+      activeSpeechChatId.set(cur.id);
+      return;
+    }
+    const s: SpeechSession = { id: newSpeechChatId(), title: "New speech", turns: [], updatedAt: Date.now() };
+    speechSessions.update((ss) => [s, ...ss]);
+    activeSpeechChatId.set(s.id);
+  }
+
   // Small thumbnails for an image thread's history row: the last turn's images
   // (most recent result first), capped at 2 so the row stays compact.
   function imageThumbs(id: string): string[] {
@@ -114,6 +137,7 @@
 
   let confirmDeleteId = $state<string | null>(null);
   let confirmDeleteImageId = $state<string | null>(null);
+  let confirmDeleteSpeechId = $state<string | null>(null);
   let showSettings = $state(false);
   // Which settings category the modal's side-nav has selected.
   type SettingsCat = "general" | "search" | "prompt";
@@ -248,6 +272,23 @@
       activeImageChatId.set(s.id);
     }
   }
+
+  function deleteSpeechChat(id: string) {
+    confirmDeleteSpeechId = null;
+    const remaining = get(speechSessions).filter((s) => s.id !== id);
+    if (id !== get(activeSpeechChatId)) {
+      speechSessions.set(remaining);
+      return;
+    }
+    if (remaining.length > 0) {
+      speechSessions.set(remaining);
+      activeSpeechChatId.set(remaining[0].id);
+    } else {
+      const s: SpeechSession = { id: newSpeechChatId(), title: "New speech", turns: [], updatedAt: Date.now() };
+      speechSessions.set([s]);
+      activeSpeechChatId.set(s.id);
+    }
+  }
 </script>
 
 <div class="h-screen flex bg-background">
@@ -255,9 +296,9 @@
   <nav
     class="group/rail relative z-40 shrink-0 w-14 hover:w-44 transition-[width] duration-200 overflow-hidden flex flex-col gap-1 py-2 border-r border-border bg-surface"
   >
-    <div class="pb-2 h-9 flex items-center font-mono text-xs uppercase tracking-[0.2em] text-primary leading-tight">
+    <div class="relative pb-2 h-9 flex items-center font-mono text-xs uppercase tracking-[0.2em] text-primary leading-tight">
       <span class="w-14 shrink-0 flex items-center justify-center group-hover/rail:hidden">QM</span>
-      <span class="hidden group-hover/rail:block whitespace-nowrap">Quartermaster<br />Playground</span>
+      <span class="hidden group-hover/rail:block absolute left-0 top-1/2 -translate-y-[0.72rem] whitespace-nowrap pl-[1.2rem] leading-tight">Quartermaster<br />Playground</span>
     </div>
     <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pretty-scroll flex flex-col gap-1">
     {#each tabs as tab (tab.id)}
@@ -277,6 +318,9 @@
             {/if}
             {#if tab.id === "images" && $generatingImageChatId}
               <span class="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary reason-glow" title="An image is generating"></span>
+            {/if}
+            {#if tab.id === "speech" && $generatingSpeechChatId}
+              <span class="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary reason-glow" title="Speech is generating"></span>
             {/if}
           </span>
         </span>
@@ -395,6 +439,41 @@
         <button
           class="px-3 py-1.5 rounded-md text-sm bg-red-500 text-white hover:opacity-90 transition-opacity"
           onclick={() => confirmDeleteImageId && deleteImageChat(confirmDeleteImageId)}
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Delete speech thread confirmation -->
+{#if confirmDeleteSpeechId}
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+    onclick={() => (confirmDeleteSpeechId = null)}
+    onkeydown={(e) => e.key === "Escape" && (confirmDeleteSpeechId = null)}
+    role="button"
+    tabindex="-1"
+  >
+    <div
+      class="w-72 flex flex-col gap-3 p-4 rounded-lg border border-card-border bg-surface shadow-lg"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+      role="dialog"
+      tabindex="-1"
+    >
+      <p class="text-sm text-txtmain">Delete this speech thread? This can't be undone.</p>
+      <div class="flex justify-end gap-2">
+        <button
+          class="px-3 py-1.5 rounded-md text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
+          onclick={() => (confirmDeleteSpeechId = null)}
+        >
+          Cancel
+        </button>
+        <button
+          class="px-3 py-1.5 rounded-md text-sm bg-red-500 text-white hover:opacity-90 transition-opacity"
+          onclick={() => confirmDeleteSpeechId && deleteSpeechChat(confirmDeleteSpeechId)}
         >
           Delete
         </button>
@@ -806,7 +885,7 @@
   </div>
 {/snippet}
 
-{#if historyOpen && (onChats || onImages)}
+{#if historyOpen && (onChats || onImages || onSpeech)}
   <div class="fixed inset-0 z-30" onclick={() => (historyOpen = false)} role="presentation">
     <div
       class="absolute left-16 top-4 w-72 max-h-[80vh] flex flex-col p-2 rounded-lg border border-card-border bg-surface shadow-xl"
@@ -815,8 +894,10 @@
     >
       {#if onChats}
         {@render historyPanel(sortedSessions, $activeChatId, $generatingChatId, () => { newChat(); historyOpen = false; }, (id) => { activeChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteId = id), "New chat")}
-      {:else}
+      {:else if onImages}
         {@render historyPanel(sortedImageSessions, $activeImageChatId, $generatingImageChatId, () => { newImageChat(); historyOpen = false; }, (id) => { activeImageChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteImageId = id), "New image", imageThumbs)}
+      {:else}
+        {@render historyPanel(sortedSpeechSessions, $activeSpeechChatId, $generatingSpeechChatId, () => { newSpeechChat(); historyOpen = false; }, (id) => { activeSpeechChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteSpeechId = id), "New speech")}
       {/if}
     </div>
   </div>
