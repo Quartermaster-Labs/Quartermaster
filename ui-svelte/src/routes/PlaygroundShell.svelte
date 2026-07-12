@@ -888,7 +888,7 @@
 {#if historyOpen && (onChats || onImages || onSpeech)}
   <div class="fixed inset-0 z-30" onclick={() => (historyOpen = false)} role="presentation">
     <div
-      class="absolute left-16 top-4 w-72 max-h-[80vh] flex flex-col p-2 rounded-lg border border-card-border bg-surface shadow-xl"
+      class="absolute left-44 top-4 w-72 max-h-[80vh] flex flex-col p-2 rounded-lg border border-card-border bg-surface shadow-xl"
       onclick={(e) => e.stopPropagation()}
       role="presentation"
     >

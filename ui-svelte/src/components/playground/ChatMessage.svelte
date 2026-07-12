@@ -1,10 +1,10 @@
 <script lang="ts">
   import { renderMarkdown, renderStreamingMarkdown, createStreamingCache } from "../../lib/markdown";
   import type { RenderedBlock } from "../../lib/markdown";
-  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronRight, Code, Search, BookOpen, PenLine } from "lucide-svelte";
+  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronRight, Code, Search, BookOpen, PenLine, Wrench } from "lucide-svelte";
   import { getTextContent, getImageUrls } from "../../lib/types";
   import { harmonyToThink } from "../../lib/reasoning";
-  import type { ContentPart } from "../../lib/types";
+  import type { ContentPart, QmApproval } from "../../lib/types";
   import RewriteDiff from "./RewriteDiff.svelte";
   import { autogrow } from "../../lib/autogrow";
   import { openWikiArticle } from "../../stores/wiki";
@@ -15,8 +15,10 @@
     reasoning_content?: string;
     reasoningTimeMs?: number;
     genTimeMs?: number;
-    searches?: { query: string; results: string; kind?: "web" | "wiki"; at?: number; reasoningAt?: number; duringReasoning?: boolean; sources?: { title: string; url: string }[] }[];
+    searches?: { query: string; results: string; kind?: "web" | "wiki" | "quartermaster"; at?: number; reasoningAt?: number; duringReasoning?: boolean; sources?: { title: string; url: string }[] }[];
     citations?: { n: number; title: string; url: string; wikiId?: string }[];
+    approval?: QmApproval;
+    onApprove?: (id: string, accept: boolean) => void;
     rewriteInstruction?: string;
     rewriteOriginal?: string;
     isStreaming?: boolean;
@@ -28,7 +30,13 @@
     onRegenerate?: () => void;
   }
 
-  let { role, content, reasoning_content = "", reasoningTimeMs = 0, genTimeMs = 0, searches, citations, rewriteInstruction, rewriteOriginal, isStreaming = false, isReasoning = false, isSearching = false, modelReady = false, hasVisionInput = false, onEdit, onRegenerate }: Props = $props();
+  let { role, content, reasoning_content = "", reasoningTimeMs = 0, genTimeMs = 0, searches, citations, approval, onApprove, rewriteInstruction, rewriteOriginal, isStreaming = false, isReasoning = false, isSearching = false, modelReady = false, hasVisionInput = false, onEdit, onRegenerate }: Props = $props();
+
+  // Format a JSON diff value for the approval card (null → "auto", strings bare).
+  function fmtVal(v: unknown): string {
+    if (v === null || v === undefined || v === "") return "auto";
+    return typeof v === "string" ? v : JSON.stringify(v);
+  }
 
   let textContent = $derived(getTextContent(content));
   // Some models (gpt-oss harmony et al.) emit reasoning as channel markup
@@ -48,7 +56,7 @@
   // Searches are recorded separately with the content offset (`at`) where they
   // ran. Build one ordered timeline so think boxes and search blocks render
   // inline between the surrounding text, not pinned to the top.
-  type SearchHit = { query: string; results: string; kind?: "web" | "wiki"; sources?: { title: string; url: string }[] };
+  type SearchHit = { query: string; results: string; kind?: "web" | "wiki" | "quartermaster"; sources?: { title: string; url: string }[] };
   type SubItem = { type: "text"; text: string } | { type: "search"; search: SearchHit };
   type Segment =
     | { kind: "text"; text: string; idx: number }
@@ -421,6 +429,9 @@
             {#if search.kind === "wiki"}
               <BookOpen class="w-3 h-3 shrink-0" />
               <span class="font-medium truncate">Read: {search.query || "help wiki"}</span>
+            {:else if search.kind === "quartermaster"}
+              <Wrench class="w-3 h-3 shrink-0" />
+              <span class="font-medium truncate">Quartermaster: {search.query || "instance"}</span>
             {:else}
               <Search class="w-3 h-3 shrink-0" />
               <span class="font-medium truncate">Searched: {search.query || "the web"}</span>
@@ -563,6 +574,46 @@
               <span class="w-1.5 h-1.5 bg-primary rounded-full reason-glow"></span>
               <span class="reason-shimmer-white font-medium">{!modelReady ? "Loading model…" : hasVisionInput ? "Processing image…" : "Generating…"}</span>
             </span>
+          {/if}
+        </div>
+      {/if}
+      {#if approval}
+        <!-- Quartermaster config-change approval: before/after diff the model
+             proposed, gated on the user's accept/deny. The turn is blocked
+             server-side until a decision (or timeout). -->
+        <div class="mt-3 rounded-lg border border-card-border bg-background/40 overflow-hidden text-sm">
+          <div class="flex items-center gap-1.5 px-3 py-2 border-b border-card-border bg-secondary/40">
+            <Wrench class="w-3.5 h-3.5 shrink-0 text-primary" />
+            <span class="font-medium">Config change · {approval.target}</span>
+            {#if approval.status !== "pending"}
+              <span class="ml-auto text-xs uppercase tracking-wide {approval.status === 'applied' ? 'text-emerald-500' : approval.status === 'error' ? 'text-red-500' : 'text-txtsecondary'}">
+                {approval.status === "applied" ? "Applied ✓" : approval.status === "denied" ? "Denied" : approval.status === "timeout" ? "Timed out" : "Failed"}
+              </span>
+            {/if}
+          </div>
+          <div class="px-3 py-2 flex flex-col gap-1 font-mono text-xs">
+            {#each approval.diff as row (row.key)}
+              <div class="flex items-center gap-2">
+                <span class="text-txtsecondary min-w-[9rem] truncate">{row.key}</span>
+                <span class="text-txtsecondary/70 line-through">{fmtVal(row.before)}</span>
+                <span class="opacity-50">→</span>
+                <span class="text-txtmain font-medium">{fmtVal(row.after)}</span>
+              </div>
+            {/each}
+          </div>
+          {#if approval.status === "pending"}
+            <div class="flex justify-end gap-2 px-3 py-2 border-t border-card-border">
+              <button
+                class="px-3 py-1 rounded-md text-xs font-medium border border-card-border hover:bg-secondary transition-colors"
+                onclick={() => onApprove?.(approval!.id, false)}
+              >Deny</button>
+              <button
+                class="px-3 py-1 rounded-md text-xs font-medium bg-primary text-white hover:opacity-90 transition-opacity"
+                onclick={() => onApprove?.(approval!.id, true)}
+              >Accept</button>
+            </div>
+          {:else if approval.status === "error" && approval.detail}
+            <div class="px-3 py-2 border-t border-card-border text-xs text-red-500 whitespace-pre-wrap">{approval.detail}</div>
           {/if}
         </div>
       {/if}

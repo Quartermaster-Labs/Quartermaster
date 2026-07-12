@@ -29,6 +29,9 @@ export const maxTokensStore = userPref<number>("playground-max-tokens", 8192);
 // tokens of reasoning). 0 = unlimited. Stops models stuck in reasoning loops.
 export const reasoningBudgetStore = userPref<number>("playground-reasoning-budget", 2500);
 export const webSearchStore = userPref<boolean>("playground-websearch", true);
+// Quartermaster tools: let the chat model inspect + tune this running instance
+// (see lib/qmTools.ts). Default on, like web search; a toggle in the chat menu.
+export const qmToolsStore = userPref<boolean>("playground-qmtools", true);
 export const reasoningStore = userPref<boolean>("playground-reasoning", true);
 // Rewrite mode: composer becomes a two-field (instructions + prose) rewriter
 // whose output renders as a side-by-side diff. Toggle + last-used instruction.

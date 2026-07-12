@@ -88,16 +88,16 @@
   ></textarea>
 
   <div class="flex items-center justify-between">
-    <div class="flex items-center gap-1">
+    <div class="flex-1 min-w-0 flex items-center gap-1">
       {@render leftButtons?.()}
     </div>
 
-    <div class="flex-1 min-w-0 px-2 flex flex-col items-center gap-1">
+    <div class="min-w-0 px-2 flex flex-col items-center gap-1">
       <ModelSelector bind:value={modelValue} placeholder={modelPlaceholder} disabled={busy} {category} ghost dropUp />
       {@render ctxBar?.()}
     </div>
 
-    <div class="flex items-center gap-1">
+    <div class="flex-1 min-w-0 flex items-center justify-end gap-1">
       {@render extraRightButtons?.()}
       <button
         class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors {showSettings ? 'bg-secondary text-txtmain shadow-inner' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"

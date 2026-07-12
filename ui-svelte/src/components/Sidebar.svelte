@@ -1,6 +1,6 @@
 <script lang="ts">
   import { link, location } from "svelte-spa-router";
-  import { LayoutDashboard, Boxes, FlaskConical, Activity, KeyRound, Sun, Moon, MonitorCog, ChevronRight, ArrowUpCircle, MessageSquare, Image, Volume2, Mic, Binary, BookOpen, SlidersHorizontal } from "lucide-svelte";
+  import { LayoutDashboard, Boxes, FlaskConical, Activity, KeyRound, Sun, Moon, MonitorCog, ChevronRight, ArrowUpCircle, MessageSquare, Image, Volume2, Mic, Binary, BookOpen, Settings } from "lucide-svelte";
   import WikiModal from "./WikiModal.svelte";
   import SettingsModal from "./SettingsModal.svelte";
   import { toggleTheme, themeMode, connectionState } from "../stores/theme";
@@ -179,7 +179,7 @@
     class="w-full flex items-center gap-3 pr-3 py-2 font-mono text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
   >
     <span class="w-14 shrink-0 flex items-center justify-center">
-      <SlidersHorizontal size={18} strokeWidth={1.8} />
+      <Settings size={18} strokeWidth={1.8} />
     </span>
     <span class={labelClass}>Settings</span>
   </button>

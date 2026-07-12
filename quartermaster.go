@@ -247,6 +247,7 @@ func main() {
 		exePath, _ := os.Executable()
 		dataDir := filepath.Join(filepath.Dir(exePath), "playground-data")
 		playground = &server.Playground{Addr: pgAddr, DataDir: dataDir, SelfBase: server.LoopbackBase(listenAddr)}
+		playground.Migrate() // flat inline-base64 layout -> per-user folders + media files
 		playground.InitTurns(proxyLog)
 		initialSrv.SetPlayground(playground)
 		listenAddrs = append(listenAddrs, pgAddr)

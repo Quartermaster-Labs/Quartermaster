@@ -63,6 +63,12 @@ func ttsCmdLines(s Settings, row GgufRow, ov *Override) []string {
 	if row.CodecPath != "" {
 		lines = append(lines, fmt.Sprintf("--codec %s", strings.ReplaceAll(row.CodecPath, "\\", "/")))
 	}
+	// Persist cloned voices next to the talker gguf so they survive restarts
+	// (tts-server keeps them in RAM otherwise). Per-file dir keeps a model's
+	// latents from bleeding into another's.
+	stem := strings.TrimSuffix(filepath.Base(row.FullPath), filepath.Ext(row.FullPath))
+	voicesDir := filepath.Join(filepath.Dir(row.FullPath), "voices", stem)
+	lines = append(lines, fmt.Sprintf("--voices-dir %s", strings.ReplaceAll(voicesDir, "\\", "/")))
 	lines = append(lines, "--port ${PORT}")
 	if ov != nil {
 		if extra := strings.TrimSpace(ov.ExtraArgs); extra != "" {

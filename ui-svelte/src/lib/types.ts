@@ -236,7 +236,7 @@ export interface ChatMessage {
   // model ran mid-think (field-based reasoning_content); `reasoningAt` is its
   // offset into reasoning_content, so the UI nests it inside the reasoning box
   // instead of dropping it below.
-  searches?: { query: string; results: string; kind?: "web" | "wiki"; at?: number; reasoningAt?: number; duringReasoning?: boolean; sources?: { title: string; url: string }[] }[];
+  searches?: { query: string; results: string; kind?: "web" | "wiki" | "quartermaster"; at?: number; reasoningAt?: number; duringReasoning?: boolean; sources?: { title: string; url: string }[] }[];
   // Inline-citation registry for this turn: the bracketed source numbers the
   // model was fed (and cites with, e.g. "[3]") mapped to their title + URL, so
   // the renderer can turn "[3]" in the answer into a clickable chip. A wiki
@@ -248,6 +248,19 @@ export interface ChatMessage {
   // rewrite, so the bubble can render a side-by-side diff against its output.
   rewriteInstruction?: string;
   rewriteOriginal?: string;
+  // A pending/resolved quartermaster config change the model proposed this turn.
+  // Live-only (streamed via the turn SSE, not persisted): while status is
+  // "pending" the bubble shows a before/after diff with Accept/Deny; once
+  // resolved it shows the outcome, then drops on the post-turn server sync.
+  approval?: QmApproval;
+}
+
+export interface QmApproval {
+  id: string;
+  target: string;
+  diff: { key: string; before: unknown; after: unknown }[];
+  status: "pending" | "applied" | "denied" | "timeout" | "error";
+  detail?: string;
 }
 
 export function getTextContent(content: string | ContentPart[]): string {
@@ -384,4 +397,6 @@ export interface SpeechGenerationRequest {
   // qwentts tts-server defaults to "pcm" (raw headerless s16le) which browsers
   // can't decode; ask for "wav" so the returned blob is a playable RIFF file.
   response_format?: "wav" | "pcm";
+  // voice_design style description → tts-server ABI `instruct`.
+  instructions?: string;
 }

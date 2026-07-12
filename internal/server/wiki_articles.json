@@ -109,6 +109,26 @@
     "body": "Chat can let the model search the web for fresh or niche facts. It goes through a **SearXNG** instance you run.\n\nSetup (playground **Settings → Web Search**):\n1. Toggle Web Search on.\n2. Enter your SearXNG URL (e.g. `http://localhost:8888`) and hit **Test**.\n3. SearXNG must have **JSON format enabled** (`formats: [html, json]`).\n\n**Requirements** : the model must support **tool calling**.\nKnobs:\n- **Max/Turn** caps searches per message;\n- **Throttle ms** spaces requests so SearXNG's rate limiter doesn't trip;\n- **Dedupe** reuses the result for a repeated query.\n\nA bare \"Failed to fetch\" on Test is almost always CORS or a wrong host/port."
   },
   {
+    "id": "qm-tools",
+    "title": "Quartermaster tools (assistant self-service)",
+    "keywords": [
+      "quartermaster tools",
+      "qm tools",
+      "inspect",
+      "configure",
+      "assistant",
+      "introspection",
+      "mcp",
+      "self",
+      "change settings",
+      "approve",
+      "approval",
+      "diff",
+      "agent config"
+    ],
+    "body": "**Quartermaster tools** let the chat assistant look at — and, with your approval, tune — the quartermaster instance it's running in. Toggle them per chat with the **QM Tools** switch in the chat menu (on by default, like Web Search). They only act on this running instance; they never load or unload models (that would evict the very model you're talking to).\n\n**Inspect (read-only).** The assistant can pull a compact, formatted view of your setup: what models are installed and their capabilities, what's loaded right now, live GPU/VRAM and RAM, the global memory settings, or one model's full config. Ask things like \"what models do I have?\", \"how much VRAM is free?\", or \"show my Qwen model's context and offload\".\n\n**Configure (approval-gated).** The assistant can change three kinds of settings:\n- **Global memory settings** — VRAM target, headroom, max RAM, idle-unload TTL (the dashboard Settings).\n- **Your playground preferences** — temperature, max tokens, thinking budget, web search on/off, and the search knobs. These are your own per-user prefs and take effect on your next page reload.\n- **A model's config** — context, KV quant, CPU offload, and the like.\n\n**You approve every change.** When the assistant wants to configure something, the chat pauses and shows a **before → after diff card** with **Accept** and **Deny**. Nothing is applied until you accept; deny (or ignore it — it times out after 5 minutes) and nothing happens. Accepting a global or model change hot-reloads the config in place — running models are **not** evicted, and a changed model's new launch args apply the next time it loads.\n\nQuartermaster tools need the server running with config editing enabled (`-generate`)."
+  },
+  {
     "id": "images",
     "title": "Image generation",
     "keywords": [
@@ -138,9 +158,15 @@
       "transcribe",
       "whisper",
       "stt",
-      "text to speech"
+      "text to speech",
+      "voice cloning",
+      "clone voice",
+      "voice design",
+      "speaker",
+      "preset",
+      "studio"
     ],
-    "body": "Two playground tabs cover audio:\n\n- **Speech (TTS)**: type text, pick a voice, generate spoken audio from a text-to-speech model.\n- **Transcription (STT)**: upload an audio file and get the transcript from a speech-recognition model.\n\nBoth use the same on-demand loading as every other model — the first request loads the model."
+    "body": "Two playground tabs cover audio.\n\n**Speech (TTS)** is a small studio: type text on the left, pick a voice, and each generation becomes a waveform card in the clip library on the right. Cards can be played, edited (which regenerates), regenerated, downloaded (WAV), or deleted; a volume slider and Auto-play toggle sit pinned at the bottom, and clips are saved per user as threads.\n\nHow voices work depends on the model kind (auto-detected):\n- **Base model** — one default voice, plus **voice cloning**: click *Clone a voice* and either read the on-screen passage aloud (live mic) or upload a WAV/MP3 sample; an optional reference transcript improves the clone. Cloned voices are saved and reusable, and can be deleted.\n- **Custom-voice model** — ships its own set of named speakers; pick one from the list (no default).\n- **Voice-design model** — no fixed speakers. Instead you pick a **style preset** (a written description like \"a calm elderly man with a slight rasp\"). Several presets ship built-in, and you can *Design a voice* to save your own.\n\nUse the refresh button by the voice list to reload the voices a model actually offers.\n\n**Transcription (STT)** — upload an audio file and get the transcript from a speech-recognition model.\n\nBoth use the same on-demand loading as every other model — the first request loads the model."
   },
   {
     "id": "rerank-embed",

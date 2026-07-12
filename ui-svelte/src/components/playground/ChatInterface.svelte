@@ -11,6 +11,7 @@
     maxTokensStore,
     reasoningBudgetStore,
     webSearchStore,
+    qmToolsStore,
     reasoningStore,
     searxngUrlStore,
     searchMaxPerTurnStore,
@@ -30,11 +31,12 @@
   } from "../../stores/chatHistory";
   import { WEB_SEARCH_TOOL } from "../../lib/webSearch";
   import { WIKI_TOOL } from "../../lib/wiki";
+  import { QM_INSPECT_TOOL, QM_CONFIGURE_TOOL } from "../../lib/qmTools";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import { getTextContent, getImageUrls } from "../../lib/types";
   import { buildBasePrompt } from "../../lib/systemPrompt";
   import type { ChatMessage, ContentPart } from "../../lib/types";
-  import { Paperclip, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle, Eye } from "lucide-svelte";
+  import { Paperclip, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle, Eye, Wrench } from "lucide-svelte";
   import ChatMessageComponent from "./ChatMessage.svelte";
   import Composer from "./Composer.svelte";
   import { modelCategory } from "../../lib/modelUtils";
@@ -432,6 +434,20 @@
     abortController?.abort();
   }
 
+  // Accept/deny a pending qm config change — unblocks the server-side turn, which
+  // then applies (or skips) the change and continues generating.
+  async function respondApproval(id: string, accept: boolean) {
+    try {
+      await fetch("/api/chats/turn/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatId: $activeChatId, id, accept }),
+      });
+    } catch {
+      showToast("Could not send the decision");
+    }
+  }
+
   // Web search runs as OpenAI tool-calling, which only the chat/completions
   // endpoint speaks. Other endpoints just chat without the tool.
 
@@ -440,7 +456,7 @@
   // deliberately NOT here — it's appended at the very END of the system block (see
   // currentDateLine) so this prefix stays byte-identical across a midnight rollover
   // and the KV cache isn't invalidated once a day.
-  function basePrompt(searchAvailable: boolean, wikiAvailable: boolean, modelId: string): string {
+  function basePrompt(searchAvailable: boolean, wikiAvailable: boolean, qmAvailable: boolean, modelId: string): string {
     // Persona + tool sub-prompts, all from the active system-prompt selection
     // (built-in default, a named preset, or none). A preset bundles its own tool
     // prompts; fixed options use the shipped defaults. Tool directives are only
@@ -448,6 +464,7 @@
     return buildBasePrompt(get(activeSystemPresetStore), get(systemPresetsStore), {
       search: searchAvailable,
       wiki: wikiAvailable,
+      qm: qmAvailable,
       model: modelId,
     });
   }
@@ -519,9 +536,15 @@
     // models can answer quartermaster questions.
     const webEnabled = !isRewrite && $webSearchStore;
     const wikiEnabled = !isRewrite;
+    // Quartermaster tools (inspect/configure the running instance). Default on.
+    const qmEnabled = !isRewrite && $qmToolsStore;
     // Stable per-turn tool set the client advertises; the server dispatches them
     // and enforces the per-turn caps (wiki lookups, web-search rate limits).
-    const turnTools = [...(webEnabled ? [WEB_SEARCH_TOOL] : []), ...(wikiEnabled ? [WIKI_TOOL] : [])];
+    const turnTools = [
+      ...(webEnabled ? [WEB_SEARCH_TOOL] : []),
+      ...(wikiEnabled ? [WIKI_TOOL] : []),
+      ...(qmEnabled ? [QM_INSPECT_TOOL, QM_CONFIGURE_TOOL] : []),
+    ];
 
     // Thinking budget: hard token cap so models can't loop forever before
     // answering. 0 = off; rewrites never think. Enforced server-side as the
@@ -536,7 +559,7 @@
     const genStart = Date.now();
 
     const sys = [
-      basePrompt(webEnabled, wikiEnabled, modelId),
+      basePrompt(webEnabled, wikiEnabled, qmEnabled, modelId),
       sessionById(id)?.instructions?.trim(),
       curSummary && `Summary of earlier conversation:\n${curSummary}`,
       // Rewrite turns keep the full conversation for context (setting, characters,
@@ -738,6 +761,11 @@
         }
         break;
       }
+      case "approval":
+        // A qm config change awaiting accept/deny (or its resolved outcome).
+        // Lives on the bubble only for the turn; the post-turn sync drops it.
+        if (d.data) patchLast(id, (m) => ({ ...m, approval: d.data }));
+        break;
       case "done":
         if (d.genMs) patchLast(id, (m) => (m.role === "assistant" ? { ...m, genTimeMs: d.genMs } : m));
         break;
@@ -979,7 +1007,7 @@
       onwheel={(e) => { if (e.deltaY < 0) userScrolledUp = true; }}
       use:scrollFade
     >
-      <div class="w-full max-w-3xl mx-auto px-2 pt-4 {messages.length === 0 ? 'h-full' : ''}">
+      <div class="w-full max-w-3xl mx-auto px-2 pt-4 pb-6 {messages.length === 0 ? 'h-full' : ''}">
       {#if messages.length === 0}
         <div class="h-full flex flex-col items-center justify-center gap-3 text-txtsecondary">
           <MessagesSquare class="w-10 h-10 opacity-40" strokeWidth={1.5} />
@@ -1002,6 +1030,8 @@
             genTimeMs={message.genTimeMs}
             searches={message.searches}
             citations={message.citations}
+            approval={message.approval}
+            onApprove={respondApproval}
             rewriteInstruction={message.rewriteInstruction}
             rewriteOriginal={message.rewriteOriginal}
             isStreaming={genId === $activeChatId && idx === messages.length - 1 && message.role === "assistant"}
@@ -1092,6 +1122,11 @@
         <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-websearch">
           <span class="flex items-center gap-1.5"><Search class="w-3.5 h-3.5" /> Web Search {@render tip("Let the model search the web (via SearXNG) for fresh facts. Needs a tool-calling model. URL + rate limits are in the side-rail Settings.")}</span>
           <input id="chat-websearch" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$webSearchStore} />
+        </label>
+
+        <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-qmtools">
+          <span class="flex items-center gap-1.5"><Wrench class="w-3.5 h-3.5" /> QM Tools {@render tip("Let the model inspect and tune this quartermaster instance — list installed models, read live VRAM/config, and change settings (hot-reloads, no eviction). Needs a tool-calling model. Requires -generate for edits.")}</span>
+          <input id="chat-qmtools" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$qmToolsStore} />
         </label>
       {/snippet}
 

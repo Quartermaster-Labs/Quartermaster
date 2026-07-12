@@ -463,8 +463,12 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 	origDirector := reverseProxy.Director
 	reverseProxy.Director = func(r *http.Request) {
 		origDirector(r)
+		// GET/POST /v1/audio/voices -> /v1/voices; DELETE /v1/audio/voices/{name}
+		// -> /v1/voices/{name} (tts-server names the voice in the path).
 		if r.URL.Path == "/v1/audio/voices" {
 			r.URL.Path = "/v1/voices"
+		} else if rest, ok := strings.CutPrefix(r.URL.Path, "/v1/audio/voices/"); ok {
+			r.URL.Path = "/v1/voices/" + rest
 		}
 	}
 	reverseProxy.Transport = &http.Transport{

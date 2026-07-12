@@ -5,13 +5,17 @@ export async function generateSpeech(
   model: string,
   input: string,
   voice: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  instructions?: string
 ): Promise<Blob> {
   const request: SpeechGenerationRequest = {
     model,
     input,
     voice,
     response_format: "wav",
+    // voice_design models design a voice from this style description; the
+    // tts-server maps OpenAI `instructions` → the ABI `instruct` field.
+    ...(instructions ? { instructions } : {}),
   };
 
   const response = await fetch("/v1/audio/speech", {

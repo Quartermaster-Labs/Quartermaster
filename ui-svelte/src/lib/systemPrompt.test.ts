@@ -6,6 +6,7 @@ import {
   DEFAULT_BUILTIN_PROMPT,
   DEFAULT_SEARCH_PROMPT,
   DEFAULT_CITE_PROMPT,
+  DEFAULT_QM_PROMPT,
   type SystemPreset,
 } from "./systemPrompt";
 
@@ -66,6 +67,16 @@ describe("buildBasePrompt", () => {
   it("preset custom tool field overrides the default", () => {
     const out = buildBasePrompt("a", [preset({ content: "", search: "SEARCH-X", cite: "CITE-X" })], { search: true, wiki: false, model: "m" });
     expect(out).toBe("SEARCH-X CITE-X");
+  });
+
+  it("qm on appends the fixed qm directive (no citation prompt)", () => {
+    const out = buildBasePrompt(null, [], { search: false, wiki: false, qm: true, model: "m" });
+    expect(out).toBe(DEFAULT_BUILTIN_PROMPT + " " + DEFAULT_QM_PROMPT);
+  });
+
+  it("qm directive is not preset-overridable (fixed even for a preset)", () => {
+    const out = buildBasePrompt("a", [preset({ content: "P" })], { search: false, wiki: false, qm: true, model: "m" });
+    expect(out).toBe("P " + DEFAULT_QM_PROMPT);
   });
 
   it("fixed default option still gets default tool prompts when tool on", () => {

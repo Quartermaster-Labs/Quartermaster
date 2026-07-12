@@ -3,7 +3,10 @@ import { writable } from "svelte/store";
 // One turn in a speech thread: the text spoken, the voice used, and the
 // generated audio (a base64 data URL so it survives a reload / server round-trip,
 // unlike an ephemeral object URL). Mirrors the image tab's turn model.
-export type Turn = { text: string; voice: string; audio?: string; error?: string; secs?: number };
+// `voice` is the display label (speaker name, preset name, or "Default").
+// `instructions` is the voice_design style description actually sent (empty for
+// base/custom_voice); kept so regenerate reuses the same design.
+export type Turn = { text: string; voice: string; instructions?: string; audio?: string; error?: string; secs?: number };
 
 export interface SpeechSession {
   id: string;

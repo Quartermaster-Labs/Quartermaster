@@ -5,7 +5,7 @@
   // palette, primary fill) — replaces the ugly native <audio controls>. Shows a
   // real waveform decoded from the clip; the played portion fills primary.
   // Parent auto-play still works via the exported play().
-  let { src, volume = 1 }: { src: string; volume?: number } = $props();
+  let { src, volume = 1, label = "" }: { src: string; volume?: number; label?: string } = $props();
 
   const BARS = 48;
 
@@ -122,7 +122,7 @@
   ></audio>
 
   <button
-    class="shrink-0 grid place-items-center w-9 h-9 rounded-full bg-primary text-btn-primary-text hover:bg-primary-hover active:bg-primary-active transition-colors"
+    class="shrink-0 grid place-items-center w-9 h-9 rounded-full bg-[#141414] text-white hover:opacity-90 active:opacity-80 transition-opacity"
     onclick={toggle}
     title={playing ? "Pause" : "Play"}
   >
@@ -137,7 +137,7 @@
     <!-- Waveform: bar heights = clip peaks; played bars fill primary. Click / drag to seek. -->
     <div
       bind:this={trackEl}
-      class="relative flex items-center gap-px h-7 cursor-pointer touch-none"
+      class="relative h-7 cursor-pointer touch-none"
       onpointerdown={onPointerDown}
       onpointermove={onPointerMove}
       onpointerup={onPointerUp}
@@ -148,15 +148,27 @@
       aria-valuemax={Math.round(dur)}
       aria-valuenow={Math.round(cur)}
     >
-      {#each bars as p, i}
-        <div
-          class="flex-1 rounded-full transition-colors {i / BARS < frac ? 'bg-primary' : 'bg-secondary'}"
-          style="height: {15 + p * 85}%"
-        ></div>
-      {/each}
+      <!-- SVG bars: preserveAspectRatio="none" scales every rect's x by the same
+           factor, so all bars render at identical width (DOM flex bars land on
+           fractional pixels → antialias to uneven widths). -->
+      <svg class="w-full h-full" viewBox="0 0 {BARS * 2} 100" preserveAspectRatio="none">
+        {#each bars as p, i}
+          {@const h = 15 + p * 85}
+          <rect
+            x={i * 2 + 0.4}
+            y={(100 - h) / 2}
+            width="1.2"
+            height={h}
+            rx="0.6"
+            class={i / BARS < frac ? "text-primary" : "text-secondary"}
+            fill="currentColor"
+          />
+        {/each}
+      </svg>
     </div>
-    <div class="flex justify-between text-[0.6875rem] text-txtsecondary tabular-nums leading-none">
+    <div class="flex justify-between items-center gap-2 text-[0.6875rem] text-txtsecondary tabular-nums leading-none">
       <span>{fmt(cur)}</span>
+      {#if label}<span class="truncate normal-nums">{label}</span>{/if}
       <span>{fmt(dur)}</span>
     </div>
   </div>

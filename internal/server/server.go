@@ -133,6 +133,13 @@ var modelGetRoutes = []string{
 	"/sdapi/v1/loras",
 }
 
+// modelDeleteRoutes are model-dispatched DELETE endpoints (the model arrives as
+// a query parameter; a trailing path segment names the target). The voices path
+// is rewritten to tts-server's /v1/voices/{name} by the reverse-proxy Director.
+var modelDeleteRoutes = []string{
+	"/v1/audio/voices/{name}",
+}
+
 // BuildInfo carries version metadata surfaced by GET /api/version.
 type BuildInfo struct {
 	Version string
@@ -502,6 +509,9 @@ func (s *Server) routes() {
 	for _, path := range modelGetRoutes {
 		mux.Handle("GET "+path, modelChain.Then(dispatch))
 	}
+	for _, path := range modelDeleteRoutes {
+		mux.Handle("DELETE "+path, modelChain.Then(dispatch))
+	}
 
 	// quartermaster API + custom endpoints.
 	mux.Handle("GET /v1/models", discoveryChain.ThenFunc(s.handleListModels))
@@ -555,6 +565,7 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/imagechats", apiChain.ThenFunc(s.handlePlaygroundImageChats))
 	mux.Handle("GET /api/speechchats", apiChain.ThenFunc(s.handlePlaygroundSpeechChats))
 	mux.Handle("PUT /api/speechchats", apiChain.ThenFunc(s.handlePlaygroundSpeechChats))
+	mux.Handle("GET /api/media/{file...}", apiChain.ThenFunc(s.handlePlaygroundMedia))
 
 	// Server-owned turn runner: a chat turn runs as a server goroutine that
 	// streams to disk + SSE, so a closed/refreshed tab no longer loses (or stops)
@@ -563,6 +574,7 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/chats/turn/stream", apiChain.ThenFunc(s.handleTurnStream))
 	mux.Handle("GET /api/chats/turn/state", apiChain.ThenFunc(s.handleTurnState))
 	mux.Handle("DELETE /api/chats/turn", apiChain.ThenFunc(s.handleTurnStop))
+	mux.Handle("POST /api/chats/turn/approve", apiChain.ThenFunc(s.handleTurnApprove))
 
 	// Per-model config editor (cogwheel) — read launch params + effective
 	// override, save curated overrides, reset to autogen default, add named

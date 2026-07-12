@@ -24,7 +24,7 @@ export const WIKI_ARTICLES: WikiArticle[] = articles as WikiArticle[];
 export const WIKI_CATEGORIES: { title: string; ids: string[] }[] = [
   { title: "Getting started", ids: ["overview"] },
   { title: "Models & config", ids: ["loading-models", "model-config", "config-variants", "autogen"] },
-  { title: "Playground", ids: ["playground-chat", "web-search", "images", "speech-audio", "rerank-embed", "settings"] },
+  { title: "Playground", ids: ["playground-chat", "web-search", "qm-tools", "images", "speech-audio", "rerank-embed", "settings"] },
   { title: "Monitoring & VRAM", ids: ["observe", "gpu-memory"] },
   { title: "API & access", ids: ["api-keys"] },
   { title: "Troubleshooting", ids: ["troubleshooting"] },

@@ -69,6 +69,7 @@ type turnCitation struct {
 // activeTurn is the in-memory handle for the one turn a user has generating.
 type activeTurn struct {
 	mu          sync.Mutex
+	user        string // playground user this turn belongs to (for per-user prefs writes)
 	chatID      string
 	content     string
 	reasoning   string
@@ -80,6 +81,9 @@ type activeTurn struct {
 	done        bool
 	subs        map[chan turnDelta]struct{}
 	cancel      context.CancelFunc
+	// pending is the config change awaiting the user's accept/deny (qm tools).
+	// Non-nil only while a quartermaster_configure call is blocked on approval.
+	pending *pendingApproval
 }
 
 // turnManager owns all server-side turn generation for the playground. One
@@ -191,6 +195,11 @@ func (at *activeTurn) subscribe() (chan turnDelta, []turnDelta, bool) {
 		payload, _ := json.Marshal(map[string]any{"search": s, "citations": at.citations})
 		snap = append(snap, turnDelta{Kind: "search", Data: payload})
 	}
+	// A reopened tab re-sees a live approval prompt so it can still accept/deny.
+	if at.pending != nil {
+		payload, _ := json.Marshal(at.pending)
+		snap = append(snap, turnDelta{Kind: "approval", Data: payload})
+	}
 	ch := make(chan turnDelta, 256)
 	if at.subs == nil {
 		at.subs = map[chan turnDelta]struct{}{}
@@ -239,7 +248,7 @@ func (s *Server) handleTurnStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	at := &activeTurn{chatID: start.ChatID, cancel: cancel, authKey: s.pickSelfKey(start.Model)}
+	at := &activeTurn{user: user, chatID: start.ChatID, cancel: cancel, authKey: s.pickSelfKey(start.Model)}
 	tm.active[user] = at
 	tm.mu.Unlock()
 
@@ -487,7 +496,10 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 			var sources []turnSource
 			kind := "web"
 
-			if tc.Name == "wiki_search" {
+			if tc.Name == "quartermaster_inspect" || tc.Name == "quartermaster_configure" {
+				kind = "quartermaster"
+				query, resultText = tm.dispatchQM(ctx, at, tc)
+			} else if tc.Name == "wiki_search" {
 				kind = "wiki"
 				if wikiCount >= maxWiki {
 					resultText = fmt.Sprintf("Wiki lookup limit reached (%d per turn). Answer with what you have.", maxWiki)
@@ -906,6 +918,7 @@ func (p *Playground) writeChatsLocked(user string, arr []map[string]any) {
 		return
 	}
 	b, _ := json.Marshal(arr)
+	b = p.extractMedia(user, b)
 	os.WriteFile(path, b, 0o644)
 }
 

@@ -1,11 +1,16 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -23,7 +28,7 @@ import (
 // so different people on the same box keep separate conversations.
 type Playground struct {
 	Addr    string // listen address this app is served on (e.g. ":8081")
-	DataDir string // dir for users.json + chats/<user>.json
+	DataDir string // users.json + per-user folders (users/<user>/{chats,imagechats,speechchats,prefs}.json + media/)
 	// SelfBase is quartermaster's own inference loopback (e.g. "http://127.0.0.1:8080"),
 	// where the server-side turn runner POSTs /v1/chat/completions so template /
 	// canon / routing / slotcache all apply. Set at startup from the main listen addr.
@@ -117,20 +122,185 @@ func (p *Playground) saveUsers(users map[string]string) error {
 	return os.WriteFile(p.usersPath(), b, 0o644)
 }
 
+// Per-user layout: DataDir/users/<user>/{chats,imagechats,speechchats,prefs}.json
+// with generated media split out into DataDir/users/<user>/media/ (see extractMedia)
+// so the tab JSONs stay small structure-only blobs instead of MB of inline base64.
+func (p *Playground) userDir(user string) string { return filepath.Join(p.DataDir, "users", user) }
+
 func (p *Playground) chatsPath(user string) string {
-	return filepath.Join(p.DataDir, "chats", user+".json")
+	return filepath.Join(p.userDir(user), "chats.json")
 }
 
 func (p *Playground) prefsPath(user string) string {
-	return filepath.Join(p.DataDir, "prefs", user+".json")
+	return filepath.Join(p.userDir(user), "prefs.json")
 }
 
 func (p *Playground) imageChatsPath(user string) string {
-	return filepath.Join(p.DataDir, "imagechats", user+".json")
+	return filepath.Join(p.userDir(user), "imagechats.json")
 }
 
 func (p *Playground) speechChatsPath(user string) string {
-	return filepath.Join(p.DataDir, "speechchats", user+".json")
+	return filepath.Join(p.userDir(user), "speechchats.json")
+}
+
+func (p *Playground) mediaDir(user string) string { return filepath.Join(p.userDir(user), "media") }
+
+// dataURLRe matches an inline "data:<mime>;base64,<payload>" URL. base64's
+// alphabet excludes the JSON string terminator (") so the payload run stops
+// cleanly at the closing quote without needing to model the surrounding JSON.
+var dataURLRe = regexp.MustCompile(`data:([\w.+-]+/[\w.+-]+);base64,([A-Za-z0-9+/]+={0,2})`)
+
+// extractMedia rewrites inline base64 data: URLs in a raw JSON blob to
+// /api/media/<file> references, writing each decoded blob to the user's media
+// dir (deduped by content hash). It runs on raw bytes, not a parsed structure,
+// so everything else (numbers, key order, timestamps) is byte-preserved and it
+// works for any tab's JSON shape. Already-rewritten refs don't match, so it's
+// idempotent — a client re-PUTing refs is a no-op.
+func (p *Playground) extractMedia(user string, raw []byte) []byte {
+	return dataURLRe.ReplaceAllFunc(raw, func(m []byte) []byte {
+		sub := dataURLRe.FindSubmatch(m)
+		data, err := base64.StdEncoding.DecodeString(string(sub[2]))
+		if err != nil || len(data) == 0 {
+			return m // leave malformed payloads inline rather than lose them
+		}
+		sum := sha256.Sum256(data)
+		kind := mediaKind(string(sub[1]))
+		name := hex.EncodeToString(sum[:8]) + "." + mimeExt(string(sub[1]))
+		dir := filepath.Join(p.mediaDir(user), kind)
+		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); err != nil { // write once; hash dedups
+			if os.MkdirAll(dir, 0o755) == nil {
+				os.WriteFile(path, data, 0o644)
+			}
+		}
+		return []byte("/api/media/" + kind + "/" + name)
+	})
+}
+
+// gcMedia deletes media files in the user's dir that no tab JSON references
+// (an orphan left after a chat/image/speech entry was deleted client-side).
+// MUST be called under p.mu and after the triggering write, so the union scan
+// across all tabs sees committed state — otherwise a concurrent write to another
+// tab could delete a file it just referenced. Only ref-removing client PUTs call
+// it; the streaming turn writer only adds refs, so it skips GC to avoid churn.
+//
+// ponytail: substring scan of the (now small, ref-only) JSONs, not a parse — a
+// "/api/media/<name>" only ever appears as a ref, so containment is enough.
+func (p *Playground) gcMedia(user string) {
+	kinds, err := os.ReadDir(p.mediaDir(user))
+	if err != nil {
+		return
+	}
+	var refs []byte
+	for _, fn := range []func(string) string{p.chatsPath, p.imageChatsPath, p.speechChatsPath} {
+		b, _ := os.ReadFile(fn(user))
+		refs = append(refs, b...)
+	}
+	for _, k := range kinds {
+		if !k.IsDir() {
+			continue
+		}
+		dir := filepath.Join(p.mediaDir(user), k.Name())
+		files, _ := os.ReadDir(dir)
+		for _, f := range files {
+			if f.IsDir() {
+				continue
+			}
+			if !bytes.Contains(refs, []byte("/api/media/"+k.Name()+"/"+f.Name())) {
+				os.Remove(filepath.Join(dir, f.Name()))
+			}
+		}
+	}
+}
+
+// mediaKind buckets a MIME type into a top-level media subfolder so images and
+// audio live apart. Unknown types go to "other".
+func mediaKind(mime string) string {
+	switch {
+	case strings.HasPrefix(mime, "image/"):
+		return "image"
+	case strings.HasPrefix(mime, "audio/"):
+		return "audio"
+	default:
+		return "other"
+	}
+}
+
+// mimeExt maps the media types the playground actually emits to a file
+// extension (so http.ServeFile sets the right Content-Type on read). Unknown
+// types fall back to the alnum tail of the subtype, or "bin".
+func mimeExt(mime string) string {
+	switch mime {
+	case "image/png":
+		return "png"
+	case "image/jpeg":
+		return "jpg"
+	case "image/webp":
+		return "webp"
+	case "image/gif":
+		return "gif"
+	case "audio/wav", "audio/x-wav", "audio/wave":
+		return "wav"
+	case "audio/mpeg", "audio/mp3":
+		return "mp3"
+	case "audio/webm":
+		return "webm"
+	case "audio/ogg":
+		return "ogg"
+	}
+	sub := mime[strings.LastIndexByte(mime, '/')+1:]
+	ext := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return -1
+	}, strings.ToLower(sub))
+	if ext == "" {
+		return "bin"
+	}
+	return ext
+}
+
+// Migrate moves the pre-split flat layout (DataDir/<kind>/<user>.json with inline
+// base64) into the per-user folder layout with media extracted. Idempotent and
+// best-effort: skips users already migrated, leaves the old files in place. Runs
+// once at startup.
+func (p *Playground) Migrate() {
+	if p == nil {
+		return
+	}
+	kinds := map[string]func(string) string{
+		"chats":       p.chatsPath,
+		"imagechats":  p.imageChatsPath,
+		"speechchats": p.speechChatsPath,
+		"prefs":       p.prefsPath,
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for kind, newPathFn := range kinds {
+		entries, _ := os.ReadDir(filepath.Join(p.DataDir, kind))
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			user := strings.TrimSuffix(e.Name(), ".json")
+			if !pgUserRe.MatchString(user) {
+				continue
+			}
+			newPath := newPathFn(user)
+			if _, err := os.Stat(newPath); err == nil {
+				continue // already migrated
+			}
+			raw, err := os.ReadFile(filepath.Join(p.DataDir, kind, e.Name()))
+			if err != nil {
+				continue
+			}
+			raw = p.extractMedia(user, raw)
+			if os.MkdirAll(filepath.Dir(newPath), 0o755) == nil {
+				os.WriteFile(newPath, raw, 0o644)
+			}
+		}
+	}
 }
 
 // POST /auth/login {username,password}. Unknown username registers; known one
@@ -237,6 +407,7 @@ func (s *Server) handlePlaygroundChats(w http.ResponseWriter, r *http.Request) {
 		p.mu.Lock()
 		clientArr = p.turns.guardedChatsPut(user, clientArr)
 		p.writeChatsLocked(user, clientArr)
+		p.gcMedia(user)
 		p.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -261,6 +432,30 @@ func (s *Server) handlePlaygroundSpeechChats(w http.ResponseWriter, r *http.Requ
 // client-owns-the-blob model as chats, just defaulting to {} when absent.
 func (s *Server) handlePlaygroundPrefs(w http.ResponseWriter, r *http.Request) {
 	s.serveUserBlob(w, r, (*Playground).prefsPath, "{}")
+}
+
+// GET /api/media/{file...} — serves a generated media blob from the logged-in
+// user's media dir (path is "<kind>/<name>", e.g. "image/ab12.png"). The
+// path.Clean + "../" reject pins access under the media dir (no traversal);
+// http.ServeFile sets Content-Type by extension and honors Range requests so
+// audio scrubbing works.
+func (s *Server) handlePlaygroundMedia(w http.ResponseWriter, r *http.Request) {
+	p := s.playground
+	if p == nil {
+		http.Error(w, "playground not enabled", http.StatusNotImplemented)
+		return
+	}
+	user := playgroundUser(r)
+	if user == "" {
+		http.Error(w, "not logged in", http.StatusUnauthorized)
+		return
+	}
+	file := path.Clean("/" + r.PathValue("file")) // collapse ../, force absolute
+	if file == "/" {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeFile(w, r, filepath.Join(p.mediaDir(user), filepath.FromSlash(file)))
 }
 
 // serveUserBlob reads (GET) or overwrites (PUT) a per-user JSON file, opaque to
@@ -301,9 +496,13 @@ func (s *Server) serveUserBlob(w http.ResponseWriter, r *http.Request, pathFn fu
 			return
 		}
 		p.mu.Lock()
+		blob = p.extractMedia(user, blob)
 		err := os.MkdirAll(filepath.Dir(path), 0o755)
 		if err == nil {
 			err = os.WriteFile(path, blob, 0o644)
+		}
+		if err == nil {
+			p.gcMedia(user)
 		}
 		p.mu.Unlock()
 		if err != nil {
