@@ -533,6 +533,15 @@ export interface AppSettings {
   modelsRoot: string;
   categoryRoots: Record<string, string> | null;
   slotCache: SlotCacheSettings;
+  backends: BackendExes;
+}
+
+// Backend executable paths (llama-server / sd-server / tts-server). Blank => the
+// generate-file value / sibling default. Set a Vulkan/ROCm build here on AMD/Intel.
+export interface BackendExes {
+  serverExe: string;
+  sdServerExe: string;
+  ttsServerExe: string;
 }
 
 // On-disk slot KV persistence knobs (dashboard slot-KV section). Zero values
@@ -566,6 +575,17 @@ export async function putSettings(p: {
   });
   if (!response.ok) {
     throw new Error(`Failed to save settings: ${response.status} ${await response.text()}`);
+  }
+}
+
+export async function putBackends(p: BackendExes): Promise<void> {
+  const response = await fetch("/api/settings/backends", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(p),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to save backend paths: ${response.status} ${await response.text()}`);
   }
 }
 
@@ -604,6 +624,19 @@ export async function pickFolder(): Promise<string | null> {
   if (response.status === 204) return null;
   if (!response.ok) {
     throw new Error(`Folder picker failed: ${response.status} ${await response.text()}`);
+  }
+  const body = (await response.json()) as { path: string };
+  return body.path;
+}
+
+// Opens the host's native open-file dialog to pick a backend executable.
+// Returns the path, or null when cancelled (204) or unsupported (501) — the
+// caller then leaves the field as-is for manual typing.
+export async function pickBackend(): Promise<string | null> {
+  const response = await fetch("/api/settings/backend/pick", { method: "POST" });
+  if (response.status === 204 || response.status === 501) return null;
+  if (!response.ok) {
+    throw new Error(`File picker failed: ${response.status} ${await response.text()}`);
   }
   const body = (await response.json()) as { path: string };
   return body.path;

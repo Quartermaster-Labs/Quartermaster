@@ -284,29 +284,35 @@ func (s *Server) WireDynamicOffload(settings autogen.Settings) {
 			fresh, fok := autogen.SampleFreeVramGB(spawnVramSampleTimeout)
 			if fok {
 				n++
-				logf(fmt.Sprintf("dynoffload: VRAM refusal, retry %d/%d — free now %.1fGB (post-eviction reclaim)",
+				logf(fmt.Sprintf("dynoffload: re-probe %d/%d — free now %.1fGB (post-eviction reclaim)",
 					n, spawnVramReclaimTries, fresh))
 			}
 			return fresh, fok
 		}
-		return offloadWithReclaim(freeGB, ok, offload, sample,
+		return offloadWithReclaim(args, freeGB, ok, offload, sample,
 			func() { time.Sleep(spawnVramReclaimDelay) }, spawnVramReclaimTries)
 	})
 }
 
 // offloadWithReclaim runs the offload guard once against the (possibly stale,
-// cached) free reading; if it refuses for lack of VRAM it re-probes a FRESH
-// reading up to `tries` times, `sleep` apart, retrying the guard against each.
-// This absorbs the post-eviction reclaim lag — the cached sample predates the
-// eviction and the driver frees lazily after a killed process — without slowing
-// the common ample-VRAM path (which succeeds on the first call). `!ok` (no GPU
-// telemetry) passes straight through: nothing to re-probe. Pure/injectable so the
-// retry behavior is unit-testable without a GPU.
-func offloadWithReclaim(freeGB float64, ok bool,
+// cached) free reading. If that reading MATTERED — the guard refused for lack of
+// VRAM, OR it offloaded more than the baked plan — it re-probes a FRESH reading
+// up to `tries` times, `sleep` apart, retrying the guard against each. This
+// absorbs the post-eviction reclaim lag (the cached sample predates the eviction
+// and the driver frees a killed process's VRAM lazily), so a stale-low sample
+// can't over-offload a model that actually fits once the outgoing model's VRAM is
+// reclaimed. The common ample-VRAM path — guard leaves the baked args untouched —
+// still returns on the first call with no probing. `!ok` (no GPU telemetry)
+// passes straight through. Pure/injectable so the retry behavior is unit-testable
+// without a GPU.
+func offloadWithReclaim(orig []string, freeGB float64, ok bool,
 	offload func(free float64, freeOK bool) ([]string, error),
 	sample func() (float64, bool), sleep func(), tries int) ([]string, error) {
 	out, err := offload(freeGB, ok)
-	if err == nil || !ok {
+	// Fast path: no telemetry to second-guess, or the guard trusted the baked
+	// plan as-is (ample VRAM). Only a refusal or an actual offload change means
+	// the (stale) reading drove the outcome and is worth reconfirming.
+	if !ok || (err == nil && sameArgs(out, orig)) {
 		return out, err
 	}
 	for i := 0; i < tries; i++ {
@@ -315,11 +321,29 @@ func offloadWithReclaim(freeGB float64, ok bool,
 		if !fok {
 			continue
 		}
+		// A fresh post-eviction reading is authoritative: take its result the
+		// moment it fits (even if it still offloads some — that's honest), and
+		// keep retrying only while it refuses.
 		if out, err = offload(fresh, true); err == nil {
 			return out, nil
 		}
 	}
 	return out, err
+}
+
+// sameArgs reports whether two arg vectors are element-wise equal. LiveOffloadArgs
+// returns the input slice unchanged when it doesn't intervene, so an inequality
+// means it rewrote -ngl/--n-cpu-moe (offloaded more than the baked plan).
+func sameArgs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // spawnVram* bound the post-eviction VRAM-reclaim wait in the dynamic-offload
@@ -593,6 +617,8 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/settings", apiChain.ThenFunc(s.handleAPISettingsPut))
 	mux.Handle("DELETE /api/settings", apiChain.ThenFunc(s.handleAPISettingsDelete))
 	mux.Handle("PUT /api/settings/slotcache", apiChain.ThenFunc(s.handleAPISlotCachePut))
+	mux.Handle("PUT /api/settings/backends", apiChain.ThenFunc(s.handleAPIBackendsPut))
+	mux.Handle("POST /api/settings/backend/pick", apiChain.ThenFunc(s.handleAPIBackendPick))
 	mux.Handle("GET /api/kvcache", apiChain.ThenFunc(s.handleAPIKvCache))
 	mux.Handle("GET /api/canon", apiChain.ThenFunc(s.handleAPICanon))
 	// Per-category scan folder (Models tab folder icon) — opens the host's native

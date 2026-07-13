@@ -27,7 +27,7 @@ export const WIKI_CATEGORIES: { title: string; ids: string[] }[] = [
   { title: "Playground", ids: ["playground-chat", "web-search", "qm-tools", "images", "speech-audio", "rerank-embed", "settings"] },
   { title: "Monitoring & VRAM", ids: ["observe", "gpu-memory"] },
   { title: "API & access", ids: ["api-keys"] },
-  { title: "Troubleshooting", ids: ["troubleshooting"] },
+  { title: "Troubleshooting", ids: ["troubleshooting", "known-issues"] },
 ];
 
 // Group articles into their display categories, keeping only groups with a

@@ -136,11 +136,13 @@
     const model = $selectedModelStore;
     if (model === lastVoiceModel) return;
     lastVoiceModel = model;
-    // Cache is only an instant seed for first paint; always refresh against the
-    // server so voices lost on a tts-server restart don't linger as phantoms.
+    // Cache seeds the UI instantly. Only hit the server when the model is
+    // ALREADY loaded — GET /v1/audio/voices proxies to tts-server and would
+    // otherwise force a model load just from opening the tab. A manual refresh
+    // or the first generation (which loads the model anyway) fetches fresh.
     const cache = getVoicesCache();
     applyVoices(model && cache[model] ? cache[model] : defaultVoices);
-    if (model) refreshVoices();
+    if (model && get(models).some((m) => m.id === model && m.state === "ready")) refreshVoices();
   });
 
   async function refreshVoices() {
@@ -280,6 +282,11 @@
     if (recordedUrl) URL.revokeObjectURL(recordedUrl);
     recordedUrl = "";
     try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        recError =
+          "Microphone needs a secure context. Open this page via http://localhost or serve it over HTTPS.";
+        return;
+      }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       recChunks = [];
       recorder = new MediaRecorder(stream);

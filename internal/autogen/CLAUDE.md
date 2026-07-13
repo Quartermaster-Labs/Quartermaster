@@ -43,7 +43,7 @@ upstreaming.
 - `EstimatePlan` (`estimate.go:37`) — preview load plan for the editor, mirroring the solo profile.
 - `GenerateFile`/`Settings`/`Override`/`VariantSpec`/`GroupSpec` (`overrides.go`) — the YAML control surface; `LoadGenerateFile` (`overrides.go:181`) applies defaults and merges the sidecar.
 - `EnsureConfig` (`hash.go:107`) — hash-gated generate; `CurrentInputsHash` (`hash.go:84`) lets callers detect a would-be-different config cheaply.
-- Sidecar API (`sidecar.go`) — `LoadSidecarOverrides`, `UpsertSidecarOverride`, `DeleteSidecarOverride`, `UpsertSidecarSettings`, `ClearSidecarSettings`, `LoadSidecarCategoryRoots`/`UpsertSidecarRoot` (per-category scan folders).
+- Sidecar API (`sidecar.go`) — `LoadSidecarOverrides`, `UpsertSidecarOverride`, `DeleteSidecarOverride`, `UpsertSidecarSettings`, `ClearSidecarSettings`, `LoadSidecarCategoryRoots`/`UpsertSidecarRoot` (per-category scan folders), `LoadSidecarBackends`/`UpsertSidecarBackends` (backend exe paths — llama/sd/tts-server; top-level so a VRAM reset can't wipe them; overlaid onto `Settings` BEFORE `applyDefaults` so a blank sd/tts derives as a sibling of a UI-set llama exe).
 
 ## Data flow / how it works
 

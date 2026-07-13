@@ -63,6 +63,14 @@ func getGpuStats(ctx context.Context, every time.Duration, logger *logmon.Monito
 		logger.Debugf("nvidia-smi: %s", err.Error())
 	}
 
+	// Vendor-neutral fallback (AMD/Intel): DXGI for VRAM + PDH for utilization.
+	if ch, err := tryDxgiWindows(ctx, every, logger); err == nil {
+		logger.Info("using DXGI for GPU VRAM monitoring")
+		return ch, nil
+	} else {
+		logger.Debugf("DXGI: %s", err.Error())
+	}
+
 	return nil, ErrNoGpuTool
 }
 

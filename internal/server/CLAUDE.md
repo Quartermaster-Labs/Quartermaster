@@ -72,7 +72,7 @@ API / operations / UI:
 - API-key manager (local admin, `-generate` only): `GET /api/apikeys`, `POST /api/apikeys`, `DELETE /api/apikeys/{name}` (`configapi_apikeys.go`).
 - Context / observe extras: `GET /api/canon` (prompt-canon snapshot, `promptcanon.go`), `GET /api/backend-metrics` (`backendmetrics.go`), `GET /api/websearch` (SearXNG proxy, `websearch.go`).
 - Self-update: `POST /api/update` (`update.go`, Windows release builds only).
-- Config-editor extras (`-generate` only): `PUT /api/models/{model}/preview` (cmd preview), `PUT /api/models/{model}/adhoc-cmd` (one-time flag-override cmd for scripts — no persistence, no reload), `PUT /api/settings/slotcache`, `PUT /api/default-variants`, `POST /api/pick-folder`, `POST /api/settings/root/pick` (`pickfolder_*.go`).
+- Config-editor extras (`-generate` only): `PUT /api/models/{model}/preview` (cmd preview), `PUT /api/models/{model}/adhoc-cmd` (one-time flag-override cmd for scripts — no persistence, no reload), `PUT /api/settings/slotcache`, `PUT /api/settings/backends` (backend exe paths — llama/sd/tts-server; Vulkan/ROCm build on non-NVIDIA GPUs), `PUT /api/default-variants`, `POST /api/pick-folder`, `POST /api/settings/root/pick` (`pickfolder_*.go`).
 - Playground app (on `-playground-port`): `GET /api/mode`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, `GET`/`PUT /api/chats`, `GET`/`PUT /api/prefs` (`playground.go`).
 
 ## Gotchas / conventions

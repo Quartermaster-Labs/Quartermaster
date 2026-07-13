@@ -97,7 +97,21 @@ type sidecar struct {
 	// in SettingsPatch) so a VRAM reset can't wipe it. omitempty => never written
 	// until the dashboard saves it.
 	SlotCache *SlotCacheSettings `yaml:"slotCache,omitempty"`
-	Overrides []Override         `yaml:"overrides"`
+	// Backends, when non-nil, overrides the generate file's backend executable
+	// paths (llama-server / sd-server / tts-server). Top-level (not in
+	// SettingsPatch) so a VRAM reset can't wipe it. Per-field empty => inherit the
+	// generate file / sibling default. Lets the dashboard point at a Vulkan/ROCm
+	// build on non-NVIDIA GPUs without hand-editing the generate file.
+	Backends  *BackendExes `yaml:"backends,omitempty"`
+	Overrides []Override   `yaml:"overrides"`
+}
+
+// BackendExes holds the dashboard-editable backend executable paths. Empty field
+// => inherit the generate file value / applyDefaults sibling.
+type BackendExes struct {
+	ServerExe    string `yaml:"serverExe,omitempty"`
+	SdServerExe  string `yaml:"sdServerExe,omitempty"`
+	TtsServerExe string `yaml:"ttsServerExe,omitempty"`
 }
 
 // loadSidecar reads the whole sidecar, returning a zero value when absent.
@@ -158,6 +172,31 @@ func LoadSidecarSlotCache(generatePath string) (*SlotCacheSettings, error) {
 		return nil, err
 	}
 	return sc.SlotCache, nil
+}
+
+// LoadSidecarBackends returns the sidecar's backend-exe overrides, or nil when
+// none is set.
+func LoadSidecarBackends(generatePath string) (*BackendExes, error) {
+	sc, err := loadSidecar(generatePath)
+	if err != nil {
+		return nil, err
+	}
+	return sc.Backends, nil
+}
+
+// UpsertSidecarBackends stores the dashboard's backend-exe overrides, preserving
+// the rest of the sidecar. An all-empty value is cleared (reverts to defaults).
+func UpsertSidecarBackends(generatePath string, be BackendExes) error {
+	sc, err := loadSidecar(generatePath)
+	if err != nil {
+		return err
+	}
+	if be.ServerExe == "" && be.SdServerExe == "" && be.TtsServerExe == "" {
+		sc.Backends = nil
+	} else {
+		sc.Backends = &be
+	}
+	return writeSidecar(generatePath, sc)
 }
 
 // UpsertSidecarSlotCache stores the dashboard's slot-KV block, preserving the

@@ -1,15 +1,16 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { SlidersHorizontal, HardDrive } from "lucide-svelte";
-  import { getSettings, putSettings, putSlotCache, pickFolder, resetSettings, type AppSettings } from "../stores/api";
+  import { SlidersHorizontal, HardDrive, Cpu } from "lucide-svelte";
+  import { getSettings, putSettings, putSlotCache, putBackends, pickFolder, pickBackend, resetSettings, type AppSettings } from "../stores/api";
   import { latestGpu, latestSys } from "../stores/perf";
 
   // Category side-nav — mirrors the playground settings modal's pattern.
-  type SettingsCat = "general" | "kvcache";
+  type SettingsCat = "general" | "kvcache" | "backends";
   let cat = $state<SettingsCat>("general");
   const cats: { id: SettingsCat; label: string; icon: typeof SlidersHorizontal }[] = [
     { id: "general", label: "Memory & Eviction", icon: SlidersHorizontal },
     { id: "kvcache", label: "KV Cache", icon: HardDrive },
+    { id: "backends", label: "Backends", icon: Cpu },
   ];
 
   // --- Global settings (VRAM budget + idle eviction + slot KV) ---
@@ -32,6 +33,59 @@
     slotMinTokens = s.slotCache.minSaveTokens;
     slotMaxDiskGB = s.slotCache.maxDiskGB;
     slotMaxSessions = s.slotCache.maxSessions;
+    beServer = s.backends.serverExe;
+    beSd = s.backends.sdServerExe;
+    beTts = s.backends.ttsServerExe;
+  }
+
+  // --- Backend executables (llama-server / sd-server / tts-server) ---
+  // Point these at a Vulkan/ROCm build on AMD/Intel GPUs. Blank => the generate
+  // file / sibling default.
+  let beServer = $state("");
+  let beSd = $state("");
+  let beTts = $state("");
+  let savingBackends = $state(false);
+  let backendsErr = $state<string | null>(null);
+  let backendsSaved = $state(false); // brief "Saved" flash after a successful write
+
+  // Persist the current three paths. Called after a native pick and on manual
+  // field blur (autosave — no explicit Save button). No-ops if nothing changed.
+  async function saveBackendsNow(): Promise<void> {
+    if (!settings) return;
+    const next = { serverExe: beServer.trim(), sdServerExe: beSd.trim(), ttsServerExe: beTts.trim() };
+    if (
+      next.serverExe === settings.backends.serverExe &&
+      next.sdServerExe === settings.backends.sdServerExe &&
+      next.ttsServerExe === settings.backends.ttsServerExe
+    )
+      return;
+    savingBackends = true;
+    backendsErr = null;
+    backendsSaved = false;
+    try {
+      await putBackends(next);
+      await loadSettings();
+      backendsSaved = true;
+    } catch (e) {
+      backendsErr = e instanceof Error ? e.message : String(e);
+    } finally {
+      savingBackends = false;
+    }
+  }
+
+  // Open the host's native file dialog for one backend, then autosave.
+  async function browseBackend(which: "server" | "sd" | "tts"): Promise<void> {
+    backendsErr = null;
+    try {
+      const picked = await pickBackend();
+      if (!picked) return; // cancelled / unsupported — keep the text field
+      if (which === "server") beServer = picked;
+      else if (which === "sd") beSd = picked;
+      else beTts = picked;
+      await saveBackendsNow();
+    } catch (e) {
+      backendsErr = e instanceof Error ? e.message : String(e);
+    }
   }
 
   // --- Slot KV-cache persistence (global master switch + shared knobs) ---
@@ -298,7 +352,7 @@
         {/if}
       </div>
     </div>
-    {:else}
+    {:else if cat === "kvcache"}
     <!-- Slot KV-cache persistence -->
     <div>
       <div class="flex items-center justify-between mb-3">
@@ -380,6 +434,65 @@
         <span class="font-mono text-[0.65rem] text-txtsecondary">Saving regenerates the config and hot-reloads.</span>
         {#if slotErr}
           <span class="font-mono text-[0.65rem] text-error">{slotErr}</span>
+        {/if}
+      </div>
+    </div>
+    {:else}
+    <!-- Backend executables -->
+    <div>
+      <div class="flex items-center gap-2 mb-3">
+        <h6 class="!pb-0">Backend executables</h6>
+        {@render hint("Paths to the inference server binaries Quartermaster spawns. On AMD/Intel GPUs point llama-server at a Vulkan (or ROCm/HIP) build — a CUDA build silently falls back to CPU. Leave blank to use the default (bare name on PATH, or a sibling of llama-server for sd/tts).")}
+      </div>
+
+      <div class="grid grid-cols-1 gap-3 font-mono text-xs">
+        <div class="flex flex-col gap-1">
+          <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
+            llama-server (text/LLM)
+            {@render hint("stable llama.cpp server for GGUF LLMs. Use a Vulkan or ROCm build on non-NVIDIA GPUs.")}
+          </span>
+          <div class="flex gap-2">
+            <input
+              type="text" bind:value={beServer} placeholder="llama-server (on PATH)" onblur={saveBackendsNow}
+              class="flex-1 rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+            <button type="button" class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary" onclick={() => browseBackend("server")}>Browse…</button>
+          </div>
+        </div>
+        <div class="flex flex-col gap-1">
+          <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
+            sd-server (image)
+            {@render hint("stable-diffusion.cpp server for image models. Blank => a sibling 'sd-server' of the llama-server path.")}
+          </span>
+          <div class="flex gap-2">
+            <input
+              type="text" bind:value={beSd} placeholder="(sibling of llama-server)" onblur={saveBackendsNow}
+              class="flex-1 rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+            <button type="button" class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary" onclick={() => browseBackend("sd")}>Browse…</button>
+          </div>
+        </div>
+        <div class="flex flex-col gap-1">
+          <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
+            tts-server (speech)
+            {@render hint("qwentts.cpp server for TTS models. Blank => a sibling 'tts-server' of the llama-server path.")}
+          </span>
+          <div class="flex gap-2">
+            <input
+              type="text" bind:value={beTts} placeholder="(sibling of llama-server)" onblur={saveBackendsNow}
+              class="flex-1 rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+            <button type="button" class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary" onclick={() => browseBackend("tts")}>Browse…</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-3 flex items-center gap-3">
+        <span class="font-mono text-[0.65rem] text-txtsecondary">
+          {savingBackends ? "Saving…" : backendsSaved ? "Saved — config regenerated; new paths apply on each model's next load." : "Autosaves on pick or when you leave a field; regenerates the config and hot-reloads."}
+        </span>
+        {#if backendsErr}
+          <span class="font-mono text-[0.65rem] text-error">{backendsErr}</span>
         {/if}
       </div>
     </div>

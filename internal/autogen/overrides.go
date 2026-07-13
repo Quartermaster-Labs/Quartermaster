@@ -483,6 +483,23 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 	if err := yaml.Unmarshal(data, &gf); err != nil {
 		return GenerateFile{}, fmt.Errorf("parsing %s: %w", path, err)
 	}
+	// Overlay UI-owned backend-exe paths BEFORE applyDefaults so an empty
+	// sd/tts-server derives as a sibling of the (possibly UI-set) llama exe.
+	be, err := LoadSidecarBackends(path)
+	if err != nil {
+		return GenerateFile{}, err
+	}
+	if be != nil {
+		if be.ServerExe != "" {
+			gf.Settings.ServerExe = be.ServerExe
+		}
+		if be.SdServerExe != "" {
+			gf.Settings.SdServerExe = be.SdServerExe
+		}
+		if be.TtsServerExe != "" {
+			gf.Settings.TtsServerExe = be.TtsServerExe
+		}
+	}
 	gf.Settings.applyDefaults()
 	// Overlay the UI-owned settings patch (dashboard VRAM/headroom edits) ahead of
 	// modelsDir resolution. Absent => no-op.

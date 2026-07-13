@@ -667,6 +667,15 @@ type settingsResp struct {
 	// CategoryRoots is the effective per-category scan folder ("" => uses ModelsRoot).
 	CategoryRoots map[string]string `json:"categoryRoots"`
 	SlotCache     slotCacheDTO      `json:"slotCache"` // on-disk slot KV persistence
+	Backends      backendsDTO       `json:"backends"`  // effective backend executable paths
+}
+
+// backendsDTO mirrors the backend executable paths (llama-server / sd-server /
+// tts-server). Effective (post-default) values on GET; the raw override on PUT.
+type backendsDTO struct {
+	ServerExe    string `json:"serverExe"`
+	SdServerExe  string `json:"sdServerExe"`
+	TtsServerExe string `json:"ttsServerExe"`
 }
 
 // slotCacheDTO mirrors autogen.SlotCacheSettings for the dashboard slot-KV
@@ -743,7 +752,39 @@ func (s *Server) handleAPISettingsGet(w http.ResponseWriter, r *http.Request) {
 			MaxDiskGB:     gf.Settings.SlotCache.MaxDiskGB,
 			MaxSessions:   gf.Settings.SlotCache.MaxSessions,
 		},
+		Backends: backendsDTO{
+			ServerExe:    gf.Settings.ServerExe,
+			SdServerExe:  gf.Settings.SdServerExe,
+			TtsServerExe: gf.Settings.TtsServerExe,
+		},
 	})
+}
+
+// handleAPIBackendsPut writes the dashboard's backend executable paths to the
+// sidecar (independent of the VRAM patch), then regenerates + reloads. Blank
+// fields revert to the generate file / sibling default.
+func (s *Server) handleAPIBackendsPut(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAutogen(w, r) {
+		return
+	}
+	var body backendsDTO
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		shared.SendResponse(w, r, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	err := autogen.UpsertSidecarBackends(s.autogen.GeneratePath, autogen.BackendExes{
+		ServerExe:    strings.TrimSpace(body.ServerExe),
+		SdServerExe:  strings.TrimSpace(body.SdServerExe),
+		TtsServerExe: strings.TrimSpace(body.TtsServerExe),
+	})
+	if err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !s.regenAndReload(w, r) {
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 // handleAPISlotCachePut writes the dashboard's slot-KV settings to the sidecar
@@ -816,6 +857,23 @@ func (s *Server) handleAPISettingsRootPick(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if !s.regenAndReload(w, r) {
+		return
+	}
+	writeJSON(w, map[string]string{"path": path})
+}
+
+// handleAPIBackendPick opens the host's native open-file dialog and returns the
+// chosen executable path. Does NOT persist — the Backends UI drops it into the
+// field and autosaves via PUT /api/settings/backends. 204 when the user
+// cancels; 501 when the platform has no native picker (UI keeps the text field).
+func (s *Server) handleAPIBackendPick(w http.ResponseWriter, r *http.Request) {
+	path, err := pickFile()
+	if err != nil {
+		shared.SendResponse(w, r, http.StatusNotImplemented, "file picker unavailable: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(path) == "" {
+		w.WriteHeader(http.StatusNoContent) // cancelled
 		return
 	}
 	writeJSON(w, map[string]string{"path": path})

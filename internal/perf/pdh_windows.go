@@ -50,35 +50,48 @@ func init() {
 	}
 }
 
-// pdhGpuUtil reads the Windows "GPU Engine" utilization counters — the same
-// WDDM-scheduler accounting Task Manager shows. Unlike nvidia-smi's
-// utilization.gpu, reading these does not sample the GPU's hardware perf
-// counters and so does not stall an in-flight generation.
+// pdhGpuUtil reads a Windows per-adapter GPU PDH counter whose instance names
+// embed the adapter LUID. Two counters are used: "GPU Engine\Utilization
+// Percentage" (util, clamped to 100%) and "GPU Adapter Memory\Dedicated Usage"
+// (bytes of dedicated VRAM in use system-wide — the number Task Manager shows,
+// which DXGI's per-process QueryVideoMemoryInfo cannot provide). Reading these
+// does not sample hardware perf counters, so it does not stall generation.
 type pdhGpuUtil struct {
-	query   uintptr
-	counter uintptr
+	query    uintptr
+	counter  uintptr
+	clampPct bool // clamp per-adapter sum to 100 (utilization only)
 }
 
 // initPdhGpuUtil creates a PDH query for the GPU Engine utilization counter.
-// Returns nil with an error if PDH or the counter is unavailable.
 func initPdhGpuUtil() (*pdhGpuUtil, error) {
+	return initPdhLuidCounter(`\GPU Engine(*)\Utilization Percentage`, "GPU Engine", true)
+}
+
+// initPdhGpuMem creates a PDH query for system-wide dedicated VRAM usage (bytes).
+func initPdhGpuMem() (*pdhGpuUtil, error) {
+	return initPdhLuidCounter(`\GPU Adapter Memory(*)\Dedicated Usage`, "GPU Adapter Memory", false)
+}
+
+// initPdhLuidCounter opens a PDH query for a per-adapter counter and returns nil
+// with an error if PDH or the counter is unavailable.
+func initPdhLuidCounter(counterPath, label string, clampPct bool) (*pdhGpuUtil, error) {
 	var query uintptr
 	if ret, _, _ := procPdhOpenQuery.Call(0, 0, uintptr(unsafe.Pointer(&query))); ret != 0 {
 		return nil, fmt.Errorf("PdhOpenQuery: 0x%x", ret)
 	}
 
-	path, _ := windows.UTF16PtrFromString(`\GPU Engine(*)\Utilization Percentage`)
+	path, _ := windows.UTF16PtrFromString(counterPath)
 	var counter uintptr
 	if ret, _, _ := procPdhAddEnglishCounter.Call(
 		query, uintptr(unsafe.Pointer(path)), 0, uintptr(unsafe.Pointer(&counter)),
 	); ret != 0 {
 		procPdhCloseQuery.Call(query)
-		return nil, fmt.Errorf("PdhAddEnglishCounter(GPU Engine): 0x%x", ret)
+		return nil, fmt.Errorf("PdhAddEnglishCounter(%s): 0x%x", label, ret)
 	}
 
 	procPdhCollectQueryData.Call(query)
 
-	return &pdhGpuUtil{query: query, counter: counter}, nil
+	return &pdhGpuUtil{query: query, counter: counter, clampPct: clampPct}, nil
 }
 
 // close releases the PDH query handle.
@@ -89,9 +102,9 @@ func (p *pdhGpuUtil) close() {
 	}
 }
 
-// collect reads the PDH counter and returns a map of adapter LUID to
-// aggregated GPU utilization percentage, summed across all engine instances
-// per adapter and clamped to 100%.
+// collect reads the PDH counter and returns a map of adapter LUID to the value
+// summed across all instances per adapter. Utilization counters are clamped to
+// 100%; memory (bytes) counters are returned raw.
 func (p *pdhGpuUtil) collect() map[LUID]float64 {
 	ret, _, _ := procPdhCollectQueryData.Call(p.query)
 	if ret != 0 && ret != pdhNoData {
@@ -136,9 +149,11 @@ func (p *pdhGpuUtil) collect() map[LUID]float64 {
 		result[luid] += item.FmtValue.DblVal
 	}
 
-	for luid := range result {
-		if result[luid] > 100.0 {
-			result[luid] = 100.0
+	if p.clampPct {
+		for luid := range result {
+			if result[luid] > 100.0 {
+				result[luid] = 100.0
+			}
 		}
 	}
 
