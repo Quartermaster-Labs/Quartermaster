@@ -4,11 +4,59 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/quartermaster-labs/quartermaster/internal/logmon"
 	"github.com/quartermaster-labs/quartermaster/internal/perf"
 )
+
+// cudaGPU records whether the serving GPU is CUDA (NVIDIA). It gates the fixed
+// CUDA-context term in computeBufferGB — that cost is a CUDA-runtime figure and
+// shouldn't be charged on Vulkan/ROCm (AMD/Intel). Defaults to true (assume
+// CUDA) so NVIDIA boxes and tests are unchanged until DetectGpuCompute flips it.
+var cudaGPU atomic.Bool
+
+func init() { cudaGPU.Store(true) }
+
+// usingCudaGPU reports the detected GPU class (default true until detected).
+func usingCudaGPU() bool { return cudaGPU.Load() }
+
+// DetectGpuCompute samples the GPU once and records whether it is CUDA (NVIDIA),
+// so the sizer only charges the CUDA-context overhead on a CUDA GPU. Best-effort:
+// on no reading it leaves the default (assume CUDA). Call once at startup, before
+// EnsureConfig, mirroring ResolveAutoVram's live-probe timing.
+func DetectGpuCompute(logf func(string)) {
+	ctx, cancel := context.WithTimeout(context.Background(), autoVramSampleTimeout)
+	defer cancel()
+	gpuCh, err := perf.GetGpuStats(ctx, time.Second, logmon.NewWriter(io.Discard))
+	if err != nil || gpuCh == nil {
+		return
+	}
+	select {
+	case stats := <-gpuCh:
+		best := -1
+		for i := range stats {
+			if stats[i].MemTotalMB <= 0 {
+				continue
+			}
+			if best < 0 || stats[i].MemTotalMB > stats[best].MemTotalMB {
+				best = i
+			}
+		}
+		if best < 0 {
+			return
+		}
+		isCuda := strings.Contains(strings.ToLower(stats[best].Name), "nvidia")
+		cudaGPU.Store(isCuda)
+		if logf != nil {
+			logf(fmt.Sprintf("gpu compute: %q -> cuda=%v (CUDA-context overhead %s)",
+				stats[best].Name, isCuda, map[bool]string{true: "charged", false: "skipped"}[isCuda]))
+		}
+	case <-ctx.Done():
+	}
+}
 
 // SampleFreeVramGB takes a single GPU telemetry snapshot and returns the free
 // VRAM (in GB) of the adapter with the most total memory — the project's
@@ -39,6 +87,16 @@ const autoVramSampleTimeout = 8 * time.Second
 // autoVramFloorGB is the smallest usable target we'll accept from a live
 // reading; below it we keep the static configured value instead.
 const autoVramFloorGB = 1.0
+
+// ResolveAutoVram replaces s.TargetVramGB with the live free-VRAM budget when
+// s.AutoVram is set, so a preview (EstimatePlan) sizes against the same budget
+// EnsureConfig bakes into the config. No-op when AutoVram is off.
+func ResolveAutoVram(s *Settings, logf func(string)) {
+	if !s.AutoVram {
+		return
+	}
+	resolveAutoVram(s, logf)
+}
 
 // resolveAutoVram replaces s.TargetVramGB with the live free VRAM (minus
 // s.VramOverheadGB) when a GPU reading is available and sane. On any failure it

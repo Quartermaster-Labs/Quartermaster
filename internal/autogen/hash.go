@@ -28,7 +28,7 @@ const hashCacheSuffix = ".modelhash"
 //	v5: flux.2 klein name-detected (arch is "flux", same as flux.1) to wire
 //	    flux2Vae + qwenLlm instead of fluxVae/clip_l/t5.
 //	v7: tts-server checkEndpoint none -> /health (gate readiness, kill 502-on-cold).
-const genVersion = "v8"
+const genVersion = "v12"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

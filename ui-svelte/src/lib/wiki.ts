@@ -22,10 +22,10 @@ export const WIKI_ARTICLES: WikiArticle[] = articles as WikiArticle[];
 // articles themselves stay a flat list (search/tool don't care about groups).
 // Order here is the display order; any id not listed falls under "More".
 export const WIKI_CATEGORIES: { title: string; ids: string[] }[] = [
-  { title: "Getting started", ids: ["overview"] },
-  { title: "Models & config", ids: ["loading-models", "model-config", "config-variants", "autogen"] },
-  { title: "Playground", ids: ["playground-chat", "web-search", "qm-tools", "images", "speech-audio", "rerank-embed", "settings"] },
-  { title: "Monitoring & VRAM", ids: ["observe", "gpu-memory"] },
+  { title: "Getting started", ids: ["overview", "updating"] },
+  { title: "Models & config", ids: ["loading-models", "model-config", "config-variants", "autogen", "backends", "multi-listener"] },
+  { title: "Playground", ids: ["playground-chat", "load-testing", "playground-login", "web-search", "qm-tools", "images", "speech-audio", "rerank-embed", "settings"] },
+  { title: "Monitoring & VRAM", ids: ["observe", "gpu-memory", "slot-kv-cache"] },
   { title: "API & access", ids: ["api-keys"] },
   { title: "Troubleshooting", ids: ["troubleshooting", "known-issues"] },
 ];

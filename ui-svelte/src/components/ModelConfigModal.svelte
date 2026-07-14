@@ -104,6 +104,13 @@
   let cmdDraft = $state("");
   let extraArgs = $state("");
 
+  // --- Backend selection (per-model) ---
+  // backend = the registry entry id ("" => auto-pick the class default). vllm
+  // knobs apply only when the selected backend's kind is "vllm".
+  let backend = $state("");
+  let vllmGpuUtil = $state<number | "">("");
+  let vllmTensorParallel = $state<number | "">("");
+
   // --- Image (diffusion / sd-server) fields. Only used when config.isImage. ---
   // Component paths (external VAE + text encoders); "" => omit the flag.
   let vaePath = $state("");
@@ -128,6 +135,21 @@
   // Qwen3-TTS talker (tts-server): minimal form, no KV/ctx/spec/estimate. The
   // talker + codec are tiny and fully resident; voice/temperature are per-request.
   const audioMode = $derived(config?.isAudio ?? false);
+
+  // Model class a backend kind serves — mirrors autogen's kindClass.
+  function backendClass(kind: string): string {
+    if (["llama", "llama.cpp", "server", "vllm"].includes(kind)) return "llm";
+    if (["sd", "sd-server", "image"].includes(kind)) return "image";
+    if (["tts", "tts-server", "speech"].includes(kind)) return "tts";
+    return "";
+  }
+  // Backends compatible with this model, the selected one's kind, and whether it
+  // is vllm (drives which knobs apply). Empty registry => no picker shown.
+  const modelClass = $derived(imageMode ? "image" : audioMode ? "tts" : "llm");
+  const classBackends = $derived((config?.backends ?? []).filter((b) => backendClass(b.kind) === modelClass));
+  const selectedKind = $derived(classBackends.find((b) => b.id === backend)?.kind ?? "");
+  const isVllm = $derived(selectedKind === "vllm");
+
   // sd.cpp sampling methods (mirrors the playground's SAMPLER_OPTIONS).
   const IMG_SAMPLERS = ["", "euler_a", "euler", "heun", "dpm2", "dpmpp2s_a", "dpmpp2m", "dpmpp2mv2", "ipndm", "ipndm_v", "lcm", "ddim_trailing", "tcd"];
 
@@ -550,6 +572,9 @@
     cpuAuto = !o?.cpuOffload;
     cpuOffload = o?.cpuOffload || 0;
     spec = o?.spec ?? "";
+    backend = o?.backend ?? "";
+    vllmGpuUtil = o?.vllmGpuUtil ? o.vllmGpuUtil : "";
+    vllmTensorParallel = o?.vllmTensorParallel ? o.vllmTensorParallel : "";
     reasoningOn = (o?.reasoningFmt ?? "") !== "off";
     reasoningBudget = o?.reasoningBudget ? o.reasoningBudget : "";
     preserveThinking = o?.preserveThinking ?? false;
@@ -691,8 +716,8 @@
       selectedV?.kvInRam, selectedV?.cpuOffload,
     ];
     void deps;
-    // Diffusion/TTS sizing isn't modeled by the llama sizer; skip the estimate.
-    if (!open || !config || !modelId || imageMode || audioMode) return;
+    // Diffusion/TTS/vllm sizing isn't modeled by the llama sizer; skip the estimate.
+    if (!open || !config || !modelId || imageMode || audioMode || isVllm) return;
     clearTimeout(estTimer);
     estTimer = setTimeout(runEstimate, 100);
   });
@@ -705,28 +730,56 @@
       // overrides with its own non-blank fields — same as the generate path. So a
       // blank kv/spec/vram falls back to the Default values, not the bare backend
       // default, keeping the preview estimate in step with the emitted config.
+      // The model we actually estimate against. A variant with its OWN served model
+      // (the reserved "vision" twin) estimates against that twin so its real cmd —
+      // e.g. --mmproj — drives the plan (else mmprojGB is 0 and the bar drops the
+      // Vision projector segment). Opening the base model's vision tab passes the
+      // BASE id here, so `${modelId}-vision` resolves the twin; opening the config
+      // from the dashboard passes the twin's OWN id as modelId, where that suffix
+      // wouldn't exist (double "-vision") and we fall back to modelId (already the
+      // twin). Both land on the twin id.
+      const estId =
+        selectedV && get(models).some((m) => m.id === `${modelId}-${selectedV.name}`)
+          ? `${modelId}-${selectedV.name}`
+          : modelId;
+      // Pin the GPU/CPU layer split to the ACTUAL running argv (post spawn-time
+      // offload guard) when the model we're estimating (estId) is itself loaded, so
+      // the preview matches the staging area instead of re-deriving a rosier -ngl
+      // against the budget. Gate on estId — NOT modelId — so it fires whether the
+      // config was opened from the dashboard (modelId already the twin) or the base
+      // model's variant tab (estId resolves the twin). Suppressed only by a manual
+      // cpu-offload (variant field or model-wide), which is a genuine what-if.
+      const manualOffload = selectedV ? !!selectedV.cpuOffload || !cpuAuto : !cpuAuto;
+      const actual = !manualOffload && get(models).some((m) => m.id === estId && m.state === "ready");
       const params = selectedV
         ? {
             ctx: selectedV.ctx ? Number(selectedV.ctx) : ctxAuto ? undefined : Number(ctx),
             kvK: selectedV.kvK || kvK || undefined,
             kvV: selectedV.kvV || kvV || undefined,
             kvInRam: selectedV.kvInRam ?? kvInRam,
-            spec: selectedV.spec || spec || undefined,
+            // Send the RESOLVED spec (blank => the generator default, e.g. baked
+            // draft-mtp) so the server charges the draft's VRAM — matching what
+            // generate bakes. A raw blank would drop to undefined and under-report.
+            spec: vEffSpecs.length ? vEffSpecs.join("+") : "none",
             vram: selectedV.vramTargetGB ? Number(selectedV.vramTargetGB) : vramAuto ? undefined : Number(vramTarget),
             cpuOffload: selectedV.cpuOffload ? Number(selectedV.cpuOffload) : cpuAuto ? undefined : Number(cpuOffload),
             ctxCheckpoints: selectedV.ctxCheckpoints ?? undefined,
+            actual,
           }
         : {
             ctx: ctxAuto ? undefined : Number(ctx),
             kvK: kvK || undefined,
             kvV: kvV || undefined,
             kvInRam,
-            spec: spec || undefined,
+            // Resolved spec (blank => generator default, e.g. baked draft-mtp) so
+            // the default tab charges the drafter's VRAM like the variant tabs do.
+            spec: effSpecs.length ? effSpecs.join("+") : "none",
             vram: vramAuto ? undefined : Number(vramTarget),
             cpuOffload: cpuAuto ? undefined : Number(cpuOffload),
             ctxCheckpoints: ctxCheckpoints ?? undefined,
+            actual,
           };
-      estimate = await estimatePlan(modelId, params);
+      estimate = await estimatePlan(estId, params);
     } catch (e) {
       estimateError = e instanceof Error ? e.message : String(e);
       estimate = null;
@@ -763,6 +816,9 @@
       kvInRam,
       vramTargetGB: vramAuto ? 0 : Number(vramTarget),
       cpuOffload: cpuAuto ? 0 : Number(cpuOffload),
+      backend,
+      vllmGpuUtil: vllmGpuUtil === "" ? 0 : Number(vllmGpuUtil),
+      vllmTensorParallel: vllmTensorParallel === "" ? 0 : Number(vllmTensorParallel),
       spec,
       reasoningFmt: reasoningOn ? "" : "off",
       reasoningBudget: reasoningBudget === "" ? 0 : Number(reasoningBudget),
@@ -866,6 +922,7 @@
   // Remove a tab from whichever bucket holds it (per-model variant, ctx tier, or
   // fleet-wide default variant). Fleet-wide removals save globally.
   function removeVariantEntry(name: string) {
+    if (!confirm(`Delete variant "${name}"? This cannot be undone until you save.`)) return;
     variants = variants.filter((v) => v.name !== name);
     ctxTiers = ctxTiers.filter((v) => v.name !== name);
     defaultVariants = defaultVariants.filter((v) => v.name !== name);
@@ -972,7 +1029,7 @@
 
     <!-- Sticky live estimate: stays pinned above the scrolling form so the memory
          cost of the current tuning is always visible while editing. -->
-    {#if config && !loading && !imageMode && !audioMode}
+    {#if config && !loading && !imageMode && !audioMode && !isVllm}
       <div class="px-4 py-2 border-b border-card-border bg-background/60 shrink-0">
         {#if estimateError}
           <p class="font-mono text-xs text-error">{estimateError}</p>
@@ -1027,6 +1084,33 @@
       {/snippet}
 
       {#if config}
+        {#if classBackends.length > 0}
+          <div class="flex items-center gap-2">
+            <span class="text-txtsecondary text-sm">Backend</span>
+            {@render hint("Which inference backend serves this model. Auto uses the ★ default for the model's class (Settings → Backends). Switching backend kind changes which knobs apply.")}
+            <select bind:value={backend} class="cfg-input ml-auto w-56">
+              <option value="">Auto (default)</option>
+              {#each classBackends as b (b.id)}
+                <option value={b.id}>{b.name || b.kind}{b.default ? " ★" : ""} ({b.kind})</option>
+              {/each}
+            </select>
+          </div>
+          {#if isVllm}
+            <div class="rounded border border-card-border p-3 space-y-2">
+              <p class="text-xs text-txtsecondary">vLLM backend — llama.cpp knobs below are ignored. Context sets <span class="font-mono">--max-model-len</span>.</p>
+              <label class="flex items-center gap-2 text-sm">
+                <span>GPU memory utilization</span>
+                {@render hint("--gpu-memory-utilization: fraction of each GPU vLLM may fill (weights + KV + activations). Default 0.90.")}
+                <input type="number" min="0.1" max="1" step="0.05" bind:value={vllmGpuUtil} class="cfg-input w-24 ml-auto" placeholder="0.90" />
+              </label>
+              <label class="flex items-center gap-2 text-sm">
+                <span>Tensor parallel size</span>
+                {@render hint("--tensor-parallel-size: shard the model across N GPUs. Default 1 (single GPU).")}
+                <input type="number" min="1" step="1" bind:value={vllmTensorParallel} class="cfg-input w-24 ml-auto" placeholder="1" />
+              </label>
+            </div>
+          {/if}
+        {/if}
         {#if imageMode}
         <!-- Image (diffusion / sd-server) form. Mirrors the Default tab's design
              but with diffusion-relevant knobs: external component paths, placement,
@@ -1820,9 +1904,9 @@
               <label class="flex flex-col gap-1 text-sm">
                 <span class="text-txtsecondary flex items-center gap-1">
                   Draft n-max
-                  {@render hint(`--spec-draft-n-max for this variant. Empty / 0 = inherit (${vEffSpecs.includes("draft-dflash") ? "5" : "2"}).`)}
+                  {@render hint(`--spec-draft-n-max for this variant. Empty / 0 = inherit (${specDraftNMax !== "" && Number(specDraftNMax) > 0 ? specDraftNMax : vEffSpecs.includes("draft-dflash") ? "5" : "2"}).`)}
                 </span>
-                <input type="number" min="0" step="1" value={vnum(sv.specDraftNMax)} oninput={(e) => (sv.specDraftNMax = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input" placeholder={`inherit (${vEffSpecs.includes("draft-dflash") ? "5" : "2"})`} />
+                <input type="number" min="0" step="1" value={vnum(sv.specDraftNMax)} oninput={(e) => (sv.specDraftNMax = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input" placeholder={`inherit (${specDraftNMax !== "" && Number(specDraftNMax) > 0 ? specDraftNMax : vEffSpecs.includes("draft-dflash") ? "5" : "2"})`} />
               </label>
             {/if}
             {#if vEffSpecs.includes("ngram-map-k4v")}

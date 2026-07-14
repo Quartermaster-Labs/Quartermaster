@@ -110,10 +110,13 @@ func (tm *turnManager) qmReq(ctx context.Context, at *activeTurn, method, path s
 //	"loaded"         → models running now, with state + idle-TTL
 //	"vram"           → live GPU/VRAM + system RAM
 //	"settings"       → the global memory knobs
+//	"logs"           → the last `tail` lines of the quartermaster (proxy) log
 //	<a model id>     → that model's effective config (ctx, KV, offload, variants…)
 func (tm *turnManager) qmInspect(ctx context.Context, at *activeTurn, args string) (string, string) {
 	var a struct {
 		Target string `json:"target"`
+		Tail   int    `json:"tail"`
+		Source string `json:"source"`
 	}
 	json.Unmarshal([]byte(args), &a)
 	target := strings.TrimSpace(a.Target)
@@ -129,9 +132,83 @@ func (tm *turnManager) qmInspect(ctx context.Context, at *activeTurn, args strin
 		return "vram", tm.qmVram(ctx, at)
 	case "settings":
 		return "settings", tm.qmSettings(ctx, at)
+	case "logs", "log":
+		return "logs", tm.qmLogs(ctx, at, a.Tail, a.Source)
 	default:
 		return target, tm.qmModelConfig(ctx, at, target)
 	}
+}
+
+const (
+	qmLogsDefaultTail = 50
+	qmLogsMaxTail     = 300
+	// qmLogsReadLimit bounds the raw bytes pulled before tailing. The log monitor's
+	// own history is capped (logmon.BufferSize = 100 KB), so this reads the whole
+	// buffer — we then keep only the last N lines. Bigger than qmBodyLimit because
+	// we tail from the END, not the front.
+	qmLogsReadLimit = 128 * 1024
+)
+
+// qmLogs returns the last `tail` lines of a log so the model can diagnose a load
+// failure/crash. `source` picks which: "proxy" (default) is quartermaster's OWN
+// lifecycle log — loads, swaps, evictions, spawn/health errors — which is the
+// useful diagnostic layer and, crucially, does NOT contain the answering model's
+// own token-by-token decode spam; "upstream" is the raw backend (llama-server /
+// sd-server) output for a crash reason (CUDA/Vulkan alloc errors etc., but noisy);
+// "all" is both combined. Reads the full (bounded) history then tails — a
+// front-truncated read would give the wrong end.
+func (tm *turnManager) qmLogs(ctx context.Context, at *activeTurn, tail int, source string) string {
+	if tail <= 0 {
+		tail = qmLogsDefaultTail
+	}
+	if tail > qmLogsMaxTail {
+		tail = qmLogsMaxTail
+	}
+	path, label := "/logs?source=proxy", "quartermaster"
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "upstream", "backend":
+		path, label = "/logs?source=upstream", "upstream backend"
+	case "all", "combined", "both":
+		path, label = "/logs", "combined"
+	}
+	code, body, err := tm.qmGetRaw(ctx, at, path, qmLogsReadLimit)
+	if err != nil {
+		return "Couldn't read the log: " + err.Error()
+	}
+	if code != http.StatusOK {
+		return fmt.Sprintf("Couldn't read the log (HTTP %d): %s", code, body)
+	}
+	if body == "" {
+		return "The log is empty."
+	}
+	lines := strings.Split(body, "\n")
+	if len(lines) > tail {
+		lines = lines[len(lines)-tail:]
+	}
+	return fmt.Sprintf("Last %d %s log line(s):\n", len(lines), label) + strings.Join(lines, "\n")
+}
+
+// qmGetRaw is qmReq's GET path with a caller-set read cap — used for /logs, whose
+// tail we need in full (up to qmLogsReadLimit) rather than qmBodyLimit's front slice.
+func (tm *turnManager) qmGetRaw(ctx context.Context, at *activeTurn, path string, limit int64) (int, string, error) {
+	u := strings.TrimRight(tm.pg.SelfBase, "/") + path
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return 0, "", err
+	}
+	if at.authKey != "" {
+		req.Header.Set("Authorization", "Bearer "+at.authKey)
+	}
+	if at.user != "" {
+		req.AddCookie(&http.Cookie{Name: pgCookie, Value: at.user})
+	}
+	resp, err := tm.client.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer resp.Body.Close()
+	s, _ := readLimited(resp.Body, limit)
+	return resp.StatusCode, strings.TrimSpace(s), nil
 }
 
 // qmGetInto GETs a loopback JSON endpoint and decodes it into dst.
@@ -326,46 +403,146 @@ func (tm *turnManager) qmModelConfig(ctx context.Context, at *activeTurn, id str
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Config for %s:\n", c.Id)
-	if c.MaxCtx > 0 {
-		fmt.Fprintf(&b, "• trained context: %s (max ctx you can set)\n", humanCtx(c.MaxCtx))
-	}
-	if c.BlockCount > 0 {
-		fmt.Fprintf(&b, "• layers: %d\n", c.BlockCount)
-	}
-	o := c.Override
-	if o == nil {
-		b.WriteString("• no per-model override set — running on auto-derived defaults.")
-		return b.String()
+	kind := "text"
+	switch {
+	case c.IsImage:
+		kind = "image (diffusion / sd-server)"
+	case c.IsAudio:
+		kind = "audio / TTS (tts-server)"
 	}
 	add := func(label string, cond bool, val string) {
 		if cond {
 			fmt.Fprintf(&b, "• %s: %s\n", label, val)
 		}
 	}
-	add("ctx", o.Ctx > 0, humanCtx(o.Ctx))
-	add("vramTargetGB", o.VramTargetGB > 0, fmt.Sprintf("%g", o.VramTargetGB))
-	add("KV quant (k/v)", o.KvK != "" || o.KvV != "", strings.TrimSpace(o.KvK+"/"+o.KvV))
-	add("cpuOffload (layers on CPU)", o.CpuOffload > 0, fmt.Sprintf("%d", o.CpuOffload))
-	add("reasoningBudget", o.ReasoningBudget > 0, fmt.Sprintf("%d", o.ReasoningBudget))
-	add("spec (speculative)", o.Spec != "", o.Spec)
-	add("extraArgs", o.ExtraArgs != "", o.ExtraArgs)
-	add("unlisted", o.Unlisted, "true")
-	add("skip", o.Skip, "true")
-	if len(o.CtxVariants) > 0 {
-		labels := make([]string, len(o.CtxVariants))
-		for i, v := range o.CtxVariants {
-			labels[i] = humanCtx(v)
-		}
-		add("ctx tiers", true, strings.Join(labels, ", "))
+	add("kind", true, kind)
+	if c.MaxCtx > 0 {
+		fmt.Fprintf(&b, "• trained context: %s (max ctx you can set)\n", humanCtx(c.MaxCtx))
 	}
-	if len(o.Variants) > 0 {
-		names := make([]string, len(o.Variants))
-		for i, v := range o.Variants {
-			names[i] = v.Name
+	if c.BlockCount > 0 {
+		fmt.Fprintf(&b, "• layers: %d\n", c.BlockCount)
+	}
+	if drafts := draftLabels(c); drafts != "" {
+		add("draft/speculative available", true, drafts)
+	}
+
+	o := c.Override
+	if o == nil {
+		b.WriteString("• per-model override: none — running on auto-derived defaults\n")
+	} else {
+		b.WriteString("• per-model override set (fields below differ from / pin auto defaults):\n")
+		add("  backend", o.Backend != "", o.Backend)
+		add("  ctx", o.Ctx > 0, humanCtx(o.Ctx))
+		add("  vramTargetGB", o.VramTargetGB > 0, fmt.Sprintf("%g", o.VramTargetGB))
+		add("  KV quant (k/v)", o.KvK != "" || o.KvV != "", strings.TrimSpace(o.KvK+"/"+o.KvV))
+		add("  KV in RAM", o.KvInRam, "yes")
+		add("  cpuOffload (layers on CPU)", o.CpuOffload > 0, fmt.Sprintf("%d", o.CpuOffload))
+		add("  flashAttn", o.FlashAttn != "", o.FlashAttn)
+		add("  mmap", o.Mmap != "", o.Mmap)
+		add("  mlock", o.Mlock, "on")
+		add("  threads", o.Threads > 0, fmt.Sprintf("%d", o.Threads))
+		add("  parallel slots", o.Parallel > 0, fmt.Sprintf("%d", o.Parallel))
+		add("  ubatch", o.Ub > 0, fmt.Sprintf("%d", o.Ub))
+		add("  reasoningBudget", o.ReasoningBudget > 0, fmt.Sprintf("%d", o.ReasoningBudget))
+		add("  reasoningFmt", o.ReasoningFmt != "", o.ReasoningFmt)
+		add("  preserveThinking", o.PreserveThinking, "on")
+		add("  spec (speculative)", o.Spec != "", o.Spec)
+		add("  extraArgs", o.ExtraArgs != "", o.ExtraArgs)
+		add("  slotCache", o.SlotCache != nil, boolStr(o.SlotCache))
+		add("  unlisted", o.Unlisted, "true")
+		add("  skip", o.Skip, "true")
+		if len(o.CtxVariants) > 0 {
+			labels := make([]string, len(o.CtxVariants))
+			for i, v := range o.CtxVariants {
+				labels[i] = humanCtx(v)
+			}
+			add("  ctx tiers", true, strings.Join(labels, ", "))
 		}
-		add("variants", true, strings.Join(names, ", "))
+	}
+
+	// Variants come from two sources: the model's own override.Variants and the
+	// fleet-wide settings.defaultVariants shared by every model. Show both, with
+	// their salient settings, not just names.
+	if o != nil && len(o.Variants) > 0 {
+		b.WriteString("• per-model variants:\n")
+		for _, v := range o.Variants {
+			fmt.Fprintf(&b, "  - %s\n", describeVariant(v))
+		}
+	}
+	if len(c.DefaultVariants) > 0 {
+		b.WriteString("• fleet-wide variants (settings.defaultVariants, apply to every model):\n")
+		for _, v := range c.DefaultVariants {
+			fmt.Fprintf(&b, "  - %s\n", describeVariant(v))
+		}
+	}
+
+	if c.Cmd != "" {
+		fmt.Fprintf(&b, "• effective launch command (base/default variant):\n  %s\n", c.Cmd)
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// draftLabels lists which speculative-decode drafts the model can use.
+func draftLabels(c modelConfigResp) string {
+	var d []string
+	if c.IsMTP {
+		d = append(d, "mtp")
+	}
+	if c.IsDflash {
+		d = append(d, "dflash")
+	}
+	return strings.Join(d, ", ")
+}
+
+func boolStr(b *bool) string {
+	if b == nil {
+		return ""
+	}
+	if *b {
+		return "on"
+	}
+	return "off"
+}
+
+// describeVariant renders a variant name plus the settings it overrides, so the
+// model sees what each variant actually changes (ctx tier, KV, spec, …) not just
+// a bare label.
+func describeVariant(v variantDTO) string {
+	var parts []string
+	if v.Ctx > 0 {
+		parts = append(parts, "ctx "+humanCtx(v.Ctx))
+	}
+	if v.VramTargetGB > 0 {
+		parts = append(parts, fmt.Sprintf("vram %gGB", v.VramTargetGB))
+	}
+	if v.KvK != "" || v.KvV != "" {
+		parts = append(parts, "kv "+strings.TrimSpace(v.KvK+"/"+v.KvV))
+	}
+	if v.CpuOffload > 0 {
+		parts = append(parts, fmt.Sprintf("cpuOffload %d", v.CpuOffload))
+	}
+	if v.Spec != "" {
+		parts = append(parts, "spec "+v.Spec)
+	}
+	if v.ReasoningFmt != "" {
+		parts = append(parts, "reasoningFmt "+v.ReasoningFmt)
+	}
+	if v.Ub > 0 {
+		parts = append(parts, fmt.Sprintf("ubatch %d", v.Ub))
+	}
+	if v.PreserveThinking != nil && *v.PreserveThinking {
+		parts = append(parts, "preserveThinking")
+	}
+	if v.Unlisted {
+		parts = append(parts, "unlisted")
+	}
+	if v.ExtraArgs != "" {
+		parts = append(parts, "extraArgs "+v.ExtraArgs)
+	}
+	if len(parts) == 0 {
+		return v.Name
+	}
+	return v.Name + " (" + strings.Join(parts, ", ") + ")"
 }
 
 // capLabels lists a model's true-valued capability keys, sorted, with a couple

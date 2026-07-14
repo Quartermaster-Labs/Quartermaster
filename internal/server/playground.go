@@ -177,6 +177,66 @@ func (p *Playground) extractMedia(user string, raw []byte) []byte {
 	})
 }
 
+// mediaRefRe matches an "/api/media/<kind>/<name>" reference written by
+// extractMedia. Both segments are character-constrained (no "/", no ".." — the
+// only dot is the extension separator), so a match can't escape the user's
+// media dir when joined as a path.
+var mediaRefRe = regexp.MustCompile(`/api/media/([a-z]+)/([0-9a-f]+)\.([a-z0-9]+)`)
+
+// inlineMedia is extractMedia's inverse: it rewrites media refs in a raw JSON
+// blob back to inline "data:<mime>;base64,<payload>" URLs, reading each blob
+// from the user's media dir.
+//
+// Needed because a chat turn's history is replayed to the MODEL, not to a
+// browser. The client's copy of an attached image becomes a ref the moment the
+// session round-trips through extractMedia (the post-turn sync pulls the
+// rewritten copy back), so a follow-up message to a vision model would forward
+// "/api/media/image/ab12.png" as the image_url — a path llama-server can't
+// resolve. The browser resolves refs itself via GET /api/media; the model can't.
+//
+// ponytail: raw-bytes regex like extractMedia, so it's shape-agnostic and
+// byte-preserves everything else. A ref whose file is gone is left as-is.
+func (p *Playground) inlineMedia(user string, raw []byte) []byte {
+	return mediaRefRe.ReplaceAllFunc(raw, func(m []byte) []byte {
+		sub := mediaRefRe.FindSubmatch(m)
+		kind, name, ext := string(sub[1]), string(sub[2]), string(sub[3])
+		mime := extMime(ext)
+		if mime == "" {
+			return m
+		}
+		data, err := os.ReadFile(filepath.Join(p.mediaDir(user), kind, name+"."+ext))
+		if err != nil {
+			return m
+		}
+		return []byte("data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data))
+	})
+}
+
+// extMime maps the extensions extractMedia writes back to their media type.
+// Unknown extensions return "" — the ref is then left alone rather than
+// guessed at, since a wrong type would confuse the model's media decoder.
+func extMime(ext string) string {
+	switch ext {
+	case "png":
+		return "image/png"
+	case "jpg", "jpeg":
+		return "image/jpeg"
+	case "webp":
+		return "image/webp"
+	case "gif":
+		return "image/gif"
+	case "wav":
+		return "audio/wav"
+	case "mp3":
+		return "audio/mpeg"
+	case "webm":
+		return "audio/webm"
+	case "ogg":
+		return "audio/ogg"
+	}
+	return ""
+}
+
 // gcMedia deletes media files in the user's dir that no tab JSON references
 // (an orphan left after a chat/image/speech entry was deleted client-side).
 // MUST be called under p.mu and after the triggering write, so the union scan

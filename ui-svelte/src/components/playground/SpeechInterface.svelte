@@ -66,6 +66,11 @@
   // voice clones. A custom_voice model has speakers and REQUIRES a named voice.
   let isBaseModel = $derived(availableVoices.includes("") && !isVoiceDesign);
   let activePreset = $derived(allPresets.find((p) => p.name === $selectedPresetStore) ?? null);
+  // Is the selected model actually loaded? When idle, the voice list is whatever
+  // was cached last — cloned/designed voices only appear after a refresh loads
+  // the model and re-fetches. Surface that so an empty-looking list doesn't read
+  // as "my clones vanished".
+  let modelReady = $derived($models.some((m) => m.id === $selectedModelStore && m.state === "ready"));
 
   // Resolve what to actually send + how to label the clip. voice_design sends no
   // speaker (rejected) — it sends the preset's style description as instructions.
@@ -664,7 +669,15 @@
              other model type lists the server's voices. -->
         <div class="flex-1 min-h-0 flex flex-col gap-2 px-1">
           <div class="flex items-center justify-between shrink-0">
-            <span class="text-xs uppercase tracking-wide text-txtsecondary">{isVoiceDesign ? "Voice preset" : "Voice"}</span>
+            <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">
+              {isVoiceDesign ? "Voice preset" : "Voice"}
+              {#if !isVoiceDesign}
+                <span
+                  class="w-1.5 h-1.5 rounded-full {modelReady ? 'bg-green-500' : 'bg-txtsecondary/40'}"
+                  title={modelReady ? "Model loaded — voice list is live" : "Model not loaded — voice list is from cache"}
+                ></span>
+              {/if}
+            </span>
             {#if !isVoiceDesign}
               <button
                 class="p-1 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
@@ -676,6 +689,16 @@
               </button>
             {/if}
           </div>
+
+          {#if !isVoiceDesign && !modelReady && $selectedModelStore}
+            <button
+              class="shrink-0 text-left text-[0.6875rem] leading-tight text-txtsecondary hover:text-txtmain px-1 -mt-1"
+              onclick={refreshVoices}
+              disabled={isLoadingVoices}
+            >
+              Model idle — showing cached voices. Click to load &amp; sync clones.
+            </button>
+          {/if}
 
           {#if isVoiceDesign}
             <!-- Design presets: pick one like a voice; each is a saved style desc. -->

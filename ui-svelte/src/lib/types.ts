@@ -223,6 +223,10 @@ export interface ChatMessage {
   content: string | ContentPart[];
   reasoning_content?: string;
   reasoningTimeMs?: number;
+  // Wall time of each inline <think> span in the content, in span order (the
+  // server splices reasoning that arrives after the answer starts into the
+  // content — see turns.go). Zipped onto the think boxes the UI tokenizes out.
+  thinkMs?: number[];
   // Total wall time of the assistant turn (ms), shown in the message footer.
   genTimeMs?: number;
   tool_calls?: ToolCall[];

@@ -34,7 +34,7 @@ const turnFlushInterval = 2 * time.Second
 // turnDelta is one SSE frame. Replace=true carries a full snapshot (sent once on
 // subscribe so a reopened tab syncs), Replace=false is an incremental append.
 type turnDelta struct {
-	Kind    string          `json:"kind"` // content | reasoning | search | done | error
+	Kind    string          `json:"kind"` // content | reasoning | search | thinkMs | done | error
 	Text    string          `json:"text,omitempty"`
 	Replace bool            `json:"replace,omitempty"`
 	Msg     string          `json:"msg,omitempty"`
@@ -78,6 +78,10 @@ type activeTurn struct {
 	searches    []turnSearch
 	citations   []turnCitation
 	authKey     string // configured API key injected into the loopback self-call (empty = keys off)
+	thinkBytes  int    // all reasoning emitted this turn (field-based + inlined), for the soft budget
+	inlineThink bool   // an inline <think> span is open in content (see append)
+	inlineStart time.Time
+	thinkMs     []int64 // wall time of each closed inline span, in span order
 	done        bool
 	subs        map[chan turnDelta]struct{}
 	cancel      context.CancelFunc
@@ -123,7 +127,7 @@ type turnStart struct {
 	// Tool loop (phase 2). The client still assembles messages+tools; these are
 	// the numeric knobs + web-search config the server needs to dispatch tools
 	// and enforce per-turn caps (mirrors the client's turn-loop state).
-	ReasoningBudget int    `json:"reasoningBudget,omitempty"` // hard token cap on the thinking round; 0 = off
+	ReasoningBudget int    `json:"reasoningBudget,omitempty"` // soft cumulative-thinking cap (tokens); 0 = off. Enforced at round boundaries, see runLoop.
 	WebSearch       bool   `json:"webSearch,omitempty"`
 	SearxngURL      string `json:"searxngUrl,omitempty"`
 	MaxSearches     int    `json:"maxSearches,omitempty"`
@@ -142,11 +146,59 @@ func (at *activeTurn) append(kind, text string) {
 	defer at.mu.Unlock()
 	switch kind {
 	case "content":
+		at.closeInline()
 		at.content += text
+		at.fan(turnDelta{Kind: "content", Text: text})
 	case "reasoning":
-		at.reasoning += text
+		at.thinkBytes += len(text)
+		// reasoning_content is a single field, so the UI can only render it as ONE
+		// box above the answer. That is only true for a turn that thinks BEFORE it
+		// speaks. Models that answer first and think after — and every tool round
+		// after the first — would have their later thinking (and any tool call made
+		// inside it) yanked to the top, out of order. So once content exists, splice
+		// later reasoning INTO the content as an inline <think> span: the UI already
+		// tokenizes those in place, and a search's content offset lands inside them.
+		if at.content == "" {
+			at.reasoning += text
+			at.fan(turnDelta{Kind: "reasoning", Text: text})
+			return
+		}
+		if !at.inlineThink {
+			at.inlineThink = true
+			at.inlineStart = time.Now()
+			at.emitContent("\n\n<think>")
+		}
+		at.emitContent(text)
 	}
-	at.fan(turnDelta{Kind: kind, Text: text})
+}
+
+// emitContent appends server-injected content and fans it; caller holds at.mu.
+func (at *activeTurn) emitContent(text string) {
+	at.content += text
+	at.fan(turnDelta{Kind: "content", Text: text})
+}
+
+// closeInline closes an open inline <think> span. Caller holds at.mu.
+func (at *activeTurn) closeInline() {
+	if !at.inlineThink {
+		return
+	}
+	at.inlineThink = false
+	at.emitContent("</think>\n\n")
+	// Per-span duration, so each inline box can say "Thought for 4.2s" like the
+	// leading reasoning_content one does. Spans are ordered, so the UI zips this
+	// onto the think segments it tokenizes out of content by index.
+	ms := time.Since(at.inlineStart).Milliseconds()
+	at.thinkMs = append(at.thinkMs, ms)
+	at.fan(turnDelta{Kind: "thinkMs", GenMs: ms})
+}
+
+// endInline closes a trailing inline <think> span at end of turn, so a finished
+// answer never renders a forever-"Thinking" (unclosed) box.
+func (at *activeTurn) endInline() {
+	at.mu.Lock()
+	defer at.mu.Unlock()
+	at.closeInline()
 }
 
 // appendSearch records a completed tool search and refreshes the citation
@@ -166,6 +218,14 @@ func (at *activeTurn) lens() (contentLen, reasoningLen int, duringReasoning bool
 	at.mu.Lock()
 	defer at.mu.Unlock()
 	return len(at.content), len(at.reasoning), answerOnly(at.content) == ""
+}
+
+// thinking returns every reasoning byte emitted this turn, including what was
+// inlined into content — len(at.reasoning) alone would undercount the budget.
+func (at *activeTurn) thinking() int {
+	at.mu.Lock()
+	defer at.mu.Unlock()
+	return at.thinkBytes
 }
 
 // fan pushes to subscribers; caller holds at.mu.
@@ -191,6 +251,9 @@ func (at *activeTurn) subscribe() (chan turnDelta, []turnDelta, bool) {
 		snap = append(snap, turnDelta{Kind: "reasoning", Text: at.reasoning, Replace: true})
 	}
 	snap = append(snap, turnDelta{Kind: "content", Text: at.content, Replace: true})
+	if len(at.thinkMs) > 0 {
+		snap = append(snap, turnDelta{Kind: "thinkMs", Replace: true, Data: mustJSON(at.thinkMs)})
+	}
 	for _, s := range at.searches {
 		payload, _ := json.Marshal(map[string]any{"search": s, "citations": at.citations})
 		snap = append(snap, turnDelta{Kind: "search", Data: payload})
@@ -425,10 +488,15 @@ type cachedSearch struct {
 // flushing the growing answer into chats.json.
 func (tm *turnManager) run(ctx context.Context, user string, at *activeTurn, start turnStart) {
 	began := time.Now()
+	// History replayed to the model must carry real image/audio bytes: the
+	// client's copy holds /api/media refs once the session round-trips through
+	// extractMedia, and the upstream can't resolve those.
+	start.Messages = tm.pg.inlineMedia(user, start.Messages)
 	kind, msg := "done", ""
 	if err := tm.runLoop(ctx, at, start); err != nil && ctx.Err() == nil {
 		kind, msg = "error", err.Error()
 	}
+	at.endInline()
 	at.mu.Lock()
 	at.genMs = time.Since(began).Milliseconds()
 	at.mu.Unlock()
@@ -466,19 +534,28 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 	var citations []turnCitation
 	citeOffset := 0
 
+	// Soft reasoning budget: enforced HERE at round boundaries, not by llama.cpp's
+	// native reasoning_budget. The native cap hard-closes </think> mid-generation;
+	// on a tool-using model mid-search that derails it into dumping its in-thinking
+	// search stream as the answer (fabricated result blocks, no real tool call, no
+	// reply). Instead we let every round finish its thought (and any in-flight tool
+	// call) naturally, and once cumulative thinking passes the budget we simply turn
+	// thinking OFF for subsequent rounds so the model must answer. A lone round that
+	// overthinks is bounded by max_tokens, not force-closed.
+	baseThink := start.Reasoning == nil || *start.Reasoning
+
 	for {
+		think := baseThink
+		if think && start.ReasoningBudget > 0 && at.thinking()/4 >= start.ReasoningBudget {
+			think = false // ~4 bytes/token: cumulative thinking hit the budget
+		}
 		msgs := append(append([]json.RawMessage{}, base...), apiTail...)
-		roundContent, calls, _, err := tm.streamRound(ctx, at, start, msgs, maxTokens)
+		roundContent, calls, _, err := tm.streamRound(ctx, at, start, msgs, maxTokens, think)
 		if err != nil {
 			return err
 		}
 
-		// No tool calls (or tools off) → the turn is complete. The reasoning
-		// budget is enforced natively by llama.cpp (reasoning_budget in the
-		// request body): it caps thinking at N tokens, force-closes the block,
-		// and flows into the answer in the SAME slot — no second request, so no
-		// reprocess and no duplicate thinking. See buildBody.
-
+		// No tool calls (or tools off) → the turn is complete.
 		if !useTools || len(calls) == 0 {
 			return nil
 		}
@@ -588,8 +665,8 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 // streamRound POSTs one streamed round and folds the deltas into the turn (live
 // view + periodic flush), returning the round's raw content, assembled tool
 // calls, and finish reason.
-func (tm *turnManager) streamRound(ctx context.Context, at *activeTurn, start turnStart, msgs []json.RawMessage, maxTokens int) (string, []toolCall, string, error) {
-	body := buildBody(start, msgs, maxTokens, start.Reasoning)
+func (tm *turnManager) streamRound(ctx context.Context, at *activeTurn, start turnStart, msgs []json.RawMessage, maxTokens int, think bool) (string, []toolCall, string, error) {
+	body := buildBody(start, msgs, maxTokens, think)
 
 	var roundContent string
 	var reasoningStart time.Time
@@ -730,7 +807,11 @@ func (tm *turnManager) streamSSE(ctx context.Context, body map[string]any, chatI
 
 // --- small helpers --------------------------------------------------------
 
-func buildBody(start turnStart, msgs []json.RawMessage, maxTokens int, reasoning *bool) map[string]any {
+// buildBody assembles one round's request. `think` is the resolved enable_thinking
+// for THIS round; the soft reasoning budget is applied by the caller flipping it to
+// false at a round boundary (see runLoop). No native reasoning_budget is sent — that
+// hard-closes </think> mid-generation and derails tool-using models.
+func buildBody(start turnStart, msgs []json.RawMessage, maxTokens int, think bool) map[string]any {
 	b := map[string]any{"model": start.Model, "messages": msgs, "stream": true}
 	if start.Temperature != nil {
 		b["temperature"] = *start.Temperature
@@ -741,15 +822,7 @@ func buildBody(start turnStart, msgs []json.RawMessage, maxTokens int, reasoning
 	if len(start.Tools) > 0 {
 		b["tools"] = start.Tools
 	}
-	if reasoning != nil {
-		b["chat_template_kwargs"] = map[string]any{"enable_thinking": *reasoning}
-	}
-	// Native thinking cap (llama.cpp >= b9886): caps reasoning at N tokens,
-	// force-closes the block, and continues into the answer in the same slot —
-	// no second request. Only meaningful while thinking is on.
-	if start.ReasoningBudget > 0 && (reasoning == nil || *reasoning) {
-		b["reasoning_budget"] = start.ReasoningBudget
-	}
+	b["chat_template_kwargs"] = map[string]any{"enable_thinking": think}
 	return b
 }
 
@@ -827,6 +900,7 @@ func (tm *turnManager) flush(user string, at *activeTurn, isErr bool, errMsg str
 	}
 	at.mu.Lock()
 	content, reasoning, genMs, reasoningMs, done := at.content, at.reasoning, at.genMs, at.reasoningMs, at.done
+	thinkMs := append([]int64(nil), at.thinkMs...)
 	searches := append([]turnSearch(nil), at.searches...)
 	citations := append([]turnCitation(nil), at.citations...)
 	at.mu.Unlock()
@@ -848,6 +922,9 @@ func (tm *turnManager) flush(user string, at *activeTurn, isErr bool, errMsg str
 	}
 	if reasoningMs > 0 {
 		am["reasoningTimeMs"] = reasoningMs
+	}
+	if len(thinkMs) > 0 {
+		am["thinkMs"] = thinkMs
 	}
 	if len(searches) > 0 {
 		am["searches"] = searches

@@ -14,6 +14,7 @@
     content: string | ContentPart[];
     reasoning_content?: string;
     reasoningTimeMs?: number;
+    thinkMs?: number[];
     genTimeMs?: number;
     searches?: { query: string; results: string; kind?: "web" | "wiki" | "quartermaster"; at?: number; reasoningAt?: number; duringReasoning?: boolean; sources?: { title: string; url: string }[] }[];
     citations?: { n: number; title: string; url: string; wikiId?: string }[];
@@ -30,7 +31,7 @@
     onRegenerate?: () => void;
   }
 
-  let { role, content, reasoning_content = "", reasoningTimeMs = 0, genTimeMs = 0, searches, citations, approval, onApprove, rewriteInstruction, rewriteOriginal, isStreaming = false, isReasoning = false, isSearching = false, modelReady = false, hasVisionInput = false, onEdit, onRegenerate }: Props = $props();
+  let { role, content, reasoning_content = "", reasoningTimeMs = 0, thinkMs, genTimeMs = 0, searches, citations, approval, onApprove, rewriteInstruction, rewriteOriginal, isStreaming = false, isReasoning = false, isSearching = false, modelReady = false, hasVisionInput = false, onEdit, onRegenerate }: Props = $props();
 
   // Format a JSON diff value for the approval card (null → "auto", strings bare).
   function fmtVal(v: unknown): string {
@@ -60,7 +61,7 @@
   type SubItem = { type: "text"; text: string } | { type: "search"; search: SearchHit };
   type Segment =
     | { kind: "text"; text: string; idx: number }
-    | { kind: "think"; items: SubItem[]; open: boolean }
+    | { kind: "think"; items: SubItem[]; open: boolean; ms: number }
     | { kind: "search"; search: SearchHit };
 
   // Step 1: tokenize content into think / text parts (think tags anywhere, plus
@@ -68,19 +69,20 @@
   // body and its content offset so searches can be nested into it later.
   // Field-based reasoning_content has no inline tags → a single text part.
   let parts = $derived.by(() => {
-    const res: { kind: "text" | "think"; text: string; start: number; end: number; innerStart: number; open: boolean }[] = [];
+    const res: { kind: "text" | "think"; text: string; start: number; end: number; innerStart: number; open: boolean; ms: number }[] = [];
     if (role !== "assistant") return res;
     const re = /<(think|thinking|reasoning)>([\s\S]*?)(<\/\1>|$)/gi;
     let last = 0;
+    let ti = 0; // think-span ordinal, indexes thinkMs (server records one entry per closed span)
     let m: RegExpExecArray | null;
     while ((m = re.exec(displayContent))) {
-      if (m.index > last) res.push({ kind: "text", text: displayContent.slice(last, m.index), start: last, end: m.index, innerStart: last, open: false });
+      if (m.index > last) res.push({ kind: "text", text: displayContent.slice(last, m.index), start: last, end: m.index, innerStart: last, open: false, ms: 0 });
       const closed = m[3] !== "";
-      res.push({ kind: "think", text: m[2], start: m.index, end: m.index + m[0].length, innerStart: m.index + m[1].length + 2, open: !closed });
+      res.push({ kind: "think", text: m[2], start: m.index, end: m.index + m[0].length, innerStart: m.index + m[1].length + 2, open: !closed, ms: thinkMs?.[ti++] ?? 0 });
       last = m.index + m[0].length;
       if (!closed) break; // unclosed think runs to the end of the stream
     }
-    if (last < displayContent.length) res.push({ kind: "text", text: displayContent.slice(last), start: last, end: displayContent.length, innerStart: last, open: false });
+    if (last < displayContent.length) res.push({ kind: "text", text: displayContent.slice(last), start: last, end: displayContent.length, innerStart: last, open: false, ms: 0 });
     return res;
   });
 
@@ -112,7 +114,7 @@
           cur = rel;
         }
         if (cur < inner.length) items.push({ type: "text", text: inner.slice(cur) });
-        out.push({ kind: "think", items, open: p.open });
+        out.push({ kind: "think", items, open: p.open, ms: p.ms });
         continue;
       }
       let cur = p.start;
@@ -141,6 +143,7 @@
           for (const ps of pending) prev.items.push({ type: "search", search: ps.search });
           prev.items = [...prev.items, ...seg.items];
           prev.open = prev.open || seg.open;
+          prev.ms += seg.ms; // coalesced rounds report their combined think time
         } else {
           merged.push(...pending, { ...seg, items: [...seg.items] });
         }
@@ -405,6 +408,28 @@
   }
 </script>
 
+<!-- A tool step (web search / wiki lookup): a clickable label line that
+     expands its raw results inline — no box, matching the reasoning trail.
+     Top-level so both the reasoning trail and the Sources section can use it. -->
+{#snippet searchLine(search: SearchHit)}
+  <details class="not-prose group/s">
+    <summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden text-txtsecondary hover:text-txtmain transition-colors">
+      {#if search.kind === "wiki"}
+        <BookOpen class="w-3 h-3 shrink-0" />
+        <span class="font-medium truncate">Read: {search.query || "help wiki"}</span>
+      {:else if search.kind === "quartermaster"}
+        <Wrench class="w-3 h-3 shrink-0" />
+        <span class="font-medium truncate">Quartermaster: {search.query || "instance"}</span>
+      {:else}
+        <Search class="w-3 h-3 shrink-0" />
+        <span class="font-medium truncate">Searched: {search.query || "the web"}</span>
+      {/if}
+      <ChevronRight class="w-3 h-3 shrink-0 opacity-60 transition-transform group-open/s:rotate-90" />
+    </summary>
+    <div class="mt-1.5 whitespace-pre-wrap font-mono text-xs bg-background/40 rounded-md px-2 py-1.5 max-h-72 overflow-y-auto pretty-scroll">{search.results}</div>
+  </details>
+{/snippet}
+
 {#if role === "tool"}
   <details class="mb-4 rounded-lg border border-card-border bg-surface/50 text-[0.8125rem]">
     <summary class="flex items-center gap-2 px-3 py-2 cursor-pointer text-txtsecondary select-none">
@@ -421,26 +446,6 @@
       : (rewriteOriginal != null ? 'w-full' : 'w-full sm:w-4/5') + ' rounded-bl-sm'}"
   >
     {#if role === "assistant"}
-      <!-- A tool step (web search / wiki lookup): a clickable label line that
-           expands its raw results inline — no box, matching the reasoning trail. -->
-      {#snippet searchLine(search: SearchHit)}
-        <details class="not-prose group/s">
-          <summary class="flex items-center gap-1.5 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden text-txtsecondary hover:text-txtmain transition-colors">
-            {#if search.kind === "wiki"}
-              <BookOpen class="w-3 h-3 shrink-0" />
-              <span class="font-medium truncate">Read: {search.query || "help wiki"}</span>
-            {:else if search.kind === "quartermaster"}
-              <Wrench class="w-3 h-3 shrink-0" />
-              <span class="font-medium truncate">Quartermaster: {search.query || "instance"}</span>
-            {:else}
-              <Search class="w-3 h-3 shrink-0" />
-              <span class="font-medium truncate">Searched: {search.query || "the web"}</span>
-            {/if}
-            <ChevronRight class="w-3 h-3 shrink-0 opacity-60 transition-transform group-open/s:rotate-90" />
-          </summary>
-          <div class="mt-1.5 whitespace-pre-wrap font-mono text-xs bg-background/40 rounded-md px-2 py-1.5 max-h-72 overflow-y-auto pretty-scroll">{search.results}</div>
-        </details>
-      {/snippet}
       <!-- DeepSeek-style reasoning trail: one dot per step (thought / searched),
            a gapped connector line between dots, content hanging to the right. -->
       {#snippet reasoningTrail(items: SubItem[])}
@@ -525,7 +530,7 @@
                   {:else if seg.open}
                     <span class="font-medium reason-shimmer-white thinking-dots">Thinking</span>
                   {:else}
-                    <span class="font-medium">Thought</span>
+                    <span class="font-medium">{#if seg.ms > 0}Thought for {formatDuration(seg.ms)}{:else}Thought{/if}</span>
                   {/if}
                 </summary>
                 <div class="reveal">
@@ -542,20 +547,6 @@
               {@html r.pendingHtml}
             {/if}
           {/each}
-          {#if answerSearches.length > 0}
-            <details class="not-prose my-2 group/src">
-              <summary class="flex items-center gap-1.5 text-sm text-txtsecondary hover:text-txtmain transition-colors cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
-                <ChevronRight class="w-3.5 h-3.5 shrink-0 transition-transform group-open/src:rotate-90" />
-                <span class="font-medium">Sources</span>
-                <span class="opacity-60">({answerSearches.length})</span>
-              </summary>
-              <div class="mt-2 flex flex-col gap-1.5">
-                {#each answerSearches as s, i (i)}
-                  {@render searchLine(s)}
-                {/each}
-              </div>
-            </details>
-          {/if}
           {#if isSearching && !isReasoning && !openThink}
             <!-- Post-reasoning search (answer phase). A mid-think search instead
                  shows its "Searching" label on the reasoning box itself. -->
@@ -720,14 +711,24 @@
       {/if}
     {/if}
   </div>
-  {#if allSources.length > 0}
+  <!-- The ONE Sources section for the whole message: every answer-phase tool call
+       (the in-`Thought` ones stay nested in their reasoning trail) followed by the
+       deduped source pills. Both used to render their own "Sources" header. -->
+  {#if allSources.length > 0 || answerSearches.length > 0}
     <details class="w-full sm:w-4/5 mt-1.5 group/pills">
       <summary class="flex items-center gap-1.5 text-sm text-txtsecondary hover:text-txtmain transition-colors cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
         <ChevronRight class="w-3.5 h-3.5 shrink-0 transition-transform group-open/pills:rotate-90" />
         <span class="font-medium">Sources</span>
-        <span class="opacity-60">({allSources.length})</span>
+        <span class="opacity-60">({allSources.length || answerSearches.length})</span>
       </summary>
-      <div class="mt-2 flex flex-wrap gap-1.5">
+      {#if answerSearches.length > 0}
+        <div class="mt-2 flex flex-col gap-1.5 text-sm">
+          {#each answerSearches as s, i (i)}
+            {@render searchLine(s)}
+          {/each}
+        </div>
+      {/if}
+      <div class="mt-2 flex flex-wrap gap-1.5" class:hidden={allSources.length === 0}>
         {#each allSources as src (src.url)}
           <a
             href={src.url}

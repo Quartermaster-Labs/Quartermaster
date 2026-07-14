@@ -67,8 +67,9 @@ One goroutine per active turn. Self-calls quartermaster's own inference loopback
 all apply. The loopback call carries `Authorization: Bearer <key>` when API keys
 are configured (`pickSelfKey` — prefers an unscoped key, else one scoped to the
 model), since `/v1` is gated; empty when keys are off. Mirrors the client loop:
-round loop → tool dispatch. The reasoning budget rides in the request body
-(`reasoning_budget`) and is enforced by llama.cpp, not by a second request. Live
+round loop → tool dispatch. The reasoning budget is a SOFT cap enforced at round
+boundaries by the runner (thinking off for later rounds once cumulative thinking
+passes the budget), not llama.cpp's native `reasoning_budget`. Live
 view is an in-memory
 snapshot+tail (no sidecar); the growing answer + searches + citations are flushed
 into `chats.json` every `turnFlushInterval` and on terminal state, so a
@@ -85,12 +86,16 @@ nothing mid-answer is lost, and the server surface stays small.
    turns.
 2. **Tool loop** — web (SearXNG) + wiki (`turnstools.go`, corpus embedded from the
    shared `wiki_articles.json`), citation numbering, per-turn caps, throttle/cache.
-3. **Reasoning budget** — native. `buildBody` forwards `reasoning_budget: N` in
-   the request body; llama.cpp (>= b9886) caps thinking at N tokens, force-closes
-   the block, and flows into the answer in the SAME slot. No second request, so no
-   reprocess and no duplicate thinking. Replaced the old max_tokens-cap +
-   prefill-continue finalize dance (fragile on hybrid exact-prefix KV — it
-   reprocessed the whole context and re-thought).
+3. **Reasoning budget** — SOFT, round-boundary. `runLoop` tracks cumulative
+   thinking (~4 bytes/token) and, once it passes the budget, sends
+   `enable_thinking:false` for subsequent rounds so the model must answer. No native
+   `reasoning_budget` — that hard-closes `</think>` mid-generation, which on a
+   tool-using model mid-search derails it into dumping its in-thinking search stream
+   as the answer (fabricated result blocks, no real tool call, no reply). The soft
+   cut lets every round finish its thought + any in-flight tool call; a lone
+   overthinking round is bounded by `max_tokens`. Also replaced the even-older
+   max_tokens-cap + prefill-continue finalize dance (fragile on hybrid exact-prefix
+   KV — reprocessed the whole context and re-thought).
 4. **Compaction + title-gen** — NOT server-side (deliberate, see Runner internals):
    they stay client-side, run by the viewer after the answer / on reconnect.
 5. **Client thin-viewer** — `ChatInterface.svelte` pre-persists the session, POSTs

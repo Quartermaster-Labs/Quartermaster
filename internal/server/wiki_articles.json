@@ -13,6 +13,19 @@
     "body": "Quartermaster is an all-in-one **local inference engine** — a front-end over llama.cpp (text/vision models) and stable-diffusion.cpp (images) that runs entirely on your own machine. Nothing is sent to a cloud service; weights, prompts, and conversations stay local.\n\nIt discovers the model files you have on disk, works out sensible runtime settings for each one automatically (context length, GPU offload, KV cache), and **hot-swaps** models in and out of VRAM on demand — a request for a model that isn't loaded triggers a load (evicting others if needed).\n\nTwo web UIs: the **operator dashboard** (main port — catalog, loading, config, metrics) and the **playground** (its own port — chat, images, speech, transcription, rerank)."
   },
   {
+    "id": "updating",
+    "title": "Updating Quartermaster",
+    "keywords": [
+      "update",
+      "upgrade",
+      "new version",
+      "installer",
+      "self-update",
+      "version"
+    ],
+    "body": "Quartermaster can update itself (Windows release builds only). When a newer version is available, the **Sidebar** shows an update control.\n\n- Clicking it downloads and launches the release installer, then the server shuts down gracefully so the installer can replace it.\n- Both the dashboard and playground briefly drop while it restarts — reload the page once the installer finishes.\n- Only release builds wired with the updater show this; a dev / self-compiled build won't."
+  },
+  {
     "id": "loading-models",
     "title": "Loading and swapping models",
     "keywords": [
@@ -40,9 +53,11 @@
       "variant",
       "tune",
       "params",
-      "gpu layers"
+      "gpu layers",
+      "backend",
+      "vllm"
     ],
-    "body": "On the Models page, the cogwheel opens the per-model config editor. It shows the exact launch command and lets you tune:\n\n- **Context size (ctx)**: how many tokens the model can hold. Bigger ctx uses more KV-cache VRAM.\n- **Target VRAM**: a budget; Quartermaster computes GPU offload (`-ngl` / `--n-cpu-moe`) to fit. Lower target = more layers on CPU = slower but fits smaller cards.\n- **Variants**: alternate profiles of the same model (e.g. different ctx tiers) selectable per request.\n\n**Save & reload** applies changes live — a running model keeps serving under its old settings and the new ones take effect on its next load. The staging card shows what a running model is *actually* loaded with, which can differ from the pending config until it reloads."
+    "body": "On the Models page, the cogwheel opens the per-model config editor. It shows the exact launch command and lets you tune:\n\n- **Context size (ctx)**: how many tokens the model can hold. Bigger ctx uses more KV-cache VRAM.\n- **Target VRAM**: a budget; Quartermaster computes GPU offload (`-ngl` / `--n-cpu-moe`) to fit. Lower target = more layers on CPU = slower but fits smaller cards.\n- **Backend**: which engine runs this model (llama.cpp, vLLM, ...). Leave on auto or pin one; see the Backends article. Config is stored per-backend.\n- **Variants**: alternate profiles of the same model (e.g. different ctx tiers) selectable per request.\n\n**Save & reload** applies changes live — a running model keeps serving under its old settings and the new ones take effect on its next load. The staging card shows what a running model is *actually* loaded with, which can differ from the pending config until it reloads."
   },
   {
     "id": "config-variants",
@@ -77,6 +92,44 @@
     "body": "Rather than hand-writing a config per model, Quartermaster **auto-generates** one at startup: it scans your model folders for GGUF/checkpoint files, estimates each model's VRAM footprint (weights + KV + compute buffers), and derives runtime flags (context, GPU offload, KV type) that fit your hardware.\n\nThis means adding a model is usually just dropping the file in the watched folder — no manual YAML. You can still override any of it per-model in the cogwheel editor, and those overrides survive regeneration."
   },
   {
+    "id": "backends",
+    "title": "Backends (llama.cpp, vLLM, sd, tts)",
+    "keywords": [
+      "backend",
+      "backends",
+      "llama.cpp",
+      "vllm",
+      "sd-server",
+      "tts",
+      "exe",
+      "engine",
+      "vulkan",
+      "rocm",
+      "hip",
+      "cuda",
+      "tensor parallel",
+      "gpu-memory-utilization"
+    ],
+    "body": "**Settings -> Backends** is a list of inference engines Quartermaster can launch. Each row is one binary: a **kind** (llama, vllm, sd, tts, or custom), a name, and the path to its executable. Click **+ Add backend** for more (e.g. a Vulkan *and* a ROCm llama build, or CUDA llama + vLLM), **✕** to remove.\n\n**Auto-pick (★).** Each backend can be starred as the default for its class (llm / image / tts). When a model loads, Quartermaster picks a backend by class: the model's explicit choice wins, else the ★-starred one, else the first of that kind. So with one llama build everything just works; add more and the star decides the default.\n\n**Per-model override.** In the cogwheel editor each model has a **Backend** dropdown (filtered to the backends valid for its class). Leave it on auto or pin a specific engine. Config is *keyed to the backend*: a model's llama tuning (ctx / target VRAM / variants) and its vLLM knobs are stored separately, so switching engines never wipes the other set.\n\n**vLLM.** Selecting a vLLM backend launches `vllm serve <gguf> --quantization gguf --gpu-memory-utilization <util> --max-model-len <ctx> [--tensor-parallel-size N]`. It reuses the same discovered GGUF. vLLM self-manages VRAM, so the llama estimate panel and offload/KV planner are hidden — you get two knobs: **GPU utilization** (fraction of VRAM, default 0.90) and **tensor-parallel size** (GPUs to shard across). Note vLLM is slow to start and not every GGUF architecture runs on it."
+  },
+  {
+    "id": "multi-listener",
+    "title": "Multiple ports & per-port model catalogs",
+    "keywords": [
+      "listener",
+      "listeners",
+      "port",
+      "ports",
+      "catalog",
+      "multi-listener",
+      "groups",
+      "scope",
+      "cross-port",
+      "eviction"
+    ],
+    "body": "Quartermaster can expose **several listen ports** from one process, each showing a different subset of models — e.g. an 'assistant' port and a separate 'tools/judge' port.\n\n- **Per-port catalogs**: a request to a listener only sees (and can load) the models assigned to that port; `/v1/models` is filtered per port.\n- **One shared GPU budget**: all listeners share ONE scheduler and VRAM accounting, so loading a model on one port can still evict a model loaded via another — there is a single GPU, not one per port. That shared accounting is the whole reason to use ports instead of running separate instances.\n- **Config**: the `listeners:` block maps a bind address to swap groups (groups are auto-derived from model-name globs at autogen time). Requires the group router.\n- **Access**: an API key can be scoped to specific models, which intersects with a port's catalog — see the api-keys article.\n\nChanging a listener's bind address needs a restart; its model scoping updates live on config save."
+  },
+  {
     "id": "playground-chat",
     "title": "Chat playground",
     "keywords": [
@@ -91,7 +144,41 @@
       "history",
       "compaction"
     ],
-    "body": "The Chat tab is a full chat client for your local models:\n\n- **Vision**: attach an image (paperclip) to a vision-capable model.\n- **Reasoning**: thinking models stream their reasoning into a collapsible box. A **Thinking Budget** (Settings) caps reasoning tokens so a model can't overthink forever.\n- **Web search**: optional — the model searches the web via SearXNG (see the web-search article).\n- **Wiki**: models can look up this help wiki to answer questions about Quartermaster.\n- **Rewrite mode**: ask the model to rewrite selected text and see a side-by-side diff.\n- **History**: chats are saved server-side per user; long chats auto-compact (older turns summarized) to stay within context."
+    "body": "The Chat tab is a full chat client for your local models:\n\n- **Vision**: attach an image (paperclip) to a vision-capable model.\n- **Reasoning**: thinking models stream their reasoning into a collapsible box. A **Thinking Budget** (Settings) caps reasoning tokens so a model can't overthink forever.\n- **Web search**: optional — the model searches the web via SearXNG (see the web-search article).\n- **Wiki**: models can look up this help wiki to answer questions about Quartermaster.\n- **Rewrite mode**: send text with an instruction and get a side-by-side **word-level diff** (added / removed / changed) instead of a chat reply — good for editing prose or code in place.\n- **History & auto-compaction**: chats are saved server-side per user. When a conversation reaches ~80% of the model's context window, the oldest turns (all but the most recent ~6 messages) are summarized by the model into a brief so the chat can continue past the raw context limit — the full transcript still shows in the UI, only what's *sent* to the model is compacted. A live bar shows how full the context is."
+  },
+  {
+    "id": "load-testing",
+    "title": "Load testing (compare models side by side)",
+    "keywords": [
+      "load test",
+      "load testing",
+      "concurrency",
+      "benchmark",
+      "compare",
+      "timeline",
+      "throughput",
+      "tokens per second",
+      "swap latency",
+      "stress"
+    ],
+    "body": "The **Load Test** tab (playground side rail) fires the same prompt at several models at once and shows a per-model timeline so you can compare cold-load and generation speed.\n\n- **Build a run list**: add models (the same model can be added twice), drag to reorder, or clear all. Set the shared **prompt** and **max tokens** (default 256).\n- **Run**: every entry streams concurrently. Each row's timeline bar splits the run into phases — **waiting** (queued), **loading** (model swap / prefill), **reasoning** (thinking tokens), **content** (answer) — scaled to the slowest run so you can see where the time went.\n- **Use it to** compare swap latency and tokens/sec across models or variants, or watch how concurrent requests queue on one GPU.\n\nRuns are throwaway snapshots — nothing is saved to chat history. Loading a model here can evict another (shared VRAM), same as anywhere else."
+  },
+  {
+    "id": "playground-login",
+    "title": "Playground accounts & login",
+    "keywords": [
+      "login",
+      "log in",
+      "sign in",
+      "account",
+      "username",
+      "password",
+      "register",
+      "user",
+      "auth",
+      "playground port"
+    ],
+    "body": "The playground runs on its own port and is gated behind a per-user login (separate from the open dashboard).\n\n- **First login registers you**: type any username + password and sign in — an unknown username is created automatically. This keeps each person's chats, image/speech threads, and settings separate.\n- **Per-user storage**: your chat history and preferences are saved server-side under your account; nothing is shared between users.\n- **Not secure by design**: credentials are stored in plaintext for a local / trusted-network tool. Do NOT expose the playground port to the internet or reuse a real password — it's a convenience separator, not real authentication.\n- **Logout** is in the side rail, next to your username."
   },
   {
     "id": "web-search",
@@ -145,7 +232,7 @@
       "cfg",
       "blurry"
     ],
-    "body": "The Images tab drives stable-diffusion.cpp models:\n\n- **txt2img** and **img2img** (needs a source image + a denoise strength).\n- **Hires fix**: a second upscaled pass for sharper detail (txt2img only).\n- **Reference images** (Kontext-class models): condition on a subject/style image while the prompt drives the edit.\n- **Inpainting**: paint a mask; white = regenerate, black = keep.\n- **Style presets** keep a batch visually consistent.\n\nTips: **turbo/lightning** checkpoints usually need **CFG = 1.0** — a higher CFG makes them blurry. SDXL/SD models need a **full checkpoint** (they can't be split-loaded from separate UNet + text-encoder files)."
+    "body": "The Images tab drives stable-diffusion.cpp models:\n\n- **txt2img** and **img2img** (needs a source image + a denoise strength).\n- **Hires fix**: a second upscaled pass for sharper detail (txt2img only).\n- **Reference images** (Kontext-class models): condition on a subject/style image while the prompt drives the edit.\n- **Inpainting**: open the mask editor to brush over the area to change (adjustable brush; white = regenerate, black = keep), then generate — only the painted region is redrawn.\n- **Style presets** keep a batch visually consistent.\n\nTips: **turbo/lightning** checkpoints usually need **CFG = 1.0** — a higher CFG makes them blurry. SDXL/SD models need a **full checkpoint** (they can't be split-loaded from separate UNet + text-encoder files)."
   },
   {
     "id": "speech-audio",
@@ -210,7 +297,7 @@
       "debug",
       "tokens per second"
     ],
-    "body": "The **Observe** page has tabbed monitoring:\n\n- **Activity**: per-request history — path, status, token counts, throughput, duration; drill into a captured request/response.\n- **Logs**: live proxy + upstream (llama-server) logs.\n- **Performance**: CPU, system RAM, and GPU charts over time.\n- **Context → KV Cache**: how much of each model's context window is filled, plus prompt-canonicalization stats.\n\nLive metrics stream over SSE, so the page updates in real time while a model generates."
+    "body": "The **Observe** page has tabbed monitoring:\n\n- **Activity**: per-request history — path, status, token counts, throughput, duration; drill into a captured request/response.\n- **Logs**: live proxy + upstream (llama-server) logs.\n- **Performance**: CPU, system RAM, and GPU charts over time.\n- **Context → KV Cache**: how much of each model's context window is filled, plus KV-cache disk-save hit/miss stats and prompt-canonicalization stats.\n\nLive metrics stream over SSE, so the page updates in real time while a model generates."
   },
   {
     "id": "gpu-memory",
@@ -228,6 +315,25 @@
     "body": "Quartermaster tracks GPU memory live and breaks it down (System / Weights / Draft / KV / Checkpoints / CUDA / Foreign). The VRAM budget already accounts for memory the system and other apps hold, so its estimates target *free* VRAM.\n\n- **Foreign**: VRAM held by llama-server/sd-server processes Quartermaster didn't spawn (a stray llama.cpp) — it counts these so it won't overcommit.\n- If a model won't load or crashes on load, the usual cause is **not enough free VRAM**. Lower that model's **Target VRAM** (more layers to CPU) or its **context size** in the cogwheel editor, or unload other models."
   },
   {
+    "id": "slot-kv-cache",
+    "title": "KV-cache disk save (survive eviction)",
+    "keywords": [
+      "kv cache",
+      "kv-cache",
+      "slot",
+      "disk",
+      "save",
+      "restore",
+      "prefill",
+      "reprefill",
+      "reprocess",
+      "slot-save-path",
+      "persist",
+      "checkpoint"
+    ],
+    "body": "**KV-cache disk save** (dashboard Settings → KV Cache) persists a conversation's KV cache to disk so a long prompt isn't re-processed from scratch after the model is evicted.\n\nWhy: llama-server has a single slot — any new request can push out the resident conversation. Normally returning to that chat means re-prefilling the whole prompt (slow for long contexts). With this on, Quartermaster snapshots the KV before eviction and restores it instead.\n\n- **Turn it on**: two gates — the global **Enable** switch (plus Directory, min-tokens-to-save, max disk GB, max sessions) in Settings → KV Cache, AND a per-model **Save KV cache to disk** checkbox in the cogwheel editor. A model without the checkbox is left alone.\n- **Check it's working**: Observe → Context → KV Cache lists saved files and confirm-hit / confirm-miss counts — a *confirm* means the restored KV was actually reused on the next request, not just loaded.\n- **Caveat**: hybrid / recurrent-attention models (e.g. Qwen3.5 / 3.6) are skipped on purpose — they can't reuse a restored slot (upstream llama.cpp limitation), so saving would be wasted I/O. Standard transformer models benefit."
+  },
+  {
     "id": "settings",
     "title": "Playground settings (tokens, thinking)",
     "keywords": [
@@ -236,9 +342,14 @@
       "thinking budget",
       "reasoning",
       "temperature",
-      "length"
+      "length",
+      "dashboard",
+      "memory",
+      "vram",
+      "backends",
+      "idle unload"
     ],
-    "body": "Playground **Settings** (gear in the side rail):\n\n- **Max Tokens**: cap on a single response's length.\n- **Thinking Budget**: max reasoning tokens before a thinking model is forced to answer — stops it overthinking. 0 = unlimited. It's enforced as a clean server-side stop so the model's KV cache stays warm.\n- **Web Search**: see the web-search article.\n- **Temperature** (per-chat): higher = more varied/creative, lower = more focused."
+    "body": "Playground **Settings** (gear in the side rail):\n\n- **Max Tokens**: cap on a single response's length.\n- **Thinking Budget**: max reasoning tokens before a thinking model is forced to answer — stops it overthinking. 0 = unlimited. It's enforced as a clean server-side stop so the model's KV cache stays warm.\n- **Web Search**: see the web-search article.\n- **Temperature** (per-chat): higher = more varied/creative, lower = more focused.\n\nThese are the **playground** per-user settings (saved to your account; the assistant's Quartermaster tools can adjust them for you). The **dashboard** has a separate Settings modal for server-wide config — memory budget (Target VRAM / Headroom / Max RAM), idle unload, KV-cache disk save, and Backends — each covered in its own article."
   },
   {
     "id": "known-issues",

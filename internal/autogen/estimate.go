@@ -37,9 +37,18 @@ type EstimateResult struct {
 	// (baked-in ~0.34 GB or a separate draft gguf's weights + pad). Folded into
 	// EstVramGB via overhead; broken out so the UI can attribute it separately
 	// from the main model weights. 0 when no draft-mtp spec is active.
-	DraftGB     float64 `json:"draftGB"`
-	RamExceeded bool    `json:"ramExceeded"`
-	IsMoE       bool    `json:"isMoE"`
+	DraftGB float64 `json:"draftGB"`
+	// ComputeBufGB is the GPU compute buffer (logits + activations + the CUDA
+	// context constant when a CUDA GPU is in use). MmprojGB is a "-vision" twin's
+	// projector weights + CLIP reserve (0 for non-vision). OverheadGB is the global
+	// vramOverheadGB safety headroom. All three are folded into EstVramGB via
+	// overhead; broken out so the UI can label them separately from the model
+	// weights instead of lumping everything non-KV into "Weights".
+	ComputeBufGB float64 `json:"computeBufGB"`
+	MmprojGB     float64 `json:"mmprojGB"`
+	OverheadGB   float64 `json:"overheadGB"`
+	RamExceeded  bool    `json:"ramExceeded"`
+	IsMoE        bool    `json:"isMoE"`
 }
 
 // EstimatePlan sizes one candidate tuning against the given settings + gguf
@@ -97,7 +106,8 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 
 		CtxCheckpoints: in.CtxCheckpoints,
 	}
-	prof.Overhead += computeBufferGB(meta, effectiveUb(prof, nil, prof.Ctx), s.ComputeBufFactor)
+	computeBufGB := computeBufferGB(meta, effectiveUb(prof, nil, prof.Ctx, target), s.ComputeBufFactor)
+	prof.Overhead += computeBufGB
 	prof.Overhead += in.MmprojGB // "-vision" projector weights + CLIP compute reserve
 
 	ctx, plan, kvReserve, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, in.KvInRam)
@@ -145,6 +155,9 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		KvReserveGB:  kvReserve,
 		CheckpointGB: checkpointGB,
 		DraftGB:      specOh,
+		ComputeBufGB: computeBufGB,
+		MmprojGB:     in.MmprojGB,
+		OverheadGB:   s.VramOverheadGB,
 		RamExceeded:  plan.RamExceeded,
 		IsMoE:        meta.IsMoE,
 	}, nil

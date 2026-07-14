@@ -44,7 +44,7 @@ func TestEstimatePlan_MmprojChargedToVram(t *testing.T) {
 		t.Fatal(err)
 	}
 	withProj := base
-	withProj.MmprojGB = mmprojVramGB(0.7, s) // 0.7 GB projector + 1.0 reserve = 1.7
+	withProj.MmprojGB = MmprojVramGB("", 0.7, s) // 0.7 GB projector + 1.0 reserve = 1.7 (no path -> flat fallback)
 	r1, err := EstimatePlan(s, meta, withProj)
 	if err != nil {
 		t.Fatal(err)
@@ -57,9 +57,9 @@ func TestEstimatePlan_MmprojChargedToVram(t *testing.T) {
 		t.Fatalf("EstVram delta=%.4f want 1.7 (projector 0.7 + reserve 1.0)", delta)
 	}
 
-	// mmprojVramGB with no reserve set falls back to the default via LoadGenerateFile,
-	// but the helper itself is pure: fileSize + whatever VisionOverheadGB holds.
-	if g := mmprojVramGB(0.7, Settings{VisionOverheadGB: 1.5}); math.Abs(g-2.2) > 1e-9 {
-		t.Fatalf("mmprojVramGB=%.4f want 2.2", g)
+	// With no mmproj path the helper falls back to the flat VisionOverheadGB pad:
+	// fileSize + whatever VisionOverheadGB holds (per-projector modeling needs the file).
+	if g := MmprojVramGB("", 0.7, Settings{VisionOverheadGB: 1.5}); math.Abs(g-2.2) > 1e-9 {
+		t.Fatalf("MmprojVramGB=%.4f want 2.2", g)
 	}
 }

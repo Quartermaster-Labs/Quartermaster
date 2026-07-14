@@ -57,6 +57,13 @@ func TestComputeBufferGB(t *testing.T) {
 	if fb := computeBufferGB(Metadata{}, 1024, 1.0); fb != computeFallbackGB {
 		t.Errorf("missing dims: got %.3f, want fallback %.3f", fb, computeFallbackGB)
 	}
+
+	// Non-CUDA GPU (Vulkan/ROCm) drops the fixed CUDA-context constant.
+	cudaGPU.Store(false)
+	defer cudaGPU.Store(true)
+	if d := got - computeBufferGB(meta, 1024, 1.0); d < computeCudaCtxGB-0.001 || d > computeCudaCtxGB+0.001 {
+		t.Errorf("non-CUDA should drop the %.2f CUDA-ctx constant, dropped %.3f", computeCudaCtxGB, d)
+	}
 }
 
 // mmap is on by default — even on the CPU-offload path (--n-cpu-moe). Only an
@@ -79,6 +86,20 @@ func TestEmitProfile_MmapDefaultOn(t *testing.T) {
 	emitProfile(&off, s, meta, row, prof, 8192, 99, 20, LoadPlan{EstRamGB: 18}, "q8_0", "q8_0", false, &Override{Mmap: "off"})
 	if !strings.Contains(off.String(), "--no-mmap") {
 		t.Errorf("explicit Mmap:off should emit --no-mmap:\n%s", off.String())
+	}
+
+	// Fully GPU-offloaded (ngl > blocks, no --n-cpu-moe): default --no-mmap.
+	var full strings.Builder
+	emitProfile(&full, s, meta, row, prof, 8192, 99, 0, LoadPlan{EstRamGB: 18}, "q8_0", "q8_0", false, nil)
+	if !strings.Contains(full.String(), "--no-mmap") {
+		t.Errorf("full offload should default --no-mmap:\n%s", full.String())
+	}
+
+	// Explicit Mmap:"on" overrides the full-offload default.
+	var on strings.Builder
+	emitProfile(&on, s, meta, row, prof, 8192, 99, 0, LoadPlan{EstRamGB: 18}, "q8_0", "q8_0", false, &Override{Mmap: "on"})
+	if strings.Contains(on.String(), "--no-mmap") {
+		t.Errorf("explicit Mmap:on should suppress --no-mmap on full offload:\n%s", on.String())
 	}
 }
 

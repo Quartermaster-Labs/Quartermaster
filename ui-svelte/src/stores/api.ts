@@ -301,6 +301,11 @@ export interface ModelVariant {
 }
 
 export interface ModelOverride {
+  // Backend registry entry id this model launches with ("" => auto-pick the class
+  // default). Its kind decides which knobs below apply (llama vs vllm).
+  backend?: string;
+  vllmGpuUtil?: number; // --gpu-memory-utilization (0/undefined => 0.90)
+  vllmTensorParallel?: number; // --tensor-parallel-size (>1 emits the flag)
   ctx?: number;
   kvK?: string;
   kvV?: string;
@@ -368,6 +373,8 @@ export interface ModelConfig {
   override: ModelOverride | null;
   /** Fleet-wide variants (e.g. game), shared by every model; saved globally. */
   defaultVariants?: ModelVariant[];
+  /** Backend registry, so the editor can offer a per-model backend picker. */
+  backends?: BackendEntry[];
 }
 
 export async function getModelConfig(model: string): Promise<ModelConfig> {
@@ -468,6 +475,9 @@ export interface PlanEstimate {
   kvReserveGB: number;
   checkpointGB: number;
   draftGB: number;
+  computeBufGB: number;
+  mmprojGB: number;
+  overheadGB: number;
   ramExceeded: boolean;
   isMoE: boolean;
 }
@@ -534,6 +544,7 @@ export interface AppSettings {
   categoryRoots: Record<string, string> | null;
   slotCache: SlotCacheSettings;
   backends: BackendExes;
+  backendList: BackendEntry[];
 }
 
 // Backend executable paths (llama-server / sd-server / tts-server). Blank => the
@@ -542,6 +553,16 @@ export interface BackendExes {
   serverExe: string;
   sdServerExe: string;
   ttsServerExe: string;
+}
+
+// One row of the backend registry. kind ∈ llama | sd | tts | vllm | custom.
+// Only llama/sd/tts currently feed model loading; extras persist for later wiring.
+export interface BackendEntry {
+  id: string;
+  kind: string;
+  name: string;
+  path: string;
+  default: boolean; // the auto-pick for this backend's model class
 }
 
 // On-disk slot KV persistence knobs (dashboard slot-KV section). Zero values
@@ -578,14 +599,14 @@ export async function putSettings(p: {
   }
 }
 
-export async function putBackends(p: BackendExes): Promise<void> {
+export async function putBackends(list: BackendEntry[]): Promise<void> {
   const response = await fetch("/api/settings/backends", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(p),
+    body: JSON.stringify(list),
   });
   if (!response.ok) {
-    throw new Error(`Failed to save backend paths: ${response.status} ${await response.text()}`);
+    throw new Error(`Failed to save backends: ${response.status} ${await response.text()}`);
   }
 }
 

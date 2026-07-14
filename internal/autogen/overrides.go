@@ -35,10 +35,15 @@ type Settings struct {
 	SdServerExe string `yaml:"sdServerExe"`
 	// TtsServerExe runs Qwen3-TTS talker GGUFs (qwentts.cpp's tts-server). Empty =>
 	// a sibling "tts-server" of ServerExe, else bare on PATH.
-	TtsServerExe   string  `yaml:"ttsServerExe"`
-	TargetVramGB   float64 `yaml:"targetVramGB"`
-	AutoVram       bool    `yaml:"autoVram"` // measure free VRAM at gen time, use it as TargetVramGB (minus VramOverheadGB)
-	VramOverheadGB float64 `yaml:"vramOverheadGB"`
+	TtsServerExe string `yaml:"ttsServerExe"`
+	// Backends is the dashboard's full backend registry (llama / vllm / sd / tts /
+	// custom entries). Populated from the UI sidecar; a model resolves its backend
+	// against this via resolveBackend. The legacy ServerExe/SdServerExe/TtsServerExe
+	// above stay as the fallback when no registry entry matches a model's class.
+	Backends       []BackendEntry `yaml:"backends"`
+	TargetVramGB   float64        `yaml:"targetVramGB"`
+	AutoVram       bool           `yaml:"autoVram"` // measure free VRAM at gen time, use it as TargetVramGB (minus VramOverheadGB)
+	VramOverheadGB float64        `yaml:"vramOverheadGB"`
 	// ComputeBufFactor scales the modeled compute buffer (logits + activations).
 	// 1.0 = the analytic estimate; tune against the "compute buffer size" llama
 	// prints at load if your build/arch differs. 0 => default 1.0.
@@ -211,10 +216,22 @@ type GroupSpec struct {
 // gguf's full path (first match wins; optional Quant scopes the match to one
 // quant of a multi-quant repo). Mirrors the PowerShell $Overrides rows.
 type Override struct {
-	Match        string `yaml:"match"`
-	Quant        string `yaml:"quant"`
-	Spec         string `yaml:"spec"`         // "draft-mtp" | "draft-dflash" | "" (=> ngram-mod); chainable with "+"
-	ReasoningFmt string `yaml:"reasoningFmt"` // "auto" | "off" | "" (=> auto)
+	Match string `yaml:"match"`
+	Quant string `yaml:"quant"`
+	// Backend is the registry entry id (settings.backends) this model launches
+	// with. Empty => auto-pick the class-default backend (see resolveBackend). The
+	// entry's kind selects the emitter: "llama" => the llama-server path below,
+	// "vllm" => vllm.go (a different arg set — the llama knobs are ignored, only
+	// Ctx/Vllm* apply). Config is thus keyed to the backend: switching kind reads
+	// a different subset of these fields; the dormant ones are kept, not wiped.
+	Backend string `yaml:"backend"`
+	// --- vllm knobs (kind "vllm"; ignored by the llama path) ---
+	// VllmGpuUtil => --gpu-memory-utilization (0 => 0.90). VllmTensorParallel =>
+	// --tensor-parallel-size when >1. --max-model-len comes from Ctx (shared).
+	VllmGpuUtil        float64 `yaml:"vllmGpuUtil"`
+	VllmTensorParallel int     `yaml:"vllmTensorParallel"`
+	Spec               string  `yaml:"spec"`         // "draft-mtp" | "draft-dflash" | "" (=> ngram-mod); chainable with "+"
+	ReasoningFmt       string  `yaml:"reasoningFmt"` // "auto" | "off" | "" (=> auto)
 	// ReasoningBudget caps thinking tokens (--reasoning-budget N). 0 => omit (no
 	// cap). Inherited by ctx-tier variants; named variants are standalone.
 	ReasoningBudget int    `yaml:"reasoningBudget"`
@@ -499,6 +516,13 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 		if be.TtsServerExe != "" {
 			gf.Settings.TtsServerExe = be.TtsServerExe
 		}
+	}
+	// The full backend registry (multi-entry) that per-model resolveBackend reads.
+	// Sidecar wins over any generate-file backends list.
+	if list, err := LoadSidecarBackendList(path); err != nil {
+		return GenerateFile{}, err
+	} else if len(list) > 0 {
+		gf.Settings.Backends = list
 	}
 	gf.Settings.applyDefaults()
 	// Overlay the UI-owned settings patch (dashboard VRAM/headroom edits) ahead of

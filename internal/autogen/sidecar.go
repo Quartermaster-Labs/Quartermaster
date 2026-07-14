@@ -102,8 +102,14 @@ type sidecar struct {
 	// SettingsPatch) so a VRAM reset can't wipe it. Per-field empty => inherit the
 	// generate file / sibling default. Lets the dashboard point at a Vulkan/ROCm
 	// build on non-NVIDIA GPUs without hand-editing the generate file.
-	Backends  *BackendExes `yaml:"backends,omitempty"`
-	Overrides []Override   `yaml:"overrides"`
+	Backends *BackendExes `yaml:"backends,omitempty"`
+	// BackendList is the dashboard's full backend registry (multiple llama.cpp /
+	// sd / tts / vllm / custom entries). The legacy `Backends` block above is
+	// DERIVED from it (first entry per kind) so autogen keeps consuming three
+	// exes; extra entries are stored for future per-model wiring but currently
+	// unused by generation.
+	BackendList []BackendEntry `yaml:"backendList,omitempty"`
+	Overrides   []Override     `yaml:"overrides"`
 }
 
 // BackendExes holds the dashboard-editable backend executable paths. Empty field
@@ -112,6 +118,20 @@ type BackendExes struct {
 	ServerExe    string `yaml:"serverExe,omitempty"`
 	SdServerExe  string `yaml:"sdServerExe,omitempty"`
 	TtsServerExe string `yaml:"ttsServerExe,omitempty"`
+}
+
+// BackendEntry is one row in the dashboard's backend registry. Kind drives how a
+// backend is launched (currently only llama/sd/tts feed autogen; vllm/custom are
+// stored for later wiring). Path is the executable (or launch command) to run.
+type BackendEntry struct {
+	ID   string `yaml:"id"`
+	Kind string `yaml:"kind"` // llama | sd | tts | vllm | custom
+	Name string `yaml:"name,omitempty"`
+	Path string `yaml:"path"`
+	// Default marks this entry as the auto-pick for its model class (one per
+	// class: ★ "default for LLMs"). A model with no explicit backend resolves to
+	// the class-default entry, else the first entry of that class.
+	Default bool `yaml:"default,omitempty"`
 }
 
 // loadSidecar reads the whole sidecar, returning a zero value when absent.
@@ -191,6 +211,75 @@ func UpsertSidecarBackends(generatePath string, be BackendExes) error {
 	if err != nil {
 		return err
 	}
+	if be.ServerExe == "" && be.SdServerExe == "" && be.TtsServerExe == "" {
+		sc.Backends = nil
+	} else {
+		sc.Backends = &be
+	}
+	return writeSidecar(generatePath, sc)
+}
+
+// LoadSidecarBackendList returns the dashboard's full backend registry, or nil
+// when none is set.
+func LoadSidecarBackendList(generatePath string) ([]BackendEntry, error) {
+	sc, err := loadSidecar(generatePath)
+	if err != nil {
+		return nil, err
+	}
+	return sc.BackendList, nil
+}
+
+// deriveBackendExes maps the registry onto the three legacy exes autogen
+// consumes: the first entry of each kind wins. Alias kinds are accepted so a
+// hand-edited sidecar still resolves.
+func deriveBackendExes(list []BackendEntry) BackendExes {
+	var be BackendExes
+	for _, e := range list {
+		switch strings.ToLower(strings.TrimSpace(e.Kind)) {
+		case "llama", "llama.cpp", "server":
+			if be.ServerExe == "" {
+				be.ServerExe = strings.TrimSpace(e.Path)
+			}
+		case "sd", "sd-server", "image":
+			if be.SdServerExe == "" {
+				be.SdServerExe = strings.TrimSpace(e.Path)
+			}
+		case "tts", "tts-server", "speech":
+			if be.TtsServerExe == "" {
+				be.TtsServerExe = strings.TrimSpace(e.Path)
+			}
+		}
+	}
+	return be
+}
+
+// UpsertSidecarBackendList stores the dashboard's backend registry, preserving
+// the rest of the sidecar, and re-derives the legacy `Backends` block (first
+// entry per kind) so autogen keeps resolving exes. Blank-path rows are dropped;
+// an empty result clears both fields (revert to defaults).
+func UpsertSidecarBackendList(generatePath string, list []BackendEntry) error {
+	sc, err := loadSidecar(generatePath)
+	if err != nil {
+		return err
+	}
+	cleaned := make([]BackendEntry, 0, len(list))
+	for _, e := range list {
+		e.Kind = strings.TrimSpace(e.Kind)
+		e.Name = strings.TrimSpace(e.Name)
+		e.Path = strings.TrimSpace(e.Path)
+		e.ID = strings.TrimSpace(e.ID)
+		if e.Path == "" {
+			continue // a row with no exe carries nothing to launch
+		}
+		cleaned = append(cleaned, e)
+	}
+	if len(cleaned) == 0 {
+		sc.BackendList = nil
+		sc.Backends = nil
+		return writeSidecar(generatePath, sc)
+	}
+	sc.BackendList = cleaned
+	be := deriveBackendExes(cleaned)
 	if be.ServerExe == "" && be.SdServerExe == "" && be.TtsServerExe == "" {
 		sc.Backends = nil
 	} else {

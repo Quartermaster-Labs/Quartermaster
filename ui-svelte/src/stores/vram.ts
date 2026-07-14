@@ -28,27 +28,37 @@ export interface VramBreakdown {
   segments: VramSegment[];
 }
 
-// estimateSegments splits a load-plan estimate into the canonical VRAM
-// components (weights / KV / checkpoints) using the SAME labels + colors as the
-// live status-rail breakdown, so the config-editor preview and the rail read as
-// one consistent widget. estVramGB folds the checkpoint reserve into overhead,
-// so subtract both KV and checkpoints to leave the true weights share. When KV
-// lives in RAM it (and its checkpoints) cost no VRAM.
+// estimateSegments splits a load-plan estimate into its VRAM components using the
+// SAME labels + colors as the live status-rail breakdown, so the config-editor
+// preview and the rail read as one consistent widget. estVramGB folds the KV,
+// checkpoint, draft, compute-buffer, vision-projector and headroom reserves in;
+// subtract each so "Weights" is the pure model-file share on GPU (why the total
+// exceeds the raw gguf size). When KV lives in RAM it (and its checkpoints) cost
+// no VRAM.
 export function estimateSegments(est: PlanEstimate, kvInRam = false): VramSegment[] {
   const kvMb = Math.max(0, (kvInRam ? 0 : est.kvReserveGB) * 1024);
   const ckptMb = Math.max(0, (kvInRam ? 0 : est.checkpointGB ?? 0) * 1024);
   // Draft/MTP weights are folded into estVramGB (always in VRAM), not into KV/ckpt.
   const draftMb = Math.max(0, (est.draftGB ?? 0) * 1024);
-  const weightsMb = Math.max(0, est.estVramGB * 1024 - kvMb - ckptMb - draftMb);
+  const computeMb = Math.max(0, (est.computeBufGB ?? 0) * 1024);
+  const mmprojMb = Math.max(0, (est.mmprojGB ?? 0) * 1024);
+  const overheadMb = Math.max(0, (est.overheadGB ?? 0) * 1024);
+  const weightsMb = Math.max(0, est.estVramGB * 1024 - kvMb - ckptMb - draftMb - computeMb - mmprojMb - overheadMb);
   const segs: VramSegment[] = [];
   if (weightsMb > 0)
-    segs.push({ label: "Weights", mb: weightsMb, class: "bg-primary", detail: "model weights + compute on GPU" });
+    segs.push({ label: "Weights", mb: weightsMb, class: "bg-primary", detail: "model file weights on GPU" });
+  if (mmprojMb > 0)
+    segs.push({ label: "Vision projector", mb: mmprojMb, class: "bg-primary/60", detail: "mmproj weights + CLIP compute reserve" });
   if (draftMb > 0)
     segs.push({ label: "Draft", mb: draftMb, class: "bg-primary/40", detail: "speculative draft / MTP model on GPU" });
+  if (computeMb > 0)
+    segs.push({ label: "Compute buffer", mb: computeMb, class: "bg-success", detail: "logits + activations" + (est.computeBufGB > 0 ? " (+CUDA context if NVIDIA)" : "") });
   if (kvMb > 0)
     segs.push({ label: "KV cache", mb: kvMb, class: "bg-warning", detail: `attention cache (ctx ${est.ctx})` });
   if (ckptMb > 0)
     segs.push({ label: "Checkpoints", mb: ckptMb, class: "bg-error", detail: "context-checkpoint KV snapshots" });
+  if (overheadMb > 0)
+    segs.push({ label: "Headroom", mb: overheadMb, class: "bg-txtsecondary/30", detail: "reserved safety headroom (vramOverheadGB)" });
   return segs;
 }
 
@@ -157,45 +167,49 @@ export const vramBreakdown = derived(
       const kvEstMb = Math.max(0, $est.est.kvReserveGB * 1024);
       const ckptEstMb = Math.max(0, ($est.est.checkpointGB ?? 0) * 1024);
       const draftEstMb = Math.max(0, ($est.est.draftGB ?? 0) * 1024);
-      // estVramGB folds the checkpoint + draft reserves into overhead, so subtract
-      // KV, checkpoints and draft to leave the true weights share.
-      const weightsEstMb = Math.max(0, estTotalMb - kvEstMb - ckptEstMb - draftEstMb);
+      const computeEstMb = Math.max(0, ($est.est.computeBufGB ?? 0) * 1024);
+      const mmprojEstMb = Math.max(0, ($est.est.mmprojGB ?? 0) * 1024);
+      const headroomEstMb = Math.max(0, ($est.est.overheadGB ?? 0) * 1024);
+      // estVramGB folds KV, checkpoints, draft, compute buffer, vision projector and
+      // headroom in; subtract each to leave the pure model-file weights share.
+      const weightsEstMb = Math.max(0, estTotalMb - kvEstMb - ckptEstMb - draftEstMb - computeEstMb - mmprojEstMb - headroomEstMb);
 
       // Fit the estimated components inside the measured model slice. If the
-      // measurement exceeds the estimate, the surplus is CUDA context + compute
-      // buffers. If it's under, scale the components down proportionally.
-      let weightsMb: number;
-      let kvMb: number;
-      let ckptMb: number;
-      let draftMb: number;
-      let overheadMb: number;
+      // measurement exceeds the estimate, the surplus is unaccounted runtime
+      // overhead. If it's under, scale the components down proportionally.
+      let scale = 1;
+      let surplusMb = 0;
       if (estTotalMb <= modelMb) {
-        weightsMb = weightsEstMb;
-        kvMb = kvEstMb;
-        ckptMb = ckptEstMb;
-        draftMb = draftEstMb;
-        overheadMb = modelMb - estTotalMb;
+        surplusMb = modelMb - estTotalMb;
       } else {
-        const scale = estTotalMb > 0 ? modelMb / estTotalMb : 0;
-        weightsMb = weightsEstMb * scale;
-        kvMb = kvEstMb * scale;
-        ckptMb = ckptEstMb * scale;
-        draftMb = draftEstMb * scale;
-        overheadMb = 0;
+        scale = estTotalMb > 0 ? modelMb / estTotalMb : 0;
       }
+      const weightsMb = weightsEstMb * scale;
+      const kvMb = kvEstMb * scale;
+      const ckptMb = ckptEstMb * scale;
+      const draftMb = draftEstMb * scale;
+      const computeMb = computeEstMb * scale;
+      const mmprojMb = mmprojEstMb * scale;
+      const headroomMb = headroomEstMb * scale;
 
       const name = live[0].name || live[0].id;
       const segments: VramSegment[] = [systemSeg];
       if (weightsMb > 0)
-        segments.push({ label: "Weights", mb: weightsMb, class: "bg-primary", detail: `${name} model weights on GPU` });
+        segments.push({ label: "Weights", mb: weightsMb, class: "bg-primary", detail: `${name} model file weights on GPU` });
+      if (mmprojMb > 0)
+        segments.push({ label: "Vision projector", mb: mmprojMb, class: "bg-primary/60", detail: `${name} mmproj weights + CLIP compute reserve` });
       if (draftMb > 0)
         segments.push({ label: "Draft", mb: draftMb, class: "bg-primary/40", detail: `${name} speculative draft / MTP model on GPU` });
+      if (computeMb > 0)
+        segments.push({ label: "Compute buffer", mb: computeMb, class: "bg-success", detail: `${name} logits + activations` });
       if (kvMb > 0)
         segments.push({ label: "KV cache", mb: kvMb, class: "bg-warning", detail: `${name} attention cache (ctx ${$est.est.ctx})` });
       if (ckptMb > 0)
         segments.push({ label: "Checkpoints", mb: ckptMb, class: "bg-error", detail: `${name} context-checkpoint KV snapshots` });
-      if (overheadMb > 0)
-        segments.push({ label: "CUDA", mb: overheadMb, class: "bg-success", detail: "CUDA context + compute buffers" });
+      if (headroomMb > 0)
+        segments.push({ label: "Headroom", mb: headroomMb, class: "bg-txtsecondary/30", detail: "reserved safety headroom (vramOverheadGB)" });
+      if (surplusMb > 0)
+        segments.push({ label: "Overhead", mb: surplusMb, class: "bg-success/60", detail: "measured runtime overhead beyond the estimate" });
       segments.push(...foreign);
       return { usedMb: rawUsed, totalMb: $gpu.mem_total_mb, segments };
     }

@@ -219,7 +219,9 @@ func isInferenceProc(name string) bool {
 }
 
 // foreignGPU lists inference processes using GPU memory whose pid is not one of
-// our managed children. nvidia-smi-only; returns a zero tally on non-NVIDIA.
+// our managed children. Uses nvidia-smi on NVIDIA and a vendor-neutral PDH
+// per-process VRAM source on non-NVIDIA Windows (AMD/Intel); zero tally when no
+// source is available.
 func (s *Server) foreignGPU(ctx context.Context) foreignVram {
 	procs := perf.QueryComputeApps(ctx)
 	if len(procs) == 0 {

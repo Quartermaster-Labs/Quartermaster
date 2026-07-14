@@ -13,7 +13,7 @@
 #
 # usage:
 #   scripts/qm-adhoc-spawn.sh --model KEY --port N [--qm-url URL]
-#       [--ctx N] [--ub N] [--threads N] [--kv-k Q] [--kv-v Q] [--spec TYPE]
+#       [--backend ID] [--ctx N] [--ub N] [--threads N] [--kv-k Q] [--kv-v Q] [--spec TYPE]
 #       [--vram-target GB] [--cpu-offload N] [--flash-attn on|off]
 #       [--parallel N] [--spec-draft-n-max N] [--spec-default]
 #       [--spec-ngram-size-n N] [--spec-ngram-size-m N] [--spec-ngram-min-hits N]
@@ -37,6 +37,7 @@ while [[ $# -gt 0 ]]; do
     --port) port="$2"; shift 2 ;;
     --qm-url) qm_url="$2"; shift 2 ;;
     --kill) kill_mode=1; shift ;;
+    --backend) patch[backend]="\"$2\""; shift 2 ;;
     --ctx) patch[ctx]="$2"; shift 2 ;;
     --ub) patch[ub]="$2"; shift 2 ;;
     --threads) patch[threads]="$2"; shift 2 ;;
@@ -116,6 +117,15 @@ cmd_json=$(curl -sS -m 30 -X PUT "${qm_url}/api/models/${model_key}/adhoc-cmd" \
 cmd=$(echo "$cmd_json" | jq -r '.cmd // empty')
 [[ -n "$cmd" ]] || { echo "adhoc-cmd failed: $cmd_json" >&2; exit 1; }
 cmd="${cmd//\$\{PORT\}/$port}"
+# Backend paths from the registry may be Windows-style (E:\Apps\...); eval would
+# treat each backslash as an escape (\A -> A). Forward slashes work fine for
+# llama-server.exe on Windows, so normalize before eval -- but a blanket \->/
+# also corrupts JSON string escapes in flags like
+# --chat-template-kwargs "{\"preserve_thinking\":true}" (\" -> /"). Convert a
+# backslash only when NOT followed by " -- paths get slashed, JSON \" survives.
+# (\x5c = backslash, kept out of the shell script text so cygwin/git-bash quote
+# handling can't mangle it; brace delims avoid escaping the / replacement.)
+cmd=$(printf '%s' "$cmd" | perl -pe 's{\x5c(?!")}{/}g')
 
 # --- spawn standalone, wait healthy ------------------------------------------
 srvlog="$(dirname "$0")/adhoc-srv-${port}.log"

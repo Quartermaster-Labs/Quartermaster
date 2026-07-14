@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { SlidersHorizontal, HardDrive, Cpu } from "lucide-svelte";
-  import { getSettings, putSettings, putSlotCache, putBackends, pickFolder, pickBackend, resetSettings, type AppSettings } from "../stores/api";
+  import { getSettings, putSettings, putSlotCache, putBackends, pickFolder, pickBackend, resetSettings, type AppSettings, type BackendEntry } from "../stores/api";
   import { latestGpu, latestSys } from "../stores/perf";
 
   // Category side-nav — mirrors the playground settings modal's pattern.
@@ -33,38 +33,68 @@
     slotMinTokens = s.slotCache.minSaveTokens;
     slotMaxDiskGB = s.slotCache.maxDiskGB;
     slotMaxSessions = s.slotCache.maxSessions;
-    beServer = s.backends.serverExe;
-    beSd = s.backends.sdServerExe;
-    beTts = s.backends.ttsServerExe;
+    backends = s.backendList.map((b) => ({ ...b }));
   }
 
-  // --- Backend executables (llama-server / sd-server / tts-server) ---
-  // Point these at a Vulkan/ROCm build on AMD/Intel GPUs. Blank => the generate
-  // file / sibling default.
-  let beServer = $state("");
-  let beSd = $state("");
-  let beTts = $state("");
+  // --- Backend registry (llama-server / sd-server / tts-server / vllm / …) ---
+  // A list of backends the loader can spawn. Point a llama/sd/tts row at a
+  // Vulkan/ROCm build on AMD/Intel GPUs. Currently the first entry of each kind
+  // drives model loading; extra rows persist for later per-model wiring.
+  const BACKEND_KINDS = ["llama", "sd", "tts", "vllm", "custom"];
+  let backends = $state<BackendEntry[]>([]);
   let savingBackends = $state(false);
   let backendsErr = $state<string | null>(null);
   let backendsSaved = $state(false); // brief "Saved" flash after a successful write
 
-  // Persist the current three paths. Called after a native pick and on manual
-  // field blur (autosave — no explicit Save button). No-ops if nothing changed.
+  // ponytail: cheap id, only needs to be stable within this list. crypto.randomUUID
+  // is on every browser we target.
+  function newBackendId(): string {
+    return crypto.randomUUID();
+  }
+
+  function addBackend(): void {
+    backends = [...backends, { id: newBackendId(), kind: "llama", name: "", path: "", default: false }];
+    backendsSaved = false;
+  }
+
+  // Model class a backend kind serves — mirrors autogen's kindClass. Used so the
+  // ★ default is one-per-class (a default llama and a default sd can coexist).
+  function backendClass(kind: string): string {
+    if (["llama", "llama.cpp", "server", "vllm"].includes(kind)) return "llm";
+    if (["sd", "sd-server", "image"].includes(kind)) return "image";
+    if (["tts", "tts-server", "speech"].includes(kind)) return "tts";
+    return "";
+  }
+
+  // Mark row i the auto-pick for its class, clearing the flag on its classmates.
+  async function setDefaultBackend(i: number): Promise<void> {
+    const cls = backendClass(backends[i].kind);
+    backends = backends.map((b, j) => (backendClass(b.kind) === cls ? { ...b, default: j === i } : b));
+    await saveBackendsNow();
+  }
+
+  async function removeBackend(i: number): Promise<void> {
+    backends = backends.filter((_, j) => j !== i);
+    await saveBackendsNow();
+  }
+
+  // Persist the whole registry. Called on add/remove, native pick, and field
+  // blur (autosave — no explicit Save button). No-ops if nothing changed.
   async function saveBackendsNow(): Promise<void> {
     if (!settings) return;
-    const next = { serverExe: beServer.trim(), sdServerExe: beSd.trim(), ttsServerExe: beTts.trim() };
-    if (
-      next.serverExe === settings.backends.serverExe &&
-      next.sdServerExe === settings.backends.sdServerExe &&
-      next.ttsServerExe === settings.backends.ttsServerExe
-    )
-      return;
+    // A pathless row can't be launched — the server drops it (UpsertSidecarBackendList).
+    // Persist only complete rows; keep pathless ones as in-progress editor rows so
+    // blurring the name field (before the path is typed) doesn't wipe the new row.
+    const next = backends.filter((b) => b.path.trim()).map((b) => ({ ...b, name: b.name.trim(), path: b.path.trim() }));
+    if (JSON.stringify(next) === JSON.stringify(settings.backendList)) return;
     savingBackends = true;
     backendsErr = null;
     backendsSaved = false;
     try {
+      const inProgress = backends.filter((b) => !b.path.trim());
       await putBackends(next);
       await loadSettings();
+      if (inProgress.length) backends = [...backends, ...inProgress];
       backendsSaved = true;
     } catch (e) {
       backendsErr = e instanceof Error ? e.message : String(e);
@@ -73,15 +103,13 @@
     }
   }
 
-  // Open the host's native file dialog for one backend, then autosave.
-  async function browseBackend(which: "server" | "sd" | "tts"): Promise<void> {
+  // Open the host's native file dialog for one backend row, then autosave.
+  async function browseBackend(i: number): Promise<void> {
     backendsErr = null;
     try {
       const picked = await pickBackend();
       if (!picked) return; // cancelled / unsupported — keep the text field
-      if (which === "server") beServer = picked;
-      else if (which === "sd") beSd = picked;
-      else beTts = picked;
+      backends[i].path = picked;
       await saveBackendsNow();
     } catch (e) {
       backendsErr = e instanceof Error ? e.message : String(e);
@@ -438,58 +466,53 @@
       </div>
     </div>
     {:else}
-    <!-- Backend executables -->
+    <!-- Backend registry -->
     <div>
-      <div class="flex items-center gap-2 mb-3">
-        <h6 class="!pb-0">Backend executables</h6>
-        {@render hint("Paths to the inference server binaries Quartermaster spawns. On AMD/Intel GPUs point llama-server at a Vulkan (or ROCm/HIP) build — a CUDA build silently falls back to CPU. Leave blank to use the default (bare name on PATH, or a sibling of llama-server for sd/tts).")}
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+          <h6 class="!pb-0">Backends</h6>
+          {@render hint("Inference server binaries Quartermaster can spawn. On AMD/Intel GPUs point a llama row at a Vulkan (or ROCm/HIP) build — a CUDA build silently falls back to CPU. The first entry of each kind currently drives model loading; extra rows (a 2nd llama build, vllm, custom) are saved for later per-model wiring.")}
+        </div>
+        <button type="button" class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary" onclick={addBackend}>+ Add backend</button>
       </div>
 
-      <div class="grid grid-cols-1 gap-3 font-mono text-xs">
-        <div class="flex flex-col gap-1">
-          <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
-            llama-server (text/LLM)
-            {@render hint("stable llama.cpp server for GGUF LLMs. Use a Vulkan or ROCm build on non-NVIDIA GPUs.")}
-          </span>
-          <div class="flex gap-2">
+      <div class="flex flex-col gap-2 font-mono text-xs">
+        {#each backends as be, i (be.id)}
+          <div class="flex gap-2 items-center">
+            <select
+              bind:value={be.kind} onchange={saveBackendsNow}
+              class="rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
+            >
+              {#each BACKEND_KINDS as k (k)}
+                <option value={k}>{k}</option>
+              {/each}
+            </select>
             <input
-              type="text" bind:value={beServer} placeholder="llama-server (on PATH)" onblur={saveBackendsNow}
+              type="text" bind:value={be.name} placeholder="name (optional)" onblur={saveBackendsNow}
+              class="w-32 rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+            <input
+              type="text" bind:value={be.path} placeholder="path to executable" onblur={saveBackendsNow}
               class="flex-1 rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
             />
-            <button type="button" class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary" onclick={() => browseBackend("server")}>Browse…</button>
+            <button
+              type="button"
+              class="btn btn--sm {be.default ? 'border-primary text-primary' : 'text-txtsecondary'}"
+              title={be.default ? "Default backend for this class" : "Make default for this class"}
+              onclick={() => setDefaultBackend(i)}
+            >{be.default ? "★" : "☆"}</button>
+            <button type="button" class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary" onclick={() => browseBackend(i)}>Browse…</button>
+            <button type="button" class="btn btn--sm uppercase tracking-wide hover:border-error hover:text-error" title="Remove backend" onclick={() => removeBackend(i)}>✕</button>
           </div>
-        </div>
-        <div class="flex flex-col gap-1">
-          <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
-            sd-server (image)
-            {@render hint("stable-diffusion.cpp server for image models. Blank => a sibling 'sd-server' of the llama-server path.")}
-          </span>
-          <div class="flex gap-2">
-            <input
-              type="text" bind:value={beSd} placeholder="(sibling of llama-server)" onblur={saveBackendsNow}
-              class="flex-1 rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
-            />
-            <button type="button" class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary" onclick={() => browseBackend("sd")}>Browse…</button>
-          </div>
-        </div>
-        <div class="flex flex-col gap-1">
-          <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
-            tts-server (speech)
-            {@render hint("qwentts.cpp server for TTS models. Blank => a sibling 'tts-server' of the llama-server path.")}
-          </span>
-          <div class="flex gap-2">
-            <input
-              type="text" bind:value={beTts} placeholder="(sibling of llama-server)" onblur={saveBackendsNow}
-              class="flex-1 rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
-            />
-            <button type="button" class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary" onclick={() => browseBackend("tts")}>Browse…</button>
-          </div>
-        </div>
+        {/each}
+        {#if backends.length === 0}
+          <p class="text-txtsecondary">No backends — using defaults (llama-server on PATH, sd/tts as siblings). Add one to override.</p>
+        {/if}
       </div>
 
       <div class="mt-3 flex items-center gap-3">
         <span class="font-mono text-[0.65rem] text-txtsecondary">
-          {savingBackends ? "Saving…" : backendsSaved ? "Saved — config regenerated; new paths apply on each model's next load." : "Autosaves on pick or when you leave a field; regenerates the config and hot-reloads."}
+          {savingBackends ? "Saving…" : backendsSaved ? "Saved — config regenerated; new paths apply on each model's next load." : "Autosaves on change; regenerates the config and hot-reloads."}
         </span>
         {#if backendsErr}
           <span class="font-mono text-[0.65rem] text-error">{backendsErr}</span>

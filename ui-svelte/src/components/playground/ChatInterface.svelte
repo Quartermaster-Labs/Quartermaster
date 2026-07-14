@@ -473,6 +473,11 @@
   // Appended LAST in the system block so a date change at midnight doesn't rewrite
   // the stable prefix above it — which would invalidate the whole conversation's
   // KV cache once a day (the prefix no longer prefix-matches the cached tokens).
+  // Framed as a labelled "Context —" metadata line, NOT a sentence: phrased as
+  // "The current date is ..." a weak-role-separation model reads it as a user
+  // utterance and replies "thanks for the heads-up on the date". The label form
+  // reads as ambient system context. Stable prefix ("Context — current date...")
+  // is unchanged across midnight; only the date value rolls.
   function currentDateLine(): string {
     const date = new Date().toLocaleString(undefined, {
       weekday: "long",
@@ -482,7 +487,7 @@
       timeZoneName: "short",
     });
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return `The current date and time is ${date}${tz ? ` (${tz})` : ""}.`;
+    return `Context — current date and time (for your reference; the user did not send this): ${date}${tz ? ` (${tz})` : ""}.`;
   }
 
   const REWRITE_SYSTEM =
@@ -546,10 +551,11 @@
       ...(qmEnabled ? [QM_INSPECT_TOOL, QM_CONFIGURE_TOOL] : []),
     ];
 
-    // Thinking budget: hard token cap so models can't loop forever before
-    // answering. 0 = off; rewrites never think. Enforced server-side as the
-    // round's max_tokens (a clean "length" stop, NOT a client disconnect — a
-    // disconnect resets the recurrent slot KV and forces a full reprocess).
+    // Thinking budget: soft cumulative-thinking cap so models can't loop forever
+    // before answering. 0 = off; rewrites never think. Enforced server-side at
+    // round boundaries — once total thinking passes the budget, thinking is turned
+    // off for later rounds (never a mid-generation hard close, which derails a
+    // tool-using model mid-search).
     const reasoningBudget = isRewrite ? 0 : $reasoningBudgetStore;
     // One assistant bubble holds the whole turn: reasoning, any web searches
     // (as collapsible sections), and the final reply. The server writes into
@@ -747,6 +753,14 @@
         patchLast(id, (m) => ({
           ...m,
           content: d.replace ? d.text || "" : (m.content || "") + (d.text || ""),
+        }));
+        break;
+      case "thinkMs":
+        // Duration of one closed inline <think> span (replace=true carries the
+        // whole array as a snapshot on subscribe).
+        patchLast(id, (m) => ({
+          ...m,
+          thinkMs: d.replace ? (d.data ?? []) : [...(m.thinkMs ?? []), d.genMs],
         }));
         break;
       case "search": {
@@ -1027,6 +1041,7 @@
             content={message.content}
             reasoning_content={message.reasoning_content}
             reasoningTimeMs={message.reasoningTimeMs}
+            thinkMs={message.thinkMs}
             genTimeMs={message.genTimeMs}
             searches={message.searches}
             citations={message.citations}

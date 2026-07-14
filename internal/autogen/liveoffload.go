@@ -82,7 +82,7 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 	// little free VRAM once the projector + image buffers load.
 	if mm, i := argVal(args, "--mmproj"); i >= 0 {
 		if fi, statErr := os.Stat(mm); statErr == nil {
-			in.MmprojGB = mmprojVramGB(float64(fi.Size())/gib, s)
+			in.MmprojGB = MmprojVramGB(mm, float64(fi.Size())/gib, s)
 		} else if logf != nil {
 			logf(fmt.Sprintf("dynoffload: --mmproj stat failed (%v); projector VRAM uncharged", statErr))
 		}

@@ -15,25 +15,25 @@ type GpuProc struct {
 	MemMB int    `json:"mem_mb"`
 }
 
-// QueryComputeApps lists the processes currently using GPU memory via
-// nvidia-smi. Returns nil (no error) when nvidia-smi is absent (non-NVIDIA /
-// darwin) — the feature degrades to "no foreign processes detected" rather
-// than failing. Unlike the live util/power query, --query-compute-apps reads
-// NVML's process accounting, not hardware perf counters, so it does not stall
-// an in-flight llama.cpp generation.
+// QueryComputeApps lists the processes currently using GPU memory. On NVIDIA it
+// uses nvidia-smi (NVML process accounting, no hardware-perf-counter stall). On
+// non-NVIDIA GPUs (AMD/Intel) it falls back to a vendor-neutral per-process VRAM
+// source (Windows PDH "GPU Process Memory"; nil on other platforms). Returns nil
+// (no error) when no source is available — the foreign-VRAM feature degrades to
+// "no foreign processes detected" rather than failing.
 func QueryComputeApps(ctx context.Context) []GpuProc {
-	if _, err := exec.LookPath("nvidia-smi"); err != nil {
-		return nil
+	if _, err := exec.LookPath("nvidia-smi"); err == nil {
+		cmd := exec.CommandContext(ctx, "nvidia-smi",
+			"--query-compute-apps=pid,used_memory,process_name",
+			"--format=csv,noheader,nounits")
+		hideConsole(cmd)
+		out, err := cmd.Output()
+		if err != nil {
+			return nil
+		}
+		return parseComputeApps(string(out))
 	}
-	cmd := exec.CommandContext(ctx, "nvidia-smi",
-		"--query-compute-apps=pid,used_memory,process_name",
-		"--format=csv,noheader,nounits")
-	hideConsole(cmd)
-	out, err := cmd.Output()
-	if err != nil {
-		return nil
-	}
-	return parseComputeApps(string(out))
+	return computeAppsPlatform(ctx)
 }
 
 // parseComputeApps parses nvidia-smi CSV (noheader,nounits) rows of

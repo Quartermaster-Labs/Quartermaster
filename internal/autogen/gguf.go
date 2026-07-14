@@ -115,6 +115,18 @@ type Metadata struct {
 	// tensors (*_exps.weight), derived from the tensor section. 0 when not MoE
 	// or the tensor section could not be sized. Replaces the per-arch heuristic.
 	ExpertWeightShare float64
+
+	// Vision (CLIP mmproj) hparams — nonzero only in an mmproj projector gguf
+	// (general.architecture = "clip"); all 0 in a normal LLM gguf. Drive
+	// clipComputeBufferGB so a "-vision" twin's compute-buffer reserve scales
+	// per projector instead of a flat pad.
+	VisionImageSize int64
+	VisionPatchSize int64
+	VisionEmbd      int64
+	VisionFFN       int64
+	VisionBlocks    int64
+	VisionHeads     int64
+	VisionMerge     int64
 }
 
 // ggmlTypeSize maps a ggml tensor type to (block size in elements, bytes per
@@ -417,6 +429,7 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 	var slidingWindow, slidingWinPattern, keyLengthSwa, valueLengthSwa *int64
 	var fullAttnInterval, ssmInnerSize, ssmConvKernel, ssmStateSize *int64
 	var nextnLayers, poolingType *int64
+	var visImageSize, visPatchSize, visEmbd, visFFN, visBlocks, visHeads, visMerge *int64
 
 	pi := func(v int64) *int64 { return &v }
 	pf := func(v float64) *float64 { return &v }
@@ -615,6 +628,58 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 				}
 				poolingType = pi(v)
 				matched = true
+			// Vision (CLIP mmproj) hparams — present only when arch == "clip"
+			// (the projector gguf). Drive the per-projector CLIP compute-buffer
+			// model in clipComputeBufferGB.
+			case key == pfx+"vision.image_size" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				visImageSize = pi(v)
+				matched = true
+			case key == pfx+"vision.patch_size" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				visPatchSize = pi(v)
+				matched = true
+			case key == pfx+"vision.embedding_length" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				visEmbd = pi(v)
+				matched = true
+			case key == pfx+"vision.feed_forward_length" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				visFFN = pi(v)
+				matched = true
+			case key == pfx+"vision.block_count" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				visBlocks = pi(v)
+				matched = true
+			case key == pfx+"vision.attention.head_count" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				visHeads = pi(v)
+				matched = true
+			case key == pfx+"vision.spatial_merge_size" && isIntType(t):
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				visMerge = pi(v)
+				matched = true
 			}
 		}
 
@@ -734,6 +799,13 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 		IsMoE:             expertCount != nil && *expertCount > 0,
 		IsMTP:             nextnLayers != nil && *nextnLayers > 0,
 		ExpertWeightShare: expertShare,
+		VisionImageSize:   deref(visImageSize),
+		VisionPatchSize:   deref(visPatchSize),
+		VisionEmbd:        deref(visEmbd),
+		VisionFFN:         deref(visFFN),
+		VisionBlocks:      deref(visBlocks),
+		VisionHeads:       deref(visHeads),
+		VisionMerge:       deref(visMerge),
 	}
 	return m, nil
 }

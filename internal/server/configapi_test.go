@@ -95,3 +95,26 @@ func TestEstimateInputFromCmd(t *testing.T) {
 		t.Error("KvInRam=true want false when --no-kv-offload absent")
 	}
 }
+
+// forcedOffloadFromCmd maps a running argv's layer split to EstimateInput.CpuOffload
+// so the settings preview reproduces the loaded placement (post spawn-time guard).
+func TestForcedOffloadFromCmd(t *testing.T) {
+	// Dense: 60 of 65 layers on GPU => 5 pinned to CPU.
+	dense := autogen.Metadata{BlockCount: 65}
+	if n, ok := forcedOffloadFromCmd("llama-server -m x.gguf -ngl 60 -c 8192", dense); !ok || n != 5 {
+		t.Errorf("dense -ngl 60/65: got (%d,%v), want (5,true)", n, ok)
+	}
+	// Dense fully on GPU (-ngl 99 clamps to blocks) => 0 offloaded.
+	if n, ok := forcedOffloadFromCmd("llama-server -ngl 99", dense); !ok || n != 0 {
+		t.Errorf("dense -ngl 99: got (%d,%v), want (0,true)", n, ok)
+	}
+	// MoE: --n-cpu-moe is the offload count directly.
+	moe := autogen.Metadata{BlockCount: 48, IsMoE: true}
+	if n, ok := forcedOffloadFromCmd("llama-server -ngl 99 --n-cpu-moe 7", moe); !ok || n != 7 {
+		t.Errorf("moe --n-cpu-moe 7: got (%d,%v), want (7,true)", n, ok)
+	}
+	// No placement flag => not forced.
+	if _, ok := forcedOffloadFromCmd("llama-server -m x.gguf -c 8192", dense); ok {
+		t.Error("no -ngl/--n-cpu-moe: want ok=false")
+	}
+}

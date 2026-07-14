@@ -72,6 +72,14 @@ func initPdhGpuMem() (*pdhGpuUtil, error) {
 	return initPdhLuidCounter(`\GPU Adapter Memory(*)\Dedicated Usage`, "GPU Adapter Memory", false)
 }
 
+// initPdhProcMem creates a PDH query for per-process dedicated VRAM usage
+// (bytes). Instance names embed the pid (e.g. "pid_1234_luid_0x..._phys_0"),
+// giving a vendor-neutral per-process VRAM source for foreign-VRAM detection on
+// non-NVIDIA GPUs where nvidia-smi --query-compute-apps is unavailable.
+func initPdhProcMem() (*pdhGpuUtil, error) {
+	return initPdhLuidCounter(`\GPU Process Memory(*)\Dedicated Usage`, "GPU Process Memory", false)
+}
+
 // initPdhLuidCounter opens a PDH query for a per-adapter counter and returns nil
 // with an error if PDH or the counter is unavailable.
 func initPdhLuidCounter(counterPath, label string, clampPct bool) (*pdhGpuUtil, error) {
@@ -102,10 +110,16 @@ func (p *pdhGpuUtil) close() {
 	}
 }
 
-// collect reads the PDH counter and returns a map of adapter LUID to the value
-// summed across all instances per adapter. Utilization counters are clamped to
-// 100%; memory (bytes) counters are returned raw.
-func (p *pdhGpuUtil) collect() map[LUID]float64 {
+// pdhItem is one PDH counter instance: its raw instance name and formatted value.
+type pdhItem struct {
+	Name string
+	Val  float64
+}
+
+// collectRaw reads the PDH counter array and returns each instance's name and
+// value, without any grouping. Callers key on whatever the instance name embeds
+// (adapter LUID for GPU Engine/Adapter Memory, pid for GPU Process Memory).
+func (p *pdhGpuUtil) collectRaw() []pdhItem {
 	ret, _, _ := procPdhCollectQueryData.Call(p.query)
 	if ret != 0 && ret != pdhNoData {
 		return nil
@@ -135,18 +149,31 @@ func (p *pdhGpuUtil) collect() map[LUID]float64 {
 	}
 
 	itemSize := uint32(unsafe.Sizeof(pdhCounterValueItem{}))
-	result := make(map[LUID]float64)
-
+	items := make([]pdhItem, 0, itemCount)
 	for i := uint32(0); i < itemCount; i++ {
 		item := (*pdhCounterValueItem)(unsafe.Pointer(&buf[i*itemSize]))
 		if item.FmtValue.CStatus != 0 {
 			continue
 		}
-		luid, ok := parsePdhLuid(windows.UTF16PtrToString(item.SzName))
+		items = append(items, pdhItem{
+			Name: windows.UTF16PtrToString(item.SzName),
+			Val:  item.FmtValue.DblVal,
+		})
+	}
+	return items
+}
+
+// collect reads the PDH counter and returns a map of adapter LUID to the value
+// summed across all instances per adapter. Utilization counters are clamped to
+// 100%; memory (bytes) counters are returned raw.
+func (p *pdhGpuUtil) collect() map[LUID]float64 {
+	result := make(map[LUID]float64)
+	for _, it := range p.collectRaw() {
+		luid, ok := parsePdhLuid(it.Name)
 		if !ok {
 			continue
 		}
-		result[luid] += item.FmtValue.DblVal
+		result[luid] += it.Val
 	}
 
 	if p.clampPct {

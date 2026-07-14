@@ -477,6 +477,20 @@ func (s *Server) localPeerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Optional per-request backend override: X-QM-Backend names a backend
+	// registry id; serve this model on that backend's exe (via the real router,
+	// same VRAM group, dashboard-visible) instead of its configured one. Only
+	// applies to local models; peers have no backend registry.
+	if be := strings.TrimSpace(r.Header.Get("X-QM-Backend")); be != "" && s.local.Handles(data.ModelID) {
+		syntheticID, err := s.ensureBackendVariant(data.ModelID, be)
+		if err != nil {
+			shared.SendResponse(w, r, http.StatusBadRequest, "backend override failed: "+err.Error())
+			return
+		}
+		data.ModelID = syntheticID
+		*r = *r.WithContext(shared.SetContext(r.Context(), data))
+	}
+
 	switch {
 	case s.local.Handles(data.ModelID):
 		s.proxylog.Debugf("dispatch: using local process for model: %s", data.ModelID)
@@ -617,6 +631,7 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/settings", apiChain.ThenFunc(s.handleAPISettingsPut))
 	mux.Handle("DELETE /api/settings", apiChain.ThenFunc(s.handleAPISettingsDelete))
 	mux.Handle("PUT /api/settings/slotcache", apiChain.ThenFunc(s.handleAPISlotCachePut))
+	mux.Handle("GET /api/backends", apiChain.ThenFunc(s.handleAPIBackendsList))
 	mux.Handle("PUT /api/settings/backends", apiChain.ThenFunc(s.handleAPIBackendsPut))
 	mux.Handle("POST /api/settings/backend/pick", apiChain.ThenFunc(s.handleAPIBackendPick))
 	mux.Handle("GET /api/kvcache", apiChain.ThenFunc(s.handleAPIKvCache))

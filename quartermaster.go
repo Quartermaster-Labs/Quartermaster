@@ -84,8 +84,8 @@ func main() {
 	flagWatchConfig := flag.Bool("watch-config", false, "reload config on file change")
 	flagGenerate := flag.String("generate", "", "path to autogen control file (settings + overrides); generates -config from local GGUFs on startup (hash-gated)")
 	flagModelsDir := flag.String("models-dir", "", "models root for -generate (overrides settings.modelsRoot)")
-	flagWatchModels := flag.Bool("watch-models", false, "periodically re-scan the models folder and hot-reload when it changes (requires -generate)")
-	flagWatchModelsInterval := flag.Duration("watch-models-interval", 30*time.Second, "poll interval for -watch-models")
+	flagWatchModels := flag.Bool("watch-models", true, "periodically re-scan the models folder and hot-reload when it changes (requires -generate); on by default, pass -watch-models=false to disable")
+	flagWatchModelsInterval := flag.Duration("watch-models-interval", 5*time.Second, "poll interval for -watch-models")
 	flagPlaygroundPort := flag.String("playground-port", "", "serve the standalone playground app (per-user login + chat history) on this extra address, e.g. :8081")
 	flagNoUpdateCheck := flag.Bool("no-update-check", false, "disable checking GitHub for new releases (Windows release builds only)")
 	flagTray := flag.Bool("tray", false, "run as a desktop app: show a system-tray icon with Open/Exit (Windows only; no-op elsewhere)")
@@ -126,6 +126,9 @@ func main() {
 	// tree before loading. Hash-gated, so an unchanged models folder + control
 	// file skips the scan. -config is the output path here.
 	if *flagGenerate != "" {
+		// Detect the GPU class once so the sizer only charges CUDA-context overhead
+		// on a CUDA (NVIDIA) GPU, not on Vulkan/ROCm. Best-effort, before the sizer runs.
+		autogen.DetectGpuCompute(func(m string) { slog.Info(m) })
 		if _, err := autogen.EnsureConfig(*flagGenerate, configPath, *flagModelsDir, func(m string) { slog.Info(m) }); err != nil {
 			slog.Error("autogen failed", "error", err)
 			os.Exit(1)
@@ -384,9 +387,19 @@ func main() {
 	// and AutoVram's VRAM drift, which the hash ignores — never trigger a needless
 	// reload that would evict the loaded model. Requires -generate.
 	if *flagWatchModels {
+		// watch-models defaults on, so only nag about the -generate requirement when
+		// the user explicitly asked for it; a plain -config launch stays quiet.
+		watchModelsSet := false
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name == "watch-models" {
+				watchModelsSet = true
+			}
+		})
 		switch {
 		case *flagGenerate == "":
-			proxyLog.Warn("-watch-models ignored: it requires -generate")
+			if watchModelsSet {
+				proxyLog.Warn("-watch-models ignored: it requires -generate")
+			}
 		default:
 			if *flagWatchConfig {
 				proxyLog.Warn("-watch-models and -watch-config are both set: a models-triggered regen will reload twice (once per watcher)")

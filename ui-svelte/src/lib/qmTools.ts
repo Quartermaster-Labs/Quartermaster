@@ -13,14 +13,25 @@ export const QM_INSPECT_TOOL: ToolDef = {
   function: {
     name: "quartermaster_inspect",
     description:
-      "Read the live state of THIS running quartermaster. Returns compact formatted text. Pick one slice per call with `target` so you only pull what you need: 'status' (default) = what's loaded + a one-line VRAM/RAM summary; 'models' = installed models with capabilities + context length; 'loaded' = models running now with state + idle-TTL; 'vram' = live GPU/VRAM + system RAM; 'settings' = the global memory knobs; or a model id = that model's effective config (ctx, KV, offload, variants). Use this before answering questions about the user's own setup or before suggesting/making config changes, so your answer matches reality.",
+      "Read the live state of THIS running quartermaster. Returns compact formatted text. Pick one slice per call with `target` so you only pull what you need: 'status' (default) = what's loaded + a one-line VRAM/RAM summary; 'models' = installed models with capabilities + context length; 'loaded' = models running now with state + idle-TTL; 'vram' = live GPU/VRAM + system RAM; 'settings' = the global memory knobs; 'logs' = the last lines of quartermaster's own log (model loads, swaps, evictions, spawn/health errors) — use it to diagnose a load failure, crash, or error the user hit; or a model id = that model's effective config (ctx, KV, offload, variants). Use this before answering questions about the user's own setup or before suggesting/making config changes, so your answer matches reality.",
     parameters: {
       type: "object",
       properties: {
         target: {
           type: "string",
           description:
-            "What to read: 'status' (or omit) for loaded + VRAM summary, 'models', 'loaded', 'vram', 'settings', or a model id for that model's config. One slice per call.",
+            "What to read: 'status' (or omit) for loaded + VRAM summary, 'models', 'loaded', 'vram', 'settings', 'logs', or a model id for that model's config. One slice per call.",
+        },
+        tail: {
+          type: "integer",
+          description:
+            "Only for target='logs': how many of the most recent log lines to return (default 50, max 300). Ignored for other targets.",
+        },
+        source: {
+          type: "string",
+          enum: ["proxy", "upstream", "all"],
+          description:
+            "Only for target='logs': which log. 'proxy' (default) = quartermaster's own lifecycle/error log, and does NOT include the currently-answering model's token-by-token decode noise. 'upstream' = the raw backend (llama-server/sd-server) output — noisier, but where a crash reason (CUDA/Vulkan alloc error) shows. 'all' = both combined.",
         },
       },
     },

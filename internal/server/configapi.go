@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -57,7 +58,11 @@ func (s *Server) SetAutogenAdmin(a *AutogenAdmin) { s.autogen = a }
 // VariantSpec field the UI can edit so a save round-trips them instead of
 // dropping file-defined knobs (e.g. judge's ctxCheckpoints:0 / dry:false).
 type variantDTO struct {
-	Name           string  `json:"name"`
+	Name string `json:"name"`
+	// Backend is the registry entry id to launch with ("" => inherit / auto-pick).
+	// Lets a script (e.g. a bench) render a one-off cmd against a specific backend
+	// build without persisting a per-model override.
+	Backend        string  `json:"backend"`
 	Ctx            int     `json:"ctx"`
 	VramTargetGB   float64 `json:"vramTargetGB"`
 	KvK            string  `json:"kvK"`
@@ -110,26 +115,33 @@ type variantDTO struct {
 // overrideDTO is the curated JSON shape of a per-model override (the cogwheel
 // fields) plus its named variants.
 type overrideDTO struct {
-	Ctx             int     `json:"ctx"`
-	KvK             string  `json:"kvK"`
-	KvV             string  `json:"kvV"`
-	KvInRam         bool    `json:"kvInRam"`
-	VramTargetGB    float64 `json:"vramTargetGB"`
-	CpuOffload      int     `json:"cpuOffload"`
-	Spec            string  `json:"spec"`
-	ReasoningFmt    string  `json:"reasoningFmt"`
-	ReasoningBudget int     `json:"reasoningBudget"`
-	FlashAttn       string  `json:"flashAttn"`
-	Mmap            string  `json:"mmap"`
-	Mlock           bool    `json:"mlock"`
-	Threads         int     `json:"threads"`
-	Parallel        int     `json:"parallel"`
-	Ub              int     `json:"ub"`
-	ExtraArgs       string  `json:"extraArgs"`
-	Unlisted        bool    `json:"unlisted"`
-	Skip            bool    `json:"skip"`
-	SlotCache       *bool   `json:"slotCache"`   // opt this model into on-disk slot KV persistence; nil => default on
-	CtxVariants     []int   `json:"ctxVariants"` // per-model ctx tiers (e.g. 32768, 65536)
+	// Backend is the registry entry id this model launches with ("" => auto-pick
+	// the class default). Its kind selects which knobs below apply.
+	Backend string `json:"backend"`
+	// vllm knobs (kind "vllm"): gpu-memory-utilization + tensor-parallel-size.
+	// --max-model-len comes from Ctx.
+	VllmGpuUtil        float64 `json:"vllmGpuUtil"`
+	VllmTensorParallel int     `json:"vllmTensorParallel"`
+	Ctx                int     `json:"ctx"`
+	KvK                string  `json:"kvK"`
+	KvV                string  `json:"kvV"`
+	KvInRam            bool    `json:"kvInRam"`
+	VramTargetGB       float64 `json:"vramTargetGB"`
+	CpuOffload         int     `json:"cpuOffload"`
+	Spec               string  `json:"spec"`
+	ReasoningFmt       string  `json:"reasoningFmt"`
+	ReasoningBudget    int     `json:"reasoningBudget"`
+	FlashAttn          string  `json:"flashAttn"`
+	Mmap               string  `json:"mmap"`
+	Mlock              bool    `json:"mlock"`
+	Threads            int     `json:"threads"`
+	Parallel           int     `json:"parallel"`
+	Ub                 int     `json:"ub"`
+	ExtraArgs          string  `json:"extraArgs"`
+	Unlisted           bool    `json:"unlisted"`
+	Skip               bool    `json:"skip"`
+	SlotCache          *bool   `json:"slotCache"`   // opt this model into on-disk slot KV persistence; nil => default on
+	CtxVariants        []int   `json:"ctxVariants"` // per-model ctx tiers (e.g. 32768, 65536)
 	// PreserveThinking keeps prior-turn <think> in chat history (Qwen3.6+); only
 	// meaningful when reasoning is on.
 	PreserveThinking bool `json:"preserveThinking"`
@@ -180,6 +192,10 @@ type modelConfigResp struct {
 	// DefaultVariants are the fleet-wide settings.defaultVariants (e.g. game),
 	// shared by every model. Editable here but saved globally (PUT /api/default-variants).
 	DefaultVariants []variantDTO `json:"defaultVariants"`
+	// Backends is the registry so the editor can offer a per-model backend picker
+	// (filtered client-side to the model's class). Empty => no configured registry,
+	// the editor shows only the default backend.
+	Backends []backendEntryDTO `json:"backends"`
 }
 
 func variantToDTO(v autogen.VariantSpec) variantDTO {
@@ -204,6 +220,7 @@ func variantToDTO(v autogen.VariantSpec) variantDTO {
 
 func toOverrideDTO(o autogen.Override) *overrideDTO {
 	dto := &overrideDTO{
+		Backend: o.Backend, VllmGpuUtil: o.VllmGpuUtil, VllmTensorParallel: o.VllmTensorParallel,
 		Ctx: o.Ctx, KvK: o.KvK, KvV: o.KvV, KvInRam: o.KvInRam,
 		VramTargetGB: o.VramTargetGB, CpuOffload: o.CpuOffload,
 		Spec: o.Spec, ReasoningFmt: o.ReasoningFmt, ReasoningBudget: o.ReasoningBudget,
@@ -345,10 +362,14 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 		resp.IsMTP = meta.IsMTP || draftKind == "mtp" || strings.Contains(cmd, "--spec-type draft-mtp")
 		resp.IsDflash = draftKind == "dflash" || strings.Contains(cmd, "--spec-type draft-dflash")
 	}
-	// Fleet-wide default variants (e.g. game) so the editor can surface + edit them.
+	// Fleet-wide default variants (e.g. game) + the backend registry so the editor
+	// can surface + edit them.
 	if gf, err := autogen.LoadGenerateFile(s.autogen.GeneratePath, s.autogen.ModelsDir); err == nil {
 		for _, v := range gf.Settings.DefaultVariants {
 			resp.DefaultVariants = append(resp.DefaultVariants, variantToDTO(v))
+		}
+		for _, e := range gf.Settings.Backends {
+			resp.Backends = append(resp.Backends, backendEntryDTO{ID: e.ID, Kind: e.Kind, Name: e.Name, Path: e.Path, Default: e.Default})
 		}
 	}
 	writeJSON(w, resp)
@@ -550,6 +571,46 @@ func estimateInputFromCmd(cmd string) autogen.EstimateInput {
 	return in
 }
 
+// forcedOffloadFromCmd maps a rendered command's GPU/CPU layer split to the
+// EstimateInput.CpuOffload the sizer's applyForcedOffload expects, so an estimate
+// can reproduce the exact placement a running process launched with (incl. the
+// spawn-time LiveOffloadArgs guard's extra offload) rather than re-deriving it.
+// MoE: --n-cpu-moe N is the offload count directly. Dense: -ngl G of BlockCount
+// layers => BlockCount-G on CPU. ok=false when the argv carries no placement flag
+// (or dims are unknown) so the caller leaves the sizer to choose.
+func forcedOffloadFromCmd(cmd string, meta autogen.Metadata) (int, bool) {
+	toks := strings.Fields(cmd)
+	ngl, nglSet := 0, false
+	ncpu, ncpuSet := 0, false
+	for i := 0; i+1 < len(toks); i++ {
+		switch toks[i] {
+		case "-ngl", "--n-gpu-layers", "--gpu-layers":
+			if v, err := strconv.Atoi(toks[i+1]); err == nil {
+				ngl, nglSet = v, true
+			}
+		case "--n-cpu-moe", "--cpu-moe":
+			if v, err := strconv.Atoi(toks[i+1]); err == nil {
+				ncpu, ncpuSet = v, true
+			}
+		}
+	}
+	if meta.IsMoE {
+		if ncpuSet {
+			return ncpu, true
+		}
+		return 0, false
+	}
+	blocks := int(meta.BlockCount)
+	if nglSet && blocks > 0 {
+		n := blocks - ngl
+		if n < 0 {
+			n = 0
+		}
+		return n, true
+	}
+	return 0, false
+}
+
 // mmprojPathFromCmd returns the "--mmproj" projector path in a rendered command,
 // or "" when the command loads no projector (non-vision model).
 func mmprojPathFromCmd(cmd string) string {
@@ -563,7 +624,7 @@ func mmprojPathFromCmd(cmd string) string {
 }
 
 func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) {
-	_, gguf, cmd, ok := s.resolveModelGguf(w, r)
+	realID, gguf, cmd, ok := s.resolveModelGguf(w, r)
 	if !ok {
 		return
 	}
@@ -579,12 +640,25 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 	}
 
 	q := r.URL.Query()
-	// actual=true: seed from the loaded command so the status rail breaks down
-	// the variant that's really running. Otherwise (config editor) start blank so
-	// omitted fields fall back to the sizer's auto choices.
+	// actual=true: seed from the loaded command so the preview reflects the variant
+	// that's really running. Prefer the RUNNING cmd (post spawn-time LiveOffloadArgs
+	// guard) over the config cmd: the guard can offload MORE layers than the baked
+	// plan against live free VRAM, so the config cmd's -ngl is pre-guard and would
+	// disagree with the staging area. Pin the estimate to the running placement so
+	// the settings menu matches what's actually loaded. Otherwise (config editor,
+	// unloaded, or an edited field) start blank so the sizer re-derives placement.
 	var in autogen.EstimateInput
 	if q.Get("actual") == "true" {
-		in = estimateInputFromCmd(cmd)
+		seedCmd := cmd
+		if rc, running := s.local.LaunchedCmd(realID); running && rc != "" {
+			seedCmd = rc
+		}
+		in = estimateInputFromCmd(seedCmd)
+		// Pin the actual GPU/CPU layer split from the running argv so EstimatePlan
+		// reports the loaded placement instead of re-sizing it against the budget.
+		if n, ok := forcedOffloadFromCmd(seedCmd, meta); ok {
+			in.CpuOffload = n
+		}
 	}
 	// Explicit query params override the seed (the config editor's form fields).
 	if v := q.Get("kvK"); v != "" {
@@ -609,6 +683,12 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 	}
 	if v := q.Get("vram"); v != "" {
 		in.TargetVramGB, _ = strconv.ParseFloat(v, 64)
+	} else {
+		// No explicit budget: mirror EnsureConfig's autoVram so the preview sizes
+		// against the same live free-VRAM budget the config was baked with.
+		// Otherwise the estimate uses the larger static targetVramGB and reports a
+		// bigger ctx (e.g. 128k) than the config's actual -c (e.g. 98k).
+		autogen.ResolveAutoVram(&gf.Settings, nil)
 	}
 	if v := q.Get("cpuOffload"); v != "" {
 		in.CpuOffload, _ = strconv.Atoi(v)
@@ -633,7 +713,10 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 	if in.MmprojGB == 0 {
 		if mp := mmprojPathFromCmd(cmd); mp != "" {
 			if fi, err := os.Stat(mp); err == nil {
-				in.MmprojGB = float64(fi.Size())/(1<<30) + gf.Settings.VisionOverheadGB
+				// Same footprint generate-time bakes: projector weights + the
+				// per-projector CLIP compute buffer (modeled from mmproj hparams,
+				// flat VisionOverheadGB fallback).
+				in.MmprojGB = autogen.MmprojVramGB(mp, float64(fi.Size())/(1<<30), gf.Settings)
 			}
 		}
 	}
@@ -666,16 +749,28 @@ type settingsResp struct {
 	ModelsRoot     string           `json:"modelsRoot"` // the shared/fallback scan folder
 	// CategoryRoots is the effective per-category scan folder ("" => uses ModelsRoot).
 	CategoryRoots map[string]string `json:"categoryRoots"`
-	SlotCache     slotCacheDTO      `json:"slotCache"` // on-disk slot KV persistence
-	Backends      backendsDTO       `json:"backends"`  // effective backend executable paths
+	SlotCache     slotCacheDTO      `json:"slotCache"`   // on-disk slot KV persistence
+	Backends      backendsDTO       `json:"backends"`    // effective backend executable paths (legacy 3-slot view)
+	BackendList   []backendEntryDTO `json:"backendList"` // full backend registry (add/remove list)
 }
 
-// backendsDTO mirrors the backend executable paths (llama-server / sd-server /
-// tts-server). Effective (post-default) values on GET; the raw override on PUT.
+// backendsDTO mirrors the effective backend executable paths (llama-server /
+// sd-server / tts-server) — the legacy 3-slot view, GET-only. Writes go through
+// backendEntryDTO (the registry list); these three are derived from it.
 type backendsDTO struct {
 	ServerExe    string `json:"serverExe"`
 	SdServerExe  string `json:"sdServerExe"`
 	TtsServerExe string `json:"ttsServerExe"`
+}
+
+// backendEntryDTO mirrors autogen.BackendEntry — one row of the dashboard's
+// backend registry.
+type backendEntryDTO struct {
+	ID      string `json:"id"`
+	Kind    string `json:"kind"`
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Default bool   `json:"default"` // the auto-pick for this backend's model class
 }
 
 // slotCacheDTO mirrors autogen.SlotCacheSettings for the dashboard slot-KV
@@ -728,6 +823,25 @@ func (s *Server) handleAPISettingsGet(w http.ResponseWriter, r *http.Request) {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
+	stored, err := autogen.LoadSidecarBackendList(a.GeneratePath)
+	if err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// No stored registry yet => seed the list from the effective 3 exes so the
+	// UI shows the current backends as editable rows instead of an empty list.
+	backendList := make([]backendEntryDTO, 0, len(stored))
+	if len(stored) == 0 {
+		backendList = append(backendList,
+			backendEntryDTO{ID: "llama", Kind: "llama", Name: "llama-server", Path: gf.Settings.ServerExe, Default: true},
+			backendEntryDTO{ID: "sd", Kind: "sd", Name: "sd-server", Path: gf.Settings.SdServerExe, Default: true},
+			backendEntryDTO{ID: "tts", Kind: "tts", Name: "tts-server", Path: gf.Settings.TtsServerExe, Default: true},
+		)
+	} else {
+		for _, e := range stored {
+			backendList = append(backendList, backendEntryDTO{ID: e.ID, Kind: e.Kind, Name: e.Name, Path: e.Path, Default: e.Default})
+		}
+	}
 	writeJSON(w, settingsResp{
 		TargetVramGB:   gf.Settings.TargetVramGB,
 		VramOverheadGB: gf.Settings.VramOverheadGB,
@@ -757,27 +871,28 @@ func (s *Server) handleAPISettingsGet(w http.ResponseWriter, r *http.Request) {
 			SdServerExe:  gf.Settings.SdServerExe,
 			TtsServerExe: gf.Settings.TtsServerExe,
 		},
+		BackendList: backendList,
 	})
 }
 
-// handleAPIBackendsPut writes the dashboard's backend executable paths to the
-// sidecar (independent of the VRAM patch), then regenerates + reloads. Blank
-// fields revert to the generate file / sibling default.
+// handleAPIBackendsPut writes the dashboard's backend registry to the sidecar
+// (independent of the VRAM patch), then regenerates + reloads. The legacy 3
+// exes autogen consumes are re-derived from the list (first entry per kind).
+// An empty list reverts to the generate file / sibling defaults.
 func (s *Server) handleAPIBackendsPut(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAutogen(w, r) {
 		return
 	}
-	var body backendsDTO
+	var body []backendEntryDTO
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		shared.SendResponse(w, r, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	err := autogen.UpsertSidecarBackends(s.autogen.GeneratePath, autogen.BackendExes{
-		ServerExe:    strings.TrimSpace(body.ServerExe),
-		SdServerExe:  strings.TrimSpace(body.SdServerExe),
-		TtsServerExe: strings.TrimSpace(body.TtsServerExe),
-	})
-	if err != nil {
+	list := make([]autogen.BackendEntry, 0, len(body))
+	for _, e := range body {
+		list = append(list, autogen.BackendEntry{ID: e.ID, Kind: e.Kind, Name: e.Name, Path: e.Path, Default: e.Default})
+	}
+	if err := autogen.UpsertSidecarBackendList(s.autogen.GeneratePath, list); err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -937,6 +1052,9 @@ func (s *Server) handleAPISettingsDelete(w http.ResponseWriter, r *http.Request)
 // JSON body onto an Override, leaving Match untouched. Shared by the override PUT
 // and the command-preview endpoint.
 func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
+	ov.Backend = strings.TrimSpace(body.Backend)
+	ov.VllmGpuUtil = body.VllmGpuUtil
+	ov.VllmTensorParallel = body.VllmTensorParallel
 	ov.Ctx = body.Ctx
 	ov.KvK = body.KvK
 	ov.KvV = body.KvV
@@ -1027,6 +1145,9 @@ func (s *Server) handleAPIModelCmdPreview(w http.ResponseWriter, r *http.Request
 // replace), this treats the body as a sparse diff — the same "zero/empty =
 // inherit" convention VariantSpec already uses for named variants.
 func applyVariantPatch(ov *autogen.Override, p variantDTO) {
+	if strings.TrimSpace(p.Backend) != "" {
+		ov.Backend = strings.TrimSpace(p.Backend)
+	}
 	if p.Ctx != 0 {
 		ov.Ctx = p.Ctx
 	}
@@ -1199,6 +1320,150 @@ func (s *Server) handleAPIModelAdhocCmd(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, map[string]string{"cmd": cmd})
+}
+
+// handleAPIBackendsList returns the backend registry (llama/vllm/sd/tts/custom)
+// with an `exists` flag per entry (whether its exe is on disk). Read-only —
+// lets a script discover which backend ids are installed before rendering an
+// ad-hoc cmd against one (adhoc-cmd's `backend` field).
+func (s *Server) handleAPIBackendsList(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAutogen(w, r) {
+		return
+	}
+	gf, err := autogen.LoadGenerateFile(s.autogen.GeneratePath, s.autogen.ModelsDir)
+	if err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, "loading settings failed: "+err.Error())
+		return
+	}
+	type backendListEntry struct {
+		ID      string `json:"id"`
+		Kind    string `json:"kind"`
+		Name    string `json:"name"`
+		Path    string `json:"path"`
+		Default bool   `json:"default"`
+		Exists  bool   `json:"exists"`
+	}
+	out := make([]backendListEntry, 0, len(gf.Settings.Backends))
+	for _, e := range gf.Settings.Backends {
+		exists := false
+		if p := strings.TrimSpace(e.Path); p != "" {
+			if _, statErr := os.Stat(p); statErr == nil {
+				exists = true
+			}
+		}
+		out = append(out, backendListEntry{ID: e.ID, Kind: e.Kind, Name: e.Name, Path: e.Path, Default: e.Default, Exists: exists})
+	}
+	writeJSON(w, out)
+}
+
+// ensureBackendVariant makes model realID routable on an ALTERNATE backend
+// (registry entry backendID) without touching its configured backend. It clones
+// the model's live config with the backend's exe swapped into argv[0], registers
+// it under a synthetic id "<realID>@<backendID>" in the SAME swap group (so it
+// evicts/loads against the same VRAM and shows on the dashboard), and returns
+// that id to route to. Idempotent: a no-op once the variant is already live.
+// Requires -generate — the backend registry lives in the autogen sidecar.
+//
+// ponytail: the synthetic model reuses the base model's already-allocated
+// ${PORT} and proxy; safe because both share one exclusive group, so only one
+// ever runs at a time. Two concurrent first-requests for the same (model,backend)
+// may both build+ApplyConfig — the second is a harmless idempotent re-plan.
+func (s *Server) ensureBackendVariant(realID, backendID string) (string, error) {
+	if s.autogen == nil {
+		return "", fmt.Errorf("backend override requires -generate")
+	}
+	syntheticID := realID + "@" + backendID
+	if s.local.Handles(syntheticID) {
+		return syntheticID, nil
+	}
+	cfg := s.config()
+	base, ok := cfg.Models[realID]
+	if !ok {
+		return "", fmt.Errorf("model %q not found", realID)
+	}
+
+	gf, err := autogen.LoadGenerateFile(s.autogen.GeneratePath, s.autogen.ModelsDir)
+	if err != nil {
+		return "", fmt.Errorf("loading backend registry: %w", err)
+	}
+	var exe, name string
+	for _, e := range gf.Settings.Backends {
+		if e.ID == backendID {
+			exe = strings.TrimSpace(e.Path)
+			name = e.Name
+			break
+		}
+	}
+	if exe == "" {
+		return "", fmt.Errorf("backend %q not in registry (or has no path)", backendID)
+	}
+	newCmd, err := swapCmdExe(base.Cmd, exe)
+	if err != nil {
+		return "", err
+	}
+
+	variant := base // struct copy
+	variant.Cmd = newCmd
+	variant.Unlisted = true // routable + dashboard-visible, but out of the /v1/models catalog
+	if name == "" {
+		name = backendID
+	}
+	if variant.Name == "" {
+		variant.Name = realID
+	}
+	variant.Name += " @ " + name
+
+	// COW: build fresh Models + Groups maps; never mutate the live config in place.
+	newModels := make(map[string]config.ModelConfig, len(cfg.Models)+1)
+	for k, v := range cfg.Models {
+		newModels[k] = v
+	}
+	newModels[syntheticID] = variant
+	cfg.Models = newModels
+
+	oldGroups := cfg.Routing.Router.Settings.Groups
+	newGroups := make(map[string]config.GroupConfig, len(oldGroups))
+	for gid, g := range oldGroups {
+		if containsStr(g.Members, realID) {
+			m := make([]string, len(g.Members), len(g.Members)+1)
+			copy(m, g.Members)
+			g.Members = append(m, syntheticID)
+		}
+		newGroups[gid] = g
+	}
+	cfg.Routing.Router.Settings.Groups = newGroups
+
+	if err := s.ApplyConfig(cfg); err != nil {
+		return "", fmt.Errorf("registering backend variant: %w", err)
+	}
+	return syntheticID, nil
+}
+
+// swapCmdExe replaces the executable (argv[0]) of a model cmd with newExe,
+// preserving the rest of the command byte-for-byte (flags, newlines, comments).
+func swapCmdExe(cmd, newExe string) (string, error) {
+	argv, err := config.SanitizeCommand(cmd)
+	if err != nil || len(argv) == 0 {
+		return "", fmt.Errorf("cannot parse model cmd")
+	}
+	oldExe := argv[0]
+	i := strings.Index(cmd, oldExe)
+	if i < 0 {
+		// ponytail: only trips when the exe token is quoted/space-containing;
+		// every generated cmd emits an unquoted exe path, so this is a hand-edit
+		// edge case, not the normal path.
+		return "", fmt.Errorf("cannot locate exe token in cmd")
+	}
+	return cmd[:i] + newExe + cmd[i+len(oldExe):], nil
+}
+
+func containsStr(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

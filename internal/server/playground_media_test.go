@@ -75,3 +75,37 @@ func TestPlayground_gcMedia(t *testing.T) {
 		t.Fatalf("GC deleted the referenced file: kept %s, on disk %s", keptName, files[0].Name())
 	}
 }
+
+// A vision follow-up replays history to the MODEL, so refs must rehydrate to
+// real bytes — extract -> inline is a round-trip back to the original blob.
+func TestPlayground_inlineMedia(t *testing.T) {
+	dir := t.TempDir()
+	p := &Playground{DataDir: dir}
+
+	png := []byte("\x89PNG\r\n\x1a\n fake pixels")
+	in := []byte(`[{"ts":1700000000000,"image_url":{"url":"data:image/png;base64,` +
+		base64.StdEncoding.EncodeToString(png) + `"}}]`)
+
+	refs := p.extractMedia("radu", in)
+	if !strings.Contains(string(refs), "/api/media/image/") {
+		t.Fatalf("no media ref to inline: %s", refs)
+	}
+	if got := string(p.inlineMedia("radu", refs)); got != string(in) {
+		t.Fatalf("round-trip mismatch:\n got %s\nwant %s", got, in)
+	}
+
+	// A ref whose file is gone stays put rather than becoming a broken data URL.
+	gone := []byte(`"/api/media/image/deadbeefdeadbeef.png"`)
+	if got := string(p.inlineMedia("radu", gone)); got != string(gone) {
+		t.Fatalf("missing file should be left alone, got %s", got)
+	}
+
+	// Traversal can't escape the media dir: the ref grammar admits no "..".
+	if err := os.WriteFile(filepath.Join(dir, "secret.png"), []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	esc := []byte(`"/api/media/image/../../secret.png"`)
+	if got := string(p.inlineMedia("radu", esc)); strings.Contains(got, "base64,") {
+		t.Fatalf("traversal ref resolved: %s", got)
+	}
+}

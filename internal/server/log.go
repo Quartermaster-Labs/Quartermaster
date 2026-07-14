@@ -55,14 +55,22 @@ func NewLoggers(logToStdout string) (muxlog, proxylog, upstreamlog *logmon.Monit
 }
 
 // handleLogs serves the historical proxy/upstream log. HTML clients are
-// redirected to the UI.
+// redirected to the UI. `?source=proxy|upstream` selects one monitor; the
+// default (or any other value) is the combined mux log, preserving old behavior.
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	if strings.Contains(r.Header.Get("Accept"), "text/html") {
 		http.Redirect(w, r, "/ui/", http.StatusFound)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain")
-	w.Write(s.muxlog.GetHistory())
+	log := s.muxlog
+	switch r.URL.Query().Get("source") {
+	case "proxy":
+		log = s.proxylog
+	case "upstream":
+		log = s.upstreamlog
+	}
+	w.Write(log.GetHistory())
 }
 
 // getLogger resolves a log monitor by id. An empty id maps to the combined

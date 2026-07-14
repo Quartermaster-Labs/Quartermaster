@@ -40,7 +40,7 @@ type profile struct {
 	Overhead float64
 	Unlisted bool
 	Ctx      int  // 0 = auto-size; >0 forces that ctx via the manual-cap path
-	IsLong   bool // ctx-tier rung >= 64k (drops -ub to 512)
+	IsLong   bool // ctx-tier rung >= 64k (drops -ub to 512 only on a small-VRAM card)
 	// Per-variant overrides. Empty/zero => inherit the model-wide override. Set
 	// only by named custom variants (Override.Variants); emitProfile and the
 	// kv-cost sizing prefer these over the model-wide values.
@@ -324,6 +324,20 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		return nil
 	}
 
+	// Resolve which backend serves this LLM. A "vllm" (or other non-llama) kind
+	// emits through its own path — different engine, different args, no KV/-ngl
+	// sizing. A chosen "llama" build just swaps the exe threaded through the llama
+	// path below. No registry match => keep the legacy ServerExe (zero behaviour
+	// change for single-backend setups).
+	be := resolveBackend(s, ov, "llm")
+	if strings.EqualFold(be.Kind, "vllm") {
+		emitVllmModel(b, s, row, ov, name, be, meta, emitted)
+		return nil
+	}
+	if be.Exe != "" {
+		s.ServerExe = be.Exe // this model's chosen llama build wins (local copy)
+	}
+
 	// KV quant: dense archs default to q8_0; MoE defaults to f16. A low number of
 	// active params means each token's KV carries more of the model's signal, so
 	// MoE tends to degrade more under a quantized cache — keep it full precision.
@@ -458,7 +472,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		vp := profile{
 			Name:     fmt.Sprintf("%s-vision", name),
 			Target:   soloTarget,
-			Overhead: s.VramOverheadGB + specOh + mmprojVramGB(row.MmprojSizeGB, s),
+			Overhead: s.VramOverheadGB + specOh + MmprojVramGB(row.MmprojPath, row.MmprojSizeGB, s),
 			Ctx:      override.Ctx,
 			Vision:   true,
 		}
@@ -484,7 +498,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			}
 			// Spec changes the draft overhead; recharge off the variant's spec.
 			if v.Spec != "" {
-				vp.Overhead = s.VramOverheadGB + draftOverheadGB(v.Spec, row.DraftSizeGB) + mmprojVramGB(row.MmprojSizeGB, s)
+				vp.Overhead = s.VramOverheadGB + draftOverheadGB(v.Spec, row.DraftSizeGB) + MmprojVramGB(row.MmprojPath, row.MmprojSizeGB, s)
 			}
 			vp.Unlisted = v.Unlisted
 			vp.KvK = v.KvK
@@ -504,7 +518,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	// of CPU expert offload, so it's flat VRAM overhead. Replaces the old flat
 	// 0.17 GB ubSoloOh fudge.
 	for i := range profiles {
-		profiles[i].Overhead += computeBufferGB(meta, effectiveUb(profiles[i], ov, profiles[i].Ctx), s.ComputeBufFactor)
+		profiles[i].Overhead += computeBufferGB(meta, effectiveUb(profiles[i], ov, profiles[i].Ctx, s.TargetVramGB), s.ComputeBufFactor)
 	}
 
 	for _, prof := range profiles {
@@ -928,18 +942,66 @@ func computeBufferGB(meta Metadata, ub int, factor float64) float64 {
 	}
 	logits := vocab * math.Min(float64(ub), computeLogitsTokens) * 4.0
 	acts := float64(ub) * embd * computeActCopies * 4.0
-	return computeCudaCtxGB + factor*(logits+acts)/gib
+	// The fixed CUDA-context constant is a CUDA-runtime cost; only charge it when a
+	// CUDA (NVIDIA) GPU is actually in use. On Vulkan/ROCm (AMD/Intel) the runtime
+	// context buffer differs, so charging the CUDA figure over-counts.
+	// ponytail: Vulkan/ROCm get 0 here rather than their own constant — add a
+	// per-backend value if a non-CUDA build's context buffer proves to matter.
+	ctxOh := 0.0
+	if usingCudaGPU() {
+		ctxOh = computeCudaCtxGB
+	}
+	return ctxOh + factor*(logits+acts)/gib
 }
 
-// mmprojVramGB is a "-vision" twin's total projector VRAM footprint: the
-// projector gguf's own weights (fileSizeGB — resident on GPU by default) plus
-// s.VisionOverheadGB for the CLIP compute buffer that image processing allocates.
-// Charged at BOTH generate time (baked plan) and spawn time (LiveOffloadArgs via
+// clipComputeBufferGB models the CLIP vision tower's peak GPU compute buffer from
+// the mmproj's own hparams, so a "-vision" twin's reserve scales per projector
+// rather than a flat pad. The vision graph runs standard (non-flash) attention, so
+// the n_head × n_patches² score matrix dominates, plus per-patch FFN+hidden
+// activations, × a graph factor for ggml's intermediate copies. n_patches is the
+// base image_size/patch_size grid. Qwen-VL dynamic resolution can exceed the base
+// tile on a large image, but the spawn-time offload guard REFUSES an over-budget
+// load rather than OOMing, so sizing for the base (typical) tile trades a little
+// big-image headroom for not permanently over-reserving. Returns 0 when the gguf
+// carries no vision dims (caller falls back to the flat VisionOverheadGB).
+func clipComputeBufferGB(m Metadata) float64 {
+	if m.VisionImageSize <= 0 || m.VisionPatchSize <= 0 || m.VisionEmbd <= 0 {
+		return 0
+	}
+	grid := m.VisionImageSize / m.VisionPatchSize
+	nPatch := float64(grid * grid)
+	heads := float64(m.VisionHeads)
+	if heads <= 0 {
+		heads = 1
+	}
+	ffn := float64(m.VisionFFN)
+	if ffn <= 0 {
+		ffn = 4 * float64(m.VisionEmbd)
+	}
+	const bytesF32, graphFactor = 4.0, 1.3
+	kq := heads * nPatch * nPatch * bytesF32                 // attention score matrix (peak)
+	act := nPatch * (ffn + float64(m.VisionEmbd)) * bytesF32 // ffn + hidden activations
+	return graphFactor * (kq + act) / gib
+}
+
+// MmprojVramGB is a "-vision" twin's total projector VRAM footprint: the projector
+// gguf's own weights (fileSizeGB — resident on GPU by default) plus its CLIP
+// compute buffer. The buffer is modeled per-projector from the mmproj hparams
+// (clipComputeBufferGB, read via ReadGgufMetadataCached) when mmprojPath is
+// available; otherwise it falls back to the flat s.VisionOverheadGB. Charged at
+// BOTH generate time (baked plan) and spawn time (LiveOffloadArgs via
 // EstimateInput.MmprojGB), so the live guard sizes the twin against the same
-// footprint the config assumed. Without the reserve, the projector's compute
-// buffer is invisible to the sizer and the vision load leaves too little free VRAM.
-func mmprojVramGB(fileSizeGB float64, s Settings) float64 {
-	return fileSizeGB + s.VisionOverheadGB
+// footprint the config assumed.
+func MmprojVramGB(mmprojPath string, fileSizeGB float64, s Settings) float64 {
+	buf := s.VisionOverheadGB
+	if mmprojPath != "" {
+		if mm, err := ReadGgufMetadataCached(mmprojPath); err == nil {
+			if b := clipComputeBufferGB(mm); b > 0 {
+				buf = b
+			}
+		}
+	}
+	return fileSizeGB + buf
 }
 
 // isVLModel reports whether a model is a dedicated vision-language model (its
@@ -976,16 +1038,20 @@ func needsQwenFixedChatTemplate(arch string) bool {
 	}
 }
 
-// effectiveUb resolves the physical batch (-ub/-b) for a profile, matching the
-// flag emitted by buildCmdLines: 1024 default, 512 for long ctx, overridden by
-// ov.Ub then the profile's own Ub. ctx is the resolved context length; a >=64k
-// ctx drops ub to 512 even when prof.IsLong wasn't set upfront — the auto-sized
-// solo profile (Ctx=0) only learns its real ctx after sizing, and at 64k+ the
-// ub=1024 compute buffer won't fit an 8GB card even fully expert-offloaded.
-// Pass 0 pre-sizing to charge the conservative (larger) ub=1024 buffer.
-func effectiveUb(prof profile, ov *Override, ctx int) int {
+// smallCardVramGB is the budget below which a high-ctx profile falls back to
+// ub=512. The ub=1024 compute buffer (~0.5 GB larger) only fails to fit on a
+// genuinely small card at 64k+; bigger cards keep ub=1024 everywhere (bench:
+// ub=512 costs ~52% prefill vs 1024).
+const smallCardVramGB = 12.0
+
+// effectiveUb picks the physical batch. Default 1024. Drop to 512 at high ctx
+// ONLY when the VRAM budget is small (< smallCardVramGB) — the auto-sized solo
+// profile (Ctx=0) learns its real ctx after sizing, so ctx>=65536 is checked
+// alongside prof.IsLong. budgetGB<=0 (unknown) keeps 1024 (prefer speed). An
+// explicit Ub override always wins.
+func effectiveUb(prof profile, ov *Override, ctx int, budgetGB float64) int {
 	ub := 1024
-	if prof.IsLong || ctx >= 65536 {
+	if (prof.IsLong || ctx >= 65536) && budgetGB > 0 && budgetGB < smallCardVramGB {
 		ub = 512
 	}
 	if ov != nil && ov.Ub > 0 {
@@ -1007,12 +1073,22 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		cpuMoeFlag = fmt.Sprintf(" --n-cpu-moe %d", ncpuMoe)
 	}
 
-	// mmap on by default: lazy demand-paging → snappy load, OS caches naturally.
-	// --no-mmap only on explicit Mmap:"off" (forces fully-resident anon RAM,
-	// resists eviction under pressure at the cost of a full upfront read).
+	// mmap default is placement-dependent:
+	//   - fully GPU-offloaded (all layers on GPU, no --n-cpu-moe): weights get
+	//     copied straight into VRAM, so mmap only leaves a redundant file-backed
+	//     copy in host page cache. Default --no-mmap to skip that waste.
+	//   - partial/CPU offload: mmap on (lazy demand-paging → snappy load, OS
+	//     caches the on-CPU tensors naturally).
+	// Explicit Mmap:"on"/"off" always wins over the placement default.
+	fullyOffloaded := ncpuMoe == 0 && meta.BlockCount > 0 && int64(ngl) > meta.BlockCount
 	noMmapFlag := ""
+	if fullyOffloaded {
+		noMmapFlag = "--no-mmap "
+	}
 	if ov != nil && ov.Mmap == "off" {
 		noMmapFlag = "--no-mmap "
+	} else if ov != nil && ov.Mmap == "on" {
+		noMmapFlag = ""
 	}
 	mlockFlag := ""
 	if ov != nil && ov.Mlock {
@@ -1041,7 +1117,7 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		threads = ov.Threads
 	}
 
-	ub := effectiveUb(prof, ov, ctx)
+	ub := effectiveUb(prof, ov, ctx, s.TargetVramGB)
 	// -b (logical batch) decoupled from -ub (physical/compute tile). A larger logical
 	// batch pipelines more ub-micro-batches per decode(), overlapping CPU expert-fetch
 	// with GPU compute on MoE offload — measured +38% pp at ub1024, +20% at ub512, for
@@ -1218,6 +1294,14 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 	if IsTTSModel(meta, row.FileName) {
 		return strings.Join(ttsCmdLines(s, row, &ov), " "), nil
 	}
+	// vllm-backed LLMs render a vllm command; a chosen llama build swaps the exe.
+	be := resolveBackend(s, &ov, "llm")
+	if strings.EqualFold(be.Kind, "vllm") {
+		return strings.Join(vllmCmdLines(s, row, &ov, row.FullPath, be, meta), " "), nil
+	}
+	if be.Exe != "" {
+		s.ServerExe = be.Exe
+	}
 	kvK, kvV := "q8_0", "q8_0"
 	if ov.KvK != "" {
 		kvK = ov.KvK
@@ -1252,7 +1336,7 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 		IsLong:         ov.Ctx >= 65536,
 		CtxCheckpoints: ov.CtxCheckpoints,
 	}
-	prof.Overhead += computeBufferGB(meta, effectiveUb(prof, &ov, prof.Ctx), s.ComputeBufFactor)
+	prof.Overhead += computeBufferGB(meta, effectiveUb(prof, &ov, prof.Ctx, s.TargetVramGB), s.ComputeBufFactor)
 	ctx, plan, kvReserve, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, ov.KvInRam)
 	if err != nil {
 		return "", err
