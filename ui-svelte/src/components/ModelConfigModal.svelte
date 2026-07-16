@@ -122,6 +122,7 @@
   // "off" => omit the flag), surfaced as plain on/off checkboxes.
   let offloadToCpu = $state(""); // "" auto | "on" | "off"
   let teOnCpu = $state(""); // "" on | "off"
+  let vaeOnCpu = $state(""); // "" gpu (default) | "on" cpu
   let vaeTiling = $state(""); // "" on | "off"
   let diffusionFa = $state(""); // "" on | "off"
   // Generation defaults baked into the launch cmd; "" => sd-server default.
@@ -307,6 +308,92 @@
     extraArgs = p.extraArgs;
   }
 
+  // Owned by other controls / autogen — swallowed when parsing the image box so
+  // they never bleed into extraArgs: -m modelPath, -l/--listen-port the socket,
+  // --max-vram the slider, --vae-on-cpu the offload pair (--backend vae=cpu is a
+  // separate toggle, kept).
+  const IMG_IGNORE_VALUE = new Set(["-m", "--diffusion-model", "-l", "--listen-port", "--max-vram"]);
+  const IMG_IGNORE_BOOL = new Set(["--vae-on-cpu"]);
+
+  // Parse an sd-server launch command into the image form fields + extraArgs
+  // passthrough (mirror of parseCmdFields for the diffusion emit). Default-on
+  // toggles (te/tiling/diffusion-fa) flip to "off" when their flag is absent.
+  interface ParsedImg {
+    vaePath: string; clipLPath: string; clipGPath: string; t5Path: string; textEncoderPath: string;
+    offloadToCpu: string; teOnCpu: string; vaeOnCpu: string; vaeTiling: string; diffusionFa: string;
+    defaultSteps: number | ""; defaultCfg: number | ""; defaultSampler: string;
+    defaultWidth: number | ""; defaultHeight: number | ""; threads: number | ""; extraArgs: string;
+  }
+  function parseImageCmdFields(cmd: string): ParsedImg {
+    const toks = cmd.trim().split(/\s+/);
+    let i = 0;
+    while (i < toks.length && !toks[i].startsWith("-")) i++; // skip the exe
+    const val = (): string => (i + 1 < toks.length && !toks[i + 1].startsWith("-") ? toks[++i] : "");
+    let vae = "", clipL = "", clipG = "", t5 = "", llm = "", steps = "", cfg = "", sampler = "", w = "", h = "", t = "";
+    let sawFa = false, sawTiling = false, sawTeCpu = false, sawVaeCpu = false, sawOffload = false;
+    const extras: string[] = [];
+    for (; i < toks.length; i++) {
+      const tk = toks[i];
+      switch (tk) {
+        case "--vae": vae = val(); break;
+        case "--clip_l": clipL = val(); break;
+        case "--clip_g": clipG = val(); break;
+        case "--t5xxl": t5 = val(); break;
+        case "--llm": llm = val(); break;
+        case "--diffusion-fa": sawFa = true; break;
+        case "--vae-tiling": sawTiling = true; break;
+        case "--offload-to-cpu": sawOffload = true; break;
+        case "-t": t = val(); break;
+        case "--steps": steps = val(); break;
+        case "--cfg-scale": cfg = val(); break;
+        case "--sampling-method": sampler = val(); break;
+        case "--width": w = val(); break;
+        case "--height": h = val(); break;
+        case "--backend": {
+          // te=cpu / vae=cpu drive the placement toggles; any other value (e.g.
+          // the compute backend "cpu"/"cuda") is passthrough → extraArgs.
+          const v = val();
+          const parts = v.split(",").map((x) => x.trim());
+          const known = parts.filter((x) => x === "te=cpu" || x === "vae=cpu");
+          if (known.includes("te=cpu")) sawTeCpu = true;
+          if (known.includes("vae=cpu")) sawVaeCpu = true;
+          const rest = parts.filter((x) => x !== "te=cpu" && x !== "vae=cpu" && x !== "");
+          if (rest.length) extras.push("--backend", rest.join(","));
+          break;
+        }
+        default:
+          if (IMG_IGNORE_VALUE.has(tk)) val();
+          else if (IMG_IGNORE_BOOL.has(tk)) break;
+          else {
+            extras.push(tk);
+            const v = i + 1 < toks.length && !toks[i + 1].startsWith("-") ? toks[++i] : "";
+            if (v) extras.push(v);
+          }
+      }
+    }
+    const num = (s: string): number | "" => (s !== "" ? Number(s) : "");
+    return {
+      vaePath: vae, clipLPath: clipL, clipGPath: clipG, t5Path: t5, textEncoderPath: llm,
+      offloadToCpu: sawOffload ? "on" : "", // absent => auto (can't distinguish off)
+      teOnCpu: sawTeCpu ? "" : "off",
+      vaeOnCpu: sawVaeCpu ? "on" : "",
+      vaeTiling: sawTiling ? "" : "off",
+      diffusionFa: sawFa ? "" : "off",
+      defaultSteps: num(steps), defaultCfg: num(cfg), defaultSampler: sampler,
+      defaultWidth: num(w), defaultHeight: num(h), threads: num(t), extraArgs: extras.join(" "),
+    };
+  }
+  function applyImageParsedToDefault(p: ParsedImg) {
+    vaePath = p.vaePath; clipLPath = p.clipLPath; clipGPath = p.clipGPath;
+    t5Path = p.t5Path; textEncoderPath = p.textEncoderPath;
+    offloadToCpu = p.offloadToCpu; teOnCpu = p.teOnCpu; vaeOnCpu = p.vaeOnCpu;
+    vaeTiling = p.vaeTiling; diffusionFa = p.diffusionFa;
+    defaultSteps = p.defaultSteps; defaultCfg = p.defaultCfg; defaultSampler = p.defaultSampler;
+    defaultWidth = p.defaultWidth; defaultHeight = p.defaultHeight;
+    threads = p.threads;
+    extraArgs = p.extraArgs;
+  }
+
   // Apply parsed flags to the selected variant (string on/off knobs mirror the
   // override encoding: "" = inherit/on, "off" = forced off).
   function applyParsedToVariant(v: ModelVariant, p: ParsedCmd) {
@@ -349,6 +436,11 @@
   function onCmdBlur() {
     // On blur, fold the edited command back into the active entry. Field changes
     // trigger the render effect, which re-renders the canonical command.
+    if (imageMode) {
+      // Image box is Default-only (no variant box), sd-server flag set.
+      applyImageParsedToDefault(parseImageCmdFields(cmdDraft));
+      return;
+    }
     const p = parseCmdFields(cmdDraft);
     if (selectedV) applyParsedToVariant(selectedV, p);
     else applyParsedToDefault(p);
@@ -362,7 +454,7 @@
       open, config, selectedVariant,
       ctx, ctxAuto, kvK, kvV, kvInRam, spec, reasoningOn, reasoningBudget, preserveThinking, flashOn, mmapOn, mlock, threads, parallel, ub, vramTarget, vramAuto, cpuOffload, cpuAuto, extraArgs, ctxCheckpoints,
       dryOn, dryMultiplier, dryBase, dryAllowedLength, specDraftNMax, specDefault, specNgramSizeN, specNgramSizeM, specNgramMinHits,
-      vaePath, clipLPath, clipGPath, t5Path, textEncoderPath, offloadToCpu, teOnCpu, vaeTiling, diffusionFa,
+      vaePath, clipLPath, clipGPath, t5Path, textEncoderPath, offloadToCpu, teOnCpu, vaeOnCpu, vaeTiling, diffusionFa,
       defaultSteps, defaultCfg, defaultSampler, defaultWidth, defaultHeight,
       selectedV?.ctx, selectedV?.kvK, selectedV?.kvV, selectedV?.kvInRam, selectedV?.spec,
       selectedV?.reasoningFmt, selectedV?.flashAttn, selectedV?.mmap, selectedV?.mlock,
@@ -402,6 +494,7 @@
         textEncoderPath: v.textEncoderPath || base.textEncoderPath,
         offloadToCpu: v.offloadToCpu || base.offloadToCpu,
         teOnCpu: v.teOnCpu || base.teOnCpu,
+        vaeOnCpu: v.vaeOnCpu || base.vaeOnCpu,
         vaeTiling: v.vaeTiling || base.vaeTiling,
         diffusionFa: v.diffusionFa || base.diffusionFa,
         vramTargetGB: v.vramTargetGB || base.vramTargetGB,
@@ -608,6 +701,7 @@
     textEncoderPath = o?.textEncoderPath ?? "";
     offloadToCpu = o?.offloadToCpu ?? "";
     teOnCpu = o?.teOnCpu ?? "";
+    vaeOnCpu = o?.vaeOnCpu ?? "";
     vaeTiling = o?.vaeTiling ?? "";
     diffusionFa = o?.diffusionFa ?? "";
     defaultSteps = o?.defaultSteps ? o.defaultSteps : "";
@@ -629,7 +723,7 @@
       dryMultiplier: 0, dryBase: 0, dryAllowedLength: 0,
       specDraftNMax: 0, specDefault: false, specNgramSizeN: 0, specNgramSizeM: 0, specNgramMinHits: 0,
       vaePath: "", clipLPath: "", clipGPath: "", t5Path: "", textEncoderPath: "",
-      offloadToCpu: "", teOnCpu: "", vaeTiling: "", diffusionFa: "",
+      offloadToCpu: "", teOnCpu: "", vaeOnCpu: "", vaeTiling: "", diffusionFa: "",
       defaultSteps: 0, defaultCfg: 0, defaultSampler: "", defaultWidth: 0, defaultHeight: 0,
     };
   }
@@ -855,6 +949,7 @@
       textEncoderPath,
       offloadToCpu,
       teOnCpu,
+      vaeOnCpu,
       vaeTiling,
       diffusionFa,
       defaultSteps: defaultSteps === "" ? 0 : Number(defaultSteps),
@@ -1273,6 +1368,13 @@
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={vaeOnCpu === "on"} onchange={(e) => (vaeOnCpu = (e.currentTarget as HTMLInputElement).checked ? "on" : "")} />
+              <span class="text-txtsecondary flex items-center gap-1">
+                VAE on CPU
+                {@render hint("--backend vae=cpu. Force the VAE decoder onto the CPU (off by default — it decodes on the GPU). Turn on if the GPU VAE outputs a blank/white image (a bf16 VAE whitens on some backends); costs decode speed.")}
+              </span>
+            </label>
+            <label class="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={vaeTiling !== "off"} onchange={(e) => (vaeTiling = (e.currentTarget as HTMLInputElement).checked ? "" : "off")} />
               <span class="text-txtsecondary flex items-center gap-1">
                 VAE tiling
@@ -1303,21 +1405,23 @@
           </div>
         </div>
 
-        <!-- Launch command (read-only preview; re-renders live from the fields). The
-             image cmd has no two-way parse-back — use the fields above + extraArgs. -->
+        <!-- Launch command (editable, two-way). Form edits re-render it; editing the
+             box parses sd-server flags back into the fields (on blur), unknown flags
+             stashed into extraArgs. Mirrors the LLM tab. -->
         <details class="group">
           <summary class="cursor-pointer font-semibold text-sm uppercase tracking-wider text-txtsecondary hover:text-txtmain">
             Launch parameters {config.hasOverride ? "(custom)" : "(autogen default)"}
           </summary>
           <textarea
             value={cmdDraft}
-            readonly
+            oninput={onCmdInput}
+            onblur={onCmdBlur}
             spellcheck="false"
             rows="6"
-            class="mt-2 w-full bg-background rounded border border-card-border p-3 text-xs font-mono whitespace-pre-wrap break-all resize-y text-txtmain opacity-90"
+            class="mt-2 w-full bg-background rounded border border-card-border p-3 text-xs font-mono whitespace-pre-wrap break-all resize-y text-txtmain"
           ></textarea>
           <p class="text-xs text-txtsecondary mt-1">
-            Re-renders from the fields above. For flags not modelled here, add them in <code>extraArgs</code> via the generate file.
+            Two-way: known sd-server flags parse back into the fields on blur; anything else lands in <code>extraArgs</code>.
           </p>
           <p class="text-xs text-txtsecondary mt-1 font-mono break-all">{config.gguf}</p>
         </details>

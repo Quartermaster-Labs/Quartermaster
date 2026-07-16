@@ -38,11 +38,34 @@ export const versionInfo = writable<VersionInfo>({
 
 let apiEventSource: EventSource | null = null;
 
+// Coalesce log appends into one store update per animation frame. A chatty
+// backend (e.g. an sd-server stuck in an output loop) can emit thousands of
+// lines/sec; one store.update per message = thousands of full <pre> re-renders
+// + forced reflows/sec, which freezes the page until the process is killed.
+// Buffering to a single flush/frame caps that at ~60 renders/sec regardless of
+// input rate. Pending buffer is bounded to the same 100KB so a hidden tab (no
+// rAF) can't grow it unboundedly.
+const pendingLog = new Map<typeof proxyLogs, string>();
+let logFlushScheduled = false;
+
+function flushLogs(): void {
+  logFlushScheduled = false;
+  for (const [store, buf] of pendingLog) {
+    store.update((prev) => {
+      const updated = prev + buf;
+      return updated.length > LOG_LENGTH_LIMIT ? updated.slice(-LOG_LENGTH_LIMIT) : updated;
+    });
+  }
+  pendingLog.clear();
+}
+
 function appendLog(newData: string, store: typeof proxyLogs | typeof upstreamLogs): void {
-  store.update((prev) => {
-    const updatedLog = prev + newData;
-    return updatedLog.length > LOG_LENGTH_LIMIT ? updatedLog.slice(-LOG_LENGTH_LIMIT) : updatedLog;
-  });
+  const buf = (pendingLog.get(store) ?? "") + newData;
+  pendingLog.set(store, buf.length > LOG_LENGTH_LIMIT ? buf.slice(-LOG_LENGTH_LIMIT) : buf);
+  if (!logFlushScheduled) {
+    logFlushScheduled = true;
+    requestAnimationFrame(flushLogs);
+  }
 }
 
 export function enableAPIEvents(enabled: boolean): void {
@@ -291,6 +314,7 @@ export interface ModelVariant {
   textEncoderPath?: string;
   offloadToCpu?: string;
   teOnCpu?: string;
+  vaeOnCpu?: string;
   vaeTiling?: string;
   diffusionFa?: string;
   defaultSteps?: number;
@@ -349,6 +373,7 @@ export interface ModelOverride {
   // Placement tri-states: "" => generator default, "on"/"off" pin it.
   offloadToCpu?: string;
   teOnCpu?: string;
+  vaeOnCpu?: string;
   vaeTiling?: string;
   diffusionFa?: string;
   // Generation defaults (0/empty => sd-server default).

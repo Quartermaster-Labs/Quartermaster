@@ -33,7 +33,12 @@
   // server-backed per user exactly like the chat tab.
 
   const selectedModelStore = userPref<string>("playground-image-model", "");
+  // selectedSizeStore ("WxH") stays the single downstream source of truth; it's
+  // now DERIVED from an aspect + long-edge pair (see the $effect below) so the UI
+  // can offer the two knobs separately. Both persisted so they follow the user.
   const selectedSizeStore = userPref<string>("playground-image-size", "512x512");
+  const aspectStore = userPref<string>("playground-image-aspect", "1:1");
+  const longEdgeStore = userPref<string>("playground-image-long", "512");
   const apiModeStore = userPref<ImageApiMode>("playground-image-api-mode", "sdapi");
   const sdNegativePromptStore = userPref<string>("playground-sdapi-negative-prompt", "");
   const sdStepsStore = userPref<number>("playground-sdapi-steps", 20);
@@ -43,6 +48,9 @@
   const sdSchedulerStore = userPref<string>("playground-sdapi-scheduler", "");
   // Tweak strength for the img2img follow-up path (non-Kontext models).
   const sdDenoiseStore = userPref<number>("playground-sdapi-denoise", 0.6);
+  // Luma tone-anchoring of reused sources back to the thread origin (fights
+  // brightness drift over chained edits). Toggle to A/B it against the raw model.
+  const sdToneAnchorStore = userPref<boolean>("playground-sdapi-tone-anchor", true);
 
   let prompt = $state("");
   // Images the user attached to the NEXT message (data URLs) — seed a thread from
@@ -144,16 +152,27 @@
   let threadEl = $state<HTMLDivElement | undefined>();
   let fileInput = $state<HTMLInputElement | undefined>();
 
-  const SIZE_OPTIONS = [
-    { value: "512x512", label: "512×512 · Square" },
-    { value: "1024x1024", label: "1024×1024 · Square" },
-    { value: "1024x768", label: "1024×768 · 4:3" },
-    { value: "1280x720", label: "1280×720 · 16:9" },
-    { value: "1792x1024", label: "1792×1024 · SDXL wide" },
-    { value: "768x1024", label: "768×1024 · 3:4" },
-    { value: "720x1280", label: "720×1280 · 9:16" },
-    { value: "1024x1792", label: "1024×1792 · SDXL tall" },
+  // Aspect ratio × long-edge → concrete WxH. The short edge is rounded to a
+  // multiple of 64 (SD/VAE latent stride). One aspect + one size list beats a flat
+  // grid of every WxH combo.
+  const ASPECTS = [
+    { value: "1:1", label: "Square 1:1", w: 1, h: 1 },
+    { value: "4:3", label: "Landscape 4:3", w: 4, h: 3 },
+    { value: "3:2", label: "Landscape 3:2", w: 3, h: 2 },
+    { value: "16:9", label: "Wide 16:9", w: 16, h: 9 },
+    { value: "3:4", label: "Portrait 3:4", w: 3, h: 4 },
+    { value: "2:3", label: "Portrait 2:3", w: 2, h: 3 },
+    { value: "9:16", label: "Tall 9:16", w: 9, h: 16 },
   ];
+  const SIZE_TIERS = [512, 768, 1024, 1280, 1536, 2048];
+
+  // Concrete [w,h] for an aspect id + long edge. Short edge snapped to /64.
+  function aspectDims(aspectValue: string, longEdge: number): [number, number] {
+    const a = ASPECTS.find((x) => x.value === aspectValue) ?? ASPECTS[0];
+    if (a.w === a.h) return [longEdge, longEdge];
+    const short = Math.max(64, Math.round((longEdge * Math.min(a.w, a.h)) / Math.max(a.w, a.h) / 64) * 64);
+    return a.w > a.h ? [longEdge, short] : [short, longEdge];
+  }
   const SAMPLER_OPTIONS = ["", "euler_a", "euler", "heun", "dpm2", "dpmpp2s_a", "dpmpp2m", "dpmpp2mv2", "ipndm", "ipndm_v", "lcm", "ddim_trailing", "tcd"].map(
     (v) => ({ value: v, label: v || "Default sampler" })
   );
@@ -171,10 +190,17 @@
   // cfg here = sdapi cfg_scale (true CFG / txt_cfg); for flux-dev models keep it 1.0
   // and the DISTILLED guidance is baked server-side via autogen --guidance (the
   // /sdapi route has no per-request key for it). denoise = img2img strength.
-  const IMAGE_DEFAULTS: { match: string; steps: number; cfg: number; sampler: string; scheduler: string; size?: string; negative?: string; denoise?: number }[] = [
+  // maxDim = largest long edge this model handles; bigger tiers are greyed out in
+  // the Size picker. Absent → DEFAULT_MAX_DIM (1536). 2048 is opt-in per model.
+  const DEFAULT_MAX_DIM = 1536;
+  const IMAGE_DEFAULTS: { match: string; steps: number; cfg: number; sampler: string; scheduler: string; size?: string; negative?: string; denoise?: number; maxDim?: number }[] = [
     { match: "z-image", steps: 10, cfg: 1.0, sampler: "euler", scheduler: "discrete" },
     // Kontext: surgical edit — low denoise so it doesn't redraw the whole scene.
     { match: "kontext", steps: 24, cfg: 1.0, sampler: "euler", scheduler: "discrete", denoise: 0.55 },
+    // Qwen-Image-Edit Rapid: guidance-distilled (cfg MUST be 1.0 — cfg>1 burns to a
+    // solid yellow frame). 8 steps undercooks; 20 is the sweet spot. Ref-image edit
+    // (extra_images), so denoise unused.
+    { match: "qwen-rapid", steps: 20, cfg: 1.0, sampler: "euler", scheduler: "discrete" },
     // Fill: inpaint — always fully regenerates the masked area (denoise 1.0).
     { match: "fill", steps: 20, cfg: 1.0, sampler: "euler", scheduler: "discrete", denoise: 1.0 },
     // AnimagineXL 3.1 / Illustrious SDXL-anime: Euler a, <30 steps, cfg 5-7, 1024.
@@ -203,7 +229,14 @@
     $sdCfgScaleStore = d.cfg;
     $sdSamplerStore = d.sampler;
     $sdSchedulerStore = d.scheduler;
-    if (d.size) $selectedSizeStore = d.size;
+    if (d.size) {
+      const [w, h] = d.size.split("x").map(Number);
+      const r = w / h;
+      $aspectStore = ASPECTS.reduce((best, a) =>
+        Math.abs(a.w / a.h - r) < Math.abs(best.w / best.h - r) ? a : best
+      ).value;
+      $longEdgeStore = String(Math.max(w, h));
+    }
     if (d.negative) $sdNegativePromptStore = d.negative;
     if (d.denoise !== undefined) $sdDenoiseStore = d.denoise;
   });
@@ -306,9 +339,32 @@
 
   let hasModels = $derived($models.some((m) => !m.unlisted));
   let isSdapi = $derived($apiModeStore === "sdapi");
-  // Only Kontext-class models do reference edits (extra_images → ref_images).
-  let supportsRefImages = $derived($selectedModelStore.toLowerCase().includes("kontext"));
+  // Reference-edit models take the source as a ref (extra_images → ref_images),
+  // NOT an img2img denoise base: Kontext, and Qwen-Image-Edit (incl. the distilled
+  // "rapid" merges whose id drops the "edit" token, e.g. qwen-rapid-nsfw).
+  let supportsRefImages = $derived(
+    (() => {
+      const l = $selectedModelStore.toLowerCase();
+      return l.includes("kontext") || l.includes("qwen-image-edit") || l.includes("qwen-rapid");
+    })()
+  );
   let modelDefaults = $derived(defaultsFor($selectedModelStore));
+  // Largest long edge the current model handles (tiers above are greyed out).
+  let modelMax = $derived(modelDefaults?.maxDim ?? DEFAULT_MAX_DIM);
+  let aspectOptions = $derived(ASPECTS.map((a) => ({ value: a.value, label: a.label })));
+  // Size tiers for the chosen aspect, labelled with the concrete WxH; tiers over
+  // the model's cap are disabled.
+  let sizeOptions = $derived(
+    SIZE_TIERS.map((L) => {
+      const [w, h] = aspectDims($aspectStore, L);
+      return { value: String(L), label: `${w}×${h}`, disabled: L > modelMax };
+    })
+  );
+  // Aspect + long edge (clamped to the model cap) → the WxH every gen path reads.
+  $effect(() => {
+    const [w, h] = aspectDims($aspectStore, Math.min(Number($longEdgeStore) || 512, modelMax));
+    $selectedSizeStore = `${w}x${h}`;
+  });
   // The image the next turn tweaks: an attachment if present, else the last reply.
   let baseImage = $derived(
     attached[0] ?? [...turns].reverse().find((t) => t.images.length)?.images[0] ?? null
@@ -330,6 +386,23 @@
   });
 
   const stripB64 = (dataUrl: string) => dataUrl.replace(/^data:[^,]+,/, "");
+
+  // Raw base64 for sd-server (extra_images / init_images want bytes, not a URL).
+  // Fresh attachments/results are inline data: URLs; once persisted the server
+  // rewrites them to /api/media/ paths (playground.go extractMedia), so a reused
+  // source loaded from disk must be fetched back to bytes or it's sent as a path
+  // and silently ignored.
+  async function toB64(url: string): Promise<string> {
+    if (url.startsWith("data:")) return stripB64(url);
+    const blob = await (await fetch(url)).blob();
+    const dataUrl = await new Promise<string>((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result as string);
+      fr.onerror = rej;
+      fr.readAsDataURL(blob);
+    });
+    return stripB64(dataUrl);
+  }
 
   async function genTxt2Img(promptText: string, refs: string[] | undefined, signal: AbortSignal): Promise<string[]> {
     const [w, h] = $selectedSizeStore.split("x").map(Number);
@@ -398,30 +471,44 @@
   // origin = thread anchor for tone matching (null = nothing to match / this is it).
   async function generate(promptText: string, refs: string[], origin: string | null, mask: string | null, signal: AbortSignal): Promise<string[]> {
     if (!isSdapi) return genOpenAi(promptText, signal); // OpenAI route ignores sources
-    let src = refs[0];
+    const src = refs[0];
     if (!src) return genTxt2Img(promptText, undefined, signal);
-    // Match the reused base back to the origin's tone before re-encoding. Skipped
-    // when src IS the origin (first turn) or on any canvas failure (fall back raw).
-    let matched = refs;
-    if (origin && src !== origin) {
+    // Ref-edit models (Kontext, Qwen-Image-Edit) re-run off the previous output
+    // each turn, and the model/VAE round-trip drifts brightness a little every
+    // round → a chain darkens (or brightens) and compounds. Anchor the reused
+    // base's BRIGHTNESS (mean only, matchContrast=false) back to the origin so the
+    // drift becomes a one-time offset instead of compounding. Mean-only avoids the
+    // contrast-stretch blowout full luma-matching caused. Skipped when src IS the
+    // origin (first turn) or on any canvas failure.
+    if (supportsRefImages) {
+      let anchored = refs;
+      if ($sdToneAnchorStore && origin && src !== origin) {
+        try {
+          anchored = [await matchColorToRef(src, origin, false), ...refs.slice(1)];
+        } catch {
+          /* keep the un-normalized base */
+        }
+      }
+      return genTxt2Img(promptText, await Promise.all(anchored.map(toB64)), signal);
+    }
+    // img2img re-encodes the base into latent each turn → brightness/contrast
+    // drift compounds. Anchor the base back to the origin's tone first (skipped
+    // when src IS the origin or on any canvas failure — fall back raw).
+    let base = src;
+    if ($sdToneAnchorStore && origin && src !== origin) {
       try {
-        const fixed = await matchColorToRef(src, origin);
-        matched = [fixed, ...refs.slice(1)];
-        src = fixed;
+        base = await matchColorToRef(src, origin);
       } catch {
         /* keep the un-normalized base */
       }
     }
-    // Kontext feeds the sources back as references; other models img2img off the
-    // first (with an optional inpaint mask). Kontext ignores the mask.
-    if (supportsRefImages) return genTxt2Img(promptText, matched.map(stripB64), signal);
-    return genImg2Img(promptText, stripB64(src), mask, signal);
+    return genImg2Img(promptText, await toB64(base), mask, signal);
   }
 
   // Run a turn already appended at index ti of session `id` and fold its result /
   // error back into the store. Writes by session id, so the reply lands even if
   // the user switched threads mid-generation. genId gates one turn at a time.
-  async function runTurn(id: string, ti: number, promptText: string, refs: string[], mask: string | null, onAbort: () => void) {
+  async function runTurn(id: string, ti: number, promptText: string, refs: string[], mask: string | null, onAbort: () => void, prevTurns: Turn[]) {
     genId = id;
     abortController = new AbortController();
     try {
@@ -429,8 +516,10 @@
       updateTurn(id, ti, { images, secs: elapsed });
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
-        const s = sessionById(id);
-        if (s) patchSession(id, { turns: s.turns.filter((_, i) => i !== ti) });
+        // Restore the thread to exactly what it was before this run — for a fresh
+        // send that drops the appended turn, for regenerate/edit it puts the
+        // original turn (and its output) back rather than deleting it.
+        patchSession(id, { turns: prevTurns });
         onAbort();
       } else {
         const msg = err instanceof Error ? err.message : "An error occurred";
@@ -459,14 +548,15 @@
     // Record what actually feeds this turn: attachments if present, else the
     // reused base image. OpenAI route ignores sources, so none there.
     const refs = !isSdapi ? [] : wasAttached.length ? wasAttached : base ? [base] : [];
-    const ti = sessionById(id)!.turns.length;
+    const prevTurns = sessionById(id)!.turns;
+    const ti = prevTurns.length;
     appendTurn(id, { prompt: promptText, refs, images: [] });
     await runTurn(id, ti, promptText, refs, useMask, () => {
       prompt = promptText;
       attached = wasAttached;
       maskData = useMask;
       maskSource = useMask ? base : null;
-    });
+    }, prevTurns);
   }
 
   // Edit a past prompt: rewrite it, drop that turn + everything after, re-run from
@@ -481,9 +571,10 @@
     const id = $activeImageChatId;
     const s = sessionById(id);
     if (!s) return;
-    const refs = s.turns[idx].refs;
-    setTurns(id, [...s.turns.slice(0, idx), { prompt: promptText, refs, images: [] }], true);
-    await runTurn(id, idx, promptText, refs, null, () => {});
+    const prevTurns = s.turns;
+    const refs = prevTurns[idx].refs;
+    setTurns(id, [...prevTurns.slice(0, idx), { prompt: promptText, refs, images: [] }], true);
+    await runTurn(id, idx, promptText, refs, null, () => {}, prevTurns);
   }
 
   // Re-run a turn with its same prompt + sources, dropping everything after it
@@ -495,8 +586,9 @@
     const s = sessionById(id);
     const t = s?.turns[idx];
     if (!s || !t) return;
-    setTurns(id, [...s.turns.slice(0, idx), { prompt: t.prompt, refs: t.refs, images: [] }], true);
-    await runTurn(id, idx, t.prompt, t.refs, null, () => {});
+    const prevTurns = s.turns;
+    setTurns(id, [...prevTurns.slice(0, idx), { prompt: t.prompt, refs: t.refs, images: [] }], true);
+    await runTurn(id, idx, t.prompt, t.refs, null, () => {}, prevTurns);
   }
 
   function startEdit(idx: number) {
@@ -628,7 +720,7 @@
             <!-- User prompt (right) — matches chat: black bubble, no avatar. Source
                  / reference images fed into this turn ride inside the bubble. -->
             <div class="flex justify-end">
-              <div class="group relative max-w-[85%] rounded-2xl rounded-br-sm bg-black text-white px-3.5 py-2 flex flex-col gap-2">
+              <div class="group relative max-w-[85%] rounded-2xl rounded-br-sm bg-[#141414] text-[#ededee] msg-tail-user px-3.5 py-2 flex flex-col gap-2">
                 {#if t.refs.length}
                   <div class="flex flex-wrap gap-1.5">
                     {#each t.refs as ref, ri (ri)}
@@ -743,60 +835,75 @@
 
       <!-- Composer — narrower than the thread, centered. -->
       {#snippet imageSettingsPanel()}
-        <div class="grid grid-cols-2 gap-3">
-          <div class="flex flex-col gap-1">
-            <span class="text-xs uppercase tracking-wide text-txtsecondary">API</span>
-            <Select
-              bind:value={$apiModeStore}
-              disabled={isGenerating}
-              compact
-              options={[
-                { value: "openai", label: "OpenAI" },
-                { value: "sdapi", label: "SDAPI" },
-              ]}
-            />
-          </div>
-          <div class="flex flex-col gap-1">
-            <span class="text-xs uppercase tracking-wide text-txtsecondary">Size</span>
-            <Select bind:value={$selectedSizeStore} disabled={isGenerating} compact options={SIZE_OPTIONS} />
-          </div>
-        </div>
-        {#if isSdapi}
-          <div class="grid grid-cols-2 gap-3">
+        <div class="flex flex-col gap-2">
+          <div class="grid grid-cols-3 gap-3">
             <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">Steps</span>
-              <input type="number" min="1" max="150" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdStepsStore} />
+              <span class="text-xs uppercase tracking-wide text-txtsecondary">API</span>
+              <Select
+                bind:value={$apiModeStore}
+                disabled={isGenerating}
+                compact
+                options={[
+                  { value: "openai", label: "OpenAI" },
+                  { value: "sdapi", label: "SDAPI" },
+                ]}
+              />
             </div>
             <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">CFG Scale</span>
-              <input type="number" min="1" max="30" step="0.5" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdCfgScaleStore} />
+              <span class="text-xs uppercase tracking-wide text-txtsecondary">Aspect</span>
+              <Select bind:value={$aspectStore} disabled={isGenerating} compact options={aspectOptions} />
+            </div>
+            <div class="flex flex-col gap-1">
+              <span class="text-xs uppercase tracking-wide text-txtsecondary">Size</span>
+              <Select bind:value={$longEdgeStore} disabled={isGenerating} compact options={sizeOptions} />
             </div>
           </div>
-          {#if modelDefaults}
-            <p class="text-xs text-txtsecondary -mt-1">Model default · {modelDefaults.steps} steps · cfg {modelDefaults.cfg} · {modelDefaults.sampler}</p>
+          {#if isSdapi}
+            <div class="grid grid-cols-3 gap-3">
+              <div class="flex flex-col gap-1">
+                <span class="text-xs uppercase tracking-wide text-txtsecondary">Steps</span>
+                <input type="number" min="1" max="150" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdStepsStore} />
+              </div>
+              <div class="flex flex-col gap-1">
+                <span class="text-xs uppercase tracking-wide text-txtsecondary">CFG</span>
+                <input type="number" min="1" max="30" step="0.5" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdCfgScaleStore} />
+              </div>
+              <div class="flex flex-col gap-1">
+                <span class="text-xs uppercase tracking-wide text-txtsecondary">Seed</span>
+                <input type="number" min="-1" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdSeedStore} />
+              </div>
+            </div>
+            {#if modelDefaults}
+              <p class="text-xs text-txtsecondary -mt-1">Model default · {modelDefaults.steps} steps · cfg {modelDefaults.cfg} · {modelDefaults.sampler}</p>
+            {/if}
+            <div class="flex flex-col gap-1">
+              <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
+                Tweak strength · {$sdDenoiseStore.toFixed(2)}
+                <span class="cursor-help opacity-60" title="How far each follow-up may stray from the previous image (non-Kontext models).">(?)</span>
+              </span>
+              <input type="range" min="0" max="1" step="0.05" class="w-full accent-primary" bind:value={$sdDenoiseStore} />
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div class="flex flex-col gap-1">
+                <span class="text-xs uppercase tracking-wide text-txtsecondary">Sampler</span>
+                <Select bind:value={$sdSamplerStore} compact options={SAMPLER_OPTIONS} />
+              </div>
+              <div class="flex flex-col gap-1">
+                <span class="text-xs uppercase tracking-wide text-txtsecondary">Scheduler</span>
+                <Select bind:value={$sdSchedulerStore} compact options={SCHEDULER_OPTIONS} />
+              </div>
+            </div>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" class="accent-primary" bind:checked={$sdToneAnchorStore} />
+              <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
+                Tone anchor
+                <span class="cursor-help opacity-60" title="Pin reused-source brightness to the thread's first image so chained edits don't drift darker/brighter. Off = raw model output.">(?)</span>
+              </span>
+            </label>
+          {:else}
+            <p class="text-xs text-txtsecondary">OpenAI image route generates fresh each turn — it can't tweak a previous image. Switch to SDAPI for the edit loop.</p>
           {/if}
-          <div class="flex flex-col gap-1">
-            <span class="text-xs uppercase tracking-wide text-txtsecondary">Tweak strength · {$sdDenoiseStore.toFixed(2)}</span>
-            <input type="range" min="0" max="1" step="0.05" class="w-full accent-primary" bind:value={$sdDenoiseStore} />
-            <p class="text-xs text-txtsecondary">How far each follow-up may stray from the previous image (non-Kontext models).</p>
-          </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">Sampler</span>
-              <Select bind:value={$sdSamplerStore} compact options={SAMPLER_OPTIONS} />
-            </div>
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">Scheduler</span>
-              <Select bind:value={$sdSchedulerStore} compact options={SCHEDULER_OPTIONS} />
-            </div>
-          </div>
-          <div class="flex flex-col gap-1">
-            <span class="text-xs uppercase tracking-wide text-txtsecondary">Seed (-1 random)</span>
-            <input type="number" min="-1" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdSeedStore} />
-          </div>
-        {:else}
-          <p class="text-xs text-txtsecondary">OpenAI image route generates fresh each turn — it can't tweak a previous image. Switch to SDAPI for the edit loop.</p>
-        {/if}
+        </div>
       {/snippet}
 
       {#snippet imageTopExtra()}
@@ -938,3 +1045,19 @@
     <img src={fullscreenImg} alt="fullscreen" class="max-w-full max-h-full object-contain" />
   </div>
 {/if}
+
+<style>
+  /* Messenger-style bubble tail on the user prompt — matches the chat tab
+     (ChatMessage.svelte .msg-tail-user). */
+  .msg-tail-user::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    right: -5px;
+    width: 0;
+    height: 0;
+    border: 6px solid transparent;
+    border-bottom: 0;
+    border-left-color: #141414;
+  }
+</style>

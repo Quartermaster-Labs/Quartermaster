@@ -21,6 +21,11 @@ var imageArchs = map[string]bool{
 	"z_image":          true,
 	"lumina":           true, // Lumina2 / Lumina-Next; Z-Image-Turbo reports "lumina2"
 	"wan":              true,
+	// Generic marker for a GGUF that declares general.type=diffusion but whose
+	// general.architecture doesn't self-identify as image (e.g. HiDream-O1 reports
+	// arch "qwen"). effectiveImageArch maps such a file to "diffusion". No
+	// resolveComponents arm → nothing auto-wired; components come from an override.
+	"diffusion": true,
 }
 
 // effectiveImageArch returns the arch to classify a gguf as a diffusion model:
@@ -35,6 +40,11 @@ func effectiveImageArch(meta Metadata) string {
 	}
 	if meta.DiffusionKind != "" {
 		return meta.DiffusionKind
+	}
+	// A non-image arch that still declares general.type=diffusion (HiDream-O1
+	// reports arch "qwen") — classify it image via the generic "diffusion" marker.
+	if strings.EqualFold(strings.TrimSpace(meta.GeneralType), "diffusion") {
+		return "diffusion"
 	}
 	return meta.Architecture
 }
@@ -263,8 +273,15 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string) (li
 	if fullCkpt {
 		modelFlag = "-m"
 	}
+	// Per-model backend pick from the config editor (Override.Backend) or the
+	// ★Default image entry; fall back to the legacy derived exe. Guard on class so
+	// a stray non-image backend id can't emit the wrong launcher.
+	sdExe := s.SdServerExe
+	if rb := resolveBackend(s, ov, "image"); rb.Exe != "" && kindClass(rb.Kind) == "image" {
+		sdExe = rb.Exe
+	}
 	lines = []string{
-		s.SdServerExe,
+		sdExe,
 		fmt.Sprintf("%s %s", modelFlag, modelPath),
 		"-l 127.0.0.1",
 		"--listen-port ${PORT}",
@@ -302,12 +319,21 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string) (li
 		lines = append(lines, "--vae-tiling")
 	}
 	lines = append(lines, fmt.Sprintf("-t %d", threads))
-	// Park the text encoder on CPU by default: it runs once per generation (cheapest
-	// component to keep off the GPU), and its VRAM is NOT in row.SizeGB, so leaving
-	// it resident lets a "fits" diffusion model thrash the whole graph through
-	// --max-vram. "off" keeps it on the GPU for a model that has the headroom.
+	// Park components on CPU via the sd-server --backend spec. te=cpu is the default
+	// (the text encoder runs once per generation, cheapest to keep off the GPU, and
+	// its VRAM is NOT in row.SizeGB — leaving it resident lets a "fits" diffusion
+	// model thrash the whole graph through --max-vram). "off" keeps it on the GPU.
+	// vae=cpu is opt-in: the bf16 VAE decodes on the GPU by default, but some
+	// backends whiten it — CPU is the safe (slower) fallback.
+	var beParts []string
 	if ov == nil || ov.TeOnCpu != "off" {
-		lines = append(lines, "--backend te=cpu")
+		beParts = append(beParts, "te=cpu")
+	}
+	if ov != nil && ov.VaeOnCpu == "on" {
+		beParts = append(beParts, "vae=cpu")
+	}
+	if len(beParts) > 0 {
+		lines = append(lines, "--backend "+strings.Join(beParts, ","))
 	}
 	// Distilled guidance for flux edit models. The /sdapi route only reads
 	// cfg_scale (→ guidance.txt_cfg); it has NO per-request key for distilled
@@ -380,6 +406,9 @@ func mergeImageVariant(base Override, v VariantSpec) Override {
 	if v.TeOnCpu != "" {
 		o.TeOnCpu = v.TeOnCpu
 	}
+	if v.VaeOnCpu != "" {
+		o.VaeOnCpu = v.VaeOnCpu
+	}
 	if v.VaeTiling != "" {
 		o.VaeTiling = v.VaeTiling
 	}
@@ -411,6 +440,216 @@ func mergeImageVariant(base Override, v VariantSpec) Override {
 		o.ExtraArgs = v.ExtraArgs
 	}
 	return o
+}
+
+// extraImageBudget resolves the --max-vram for an extra image model (its own
+// VramTargetGB, else the settings target minus overhead; floored at 1).
+func extraImageBudget(s Settings, m ExtraImageModel) float64 {
+	budget := s.TargetVramGB - s.VramOverheadGB
+	if m.VramTargetGB > 0 {
+		budget = m.VramTargetGB
+	}
+	if budget < 1 {
+		budget = 1
+	}
+	return budget
+}
+
+// extraImageCmdLines builds the sd-server argv for one hand-declared extra image
+// model (safetensors DiT). Shared by config emit and the editor's cmd preview so
+// both render identically — the gguf-scan RenderSoloCmd path can't serve these
+// (a safetensors DiT has no gguf header to arch-detect from).
+func extraImageCmdLines(s Settings, m ExtraImageModel) []string {
+	threads := s.Threads
+	if m.Threads > 0 {
+		threads = m.Threads
+	}
+	modelFlag := "-m"
+	if strings.TrimSpace(m.ModelFlag) != "" {
+		modelFlag = strings.TrimSpace(m.ModelFlag)
+	}
+	lines := []string{
+		s.SdServerExe,
+		fmt.Sprintf("%s %s", modelFlag, imageArg(m.ModelPath)),
+		"-l 127.0.0.1",
+		"--listen-port ${PORT}",
+		fmt.Sprintf("--max-vram %g", extraImageBudget(s, m)),
+	}
+	if p := imageArg(m.VaePath); p != "" {
+		lines = append(lines, "--vae "+p)
+	}
+	if p := imageArg(m.ClipLPath); p != "" {
+		lines = append(lines, "--clip_l "+p)
+	}
+	if p := imageArg(m.ClipGPath); p != "" {
+		lines = append(lines, "--clip_g "+p)
+	}
+	if p := imageArg(m.T5Path); p != "" {
+		lines = append(lines, "--t5xxl "+p)
+	}
+	if p := imageArg(m.LlmPath); p != "" {
+		lines = append(lines, "--llm "+p)
+	}
+	if m.DiffusionFa != "off" {
+		lines = append(lines, "--diffusion-fa")
+	}
+	if m.VaeTiling != "off" {
+		lines = append(lines, "--vae-tiling")
+	}
+	lines = append(lines, fmt.Sprintf("-t %d", threads))
+	var beParts []string
+	if m.TeOnCpu != "off" {
+		beParts = append(beParts, "te=cpu")
+	}
+	if m.VaeOnCpu == "on" {
+		beParts = append(beParts, "vae=cpu")
+	}
+	if len(beParts) > 0 {
+		lines = append(lines, "--backend "+strings.Join(beParts, ","))
+	}
+	if m.OffloadToCpu == "on" {
+		lines = append(lines, "--offload-to-cpu", "--vae-on-cpu")
+	}
+	if m.DefaultSteps > 0 {
+		lines = append(lines, fmt.Sprintf("--steps %d", m.DefaultSteps))
+	}
+	if m.DefaultCfg > 0 {
+		lines = append(lines, fmt.Sprintf("--cfg-scale %g", m.DefaultCfg))
+	}
+	if sm := strings.TrimSpace(m.DefaultSampler); sm != "" {
+		lines = append(lines, "--sampling-method "+sm)
+	}
+	if m.DefaultWidth > 0 {
+		lines = append(lines, fmt.Sprintf("--width %d", m.DefaultWidth))
+	}
+	if m.DefaultHeight > 0 {
+		lines = append(lines, fmt.Sprintf("--height %d", m.DefaultHeight))
+	}
+	if extra := strings.TrimSpace(m.ExtraArgs); extra != "" {
+		lines = append(lines, extra)
+	}
+	return lines
+}
+
+// RenderExtraImageCmd renders the full sd-server command for one extra image
+// model as a single line (the editor's cmd-preview endpoint uses this).
+func RenderExtraImageCmd(s Settings, m ExtraImageModel) string {
+	return strings.Join(extraImageCmdLines(s, m), " ")
+}
+
+// FindExtraImageModel returns the settings entry whose model path matches p
+// (the editor resolves a model to its -m/--diffusion-model gguf path).
+func FindExtraImageModel(s Settings, p string) (ExtraImageModel, bool) {
+	for _, m := range s.ExtraImageModels {
+		if strings.EqualFold(strings.ReplaceAll(m.ModelPath, "\\", "/"), strings.ReplaceAll(p, "\\", "/")) {
+			return m, true
+		}
+	}
+	return ExtraImageModel{}, false
+}
+
+// ExtraImageAsOverride projects an ExtraImageModel's editable fields into an
+// Override so the config editor can seed its image form from the hand-declared
+// settings entry when no sidecar override exists yet (without this, opening an
+// unedited extra model shows blank fields and the first save wipes the base).
+func ExtraImageAsOverride(m ExtraImageModel) Override {
+	return Override{
+		Match:           m.ModelPath,
+		VaePath:         m.VaePath,
+		ClipLPath:       m.ClipLPath,
+		ClipGPath:       m.ClipGPath,
+		T5Path:          m.T5Path,
+		TextEncoderPath: m.LlmPath,
+		TeOnCpu:         m.TeOnCpu,
+		VaeOnCpu:        m.VaeOnCpu,
+		VaeTiling:       m.VaeTiling,
+		DiffusionFa:     m.DiffusionFa,
+		OffloadToCpu:    m.OffloadToCpu,
+		DefaultSteps:    m.DefaultSteps,
+		DefaultCfg:      m.DefaultCfg,
+		DefaultSampler:  m.DefaultSampler,
+		DefaultWidth:    m.DefaultWidth,
+		DefaultHeight:   m.DefaultHeight,
+		VramTargetGB:    m.VramTargetGB,
+		Threads:         m.Threads,
+		ExtraArgs:       m.ExtraArgs,
+		Unlisted:        m.Unlisted,
+	}
+}
+
+// ApplyOverrideToExtraImage overlays a matched Override's image fields onto a
+// hand-declared ExtraImageModel so UI config edits (the sidecar override) reach
+// the safetensors models the gguf scan never sees. The Override is the UI's
+// COMPLETE snapshot (seeded from ExtraImageAsOverride), so every UI-modelled
+// field is taken authoritatively — including the "" tri-state defaults, so a
+// toggle flipped back ON (DiffusionFa "") clears a base "off". Structural fields
+// (Name/ModelPath/ModelFlag) always stay.
+// ponytail: authoritative replace, not field-merge — correct because a UI save
+// writes the full field set; a broad glob file override matching a safetensors
+// model would flatten its toggles to defaults, but none is authored that way.
+func ApplyOverrideToExtraImage(m ExtraImageModel, ov *Override) ExtraImageModel {
+	if ov == nil {
+		return m
+	}
+	m.VaePath = ov.VaePath
+	m.ClipLPath = ov.ClipLPath
+	m.ClipGPath = ov.ClipGPath
+	m.T5Path = ov.T5Path
+	m.LlmPath = ov.TextEncoderPath
+	m.TeOnCpu = ov.TeOnCpu
+	m.VaeOnCpu = ov.VaeOnCpu
+	m.VaeTiling = ov.VaeTiling
+	m.DiffusionFa = ov.DiffusionFa
+	m.OffloadToCpu = ov.OffloadToCpu
+	m.DefaultSteps = ov.DefaultSteps
+	m.DefaultCfg = ov.DefaultCfg
+	m.DefaultSampler = ov.DefaultSampler
+	m.DefaultWidth = ov.DefaultWidth
+	m.DefaultHeight = ov.DefaultHeight
+	m.ExtraArgs = ov.ExtraArgs
+	m.Unlisted = ov.Unlisted
+	if ov.Threads > 0 {
+		m.Threads = ov.Threads
+	}
+	if ov.VramTargetGB > 0 {
+		m.VramTargetGB = ov.VramTargetGB
+	}
+	return m
+}
+
+// emitExtraImageModels writes an sd-server block for each Settings.ExtraImageModel
+// (safetensors DiTs autogen's gguf scan can't see). Unlike emitImageModel these
+// wire components verbatim from explicit paths — no arch detection, no VRAM
+// planner. A matching override (sidecar UI edit or file rule) is overlaid so the
+// config editor can tune these. Names are deduped against emitted models via seen.
+func emitExtraImageModels(b *strings.Builder, s Settings, overrides []Override, seen map[string]bool, emitted *[]string) {
+	for _, m := range s.ExtraImageModels {
+		name := strings.TrimSpace(m.Name)
+		if strings.TrimSpace(m.ModelPath) == "" || name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+
+		ov := ResolveOverride(GgufRow{FullPath: m.ModelPath}, overrides)
+		m = ApplyOverrideToExtraImage(m, ov)
+		lines := extraImageCmdLines(s, m)
+
+		fmt.Fprintf(b, "\n  # extra image model (safetensors, sd-server, max-vram=%gGB) — hand-declared, no gguf scan\n", extraImageBudget(s, m))
+		fmt.Fprintf(b, "  %q:\n", name)
+		b.WriteString("    cmd: >\n")
+		for _, line := range lines {
+			fmt.Fprintf(b, "      %s\n", line)
+		}
+		fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
+		b.WriteString("    checkEndpoint: /\n")
+		if m.Unlisted {
+			b.WriteString("    unlisted: true\n")
+		}
+		b.WriteString("    capabilities:\n")
+		b.WriteString("      in: [text]\n")
+		b.WriteString("      out: [image]\n")
+		*emitted = append(*emitted, name)
+	}
 }
 
 func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, name, arch string, bakedEnc bool, emitted *[]string) {

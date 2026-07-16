@@ -31,6 +31,18 @@ describe("colorMatch (luminance-only)", () => {
     expect(after).toBeCloseTo(before, 5);
   });
 
+  it("matchContrast=false shifts mean only, leaves contrast (std) alone", () => {
+    const src = rgba([[0, 0, 0], [85, 85, 85], [170, 170, 170], [255, 255, 255]]);
+    const ref = rgba([[90, 90, 90], [100, 100, 100], [100, 100, 100], [110, 110, 110]]);
+    const srcStd = lumaStats(src).std;
+    const refStats = lumaStats(ref);
+    applyLumaMatch(src, lumaStats(src), refStats, false);
+
+    const after = lumaStats(src);
+    expect(after.mean).toBeCloseTo(refStats.mean, 1); // brightness matched
+    expect(after.std).toBeCloseTo(srcStd, 1); // contrast unchanged (not ref's)
+  });
+
   it("clamps to 0..255", () => {
     const src = rgba([[0, 0, 0], [128, 128, 128], [255, 255, 255]]);
     applyLumaMatch(src, lumaStats(src), { mean: 128, std: 500 });

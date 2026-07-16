@@ -234,20 +234,28 @@ func LoadSidecarBackendList(generatePath string) ([]BackendEntry, error) {
 // hand-edited sidecar still resolves.
 func deriveBackendExes(list []BackendEntry) BackendExes {
 	var be BackendExes
+	// A ★Default entry wins over first-seen for its class (matches resolveBackend's
+	// llm contract). Track whether each slot was set by a default so a later
+	// default can't be clobbered but a first-seen fallback can be upgraded.
+	var serverDef, sdDef, ttsDef bool
+	set := func(slot *string, isDef *bool, path string, entryDef bool) {
+		p := strings.TrimSpace(path)
+		if p == "" {
+			return
+		}
+		if *slot == "" || (entryDef && !*isDef) {
+			*slot = p
+			*isDef = entryDef
+		}
+	}
 	for _, e := range list {
 		switch strings.ToLower(strings.TrimSpace(e.Kind)) {
 		case "llama", "llama.cpp", "server":
-			if be.ServerExe == "" {
-				be.ServerExe = strings.TrimSpace(e.Path)
-			}
+			set(&be.ServerExe, &serverDef, e.Path, e.Default)
 		case "sd", "sd-server", "image":
-			if be.SdServerExe == "" {
-				be.SdServerExe = strings.TrimSpace(e.Path)
-			}
+			set(&be.SdServerExe, &sdDef, e.Path, e.Default)
 		case "tts", "tts-server", "speech":
-			if be.TtsServerExe == "" {
-				be.TtsServerExe = strings.TrimSpace(e.Path)
-			}
+			set(&be.TtsServerExe, &ttsDef, e.Path, e.Default)
 		}
 	}
 	return be

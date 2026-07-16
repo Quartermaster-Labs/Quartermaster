@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -103,6 +104,7 @@ type variantDTO struct {
 	TextEncoderPath string  `json:"textEncoderPath"`
 	OffloadToCpu    string  `json:"offloadToCpu"`
 	TeOnCpu         string  `json:"teOnCpu"`
+	VaeOnCpu        string  `json:"vaeOnCpu"`
 	VaeTiling       string  `json:"vaeTiling"`
 	DiffusionFa     string  `json:"diffusionFa"`
 	DefaultSteps    int     `json:"defaultSteps"`
@@ -168,6 +170,7 @@ type overrideDTO struct {
 	TextEncoderPath string  `json:"textEncoderPath"`
 	OffloadToCpu    string  `json:"offloadToCpu"`
 	TeOnCpu         string  `json:"teOnCpu"`
+	VaeOnCpu        string  `json:"vaeOnCpu"`
 	VaeTiling       string  `json:"vaeTiling"`
 	DiffusionFa     string  `json:"diffusionFa"`
 	DefaultSteps    int     `json:"defaultSteps"`
@@ -212,7 +215,7 @@ func variantToDTO(v autogen.VariantSpec) variantDTO {
 		SpecNgramSizeN: v.SpecNgramSizeN, SpecNgramSizeM: v.SpecNgramSizeM, SpecNgramMinHits: v.SpecNgramMinHits,
 		VaePath: v.VaePath, ClipLPath: v.ClipLPath, ClipGPath: v.ClipGPath,
 		T5Path: v.T5Path, TextEncoderPath: v.TextEncoderPath,
-		OffloadToCpu: v.OffloadToCpu, TeOnCpu: v.TeOnCpu, VaeTiling: v.VaeTiling, DiffusionFa: v.DiffusionFa,
+		OffloadToCpu: v.OffloadToCpu, TeOnCpu: v.TeOnCpu, VaeOnCpu: v.VaeOnCpu, VaeTiling: v.VaeTiling, DiffusionFa: v.DiffusionFa,
 		DefaultSteps: v.DefaultSteps, DefaultCfg: v.DefaultCfg, DefaultSampler: v.DefaultSampler,
 		DefaultWidth: v.DefaultWidth, DefaultHeight: v.DefaultHeight,
 	}
@@ -236,7 +239,7 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		SpecNgramSizeN: o.SpecNgramSizeN, SpecNgramSizeM: o.SpecNgramSizeM, SpecNgramMinHits: o.SpecNgramMinHits,
 		VaePath: o.VaePath, ClipLPath: o.ClipLPath, ClipGPath: o.ClipGPath,
 		T5Path: o.T5Path, TextEncoderPath: o.TextEncoderPath,
-		OffloadToCpu: o.OffloadToCpu, TeOnCpu: o.TeOnCpu, VaeTiling: o.VaeTiling, DiffusionFa: o.DiffusionFa,
+		OffloadToCpu: o.OffloadToCpu, TeOnCpu: o.TeOnCpu, VaeOnCpu: o.VaeOnCpu, VaeTiling: o.VaeTiling, DiffusionFa: o.DiffusionFa,
 		DefaultSteps: o.DefaultSteps, DefaultCfg: o.DefaultCfg, DefaultSampler: o.DefaultSampler,
 		DefaultWidth: o.DefaultWidth, DefaultHeight: o.DefaultHeight,
 	}
@@ -260,7 +263,7 @@ func toVariantSpec(v variantDTO) autogen.VariantSpec {
 		SpecNgramSizeN: v.SpecNgramSizeN, SpecNgramSizeM: v.SpecNgramSizeM, SpecNgramMinHits: v.SpecNgramMinHits,
 		VaePath: v.VaePath, ClipLPath: v.ClipLPath, ClipGPath: v.ClipGPath,
 		T5Path: v.T5Path, TextEncoderPath: v.TextEncoderPath,
-		OffloadToCpu: v.OffloadToCpu, TeOnCpu: v.TeOnCpu, VaeTiling: v.VaeTiling, DiffusionFa: v.DiffusionFa,
+		OffloadToCpu: v.OffloadToCpu, TeOnCpu: v.TeOnCpu, VaeOnCpu: v.VaeOnCpu, VaeTiling: v.VaeTiling, DiffusionFa: v.DiffusionFa,
 		DefaultSteps: v.DefaultSteps, DefaultCfg: v.DefaultCfg, DefaultSampler: v.DefaultSampler,
 		DefaultWidth: v.DefaultWidth, DefaultHeight: v.DefaultHeight,
 	}
@@ -332,8 +335,14 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	// Diffusion models (sd-server) get the image config form, not the llama one.
-	// Detect from the rendered command — the sd-server path always carries it.
+	// Prefer the declared capability (authoritative); fall back to the rendered
+	// command. --diffusion-model catches most sd-server models, but pixel-native /
+	// full-checkpoint archs (HiDream-O1, SD/SDXL) are served with -m, which the
+	// cmd sniff misses — capabilities.out:[image] covers them.
 	isImage := strings.Contains(cmd, "--diffusion-model")
+	if mc, ok := s.config().Models[realID]; ok && slices.Contains(mc.Capabilities.Out, "image") {
+		isImage = true
+	}
 	// Qwen3-TTS talkers (tts-server) get the audio form: no KV/ctx/spec/estimate.
 	// The tts-server cmd uses --model (llama/sd emit -m/--diffusion-model), so that
 	// flag is a clean discriminator on the autogen-rendered command.
@@ -349,6 +358,15 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 		resp.Override = toOverrideDTO(*existing)
 	} else if fileOv, found, ferr := autogen.ResolveFileOverride(s.autogen.GeneratePath, gguf); ferr == nil && found {
 		resp.Override = toOverrideDTO(fileOv)
+	} else if isImage {
+		// Extra image models (safetensors) carry their base config in the settings
+		// entry, not an override — seed the form from it so an unedited model shows
+		// its real values (else the first save writes blanks and wipes the base).
+		if gf, err := autogen.LoadGenerateFile(s.autogen.GeneratePath, s.autogen.ModelsDir); err == nil {
+			if m, ok := autogen.FindExtraImageModel(gf.Settings, gguf); ok {
+				resp.Override = toOverrideDTO(autogen.ExtraImageAsOverride(m))
+			}
+		}
 	}
 	// Read trained ctx + MTP capability from the gguf header (cheap; header only).
 	// Non-fatal: a missing/unreadable gguf just leaves the slider ceiling at 0.
@@ -1093,6 +1111,7 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.TextEncoderPath = strings.TrimSpace(body.TextEncoderPath)
 	ov.OffloadToCpu = body.OffloadToCpu
 	ov.TeOnCpu = body.TeOnCpu
+	ov.VaeOnCpu = body.VaeOnCpu
 	ov.VaeTiling = body.VaeTiling
 	ov.DiffusionFa = body.DiffusionFa
 	ov.DefaultSteps = body.DefaultSteps
@@ -1124,13 +1143,20 @@ func (s *Server) handleAPIModelCmdPreview(w http.ResponseWriter, r *http.Request
 		shared.SendResponse(w, r, http.StatusInternalServerError, "loading settings failed: "+err.Error())
 		return
 	}
+	ov := autogen.Override{Match: gguf}
+	applyOverrideDTO(&ov, body)
+	// Extra image models (safetensors) have no gguf header to arch-detect from, so
+	// they render through the ExtraImageModel path directly, not the gguf sizer.
+	if m, ok := autogen.FindExtraImageModel(gf.Settings, gguf); ok {
+		cmd := autogen.RenderExtraImageCmd(gf.Settings, autogen.ApplyOverrideToExtraImage(m, &ov))
+		writeJSON(w, map[string]string{"cmd": cmd})
+		return
+	}
 	meta, err := autogen.ReadGgufMetadataCached(gguf)
 	if err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, "reading gguf metadata failed: "+err.Error())
 		return
 	}
-	ov := autogen.Override{Match: gguf}
-	applyOverrideDTO(&ov, body)
 	cmd, err := autogen.RenderSoloCmd(gf.Settings, meta, autogen.GgufRow{FullPath: gguf}, ov)
 	if err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, "rendering command failed: "+err.Error())
@@ -1249,6 +1275,9 @@ func applyVariantPatch(ov *autogen.Override, p variantDTO) {
 	}
 	if p.TeOnCpu != "" {
 		ov.TeOnCpu = p.TeOnCpu
+	}
+	if p.VaeOnCpu != "" {
+		ov.VaeOnCpu = p.VaeOnCpu
 	}
 	if p.VaeTiling != "" {
 		ov.VaeTiling = p.VaeTiling

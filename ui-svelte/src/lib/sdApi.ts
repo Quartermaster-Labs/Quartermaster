@@ -10,11 +10,21 @@ async function postSd(path: string, request: unknown, signal?: AbortSignal): Pro
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`SDAPI error: ${response.status} - ${errorText}`);
+    throw new Error(await friendlySdError(response));
   }
 
   return response.json();
+}
+
+// friendlySdError turns an upstream failure into a human message. 502/503/504
+// mean the sd-server backend is gone (crashed, evicted, or still loading) — the
+// raw gateway text is noise to a playground user, so hide it behind a hint.
+async function friendlySdError(response: Response): Promise<string> {
+  if (response.status === 502 || response.status === 503 || response.status === 504) {
+    return "Image model unavailable — it crashed, was evicted, or is still loading. Try again in a moment.";
+  }
+  const errorText = await response.text().catch(() => "");
+  return `Image generation failed (${response.status})${errorText ? `: ${errorText}` : ""}`;
 }
 
 export function generateSdImage(request: SdApiTxt2ImgRequest, signal?: AbortSignal): Promise<SdApiResponse> {

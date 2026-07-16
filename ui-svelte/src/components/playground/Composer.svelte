@@ -54,10 +54,22 @@
     ctxBar?: Snippet;
     settingsPanel?: Snippet;
   } = $props();
+
+  // Close the settings popover on any outside click, but ignore the gear toggle
+  // (its own onclick handles that) so a click on it doesn't close-then-reopen.
+  function closeOnOutside(node: HTMLElement) {
+    function onClick(e: MouseEvent) {
+      const t = e.target as Node;
+      if (!node.contains(t) && !settingsToggleEl?.contains(t)) showSettings = false;
+    }
+    document.addEventListener("click", onClick, true);
+    return { destroy: () => document.removeEventListener("click", onClick, true) };
+  }
+  let settingsToggleEl = $state<HTMLButtonElement>();
 </script>
 
 {#if showSettings}
-  <div class="absolute bottom-full right-0 mb-2 w-80 z-20 flex flex-col gap-3 p-4 rounded-lg border border-card-border bg-surface shadow-lg text-[0.8125rem]">
+  <div use:closeOnOutside class="absolute bottom-full right-0 mb-2 w-80 z-20 flex flex-col gap-3 p-4 rounded-lg border border-card-border bg-surface shadow-lg text-[0.8125rem]">
     <div class="flex items-center justify-between">
       <span class="font-medium text-txtmain">{settingsTitle}</span>
       <button
@@ -100,6 +112,7 @@
     <div class="flex-1 min-w-0 flex items-center justify-end gap-1">
       {@render extraRightButtons?.()}
       <button
+        bind:this={settingsToggleEl}
         class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors {showSettings ? 'bg-secondary text-txtmain shadow-inner' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
         onclick={() => (showSettings = !showSettings)}
         title={settingsTitle}

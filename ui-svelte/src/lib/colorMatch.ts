@@ -36,8 +36,15 @@ export function lumaStats(data: Uint8ClampedArray | number[]): LumaStats {
 // In-place: scale each pixel's luma contrast toward the reference and shift its
 // brightness, as ONE offset added to all three channels — so hue/saturation are
 // preserved. off = (L - srcMean)*(refStd/srcStd - 1) + (refMean - srcMean).
-export function applyLumaMatch(data: Uint8ClampedArray | number[], src: LumaStats, ref: LumaStats): void {
-  const scale = ref.std / src.std;
+// matchContrast=false pins scale to 1 → brightness-only (mean) match, no contrast
+// stretch: gentler and can't blow out when src std << ref std.
+export function applyLumaMatch(
+  data: Uint8ClampedArray | number[],
+  src: LumaStats,
+  ref: LumaStats,
+  matchContrast = true,
+): void {
+  const scale = matchContrast ? ref.std / src.std : 1;
   for (let i = 0; i < data.length; i += 4) {
     const l = luma(data[i], data[i + 1], data[i + 2]);
     const off = (l - src.mean) * (scale - 1) + (ref.mean - src.mean);
@@ -69,12 +76,12 @@ function toImageData(img: HTMLImageElement): ImageData {
 
 // Match srcUrl's exposure (brightness/contrast) to refUrl, keeping its colors.
 // Both data URLs; returns a PNG data URL.
-export async function matchColorToRef(srcUrl: string, refUrl: string): Promise<string> {
+export async function matchColorToRef(srcUrl: string, refUrl: string, matchContrast = true): Promise<string> {
   const [srcImg, refImg] = await Promise.all([loadImage(srcUrl), loadImage(refUrl)]);
   const srcData = toImageData(srcImg);
   const refStats = lumaStats(toImageData(refImg).data);
   const srcStats = lumaStats(srcData.data);
-  applyLumaMatch(srcData.data, srcStats, refStats);
+  applyLumaMatch(srcData.data, srcStats, refStats, matchContrast);
 
   const c = document.createElement("canvas");
   c.width = srcData.width;

@@ -95,6 +95,44 @@ type Settings struct {
 	// none of these; archComponents (image.go) maps each family to the fields it
 	// needs. A per-model Override component path still wins over the pool.
 	Encoders EncoderSet `yaml:"encoders"`
+	// ExtraImageModels are sd-server image models that autogen's gguf scan can't
+	// discover or header-parse — chiefly single-file .safetensors DiTs whose weights
+	// exceed the gguf 4-dim tensor cap (HiDream-O1's 5-D vision patch-embed can't be
+	// stored in gguf at all, only safetensors). Each entry emits a verbatim sd-server
+	// block from explicit paths; no VRAM planner or arch detection runs. Persisted
+	// here (not a runtime hack) so a regen keeps them.
+	ExtraImageModels []ExtraImageModel `yaml:"extraImageModels"`
+}
+
+// ExtraImageModel is one hand-declared sd-server image model (see
+// Settings.ExtraImageModels). Only ModelPath is required. ModelFlag defaults to
+// "-m" (all-in-one checkpoint, the sd.cpp version-detect entry). The component
+// paths are wired verbatim — nothing is arch-inferred — so a self-contained DiT
+// that still needs an external VAE (HiDream-O1 bakes its text model but no VAE)
+// just sets VaePath. Placement tri-states mirror Override ("" => on).
+type ExtraImageModel struct {
+	Name           string  `yaml:"name"`
+	ModelPath      string  `yaml:"modelPath"`
+	ModelFlag      string  `yaml:"modelFlag"` // "" => "-m"; or "--diffusion-model"
+	VaePath        string  `yaml:"vaePath"`   // --vae
+	LlmPath        string  `yaml:"llmPath"`   // --llm
+	ClipLPath      string  `yaml:"clipLPath"` // --clip_l
+	ClipGPath      string  `yaml:"clipGPath"` // --clip_g
+	T5Path         string  `yaml:"t5Path"`    // --t5xxl
+	VramTargetGB   float64 `yaml:"vramTargetGB"`
+	DefaultCfg     float64 `yaml:"defaultCfg"`
+	DefaultSteps   int     `yaml:"defaultSteps"`
+	DefaultSampler string  `yaml:"defaultSampler"` // --sampling-method
+	DefaultWidth   int     `yaml:"defaultWidth"`
+	DefaultHeight  int     `yaml:"defaultHeight"`
+	DiffusionFa    string  `yaml:"diffusionFa"`  // "" => on, "off" => off
+	VaeTiling      string  `yaml:"vaeTiling"`    // "" => on, "off" => off
+	TeOnCpu        string  `yaml:"teOnCpu"`      // "" => on (te=cpu), "off" => keep on GPU
+	VaeOnCpu       string  `yaml:"vaeOnCpu"`     // "on" => add vae=cpu to --backend; "" => GPU
+	OffloadToCpu   string  `yaml:"offloadToCpu"` // "on" => --offload-to-cpu (+ --vae-on-cpu)
+	Threads        int     `yaml:"threads"`
+	ExtraArgs      string  `yaml:"extraArgs"`
+	Unlisted       bool    `yaml:"unlisted"`
 }
 
 // EncoderSet is the pool of shared diffusion component files, each field one
@@ -313,8 +351,11 @@ type Override struct {
 	//   TeOnCpu:      "" => on  (--backend te=cpu); "off" keeps the encoder on GPU
 	//   VaeTiling:    "" => on  (--vae-tiling, caps the VAE decode VRAM spike)
 	//   DiffusionFa:  "" => on  (--diffusion-fa)
+	//   VaeOnCpu:     "" => off (VAE decodes on GPU); "on" adds vae=cpu to --backend
+	//                 (bf16 VAE whitens on some GPU backends; CPU is the safe fallback)
 	OffloadToCpu string `yaml:"offloadToCpu"`
 	TeOnCpu      string `yaml:"teOnCpu"`
+	VaeOnCpu     string `yaml:"vaeOnCpu"`
 	VaeTiling    string `yaml:"vaeTiling"`
 	DiffusionFa  string `yaml:"diffusionFa"`
 	// Generation defaults baked into the sd-server command (applied when a request
@@ -406,6 +447,7 @@ type VariantSpec struct {
 	TextEncoderPath string  `yaml:"textEncoderPath"`
 	OffloadToCpu    string  `yaml:"offloadToCpu"`
 	TeOnCpu         string  `yaml:"teOnCpu"`
+	VaeOnCpu        string  `yaml:"vaeOnCpu"`
 	VaeTiling       string  `yaml:"vaeTiling"`
 	DiffusionFa     string  `yaml:"diffusionFa"`
 	DefaultSteps    int     `yaml:"defaultSteps"`

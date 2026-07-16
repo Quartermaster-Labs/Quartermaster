@@ -3,7 +3,7 @@
 
   interface Props {
     value: string;
-    options: { value: string; label: string }[];
+    options: { value: string; label: string; disabled?: boolean }[];
     disabled?: boolean;
     compact?: boolean;
   }
@@ -43,13 +43,16 @@
 
   {#if open}
     <div
-      class="absolute left-0 right-0 top-full mt-1 z-30 max-h-64 overflow-y-auto pretty-scroll rounded-md border border-card-border bg-surface shadow-lg py-1 text-[0.8125rem]"
+      class="absolute left-0 top-full mt-1 z-30 min-w-full w-max max-w-[16rem] max-h-64 overflow-y-auto pretty-scroll rounded-md border border-card-border bg-surface shadow-lg py-1 text-[0.8125rem]"
     >
       {#each options as o (o.value)}
         <button
           type="button"
-          class="w-full text-left truncate px-2.5 py-1.5 hover:bg-secondary transition-colors {o.value === value ? 'text-primary' : 'text-txtmain'}"
-          onclick={() => select(o.value)}
+          disabled={o.disabled}
+          class="w-full text-left whitespace-nowrap px-2.5 py-1.5 transition-colors {o.disabled
+            ? 'text-txtsecondary opacity-40 cursor-not-allowed'
+            : `hover:bg-secondary ${o.value === value ? 'text-primary' : 'text-txtmain'}`}"
+          onclick={() => !o.disabled && select(o.value)}
         >
           {o.label}
         </button>

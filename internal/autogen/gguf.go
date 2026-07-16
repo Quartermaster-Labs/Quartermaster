@@ -52,6 +52,13 @@ type Metadata struct {
 	Architecture string
 	BlockCount   int64
 
+	// GeneralType is the gguf "general.type" KV ("diffusion" for an image model,
+	// absent/"model" for a normal LLM). Some diffusion GGUFs (e.g. HiDream-O1,
+	// whose transformer is Qwen-based) report a non-image general.architecture
+	// ("qwen") but mark themselves here — the authoritative diffusion signal when
+	// the arch tag doesn't self-identify. See effectiveImageArch.
+	GeneralType string
+
 	// DiffusionKind is a tensor-name-sniffed diffusion arch ("sdxl"/"sd1") for a
 	// UNet gguf that carries no general.architecture — stable-diffusion.cpp's
 	// `convert` strips the metadata KVs, so a converted SDXL UNet reports
@@ -418,6 +425,7 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 	// Optional fields tracked via pointers so absence is distinguishable from a
 	// real zero, exactly like the PowerShell $null checks.
 	var arch string
+	var genType string
 	var blockCount, expertCount, expertUsed *int64
 	var contextLength, embeddingLength, headCount, headCountKv *int64
 	var headCountKvArr []int64
@@ -452,6 +460,13 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 				return Metadata{}, err
 			}
 			arch = s
+			matched = true
+		} else if key == "general.type" && t == ggufString {
+			_, _, s, err := r.readScalar(t)
+			if err != nil {
+				return Metadata{}, err
+			}
+			genType = s
 			matched = true
 		} else if arch != "" {
 			pfx := arch + "."
@@ -768,6 +783,7 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 		Path:              path,
 		FileSizeGB:        round(float64(fi.Size())/gib, 3),
 		Architecture:      arch,
+		GeneralType:       genType,
 		BlockCount:        deref(blockCount),
 		ExpertCount:       deref(expertCount),
 		ExpertUsed:        deref(expertUsed),
