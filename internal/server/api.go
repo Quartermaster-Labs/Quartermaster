@@ -170,13 +170,23 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		if keyScoped && !keyAllowed[id] {
 			continue
 		}
-		data = append(data, newRecord(id, mc.Name, mc.Description, mc.Metadata, mc.Capabilities))
+		// A UI-set display name (mc.Name) is advertised AS the id so external
+		// clients see the renamed model; the real id stays the config key and
+		// still routes (mc.Name is also emitted as an alias -> real id).
+		publicID := id
+		if n := strings.TrimSpace(mc.Name); n != "" {
+			publicID = n
+		}
+		data = append(data, newRecord(publicID, mc.Name, mc.Description, mc.Metadata, mc.Capabilities))
 
 		if cfg.IncludeAliasesInList {
 			for _, alias := range mc.Aliases {
-				if alias := strings.TrimSpace(alias); alias != "" {
-					data = append(data, newRecord(alias, mc.Name, mc.Description, mc.Metadata, mc.Capabilities))
+				alias := strings.TrimSpace(alias)
+				// The display-name alias is already advertised as publicID above.
+				if alias == "" || alias == publicID {
+					continue
 				}
+				data = append(data, newRecord(alias, mc.Name, mc.Description, mc.Metadata, mc.Capabilities))
 			}
 		}
 	}

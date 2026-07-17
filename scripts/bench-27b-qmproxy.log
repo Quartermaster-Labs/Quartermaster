@@ -1,0 +1,112 @@
+
+=== combo: none  patch={"spec":"none","ub":1024} ===
+  loaded: -ub 1024 --spec-type none 
+[none warmup r0] pp=203.4730748991405 (n=29) tg=43.18220461347878 (n=16) cached=0
+[none pp_8k r1] pp=649.2500408260773 (n=9001) tg=1000000.0 (n=1) cached=0
+[none pp_8k r2] pp=650.7321043429879 (n=9001) tg=1000000.0 (n=1) cached=0
+[none creative r1] pp=216.71387043499703 (n=29) tg=41.1644125934802 (n=256) cached=0
+[none creative r2] pp=208.42766481956633 (n=29) tg=41.17635042747003 (n=256) cached=0
+[none reason r1] pp=327.01111837802483 (n=76) tg=40.93455180783211 (n=1024) cached=0
+[none reason r2] pp=326.5713021171274 (n=76) tg=40.89615782594108 (n=1024) cached=0
+
+=== combo: mtp-n2  patch={"spec":"draft-mtp","specDraftNMax":2,"ub":1024} ===
+  loaded: -ub 1024 --spec-type draft-mtp --spec-draft-n-max 2 
+[mtp-n2 warmup r0] pp=214.53036344402608 (n=29) tg=82.32739546993507 (n=16) cached=0
+[mtp-n2 pp_8k r1] pp=635.24707307141 (n=9001) tg=1000000.0 (n=1) cached=0
+[mtp-n2 pp_8k r2] pp=634.605135796404 (n=9001) tg=1000000.0 (n=1) cached=0
+[mtp-n2 creative r1] pp=226.12438400598842 (n=29) tg=72.06166451748382 (n=256) cached=0
+[mtp-n2 creative r2] pp=218.2617334497396 (n=29) tg=69.32362080521011 (n=256) cached=0
+[mtp-n2 reason r1] pp=335.389802384798 (n=76) tg=78.27256724618687 (n=1024) cached=0
+[mtp-n2 reason r2] pp=334.8386386165878 (n=76) tg=79.02923695882531 (n=1024) cached=0
+
+=== combo: ngram-mod  patch={"spec":"ngram-mod","ub":1024} ===
+  loaded: -ub 1024 --spec-type ngram-mod 
+[ngram-mod warmup r0] pp=219.8718677736078 (n=29) tg=43.74082467857328 (n=16) cached=0
+[ngram-mod pp_8k r1] pp=650.5256892240538 (n=9001) tg=1000000.0 (n=1) cached=0
+[ngram-mod pp_8k r2] pp=650.1535419824677 (n=9001) tg=1000000.0 (n=1) cached=0
+[ngram-mod creative r1] pp=224.8114297231718 (n=29) tg=41.116750209157374 (n=256) cached=0
+[ngram-mod creative r2] pp=216.03420789940256 (n=29) tg=49.38191587944949 (n=256) cached=0
+[ngram-mod reason r1] pp=332.7757879342505 (n=76) tg=40.90588315282414 (n=1024) cached=0
+[ngram-mod reason r2] pp=331.07534142144584 (n=76) tg=54.52155683323889 (n=1024) cached=0
+
+=== combo: ngram-map-k4v  patch={"spec":"ngram-map-k4v","ub":1024} ===
+  loaded: -ub 1024 --spec-type ngram-map-k 
+[ngram-map-k4v warmup r0] pp=219.72360286095284 (n=29) tg=43.712741717801464 (n=16) cached=0
+[ngram-map-k4v pp_8k r1] pp=637.4103281009648 (n=9001) tg=1000000.0 (n=1) cached=0
+[ngram-map-k4v pp_8k r2] pp=637.481429219058 (n=9001) tg=1000000.0 (n=1) cached=0
+[ngram-map-k4v creative r1] pp=224.96315258707628 (n=29) tg=41.10970510209981 (n=256) cached=0
+[ngram-map-k4v creative r2] pp=213.57764652163024 (n=29) tg=41.12685659241823 (n=256) cached=0
+[ngram-map-k4v reason r1] pp=332.13589602398366 (n=76) tg=40.07161705840912 (n=1024) cached=0
+[ngram-map-k4v reason r2] pp=331.078225943464 (n=76) tg=40.42254188312201 (n=1024) cached=0
+
+=== combo: mtp-n2+ngram-mod  patch={"spec":"draft-mtp+ngram-mod","specDraftNMax":2,"ub":1024} ===
+  loaded: -ub 1024 --spec-type draft-mtp --spec-type ngram-mod --spec-draft-n-max 2 
+[mtp-n2+ngram-mod warmup r0] pp=215.18780701363846 (n=29) tg=85.21925315977012 (n=16) cached=0
+[mtp-n2+ngram-mod pp_8k r1] pp=633.2894090384702 (n=9001) tg=1000000.0 (n=1) cached=0
+[mtp-n2+ngram-mod pp_8k r2] pp=633.3538892474368 (n=9001) tg=1000000.0 (n=1) cached=0
+[mtp-n2+ngram-mod creative r1] pp=224.5798807403392 (n=29) tg=72.07556221753981 (n=256) cached=0
+[mtp-n2+ngram-mod creative r2] pp=217.43042226487523 (n=29) tg=90.78413377042111 (n=256) cached=0
+[mtp-n2+ngram-mod reason r1] pp=334.3878282830505 (n=76) tg=78.84562004495893 (n=1024) cached=0
+[mtp-n2+ngram-mod reason r2] pp=334.1570010288518 (n=76) tg=107.7100970116654 (n=1024) cached=0
+
+=== combo: mtp-n2+ngram-map-k4v  patch={"spec":"draft-mtp+ngram-map-k4v","specDraftNMax":2,"ub":1024} ===
+  loaded: -ub 1024 --spec-type draft-mtp --spec-type ngram-map-k --spec-draft-n-max 2 
+[mtp-n2+ngram-map-k4v warmup r0] pp=214.3606877282202 (n=29) tg=84.85902793983495 (n=16) cached=0
+[mtp-n2+ngram-map-k4v pp_8k r1] pp=623.7333556189291 (n=9001) tg=1000000.0 (n=1) cached=0
+[mtp-n2+ngram-map-k4v pp_8k r2] pp=623.1246033214113 (n=9001) tg=1000000.0 (n=1) cached=0
+[mtp-n2+ngram-map-k4v creative r1] pp=225.14828732026956 (n=29) tg=72.14641212510638 (n=256) cached=0
+[mtp-n2+ngram-map-k4v creative r2] pp=215.80752945028615 (n=29) tg=69.31849628685727 (n=256) cached=0
+[mtp-n2+ngram-map-k4v reason r1] pp=332.82096421736713 (n=76) tg=75.39608530860892 (n=1024) cached=0
+[mtp-n2+ngram-map-k4v reason r2] pp=334.0512504944837 (n=76) tg=75.12107404355613 (n=1024) cached=0
+
+== summary (avg through qm proxy) ==
+mtp-n2           creative  pp=222.2 tok/s
+mtp-n2           creative  tg=70.7 tok/s
+mtp-n2           pp_8k     pp=634.9 tok/s
+mtp-n2           pp_8k     tg=1000000.0 tok/s
+mtp-n2           reason    pp=335.1 tok/s
+mtp-n2           reason    tg=78.7 tok/s
+mtp-n2           warmup    pp=214.5 tok/s
+mtp-n2           warmup    tg=82.3 tok/s
+mtp-n2+ngram-map-k4v creative  pp=220.5 tok/s
+mtp-n2+ngram-map-k4v creative  tg=70.7 tok/s
+mtp-n2+ngram-map-k4v pp_8k     pp=623.4 tok/s
+mtp-n2+ngram-map-k4v pp_8k     tg=1000000.0 tok/s
+mtp-n2+ngram-map-k4v reason    pp=333.4 tok/s
+mtp-n2+ngram-map-k4v reason    tg=75.3 tok/s
+mtp-n2+ngram-map-k4v warmup    pp=214.4 tok/s
+mtp-n2+ngram-map-k4v warmup    tg=84.9 tok/s
+mtp-n2+ngram-mod creative  pp=221.0 tok/s
+mtp-n2+ngram-mod creative  tg=81.4 tok/s
+mtp-n2+ngram-mod pp_8k     pp=633.3 tok/s
+mtp-n2+ngram-mod pp_8k     tg=1000000.0 tok/s
+mtp-n2+ngram-mod reason    pp=334.3 tok/s
+mtp-n2+ngram-mod reason    tg=93.3 tok/s
+mtp-n2+ngram-mod warmup    pp=215.2 tok/s
+mtp-n2+ngram-mod warmup    tg=85.2 tok/s
+ngram-map-k4v    creative  pp=219.3 tok/s
+ngram-map-k4v    creative  tg=41.1 tok/s
+ngram-map-k4v    pp_8k     pp=637.4 tok/s
+ngram-map-k4v    pp_8k     tg=1000000.0 tok/s
+ngram-map-k4v    reason    pp=331.6 tok/s
+ngram-map-k4v    reason    tg=40.2 tok/s
+ngram-map-k4v    warmup    pp=219.7 tok/s
+ngram-map-k4v    warmup    tg=43.7 tok/s
+ngram-mod        creative  pp=220.4 tok/s
+ngram-mod        creative  tg=45.2 tok/s
+ngram-mod        pp_8k     pp=650.3 tok/s
+ngram-mod        pp_8k     tg=1000000.0 tok/s
+ngram-mod        reason    pp=331.9 tok/s
+ngram-mod        reason    tg=47.7 tok/s
+ngram-mod        warmup    pp=219.9 tok/s
+ngram-mod        warmup    tg=43.7 tok/s
+none             creative  pp=212.6 tok/s
+none             creative  tg=41.2 tok/s
+none             pp_8k     pp=650.0 tok/s
+none             pp_8k     tg=1000000.0 tok/s
+none             reason    pp=326.8 tok/s
+none             reason    tg=40.9 tok/s
+none             warmup    pp=203.5 tok/s
+none             warmup    tg=43.2 tok/s
+
+results: scripts/bench-27b-qmproxy.csv (adhoc-load reverted on exit)

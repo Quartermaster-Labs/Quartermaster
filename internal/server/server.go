@@ -621,9 +621,13 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/models/{model}/override", apiChain.ThenFunc(s.handleAPIModelOverridePut))
 	mux.Handle("DELETE /api/models/{model}/override", apiChain.ThenFunc(s.handleAPIModelOverrideDelete))
 	mux.Handle("PUT /api/models/{model}/variant", apiChain.ThenFunc(s.handleAPIModelVariantPost))
+	mux.Handle("PUT /api/models/{model}/display-name", apiChain.ThenFunc(s.handleAPIModelDisplayNamePut))
+	mux.Handle("DELETE /api/models/{model}/display-name", apiChain.ThenFunc(s.handleAPIModelDisplayNameDelete))
 	mux.Handle("GET /api/models/{model}/estimate", apiChain.ThenFunc(s.handleAPIModelEstimate))
 	mux.Handle("PUT /api/models/{model}/preview", apiChain.ThenFunc(s.handleAPIModelCmdPreview))
 	mux.Handle("PUT /api/models/{model}/adhoc-cmd", apiChain.ThenFunc(s.handleAPIModelAdhocCmd))
+	mux.Handle("PUT /api/models/{model}/adhoc-load", apiChain.ThenFunc(s.handleAPIModelAdhocLoad))
+	mux.Handle("DELETE /api/models/{model}/adhoc-load", apiChain.ThenFunc(s.handleAPIModelAdhocUnload))
 
 	// Global settings editor (dashboard GPU-memory card): read effective
 	// settings + defaults, save a manual VRAM target/headroom patch, reset it.

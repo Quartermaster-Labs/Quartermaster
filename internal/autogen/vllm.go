@@ -136,6 +136,7 @@ func emitVllmModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, na
 	if ov != nil && ov.Unlisted {
 		b.WriteString("    unlisted: true\n")
 	}
+	writeDisplayName(b, s, name)
 	*emitted = append(*emitted, name)
 }
 

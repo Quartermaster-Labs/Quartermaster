@@ -678,5 +678,6 @@ func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, n
 	b.WriteString("    capabilities:\n")
 	b.WriteString("      in: [text]\n")
 	b.WriteString("      out: [image]\n")
+	writeDisplayName(b, s, name)
 	*emitted = append(*emitted, name)
 }

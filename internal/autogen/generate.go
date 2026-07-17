@@ -630,6 +630,76 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			if v.SpecNgramMinHits != 0 {
 				effOv.SpecNgramMinHits = v.SpecNgramMinHits
 			}
+			// Advanced knobs: variant's own non-zero/non-empty value wins.
+			if v.ThreadsBatch != 0 {
+				effOv.ThreadsBatch = v.ThreadsBatch
+			}
+			if v.Prio != 0 {
+				effOv.Prio = v.Prio
+			}
+			if v.DirectIo {
+				effOv.DirectIo = true
+			}
+			if v.NoOpOffload {
+				effOv.NoOpOffload = true
+			}
+			if v.NoRepack {
+				effOv.NoRepack = true
+			}
+			if v.KvKDraft != "" {
+				effOv.KvKDraft = v.KvKDraft
+			}
+			if v.KvVDraft != "" {
+				effOv.KvVDraft = v.KvVDraft
+			}
+			if v.CacheReuse != 0 {
+				effOv.CacheReuse = v.CacheReuse
+			}
+			if v.CacheRamMB != 0 {
+				effOv.CacheRamMB = v.CacheRamMB
+			}
+			if v.CacheIdleSlots != "" {
+				effOv.CacheIdleSlots = v.CacheIdleSlots
+			}
+			if v.SwaFull {
+				effOv.SwaFull = true
+			}
+			if v.CheckpointMinStep != 0 {
+				effOv.CheckpointMinStep = v.CheckpointMinStep
+			}
+			if v.ContextShift != "" {
+				effOv.ContextShift = v.ContextShift
+			}
+			if v.SpecDraftNMin != 0 {
+				effOv.SpecDraftNMin = v.SpecDraftNMin
+			}
+			if v.SlotPromptSimilarity != 0 {
+				effOv.SlotPromptSimilarity = v.SlotPromptSimilarity
+			}
+			if v.RopeScaling != "" {
+				effOv.RopeScaling = v.RopeScaling
+			}
+			if v.RopeScale != 0 {
+				effOv.RopeScale = v.RopeScale
+			}
+			if v.RopeFreqBase != 0 {
+				effOv.RopeFreqBase = v.RopeFreqBase
+			}
+			if v.YarnOrigCtx != 0 {
+				effOv.YarnOrigCtx = v.YarnOrigCtx
+			}
+			if v.SplitMode != "" {
+				effOv.SplitMode = v.SplitMode
+			}
+			if v.TensorSplit != "" {
+				effOv.TensorSplit = v.TensorSplit
+			}
+			if v.MainGpu != 0 {
+				effOv.MainGpu = v.MainGpu
+			}
+			if v.OverrideTensor != "" {
+				effOv.OverrideTensor = v.OverrideTensor
+			}
 		}
 		emitProfile(b, s, meta, row, prof, ctx, ngl, ncpuMoe, plan, ekvK, ekvV, pkvInRam, &effOv)
 		*emitted = append(*emitted, prof.Name)
@@ -751,11 +821,13 @@ const llamaDefaultCtxCheckpoints = 32
 // defaultCtxCheckpoints picks a sane checkpoint count for a model that doesn't
 // set ctxCheckpoints itself.
 //
-// recurrent (FullAttnInterval>0: GatedDeltaNet/SSM hybrids) => 0: their recurrent
-// state can only be restored at its exact saved length, so a checkpoint restore
-// lands it at the wrong position and llama-server spams "non-consecutive token
-// position" + reprocesses the whole prompt (0 reuse, upstream llama.cpp #21831).
-// Checkpoints cost VRAM and buy nothing on this arch, so disable them.
+// recurrent (FullAttnInterval>0: GatedDeltaNet/SSM hybrids) => 2. Checkpoint
+// restore on these archs USED to land at the wrong position and spam
+// "non-consecutive token position" + reprocess the whole prompt (upstream
+// llama.cpp #21831), so we disabled them. That's now fixed upstream — measured on
+// qwen3.6-27b: after clobbering the slot, returning to a prior 3524-token prompt
+// restored 3520 tokens from a checkpoint (4 reprocessed), zero spam. Their KV is
+// cheap (only the ~1/4 full-attn layers carry it), so a couple is nearly free.
 //
 // Otherwise kvConstGB > 0 means SWA: the KV window rolls, so prefix-cache reuse
 // breaks on a context shift and checkpoints (which DO restore on SWA) are the
@@ -764,7 +836,7 @@ const llamaDefaultCtxCheckpoints = 32
 // a couple for the occasional edit/branch.
 func defaultCtxCheckpoints(kvConstGB float64, recurrent bool) int {
 	if recurrent {
-		return 0
+		return 2
 	}
 	if kvConstGB > 0 {
 		return 6
@@ -1075,16 +1147,18 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		cpuMoeFlag = fmt.Sprintf(" --n-cpu-moe %d", ncpuMoe)
 	}
 
-	// mmap default is placement-dependent:
-	//   - fully GPU-offloaded (all layers on GPU, no --n-cpu-moe): weights get
-	//     copied straight into VRAM, so mmap only leaves a redundant file-backed
-	//     copy in host page cache. Default --no-mmap to skip that waste.
-	//   - partial/CPU offload: mmap on (lazy demand-paging → snappy load, OS
-	//     caches the on-CPU tensors naturally).
-	// Explicit Mmap:"on"/"off" always wins over the placement default.
-	fullyOffloaded := ncpuMoe == 0 && meta.BlockCount > 0 && int64(ngl) > meta.BlockCount
+	// mmap only helps when some weights live on the CPU: mmap gives lazy
+	// demand-paging + natural OS page-caching of the on-CPU tensors. With NO CPU
+	// offload the weights are copied straight into VRAM, so mmap only leaves a
+	// redundant file-backed copy in host page cache — waste. So default to
+	// --no-mmap and only keep mmap when CPU offload is actually happening:
+	//   - --n-cpu-moe > 0 (experts on CPU), or
+	//   - partial layer offload (ngl <= blocks => some layers on CPU).
+	// Unknown block count (parse miss) assumes GPU-resident => --no-mmap.
+	// Explicit Mmap:"on"/"off" always wins over this default.
+	cpuOffload := ncpuMoe > 0 || (meta.BlockCount > 0 && int64(ngl) <= meta.BlockCount)
 	noMmapFlag := ""
-	if fullyOffloaded {
+	if !cpuOffload {
 		noMmapFlag = "--no-mmap "
 	}
 	if ov != nil && ov.Mmap == "off" {
@@ -1208,6 +1282,15 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		if row.DraftPath != "" && mdMatches {
 			lines = append(lines, fmt.Sprintf("-md %s", strings.ReplaceAll(row.DraftPath, "\\", "/")))
 			lines = append(lines, "-ngld 99")
+			// Draft KV quant (-ctkd/-ctvd). "" => llama's f16 default; a matched
+			// quant here shrinks the resident draft's KV VRAM (fa is global, so the
+			// same flash-attn that gates main quant KV covers the draft too).
+			if ov != nil && ov.KvKDraft != "" {
+				lines = append(lines, fmt.Sprintf("-ctkd %s", ov.KvKDraft))
+			}
+			if ov != nil && ov.KvVDraft != "" {
+				lines = append(lines, fmt.Sprintf("-ctvd %s", ov.KvVDraft))
+			}
 		}
 	}
 	if specHas(spec, "ngram-map-k4v") && ov != nil {
@@ -1270,6 +1353,79 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	}
 	if needsQwenFixedChatTemplate(meta.Architecture) {
 		lines = append(lines, fmt.Sprintf("--chat-template-file %s", qwenFixedChatTemplateFile))
+	}
+	// Advanced / power-user knobs. Each is gated on a set override field (zero/
+	// empty => omit), so a model with none of them set emits exactly as before.
+	if ov != nil {
+		if ov.ThreadsBatch > 0 {
+			lines = append(lines, fmt.Sprintf("-tb %d", ov.ThreadsBatch))
+		}
+		if ov.Prio > 0 {
+			lines = append(lines, fmt.Sprintf("--prio %d", ov.Prio))
+		}
+		if ov.DirectIo {
+			lines = append(lines, "-dio")
+		}
+		if ov.NoOpOffload {
+			lines = append(lines, "--no-op-offload")
+		}
+		if ov.NoRepack {
+			lines = append(lines, "--no-repack")
+		}
+		if ov.CacheReuse > 0 {
+			lines = append(lines, fmt.Sprintf("--cache-reuse %d", ov.CacheReuse))
+		}
+		if ov.CacheRamMB > 0 {
+			lines = append(lines, fmt.Sprintf("-cram %d", ov.CacheRamMB))
+		}
+		switch ov.CacheIdleSlots {
+		case "on":
+			lines = append(lines, "--cache-idle-slots")
+		case "off":
+			lines = append(lines, "--no-cache-idle-slots")
+		}
+		if ov.SwaFull {
+			lines = append(lines, "--swa-full")
+		}
+		if ov.CheckpointMinStep > 0 {
+			lines = append(lines, fmt.Sprintf("-cms %d", ov.CheckpointMinStep))
+		}
+		switch ov.ContextShift {
+		case "on":
+			lines = append(lines, "--context-shift")
+		case "off":
+			lines = append(lines, "--no-context-shift")
+		}
+		if ov.SpecDraftNMin > 0 {
+			lines = append(lines, fmt.Sprintf("--spec-draft-n-min %d", ov.SpecDraftNMin))
+		}
+		if ov.SlotPromptSimilarity > 0 {
+			lines = append(lines, fmt.Sprintf("-sps %g", ov.SlotPromptSimilarity))
+		}
+		if ov.RopeScaling != "" {
+			lines = append(lines, fmt.Sprintf("--rope-scaling %s", ov.RopeScaling))
+		}
+		if ov.RopeScale > 0 {
+			lines = append(lines, fmt.Sprintf("--rope-scale %g", ov.RopeScale))
+		}
+		if ov.RopeFreqBase > 0 {
+			lines = append(lines, fmt.Sprintf("--rope-freq-base %g", ov.RopeFreqBase))
+		}
+		if ov.YarnOrigCtx > 0 {
+			lines = append(lines, fmt.Sprintf("--yarn-orig-ctx %d", ov.YarnOrigCtx))
+		}
+		if ov.SplitMode != "" {
+			lines = append(lines, fmt.Sprintf("-sm %s", ov.SplitMode))
+		}
+		if ov.TensorSplit != "" {
+			lines = append(lines, fmt.Sprintf("-ts %s", ov.TensorSplit))
+		}
+		if ov.MainGpu > 0 {
+			lines = append(lines, fmt.Sprintf("-mg %d", ov.MainGpu))
+		}
+		if ov.OverrideTensor != "" {
+			lines = append(lines, fmt.Sprintf("-ot %s", ov.OverrideTensor))
+		}
 	}
 	if ov != nil {
 		if extra := strings.TrimSpace(ov.ExtraArgs); extra != "" {
@@ -1351,6 +1507,42 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 }
 
 // emitProfile writes one model entry's YAML block.
+// resolvePublicName returns the advertised name for a served id when its base
+// model was renamed via settings.displayNames: the display name plus the served
+// id's variant suffix. The map is keyed by BASE id; the longest matching base
+// prefix wins so a renamed "foo" doesn't shadow a separately-renamed "foo-bar".
+// "" => not renamed (advertise the real id unchanged).
+func resolvePublicName(dn map[string]string, id string) string {
+	best, bestName := "", ""
+	for base, name := range dn {
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		if id == base || strings.HasPrefix(id, base+"-") {
+			if len(base) > len(best) {
+				best, bestName = base, name
+			}
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	return bestName + id[len(best):]
+}
+
+// writeDisplayName emits the config name: + a routable alias for a renamed served
+// id (both = the advertised public name). The real served id stays the config
+// key, so it still resolves; the alias makes the public name resolve too. No-op
+// when the model wasn't renamed. Indent matches the 4-space model-field block.
+func writeDisplayName(b *strings.Builder, s Settings, id string) {
+	pub := resolvePublicName(s.DisplayNames, id)
+	if pub == "" || pub == id {
+		return
+	}
+	fmt.Fprintf(b, "    name: %q\n", pub)
+	fmt.Fprintf(b, "    aliases: [%q]\n", pub)
+}
+
 func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, prof profile, ctx, ngl, ncpuMoe int, plan LoadPlan, kvK, kvV string, kvInRam bool, ov *Override) {
 	fmt.Fprintf(b, "\n  # arch=%s size=%gGB blocks=%d moe=%v\n", meta.Architecture, meta.FileSizeGB, meta.BlockCount, meta.IsMoE)
 	fmt.Fprintf(b, "  # est vram=%gGB ram=%gGB\n", plan.EstVramGB, plan.EstRamGB)
@@ -1360,6 +1552,7 @@ func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, pro
 		fmt.Fprintf(b, "      %s\n", line)
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
+	writeDisplayName(b, s, prof.Name)
 	if prof.Unlisted {
 		b.WriteString("    unlisted: true\n")
 	}
@@ -1382,8 +1575,9 @@ func specHas(spec, b string) bool {
 
 // formatCtxTag renders a short ctx tag: 8192->"8k", 131072->"128k", 1048576->"1m".
 // effectiveSpec resolves the spec-type: MTP-capable models (baked-in nextn
-// layer or a paired mtp-*.gguf sidecar) default to draft-mtp, everything else
-// to ngram-mod. A paired DFlash drafter is never auto-selected — see below.
+// layer or a paired mtp-*.gguf sidecar) default to draft-mtp+ngram-mod (the
+// chain beats mtp alone), everything else to ngram-mod. A paired DFlash drafter
+// is never auto-selected — see below.
 // An explicit override spec wins (set spec: "ngram-mod" to force ngram on a
 // drafted model, or spec: "draft-dflash" to opt into DFlash).
 //
@@ -1403,7 +1597,12 @@ func effectiveSpec(meta Metadata, ov *Override, draftKind string) string {
 	}
 	switch {
 	case meta.IsMTP || draftKind == "mtp":
-		return "draft-mtp"
+		// draft-mtp CHAINED with model-less ngram-mod: benched better than mtp
+		// alone. The MTP head drafts short high-confidence continuations; ngram-mod
+		// fills the gaps mtp misses (verbatim repeats — code, quoted context, tool
+		// echoes) at zero extra VRAM (no draft weights/KV). llama-server verifies
+		// both proposals each step, so the union lifts accept rate over either solo.
+		return "draft-mtp+ngram-mod"
 	}
 	return "ngram-mod"
 }

@@ -98,12 +98,13 @@ func TestBuildCmdLines_specKnobs(t *testing.T) {
 // draft).
 func TestBuildCmdLines_dflashNotAutoDefault(t *testing.T) {
 	meta := Metadata{IsMTP: true}
-	// Baked MTP head always wins the auto-default, dflash sidecar or not.
-	if got := effectiveSpec(meta, nil, "dflash"); got != "draft-mtp" {
-		t.Fatalf("effectiveSpec = %q, want draft-mtp (dflash never auto-defaults)", got)
+	// Baked MTP head always wins the auto-default (chained with ngram-mod),
+	// dflash sidecar or not.
+	if got := effectiveSpec(meta, nil, "dflash"); got != "draft-mtp+ngram-mod" {
+		t.Fatalf("effectiveSpec = %q, want draft-mtp+ngram-mod (dflash never auto-defaults)", got)
 	}
-	if got := effectiveSpec(meta, nil, ""); got != "draft-mtp" {
-		t.Fatalf("effectiveSpec = %q, want draft-mtp (baked, no sidecar)", got)
+	if got := effectiveSpec(meta, nil, ""); got != "draft-mtp+ngram-mod" {
+		t.Fatalf("effectiveSpec = %q, want draft-mtp+ngram-mod (baked, no sidecar)", got)
 	}
 	// No baked MTP, dflash sidecar present but not auto-selected → model-less ngram.
 	if got := effectiveSpec(Metadata{}, nil, "dflash"); got != "ngram-mod" {

@@ -109,5 +109,6 @@ func emitTTSModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, nam
 	b.WriteString("    capabilities:\n")
 	b.WriteString("      in: [text]\n")
 	b.WriteString("      out: [audio]\n")
+	writeDisplayName(b, s, name)
 	*emitted = append(*emitted, name)
 }

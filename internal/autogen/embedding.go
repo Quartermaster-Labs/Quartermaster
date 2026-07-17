@@ -112,5 +112,6 @@ func emitEmbeddingModel(b *strings.Builder, s Settings, row GgufRow, ov *Overrid
 	}
 	b.WriteString("    capabilities:\n")
 	b.WriteString("      embedding: true\n")
+	writeDisplayName(b, s, name)
 	*emitted = append(*emitted, name)
 }

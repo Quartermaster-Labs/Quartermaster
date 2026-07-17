@@ -31,7 +31,9 @@ const hashCacheSuffix = ".modelhash"
 //	v14: settings.extraImageModels emit (hand-declared safetensors sd-server blocks).
 //	v17: extraImageModels are override-aware (sidecar/file override overlaid) + emit
 //	     --clip_g / --sampling-method so the config editor can tune them.
-const genVersion = "v17"
+//	v19: MTP models default spec draft-mtp+ngram-mod (chain beats mtp alone); mmap
+//	     defaults --no-mmap unless CPU offload (n-cpu-moe or partial layer offload).
+const genVersion = "v19"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

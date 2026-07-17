@@ -306,6 +306,30 @@ export interface ModelVariant {
   specNgramSizeN?: number;
   specNgramSizeM?: number;
   specNgramMinHits?: number;
+  // Advanced / power-user llama-server knobs; 0/""/false => inherit / omit.
+  threadsBatch?: number;
+  prio?: number;
+  directIo?: boolean;
+  noOpOffload?: boolean;
+  noRepack?: boolean;
+  kvKDraft?: string;
+  kvVDraft?: string;
+  cacheReuse?: number;
+  cacheRamMB?: number;
+  cacheIdleSlots?: string;
+  swaFull?: boolean;
+  checkpointMinStep?: number;
+  contextShift?: string;
+  specDraftNMin?: number;
+  slotPromptSimilarity?: number;
+  ropeScaling?: string;
+  ropeScale?: number;
+  ropeFreqBase?: number;
+  yarnOrigCtx?: number;
+  splitMode?: string;
+  tensorSplit?: string;
+  mainGpu?: number;
+  overrideTensor?: string;
   // Image (sd-server) knobs; empty/0 => inherit the model-wide override.
   vaePath?: string;
   clipLPath?: string;
@@ -364,6 +388,30 @@ export interface ModelOverride {
   specNgramSizeN?: number;
   specNgramSizeM?: number;
   specNgramMinHits?: number;
+  // Advanced / power-user llama-server knobs; 0/""/false => inherit / omit.
+  threadsBatch?: number;
+  prio?: number;
+  directIo?: boolean;
+  noOpOffload?: boolean;
+  noRepack?: boolean;
+  kvKDraft?: string;
+  kvVDraft?: string;
+  cacheReuse?: number;
+  cacheRamMB?: number;
+  cacheIdleSlots?: string;
+  swaFull?: boolean;
+  checkpointMinStep?: number;
+  contextShift?: string;
+  specDraftNMin?: number;
+  slotPromptSimilarity?: number;
+  ropeScaling?: string;
+  ropeScale?: number;
+  ropeFreqBase?: number;
+  yarnOrigCtx?: number;
+  splitMode?: string;
+  tensorSplit?: string;
+  mainGpu?: number;
+  overrideTensor?: string;
   // Image (sd-server) knobs; ignored for llama models. Component paths empty => omit.
   vaePath?: string;
   clipLPath?: string;
@@ -395,6 +443,8 @@ export interface ModelConfig {
   isImage: boolean; // diffusion model => image config form
   isAudio: boolean; // Qwen3-TTS talker (tts-server) => audio config form
   hasOverride: boolean;
+  /** UI-set advertised name (cascades to variants); "" => unrenamed, shows id. */
+  displayName?: string;
   override: ModelOverride | null;
   /** Fleet-wide variants (e.g. game), shared by every model; saved globally. */
   defaultVariants?: ModelVariant[];
@@ -427,6 +477,26 @@ export async function resetModelOverride(model: string): Promise<void> {
   });
   if (!response.ok) {
     throw new Error(`Failed to reset override: ${response.status} ${await response.text()}`);
+  }
+}
+
+export async function putModelDisplayName(model: string, name: string): Promise<void> {
+  const response = await fetch(`/api/models/${encodeURIComponent(model)}/display-name`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to rename model: ${response.status} ${await response.text()}`);
+  }
+}
+
+export async function deleteModelDisplayName(model: string): Promise<void> {
+  const response = await fetch(`/api/models/${encodeURIComponent(model)}/display-name`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to reset model name: ${response.status} ${await response.text()}`);
   }
 }
 

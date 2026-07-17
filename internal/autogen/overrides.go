@@ -72,12 +72,19 @@ type Settings struct {
 	// in addition to any per-override variants (use-case agnostic). Lets a config
 	// apply a fleet-wide spawn shape (e.g. a low-VRAM coexistence variant) without
 	// repeating it on each row. Same VariantSpec semantics as Override.Variants.
-	DefaultVariants    []VariantSpec `yaml:"defaultVariants"`
-	DenseCtxLadder     []int         `yaml:"denseCtxLadder"`
-	DenseMinCtx        int           `yaml:"denseMinCtx"`
-	Threads            int           `yaml:"threads"`
-	TtlSec             int           `yaml:"ttlSec"`
-	HealthCheckTimeout int           `yaml:"healthCheckTimeout"`
+	DefaultVariants []VariantSpec `yaml:"defaultVariants"`
+	// DisplayNames renames a model's advertised id WITHOUT touching the real
+	// served id (the config key that keys cmd/gguf/slotcache/groups). Keyed by
+	// BASE served id (row.ID); the new name cascades to every derived variant id
+	// via a prefix swap (see resolvePublicName), so "foo"->"bar" also renames
+	// "foo-mtp" to "bar-mtp". Each renamed id emits config name: + a routable
+	// alias; the real id still resolves. UI-owned (sidecar), regen-safe.
+	DisplayNames       map[string]string `yaml:"displayNames"`
+	DenseCtxLadder     []int             `yaml:"denseCtxLadder"`
+	DenseMinCtx        int               `yaml:"denseMinCtx"`
+	Threads            int               `yaml:"threads"`
+	TtlSec             int               `yaml:"ttlSec"`
+	HealthCheckTimeout int               `yaml:"healthCheckTimeout"`
 	// DryDefault is the fleet-wide DRY-sampler default. nil => off; set true to
 	// make DRY on by default (a model still flips it via Override.Dry).
 	DryDefault *bool `yaml:"dryDefault"`
@@ -330,6 +337,56 @@ type Override struct {
 	SpecNgramSizeN   int  `yaml:"specNgramSizeN"`
 	SpecNgramSizeM   int  `yaml:"specNgramSizeM"`
 	SpecNgramMinHits int  `yaml:"specNgramMinHits"`
+	// --- Advanced / power-user llama-server knobs ---
+	// All default zero/empty => the flag is omitted, so existing configs emit
+	// unchanged. Variants inherit these from the model-wide override and can
+	// override each (see the effOv merge in generate.go). Grouped under the UI's
+	// "Advanced" collapsible.
+	//   ThreadsBatch: 0 => same as -t           (-tb, prompt/batch threads)
+	//   Prio:         0 => normal                (--prio 0..3)
+	//   DirectIo:     -dio (faster cold load)
+	//   NoOpOffload:  --no-op-offload
+	//   NoRepack:     --no-repack
+	//   KvKDraft/KvVDraft: "" => llama f16       (-ctkd/-ctvd, draft KV quant; draft models only)
+	//   CacheReuse:   0 => off                   (--cache-reuse N, prefix KV-shift reuse)
+	//   CacheRamMB:   0 => llama default (8192)  (-cram, prompt-cache size MiB)
+	//   CacheIdleSlots: "" | "on" | "off"        (--cache-idle-slots / --no-)
+	//   SwaFull:      --swa-full (full SWA cache)
+	//   CheckpointMinStep: 0 => llama default    (-cms, ctx-checkpoint spacing)
+	//   ContextShift: "" | "on" | "off"          (--context-shift / --no-)
+	//   SpecDraftNMin: 0 => llama default        (--spec-draft-n-min)
+	//   SlotPromptSimilarity: 0 => omit          (-sps, slot reuse threshold)
+	//   RopeScaling:  "" | none | linear | yarn  (--rope-scaling)
+	//   RopeScale:    0 => omit                  (--rope-scale)
+	//   RopeFreqBase: 0 => omit                  (--rope-freq-base)
+	//   YarnOrigCtx:  0 => omit                  (--yarn-orig-ctx)
+	//   SplitMode:    "" | none|layer|row|tensor (-sm, multi-GPU)
+	//   TensorSplit:  "" => omit                 (-ts, e.g. "3,1")
+	//   MainGpu:      0 => GPU 0                  (-mg)
+	//   OverrideTensor: "" => omit               (-ot, manual tensor placement)
+	ThreadsBatch         int     `yaml:"threadsBatch"`
+	Prio                 int     `yaml:"prio"`
+	DirectIo             bool    `yaml:"directIo"`
+	NoOpOffload          bool    `yaml:"noOpOffload"`
+	NoRepack             bool    `yaml:"noRepack"`
+	KvKDraft             string  `yaml:"kvKDraft"`
+	KvVDraft             string  `yaml:"kvVDraft"`
+	CacheReuse           int     `yaml:"cacheReuse"`
+	CacheRamMB           int     `yaml:"cacheRamMB"`
+	CacheIdleSlots       string  `yaml:"cacheIdleSlots"`
+	SwaFull              bool    `yaml:"swaFull"`
+	CheckpointMinStep    int     `yaml:"checkpointMinStep"`
+	ContextShift         string  `yaml:"contextShift"`
+	SpecDraftNMin        int     `yaml:"specDraftNMin"`
+	SlotPromptSimilarity float64 `yaml:"slotPromptSimilarity"`
+	RopeScaling          string  `yaml:"ropeScaling"`
+	RopeScale            float64 `yaml:"ropeScale"`
+	RopeFreqBase         float64 `yaml:"ropeFreqBase"`
+	YarnOrigCtx          int     `yaml:"yarnOrigCtx"`
+	SplitMode            string  `yaml:"splitMode"`
+	TensorSplit          string  `yaml:"tensorSplit"`
+	MainGpu              int     `yaml:"mainGpu"`
+	OverrideTensor       string  `yaml:"overrideTensor"`
 	// ExtraArgs are additional llama-server flags appended verbatim to the emitted
 	// command, for knobs autogen doesn't model (e.g. --rope-freq-scale,
 	// --override-kv). The structured fields above still own the computed flags;
@@ -435,6 +492,31 @@ type VariantSpec struct {
 	SpecNgramSizeN   int     `yaml:"specNgramSizeN"`
 	SpecNgramSizeM   int     `yaml:"specNgramSizeM"`
 	SpecNgramMinHits int     `yaml:"specNgramMinHits"`
+	// Advanced / power-user knobs mirroring Override; zero/empty => inherit the
+	// model-wide value (a variant's own non-zero/non-empty value wins at merge).
+	ThreadsBatch         int     `yaml:"threadsBatch"`
+	Prio                 int     `yaml:"prio"`
+	DirectIo             bool    `yaml:"directIo"`
+	NoOpOffload          bool    `yaml:"noOpOffload"`
+	NoRepack             bool    `yaml:"noRepack"`
+	KvKDraft             string  `yaml:"kvKDraft"`
+	KvVDraft             string  `yaml:"kvVDraft"`
+	CacheReuse           int     `yaml:"cacheReuse"`
+	CacheRamMB           int     `yaml:"cacheRamMB"`
+	CacheIdleSlots       string  `yaml:"cacheIdleSlots"`
+	SwaFull              bool    `yaml:"swaFull"`
+	CheckpointMinStep    int     `yaml:"checkpointMinStep"`
+	ContextShift         string  `yaml:"contextShift"`
+	SpecDraftNMin        int     `yaml:"specDraftNMin"`
+	SlotPromptSimilarity float64 `yaml:"slotPromptSimilarity"`
+	RopeScaling          string  `yaml:"ropeScaling"`
+	RopeScale            float64 `yaml:"ropeScale"`
+	RopeFreqBase         float64 `yaml:"ropeFreqBase"`
+	YarnOrigCtx          int     `yaml:"yarnOrigCtx"`
+	SplitMode            string  `yaml:"splitMode"`
+	TensorSplit          string  `yaml:"tensorSplit"`
+	MainGpu              int     `yaml:"mainGpu"`
+	OverrideTensor       string  `yaml:"overrideTensor"`
 	// Image (sd-server) knobs. Unlike the llama knobs above, an image variant
 	// INHERITS the model-wide Override for anything it leaves empty (component
 	// paths + placement) and overrides only what it sets — the natural use is a
@@ -581,6 +663,19 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 	}
 	if sideDV != nil {
 		gf.Settings.DefaultVariants = sideDV
+	}
+	// UI-owned display-name renames overlay the file's (per-key, like categoryRoots).
+	sideDN, err := LoadSidecarDisplayNames(path)
+	if err != nil {
+		return GenerateFile{}, err
+	}
+	if len(sideDN) > 0 {
+		if gf.Settings.DisplayNames == nil {
+			gf.Settings.DisplayNames = map[string]string{}
+		}
+		for k, v := range sideDN {
+			gf.Settings.DisplayNames[k] = v
+		}
 	}
 	// UI-owned per-category scan folders overlay the file's (the folder picker
 	// writes these). Stored at the sidecar top level so a VRAM reset can't wipe them.

@@ -5,11 +5,12 @@ import (
 	"testing"
 )
 
-// Recurrent/hybrid models (FullAttnInterval>0) disable checkpoints (broken
-// restore upstream); SWA (kvConst>0, non-recurrent) keeps 6; plain attention 3.
+// Recurrent/hybrid models (FullAttnInterval>0) get 2 (upstream #21831 restore
+// fixed, verified on qwen3.6-27b); SWA (kvConst>0, non-recurrent) keeps 6; plain
+// attention 3.
 func TestDefaultCtxCheckpoints_Recurrent(t *testing.T) {
-	if n := defaultCtxCheckpoints(0.05, true); n != 0 {
-		t.Errorf("recurrent must disable checkpoints, got %d", n)
+	if n := defaultCtxCheckpoints(0.05, true); n != 2 {
+		t.Errorf("recurrent checkpoints = %d, want 2", n)
 	}
 	if n := defaultCtxCheckpoints(0.05, false); n != 6 {
 		t.Errorf("SWA default got %d want 6", n)

@@ -96,6 +96,30 @@ type variantDTO struct {
 	SpecNgramSizeN   int     `json:"specNgramSizeN"`
 	SpecNgramSizeM   int     `json:"specNgramSizeM"`
 	SpecNgramMinHits int     `json:"specNgramMinHits"`
+	// Advanced / power-user knobs; zero/empty => inherit the model-wide value.
+	ThreadsBatch         int     `json:"threadsBatch"`
+	Prio                 int     `json:"prio"`
+	DirectIo             bool    `json:"directIo"`
+	NoOpOffload          bool    `json:"noOpOffload"`
+	NoRepack             bool    `json:"noRepack"`
+	KvKDraft             string  `json:"kvKDraft"`
+	KvVDraft             string  `json:"kvVDraft"`
+	CacheReuse           int     `json:"cacheReuse"`
+	CacheRamMB           int     `json:"cacheRamMB"`
+	CacheIdleSlots       string  `json:"cacheIdleSlots"`
+	SwaFull              bool    `json:"swaFull"`
+	CheckpointMinStep    int     `json:"checkpointMinStep"`
+	ContextShift         string  `json:"contextShift"`
+	SpecDraftNMin        int     `json:"specDraftNMin"`
+	SlotPromptSimilarity float64 `json:"slotPromptSimilarity"`
+	RopeScaling          string  `json:"ropeScaling"`
+	RopeScale            float64 `json:"ropeScale"`
+	RopeFreqBase         float64 `json:"ropeFreqBase"`
+	YarnOrigCtx          int     `json:"yarnOrigCtx"`
+	SplitMode            string  `json:"splitMode"`
+	TensorSplit          string  `json:"tensorSplit"`
+	MainGpu              int     `json:"mainGpu"`
+	OverrideTensor       string  `json:"overrideTensor"`
 	// Image (sd-server) knobs; empty => inherit the model-wide override.
 	VaePath         string  `json:"vaePath"`
 	ClipLPath       string  `json:"clipLPath"`
@@ -162,6 +186,30 @@ type overrideDTO struct {
 	SpecNgramSizeN   int  `json:"specNgramSizeN"`
 	SpecNgramSizeM   int  `json:"specNgramSizeM"`
 	SpecNgramMinHits int  `json:"specNgramMinHits"`
+	// Advanced / power-user knobs; zero/empty => omit the flag.
+	ThreadsBatch         int     `json:"threadsBatch"`
+	Prio                 int     `json:"prio"`
+	DirectIo             bool    `json:"directIo"`
+	NoOpOffload          bool    `json:"noOpOffload"`
+	NoRepack             bool    `json:"noRepack"`
+	KvKDraft             string  `json:"kvKDraft"`
+	KvVDraft             string  `json:"kvVDraft"`
+	CacheReuse           int     `json:"cacheReuse"`
+	CacheRamMB           int     `json:"cacheRamMB"`
+	CacheIdleSlots       string  `json:"cacheIdleSlots"`
+	SwaFull              bool    `json:"swaFull"`
+	CheckpointMinStep    int     `json:"checkpointMinStep"`
+	ContextShift         string  `json:"contextShift"`
+	SpecDraftNMin        int     `json:"specDraftNMin"`
+	SlotPromptSimilarity float64 `json:"slotPromptSimilarity"`
+	RopeScaling          string  `json:"ropeScaling"`
+	RopeScale            float64 `json:"ropeScale"`
+	RopeFreqBase         float64 `json:"ropeFreqBase"`
+	YarnOrigCtx          int     `json:"yarnOrigCtx"`
+	SplitMode            string  `json:"splitMode"`
+	TensorSplit          string  `json:"tensorSplit"`
+	MainGpu              int     `json:"mainGpu"`
+	OverrideTensor       string  `json:"overrideTensor"`
 	// Image (sd-server) knobs; ignored for llama models.
 	VaePath         string  `json:"vaePath"`
 	ClipLPath       string  `json:"clipLPath"`
@@ -181,16 +229,19 @@ type overrideDTO struct {
 }
 
 type modelConfigResp struct {
-	Id          string       `json:"id"`
-	Gguf        string       `json:"gguf"`
-	Cmd         string       `json:"cmd"`
-	MaxCtx      int          `json:"maxCtx"`     // trained context length (slider ceiling); 0 if unknown
-	BlockCount  int          `json:"blockCount"` // transformer layers (denominator for -ngl); 0 if unknown
-	IsMTP       bool         `json:"isMTP"`      // model has nextn/MTP layers, or an mtp-* sidecar => draft-mtp usable
-	IsDflash    bool         `json:"isDflash"`   // paired *-dflash-*.gguf sidecar in the model's dir => draft-dflash usable
-	IsImage     bool         `json:"isImage"`    // diffusion model (sd-server) => image config form
-	IsAudio     bool         `json:"isAudio"`    // Qwen3-TTS talker (tts-server) => audio config form
-	HasOverride bool         `json:"hasOverride"`
+	Id          string `json:"id"`
+	Gguf        string `json:"gguf"`
+	Cmd         string `json:"cmd"`
+	MaxCtx      int    `json:"maxCtx"`     // trained context length (slider ceiling); 0 if unknown
+	BlockCount  int    `json:"blockCount"` // transformer layers (denominator for -ngl); 0 if unknown
+	IsMTP       bool   `json:"isMTP"`      // model has nextn/MTP layers, or an mtp-* sidecar => draft-mtp usable
+	IsDflash    bool   `json:"isDflash"`   // paired *-dflash-*.gguf sidecar in the model's dir => draft-dflash usable
+	IsImage     bool   `json:"isImage"`    // diffusion model (sd-server) => image config form
+	IsAudio     bool   `json:"isAudio"`    // Qwen3-TTS talker (tts-server) => audio config form
+	HasOverride bool   `json:"hasOverride"`
+	// DisplayName is the UI-chosen advertised name for this base id ("" => none;
+	// the model advertises its real id). Renaming cascades to variant ids.
+	DisplayName string       `json:"displayName"`
 	Override    *overrideDTO `json:"override"`
 	// DefaultVariants are the fleet-wide settings.defaultVariants (e.g. game),
 	// shared by every model. Editable here but saved globally (PUT /api/default-variants).
@@ -213,6 +264,12 @@ func variantToDTO(v autogen.VariantSpec) variantDTO {
 		DryMultiplier: v.DryMultiplier, DryBase: v.DryBase, DryAllowedLength: v.DryAllowedLength,
 		SpecDraftNMax: v.SpecDraftNMax, SpecDefault: v.SpecDefault,
 		SpecNgramSizeN: v.SpecNgramSizeN, SpecNgramSizeM: v.SpecNgramSizeM, SpecNgramMinHits: v.SpecNgramMinHits,
+		ThreadsBatch: v.ThreadsBatch, Prio: v.Prio, DirectIo: v.DirectIo, NoOpOffload: v.NoOpOffload, NoRepack: v.NoRepack,
+		KvKDraft: v.KvKDraft, KvVDraft: v.KvVDraft, CacheReuse: v.CacheReuse, CacheRamMB: v.CacheRamMB, CacheIdleSlots: v.CacheIdleSlots,
+		SwaFull: v.SwaFull, CheckpointMinStep: v.CheckpointMinStep, ContextShift: v.ContextShift,
+		SpecDraftNMin: v.SpecDraftNMin, SlotPromptSimilarity: v.SlotPromptSimilarity,
+		RopeScaling: v.RopeScaling, RopeScale: v.RopeScale, RopeFreqBase: v.RopeFreqBase, YarnOrigCtx: v.YarnOrigCtx,
+		SplitMode: v.SplitMode, TensorSplit: v.TensorSplit, MainGpu: v.MainGpu, OverrideTensor: v.OverrideTensor,
 		VaePath: v.VaePath, ClipLPath: v.ClipLPath, ClipGPath: v.ClipGPath,
 		T5Path: v.T5Path, TextEncoderPath: v.TextEncoderPath,
 		OffloadToCpu: v.OffloadToCpu, TeOnCpu: v.TeOnCpu, VaeOnCpu: v.VaeOnCpu, VaeTiling: v.VaeTiling, DiffusionFa: v.DiffusionFa,
@@ -237,6 +294,12 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		DryMultiplier:    o.DryMultiplier, DryBase: o.DryBase, DryAllowedLength: o.DryAllowedLength,
 		SpecDraftNMax: o.SpecDraftNMax, SpecDefault: o.SpecDefault,
 		SpecNgramSizeN: o.SpecNgramSizeN, SpecNgramSizeM: o.SpecNgramSizeM, SpecNgramMinHits: o.SpecNgramMinHits,
+		ThreadsBatch: o.ThreadsBatch, Prio: o.Prio, DirectIo: o.DirectIo, NoOpOffload: o.NoOpOffload, NoRepack: o.NoRepack,
+		KvKDraft: o.KvKDraft, KvVDraft: o.KvVDraft, CacheReuse: o.CacheReuse, CacheRamMB: o.CacheRamMB, CacheIdleSlots: o.CacheIdleSlots,
+		SwaFull: o.SwaFull, CheckpointMinStep: o.CheckpointMinStep, ContextShift: o.ContextShift,
+		SpecDraftNMin: o.SpecDraftNMin, SlotPromptSimilarity: o.SlotPromptSimilarity,
+		RopeScaling: o.RopeScaling, RopeScale: o.RopeScale, RopeFreqBase: o.RopeFreqBase, YarnOrigCtx: o.YarnOrigCtx,
+		SplitMode: o.SplitMode, TensorSplit: o.TensorSplit, MainGpu: o.MainGpu, OverrideTensor: o.OverrideTensor,
 		VaePath: o.VaePath, ClipLPath: o.ClipLPath, ClipGPath: o.ClipGPath,
 		T5Path: o.T5Path, TextEncoderPath: o.TextEncoderPath,
 		OffloadToCpu: o.OffloadToCpu, TeOnCpu: o.TeOnCpu, VaeOnCpu: o.VaeOnCpu, VaeTiling: o.VaeTiling, DiffusionFa: o.DiffusionFa,
@@ -261,6 +324,12 @@ func toVariantSpec(v variantDTO) autogen.VariantSpec {
 		DryMultiplier: v.DryMultiplier, DryBase: v.DryBase, DryAllowedLength: v.DryAllowedLength,
 		SpecDraftNMax: v.SpecDraftNMax, SpecDefault: v.SpecDefault,
 		SpecNgramSizeN: v.SpecNgramSizeN, SpecNgramSizeM: v.SpecNgramSizeM, SpecNgramMinHits: v.SpecNgramMinHits,
+		ThreadsBatch: v.ThreadsBatch, Prio: v.Prio, DirectIo: v.DirectIo, NoOpOffload: v.NoOpOffload, NoRepack: v.NoRepack,
+		KvKDraft: v.KvKDraft, KvVDraft: v.KvVDraft, CacheReuse: v.CacheReuse, CacheRamMB: v.CacheRamMB, CacheIdleSlots: v.CacheIdleSlots,
+		SwaFull: v.SwaFull, CheckpointMinStep: v.CheckpointMinStep, ContextShift: v.ContextShift,
+		SpecDraftNMin: v.SpecDraftNMin, SlotPromptSimilarity: v.SlotPromptSimilarity,
+		RopeScaling: v.RopeScaling, RopeScale: v.RopeScale, RopeFreqBase: v.RopeFreqBase, YarnOrigCtx: v.YarnOrigCtx,
+		SplitMode: v.SplitMode, TensorSplit: v.TensorSplit, MainGpu: v.MainGpu, OverrideTensor: v.OverrideTensor,
 		VaePath: v.VaePath, ClipLPath: v.ClipLPath, ClipGPath: v.ClipGPath,
 		T5Path: v.T5Path, TextEncoderPath: v.TextEncoderPath,
 		OffloadToCpu: v.OffloadToCpu, TeOnCpu: v.TeOnCpu, VaeOnCpu: v.VaeOnCpu, VaeTiling: v.VaeTiling, DiffusionFa: v.DiffusionFa,
@@ -348,6 +417,9 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 	// flag is a clean discriminator on the autogen-rendered command.
 	isAudio := strings.Contains(cmd, "--codec") || strings.Contains(cmd, "--model ")
 	resp := modelConfigResp{Id: realID, Gguf: gguf, Cmd: strings.TrimSpace(cmd), IsImage: isImage, IsAudio: isAudio, HasOverride: existing != nil}
+	if dn, err := autogen.LoadSidecarDisplayNames(s.autogen.GeneratePath); err == nil {
+		resp.DisplayName = dn[realID]
+	}
 	// Show the EFFECTIVE override so the editor has the complete picture. The
 	// sidecar wins when present (a UI save writes a superset that already carries
 	// the file's fields); otherwise surface the hand-authored file override so its
@@ -467,6 +539,111 @@ func (s *Server) handleAPIModelOverrideDelete(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if _, err := autogen.DeleteSidecarOverride(s.autogen.GeneratePath, gguf); err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !s.regenAndReload(w, r) {
+		return
+	}
+	writeJSON(w, map[string]string{"status": "reset"})
+}
+
+// handleAPIModelDisplayNamePut sets the advertised display name for a base model
+// id (cascades to its variant ids). A blank/absent name clears it. Validates the
+// rename won't collide with another model's advertised id or alias BEFORE writing
+// the sidecar, so a bad rename can't produce a config that fails to load.
+func (s *Server) handleAPIModelDisplayNamePut(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAutogen(w, r) {
+		return
+	}
+	requested := strings.TrimPrefix(r.PathValue("model"), "/")
+	cfg := s.config()
+	base, found := cfg.RealModelName(requested)
+	if !found {
+		shared.SendResponse(w, r, http.StatusNotFound, "model not found")
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		shared.SendResponse(w, r, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	// A rename to a name carrying spaces or slashes would make an un-sendable model
+	// id; keep it to the same shape as an autogen-generated id.
+	if name != "" && strings.ContainsAny(name, " \t/\\\"") {
+		shared.SendResponse(w, r, http.StatusBadRequest, "display name cannot contain spaces, slashes, or quotes")
+		return
+	}
+	if err := s.validateRename(base, name); err != nil {
+		shared.SendResponse(w, r, http.StatusConflict, err.Error())
+		return
+	}
+	if _, err := autogen.UpsertSidecarDisplayName(s.autogen.GeneratePath, base, name); err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !s.regenAndReload(w, r) {
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// validateRename rejects a display name whose cascaded ids (the new base name
+// plus each family variant suffix) would collide with another model's advertised
+// id or alias. name=="" (clear) always passes. Duplicate aliases hard-fail config
+// load, so this guard keeps a bad rename from bricking the generated config.
+func (s *Server) validateRename(base, name string) error {
+	if name == "" {
+		return nil
+	}
+	cfg := s.config()
+	inFamily := func(id string) bool { return id == base || strings.HasPrefix(id, base+"-") }
+	// Every advertised id + alias NOT belonging to this family is taken.
+	taken := map[string]string{} // public id -> owning model id
+	for id, mc := range cfg.Models {
+		if inFamily(id) {
+			continue
+		}
+		pub := id
+		if n := strings.TrimSpace(mc.Name); n != "" {
+			pub = n
+		}
+		taken[pub] = id
+		for _, a := range mc.Aliases {
+			if a = strings.TrimSpace(a); a != "" {
+				taken[a] = id
+			}
+		}
+	}
+	for id := range cfg.Models {
+		if !inFamily(id) {
+			continue
+		}
+		newPub := name + id[len(base):] // base -> name, keep the variant suffix
+		if owner, clash := taken[newPub]; clash {
+			return fmt.Errorf("name %q would collide with model %q", newPub, owner)
+		}
+	}
+	return nil
+}
+
+// handleAPIModelDisplayNameDelete clears a model's display name (reverts to the
+// real id), then regenerates + reloads.
+func (s *Server) handleAPIModelDisplayNameDelete(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAutogen(w, r) {
+		return
+	}
+	requested := strings.TrimPrefix(r.PathValue("model"), "/")
+	cfg := s.config()
+	base, found := cfg.RealModelName(requested)
+	if !found {
+		shared.SendResponse(w, r, http.StatusNotFound, "model not found")
+		return
+	}
+	if _, err := autogen.UpsertSidecarDisplayName(s.autogen.GeneratePath, base, ""); err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -1104,6 +1281,29 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.SpecNgramSizeN = body.SpecNgramSizeN
 	ov.SpecNgramSizeM = body.SpecNgramSizeM
 	ov.SpecNgramMinHits = body.SpecNgramMinHits
+	ov.ThreadsBatch = body.ThreadsBatch
+	ov.Prio = body.Prio
+	ov.DirectIo = body.DirectIo
+	ov.NoOpOffload = body.NoOpOffload
+	ov.NoRepack = body.NoRepack
+	ov.KvKDraft = body.KvKDraft
+	ov.KvVDraft = body.KvVDraft
+	ov.CacheReuse = body.CacheReuse
+	ov.CacheRamMB = body.CacheRamMB
+	ov.CacheIdleSlots = body.CacheIdleSlots
+	ov.SwaFull = body.SwaFull
+	ov.CheckpointMinStep = body.CheckpointMinStep
+	ov.ContextShift = body.ContextShift
+	ov.SpecDraftNMin = body.SpecDraftNMin
+	ov.SlotPromptSimilarity = body.SlotPromptSimilarity
+	ov.RopeScaling = body.RopeScaling
+	ov.RopeScale = body.RopeScale
+	ov.RopeFreqBase = body.RopeFreqBase
+	ov.YarnOrigCtx = body.YarnOrigCtx
+	ov.SplitMode = body.SplitMode
+	ov.TensorSplit = strings.TrimSpace(body.TensorSplit)
+	ov.MainGpu = body.MainGpu
+	ov.OverrideTensor = strings.TrimSpace(body.OverrideTensor)
 	ov.VaePath = strings.TrimSpace(body.VaePath)
 	ov.ClipLPath = strings.TrimSpace(body.ClipLPath)
 	ov.ClipGPath = strings.TrimSpace(body.ClipGPath)
@@ -1255,6 +1455,75 @@ func applyVariantPatch(ov *autogen.Override, p variantDTO) {
 	if p.SpecNgramMinHits != 0 {
 		ov.SpecNgramMinHits = p.SpecNgramMinHits
 	}
+	if p.ThreadsBatch != 0 {
+		ov.ThreadsBatch = p.ThreadsBatch
+	}
+	if p.Prio != 0 {
+		ov.Prio = p.Prio
+	}
+	if p.DirectIo {
+		ov.DirectIo = true
+	}
+	if p.NoOpOffload {
+		ov.NoOpOffload = true
+	}
+	if p.NoRepack {
+		ov.NoRepack = true
+	}
+	if p.KvKDraft != "" {
+		ov.KvKDraft = p.KvKDraft
+	}
+	if p.KvVDraft != "" {
+		ov.KvVDraft = p.KvVDraft
+	}
+	if p.CacheReuse != 0 {
+		ov.CacheReuse = p.CacheReuse
+	}
+	if p.CacheRamMB != 0 {
+		ov.CacheRamMB = p.CacheRamMB
+	}
+	if p.CacheIdleSlots != "" {
+		ov.CacheIdleSlots = p.CacheIdleSlots
+	}
+	if p.SwaFull {
+		ov.SwaFull = true
+	}
+	if p.CheckpointMinStep != 0 {
+		ov.CheckpointMinStep = p.CheckpointMinStep
+	}
+	if p.ContextShift != "" {
+		ov.ContextShift = p.ContextShift
+	}
+	if p.SpecDraftNMin != 0 {
+		ov.SpecDraftNMin = p.SpecDraftNMin
+	}
+	if p.SlotPromptSimilarity != 0 {
+		ov.SlotPromptSimilarity = p.SlotPromptSimilarity
+	}
+	if p.RopeScaling != "" {
+		ov.RopeScaling = p.RopeScaling
+	}
+	if p.RopeScale != 0 {
+		ov.RopeScale = p.RopeScale
+	}
+	if p.RopeFreqBase != 0 {
+		ov.RopeFreqBase = p.RopeFreqBase
+	}
+	if p.YarnOrigCtx != 0 {
+		ov.YarnOrigCtx = p.YarnOrigCtx
+	}
+	if p.SplitMode != "" {
+		ov.SplitMode = p.SplitMode
+	}
+	if strings.TrimSpace(p.TensorSplit) != "" {
+		ov.TensorSplit = strings.TrimSpace(p.TensorSplit)
+	}
+	if p.MainGpu != 0 {
+		ov.MainGpu = p.MainGpu
+	}
+	if strings.TrimSpace(p.OverrideTensor) != "" {
+		ov.OverrideTensor = strings.TrimSpace(p.OverrideTensor)
+	}
 	if strings.TrimSpace(p.VaePath) != "" {
 		ov.VaePath = strings.TrimSpace(p.VaePath)
 	}
@@ -1318,13 +1587,22 @@ func (s *Server) handleAPIModelAdhocCmd(w http.ResponseWriter, r *http.Request) 
 		shared.SendResponse(w, r, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	// Seed from the model's EFFECTIVE override — sidecar wins, else the
-	// hand-authored file override, else blank — same precedence
-	// handleAPIModelConfigGet surfaces to the editor (:325-329).
-	var ov autogen.Override
-	if existing, _, err := s.findSidecarOverride(gguf); err != nil {
+	cmd, err := s.renderAdhocCmd(gguf, patch)
+	if err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
+	}
+	writeJSON(w, map[string]string{"cmd": cmd})
+}
+
+// renderAdhocCmd layers a sparse variant patch onto the model's effective
+// override (sidecar > file > blank) and renders the full VRAM-sized launch
+// command (with a `${PORT}` placeholder). Shared by adhoc-cmd (render only) and
+// adhoc-load (render + inject into the live router).
+func (s *Server) renderAdhocCmd(gguf string, patch variantDTO) (string, error) {
+	var ov autogen.Override
+	if existing, _, err := s.findSidecarOverride(gguf); err != nil {
+		return "", err
 	} else if existing != nil {
 		ov = *existing
 	} else if fileOv, found, ferr := autogen.ResolveFileOverride(s.autogen.GeneratePath, gguf); ferr == nil && found {
@@ -1335,20 +1613,105 @@ func (s *Server) handleAPIModelAdhocCmd(w http.ResponseWriter, r *http.Request) 
 	applyVariantPatch(&ov, patch)
 	gf, err := autogen.LoadGenerateFile(s.autogen.GeneratePath, s.autogen.ModelsDir)
 	if err != nil {
-		shared.SendResponse(w, r, http.StatusInternalServerError, "loading settings failed: "+err.Error())
-		return
+		return "", fmt.Errorf("loading settings failed: %w", err)
 	}
 	meta, err := autogen.ReadGgufMetadataCached(gguf)
 	if err != nil {
-		shared.SendResponse(w, r, http.StatusInternalServerError, "reading gguf metadata failed: "+err.Error())
-		return
+		return "", fmt.Errorf("reading gguf metadata failed: %w", err)
 	}
 	cmd, err := autogen.RenderSoloCmd(gf.Settings, meta, autogen.GgufRow{FullPath: gguf}, ov)
 	if err != nil {
-		shared.SendResponse(w, r, http.StatusInternalServerError, "rendering command failed: "+err.Error())
+		return "", fmt.Errorf("rendering command failed: %w", err)
+	}
+	return cmd, nil
+}
+
+// handleAPIModelAdhocLoad renders a one-time launch command for a model with
+// ad-hoc flag overrides (same semantics as adhoc-cmd) and injects it into the
+// LIVE router as the model's next-spawn cmd — so requests to this model id
+// through the normal proxy (/v1/chat/completions etc.) load it with the custom
+// args and are served through the full quartermaster path (promptCanon,
+// slotcache, reverse proxy). Nothing is persisted to disk: the mutation lives
+// only in the in-memory config until adhoc-unload (or any file reload) reverts
+// it. The model id, allocated port, group, listener scope, API-key scope and
+// capabilities are all unchanged — only the launch args differ. The model is
+// unloaded so its next request spawns fresh with the new args.
+//
+// Meant for benching arg combos through the real proxy without adding a
+// permanent catalog entry. DELETE reverts.
+func (s *Server) handleAPIModelAdhocLoad(w http.ResponseWriter, r *http.Request) {
+	realID, gguf, baseCmd, ok := s.resolveModelGguf(w, r)
+	if !ok {
 		return
 	}
-	writeJSON(w, map[string]string{"cmd": cmd})
+	var patch variantDTO
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		shared.SendResponse(w, r, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	cmd, err := s.renderAdhocCmd(gguf, patch)
+	if err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// The rendered cmd carries a ${PORT} placeholder; the live model already has a
+	// concrete port allocated at config load. Reuse it so the proxy target still
+	// matches, then inject the cmd into a COW copy of the live config.
+	port := portFromCmd(baseCmd)
+	if port == "" {
+		shared.SendResponse(w, r, http.StatusInternalServerError, "could not determine model port from base cmd")
+		return
+	}
+	cmd = strings.ReplaceAll(cmd, "${PORT}", port)
+
+	newCfg := s.config()
+	models := make(map[string]config.ModelConfig, len(newCfg.Models))
+	for k, v := range newCfg.Models {
+		models[k] = v
+	}
+	mc := models[realID]
+	mc.Cmd = cmd
+	models[realID] = mc
+	newCfg.Models = models
+	if err := s.ApplyConfig(newCfg); err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, "applying config failed: "+err.Error())
+		return
+	}
+	// Force the next request to spawn fresh with the new args (a running process
+	// keeps its old args until restart).
+	s.local.Unload(apiUnloadTimeout, realID)
+	writeJSON(w, map[string]string{"status": "loaded", "model": realID, "port": port, "cmd": cmd})
+}
+
+// handleAPIModelAdhocUnload reverts an adhoc-load by regenerating the config
+// from the on-disk generate + sidecar files (restoring the model's original
+// launch args) and hot-reloading, then unloading so the next request spawns
+// with the restored args.
+func (s *Server) handleAPIModelAdhocUnload(w http.ResponseWriter, r *http.Request) {
+	realID, _, _, ok := s.resolveModelGguf(w, r)
+	if !ok {
+		return
+	}
+	if !s.regenAndReload(w, r) {
+		return
+	}
+	s.local.Unload(apiUnloadTimeout, realID)
+	writeJSON(w, map[string]string{"status": "reverted", "model": realID})
+}
+
+// portFromCmd extracts the value following --port / -port in a launch command
+// (already-allocated concrete port from config load). Empty if not found.
+func portFromCmd(cmd string) string {
+	argv, err := config.SanitizeCommand(cmd)
+	if err != nil {
+		return ""
+	}
+	for i, a := range argv {
+		if (a == "--port" || a == "-port") && i+1 < len(argv) {
+			return argv[i+1]
+		}
+	}
+	return ""
 }
 
 // handleAPIBackendsList returns the backend registry (llama/vllm/sd/tts/custom)

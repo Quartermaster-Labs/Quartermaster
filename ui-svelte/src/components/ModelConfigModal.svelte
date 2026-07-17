@@ -2,6 +2,8 @@
   import {
     getModelConfig,
     putModelOverride,
+    putModelDisplayName,
+    deleteModelDisplayName,
     putDefaultVariants,
     resetModelOverride,
     estimatePlan,
@@ -38,6 +40,28 @@
   let savedTimer: ReturnType<typeof setTimeout> | undefined;
   let config = $state<ModelConfig | null>(null);
 
+  // Click-to-edit display name (advertised alias -> real id; cascades to variants).
+  let editingName = $state(false);
+  let nameDraft = $state("");
+  async function commitName() {
+    if (!modelId || !config) return;
+    editingName = false;
+    const next = nameDraft.trim();
+    const cur = config.displayName ?? "";
+    if (next === cur) return;
+    saving = true;
+    error = null;
+    try {
+      if (next === "") await deleteModelDisplayName(modelId);
+      else await putModelDisplayName(modelId, next);
+      await load();
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      saving = false;
+    }
+  }
+
   // Editable form state (mirrors ModelOverride; "" / 0 means inherit default).
   let ctx = $state<number>(8192);
   let ctxAuto = $state(true);
@@ -61,6 +85,28 @@
   let reasoningBudget = $state<number | "">(""); // --reasoning-budget token cap; "" => no cap
   let flashOn = $state(true); // false => flashAttn "off"
   let mmapOn = $state(true); // false => mmap "off" (--no-mmap)
+  // mmap inherit default: a blank ("") mmap override inherits the sizer's
+  // placement choice, which shows as --no-mmap in the base launch args for
+  // GPU-resident / expert-offloaded models. Used to render blank mmap checkboxes
+  // (Default + variant tabs) truthfully instead of always-on.
+  // ponytail: base cmd is the best available proxy — per-variant cmds aren't
+  // fetched, so a variant with different offload than base can read stale.
+  const mmapInheritOn = $derived(!/(?:^|\s)--no-mmap(?:\s|$)/.test(config?.cmd ?? ""));
+  // Per-variant launch cmds, keyed by variant name, fetched at load() (each
+  // variant is its own served id "<base>-<name>"). Lets a blank variant mmap
+  // checkbox read that variant's own placement default instead of the base's.
+  let variantCmds = $state<Record<string, string>>({});
+  function noNoMmap(cmd: string): boolean {
+    return !/(?:^|\s)--no-mmap(?:\s|$)/.test(cmd);
+  }
+  // True when a variant's mmap checkbox should show checked: explicit override
+  // wins; blank inherits from the variant's own cmd, falling back to the base
+  // until that fetch lands.
+  function variantMmapOn(v: ModelVariant): boolean {
+    if (v.mmap) return v.mmap !== "off";
+    const c = variantCmds[v.name];
+    return c != null ? noNoMmap(c) : mmapInheritOn;
+  }
   let mlock = $state(false);
   let threads = $state<number | "">(""); // "" = global default
   let parallel = $state<number | "">(""); // "" = 1
@@ -78,6 +124,52 @@
   let specNgramSizeN = $state<number | "">("");
   let specNgramSizeM = $state<number | "">("");
   let specNgramMinHits = $state<number | "">("");
+  // Advanced / power-user knobs (Default tab), one object to keep load/save compact.
+  // Numeric fields hold "" (=inherit/omit) or a number; tri-states hold ""/"on"/"off".
+  type AdvKnobs = {
+    threadsBatch: number | ""; prio: number | ""; directIo: boolean; noOpOffload: boolean; noRepack: boolean;
+    kvKDraft: string; kvVDraft: string; cacheReuse: number | ""; cacheRamMB: number | ""; cacheIdleSlots: string;
+    swaFull: boolean; checkpointMinStep: number | ""; contextShift: string; specDraftNMin: number | "";
+    slotPromptSimilarity: number | ""; ropeScaling: string; ropeScale: number | ""; ropeFreqBase: number | "";
+    yarnOrigCtx: number | ""; splitMode: string; tensorSplit: string; mainGpu: number | ""; overrideTensor: string;
+  };
+  function blankAdv(): AdvKnobs {
+    return {
+      threadsBatch: "", prio: "", directIo: false, noOpOffload: false, noRepack: false,
+      kvKDraft: "", kvVDraft: "", cacheReuse: "", cacheRamMB: "", cacheIdleSlots: "",
+      swaFull: false, checkpointMinStep: "", contextShift: "", specDraftNMin: "",
+      slotPromptSimilarity: "", ropeScaling: "", ropeScale: "", ropeFreqBase: "",
+      yarnOrigCtx: "", splitMode: "", tensorSplit: "", mainGpu: "", overrideTensor: "",
+    };
+  }
+  let adv = $state<AdvKnobs>(blankAdv());
+  // adv object <-> ModelOverride's advanced fields.
+  function advFromOverride(o: ModelOverride | null): AdvKnobs {
+    return {
+      threadsBatch: o?.threadsBatch || "", prio: o?.prio || "", directIo: o?.directIo ?? false,
+      noOpOffload: o?.noOpOffload ?? false, noRepack: o?.noRepack ?? false,
+      kvKDraft: o?.kvKDraft ?? "", kvVDraft: o?.kvVDraft ?? "",
+      cacheReuse: o?.cacheReuse || "", cacheRamMB: o?.cacheRamMB || "", cacheIdleSlots: o?.cacheIdleSlots ?? "",
+      swaFull: o?.swaFull ?? false, checkpointMinStep: o?.checkpointMinStep || "", contextShift: o?.contextShift ?? "",
+      specDraftNMin: o?.specDraftNMin || "", slotPromptSimilarity: o?.slotPromptSimilarity || "",
+      ropeScaling: o?.ropeScaling ?? "", ropeScale: o?.ropeScale || "", ropeFreqBase: o?.ropeFreqBase || "",
+      yarnOrigCtx: o?.yarnOrigCtx || "", splitMode: o?.splitMode ?? "", tensorSplit: o?.tensorSplit ?? "",
+      mainGpu: o?.mainGpu || "", overrideTensor: o?.overrideTensor ?? "",
+    };
+  }
+  function advToOverride(): Partial<ModelOverride> {
+    const n = (v: number | "") => (v === "" ? 0 : Number(v));
+    return {
+      threadsBatch: n(adv.threadsBatch), prio: n(adv.prio), directIo: adv.directIo,
+      noOpOffload: adv.noOpOffload, noRepack: adv.noRepack, kvKDraft: adv.kvKDraft, kvVDraft: adv.kvVDraft,
+      cacheReuse: n(adv.cacheReuse), cacheRamMB: n(adv.cacheRamMB), cacheIdleSlots: adv.cacheIdleSlots,
+      swaFull: adv.swaFull, checkpointMinStep: n(adv.checkpointMinStep), contextShift: adv.contextShift,
+      specDraftNMin: n(adv.specDraftNMin), slotPromptSimilarity: n(adv.slotPromptSimilarity),
+      ropeScaling: adv.ropeScaling, ropeScale: n(adv.ropeScale), ropeFreqBase: n(adv.ropeFreqBase),
+      yarnOrigCtx: n(adv.yarnOrigCtx), splitMode: adv.splitMode, tensorSplit: adv.tensorSplit,
+      mainGpu: n(adv.mainGpu), overrideTensor: adv.overrideTensor,
+    };
+  }
   let unlisted = $state(false);
   let skip = $state(false);
   // Opt this model into on-disk slot KV persistence (--slot-save-path). On by
@@ -405,7 +497,10 @@
     // as a delta vs the generator default so an unchanged value stays "inherit" ("").
     const genSpec = genDefaultSpec(config);
     v.flashAttn = p.flashOn ? "" : "off";
-    v.mmap = p.mmapOn ? "" : "off";
+    // mmap is tri-state ("" inherits the placement default, which is --no-mmap for
+    // fully-offloaded models). The checkbox is binary, so checked forces "on" to
+    // stay authoritative over that default. See save handler + inline variant editor.
+    v.mmap = p.mmapOn ? "on" : "off";
     v.mlock = p.mlock;
     v.kvInRam = p.kvInRam;
     v.reasoningFmt = p.reasoningOn ? "" : "off";
@@ -462,6 +557,9 @@
       selectedV?.cpuOffload, selectedV?.ctxCheckpoints, selectedV?.dry, selectedV?.extraArgs, selectedV?.preserveThinking,
       selectedV?.dryMultiplier, selectedV?.dryBase, selectedV?.dryAllowedLength,
       selectedV?.specDraftNMax, selectedV?.specDefault, selectedV?.specNgramSizeN, selectedV?.specNgramSizeM, selectedV?.specNgramMinHits,
+      // Advanced knobs (Default via adv, variant via selectedV) — deep-read so any
+      // nested change re-renders the launch-command preview.
+      JSON.stringify(adv), JSON.stringify(selectedV),
     ];
     void deps;
     if (!open || !config || !modelId) return;
@@ -539,6 +637,30 @@
       specNgramSizeN: v.specNgramSizeN || base.specNgramSizeN || 0,
       specNgramSizeM: v.specNgramSizeM || base.specNgramSizeM || 0,
       specNgramMinHits: v.specNgramMinHits || base.specNgramMinHits || 0,
+      // Advanced knobs: variant value wins, else inherit the base (Default tab).
+      threadsBatch: v.threadsBatch || base.threadsBatch || 0,
+      prio: v.prio || base.prio || 0,
+      directIo: v.directIo ?? base.directIo ?? false,
+      noOpOffload: v.noOpOffload ?? base.noOpOffload ?? false,
+      noRepack: v.noRepack ?? base.noRepack ?? false,
+      kvKDraft: v.kvKDraft || base.kvKDraft || "",
+      kvVDraft: v.kvVDraft || base.kvVDraft || "",
+      cacheReuse: v.cacheReuse || base.cacheReuse || 0,
+      cacheRamMB: v.cacheRamMB || base.cacheRamMB || 0,
+      cacheIdleSlots: v.cacheIdleSlots || base.cacheIdleSlots || "",
+      swaFull: v.swaFull ?? base.swaFull ?? false,
+      checkpointMinStep: v.checkpointMinStep || base.checkpointMinStep || 0,
+      contextShift: v.contextShift || base.contextShift || "",
+      specDraftNMin: v.specDraftNMin || base.specDraftNMin || 0,
+      slotPromptSimilarity: v.slotPromptSimilarity || base.slotPromptSimilarity || 0,
+      ropeScaling: v.ropeScaling || base.ropeScaling || "",
+      ropeScale: v.ropeScale || base.ropeScale || 0,
+      ropeFreqBase: v.ropeFreqBase || base.ropeFreqBase || 0,
+      yarnOrigCtx: v.yarnOrigCtx || base.yarnOrigCtx || 0,
+      splitMode: v.splitMode || base.splitMode || "",
+      tensorSplit: v.tensorSplit || base.tensorSplit || "",
+      mainGpu: v.mainGpu || base.mainGpu || 0,
+      overrideTensor: v.overrideTensor || base.overrideTensor || "",
       ctxCheckpoints: v.ctxCheckpoints ?? null,
       // variant-local: never inherited from the base.
       unlisted: v.unlisted ?? false,
@@ -589,11 +711,12 @@
     "ngram-map-k4v",
   ]);
 
-  // Matches generate.go's effectiveSpec priority: baked-in/sidecar MTP wins over
-  // a DFlash sidecar (a model only ever pairs one draft), else ngram-mod.
+  // Matches generate.go's effectiveSpec: MTP (baked head/sidecar) defaults to
+  // draft-mtp CHAINED with ngram-mod (benched better than mtp alone); everything
+  // else to ngram-mod. A DFlash sidecar is NEVER auto-picked (opt-in only), so it
+  // is not a default here either. "+"-joined; activeSpecs splits it.
   function genDefaultSpec(c: ModelConfig | null): string {
-    if (c?.isMTP) return "draft-mtp";
-    if (c?.isDflash) return "draft-dflash";
+    if (c?.isMTP) return "draft-mtp+ngram-mod";
     return "ngram-mod";
   }
 
@@ -616,7 +739,7 @@
   // show only the sub-knobs the chosen backends actually emit.
   function activeSpecs(s: string | undefined): string[] {
     const raw = (s ?? "").split("+").filter(Boolean);
-    if (raw.length === 0) return [genDefaultSpec(config)];
+    if (raw.length === 0) return genDefaultSpec(config).split("+");
     if (raw.includes("none")) return [];
     return raw;
   }
@@ -672,7 +795,11 @@
     reasoningBudget = o?.reasoningBudget ? o.reasoningBudget : "";
     preserveThinking = o?.preserveThinking ?? false;
     flashOn = (o?.flashAttn ?? "") !== "off";
-    mmapOn = (o?.mmap ?? "") !== "off";
+    // mmap blank (inherit) => reflect the placement default the sizer actually
+    // emitted (--no-mmap for GPU-resident/expert-offloaded models), read from the
+    // launch args; an explicit on/off override wins over that.
+    mmapOn =
+      (o?.mmap ?? "") === "" ? mmapInheritOn : o?.mmap !== "off";
     mlock = o?.mlock ?? false;
     threads = o?.threads ? o.threads : "";
     parallel = o?.parallel ? o.parallel : "";
@@ -686,6 +813,7 @@
     specNgramSizeN = o?.specNgramSizeN ? o.specNgramSizeN : "";
     specNgramSizeM = o?.specNgramSizeM ? o.specNgramSizeM : "";
     specNgramMinHits = o?.specNgramMinHits ? o.specNgramMinHits : "";
+    adv = advFromOverride(o);
     extraArgs = o?.extraArgs ?? "";
     unlisted = o?.unlisted ?? false;
     skip = o?.skip ?? false;
@@ -792,6 +920,22 @@
       selectedV = chosen
         ? ([...variants, ...ctxTiers, ...defaultVariants].find((v) => v.name === chosen) ?? null)
         : null;
+      // Fetch each variant's own launch cmd so blank mmap checkboxes reflect that
+      // variant's placement (not the base's). Best-effort, parallel, non-blocking.
+      const idSet = new Set(get(models).map((m) => m.id));
+      const cmds: Record<string, string> = {};
+      await Promise.all(
+        [...variants, ...ctxTiers, ...defaultVariants].map(async (v) => {
+          const vid = `${modelId}-${v.name}`;
+          if (!idSet.has(vid)) return;
+          try {
+            cmds[v.name] = (await getModelConfig(vid)).cmd;
+          } catch {
+            /* leave blank => base fallback */
+          }
+        }),
+      );
+      variantCmds = cmds;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -832,9 +976,10 @@
       // from the dashboard passes the twin's OWN id as modelId, where that suffix
       // wouldn't exist (double "-vision") and we fall back to modelId (already the
       // twin). Both land on the twin id.
+      const selV = selectedV;
       const estId =
-        selectedV && get(models).some((m) => m.id === `${modelId}-${selectedV.name}`)
-          ? `${modelId}-${selectedV.name}`
+        selV && get(models).some((m) => m.id === `${modelId}-${selV.name}`)
+          ? `${modelId}-${selV.name}`
           : modelId;
       // Pin the GPU/CPU layer split to the ACTUAL running argv (post spawn-time
       // offload guard) when the model we're estimating (estId) is itself loaded, so
@@ -918,7 +1063,7 @@
       reasoningBudget: reasoningBudget === "" ? 0 : Number(reasoningBudget),
       preserveThinking: reasoningOn && preserveThinking,
       flashAttn: flashOn ? "" : "off",
-      mmap: mmapOn ? "" : "off",
+      mmap: mmapOn ? "on" : "off",
       mlock,
       threads: threads === "" ? 0 : Number(threads),
       parallel: parallel === "" ? 0 : Number(parallel),
@@ -932,6 +1077,7 @@
       specNgramSizeN: specNgramSizeN === "" ? 0 : Number(specNgramSizeN),
       specNgramSizeM: specNgramSizeM === "" ? 0 : Number(specNgramSizeM),
       specNgramMinHits: specNgramMinHits === "" ? 0 : Number(specNgramMinHits),
+      ...advToOverride(),
       extraArgs,
       unlisted,
       skip,
@@ -984,6 +1130,8 @@
       specDraftNMax: o.specDraftNMax ?? 0, specDefault: o.specDefault ?? false,
       specNgramSizeN: o.specNgramSizeN ?? 0, specNgramSizeM: o.specNgramSizeM ?? 0, specNgramMinHits: o.specNgramMinHits ?? 0,
       extraArgs: o.extraArgs ?? "", unlisted: false, ctxCheckpoints: o.ctxCheckpoints ?? null,
+      // Snapshot the Default tab's advanced knobs too (variant then drifts freely).
+      ...advToOverride(),
     };
   }
 
@@ -1117,7 +1265,26 @@
     <div class="flex justify-between items-center p-4 border-b border-card-border">
       <h2 class="text-xl font-bold pb-0">
         Model parameters
-        {#if config}<span class="text-base font-mono font-normal text-txtsecondary">{config.id}{selectedVariant && !config.id.endsWith(`-${selectedVariant}`) ? `-${selectedVariant}` : ""}</span>{/if}
+        {#if config}
+          {@const suffix = selectedVariant && !config.id.endsWith(`-${selectedVariant}`) ? `-${selectedVariant}` : ""}
+          {#if editingName}
+            <input
+              class="text-base font-mono font-normal bg-background border border-card-border rounded px-1 py-0.5 text-txtmain w-64"
+              bind:value={nameDraft}
+              onblur={commitName}
+              onkeydown={(e) => { if (e.key === "Enter") commitName(); else if (e.key === "Escape") editingName = false; }}
+              placeholder={config.id}
+              autofocus
+            />
+          {:else}
+            <button
+              type="button"
+              class="text-base font-mono font-normal text-txtsecondary hover:text-txtmain hover:underline decoration-dotted"
+              title="Click to rename (advertised name; real id still routes, cascades to variants)"
+              onclick={() => { nameDraft = config?.displayName ?? ""; editingName = true; }}
+            >{(config.displayName || config.id) + suffix}</button>
+          {/if}
+        {/if}
       </h2>
       <button onclick={() => dialogEl?.close()} class="text-txtsecondary hover:text-txtmain text-2xl leading-none">&times;</button>
     </div>
@@ -1862,7 +2029,7 @@
               <input type="checkbox" bind:checked={mmapOn} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Memory-map (mmap)
-                {@render hint("Memory-map weights from disk. On = default (the sizer still drops it for fully GPU-resident / expert-offloaded models). Off forces --no-mmap, copying weights into RAM.")}
+                {@render hint("Memory-map weights from disk. Reflects the sizer's placement default: OFF (--no-mmap) when fully GPU-resident / expert-offloaded, ON when weights sit on CPU. Toggle to force either way.")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
@@ -1895,6 +2062,108 @@
             </label>
           </div>
         </div>
+
+        <!-- Advanced / power-user llama-server knobs. Collapsed; every field
+             inherits/omits unless set. Same knobs available per-variant below. -->
+        <details class="group">
+          <summary class="cursor-pointer font-semibold text-sm uppercase tracking-wider text-txtsecondary hover:text-txtmain">
+            Advanced
+          </summary>
+          <div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+            <label class="flex items-center gap-2">
+              <span class="text-txtsecondary flex items-center gap-1">Batch threads {@render hint("-tb. CPU threads for prompt/batch processing. Empty = same as -t.")}</span>
+              <input type="number" min="0" step="1" bind:value={adv.threadsBatch} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="auto" />
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="text-txtsecondary flex items-center gap-1">Priority {@render hint("--prio. 0 normal, 1 medium, 2 high, 3 realtime.")}</span>
+              <input type="number" min="0" max="3" step="1" bind:value={adv.prio} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="0" />
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="text-txtsecondary flex items-center gap-1">Cache reuse {@render hint("--cache-reuse N. Min chunk reused from the prompt cache via KV-shifting. 0 = off.")}</span>
+              <input type="number" min="0" step="64" bind:value={adv.cacheReuse} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="off" />
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="text-txtsecondary flex items-center gap-1">Cache RAM (MiB) {@render hint("-cram. Max prompt-cache size in MiB. Empty = llama default (8192).")}</span>
+              <input type="number" min="0" step="512" bind:value={adv.cacheRamMB} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="8192" />
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="text-txtsecondary flex items-center gap-1">Checkpoint spacing {@render hint("-cms. Min tokens between context checkpoints. Empty = llama default (8192).")}</span>
+              <input type="number" min="0" step="512" bind:value={adv.checkpointMinStep} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="8192" />
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="text-txtsecondary flex items-center gap-1">Spec draft n-min {@render hint("--spec-draft-n-min. Minimum draft tokens per speculative step. 0 = default.")}</span>
+              <input type="number" min="0" step="1" bind:value={adv.specDraftNMin} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="0" />
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="text-txtsecondary flex items-center gap-1">Slot match {@render hint("-sps. Prompt-similarity threshold (0..1) to reuse a slot. 0 = omit.")}</span>
+              <input type="number" min="0" max="1" step="0.05" bind:value={adv.slotPromptSimilarity} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="off" />
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="text-txtsecondary flex items-center gap-1">Main GPU {@render hint("-mg. Primary GPU index. 0 = GPU 0.")}</span>
+              <input type="number" min="0" step="1" bind:value={adv.mainGpu} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="0" />
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="text-txtsecondary flex items-center gap-1">Draft KV-K {@render hint("-ctkd. Draft/spec model K cache type. Empty = f16.")}</span>
+              <input type="text" bind:value={adv.kvKDraft} class="cfg-input w-20 ml-auto" placeholder="f16" />
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="text-txtsecondary flex items-center gap-1">Draft KV-V {@render hint("-ctvd. Draft/spec model V cache type. Empty = f16.")}</span>
+              <input type="text" bind:value={adv.kvVDraft} class="cfg-input w-20 ml-auto" placeholder="f16" />
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="text-txtsecondary flex items-center gap-1">Idle-slot cache {@render hint("--cache-idle-slots. Save idle slots to the prompt cache. inherit = llama default.")}</span>
+              <select bind:value={adv.cacheIdleSlots} class="cfg-input ml-auto"><option value="">inherit</option><option value="on">on</option><option value="off">off</option></select>
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="text-txtsecondary flex items-center gap-1">Context shift {@render hint("--context-shift. Slide the window on overflow. inherit = llama default (off).")}</span>
+              <select bind:value={adv.contextShift} class="cfg-input ml-auto"><option value="">inherit</option><option value="on">on</option><option value="off">off</option></select>
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="text-txtsecondary flex items-center gap-1">RoPE scaling {@render hint("--rope-scaling. Context-extension method. auto = from model.")}</span>
+              <select bind:value={adv.ropeScaling} class="cfg-input ml-auto"><option value="">auto</option><option value="none">none</option><option value="linear">linear</option><option value="yarn">yarn</option></select>
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="text-txtsecondary flex items-center gap-1">Split mode {@render hint("-sm. Multi-GPU split strategy. auto = from model.")}</span>
+              <select bind:value={adv.splitMode} class="cfg-input ml-auto"><option value="">auto</option><option value="none">none</option><option value="layer">layer</option><option value="row">row</option><option value="tensor">tensor</option></select>
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="text-txtsecondary flex items-center gap-1">RoPE scale {@render hint("--rope-scale. Context scaling factor (expand ctx by N). 0 = omit.")}</span>
+              <input type="number" min="0" step="0.5" bind:value={adv.ropeScale} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="auto" />
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="text-txtsecondary flex items-center gap-1">RoPE freq base {@render hint("--rope-freq-base. NTK base frequency. 0 = from model.")}</span>
+              <input type="number" min="0" step="10000" bind:value={adv.ropeFreqBase} use:wheelAdjust class="cfg-input w-24 ml-auto" placeholder="auto" />
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="text-txtsecondary flex items-center gap-1">YaRN orig ctx {@render hint("--yarn-orig-ctx. Model's original training context. 0 = from model.")}</span>
+              <input type="number" min="0" step="1024" bind:value={adv.yarnOrigCtx} use:wheelAdjust class="cfg-input w-24 ml-auto" placeholder="auto" />
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="text-txtsecondary flex items-center gap-1">Tensor split {@render hint("-ts. Per-GPU proportion, comma list e.g. 3,1. Empty = omit.")}</span>
+              <input type="text" bind:value={adv.tensorSplit} class="cfg-input w-24 ml-auto" placeholder="3,1" />
+            </label>
+            <label class="flex items-center gap-2 col-span-2">
+              <span class="text-txtsecondary flex items-center gap-1 shrink-0">Override tensor {@render hint("-ot. Manual tensor→buffer placement pattern, e.g. exps=CPU. Empty = omit.")}</span>
+              <input type="text" bind:value={adv.overrideTensor} class="cfg-input flex-1 ml-auto font-mono" placeholder="regex=BUFFER" />
+            </label>
+            <label class="flex items-center gap-2">
+              <input type="checkbox" bind:checked={adv.directIo} />
+              <span class="text-txtsecondary flex items-center gap-1">Direct I/O {@render hint("-dio. DirectIO for faster cold model load where supported.")}</span>
+            </label>
+            <label class="flex items-center gap-2">
+              <input type="checkbox" bind:checked={adv.swaFull} />
+              <span class="text-txtsecondary flex items-center gap-1">Full SWA cache {@render hint("--swa-full. Keep the full sliding-window KV cache (Gemma etc.).")}</span>
+            </label>
+            <label class="flex items-center gap-2">
+              <input type="checkbox" bind:checked={adv.noOpOffload} />
+              <span class="text-txtsecondary flex items-center gap-1">No op-offload {@render hint("--no-op-offload. Keep host tensor ops on the CPU.")}</span>
+            </label>
+            <label class="flex items-center gap-2">
+              <input type="checkbox" bind:checked={adv.noRepack} />
+              <span class="text-txtsecondary flex items-center gap-1">No repack {@render hint("--no-repack. Disable weight repacking at load.")}</span>
+            </label>
+          </div>
+        </details>
 
         <!-- Launch command (editable, two-way) — collapsed at bottom. Form edits
              re-render it; editing it (then blurring) folds known flags back into
@@ -2130,10 +2399,10 @@
                 </span>
               </label>
               <label class="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={sv.mmap !== "off"} onchange={(e) => (sv.mmap = (e.currentTarget as HTMLInputElement).checked ? "" : "off")} />
+                <input type="checkbox" checked={variantMmapOn(sv)} onchange={(e) => (sv.mmap = (e.currentTarget as HTMLInputElement).checked ? "on" : "off")} />
                 <span class="text-txtsecondary flex items-center gap-1">
                   Memory-map (mmap)
-                  {@render hint("Memory-map weights from disk. Off forces --no-mmap, copying weights into RAM.")}
+                  {@render hint("Memory-map weights from disk. Blank inherits this variant's placement default (--no-mmap when GPU-resident). Off forces --no-mmap, copying weights into RAM.")}
                 </span>
               </label>
               <label class="flex items-center gap-2 text-sm">
@@ -2163,6 +2432,107 @@
               </label>
             </div>
           </div>
+
+          <!-- Advanced knobs for this variant; empty/unset inherits Default. -->
+          <details class="group">
+            <summary class="cursor-pointer font-semibold text-sm uppercase tracking-wider text-txtsecondary hover:text-txtmain">
+              Advanced
+            </summary>
+            <div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+              <label class="flex items-center gap-2">
+                <span class="text-txtsecondary flex items-center gap-1">Batch threads {@render hint("-tb. CPU threads for prompt/batch processing.")}</span>
+                <input type="number" min="0" step="1" value={vnum(sv.threadsBatch)} oninput={(e) => (sv.threadsBatch = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="inherit" />
+              </label>
+              <label class="flex items-center gap-2">
+                <span class="text-txtsecondary flex items-center gap-1">Priority {@render hint("--prio. 0 normal, 1 medium, 2 high, 3 realtime.")}</span>
+                <input type="number" min="0" max="3" step="1" value={vnum(sv.prio)} oninput={(e) => (sv.prio = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="inherit" />
+              </label>
+              <label class="flex items-center gap-2">
+                <span class="text-txtsecondary flex items-center gap-1">Cache reuse {@render hint("--cache-reuse N. Prefix KV-shift reuse. 0 = off.")}</span>
+                <input type="number" min="0" step="64" value={vnum(sv.cacheReuse)} oninput={(e) => (sv.cacheReuse = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="inherit" />
+              </label>
+              <label class="flex items-center gap-2">
+                <span class="text-txtsecondary flex items-center gap-1">Cache RAM (MiB) {@render hint("-cram. Prompt-cache size MiB.")}</span>
+                <input type="number" min="0" step="512" value={vnum(sv.cacheRamMB)} oninput={(e) => (sv.cacheRamMB = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="inherit" />
+              </label>
+              <label class="flex items-center gap-2">
+                <span class="text-txtsecondary flex items-center gap-1">Checkpoint spacing {@render hint("-cms. Min tokens between context checkpoints.")}</span>
+                <input type="number" min="0" step="512" value={vnum(sv.checkpointMinStep)} oninput={(e) => (sv.checkpointMinStep = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="inherit" />
+              </label>
+              <label class="flex items-center gap-2">
+                <span class="text-txtsecondary flex items-center gap-1">Spec draft n-min {@render hint("--spec-draft-n-min. Min draft tokens per step.")}</span>
+                <input type="number" min="0" step="1" value={vnum(sv.specDraftNMin)} oninput={(e) => (sv.specDraftNMin = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="inherit" />
+              </label>
+              <label class="flex items-center gap-2">
+                <span class="text-txtsecondary flex items-center gap-1">Slot match {@render hint("-sps. Slot prompt-similarity threshold (0..1).")}</span>
+                <input type="number" min="0" max="1" step="0.05" value={vnum(sv.slotPromptSimilarity)} oninput={(e) => (sv.slotPromptSimilarity = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="inherit" />
+              </label>
+              <label class="flex items-center gap-2">
+                <span class="text-txtsecondary flex items-center gap-1">Main GPU {@render hint("-mg. Primary GPU index.")}</span>
+                <input type="number" min="0" step="1" value={vnum(sv.mainGpu)} oninput={(e) => (sv.mainGpu = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="inherit" />
+              </label>
+              <label class="flex items-center gap-2">
+                <span class="text-txtsecondary flex items-center gap-1">Draft KV-K {@render hint("-ctkd. Draft/spec K cache type.")}</span>
+                <input type="text" value={sv.kvKDraft ?? ""} oninput={(e) => (sv.kvKDraft = (e.currentTarget as HTMLInputElement).value)} class="cfg-input w-20 ml-auto" placeholder="inherit" />
+              </label>
+              <label class="flex items-center gap-2">
+                <span class="text-txtsecondary flex items-center gap-1">Draft KV-V {@render hint("-ctvd. Draft/spec V cache type.")}</span>
+                <input type="text" value={sv.kvVDraft ?? ""} oninput={(e) => (sv.kvVDraft = (e.currentTarget as HTMLInputElement).value)} class="cfg-input w-20 ml-auto" placeholder="inherit" />
+              </label>
+              <label class="flex items-center gap-2">
+                <span class="text-txtsecondary flex items-center gap-1">Idle-slot cache {@render hint("--cache-idle-slots. inherit = Default's value.")}</span>
+                <select value={sv.cacheIdleSlots ?? ""} onchange={(e) => (sv.cacheIdleSlots = (e.currentTarget as HTMLSelectElement).value)} class="cfg-input ml-auto"><option value="">inherit</option><option value="on">on</option><option value="off">off</option></select>
+              </label>
+              <label class="flex items-center gap-2">
+                <span class="text-txtsecondary flex items-center gap-1">Context shift {@render hint("--context-shift. inherit = Default's value.")}</span>
+                <select value={sv.contextShift ?? ""} onchange={(e) => (sv.contextShift = (e.currentTarget as HTMLSelectElement).value)} class="cfg-input ml-auto"><option value="">inherit</option><option value="on">on</option><option value="off">off</option></select>
+              </label>
+              <label class="flex items-center gap-2">
+                <span class="text-txtsecondary flex items-center gap-1">RoPE scaling {@render hint("--rope-scaling. Context-extension method.")}</span>
+                <select value={sv.ropeScaling ?? ""} onchange={(e) => (sv.ropeScaling = (e.currentTarget as HTMLSelectElement).value)} class="cfg-input ml-auto"><option value="">inherit</option><option value="none">none</option><option value="linear">linear</option><option value="yarn">yarn</option></select>
+              </label>
+              <label class="flex items-center gap-2">
+                <span class="text-txtsecondary flex items-center gap-1">Split mode {@render hint("-sm. Multi-GPU split strategy.")}</span>
+                <select value={sv.splitMode ?? ""} onchange={(e) => (sv.splitMode = (e.currentTarget as HTMLSelectElement).value)} class="cfg-input ml-auto"><option value="">inherit</option><option value="none">none</option><option value="layer">layer</option><option value="row">row</option><option value="tensor">tensor</option></select>
+              </label>
+              <label class="flex items-center gap-2">
+                <span class="text-txtsecondary flex items-center gap-1">RoPE scale {@render hint("--rope-scale. Ctx scaling factor. 0 = inherit.")}</span>
+                <input type="number" min="0" step="0.5" value={vnum(sv.ropeScale)} oninput={(e) => (sv.ropeScale = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="inherit" />
+              </label>
+              <label class="flex items-center gap-2">
+                <span class="text-txtsecondary flex items-center gap-1">RoPE freq base {@render hint("--rope-freq-base. NTK base frequency.")}</span>
+                <input type="number" min="0" step="10000" value={vnum(sv.ropeFreqBase)} oninput={(e) => (sv.ropeFreqBase = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input w-24 ml-auto" placeholder="inherit" />
+              </label>
+              <label class="flex items-center gap-2">
+                <span class="text-txtsecondary flex items-center gap-1">YaRN orig ctx {@render hint("--yarn-orig-ctx. Model's original training context.")}</span>
+                <input type="number" min="0" step="1024" value={vnum(sv.yarnOrigCtx)} oninput={(e) => (sv.yarnOrigCtx = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input w-24 ml-auto" placeholder="inherit" />
+              </label>
+              <label class="flex items-center gap-2">
+                <span class="text-txtsecondary flex items-center gap-1">Tensor split {@render hint("-ts. Per-GPU proportion, e.g. 3,1.")}</span>
+                <input type="text" value={sv.tensorSplit ?? ""} oninput={(e) => (sv.tensorSplit = (e.currentTarget as HTMLInputElement).value)} class="cfg-input w-24 ml-auto" placeholder="inherit" />
+              </label>
+              <label class="flex items-center gap-2 col-span-2">
+                <span class="text-txtsecondary flex items-center gap-1 shrink-0">Override tensor {@render hint("-ot. Manual tensor→buffer placement, e.g. exps=CPU.")}</span>
+                <input type="text" value={sv.overrideTensor ?? ""} oninput={(e) => (sv.overrideTensor = (e.currentTarget as HTMLInputElement).value)} class="cfg-input flex-1 ml-auto font-mono" placeholder="inherit" />
+              </label>
+              <label class="flex items-center gap-2">
+                <input type="checkbox" checked={!!sv.directIo} onchange={(e) => (sv.directIo = (e.currentTarget as HTMLInputElement).checked)} />
+                <span class="text-txtsecondary flex items-center gap-1">Direct I/O {@render hint("-dio. Faster cold model load where supported.")}</span>
+              </label>
+              <label class="flex items-center gap-2">
+                <input type="checkbox" checked={!!sv.swaFull} onchange={(e) => (sv.swaFull = (e.currentTarget as HTMLInputElement).checked)} />
+                <span class="text-txtsecondary flex items-center gap-1">Full SWA cache {@render hint("--swa-full. Full sliding-window KV cache.")}</span>
+              </label>
+              <label class="flex items-center gap-2">
+                <input type="checkbox" checked={!!sv.noOpOffload} onchange={(e) => (sv.noOpOffload = (e.currentTarget as HTMLInputElement).checked)} />
+                <span class="text-txtsecondary flex items-center gap-1">No op-offload {@render hint("--no-op-offload. Keep host tensor ops on CPU.")}</span>
+              </label>
+              <label class="flex items-center gap-2">
+                <input type="checkbox" checked={!!sv.noRepack} onchange={(e) => (sv.noRepack = (e.currentTarget as HTMLInputElement).checked)} />
+                <span class="text-txtsecondary flex items-center gap-1">No repack {@render hint("--no-repack. Disable weight repacking at load.")}</span>
+              </label>
+            </div>
+          </details>
 
           <!-- Launch command for this variant (two-way, same as Default). -->
           <details class="group">

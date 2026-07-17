@@ -66,8 +66,8 @@ func TestComputeBufferGB(t *testing.T) {
 	}
 }
 
-// mmap is on by default — even on the CPU-offload path (--n-cpu-moe). Only an
-// explicit Mmap:"off" override emits --no-mmap.
+// mmap is placement-gated: on when CPU offload happens (--n-cpu-moe or partial
+// layer offload), --no-mmap when fully GPU-resident. Explicit Mmap:on/off wins.
 func TestEmitProfile_MmapDefaultOn(t *testing.T) {
 	s := Settings{ServerExe: "llama-server", Threads: 7, TtlSec: 600, MaxRamGB: 32}
 	meta := Metadata{Architecture: "qwen3moe", BlockCount: 48, IsMoE: true}
@@ -117,6 +117,40 @@ func TestEmitProfile_ExtraArgs(t *testing.T) {
 
 	if !strings.Contains(out, "--rope-freq-scale 0.5 --override-kv x=int:1") {
 		t.Errorf("missing extra args in emit:\n%s", out)
+	}
+}
+
+// Advanced / power-user knobs each emit their flag when set, and emit NOTHING
+// when unset (zero/empty => existing configs unchanged).
+func TestEmitProfile_AdvancedKnobs(t *testing.T) {
+	s := Settings{ServerExe: "llama-server", Threads: 7, TtlSec: 600}
+	meta := Metadata{Architecture: "llama", BlockCount: 32}
+	row := GgufRow{FullPath: "/models/foo.gguf"}
+
+	// Unset: none of the advanced flags appear.
+	var def strings.Builder
+	emitProfile(&def, s, meta, row, profile{Name: "foo"}, 8192, 10, 0, LoadPlan{}, "q8_0", "q8_0", false, &Override{})
+	for _, unwanted := range []string{"-tb ", "--prio", "-dio", "--no-op-offload", "--no-repack", "--cache-reuse", "-cram", "--cache-idle-slots", "--swa-full", "-cms", "--context-shift", "--spec-draft-n-min", "-sps", "--rope-scaling", "-sm ", "-ts ", "-mg ", "-ot "} {
+		if strings.Contains(def.String(), unwanted) {
+			t.Errorf("unexpected %q emitted for a blank override:\n%s", unwanted, def.String())
+		}
+	}
+
+	// Set: each flag renders.
+	ov := &Override{
+		ThreadsBatch: 12, Prio: 2, DirectIo: true, NoOpOffload: true, NoRepack: true,
+		CacheReuse: 256, CacheRamMB: 4096, CacheIdleSlots: "off", SwaFull: true,
+		CheckpointMinStep: 2048, ContextShift: "on", SpecDraftNMin: 1, SlotPromptSimilarity: 0.5,
+		RopeScaling: "yarn", RopeScale: 2, RopeFreqBase: 1000000, YarnOrigCtx: 4096,
+		SplitMode: "row", TensorSplit: "3,1", MainGpu: 1, OverrideTensor: "exps=CPU",
+	}
+	var on strings.Builder
+	emitProfile(&on, s, meta, row, profile{Name: "foo"}, 8192, 10, 0, LoadPlan{}, "q8_0", "q8_0", false, ov)
+	out := on.String()
+	for _, want := range []string{"-tb 12", "--prio 2", "-dio", "--no-op-offload", "--no-repack", "--cache-reuse 256", "-cram 4096", "--no-cache-idle-slots", "--swa-full", "-cms 2048", "--context-shift", "--spec-draft-n-min 1", "-sps 0.5", "--rope-scaling yarn", "--rope-scale 2", "--rope-freq-base 1e+06", "--yarn-orig-ctx 4096", "-sm row", "-ts 3,1", "-mg 1", "-ot exps=CPU"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in emit:\n%s", want, out)
+		}
 	}
 }
 

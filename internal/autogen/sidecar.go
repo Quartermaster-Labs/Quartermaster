@@ -88,6 +88,10 @@ type sidecar struct {
 	// (not in SettingsPatch) so a dashboard VRAM reset preserves them. omitempty =>
 	// clearing the last entry reverts to the generate file's categoryRoots.
 	CategoryRoots map[string]string `yaml:"categoryRoots,omitempty"`
+	// DisplayNames maps a base served id -> a UI-chosen advertised name (cascades
+	// to variant ids). Top-level so a VRAM reset can't wipe it. omitempty =>
+	// clearing the last rename reverts to the generate file.
+	DisplayNames map[string]string `yaml:"displayNames,omitempty"`
 	// APIKeys, when non-nil, replaces the generate file's apiKeys wholesale (the
 	// UI sends the full list). omitempty => deleting the last key reverts to the
 	// file's apiKeys.
@@ -419,6 +423,37 @@ func UpsertSidecarDefaultVariants(generatePath string, vs []VariantSpec) error {
 	}
 	sc.DefaultVariants = vs
 	return writeSidecar(generatePath, sc)
+}
+
+// LoadSidecarDisplayNames returns the sidecar's base-id -> advertised-name map,
+// or nil when none are set.
+func LoadSidecarDisplayNames(generatePath string) (map[string]string, error) {
+	sc, err := loadSidecar(generatePath)
+	if err != nil {
+		return nil, err
+	}
+	return sc.DisplayNames, nil
+}
+
+// UpsertSidecarDisplayName sets (or, when name is "", clears) the advertised name
+// for one base served id, preserving the rest of the sidecar. Returns the map.
+func UpsertSidecarDisplayName(generatePath, baseID, name string) (map[string]string, error) {
+	sc, err := loadSidecar(generatePath)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(name) == "" {
+		delete(sc.DisplayNames, baseID)
+	} else {
+		if sc.DisplayNames == nil {
+			sc.DisplayNames = map[string]string{}
+		}
+		sc.DisplayNames[baseID] = strings.TrimSpace(name)
+	}
+	if err := writeSidecar(generatePath, sc); err != nil {
+		return nil, err
+	}
+	return sc.DisplayNames, nil
 }
 
 // LoadSidecarCategoryRoots returns the sidecar's per-category scan folders, or
