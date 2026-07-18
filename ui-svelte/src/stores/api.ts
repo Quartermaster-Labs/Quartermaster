@@ -442,6 +442,7 @@ export interface ModelConfig {
   isDflash: boolean; // paired *-dflash-*.gguf sidecar => draft-dflash usable
   isImage: boolean; // diffusion model => image config form
   isAudio: boolean; // Qwen3-TTS talker (tts-server) => audio config form
+  isSam?: boolean; // SAM segmentation (sam3_server) => minimal segment form
   hasOverride: boolean;
   /** UI-set advertised name (cascades to variants); "" => unrenamed, shows id. */
   displayName?: string;

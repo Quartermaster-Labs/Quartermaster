@@ -19,7 +19,7 @@
   import Select from "./Select.svelte";
   import Composer from "./Composer.svelte";
   import { autogrow } from "../../lib/autogrow";
-  import { Image as ImageIcon, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush } from "lucide-svelte";
+  import { Image as ImageIcon, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Palette, Reply } from "lucide-svelte";
   import { scrollFade } from "../../lib/scrollFade";
   import type { ImageApiMode } from "../../lib/types";
 
@@ -51,6 +51,9 @@
   // Luma tone-anchoring of reused sources back to the thread origin (fights
   // brightness drift over chained edits). Toggle to A/B it against the raw model.
   const sdToneAnchorStore = userPref<boolean>("playground-sdapi-tone-anchor", true);
+  // Keep the source image's native resolution on img2img (edit in place, don't
+  // resize to the selected size). Falls back to selected size if dims unreadable.
+  const sdKeepResStore = userPref<boolean>("playground-sdapi-keep-res", true);
 
   let prompt = $state("");
   // Images the user attached to the NEXT message (data URLs) — seed a thread from
@@ -62,6 +65,30 @@
   let maskData = $state<string | null>(null);
   let maskSource = $state<string | null>(null);
   let showMask = $state(false);
+  // Style-transfer reference (data URL) for the NEXT message: appended as the LAST
+  // ref image and scaffolds the prompt ("apply the style of the last reference").
+  // Ref-edit models only (Qwen-Image-Edit multi-ref / Kontext); ignored elsewhere.
+  let styleRef = $state<string | null>(null);
+  let styleInput = $state<HTMLInputElement | undefined>();
+  // A segmentation-capable model (SAM) unlocks the AI-select tools (box/point/
+  // lasso) inside the inpaint MaskEditor — same mask output, loaded on demand via
+  // /v1/segment. "" = brush-only.
+  let segmentModel = $derived($models.find((m) => m.capabilities?.segmentation)?.id ?? "");
+
+  // A preview of the base image with the masked region tinted, so the pending
+  // mask (above the composer) and the sent turn show WHAT will be regenerated.
+  let pendingMaskPreview = $state<string | null>(null);
+  $effect(() => {
+    const b = baseImage;
+    const m = maskData;
+    if (!b || !m || maskSource !== b) {
+      pendingMaskPreview = null;
+      return;
+    }
+    let cancelled = false;
+    buildMaskOverlay(b, m).then((u) => { if (!cancelled) pendingMaskPreview = u; });
+    return () => { cancelled = true; };
+  });
 
   // Ensure a valid active thread exists (first run / persisted id gone). Mirrors
   // the chat tab's initChats. The list is hydrated server-side before mount.
@@ -197,10 +224,13 @@
     { match: "z-image", steps: 10, cfg: 1.0, sampler: "euler", scheduler: "discrete" },
     // Kontext: surgical edit — low denoise so it doesn't redraw the whole scene.
     { match: "kontext", steps: 24, cfg: 1.0, sampler: "euler", scheduler: "discrete", denoise: 0.55 },
-    // Qwen-Image-Edit Rapid: guidance-distilled (cfg MUST be 1.0 — cfg>1 burns to a
-    // solid yellow frame). 8 steps undercooks; 20 is the sweet spot. Ref-image edit
-    // (extra_images), so denoise unused.
-    { match: "qwen-rapid", steps: 20, cfg: 1.0, sampler: "euler", scheduler: "discrete" },
+    // Qwen-Image-Edit Rapid (Phr00t AIO, Lightning 2511 8-step distill): cfg MUST
+    // be 1.0 (cfg>1 burns to a solid yellow frame). Repo recipe is euler_ancestral
+    // + beta @ 4-8 steps — sd.cpp has no "beta" schedule so discrete stands in, but
+    // the ANCESTRAL sampler is what the few-step distill needs (plain euler
+    // undercooks at 8 → needed 20 to compensate). Ref-image edit (extra_images), so
+    // denoise unused.
+    { match: "qwen-rapid", steps: 8, cfg: 1.0, sampler: "euler_a", scheduler: "discrete" },
     // Fill: inpaint — always fully regenerates the masked area (denoise 1.0).
     { match: "fill", steps: 20, cfg: 1.0, sampler: "euler", scheduler: "discrete", denoise: 1.0 },
     // AnimagineXL 3.1 / Illustrious SDXL-anime: Euler a, <30 steps, cfg 5-7, 1024.
@@ -365,9 +395,14 @@
     const [w, h] = aspectDims($aspectStore, Math.min(Number($longEdgeStore) || 512, modelMax));
     $selectedSizeStore = `${w}x${h}`;
   });
-  // The image the next turn tweaks: an attachment if present, else the last reply.
+  // When set, the next turn ignores the last reply and runs a fresh txt2img (a new
+  // image in the same thread instead of an img2img edit). Cleared once the user
+  // picks a base again (attach / reply) or after the send.
+  let skipBase = $state(false);
+  // The image the next turn tweaks: an attachment if present, else the last reply
+  // (unless the user opted out via skipBase).
   let baseImage = $derived(
-    attached[0] ?? [...turns].reverse().find((t) => t.images.length)?.images[0] ?? null
+    attached[0] ?? (skipBase ? null : [...turns].reverse().find((t) => t.images.length)?.images[0]) ?? null
   );
 
   $effect(() => {
@@ -387,6 +422,33 @@
 
   const stripB64 = (dataUrl: string) => dataUrl.replace(/^data:[^,]+,/, "");
 
+  // Decode an image's native pixel dims (for keep-resolution edits), snapped to
+  // the model's latent grid (multiple of 64). Ref-edit models reflow the WHOLE
+  // frame when output dims don't align to the VAE/patch grid, so an off-grid
+  // native size (e.g. 1023×769) causes a full redraw instead of a local edit.
+  // Accepts a data: URL or a same-origin media path.
+  function imgDims(url: string): Promise<[number, number]> {
+    return new Promise((res, rej) => {
+      const im = new Image();
+      im.onload = () => {
+        let w = im.naturalWidth;
+        let h = im.naturalHeight;
+        // Clamp the long edge to the model cap so a big source (phone photo)
+        // doesn't balloon the gen canvas → slow / VRAM spill. Preserve aspect.
+        const long = Math.max(w, h);
+        if (long > modelMax) {
+          const s = modelMax / long;
+          w = Math.round(w * s);
+          h = Math.round(h * s);
+        }
+        const snap = (n: number) => Math.max(64, Math.round(n / 64) * 64);
+        res([snap(w), snap(h)]);
+      };
+      im.onerror = rej;
+      im.src = url;
+    });
+  }
+
   // Raw base64 for sd-server (extra_images / init_images want bytes, not a URL).
   // Fresh attachments/results are inline data: URLs; once persisted the server
   // rewrites them to /api/media/ paths (playground.go extractMedia), so a reused
@@ -404,8 +466,8 @@
     return stripB64(dataUrl);
   }
 
-  async function genTxt2Img(promptText: string, refs: string[] | undefined, signal: AbortSignal): Promise<string[]> {
-    const [w, h] = $selectedSizeStore.split("x").map(Number);
+  async function genTxt2Img(promptText: string, refs: string[] | undefined, signal: AbortSignal, dims?: [number, number]): Promise<string[]> {
+    const [w, h] = dims ?? $selectedSizeStore.split("x").map(Number);
     const response = await generateSdImage(
       {
         model: $selectedModelStore,
@@ -426,7 +488,14 @@
   }
 
   async function genImg2Img(promptText: string, initB64: string, mask: string | null, signal: AbortSignal): Promise<string[]> {
-    const [w, h] = $selectedSizeStore.split("x").map(Number);
+    let [w, h] = $selectedSizeStore.split("x").map(Number);
+    if ($sdKeepResStore) {
+      try {
+        [w, h] = await imgDims(`data:image/png;base64,${initB64}`);
+      } catch {
+        /* unreadable — fall back to selected size */
+      }
+    }
     const response = await generateSdImg2Img(
       {
         model: $selectedModelStore,
@@ -480,7 +549,10 @@
     // drift becomes a one-time offset instead of compounding. Mean-only avoids the
     // contrast-stretch blowout full luma-matching caused. Skipped when src IS the
     // origin (first turn) or on any canvas failure.
-    if (supportsRefImages) {
+    // A painted mask forces the img2img+mask (inpaint) route below even for
+    // ref-edit models — sd.cpp honors the mask there (unmasked region preserved),
+    // which the extra_images ref path can't do (it redraws the whole frame).
+    if (supportsRefImages && !mask) {
       let anchored = refs;
       if ($sdToneAnchorStore && origin && src !== origin) {
         try {
@@ -489,7 +561,15 @@
           /* keep the un-normalized base */
         }
       }
-      return genTxt2Img(promptText, await Promise.all(anchored.map(toB64)), signal);
+      let dims: [number, number] | undefined;
+      if ($sdKeepResStore) {
+        try {
+          dims = await imgDims(src);
+        } catch {
+          /* unreadable — fall back to selected size */
+        }
+      }
+      return genTxt2Img(promptText, await Promise.all(anchored.map(toB64)), signal, dims);
     }
     // img2img re-encodes the base into latent each turn → brightness/contrast
     // drift compounds. Anchor the base back to the origin's tone first (skipped
@@ -531,6 +611,47 @@
     }
   }
 
+  function loadImg(src: string): Promise<HTMLImageElement> {
+    return new Promise((resolve, reject) => {
+      const im = new Image();
+      im.onload = () => resolve(im);
+      im.onerror = () => reject(new Error("image load failed"));
+      im.src = src;
+    });
+  }
+
+  // Composite the base image with its white-on-black mask, tinting the masked
+  // region pink (matching the MaskEditor's on-canvas mask) so the user sees
+  // exactly what region will be regenerated. Returns a PNG data URL at the base's
+  // natural resolution.
+  async function buildMaskOverlay(baseUrl: string, maskUrl: string): Promise<string> {
+    const [b, m] = await Promise.all([loadImg(baseUrl), loadImg(maskUrl)]);
+    const w = b.naturalWidth;
+    const h = b.naturalHeight;
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    const x = c.getContext("2d")!;
+    x.drawImage(b, 0, 0, w, h);
+    const t = document.createElement("canvas");
+    t.width = w;
+    t.height = h;
+    const tx = t.getContext("2d")!;
+    tx.drawImage(m, 0, 0, w, h);
+    const d = tx.getImageData(0, 0, w, h);
+    const px = d.data;
+    for (let i = 0; i < px.length; i += 4) {
+      if (px[i] > 127) {
+        px[i] = 236; px[i + 1] = 72; px[i + 2] = 153; px[i + 3] = 150; // #ec4899 pink-500 @ ~0.6
+      } else {
+        px[i + 3] = 0;
+      }
+    }
+    tx.putImageData(d, 0, 0);
+    x.drawImage(t, 0, 0);
+    return c.toDataURL("image/png");
+  }
+
   async function send() {
     const promptText = prompt.trim();
     if (!$selectedModelStore || isGenerating || !promptText) return;
@@ -539,23 +660,38 @@
 
     const base = baseImage;
     const wasAttached = attached;
+    // Style transfer needs the second-image ref slot, so it's ref-edit only.
+    const useStyle = supportsRefImages ? styleRef : null;
     // Use the mask only if it was painted on this exact base (else it's stale).
-    const useMask = !supportsRefImages && maskSource === base ? maskData : null;
+    // A style ref forces the whole-frame ref path, so drop any pending mask.
+    const useMask = !useStyle && maskSource === base ? maskData : null;
     prompt = "";
     attached = [];
+    skipBase = false;
     maskData = null;
     maskSource = null;
+    styleRef = null;
     // Record what actually feeds this turn: attachments if present, else the
-    // reused base image. OpenAI route ignores sources, so none there.
-    const refs = !isSdapi ? [] : wasAttached.length ? wasAttached : base ? [base] : [];
+    // reused base image. A style ref rides last (the scaffold points at it).
+    // OpenAI route ignores sources, so none there.
+    const contentRefs = !isSdapi ? [] : wasAttached.length ? wasAttached : base ? [base] : [];
+    const refs = useStyle ? [...contentRefs, useStyle] : contentRefs;
+    // Prepend the style instruction so the model applies the last ref's look to
+    // the rest. Stored into the turn so regenerate/edit reproduce it verbatim.
+    const sentPrompt = useStyle
+      ? `Apply the artistic style, color palette, brushwork, and texture of the final reference image to the other image, keeping its content and composition. ${promptText}`.trim()
+      : promptText;
+    // Composite base + mask now so the sent turn shows the region that changed.
+    const maskPreview = useMask && base ? await buildMaskOverlay(base, useMask) : undefined;
     const prevTurns = sessionById(id)!.turns;
     const ti = prevTurns.length;
-    appendTurn(id, { prompt: promptText, refs, images: [] });
-    await runTurn(id, ti, promptText, refs, useMask, () => {
+    appendTurn(id, { prompt: sentPrompt, refs, images: [], maskPreview, model: $selectedModelStore });
+    await runTurn(id, ti, sentPrompt, refs, useMask, () => {
       prompt = promptText;
       attached = wasAttached;
       maskData = useMask;
       maskSource = useMask ? base : null;
+      styleRef = useStyle;
     }, prevTurns);
   }
 
@@ -573,7 +709,7 @@
     if (!s) return;
     const prevTurns = s.turns;
     const refs = prevTurns[idx].refs;
-    setTurns(id, [...prevTurns.slice(0, idx), { prompt: promptText, refs, images: [] }], true);
+    setTurns(id, [...prevTurns.slice(0, idx), { prompt: promptText, refs, images: [], model: $selectedModelStore }], true);
     await runTurn(id, idx, promptText, refs, null, () => {}, prevTurns);
   }
 
@@ -587,7 +723,7 @@
     const t = s?.turns[idx];
     if (!s || !t) return;
     const prevTurns = s.turns;
-    setTurns(id, [...prevTurns.slice(0, idx), { prompt: t.prompt, refs: t.refs, images: [] }], true);
+    setTurns(id, [...prevTurns.slice(0, idx), { prompt: t.prompt, refs: t.refs, images: [], model: t.model ?? $selectedModelStore }], true);
     await runTurn(id, idx, t.prompt, t.refs, null, () => {}, prevTurns);
   }
 
@@ -633,6 +769,7 @@
   }
 
   function attachFiles(files: File[]) {
+    skipBase = false; // picking a base overrides the fresh-gen opt-out
     maskData = null; // base changes → any painted mask is stale
     maskSource = null;
     for (const file of files) {
@@ -645,6 +782,17 @@
   function onAttachFiles(event: Event) {
     const input = event.target as HTMLInputElement;
     attachFiles(Array.from(input.files ?? []));
+    input.value = "";
+  }
+
+  function onAttachStyle(event: Event) {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = () => (styleRef = reader.result as string);
+      reader.readAsDataURL(file);
+    }
     input.value = "";
   }
 
@@ -677,6 +825,17 @@
     } catch {
       /* clipboard image write unsupported / denied */
     }
+  }
+
+  // Reply to a past image: attach it as the source/reference for the next prompt.
+  // baseImage reads attached[0] first, so the next turn edits THIS image instead
+  // of the latest reply. Clears any stale mask.
+  function replyWithImage(img: string) {
+    if (isGenerating) return;
+    skipBase = false;
+    attached = [img];
+    maskData = null;
+    maskSource = null;
   }
 
   function downloadImage(img: string) {
@@ -721,7 +880,13 @@
                  / reference images fed into this turn ride inside the bubble. -->
             <div class="flex justify-end">
               <div class="group relative max-w-[85%] rounded-2xl rounded-br-sm bg-[#141414] text-[#ededee] msg-tail-user px-3.5 py-2 flex flex-col gap-2">
-                {#if t.refs.length}
+                {#if t.maskPreview}
+                  <!-- Inpaint mask: base with the regenerated region highlighted
+                       (replaces the plain reference — it IS the base image). -->
+                  <button class="block self-start rounded-lg overflow-hidden border border-white/15 cursor-zoom-in focus:outline-none" onclick={() => (fullscreenImg = t.maskPreview ?? null)} aria-label="View inpaint mask">
+                    <img src={t.maskPreview} alt="inpaint mask" class="max-h-28 w-auto object-contain" />
+                  </button>
+                {:else if t.refs.length}
                   <div class="flex flex-wrap gap-1.5">
                     {#each t.refs as ref, ri (ri)}
                       <button class="block rounded-lg overflow-hidden border border-white/15 cursor-zoom-in focus:outline-none" onclick={() => (fullscreenImg = ref)} aria-label="View reference image">
@@ -760,7 +925,21 @@
             </div>
             <!-- Image reply (left) — matches chat: surface bubble, no avatar. -->
             <div class="flex flex-col items-start">
+              {#if t.model}
+                <span class="flex items-center gap-1 mb-1 px-3 text-[0.6875rem] font-medium text-txtsecondary">
+                  <Sparkles class="w-3 h-3 shrink-0" />{t.model}
+                </span>
+              {/if}
               <div class="relative group rounded-2xl rounded-bl-sm px-3 py-2 text-[0.8125rem] w-fit max-w-full sm:max-w-[60%]">
+                {#if t.images.length && !isGenerating}
+                  <button
+                    class="absolute top-1/2 left-full ml-2 -translate-y-1/2 z-10 p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary opacity-0 group-hover:opacity-100 transition-opacity"
+                    onclick={() => replyWithImage(t.images[0])}
+                    title="Reply — use this image as the source/reference"
+                  >
+                    <Reply class="w-4 h-4" />
+                  </button>
+                {/if}
                 {#if t.error}
                   <div class="text-red-500">{t.error}</div>
                 {:else if t.images.length}
@@ -900,6 +1079,13 @@
                 <span class="cursor-help opacity-60" title="Pin reused-source brightness to the thread's first image so chained edits don't drift darker/brighter. Off = raw model output.">(?)</span>
               </span>
             </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" class="accent-primary" bind:checked={$sdKeepResStore} />
+              <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
+                Keep resolution
+                <span class="cursor-help opacity-60" title="Edit at the source image's native size instead of resizing to the selected size.">(?)</span>
+              </span>
+            </label>
           {:else}
             <p class="text-xs text-txtsecondary">OpenAI image route generates fresh each turn — it can't tweak a previous image. Switch to SDAPI for the edit loop.</p>
           {/if}
@@ -936,14 +1122,24 @@
         >
           <Paperclip class="w-[1.125rem] h-[1.125rem]" />
         </button>
-        {#if isSdapi && !supportsRefImages && baseImage}
+        {#if isSdapi && baseImage}
           <button
             class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {maskData && maskSource === baseImage ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
             onclick={() => (showMask = true)}
             disabled={isGenerating}
-            title="Inpaint — mask a region to change (keeps the rest)"
+            title={segmentModel ? "Inpaint — mask a region to change (brush or AI select)" : "Inpaint — mask a region to change (keeps the rest)"}
           >
             <Brush class="w-[1.125rem] h-[1.125rem]" />
+          </button>
+        {/if}
+        {#if isSdapi && supportsRefImages}
+          <button
+            class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {styleRef ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
+            onclick={() => styleInput?.click()}
+            disabled={isGenerating}
+            title="Style transfer — apply the look of a reference image to the edit"
+          >
+            <Palette class="w-[1.125rem] h-[1.125rem]" />
           </button>
         {/if}
         {#if isSdapi && !(showNegative || $sdNegativePromptStore)}
@@ -983,18 +1179,57 @@
             {/each}
           </div>
         {:else if baseImage && turns.length > 0}
-          <p class="text-xs text-txtsecondary mb-2 px-2">{supportsRefImages ? "Editing the last image (reference)" : isSdapi ? "Editing the last image (img2img)" : "Fresh generation each turn"}</p>
+          <p class="flex items-center gap-1.5 text-xs text-txtsecondary mb-2 px-2">
+            <span>{supportsRefImages ? "Editing the last image (reference)" : isSdapi ? "Editing the last image (img2img)" : "Fresh generation each turn"}</span>
+            {#if isSdapi}
+              <button class="hover:text-txtmain transition-colors" onclick={() => (skipBase = true)} title="New image instead — don't edit the last one">
+                <X class="w-3.5 h-3.5" />
+              </button>
+            {/if}
+          </p>
+        {:else if skipBase && turns.length > 0 && isSdapi}
+          <p class="flex items-center gap-1.5 text-xs text-txtsecondary mb-2 px-2">
+            <span>New image — not editing the last one</span>
+            <button class="hover:text-txtmain transition-colors" onclick={() => (skipBase = false)} title="Edit the last image instead">
+              <RefreshCw class="w-3.5 h-3.5" />
+            </button>
+          </p>
         {/if}
 
         {#if maskData && maskSource === baseImage}
-          <div class="flex items-center gap-2 mb-2 px-2 text-xs text-primary">
-            <Brush class="w-3.5 h-3.5" />
-            <span>Inpaint mask set — only the painted area changes</span>
-            <button class="text-txtsecondary hover:text-txtmain" onclick={() => { maskData = null; maskSource = null; }}>clear</button>
+          <div class="flex items-center gap-2.5 mb-2 px-2">
+            {#if pendingMaskPreview}
+              <button
+                class="block rounded-lg overflow-hidden border border-card-border shrink-0 cursor-zoom-in focus:outline-none"
+                onclick={() => (fullscreenImg = pendingMaskPreview)}
+                aria-label="View inpaint mask"
+              >
+                <img src={pendingMaskPreview} alt="inpaint mask preview" class="h-14 w-auto object-contain" />
+              </button>
+            {/if}
+            <div class="flex items-center gap-2 text-xs text-primary">
+              <Brush class="w-3.5 h-3.5" />
+              <span>Inpaint mask set — only the highlighted area changes</span>
+              <button class="text-txtsecondary hover:text-txtmain" onclick={() => { maskData = null; maskSource = null; }}>clear</button>
+            </div>
+          </div>
+        {/if}
+
+        {#if styleRef && supportsRefImages}
+          <div class="flex items-center gap-2.5 mb-2 px-2">
+            <div class="relative w-14 h-14 rounded-lg overflow-hidden border border-primary bg-secondary shrink-0">
+              <img src={styleRef} alt="style reference" class="w-full h-full object-cover" />
+            </div>
+            <div class="flex items-center gap-2 text-xs text-primary">
+              <Palette class="w-3.5 h-3.5" />
+              <span>Style reference set — its look is applied to the edit</span>
+              <button class="text-txtsecondary hover:text-txtmain" onclick={() => (styleRef = null)}>clear</button>
+            </div>
           </div>
         {/if}
 
         <input type="file" accept="image/*" multiple class="hidden" bind:this={fileInput} onchange={onAttachFiles} />
+        <input type="file" accept="image/*" class="hidden" bind:this={styleInput} onchange={onAttachStyle} />
 
         <Composer
           bind:value={prompt}
@@ -1023,6 +1258,7 @@
 {#if showMask && baseImage}
   <MaskEditor
     source={baseImage}
+    model={segmentModel}
     initialMask={maskSource === baseImage ? maskData : null}
     onDone={(m) => { maskData = m; maskSource = m ? baseImage : null; showMask = false; }}
     onCancel={() => (showMask = false)}

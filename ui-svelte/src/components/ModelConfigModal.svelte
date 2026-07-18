@@ -228,17 +228,23 @@
   // Qwen3-TTS talker (tts-server): minimal form, no KV/ctx/spec/estimate. The
   // talker + codec are tiny and fully resident; voice/temperature are per-request.
   const audioMode = $derived(config?.isAudio ?? false);
+  // SAM segmentation (sam3_server): minimal form, no KV/ctx/spec/estimate. Only
+  // launch knobs are the backend pick + extraArgs + listing toggles; box/point
+  // prompts are per-request (/v1/segment). CPU vs GPU is auto (VRAM-aware) or
+  // pinned via extraArgs --no-gpu.
+  const samMode = $derived(config?.isSam ?? false);
 
   // Model class a backend kind serves — mirrors autogen's kindClass.
   function backendClass(kind: string): string {
     if (["llama", "llama.cpp", "server", "vllm"].includes(kind)) return "llm";
     if (["sd", "sd-server", "image"].includes(kind)) return "image";
     if (["tts", "tts-server", "speech"].includes(kind)) return "tts";
+    if (["sam", "sam3", "segment"].includes(kind)) return "segment";
     return "";
   }
   // Backends compatible with this model, the selected one's kind, and whether it
   // is vllm (drives which knobs apply). Empty registry => no picker shown.
-  const modelClass = $derived(imageMode ? "image" : audioMode ? "tts" : "llm");
+  const modelClass = $derived(imageMode ? "image" : audioMode ? "tts" : samMode ? "segment" : "llm");
   const classBackends = $derived((config?.backends ?? []).filter((b) => backendClass(b.kind) === modelClass));
   const selectedKind = $derived(classBackends.find((b) => b.id === backend)?.kind ?? "");
   const isVllm = $derived(selectedKind === "vllm");
@@ -955,7 +961,7 @@
     ];
     void deps;
     // Diffusion/TTS/vllm sizing isn't modeled by the llama sizer; skip the estimate.
-    if (!open || !config || !modelId || imageMode || audioMode || isVllm) return;
+    if (!open || !config || !modelId || imageMode || audioMode || samMode || isVllm) return;
     clearTimeout(estTimer);
     estTimer = setTimeout(runEstimate, 100);
   });
@@ -1291,7 +1297,7 @@
 
     <!-- Sticky live estimate: stays pinned above the scrolling form so the memory
          cost of the current tuning is always visible while editing. -->
-    {#if config && !loading && !imageMode && !audioMode && !isVllm}
+    {#if config && !loading && !imageMode && !audioMode && !samMode && !isVllm}
       <div class="px-4 py-2 border-b border-card-border bg-background/60 shrink-0">
         {#if estimateError}
           <p class="font-mono text-xs text-error">{estimateError}</p>
@@ -1690,6 +1696,49 @@
               {@render hint("Appended verbatim to the tts-server command, for flags autogen doesn't model.")}
             </span>
             <input type="text" bind:value={extraArgs} class="cfg-input" placeholder="e.g. --temperature 0.7" spellcheck="false" />
+          </label>
+          <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" bind:checked={unlisted} />
+            <span class="text-txtsecondary flex items-center gap-1">
+              Unlisted
+              {@render hint("Hide from /v1/models listings, but still loadable by exact id.")}
+            </span>
+          </label>
+          <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" bind:checked={skip} />
+            <span class="text-txtsecondary flex items-center gap-1">
+              Skip (don't emit)
+              {@render hint("Exclude this model from the generated config entirely.")}
+            </span>
+          </label>
+        </div>
+
+        <details class="group">
+          <summary class="cursor-pointer font-semibold text-sm uppercase tracking-wider text-txtsecondary hover:text-txtmain">
+            Launch parameters {config.hasOverride ? "(custom)" : "(autogen default)"}
+          </summary>
+          <textarea value={cmdDraft} readonly spellcheck="false" rows="4" class="mt-2 w-full bg-background rounded border border-card-border p-3 text-xs font-mono whitespace-pre-wrap break-all resize-y text-txtmain opacity-90"></textarea>
+          <p class="text-xs text-txtsecondary mt-1 font-mono break-all">{config.gguf}</p>
+        </details>
+        {:else if samMode}
+        <!-- SAM segmentation (sam3.cpp tts-server sibling: sam3_server) form. No
+             KV/ctx/spec/estimate — SAM models are tiny and fully resident. Box/
+             point prompts are per-request (/v1/segment), not launch flags. CPU vs
+             GPU placement is auto (VRAM-aware, coexists with the loaded model);
+             pin it with extraArgs --no-gpu. Only launch knobs are the backend pick
+             (above) + extraArgs passthrough + listing toggles. No variants. -->
+        <div class="grid grid-cols-2 gap-3">
+          <p class="col-span-2 text-xs text-txtsecondary">
+            Served by <code>sam3_server</code> (<code>POST /v1/segment</code>) with box / point
+            prompts. Runs alongside the loaded model — auto-placed on CPU when VRAM is tight
+            (pin with <code>--no-gpu</code> below). Used from the image playground's AI-select tool.
+          </p>
+          <label class="flex flex-col gap-1 text-sm col-span-2">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Extra args
+              {@render hint("Appended verbatim to the sam3_server command, for flags autogen doesn't model. Use --no-gpu to force CPU regardless of the auto placement.")}
+            </span>
+            <input type="text" bind:value={extraArgs} class="cfg-input" placeholder="e.g. --no-gpu" spellcheck="false" />
           </label>
           <label class="flex items-center gap-2 text-sm">
             <input type="checkbox" bind:checked={unlisted} />

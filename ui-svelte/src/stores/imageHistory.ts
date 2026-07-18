@@ -2,7 +2,7 @@ import { writable } from "svelte/store";
 
 // One turn in an image thread: a prompt, the source/reference images fed into it,
 // and the generated result. Mirrors the chat tab's message model but for images.
-export type Turn = { prompt: string; refs: string[]; images: string[]; error?: string; secs?: number };
+export type Turn = { prompt: string; refs: string[]; images: string[]; maskPreview?: string; error?: string; secs?: number; model?: string };
 
 export interface ImageSession {
   id: string;

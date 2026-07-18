@@ -107,6 +107,7 @@ var modelPostJSONRoutes = []string{
 	"/v1/images/generations",
 	"/sdapi/v1/txt2img",
 	"/sdapi/v1/img2img",
+	"/v1/segment", // SAM image segmentation -> sam3_server (model id in JSON body)
 
 	// versionless routes, the /v/ is stripped before the request is forwarded upstream
 	// see issue #728

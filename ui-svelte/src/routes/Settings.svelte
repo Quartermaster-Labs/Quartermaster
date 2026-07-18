@@ -40,7 +40,7 @@
   // A list of backends the loader can spawn. Point a llama/sd/tts row at a
   // Vulkan/ROCm build on AMD/Intel GPUs. Currently the first entry of each kind
   // drives model loading; extra rows persist for later per-model wiring.
-  const BACKEND_KINDS = ["llama", "sd", "tts", "vllm", "custom"];
+  const BACKEND_KINDS = ["llama", "sd", "tts", "sam", "vllm", "custom"];
   let backends = $state<BackendEntry[]>([]);
   let savingBackends = $state(false);
   let backendsErr = $state<string | null>(null);
@@ -63,6 +63,7 @@
     if (["llama", "llama.cpp", "server", "vllm"].includes(kind)) return "llm";
     if (["sd", "sd-server", "image"].includes(kind)) return "image";
     if (["tts", "tts-server", "speech"].includes(kind)) return "tts";
+    if (["sam", "sam3", "segment"].includes(kind)) return "segment";
     return "";
   }
 

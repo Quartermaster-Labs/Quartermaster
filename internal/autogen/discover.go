@@ -34,6 +34,10 @@ type GgufRow struct {
 	// dir as a talker, if any. Loaded via tts-server --codec, never served alone.
 	CodecPath   string
 	CodecSizeGB float64
+	// IsSam marks a SAM (Segment Anything) model: a *.ggml file (NOT gguf — sam3.cpp
+	// uses the raw ggml format, no metadata header) served by sam3_server. Routed
+	// before the gguf metadata read in emitModel, since ReadGgufMetadata can't parse it.
+	IsSam bool
 }
 
 var (
@@ -54,6 +58,10 @@ var (
 	// Loaded via tts-server --codec alongside the talker, never served as its own
 	// model. "hz" scopes the tokenizer match so a normal model file can't trip it.
 	ttsCodecFileRe = regexp.MustCompile(`(?i)tokenizer-?\d+hz|codec`)
+	// SAM (Segment Anything) model files, served by sam3_server. These are raw
+	// *.ggml (not gguf), so they're matched by name — ".ggml" alone is too generic
+	// (other ggml projects use it). Add new families here (mobilesam, etc.).
+	samFileRe = regexp.MustCompile(`(?i)(sam2|sam3|edgetam|hiera)`)
 )
 
 // quantFromName extracts the quant token (upper-cased) from a gguf file name,
@@ -109,6 +117,25 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 	walkErr := filepath.WalkDir(modelsRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable entries, matching -ErrorAction SilentlyContinue
+		}
+		// SAM models are raw *.ggml (no gguf header); served by sam3_server. Emit a
+		// row by filename and skip the gguf pipeline (metadata/quant/shard logic).
+		if !d.IsDir() && strings.EqualFold(filepath.Ext(path), ".ggml") && samFileRe.MatchString(d.Name()) {
+			fi, e := d.Info()
+			if e != nil {
+				return nil
+			}
+			base := strings.TrimSuffix(d.Name(), filepath.Ext(d.Name()))
+			id := strings.ToLower(strings.ReplaceAll(base, "_", "-"))
+			rows = append(rows, GgufRow{
+				ID:       id,
+				BaseID:   id,
+				FullPath: path,
+				FileName: d.Name(),
+				SizeGB:   round(float64(fi.Size())/gib, 2),
+				IsSam:    true,
+			})
+			return nil
 		}
 		if d.IsDir() || !strings.EqualFold(filepath.Ext(path), ".gguf") {
 			return nil

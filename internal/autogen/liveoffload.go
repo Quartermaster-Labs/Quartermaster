@@ -42,7 +42,29 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 	}
 
 	model, _ := argVal(args, "-m", "--model")
-	if !strings.HasSuffix(strings.ToLower(model), ".gguf") {
+	lower := strings.ToLower(model)
+
+	// SAM (sam3_server) segmentation: model is *.ggml. Always force CPU. The
+	// Vulkan backend on RX 7900 XTX numerically corrupts SAM inference — both the
+	// PCS (text) detector scores AND the PVS (box/point) masks come back garbage
+	// (scores collapse to ~0.0003, no object found), while CPU gives correct
+	// results. SAM is tiny and coexists with a loaded LLM/image model (never
+	// evicted), so the CPU cost (~14s/segment) is acceptable and the only backend
+	// that actually works here. An explicit --no-gpu (user extraArgs) is a no-op.
+	// ponytail: force CPU for all .ggml; revisit if a non-broken GPU backend
+	// (CUDA, or a fixed Vulkan/ROCm build) is ever wired for SAM.
+	if strings.HasSuffix(lower, ".ggml") {
+		if hasFlag(args, "--no-gpu") {
+			return args, nil
+		}
+		out := append(append([]string(nil), args...), "--no-gpu")
+		if logf != nil {
+			logf("dynoffload: sam -> --no-gpu (Vulkan SAM inference is numerically broken; CPU only)")
+		}
+		return out, nil
+	}
+
+	if !strings.HasSuffix(lower, ".gguf") {
 		return args, nil // not a llama.cpp model load (sd-server, custom cmd, …)
 	}
 	nglStr, nglIdx := argVal(args, "-ngl", "--n-gpu-layers", "--gpu-layers")

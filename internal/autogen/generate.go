@@ -89,6 +89,7 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 	b.WriteString("models:\n")
 
 	var emitted []string
+	var samNames []string
 	seen := map[string]bool{}
 
 	for _, row := range rows {
@@ -110,11 +111,14 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 			fmt.Fprintf(&b, "\n  # SKIPPED %q: %v\n", name, err)
 			continue
 		}
+		if row.IsSam {
+			samNames = append(samNames, name)
+		}
 	}
 
 	emitExtraImageModels(&b, s, gf.Overrides, seen, &emitted)
 
-	emitGroupsAndListeners(&b, s, emitted)
+	emitGroupsAndListeners(&b, s, emitted, samNames)
 	return b.String(), nil
 }
 
@@ -199,10 +203,28 @@ func emitAPIKeys(b *strings.Builder, keys []APIKeyEntry) {
 // exclusive swap groups, so loading on any listener still evicts whatever the
 // others were running (one GPU, VRAM-exclusive). With no settings.groups the
 // output is a single "exclusive" group over every model (upstream default).
-func emitGroupsAndListeners(b *strings.Builder, s Settings, emitted []string) {
+func emitGroupsAndListeners(b *strings.Builder, s Settings, emitted, samNames []string) {
+	// SAM models are tiny and must coexist with whatever LLM/image model is loaded,
+	// so they go in their own group that never evicts and is never evicted (see
+	// writeSamGroup) — kept out of the exclusive swap groups below.
+	isSam := map[string]bool{}
+	for _, n := range samNames {
+		isSam[n] = true
+	}
+	nonSam := emitted
+	if len(isSam) > 0 {
+		nonSam = nonSam[:0:0]
+		for _, n := range emitted {
+			if !isSam[n] {
+				nonSam = append(nonSam, n)
+			}
+		}
+	}
+
 	if len(s.Groups) == 0 {
 		b.WriteString("\ngroups:\n")
-		writeGroup(b, "exclusive", emitted)
+		writeGroup(b, "exclusive", nonSam)
+		writeSamGroup(b, samNames)
 		return
 	}
 
@@ -220,7 +242,7 @@ func emitGroupsAndListeners(b *strings.Builder, s Settings, emitted []string) {
 		addGroup(g.Name)
 	}
 	const defaultGroup = "default"
-	for _, name := range emitted {
+	for _, name := range nonSam {
 		assigned := ""
 		for _, g := range s.Groups {
 			for _, pat := range g.Match {
@@ -244,6 +266,7 @@ func emitGroupsAndListeners(b *strings.Builder, s Settings, emitted []string) {
 	for _, name := range order {
 		writeGroup(b, name, members[name])
 	}
+	writeSamGroup(b, samNames)
 
 	// listeners: address -> the groups it exposes (a group with no Listen binds
 	// no dedicated port but still groups for eviction).
@@ -267,6 +290,24 @@ func emitGroupsAndListeners(b *strings.Builder, s Settings, emitted []string) {
 	}
 }
 
+// writeSamGroup emits the coexistence group for SAM models: exclusive:false so
+// loading a SAM model evicts nothing, persistent:true so an exclusive LLM/image
+// load never evicts the SAM models, swap:false so multiple SAM models coexist
+// (they're tiny). Nothing emitted when there are no SAM models.
+func writeSamGroup(b *strings.Builder, members []string) {
+	if len(members) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "  %s:\n", "sam")
+	b.WriteString("    swap: false\n")
+	b.WriteString("    exclusive: false\n")
+	b.WriteString("    persistent: true\n")
+	b.WriteString("    members:\n")
+	for _, n := range members {
+		fmt.Fprintf(b, "      - %q\n", n)
+	}
+}
+
 // writeGroup emits one exclusive swap group with the given members.
 func writeGroup(b *strings.Builder, name string, members []string) {
 	fmt.Fprintf(b, "  %s:\n", name)
@@ -281,6 +322,13 @@ func writeGroup(b *strings.Builder, name string, members []string) {
 // emitModel reads metadata once and emits every profile (solo, ctx tiers, game)
 // for one discovered gguf.
 func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov *Override, name string, emitted *[]string) error {
+	// SAM models are raw *.ggml with no gguf header — route them before the
+	// metadata read (ReadGgufMetadata would fail). Served by sam3_server.
+	if row.IsSam {
+		emitSamModel(b, s, row, ov, name, emitted)
+		return nil
+	}
+
 	meta, err := ReadGgufMetadataCached(row.FullPath)
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
@@ -1439,6 +1487,10 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 // reusing the solo-profile sizer so the editor's launch-parameters box matches
 // what a save would emit. Returns the command on one line (with `${PORT}` intact).
 func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string, error) {
+	// SAM models render a sam3_server command (no metadata; matched by IsSam).
+	if row.IsSam {
+		return strings.Join(samCmdLines(s, row, &ov), " "), nil
+	}
 	// Diffusion models render an sd-server command, not a llama-server one.
 	if imgArch := effectiveImageArch(meta); isImageArch(imgArch) {
 		lines, _, _, _ := imageCmdLines(s, row, &ov, imgArch, row.FullPath)

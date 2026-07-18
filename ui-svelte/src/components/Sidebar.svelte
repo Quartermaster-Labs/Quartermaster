@@ -1,6 +1,6 @@
 <script lang="ts">
   import { link, location } from "svelte-spa-router";
-  import { LayoutDashboard, Boxes, FlaskConical, Activity, KeyRound, Sun, Moon, MonitorCog, ChevronRight, ArrowUpCircle, MessageSquare, Image, Volume2, Mic, Binary, BookOpen, Settings } from "lucide-svelte";
+  import { LayoutDashboard, Boxes, FlaskConical, Activity, KeyRound, Sun, Moon, MonitorCog, ChevronRight, ArrowUpCircle, MessageSquare, Image, Volume2, Mic, Binary, Scissors, BookOpen, Settings } from "lucide-svelte";
   import WikiModal from "./WikiModal.svelte";
   import SettingsModal from "./SettingsModal.svelte";
   import { toggleTheme, themeMode, connectionState } from "../stores/theme";
@@ -13,6 +13,7 @@
   const CATEGORY_ICONS: Record<ModelCategory, typeof MessageSquare> = {
     llm: MessageSquare,
     image: Image,
+    segment: Scissors,
     tts: Volume2,
     transcribe: Mic,
     embed: Binary,

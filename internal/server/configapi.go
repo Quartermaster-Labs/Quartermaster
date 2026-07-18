@@ -238,6 +238,7 @@ type modelConfigResp struct {
 	IsDflash    bool   `json:"isDflash"`   // paired *-dflash-*.gguf sidecar in the model's dir => draft-dflash usable
 	IsImage     bool   `json:"isImage"`    // diffusion model (sd-server) => image config form
 	IsAudio     bool   `json:"isAudio"`    // Qwen3-TTS talker (tts-server) => audio config form
+	IsSam       bool   `json:"isSam"`      // SAM segmentation (sam3_server) => minimal segment form
 	HasOverride bool   `json:"hasOverride"`
 	// DisplayName is the UI-chosen advertised name for this base id ("" => none;
 	// the model advertises its real id). Renaming cascades to variant ids.
@@ -408,6 +409,15 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 	// command. --diffusion-model catches most sd-server models, but pixel-native /
 	// full-checkpoint archs (HiDream-O1, SD/SDXL) are served with -m, which the
 	// cmd sniff misses — capabilities.out:[image] covers them.
+	// SAM segmentation (sam3_server) gets a minimal segment form. The declared
+	// capability is authoritative and MUST win over the image/audio sniffs below:
+	// a SAM cmd carries both `--model ` (trips the tts discriminator) and
+	// capabilities.out:[image] (trips the image one), so without this SAM would
+	// render the wrong form.
+	isSam := false
+	if mc, ok := s.config().Models[realID]; ok && mc.Capabilities.Segmentation {
+		isSam = true
+	}
 	isImage := strings.Contains(cmd, "--diffusion-model")
 	if mc, ok := s.config().Models[realID]; ok && slices.Contains(mc.Capabilities.Out, "image") {
 		isImage = true
@@ -416,7 +426,10 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 	// The tts-server cmd uses --model (llama/sd emit -m/--diffusion-model), so that
 	// flag is a clean discriminator on the autogen-rendered command.
 	isAudio := strings.Contains(cmd, "--codec") || strings.Contains(cmd, "--model ")
-	resp := modelConfigResp{Id: realID, Gguf: gguf, Cmd: strings.TrimSpace(cmd), IsImage: isImage, IsAudio: isAudio, HasOverride: existing != nil}
+	if isSam {
+		isImage, isAudio = false, false
+	}
+	resp := modelConfigResp{Id: realID, Gguf: gguf, Cmd: strings.TrimSpace(cmd), IsImage: isImage, IsAudio: isAudio, IsSam: isSam, HasOverride: existing != nil}
 	if dn, err := autogen.LoadSidecarDisplayNames(s.autogen.GeneratePath); err == nil {
 		resp.DisplayName = dn[realID]
 	}

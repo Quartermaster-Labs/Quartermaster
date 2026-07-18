@@ -1,7 +1,7 @@
 <script lang="ts">
   import { renderMarkdown, renderStreamingMarkdown, createStreamingCache } from "../../lib/markdown";
   import type { RenderedBlock } from "../../lib/markdown";
-  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronRight, Code, Search, BookOpen, PenLine, Wrench } from "lucide-svelte";
+  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronRight, Code, Search, BookOpen, PenLine, Wrench, Reply } from "lucide-svelte";
   import { getTextContent, getImageUrls } from "../../lib/types";
   import { harmonyToThink } from "../../lib/reasoning";
   import type { ContentPart, QmApproval } from "../../lib/types";
@@ -29,9 +29,10 @@
     hasVisionInput?: boolean;
     onEdit?: (newContent: string) => void;
     onRegenerate?: () => void;
+    onReply?: () => void;
   }
 
-  let { role, content, reasoning_content = "", reasoningTimeMs = 0, thinkMs, genTimeMs = 0, searches, citations, approval, onApprove, rewriteInstruction, rewriteOriginal, isStreaming = false, isReasoning = false, isSearching = false, modelReady = false, hasVisionInput = false, onEdit, onRegenerate }: Props = $props();
+  let { role, content, reasoning_content = "", reasoningTimeMs = 0, thinkMs, genTimeMs = 0, searches, citations, approval, onApprove, rewriteInstruction, rewriteOriginal, isStreaming = false, isReasoning = false, isSearching = false, modelReady = false, hasVisionInput = false, onEdit, onRegenerate, onReply }: Props = $props();
 
   // Format a JSON diff value for the approval card (null → "auto", strings bare).
   function fmtVal(v: unknown): string {
@@ -228,6 +229,19 @@
   });
   let copied = $state(false);
   let showRaw = $state(false);
+  // Vertical offset (px, relative to the bubble top) the reply button tracks to.
+  // Snaps to the CENTER of the text line under the cursor (via caret hit-testing)
+  // so it steps line-by-line, and is clamped inside the bubble so it can't drift
+  // past the text bounds.
+  let replyY = $state(0);
+  function trackReply(e: MouseEvent) {
+    const el = e.currentTarget as HTMLElement;
+    const top = el.getBoundingClientRect().top;
+    const range = (document as any).caretRangeFromPoint?.(e.clientX, e.clientY) as Range | undefined;
+    const rect = range?.getBoundingClientRect();
+    const y = rect && rect.height > 0 ? rect.top - top + rect.height / 2 : e.clientY - top;
+    replyY = Math.max(10, Math.min(el.clientHeight - 10, y));
+  }
   let isEditing = $state(false);
   let editContent = $state("");
   let showReasoning = $state(false);
@@ -440,12 +454,24 @@
   </details>
 {:else}
 <div class="flex flex-col {role === 'user' ? 'items-end' : 'items-start'} mb-4">
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
+    onmousemove={role === "assistant" ? trackReply : undefined}
     class="relative group rounded-2xl px-3 py-2 text-[0.8125rem] {role === 'user'
       ? 'max-w-[85%] bg-[#141414] text-[#ededee] rounded-br-sm msg-tail-user'
       : (rewriteOriginal != null ? 'w-full' : 'w-full sm:w-4/5') + ' rounded-bl-sm'}"
   >
     {#if role === "assistant"}
+      {#if onReply && !isStreaming}
+        <button
+          class="absolute left-full ml-2 -translate-y-1/2 z-10 p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary opacity-0 group-hover:opacity-100 transition-opacity"
+          style="top: {replyY}px"
+          onclick={onReply}
+          title="Reply to this message"
+        >
+          <Reply class="w-4 h-4" />
+        </button>
+      {/if}
       <!-- DeepSeek-style reasoning trail: one dot per step (thought / searched),
            a gapped connector line between dots, content hanging to the right. -->
       {#snippet reasoningTrail(items: SubItem[])}

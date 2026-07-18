@@ -65,7 +65,7 @@ func renderCapabilities(caps config.ModelCapConfig) (arch map[string]any, capsMa
 	}
 
 	// Build capabilities map only if there's something to put in it.
-	if hasIn || hasOut || caps.Tools || caps.Reranker || caps.Embedding {
+	if hasIn || hasOut || caps.Tools || caps.Reranker || caps.Embedding || caps.Segmentation {
 		capsMap = make(map[string]any)
 	}
 
@@ -100,6 +100,10 @@ func renderCapabilities(caps config.ModelCapConfig) (arch map[string]any, capsMa
 
 	if caps.Embedding {
 		capsMap["embeddings"] = true
+	}
+
+	if caps.Segmentation {
+		capsMap["segmentation"] = true
 	}
 
 	if caps.Context > 0 {

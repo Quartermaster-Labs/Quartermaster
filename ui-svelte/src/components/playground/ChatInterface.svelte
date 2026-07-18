@@ -36,7 +36,7 @@
   import { getTextContent, getImageUrls } from "../../lib/types";
   import { buildBasePrompt } from "../../lib/systemPrompt";
   import type { ChatMessage, ContentPart } from "../../lib/types";
-  import { Paperclip, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle, Eye, Wrench } from "lucide-svelte";
+  import { Paperclip, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle, Eye, Wrench, Reply, Quote } from "lucide-svelte";
   import ChatMessageComponent from "./ChatMessage.svelte";
   import Composer from "./Composer.svelte";
   import { modelCategory } from "../../lib/modelUtils";
@@ -139,6 +139,59 @@
   let userInput = $state("");
   // Messages typed while a turn is streaming; sent one-by-one once it finishes.
   let queued = $state<string[]>([]);
+
+  // Reply target: a past assistant message the next send quotes. The whole
+  // conversation is already resent to the model, so the quote is just a short
+  // pointer telling it WHICH message the user is answering. Cleared on send or
+  // chat switch.
+  let replyingTo = $state<string | null>(null);
+  function replyTo(idx: number) {
+    replyingTo = getTextContent(messages[idx].content).replace(/\s+/g, " ").trim();
+  }
+  // Markdown blockquote prefix from the reply target (snippet, capped).
+  function quotePrefix(text: string): string {
+    const snippet = text.slice(0, 140);
+    return `> ${snippet}${text.length > 140 ? "…" : ""}\n\n`;
+  }
+  $effect(() => {
+    $activeChatId;
+    replyingTo = null;
+  });
+
+  // Highlight-to-reply: selecting text inside an assistant bubble pops a small
+  // Reply button anchored at the selection, which quotes exactly that span.
+  let selReply = $state<{ text: string; x: number; y: number } | null>(null);
+  function onSelection() {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) return; // keep popup on button mousedown collapse
+    const text = sel.toString().replace(/\s+/g, " ").trim();
+    if (!text) {
+      selReply = null;
+      return;
+    }
+    // Both ends must sit inside the same assistant message.
+    const owner = (n: Node | null) =>
+      (n instanceof Element ? n : n?.parentElement)?.closest('[data-role="assistant"]') ?? null;
+    const a = owner(sel.anchorNode);
+    if (!a || a !== owner(sel.focusNode)) {
+      selReply = null;
+      return;
+    }
+    // getBoundingClientRect spans the whole selection (rightmost = widest line);
+    // the LAST client rect is the end of the final selected line — anchor there so
+    // the button lands by the cursor, not the far edge of the paragraph.
+    const range = sel.getRangeAt(0);
+    const rects = range.getClientRects();
+    const rect = rects[rects.length - 1] ?? range.getBoundingClientRect();
+    selReply = { text, x: rect.right, y: rect.bottom };
+  }
+  function replyToSelection() {
+    if (!selReply) return;
+    replyingTo = selReply.text;
+    selReply = null;
+    window.getSelection()?.removeAllRanges();
+    inputEl?.focus();
+  }
 
   // Transient toast shown just above the composer (e.g. toggling reasoning/search).
   let toast = $state("");
@@ -342,6 +395,7 @@
   let autoScrolling = false;
 
   function handleMessagesScroll() {
+    selReply = null; // rects go stale once the list scrolls
     if (!messagesContainer) return;
     if (autoScrolling) {
       autoScrolling = false;
@@ -407,19 +461,24 @@
 
     userScrolledUp = false;
 
+    // Reply to a past message → prepend a quote snippet so the model knows which
+    // one this answers (the full thread is already resent as history).
+    const text = replyingTo ? quotePrefix(replyingTo) + trimmedInput : trimmedInput;
+    replyingTo = null;
+
     // Build message content (multimodal if images attached)
     let content: string | ContentPart[];
     if (attachedImages.length > 0) {
       const parts: ContentPart[] = [];
-      if (trimmedInput) {
-        parts.push({ type: "text", text: trimmedInput });
+      if (text) {
+        parts.push({ type: "text", text });
       }
       for (const url of attachedImages) {
         parts.push({ type: "image_url", image_url: { url } });
       }
       content = parts;
     } else {
-      content = trimmedInput;
+      content = text;
     }
 
     appendMessage(id, { role: "user", content });
@@ -1002,6 +1061,18 @@
       <p>No models configured. Add models to your configuration to start chatting.</p>
     </div>
   {:else}
+    <!-- Highlight-to-reply popup, anchored above the current text selection. -->
+    {#if selReply}
+      <button
+        class="fixed z-30 inline-flex items-center justify-center rounded-lg bg-[#141414] text-[#ededee] p-1.5 shadow-lg hover:opacity-90 transition-opacity"
+        style="left: {selReply.x + 4}px; top: {selReply.y + 4}px"
+        title="Reply to selection"
+        onmousedown={(e) => e.preventDefault()}
+        onclick={replyToSelection}
+      >
+        <Quote class="w-3.5 h-3.5" />
+      </button>
+    {/if}
     <!-- Chat column — full-width so the whole pane scrolls; the message list and
          composer are width-constrained and centered inside. -->
     <div class="flex-1 flex flex-col min-w-0 min-h-0 w-full">
@@ -1014,11 +1085,14 @@
       </div>
     {/if}
     <!-- Messages area — scrolls across the full width; content centered within. -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="flex-1 min-h-0 overflow-y-auto pretty-scroll scroll-fade-b mb-4"
       bind:this={messagesContainer}
       onscroll={handleMessagesScroll}
       onwheel={(e) => { if (e.deltaY < 0) userScrolledUp = true; }}
+      onmousedown={() => (selReply = null)}
+      onmouseup={onSelection}
       use:scrollFade
     >
       <div class="w-full max-w-3xl mx-auto px-2 pt-4 pb-6 {messages.length === 0 ? 'h-full' : ''}">
@@ -1036,6 +1110,7 @@
               <span class="flex-1 h-px bg-card-border"></span>
             </div>
           {/if}
+          <div data-role={message.role}>
           <ChatMessageComponent
             role={message.role}
             content={message.content}
@@ -1058,7 +1133,9 @@
             onRegenerate={message.role === "assistant" && idx > 0 && messages[idx - 1].role === "user"
               ? () => regenerateFromIndex($activeChatId, idx - 1)
               : undefined}
+            onReply={message.role === "assistant" ? () => { replyTo(idx); inputEl?.focus(); } : undefined}
           />
+          </div>
         {/each}
       {/if}
       </div>
@@ -1228,6 +1305,21 @@
               </button>
             </div>
           {/each}
+        </div>
+      {/if}
+
+      <!-- Reply target chip: the past message the next send quotes. -->
+      {#if replyingTo}
+        <div class="flex items-center gap-2 mb-2 self-start max-w-full rounded-2xl bg-secondary/60 border border-card-border px-3 py-1.5 text-[0.8125rem]">
+          <Reply class="w-3.5 h-3.5 shrink-0 text-primary" />
+          <span class="truncate text-txtsecondary" title={replyingTo}>Replying to: {replyingTo}</span>
+          <button
+            class="shrink-0 p-0.5 rounded-full text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
+            onclick={() => (replyingTo = null)}
+            title="Cancel reply"
+          >
+            <X class="w-3.5 h-3.5" />
+          </button>
         </div>
       {/if}
 

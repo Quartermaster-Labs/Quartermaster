@@ -53,9 +53,11 @@
     }
   });
 
-  // Every category except embed has a playground tab. Embedders have no UI.
+  // Every category except embed/segment has a playground tab. Embedders have no
+  // UI; SAM segmenters are driven from the Images playground select tool.
   function playable(m: Model): boolean {
-    return modelCategory(m) !== "embed";
+    const cat = modelCategory(m);
+    return cat !== "embed" && cat !== "segment";
   }
   function playgroundTab(m: Model): string {
     const c = m.capabilities;

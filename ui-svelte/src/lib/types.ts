@@ -11,6 +11,7 @@ export interface ModelCapabilities {
   function_calling?: boolean;
   reranker?: boolean;
   embeddings?: boolean;
+  segmentation?: boolean;
 }
 
 export interface Model {

@@ -33,7 +33,14 @@ const hashCacheSuffix = ".modelhash"
 //	     --clip_g / --sampling-method so the config editor can tune them.
 //	v19: MTP models default spec draft-mtp+ngram-mod (chain beats mtp alone); mmap
 //	     defaults --no-mmap unless CPU offload (n-cpu-moe or partial layer offload).
-const genVersion = "v19"
+//	v21: SAM emits capabilities.segmentation + auto --no-gpu when the card can't
+//	     spare headroom beyond the primary VRAM budget (coexist placement).
+//	v22: SAM exe fallback derives as sibling of ServerExe (backends dir) instead
+//	     of bare "sam3_server" on PATH.
+//	v23: SAM no longer bakes --no-gpu at generate (static-budget heuristic always
+//	     tripped CPU on a full-budget card even when idle); CPU vs GPU is now a
+//	     live spawn-time decision (LiveOffloadArgs .ggml branch, samGpuMinFreeGB).
+const genVersion = "v23"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

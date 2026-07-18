@@ -80,6 +80,44 @@ func SampleFreeVramGB(timeout time.Duration) (gb float64, ok bool) {
 	}
 }
 
+// SampleTotalVramGB takes a single GPU telemetry snapshot and returns the TOTAL
+// VRAM (in GB) of the adapter with the most total memory. Used by SAM placement
+// to compare the physical card against the primary-model budget. ok is false when
+// no GPU telemetry is available (headless/test), so callers fail open.
+func SampleTotalVramGB(timeout time.Duration) (gb float64, ok bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	gpuCh, err := perf.GetGpuStats(ctx, time.Second, logmon.NewWriter(io.Discard))
+	if err != nil || gpuCh == nil {
+		return 0, false
+	}
+	select {
+	case stats := <-gpuCh:
+		return totalVramGBFromStats(stats)
+	case <-ctx.Done():
+		return 0, false
+	}
+}
+
+// totalVramGBFromStats picks the adapter with the largest total memory and
+// returns its total VRAM in GB. Split out for unit testing without a real GPU.
+func totalVramGBFromStats(stats []perf.GpuStat) (float64, bool) {
+	best := -1
+	for i := range stats {
+		if stats[i].MemTotalMB <= 0 {
+			continue
+		}
+		if best < 0 || stats[i].MemTotalMB > stats[best].MemTotalMB {
+			best = i
+		}
+	}
+	if best < 0 {
+		return 0, false
+	}
+	return float64(stats[best].MemTotalMB) / 1024.0, true
+}
+
 // autoVramSampleTimeout bounds the one-shot probe; some backends (nvidia-smi)
 // need a tick before the first sample lands.
 const autoVramSampleTimeout = 8 * time.Second

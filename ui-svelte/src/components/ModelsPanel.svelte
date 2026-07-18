@@ -62,10 +62,12 @@
     }
   }
 
-  // Every category except embed has a playground tab (chat/images/speech/
-  // audio/rerank). Embedders have no interactive UI, so they get no button.
+  // Every category except embed/segment has a playground tab (chat/images/
+  // speech/audio/rerank). Embedders have no interactive UI; SAM segmenters are
+  // driven from the Images playground's select tool, not their own tab.
   function playable(m: Model): boolean {
-    return modelCategory(m) !== "embed";
+    const cat = modelCategory(m);
+    return cat !== "embed" && cat !== "segment";
   }
 
   // Pick the playground tab for a model from its capabilities. Rerankers ride the

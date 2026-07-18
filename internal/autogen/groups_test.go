@@ -7,7 +7,7 @@ import (
 
 func emitGroups(s Settings, emitted []string) string {
 	var b strings.Builder
-	emitGroupsAndListeners(&b, s, emitted)
+	emitGroupsAndListeners(&b, s, emitted, nil)
 	return b.String()
 }
 
