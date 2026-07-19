@@ -11,7 +11,7 @@
     type ImageSession,
     type Turn,
   } from "../../stores/imageHistory";
-  import { generateImage } from "../../lib/imageApi";
+  import { generateImage, upscaleImage } from "../../lib/imageApi";
   import { generateSdImage, generateSdImg2Img } from "../../lib/sdApi";
   import { matchColorToRef } from "../../lib/colorMatch";
   import { playgroundStores } from "../../stores/playgroundActivity";
@@ -19,7 +19,7 @@
   import Select from "./Select.svelte";
   import Composer from "./Composer.svelte";
   import { autogrow } from "../../lib/autogrow";
-  import { Image as ImageIcon, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Palette, Reply } from "lucide-svelte";
+  import { Image as ImageIcon, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Palette, Reply, Maximize2, Loader2 } from "lucide-svelte";
   import { scrollFade } from "../../lib/scrollFade";
   import type { ImageApiMode } from "../../lib/types";
 
@@ -203,9 +203,15 @@
   const SAMPLER_OPTIONS = ["", "euler_a", "euler", "heun", "dpm2", "dpmpp2s_a", "dpmpp2m", "dpmpp2mv2", "ipndm", "ipndm_v", "lcm", "ddim_trailing", "tcd"].map(
     (v) => ({ value: v, label: v || "Default sampler" })
   );
-  const SCHEDULER_OPTIONS = ["", "discrete", "karras", "exponential", "ays", "gits"].map(
-    (v) => ({ value: v, label: v || "Auto for model" })
-  );
+  // Full scheduler set supported by this sd-server build (leejet stable-diffusion.cpp,
+  // str_to_scheduler in examples/common/common.cpp). Sent verbatim as the sdapi
+  // "scheduler" field; sd.cpp matches these names exactly (no alias map, unlike
+  // samplers). "logit_normal" is omitted — absent from the pinned 2026-06-22 binary.
+  const SCHEDULER_OPTIONS = [
+    "", "discrete", "karras", "exponential", "ays", "gits", "sgm_uniform",
+    "simple", "kl_optimal", "beta", "smoothstep", "bong_tangent", "lcm",
+    "flux", "flux2", "ltx2",
+  ].map((v) => ({ value: v, label: v || "Auto for model" }));
 
   // Sensible per-model gen defaults, matched by id substring. Applied only when
   // the user switches models (not on reload) so manual tweaks survive a refresh.
@@ -226,11 +232,11 @@
     { match: "kontext", steps: 24, cfg: 1.0, sampler: "euler", scheduler: "discrete", denoise: 0.55 },
     // Qwen-Image-Edit Rapid (Phr00t AIO, Lightning 2511 8-step distill): cfg MUST
     // be 1.0 (cfg>1 burns to a solid yellow frame). Repo recipe is euler_ancestral
-    // + beta @ 4-8 steps — sd.cpp has no "beta" schedule so discrete stands in, but
-    // the ANCESTRAL sampler is what the few-step distill needs (plain euler
-    // undercooks at 8 → needed 20 to compensate). Ref-image edit (extra_images), so
-    // denoise unused.
-    { match: "qwen-rapid", steps: 8, cfg: 1.0, sampler: "euler_a", scheduler: "discrete" },
+    // + beta @ 4-8 steps — this sd.cpp build DOES support the beta schedule, so use
+    // it (was standing in with discrete when beta wasn't reachable). The ANCESTRAL
+    // sampler is what the few-step distill needs (plain euler undercooks at 8 →
+    // needed 20 to compensate). Ref-image edit (extra_images), so denoise unused.
+    { match: "qwen-rapid", steps: 8, cfg: 1.0, sampler: "euler_a", scheduler: "beta" },
     // Fill: inpaint — always fully regenerates the masked area (denoise 1.0).
     { match: "fill", steps: 20, cfg: 1.0, sampler: "euler", scheduler: "discrete", denoise: 1.0 },
     // AnimagineXL 3.1 / Illustrious SDXL-anime: Euler a, <30 steps, cfg 5-7, 1024.
@@ -838,6 +844,32 @@
     maskSource = null;
   }
 
+  // Upscale a finished image via the server's standalone ESRGAN runner and post
+  // the result as a NEW turn below (source kept as the turn's ref). One at a time
+  // (the server serializes runs too, to avoid stacking GPU memory).
+  // Which image is upscaling (null = idle). Keyed by source so a message-image
+  // button ("m<turn>") and a composer-attachment button ("a<idx>") don't share a
+  // spinner. One at a time (the server serializes runs too).
+  let upscaling = $state<string | null>(null);
+  async function runUpscale(img: string, key: string) {
+    if (upscaling !== null || isGenerating) return;
+    const id = $activeImageChatId;
+    if (!sessionById(id)) return;
+    upscaling = key;
+    const t0 = performance.now();
+    try {
+      // A saved image is a /api/media/<hash> URL (server splits inline base64 out
+      // on save), not a data URL — fetch it back to bytes before sending.
+      const b64 = await toB64(img);
+      const result = await upscaleImage(b64, 4);
+      appendTurn(id, { prompt: "Upscaled ×4", refs: [img], images: [result], model: "upscale", secs: Math.round((performance.now() - t0) / 1000) });
+    } catch (e) {
+      appendTurn(id, { prompt: "Upscaled ×4", refs: [img], images: [], model: "upscale", error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      upscaling = null;
+    }
+  }
+
   function downloadImage(img: string) {
     const link = document.createElement("a");
     link.href = img;
@@ -975,6 +1007,14 @@
                       title="Download"
                     >
                       <Download class="w-4 h-4" />
+                    </button>
+                    <button
+                      class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary disabled:opacity-40"
+                      onclick={() => runUpscale(t.images[0], "m" + ti)}
+                      disabled={upscaling !== null || isGenerating}
+                      title="Upscale ×4"
+                    >
+                      {#if upscaling === "m" + ti}<Loader2 class="w-4 h-4 animate-spin" />{:else}<Maximize2 class="w-4 h-4" />{/if}
                     </button>
                     {#if t.secs != null}
                       <span class="ml-auto flex items-center self-center text-[0.6875rem] text-txtsecondary tabular-nums">{fmtDur(t.secs)}</span>
@@ -1175,6 +1215,14 @@
                   onclick={() => (attached = attached.filter((_, j) => j !== i))}
                   aria-label="Remove attachment {i + 1}"
                 ><X class="w-3 h-3" /></button>
+                <button
+                  class="absolute top-0 left-0 w-5 h-5 flex items-center justify-center bg-black/60 text-white rounded-br opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-40 disabled:cursor-default"
+                  onclick={() => runUpscale(img, "a" + i)}
+                  disabled={upscaling !== null || isGenerating}
+                  title="Upscale ×4"
+                >
+                  {#if upscaling === "a" + i}<Loader2 class="w-3 h-3 animate-spin" />{:else}<Maximize2 class="w-3 h-3" />{/if}
+                </button>
               </div>
             {/each}
           </div>

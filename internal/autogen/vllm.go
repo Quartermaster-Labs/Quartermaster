@@ -24,6 +24,8 @@ func kindClass(kind string) string {
 		return "tts"
 	case "sam", "sam3", "segment":
 		return "segment"
+	case "upscale", "realesrgan", "esrgan":
+		return "upscale"
 	}
 	return ""
 }

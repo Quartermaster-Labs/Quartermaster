@@ -50,6 +50,10 @@ Crash caveat: a server crash mid-turn loses the un-flushed tail (bounded to
   chat, or `{}`. Reopen reconciliation.
 - `DELETE /api/chats/turn?chatId=`     — Stop: cancel the goroutine; the partial
   answer stays in `chats.json`.
+- `POST   /api/chats/turn/approve`     — accept/deny a pending qm-tools
+  `quartermaster_configure` change (the before→after diff card). The turn parks on
+  a `pendingApproval` until answered; a 5-min timeout counts as deny. Accept
+  applies via the config hot-reload path (no eviction).
 
 ## SSE event protocol
 

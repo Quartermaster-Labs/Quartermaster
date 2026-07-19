@@ -554,6 +554,9 @@ func (s *Server) routes() {
 
 	// quartermaster API + custom endpoints.
 	mux.Handle("GET /v1/models", discoveryChain.ThenFunc(s.handleListModels))
+	// Standalone ESRGAN/RealESRGAN upscale (exec-per-request, not model-dispatched).
+	// Auth-gated like the inference API (discoveryChain) so an external key reaches it.
+	mux.Handle("POST /v1/images/upscale", discoveryChain.ThenFunc(s.handleUpscale))
 	mux.Handle("GET /logs", apiChain.ThenFunc(s.handleLogs))
 	mux.Handle("GET /logs/stream", apiChain.ThenFunc(s.handleLogStream))
 	mux.Handle("GET /logs/stream/{logMonitorID...}", apiChain.ThenFunc(s.handleLogStream))
