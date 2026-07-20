@@ -142,10 +142,15 @@ func (w *Monitor) Write(p []byte) (n int, err error) {
 		return 0, nil
 	}
 
+	// A failing downstream sink must NOT cost us the history/broadcast: the
+	// proxy monitor writes into the mux monitor, which writes to os.Stdout, and
+	// on Windows a process started without a console (installer shortcut,
+	// detached service) has an invalid stdout handle — every write errors. When
+	// this returned early on that error, the whole proxy stream (and the mux
+	// history behind /logs) stayed permanently empty in the dashboard while the
+	// upstream stream — whose sink is io.Discard — kept working. Retain the
+	// error for io.Writer contract, but buffer and broadcast regardless.
 	n, err = w.stdout.Write(p)
-	if err != nil {
-		return n, err
-	}
 
 	w.bufferMu.Lock()
 	if w.buffer == nil {
@@ -166,7 +171,12 @@ func (w *Monitor) Write(p []byte) (n int, err error) {
 		// clients, and the dropped bytes are reported in-stream below.
 		w.dropped.Add(uint64(len(p)))
 	}
-	return n, nil
+	// The sink error is deliberately swallowed rather than propagated: this
+	// Monitor is also the stdout/stderr sink of every spawned subprocess, and
+	// exec's copier aborts the drain on a write error — a dead console handle
+	// would then silently truncate a model's log. The buffer + broadcast above
+	// are the real consumers; the tee is best-effort.
+	return len(p), nil
 }
 
 func (w *Monitor) GetHistory() []byte {

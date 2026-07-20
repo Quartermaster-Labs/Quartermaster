@@ -3,11 +3,14 @@ import { inferenceHeaders } from "./inferenceAuth";
 
 export async function transcribeAudio(
   model: string,
-  file: File,
-  signal?: AbortSignal
+  file: Blob,
+  signal?: AbortSignal,
+  // Live-mic segments are bare Blobs; the backend keys off the extension, so a
+  // filename has to be supplied when there isn't one.
+  filename = "audio.wav"
 ): Promise<AudioTranscriptionResponse> {
   const formData = new FormData();
-  formData.append("file", file);
+  formData.append("file", file, file instanceof File ? file.name : filename);
   formData.append("model", model);
 
   const response = await fetch("/v1/audio/transcriptions", {

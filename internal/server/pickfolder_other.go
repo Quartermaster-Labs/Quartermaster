@@ -13,6 +13,6 @@ func pickFolder() (string, error) {
 
 // pickFile has no native dialog on this platform. The handler maps this to a
 // 501 so the UI falls back to the text field.
-func pickFile() (string, error) {
+func pickFile(_ filePickSpec) (string, error) {
 	return "", errors.New("native file picker not supported on this platform")
 }

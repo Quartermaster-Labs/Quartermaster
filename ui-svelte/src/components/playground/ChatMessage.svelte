@@ -594,19 +594,17 @@
           {/if}
         </div>
       {/if}
-      {#if approval}
+      {#if approval && approval.status === "pending"}
         <!-- Quartermaster config-change approval: before/after diff the model
              proposed, gated on the user's accept/deny. The turn is blocked
-             server-side until a decision (or timeout). -->
+             server-side until a decision (or timeout). Transient by design —
+             once decided it vanishes, and the outcome + diff live on in the
+             tool step inside the reasoning trail ("Quartermaster: configure X
+             — accepted"), which is server-persisted and survives a reload. -->
         <div class="mt-3 rounded-lg border border-card-border bg-background/40 overflow-hidden text-sm">
           <div class="flex items-center gap-1.5 px-3 py-2 border-b border-card-border bg-secondary/40">
             <Wrench class="w-3.5 h-3.5 shrink-0 text-primary" />
             <span class="font-medium">Config change · {approval.target}</span>
-            {#if approval.status !== "pending"}
-              <span class="ml-auto text-xs uppercase tracking-wide {approval.status === 'applied' ? 'text-emerald-500' : approval.status === 'error' ? 'text-red-500' : 'text-txtsecondary'}">
-                {approval.status === "applied" ? "Applied ✓" : approval.status === "denied" ? "Denied" : approval.status === "timeout" ? "Timed out" : "Failed"}
-              </span>
-            {/if}
           </div>
           <div class="px-3 py-2 flex flex-col gap-1 font-mono text-xs">
             {#each approval.diff as row (row.key)}
@@ -618,20 +616,16 @@
               </div>
             {/each}
           </div>
-          {#if approval.status === "pending"}
-            <div class="flex justify-end gap-2 px-3 py-2 border-t border-card-border">
-              <button
-                class="px-3 py-1 rounded-md text-xs font-medium border border-card-border hover:bg-secondary transition-colors"
-                onclick={() => onApprove?.(approval!.id, false)}
-              >Deny</button>
-              <button
-                class="px-3 py-1 rounded-md text-xs font-medium bg-primary text-white hover:opacity-90 transition-opacity"
-                onclick={() => onApprove?.(approval!.id, true)}
-              >Accept</button>
-            </div>
-          {:else if approval.status === "error" && approval.detail}
-            <div class="px-3 py-2 border-t border-card-border text-xs text-red-500 whitespace-pre-wrap">{approval.detail}</div>
-          {/if}
+          <div class="flex justify-end gap-2 px-3 py-2 border-t border-card-border">
+            <button
+              class="px-3 py-1 rounded-md text-xs font-medium border border-card-border hover:bg-secondary transition-colors"
+              onclick={() => onApprove?.(approval!.id, false)}
+            >Deny</button>
+            <button
+              class="px-3 py-1 rounded-md text-xs font-medium bg-primary text-white hover:opacity-90 transition-opacity"
+              onclick={() => onApprove?.(approval!.id, true)}
+            >Accept</button>
+          </div>
         </div>
       {/if}
       {#if !isStreaming && textContent}

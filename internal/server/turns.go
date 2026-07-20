@@ -158,7 +158,12 @@ func (at *activeTurn) append(kind, text string) {
 		// inside it) yanked to the top, out of order. So once content exists, splice
 		// later reasoning INTO the content as an inline <think> span: the UI already
 		// tokenizes those in place, and a search's content offset lands inside them.
-		if at.content == "" {
+		// Whitespace-only content does NOT count as having spoken: a tool-calling
+		// round often leaks a stray newline/space around the call before any real
+		// answer token, and treating that as "the answer started" flipped the rest
+		// of the pre-answer thinking into an inline <think> span — splitting one
+		// thought into a 1-char reasoning box plus a detached inline box.
+		if strings.TrimSpace(at.content) == "" {
 			at.reasoning += text
 			at.fan(turnDelta{Kind: "reasoning", Text: text})
 			return

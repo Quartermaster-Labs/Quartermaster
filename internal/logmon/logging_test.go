@@ -2,6 +2,7 @@ package logmon
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -308,4 +309,41 @@ func BenchmarkLogMonitorWrite(b *testing.B) {
 			lm.GetHistory()
 		}
 	})
+}
+
+// errWriter fails every write, like os.Stdout on a Windows process started
+// without a console (invalid handle).
+type errWriter struct{}
+
+func (errWriter) Write(p []byte) (int, error) { return 0, errors.New("sink closed") }
+
+// A dead downstream sink must not cost the monitor its history or its live
+// broadcast — that is what left the dashboard's proxy log permanently empty
+// (proxy -> mux -> os.Stdout, and stdout was unwritable).
+func TestLogMonitor_BufferSurvivesSinkError(t *testing.T) {
+	lm := NewWriter(errWriter{})
+
+	got := make(chan []byte, 1)
+	defer lm.OnLogData(func(data []byte) {
+		select {
+		case got <- data:
+		default:
+		}
+	})()
+
+	if _, err := lm.Write([]byte("hello\n")); err != nil {
+		t.Fatalf("Write returned %v; a failing sink must not surface as a short/failed write", err)
+	}
+	if h := string(lm.GetHistory()); h != "hello\n" {
+		t.Fatalf("history = %q, want %q", h, "hello\n")
+	}
+
+	select {
+	case data := <-got:
+		if string(data) != "hello\n" {
+			t.Fatalf("broadcast = %q, want %q", data, "hello\n")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("subscriber never received the log data")
+	}
 }

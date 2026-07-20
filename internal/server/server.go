@@ -650,6 +650,9 @@ func (s *Server) routes() {
 	// Generic native folder dialog that returns the chosen path without persisting
 	// (slot-cache directory field binds it, then saves on demand).
 	mux.Handle("POST /api/pick-folder", apiChain.ThenFunc(s.handleAPIPickFolder))
+	// Generic native open-file dialog, kind-whitelisted (?kind=template) — the
+	// chat-template-file field binds the returned path.
+	mux.Handle("POST /api/pick-file", apiChain.ThenFunc(s.handleAPIPickFile))
 
 	// Fleet-wide default variants (e.g. game) — surfaced per-model in the editor
 	// but saved globally to settings.defaultVariants.

@@ -266,6 +266,53 @@
   .btn:disabled {
     @apply opacity-50 cursor-not-allowed;
   }
+
+  /* Segmented control — one row of mutually exclusive toggles (time window,
+     refresh interval, log view mode). The selected child carries
+     aria-pressed="true"; no extra classes needed at the call site. */
+  .seg {
+    @apply inline-flex items-stretch rounded-md border border-card-border bg-surface overflow-hidden;
+  }
+  .seg > button {
+    @apply px-2.5 py-1 font-mono text-[0.7rem] uppercase tracking-wide text-txtsecondary transition-colors;
+  }
+  .seg > button + button {
+    @apply border-l border-card-border;
+  }
+  .seg > button:hover {
+    @apply bg-secondary text-txtmain cursor-pointer;
+  }
+  .seg > button[aria-pressed="true"] {
+    @apply bg-primary text-btn-primary-text;
+  }
+  .seg > button[aria-pressed="true"]:hover {
+    @apply bg-primary-hover;
+  }
+
+  /* Icon-only affordance button (panel toolbars). */
+  .icon-btn {
+    @apply w-7 h-7 inline-flex items-center justify-center rounded border border-transparent text-txtsecondary transition-colors;
+  }
+  .icon-btn:hover {
+    @apply text-txtmain bg-secondary cursor-pointer;
+  }
+  .icon-btn[aria-pressed="true"] {
+    @apply text-primary border-primary/40;
+  }
+
+  /* Stat tile — one KPI: label on top, big value below, optional sub-line. */
+  .tile {
+    @apply flex flex-col gap-0.5 rounded-md border border-card-border bg-surface/60 px-3 py-2;
+  }
+  .tile__label {
+    @apply flex items-center gap-1.5 font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary;
+  }
+  .tile__value {
+    @apply font-mono text-lg leading-tight text-txtmain tabular-nums;
+  }
+  .tile__sub {
+    @apply font-mono text-[0.65rem] text-txtsecondary tabular-nums;
+  }
 }
 
 @layer utilities {

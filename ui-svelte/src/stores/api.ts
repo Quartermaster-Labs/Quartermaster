@@ -297,6 +297,7 @@ export interface ModelVariant {
   threads?: number;
   parallel?: number;
   extraArgs?: string;
+  chatTemplateFile?: string; // .jinja path; "" => inherit model-wide
   // Sampler / speculative sub-knobs (0/empty => inherit model-wide).
   dryMultiplier?: number;
   dryBase?: number;
@@ -371,6 +372,7 @@ export interface ModelOverride {
   parallel?: number; // 0 => 1
   ub?: number; // 0 => auto (physical batch -ub/-b)
   extraArgs?: string; // extra llama-server flags appended verbatim (passthrough)
+  chatTemplateFile?: string; // --chat-template-file path; "" => the gguf's baked-in template
   unlisted?: boolean;
   skip?: boolean;
   slotCache?: boolean; // opt this model into on-disk slot KV persistence (needs the global toggle on)
@@ -751,6 +753,20 @@ export async function pickFolder(): Promise<string | null> {
 // caller then leaves the field as-is for manual typing.
 export async function pickBackend(): Promise<string | null> {
   const response = await fetch("/api/settings/backend/pick", { method: "POST" });
+  if (response.status === 204 || response.status === 501) return null;
+  if (!response.ok) {
+    throw new Error(`File picker failed: ${response.status} ${await response.text()}`);
+  }
+  const body = (await response.json()) as { path: string };
+  return body.path;
+}
+
+// Opens the host's native open-file dialog for a whitelisted kind (e.g.
+// "template" for a .jinja chat template). Returns the path, or null when
+// cancelled (204) or unsupported (501) — the caller leaves the field for
+// manual typing.
+export async function pickFileOfKind(kind: string): Promise<string | null> {
+  const response = await fetch(`/api/pick-file?kind=${encodeURIComponent(kind)}`, { method: "POST" });
   if (response.status === 204 || response.status === 501) return null;
   if (!response.ok) {
     throw new Error(`File picker failed: ${response.status} ${await response.text()}`);

@@ -650,6 +650,9 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			if strings.TrimSpace(v.ExtraArgs) != "" {
 				effOv.ExtraArgs = v.ExtraArgs
 			}
+			if strings.TrimSpace(v.ChatTemplateFile) != "" {
+				effOv.ChatTemplateFile = v.ChatTemplateFile
+			}
 			// Sampler / speculative sub-knobs: non-zero/non-nil variant value wins.
 			if v.Dry != nil {
 				effOv.Dry = v.Dry
@@ -1137,6 +1140,17 @@ func isVLModel(name, arch string) bool {
 		strings.Contains(strings.ToLower(arch), "vl")
 }
 
+// cmdPath renders a filesystem path as ONE cmd argument. NOT `%q`: the emitted
+// cmd is re-split by shlex (Windows rules on Windows), where a backslash inside
+// double quotes is a literal separator — so Go's escaping turned D:\Models\x
+// into D:\\Models\\x and llama-server failed to open it. Separators are
+// normalized to "/" (accepted by Windows too, and what slotKvPath already does),
+// and quotes are kept for paths with spaces.
+func cmdPath(p string) string {
+	p = strings.ReplaceAll(strings.TrimSpace(p), "\\", "/")
+	return `"` + strings.ReplaceAll(p, `"`, "") + `"` // a `"` can't appear in a real path
+}
+
 // qwenFixedChatTemplateFile is the server-cwd-relative path to froggeric's
 // community chat-template fix for Qwen 3.5/3.6 (Apache-2.0, inherited from
 // Qwen; see templates/CREDITS.md). The official Qwen 3.5/3.6 templates
@@ -1399,7 +1413,11 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	if s.SlotCache.Enable && (ov == nil || ov.SlotCache == nil || *ov.SlotCache) {
 		lines = append(lines, fmt.Sprintf("--slot-save-path %q", slotKvPath(s.SlotCache)))
 	}
-	if needsQwenFixedChatTemplate(meta.Architecture) {
+	// A user-supplied template always wins over the arch-derived built-in fix.
+	// Quoted: user paths routinely contain spaces.
+	if ov != nil && strings.TrimSpace(ov.ChatTemplateFile) != "" {
+		lines = append(lines, "--chat-template-file "+cmdPath(ov.ChatTemplateFile))
+	} else if needsQwenFixedChatTemplate(meta.Architecture) {
 		lines = append(lines, fmt.Sprintf("--chat-template-file %s", qwenFixedChatTemplateFile))
 	}
 	// Advanced / power-user knobs. Each is gated on a set override field (zero/

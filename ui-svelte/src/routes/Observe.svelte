@@ -51,18 +51,13 @@
     </div>
 
     {#if showWindow}
-      <div class="flex items-center gap-1">
-        <span class="text-xs text-txtsecondary mr-1">Window:</span>
-        {#each OBSERVE_WINDOWS as win, i}
-          <button
-            class="btn btn--sm"
-            class:bg-primary={$observeWindowIdx === i}
-            class:text-btn-primary-text={$observeWindowIdx === i}
-            onclick={() => observeWindowIdx.set(i)}
-          >
-            {win.label}
-          </button>
-        {/each}
+      <div class="flex items-center gap-2">
+        <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary">Window</span>
+        <div class="seg">
+          {#each OBSERVE_WINDOWS as win, i (win.label)}
+            <button aria-pressed={$observeWindowIdx === i} onclick={() => observeWindowIdx.set(i)}>{win.label}</button>
+          {/each}
+        </div>
       </div>
     {/if}
   </div>

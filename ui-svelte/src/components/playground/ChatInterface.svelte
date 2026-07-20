@@ -496,11 +496,17 @@
   // Accept/deny a pending qm config change — unblocks the server-side turn, which
   // then applies (or skips) the change and continues generating.
   async function respondApproval(id: string, accept: boolean) {
+    const chatId = $activeChatId;
+    // Dismiss the card on click, don't wait for the server's resolved delta —
+    // that delta is best-effort (dropped for a slow/re-attached subscriber) and
+    // a card that outlives the decision still offers buttons for a change the
+    // server already applied. The outcome shows up in the tool step instead.
+    patchLast(chatId, (m) => (m.approval?.id === id ? { ...m, approval: { ...m.approval, status: accept ? "applied" : "denied" } } : m));
     try {
       await fetch("/api/chats/turn/approve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chatId: $activeChatId, id, accept }),
+        body: JSON.stringify({ chatId, id, accept }),
       });
     } catch {
       showToast("Could not send the decision");

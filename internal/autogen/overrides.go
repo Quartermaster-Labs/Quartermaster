@@ -393,6 +393,11 @@ type Override struct {
 	// these are pure passthrough. The UI captures anything it can't map from the
 	// editable launch-parameters box into here.
 	ExtraArgs string `yaml:"extraArgs"`
+	// ChatTemplateFile is a path to a .jinja chat template that replaces the
+	// gguf's baked-in one (--chat-template-file). Empty => the baked-in template,
+	// except for archs autogen ships a known-good fix for (Qwen 3.5/3.6); a
+	// non-empty value always wins over that built-in fix.
+	ChatTemplateFile string `yaml:"chatTemplateFile"`
 	// --- Image (diffusion / sd-server) knobs ---
 	// Only consumed for image-arch models (emitImageModel / imageCmdLines); ignored
 	// by the llama-server path. The component paths are the external VAE + text
@@ -482,6 +487,8 @@ type VariantSpec struct {
 	Threads    int    `yaml:"threads"`
 	Parallel   int    `yaml:"parallel"`
 	ExtraArgs  string `yaml:"extraArgs"`
+	// ChatTemplateFile mirrors Override; empty => inherit the model-wide value.
+	ChatTemplateFile string `yaml:"chatTemplateFile"`
 	// Sampler / speculative sub-knobs mirroring Override; 0/empty => inherit the
 	// model-wide value. (Dry on/off is the *bool field above.)
 	DryMultiplier    float64 `yaml:"dryMultiplier"`

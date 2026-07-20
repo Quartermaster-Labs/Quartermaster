@@ -1,19 +1,28 @@
 <script lang="ts">
   import { persistentStore } from "../stores/persistent";
+  import { Type, WrapText, Search, Copy, Check, X, ArrowDown } from "lucide-svelte";
 
   interface Props {
     id: string;
     title: string;
+    /** One line explaining what this stream actually carries (shown as a ? hint). */
+    subtitle?: string;
     logData: string;
   }
 
-  let { id, title, logData }: Props = $props();
+  let { id, title, subtitle, logData }: Props = $props();
 
   let filterRegex = $state("");
 
+  // Font size is a real px value, not a class enum: ctrl+scroll over the log
+  // nudges it like an editor, and the dropdown offers the same range.
+  const FONT_MIN = 8;
+  const FONT_MAX = 20;
+  const FONT_PRESETS = [9, 10, 11, 12, 13, 14, 16, 18];
+
   // Create persistent stores for this panel (id is intentionally captured at init time)
   // svelte-ignore state_referenced_locally
-  const fontSizeStore = persistentStore<"xxs" | "xs" | "small" | "normal">(`logPanel-${id}-fontSize`, "normal");
+  const fontPxStore = persistentStore<number>(`logPanel-${id}-fontPx`, 12);
   // svelte-ignore state_referenced_locally
   const wrapTextStore = persistentStore<boolean>(`logPanel-${id}-wrapText`, false);
   // svelte-ignore state_referenced_locally
@@ -21,15 +30,15 @@
 
   let textWrapClass = $derived($wrapTextStore ? "whitespace-pre-wrap" : "whitespace-pre");
 
-  function toggleFontSize(): void {
-    fontSizeStore.update((prev) => {
-      switch (prev) {
-        case "xxs": return "xs";
-        case "xs": return "small";
-        case "small": return "normal";
-        case "normal": return "xxs";
-      }
-    });
+  function clampFont(px: number): number {
+    return Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(px)));
+  }
+
+  // ctrl/⌘ + wheel over the log body zooms it instead of scrolling the page.
+  function handleWheel(e: WheelEvent): void {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    fontPxStore.update((px) => clampFont(px + (e.deltaY < 0 ? 1 : -1)));
   }
 
   function toggleWrapText(): void {
@@ -45,24 +54,36 @@
     }
   }
 
-  let fontSizeClass = $derived.by(() => {
-    switch ($fontSizeStore) {
-      case "xxs": return "text-[0.5rem]";
-      case "xs": return "text-[0.75rem]";
-      case "small": return "text-[0.875rem]";
-      case "normal": return "text-base";
+  // A half-typed regex ("[" etc.) shows every line rather than nothing, and
+  // flags itself in the toolbar instead of silently doing nothing.
+  const filtered = $derived.by(() => {
+    if (!filterRegex) return { text: logData, bad: false };
+    try {
+      const regex = new RegExp(filterRegex, "i");
+      return { text: logData.split("\n").filter((line) => regex.test(line)).join("\n"), bad: false };
+    } catch {
+      return { text: logData, bad: true };
     }
   });
 
-  let filteredLogs = $derived.by(() => {
-    if (!filterRegex) return logData;
+  const filteredLogs = $derived(filtered.text);
+  const badRegex = $derived(filtered.bad);
+  const totalLines = $derived(logData ? logData.split("\n").length : 0);
+  const lineCount = $derived(filteredLogs ? filteredLogs.split("\n").length : 0);
+
+  let copied = $state(false);
+  let copyTimer: ReturnType<typeof setTimeout> | null = null;
+
+  async function copyLogs(): Promise<void> {
     try {
-      const regex = new RegExp(filterRegex, "i");
-      return logData.split("\n").filter((line) => regex.test(line)).join("\n");
+      await navigator.clipboard.writeText(filteredLogs);
+      copied = true;
+      if (copyTimer) clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => (copied = false), 1200);
     } catch {
-      return logData;
+      // clipboard blocked (insecure context) — nothing useful to show
     }
-  });
+  }
 
   let preElement: HTMLPreElement;
   let userScrolledUp = $state(false);
@@ -73,6 +94,12 @@
     userScrolledUp = scrollHeight - scrollTop - clientHeight > 40;
   }
 
+  function jumpToBottom(): void {
+    if (!preElement) return;
+    preElement.scrollTop = preElement.scrollHeight;
+    userScrolledUp = false;
+  }
+
   // Auto scroll to bottom when logs change, unless user has scrolled up
   $effect(() => {
     if (preElement && filteredLogs && !userScrolledUp) {
@@ -81,59 +108,78 @@
   });
 </script>
 
-<div class="card flex flex-col h-full w-full p-3">
-  <div class="pb-3">
-    <div class="flex items-center justify-between">
-      <h6 class="!pb-0">{title}</h6>
+<div class="card flex flex-col h-full w-full p-0">
+  <!-- Toolbar -->
+  <div class="flex items-center gap-2 px-3 py-2 border-b border-card-border-inner">
+    <h6 class="!pb-0 truncate">{title}</h6>
+    {#if subtitle}
+      <span
+        class="shrink-0 inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-card-border text-txtsecondary text-[0.55rem] leading-none cursor-help"
+        title={subtitle}
+        aria-label={subtitle}>?</span>
+    {/if}
+    <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary shrink-0">
+      {lineCount.toLocaleString()} lines{#if filterRegex && lineCount !== totalLines}<span class="text-primary"> / {totalLines.toLocaleString()}</span>{/if}
+    </span>
 
-      <div class="flex gap-1 items-center">
-        <button class="w-8 h-8 flex items-center justify-center rounded text-txtsecondary hover:text-txtmain hover:bg-secondary-hover transition-colors" onclick={toggleFontSize} title="Change font size">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4">
-            <path d="M2 4v3h5v12h3V7h5V4H2zm19 5h-9v3h3v7h3v-7h3V9z"/>
-          </svg>
-        </button>
-        <button class="w-8 h-8 flex items-center justify-center rounded text-txtsecondary hover:text-txtmain hover:bg-secondary-hover transition-colors" onclick={toggleWrapText} title="Toggle text wrap">
-          {#if $wrapTextStore}
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4">
-              <path fill-rule="evenodd" d="M3 6.75A.75.75 0 0 1 3.75 6h16.5a.75.75 0 0 1 0 1.5H3.75A.75.75 0 0 1 3 6.75ZM3 12a.75.75 0 0 1 .75-.75h16.5a.75.75 0 0 1 0 1.5H3.75A.75.75 0 0 1 3 12Zm0 5.25a.75.75 0 0 1 .75-.75h16.5a.75.75 0 0 1 0 1.5H3.75a.75.75 0 0 1-.75-.75Z" clip-rule="evenodd" />
-            </svg>
-          {:else}
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4">
-              <path fill-rule="evenodd" d="M3 6.75A.75.75 0 0 1 3.75 6h16.5a.75.75 0 0 1 0 1.5H3.75A.75.75 0 0 1 3 6.75ZM3 12a.75.75 0 0 1 .75-.75h10.5a.75.75 0 0 1 0 1.5H3.75A.75.75 0 0 1 3 12Zm0 5.25a.75.75 0 0 1 .75-.75h16.5a.75.75 0 0 1 0 1.5H3.75a.75.75 0 0 1-.75-.75Z" clip-rule="evenodd" />
-            </svg>
+    <div class="flex gap-1 items-center ml-auto shrink-0">
+      <label class="flex items-center gap-1 text-txtsecondary" title="Font size — ctrl+scroll over the log also works">
+        <Type size={14} />
+        <select
+          value={$fontPxStore}
+          onchange={(e) => fontPxStore.set(clampFont(Number(e.currentTarget.value)))}
+          class="rounded border border-card-border bg-surface py-0.5 pl-1 pr-0.5 font-mono text-[0.7rem] text-txtmain focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+        >
+          {#if !FONT_PRESETS.includes($fontPxStore)}
+            <option value={$fontPxStore}>{$fontPxStore}px</option>
           {/if}
-        </button>
-        <button class="w-8 h-8 flex items-center justify-center rounded text-txtsecondary hover:text-txtmain hover:bg-secondary-hover transition-colors" onclick={toggleFilter} title="Toggle filter">
-          {#if $showFilterStore}
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4">
-              <path fill-rule="evenodd" d="M10.5 3.75a6.75 6.75 0 1 0 0 13.5 6.75 6.75 0 0 0 0-13.5ZM2.25 10.5a8.25 8.25 0 1 1 14.59 5.28l4.69 4.69a.75.75 0 1 1-1.06 1.06l-4.69-4.69A8.25 8.25 0 0 1 2.25 10.5Z" clip-rule="evenodd" />
-            </svg>
-          {:else}
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
-              <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
-            </svg>
-          {/if}
-        </button>
-      </div>
+          {#each FONT_PRESETS as px (px)}
+            <option value={px}>{px}px</option>
+          {/each}
+        </select>
+      </label>
+      <button class="icon-btn" aria-pressed={$wrapTextStore} onclick={toggleWrapText} title="Toggle text wrap"><WrapText size={15} /></button>
+      <button class="icon-btn" aria-pressed={$showFilterStore} onclick={toggleFilter} title="Filter (regex)"><Search size={15} /></button>
+      <button class="icon-btn" onclick={copyLogs} title="Copy visible log">
+        {#if copied}<Check size={15} class="text-success" />{:else}<Copy size={15} />{/if}
+      </button>
     </div>
+  </div>
 
-    {#if $showFilterStore}
-      <div class="mt-2 flex gap-2 items-center w-full">
+  {#if $showFilterStore}
+    <div class="flex gap-2 items-center px-3 py-2 border-b border-card-border-inner">
+      <div class="relative flex-1">
+        <Search size={13} class="absolute left-2 top-1/2 -translate-y-1/2 text-txtsecondary pointer-events-none" />
         <input
           type="text"
-          class="w-full text-sm border border-card-border bg-surface px-2 py-1 rounded focus:outline-none focus:ring-2 focus:ring-primary"
-          placeholder="Filter logs (regex)..."
+          class="w-full font-mono text-xs border border-card-border bg-surface pl-7 pr-6 py-1 rounded text-txtmain placeholder:text-txtsecondary/60 focus:outline-none focus:ring-2 focus:ring-primary {badRegex ? 'border-error' : ''}"
+          placeholder="filter lines (regex)"
           bind:value={filterRegex}
         />
-        <button class="pl-2 text-txtsecondary hover:text-txtmain transition-colors" onclick={() => (filterRegex = "")} aria-label="Clear filter">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-6 h-6">
-            <path fill-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25Zm-1.72 6.97a.75.75 0 1 0-1.06 1.06L10.94 12l-1.72 1.72a.75.75 0 1 0 1.06 1.06L12 13.06l1.72 1.72a.75.75 0 1 0 1.06-1.06L13.06 12l1.72-1.72a.75.75 0 1 0-1.06-1.06L12 10.94l-1.72-1.72Z" clip-rule="evenodd" />
-          </svg>
-        </button>
+        {#if filterRegex}
+          <button class="absolute right-1.5 top-1/2 -translate-y-1/2 text-txtsecondary hover:text-txtmain" onclick={() => (filterRegex = "")} aria-label="Clear filter">
+            <X size={13} />
+          </button>
+        {/if}
       </div>
+      {#if badRegex}<span class="font-mono text-[0.65rem] text-error shrink-0">invalid regex</span>{/if}
+    </div>
+  {/if}
+
+  <div class="relative flex-1 overflow-hidden bg-background font-mono">
+    <pre
+      bind:this={preElement}
+      onscroll={handleScroll}
+      onwheel={handleWheel}
+      style="font-size: {$fontPxStore}px; line-height: 1.45"
+      class="{textWrapClass} pretty-scroll h-full overflow-auto p-3">{filteredLogs}</pre>
+
+    <!-- Auto-follow is suspended while scrolled up; this jumps back and resumes. -->
+    {#if userScrolledUp}
+      <button
+        class="absolute bottom-3 right-4 inline-flex items-center gap-1 rounded-full border border-card-border bg-surface px-2.5 py-1 font-mono text-[0.65rem] uppercase tracking-wide text-txtsecondary shadow-sm hover:text-primary hover:border-primary transition-colors"
+        onclick={jumpToBottom}
+      ><ArrowDown size={12} /> Live</button>
     {/if}
-  </div>
-  <div class="rounded-md border border-card-border-inner bg-background font-mono text-sm flex-1 overflow-hidden">
-    <pre bind:this={preElement} onscroll={handleScroll} class="{textWrapClass} {fontSizeClass} pretty-scroll h-full overflow-auto p-4">{filteredLogs}</pre>
   </div>
 </div>

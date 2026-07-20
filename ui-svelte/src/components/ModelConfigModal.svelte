@@ -9,6 +9,7 @@
     estimatePlan,
     previewCmd,
     getSettings,
+    pickFileOfKind,
     type ModelConfig,
     type ModelOverride,
     type ModelVariant,
@@ -16,8 +17,10 @@
     models,
   } from "../stores/api";
   import { get } from "svelte/store";
+  import { FolderOpen } from "lucide-svelte";
   import VramGauge from "./VramGauge.svelte";
   import { estimateSegments } from "../stores/vram";
+  import { backendClass, engineLabel } from "../lib/backends";
 
   interface Props {
     modelId: string | null;
@@ -132,6 +135,7 @@
     swaFull: boolean; checkpointMinStep: number | ""; contextShift: string; specDraftNMin: number | "";
     slotPromptSimilarity: number | ""; ropeScaling: string; ropeScale: number | ""; ropeFreqBase: number | "";
     yarnOrigCtx: number | ""; splitMode: string; tensorSplit: string; mainGpu: number | ""; overrideTensor: string;
+    chatTemplateFile: string;
   };
   function blankAdv(): AdvKnobs {
     return {
@@ -140,6 +144,7 @@
       swaFull: false, checkpointMinStep: "", contextShift: "", specDraftNMin: "",
       slotPromptSimilarity: "", ropeScaling: "", ropeScale: "", ropeFreqBase: "",
       yarnOrigCtx: "", splitMode: "", tensorSplit: "", mainGpu: "", overrideTensor: "",
+      chatTemplateFile: "",
     };
   }
   let adv = $state<AdvKnobs>(blankAdv());
@@ -155,6 +160,7 @@
       ropeScaling: o?.ropeScaling ?? "", ropeScale: o?.ropeScale || "", ropeFreqBase: o?.ropeFreqBase || "",
       yarnOrigCtx: o?.yarnOrigCtx || "", splitMode: o?.splitMode ?? "", tensorSplit: o?.tensorSplit ?? "",
       mainGpu: o?.mainGpu || "", overrideTensor: o?.overrideTensor ?? "",
+      chatTemplateFile: o?.chatTemplateFile ?? "",
     };
   }
   function advToOverride(): Partial<ModelOverride> {
@@ -168,8 +174,21 @@
       ropeScaling: adv.ropeScaling, ropeScale: n(adv.ropeScale), ropeFreqBase: n(adv.ropeFreqBase),
       yarnOrigCtx: n(adv.yarnOrigCtx), splitMode: adv.splitMode, tensorSplit: adv.tensorSplit,
       mainGpu: n(adv.mainGpu), overrideTensor: adv.overrideTensor,
+      chatTemplateFile: adv.chatTemplateFile.trim(),
     };
   }
+  // Native open-file dialog for the chat-template path (the dialog opens on the
+  // server host — the operator's own machine for a local install). Returns null
+  // on cancel or on a platform with no picker, leaving the text field alone.
+  async function browseChatTemplate(apply: (path: string) => void): Promise<void> {
+    try {
+      const picked = await pickFileOfKind("template");
+      if (picked) apply(picked);
+    } catch {
+      // picker failed — the field stays typable, no need to nag
+    }
+  }
+
   let unlisted = $state(false);
   let skip = $state(false);
   // Opt this model into on-disk slot KV persistence (--slot-save-path). On by
@@ -234,14 +253,6 @@
   // pinned via extraArgs --no-gpu.
   const samMode = $derived(config?.isSam ?? false);
 
-  // Model class a backend kind serves — mirrors autogen's kindClass.
-  function backendClass(kind: string): string {
-    if (["llama", "llama.cpp", "server", "vllm"].includes(kind)) return "llm";
-    if (["sd", "sd-server", "image"].includes(kind)) return "image";
-    if (["tts", "tts-server", "speech"].includes(kind)) return "tts";
-    if (["sam", "sam3", "segment"].includes(kind)) return "segment";
-    return "";
-  }
   // Backends compatible with this model, the selected one's kind, and whether it
   // is vllm (drives which knobs apply). Empty registry => no picker shown.
   const modelClass = $derived(imageMode ? "image" : audioMode ? "tts" : samMode ? "segment" : "llm");
@@ -258,8 +269,15 @@
   // when parsing so they never bleed into extraArgs and double-emit:
   //   -c/-ngl/--n-cpu-moe/-b  sizer; --ctx-checkpoints  its own field;
   //   --chat-template-kwargs  the preserve-thinking toggle; -md  draft path;
-  //   --slot-save-path  the slotCacheOn toggle; --chat-template-file  arch-derived.
-  const IGNORE_VALUE = new Set(["-m", "--port", "--host", "-c", "-ngl", "--n-cpu-moe", "-b", "--ctx-checkpoints", "--chat-template-kwargs", "-md", "--slot-save-path", "--chat-template-file"]);
+  //   --slot-save-path  the slotCacheOn toggle.
+  // --chat-template-file is NOT here: it has its own case below that captures the
+  // path into the advanced field. Swallowing it silently dropped a template set
+  // any other way (qm-tools/hand-edited extraArgs) on the first box blur.
+  const IGNORE_VALUE = new Set(["-m", "--port", "--host", "-c", "-ngl", "--n-cpu-moe", "-b", "--ctx-checkpoints", "--chat-template-kwargs", "-md", "--slot-save-path"]);
+  // autogen's arch-derived template fix (internal/autogen/generate.go
+  // qwenFixedChatTemplateFile) — matched by suffix so it is never mistaken for a
+  // user-chosen template.
+  const BUILTIN_CHAT_TEMPLATE = "templates/qwen-fixed-chat-template.jinja";
   const IGNORE_BOOL = new Set(["--kv-unified", "--no-warmup", "--no-webui", "--jinja", "--metrics", "--props"]);
 
   // Parsed launch-flag bundle shared by the Default form and a variant. Booleans
@@ -278,6 +296,9 @@
     parallel: number | "";
     ub: number | "";
     extraArgs: string;
+    // "" when the box carries no --chat-template-file, or carries the arch-derived
+    // built-in one (that stays owned by autogen, not pinned into the field).
+    chatTemplateFile: string;
     // DRY: presence of any --dry-* flag => on; absence => off. Values "" => default.
     dryOn: boolean;
     dryMultiplier: number | "";
@@ -291,6 +312,17 @@
     specNgramMinHits: number | "";
   }
 
+  // Pull a `--chat-template-file <path>` pair out of a free-form extraArgs string,
+  // returning the remaining args plus the path (quotes stripped, "" when absent).
+  // extraArgs is the only surface the qm-tools chat model can write a template
+  // through, and the form owns that flag elsewhere — so it has to be hoisted.
+  function hoistChatTemplate(extra: string): { extra: string; path: string } {
+    const m = extra.match(/(^|\s)--chat-template-file\s+("[^"]*"|\S+)/);
+    if (!m) return { extra, path: "" };
+    const path = m[2].replace(/^"|"$/g, "");
+    return { extra: (extra.slice(0, m.index) + " " + extra.slice(m.index! + m[0].length)).trim(), path };
+  }
+
   // Parse a launch command into form fields + extraArgs passthrough. Computed
   // flags (-c/-ngl/--n-cpu-moe) are owned by the sliders, so they're ignored here.
   function parseCmdFields(cmd: string): ParsedCmd {
@@ -298,6 +330,14 @@
     let i = 0;
     while (i < toks.length && !toks[i].startsWith("-")) i++; // skip the exe
     const val = (): string => (i + 1 < toks.length && !toks[i + 1].startsWith("-") ? toks[++i] : "");
+    // A path value is emitted quoted (%q) because templates live in folders with
+    // spaces — rejoin what the whitespace split broke apart, then unquote.
+    const pathVal = (): string => {
+      let s = val();
+      if (!s.startsWith('"')) return s;
+      while (!(s.length > 1 && s.endsWith('"')) && i + 1 < toks.length) s += " " + toks[++i];
+      return s.replace(/^"|"$/g, "");
+    };
     let fa: string | null = null,
       ctk: string | null = null,
       ctv: string | null = null,
@@ -306,7 +346,8 @@
       u: string | null = null,
       sp: string | null = null,
       reason: string | null = null,
-      rBudget: string | null = null;
+      rBudget: string | null = null,
+      ctFile: string | null = null;
     let noMmap = false,
       mlockF = false,
       noKv = false,
@@ -329,6 +370,7 @@
         case "--parallel": par = val(); break;
         case "-ub": u = val(); break;
         case "--spec-type": { const t = val(); sp = sp ? `${sp}+${t}` : t; break; } // chained backends accumulate
+        case "--chat-template-file": ctFile = pathVal(); break;
         case "--reasoning-format": reason = val(); break;
         case "--reasoning-budget": rBudget = val(); break;
         case "--reasoning": if (val() === "off") reason = "off"; break;
@@ -367,6 +409,9 @@
       parallel: par !== null ? Number(par) : "",
       ub: u !== null ? Number(u) : "",
       extraArgs: extras.join(" "),
+      // autogen's own Qwen 3.5/3.6 fix is arch-derived — leave it owned by the
+      // generator instead of pinning its path into the user's field.
+      chatTemplateFile: ctFile && !ctFile.includes(BUILTIN_CHAT_TEMPLATE) ? ctFile : "",
       // DRY is on iff any --dry-* flag survived in the box.
       dryOn: dMult !== null || dBase !== null || dAllow !== null,
       dryMultiplier: dMult !== null && dMult !== "" ? Number(dMult) : "",
@@ -404,6 +449,7 @@
     specNgramSizeM = p.specNgramSizeM;
     specNgramMinHits = p.specNgramMinHits;
     extraArgs = p.extraArgs;
+    adv.chatTemplateFile = p.chatTemplateFile;
   }
 
   // Owned by other controls / autogen — swallowed when parsing the image box so
@@ -527,6 +573,9 @@
     v.specNgramSizeM = p.specNgramSizeM === "" ? 0 : Number(p.specNgramSizeM);
     v.specNgramMinHits = p.specNgramMinHits === "" ? 0 : Number(p.specNgramMinHits);
     v.extraArgs = p.extraArgs.trim();
+    // The variant box renders the inherited model-wide template too — capture it
+    // as a delta so an untouched value stays "inherit" ("") instead of pinning.
+    v.chatTemplateFile = p.chatTemplateFile === adv.chatTemplateFile.trim() ? "" : p.chatTemplateFile;
   }
 
   function onCmdInput(e: Event) {
@@ -667,6 +716,7 @@
       tensorSplit: v.tensorSplit || base.tensorSplit || "",
       mainGpu: v.mainGpu || base.mainGpu || 0,
       overrideTensor: v.overrideTensor || base.overrideTensor || "",
+      chatTemplateFile: v.chatTemplateFile || base.chatTemplateFile || "",
       ctxCheckpoints: v.ctxCheckpoints ?? null,
       // variant-local: never inherited from the base.
       unlisted: v.unlisted ?? false,
@@ -821,11 +871,29 @@
     specNgramMinHits = o?.specNgramMinHits ? o.specNgramMinHits : "";
     adv = advFromOverride(o);
     extraArgs = o?.extraArgs ?? "";
+    // A template set through extraArgs (qm-tools, hand-edited sidecar) belongs in
+    // the advanced field — otherwise it renders nowhere in the form and the first
+    // launch-box blur silently drops it.
+    {
+      const h = hoistChatTemplate(extraArgs);
+      if (h.path) {
+        extraArgs = h.extra;
+        if (!adv.chatTemplateFile) adv.chatTemplateFile = h.path;
+      }
+    }
     unlisted = o?.unlisted ?? false;
     skip = o?.skip ?? false;
     slotCacheOn = o?.slotCache ?? true;
     ctxCheckpoints = o?.ctxCheckpoints ?? null;
-    variants = (o?.variants ?? []).map((v) => ({ ...v }));
+    variants = (o?.variants ?? []).map((v) => {
+      const c = { ...v };
+      const h = hoistChatTemplate(c.extraArgs ?? "");
+      if (h.path) {
+        c.extraArgs = h.extra;
+        if (!c.chatTemplateFile) c.chatTemplateFile = h.path;
+      }
+      return c;
+    });
     ctxTiers = (o?.ctxVariants ?? []).map((n) => blankVariant(fmtCtx(n), n));
     // Image fields (no-op for llama models — left at "").
     vaePath = o?.vaePath ?? "";
@@ -853,7 +921,7 @@
       reasoningFmt: "", unlisted: false, ctxCheckpoints: null, dry: null, preserveThinking: null,
       slotCache: null,
       kvInRam: false, cpuOffload: 0, flashAttn: "", mmap: "", mlock: false,
-      threads: 0, parallel: 0, extraArgs: "",
+      threads: 0, parallel: 0, extraArgs: "", chatTemplateFile: "",
       dryMultiplier: 0, dryBase: 0, dryAllowedLength: 0,
       specDraftNMax: 0, specDefault: false, specNgramSizeN: 0, specNgramSizeM: 0, specNgramMinHits: 0,
       vaePath: "", clipLPath: "", clipGPath: "", t5Path: "", textEncoderPath: "",
@@ -869,9 +937,10 @@
     let name = "preset";
     const taken = (nm: string) => variants.some((v) => v.name.toLowerCase() === nm.toLowerCase());
     while (taken(name)) name = `preset${++n}`;
-    const nv = blankVariant(name, 0);
-    variants = [...variants, nv];
-    selectedV = nv;
+    variants = [...variants, blankVariant(name, 0)];
+    // Select the ARRAY's element, not the raw literal: $state wraps elements in a
+    // proxy, so `selectedV = nv` never `===` the rendered tab and nothing lights up.
+    selectedV = variants[variants.length - 1];
   }
 
   // True when a ctx tier carries nothing but its ctx value, so it round-trips as
@@ -881,7 +950,7 @@
       !v.vramTargetGB && !v.kvK && !v.kvV && !v.spec && !v.ub &&
       !v.reasoningFmt && !v.unlisted &&
       v.ctxCheckpoints == null && v.dry == null && v.preserveThinking == null && v.slotCache == null && !v.kvInRam && !v.cpuOffload &&
-      !v.flashAttn && !v.mmap && !v.mlock && !v.threads && !v.parallel && !v.extraArgs &&
+      !v.flashAttn && !v.mmap && !v.mlock && !v.threads && !v.parallel && !v.extraArgs && !v.chatTemplateFile &&
       !v.dryMultiplier && !v.dryBase && !v.dryAllowedLength &&
       !v.specDraftNMax && !v.specDefault && !v.specNgramSizeN && !v.specNgramSizeM && !v.specNgramMinHits
     );
@@ -1148,9 +1217,9 @@
     const taken = (nm: string) =>
       [...variants, ...ctxTiers, ...defaultVariants].some((v) => v.name.toLowerCase() === nm.toLowerCase());
     while (taken(name)) name = `variant${++n}`;
-    const nv = variantFromDefault(name);
-    variants = [...variants, nv];
-    selectedV = nv;
+    variants = [...variants, variantFromDefault(name)];
+    // Select the proxied array element (see addImageVariantEntry).
+    selectedV = variants[variants.length - 1];
   }
 
   // Add a fresh fleet-wide variant (shared by every model) and select it. Saved
@@ -1163,9 +1232,8 @@
     while (taken(name)) name = `fleet${++n}`;
     // Seed from the current Default (spec, kv, engine knobs) like a per-model
     // variant: it inherits at creation, then drifts independently (standalone).
-    const nv = variantFromDefault(name);
-    defaultVariants = [...defaultVariants, nv];
-    selectedV = nv;
+    defaultVariants = [...defaultVariants, variantFromDefault(name)];
+    selectedV = defaultVariants[defaultVariants.length - 1];
   }
 
   // Remove a tab from whichever bucket holds it (per-model variant, ctx tier, or
@@ -1359,7 +1427,7 @@
             <select bind:value={backend} class="cfg-input ml-auto w-56">
               <option value="">Auto (default)</option>
               {#each classBackends as b (b.id)}
-                <option value={b.id}>{b.name || b.kind}{b.default ? " ★" : ""} ({b.kind})</option>
+                <option value={b.id}>{b.name || engineLabel(b.kind)}{b.default ? " ★" : ""} ({engineLabel(b.kind)})</option>
               {/each}
             </select>
           </div>
@@ -2195,6 +2263,15 @@
               <span class="text-txtsecondary flex items-center gap-1 shrink-0">Override tensor {@render hint("-ot. Manual tensor→buffer placement pattern, e.g. exps=CPU. Empty = omit.")}</span>
               <input type="text" bind:value={adv.overrideTensor} class="cfg-input flex-1 ml-auto font-mono" placeholder="regex=BUFFER" />
             </label>
+            <label class="flex items-center gap-2 col-span-2">
+              <span class="text-txtsecondary flex items-center gap-1 shrink-0">Chat template file {@render hint("--chat-template-file. Path to a .jinja chat template replacing the gguf's baked-in one — use a vendor-fixed template (e.g. Gemma, Qwen) without rebuilding the gguf. Empty = the baked-in template (or quartermaster's built-in Qwen 3.5/3.6 fix).")}</span>
+              <input type="text" bind:value={adv.chatTemplateFile} class="cfg-input flex-1 ml-auto font-mono" placeholder="D:/LLM/Models/templates/gemma4.jinja" spellcheck="false" />
+              <button
+                type="button" title="Browse for a .jinja template" aria-label="Browse for a chat template file"
+                class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
+                onclick={() => browseChatTemplate((p) => (adv.chatTemplateFile = p))}
+              ><FolderOpen size={14} /></button>
+            </label>
             <label class="flex items-center gap-2">
               <input type="checkbox" bind:checked={adv.directIo} />
               <span class="text-txtsecondary flex items-center gap-1">Direct I/O {@render hint("-dio. DirectIO for faster cold model load where supported.")}</span>
@@ -2563,6 +2640,15 @@
               <label class="flex items-center gap-2 col-span-2">
                 <span class="text-txtsecondary flex items-center gap-1 shrink-0">Override tensor {@render hint("-ot. Manual tensor→buffer placement, e.g. exps=CPU.")}</span>
                 <input type="text" value={sv.overrideTensor ?? ""} oninput={(e) => (sv.overrideTensor = (e.currentTarget as HTMLInputElement).value)} class="cfg-input flex-1 ml-auto font-mono" placeholder="inherit" />
+              </label>
+              <label class="flex items-center gap-2 col-span-2">
+                <span class="text-txtsecondary flex items-center gap-1 shrink-0">Chat template file {@render hint("--chat-template-file. Path to a .jinja chat template replacing the gguf's baked-in one. Empty = inherit the model-wide value.")}</span>
+                <input type="text" value={sv.chatTemplateFile ?? ""} oninput={(e) => (sv.chatTemplateFile = (e.currentTarget as HTMLInputElement).value)} class="cfg-input flex-1 ml-auto font-mono" placeholder="inherit" spellcheck="false" />
+                <button
+                  type="button" title="Browse for a .jinja template" aria-label="Browse for a chat template file"
+                  class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
+                  onclick={() => browseChatTemplate((p) => (sv.chatTemplateFile = p))}
+                ><FolderOpen size={14} /></button>
               </label>
               <label class="flex items-center gap-2">
                 <input type="checkbox" checked={!!sv.directIo} onchange={(e) => (sv.directIo = (e.currentTarget as HTMLInputElement).checked)} />

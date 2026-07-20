@@ -7,6 +7,7 @@
   import { persistentStore } from "../stores/persistent";
   import { observeWindowIdx, OBSERVE_WINDOWS } from "../stores/observe";
   import { onMount } from "svelte";
+  import { Search, X, Columns3, GripVertical } from "lucide-svelte";
   import type { ReqRespCapture } from "../lib/types";
 
   type ColumnKey = string;
@@ -27,8 +28,8 @@
     { key: "cached", label: "Cached", defaultVisible: true },
     { key: "prompt", label: "Prompt", defaultVisible: true },
     { key: "generated", label: "Generated", defaultVisible: true },
-    { key: "prompt_speed", label: "Prompt Speed", defaultVisible: true },
-    { key: "gen_speed", label: "Gen Speed", defaultVisible: true },
+    { key: "prompt_speed", label: "Prompt t/s", defaultVisible: true },
+    { key: "gen_speed", label: "Gen t/s", defaultVisible: true },
     { key: "duration", label: "Duration", defaultVisible: true },
     { key: "capture", label: "Capture", defaultVisible: true },
     { key: "meta", label: "Meta", defaultVisible: false },
@@ -156,7 +157,7 @@
   });
 
   function formatSpeed(speed: number): string {
-    return speed < 0 ? "unknown" : speed.toFixed(2) + " t/s";
+    return speed < 0 ? "—" : speed.toFixed(1);
   }
 
   function formatDuration(ms: number): string {
@@ -190,13 +191,35 @@
     return "a while ago";
   }
 
-  let sortedMetrics = $derived.by(() => {
+  // Free-text row filter (model / path / status), applied on top of the shared
+  // Observe time window.
+  let search = $state("");
+
+  let windowMetrics = $derived.by(() => {
     const ms = OBSERVE_WINDOWS[$observeWindowIdx]?.ms ?? 0;
     const cutoff = ms <= 0 ? 0 : Date.now() - ms;
     return [...$metrics]
       .filter((m) => cutoff === 0 || new Date(m.timestamp).getTime() >= cutoff)
       .sort((a, b) => b.id - a.id);
   });
+
+  let sortedMetrics = $derived.by(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return windowMetrics;
+    return windowMetrics.filter((m) =>
+      `${m.model} ${m.req_path ?? ""} ${m.resp_status_code ?? ""}`.toLowerCase().includes(q),
+    );
+  });
+
+  // Numeric cells get right-aligned tabular figures so magnitudes line up.
+  const NUMERIC = new Set(["id", "cached", "prompt", "generated", "prompt_speed", "gen_speed", "duration", "resp_status_code"]);
+
+  function statusClass(code: number): string {
+    if (!code) return "text-txtsecondary";
+    if (code >= 500) return "text-error";
+    if (code >= 400) return "text-warning";
+    return "text-success";
+  }
 
   let selectedCapture = $state<ReqRespCapture | null>(null);
   let dialogOpen = $state(false);
@@ -216,23 +239,42 @@
   }
 </script>
 
-<div class="p-2">
-  <div class="mt-4 mb-4">
-    <ActivityStats />
-  </div>
+<div class="p-2 flex flex-col gap-3">
+  <ActivityStats rows={windowMetrics} />
 
-  <div class="card overflow-auto relative min-h-[30rem] pretty-scroll">
-    <div class="flex justify-end px-4" bind:this={dropdownContainer}>
+  <div class="card p-0 flex flex-col min-h-[24rem]">
+    <!-- Toolbar: row count + search + column picker -->
+    <div class="flex items-center gap-2 px-3 py-2 border-b border-card-border-inner" bind:this={dropdownContainer}>
+      <span class="font-mono text-[0.7rem] uppercase tracking-wide text-txtsecondary">
+        Requests
+        <span class="text-txtmain">{sortedMetrics.length}</span>
+        {#if sortedMetrics.length !== windowMetrics.length}<span class="text-txtsecondary">/ {windowMetrics.length}</span>{/if}
+      </span>
+
+      <div class="relative ml-auto">
+        <Search size={13} class="absolute left-2 top-1/2 -translate-y-1/2 text-txtsecondary pointer-events-none" />
+        <input
+          type="text"
+          bind:value={search}
+          placeholder="filter model / path / status"
+          class="w-56 rounded border border-card-border bg-surface pl-7 pr-6 py-1 font-mono text-xs text-txtmain placeholder:text-txtsecondary/60 focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+        {#if search}
+          <button
+            class="absolute right-1.5 top-1/2 -translate-y-1/2 text-txtsecondary hover:text-txtmain"
+            onclick={() => (search = "")}
+            aria-label="Clear filter"
+          ><X size={13} /></button>
+        {/if}
+      </div>
+
       <div class="relative">
         <button
-          class="w-8 h-8 flex items-center justify-center rounded text-txtsecondary hover:text-txtmain hover:bg-secondary-hover transition-colors"
+          class="icon-btn"
+          aria-pressed={columnsMenuOpen}
           onclick={() => (columnsMenuOpen = !columnsMenuOpen)}
           title="Select columns"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path>
-          </svg>
-        </button>
+        ><Columns3 size={15} /></button>
         {#if columnsMenuOpen}
           <div class="absolute right-0 top-full mt-1 bg-surface border border-card-border rounded-md shadow-lg z-10 py-1 min-w-[16rem]" role="list">
             <div class="px-3 py-2 text-xs font-medium uppercase tracking-wide text-txtsecondary border-b border-card-border-inner" role="presentation">
@@ -254,7 +296,7 @@
                   aria-label="Drag to reorder {col.label}"
                   ondragstart={(e) => handleDragStart(e, key)}
                   ondragend={handleDragEnd}
-                >⋮⋮</span>
+                ><GripVertical size={13} /></span>
                 <label class="flex items-center gap-2 flex-1 cursor-pointer">
                   <input
                     type="checkbox"
@@ -271,11 +313,12 @@
       </div>
     </div>
 
-    <table class="min-w-full divide-y divide-card-border-inner">
-      <thead class="border-card-border-inner">
-        <tr class="text-left text-xs uppercase tracking-wide text-txtsecondary">
+    <div class="flex-1 overflow-auto pretty-scroll">
+    <table class="min-w-full !border-0 !rounded-none">
+      <thead>
+        <tr class="text-left text-[0.65rem] uppercase tracking-wide text-txtsecondary">
           {#each activeVisibleColumns as key (key)}
-            <th class="px-4 py-2.5">
+            <th class="sticky top-0 z-[1] bg-surface px-3 py-2 font-medium whitespace-nowrap {NUMERIC.has(key) ? 'text-right' : ''}">
               {#if key === "cached"}
                 Cached <Tooltip content="prompt tokens from cache" />
               {:else if key === "prompt"}
@@ -287,32 +330,36 @@
           {/each}
         </tr>
       </thead>
-      <tbody class="divide-y divide-card-border-inner">
+      <tbody>
         {#if sortedMetrics.length === 0}
           <tr>
-            <td colspan={activeVisibleColumns.length} class="px-4 py-8 text-center text-sm text-txtsecondary">
-              No activity recorded
+            <td colspan={activeVisibleColumns.length} class="px-4 py-10 text-center text-sm text-txtsecondary">
+              {search ? "No requests match the filter" : "No activity recorded"}
             </td>
           </tr>
         {:else}
           {#each sortedMetrics as metric (metric.id)}
             <tr class="whitespace-nowrap text-sm hover:bg-secondary/40 transition-colors">
               {#each activeVisibleColumns as key (key)}
-                <td class="px-4 py-2.5">
+                <td class="px-3 py-2 {NUMERIC.has(key) ? 'text-right font-mono tabular-nums' : ''}">
                   {#if key === "id"}
-                    {metric.id + 1}
+                    <span class="text-txtsecondary">{metric.id + 1}</span>
                   {:else if key === "time"}
-                    {formatRelativeTime(metric.timestamp)}
+                    <span class="text-txtsecondary" title={new Date(metric.timestamp).toLocaleString()}>{formatRelativeTime(metric.timestamp)}</span>
                   {:else if key === "model"}
-                    {metric.model}
+                    <span class="font-mono text-xs">{metric.model}</span>
                   {:else if key === "req_path"}
-                    {metric.req_path || "-"}
+                    <span class="font-mono text-xs text-txtsecondary">{metric.req_path || "-"}</span>
                   {:else if key === "resp_status_code"}
-                    {metric.resp_status_code || "-"}
+                    <span class={statusClass(metric.resp_status_code)}>{metric.resp_status_code || "-"}</span>
                   {:else if key === "resp_content_type"}
                     {metric.resp_content_type || "-"}
                   {:else if key === "cached"}
-                    {metric.tokens.cache_tokens > 0 ? metric.tokens.cache_tokens.toLocaleString() : "-"}
+                    {#if metric.tokens.cache_tokens > 0}
+                      <span class="text-success">{metric.tokens.cache_tokens.toLocaleString()}</span>
+                    {:else}
+                      <span class="text-txtsecondary">-</span>
+                    {/if}
                   {:else if key === "prompt"}
                     {metric.tokens.input_tokens.toLocaleString()}
                   {:else if key === "generated"}
@@ -353,6 +400,7 @@
         {/if}
       </tbody>
     </table>
+    </div>
   </div>
 </div>
 

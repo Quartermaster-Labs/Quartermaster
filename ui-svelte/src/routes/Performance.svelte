@@ -3,6 +3,7 @@
   import { fetchPerformance } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
   import { observeWindowIdx, OBSERVE_WINDOWS } from "../stores/observe";
+  import { RefreshCw, Cpu, Gauge, MemoryStick } from "lucide-svelte";
   import type { SysStat, GpuStat } from "../lib/types";
   import PerformanceChart from "../components/PerformanceChart.svelte";
 
@@ -343,58 +344,90 @@
   const gpuVramTempDatasets = $derived(buildGpuDatasets(filteredGpuStats, "vram_temp_c"));
   const gpuPowerDatasets = $derived(buildGpuDatasets(filteredGpuStats, "power_draw_w"));
   const hasVramTemp = $derived(filteredGpuStats.some((g) => g.vram_temp_c > 0));
+
+  // --- Latest-sample readout (the KPI strip above the charts) ---
+
+  // Newest sample per GPU id, in id order.
+  const latestGpus = $derived.by(() => {
+    const byId = new Map<number, GpuStat>();
+    for (const g of filteredGpuStats) byId.set(g.id, g);
+    return [...byId.entries()].sort((a, b) => a[0] - b[0]).map(([, g]) => g);
+  });
+
+  const latestCpu = $derived.by(() => {
+    const stats = filteredSysStats;
+    if (stats.length === 0) return null;
+    const cores = stats[stats.length - 1].cpu_util_per_core;
+    if (!cores?.length) return null;
+    return {
+      avg: cores.reduce((a, b) => a + b, 0) / cores.length,
+      max: Math.max(...cores),
+      cores: cores.length,
+    };
+  });
   // Windows nvidia-smi path no longer queries power.draw (avoids WDDM stalls),
   // so only show the power chart when some backend actually reports it.
   const hasPower = $derived(filteredGpuStats.some((g) => g.power_draw_w > 0));
 </script>
 
-<div class="space-y-6">
-  <div class="flex items-center justify-between">
-    <h6 class="!pb-0 text-txtsecondary">Performance <span class="text-[0.6rem] uppercase tracking-wide">experimental</span></h6>
-    <div class="flex items-center gap-4">
-      <div class="flex items-center gap-1">
-        <span class="text-xs text-txtsecondary mr-1 uppercase tracking-wide">Refresh:</span>
-        {#each INTERVALS as intv, i}
-          <button
-            class="btn btn--sm uppercase tracking-wide"
-            class:bg-primary={$selectedInterval === i}
-            class:text-btn-primary-text={$selectedInterval === i}
-            onclick={() => handleIntervalChange(i)}
-          >
-            {intv.label}
-          </button>
+<div class="space-y-5 p-2">
+  <!-- Toolbar -->
+  <div class="flex items-center gap-3 flex-wrap">
+    <div class="flex items-baseline gap-2">
+      <h6 class="!pb-0">Performance</h6>
+      <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary border border-card-border rounded px-1.5 py-0.5">experimental</span>
+    </div>
+    <span class="text-xs text-txtsecondary hidden md:inline">Live system &amp; GPU telemetry — cadence and available metrics depend on the platform backend.</span>
+
+    <div class="flex items-center gap-2 ml-auto">
+      <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary">Refresh</span>
+      <div class="seg">
+        {#each INTERVALS as intv, i (intv.label)}
+          <button aria-pressed={$selectedInterval === i} onclick={() => handleIntervalChange(i)}>{intv.label}</button>
         {/each}
       </div>
-      <button class="btn btn--sm p-1" title="Refresh" onclick={manualRefresh} disabled={refreshing}>
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          class="w-4 h-4"
-          class:animate-spin={refreshing}
-        >
-          <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-          <path d="M3 3v5h5" />
-          <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
-          <path d="M16 16h5v5" />
-        </svg>
+      <button class="icon-btn" title="Refresh now" onclick={manualRefresh} disabled={refreshing}>
+        <RefreshCw size={15} class={refreshing ? "animate-spin" : ""} />
       </button>
     </div>
   </div>
-  <p class="text-sm text-txtsecondary">
-    Live system &amp; GPU telemetry. Experimental — sampling cadence and available
-    metrics depend on the platform backend.
-  </p>
+
+  <!-- Latest-sample KPI strip -->
+  {#if latestGpus.length > 0 || latestCpu || latestMemSwap}
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+      {#each latestGpus as g (g.id)}
+        <div class="tile">
+          <span class="tile__label"><Cpu size={11} /> {g.name || `GPU ${g.id}`}</span>
+          <span class="tile__value">{g.gpu_util_pct.toFixed(0)}<span class="text-xs text-txtsecondary">% util</span></span>
+          <span class="tile__sub">
+            {g.mem_util_pct.toFixed(0)}% vram · {g.temp_c.toFixed(0)}°C{#if g.power_draw_w > 0} · {g.power_draw_w.toFixed(0)} W{/if}
+          </span>
+        </div>
+      {/each}
+      {#if latestCpu}
+        <div class="tile">
+          <span class="tile__label"><Gauge size={11} /> CPU</span>
+          <span class="tile__value">{latestCpu.avg.toFixed(0)}<span class="text-xs text-txtsecondary">% avg</span></span>
+          <span class="tile__sub">peak core {latestCpu.max.toFixed(0)}% · {latestCpu.cores} cores</span>
+        </div>
+      {/if}
+      {#if latestMemSwap}
+        <div class="tile">
+          <span class="tile__label"><MemoryStick size={11} /> Memory</span>
+          <span class="tile__value">{latestMemSwap.mem_used_pct}<span class="text-xs text-txtsecondary">%</span></span>
+          <span class="tile__sub">
+            {(latestMemSwap.mem_used_mb / 1024).toFixed(1)} / {(latestMemSwap.mem_total_mb / 1024).toFixed(0)} GB{#if latestMemSwap.swap_used_pct !== null} · swap {latestMemSwap.swap_used_pct}%{/if}
+          </span>
+        </div>
+      {/if}
+    </div>
+  {/if}
 
   <!-- GPU Section -->
-  <section class="space-y-4">
-    <h6 class="!pb-0 uppercase tracking-wide text-txtsecondary">GPU</h6>
+  <section class="space-y-3">
+    <h6 class="!pb-0 uppercase tracking-wide text-txtsecondary text-xs">GPU</h6>
     {#if !hasGpuData}
-      <p class="text-txtsecondary card p-4">No GPU data available</p>
+      <p class="text-txtsecondary card p-4 text-sm">No GPU data available</p>
     {:else}
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <PerformanceChart
@@ -443,8 +476,8 @@
   </section>
 
   <!-- System Section -->
-  <section class="space-y-4">
-    <h6 class="!pb-0 uppercase tracking-wide text-txtsecondary">System</h6>
+  <section class="space-y-3">
+    <h6 class="!pb-0 uppercase tracking-wide text-txtsecondary text-xs">System</h6>
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <PerformanceChart
         title="CPU Utilization (%)"
@@ -455,32 +488,15 @@
         yLabel="%"
         showLegend={false}
       />
-      <div>
-        <PerformanceChart
-          title="Memory & Swap Usage (%)"
-          labels={sysLabels}
-          datasets={memSwapDatasets}
-          yMin={0}
-          yMax={100}
-          yLabel="%"
-        />
-        {#if latestMemSwap}
-          <div class="flex items-center justify-center gap-4 text-xs text-txtsecondary mt-1 px-4">
-            <span
-              >Mem: <span class="text-txtmain font-medium"
-                >{latestMemSwap.mem_used_mb.toLocaleString()} / {latestMemSwap.mem_total_mb.toLocaleString()} MB ({latestMemSwap.mem_used_pct}%)</span
-              ></span
-            >
-            {#if latestMemSwap.swap_used_pct !== null}
-              <span
-                >Swap: <span class="text-txtmain font-medium"
-                  >{latestMemSwap.swap_used_mb.toLocaleString()} / {latestMemSwap.swap_total_mb.toLocaleString()} MB ({latestMemSwap.swap_used_pct}%)</span
-                ></span
-              >
-            {/if}
-          </div>
-        {/if}
-      </div>
+      <!-- Absolute MB figures live in the Memory KPI tile above. -->
+      <PerformanceChart
+        title="Memory & Swap Usage (%)"
+        labels={sysLabels}
+        datasets={memSwapDatasets}
+        yMin={0}
+        yMax={100}
+        yLabel="%"
+      />
       <PerformanceChart title="Load Average" labels={sysLabels} datasets={loadDatasets} yMin={0} />
       {#if netBandwidthDatasets.length > 0}
         <PerformanceChart

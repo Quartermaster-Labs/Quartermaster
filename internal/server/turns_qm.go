@@ -134,6 +134,10 @@ func (tm *turnManager) qmInspect(ctx context.Context, at *activeTurn, args strin
 		return "settings", tm.qmSettings(ctx, at)
 	case "logs", "log":
 		return "logs", tm.qmLogs(ctx, at, a.Tail, a.Source)
+	case "fields", "schema":
+		// The full editable surface, pulled on demand — see turns_qm_fields.go for
+		// why it isn't baked into the tool description.
+		return "fields", qmFieldCatalog()
 	default:
 		return target, tm.qmModelConfig(ctx, at, target)
 	}
@@ -430,33 +434,12 @@ func (tm *turnManager) qmModelConfig(ctx context.Context, at *activeTurn, id str
 	if o == nil {
 		b.WriteString("• per-model override: none — running on auto-derived defaults\n")
 	} else {
+		// Reflection over the DTO, not a hand-listed subset: a knob added to the
+		// cogwheel shows up here (and in the configure tool) with no edit, and the
+		// model never sees a config that silently omits a field that IS set.
 		b.WriteString("• per-model override set (fields below differ from / pin auto defaults):\n")
-		add("  backend", o.Backend != "", o.Backend)
-		add("  ctx", o.Ctx > 0, humanCtx(o.Ctx))
-		add("  vramTargetGB", o.VramTargetGB > 0, fmt.Sprintf("%g", o.VramTargetGB))
-		add("  KV quant (k/v)", o.KvK != "" || o.KvV != "", strings.TrimSpace(o.KvK+"/"+o.KvV))
-		add("  KV in RAM", o.KvInRam, "yes")
-		add("  cpuOffload (layers on CPU)", o.CpuOffload > 0, fmt.Sprintf("%d", o.CpuOffload))
-		add("  flashAttn", o.FlashAttn != "", o.FlashAttn)
-		add("  mmap", o.Mmap != "", o.Mmap)
-		add("  mlock", o.Mlock, "on")
-		add("  threads", o.Threads > 0, fmt.Sprintf("%d", o.Threads))
-		add("  parallel slots", o.Parallel > 0, fmt.Sprintf("%d", o.Parallel))
-		add("  ubatch", o.Ub > 0, fmt.Sprintf("%d", o.Ub))
-		add("  reasoningBudget", o.ReasoningBudget > 0, fmt.Sprintf("%d", o.ReasoningBudget))
-		add("  reasoningFmt", o.ReasoningFmt != "", o.ReasoningFmt)
-		add("  preserveThinking", o.PreserveThinking, "on")
-		add("  spec (speculative)", o.Spec != "", o.Spec)
-		add("  extraArgs", o.ExtraArgs != "", o.ExtraArgs)
-		add("  slotCache", o.SlotCache != nil, boolStr(o.SlotCache))
-		add("  unlisted", o.Unlisted, "true")
-		add("  skip", o.Skip, "true")
-		if len(o.CtxVariants) > 0 {
-			labels := make([]string, len(o.CtxVariants))
-			for i, v := range o.CtxVariants {
-				labels[i] = humanCtx(v)
-			}
-			add("  ctx tiers", true, strings.Join(labels, ", "))
+		if qmRenderNonZero(&b, *o, "  ") == 0 {
+			b.WriteString("  (all fields at their auto/inherit value)\n")
 		}
 	}
 
@@ -494,55 +477,27 @@ func draftLabels(c modelConfigResp) string {
 	return strings.Join(d, ", ")
 }
 
-func boolStr(b *bool) string {
-	if b == nil {
-		return ""
-	}
-	if *b {
-		return "on"
-	}
-	return "off"
-}
-
 // describeVariant renders a variant name plus the settings it overrides, so the
 // model sees what each variant actually changes (ctx tier, KV, spec, …) not just
 // a bare label.
+// Same reflection pass as the override dump, so a variant's every set field is
+// visible (name is dropped — it's the label) instead of a curated subset.
 func describeVariant(v variantDTO) string {
-	var parts []string
-	if v.Ctx > 0 {
-		parts = append(parts, "ctx "+humanCtx(v.Ctx))
+	name := v.Name
+	v.Name = ""
+	var inner strings.Builder
+	qmRenderNonZero(&inner, v, "")
+	parts := strings.Split(strings.TrimRight(inner.String(), "\n"), "\n")
+	var kv []string
+	for _, p := range parts {
+		if p = strings.TrimPrefix(strings.TrimSpace(p), "• "); p != "" {
+			kv = append(kv, strings.Replace(p, ": ", " ", 1))
+		}
 	}
-	if v.VramTargetGB > 0 {
-		parts = append(parts, fmt.Sprintf("vram %gGB", v.VramTargetGB))
+	if len(kv) == 0 {
+		return name
 	}
-	if v.KvK != "" || v.KvV != "" {
-		parts = append(parts, "kv "+strings.TrimSpace(v.KvK+"/"+v.KvV))
-	}
-	if v.CpuOffload > 0 {
-		parts = append(parts, fmt.Sprintf("cpuOffload %d", v.CpuOffload))
-	}
-	if v.Spec != "" {
-		parts = append(parts, "spec "+v.Spec)
-	}
-	if v.ReasoningFmt != "" {
-		parts = append(parts, "reasoningFmt "+v.ReasoningFmt)
-	}
-	if v.Ub > 0 {
-		parts = append(parts, fmt.Sprintf("ubatch %d", v.Ub))
-	}
-	if v.PreserveThinking != nil && *v.PreserveThinking {
-		parts = append(parts, "preserveThinking")
-	}
-	if v.Unlisted {
-		parts = append(parts, "unlisted")
-	}
-	if v.ExtraArgs != "" {
-		parts = append(parts, "extraArgs "+v.ExtraArgs)
-	}
-	if len(parts) == 0 {
-		return v.Name
-	}
-	return v.Name + " (" + strings.Join(parts, ", ") + ")"
+	return name + " (" + strings.Join(kv, ", ") + ")"
 }
 
 // capLabels lists a model's true-valued capability keys, sorted, with a couple
@@ -592,23 +547,27 @@ func (tm *turnManager) qmConfigure(ctx context.Context, at *activeTurn, callID, 
 	case accept := <-pa.decide:
 		if !accept {
 			at.resolveApproval(pa, "denied", "")
-			return label, "The user DENIED this change; nothing was applied. Do not retry it — acknowledge and move on."
+			return label + " — denied", "The user DENIED this change; nothing was applied. Do not retry it — acknowledge and move on."
 		}
 	case <-ctx.Done():
 		at.resolveApproval(pa, "denied", "cancelled")
-		return label, "The turn was cancelled before the change was approved; nothing was applied."
+		return label + " — cancelled", "The turn was cancelled before the change was approved; nothing was applied."
 	case <-time.After(approvalTimeout):
 		at.resolveApproval(pa, "timeout", "")
-		return label, "The approval request timed out; nothing was applied."
+		return label + " — timed out", "The approval request timed out; nothing was applied."
 	}
 
 	ok, text := tm.applyPlan(ctx, at, plan)
 	if ok {
 		at.resolveApproval(pa, "applied", diffSummary(plan.diff))
-	} else {
-		at.resolveApproval(pa, "error", text)
+		// The outcome rides on the tool step's own label (and its result text
+		// carries the diff), so the accepted change stays visible in the
+		// reasoning trail after the transient approval card is gone — and
+		// survives the post-turn resync, which drops the card's state.
+		return label + " — accepted", text
 	}
-	return label, text
+	at.resolveApproval(pa, "error", text)
+	return label + " — failed", text
 }
 
 // buildConfigPlan resolves a configure request into a full merged body + a diff,
@@ -637,11 +596,24 @@ func (tm *turnManager) buildConfigPlan(ctx context.Context, at *activeTurn, args
 		return tm.buildPlaygroundPlan(ctx, at, a.Changes)
 	}
 
+	// "<model id>#<variant name>" edits ONE named variant, mirroring the cogwheel's
+	// variant tabs. Split before the model lookup — a '#' is not legal in a model id.
+	modelID, variantName := target, ""
+	if i := strings.LastIndex(target, "#"); i >= 0 {
+		modelID, variantName = strings.TrimSpace(target[:i]), strings.TrimSpace(target[i+1:])
+		if modelID == "" || variantName == "" {
+			return nil, "Bad target: use '<model id>#<variant name>' to edit a variant."
+		}
+	}
+
 	var path string
 	var current map[string]any
 	if strings.EqualFold(target, "settings") {
 		target = "settings"
 		path = "/api/settings"
+		if msg := validateQmChanges(qmSettingsFieldSpecs(), a.Changes); msg != "" {
+			return nil, msg
+		}
 		code, cur, err := tm.qmReq(ctx, at, http.MethodGet, "/api/settings", nil)
 		if err != nil {
 			return nil, "Reading current settings failed: " + err.Error()
@@ -659,8 +631,14 @@ func (tm *turnManager) buildConfigPlan(ctx context.Context, at *activeTurn, args
 			"ttlSec":         m["ttlSec"],
 		}
 	} else {
-		path = "/api/models/" + url.PathEscape(target) + "/override"
-		code, cur, err := tm.qmReq(ctx, at, http.MethodGet, "/api/models/"+url.PathEscape(target)+"/config", nil)
+		specs := qmModelFieldSpecs()
+		if variantName != "" {
+			specs = qmVariantFieldSpecs()
+		}
+		if msg := validateQmChanges(specs, a.Changes); msg != "" {
+			return nil, msg
+		}
+		code, cur, err := tm.qmReq(ctx, at, http.MethodGet, "/api/models/"+url.PathEscape(modelID)+"/config", nil)
 		if err != nil {
 			return nil, "Reading current config failed: " + err.Error()
 		}
@@ -677,6 +655,24 @@ func (tm *turnManager) buildConfigPlan(ctx context.Context, at *activeTurn, args
 		if current == nil {
 			current = map[string]any{}
 		}
+		if variantName != "" {
+			// The variant PUT replaces the whole variant by name, so the body must be
+			// that variant's CURRENT values with the changes layered on — not a sparse
+			// patch (which would blank every other field).
+			path = "/api/models/" + url.PathEscape(modelID) + "/variant"
+			v, ok := findVariantMap(current["variants"], variantName)
+			if !ok {
+				return nil, fmt.Sprintf("Model %s has no variant named %q. quartermaster_inspect the model to see its variants; this tool edits existing variants only.", modelID, variantName)
+			}
+			current = v
+			// name identifies the variant; changing it here would fork a new one.
+			delete(a.Changes, "name")
+			if len(a.Changes) == 0 {
+				return nil, "No editable fields left in 'changes' (a variant's name can't be changed here)."
+			}
+		} else {
+			path = "/api/models/" + url.PathEscape(modelID) + "/override"
+		}
 	}
 
 	body, diff := mergeAndDiff(current, a.Changes)
@@ -684,6 +680,25 @@ func (tm *turnManager) buildConfigPlan(ctx context.Context, at *activeTurn, args
 		return nil, "Those values are already set — no change needed."
 	}
 	return &configPlan{target: target, path: path, body: body, diff: diff}, ""
+}
+
+// findVariantMap picks one variant (case-insensitive by name) out of the decoded
+// override.variants array, so a variant edit starts from its real current values.
+func findVariantMap(variants any, name string) (map[string]any, bool) {
+	arr, ok := variants.([]any)
+	if !ok {
+		return nil, false
+	}
+	for _, e := range arr {
+		m, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		if n, _ := m["name"].(string); strings.EqualFold(n, name) {
+			return m, true
+		}
+	}
+	return nil, false
 }
 
 // prefField maps a model-facing playground setting name to its internal pref key

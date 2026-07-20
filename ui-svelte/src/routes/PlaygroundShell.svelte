@@ -294,11 +294,11 @@
 <div class="h-screen flex bg-background">
   <!-- Side rail: icons only at rest; expands on hover. Same width hover or with the chat list open. -->
   <nav
-    class="group/rail relative z-40 shrink-0 w-14 hover:w-44 transition-[width] duration-200 overflow-hidden flex flex-col gap-1 py-2 border-r border-border bg-surface"
+    class="group/rail relative z-40 shrink-0 {historyOpen ? 'w-44' : 'w-14'} hover:w-44 transition-[width] duration-200 overflow-hidden flex flex-col gap-1 py-2 border-r border-border bg-surface"
   >
     <div class="relative pb-2 h-9 flex items-center font-mono text-xs uppercase tracking-[0.2em] text-primary leading-tight">
-      <span class="w-14 shrink-0 flex items-center justify-center group-hover/rail:hidden">QM</span>
-      <span class="hidden group-hover/rail:block absolute left-0 top-1/2 -translate-y-[0.72rem] whitespace-nowrap pl-[1.2rem] leading-tight">Quartermaster<br />Playground</span>
+      <span class="w-14 shrink-0 flex items-center justify-center group-hover/rail:hidden {historyOpen ? 'hidden' : ''}">QM</span>
+      <span class="{historyOpen ? 'block' : 'hidden'} group-hover/rail:block absolute left-0 top-1/2 -translate-y-[0.72rem] whitespace-nowrap pl-[1.2rem] leading-tight">Quartermaster<br />Playground</span>
     </div>
     <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pretty-scroll flex flex-col gap-1">
     {#each tabs as tab (tab.id)}
@@ -324,7 +324,7 @@
             {/if}
           </span>
         </span>
-        <span class="font-mono text-sm whitespace-nowrap opacity-0 group-hover/rail:opacity-100 transition-opacity">
+        <span class="font-mono text-sm whitespace-nowrap {historyOpen ? 'opacity-100' : 'opacity-0'} group-hover/rail:opacity-100 transition-opacity">
           {tab.label}
         </span>
       </button>
@@ -340,7 +340,7 @@
       class="shrink-0 w-full flex items-center pr-3 py-2 border-l-2 border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
       <span class="w-14 shrink-0 -ml-0.5 flex items-center justify-center"><BookOpen size={18} class="shrink-0" /></span>
-      <span class="font-mono text-sm whitespace-nowrap opacity-0 group-hover/rail:opacity-100 transition-opacity">
+      <span class="font-mono text-sm whitespace-nowrap {historyOpen ? 'opacity-100' : 'opacity-0'} group-hover/rail:opacity-100 transition-opacity">
         Help
       </span>
     </button>
@@ -350,7 +350,7 @@
       class="shrink-0 w-full flex items-center pr-3 py-2 border-l-2 border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
       <span class="w-14 shrink-0 -ml-0.5 flex items-center justify-center"><Settings size={18} class="shrink-0" /></span>
-      <span class="font-mono text-sm whitespace-nowrap opacity-0 group-hover/rail:opacity-100 transition-opacity">
+      <span class="font-mono text-sm whitespace-nowrap {historyOpen ? 'opacity-100' : 'opacity-0'} group-hover/rail:opacity-100 transition-opacity">
         Settings
       </span>
     </button>
@@ -360,7 +360,7 @@
       class="w-full flex items-center pr-3 py-2 border-l-2 border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
       <span class="w-14 shrink-0 -ml-0.5 flex items-center justify-center"><LogOut size={18} class="shrink-0" /></span>
-      <span class="font-mono text-sm whitespace-nowrap truncate opacity-0 group-hover/rail:opacity-100 transition-opacity">
+      <span class="font-mono text-sm whitespace-nowrap truncate {historyOpen ? 'opacity-100' : 'opacity-0'} group-hover/rail:opacity-100 transition-opacity">
         {$me}
       </span>
     </button>
@@ -888,7 +888,7 @@
 {#if historyOpen && (onChats || onImages || onSpeech)}
   <div class="fixed inset-0 z-30" onclick={() => (historyOpen = false)} role="presentation">
     <div
-      class="absolute left-44 top-4 w-72 max-h-[80vh] flex flex-col p-2 rounded-lg border border-card-border bg-surface shadow-xl"
+      class="absolute left-[12rem] top-4 w-72 max-h-[80vh] flex flex-col p-2 rounded-lg border border-card-border bg-surface shadow-xl"
       onclick={(e) => e.stopPropagation()}
       role="presentation"
     >

@@ -29,8 +29,12 @@ func pickFolder() (string, error) {
 // pickFile opens a native file-selection dialog via zenity and returns the
 // chosen absolute path ("" when the user cancels). Same zenity/local-display
 // caveat as pickFolder.
-func pickFile() (string, error) {
-	out, err := exec.Command("zenity", "--file-selection", "--title=Select backend executable").Output()
+func pickFile(spec filePickSpec) (string, error) {
+	args := []string{"--file-selection", "--title=" + spec.Title}
+	for _, p := range spec.ZenityPatterns {
+		args = append(args, "--file-filter="+p)
+	}
+	out, err := exec.Command("zenity", args...).Output()
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {

@@ -40,7 +40,9 @@ const hashCacheSuffix = ".modelhash"
 //	v23: SAM no longer bakes --no-gpu at generate (static-budget heuristic always
 //	     tripped CPU on a full-budget card even when idle); CPU vs GPU is now a
 //	     live spawn-time decision (LiveOffloadArgs .ggml branch, samGpuMinFreeGB).
-const genVersion = "v23"
+//	v24: --chat-template-file emits via cmdPath (forward slashes, unescaped) —
+//	     %q doubled every backslash and llama-server couldn't open the template.
+const genVersion = "v24"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

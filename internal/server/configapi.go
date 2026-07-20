@@ -15,6 +15,28 @@ import (
 	"github.com/quartermaster-labs/quartermaster/internal/shared"
 )
 
+// chatTemplateErr validates a --chat-template-file path at SAVE time, returning
+// a message when it can't be used. llama-server refuses to start on a missing
+// template, so an unchecked path turns into a dead model at its next load — far
+// from the edit that caused it. It also stops a chat model driving
+// quartermaster_configure from persisting an invented-but-plausible path
+// (a real one: it guessed a repo-style `chat_template.jinja` next to the gguf).
+// Relative paths resolve against the server's cwd, like the built-in template.
+func chatTemplateErr(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	st, err := os.Stat(p)
+	if err != nil {
+		return "chat template file not found: " + p
+	}
+	if st.IsDir() {
+		return "chat template path is a directory, not a file: " + p
+	}
+	return ""
+}
+
 // slotCachePathOrDefault echoes p, or resolves the default snapshot dir when
 // blank so the UI displays the real path.
 func slotCachePathOrDefault(p string) string {
@@ -79,14 +101,15 @@ type variantDTO struct {
 	// SlotCache: nil => inherit the model-wide flag, true/false => explicit.
 	SlotCache *bool `json:"slotCache"`
 	// Engine knobs (variant carries the full launch shape; zero/empty => inherit).
-	KvInRam    bool   `json:"kvInRam"`
-	CpuOffload int    `json:"cpuOffload"`
-	FlashAttn  string `json:"flashAttn"`
-	Mmap       string `json:"mmap"`
-	Mlock      bool   `json:"mlock"`
-	Threads    int    `json:"threads"`
-	Parallel   int    `json:"parallel"`
-	ExtraArgs  string `json:"extraArgs"`
+	KvInRam          bool   `json:"kvInRam"`
+	CpuOffload       int    `json:"cpuOffload"`
+	FlashAttn        string `json:"flashAttn"`
+	Mmap             string `json:"mmap"`
+	Mlock            bool   `json:"mlock"`
+	Threads          int    `json:"threads"`
+	Parallel         int    `json:"parallel"`
+	ExtraArgs        string `json:"extraArgs"`
+	ChatTemplateFile string `json:"chatTemplateFile"`
 	// Sampler / speculative sub-knobs (Dry on/off is the *bool field above).
 	DryMultiplier    float64 `json:"dryMultiplier"`
 	DryBase          float64 `json:"dryBase"`
@@ -164,6 +187,7 @@ type overrideDTO struct {
 	Parallel           int     `json:"parallel"`
 	Ub                 int     `json:"ub"`
 	ExtraArgs          string  `json:"extraArgs"`
+	ChatTemplateFile   string  `json:"chatTemplateFile"`
 	Unlisted           bool    `json:"unlisted"`
 	Skip               bool    `json:"skip"`
 	SlotCache          *bool   `json:"slotCache"`   // opt this model into on-disk slot KV persistence; nil => default on
@@ -262,7 +286,8 @@ func variantToDTO(v autogen.VariantSpec) variantDTO {
 		KvInRam: v.KvInRam, CpuOffload: v.CpuOffload,
 		FlashAttn: v.FlashAttn, Mmap: v.Mmap, Mlock: v.Mlock,
 		Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
-		DryMultiplier: v.DryMultiplier, DryBase: v.DryBase, DryAllowedLength: v.DryAllowedLength,
+		ChatTemplateFile: v.ChatTemplateFile,
+		DryMultiplier:    v.DryMultiplier, DryBase: v.DryBase, DryAllowedLength: v.DryAllowedLength,
 		SpecDraftNMax: v.SpecDraftNMax, SpecDefault: v.SpecDefault,
 		SpecNgramSizeN: v.SpecNgramSizeN, SpecNgramSizeM: v.SpecNgramSizeM, SpecNgramMinHits: v.SpecNgramMinHits,
 		ThreadsBatch: v.ThreadsBatch, Prio: v.Prio, DirectIo: v.DirectIo, NoOpOffload: v.NoOpOffload, NoRepack: v.NoRepack,
@@ -287,8 +312,9 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		Spec: o.Spec, ReasoningFmt: o.ReasoningFmt, ReasoningBudget: o.ReasoningBudget,
 		FlashAttn: o.FlashAttn, Mmap: o.Mmap, Mlock: o.Mlock,
 		Threads: o.Threads, Parallel: o.Parallel, Ub: o.Ub,
-		ExtraArgs: o.ExtraArgs,
-		Unlisted:  o.Unlisted, Skip: o.Skip, SlotCache: o.SlotCache,
+		ExtraArgs:        o.ExtraArgs,
+		ChatTemplateFile: o.ChatTemplateFile,
+		Unlisted:         o.Unlisted, Skip: o.Skip, SlotCache: o.SlotCache,
 		CtxVariants: o.CtxVariants, CtxCheckpoints: o.CtxCheckpoints,
 		PreserveThinking: o.PreserveThinking,
 		Dry:              o.Dry,
@@ -322,7 +348,8 @@ func toVariantSpec(v variantDTO) autogen.VariantSpec {
 		KvInRam: v.KvInRam, CpuOffload: v.CpuOffload,
 		FlashAttn: v.FlashAttn, Mmap: v.Mmap, Mlock: v.Mlock,
 		Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
-		DryMultiplier: v.DryMultiplier, DryBase: v.DryBase, DryAllowedLength: v.DryAllowedLength,
+		ChatTemplateFile: v.ChatTemplateFile,
+		DryMultiplier:    v.DryMultiplier, DryBase: v.DryBase, DryAllowedLength: v.DryAllowedLength,
 		SpecDraftNMax: v.SpecDraftNMax, SpecDefault: v.SpecDefault,
 		SpecNgramSizeN: v.SpecNgramSizeN, SpecNgramSizeM: v.SpecNgramSizeM, SpecNgramMinHits: v.SpecNgramMinHits,
 		ThreadsBatch: v.ThreadsBatch, Prio: v.Prio, DirectIo: v.DirectIo, NoOpOffload: v.NoOpOffload, NoRepack: v.NoRepack,
@@ -521,6 +548,10 @@ func (s *Server) handleAPIModelOverridePut(w http.ResponseWriter, r *http.Reques
 		shared.SendResponse(w, r, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
+	if msg := chatTemplateErr(body.ChatTemplateFile); msg != "" {
+		shared.SendResponse(w, r, http.StatusBadRequest, msg)
+		return
+	}
 	// Base the sidecar row on the hand-authored FILE override so its file-only
 	// fields (ctxVariants, quant) survive — the sidecar row shadows the file row
 	// wholesale, so anything the editor doesn't carry would otherwise be lost. The
@@ -680,6 +711,10 @@ func (s *Server) handleAPIModelVariantPost(w http.ResponseWriter, r *http.Reques
 	}
 	if strings.TrimSpace(v.Name) == "" {
 		shared.SendResponse(w, r, http.StatusBadRequest, "variant name is required")
+		return
+	}
+	if msg := chatTemplateErr(v.ChatTemplateFile); msg != "" {
+		shared.SendResponse(w, r, http.StatusBadRequest, msg)
 		return
 	}
 	side, ov, err := s.findSidecarOverride(gguf)
@@ -1190,7 +1225,32 @@ func (s *Server) handleAPISettingsRootPick(w http.ResponseWriter, r *http.Reques
 // field and autosaves via PUT /api/settings/backends. 204 when the user
 // cancels; 501 when the platform has no native picker (UI keeps the text field).
 func (s *Server) handleAPIBackendPick(w http.ResponseWriter, r *http.Request) {
-	path, err := pickFile()
+	path, err := pickFile(pickSpecs["backend"])
+	if err != nil {
+		shared.SendResponse(w, r, http.StatusNotImplemented, "file picker unavailable: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(path) == "" {
+		w.WriteHeader(http.StatusNoContent) // cancelled
+		return
+	}
+	writeJSON(w, map[string]string{"path": path})
+}
+
+// handleAPIPickFile opens the host's native open-file dialog for a named kind
+// (?kind=template) and returns the chosen path without persisting anything —
+// the caller drops it into a form field. The kind is looked up in the
+// server-side pickSpecs whitelist; the dialog config is never taken from the
+// request (it is interpolated into a shell command line). 204 on cancel, 501
+// when the platform has no native picker (UI keeps the text field).
+func (s *Server) handleAPIPickFile(w http.ResponseWriter, r *http.Request) {
+	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
+	spec, ok := pickSpecs[kind]
+	if !ok {
+		shared.SendResponse(w, r, http.StatusBadRequest, "unknown file picker kind: "+kind)
+		return
+	}
+	path, err := pickFile(spec)
 	if err != nil {
 		shared.SendResponse(w, r, http.StatusNotImplemented, "file picker unavailable: "+err.Error())
 		return
@@ -1279,6 +1339,7 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.Parallel = body.Parallel
 	ov.Ub = body.Ub
 	ov.ExtraArgs = strings.TrimSpace(body.ExtraArgs)
+	ov.ChatTemplateFile = strings.TrimSpace(body.ChatTemplateFile)
 	ov.Unlisted = body.Unlisted
 	ov.Skip = body.Skip
 	ov.SlotCache = body.SlotCache
@@ -1443,6 +1504,9 @@ func applyVariantPatch(ov *autogen.Override, p variantDTO) {
 	}
 	if strings.TrimSpace(p.ExtraArgs) != "" {
 		ov.ExtraArgs = strings.TrimSpace(p.ExtraArgs)
+	}
+	if strings.TrimSpace(p.ChatTemplateFile) != "" {
+		ov.ChatTemplateFile = strings.TrimSpace(p.ChatTemplateFile)
 	}
 	if p.DryMultiplier != 0 {
 		ov.DryMultiplier = p.DryMultiplier

@@ -106,10 +106,17 @@
 
   let containerClass = $derived(direction === "horizontal" ? "flex-row" : "flex-col");
 
+  // The handle is a transparent hit-target; the visible part is a hairline that
+  // only picks up colour on hover/drag (a permanently coloured bar reads as a
+  // UI element rather than a divider).
   let handleClass = $derived(
     direction === "horizontal"
-      ? "w-2 h-full cursor-col-resize"
-      : "w-full h-2 cursor-row-resize"
+      ? "w-1.5 h-full cursor-col-resize"
+      : "w-full h-1.5 cursor-row-resize"
+  );
+
+  let lineClass = $derived(
+    direction === "horizontal" ? "w-px h-full" : "h-px w-full"
   );
 
   let leftStyle = $derived(
@@ -125,7 +132,7 @@
   );
 </script>
 
-<div bind:this={containerRef} class="flex {containerClass} h-full w-full gap-2">
+<div bind:this={containerRef} class="flex {containerClass} h-full w-full gap-1">
   <div style={leftStyle} class="overflow-hidden">
     {@render leftPanel()}
   </div>
@@ -135,7 +142,7 @@
   <div
     role="separator"
     tabindex="0"
-    class="{handleClass} bg-primary hover:bg-success transition-colors rounded flex-shrink-0"
+    class="{handleClass} group flex items-center justify-center flex-shrink-0 focus:outline-none"
     onmousedown={handleMouseDown}
     ontouchstart={handleTouchStart}
     onkeydown={handleKeyDown}
@@ -144,7 +151,13 @@
     aria-valuenow={Math.round(leftSize)}
     aria-valuemin={minSize}
     aria-valuemax={100 - minSize}
-  ></div>
+  >
+    <div
+      class="{lineClass} transition-colors {isDragging
+        ? 'bg-primary'
+        : 'bg-card-border group-hover:bg-primary group-focus:bg-primary'}"
+    ></div>
+  </div>
 
   <div style={rightStyle} class="overflow-hidden">
     {@render rightPanel()}

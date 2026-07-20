@@ -5,8 +5,6 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 )
@@ -118,33 +116,12 @@ const (
 
 // searxngSearch queries SearXNG's JSON API directly (server-side, no browser
 // CORS concern). Port of webSearch.ts searxngSearch, minus the /api/websearch
-// proxy hop (we ARE the server).
+// proxy hop (we ARE the server). Shares the rate-limited/cached gate in
+// searxng.go with the browser proxy.
 func searxngSearch(ctx context.Context, baseURL, query string) ([]searchResult, error) {
-	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if base == "" {
-		return nil, fmt.Errorf("SearXNG URL not set")
-	}
-	target, err := url.Parse(base + "/search")
+	body, err := searxngJSON(ctx, baseURL, query)
 	if err != nil {
 		return nil, err
-	}
-	qs := target.Query()
-	qs.Set("q", query)
-	qs.Set("format", "json")
-	target.RawQuery = qs.Encode()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := webSearchClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("searxng unreachable: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		snip, _ := readLimited(resp.Body, 512)
-		return nil, fmt.Errorf("searxng %s: %s", resp.Status, snip)
 	}
 	var parsed struct {
 		Results []struct {
@@ -153,7 +130,7 @@ func searxngSearch(ctx context.Context, baseURL, query string) ([]searchResult, 
 			Content string `json:"content"`
 		} `json:"results"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, err
 	}
 	out := make([]searchResult, 0, webMaxResults)

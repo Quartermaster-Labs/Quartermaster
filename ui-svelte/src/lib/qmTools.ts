@@ -13,14 +13,14 @@ export const QM_INSPECT_TOOL: ToolDef = {
   function: {
     name: "quartermaster_inspect",
     description:
-      "Read the live state of THIS running quartermaster. Returns compact formatted text. Pick one slice per call with `target` so you only pull what you need: 'status' (default) = what's loaded + a one-line VRAM/RAM summary; 'models' = installed models with capabilities + context length; 'loaded' = models running now with state + idle-TTL; 'vram' = live GPU/VRAM + system RAM; 'settings' = the global memory knobs; 'logs' = the last lines of quartermaster's own log (model loads, swaps, evictions, spawn/health errors) — use it to diagnose a load failure, crash, or error the user hit; or a model id = that model's effective config (ctx, KV, offload, variants). Use this before answering questions about the user's own setup or before suggesting/making config changes, so your answer matches reality.",
+      "Read the live state of THIS running quartermaster. Returns compact formatted text. Pick one slice per call with `target` so you only pull what you need: 'status' (default) = what's loaded + a one-line VRAM/RAM summary; 'models' = installed models with capabilities + context length; 'loaded' = models running now with state + idle-TTL; 'vram' = live GPU/VRAM + system RAM; 'settings' = the global memory knobs; 'fields' = the COMPLETE list of configuration fields quartermaster_configure can change, with types (call this before any change whose field name you are not sure of); 'logs' = the last lines of quartermaster's own log (model loads, swaps, evictions, spawn/health errors) — use it to diagnose a load failure, crash, or error the user hit; or a model id = that model's effective config (every set field, plus its variants). Use this before answering questions about the user's own setup or before suggesting/making config changes, so your answer matches reality.",
     parameters: {
       type: "object",
       properties: {
         target: {
           type: "string",
           description:
-            "What to read: 'status' (or omit) for loaded + VRAM summary, 'models', 'loaded', 'vram', 'settings', 'logs', or a model id for that model's config. One slice per call.",
+            "What to read: 'status' (or omit) for loaded + VRAM summary, 'models', 'loaded', 'vram', 'settings', 'fields' (every editable config field + its type), 'logs', or a model id for that model's config. One slice per call.",
         },
         tail: {
           type: "integer",
@@ -50,12 +50,12 @@ export const QM_CONFIGURE_TOOL: ToolDef = {
         target: {
           type: "string",
           description:
-            "What to change: 'settings' = global memory knobs (dashboard); 'playground' = this user's own playground preferences; or a model id = that model's per-model config.",
+            "What to change: 'settings' = global memory knobs (dashboard); 'playground' = this user's own playground preferences; a model id = that model's per-model config; or '<model id>#<variant name>' = one existing named variant of that model.",
         },
         changes: {
           type: "object",
           description:
-            "The fields to change (only these are touched; everything else is preserved). For target='settings': targetVramGB (number), vramOverheadGB (number), maxRamGB (number), ttlSec (integer idle-unload seconds, 0=never). For target='playground': temperature (0-2), maxTokens (int), reasoningBudget (int, 0=unlimited), reasoning (bool), webSearch (bool), qmTools (bool), searxngUrl (string), searchMaxPerTurn (int), searchThrottleMs (int), searchDedupe (bool). For a model target: ctx (integer), vramTargetGB (number), kvK/kvV (quant strings e.g. 'q8_0','q4_0','f16'), cpuOffload (integer layers pinned to CPU), reasoningBudget (integer), spec (draft/speculative spec string), extraArgs (string), unlisted (bool), skip (bool). Numeric fields must be > 0 where the setting requires it.",
+            "The fields to change (only these are touched; everything else is preserved). A model or variant target accepts EVERY knob the dashboard's per-model editor has — the full list with types comes from quartermaster_inspect target='fields'; call that whenever you are not certain a field exists, and never smuggle a flag into extraArgs when it has a field of its own. Unknown or wrong-typed fields are rejected with the correct name, not silently ignored. Common model fields: ctx (int), vramTargetGB (number), kvK/kvV ('q8_0','q4_0','f16'), cpuOffload (int layers on CPU), reasoningBudget (int), spec (draft/speculative string), chatTemplateFile (string .jinja path), extraArgs (string, only for flags with no field), unlisted/skip (bool). For target='settings': targetVramGB, vramOverheadGB, maxRamGB (numbers), ttlSec (int idle-unload seconds, 0=never). For target='playground': temperature (0-2), maxTokens (int), reasoningBudget (int, 0=unlimited), reasoning (bool), webSearch (bool), qmTools (bool), searxngUrl (string), searchMaxPerTurn (int), searchThrottleMs (int), searchDedupe (bool).",
         },
       },
       required: ["target", "changes"],

@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { SlidersHorizontal, HardDrive, Cpu } from "lucide-svelte";
+  import { SlidersHorizontal, HardDrive, Cpu, FolderOpen, Trash2, Star, Plus } from "lucide-svelte";
   import { getSettings, putSettings, putSlotCache, putBackends, pickFolder, pickBackend, resetSettings, type AppSettings, type BackendEntry } from "../stores/api";
+  import { BACKEND_CLASSES, backendClass, type BackendClassDef } from "../lib/backends";
   import { latestGpu, latestSys } from "../stores/perf";
 
   // Category side-nav — mirrors the playground settings modal's pattern.
@@ -37,11 +38,21 @@
   }
 
   // --- Backend registry (llama-server / sd-server / tts-server / vllm / …) ---
-  // A list of backends the loader can spawn. Point a llama/sd/tts row at a
-  // Vulkan/ROCm build on AMD/Intel GPUs. Currently the first entry of each kind
-  // drives model loading; extra rows persist for later per-model wiring.
-  const BACKEND_KINDS = ["llama", "sd", "tts", "sam", "vllm", "custom"];
+  // A list of backends the loader can spawn, grouped by the model class each
+  // serves (see lib/backends.ts — llama.cpp and vLLM are both "llm" engines).
+  // Point a llama/sd/tts row at a Vulkan/ROCm build on AMD/Intel GPUs. The ★
+  // entry of a class is the auto-pick; per-model overrides live in the model
+  // config editor.
   let backends = $state<BackendEntry[]>([]);
+
+  // Rows bucketed by class, in BACKEND_CLASSES order. Carries each row's index
+  // in `backends` so the mutators stay index-based (ids are client-only).
+  const backendGroups = $derived(
+    BACKEND_CLASSES.map((cls) => ({
+      cls,
+      rows: backends.map((be, i) => ({ be, i })).filter(({ be }) => backendClass(be.kind) === cls.id),
+    })),
+  );
   let savingBackends = $state(false);
   let backendsErr = $state<string | null>(null);
   let backendsSaved = $state(false); // brief "Saved" flash after a successful write
@@ -52,19 +63,11 @@
     return crypto.randomUUID();
   }
 
-  function addBackend(): void {
-    backends = [...backends, { id: newBackendId(), kind: "llama", name: "", path: "", default: false }];
+  // Add an empty row to one class, seeded with that class's first engine. Not
+  // saved until it has a path (saveBackendsNow drops pathless rows).
+  function addBackend(cls: BackendClassDef): void {
+    backends = [...backends, { id: newBackendId(), kind: cls.engines[0].kind, name: "", path: "", default: false }];
     backendsSaved = false;
-  }
-
-  // Model class a backend kind serves — mirrors autogen's kindClass. Used so the
-  // ★ default is one-per-class (a default llama and a default sd can coexist).
-  function backendClass(kind: string): string {
-    if (["llama", "llama.cpp", "server", "vllm"].includes(kind)) return "llm";
-    if (["sd", "sd-server", "image"].includes(kind)) return "image";
-    if (["tts", "tts-server", "speech"].includes(kind)) return "tts";
-    if (["sam", "sam3", "segment"].includes(kind)) return "segment";
-    return "";
   }
 
   // Mark row i the auto-pick for its class, clearing the flag on its classmates.
@@ -467,48 +470,82 @@
       </div>
     </div>
     {:else}
-    <!-- Backend registry -->
+    <!-- Backend registry — one section per model class -->
     <div>
-      <div class="flex items-center justify-between mb-3">
-        <div class="flex items-center gap-2">
-          <h6 class="!pb-0">Backends</h6>
-          {@render hint("Inference server binaries Quartermaster can spawn. On AMD/Intel GPUs point a llama row at a Vulkan (or ROCm/HIP) build — a CUDA build silently falls back to CPU. The first entry of each kind currently drives model loading; extra rows (a 2nd llama build, vllm, custom) are saved for later per-model wiring.")}
-        </div>
-        <button type="button" class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary" onclick={addBackend}>+ Add backend</button>
+      <div class="flex items-baseline gap-2 mb-1">
+        <h6 class="!pb-0">Backends</h6>
+        {@render hint("Inference server binaries Quartermaster can spawn, grouped by the kind of model they serve. On AMD/Intel GPUs point a row at a Vulkan (or ROCm/HIP) build — a CUDA build silently falls back to CPU. The ★ entry of a group is the auto-pick; a model can be pinned to any other entry of its group from its config editor.")}
       </div>
+      <p class="text-[0.7rem] text-txtsecondary mb-4">
+        Blank groups fall back to the built-in defaults (llama-server on PATH, sd/tts as siblings).
+      </p>
 
-      <div class="flex flex-col gap-2 font-mono text-xs">
-        {#each backends as be, i (be.id)}
-          <div class="flex gap-2 items-center">
-            <select
-              bind:value={be.kind} onchange={saveBackendsNow}
-              class="rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
-            >
-              {#each BACKEND_KINDS as k (k)}
-                <option value={k}>{k}</option>
-              {/each}
-            </select>
-            <input
-              type="text" bind:value={be.name} placeholder="name (optional)" onblur={saveBackendsNow}
-              class="w-32 rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
-            />
-            <input
-              type="text" bind:value={be.path} placeholder="path to executable" onblur={saveBackendsNow}
-              class="flex-1 rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
-            />
-            <button
-              type="button"
-              class="btn btn--sm {be.default ? 'border-primary text-primary' : 'text-txtsecondary'}"
-              title={be.default ? "Default backend for this class" : "Make default for this class"}
-              onclick={() => setDefaultBackend(i)}
-            >{be.default ? "★" : "☆"}</button>
-            <button type="button" class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary" onclick={() => browseBackend(i)}>Browse…</button>
-            <button type="button" class="btn btn--sm uppercase tracking-wide hover:border-error hover:text-error" title="Remove backend" onclick={() => removeBackend(i)}>✕</button>
-          </div>
+      <div class="flex flex-col gap-3">
+        {#each backendGroups as g (g.cls.id)}
+          <section class="rounded-md border border-card-border bg-surface/40">
+            <header class="flex items-center gap-2 px-3 py-2 border-b border-card-border">
+              <span class="text-[0.8125rem] text-txtmain">{g.cls.label}</span>
+              <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary border border-card-border rounded px-1.5 py-0.5">{g.cls.id}</span>
+              <span class="text-[0.7rem] text-txtsecondary truncate">{g.cls.blurb}</span>
+              <button
+                type="button"
+                class="btn btn--sm ml-auto shrink-0 inline-flex items-center gap-1 uppercase tracking-wide hover:border-primary hover:text-primary"
+                onclick={() => addBackend(g.cls)}
+              ><Plus size={12} /> Add</button>
+            </header>
+
+            {#if g.rows.length === 0}
+              <p class="px-3 py-2.5 text-[0.7rem] text-txtsecondary">None registered.</p>
+            {:else}
+              <div class="flex flex-col divide-y divide-card-border">
+                {#each g.rows as { be, i } (be.id)}
+                  <div class="flex gap-2 items-center px-3 py-2 font-mono text-xs">
+                    <button
+                      type="button"
+                      class="shrink-0 p-1 rounded transition-colors {be.default ? 'text-primary' : 'text-txtsecondary hover:text-txtmain'}"
+                      title={be.default ? `Default ${g.cls.label.toLowerCase()} backend` : "Make the default for this group"}
+                      aria-pressed={be.default}
+                      onclick={() => setDefaultBackend(i)}
+                    ><Star size={14} fill={be.default ? "currentColor" : "none"} /></button>
+
+                    {#if g.cls.engines.length > 1}
+                      <select
+                        bind:value={be.kind} onchange={saveBackendsNow}
+                        title="Engine — decides which arg set is generated"
+                        class="w-28 shrink-0 rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
+                      >
+                        {#each g.cls.engines as e (e.kind)}
+                          <option value={e.kind}>{e.label}</option>
+                        {/each}
+                      </select>
+                    {:else}
+                      <span class="w-28 shrink-0 px-2 py-1 text-txtsecondary truncate" title={g.cls.engines[0]?.hint ?? ""}>{g.cls.engines[0]?.label ?? be.kind}</span>
+                    {/if}
+
+                    <input
+                      type="text" bind:value={be.name} placeholder="label (optional)" onblur={saveBackendsNow}
+                      class="w-32 shrink-0 rounded border border-card-border bg-surface px-2 py-1 text-txtmain placeholder:text-txtsecondary/60 focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                    <input
+                      type="text" bind:value={be.path} placeholder="path to executable" onblur={saveBackendsNow}
+                      class="flex-1 min-w-0 rounded border border-card-border bg-surface px-2 py-1 text-txtmain placeholder:text-txtsecondary/60 focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                    <button
+                      type="button" title="Browse…" aria-label="Browse for executable"
+                      class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
+                      onclick={() => browseBackend(i)}
+                    ><FolderOpen size={14} /></button>
+                    <button
+                      type="button" title="Remove backend" aria-label="Remove backend"
+                      class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-error hover:border-error transition-colors"
+                      onclick={() => removeBackend(i)}
+                    ><Trash2 size={14} /></button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </section>
         {/each}
-        {#if backends.length === 0}
-          <p class="text-txtsecondary">No backends — using defaults (llama-server on PATH, sd/tts as siblings). Add one to override.</p>
-        {/if}
       </div>
 
       <div class="mt-3 flex items-center gap-3">

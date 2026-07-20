@@ -86,13 +86,16 @@ func pickFolder() (string, error) {
 			`if ($d.ShowDialog($o) -eq [System.Windows.Forms.DialogResult]::OK) { $d.SelectedPath }`)
 }
 
-// pickFile opens the native Windows open-file dialog (executable filter) and
+// pickFile opens the native Windows open-file dialog with the given spec and
 // returns the chosen absolute path ("" when the user cancels). Same local-host
 // caveat as pickFolder.
-func pickFile() (string, error) {
+func pickFile(spec filePickSpec) (string, error) {
+	// Specs are server-side constants, but single-quote-escape anyway so a future
+	// label with an apostrophe can't break out of the PowerShell string literal.
+	q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 	return runPicker(
 		`$d = New-Object System.Windows.Forms.OpenFileDialog;` +
-			`$d.Title = 'Select backend executable';` +
-			`$d.Filter = 'Executables (*.exe)|*.exe|All files (*.*)|*.*';` +
+			`$d.Title = ` + q(spec.Title) + `;` +
+			`$d.Filter = ` + q(spec.WinFilter) + `;` +
 			`if ($d.ShowDialog($o) -eq [System.Windows.Forms.DialogResult]::OK) { $d.FileName }`)
 }
