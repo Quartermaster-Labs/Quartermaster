@@ -122,6 +122,7 @@ type BackendExes struct {
 	ServerExe    string `yaml:"serverExe,omitempty"`
 	SdServerExe  string `yaml:"sdServerExe,omitempty"`
 	TtsServerExe string `yaml:"ttsServerExe,omitempty"`
+	AsrServerExe string `yaml:"asrServerExe,omitempty"`
 }
 
 // BackendEntry is one row in the dashboard's backend registry. Kind drives how a
@@ -129,7 +130,7 @@ type BackendExes struct {
 // stored for later wiring). Path is the executable (or launch command) to run.
 type BackendEntry struct {
 	ID   string `yaml:"id"`
-	Kind string `yaml:"kind"` // llama | sd | tts | vllm | custom
+	Kind string `yaml:"kind"` // llama | sd | tts | asr | vllm | custom
 	Name string `yaml:"name,omitempty"`
 	Path string `yaml:"path"`
 	// Default marks this entry as the auto-pick for its model class (one per
@@ -241,7 +242,7 @@ func deriveBackendExes(list []BackendEntry) BackendExes {
 	// A ★Default entry wins over first-seen for its class (matches resolveBackend's
 	// llm contract). Track whether each slot was set by a default so a later
 	// default can't be clobbered but a first-seen fallback can be upgraded.
-	var serverDef, sdDef, ttsDef bool
+	var serverDef, sdDef, ttsDef, asrDef bool
 	set := func(slot *string, isDef *bool, path string, entryDef bool) {
 		p := strings.TrimSpace(path)
 		if p == "" {
@@ -260,6 +261,8 @@ func deriveBackendExes(list []BackendEntry) BackendExes {
 			set(&be.SdServerExe, &sdDef, e.Path, e.Default)
 		case "tts", "tts-server", "speech":
 			set(&be.TtsServerExe, &ttsDef, e.Path, e.Default)
+		case "asr", "parakeet", "parakeet-server", "transcribe":
+			set(&be.AsrServerExe, &asrDef, e.Path, e.Default)
 		}
 	}
 	return be

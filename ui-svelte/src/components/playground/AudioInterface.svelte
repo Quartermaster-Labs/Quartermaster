@@ -106,19 +106,30 @@
   }
 
   // --- live transcription ---------------------------------------------------
-  // There is no streaming ASR endpoint, so the stream is segmented client-side:
-  // raw PCM is captured, cut at a silence gap (or a hard max length), downsampled
-  // to 16 kHz mono WAV, and POSTed. Segments are sent one at a time so a live
-  // session can't stack N concurrent loads on the same model.
+  // There is no streaming ASR endpoint (parakeet-server exposes only the one-shot
+  // POST /v1/audio/transcriptions), so "live" is done by ROLLING RE-DECODE: the
+  // current utterance is re-sent in full every POLL_SEC and its text replaced in
+  // place, so words appear sub-second instead of only at a segment boundary. The
+  // window is committed (frozen into the transcript, buffer reset) at a silence
+  // gap or MAX_WINDOW, and a fresh utterance starts.
+  //
+  // Cost of the approach: the same audio is decoded repeatedly, and a partial can
+  // revise itself as more context arrives. Parakeet runs 20-36x realtime, so a
+  // ~20s window still re-decodes in well under the poll interval. Only ONE request
+  // is ever in flight — the backend is single-request, and stacking would also
+  // deliver results out of order.
   const SILENCE_RMS = 0.012; // below this a frame counts as silence
-  const SILENCE_HOLD = 0.6; // seconds of trailing silence that ends a segment
-  const MIN_SEG = 1.2; // don't ship anything shorter than this
-  const MAX_SEG = 12; // hard cut so a monologue still streams in
+  const SILENCE_HOLD = 0.5; // seconds of trailing silence that commits the window
+  const MIN_UTTER = 0.8; // don't commit anything shorter than this
+  const MAX_WINDOW = 20; // hard commit, also bounds re-decode cost
+  const POLL_SEC = 0.8; // how often the growing window is re-decoded
 
   let listening = $state(false);
   let level = $state(0);
-  let liveText = $state("");
-  let pending = $state(0); // segments queued or in flight
+  let committedText = $state(""); // utterances already frozen
+  let partialText = $state(""); // current window, still revisable
+  let liveText = $derived([committedText, partialText].filter(Boolean).join(" "));
+  let pending = $state(0); // 1 while a decode is in flight
   let micError = $state("");
 
   let audioCtx: AudioContext | null = null;
@@ -132,13 +143,29 @@
   let silenceSamples = 0;
   let captureRate = 48000;
 
-  let queue: Float32Array[] = [];
-  let draining = false;
+  // Decodes are serialized through `chain`: parakeet-server handles one request at
+  // a time, and a commit's final decode must not race the partial that is already
+  // out for the same window. `inFlight` only gates the *poll* (a slow decode
+  // throttles the cadence instead of queueing partials); a final always enqueues.
+  // `utterance` is bumped on every commit so a partial that resolves after the
+  // window was frozen is discarded instead of overwriting the next one's text.
+  let inFlight = false;
+  let chain: Promise<void> = Promise.resolve();
+  let utterance = 0;
+  let lastDecodedSamples = 0;
+
+  function enqueue(fn: () => Promise<void>): Promise<void> {
+    pending++;
+    chain = chain
+      .then(fn)
+      .catch(() => {})
+      .finally(() => pending--);
+    return chain;
+  }
 
   async function startListening() {
     if (listening || !hasModel) return;
     micError = "";
-    liveText = "";
     if (!navigator.mediaDevices?.getUserMedia) {
       micError = "Microphone needs a secure context. Open this page via http://localhost or serve it over HTTPS.";
       return;
@@ -169,6 +196,8 @@
 
     frames = [];
     frameSamples = speechSamples = silenceSamples = 0;
+    lastDecodedSamples = 0;
+    committedText = partialText = "";
     listening = true;
   }
 
@@ -186,41 +215,69 @@
     }
 
     const secs = frameSamples / captureRate;
-    const gapEnded = speechSamples > 0 && silenceSamples / captureRate >= SILENCE_HOLD && secs >= MIN_SEG;
-    if (gapEnded || secs >= MAX_SEG) flushSegment();
+    const gapEnded = speechSamples > 0 && silenceSamples / captureRate >= SILENCE_HOLD && secs >= MIN_UTTER;
+    if (gapEnded || secs >= MAX_WINDOW) {
+      void commitWindow();
+      return;
+    }
+    // Re-decode the growing window on a fixed cadence. Skipped while a request is
+    // already out, so a slow decode throttles the poll rate instead of queueing.
+    if (!inFlight && frameSamples - lastDecodedSamples >= POLL_SEC * captureRate) {
+      const buf = concat(frames);
+      const id = utterance;
+      // Stamped here, not in decodeWindow: a commit resets this for the NEW
+      // utterance, and the final decode running afterwards must not stamp the old
+      // window's length over it (that starves the next utterance of partials).
+      lastDecodedSamples = frameSamples;
+      void enqueue(() => decodeWindow(buf, id, false));
+    }
   }
 
-  function flushSegment() {
-    const secs = frameSamples / captureRate;
+  // decodeWindow transcribes one snapshot. `final` commits the text into the
+  // transcript; otherwise it replaces the revisable partial. A late response whose
+  // utterance id no longer matches is dropped.
+  async function decodeWindow(buf: Float32Array, id: number, final: boolean) {
+    const secs = buf.length / captureRate;
+    if (secs < 0.4) return;
+    inFlight = true;
+    try {
+      const wav = encodeWav(resample(buf, captureRate, ASR_SAMPLE_RATE), ASR_SAMPLE_RATE);
+      const res = await transcribeAudio($selectedModelStore, wav, undefined, "segment.wav");
+      const text = (res.text ?? "").trim();
+      micError = "";
+      if (final) {
+        if (text) committedText = committedText ? `${committedText} ${text}` : text;
+        if (id === utterance - 1) partialText = "";
+      } else if (id === utterance) {
+        partialText = text;
+      }
+    } catch (err) {
+      micError = err instanceof Error ? err.message : "Transcription failed";
+    } finally {
+      inFlight = false;
+    }
+  }
+
+  // commitWindow freezes the current utterance: the buffer is reset immediately so
+  // incoming audio accumulates into the next one while the final decode runs.
+  async function commitWindow() {
     const voiced = speechSamples / captureRate;
     const buf = concat(frames);
+    const id = utterance;
     frames = [];
     frameSamples = speechSamples = silenceSamples = 0;
-    // Skip near-silent segments outright — sending them just makes the model
+    lastDecodedSamples = 0;
+    utterance++;
+    // Near-silent windows are dropped outright — sending them just makes the model
     // hallucinate filler ("Thank you.", subtitle credits, …).
-    if (secs < 0.4 || voiced < 0.3) return;
-    queue.push(buf);
-    pending = queue.length + (draining ? 1 : 0);
-    void drain();
-  }
-
-  async function drain() {
-    if (draining) return;
-    draining = true;
-    while (queue.length) {
-      const buf = queue.shift()!;
-      pending = queue.length + 1;
-      try {
-        const wav = encodeWav(resample(buf, captureRate, ASR_SAMPLE_RATE), ASR_SAMPLE_RATE);
-        const res = await transcribeAudio($selectedModelStore, wav, undefined, "segment.wav");
-        const text = (res.text ?? "").trim();
-        if (text) liveText = liveText ? `${liveText} ${text}` : text;
-      } catch (err) {
-        micError = err instanceof Error ? err.message : "Transcription failed";
-      }
+    if (voiced < 0.3) {
+      partialText = "";
+      return;
     }
-    draining = false;
-    pending = 0;
+    // Queued, not called directly: a partial for this same window may still be out,
+    // and the backend takes one request at a time. The id bump above already
+    // invalidates that partial's result when it lands.
+    await enqueue(() => decodeWindow(buf, id, true));
   }
 
   async function stopListening() {
@@ -236,13 +293,13 @@
     audioCtx = null;
     level = 0;
 
-    flushSegment(); // ship whatever is still buffered
-    await drain();
+    await commitWindow(); // transcribe whatever is still buffered
+    await chain.catch(() => {}); // and let any partial still queued land first
     const text = liveText.trim();
     if (text) {
       entries = [{ id: nextId++, label: "Live recording", text, source: "live" }, ...entries];
     }
-    liveText = "";
+    committedText = partialText = "";
   }
 
   $effect(() => {
@@ -351,13 +408,13 @@
                   <div class="h-full flex flex-col items-center justify-center gap-2 text-txtsecondary text-center">
                     <Radio class="w-8 h-8 opacity-40" strokeWidth={1.5} />
                     <p class="text-[0.8125rem]">
-                      {listening ? "Listening — speak, then pause; text appears each time you stop for a moment." : "Speak into the mic and the text shows up here live."}
+                      {listening ? "Listening — text appears as you speak and firms up when you pause." : "Speak into the mic and the text shows up here live."}
                     </p>
                   </div>
                 {/if}
               </div>
               <p class="shrink-0 text-[0.6875rem] text-txtsecondary px-1">
-                Audio is cut at natural pauses (or every {MAX_SEG}s) and transcribed segment by segment. Stopping saves the whole run to the library.
+                Text updates about every {POLL_SEC}s as you speak and may revise itself; it settles at each pause (or every {MAX_WINDOW}s). Stopping saves the whole run to the library.
               </p>
             </div>
           {:else}

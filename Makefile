@@ -56,6 +56,16 @@ linux-arm64: ui
 	@echo "Building Linux ARM64 binary..."
 	GOOS=linux GOARCH=arm64 go build -ldflags="-X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE}" -o $(BUILD_DIR)/$(APP_NAME)-linux-arm64
 
+# Windows VERSIONINFO resource. resource_windows_amd64.syso is committed (Go links
+# any .syso in the main package automatically), so a normal build needs no tool.
+# Regenerate only after editing versioninfo.json. FileDescription is what the
+# Windows Startup apps list / Task Manager shows for the autostart entry, so it
+# must read "Quartermaster" — keep it in sync with the Run value name in
+# internal/server/autostart.go. NOTE: a 0.0.0.0 FixedFileInfo makes Windows drop
+# the whole string table; keep the version non-zero.
+versioninfo:
+	go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -o resource_windows_amd64.syso versioninfo.json
+
 # Build Windows binary
 windows: ui
 	@echo "Building Windows binary..."
@@ -193,5 +203,5 @@ test-ui:
 	cd ui-svelte && npm ci && npm run check && npm test
 
 # Phony targets
-.PHONY: all clean ui mac windows package-windows package-linux package-mac _package-nix simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy release release-public _build-release
+.PHONY: all clean ui mac windows versioninfo package-windows package-linux package-mac _package-nix simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy release release-public _build-release
 .PHONE: linux linux-arm64 linux-amd64

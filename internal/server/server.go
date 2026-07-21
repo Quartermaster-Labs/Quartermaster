@@ -639,6 +639,10 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/settings", apiChain.ThenFunc(s.handleAPISettingsPut))
 	mux.Handle("DELETE /api/settings", apiChain.ThenFunc(s.handleAPISettingsDelete))
 	mux.Handle("PUT /api/settings/slotcache", apiChain.ThenFunc(s.handleAPISlotCachePut))
+	// "Start with the system" — OS state (Windows Run key), NOT autogen config,
+	// so it works without -generate and is shared across installs. See autostart.go.
+	mux.Handle("GET /api/autostart", apiChain.ThenFunc(s.handleAPIAutostartGet))
+	mux.Handle("PUT /api/autostart", apiChain.ThenFunc(s.handleAPIAutostartPut))
 	mux.Handle("GET /api/backends", apiChain.ThenFunc(s.handleAPIBackendsList))
 	mux.Handle("PUT /api/settings/backends", apiChain.ThenFunc(s.handleAPIBackendsPut))
 	mux.Handle("POST /api/settings/backend/pick", apiChain.ThenFunc(s.handleAPIBackendPick))

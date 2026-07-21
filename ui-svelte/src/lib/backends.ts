@@ -41,6 +41,12 @@ export const BACKEND_CLASSES: BackendClassDef[] = [
     engines: [{ kind: "tts", label: "tts-server", hint: "qwentts.cpp / tts-server." }],
   },
   {
+    id: "asr",
+    label: "Transcription",
+    blurb: "Speech-to-text models (Parakeet / FastConformer).",
+    engines: [{ kind: "asr", label: "parakeet-server", hint: "parakeet.cpp — runs faster than realtime on CPU alone." }],
+  },
+  {
     id: "segment",
     label: "Segmentation",
     blurb: "Mask / segment-anything models.",
@@ -78,6 +84,11 @@ export function backendClass(kind: string): string {
     case "tts-server":
     case "speech":
       return "tts";
+    case "asr":
+    case "parakeet":
+    case "parakeet-server":
+    case "transcribe":
+      return "asr";
     case "sam":
     case "sam3":
     case "segment":

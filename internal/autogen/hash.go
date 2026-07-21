@@ -42,7 +42,9 @@ const hashCacheSuffix = ".modelhash"
 //	     live spawn-time decision (LiveOffloadArgs .ggml branch, samGpuMinFreeGB).
 //	v24: --chat-template-file emits via cmdPath (forward slashes, unescaped) —
 //	     %q doubled every backslash and llama-server couldn't open the template.
-const genVersion = "v24"
+//	v25: Parakeet ASR models emit a parakeet-server block (capabilities in:[audio]
+//	     out:[text]) instead of routing to llama-server as a chat model.
+const genVersion = "v26"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

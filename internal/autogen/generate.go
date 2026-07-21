@@ -53,6 +53,11 @@ type profile struct {
 	// prompt-prefix checkpoint cache). nil => inherit the model-wide value, else
 	// the llama-server default (32). See effectiveCtxCheckpoints.
 	CtxCheckpoints *int
+	// CheckpointMinStep, when > 0, is the resolved -cms (checkpoint spacing in
+	// prompt tokens) for this profile. 0 => the arch default from
+	// defaultCheckpointMinStep. Both the emitted flag and the VRAM reserve read
+	// it, so they can't drift apart.
+	CheckpointMinStep int
 	// Variant, when non-nil, is the named-variant source this profile was built
 	// from. Its engine knobs (kvInRam/flash/mmap/mlock/threads/parallel/extraArgs)
 	// layer over the model-wide override at emit so a variant carries the full
@@ -374,6 +379,15 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		return nil
 	}
 
+	// Parakeet-family ASR GGUFs go to parakeet.cpp's parakeet-server (OpenAI
+	// /v1/audio/transcriptions), not llama-server: transducer encoder+decoder, no
+	// KV/ctx/spec sizing, and the audio->text capability buckets them out of the
+	// chat-able LLM catalog.
+	if IsASRModel(meta, row.FileName) {
+		emitASRModel(b, s, row, ov, name, meta.Architecture, emitted)
+		return nil
+	}
+
 	// Resolve which backend serves this LLM. A "vllm" (or other non-llama) kind
 	// emits through its own path — different engine, different args, no KV/-ngl
 	// sizing. A chosen "llama" build just swaps the exe threaded through the llama
@@ -441,13 +455,14 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		soloTarget = override.VramTargetGB
 	}
 	profiles := []profile{{
-		Name:           name,
-		Target:         soloTarget,
-		Overhead:       s.VramOverheadGB + specOh,
-		Unlisted:       override.Unlisted,
-		Ctx:            override.Ctx,
-		CpuOffload:     override.CpuOffload,
-		CtxCheckpoints: override.CtxCheckpoints,
+		Name:              name,
+		Target:            soloTarget,
+		Overhead:          s.VramOverheadGB + specOh,
+		Unlisted:          override.Unlisted,
+		Ctx:               override.Ctx,
+		CpuOffload:        override.CpuOffload,
+		CtxCheckpoints:    override.CtxCheckpoints,
+		CheckpointMinStep: override.CheckpointMinStep,
 	}}
 	for _, cv := range ctxVariants {
 		cvTarget := s.TargetVramGB
@@ -455,12 +470,13 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			cvTarget = s.TargetVramGB - 0.5
 		}
 		profiles = append(profiles, profile{
-			Name:           fmt.Sprintf("%s-%s", name, formatCtxTag(cv)),
-			Target:         cvTarget,
-			Overhead:       s.VramOverheadGB + specOh,
-			Ctx:            cv,
-			IsLong:         cv >= 65536,
-			CtxCheckpoints: override.CtxCheckpoints,
+			Name:              fmt.Sprintf("%s-%s", name, formatCtxTag(cv)),
+			Target:            cvTarget,
+			Overhead:          s.VramOverheadGB + specOh,
+			Ctx:               cv,
+			IsLong:            cv >= 65536,
+			CtxCheckpoints:    override.CtxCheckpoints,
+			CheckpointMinStep: override.CheckpointMinStep,
 		})
 	}
 
@@ -495,21 +511,28 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		// Standalone: a blank ctx-checkpoints uses the generator default, not the
 		// model-wide override value.
 		vCheckpoints := v.CtxCheckpoints
+		// Spacing DOES inherit the model-wide value (matching the effOv merge at
+		// emit): a blank variant -cms must not diverge from the emitted flag.
+		vMinStep := v.CheckpointMinStep
+		if vMinStep == 0 {
+			vMinStep = override.CheckpointMinStep
+		}
 		profiles = append(profiles, profile{
-			Name:           fmt.Sprintf("%s-%s", name, slugify(v.Name)),
-			Target:         vTarget,
-			Overhead:       s.VramOverheadGB + vSpecOh,
-			Unlisted:       v.Unlisted,
-			Ctx:            v.Ctx,
-			IsLong:         v.Ctx >= 65536,
-			KvK:            v.KvK,
-			KvV:            v.KvV,
-			Spec:           v.Spec,
-			ReasoningFmt:   v.ReasoningFmt,
-			Ub:             v.Ub,
-			CpuOffload:     v.CpuOffload,
-			CtxCheckpoints: vCheckpoints,
-			Variant:        &variantSpecs[i],
+			Name:              fmt.Sprintf("%s-%s", name, slugify(v.Name)),
+			Target:            vTarget,
+			Overhead:          s.VramOverheadGB + vSpecOh,
+			Unlisted:          v.Unlisted,
+			Ctx:               v.Ctx,
+			IsLong:            v.Ctx >= 65536,
+			KvK:               v.KvK,
+			KvV:               v.KvV,
+			Spec:              v.Spec,
+			ReasoningFmt:      v.ReasoningFmt,
+			Ub:                v.Ub,
+			CpuOffload:        v.CpuOffload,
+			CtxCheckpoints:    vCheckpoints,
+			CheckpointMinStep: vMinStep,
+			Variant:           &variantSpecs[i],
 		})
 	}
 
@@ -520,11 +543,12 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	// file size as flat VRAM overhead.
 	if row.MmprojPath != "" {
 		vp := profile{
-			Name:     fmt.Sprintf("%s-vision", name),
-			Target:   soloTarget,
-			Overhead: s.VramOverheadGB + specOh + MmprojVramGB(row.MmprojPath, row.MmprojSizeGB, s),
-			Ctx:      override.Ctx,
-			Vision:   true,
+			Name:              fmt.Sprintf("%s-vision", name),
+			Target:            soloTarget,
+			Overhead:          s.VramOverheadGB + specOh + MmprojVramGB(row.MmprojPath, row.MmprojSizeGB, s),
+			Ctx:               override.Ctx,
+			CheckpointMinStep: override.CheckpointMinStep,
+			Vision:            true,
 		}
 		// Small text window only for dedicated VL models (Qwen-VL, InternVL, …):
 		// their whole purpose is image chat, so the maxed 32k ctx (~2.5 GB KV) is
@@ -558,6 +582,9 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			vp.Ub = v.Ub
 			vp.CpuOffload = v.CpuOffload
 			vp.CtxCheckpoints = v.CtxCheckpoints
+			if v.CheckpointMinStep > 0 {
+				vp.CheckpointMinStep = v.CheckpointMinStep
+			}
 			vp.Variant = v
 		}
 		profiles = append(profiles, vp)
@@ -885,19 +912,55 @@ const llamaDefaultCtxCheckpoints = 32
 // only reuse path — worth a few, though each is pricey. Plain full-attention
 // models keep a persistent KV that already covers linear chat, so they need only
 // a couple for the occasional edit/branch.
+//
+// SWA gets 3, not more: a checkpoint costs kvConstGB + perTokGB*minStep, and on
+// SWA the kvConstGB term (every local layer's whole window) dominates and is paid
+// per snapshot — 6 snapshots reserved GBs on gemma-class models and crowded out
+// the context. Rewind coverage is bought back by widening the spacing instead
+// (defaultCheckpointMinStep), which only scales the cheap perTokGB term.
 func defaultCtxCheckpoints(kvConstGB float64, recurrent bool) int {
 	if recurrent {
 		return 2
 	}
 	if kvConstGB > 0 {
-		return 6
+		return 3
 	}
 	return 3
 }
 
+// defaultCheckpointMinStep picks the -cms (minimum prompt-token spacing between
+// context checkpoints) for a model that doesn't pin one.
+//
+// SWA models get a wide 1024: with only 3 snapshots retained, spacing is what
+// decides how far back a divergent prompt can be restored from, and on SWA the
+// per-snapshot cost is dominated by the ctx-independent window state (kvConstGB),
+// so quadrupling the step adds only perTokGB*768 per snapshot — far cheaper than
+// paying kvConstGB again for extra snapshots. Everything else keeps llama's 256:
+// their kvConstGB is ~0, so snapshots are cheap and tight spacing restores more
+// of a diverging prompt.
+func defaultCheckpointMinStep(kvConstGB float64, recurrent bool) int {
+	if !recurrent && kvConstGB > 0 {
+		return swaCheckpointMinStep
+	}
+	return checkpointMinStep
+}
+
+// swaCheckpointMinStep is the widened checkpoint spacing used for SWA models.
+const swaCheckpointMinStep = 1024
+
+// effectiveCheckpointMinStep resolves the spacing a profile will actually run
+// with: an explicit pin wins, else the arch default.
+func effectiveCheckpointMinStep(prof profile, kvConstGB float64, recurrent bool) int {
+	if prof.CheckpointMinStep > 0 {
+		return prof.CheckpointMinStep
+	}
+	return defaultCheckpointMinStep(kvConstGB, recurrent)
+}
+
 // checkpointMinStep mirrors llama-server's --checkpoint-min-step default â€” the
-// minimum prompt-token spacing between context checkpoints. We don't model the
-// flag, so the default is assumed for the per-checkpoint global-KV term.
+// minimum prompt-token spacing between context checkpoints. It is the floor for
+// the per-checkpoint global-KV term; the spacing actually emitted (and charged)
+// comes from effectiveCheckpointMinStep.
 const checkpointMinStep = 256
 
 // effectiveCtxCheckpoints resolves the checkpoint count a profile will actually
@@ -918,24 +981,24 @@ func effectiveCtxCheckpoints(prof profile, def int) int {
 // snapshots silently overflow VRAM into sysmem and tank decode speed.
 //
 // The count is capped by how many checkpoints can actually exist: at min-step
-// spacing a context of ctxCeil tokens holds at most ctxCeil/checkpointMinStep
-// snapshots, so a small pinned ctx (e.g. a 4k judge) reserves far fewer than the
-// 32 default. Returns 0 when checkpoints are disabled or the model has no
-// VRAM-resident KV.
+// spacing a context of ctxCeil tokens holds at most ctxCeil/step snapshots, so a
+// small pinned ctx (e.g. a 4k judge) reserves far fewer than the 32 default.
+// Returns 0 when checkpoints are disabled or the model has no VRAM-resident KV.
 func checkpointReserveGB(prof profile, perTokGB, kvConstGB float64, ctxCeil int, recurrent bool) float64 {
 	n := effectiveCtxCheckpoints(prof, defaultCtxCheckpoints(kvConstGB, recurrent))
 	if n <= 0 || (perTokGB <= 0 && kvConstGB <= 0) {
 		return 0
 	}
+	step := effectiveCheckpointMinStep(prof, kvConstGB, recurrent)
 	if ctxCeil > 0 {
-		if maxN := ctxCeil / checkpointMinStep; maxN < n {
+		if maxN := ctxCeil / step; maxN < n {
 			n = maxN
 		}
 	}
 	if n <= 0 {
 		return 0
 	}
-	perCheckpoint := kvConstGB + perTokGB*float64(checkpointMinStep)
+	perCheckpoint := kvConstGB + perTokGB*float64(step)
 	return float64(n) * perCheckpoint
 }
 
@@ -1380,8 +1443,22 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		lines = append(lines, `--chat-template-kwargs "{\"preserve_thinking\":true}"`)
 	}
 	// Always emit so runtime matches our reserve (else llama-server defaults to 32).
-	ckpts := effectiveCtxCheckpoints(prof, defaultCtxCheckpoints(GetKvCostModel(meta, kvK, kvV).ConstGB, meta.FullAttnInterval > 0))
+	ckptConstGB := GetKvCostModel(meta, kvK, kvV).ConstGB
+	ckptRecurrent := meta.FullAttnInterval > 0
+	ckpts := effectiveCtxCheckpoints(prof, defaultCtxCheckpoints(ckptConstGB, ckptRecurrent))
 	lines = append(lines, fmt.Sprintf("--ctx-checkpoints %d", ckpts))
+	// Spacing is charged per checkpoint by checkpointReserveGB, so emit whatever it
+	// assumed. An ov-only pin (a preview profile built without the field) still
+	// wins over the arch default.
+	if ckpts > 0 {
+		stepProf := prof
+		if stepProf.CheckpointMinStep == 0 && ov != nil {
+			stepProf.CheckpointMinStep = ov.CheckpointMinStep
+		}
+		if step := effectiveCheckpointMinStep(stepProf, ckptConstGB, ckptRecurrent); step != checkpointMinStep {
+			lines = append(lines, fmt.Sprintf("-cms %d", step))
+		}
+	}
 	// DRY sampler: defaults to settings.DryDefault (nil => off) and a per-model
 	// ov.Dry wins (nil => the default, false => off, true => on). Values default
 	// to 0.8 / 1.75 / 3; a non-zero override replaces each independently.
@@ -1453,9 +1530,6 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		if ov.SwaFull {
 			lines = append(lines, "--swa-full")
 		}
-		if ov.CheckpointMinStep > 0 {
-			lines = append(lines, fmt.Sprintf("-cms %d", ov.CheckpointMinStep))
-		}
 		switch ov.ContextShift {
 		case "on":
 			lines = append(lines, "--context-shift")
@@ -1522,6 +1596,10 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 	if IsTTSModel(meta, row.FileName) {
 		return strings.Join(ttsCmdLines(s, row, &ov), " "), nil
 	}
+	// Parakeet ASR models render a parakeet-server command (model + port only).
+	if IsASRModel(meta, row.FileName) {
+		return strings.Join(asrCmdLines(s, row, &ov), " "), nil
+	}
 	// vllm-backed LLMs render a vllm command; a chosen llama build swaps the exe.
 	be := resolveBackend(s, &ov, "llm")
 	if strings.EqualFold(be.Kind, "vllm") {
@@ -1563,6 +1641,8 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 		KvV:            kvV,
 		IsLong:         ov.Ctx >= 65536,
 		CtxCheckpoints: ov.CtxCheckpoints,
+
+		CheckpointMinStep: ov.CheckpointMinStep,
 	}
 	prof.Overhead += computeBufferGB(meta, effectiveUb(prof, &ov, prof.Ctx, s.TargetVramGB), s.ComputeBufFactor)
 	ctx, plan, kvReserve, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, ov.KvInRam)

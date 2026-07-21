@@ -783,6 +783,12 @@ func estimateInputFromCmd(cmd string) autogen.EstimateInput {
 					in.CtxCheckpoints = &n
 				}
 			}
+		case "-cms", "--checkpoint-min-step":
+			// Spacing scales each checkpoint's KV term, so the preview must charge
+			// the same step the argv runs with.
+			if v, ok := next(); ok {
+				in.CheckpointMinStep, _ = strconv.Atoi(v)
+			}
 		case "--spec-type":
 			// Chained spec backends (draft-mtp + ngram-map-k4v) appear as repeated
 			// --spec-type; accumulate into the "+"-joined list the sizer expects.
@@ -921,6 +927,9 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 			in.CtxCheckpoints = &n
 		}
 	}
+	if v := q.Get("checkpointMinStep"); v != "" {
+		in.CheckpointMinStep, _ = strconv.Atoi(v)
+	}
 	if v := q.Get("ctx"); v != "" {
 		in.Ctx, _ = strconv.Atoi(v)
 	}
@@ -1004,6 +1013,7 @@ type backendsDTO struct {
 	ServerExe    string `json:"serverExe"`
 	SdServerExe  string `json:"sdServerExe"`
 	TtsServerExe string `json:"ttsServerExe"`
+	AsrServerExe string `json:"asrServerExe"`
 }
 
 // backendEntryDTO mirrors autogen.BackendEntry — one row of the dashboard's
@@ -1113,6 +1123,7 @@ func (s *Server) handleAPISettingsGet(w http.ResponseWriter, r *http.Request) {
 			ServerExe:    gf.Settings.ServerExe,
 			SdServerExe:  gf.Settings.SdServerExe,
 			TtsServerExe: gf.Settings.TtsServerExe,
+			AsrServerExe: gf.Settings.AsrServerExe,
 		},
 		BackendList: backendList,
 	})

@@ -97,6 +97,9 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 	if c, ok := atoiFlagOK(args, "--ctx-checkpoints"); ok {
 		in.CtxCheckpoints = &c
 	}
+	// Spacing scales each checkpoint's global-KV term, so the live re-estimate has
+	// to charge the same step the baked argv runs with.
+	in.CheckpointMinStep = atoiFlag(args, "-cms", "--checkpoint-min-step")
 	// A "-vision" twin loads a CLIP projector via --mmproj. The model gguf (-m)
 	// carries no vision info, so EstimatePlan is projector-blind; charge the
 	// projector's weights + CLIP compute reserve here so the live guard sizes the

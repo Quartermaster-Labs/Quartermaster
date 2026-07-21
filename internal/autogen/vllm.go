@@ -22,6 +22,8 @@ func kindClass(kind string) string {
 		return "image"
 	case "tts", "tts-server", "speech":
 		return "tts"
+	case "asr", "parakeet", "parakeet-server", "transcribe":
+		return "asr"
 	case "sam", "sam3", "segment":
 		return "segment"
 	case "upscale", "realesrgan", "esrgan":

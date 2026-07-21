@@ -36,10 +36,15 @@ type Settings struct {
 	// TtsServerExe runs Qwen3-TTS talker GGUFs (qwentts.cpp's tts-server). Empty =>
 	// a sibling "tts-server" of ServerExe, else bare on PATH.
 	TtsServerExe string `yaml:"ttsServerExe"`
+	// AsrServerExe runs Parakeet-family speech-to-text GGUFs (parakeet.cpp's
+	// parakeet-server). Empty => a sibling "parakeet-server" of ServerExe, else
+	// bare on PATH.
+	AsrServerExe string `yaml:"asrServerExe"`
 	// Backends is the dashboard's full backend registry (llama / vllm / sd / tts /
-	// custom entries). Populated from the UI sidecar; a model resolves its backend
-	// against this via resolveBackend. The legacy ServerExe/SdServerExe/TtsServerExe
-	// above stay as the fallback when no registry entry matches a model's class.
+	// asr / custom entries). Populated from the UI sidecar; a model resolves its
+	// backend against this via resolveBackend. The legacy ServerExe/SdServerExe/
+	// TtsServerExe/AsrServerExe above stay as the fallback when no registry entry
+	// matches a model's class.
 	Backends       []BackendEntry `yaml:"backends"`
 	TargetVramGB   float64        `yaml:"targetVramGB"`
 	AutoVram       bool           `yaml:"autoVram"` // measure free VRAM at gen time, use it as TargetVramGB (minus VramOverheadGB)
@@ -565,6 +570,13 @@ func (s *Settings) applyDefaults() {
 			s.TtsServerExe = "tts-server"
 		}
 	}
+	if s.AsrServerExe == "" {
+		if strings.ContainsAny(s.ServerExe, `/\`) {
+			s.AsrServerExe = filepath.Join(filepath.Dir(s.ServerExe), "parakeet-server")
+		} else {
+			s.AsrServerExe = "parakeet-server"
+		}
+	}
 	if s.TargetVramGB == 0 {
 		s.TargetVramGB = 7
 	}
@@ -646,6 +658,9 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 		}
 		if be.TtsServerExe != "" {
 			gf.Settings.TtsServerExe = be.TtsServerExe
+		}
+		if be.AsrServerExe != "" {
+			gf.Settings.AsrServerExe = be.AsrServerExe
 		}
 	}
 	// The full backend registry (multi-entry) that per-model resolveBackend reads.

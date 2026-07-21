@@ -1,17 +1,18 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { SlidersHorizontal, HardDrive, Cpu, FolderOpen, Trash2, Star, Plus } from "lucide-svelte";
-  import { getSettings, putSettings, putSlotCache, putBackends, pickFolder, pickBackend, resetSettings, type AppSettings, type BackendEntry } from "../stores/api";
+  import { SlidersHorizontal, HardDrive, Cpu, FolderOpen, Trash2, Star, Plus, Power } from "lucide-svelte";
+  import { getSettings, putSettings, putSlotCache, putBackends, pickFolder, pickBackend, resetSettings, getAutostart, putAutostart, type AppSettings, type BackendEntry, type AutostartStatus } from "../stores/api";
   import { BACKEND_CLASSES, backendClass, type BackendClassDef } from "../lib/backends";
   import { latestGpu, latestSys } from "../stores/perf";
 
   // Category side-nav — mirrors the playground settings modal's pattern.
-  type SettingsCat = "general" | "kvcache" | "backends";
+  type SettingsCat = "general" | "kvcache" | "backends" | "system";
   let cat = $state<SettingsCat>("general");
   const cats: { id: SettingsCat; label: string; icon: typeof SlidersHorizontal }[] = [
     { id: "general", label: "Memory & Eviction", icon: SlidersHorizontal },
     { id: "kvcache", label: "KV Cache", icon: HardDrive },
     { id: "backends", label: "Backends", icon: Cpu },
+    { id: "system", label: "System", icon: Power },
   ];
 
   // --- Global settings (VRAM budget + idle eviction + slot KV) ---
@@ -147,6 +148,9 @@
     }
   }
 
+  let slotSaved = $state(false); // brief "Saved" flash after a successful write
+  let slotFlashTimer: ReturnType<typeof setTimeout> | undefined;
+
   async function saveSlotCache(): Promise<void> {
     savingSlot = true;
     slotErr = null;
@@ -159,12 +163,24 @@
         maxSessions: Number(slotMaxSessions) || 0,
       });
       await loadSettings();
+      slotSaved = true;
+      clearTimeout(slotFlashTimer);
+      slotFlashTimer = setTimeout(() => (slotSaved = false), 2500);
     } catch (e) {
       slotErr = e instanceof Error ? e.message : String(e);
     } finally {
       savingSlot = false;
     }
   }
+
+  // Autosave, same debounce as the memory knobs (each write regenerates + reloads).
+  let slotAutosaveTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    if (!slotDirty || savingSlot) return;
+    clearTimeout(slotAutosaveTimer);
+    slotAutosaveTimer = setTimeout(saveSlotCache, 900);
+    return () => clearTimeout(slotAutosaveTimer);
+  });
 
   async function loadSettings(): Promise<void> {
     try {
@@ -202,6 +218,9 @@
     if (tTtl < 0) tTtl = 0;
   }
 
+  let settingsSaved = $state(false); // brief "Saved" flash after a successful write
+  let savedFlashTimer: ReturnType<typeof setTimeout> | undefined;
+
   async function saveSettings(): Promise<void> {
     clampSettingsForm();
     savingSettings = true;
@@ -209,12 +228,27 @@
     try {
       await putSettings({ targetVramGB: tVram, vramOverheadGB: tHead, maxRamGB: tRam, ttlSec: Number(tTtl) || 0 });
       await loadSettings();
+      settingsSaved = true;
+      clearTimeout(savedFlashTimer);
+      savedFlashTimer = setTimeout(() => (settingsSaved = false), 2500);
     } catch (e) {
       settingsErr = e instanceof Error ? e.message : String(e);
     } finally {
       savingSettings = false;
     }
   }
+
+  // Autosave: debounce edits to the memory/eviction fields, no Save button. The
+  // write regenerates the config + hot-reloads, so it must not fire per keystroke.
+  let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    if (!settingsDirty || savingSettings) return;
+    // touch the fields so the effect re-runs on each edit
+    void tVram; void tHead; void tRam; void tTtl;
+    clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(saveSettings, 900);
+    return () => clearTimeout(autosaveTimer);
+  });
 
   async function resetSettingsToDefault(): Promise<void> {
     savingSettings = true;
@@ -229,12 +263,43 @@
     }
   }
 
+  // --- Start with the system (Windows Run key, shared across installs) ---
+  let autostart = $state<AutostartStatus | null>(null);
+  let autostartBusy = $state(false);
+  let autostartErr = $state<string | null>(null);
+
+  async function loadAutostart(): Promise<void> {
+    try {
+      autostart = await getAutostart();
+    } catch (e) {
+      console.warn("autostart unavailable", e);
+    }
+  }
+
+  async function toggleAutostart(enabled: boolean, takeover = false): Promise<void> {
+    autostartBusy = true;
+    autostartErr = null;
+    try {
+      const st = await putAutostart(enabled, takeover);
+      // A 409 returns the unchanged status (enabled by a foreign exe), which
+      // the markup renders as the take-over prompt.
+      autostart = st;
+    } catch (e) {
+      autostartErr = e instanceof Error ? e.message : String(e);
+    } finally {
+      autostartBusy = false;
+    }
+  }
+
   // Friendly readout for the idle-eviction seconds field.
   const ttlHuman = $derived(
     Number(tTtl) <= 0 ? "never auto-unload" : Number(tTtl) % 60 === 0 ? `${Number(tTtl) / 60} min` : `${tTtl}s`,
   );
 
-  onMount(loadSettings);
+  onMount(() => {
+    loadSettings();
+    loadAutostart();
+  });
 </script>
 
 <div class="flex flex-1 min-h-0">
@@ -370,20 +435,80 @@
         <p class="mt-2 font-mono text-[0.65rem] text-warning">⚠ Value exceeds installed hardware — will be clamped on save.</p>
       {/if}
 
-      <div class="mt-3 flex items-center gap-3">
-        <button
-          class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary"
-          onclick={saveSettings}
-          disabled={savingSettings || !settingsDirty}
-        >
-          {savingSettings ? "Saving…" : "Save & reload"}
-        </button>
-        <span class="font-mono text-[0.65rem] text-txtsecondary">Saving regenerates the config and hot-reloads.</span>
-        {#if settingsErr}
-          <span class="font-mono text-[0.65rem] text-error">{settingsErr}</span>
-        {/if}
+      <div class="mt-3 flex items-center justify-between gap-3">
+        <span class="font-mono text-[0.65rem] text-txtsecondary">Changes save automatically, regenerate the config and hot-reload.</span>
+        <span class="font-mono text-[0.65rem]">
+          {#if settingsErr}
+            <span class="text-error">{settingsErr}</span>
+          {:else if savingSettings}
+            <span class="text-txtsecondary">Saving…</span>
+          {:else if settingsSaved}
+            <span class="text-primary">Saved!</span>
+          {/if}
+        </span>
       </div>
     </div>
+
+    {:else if cat === "system"}
+    <!-- Start with the system (Windows only) -->
+    {#if autostart?.supported}
+      <div>
+        <div class="flex items-center gap-2 mb-3">
+          <h6 class="!pb-0">Startup</h6>
+          {@render hint("Launch quartermaster in the system tray when you log in to Windows. All quartermaster installs on this machine share ONE startup entry, so only one can start with the system — if another install owns it, take it over from here.")}
+        </div>
+
+        <div class="rounded border border-card-border bg-surface p-3">
+          <label class="flex items-start justify-between gap-4 cursor-pointer">
+            <span class="min-w-0">
+              <span class="block text-sm text-txtmain">Start with system</span>
+              <span class="block mt-0.5 text-[0.65rem] text-txtsecondary">
+                Launch minimized to the tray when you sign in to Windows.
+              </span>
+            </span>
+            <span class="relative inline-flex shrink-0 items-center mt-0.5">
+              <input
+                type="checkbox"
+                class="peer sr-only"
+                disabled={autostartBusy}
+                checked={autostart.enabled && autostart.ownedByUs}
+                onchange={(e) => toggleAutostart(e.currentTarget.checked)}
+              />
+              <span
+                class="h-5 w-9 rounded-full bg-card-border transition-colors peer-checked:bg-primary peer-disabled:opacity-50 peer-focus-visible:ring-2 peer-focus-visible:ring-primary"
+              ></span>
+              <span
+                class="pointer-events-none absolute left-0.5 h-4 w-4 rounded-full bg-surface shadow transition-transform peer-checked:translate-x-4"
+              ></span>
+            </span>
+          </label>
+
+          {#if autostart.enabled && !autostart.ownedByUs}
+            <div class="mt-3 rounded border border-warning/40 bg-warning/10 p-2 text-[0.65rem]">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-warning">⚠ Owned by another quartermaster install</span>
+                <button
+                  class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary"
+                  disabled={autostartBusy}
+                  onclick={() => toggleAutostart(true, true)}
+                >
+                  {autostartBusy ? "Working…" : "Take over"}
+                </button>
+              </div>
+              <p class="mt-1.5 truncate font-mono text-txtsecondary" title={autostart.ownerExe}>
+                {autostart.ownerExe}
+              </p>
+            </div>
+          {/if}
+
+          {#if autostartErr}
+            <p class="mt-2 font-mono text-[0.65rem] text-error">{autostartErr}</p>
+          {/if}
+        </div>
+      </div>
+    {:else}
+      <p class="font-mono text-xs text-txtsecondary">No system options available on this platform.</p>
+    {/if}
     {:else if cat === "kvcache"}
     <!-- Slot KV-cache persistence -->
     <div>
@@ -455,18 +580,17 @@
         </label>
       </div>
 
-      <div class="mt-3 flex items-center gap-3">
-        <button
-          class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary"
-          onclick={saveSlotCache}
-          disabled={savingSlot || !slotDirty}
-        >
-          {savingSlot ? "Saving…" : "Save & reload"}
-        </button>
-        <span class="font-mono text-[0.65rem] text-txtsecondary">Saving regenerates the config and hot-reloads.</span>
-        {#if slotErr}
-          <span class="font-mono text-[0.65rem] text-error">{slotErr}</span>
-        {/if}
+      <div class="mt-3 flex items-center justify-between gap-3">
+        <span class="font-mono text-[0.65rem] text-txtsecondary">Changes save automatically, regenerate the config and hot-reload.</span>
+        <span class="font-mono text-[0.65rem]">
+          {#if slotErr}
+            <span class="text-error">{slotErr}</span>
+          {:else if savingSlot}
+            <span class="text-txtsecondary">Saving…</span>
+          {:else if slotSaved}
+            <span class="text-primary">Saved!</span>
+          {/if}
+        </span>
       </div>
     </div>
     {:else}

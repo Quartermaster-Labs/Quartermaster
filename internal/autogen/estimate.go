@@ -13,10 +13,13 @@ type EstimateInput struct {
 	KvInRam        bool
 	Spec           string
 	TargetVramGB   float64
-	CpuOffload     int     // >0 pins layers offloaded to CPU, overriding the sizer
-	CtxCheckpoints *int    // nil => llama default (32); 0 disables; reserves checkpoint VRAM
-	DraftGB        float64 // separate MTP/DFlash draft gguf weights (GB); 0 => baked-in or none
-	MmprojGB       float64 // "-vision" twin projector footprint (weights + CLIP reserve); 0 => none
+	CpuOffload     int  // >0 pins layers offloaded to CPU, overriding the sizer
+	CtxCheckpoints *int // nil => llama default (32); 0 disables; reserves checkpoint VRAM
+	// CheckpointMinStep pins -cms (checkpoint spacing in prompt tokens), which
+	// scales each snapshot's global-KV term. 0 => the arch default (wide on SWA).
+	CheckpointMinStep int
+	DraftGB           float64 // separate MTP/DFlash draft gguf weights (GB); 0 => baked-in or none
+	MmprojGB          float64 // "-vision" twin projector footprint (weights + CLIP reserve); 0 => none
 }
 
 // EstimateResult is the previewed load plan for a candidate tuning.
@@ -104,7 +107,8 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		KvV:      kvV,
 		IsLong:   in.Ctx >= 65536,
 
-		CtxCheckpoints: in.CtxCheckpoints,
+		CtxCheckpoints:    in.CtxCheckpoints,
+		CheckpointMinStep: in.CheckpointMinStep,
 	}
 	computeBufGB := computeBufferGB(meta, effectiveUb(prof, nil, prof.Ctx, target), s.ComputeBufFactor)
 	prof.Overhead += computeBufGB

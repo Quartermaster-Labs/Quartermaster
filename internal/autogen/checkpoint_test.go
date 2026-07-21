@@ -6,17 +6,36 @@ import (
 )
 
 // Recurrent/hybrid models (FullAttnInterval>0) get 2 (upstream #21831 restore
-// fixed, verified on qwen3.6-27b); SWA (kvConst>0, non-recurrent) keeps 6; plain
-// attention 3.
+// fixed, verified on qwen3.6-27b); SWA (kvConst>0, non-recurrent) and plain
+// attention both get 3. SWA buys its rewind coverage back with a wider spacing
+// instead of more (expensive) snapshots.
 func TestDefaultCtxCheckpoints_Recurrent(t *testing.T) {
 	if n := defaultCtxCheckpoints(0.05, true); n != 2 {
 		t.Errorf("recurrent checkpoints = %d, want 2", n)
 	}
-	if n := defaultCtxCheckpoints(0.05, false); n != 6 {
-		t.Errorf("SWA default got %d want 6", n)
+	if n := defaultCtxCheckpoints(0.05, false); n != 3 {
+		t.Errorf("SWA default got %d want 3", n)
 	}
 	if n := defaultCtxCheckpoints(0, false); n != 3 {
 		t.Errorf("plain default got %d want 3", n)
+	}
+}
+
+// Spacing is arch-keyed: SWA widens to swaCheckpointMinStep so 3 snapshots still
+// cover a broad rewind range; recurrent and plain attention keep llama's 256. An
+// explicit pin always wins.
+func TestCheckpointMinStep(t *testing.T) {
+	if s := defaultCheckpointMinStep(0.05, false); s != swaCheckpointMinStep {
+		t.Errorf("SWA step = %d, want %d", s, swaCheckpointMinStep)
+	}
+	if s := defaultCheckpointMinStep(0.05, true); s != checkpointMinStep {
+		t.Errorf("recurrent step = %d, want %d", s, checkpointMinStep)
+	}
+	if s := defaultCheckpointMinStep(0, false); s != checkpointMinStep {
+		t.Errorf("plain step = %d, want %d", s, checkpointMinStep)
+	}
+	if s := effectiveCheckpointMinStep(profile{CheckpointMinStep: 512}, 0.05, false); s != 512 {
+		t.Errorf("pinned step = %d, want 512", s)
 	}
 }
 
@@ -24,8 +43,9 @@ func TestDefaultCtxCheckpoints_Recurrent(t *testing.T) {
 // llama default (32), an explicit value is used verbatim, 0 disables, and a
 // model with no VRAM-resident KV reserves nothing.
 func TestCheckpointReserveGB(t *testing.T) {
+	// kcg>0 with recurrent=false is SWA, so the charged spacing is the wide one.
 	const ptg, kcg = 0.00002, 0.05
-	per := kcg + ptg*float64(checkpointMinStep)
+	per := kcg + ptg*float64(swaCheckpointMinStep)
 
 	// Large ctx ceiling: the count cap never binds, so the resolved count is used.
 	const bigCtx = 1 << 20
@@ -34,7 +54,7 @@ func TestCheckpointReserveGB(t *testing.T) {
 	if g := checkpointReserveGB(profile{CtxCheckpoints: &zero}, ptg, kcg, bigCtx, false); g != 0 {
 		t.Errorf("disabled reserve=%v want 0", g)
 	}
-	// nil count => the arch-aware default; kcg>0 here (SWA/SSM) => 6.
+	// nil count => the arch-aware default; kcg>0 here (SWA) => 3.
 	def := defaultCtxCheckpoints(kcg, false)
 	if g := checkpointReserveGB(profile{}, ptg, kcg, bigCtx, false); math.Abs(g-float64(def)*per) > 1e-9 {
 		t.Errorf("nil reserve=%v want %v (default %d checkpoints)", g, float64(def)*per, def)
@@ -47,10 +67,10 @@ func TestCheckpointReserveGB(t *testing.T) {
 		t.Errorf("no-kv reserve=%v want 0", g)
 	}
 
-	// Small ctx caps the count: a 4k ctx at min-step 256 holds at most 16
-	// checkpoints, so an explicit 32 is clamped to 16.
+	// Small ctx caps the count: a 4k ctx at the SWA min-step holds at most
+	// 4096/step checkpoints, so an explicit 32 is clamped to that.
 	n32 := 32
-	wantN := 4096 / checkpointMinStep
+	wantN := 4096 / swaCheckpointMinStep
 	if g := checkpointReserveGB(profile{CtxCheckpoints: &n32}, ptg, kcg, 4096, false); math.Abs(g-float64(wantN)*per) > 1e-9 {
 		t.Errorf("ctx-capped reserve=%v want %v (%d checkpoints)", g, float64(wantN)*per, wantN)
 	}

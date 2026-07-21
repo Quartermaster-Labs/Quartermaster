@@ -651,6 +651,7 @@ export interface BackendExes {
   serverExe: string;
   sdServerExe: string;
   ttsServerExe: string;
+  asrServerExe: string;
 }
 
 // One row of the backend registry. kind ∈ llama | sd | tts | vllm | custom.
@@ -695,6 +696,45 @@ export async function putSettings(p: {
   if (!response.ok) {
     throw new Error(`Failed to save settings: ${response.status} ${await response.text()}`);
   }
+}
+
+// "Start with the system" — OS-level (Windows Run key), not autogen config.
+// All quartermaster installs share ONE registry entry, so `ownedByUs` false
+// with `enabled` true means a different install owns login startup.
+export interface AutostartStatus {
+  supported: boolean;
+  enabled: boolean;
+  ownedByUs: boolean;
+  ownerExe: string;
+  ownerCmd: string;
+  selfExe: string;
+  selfCmd: string;
+}
+
+export async function getAutostart(): Promise<AutostartStatus> {
+  const response = await fetch("/api/autostart");
+  if (!response.ok) {
+    throw new Error(`Failed to load autostart: ${response.status} ${await response.text()}`);
+  }
+  return await response.json();
+}
+
+// Returns the fresh status on success. A 409 means another install owns the
+// entry — the caller re-sends with takeover:true after the user confirms.
+export async function putAutostart(enabled: boolean, takeover = false): Promise<AutostartStatus> {
+  const response = await fetch("/api/autostart", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled, takeover }),
+  });
+  const body = await response.json().catch(() => null);
+  if (response.status === 409) {
+    return body as AutostartStatus; // conflict: caller inspects ownerExe
+  }
+  if (!response.ok) {
+    throw new Error(`Failed to save autostart: ${response.status}`);
+  }
+  return body as AutostartStatus;
 }
 
 export async function putBackends(list: BackendEntry[]): Promise<void> {
