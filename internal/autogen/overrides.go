@@ -107,6 +107,13 @@ type Settings struct {
 	// none of these; archComponents (image.go) maps each family to the fields it
 	// needs. A per-model Override component path still wins over the pool.
 	Encoders EncoderSet `yaml:"encoders"`
+	// LoraDir is the fleet-wide `--lora-model-dir` for image models: the folder
+	// sd-server scans for LoRA .safetensors, which is what `/sdapi/v1/loras`
+	// lists and what a request's `lora: [{path,multiplier}]` refs resolve against.
+	// Empty => each image model defaults to its OWN gguf's directory, so dropping
+	// a LoRA next to the checkpoint it was trained for is zero-config. A per-model
+	// Override.LoraDir still wins over both.
+	LoraDir string `yaml:"loraDir"`
 	// ExtraImageModels are sd-server image models that autogen's gguf scan can't
 	// discover or header-parse — chiefly single-file .safetensors DiTs whose weights
 	// exceed the gguf 4-dim tensor cap (HiDream-O1's 5-D vision patch-embed can't be
@@ -131,6 +138,7 @@ type ExtraImageModel struct {
 	ClipLPath      string  `yaml:"clipLPath"` // --clip_l
 	ClipGPath      string  `yaml:"clipGPath"` // --clip_g
 	T5Path         string  `yaml:"t5Path"`    // --t5xxl
+	LoraDir        string  `yaml:"loraDir"`   // --lora-model-dir ("" => settings.loraDir, else the model's own dir)
 	VramTargetGB   float64 `yaml:"vramTargetGB"`
 	DefaultCfg     float64 `yaml:"defaultCfg"`
 	DefaultSteps   int     `yaml:"defaultSteps"`
@@ -413,6 +421,9 @@ type Override struct {
 	ClipGPath       string `yaml:"clipGPath"`       // --clip_g
 	T5Path          string `yaml:"t5Path"`          // --t5xxl
 	TextEncoderPath string `yaml:"textEncoderPath"` // --llm (Z-Image / Lumina text encoder)
+	// LoraDir is this model's `--lora-model-dir`. Empty => settings.loraDir, and
+	// if that is empty too, the directory the model gguf itself lives in.
+	LoraDir string `yaml:"loraDir"`
 	// Placement tri-states: "" => the generator default (shown), "on"/"off" pin it.
 	//   OffloadToCpu: "" => auto (sizer offloads when weights+compute don't fit)
 	//   TeOnCpu:      "" => on  (--backend te=cpu); "off" keeps the encoder on GPU
@@ -539,6 +550,7 @@ type VariantSpec struct {
 	ClipGPath       string  `yaml:"clipGPath"`
 	T5Path          string  `yaml:"t5Path"`
 	TextEncoderPath string  `yaml:"textEncoderPath"`
+	LoraDir         string  `yaml:"loraDir"`
 	OffloadToCpu    string  `yaml:"offloadToCpu"`
 	TeOnCpu         string  `yaml:"teOnCpu"`
 	VaeOnCpu        string  `yaml:"vaeOnCpu"`

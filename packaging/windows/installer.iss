@@ -38,6 +38,10 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir={#OutputDir}
 OutputBaseFilename=quartermaster-setup-{#MyAppVersion}
+; Wizard/setup icon and the Apps & Features entry icon. The path is relative to
+; this .iss, i.e. the repo-root favicon.ico that is also embedded in the exe.
+SetupIconFile=..\..\favicon.ico
+UninstallDisplayIcon={app}\{#MyAppExe}
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible

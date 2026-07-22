@@ -546,7 +546,14 @@ func (s *Server) routes() {
 		mux.Handle("POST "+path, modelChain.Then(dispatch))
 	}
 	for _, path := range modelGetRoutes {
-		mux.Handle("GET "+path, modelChain.Then(dispatch))
+		var h http.Handler = dispatch
+		if path == "/sdapi/v1/loras" {
+			// sd-server lists every weight file in --lora-model-dir, which is the
+			// model's own folder by default — strip the checkpoints/encoders so the
+			// picker only offers things that are actually loadable as a LoRA.
+			h = s.filterLorasResponse(dispatch)
+		}
+		mux.Handle("GET "+path, modelChain.Then(h))
 	}
 	for _, path := range modelDeleteRoutes {
 		mux.Handle("DELETE "+path, modelChain.Then(dispatch))

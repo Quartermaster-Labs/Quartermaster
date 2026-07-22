@@ -63,8 +63,12 @@ linux-arm64: ui
 # must read "Quartermaster" — keep it in sync with the Run value name in
 # internal/server/autostart.go. NOTE: a 0.0.0.0 FixedFileInfo makes Windows drop
 # the whole string table; keep the version non-zero.
+#
+# -icon embeds favicon.ico as the exe's application icon (resource ID 1). Without
+# it the exe has no icon at all, so Explorer, the taskbar, and the Startup apps
+# list all fall back to the blank generic-executable glyph.
 versioninfo:
-	go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -o resource_windows_amd64.syso versioninfo.json
+	go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -icon favicon.ico -o resource_windows_amd64.syso versioninfo.json
 
 # Build Windows binary
 windows: ui

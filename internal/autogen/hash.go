@@ -44,7 +44,10 @@ const hashCacheSuffix = ".modelhash"
 //	     %q doubled every backslash and llama-server couldn't open the template.
 //	v25: Parakeet ASR models emit a parakeet-server block (capabilities in:[audio]
 //	     out:[text]) instead of routing to llama-server as a chat model.
-const genVersion = "v26"
+//	v27: image models emit --lora-model-dir (per-model override, else
+//	     settings.loraDir, else the model gguf's own directory) so LoRAs are
+//	     listable via /sdapi/v1/loras and usable per-request.
+const genVersion = "v27"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

@@ -12,7 +12,7 @@
     type Turn,
   } from "../../stores/imageHistory";
   import { generateImage, upscaleImage } from "../../lib/imageApi";
-  import { generateSdImage, generateSdImg2Img } from "../../lib/sdApi";
+  import { generateSdImage, generateSdImg2Img, fetchSdLoras } from "../../lib/sdApi";
   import { matchColorToRef } from "../../lib/colorMatch";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import MaskEditor from "./MaskEditor.svelte";
@@ -21,7 +21,7 @@
   import { autogrow } from "../../lib/autogrow";
   import { Image as ImageIcon, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Palette, Reply, Maximize2, Loader2 } from "lucide-svelte";
   import { scrollFade } from "../../lib/scrollFade";
-  import type { ImageApiMode } from "../../lib/types";
+  import type { ImageApiMode, SdApiLora, SdApiLoraRef } from "../../lib/types";
 
   // A conversational image tab: each user prompt becomes a turn, and the model
   // replies with an image. Follow-up prompts tweak the last image — Kontext gets
@@ -54,6 +54,61 @@
   // Keep the source image's native resolution on img2img (edit in place, don't
   // resize to the selected size). Falls back to selected size if dims unreadable.
   const sdKeepResStore = userPref<boolean>("playground-sdapi-keep-res", true);
+  // Selected LoRAs, keyed per model then per LoRA `path` → strength. The key is
+  // the list entry's `path` (what sd-server resolves against --lora-model-dir),
+  // NOT its display `name`: a bare name is rejected with "invalid lora path".
+  // LoRAs are
+  // trained against one base checkpoint, so a selection must not leak across
+  // models when the picker switches.
+  const sdLoraStore = userPref<Record<string, Record<string, number>>>("playground-sdapi-loras", {});
+
+  // Available LoRAs for the selected model, from GET /sdapi/v1/loras (sd-server
+  // lists whatever sits in its --lora-model-dir, which autogen points at the
+  // model's own folder by default). NOT fetched on model change: that route is
+  // model-dispatched, so listing would swap the model in — the user asks for it.
+  let loraList = $state<SdApiLora[]>([]);
+  let loraListModel = $state("");
+  let loraLoading = $state(false);
+  let loraError = $state("");
+
+  async function loadLoras() {
+    const model = $selectedModelStore;
+    if (!model) return;
+    loraLoading = true;
+    loraError = "";
+    try {
+      loraList = await fetchSdLoras(model);
+      loraListModel = model;
+      // Drop selections that aren't a listed `path` — chiefly entries saved by
+      // the earlier name-keyed build, which the backend rejects outright.
+      const valid = new Set(loraList.map((l) => l.path));
+      const saved = $sdLoraStore[model] ?? {};
+      const kept = Object.fromEntries(Object.entries(saved).filter(([p]) => valid.has(p)));
+      if (Object.keys(kept).length !== Object.keys(saved).length) {
+        $sdLoraStore = { ...$sdLoraStore, [model]: kept };
+      }
+    } catch (e) {
+      loraError = e instanceof Error ? e.message : String(e);
+    } finally {
+      loraLoading = false;
+    }
+  }
+
+  // The per-request refs sent with a generation. sd-server resolves `path`
+  // against --lora-model-dir; multiplier 0 means "not applied", so it's dropped.
+  let activeLoras = $derived.by<SdApiLoraRef[]>(() =>
+    Object.entries($sdLoraStore[$selectedModelStore] ?? {})
+      .filter(([, mult]) => mult !== 0)
+      .map(([path, multiplier]) => ({ path, multiplier }))
+  );
+
+  function setLoraStrength(path: string, multiplier: number) {
+    const model = $selectedModelStore;
+    const forModel = { ...($sdLoraStore[model] ?? {}) };
+    if (multiplier === 0) delete forModel[path];
+    else forModel[path] = multiplier;
+    $sdLoraStore = { ...$sdLoraStore, [model]: forModel };
+  }
 
   let prompt = $state("");
   // Images the user attached to the NEXT message (data URLs) — seed a thread from
@@ -238,7 +293,9 @@
     // needed 20 to compensate). Ref-image edit (extra_images), so denoise unused.
     { match: "qwen-rapid", steps: 8, cfg: 1.0, sampler: "euler_a", scheduler: "beta" },
     // Fill: inpaint — always fully regenerates the masked area (denoise 1.0).
-    { match: "fill", steps: 20, cfg: 1.0, sampler: "euler", scheduler: "discrete", denoise: 1.0 },
+    // Guidance-distilled but NOT step-distilled (BFL reference is 50): 20 leaves
+    // soft seams at mask edges on large fills, 25 is the practical knee.
+    { match: "fill", steps: 25, cfg: 1.0, sampler: "euler", scheduler: "discrete", denoise: 1.0 },
     // AnimagineXL 3.1 / Illustrious SDXL-anime: Euler a, <30 steps, cfg 5-7, 1024.
     { match: "animagine", steps: 28, cfg: 7, sampler: "euler_a", scheduler: "discrete", size: "1024x1024", negative: SDXL_ANIME_NEG },
     { match: "illustrious", steps: 28, cfg: 7, sampler: "euler_a", scheduler: "discrete", size: "1024x1024", negative: SDXL_ANIME_NEG },
@@ -487,6 +544,7 @@
         sampler_name: $sdSamplerStore || undefined,
         scheduler: $sdSchedulerStore || undefined,
         extra_images: refs && refs.length ? refs : undefined,
+        lora: activeLoras.length ? activeLoras : undefined,
       },
       signal
     );
@@ -516,6 +574,7 @@
         seed: $sdSeedStore,
         sampler_name: $sdSamplerStore || undefined,
         scheduler: $sdSchedulerStore || undefined,
+        lora: activeLoras.length ? activeLoras : undefined,
         // Inpaint: only the white-painted region regenerates (invert 0 = as painted).
         ...(mask ? { mask: stripB64(mask), inpainting_mask_invert: 0 } : {}),
       },
@@ -1126,6 +1185,51 @@
                 <span class="cursor-help opacity-60" title="Edit at the source image's native size instead of resizing to the selected size.">(?)</span>
               </span>
             </label>
+            <!-- LoRAs. The list comes from the backend's --lora-model-dir, so it
+                 needs the model loaded — fetched on demand, never automatically. -->
+            <div class="flex flex-col gap-1 pt-1 border-t border-card-border">
+              <div class="flex items-center justify-between">
+                <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
+                  LoRAs
+                  <span class="cursor-help opacity-60" title="Adapters found next to the model file. Listing them loads the model.">(?)</span>
+                </span>
+                <button
+                  class="text-xs text-primary hover:underline disabled:opacity-50"
+                  onclick={loadLoras}
+                  disabled={loraLoading || !$selectedModelStore}
+                >{loraLoading ? "Loading…" : loraListModel === $selectedModelStore ? "Refresh" : "Load list"}</button>
+              </div>
+              {#if loraError}
+                <p class="text-xs text-red-500">{loraError}</p>
+              {:else if loraListModel === $selectedModelStore && loraList.length === 0}
+                <p class="text-xs text-txtsecondary">No LoRAs in this model's folder.</p>
+              {:else if loraListModel === $selectedModelStore}
+                {#each loraList as lora (lora.path)}
+                  {@const strength = $sdLoraStore[$selectedModelStore]?.[lora.path] ?? 0}
+                  <div class="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      class="accent-primary"
+                      checked={strength !== 0}
+                      onchange={(e) => setLoraStrength(lora.path, (e.currentTarget as HTMLInputElement).checked ? 1 : 0)}
+                    />
+                    <span class="text-xs truncate flex-1" title={lora.path}>{lora.name}</span>
+                    <input
+                      type="number"
+                      min="-2"
+                      max="2"
+                      step="0.05"
+                      class="w-16 px-1.5 py-0.5 text-xs rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary disabled:opacity-40"
+                      disabled={strength === 0}
+                      value={strength}
+                      onchange={(e) => setLoraStrength(lora.path, Number((e.currentTarget as HTMLInputElement).value))}
+                    />
+                  </div>
+                {/each}
+              {:else if activeLoras.length}
+                <p class="text-xs text-txtsecondary">{activeLoras.map((l) => `${l.path} @ ${l.multiplier}`).join(", ")}</p>
+              {/if}
+            </div>
           {:else}
             <p class="text-xs text-txtsecondary">OpenAI image route generates fresh each turn — it can't tweak a previous image. Switch to SDAPI for the edit loop.</p>
           {/if}

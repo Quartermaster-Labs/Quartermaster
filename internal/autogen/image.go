@@ -149,6 +149,30 @@ func imageArg(p string) string {
 	return p
 }
 
+// resolveLoraDir picks the `--lora-model-dir` for an image model: the per-model
+// override, else the fleet-wide settings.loraDir, else the directory the model
+// file itself sits in. The last fallback is what makes a LoRA dropped next to
+// its base checkpoint (D:/LLM/Models/flux1/<lora>.safetensors) show up in
+// /sdapi/v1/loras with no config at all — sd-server's default is the process
+// cwd, which never contains anything useful here.
+//
+// Only the DIRECTORY is a launch flag; which LoRA (and at what strength) is
+// per-request — `lora: [{path, multiplier}]` on /sdapi/v1/{txt2img,img2img},
+// where path is the file's name inside this dir.
+func resolveLoraDir(s Settings, ovDir, modelPath string) string {
+	if d := strings.TrimSpace(ovDir); d != "" {
+		return d
+	}
+	if d := strings.TrimSpace(s.LoraDir); d != "" {
+		return d
+	}
+	p := strings.ReplaceAll(strings.TrimSpace(modelPath), "\\", "/")
+	if i := strings.LastIndex(p, "/"); i > 0 {
+		return p[:i]
+	}
+	return ""
+}
+
 // imageComponents are the resolved VAE / text-encoder file paths for one
 // diffusion model. Empty = not attached (the family doesn't need it, or it's
 // missing from the pool — see resolveComponents' missing list).
@@ -308,6 +332,13 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string) (li
 	if p := imageArg(comp.llm); p != "" {
 		lines = append(lines, "--llm "+p)
 	}
+	var ovLoraDir string
+	if ov != nil {
+		ovLoraDir = ov.LoraDir
+	}
+	if p := imageArg(resolveLoraDir(s, ovLoraDir, modelPath)); p != "" {
+		lines = append(lines, "--lora-model-dir "+p)
+	}
 	// --diffusion-fa is a near-free VRAM saver, on unless turned off.
 	if ov == nil || ov.DiffusionFa != "off" {
 		lines = append(lines, "--diffusion-fa")
@@ -400,6 +431,9 @@ func mergeImageVariant(base Override, v VariantSpec) Override {
 	if v.TextEncoderPath != "" {
 		o.TextEncoderPath = v.TextEncoderPath
 	}
+	if v.LoraDir != "" {
+		o.LoraDir = v.LoraDir
+	}
 	if v.OffloadToCpu != "" {
 		o.OffloadToCpu = v.OffloadToCpu
 	}
@@ -490,6 +524,9 @@ func extraImageCmdLines(s Settings, m ExtraImageModel) []string {
 	if p := imageArg(m.LlmPath); p != "" {
 		lines = append(lines, "--llm "+p)
 	}
+	if p := imageArg(resolveLoraDir(s, m.LoraDir, m.ModelPath)); p != "" {
+		lines = append(lines, "--lora-model-dir "+p)
+	}
 	if m.DiffusionFa != "off" {
 		lines = append(lines, "--diffusion-fa")
 	}
@@ -560,6 +597,7 @@ func ExtraImageAsOverride(m ExtraImageModel) Override {
 		ClipGPath:       m.ClipGPath,
 		T5Path:          m.T5Path,
 		TextEncoderPath: m.LlmPath,
+		LoraDir:         m.LoraDir,
 		TeOnCpu:         m.TeOnCpu,
 		VaeOnCpu:        m.VaeOnCpu,
 		VaeTiling:       m.VaeTiling,
@@ -596,6 +634,7 @@ func ApplyOverrideToExtraImage(m ExtraImageModel, ov *Override) ExtraImageModel 
 	m.ClipGPath = ov.ClipGPath
 	m.T5Path = ov.T5Path
 	m.LlmPath = ov.TextEncoderPath
+	m.LoraDir = ov.LoraDir
 	m.TeOnCpu = ov.TeOnCpu
 	m.VaeOnCpu = ov.VaeOnCpu
 	m.VaeTiling = ov.VaeTiling

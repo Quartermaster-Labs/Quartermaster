@@ -8,8 +8,11 @@ import (
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -20,6 +23,61 @@ import (
 )
 
 var ErrStartAborted = fmt.Errorf("aborted")
+
+// spawnDir is the working directory every upstream is launched in: the
+// quartermaster executable's own directory.
+//
+// Why pin it instead of inheriting: quartermaster's cwd is whatever launched
+// it. Started from a shell in the package dir that is the package dir, but
+// started from the Windows Run key ("start with the system") it is
+// C:\Windows\system32, and from the tray/installer shortcut it can be anything.
+// Any relative path in a generated model command (-m, --mmproj, the backend exe
+// itself) then resolves against a directory that has none of those files, so the
+// spawn fails and the request 500s — while the dashboard, whose own paths were
+// absolutised at startup, looks perfectly healthy. Pinning to the exe dir makes
+// a model's launch line resolve identically no matter how quartermaster was
+// started, and matches where the packaged layout puts the backends/config.
+//
+// Absolute paths (the common case) are unaffected.
+var spawnDir = sync.OnceValue(func() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "" // inherit quartermaster's cwd, as before
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	dir := filepath.Dir(exe)
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		return ""
+	}
+	return dir
+})
+
+// resolveExe pins a relative backend path (e.g. "backends/llama-server.exe") to
+// the exe dir. cmd.Dir does NOT cover this: exec resolves the program path
+// against the CALLING process's cwd, not against Dir, so the same
+// launched-from-anywhere problem spawnDir fixes for arguments would still bite
+// the binary itself. A bare command name ("llama-server", no separator) is left
+// alone so PATH lookup keeps working, as is anything already absolute or any
+// path that does resolve from the current cwd.
+func resolveExe(exe string) string {
+	if exe == "" || filepath.IsAbs(exe) || !strings.ContainsAny(exe, `/\`) {
+		return exe
+	}
+	dir := spawnDir()
+	if dir == "" {
+		return exe
+	}
+	if _, err := os.Stat(exe); err == nil {
+		return exe // resolves from the current cwd already
+	}
+	pinned := filepath.Join(dir, exe)
+	if _, err := os.Stat(pinned); err != nil {
+		return exe // not there either; let exec produce the original error
+	}
+	return pinned
+}
 
 // cmdWaitDelay is the upper bound the runtime will wait for child I/O to
 // drain after the process exits before force-closing the stdout/stderr
@@ -515,15 +573,16 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 	// cmd.WaitDelay only acts as the inherited-pipe backstop measured from
 	// process exit (see killProcess).
 	cmdCtx, cmdCancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(cmdCtx, args[0], args[1:]...)
+	cmd := exec.CommandContext(cmdCtx, resolveExe(args[0]), args[1:]...)
 	cmd.Stderr = p.processLogger
 	cmd.Stdout = p.processLogger
+	cmd.Dir = spawnDir()
 	cmd.Env = append(cmd.Environ(), cfg.Env...)
 	cmd.Cancel = func() error { return p.sendStopSignal(cmd) }
 	cmd.WaitDelay = p.waitDelay
 	setProcAttributes(cmd)
 
-	p.proxyLogger.Debugf("<%s> Executing start command: %s, env: %s", p.id, strings.Join(args, " "), strings.Join(cfg.Env, ", "))
+	p.proxyLogger.Debugf("<%s> Executing start command: %s, cwd: %s, env: %s", p.id, strings.Join(args, " "), cmd.Dir, strings.Join(cfg.Env, ", "))
 
 	cmdDone := make(chan struct{})
 	if err := cmd.Start(); err != nil {
