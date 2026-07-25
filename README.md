@@ -51,6 +51,10 @@ Docker image bundle them for you.
   server-side chat history, and a side-rail for Chat / Images / Speech / Transcription / Rerank /
   Load Test.
 - 🆕 **Per-key model scoping** — API keys can be restricted to specific models, not just all-or-nothing.
+- 🆕 **Safe LAN/tailnet exposure** — bind the API to `0.0.0.0` (or a tailnet address) and the
+  dashboard, ops and config-editor endpoints — which are deliberately key-free so a bad key can
+  never lock you out of your own UI — automatically answer to this host only. Widen with
+  `-admin-allow 100.64.0.0/10`, or drop the gate entirely with `-admin-open`.
 - ✅ Easy to deploy and configure: one binary, one configuration file; orchestrates your inference backends (llama-server, stable-diffusion.cpp, …)
 - ✅ On-demand model switching
 - ✅ Use any local OpenAI compatible server (llama.cpp, vllm, tabbyAPI, stable-diffusion.cpp, etc.)

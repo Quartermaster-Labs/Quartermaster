@@ -89,6 +89,8 @@ func main() {
 	flagPlaygroundPort := flag.String("playground-port", "", "serve the standalone playground app (per-user login + chat history) on this extra address, e.g. :8081")
 	flagNoUpdateCheck := flag.Bool("no-update-check", false, "disable checking GitHub for new releases (Windows release builds only)")
 	flagTray := flag.Bool("tray", false, "run as a desktop app: show a system-tray icon with Open/Exit (Windows only; no-op elsewhere)")
+	flagAdminAllow := flag.String("admin-allow", "", "extra IPs/CIDRs (comma separated) allowed to reach the dashboard/admin endpoints when listening beyond loopback, e.g. 100.64.0.0/10 for a tailnet")
+	flagAdminOpen := flag.Bool("admin-open", false, "serve the unauthenticated dashboard/admin endpoints to every remote host (legacy behaviour; the inference API is unaffected)")
 	flag.Parse()
 
 	if *flagNoUpdateCheck {
@@ -255,6 +257,40 @@ func main() {
 		initialSrv.SetPlayground(playground)
 		listenAddrs = append(listenAddrs, pgAddr)
 		proxyLog.Infof("playground app enabled on %s (data dir: %s)", pgAddr, dataDir)
+	}
+
+	// Admin surface gating. The dashboard / ops / config-editor endpoints carry
+	// no auth on purpose (API keys must never lock the operator out of their own
+	// UI), so a non-loopback bind — which is how the inference API is published to
+	// the LAN or a tailnet — would otherwise hand model control to every host that
+	// can reach the port. When any API listener binds beyond loopback we restrict
+	// those endpoints to this host, plus whatever -admin-allow adds. -admin-open
+	// restores the old wide-open behaviour. The playground app (its own port, its
+	// own login) is exempt, so it is excluded from this check.
+	adminAllow, err := server.ParseAdminAllow(*flagAdminAllow)
+	if err != nil {
+		slog.Error("invalid -admin-allow", "error", err)
+		os.Exit(1)
+	}
+	adminLocalOnly := false
+	if !*flagAdminOpen {
+		for _, addr := range listenAddrs {
+			if playground != nil && addr == playground.Addr {
+				continue
+			}
+			if !shared.IsLoopbackAddr(addr) {
+				adminLocalOnly = true
+				break
+			}
+		}
+	}
+	initialSrv.SetAdminAccess(adminLocalOnly, adminAllow)
+	if adminLocalOnly {
+		msg := "listening beyond loopback: dashboard and admin endpoints are restricted to this host"
+		if len(adminAllow) > 0 {
+			msg += fmt.Sprintf(" (plus %s)", *flagAdminAllow)
+		}
+		proxyLog.Info(msg + "; the inference API stays reachable (gate it with apiKeys)")
 	}
 
 	httpServers := make([]*http.Server, 0, len(listenAddrs))

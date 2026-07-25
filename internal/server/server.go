@@ -67,6 +67,12 @@ type Server struct {
 	// in-flight requests or long-lived SSE streams.
 	handler atomic.Pointer[http.Handler]
 
+	// admin gates the unauthenticated admin surface (dashboard, ops, config
+	// editor) by remote address, so binding a LAN/tailnet address exposes the
+	// inference API without handing out model control. Set once at startup via
+	// SetAdminAccess, before serving. See admin.go.
+	admin adminAccess
+
 	// autogen, when set, enables the UI model-config endpoints (cogwheel
 	// override editor + variant creation). nil when the server was not started
 	// with -generate. See configapi.go.
@@ -535,6 +541,10 @@ func (s *Server) routes() {
 	// Discovery (/v1/models) is part of what an external app uses, so it carries
 	// auth + per-key model scoping like the inference routes.
 	discoveryChain := chain.New(authMW)
+	// The admin surface (dashboard, ops, captures, config editor) carries no auth
+	// by design, so when the socket is bound beyond loopback it is instead gated
+	// by remote address. Pass-through unless SetAdminAccess enabled it. See admin.go.
+	adminChain := chain.New(s.adminMiddleware())
 
 	mux := http.NewServeMux()
 	dispatch := http.HandlerFunc(s.localPeerHandler)
@@ -564,40 +574,45 @@ func (s *Server) routes() {
 	// Standalone ESRGAN/RealESRGAN upscale (exec-per-request, not model-dispatched).
 	// Auth-gated like the inference API (discoveryChain) so an external key reaches it.
 	mux.Handle("POST /v1/images/upscale", discoveryChain.ThenFunc(s.handleUpscale))
-	mux.Handle("GET /logs", apiChain.ThenFunc(s.handleLogs))
-	mux.Handle("GET /logs/stream", apiChain.ThenFunc(s.handleLogStream))
-	mux.Handle("GET /logs/stream/{logMonitorID...}", apiChain.ThenFunc(s.handleLogStream))
+	mux.Handle("GET /logs", adminChain.ThenFunc(s.handleLogs))
+	mux.Handle("GET /logs/stream", adminChain.ThenFunc(s.handleLogStream))
+	mux.Handle("GET /logs/stream/{logMonitorID...}", adminChain.ThenFunc(s.handleLogStream))
 
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("GET /wol-health", handleHealth)
 	mux.HandleFunc("GET /{$}", handleRootRedirect)
 
-	// Embedded UI.
-	mux.Handle("GET /ui/", apiChain.ThenFunc(s.handleUI))
+	// Embedded UI. Admin-gated: the dashboard drives every unauthenticated ops
+	// endpoint, so serving it to a remote host would be handing out the keys.
+	// The playground app is exempt (see adminAllowed) and keeps its own port.
+	mux.Handle("GET /ui/", adminChain.ThenFunc(s.handleUI))
 	mux.HandleFunc("GET /favicon.ico", s.handleFavicon)
 
 	// Prometheus metrics (wrapped by apiChain, matches the legacy endpoint).
 	mux.Handle("GET /metrics", apiChain.ThenFunc(s.handleMetrics))
 
 	// Operations endpoints.
-	mux.Handle("GET /unload", apiChain.ThenFunc(s.handleUnload))
-	mux.Handle("GET /running", apiChain.ThenFunc(s.handleRunning))
+	mux.Handle("GET /unload", adminChain.ThenFunc(s.handleUnload))
+	mux.Handle("GET /running", adminChain.ThenFunc(s.handleRunning))
 
-	// Upstream passthrough.
+	// Upstream passthrough. Admin-gated: it forwards straight to a backend
+	// server, bypassing the model chain (and therefore the API-key auth on it).
 	mux.HandleFunc("GET /upstream", handleUpstreamRedirect)
-	mux.Handle("/upstream/{upstreamPath...}", apiChain.ThenFunc(s.handleUpstream))
+	mux.Handle("/upstream/{upstreamPath...}", adminChain.ThenFunc(s.handleUpstream))
 
-	// API group (API-key protected) consumed by the UI.
-	mux.Handle("POST /api/models/unload", apiChain.ThenFunc(s.handleAPIUnloadAll))
-	mux.Handle("POST /api/models/unload/{model...}", apiChain.ThenFunc(s.handleAPIUnloadModel))
-	mux.Handle("GET /api/events", apiChain.ThenFunc(s.handleAPIEvents))
-	mux.Handle("GET /api/metrics", apiChain.ThenFunc(s.handleAPIMetrics))
-	mux.Handle("GET /api/backend-metrics", apiChain.ThenFunc(s.handleAPIBackendMetrics))
-	mux.Handle("GET /api/performance", apiChain.ThenFunc(s.handleAPIPerformance))
+	// API group consumed by the UI. Unauthenticated by design (keys must never
+	// lock the operator out of their own dashboard), so these are the routes the
+	// admin guard covers when the socket reaches beyond loopback.
+	mux.Handle("POST /api/models/unload", adminChain.ThenFunc(s.handleAPIUnloadAll))
+	mux.Handle("POST /api/models/unload/{model...}", adminChain.ThenFunc(s.handleAPIUnloadModel))
+	mux.Handle("GET /api/events", adminChain.ThenFunc(s.handleAPIEvents))
+	mux.Handle("GET /api/metrics", adminChain.ThenFunc(s.handleAPIMetrics))
+	mux.Handle("GET /api/backend-metrics", adminChain.ThenFunc(s.handleAPIBackendMetrics))
+	mux.Handle("GET /api/performance", adminChain.ThenFunc(s.handleAPIPerformance))
 	mux.Handle("GET /api/version", apiChain.ThenFunc(s.handleAPIVersion))
-	mux.Handle("POST /api/update", apiChain.ThenFunc(s.handleAPIUpdate))
-	mux.Handle("GET /api/captures/{id}", apiChain.ThenFunc(s.handleAPICapture))
-	mux.Handle("GET /api/websearch", apiChain.ThenFunc(s.handleAPIWebSearch))
+	mux.Handle("POST /api/update", adminChain.ThenFunc(s.handleAPIUpdate))
+	mux.Handle("GET /api/captures/{id}", adminChain.ThenFunc(s.handleAPICapture))
+	mux.Handle("GET /api/websearch", adminChain.ThenFunc(s.handleAPIWebSearch))
 
 	// Standalone playground (separate port): which app to render + not-serious
 	// per-user login & chat history. /api/mode is always safe; the rest 501/401
@@ -628,52 +643,52 @@ func (s *Server) routes() {
 	// Per-model config editor (cogwheel) — read launch params + effective
 	// override, save curated overrides, reset to autogen default, add named
 	// variants. All no-op with 501 when -generate is not in use (s.autogen nil).
-	mux.Handle("GET /api/models/{model}/config", apiChain.ThenFunc(s.handleAPIModelConfigGet))
-	mux.Handle("PUT /api/models/{model}/override", apiChain.ThenFunc(s.handleAPIModelOverridePut))
-	mux.Handle("DELETE /api/models/{model}/override", apiChain.ThenFunc(s.handleAPIModelOverrideDelete))
-	mux.Handle("PUT /api/models/{model}/variant", apiChain.ThenFunc(s.handleAPIModelVariantPost))
-	mux.Handle("PUT /api/models/{model}/display-name", apiChain.ThenFunc(s.handleAPIModelDisplayNamePut))
-	mux.Handle("DELETE /api/models/{model}/display-name", apiChain.ThenFunc(s.handleAPIModelDisplayNameDelete))
-	mux.Handle("GET /api/models/{model}/estimate", apiChain.ThenFunc(s.handleAPIModelEstimate))
-	mux.Handle("PUT /api/models/{model}/preview", apiChain.ThenFunc(s.handleAPIModelCmdPreview))
-	mux.Handle("PUT /api/models/{model}/adhoc-cmd", apiChain.ThenFunc(s.handleAPIModelAdhocCmd))
-	mux.Handle("PUT /api/models/{model}/adhoc-load", apiChain.ThenFunc(s.handleAPIModelAdhocLoad))
-	mux.Handle("DELETE /api/models/{model}/adhoc-load", apiChain.ThenFunc(s.handleAPIModelAdhocUnload))
+	mux.Handle("GET /api/models/{model}/config", adminChain.ThenFunc(s.handleAPIModelConfigGet))
+	mux.Handle("PUT /api/models/{model}/override", adminChain.ThenFunc(s.handleAPIModelOverridePut))
+	mux.Handle("DELETE /api/models/{model}/override", adminChain.ThenFunc(s.handleAPIModelOverrideDelete))
+	mux.Handle("PUT /api/models/{model}/variant", adminChain.ThenFunc(s.handleAPIModelVariantPost))
+	mux.Handle("PUT /api/models/{model}/display-name", adminChain.ThenFunc(s.handleAPIModelDisplayNamePut))
+	mux.Handle("DELETE /api/models/{model}/display-name", adminChain.ThenFunc(s.handleAPIModelDisplayNameDelete))
+	mux.Handle("GET /api/models/{model}/estimate", adminChain.ThenFunc(s.handleAPIModelEstimate))
+	mux.Handle("PUT /api/models/{model}/preview", adminChain.ThenFunc(s.handleAPIModelCmdPreview))
+	mux.Handle("PUT /api/models/{model}/adhoc-cmd", adminChain.ThenFunc(s.handleAPIModelAdhocCmd))
+	mux.Handle("PUT /api/models/{model}/adhoc-load", adminChain.ThenFunc(s.handleAPIModelAdhocLoad))
+	mux.Handle("DELETE /api/models/{model}/adhoc-load", adminChain.ThenFunc(s.handleAPIModelAdhocUnload))
 
 	// Global settings editor (dashboard GPU-memory card): read effective
 	// settings + defaults, save a manual VRAM target/headroom patch, reset it.
-	mux.Handle("GET /api/settings", apiChain.ThenFunc(s.handleAPISettingsGet))
-	mux.Handle("PUT /api/settings", apiChain.ThenFunc(s.handleAPISettingsPut))
-	mux.Handle("DELETE /api/settings", apiChain.ThenFunc(s.handleAPISettingsDelete))
-	mux.Handle("PUT /api/settings/slotcache", apiChain.ThenFunc(s.handleAPISlotCachePut))
+	mux.Handle("GET /api/settings", adminChain.ThenFunc(s.handleAPISettingsGet))
+	mux.Handle("PUT /api/settings", adminChain.ThenFunc(s.handleAPISettingsPut))
+	mux.Handle("DELETE /api/settings", adminChain.ThenFunc(s.handleAPISettingsDelete))
+	mux.Handle("PUT /api/settings/slotcache", adminChain.ThenFunc(s.handleAPISlotCachePut))
 	// "Start with the system" — OS state (Windows Run key), NOT autogen config,
 	// so it works without -generate and is shared across installs. See autostart.go.
-	mux.Handle("GET /api/autostart", apiChain.ThenFunc(s.handleAPIAutostartGet))
-	mux.Handle("PUT /api/autostart", apiChain.ThenFunc(s.handleAPIAutostartPut))
-	mux.Handle("GET /api/backends", apiChain.ThenFunc(s.handleAPIBackendsList))
-	mux.Handle("PUT /api/settings/backends", apiChain.ThenFunc(s.handleAPIBackendsPut))
-	mux.Handle("POST /api/settings/backend/pick", apiChain.ThenFunc(s.handleAPIBackendPick))
-	mux.Handle("GET /api/kvcache", apiChain.ThenFunc(s.handleAPIKvCache))
-	mux.Handle("GET /api/canon", apiChain.ThenFunc(s.handleAPICanon))
+	mux.Handle("GET /api/autostart", adminChain.ThenFunc(s.handleAPIAutostartGet))
+	mux.Handle("PUT /api/autostart", adminChain.ThenFunc(s.handleAPIAutostartPut))
+	mux.Handle("GET /api/backends", adminChain.ThenFunc(s.handleAPIBackendsList))
+	mux.Handle("PUT /api/settings/backends", adminChain.ThenFunc(s.handleAPIBackendsPut))
+	mux.Handle("POST /api/settings/backend/pick", adminChain.ThenFunc(s.handleAPIBackendPick))
+	mux.Handle("GET /api/kvcache", adminChain.ThenFunc(s.handleAPIKvCache))
+	mux.Handle("GET /api/canon", adminChain.ThenFunc(s.handleAPICanon))
 	// Per-category scan folder (Models tab folder icon) — opens the host's native
 	// folder dialog, then sets settings.categoryRoots[category].
-	mux.Handle("POST /api/settings/root/pick", apiChain.ThenFunc(s.handleAPISettingsRootPick))
+	mux.Handle("POST /api/settings/root/pick", adminChain.ThenFunc(s.handleAPISettingsRootPick))
 	// Generic native folder dialog that returns the chosen path without persisting
 	// (slot-cache directory field binds it, then saves on demand).
-	mux.Handle("POST /api/pick-folder", apiChain.ThenFunc(s.handleAPIPickFolder))
+	mux.Handle("POST /api/pick-folder", adminChain.ThenFunc(s.handleAPIPickFolder))
 	// Generic native open-file dialog, kind-whitelisted (?kind=template) — the
 	// chat-template-file field binds the returned path.
-	mux.Handle("POST /api/pick-file", apiChain.ThenFunc(s.handleAPIPickFile))
+	mux.Handle("POST /api/pick-file", adminChain.ThenFunc(s.handleAPIPickFile))
 
 	// Fleet-wide default variants (e.g. game) — surfaced per-model in the editor
 	// but saved globally to settings.defaultVariants.
-	mux.Handle("PUT /api/default-variants", apiChain.ThenFunc(s.handleAPIDefaultVariantsPut))
+	mux.Handle("PUT /api/default-variants", adminChain.ThenFunc(s.handleAPIDefaultVariantsPut))
 
 	// API-key manager (admin-only): list/create/delete named keys with optional
 	// per-model scoping. 501 without -generate.
-	mux.Handle("GET /api/apikeys", apiChain.ThenFunc(s.handleAPIKeysGet))
-	mux.Handle("POST /api/apikeys", apiChain.ThenFunc(s.handleAPIKeyUpsert))
-	mux.Handle("DELETE /api/apikeys/{name}", apiChain.ThenFunc(s.handleAPIKeyDelete))
+	mux.Handle("GET /api/apikeys", adminChain.ThenFunc(s.handleAPIKeysGet))
+	mux.Handle("POST /api/apikeys", adminChain.ThenFunc(s.handleAPIKeyUpsert))
+	mux.Handle("DELETE /api/apikeys/{name}", adminChain.ThenFunc(s.handleAPIKeyDelete))
 
 	var h http.Handler = chain.New(CreateRequestLogMiddleware(s.proxylog), CreateCORSMiddleware()).Then(mux)
 	s.handler.Store(&h)
