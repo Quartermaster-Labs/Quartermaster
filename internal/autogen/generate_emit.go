@@ -1,0 +1,299 @@
+package autogen
+
+// YAML emission helpers: the non-model sections of the generated config
+// (slot cache, API keys, groups, listeners) plus the small per-model bits
+// (display name, profile block, id slug/tag formatting).
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+// slotKvPath resolves the slot-cache snapshot dir as forward-slash text shared
+// by the --slot-save-path flag and the emitted slotCache.path. Blank Path falls
+// back to a ".cache" folder next to the quartermaster binary (kept in sync with
+// config.DefaultSlotCachePath; duplicated here so autogen stays free of an
+// internal/config import).
+func slotKvPath(sc SlotCacheSettings) string {
+	p := sc.Path
+	if p == "" {
+		if exe, err := os.Executable(); err == nil {
+			p = filepath.Join(filepath.Dir(exe), ".cache", "slotkv")
+		} else {
+			p = filepath.Join(os.TempDir(), "quartermaster", "slotkv")
+		}
+	}
+	return strings.ReplaceAll(p, "\\", "/")
+}
+
+// emitSlotCache writes the slotCache config block (consumed by the server) when
+// the feature is enabled. Unset knobs are omitted so the server applies its
+// defaults. The path is always emitted so it matches the --slot-save-path flag.
+func emitSlotCache(b *strings.Builder, sc SlotCacheSettings) {
+	if !sc.Enable {
+		return
+	}
+	b.WriteString("slotCache:\n")
+	b.WriteString("  enable: true\n")
+	fmt.Fprintf(b, "  path: %q\n", slotKvPath(sc))
+	if sc.MinSaveTokens > 0 {
+		fmt.Fprintf(b, "  minSaveTokens: %d\n", sc.MinSaveTokens)
+	}
+	if sc.MaxDiskGB > 0 {
+		fmt.Fprintf(b, "  maxDiskGB: %g\n", sc.MaxDiskGB)
+	}
+	if sc.MaxSessions > 0 {
+		fmt.Fprintf(b, "  maxSessions: %d\n", sc.MaxSessions)
+	}
+	b.WriteString("\n")
+}
+
+// emitAPIKeys writes the apiKeys list and, for any key scoped to a model
+// subset, the apiKeyModels map (key => allowed model IDs). Keys with no Models
+// are unrestricted and appear only in apiKeys. No keys => nothing emitted.
+func emitAPIKeys(b *strings.Builder, keys []APIKeyEntry) {
+	if len(keys) == 0 {
+		return
+	}
+	b.WriteString("apiKeys:\n")
+	for _, k := range keys {
+		fmt.Fprintf(b, "  - %q\n", k.Key)
+	}
+	scoped := false
+	for _, k := range keys {
+		if len(k.Models) > 0 {
+			scoped = true
+			break
+		}
+	}
+	if scoped {
+		b.WriteString("apiKeyModels:\n")
+		for _, k := range keys {
+			if len(k.Models) == 0 {
+				continue
+			}
+			fmt.Fprintf(b, "  %q:\n", k.Key)
+			for _, m := range k.Models {
+				fmt.Fprintf(b, "    - %q\n", m)
+			}
+		}
+	}
+	b.WriteString("\n")
+}
+
+// emitGroupsAndListeners writes the groups block and, when settings.groups
+// define listen addresses, a listeners block. The mechanism is use-case
+// agnostic: each configured group has name-glob patterns (PowerShell -like);
+// every emitted model is assigned to the FIRST group whose any pattern matches
+// its name, so put specific groups before a "*" catch-all. Models matching no
+// group fall into an implicit "default" group with no listener. All groups are
+// exclusive swap groups, so loading on any listener still evicts whatever the
+// others were running (one GPU, VRAM-exclusive). With no settings.groups the
+// output is a single "exclusive" group over every model (upstream default).
+func emitGroupsAndListeners(b *strings.Builder, s Settings, emitted, samNames []string) {
+	// SAM models are tiny and must coexist with whatever LLM/image model is loaded,
+	// so they go in their own group that never evicts and is never evicted (see
+	// writeSamGroup) — kept out of the exclusive swap groups below.
+	isSam := map[string]bool{}
+	for _, n := range samNames {
+		isSam[n] = true
+	}
+	nonSam := emitted
+	if len(isSam) > 0 {
+		nonSam = nonSam[:0:0]
+		for _, n := range emitted {
+			if !isSam[n] {
+				nonSam = append(nonSam, n)
+			}
+		}
+	}
+
+	if len(s.Groups) == 0 {
+		b.WriteString("\ngroups:\n")
+		writeGroup(b, "exclusive", nonSam)
+		writeSamGroup(b, samNames)
+		return
+	}
+
+	// Assign each model to the first matching group (config order preserved).
+	members := make(map[string][]string, len(s.Groups)+1)
+	order := make([]string, 0, len(s.Groups)+1)
+	seenGroup := map[string]bool{}
+	addGroup := func(name string) {
+		if !seenGroup[name] {
+			seenGroup[name] = true
+			order = append(order, name)
+		}
+	}
+	for _, g := range s.Groups {
+		addGroup(g.Name)
+	}
+	const defaultGroup = "default"
+	for _, name := range nonSam {
+		assigned := ""
+		for _, g := range s.Groups {
+			for _, pat := range g.Match {
+				if globLike(pat, name) {
+					assigned = g.Name
+					break
+				}
+			}
+			if assigned != "" {
+				break
+			}
+		}
+		if assigned == "" {
+			assigned = defaultGroup
+			addGroup(defaultGroup)
+		}
+		members[assigned] = append(members[assigned], name)
+	}
+
+	b.WriteString("\ngroups:\n")
+	for _, name := range order {
+		writeGroup(b, name, members[name])
+	}
+	writeSamGroup(b, samNames)
+
+	// listeners: address -> the groups it exposes (a group with no Listen binds
+	// no dedicated port but still groups for eviction).
+	byAddr := map[string][]string{}
+	var addrOrder []string
+	for _, g := range s.Groups {
+		if g.Listen == "" {
+			continue
+		}
+		if _, ok := byAddr[g.Listen]; !ok {
+			addrOrder = append(addrOrder, g.Listen)
+		}
+		byAddr[g.Listen] = append(byAddr[g.Listen], g.Name)
+	}
+	if len(addrOrder) == 0 {
+		return
+	}
+	b.WriteString("\nlisteners:\n")
+	for _, addr := range addrOrder {
+		fmt.Fprintf(b, "  %q:\n    groups: [%s]\n", addr, strings.Join(byAddr[addr], ", "))
+	}
+}
+
+// writeSamGroup emits the coexistence group for SAM models: exclusive:false so
+// loading a SAM model evicts nothing, persistent:true so an exclusive LLM/image
+// load never evicts the SAM models, swap:false so multiple SAM models coexist
+// (they're tiny). Nothing emitted when there are no SAM models.
+func writeSamGroup(b *strings.Builder, members []string) {
+	if len(members) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "  %s:\n", "sam")
+	b.WriteString("    swap: false\n")
+	b.WriteString("    exclusive: false\n")
+	b.WriteString("    persistent: true\n")
+	b.WriteString("    members:\n")
+	for _, n := range members {
+		fmt.Fprintf(b, "      - %q\n", n)
+	}
+}
+
+// writeGroup emits one exclusive swap group with the given members.
+func writeGroup(b *strings.Builder, name string, members []string) {
+	fmt.Fprintf(b, "  %s:\n", name)
+	b.WriteString("    swap: true\n")
+	b.WriteString("    exclusive: true\n")
+	b.WriteString("    members:\n")
+	for _, n := range members {
+		fmt.Fprintf(b, "      - %q\n", n)
+	}
+}
+
+// emitProfile writes one model entry's YAML block.
+// resolvePublicName returns the advertised name for a served id when its base
+// model was renamed via settings.displayNames: the display name plus the served
+// id's variant suffix. The map is keyed by BASE id; the longest matching base
+// prefix wins so a renamed "foo" doesn't shadow a separately-renamed "foo-bar".
+// "" => not renamed (advertise the real id unchanged).
+func resolvePublicName(dn map[string]string, id string) string {
+	best, bestName := "", ""
+	for base, name := range dn {
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		if id == base || strings.HasPrefix(id, base+"-") {
+			if len(base) > len(best) {
+				best, bestName = base, name
+			}
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	return bestName + id[len(best):]
+}
+
+// writeDisplayName emits the config name: + a routable alias for a renamed served
+// id (both = the advertised public name). The real served id stays the config
+// key, so it still resolves; the alias makes the public name resolve too. No-op
+// when the model wasn't renamed. Indent matches the 4-space model-field block.
+func writeDisplayName(b *strings.Builder, s Settings, id string) {
+	pub := resolvePublicName(s.DisplayNames, id)
+	if pub == "" || pub == id {
+		return
+	}
+	fmt.Fprintf(b, "    name: %q\n", pub)
+	fmt.Fprintf(b, "    aliases: [%q]\n", pub)
+}
+
+func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, prof profile, ctx, ngl, ncpuMoe int, plan LoadPlan, kvK, kvV string, kvInRam bool, ov *Override) {
+	fmt.Fprintf(b, "\n  # arch=%s size=%gGB blocks=%d moe=%v\n", meta.Architecture, meta.FileSizeGB, meta.BlockCount, meta.IsMoE)
+	fmt.Fprintf(b, "  # est vram=%gGB ram=%gGB\n", plan.EstVramGB, plan.EstRamGB)
+	fmt.Fprintf(b, "  %q:\n", prof.Name)
+	b.WriteString("    cmd: >\n")
+	for _, line := range buildCmdLines(s, meta, row, prof, ctx, ngl, ncpuMoe, kvK, kvV, kvInRam, ov) {
+		fmt.Fprintf(b, "      %s\n", line)
+	}
+	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
+	writeDisplayName(b, s, prof.Name)
+	if prof.Unlisted {
+		b.WriteString("    unlisted: true\n")
+	}
+	if prof.Vision {
+		b.WriteString("    capabilities:\n")
+		b.WriteString("      in: [text, image]\n")
+		b.WriteString("      out: [text]\n")
+	}
+}
+
+func formatCtxTag(ctx int) string {
+	if ctx >= 1048576 && ctx%1048576 == 0 {
+		return fmt.Sprintf("%dm", ctx/1048576)
+	}
+	if ctx >= 1024 && ctx%1024 == 0 {
+		return fmt.Sprintf("%dk", ctx/1024)
+	}
+	return fmt.Sprintf("%d", ctx)
+}
+
+// slugify lowercases and collapses non-alphanumerics to single dashes.
+func slugify(s string) string {
+	var b strings.Builder
+	prevDash := false
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			prevDash = false
+		} else if !prevDash {
+			b.WriteByte('-')
+			prevDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+// DefaultNow returns an RFC3339 timestamp for the generation header. Kept
+// separate so Generate stays deterministic in tests.
+func DefaultNow() string {
+	return time.Now().Format(time.RFC3339)
+}

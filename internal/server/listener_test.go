@@ -17,9 +17,12 @@ func listenerTestServer(t *testing.T, listenerModels map[string]map[string]bool)
 		newStubRouter(nil, ""),
 	)
 	s.cfg.Store(&config.Config{
+		// No Name: set — a display name is advertised AS the model id (see
+		// handleListModels), which would change what these listener-scoping
+		// assertions are looking at. TestServer_DisplayNameIsPublicID covers that.
 		Models: map[string]config.ModelConfig{
-			"assistant1": {Name: "Assistant"},
-			"game1":      {Name: "Game"},
+			"assistant1": {},
+			"game1":      {},
 		},
 		Peers: config.PeerDictionaryConfig{
 			"peer1": {Models: []string{"remote-model"}},

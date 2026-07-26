@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -236,9 +237,50 @@ func (c *Config) RealModelName(search string) (string, bool) {
 		return search, true
 	} else if name, found := c.aliases[search]; found {
 		return name, found
-	} else {
-		return "", false
 	}
+	// Per-request context selector: "qwen?ctx=32768" is the SAME model as "qwen",
+	// launched with a different -c. Resolving it here means every layer that keys
+	// off the model id — API-key scoping, per-listener catalogs, metrics labels —
+	// sees the real model and can't be bypassed by appending a suffix. The
+	// requested size is read separately (SplitCtxRequest) by the dispatcher, which
+	// is the only thing that acts on it.
+	if base, _, ok := SplitCtxRequest(search); ok {
+		if _, found := c.Models[base]; found {
+			return base, true
+		}
+		if name, found := c.aliases[base]; found {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+// CtxSuffix marks a per-request context size on a model name.
+const CtxSuffix = "?ctx="
+
+// ctx bounds for the per-request selector: below the floor a model can't hold a
+// useful prompt, and the ceiling is a sanity guard against a typo'd value being
+// handed to the VRAM sizer.
+const (
+	MinRequestCtx = 512
+	MaxRequestCtx = 4 << 20
+)
+
+// SplitCtxRequest splits a "model?ctx=N" request name into the base model name
+// and N. ok is false when there is no suffix, N is not a number, or N is
+// outside [MinRequestCtx, MaxRequestCtx] — in which case callers treat the whole
+// string as an ordinary model name (and it fails to resolve, as any unknown
+// model does, rather than silently loading a different size than asked for).
+func SplitCtxRequest(name string) (base string, ctx int, ok bool) {
+	i := strings.Index(name, CtxSuffix)
+	if i < 0 {
+		return name, 0, false
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(name[i+len(CtxSuffix):]))
+	if err != nil || n < MinRequestCtx || n > MaxRequestCtx {
+		return name, 0, false
+	}
+	return name[:i], n, true
 }
 
 func (c *Config) FindConfig(modelName string) (ModelConfig, string, bool) {

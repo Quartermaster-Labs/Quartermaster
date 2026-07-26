@@ -196,6 +196,61 @@ func TestSlotCache_SaveOnEvict(t *testing.T) {
 	}
 }
 
+// A multi-GB save for model A must not stall a request for model B. Each model
+// is its own llama-server with its own slot 0, so only same-model work needs
+// serializing — the old single global sc.mu made every model queue behind the
+// slowest save.
+func TestSlotCache_SaveDoesNotBlockOtherModels(t *testing.T) {
+	dir := t.TempDir()
+	saving := make(chan struct{})  // closed once A's save is in flight
+	release := make(chan struct{}) // closes to let A's save finish
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/slots/0" && r.URL.Query().Get("action") == "save" {
+			close(saving)
+			<-release // stand in for a multi-GB write
+			fmt.Fprint(w, `{}`)
+			return
+		}
+		if r.URL.Path == "/slots" {
+			fmt.Fprint(w, `[{"n_prompt_tokens":35000,"n_ctx":100000,"is_processing":false}]`)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	sc := newEvictTestCache(dir, srv.URL)
+	sc.running = func() map[string]string { return map[string]string{"a": srv.URL, "b": srv.URL} }
+	sc.occupant["a"] = &occInfo{key: "old", dirty: true}
+
+	aDone := make(chan struct{})
+	go func() {
+		defer close(aDone)
+		sc.onSwitch(context.Background(), "a", srv.URL, "new", "")
+	}()
+	<-saving // A now holds its model lock, parked mid-save
+
+	// B has no occupant and no preamble, so this is pure bookkeeping: it must
+	// return immediately rather than wait behind A.
+	bDone := make(chan struct{})
+	go func() {
+		defer close(bDone)
+		sc.onSwitch(context.Background(), "b", srv.URL, "k", "")
+	}()
+	select {
+	case <-bDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("model b blocked behind model a's save — per-model locking regressed")
+	}
+	if occ := sc.occupant["b"]; occ == nil || occ.key != "k" {
+		t.Errorf("expected b resident with key k, got %+v", occ)
+	}
+
+	close(release)
+	<-aDone
+}
+
 func TestSlotCache_SaveOnEvict_BelowThresholdSkips(t *testing.T) {
 	dir := t.TempDir()
 	srv := fakeBackend(t, 5000, dir) // below 30k threshold

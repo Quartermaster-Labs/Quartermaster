@@ -77,8 +77,9 @@ func (b *bufferedResponse) Write(p []byte) (int, error) {
 func (s *Server) modelFileNames() map[string]struct{} {
 	names := map[string]struct{}{}
 	for _, m := range s.config().Models {
-		for _, tok := range strings.Fields(m.Cmd) {
-			tok = strings.Trim(tok, `"'`)
+		// Same splitter the process layer uses, so a quoted path with spaces
+		// stays one token instead of being shredded mid-path.
+		for _, tok := range cmdArgv(m.Cmd) {
 			lower := strings.ToLower(tok)
 			if !strings.HasSuffix(lower, ".gguf") && !strings.HasSuffix(lower, ".safetensors") &&
 				!strings.HasSuffix(lower, ".ckpt") && !strings.HasSuffix(lower, ".pt") {

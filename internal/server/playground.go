@@ -3,6 +3,8 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -24,8 +26,11 @@ import (
 // history are stored. nil unless -playground-port is set.
 //
 // Auth here is deliberately NOT serious — plaintext username/password in a JSON
-// file, a plain (unsigned) cookie. Its only job is to key chat history per user
-// so different people on the same box keep separate conversations.
+// file. Its only job is to key chat history per user so different people on the
+// same box keep separate conversations. The cookie IS authenticated though
+// (HMAC, see cookieValue): an unsigned one would have made the password
+// decorative, since anyone could have typed document.cookie='pg_user=victim'
+// and read that user's whole history.
 type Playground struct {
 	Addr    string // listen address this app is served on (e.g. ":8081")
 	DataDir string // users.json + per-user folders (users/<user>/{chats,imagechats,speechchats,prefs}.json + media/)
@@ -38,6 +43,10 @@ type Playground struct {
 
 	// turns owns server-side turn generation (see turns_design.md / turns.go).
 	turns *turnManager
+
+	// secretOnce/secret back the cookie HMAC key (see cookieSecret).
+	secretOnce sync.Once
+	secret     []byte
 }
 
 // InitTurns wires the server-side turn runner. Called once at startup, before
@@ -62,6 +71,13 @@ func LoopbackBase(listenAddr string) string {
 type playgroundCtxKey struct{}
 
 const pgCookie = "pg_user"
+
+// maxBlobBytes caps a per-user blob PUT (chats / imagechats / speechchats /
+// prefs). These are decoded whole into memory before being written, so without
+// a cap one request can exhaust RAM. Generous on purpose: a chat thread can
+// legitimately carry many inline data: URLs before extractMedia splits them
+// out, and a speech thread carries audio. Real threads land far below this.
+const maxBlobBytes = 128 << 20
 
 var pgUserRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
 
@@ -375,7 +391,7 @@ func (s *Server) handlePlaygroundLogin(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -411,7 +427,7 @@ func (s *Server) handlePlaygroundLogin(w http.ResponseWriter, r *http.Request) {
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     pgCookie,
-		Value:    body.Username,
+		Value:    p.cookieValue(body.Username),
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
@@ -428,7 +444,12 @@ func (s *Server) handlePlaygroundLogout(w http.ResponseWriter, r *http.Request) 
 
 // GET /auth/me — current user from the cookie, or 401.
 func (s *Server) handlePlaygroundMe(w http.ResponseWriter, r *http.Request) {
-	user := playgroundUser(r)
+	p := s.playground
+	if p == nil {
+		http.Error(w, "playground not enabled", http.StatusNotImplemented)
+		return
+	}
+	user := p.userFromRequest(r)
 	if user == "" {
 		http.Error(w, "not logged in", http.StatusUnauthorized)
 		return
@@ -436,13 +457,61 @@ func (s *Server) handlePlaygroundMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"username": user})
 }
 
-// playgroundUser reads + validates the username cookie.
-func playgroundUser(r *http.Request) string {
+// cookieSecret returns the HMAC key for the session cookie, loading it from
+// DataDir/.cookie-secret on first use and minting a fresh 32-byte one if that
+// file is absent. Persisting it is what lets a login survive a restart; if the
+// dir is unwritable we keep the minted key in memory only (everyone is logged
+// out on the next restart, which beats an unauthenticated cookie).
+func (p *Playground) cookieSecret() []byte {
+	p.secretOnce.Do(func() {
+		path := filepath.Join(p.DataDir, ".cookie-secret")
+		if b, err := os.ReadFile(path); err == nil && len(b) >= 32 {
+			p.secret = b
+			return
+		}
+		p.secret = make([]byte, 32)
+		if _, err := rand.Read(p.secret); err != nil {
+			// crypto/rand failing is unrecoverable for auth purposes; leaving the
+			// key zeroed would make every signature forgeable, so panic instead.
+			panic("playground: crypto/rand unavailable: " + err.Error())
+		}
+		if os.MkdirAll(p.DataDir, 0o755) == nil {
+			os.WriteFile(path, p.secret, 0o600)
+		}
+	})
+	return p.secret
+}
+
+// cookieValue formats the authenticated session cookie: "<user>.<mac>", where
+// mac is HMAC-SHA256(secret, user). The username stays readable (it is not a
+// secret) but cannot be swapped for someone else's without the key.
+func (p *Playground) cookieValue(user string) string {
+	m := hmac.New(sha256.New, p.cookieSecret())
+	m.Write([]byte(user))
+	return user + "." + base64.RawURLEncoding.EncodeToString(m.Sum(nil))
+}
+
+// userFromRequest reads, validates and AUTHENTICATES the session cookie,
+// returning "" for anything that does not carry a signature made with this
+// server's key. A pre-HMAC (bare-username) cookie has no "." and so fails here
+// — that costs those sessions one re-login, which is the right trade for a
+// cookie that was previously forgeable by hand.
+func (p *Playground) userFromRequest(r *http.Request) string {
 	c, err := r.Cookie(pgCookie)
-	if err != nil || !pgUserRe.MatchString(c.Value) {
+	if err != nil {
 		return ""
 	}
-	return c.Value
+	user, mac, ok := strings.Cut(c.Value, ".")
+	if !ok || !pgUserRe.MatchString(user) {
+		return ""
+	}
+	want := hmac.New(sha256.New, p.cookieSecret())
+	want.Write([]byte(user))
+	got, err := base64.RawURLEncoding.DecodeString(mac)
+	if err != nil || !hmac.Equal(got, want.Sum(nil)) {
+		return ""
+	}
+	return user
 }
 
 // GET /api/chats — the user's saved sessions (opaque JSON array, client-owned).
@@ -454,13 +523,13 @@ func (s *Server) handlePlaygroundChats(w http.ResponseWriter, r *http.Request) {
 	// revert it (see turns.go guardedChatsPut). GET stays a plain blob read.
 	p := s.playground
 	if r.Method == http.MethodPut && p != nil && p.turns != nil {
-		user := playgroundUser(r)
+		user := p.userFromRequest(r)
 		if user == "" {
 			http.Error(w, "not logged in", http.StatusUnauthorized)
 			return
 		}
 		var clientArr []map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&clientArr); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBlobBytes)).Decode(&clientArr); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
@@ -505,7 +574,7 @@ func (s *Server) handlePlaygroundMedia(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "playground not enabled", http.StatusNotImplemented)
 		return
 	}
-	user := playgroundUser(r)
+	user := p.userFromRequest(r)
 	if user == "" {
 		http.Error(w, "not logged in", http.StatusUnauthorized)
 		return
@@ -526,7 +595,7 @@ func (s *Server) serveUserBlob(w http.ResponseWriter, r *http.Request, pathFn fu
 		http.Error(w, "playground not enabled", http.StatusNotImplemented)
 		return
 	}
-	user := playgroundUser(r)
+	user := p.userFromRequest(r)
 	if user == "" {
 		http.Error(w, "not logged in", http.StatusUnauthorized)
 		return
@@ -551,7 +620,7 @@ func (s *Server) serveUserBlob(w http.ResponseWriter, r *http.Request, pathFn fu
 		w.Write(b)
 	case http.MethodPut:
 		var blob json.RawMessage
-		if err := json.NewDecoder(r.Body).Decode(&blob); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBlobBytes)).Decode(&blob); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}

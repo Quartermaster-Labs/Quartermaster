@@ -83,22 +83,30 @@ func init() {
 }
 
 // comCall invokes a COM vtable method: args[0] is implicitly the object pointer.
-func comCall(obj uintptr, method int, args ...uintptr) uintptr {
-	vtbl := *(*uintptr)(unsafe.Pointer(obj))
-	fn := *(*uintptr)(unsafe.Pointer(vtbl + uintptr(method)*unsafe.Sizeof(uintptr(0))))
-	ret, _, _ := syscall.SyscallN(fn, append([]uintptr{obj}, args...)...)
+//
+// COM interface pointers are carried as unsafe.Pointer rather than uintptr on
+// purpose: dereferencing a uintptr (`*(*uintptr)(unsafe.Pointer(obj))`) is the
+// pattern `go vet`'s unsafeptr check flags, because in general a uintptr does
+// not keep its referent alive or track a moving object. Keeping the value typed
+// as unsafe.Pointer end-to-end expresses what it actually is — a pointer into
+// driver-owned memory the Go heap never moves — and the deref below needs no
+// uintptr->Pointer conversion at all.
+func comCall(obj unsafe.Pointer, method int, args ...uintptr) uintptr {
+	vtbl := *(*unsafe.Pointer)(obj)
+	fn := *(*uintptr)(unsafe.Add(vtbl, uintptr(method)*unsafe.Sizeof(uintptr(0))))
+	ret, _, _ := syscall.SyscallN(fn, append([]uintptr{uintptr(obj)}, args...)...)
 	return ret
 }
 
 // comRelease calls IUnknown::Release (vtable index 2).
-func comRelease(obj uintptr) { comCall(obj, 2) }
+func comRelease(obj unsafe.Pointer) { comCall(obj, 2) }
 
 // dxgiAdapter is one physical GPU. The AMD driver enumerates a card multiple
 // times under distinct LUIDs (mirror entries with identical name/VRAM/budget);
 // they're collapsed into one adapter here, but every LUID/interface is retained
 // because live usage/utilization can surface on any one of the mirrors.
 type dxgiAdapter struct {
-	ptrs    []uintptr // IDXGIAdapter3*, one per mirror LUID
+	ptrs    []unsafe.Pointer // IDXGIAdapter3*, one per mirror LUID
 	luids   []LUID
 	name    string
 	totalMB int
@@ -143,12 +151,12 @@ func (a *dxgiAdapter) release() {
 // openDxgiAdapters enumerates hardware adapters with dedicated VRAM. The
 // returned IDXGIAdapter3 pointers must be released by the caller.
 func openDxgiAdapters() ([]dxgiAdapter, error) {
-	var factory uintptr
+	var factory unsafe.Pointer
 	r, _, _ := procCreateDXGIFactory1.Call(
 		uintptr(unsafe.Pointer(&iidIDXGIFactory1)),
 		uintptr(unsafe.Pointer(&factory)),
 	)
-	if r != 0 || factory == 0 {
+	if r != 0 || factory == nil {
 		return nil, fmt.Errorf("CreateDXGIFactory1: 0x%x", r)
 	}
 	defer comRelease(factory)
@@ -156,21 +164,21 @@ func openDxgiAdapters() ([]dxgiAdapter, error) {
 	var adapters []dxgiAdapter
 	byKey := map[string]int{} // name|totalMB -> index into adapters
 	for i := uint32(0); ; i++ {
-		var ad1 uintptr
+		var ad1 unsafe.Pointer
 		// IDXGIFactory1::EnumAdapters1 is vtable index 12; non-zero = NOT_FOUND, done.
-		if comCall(factory, 12, uintptr(i), uintptr(unsafe.Pointer(&ad1))) != 0 || ad1 == 0 {
+		if comCall(factory, 12, uintptr(i), uintptr(unsafe.Pointer(&ad1))) != 0 || ad1 == nil {
 			break
 		}
 
 		var desc dxgiAdapterDesc1
 		comCall(ad1, 10, uintptr(unsafe.Pointer(&desc))) // IDXGIAdapter1::GetDesc1
 
-		var ad3 uintptr
+		var ad3 unsafe.Pointer
 		qr := comCall(ad1, 0, // IUnknown::QueryInterface
 			uintptr(unsafe.Pointer(&iidIDXGIAdapter3)),
 			uintptr(unsafe.Pointer(&ad3)))
 		comRelease(ad1)
-		if qr != 0 || ad3 == 0 {
+		if qr != 0 || ad3 == nil {
 			continue
 		}
 
@@ -194,7 +202,7 @@ func openDxgiAdapters() ([]dxgiAdapter, error) {
 		}
 		byKey[key] = len(adapters)
 		adapters = append(adapters, dxgiAdapter{
-			ptrs:    []uintptr{ad3},
+			ptrs:    []unsafe.Pointer{ad3},
 			luids:   []LUID{desc.AdapterLuid},
 			name:    name,
 			totalMB: totalMB,

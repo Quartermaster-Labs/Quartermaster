@@ -13,7 +13,9 @@ func TestServer_HandleListModels(t *testing.T) {
 	s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
 	s.cfg.Store(&config.Config{
 		Models: map[string]config.ModelConfig{
-			"visible": {Name: "Visible", Description: "a model"},
+			// Name is left unset: it is advertised AS the id (see
+			// TestServer_DisplayNameIsPublicID), which this test is not about.
+			"visible": {Description: "a model"},
 			"hidden":  {Unlisted: true},
 		},
 		Peers: config.PeerDictionaryConfig{
@@ -48,6 +50,42 @@ func TestServer_HandleListModels(t *testing.T) {
 	}
 	if ids["hidden"] {
 		t.Error("unlisted model should not appear")
+	}
+}
+
+// A UI-set display name (ModelConfig.Name) is advertised AS the model id, so an
+// external client sees and sends the renamed model while the config key stays
+// the routing id. Nothing asserted this, which is how the rename shipped and
+// silently broke three catalog tests.
+func TestServer_DisplayNameIsPublicID(t *testing.T) {
+	s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
+	s.cfg.Store(&config.Config{
+		Models: map[string]config.ModelConfig{
+			"qwen3-35b-a3b-q4": {Name: "qwen-primary"},
+			"plain":            {},
+		},
+	})
+
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	var resp struct {
+		Data []modelRecord `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	ids := map[string]bool{}
+	for _, m := range resp.Data {
+		ids[m.ID] = true
+	}
+	if !ids["qwen-primary"] {
+		t.Errorf("display name not advertised as id: %v", ids)
+	}
+	if ids["qwen3-35b-a3b-q4"] {
+		t.Errorf("renamed model still advertised under its config key: %v", ids)
+	}
+	if !ids["plain"] {
+		t.Errorf("un-renamed model should keep its config key: %v", ids)
 	}
 }
 

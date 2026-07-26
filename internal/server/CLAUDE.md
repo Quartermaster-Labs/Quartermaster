@@ -15,7 +15,8 @@ Owns the HTTP layer: it builds the mux, applies cross-cutting middleware (auth, 
 | `auth.go` | Auth, request-context, and CORS middleware; `Access-Control-Request-Headers` sanitization. |
 | `admin.go` | Fork: remote-address gate for the unauthenticated admin surface (`adminChain`). `SetAdminAccess(localOnly, allow)` + `ParseAdminAllow`; loopback (and `-admin-allow` CIDRs) only, playground requests exempt. Enabled by `main` whenever an API listener binds beyond loopback. |
 | `captures.go` | Request/response capture storage: per-route field masks, zstd+CBOR (de)compression, header redaction. |
-| `family.go` | `modelFamily` — derives a stable grouping key (the gguf `-m`/`--model` path) so the UI groups variants of one model. |
+| `family.go` | `modelFamily` — derives a stable grouping key (the gguf `-m`/`--model` path, via `config.ParseCmd`) so the UI groups variants of one model. |
+| `variant.go` | Fork: **synthetic per-request model variants**. `ensureCtxVariant(realID, ctx)` mints `realID@ctx<N>` on first use — a copy of the base model whose cmd is re-rendered by `renderAdhocCmd` for the requested context (so `-ngl`/`--n-cpu-moe`/KV types are re-derived, not inherited), reusing the base's allocated port and joining all its groups. `requestedCtx` reads the size off the `?ctx=` model suffix or the `X-QM-Ctx` header. `addVariantToConfig` is the shared COW registration used by this and `ensureBackendVariant`. |
 | `filters.go` | Request-body filter middleware (model-name rewrite, strip/set params) for JSON and multipart form requests. |
 | `inflight.go` | Atomic in-flight request counter + middleware emitting `InFlightRequestsEvent`. |
 | `listener.go` | Fork: per-listener catalog scoping. `ServeListener` stores a listen address's allowed model set in request context; `listenerModelSet` reads it back. |
@@ -95,7 +96,10 @@ API / operations / UI:
 - **Embedded UI.** `ui_dist` is `//go:embed`-ed; the Makefile `ui` target copies the Svelte build in, and a placeholder keeps the embed valid before any build. Pre-compressed `.br`/`.gz` siblings are preferred; extensionless misses fall back to `index.html` for SPA routing.
 - **Access-log skips.** `/wol-health`, `/api/performance`, `/metrics` are excluded from the access log to avoid drowning it in poll traffic. Path is captured before `next` runs because `/upstream` rewrites the URL in place.
 - **Versionless routes.** `/v/...` paths are rewritten to `/...` by `stripVersionPrefix` before forwarding (issue #728).
-- **Family / group tagging (fork).** `modelFamily` keys models by their gguf path so the UI can collapse ctx/game/judge variants; `modelStatus` additionally tags each model with its swap group and the listener addresses exposing it.
+- **Family / group tagging (fork).** `modelFamily` keys models by their gguf path so the UI can collapse ctx/game/judge variants; `modelStatus` additionally tags each model with its swap group and the listener addresses exposing it. It is a thin wrapper over `config.ParseCmd(cmd).ModelPath` — the parse is memoized because this runs per SSE status build and per slot-cache request.
+- **Ask a command questions via `config.ParseCmd`, not `strings.Contains`.** Every consumer here that needs a fact out of a rendered launch command (`modelFamily`, the `slotParticipates`/`slotRecurrent` closures in `server.go`, `cmdArgv`/`portFromCmd` and the image/audio/MTP sniffs in `configapi.go`, `loras.go`) goes through the shared memoized `CmdInfo`. Raw substring tests were wrong twice over: `"--spec-type draft-mtp"` stops matching the moment the emitter wraps the flag onto its own line, and `"--model "` matches prefixes of longer flags.
+- **Per-request variants are synthetic sibling models, not a re-key (fork).** `X-QM-Backend: <id>` and `?ctx=<N>`/`X-QM-Ctx` do NOT parameterize the running process — they mint a new model id (`realID@<backend>`, `realID@ctx<N>`) via `ensureBackendVariant`/`ensureCtxVariant` and dispatch to that. The variant is `Unlisted`, reuses the base model's already-allocated `${PORT}`, and joins **every group the base is in** — that shared exclusive group is what makes both the port reuse and the VRAM accounting correct (base and variant can never be resident together). Minting is a read-modify-`ApplyConfig` cycle over the whole config, so it is serialized on `Server.variantMu` and registers through the COW `addVariantToConfig`; never mutate the live config's maps or a group's `Members` slice in place. Ctx variants are capped per base (`maxCtxVariants`) since a client sweeping `?ctx=` values would otherwise grow the config unbounded; they last until the next file reload regenerates the config.
+- **The `?ctx=` suffix resolves to the REAL model id.** `config.RealModelName` strips it (`config.SplitCtxRequest`), so listener scoping, API-key scoping, filters, and metrics labels all see the base model. `localPeerHandler` therefore reads the requested ctx **after** both scope checks — moving that earlier would let a client reach a model it isn't scoped for by appending a suffix. A malformed or out-of-range value is not clamped: it fails to resolve, so nobody silently gets a size they didn't ask for.
 - **OOM / VRAM protection (fork).** Three cooperating pieces surfaced through `/api/performance`:
   - **Foreign VRAM** — `foreignGPU`/`foreignVram`/`isInferenceProc` (`apigroup.go`) tally GPU memory held by `llama-server`/`sd-server` processes this instance did NOT spawn (via `perf.QueryComputeApps` minus `router.RunningPIDs()`), returned as `"foreign"` (red UI gauge) so the sizer knows VRAM it can't reclaim.
   - **Idle floor** — `trackSystemVram` (`server.go`) keeps the min idle used-VRAM on the largest GPU while no model runs, returned as `"system_mb"` — the baseline non-inference VRAM the budget must reserve.
@@ -219,9 +223,16 @@ proof the KV was actually reused (`confirm` / `confirm-miss`), not just loaded.
   seconds). Tradeoff: the model sees date granularity, not the exact time. Bare dates
   (no time-of-day) are untouched. Always on when the slot cache participates; add a
   config gate only if date-only forwarding ever bites.
-- **Single slot.** All save/restore hit `/slots/0`. One global `sc.mu` serializes them
-  — a multi-GB save blocks other models' requests for its duration (fine for single-user
-  local inference; upgrade path = per-model locks).
+- **Single slot, three locks.** All save/restore hit `/slots/0` — one per model, since
+  each model is its own llama-server. Locking is split accordingly: `stateMu` guards the
+  bookkeeping maps (never held across I/O), `slotMu` is **per model id** (`lockModel`)
+  and serializes that model's long work (save/restore, preamble mint), and `diskMu`
+  serializes the directory-wide prune passes (`enforceCaps`, `prunePreambleFiles`,
+  `dropStalePreambles`) that scan and unlink across models. Lock order: `slotMu` →
+  `stateMu`, `slotMu` → `diskMu`; `statsMu` (see below) nests into none of them. This
+  replaced a single global `sc.mu` under which a multi-GB save for model A blocked every
+  other model's requests for its duration (regression test:
+  `TestSlotCache_SaveDoesNotBlockOtherModels`).
 - **Cold mint template mismatch.** `synthPrefill` always mints via OpenAI
   `/v1/chat/completions`. A harness served through a *different* upstream template
   (Anthropic-native `/v1/messages`) may tokenize the preamble differently → restored KV
@@ -229,8 +240,8 @@ proof the KV was actually reused (`confirm` / `confirm-miss`), not just loaded.
   via the request's own endpoint.
 - **Anthropic system.** `sessionAnchor` falls back to the top-level `"system"` field
   when there's no system-role message, so `/v1/messages` harnesses still get a preamble.
-- **Stats lock.** `record()` uses a separate `statsMu` so it's callable from inside
-  `sc.mu`-held sections without reentrancy.
+- **Stats lock.** `record()` uses a separate `statsMu` so it's callable from inside any
+  `stateMu`/`slotMu`-held section without reentrancy.
 - **Hybrid / SWA / recurrent models.** Some families don't use plain full attention:
   sliding-window (Gemma), linear-hybrid (Qwen3.6-35B-A3B = Gated DeltaNet ×3 : Gated
   Attention ×1, only ~16 of 64 layers carry KV; Qwen3-Next), recurrent (Mamba, RWKV).

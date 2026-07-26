@@ -96,6 +96,31 @@ func TestEstimateInputFromCmd(t *testing.T) {
 	}
 }
 
+// Regression: these parsers used to whitespace-split the rendered command, so a
+// quoted model path containing a space (the norm on Windows — "C:\Program
+// Files\...", "D:\LLM\My Models\...") shredded into two tokens and every flag
+// read after it landed on the wrong argument. They now share the process
+// layer's own splitter (cmdArgv -> config.SanitizeCommand).
+func TestCmdParsers_SpacedPaths(t *testing.T) {
+	// Forward slashes so the assertion holds under both shlex dialects (POSIX
+	// treats a backslash as an escape); the space is what is being tested.
+	cmd := `"C:/Program Files/llama/llama-server.exe" -m "D:/LLM/My Models/foo.gguf" ` +
+		`--mmproj "D:/LLM/My Models/mmproj f16.gguf" -ngl 60 -c 4096 --port 9099`
+
+	if in := estimateInputFromCmd(cmd); in.Ctx != 4096 {
+		t.Errorf("Ctx=%d want 4096 (flag after a spaced path)", in.Ctx)
+	}
+	if n, ok := forcedOffloadFromCmd(cmd, autogen.Metadata{BlockCount: 65}); !ok || n != 5 {
+		t.Errorf("forcedOffload = (%d,%v), want (5,true)", n, ok)
+	}
+	if got, want := mmprojPathFromCmd(cmd), "D:/LLM/My Models/mmproj f16.gguf"; got != want {
+		t.Errorf("mmproj=%q want %q", got, want)
+	}
+	if got := portFromCmd(cmd); got != "9099" {
+		t.Errorf("port=%q want 9099", got)
+	}
+}
+
 // forcedOffloadFromCmd maps a running argv's layer split to EstimateInput.CpuOffload
 // so the settings preview reproduces the loaded placement (post spawn-time guard).
 func TestForcedOffloadFromCmd(t *testing.T) {

@@ -88,9 +88,10 @@ func (tm *turnManager) qmReq(ctx context.Context, at *activeTurn, method, path s
 		req.Header.Set("Authorization", "Bearer "+at.authKey) // /v1 is key-gated when keys are on
 	}
 	if at.user != "" {
-		// pg_user is a plaintext-username cookie; the turn knows its user, so this
-		// lets a loopback call reach per-user endpoints (/api/prefs) as that user.
-		req.AddCookie(&http.Cookie{Name: pgCookie, Value: at.user})
+		// The turn knows its user, so mint a properly signed session cookie for it
+		// (same HMAC as a browser login) — that lets a loopback call reach per-user
+		// endpoints like /api/prefs as that user.
+		req.AddCookie(&http.Cookie{Name: pgCookie, Value: tm.pg.cookieValue(at.user)})
 	}
 	resp, err := tm.client.Do(req)
 	if err != nil {

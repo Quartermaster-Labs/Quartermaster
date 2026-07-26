@@ -64,11 +64,26 @@ type slotCache struct {
 	client    *http.Client
 	log       *logmon.Monitor
 
-	// ponytail: one global lock guards the occupant map AND serializes the
-	// save/restore HTTP calls. A multi-GB save blocks other models' requests for
-	// its duration — fine for single-user local inference. Upgrade path: per-model
-	// locks keyed by model id if concurrent multi-model traffic ever matters.
-	mu       sync.Mutex
+	// Locking is three-way, because the three things being protected have very
+	// different hold times:
+	//
+	//   stateMu  — the bookkeeping maps below (and the occInfo values they point
+	//              at). Held for map reads/writes only, never across I/O.
+	//   slotMu   — per model id, from lockModel. Serializes the LONG work for one
+	//              model: /slots save+restore, the synthetic preamble prefill. Each
+	//              model is a separate llama-server with its own slot 0, so two
+	//              models have nothing to serialize; a multi-GB save for model A no
+	//              longer blocks a request for model B (it used to — one global lock
+	//              covered both the maps and the HTTP calls).
+	//   diskMu   — the shared cache directory, for the scan-and-delete passes
+	//              (enforceCaps / prunePreambleFiles / dropStalePreambles). Those
+	//              read the whole dir and unlink across models, so they must not run
+	//              concurrently even though their callers hold different slotMus.
+	//
+	// Lock order when more than one is needed: slotMu -> stateMu, slotMu -> diskMu.
+	// Nothing takes stateMu and diskMu together, and none of them nest into
+	// statsMu's users (record() takes only statsMu, so it stays callable anywhere).
+	stateMu  sync.Mutex
 	occupant map[string]*occInfo // model id -> who currently holds its slot
 	// pending maps a model id -> conversation key to restore the next time that
 	// model reaches Ready. Set when a request arrives for a model that is NOT
@@ -92,9 +107,14 @@ type slotCache struct {
 	// request correlation only if labels (not totals) start mattering.
 	awaitConfirm map[string][]string
 
+	// slotMu holds one mutex per model id (see lockModel). Guarded by stateMu.
+	slotMu map[string]*sync.Mutex
+	// diskMu serializes the directory-wide prune passes.
+	diskMu sync.Mutex
+
 	// stats: counters + a bounded ring of recent events, surfaced at /api/kvcache
 	// for the Observe → KV Cache tab. Guarded by its own lock so record() can be
-	// called from inside sc.mu-held sections without reentrancy.
+	// called from inside any of the locks above without reentrancy.
 	statsMu  sync.Mutex
 	counters kvCounters
 	events   []kvEvent // newest last, capped at kvEventRing
@@ -173,6 +193,7 @@ func newSlotCache(cfg config.SlotCacheConfig, running func() map[string]string, 
 		pendingSeed:     map[string]bool{},
 		pendingPreamble: map[string]string{},
 		awaitConfirm:    map[string][]string{},
+		slotMu:          map[string]*sync.Mutex{},
 	}
 	if !sc.enabled {
 		return sc
@@ -256,19 +277,56 @@ func (sc *slotCache) recurrentSkip(model string) bool {
 	return sc.recurrent != nil && sc.recurrent(model)
 }
 
+// lockModel acquires the per-model slot lock and returns its unlocker. One
+// llama-server per model, one slot 0 per llama-server — so the only thing that
+// must be serialized is two operations on the SAME model. The map itself is
+// tiny (one entry per model ever seen) and never pruned.
+func (sc *slotCache) lockModel(model string) func() {
+	sc.stateMu.Lock()
+	if sc.slotMu == nil { // zero-value slotCache (tests build literals)
+		sc.slotMu = map[string]*sync.Mutex{}
+	}
+	mu := sc.slotMu[model]
+	if mu == nil {
+		mu = &sync.Mutex{}
+		sc.slotMu[model] = mu
+	}
+	sc.stateMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
+}
+
+// occupantOf returns the model's current occupant plus a snapshot of its fields,
+// so the caller can read them without holding stateMu across I/O.
+func (sc *slotCache) occupantOf(model string) (occ *occInfo, key, preamble string, dirty bool) {
+	sc.stateMu.Lock()
+	defer sc.stateMu.Unlock()
+	if occ = sc.occupant[model]; occ == nil {
+		return nil, "", "", false
+	}
+	return occ, occ.key, occ.preamble, occ.dirty
+}
+
+func (sc *slotCache) setOccupant(model string, occ *occInfo) {
+	sc.stateMu.Lock()
+	defer sc.stateMu.Unlock()
+	sc.occupant[model] = occ
+}
+
 // onSwitch handles the moment a (possibly) different conversation arrives for a
 // warm model: save the outgoing one if worth it, restore the incoming one if we
 // have it on disk, then mark the incoming as resident.
 func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble string) {
-	sc.mu.Lock()
-	defer sc.mu.Unlock()
+	// Per-model, not global: the save/restore below can take seconds on a
+	// multi-GB slot, and only requests for THIS model must wait behind it.
+	defer sc.lockModel(model)()
 
-	occ := sc.occupant[model]
-	if occ != nil && occ.key == key {
+	occ, occKey, occPreamble, occDirty := sc.occupantOf(model)
+	if occ != nil && occKey == key {
 		return // same conversation continuing — nothing to swap
 	}
 
-	if occ != nil && occ.dirty {
+	if occ != nil && occDirty {
 		// Read the live slot occupancy; only persist a conversation big enough to
 		// be expensive to reprefill. No turn-count gate: a single-turn chat with a
 		// long answer (or big context) is still expensive — and if we skip it here,
@@ -276,13 +334,15 @@ func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble st
 		// later unload's saveOnEvict can't recover it either (it only sees whatever
 		// anchor took the slot next). The toks>=minTokens check is the worth-it gate.
 		if toks := sc.slotTokens(ctx, base); toks >= sc.minTokens {
-			if err := sc.save(ctx, base, model, occ.key, occ.preamble); err != nil {
-				sc.log.Warnf("slotcache: save %s/%s: %v", model, occ.key, err)
-				sc.record(kvEvent{Model: model, Op: "error", Key: short(occ.key), Detail: "save"})
+			if err := sc.save(ctx, base, model, occKey, occPreamble); err != nil {
+				sc.log.Warnf("slotcache: save %s/%s: %v", model, occKey, err)
+				sc.record(kvEvent{Model: model, Op: "error", Key: short(occKey), Detail: "save"})
 			} else {
+				sc.stateMu.Lock()
 				occ.dirty = false
-				sc.enforceCaps(model, occ.key)
-				sc.record(kvEvent{Model: model, Op: "save", Key: short(occ.key), Tokens: toks})
+				sc.stateMu.Unlock()
+				sc.enforceCaps(model, occKey)
+				sc.record(kvEvent{Model: model, Op: "save", Key: short(occKey), Tokens: toks})
 			}
 		}
 	}
@@ -300,7 +360,7 @@ func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble st
 			sc.record(kvEvent{Model: model, Op: "restore-hit", Key: short(key)})
 			sc.pushAwait(model, "restore-hit") // expect a forwarded request to confirm reuse
 		}
-	} else if occ != nil && occ.preamble == preamble && preamble != "" {
+	} else if occ != nil && occPreamble == preamble && preamble != "" {
 		// Slot already holds this exact preamble live (a different conversation from
 		// the same agent). Restoring the disk copy would clobber valid live state with
 		// a worse one — and on hybrid/linear-attn models (Qwen3.6) a disk-restored
@@ -310,7 +370,7 @@ func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble st
 	} else if sc.ensurePreambleSeed(ctx, base, model, preamble) {
 		sc.pushAwait(model, "preamble")
 	}
-	sc.occupant[model] = &occInfo{key: key, preamble: preamble}
+	sc.setOccupant(model, &occInfo{key: key, preamble: preamble})
 }
 
 // markPendingRestore records that, when `model` next reaches Ready, its slot
@@ -320,8 +380,8 @@ func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble st
 // fresh agent run still reuses the shared static preamble instead of cold
 // reprefilling it. Called from the middleware when a request hits a cold model.
 func (sc *slotCache) markPendingRestore(model, key, preamble string) {
-	sc.mu.Lock()
-	defer sc.mu.Unlock()
+	sc.stateMu.Lock()
+	defer sc.stateMu.Unlock()
 	if sc.fileExists(model, key) {
 		sc.pending[model] = key
 		sc.pendingSeed[model] = false
@@ -344,13 +404,15 @@ func (sc *slotCache) restoreOnLoad(model string) {
 	if sc == nil || !sc.enabled || model == "" {
 		return
 	}
-	sc.mu.Lock()
+	defer sc.lockModel(model)()
+
+	sc.stateMu.Lock()
 	key := sc.pending[model]
 	preamble := sc.pendingPreamble[model]
 	delete(sc.pending, model)
 	delete(sc.pendingSeed, model)
 	delete(sc.pendingPreamble, model)
-	sc.mu.Unlock()
+	sc.stateMu.Unlock()
 	if key == "" && preamble == "" {
 		return
 	}
@@ -375,10 +437,8 @@ func (sc *slotCache) restoreOnLoad(model string) {
 			return
 		}
 		sc.record(kvEvent{Model: model, Op: "restore-hit", Key: short(key)})
-		sc.mu.Lock()
-		sc.occupant[model] = &occInfo{key: key} // resident, not yet dirty (nothing ran)
+		sc.setOccupant(model, &occInfo{key: key}) // resident, not yet dirty (nothing ran)
 		sc.pushAwait(model, "restore-hit")
-		sc.mu.Unlock()
 		return
 	}
 
@@ -386,9 +446,7 @@ func (sc *slotCache) restoreOnLoad(model string) {
 	// preamble cache on first sight. The real conversation's key is set by
 	// markResident once the triggering request runs, so don't claim occupancy here.
 	if sc.ensurePreambleSeed(ctx, base, model, preamble) {
-		sc.mu.Lock()
 		sc.pushAwait(model, "preamble")
-		sc.mu.Unlock()
 		return
 	}
 	// Fallback: a similar prior session's prefix (handles preambles too short or
@@ -400,9 +458,7 @@ func (sc *slotCache) restoreOnLoad(model string) {
 			return
 		}
 		sc.record(kvEvent{Model: model, Op: "restore-seed", Key: short(seedKey)})
-		sc.mu.Lock()
 		sc.pushAwait(model, "restore-seed")
-		sc.mu.Unlock()
 		return
 	}
 	sc.record(kvEvent{Model: model, Op: "miss"})
@@ -543,6 +599,8 @@ func isPreambleKey(key string) bool { return strings.HasPrefix(key, preambleKeyP
 // which preamble-hit touches — so this is LRU by access, not by mint time, and a
 // hot but old preamble (pi's stable prompt) survives while a stale one is evicted.
 func (sc *slotCache) prunePreambleFiles(model string) {
+	sc.diskMu.Lock() // see enforceCaps
+	defer sc.diskMu.Unlock()
 	entries, err := os.ReadDir(sc.dir)
 	if err != nil {
 		return
@@ -591,11 +649,10 @@ func (sc *slotCache) saveOnEvict(model string) {
 	if sc.recurrentSkip(model) {
 		return // hybrid: restore yields 0 reuse, so saving is pure overhead (see recurrentSkip)
 	}
-	sc.mu.Lock()
-	defer sc.mu.Unlock()
+	defer sc.lockModel(model)()
 
-	occ := sc.occupant[model]
-	if occ == nil || !occ.dirty {
+	occ, occKey, occPreamble, occDirty := sc.occupantOf(model)
+	if occ == nil || !occDirty {
 		return // nothing ran since the last save (or nothing resident)
 	}
 	base, running := sc.running()[model]
@@ -605,17 +662,19 @@ func (sc *slotCache) saveOnEvict(model string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	if toks := sc.slotTokens(ctx, base); toks >= sc.minTokens {
-		if err := sc.save(ctx, base, model, occ.key, occ.preamble); err != nil {
-			sc.log.Warnf("slotcache: evict-save %s/%s: %v", model, occ.key, err)
-			sc.record(kvEvent{Model: model, Op: "error", Key: short(occ.key), Detail: "evict-save"})
+		if err := sc.save(ctx, base, model, occKey, occPreamble); err != nil {
+			sc.log.Warnf("slotcache: evict-save %s/%s: %v", model, occKey, err)
+			sc.record(kvEvent{Model: model, Op: "error", Key: short(occKey), Detail: "evict-save"})
 		} else {
-			sc.enforceCaps(model, occ.key)
-			sc.record(kvEvent{Model: model, Op: "save", Key: short(occ.key), Detail: "evict", Tokens: toks})
+			sc.enforceCaps(model, occKey)
+			sc.record(kvEvent{Model: model, Op: "save", Key: short(occKey), Detail: "evict", Tokens: toks})
 		}
 	}
 	// The process is about to die; its slot will be gone. Drop the occupant so a
 	// later load + request restores from disk rather than treating it as resident.
+	sc.stateMu.Lock()
 	delete(sc.occupant, model)
+	sc.stateMu.Unlock()
 }
 
 // markResident records that `key` now holds the model's slot and has run.
@@ -623,8 +682,8 @@ func (sc *slotCache) markResident(model, key, preamble string) {
 	if model == "" {
 		return
 	}
-	sc.mu.Lock()
-	defer sc.mu.Unlock()
+	sc.stateMu.Lock()
+	defer sc.stateMu.Unlock()
 	occ := sc.occupant[model]
 	if occ == nil || occ.key != key {
 		occ = &occInfo{key: key}
@@ -713,6 +772,10 @@ func (sc *slotCache) fileExists(model, key string) bool {
 // the byte budget and the file-count cap. The just-saved file (newest) is never
 // the eviction target. keepKey/keepModel name it so it is also skipped explicitly.
 func (sc *slotCache) enforceCaps(keepModel, keepKey string) {
+	// Directory-wide scan-and-delete: callers hold different per-model locks, so
+	// this needs its own to keep two models from racing over the same files.
+	sc.diskMu.Lock()
+	defer sc.diskMu.Unlock()
 	entries, err := os.ReadDir(sc.dir)
 	if err != nil {
 		return
@@ -828,6 +891,8 @@ func supersedesPreamble(new, old string) bool {
 // — e.g. yesterday's date-stamped generation once today's is minted. keepKey is the
 // just-minted file, never a target. Backstop: prunePreambleFiles still caps the rest.
 func (sc *slotCache) dropStalePreambles(model, keepKey, preamble string) {
+	sc.diskMu.Lock() // see enforceCaps
+	defer sc.diskMu.Unlock()
 	entries, err := os.ReadDir(sc.dir)
 	if err != nil {
 		return
@@ -922,7 +987,7 @@ func (sc *slotCache) bestSeed(model, preamble string) (key string, bytes int64, 
 }
 
 // record appends an event to the bounded ring and bumps the matching counter.
-// Safe to call from inside sc.mu-held sections (uses a separate lock).
+// Safe to call while holding any other slotCache lock (uses a separate one).
 func (sc *slotCache) record(ev kvEvent) {
 	if ev.Time.IsZero() {
 		ev.Time = time.Now()
@@ -962,8 +1027,10 @@ func (sc *slotCache) record(ev kvEvent) {
 // restores but never receives a confirming request can't grow unbounded.
 const awaitConfirmMax = 16
 
-// pushAwait queues an op for the next request on model to confirm. Caller holds sc.mu.
+// pushAwait queues an op for the next request on model to confirm.
 func (sc *slotCache) pushAwait(model, op string) {
+	sc.stateMu.Lock()
+	defer sc.stateMu.Unlock()
 	q := append(sc.awaitConfirm[model], op)
 	if len(q) > awaitConfirmMax {
 		q = q[len(q)-awaitConfirmMax:]
@@ -980,10 +1047,10 @@ func (sc *slotCache) confirmReuse(model string, prompt, cached int) {
 	if sc == nil || !sc.enabled || model == "" {
 		return
 	}
-	sc.mu.Lock()
+	sc.stateMu.Lock()
 	q := sc.awaitConfirm[model]
 	if len(q) == 0 {
-		sc.mu.Unlock()
+		sc.stateMu.Unlock()
 		return // not a post-restore request; warm-slot reuse isn't ours to claim
 	}
 	op := q[0] // FIFO: oldest pending op confirmed first
@@ -992,7 +1059,7 @@ func (sc *slotCache) confirmReuse(model string, prompt, cached int) {
 	} else {
 		sc.awaitConfirm[model] = q[1:]
 	}
-	sc.mu.Unlock()
+	sc.stateMu.Unlock()
 	if cached > 0 {
 		sc.record(kvEvent{
 			Model:  model,

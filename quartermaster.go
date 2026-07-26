@@ -304,6 +304,16 @@ func main() {
 				activeMu.RUnlock()
 				srv.ServeListener(addr, w, r)
 			}),
+			// ReadHeaderTimeout bounds how long a connection may dribble out its
+			// request headers (Slowloris); IdleTimeout reaps parked keep-alives.
+			// Deliberately NOT set: ReadTimeout (a large multipart upload — image
+			// edits, audio transcription — is a legitimately slow body) and
+			// WriteTimeout (streaming completions and SSE run for minutes, and
+			// WriteTimeout is an absolute deadline from the start of the request,
+			// so any non-zero value would sever long generations).
+			ReadHeaderTimeout: 20 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			MaxHeaderBytes:    1 << 20,
 		})
 	}
 

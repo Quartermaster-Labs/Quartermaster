@@ -78,6 +78,13 @@ type Server struct {
 	// with -generate. See configapi.go.
 	autogen *AutogenAdmin
 
+	// variantMu serializes minting of synthetic per-request model variants
+	// (X-QM-Backend, ?ctx=N). Each mint is a read-modify-ApplyConfig cycle over
+	// the whole config, so without it two concurrent first-requests would each
+	// start from a stale snapshot and the later write would drop the earlier
+	// variant. See variant.go.
+	variantMu sync.Mutex
+
 	// updater polls GitHub releases for a newer build (Windows release builds
 	// only). shutdownHook, when set, triggers a graceful process shutdown so the
 	// downloaded installer can replace the running exe. See update.go.
@@ -203,7 +210,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	// the slotCache (which would drop its saved-KV state).
 	slotParticipates := func(id string) bool {
 		mc, ok := s.config().Models[id]
-		return ok && strings.Contains(mc.Cmd, "--slot-save-path")
+		return ok && config.ParseCmd(mc.Cmd).Has("--slot-save-path")
 	}
 	// slotRecurrent reports whether a model loads a hybrid/recurrent gguf
 	// (GatedDeltaNet/SSM, full_attention_interval>0). Memoized per gguf path —
@@ -482,6 +489,21 @@ func (s *Server) localPeerHandler(w http.ResponseWriter, r *http.Request) {
 		s.proxylog.Debugf("dispatch: model %q not permitted for this API key", data.ModelID)
 		shared.SendResponse(w, r, http.StatusForbidden, fmt.Sprintf("model %q is not available for this API key", data.Model))
 		return
+	}
+
+	// Optional per-request context size: "model?ctx=32768" (or X-QM-Ctx) serves
+	// this model from a synthetic sibling launched with that -c, re-sized by the
+	// normal VRAM sizer. Deliberately AFTER the scope checks above, which ran
+	// against the real model id — appending a suffix must never widen what a
+	// listener or API key can reach.
+	if ctx, ok := requestedCtx(r, data.Model); ok && s.local.Handles(data.ModelID) {
+		syntheticID, err := s.ensureCtxVariant(data.ModelID, ctx)
+		if err != nil {
+			shared.SendResponse(w, r, http.StatusBadRequest, "context override failed: "+err.Error())
+			return
+		}
+		data.ModelID = syntheticID
+		*r = *r.WithContext(shared.SetContext(r.Context(), data))
 	}
 
 	// Optional per-request backend override: X-QM-Backend names a backend

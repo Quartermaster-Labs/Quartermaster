@@ -25,12 +25,14 @@ Parses, validates, and normalizes the quartermaster YAML config into the in-memo
 - `${env.VAR}` substitution — `substituteEnvMacros` `config.go:868` (strips YAML comments before scanning so macros in comments are ignored).
 - `${PORT}` allocation — `config.go:398-424`. Only allocated when `cmd` uses `${PORT}`; ports assigned sequentially from `StartPort` over sorted model IDs. `proxy` may use `${PORT}` only if `cmd` does.
 - `SanitizeCommand(cmdStr)` — `config.go:698`. Strips `#` comment lines, joins `\`-continued lines, then shlex-splits into argv (Windows vs POSIX rules by `runtime.GOOS`). `ModelConfig.SanitizedCommand` (`model_config.go:147`) wraps it for `cmd`.
+- `ParseCmd(cmd)` / `CmdInfo` — `cmdinfo.go`. Memoized, read-only parse of a rendered launch command: `Argv`, `ModelPath` (`-m`/`--model`/`--diffusion-model`, slash-normalized — the fork's model "family" key), plus token-exact accessors `Has`/`Value`/`Values`/`Int`/`HasValue` (all handle `--flag=value`). Use this instead of re-splitting or substring-sniffing a command.
 - `ModelConfig` — `model_config.go:65`; defaults (incl. `proxy: http://localhost:${PORT}`, platform-specific `cmdStop`) in its `UnmarshalYAML` `model_config.go:107`.
 - `Filters` — `filters.go:15`; `SanitizedStripParams`, `SanitizedSetParams`, `SanitizedSetParamsByID` all drop `ProtectedParams` (`model`).
 - `ListenerConfig` / `ListenerModelSets` — `listeners.go:12` / `listeners.go:55`. Per-address reachable model set = union of its groups' members.
 - `MatrixConfig` / `ValidateMatrix` — `matrix.go:14` / `matrix.go:67`. `ExpandedSet` (`matrix.go:60`) is one valid concurrent-model combination.
 - `ParseAndExpandDSL` — `matrix_dsl.go:316`. `&` (cartesian product) binds tighter than `|` (union); capped at `maxDSLExpansions` (1000).
-- `RealModelName` / `FindConfig` — `config.go:204` / `config.go:214`. Resolve a requested name (model ID or alias) to a real model.
+- `RealModelName` / `FindConfig` — `config.go:204` / `config.go:214`. Resolve a requested name (model ID or alias) to a real model. `RealModelName` also strips the fork's per-request context suffix, so `"qwen?ctx=32768"` resolves to `qwen`.
+- `SplitCtxRequest(name)` / `CtxSuffix` / `MinRequestCtx` / `MaxRequestCtx` — `config.go`. Split `"model?ctx=N"` into base + N. `ok=false` for no suffix, a non-numeric N, or an N outside the bounds — callers then treat the string as an ordinary (unresolvable) model name rather than clamping. Acted on only by `internal/server`'s dispatcher.
 
 ## Config structure
 
@@ -46,13 +48,15 @@ Each `models:` entry (`ModelConfig`) carries `cmd`, `cmdStop`, `proxy`, `aliases
 
 ## Gotchas / conventions
 
-- **Macros expand at config-load time, not spawn time.** This is the key constraint for the fork's dynamic-ctx goal: `${CTX}/${NGL}/${NCPUMOE}/${CTK}/${CTV}` injection must happen at spawn (keyed by `(modelID, ctx)`), so it cannot reuse the load-time substitution loop here — it needs a separate spawn-time pass.
+- **Macros expand at config-load time, not spawn time.** Anything that must vary per launch cannot use this substitution loop. The fork's two cases both went elsewhere: per-request ctx mints a synthetic model whose cmd is re-rendered by the autogen sizer (`internal/server/variant.go`), and live-VRAM offload rewrites argv at spawn (`Server.WireDynamicOffload`).
 - `${PORT}` and `${MODEL_ID}` are reserved macro names; user macros matching them are rejected. `${PID}` in `cmdStop` is left unsubstituted (replaced at runtime by the process layer).
 - After substitution the loader hard-fails on any remaining `${...}` macro (`config.go:426-449`), so unknown macros are a load error, not a silent passthrough.
 - `setParamsByID` keys auto-register as aliases for the model (`config.go:471-487`); conflicts with real model IDs or other aliases are errors.
 - `ProtectedParams` (currently just `model`) can never be stripped or set via filters.
 - Listeners require the **group** router (not matrix) and reference existing groups; an address absent from `ListenerModelSets` is unrestricted by convention. See the fork goal of multi-listener with separate catalogs.
 - Platform-specific behavior: `SanitizeCommand` uses Windows vs POSIX shlex, and the default `cmdStop` is `taskkill ...` on Windows. Expect platform-tagged differences in tests.
+- **Never substring-sniff a command** (`strings.Contains(cmd, "--spec-type draft-mtp")`). The emitter renders one flag per line, so flag and value are routinely separated by a newline and a contiguous-substring test silently goes blind; a longer flag (`--model-draft`) also matches a shorter one's prefix. `ParseCmd(cmd).Has/Value/HasValue` is token-exact and answers both correctly. It is also the only cheap option on the request hot path — `modelFamily` and the slot-cache gates run per request, and re-shlexing there was measurable churn.
+- **`CmdInfo` is shared and must not be mutated.** `ParseCmd` hands every caller the same cached value, `Argv` included. Anything that REWRITES argv (the spawn path: `SanitizedCommand`, `autogen.LiveOffloadArgs`) must keep calling `SanitizeCommand` for its own private copy.
 - `*_test.go` files in this package (`*_test.go`) cover load/macro/matrix/listener behavior and should be run with `go test ./internal/config/...`.
 
 ## Connections

@@ -134,8 +134,10 @@ func TestServer_ApplyConfig(t *testing.T) {
 		t.Fatalf("initial models=%d want 0", got)
 	}
 
+	// Name left unset: it is advertised AS the id, which would obscure what this
+	// test asserts (that the catalog picked up the new config key).
 	newCfg := config.Config{Models: map[string]config.ModelConfig{
-		"added": {Name: "Added"},
+		"added": {},
 	}}
 	if err := s.ApplyConfig(newCfg); err != nil {
 		t.Fatalf("ApplyConfig: %v", err)

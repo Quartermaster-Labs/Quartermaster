@@ -304,7 +304,9 @@ func (s *Server) handleTurnStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var start turnStart
-	if err := json.NewDecoder(r.Body).Decode(&start); err != nil || start.ChatID == "" || start.Model == "" {
+	// Same cap as a chats PUT: the payload carries the message history, inline
+	// attachments included, and is decoded whole into memory.
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBlobBytes)).Decode(&start); err != nil || start.ChatID == "" || start.Model == "" {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -454,7 +456,7 @@ func (s *Server) turnAuth(w http.ResponseWriter, r *http.Request) (*turnManager,
 		http.Error(w, "playground not enabled", http.StatusNotImplemented)
 		return nil, ""
 	}
-	user := playgroundUser(r)
+	user := p.userFromRequest(r)
 	if user == "" {
 		http.Error(w, "not logged in", http.StatusUnauthorized)
 		return nil, ""

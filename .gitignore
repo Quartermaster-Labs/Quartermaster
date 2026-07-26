@@ -12,3 +12,12 @@ quartermaster-generate.yaml
 
 # UI build output; placeholder.txt is kept so the go:embed succeeds.
 internal/server/ui_dist/*
+
+# Release build output. packaging/windows/build-release.ps1 wipes and regenerates
+# staging/ on every run, and iscc writes the installer into Output/ — both are
+# pure build products (they were tracked by accident and cost ~52MB of history).
+staging/
+Output/
+
+# JS deps + tool caches.
+node_modules/
