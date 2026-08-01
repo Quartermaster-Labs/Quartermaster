@@ -17,6 +17,7 @@
     DEFAULT_BUILTIN_PROMPT,
     DEFAULT_SEARCH_PROMPT,
     DEFAULT_WIKI_PROMPT,
+    DEFAULT_YOUTUBE_PROMPT,
     DEFAULT_CITE_PROMPT,
     PROMPT_VARS,
     type SystemPreset,
@@ -147,16 +148,17 @@
     { id: "search", label: "Web Search", icon: Search },
     { id: "prompt", label: "System Prompt", icon: FileText },
   ];
-  // Preset editor. A preset bundles the persona (content) AND its three tool
-  // sub-prompts (search/wiki/cite). The editor lists the four sections; clicking
-  // one opens a big single-section editor (openSection) with revert + save.
-  // content: blank = no system prompt. tool fields: blank = shipped default.
-  type SectionKey = "content" | "search" | "wiki" | "cite";
+  // Preset editor. A preset bundles the persona (content) AND its tool
+  // sub-prompts (search/wiki/youtube/cite). The editor lists the sections;
+  // clicking one opens a big single-section editor (openSection) with revert +
+  // save. content: blank = no system prompt. tool fields: blank = shipped default.
+  type SectionKey = "content" | "search" | "wiki" | "youtube" | "cite";
   const PRESET_SECTIONS = [
     { key: "content", label: "System Prompt", def: DEFAULT_BUILTIN_PROMPT, blank: "No system prompt", note: "The persona and instructions. Blank means no system prompt.", vars: true },
     { key: "search", label: "Web Search", def: DEFAULT_SEARCH_PROMPT, blank: "Shipped default", note: "Appended when Web Search is on. Blank uses the shipped default.", vars: false },
     { key: "wiki", label: "Wiki", def: DEFAULT_WIKI_PROMPT, blank: "Shipped default", note: "Appended when the help wiki tool is active (always on in chat). Blank uses the shipped default.", vars: false },
-    { key: "cite", label: "Citations", def: DEFAULT_CITE_PROMPT, blank: "Shipped default", note: "Appended when either tool is on — how to cite [n]. Blank uses the shipped default.", vars: false },
+    { key: "youtube", label: "YouTube", def: DEFAULT_YOUTUBE_PROMPT, blank: "Shipped default", note: "Appended when the youtube_transcript tool is active (always on in chat). Blank uses the shipped default.", vars: false },
+    { key: "cite", label: "Citations", def: DEFAULT_CITE_PROMPT, blank: "Shipped default", note: "Appended when a citing tool is on — how to cite [n]. Blank uses the shipped default.", vars: false },
   ] as const;
   let presetEditor = $state<null | {
     presetId: string | null; // null = new preset
@@ -164,6 +166,7 @@
     content: string;
     search: string; // "" = use default
     wiki: string;
+    youtube: string;
     cite: string;
   }>(null);
   // Single-section editor, layered above the preset editor.
@@ -185,16 +188,16 @@
   }
   function newPreset() {
     // Seed from the built-in default so users edit rather than start blank.
-    presetEditor = { presetId: null, name: "", content: DEFAULT_BUILTIN_PROMPT, search: "", wiki: "", cite: "" };
+    presetEditor = { presetId: null, name: "", content: DEFAULT_BUILTIN_PROMPT, search: "", wiki: "", youtube: "", cite: "" };
   }
   function editPreset(p: SystemPreset) {
-    presetEditor = { presetId: p.id, name: p.name, content: p.content, search: p.search ?? "", wiki: p.wiki ?? "", cite: p.cite ?? "" };
+    presetEditor = { presetId: p.id, name: p.name, content: p.content, search: p.search ?? "", wiki: p.wiki ?? "", youtube: p.youtube ?? "", cite: p.cite ?? "" };
   }
   function savePreset() {
     if (!presetEditor) return;
     const e = presetEditor;
     const nn = (s: string) => (s.trim() === "" ? null : s); // blank tool field → default
-    const fields = { name: e.name.trim() || "Untitled", content: e.content, search: nn(e.search), wiki: nn(e.wiki), cite: nn(e.cite) };
+    const fields = { name: e.name.trim() || "Untitled", content: e.content, search: nn(e.search), wiki: nn(e.wiki), youtube: nn(e.youtube), cite: nn(e.cite) };
     if (e.presetId === null) {
       const id = newChatId();
       systemPresetsStore.update((ps) => [...ps, { id, ...fields }]);

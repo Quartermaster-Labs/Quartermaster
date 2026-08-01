@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
@@ -232,14 +233,23 @@ func (m *backendMetricsMonitor) scrapeOne(ctx context.Context, model, base strin
 	// get_metrics/get_slots), but re-fetching it every 2s forever was pointless.
 	// Fetch once per (model, base) and cache; a base-URL change means a new
 	// process (restart/reload), so that invalidates the cache naturally.
+	// Only a snapshot with a real n_ctx is worth caching (and worth clobbering the
+	// /slots-derived value with): a poll that lands while the process is still
+	// loading answers 503 with an error body, which parses to n_ctx 0. Caching that
+	// zero pinned the context maximum at 0 for the whole process lifetime, so the
+	// UI bar rendered "5k/0 tok".
 	if ps, ok := m.cachedProps(model, base); ok {
 		bm.NCtx, bm.TotalSlots = ps.nCtx, ps.totalSlots
 	} else if body, err := m.get(ctx, base+"/props"); err == nil {
 		j := gjson.ParseBytes(body)
 		ps := propsSnapshot{base: base, nCtx: j.Get("default_generation_settings.n_ctx").Int(), totalSlots: j.Get("total_slots").Int()}
-		m.storeProps(model, ps)
-		bm.NCtx, bm.TotalSlots = ps.nCtx, ps.totalSlots
-	} else if hadPrev {
+		if ps.nCtx > 0 {
+			m.storeProps(model, ps)
+			bm.NCtx, bm.TotalSlots = ps.nCtx, ps.totalSlots
+		} else if bm.NCtx == 0 && hadPrev {
+			bm.NCtx, bm.TotalSlots = prev.NCtx, prev.TotalSlots
+		}
+	} else if bm.NCtx == 0 && hadPrev {
 		bm.NCtx, bm.TotalSlots = prev.NCtx, prev.TotalSlots
 	}
 	return bm
@@ -308,6 +318,12 @@ func (m *backendMetricsMonitor) get(ctx context.Context, url string) ([]byte, er
 		return nil, err
 	}
 	defer resp.Body.Close()
+	// A still-loading llama-server answers 503 with a JSON error body; parsing it
+	// yields zeroed gauges that look real. Treat any non-2xx as a failed scrape.
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+		return nil, fmt.Errorf("%s: %s", url, resp.Status)
+	}
 	return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 }
 

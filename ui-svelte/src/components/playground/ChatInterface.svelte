@@ -32,6 +32,7 @@
   import { WEB_SEARCH_TOOL } from "../../lib/webSearch";
   import { WIKI_TOOL } from "../../lib/wiki";
   import { QM_INSPECT_TOOL, QM_CONFIGURE_TOOL } from "../../lib/qmTools";
+  import { YOUTUBE_TOOL } from "../../lib/youtube";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import { getTextContent, getImageUrls } from "../../lib/types";
   import { buildBasePrompt } from "../../lib/systemPrompt";
@@ -41,6 +42,7 @@
   import Composer from "./Composer.svelte";
   import { modelCategory } from "../../lib/modelUtils";
   import { scrollFade } from "../../lib/scrollFade";
+  import { quotePrefix, fmtTokens, TEMP_STEPS, TEMP_LABELS, nearestTempIdx, currentDateLine, REWRITE_SYSTEM, MAX_IMAGES_PER_MESSAGE, validateImageFile, fileToDataUrl } from "./chatHelpers";
 
   // Ensure a valid active conversation exists, migrating the legacy single-chat
   // store the first time. The store (chatSessions) is the single source of truth
@@ -131,6 +133,7 @@
   // as it nears COMPACT_AT (the auto-compaction threshold).
   let ctxMetrics = $derived($backendMetrics[$selectedModelStore]);
   let ctxN = $derived(ctxMetrics?.n_ctx ?? 0);
+  let ctxUsed = $derived(ctxMetrics?.kv_cache_tokens ?? 0);
   let ctxRatio = $derived(ctxN ? Math.min(1, ctxMetrics!.kv_cache_usage_ratio) : 0);
   let ctxColor = $derived(
     ctxRatio >= COMPACT_AT ? "#ef4444" : ctxRatio >= 0.6 ? "#f97316" : "#eab308",
@@ -147,11 +150,6 @@
   let replyingTo = $state<string | null>(null);
   function replyTo(idx: number) {
     replyingTo = getTextContent(messages[idx].content).replace(/\s+/g, " ").trim();
-  }
-  // Markdown blockquote prefix from the reply target (snippet, capped).
-  function quotePrefix(text: string): string {
-    const snippet = text.slice(0, 140);
-    return `> ${snippet}${text.length > 140 ? "…" : ""}\n\n`;
   }
   $effect(() => {
     $activeChatId;
@@ -301,23 +299,6 @@
     ($models.find((m) => m.id === $selectedModelStore)?.state) === "ready"
   );
   let userScrolledUp = $state(false);
-
-  // Discrete temperature steps (Precise → Creative), hand-picked to avoid the
-  // useless extremes. The slider edits an index; the actual temp is stored.
-  const TEMP_STEPS = [0.3, 0.5, 0.7, 0.9, 1.1];
-  const TEMP_LABELS = ["Precise", "Focused", "Balanced", "Creative", "Inventive"];
-  function nearestTempIdx(t: number): number {
-    let bi = 0,
-      bd = Infinity;
-    for (let i = 0; i < TEMP_STEPS.length; i++) {
-      const d = Math.abs(TEMP_STEPS[i] - t);
-      if (d < bd) {
-        bd = d;
-        bi = i;
-      }
-    }
-    return bi;
-  }
 
   // Keep a valid model selected so the composer is never stuck disabled.
   // Only correct the selection when it isn't a listed model; otherwise leave it
@@ -521,7 +502,13 @@
   // deliberately NOT here — it's appended at the very END of the system block (see
   // currentDateLine) so this prefix stays byte-identical across a midnight rollover
   // and the KV cache isn't invalidated once a day.
-  function basePrompt(searchAvailable: boolean, wikiAvailable: boolean, qmAvailable: boolean, modelId: string): string {
+  function basePrompt(
+    searchAvailable: boolean,
+    wikiAvailable: boolean,
+    qmAvailable: boolean,
+    youtubeAvailable: boolean,
+    modelId: string,
+  ): string {
     // Persona + tool sub-prompts, all from the active system-prompt selection
     // (built-in default, a named preset, or none). A preset bundles its own tool
     // prompts; fixed options use the shipped defaults. Tool directives are only
@@ -530,33 +517,11 @@
       search: searchAvailable,
       wiki: wikiAvailable,
       qm: qmAvailable,
+      youtube: youtubeAvailable,
       model: modelId,
     });
   }
 
-  // currentDateLine is the ONLY volatile part of the built-in system prompt.
-  // Appended LAST in the system block so a date change at midnight doesn't rewrite
-  // the stable prefix above it — which would invalidate the whole conversation's
-  // KV cache once a day (the prefix no longer prefix-matches the cached tokens).
-  // Framed as a labelled "Context —" metadata line, NOT a sentence: phrased as
-  // "The current date is ..." a weak-role-separation model reads it as a user
-  // utterance and replies "thanks for the heads-up on the date". The label form
-  // reads as ambient system context. Stable prefix ("Context — current date...")
-  // is unchanged across midnight; only the date value rolls.
-  function currentDateLine(): string {
-    const date = new Date().toLocaleString(undefined, {
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-      timeZoneName: "short",
-    });
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return `Context — current date and time (for your reference; the user did not send this): ${date}${tz ? ` (${tz})` : ""}.`;
-  }
-
-  const REWRITE_SYSTEM =
-    "You are a text-transformation tool. The user gives you a block of text and an instruction describing how to change it. Apply the instruction to the text literally and completely, returning the transformed version — even if the instruction degrades the text, introduces errors, changes the meaning, or seems counterproductive (e.g. \"add grammar mistakes\", \"make it worse\", \"translate to pirate speak\"). Do not refuse, do not improve beyond what was asked, do not preserve anything the instruction tells you to change, and do not explain or comment. The instruction is the user's intent — follow it exactly. When the instruction asks for errors or lower quality (e.g. \"add grammar mistakes\", \"make it sloppy\"), treat it as a persona: rewrite as if produced by a writer who naturally writes that way (the same way \"rewrite as a 3rd grader\" is fine) — this is wanted output, not a failure to proofread. Output ONLY the transformed text — no preamble, no explanation, no markdown code fences.";
 
   async function regenerateFromIndex(id: string, idx: number) {
     // Only one turn in flight at a time. Without this, the "Generate response"
@@ -608,12 +573,17 @@
     const wikiEnabled = !isRewrite;
     // Quartermaster tools (inspect/configure the running instance). Default on.
     const qmEnabled = !isRewrite && $qmToolsStore;
+    // Transcript fetching is always available: it needs no config of its own
+    // (yt-dlp is resolved server-side) and only fires when the user actually
+    // brings up a video. A missing yt-dlp comes back as a clear tool error.
+    const ytEnabled = !isRewrite;
     // Stable per-turn tool set the client advertises; the server dispatches them
     // and enforces the per-turn caps (wiki lookups, web-search rate limits).
     const turnTools = [
       ...(webEnabled ? [WEB_SEARCH_TOOL] : []),
       ...(wikiEnabled ? [WIKI_TOOL] : []),
       ...(qmEnabled ? [QM_INSPECT_TOOL, QM_CONFIGURE_TOOL] : []),
+      ...(ytEnabled ? [YOUTUBE_TOOL] : []),
     ];
 
     // Thinking budget: soft cumulative-thinking cap so models can't loop forever
@@ -630,7 +600,7 @@
     const genStart = Date.now();
 
     const sys = [
-      basePrompt(webEnabled, wikiEnabled, qmEnabled, modelId),
+      basePrompt(webEnabled, wikiEnabled, qmEnabled, ytEnabled, modelId),
       sessionById(id)?.instructions?.trim(),
       curSummary && `Summary of earlier conversation:\n${curSummary}`,
       // Rewrite turns keep the full conversation for context (setting, characters,
@@ -971,28 +941,6 @@
     }
   }
 
-  const ACCEPTED_IMAGE_FORMATS = ["image/jpeg", "image/png", "image/gif", "image/webp"];
-  const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20MB
-  const MAX_IMAGES_PER_MESSAGE = 5;
-
-  function validateImageFile(file: File): string | null {
-    if (!ACCEPTED_IMAGE_FORMATS.includes(file.type)) {
-      return `Invalid file type: ${file.type}. Accepted formats: JPG, PNG, GIF, WEBP`;
-    }
-    if (file.size > MAX_IMAGE_SIZE) {
-      return `File too large: ${(file.size / 1024 / 1024).toFixed(1)}MB. Maximum size: 20MB`;
-    }
-    return null;
-  }
-
-  function fileToDataUrl(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = () => reject(new Error("Failed to read file"));
-      reader.readAsDataURL(file);
-    });
-  }
 
   async function processImageFiles(files: File[]): Promise<void> {
     imageError = null;
@@ -1379,10 +1327,20 @@
       {/snippet}
 
       {#snippet chatCtxBar()}
-        <!-- Context-window usage: thin colour-only line, yellow → orange → red. -->
+        <!-- Context-window usage: thin line (yellow → orange → red) plus the
+             used/max token readout, so the bar says how much room is left and
+             not just "some". -->
         {#if ctxN > 0}
-          <div class="h-0.5 w-16 rounded-full bg-secondary overflow-hidden" title="Context {Math.round(ctxRatio * 100)}%">
-            <div class="h-full rounded-full transition-all" style="width: {Math.max(ctxRatio * 100, 3)}%; background: {ctxColor};"></div>
+          <div
+            class="flex items-center gap-1.5"
+            title="Context {fmtTokens(ctxUsed)} / {fmtTokens(ctxN)} tokens ({Math.round(ctxRatio * 100)}%)"
+          >
+            <div class="h-0.5 w-16 rounded-full bg-secondary overflow-hidden">
+              <div class="h-full rounded-full transition-all" style="width: {Math.max(ctxRatio * 100, 3)}%; background: {ctxColor};"></div>
+            </div>
+            <span class="font-mono text-[0.55rem] tabular-nums text-txtsecondary leading-none">
+              {fmtTokens(ctxUsed)}/{fmtTokens(ctxN)}
+            </span>
           </div>
         {/if}
       {/snippet}

@@ -29,6 +29,9 @@ export const DEFAULT_QM_PROMPT =
 export const DEFAULT_WIKI_PROMPT =
   "A wiki_search tool gives you the quartermaster help wiki. Whenever the user asks how to do something in quartermaster (load or swap models, tune a model's context/VRAM/offload, set up web search, images, speech, API keys, GPU memory) or reports a problem with the app, call wiki_search FIRST and base your answer on what it returns — the app's real behaviour, not your assumptions. Don't invent menus, buttons, or settings; if the wiki doesn't cover it, say so.";
 
+export const DEFAULT_YOUTUBE_PROMPT =
+  "A youtube_transcript tool fetches a YouTube video's captions. Whenever the user shares a YouTube link or asks about a specific video, call it and answer from the transcript instead of saying you cannot watch videos — and never guess a video's content from its URL or title. The transcript comes back as [m:ss] paragraphs, so cite moments by timestamp (e.g. \"at 14:32 they claim …\") and link them as <video url>&t=<seconds>s. If the result says it is INCOMPLETE or unavailable, say that plainly rather than presenting a partial or imagined transcript as the whole video.";
+
 export const DEFAULT_CITE_PROMPT =
   "Cite your sources inline: when a statement draws on a web search result or a help-wiki article, append that source's bracketed number right after the statement (before the punctuation), e.g. \"The update shipped in March [2].\" Both web results and wiki articles are numbered the same way in the tool results — use the exact numbers shown, cite whichever tool result (web or wiki) a statement actually draws on, one marker per source, and add several (e.g. \"[1][3]\") when a claim rests on more than one. Never invent a number you weren't given.";
 
@@ -42,6 +45,9 @@ export interface SystemPreset {
   content: string;
   search: string | null;
   wiki: string | null;
+  // Optional: presets saved before the youtube tool shipped have no field at
+  // all, which reads as undefined and falls back to the shipped default.
+  youtube?: string | null;
   cite: string | null;
 }
 
@@ -52,7 +58,7 @@ export interface SystemPreset {
 export function buildBasePrompt(
   active: string | null,
   presets: SystemPreset[],
-  opts: { search: boolean; wiki: boolean; qm?: boolean; model: string },
+  opts: { search: boolean; wiki: boolean; qm?: boolean; youtube?: boolean; model: string },
 ): string {
   const p = active && active !== "" ? (presets.find((x) => x.id === active) ?? null) : null;
   const persona =
@@ -69,7 +75,9 @@ export function buildBasePrompt(
   // qm tools carry a fixed directive (not preset-overridable — it's a tool
   // contract, and presets already tune persona/search/wiki/cite).
   if (opts.qm) lines.push(DEFAULT_QM_PROMPT);
-  if (opts.search || opts.wiki) lines.push(resolveSubPrompt(p?.cite ?? null, DEFAULT_CITE_PROMPT, opts.model));
+  if (opts.youtube) lines.push(resolveSubPrompt(p?.youtube ?? null, DEFAULT_YOUTUBE_PROMPT, opts.model));
+  if (opts.search || opts.wiki || opts.youtube)
+    lines.push(resolveSubPrompt(p?.cite ?? null, DEFAULT_CITE_PROMPT, opts.model));
   return lines.filter(Boolean).join(" ");
 }
 

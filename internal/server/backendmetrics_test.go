@@ -67,6 +67,42 @@ func TestParseSlotsInto(t *testing.T) {
 
 // TestScrapeOne_SkipsQueuedEndpointsWhenBusy confirms /metrics and /slots
 // (both queue-contending, per server-context.cpp) are skipped while a request
+// A /props poll that lands while the model is still loading gets a 503 error
+// body (n_ctx 0). That zero must neither be cached nor clobber the n_ctx the
+// /slots scrape already derived -- otherwise the context bar reads "5k/0" for
+// the rest of the process's life.
+func TestScrapeOne_LoadingPropsDoesNotPinNCtxToZero(t *testing.T) {
+	var ready atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/metrics":
+			w.Write([]byte("llamacpp:requests_processing 0\n"))
+		case "/slots":
+			w.Write([]byte(`[{"n_ctx":32768,"n_prompt_tokens":5278,"is_processing":false}]`))
+		case "/props":
+			if !ready.Load() {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				w.Write([]byte(`{"error":{"code":503,"message":"Loading model"}}`))
+				return
+			}
+			w.Write([]byte(`{"total_slots":1,"default_generation_settings":{"n_ctx":32768}}`))
+		}
+	}))
+	defer srv.Close()
+
+	m := newBackendMetricsMonitor(nil, nil, nil, logmon.New())
+	loading := m.scrapeOne(context.Background(), "m", srv.URL, false, BackendMetrics{}, false)
+	if loading.NCtx != 32768 {
+		t.Errorf("NCtx during load = %d, want 32768 from /slots", loading.NCtx)
+	}
+
+	ready.Store(true)
+	after := m.scrapeOne(context.Background(), "m", srv.URL, false, loading, true)
+	if after.NCtx != 32768 || after.TotalSlots != 1 {
+		t.Errorf("NCtx/TotalSlots after load = %d/%d, want 32768/1 (503 must not be cached)", after.NCtx, after.TotalSlots)
+	}
+}
+
 // is in flight, and that /props is fetched only once per (model, base) --
 // never re-hit on later ticks unless the base URL changes (restart/reload).
 func TestScrapeOne_SkipsQueuedEndpointsWhenBusy(t *testing.T) {

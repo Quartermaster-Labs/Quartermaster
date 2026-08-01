@@ -81,6 +81,17 @@ $ASSET_PATTERNS = @{
         cuda   = @('.*-bin-win-cuda.*-x64\.zip$', '.*cuda.*\.zip$')
         cpu    = @('.*-bin-win-avx2-x64\.zip$', '.*-bin-win-cpu-x64\.zip$', '.*avx2.*\.zip$')
     }
+    # Not an inference backend: the helper behind the chat `youtube_transcript`
+    # tool. Backend-agnostic (`any`) and shipped as a bare standalone exe rather
+    # than a zip (`bare`) -- it bundles its own Python, so there is nothing to
+    # install alongside it. Nothing is written to the generate yaml either; the
+    # server finds it on PATH or under bin\yt-dlp.
+    'yt-dlp'       = @{
+        repo = 'yt-dlp/yt-dlp'
+        exe  = 'yt-dlp.exe'
+        any  = @('^yt-dlp\.exe$')
+        bare = $true
+    }
 }
 
 # Pick the first asset whose name matches any pattern, in order.
@@ -107,6 +118,10 @@ if ($Test) {
     if ((Select-Asset $llama $cfg.cpu)    -ne 'llama-b6543-bin-win-cpu-x64.zip') { throw 'cpu match failed' }
     if ((Select-Asset $llama $cfg.extra.cuda) -ne 'cudart-llama-bin-win-cuda-12.4-x64.zip') { throw 'cudart match failed' }
     if ($null -ne (Select-Asset @('nope.zip') $cfg.vulkan)) { throw 'expected no match' }
+    # yt-dlp: one bare exe for every backend, and the pattern must not grab the
+    # other assets the release ships (yt-dlp_win.zip, yt-dlp.exe.sha256, ...).
+    $yt = @('yt-dlp', 'yt-dlp.exe', 'yt-dlp_win.zip', 'yt-dlp.exe.sha256', 'yt-dlp_x86.exe')
+    if ((Select-Asset $yt $ASSET_PATTERNS['yt-dlp'].any) -ne 'yt-dlp.exe') { throw 'yt-dlp match failed' }
     Write-Host 'self-check OK' -ForegroundColor Green
     return
 }
@@ -138,6 +153,15 @@ function Get-And-Extract {
     Invoke-WebRequest -Uri $Url -OutFile $tmp -UseBasicParsing
     Expand-Archive -LiteralPath $tmp -DestinationPath $DestDir -Force
     Remove-Item -Force $tmp
+}
+
+# Same, for a component published as a bare exe instead of a zip.
+function Get-BareExe {
+    param([string]$Url, [string]$DestDir, [string]$Name)
+    if (Test-Path -LiteralPath $DestDir) { Remove-Item -Recurse -Force $DestDir }
+    New-Item -ItemType Directory -Force $DestDir | Out-Null
+    Write-Host "  downloading $Url"
+    Invoke-WebRequest -Uri $Url -OutFile (Join-Path $DestDir $Name) -UseBasicParsing
 }
 
 # Find the named exe anywhere under a dir (zips nest in a subfolder).
@@ -214,13 +238,16 @@ foreach ($comp in $wanted) {
         Write-Host "== $comp ($Backend) ==" -ForegroundColor Cyan
         $assets = Get-LatestAssets $cfg.repo
         $names = @($assets.Keys)
-        $pick = Select-Asset $names $cfg[$Backend]
+        # `any` components (yt-dlp) ship one build for every backend.
+        $patterns = if ($cfg.any) { $cfg.any } else { $cfg[$Backend] }
+        $pick = Select-Asset $names $patterns
         if (-not $pick) {
             Write-Warning "${comp}: no '$Backend' asset in latest $($cfg.repo) release. Available: $($names -join ', ')"
             continue
         }
         $dest = Join-Path (Join-Path $AppDir 'bin') $comp
-        Get-And-Extract $assets[$pick] $dest
+        if ($cfg.bare) { Get-BareExe $assets[$pick] $dest $cfg.exe }
+        else { Get-And-Extract $assets[$pick] $dest }
 
         # CUDA: also drop the cudart runtime next to the exe.
         if ($Backend -eq 'cuda' -and $cfg.extra -and $cfg.extra.cuda) {

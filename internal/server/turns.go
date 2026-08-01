@@ -52,7 +52,7 @@ type turnSource struct {
 type turnSearch struct {
 	Query           string       `json:"query"`
 	Results         string       `json:"results"`
-	Kind            string       `json:"kind"` // web | wiki
+	Kind            string       `json:"kind"` // web | wiki | quartermaster | youtube
 	At              int          `json:"at"`
 	ReasoningAt     int          `json:"reasoningAt"`
 	DuringReasoning bool         `json:"duringReasoning"`
@@ -535,7 +535,9 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 	if maxWiki <= 0 {
 		maxWiki = 4 // client hardcodes this and doesn't send it
 	}
-	wikiCount, searchCount := 0, 0
+	// Transcripts are the most expensive tool result by far (up to ytMaxTokens
+	// each), so cap how many one turn may pull into context.
+	wikiCount, searchCount, ytCount := 0, 0, 0
 	var lastSearchAt time.Time
 	searchCache := map[string]cachedSearch{}
 	var citations []turnCitation
@@ -601,6 +603,40 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 						citations = append(citations, turnCitation{N: citeOffset, Title: a.Title, WikiID: a.ID})
 					}
 					resultText = formatWikiResults(query, arts, numbers)
+				}
+			} else if tc.Name == "youtube_transcript" {
+				kind = "youtube"
+				link, lang := parseYouTubeArgs(tc.Args)
+				query = link
+				vid := parseYouTubeID(link)
+				switch {
+				case vid == "":
+					resultText = fmt.Sprintf("%q is not a YouTube link. Pass the full video URL (or its 11-character video id).", link)
+				case ytCount >= maxYouTube:
+					resultText = fmt.Sprintf("Transcript limit reached (%d per turn). Answer with what you have.", maxYouTube)
+				default:
+					ytCount++
+					tr, terr := fetchYouTubeTranscript(ctx, vid, lang)
+					if terr != nil {
+						if ctx.Err() != nil {
+							return ctx.Err()
+						}
+						// Loud, specific failure: an empty transcript the model
+						// narrates over is worse than no tool at all.
+						resultText = "Transcript unavailable: " + terr.Error()
+					} else {
+						vurl := "https://www.youtube.com/watch?v=" + vid
+						title := orURL(tr.Title, vurl)
+						query = title
+						n, ok := citeByURL(citations, vurl)
+						if !ok {
+							citeOffset++
+							n = citeOffset
+							citations = append(citations, turnCitation{N: n, Title: title, URL: vurl})
+						}
+						resultText = formatYouTubeTranscript(tr, n)
+						sources = append(sources, turnSource{Title: title, URL: vurl})
+					}
 				}
 			} else {
 				if cached, ok := searchCache[query]; ok && start.Dedupe {
@@ -852,6 +888,19 @@ func parseToolQuery(args string) string {
 	}
 	_ = json.Unmarshal([]byte(args), &a)
 	return a.Query
+}
+
+func parseYouTubeArgs(args string) (urlOrID, lang string) {
+	var a struct {
+		URL   string `json:"url"`
+		Video string `json:"video"`
+		Lang  string `json:"lang"`
+	}
+	_ = json.Unmarshal([]byte(args), &a)
+	if a.URL == "" {
+		a.URL = a.Video
+	}
+	return strings.TrimSpace(a.URL), strings.TrimSpace(a.Lang)
 }
 
 func citeByURL(cs []turnCitation, url string) (int, bool) {

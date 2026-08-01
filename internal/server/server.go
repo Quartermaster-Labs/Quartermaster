@@ -635,6 +635,7 @@ func (s *Server) routes() {
 	mux.Handle("POST /api/update", adminChain.ThenFunc(s.handleAPIUpdate))
 	mux.Handle("GET /api/captures/{id}", adminChain.ThenFunc(s.handleAPICapture))
 	mux.Handle("GET /api/websearch", adminChain.ThenFunc(s.handleAPIWebSearch))
+	mux.Handle("GET /api/youtube/meta", adminChain.ThenFunc(s.handleAPIYouTubeMeta))
 
 	// Standalone playground (separate port): which app to render + not-serious
 	// per-user login & chat history. /api/mode is always safe; the rest 501/401

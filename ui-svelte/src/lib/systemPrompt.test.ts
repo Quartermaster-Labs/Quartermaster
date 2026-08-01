@@ -7,6 +7,7 @@ import {
   DEFAULT_SEARCH_PROMPT,
   DEFAULT_CITE_PROMPT,
   DEFAULT_QM_PROMPT,
+  DEFAULT_YOUTUBE_PROMPT,
   type SystemPreset,
 } from "./systemPrompt";
 
@@ -77,6 +78,22 @@ describe("buildBasePrompt", () => {
   it("qm directive is not preset-overridable (fixed even for a preset)", () => {
     const out = buildBasePrompt("a", [preset({ content: "P" })], { search: false, wiki: false, qm: true, model: "m" });
     expect(out).toBe("P " + DEFAULT_QM_PROMPT);
+  });
+
+  it("youtube on appends the shipped transcript directive plus citations", () => {
+    const out = buildBasePrompt(null, [], { search: false, wiki: false, youtube: true, model: "m" });
+    expect(out).toBe(DEFAULT_BUILTIN_PROMPT + " " + DEFAULT_YOUTUBE_PROMPT + " " + DEFAULT_CITE_PROMPT);
+  });
+
+  it("preset overrides the youtube directive", () => {
+    const out = buildBasePrompt("a", [preset({ content: "", youtube: "YT-X", cite: "CITE-X" })], { search: false, wiki: false, youtube: true, model: "m" });
+    expect(out).toBe("YT-X CITE-X");
+  });
+
+  it("preset saved before youtube shipped (field absent) uses the default", () => {
+    const legacy = { id: "a", name: "A", content: "P", search: null, wiki: null, cite: null } as SystemPreset;
+    const out = buildBasePrompt("a", [legacy], { search: false, wiki: false, youtube: true, model: "m" });
+    expect(out).toBe("P " + DEFAULT_YOUTUBE_PROMPT + " " + DEFAULT_CITE_PROMPT);
   });
 
   it("fixed default option still gets default tool prompts when tool on", () => {

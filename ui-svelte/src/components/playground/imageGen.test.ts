@@ -1,0 +1,81 @@
+import { describe, it, expect } from "vitest";
+import { aspectDims, defaultsFor, fmtDur, parseSdProgress } from "./imageGen";
+
+describe("aspectDims", () => {
+  it("keeps squares square", () => {
+    expect(aspectDims("1:1", 1024)).toEqual([1024, 1024]);
+  });
+
+  it("snaps the short edge to a multiple of 64", () => {
+    const [w, h] = aspectDims("16:9", 1024);
+    expect(w).toBe(1024);
+    expect(h % 64).toBe(0);
+    expect(h).toBe(576);
+  });
+
+  it("puts the long edge on the tall side for portrait", () => {
+    expect(aspectDims("9:16", 1024)).toEqual([576, 1024]);
+  });
+
+  it("falls back to the first aspect for an unknown id", () => {
+    expect(aspectDims("nope", 512)).toEqual([512, 512]);
+  });
+});
+
+describe("defaultsFor", () => {
+  it("matches on an id substring, case-insensitively", () => {
+    expect(defaultsFor("SD/Flux-Kontext-Q8.gguf")?.match).toBe("kontext");
+  });
+
+  it("returns undefined for a model with no preset", () => {
+    expect(defaultsFor("some-random-model")).toBeUndefined();
+  });
+});
+
+describe("fmtDur", () => {
+  it("stays in seconds under a minute", () => {
+    expect(fmtDur(45)).toBe("45s");
+  });
+
+  it("splits minutes and seconds", () => {
+    expect(fmtDur(90)).toBe("1m 30s");
+  });
+});
+
+describe("parseSdProgress", () => {
+  it("reports the preparing state with no markers", () => {
+    expect(parseSdProgress("nothing here", 20)).toEqual({
+      label: "Preparing…",
+      phase: null,
+      step: 0,
+      totalSteps: 0,
+      secPerIt: 0,
+    });
+  });
+
+  it("takes the phase from the LAST marker in the tail", () => {
+    const tail = "EDIT mode\nencode_first_stage completed\ngenerating image:\ndecoding\n";
+    expect(parseSdProgress(tail, 20).phase).toBe("decode");
+  });
+
+  it("ignores a stale VAE bar while sampling (total must equal the step count)", () => {
+    const tail = "EDIT mode\n4/4 - 1.0s/it\ngenerating image:\n7/20 - 2.5s/it\n";
+    const p = parseSdProgress(tail, 20);
+    expect(p.phase).toBe("sample");
+    expect(p).toMatchObject({ step: 7, totalSteps: 20, secPerIt: 2.5 });
+  });
+
+  it("takes the VAE bar (total !== steps) while encoding", () => {
+    const tail = "EDIT mode\n3/4 - 1.5s/it\n";
+    const p = parseSdProgress(tail, 20);
+    expect(p.phase).toBe("encode");
+    expect(p).toMatchObject({ step: 3, totalSteps: 4, secPerIt: 1.5 });
+  });
+
+  it("stays indeterminate during prompt conditioning", () => {
+    const tail = "EDIT mode\n3/4 - 1.5s/it\nencode_first_stage completed\n";
+    const p = parseSdProgress(tail, 20);
+    expect(p.phase).toBe("cond");
+    expect(p).toMatchObject({ step: 0, totalSteps: 0, secPerIt: 0 });
+  });
+});

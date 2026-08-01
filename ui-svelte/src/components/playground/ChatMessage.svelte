@@ -1,11 +1,13 @@
 <script lang="ts">
   import { renderMarkdown, renderStreamingMarkdown, createStreamingCache } from "../../lib/markdown";
   import type { RenderedBlock } from "../../lib/markdown";
-  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronRight, Code, Search, BookOpen, PenLine, Wrench, Reply } from "lucide-svelte";
+  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronRight, Code, Search, BookOpen, PenLine, Wrench, Reply, Youtube } from "lucide-svelte";
   import { getTextContent, getImageUrls } from "../../lib/types";
   import { harmonyToThink } from "../../lib/reasoning";
   import type { ContentPart, QmApproval } from "../../lib/types";
   import RewriteDiff from "./RewriteDiff.svelte";
+  import YouTubeEmbed from "./YouTubeEmbed.svelte";
+  import { extractYouTubeIds } from "../../lib/youtube";
   import { autogrow } from "../../lib/autogrow";
   import { openWikiArticle } from "../../stores/wiki";
 
@@ -16,7 +18,7 @@
     reasoningTimeMs?: number;
     thinkMs?: number[];
     genTimeMs?: number;
-    searches?: { query: string; results: string; kind?: "web" | "wiki" | "quartermaster"; at?: number; reasoningAt?: number; duringReasoning?: boolean; sources?: { title: string; url: string }[] }[];
+    searches?: { query: string; results: string; kind?: "web" | "wiki" | "quartermaster" | "youtube"; at?: number; reasoningAt?: number; duringReasoning?: boolean; sources?: { title: string; url: string }[] }[];
     citations?: { n: number; title: string; url: string; wikiId?: string }[];
     approval?: QmApproval;
     onApprove?: (id: string, accept: boolean) => void;
@@ -48,6 +50,10 @@
   // them up as reasoning boxes. No-op when no channel markup is present.
   let displayContent = $derived(role === "assistant" ? harmonyToThink(textContent) : textContent);
   let wordCount = $derived(stripThinking(displayContent).trim().split(/\s+/).filter(Boolean).length);
+  // YouTube links anywhere in the message get a Discord-style card underneath.
+  // Derived from displayContent so a link the model wrote in its answer unfurls
+  // too, and reasoning-only mentions don't (stripThinking runs first).
+  let ytIds = $derived(extractYouTubeIds(stripThinking(displayContent)));
   let imageUrls = $derived(getImageUrls(content));
   let hasImages = $derived(imageUrls.length > 0);
   let canEdit = $derived(onEdit !== undefined && !hasImages);
@@ -58,7 +64,7 @@
   // Searches are recorded separately with the content offset (`at`) where they
   // ran. Build one ordered timeline so think boxes and search blocks render
   // inline between the surrounding text, not pinned to the top.
-  type SearchHit = { query: string; results: string; kind?: "web" | "wiki" | "quartermaster"; sources?: { title: string; url: string }[] };
+  type SearchHit = { query: string; results: string; kind?: "web" | "wiki" | "quartermaster" | "youtube"; sources?: { title: string; url: string }[] };
   type SubItem = { type: "text"; text: string } | { type: "search"; search: SearchHit };
   type Segment =
     | { kind: "text"; text: string; idx: number }
@@ -434,6 +440,9 @@
       {:else if search.kind === "quartermaster"}
         <Wrench class="w-3 h-3 shrink-0" />
         <span class="font-medium truncate">Quartermaster: {search.query || "instance"}</span>
+      {:else if search.kind === "youtube"}
+        <Youtube class="w-3 h-3 shrink-0" />
+        <span class="font-medium truncate">Watched: {search.query || "YouTube video"}</span>
       {:else}
         <Search class="w-3 h-3 shrink-0" />
         <span class="font-medium truncate">Searched: {search.query || "the web"}</span>
@@ -594,6 +603,11 @@
           {/if}
         </div>
       {/if}
+      <!-- Link unfurls sit inside the bubble, under the text, so they read as
+           part of the message rather than a turn of their own. -->
+      {#each ytIds as vid (vid)}
+        <YouTubeEmbed id={vid} />
+      {/each}
       {#if approval && approval.status === "pending"}
         <!-- Quartermaster config-change approval: before/after diff the model
              proposed, gated on the user's accept/deny. The turn is blocked
@@ -719,6 +733,9 @@
         <div class="prose prose-sm prose-invert max-w-none chat-prose user-msg-prose pr-8" bind:this={textEl} use:codeBlockCopy>
           {@html renderMarkdown(textContent)}
         </div>
+        {#each ytIds as vid (vid)}
+          <YouTubeEmbed id={vid} onDark />
+        {/each}
         {#if canEdit}
           <button
             class="absolute top-1.5 right-1.5 p-1 rounded-full opacity-0 group-hover:opacity-100 transition-all bg-white/10 text-white/70 hover:text-white hover:bg-white/25"

@@ -58,6 +58,10 @@ Source: "{#StagingDir}\config\quartermaster-generate.example.yaml"; DestDir: "{a
 
 [Tasks]
 Name: autostart; Description: "Start quartermaster automatically when I log in"; GroupDescription: "Startup:"; Flags: unchecked
+; A Task, not a ServersPage checkbox: yt-dlp is not an inference backend, has no
+; compute-backend or existing-install variant, and must be fetchable even when
+; the user configures no servers at all. ~17MB standalone exe (bundles Python).
+Name: ytdlp; Description: "yt-dlp - lets chat models read YouTube video transcripts"; GroupDescription: "Optional helpers:"
 
 [Icons]
 Name: "{group}\quartermaster"; Filename: "{app}\start.cmd"; WorkingDir: "{app}"
@@ -85,6 +89,12 @@ Filename: "powershell.exe"; \
   StatusMsg: "Configuring existing inference backends..."; \
   Flags: runhidden waituntilterminated; \
   Check: IsExistingMode
+; Optional helper, independent of the backend source mode above.
+Filename: "powershell.exe"; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\packaging\windows\fetch-backend.ps1"" -Components ""yt-dlp"" -AppDir ""{app}"" -NoPause"; \
+  StatusMsg: "Downloading yt-dlp..."; \
+  Flags: runhidden waituntilterminated; \
+  Tasks: ytdlp
 Filename: "{app}\start.cmd"; Description: "Launch quartermaster now"; Flags: postinstall shellexec skipifsilent nowait
 
 [Code]
