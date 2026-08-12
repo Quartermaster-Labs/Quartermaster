@@ -16,6 +16,11 @@ export interface ChatSession {
   // Set once the model has named the chat (see generateTitle). Until then the
   // title is the first-message heuristic and is recomputed on every save.
   titled?: boolean;
+  // Model this conversation last ran on. Recorded when a turn starts and when the
+  // user picks a model while this chat is open; reopening the chat re-selects it,
+  // so a thread stays on the model it was built with (its KV/context, its voice)
+  // instead of inheriting whatever the previous chat used.
+  model?: string;
   // Per-chat standing instructions (the composer's "Instructions" field). Layered
   // on top of the built-in prompt for this conversation only. Empty/undefined =
   // none. Persisted with the chat so it follows the conversation, not the user.
@@ -144,6 +149,33 @@ export async function saveChatsNow(): Promise<void> {
 
 export function newChatId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+// Open a fresh conversation, optionally pinned to a model (the dashboard's "Chat"
+// button). An already-empty chat is reused instead of stacking blank sessions when
+// the button is clicked repeatedly. Returns the active chat id.
+export function startChat(model?: string): string {
+  const sessions = get(chatSessions);
+  const empty = sessions.find((s) => s.messages.length === 0);
+  if (empty) {
+    chatSessions.set(
+      sessions.map((s) =>
+        s.id === empty.id ? { ...s, ...(model ? { model } : {}), updatedAt: Date.now() } : s,
+      ),
+    );
+    activeChatId.set(empty.id);
+    return empty.id;
+  }
+  const s: ChatSession = {
+    id: newChatId(),
+    title: "New chat",
+    messages: [],
+    updatedAt: Date.now(),
+    ...(model ? { model } : {}),
+  };
+  chatSessions.set([...sessions, s]);
+  activeChatId.set(s.id);
+  return s.id;
 }
 
 // First user message, trimmed — good enough as a title. "New chat" until then.

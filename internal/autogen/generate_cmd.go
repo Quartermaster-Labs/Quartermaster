@@ -421,20 +421,32 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 	// vllm-backed LLMs render a vllm command; a chosen llama build swaps the exe.
 	be := resolveBackend(s, &ov, "llm")
 	if strings.EqualFold(be.Kind, "vllm") {
+		// Same refusal the emitter makes: vllm loads only the shard it is given,
+		// so there is no command to preview for a split set.
+		if isSplitGguf(row) {
+			return "", fmt.Errorf("vllm cannot load split gguf shards; merge %s with llama-gguf-split --merge or pick a llama backend", row.FileName)
+		}
 		return strings.Join(vllmCmdLines(s, row, &ov, row.FullPath, be, meta), " "), nil
 	}
 	if be.Exe != "" {
 		s.ServerExe = be.Exe
 	}
-	kvK, kvV := "q8_0", "q8_0"
+	// Same default as emitModel — this used to hardcode q8_0 with no MoE branch,
+	// so the editor previewed a KV type the emitted config never used.
+	soloTarget := s.TargetVramGB
+	if ov.VramTargetGB > 0 {
+		soloTarget = ov.VramTargetGB
+	}
+	kvDef := defaultKvQuant(s, meta, soloTarget, s.VramOverheadGB+draftOverheadGB(effectiveSpec(meta, &ov, row.DraftKind), row.DraftSizeGB))
+	kvK, kvV := kvDef, kvDef
 	if ov.KvK != "" {
 		kvK = ov.KvK
 	}
 	if ov.KvV != "" {
 		kvV = ov.KvV
 	}
-	if kvK != kvV || kvK == "iq4_nl" || kvV == "iq4_nl" {
-		kvK, kvV = "q8_0", "q8_0"
+	if !ValidKvPair(kvK, kvV) {
+		kvK, kvV = kvDef, kvDef
 	}
 	perTokGB, kvConstGB := 0.0, 0.0
 	if m := GetKvCostModel(meta, kvK, kvV); m.OK {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,6 +89,12 @@ type activeTurn struct {
 	// pending is the config change awaiting the user's accept/deny (qm tools).
 	// Non-nil only while a quartermaster_configure call is blocked on approval.
 	pending *pendingApproval
+	// busy is what the turn is doing RIGHT NOW ("Searching for …", "Reading
+	// example.com"), empty when it is just generating. A tool call only produces
+	// a search card once it has FINISHED, so without this the UI shows nothing
+	// for the seconds a search actually takes — the user watches a source counter
+	// tick up with no indication anything is running.
+	busy string
 }
 
 // turnManager owns all server-side turn generation for the playground. One
@@ -129,11 +136,27 @@ type turnStart struct {
 	// and enforce per-turn caps (mirrors the client's turn-loop state).
 	ReasoningBudget int    `json:"reasoningBudget,omitempty"` // soft cumulative-thinking cap (tokens); 0 = off. Enforced at round boundaries, see runLoop.
 	WebSearch       bool   `json:"webSearch,omitempty"`
-	SearxngURL      string `json:"searxngUrl,omitempty"`
+	SearxngURL      string `json:"searxngUrl,omitempty"` // legacy single-provider field; superseded by SearchProviders
 	MaxSearches     int    `json:"maxSearches,omitempty"`
 	ThrottleMs      int    `json:"throttleMs,omitempty"`
 	Dedupe          bool   `json:"dedupe,omitempty"`
 	MaxWiki         int    `json:"maxWiki,omitempty"`
+
+	// SearchProviders is the ordered failover chain (search.go). It rides on the
+	// turn payload rather than being read from stored prefs for the same reason
+	// SearxngURL always has: the turn is a snapshot of what the client had
+	// configured when the user pressed send. turnStart is in-memory only and is
+	// never written into chats.json, so the API keys in it are not persisted.
+	SearchProviders []searchProviderCfg `json:"searchProviders,omitempty"`
+}
+
+// providerChain is the chain to search with, falling back to the legacy
+// single-URL field so an older client (or a stored payload) still works.
+func (s turnStart) providerChain() []searchProviderCfg {
+	if len(s.SearchProviders) > 0 {
+		return s.SearchProviders
+	}
+	return legacySearchChain(s.SearxngURL)
 }
 
 // --- delta fan-out --------------------------------------------------------
@@ -217,12 +240,91 @@ func (at *activeTurn) appendSearch(s turnSearch, cites []turnCitation) {
 	at.fan(turnDelta{Kind: "search", Data: payload})
 }
 
-// lens returns the current content/reasoning byte lengths + reasoning state,
-// for positioning a search inside the assistant bubble (at/reasoningAt/during).
+// setBusy publishes (or clears) the live activity label.
+func (at *activeTurn) setBusy(label string) {
+	at.mu.Lock()
+	defer at.mu.Unlock()
+	if at.busy == label {
+		return
+	}
+	at.busy = label
+	at.fan(turnDelta{Kind: "busy", Text: label})
+}
+
+// busyLabel is what the user reads while a tool runs. The instant local tools
+// (clock / calculator / units) deliberately have none: they return in under a
+// millisecond, and a label that flashes on and off reads as a glitch.
+func busyLabel(name, query string) string {
+	short := query
+	if len([]rune(short)) > 60 {
+		short = string([]rune(short)[:60]) + "…"
+	}
+	switch name {
+	case "web_search":
+		if short == "" {
+			return "Searching the web"
+		}
+		return fmt.Sprintf("Searching for %q", short)
+	case "wiki_search":
+		return "Searching the help articles"
+	case "fetch_page":
+		if u, err := url.Parse(query); err == nil && u.Host != "" {
+			return "Reading " + strings.TrimPrefix(u.Host, "www.")
+		}
+		return "Reading the page"
+	case "fetch_feed":
+		return "Reading the feed"
+	case "youtube_search":
+		return "Searching YouTube"
+	case "youtube_transcript":
+		return "Reading the transcript"
+	case "youtube_comments":
+		return "Reading the comments"
+	case "convert_currency":
+		return "Checking the exchange rate"
+	case "get_weather":
+		return "Checking the weather"
+	case "quartermaster_inspect":
+		return "Checking quartermaster"
+	case "quartermaster_configure":
+		return "Applying the config change"
+	}
+	return ""
+}
+
+// lens returns the current content/reasoning lengths + reasoning state, for
+// positioning a search inside the assistant bubble (at/reasoningAt/during).
+//
+// Lengths are UTF-16 code units, NOT bytes: the only consumer is the UI, which
+// slices the same text with JavaScript string indices. A byte offset is equal
+// only while the text is pure ASCII — one emoji earlier in the answer pushes it
+// three units too far right and the tool cards land inside a word.
 func (at *activeTurn) lens() (contentLen, reasoningLen int, duringReasoning bool) {
 	at.mu.Lock()
 	defer at.mu.Unlock()
-	return len(at.content), len(at.reasoning), answerOnly(at.content) == ""
+	return utf16Len(at.content), utf16Len(at.reasoning), answerOnly(at.content) == ""
+}
+
+// utf16Len counts s the way JavaScript's String.length does: one unit per rune
+// in the BMP, two for anything above it (emoji, most symbols a model writes).
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		n++
+		if r > 0xFFFF {
+			n++
+		}
+	}
+	return n
+}
+
+// answerText returns the turn's answer so far, with any inlined thinking
+// stripped — what the user actually reads, which is what the fabricated-link
+// check must run against.
+func (at *activeTurn) answerText() string {
+	at.mu.Lock()
+	defer at.mu.Unlock()
+	return answerOnly(at.content)
 }
 
 // thinking returns every reasoning byte emitted this turn, including what was
@@ -256,6 +358,10 @@ func (at *activeTurn) subscribe() (chan turnDelta, []turnDelta, bool) {
 		snap = append(snap, turnDelta{Kind: "reasoning", Text: at.reasoning, Replace: true})
 	}
 	snap = append(snap, turnDelta{Kind: "content", Text: at.content, Replace: true})
+	if at.busy != "" {
+		// A tab that reattaches mid-search must see the search, not a silent gap.
+		snap = append(snap, turnDelta{Kind: "busy", Text: at.busy})
+	}
 	if len(at.thinkMs) > 0 {
 		snap = append(snap, turnDelta{Kind: "thinkMs", Replace: true, Data: mustJSON(at.thinkMs)})
 	}
@@ -420,6 +526,18 @@ func (s *Server) handleTurnStop(w http.ResponseWriter, r *http.Request) {
 	tm.mu.Unlock()
 	if at != nil && at.chatID == chatID {
 		at.cancel()
+		// Wait for the goroutine to actually unwind before answering. cancel()
+		// only signals; the runner still has to close the upstream body and run
+		// its flush defer. A user who hits Stop and immediately re-sends would
+		// otherwise race that window and get 409 "a turn is already running".
+		for i := 0; i < 100 && !at.isDone(); i++ {
+			select {
+			case <-r.Context().Done():
+				w.WriteHeader(http.StatusNoContent)
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -506,6 +624,14 @@ func (tm *turnManager) run(ctx context.Context, user string, at *activeTurn, sta
 	at.endInline()
 	at.mu.Lock()
 	at.genMs = time.Since(began).Milliseconds()
+	// Drop citation markers with no source behind them before the answer is
+	// persisted. Done once at end of turn (not per delta) so a marker mid-stream
+	// isn't judged before the round that would have registered its source ran;
+	// attached viewers get a content snapshot so the live bubble matches disk.
+	if cleaned := stripPhantomCites(at.content, at.citations); cleaned != at.content {
+		at.content = cleaned
+		at.fan(turnDelta{Kind: "content", Text: cleaned, Replace: true})
+	}
 	at.mu.Unlock()
 
 	tm.flush(user, at, kind == "error", msg) // final write of the completed answer
@@ -527,6 +653,12 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 	var apiTail []json.RawMessage
 
 	useTools := len(start.Tools) > 0
+	// Put previous turns' tool calls and results back into the history the model
+	// reads (see turnsreplay.go). Only when tools are on: without them the model
+	// cannot answer a tool_calls message and the template may reject it.
+	if useTools {
+		base = replayToolCalls(base)
+	}
 	maxTokens := 0
 	if start.MaxTokens != nil {
 		maxTokens = *start.MaxTokens
@@ -537,7 +669,15 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 	}
 	// Transcripts are the most expensive tool result by far (up to ytMaxTokens
 	// each), so cap how many one turn may pull into context.
-	wikiCount, searchCount, ytCount := 0, 0, 0
+	wikiCount, searchCount, ytCount, fetchCount, fxCount := 0, 0, 0, 0, 0
+	// Local tools (no network, no rate limit); the caps here are runaway-loop
+	// stops, not cost controls.
+	dtCount, calcCount, unitCount, wxCount, feedCount := 0, 0, 0, 0, 0
+	ytTokens := 0 // transcript tokens spent this turn (the real transcript limiter)
+	// Discovery tools are cheap per call but compound: a model left to browse
+	// freely will list a channel, search twice more, then read comments on three
+	// videos before writing a word. Capped separately from transcripts.
+	ytBrowseCount, ytCommentCount := 0, 0
 	var lastSearchAt time.Time
 	searchCache := map[string]cachedSearch{}
 	var citations []turnCitation
@@ -552,6 +692,21 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 	// thinking OFF for subsequent rounds so the model must answer. A lone round that
 	// overthinks is bounded by max_tokens, not force-closed.
 	baseThink := start.Reasoning == nil || *start.Reasoning
+	noAnswerRetried := false
+
+	// Anti-fabrication state (see turnstools.go, "fabricated videos"). ytSeen is
+	// every video id already present in the conversation — anything the user
+	// pasted, and anything a previous turn's tool results put there — so links in
+	// the answer can be told apart from links the model dreamt up.
+	ytOffered := useTools && bytes.Contains(start.Tools, []byte(`"youtube_search"`))
+	forceTools := ytOffered && pastedNewVideo(base)
+	ytSeen := map[string]bool{}
+	for _, id := range ytLinkIDs(string(start.Messages)) {
+		ytSeen[id] = true
+	}
+	ytToolUsed := false
+	doneCalls := map[string]string{} // name+args → result, for the repeat-call guard
+	round := 0
 
 	for {
 		think := baseThink
@@ -559,13 +714,64 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 			think = false // ~4 bytes/token: cumulative thinking hit the budget
 		}
 		msgs := append(append([]json.RawMessage{}, base...), apiTail...)
-		roundContent, calls, _, err := tm.streamRound(ctx, at, start, msgs, maxTokens, think)
+		// A video the model has never seen must be looked up, not recalled: force a
+		// tool call on the opening round. Only that round — once the model has real
+		// results the choice is its own again, and forcing later rounds would loop
+		// forever.
+		toolChoice := ""
+		if forceTools && round == 0 {
+			toolChoice = "required"
+		}
+		round++
+		roundContent, roundReasoning, calls, _, err := tm.streamRound(ctx, at, start, msgs, maxTokens, think, toolChoice)
 		if err != nil {
 			return err
 		}
 
 		// No tool calls (or tools off) → the turn is complete.
 		if !useTools || len(calls) == 0 {
+			// ...unless the model thought and then stopped WITHOUT writing an
+			// answer: it hit EOS on an unterminated <think>, so every token it
+			// generated landed in reasoning_content and the bubble would render
+			// as a thought with no reply. Retry once with thinking OFF, handing
+			// the model its own reasoning back so it finishes from there instead
+			// of starting over. The nudge is appended at the tail, so the prompt
+			// prefix stays byte-identical and the KV is reused.
+			if _, _, noAnswer := at.lens(); noAnswer {
+				thought := roundReasoning
+				if thought == "" {
+					thought = roundContent // model inlined its <think> into content
+				}
+				if think && !noAnswerRetried && strings.TrimSpace(thought) != "" {
+					noAnswerRetried = true
+					baseThink = false
+					at.mu.Lock()
+					at.closeInline() // don't append the retry inside the open think box
+					at.mu.Unlock()
+					apiTail = append(apiTail, mustJSON(map[string]any{
+						"role": "user", "content": noAnswerNudge(thought),
+					}))
+					continue
+				}
+				// Retry declined or also came back empty — never leave a silent
+				// bubble the user can only stare at.
+				at.mu.Lock()
+				at.closeInline()
+				at.emitContent(noAnswerMarker)
+				at.mu.Unlock()
+			}
+
+			// Last line of defence: links to videos that came from neither the
+			// conversation nor any tool result this turn are invented. Cannot be
+			// unsaid — already streamed — so it gets labelled.
+			if ytOffered && !ytToolUsed {
+				if bad := unverifiedYtIDs(at.answerText(), ytSeen); len(bad) > 0 {
+					at.mu.Lock()
+					at.closeInline()
+					at.emitContent(unverifiedVideoMarker)
+					at.mu.Unlock()
+				}
+			}
 			return nil
 		}
 
@@ -576,8 +782,25 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 
 		contentLen, reasoningLen, during := at.lens()
 		for _, tc := range calls {
+			// Models re-issue a call they already made — the same channel listing
+			// twice in one round, or again next round after ignoring the result.
+			// Re-running it costs a yt-dlp process and paints a second identical
+			// card in the trail. Answer from the first run instead. The tool
+			// message is still emitted (the API needs one per tool_call_id), but
+			// nothing re-executes and no duplicate card is appended.
+			dupKey := tc.Name + "\x00" + strings.TrimSpace(tc.Args)
+			if prev, ok := doneCalls[dupKey]; ok {
+				apiTail = append(apiTail, mustJSON(map[string]any{
+					"role": "tool", "tool_call_id": tc.ID,
+					"content": prev + "\n\n(You already made this exact call this turn — this is the same result, not a new one. Use it, or call with different arguments.)",
+				}))
+				continue
+			}
+
 			citesBefore := citeOffset
 			query := parseToolQuery(tc.Args)
+			// Live status for the duration of the call; cleared when it returns.
+			at.setBusy(busyLabel(tc.Name, query))
 			var resultText string
 			var sources []turnSource
 			kind := "web"
@@ -604,6 +827,174 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 					}
 					resultText = formatWikiResults(query, arts, numbers)
 				}
+			} else if tc.Name == "fetch_page" {
+				kind = "page"
+				link := parseFetchArgs(tc.Args)
+				query = link
+				switch {
+				case link == "":
+					resultText = "fetch_page needs a `url` argument (a full http(s) link, e.g. from a previous search result)."
+				case fetchCount >= maxFetches:
+					resultText = fmt.Sprintf("Page-read limit reached (%d per turn). Answer with the pages already read.", maxFetches)
+				default:
+					fetchCount++
+					doc, ferr := fetchPage(ctx, link)
+					if ferr != nil {
+						if ctx.Err() != nil {
+							return ctx.Err()
+						}
+						// Loud failure: a shop that bot-blocks or renders in JS must
+						// read as "could not check", never as an absent price the
+						// model fills in from memory.
+						resultText = "Could not read " + link + ": " + ferr.Error() +
+							"\nDo not guess this page's contents — say it could not be read, or try a different source."
+					} else {
+						title := orURL(doc.Title, doc.URL)
+						query = title
+						n, ok := citeByURL(citations, doc.URL)
+						if !ok {
+							citeOffset++
+							n = citeOffset
+							citations = append(citations, turnCitation{N: n, Title: title, URL: doc.URL})
+						}
+						resultText = formatPage(doc, n)
+						sources = append(sources, turnSource{Title: title, URL: doc.URL})
+					}
+				}
+			} else if tc.Name == "convert_currency" {
+				kind = "currency"
+				amount, from, to := parseConvertArgs(tc.Args)
+				query = fmt.Sprintf("%s %s → %s", trimNum(amount), from, to)
+				switch {
+				case from == "" || to == "":
+					query = "currency"
+					resultText = "convert_currency needs `from` and `to` as three-letter currency codes (e.g. {\"amount\":1299,\"from\":\"RON\",\"to\":\"EUR\"})."
+				case fxCount >= maxConverts:
+					resultText = fmt.Sprintf("Currency-conversion limit reached (%d per turn). Convert the remaining figures from the rates already fetched.", maxConverts)
+				default:
+					fxCount++
+					q, ferr := fetchFxRate(ctx, from, to)
+					if ferr != nil {
+						if ctx.Err() != nil {
+							return ctx.Err()
+						}
+						// A guessed rate is the failure this tool exists to stop,
+						// so the error says so rather than leaving room for one.
+						resultText = fmt.Sprintf("Could not get a %s→%s rate: %v\nDo not convert from memory — quote the price in %s as the page states it and say you could not convert it.", from, to, ferr, from)
+					} else {
+						resultText = formatFxRate(amount, q)
+					}
+				}
+			} else if tc.Name == "get_datetime" {
+				kind = "time"
+				tz, until := parseDatetimeArgs(tc.Args)
+				query = tz
+				if query == "" {
+					query = "now"
+				}
+				if until != "" {
+					query += " → " + until
+				}
+				if dtCount >= maxDatetime {
+					resultText = fmt.Sprintf("Date lookup limit reached (%d per turn).", maxDatetime)
+				} else {
+					dtCount++
+					txt, derr := formatDatetime(tz, until)
+					if derr != nil {
+						resultText = derr.Error()
+					} else {
+						resultText = txt
+					}
+				}
+			} else if tc.Name == "calculate" {
+				kind = "calc"
+				expr := parseCalcArgs(tc.Args)
+				query = expr
+				switch {
+				case expr == "":
+					query = "calculate"
+					resultText = "calculate needs an `expression`, e.g. {\"expression\":\"(1299 * 3) / 36\"}."
+				case calcCount >= maxCalcs:
+					resultText = fmt.Sprintf("Calculation limit reached (%d per turn).", maxCalcs)
+				default:
+					calcCount++
+					v, cerr := evalExpr(expr)
+					if cerr != nil {
+						// Named, specific failure: a model told only "error" tends
+						// to answer with its own arithmetic, which is the thing
+						// this tool exists to replace.
+						resultText = fmt.Sprintf("Could not evaluate %q: %v. This tool takes plain arithmetic only — numbers, + - * / ^, parentheses, %% for percent, and the functions sqrt/abs/round/floor/ceil/min/max/sum/avg/pow/ln/log.", expr, cerr)
+					} else {
+						resultText = formatCalc(expr, v)
+					}
+				}
+			} else if tc.Name == "convert_units" {
+				kind = "units"
+				amount, from, to := parseUnitArgs(tc.Args)
+				query = fmt.Sprintf("%s %s → %s", fmtCalcNum(amount), from, to)
+				switch {
+				case from == "" || to == "":
+					query = "convert units"
+					resultText = "convert_units needs `from` and `to`, e.g. {\"amount\":15.6,\"from\":\"in\",\"to\":\"cm\"}."
+				case unitCount >= maxUnitConverts:
+					resultText = fmt.Sprintf("Unit-conversion limit reached (%d per turn).", maxUnitConverts)
+				default:
+					unitCount++
+					v, cf, ct, uerr := convertUnit(amount, from, to)
+					if uerr != nil {
+						resultText = uerr.Error()
+					} else {
+						resultText = formatUnitConvert(amount, cf, v, ct)
+					}
+				}
+			} else if tc.Name == "get_weather" {
+				kind = "weather"
+				place, days, imperial := parseWeatherArgs(tc.Args)
+				query = place
+				switch {
+				case place == "":
+					query = "weather"
+					resultText = "get_weather needs a `location`, e.g. {\"location\":\"Cluj-Napoca\",\"days\":3}."
+				case wxCount >= maxWeather:
+					resultText = fmt.Sprintf("Weather limit reached (%d per turn).", maxWeather)
+				default:
+					wxCount++
+					txt, werr := fetchWeather(ctx, place, days, imperial)
+					if werr != nil {
+						if ctx.Err() != nil {
+							return ctx.Err()
+						}
+						resultText = fmt.Sprintf("Could not get the weather for %q: %v\nDo not describe the weather from memory — say the forecast could not be read.", place, werr)
+					} else {
+						resultText = txt
+					}
+				}
+			} else if tc.Name == "fetch_feed" {
+				kind = "feed"
+				furl, limit := parseFeedArgs(tc.Args)
+				query = furl
+				switch {
+				case furl == "":
+					query = "feed"
+					resultText = "fetch_feed needs a feed `url` (RSS or Atom), e.g. {\"url\":\"https://example.com/feed.xml\"}."
+				case feedCount >= maxFeeds:
+					resultText = fmt.Sprintf("Feed limit reached (%d per turn).", maxFeeds)
+				default:
+					feedCount++
+					fd, ferr := fetchFeed(ctx, furl, limit)
+					if ferr != nil {
+						if ctx.Err() != nil {
+							return ctx.Err()
+						}
+						resultText = fmt.Sprintf("Could not read the feed at %s: %v", furl, ferr)
+					} else {
+						if fd.Title != "" {
+							query = fd.Title
+						}
+						resultText = formatFeed(fd)
+						sources = append(sources, turnSource{Title: fd.Title, URL: fd.URL})
+					}
+				}
 			} else if tc.Name == "youtube_transcript" {
 				kind = "youtube"
 				link, lang := parseYouTubeArgs(tc.Args)
@@ -614,6 +1005,8 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 					resultText = fmt.Sprintf("%q is not a YouTube link. Pass the full video URL (or its 11-character video id).", link)
 				case ytCount >= maxYouTube:
 					resultText = fmt.Sprintf("Transcript limit reached (%d per turn). Answer with what you have.", maxYouTube)
+				case ytTurnTokens-ytTokens < ytMinTranscript:
+					resultText = fmt.Sprintf("Transcript budget for this turn is spent (~%d tokens of transcript already read, across %d video(s)). Answer from those; ask the user which remaining video matters most if you need another.", ytTokens, ytCount)
 				default:
 					ytCount++
 					tr, terr := fetchYouTubeTranscript(ctx, vid, lang)
@@ -634,12 +1027,104 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 							n = citeOffset
 							citations = append(citations, turnCitation{N: n, Title: title, URL: vurl})
 						}
-						resultText = formatYouTubeTranscript(tr, n)
+						// Each transcript gets whatever is left of the turn's budget,
+						// capped at the per-video ceiling: five shorts all fit, one
+						// three-hour stream still gets truncated (loudly) rather
+						// than eating the whole window.
+						resultText = formatYouTubeTranscript(tr, n, ytTurnTokens-ytTokens)
+						ytTokens += len(resultText) / 4 // ~4 bytes/token, same estimate as the reasoning budget
+						sources = append(sources, turnSource{Title: title, URL: vurl})
+					}
+				}
+			} else if tc.Name == "youtube_search" {
+				// Distinct kind from the transcript tool: the trail labels these
+				// "Searched YouTube", not "Read transcript" — a listing is metadata,
+				// and a card claiming the video was read is a lie about the evidence.
+				kind = "youtube-search"
+				sa := parseYtSearchArgs(tc.Args)
+				switch {
+				case sa.Query == "" && sa.Channel == "":
+					resultText = "youtube_search needs either a `query` (free-text search) or a `channel` (a @handle or channel URL to list videos from)."
+				case ytBrowseCount >= maxYtBrowse:
+					resultText = fmt.Sprintf("YouTube search limit reached (%d per turn). Work with the videos already found.", maxYtBrowse)
+				default:
+					ytBrowseCount++
+					var vids []ytVideo
+					var verr error
+					// A channel argument wins: "what did X post about Y" is answered
+					// by listing X, not by a global search that may never surface it.
+					if sa.Channel != "" {
+						query = sa.Channel
+						vids, verr = ytChannelVideos(ctx, sa.Channel, sa.Tab, sa.Limit)
+					} else {
+						query = sa.Query
+						vids, verr = ytSearch(ctx, sa.Query, sa.Limit)
+					}
+					if verr != nil {
+						if ctx.Err() != nil {
+							return ctx.Err()
+						}
+						resultText = "YouTube search failed: " + verr.Error() +
+							"\nDo not invent video titles or links — say the search did not work."
+					} else {
+						numbers := make([]int, len(vids))
+						for i, v := range vids {
+							vurl := "https://www.youtube.com/watch?v=" + v.ID
+							if n, ok := citeByURL(citations, vurl); ok {
+								numbers[i] = n
+								continue
+							}
+							citeOffset++
+							numbers[i] = citeOffset
+							citations = append(citations, turnCitation{N: citeOffset, Title: orURL(v.Title, vurl), URL: vurl})
+							sources = append(sources, turnSource{Title: orURL(v.Title, vurl), URL: vurl})
+						}
+						what := fmt.Sprintf("%q", query)
+						if sa.Channel != "" {
+							what = fmt.Sprintf("channel %s", query)
+						}
+						// A channel/playlist tab comes back in upload order; a
+						// search comes back in relevance order. The model is told
+						// which, because the listing carries no dates of its own.
+						resultText = formatYouTubeVideos(what, vids, numbers, sa.Channel != "")
+					}
+				}
+			} else if tc.Name == "youtube_comments" {
+				kind = "youtube-comments"
+				link, limit := parseYtCommentArgs(tc.Args)
+				query = link
+				vid := parseYouTubeID(link)
+				switch {
+				case vid == "":
+					resultText = fmt.Sprintf("%q is not a YouTube link. Pass the full video URL (or its 11-character video id).", link)
+				case ytCommentCount >= maxYtComments:
+					resultText = fmt.Sprintf("Comment-read limit reached (%d per turn). Answer with what you have.", maxYtComments)
+				default:
+					ytCommentCount++
+					cs, meta, cerr := fetchYouTubeComments(ctx, vid, limit)
+					if cerr != nil {
+						if ctx.Err() != nil {
+							return ctx.Err()
+						}
+						resultText = "Comments unavailable: " + cerr.Error() +
+							"\nSay so plainly — never write what commenters 'probably' said."
+					} else {
+						vurl := "https://www.youtube.com/watch?v=" + vid
+						title := orURL(meta.Title, vurl)
+						query = title
+						n, ok := citeByURL(citations, vurl)
+						if !ok {
+							citeOffset++
+							n = citeOffset
+							citations = append(citations, turnCitation{N: n, Title: title, URL: vurl})
+						}
+						resultText = formatYouTubeComments(cs, meta, n)
 						sources = append(sources, turnSource{Title: title, URL: vurl})
 					}
 				}
 			} else {
-				if cached, ok := searchCache[query]; ok && start.Dedupe {
+				cacheKey := fmt.Sprintf("%s|%d", query, parseSearchCount(tc.Args))
+				if cached, ok := searchCache[cacheKey]; ok && start.Dedupe {
 					resultText, sources = cached.text, cached.sources
 				} else if start.MaxSearches > 0 && searchCount >= start.MaxSearches {
 					resultText = fmt.Sprintf("Search limit reached (%d per turn). Answer with the information already gathered.", start.MaxSearches)
@@ -651,7 +1136,7 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 							}
 						}
 					}
-					results, serr := searxngSearch(ctx, start.SearxngURL, query)
+					results, _, serr := searchChain(ctx, start.providerChain(), query, parseSearchCount(tc.Args))
 					if serr != nil {
 						if ctx.Err() != nil {
 							return ctx.Err()
@@ -682,20 +1167,31 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 							}
 						}
 						if start.Dedupe {
-							searchCache[query] = cachedSearch{text: resultText, sources: sources}
+							searchCache[cacheKey] = cachedSearch{text: resultText, sources: sources}
 						}
 					}
 				}
 			}
 
+			at.setBusy("")
+
 			// Cite reminder co-located with the numbered results (high compliance).
 			citeHint := ""
 			if citeOffset > citesBefore {
-				citeHint = fmt.Sprintf("\n\nWhen you use any of the above in your answer, cite it inline with its bracketed number (e.g. [%d]) right after the statement.", citesBefore+1)
+				citeHint = fmt.Sprintf("\n\nWhen you use any of the above in your answer, cite it inline with its bracketed number (e.g. [%d]) right after the statement — once, where you first use it, not on every following sentence. Anything you did not take from these results stays uncited.", citesBefore+1)
 			}
 			apiTail = append(apiTail, mustJSON(map[string]any{
 				"role": "tool", "tool_call_id": tc.ID, "content": resultText + citeHint,
 			}))
+			doneCalls[dupKey] = resultText
+			// Any video id a tool actually returned is a real one the model may
+			// link (a web search hit counts too, not just the YouTube tools).
+			if strings.HasPrefix(kind, "youtube") {
+				ytToolUsed = true
+			}
+			for _, id := range ytLinkIDs(resultText) {
+				ytSeen[id] = true
+			}
 			at.appendSearch(turnSearch{
 				Query: query, Results: resultText, Kind: kind,
 				At: contentLen, ReasoningAt: reasoningLen, DuringReasoning: during, Sources: sources,
@@ -706,12 +1202,12 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 }
 
 // streamRound POSTs one streamed round and folds the deltas into the turn (live
-// view + periodic flush), returning the round's raw content, assembled tool
-// calls, and finish reason.
-func (tm *turnManager) streamRound(ctx context.Context, at *activeTurn, start turnStart, msgs []json.RawMessage, maxTokens int, think bool) (string, []toolCall, string, error) {
-	body := buildBody(start, msgs, maxTokens, think)
+// view + periodic flush), returning the round's raw content, its reasoning_content,
+// the assembled tool calls, and the finish reason.
+func (tm *turnManager) streamRound(ctx context.Context, at *activeTurn, start turnStart, msgs []json.RawMessage, maxTokens int, think bool, toolChoice string) (string, string, []toolCall, string, error) {
+	body := buildBody(start, msgs, maxTokens, think, toolChoice)
 
-	var roundContent string
+	var roundContent, roundReasoning string
 	var reasoningStart time.Time
 	lastFlush := time.Now()
 	accs := map[int]*toolCall{}
@@ -732,6 +1228,7 @@ func (tm *turnManager) streamRound(ctx context.Context, at *activeTurn, start tu
 		if reasoningStart.IsZero() {
 			reasoningStart = time.Now()
 		}
+		roundReasoning += rc
 		at.append("reasoning", rc)
 	}
 	onTool := func(idx int, id, name, args string) {
@@ -758,13 +1255,13 @@ func (tm *turnManager) streamRound(ctx context.Context, at *activeTurn, start tu
 
 	finish, err := tm.streamSSE(ctx, body, start.ChatID, at.authKey, onContent, onReasoning, onTool, onProgress)
 	if err != nil {
-		return "", nil, "", err
+		return "", "", nil, "", err
 	}
 	calls := make([]toolCall, 0, len(order))
 	for _, idx := range order {
 		calls = append(calls, *accs[idx])
 	}
-	return roundContent, calls, finish, nil
+	return roundContent, roundReasoning, calls, finish, nil
 }
 
 // streamSSE POSTs a streamed chat completion to quartermaster's own inference
@@ -854,7 +1351,11 @@ func (tm *turnManager) streamSSE(ctx context.Context, body map[string]any, chatI
 // for THIS round; the soft reasoning budget is applied by the caller flipping it to
 // false at a round boundary (see runLoop). No native reasoning_budget is sent — that
 // hard-closes </think> mid-generation and derails tool-using models.
-func buildBody(start turnStart, msgs []json.RawMessage, maxTokens int, think bool) map[string]any {
+// toolChoice, when non-empty, is passed through as OpenAI's tool_choice for this
+// round only. runLoop uses "required" on the first round of a YouTube question to
+// stop the model answering from imagination without ever looking (see
+// turnstools.go, "fabricated videos").
+func buildBody(start turnStart, msgs []json.RawMessage, maxTokens int, think bool, toolChoice string) map[string]any {
 	b := map[string]any{"model": start.Model, "messages": msgs, "stream": true}
 	if start.Temperature != nil {
 		b["temperature"] = *start.Temperature
@@ -864,6 +1365,9 @@ func buildBody(start turnStart, msgs []json.RawMessage, maxTokens int, think boo
 	}
 	if len(start.Tools) > 0 {
 		b["tools"] = start.Tools
+		if toolChoice != "" {
+			b["tool_choice"] = toolChoice
+		}
 	}
 	b["chat_template_kwargs"] = map[string]any{"enable_thinking": think}
 	return b
@@ -890,6 +1394,18 @@ func parseToolQuery(args string) string {
 	return a.Query
 }
 
+func parseFetchArgs(args string) string {
+	var a struct {
+		URL  string `json:"url"`
+		Link string `json:"link"`
+	}
+	_ = json.Unmarshal([]byte(args), &a)
+	if a.URL == "" {
+		a.URL = a.Link
+	}
+	return strings.TrimSpace(a.URL)
+}
+
 func parseYouTubeArgs(args string) (urlOrID, lang string) {
 	var a struct {
 		URL   string `json:"url"`
@@ -901,6 +1417,74 @@ func parseYouTubeArgs(args string) (urlOrID, lang string) {
 		a.URL = a.Video
 	}
 	return strings.TrimSpace(a.URL), strings.TrimSpace(a.Lang)
+}
+
+// ytSearchArgs is one youtube_search call: a free-text query, or a channel to
+// list (with an optional tab), plus a result count.
+type ytSearchArgs struct {
+	Query   string
+	Channel string
+	Tab     string
+	Limit   int
+}
+
+func parseYtSearchArgs(args string) ytSearchArgs {
+	var a struct {
+		Query   string `json:"query"`
+		Search  string `json:"search"`
+		Q       string `json:"q"`
+		Channel string `json:"channel"`
+		Handle  string `json:"handle"`
+		Tab     string `json:"tab"`
+		// Models name a count half a dozen ways; accept the obvious ones rather
+		// than silently ignoring the one they picked.
+		Limit   *int `json:"limit"`
+		MaxRes  *int `json:"max_results"`
+		Count   *int `json:"count"`
+		NumRes  *int `json:"n"`
+		Results *int `json:"results"`
+	}
+	_ = json.Unmarshal([]byte(args), &a)
+	out := ytSearchArgs{
+		Query:   strings.TrimSpace(firstNonEmpty(a.Query, a.Search, a.Q)),
+		Channel: strings.TrimSpace(firstNonEmpty(a.Channel, a.Handle)),
+		Tab:     strings.TrimSpace(a.Tab),
+	}
+	for _, p := range []*int{a.Limit, a.MaxRes, a.Count, a.NumRes, a.Results} {
+		if p != nil && *p > 0 {
+			out.Limit = *p
+			break
+		}
+	}
+	return out
+}
+
+func parseYtCommentArgs(args string) (urlOrID string, limit int) {
+	var a struct {
+		URL    string `json:"url"`
+		Video  string `json:"video"`
+		ID     string `json:"id"`
+		Limit  *int   `json:"limit"`
+		MaxCom *int   `json:"max_comments"`
+		Count  *int   `json:"count"`
+	}
+	_ = json.Unmarshal([]byte(args), &a)
+	for _, p := range []*int{a.Limit, a.MaxCom, a.Count} {
+		if p != nil && *p > 0 {
+			limit = *p
+			break
+		}
+	}
+	return strings.TrimSpace(firstNonEmpty(a.URL, a.Video, a.ID)), limit
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func citeByURL(cs []turnCitation, url string) (int, bool) {

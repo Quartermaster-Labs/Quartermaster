@@ -260,6 +260,16 @@ export function genDefaultSpec(c: ModelConfig | null): string {
   return "ngram-mod";
 }
 
+// The KV cache type the generator emits for THIS model, read off its rendered
+// command. Used to decide whether a value parsed out of the command box is a
+// real edit or just the default echoed back. Was a hardcoded "q8_0"; autogen now
+// picks per model (f16, stepping down to q8_0 only when f16 can't reach the
+// minimum context in the VRAM budget), so a constant would mis-flag every model.
+export function genDefaultKv(c: ModelConfig | null): string {
+  const m = /(?:^|\s)-ctk\s+(\S+)/.exec(c?.cmd ?? "");
+  return m ? m[1] : "f16";
+}
+
 // Does spec list s contain backend b?
 export function specHas(s: string | undefined, b: string): boolean {
   return (s ?? "").split("+").includes(b);

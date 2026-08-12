@@ -13,10 +13,10 @@ A minimal generic fixed-capacity ring (circular) buffer. Pushing past capacity o
 
 ## Important types & functions
 
-- `Buffer[T any]` struct — `buffer.go:3`. Backing slice plus `head` and `size` indices. Used as a value (constructor returns `Buffer[T]`, methods take a pointer receiver).
-- `NewBuffer[T any](capacity int) Buffer[T]` — `buffer.go:9`. Capacity is clamped to a minimum of 1.
-- `(*Buffer[T]) Push(v T)` — `buffer.go:17`. Appends; once full, overwrites the oldest element and advances `head`.
-- `(*Buffer[T]) Slice() []T` — `buffer.go:29`. Returns all current entries in insertion order as a freshly allocated slice (`nil` when empty).
+- `Buffer[T any]` struct — `buffer.go`. Backing slice plus `head` and `size` indices. Used as a value (constructor returns `Buffer[T]`, methods take a pointer receiver).
+- `NewBuffer[T any](capacity int) Buffer[T]` — `buffer.go`. Capacity is clamped to a minimum of 1.
+- `(*Buffer[T]) Push(v T)` — `buffer.go`. Appends; once full, overwrites the oldest element and advances `head`.
+- `(*Buffer[T]) Slice() []T` — `buffer.go`. Returns all current entries in insertion order as a freshly allocated slice (`nil` when empty).
 
 ## Connections
 

@@ -1,6 +1,7 @@
 import { persistentStore } from "./persistent";
 import { userPref } from "./prefs";
 import type { SystemPreset } from "../lib/systemPrompt";
+import { DEFAULT_SEARCH_PROVIDERS, type SearchProviderCfg } from "../lib/webSearch";
 
 // Shared singletons so other pages (e.g. the Models panel's "Chat" button) can
 // drive the always-mounted playground. persistentStore returns a fresh writable
@@ -32,12 +33,28 @@ export const webSearchStore = userPref<boolean>("playground-websearch", true);
 // Quartermaster tools: let the chat model inspect + tune this running instance
 // (see lib/qmTools.ts). Default on, like web search; a toggle in the chat menu.
 export const qmToolsStore = userPref<boolean>("playground-qmtools", true);
+// Weather + RSS/Atom feeds (lib/assistantTools.ts EXTRA_TOOLS). Separate from
+// the always-on local trio (clock / calculator / units) because these two hit
+// the network and only matter to some conversations — and every advertised
+// tool is prefix the KV cache carries on every turn.
+export const extraToolsStore = userPref<boolean>("playground-extratools", true);
 export const reasoningStore = userPref<boolean>("playground-reasoning", true);
 // Rewrite mode: composer becomes a two-field (instructions + prose) rewriter
 // whose output renders as a side-by-side diff. Toggle + last-used instruction.
 export const rewriteStore = userPref<boolean>("playground-rewrite", false);
 export const rewriteInstructionStore = userPref<string>("playground-rewrite-instruction", "");
+// Shopping assistant: staged buying helper (brief → research → report). Off by
+// default — it changes how the model answers, so it is opt-in per conversation
+// via the composer tool menu. The prefs line (country / currency / shops) is
+// standing, not per-chat: prices from the wrong country are worthless.
+export const shoppingStore = userPref<boolean>("playground-shopping", false);
+export const shoppingPrefsStore = userPref<string>("playground-shopping-prefs", "");
 export const searxngUrlStore = userPref<string>("playground-searxng-url", "http://localhost:8888");
+// Ordered web-search failover chain (SearXNG first, keyed APIs behind it). One
+// provider means one timeout ends the tool call; see lib/webSearch.ts and
+// internal/server/search.go. Stored raw — normalizeProviders() repairs it on
+// read, so a provider added later needs no migration here.
+export const searchProvidersStore = userPref<SearchProviderCfg[]>("playground-search-providers", DEFAULT_SEARCH_PROVIDERS);
 // Web-search rate controls (protect self-hosted SearXNG from runaway agents).
 export const searchMaxPerTurnStore = userPref<number>("playground-search-max-per-turn", 5);
 export const searchThrottleMsStore = userPref<number>("playground-search-throttle-ms", 500);

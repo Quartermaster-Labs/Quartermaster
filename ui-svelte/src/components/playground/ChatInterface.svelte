@@ -14,11 +14,15 @@
     qmToolsStore,
     reasoningStore,
     searxngUrlStore,
+    searchProvidersStore,
     searchMaxPerTurnStore,
     searchThrottleMsStore,
     searchDedupeStore,
     rewriteStore,
     rewriteInstructionStore,
+    shoppingStore,
+    shoppingPrefsStore,
+    extraToolsStore,
   } from "../../stores/playground";
   import {
     chatSessions,
@@ -29,20 +33,63 @@
     deriveTitle,
     type ChatSession,
   } from "../../stores/chatHistory";
-  import { WEB_SEARCH_TOOL } from "../../lib/webSearch";
+  import { WEB_SEARCH_TOOL, normalizeProviders, providerReady } from "../../lib/webSearch";
   import { WIKI_TOOL } from "../../lib/wiki";
   import { QM_INSPECT_TOOL, QM_CONFIGURE_TOOL } from "../../lib/qmTools";
-  import { YOUTUBE_TOOL } from "../../lib/youtube";
+  import { YOUTUBE_TOOL, YOUTUBE_SEARCH_TOOL, YOUTUBE_COMMENTS_TOOL } from "../../lib/youtube";
+  import { FETCH_PAGE_TOOL } from "../../lib/fetchPage";
+  import { CONVERT_CURRENCY_TOOL } from "../../lib/currency";
+  import { ALWAYS_TOOLS, EXTRA_TOOLS } from "../../lib/assistantTools";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import { getTextContent, getImageUrls } from "../../lib/types";
   import { buildBasePrompt } from "../../lib/systemPrompt";
   import type { ChatMessage, ContentPart } from "../../lib/types";
-  import { Paperclip, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle, Eye, Wrench, Reply, Quote } from "lucide-svelte";
+  import { Paperclip, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle, Wrench, Reply, Quote, ShoppingCart, CloudSun } from "lucide-svelte";
   import ChatMessageComponent from "./ChatMessage.svelte";
   import Composer from "./Composer.svelte";
+  import ToolMenu from "./ToolMenu.svelte";
   import { modelCategory } from "../../lib/modelUtils";
   import { scrollFade } from "../../lib/scrollFade";
-  import { quotePrefix, fmtTokens, TEMP_STEPS, TEMP_LABELS, nearestTempIdx, currentDateLine, REWRITE_SYSTEM, MAX_IMAGES_PER_MESSAGE, validateImageFile, fileToDataUrl } from "./chatHelpers";
+  import { quotePrefix, fmtTokens, TEMP_STEPS, TEMP_LABELS, nearestTempIdx, currentDateLine, REWRITE_SYSTEM, MAX_IMAGES_PER_MESSAGE, validateImageFile, fileToDataUrl, type ToolItem } from "./chatHelpers";
+
+  // Both prefs persist, so a session saved before modes became exclusive can come
+  // back with two on — settle it once at mount, newest mode loses to rewrite's
+  // dedicated UI.
+  if ($rewriteStore && $shoppingStore) shoppingStore.set(false);
+
+  // Composer tool menu: agent MODES only — each one rewires how the assistant
+  // answers, and the menu button wears the active mode's icon. Plain capability
+  // flags (reasoning, web search, qm tools) belong in the Configs popover.
+  const toolMenuItems = $derived<ToolItem[]>([
+    {
+      key: "rewrite",
+      label: "Rewrite",
+      description: "Edit pasted text to an instruction, side by side with the original.",
+      icon: PenLine,
+      active: $rewriteStore,
+      onToggle: () => {
+        const on = !$rewriteStore;
+        // Modes are exclusive: rewrite is a single-shot text edit with no tool
+        // loop, so it can't co-exist with the shopping assistant's research.
+        if (on) shoppingStore.set(false);
+        rewriteStore.set(on);
+        showToast(on ? "Rewrite mode on" : "Rewrite mode off");
+      },
+    },
+    {
+      key: "shopping",
+      label: "Shopping assistant",
+      description: "Buying help: pins down the brief, reads real shop pages, returns a compared shortlist.",
+      icon: ShoppingCart,
+      active: $shoppingStore,
+      onToggle: () => {
+        const on = !$shoppingStore;
+        if (on) rewriteStore.set(false);
+        shoppingStore.set(on);
+        showToast(on ? "Shopping assistant on" : "Shopping assistant off");
+      },
+    },
+  ]);
 
   // Ensure a valid active conversation exists, migrating the legacy single-chat
   // store the first time. The store (chatSessions) is the single source of truth
@@ -201,7 +248,11 @@
   }
   let isStreaming = $derived(genId !== null);
   let isReasoning = $state(false);
-  let isSearching = $state(false);
+  // What the server says the turn is doing right now ("Searching for …"). A tool
+  // call only produces a search card once it FINISHES, so this is the only signal
+  // during the seconds it runs. Server-driven: the turn loop owns the tools.
+  let busyLabel = $state("");
+  let isSearching = $derived(busyLabel !== "");
   let reasoningStartTime = $state<number>(0);
   let abortController = $state<AbortController | null>(null);
   let messagesContainer: HTMLDivElement | undefined = $state();
@@ -249,47 +300,17 @@
   );
   let canAttach = $derived(selectedModelVision || !!visionTwin);
 
-  // The non-vision sibling to swap back to when turning vision off. Only exists
-  // when we're currently on a twin that has a text-only base (native-vision
-  // models have no base, so the toggle can't disable them).
-  let visionBase = $derived(
-    selectedModelVision
-      ? $models.find(
-          (m) =>
-            !!m.family &&
-            m.family === selectedModel?.family &&
-            m.id !== selectedModel?.id &&
-            !m.capabilities?.vision
-        )
-      : undefined
-  );
-  // Vision toggle: lit when on the vision twin (auto-lights after attach, which
-  // swaps to it). Shown only when a swap target exists in either direction.
-  let visionActive = $derived(selectedModelVision && !!visionBase);
-  let showVisionToggle = $derived(!!visionTwin || !!visionBase);
-
-  // Switch to the vision twin (loading its mmproj projector) if needed, then open
-  // the file picker. Warm-loads the twin so the swap overlaps file selection.
+  // Attaching IS the vision switch: swap to the twin (loading its mmproj
+  // projector) if needed, then open the file picker. Warm-loading the twin
+  // overlaps the swap with file selection. Going back to the text-only build is
+  // the model picker's job — no separate vision toggle.
   function attachImage() {
     if (visionTwin) {
       selectedModelStore.set(visionTwin.id);
       void loadModel(visionTwin.id).catch(() => {});
+      showToast("Switched to the vision variant");
     }
     fileInput?.click();
-  }
-
-  // Swap between the text base and its vision twin. Disabling clears any pending
-  // images — the base model 500s on image input.
-  function toggleVision() {
-    const target = visionActive ? visionBase : visionTwin;
-    if (!target) return;
-    if (visionActive) {
-      attachedImages = [];
-      imageError = null;
-    }
-    selectedModelStore.set(target.id);
-    void loadModel(target.id).catch(() => {});
-    showToast(visionActive ? "Vision disabled" : "Vision enabled");
   }
   // Loaded → an empty stream means the model is generating, not swapping in.
   // Use the authoritative catalog state (what the dashboard shows), not just the
@@ -319,6 +340,53 @@
       const ready = listed.find((m) => m.state === "ready");
       selectedModelStore.set((ready ?? listed[0]).id);
     }
+  });
+
+  // Per-chat model memory. Switching conversations re-selects the model that chat
+  // last ran on, so a thread stays on the model it was built with. Only fires on an
+  // actual chat switch (guarded by lastAppliedChat) — inside a chat the user's own
+  // pick wins, and rememberModel() writes it back. A chat with no recorded model
+  // (fresh, or created before this existed) keeps the current selection.
+  let lastAppliedChat = "";
+  $effect(() => {
+    const id = $activeChatId;
+    if (id === lastAppliedChat) return;
+    lastAppliedChat = id;
+    const want = get(chatSessions).find((s) => s.id === id)?.model;
+    // Don't validate against $models here: the catalog may not have arrived yet,
+    // and the default-correction effect above already snaps away from a model that
+    // turns out to be gone.
+    if (want && want !== get(selectedModelStore)) selectedModelStore.set(want);
+  });
+
+  // Bind the current model to the open chat. Called on an explicit pick in the
+  // composer's selector and at the start of every turn (which also captures the
+  // vision-twin swap and any model the user changed to mid-thread).
+  function rememberModel(modelId: string) {
+    const id = $activeChatId;
+    if (!modelId || !id) return;
+    lastAppliedChat = id; // this selection IS the chat's model — don't re-apply over it
+    if (sessionById(id)?.model !== modelId) patchSession(id, { model: modelId });
+  }
+
+  // Warm-start the selected model while the user is still typing, so the first
+  // token doesn't wait on a cold load/swap. Fires once per model, ~500 ms after the
+  // composer stops being empty. A ready/starting model is skipped; the request is
+  // the same idempotent GET /upstream/<id>/ the dashboard's load button uses.
+  let preloadedModel = "";
+  $effect(() => {
+    const typing = userInput.trim().length > 0;
+    const id = $selectedModelStore;
+    const state = $models.find((m) => m.id === id)?.state;
+    if (!typing || !id || genId !== null || preloadedModel === id) return;
+    if (state === "ready" || state === "starting") return;
+    const t = setTimeout(() => {
+      preloadedModel = id;
+      void loadModel(id).catch(() => {
+        preloadedModel = ""; // failed load → let the next keystroke retry
+      });
+    }, 500);
+    return () => clearTimeout(t);
   });
 
   $effect(() => {
@@ -470,8 +538,21 @@
     await regenerateFromIndex(id, sessionById(id)!.messages.length - 1);
   }
 
-  function cancelStreaming() {
+  // Stop. Aborting the local fetch only detaches this VIEWER — the turn runs
+  // server-side (that is the whole point: a closed tab doesn't kill it), so the
+  // backend kept generating and the next send came back 409 "already
+  // generating". Tell the server too. Abort first so the UI stops instantly,
+  // then cancel the turn; the DELETE carries no signal of its own so the abort
+  // above cannot cancel the cancel.
+  async function cancelStreaming() {
+    const id = genId ?? $activeChatId;
     abortController?.abort();
+    if (!id) return;
+    try {
+      await fetch(`/api/chats/turn?chatId=${encodeURIComponent(id)}`, { method: "DELETE" });
+    } catch {
+      showToast("Could not stop the generation on the server");
+    }
   }
 
   // Accept/deny a pending qm config change — unblocks the server-side turn, which
@@ -508,6 +589,10 @@
     qmAvailable: boolean,
     youtubeAvailable: boolean,
     modelId: string,
+    fetchAvailable = false,
+    shoppingPrefs: string | false = false,
+    assistantAvailable = false,
+    extrasAvailable = false,
   ): string {
     // Persona + tool sub-prompts, all from the active system-prompt selection
     // (built-in default, a named preset, or none). A preset bundles its own tool
@@ -518,6 +603,14 @@
       wiki: wikiAvailable,
       qm: qmAvailable,
       youtube: youtubeAvailable,
+      fetch: fetchAvailable,
+      shopping: shoppingPrefs,
+      assistant: assistantAvailable,
+      extras: extrasAvailable,
+      // The chat pane renders ```mermaid / ```chart blocks (lib/diagrams.ts), so
+      // the model is always told it can draw. Rewrite mode never gets here — it
+      // ships REWRITE_SYSTEM instead.
+      diagrams: true,
       model: modelId,
     });
   }
@@ -538,6 +631,8 @@
     // streams in the background; the turn must stay on the model it started on.
     const modelId = $selectedModelStore;
     if (!modelId || !sessionById(id)) return;
+    // The chat now belongs to this model — reopening it re-selects it.
+    rememberModel(modelId);
 
     // Editing/regenerating inside the already-summarized region would make the
     // summary describe messages that no longer match — drop compaction and resend
@@ -561,7 +656,7 @@
 
     genId = id;
     isReasoning = false;
-    isSearching = false;
+    busyLabel = "";
     reasoningStartTime = 0;
     abortController = new AbortController();
     const signal = abortController.signal;
@@ -577,13 +672,32 @@
     // (yt-dlp is resolved server-side) and only fires when the user actually
     // brings up a video. A missing yt-dlp comes back as a clear tool error.
     const ytEnabled = !isRewrite;
+    // Reading a page pairs with searching: search finds the URL, fetch_page reads
+    // the real thing off it. On its own (no search) the model has no way to find
+    // a URL, so it rides the same toggle. Shopping mode needs it outright — a
+    // price from a snippet is not a price.
+    const fetchEnabled = !isRewrite && (webEnabled || $shoppingStore);
+    // Clock / calculator / unit converter: local, instant, and correcting a
+    // failure mode (confident wrong dates and arithmetic) that shows up in
+    // ordinary conversation, so they ride along with the wiki as always-on.
+    const assistantEnabled = !isRewrite;
+    // Weather + feeds hit the network and only matter to some chats — own toggle.
+    const extrasEnabled = !isRewrite && $extraToolsStore;
+    // Shopping mode: staged buying helper. Carries the standing prefs line.
+    const shoppingPrefs: string | false = !isRewrite && $shoppingStore ? $shoppingPrefsStore : false;
     // Stable per-turn tool set the client advertises; the server dispatches them
     // and enforces the per-turn caps (wiki lookups, web-search rate limits).
     const turnTools = [
       ...(webEnabled ? [WEB_SEARCH_TOOL] : []),
+      ...(fetchEnabled ? [FETCH_PAGE_TOOL] : []),
+      // Shopping only: outside it, converting money is a rare aside a search can
+      // answer, and every advertised tool is prefix the KV cache has to carry.
+      ...(!isRewrite && $shoppingStore ? [CONVERT_CURRENCY_TOOL] : []),
+      ...(assistantEnabled ? ALWAYS_TOOLS : []),
+      ...(extrasEnabled ? EXTRA_TOOLS : []),
       ...(wikiEnabled ? [WIKI_TOOL] : []),
       ...(qmEnabled ? [QM_INSPECT_TOOL, QM_CONFIGURE_TOOL] : []),
-      ...(ytEnabled ? [YOUTUBE_TOOL] : []),
+      ...(ytEnabled ? [YOUTUBE_TOOL, YOUTUBE_SEARCH_TOOL, YOUTUBE_COMMENTS_TOOL] : []),
     ];
 
     // Thinking budget: soft cumulative-thinking cap so models can't loop forever
@@ -600,7 +714,7 @@
     const genStart = Date.now();
 
     const sys = [
-      basePrompt(webEnabled, wikiEnabled, qmEnabled, ytEnabled, modelId),
+      basePrompt(webEnabled, wikiEnabled, qmEnabled, ytEnabled, modelId, fetchEnabled, shoppingPrefs, assistantEnabled, extrasEnabled),
       sessionById(id)?.instructions?.trim(),
       curSummary && `Summary of earlier conversation:\n${curSummary}`,
       // Rewrite turns keep the full conversation for context (setting, characters,
@@ -651,7 +765,8 @@
           reasoning: !isRewrite && $reasoningStore,
           reasoningBudget,
           webSearch: webEnabled,
-          searxngUrl: $searxngUrlStore,
+          searxngUrl: $searxngUrlStore, // legacy field: the server falls back to it when the chain is empty
+          searchProviders: normalizeProviders($searchProvidersStore, $searxngUrlStore).filter(providerReady),
           maxSearches: $searchMaxPerTurnStore,
           throttleMs: $searchThrottleMsStore,
           dedupe: $searchDedupeStore,
@@ -710,7 +825,7 @@
       }
       genId = null;
       isReasoning = false;
-      isSearching = false;
+      busyLabel = "";
       abortController = null;
     }
 
@@ -810,12 +925,17 @@
         }
         break;
       }
+      case "busy":
+        // "" = nothing running; the label is shown verbatim.
+        busyLabel = d.text || "";
+        break;
       case "approval":
         // A qm config change awaiting accept/deny (or its resolved outcome).
         // Lives on the bubble only for the turn; the post-turn sync drops it.
         if (d.data) patchLast(id, (m) => ({ ...m, approval: d.data }));
         break;
       case "done":
+        busyLabel = "";
         if (d.genMs) patchLast(id, (m) => (m.role === "assistant" ? { ...m, genTimeMs: d.genMs } : m));
         break;
       case "error":
@@ -854,7 +974,7 @@
     }
     genId = id;
     isReasoning = false;
-    isSearching = false;
+    busyLabel = "";
     reasoningStartTime = 0;
     abortController = new AbortController();
     const signal = abortController.signal;
@@ -871,7 +991,7 @@
     } finally {
       genId = null;
       isReasoning = false;
-      isSearching = false;
+      busyLabel = "";
       abortController = null;
     }
   }
@@ -1081,6 +1201,7 @@
             isStreaming={genId === $activeChatId && idx === messages.length - 1 && message.role === "assistant"}
             isReasoning={isReasoning && genId === $activeChatId && idx === messages.length - 1 && message.role === "assistant"}
             isSearching={isSearching && genId === $activeChatId && idx === messages.length - 1 && message.role === "assistant"}
+            {busyLabel}
             modelReady={modelReady}
             hasVisionInput={message.role === "assistant" && idx > 0 && getImageUrls(messages[idx - 1].content).length > 0}
             onEdit={message.role === "user" && message.rewriteInstruction == null ? (newContent) => editMessage(idx, newContent) : undefined}
@@ -1088,6 +1209,9 @@
               ? () => regenerateFromIndex($activeChatId, idx - 1)
               : undefined}
             onReply={message.role === "assistant" ? () => { replyTo(idx); inputEl?.focus(); } : undefined}
+            onAskAnswer={message.role === "assistant" && idx === messages.length - 1 && genId !== $activeChatId
+              ? (text) => { userInput = text; void sendMessage(); }
+              : undefined}
           />
           </div>
         {/each}
@@ -1149,6 +1273,26 @@
           </div>
         </div>
 
+        <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-reasoning">
+          <span class="flex items-center gap-1.5"><Brain class="w-3.5 h-3.5" /> Reasoning {@render tip("Let the model think before answering (for reasoning-capable models).")}</span>
+          <input id="chat-reasoning" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$reasoningStore} />
+        </label>
+
+        <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-websearch">
+          <span class="flex items-center gap-1.5"><Search class="w-3.5 h-3.5" /> Web Search {@render tip("Let the model search the web (via SearXNG) for fresh facts. Needs a tool-calling model. URL + rate limits are in the side-rail Settings.")}</span>
+          <input id="chat-websearch" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$webSearchStore} />
+        </label>
+
+        <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-extratools">
+          <span class="flex items-center gap-1.5"><CloudSun class="w-3.5 h-3.5" /> Weather & Feeds {@render tip("Let the model read the live weather (Open-Meteo) and any RSS/Atom feed. The clock, calculator and unit converter are always on and need no toggle.")}</span>
+          <input id="chat-extratools" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$extraToolsStore} />
+        </label>
+
+        <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-qmtools">
+          <span class="flex items-center gap-1.5"><Wrench class="w-3.5 h-3.5" /> QM Tools {@render tip("Let the model inspect and tune this quartermaster instance — list installed models, read live VRAM/config, and change settings (hot-reloads, no eviction). Needs a tool-calling model. Requires -generate for edits.")}</span>
+          <input id="chat-qmtools" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$qmToolsStore} />
+        </label>
+
         <div class="flex flex-col gap-1">
           <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">Instructions {@render tip("Standing instructions for THIS chat only, layered on top of the built-in prompt. Saved with the conversation.")}</span>
           <button
@@ -1160,20 +1304,24 @@
           </button>
         </div>
 
-        <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-reasoning">
-          <span class="flex items-center gap-1.5"><Brain class="w-3.5 h-3.5" /> Reasoning {@render tip("Let the model think before answering (for reasoning-capable models).")}</span>
-          <input id="chat-reasoning" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$reasoningStore} />
-        </label>
+        {#if $shoppingStore}
+          <div class="flex flex-col gap-1">
+            <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">
+              <ShoppingCart class="w-3.5 h-3.5" /> Shopping preferences
+              {@render tip("Where you buy: country, currency and the shops you prefer. Standing setting — the assistant searches these first instead of asking every time.")}
+            </span>
+            <input
+              type="text"
+              class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary text-[0.8125rem]"
+              placeholder="e.g. Romania, RON, prefer emag.ro and altex.ro"
+              bind:value={$shoppingPrefsStore}
+            />
+          </div>
+        {/if}
 
-        <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-websearch">
-          <span class="flex items-center gap-1.5"><Search class="w-3.5 h-3.5" /> Web Search {@render tip("Let the model search the web (via SearXNG) for fresh facts. Needs a tool-calling model. URL + rate limits are in the side-rail Settings.")}</span>
-          <input id="chat-websearch" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$webSearchStore} />
-        </label>
-
-        <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-qmtools">
-          <span class="flex items-center gap-1.5"><Wrench class="w-3.5 h-3.5" /> QM Tools {@render tip("Let the model inspect and tune this quartermaster instance — list installed models, read live VRAM/config, and change settings (hot-reloads, no eviction). Needs a tool-calling model. Requires -generate for edits.")}</span>
-          <input id="chat-qmtools" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$qmToolsStore} />
-        </label>
+        <p class="text-xs text-txtsecondary/80">
+          Rewrite and the Shopping assistant are modes — pick them from the ✨ menu beside the text box.
+        </p>
       {/snippet}
 
       <!-- System-prompt editor: roomier modal to write/save the standing prompt. -->
@@ -1297,32 +1445,23 @@
       {/snippet}
 
       {#snippet chatLeftButtons()}
-        {#if canAttach}
-          <button
-            class="composer-icon-btn"
-            onclick={attachImage}
-            disabled={isStreaming || !$selectedModelStore}
-            title={visionTwin ? "Attach image (loads vision projector)" : "Attach image"}
-          >
-            <Paperclip class="w-[1.125rem] h-[1.125rem]" />
-          </button>
-        {/if}
-        {#if showVisionToggle}
-          <button
-            class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors {visionActive ? 'bg-primary/10 text-primary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
-            onclick={toggleVision}
-            disabled={isStreaming}
-            title={visionActive ? "Vision on (image variant loaded)" : "Vision off — switch to image variant"}
-          >
-            <Eye class="w-[1.125rem] h-[1.125rem]" />
-          </button>
-        {/if}
+        <ToolMenu items={toolMenuItems} disabled={isStreaming} />
+        <!-- Always shown so the composer row doesn't reshuffle per model; what it
+             accepts is what the selected model can actually read (images only for
+             now), and it's dead when the model can read nothing. -->
         <button
-          class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors {$rewriteStore ? 'bg-primary/10 text-primary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
-          onclick={() => { rewriteStore.set(!$rewriteStore); showToast($rewriteStore ? "Rewrite mode on" : "Rewrite mode off"); }}
-          title={$rewriteStore ? "Rewrite mode on" : "Rewrite mode off"}
+          class="composer-icon-btn"
+          onclick={attachImage}
+          disabled={isStreaming || !$selectedModelStore || !canAttach}
+          title={!$selectedModelStore
+            ? "Pick a model first"
+            : !canAttach
+              ? "This model can't read attachments"
+              : visionTwin
+                ? "Attach image (loads vision projector)"
+                : "Attach image"}
         >
-          <PenLine class="w-[1.125rem] h-[1.125rem]" />
+          <Paperclip class="w-[1.125rem] h-[1.125rem]" />
         </button>
       {/snippet}
 
@@ -1352,6 +1491,7 @@
         onKeydown={handleKeyDown}
         onPaste={handlePaste}
         bind:modelValue={$selectedModelStore}
+        onModelChange={rememberModel}
         modelPlaceholder="Select a model..."
         category="llm"
         busy={isStreaming}

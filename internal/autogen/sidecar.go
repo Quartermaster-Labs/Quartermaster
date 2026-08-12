@@ -137,6 +137,15 @@ type BackendEntry struct {
 	// class: ★ "default for LLMs"). A model with no explicit backend resolves to
 	// the class-default entry, else the first entry of that class.
 	Default bool `yaml:"default,omitempty"`
+	// Managed marks a row whose binary was downloaded by the in-app backend
+	// manager (internal/backends) rather than pointed at by hand. Component +
+	// Version + Variant identify which build, so an update can repoint this row
+	// and the UI can offer a rollback to another installed version. A manual row
+	// leaves all four zero and is never touched by the manager.
+	Managed   bool   `yaml:"managed,omitempty"`
+	Component string `yaml:"component,omitempty"`
+	Version   string `yaml:"version,omitempty"`
+	Variant   string `yaml:"variant,omitempty"`
 }
 
 // loadSidecar reads the whole sidecar, returning a zero value when absent.

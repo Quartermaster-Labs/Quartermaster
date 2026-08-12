@@ -7,6 +7,7 @@
     reasoningBudgetStore,
     webSearchStore,
     searxngUrlStore,
+    searchProvidersStore,
     searchMaxPerTurnStore,
     searchThrottleMsStore,
     searchDedupeStore,
@@ -22,7 +23,14 @@
     PROMPT_VARS,
     type SystemPreset,
   } from "../lib/systemPrompt";
-  import { searxngSearch } from "../lib/webSearch";
+  import {
+    SEARCH_PROVIDER_META,
+    normalizeProviders,
+    providerReady,
+    searchViaChain,
+    type SearchProviderCfg,
+    type SearchProviderId,
+  } from "../lib/webSearch";
   import { openWikiArticle } from "../stores/wiki";
   import { me, logout } from "../stores/playgroundAuth";
   import { themeMode } from "../stores/theme";
@@ -157,7 +165,7 @@
     { key: "content", label: "System Prompt", def: DEFAULT_BUILTIN_PROMPT, blank: "No system prompt", note: "The persona and instructions. Blank means no system prompt.", vars: true },
     { key: "search", label: "Web Search", def: DEFAULT_SEARCH_PROMPT, blank: "Shipped default", note: "Appended when Web Search is on. Blank uses the shipped default.", vars: false },
     { key: "wiki", label: "Wiki", def: DEFAULT_WIKI_PROMPT, blank: "Shipped default", note: "Appended when the help wiki tool is active (always on in chat). Blank uses the shipped default.", vars: false },
-    { key: "youtube", label: "YouTube", def: DEFAULT_YOUTUBE_PROMPT, blank: "Shipped default", note: "Appended when the youtube_transcript tool is active (always on in chat). Blank uses the shipped default.", vars: false },
+    { key: "youtube", label: "YouTube", def: DEFAULT_YOUTUBE_PROMPT, blank: "Shipped default", note: "Appended when the YouTube tools are active (transcript, search and comments — always on in chat). Blank uses the shipped default.", vars: false },
     { key: "cite", label: "Citations", def: DEFAULT_CITE_PROMPT, blank: "Shipped default", note: "Appended when a citing tool is on — how to cite [n]. Blank uses the shipped default.", vars: false },
   ] as const;
   let presetEditor = $state<null | {
@@ -228,17 +236,53 @@
     }
   });
   let confirmLogout = $state(false);
-  let searxngProbe = $state<{ state: "idle" | "testing" | "ok" | "fail"; msg: string }>({ state: "idle", msg: "" });
 
-  async function testSearxng() {
-    searxngProbe = { state: "testing", msg: "" };
+  // Web-search provider chain. Local $state (not the store directly) so a
+  // half-typed API key isn't PUT to the server on every keystroke; saveProviders
+  // writes the whole list back. Seeded from the store once — prefs are hydrated
+  // by PlaygroundApp before this component mounts.
+  let providers = $state<SearchProviderCfg[]>(normalizeProviders(get(searchProvidersStore), get(searxngUrlStore)));
+  let searchProbe = $state<Record<string, { state: "idle" | "testing" | "ok" | "fail"; msg: string }>>({});
+
+  function providerMeta(id: SearchProviderId) {
+    return SEARCH_PROVIDER_META.find((m) => m.id === id)!;
+  }
+
+  function saveProviders() {
+    searchProvidersStore.set(providers.map((p) => ({ ...p })));
+    // Keep the legacy standalone pref in step: it is what an older client and
+    // the GET /api/websearch proxy still read.
+    const searx = providers.find((p) => p.id === "searxng");
+    if (searx?.baseUrl !== undefined) searxngUrlStore.set(searx.baseUrl);
+  }
+
+  // Order IS the failover order, so it has to be editable. Two arrow buttons
+  // rather than drag-and-drop: five rows, and a drag target in a scrolling
+  // settings pane is more fuss than it is worth.
+  function moveProvider(i: number, dir: -1 | 1) {
+    const j = i + dir;
+    if (j < 0 || j >= providers.length) return;
+    [providers[i], providers[j]] = [providers[j], providers[i]];
+    searchProbe = {};
+    saveProviders();
+  }
+
+  async function testProvider(p: SearchProviderCfg) {
+    searchProbe = { ...searchProbe, [p.id]: { state: "testing", msg: "" } };
     try {
-      const results = await searxngSearch(get(searxngUrlStore), "test");
-      searxngProbe = { state: "ok", msg: `OK — ${results.length} result${results.length === 1 ? "" : "s"}` };
+      // Test THIS row alone — a chain test would silently pass on the provider
+      // below the one being configured.
+      const { results } = await searchViaChain([{ ...p, enabled: true }], "test", 3);
+      searchProbe = {
+        ...searchProbe,
+        [p.id]: { state: "ok", msg: `OK — ${results.length} result${results.length === 1 ? "" : "s"}` },
+      };
     } catch (e) {
-      const m = e instanceof Error ? e.message : String(e);
-      // A bare "Failed to fetch" is almost always CORS or wrong host/port.
-      searxngProbe = { state: "fail", msg: /failed to fetch/i.test(m) ? "Failed — unreachable or CORS blocked" : m };
+      const m = (e instanceof Error ? e.message : String(e)).trim();
+      searchProbe = {
+        ...searchProbe,
+        [p.id]: { state: "fail", msg: /failed to fetch/i.test(m) ? "Failed — server unreachable" : m || "Failed" },
+      };
     }
   }
 
@@ -607,34 +651,112 @@
           {:else if settingsCat === "search"}
             <div class="flex flex-col gap-1.5">
               <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="websearch">
-                <span class="flex items-center gap-1.5">Web Search {@render tip("Let the model search the web (via SearXNG) for fresh facts. Needs a tool-calling model.")}</span>
+                <span class="flex items-center gap-1.5">Web Search {@render tip("Let the model search the web for fresh facts. Needs a tool-calling model.")}</span>
                 <input id="websearch" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$webSearchStore} />
               </label>
               {#if $webSearchStore}
-                <div class="flex gap-1.5">
-                  <input
-                    type="text"
-                    class="flex-1 min-w-0 px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary"
-                    placeholder="SearXNG URL (http://localhost:8888)"
-                    bind:value={$searxngUrlStore}
-                    oninput={() => (searxngProbe = { state: "idle", msg: "" })}
-                  />
-                  <button
-                    class="shrink-0 px-2.5 py-1.5 rounded-md border border-card-border bg-surface text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
-                    onclick={testSearxng}
-                    disabled={searxngProbe.state === "testing" || !$searxngUrlStore.trim()}
-                    title="Probe the SearXNG endpoint"
-                  >
-                    {searxngProbe.state === "testing" ? "Testing…" : "Test"}
-                  </button>
+                <!-- Provider chain. Tried top to bottom; a provider that errors,
+                     times out or returns nothing hands off to the next one. -->
+                <div class="flex flex-col gap-2 border-t border-card-border pt-2.5">
+                  <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">
+                    Providers {@render tip("Searched in order, top first. If one times out or returns nothing, the next one is tried — so a rate-limited SearXNG no longer ends the search. Keyed providers only spend quota when the ones above them failed.")}
+                  </span>
+
+                  {#each providers as p, i (p.id)}
+                    {@const meta = providerMeta(p.id)}
+                    {@const probe = searchProbe[p.id]}
+                    <div class="rounded-md border {p.enabled ? 'border-card-border' : 'border-card-border/50'} bg-surface/60 p-2 flex flex-col gap-1.5">
+                      <div class="flex items-center gap-2">
+                        <span class="font-mono text-[0.7rem] text-txtsecondary w-4 shrink-0">{i + 1}</span>
+                        <input
+                          type="checkbox"
+                          class="accent-primary w-4 h-4 shrink-0"
+                          aria-label="Enable {meta.label}"
+                          bind:checked={p.enabled}
+                          onchange={saveProviders}
+                        />
+                        <span class="flex-1 min-w-0 truncate text-sm {p.enabled ? 'text-txtmain' : 'text-txtsecondary'}">{meta.label}</span>
+                        {#if p.enabled && !providerReady(p)}
+                          <span class="shrink-0 text-[0.65rem] uppercase tracking-wide text-amber-500" title="Enabled but not configured — it is skipped, not tried.">
+                            needs setup
+                          </span>
+                        {/if}
+                        <button
+                          class="shrink-0 px-1 text-txtsecondary hover:text-txtmain disabled:opacity-30"
+                          onclick={() => moveProvider(i, -1)}
+                          disabled={i === 0}
+                          title="Try earlier"
+                          aria-label="Move {meta.label} up">↑</button
+                        >
+                        <button
+                          class="shrink-0 px-1 text-txtsecondary hover:text-txtmain disabled:opacity-30"
+                          onclick={() => moveProvider(i, 1)}
+                          disabled={i === providers.length - 1}
+                          title="Try later"
+                          aria-label="Move {meta.label} down">↓</button
+                        >
+                      </div>
+
+                      {#if p.enabled}
+                        {#if meta.needs === "url"}
+                          <input
+                            type="text"
+                            class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary"
+                            placeholder="http://localhost:8888"
+                            bind:value={p.baseUrl}
+                            oninput={() => (searchProbe = { ...searchProbe, [p.id]: { state: "idle", msg: "" } })}
+                            onchange={saveProviders}
+                          />
+                        {:else if meta.needs === "key" || meta.needs === "key+cx"}
+                          <input
+                            type="password"
+                            autocomplete="off"
+                            class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary"
+                            placeholder="API key"
+                            bind:value={p.key}
+                            oninput={() => (searchProbe = { ...searchProbe, [p.id]: { state: "idle", msg: "" } })}
+                            onchange={saveProviders}
+                          />
+                        {/if}
+                        {#if meta.needs === "key+cx"}
+                          <input
+                            type="text"
+                            class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary"
+                            placeholder="Search engine id (cx)"
+                            bind:value={p.cx}
+                            oninput={() => (searchProbe = { ...searchProbe, [p.id]: { state: "idle", msg: "" } })}
+                            onchange={saveProviders}
+                          />
+                        {/if}
+
+                        <div class="flex items-center gap-2">
+                          <button
+                            class="shrink-0 px-2.5 py-1 rounded-md border border-card-border bg-surface text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
+                            onclick={() => testProvider(p)}
+                            disabled={probe?.state === "testing" || !providerReady(p)}
+                            title="Run one query against this provider only"
+                          >
+                            {probe?.state === "testing" ? "Testing…" : "Test"}
+                          </button>
+                          {#if probe?.state === "ok"}
+                            <span class="text-xs text-green-500 min-w-0 truncate">{probe.msg}</span>
+                          {:else if probe?.state === "fail"}
+                            <span class="text-xs text-red-500 min-w-0 truncate" title={probe.msg}>{probe.msg}</span>
+                          {:else if meta.signupUrl}
+                            <a class="text-xs text-txtsecondary hover:text-primary underline" href={meta.signupUrl} target="_blank" rel="noopener noreferrer">Get a key</a>
+                          {/if}
+                        </div>
+                        <p class="text-[0.7rem] leading-snug text-txtsecondary">{meta.hint}</p>
+                      {/if}
+                    </div>
+                  {/each}
+
+                  {#if !providers.some(providerReady)}
+                    <p class="text-xs text-amber-500">No provider is configured — web search will fail on every call.</p>
+                  {:else}
+                    <p class="text-xs text-txtsecondary">Model must support tool calling.</p>
+                  {/if}
                 </div>
-                {#if searxngProbe.state === "ok"}
-                  <p class="text-xs text-green-500">{searxngProbe.msg}</p>
-                {:else if searxngProbe.state === "fail"}
-                  <p class="text-xs text-red-500">{searxngProbe.msg}</p>
-                {:else}
-                  <p class="text-xs text-txtsecondary">Model must support tool calling. SearXNG needs JSON format + CORS enabled.</p>
-                {/if}
 
                 <div class="grid grid-cols-2 gap-2">
                   <label class="flex flex-col gap-1 text-xs uppercase tracking-wide text-txtsecondary" for="search-max">

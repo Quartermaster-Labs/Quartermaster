@@ -29,6 +29,69 @@ export const YOUTUBE_TOOL: ToolDef = {
   },
 };
 
+// Discovery. Without these the model can only read a video the user already
+// pasted — it cannot find one, cannot see what a channel posted, and cannot tell
+// whether a video is worth watching. Search and channel listing are one tool on
+// purpose: they return the same thing (a video list) and a weak local model
+// picking between two near-identical tools mostly picks wrong.
+export const YOUTUBE_SEARCH_TOOL: ToolDef = {
+  type: "function",
+  function: {
+    name: "youtube_search",
+    description:
+      "Find YouTube videos: pass `query` to search all of YouTube, or `channel` to list what one channel has posted (newest first). Returns titles, links, channel, duration, upload date and view count — metadata only, never what was said in a video. Use it to find a video when the user has not given a link, to check what a channel recently covered, or to pick a video worth reading; then call youtube_transcript on the one you chose.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Free-text search, as typed into YouTube's own search box. Include the year when the question is time-sensitive.",
+        },
+        channel: {
+          type: "string",
+          description:
+            "A channel to list instead of searching: a @handle, a channel URL, or a playlist URL. Takes priority over `query`.",
+        },
+        tab: {
+          type: "string",
+          description:
+            "Which part of the channel to list: 'videos' (default), 'shorts', or 'streams' (past live streams). Ignored for a playlist.",
+        },
+        limit: {
+          type: "integer",
+          description: "How many videos to return, 1-10 (default 8).",
+        },
+      },
+      required: [],
+    },
+  },
+};
+
+export const YOUTUBE_COMMENTS_TOOL: ToolDef = {
+  type: "function",
+  function: {
+    name: "youtube_comments",
+    description:
+      "Read the top 10 most-liked comments on a YouTube video (replies excluded). Use it when the user asks what people thought of a video, whether its claims are disputed, or for corrections and context the video itself does not carry. Comments are individual opinions, not facts and not a representative sample — attribute them to commenters, never present them as the consensus or as verified. This is the slowest tool available, so call it only when the reaction is what is actually being asked about.",
+    parameters: {
+      type: "object",
+      properties: {
+        url: {
+          type: "string",
+          description:
+            "The YouTube video URL (watch, youtu.be, shorts or embed form) or its 11-character video id",
+        },
+        limit: {
+          type: "integer",
+          description: "How many comments to read, 1-10 (default 10).",
+        },
+      },
+      required: ["url"],
+    },
+  },
+};
+
 // ---------------------------------------------------------------------------
 // Link unfurling (the Discord-style card under a message that contains a link)
 // ---------------------------------------------------------------------------

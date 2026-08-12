@@ -70,7 +70,7 @@ var qmFieldDocs = map[string]string{
 	"ctx":            "context length in tokens (<= the model's trained max); 0 = auto-size",
 	"vramTargetGB":   "VRAM budget for this model; 0 = the global target",
 	"cpuOffload":     "layers pinned to CPU (--n-cpu-moe); 0 = auto placement",
-	"kvK":            "KV key quant: f16, q8_0, q5_1, q4_0",
+	"kvK":            "KV key quant: f32, f16, bf16, q8_0, q5_1, q5_0, q4_1, q4_0 (must match kvV)",
 	"kvV":            "KV value quant, same values as kvK",
 	"kvInRam":        "keep the KV cache in system RAM instead of VRAM",
 	"ub":             "micro-batch size (-ub); prefill throughput knob",

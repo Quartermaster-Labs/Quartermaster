@@ -12,16 +12,16 @@ A log monitor that doubles as an `io.Writer`: it tees everything written to it t
 
 ## Important types & functions
 
-- `Monitor` struct — `logging.go:102`. Wraps a downstream `io.Writer`, a lazily-allocated `circularBuffer`, a private `event.Dispatcher`, and log-formatting settings (level, prefix, time format).
-- `New()` / `NewWriter(stdout io.Writer)` — `logging.go:115` / `:119`. `New` targets `os.Stdout`. The internal dispatcher is created with a 1000-deep queue.
-- `(*Monitor) Write(p []byte) (int, error)` — `logging.go:130`. Writes downstream, appends to the buffer (lazily allocating it), and broadcasts a copy of the bytes. Implements `io.Writer`.
-- `(*Monitor) GetHistory() []byte` — `logging.go:153`. Returns the retained tail in chronological order.
-- `(*Monitor) Clear()` — `logging.go:164`. Drops the buffer (GC-eligible); re-allocated on next write.
-- `(*Monitor) OnLogData(callback func(data []byte)) context.CancelFunc` — `logging.go:170`. Subscribes to `DataEvent`s; returns an unsubscribe func.
-- `SetPrefix` / `SetLogLevel` / `SetLogTimeFormat` — `logging.go:180-196`. Configure formatting.
-- Leveled logging: `Debug`/`Info`/`Warn`/`Error` and their `*f` variants — `logging.go:217-236`; gated by the configured `Level`.
-- `DataEvent` (`logging.go:16`, `Type()` → `DataEventID` = `0x04`) — the event payload carrying a chunk of log bytes.
-- `circularBuffer` — `logging.go:26`. Fixed-capacity (`BufferSize` = 100 KiB, `logging.go:99`) byte ring with O(1) `Write` and O(n) `GetHistory`.
+- `Monitor` struct — `logging.go`. Wraps a downstream `io.Writer`, a lazily-allocated `circularBuffer`, a private `event.Dispatcher`, and log-formatting settings (level, prefix, time format).
+- `New()` / `NewWriter(stdout io.Writer)` — `logging.go` / `:119`. `New` targets `os.Stdout`. The internal dispatcher is created with a 1000-deep queue.
+- `(*Monitor) Write(p []byte) (int, error)` — `logging.go`. Writes downstream, appends to the buffer (lazily allocating it), and broadcasts a copy of the bytes. Implements `io.Writer`.
+- `(*Monitor) GetHistory() []byte` — `logging.go`. Returns the retained tail in chronological order.
+- `(*Monitor) Clear()` — `logging.go`. Drops the buffer (GC-eligible); re-allocated on next write.
+- `(*Monitor) OnLogData(callback func(data []byte)) context.CancelFunc` — `logging.go`. Subscribes to `DataEvent`s; returns an unsubscribe func.
+- `SetPrefix` / `SetLogLevel` / `SetLogTimeFormat` — `logging.go`. Configure formatting.
+- Leveled logging: `Debug`/`Info`/`Warn`/`Error` and their `*f` variants — `logging.go`; gated by the configured `Level`.
+- `DataEvent` (`logging.go`, `Type()` → `DataEventID` = `0x04`) — the event payload carrying a chunk of log bytes.
+- `circularBuffer` — `logging.go`. Fixed-capacity (`BufferSize` = 100 KiB, `logging.go`) byte ring with O(1) `Write` and O(n) `GetHistory`.
 
 ## Connections
 

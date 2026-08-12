@@ -2,6 +2,22 @@
 // Nothing here reads component state — the component owns the $state/$derived
 // and calls into these.
 
+// One entry in the composer's tool menu (ToolMenu.svelte). Lives here rather
+// than in the component because a Svelte instance script can't export types.
+// The icon type is borrowed from a lucide icon (they are still legacy class
+// components, so svelte's `Component` doesn't match them).
+export type ToolIcon = typeof import("lucide-svelte").PenLine;
+
+export interface ToolItem {
+  key: string;
+  label: string;
+  description: string;
+  icon: ToolIcon;
+  active: boolean;
+  disabled?: boolean;
+  onToggle: () => void;
+}
+
 // Markdown blockquote prefix from the reply target (snippet, capped).
 export function quotePrefix(text: string): string {
   const snippet = text.slice(0, 140);

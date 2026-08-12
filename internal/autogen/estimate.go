@@ -59,12 +59,15 @@ type EstimateResult struct {
 // reuses sizeProfile/forceLowActiveMoE so the preview matches what a save would
 // actually emit for the solo profile.
 func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, error) {
-	// KV quant: dense defaults to q8_0, MoE to f16, unless a valid matched
-	// override is given (mirrors emitModel).
-	kvK, kvV := "q8_0", "q8_0"
-	if meta.IsMoE {
-		kvK, kvV = "f16", "f16"
+	// KV quant: the fleet default (f16, stepping down to q8_0 only under VRAM
+	// pressure) unless a valid matched override is given — mirrors emitModel, so
+	// the preview's KV reserve matches what a save would emit.
+	estTarget := s.TargetVramGB
+	if in.TargetVramGB > 0 {
+		estTarget = in.TargetVramGB
 	}
+	kvDef := defaultKvQuant(s, meta, estTarget, s.VramOverheadGB+draftOverheadGB(in.Spec, in.DraftGB))
+	kvK, kvV := kvDef, kvDef
 	kvDefK, kvDefV := kvK, kvV
 	if in.KvK != "" {
 		kvK = in.KvK
@@ -72,7 +75,7 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 	if in.KvV != "" {
 		kvV = in.KvV
 	}
-	if kvK != kvV || kvK == "iq4_nl" || kvV == "iq4_nl" {
+	if !ValidKvPair(kvK, kvV) {
 		kvK, kvV = kvDefK, kvDefV
 	}
 

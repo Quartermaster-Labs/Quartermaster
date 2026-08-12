@@ -24,6 +24,7 @@
   import {
     IMG_SAMPLERS,
     fmtCtx,
+    genDefaultKv,
     genDefaultSpec,
     hoistChatTemplate,
     nglDisplay,
@@ -61,6 +62,12 @@
   // Click-to-edit display name (advertised alias -> real id; cascades to variants).
   let editingName = $state(false);
   let nameDraft = $state("");
+  // Focus on mount instead of the `autofocus` attribute (a11y_autofocus): the
+  // input only exists while editing, so mounting is the moment to focus.
+  function focusOnMount(node: HTMLInputElement) {
+    node.focus();
+    node.select();
+  }
   async function commitName() {
     if (!modelId || !config) return;
     editingName = false;
@@ -233,6 +240,7 @@
   let backend = $state("");
   let vllmGpuUtil = $state<number | "">("");
   let vllmTensorParallel = $state<number | "">("");
+  let vllmTokenizer = $state("");
 
   // --- Image (diffusion / sd-server) fields. Only used when config.isImage. ---
   // Component paths (external VAE + text encoders); "" => omit the flag.
@@ -318,7 +326,7 @@
     // variant's fields. Model-specific flags (-ngl/-c/--n-cpu-moe/-m...) are
     // skipped by IGNORE_VALUE, so nothing model-bound leaks. The only fields that
     // would wrongly bake into a fleet-wide variant are kv and spec at their
-    // generator defaults (q8_0 / draft-mtp|draft-dflash|ngram-mod): capture those
+    // generator defaults (the model's own kv / draft-mtp|draft-dflash|ngram-mod): capture those
     // as a delta vs the generator default so an unchanged value stays "inherit" ("").
     const genSpec = genDefaultSpec(config);
     v.flashAttn = p.flashOn ? "" : "off";
@@ -329,8 +337,9 @@
     v.mlock = p.mlock;
     v.kvInRam = p.kvInRam;
     v.reasoningFmt = p.reasoningOn ? "" : "off";
-    v.kvK = p.kvK === "q8_0" ? "" : p.kvK;
-    v.kvV = p.kvV === "q8_0" ? "" : p.kvV;
+    const genKv = genDefaultKv(config);
+    v.kvK = p.kvK === genKv ? "" : p.kvK;
+    v.kvV = p.kvV === genKv ? "" : p.kvV;
     v.spec = p.spec === genSpec ? "" : p.spec;
     v.threads = p.threads === "" ? 0 : Number(p.threads);
     v.parallel = p.parallel === "" ? 0 : Number(p.parallel);
@@ -520,7 +529,8 @@
     !!selectedV && defaultVariants.includes(selectedV),
   );
 
-  const KV_OPTS = ["", "q8_0", "q4_0", "q5_1", "f16", "bf16"];
+  // llama.cpp's kv_cache_types, minus iq4_nl (no flash-attention KV kernel).
+  const KV_OPTS = ["", "f32", "f16", "bf16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0"];
 
   // Slider ceiling = trained context length (fallback 32k). Floor 4k.
   const CTX_MIN = 4096;
@@ -578,6 +588,7 @@
     backend = o?.backend ?? "";
     vllmGpuUtil = o?.vllmGpuUtil ? o.vllmGpuUtil : "";
     vllmTensorParallel = o?.vllmTensorParallel ? o.vllmTensorParallel : "";
+    vllmTokenizer = o?.vllmTokenizer ?? "";
     reasoningOn = (o?.reasoningFmt ?? "") !== "off";
     reasoningBudget = o?.reasoningBudget ? o.reasoningBudget : "";
     preserveThinking = o?.preserveThinking ?? false;
@@ -864,6 +875,7 @@
       backend,
       vllmGpuUtil: vllmGpuUtil === "" ? 0 : Number(vllmGpuUtil),
       vllmTensorParallel: vllmTensorParallel === "" ? 0 : Number(vllmTensorParallel),
+      vllmTokenizer,
       spec,
       reasoningFmt: reasoningOn ? "" : "off",
       reasoningBudget: reasoningBudget === "" ? 0 : Number(reasoningBudget),
@@ -1079,7 +1091,7 @@
               onblur={commitName}
               onkeydown={(e) => { if (e.key === "Enter") commitName(); else if (e.key === "Escape") editingName = false; }}
               placeholder={config.id}
-              autofocus
+              use:focusOnMount
             />
           {:else}
             <button
@@ -1164,16 +1176,21 @@
           </div>
           {#if isVllm}
             <div class="rounded border border-card-border p-3 space-y-2">
-              <p class="text-xs text-txtsecondary">vLLM backend — llama.cpp knobs below are ignored. Context sets <span class="font-mono">--max-model-len</span>.</p>
+              <p class="text-xs text-txtsecondary">vLLM backend — llama.cpp knobs below are ignored. Context sets <span class="font-mono">--max-model-len</span>; blank sizes it against the VRAM budget.</p>
               <label class="flex items-center gap-2 text-sm">
                 <span>GPU memory utilization</span>
-                {@render hint("--gpu-memory-utilization: fraction of each GPU vLLM may fill (weights + KV + activations). Default 0.90.")}
+                {@render hint("--gpu-memory-utilization: fraction of each GPU vLLM may fill (weights + KV + activations). Blank derives it from the VRAM budget and the card's size.")}
                 <input type="number" min="0.1" max="1" step="0.05" bind:value={vllmGpuUtil} class="cfg-input w-24 ml-auto" placeholder="0.90" />
               </label>
               <label class="flex items-center gap-2 text-sm">
                 <span>Tensor parallel size</span>
                 {@render hint("--tensor-parallel-size: shard the model across N GPUs. Default 1 (single GPU).")}
                 <input type="number" min="1" step="1" bind:value={vllmTensorParallel} class="cfg-input w-24 ml-auto" placeholder="1" />
+              </label>
+              <label class="flex items-center gap-2 text-sm">
+                <span>Tokenizer</span>
+                {@render hint("--tokenizer: the base model's tokenizer (Hugging Face repo id or a local path). vLLM recommends this over the one converted out of the GGUF, which is slow and unstable. Blank omits the flag — it is never guessed, since the discovered model only knows its local folder name.")}
+                <input type="text" bind:value={vllmTokenizer} class="cfg-input flex-1 ml-auto" placeholder="Qwen/Qwen3-8B" />
               </label>
             </div>
           {/if}
@@ -1715,19 +1732,19 @@
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               KV cache K
-              {@render hint("Quantization of the attention key cache. Lower bits = less VRAM, slightly less accuracy. q8_0 is the default.")}
+              {@render hint("Quantization of the attention key cache. Lower bits = less VRAM, but quantized KV costs long-context recall well before it shows in perplexity. Default is f16, dropping to q8_0 only when f16 cannot reach the minimum context in the VRAM budget.")}
             </span>
             <select bind:value={kvK} class="cfg-input">
-              {#each KV_OPTS as o}<option value={o}>{o === "" ? "default (q8_0)" : o}</option>{/each}
+              {#each KV_OPTS as o}<option value={o}>{o === "" ? "default (auto)" : o}</option>{/each}
             </select>
           </label>
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               KV cache V
-              {@render hint("Quantization of the attention value cache. Must match K for flash-attention. q8_0 is the default.")}
+              {@render hint("Quantization of the attention value cache. Must match K for flash-attention. Same default as K.")}
             </span>
             <select bind:value={kvV} class="cfg-input">
-              {#each KV_OPTS as o}<option value={o}>{o === "" ? "default (q8_0)" : o}</option>{/each}
+              {#each KV_OPTS as o}<option value={o}>{o === "" ? "default (auto)" : o}</option>{/each}
             </select>
           </label>
 

@@ -14,11 +14,11 @@ A simple cross-platform config-file watcher based on `os.Stat` polling rather th
 
 ## Important types & functions
 
-- `Watcher` struct — `watcher.go:19`. Fields: `Path`, `Interval`, and `OnChange func()` callback.
-- `DefaultInterval` — `watcher.go:17`. 2 seconds; used when `Interval <= 0`.
-- `(*Watcher) Run(ctx context.Context)` — `watcher.go:35`. Blocks until `ctx` is canceled; polls on a ticker and invokes `OnChange` on each detected change. The baseline poll establishes initial state and does **not** fire `OnChange`.
-- `stat(path) snapshot` — `watcher.go:60`. Reads existence/modtime/size; logs unexpected stat errors but treats `ErrNotExist` as simply "missing".
-- `changed(prev, cur) bool` — `watcher.go:75`. Fires on modtime or size change, and on missing→present (file reappears). Stays quiet on present→missing (treats a vanished file as a transient rename-style write).
+- `Watcher` struct — `watcher.go`. Fields: `Path`, `Interval`, and `OnChange func()` callback.
+- `DefaultInterval` — `watcher.go`. 2 seconds; used when `Interval <= 0`.
+- `(*Watcher) Run(ctx context.Context)` — `watcher.go`. Blocks until `ctx` is canceled; polls on a ticker and invokes `OnChange` on each detected change. The baseline poll establishes initial state and does **not** fire `OnChange`.
+- `stat(path) snapshot` — `watcher.go`. Reads existence/modtime/size; logs unexpected stat errors but treats `ErrNotExist` as simply "missing".
+- `changed(prev, cur) bool` — `watcher.go`. Fires on modtime or size change, and on missing→present (file reappears). Stays quiet on present→missing (treats a vanished file as a transient rename-style write).
 
 ## Connections
 

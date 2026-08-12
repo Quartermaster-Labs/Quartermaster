@@ -81,6 +81,14 @@ type backendEntryDTO struct {
 	Name    string `json:"name"`
 	Path    string `json:"path"`
 	Default bool   `json:"default"` // the auto-pick for this backend's model class
+	// Managed + Component identify a row the in-app installer owns (see
+	// backendsapi.go). Read-only for the UI: the path is whatever build is
+	// currently activated, and a PUT restores these from the stored row so an
+	// unrelated edit elsewhere in the list can't strip a row's provenance.
+	Managed   bool   `json:"managed,omitempty"`
+	Component string `json:"component,omitempty"`
+	Version   string `json:"version,omitempty"`
+	Variant   string `json:"variant,omitempty"`
 }
 
 // slotCacheDTO mirrors autogen.SlotCacheSettings for the dashboard slot-KV
@@ -149,7 +157,10 @@ func (s *Server) handleAPISettingsGet(w http.ResponseWriter, r *http.Request) {
 		)
 	} else {
 		for _, e := range stored {
-			backendList = append(backendList, backendEntryDTO{ID: e.ID, Kind: e.Kind, Name: e.Name, Path: e.Path, Default: e.Default})
+			backendList = append(backendList, backendEntryDTO{
+				ID: e.ID, Kind: e.Kind, Name: e.Name, Path: e.Path, Default: e.Default,
+				Managed: e.Managed, Component: e.Component, Version: e.Version, Variant: e.Variant,
+			})
 		}
 	}
 	writeJSON(w, settingsResp{
@@ -199,9 +210,28 @@ func (s *Server) handleAPIBackendsPut(w http.ResponseWriter, r *http.Request) {
 		shared.SendResponse(w, r, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
+	// Managed provenance is server-owned: re-read it from the stored row rather
+	// than trusting (or requiring) the client to echo it back, so a save from the
+	// manual editor can't turn an installer-owned row into an orphaned path.
+	stored, err := autogen.LoadSidecarBackendList(s.autogen.GeneratePath)
+	if err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+	prov := make(map[string]autogen.BackendEntry, len(stored))
+	for _, e := range stored {
+		if e.Managed {
+			prov[e.ID] = e
+		}
+	}
 	list := make([]autogen.BackendEntry, 0, len(body))
 	for _, e := range body {
-		list = append(list, autogen.BackendEntry{ID: e.ID, Kind: e.Kind, Name: e.Name, Path: e.Path, Default: e.Default})
+		row := autogen.BackendEntry{ID: e.ID, Kind: e.Kind, Name: e.Name, Path: e.Path, Default: e.Default}
+		if p, ok := prov[e.ID]; ok {
+			row.Managed, row.Component, row.Version, row.Variant = true, p.Component, p.Version, p.Variant
+			row.Path = p.Path // the active build's exe, not an edited copy
+		}
+		list = append(list, row)
 	}
 	if err := autogen.UpsertSidecarBackendList(s.autogen.GeneratePath, list); err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())

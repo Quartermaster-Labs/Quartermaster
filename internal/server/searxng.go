@@ -33,12 +33,25 @@ type searxCacheEntry struct {
 	at   time.Time
 }
 
+// sendSlot is the single upstream permit. A channel, not a Mutex, because the
+// permit is held across a multi-second HTTP call and the waiters behind it must
+// be able to give up: with sync.Mutex a queued query cannot observe its own
+// deadline, so one stalled SearXNG request used to burn the hop budget of every
+// query behind it (and, with failover, delay the provider that would have
+// answered).
 var searxGate struct {
-	sendMu sync.Mutex // held across a request: serializes + paces upstream calls
-	last   time.Time
+	sendSlot chan struct{}
+	slotOnce sync.Once
+	lastMu   sync.Mutex
+	last     time.Time
 
 	mu    sync.Mutex
 	cache map[string]searxCacheEntry
+}
+
+func searxSlot() chan struct{} {
+	searxGate.slotOnce.Do(func() { searxGate.sendSlot = make(chan struct{}, 1) })
+	return searxGate.sendSlot
 }
 
 // searxngJSON fetches <base>/search?q=..&format=json, rate-limited and cached.
@@ -70,15 +83,20 @@ func searxngJSON(ctx context.Context, baseURL, query string) ([]byte, error) {
 	qs.Set("format", "json")
 	target.RawQuery = qs.Encode()
 
-	searxGate.sendMu.Lock()
-	defer searxGate.sendMu.Unlock()
+	slot := searxSlot()
+	select {
+	case slot <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-slot }()
 
 	// Re-check: a concurrent caller may have just fetched the same query while
-	// we waited for the lock.
+	// we waited for the slot.
 	if body, ok := searxCacheGet(key); ok {
 		return body, nil
 	}
-	if wait := minQueryGap - time.Since(searxGate.last); wait > 0 {
+	if wait := minQueryGap - time.Since(searxLast()); wait > 0 {
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():
@@ -91,7 +109,7 @@ func searxngJSON(ctx context.Context, baseURL, query string) ([]byte, error) {
 		return nil, err
 	}
 	resp, err := webSearchClient.Do(req)
-	searxGate.last = time.Now()
+	searxSetLast(time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("searxng unreachable: %w", err)
 	}
@@ -106,6 +124,18 @@ func searxngJSON(ctx context.Context, baseURL, query string) ([]byte, error) {
 	}
 	searxCachePut(key, body)
 	return body, nil
+}
+
+func searxLast() time.Time {
+	searxGate.lastMu.Lock()
+	defer searxGate.lastMu.Unlock()
+	return searxGate.last
+}
+
+func searxSetLast(t time.Time) {
+	searxGate.lastMu.Lock()
+	defer searxGate.lastMu.Unlock()
+	searxGate.last = t
 }
 
 func searxCacheGet(key string) ([]byte, bool) {

@@ -12,11 +12,11 @@ Composes `http.Handler` middleware into a single handler. A reusable middleware 
 
 ## Important types & functions
 
-- `Middleware func(next http.Handler) http.Handler` — `chain.go:13`. A middleware may run logic before/after `next`, or short-circuit by never calling it (auth failure, CORS preflight).
-- `Chain` struct — `chain.go:27`. Immutable middleware stack; the zero value is valid and applies no middleware.
-- `New(mws ...Middleware) Chain` — `chain.go:31`. Builds a chain; copies the slice so callers can't mutate it afterward.
-- `(Chain) Then(final http.Handler) http.Handler` — `chain.go:40`. Wraps `final` and returns the composed handler.
-- `(Chain) ThenFunc(f http.HandlerFunc) http.Handler` — `chain.go:49`. Shorthand for `Then(http.HandlerFunc(f))`.
+- `Middleware func(next http.Handler) http.Handler` — `chain.go`. A middleware may run logic before/after `next`, or short-circuit by never calling it (auth failure, CORS preflight).
+- `Chain` struct — `chain.go`. Immutable middleware stack; the zero value is valid and applies no middleware.
+- `New(mws ...Middleware) Chain` — `chain.go`. Builds a chain; copies the slice so callers can't mutate it afterward.
+- `(Chain) Then(final http.Handler) http.Handler` — `chain.go`. Wraps `final` and returns the composed handler.
+- `(Chain) ThenFunc(f http.HandlerFunc) http.Handler` — `chain.go`. Shorthand for `Then(http.HandlerFunc(f))`.
 
 ## Connections
 

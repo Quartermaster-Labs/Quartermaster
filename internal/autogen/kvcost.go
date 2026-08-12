@@ -5,14 +5,63 @@ import "math"
 // kvBytesPerElem is the approximate bytes-per-element of each KV cache quant
 // (includes block-scale overhead).
 var kvBytesPerElem = map[string]float64{
-	"f16":    2.0,
 	"f32":    4.0,
+	"f16":    2.0,
+	"bf16":   2.0,
 	"q8_0":   1.0625,
 	"q5_1":   0.75,
 	"q5_0":   0.6875,
 	"q4_1":   0.625,
 	"q4_0":   0.5625,
 	"iq4_nl": 0.5625,
+}
+
+// kvQuantAllowed is the set of KV cache types quartermaster will emit for
+// -ctk/-ctv. It is llama.cpp's own list (common/arg.cpp `kv_cache_types`) minus
+// iq4_nl: every emitted command uses flash-attention, which has no iq4_nl KV
+// kernel.
+var kvQuantAllowed = map[string]bool{
+	"f32": true, "f16": true, "bf16": true,
+	"q8_0": true, "q5_1": true, "q5_0": true, "q4_1": true, "q4_0": true,
+}
+
+// ValidKvPair reports whether a K/V quant pair is emittable: both sides must be
+// a known type and must match (flash-attention requires matched K/V).
+func ValidKvPair(kvK, kvV string) bool {
+	return kvK == kvV && kvQuantAllowed[kvK]
+}
+
+// defaultKvQuant picks the fleet-wide default KV cache type for an LLM when no
+// per-model override is set. Quality-first: f16 is the baseline for EVERY arch,
+// not just MoE — a quantized KV's damage shows up in long-context recall and
+// multi-turn tool use long before it shows in perplexity, and quartermaster's
+// whole point is that placement is computed, so KV precision shouldn't be the
+// thing silently traded away. q8_0 is used only as a step-down, when f16 cannot
+// reach DenseMinCtx inside the VRAM budget (there, a shrunken window is the worse
+// loss). settings.kvQuant pins one type fleet-wide and skips the decision.
+//
+// bf16 is deliberately NOT the auto pick despite the same 2 bytes: it trades
+// mantissa bits for exponent range that K/V activations don't need, and f16 is
+// the native flash-attention path.
+func defaultKvQuant(s Settings, meta Metadata, targetVramGB, overheadGB float64) string {
+	if kvQuantAllowed[s.KvQuant] {
+		return s.KvQuant
+	}
+	m := GetKvCostModel(meta, "f16", "f16")
+	if !m.OK {
+		return "f16"
+	}
+	minCtx := s.DenseMinCtx
+	if minCtx <= 0 {
+		minCtx = 32768
+	}
+	if meta.ContextLength > 0 && int(meta.ContextLength) < minCtx {
+		minCtx = int(meta.ContextLength)
+	}
+	if MaxCtxForBudget(targetVramGB-meta.FileSizeGB-overheadGB, m.SlopeGB, m.ConstGB) >= minCtx {
+		return "f16"
+	}
+	return "q8_0"
 }
 
 func kvByteWidth(quant string) float64 {

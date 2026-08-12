@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Server-side ports of the playground's tool + reasoning helpers, so the turn
@@ -110,15 +112,57 @@ type searchResult struct {
 }
 
 const (
-	webMaxResults = 5
-	snippetMax    = 400
+	// webDefaultResults is what a search returns when the model does not say.
+	// webMaxResults is the ceiling: results are prefill on every following turn
+	// of the conversation, so "as many as you like" is a context bill the user
+	// pays for the rest of the chat.
+	webDefaultResults = 5
+	webMaxResults     = 10
+	snippetMax        = 400
 )
+
+// parseSearchCount reads the optional `count` off a web_search call. Out-of-range
+// and missing values collapse to the default rather than failing the call: the
+// number is a preference, and refusing a search over it would cost a round trip
+// to gain nothing.
+func parseSearchCount(raw string) int {
+	var a struct {
+		Count      any `json:"count"`
+		NumResults any `json:"num_results"`
+		Limit      any `json:"limit"`
+	}
+	if json.Unmarshal([]byte(raw), &a) != nil {
+		return webDefaultResults
+	}
+	for _, v := range []any{a.Count, a.NumResults, a.Limit} {
+		n := 0
+		switch t := v.(type) {
+		case float64:
+			n = int(t)
+		case string:
+			fmt.Sscanf(strings.TrimSpace(t), "%d", &n)
+		default:
+			continue
+		}
+		if n < 1 {
+			return webDefaultResults
+		}
+		if n > webMaxResults {
+			return webMaxResults
+		}
+		return n
+	}
+	return webDefaultResults
+}
 
 // searxngSearch queries SearXNG's JSON API directly (server-side, no browser
 // CORS concern). Port of webSearch.ts searxngSearch, minus the /api/websearch
 // proxy hop (we ARE the server). Shares the rate-limited/cached gate in
 // searxng.go with the browser proxy.
-func searxngSearch(ctx context.Context, baseURL, query string) ([]searchResult, error) {
+func searxngSearch(ctx context.Context, baseURL, query string, limit int) ([]searchResult, error) {
+	if limit < 1 || limit > webMaxResults {
+		limit = webDefaultResults
+	}
 	body, err := searxngJSON(ctx, baseURL, query)
 	if err != nil {
 		return nil, err
@@ -133,9 +177,9 @@ func searxngSearch(ctx context.Context, baseURL, query string) ([]searchResult, 
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, err
 	}
-	out := make([]searchResult, 0, webMaxResults)
+	out := make([]searchResult, 0, limit)
 	for _, r := range parsed.Results {
-		if len(out) >= webMaxResults {
+		if len(out) >= limit {
 			break
 		}
 		c := r.Content
@@ -148,16 +192,29 @@ func searxngSearch(ctx context.Context, baseURL, query string) ([]searchResult, 
 }
 
 // formatSearchResults renders the plain-text tool message. Port of webSearch.ts.
+//
+// The result header carries the current date. The system prompt already states
+// it, but that line sits at the very end of a long prefix and models still write
+// queries with their training-cutoff year ("best X 2025"). Stamping it on the
+// result puts the real date next to the thing being judged for freshness, and —
+// unlike putting it in the tool *description* — costs nothing in KV-prefix
+// stability, since tool results are volatile per-turn anyway.
 func formatSearchResults(query string, results []searchResult, numbers []int) string {
+	date := searchDate()
 	if len(results) == 0 {
-		return fmt.Sprintf("No results found for %q.", query)
+		return fmt.Sprintf("No results found for %q. (Searched %s.)", query, date)
 	}
 	var lines []string
 	for i, r := range results {
 		lines = append(lines, fmt.Sprintf("[%d] %s\n%s\n%s", numbers[i], r.Title, r.URL, r.Content))
 	}
-	return fmt.Sprintf("Search results for %q:\n\n%s", query, strings.Join(lines, "\n\n"))
+	return fmt.Sprintf("Search results for %q (searched %s — today's date, use it, not a year from memory, when a query is time-sensitive):\n\n%s",
+		query, date, strings.Join(lines, "\n\n"))
 }
+
+// searchDate is the wall-clock date stamped onto search results. Var, not a
+// call, so tests can pin it.
+var searchDate = func() string { return time.Now().Format("2 January 2006") }
 
 // --- reasoning markup (port of reasoning.ts) -------------------------------
 
@@ -201,6 +258,253 @@ func harmonyToThink(text string) string {
 		}
 	}
 	return b.String()
+}
+
+// Recovery from a round that ended after thinking with no answer (EOS on an
+// unterminated <think>). See runLoop.
+const (
+	// noAnswerMarker is written into the answer when even the retry produced
+	// nothing, so the chat never shows a thought bubble with silence under it.
+	noAnswerMarker = "_(the model stopped after thinking, without writing an answer)_"
+	// nudgeThoughtMax caps how much reasoning is handed back. The tail is what
+	// matters — that's where the model was heading when it stopped.
+	nudgeThoughtMax = 6000
+)
+
+var thinkTagStripper = strings.NewReplacer("<think>", "", "</think>", "")
+
+// noAnswerNudge builds the synthetic user turn that hands the model its own
+// reasoning back and asks for the answer alone. Deliberately a *user* message
+// with the reasoning inlined as text rather than an assistant turn carrying
+// reasoning_content: chat templates routinely drop an assistant message with
+// empty content, and only some keep prior-turn <think> at all, so the field
+// route would silently lose the thought on most models. This survives any
+// template. It is never persisted — it lives only in the round's message list.
+func noAnswerNudge(thought string) string {
+	// Strip the tags, keep the text: for a model that inlines its <think> into
+	// content the thought IS the text between them (answerOnly would delete
+	// exactly the part we want to hand back).
+	thought = strings.TrimSpace(thinkTagStripper.Replace(thought))
+	if thought == "" {
+		thought = "(empty)"
+	}
+	if len(thought) > nudgeThoughtMax {
+		// Keep the tail; cut on a rune boundary so the prompt stays valid UTF-8.
+		thought = "…" + strings.ToValidUTF8(thought[len(thought)-nudgeThoughtMax:], "")
+	}
+	return "You worked through this reply but stopped before writing it. Your reasoning was:\n\n" +
+		thought +
+		"\n\nWrite the final answer now, directly and in full. Do not think further, do not mention this message, and do not restate the reasoning — just give the answer."
+}
+
+// --- fabricated videos ------------------------------------------------------
+//
+// Models invent YouTube videos. Asked "find me a video about X" they will write
+// a plausible title, a plausible channel and a syntactically valid 11-character
+// watch URL — all of it made up — instead of calling a tool. It is the single
+// most confident failure mode this tool set has: the answer LOOKS like tool
+// output, and the link even resolves to *something* (YouTube shows "video
+// unavailable" for an unused id, not an error the user reads as fabrication).
+//
+// The system prompt alone does not fix it, because a model that never calls the
+// tool never sees a result contradicting itself. So there are two mechanical
+// guards, in runLoop:
+//
+//  1. pastedNewVideo + tool_choice:"required" — when the user pastes a video link
+//     the model has not seen before, the first round MUST call a tool. This is
+//     the one case where forcing is provably right: the model cannot know that
+//     video's contents, so there is nothing to answer from and nothing to ask
+//     about. Any looser trigger (the word "youtube" anywhere) takes away the
+//     model's option to answer, or to ask which video is meant, on questions that
+//     never needed a lookup.
+//  2. unverifiedYtIDs — if a turn nonetheless ends with video links that came
+//     from neither the conversation nor a tool result, the answer is marked. The
+//     content already streamed to the browser and deltas are append-only, so the
+//     marker is appended rather than the links rewritten; a silent fake is far
+//     worse than a visible correction.
+//
+// Guard 2 is the one that carries the weight: it is a check on output, not a
+// guess at intent, so it cannot derail a legitimate answer. A third guard used to
+// live here — a regex that spotted "let me fetch those now." with no tool call
+// and nudged the model to follow through — and was deleted. Detecting an
+// abandoned promise means pattern-matching English prose, and every false
+// positive cost a whole round of the model disputing the nudge instead of
+// answering. An un-made call leaves a short answer; only guard 2 catches the
+// failure that actually misleads.
+
+// ytLinkRe matches a YouTube video link in prose. Deliberately narrower than
+// parseYouTubeID: this runs over model output, where a bare 11-char word is
+// usually just a word.
+var ytLinkRe = regexp.MustCompile(`(?i)https?://(?:www\.|m\.|music\.)?(?:youtube\.com/(?:watch\?(?:[^\s"'<)]*&)?v=|shorts/|embed/|live/|v/)|youtu\.be/)([A-Za-z0-9_-]{11})`)
+
+// ytLinkIDs returns every YouTube video id linked in a string, deduped.
+func ytLinkIDs(s string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range ytLinkRe.FindAllStringSubmatch(s, -1) {
+		if !seen[m[1]] {
+			seen[m[1]] = true
+			out = append(out, m[1])
+		}
+	}
+	return out
+}
+
+// unverifiedYtIDs returns the video ids in an answer that were never seen in the
+// conversation or in a tool result this turn — i.e. the ones the model made up.
+func unverifiedYtIDs(answer string, seen map[string]bool) []string {
+	var bad []string
+	for _, id := range ytLinkIDs(answer) {
+		if !seen[id] {
+			bad = append(bad, id)
+		}
+	}
+	return bad
+}
+
+// unverifiedVideoMarker is appended to an answer carrying invented links. It
+// addresses the user, not the model: by this point the fabricated text has
+// already been streamed and persisted, and the only remaining honest move is to
+// say it is not trustworthy.
+const unverifiedVideoMarker = "\n\n---\n\n⚠️ **Unverified:** the video link(s) above were not looked up with the YouTube tools, so the videos may not exist. Ask again and they will be searched for properly."
+
+// pastedNewVideo reports whether the final user message links a video that
+// appears nowhere earlier in the conversation. This is the trigger for forcing a
+// tool call, and it is deliberately the narrowest possible one: a link the model
+// has never seen is a question it cannot answer from memory and cannot sensibly
+// ask a clarifying question about, so "you must call a tool" is always right.
+//
+// Naming YouTube is NOT enough. "why does youtube compress so hard?" wants an
+// answer, not a lookup, and "what did he say about X?" after a transcript was
+// already read wants the transcript, not a second fetch — forcing a call in
+// either case takes away the only correct move the model had.
+func pastedNewVideo(msgs []json.RawMessage) bool {
+	i := lastUserIdx(msgs)
+	if i < 0 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, m := range msgs[:i] {
+		for _, id := range ytLinkIDs(string(m)) {
+			seen[id] = true
+		}
+	}
+	return len(unverifiedYtIDs(msgText(msgs[i]), seen)) > 0
+}
+
+// lastUserIdx is the index of the final user message, or -1.
+func lastUserIdx(msgs []json.RawMessage) int {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		var m struct {
+			Role string `json:"role"`
+		}
+		if json.Unmarshal(msgs[i], &m) == nil && m.Role == "user" {
+			return i
+		}
+	}
+	return -1
+}
+
+// msgText pulls the text out of one message. Content is either a string or an
+// array of parts (vision attachments), and only the text parts matter here.
+func msgText(raw json.RawMessage) string {
+	var m struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(raw, &m) != nil {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(m.Content, &s) == nil {
+		return s
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(m.Content, &parts) == nil {
+		var b strings.Builder
+		for _, p := range parts {
+			if p.Text != "" {
+				b.WriteString(p.Text + " ")
+			}
+		}
+		return b.String()
+	}
+	return ""
+}
+
+// lastUserText is the text of the final user message.
+func lastUserText(msgs []json.RawMessage) string {
+	i := lastUserIdx(msgs)
+	if i < 0 {
+		return ""
+	}
+	return msgText(msgs[i])
+}
+
+// Phantom citations. The citation directive lives in the system prompt whenever
+// a citing tool is AVAILABLE (wiki/youtube always are) — it can't be added per
+// turn without breaking the byte-stable prefix the KV cache depends on — so a
+// model in a conversation that searched nothing is still being told how to cite,
+// and some will emit "[1]" with no source behind it. The renderer already leaves
+// an unresolvable marker as literal text, which is exactly the confusing artifact
+// the user sees. So drop it from the answer instead, before it is persisted.
+var citeMarkerRe = regexp.MustCompile(`[ \t]*\[(\d{1,3})\]`)
+
+// stripPhantomCites removes bracketed citation markers whose number is not in
+// this turn's citation registry. Real citations are untouched. Fenced and inline
+// code are skipped verbatim — "arr[0]" and friends are not citations.
+func stripPhantomCites(s string, cites []turnCitation) string {
+	if !strings.Contains(s, "[") {
+		return s
+	}
+	valid := make(map[string]bool, len(cites))
+	for _, c := range cites {
+		valid[strconv.Itoa(c.N)] = true
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	// Split on code spans/fences: odd segments are code and pass through as-is.
+	for i, seg := range splitCode(s) {
+		if i%2 == 1 {
+			b.WriteString(seg)
+			continue
+		}
+		b.WriteString(citeMarkerRe.ReplaceAllStringFunc(seg, func(m string) string {
+			if valid[citeMarkerRe.FindStringSubmatch(m)[1]] {
+				return m
+			}
+			return ""
+		}))
+	}
+	return b.String()
+}
+
+// splitCode cuts text on ``` fences and ` inline spans, alternating
+// prose/code/prose/code… (even indexes are prose). An unclosed opener runs to
+// the end of the string and is treated as code — safer than rewriting inside
+// what is probably a code block still being streamed.
+func splitCode(s string) []string {
+	out := []string{}
+	for {
+		i := strings.IndexByte(s, '`')
+		if i < 0 {
+			return append(out, s)
+		}
+		delim := "`"
+		if strings.HasPrefix(s[i:], "```") {
+			delim = "```"
+		}
+		out = append(out, s[:i])
+		rest := s[i+len(delim):]
+		j := strings.Index(rest, delim)
+		if j < 0 {
+			return append(out, s[i:]) // unclosed — rest of the string is code
+		}
+		out = append(out, s[i:i+len(delim)+j+len(delim)])
+		s = rest[j+len(delim):]
+	}
 }
 
 // answerOnly strips reasoning markup of every flavour, leaving the answer text.

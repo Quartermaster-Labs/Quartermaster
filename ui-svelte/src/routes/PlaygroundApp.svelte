@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { me, checkMe } from "../stores/playgroundAuth";
-  import { loadChats, clearChats } from "../stores/chatHistory";
+  import { loadChats, clearChats, startChat } from "../stores/chatHistory";
   import { loadImageChats, clearImageChats } from "../stores/imageHistory";
   import { loadSpeechChats, clearSpeechChats } from "../stores/speechHistory";
   import { loadPrefs, clearPrefs } from "../stores/prefs";
@@ -21,7 +21,13 @@
     if (tab) selectedTabStore.set(tab);
     if (model) {
       if (tab === "images") userPref<string>("playground-image-model", "").set(model);
-      else selectedModelStore.set(model);
+      else {
+        selectedModelStore.set(model);
+        // Chat launches into a FRESH conversation pinned to this model, rather
+        // than dropping the model onto whatever thread happened to be open (which
+        // would silently switch that thread's model mid-history).
+        startChat(model);
+      }
     }
     if (model || tab) history.replaceState(null, "", window.location.pathname + window.location.hash);
   }

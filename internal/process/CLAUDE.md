@@ -17,16 +17,16 @@ Manages the lifecycle of a single upstream llama.cpp subprocess: spawning it wit
 
 ## Important types & functions
 
-- **`Process` interface** (`process.go:23`) — `Run`, `WaitReady`, `Stop`, `State`, `ServeHTTP`, `Logger`. `ProcessState` values: `Stopped`, `Starting`, `Ready`, `Stopping`, `Shutdown` (`process.go:13-21`).
-- **`ProcessCommand` struct** (`process_command.go:62-88`) — holds `id`, `config config.ModelConfig`, `parentCtx`, loggers, request channels, and atomics: `state`, `handler` (reverse-proxy handler), `lastUse`, `inflight`.
-- **`New`** (`process_command.go:92`) — constructs a `ProcessCommand` and launches the `run()` goroutine.
-- **`run`** (`process_command.go:126`) — the single-writer goroutine owning all mutable lifecycle state. Every public method is a thin client that sends on `runCh`/`stopCh`/`waitReadyCh` and waits for a response, serializing all transitions through one point. Handles parent-context shutdown, unexpected upstream exit (`cmdDone`), WaitReady queueing, Run/start, and Stop.
-- **`doStart`** (`process_command.go:357`) — builds the argv via `SanitizedCommand`, constructs the reverse proxy + transport, execs the command (`exec.CommandContext`, `process_command.go:417`), then polls the health endpoint until ready. Returns a `startResult`. Runs in its own goroutine so an in-flight start can be aborted by a Stop or `parentCtx` cancellation.
-- **Health check** (`process_command.go:466-511`) — if `CheckEndpoint == "none"`, skips checking; otherwise waits 250ms, then polls `CheckEndpoint` through the reverse proxy once per second until HTTP 200 or `healthCheckTimeout` deadline. Early-exits on start-context cancel (`ErrStartAborted`) or premature upstream exit.
-- **TTL handling** (`process_command.go:269-288`) — when `config.UnloadAfter > 0`, a goroutine started on entry to `StateReady` ticks every second and calls `Stop` once the process has been idle (zero `inflight`, `lastUse` older than the TTL) for `UnloadAfter` seconds. Self-terminates when state leaves `StateReady`.
-- **`sendStopSignal`** (`process_command.go:519`) — runs the configured `CmdStop` (with `${PID}` substituted) if set, else calls `terminateProcessTree` (SIGTERM group / `taskkill /t`).
-- **`killProcess`** (`process_command.go:578`) — sends the graceful stop signal directly (not via context cancel, to avoid capping the grace period at `cmd.WaitDelay`), waits up to `gracefulTimeout`, then escalates to `killProcessTree` (SIGKILL group / `taskkill /f /t`), and finally waits on `cmdDone`.
-- **`ServeHTTP`** (`process_command.go:672`) — atomically loads the handler (503 `quartermaster-error` if not ready), increments `inflight`, forwards, and records `lastUse` for TTL.
+- **`Process` interface** (`process.go`) — `Run`, `WaitReady`, `Stop`, `State`, `ServeHTTP`, `Logger`. `ProcessState` values: `Stopped`, `Starting`, `Ready`, `Stopping`, `Shutdown` (`process.go`).
+- **`ProcessCommand` struct** (`process_command.go`) — holds `id`, `config config.ModelConfig`, `parentCtx`, loggers, request channels, and atomics: `state`, `handler` (reverse-proxy handler), `lastUse`, `inflight`.
+- **`New`** (`process_command.go`) — constructs a `ProcessCommand` and launches the `run()` goroutine.
+- **`run`** (`process_command.go`) — the single-writer goroutine owning all mutable lifecycle state. Every public method is a thin client that sends on `runCh`/`stopCh`/`waitReadyCh` and waits for a response, serializing all transitions through one point. Handles parent-context shutdown, unexpected upstream exit (`cmdDone`), WaitReady queueing, Run/start, and Stop.
+- **`doStart`** (`process_command.go`) — builds the argv via `SanitizedCommand`, constructs the reverse proxy + transport, execs the command (`exec.CommandContext`, `process_command.go`), then polls the health endpoint until ready. Returns a `startResult`. Runs in its own goroutine so an in-flight start can be aborted by a Stop or `parentCtx` cancellation.
+- **Health check** (`process_command.go`) — if `CheckEndpoint == "none"`, skips checking; otherwise waits 250ms, then polls `CheckEndpoint` through the reverse proxy once per second until HTTP 200 or `healthCheckTimeout` deadline. Early-exits on start-context cancel (`ErrStartAborted`) or premature upstream exit.
+- **TTL handling** (`process_command.go`) — when `config.UnloadAfter > 0`, a goroutine started on entry to `StateReady` ticks every second and calls `Stop` once the process has been idle (zero `inflight`, `lastUse` older than the TTL) for `UnloadAfter` seconds. Self-terminates when state leaves `StateReady`.
+- **`sendStopSignal`** (`process_command.go`) — runs the configured `CmdStop` (with `${PID}` substituted) if set, else calls `terminateProcessTree` (SIGTERM group / `taskkill /t`).
+- **`killProcess`** (`process_command.go`) — sends the graceful stop signal directly (not via context cancel, to avoid capping the grace period at `cmd.WaitDelay`), waits up to `gracefulTimeout`, then escalates to `killProcessTree` (SIGKILL group / `taskkill /f /t`), and finally waits on `cmdDone`.
+- **`ServeHTTP`** (`process_command.go`) — atomically loads the handler (503 `quartermaster-error` if not ready), increments `inflight`, forwards, and records `lastUse` for TTL.
 
 ## Lifecycle
 

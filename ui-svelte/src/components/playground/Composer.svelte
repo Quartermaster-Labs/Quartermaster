@@ -20,6 +20,7 @@
     onStop,
     stopTitle = "Stop",
     modelValue = $bindable(""),
+    onModelChange,
     modelPlaceholder = "Select a model...",
     category,
     onKeydown,
@@ -42,6 +43,9 @@
     onStop?: () => void;
     stopTitle?: string;
     modelValue?: string;
+    // Fired only on an explicit pick in the dropdown (not on programmatic changes
+    // to modelValue) — chat uses it to bind the model to the open conversation.
+    onModelChange?: (value: string) => void;
     modelPlaceholder?: string;
     category: ModelCategory;
     onKeydown?: (e: KeyboardEvent) => void;
@@ -105,7 +109,7 @@
     </div>
 
     <div class="min-w-0 px-2 flex flex-col items-center gap-1">
-      <ModelSelector bind:value={modelValue} placeholder={modelPlaceholder} disabled={busy} {category} ghost dropUp />
+      <ModelSelector bind:value={modelValue} placeholder={modelPlaceholder} disabled={busy} {category} onChange={onModelChange} ghost dropUp />
       {@render ctxBar?.()}
     </div>
 

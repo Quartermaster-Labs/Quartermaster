@@ -24,6 +24,20 @@ describe("renderMarkdown", () => {
       expect(result).toContain("const");
     });
 
+    // lib/diagrams.ts renders these client-side from the fence's raw source, so
+    // the source must survive the pipeline unhighlighted.
+    it("leaves mermaid and chart fences unhighlighted with their language class", () => {
+      const mm = renderMarkdown("```mermaid\nflowchart TD\n  A --> B\n```");
+      expect(mm).toContain("language-mermaid");
+      expect(mm).not.toContain("hljs");
+      expect(mm).toContain("flowchart TD");
+
+      const ch = renderMarkdown('```chart\n{"type":"bar"}\n```');
+      expect(ch).toContain("language-chart");
+      expect(ch).not.toContain("hljs");
+      expect(ch).toContain('"type":"bar"');
+    });
+
     it("returns empty string for empty content", () => {
       const result = renderMarkdown("");
       expect(result).toBe("");
@@ -466,5 +480,21 @@ describe("inline citations", () => {
     const html = renderMarkdown("Plain [1] text.");
     expect(html).toContain("[1]");
     expect(html).not.toContain('class="cite"');
+  });
+});
+
+// The chat is the whole app: following a link in place tears down the playground
+// (and any turn still streaming into it).
+describe("external links", () => {
+  it("opens http(s) links in a new tab", () => {
+    const html = renderMarkdown("See [the shop](https://example.de/w).");
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+  });
+
+  it("leaves in-app wiki citation chips alone", () => {
+    const html = renderMarkdown("Fact [1].", [{ n: 1, title: "Help", url: "", wikiId: "kv-cache" }]);
+    expect(html).toContain('data-wiki-id="kv-cache"');
+    expect(html).not.toContain('target="_blank"');
   });
 });

@@ -422,24 +422,30 @@
     animation: reason-sweep 1.8s linear infinite;
   }
   /* Animated "..." after a live status word (Thinking...). Cycles 0→3 dots.
-     Fixed-width, left-aligned box so the growing dots never reflow siblings. */
+
+     The content is ALWAYS "..." and the dots are revealed by clipping from the
+     right — never grown by swapping `content` per keyframe. Swapping the string
+     changes the pseudo-element's box on every step, and the glyphs re-lay out
+     inside it, so the dots visibly slide right as they appear instead of just
+     appearing. Three identical glyphs means three equal advances, so clipping at
+     thirds lands exactly on a dot boundary, and the box is one fixed width for
+     the whole cycle. */
   .thinking-dots::after {
-    content: "";
+    content: "...";
     display: inline-block;
-    width: 2ch;
-    text-align: left;
     /* Opt the dots out of the parent shimmer's background-clip:text + transparent
        fill, else the sweeping gradient makes them fade/vanish. Solid color. */
     color: var(--color-txtsecondary);
     -webkit-text-fill-color: var(--color-txtsecondary);
+    clip-path: inset(0 100% 0 0);
     animation: thinking-dots 1.4s steps(1, end) infinite;
   }
   @keyframes thinking-dots {
-    0% { content: ""; }
-    25% { content: "."; }
-    50% { content: ".."; }
-    75% { content: "..."; }
-    100% { content: ""; }
+    0% { clip-path: inset(0 100% 0 0); }
+    25% { clip-path: inset(0 66.667% 0 0); }
+    50% { clip-path: inset(0 33.334% 0 0); }
+    75% { clip-path: inset(0 0 0 0); }
+    100% { clip-path: inset(0 100% 0 0); }
   }
   .reason-glow {
     color: var(--color-primary);
@@ -465,6 +471,7 @@
     }
     .thinking-dots::after {
       content: "…";
+      clip-path: none;
     }
   }
 }

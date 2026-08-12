@@ -47,7 +47,15 @@ const hashCacheSuffix = ".modelhash"
 //	v27: image models emit --lora-model-dir (per-model override, else
 //	     settings.loraDir, else the model gguf's own directory) so LoRAs are
 //	     listable via /sdapi/v1/loras and usable per-request.
-const genVersion = "v27"
+//	v28: KV quant validated against llama's full kv_cache_types set (q5_0/q4_1/f32
+//	     now accepted instead of silently emitted-but-unmodelled); bf16 KV costs
+//	     2.0 B/elem instead of falling back to q8_0's 1.0625 (undersized ctx).
+//	v29: KV default is f16 for EVERY arch (was q8_0 dense / f16 MoE), stepping down
+//	     to q8_0 only when f16 can't reach denseMinCtx; settings.kvQuant pins it.
+//	v30: vllm emit sizes --max-model-len and --gpu-memory-utilization from the VRAM
+//	     budget (were the model's trained ctx and a flat 0.90), emits --tokenizer
+//	     when set, and skips split-shard ggufs vllm cannot load.
+const genVersion = "v30"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

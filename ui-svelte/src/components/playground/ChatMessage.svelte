@@ -1,7 +1,7 @@
 <script lang="ts">
   import { renderMarkdown, renderStreamingMarkdown, createStreamingCache } from "../../lib/markdown";
   import type { RenderedBlock } from "../../lib/markdown";
-  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronRight, Code, Search, BookOpen, PenLine, Wrench, Reply, Youtube } from "lucide-svelte";
+  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronRight, Code, Search, BookOpen, PenLine, Wrench, Reply, Youtube, FileText, ArrowRightLeft, Clock, Calculator, Ruler, CloudSun, Rss } from "lucide-svelte";
   import { getTextContent, getImageUrls } from "../../lib/types";
   import { harmonyToThink } from "../../lib/reasoning";
   import type { ContentPart, QmApproval } from "../../lib/types";
@@ -9,6 +9,11 @@
   import YouTubeEmbed from "./YouTubeEmbed.svelte";
   import { extractYouTubeIds } from "../../lib/youtube";
   import { autogrow } from "../../lib/autogrow";
+  import { splitAsk } from "../../lib/askBlock";
+  import AskWizard from "./AskWizard.svelte";
+  import { splitProducts, repairProductUrls } from "../../lib/productBlock";
+  import ProductReport from "./ProductReport.svelte";
+  import { diagramBlocks } from "../../lib/diagrams";
   import { openWikiArticle } from "../../stores/wiki";
 
   interface Props {
@@ -18,7 +23,7 @@
     reasoningTimeMs?: number;
     thinkMs?: number[];
     genTimeMs?: number;
-    searches?: { query: string; results: string; kind?: "web" | "wiki" | "quartermaster" | "youtube"; at?: number; reasoningAt?: number; duringReasoning?: boolean; sources?: { title: string; url: string }[] }[];
+    searches?: { query: string; results: string; kind?: "web" | "wiki" | "quartermaster" | "youtube" | "youtube-search" | "youtube-comments" | "page" | "currency" | "time" | "calc" | "units" | "weather" | "feed"; at?: number; reasoningAt?: number; duringReasoning?: boolean; sources?: { title: string; url: string }[] }[];
     citations?: { n: number; title: string; url: string; wikiId?: string }[];
     approval?: QmApproval;
     onApprove?: (id: string, accept: boolean) => void;
@@ -27,14 +32,19 @@
     isStreaming?: boolean;
     isReasoning?: boolean;
     isSearching?: boolean;
+    // Live activity label from the server ('Searching for "x"', 'Reading shop.com').
+    busyLabel?: string;
     modelReady?: boolean;
     hasVisionInput?: boolean;
     onEdit?: (newContent: string) => void;
     onRegenerate?: () => void;
     onReply?: () => void;
+    // Set only on the last finished assistant turn: enables the ```ask wizard,
+    // whose picks are sent back as a normal user message.
+    onAskAnswer?: (text: string) => void;
   }
 
-  let { role, content, reasoning_content = "", reasoningTimeMs = 0, thinkMs, genTimeMs = 0, searches, citations, approval, onApprove, rewriteInstruction, rewriteOriginal, isStreaming = false, isReasoning = false, isSearching = false, modelReady = false, hasVisionInput = false, onEdit, onRegenerate, onReply }: Props = $props();
+  let { role, content, reasoning_content = "", reasoningTimeMs = 0, thinkMs, genTimeMs = 0, searches, citations, approval, onApprove, rewriteInstruction, rewriteOriginal, isStreaming = false, isReasoning = false, isSearching = false, busyLabel = "", modelReady = false, hasVisionInput = false, onEdit, onRegenerate, onReply, onAskAnswer }: Props = $props();
 
   // Format a JSON diff value for the approval card (null → "auto", strings bare).
   function fmtVal(v: unknown): string {
@@ -43,12 +53,37 @@
   }
 
   let textContent = $derived(getTextContent(content));
+  // A ```ask block turns into the click-through wizard below the answer, and is
+  // taken out of the prose so the raw JSON never shows — including mid-stream,
+  // where the half-written fence becomes a "writing options" label. The wizard
+  // itself only appears on the message the user can reply to (onAskAnswer set =
+  // last, finished assistant turn).
+  let ask = $derived(role === "assistant" ? splitAsk(textContent) : null);
+  // Same treatment for the shopping report's ```products block: lifted out of the
+  // prose and rendered as cards below the answer. Split AFTER the ask block so a
+  // turn carrying both keeps each one's fence out of the other's prose. Unlike
+  // the wizard this is read-only, so it shows on every assistant turn, not just
+  // the last one.
+  let products = $derived(role === "assistant" ? splitProducts(ask ? ask.cleaned : textContent) : null);
+  // Pages this turn actually opened, so a card pointing at a shop's search page
+  // can be re-pointed at the product page the assistant already read.
+  let fetchedPages = $derived(
+    (searches ?? [])
+      .filter((s) => s.kind === "page")
+      .flatMap((s) => (s.sources ?? []).map((x) => ({ title: x.title || "", url: x.url || "" })))
+      .filter((x) => x.url),
+  );
+  let productReport = $derived(
+    products?.report ? { ...products.report, products: repairProductUrls(products.report.products, fetchedPages) } : null,
+  );
   // Some models (gpt-oss harmony et al.) emit reasoning as channel markup
   // (`<|channel|>analysis<|message|>…<|end|>…<|channel|>final<|message|>…`)
   // that llama.cpp's `--reasoning-format auto` doesn't parse, so it leaks raw
   // into content. Rewrite non-final channels into <think> so the timeline picks
   // them up as reasoning boxes. No-op when no channel markup is present.
-  let displayContent = $derived(role === "assistant" ? harmonyToThink(textContent) : textContent);
+  let displayContent = $derived(
+    role === "assistant" ? harmonyToThink(products ? products.cleaned : ask ? ask.cleaned : textContent) : textContent,
+  );
   let wordCount = $derived(stripThinking(displayContent).trim().split(/\s+/).filter(Boolean).length);
   // YouTube links anywhere in the message get a Discord-style card underneath.
   // Derived from displayContent so a link the model wrote in its answer unfurls
@@ -64,7 +99,7 @@
   // Searches are recorded separately with the content offset (`at`) where they
   // ran. Build one ordered timeline so think boxes and search blocks render
   // inline between the surrounding text, not pinned to the top.
-  type SearchHit = { query: string; results: string; kind?: "web" | "wiki" | "quartermaster" | "youtube"; sources?: { title: string; url: string }[] };
+  type SearchHit = { query: string; results: string; kind?: "web" | "wiki" | "quartermaster" | "youtube" | "youtube-search" | "youtube-comments" | "page" | "currency" | "time" | "calc" | "units" | "weather" | "feed"; sources?: { title: string; url: string }[] };
   type SubItem = { type: "text"; text: string } | { type: "search"; search: SearchHit };
   type Segment =
     | { kind: "text"; text: string; idx: number }
@@ -213,10 +248,9 @@
     return items;
   });
 
-  // User open/close override for inline reasoning boxes, keyed by timeline index.
-  // Defaults to the live `seg.open` (auto-open while reasoning streams); once the
-  // user clicks, their choice wins — otherwise the reactive `open` would re-assert
-  // every chunk and the box couldn't be closed mid-stream.
+  // User open/close state for inline reasoning boxes, keyed by timeline index.
+  // Absent = collapsed; nothing auto-opens. `seg.open` (span still streaming)
+  // drives the summary label only, never the disclosure.
   let thinkOverride = $state<Record<number, boolean>>({});
   let openThink = $derived(timeline.some((s) => s.kind === "think" && s.open));
   let hasBodyText = $derived(timeline.some((s) => s.kind === "text" && s.text.trim().length > 0));
@@ -248,6 +282,10 @@
     const y = rect && rect.height > 0 ? rect.top - top + rect.height / 2 : e.clientY - top;
     replyY = Math.max(10, Math.min(el.clientHeight - 10, y));
   }
+  // The ask wizard sits inside the assistant bubble, so the bubble's group-hover
+  // offered "reply to this message" while the cursor was on a form control —
+  // answering the questions IS the reply. Suppressed while pointing at it.
+  let overAsk = $state(false);
   let isEditing = $state(false);
   let editContent = $state("");
   let showReasoning = $state(false);
@@ -440,9 +478,38 @@
       {:else if search.kind === "quartermaster"}
         <Wrench class="w-3 h-3 shrink-0" />
         <span class="font-medium truncate">Quartermaster: {search.query || "instance"}</span>
-      {:else if search.kind === "youtube"}
+      {:else if search.kind === "youtube-search"}
         <Youtube class="w-3 h-3 shrink-0" />
-        <span class="font-medium truncate">Watched: {search.query || "YouTube video"}</span>
+        <span class="font-medium truncate">Searched YouTube: {search.query || "videos"}</span>
+      {:else if search.kind === "youtube-comments"}
+        <Youtube class="w-3 h-3 shrink-0" />
+        <span class="font-medium truncate">Read comments: {search.query || "YouTube video"}</span>
+      {:else if search.kind === "youtube"}
+        <!-- Captions, not viewing: "Watched" claimed the model saw a video it
+             only read the transcript of. -->
+        <Youtube class="w-3 h-3 shrink-0" />
+        <span class="font-medium truncate">Read transcript: {search.query || "YouTube video"}</span>
+      {:else if search.kind === "page"}
+        <FileText class="w-3 h-3 shrink-0" />
+        <span class="font-medium truncate">Read page: {search.query || "web page"}</span>
+      {:else if search.kind === "currency"}
+        <ArrowRightLeft class="w-3 h-3 shrink-0" />
+        <span class="font-medium truncate">Converted: {search.query || "currency"}</span>
+      {:else if search.kind === "time"}
+        <Clock class="w-3 h-3 shrink-0" />
+        <span class="font-medium truncate">Checked the date: {search.query || "now"}</span>
+      {:else if search.kind === "calc"}
+        <Calculator class="w-3 h-3 shrink-0" />
+        <span class="font-medium truncate">Calculated: {search.query || "expression"}</span>
+      {:else if search.kind === "units"}
+        <Ruler class="w-3 h-3 shrink-0" />
+        <span class="font-medium truncate">Converted: {search.query || "units"}</span>
+      {:else if search.kind === "weather"}
+        <CloudSun class="w-3 h-3 shrink-0" />
+        <span class="font-medium truncate">Weather: {search.query || "forecast"}</span>
+      {:else if search.kind === "feed"}
+        <Rss class="w-3 h-3 shrink-0" />
+        <span class="font-medium truncate">Read feed: {search.query || "feed"}</span>
       {:else}
         <Search class="w-3 h-3 shrink-0" />
         <span class="font-medium truncate">Searched: {search.query || "the web"}</span>
@@ -471,7 +538,7 @@
       : (rewriteOriginal != null ? 'w-full' : 'w-full sm:w-4/5') + ' rounded-bl-sm'}"
   >
     {#if role === "assistant"}
-      {#if onReply && !isStreaming}
+      {#if onReply && !isStreaming && !overAsk}
         <button
           class="absolute left-full ml-2 -translate-y-1/2 z-10 p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary opacity-0 group-hover:opacity-100 transition-opacity"
           style="top: {replyY}px"
@@ -512,7 +579,7 @@
           >
             <ChevronRight class="w-3.5 h-3.5 transition-transform {showReasoning ? 'rotate-90' : ''}" />
             {#if isSearching}
-              <span class="font-medium reason-shimmer-white thinking-dots">Searching</span>
+              <span class="font-medium reason-shimmer-white thinking-dots">{busyLabel || "Searching"}</span>
             {:else if isReasoning}
               <span class="font-medium reason-shimmer-white thinking-dots">Thinking</span>
             {:else}
@@ -547,13 +614,20 @@
       {:else if showRaw}
         <div class="whitespace-pre-wrap font-mono text-sm">{textContent}</div>
       {:else}
-        <div class="prose prose-sm dark:prose-invert max-w-none chat-prose" use:codeBlockCopy use:wikiCiteClick>
+        <div class="prose prose-sm dark:prose-invert max-w-none chat-prose" use:codeBlockCopy use:wikiCiteClick use:diagramBlocks={!isStreaming}>
           <!-- Ordered timeline: inline think boxes, search blocks, and answer text. -->
           {#each timeline as seg, si (si)}
             {#if seg.kind === "search"}
               <!-- Rendered together under the "Sources" header below, not inline. -->
             {:else if seg.kind === "think"}
-              {@const isOpen = si in thinkOverride ? thinkOverride[si] : seg.open}
+              <!-- Collapsed unless the user opens it, matching the field-based
+                   box above (showReasoning starts false). Following `seg.open`
+                   meant every inline think span — i.e. every thought after the
+                   first, and every tool round — unfolded itself mid-stream while
+                   the first one stayed hidden. The summary still shimmers
+                   "Thinking"/"Searching" off seg.open, so live state is visible
+                   without dumping the thought into the bubble. -->
+              {@const isOpen = thinkOverride[si] === true}
               <details class="not-prose my-2" open={isOpen}>
                 <summary
                   class="flex items-center gap-1.5 text-sm text-txtsecondary hover:text-txtmain transition-colors cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden"
@@ -587,7 +661,7 @@
                  shows its "Searching" label on the reasoning box itself. -->
             <span class="inline-flex items-center gap-2 text-sm italic">
               <span class="w-1.5 h-1.5 bg-primary rounded-full reason-glow"></span>
-              <span class="reason-shimmer-white font-medium">Searching the web…</span>
+              <span class="reason-shimmer-white thinking-dots font-medium">{busyLabel || "Searching the web"}</span>
             </span>
           {:else if isStreaming && !openThink && !isReasoning && !hasBodyText && !isSearching}
             <!-- No tokens yet. Order of waits: swap the model in, encode the image
@@ -608,6 +682,27 @@
       {#each ytIds as vid (vid)}
         <YouTubeEmbed id={vid} />
       {/each}
+      <!-- ```products block → shopping report cards (picture, price, why). -->
+      {#if products?.pending}
+        <div class="mt-2 inline-flex items-center gap-2 text-sm italic">
+          <span class="w-1.5 h-1.5 bg-primary rounded-full reason-glow"></span>
+          <span class="reason-shimmer-white font-medium">Building your comparison…</span>
+        </div>
+      {:else if productReport}
+        <ProductReport report={productReport} />
+      {/if}
+      <!-- ```ask block → click-through answers instead of a numbered list to retype. -->
+      {#if ask?.pending}
+        <div class="mt-2 inline-flex items-center gap-2 text-sm italic">
+          <span class="w-1.5 h-1.5 bg-primary rounded-full reason-glow"></span>
+          <span class="reason-shimmer-white font-medium">Writing your options…</span>
+        </div>
+      {:else if ask?.questions && onAskAnswer && !isStreaming}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div onmouseenter={() => (overAsk = true)} onmouseleave={() => (overAsk = false)}>
+          <AskWizard questions={ask.questions} onSubmit={onAskAnswer} />
+        </div>
+      {/if}
       {#if approval && approval.status === "pending"}
         <!-- Quartermaster config-change approval: before/after diff the model
              proposed, gated on the user's accept/deny. The turn is blocked
@@ -920,6 +1015,57 @@
   .prose :global(.code-copy-btn.copied) {
     color: var(--color-success);
     opacity: 1;
+  }
+
+  /* Rendered ```mermaid / ```chart blocks (lib/diagrams.ts). The chart canvas
+     needs a fixed-height box — Chart.js sizes to its parent, and a canvas in an
+     auto-height flow collapses to nothing. */
+  .prose :global(.diagram-block) {
+    margin: 0.75rem 0;
+    padding: 0.75rem;
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    background: var(--color-surface);
+    overflow-x: auto;
+  }
+
+  .prose :global(.diagram-block .diagram-out) {
+    display: flex;
+    justify-content: center;
+  }
+
+  .prose :global(.diagram-block canvas) {
+    max-width: 100%;
+  }
+
+  .prose :global(.diagram-block .diagram-out:has(canvas)) {
+    height: 18rem;
+    position: relative;
+  }
+
+  .prose :global(.diagram-src-btn) {
+    margin-top: 0.5rem;
+    padding: 0.125rem 0.5rem;
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    border-radius: 0.25rem;
+    border: 1px solid var(--color-border);
+    color: var(--color-txtsecondary);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .prose :global(.diagram-src-btn:hover),
+  .prose :global(.diagram-src-btn.open) {
+    background: var(--color-secondary);
+    color: var(--color-txtmain);
+  }
+
+  .prose :global(.diagram-error) {
+    margin: 0.5rem 0 -0.25rem;
+    font-size: 0.75rem;
+    color: var(--color-txtsecondary);
   }
 
   .prose :global(code) {

@@ -45,10 +45,17 @@ type Settings struct {
 	// backend against this via resolveBackend. The legacy ServerExe/SdServerExe/
 	// TtsServerExe/AsrServerExe above stay as the fallback when no registry entry
 	// matches a model's class.
-	Backends       []BackendEntry `yaml:"backends"`
-	TargetVramGB   float64        `yaml:"targetVramGB"`
-	AutoVram       bool           `yaml:"autoVram"` // measure free VRAM at gen time, use it as TargetVramGB (minus VramOverheadGB)
-	VramOverheadGB float64        `yaml:"vramOverheadGB"`
+	Backends []BackendEntry `yaml:"backends"`
+	// KvQuant pins the fleet-wide default KV cache type (-ctk/-ctv) for every
+	// llama-backed LLM: f32 | f16 | bf16 | q8_0 | q5_1 | q5_0 | q4_1 | q4_0.
+	// Empty (default) => auto, which prefers f16 and steps down to q8_0 only when
+	// f16 can't reach denseMinCtx inside the VRAM budget (see defaultKvQuant). A
+	// per-model Override.KvK/KvV still wins over either. An unknown value is
+	// ignored (falls back to auto).
+	KvQuant        string  `yaml:"kvQuant"`
+	TargetVramGB   float64 `yaml:"targetVramGB"`
+	AutoVram       bool    `yaml:"autoVram"` // measure free VRAM at gen time, use it as TargetVramGB (minus VramOverheadGB)
+	VramOverheadGB float64 `yaml:"vramOverheadGB"`
 	// ComputeBufFactor scales the modeled compute buffer (logits + activations).
 	// 1.0 = the analytic estimate; tune against the "compute buffer size" llama
 	// prints at load if your build/arch differs. 0 => default 1.0.
@@ -284,12 +291,21 @@ type Override struct {
 	// a different subset of these fields; the dormant ones are kept, not wiped.
 	Backend string `yaml:"backend"`
 	// --- vllm knobs (kind "vllm"; ignored by the llama path) ---
-	// VllmGpuUtil => --gpu-memory-utilization (0 => 0.90). VllmTensorParallel =>
-	// --tensor-parallel-size when >1. --max-model-len comes from Ctx (shared).
+	// VllmGpuUtil => --gpu-memory-utilization (0 => derived from the VRAM budget
+	// and the card's size). VllmTensorParallel => --tensor-parallel-size when >1.
+	// --max-model-len comes from Ctx when pinned, else it is sized against the
+	// same budget.
 	VllmGpuUtil        float64 `yaml:"vllmGpuUtil"`
 	VllmTensorParallel int     `yaml:"vllmTensorParallel"`
-	Spec               string  `yaml:"spec"`         // "draft-mtp" | "draft-dflash" | "" (=> ngram-mod); chainable with "+"
-	ReasoningFmt       string  `yaml:"reasoningFmt"` // "auto" | "off" | "" (=> auto)
+	// VllmTokenizer => --tokenizer. Upstream recommends pointing vllm at the base
+	// model's tokenizer rather than the one converted out of the gguf ("the
+	// tokenizer conversion from GGUF is time-consuming and unstable"). It is not
+	// derived automatically: the discovered row only knows the model's local
+	// folder name, not a verified Hugging Face repo id, so a guess here would bake
+	// a wrong remote reference into a launch command. A repo id or a local path.
+	VllmTokenizer string `yaml:"vllmTokenizer"`
+	Spec          string `yaml:"spec"`         // "draft-mtp" | "draft-dflash" | "" (=> ngram-mod); chainable with "+"
+	ReasoningFmt  string `yaml:"reasoningFmt"` // "auto" | "off" | "" (=> auto)
 	// ReasoningBudget caps thinking tokens (--reasoning-budget N). 0 => omit (no
 	// cap). Inherited by ctx-tier variants; named variants are standalone.
 	ReasoningBudget int    `yaml:"reasoningBudget"`

@@ -27,6 +27,15 @@ function rehypeHighlight() {
           .map((child) => child.value)
           .join("");
 
+        // Renderable fences (```mermaid, ```chart) keep their language class and
+        // their raw source: `lib/diagrams.ts` turns them into an SVG/canvas after
+        // the HTML lands in the DOM. Highlighting them would rewrite the text
+        // into markup and there'd be no source left to render.
+        if (lang === "mermaid" || lang === "chart") {
+          node.properties.className = [`language-${lang}`, ...classes.filter((c) => !c.startsWith("language-"))];
+          return;
+        }
+
         if (text) {
           const language = lang && hljs.getLanguage(lang) ? lang : "plaintext";
           const highlighted = hljs.highlight(text, { language }).value;
@@ -121,6 +130,22 @@ function rehypeCitations() {
   };
 }
 
+// Every ordinary link the model writes opens in a new tab. The chat IS the app:
+// following a shop link in place tears down the playground (and, mid-turn, the
+// SSE the answer is streaming over). Citation chips already set this themselves;
+// in-app wiki chips (href="#", data-wiki-id) must NOT get it.
+function rehypeExternalLinks() {
+  return (tree: Root) => {
+    visit(tree, "element", (node: Element) => {
+      if (node.tagName !== "a" || !node.properties) return;
+      const href = node.properties.href;
+      if (typeof href !== "string" || !/^https?:\/\//i.test(href)) return;
+      node.properties.target = "_blank";
+      node.properties.rel = "noopener noreferrer";
+    });
+  };
+}
+
 export function escapeHtml(text: string): string {
   const htmlEntities: Record<string, string> = {
     "&": "&amp;",
@@ -141,6 +166,7 @@ const processor = unified()
   .use(rehypeKatex)
   .use(rehypeHighlight)
   .use(rehypeCitations)
+  .use(rehypeExternalLinks)
   .use(rehypeStringify, { allowDangerousHtml: true });
 
 export function splitCompleteBlocks(text: string): { complete: string; pending: string } {

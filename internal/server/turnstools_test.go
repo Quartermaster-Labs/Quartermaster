@@ -1,13 +1,16 @@
 package server
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestTurns_answerOnly(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"hello", "hello"},
 		{"<think>plan</think>answer", "answer"},
-		{"  <think>plan</think>\n\nanswer", "answer"},   // leading ws trimmed
-		{"<think>still thinking", ""},                   // unclosed think, no answer yet
+		{"  <think>plan</think>\n\nanswer", "answer"},              // leading ws trimmed
+		{"<think>still thinking", ""},                              // unclosed think, no answer yet
 		{"<think>a</think>mid<thinking>b</thinking>end", "midend"}, // multiple flavours
 	}
 	for _, c := range cases {
@@ -52,13 +55,21 @@ func TestTurns_searchWiki(t *testing.T) {
 }
 
 func TestTurns_formatSearchResults(t *testing.T) {
-	if got := formatSearchResults("q", nil, nil); got != `No results found for "q".` {
+	// Pin the stamped date: the model has to see the real one, so it is part of
+	// the contract, not incidental formatting.
+	orig := searchDate
+	searchDate = func() string { return "5 August 2026" }
+	defer func() { searchDate = orig }()
+
+	if got := formatSearchResults("q", nil, nil); got != `No results found for "q". (Searched 5 August 2026.)` {
 		t.Errorf("empty format = %q", got)
 	}
 	rs := []searchResult{{Title: "T", URL: "http://x", Content: "snip"}}
 	got := formatSearchResults("q", rs, []int{3})
-	want := "Search results for \"q\":\n\n[3] T\nhttp://x\nsnip"
-	if got != want {
-		t.Errorf("format = %q, want %q", got, want)
+	if !strings.Contains(got, "5 August 2026") {
+		t.Errorf("format = %q, want the search date stamped", got)
+	}
+	if !strings.HasSuffix(got, "\n\n[3] T\nhttp://x\nsnip") {
+		t.Errorf("format = %q, want the numbered result block last", got)
 	}
 }

@@ -102,10 +102,12 @@ type overrideDTO struct {
 	// Backend is the registry entry id this model launches with ("" => auto-pick
 	// the class default). Its kind selects which knobs below apply.
 	Backend string `json:"backend"`
-	// vllm knobs (kind "vllm"): gpu-memory-utilization + tensor-parallel-size.
-	// --max-model-len comes from Ctx.
+	// vllm knobs (kind "vllm"): gpu-memory-utilization, tensor-parallel-size, and
+	// the base-model tokenizer. --max-model-len comes from Ctx when set, else it
+	// is sized against the VRAM budget.
 	VllmGpuUtil        float64 `json:"vllmGpuUtil"`
 	VllmTensorParallel int     `json:"vllmTensorParallel"`
+	VllmTokenizer      string  `json:"vllmTokenizer"`
 	Ctx                int     `json:"ctx"`
 	KvK                string  `json:"kvK"`
 	KvV                string  `json:"kvV"`
@@ -242,7 +244,8 @@ func variantToDTO(v autogen.VariantSpec) variantDTO {
 func toOverrideDTO(o autogen.Override) *overrideDTO {
 	dto := &overrideDTO{
 		Backend: o.Backend, VllmGpuUtil: o.VllmGpuUtil, VllmTensorParallel: o.VllmTensorParallel,
-		Ctx: o.Ctx, KvK: o.KvK, KvV: o.KvV, KvInRam: o.KvInRam,
+		VllmTokenizer: o.VllmTokenizer,
+		Ctx:           o.Ctx, KvK: o.KvK, KvV: o.KvV, KvInRam: o.KvInRam,
 		VramTargetGB: o.VramTargetGB, CpuOffload: o.CpuOffload,
 		Spec: o.Spec, ReasoningFmt: o.ReasoningFmt, ReasoningBudget: o.ReasoningBudget,
 		FlashAttn: o.FlashAttn, Mmap: o.Mmap, Mlock: o.Mlock,
@@ -308,6 +311,7 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.Backend = strings.TrimSpace(body.Backend)
 	ov.VllmGpuUtil = body.VllmGpuUtil
 	ov.VllmTensorParallel = body.VllmTensorParallel
+	ov.VllmTokenizer = strings.TrimSpace(body.VllmTokenizer)
 	ov.Ctx = body.Ctx
 	ov.KvK = body.KvK
 	ov.KvV = body.KvV

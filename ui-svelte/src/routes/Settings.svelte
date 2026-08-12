@@ -3,6 +3,7 @@
   import { SlidersHorizontal, HardDrive, Cpu, FolderOpen, Trash2, Star, Plus, Power } from "lucide-svelte";
   import { getSettings, putSettings, putSlotCache, putBackends, pickFolder, pickBackend, resetSettings, getAutostart, putAutostart, type AppSettings, type BackendEntry, type AutostartStatus } from "../stores/api";
   import { BACKEND_CLASSES, backendClass, type BackendClassDef } from "../lib/backends";
+  import ManagedBackends from "../components/ManagedBackends.svelte";
   import { latestGpu, latestSys } from "../stores/perf";
 
   // Category side-nav — mirrors the playground settings modal's pattern.
@@ -594,8 +595,10 @@
       </div>
     </div>
     {:else}
-    <!-- Backend registry — one section per model class -->
+    <!-- Managed installs first, then the hand-entered registry they write into -->
     <div>
+      <ManagedBackends onchanged={loadSettings} />
+
       <div class="flex items-baseline gap-2 mb-1">
         <h6 class="!pb-0">Backends</h6>
         {@render hint("Inference server binaries Quartermaster can spawn, grouped by the kind of model they serve. On AMD/Intel GPUs point a row at a Vulkan (or ROCm/HIP) build — a CUDA build silently falls back to CPU. The ★ entry of a group is the auto-pick; a model can be pinned to any other entry of its group from its config editor.")}
@@ -652,13 +655,19 @@
                     />
                     <input
                       type="text" bind:value={be.path} placeholder="path to executable" onblur={saveBackendsNow}
-                      class="flex-1 min-w-0 rounded border border-card-border bg-surface px-2 py-1 text-txtmain placeholder:text-txtsecondary/60 focus:outline-none focus:ring-2 focus:ring-primary"
+                      readonly={be.managed}
+                      title={be.managed ? `Installed build ${be.version} (${be.variant}) — change it from Install a backend above` : ""}
+                      class="flex-1 min-w-0 rounded border border-card-border bg-surface px-2 py-1 text-txtmain placeholder:text-txtsecondary/60 focus:outline-none focus:ring-2 focus:ring-primary {be.managed ? 'opacity-60' : ''}"
                     />
-                    <button
-                      type="button" title="Browse…" aria-label="Browse for executable"
-                      class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
-                      onclick={() => browseBackend(i)}
-                    ><FolderOpen size={14} /></button>
+                    {#if be.managed}
+                      <span class="shrink-0 font-mono text-[0.6rem] uppercase tracking-wide text-primary border border-primary rounded px-1.5 py-0.5">installed</span>
+                    {:else}
+                      <button
+                        type="button" title="Browse…" aria-label="Browse for executable"
+                        class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
+                        onclick={() => browseBackend(i)}
+                      ><FolderOpen size={14} /></button>
+                    {/if}
                     <button
                       type="button" title="Remove backend" aria-label="Remove backend"
                       class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-error hover:border-error transition-colors"

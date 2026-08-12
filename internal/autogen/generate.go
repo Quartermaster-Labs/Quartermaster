@@ -201,15 +201,23 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		s.ServerExe = be.Exe // this model's chosen llama build wins (local copy)
 	}
 
-	// KV quant: dense archs default to q8_0; MoE defaults to f16. A low number of
-	// active params means each token's KV carries more of the model's signal, so
-	// MoE tends to degrade more under a quantized cache — keep it full precision.
+	// Pre-placement (ngl not chosen yet): assume GPU-bound so a dflash sidecar
+	// charges its real draft VRAM. If the model turns out CPU-bound and emit
+	// downgrades to mtp, we've over-reserved by the draft size — conservative,
+	// never an under-count that could OOM.
+	modelSpec := effectiveSpec(meta, ov, row.DraftKind)
+	specOh := draftOverheadGB(modelSpec, row.DraftSizeGB)
+
+	// KV quant: f16 unless it can't buy denseMinCtx in this model's budget, in
+	// which case q8_0 (see defaultKvQuant); settings.kvQuant pins it outright.
 	// Per-model override still wins. Fast flash-attention needs matched K/V and
 	// never iq4_nl.
-	kvK, kvV := "q8_0", "q8_0"
-	if meta.IsMoE {
-		kvK, kvV = "f16", "f16"
+	kvTarget := s.TargetVramGB
+	if ov != nil && ov.VramTargetGB > 0 {
+		kvTarget = ov.VramTargetGB
 	}
+	kvDef := defaultKvQuant(s, meta, kvTarget, s.VramOverheadGB+specOh)
+	kvK, kvV := kvDef, kvDef
 	kvDefK, kvDefV := kvK, kvV
 	if ov != nil && ov.KvK != "" {
 		kvK = ov.KvK
@@ -217,7 +225,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	if ov != nil && ov.KvV != "" {
 		kvV = ov.KvV
 	}
-	if kvK != kvV || kvK == "iq4_nl" || kvV == "iq4_nl" {
+	if !ValidKvPair(kvK, kvV) {
 		kvK, kvV = kvDefK, kvDefV
 	}
 
@@ -234,12 +242,6 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	}
 	kvInRam := ov != nil && ov.KvInRam
 
-	// Pre-placement (ngl not chosen yet): assume GPU-bound so a dflash sidecar
-	// charges its real draft VRAM. If the model turns out CPU-bound and emit
-	// downgrades to mtp, we've over-reserved by the draft size — conservative,
-	// never an under-count that could OOM.
-	modelSpec := effectiveSpec(meta, ov, row.DraftKind)
-	specOh := draftOverheadGB(modelSpec, row.DraftSizeGB)
 	var ctxVariants []int
 	override := Override{}
 	if ov != nil {
@@ -409,7 +411,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		if prof.KvV != "" {
 			ekvV = prof.KvV
 		}
-		if ekvK != ekvV || ekvK == "iq4_nl" || ekvV == "iq4_nl" {
+		if !ValidKvPair(ekvK, ekvV) {
 			ekvK, ekvV = kvK, kvV // fall back to the model-wide quant (f16 for MoE)
 		}
 		ptg, kcg := perTokGB, kvConstGB

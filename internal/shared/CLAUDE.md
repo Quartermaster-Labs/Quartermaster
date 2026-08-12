@@ -16,25 +16,25 @@ A leaf package of cross-cutting helpers shared by the server/router layers witho
 ## Important types & functions
 
 ### events.go
-- Event IDs — `events.go:3-8`: `ProcessStateChangeEventID` (`0x01`), `ConfigFileChangedEventID` (`0x03`), `ActivityLogEventID` (`0x05`), `ModelPreloadedEventID` (`0x06`), `InFlightRequestsEventID` (`0x07`), `LiveTokensEventID` (`0x08`).
+- Event IDs — `events.go`: `ProcessStateChangeEventID` (`0x01`), `ConfigFileChangedEventID` (`0x03`), `ActivityLogEventID` (`0x05`), `ModelPreloadedEventID` (`0x06`), `InFlightRequestsEventID` (`0x07`), `LiveTokensEventID` (`0x08`).
 - Event structs (each implements `event.Event` via `Type()`): `ProcessStateChangeEvent` (`:13`), `ConfigFileChangedEvent` (`:30`, with `ReloadingState` enum `:23`), `ModelPreloadedEvent` (`:38`), `InFlightRequestsEvent` (`:47`), `LiveTokensEvent` (`:59`, live tokens/sec readout for streaming requests).
 
 ### http.go
-- `ReqContextData` struct — `http.go:23`. Per-request bag: API key, model name/ID, streaming flag, loading-state flag, and a mutable `Metadata` map.
-- `FetchContext(r, cfg) (ReqContextData, error)` — `http.go:98`. Returns cached context or extracts it from the request, resolves the real model name via `cfg.RealModelName`, stores it back on the request, else `ErrNoModelInContext`.
-- `SetContext` / `ReadContext` — `http.go:120` / `:124`. Context get/set under `ReqContextKey`.
-- `SetReqData(ctx, key, value) error` — `http.go:133`. Mutates the request's `Metadata` map (the metrics middleware copies it into the activity log).
-- `extractContext(r)` — `http.go:154`. Pulls `model`/`stream` from GET query or POST body (JSON / multipart / urlencoded), always restoring `r.Body`.
-- `ExtractAPIKey(r)` — `http.go:211`. Prefers Basic (password field), then Bearer, then `x-api-key`.
-- `SendError(w, r, err)` — `http.go:42`. If `err` is an `HTTPError`, writes it verbatim; otherwise maps sentinel errors (`ErrNoModelInContext`, `ErrNoRouterFound`, `ErrNoPeerModelFound`, `ErrNoLocalModelFound`) to statuses.
-- `SendResponse(w, r, status, message)` — `http.go:68`. Content-negotiated (text/plain, text/html, JSON) error body.
+- `ReqContextData` struct — `http.go`. Per-request bag: API key, model name/ID, streaming flag, loading-state flag, and a mutable `Metadata` map.
+- `FetchContext(r, cfg) (ReqContextData, error)` — `http.go`. Returns cached context or extracts it from the request, resolves the real model name via `cfg.RealModelName`, stores it back on the request, else `ErrNoModelInContext`.
+- `SetContext` / `ReadContext` — `http.go` / `:124`. Context get/set under `ReqContextKey`.
+- `SetReqData(ctx, key, value) error` — `http.go`. Mutates the request's `Metadata` map (the metrics middleware copies it into the activity log).
+- `extractContext(r)` — `http.go`. Pulls `model`/`stream` from GET query or POST body (JSON / multipart / urlencoded), always restoring `r.Body`.
+- `ExtractAPIKey(r)` — `http.go`. Prefers Basic (password field), then Bearer, then `x-api-key`.
+- `SendError(w, r, err)` — `http.go`. If `err` is an `HTTPError`, writes it verbatim; otherwise maps sentinel errors (`ErrNoModelInContext`, `ErrNoRouterFound`, `ErrNoPeerModelFound`, `ErrNoLocalModelFound`) to statuses.
+- `SendResponse(w, r, status, message)` — `http.go`. Content-negotiated (text/plain, text/html, JSON) error body.
 
 ### httperror.go
-- `HTTPError` interface — `httperror.go:15`. `error` + `StatusCode()` / `Header()` / `Body()`; lets a producer (e.g. the scheduler) shed a request with a complete, rich response that the renderer writes verbatim.
-- `ConcurrencyLimitError` — `httperror.go:25`. A 429 with `Retry-After` (default 1s) and a JSON hint body; zero-value-friendly.
+- `HTTPError` interface — `httperror.go`. `error` + `StatusCode()` / `Header()` / `Body()`; lets a producer (e.g. the scheduler) shed a request with a complete, rich response that the renderer writes verbatim.
+- `ConcurrencyLimitError` — `httperror.go`. A 429 with `Retry-After` (default 1s) and a JSON hint body; zero-value-friendly.
 
 ### loopback.go
-- `IsLoopbackAddr(listenAddr string) bool` — `loopback.go:8`. True only if the address binds exclusively to loopback; wildcard/empty hosts (`:8080`, `0.0.0.0:...`, `[::]:...`) return false; resolves hostnames like `localhost`.
+- `IsLoopbackAddr(listenAddr string) bool` — `loopback.go`. True only if the address binds exclusively to loopback; wildcard/empty hosts (`:8080`, `0.0.0.0:...`, `[::]:...`) return false; resolves hostnames like `localhost`.
 
 ## Connections
 

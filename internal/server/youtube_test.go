@@ -105,14 +105,14 @@ func TestFormatYouTubeTranscriptAnnouncesTruncation(t *testing.T) {
 	}
 	tr := ytTranscript{ID: "dQw4w9WgXcQ", Title: "Long talk", Uploader: "Chan", Duration: 7200, Text: strings.TrimSpace(b.String())}
 
-	out := formatYouTubeTranscript(tr, 3)
+	out := formatYouTubeTranscript(tr, 3, 0)
 	for _, want := range []string{"[3] YouTube transcript", `"Long talk"`, "Chan, 2:00:00", "watch?v=dQw4w9WgXcQ", "INCOMPLETE", "transcript truncated at"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q", want)
 		}
 	}
 
-	short := formatYouTubeTranscript(ytTranscript{ID: "dQw4w9WgXcQ", Text: "[0:00] hi"}, 0)
+	short := formatYouTubeTranscript(ytTranscript{ID: "dQw4w9WgXcQ", Text: "[0:00] hi"}, 0, 0)
 	if strings.Contains(short, "INCOMPLETE") || strings.HasPrefix(short, "[0]") {
 		t.Errorf("short transcript mis-annotated:\n%s", short)
 	}
@@ -139,5 +139,27 @@ func TestFetchYouTubeTranscriptRejectsBadInput(t *testing.T) {
 	}
 	if _, err := fetchYouTubeTranscript(t.Context(), "dQw4w9WgXcQ", "en; rm -rf /"); err == nil {
 		t.Error("injected language code accepted")
+	}
+}
+
+// The per-turn transcript budget works by shrinking each fetch's ceiling, so a
+// long transcript must truncate to what is left — loudly, never silently.
+func TestFormatYouTubeTranscriptBudget(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < 4000; i++ {
+		b.WriteString("[0:30] some spoken words here\n\n")
+	}
+	tr := ytTranscript{ID: "dQw4w9WgXcQ", Title: "Long", Text: b.String()}
+	small := formatYouTubeTranscript(tr, 0, 500)
+	big := formatYouTubeTranscript(tr, 0, 0) // 0 = the per-video ceiling
+	if len(small) >= len(big) {
+		t.Errorf("budget ignored: small=%d big=%d", len(small), len(big))
+	}
+	if !strings.Contains(small, "INCOMPLETE") {
+		t.Errorf("truncation not announced:\n%s", small[:300])
+	}
+	// An over-large ask is clamped to the per-video ceiling, not honoured.
+	if got := formatYouTubeTranscript(tr, 0, 10*ytMaxTokens); len(got) != len(big) {
+		t.Errorf("ceiling not enforced: %d vs %d", len(got), len(big))
 	}
 }

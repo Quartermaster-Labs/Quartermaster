@@ -353,8 +353,9 @@ export interface ModelOverride {
   // Backend registry entry id this model launches with ("" => auto-pick the class
   // default). Its kind decides which knobs below apply (llama vs vllm).
   backend?: string;
-  vllmGpuUtil?: number; // --gpu-memory-utilization (0/undefined => 0.90)
+  vllmGpuUtil?: number; // --gpu-memory-utilization (0/undefined => derived from the VRAM budget)
   vllmTensorParallel?: number; // --tensor-parallel-size (>1 emits the flag)
+  vllmTokenizer?: string; // --tokenizer: base-model repo id or path (never guessed)
   ctx?: number;
   kvK?: string;
   kvV?: string;
@@ -662,6 +663,13 @@ export interface BackendEntry {
   name: string;
   path: string;
   default: boolean; // the auto-pick for this backend's model class
+  // Set on a row the in-app installer owns: its path tracks whichever installed
+  // build is active, so the editor shows it read-only and defers to the
+  // installer above for version switching. Server-owned — a PUT ignores them.
+  managed?: boolean;
+  component?: string;
+  version?: string;
+  variant?: string;
 }
 
 // On-disk slot KV persistence knobs (dashboard slot-KV section). Zero values
@@ -813,6 +821,187 @@ export async function pickFileOfKind(kind: string): Promise<string | null> {
   }
   const body = (await response.json()) as { path: string };
   return body.path;
+}
+
+// ---- Managed backend installs (Settings → Backends) ----
+//
+// The manager downloads an inference-server build from its upstream GitHub
+// release, keeps several versions side by side, and registers the active one
+// into the same backend registry hand-entered paths live in. Distinct from
+// putBackends above, which only records a path the user typed.
+
+export interface ManagedVariant {
+  id: string;
+  label: string;
+  note?: string;
+  available: boolean; // upstream publishes this flavour for this OS
+}
+
+export interface ManagedBuild {
+  version: string;
+  variant: string;
+  exe: string;
+  installedAt: string;
+  sizeBytes: number;
+  active: boolean; // the registry currently points here
+}
+
+export interface ManagedComponent {
+  id: string;
+  name: string;
+  blurb: string;
+  repo: string;
+  kind: string; // "" => helper binary, installed but never registered
+  // True for an engine Quartermaster can drive but not install, because upstream
+  // ships no self-contained executable (vLLM publishes Python wheels). `setup`
+  // is shown in place of the install controls.
+  manual: boolean;
+  setup?: string;
+  supported: boolean;
+  suggested: string; // variant preselected for this host's GPU
+  variants: ManagedVariant[];
+  installed: ManagedBuild[];
+  active?: ManagedBuild;
+  // False when some other registry row (usually a hand-entered backend set up
+  // before this one) is the ★ auto-pick for the class, so installing this did
+  // not change what Quartermaster actually launches. defaultOwner names it.
+  isDefault: boolean;
+  defaultOwner?: string;
+}
+
+export interface BackendJob {
+  id: string;
+  component: string;
+  variant: string;
+  version: string;
+  phase: "resolving" | "downloading" | "extracting" | "registering" | "done" | "error";
+  asset?: string;
+  downloaded: number;
+  total: number;
+  error?: string;
+  exe?: string;
+  started: string;
+  finished?: string;
+}
+
+export interface BackendCatalog {
+  root: string;
+  os: string;
+  components: ManagedComponent[];
+  jobs: BackendJob[];
+  gpus: string[];
+}
+
+export interface BackendRelease {
+  tag: string;
+  name: string;
+  publishedAt: string;
+  prerelease: boolean;
+  variants: string[]; // installable flavours in this release, on this OS
+}
+
+// Carries the HTTP status so callers can tell "this server has no backend
+// manager" (501) apart from a real failure worth showing the user.
+export class BackendApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+export async function getBackendCatalog(): Promise<BackendCatalog> {
+  const response = await fetch("/api/backends/catalog");
+  if (!response.ok) {
+    throw new BackendApiError(
+      response.status,
+      `Failed to load the backend catalog: ${response.status} ${await response.text()}`,
+    );
+  }
+  const catalog: BackendCatalog = await response.json();
+  // Go marshals an empty slice as null unless it was allocated, and the UI walks
+  // these lists unconditionally. Normalise once here so one nil slice on the
+  // server can never blank the whole section.
+  catalog.jobs ??= [];
+  catalog.gpus ??= [];
+  catalog.components ??= [];
+  for (const comp of catalog.components) {
+    comp.variants ??= [];
+    comp.installed ??= [];
+  }
+  return catalog;
+}
+
+// Lists a component's upstream releases. Cached server-side for 10 minutes;
+// refresh forces a fresh check ("check for updates").
+export async function getBackendReleases(component: string, refresh = false): Promise<BackendRelease[]> {
+  const url = `/api/backends/${encodeURIComponent(component)}/releases${refresh ? "?refresh=1" : ""}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to list releases: ${response.status} ${await response.text()}`);
+  }
+  return await response.json();
+}
+
+// Starts a download+install and returns the job id; poll getBackendJobs for
+// progress. version "" installs the newest stable release.
+export async function installBackend(component: string, variant: string, version = ""): Promise<string> {
+  const response = await fetch("/api/backends/install", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ component, variant, version }),
+  });
+  if (!response.ok) {
+    throw new Error(`Install failed: ${await response.text()}`);
+  }
+  const body = (await response.json()) as { jobId: string };
+  return body.jobId;
+}
+
+export async function getBackendJobs(): Promise<BackendJob[]> {
+  const response = await fetch("/api/backends/jobs");
+  if (!response.ok) {
+    throw new Error(`Failed to load install jobs: ${response.status}`);
+  }
+  return (await response.json()) ?? [];
+}
+
+// Points the registry at an already-installed build (switch build / roll back).
+export async function activateBackend(component: string, version: string, variant: string): Promise<void> {
+  const response = await fetch("/api/backends/activate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ component, version, variant }),
+  });
+  if (!response.ok) {
+    throw new Error(`Activation failed: ${await response.text()}`);
+  }
+}
+
+// Makes a managed component the ★ auto-pick for its class, taking it from
+// whichever registry row holds it now.
+export async function makeBackendDefault(component: string): Promise<void> {
+  const response = await fetch("/api/backends/default", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ component }),
+  });
+  if (!response.ok) {
+    throw new Error(`Could not make it the default: ${await response.text()}`);
+  }
+}
+
+// Deletes one installed build. The active build is refused (409) — activate
+// another version first.
+export async function uninstallBackend(component: string, version: string, variant: string): Promise<void> {
+  const response = await fetch("/api/backends/uninstall", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ component, version, variant }),
+  });
+  if (!response.ok) {
+    throw new Error(`Uninstall failed: ${await response.text()}`);
+  }
 }
 
 export async function resetSettings(): Promise<void> {

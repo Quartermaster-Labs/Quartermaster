@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/quartermaster-labs/quartermaster/internal/autogen"
+	"github.com/quartermaster-labs/quartermaster/internal/backends"
 	"github.com/quartermaster-labs/quartermaster/internal/chain"
 	"github.com/quartermaster-labs/quartermaster/internal/config"
 	"github.com/quartermaster-labs/quartermaster/internal/logmon"
@@ -72,6 +73,11 @@ type Server struct {
 	// inference API without handing out model control. Set once at startup via
 	// SetAdminAccess, before serving. See admin.go.
 	admin adminAccess
+
+	// backends downloads and manages inference-server builds from their upstream
+	// GitHub releases (the Settings → Backends tab). Always non-nil; installs are
+	// only registered into the config when autogen is also set. See backendsapi.go.
+	backends *backends.Manager
 
 	// autogen, when set, enables the UI model-config endpoints (cogwheel
 	// override editor + variant creation). nil when the server was not started
@@ -242,6 +248,11 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	local.SetPreEvict(s.slotCache.saveOnEvict)    // save slot KV before a swap/unload kills the process
 	local.SetPostLoad(s.slotCache.restoreOnLoad)  // restore slot KV after a cold load, before serving
 	s.metrics.onRecord = s.slotCache.confirmReuse // confirm restores actually reused KV (cached_tokens)
+	// The backend manager installs beside the running executable and calls back
+	// into the registry so a fresh install is usable without a restart.
+	s.backends = backends.NewManager("", func(m string) { proxylog.Info(m) })
+	s.backends.GpuNames = s.gpuNames
+	s.backends.OnInstalled = s.registerManagedBackend
 	s.updater = update.New(updateRepo, build.Version, func(m string) { proxylog.Info(m) })
 	go s.updater.Run(s.shutdownCtx)
 	s.routes()
@@ -635,7 +646,10 @@ func (s *Server) routes() {
 	mux.Handle("POST /api/update", adminChain.ThenFunc(s.handleAPIUpdate))
 	mux.Handle("GET /api/captures/{id}", adminChain.ThenFunc(s.handleAPICapture))
 	mux.Handle("GET /api/websearch", adminChain.ThenFunc(s.handleAPIWebSearch))
+	mux.Handle("POST /api/websearch", adminChain.ThenFunc(s.handleAPIWebSearch))
 	mux.Handle("GET /api/youtube/meta", adminChain.ThenFunc(s.handleAPIYouTubeMeta))
+	mux.Handle("GET /api/imgproxy", adminChain.ThenFunc(s.handleAPIImageProxy))
+	mux.Handle("GET /api/fx", adminChain.ThenFunc(s.handleAPIFxRate))
 
 	// Standalone playground (separate port): which app to render + not-serious
 	// per-user login & chat history. /api/mode is always safe; the rest 501/401
@@ -691,6 +705,15 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/backends", adminChain.ThenFunc(s.handleAPIBackendsList))
 	mux.Handle("PUT /api/settings/backends", adminChain.ThenFunc(s.handleAPIBackendsPut))
 	mux.Handle("POST /api/settings/backend/pick", adminChain.ThenFunc(s.handleAPIBackendPick))
+	// Managed backend installs (download/update/roll back an upstream build).
+	// Distinct from the routes above, which register a hand-entered exe path.
+	mux.Handle("GET /api/backends/catalog", adminChain.ThenFunc(s.handleAPIBackendCatalog))
+	mux.Handle("GET /api/backends/jobs", adminChain.ThenFunc(s.handleAPIBackendJobs))
+	mux.Handle("GET /api/backends/{component}/releases", adminChain.ThenFunc(s.handleAPIBackendReleases))
+	mux.Handle("POST /api/backends/install", adminChain.ThenFunc(s.handleAPIBackendInstall))
+	mux.Handle("POST /api/backends/activate", adminChain.ThenFunc(s.handleAPIBackendActivate))
+	mux.Handle("POST /api/backends/default", adminChain.ThenFunc(s.handleAPIBackendDefault))
+	mux.Handle("POST /api/backends/uninstall", adminChain.ThenFunc(s.handleAPIBackendUninstall))
 	mux.Handle("GET /api/kvcache", adminChain.ThenFunc(s.handleAPIKvCache))
 	mux.Handle("GET /api/canon", adminChain.ThenFunc(s.handleAPICanon))
 	// Per-category scan folder (Models tab folder icon) — opens the host's native

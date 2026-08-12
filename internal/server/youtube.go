@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/quartermaster-labs/quartermaster/internal/backends"
 )
 
 // The youtube_transcript tool: given a YouTube link, hand the model the video's
@@ -43,9 +45,17 @@ const (
 	ytMaxTokens = 12000
 	ytCacheTTL  = 30 * time.Minute
 	ytCacheMax  = 16
-	// maxYouTube caps transcripts per turn: at ytMaxTokens each, a model looping
-	// over a playlist would blow the window on its own.
-	maxYouTube = 2
+	// Transcripts are capped per TURN by a token budget, not by a call count:
+	// "watch all five of these" is a legitimate ask, and five 2-minute shorts
+	// cost less than one 40-minute talk. maxYouTube stays only as a stop for a
+	// model looping over a playlist forever (each call is a yt-dlp process and a
+	// request to YouTube, so an unbounded loop is a hang and a 429, not just a
+	// context problem). ytTurnTokens is the real limiter; ytMinTranscript is the
+	// floor below which a further fetch is refused rather than served as a stub
+	// the model would narrate over.
+	maxYouTube      = 8
+	ytTurnTokens    = 40000
+	ytMinTranscript = 1500
 )
 
 // ytVideoID matches YouTube's 11-character video id. Everything handed to
@@ -122,9 +132,16 @@ func parseYouTubeID(s string) string {
 	return ""
 }
 
-// ytDlpPath finds the yt-dlp binary: PATH first, then beside our own exe (the
-// packaged-install case, where backends ship in the same directory).
+// ytDlpPath finds the yt-dlp binary: a managed install first, then PATH, then
+// beside our own exe (the packaged-install case, where backends ship in the same
+// directory).
 func ytDlpPath() (string, error) {
+	// A build the user installed from the Backends tab wins: it is the copy this
+	// app can keep updated, and it is only there because they asked for it. The
+	// manager is a plain directory scan, so building one here is cheap.
+	if got := backends.NewManager("", nil).Installed("yt-dlp"); len(got) > 0 {
+		return got[0].Exe, nil
+	}
 	// LookPath already applies PATHEXT on Windows; the explicit .exe only matters
 	// for the exe-dir fallback below.
 	names := []string{"yt-dlp", "yt-dlp.exe"}
@@ -344,8 +361,11 @@ func ytClock(sec int) string {
 // can cite from, then the paragraphs, truncated at ytMaxTokens with an explicit
 // marker. Truncation is announced in the header AND at the cut so the model
 // can't summarise the first third and present it as the whole video.
-func formatYouTubeTranscript(tr ytTranscript, citation int) string {
-	body, cutAt, truncated := ytTruncate(tr.Text, ytMaxTokens)
+func formatYouTubeTranscript(tr ytTranscript, citation, maxTokens int) string {
+	if maxTokens <= 0 || maxTokens > ytMaxTokens {
+		maxTokens = ytMaxTokens
+	}
+	body, cutAt, truncated := ytTruncate(tr.Text, maxTokens)
 
 	var head strings.Builder
 	if citation > 0 {

@@ -1,0 +1,146 @@
+# internal/backends
+
+## Purpose
+
+Downloads and manages inference-backend binaries from their upstream GitHub
+releases — the LM-Studio-style "install a backend" flow behind Settings →
+Backends. It knows which project ships each backend, picks the release asset
+matching the host's GPU, unpacks it into a versioned folder under the bundle's
+`bin/`, and reports what is installed.
+
+It is the in-app replacement for `packaging/windows/fetch-backend.ps1`, which
+could only run at install time and only wrote the generate YAML.
+
+**It does not replace manual "bring your own path" backends, and cannot.** Three
+of the fork's backends have no installable upstream release: `tts-server`
+(qwentts.cpp, built locally), `sam3_server` (the user's own sibling repo), and
+the hand-patched sd-server carrying vendored gfx1100 Tensile kernels (distinct
+from upstream's stock ROCm build, which *is* installable). Managed installs
+therefore *coexist* with hand-entered rows in one registry, distinguished by
+`BackendEntry.Managed`.
+
+## Key files
+
+| File | Role |
+|---|---|
+| `catalog.go` | Package doc + the static `Component`/`Variant` table, asset-name matching (`SelectAsset`, `MatchAssets`), and GPU→variant selection (`SuggestVariant`, `DefaultVariant`). |
+| `github.go` | Releases API client: `Release`/`Asset`, `ghClient.Releases` (30 newest, 10-minute cache, `GITHUB_TOKEN` when set, explicit rate-limit message), `pickRelease`, `validAssetURL`. |
+| `install.go` | On-disk layout and I/O: `ComponentDir`/`InstallDir`, `Installed`/`AllInstalled`, the `.qm-install.json` manifest, `Uninstall`, `download` + `progressReader`, `extract` (zip / tar.gz) with `safeJoin`, `findExe`. |
+| `manager.go` | `Manager` — job list, phases, and the `run()` install goroutine (resolve → download → stage → extract → manifest → rename → `OnInstalled`). |
+| `backends_test.go` | Pins asset matching per component/OS, variant suggestion, zip-slip rejection, manifest-gated scanning, versioned dirs, release picking, URL allowlisting. |
+
+## Important types & functions
+
+- `Component` (`catalog.go`) — one installable backend: `Repo`, the autogen
+  registry `Kind` it registers as (**empty for `yt-dlp`** — installed but never
+  registered), per-GOOS `Exe` name, `Bare` (the asset IS the executable), and its
+  `Variants`.
+- `Variant` (`catalog.go`) — a GPU-runtime flavour
+  (`vulkan`/`cuda`/`rocm`/`cpu`/`any`) holding per-GOOS asset-name regexes, plus
+  `Extra` assets unpacked alongside (the separately-shipped cudart zips) and
+  `PairKey`, the capture that ties an extra to its primary.
+- `Manager` (`manager.go`) — owns the install root, the GitHub client and the
+  job list. Callers wire two hooks: `GpuNames` (variant auto-selection) and
+  `OnInstalled` (registry write-back).
+- `Manager.Install(comp, variant, version)` (`manager.go`) — starts the job
+  and returns its id; `version` "" or "latest" resolves to the newest
+  non-prerelease. Refuses a second concurrent install **of the same component**;
+  different components install in parallel.
+- `Job` (`manager.go`) — `resolving → downloading → extracting → registering →
+  done | error`, with byte counters. Errors land on the job, never on a caller.
+- `Installed` (`install.go`) — one build on disk (absolute `Exe`, `Dir`,
+  version, variant, size, install time).
+
+## Data flow / how it works
+
+1. **Resolve** — list the repo's 30 newest releases (cached 10 min) and pick the
+   requested tag, or the newest non-prerelease.
+2. **Match** — `MatchAssets` runs the variant's regexes over the release's asset
+   names, most-preferred first, and returns the primary asset plus any extras.
+3. **Download** — stream to a temp file with progress callbacks throttled to one
+   per 512 KiB.
+4. **Stage** — extract into `<final>.tmp`, never into the destination.
+5. **Locate + record** — `findExe` walks the tree for the component's executable
+   (release archives nest it differently per project and per build), then the
+   manifest is written **inside the staging dir**.
+6. **Commit** — `RemoveAll(final)` + `Rename(staging, final)`.
+7. **Register** — `OnInstalled` points the backend registry row at the new exe
+   (see `internal/server/backendsapi.go`), regenerates the config and hot-reloads.
+
+## Gotchas / conventions
+
+- **An install never steals ★ from an existing row.** `registerManagedBackend`
+  only marks the new row as its class default when no row of that class exists
+  yet, so a hand-entered backend the user set up earlier keeps winning and the
+  managed build sits unused. That is the right default (their choice stands) but
+  it is invisible, so the catalog DTO carries `isDefault`/`defaultOwner` and the
+  card shows "Installed, but not in use — X is the default" with a
+  `POST /api/backends/default` action. `activate` is a different axis entirely:
+  it picks *which build of this component* the row points at, never ★.
+- **The catalog is the one maintenance point.** When upstream renames its release
+  assets, the fix is a regex in `catalog.go` — and `TestBackends_MatchAssets`
+  pins the current naming for every component, so a rename breaks the test rather
+  than silently installing the wrong flavour.
+- **The manifest is the only "installed" signal.** A directory without
+  `.qm-install.json`, or one whose recorded exe has vanished, is not an install.
+  Combined with staging + rename this means a failed or half-finished extract can
+  never masquerade as a usable build.
+- **Versioned side-by-side, nothing is ever overwritten.**
+  `<root>/bin/<component>/<version>-<variant>` — an update can't brick a working
+  setup, and a rollback is one activate away. Uninstall is the only removal.
+  `sanitizeSeg` keeps a hostile tag inside the component directory.
+- **Two hostile-input guards, both tested.** `validAssetURL` (https + a GitHub
+  host allowlist, copied from `internal/update`) so a poisoned API response can't
+  make us fetch and run an arbitrary binary; `safeJoin` so a crafted archive
+  can't write outside the install directory. `extractTarGz` skips symlinks and
+  devices deliberately — no backend archive needs them, and a link is the other
+  half of a path-escape trick.
+- **Rate limits are real.** Unauthenticated GitHub API calls are 60/hour per IP,
+  which is why release listings are cached for 10 minutes and only fetched when
+  the user opens a version picker or hits Check — the catalog endpoint itself
+  never calls GitHub, so the settings tab opens instantly and works offline.
+  `GITHUB_TOKEN` is used when present.
+- **`yt-dlp` is installed but not registered** (`Kind: ""`). It is a helper for
+  the chat `youtube_transcript` tool, not a backend;
+  `internal/server/youtube.go`'s `ytDlpPath` checks a managed install first, then
+  PATH, then the bundle directory.
+- **Extras are best-effort, but must be *paired*.** A missing cudart zip logs and
+  continues rather than discarding an otherwise-good llama-server. When one
+  release ships several builds of a variant (llama.cpp publishes CUDA 12.4 and
+  13.3 side by side, each with its own cudart), `Variant.PairKey` captures the
+  toolkit version from the chosen primary and `{v}` in the extra pattern is
+  substituted with it. Matching extras by list order alone eventually ships the
+  wrong runtime.
+- **Asset naming is not uniform across projects.** llama.cpp moved its
+  Linux/macOS archives to `.tar.gz` while Windows stayed `.zip`;
+  stable-diffusion.cpp capitalises its platform segment (`Linux-Ubuntu`,
+  `Darwin-macOS`), so every sd pattern is `(?i)`. Both are the kind of break that
+  is invisible until an install fails, which is what `TestBackends_MatchAssets`
+  (verbatim upstream asset lists) exists to catch.
+- **A catalog entry is not always installable at all (`Manual`).** vLLM is a
+  first-class backend in autogen (`kind: vllm`, its own emitter) but its releases
+  attach *Python wheels*, not executables
+  (`vllm-0.26.0+cu129-cp38-abi3-manylinux_2_28_x86_64.whl`) — there is no Windows
+  wheel at all and the ROCm build is source-/container-only. Installing it means
+  provisioning a Python environment and letting pip pull torch from PyPI, which
+  is a different installer, not a different regex. It is catalogued with
+  `Manual: true` + `Setup` so the UI can describe the engine instead of hiding a
+  supported backend; `Install()` refuses, and the card shows the setup text with
+  no install controls. Add a manual entry for any engine we can *drive* but not
+  *download*.
+- **The newest release is not always installable.** Real-ESRGAN's latest tag is
+  source-only. `pickRelease` takes an `installable` predicate and, for "latest",
+  skips releases with no matching asset for the requested variant/OS.
+
+## Connections
+
+- **Depends on:** the standard library only (`net/http`, `archive/zip`,
+  `archive/tar`).
+- **Called by:** `internal/server` — `Server.backends` is constructed in
+  `server.New` with `GpuNames: s.gpuNames` and `OnInstalled:
+  s.registerManagedBackend`; the HTTP surface is `internal/server/backendsapi.go`
+  (`/api/backends/*`). `internal/server/youtube.go` also scans for a managed
+  `yt-dlp`.
+- **Writes into:** the autogen sidecar backend registry
+  (`autogen.BackendEntry.Managed/Component/Version/Variant`), indirectly via that
+  callback.
