@@ -48,8 +48,7 @@ Docker image bundle them for you.
   named variants, reset to autogen default), collapsible variant groups, segmented VRAM/RAM gauges
   (system vs model), and a unified Observe page (activity + logs + performance).
 - 🆕 **Standalone playground** — split onto its own port (`-playground-port`) with per-user login,
-  server-side chat history, and a side-rail for Chat / Images / Speech / Transcription / Rerank /
-  Load Test.
+  server-side chat history, and a side-rail for Chats / Images / Speech / Transcription.
 - 🆕 **Per-key model scoping** — API keys can be restricted to specific models, not just all-or-nothing.
 - 🆕 **Safe LAN/tailnet exposure** — bind the API to `0.0.0.0` (or a tailnet address) and the
   dashboard, ops and config-editor endpoints — which are deliberately key-free so a bad key can
@@ -98,13 +97,15 @@ Real time log streaming:
 
 ## Playground
 
-The built-in playground is a full chat client over your local models (plus Images, Speech,
-Transcription, Rerank, and Load Test tabs). It can run on its own port with per-user login
+The built-in playground is a full chat client over your local models (plus Images, Speech and
+Transcription tabs). It can run on its own port with per-user login
 (`-playground-port`). Fork additions to the chat experience:
 
-- **Web search** — toggle a `web_search` tool the model can call mid-conversation. Results come from
-  your own [SearXNG](https://github.com/searxng/searxng) instance via a same-origin proxy
-  (`/api/websearch`), so no third-party search key and no browser CORS headaches.
+- **Web search** — toggle a `web_search` tool the model can call mid-conversation, plus `fetch_page`
+  to read a result in full. Providers are an ordered failover chain — your own
+  [SearXNG](https://github.com/searxng/searxng) instance first (keyless, local), Brave / Tavily /
+  DuckDuckGo / Google behind it — proxied server-side (`/api/websearch`), so no key in the browser
+  and no CORS headaches. See the [web search guide](docs/web-search.md).
 - **Clean reasoning toggle** — reasoning ("thinking") models stream their thought process into a
   collapsible block, kept out of the final answer. Flip it off to hide thinking entirely.
 - **Rewrite tool** — a text-transformation mode: paste prose + an instruction ("make it formal",
