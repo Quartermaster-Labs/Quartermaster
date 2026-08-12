@@ -63,21 +63,19 @@
   }
 
   // Every category except embed/segment has a playground tab (chat/images/
-  // speech/audio/rerank). Embedders have no interactive UI; SAM segmenters are
-  // driven from the Images playground's select tool, not their own tab.
+  // speech/audio). Embedders and rerankers have no interactive UI (API only);
+  // SAM segmenters are driven from the Images playground's select tool.
   function playable(m: Model): boolean {
     const cat = modelCategory(m);
-    return cat !== "embed" && cat !== "segment";
+    return cat !== "embed" && cat !== "segment" && !m.capabilities?.reranker;
   }
 
-  // Pick the playground tab for a model from its capabilities. Rerankers ride the
-  // llm category but open the Rerank tab, not Chat.
+  // Pick the playground tab for a model from its capabilities.
   function playgroundTab(m: Model): string {
     const c = m.capabilities;
     if (c?.image_generation) return "images";
     if (c?.audio_speech) return "speech";
     if (c?.audio_transcriptions) return "audio";
-    if (c?.reranker) return "rerank";
     return "chat";
   }
 
@@ -108,7 +106,6 @@
     if (c?.image_generation) return "Generate";
     if (c?.audio_speech) return "Speak";
     if (c?.audio_transcriptions) return "Transcribe";
-    if (c?.reranker) return "Rerank";
     return "Chat";
   }
 

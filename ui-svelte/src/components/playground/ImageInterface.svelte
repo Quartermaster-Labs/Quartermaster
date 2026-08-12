@@ -2,6 +2,7 @@
   import { get } from "svelte/store";
   import { models, upstreamLogs, unloadSingleModel } from "../../stores/api";
   import { userPref } from "../../stores/prefs";
+  import { selectedTabStore } from "../../stores/playground";
   import {
     imageSessions,
     activeImageChatId,
@@ -112,6 +113,21 @@
   }
 
   let prompt = $state("");
+  let promptEl = $state<HTMLTextAreaElement>();
+
+  // Auto-grow the composer textarea by content, same as the chat tab. Guard
+  // scrollHeight === 0 (this tab is display:none at mount) — otherwise the height
+  // locks at 0px and never recovers, leaving an invisible textarea. CSS
+  // min-h-[3rem]/max-h-[30rem] on Composer bound the range.
+  $effect(() => {
+    prompt;
+    $selectedTabStore; // re-run when this tab becomes visible again
+    if (promptEl) {
+      promptEl.style.height = "auto";
+      if (promptEl.scrollHeight > 0) promptEl.style.height = Math.min(promptEl.scrollHeight, 480) + "px";
+    }
+  });
+
   // Images the user attached to the NEXT message (data URLs) — seed a thread from
   // an existing picture. When empty, follow-ups reuse the last reply's image.
   let attached = $state<string[]>([]);
@@ -1267,6 +1283,7 @@
 
         <Composer
           bind:value={prompt}
+          bind:textareaEl={promptEl}
           placeholder={turns.length ? "Describe a change…" : "Describe the image you want…"}
           textareaDisabled={isGenerating}
           onKeydown={handleKeyDown}

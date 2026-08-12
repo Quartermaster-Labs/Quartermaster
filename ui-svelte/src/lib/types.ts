@@ -223,6 +223,10 @@ export interface ChatMessage {
   role: "user" | "assistant" | "system" | "tool";
   content: string | ContentPart[];
   reasoning_content?: string;
+  // Model that produced this assistant turn, stamped at send time and shown above
+  // the bubble — a thread can switch models mid-conversation, so "which model said
+  // this" is not answerable from the composer's current selection.
+  model?: string;
   reasoningTimeMs?: number;
   // Wall time of each inline <think> span in the content, in span order (the
   // server splices reasoning that arrives after the answer starts into the

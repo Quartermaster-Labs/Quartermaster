@@ -13,7 +13,11 @@
     searchDedupeStore,
     systemPresetsStore,
     activeSystemPresetStore,
+    chatTtsModelStore,
+    effectiveTtsModel,
+    ttsModels,
   } from "../stores/playground";
+  import ModelSelector from "../components/playground/ModelSelector.svelte";
   import {
     DEFAULT_BUILTIN_PROMPT,
     DEFAULT_SEARCH_PROMPT,
@@ -55,14 +59,12 @@
     newSpeechChatId,
     type SpeechSession,
   } from "../stores/speechHistory";
-  import { MessageSquare, Image, Volume2, Mic, ListOrdered, Zap, LogOut, Plus, Trash2, Settings, HelpCircle, BookOpen, SlidersHorizontal, Search, FileText, Pencil } from "lucide-svelte";
+  import { MessageSquare, Image, Volume2, Mic, LogOut, Plus, Trash2, Settings, HelpCircle, BookOpen, SlidersHorizontal, Search, FileText, Pencil } from "lucide-svelte";
   import WikiModal from "../components/WikiModal.svelte";
   import ChatInterface from "../components/playground/ChatInterface.svelte";
   import ImageInterface from "../components/playground/ImageInterface.svelte";
   import AudioInterface from "../components/playground/AudioInterface.svelte";
   import SpeechInterface from "../components/playground/SpeechInterface.svelte";
-  import RerankInterface from "../components/playground/RerankInterface.svelte";
-  import ConcurrencyInterface from "../components/playground/ConcurrencyInterface.svelte";
 
   type Tab = PlaygroundTab;
 
@@ -71,8 +73,6 @@
     { id: "images", label: "Images", icon: Image },
     { id: "speech", label: "Speech", icon: Volume2 },
     { id: "audio", label: "Transcription", icon: Mic },
-    { id: "rerank", label: "Rerank", icon: ListOrdered },
-    { id: "concurrency", label: "Load Test", icon: Zap },
   ];
 
   let onChats = $derived($selectedTabStore === "chat");
@@ -419,8 +419,6 @@
     <div class="h-full" class:tab-hidden={$selectedTabStore !== "images"}><ImageInterface /></div>
     <div class="h-full" class:tab-hidden={$selectedTabStore !== "speech"}><SpeechInterface /></div>
     <div class="h-full" class:tab-hidden={$selectedTabStore !== "audio"}><AudioInterface /></div>
-    <div class="h-full" class:tab-hidden={$selectedTabStore !== "rerank"}><RerankInterface /></div>
-    <div class="h-full" class:tab-hidden={$selectedTabStore !== "concurrency"}><ConcurrencyInterface /></div>
   </main>
 </div>
 
@@ -646,6 +644,24 @@
               />
               <p class="text-xs text-txtsecondary">Max reasoning tokens before the model is forced to answer. 0 = unlimited.</p>
             </div>
+
+            <!-- Read-aloud TTS. Hidden outright when no TTS model is installed —
+                 an empty picker for a feature the box can't do is just noise. -->
+            {#if $ttsModels.length > 0}
+              <div class="flex flex-col gap-1">
+                <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">
+                  Read Aloud {@render tip("Model behind the speaker button under each chat reply. Loading it can evict the chat model — one GPU, one pool. The voice is whichever one the Speech tab is set to.")}
+                </span>
+                <!-- Shows the model that WOULD speak (auto-picked when nothing is
+                     chosen), so the row never reads "none" while the button works. -->
+                <ModelSelector
+                  value={$effectiveTtsModel}
+                  placeholder="Select a TTS model..."
+                  category="tts"
+                  onChange={(v) => chatTtsModelStore.set(v)}
+                />
+              </div>
+            {/if}
 
             <p class="text-xs text-txtsecondary border-t border-card-border pt-3">Per-user memory management is coming soon.</p>
           {:else if settingsCat === "search"}
@@ -966,14 +982,24 @@
   onOpen: (id: string) => void,
   onDelete: (id: string) => void,
   emptyLabel: string,
+  heading: string,
+  newTip: string,
   thumbsFor?: (id: string) => string[],
 )}
-  <button
-    class="flex items-center justify-center gap-2 w-full px-2.5 py-1.5 rounded-md bg-primary/15 text-primary text-[0.8125rem] font-medium hover:bg-primary/25 transition-colors shrink-0"
-    onclick={onNew}
-  >
-    <Plus class="w-3.5 h-3.5 shrink-0" /> {emptyLabel}
-  </button>
+  <div class="flex items-center justify-between gap-2 px-1 shrink-0">
+    <span class="text-[0.8125rem] font-medium text-txtmain truncate">{heading}</span>
+    <!-- No newTip = no button: speech threads start from the composer, not here. -->
+    {#if newTip}
+      <button
+        class="shrink-0 grid place-items-center w-6 h-6 rounded-md bg-[#141414] text-[#ededee] border border-card-border hover:bg-[#1e1e1e] hover:text-white transition-colors"
+        onclick={onNew}
+        title={newTip}
+        aria-label={newTip}
+      >
+        <Plus class="w-3.5 h-3.5" />
+      </button>
+    {/if}
+  </div>
   <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll flex flex-col gap-px mt-1.5">
     {#each sessions as session (session.id)}
       {@const sActive = session.id === activeId}
@@ -1018,11 +1044,11 @@
       role="presentation"
     >
       {#if onChats}
-        {@render historyPanel(sortedSessions, $activeChatId, $generatingChatId, () => { newChat(); historyOpen = false; }, (id) => { activeChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteId = id), "New chat")}
+        {@render historyPanel(sortedSessions, $activeChatId, $generatingChatId, () => { newChat(); historyOpen = false; }, (id) => { activeChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteId = id), "New chat", "Chat history", "New chat")}
       {:else if onImages}
-        {@render historyPanel(sortedImageSessions, $activeImageChatId, $generatingImageChatId, () => { newImageChat(); historyOpen = false; }, (id) => { activeImageChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteImageId = id), "New image", imageThumbs)}
+        {@render historyPanel(sortedImageSessions, $activeImageChatId, $generatingImageChatId, () => { newImageChat(); historyOpen = false; }, (id) => { activeImageChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteImageId = id), "New image", "Image history", "New image", imageThumbs)}
       {:else}
-        {@render historyPanel(sortedSpeechSessions, $activeSpeechChatId, $generatingSpeechChatId, () => { newSpeechChat(); historyOpen = false; }, (id) => { activeSpeechChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteSpeechId = id), "New speech")}
+        {@render historyPanel(sortedSpeechSessions, $activeSpeechChatId, $generatingSpeechChatId, () => { newSpeechChat(); historyOpen = false; }, (id) => { activeSpeechChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteSpeechId = id), "New speech", "Speech history", "")}
       {/if}
     </div>
   </div>

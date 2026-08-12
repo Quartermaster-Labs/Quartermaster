@@ -1,4 +1,7 @@
+import { derived, get, writable } from "svelte/store";
 import { persistentStore } from "./persistent";
+import { models } from "./api";
+import { modelCategory } from "../lib/modelUtils";
 import { userPref } from "./prefs";
 import type { SystemPreset } from "../lib/systemPrompt";
 import { DEFAULT_SEARCH_PROVIDERS, type SearchProviderCfg } from "../lib/webSearch";
@@ -6,9 +9,12 @@ import { DEFAULT_SEARCH_PROVIDERS, type SearchProviderCfg } from "../lib/webSear
 // Shared singletons so other pages (e.g. the Models panel's "Chat" button) can
 // drive the always-mounted playground. persistentStore returns a fresh writable
 // per call, so these MUST be imported, not re-created, to stay in sync.
-export type PlaygroundTab = "chat" | "images" | "speech" | "audio" | "rerank" | "concurrency";
+export type PlaygroundTab = "chat" | "images" | "speech" | "audio";
 
 export const selectedTabStore = persistentStore<PlaygroundTab>("playground-selected-tab", "chat");
+// A browser last parked on a tab that no longer exists (rerank / concurrency)
+// would render no panel at all — snap it back to chat once at load.
+if (!["chat", "images", "speech", "audio"].includes(get(selectedTabStore))) selectedTabStore.set("chat");
 // Per-user (server-backed) so the chosen model follows the user, not the browser.
 export const selectedModelStore = userPref<string>("playground-selected-model", "");
 
@@ -39,15 +45,34 @@ export const qmToolsStore = userPref<boolean>("playground-qmtools", true);
 // tool is prefix the KV cache carries on every turn.
 export const extraToolsStore = userPref<boolean>("playground-extratools", true);
 export const reasoningStore = userPref<boolean>("playground-reasoning", true);
+// Read-aloud: the TTS model the chat tab's speaker button uses. Empty = the
+// button is inert (nothing picked yet). Separate from the Speech tab's model so
+// reading a reply out doesn't hijack whatever that tab is set up for, but the
+// VOICE is shared — it is the same person's voice either way.
+export const chatTtsModelStore = userPref<string>("playground-chat-tts-model", "");
+export const chatTtsVoiceStore = userPref<string>("playground-speech-voice", "");
+// Installed TTS models, and the one read-aloud will actually use: the explicit
+// pick when it still exists, else the first installed model. Auto-selecting
+// rather than making the user choose keeps the speaker button working out of the
+// box; it is only a playback voice, not a setting worth a setup step. Empty list
+// = the box has no TTS model, and the button hides entirely.
+export const ttsModels = derived(models, ($m) => $m.filter((x) => modelCategory(x) === "tts"));
+export const effectiveTtsModel = derived([chatTtsModelStore, ttsModels], ([$pick, $tts]) =>
+  $tts.some((m) => m.id === $pick) ? $pick : ($tts[0]?.id ?? ""),
+);
 // Rewrite mode: composer becomes a two-field (instructions + prose) rewriter
 // whose output renders as a side-by-side diff. Toggle + last-used instruction.
-export const rewriteStore = userPref<boolean>("playground-rewrite", false);
+// The TOGGLE is deliberately NOT persisted (plain writable): it changes what the
+// composer does and what the model is told to do, so it must not survive a reload
+// or follow the user into a new chat. Same for shopping below. The instruction
+// text is only read while rewrite is on, so keeping it around is harmless.
+export const rewriteStore = writable<boolean>(false);
 export const rewriteInstructionStore = userPref<string>("playground-rewrite-instruction", "");
 // Shopping assistant: staged buying helper (brief → research → report). Off by
-// default — it changes how the model answers, so it is opt-in per conversation
-// via the composer tool menu. The prefs line (country / currency / shops) is
-// standing, not per-chat: prices from the wrong country are worthless.
-export const shoppingStore = userPref<boolean>("playground-shopping", false);
+// default and session-local — it changes how the model answers, so it is opt-in
+// per conversation via the composer tool menu. The prefs line (country /
+// currency / shops) IS standing: prices from the wrong country are worthless.
+export const shoppingStore = writable<boolean>(false);
 export const shoppingPrefsStore = userPref<string>("playground-shopping-prefs", "");
 export const searxngUrlStore = userPref<string>("playground-searxng-url", "http://localhost:8888");
 // Ordered web-search failover chain (SearXNG first, keyed APIs behind it). One

@@ -52,10 +52,17 @@
   import { scrollFade } from "../../lib/scrollFade";
   import { quotePrefix, fmtTokens, TEMP_STEPS, TEMP_LABELS, nearestTempIdx, currentDateLine, REWRITE_SYSTEM, MAX_IMAGES_PER_MESSAGE, validateImageFile, fileToDataUrl, type ToolItem } from "./chatHelpers";
 
-  // Both prefs persist, so a session saved before modes became exclusive can come
-  // back with two on — settle it once at mount, newest mode loses to rewrite's
-  // dedicated UI.
-  if ($rewriteStore && $shoppingStore) shoppingStore.set(false);
+  // Modes are per-conversation: switching chats drops back to a plain chat rather
+  // than silently carrying rewrite/shopping into the new one. (They already reset
+  // on reload — the stores are session-local, not persisted.)
+  let lastModeChatId = "";
+  $effect(() => {
+    const id = $activeChatId;
+    if (id === lastModeChatId) return;
+    lastModeChatId = id;
+    rewriteStore.set(false);
+    shoppingStore.set(false);
+  });
 
   // Composer tool menu: agent MODES only — each one rewires how the assistant
   // answers, and the menu button wears the active mode's icon. Plain capability
@@ -710,7 +717,7 @@
     // (as collapsible sections), and the final reply. The server writes into
     // this bubble (last message) as it streams; the tool plumbing it sends to
     // the model stays server-side and is never shown here.
-    appendMessage(id, { role: "assistant", content: "", ...(isRewrite ? { rewriteOriginal: original } : {}) });
+    appendMessage(id, { role: "assistant", content: "", model: modelId, ...(isRewrite ? { rewriteOriginal: original } : {}) });
     const genStart = Date.now();
 
     const sys = [
@@ -1188,6 +1195,7 @@
           <ChatMessageComponent
             role={message.role}
             content={message.content}
+            model={message.model}
             reasoning_content={message.reasoning_content}
             reasoningTimeMs={message.reasoningTimeMs}
             thinkMs={message.thinkMs}
@@ -1284,7 +1292,7 @@
         </label>
 
         <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-extratools">
-          <span class="flex items-center gap-1.5"><CloudSun class="w-3.5 h-3.5" /> Weather & Feeds {@render tip("Let the model read the live weather (Open-Meteo) and any RSS/Atom feed. The clock, calculator and unit converter are always on and need no toggle.")}</span>
+          <span class="flex items-center gap-1.5"><CloudSun class="w-3.5 h-3.5" /> Weather & Feeds {@render tip("Let the model read the live weather (Open-Meteo) and any RSS/Atom feed.")}</span>
           <input id="chat-extratools" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$extraToolsStore} />
         </label>
 
@@ -1319,9 +1327,6 @@
           </div>
         {/if}
 
-        <p class="text-xs text-txtsecondary/80">
-          Rewrite and the Shopping assistant are modes — pick them from the ✨ menu beside the text box.
-        </p>
       {/snippet}
 
       <!-- System-prompt editor: roomier modal to write/save the standing prompt. -->

@@ -18,7 +18,9 @@
     const p = new URLSearchParams(window.location.search);
     const model = p.get("model");
     const tab = p.get("tab") as PlaygroundTab | null;
-    if (tab) selectedTabStore.set(tab);
+    // Ignore a tab that no longer exists (an old dashboard link, e.g. ?tab=rerank)
+    // — an unknown value renders no panel at all.
+    if (tab && ["chat", "images", "speech", "audio"].includes(tab)) selectedTabStore.set(tab);
     if (model) {
       if (tab === "images") userPref<string>("playground-image-model", "").set(model);
       else {

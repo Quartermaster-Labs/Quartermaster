@@ -53,18 +53,18 @@
     }
   });
 
-  // Every category except embed/segment has a playground tab. Embedders have no
-  // UI; SAM segmenters are driven from the Images playground select tool.
+  // Every category except embed/segment has a playground tab. Embedders and
+  // rerankers have no UI (API only); SAM segmenters are driven from the Images
+  // playground select tool.
   function playable(m: Model): boolean {
     const cat = modelCategory(m);
-    return cat !== "embed" && cat !== "segment";
+    return cat !== "embed" && cat !== "segment" && !m.capabilities?.reranker;
   }
   function playgroundTab(m: Model): string {
     const c = m.capabilities;
     if (c?.image_generation) return "images";
     if (c?.audio_speech) return "speech";
     if (c?.audio_transcriptions) return "audio";
-    if (c?.reranker) return "rerank";
     return "chat";
   }
   function playLabel(m: Model): string {
@@ -72,7 +72,6 @@
     if (c?.image_generation) return "Generate";
     if (c?.audio_speech) return "Speak";
     if (c?.audio_transcriptions) return "Transcribe";
-    if (c?.reranker) return "Rerank";
     return "Chat";
   }
   // Playground is a separate app on its own port — open it with model + tab.

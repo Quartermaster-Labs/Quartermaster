@@ -1,7 +1,9 @@
 <script lang="ts">
   import { renderMarkdown, renderStreamingMarkdown, createStreamingCache } from "../../lib/markdown";
   import type { RenderedBlock } from "../../lib/markdown";
-  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronRight, Code, Search, BookOpen, PenLine, Wrench, Reply, Youtube, FileText, ArrowRightLeft, Clock, Calculator, Ruler, CloudSun, Rss } from "lucide-svelte";
+  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronRight, Search, BookOpen, PenLine, Wrench, Reply, Youtube, FileText, ArrowRightLeft, Clock, Calculator, Ruler, CloudSun, Rss, Sparkles, Volume2, Loader2, Square } from "lucide-svelte";
+  import { generateSpeech } from "../../lib/speechApi";
+  import { effectiveTtsModel, chatTtsVoiceStore } from "../../stores/playground";
   import { getTextContent, getImageUrls } from "../../lib/types";
   import { harmonyToThink } from "../../lib/reasoning";
   import type { ContentPart, QmApproval } from "../../lib/types";
@@ -19,6 +21,8 @@
   interface Props {
     role: "user" | "assistant" | "system" | "tool";
     content: string | ContentPart[];
+    // Model that produced this assistant turn (blank on older messages).
+    model?: string;
     reasoning_content?: string;
     reasoningTimeMs?: number;
     thinkMs?: number[];
@@ -44,7 +48,7 @@
     onAskAnswer?: (text: string) => void;
   }
 
-  let { role, content, reasoning_content = "", reasoningTimeMs = 0, thinkMs, genTimeMs = 0, searches, citations, approval, onApprove, rewriteInstruction, rewriteOriginal, isStreaming = false, isReasoning = false, isSearching = false, busyLabel = "", modelReady = false, hasVisionInput = false, onEdit, onRegenerate, onReply, onAskAnswer }: Props = $props();
+  let { role, content, model = "", reasoning_content = "", reasoningTimeMs = 0, thinkMs, genTimeMs = 0, searches, citations, approval, onApprove, rewriteInstruction, rewriteOriginal, isStreaming = false, isReasoning = false, isSearching = false, busyLabel = "", modelReady = false, hasVisionInput = false, onEdit, onRegenerate, onReply, onAskAnswer }: Props = $props();
 
   // Format a JSON diff value for the approval card (null → "auto", strings bare).
   function fmtVal(v: unknown): string {
@@ -268,7 +272,93 @@
     if (!isStreaming) streamingCache = createStreamingCache();
   });
   let copied = $state(false);
-  let showRaw = $state(false);
+
+  // --- read aloud -----------------------------------------------------------
+  // Speaks the answer through the TTS model picked in the chat settings. The
+  // model is loaded on demand by the router like any other request, so the first
+  // click can take a while (and can evict the chat model — one GPU, one pool).
+  let speakState = $state<"idle" | "loading" | "playing">("idle");
+  let speakErr = $state("");
+  let audioEl: HTMLAudioElement | null = null;
+  let audioUrl = "";
+  let speakAbort: AbortController | null = null;
+
+  // Long answers: TTS cost is linear in characters and a 5k-word reply would tie
+  // up the GPU for minutes, so cut it at a paragraph boundary near the cap.
+  const SPEAK_MAX = 4000;
+
+  // Markdown read aloud is unlistenable ("star star note star star"), so flatten
+  // it to prose: drop code blocks outright, unwrap links/emphasis, strip list and
+  // heading markers, and drop the citation brackets the renderer turns into chips.
+  function speechText(md: string): string {
+    let t = stripThinking(md)
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/`([^`]*)`/g, "$1")
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+      .replace(/^\s{0,3}[-*+]\s+/gm, "")
+      .replace(/^\s{0,3}>\s?/gm, "")
+      .replace(/(\*\*|__|\*|_|~~)/g, "")
+      .replace(/^\s*\|.*\|\s*$/gm, " ")
+      .replace(/\[\d+\]/g, "")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    if (t.length > SPEAK_MAX) {
+      const cut = t.slice(0, SPEAK_MAX);
+      const brk = Math.max(cut.lastIndexOf("\n\n"), cut.lastIndexOf(". "));
+      t = (brk > SPEAK_MAX / 2 ? cut.slice(0, brk + 1) : cut).trim();
+    }
+    return t;
+  }
+
+  let speakTitle = $derived(
+    speakErr ? speakErr :
+    speakState === "playing" ? "Stop" :
+    speakState === "loading" ? "Generating speech…" :
+    "Read aloud",
+  );
+
+  function stopSpeak() {
+    speakAbort?.abort();
+    speakAbort = null;
+    audioEl?.pause();
+    audioEl = null;
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    audioUrl = "";
+    speakState = "idle";
+  }
+
+  async function toggleSpeak() {
+    if (speakState !== "idle") {
+      stopSpeak();
+      return;
+    }
+    const model = $effectiveTtsModel;
+    if (!model) return;
+    const text = speechText(displayContent);
+    if (!text) return;
+    speakErr = "";
+    speakState = "loading";
+    speakAbort = new AbortController();
+    try {
+      const blob = await generateSpeech(model, text, $chatTtsVoiceStore, speakAbort.signal);
+      if (!speakAbort) return; // stopped while generating
+      audioUrl = URL.createObjectURL(blob);
+      audioEl = new Audio(audioUrl);
+      audioEl.onended = stopSpeak;
+      audioEl.onerror = () => { speakErr = "Playback failed"; stopSpeak(); };
+      await audioEl.play();
+      speakState = "playing";
+    } catch (e) {
+      if ((e as Error)?.name !== "AbortError") speakErr = (e as Error)?.message ?? "Speech failed";
+      stopSpeak();
+    }
+  }
+
+  // Leaving the page mid-clip must not keep the audio (or its object URL) alive.
+  $effect(() => () => stopSpeak());
   // Vertical offset (px, relative to the bubble top) the reply button tracks to.
   // Snaps to the CENTER of the text line under the cursor (via caret hit-testing)
   // so it steps line-by-line, and is clamped inside the bubble so it can't drift
@@ -530,6 +620,13 @@
   </details>
 {:else}
 <div class="flex flex-col {role === 'user' ? 'items-end' : 'items-start'} mb-4">
+  <!-- Which model wrote this turn — same header as the image tab. A thread can
+       switch models mid-conversation, so the composer's selection doesn't answer it. -->
+  {#if role === "assistant" && model}
+    <span class="flex items-center gap-1 mb-1 px-3 text-[0.6875rem] font-medium text-txtsecondary">
+      <Sparkles class="w-3 h-3 shrink-0" />{model}
+    </span>
+  {/if}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     onmousemove={role === "assistant" ? trackReply : undefined}
@@ -611,8 +708,6 @@
       {/if}
       {#if rewriteOriginal != null}
         <RewriteDiff original={rewriteOriginal} rewritten={stripThinking(displayContent)} {isStreaming} {modelReady} />
-      {:else if showRaw}
-        <div class="whitespace-pre-wrap font-mono text-sm">{textContent}</div>
       {:else}
         <div class="prose prose-sm dark:prose-invert max-w-none chat-prose" use:codeBlockCopy use:wikiCiteClick use:diagramBlocks={!isStreaming}>
           <!-- Ordered timeline: inline think boxes, search blocks, and answer text. -->
@@ -759,13 +854,23 @@
               <Copy class="w-4 h-4" />
             {/if}
           </button>
+          <!-- No TTS model installed → no speaker button, rather than a button
+               that can only ever explain why it does nothing. -->
+          {#if $effectiveTtsModel}
           <button
-            class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 {showRaw ? 'text-primary' : 'text-txtsecondary'}"
-            onclick={() => showRaw = !showRaw}
-            title={showRaw ? "Show rendered" : "Show raw"}
+            class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 {speakState === 'idle' ? 'text-txtsecondary' : 'text-primary'}"
+            onclick={toggleSpeak}
+            title={speakTitle}
           >
-            <Code class="w-4 h-4" />
+            {#if speakState === "loading"}
+              <Loader2 class="w-4 h-4 animate-spin" />
+            {:else if speakState === "playing"}
+              <Square class="w-4 h-4" fill="currentColor" />
+            {:else}
+              <Volume2 class="w-4 h-4" />
+            {/if}
           </button>
+          {/if}
           <span class="ml-auto flex items-center gap-2 self-center text-[0.6875rem] text-txtsecondary tabular-nums">
             <span>{wordCount} {wordCount === 1 ? "word" : "words"}</span>
             {#if genTimeMs > 0}
