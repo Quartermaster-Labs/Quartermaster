@@ -86,6 +86,25 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 		return args, nil
 	}
 
+	// Budget = the TIGHTER of live free and the configured target. Live free is a
+	// snapshot, and the other GPU clients on a desktop box are not static: dwm
+	// alone swings by a GB or more with monitor/HDR/compositing load, and Discord,
+	// Steam, a VR runtime or a browser can each take a few hundred MB AFTER the
+	// model has already claimed everything the snapshot showed. Planning against
+	// 100% of that snapshot is what makes a load that fit yesterday spill into
+	// shared memory today: nothing is left for the growth, so the driver silently
+	// demotes part of the model and throughput collapses.
+	//
+	// Capping at TargetVramGB makes the setting mean what it says on the load path
+	// too (it used to bind only at generate time), so the split is a deliberate
+	// decision instead of a race with whatever the desktop happened to hold at
+	// spawn. Free still wins when it is the smaller of the two — a target above
+	// what the card actually has left must not talk us into an OOM.
+	budgetGB := liveBudgetGB(s, freeGB)
+	if logf != nil && budgetGB < freeGB {
+		logf(fmt.Sprintf("dynoffload: budget %.1fGB (targetVramGB, free=%.1fGB)", budgetGB, freeGB))
+	}
+
 	in := EstimateInput{
 		Ctx:          atoiFlag(args, "-c", "--ctx-size"),
 		KvK:          flagStr(args, "-ctk", "--cache-type-k"),
@@ -93,7 +112,7 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 		KvInRam:      hasFlag(args, "--no-kv-offload"),
 		Spec:         specTypes(args),
 		RopeScaling:  flagStr(args, "--rope-scaling"),
-		TargetVramGB: freeGB, // RAW live free; EstimatePlan subtracts overhead via s
+		TargetVramGB: budgetGB, // EstimatePlan subtracts overhead via s
 	}
 	if c, ok := atoiFlagOK(args, "--ctx-checkpoints"); ok {
 		in.CtxCheckpoints = &c
@@ -175,6 +194,17 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 			freeGB, bakedNgl, res.Ngl, bakedNcpu, res.NCpuMoe, res.EstVramGB))
 	}
 	return out, nil
+}
+
+// liveBudgetGB is the VRAM the spawn-time sizer is allowed to plan into: the
+// tighter of the live free reading and the configured TargetVramGB. See the
+// call site for why the raw free snapshot is not a safe budget on a desktop.
+// TargetVramGB <= 0 (unset) leaves the free reading as the only bound.
+func liveBudgetGB(s Settings, freeGB float64) float64 {
+	if s.TargetVramGB > 0 && s.TargetVramGB < freeGB {
+		return s.TargetVramGB
+	}
+	return freeGB
 }
 
 // gpuResidentFraction estimates how much of a model's weight ends up on the GPU

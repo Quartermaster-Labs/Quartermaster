@@ -127,3 +127,19 @@ func TestLiveOffload_SdMaxVram(t *testing.T) {
 		t.Errorf("no reading should be a noop, got %v", out)
 	}
 }
+
+func TestLiveOffload_BudgetCap(t *testing.T) {
+	// Target below live free binds: the spawn snapshot is not a safe budget on a
+	// desktop, where dwm/Discord/a VR runtime grow into VRAM after the load.
+	if got := liveBudgetGB(Settings{TargetVramGB: 20.5}, 22.5); got != 20.5 {
+		t.Fatalf("target should cap free: got %v want 20.5", got)
+	}
+	// Target above what the card actually has left must not talk us into an OOM.
+	if got := liveBudgetGB(Settings{TargetVramGB: 22.8}, 18.0); got != 18.0 {
+		t.Fatalf("free should win when tighter: got %v want 18.0", got)
+	}
+	// Unset target leaves live free as the only bound (hand-written config).
+	if got := liveBudgetGB(Settings{}, 12.0); got != 12.0 {
+		t.Fatalf("unset target: got %v want 12.0", got)
+	}
+}
