@@ -13,6 +13,7 @@ func TestParseCmd_ModelPath(t *testing.T) {
 		{"equals form", "llama-server --model=/models/c.gguf", "/models/c.gguf"},
 		{"sd diffusion model", "sd-server --diffusion-model /models/d.gguf --max-vram 20", "/models/d.gguf"},
 		{"first flag wins", "sd-server --diffusion-model /models/d.gguf --model /models/clip.gguf", "/models/d.gguf"},
+		{"ttscpp model-path", "tts-server --model-path /models/Kokoro_no_espeak_Q8.gguf --port 9000", "/models/Kokoro_no_espeak_Q8.gguf"},
 		{"no model flag", "some-upstream --serve 8080", ""},
 		{"flag with no value", "llama-server -c 4096 -m", ""},
 		{"unparseable", "", ""},

@@ -70,6 +70,12 @@ func estimateInputFromCmd(cmd string) autogen.EstimateInput {
 					in.Spec += "+" + v
 				}
 			}
+		case "--rope-scaling":
+			// Decides whether the sizer may pick a ctx past the trained length, so
+			// the preview must read it back off the argv like -c itself.
+			if v, ok := next(); ok {
+				in.RopeScaling = v
+			}
 		case "-ctk":
 			if v, ok := next(); ok {
 				in.KvK = v

@@ -52,13 +52,31 @@ type Settings struct {
 	// f16 can't reach denseMinCtx inside the VRAM budget (see defaultKvQuant). A
 	// per-model Override.KvK/KvV still wins over either. An unknown value is
 	// ignored (falls back to auto).
-	KvQuant        string  `yaml:"kvQuant"`
-	TargetVramGB   float64 `yaml:"targetVramGB"`
+	KvQuant      string  `yaml:"kvQuant"`
+	TargetVramGB float64 `yaml:"targetVramGB"`
+	// MultiResident emits the `vramBudgetGB` config block and a per-model
+	// `estVramGB`, which switch the router from "every group is exclusive, any
+	// load evicts everything else" to VRAM-budget admission: models stay
+	// co-resident as long as their summed estimates fit TargetVramGB. nil =>
+	// default ON. Set false to keep the legacy one-model-at-a-time behaviour
+	// (the per-model estimate is still emitted; only the budget is withheld).
+	MultiResident *bool `yaml:"multiResident"`
+	// MinGpuFraction is the admission floor for the spawn-time sizer: the least
+	// of a model's weight that must land on the GPU before a load is REFUSED
+	// instead of silently degraded to CPU. It exists because multi-resident
+	// loading otherwise always "succeeds" — the sizer just offloads the new
+	// model until it fits the leftovers, and every model ends up crawling. Only
+	// applies when the model's own baked plan was above the floor, so a model
+	// deliberately configured to run mostly on CPU still loads. 0 => default
+	// 0.5; negative disables the floor (pure best-effort degradation).
+	MinGpuFraction float64 `yaml:"minGpuFraction"`
 	AutoVram       bool    `yaml:"autoVram"` // measure free VRAM at gen time, use it as TargetVramGB (minus VramOverheadGB)
 	VramOverheadGB float64 `yaml:"vramOverheadGB"`
 	// ComputeBufFactor scales the modeled compute buffer (logits + activations).
 	// 1.0 = the analytic estimate; tune against the "compute buffer size" llama
-	// prints at load if your build/arch differs. 0 => default 1.0.
+	// prints at load if your build/arch differs. 0 => default 1.0. Measure PEAK
+	// (mid-generation dedicated + SHARED usage), never an idle process — see the
+	// warning above computeBufferGB before lowering this on Vulkan/ROCm.
 	ComputeBufFactor float64 `yaml:"computeBufFactor"`
 	// VisionOverheadGB is the VRAM reserved for a "-vision" twin's CLIP/vision
 	// compute buffer (image-token activations + patch-embed work), on TOP of the
@@ -271,10 +289,19 @@ func (p *SettingsPatch) apply(s *Settings) {
 // exposes it. Match is a list of model-name globs (PowerShell -like); a model
 // joins the first group it matches. Listen empty => the group binds no
 // dedicated port but still groups its members for eviction.
+//
+// Coexist turns the group into a coexistence group (emitted swap:false): its own
+// members stay loaded alongside each other instead of evicting one another, while
+// the group as a whole still evicts the other (exclusive) groups. That is what an
+// eval harness wants on a card with room for several small models at once —
+// several candidates resident, all other catalogs pushed out. Nothing here budgets
+// VRAM, so the caller decides how many members it loads concurrently; oversubscribe
+// and the extra llama-server just fails to allocate.
 type GroupSpec struct {
-	Name   string   `yaml:"name"`
-	Listen string   `yaml:"listen"`
-	Match  []string `yaml:"match"`
+	Name    string   `yaml:"name"`
+	Listen  string   `yaml:"listen"`
+	Match   []string `yaml:"match"`
+	Coexist bool     `yaml:"coexist"`
 }
 
 // Override supplies what gguf metadata can't, matched by a path glob against the
@@ -610,6 +637,11 @@ func (s *Settings) applyDefaults() {
 	}
 	if s.VramOverheadGB == 0 {
 		s.VramOverheadGB = 1.0
+	}
+	if s.MinGpuFraction == 0 {
+		s.MinGpuFraction = 0.5
+	} else if s.MinGpuFraction < 0 {
+		s.MinGpuFraction = 0 // explicit opt-out: no floor, degrade instead of refuse
 	}
 	if s.ComputeBufFactor == 0 {
 		s.ComputeBufFactor = 1.0

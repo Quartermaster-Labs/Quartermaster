@@ -365,6 +365,14 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		}
 		if ov.RopeScale > 0 {
 			lines = append(lines, fmt.Sprintf("--rope-scale %g", ov.RopeScale))
+		} else if ropeExtends(ov.RopeScaling) {
+			// Derive the factor from the ctx actually chosen. Emitting the type
+			// alone leaves llama.cpp on the model's own factor (1.0 unless the
+			// publisher fine-tuned for extension), i.e. a longer window over
+			// untrained positions.
+			if f := ropeFactor(meta, ctx); f > 0 {
+				lines = append(lines, fmt.Sprintf("--rope-scale %g", f))
+			}
 		}
 		if ov.RopeFreqBase > 0 {
 			lines = append(lines, fmt.Sprintf("--rope-freq-base %g", ov.RopeFreqBase))
@@ -410,9 +418,10 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 	if IsEmbeddingModel(meta) {
 		return strings.Join(embeddingCmdLines(s, row, &ov, meta), " "), nil
 	}
-	// Qwen3-TTS talkers render a tts-server command (talker + paired codec).
+	// Speech models render a tts-server command: qwentts (talker + paired codec)
+	// or TTS.cpp (--model-path), whichever engine the model resolves to.
 	if IsTTSModel(meta, row.FileName) {
-		return strings.Join(ttsCmdLines(s, row, &ov), " "), nil
+		return strings.Join(ttsCmdLines(s, row, &ov, meta), " "), nil
 	}
 	// Parakeet ASR models render a parakeet-server command (model + port only).
 	if IsASRModel(meta, row.FileName) {
@@ -452,10 +461,8 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 	if m := GetKvCostModel(meta, kvK, kvV); m.OK {
 		perTokGB, kvConstGB = m.SlopeGB, m.ConstGB
 	}
-	modelMax := 32768
-	if meta.ContextLength > 0 {
-		modelMax = int(meta.ContextLength)
-	}
+	// Rope scaling lifts the trained-length ceiling; without it this is nativeCtx.
+	modelMax := ropeCeiling(meta, ov.RopeScaling, ov.Ctx)
 	target := s.TargetVramGB
 	if ov.VramTargetGB > 0 {
 		target = ov.VramTargetGB

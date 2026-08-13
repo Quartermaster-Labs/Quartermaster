@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quartermaster-labs/quartermaster/internal/config"
 	"github.com/quartermaster-labs/quartermaster/internal/event"
 	"github.com/quartermaster-labs/quartermaster/internal/perf"
 	"github.com/quartermaster-labs/quartermaster/internal/shared"
@@ -33,6 +34,9 @@ type apiModel struct {
 	// so each port shows only its own models. Empty when ungrouped/unrestricted.
 	Group     string   `json:"group,omitempty"`
 	Listeners []string `json:"listeners,omitempty"`
+	// Ctx is the configured context size (-c / --ctx-size) the model launches
+	// with, 0 when its command takes no such flag (image/audio backends).
+	Ctx int `json:"ctx,omitempty"`
 	// RunningCmd is the actual argv the process spawned with, set only while the
 	// model is running. It differs from the config command after a live config
 	// edit (new args apply on next load) or a spawn-time offload rewrite, so the
@@ -92,6 +96,10 @@ func (s *Server) modelStatus() []apiModel {
 		}
 		_, capsMap, _, _ := renderCapabilities(mc.Capabilities)
 		gid := modelGroup[id]
+		ctxSize := 0
+		if v, ok := config.ParseCmd(mc.Cmd).Value("-c", "--ctx-size"); ok {
+			ctxSize, _ = strconv.Atoi(strings.TrimSpace(v))
+		}
 		models = append(models, apiModel{
 			Id:           id,
 			Name:         mc.Name,
@@ -103,6 +111,7 @@ func (s *Server) modelStatus() []apiModel {
 			Family:       modelFamily(mc.Cmd),
 			Group:        gid,
 			Listeners:    groupListeners[gid],
+			Ctx:          ctxSize,
 			RunningCmd:   runningCmd,
 		})
 	}
@@ -114,6 +123,16 @@ func (s *Server) modelStatus() []apiModel {
 	}
 
 	return models
+}
+
+// handleAPICatalog serves the FULL local catalog as JSON — the same payload the
+// dashboard gets pushed over /api/events, but pullable. Unlike /v1/models it is
+// not the OpenAI discovery route: it is not filtered by an API key's model scope
+// and it keeps unlisted entries (synthetic ctx/backend variants), so an
+// inspection client (the quartermaster_inspect chat tool) sees every model that
+// exists rather than the slice one key is allowed to call.
+func (s *Server) handleAPICatalog(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]any{"models": s.modelStatus()})
 }
 
 // handleAPIUnloadAll stops every running local process.

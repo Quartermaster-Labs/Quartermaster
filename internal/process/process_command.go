@@ -488,6 +488,22 @@ func (p *ProcessCommand) run() {
 	}
 }
 
+// rewritesVoicesPath reports whether this upstream needs /v1/audio/voices mapped
+// onto /v1/voices. Two different speech engines ship a binary called tts-server:
+// qwentts.cpp (loads a talker with --model plus a paired --codec, voices under
+// /v1/voices) and mmwillet/TTS.cpp (loads a self-contained gguf with
+// --model-path, voices under /v1/audio/voices). The flag is the only reliable
+// discriminator — the exe name is identical — and it is token-exact, so a path
+// that merely contains the string cannot trip it.
+func rewritesVoicesPath(args []string) bool {
+	for _, a := range args {
+		if a == "--model-path" || strings.HasPrefix(a, "--model-path=") {
+			return false
+		}
+	}
+	return true
+}
+
 func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout time.Duration) startResult {
 	cfg := p.cfg()
 	if cfg.Proxy == "" {
@@ -515,12 +531,22 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 	}
 
 	reverseProxy := httputil.NewSingleHostReverseProxy(proxyURL)
-	// tts-server exposes GET /v1/voices, but quartermaster's model-routed catalog
-	// uses the OpenAI-style /v1/audio/voices path. Map it so the playground's voice
-	// list reaches the backend. Harmless for other backends — they never get this path.
+	// qwentts.cpp's tts-server exposes GET /v1/voices, but quartermaster's
+	// model-routed catalog uses the OpenAI-style /v1/audio/voices path. Map it so
+	// the playground's voice list reaches the backend. Harmless for non-speech
+	// backends — they never get this path.
+	//
+	// NOT harmless for TTS.cpp, the other engine behind a binary also named
+	// tts-server: it serves /v1/audio/voices itself and has no /v1/voices, so the
+	// rewrite turned its voice list into a 404 and the Speech tab showed only the
+	// default speaker. Skip it there — see rewritesVoicesPath.
+	rewriteVoices := rewritesVoicesPath(args)
 	origDirector := reverseProxy.Director
 	reverseProxy.Director = func(r *http.Request) {
 		origDirector(r)
+		if !rewriteVoices {
+			return
+		}
 		// GET/POST /v1/audio/voices -> /v1/voices; DELETE /v1/audio/voices/{name}
 		// -> /v1/voices/{name} (tts-server names the voice in the path).
 		if r.URL.Path == "/v1/audio/voices" {

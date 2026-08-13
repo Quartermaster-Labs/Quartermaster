@@ -123,6 +123,16 @@ type Config struct {
 	Models             map[string]ModelConfig `yaml:"models"` /* key is model ID */
 	Profiles           map[string][]string    `yaml:"profiles"`
 
+	// VramBudgetGB enables VRAM-budget-aware multi-load: the total GPU memory
+	// the resident model set may occupy. When > 0 the group router stops
+	// evicting on group membership alone and instead admits a model whenever
+	// ModelConfig.EstVramGB for the target plus the resident set fits this
+	// budget, evicting least-recently-used models only until it does. 0 (the
+	// default, and any hand-written config that omits it) keeps the legacy
+	// static swap/exclusive behaviour. Fork addition; emitted by autogen from
+	// settings.targetVramGB.
+	VramBudgetGB float64 `yaml:"vramBudgetGB"`
+
 	// routing is the canonical source for swap/scheduling configuration.
 	// New code must read Routing, never the backwards-compat fields below.
 	Routing RoutingConfig `yaml:"routing"`

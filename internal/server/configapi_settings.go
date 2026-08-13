@@ -434,6 +434,12 @@ func (s *Server) handleAPIBackendsList(w http.ResponseWriter, r *http.Request) {
 		Path    string `json:"path"`
 		Default bool   `json:"default"`
 		Exists  bool   `json:"exists"`
+		// Provenance of a managed row (downloaded by the in-app backend manager):
+		// which upstream component/build this exe is. Empty on a hand-entered row.
+		Managed   bool   `json:"managed,omitempty"`
+		Component string `json:"component,omitempty"`
+		Version   string `json:"version,omitempty"`
+		Variant   string `json:"variant,omitempty"`
 	}
 	out := make([]backendListEntry, 0, len(gf.Settings.Backends))
 	for _, e := range gf.Settings.Backends {
@@ -443,7 +449,10 @@ func (s *Server) handleAPIBackendsList(w http.ResponseWriter, r *http.Request) {
 				exists = true
 			}
 		}
-		out = append(out, backendListEntry{ID: e.ID, Kind: e.Kind, Name: e.Name, Path: e.Path, Default: e.Default, Exists: exists})
+		out = append(out, backendListEntry{
+			ID: e.ID, Kind: e.Kind, Name: e.Name, Path: e.Path, Default: e.Default, Exists: exists,
+			Managed: e.Managed, Component: e.Component, Version: e.Version, Variant: e.Variant,
+		})
 	}
 	writeJSON(w, out)
 }

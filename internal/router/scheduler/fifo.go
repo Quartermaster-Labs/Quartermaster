@@ -52,6 +52,14 @@ type FIFO struct {
 	// VAE decode) runs above the steady-state --max-vram cap, so no other model
 	// may spawn alongside an in-flight render — see OnRequest step (3b).
 	imageModels map[string]bool
+
+	// useTick is a monotonic counter stamped into lastUse whenever a model is
+	// granted a handler or swapped in. It orders runningSet least-recently-used
+	// first, which is what lets a budget-aware Swapper pick victims. A counter
+	// rather than a clock: it needs only an ordering, and it keeps tests
+	// deterministic without a fake clock.
+	useTick int64
+	lastUse map[string]int64
 }
 
 // NewFIFO builds a FIFO scheduler. Per-model concurrency limits are derived
@@ -69,6 +77,7 @@ func NewFIFO(name string, logger *logmon.Monitor, planner Swapper, cfg config.Fi
 		active:      make(map[string]*activeSwap),
 		inFlight:    make(map[string]int),
 		imageModels: imageModels,
+		lastUse:     make(map[string]int64),
 	}
 }
 
@@ -338,7 +347,16 @@ func (s *FIFO) grantHandler(req HandlerReq, modelID string) {
 
 	if s.effects.GrantServe(req, modelID) {
 		s.inFlight[modelID]++
+		s.touch(modelID)
 	}
+}
+
+// touch stamps a model as most-recently-used. Called on every granted handler
+// and on every swap start, so a model that was only just loaded is never the
+// first LRU victim of the request queued behind it.
+func (s *FIFO) touch(modelID string) {
+	s.useTick++
+	s.lastUse[modelID] = s.useTick
 }
 
 // limit returns the per-model concurrency cap, defaulting to
@@ -359,6 +377,7 @@ func (s *FIFO) startSwap(initial HandlerReq, evict, running []string) {
 		evict:   evict,
 		waiters: []HandlerReq{initial},
 	}
+	s.touch(initial.Model)
 	s.planner.OnSwapStart(initial.Model, running)
 	s.effects.StartSwap(initial.Model, evict)
 }
@@ -466,8 +485,13 @@ func (s *FIFO) queueNeedsEvict(modelID string) bool {
 // runningSet is the live model set handed to the Swapper: every process the
 // baseRouter reports as running, unioned with the targets of in-flight swaps
 // (excluding excludeActive, the model whose own swap is being decided — its
-// in-flight entry must not count as "already running"). The result is sorted so
-// eviction decisions derived from it are deterministic.
+// in-flight entry must not count as "already running").
+//
+// Order is LEAST-RECENTLY-USED FIRST, ties broken alphabetically. A Swapper that
+// evicts on group membership alone ignores the order; a budget-aware one
+// (groupSwapper under vramBudgetGB) walks the slice front-to-back to free the
+// least valuable residents first. The tie-break keeps it deterministic — never
+// hand the planner map iteration order.
 func (s *FIFO) runningSet(excludeActive string) []string {
 	seen := make(map[string]struct{})
 	var out []string
@@ -484,7 +508,13 @@ func (s *FIFO) runningSet(excludeActive string) []string {
 	for _, id := range activeTargets(s.active, excludeActive) {
 		add(id)
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool {
+		ui, uj := s.lastUse[out[i]], s.lastUse[out[j]]
+		if ui != uj {
+			return ui < uj // never used (0) sorts first: evict it before a used one
+		}
+		return out[i] < out[j]
+	})
 	return out
 }
 

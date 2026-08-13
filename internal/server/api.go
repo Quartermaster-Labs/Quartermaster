@@ -65,7 +65,7 @@ func renderCapabilities(caps config.ModelCapConfig) (arch map[string]any, capsMa
 	}
 
 	// Build capabilities map only if there's something to put in it.
-	if hasIn || hasOut || caps.Tools || caps.Reranker || caps.Embedding || caps.Segmentation {
+	if hasIn || hasOut || caps.Tools || caps.Reranker || caps.Embedding || caps.Segmentation || caps.VoiceClone {
 		capsMap = make(map[string]any)
 	}
 
@@ -104,6 +104,14 @@ func renderCapabilities(caps config.ModelCapConfig) (arch map[string]any, capsMa
 
 	if caps.Segmentation {
 		capsMap["segmentation"] = true
+	}
+
+	// Speech engines differ in what they can do beyond synthesis: qwentts.cpp
+	// registers new voices from a clip, TTS.cpp ships a fixed voice pack. The
+	// playground gates its cloning UI on this rather than guessing from whether
+	// the model reported named speakers.
+	if caps.VoiceClone {
+		capsMap["voice_clone"] = true
 	}
 
 	if caps.Context > 0 {

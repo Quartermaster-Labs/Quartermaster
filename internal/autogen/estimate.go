@@ -12,7 +12,11 @@ type EstimateInput struct {
 	KvV            string
 	KvInRam        bool
 	Spec           string
-	TargetVramGB   float64
+	// RopeScaling ("linear"/"yarn") lets Ctx exceed the model's trained length —
+	// the preview must know, or it silently sizes a clamped window and reports a
+	// KV reserve the real launch won't have.
+	RopeScaling  string
+	TargetVramGB float64
 	CpuOffload     int  // >0 pins layers offloaded to CPU, overriding the sizer
 	CtxCheckpoints *int // nil => llama default (32); 0 disables; reserves checkpoint VRAM
 	// CheckpointMinStep pins -cms (checkpoint spacing in prompt tokens), which
@@ -84,10 +88,8 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		perTokGB, kvConstGB = m.SlopeGB, m.ConstGB
 	}
 
-	modelMax := 32768
-	if meta.ContextLength > 0 {
-		modelMax = int(meta.ContextLength)
-	}
+	// Rope scaling lifts the trained-length ceiling; without it this is nativeCtx.
+	modelMax := ropeCeiling(meta, in.RopeScaling, in.Ctx)
 
 	target := s.TargetVramGB
 	if in.TargetVramGB > 0 {

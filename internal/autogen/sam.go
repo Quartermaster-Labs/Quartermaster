@@ -67,6 +67,9 @@ func emitSamModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, nam
 		fmt.Fprintf(b, "      %s\n", line)
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
+	// No estVramGB: SAM is pinned to the CPU here (LiveOffloadArgs appends
+	// --no-gpu to every .ggml), so it costs no VRAM budget — consistent with its
+	// persistent, never-evicting group.
 	b.WriteString("    checkEndpoint: /health\n")
 	if ov != nil && ov.Unlisted {
 		b.WriteString("    unlisted: true\n")

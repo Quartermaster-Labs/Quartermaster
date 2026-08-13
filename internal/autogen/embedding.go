@@ -5,6 +5,11 @@ import (
 	"strings"
 )
 
+// embeddingOverheadGB pads an embedder's weights into a VRAM admission estimate
+// (compute buffer + the single short KV sequence it keeps). These models are
+// sub-GB and fully offloaded, so a flat pad beats running the LLM sizer here.
+const embeddingOverheadGB = 0.5
+
 // embeddingArchs are general.architecture values that mark a text-embedding GGUF
 // (BERT-family encoders served with --embedding, no generation head). The
 // pooling_type metadata key catches the rest (incl. LLM-arch embedders like
@@ -107,6 +112,9 @@ func emitEmbeddingModel(b *strings.Builder, s Settings, row GgufRow, ov *Overrid
 		fmt.Fprintf(b, "      %s\n", line)
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
+	// Embedders are small, fully offloaded and their KV is one short sequence:
+	// weights plus a flat pad is close enough for admission.
+	writeEstVram(b, row.SizeGB+embeddingOverheadGB)
 	if ov != nil && ov.Unlisted {
 		b.WriteString("    unlisted: true\n")
 	}

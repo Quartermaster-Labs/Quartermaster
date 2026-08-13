@@ -85,6 +85,7 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 	fmt.Fprintf(&b, "# TargetVramGB=%g  MaxRamGB=%g  Threads=%d\n", s.TargetVramGB, s.MaxRamGB, s.Threads)
 	b.WriteString("# Regen: quartermaster startup (hash-gated)\n\n")
 	fmt.Fprintf(&b, "healthCheckTimeout: %d\n\n", s.HealthCheckTimeout)
+	emitVramBudget(&b, s)
 	emitSlotCache(&b, s.SlotCache)
 	emitAPIKeys(&b, s.APIKeys)
 	b.WriteString("models:\n")
@@ -169,12 +170,13 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		return nil
 	}
 
-	// Qwen3-TTS "talker" GGUFs go to qwentts.cpp's tts-server (OpenAI
-	// /v1/audio/speech), not llama-server: they emit audio-codec tokens and load
-	// with a paired codec gguf. Detect by arch or the "talker" filename ahead of the
-	// LLM path, since the talker is a small qwen3 LM that would otherwise route to chat.
+	// Speech GGUFs go to a TTS server (OpenAI /v1/audio/speech), not llama-server:
+	// a Qwen3-TTS "talker" emits audio-codec tokens and loads with a paired codec
+	// gguf (qwentts.cpp), a TTS.cpp export is self-contained. Detect ahead of the
+	// LLM path — a talker is a small qwen3 LM that would otherwise route to chat.
+	// emitTTSModel picks the engine from the registry (see ttsBackend).
 	if IsTTSModel(meta, row.FileName) {
-		emitTTSModel(b, s, row, ov, name, meta.Architecture, emitted)
+		emitTTSModel(b, s, row, ov, name, meta, emitted)
 		return nil
 	}
 
@@ -236,9 +238,10 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		perTokGB = kvModel.SlopeGB
 		kvConstGB = kvModel.ConstGB
 	}
-	modelMax := 32768
-	if meta.ContextLength > 0 {
-		modelMax = int(meta.ContextLength)
+	modelMax := nativeCtx(meta)
+	if ov != nil {
+		// Rope scaling is the one knob that lifts the trained-length ceiling.
+		modelMax = ropeCeiling(meta, ov.RopeScaling, ov.Ctx)
 	}
 	kvInRam := ov != nil && ov.KvInRam
 
@@ -428,7 +431,20 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			pkvInRam = true
 		}
 
-		ctx, plan, kvReserve, err := sizeProfile(meta, s, prof, ptg, kcg, modelMax, pkvInRam)
+		// A variant can turn rope scaling on (or ask for a bigger ctx) by itself, so
+		// the trained-length ceiling is resolved per profile, not once per model.
+		pModelMax := modelMax
+		if v := prof.Variant; v != nil {
+			rs := v.RopeScaling
+			if rs == "" {
+				rs = override.RopeScaling
+			}
+			if c := ropeCeiling(meta, rs, prof.Ctx); c > pModelMax {
+				pModelMax = c
+			}
+		}
+
+		ctx, plan, kvReserve, err := sizeProfile(meta, s, prof, ptg, kcg, pModelMax, pkvInRam)
 		if err != nil {
 			return err
 		}

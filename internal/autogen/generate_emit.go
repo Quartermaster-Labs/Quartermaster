@@ -29,6 +29,35 @@ func slotKvPath(sc SlotCacheSettings) string {
 	return strings.ReplaceAll(p, "\\", "/")
 }
 
+// multiResidentOn reports whether VRAM-budget multi-load is enabled (default on).
+func multiResidentOn(s Settings) bool {
+	return s.MultiResident == nil || *s.MultiResident
+}
+
+// emitVramBudget writes the top-level vramBudgetGB the router admits against.
+// Withheld when multiResident is off, which leaves the router on the legacy
+// static swap/exclusive policy even though every model still carries its
+// estVramGB (harmless, and it keeps the dashboard's numbers available).
+func emitVramBudget(b *strings.Builder, s Settings) {
+	if !multiResidentOn(s) || s.TargetVramGB <= 0 {
+		return
+	}
+	b.WriteString("# multi-resident: models stay loaded side by side while their\n")
+	b.WriteString("# estVramGB sum fits this budget; over it, the least-recently-used\n")
+	b.WriteString("# ones are evicted until the incoming model fits.\n")
+	fmt.Fprintf(b, "vramBudgetGB: %g\n\n", round2(s.TargetVramGB))
+}
+
+// writeEstVram emits a model's predicted VRAM footprint, the admission input for
+// vramBudgetGB. Omitted when the caller has no estimate (0), which the router
+// reads as "unknown" and handles conservatively.
+func writeEstVram(b *strings.Builder, estGB float64) {
+	if estGB <= 0 {
+		return
+	}
+	fmt.Fprintf(b, "    estVramGB: %g\n", round2(estGB))
+}
+
 // emitSlotCache writes the slotCache config block (consumed by the server) when
 // the feature is enabled. Unset knobs are omitted so the server applies its
 // defaults. The path is always emitted so it matches the --slot-save-path flag.
@@ -89,10 +118,12 @@ func emitAPIKeys(b *strings.Builder, keys []APIKeyEntry) {
 // agnostic: each configured group has name-glob patterns (PowerShell -like);
 // every emitted model is assigned to the FIRST group whose any pattern matches
 // its name, so put specific groups before a "*" catch-all. Models matching no
-// group fall into an implicit "default" group with no listener. All groups are
-// exclusive swap groups, so loading on any listener still evicts whatever the
-// others were running (one GPU, VRAM-exclusive). With no settings.groups the
-// output is a single "exclusive" group over every model (upstream default).
+// group fall into an implicit "default" group with no listener. Every group is
+// exclusive, so loading on any listener still evicts whatever the others were
+// running (one GPU, VRAM-exclusive); a group marked coexist additionally keeps its
+// OWN members loaded side by side (swap:false) instead of swapping between them.
+// With no settings.groups the output is a single "exclusive" group over every model
+// (upstream default).
 func emitGroupsAndListeners(b *strings.Builder, s Settings, emitted, samNames []string) {
 	// SAM models are tiny and must coexist with whatever LLM/image model is loaded,
 	// so they go in their own group that never evicts and is never evicted (see
@@ -113,9 +144,15 @@ func emitGroupsAndListeners(b *strings.Builder, s Settings, emitted, samNames []
 
 	if len(s.Groups) == 0 {
 		b.WriteString("\ngroups:\n")
-		writeGroup(b, "exclusive", nonSam)
+		writeGroup(b, "exclusive", nonSam, false)
 		writeSamGroup(b, samNames)
 		return
+	}
+	coexist := make(map[string]bool, len(s.Groups))
+	for _, g := range s.Groups {
+		if g.Coexist {
+			coexist[g.Name] = true
+		}
 	}
 
 	// Assign each model to the first matching group (config order preserved).
@@ -154,7 +191,7 @@ func emitGroupsAndListeners(b *strings.Builder, s Settings, emitted, samNames []
 
 	b.WriteString("\ngroups:\n")
 	for _, name := range order {
-		writeGroup(b, name, members[name])
+		writeGroup(b, name, members[name], coexist[name])
 	}
 	writeSamGroup(b, samNames)
 
@@ -198,10 +235,17 @@ func writeSamGroup(b *strings.Builder, members []string) {
 	}
 }
 
-// writeGroup emits one exclusive swap group with the given members.
-func writeGroup(b *strings.Builder, name string, members []string) {
+// writeGroup emits one exclusive group with the given members. swap:true (the
+// default) means only one member is loaded at a time; coexist emits swap:false so
+// the members stay resident together. Either way exclusive:true keeps the group
+// evicting the OTHER groups — one GPU.
+func writeGroup(b *strings.Builder, name string, members []string, coexist bool) {
 	fmt.Fprintf(b, "  %s:\n", name)
-	b.WriteString("    swap: true\n")
+	if coexist {
+		b.WriteString("    swap: false\n")
+	} else {
+		b.WriteString("    swap: true\n")
+	}
 	b.WriteString("    exclusive: true\n")
 	b.WriteString("    members:\n")
 	for _, n := range members {
@@ -255,6 +299,7 @@ func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, pro
 		fmt.Fprintf(b, "      %s\n", line)
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
+	writeEstVram(b, plan.EstVramGB)
 	writeDisplayName(b, s, prof.Name)
 	if prof.Unlisted {
 		b.WriteString("    unlisted: true\n")

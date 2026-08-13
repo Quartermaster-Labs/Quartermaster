@@ -340,17 +340,29 @@ func offloadWithReclaim(orig []string, freeGB float64, ok bool,
 	if !ok || (err == nil && sameArgs(out, orig)) {
 		return out, err
 	}
+	// Keep probing while reclaim is still in flight. Accepting the FIRST
+	// non-error fresh reading is wrong: a probe taken mid-reclaim reads low but
+	// still "fits" (it just offloads a layer or two more), so the retry stopped
+	// early and the model loaded one layer short of what the box could hold —
+	// the same config landing -ngl 64 or 65 depending on probe timing. Stop only
+	// when the baked plan fits untouched (best case, nothing left to gain) or
+	// when free VRAM stops climbing (reclaim finished; this reading is real).
+	bestFree := freeGB
 	for i := 0; i < tries; i++ {
 		sleep()
 		fresh, fok := sample()
 		if !fok {
 			continue
 		}
-		// A fresh post-eviction reading is authoritative: take its result the
-		// moment it fits (even if it still offloads some — that's honest), and
-		// keep retrying only while it refuses.
-		if out, err = offload(fresh, true); err == nil {
+		out, err = offload(fresh, true)
+		if err == nil && sameArgs(out, orig) {
 			return out, nil
+		}
+		if fresh <= bestFree+vramReclaimEpsilonGB && err == nil {
+			return out, nil // plateaued and it fits: this is the honest placement
+		}
+		if fresh > bestFree {
+			bestFree = fresh
 		}
 	}
 	return out, err
@@ -381,6 +393,12 @@ const (
 	spawnVramReclaimDelay  = 700 * time.Millisecond
 	spawnVramSampleTimeout = 4 * time.Second
 )
+
+// vramReclaimEpsilonGB is how much a fresh probe must exceed the best reading so
+// far to count as "reclaim still in progress". Below it the driver has settled
+// and further probing only burns spawn latency; telemetry jitters by tens of MB,
+// so a flat compare would loop for nothing.
+const vramReclaimEpsilonGB = 0.15
 
 // freeVramGB returns the free VRAM (GB) of the largest GPU from the most recent
 // perf sample. ok is false when there's no GPU telemetry yet.
@@ -638,6 +656,7 @@ func (s *Server) routes() {
 	// admin guard covers when the socket reaches beyond loopback.
 	mux.Handle("POST /api/models/unload", adminChain.ThenFunc(s.handleAPIUnloadAll))
 	mux.Handle("POST /api/models/unload/{model...}", adminChain.ThenFunc(s.handleAPIUnloadModel))
+	mux.Handle("GET /api/catalog", adminChain.ThenFunc(s.handleAPICatalog))
 	mux.Handle("GET /api/events", adminChain.ThenFunc(s.handleAPIEvents))
 	mux.Handle("GET /api/metrics", adminChain.ThenFunc(s.handleAPIMetrics))
 	mux.Handle("GET /api/backend-metrics", adminChain.ThenFunc(s.handleAPIBackendMetrics))
@@ -667,6 +686,11 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/speechchats", apiChain.ThenFunc(s.handlePlaygroundSpeechChats))
 	mux.Handle("PUT /api/speechchats", apiChain.ThenFunc(s.handlePlaygroundSpeechChats))
 	mux.Handle("GET /api/media/{file...}", apiChain.ThenFunc(s.handlePlaygroundMedia))
+	// Assistant memory is server-owned (model AND browser write it) — per-entry
+	// CRUD, not the whole-blob PUT the other per-user files use. See memories.go.
+	mux.Handle("GET /api/memories", apiChain.ThenFunc(s.handleMemories))
+	mux.Handle("POST /api/memories", apiChain.ThenFunc(s.handleMemories))
+	mux.Handle("DELETE /api/memories/{id}", apiChain.ThenFunc(s.handleMemories))
 
 	// Server-owned turn runner: a chat turn runs as a server goroutine that
 	// streams to disk + SSE, so a closed/refreshed tab no longer loses (or stops)

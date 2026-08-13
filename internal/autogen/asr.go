@@ -91,6 +91,10 @@ func emitASRModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, nam
 		fmt.Fprintf(b, "      %s\n", line)
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
+	// No estVramGB: parakeet runs on the CPU unless a user opts into GPU via
+	// extraArgs, so it occupies no VRAM budget and must never cost a chat model
+	// its residency. A GPU opt-in under-charges — an accepted trade for not
+	// evicting on every dictation.
 	// parakeet-server exposes no health route; readiness = socket open.
 	b.WriteString("    checkEndpoint: none\n")
 	if ov != nil && ov.Unlisted {

@@ -47,13 +47,29 @@ func TestServer_OffloadWithReclaim(t *testing.T) {
 		t.Fatalf("over-offload path: probes=%d (want 1 — one fresh probe confirms fit)", probes)
 	}
 
-	// 3. Genuinely tight even after reclaim -> keep the heavier offload, no wasted
-	//    retries (return the first fitting fresh result).
+	// 3. Genuinely tight even after reclaim -> keep the heavier offload. Takes two
+	//    probes: the first still offloads more than baked, so it can't be trusted
+	//    until a second probe shows free VRAM has stopped climbing (reclaim done).
 	probes = 0
 	sample = func() (float64, bool) { probes++; return 10, true }
 	out, err = offloadWithReclaim(baked, 5, true, offload, sample, noSleep, 6)
-	if err != nil || !sameArgs(out, offloaded) || probes != 1 {
-		t.Fatalf("tight path: out=%v err=%v probes=%d (want offloaded, 1 probe)", out, err, probes)
+	if err != nil || !sameArgs(out, offloaded) || probes != 2 {
+		t.Fatalf("tight path: out=%v err=%v probes=%d (want offloaded, 2 probes)", out, err, probes)
+	}
+
+	// 3b. The layer-shaving regression: a mid-reclaim probe FITS but offloads more
+	//     than baked, and free VRAM is still climbing. Accepting it would load the
+	//     model a layer short; keep probing until the baked plan fits.
+	probes = 0
+	climbing := []float64{6.0, 12.0, 30.0}
+	sample = func() (float64, bool) {
+		i := min(probes, len(climbing)-1)
+		probes++
+		return climbing[i], true
+	}
+	out, err = offloadWithReclaim(baked, 5, true, offload, sample, noSleep, 6)
+	if err != nil || !sameArgs(out, baked) || probes != 3 {
+		t.Fatalf("climbing path: out=%v err=%v probes=%d (want baked, 3 probes)", out, err, probes)
 	}
 
 	// 4. Refused on the stale reading, VRAM reclaimed by the 3rd fresh probe.

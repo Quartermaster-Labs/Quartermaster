@@ -198,8 +198,13 @@ type modelConfigResp struct {
 	IsMTP       bool   `json:"isMTP"`      // model has nextn/MTP layers, or an mtp-* sidecar => draft-mtp usable
 	IsDflash    bool   `json:"isDflash"`   // paired *-dflash-*.gguf sidecar in the model's dir => draft-dflash usable
 	IsImage     bool   `json:"isImage"`    // diffusion model (sd-server) => image config form
-	IsAudio     bool   `json:"isAudio"`    // Qwen3-TTS talker (tts-server) => audio config form
+	IsAudio     bool   `json:"isAudio"`    // TTS or ASR model => audio config form
 	IsSam       bool   `json:"isSam"`      // SAM segmentation (sam3_server) => minimal segment form
+	// Class is the backend class this model resolves against (autogen kindClass):
+	// llm / image / tts / asr / segment. The UI filters the backend picker by it —
+	// TTS and ASR share one config form but not their engines, so the form flags
+	// above cannot stand in for it.
+	Class string `json:"class"`
 	HasOverride bool   `json:"hasOverride"`
 	// DisplayName is the UI-chosen advertised name for this base id ("" => none;
 	// the model advertises its real id). Renaming cascades to variant ids.

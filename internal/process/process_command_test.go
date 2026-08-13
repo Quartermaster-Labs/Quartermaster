@@ -658,3 +658,26 @@ func TestProcessCommand_ConcurrentRunStop(t *testing.T) {
 		}
 	}
 }
+
+// Both speech engines ship a binary named tts-server, but only qwentts.cpp keeps
+// its voice list at /v1/voices. Rewriting the path for TTS.cpp 404s its
+// /v1/audio/voices route, which the playground renders as "default voice only".
+func TestProcessCommand_rewritesVoicesPath(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"qwentts", []string{"tts-server", "--model", "talker.gguf", "--codec", "codec.gguf"}, true},
+		{"ttscpp", []string{"tts-server", "--model-path", "Kokoro_Q8.gguf"}, false},
+		{"ttscpp equals form", []string{"tts-server", "--model-path=Kokoro_Q8.gguf"}, false},
+		{"llama-server", []string{"llama-server", "-m", "model.gguf"}, true},
+		// A path that merely mentions the flag is not the flag.
+		{"lookalike path", []string{"llama-server", "-m", "/models/--model-path/x.gguf"}, true},
+	}
+	for _, c := range cases {
+		if got := rewritesVoicesPath(c.args); got != c.want {
+			t.Errorf("%s: rewritesVoicesPath(%v) = %v, want %v", c.name, c.args, got, c.want)
+		}
+	}
+}

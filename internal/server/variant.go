@@ -74,6 +74,13 @@ func (s *Server) ensureCtxVariant(realID string, ctx int) (string, error) {
 
 	variant := base // struct copy
 	variant.Cmd = cmd
+	// The variant's footprint is NOT the base's: a smaller ctx is a smaller KV
+	// reserve, which is the whole point of asking for one. Re-size it from the
+	// rendered cmd so budget admission (config.VramBudgetGB) charges what this
+	// variant actually costs — inheriting the base's estimate would price a 8k
+	// variant like the 128k model it came from. Unknown (0) on failure, which the
+	// router reads as "no estimate" and falls back to the static group policy.
+	variant.EstVramGB = s.estVramForCmd(gguf, cmd)
 	variant.Unlisted = true // routable + dashboard-visible, out of the /v1/models catalog
 	if variant.Name == "" {
 		variant.Name = realID
@@ -85,6 +92,40 @@ func (s *Server) ensureCtxVariant(realID string, ctx int) (string, error) {
 		return "", fmt.Errorf("registering ctx variant: %w", err)
 	}
 	return syntheticID, nil
+}
+
+// estVramForCmd re-runs the load-plan sizer over an already-rendered launch
+// command and returns its predicted VRAM footprint in GB — the same number
+// autogen bakes into `estVramGB:` at generate time, so a synthetic variant is
+// admitted against config.VramBudgetGB on equal terms with a generated model.
+//
+// Returns 0 (unknown) for anything it can't size: no -generate, unreadable
+// gguf, or a class the sizer doesn't model. 0 is the honest answer there, and
+// the router treats it as "fall back to the static group policy" rather than
+// guessing a footprint against a budget.
+func (s *Server) estVramForCmd(gguf, cmd string) float64 {
+	if s.autogen == nil {
+		return 0
+	}
+	gf, err := autogen.LoadGenerateFile(s.autogen.GeneratePath, s.autogen.ModelsDir)
+	if err != nil {
+		return 0
+	}
+	meta, err := autogen.ReadGgufMetadataCached(gguf)
+	if err != nil {
+		return 0
+	}
+	in := estimateInputFromCmd(cmd)
+	// Pin the placement the cmd actually launches with; otherwise the sizer
+	// re-derives its own split and reports a footprint this process won't have.
+	if n, ok := forcedOffloadFromCmd(cmd, meta); ok {
+		in.CpuOffload = n
+	}
+	res, err := autogen.EstimatePlan(gf.Settings, meta, in)
+	if err != nil {
+		return 0
+	}
+	return res.EstVramGB
 }
 
 // requestedCtx extracts a per-request context size from the requested model
@@ -201,7 +242,9 @@ func (s *Server) ensureBackendVariant(realID, backendID string) (string, error) 
 		return "", err
 	}
 
-	variant := base // struct copy
+	// Struct copy keeps the base's EstVramGB, which is correct here: only argv[0]
+	// changes, so the same weights load with the same ctx/KV/placement flags.
+	variant := base
 	variant.Cmd = newCmd
 	variant.Unlisted = true // routable + dashboard-visible, but out of the /v1/models catalog
 	if name == "" {

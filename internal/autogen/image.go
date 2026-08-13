@@ -680,6 +680,7 @@ func emitExtraImageModels(b *strings.Builder, s Settings, overrides []Override, 
 			fmt.Fprintf(b, "      %s\n", line)
 		}
 		fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
+		writeEstVram(b, extraImageBudget(s, m))
 		b.WriteString("    checkEndpoint: /\n")
 		if m.Unlisted {
 			b.WriteString("    unlisted: true\n")
@@ -709,6 +710,12 @@ func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, n
 		fmt.Fprintf(b, "      %s\n", line)
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
+	// Admission estimate = the --max-vram cap sd-server is told to stay inside.
+	// True peak during sampling/VAE decode runs above it, which is why the
+	// scheduler additionally refuses to spawn anything while a render is in
+	// flight (see FIFO.imageRenderInFlight) rather than trusting this number
+	// alone.
+	writeEstVram(b, budget)
 	// sd-server has no /health; the webui root returns 200 once loaded.
 	b.WriteString("    checkEndpoint: /\n")
 	if ov != nil && ov.Unlisted {

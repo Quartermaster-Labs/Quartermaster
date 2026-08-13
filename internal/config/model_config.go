@@ -26,12 +26,17 @@ type ModelCapConfig struct {
 	Reranker     bool     `yaml:"reranker"`
 	Embedding    bool     `yaml:"embedding"`
 	Segmentation bool     `yaml:"segmentation"`
-	Context      int      `yaml:"context"`
+	// VoiceClone marks a speech model that can register NEW voices from a
+	// reference clip (qwentts.cpp). It is not implied by out:[audio] — a
+	// fixed-voice-pack engine like TTS.cpp/Kokoro serves speech but has no
+	// endpoint to clone with, and offering the UI for it produces a 404 at best.
+	VoiceClone bool `yaml:"voiceClone"`
+	Context    int  `yaml:"context"`
 }
 
 // Empty returns true when all fields are at their zero values.
 func (c ModelCapConfig) Empty() bool {
-	return len(c.In) == 0 && len(c.Out) == 0 && !c.Tools && !c.Reranker && !c.Embedding && !c.Segmentation && c.Context == 0
+	return len(c.In) == 0 && len(c.Out) == 0 && !c.Tools && !c.Reranker && !c.Embedding && !c.Segmentation && !c.VoiceClone && c.Context == 0
 }
 
 // Validate checks that all modality values are recognized and context is
@@ -101,6 +106,16 @@ type ModelConfig struct {
 
 	// Capabilities defines what modalities and features the model supports.
 	Capabilities ModelCapConfig `yaml:"capabilities"`
+
+	// EstVramGB is this model's predicted VRAM footprint when loaded (weights +
+	// KV reserve + compute buffer + overhead), as computed by the autogen sizer
+	// at generate time. It is the admission input for VRAM-budget-aware
+	// multi-load (see Config.VramBudgetGB): the router sums it over the resident
+	// set to decide whether a new model fits alongside them or something must be
+	// evicted first. 0 = unknown (hand-written config, or a class the sizer does
+	// not model), which the router treats conservatively — see
+	// internal/router/group.go.
+	EstVramGB float64 `yaml:"estVramGB"`
 
 	// Copy of HealthCheckTimeout from global config
 	HealthCheckTimeout int `yaml:"healthCheckTimeout"`

@@ -30,7 +30,7 @@ func NewGroup(conf config.Config, proxylog, upstreamlog *logmon.Monitor) (*Group
 			}
 			want[mid] = modelCfg
 		}
-		return &groupSwapper{config: c, modelToGroup: modelToGroup}, want, nil
+		return &groupSwapper{config: c, modelToGroup: modelToGroup, logger: proxylog}, want, nil
 	}
 
 	swapper, want, err := plan(conf)
@@ -87,9 +87,14 @@ func buildModelToGroup(conf config.Config) (map[string]string, error) {
 type groupSwapper struct {
 	config       config.Config
 	modelToGroup map[string]string
+	logger       *logmon.Monitor
 }
 
 func (p *groupSwapper) EvictionFor(target string, running []string) []string {
+	if evict, ok := p.budgetEviction(target, running); ok {
+		return evict
+	}
+
 	tg := p.modelToGroup[target]
 	tgCfg := p.config.Routing.Router.Settings.Groups[tg]
 
@@ -125,4 +130,93 @@ func (p *groupSwapper) EvictionFor(target string, running []string) []string {
 	return result
 }
 
-func (p *groupSwapper) OnSwapStart(target string, running []string) {}
+// budgetEviction is the VRAM-budget admission rule, which REPLACES the static
+// group policy above whenever config.VramBudgetGB is set and the target's
+// footprint is known: models stay co-resident as long as the sum of their
+// estVramGB fits the budget, and only when the incoming model would push the
+// total over it are residents evicted — least-recently-used first, and only as
+// many as it takes to fit.
+//
+// This is also what keeps the fork's cross-port accounting honest once groups
+// stop being exclusive: one scheduler sees every group's residents, so the sum
+// it admits against covers all listeners rather than relying on group
+// exclusivity to serialise the GPU.
+//
+// ok=false hands the decision back to the static policy. That happens when no
+// budget is configured (hand-written config, or multiResident off) or when the
+// TARGET has no estimate — admitting a model of unknown size against a budget is
+// exactly the case where guessing OOMs the box, so it falls back to the
+// conservative "evict per group config" behaviour.
+//
+// Two rules keep the accounting from lying:
+//   - persistent-group members can never be evicted, but they still OCCUPY the
+//     budget (they hold real VRAM). ASR/SAM/TTS.cpp models emit no estimate
+//     precisely because they are CPU-resident, so they add nothing here.
+//   - an evictable resident with NO estimate is always evicted. Its footprint is
+//     unknown, so keeping it would silently overrun the budget; this degenerates
+//     to the legacy one-at-a-time behaviour for models the sizer can't measure.
+//
+// Purity: reads only config + the args, no mutation (see Swapper.EvictionFor).
+func (p *groupSwapper) budgetEviction(target string, running []string) ([]string, bool) {
+	budget := p.config.VramBudgetGB
+	if budget <= 0 {
+		return nil, false
+	}
+	targetGB := p.config.Models[target].EstVramGB
+	if targetGB <= 0 {
+		return nil, false
+	}
+
+	total := targetGB
+	var victims []string
+	var candidates []string // evictable, known cost, LRU-first (runningSet order)
+	seen := map[string]struct{}{target: {}}
+	for _, id := range running {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+
+		gcfg := p.config.Routing.Router.Settings.Groups[p.modelToGroup[id]]
+		estGB := p.config.Models[id].EstVramGB
+		switch {
+		case gcfg.Persistent:
+			total += estGB
+		case estGB <= 0:
+			victims = append(victims, id)
+		default:
+			total += estGB
+			candidates = append(candidates, id)
+		}
+	}
+
+	// Free the least-recently-used residents until the target fits. If even
+	// evicting every candidate leaves us over budget, they all go — the spawn
+	// guard (autogen.LiveOffloadArgs) then sizes or refuses the load against
+	// what the GPU actually has free.
+	for _, id := range candidates {
+		if total <= budget {
+			break
+		}
+		total -= p.config.Models[id].EstVramGB
+		victims = append(victims, id)
+	}
+	return victims, true
+}
+
+// OnSwapStart logs the budget arithmetic behind this swap — the one place a
+// Swapper may log, since it fires once per real swap while EvictionFor runs on
+// every request and every queue drain.
+func (p *groupSwapper) OnSwapStart(target string, running []string) {
+	if p.logger == nil || p.config.VramBudgetGB <= 0 {
+		return
+	}
+	residentGB := 0.0
+	for _, id := range running {
+		if id != target {
+			residentGB += p.config.Models[id].EstVramGB
+		}
+	}
+	p.logger.Debugf("group: admitting %s (est %.2fGB) against resident %.2fGB of %.2fGB budget",
+		target, p.config.Models[target].EstVramGB, residentGB, p.config.VramBudgetGB)
+}

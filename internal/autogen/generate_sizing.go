@@ -341,6 +341,16 @@ const (
 	computeFallbackGB   = 0.17 // vocab/embd dims missing => prior flat estimate
 )
 
+// Do NOT scale this model down on Vulkan/ROCm without measuring PEAK, not idle.
+// An idle process (post-load, one short prompt) holds ~1.9GB less than the same
+// process mid-generation: context checkpoints, the exercised compute buffer, and
+// the MTP draft context only materialize under a real prompt. Measured on an RX
+// 7900 XTX (b10405-vulkan, Qwen3.6-27B UD-Q4_K_XL, ctx 102400, -ngl 99): idle
+// 20.51GB dedicated, but generating 20.27GB dedicated + 2.11GB SHARED = 22.38GB
+// real footprint against a ~22.4GB estimate. Comparing the idle figure against a
+// peak-modeling estimate makes the compute term look ~1.6GB fat when it is not,
+// and a factor derived that way plans straight into a driver spill.
+
 // computeBufferGB estimates the GPU compute buffer (logits + activations + CUDA
 // runtime) for a given physical batch (ub). This lives on the GPU regardless of
 // CPU expert offload, so it is charged as flat VRAM overhead.

@@ -127,10 +127,14 @@ func main() {
 	// Autogen: when -generate is set, (re)generate -config from the local GGUF
 	// tree before loading. Hash-gated, so an unchanged models folder + control
 	// file skips the scan. -config is the output path here.
+	// Detect the GPU class once, before anything sizes a model. It gates both the
+	// CUDA-context overhead and the default ComputeBufFactor, and the spawn-time
+	// guard (LiveOffloadArgs) re-estimates on every load — so this has to run even
+	// without -generate, or a serve-only start sizes a Vulkan box as if it were CUDA.
+	// Best-effort; on no reading the CUDA default stands.
+	autogen.DetectGpuCompute(func(m string) { slog.Info(m) })
+
 	if *flagGenerate != "" {
-		// Detect the GPU class once so the sizer only charges CUDA-context overhead
-		// on a CUDA (NVIDIA) GPU, not on Vulkan/ROCm. Best-effort, before the sizer runs.
-		autogen.DetectGpuCompute(func(m string) { slog.Info(m) })
 		if _, err := autogen.EnsureConfig(*flagGenerate, configPath, *flagModelsDir, func(m string) { slog.Info(m) }); err != nil {
 			slog.Error("autogen failed", "error", err)
 			os.Exit(1)

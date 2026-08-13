@@ -130,19 +130,41 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 	if mc, ok := s.config().Models[realID]; ok && mc.Capabilities.Segmentation {
 		isSam = true
 	}
+	mc, hasMC := s.config().Models[realID]
 	info := config.ParseCmd(cmd)
 	isImage := info.Has("--diffusion-model")
-	if mc, ok := s.config().Models[realID]; ok && slices.Contains(mc.Capabilities.Out, "image") {
+	if hasMC && slices.Contains(mc.Capabilities.Out, "image") {
 		isImage = true
 	}
-	// Qwen3-TTS talkers (tts-server) get the audio form: no KV/ctx/spec/estimate.
-	// The tts-server cmd uses --model (llama/sd emit -m/--diffusion-model), so that
-	// flag is a clean discriminator on the autogen-rendered command.
-	isAudio := info.Has("--codec") || info.Has("--model")
+	// Speech models get the audio form: no KV/ctx/spec/estimate. The declared
+	// capability is the discriminator — out:[audio] is TTS, in:[audio] is ASR.
+	// This used to sniff `--model` off the rendered command, which broke twice: it
+	// swept in ASR/SAM (they use --model too, SAM only escaping via the explicit
+	// guard above), and it MISSED TTS.cpp, whose flag is --model-path — a Kokoro
+	// model then rendered the whole llama.cpp KV/offload form and offered LLM
+	// backends. The --codec fallback keeps a hand-written qwentts config with no
+	// capabilities block on the audio form.
+	isTTS := info.Has("--codec") || (hasMC && slices.Contains(mc.Capabilities.Out, "audio"))
+	isASR := hasMC && slices.Contains(mc.Capabilities.In, "audio")
+	isAudio := isTTS || isASR
 	if isSam {
-		isImage, isAudio = false, false
+		isImage, isAudio, isTTS, isASR = false, false, false, false
 	}
-	resp := modelConfigResp{Id: realID, Gguf: gguf, Cmd: strings.TrimSpace(cmd), IsImage: isImage, IsAudio: isAudio, IsSam: isSam, HasOverride: existing != nil}
+	// Class is what the UI filters the backend picker by, so it must name the
+	// engine class autogen resolves against (kindClass), not just the form shape:
+	// TTS and ASR share the audio form but not their backends.
+	class := "llm"
+	switch {
+	case isSam:
+		class = "segment"
+	case isImage:
+		class = "image"
+	case isTTS:
+		class = "tts"
+	case isASR:
+		class = "asr"
+	}
+	resp := modelConfigResp{Id: realID, Gguf: gguf, Cmd: strings.TrimSpace(cmd), IsImage: isImage, IsAudio: isAudio, IsSam: isSam, Class: class, HasOverride: existing != nil}
 	if dn, err := autogen.LoadSidecarDisplayNames(s.autogen.GeneratePath); err == nil {
 		resp.DisplayName = dn[realID]
 	}

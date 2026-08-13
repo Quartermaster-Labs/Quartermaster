@@ -33,10 +33,14 @@ type CmdInfo struct {
 	ModelPath string
 }
 
-// modelPathFlags are the flags whose value is the loaded model file, in the
-// order they win: the first one present decides. sd-server loads via
-// --diffusion-model, tts/asr/sam via --model, llama-server via -m.
-var modelPathFlags = []string{"-m", "--model", "--diffusion-model"}
+// modelPathFlags are the flags whose value is the loaded model file; the first
+// one appearing in the command decides. sd-server loads via --diffusion-model,
+// qwentts/asr/sam via --model, TTS.cpp via --model-path, llama-server via -m.
+// A backend missing from this list has no family key, which is not cosmetic: the
+// config editor refuses to save an override for a model whose gguf it cannot
+// find ("model has no gguf path to override"), so every emitted backend's model
+// flag belongs here.
+var modelPathFlags = []string{"-m", "--model", "--model-path", "--diffusion-model"}
 
 // cmdInfoCache memoizes by raw command string. Commands are stable config data
 // (one per model, changing only on reload), so the cache is small and never

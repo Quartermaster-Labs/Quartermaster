@@ -55,7 +55,20 @@ const hashCacheSuffix = ".modelhash"
 //	v30: vllm emit sizes --max-model-len and --gpu-memory-utilization from the VRAM
 //	     budget (were the model's trained ctx and a flat 0.90), emits --tokenizer
 //	     when set, and skips split-shard ggufs vllm cannot load.
-const genVersion = "v30"
+//	v31: TTS is multi-backend like the LLM class — Kokoro/Parler/Orpheus GGUFs are
+//	     detected and emitted as TTS.cpp (--model-path, no codec/voices dir), and the
+//	     engine is resolved from the registry per model instead of always qwentts.
+//	v32: TTS.cpp models emit useModelName (the gguf stem) — its server validates the
+//	     request's "model" against its own file-stem map and 400s "Invalid Model".
+//	v33: qwentts TTS models emit capabilities.voiceClone (TTS.cpp cannot clone), so
+//	     the playground stops offering a clone button for a fixed voice pack.
+//	v34: per-model estVramGB + top-level vramBudgetGB (VRAM-budget-aware
+//	     multi-load): the router admits a model alongside the resident set while
+//	     the estimates fit the budget instead of evicting on group membership.
+//	v35: rope scaling extends the ctx ceiling past the model's trained length and
+//	     derives --rope-scale from the chosen ctx (was: ctx hard-clamped to
+//	     context_length, and a bare --rope-scaling kept llama.cpp's factor of 1).
+const genVersion = "v35"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

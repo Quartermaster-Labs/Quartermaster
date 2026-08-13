@@ -86,3 +86,33 @@ func section(out, header, next string) string {
 	}
 	return rest
 }
+
+// A coexist group emits swap:false (members stay resident together) while keeping
+// exclusive:true (the group still evicts the other groups). Non-coexist groups in
+// the same config are unaffected.
+func TestAutogen_emitGroups_coexistGroup(t *testing.T) {
+	s := Settings{Groups: []GroupSpec{
+		{Name: "evalfleet", Match: []string{"*-game"}, Coexist: true},
+		{Name: "exclusive", Match: []string{"*"}},
+	}}
+	out := emitGroups(s, []string{"qwen-game", "gemma-game", "qwen"})
+
+	// End marker is a newline + indented key, not the bare word: "exclusive:" also
+	// matches the "exclusive: true" line INSIDE the evalfleet block and truncates it.
+	fleet := section(out, "  evalfleet:\n", "\n  exclusive:")
+	if !strings.Contains(fleet, "swap: false") || !strings.Contains(fleet, "exclusive: true") {
+		t.Fatalf("evalfleet must be swap:false + exclusive:true, got:\n%s", out)
+	}
+	for _, want := range []string{`- "qwen-game"`, `- "gemma-game"`} {
+		if !strings.Contains(fleet, want) {
+			t.Fatalf("%s not in evalfleet group:\n%s", want, out)
+		}
+	}
+	excl := section(out, "\n  exclusive:\n", "")
+	if !strings.Contains(excl, "swap: true") {
+		t.Fatalf("non-coexist group must stay swap:true, got:\n%s", out)
+	}
+	if strings.Contains(out, "listeners:") {
+		t.Fatalf("no group has a listen address; listeners must be omitted:\n%s", out)
+	}
+}

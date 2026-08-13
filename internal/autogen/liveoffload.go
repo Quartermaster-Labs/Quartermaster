@@ -92,6 +92,7 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 		KvV:          flagStr(args, "-ctv", "--cache-type-v"),
 		KvInRam:      hasFlag(args, "--no-kv-offload"),
 		Spec:         specTypes(args),
+		RopeScaling:  flagStr(args, "--rope-scaling"),
 		TargetVramGB: freeGB, // RAW live free; EstimatePlan subtracts overhead via s
 	}
 	if c, ok := atoiFlagOK(args, "--ctx-checkpoints"); ok {
@@ -139,9 +140,32 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 			filepath.Base(model), res.EstVramGB, freeGB)
 	}
 
+	// Admission floor. Without one, multi-resident loading always "succeeds":
+	// the sizer just pushes the new model's layers/experts to CPU until it fits
+	// whatever VRAM the already-resident models left over, and the box ends up
+	// with everything loaded and everything crawling. Refuse instead — but only
+	// when the BAKED plan was itself above the floor, so a model deliberately
+	// configured to run mostly on CPU (a 35B MoE on a small card) still loads.
+	if s.MinGpuFraction > 0 {
+		live := gpuResidentFraction(meta, res.Ngl, res.NCpuMoe)
+		baked := gpuResidentFraction(meta, bakedNgl, bakedNcpu)
+		if live < s.MinGpuFraction && baked >= s.MinGpuFraction {
+			return nil, fmt.Errorf("refusing to load %s: only %.0f%% of it would fit on the GPU right now (%.1fGB free, floor %.0f%%) — it would run at CPU speed; free VRAM or unload another model first",
+				filepath.Base(model), live*100, freeGB, s.MinGpuFraction*100)
+		}
+	}
+
 	// Only intervene when the live plan offloads MORE than the baked one. Ample
 	// VRAM (res keeps everything on GPU) or a hand-pinned config is left as-is.
 	if res.NCpuMoe <= bakedNcpu && res.Ngl >= bakedNgl {
+		// Log the no-op too. Without this the guard is only visible when it fires,
+		// so "the model loaded a layer short" can't be attributed: there's no way to
+		// tell a low live reading from an over-conservative estimate without knowing
+		// both numbers on a load that went fine.
+		if logf != nil {
+			logf(fmt.Sprintf("dynoffload: free=%.1fGB est=%.1fGB -> baked plan kept (-ngl %d --n-cpu-moe %d)",
+				freeGB, res.EstVramGB, bakedNgl, bakedNcpu))
+		}
 		return args, nil
 	}
 
@@ -151,6 +175,33 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 			freeGB, bakedNgl, res.Ngl, bakedNcpu, res.NCpuMoe, res.EstVramGB))
 	}
 	return out, nil
+}
+
+// gpuResidentFraction estimates how much of a model's weight ends up on the GPU
+// under a given placement, as 0..1.
+//
+// Dense: the offloaded layer share (-ngl of the block count). MoE: -ngl is 99
+// and the real lever is --n-cpu-moe, which moves N blocks' EXPERT tensors to
+// CPU — so the CPU share is the expert-weight fraction scaled by N/blocks, and
+// the dense trunk stays on the GPU. Unknown block count => 1 (no opinion, which
+// keeps the floor from firing on a model it can't measure).
+func gpuResidentFraction(meta Metadata, ngl, ncpuMoe int) float64 {
+	blocks := int(meta.BlockCount)
+	if blocks <= 0 {
+		return 1
+	}
+	if meta.IsMoE && ncpuMoe > 0 {
+		share := effectiveShare(meta, genMoeShareFor)
+		onCPU := share * float64(min(ncpuMoe, blocks)) / float64(blocks)
+		return 1 - onCPU
+	}
+	if ngl >= blocks {
+		return 1
+	}
+	if ngl <= 0 {
+		return 0
+	}
+	return float64(ngl) / float64(blocks)
 }
 
 // imageVramHeadroomGB is the VRAM kept free above sd-server's --max-vram budget,

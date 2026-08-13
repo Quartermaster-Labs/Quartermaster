@@ -44,7 +44,7 @@ func kindClass(kind string) string {
 		return "llm"
 	case "sd", "sd-server", "image":
 		return "image"
-	case "tts", "tts-server", "speech":
+	case "tts", "tts-server", "speech", "ttscpp", "tts.cpp", "kokoro":
 		return "tts"
 	case "asr", "parakeet", "parakeet-server", "transcribe":
 		return "asr"
@@ -104,6 +104,45 @@ func resolveBackend(s Settings, ov *Override, class string) resolvedBackend {
 		return resolvedBackend{Kind: first.Kind, Exe: strings.TrimSpace(first.Path), ID: first.ID}
 	}
 	return resolvedBackend{}
+}
+
+// resolveBackendPreferring is resolveBackend with a family hint. Some classes
+// hold engines that are NOT interchangeable: llama and vllm both serve any LLM
+// gguf, but qwentts.cpp and TTS.cpp each read their own weights format, so the
+// ★-default of the "tts" class is the wrong pick for a model of the other
+// family. preferKind therefore beats Default — an explicit per-model
+// Override.Backend still wins over both, since that is the user overruling the
+// auto-pick on purpose. Falls back to plain resolveBackend when the class holds
+// no entry of the preferred kind.
+func resolveBackendPreferring(s Settings, ov *Override, class, preferKind string) resolvedBackend {
+	if ov != nil {
+		if id := strings.TrimSpace(ov.Backend); id != "" {
+			for _, e := range s.Backends {
+				if e.ID == id {
+					return resolvedBackend{Kind: e.Kind, Exe: strings.TrimSpace(e.Path), ID: e.ID}
+				}
+			}
+		}
+	}
+	if preferKind != "" {
+		var first *BackendEntry
+		for i := range s.Backends {
+			e := &s.Backends[i]
+			if kindClass(e.Kind) != class || !strings.EqualFold(strings.TrimSpace(e.Kind), preferKind) {
+				continue
+			}
+			if e.Default {
+				return resolvedBackend{Kind: e.Kind, Exe: strings.TrimSpace(e.Path), ID: e.ID}
+			}
+			if first == nil {
+				first = e
+			}
+		}
+		if first != nil {
+			return resolvedBackend{Kind: first.Kind, Exe: strings.TrimSpace(first.Path), ID: first.ID}
+		}
+	}
+	return resolveBackend(s, ov, class)
 }
 
 // vllmCmdLines builds the vllm argv (exe first) for a gguf served through vllm.
@@ -181,6 +220,10 @@ func emitVllmModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, na
 		fmt.Fprintf(b, "      %s\n", line)
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
+	// vllm allocates its whole pool (weights + KV) up front from
+	// --gpu-memory-utilization, so its footprint IS the budget it was sized
+	// against, not a computed weights+KV sum.
+	writeEstVram(b, vllmBudgetGB(s, ov))
 	if ov != nil && ov.Unlisted {
 		b.WriteString("    unlisted: true\n")
 	}
