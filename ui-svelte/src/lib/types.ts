@@ -12,6 +12,10 @@ export interface ModelCapabilities {
   reranker?: boolean;
   embeddings?: boolean;
   segmentation?: boolean;
+  // Speech model that can REGISTER a new voice from a reference clip
+  // (qwentts.cpp). Not implied by audio_speech: TTS.cpp/Kokoro synthesizes from a
+  // fixed voice pack and has no clone route.
+  voice_clone?: boolean;
 }
 
 export interface Model {
@@ -245,7 +249,7 @@ export interface ChatMessage {
   // model ran mid-think (field-based reasoning_content); `reasoningAt` is its
   // offset into reasoning_content, so the UI nests it inside the reasoning box
   // instead of dropping it below.
-  searches?: { query: string; results: string; kind?: "web" | "wiki" | "quartermaster" | "youtube" | "youtube-search" | "youtube-comments" | "page" | "currency" | "time" | "calc" | "units" | "weather" | "feed"; at?: number; reasoningAt?: number; duringReasoning?: boolean; sources?: { title: string; url: string }[] }[];
+  searches?: { query: string; results: string; kind?: "web" | "wiki" | "quartermaster" | "memory" | "youtube" | "youtube-search" | "youtube-comments" | "page" | "currency" | "time" | "calc" | "units" | "weather" | "feed"; at?: number; reasoningAt?: number; duringReasoning?: boolean; sources?: { title: string; url: string }[] }[];
   // Inline-citation registry for this turn: the bracketed source numbers the
   // model was fed (and cites with, e.g. "[3]") mapped to their title + URL, so
   // the renderer can turn "[3]" in the answer into a clickable chip. A wiki

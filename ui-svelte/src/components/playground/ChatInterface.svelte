@@ -23,7 +23,9 @@
     shoppingStore,
     shoppingPrefsStore,
     extraToolsStore,
+    memoryStore,
   } from "../../stores/playground";
+  import { memories, loadMemories } from "../../stores/memories";
   import {
     chatSessions,
     activeChatId,
@@ -40,11 +42,12 @@
   import { FETCH_PAGE_TOOL } from "../../lib/fetchPage";
   import { CONVERT_CURRENCY_TOOL } from "../../lib/currency";
   import { ALWAYS_TOOLS, EXTRA_TOOLS } from "../../lib/assistantTools";
+  import { MEMORY_TOOLS, memoryBlock } from "../../lib/memoryTools";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import { getTextContent, getImageUrls } from "../../lib/types";
   import { buildBasePrompt } from "../../lib/systemPrompt";
   import type { ChatMessage, ContentPart } from "../../lib/types";
-  import { Paperclip, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle, Wrench, Reply, Quote, ShoppingCart, CloudSun } from "lucide-svelte";
+  import { Paperclip, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle, Wrench, Reply, Quote, ShoppingCart, CloudSun, BrainCircuit } from "lucide-svelte";
   import ChatMessageComponent from "./ChatMessage.svelte";
   import Composer from "./Composer.svelte";
   import ToolMenu from "./ToolMenu.svelte";
@@ -263,6 +266,9 @@
   let reasoningStartTime = $state<number>(0);
   let abortController = $state<AbortController | null>(null);
   let messagesContainer: HTMLDivElement | undefined = $state();
+  // Inner content wrapper — the thing that actually changes height (a collapsed
+  // tool box, a streamed token); the scroll container itself never resizes.
+  let messagesInner: HTMLDivElement | undefined = $state();
   let inputEl: HTMLTextAreaElement | undefined = $state();
   let rewriteFocused = $state(false);
   let rewriteEl: HTMLTextAreaElement | undefined = $state();
@@ -446,30 +452,43 @@
     }
   });
 
-  // Set right before a programmatic scroll so the onscroll it triggers doesn't
-  // get misread as the user scrolling and clear userScrolledUp (the autoscroll fight).
-  let autoScrolling = false;
-
+  // Every scroll event just re-derives "is the view at the bottom" from the live
+  // position — no flag marking our own programmatic scrolls. A one-shot flag was
+  // worse than nothing here: assigning scrollTop to where it already is fires NO
+  // event, so the flag leaked and swallowed the user's next real scroll. Since
+  // the pin below is instant (never smooth), there are no intermediate positions
+  // to misread: after a pin we are at the bottom, which is exactly what the
+  // recomputation reports.
   function handleMessagesScroll() {
     selReply = null; // rects go stale once the list scrolls
     if (!messagesContainer) return;
-    if (autoScrolling) {
-      autoScrolling = false;
-      return;
-    }
     const { scrollTop, scrollHeight, clientHeight } = messagesContainer;
     // Consider "at bottom" if within 40px of the bottom
     userScrolledUp = scrollHeight - scrollTop - clientHeight > 40;
   }
 
+  // Pin the view to the newest content unless the user has scrolled away.
+  function pinToBottom() {
+    if (!messagesContainer || userScrolledUp) return;
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  }
+
   // Auto-scroll when messages change — skip if user scrolled up
   $effect(() => {
-    if (messages.length > 0 && messagesContainer && !userScrolledUp) {
-      autoScrolling = true;
-      // Instant + direct so it emits a single onscroll the guard above absorbs;
-      // smooth would fire a stream of events mid-scroll that re-trip the guard.
-      messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    }
+    if (messages.length > 0 && messagesContainer && !userScrolledUp) pinToBottom();
+  });
+
+  // Re-pin on any content height change, not just on a new message: collapsing
+  // or expanding a reasoning/tool box mid-stream resizes the list without
+  // touching `messages`, and the browser then clamps scrollTop wherever the
+  // shrink left it. Together with `overflow-anchor: none` on the container (see
+  // the markup) this is what keeps a collapse from stranding the view above the
+  // still-growing reply with no way back down short of a reload.
+  $effect(() => {
+    if (!messagesInner) return;
+    const ro = new ResizeObserver(() => pinToBottom());
+    ro.observe(messagesInner);
+    return () => ro.disconnect();
   });
 
   // Follow the bottom again when switching conversations.
@@ -600,6 +619,7 @@
     shoppingPrefs: string | false = false,
     assistantAvailable = false,
     extrasAvailable = false,
+    memoryAvailable = false,
   ): string {
     // Persona + tool sub-prompts, all from the active system-prompt selection
     // (built-in default, a named preset, or none). A preset bundles its own tool
@@ -614,6 +634,7 @@
       shopping: shoppingPrefs,
       assistant: assistantAvailable,
       extras: extrasAvailable,
+      memory: memoryAvailable,
       // The chat pane renders ```mermaid / ```chart blocks (lib/diagrams.ts), so
       // the model is always told it can draw. Rewrite mode never gets here — it
       // ships REWRITE_SYSTEM instead.
@@ -690,6 +711,9 @@
     const assistantEnabled = !isRewrite;
     // Weather + feeds hit the network and only matter to some chats — own toggle.
     const extrasEnabled = !isRewrite && $extraToolsStore;
+    // Cross-conversation memory. Opt-in: it writes a store the user has to
+    // police, and the remembered facts sit in the system prompt of every chat.
+    const memoryEnabled = !isRewrite && $memoryStore;
     // Shopping mode: staged buying helper. Carries the standing prefs line.
     const shoppingPrefs: string | false = !isRewrite && $shoppingStore ? $shoppingPrefsStore : false;
     // Stable per-turn tool set the client advertises; the server dispatches them
@@ -702,6 +726,7 @@
       ...(!isRewrite && $shoppingStore ? [CONVERT_CURRENCY_TOOL] : []),
       ...(assistantEnabled ? ALWAYS_TOOLS : []),
       ...(extrasEnabled ? EXTRA_TOOLS : []),
+      ...(memoryEnabled ? MEMORY_TOOLS : []),
       ...(wikiEnabled ? [WIKI_TOOL] : []),
       ...(qmEnabled ? [QM_INSPECT_TOOL, QM_CONFIGURE_TOOL] : []),
       ...(ytEnabled ? [YOUTUBE_TOOL, YOUTUBE_SEARCH_TOOL, YOUTUBE_COMMENTS_TOOL] : []),
@@ -721,8 +746,13 @@
     const genStart = Date.now();
 
     const sys = [
-      basePrompt(webEnabled, wikiEnabled, qmEnabled, ytEnabled, modelId, fetchEnabled, shoppingPrefs, assistantEnabled, extrasEnabled),
+      basePrompt(webEnabled, wikiEnabled, qmEnabled, ytEnabled, modelId, fetchEnabled, shoppingPrefs, assistantEnabled, extrasEnabled, memoryEnabled),
       sessionById(id)?.instructions?.trim(),
+      // The remembered facts themselves. Below the persona so a memory can never
+      // displace the instructions, and above the volatile date line. Every save
+      // changes this block and so invalidates the KV prefix of every chat — the
+      // price of recall the model does not have to ask for.
+      memoryEnabled && memoryBlock($memories),
       curSummary && `Summary of earlier conversation:\n${curSummary}`,
       // Rewrite turns keep the full conversation for context (setting, characters,
       // goals discussed earlier) but add the transform-tool directive on top.
@@ -929,6 +959,10 @@
             ...(citations ? { citations } : {}),
             searches: [...(m.searches ?? []), search],
           }));
+          // The model just wrote to the memory store server-side; re-read it so
+          // Settings → Memory (and the next turn's injected block) reflect the
+          // change without a page reload.
+          if (search.kind === "memory") void loadMemories();
         }
         break;
       }
@@ -1168,7 +1202,7 @@
     <!-- Messages area — scrolls across the full width; content centered within. -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="flex-1 min-h-0 overflow-y-auto pretty-scroll scroll-fade-b mb-4"
+      class="flex-1 min-h-0 overflow-y-auto [overflow-anchor:none] pretty-scroll scroll-fade-b mb-4"
       bind:this={messagesContainer}
       onscroll={handleMessagesScroll}
       onwheel={(e) => { if (e.deltaY < 0) userScrolledUp = true; }}
@@ -1176,7 +1210,7 @@
       onmouseup={onSelection}
       use:scrollFade
     >
-      <div class="w-full max-w-3xl mx-auto px-2 pt-4 pb-6 {messages.length === 0 ? 'h-full' : ''}">
+      <div class="w-full max-w-3xl mx-auto px-2 pt-4 pb-6 {messages.length === 0 ? 'h-full' : ''}" bind:this={messagesInner}>
       {#if messages.length === 0}
         <div class="h-full flex flex-col items-center justify-center gap-3 text-txtsecondary">
           <MessagesSquare class="w-10 h-10 opacity-40" strokeWidth={1.5} />
@@ -1294,6 +1328,11 @@
         <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-extratools">
           <span class="flex items-center gap-1.5"><CloudSun class="w-3.5 h-3.5" /> Weather & Feeds {@render tip("Let the model read the live weather (Open-Meteo) and any RSS/Atom feed.")}</span>
           <input id="chat-extratools" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$extraToolsStore} />
+        </label>
+
+        <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-memory">
+          <span class="flex items-center gap-1.5"><BrainCircuit class="w-3.5 h-3.5" /> Memory {@render tip("Let the model remember lasting facts about you across conversations. Remembered facts are added to every chat's system prompt; read, edit and delete them in Settings → Memory.")}</span>
+          <input id="chat-memory" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$memoryStore} />
         </label>
 
         <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-qmtools">

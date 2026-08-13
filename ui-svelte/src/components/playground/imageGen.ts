@@ -49,6 +49,11 @@ export const SDXL_ANIME_NEG =
 // maxDim = largest long edge this model handles; bigger tiers are greyed out in
 // the Size picker. Absent → DEFAULT_MAX_DIM (1536). 2048 is opt-in per model.
 export const DEFAULT_MAX_DIM = 1536;
+// Batch ceiling for one prompt (sdapi `batch_size`). sd.cpp renders the images
+// sequentially, so N images cost N× the time with no way to stop mid-run except
+// unloading the model — a low cap keeps a fat-fingered value from parking the
+// GPU for an hour.
+export const MAX_BATCH = 8;
 export const IMAGE_DEFAULTS: { match: string; steps: number; cfg: number; sampler: string; scheduler: string; size?: string; negative?: string; denoise?: number; maxDim?: number }[] = [
   { match: "z-image", steps: 10, cfg: 1.0, sampler: "euler", scheduler: "discrete" },
   // Kontext: surgical edit — low denoise so it doesn't redraw the whole scene.

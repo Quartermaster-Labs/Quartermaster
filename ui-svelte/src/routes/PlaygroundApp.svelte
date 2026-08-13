@@ -5,6 +5,7 @@
   import { loadImageChats, clearImageChats } from "../stores/imageHistory";
   import { loadSpeechChats, clearSpeechChats } from "../stores/speechHistory";
   import { loadPrefs, clearPrefs } from "../stores/prefs";
+  import { loadMemories, clearMemories } from "../stores/memories";
   import { selectedTabStore, selectedModelStore, type PlaygroundTab } from "../stores/playground";
   import { userPref } from "../stores/prefs";
   import Login from "./Login.svelte";
@@ -48,7 +49,7 @@
   $effect(() => {
     if ($me) {
       chatsLoaded = false;
-      Promise.all([loadChats(), loadImageChats(), loadSpeechChats(), loadPrefs()]).then(() => {
+      Promise.all([loadChats(), loadImageChats(), loadSpeechChats(), loadPrefs(), loadMemories()]).then(() => {
         applyLaunchParams();
         chatsLoaded = true;
       });
@@ -57,6 +58,7 @@
       clearImageChats();
       clearSpeechChats();
       clearPrefs();
+      clearMemories();
       chatsLoaded = false;
     }
   });

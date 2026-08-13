@@ -13,14 +13,19 @@ export const QM_INSPECT_TOOL: ToolDef = {
   function: {
     name: "quartermaster_inspect",
     description:
-      "Read the live state of THIS running quartermaster. Returns compact formatted text. Pick one slice per call with `target` so you only pull what you need: 'status' (default) = what's loaded + a one-line VRAM/RAM summary; 'models' = installed models with capabilities + context length; 'loaded' = models running now with state + idle-TTL; 'vram' = live GPU/VRAM + system RAM; 'settings' = the global memory knobs; 'fields' = the COMPLETE list of configuration fields quartermaster_configure can change, with types (call this before any change whose field name you are not sure of); 'logs' = the last lines of quartermaster's own log (model loads, swaps, evictions, spawn/health errors) — use it to diagnose a load failure, crash, or error the user hit; or a model id = that model's effective config (every set field, plus its variants). Use this before answering questions about the user's own setup or before suggesting/making config changes, so your answer matches reality.",
+      "Read the live state of THIS running quartermaster. Returns compact formatted text. Pick one slice per call with `target` so you only pull what you need: 'status' (default) = what's loaded + a one-line VRAM/RAM summary; 'models' = EVERY installed model (not just loaded ones) with capabilities, context length and state, each with its variant count; 'loaded' = models running now with state + idle-TTL; 'vram' = live GPU/VRAM + system RAM; 'settings' = the global memory knobs; 'backends' = the backend registry: which executable (and managed build/version) each class runs, which is the ★ auto-pick, and whether any exe is missing from disk; 'estimate:<model id>' = a what-if load-plan sizing for that model — the chosen context, GPU/CPU layer split, estimated VRAM vs the budget and RAM vs the cap — optionally with `options` to try a tuning BEFORE you propose it with quartermaster_configure; 'fields' = the COMPLETE list of configuration fields quartermaster_configure can change, with types (call this before any change whose field name you are not sure of); 'logs' = the last lines of quartermaster's own log (model loads, swaps, evictions, spawn/health errors) — use it to diagnose a load failure, crash, or error the user hit; or a model id = that model's effective config (every set field, its named variant presets, AND each of its separate variant models — '<id>@ctx32768', '<id>@<backend>' — with the exact launch-flag deviations from the base command). Inspecting a variant id instead diffs it the other way, against its base. Use this before answering questions about the user's own setup or before suggesting/making config changes, so your answer matches reality.",
     parameters: {
       type: "object",
       properties: {
         target: {
           type: "string",
           description:
-            "What to read: 'status' (or omit) for loaded + VRAM summary, 'models', 'loaded', 'vram', 'settings', 'fields' (every editable config field + its type), 'logs', or a model id for that model's config. One slice per call.",
+            "What to read: 'status' (or omit) for loaded + VRAM summary, 'models' (the whole installed catalog), 'loaded' (only what is running now), 'vram', 'settings', 'backends' (registry: exe/version per class), 'estimate:<model id>' (predict a load plan, pair it with `options`), 'fields' (every editable config field + its type), 'logs', or a model id for that model's config + variants (what each variant changes vs the base). One slice per call.",
+        },
+        options: {
+          type: "object",
+          description:
+            "Only for target='estimate:<model id>': the what-if tuning to size. Anything you omit is re-derived by the sizer, NOT taken from the model's current config — so a bare estimate is the auto plan; pass actual=true for the placement that is really loaded. Keys: ctx (int), kvK/kvV ('q8_0','q4_0','f16'), spec (string), kvInRam (bool), ctxCheckpoints (int), checkpointMinStep (int), vram (number, GB budget to size against), cpuOffload (int layers on CPU), actual (bool). Nothing is changed by this call. Ignored for other targets.",
         },
         tail: {
           type: "integer",

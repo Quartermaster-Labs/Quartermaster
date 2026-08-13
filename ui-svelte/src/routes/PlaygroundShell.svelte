@@ -16,8 +16,12 @@
     chatTtsModelStore,
     effectiveTtsModel,
     ttsModels,
+    chatTtsVoiceStore,
+    memoryStore,
   } from "../stores/playground";
-  import ModelSelector from "../components/playground/ModelSelector.svelte";
+  import { cachedVoices, fetchVoices, hasCachedVoices, voiceLabel, voiceSubstitution } from "../lib/voices";
+  import { generateSpeech } from "../lib/speechApi";
+  import { models } from "../stores/api";
   import {
     DEFAULT_BUILTIN_PROMPT,
     DEFAULT_SEARCH_PROMPT,
@@ -36,6 +40,8 @@
     type SearchProviderId,
   } from "../lib/webSearch";
   import { openWikiArticle } from "../stores/wiki";
+  import { memories, saveMemory, deleteMemory } from "../stores/memories";
+  import type { MemoryEntry } from "../lib/memoryTools";
   import { me, logout } from "../stores/playgroundAuth";
   import { themeMode } from "../stores/theme";
   import {
@@ -59,7 +65,7 @@
     newSpeechChatId,
     type SpeechSession,
   } from "../stores/speechHistory";
-  import { MessageSquare, Image, Volume2, Mic, LogOut, Plus, Trash2, Settings, HelpCircle, BookOpen, SlidersHorizontal, Search, FileText, Pencil } from "lucide-svelte";
+  import { MessageSquare, Image, Volume2, Mic, LogOut, Plus, Trash2, Settings, HelpCircle, BookOpen, SlidersHorizontal, Search, FileText, Pencil, BrainCircuit, RefreshCw, Square } from "lucide-svelte";
   import WikiModal from "../components/WikiModal.svelte";
   import ChatInterface from "../components/playground/ChatInterface.svelte";
   import ImageInterface from "../components/playground/ImageInterface.svelte";
@@ -149,13 +155,237 @@
   let confirmDeleteSpeechId = $state<string | null>(null);
   let showSettings = $state(false);
   // Which settings category the modal's side-nav has selected.
-  type SettingsCat = "general" | "search" | "prompt";
+  type SettingsCat = "general" | "memory" | "search" | "prompt";
   let settingsCat = $state<SettingsCat>("general");
   const settingsCats: { id: SettingsCat; label: string; icon: typeof Settings }[] = [
     { id: "general", label: "General", icon: SlidersHorizontal },
+    { id: "memory", label: "Memory", icon: BrainCircuit },
     { id: "search", label: "Web Search", icon: Search },
     { id: "prompt", label: "System Prompt", icon: FileText },
   ];
+
+  // --- Read-aloud voices --------------------------------------------------
+  // The voice list is per TTS model and shared with the Speech tab (same pref
+  // key, one person one voice). Rendered from the localStorage cache and only
+  // fetched when that model is already loaded: GET /v1/audio/voices proxies to
+  // tts-server, so an eager fetch would swap a model out of VRAM just because
+  // someone opened Settings. The refresh button is the explicit opt-in.
+  let ttsVoices = $state<string[]>([""]);
+  let ttsVoicesLoading = $state(false);
+  // False while the list is still the [""] placeholder — see the clamp effect.
+  let ttsVoicesKnown = $state(false);
+
+  const ttsModelReady = $derived(
+    !!$effectiveTtsModel && $models.some((m) => m.id === $effectiveTtsModel && m.state === "ready"),
+  );
+
+  let lastVoiceModel: string | null = null;
+  let lastVoiceFetch: string | null = null;
+  $effect(() => {
+    const model = $effectiveTtsModel;
+    const ready = ttsModelReady;
+    if (model !== lastVoiceModel) {
+      lastVoiceModel = model;
+      ttsVoices = cachedVoices(model);
+      ttsVoicesKnown = hasCachedVoices(model);
+    }
+    // Fetch when the model BECOMES ready, not only when the selection changes.
+    // Settings is normally opened while the TTS model is idle, and the old
+    // model-changed guard then never fired again — the dropdown sat on the
+    // placeholder for the rest of the session however long the model ran. Same
+    // fix the Speech tab already carries.
+    const key = `${model}|${ready}`;
+    if (model && ready && key !== lastVoiceFetch) {
+      lastVoiceFetch = key;
+      void refreshTtsVoices();
+    }
+  });
+
+  // Keep the stored pick inside the list, so the <select> never sits on a value
+  // it can't show (a voice cloned on another model, say) while sending it.
+  // Gated on ttsVoicesKnown: clamping against the [""] placeholder wipes the
+  // saved voice pref for every model whose list hasn't been fetched yet.
+  $effect(() => {
+    if (ttsVoicesKnown && ttsVoices.length && !ttsVoices.includes($chatTtsVoiceStore)) {
+      chatTtsVoiceStore.set(ttsVoices[0]);
+    }
+  });
+
+  // What actually reaches the server is safeVoice()'s answer, which is not always
+  // the name in the dropdown. Say so: a silent swap and a mislabelled voice pack
+  // sound identical from the outside. Depends on ttsVoices/ttsVoicesKnown so it
+  // re-derives when the cache behind voiceSubstitution changes.
+  const voiceSwapNote = $derived.by(() => {
+    void ttsVoices;
+    void ttsVoicesKnown;
+    return voiceSubstitution($effectiveTtsModel, $chatTtsVoiceStore);
+  });
+
+  // Preview the selected voice. Deliberately one short sentence — the point is
+  // "is this the voice I want", and every extra word is generation time on a
+  // model that had to be loaded to answer at all.
+  // Plain ASCII on purpose: an em dash / curly quote reaches the phonemizer as an
+  // unknown token, and TTS.cpp's Kokoro runner is happy to abort on one.
+  const VOICE_TEST_LINE = "Hello, this is how I will read your messages out loud.";
+  let ttsTestBusy = $state(false);
+  let ttsTestError = $state("");
+  // Lets a second click cancel a generation that is still in flight instead of
+  // being swallowed — a TTS request that has to load the model first can run for
+  // tens of seconds, and an unresponsive button reads as broken.
+  let ttsTestAbort: AbortController | null = null;
+  // $state, not a plain let: the button swaps to Stop while it plays.
+  let ttsTestAudio = $state<HTMLAudioElement | null>(null);
+  // "model|voice" of whatever is playing, so a click after changing the voice
+  // reads as "preview THAT one" instead of as a stop.
+  let ttsTestKey = "";
+  // Bumped per preview attempt; see testVoice.
+  let ttsTestSeq = 0;
+
+  function stopVoiceTest() {
+    ttsTestAbort?.abort();
+    ttsTestAbort = null;
+    ttsTestKey = "";
+    if (!ttsTestAudio) return;
+    ttsTestAudio.pause();
+    // A paused Audio still holds the blob URL.
+    URL.revokeObjectURL(ttsTestAudio.src);
+    ttsTestAudio = null;
+    ttsTestKey = "";
+  }
+
+  // Only the element that is CURRENTLY the preview may clear the button state:
+  // an old element's ended/error can land after the next preview started, and
+  // stopping unconditionally would kill the new one.
+  function finishPreview(a: HTMLAudioElement) {
+    if (ttsTestAudio !== a) {
+      URL.revokeObjectURL(a.src);
+      return;
+    }
+    stopVoiceTest();
+  }
+
+  // A cancelled preview is a user action, not a failure: a fetch aborted mid-
+  // flight and a play() interrupted by our own pause() both reject, and showing
+  // either as red text under the picker is how "I clicked while the last one was
+  // still going" turned into an error message.
+  function isCancellation(e: unknown): boolean {
+    if (!(e instanceof Error)) return false;
+    return e.name === "AbortError" || e.message.includes("interrupted by a call to pause");
+  }
+
+  async function testVoice() {
+    const model = get(effectiveTtsModel);
+    if (!model) return;
+    const voice = get(chatTtsVoiceStore);
+    const key = `${model}|${voice}`;
+
+    // A click while the previous preview is still generating OR still playing
+    // cancels it. Same voice = stop, different voice = play that one instead.
+    // Generation can run for tens of seconds when the model has to load first,
+    // and the old code just swallowed clicks in that window.
+    if (ttsTestBusy || ttsTestAudio) {
+      const sameVoice = ttsTestKey === key;
+      stopVoiceTest();
+      ttsTestError = "";
+      if (sameVoice) return;
+    }
+
+    // Seq guards against the aborted request's own unwinding: its catch/finally
+    // run AFTER this one started and would otherwise clear busy or post an error
+    // belonging to a preview nobody is waiting for.
+    const seq = ++ttsTestSeq;
+    const abort = new AbortController();
+    ttsTestAbort = abort;
+    ttsTestBusy = true;
+    ttsTestKey = key;
+    ttsTestError = "";
+    try {
+      const blob = await generateSpeech(model, VOICE_TEST_LINE, voice, abort.signal);
+      if (seq !== ttsTestSeq) return; // superseded while generating
+      const audio = new Audio(URL.createObjectURL(blob));
+      audio.onended = () => finishPreview(audio);
+      // A decode failure with no handler leaves the button stuck in Stop.
+      audio.onerror = () => finishPreview(audio);
+      ttsTestAudio = audio;
+      await audio.play();
+    } catch (e) {
+      if (seq !== ttsTestSeq || isCancellation(e)) return;
+      ttsTestError = e instanceof Error ? e.message : String(e);
+      stopVoiceTest();
+    } finally {
+      if (seq === ttsTestSeq) ttsTestBusy = false;
+    }
+  }
+
+  // Leaving the playground mid-preview must not leave audio playing or the blob
+  // URL alive.
+  $effect(() => () => stopVoiceTest());
+
+  async function refreshTtsVoices() {
+    const model = get(effectiveTtsModel);
+    if (!model || ttsVoicesLoading) return;
+    ttsVoicesLoading = true;
+    try {
+      ttsVoices = await fetchVoices(model);
+      // fetchVoices caches on success and returns DEFAULT_VOICES on failure, so
+      // the cache — not the return value — is what says whether we really know.
+      ttsVoicesKnown = hasCachedVoices(model);
+    } finally {
+      ttsVoicesLoading = false;
+    }
+  }
+
+  // --- Memory panel ------------------------------------------------------
+  // The list is server-owned (the chat model writes it too), so every edit is a
+  // request, not a local mutation flushed later. memEditId: null = not editing,
+  // "" = composing a new one.
+  let memEditId = $state<string | null>(null);
+  let memDraft = $state("");
+  let memBusy = $state(false);
+  let memError = $state("");
+
+  function startNewMemory() {
+    memEditId = "";
+    memDraft = "";
+    memError = "";
+  }
+  function startEditMemory(m: MemoryEntry) {
+    memEditId = m.id;
+    memDraft = m.text;
+    memError = "";
+  }
+  async function commitMemory() {
+    const text = memDraft.trim();
+    if (!text || memBusy) return;
+    memBusy = true;
+    memError = "";
+    try {
+      await saveMemory(memEditId ? { id: memEditId, text } : { text });
+      memEditId = null;
+      memDraft = "";
+    } catch (e) {
+      memError = e instanceof Error ? e.message : "could not save";
+    } finally {
+      memBusy = false;
+    }
+  }
+  async function removeMemory(id: string) {
+    memBusy = true;
+    memError = "";
+    try {
+      await deleteMemory(id);
+      if (memEditId === id) memEditId = null;
+    } catch (e) {
+      memError = e instanceof Error ? e.message : "could not delete";
+    } finally {
+      memBusy = false;
+    }
+  }
+  // Dates only: a memory's usefulness is measured in weeks, and a wall-clock
+  // time on every row is noise.
+  function memDate(unix: number): string {
+    return unix ? new Date(unix * 1000).toLocaleDateString() : "";
+  }
   // Preset editor. A preset bundles the persona (content) AND its tool
   // sub-prompts (search/wiki/youtube/cite). The editor lists the sections;
   // clicking one opens a big single-section editor (openSection) with revert +
@@ -646,24 +876,158 @@
             </div>
 
             <!-- Read-aloud TTS. Hidden outright when no TTS model is installed —
-                 an empty picker for a feature the box can't do is just noise. -->
+                 an empty picker for a feature the box can't do is just noise.
+                 Native <select> on purpose: this panel is a scroll container, and
+                 ModelSelector's absolutely-positioned menu is clipped by it, so
+                 its options landed further down the page instead of over the row.
+                 A native menu renders in the browser's own layer. -->
             {#if $ttsModels.length > 0}
               <div class="flex flex-col gap-1">
-                <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">
-                  Read Aloud {@render tip("Model behind the speaker button under each chat reply. Loading it can evict the chat model — one GPU, one pool. The voice is whichever one the Speech tab is set to.")}
-                </span>
-                <!-- Shows the model that WOULD speak (auto-picked when nothing is
+                <label class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary" for="tts-model">
+                  Read Aloud {@render tip("Model behind the speaker button under each chat reply. Loading it can evict the chat model — one GPU, one pool.")}
+                </label>
+                <!-- Bound to the EFFECTIVE model (auto-picked when nothing is
                      chosen), so the row never reads "none" while the button works. -->
-                <ModelSelector
+                <select
+                  id="tts-model"
+                  class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary"
                   value={$effectiveTtsModel}
-                  placeholder="Select a TTS model..."
-                  category="tts"
-                  onChange={(v) => chatTtsModelStore.set(v)}
-                />
+                  onchange={(e) => chatTtsModelStore.set(e.currentTarget.value)}
+                >
+                  {#each $ttsModels as m (m.id)}
+                    <option value={m.id}>{m.id}</option>
+                  {/each}
+                </select>
+              </div>
+
+              <div class="flex flex-col gap-1">
+                <label class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary" for="tts-voice">
+                  Voice {@render tip("Speaker the read-aloud button uses. Shared with the Speech tab — one person, one voice. Refresh loads the model to ask it for the full list, including any cloned voices.")}
+                </label>
+                <div class="flex items-center gap-2">
+                  <select
+                    id="tts-voice"
+                    class="flex-1 min-w-0 px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary"
+                    bind:value={$chatTtsVoiceStore}
+                  >
+                    {#each ttsVoices as v (v)}
+                      <option value={v}>{voiceLabel(v)}</option>
+                    {/each}
+                  </select>
+                  <button
+                    type="button"
+                    class="p-1.5 rounded-md border border-card-border text-txtsecondary hover:text-txtmain hover:border-primary/50 disabled:opacity-50 transition-colors"
+                    title={ttsTestAudio || ttsTestBusy
+                      ? "Stop (or pick another voice to hear that one instead)"
+                      : `Hear this voice (loads the TTS model). Says: "${VOICE_TEST_LINE}"`}
+                    disabled={!$effectiveTtsModel}
+                    onclick={testVoice}
+                  >
+                    {#if ttsTestAudio || ttsTestBusy}
+                      <Square class="w-3.5 h-3.5 {ttsTestBusy ? 'animate-pulse' : ''}" />
+                    {:else}
+                      <Volume2 class="w-3.5 h-3.5" />
+                    {/if}
+                  </button>
+                  <button
+                    type="button"
+                    class="p-1.5 rounded-md border border-card-border text-txtsecondary hover:text-txtmain hover:border-primary/50 disabled:opacity-50 transition-colors"
+                    title="Refresh voices (loads the TTS model)"
+                    disabled={ttsVoicesLoading || !$effectiveTtsModel}
+                    onclick={refreshTtsVoices}
+                  >
+                    <RefreshCw class="w-3.5 h-3.5 {ttsVoicesLoading ? 'animate-spin' : ''}" />
+                  </button>
+                </div>
+                {#if ttsTestError}
+                  <p class="text-xs text-red-400">{ttsTestError}</p>
+                {/if}
+                <!-- Without this, a substituted voice looks like a mislabelled
+                     one: the name stays on screen and someone else speaks. -->
+                {#if voiceSwapNote}
+                  <p class="text-xs text-warning">{voiceSwapNote}</p>
+                {/if}
+                <p class="text-xs text-txtsecondary">
+                  {#if ttsVoices.length > 1}
+                    {ttsVoices.length} voices for this model.
+                  {:else}
+                    Only this model's default voice is known. Refresh to ask it for its full list.
+                  {/if}
+                  <!-- Spell out the preview line: otherwise the only way to know
+                       what the speaker button says is to press it. -->
+                  Preview says <span class="italic">“{VOICE_TEST_LINE}”</span>
+                </p>
               </div>
             {/if}
+          {:else if settingsCat === "memory"}
+            <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="memory-enabled">
+              <span class="flex items-center gap-1.5">Memory {@render tip("Let the assistant remember lasting facts about you across conversations. Remembered facts are added to the system prompt of every chat, so keeping the list short keeps chats fast.")}</span>
+              <input id="memory-enabled" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$memoryStore} />
+            </label>
 
-            <p class="text-xs text-txtsecondary border-t border-card-border pt-3">Per-user memory management is coming soon.</p>
+            <p class="text-xs text-txtsecondary">
+              The assistant writes here when you tell it to remember something. Everything is editable — these facts go into every chat, so a wrong one is worth deleting.
+            </p>
+
+            {#if memError}
+              <p class="text-xs text-red-400">{memError}</p>
+            {/if}
+
+            {#if memEditId === ""}
+              <div class="flex flex-col gap-2 p-2.5 rounded-md border border-primary/60 bg-background/40">
+                <textarea
+                  class="w-full min-h-20 px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary resize-y"
+                  placeholder="Something worth remembering across conversations…"
+                  bind:value={memDraft}
+                ></textarea>
+                <div class="flex justify-end gap-2">
+                  <button type="button" class="px-2.5 py-1 rounded-md text-txtsecondary hover:text-txtmain" onclick={() => (memEditId = null)}>Cancel</button>
+                  <button type="button" class="px-2.5 py-1 rounded-md bg-primary text-white disabled:opacity-50" disabled={!memDraft.trim() || memBusy} onclick={commitMemory}>Save</button>
+                </div>
+              </div>
+            {:else}
+              <button
+                type="button"
+                class="flex items-center gap-1.5 self-start px-2.5 py-1.5 rounded-md border border-card-border text-txtsecondary hover:text-txtmain hover:border-primary transition-colors"
+                onclick={startNewMemory}
+              >
+                <Plus class="w-3.5 h-3.5" /> Add a memory
+              </button>
+            {/if}
+
+            <div class="flex flex-col gap-1.5">
+              {#each $memories as m (m.id)}
+                {#if memEditId === m.id}
+                  <div class="flex flex-col gap-2 p-2.5 rounded-md border border-primary/60 bg-background/40">
+                    <textarea
+                      class="w-full min-h-20 px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary resize-y"
+                      bind:value={memDraft}
+                    ></textarea>
+                    <div class="flex justify-end gap-2">
+                      <button type="button" class="px-2.5 py-1 rounded-md text-txtsecondary hover:text-txtmain" onclick={() => (memEditId = null)}>Cancel</button>
+                      <button type="button" class="px-2.5 py-1 rounded-md bg-primary text-white disabled:opacity-50" disabled={!memDraft.trim() || memBusy} onclick={commitMemory}>Save</button>
+                    </div>
+                  </div>
+                {:else}
+                  <div class="group flex items-start gap-2 p-2.5 rounded-md border border-card-border bg-background/40">
+                    <div class="flex-1 min-w-0 flex flex-col gap-1">
+                      <span class="text-txtmain whitespace-pre-wrap break-words">{m.text}</span>
+                      <span class="text-xs text-txtsecondary">
+                        {m.source === "assistant" ? "Remembered by the assistant" : "Added by you"}{memDate(m.updatedAt) ? ` · ${memDate(m.updatedAt)}` : ""}
+                      </span>
+                    </div>
+                    <button type="button" class="shrink-0 p-1.5 rounded text-txtsecondary hover:text-txtmain" title="Edit" onclick={() => startEditMemory(m)}>
+                      <Pencil class="w-3.5 h-3.5" />
+                    </button>
+                    <button type="button" class="shrink-0 p-1.5 rounded text-txtsecondary hover:text-red-400" title="Delete" disabled={memBusy} onclick={() => removeMemory(m.id)}>
+                      <Trash2 class="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                {/if}
+              {:else}
+                <p class="text-xs text-txtsecondary italic">Nothing remembered yet.</p>
+              {/each}
+            </div>
           {:else if settingsCat === "search"}
             <div class="flex flex-col gap-1.5">
               <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="websearch">

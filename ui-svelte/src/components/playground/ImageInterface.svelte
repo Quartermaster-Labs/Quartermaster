@@ -23,7 +23,7 @@
   import { Image as ImageIcon, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Palette, Reply, Maximize2, Loader2 } from "lucide-svelte";
   import { scrollFade } from "../../lib/scrollFade";
   import type { ImageApiMode, SdApiLora, SdApiLoraRef } from "../../lib/types";
-  import { ASPECTS, SIZE_TIERS, aspectDims, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, DEFAULT_MAX_DIM, defaultsFor, parseSdProgress, fmtDur } from "./imageGen";
+  import { ASPECTS, SIZE_TIERS, aspectDims, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, DEFAULT_MAX_DIM, MAX_BATCH, defaultsFor, parseSdProgress, fmtDur } from "./imageGen";
 
   // A conversational image tab: each user prompt becomes a turn, and the model
   // replies with an image. Follow-up prompts tweak the last image — Kontext gets
@@ -46,6 +46,11 @@
   const sdStepsStore = userPref<number>("playground-sdapi-steps", 20);
   const sdCfgScaleStore = userPref<number>("playground-sdapi-cfg-scale", 7);
   const sdSeedStore = userPref<number>("playground-sdapi-seed", -1);
+  // Batch: how many images one prompt renders (sdapi `batch_size` → sd.cpp
+  // batch_count). sd.cpp renders them one after another, incrementing the seed
+  // per image — time is linear in the count. A pinned seed still reproduces
+  // image 1; images 2..N are seed+1.. .
+  const sdBatchStore = userPref<number>("playground-sdapi-batch", 1);
   const sdSamplerStore = userPref<string>("playground-sdapi-sampler", "");
   const sdSchedulerStore = userPref<string>("playground-sdapi-scheduler", "");
   // Tweak strength for the img2img follow-up path (non-Kontext models).
@@ -242,6 +247,9 @@
   let showSettings = $state(false);
   let showNegative = $state(false);
   let fullscreenImg = $state<string | null>(null);
+  // Per-turn pick inside a batch (turn index → image index). Which image the
+  // turn's action row acts on; view-only state, not persisted with the thread.
+  let pickedImg = $state<Record<number, number>>({});
   let elapsed = $state(0);
   let step = $state(0);
   let totalSteps = $state(0);
@@ -278,6 +286,13 @@
     }
     if (d.negative) $sdNegativePromptStore = d.negative;
     if (d.denoise !== undefined) $sdDenoiseStore = d.denoise;
+  });
+
+  // Batch picks are indexed by turn position, which means something else in
+  // another thread — drop them on a thread switch.
+  $effect(() => {
+    void $activeImageChatId;
+    pickedImg = {};
   });
 
   // Elapsed tick so a slow (offloaded) generation looks alive.
@@ -339,6 +354,9 @@
       return l.includes("kontext") || l.includes("qwen-image-edit") || l.includes("qwen-rapid");
     })()
   );
+  // Clamp the persisted batch pref — a hand-edited pref (or an old value) must not
+  // queue 200 renders behind one prompt.
+  let batchCount = $derived(Math.min(MAX_BATCH, Math.max(1, Math.round($sdBatchStore || 1))));
   let modelDefaults = $derived(defaultsFor($selectedModelStore));
   // Largest long edge the current model handles (tiers above are greyed out).
   let modelMax = $derived(modelDefaults?.maxDim ?? DEFAULT_MAX_DIM);
@@ -439,6 +457,7 @@
         steps: $sdStepsStore,
         cfg_scale: $sdCfgScaleStore,
         seed: $sdSeedStore,
+        batch_size: batchCount > 1 ? batchCount : undefined,
         sampler_name: $sdSamplerStore || undefined,
         scheduler: $sdSchedulerStore || undefined,
         extra_images: refs && refs.length ? refs : undefined,
@@ -470,6 +489,7 @@
         steps: $sdStepsStore,
         cfg_scale: $sdCfgScaleStore,
         seed: $sdSeedStore,
+        batch_size: batchCount > 1 ? batchCount : undefined,
         sampler_name: $sdSamplerStore || undefined,
         scheduler: $sdSchedulerStore || undefined,
         lora: activeLoras.length ? activeLoras : undefined,
@@ -865,6 +885,10 @@
           {/if}
 
           {#each turns as t, ti (ti)}
+            <!-- picked = which image of a batch the reply/copy/download/upscale
+                 actions act on; clamped so a shorter regenerated turn can't act
+                 on a stale index. -->
+            {@const picked = Math.min(pickedImg[ti] ?? 0, Math.max(0, t.images.length - 1))}
             <!-- User prompt (right) — matches chat: black bubble, no avatar. Source
                  / reference images fed into this turn ride inside the bubble. -->
             <div class="flex justify-end">
@@ -923,7 +947,7 @@
                 {#if t.images.length && !isGenerating}
                   <button
                     class="absolute top-1/2 left-full ml-2 -translate-y-1/2 z-10 p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary opacity-0 group-hover:opacity-100 transition-opacity"
-                    onclick={() => replyWithImage(t.images[0])}
+                    onclick={() => replyWithImage(t.images[picked])}
                     title="Reply — use this image as the source/reference"
                   >
                     <Reply class="w-4 h-4" />
@@ -934,14 +958,26 @@
                 {:else if t.images.length}
                   <div class="flex flex-wrap gap-2">
                     {#each t.images as img, ii (ii)}
-                      <button class="block rounded-xl overflow-hidden border border-card-border bg-secondary cursor-zoom-in focus:outline-none" onclick={() => (fullscreenImg = img)} aria-label="View image fullscreen">
-                        <img src={img} alt="generated {ti + 1}" class="max-h-56 w-auto object-contain" />
-                      </button>
+                      <div class="relative">
+                        <button class="block rounded-xl overflow-hidden border {t.images.length > 1 && ii === picked ? 'border-primary' : 'border-card-border'} bg-secondary cursor-zoom-in focus:outline-none" onclick={() => (fullscreenImg = img)} aria-label="View image fullscreen">
+                          <img src={img} alt="generated {ti + 1}" class="max-h-56 w-auto object-contain" />
+                        </button>
+                        {#if t.images.length > 1}
+                          <!-- Batch picker. A separate badge, not the thumbnail itself:
+                               clicking the image already means zoom, and stealing that
+                               would break the single-image case. -->
+                          <button
+                            class="absolute top-1 left-1 min-w-5 px-1 py-0.5 rounded text-[0.625rem] font-medium tabular-nums {ii === picked ? 'bg-primary text-white' : 'bg-black/50 text-white/80 hover:bg-black/70'}"
+                            onclick={() => (pickedImg[ti] = ii)}
+                            title="Use this one for the actions below"
+                          >{ii + 1}</button>
+                        {/if}
+                      </div>
                     {/each}
                   </div>
                   <!-- Actions + timing, matching the chat tab's footer: divider, buttons
-                       left, elapsed on the right. Acts on the first image (batch>1 isn't
-                       exposed in the UI). -->
+                       left, elapsed on the right. Acts on the picked image of the batch
+                       (the first one unless a badge was clicked). -->
                   <div class="flex flex-wrap items-center gap-1 mt-2 pt-1 border-t border-card-border">
                     <button
                       class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary disabled:opacity-40"
@@ -953,21 +989,21 @@
                     </button>
                     <button
                       class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary"
-                      onclick={() => copyImage(t.images[0], ti)}
+                      onclick={() => copyImage(t.images[picked], ti)}
                       title={copiedIdx === ti ? "Copied!" : "Copy image"}
                     >
                       {#if copiedIdx === ti}<Check class="w-4 h-4 text-green-500" />{:else}<Copy class="w-4 h-4" />{/if}
                     </button>
                     <button
                       class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary"
-                      onclick={() => downloadImage(t.images[0])}
+                      onclick={() => downloadImage(t.images[picked])}
                       title="Download"
                     >
                       <Download class="w-4 h-4" />
                     </button>
                     <button
                       class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary disabled:opacity-40"
-                      onclick={() => runUpscale(t.images[0], "m" + ti)}
+                      onclick={() => runUpscale(t.images[picked], "m" + ti)}
                       disabled={upscaling !== null || isGenerating}
                       title="Upscale ×4"
                     >
@@ -991,6 +1027,11 @@
                         <span class="inline-block w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></span>
                       {/if}
                       <span class="reason-shimmer-white font-medium">{stageLabel || "Generating…"}</span>
+                      {#if batchCount > 1}
+                        <!-- The step bar restarts once per batch image; say so, or a
+                             bar going back to 0/N looks like a stall/restart. -->
+                        <span class="text-[0.6875rem] tabular-nums">×{batchCount}</span>
+                      {/if}
                     </div>
                     {#if totalSteps > 0}
                       <div class="h-1.5 w-full rounded bg-card-border overflow-hidden">
@@ -1035,7 +1076,7 @@
             </div>
           </div>
           {#if isSdapi}
-            <div class="grid grid-cols-3 gap-3">
+            <div class="grid grid-cols-2 gap-3">
               <div class="flex flex-col gap-1">
                 <span class="text-xs uppercase tracking-wide text-txtsecondary">Steps</span>
                 <input type="number" min="1" max="150" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdStepsStore} />
@@ -1047,6 +1088,13 @@
               <div class="flex flex-col gap-1">
                 <span class="text-xs uppercase tracking-wide text-txtsecondary">Seed</span>
                 <input type="number" min="-1" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdSeedStore} />
+              </div>
+              <div class="flex flex-col gap-1">
+                <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
+                  Batch
+                  <span class="cursor-help opacity-60" title="Images rendered per prompt (max {MAX_BATCH}). They render one after another — N images take N× the time — and the seed increments per image, so a pinned seed reproduces the first one.">(?)</span>
+                </span>
+                <input type="number" min="1" max={MAX_BATCH} step="1" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdBatchStore} />
               </div>
             </div>
             {#if modelDefaults}

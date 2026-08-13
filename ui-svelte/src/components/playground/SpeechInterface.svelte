@@ -13,6 +13,7 @@
   } from "../../stores/speechHistory";
   import { generateSpeech } from "../../lib/speechApi";
   import { inferenceHeaders } from "../../lib/inferenceAuth";
+  import { DEFAULT_VOICES, cachedVoices, fetchVoices } from "../../lib/voices";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import ModelSelector from "./ModelSelector.svelte";
   import { Volume2, VolumeX, Download, RefreshCw, Plus, Pencil, X, Save, Upload, Square, Check, MoreVertical, Trash2, Mic, ChevronLeft } from "lucide-svelte";
@@ -53,8 +54,9 @@
 
   // "" = model's default speaker (tts-server picks it; never 400s on an unknown
   // name). Real speaker names come from refreshVoices() → GET /v1/audio/voices.
-  const defaultVoices = [""];
-  const CACHE_KEY = "playground-speech-voices-cache-v4"; // v4: base models keep "" + cloned voices; kind-aware
+  // List + cache live in lib/voices.ts — Settings → Read Aloud renders the same
+  // voices for the same models.
+  const defaultVoices = DEFAULT_VOICES;
 
   let availableVoices = $state<string[]>(defaultVoices);
   let isLoadingVoices = $state(false);
@@ -62,9 +64,14 @@
   // ("voice references are only valid for base models"), so they must NOT show
   // cloning. Detect them by the talker-gguf suffix baked into the model id.
   let isVoiceDesign = $derived(/voice[\s_-]*design/i.test($selectedModelStore));
+  // Cloning is an ENGINE capability, declared by the server (capabilities.
+  // voiceClone → voice_clone). It used to be inferred from "the voice list
+  // contains ''", which reads a TTS.cpp model — whose cached list starts at [""]
+  // and whose engine has no clone route at all — as a clonable base model.
+  let canClone = $derived($models.find((m) => m.id === $selectedModelStore)?.capabilities?.voice_clone ?? false);
   // A base model has no named speakers → its "" default is valid and it accepts
   // voice clones. A custom_voice model has speakers and REQUIRES a named voice.
-  let isBaseModel = $derived(availableVoices.includes("") && !isVoiceDesign);
+  let isBaseModel = $derived(canClone && availableVoices.includes("") && !isVoiceDesign);
   let activePreset = $derived(allPresets.find((p) => p.name === $selectedPresetStore) ?? null);
   // Is the selected model actually loaded? When idle, the voice list is whatever
   // was cached last — cloned/designed voices only appear after a refresh loads
@@ -109,24 +116,6 @@
     if (get(selectedPresetStore) === name) selectedPresetStore.set("");
   }
 
-  function getVoicesCache(): Record<string, string[]> {
-    if (typeof window === "undefined") return {};
-    try {
-      const saved = localStorage.getItem(CACHE_KEY);
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
-    }
-  }
-  function saveVoicesCache(cache: Record<string, string[]>) {
-    if (typeof window === "undefined") return;
-    try {
-      localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
-    } catch (e) {
-      console.error("Error saving voices cache", e);
-    }
-  }
-
   // Apply a voice list and keep the selection valid — a custom_voice model has
   // named speakers and REQUIRES one (no "Default"), so an out-of-list selection
   // (e.g. "" carried over from a base model) is snapped to the first speaker.
@@ -137,17 +126,26 @@
 
   // Restore cached voices for the selected model, else auto-fetch its real list.
   let lastVoiceModel: string | null = null;
+  let lastFetchedModel: string | null = null;
   $effect(() => {
     const model = $selectedModelStore;
-    if (model === lastVoiceModel) return;
-    lastVoiceModel = model;
-    // Cache seeds the UI instantly. Only hit the server when the model is
-    // ALREADY loaded — GET /v1/audio/voices proxies to tts-server and would
-    // otherwise force a model load just from opening the tab. A manual refresh
-    // or the first generation (which loads the model anyway) fetches fresh.
-    const cache = getVoicesCache();
-    applyVoices(model && cache[model] ? cache[model] : defaultVoices);
-    if (model && get(models).some((m) => m.id === model && m.state === "ready")) refreshVoices();
+    // Depend on readiness, not just the selection: picking a model while it is
+    // idle used to seed [""] and never look again, so a model whose speakers are
+    // a fixed pack (nothing to clone, nothing to refresh for) sat on an empty
+    // list until the user found the ⟳ button.
+    const ready = modelReady;
+    if (model !== lastVoiceModel) {
+      lastVoiceModel = model;
+      // Cache seeds the UI instantly. Only hit the server when the model is
+      // ALREADY loaded — GET /v1/audio/voices proxies to tts-server and would
+      // otherwise force a model load just from opening the tab. A manual refresh
+      // or the first generation (which loads the model anyway) fetches fresh.
+      applyVoices(cachedVoices(model));
+    }
+    if (model && ready && model !== lastFetchedModel) {
+      lastFetchedModel = model;
+      refreshVoices();
+    }
   });
 
   async function refreshVoices() {
@@ -155,30 +153,7 @@
     if (!model || isLoadingVoices) return;
     isLoadingVoices = true;
     try {
-      const response = await fetch(`/v1/audio/voices?model=${encodeURIComponent(model)}`, {
-        headers: inferenceHeaders(),
-      });
-      let voices = defaultVoices;
-      if (response.ok) {
-        const data = await response.json();
-        const got: unknown[] = Array.isArray(data) ? data : data.voices || [];
-        // tts-server returns {voices:[{name,kind}]} (kind = "speaker" for built-in,
-        // "registered" for a clone); also tolerate bare strings.
-        const norm = got
-          .map((v) => (typeof v === "string" ? { name: v, kind: "speaker" } : (v as { name?: string; kind?: string })))
-          .filter((v): v is { name: string; kind?: string } => !!v?.name);
-        const speakers = norm.filter((v) => v.kind !== "registered").map((v) => v.name);
-        const registered = norm.filter((v) => v.kind === "registered").map((v) => v.name);
-        // custom_voice model (named speakers) requires a named voice → no "".
-        // base model (no speakers) → "" default plus any cloned voices.
-        voices = speakers.length ? [...speakers, ...registered] : ["", ...registered];
-      }
-      const cache = getVoicesCache();
-      cache[model] = voices;
-      saveVoicesCache(cache);
-      applyVoices(voices);
-    } catch {
-      applyVoices(defaultVoices);
+      applyVoices(await fetchVoices(model));
     } finally {
       isLoadingVoices = false;
     }

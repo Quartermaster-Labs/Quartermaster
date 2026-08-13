@@ -1,7 +1,7 @@
 <script lang="ts">
   import { renderMarkdown, renderStreamingMarkdown, createStreamingCache } from "../../lib/markdown";
   import type { RenderedBlock } from "../../lib/markdown";
-  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronRight, Search, BookOpen, PenLine, Wrench, Reply, Youtube, FileText, ArrowRightLeft, Clock, Calculator, Ruler, CloudSun, Rss, Sparkles, Volume2, Loader2, Square } from "lucide-svelte";
+  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronRight, Search, BookOpen, PenLine, Wrench, Reply, Youtube, FileText, ArrowRightLeft, Clock, Calculator, Ruler, CloudSun, Rss, Sparkles, Volume2, Loader2, Square, BrainCircuit } from "lucide-svelte";
   import { generateSpeech } from "../../lib/speechApi";
   import { effectiveTtsModel, chatTtsVoiceStore } from "../../stores/playground";
   import { getTextContent, getImageUrls } from "../../lib/types";
@@ -27,7 +27,7 @@
     reasoningTimeMs?: number;
     thinkMs?: number[];
     genTimeMs?: number;
-    searches?: { query: string; results: string; kind?: "web" | "wiki" | "quartermaster" | "youtube" | "youtube-search" | "youtube-comments" | "page" | "currency" | "time" | "calc" | "units" | "weather" | "feed"; at?: number; reasoningAt?: number; duringReasoning?: boolean; sources?: { title: string; url: string }[] }[];
+    searches?: { query: string; results: string; kind?: "web" | "wiki" | "quartermaster" | "memory" | "youtube" | "youtube-search" | "youtube-comments" | "page" | "currency" | "time" | "calc" | "units" | "weather" | "feed"; at?: number; reasoningAt?: number; duringReasoning?: boolean; sources?: { title: string; url: string }[] }[];
     citations?: { n: number; title: string; url: string; wikiId?: string }[];
     approval?: QmApproval;
     onApprove?: (id: string, accept: boolean) => void;
@@ -103,7 +103,7 @@
   // Searches are recorded separately with the content offset (`at`) where they
   // ran. Build one ordered timeline so think boxes and search blocks render
   // inline between the surrounding text, not pinned to the top.
-  type SearchHit = { query: string; results: string; kind?: "web" | "wiki" | "quartermaster" | "youtube" | "youtube-search" | "youtube-comments" | "page" | "currency" | "time" | "calc" | "units" | "weather" | "feed"; sources?: { title: string; url: string }[] };
+  type SearchHit = { query: string; results: string; kind?: "web" | "wiki" | "quartermaster" | "memory" | "youtube" | "youtube-search" | "youtube-comments" | "page" | "currency" | "time" | "calc" | "units" | "weather" | "feed"; sources?: { title: string; url: string }[] };
   type SubItem = { type: "text"; text: string } | { type: "search"; search: SearchHit };
   type Segment =
     | { kind: "text"; text: string; idx: number }
@@ -568,6 +568,9 @@
       {:else if search.kind === "quartermaster"}
         <Wrench class="w-3 h-3 shrink-0" />
         <span class="font-medium truncate">Quartermaster: {search.query || "instance"}</span>
+      {:else if search.kind === "memory"}
+        <BrainCircuit class="w-3 h-3 shrink-0" />
+        <span class="font-medium truncate">Memory: {search.query || "updated"}</span>
       {:else if search.kind === "youtube-search"}
         <Youtube class="w-3 h-3 shrink-0" />
         <span class="font-medium truncate">Searched YouTube: {search.query || "videos"}</span>

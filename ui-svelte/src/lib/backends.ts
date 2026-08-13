@@ -38,7 +38,10 @@ export const BACKEND_CLASSES: BackendClassDef[] = [
     id: "tts",
     label: "Speech",
     blurb: "Text-to-speech models.",
-    engines: [{ kind: "tts", label: "tts-server", hint: "qwentts.cpp / tts-server." }],
+    engines: [
+      { kind: "tts", label: "tts-server", hint: "qwentts.cpp — Qwen3-TTS talker + paired codec gguf." },
+      { kind: "ttscpp", label: "TTS.cpp", hint: "mmwillet/TTS.cpp — Kokoro / Parler / Orpheus ggufs, self-contained, CPU only." },
+    ],
   },
   {
     id: "asr",
@@ -83,6 +86,9 @@ export function backendClass(kind: string): string {
     case "tts":
     case "tts-server":
     case "speech":
+    case "ttscpp":
+    case "tts.cpp":
+    case "kokoro":
       return "tts";
     case "asr":
     case "parakeet":

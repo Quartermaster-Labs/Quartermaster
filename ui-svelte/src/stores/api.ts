@@ -444,8 +444,11 @@ export interface ModelConfig {
   isMTP: boolean;
   isDflash: boolean; // paired *-dflash-*.gguf sidecar => draft-dflash usable
   isImage: boolean; // diffusion model => image config form
-  isAudio: boolean; // Qwen3-TTS talker (tts-server) => audio config form
+  isAudio: boolean; // TTS or ASR model => audio config form
   isSam?: boolean; // SAM segmentation (sam3_server) => minimal segment form
+  /** Backend class (autogen kindClass): llm/image/tts/asr/segment. Filters the
+   *  backend picker — TTS and ASR share the audio form but not their engines. */
+  class?: string;
   hasOverride: boolean;
   /** UI-set advertised name (cascades to variants); "" => unrenamed, shows id. */
   displayName?: string;

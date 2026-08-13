@@ -1,5 +1,6 @@
 import type { SpeechGenerationRequest } from "./types";
 import { inferenceHeaders } from "./inferenceAuth";
+import { safeVoice } from "./voices";
 
 export async function generateSpeech(
   model: string,
@@ -11,7 +12,10 @@ export async function generateSpeech(
   const request: SpeechGenerationRequest = {
     model,
     input,
-    voice,
+    // One choke point for every caller (Speech tab, read-aloud, voice preview):
+    // the voice pref is shared across models, and a name one engine knows can
+    // ABORT the other's server process. See safeVoice.
+    voice: safeVoice(model, voice),
     response_format: "wav",
     // voice_design models design a voice from this style description; the
     // tts-server maps OpenAI `instructions` → the ABI `instruct` field.

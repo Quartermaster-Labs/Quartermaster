@@ -44,6 +44,13 @@ export const qmToolsStore = userPref<boolean>("playground-qmtools", true);
 // the network and only matter to some conversations — and every advertised
 // tool is prefix the KV cache carries on every turn.
 export const extraToolsStore = userPref<boolean>("playground-extratools", true);
+// Cross-conversation memory (lib/memoryTools.ts): the remembered facts are
+// injected into the system prompt and the model can save/delete them. ON by
+// default: an assistant that forgets everything between chats is the thing being
+// fixed, and a feature nobody switches on is not a feature. The costs are real
+// but bounded — an empty list injects nothing, and Settings → Memory is where a
+// user prunes what the model kept.
+export const memoryStore = userPref<boolean>("playground-memory", true);
 export const reasoningStore = userPref<boolean>("playground-reasoning", true);
 // Read-aloud: the TTS model the chat tab's speaker button uses. Empty = the
 // button is inert (nothing picked yet). Separate from the Speech tab's model so

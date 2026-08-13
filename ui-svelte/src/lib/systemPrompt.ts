@@ -26,6 +26,14 @@ export const DEFAULT_SEARCH_PROMPT = [
 export const DEFAULT_QM_PROMPT =
   "You have quartermaster_inspect and quartermaster_configure tools that read and change THIS running quartermaster instance (the app hosting you). When the user asks about their own setup — what models they have, what's loaded, VRAM/memory, or a model's settings — call quartermaster_inspect first and answer from what it returns, not from assumptions. It returns short formatted text; pass a target ('models', 'loaded', 'vram', 'settings', 'fields', or a model id) to pull just the slice you need instead of everything. When they ask you to change a setting, inspect first to see current values, then call quartermaster_configure with only the fields to change — target 'settings' for the global memory/dashboard knobs, 'playground' for their own playground preferences (temperature, max tokens, thinking budget, web search, etc.), a model id for that model's config, or '<model id>#<variant>' for one of its variants. quartermaster_configure can set every knob the dashboard's model editor has; when you are unsure a field exists or what it is called, call quartermaster_inspect with target 'fields' for the full list rather than guessing or stuffing a raw flag into extraArgs. Every change is gated: the user is shown a before/after diff and must accept it, so the tool call blocks until they decide — if they deny or it times out, nothing is applied and you should just acknowledge that. On accept it hot-reloads without evicting running models. You cannot load or unload models. Only reach for these tools for questions genuinely about this instance's models or configuration — ordinary questions about AI or generation are not about quartermaster.";
 
+// Appended when the memory tools are on. The memories THEMSELVES are injected
+// separately (lib/memoryTools.ts memoryBlock) — this is only the contract for
+// writing them. Kept short and strict on purpose: every save rewrites the system
+// prompt, which invalidates the KV prefix of every chat, so a model that saves
+// chattily costs the user a reprefill for something it will read once.
+export const DEFAULT_MEMORY_PROMPT =
+  "You have a memory that survives across conversations, shown to you as \"What you remember about this user\" below (empty if you have never saved anything). Use memory_save when the user asks you to remember something, or when they state a lasting preference, constraint, or fact about themselves or their setup that would change how you answer in a future conversation. Do NOT save things that only matter in this conversation, things you can look up at any time, or anything already in your memory block — check it first. Before relying on a memory that could have gone stale, verify it (ask the user, or look it up) rather than asserting it; when one turns out to be wrong or outdated, call memory_save with that memory's id to replace it, and memory_delete only when the fact should simply be gone. Say in one short sentence when you have remembered, updated or forgotten something — never silently, and never as a whole paragraph about it. The user can read, edit and delete these memories themselves in Settings.";
+
 export const DEFAULT_WIKI_PROMPT =
   "A wiki_search tool gives you the quartermaster help wiki. Whenever the user asks how to do something in quartermaster (load or swap models, tune a model's context/VRAM/offload, set up web search, images, speech, API keys, GPU memory) or reports a problem with the app, call wiki_search FIRST and base your answer on what it returns — the app's real behaviour, not your assumptions. Don't invent menus, buttons, or settings; if the wiki doesn't cover it, say so.";
 
@@ -121,6 +129,9 @@ export function buildBasePrompt(
     // situational network ones (weather / feeds).
     assistant?: boolean;
     extras?: boolean;
+    // Cross-conversation memory tools (lib/memoryTools.ts). The remembered facts
+    // are injected by the caller, not here.
+    memory?: boolean;
     // Chat surface can draw ```mermaid / ```chart blocks. Off for surfaces that
     // render raw text (rewrite mode).
     diagrams?: boolean;
@@ -145,6 +156,7 @@ export function buildBasePrompt(
   if (opts.qm) lines.push(DEFAULT_QM_PROMPT);
   if (opts.fetch) lines.push(DEFAULT_FETCH_PROMPT);
   if (opts.assistant) lines.push(DEFAULT_ASSISTANT_PROMPT);
+  if (opts.memory) lines.push(DEFAULT_MEMORY_PROMPT);
   if (opts.extras) lines.push(DEFAULT_EXTRA_TOOLS_PROMPT);
   if (opts.shopping !== false && opts.shopping !== undefined) {
     lines.push(DEFAULT_SHOPPING_PROMPT);
