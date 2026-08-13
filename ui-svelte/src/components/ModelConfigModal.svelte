@@ -272,10 +272,18 @@
   // prompts are per-request (/v1/segment). CPU vs GPU is auto (VRAM-aware) or
   // pinned via extraArgs --no-gpu.
   const samMode = $derived(config?.isSam ?? false);
+  // Which speech engine this model runs on. The two are not interchangeable
+  // (TTS.cpp reads Kokoro/Parler/Orpheus ggufs, qwentts.cpp reads a talker +
+  // paired codec), so the form blurb must not claim the wrong one.
+  const ttscppMode = $derived(audioMode && /(^|\s)--model-path(\s|=)/.test(config?.cmd ?? ""));
 
   // Backends compatible with this model, the selected one's kind, and whether it
   // is vllm (drives which knobs apply). Empty registry => no picker shown.
-  const modelClass = $derived(imageMode ? "image" : audioMode ? "tts" : samMode ? "segment" : "llm");
+  // The server names the class (it knows which emitter ran); the form flags are
+  // only a fallback for an older backend, and they can't tell TTS from ASR.
+  const modelClass = $derived(
+    config?.class || (imageMode ? "image" : audioMode ? "tts" : samMode ? "segment" : "llm"),
+  );
   const classBackends = $derived((config?.backends ?? []).filter((b) => backendClass(b.kind) === modelClass));
   const selectedKind = $derived(classBackends.find((b) => b.id === backend)?.kind ?? "");
   const isVllm = $derived(selectedKind === "vllm");
@@ -514,6 +522,27 @@
   let estimateError = $state<string | null>(null);
   let estTimer: ReturnType<typeof setTimeout> | undefined;
 
+  // Baseline of the memory-affecting fields as they were SEEDED (saved config).
+  // The estimate pins the layer split to the running argv only while the form
+  // still matches what's loaded; once any of these is edited the preview is a
+  // what-if and must re-derive placement, or the pin freezes -ngl at whatever
+  // the spawn guard picked and a ctx/kv change silently reports the old split
+  // (e.g. "GPU 62/65" with 1.6GB of the budget unspent). Plain lets, not $state:
+  // only runEstimate reads them, and making them reactive would re-trigger it.
+  let memBaseline: string | null = null;
+  let baselineVariant = "";
+
+  // The exact set the re-estimate effect below watches, serialized. Anything
+  // added to those deps that can change the load plan belongs here too.
+  function memKey(): string {
+    return JSON.stringify([
+      ctx, ctxAuto, kvK, kvV, kvInRam, spec, vramTarget, vramAuto, cpuOffload, cpuAuto, ctxCheckpoints,
+      selectedV?.ctx, selectedV?.kvK, selectedV?.kvV, selectedV?.spec,
+      selectedV?.vramTargetGB, selectedV?.ub, selectedV?.ctxCheckpoints,
+      selectedV?.kvInRam, selectedV?.cpuOffload,
+    ]);
+  }
+
   // Which entry the form edits: "" = the Default (base override, full field set);
   // a variant name = that variant (a subset of fields; the rest inherit Default).
   // Default is a pinned, non-deletable entry — opening any variant's gear lands
@@ -534,7 +563,29 @@
 
   // Slider ceiling = trained context length (fallback 32k). Floor 4k.
   const CTX_MIN = 4096;
-  const maxCtx = $derived(config?.maxCtx && config.maxCtx > CTX_MIN ? config.maxCtx : 32768);
+  const nativeCtx = $derived(config?.maxCtx && config.maxCtx > CTX_MIN ? config.maxCtx : 32768);
+  // RoPE scaling is what makes a ctx past the trained length meaningful rather
+  // than garbage, so it's the one knob that lifts the slider's ceiling (the Go
+  // sizer applies the same rule and derives --rope-scale from the chosen ctx).
+  // Cap at 4x: past that even YaRN degrades badly.
+  const ropeOn = $derived(adv.ropeScaling === "yarn" || adv.ropeScaling === "linear");
+  const maxCtx = $derived(ropeOn ? nativeCtx * 4 : nativeCtx);
+  // Where the trained length sits on the (extended) slider track, as a %.
+  const nativePct = $derived(
+    maxCtx > nativeCtx ? ((nativeCtx - CTX_MIN) / (maxCtx - CTX_MIN)) * 100 : 100,
+  );
+  const ctxOverNative = $derived(!ctxAuto && ctx > nativeCtx);
+
+  // Toggling extension off must also pull the ctx back under the ceiling — the
+  // sizer would clamp it anyway, and a slider showing 256k on a 128k model that
+  // launches at 128k is a lie.
+  function toggleRope(on: boolean) {
+    adv.ropeScaling = on ? "yarn" : "";
+    if (!on) {
+      adv.ropeScale = "";
+      if (ctx > nativeCtx) ctx = nativeCtx;
+    }
+  }
   // Offload slider ceiling = transformer block count (fallback 64).
   const maxOffload = $derived(config?.blockCount && config.blockCount > 0 ? config.blockCount : 64);
   // VRAM slider ceiling = the global budget (fallback 24 GB until settings load).
@@ -574,6 +625,9 @@
   // Seed the structured form fields from a stored override (or autogen defaults
   // when null). Split out so "revert to auto" can re-seed without a refetch.
   function seedFromOverride(o: ModelOverride | null) {
+    // Fields are about to be (re)seeded from storage, so the next estimate
+    // re-takes the baseline instead of reading the seed itself as an edit.
+    memBaseline = null;
     ctxAuto = !o?.ctx;
     // Slider seeds from the override, else the sizer's effective ctx, else 8k.
     ctx = o?.ctx || autoCtx || Math.min(8192, config?.maxCtx || 8192);
@@ -754,6 +808,10 @@
       );
       variantCmds = cmds;
     } catch (e) {
+      // Drop the previous model's config: `config` is what the whole body renders
+      // from, so keeping it on a failed load showed the LAST model's settings under
+      // this model's title — and a save then wrote those values to the wrong gguf.
+      config = null;
       error = e instanceof Error ? e.message : String(e);
     } finally {
       loading = false;
@@ -806,7 +864,17 @@
       // model's variant tab (estId resolves the twin). Suppressed only by a manual
       // cpu-offload (variant field or model-wide), which is a genuine what-if.
       const manualOffload = selectedV ? !!selectedV.cpuOffload || !cpuAuto : !cpuAuto;
-      const actual = !manualOffload && get(models).some((m) => m.id === estId && m.state === "ready");
+      // Re-baseline on the first estimate after a seed and on every variant
+      // switch (each tab carries its own saved fields), then treat any later
+      // difference as an edit.
+      const key = memKey();
+      if (memBaseline === null || selectedVariant !== baselineVariant) {
+        memBaseline = key;
+        baselineVariant = selectedVariant;
+      }
+      const edited = key !== memBaseline;
+      const actual =
+        !manualOffload && !edited && get(models).some((m) => m.id === estId && m.state === "ready");
       const params = selectedV
         ? {
             ctx: selectedV.ctx ? Number(selectedV.ctx) : ctxAuto ? undefined : Number(ctx),
@@ -1503,8 +1571,13 @@
              (base/customvoice/voicedesign ship as separate ggufs = separate models). -->
         <div class="grid grid-cols-2 gap-3">
           <p class="col-span-2 text-xs text-txtsecondary">
-            Served by qwentts.cpp <code>tts-server</code> (OpenAI <code>/v1/audio/speech</code>).
-            The talker loads with its paired codec gguf; voice is chosen per request.
+            {#if ttscppMode}
+              Served by TTS.cpp <code>tts-server</code> (OpenAI <code>/v1/audio/speech</code>).
+              Self-contained gguf, CPU only; voice is chosen per request.
+            {:else}
+              Served by qwentts.cpp <code>tts-server</code> (OpenAI <code>/v1/audio/speech</code>).
+              The talker loads with its paired codec gguf; voice is chosen per request.
+            {/if}
           </p>
           <label class="flex flex-col gap-1 text-sm col-span-2">
             <span class="text-txtsecondary flex items-center gap-1">
@@ -1674,27 +1747,53 @@
           <label class="flex flex-col gap-1 text-sm col-span-2">
             <span class="text-txtsecondary flex items-center gap-1">
               Context window
-              {@render hint("Tokens the model can attend to. Auto = the size the autogen sizer picked to fit free VRAM (shown). Slider ranges 4k to the model's trained max.")}
-              <span class="ml-auto font-mono text-txtmain">
+              {@render hint("Tokens the model can attend to. Auto = the size the autogen sizer picked to fit free VRAM (shown). Slider ranges 4k to the model's trained max, or 4x that with RoPE extension on.")}
+              <span class="ml-auto font-mono {ctxOverNative ? 'text-warning' : 'text-txtmain'}">
                 {ctxAuto ? (autoCtx ? `auto · ${fmtCtx(autoCtx)}` : "auto") : fmtCtx(ctx)}
+                {#if ctxOverNative}<span class="text-xs"> · {(ctx / nativeCtx).toFixed(2)}x native</span>{/if}
               </span>
             </span>
             <div class="flex items-center gap-3">
               <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
                 <input type="checkbox" bind:checked={ctxAuto} /> Auto
               </label>
-              <input
-                type="range"
-                min={CTX_MIN}
-                max={maxCtx}
-                step="1024"
-                bind:value={ctx}
-                disabled={ctxAuto}
-                use:wheelAdjust
-                class="flex-1 disabled:opacity-40"
-              />
+              <!-- The track carries a tick at the trained length; everything right
+                   of it only works because RoPE is being stretched. -->
+              <div class="relative flex-1 flex items-center">
+                {#if maxCtx > nativeCtx}
+                  <div
+                    class="pointer-events-none absolute top-0 bottom-0 w-px bg-warning/70"
+                    style="left: {nativePct}%"
+                  ></div>
+                {/if}
+                <input
+                  type="range"
+                  min={CTX_MIN}
+                  max={maxCtx}
+                  step="1024"
+                  bind:value={ctx}
+                  disabled={ctxAuto}
+                  use:wheelAdjust
+                  class="w-full disabled:opacity-40 {ctxOverNative ? 'accent-warning' : ''}"
+                />
+              </div>
+              <label
+                class="flex items-center gap-1.5 text-xs whitespace-nowrap {ropeOn ? 'text-warning' : 'text-txtsecondary'}"
+                title="Extend past the model's trained {fmtCtx(nativeCtx)} context with YaRN RoPE scaling (--rope-scaling yarn). The scale factor is derived from the ctx you pick. Quality degrades the further past native you go."
+              >
+                <input
+                  type="checkbox"
+                  checked={ropeOn}
+                  onchange={(e) => toggleRope(e.currentTarget.checked)}
+                /> RoPE
+              </label>
               <span class="text-xs text-txtsecondary font-mono whitespace-nowrap">max {fmtCtx(maxCtx)}</span>
             </div>
+            {#if ctxOverNative}
+              <span class="text-xs text-warning">
+                Past the trained {fmtCtx(nativeCtx)} — YaRN scaling at {(Math.ceil((ctx / nativeCtx) * 2) / 2).toFixed(1)}x. Long-range recall degrades; verify before relying on it.
+              </span>
+            {/if}
           </label>
 
           <label class="flex flex-col gap-1 text-sm col-span-2">
