@@ -1,0 +1,99 @@
+package server
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+// Server-side dispatch for the memory_save / memory_delete chat tools (advertised
+// client-side in ui-svelte/src/lib/memoryTools.ts). Storage and the CRUD API live
+// in memories.go; this file is only the tool surface.
+//
+// There is deliberately no memory_read / memory_list tool: the user's memories
+// are injected into the chat system prompt every turn, so the model already has
+// them in front of it. A read tool would add a schema to the KV-stable prefix of
+// every conversation to fetch text that is already there — and would only fire
+// when the model remembered to call it, which is exactly the failure the whole
+// feature exists to avoid.
+
+// dispatchMemory runs one memory tool call, returning (displayLabel, resultText).
+// The label is what the chat card shows, so it is the fact (or its id), not the
+// tool name.
+func (tm *turnManager) dispatchMemory(at *activeTurn, tc toolCall) (string, string) {
+	if at.user == "" {
+		return "memory", "Memory is unavailable for this turn (no signed-in user)."
+	}
+	switch tc.Name {
+	case "memory_save":
+		return tm.memorySave(at, tc.Args)
+	case "memory_delete":
+		return tm.memoryDelete(at, tc.Args)
+	}
+	return "memory", "Unknown memory tool."
+}
+
+// memorySave upserts one memory. An `id` updates that entry (the model is
+// expected to reuse an id it was given rather than accumulate near-duplicates);
+// no id creates one.
+func (tm *turnManager) memorySave(at *activeTurn, args string) (string, string) {
+	var a struct {
+		ID   string   `json:"id"`
+		Text string   `json:"text"`
+		Tags []string `json:"tags"`
+	}
+	if err := json.Unmarshal([]byte(args), &a); err != nil {
+		return "memory", "memory_save needs a JSON object like {\"text\":\"…\"} (optionally \"id\" to update an existing memory and \"tags\")."
+	}
+	updating := strings.TrimSpace(a.ID) != ""
+	out, err := tm.pg.upsertMemory(at.user, memoryEntry{
+		ID:     strings.TrimSpace(a.ID),
+		Text:   a.Text,
+		Tags:   a.Tags,
+		Source: "assistant",
+	})
+	if err != nil {
+		return "memory", "Could not save this memory: " + err.Error()
+	}
+	verb := "Saved"
+	if updating {
+		verb = "Updated"
+	}
+	// The id is echoed because it is the only handle the model has for a later
+	// correction, and the reminder about the next turn is load-bearing: the
+	// injected block was rendered before this call, so the fact is NOT in the
+	// prompt yet and a model that re-reads the block will think the save failed.
+	return memoryLabel(out.Text), fmt.Sprintf(
+		"%s memory %s: %s\n\nIt is stored now and will be in your memory block from the user's next message onward (not in the one you were given this turn). Tell the user plainly that you have remembered it.",
+		verb, out.ID, out.Text)
+}
+
+// memoryDelete removes one memory by id.
+func (tm *turnManager) memoryDelete(at *activeTurn, args string) (string, string) {
+	var a struct {
+		ID string `json:"id"`
+	}
+	json.Unmarshal([]byte(args), &a)
+	id := strings.TrimSpace(a.ID)
+	if id == "" {
+		return "memory", "memory_delete needs the `id` of the memory to forget, as shown in your memory block."
+	}
+	gone, ok, err := tm.pg.deleteMemory(at.user, id)
+	if err != nil {
+		return "memory", "Could not delete that memory: " + err.Error()
+	}
+	if !ok {
+		return "memory", fmt.Sprintf("No memory with id %q — it may already be gone. Use an id from your memory block.", id)
+	}
+	return "forget " + memoryLabel(gone.Text), fmt.Sprintf(
+		"Deleted memory %s: %s\n\nIt is gone from storage; your memory block still shows it for the rest of this turn.", id, gone.Text)
+}
+
+// memoryLabel shortens a memory to a card title.
+func memoryLabel(text string) string {
+	text = strings.TrimSpace(strings.ReplaceAll(text, "\n", " "))
+	if r := []rune(text); len(r) > 60 {
+		return string(r[:60]) + "…"
+	}
+	return text
+}

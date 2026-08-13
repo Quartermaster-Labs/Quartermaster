@@ -125,6 +125,10 @@ func replayCall(s turnSearch) (name, args string, ok bool) {
 		// arguments, so replaying them would put a call in the history that
 		// could not have been made. They are also instant to re-issue.
 		//
+		// "memory": same shape — the recorded query is the fact, not the call's
+		// arguments, and a replayed memory_save would read as a second save of
+		// something already stored.
+		//
 		// "quartermaster" and anything a later version adds: a config action is
 		// not reference data, and guessing which of the two QM tools ran (the
 		// kind does not say) would put a call in the history that never happened.

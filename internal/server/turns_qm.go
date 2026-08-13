@@ -8,9 +8,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/quartermaster-labs/quartermaster/internal/config"
 )
 
 // A quartermaster_configure call blocks the turn until the user accepts/denies
@@ -56,7 +59,16 @@ type configPlan struct {
 // -generate editor endpoints (501 without -generate). No load/unload: swapping a
 // model would evict the one answering the chat.
 
-const qmBodyLimit = 24 * 1024 // per-response cap fed back to the model
+const (
+	qmBodyLimit = 24 * 1024 // per-response cap fed back to the model
+	// qmJSONLimit caps a response we PARSE ourselves before rendering it as text.
+	// It must NOT be qmBodyLimit: that cap is about how much text the model can be
+	// handed, and applying it to a JSON body cut /api/catalog mid-object on any
+	// real fleet, so the decode failed with "unexpected end of JSON input" and the
+	// tool reported the catalog as unreadable. The rendered text is still capped —
+	// that happens after parsing, where a whole model can be dropped cleanly.
+	qmJSONLimit = 4 << 20
+)
 
 // dispatchQM runs one quartermaster tool call, returning (displayLabel, resultText).
 func (tm *turnManager) dispatchQM(ctx context.Context, at *activeTurn, tc toolCall) (string, string) {
@@ -72,6 +84,14 @@ func (tm *turnManager) dispatchQM(ctx context.Context, at *activeTurn, tc toolCa
 // qmReq issues one loopback request and returns (status, body, err). The body is
 // capped so a huge catalog can't blow the model's context.
 func (tm *turnManager) qmReq(ctx context.Context, at *activeTurn, method, path string, body []byte) (int, string, error) {
+	code, s, _, err := tm.qmDo(ctx, at, method, path, body, qmBodyLimit)
+	return code, s, err
+}
+
+// qmDo is the shared loopback call. `limit` bounds the body read; `truncated`
+// reports that the response hit it — harmless for text handed to the model,
+// fatal for a body we are about to parse.
+func (tm *turnManager) qmDo(ctx context.Context, at *activeTurn, method, path string, body []byte, limit int64) (int, string, bool, error) {
 	u := strings.TrimRight(tm.pg.SelfBase, "/") + path
 	var r io.Reader
 	if body != nil {
@@ -79,7 +99,7 @@ func (tm *turnManager) qmReq(ctx context.Context, at *activeTurn, method, path s
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u, r)
 	if err != nil {
-		return 0, "", err
+		return 0, "", false, err
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -95,11 +115,17 @@ func (tm *turnManager) qmReq(ctx context.Context, at *activeTurn, method, path s
 	}
 	resp, err := tm.client.Do(req)
 	if err != nil {
-		return 0, "", err
+		return 0, "", false, err
 	}
 	defer resp.Body.Close()
-	s, _ := readLimited(resp.Body, qmBodyLimit)
-	return resp.StatusCode, strings.TrimSpace(s), nil
+	// Read one byte past the cap so hitting it is distinguishable from a body that
+	// happens to be exactly that long.
+	s, _ := readLimited(resp.Body, limit+1)
+	truncated := int64(len(s)) > limit
+	if truncated {
+		s = s[:limit]
+	}
+	return resp.StatusCode, strings.TrimSpace(s), truncated, nil
 }
 
 // qmInspect reads live state and returns it as compact, human-readable TEXT (not
@@ -108,19 +134,30 @@ func (tm *turnManager) qmReq(ctx context.Context, at *activeTurn, method, path s
 //
 //	""/"status"      → quick status: what's loaded + a one-line VRAM/RAM summary
 //	"models"         → installed models with capabilities + context length
+//	                   (variants folded in; `variants: true` expands them)
 //	"loaded"         → models running now, with state + idle-TTL
 //	"vram"           → live GPU/VRAM + system RAM
 //	"settings"       → the global memory knobs
 //	"logs"           → the last `tail` lines of the quartermaster (proxy) log
+//	"backends"       → the backend registry: which exe/version each class runs
+//	"estimate:<id>"  → a what-if load-plan sizing for that model (see qmEstimate)
 //	<a model id>     → that model's effective config (ctx, KV, offload, variants…)
 func (tm *turnManager) qmInspect(ctx context.Context, at *activeTurn, args string) (string, string) {
 	var a struct {
-		Target string `json:"target"`
-		Tail   int    `json:"tail"`
-		Source string `json:"source"`
+		Target  string         `json:"target"`
+		Tail    int            `json:"tail"`
+		Source  string         `json:"source"`
+		Options map[string]any `json:"options"`
 	}
 	json.Unmarshal([]byte(args), &a)
 	target := strings.TrimSpace(a.Target)
+
+	// "estimate:<model id>" — a what-if sizing run, so it carries a model id in the
+	// target rather than a separate arg (one more top-level schema property sits in
+	// every conversation's KV-stable prefix for a target used once in a hundred).
+	if rest, ok := qmCutFold(target, "estimate"); ok {
+		return "estimate", tm.qmEstimate(ctx, at, rest, a.Options)
+	}
 
 	switch strings.ToLower(target) {
 	case "", "status", "overview":
@@ -135,6 +172,8 @@ func (tm *turnManager) qmInspect(ctx context.Context, at *activeTurn, args strin
 		return "settings", tm.qmSettings(ctx, at)
 	case "logs", "log":
 		return "logs", tm.qmLogs(ctx, at, a.Tail, a.Source)
+	case "backends", "backend":
+		return "backends", tm.qmBackends(ctx, at)
 	case "fields", "schema":
 		// The full editable surface, pulled on demand — see turns_qm_fields.go for
 		// why it isn't baked into the tool description.
@@ -196,34 +235,25 @@ func (tm *turnManager) qmLogs(ctx context.Context, at *activeTurn, tail int, sou
 // qmGetRaw is qmReq's GET path with a caller-set read cap — used for /logs, whose
 // tail we need in full (up to qmLogsReadLimit) rather than qmBodyLimit's front slice.
 func (tm *turnManager) qmGetRaw(ctx context.Context, at *activeTurn, path string, limit int64) (int, string, error) {
-	u := strings.TrimRight(tm.pg.SelfBase, "/") + path
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return 0, "", err
-	}
-	if at.authKey != "" {
-		req.Header.Set("Authorization", "Bearer "+at.authKey)
-	}
-	if at.user != "" {
-		req.AddCookie(&http.Cookie{Name: pgCookie, Value: at.user})
-	}
-	resp, err := tm.client.Do(req)
-	if err != nil {
-		return 0, "", err
-	}
-	defer resp.Body.Close()
-	s, _ := readLimited(resp.Body, limit)
-	return resp.StatusCode, strings.TrimSpace(s), nil
+	code, s, _, err := tm.qmDo(ctx, at, http.MethodGet, path, nil, limit)
+	return code, s, err
 }
 
-// qmGetInto GETs a loopback JSON endpoint and decodes it into dst.
+// qmGetInto GETs a loopback JSON endpoint and decodes it into dst. It reads to
+// qmJSONLimit, NOT qmBodyLimit — the model-facing cap belongs on rendered text,
+// and applying it here truncated `/api/catalog` mid-object.
 func (tm *turnManager) qmGetInto(ctx context.Context, at *activeTurn, path string, dst any) error {
-	code, body, err := tm.qmReq(ctx, at, http.MethodGet, path, nil)
+	code, body, truncated, err := tm.qmDo(ctx, at, http.MethodGet, path, nil, qmJSONLimit)
 	if err != nil {
 		return err
 	}
 	if code != http.StatusOK {
 		return fmt.Errorf("HTTP %d: %s", code, body)
+	}
+	// Say what actually happened. A truncated body fails to parse with a decoder
+	// error that reads like the endpoint is broken.
+	if truncated {
+		return fmt.Errorf("response from %s is larger than %d bytes", path, qmJSONLimit)
 	}
 	return json.Unmarshal([]byte(body), dst)
 }
@@ -239,27 +269,81 @@ func (tm *turnManager) qmStatus(ctx context.Context, at *activeTurn) string {
 	return b.String()
 }
 
+// qmModels lists the installed catalog. It reads /api/catalog, NOT /v1/models:
+// the latter is the OpenAI discovery route, so it is filtered by the model scope
+// of whatever API key the turn authenticates with — an inspection tool that
+// answers "what models do I have?" with "the one you're talking to" is worse
+// than useless. /api/catalog is the dashboard's own view: every configured
+// model, its live state, and the synthetic variants (`base@ctx32768`,
+// `base@backend`) that are deliberately kept out of the OpenAI catalog.
+//
+// Variants are folded into their base and counted, never listed: a fleet with
+// 16 ctx tiers per model would bury the catalog, and the interesting question
+// about a variant ("what does it change?") is answered by inspecting the model
+// id itself, which diffs each variant's launch command against the base.
 func (tm *turnManager) qmModels(ctx context.Context, at *activeTurn) string {
 	var resp struct {
-		Data []modelRecord `json:"data"`
+		Models []apiModel `json:"models"`
 	}
-	if err := tm.qmGetInto(ctx, at, "/v1/models", &resp); err != nil {
+	if err := tm.qmGetInto(ctx, at, "/api/catalog", &resp); err != nil {
 		return "Couldn't read the model list: " + err.Error()
 	}
-	if len(resp.Data) == 0 {
+	if len(resp.Models) == 0 {
 		return "No models are installed."
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "%d model(s) installed:\n", len(resp.Data))
-	for _, m := range resp.Data {
-		b.WriteString("• " + m.ID)
-		if caps := capLabels(m.Capabilities); len(caps) > 0 {
-			b.WriteString("  [" + strings.Join(caps, ", ") + "]")
+
+	line := func(m apiModel, indent string) string {
+		var s strings.Builder
+		s.WriteString(indent + "• " + m.Id)
+		if m.PeerID != "" {
+			s.WriteString("  (peer " + m.PeerID + ")")
 		}
-		if m.ContextLength > 0 {
-			fmt.Fprintf(&b, "  ctx %s", humanCtx(m.ContextLength))
+		if caps := capLabels(m.Capabilities); len(caps) > 0 {
+			s.WriteString("  [" + strings.Join(caps, ", ") + "]")
+		}
+		if m.Ctx > 0 {
+			s.WriteString("  ctx " + humanCtx(m.Ctx))
+		}
+		if m.State != "" && m.State != "stopped" {
+			s.WriteString("  — " + m.State)
+		}
+		if m.Unlisted && m.PeerID == "" {
+			s.WriteString("  (unlisted)")
+		}
+		return s.String()
+	}
+
+	// Synthetic variants are named "<base id>@<something>"; group them under the
+	// base when it exists, otherwise treat them as top-level rows.
+	byID := make(map[string]bool, len(resp.Models))
+	for _, m := range resp.Models {
+		byID[m.Id] = true
+	}
+	variants := map[string][]apiModel{}
+	var bases []apiModel
+	for _, m := range resp.Models {
+		if i := strings.Index(m.Id, "@"); i > 0 && byID[m.Id[:i]] {
+			variants[m.Id[:i]] = append(variants[m.Id[:i]], m)
+			continue
+		}
+		bases = append(bases, m)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d model(s) installed", len(bases))
+	if n := len(resp.Models) - len(bases); n > 0 {
+		fmt.Fprintf(&b, " (+%d variant(s))", n)
+	}
+	b.WriteString(":\n")
+	for _, m := range bases {
+		b.WriteString(line(m, ""))
+		if n := len(variants[m.Id]); n > 0 {
+			fmt.Fprintf(&b, "  (+%d variant(s))", n)
 		}
 		b.WriteString("\n")
+	}
+	if len(resp.Models) > len(bases) {
+		b.WriteString("\nInspect a model by id to see its variants and what each one changes.")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -401,6 +485,235 @@ func (tm *turnManager) qmSettings(ctx context.Context, at *activeTurn) string {
 		s.TargetVramGB, s.VramOverheadGB, s.MaxRamGB, s.TtlSec, ttl)
 }
 
+// qmCutFold splits "<prefix>:<rest>" (prefix matched case-insensitively, ':' or
+// '=' or whitespace as the separator), so "estimate:qwen3" and "Estimate qwen3"
+// both land. A bare prefix with no rest still matches, with rest == "".
+func qmCutFold(target, prefix string) (string, bool) {
+	if len(target) < len(prefix) || !strings.EqualFold(target[:len(prefix)], prefix) {
+		return "", false
+	}
+	rest := target[len(prefix):]
+	if rest == "" {
+		return "", true
+	}
+	if rest[0] != ':' && rest[0] != '=' && rest[0] != ' ' {
+		return "", false // "estimates", "estimate-foo" — a different target
+	}
+	return strings.TrimSpace(rest[1:]), true
+}
+
+// qmEstimateParams whitelists the sizer knobs the estimate target may forward,
+// keyed by a lowercased alias → the real query param. A whitelist, not a
+// pass-through of the model's `options` object: the values land in a URL, and an
+// unknown key silently ignored by the handler would make the model report an
+// estimate for a tuning it never asked for.
+var qmEstimateParams = map[string]string{
+	"ctx":               "ctx",
+	"kvk":               "kvK",
+	"kvv":               "kvV",
+	"spec":              "spec",
+	"kvinram":           "kvInRam",
+	"ctxcheckpoints":    "ctxCheckpoints",
+	"checkpointminstep": "checkpointMinStep",
+	"vram":              "vram",
+	"vramtargetgb":      "vram",
+	"cpuoffload":        "cpuOffload",
+	"actual":            "actual",
+}
+
+// qmEstimate runs the load-plan sizer for a model WITHOUT changing anything:
+// the same `/api/models/{id}/estimate` preview the cogwheel draws. It answers
+// the question a configure call otherwise has to guess at — "does ctx 128k with
+// q8_0 KV actually fit in this box?" — so the model can check a tuning before
+// proposing it, instead of proposing one that spills to RAM or refuses to spawn.
+//
+// Options are what-if overrides; anything not passed is re-derived by the sizer
+// (NOT inherited from the model's current config), so an estimate with no
+// options is the auto plan, not the configured one — pass actual:true for the
+// running placement.
+func (tm *turnManager) qmEstimate(ctx context.Context, at *activeTurn, id string, opts map[string]any) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "Missing the model id: use target='estimate:<model id>' (inspect target='models' for the ids)."
+	}
+	q := url.Values{}
+	var unknown, asked []string
+	for k, v := range opts {
+		param, ok := qmEstimateParams[strings.ToLower(strings.TrimSpace(k))]
+		if !ok {
+			unknown = append(unknown, k)
+			continue
+		}
+		s := qmScalarString(v)
+		if s == "" {
+			continue
+		}
+		q.Set(param, s)
+		asked = append(asked, param+"="+s)
+	}
+	if len(unknown) > 0 {
+		sort.Strings(unknown)
+		return "Unknown estimate option(s): " + strings.Join(unknown, ", ") +
+			". Valid options: ctx, kvK, kvV, spec, kvInRam, ctxCheckpoints, checkpointMinStep, vram, cpuOffload, actual."
+	}
+
+	path := "/api/models/" + url.PathEscape(id) + "/estimate"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	var e struct {
+		Ctx          int     `json:"ctx"`
+		Ngl          int     `json:"ngl"`
+		NCpuMoe      int     `json:"nCpuMoe"`
+		EstVramGB    float64 `json:"estVramGB"`
+		EstRamGB     float64 `json:"estRamGB"`
+		TargetVramGB float64 `json:"targetVramGB"`
+		MaxRamGB     float64 `json:"maxRamGB"`
+		KvReserveGB  float64 `json:"kvReserveGB"`
+		CheckpointGB float64 `json:"checkpointGB"`
+		DraftGB      float64 `json:"draftGB"`
+		ComputeBufGB float64 `json:"computeBufGB"`
+		MmprojGB     float64 `json:"mmprojGB"`
+		OverheadGB   float64 `json:"overheadGB"`
+		RamExceeded  bool    `json:"ramExceeded"`
+		IsMoE        bool    `json:"isMoE"`
+	}
+	if err := tm.qmGetInto(ctx, at, path, &e); err != nil {
+		return "Couldn't estimate " + id + ": " + err.Error()
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Load-plan estimate for %s", id)
+	if len(asked) > 0 {
+		sort.Strings(asked)
+		fmt.Fprintf(&b, " (what-if: %s)", strings.Join(asked, ", "))
+	}
+	b.WriteString(" — nothing was changed:\n")
+	fmt.Fprintf(&b, "• context it would launch with: %s\n", humanCtx(e.Ctx))
+	fmt.Fprintf(&b, "• layer placement: -ngl %d", e.Ngl)
+	if e.NCpuMoe > 0 {
+		fmt.Fprintf(&b, ", --n-cpu-moe %d (MoE expert layers on CPU)", e.NCpuMoe)
+	}
+	b.WriteString("\n")
+	fit := "fits"
+	if e.TargetVramGB > 0 && e.EstVramGB > e.TargetVramGB {
+		fit = "OVER BUDGET"
+	}
+	fmt.Fprintf(&b, "• estimated VRAM: %.1f GB of a %.1f GB budget — %s\n", e.EstVramGB, e.TargetVramGB, fit)
+	ram := "within the cap"
+	if e.RamExceeded {
+		ram = "EXCEEDS the cap — this tuning would not be safe to load"
+	}
+	fmt.Fprintf(&b, "• estimated system RAM: %.1f GB of %.1f GB — %s\n", e.EstRamGB, e.MaxRamGB, ram)
+	fmt.Fprintf(&b, "• of the VRAM: %.1f GB KV cache", e.KvReserveGB)
+	for _, part := range []struct {
+		label string
+		v     float64
+	}{
+		{"checkpoints", e.CheckpointGB}, {"draft/MTP", e.DraftGB},
+		{"compute buffer", e.ComputeBufGB}, {"vision projector", e.MmprojGB},
+		{"safety headroom", e.OverheadGB},
+	} {
+		if part.v > 0 {
+			fmt.Fprintf(&b, ", %.1f GB %s", part.v, part.label)
+		}
+	}
+	b.WriteString(" (the rest is weights)\n")
+	if e.IsMoE {
+		b.WriteString("• this is a MoE model — cpuOffload moves whole layers, --n-cpu-moe only their experts\n")
+	}
+	b.WriteString("This is a prediction from the same sizer that bakes the config, not a load test.")
+	return b.String()
+}
+
+// qmScalarString renders one JSON option value as a query-param string. Numbers
+// come back as float64, so an integral one is printed without the ".000000" a
+// %v would give — the handler parses "32768", not "32768.000000".
+func qmScalarString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t)
+	case bool:
+		if t {
+			return "true"
+		}
+		return "false"
+	case float64:
+		if t == float64(int64(t)) {
+			return fmt.Sprintf("%d", int64(t))
+		}
+		return fmt.Sprintf("%g", t)
+	case nil:
+		return ""
+	default:
+		return fmt.Sprintf("%v", t)
+	}
+}
+
+// qmBackends lists the backend registry: which executable (and, for a managed
+// install, which upstream build) each class runs, plus the ★ class default a
+// model with no explicit `backend` resolves to. The model needs this to answer
+// "why is this model slow / why did it fail to spawn" — a missing exe or an old
+// build is a whole class of problem invisible from the model config alone.
+func (tm *turnManager) qmBackends(ctx context.Context, at *activeTurn) string {
+	var list []struct {
+		ID        string `json:"id"`
+		Kind      string `json:"kind"`
+		Name      string `json:"name"`
+		Path      string `json:"path"`
+		Default   bool   `json:"default"`
+		Exists    bool   `json:"exists"`
+		Managed   bool   `json:"managed"`
+		Component string `json:"component"`
+		Version   string `json:"version"`
+		Variant   string `json:"variant"`
+	}
+	if err := tm.qmGetInto(ctx, at, "/api/backends", &list); err != nil {
+		return "Couldn't read the backend registry: " + err.Error()
+	}
+	if len(list) == 0 {
+		return "No backends are registered."
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d backend(s) registered (a model's `backend` field picks one by id; ★ is the auto-pick for its class):\n", len(list))
+	missing := 0
+	for _, e := range list {
+		kind := e.Kind
+		if kind == "" {
+			kind = "tool"
+		}
+		fmt.Fprintf(&b, "• %s [%s]", e.ID, kind)
+		if e.Default {
+			b.WriteString(" ★")
+		}
+		if e.Name != "" && e.Name != e.ID {
+			b.WriteString("  " + e.Name)
+		}
+		if e.Managed {
+			ver := e.Version
+			if ver == "" {
+				ver = "unknown version"
+			}
+			fmt.Fprintf(&b, "  — managed build %s", ver)
+			if e.Variant != "" {
+				b.WriteString(" (" + e.Variant + ")")
+			}
+		}
+		if !e.Exists {
+			b.WriteString("  — MISSING ON DISK")
+			missing++
+		}
+		b.WriteString("\n")
+		if e.Path != "" {
+			fmt.Fprintf(&b, "  %s\n", e.Path)
+		}
+	}
+	if missing > 0 {
+		fmt.Fprintf(&b, "\n%d backend(s) point at an executable that isn't there — any model resolving to one of those cannot start.", missing)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 func (tm *turnManager) qmModelConfig(ctx context.Context, at *activeTurn, id string) string {
 	var c modelConfigResp
 	if err := tm.qmGetInto(ctx, at, "/api/models/"+url.PathEscape(id)+"/config", &c); err != nil {
@@ -463,7 +776,188 @@ func (tm *turnManager) qmModelConfig(ctx context.Context, at *activeTurn, id str
 	if c.Cmd != "" {
 		fmt.Fprintf(&b, "• effective launch command (base/default variant):\n  %s\n", c.Cmd)
 	}
+
+	b.WriteString(tm.qmModelVariants(ctx, at, c.Id, c.Cmd))
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// qmMaxDiffedVariants caps how many sibling variants get a full flag diff. Each
+// one costs a loopback /config call, and a model with the ctx-variant limit
+// (16) would otherwise turn one inspect into 16 round trips and a wall of argv.
+const qmMaxDiffedVariants = 8
+
+// qmModelVariants renders the synthetic variants of a model — the separate
+// (unlisted) config entries minted for a per-request ctx ("id@ctx32768") or an
+// alternate backend ("id@vulkan"), NOT the named presets in override.Variants
+// above. For each it diffs the variant's launch command against the base's, so
+// the model reports what actually deviates instead of just naming ids.
+//
+// Also handles being called ON a variant: then the diff runs the other way, and
+// the section names the base so the model can go read it.
+func (tm *turnManager) qmModelVariants(ctx context.Context, at *activeTurn, id, baseCmd string) string {
+	var cat struct {
+		Models []apiModel `json:"models"`
+	}
+	if err := tm.qmGetInto(ctx, at, "/api/catalog", &cat); err != nil {
+		return "" // the config above is still worth returning
+	}
+
+	state := map[string]string{}
+	for _, m := range cat.Models {
+		state[m.Id] = m.State
+	}
+
+	// Called on a variant: describe it relative to its base.
+	if i := strings.Index(id, "@"); i > 0 {
+		base := id[:i]
+		if _, ok := state[base]; ok {
+			var bc modelConfigResp
+			if err := tm.qmGetInto(ctx, at, "/api/models/"+url.PathEscape(base)+"/config", &bc); err != nil {
+				return fmt.Sprintf("• this is a variant of %s\n", base)
+			}
+			var b strings.Builder
+			fmt.Fprintf(&b, "• this is a variant of %s; it differs from the base by:\n", base)
+			b.WriteString(qmDiffLines(bc.Cmd, baseCmd, "  "))
+			return b.String()
+		}
+	}
+
+	var ids []string
+	for _, m := range cat.Models {
+		if strings.HasPrefix(m.Id, id+"@") {
+			ids = append(ids, m.Id)
+		}
+	}
+	if len(ids) == 0 {
+		return ""
+	}
+	sort.Strings(ids)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "• %d variant(s) of this model (separate routable ids, same swap group — deviations from the base command):\n", len(ids))
+	shown := ids
+	if len(shown) > qmMaxDiffedVariants {
+		shown = shown[:qmMaxDiffedVariants]
+	}
+	for _, vid := range shown {
+		fmt.Fprintf(&b, "  - %s", vid)
+		if st := state[vid]; st != "" && st != "stopped" {
+			b.WriteString(" — " + st)
+		}
+		b.WriteString("\n")
+		var vc modelConfigResp
+		if err := tm.qmGetInto(ctx, at, "/api/models/"+url.PathEscape(vid)+"/config", &vc); err != nil {
+			b.WriteString("    (couldn't read its config: " + err.Error() + ")\n")
+			continue
+		}
+		b.WriteString(qmDiffLines(baseCmd, vc.Cmd, "    "))
+	}
+	if len(ids) > len(shown) {
+		fmt.Fprintf(&b, "  (+%d more variant(s) not diffed — inspect one by its id)\n", len(ids)-len(shown))
+	}
+	return b.String()
+}
+
+// qmDiffLines renders qmCmdDiff as indented bullet lines, or a "no difference"
+// note — an empty section would read as "couldn't tell".
+func qmDiffLines(base, variant, indent string) string {
+	diffs := qmCmdDiff(base, variant)
+	if len(diffs) == 0 {
+		return indent + "(launch command identical to the base)\n"
+	}
+	var b strings.Builder
+	for _, d := range diffs {
+		b.WriteString(indent + "· " + d + "\n")
+	}
+	return b.String()
+}
+
+// qmCmdDiff compares two launch commands flag by flag and returns one line per
+// deviation: value changed, flag added, flag dropped, or a different executable
+// (what a backend variant is). Order follows the variant's own argv so the
+// output reads in command order rather than alphabetically.
+func qmCmdDiff(base, variant string) []string {
+	bf, _ := qmCmdFlags(base)
+	vf, vOrder := qmCmdFlags(variant)
+
+	var out []string
+	if b, v := qmExeName(base), qmExeName(variant); b != v && v != "" {
+		out = append(out, fmt.Sprintf("backend exe: %s (base: %s)", v, b))
+	}
+	for _, f := range vOrder {
+		bv, had := bf[f]
+		vv := vf[f]
+		switch {
+		case !had:
+			out = append(out, strings.TrimSpace(f+" "+vv)+" (base: not set)")
+		case bv != vv:
+			out = append(out, strings.TrimSpace(f+" "+vv)+" (base: "+qmOrNone(bv)+")")
+		}
+	}
+	for _, f := range qmSortedKeys(bf) {
+		if _, still := vf[f]; !still {
+			out = append(out, f+" dropped (base: "+qmOrNone(bf[f])+")")
+		}
+	}
+	return out
+}
+
+// qmCmdFlags maps each flag in a launch command to its value ("" for a boolean
+// flag; repeated flags join their values), plus first-seen order. A token is a
+// value, not a flag, when it doesn't start with '-' or is a negative number
+// ("-ngl -1"), which is why this isn't a plain strings.HasPrefix check.
+func qmCmdFlags(cmd string) (map[string]string, []string) {
+	argv := config.ParseCmd(cmd).Argv
+	flags := map[string]string{}
+	var order []string
+	isFlag := func(tok string) bool {
+		if len(tok) < 2 || tok[0] != '-' {
+			return false
+		}
+		return !(tok[1] >= '0' && tok[1] <= '9') && tok[1] != '.'
+	}
+	for i := 1; i < len(argv); i++ { // skip argv[0], the exe
+		tok := argv[i]
+		if !isFlag(tok) {
+			continue
+		}
+		val := ""
+		if i+1 < len(argv) && !isFlag(argv[i+1]) {
+			val = argv[i+1]
+			i++
+		}
+		if prev, dup := flags[tok]; dup {
+			flags[tok] = strings.TrimSpace(prev + " " + val)
+			continue
+		}
+		flags[tok] = val
+		order = append(order, tok)
+	}
+	return flags, order
+}
+
+func qmExeName(cmd string) string {
+	argv := config.ParseCmd(cmd).Argv
+	if len(argv) == 0 {
+		return ""
+	}
+	return filepath.Base(argv[0])
+}
+
+func qmOrNone(v string) string {
+	if v == "" {
+		return "set, no value"
+	}
+	return v
+}
+
+func qmSortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // draftLabels lists which speculative-decode drafts the model can use.

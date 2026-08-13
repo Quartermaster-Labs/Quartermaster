@@ -665,7 +665,11 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 	}
 	maxWiki := start.MaxWiki
 	if maxWiki <= 0 {
-		maxWiki = 4 // client hardcodes this and doesn't send it
+		// Client hardcodes this and doesn't send it. The wiki is embedded — no
+		// network, no rate limit — so this is a runaway-loop stop, not a budget:
+		// a model working through a multi-part question legitimately reads a
+		// handful of articles, and cutting it off mid-answer is the worse failure.
+		maxWiki = 15
 	}
 	// Transcripts are the most expensive tool result by far (up to ytMaxTokens
 	// each), so cap how many one turn may pull into context.
@@ -808,6 +812,9 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 			if tc.Name == "quartermaster_inspect" || tc.Name == "quartermaster_configure" {
 				kind = "quartermaster"
 				query, resultText = tm.dispatchQM(ctx, at, tc)
+			} else if tc.Name == "memory_save" || tc.Name == "memory_delete" {
+				kind = "memory"
+				query, resultText = tm.dispatchMemory(at, tc)
 			} else if tc.Name == "wiki_search" {
 				kind = "wiki"
 				if wikiCount >= maxWiki {
