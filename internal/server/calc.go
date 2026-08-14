@@ -315,7 +315,7 @@ func (p *calcParser) primary() (float64, error) {
 		}
 		f, ok := calcFuncs[name]
 		if !ok {
-			return 0, fmt.Errorf("unknown name %q — this tool does arithmetic only, with no variables", name)
+			return 0, fmt.Errorf("unknown name %q - this tool does arithmetic only, with no variables", name)
 		}
 		if p.peek() != '(' {
 			return 0, fmt.Errorf("%s needs parentheses", name)

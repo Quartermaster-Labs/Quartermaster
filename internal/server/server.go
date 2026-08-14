@@ -309,7 +309,7 @@ func (s *Server) WireDynamicOffload(settings autogen.Settings) {
 			fresh, fok := autogen.SampleFreeVramGB(spawnVramSampleTimeout)
 			if fok {
 				n++
-				logf(fmt.Sprintf("dynoffload: re-probe %d/%d — free now %.1fGB (post-eviction reclaim)",
+				logf(fmt.Sprintf("dynoffload: re-probe %d/%d - free now %.1fGB (post-eviction reclaim)",
 					n, spawnVramReclaimTries, fresh))
 			}
 			return fresh, fok
@@ -700,6 +700,11 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/chats/turn/state", apiChain.ThenFunc(s.handleTurnState))
 	mux.Handle("DELETE /api/chats/turn", apiChain.ThenFunc(s.handleTurnStop))
 	mux.Handle("POST /api/chats/turn/approve", apiChain.ThenFunc(s.handleTurnApprove))
+
+	// Conversation titles off the vendored CPU title model, so naming a chat never
+	// swaps or contends for a GPU model. Falls back to the chat model client-side
+	// when this returns nothing. See titlegen.go.
+	mux.Handle("POST /api/chats/title", apiChain.ThenFunc(s.handleChatTitle))
 
 	// Per-model config editor (cogwheel) — read launch params + effective
 	// override, save curated overrides, reset to autogen default, add named

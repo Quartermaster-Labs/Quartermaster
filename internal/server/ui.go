@@ -24,6 +24,43 @@ var uiFS = func() http.FileSystem {
 	return http.FS(sub)
 }()
 
+// uiMimeTypes pins the Content-Type of every extension the UI build emits.
+//
+// http.ServeContent falls back to mime.TypeByExtension, which on Windows is
+// driven by the registry — and the registry has no ".mjs" row, so the pdf.js
+// worker (pdf.worker.min-<hash>.mjs) is served as text/plain and the browser
+// refuses to start it. ".js" is registry-provided too, so any of these can be
+// wrong on someone else's machine; serving our own assets from our own table
+// removes the whole class of failure.
+var uiMimeTypes = map[string]string{
+	".js":    "text/javascript; charset=utf-8",
+	".mjs":   "text/javascript; charset=utf-8",
+	".css":   "text/css; charset=utf-8",
+	".html":  "text/html; charset=utf-8",
+	".json":  "application/json",
+	".map":   "application/json",
+	".svg":   "image/svg+xml",
+	".wasm":  "application/wasm",
+	".ico":   "image/x-icon",
+	".png":   "image/png",
+	".jpg":   "image/jpeg",
+	".jpeg":  "image/jpeg",
+	".gif":   "image/gif",
+	".webp":  "image/webp",
+	".woff":  "font/woff",
+	".woff2": "font/woff2",
+	".ttf":   "font/ttf",
+	".txt":   "text/plain; charset=utf-8",
+}
+
+// setUIContentType pins the response type for a known UI asset extension.
+// Unknown extensions are left to http.ServeContent's own detection.
+func setUIContentType(w http.ResponseWriter, name string) {
+	if ct := uiMimeTypes[strings.ToLower(path.Ext(name))]; ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+}
+
 // selectEncoding chooses the best pre-compressed encoding the client accepts.
 // It returns the encoding ("br" or "gzip") and the matching file extension.
 func selectEncoding(acceptEncoding string) (encoding, ext string) {
@@ -54,6 +91,7 @@ func serveCompressedFile(fsys http.FileSystem, w http.ResponseWriter, r *http.Re
 			if stat, err := cf.Stat(); err == nil && !stat.IsDir() {
 				w.Header().Set("Content-Encoding", encoding)
 				w.Header().Add("Vary", "Accept-Encoding")
+				setUIContentType(w, name)
 				http.ServeContent(w, r, name, stat.ModTime(), cf)
 				return nil
 			}
@@ -74,6 +112,7 @@ func serveCompressedFile(fsys http.FileSystem, w http.ResponseWriter, r *http.Re
 		return fs.ErrNotExist
 	}
 
+	setUIContentType(w, name)
 	http.ServeContent(w, r, name, stat.ModTime(), file)
 	return nil
 }

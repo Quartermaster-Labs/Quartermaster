@@ -21,7 +21,7 @@ async function postSd(path: string, request: unknown, signal?: AbortSignal): Pro
 // raw gateway text is noise to a playground user, so hide it behind a hint.
 async function friendlySdError(response: Response): Promise<string> {
   if (response.status === 502 || response.status === 503 || response.status === 504) {
-    return "Image model unavailable — it crashed, was evicted, or is still loading. Try again in a moment.";
+    return "Image model unavailable - it crashed, was evicted, or is still loading. Try again in a moment.";
   }
   const errorText = await response.text().catch(() => "");
   return `Image generation failed (${response.status})${errorText ? `: ${errorText}` : ""}`;

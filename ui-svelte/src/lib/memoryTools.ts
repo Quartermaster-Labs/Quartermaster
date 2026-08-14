@@ -47,7 +47,7 @@ export function memoryBlock(mems: MemoryEntry[]): string {
   }
   if (!lines.length) return "";
   const tail = dropped
-    ? `\n(${dropped} older ${dropped === 1 ? "memory is" : "memories are"} not shown here — say so if the answer depends on something you might be missing.)`
+    ? `\n(${dropped} older ${dropped === 1 ? "memory is" : "memories are"} not shown here - say so if the answer depends on something you might be missing.)`
     : "";
   return `What you remember about this user (from earlier conversations):\n${lines.join("\n")}${tail}`;
 }
@@ -57,7 +57,7 @@ export const MEMORY_SAVE_TOOL: ToolDef = {
   function: {
     name: "memory_save",
     description:
-      "Remember one durable fact about this user across conversations. Save when the user asks you to remember something, or when they state a lasting preference, constraint or detail about themselves or their setup that would change your answers later. Do NOT save: anything only relevant to this conversation, anything you can look up (their config — use quartermaster_inspect), or something already in your memory block. If a memory in that block is now wrong or outdated, pass its `id` to REPLACE it rather than saving a second, conflicting version. One fact per call, written in the third person about the user, self-contained enough to make sense with no conversation around it.",
+      "Remember one durable fact about this user across conversations. Save when the user asks you to remember something, or when they state a lasting preference, constraint or detail about themselves or their setup that would change your answers later. Do NOT save: anything only relevant to this conversation, anything you can look up (their config - use quartermaster_inspect), or something already in your memory block. If a memory in that block is now wrong or outdated, pass its `id` to REPLACE it rather than saving a second, conflicting version. One fact per call, written in the third person about the user, self-contained enough to make sense with no conversation around it.",
     parameters: {
       type: "object",
       properties: {
@@ -87,7 +87,7 @@ export const MEMORY_DELETE_TOOL: ToolDef = {
   function: {
     name: "memory_delete",
     description:
-      "Forget one memory. Use when the user asks you to forget something, or when a memory has been superseded by a fact that cannot coexist with it. To correct a memory, prefer memory_save with its id — that keeps one entry instead of deleting and re-adding.",
+      "Forget one memory. Use when the user asks you to forget something, or when a memory has been superseded by a fact that cannot coexist with it. To correct a memory, prefer memory_save with its id - that keeps one entry instead of deleting and re-adding.",
     parameters: {
       type: "object",
       properties: {

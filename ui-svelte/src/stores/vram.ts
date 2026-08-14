@@ -93,7 +93,7 @@ function foreignSeg(mb: number, procs?: { name: string }[]): VramSegment[] {
       label: "Foreign",
       mb,
       class: "bg-error",
-      detail: "llama-server not owned by us" + (names ? ` — ${names}` : ""),
+      detail: "llama-server not owned by us" + (names ? ` - ${names}` : ""),
     },
   ];
 }
@@ -158,7 +158,7 @@ export const vramBreakdown = derived(
       label: "System",
       mb: sysFloor,
       class: "bg-info",
-      detail: "OS, other apps" + (measured ? "" : " (estimated — no idle baseline yet)"),
+      detail: "OS, other apps" + (measured ? "" : " (estimated - no idle baseline yet)"),
     };
 
     // Component split when we have a fresh estimate for the single loaded model.

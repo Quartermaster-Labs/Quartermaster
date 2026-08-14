@@ -100,7 +100,7 @@ func baseName(p string) string {
 }
 
 // stripModelFiles removes rows whose path names a known model file. ok=false
-// means the body wasn't the expected JSON array — pass it through untouched
+// means the body wasn't the expected JSON array - pass it through untouched
 // rather than mangling an error payload or a future response shape.
 func stripModelFiles(body []byte, modelFiles map[string]struct{}) ([]byte, bool) {
 	var rows []json.RawMessage

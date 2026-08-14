@@ -20,7 +20,7 @@ describe("searchWiki", () => {
 });
 
 describe("groupWikiArticles", () => {
-  it("places every article in exactly one group — no orphaned 'More'", () => {
+  it("places every article in exactly one group - no orphaned 'More'", () => {
     const groups = groupWikiArticles(WIKI_ARTICLES);
     expect(groups.some((g) => g.title === "More")).toBe(false);
     const grouped = groups.flatMap((g) => g.items.map((a) => a.id)).sort();

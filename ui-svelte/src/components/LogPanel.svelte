@@ -123,7 +123,7 @@
     </span>
 
     <div class="flex gap-1 items-center ml-auto shrink-0">
-      <label class="flex items-center gap-1 text-txtsecondary" title="Font size — ctrl+scroll over the log also works">
+      <label class="flex items-center gap-1 text-txtsecondary" title="Font size - ctrl+scroll over the log also works">
         <Type size={14} />
         <select
           value={$fontPxStore}

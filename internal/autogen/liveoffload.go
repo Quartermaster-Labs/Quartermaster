@@ -155,7 +155,7 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 	// footprint. The planner already maxed out offload to fit; if it still can't,
 	// even a fully CPU-offloaded load would OOM -> refuse.
 	if res.EstVramGB > freeGB {
-		return nil, fmt.Errorf("insufficient VRAM to load %s: needs ~%.1fGB at max CPU offload but only %.1fGB free — close other GPU apps and retry",
+		return nil, fmt.Errorf("insufficient VRAM to load %s: needs ~%.1fGB at max CPU offload but only %.1fGB free - close other GPU apps and retry",
 			filepath.Base(model), res.EstVramGB, freeGB)
 	}
 
@@ -169,7 +169,7 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 		live := gpuResidentFraction(meta, res.Ngl, res.NCpuMoe)
 		baked := gpuResidentFraction(meta, bakedNgl, bakedNcpu)
 		if live < s.MinGpuFraction && baked >= s.MinGpuFraction {
-			return nil, fmt.Errorf("refusing to load %s: only %.0f%% of it would fit on the GPU right now (%.1fGB free, floor %.0f%%) — it would run at CPU speed; free VRAM or unload another model first",
+			return nil, fmt.Errorf("refusing to load %s: only %.0f%% of it would fit on the GPU right now (%.1fGB free, floor %.0f%%) - it would run at CPU speed; free VRAM or unload another model first",
 				filepath.Base(model), live*100, freeGB, s.MinGpuFraction*100)
 		}
 	}

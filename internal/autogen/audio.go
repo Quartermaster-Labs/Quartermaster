@@ -228,7 +228,7 @@ func emitTTSModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, nam
 		}
 		fmt.Fprintf(b, "\n  # arch=%s size=%gGB (Qwen3-TTS talker, qwentts.cpp tts-server, codec=%s)\n", arch, row.SizeGB, codec)
 		if row.CodecPath == "" {
-			fmt.Fprintf(b, "  # WARNING: %s has no paired codec gguf (qwen-tokenizer-*hz) in its dir — tts-server won't start; place the codec alongside it\n", name)
+			fmt.Fprintf(b, "  # WARNING: %s has no paired codec gguf (qwen-tokenizer-*hz) in its dir - tts-server won't start; place the codec alongside it\n", name)
 		}
 	}
 

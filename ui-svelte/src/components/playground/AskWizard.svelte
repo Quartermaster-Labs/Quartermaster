@@ -270,7 +270,7 @@
           <p class="text-xs text-txtsecondary">
             {#if fxRate}
               Converted from {optionCurrencyClash} at {fxRate.rate.toLocaleString("en-US", { maximumFractionDigits: 4 })}
-              {chosenCurrency}/{optionCurrencyClash}{fxRate.date && fxRate.date !== "n/a" ? `, ${fxRate.date}` : ""} — approximate.
+              {chosenCurrency}/{optionCurrencyClash}{fxRate.date && fxRate.date !== "n/a" ? `, ${fxRate.date}` : ""} - approximate.
             {:else if fxTried}
               Could not fetch a {optionCurrencyClash}→{chosenCurrency} rate. Enter your budget in {chosenCurrency}.
             {:else}

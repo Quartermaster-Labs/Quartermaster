@@ -34,6 +34,9 @@ func uiTestFS() http.FileSystem {
 		"app.js.br":   {Data: []byte("brotli")},
 		"app.js.gz":   {Data: []byte("gzipped")},
 		"favicon.ico": {Data: []byte("icon")},
+		"worker.mjs":  {Data: []byte("export{}")},
+		"w.mjs.br":    {Data: []byte("brotli-module")},
+		"w.mjs":       {Data: []byte("export{}")},
 	})
 }
 
@@ -81,6 +84,24 @@ func TestServer_ServeUI_SPAFallback(t *testing.T) {
 	w := serveUIRequest(t, "/ui/models", "")
 	if w.Code != http.StatusOK || w.Body.String() != "<html>app</html>" {
 		t.Errorf("SPA fallback: status=%d body=%q", w.Code, w.Body.String())
+	}
+}
+
+// A module served as text/plain is refused by the browser, which is exactly how
+// the pdf.js worker ships (.mjs). Windows has no registry row for it, so the
+// type must come from our own table — on both the plain and pre-compressed path.
+func TestServer_ServeUI_ModuleContentType(t *testing.T) {
+	for _, c := range []struct{ path, accept string }{
+		{"/ui/worker.mjs", ""},
+		{"/ui/w.mjs", "br"},
+	} {
+		w := serveUIRequest(t, c.path, c.accept)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200", c.path, w.Code)
+		}
+		if got := w.Header().Get("Content-Type"); got != "text/javascript; charset=utf-8" {
+			t.Errorf("%s: Content-Type = %q, want text/javascript", c.path, got)
+		}
 	}
 }
 

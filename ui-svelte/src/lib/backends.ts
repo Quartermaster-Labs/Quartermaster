@@ -24,8 +24,8 @@ export const BACKEND_CLASSES: BackendClassDef[] = [
     label: "Language models",
     blurb: "Text / vision / embedding GGUFs. One backend serves them all.",
     engines: [
-      { kind: "llama", label: "llama.cpp", hint: "llama-server — the default engine; all sizing knobs apply." },
-      { kind: "vllm", label: "vLLM", hint: "vllm serve — its own arg set; llama.cpp KV/offload knobs are ignored." },
+      { kind: "llama", label: "llama.cpp", hint: "llama-server - the default engine; all sizing knobs apply." },
+      { kind: "vllm", label: "vLLM", hint: "vllm serve - its own arg set; llama.cpp KV/offload knobs are ignored." },
     ],
   },
   {
@@ -39,15 +39,15 @@ export const BACKEND_CLASSES: BackendClassDef[] = [
     label: "Speech",
     blurb: "Text-to-speech models.",
     engines: [
-      { kind: "tts", label: "tts-server", hint: "qwentts.cpp — Qwen3-TTS talker + paired codec gguf." },
-      { kind: "ttscpp", label: "TTS.cpp", hint: "mmwillet/TTS.cpp — Kokoro / Parler / Orpheus ggufs, self-contained, CPU only." },
+      { kind: "tts", label: "tts-server", hint: "qwentts.cpp - Qwen3-TTS talker + paired codec gguf." },
+      { kind: "ttscpp", label: "TTS.cpp", hint: "mmwillet/TTS.cpp - Kokoro / Parler / Orpheus ggufs, self-contained, CPU only." },
     ],
   },
   {
     id: "asr",
     label: "Transcription",
     blurb: "Speech-to-text models (Parakeet / FastConformer).",
-    engines: [{ kind: "asr", label: "parakeet-server", hint: "parakeet.cpp — runs faster than realtime on CPU alone." }],
+    engines: [{ kind: "asr", label: "parakeet-server", hint: "parakeet.cpp - runs faster than realtime on CPU alone." }],
   },
   {
     id: "segment",

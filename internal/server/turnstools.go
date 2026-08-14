@@ -208,7 +208,7 @@ func formatSearchResults(query string, results []searchResult, numbers []int) st
 	for i, r := range results {
 		lines = append(lines, fmt.Sprintf("[%d] %s\n%s\n%s", numbers[i], r.Title, r.URL, r.Content))
 	}
-	return fmt.Sprintf("Search results for %q (searched %s — today's date, use it, not a year from memory, when a query is time-sensitive):\n\n%s",
+	return fmt.Sprintf("Search results for %q (searched %s - today's date, use it, not a year from memory, when a query is time-sensitive):\n\n%s",
 		query, date, strings.Join(lines, "\n\n"))
 }
 
@@ -294,7 +294,7 @@ func noAnswerNudge(thought string) string {
 	}
 	return "You worked through this reply but stopped before writing it. Your reasoning was:\n\n" +
 		thought +
-		"\n\nWrite the final answer now, directly and in full. Do not think further, do not mention this message, and do not restate the reasoning — just give the answer."
+		"\n\nWrite the final answer now, directly and in full. Do not think further, do not mention this message, and do not restate the reasoning - just give the answer."
 }
 
 // --- fabricated videos ------------------------------------------------------

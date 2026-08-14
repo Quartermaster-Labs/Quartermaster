@@ -77,14 +77,14 @@ export const SEARCH_PROVIDER_META: SearchProviderMeta[] = [
     id: "tavily",
     label: "Tavily",
     needs: "key",
-    hint: "Built for LLMs — returns extracted page text, not just a snippet. ~1,000 credits/month free.",
+    hint: "Built for LLMs - returns extracted page text, not just a snippet. ~1,000 credits/month free.",
     signupUrl: "https://tavily.com/",
   },
   {
     id: "duckduckgo",
     label: "DuckDuckGo",
     needs: "none",
-    hint: "Keyless HTML scrape. No quota, but the same bot-challenge exposure as SearXNG — last resort only.",
+    hint: "Keyless HTML scrape. No quota, but the same bot-challenge exposure as SearXNG - last resort only.",
   },
   {
     id: "google",
@@ -197,5 +197,5 @@ export function formatSearchResults(query: string, results: SearchResult[], numb
   const lines = results.map(
     (r, i) => `[${numbers[i]}] ${r.title}\n${r.url}\n${r.content}`
   );
-  return `Search results for "${query}" (searched ${date} — today's date, use it, not a year from memory, when a query is time-sensitive):\n\n${lines.join("\n\n")}`;
+  return `Search results for "${query}" (searched ${date} - today's date, use it, not a year from memory, when a query is time-sensitive):\n\n${lines.join("\n\n")}`;
 }

@@ -164,12 +164,12 @@ type ProcessCommand struct {
 	preStop atomic.Pointer[func()]
 
 	// postStart, when set, runs once each time the process reaches StateReady,
-	// before WaitReady callers are woken — so it can prime the upstream (e.g.
+	// before WaitReady callers are woken - so it can prime the upstream (e.g.
 	// restore a saved slot KV) before the first request is forwarded.
 	postStart atomic.Pointer[func()]
 
 	// spawnArgs, when set, rewrites the upstream argv at each doStart (after
-	// sanitization, before exec) — e.g. recompute -ngl/--n-cpu-moe from live free
+	// sanitization, before exec) - e.g. recompute -ngl/--n-cpu-moe from live free
 	// VRAM. An error aborts the start. Atomic: set from another goroutine at
 	// startup, read by doStart.
 	spawnArgs atomic.Pointer[func(args []string) ([]string, error)]
@@ -238,11 +238,11 @@ func (p *ProcessCommand) SetSpawnArgs(fn func(args []string) ([]string, error)) 
 // (current ProcessState, the running *exec.Cmd, the active reverse-proxy
 // handler, and the list of WaitReady subscribers). Every public method
 // (Run / Stop / State / WaitReady) is a thin client that sends a request on
-// one of the channels below and waits for a response — this funnels concurrent
+// one of the channels below and waits for a response - this funnels concurrent
 // callers through a single serialization point so the state machine never
 // observes a race.
 func (p *ProcessCommand) run() {
-	// Mutable state — only read/written from this goroutine. ServeHTTP reads
+	// Mutable state - only read/written from this goroutine. ServeHTTP reads
 	// p.handler concurrently, which is why handler is an atomic.Pointer.
 	// p.state mirrors `state` so State() can observe transitions; setState
 	// writes both.
@@ -273,7 +273,7 @@ func (p *ProcessCommand) run() {
 
 	// notifyWaiters wakes every blocked WaitReady caller with the given result.
 	// Used on transitions out of StateStarting (ready, failed, aborted, or
-	// shutdown) — anything that resolves the "is it ready yet?" question.
+	// shutdown) - anything that resolves the "is it ready yet?" question.
 	notifyWaiters := func(err error) {
 		for _, w := range readyWaiters {
 			select {
@@ -347,7 +347,7 @@ func (p *ProcessCommand) run() {
 		// Run: start the upstream process. Only valid from StateStopped.
 		// doStart can take a long time (health-check polling), so it runs in
 		// a separate goroutine and we wait on resultCh. While waiting we also
-		// listen for an incoming Stop — that's how callers cancel an in-flight
+		// listen for an incoming Stop - that's how callers cancel an in-flight
 		// start.
 		case req := <-p.runCh:
 			if state != StateStopped {
@@ -366,7 +366,7 @@ func (p *ProcessCommand) run() {
 			// can respond to it AFTER we've finished tearing the start down.
 			var pendingStop *stopReq
 			select {
-			// doStart finished on its own — either successfully (latch
+			// doStart finished on its own - either successfully (latch
 			// cmd/handler and move to Ready) or with an error (back to
 			// Stopped). Either way wake WaitReady subscribers and reply
 			// to the Run caller.
@@ -386,12 +386,12 @@ func (p *ProcessCommand) run() {
 						(*fp)()
 					}
 					notifyWaiters(nil)
-					// Park the Run response — Run blocks until the process
+					// Park the Run response - Run blocks until the process
 					// terminates, so we only fire this when Stop, parentCtx,
 					// or the upstream exit takes the process down.
 					runResp = req.respond
 
-					// Start TTL goroutine if configured — self-terminates
+					// Start TTL goroutine if configured - self-terminates
 					// when state leaves StateReady. Snapshot the TTL at ready
 					// time; a mid-run SetConfig retunes it on the next spawn.
 					if unloadAfter := p.cfg().UnloadAfter; unloadAfter > 0 {
@@ -479,7 +479,7 @@ func (p *ProcessCommand) run() {
 				p.handler.Store(nil)
 				p.launchedArgs.Store(nil)
 			}
-			// Stop is a no-op (and not an error) when already Stopped — this
+			// Stop is a no-op (and not an error) when already Stopped - this
 			// is what makes it idempotent for callers that don't track state.
 			setState(StateStopped)
 			respondRun(nil)
@@ -493,7 +493,7 @@ func (p *ProcessCommand) run() {
 // qwentts.cpp (loads a talker with --model plus a paired --codec, voices under
 // /v1/voices) and mmwillet/TTS.cpp (loads a self-contained gguf with
 // --model-path, voices under /v1/audio/voices). The flag is the only reliable
-// discriminator — the exe name is identical — and it is token-exact, so a path
+// discriminator - the exe name is identical - and it is token-exact, so a path
 // that merely contains the string cannot trip it.
 func rewritesVoicesPath(args []string) bool {
 	for _, a := range args {
@@ -534,12 +534,12 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 	// qwentts.cpp's tts-server exposes GET /v1/voices, but quartermaster's
 	// model-routed catalog uses the OpenAI-style /v1/audio/voices path. Map it so
 	// the playground's voice list reaches the backend. Harmless for non-speech
-	// backends — they never get this path.
+	// backends - they never get this path.
 	//
 	// NOT harmless for TTS.cpp, the other engine behind a binary also named
 	// tts-server: it serves /v1/audio/voices itself and has no /v1/voices, so the
 	// rewrite turned its voice list into a 404 and the Speech tab showed only the
-	// default speaker. Skip it there — see rewritesVoicesPath.
+	// default speaker. Skip it there - see rewritesVoicesPath.
 	rewriteVoices := rewritesVoicesPath(args)
 	origDirector := reverseProxy.Director
 	reverseProxy.Director = func(r *http.Request) {
@@ -745,7 +745,7 @@ func (p *ProcessCommand) sendStopSignal(cmd *exec.Cmd) error {
 
 // killProcess terminates the upstream process. The flow:
 //
-//  1. Send the graceful stop signal (CmdStop / SIGTERM) directly — NOT by
+//  1. Send the graceful stop signal (CmdStop / SIGTERM) directly - NOT by
 //     cancelling cmdCtx. Cancelling the context would start cmd.WaitDelay
 //     immediately, which force-kills the process WaitDelay after the signal
 //     and would silently cap gracefulTimeout at WaitDelay whenever

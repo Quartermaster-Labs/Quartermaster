@@ -37,6 +37,17 @@ type apiModel struct {
 	// Ctx is the configured context size (-c / --ctx-size) the model launches
 	// with, 0 when its command takes no such flag (image/audio backends).
 	Ctx int `json:"ctx,omitempty"`
+	// Quant is the weight type parsed out of the gguf filename ("Q4_K_M"), and
+	// SizeGB its on-disk size. Both drive the Models table's spreadsheet columns
+	// (and its grouping of one model's quants); "" / 0 when the command has no
+	// model path or the file is unreadable.
+	Quant  string  `json:"quant,omitempty"`
+	SizeGB float64 `json:"sizeGB,omitempty"`
+	// EstVramGB / EstRamGB are the autogen sizer's predicted footprint for this
+	// model, carried in the generated config. EstVramGB is also the router's
+	// admission input; EstRamGB is non-zero only when weights are CPU-offloaded.
+	EstVramGB float64 `json:"estVramGB,omitempty"`
+	EstRamGB  float64 `json:"estRamGB,omitempty"`
 	// RunningCmd is the actual argv the process spawned with, set only while the
 	// model is running. It differs from the config command after a live config
 	// edit (new args apply on next load) or a spawn-time offload rewrite, so the
@@ -100,6 +111,7 @@ func (s *Server) modelStatus() []apiModel {
 		if v, ok := config.ParseCmd(mc.Cmd).Value("-c", "--ctx-size"); ok {
 			ctxSize, _ = strconv.Atoi(strings.TrimSpace(v))
 		}
+		family := modelFamily(mc.Cmd)
 		models = append(models, apiModel{
 			Id:           id,
 			Name:         mc.Name,
@@ -108,10 +120,14 @@ func (s *Server) modelStatus() []apiModel {
 			Unlisted:     mc.Unlisted,
 			Aliases:      mc.Aliases,
 			Capabilities: capsMap,
-			Family:       modelFamily(mc.Cmd),
+			Family:       family,
 			Group:        gid,
 			Listeners:    groupListeners[gid],
 			Ctx:          ctxSize,
+			Quant:        quantFromPath(family),
+			SizeGB:       fileSizeGB(family),
+			EstVramGB:    mc.EstVramGB,
+			EstRamGB:     mc.EstRamGB,
 			RunningCmd:   runningCmd,
 		})
 	}

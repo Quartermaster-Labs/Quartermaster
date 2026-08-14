@@ -69,7 +69,7 @@ function asStringList(v: unknown): string[] {
 
 /**
  * Pull the ```ask block out of an assistant message. Returns null when there
- * isn't one, or when it isn't usable — a malformed block must fall through to
+ * isn't one, or when it isn't usable - a malformed block must fall through to
  * being rendered as an ordinary code fence, never swallow the message.
  */
 export function parseAskBlock(content: string): AskBlock | null {

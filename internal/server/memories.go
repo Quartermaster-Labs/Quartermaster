@@ -111,10 +111,10 @@ func newMemoryID() string {
 func (p *Playground) upsertMemory(user string, in memoryEntry) (memoryEntry, error) {
 	in.Text = strings.TrimSpace(in.Text)
 	if in.Text == "" {
-		return memoryEntry{}, errMemory("a memory needs `text` — the fact to remember, in one or two sentences")
+		return memoryEntry{}, errMemory("a memory needs `text` - the fact to remember, in one or two sentences")
 	}
 	if len([]rune(in.Text)) > maxMemoryLen {
-		return memoryEntry{}, errMemory("memory too long (max %d characters) — keep it to the fact itself", maxMemoryLen)
+		return memoryEntry{}, errMemory("memory too long (max %d characters) - keep it to the fact itself", maxMemoryLen)
 	}
 	if in.Source != "user" {
 		in.Source = "assistant"
@@ -138,7 +138,7 @@ func (p *Playground) upsertMemory(user string, in memoryEntry) (memoryEntry, err
 			out := mems[i]
 			return out, p.saveMemoriesLocked(user, mems)
 		}
-		return memoryEntry{}, errMemory("no memory with id %q — list the memories you were given and use one of those ids, or omit id to save a new one", in.ID)
+		return memoryEntry{}, errMemory("no memory with id %q - list the memories you were given and use one of those ids, or omit id to save a new one", in.ID)
 	}
 
 	if len(mems) >= maxMemories {

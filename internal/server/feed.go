@@ -156,7 +156,7 @@ func fetchFeed(ctx context.Context, raw string, limit int) (*feedDoc, error) {
 		return nil, err
 	}
 	if len(doc.Items) == 0 {
-		return nil, fmt.Errorf("no entries found — %s may not be a feed (an HTML page is not one; look for a /feed, /rss or /atom.xml URL)", u.Host)
+		return nil, fmt.Errorf("no entries found - %s may not be a feed (an HTML page is not one; look for a /feed, /rss or /atom.xml URL)", u.Host)
 	}
 	if len(doc.Items) > limit {
 		doc.Items = doc.Items[:limit]

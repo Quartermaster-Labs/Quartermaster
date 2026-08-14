@@ -179,7 +179,7 @@ func newSlotCache(cfg config.SlotCacheConfig, running func() map[string]string, 
 		sc.maxFiles = 20
 	}
 	if err := os.MkdirAll(sc.dir, 0o755); err != nil {
-		sc.log.Warnf("slotcache: cannot create %s: %v — disabling", sc.dir, err)
+		sc.log.Warnf("slotcache: cannot create %s: %v - disabling", sc.dir, err)
 		sc.enabled = false
 	}
 	return sc

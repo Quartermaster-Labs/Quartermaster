@@ -42,12 +42,12 @@ export interface ProductSplit {
 const FENCE = /```products[ \t]*\r?\n([\s\S]*?)```[ \t]*(?:\r?\n|$)/i;
 const OPEN_FENCE = /```products[ \t]*(\r?\n|$)/i;
 
-// Cards per report. A shortlist is the point — twenty cards is a search results
+// Cards per report. A shortlist is the point - twenty cards is a search results
 // page, which is what the user came here to avoid.
 const MAX_PRODUCTS = 8;
 
 // Bracketed source markers belong on the card's own cite chip, not inside a
-// product name, a spec or — worst — a URL, where `…/widget[2]` is a dead link.
+// product name, a spec or - worst - a URL, where `…/widget[2]` is a dead link.
 // Models append them to every field out of habit, so they are stripped on the
 // way in rather than argued about in the prompt.
 const CITE_MARK = /\s*\[\d+\](?=\s|$|[.,;:)])|\[\d+\]/g;

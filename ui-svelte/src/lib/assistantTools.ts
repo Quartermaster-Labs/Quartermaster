@@ -18,7 +18,7 @@ export const GET_DATETIME_TOOL: ToolDef = {
   function: {
     name: "get_datetime",
     description:
-      "Get the current date, time and weekday, optionally in a named timezone, and optionally the number of days between today and another date. Use it for anything time-sensitive — whether a date has passed, what day something falls on, how long until a deadline — rather than assuming today's date.",
+      "Get the current date, time and weekday, optionally in a named timezone, and optionally the number of days between today and another date. Use it for anything time-sensitive - whether a date has passed, what day something falls on, how long until a deadline - rather than assuming today's date.",
     parameters: {
       type: "object",
       properties: {
@@ -36,7 +36,7 @@ export const CALCULATE_TOOL: ToolDef = {
   function: {
     name: "calculate",
     description:
-      "Evaluate an arithmetic expression exactly. Use it for any calculation you would otherwise do in your head — totals, price per unit, percentages, running costs, differences between options. Supports + - * / ^, parentheses, % for percent (20% is 0.2), and sqrt/abs/round/floor/ceil/min/max/sum/avg/pow/ln/log. Arithmetic only: no variables, no units, no code.",
+      "Evaluate an arithmetic expression exactly. Use it for any calculation you would otherwise do in your head - totals, price per unit, percentages, running costs, differences between options. Supports + - * / ^, parentheses, % for percent (20% is 0.2), and sqrt/abs/round/floor/ceil/min/max/sum/avg/pow/ln/log. Arithmetic only: no variables, no units, no code.",
     parameters: {
       type: "object",
       properties: {
@@ -52,7 +52,7 @@ export const CONVERT_UNITS_TOOL: ToolDef = {
   function: {
     name: "convert_units",
     description:
-      "Convert a measurement between units — length, mass, volume, area, speed, power, energy, data, time, pressure and temperature. Use it whenever a source states a figure in units the user does not think in (a spec sheet in inches and pounds, a drive in TB against an OS reporting TiB), instead of converting from memory.",
+      "Convert a measurement between units - length, mass, volume, area, speed, power, energy, data, time, pressure and temperature. Use it whenever a source states a figure in units the user does not think in (a spec sheet in inches and pounds, a drive in TB against an OS reporting TiB), instead of converting from memory.",
     parameters: {
       type: "object",
       properties: {
@@ -70,7 +70,7 @@ export const GET_WEATHER_TOOL: ToolDef = {
   function: {
     name: "get_weather",
     description:
-      "Get the current weather and a short forecast for a place, by name. Use it for anything that depends on real conditions — what to wear, whether an outdoor plan holds, travel timing — and never describe the weather from memory.",
+      "Get the current weather and a short forecast for a place, by name. Use it for anything that depends on real conditions - what to wear, whether an outdoor plan holds, travel timing - and never describe the weather from memory.",
     parameters: {
       type: "object",
       properties: {
@@ -88,7 +88,7 @@ export const FETCH_FEED_TOOL: ToolDef = {
   function: {
     name: "fetch_feed",
     description:
-      "Read one RSS or Atom feed and return its newest entries in order. Use it for \"what's new on X\" when the site publishes a feed — a search engine ranks by relevance and will hand you last year's article, while a feed is ordered by time. Returns headlines and blurbs only: call fetch_page on an entry's link before summarising what it says.",
+      "Read one RSS or Atom feed and return its newest entries in order. Use it for \"what's new on X\" when the site publishes a feed - a search engine ranks by relevance and will hand you last year's article, while a feed is ordered by time. Returns headlines and blurbs only: call fetch_page on an entry's link before summarising what it says.",
     parameters: {
       type: "object",
       properties: {

@@ -35,7 +35,7 @@ const turnFlushInterval = 2 * time.Second
 // turnDelta is one SSE frame. Replace=true carries a full snapshot (sent once on
 // subscribe so a reopened tab syncs), Replace=false is an incremental append.
 type turnDelta struct {
-	Kind    string          `json:"kind"` // content | reasoning | search | thinkMs | done | error
+	Kind    string          `json:"kind"` // content | reasoning | search | thinkMs | titles | done | error
 	Text    string          `json:"text,omitempty"`
 	Replace bool            `json:"replace,omitempty"`
 	Msg     string          `json:"msg,omitempty"`
@@ -83,9 +83,15 @@ type activeTurn struct {
 	inlineThink bool   // an inline <think> span is open in content (see append)
 	inlineStart time.Time
 	thinkMs     []int64 // wall time of each closed inline span, in span order
-	done        bool
-	subs        map[chan turnDelta]struct{}
-	cancel      context.CancelFunc
+	// Reasoning-box titles from the CPU title model (titlegen.go), filled once at
+	// end of turn. reasoningTitle covers the field-based trace; thinkTitles is
+	// one per inline <think> span, in span order. Empty = UI keeps its local
+	// heuristic.
+	reasoningTitle string
+	thinkTitles    []string
+	done           bool
+	subs           map[chan turnDelta]struct{}
+	cancel         context.CancelFunc
 	// pending is the config change awaiting the user's accept/deny (qm tools).
 	// Non-nil only while a quartermaster_configure call is blocked on approval.
 	pending *pendingApproval
@@ -365,6 +371,12 @@ func (at *activeTurn) subscribe() (chan turnDelta, []turnDelta, bool) {
 	if len(at.thinkMs) > 0 {
 		snap = append(snap, turnDelta{Kind: "thinkMs", Replace: true, Data: mustJSON(at.thinkMs)})
 	}
+	if at.reasoningTitle != "" || len(at.thinkTitles) > 0 {
+		snap = append(snap, turnDelta{Kind: "titles", Replace: true, Data: mustJSON(map[string]any{
+			"reasoningTitle": at.reasoningTitle,
+			"thinkTitles":    at.thinkTitles,
+		})})
+	}
 	for _, s := range at.searches {
 		payload, _ := json.Marshal(map[string]any{"search": s, "citations": at.citations})
 		snap = append(snap, turnDelta{Kind: "search", Data: payload})
@@ -634,6 +646,9 @@ func (tm *turnManager) run(ctx context.Context, user string, at *activeTurn, sta
 	}
 	at.mu.Unlock()
 
+	// Reasoning-box titles, before the final flush so they persist with the answer.
+	tm.titleReasoning(ctx, at)
+
 	tm.flush(user, at, kind == "error", msg) // final write of the completed answer
 	at.finish(kind, msg)
 	tm.mu.Lock()
@@ -796,7 +811,7 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 			if prev, ok := doneCalls[dupKey]; ok {
 				apiTail = append(apiTail, mustJSON(map[string]any{
 					"role": "tool", "tool_call_id": tc.ID,
-					"content": prev + "\n\n(You already made this exact call this turn — this is the same result, not a new one. Use it, or call with different arguments.)",
+					"content": prev + "\n\n(You already made this exact call this turn - this is the same result, not a new one. Use it, or call with different arguments.)",
 				}))
 				continue
 			}
@@ -854,7 +869,7 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 						// read as "could not check", never as an absent price the
 						// model fills in from memory.
 						resultText = "Could not read " + link + ": " + ferr.Error() +
-							"\nDo not guess this page's contents — say it could not be read, or try a different source."
+							"\nDo not guess this page's contents - say it could not be read, or try a different source."
 					} else {
 						title := orURL(doc.Title, doc.URL)
 						query = title
@@ -887,7 +902,7 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 						}
 						// A guessed rate is the failure this tool exists to stop,
 						// so the error says so rather than leaving room for one.
-						resultText = fmt.Sprintf("Could not get a %s→%s rate: %v\nDo not convert from memory — quote the price in %s as the page states it and say you could not convert it.", from, to, ferr, from)
+						resultText = fmt.Sprintf("Could not get a %s→%s rate: %v\nDo not convert from memory - quote the price in %s as the page states it and say you could not convert it.", from, to, ferr, from)
 					} else {
 						resultText = formatFxRate(amount, q)
 					}
@@ -930,7 +945,7 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 						// Named, specific failure: a model told only "error" tends
 						// to answer with its own arithmetic, which is the thing
 						// this tool exists to replace.
-						resultText = fmt.Sprintf("Could not evaluate %q: %v. This tool takes plain arithmetic only — numbers, + - * / ^, parentheses, %% for percent, and the functions sqrt/abs/round/floor/ceil/min/max/sum/avg/pow/ln/log.", expr, cerr)
+						resultText = fmt.Sprintf("Could not evaluate %q: %v. This tool takes plain arithmetic only - numbers, + - * / ^, parentheses, %% for percent, and the functions sqrt/abs/round/floor/ceil/min/max/sum/avg/pow/ln/log.", expr, cerr)
 					} else {
 						resultText = formatCalc(expr, v)
 					}
@@ -971,7 +986,7 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 						if ctx.Err() != nil {
 							return ctx.Err()
 						}
-						resultText = fmt.Sprintf("Could not get the weather for %q: %v\nDo not describe the weather from memory — say the forecast could not be read.", place, werr)
+						resultText = fmt.Sprintf("Could not get the weather for %q: %v\nDo not describe the weather from memory - say the forecast could not be read.", place, werr)
 					} else {
 						resultText = txt
 					}
@@ -1072,7 +1087,7 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 							return ctx.Err()
 						}
 						resultText = "YouTube search failed: " + verr.Error() +
-							"\nDo not invent video titles or links — say the search did not work."
+							"\nDo not invent video titles or links - say the search did not work."
 					} else {
 						numbers := make([]int, len(vids))
 						for i, v := range vids {
@@ -1114,7 +1129,7 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 							return ctx.Err()
 						}
 						resultText = "Comments unavailable: " + cerr.Error() +
-							"\nSay so plainly — never write what commenters 'probably' said."
+							"\nSay so plainly - never write what commenters 'probably' said."
 					} else {
 						vurl := "https://www.youtube.com/watch?v=" + vid
 						title := orURL(meta.Title, vurl)
@@ -1185,7 +1200,7 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 			// Cite reminder co-located with the numbered results (high compliance).
 			citeHint := ""
 			if citeOffset > citesBefore {
-				citeHint = fmt.Sprintf("\n\nWhen you use any of the above in your answer, cite it inline with its bracketed number (e.g. [%d]) right after the statement — once, where you first use it, not on every following sentence. Anything you did not take from these results stays uncited.", citesBefore+1)
+				citeHint = fmt.Sprintf("\n\nWhen you use any of the above in your answer, cite it inline with its bracketed number (e.g. [%d]) right after the statement - once, where you first use it, not on every following sentence. Anything you did not take from these results stays uncited.", citesBefore+1)
 			}
 			apiTail = append(apiTail, mustJSON(map[string]any{
 				"role": "tool", "tool_call_id": tc.ID, "content": resultText + citeHint,
@@ -1548,6 +1563,8 @@ func (tm *turnManager) flush(user string, at *activeTurn, isErr bool, errMsg str
 	at.mu.Lock()
 	content, reasoning, genMs, reasoningMs, done := at.content, at.reasoning, at.genMs, at.reasoningMs, at.done
 	thinkMs := append([]int64(nil), at.thinkMs...)
+	reasoningTitle := at.reasoningTitle
+	thinkTitles := append([]string(nil), at.thinkTitles...)
 	searches := append([]turnSearch(nil), at.searches...)
 	citations := append([]turnCitation(nil), at.citations...)
 	at.mu.Unlock()
@@ -1572,6 +1589,12 @@ func (tm *turnManager) flush(user string, at *activeTurn, isErr bool, errMsg str
 	}
 	if len(thinkMs) > 0 {
 		am["thinkMs"] = thinkMs
+	}
+	if reasoningTitle != "" {
+		am["reasoningTitle"] = reasoningTitle
+	}
+	if len(thinkTitles) > 0 {
+		am["thinkTitles"] = thinkTitles
 	}
 	if len(searches) > 0 {
 		am["searches"] = searches

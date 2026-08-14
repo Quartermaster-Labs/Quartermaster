@@ -295,11 +295,11 @@
     const t = last?.tokens;
     return [
       // The three the operator watches: TTFT, prefill rate, decode rate.
-      { label: "TTFT", value: busy ? (liveTtftMs >= 0 ? fmtDur(liveTtftMs) : "—") : t && t.time_to_first_ms >= 0 ? fmtDur(t.time_to_first_ms) : "—", live: true },
+      { label: "TTFT", value: busy ? (liveTtftMs >= 0 ? fmtDur(liveTtftMs) : "-") : t && t.time_to_first_ms >= 0 ? fmtDur(t.time_to_first_ms) : "-", live: true },
       { label: "Prompt", value: busy ? fmtSpeed(activeBackend?.prompt_tokens_seconds ?? -1) : fmtSpeed(t?.prompt_per_second ?? -1), live: true },
       { label: "Gen", value: fmtSpeed(busy ? liveTps : (t?.tokens_per_second ?? -1)), live: true },
-      { label: "Duration", value: busy ? (elapsedMs > 0 ? fmtDur(elapsedMs) : "—") : last ? fmtDur(last.duration_ms) : "—", live: true },
-      { label: "In", value: busy ? (activeBackend?.prompt_tokens ? String(activeBackend.prompt_tokens) : "—") : String(t?.input_tokens ?? 0), live: true },
+      { label: "Duration", value: busy ? (elapsedMs > 0 ? fmtDur(elapsedMs) : "-") : last ? fmtDur(last.duration_ms) : "-", live: true },
+      { label: "In", value: busy ? (activeBackend?.prompt_tokens ? String(activeBackend.prompt_tokens) : "-") : String(t?.input_tokens ?? 0), live: true },
       { label: "Out", value: busy ? String(lt?.output_tokens ?? 0) : String(t?.output_tokens ?? 0), live: true },
     ];
   });
@@ -353,7 +353,7 @@
   const dots = $derived(".".repeat(Math.floor(phase / 5) % 4));
 
   function fmtSpeed(n: number): string {
-    return n > 0 ? `${n.toFixed(1)} tok/s` : "—";
+    return n > 0 ? `${n.toFixed(1)} tok/s` : "-";
   }
   // Promote the unit once the count would hit triple digits: ms -> s -> m -> h,
   // so the readout never grows past "99.9" in any unit.

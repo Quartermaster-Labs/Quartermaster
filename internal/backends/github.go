@@ -121,7 +121,7 @@ func (g *ghClient) Releases(ctx context.Context, repo string, force bool) ([]Rel
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
-		return nil, fmt.Errorf("github rate limit reached (%s) — retry later, or set GITHUB_TOKEN", resp.Status)
+		return nil, fmt.Errorf("github rate limit reached (%s) - retry later, or set GITHUB_TOKEN", resp.Status)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("github api %s: %s", repo, resp.Status)

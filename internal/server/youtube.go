@@ -373,7 +373,7 @@ func formatYouTubeTranscript(tr ytTranscript, citation, maxTokens int) string {
 	}
 	head.WriteString("YouTube transcript")
 	if tr.Title != "" {
-		head.WriteString(fmt.Sprintf(" — %q", tr.Title))
+		head.WriteString(fmt.Sprintf(" - %q", tr.Title))
 	}
 	var meta []string
 	if tr.Uploader != "" {
@@ -388,12 +388,12 @@ func formatYouTubeTranscript(tr ytTranscript, citation, maxTokens int) string {
 	head.WriteString("\nhttps://www.youtube.com/watch?v=" + tr.ID + "\n")
 	head.WriteString("Timestamps are [m:ss] into the video; link a moment as ?v=" + tr.ID + "&t=<seconds>s.\n")
 	if truncated {
-		head.WriteString(fmt.Sprintf("INCOMPLETE: only the first %s of this video fits in context. Everything after %s is missing — say so instead of presenting this as the whole video.\n", cutAt, cutAt))
+		head.WriteString(fmt.Sprintf("INCOMPLETE: only the first %s of this video fits in context. Everything after %s is missing - say so instead of presenting this as the whole video.\n", cutAt, cutAt))
 	}
 	head.WriteString("\n")
 
 	if truncated {
-		body += fmt.Sprintf("\n\n[transcript truncated at %s — the rest of the video is not included]", cutAt)
+		body += fmt.Sprintf("\n\n[transcript truncated at %s - the rest of the video is not included]", cutAt)
 	}
 	return head.String() + body
 }

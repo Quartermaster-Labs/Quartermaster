@@ -408,7 +408,7 @@
                   <div class="h-full flex flex-col items-center justify-center gap-2 text-txtsecondary text-center">
                     <Radio class="w-8 h-8 opacity-40" strokeWidth={1.5} />
                     <p class="text-[0.8125rem]">
-                      {listening ? "Listening — text appears as you speak and firms up when you pause." : "Speak into the mic and the text shows up here live."}
+                      {listening ? "Listening - text appears as you speak and firms up when you pause." : "Speak into the mic and the text shows up here live."}
                     </p>
                   </div>
                 {/if}

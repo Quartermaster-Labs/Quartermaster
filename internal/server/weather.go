@@ -201,7 +201,7 @@ func fetchWeather(ctx context.Context, place string, days int, imperial bool) (s
 			fmt.Fprintf(&b, ", wind up to %.0f %s\n", atf(r.Daily.Wind, i), wUnit)
 		}
 	}
-	b.WriteString("Source: Open-Meteo, read just now. A forecast beyond about three days is a trend, not a fact — say so if the user is planning on one.")
+	b.WriteString("Source: Open-Meteo, read just now. A forecast beyond about three days is a trend, not a fact - say so if the user is planning on one.")
 	out := b.String()
 
 	wxCacheMu.Lock()

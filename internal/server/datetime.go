@@ -62,7 +62,7 @@ func dtLocation(tz string) (*time.Location, error) {
 	}
 	loc, err := time.LoadLocation(tz)
 	if err != nil {
-		return nil, fmt.Errorf("unknown timezone %q — use an IANA name like Europe/Bucharest, America/New_York or UTC", tz)
+		return nil, fmt.Errorf("unknown timezone %q - use an IANA name like Europe/Bucharest, America/New_York or UTC", tz)
 	}
 	return loc, nil
 }
@@ -103,7 +103,7 @@ func formatDatetime(tz, until string) (string, error) {
 		}
 	}
 	if !ok {
-		fmt.Fprintf(&b, "\nCould not read %q as a date — pass it as YYYY-MM-DD.", until)
+		fmt.Fprintf(&b, "\nCould not read %q as a date - pass it as YYYY-MM-DD.", until)
 		return b.String(), nil
 	}
 	// Whole calendar days, counted from midnight to midnight: "3 days until
@@ -115,7 +115,7 @@ func formatDatetime(tz, until string) (string, error) {
 	case days == 0:
 		fmt.Fprintf(&b, "\n%s is today (%s).", target.Format("2 January 2006"), target.Format("Monday"))
 	case days > 0:
-		fmt.Fprintf(&b, "\n%s (%s) is %d day(s) from today — %s.", target.Format("2 January 2006"), target.Format("Monday"), days, weeksPhrase(days))
+		fmt.Fprintf(&b, "\n%s (%s) is %d day(s) from today - %s.", target.Format("2 January 2006"), target.Format("Monday"), days, weeksPhrase(days))
 	default:
 		fmt.Fprintf(&b, "\n%s (%s) was %d day(s) ago.", target.Format("2 January 2006"), target.Format("Monday"), -days)
 	}

@@ -80,7 +80,7 @@
     </div>
     <div class="tile">
       <span class="tile__label"><Gauge size={11} /> Median speed</span>
-      <span class="tile__value">{stats.medGen > 0 ? stats.medGen.toFixed(1) : "—"}<span class="text-xs text-txtsecondary"> t/s gen</span></span>
+      <span class="tile__value">{stats.medGen > 0 ? stats.medGen.toFixed(1) : "-"}<span class="text-xs text-txtsecondary"> t/s gen</span></span>
       <span class="tile__sub">{stats.medPrompt > 0 ? `${stats.medPrompt.toFixed(0)} t/s prompt` : "no prompt data"}</span>
     </div>
   </div>

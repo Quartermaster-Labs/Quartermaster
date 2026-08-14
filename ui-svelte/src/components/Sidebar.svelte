@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { link, location } from "svelte-spa-router";
-  import { LayoutDashboard, Boxes, FlaskConical, Activity, KeyRound, Sun, Moon, MonitorCog, ChevronRight, ArrowUpCircle, MessageSquare, Image, Volume2, Mic, Binary, Scissors, BookOpen, Settings } from "lucide-svelte";
+  import { link } from "svelte-spa-router";
+  import { LayoutDashboard, Boxes, FlaskConical, Activity, KeyRound, Sun, Moon, MonitorCog, ArrowUpCircle, BookOpen, Settings } from "lucide-svelte";
   import WikiModal from "./WikiModal.svelte";
   import SettingsModal from "./SettingsModal.svelte";
   import { toggleTheme, themeMode, connectionState } from "../stores/theme";
@@ -8,20 +8,12 @@
   import { playgroundActivity } from "../stores/playgroundActivity";
   import { versionInfo } from "../stores/api";
   import { playgroundPort } from "../stores/playgroundAuth";
-  import { MODEL_CATEGORIES, type ModelCategory } from "../lib/modelUtils";
-
-  const CATEGORY_ICONS: Record<ModelCategory, typeof MessageSquare> = {
-    llm: MessageSquare,
-    image: Image,
-    segment: Scissors,
-    tts: Volume2,
-    transcribe: Mic,
-    embed: Binary,
-  };
 
   const pages = [
     { path: "/", label: "Dashboard", icon: LayoutDashboard },
-    { path: "/models", label: "Models", icon: Boxes, children: MODEL_CATEGORIES.map((c) => ({ path: `/models/${c.id}`, label: c.label, icon: CATEGORY_ICONS[c.id] })) },
+    // Models is ONE page now — the category split is tabs on the page itself,
+    // so a sub-menu duplicating them would be two controls for one choice.
+    { path: "/models", label: "Models", icon: Boxes },
     { path: "/test", label: "Playground", icon: FlaskConical },
     { path: "/observe", label: "Observe", icon: Activity },
     { path: "/api-keys", label: "API Keys", icon: KeyRound },
@@ -32,8 +24,6 @@
     $playgroundPort ? `${window.location.protocol}//${window.location.hostname}:${$playgroundPort}/ui/` : ""
   );
 
-  // Models sub-menu open when on any /models route, toggleable otherwise.
-  let modelsOpen = $state($currentRoute.startsWith("/models"));
   let showWiki = $state(false);
   let showSettings = $state(false);
 
@@ -88,41 +78,7 @@
   <nav class="flex-1 overflow-y-auto overflow-x-hidden pretty-scroll flex flex-col gap-1">
     {#each pages as p (p.path)}
       {@const active = isActive(p.path, $currentRoute)}
-      {#if p.children}
-        <!-- Models: expandable parent. Clicking toggles the sub-menu. -->
-        <button
-          type="button"
-          onclick={() => (modelsOpen = !modelsOpen)}
-          class="relative w-full flex items-center gap-3 pr-3 py-2 font-mono text-sm transition-colors {active
-            ? 'text-txtmain bg-secondary/60'
-            : 'text-txtsecondary hover:text-txtmain hover:bg-secondary/40'}"
-        >
-          <span class="absolute left-0 top-0 bottom-0 w-0.5 {active ? 'bg-primary' : 'bg-transparent'}"></span>
-          <span class="w-14 shrink-0 flex items-center justify-center">
-            <p.icon size={18} strokeWidth={active ? 2.4 : 1.8} />
-          </span>
-          <span class={labelClass}>{p.label}</span>
-          <ChevronRight size={14} class="ml-auto shrink-0 hidden group-hover/rail:block transition-transform {modelsOpen ? 'rotate-90' : ''}" />
-        </button>
-        {#if modelsOpen}
-          <!-- Sub-items only make sense expanded; hidden while the rail is collapsed. -->
-          <div class="hidden group-hover/rail:block">
-            {#each p.children as c (c.path)}
-              {@const cActive = $location === c.path || (c.path === "/models/llm" && $location === "/models")}
-              <a
-                href={c.path}
-                use:link
-                class="flex items-center gap-2.5 pl-8 pr-3 py-1.5 font-mono text-[0.8rem] border-l-2 transition-colors {cActive
-                  ? 'border-primary text-txtmain bg-secondary/60'
-                  : 'border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40'}"
-              >
-                <c.icon size={14} strokeWidth={cActive ? 2.4 : 1.8} class="shrink-0" />
-                <span class="tracking-wide whitespace-nowrap">{c.label}</span>
-              </a>
-            {/each}
-          </div>
-        {/if}
-      {:else if p.path === "/test" && playgroundURL}
+      {#if p.path === "/test" && playgroundURL}
         <!-- Playground is a separate app on its own port: link out to it. -->
         <a
           href={playgroundURL}

@@ -314,11 +314,11 @@ export function renderStreamingMarkdown(
   if (complete) {
     if (cache.completeKey !== complete) {
       if (complete.startsWith(cache.completeKey) && cache.completeKey.length > 0) {
-        // Complete section grew — render only the new part as a new block
+        // Complete section grew - render only the new part as a new block
         const newPart = complete.slice(cache.completeKey.length);
         cache.blocks = [...cache.blocks, { id: cache.nextId++, html: renderMarkdown(newPart, citations) }];
       } else {
-        // Complete section changed unexpectedly — re-render as single block
+        // Complete section changed unexpectedly - re-render as single block
         cache.blocks = [{ id: cache.nextId++, html: renderMarkdown(complete, citations) }];
       }
       cache.completeKey = complete;

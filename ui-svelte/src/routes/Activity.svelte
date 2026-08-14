@@ -157,7 +157,7 @@
   });
 
   function formatSpeed(speed: number): string {
-    return speed < 0 ? "—" : speed.toFixed(1);
+    return speed < 0 ? "-" : speed.toFixed(1);
   }
 
   function formatDuration(ms: number): string {

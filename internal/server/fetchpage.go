@@ -503,12 +503,12 @@ func formatPage(doc *pageDoc, n int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## [%d] %s\n%s\nRead at %s.\n", n, orURL(doc.Title, doc.URL), doc.URL, doc.FetchedAt.Format("2006-01-02 15:04"))
 	if doc.Data != "" {
-		b.WriteString("\nStructured data on the page (schema.org JSON-LD — prices/availability here are the page's own machine-readable values):\n")
+		b.WriteString("\nStructured data on the page (schema.org JSON-LD - prices/availability here are the page's own machine-readable values):\n")
 		b.WriteString(doc.Data)
 		b.WriteString("\n")
 	}
 	if len(doc.Images) > 0 {
-		b.WriteString("\nImages on this page (the first is the page's own main image — copy a URL verbatim into the report's `image` field; do not invent or edit one):\n")
+		b.WriteString("\nImages on this page (the first is the page's own main image - copy a URL verbatim into the report's `image` field; do not invent or edit one):\n")
 		for _, u := range doc.Images {
 			b.WriteString(u)
 			b.WriteString("\n")
@@ -519,7 +519,7 @@ func formatPage(doc *pageDoc, n int) string {
 		b.WriteString(doc.Text)
 	}
 	if doc.Truncated {
-		b.WriteString("\n\n[TRUNCATED — the page was longer than the read limit. Do not claim this is the whole page.]")
+		b.WriteString("\n\n[TRUNCATED - the page was longer than the read limit. Do not claim this is the whole page.]")
 	}
 	return b.String()
 }

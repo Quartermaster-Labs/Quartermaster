@@ -117,6 +117,13 @@ type ModelConfig struct {
 	// internal/router/group.go.
 	EstVramGB float64 `yaml:"estVramGB"`
 
+	// EstRamGB is the sizer's companion figure: the share of the weights (plus
+	// KV, when it is kept in system memory) that does NOT fit on the GPU and is
+	// served from RAM. 0 for a fully-offloaded model. Purely informational — the
+	// router admits on EstVramGB — but the dashboard shows it per model so the
+	// cost of a partial offload is visible before loading.
+	EstRamGB float64 `yaml:"estRamGB"`
+
 	// Copy of HealthCheckTimeout from global config
 	HealthCheckTimeout int `yaml:"healthCheckTimeout"`
 }

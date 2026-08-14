@@ -57,3 +57,47 @@ func TestDiscoverGgufModels_MtpPairing(t *testing.T) {
 		t.Fatalf("DraftKind = %q, want mtp", rows[0].DraftKind)
 	}
 }
+
+// Diffusion text encoders / VAEs are components of an image model, not models.
+// They used to be emitted as llama-server rows and show up in the UI as LLMs.
+func TestDiscoverGgufModels_SkipsImageEncoders(t *testing.T) {
+	dir := t.TempDir()
+	writeStub(t, dir, "Qwen3.6-35B-A3B-Q4_K_M.gguf", 1024)
+	for _, n := range []string{
+		"T5-v1_1-xxl-encoder-Q8_0.gguf",
+		"t5xxl_fp16.gguf",
+		"umt5-xxl-encoder-Q5_K_M.gguf",
+		"clip_l.gguf",
+		"clip-g-Q8_0.gguf",
+		"flux-vae-f16.gguf",
+		"ae.gguf",
+	} {
+		writeStub(t, dir, n, 1024)
+	}
+
+	rows, err := DiscoverGgufModels(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].BaseID != "qwen3.6-35b-a3b" {
+		var got []string
+		for _, r := range rows {
+			got = append(got, r.ID)
+		}
+		t.Fatalf("want only the served model, got %v", got)
+	}
+}
+
+// The encoder rule must not eat a real seq2seq LLM that merely starts with t5.
+func TestDiscoverGgufModels_KeepsFlanT5(t *testing.T) {
+	dir := t.TempDir()
+	writeStub(t, dir, "flan-t5-large-Q4_K_M.gguf", 1024)
+
+	rows, err := DiscoverGgufModels(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want flan-t5 served, got %d rows", len(rows))
+	}
+}

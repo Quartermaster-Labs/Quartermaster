@@ -40,11 +40,11 @@
   // Built-in starter presets so voice_design works out of the box. Read-only
   // (can't be deleted); user presets with the same name shadow them.
   const DEFAULT_PRESETS: VoicePreset[] = [
-    { name: "Warm Narrator", instructions: "A warm, friendly middle-aged woman narrating an audiobook — calm and clear, at a relaxed, even pace." },
-    { name: "Deep Announcer", instructions: "A deep, resonant male voice like a movie-trailer announcer — dramatic, confident, and slow." },
-    { name: "Cheerful Assistant", instructions: "A bright, upbeat young voice — energetic and helpful, speaking quickly and clearly with a smile." },
+    { name: "Warm Narrator", instructions: "A warm, friendly middle-aged woman narrating an audiobook - calm and clear, at a relaxed, even pace." },
+    { name: "Deep Announcer", instructions: "A deep, resonant male voice like a movie-trailer announcer - dramatic, confident, and slow." },
+    { name: "Cheerful Assistant", instructions: "A bright, upbeat young voice - energetic and helpful, speaking quickly and clearly with a smile." },
     { name: "Calm Meditation", instructions: "A soft, soothing voice speaking slowly and gently, with long pauses, ideal for guided meditation." },
-    { name: "Gruff Storyteller", instructions: "An older man with a slight gravelly rasp, telling a story by the fire — unhurried, warm, and expressive." },
+    { name: "Gruff Storyteller", instructions: "An older man with a slight gravelly rasp, telling a story by the fire - unhurried, warm, and expressive." },
   ];
   let allPresets = $derived([
     ...DEFAULT_PRESETS,
@@ -365,7 +365,7 @@
     try {
       wav = await fileToWav(newVoiceFile);
     } catch {
-      createVoiceError = "Audio format unrecognized — use a WAV or MP3 clip.";
+      createVoiceError = "Audio format unrecognized - use a WAV or MP3 clip.";
       return;
     }
     const ok = await submitClone(wav, newVoiceRefText);
@@ -649,7 +649,7 @@
               {#if !isVoiceDesign}
                 <span
                   class="w-1.5 h-1.5 rounded-full {modelReady ? 'bg-green-500' : 'bg-txtsecondary/40'}"
-                  title={modelReady ? "Model loaded — voice list is live" : "Model not loaded — voice list is from cache"}
+                  title={modelReady ? "Model loaded - voice list is live" : "Model not loaded - voice list is from cache"}
                 ></span>
               {/if}
             </span>
@@ -671,7 +671,7 @@
               onclick={refreshVoices}
               disabled={isLoadingVoices}
             >
-              Model idle — showing cached voices. Click to load &amp; sync clones.
+              Model idle - showing cached voices. Click to load &amp; sync clones.
             </button>
           {/if}
 
@@ -1012,7 +1012,7 @@
             <textarea
               class="w-full px-3 py-2 rounded-md border border-card-border bg-surface text-[0.8125rem] resize-none focus:outline-none focus:ring-2 focus:ring-primary/40"
               rows="2"
-              placeholder="Reference transcript (optional — improves cloning)"
+              placeholder="Reference transcript (optional - improves cloning)"
               bind:value={newVoiceRefText}
             ></textarea>
             {#if createVoiceError}<span class="text-red-500 text-xs">{createVoiceError}</span>{/if}
@@ -1049,7 +1049,7 @@
           <textarea
             class="w-full px-3 py-2 rounded-md border border-card-border bg-surface text-[0.8125rem] resize-none focus:outline-none focus:ring-2 focus:ring-primary/40"
             rows="4"
-            placeholder="Describe the voice — e.g. “a calm elderly man with a slight rasp, speaking slowly and warmly”"
+            placeholder="Describe the voice - e.g. “a calm elderly man with a slight rasp, speaking slowly and warmly”"
             bind:value={presetInstr}
           ></textarea>
           <div class="flex justify-end gap-2">

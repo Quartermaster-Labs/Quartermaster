@@ -395,8 +395,8 @@
     { key: "content", label: "System Prompt", def: DEFAULT_BUILTIN_PROMPT, blank: "No system prompt", note: "The persona and instructions. Blank means no system prompt.", vars: true },
     { key: "search", label: "Web Search", def: DEFAULT_SEARCH_PROMPT, blank: "Shipped default", note: "Appended when Web Search is on. Blank uses the shipped default.", vars: false },
     { key: "wiki", label: "Wiki", def: DEFAULT_WIKI_PROMPT, blank: "Shipped default", note: "Appended when the help wiki tool is active (always on in chat). Blank uses the shipped default.", vars: false },
-    { key: "youtube", label: "YouTube", def: DEFAULT_YOUTUBE_PROMPT, blank: "Shipped default", note: "Appended when the YouTube tools are active (transcript, search and comments — always on in chat). Blank uses the shipped default.", vars: false },
-    { key: "cite", label: "Citations", def: DEFAULT_CITE_PROMPT, blank: "Shipped default", note: "Appended when a citing tool is on — how to cite [n]. Blank uses the shipped default.", vars: false },
+    { key: "youtube", label: "YouTube", def: DEFAULT_YOUTUBE_PROMPT, blank: "Shipped default", note: "Appended when the YouTube tools are active (transcript, search and comments - always on in chat). Blank uses the shipped default.", vars: false },
+    { key: "cite", label: "Citations", def: DEFAULT_CITE_PROMPT, blank: "Shipped default", note: "Appended when a citing tool is on - how to cite [n]. Blank uses the shipped default.", vars: false },
   ] as const;
   let presetEditor = $state<null | {
     presetId: string | null; // null = new preset
@@ -505,13 +505,13 @@
       const { results } = await searchViaChain([{ ...p, enabled: true }], "test", 3);
       searchProbe = {
         ...searchProbe,
-        [p.id]: { state: "ok", msg: `OK — ${results.length} result${results.length === 1 ? "" : "s"}` },
+        [p.id]: { state: "ok", msg: `OK - ${results.length} result${results.length === 1 ? "" : "s"}` },
       };
     } catch (e) {
       const m = (e instanceof Error ? e.message : String(e)).trim();
       searchProbe = {
         ...searchProbe,
-        [p.id]: { state: "fail", msg: /failed to fetch/i.test(m) ? "Failed — server unreachable" : m || "Failed" },
+        [p.id]: { state: "fail", msg: /failed to fetch/i.test(m) ? "Failed - server unreachable" : m || "Failed" },
       };
     }
   }
@@ -792,7 +792,7 @@
   </div>
 {/if}
 
-<!-- Settings — categorized: a left side-nav jumps between panels on the right. -->
+<!-- Settings - categorized: a left side-nav jumps between panels on the right. -->
 {#if showSettings}
   <div
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
@@ -875,7 +875,7 @@
               <p class="text-xs text-txtsecondary">Max reasoning tokens before the model is forced to answer. 0 = unlimited.</p>
             </div>
 
-            <!-- Read-aloud TTS. Hidden outright when no TTS model is installed —
+            <!-- Read-aloud TTS. Hidden outright when no TTS model is installed -
                  an empty picker for a feature the box can't do is just noise.
                  Native <select> on purpose: this panel is a scroll container, and
                  ModelSelector's absolutely-positioned menu is clipped by it, so
@@ -884,7 +884,7 @@
             {#if $ttsModels.length > 0}
               <div class="flex flex-col gap-1">
                 <label class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary" for="tts-model">
-                  Read Aloud {@render tip("Model behind the speaker button under each chat reply. Loading it can evict the chat model — one GPU, one pool.")}
+                  Read Aloud {@render tip("Model behind the speaker button under each chat reply. Loading it can evict the chat model - one GPU, one pool.")}
                 </label>
                 <!-- Bound to the EFFECTIVE model (auto-picked when nothing is
                      chosen), so the row never reads "none" while the button works. -->
@@ -902,7 +902,7 @@
 
               <div class="flex flex-col gap-1">
                 <label class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary" for="tts-voice">
-                  Voice {@render tip("Speaker the read-aloud button uses. Shared with the Speech tab — one person, one voice. Refresh loads the model to ask it for the full list, including any cloned voices.")}
+                  Voice {@render tip("Speaker the read-aloud button uses. Shared with the Speech tab - one person, one voice. Refresh loads the model to ask it for the full list, including any cloned voices.")}
                 </label>
                 <div class="flex items-center gap-2">
                   <select
@@ -966,7 +966,7 @@
             </label>
 
             <p class="text-xs text-txtsecondary">
-              The assistant writes here when you tell it to remember something. Everything is editable — these facts go into every chat, so a wrong one is worth deleting.
+              The assistant writes here when you tell it to remember something. Everything is editable - these facts go into every chat, so a wrong one is worth deleting.
             </p>
 
             {#if memError}
@@ -1039,7 +1039,7 @@
                      times out or returns nothing hands off to the next one. -->
                 <div class="flex flex-col gap-2 border-t border-card-border pt-2.5">
                   <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">
-                    Providers {@render tip("Searched in order, top first. If one times out or returns nothing, the next one is tried — so a rate-limited SearXNG no longer ends the search. Keyed providers only spend quota when the ones above them failed.")}
+                    Providers {@render tip("Searched in order, top first. If one times out or returns nothing, the next one is tried - so a rate-limited SearXNG no longer ends the search. Keyed providers only spend quota when the ones above them failed.")}
                   </span>
 
                   {#each providers as p, i (p.id)}
@@ -1057,7 +1057,7 @@
                         />
                         <span class="flex-1 min-w-0 truncate text-sm {p.enabled ? 'text-txtmain' : 'text-txtsecondary'}">{meta.label}</span>
                         {#if p.enabled && !providerReady(p)}
-                          <span class="shrink-0 text-[0.65rem] uppercase tracking-wide text-amber-500" title="Enabled but not configured — it is skipped, not tried.">
+                          <span class="shrink-0 text-[0.65rem] uppercase tracking-wide text-amber-500" title="Enabled but not configured - it is skipped, not tried.">
                             needs setup
                           </span>
                         {/if}
@@ -1132,7 +1132,7 @@
                   {/each}
 
                   {#if !providers.some(providerReady)}
-                    <p class="text-xs text-amber-500">No provider is configured — web search will fail on every call.</p>
+                    <p class="text-xs text-amber-500">No provider is configured - web search will fail on every call.</p>
                   {:else}
                     <p class="text-xs text-txtsecondary">Model must support tool calling.</p>
                   {/if}
@@ -1140,7 +1140,7 @@
 
                 <div class="grid grid-cols-2 gap-2">
                   <label class="flex flex-col gap-1 text-xs uppercase tracking-wide text-txtsecondary" for="search-max">
-                    <span class="flex items-center gap-1.5">Max / Turn {@render tip("Cap on web searches per message. Once hit, the model must answer with what it found — protects SearXNG from runaway agents.")}</span>
+                    <span class="flex items-center gap-1.5">Max / Turn {@render tip("Cap on web searches per message. Once hit, the model must answer with what it found - protects SearXNG from runaway agents.")}</span>
                     <input id="search-max" type="number" min="1" max="50" class="px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$searchMaxPerTurnStore} />
                   </label>
                   <label class="flex flex-col gap-1 text-xs uppercase tracking-wide text-txtsecondary" for="search-throttle">
@@ -1187,7 +1187,7 @@
                     {@render radio(on)}
                     <span class="flex flex-col min-w-0">
                       <span class="text-txtmain truncate">{p.name || "Untitled"}</span>
-                      <span class="text-xs text-txtsecondary truncate">{p.content.trim() || "Empty — no system prompt."}</span>
+                      <span class="text-xs text-txtsecondary truncate">{p.content.trim() || "Empty - no system prompt."}</span>
                     </span>
                   </button>
                   <button type="button" class="shrink-0 p-1.5 rounded text-txtsecondary hover:text-txtmain" onclick={() => editPreset(p)} title="Edit preset">
@@ -1218,7 +1218,7 @@
               </button>
 
               <p class="text-xs text-txtsecondary border-t border-card-border pt-3">
-                Each preset carries its own web-search, wiki, and citation instructions — edit a preset to tune them. The built-in default and its shipped tool prompts stay untouched.
+                Each preset carries its own web-search, wiki, and citation instructions - edit a preset to tune them. The built-in default and its shipped tool prompts stay untouched.
               </p>
             </div>
           {/if}
@@ -1316,7 +1316,7 @@
         <p class="text-xs text-txtsecondary shrink-0">
           Variables:
           {#each PROMPT_VARS as v, i (v)}<code class="text-txtmain">{v}</code>{i < PROMPT_VARS.length - 1 ? ", " : ""}{/each}
-          — replaced when the prompt is sent.
+          - replaced when the prompt is sent.
         </p>
       {/if}
       <div class="flex items-center justify-between gap-2 shrink-0">

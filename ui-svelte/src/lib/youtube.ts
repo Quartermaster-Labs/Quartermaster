@@ -9,7 +9,7 @@ export const YOUTUBE_TOOL: ToolDef = {
   function: {
     name: "youtube_transcript",
     description:
-      "Fetch the transcript (captions) of a YouTube video so you can analyse, summarise, quote or fact-check it. Call this whenever the user gives a YouTube link or asks about a specific video — you cannot watch video, but this gives you what was said, in timestamped paragraphs. Long videos may come back truncated; the result says so explicitly when it does.",
+      "Fetch the transcript (captions) of a YouTube video so you can analyse, summarise, quote or fact-check it. Call this whenever the user gives a YouTube link or asks about a specific video - you cannot watch video, but this gives you what was said, in timestamped paragraphs. Long videos may come back truncated; the result says so explicitly when it does.",
     parameters: {
       type: "object",
       properties: {
@@ -39,7 +39,7 @@ export const YOUTUBE_SEARCH_TOOL: ToolDef = {
   function: {
     name: "youtube_search",
     description:
-      "Find YouTube videos: pass `query` to search all of YouTube, or `channel` to list what one channel has posted (newest first). Returns titles, links, channel, duration, upload date and view count — metadata only, never what was said in a video. Use it to find a video when the user has not given a link, to check what a channel recently covered, or to pick a video worth reading; then call youtube_transcript on the one you chose.",
+      "Find YouTube videos: pass `query` to search all of YouTube, or `channel` to list what one channel has posted (newest first). Returns titles, links, channel, duration, upload date and view count - metadata only, never what was said in a video. Use it to find a video when the user has not given a link, to check what a channel recently covered, or to pick a video worth reading; then call youtube_transcript on the one you chose.",
     parameters: {
       type: "object",
       properties: {
@@ -73,7 +73,7 @@ export const YOUTUBE_COMMENTS_TOOL: ToolDef = {
   function: {
     name: "youtube_comments",
     description:
-      "Read the top 10 most-liked comments on a YouTube video (replies excluded). Use it when the user asks what people thought of a video, whether its claims are disputed, or for corrections and context the video itself does not carry. Comments are individual opinions, not facts and not a representative sample — attribute them to commenters, never present them as the consensus or as verified. This is the slowest tool available, so call it only when the reaction is what is actually being asked about.",
+      "Read the top 10 most-liked comments on a YouTube video (replies excluded). Use it when the user asks what people thought of a video, whether its claims are disputed, or for corrections and context the video itself does not carry. Comments are individual opinions, not facts and not a representative sample - attribute them to commenters, never present them as the consensus or as verified. This is the slowest tool available, so call it only when the reaction is what is actually being asked about.",
     parameters: {
       type: "object",
       properties: {

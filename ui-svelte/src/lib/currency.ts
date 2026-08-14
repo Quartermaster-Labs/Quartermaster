@@ -12,7 +12,7 @@ export const CONVERT_CURRENCY_TOOL: ToolDef = {
   function: {
     name: "convert_currency",
     description:
-      "Convert an amount between currencies at today's reference rate. Use it whenever a price you found is not in the currency the user buys in — never convert from memory, and always keep the price the page itself states.",
+      "Convert an amount between currencies at today's reference rate. Use it whenever a price you found is not in the currency the user buys in - never convert from memory, and always keep the price the page itself states.",
     parameters: {
       type: "object",
       properties: {

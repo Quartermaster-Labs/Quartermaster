@@ -360,7 +360,7 @@
                 {#if comp.variants.length > 1}
                   <select
                     bind:value={variantSel[comp.id]}
-                    title="Build flavour — auto-selected from your GPU"
+                    title="Build flavour - auto-selected from your GPU"
                     class="w-40 shrink-0 rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
                   >
                     {#each comp.variants.filter((v) => v.available) as v (v.id)}
@@ -374,7 +374,7 @@
                 <select
                   bind:value={versionSel[comp.id]}
                   onfocus={() => loadReleases(comp)}
-                  title="Version — leave on latest unless you need a specific build"
+                  title="Version - leave on latest unless you need a specific build"
                   class="w-44 shrink-0 rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
                 >
                   <option value="">Latest release</option>
@@ -418,10 +418,10 @@
                 <div class="flex flex-wrap items-center gap-2 rounded border border-card-border bg-surface/60 px-2 py-1.5">
                   <span class="text-[0.7rem] text-txtsecondary">
                     {#if comp.defaultOwner}
-                      Installed, but not in use — <span class="text-txtmain font-mono">{comp.defaultOwner}</span> is the
+                      Installed, but not in use - <span class="text-txtmain font-mono">{comp.defaultOwner}</span> is the
                       default for this group.
                     {:else}
-                      Installed, but not in use — no default is set for this group.
+                      Installed, but not in use - no default is set for this group.
                     {/if}
                   </span>
                   <button

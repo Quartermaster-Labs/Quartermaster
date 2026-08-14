@@ -410,6 +410,11 @@ func main() {
 			Reload:       reload,
 		}
 		initialSrv.SetAutogenAdmin(autogenAdmin)
+		if playground != nil {
+			// Lets the turn runner find the backend registry (and with it the CPU
+			// title model) without reaching into the per-reload Server.
+			playground.GeneratePath = *flagGenerate
+		}
 	}
 
 	watcherCtx, watcherCancel := context.WithCancel(context.Background())

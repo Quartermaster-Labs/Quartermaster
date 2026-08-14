@@ -40,7 +40,7 @@
         <div
           class="h-full {seg.class} transition-all duration-500"
           style="width: {segPct(seg.mb)}%"
-          title="{seg.label}: {gb(seg.mb)} GB — {seg.detail ?? ''}"
+          title="{seg.label}: {gb(seg.mb)} GB - {seg.detail ?? ''}"
         ></div>
       {/each}
     {:else}

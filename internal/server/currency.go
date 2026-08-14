@@ -220,7 +220,7 @@ func fxOpenERAPI(ctx context.Context, from, to string) (*fxQuote, error) {
 // the user pays the printed one.
 func formatFxRate(amount float64, q *fxQuote) string {
 	return fmt.Sprintf(
-		"%s %s = %s %s\nRate: 1 %s = %s %s (%s, as of %s).\nThis is a reference rate, not a checkout rate — cards and shops add their own margin. Always show the price the page actually states as well as the converted figure.",
+		"%s %s = %s %s\nRate: 1 %s = %s %s (%s, as of %s).\nThis is a reference rate, not a checkout rate - cards and shops add their own margin. Always show the price the page actually states as well as the converted figure.",
 		trimNum(amount), q.From, trimNum(amount*q.Rate), q.To,
 		q.From, trimNum(q.Rate), q.To, q.Source, q.Date,
 	)

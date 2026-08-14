@@ -58,6 +58,19 @@ var (
 	// Loaded via tts-server --codec alongside the talker, never served as its own
 	// model. "hz" scopes the tokenizer match so a normal model file can't trip it.
 	ttsCodecFileRe = regexp.MustCompile(`(?i)tokenizer-?\d+hz|codec`)
+	// Diffusion text encoders / VAEs (T5-XXL, UMT5, CLIP-L/G, standalone VAE).
+	// These are COMPONENTS of an image model — wired in via settings.encoders
+	// (see image.go resolveComponents), never served on their own. Without this
+	// they parse as ordinary ggufs and get emitted as llama-server "LLM" rows
+	// (a t5 encoder has no chat template and no decoder; it can't generate).
+	// Narrow on purpose: an "-encoder" tail or a known encoder/VAE stem only, so
+	// a real seq2seq LLM (flan-t5-*) is untouched.
+	encoderFileRe = regexp.MustCompile(`(?i)(^|[-_.])(t5xxl|t5[-_]?v1[-_.]?1|umt5|clip[-_]?[lg]|text[-_]?encoder|ae|vae|taesd\w*)([-_.]|\.gguf$)|[-_.]encoder([-_.]|\.gguf$)`)
+	// GGUF architectures that are encoder-only diffusion components. "clip" is
+	// handled separately (it doubles as a vision projector and IS paired).
+	// Plain "t5" is deliberately absent: flan-t5 is a real seq2seq LLM
+	// llama.cpp serves; only the encoder-only archs are components.
+	encoderArch = map[string]bool{"t5encoder": true, "umt5": true}
 	// SAM (Segment Anything) model files, served by sam3_server. These are raw
 	// *.ggml (not gguf), so they're matched by name — ".ggml" alone is too generic
 	// (other ggml projects use it). Add new families here (mobilesam, etc.).
@@ -163,6 +176,12 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 			}
 			return nil
 		}
+		// Diffusion text encoder / VAE: an image-model component, not a model.
+		// Dropped outright (unlike mmproj/codec sidecars, which are paired) — the
+		// image emitter resolves these from settings.encoders by explicit path.
+		if encoderFileRe.MatchString(name) {
+			return nil
+		}
 		for _, p := range skipPatterns {
 			if ok, _ := filepath.Match(p, name); ok {
 				return nil
@@ -189,12 +208,19 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 		// cached read is reused by the later VRAM planning pass, so it's not an
 		// extra parse. A parse error falls through and the file is treated as a
 		// normal model candidate.
-		if meta, e := ReadGgufMetadataCached(path); e == nil && meta.Architecture == "clip" {
-			mmprojByDir[filepath.Dir(path)] = mmprojSidecar{
-				path:   path,
-				sizeGB: round(float64(fi.Size())/gib, 2),
+		if meta, e := ReadGgufMetadataCached(path); e == nil {
+			if meta.Architecture == "clip" {
+				mmprojByDir[filepath.Dir(path)] = mmprojSidecar{
+					path:   path,
+					sizeGB: round(float64(fi.Size())/gib, 2),
+				}
+				return nil
 			}
-			return nil
+			// Encoder-only arch (t5encoder/umt5): a diffusion text encoder that
+			// escaped the filename rule. No decoder → nothing to serve.
+			if encoderArch[strings.ToLower(meta.Architecture)] {
+				return nil
+			}
 		}
 
 		quant := quantFromName(name)

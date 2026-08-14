@@ -1244,7 +1244,7 @@
           </div>
           {#if isVllm}
             <div class="rounded border border-card-border p-3 space-y-2">
-              <p class="text-xs text-txtsecondary">vLLM backend — llama.cpp knobs below are ignored. Context sets <span class="font-mono">--max-model-len</span>; blank sizes it against the VRAM budget.</p>
+              <p class="text-xs text-txtsecondary">vLLM backend - llama.cpp knobs below are ignored. Context sets <span class="font-mono">--max-model-len</span>; blank sizes it against the VRAM budget.</p>
               <label class="flex items-center gap-2 text-sm">
                 <span>GPU memory utilization</span>
                 {@render hint("--gpu-memory-utilization: fraction of each GPU vLLM may fill (weights + KV + activations). Blank derives it from the VRAM budget and the card's size.")}
@@ -1257,7 +1257,7 @@
               </label>
               <label class="flex items-center gap-2 text-sm">
                 <span>Tokenizer</span>
-                {@render hint("--tokenizer: the base model's tokenizer (Hugging Face repo id or a local path). vLLM recommends this over the one converted out of the GGUF, which is slow and unstable. Blank omits the flag — it is never guessed, since the discovered model only knows its local folder name.")}
+                {@render hint("--tokenizer: the base model's tokenizer (Hugging Face repo id or a local path). vLLM recommends this over the one converted out of the GGUF, which is slow and unstable. Blank omits the flag - it is never guessed, since the discovered model only knows its local folder name.")}
                 <input type="text" bind:value={vllmTokenizer} class="cfg-input flex-1 ml-auto" placeholder="Qwen/Qwen3-8B" />
               </label>
             </div>
@@ -1428,7 +1428,7 @@
               <input type="checkbox" checked={vaeOnCpu === "on"} onchange={(e) => (vaeOnCpu = (e.currentTarget as HTMLInputElement).checked ? "on" : "")} />
               <span class="text-txtsecondary flex items-center gap-1">
                 VAE on CPU
-                {@render hint("--backend vae=cpu. Force the VAE decoder onto the CPU (off by default — it decodes on the GPU). Turn on if the GPU VAE outputs a blank/white image (a bf16 VAE whitens on some backends); costs decode speed.")}
+                {@render hint("--backend vae=cpu. Force the VAE decoder onto the CPU (off by default - it decodes on the GPU). Turn on if the GPU VAE outputs a blank/white image (a bf16 VAE whitens on some backends); costs decode speed.")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
@@ -1611,7 +1611,7 @@
         </details>
         {:else if samMode}
         <!-- SAM segmentation (sam3.cpp tts-server sibling: sam3_server) form. No
-             KV/ctx/spec/estimate — SAM models are tiny and fully resident. Box/
+             KV/ctx/spec/estimate - SAM models are tiny and fully resident. Box/
              point prompts are per-request (/v1/segment), not launch flags. CPU vs
              GPU placement is auto (VRAM-aware, coexists with the loaded model);
              pin it with extraArgs --no-gpu. Only launch knobs are the backend pick
@@ -1619,7 +1619,7 @@
         <div class="grid grid-cols-2 gap-3">
           <p class="col-span-2 text-xs text-txtsecondary">
             Served by <code>sam3_server</code> (<code>POST /v1/segment</code>) with box / point
-            prompts. Runs alongside the loaded model — auto-placed on CPU when VRAM is tight
+            prompts. Runs alongside the loaded model - auto-placed on CPU when VRAM is tight
             (pin with <code>--no-gpu</code> below). Used from the image playground's AI-select tool.
           </p>
           <label class="flex flex-col gap-1 text-sm col-span-2">
@@ -1654,7 +1654,7 @@
         </details>
         {:else}
         <!-- Entry selector: Default is a pinned, non-deletable entry; variants
-             follow. Editing one shows its fields below — everything a variant
+             follow. Editing one shows its fields below - everything a variant
              doesn't set inherits from Default. -->
         <div class="flex flex-wrap items-center gap-1.5">
           <button
@@ -1791,7 +1791,7 @@
             </div>
             {#if ctxOverNative}
               <span class="text-xs text-warning">
-                Past the trained {fmtCtx(nativeCtx)} — YaRN scaling at {(Math.ceil((ctx / nativeCtx) * 2) / 2).toFixed(1)}x. Long-range recall degrades; verify before relying on it.
+                Past the trained {fmtCtx(nativeCtx)} - YaRN scaling at {(Math.ceil((ctx / nativeCtx) * 2) / 2).toFixed(1)}x. Long-range recall degrades; verify before relying on it.
               </span>
             {/if}
           </label>
@@ -2111,7 +2111,7 @@
               <input type="text" bind:value={adv.overrideTensor} class="cfg-input flex-1 ml-auto font-mono" placeholder="regex=BUFFER" />
             </label>
             <label class="flex items-center gap-2 col-span-2">
-              <span class="text-txtsecondary flex items-center gap-1 shrink-0">Chat template file {@render hint("--chat-template-file. Path to a .jinja chat template replacing the gguf's baked-in one — use a vendor-fixed template (e.g. Gemma, Qwen) without rebuilding the gguf. Empty = the baked-in template (or quartermaster's built-in Qwen 3.5/3.6 fix).")}</span>
+              <span class="text-txtsecondary flex items-center gap-1 shrink-0">Chat template file {@render hint("--chat-template-file. Path to a .jinja chat template replacing the gguf's baked-in one - use a vendor-fixed template (e.g. Gemma, Qwen) without rebuilding the gguf. Empty = the baked-in template (or quartermaster's built-in Qwen 3.5/3.6 fix).")}</span>
               <input type="text" bind:value={adv.chatTemplateFile} class="cfg-input flex-1 ml-auto font-mono" placeholder="D:/LLM/Models/templates/gemma4.jinja" spellcheck="false" />
               <button
                 type="button" title="Browse for a .jinja template" aria-label="Browse for a chat template file"
@@ -2138,7 +2138,7 @@
           </div>
         </details>
 
-        <!-- Launch command (editable, two-way) — collapsed at bottom. Form edits
+        <!-- Launch command (editable, two-way) - collapsed at bottom. Form edits
              re-render it; editing it (then blurring) folds known flags back into
              the form and keeps unknown ones as passthrough. -->
         <details class="group">
@@ -2167,7 +2167,7 @@
           </p>
           {#if selectedIsDefault}
             <p class="text-xs text-warning bg-warning/10 border border-warning/30 rounded px-2 py-1.5">
-              ⚠ Fleet-wide variant — shared by <strong>every</strong> model. Saving rewrites it globally, not just for {config.id}.
+              ⚠ Fleet-wide variant - shared by <strong>every</strong> model. Saving rewrites it globally, not just for {config.id}.
             </p>
           {/if}
           <div class="grid grid-cols-2 gap-3">

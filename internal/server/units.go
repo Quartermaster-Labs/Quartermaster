@@ -208,7 +208,7 @@ func convertUnit(amount float64, from, to string) (float64, string, string, erro
 		return 0, "", "", fmt.Errorf("unknown unit %q. Known: %s", to, knownUnitHint())
 	}
 	if df.dim != dt.dim {
-		return 0, "", "", fmt.Errorf("%s is %s and %s is %s — those do not convert into each other", df.name, df.dim, dt.name, dt.dim)
+		return 0, "", "", fmt.Errorf("%s is %s and %s is %s - those do not convert into each other", df.name, df.dim, dt.name, dt.dim)
 	}
 	return amount * df.factor / dt.factor, df.name, dt.name, nil
 }

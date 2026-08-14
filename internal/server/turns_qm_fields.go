@@ -110,7 +110,7 @@ var qmFieldDocs = map[string]string{
 	// Image (sd-server)
 	"vaePath":        "external VAE file",
 	"offloadToCpu":   "sd-server component offload spec",
-	"diffusionFa":    "'on' / 'off' — diffusion flash-attention",
+	"diffusionFa":    "'on' / 'off' - diffusion flash-attention",
 	"defaultSteps":   "default sampling steps for this image model",
 	"defaultCfg":     "default CFG scale",
 	"defaultSampler": "default sampler name",
@@ -143,21 +143,21 @@ func qmFieldCatalog() string {
 	b.WriteString("target='settings' (global):\n")
 	writeQmSpecs(&b, qmSettingsFieldSpecs())
 
-	b.WriteString("\ntarget=<model id> (per-model override — the cogwheel's fields):\n")
+	b.WriteString("\ntarget=<model id> (per-model override - the cogwheel's fields):\n")
 	writeQmSpecs(&b, qmModelFieldSpecs())
 
 	b.WriteString("\ntarget='<model id>#<variant name>' (one named variant of that model;\n")
 	b.WriteString("zero/empty means 'inherit the model-wide value', and the variant must exist):\n")
 	writeQmSpecs(&b, qmVariantFieldSpecs())
 
-	b.WriteString("\ntarget='playground' has its own field list — see the tool description.\n")
+	b.WriteString("\ntarget='playground' has its own field list - see the tool description.\n")
 	return b.String()
 }
 
 func writeQmSpecs(b *strings.Builder, specs []qmFieldSpec) {
 	for _, s := range specs {
 		if s.Doc != "" {
-			fmt.Fprintf(b, "• %s (%s) — %s\n", s.Name, s.Type, s.Doc)
+			fmt.Fprintf(b, "• %s (%s) - %s\n", s.Name, s.Type, s.Doc)
 		} else {
 			fmt.Fprintf(b, "• %s (%s)\n", s.Name, s.Type)
 		}
@@ -244,7 +244,7 @@ func qmCheckType(spec qmFieldSpec, v any) string {
 			}
 		}
 	case "object[]":
-		return "cannot be set here — edit one variant at a time with target '<model id>#<variant name>'"
+		return "cannot be set here - edit one variant at a time with target '<model id>#<variant name>'"
 	}
 	return ""
 }

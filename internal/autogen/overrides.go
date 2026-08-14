@@ -676,7 +676,7 @@ func (s *Settings) applyDefaults() {
 	// Slot KV-cache persistence is OFF by default (the master switch); the
 	// server-default knobs below are still pre-filled so the dashboard shows real
 	// numbers, not 0. Per-model SlotCache defaults ON (nil), so flipping the
-	// single dashboard switch enables persistence for every model at once — a
+	// single dashboard switch enables persistence for every model at once - a
 	// model opts OUT by setting slotCache:false. Enable's zero value (false) is
 	// the default; turn it on via the dashboard (writes enable:true to the
 	// sidecar, which overlays this).
@@ -816,7 +816,7 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 }
 
 // LoadBaseSettings returns the generate file's settings with defaults applied
-// but WITHOUT the UI sidecar patch — i.e. the values a dashboard "reset to
+// but WITHOUT the UI sidecar patch - i.e. the values a dashboard "reset to
 // default" reverts to.
 func LoadBaseSettings(path, modelsDirOverride string) (Settings, error) {
 	data, err := os.ReadFile(path)

@@ -33,6 +33,16 @@ export interface Model {
   // expose that group's catalog. The Models page sections by these.
   group?: string;
   listeners?: string[];
+  // Configured context size (-c), 0 when the backend takes no such flag.
+  ctx?: number;
+  // Weight type parsed from the gguf filename ("Q4_K_M") and the file's on-disk
+  // size in GiB. The Models table groups a model's quants by these.
+  quant?: string;
+  sizeGB?: number;
+  // Autogen sizer's predicted footprint. estRamGB is non-zero only when part of
+  // the weights is served from system memory (partial offload).
+  estVramGB?: number;
+  estRamGB?: number;
   // Actual argv the process spawned with, set only while running. Differs from
   // the config command after a live settings edit (new args apply on next load)
   // or a spawn-time offload rewrite — so the UI shows what's REALLY loaded.
@@ -236,6 +246,12 @@ export interface ChatMessage {
   // server splices reasoning that arrives after the answer starts into the
   // content — see turns.go). Zipped onto the think boxes the UI tokenizes out.
   thinkMs?: number[];
+  // One-line gists of the reasoning, from the CPU title model (server-side, end
+  // of turn — see internal/server/titlegen.go). reasoningTitle covers the
+  // reasoning_content field; thinkTitles is one per inline <think> span, same
+  // order as thinkMs. Absent = the UI falls back to its local thinkSummary().
+  reasoningTitle?: string;
+  thinkTitles?: string[];
   // Total wall time of the assistant turn (ms), shown in the message footer.
   genTimeMs?: number;
   tool_calls?: ToolCall[];

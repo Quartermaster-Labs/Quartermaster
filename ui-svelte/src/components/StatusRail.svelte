@@ -50,7 +50,7 @@
         <button
           class="group flex items-center gap-1.5 min-w-0 transition-colors cursor-pointer"
           onclick={() => openInModels(m)}
-          title="{m.id} — open in Models"
+          title="{m.id} - open in Models"
         >
           <span class="inline-block w-2 h-2 rounded-full shrink-0 {dotClass(m.state)}"></span>
           <span class="text-[0.6rem] uppercase tracking-widest text-txtsecondary truncate min-w-0 max-w-[14rem] group-hover:text-txtmain">{prettifyModelName(m.name || m.id)}</span>
@@ -79,7 +79,7 @@
         {($latestGpu.mem_used_mb / 1024).toFixed(1)}/{($latestGpu.mem_total_mb / 1024).toFixed(1)}G
       </span>
     {:else}
-      <span class="text-txtsecondary">—</span>
+      <span class="text-txtsecondary">-</span>
     {/if}
   </div>
 

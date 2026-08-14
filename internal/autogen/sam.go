@@ -29,7 +29,7 @@ func samFallbackExe(s Settings) string {
 //
 // Placement: always CPU. The spawn guard (LiveOffloadArgs) appends --no-gpu for
 // every .ggml because the Vulkan SAM backend is numerically broken on this
-// hardware (RX 7900 XTX) — both text (PCS) and box/point (PVS) inference return
+// hardware (RX 7900 XTX) - both text (PCS) and box/point (PVS) inference return
 // garbage, while CPU is correct. Not baked here (the guard owns placement); an
 // explicit extraArgs "--no-gpu" is a harmless no-op.
 func samCmdLines(s Settings, row GgufRow, ov *Override) []string {
@@ -68,7 +68,7 @@ func emitSamModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, nam
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
 	// No estVramGB: SAM is pinned to the CPU here (LiveOffloadArgs appends
-	// --no-gpu to every .ggml), so it costs no VRAM budget — consistent with its
+	// --no-gpu to every .ggml), so it costs no VRAM budget - consistent with its
 	// persistent, never-evicting group.
 	b.WriteString("    checkEndpoint: /health\n")
 	if ov != nil && ov.Unlisted {

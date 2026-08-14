@@ -209,7 +209,7 @@ func (w *Monitor) OnLogData(callback func(data []byte)) context.CancelFunc {
 func (w *Monitor) broadcastLoop() {
 	for msg := range w.broadcastCh {
 		if dropped := w.dropped.Swap(0); dropped > 0 {
-			notice := fmt.Appendf(nil, "\n— %d bytes dropped —\n", dropped)
+			notice := fmt.Appendf(nil, "\n- %d bytes dropped -\n", dropped)
 			event.Publish(w.eventbus, DataEvent{Data: notice})
 		}
 		event.Publish(w.eventbus, DataEvent{Data: msg})

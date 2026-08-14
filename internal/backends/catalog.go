@@ -111,7 +111,7 @@ var catalog = []Component{
 	{
 		ID:    "llama-server",
 		Name:  "llama.cpp",
-		Blurb: "llama-server — text, vision and embedding GGUFs.",
+		Blurb: "llama-server - text, vision and embedding GGUFs.",
 		Repo:  "ggml-org/llama.cpp",
 		Kind:  "llama",
 		Exe:   map[string]string{osWin: "llama-server.exe", "default": "llama-server"},
@@ -165,18 +165,18 @@ var catalog = []Component{
 		// ROCm build is source- or container-only.
 		ID:     "vllm",
 		Name:   "vLLM",
-		Blurb:  "vllm serve — high-throughput GPU serving for full-precision and AWQ/GPTQ models.",
+		Blurb:  "vllm serve - high-throughput GPU serving for full-precision and AWQ/GPTQ models.",
 		Repo:   "vllm-project/vllm",
 		Kind:   "vllm",
 		Manual: true,
-		Setup: "Linux or WSL2 only — there is no Windows build. Install it into a Python 3.12 environment " +
+		Setup: "Linux or WSL2 only - there is no Windows build. Install it into a Python 3.12 environment " +
 			"(`uv pip install vllm`, NVIDIA) or use the ROCm container on AMD, then add the `vllm` " +
 			"executable as a backend path below. Quartermaster generates the serve command for it either way.",
 	},
 	{
 		ID:    "sd-server",
 		Name:  "stable-diffusion.cpp",
-		Blurb: "sd-server — diffusion models (SD / SDXL / Flux / Qwen-Image).",
+		Blurb: "sd-server - diffusion models (SD / SDXL / Flux / Qwen-Image).",
 		Repo:  "leejet/stable-diffusion.cpp",
 		Kind:  "sd",
 		Exe:   map[string]string{osWin: "sd-server.exe", "default": "sd-server"},
@@ -208,7 +208,7 @@ var catalog = []Component{
 				},
 			},
 			{
-				ID: "cpu", Label: "CPU", Note: "No GPU acceleration — very slow for diffusion.",
+				ID: "cpu", Label: "CPU", Note: "No GPU acceleration - very slow for diffusion.",
 				Patterns: map[string][]string{
 					osWin:   {`(?i)^sd-.*-bin-win-cpu-x64\.zip$`, `(?i)^sd-.*-bin-win-avx2-x64\.zip$`, `(?i)^sd-.*avx2.*\.zip$`},
 					osLinux: {`(?i)^sd-.*bin-linux-ubuntu-[0-9.]+-x86_64\.zip$`, `(?i)^sd-.*ubuntu.*(avx2|cpu).*\.zip$`},
@@ -220,7 +220,7 @@ var catalog = []Component{
 	{
 		ID:    "upscaler",
 		Name:  "Real-ESRGAN (ncnn)",
-		Blurb: "realesrgan-ncnn-vulkan — the exec-per-request image upscaler.",
+		Blurb: "realesrgan-ncnn-vulkan - the exec-per-request image upscaler.",
 		Repo:  "xinntao/Real-ESRGAN",
 		Kind:  "upscale",
 		Exe:   map[string]string{osWin: "realesrgan-ncnn-vulkan.exe", "default": "realesrgan-ncnn-vulkan"},

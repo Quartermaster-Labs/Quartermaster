@@ -27,9 +27,16 @@ export function cleanTitle(text: string): string {
   return line.replace(/^["']|["']$/g, "").slice(0, 48);
 }
 
-// generateTitle asks the model for a short title (~4 words) describing the
-// conversation, derived from the opening exchange. Returns "" on any failure so
-// callers can fall back to the first-message heuristic.
+// generateTitle names the conversation from its opening exchange, using the CHAT
+// model. Returns "" on any failure so callers can fall back to the first-message
+// heuristic.
+//
+// The vendored 80M CPU title model (POST /api/chats/title, internal/server/
+// titlegen.go) was tried here first and gave poor chat titles: at that size it
+// tail-copies the opening request instead of naming the topic. It still titles
+// reasoning boxes, where it only ever summarizes prose handed to it. Naming a
+// chat costs the chat model one short round trip and it is warm by definition —
+// the title is generated right after the first answer streamed from it.
 export async function generateTitle(
   model: string,
   messages: ChatMessage[],
@@ -40,6 +47,7 @@ export async function generateTitle(
     .slice(0, 2)
     .map((m) => ({ role: m.role, content: m.content }));
   if (parts.length === 0) return "";
+
   parts.push({
     role: "user",
     content:

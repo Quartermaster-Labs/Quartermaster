@@ -482,7 +482,7 @@ func (s *Server) handleAPIBackendUninstall(w http.ResponseWriter, r *http.Reques
 	installed := s.backends.Installed(body.Component)
 	if active := s.activeBuild(body.Component, installed); active != nil &&
 		active.Version == body.Version && active.Variant == body.Variant {
-		shared.SendResponse(w, r, http.StatusConflict, "that build is in use — activate another version first")
+		shared.SendResponse(w, r, http.StatusConflict, "that build is in use - activate another version first")
 		return
 	}
 	if err := s.backends.Uninstall(body.Component, body.Version, body.Variant); err != nil {

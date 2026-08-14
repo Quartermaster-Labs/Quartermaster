@@ -469,7 +469,7 @@ func formatYouTubeVideos(what string, vids []ytVideo, numbers []int, newestFirst
 		order = "newest first"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "YouTube results for %s — %s, fetched %s.\n", what, order, searchDate())
+	fmt.Fprintf(&b, "YouTube results for %s - %s, fetched %s.\n", what, order, searchDate())
 	if !dated {
 		b.WriteString("Upload dates are not available in this listing, so do not state or imply when any of these was published.\n")
 	}
@@ -511,7 +511,7 @@ func formatYouTubeVideos(what string, vids []ytVideo, numbers []int, newestFirst
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("These are titles and metadata only — nothing here tells you what was actually said in a video. Call youtube_transcript on one before summarising or quoting it.")
+	b.WriteString("These are titles and metadata only - nothing here tells you what was actually said in a video. Call youtube_transcript on one before summarising or quoting it.")
 	return b.String()
 }
 
@@ -528,7 +528,7 @@ func formatYouTubeComments(cs []ytComment, meta ytTranscript, citation int) stri
 		fmt.Fprintf(&b, " on %q", meta.Title)
 	}
 	b.WriteString("\nhttps://www.youtube.com/watch?v=" + meta.ID + "\n")
-	fmt.Fprintf(&b, "The %d most-liked top-level comments, replies excluded. These are individual opinions ranked by likes — not a representative sample, not fact-checked, and not the video's content. Quote them as what a commenter said, never as what is true or as \"the consensus\".\n\n", len(cs))
+	fmt.Fprintf(&b, "The %d most-liked top-level comments, replies excluded. These are individual opinions ranked by likes - not a representative sample, not fact-checked, and not the video's content. Quote them as what a commenter said, never as what is true or as \"the consensus\".\n\n", len(cs))
 	for i, c := range cs {
 		author := c.Author
 		if author == "" {

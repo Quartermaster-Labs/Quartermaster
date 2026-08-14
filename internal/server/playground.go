@@ -38,6 +38,10 @@ type Playground struct {
 	// where the server-side turn runner POSTs /v1/chat/completions so template /
 	// canon / routing / slotcache all apply. Set at startup from the main listen addr.
 	SelfBase string
+	// GeneratePath is the -generate control file ("" when not generating). The
+	// turn runner reads the backend registry beside it to find the CPU title
+	// model used for reasoning-box titles (titlegen.go). Set at startup only.
+	GeneratePath string
 
 	mu sync.Mutex
 

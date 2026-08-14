@@ -88,7 +88,7 @@
         <div class="text-xs text-txtsecondary">Tokens reused (confirmed)</div>
         <div class="text-2xl font-mono text-green-500">{fmtNum(counters?.cachedTokensSeen)}</div>
         <div class="text-xs text-txtsecondary mt-0.5">
-          cached_tokens from upstream — actual prefill skipped
+          cached_tokens from upstream - actual prefill skipped
         </div>
       </div>
       <div class="card p-3">

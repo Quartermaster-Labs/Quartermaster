@@ -383,7 +383,7 @@
         <label class="flex flex-col gap-1">
           <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
             Headroom (GB)
-            {@render hint("Safety margin subtracted from Target VRAM before sizing — covers CUDA context, compute buffers and fragmentation, NOT current desktop/game usage (auto-vram already accounts for that at startup). Raise it if you hit OOM right after load.")}
+            {@render hint("Safety margin subtracted from Target VRAM before sizing - covers CUDA context, compute buffers and fragmentation, NOT current desktop/game usage (auto-vram already accounts for that at startup). Raise it if you hit OOM right after load.")}
           </span>
           <input
             type="number" min="0" step="0.25" max={gpuMaxGb || undefined} bind:value={tHead} onblur={clampSettingsForm}
@@ -433,7 +433,7 @@
       </div>
 
       {#if settingsOverCapacity}
-        <p class="mt-2 font-mono text-[0.65rem] text-warning">⚠ Value exceeds installed hardware — will be clamped on save.</p>
+        <p class="mt-2 font-mono text-[0.65rem] text-warning">⚠ Value exceeds installed hardware - will be clamped on save.</p>
       {/if}
 
       <div class="mt-3 flex items-center justify-between gap-3">
@@ -456,7 +456,7 @@
       <div>
         <div class="flex items-center gap-2 mb-3">
           <h6 class="!pb-0">Startup</h6>
-          {@render hint("Launch quartermaster in the system tray when you log in to Windows. All quartermaster installs on this machine share ONE startup entry, so only one can start with the system — if another install owns it, take it over from here.")}
+          {@render hint("Launch quartermaster in the system tray when you log in to Windows. All quartermaster installs on this machine share ONE startup entry, so only one can start with the system - if another install owns it, take it over from here.")}
         </div>
 
         <div class="rounded border border-card-border bg-surface p-3">
@@ -517,7 +517,7 @@
         <div class="flex items-center gap-2">
           <h6 class="!pb-0">KV-cache disk save</h6>
           <span class="status bg-warning/10 text-warning text-[0.6rem] !px-1.5 !py-0.5">Experimental</span>
-          {@render hint("Persist a long conversation's KV cache to disk so it survives being evicted from the live slot, and is restored instead of reprocessed. Master switch: each model opts in via its config editor (\"Save KV cache to disk\").\n\nExperimental: reliable for standard transformer models. Hybrid/recurrent models (e.g. Qwen3.5/3.6 GatedDeltaNet) don't yet restore across a process swap — pending upstream llama.cpp (#20819); they still get warm same-process reuse.")}
+          {@render hint("Persist a long conversation's KV cache to disk so it survives being evicted from the live slot, and is restored instead of reprocessed. Master switch: each model opts in via its config editor (\"Save KV cache to disk\").\n\nExperimental: reliable for standard transformer models. Hybrid/recurrent models (e.g. Qwen3.5/3.6 GatedDeltaNet) don't yet restore across a process swap - pending upstream llama.cpp (#20819); they still get warm same-process reuse.")}
         </div>
         <label class="flex items-center gap-2 text-sm">
           <input type="checkbox" bind:checked={slotEnable} />
@@ -549,7 +549,7 @@
         <label class="flex flex-col gap-1">
           <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
             Min context to save
-            {@render hint("Only persist a conversation whose live KV is at least this many tokens — cheap chats aren't worth the disk write.")}
+            {@render hint("Only persist a conversation whose live KV is at least this many tokens - cheap chats aren't worth the disk write.")}
           </span>
           <input
             type="number" min="0" step="1000" bind:value={slotMinTokens} disabled={!slotEnable}
@@ -601,7 +601,7 @@
 
       <div class="flex items-baseline gap-2 mb-1">
         <h6 class="!pb-0">Backends</h6>
-        {@render hint("Inference server binaries Quartermaster can spawn, grouped by the kind of model they serve. On AMD/Intel GPUs point a row at a Vulkan (or ROCm/HIP) build — a CUDA build silently falls back to CPU. The ★ entry of a group is the auto-pick; a model can be pinned to any other entry of its group from its config editor.")}
+        {@render hint("Inference server binaries Quartermaster can spawn, grouped by the kind of model they serve. On AMD/Intel GPUs point a row at a Vulkan (or ROCm/HIP) build - a CUDA build silently falls back to CPU. The ★ entry of a group is the auto-pick; a model can be pinned to any other entry of its group from its config editor.")}
       </div>
       <p class="text-[0.7rem] text-txtsecondary mb-4">
         Blank groups fall back to the built-in defaults (llama-server on PATH, sd/tts as siblings).
@@ -638,7 +638,7 @@
                     {#if g.cls.engines.length > 1}
                       <select
                         bind:value={be.kind} onchange={saveBackendsNow}
-                        title="Engine — decides which arg set is generated"
+                        title="Engine - decides which arg set is generated"
                         class="w-28 shrink-0 rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
                       >
                         {#each g.cls.engines as e (e.kind)}
@@ -656,7 +656,7 @@
                     <input
                       type="text" bind:value={be.path} placeholder="path to executable" onblur={saveBackendsNow}
                       readonly={be.managed}
-                      title={be.managed ? `Installed build ${be.version} (${be.variant}) — change it from Install a backend above` : ""}
+                      title={be.managed ? `Installed build ${be.version} (${be.variant}) - change it from Install a backend above` : ""}
                       class="flex-1 min-w-0 rounded border border-card-border bg-surface px-2 py-1 text-txtmain placeholder:text-txtsecondary/60 focus:outline-none focus:ring-2 focus:ring-primary {be.managed ? 'opacity-60' : ''}"
                     />
                     {#if be.managed}
@@ -683,7 +683,7 @@
 
       <div class="mt-3 flex items-center gap-3">
         <span class="font-mono text-[0.65rem] text-txtsecondary">
-          {savingBackends ? "Saving…" : backendsSaved ? "Saved — config regenerated; new paths apply on each model's next load." : "Autosaves on change; regenerates the config and hot-reloads."}
+          {savingBackends ? "Saving…" : backendsSaved ? "Saved - config regenerated; new paths apply on each model's next load." : "Autosaves on change; regenerates the config and hot-reloads."}
         </span>
         {#if backendsErr}
           <span class="font-mono text-[0.65rem] text-error">{backendsErr}</span>

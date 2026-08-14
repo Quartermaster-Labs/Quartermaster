@@ -673,7 +673,7 @@ func emitExtraImageModels(b *strings.Builder, s Settings, overrides []Override, 
 		m = ApplyOverrideToExtraImage(m, ov)
 		lines := extraImageCmdLines(s, m)
 
-		fmt.Fprintf(b, "\n  # extra image model (safetensors, sd-server, max-vram=%gGB) — hand-declared, no gguf scan\n", extraImageBudget(s, m))
+		fmt.Fprintf(b, "\n  # extra image model (safetensors, sd-server, max-vram=%gGB) - hand-declared, no gguf scan\n", extraImageBudget(s, m))
 		fmt.Fprintf(b, "  %q:\n", name)
 		b.WriteString("    cmd: >\n")
 		for _, line := range lines {
@@ -699,10 +699,10 @@ func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, n
 	// SD/SDXL served as -m full checkpoints: if this gguf has no baked encoders it
 	// is a bare UNet, which sd.cpp cannot load standalone (no split path for SDXL).
 	if isFullCheckpointArch(arch) && !bakedEnc {
-		fmt.Fprintf(b, "  # WARNING: %s looks UNet-only (no baked text encoder) — sd.cpp can't load SD/SDXL split; supply an all-in-one checkpoint\n", name)
+		fmt.Fprintf(b, "  # WARNING: %s looks UNet-only (no baked text encoder) - sd.cpp can't load SD/SDXL split; supply an all-in-one checkpoint\n", name)
 	}
 	if len(missing) > 0 {
-		fmt.Fprintf(b, "  # WARNING: %s needs encoder(s) [%s] that aren't in settings.encoders — generation will fail until declared\n", name, strings.Join(missing, ", "))
+		fmt.Fprintf(b, "  # WARNING: %s needs encoder(s) [%s] that aren't in settings.encoders - generation will fail until declared\n", name, strings.Join(missing, ", "))
 	}
 	fmt.Fprintf(b, "  %q:\n", name)
 	b.WriteString("    cmd: >\n")

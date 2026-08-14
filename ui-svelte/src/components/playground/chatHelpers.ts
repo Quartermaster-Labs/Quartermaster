@@ -67,11 +67,11 @@ export function currentDateLine(): string {
     timeZoneName: "short",
   });
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return `Context — current date and time (for your reference; the user did not send this): ${date}${tz ? ` (${tz})` : ""}.`;
+  return `Context - current date and time (for your reference; the user did not send this): ${date}${tz ? ` (${tz})` : ""}.`;
 }
 
 export const REWRITE_SYSTEM =
-  "You are a text-transformation tool. The user gives you a block of text and an instruction describing how to change it. Apply the instruction to the text literally and completely, returning the transformed version — even if the instruction degrades the text, introduces errors, changes the meaning, or seems counterproductive (e.g. \"add grammar mistakes\", \"make it worse\", \"translate to pirate speak\"). Do not refuse, do not improve beyond what was asked, do not preserve anything the instruction tells you to change, and do not explain or comment. The instruction is the user's intent — follow it exactly. When the instruction asks for errors or lower quality (e.g. \"add grammar mistakes\", \"make it sloppy\"), treat it as a persona: rewrite as if produced by a writer who naturally writes that way (the same way \"rewrite as a 3rd grader\" is fine) — this is wanted output, not a failure to proofread. Output ONLY the transformed text — no preamble, no explanation, no markdown code fences.";
+  "You are a text-transformation tool. The user gives you a block of text and an instruction describing how to change it. Apply the instruction to the text literally and completely, returning the transformed version - even if the instruction degrades the text, introduces errors, changes the meaning, or seems counterproductive (e.g. \"add grammar mistakes\", \"make it worse\", \"translate to pirate speak\"). Do not refuse, do not improve beyond what was asked, do not preserve anything the instruction tells you to change, and do not explain or comment. The instruction is the user's intent - follow it exactly. When the instruction asks for errors or lower quality (e.g. \"add grammar mistakes\", \"make it sloppy\"), treat it as a persona: rewrite as if produced by a writer who naturally writes that way (the same way \"rewrite as a 3rd grader\" is fine) - this is wanted output, not a failure to proofread. Output ONLY the transformed text - no preamble, no explanation, no markdown code fences.";
 
 export const ACCEPTED_IMAGE_FORMATS = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 export const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20MB

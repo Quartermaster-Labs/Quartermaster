@@ -122,7 +122,7 @@
       if (m) {
         bakeResult(m);
       } else {
-        error = "No object found — try another spot.";
+        error = "No object found - try another spot.";
       }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -309,7 +309,7 @@
     box: "Drag a box around the object.",
     point: "Click the object. Shift/right-click marks what to exclude.",
     lasso: "Click to trace an outline, then Close.",
-    text: "Name what to select — every match is masked.",
+    text: "Name what to select - every match is masked.",
   };
 </script>
 

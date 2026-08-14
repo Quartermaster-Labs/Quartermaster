@@ -5,7 +5,8 @@
   import { generateSpeech } from "../../lib/speechApi";
   import { effectiveTtsModel, chatTtsVoiceStore } from "../../stores/playground";
   import { getTextContent, getImageUrls } from "../../lib/types";
-  import { harmonyToThink } from "../../lib/reasoning";
+  import { splitFileBlocks } from "../../lib/attachments";
+  import { activityLabel, harmonyToThink, thinkSummary } from "../../lib/reasoning";
   import type { ContentPart, QmApproval } from "../../lib/types";
   import RewriteDiff from "./RewriteDiff.svelte";
   import YouTubeEmbed from "./YouTubeEmbed.svelte";
@@ -26,6 +27,10 @@
     reasoning_content?: string;
     reasoningTimeMs?: number;
     thinkMs?: number[];
+    // Reasoning gists from the server's CPU title model (titlegen.go). Absent
+    // (older messages, titling not installed) → the local thinkSummary heuristic.
+    reasoningTitle?: string;
+    thinkTitles?: string[];
     genTimeMs?: number;
     searches?: { query: string; results: string; kind?: "web" | "wiki" | "quartermaster" | "memory" | "youtube" | "youtube-search" | "youtube-comments" | "page" | "currency" | "time" | "calc" | "units" | "weather" | "feed"; at?: number; reasoningAt?: number; duringReasoning?: boolean; sources?: { title: string; url: string }[] }[];
     citations?: { n: number; title: string; url: string; wikiId?: string }[];
@@ -48,7 +53,7 @@
     onAskAnswer?: (text: string) => void;
   }
 
-  let { role, content, model = "", reasoning_content = "", reasoningTimeMs = 0, thinkMs, genTimeMs = 0, searches, citations, approval, onApprove, rewriteInstruction, rewriteOriginal, isStreaming = false, isReasoning = false, isSearching = false, busyLabel = "", modelReady = false, hasVisionInput = false, onEdit, onRegenerate, onReply, onAskAnswer }: Props = $props();
+  let { role, content, model = "", reasoning_content = "", reasoningTimeMs = 0, thinkMs, reasoningTitle: serverReasoningTitle = "", thinkTitles, genTimeMs = 0, searches, citations, approval, onApprove, rewriteInstruction, rewriteOriginal, isStreaming = false, isReasoning = false, isSearching = false, busyLabel = "", modelReady = false, hasVisionInput = false, onEdit, onRegenerate, onReply, onAskAnswer }: Props = $props();
 
   // Format a JSON diff value for the approval card (null → "auto", strings bare).
   function fmtVal(v: unknown): string {
@@ -85,8 +90,15 @@
   // that llama.cpp's `--reasoning-format auto` doesn't parse, so it leaks raw
   // into content. Rewrite non-final channels into <think> so the timeline picks
   // them up as reasoning boxes. No-op when no channel markup is present.
+  // Attached documents are inlined into the user's message as <file> blocks (the
+  // transcript is the storage — see lib/attachments.ts). Lift them back out so
+  // the bubble shows a chip instead of 40k characters of PDF, and so a link
+  // inside a document doesn't unfurl as if the user had pasted it.
+  let userFiles = $derived(role === "user" ? splitFileBlocks(textContent) : null);
   let displayContent = $derived(
-    role === "assistant" ? harmonyToThink(products ? products.cleaned : ask ? ask.cleaned : textContent) : textContent,
+    role === "assistant"
+      ? harmonyToThink(products ? products.cleaned : ask ? ask.cleaned : textContent)
+      : (userFiles?.rest ?? textContent),
   );
   let wordCount = $derived(stripThinking(displayContent).trim().split(/\s+/).filter(Boolean).length);
   // YouTube links anywhere in the message get a Discord-style card underneath.
@@ -95,7 +107,11 @@
   let ytIds = $derived(extractYouTubeIds(stripThinking(displayContent)));
   let imageUrls = $derived(getImageUrls(content));
   let hasImages = $derived(imageUrls.length > 0);
-  let canEdit = $derived(onEdit !== undefined && !hasImages);
+  // Editing rewrites the whole message string; with attachments that would put
+  // the raw document text in the textarea (or drop it on save), so it is off for
+  // those messages exactly as it already is for images.
+  let canEdit = $derived(onEdit !== undefined && !hasImages && (userFiles?.files.length ?? 0) === 0);
+  let openFile = $state<string | null>(null);
 
   // The assistant turn is one string holding, in order: inline <think> blocks
   // (when the backend emits reasoning inline instead of in reasoning_content),
@@ -107,7 +123,7 @@
   type SubItem = { type: "text"; text: string } | { type: "search"; search: SearchHit };
   type Segment =
     | { kind: "text"; text: string; idx: number }
-    | { kind: "think"; items: SubItem[]; open: boolean; ms: number }
+    | { kind: "think"; items: SubItem[]; open: boolean; ms: number; title: string }
     | { kind: "search"; search: SearchHit };
 
   // Step 1: tokenize content into think / text parts (think tags anywhere, plus
@@ -115,20 +131,21 @@
   // body and its content offset so searches can be nested into it later.
   // Field-based reasoning_content has no inline tags → a single text part.
   let parts = $derived.by(() => {
-    const res: { kind: "text" | "think"; text: string; start: number; end: number; innerStart: number; open: boolean; ms: number }[] = [];
+    const res: { kind: "text" | "think"; text: string; start: number; end: number; innerStart: number; open: boolean; ms: number; title: string }[] = [];
     if (role !== "assistant") return res;
     const re = /<(think|thinking|reasoning)>([\s\S]*?)(<\/\1>|$)/gi;
     let last = 0;
-    let ti = 0; // think-span ordinal, indexes thinkMs (server records one entry per closed span)
+    let ti = 0; // think-span ordinal, indexes thinkMs/thinkTitles (server records one entry per closed span)
     let m: RegExpExecArray | null;
     while ((m = re.exec(displayContent))) {
-      if (m.index > last) res.push({ kind: "text", text: displayContent.slice(last, m.index), start: last, end: m.index, innerStart: last, open: false, ms: 0 });
+      if (m.index > last) res.push({ kind: "text", text: displayContent.slice(last, m.index), start: last, end: m.index, innerStart: last, open: false, ms: 0, title: "" });
       const closed = m[3] !== "";
-      res.push({ kind: "think", text: m[2], start: m.index, end: m.index + m[0].length, innerStart: m.index + m[1].length + 2, open: !closed, ms: thinkMs?.[ti++] ?? 0 });
+      res.push({ kind: "think", text: m[2], start: m.index, end: m.index + m[0].length, innerStart: m.index + m[1].length + 2, open: !closed, ms: thinkMs?.[ti] ?? 0, title: thinkTitles?.[ti] ?? "" });
+      ti++;
       last = m.index + m[0].length;
       if (!closed) break; // unclosed think runs to the end of the stream
     }
-    if (last < displayContent.length) res.push({ kind: "text", text: displayContent.slice(last), start: last, end: displayContent.length, innerStart: last, open: false, ms: 0 });
+    if (last < displayContent.length) res.push({ kind: "text", text: displayContent.slice(last), start: last, end: displayContent.length, innerStart: last, open: false, ms: 0, title: "" });
     return res;
   });
 
@@ -160,7 +177,7 @@
           cur = rel;
         }
         if (cur < inner.length) items.push({ type: "text", text: inner.slice(cur) });
-        out.push({ kind: "think", items, open: p.open, ms: p.ms });
+        out.push({ kind: "think", items, open: p.open, ms: p.ms, title: p.title });
         continue;
       }
       let cur = p.start;
@@ -190,6 +207,7 @@
           prev.items = [...prev.items, ...seg.items];
           prev.open = prev.open || seg.open;
           prev.ms += seg.ms; // coalesced rounds report their combined think time
+          if (!prev.title) prev.title = seg.title; // first round's gist names the merged box
         } else {
           merged.push(...pending, { ...seg, items: [...seg.items] });
         }
@@ -251,6 +269,27 @@
     if (cur < text.length) items.push({ type: "text", text: text.slice(cur) });
     return items;
   });
+
+  // One-line gist shown beside "Thought for Xs" on a collapsed box, so the
+  // header says something about the thought instead of only how long it took.
+  // The server's title model only answers once the turn is finished, so the
+  // local heuristic carries the box while it streams and the model title takes
+  // over when it lands.
+  let reasoningTitle = $derived(serverReasoningTitle || thinkSummary(reasoning_content));
+  function segTitle(items: SubItem[], server: string): string {
+    if (server) return server;
+    const first = items.find((i) => i.type === "text" && i.text.trim().length > 0);
+    return first && first.type === "text" ? thinkSummary(first.text) : "";
+  }
+
+  // "Thought for 2s" is the only true thing to say about a box that only thought.
+  // A box that ran tools did something more specific, and the turn's own tool
+  // records already say what — so the verb is read off them rather than asked of
+  // the title model, which cannot phrase an activity at 80M (see titlegen.go).
+  function boxActivity(items: SubItem[]): string {
+    return activityLabel(items.flatMap((i) => (i.type === "search" ? [i.search.kind ?? "web"] : [])));
+  }
+  let reasoningActivity = $derived(boxActivity(reasoningItems));
 
   // User open/close state for inline reasoning boxes, keyed by timeline index.
   // Absent = collapsed; nothing auto-opens. `seg.open` (span still streaming)
@@ -373,7 +412,7 @@
     replyY = Math.max(10, Math.min(el.clientHeight - 10, y));
   }
   // The ask wizard sits inside the assistant bubble, so the bubble's group-hover
-  // offered "reply to this message" while the cursor was on a form control —
+  // offered "reply to this message" while the cursor was on a form control -
   // answering the questions IS the reply. Suppressed while pointing at it.
   let overAsk = $state(false);
   let isEditing = $state(false);
@@ -683,7 +722,10 @@
             {:else if isReasoning}
               <span class="font-medium reason-shimmer-white thinking-dots">Thinking</span>
             {:else}
-              <span class="font-medium">{#if reasoningTimeMs > 0}Thought for {formatDuration(reasoningTimeMs)}{:else}Thought{/if}</span>
+              <span class="font-medium shrink-0">{#if reasoningActivity}{reasoningActivity}{:else if reasoningTimeMs > 0}Thought for {formatDuration(reasoningTimeMs)}{:else}Thought{/if}</span>
+              {#if reasoningTitle && !showReasoning}
+                <span class="opacity-60 truncate text-left min-w-0">· {reasoningTitle}</span>
+              {/if}
             {/if}
           </button>
           <div class="reveal {showReasoning ? 'open' : ''}">
@@ -737,7 +779,12 @@
                   {:else if seg.open}
                     <span class="font-medium reason-shimmer-white thinking-dots">Thinking</span>
                   {:else}
-                    <span class="font-medium">{#if seg.ms > 0}Thought for {formatDuration(seg.ms)}{:else}Thought{/if}</span>
+                    {@const title = isOpen ? "" : segTitle(seg.items, seg.title)}
+                    {@const act = boxActivity(seg.items)}
+                    <span class="font-medium shrink-0">{#if act}{act}{:else if seg.ms > 0}Thought for {formatDuration(seg.ms)}{:else}Thought{/if}</span>
+                    {#if title}
+                      <span class="opacity-60 truncate min-w-0">· {title}</span>
+                    {/if}
                   {/if}
                 </summary>
                 <div class="reveal">
@@ -933,9 +980,34 @@
             {/each}
           </div>
         {/if}
-        <div class="prose prose-sm prose-invert max-w-none chat-prose user-msg-prose pr-8" bind:this={textEl} use:codeBlockCopy>
-          {@html renderMarkdown(textContent)}
-        </div>
+        {#if userFiles && userFiles.files.length > 0}
+          <div class="mb-2 flex flex-col gap-1.5">
+            {#each userFiles.files as file, fi (fi)}
+              <div class="rounded-lg border border-white/20 bg-white/10 overflow-hidden">
+                <button
+                  class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[0.8125rem] hover:bg-white/10 transition-colors"
+                  onclick={() => (openFile = openFile === `${fi}` ? null : `${fi}`)}
+                  title={openFile === `${fi}` ? "Hide contents" : "Show contents"}
+                >
+                  <FileText class="w-3.5 h-3.5 shrink-0" />
+                  <span class="truncate">{file.name}</span>
+                  {#if file.note}<span class="shrink-0 opacity-70">· {file.note}</span>{/if}
+                  <ChevronRight
+                    class="w-3.5 h-3.5 shrink-0 ml-auto transition-transform {openFile === `${fi}` ? 'rotate-90' : ''}"
+                  />
+                </button>
+                {#if openFile === `${fi}`}
+                  <pre class="max-h-72 overflow-auto px-2.5 py-2 text-[0.75rem] leading-relaxed whitespace-pre-wrap break-words border-t border-white/20 pretty-scroll">{file.text}</pre>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
+        {#if displayContent}
+          <div class="prose prose-sm prose-invert max-w-none chat-prose user-msg-prose pr-8" bind:this={textEl} use:codeBlockCopy>
+            {@html renderMarkdown(displayContent)}
+          </div>
+        {/if}
         {#each ytIds as vid (vid)}
           <YouTubeEmbed id={vid} onDark />
         {/each}
@@ -953,8 +1025,10 @@
   </div>
   <!-- The ONE Sources section for the whole message: every answer-phase tool call
        (the in-`Thought` ones stay nested in their reasoning trail) followed by the
-       deduped source pills. Both used to render their own "Sources" header. -->
-  {#if allSources.length > 0 || answerSearches.length > 0}
+       deduped source pills. Both used to render their own "Sources" header.
+       Held back until the turn finishes: mid-stream it sits pinned under the
+       growing answer, and its count/contents keep shifting as tool rounds land. -->
+  {#if !isStreaming && (allSources.length > 0 || answerSearches.length > 0)}
     <details class="w-full sm:w-4/5 mt-1.5 group/pills">
       <summary class="flex items-center gap-1.5 text-sm text-txtsecondary hover:text-txtmain transition-colors cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
         <ChevronRight class="w-3.5 h-3.5 shrink-0 transition-transform group-open/pills:rotate-90" />

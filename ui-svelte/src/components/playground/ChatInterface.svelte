@@ -47,7 +47,22 @@
   import { getTextContent, getImageUrls } from "../../lib/types";
   import { buildBasePrompt } from "../../lib/systemPrompt";
   import type { ChatMessage, ContentPart } from "../../lib/types";
-  import { Paperclip, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle, Wrench, Reply, Quote, ShoppingCart, CloudSun, BrainCircuit } from "lucide-svelte";
+  import { Paperclip, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle, Wrench, Reply, Quote, ShoppingCart, CloudSun, BrainCircuit, FileText, Loader2, AlertTriangle } from "lucide-svelte";
+  import {
+    acceptAttr,
+    buildFileBlock,
+    classifyAttachment,
+    estimateTokens,
+    extractDocxText,
+    extractPdfText,
+    oversizeError,
+    pickTranscribeModel,
+    readTextFile,
+    MAX_DOCS_PER_MESSAGE,
+    MAX_DOC_BYTES,
+    type AttachedDoc,
+  } from "../../lib/attachments";
+  import { transcribeAudio } from "../../lib/audioApi";
   import ChatMessageComponent from "./ChatMessage.svelte";
   import Composer from "./Composer.svelte";
   import ToolMenu from "./ToolMenu.svelte";
@@ -285,6 +300,10 @@
     showSysPrompt = false;
   }
   let attachedImages = $state<string[]>([]);
+  // Documents (text/code, PDF, DOCX, transcribed audio). Unlike images these
+  // become TEXT in the user's message, so they need no vision model and no
+  // server support — see lib/attachments.ts.
+  let attachedDocs = $state<AttachedDoc[]>([]);
   let fileInput = $state<HTMLInputElement | null>(null);
   let imageError = $state<string | null>(null);
 
@@ -312,18 +331,28 @@
         )
   );
   let canAttach = $derived(selectedModelVision || !!visionTwin);
+  // Budget context for document attachments: the live n_ctx of the loaded
+  // backend when there is one, else the model's configured -c from the catalog —
+  // files are normally picked before the model has ever been loaded.
+  let docCtx = $derived(ctxN > 0 ? ctxN : (selectedModel?.ctx ?? 0));
+  let docTokens = $derived(attachedDocs.reduce((n, d) => n + d.tokens, 0));
 
-  // Attaching IS the vision switch: swap to the twin (loading its mmproj
-  // projector) if needed, then open the file picker. Warm-loading the twin
-  // overlaps the swap with file selection. Going back to the text-only build is
-  // the model picker's job — no separate vision toggle.
-  function attachImage() {
-    if (visionTwin) {
-      selectedModelStore.set(visionTwin.id);
-      void loadModel(visionTwin.id).catch(() => {});
-      showToast("Switched to the vision variant");
-    }
+  // The paperclip is never dead: documents are read into text client-side, so
+  // any model can take one. Only IMAGES need vision, and that is decided when a
+  // file is actually picked (swapToVision), not when the picker opens — opening
+  // it used to swap the model even if the user then chose a PDF.
+  function openAttach() {
     fileInput?.click();
+  }
+
+  // Attaching an image IS the vision switch: swap to the twin (loading its mmproj
+  // projector). Going back to the text-only build is the model picker's job — no
+  // separate vision toggle.
+  function swapToVision() {
+    if (!visionTwin) return;
+    selectedModelStore.set(visionTwin.id);
+    void loadModel(visionTwin.id).catch(() => {});
+    showToast("Switched to the vision variant");
   }
   // Loaded → an empty stream means the model is generating, not swapping in.
   // Use the authoritative catalog state (what the dashboard shows), not just the
@@ -516,7 +545,14 @@
       return;
     }
     const trimmedInput = userInput.trim();
-    if ((!trimmedInput && attachedImages.length === 0) || !$selectedModelStore) return;
+    const readyDocs = attachedDocs.filter((d) => d.status === "ready");
+    if ((!trimmedInput && attachedImages.length === 0 && readyDocs.length === 0) || !$selectedModelStore) return;
+    // Don't send half of an attachment set: a file still extracting would silently
+    // be dropped from the message the model answers.
+    if (attachedDocs.some((d) => d.status === "loading")) {
+      showToast("Still reading the attached file");
+      return;
+    }
     const id = $activeChatId;
 
     // A turn is in flight. If it's THIS chat's turn, queue the text and send it
@@ -538,8 +574,16 @@
 
     // Reply to a past message → prepend a quote snippet so the model knows which
     // one this answers (the full thread is already resent as history).
-    const text = replyingTo ? quotePrefix(replyingTo) + trimmedInput : trimmedInput;
+    const quoted = replyingTo ? quotePrefix(replyingTo) + trimmedInput : trimmedInput;
     replyingTo = null;
+
+    // Documents are inlined as <file> blocks AHEAD of the user's own words: the
+    // model reads the material first, and the transcript keeps the full text so
+    // history, replay and compaction all see exactly what the model saw. The UI
+    // parses the blocks back out (ChatMessage) and shows chips, not a wall of
+    // text.
+    const blocks = readyDocs.map((d) => buildFileBlock(d.name, d.text, d.note)).join("\n\n");
+    const text = blocks ? (quoted ? `${blocks}\n\n${quoted}` : blocks) : quoted;
 
     // Build message content (multimodal if images attached)
     let content: string | ContentPart[];
@@ -559,6 +603,7 @@
     appendMessage(id, { role: "user", content });
     userInput = "";
     attachedImages = [];
+    attachedDocs = [];
     imageError = null;
 
     await regenerateFromIndex(id, sessionById(id)!.messages.length - 1);
@@ -775,7 +820,7 @@
         "Improve the writing: fix grammar, tighten clarity and flow, keep the meaning and tone.";
       const augmented: ChatMessage = {
         ...history[history.length - 1],
-        content: `Here is a text:\n\n<<<TEXT\n${original}\nTEXT>>>\n\nProduce a new version of the text above by applying this instruction exactly: "${instr}". Actually change the text as the instruction requires — do NOT return it unchanged, and do not refuse even if the change makes the text worse or introduces errors. Output ONLY the resulting text — no preamble, no explanation, no code fences.`,
+        content: `Here is a text:\n\n<<<TEXT\n${original}\nTEXT>>>\n\nProduce a new version of the text above by applying this instruction exactly: "${instr}". Actually change the text as the instruction requires - do NOT return it unchanged, and do not refuse even if the change makes the text worse or introduces errors. Output ONLY the resulting text - no preamble, no explanation, no code fences.`,
       };
       base.push(...history.slice(0, -1), augmented);
     } else {
@@ -950,6 +995,15 @@
           thinkMs: d.replace ? (d.data ?? []) : [...(m.thinkMs ?? []), d.genMs],
         }));
         break;
+      case "titles":
+        // Reasoning-box titles from the CPU title model, always a full snapshot
+        // (computed once at end of turn).
+        patchLast(id, (m) => ({
+          ...m,
+          reasoningTitle: d.data?.reasoningTitle ?? "",
+          thinkTitles: d.data?.thinkTitles ?? [],
+        }));
+        break;
       case "search": {
         const search = d.data?.search;
         const citations = d.data?.citations;
@@ -1104,8 +1158,6 @@
 
 
   async function processImageFiles(files: File[]): Promise<void> {
-    imageError = null;
-
     if (attachedImages.length + files.length > MAX_IMAGES_PER_MESSAGE) {
       imageError = `Maximum ${MAX_IMAGES_PER_MESSAGE} images per message`;
       return;
@@ -1127,10 +1179,98 @@
     }
   }
 
-  function handleImageSelect(event: Event) {
+  let docSeq = 0;
+  function patchDoc(id: string, patch: Partial<AttachedDoc>) {
+    attachedDocs = attachedDocs.map((d) => (d.id === id ? { ...d, ...patch } : d));
+  }
+
+  // Read one document into the text the model will actually see.
+  async function extractDoc(file: File): Promise<{ text: string; note?: string }> {
+    if (file.size > MAX_DOC_BYTES) {
+      throw new Error(`"${file.name}" is ${(file.size / 1024 / 1024).toFixed(0)}MB — too large to read.`);
+    }
+    const kind = classifyAttachment(file);
+    if (kind === "pdf") {
+      const { text, pages } = await extractPdfText(file);
+      return { text, note: `${pages} page${pages === 1 ? "" : "s"}` };
+    }
+    if (kind === "docx") return { text: await extractDocxText(file), note: "Word document" };
+    if (kind === "audio") {
+      // The only attachment that costs a model load: transcription runs on the
+      // ASR backend, which shares the one GPU pool with the chat model.
+      const asr = pickTranscribeModel($models);
+      if (!asr) throw new Error("No transcription model is installed, so audio can't be attached.");
+      if (asr.state !== "ready") showToast(`Loading ${asr.name} to transcribe — this swaps out the chat model`);
+      const res = await transcribeAudio(asr.id, file);
+      const text = (res.text ?? "").trim();
+      if (!text) throw new Error(`Nothing was transcribed from "${file.name}".`);
+      return { text, note: `transcribed by ${asr.name}` };
+    }
+    return { text: await readTextFile(file) };
+  }
+
+  // Extraction is async and can be slow (a big PDF, a model swap for audio), so
+  // each file gets its chip immediately and fills in when it lands.
+  async function processDocFiles(files: File[]): Promise<void> {
+    if (attachedDocs.length + files.length > MAX_DOCS_PER_MESSAGE) {
+      imageError = `Maximum ${MAX_DOCS_PER_MESSAGE} files per message`;
+      return;
+    }
+    for (const file of files) {
+      const id = `d${docSeq++}`;
+      const kind = classifyAttachment(file);
+      attachedDocs = [
+        ...attachedDocs,
+        { id, name: file.name, kind: kind === "image" || !kind ? "text" : kind, text: "", tokens: 0, status: "loading" },
+      ];
+      try {
+        const { text, note } = await extractDoc(file);
+        const tokens = estimateTokens(text);
+        // Budget against what the OTHER attachments claim — not this one's own
+        // zero-token placeholder, which is still in the list.
+        const used = attachedDocs.filter((d) => d.id !== id).reduce((n, d) => n + d.tokens, 0);
+        const tooBig = oversizeError(file.name, tokens, docCtx, used);
+        if (tooBig) throw new Error(tooBig);
+        patchDoc(id, { text, tokens, note, status: "ready" });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Could not read this file";
+        patchDoc(id, { status: "error", error: msg });
+        imageError = msg;
+      }
+    }
+  }
+
+  // One entry point for the picker, drag-drop and paste: sort what arrived, then
+  // let each path complain for itself.
+  async function processFiles(files: File[]): Promise<void> {
+    imageError = null;
+    const images: File[] = [];
+    const docs: File[] = [];
+    const rejected: string[] = [];
+    for (const f of files) {
+      const kind = classifyAttachment(f);
+      if (kind === "image") images.push(f);
+      else if (kind) docs.push(f);
+      else rejected.push(f.name);
+    }
+    if (images.length > 0) {
+      if (!canAttach) {
+        imageError = "This model can't read images. Pick a vision model, or attach a document instead.";
+      } else {
+        swapToVision();
+        await processImageFiles(images);
+      }
+    }
+    if (docs.length > 0) await processDocFiles(docs);
+    if (rejected.length > 0 && !imageError) {
+      imageError = `Can't read ${rejected.join(", ")} — unsupported file type.`;
+    }
+  }
+
+  function handleFileSelect(event: Event) {
     const input = event.target as HTMLInputElement;
     if (input.files && input.files.length > 0) {
-      processImageFiles(Array.from(input.files));
+      void processFiles(Array.from(input.files));
     }
     // Reset the input so the same file can be selected again
     input.value = "";
@@ -1141,30 +1281,25 @@
     imageError = null;
   }
 
-  // Paste a screenshot / copied image straight into the composer. Only acts on
-  // image clipboard items — text paste falls through to the default handler.
+  function removeDoc(id: string) {
+    attachedDocs = attachedDocs.filter((d) => d.id !== id);
+    imageError = null;
+  }
+
+  // Paste a screenshot or a copied file straight into the composer. Only acts on
+  // FILE clipboard items — pasted text falls through to the default handler.
   async function handlePaste(event: ClipboardEvent) {
     const items = event.clipboardData?.items;
     if (!items) return;
     const files: File[] = [];
     for (const it of items) {
-      if (it.kind === "file" && it.type.startsWith("image/")) {
-        const f = it.getAsFile();
-        if (f) files.push(f);
-      }
+      if (it.kind !== "file") continue;
+      const f = it.getAsFile();
+      if (f) files.push(f);
     }
     if (files.length === 0) return; // plain text → let the browser handle it
     event.preventDefault();
-    if (!canAttach) {
-      imageError = "The selected model can't accept images.";
-      return;
-    }
-    // Mirror attachImage(): swap to the vision twin so its projector loads.
-    if (visionTwin) {
-      selectedModelStore.set(visionTwin.id);
-      void loadModel(visionTwin.id).catch(() => {});
-    }
-    await processImageFiles(files);
+    await processFiles(files);
   }
 </script>
 
@@ -1221,7 +1356,7 @@
           {#if idx === compactedCount && compactedCount > 0}
             <div class="flex items-center gap-2 my-3 text-[0.7rem] uppercase tracking-wide text-txtsecondary" title="Messages above are summarized for the model; they're still shown here but not resent.">
               <span class="flex-1 h-px bg-card-border"></span>
-              <span class="inline-flex items-center gap-1"><Brain class="w-3 h-3" /> Compacted — model sees a summary above</span>
+              <span class="inline-flex items-center gap-1"><Brain class="w-3 h-3" /> Compacted - model sees a summary above</span>
               <span class="flex-1 h-px bg-card-border"></span>
             </div>
           {/if}
@@ -1233,6 +1368,8 @@
             reasoning_content={message.reasoning_content}
             reasoningTimeMs={message.reasoningTimeMs}
             thinkMs={message.thinkMs}
+            reasoningTitle={message.reasoningTitle}
+            thinkTitles={message.thinkTitles}
             genTimeMs={message.genTimeMs}
             searches={message.searches}
             citations={message.citations}
@@ -1336,7 +1473,7 @@
         </label>
 
         <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-qmtools">
-          <span class="flex items-center gap-1.5"><Wrench class="w-3.5 h-3.5" /> QM Tools {@render tip("Let the model inspect and tune this quartermaster instance — list installed models, read live VRAM/config, and change settings (hot-reloads, no eviction). Needs a tool-calling model. Requires -generate for edits.")}</span>
+          <span class="flex items-center gap-1.5"><Wrench class="w-3.5 h-3.5" /> QM Tools {@render tip("Let the model inspect and tune this quartermaster instance - list installed models, read live VRAM/config, and change settings (hot-reloads, no eviction). Needs a tool-calling model. Requires -generate for edits.")}</span>
           <input id="chat-qmtools" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$qmToolsStore} />
         </label>
 
@@ -1355,7 +1492,7 @@
           <div class="flex flex-col gap-1">
             <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">
               <ShoppingCart class="w-3.5 h-3.5" /> Shopping preferences
-              {@render tip("Where you buy: country, currency and the shops you prefer. Standing setting — the assistant searches these first instead of asking every time.")}
+              {@render tip("Where you buy: country, currency and the shops you prefer. Standing setting - the assistant searches these first instead of asking every time.")}
             </span>
             <input
               type="text"
@@ -1382,7 +1519,7 @@
                 <X class="w-4 h-4" />
               </button>
             </div>
-            <p class="text-xs text-txtsecondary">Standing instructions for this chat only — layered on top of the built-in prompt.</p>
+            <p class="text-xs text-txtsecondary">Standing instructions for this chat only - layered on top of the built-in prompt.</p>
             <textarea
               class="w-full h-64 px-3 py-2 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary resize-none text-sm"
               placeholder="e.g. Answer as a senior Rust engineer. Be terse."
@@ -1418,6 +1555,48 @@
         </div>
       {/if}
 
+      <!-- Document attachment chips. A file is text by the time it gets here, so
+           the chip carries its size in tokens: the one number that decides
+           whether it fits. -->
+      {#if attachedDocs.length > 0}
+        <div class="mb-2 flex flex-wrap gap-2">
+          {#each attachedDocs as doc (doc.id)}
+            <div
+              class="group flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[0.8125rem] max-w-[18rem] {doc.status === 'error'
+                ? 'border-red-500/50 bg-red-500/10 text-red-600 dark:text-red-400'
+                : 'border-card-border bg-surface text-txtsecondary'}"
+              title={doc.status === "error" ? doc.error : `${doc.name}${doc.note ? ` · ${doc.note}` : ""}`}
+            >
+              {#if doc.status === "loading"}
+                <Loader2 class="w-3.5 h-3.5 shrink-0 animate-spin text-primary" />
+              {:else if doc.status === "error"}
+                <AlertTriangle class="w-3.5 h-3.5 shrink-0" />
+              {:else}
+                <FileText class="w-3.5 h-3.5 shrink-0 text-primary" />
+              {/if}
+              <span class="truncate">{doc.name}</span>
+              {#if doc.status === "ready"}
+                <span class="shrink-0 text-txtsecondary/70">{fmtTokens(doc.tokens)} tok</span>
+              {:else if doc.status === "loading"}
+                <span class="shrink-0 text-txtsecondary/70">reading…</span>
+              {/if}
+              <button
+                class="shrink-0 p-0.5 rounded-full hover:bg-secondary transition-colors"
+                onclick={() => removeDoc(doc.id)}
+                title="Remove file"
+              >
+                <X class="w-3.5 h-3.5" />
+              </button>
+            </div>
+          {/each}
+          {#if docTokens > 0 && docCtx > 0}
+            <span class="self-center text-[0.75rem] text-txtsecondary/70">
+              {fmtTokens(docTokens)} of {fmtTokens(docCtx)} context
+            </span>
+          {/if}
+        </div>
+      {/if}
+
       <!-- Error message -->
       {#if imageError}
         <div class="mb-2 p-2 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded text-sm">
@@ -1428,11 +1607,11 @@
       <!-- Hidden file input -->
       <input
         type="file"
-        accept=".jpg,.jpeg,.png,.gif,.webp"
+        accept={acceptAttr(canAttach)}
         multiple
         class="hidden"
         bind:this={fileInput}
-        onchange={handleImageSelect}
+        onchange={handleFileSelect}
       />
 
       <!-- Queued messages (typed while a turn is streaming) -->
@@ -1490,20 +1669,21 @@
 
       {#snippet chatLeftButtons()}
         <ToolMenu items={toolMenuItems} disabled={isStreaming} />
-        <!-- Always shown so the composer row doesn't reshuffle per model; what it
-             accepts is what the selected model can actually read (images only for
-             now), and it's dead when the model can read nothing. -->
+        <!-- Always shown so the composer row doesn't reshuffle per model. It is no
+             longer gated on vision: documents are read into text in the browser,
+             so every model can take one; only the image half of the accept list
+             depends on the model. -->
         <button
           class="composer-icon-btn"
-          onclick={attachImage}
-          disabled={isStreaming || !$selectedModelStore || !canAttach}
+          onclick={openAttach}
+          disabled={isStreaming || !$selectedModelStore}
           title={!$selectedModelStore
             ? "Pick a model first"
-            : !canAttach
-              ? "This model can't read attachments"
-              : visionTwin
-                ? "Attach image (loads vision projector)"
-                : "Attach image"}
+            : canAttach
+              ? visionTwin
+                ? "Attach a file or image (an image loads the vision projector)"
+                : "Attach a file or image"
+              : "Attach a file (text, PDF, Word, audio) — this model can't read images"}
         >
           <Paperclip class="w-[1.125rem] h-[1.125rem]" />
         </button>

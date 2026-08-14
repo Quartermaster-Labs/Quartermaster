@@ -127,7 +127,7 @@
     return f.reasoning === "off" ? "off" : f.reasoningFmt || "auto";
   }
   function nglDisplay(ngl: string | undefined, blocks: number): string {
-    if (ngl == null) return "—";
+    if (ngl == null) return "-";
     const n = Number(ngl);
     if (!blocks || !Number.isFinite(n)) return ngl;
     return `${Math.min(n, blocks)}/${blocks}`;
@@ -216,20 +216,20 @@
 
             {#if cfg?.isImage}
               <div class="mt-2 grid grid-cols-3 gap-x-3 gap-y-2 font-mono text-xs">
-                {@render roField("Steps", flags.steps ?? "—", "Sampling steps per image (--steps). More = slower, usually higher quality. Distilled/Turbo models want few (4–8).")}
-                {@render roField("CFG", flags.cfg ?? "—", "Classifier-free guidance scale (--cfg-scale). Turbo/distilled models REQUIRE 1.0 — higher blurs. Standard models use ~7.")}
-                {@render roField("Sampler", flags.sampler ?? "—", "Sampling method (--sampling-method). euler / euler_a are safe defaults; lcm pairs with low-step distilled models.")}
-                {@render roField("Width", flags.width ?? "—", "Default image width in px (--width). Per-request width still overrides this.")}
-                {@render roField("Height", flags.height ?? "—", "Default image height in px (--height). Per-request height still overrides this.")}
+                {@render roField("Steps", flags.steps ?? "-", "Sampling steps per image (--steps). More = slower, usually higher quality. Distilled/Turbo models want few (4–8).")}
+                {@render roField("CFG", flags.cfg ?? "-", "Classifier-free guidance scale (--cfg-scale). Turbo/distilled models REQUIRE 1.0 - higher blurs. Standard models use ~7.")}
+                {@render roField("Sampler", flags.sampler ?? "-", "Sampling method (--sampling-method). euler / euler_a are safe defaults; lcm pairs with low-step distilled models.")}
+                {@render roField("Width", flags.width ?? "-", "Default image width in px (--width). Per-request width still overrides this.")}
+                {@render roField("Height", flags.height ?? "-", "Default image height in px (--height). Per-request height still overrides this.")}
                 {@render roField("CPU offload", effCmd.includes("--offload-to-cpu") ? "on" : "off", "Page diffusion weights to RAM (--offload-to-cpu): saves VRAM, slower per step.")}
               </div>
             {:else if cfg}
               <div class="mt-2 grid grid-cols-3 gap-x-3 gap-y-2 font-mono text-xs">
-                {@render roField("Ctx", flags.ctx ?? "—", "Context window (tokens) this model loaded with (-c), as sized by the autogen sizer to fit free VRAM.")}
+                {@render roField("Ctx", flags.ctx ?? "-", "Context window (tokens) this model loaded with (-c), as sized by the autogen sizer to fit free VRAM.")}
                 {@render roField("GPU layers", nglDisplay(flags.ngl, cfg.blockCount ?? 0), "Layers resident on the GPU (-ngl), as chosen by the sizer for the current plan.")}
-                {@render roField("CPU MoE", flags.cpuMoe ?? "—", "Expert layers offloaded to the CPU (--n-cpu-moe) for MoE models.")}
-                {@render roField("KV K", flags.kvK ?? "—", "Quantization of the attention key cache (-ctk). Lower bits = less VRAM, slightly less accuracy.")}
-                {@render roField("KV V", flags.kvV ?? "—", "Quantization of the attention value cache (-ctv). Lower bits = less VRAM.")}
+                {@render roField("CPU MoE", flags.cpuMoe ?? "-", "Expert layers offloaded to the CPU (--n-cpu-moe) for MoE models.")}
+                {@render roField("KV K", flags.kvK ?? "-", "Quantization of the attention key cache (-ctk). Lower bits = less VRAM, slightly less accuracy.")}
+                {@render roField("KV V", flags.kvV ?? "-", "Quantization of the attention value cache (-ctv). Lower bits = less VRAM.")}
                 {@render roField("Spec", specList(effCmd), "Speculative decoding chain (--spec-type), one entry per backend. none = disabled.")}
                 {@render roField("Reasoning", reasonDefault(flags), "How the model's chain-of-thought is parsed (--reasoning-format). auto = llama.cpp detects it; off = reasoning disabled.")}
               </div>

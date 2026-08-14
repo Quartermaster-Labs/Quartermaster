@@ -948,7 +948,7 @@
                   <button
                     class="absolute top-1/2 left-full ml-2 -translate-y-1/2 z-10 p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary opacity-0 group-hover:opacity-100 transition-opacity"
                     onclick={() => replyWithImage(t.images[picked])}
-                    title="Reply — use this image as the source/reference"
+                    title="Reply - use this image as the source/reference"
                   >
                     <Reply class="w-4 h-4" />
                   </button>
@@ -1092,7 +1092,7 @@
               <div class="flex flex-col gap-1">
                 <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
                   Batch
-                  <span class="cursor-help opacity-60" title="Images rendered per prompt (max {MAX_BATCH}). They render one after another — N images take N× the time — and the seed increments per image, so a pinned seed reproduces the first one.">(?)</span>
+                  <span class="cursor-help opacity-60" title="Images rendered per prompt (max {MAX_BATCH}). They render one after another - N images take N× the time - and the seed increments per image, so a pinned seed reproduces the first one.">(?)</span>
                 </span>
                 <input type="number" min="1" max={MAX_BATCH} step="1" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdBatchStore} />
               </div>
@@ -1177,7 +1177,7 @@
               {/if}
             </div>
           {:else}
-            <p class="text-xs text-txtsecondary">OpenAI image route generates fresh each turn — it can't tweak a previous image. Switch to SDAPI for the edit loop.</p>
+            <p class="text-xs text-txtsecondary">OpenAI image route generates fresh each turn - it can't tweak a previous image. Switch to SDAPI for the edit loop.</p>
           {/if}
         </div>
       {/snippet}
@@ -1189,7 +1189,7 @@
             <textarea
               class="w-full bg-transparent text-[0.8125rem] leading-relaxed resize-none focus:outline-none placeholder:text-txtsecondary min-h-[1.5rem] max-h-40 pretty-scroll"
               rows="1"
-              placeholder="Negative — elements to avoid…"
+              placeholder="Negative - elements to avoid…"
               bind:value={$sdNegativePromptStore}
               disabled={isGenerating}
             ></textarea>
@@ -1217,7 +1217,7 @@
             class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {maskData && maskSource === baseImage ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
             onclick={() => (showMask = true)}
             disabled={isGenerating}
-            title={segmentModel ? "Inpaint — mask a region to change (brush or AI select)" : "Inpaint — mask a region to change (keeps the rest)"}
+            title={segmentModel ? "Inpaint - mask a region to change (brush or AI select)" : "Inpaint - mask a region to change (keeps the rest)"}
           >
             <Brush class="w-[1.125rem] h-[1.125rem]" />
           </button>
@@ -1227,7 +1227,7 @@
             class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {styleRef ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
             onclick={() => styleInput?.click()}
             disabled={isGenerating}
-            title="Style transfer — apply the look of a reference image to the edit"
+            title="Style transfer - apply the look of a reference image to the edit"
           >
             <Palette class="w-[1.125rem] h-[1.125rem]" />
           </button>
@@ -1280,14 +1280,14 @@
           <p class="flex items-center gap-1.5 text-xs text-txtsecondary mb-2 px-2">
             <span>{supportsRefImages ? "Editing the last image (reference)" : isSdapi ? "Editing the last image (img2img)" : "Fresh generation each turn"}</span>
             {#if isSdapi}
-              <button class="hover:text-txtmain transition-colors" onclick={() => (skipBase = true)} title="New image instead — don't edit the last one">
+              <button class="hover:text-txtmain transition-colors" onclick={() => (skipBase = true)} title="New image instead - don't edit the last one">
                 <X class="w-3.5 h-3.5" />
               </button>
             {/if}
           </p>
         {:else if skipBase && turns.length > 0 && isSdapi}
           <p class="flex items-center gap-1.5 text-xs text-txtsecondary mb-2 px-2">
-            <span>New image — not editing the last one</span>
+            <span>New image - not editing the last one</span>
             <button class="hover:text-txtmain transition-colors" onclick={() => (skipBase = false)} title="Edit the last image instead">
               <RefreshCw class="w-3.5 h-3.5" />
             </button>
@@ -1307,7 +1307,7 @@
             {/if}
             <div class="flex items-center gap-2 text-xs text-primary">
               <Brush class="w-3.5 h-3.5" />
-              <span>Inpaint mask set — only the highlighted area changes</span>
+              <span>Inpaint mask set - only the highlighted area changes</span>
               <button class="text-txtsecondary hover:text-txtmain" onclick={() => { maskData = null; maskSource = null; }}>clear</button>
             </div>
           </div>
@@ -1320,7 +1320,7 @@
             </div>
             <div class="flex items-center gap-2 text-xs text-primary">
               <Palette class="w-3.5 h-3.5" />
-              <span>Style reference set — its look is applied to the edit</span>
+              <span>Style reference set - its look is applied to the edit</span>
               <button class="text-txtsecondary hover:text-txtmain" onclick={() => (styleRef = null)}>clear</button>
             </div>
           </div>

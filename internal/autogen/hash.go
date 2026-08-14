@@ -68,7 +68,9 @@ const hashCacheSuffix = ".modelhash"
 //	v35: rope scaling extends the ctx ceiling past the model's trained length and
 //	     derives --rope-scale from the chosen ctx (was: ctx hard-clamped to
 //	     context_length, and a bare --rope-scaling kept llama.cpp's factor of 1).
-const genVersion = "v35"
+//	v36: per-model estRamGB beside estVramGB, so the Models table can show what a
+//	     partial offload costs in system memory before the model is loaded.
+const genVersion = "v37"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

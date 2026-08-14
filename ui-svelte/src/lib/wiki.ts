@@ -50,7 +50,7 @@ export const WIKI_TOOL: ToolDef = {
   function: {
     name: "wiki_search",
     description:
-      "Search the quartermaster help wiki for how the platform works — loading/swapping models, per-model config, the playground (chat/images/speech), web search setup, API keys, GPU/VRAM, and troubleshooting. Use this whenever the user asks how to do something in quartermaster or hits a problem with it, so your answer matches the actual app.",
+      "Search the quartermaster help wiki for how the platform works - loading/swapping models, per-model config, the playground (chat/images/speech), web search setup, API keys, GPU/VRAM, and troubleshooting. Use this whenever the user asks how to do something in quartermaster or hits a problem with it, so your answer matches the actual app.",
     parameters: {
       type: "object",
       properties: {

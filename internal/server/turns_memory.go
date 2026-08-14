@@ -83,7 +83,7 @@ func (tm *turnManager) memoryDelete(at *activeTurn, args string) (string, string
 		return "memory", "Could not delete that memory: " + err.Error()
 	}
 	if !ok {
-		return "memory", fmt.Sprintf("No memory with id %q — it may already be gone. Use an id from your memory block.", id)
+		return "memory", fmt.Sprintf("No memory with id %q - it may already be gone. Use an id from your memory block.", id)
 	}
 	return "forget " + memoryLabel(gone.Text), fmt.Sprintf(
 		"Deleted memory %s: %s\n\nIt is gone from storage; your memory block still shows it for the rest of this turn.", id, gone.Text)

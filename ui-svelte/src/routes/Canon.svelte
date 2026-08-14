@@ -58,7 +58,7 @@
   {:else}
     <div class="card p-3 text-xs text-txtsecondary mb-3">
       Volatile spans (e.g. sub-day timestamps) are stripped from the system prompt of every
-      chat request so its stable prefix stays byte-identical turn-to-turn — letting llama-server
+      chat request so its stable prefix stays byte-identical turn-to-turn - letting llama-server
       reuse the KV cache instead of reprefilling. Non-lossy: the model still sees date granularity.
     </div>
 
@@ -85,7 +85,7 @@
     <div class="card p-3 min-h-0">
       <div class="text-sm font-semibold mb-2">Recent rewrites</div>
       {#if !stats.events?.length}
-        <div class="text-xs text-txtsecondary">No rewrites yet — no client sent a volatile prefix.</div>
+        <div class="text-xs text-txtsecondary">No rewrites yet - no client sent a volatile prefix.</div>
       {:else}
         <div class="overflow-auto max-h-[28rem] font-mono text-xs pretty-scroll">
           {#each stats.events as e (e.time + e.model + e.rule)}

@@ -72,7 +72,7 @@ export async function segment(
   if (!res.ok) {
     if (res.status === 502 || res.status === 503 || res.status === 504) {
       throw new Error(
-        "Segment model unavailable — it crashed, was evicted, or is still loading. Try again in a moment.",
+        "Segment model unavailable - it crashed, was evicted, or is still loading. Try again in a moment.",
       );
     }
     const t = await res.text().catch(() => "");

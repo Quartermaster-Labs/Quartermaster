@@ -58,6 +58,16 @@ func writeEstVram(b *strings.Builder, estGB float64) {
 	fmt.Fprintf(b, "    estVramGB: %g\n", round2(estGB))
 }
 
+// writeEstRam emits the sizer's predicted RAM share (weights the GPU could not
+// take). Informational only — the dashboard shows it beside estVramGB — so it
+// is omitted for a fully-offloaded model rather than written as 0.
+func writeEstRam(b *strings.Builder, estGB float64) {
+	if estGB <= 0 {
+		return
+	}
+	fmt.Fprintf(b, "    estRamGB: %g\n", round2(estGB))
+}
+
 // emitSlotCache writes the slotCache config block (consumed by the server) when
 // the feature is enabled. Unset knobs are omitted so the server applies its
 // defaults. The path is always emitted so it matches the --slot-save-path flag.
@@ -300,6 +310,7 @@ func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, pro
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
 	writeEstVram(b, plan.EstVramGB)
+	writeEstRam(b, plan.EstRamGB)
 	writeDisplayName(b, s, prof.Name)
 	if prof.Unlisted {
 		b.WriteString("    unlisted: true\n")

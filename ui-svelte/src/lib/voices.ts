@@ -116,9 +116,9 @@ export function voiceSubstitution(model: string, voice: string): string {
   const sent = safeVoice(model, voice);
   if (sent === voice) return "";
   if (!getVoicesCache()[model]) {
-    return `${voice} isn't confirmed for this model yet — speaking in the model's default voice until its list loads.`;
+    return `${voice} isn't confirmed for this model yet - speaking in the model's default voice until its list loads.`;
   }
-  return `${voice} isn't one of this model's voices — speaking as ${voiceLabel(sent)} instead.`;
+  return `${voice} isn't one of this model's voices - speaking as ${voiceLabel(sent)} instead.`;
 }
 
 // voiceLabel renders "" as the model's default speaker rather than a blank row.

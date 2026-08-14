@@ -305,7 +305,7 @@ func (tm *turnManager) qmModels(ctx context.Context, at *activeTurn) string {
 			s.WriteString("  ctx " + humanCtx(m.Ctx))
 		}
 		if m.State != "" && m.State != "stopped" {
-			s.WriteString("  — " + m.State)
+			s.WriteString("  - " + m.State)
 		}
 		if m.Unlisted && m.PeerID == "" {
 			s.WriteString("  (unlisted)")
@@ -459,7 +459,7 @@ func (tm *turnManager) qmVramLine(ctx context.Context, at *activeTurn) string {
 	if len(parts) == 0 {
 		return "VRAM: unavailable"
 	}
-	return "VRAM — " + strings.Join(parts, ", ")
+	return "VRAM - " + strings.Join(parts, ", ")
 }
 
 func (tm *turnManager) qmSettings(ctx context.Context, at *activeTurn) string {
@@ -478,10 +478,10 @@ func (tm *turnManager) qmSettings(ctx context.Context, at *activeTurn) string {
 	}
 	return fmt.Sprintf(
 		"Global memory settings:\n"+
-			"• targetVramGB: %g — VRAM budget the sizer aims to fill per model\n"+
-			"• vramOverheadGB: %g — headroom kept free on top of that\n"+
-			"• maxRamGB: %g — cap on system RAM for CPU-offloaded weights/KV\n"+
-			"• ttlSec: %d — idle auto-unload: %s",
+			"• targetVramGB: %g - VRAM budget the sizer aims to fill per model\n"+
+			"• vramOverheadGB: %g - headroom kept free on top of that\n"+
+			"• maxRamGB: %g - cap on system RAM for CPU-offloaded weights/KV\n"+
+			"• ttlSec: %d - idle auto-unload: %s",
 		s.TargetVramGB, s.VramOverheadGB, s.MaxRamGB, s.TtlSec, ttl)
 }
 
@@ -588,7 +588,7 @@ func (tm *turnManager) qmEstimate(ctx context.Context, at *activeTurn, id string
 		sort.Strings(asked)
 		fmt.Fprintf(&b, " (what-if: %s)", strings.Join(asked, ", "))
 	}
-	b.WriteString(" — nothing was changed:\n")
+	b.WriteString(" - nothing was changed:\n")
 	fmt.Fprintf(&b, "• context it would launch with: %s\n", humanCtx(e.Ctx))
 	fmt.Fprintf(&b, "• layer placement: -ngl %d", e.Ngl)
 	if e.NCpuMoe > 0 {
@@ -599,12 +599,12 @@ func (tm *turnManager) qmEstimate(ctx context.Context, at *activeTurn, id string
 	if e.TargetVramGB > 0 && e.EstVramGB > e.TargetVramGB {
 		fit = "OVER BUDGET"
 	}
-	fmt.Fprintf(&b, "• estimated VRAM: %.1f GB of a %.1f GB budget — %s\n", e.EstVramGB, e.TargetVramGB, fit)
+	fmt.Fprintf(&b, "• estimated VRAM: %.1f GB of a %.1f GB budget - %s\n", e.EstVramGB, e.TargetVramGB, fit)
 	ram := "within the cap"
 	if e.RamExceeded {
-		ram = "EXCEEDS the cap — this tuning would not be safe to load"
+		ram = "EXCEEDS the cap - this tuning would not be safe to load"
 	}
-	fmt.Fprintf(&b, "• estimated system RAM: %.1f GB of %.1f GB — %s\n", e.EstRamGB, e.MaxRamGB, ram)
+	fmt.Fprintf(&b, "• estimated system RAM: %.1f GB of %.1f GB - %s\n", e.EstRamGB, e.MaxRamGB, ram)
 	fmt.Fprintf(&b, "• of the VRAM: %.1f GB KV cache", e.KvReserveGB)
 	for _, part := range []struct {
 		label string
@@ -620,7 +620,7 @@ func (tm *turnManager) qmEstimate(ctx context.Context, at *activeTurn, id string
 	}
 	b.WriteString(" (the rest is weights)\n")
 	if e.IsMoE {
-		b.WriteString("• this is a MoE model — cpuOffload moves whole layers, --n-cpu-moe only their experts\n")
+		b.WriteString("• this is a MoE model - cpuOffload moves whole layers, --n-cpu-moe only their experts\n")
 	}
 	b.WriteString("This is a prediction from the same sizer that bakes the config, not a load test.")
 	return b.String()
@@ -694,13 +694,13 @@ func (tm *turnManager) qmBackends(ctx context.Context, at *activeTurn) string {
 			if ver == "" {
 				ver = "unknown version"
 			}
-			fmt.Fprintf(&b, "  — managed build %s", ver)
+			fmt.Fprintf(&b, "  - managed build %s", ver)
 			if e.Variant != "" {
 				b.WriteString(" (" + e.Variant + ")")
 			}
 		}
 		if !e.Exists {
-			b.WriteString("  — MISSING ON DISK")
+			b.WriteString("  - MISSING ON DISK")
 			missing++
 		}
 		b.WriteString("\n")
@@ -709,7 +709,7 @@ func (tm *turnManager) qmBackends(ctx context.Context, at *activeTurn) string {
 		}
 	}
 	if missing > 0 {
-		fmt.Fprintf(&b, "\n%d backend(s) point at an executable that isn't there — any model resolving to one of those cannot start.", missing)
+		fmt.Fprintf(&b, "\n%d backend(s) point at an executable that isn't there - any model resolving to one of those cannot start.", missing)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -746,7 +746,7 @@ func (tm *turnManager) qmModelConfig(ctx context.Context, at *activeTurn, id str
 
 	o := c.Override
 	if o == nil {
-		b.WriteString("• per-model override: none — running on auto-derived defaults\n")
+		b.WriteString("• per-model override: none - running on auto-derived defaults\n")
 	} else {
 		// Reflection over the DTO, not a hand-listed subset: a knob added to the
 		// cogwheel shows up here (and in the configure tool) with no edit, and the
@@ -834,7 +834,7 @@ func (tm *turnManager) qmModelVariants(ctx context.Context, at *activeTurn, id, 
 	sort.Strings(ids)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "• %d variant(s) of this model (separate routable ids, same swap group — deviations from the base command):\n", len(ids))
+	fmt.Fprintf(&b, "• %d variant(s) of this model (separate routable ids, same swap group - deviations from the base command):\n", len(ids))
 	shown := ids
 	if len(shown) > qmMaxDiffedVariants {
 		shown = shown[:qmMaxDiffedVariants]
@@ -842,7 +842,7 @@ func (tm *turnManager) qmModelVariants(ctx context.Context, at *activeTurn, id, 
 	for _, vid := range shown {
 		fmt.Fprintf(&b, "  - %s", vid)
 		if st := state[vid]; st != "" && st != "stopped" {
-			b.WriteString(" — " + st)
+			b.WriteString(" - " + st)
 		}
 		b.WriteString("\n")
 		var vc modelConfigResp
@@ -853,7 +853,7 @@ func (tm *turnManager) qmModelVariants(ctx context.Context, at *activeTurn, id, 
 		b.WriteString(qmDiffLines(baseCmd, vc.Cmd, "    "))
 	}
 	if len(ids) > len(shown) {
-		fmt.Fprintf(&b, "  (+%d more variant(s) not diffed — inspect one by its id)\n", len(ids)-len(shown))
+		fmt.Fprintf(&b, "  (+%d more variant(s) not diffed - inspect one by its id)\n", len(ids)-len(shown))
 	}
 	return b.String()
 }
@@ -1042,14 +1042,14 @@ func (tm *turnManager) qmConfigure(ctx context.Context, at *activeTurn, callID, 
 	case accept := <-pa.decide:
 		if !accept {
 			at.resolveApproval(pa, "denied", "")
-			return label + " — denied", "The user DENIED this change; nothing was applied. Do not retry it — acknowledge and move on."
+			return label + " - denied", "The user DENIED this change; nothing was applied. Do not retry it - acknowledge and move on."
 		}
 	case <-ctx.Done():
 		at.resolveApproval(pa, "denied", "cancelled")
-		return label + " — cancelled", "The turn was cancelled before the change was approved; nothing was applied."
+		return label + " - cancelled", "The turn was cancelled before the change was approved; nothing was applied."
 	case <-time.After(approvalTimeout):
 		at.resolveApproval(pa, "timeout", "")
-		return label + " — timed out", "The approval request timed out; nothing was applied."
+		return label + " - timed out", "The approval request timed out; nothing was applied."
 	}
 
 	ok, text := tm.applyPlan(ctx, at, plan)
@@ -1059,10 +1059,10 @@ func (tm *turnManager) qmConfigure(ctx context.Context, at *activeTurn, callID, 
 		// carries the diff), so the accepted change stays visible in the
 		// reasoning trail after the transient approval card is gone — and
 		// survives the post-turn resync, which drops the card's state.
-		return label + " — accepted", text
+		return label + " - accepted", text
 	}
 	at.resolveApproval(pa, "error", text)
-	return label + " — failed", text
+	return label + " - failed", text
 }
 
 // buildConfigPlan resolves a configure request into a full merged body + a diff,
@@ -1081,7 +1081,7 @@ func (tm *turnManager) buildConfigPlan(ctx context.Context, at *activeTurn, args
 		return nil, "Missing 'target' (use 'settings', 'playground', or a model id)."
 	}
 	if len(a.Changes) == 0 {
-		return nil, "No 'changes' given — nothing to do."
+		return nil, "No 'changes' given - nothing to do."
 	}
 
 	// Playground settings are the logged-in user's own per-user prefs (a flat
@@ -1172,7 +1172,7 @@ func (tm *turnManager) buildConfigPlan(ctx context.Context, at *activeTurn, args
 
 	body, diff := mergeAndDiff(current, a.Changes)
 	if len(diff) == 0 {
-		return nil, "Those values are already set — no change needed."
+		return nil, "Those values are already set - no change needed."
 	}
 	return &configPlan{target: target, path: path, body: body, diff: diff}, ""
 }
@@ -1267,7 +1267,7 @@ func (tm *turnManager) buildPlaygroundPlan(ctx context.Context, at *activeTurn, 
 		return nil, "Unknown playground setting(s): " + strings.Join(unknown, ", ") + ". Valid settings: " + playgroundFieldList() + "."
 	}
 	if len(diff) == 0 {
-		return nil, "Those values are already set — no change needed."
+		return nil, "Those values are already set - no change needed."
 	}
 	return &configPlan{target: "playground", path: "/api/prefs", body: body, diff: diff}, ""
 }

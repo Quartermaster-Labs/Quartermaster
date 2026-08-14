@@ -80,7 +80,7 @@ export function parseCmdFields(cmd: string): ParsedCmd {
   while (i < toks.length && !toks[i].startsWith("-")) i++; // skip the exe
   const val = (): string => (i + 1 < toks.length && !toks[i + 1].startsWith("-") ? toks[++i] : "");
   // A path value is emitted quoted (%q) because templates live in folders with
-  // spaces — rejoin what the whitespace split broke apart, then unquote.
+  // spaces - rejoin what the whitespace split broke apart, then unquote.
   const pathVal = (): string => {
     let s = val();
     if (!s.startsWith('"')) return s;
@@ -158,7 +158,7 @@ export function parseCmdFields(cmd: string): ParsedCmd {
     parallel: par !== null ? Number(par) : "",
     ub: u !== null ? Number(u) : "",
     extraArgs: extras.join(" "),
-    // autogen's own Qwen 3.5/3.6 fix is arch-derived — leave it owned by the
+    // autogen's own Qwen 3.5/3.6 fix is arch-derived - leave it owned by the
     // generator instead of pinning its path into the user's field.
     chatTemplateFile: ctFile && !ctFile.includes(BUILTIN_CHAT_TEMPLATE) ? ctFile : "",
     // DRY is on iff any --dry-* flag survived in the box.
@@ -175,7 +175,7 @@ export function parseCmdFields(cmd: string): ParsedCmd {
 }
 
 
-// Owned by other controls / autogen — swallowed when parsing the image box so
+// Owned by other controls / autogen - swallowed when parsing the image box so
 // they never bleed into extraArgs: -m modelPath, -l/--listen-port the socket,
 // --max-vram the slider, --vae-on-cpu the offload pair (--backend vae=cpu is a
 // separate toggle, kept).
@@ -280,7 +280,7 @@ export function specToggle(s: string | undefined, b: string, on: boolean): strin
   if (b === "none") return on ? "none" : "";
   let parts = (s ?? "").split("+").filter(Boolean).filter((x) => x !== "none" && x !== b);
   if (on) parts.push(b);
-  // Unchecking the last backend means "off" — store explicit "none" rather
+  // Unchecking the last backend means "off" - store explicit "none" rather
   // than "" (empty would fall back to the MTP/ngram auto-default at emit).
   if (!on && parts.length === 0) return "none";
   return parts.join("+");
