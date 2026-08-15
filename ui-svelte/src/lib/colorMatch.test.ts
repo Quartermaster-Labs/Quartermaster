@@ -32,7 +32,9 @@ describe("colorMatch (luminance-only)", () => {
   });
 
   it("matchContrast=false shifts mean only, leaves contrast (std) alone", () => {
-    const src = rgba([[0, 0, 0], [85, 85, 85], [170, 170, 170], [255, 255, 255]]);
+    // Range stays inside 0..255 after the -20 shift so clamping can't eat the
+    // mean correction (a range touching 0 can't be shifted down at all).
+    const src = rgba([[60, 60, 60], [100, 100, 100], [140, 140, 140], [180, 180, 180]]);
     const ref = rgba([[90, 90, 90], [100, 100, 100], [100, 100, 100], [110, 110, 110]]);
     const srcStd = lumaStats(src).std;
     const refStats = lumaStats(ref);

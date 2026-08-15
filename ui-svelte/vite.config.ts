@@ -1,25 +1,15 @@
 import { defineConfig } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import tailwindcss from "@tailwindcss/vite";
-import { compression } from "vite-plugin-compression2";
+
+// Pre-compressed .gz/.br siblings are made by scripts/compress-assets.mjs
+// after the build (wired in package.json), NOT by vite-plugin-compression2 —
+// the plugin's two parallel compression instances raced and shipped gzip
+// bytes under a .br name, which the Go server then sent as Content-Encoding: br.
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [
-    svelte(),
-    tailwindcss(),
-    compression({
-      algorithm: "gzip",
-      exclude: [/\.(br)$/, /\.(gz)$/],
-      threshold: 1024,
-    }),
-    compression({
-      algorithm: "brotliCompress",
-      exclude: [/\.(br)$/, /\.(gz)$/],
-      threshold: 1024,
-      filename: "[path][base].br",
-    }),
-  ],
+  plugins: [svelte(), tailwindcss()],
   base: "/ui/",
   build: {
     outDir: "../internal/server/ui_dist",
