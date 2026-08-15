@@ -1783,11 +1783,14 @@
                     style="left: {nativePct}%"
                   ></div>
                 {/if}
+                <!-- 4096, not 1024: the sizer floors ctx to a 4096 multiple
+                     (autogen RoundedCtx), so three of every four 1024 stops were
+                     unreachable — picking 63k silently baked -c 61440. -->
                 <input
                   type="range"
                   min={CTX_MIN}
                   max={maxCtx}
-                  step="1024"
+                  step="4096"
                   bind:value={ctx}
                   disabled={ctxAuto}
                   use:wheelAdjust
@@ -2224,7 +2227,7 @@
                 <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
                   <input type="checkbox" checked={!sv.ctx} onchange={(e) => setVCtxAuto((e.currentTarget as HTMLInputElement).checked)} /> Auto
                 </label>
-                <input type="range" min={CTX_MIN} max={maxCtx} step="1024" value={sv.ctx || CTX_MIN} oninput={(e) => (sv.ctx = Number((e.currentTarget as HTMLInputElement).value))} disabled={!sv.ctx} use:wheelAdjust class="flex-1 disabled:opacity-40" />
+                <input type="range" min={CTX_MIN} max={maxCtx} step="4096" value={sv.ctx || CTX_MIN} oninput={(e) => (sv.ctx = Number((e.currentTarget as HTMLInputElement).value))} disabled={!sv.ctx} use:wheelAdjust class="flex-1 disabled:opacity-40" />
                 <span class="text-xs text-txtsecondary font-mono whitespace-nowrap">max {fmtCtx(maxCtx)}</span>
               </div>
             </label>
