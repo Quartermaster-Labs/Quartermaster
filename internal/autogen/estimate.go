@@ -29,6 +29,10 @@ type EstimateInput struct {
 	// per-model Override.Ub charged a buffer the real launch never has. 0 => the
 	// same auto pick emit makes (effectiveUb).
 	Ub int
+	// DraftKind is the paired draft sidecar's kind ("mtp"/"dflash", "" for none),
+	// as DraftSidecarForDir reports it. Only consulted when Spec is empty, to
+	// resolve the same auto spec the emitter picks — see EstimatePlan.
+	DraftKind string
 }
 
 // EstimateResult is the previewed load plan for a candidate tuning.
@@ -71,11 +75,21 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 	// KV quant: the fleet default (f16, stepping down to q8_0 only under VRAM
 	// pressure) unless a valid matched override is given — mirrors emitModel, so
 	// the preview's KV reserve matches what a save would emit.
+	// An empty spec means AUTO, not "no drafter" — the emitter runs every model
+	// through effectiveSpec, which hands an MTP-capable gguf draft-mtp+ngram-mod
+	// and charges its 0.34 GB (or the sidecar's real weights). The preview used to
+	// read "" as no spec and charge 0, so a model left on auto spec previewed
+	// 0.34 GB lighter than it bakes. On a tight budget that is the whole margin:
+	// Qwen3.8-27B at 106k previewed -ngl 99 / 0 GB RAM and emitted -ngl 64 / 0.32.
+	spec := in.Spec
+	if spec == "" {
+		spec = effectiveSpec(meta, nil, in.DraftKind)
+	}
 	estTarget := s.TargetVramGB
 	if in.TargetVramGB > 0 {
 		estTarget = in.TargetVramGB
 	}
-	kvDef := defaultKvQuant(s, meta, estTarget, s.VramOverheadGB+draftOverheadGB(in.Spec, in.DraftGB))
+	kvDef := defaultKvQuant(s, meta, estTarget, s.VramOverheadGB+draftOverheadGB(spec, in.DraftGB))
 	kvK, kvV := kvDef, kvDef
 	kvDefK, kvDefV := kvK, kvV
 	if in.KvK != "" {
@@ -105,14 +119,14 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 	// draft file (Gemma-4's MTP sidecar, or any DFlash drafter — always separate)
 	// instead charges its real on-disk weights + a small KV/compute pad, so big
 	// drafts scale up rather than under-counting at 0.34.
-	specOh := draftOverheadGB(in.Spec, in.DraftGB)
+	specOh := draftOverheadGB(spec, in.DraftGB)
 
 	prof := profile{
 		Name:     "estimate",
 		Target:   target,
 		Overhead: s.VramOverheadGB + specOh,
 		Ctx:      in.Ctx,
-		Spec:     in.Spec,
+		Spec:     spec,
 		KvK:      kvK,
 		KvV:      kvV,
 		IsLong:   in.Ctx >= longCtxThreshold,

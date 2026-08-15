@@ -244,9 +244,14 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 	// — otherwise draftOverheadGB charges only its flat 0.1 GB pad and the estimate
 	// bar under-reports the drafter's weights (0.4-1.3 GB here). Harmless for
 	// non-draft specs: draftOverheadGB ignores DraftGB unless spec is draft-*.
+	// DraftKind travels with it: an empty spec means AUTO, and EstimatePlan needs
+	// the sidecar's kind to resolve the same spec the emitter would (a paired mtp
+	// gguf makes an otherwise-plain model draft-capable). Without it a model left
+	// on auto spec previews without the drafter's VRAM.
 	if in.DraftGB == 0 {
-		if _, _, sizeGB := autogen.DraftSidecarForDir(filepath.Dir(gguf)); sizeGB > 0 {
+		if _, kind, sizeGB := autogen.DraftSidecarForDir(filepath.Dir(gguf)); sizeGB > 0 {
 			in.DraftGB = sizeGB
+			in.DraftKind = kind
 		}
 	}
 	// A "-vision" twin loads an mmproj projector whose weights + CLIP compute
