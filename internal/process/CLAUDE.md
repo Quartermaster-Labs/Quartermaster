@@ -54,6 +54,17 @@ Manages the lifecycle of a single upstream llama.cpp subprocess: spawning it wit
 
 **Live config swap + launched-args readout.** `config` is an `atomic.Pointer[ModelConfig]` (`liveConfig`), read once per use via `p.cfg()`. `SetConfig` swaps it for a hot reload; a running upstream keeps serving under the config it spawned with, and the new command/flags take effect on the next `doStart`. `LaunchedCmd()` returns the ACTUAL argv the live process spawned with (`launchedArgs`, set on `StateReady`, cleared on teardown) — what it's really serving under, which differs from `cfg()` after a `SetConfig` or a spawn-time offload rewrite. Surfaced up through `router.LaunchedCmd` → `modelStatus.runningCmd` so the UI shows the running args, not the pending config.
 
+**A premature exit names the missing DLL.** On Windows a backend whose import
+graph is incomplete exits with STATUS_DLL_NOT_FOUND before running any of its own
+code — no stdout, no stderr, nothing in the process log — so `upstream command
+exited prematurely` was the entire diagnosis, and it blamed the model rather than
+the packaging. `prematureExit` now runs `peimports.Hint` on the resolved argv[0]
+and appends what is missing ("needs the AMD ROCm/HIP runtime next to the
+executable or on PATH"). It costs one header walk on a path that has already
+failed, and returns "" for a healthy binary, a non-PE (every Linux backend), or a
+process that died for any other reason — so an OOM or a bad flag still reads the
+way it did before.
+
 **Voices path rewrite is engine-specific.** The proxy `Director` maps `/v1/audio/voices[/{name}]` → `/v1/voices[/{name}]` for qwentts.cpp, whose tts-server hosts voices there. `rewritesVoicesPath(args)` suppresses it when argv carries `--model-path` (mmwillet/TTS.cpp) — that engine ships a binary with the *same name* but serves `/v1/audio/voices` itself, so the rewrite 404s and the Speech tab silently shows only the default speaker. The model flag is the only discriminator; the exe name is not.
 
 **Spawn-time argv rewrite (`SetSpawnArgs`).** `doStart` rewrites the argv after `SanitizedCommand()` and before exec via the optional `spawnArgs` hook (atomic, mirrors `SetPreStop`/`SetPostStart`; fanned out per-model by `baseRouter.SetSpawnArgs`). A returned error **aborts the start** (→ `startResult{err}` → `StateStopped`, refused not crashed). The live consumer is `server.WireDynamicOffload` → `autogen.LiveOffloadArgs`, which recomputes `-ngl`/`--n-cpu-moe` from free VRAM so a stale baked plan can't OOM (see `internal/autogen/CLAUDE.md`). This is the realized form of the old "resolve `${NGL}/${NCPUMOE}` at spawn" goal — done by editing the concrete flags, not macros (config rejects unresolved `${...}` at load). Context size is still baked per-profile.

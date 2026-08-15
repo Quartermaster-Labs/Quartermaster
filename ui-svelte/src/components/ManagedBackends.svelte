@@ -9,7 +9,17 @@
   // hand-entered path stays a first-class way to register a backend. A managed
   // install just writes the same registry row for you and keeps it updated.
   import { onMount, onDestroy } from "svelte";
-  import { Download, RefreshCw, Trash2, Check, ExternalLink, Star, Plus, Pencil } from "lucide-svelte";
+  import {
+    Download,
+    RefreshCw,
+    Trash2,
+    Check,
+    ExternalLink,
+    Star,
+    Plus,
+    Pencil,
+    AlertTriangle,
+  } from "lucide-svelte";
   import {
     getBackendCatalog,
     getBackendReleases,
@@ -562,6 +572,24 @@
                 <span class="font-mono text-[0.65rem] text-error">{last.error}</span>
               {/if}
 
+              <!-- An install that landed but cannot launch. Upstream archives are
+                   not always self-contained (stable-diffusion.cpp's Windows ROCm
+                   zip ships no HIP runtime), and the binary dies before it can
+                   log anything, so this is the only place the user can learn it
+                   from. Not an error: the build is on disk and works the moment
+                   the runtime is beside it. -->
+              {#if comp.installed.some((b) => b.warning)}
+                <div
+                  class="flex items-start gap-2 rounded border border-warning/40 bg-warning/10 px-2 py-1.5 text-[0.7rem] text-txtmain"
+                >
+                  <AlertTriangle size={13} class="mt-0.5 shrink-0 text-warning" />
+                  <!-- The hint carries its own advice — a missing HIP runtime and
+                       a CUDA build on an AMD card need different answers, so do
+                       not staple a generic fix on top of it. -->
+                  <span>{comp.installed.find((b) => b.warning)?.warning}</span>
+                </div>
+              {/if}
+
               <!-- Installing does not take ★ from a backend the user registered
                    earlier, so say plainly when a managed build is on disk but
                    not the thing that actually gets launched. -->
@@ -598,6 +626,10 @@
                       <span class="text-txtmain">{b.version}</span>
                       <span class="text-txtsecondary">{b.variant}</span>
                       <span class="text-txtsecondary">{fmtBytes(b.sizeBytes)}</span>
+                      {#if b.warning}
+                        <!-- Which build is broken, when several are installed. -->
+                        <span class="text-warning" title={b.warning}><AlertTriangle size={12} /></span>
+                      {/if}
                       {#if b.active && (comp.isDefault || comp.kind === "")}
                         <span class="ml-auto inline-flex items-center gap-1 text-primary"><Check size={12} /> in use</span>
                       {:else if b.active}

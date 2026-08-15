@@ -30,18 +30,23 @@ const maxJobs = 20
 // Job tracks one install from resolve to registration. It is copied out under
 // the manager lock, never handed out by pointer.
 type Job struct {
-	ID         string    `json:"id"`
-	Component  string    `json:"component"`
-	Variant    string    `json:"variant"`
-	Version    string    `json:"version"` // resolved tag once known
-	Phase      string    `json:"phase"`
-	Asset      string    `json:"asset,omitempty"`
-	Downloaded int64     `json:"downloaded"`
-	Total      int64     `json:"total"`
-	Err        string    `json:"error,omitempty"`
-	Exe        string    `json:"exe,omitempty"`
-	Started    time.Time `json:"started"`
-	Finished   time.Time `json:"finished,omitzero"`
+	ID         string `json:"id"`
+	Component  string `json:"component"`
+	Variant    string `json:"variant"`
+	Version    string `json:"version"` // resolved tag once known
+	Phase      string `json:"phase"`
+	Asset      string `json:"asset,omitempty"`
+	Downloaded int64  `json:"downloaded"`
+	Total      int64  `json:"total"`
+	Err        string `json:"error,omitempty"`
+	// Warning reports an install that succeeded but produced something that
+	// cannot run — an upstream archive missing its GPU runtime, say. It is not
+	// an error: the bits are on disk and a user who supplies the runtime gets a
+	// working backend, so the install stands and the job says what is wrong.
+	Warning  string    `json:"warning,omitempty"`
+	Exe      string    `json:"exe,omitempty"`
+	Started  time.Time `json:"started"`
+	Finished time.Time `json:"finished,omitzero"`
 }
 
 // Done reports whether the job reached a terminal phase.
@@ -62,6 +67,12 @@ type Manager struct {
 	// OnInstalled is called after a successful install so the caller can point
 	// the backend registry at the new exe and regenerate the config. Optional.
 	OnInstalled func(Installed) error
+	// Preflight inspects a freshly installed executable and returns a
+	// human-readable reason it cannot run, or "" when it looks fine. It is a hook
+	// for the same reason Sources is: the check is platform-specific binary
+	// inspection, and this package depends on the standard library alone.
+	// Optional; nil => installs are not checked.
+	Preflight func(exe string) string
 	// Sources supplies the user's tracked repos, merged after the built-in
 	// catalog by Catalog/Find. It is a hook rather than a field so this package
 	// keeps depending on the standard library alone — persistence lives in the
@@ -459,7 +470,18 @@ func (m *Manager) run(id string, c Component, variant, version string) {
 		fail(err)
 		return
 	}
-	m.update(id, func(j *Job) { j.Phase, j.Exe = PhaseRegistering, inst.Exe })
+	// Check the unpacked build before registering it. Upstream archives are not
+	// always self-contained (stable-diffusion.cpp's Windows ROCm zip ships no HIP
+	// runtime at all), and a backend that cannot load dies before it can log —
+	// so if we do not say this here, the user finds out as an unexplained
+	// "upstream command exited prematurely" at generation time.
+	var warning string
+	if m.Preflight != nil {
+		if warning = m.Preflight(inst.Exe); warning != "" {
+			m.log(fmt.Sprintf("backend install %s: %s", id, warning))
+		}
+	}
+	m.update(id, func(j *Job) { j.Phase, j.Exe, j.Warning = PhaseRegistering, inst.Exe, warning })
 	if m.OnInstalled != nil {
 		if err := m.OnInstalled(inst); err != nil {
 			fail(fmt.Errorf("installed to %s but registering it failed: %w", inst.Dir, err))

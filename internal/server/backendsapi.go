@@ -13,12 +13,16 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/quartermaster-labs/quartermaster/internal/autogen"
 	"github.com/quartermaster-labs/quartermaster/internal/backends"
+	"github.com/quartermaster-labs/quartermaster/internal/peimports"
 	"github.com/quartermaster-labs/quartermaster/internal/shared"
 )
 
@@ -38,6 +42,11 @@ type backendInstalledDTO struct {
 	InstalledAt time.Time `json:"installedAt"`
 	SizeBytes   int64     `json:"sizeBytes"`
 	Active      bool      `json:"active"` // the registry currently points here
+	// Warning is set when the build is on disk but cannot actually launch —
+	// almost always an upstream archive packaged without its GPU runtime. It has
+	// to live on the build rather than only on the install job, because the job
+	// scrolls away and the broken build stays.
+	Warning string `json:"warning,omitempty"`
 }
 
 type backendComponentDTO struct {
@@ -274,6 +283,31 @@ func (s *Server) activeBuild(comp string, installed []backends.Installed) *backe
 	return nil
 }
 
+// preflightCache memoises peimports.Hint per installed build. The catalog is
+// polled while the Backends tab is open and the walk opens every DLL beside the
+// exe, so recomputing it per request would turn an idle tab into steady disk
+// traffic. An install directory is immutable once committed (versioned dirs are
+// never written in place — a reinstall replaces the whole tree), and the exe's
+// modtime keys the entry so a replaced build is re-checked rather than
+// inheriting the old verdict.
+var preflightCache sync.Map // exePath+"\x00"+modtime -> string
+
+// buildWarning reports why an installed build cannot run, or "" when it looks
+// fine. Cached; see preflightCache.
+func buildWarning(exe string) string {
+	st, err := os.Stat(exe)
+	if err != nil {
+		return ""
+	}
+	key := exe + "\x00" + strconv.FormatInt(st.ModTime().UnixNano(), 10)
+	if v, ok := preflightCache.Load(key); ok {
+		return v.(string)
+	}
+	hint := peimports.Hint(exe)
+	preflightCache.Store(key, hint)
+	return hint
+}
+
 // gpuNames lists the host's GPU names from the latest perf sample, deduped.
 func (s *Server) gpuNames() []string {
 	if s.perf == nil {
@@ -357,7 +391,8 @@ func (s *Server) handleAPIBackendCatalog(w http.ResponseWriter, r *http.Request)
 			row := backendInstalledDTO{
 				Version: in.Version, Variant: in.Variant, Exe: in.Exe,
 				InstalledAt: in.InstalledAt, SizeBytes: in.SizeBytes,
-				Active: active != nil && active.Exe == in.Exe,
+				Active:  active != nil && active.Exe == in.Exe,
+				Warning: buildWarning(in.Exe),
 			}
 			if row.Active {
 				a := row

@@ -857,6 +857,10 @@ export interface ManagedBuild {
   installedAt: string;
   sizeBytes: number;
   active: boolean; // the registry currently points here
+  // Set when the build is on disk but cannot launch — nearly always an upstream
+  // archive packaged without its GPU runtime. Without this the failure only ever
+  // shows up as an unexplained "exited prematurely" at generation time.
+  warning?: string;
 }
 
 export interface ManagedComponent {
@@ -900,6 +904,8 @@ export interface BackendJob {
   downloaded: number;
   total: number;
   error?: string;
+  // Installed, but the result cannot run; see ManagedBuild.warning.
+  warning?: string;
   exe?: string;
   started: string;
   finished?: string;

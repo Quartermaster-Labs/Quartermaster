@@ -166,6 +166,20 @@ therefore *coexist* with hand-entered rows in one registry, distinguished by
   supported backend; `Install()` refuses, and the card shows the setup text with
   no install controls. Add a manual entry for any engine we can *drive* but not
   *download*.
+- **An upstream archive is not always complete, and a broken one is silent.**
+  stable-diffusion.cpp's Windows ROCm asset is built against AMD's ROCm *pip
+  wheels* and packaged with `7z a ... .\build\bin\*` — no runtime is copied (the
+  CUDA job in the same workflow does copy its cudart/cublas), so the zip holds
+  three files and imports `amdhip64_7.dll`/`hipblas.dll` from nowhere. It runs
+  only on the CI machine. A binary whose DLL graph is incomplete dies with
+  STATUS_DLL_NOT_FOUND before `main`, so nothing reaches the process log and the
+  failure surfaces as `upstream command exited prematurely` at generation time,
+  pointing at the model instead of at the packaging. `Manager.Preflight` (wired
+  to `peimports.Hint`) walks the import graph after the install commits and puts
+  the missing library on `Job.Warning`; the same check runs per build in the
+  catalog DTO, because a job scrolls away and the broken build does not. The
+  install still succeeds — the bits are on disk and work the moment the runtime
+  sits beside them.
 - **The newest release is not always installable.** Real-ESRGAN's latest tag is
   source-only. `pickRelease` takes an `installable` predicate and, for "latest",
   skips releases with no matching asset for the requested variant/OS.
@@ -173,7 +187,9 @@ therefore *coexist* with hand-entered rows in one registry, distinguished by
 ## Connections
 
 - **Depends on:** the standard library only (`net/http`, `archive/zip`,
-  `archive/tar`).
+  `archive/tar`). Binary inspection is platform-specific, so it arrives through
+  the `Preflight` hook rather than an import, the same way `Sources` keeps
+  sidecar persistence out of here.
 - **Called by:** `internal/server` — `Server.backends` is constructed in
   `server.New` with `GpuNames: s.gpuNames` and `OnInstalled:
   s.registerManagedBackend`; the HTTP surface is `internal/server/backendsapi.go`

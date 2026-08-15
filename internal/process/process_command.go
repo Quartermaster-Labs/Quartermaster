@@ -19,6 +19,7 @@ import (
 	"github.com/quartermaster-labs/quartermaster/internal/config"
 	"github.com/quartermaster-labs/quartermaster/internal/event"
 	"github.com/quartermaster-labs/quartermaster/internal/logmon"
+	"github.com/quartermaster-labs/quartermaster/internal/peimports"
 	"github.com/quartermaster-labs/quartermaster/internal/shared"
 )
 
@@ -644,6 +645,15 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 	}
 	prematureExit := func() startResult {
 		cmdCancel()
+		// A backend whose DLL graph is incomplete dies with STATUS_DLL_NOT_FOUND
+		// before it runs a line of its own code: no stdout, no stderr, nothing in
+		// the process log. "Exited prematurely" is then the only thing anyone
+		// sees, and it points at the model rather than at the packaging. Naming
+		// the missing library costs one header walk on a path we already lost.
+		if hint := peimports.Hint(resolveExe(args[0])); hint != "" {
+			p.proxyLogger.Errorf("<%s> %s", p.id, hint)
+			return startResult{err: fmt.Errorf("upstream command exited prematurely: %s", hint)}
+		}
 		return startResult{err: fmt.Errorf("upstream command exited prematurely")}
 	}
 
