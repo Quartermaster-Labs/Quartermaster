@@ -105,22 +105,44 @@ package-windows: windows
 	cp packaging/windows/start.cmd $(PKG_WIN_DIR)/start.cmd
 	cp -r packaging $(PKG_WIN_DIR)/packaging
 	@echo "$(APP_NAME) $(GIT_HASH) built $(BUILD_DATE)" > $(PKG_WIN_DIR)/VERSION.txt
-	# Zip a CLEAN distributable: exclude the user-data that now lives in the bundle
-	# (private chats + the regenerated-on-launch config.yaml) so it never ships.
-	cd $(BUILD_DIR) && rm -f quartermaster-windows.zip && \
-		( zip -qr quartermaster-windows.zip quartermaster-windows \
-			-x 'quartermaster-windows/playground-data/*' \
-			-x 'quartermaster-windows/.cache/*' \
-			-x 'quartermaster-windows/logs/*' \
-			-x 'quartermaster-windows/config/config.yaml' \
-		|| tar -a -c -f quartermaster-windows.zip \
-			--exclude='quartermaster-windows/playground-data' \
-			--exclude='quartermaster-windows/.cache' \
-			--exclude='quartermaster-windows/logs' \
-			--exclude='quartermaster-windows/config/config.yaml' \
-			quartermaster-windows \
-		|| echo "WARN: no zip/tar found — folder left unarchived at $(PKG_WIN_DIR)" )
-	@echo "Done: $(PKG_WIN_DIR)  (+ $(BUILD_DIR)/quartermaster-windows.zip)"
+	# Zip a CLEAN distributable, OPT-IN via ZIP=1. The bundle doubles as a live
+	# install, so it accumulates ~1.3 GB of FETCHED artifacts the archive must not
+	# carry: bin/ (backend exes the installer wizard downloads on first run) and
+	# config/titlegen/ (the 79 MB title model, fetched on demand). Deflating those
+	# turned a seconds-long re-package into a minutes-long one — and nothing
+	# consumes this zip today (installer.iss and build-release.ps1 both build from
+	# the folder), so it is no longer made by default.
+	# Excluded beyond that: user data living in the bundle — private chats, the
+	# regenerated-on-launch config.yaml, and the overrides sidecar, which holds
+	# the user's API keys and must never ship.
+	@if [ "$(ZIP)" != "1" ]; then \
+		echo "  skipped quartermaster-windows.zip (use ZIP=1 to build it)"; \
+	else \
+		cd $(BUILD_DIR) && rm -f quartermaster-windows.zip && \
+		if command -v zip >/dev/null 2>&1; then \
+			zip -qr quartermaster-windows.zip quartermaster-windows \
+				-x 'quartermaster-windows/playground-data/*' \
+				   'quartermaster-windows/.cache/*' \
+				   'quartermaster-windows/logs/*' \
+				   'quartermaster-windows/bin/*' \
+				   'quartermaster-windows/config/titlegen/*' \
+				   'quartermaster-windows/config/config.yaml' \
+				   'quartermaster-windows/config/quartermaster-overrides.yaml'; \
+		elif command -v tar >/dev/null 2>&1; then \
+			tar -a -c -f quartermaster-windows.zip \
+				--exclude='quartermaster-windows/playground-data' \
+				--exclude='quartermaster-windows/.cache' \
+				--exclude='quartermaster-windows/logs' \
+				--exclude='quartermaster-windows/bin' \
+				--exclude='quartermaster-windows/config/titlegen' \
+				--exclude='quartermaster-windows/config/config.yaml' \
+				--exclude='quartermaster-windows/config/quartermaster-overrides.yaml' \
+				quartermaster-windows; \
+		else \
+			echo "WARN: no zip/tar found — folder left unarchived at $(PKG_WIN_DIR)"; \
+		fi; \
+	fi
+	@echo "Done: $(PKG_WIN_DIR)"
 
 # Assemble a runnable Linux/Mac folder + tar.gz. Same in-place, user-data-preserving
 # refresh as package-windows; no launcher .cmd (the binary runs directly), but the
@@ -150,10 +172,18 @@ _package-nix:
 	cp config.example.yaml $(PKG_NIX_DIR)/config/config.example.yaml
 	cp -r packaging $(PKG_NIX_DIR)/packaging
 	@echo "$(APP_NAME) $(GIT_HASH) built $(BUILD_DATE)" > $(PKG_NIX_DIR)/VERSION.txt
+	# Same exclusions as the Windows bundle: user data (chats, the regenerated
+	# config.yaml, and the API-key-bearing overrides sidecar) plus the fetched
+	# artifacts a live install accumulates (bin/, the slot-KV cache, the title
+	# model). The tarball IS the linux/mac deliverable, so it is not opt-in.
 	cd $(BUILD_DIR) && rm -f $(APP_NAME)-$(NIX_OS).tar.gz && \
 		tar --exclude='$(APP_NAME)-$(NIX_OS)/playground-data' \
 			--exclude='$(APP_NAME)-$(NIX_OS)/logs' \
+			--exclude='$(APP_NAME)-$(NIX_OS)/.cache' \
+			--exclude='$(APP_NAME)-$(NIX_OS)/bin' \
+			--exclude='$(APP_NAME)-$(NIX_OS)/config/titlegen' \
 			--exclude='$(APP_NAME)-$(NIX_OS)/config/config.yaml' \
+			--exclude='$(APP_NAME)-$(NIX_OS)/config/quartermaster-overrides.yaml' \
 			-czf $(APP_NAME)-$(NIX_OS).tar.gz $(APP_NAME)-$(NIX_OS)
 	@echo "Done: $(PKG_NIX_DIR)  (+ $(BUILD_DIR)/$(APP_NAME)-$(NIX_OS).tar.gz)"
 
