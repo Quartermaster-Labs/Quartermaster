@@ -51,7 +51,12 @@ export const extraToolsStore = userPref<boolean>("playground-extratools", true);
 // but bounded — an empty list injects nothing, and Settings → Memory is where a
 // user prunes what the model kept.
 export const memoryStore = userPref<boolean>("playground-memory", true);
-export const reasoningStore = userPref<boolean>("playground-reasoning", true);
+// How hard the model should think. One string covering both worlds: "none" is
+// thinking off, "on" is thinking with no level (a model whose template has no
+// reasoning_effort ladder), anything else is a level off the ladder the server
+// advertised. The pick follows the user across models — lib/effort.ts resolves
+// it against what each one actually accepts, defaulting to medium.
+export const reasoningEffortStore = userPref<string>("playground-reasoning-effort", "medium");
 // Read-aloud: the TTS model the chat tab's speaker button uses. Empty = the
 // button is inert (nothing picked yet). Separate from the Speech tab's model so
 // reading a reply out doesn't hijack whatever that tab is set up for, but the

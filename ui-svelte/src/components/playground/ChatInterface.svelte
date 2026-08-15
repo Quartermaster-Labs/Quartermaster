@@ -12,7 +12,7 @@
     reasoningBudgetStore,
     webSearchStore,
     qmToolsStore,
-    reasoningStore,
+    reasoningEffortStore,
     searxngUrlStore,
     searchProvidersStore,
     searchMaxPerTurnStore,
@@ -67,6 +67,7 @@
   import Composer from "./Composer.svelte";
   import ToolMenu from "./ToolMenu.svelte";
   import { modelCategory } from "../../lib/modelUtils";
+  import { EFFORT_OFF, effortOptions, resolveEffort, requestEffort } from "../../lib/effort";
   import { scrollFade } from "../../lib/scrollFade";
   import { quotePrefix, fmtTokens, TEMP_STEPS, TEMP_LABELS, nearestTempIdx, currentDateLine, REWRITE_SYSTEM, MAX_IMAGES_PER_MESSAGE, validateImageFile, fileToDataUrl, type ToolItem } from "./chatHelpers";
 
@@ -316,6 +317,12 @@
   //    the projector loads, then lets the user pick a file.
   let selectedModel = $derived($models.find((m) => m.id === $selectedModelStore));
   let selectedModelVision = $derived(selectedModel?.capabilities?.vision ?? false);
+  // Reasoning effort: the ladder this model's template accepts (empty = no
+  // ladder, so the control is a plain on/off), the resolved pick for it, and
+  // what that means on the wire. See lib/effort.ts.
+  let effortLadder = $derived(selectedModel?.capabilities?.reasoning_effort ?? []);
+  let effortChoices = $derived(effortOptions(effortLadder));
+  let effort = $derived(resolveEffort($reasoningEffortStore, effortLadder));
   // The vision twin shares the base model's family (= same gguf path) and is the
   // sibling that carries vision caps. Family is precise here (one gguf → one
   // family); caps.vision disambiguates from ctx-tier siblings on the same gguf.
@@ -844,7 +851,11 @@
           tools: turnTools.length ? turnTools : undefined,
           temperature: $temperatureStore,
           max_tokens: $maxTokensStore,
-          reasoning: !isRewrite && $reasoningStore,
+          reasoning: !isRewrite && effort !== EFFORT_OFF,
+          // Only ever a level the model advertised: the server forwards it as the
+          // standard top-level reasoning_effort and the request filter translates
+          // it into the template kwarg — the same path an external client takes.
+          reasoningEffort: isRewrite ? "" : requestEffort(effort),
           reasoningBudget,
           webSearch: webEnabled,
           searxngUrl: $searxngUrlStore, // legacy field: the server falls back to it when the chain is empty
@@ -1452,9 +1463,22 @@
           </div>
         </div>
 
-        <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-reasoning">
-          <span class="flex items-center gap-1.5"><Brain class="w-3.5 h-3.5" /> Reasoning {@render tip("Let the model think before answering (for reasoning-capable models).")}</span>
-          <input id="chat-reasoning" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$reasoningStore} />
+        <label class="flex items-center justify-between gap-2 text-xs uppercase tracking-wide text-txtsecondary" for="chat-reasoning">
+          <span class="flex items-center gap-1.5"><Brain class="w-3.5 h-3.5" /> Reasoning {@render tip(
+            effortLadder.length > 0
+              ? "How hard this model thinks before answering. The levels come from the model's own chat template. Changing it rewrites the top of the system prompt, so it re-reads the conversation — pick one and stay on it. Thinking Budget does not apply at these levels."
+              : "Let the model think before answering (for reasoning-capable models). This model's template has no effort levels, so it is on or off.",
+          )}</span>
+          <select
+            id="chat-reasoning"
+            class="w-32 px-2 py-1 rounded-md border border-card-border bg-surface text-xs normal-case text-txtmain focus:outline-none focus:border-primary"
+            value={effort}
+            onchange={(e) => reasoningEffortStore.set(e.currentTarget.value)}
+          >
+            {#each effortChoices as opt (opt.value)}
+              <option value={opt.value}>{opt.label}</option>
+            {/each}
+          </select>
         </label>
 
         <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-websearch">

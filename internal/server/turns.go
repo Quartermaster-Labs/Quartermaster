@@ -147,6 +147,13 @@ type turnStart struct {
 	MaxTokens   *int            `json:"max_tokens,omitempty"`
 	Tools       json.RawMessage `json:"tools,omitempty"`
 	Reasoning   *bool           `json:"reasoning,omitempty"`
+	// ReasoningEffort is a level off the model's own ladder (advertised as
+	// capabilities.reasoning_effort). Passed through as the standard top-level
+	// OpenAI field and translated into the chat-template kwarg by the request
+	// filter on the way out — the same path an external client takes, so there
+	// is exactly one place that knows how a template spells its levels.
+	// Empty = the model has no ladder, or thinking is off entirely.
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 
 	// Tool loop (phase 2). The client still assembles messages+tools; these are
 	// the numeric knobs + web-search config the server needs to dispatch tools
@@ -744,7 +751,8 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 	// reply). Instead we let every round finish its thought (and any in-flight tool
 	// call) naturally, and once cumulative thinking passes the budget we simply turn
 	// thinking OFF for subsequent rounds so the model must answer. A lone round that
-	// overthinks is bounded by max_tokens, not force-closed.
+	// overthinks is bounded by max_tokens, not force-closed. Models with their own
+	// reasoning-effort ladder opt out of the budget entirely (see the loop below).
 	baseThink := start.Reasoning == nil || *start.Reasoning
 	noAnswerRetried := false
 
@@ -764,7 +772,12 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 
 	for {
 		think := baseThink
-		if think && start.ReasoningBudget > 0 && at.thinking()/4 >= start.ReasoningBudget {
+		// A model driven by its own effort ladder is exempt: the level IS the
+		// budget, and it lives in the chat template's system block. Cutting
+		// thinking off between rounds would rewrite that block mid-conversation
+		// (invalidating the KV prefix) to enforce a second, cruder limit on top
+		// of the one the user picked.
+		if think && start.ReasoningEffort == "" && start.ReasoningBudget > 0 && at.thinking()/4 >= start.ReasoningBudget {
 			think = false // ~4 bytes/token: cumulative thinking hit the budget
 		}
 		msgs := append(append([]json.RawMessage{}, base...), apiTail...)
@@ -1428,6 +1441,13 @@ func buildBody(start turnStart, msgs []json.RawMessage, maxTokens int, think boo
 		}
 	}
 	b["chat_template_kwargs"] = map[string]any{"enable_thinking": think}
+	// Top-level, not a kwarg: the request filter (reasoning_effort.go) snaps it
+	// onto the levels this model actually declares and moves it into
+	// chat_template_kwargs. Pointless once thinking is off — the template never
+	// reaches the branch that reads it.
+	if think && start.ReasoningEffort != "" {
+		b["reasoning_effort"] = start.ReasoningEffort
+	}
 	return b
 }
 

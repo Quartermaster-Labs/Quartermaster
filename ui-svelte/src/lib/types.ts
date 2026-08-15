@@ -16,6 +16,11 @@ export interface ModelCapabilities {
   // (qwentts.cpp). Not implied by audio_speech: TTS.cpp/Kokoro synthesizes from a
   // fixed voice pack and has no clone route.
   voice_clone?: boolean;
+  // Effort levels this model's chat template validates, e.g. ["xhigh","medium",
+  // "low"]. Absent = the template has no reasoning_effort ladder, so the
+  // composer offers a plain on/off instead of levels. Sending anything off this
+  // list is what the template's raise-on-unknown guard 500s on.
+  reasoning_effort?: string[];
 }
 
 export interface Model {

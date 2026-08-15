@@ -18,6 +18,7 @@
     ttsModels,
     chatTtsVoiceStore,
     memoryStore,
+    selectedModelStore,
   } from "../stores/playground";
   import { cachedVoices, fetchVoices, hasCachedVoices, voiceLabel, voiceSubstitution } from "../lib/voices";
   import { generateSpeech } from "../lib/speechApi";
@@ -200,6 +201,13 @@
       void refreshTtsVoices();
     }
   });
+
+  // A model whose chat template declares reasoning-effort levels ignores the
+  // thinking budget (the server skips it — see turns.go runLoop), so the field
+  // is disabled rather than silently doing nothing.
+  let hasEffortLadder = $derived(
+    ($models.find((m) => m.id === $selectedModelStore)?.capabilities?.reasoning_effort ?? []).length > 0,
+  );
 
   // Keep the stored pick inside the list, so the <select> never sits on a value
   // it can't show (a voice cloned on another model, say) while sending it.
@@ -871,8 +879,16 @@
                 step="500"
                 class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary"
                 bind:value={$reasoningBudgetStore}
+                disabled={hasEffortLadder}
               />
-              <p class="text-xs text-txtsecondary">Max reasoning tokens before the model is forced to answer. 0 = unlimited.</p>
+              <p class="text-xs text-txtsecondary">
+                {#if hasEffortLadder}
+                  Not used by this model: it has its own reasoning-effort levels, set in the chat composer. The budget cuts thinking off
+                  between rounds, which fights a level the template already sized.
+                {:else}
+                  Max reasoning tokens before the model is forced to answer. 0 = unlimited.
+                {/if}
+              </p>
             </div>
 
             <!-- Read-aloud TTS. Hidden outright when no TTS model is installed -
