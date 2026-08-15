@@ -12,6 +12,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -134,6 +135,55 @@ type Metadata struct {
 	VisionBlocks    int64
 	VisionHeads     int64
 	VisionMerge     int64
+
+	// ChatTemplatePreservesThinking is true when the baked-in
+	// "tokenizer.chat_template" keeps prior-turn <think> blocks in rendered
+	// history *by default* (Qwen 3.8+ wording: "preserve_thinking is undefined
+	// or preserve_thinking is true"). False for the 3.5/3.6 wording
+	// ("preserve_thinking is defined and ..."), which strips them and so
+	// re-renders history differently every turn, and false for any template
+	// with no preserve_thinking logic at all. See needsQwenFixedChatTemplate.
+	ChatTemplatePreservesThinking bool
+
+	// ChatTemplateEffortLevels are the reasoning-effort values the baked-in chat
+	// template accepts, read out of its own validation guard (Qwen 3.8:
+	// "xhigh", "medium", "low", injected as a system-prompt instruction). Nil
+	// when the template has no reasoning_effort support, or when it has some but
+	// declares no value set we can read — in both cases nothing may be
+	// normalized against it, because the template raises on an unexpected value
+	// and that surfaces as a 500. Only meaningful when the model actually runs
+	// its own template rather than a --chat-template-file override.
+	ChatTemplateEffortLevels []string
+}
+
+// effortLevelsRe pulls the value tuple out of a template's own guard, e.g.
+//
+//	{%- if resolved_reasoning_effort not in ('xhigh', 'medium', 'low') %}
+//	    {{- raise_exception('Unexpected reasoning effort ...') }}
+//
+// Matched against whitespace-collapsed source, so the guard may be wrapped.
+var effortLevelsRe = regexp.MustCompile(`reasoning_effort\s+not\s+in\s*\(([^)]*)\)`)
+
+// effortValueRe extracts one quoted value from that tuple.
+var effortValueRe = regexp.MustCompile(`['"]([A-Za-z0-9_-]+)['"]`)
+
+// scanChatTemplate derives the chat-template feature flags stored on Metadata
+// from the raw jinja source. Matching is done on whitespace-collapsed text so
+// re-indentation by a converter doesn't defeat it; both markers are literal
+// jinja conditions copied from the upstream Qwen templates, which quant
+// repackagers reproduce verbatim.
+func scanChatTemplate(tmpl string) (preservesThinking bool, effortLevels []string) {
+	if tmpl == "" {
+		return false, nil
+	}
+	flat := strings.Join(strings.Fields(tmpl), " ")
+	preservesThinking = strings.Contains(flat, "preserve_thinking is undefined or preserve_thinking is true")
+	if m := effortLevelsRe.FindStringSubmatch(flat); m != nil {
+		for _, v := range effortValueRe.FindAllStringSubmatch(m[1], -1) {
+			effortLevels = append(effortLevels, strings.ToLower(v[1]))
+		}
+	}
+	return preservesThinking, effortLevels
 }
 
 // ggmlTypeSize maps a ggml tensor type to (block size in elements, bytes per
@@ -426,6 +476,7 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 	// real zero, exactly like the PowerShell $null checks.
 	var arch string
 	var genType string
+	var chatTmpl string
 	var blockCount, expertCount, expertUsed *int64
 	var contextLength, embeddingLength, headCount, headCountKv *int64
 	var headCountKvArr []int64
@@ -467,6 +518,17 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 				return Metadata{}, err
 			}
 			genType = s
+			matched = true
+		} else if key == "tokenizer.chat_template" && t == ggufString {
+			// Decoded (not skipped) so the baked template's own feature flags can
+			// gate the arch-derived --chat-template-file override. Templates run
+			// ~10-100 KB — well under ggufReader.str's 1 MB sanity cap — and only
+			// the derived booleans are kept, not the source.
+			_, _, s, err := r.readScalar(t)
+			if err != nil {
+				return Metadata{}, err
+			}
+			chatTmpl = s
 			matched = true
 		} else if arch != "" {
 			pfx := arch + "."
@@ -823,6 +885,7 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 		VisionHeads:       deref(visHeads),
 		VisionMerge:       deref(visMerge),
 	}
+	m.ChatTemplatePreservesThinking, m.ChatTemplateEffortLevels = scanChatTemplate(chatTmpl)
 	return m, nil
 }
 

@@ -40,7 +40,7 @@ func CreateFilterMiddleware(cfg config.Config) chain.Middleware {
 				return
 			}
 
-			useModelName, filters, ok := resolveFilters(cfg, data.Model)
+			useModelName, filters, effortLevels, ok := resolveFilters(cfg, data.Model)
 			if !ok {
 				next.ServeHTTP(w, r)
 				return
@@ -53,6 +53,14 @@ func CreateFilterMiddleware(cfg config.Config) chain.Middleware {
 			}
 
 			body, err = applyFilters(body, data.Model, useModelName, filters)
+			if err != nil {
+				shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+				return
+			}
+
+			// After the configured filters, so a setParams/stripParams rule on
+			// reasoning_effort still has the last word on what arrives here.
+			body, err = applyReasoningEffort(body, effortLevels)
 			if err != nil {
 				shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 				return
@@ -90,7 +98,7 @@ func CreateFormFilterMiddleware(cfg config.Config) chain.Middleware {
 				return
 			}
 
-			useModelName, _, ok := resolveFilters(cfg, data.Model)
+			useModelName, _, _, ok := resolveFilters(cfg, data.Model)
 			if !ok || useModelName == "" {
 				next.ServeHTTP(w, r)
 				return
@@ -166,20 +174,22 @@ func rewriteMultipartModel(form *multipart.Form, useModelName string) ([]byte, s
 }
 
 // resolveFilters returns the filter settings for a requested model. UseModelName
-// only applies to local models; peers carry filters but no name rewrite.
-func resolveFilters(cfg config.Config, requested string) (useModelName string, filters config.Filters, ok bool) {
+// only applies to local models; peers carry filters but no name rewrite, and no
+// capabilities — a peer renders its own chat template, so effort translation is
+// its business, not ours.
+func resolveFilters(cfg config.Config, requested string) (useModelName string, filters config.Filters, effortLevels []string, ok bool) {
 	if realName, found := cfg.RealModelName(requested); found {
 		mc := cfg.Models[realName]
-		return mc.UseModelName, mc.Filters.Filters, true
+		return mc.UseModelName, mc.Filters.Filters, mc.Capabilities.ReasoningEffort, true
 	}
 	for _, peer := range cfg.Peers {
 		for _, m := range peer.Models {
 			if m == requested {
-				return "", peer.Filters, true
+				return "", peer.Filters, nil, true
 			}
 		}
 	}
-	return "", config.Filters{}, false
+	return "", config.Filters{}, nil, false
 }
 
 // applyFilters rewrites the JSON body in place. Order matches the legacy

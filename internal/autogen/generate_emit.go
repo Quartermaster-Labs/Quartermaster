@@ -315,11 +315,34 @@ func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, pro
 	if prof.Unlisted {
 		b.WriteString("    unlisted: true\n")
 	}
-	if prof.Vision {
+	effort := effortLevels(meta, ov)
+	if prof.Vision || len(effort) > 0 {
 		b.WriteString("    capabilities:\n")
-		b.WriteString("      in: [text, image]\n")
-		b.WriteString("      out: [text]\n")
+		if prof.Vision {
+			b.WriteString("      in: [text, image]\n")
+			b.WriteString("      out: [text]\n")
+		}
+		if len(effort) > 0 {
+			fmt.Fprintf(b, "      reasoningEffort: [%s]\n", strings.Join(effort, ", "))
+		}
 	}
+}
+
+// effortLevels reports the reasoning-effort ladder to advertise for a model:
+// the values its baked chat template validates against, but ONLY when that
+// template is the one actually being run. A --chat-template-file override
+// (user-supplied or the built-in Qwen fix) replaces the template wholesale, so
+// the gguf's ladder says nothing about what the running renderer accepts —
+// advertising it there would have the server translate a client's
+// reasoning_effort into a kwarg the live template ignores.
+func effortLevels(meta Metadata, ov *Override) []string {
+	if ov != nil && strings.TrimSpace(ov.ChatTemplateFile) != "" {
+		return nil
+	}
+	if needsQwenFixedChatTemplate(meta) {
+		return nil
+	}
+	return meta.ChatTemplateEffortLevels
 }
 
 func formatCtxTag(ctx int) string {

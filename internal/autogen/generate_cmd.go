@@ -40,16 +40,29 @@ func cmdPath(p string) string {
 // drop-in template renders history deterministically instead.
 const qwenFixedChatTemplateFile = "templates/qwen-fixed-chat-template.jinja"
 
-// needsQwenFixedChatTemplate reports whether a model's gguf arch identifies it
-// as a Qwen 3.5 or 3.6 variant, which should get qwenFixedChatTemplateFile
-// instead of its baked-in gguf template. llama.cpp has not split out a
-// separate arch for 3.6: both "Qwen3.5" and "Qwen3.6"-branded ggufs report
-// "qwen35" (dense) or "qwen35moe" (MoE) — verified against real local ggufs,
-// since neither is exercised by real_models_test.go's fixture set.
-func needsQwenFixedChatTemplate(arch string) bool {
-	switch strings.ToLower(arch) {
+// needsQwenFixedChatTemplate reports whether a model should get
+// qwenFixedChatTemplateFile instead of its baked-in gguf template.
+//
+// Arch alone can't decide this. llama.cpp has not split out a separate arch per
+// Qwen minor: 3.5, 3.6 and 3.8 ggufs all report "qwen35" (dense) or "qwen35moe"
+// (MoE) — verified against real local ggufs, since none are exercised by
+// real_models_test.go's fixture set. But 3.8 fixed the history mutation
+// upstream: its template preserves prior-turn <think> by default
+//
+//	{%- if preserve_thinking is undefined or preserve_thinking is true ...
+//
+// where 3.5/3.6 opt in instead ("preserve_thinking is defined and ..."), so 3.8
+// already renders history deterministically and needs no override. Overriding it
+// anyway is not free: the drop-in template has no reasoning_effort support, so
+// 3.8's low/medium/xhigh effort levels are silently dropped.
+//
+// Hence: match the arch family, then defer to what the baked template actually
+// does. An unrecognised template (no preserve_thinking logic at all) keeps the
+// override — the pre-existing, safe behaviour.
+func needsQwenFixedChatTemplate(meta Metadata) bool {
+	switch strings.ToLower(meta.Architecture) {
 	case "qwen35", "qwen35moe":
-		return true
+		return !meta.ChatTemplatePreservesThinking
 	default:
 		return false
 	}
@@ -312,7 +325,7 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	// Quoted: user paths routinely contain spaces.
 	if ov != nil && strings.TrimSpace(ov.ChatTemplateFile) != "" {
 		lines = append(lines, "--chat-template-file "+cmdPath(ov.ChatTemplateFile))
-	} else if needsQwenFixedChatTemplate(meta.Architecture) {
+	} else if needsQwenFixedChatTemplate(meta) {
 		lines = append(lines, fmt.Sprintf("--chat-template-file %s", qwenFixedChatTemplateFile))
 	}
 	// Advanced / power-user knobs. Each is gated on a set override field (zero/

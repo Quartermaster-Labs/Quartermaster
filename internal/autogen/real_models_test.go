@@ -4,12 +4,52 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 // realModelsRoot is the local GGUF tree. Tests here are skipped when it is
-// absent so CI without the models still passes.
-const realModelsRoot = `E:\Apps\LLM\Models`
+// absent (empty string => every os.Stat guard fails) so CI without the models
+// still passes.
+//
+// Resolved at runtime, not hardcoded: the tree has already moved between drives
+// once, and the leftover empty directory was still Stat-able — so the guards
+// passed, discovery found no models, and the tests failed instead of skipping.
+// A root only counts when it actually holds a gguf. Override with
+// QM_TEST_MODELS_ROOT.
+var realModelsRoot = findRealModelsRoot()
+
+func findRealModelsRoot() string {
+	for _, c := range []string{os.Getenv("QM_TEST_MODELS_ROOT"), `D:\LLM\Models`, `E:\Apps\LLM\Models`} {
+		if c != "" && hasGguf(c, 3) {
+			return c
+		}
+	}
+	return ""
+}
+
+// hasGguf reports whether dir contains a *.gguf within depth levels. Depth is
+// bounded so a wrong candidate costs a shallow scan, not a full-tree walk.
+func hasGguf(dir string, depth int) bool {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range ents {
+		if !e.IsDir() && strings.EqualFold(filepath.Ext(e.Name()), ".gguf") {
+			return true
+		}
+	}
+	if depth <= 1 {
+		return false
+	}
+	for _, e := range ents {
+		if e.IsDir() && hasGguf(filepath.Join(dir, e.Name()), depth-1) {
+			return true
+		}
+	}
+	return false
+}
 
 // ref captures the PowerShell Read-GgufMetadata + Get-LlamaLoadPlan output for a
 // model, used as the golden reference for the Go port. Generated with

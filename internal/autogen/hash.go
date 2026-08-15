@@ -79,7 +79,12 @@ const hashCacheSuffix = ".modelhash"
 //	     addition — it now tops vramOverheadGB up rather than stacking on it, so a
 //	     long profile stops paying two independent 0.5 GB pads and recovers the
 //	     layer it was offloading for nothing.
-const genVersion = "v39"
+//	v40: Qwen 3.8 keeps its own chat template (the built-in fix is now gated on
+//	     what the baked template does, not on arch alone) and models whose
+//	     template validates a reasoning_effort ladder emit
+//	     capabilities.reasoningEffort, which the proxy uses to translate a
+//	     client's OpenAI reasoning_effort field into a chat_template_kwarg.
+const genVersion = "v40"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

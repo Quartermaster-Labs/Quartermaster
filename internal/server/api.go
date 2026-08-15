@@ -65,7 +65,7 @@ func renderCapabilities(caps config.ModelCapConfig) (arch map[string]any, capsMa
 	}
 
 	// Build capabilities map only if there's something to put in it.
-	if hasIn || hasOut || caps.Tools || caps.Reranker || caps.Embedding || caps.Segmentation || caps.VoiceClone {
+	if hasIn || hasOut || caps.Tools || caps.Reranker || caps.Embedding || caps.Segmentation || caps.VoiceClone || len(caps.ReasoningEffort) > 0 {
 		capsMap = make(map[string]any)
 	}
 
@@ -112,6 +112,17 @@ func renderCapabilities(caps config.ModelCapConfig) (arch map[string]any, capsMa
 	// the model reported named speakers.
 	if caps.VoiceClone {
 		capsMap["voice_clone"] = true
+	}
+
+	// Reasoning effort is a chat-template feature, not a sampler one, so it is
+	// advertised as the concrete ladder the template accepts rather than a bare
+	// bool: a client that picks a value off this list is guaranteed not to hit
+	// the template's raise-on-unknown guard. "reasoning_effort" joins
+	// supported_parameters because the request field IS the OpenAI-standard one
+	// (normalizeReasoningEffort translates it on the way through).
+	if len(caps.ReasoningEffort) > 0 {
+		capsMap["reasoning_effort"] = caps.ReasoningEffort
+		params = append(params, "reasoning_effort")
 	}
 
 	if caps.Context > 0 {

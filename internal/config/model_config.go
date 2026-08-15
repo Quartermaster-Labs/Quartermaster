@@ -31,12 +31,20 @@ type ModelCapConfig struct {
 	// fixed-voice-pack engine like TTS.cpp/Kokoro serves speech but has no
 	// endpoint to clone with, and offering the UI for it produces a 404 at best.
 	VoiceClone bool `yaml:"voiceClone"`
-	Context    int  `yaml:"context"`
+	// ReasoningEffort lists the reasoning-effort levels this model's chat
+	// template accepts (Qwen 3.8: xhigh/medium/low), lowest-cost value LAST as
+	// the template declares them. Non-empty is the signal that an incoming
+	// OpenAI `reasoning_effort` field may be translated into a
+	// chat_template_kwargs entry — a template that doesn't understand the value
+	// raises, which surfaces as a 500, so an unlisted model is never translated
+	// for. Advertised in /v1/models so a client can discover the ladder.
+	ReasoningEffort []string `yaml:"reasoningEffort"`
+	Context         int      `yaml:"context"`
 }
 
 // Empty returns true when all fields are at their zero values.
 func (c ModelCapConfig) Empty() bool {
-	return len(c.In) == 0 && len(c.Out) == 0 && !c.Tools && !c.Reranker && !c.Embedding && !c.Segmentation && !c.VoiceClone && c.Context == 0
+	return len(c.In) == 0 && len(c.Out) == 0 && !c.Tools && !c.Reranker && !c.Embedding && !c.Segmentation && !c.VoiceClone && len(c.ReasoningEffort) == 0 && c.Context == 0
 }
 
 // Validate checks that all modality values are recognized and context is
