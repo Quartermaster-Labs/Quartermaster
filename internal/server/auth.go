@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"strings"
 
@@ -23,11 +24,13 @@ func CreateAuthMiddleware(cfg config.Config) chain.Middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			provided := shared.ExtractAPIKey(r)
 
+			// Constant-time compare, and never short-circuit the loop: both a
+			// byte-wise `==` and an early `break` leak how much of a guessed key
+			// was right through response timing.
 			valid := false
 			for _, key := range keys {
-				if provided == key {
+				if subtle.ConstantTimeCompare([]byte(provided), []byte(key)) == 1 {
 					valid = true
-					break
 				}
 			}
 			if !valid {

@@ -16,6 +16,7 @@ import (
 	"github.com/quartermaster-labs/quartermaster/internal/config"
 	"github.com/quartermaster-labs/quartermaster/internal/hub"
 	"github.com/quartermaster-labs/quartermaster/internal/logmon"
+	"github.com/quartermaster-labs/quartermaster/internal/peimports"
 	"github.com/quartermaster-labs/quartermaster/internal/perf"
 	"github.com/quartermaster-labs/quartermaster/internal/router"
 	"github.com/quartermaster-labs/quartermaster/internal/shared"
@@ -260,6 +261,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	s.backends = backends.NewManager("", func(m string) { proxylog.Info(m) })
 	s.backends.GpuNames = s.gpuNames
 	s.backends.OnInstalled = s.registerManagedBackend
+	s.backends.Preflight = peimports.Hint // catch an archive shipped without its GPU runtime
 	s.backends.Sources = s.trackedSources // user-tracked repos, merged over the built-in catalog
 	// The model browser writes into the models folder and then regenerates
 	// directly, rather than waiting on the -watch-models poll (up to 30s away,
@@ -623,6 +625,14 @@ func (s *Server) routes() {
 	// by design, so when the socket is bound beyond loopback it is instead gated
 	// by remote address. Pass-through unless SetAdminAccess enabled it. See admin.go.
 	adminChain := chain.New(s.adminMiddleware())
+	// The playground listener shares this mux, so it is NOT exempt from the admin
+	// guard (that exemption used to hand every host on the network the config
+	// editor and the backend installer). These two chains carry the explicit
+	// allowlist of admin routes the playground app needs instead: pgAssetChain
+	// for the SPA bundle a logged-out browser must fetch, pgChain for the data
+	// routes behind the login. Everything else stays on adminChain.
+	pgAssetChain := chain.New(s.requirePlaygroundOrAdmin(false))
+	pgChain := chain.New(s.requirePlaygroundOrAdmin(true))
 
 	mux := http.NewServeMux()
 	dispatch := http.HandlerFunc(s.localPeerHandler)
@@ -662,8 +672,10 @@ func (s *Server) routes() {
 
 	// Embedded UI. Admin-gated: the dashboard drives every unauthenticated ops
 	// endpoint, so serving it to a remote host would be handing out the keys.
-	// The playground app is exempt (see adminAllowed) and keeps its own port.
-	mux.Handle("GET /ui/", adminChain.ThenFunc(s.handleUI))
+	// One bundle serves both apps, so the playground port must be able to fetch
+	// it logged-out; a remote caller who navigates to the dashboard half gets a
+	// working shell whose every XHR is refused by adminChain.
+	mux.Handle("GET /ui/", pgAssetChain.ThenFunc(s.handleUI))
 	mux.HandleFunc("GET /favicon.ico", s.handleFavicon)
 
 	// Prometheus metrics (wrapped by apiChain, matches the legacy endpoint).
@@ -684,24 +696,31 @@ func (s *Server) routes() {
 	mux.Handle("POST /api/models/unload", adminChain.ThenFunc(s.handleAPIUnloadAll))
 	mux.Handle("POST /api/models/unload/{model...}", adminChain.ThenFunc(s.handleAPIUnloadModel))
 	mux.Handle("GET /api/catalog", adminChain.ThenFunc(s.handleAPICatalog))
-	mux.Handle("GET /api/events", adminChain.ThenFunc(s.handleAPIEvents))
+	// Model status feeds the playground's model picker, so this one is on
+	// pgChain — the handler drops the log/metrics streams for a playground caller
+	// (see handleAPIEvents) so the picker does not come with the server's logs.
+	mux.Handle("GET /api/events", pgChain.ThenFunc(s.handleAPIEvents))
 	mux.Handle("GET /api/metrics", adminChain.ThenFunc(s.handleAPIMetrics))
 	mux.Handle("GET /api/backend-metrics", adminChain.ThenFunc(s.handleAPIBackendMetrics))
 	mux.Handle("GET /api/performance", adminChain.ThenFunc(s.handleAPIPerformance))
 	mux.Handle("GET /api/version", apiChain.ThenFunc(s.handleAPIVersion))
 	mux.Handle("POST /api/update", adminChain.ThenFunc(s.handleAPIUpdate))
 	mux.Handle("GET /api/captures/{id}", adminChain.ThenFunc(s.handleAPICapture))
-	mux.Handle("GET /api/websearch", adminChain.ThenFunc(s.handleAPIWebSearch))
-	mux.Handle("POST /api/websearch", adminChain.ThenFunc(s.handleAPIWebSearch))
-	mux.Handle("GET /api/youtube/meta", adminChain.ThenFunc(s.handleAPIYouTubeMeta))
-	mux.Handle("GET /api/imgproxy", adminChain.ThenFunc(s.handleAPIImageProxy))
-	mux.Handle("GET /api/fx", adminChain.ThenFunc(s.handleAPIFxRate))
+	// Chat-tool fetch paths: the playground calls all four from the browser, so
+	// they sit on pgChain. Each is a bounded outbound fetch (fetch_page's SSRF
+	// guard, a YouTube/FX API, an image proxy) rather than an ops endpoint.
+	mux.Handle("GET /api/websearch", pgChain.ThenFunc(s.handleAPIWebSearch))
+	mux.Handle("POST /api/websearch", pgChain.ThenFunc(s.handleAPIWebSearch))
+	mux.Handle("GET /api/youtube/meta", pgChain.ThenFunc(s.handleAPIYouTubeMeta))
+	mux.Handle("GET /api/imgproxy", pgChain.ThenFunc(s.handleAPIImageProxy))
+	mux.Handle("GET /api/fx", pgChain.ThenFunc(s.handleAPIFxRate))
 
 	// Standalone playground (separate port): which app to render + not-serious
 	// per-user login & chat history. /api/mode is always safe; the rest 501/401
 	// when the playground is disabled or the caller isn't logged in.
 	mux.Handle("GET /api/mode", apiChain.ThenFunc(s.handlePlaygroundMode))
 	mux.Handle("POST /auth/login", apiChain.ThenFunc(s.handlePlaygroundLogin))
+	mux.Handle("POST /auth/signup", apiChain.ThenFunc(s.handlePlaygroundSignup))
 	mux.Handle("POST /auth/logout", apiChain.ThenFunc(s.handlePlaygroundLogout))
 	mux.Handle("GET /auth/me", apiChain.ThenFunc(s.handlePlaygroundMe))
 	mux.Handle("GET /api/chats", apiChain.ThenFunc(s.handlePlaygroundChats))

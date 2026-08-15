@@ -65,14 +65,13 @@ func ParseAdminAllow(list string) ([]*net.IPNet, error) {
 }
 
 // adminAllowed reports whether a request may reach the admin surface.
+//
+// The listen address plays no part: every listener — playground included —
+// shares this one mux, so a per-listener exemption would publish the whole admin
+// surface on that port. The playground's own needs are handled by an explicit
+// allowlist instead (requirePlaygroundOrAdmin), never by widening this.
 func (s *Server) adminAllowed(r *http.Request) bool {
 	if !s.admin.localOnly {
-		return true
-	}
-	// The playground is its own app on its own port with its own login; it is
-	// meant to be reachable remotely and shares none of the admin handlers that
-	// matter (its routes are not admin-guarded).
-	if isPlaygroundRequest(r) {
 		return true
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -112,3 +111,39 @@ func (s *Server) requireAdmin(next http.Handler) http.Handler {
 
 // adminMiddleware returns the guard as a chain.Middleware.
 func (s *Server) adminMiddleware() chain.Middleware { return s.requireAdmin }
+
+// requirePlaygroundOrAdmin guards the handful of admin-chain routes the
+// playground app genuinely needs in the browser (see the pgChain registrations
+// in routes()): the SPA bundle, the model-status stream, and the chat tools'
+// fetch paths — web search, YouTube metadata, the image proxy, FX rates.
+//
+// A remote playground user reaches exactly these and nothing else; the config
+// editor, backend installer, hub downloader, log stream and /upstream
+// passthrough stay on adminChain and answer to this host only. loginRequired
+// distinguishes the SPA bundle (must be served to a logged-out browser, else
+// there is no login form) from the data routes behind it.
+//
+// Whoever adds the next /api route: the default is adminChain. Putting it here
+// means "a stranger on the playground port may call this".
+func (s *Server) requirePlaygroundOrAdmin(loginRequired bool) chain.Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if s.adminAllowed(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if isPlaygroundRequest(r) && s.playground != nil {
+				if !loginRequired || s.playground.userFromRequest(r) != "" {
+					next.ServeHTTP(w, r)
+					return
+				}
+				shared.SendResponse(w, r, http.StatusUnauthorized, "not logged in")
+				return
+			}
+			s.proxylog.Warnf("denied admin request %s %s from %s (not loopback; use -admin-allow or -admin-open)",
+				r.Method, r.URL.Path, r.RemoteAddr)
+			shared.SendResponse(w, r, http.StatusForbidden,
+				"forbidden: admin endpoints are restricted to this host (start quartermaster with -admin-allow <cidr> or -admin-open to widen)")
+		})
+	}
+}

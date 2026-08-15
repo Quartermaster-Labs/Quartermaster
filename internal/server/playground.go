@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -17,6 +18,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/quartermaster-labs/quartermaster/internal/logmon"
 )
@@ -139,7 +142,38 @@ func (p *Playground) saveUsers(users map[string]string) error {
 		return err
 	}
 	b, _ := json.MarshalIndent(users, "", "  ")
-	return os.WriteFile(p.usersPath(), b, 0o644)
+	// 0600: the file is beside the binary, so a backup, a synced folder or a
+	// screenshot of the install dir would otherwise carry everyone's credential.
+	return os.WriteFile(p.usersPath(), b, 0o600)
+}
+
+// hashPassword stores a bcrypt hash rather than the password itself. The login
+// remains deliberately unserious (see the type comment) — this is not about
+// defending the playground, it is that people type a password they use
+// elsewhere, and users.json lives next to the binary where a backup or a sync
+// client will happily copy it.
+func hashPassword(pw string) (string, error) {
+	h, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
+	return string(h), err
+}
+
+// checkPassword verifies pw against a stored value, transparently accepting the
+// plaintext entries written by builds before hashing existed. ok reports the
+// match; upgrade carries a fresh hash to persist when the stored value was one
+// of those legacy plaintexts, so an install migrates on first login instead of
+// locking everyone out.
+func checkPassword(stored, pw string) (ok bool, upgrade string) {
+	if strings.HasPrefix(stored, "$2") { // bcrypt: $2a$ / $2b$ / $2y$
+		return bcrypt.CompareHashAndPassword([]byte(stored), []byte(pw)) == nil, ""
+	}
+	if subtle.ConstantTimeCompare([]byte(stored), []byte(pw)) != 1 {
+		return false, ""
+	}
+	h, err := hashPassword(pw)
+	if err != nil {
+		return true, "" // matched; just could not upgrade
+	}
+	return true, h
 }
 
 // Per-user layout: DataDir/users/<user>/{chats,imagechats,speechchats,prefs}.json
@@ -383,29 +417,59 @@ func (p *Playground) Migrate() {
 	}
 }
 
-// POST /auth/login {username,password}. Unknown username registers; known one
-// must match. On success sets the pg_user cookie.
-func (s *Server) handlePlaygroundLogin(w http.ResponseWriter, r *http.Request) {
-	p := s.playground
-	if p == nil {
-		http.Error(w, "playground not enabled", http.StatusNotImplemented)
-		return
-	}
+// minPasswordLen is a floor, not a policy. Nothing here is a security boundary
+// (see the Playground type comment); it only stops an empty-ish password being
+// set by accident on an account that keeps someone's chat history.
+const minPasswordLen = 6
+
+// readCredentials decodes and validates the {username,password} body shared by
+// login and signup. It writes the error response itself and returns ok=false.
+func readCredentials(w http.ResponseWriter, r *http.Request) (user, pass string, ok bool) {
 	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
-		return
+		return "", "", false
 	}
 	body.Username = strings.TrimSpace(body.Username)
 	if !pgUserRe.MatchString(body.Username) {
 		http.Error(w, "username must be 1-40 chars: letters, digits, _ or -", http.StatusBadRequest)
-		return
+		return "", "", false
 	}
 	if body.Password == "" {
 		http.Error(w, "password required", http.StatusBadRequest)
+		return "", "", false
+	}
+	return body.Username, body.Password, true
+}
+
+// setSessionCookie issues the authenticated pg_user cookie.
+func (p *Playground) setSessionCookie(w http.ResponseWriter, r *http.Request, user string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     pgCookie,
+		Value:    p.cookieValue(user),
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   60 * 60 * 24 * 30, // 30d — persist login across tab/browser close
+	})
+}
+
+// POST /auth/login {username,password} — existing accounts only. Creating one is
+// POST /auth/signup: a login form that silently registers whatever username is
+// typed turns every typo into a new empty account, and gives no way to tell
+// "wrong password" from "no such user".
+func (s *Server) handlePlaygroundLogin(w http.ResponseWriter, r *http.Request) {
+	p := s.playground
+	if p == nil {
+		http.Error(w, "playground not enabled", http.StatusNotImplemented)
+		return
+	}
+	username, password, ok := readCredentials(w, r)
+	if !ok {
 		return
 	}
 
@@ -416,28 +480,68 @@ func (s *Server) handlePlaygroundLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not read users", http.StatusInternalServerError)
 		return
 	}
-	if existing, ok := users[body.Username]; ok {
-		if existing != body.Password {
-			http.Error(w, "wrong password", http.StatusUnauthorized)
-			return
-		}
-	} else {
-		users[body.Username] = body.Password
+	stored, exists := users[username]
+	if !exists {
+		http.Error(w, "no such user — sign up first", http.StatusUnauthorized)
+		return
+	}
+	match, upgrade := checkPassword(stored, password)
+	if !match {
+		http.Error(w, "wrong password", http.StatusUnauthorized)
+		return
+	}
+	if upgrade != "" { // legacy plaintext entry, rewrite it as a hash
+		users[username] = upgrade
 		if err := p.saveUsers(users); err != nil {
-			http.Error(w, "could not save user", http.StatusInternalServerError)
-			return
+			s.proxylog.Warnf("could not upgrade stored password for %q: %v", username, err)
 		}
 	}
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     pgCookie,
-		Value:    p.cookieValue(body.Username),
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   60 * 60 * 24 * 30, // 30d — persist login across tab/browser close (plaintext local auth)
-	})
-	writeJSON(w, map[string]string{"username": body.Username})
+	p.setSessionCookie(w, r, username)
+	writeJSON(w, map[string]string{"username": username})
+}
+
+// POST /auth/signup {username,password} — creates an account and logs it in.
+// 409 when the name is taken.
+func (s *Server) handlePlaygroundSignup(w http.ResponseWriter, r *http.Request) {
+	p := s.playground
+	if p == nil {
+		http.Error(w, "playground not enabled", http.StatusNotImplemented)
+		return
+	}
+	username, password, ok := readCredentials(w, r)
+	if !ok {
+		return
+	}
+	if len(password) < minPasswordLen {
+		http.Error(w, "password must be at least 6 characters", http.StatusBadRequest)
+		return
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	users, err := p.loadUsers()
+	if err != nil {
+		http.Error(w, "could not read users", http.StatusInternalServerError)
+		return
+	}
+	if _, exists := users[username]; exists {
+		http.Error(w, "username already taken", http.StatusConflict)
+		return
+	}
+	hash, err := hashPassword(password)
+	if err != nil {
+		http.Error(w, "could not create user", http.StatusInternalServerError)
+		return
+	}
+	users[username] = hash
+	if err := p.saveUsers(users); err != nil {
+		http.Error(w, "could not save user", http.StatusInternalServerError)
+		return
+	}
+
+	p.setSessionCookie(w, r, username)
+	writeJSON(w, map[string]string{"username": username})
 }
 
 // POST /auth/logout — clears the cookie.

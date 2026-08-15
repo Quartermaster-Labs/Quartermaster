@@ -403,20 +403,32 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 
 	defer event.On(func(e shared.ProcessStateChangeEvent) { sendModels() })()
 	defer event.On(func(e shared.ConfigFileChangedEvent) { sendModels() })()
-	defer s.proxylog.OnLogData(func(data []byte) { sendLogData("proxy", data) })()
-	defer s.upstreamlog.OnLogData(func(data []byte) { sendLogData("upstream", data) })()
-	defer event.On(func(e ActivityLogEvent) { sendMetrics([]ActivityLogEntry{e.Metrics}) })()
-	defer event.On(func(e shared.InFlightRequestsEvent) { sendInFlight(e.Total) })()
 	defer event.On(func(e shared.LiveTokensEvent) { sendLiveTokens(e) })()
-	defer event.On(func(e BackendMetricsEvent) { sendBackendMetrics(e.Metrics) })()
+
+	// A playground caller subscribes to model status only. It reaches this route
+	// (pgChain) purely to populate its model picker, and it may be a stranger on
+	// the LAN, so the server's log stream, request history and backend telemetry
+	// are not part of the deal. An admin caller — the dashboard — gets the lot.
+	fullFeed := s.adminAllowed(r)
+	if fullFeed {
+		defer s.proxylog.OnLogData(func(data []byte) { sendLogData("proxy", data) })()
+		defer s.upstreamlog.OnLogData(func(data []byte) { sendLogData("upstream", data) })()
+		defer event.On(func(e ActivityLogEvent) { sendMetrics([]ActivityLogEntry{e.Metrics}) })()
+		defer event.On(func(e shared.InFlightRequestsEvent) { sendInFlight(e.Total) })()
+		defer event.On(func(e BackendMetricsEvent) { sendBackendMetrics(e.Metrics) })()
+	}
 
 	// initial payload
-	sendLogData("proxy", s.proxylog.GetHistory())
-	sendLogData("upstream", s.upstreamlog.GetHistory())
+	if fullFeed {
+		sendLogData("proxy", s.proxylog.GetHistory())
+		sendLogData("upstream", s.upstreamlog.GetHistory())
+	}
 	sendModels()
-	sendMetrics(s.metrics.getMetrics())
-	sendInFlight(int(s.inflight.Current()))
-	sendBackendMetrics(s.backendMetrics.snapshot())
+	if fullFeed {
+		sendMetrics(s.metrics.getMetrics())
+		sendInFlight(int(s.inflight.Current()))
+		sendBackendMetrics(s.backendMetrics.snapshot())
+	}
 
 	for {
 		select {

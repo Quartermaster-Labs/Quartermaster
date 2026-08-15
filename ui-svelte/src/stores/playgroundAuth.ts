@@ -22,15 +22,26 @@ export async function checkMe(): Promise<void> {
   }
 }
 
-export async function login(username: string, password: string): Promise<void> {
-  const r = await fetch("/auth/login", {
+async function credentials(path: string, username: string, password: string): Promise<void> {
+  const r = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password }),
   });
-  if (!r.ok) throw new Error((await r.text()).trim() || "login failed");
+  if (!r.ok) throw new Error((await r.text()).trim() || "request failed");
   const j = await r.json();
   me.set(j.username);
+}
+
+// Sign in to an existing account. An unknown username is an error here —
+// creating one goes through signup().
+export async function login(username: string, password: string): Promise<void> {
+  return credentials("/auth/login", username, password);
+}
+
+// Create an account and sign into it. 409 when the name is taken.
+export async function signup(username: string, password: string): Promise<void> {
+  return credentials("/auth/signup", username, password);
 }
 
 export async function logout(): Promise<void> {
