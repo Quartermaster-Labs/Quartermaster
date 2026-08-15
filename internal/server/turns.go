@@ -82,16 +82,27 @@ type activeTurn struct {
 	thinkBytes  int    // all reasoning emitted this turn (field-based + inlined), for the soft budget
 	inlineThink bool   // an inline <think> span is open in content (see append)
 	inlineStart time.Time
+	inlineAt    int     // content offset of the open span's inner text (see closeInline)
 	thinkMs     []int64 // wall time of each closed inline span, in span order
-	// Reasoning-box titles from the CPU title model (titlegen.go), filled once at
-	// end of turn. reasoningTitle covers the field-based trace; thinkTitles is
-	// one per inline <think> span, in span order. Empty = UI keeps its local
-	// heuristic.
+	// Reasoning-box titles from the CPU title model (titlegen.go). reasoningTitle
+	// covers the field-based trace; thinkTitles is one per inline <think> span, in
+	// span order. Empty = UI keeps its local heuristic. Filled INCREMENTALLY: a
+	// box is titled the moment it closes (its text is final then — only the open
+	// span is still moving), with a gap-filling pass at end of turn. A tool loop
+	// can run for minutes, so waiting for the whole turn left every finished box
+	// on the local heuristic for the entire run.
 	reasoningTitle string
 	thinkTitles    []string
-	done           bool
-	subs           map[chan turnDelta]struct{}
-	cancel         context.CancelFunc
+	// titleJobs feeds the per-turn title worker (titlegen.go, titleWorker).
+	// Non-blocking sends: a full queue means the CPU model is behind, and the
+	// end-of-turn pass fills whatever was dropped.
+	titleJobs   chan titleJob
+	titleDone   chan struct{}
+	titleQueued bool             // reasoning-field trace is final (the answer started) and was queued
+	titleSent   map[int]struct{} // inline span ordinals already handed to the worker
+	done        bool
+	subs        map[chan turnDelta]struct{}
+	cancel      context.CancelFunc
 	// pending is the config change awaiting the user's accept/deny (qm tools).
 	// Non-nil only while a quartermaster_configure call is blocked on approval.
 	pending *pendingApproval
@@ -176,7 +187,21 @@ func (at *activeTurn) append(kind, text string) {
 	switch kind {
 	case "content":
 		at.closeInline()
+		// The reasoning FIELD is final the moment the answer starts: everything the
+		// model thinks after this point is spliced in as an inline span instead. So
+		// title it now rather than at end of turn — on a plain one-round turn that
+		// box is collapsed and on screen for the whole answer.
+		if !at.titleQueued && strings.TrimSpace(at.reasoning) != "" {
+			at.titleQueued = true
+			at.enqueueTitle(titleJob{idx: -1, text: at.reasoning})
+		}
 		at.content += text
+		// A model that writes its own <think> tags into content closes a box with a
+		// token, not with an event — so the close IS this delta. Cheap tail check
+		// (endedThinkSpan) gates the scan, which therefore runs once per closed box.
+		if endedThinkSpan(at.content, text) {
+			at.queueTitles()
+		}
 		at.fan(turnDelta{Kind: "content", Text: text})
 	case "reasoning":
 		at.thinkBytes += len(text)
@@ -201,6 +226,7 @@ func (at *activeTurn) append(kind, text string) {
 			at.inlineThink = true
 			at.inlineStart = time.Now()
 			at.emitContent("\n\n<think>")
+			at.inlineAt = len(at.content)
 		}
 		at.emitContent(text)
 	}
@@ -218,13 +244,21 @@ func (at *activeTurn) closeInline() {
 		return
 	}
 	at.inlineThink = false
+	span := at.content[min(at.inlineAt, len(at.content)):]
 	at.emitContent("</think>\n\n")
 	// Per-span duration, so each inline box can say "Thought for 4.2s" like the
 	// leading reasoning_content one does. Spans are ordered, so the UI zips this
 	// onto the think segments it tokenizes out of content by index.
 	ms := time.Since(at.inlineStart).Milliseconds()
+	idx := len(at.thinkMs)
 	at.thinkMs = append(at.thinkMs, ms)
 	at.fan(turnDelta{Kind: "thinkMs", GenMs: ms})
+	// This box is closed, so its text will not change again: title it now instead
+	// of waiting for the turn (which may still have several tool rounds to run).
+	if idx < titlegenMaxSpans && strings.TrimSpace(span) != "" {
+		at.markTitleSent(idx)
+		at.enqueueTitle(titleJob{idx: idx, text: span})
+	}
 }
 
 // endInline closes a trailing inline <think> span at end of turn, so a finished
@@ -629,6 +663,7 @@ func (tm *turnManager) run(ctx context.Context, user string, at *activeTurn, sta
 	// client's copy holds /api/media refs once the session round-trips through
 	// extractMedia, and the upstream can't resolve those.
 	start.Messages = tm.pg.inlineMedia(user, start.Messages)
+	tm.startTitler(ctx, at) // titles each reasoning box as it closes (titlegen.go)
 	kind, msg := "done", ""
 	if err := tm.runLoop(ctx, at, start); err != nil && ctx.Err() == nil {
 		kind, msg = "error", err.Error()
@@ -1269,9 +1304,10 @@ func (tm *turnManager) streamRound(ctx context.Context, at *activeTurn, start tu
 		acc.Args += args
 	}
 	onProgress := func() {
-		if time.Since(lastFlush) >= turnFlushInterval {
+		now := time.Now()
+		if now.Sub(lastFlush) >= turnFlushInterval {
 			tm.flush("", at, false, "")
-			lastFlush = time.Now()
+			lastFlush = now
 		}
 	}
 

@@ -27,8 +27,9 @@
     reasoning_content?: string;
     reasoningTimeMs?: number;
     thinkMs?: number[];
-    // Reasoning gists from the server's CPU title model (titlegen.go). Absent
-    // (older messages, titling not installed) → the local thinkSummary heuristic.
+    // Reasoning gists from the server's CPU title model (titlegen.go), landing
+    // per box as that box closes. Absent or blank (still being titled, older
+    // messages, titling not installed) → the local thinkSummary heuristic.
     reasoningTitle?: string;
     thinkTitles?: string[];
     genTimeMs?: number;

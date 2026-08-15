@@ -246,8 +246,10 @@ export interface ChatMessage {
   // server splices reasoning that arrives after the answer starts into the
   // content — see turns.go). Zipped onto the think boxes the UI tokenizes out.
   thinkMs?: number[];
-  // One-line gists of the reasoning, from the CPU title model (server-side, end
-  // of turn — see internal/server/titlegen.go). reasoningTitle covers the
+  // One-line gists of the reasoning, from the CPU title model (server-side, one
+  // per box as that box closes — see internal/server/titlegen.go). A blank entry
+  // is a box the model hasn't titled yet, not a box with no title.
+  // reasoningTitle covers the
   // reasoning_content field; thinkTitles is one per inline <think> span, same
   // order as thinkMs. Absent = the UI falls back to its local thinkSummary().
   reasoningTitle?: string;

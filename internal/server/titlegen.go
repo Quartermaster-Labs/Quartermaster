@@ -402,20 +402,222 @@ func (s *Server) resolveChatTitlegen() (*titlegen, error) {
 // the later ones are near-identical "check the next source" steps.
 const titlegenMaxSpans = 6
 
-// titleReasoning fills in at.reasoningTitle / at.thinkTitles once the turn's text
-// is final, then fans a snapshot delta so an attached tab swaps its local
-// heuristic title for the model's. Called between endInline and flush, so the
-// titles land in the same chats.json write as the answer.
+// titleJob is one finished reasoning box handed to the turn's title worker.
+// idx -1 is the reasoning FIELD trace (at.reasoningTitle); idx >= 0 is the inline
+// <think> span with that ordinal (at.thinkTitles[idx]).
+type titleJob struct {
+	idx  int
+	text string
+}
+
+// titleQueueDepth bounds the per-turn backlog. The title model is one CPU process
+// at a time and a box takes a second or two; if a tool loop closes boxes faster
+// than that, the excess is dropped here and picked up by the end-of-turn pass
+// rather than queued behind a growing backlog nobody is looking at yet.
+const titleQueueDepth = 4
+
+// closeTags are the reasoning close tags thinkSpanRe accepts. Longest first is
+// irrelevant here; the longest LENGTH is what sizes the overlap window below.
+var closeTags = []string{"</think>", "</thinking>", "</reasoning>"}
+
+// endedThinkSpan reports whether the content delta just completed a reasoning
+// close tag, i.e. whether a box the MODEL wrote closed on this token. Scans only
+// the delta plus enough preceding bytes to catch a tag split across two deltas —
+// never the whole content, so it is free to run on every token.
+func endedThinkSpan(content, delta string) bool {
+	n := len(delta) + len("</reasoning>")
+	if n > len(content) {
+		n = len(content)
+	}
+	tail := strings.ToLower(content[len(content)-n:])
+	for _, t := range closeTags {
+		if strings.Contains(tail, t) {
+			return true
+		}
+	}
+	return false
+}
+
+// markTitleSent records that a span ordinal has been handed to the worker, so a
+// later sweep doesn't re-title it. Caller holds at.mu.
+func (at *activeTurn) markTitleSent(idx int) {
+	if at.titleSent == nil {
+		at.titleSent = map[int]struct{}{}
+	}
+	at.titleSent[idx] = struct{}{}
+}
+
+// queueTitles titles every reasoning box in content that has CLOSED and isn't
+// titled yet. Never a partial box — a title of a half-written thought is wrong by
+// the time the thought finishes, and each pass is a CPU process, so re-titling a
+// growing box would spend one per pass to be wrong.
+//
+// It exists for reasoning the MODEL wrote as literal <think> tags in its content
+// (harmony, --reasoning-format none): those never pass through closeInline, so
+// there is no span-close event for the server to react to. Driven by
+// endedThinkSpan on the content delta, so it runs on the close, not on a timer.
+//
+// Caller holds at.mu.
+func (at *activeTurn) queueTitles() {
+	if !strings.Contains(at.content, "<think") { // cheap guard: most content has no spans at all
+		return
+	}
+	for i, span := range splitClosedThinkSpans(at.content, titlegenMaxSpans) {
+		if _, ok := at.titleSent[i]; ok {
+			continue
+		}
+		if strings.TrimSpace(span) == "" {
+			continue
+		}
+		at.markTitleSent(i)
+		at.enqueueTitle(titleJob{idx: i, text: span})
+	}
+}
+
+// enqueueTitle hands a closed box to the title worker. Caller holds at.mu.
+// Non-blocking by design: this runs on the streaming path, and a title is chrome.
+func (at *activeTurn) enqueueTitle(j titleJob) {
+	if at.titleJobs == nil {
+		return
+	}
+	select {
+	case at.titleJobs <- j:
+	default:
+	}
+}
+
+// startTitler spins up the per-turn title worker. Titles are generated as boxes
+// CLOSE, not at end of turn: a tool-looping turn runs for minutes, and every box
+// it already finished would otherwise sit on the UI's local heuristic for the
+// whole run. Only the still-open box is unstable, and that one is never queued.
+//
+// The worker is deliberately serial (one CPU process at a time, further
+// serialized globally by titlegenMu) so mid-turn titling can't turn into a fan of
+// llama-completion processes competing with the model that is generating.
+func (tm *turnManager) startTitler(ctx context.Context, at *activeTurn) {
+	if tm.pg == nil {
+		return
+	}
+	jobs := make(chan titleJob, titleQueueDepth)
+	done := make(chan struct{})
+	at.mu.Lock()
+	at.titleJobs, at.titleDone = jobs, done
+	at.mu.Unlock()
+
+	go func() {
+		defer close(done)
+		var tg *titlegen
+		resolved := false
+		for j := range jobs {
+			if ctx.Err() != nil {
+				continue // turn cancelled: drain so senders never block, do no work
+			}
+			if !resolved {
+				resolved = true
+				g, err := resolveTitlegen(tm.pg.GeneratePath)
+				if err != nil && tm.log != nil {
+					tm.log.Warnf("titlegen: %v", err)
+				}
+				tg = g
+			}
+			if tg == nil {
+				continue
+			}
+			t, err := tg.title(ctx, j.text)
+			if err != nil {
+				if tm.log != nil {
+					tm.log.Warnf("titlegen: %v", err)
+				}
+				continue
+			}
+			if t != "" {
+				at.setTitle(j.idx, t)
+			}
+		}
+	}()
+}
+
+// stopTitler closes the queue and waits for the in-flight title, so the worker
+// can never write into at after the turn has been flushed and finished.
+func (tm *turnManager) stopTitler(at *activeTurn) {
+	at.mu.Lock()
+	jobs, done := at.titleJobs, at.titleDone
+	at.titleJobs, at.titleDone = nil, nil
+	at.mu.Unlock()
+	if jobs == nil {
+		return
+	}
+	close(jobs)
+	<-done
+}
+
+// setTitle records one box's title and fans the full snapshot. thinkTitles is
+// index-addressed (ordinal of the <think> span, same index the UI zips onto its
+// tokenized boxes), so it is grown with blanks rather than appended to.
+func (at *activeTurn) setTitle(idx int, title string) {
+	at.mu.Lock()
+	defer at.mu.Unlock()
+	if idx < 0 {
+		at.reasoningTitle = title
+	} else {
+		for len(at.thinkTitles) <= idx {
+			at.thinkTitles = append(at.thinkTitles, "")
+		}
+		at.thinkTitles[idx] = title
+	}
+	at.fanTitles()
+}
+
+// fanTitles pushes the current titles to attached viewers. Caller holds at.mu.
+// Replace-style: the arrays are the whole state, and a box the model hasn't
+// titled yet is a blank the UI falls back to its own heuristic for.
+func (at *activeTurn) fanTitles() {
+	at.fan(turnDelta{Kind: "titles", Replace: true, Data: mustJSON(map[string]any{
+		"reasoningTitle": at.reasoningTitle,
+		"thinkTitles":    at.thinkTitles,
+	})})
+}
+
+// titleReasoning stops the streaming titler and fills whatever it did not get to
+// — a box dropped by a full queue, a span that closed as the turn ended, or the
+// reasoning field of a turn that never spoke. Called between endInline and flush,
+// so the titles land in the same chats.json write as the answer.
 //
 // Best-effort by contract: no title model, no CLI, a timeout or garbage output
 // all end with the UI keeping its instant local heuristic (thinkSummary).
 func (tm *turnManager) titleReasoning(ctx context.Context, at *activeTurn) {
+	tm.stopTitler(at)
 	if ctx.Err() != nil {
 		return // user stopped the turn: don't spend CPU on chrome they cancelled
 	}
 	if tm.pg == nil {
 		return
 	}
+
+	at.mu.Lock()
+	reasoning, content := at.reasoning, at.content
+	haveReasoning := at.reasoningTitle != ""
+	have := append([]string(nil), at.thinkTitles...)
+	at.mu.Unlock()
+
+	// A model either emits reasoning in the dedicated field or inline in the
+	// content, never both, so exactly one of these produces work.
+	needReasoning := !haveReasoning && strings.TrimSpace(reasoning) != ""
+	spans := splitThinkSpans(content, titlegenMaxSpans)
+	todo := make([]titleJob, 0, len(spans)+1)
+	if needReasoning {
+		todo = append(todo, titleJob{idx: -1, text: reasoning})
+	}
+	for i, span := range spans {
+		if i < len(have) && have[i] != "" {
+			continue
+		}
+		todo = append(todo, titleJob{idx: i, text: span})
+	}
+	if len(todo) == 0 {
+		return
+	}
+
 	tg, err := resolveTitlegen(tm.pg.GeneratePath)
 	if err != nil {
 		if tm.log != nil {
@@ -426,46 +628,18 @@ func (tm *turnManager) titleReasoning(ctx context.Context, at *activeTurn) {
 	if tg == nil {
 		return
 	}
-
-	at.mu.Lock()
-	reasoning, content := at.reasoning, at.content
-	at.mu.Unlock()
-
-	// A model either emits reasoning in the dedicated field or inline in the
-	// content, never both, so exactly one of these produces work.
-	var reasoningTitle string
-	if strings.TrimSpace(reasoning) != "" {
-		if t, terr := tg.title(ctx, reasoning); terr != nil {
-			if tm.log != nil {
-				tm.log.Warnf("titlegen: %v", terr)
-			}
-		} else {
-			reasoningTitle = t
-		}
-	}
-	var thinkTitles []string
-	for _, span := range splitThinkSpans(content, titlegenMaxSpans) {
-		t, terr := tg.title(ctx, span)
+	for _, j := range todo {
+		t, terr := tg.title(ctx, j.text)
 		if terr != nil {
 			if tm.log != nil {
 				tm.log.Warnf("titlegen: %v", terr)
 			}
 			break
 		}
-		thinkTitles = append(thinkTitles, t)
+		if t != "" {
+			at.setTitle(j.idx, t)
+		}
 	}
-	if reasoningTitle == "" && len(thinkTitles) == 0 {
-		return
-	}
-
-	at.mu.Lock()
-	at.reasoningTitle = reasoningTitle
-	at.thinkTitles = thinkTitles
-	at.fan(turnDelta{Kind: "titles", Replace: true, Data: mustJSON(map[string]any{
-		"reasoningTitle": reasoningTitle,
-		"thinkTitles":    thinkTitles,
-	})})
-	at.mu.Unlock()
 }
 
 // thinkSpanRe tokenizes reasoning spans out of an assistant message, matching the
@@ -476,6 +650,29 @@ var thinkSpanRe = regexp.MustCompile(`(?is)<(think|thinking|reasoning)>(.*?)(</(
 // splitThinkSpans returns the inner text of each reasoning span in content, in
 // order, capped at max spans (titles past that are never displayed before the
 // user has expanded the box anyway).
+// splitClosedThinkSpans is splitThinkSpans minus a trailing UNCLOSED span — the
+// box the model is still writing, whose text is not final and must not be titled.
+// An unclosed span can only be the last one, so ordinals still line up with the
+// UI's boxes (and with thinkMs).
+func splitClosedThinkSpans(content string, max int) []string {
+	ms := thinkSpanRe.FindAllStringSubmatch(content, -1)
+	spans := make([]string, 0, len(ms))
+	for _, m := range ms {
+		if m[3] == "" {
+			break // unclosed: still being written
+		}
+		body := strings.TrimSpace(m[2])
+		if body == "" {
+			continue
+		}
+		spans = append(spans, body)
+		if max > 0 && len(spans) >= max {
+			break
+		}
+	}
+	return spans
+}
+
 func splitThinkSpans(content string, max int) []string {
 	ms := thinkSpanRe.FindAllStringSubmatch(content, -1)
 	spans := make([]string, 0, len(ms))

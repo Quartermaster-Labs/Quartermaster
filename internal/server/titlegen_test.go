@@ -28,6 +28,48 @@ func TestTitlegen_SplitThinkSpans(t *testing.T) {
 	}
 }
 
+// A still-open span must never be titled: its text is not final.
+func TestTitlegen_SplitClosedThinkSpans(t *testing.T) {
+	content := "<think>Weighing the two options</think>Answer one.<thinking>Now checking prices</thinking>Answer two.<think>unclosed tail"
+	got := splitClosedThinkSpans(content, 0)
+	want := []string{"Weighing the two options", "Now checking prices"}
+	if len(got) != len(want) {
+		t.Fatalf("closed spans = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("span %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+	if n := len(splitClosedThinkSpans("<think>still going", 0)); n != 0 {
+		t.Errorf("open-only content produced %d spans", n)
+	}
+}
+
+func TestTitlegen_EndedThinkSpan(t *testing.T) {
+	cases := []struct {
+		name          string
+		content, next string
+		want          bool
+	}{
+		{"close in delta", "<think>a</think>", "</think>", true},
+		{"tag split across deltas", "<think>a</thi" + "nk>", "nk>", true},
+		{"uppercase tag", "<THINK>a</THINK>", "</THINK>", true},
+		{"alternate tag", "<reasoning>a</reasoning>", "</reasoning>", true},
+		{"plain prose", "just answering now", " now", false},
+		{"open tag only", "<think>thinking", "thinking", false},
+	}
+	for _, c := range cases {
+		if got := endedThinkSpan(c.content, c.next); got != c.want {
+			t.Errorf("%s: endedThinkSpan = %v, want %v", c.name, got, c.want)
+		}
+	}
+	// Delta longer than the accumulated content must not slice out of range.
+	if endedThinkSpan("hi", "a much longer delta than the content") {
+		t.Error("short content reported a closed span")
+	}
+}
+
 func TestTitlegen_TrimTitle(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{`  "comparing three laptops."  `, "Comparing three laptops"},
