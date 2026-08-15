@@ -14,6 +14,7 @@ import (
 	"github.com/quartermaster-labs/quartermaster/internal/backends"
 	"github.com/quartermaster-labs/quartermaster/internal/chain"
 	"github.com/quartermaster-labs/quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/hub"
 	"github.com/quartermaster-labs/quartermaster/internal/logmon"
 	"github.com/quartermaster-labs/quartermaster/internal/perf"
 	"github.com/quartermaster-labs/quartermaster/internal/router"
@@ -78,6 +79,12 @@ type Server struct {
 	// GitHub releases (the Settings → Backends tab). Always non-nil; installs are
 	// only registered into the config when autogen is also set. See backendsapi.go.
 	backends *backends.Manager
+
+	// hub browses model hubs and downloads model files into the models folder
+	// (the Models → Browse tab). Always non-nil; a download only lands somewhere
+	// useful when autogen is also set, since that is what knows the models root.
+	// See hubapi.go.
+	hub *hub.Manager
 
 	// autogen, when set, enables the UI model-config endpoints (cogwheel
 	// override editor + variant creation). nil when the server was not started
@@ -253,6 +260,25 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	s.backends = backends.NewManager("", func(m string) { proxylog.Info(m) })
 	s.backends.GpuNames = s.gpuNames
 	s.backends.OnInstalled = s.registerManagedBackend
+	// The model browser writes into the models folder and then regenerates
+	// directly, rather than waiting on the -watch-models poll (up to 30s away,
+	// and only running at all when that flag is set).
+	hfSrc := hub.NewHF()
+	hfSrc.Token = hubToken
+	s.hub = hub.NewManager(s.hubModelsRoot, func(m string) { proxylog.Info(m) }, hfSrc)
+	s.hub.OnComplete = func(hub.Job) error { return s.regenReload() }
+	// Sweep abandoned `.part` files once, in the background. The job list is in
+	// memory, so a crash or a kill leaves a partial nothing will ever mention
+	// again — but a partial is also resumable, hence the age gate: only ones
+	// untouched for hubPartialMaxAge go. Nothing is downloading yet at this
+	// point, and one process owns the models root (the multi-listener invariant),
+	// so nothing live can be in the way. Backgrounded because it walks the whole
+	// models tree, which is on a spinning disk often enough.
+	go func() {
+		if n, freed := hub.SweepPartials(s.hubModelsRoot(), hubPartialMaxAge, func(m string) { proxylog.Info(m) }); n > 0 {
+			proxylog.Infof("hub: removed %d orphaned partial download(s), freeing %.1f GB", n, float64(freed)/(1<<30))
+		}
+	}()
 	s.updater = update.New(updateRepo, build.Version, func(m string) { proxylog.Info(m) })
 	go s.updater.Run(s.shutdownCtx)
 	s.routes()
@@ -743,6 +769,19 @@ func (s *Server) routes() {
 	mux.Handle("POST /api/backends/activate", adminChain.ThenFunc(s.handleAPIBackendActivate))
 	mux.Handle("POST /api/backends/default", adminChain.ThenFunc(s.handleAPIBackendDefault))
 	mux.Handle("POST /api/backends/uninstall", adminChain.ThenFunc(s.handleAPIBackendUninstall))
+
+	// Model browser + downloader. The {id...} wildcard is required: a repo id is
+	// "owner/name", i.e. it carries its own slash.
+	mux.Handle("GET /api/hub/sources", adminChain.ThenFunc(s.handleAPIHubSources))
+	mux.Handle("GET /api/hub/search", adminChain.ThenFunc(s.handleAPIHubSearch))
+	mux.Handle("GET /api/hub/model/{id...}", adminChain.ThenFunc(s.handleAPIHubModel))
+	mux.Handle("GET /api/hub/avatar", adminChain.ThenFunc(s.handleAPIHubAvatar))
+	mux.Handle("GET /api/hub/estimate", adminChain.ThenFunc(s.handleAPIHubEstimate))
+	mux.Handle("GET /api/hub/jobs", adminChain.ThenFunc(s.handleAPIHubJobs))
+	mux.Handle("POST /api/hub/download", adminChain.ThenFunc(s.handleAPIHubDownload))
+	mux.Handle("POST /api/hub/cancel", adminChain.ThenFunc(s.handleAPIHubCancel))
+	mux.Handle("POST /api/hub/pause", adminChain.ThenFunc(s.handleAPIHubPause))
+	mux.Handle("POST /api/hub/resume", adminChain.ThenFunc(s.handleAPIHubResume))
 	mux.Handle("GET /api/kvcache", adminChain.ThenFunc(s.handleAPIKvCache))
 	mux.Handle("GET /api/canon", adminChain.ThenFunc(s.handleAPICanon))
 	// Per-category scan folder (Models tab folder icon) — opens the host's native

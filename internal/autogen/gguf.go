@@ -221,9 +221,13 @@ var ggmlTypeSize = map[uint32][2]int64{
 	30: {1, 2},     // BF16
 }
 
-// ggufReader reads little-endian GGUF primitives from a seekable file.
+// ggufReader reads little-endian GGUF primitives from a seekable source. It is
+// an io.ReadSeeker rather than an *os.File so the same parser can run over a
+// header pulled from a hub with a Range request (see ReadGgufMetadataFrom) —
+// the metadata + tensor-info sections are the first few MB of the file, which
+// is the whole point of being able to size a model before downloading it.
 type ggufReader struct {
-	f   *os.File
+	f   io.ReadSeeker
 	br  *bufio.Reader
 	pos int64
 }
@@ -450,8 +454,18 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 		return Metadata{}, err
 	}
 	defer f.Close()
+	return ReadGgufMetadataFrom(f, path, fi.Size())
+}
 
-	r := &ggufReader{f: f, br: bufio.NewReaderSize(f, 1<<20)}
+// ReadGgufMetadataFrom is ReadGgufMetadata over an already-open source. Callers
+// that do not have the file on disk (the model browser, which Range-fetches the
+// first few MB from the hub) pass a bytes.Reader over the header and the file's
+// FULL size — sizeBytes is the weights figure every sizing path charges, so
+// handing it the length of the prefix that was fetched would report a model
+// that fits in any budget. A truncated source surfaces as io.ErrUnexpectedEOF,
+// which is the caller's signal to re-fetch a longer prefix.
+func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metadata, error) {
+	r := &ggufReader{f: rs, br: bufio.NewReaderSize(rs, 1<<20)}
 	magic, err := r.read(4)
 	if err != nil {
 		return Metadata{}, err
@@ -843,7 +857,7 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 
 	m := Metadata{
 		Path:              path,
-		FileSizeGB:        round(float64(fi.Size())/gib, 3),
+		FileSizeGB:        round(float64(sizeBytes)/gib, 3),
 		Architecture:      arch,
 		GeneralType:       genType,
 		BlockCount:        deref(blockCount),

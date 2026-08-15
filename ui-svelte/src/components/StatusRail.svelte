@@ -6,6 +6,7 @@
   import { prettifyModelName, modelCategory } from "../lib/modelUtils";
   import type { Model } from "../lib/types";
   import VramGauge from "./VramGauge.svelte";
+  import DownloadsMenu from "./DownloadsMenu.svelte";
 
   // Models currently occupying the GPU (or about to). The whole tool is
   // VRAM-exclusive single-model, so this is the headline state.
@@ -101,8 +102,14 @@
     <span class="text-txtmain tabular-nums">{$inFlightRequests} in-flight</span>
   </div>
 
+  <!-- Downloads: an icon with a live count, opening a panel (see the component
+       for why it is a menu and not a page). -->
+  <div class="ml-auto flex items-center gap-2 shrink-0">
+    <DownloadsMenu />
+  </div>
+
   <!-- Unload -->
-  <div class="ml-auto shrink-0">
+  <div class="shrink-0">
     {#if liveModels.length > 0}
       <button
         class="btn btn--sm uppercase tracking-wide hover:border-error hover:text-error"

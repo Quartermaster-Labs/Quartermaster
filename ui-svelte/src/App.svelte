@@ -5,6 +5,7 @@
   import StatusRail from "./components/StatusRail.svelte";
   import Dashboard from "./routes/Dashboard.svelte";
   import Models from "./routes/Models.svelte";
+  import Browse from "./routes/Browse.svelte";
   import Observe from "./routes/Observe.svelte";
   import PlaygroundStub from "./routes/PlaygroundStub.svelte";
   import PlaygroundApp from "./routes/PlaygroundApp.svelte";
@@ -26,6 +27,7 @@
     "/": Dashboard,
     "/models": Models,
     "/models/:category": Models,
+    "/browse": Browse,
     "/observe": Observe,
     "/logs": Observe,
     "/activity": Observe,
