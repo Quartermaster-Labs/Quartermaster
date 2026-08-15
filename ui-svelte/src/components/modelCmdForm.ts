@@ -5,8 +5,19 @@ import type { ModelConfig } from "../stores/api";
 // chain manipulation, and display formatting. Nothing here touches component
 // state, so it is unit-testable and keeps the modal to wiring + markup.
 
+// Whether a rendered command leaves mmap on. llama-server folded --mmap/--no-mmap
+// /--mlock/-dio into one --load-mode enum, so read that first and only fall back
+// to the deprecated flag for commands saved before the switch.
 export function noNoMmap(cmd: string): boolean {
+  const lm = cmd.match(/(?:^|\s)(?:--load-mode|-lm)\s+(\S+)/);
+  if (lm) return loadModeMmap(lm[1]);
   return !/(?:^|\s)--no-mmap(?:\s|$)/.test(cmd);
+}
+
+// --load-mode values that keep the weights mmap'd. "dio" bypasses the page cache
+// entirely and "none" reads into anonymous memory; everything else maps.
+export function loadModeMmap(mode: string): boolean {
+  return mode !== "none" && mode !== "dio" && mode !== "mlock";
 }
 
 // sd.cpp sampling methods (mirrors the playground's SAMPLER_OPTIONS).
@@ -17,17 +28,20 @@ export const IMG_SAMPLERS = ["", "euler_a", "euler", "heun", "dpm2", "dpmpp2s_a"
 // Value-flags owned by other controls (sliders / toggles / sizer), swallowed
 // when parsing so they never bleed into extraArgs and double-emit:
 //   -c/-ngl/--n-cpu-moe/-b  sizer; --ctx-checkpoints  its own field;
-//   --chat-template-kwargs  the preserve-thinking toggle; -md  draft path;
+//   --chat-template-kwargs  legacy preserve-thinking form, still swallowed so an
+//   older saved command does not bleed into extraArgs; -md  draft path;
 //   --slot-save-path  the slotCacheOn toggle.
 // --chat-template-file is NOT here: it has its own case below that captures the
 // path into the advanced field. Swallowing it silently dropped a template set
 // any other way (qm-tools/hand-edited extraArgs) on the first box blur.
-export const IGNORE_VALUE = new Set(["-m", "--port", "--host", "-c", "-ngl", "--n-cpu-moe", "-b", "--ctx-checkpoints", "--chat-template-kwargs", "-md", "--slot-save-path"]);
+export const IGNORE_VALUE = new Set(["-m", "--port", "--host", "--cors-origins", "-c", "-ngl", "--n-cpu-moe", "-b", "--ctx-checkpoints", "--chat-template-kwargs", "-md", "--slot-save-path"]);
 // autogen's arch-derived template fix (internal/autogen/generate.go
 // qwenFixedChatTemplateFile) — matched by suffix so it is never mistaken for a
 // user-chosen template.
 export const BUILTIN_CHAT_TEMPLATE = "templates/qwen-fixed-chat-template.jinja";
-export const IGNORE_BOOL = new Set(["--kv-unified", "--no-warmup", "--no-webui", "--jinja", "--metrics", "--props"]);
+// Value-less flags owned elsewhere: --reasoning-preserve belongs to the
+// preserve-thinking toggle (which is read off the override, not the box).
+export const IGNORE_BOOL = new Set(["--kv-unified", "--no-warmup", "--no-webui", "--no-ui", "--jinja", "--metrics", "--props", "--reasoning-preserve", "--no-reasoning-preserve"]);
 
 // Parsed launch-flag bundle shared by the Default form and a variant. Booleans
 // are normalized to the form's on/off sense; computed flags are dropped.
@@ -123,8 +137,20 @@ export function parseCmdFields(cmd: string): ParsedCmd {
       case "--reasoning-format": reason = val(); break;
       case "--reasoning-budget": rBudget = val(); break;
       case "--reasoning": if (val() === "off") reason = "off"; break;
-      case "--no-mmap": noMmap = true; break;
+      case "--no-mmap": noMmap = true; break; // deprecated, still parsed for old saved commands
       case "--mlock": mlockF = true; break;
+      // The enum that replaced all four. -dio is swallowed without setting a
+      // field: direct-IO lives on the advanced override, not in this bundle.
+      case "-lm":
+      case "--load-mode": {
+        const m = val();
+        // dio is the advanced override's own toggle and re-emits from there; it
+        // must not also stamp mmap "off" onto the form.
+        if (m !== "dio") noMmap = !loadModeMmap(m);
+        if (m.includes("mlock")) mlockF = true;
+        break;
+      }
+      case "-dio": break;
       case "--no-kv-offload": noKv = true; break;
       case "--dry-multiplier": dMult = val(); break;
       case "--dry-base": dBase = val(); break;

@@ -84,7 +84,13 @@ const hashCacheSuffix = ".modelhash"
 //	     template validates a reasoning_effort ladder emit
 //	     capabilities.reasoningEffort, which the proxy uses to translate a
 //	     client's OpenAI reasoning_effort field into a chat_template_kwarg.
-const genVersion = "v40"
+//	v41: llama-server flag migration — --cors-origins localhost locks the spawned
+//	     upstream down (it echoed any Origin back with credentials, exposing
+//	     /props and /slots to any page the user visits), preserve-thinking moves
+//	     from --chat-template-kwargs to --reasoning-preserve, and the deprecated
+//	     --no-webui / --mmap / --no-mmap / --mlock / -dio flags collapse into
+//	     --no-ui and the --load-mode enum.
+const genVersion = "v41"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

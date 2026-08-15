@@ -1982,7 +1982,7 @@
               <input type="checkbox" bind:checked={preserveThinking} disabled={!reasoningOn} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Preserve thinking
-                {@render hint("Keep prior-turn <think> blocks in chat history instead of stripping them (Qwen3.6+ via --chat-template-kwargs preserve_thinking). Avoids reasoning amnesia in multi-turn/agentic loops. Needs reasoning on, and the client must send reasoning_content back.")}
+                {@render hint("Keep prior-turn <think> blocks in chat history instead of stripping them (Qwen3.6+ via --reasoning-preserve). Avoids reasoning amnesia in multi-turn/agentic loops. Needs reasoning on, a template that supports preservation, and the client must send reasoning_content back.")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm" class:opacity-40={!reasoningOn}>

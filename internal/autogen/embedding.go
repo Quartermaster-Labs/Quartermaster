@@ -86,12 +86,13 @@ func embeddingCmdLines(s Settings, row GgufRow, ov *Override, meta Metadata) []s
 		fmt.Sprintf("-m %s", strings.ReplaceAll(row.FullPath, "\\", "/")),
 		"--port ${PORT}",
 		"--host 127.0.0.1",
+		corsOriginsFlag,
 		"--embeddings",
 		"--pooling auto",
 		"-ngl 99",
 		fmt.Sprintf("-c %d", embeddingCtx(meta, ov)),
 		fmt.Sprintf("-t %d", threads),
-		"--no-warmup --no-webui --metrics --props",
+		"--no-warmup --no-ui --metrics --props",
 	}
 	if ov != nil {
 		if extra := strings.TrimSpace(ov.ExtraArgs); extra != "" {

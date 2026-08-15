@@ -369,10 +369,15 @@ type Override struct {
 	// nil => omit the flag (llama default). Variants inherit this unless they set
 	// their own.
 	CtxCheckpoints *int `yaml:"ctxCheckpoints"`
-	// PreserveThinking emits --chat-template-kwargs '{"preserve_thinking":true}'
-	// so the chat template keeps prior-turn <think> blocks in history instead of
-	// stripping them (Qwen3.6+). No-op when reasoning is off. Requires the client
-	// to send reasoning_content back on assistant messages.
+	// PreserveThinking emits --reasoning-preserve so the chat template keeps
+	// prior-turn <think> blocks in history instead of stripping them (Qwen3.6+).
+	// No-op when reasoning is off, and when the template has no preserve support
+	// (llama-server warns and carries on). Requires the client to send
+	// reasoning_content back on assistant messages.
+	//
+	// Plain bool, so false means "off or never set" and we emit nothing rather
+	// than --no-reasoning-preserve: a template that preserves by default (3.8)
+	// therefore cannot be forced to strip from here. Needs a tri-state to fix.
 	PreserveThinking bool `yaml:"preserveThinking"`
 	// Dry sampler (repetition penalty). Dry==nil => the fleet default (off);
 	// *Dry==true emits the flags, *Dry==false omits them. DryMultiplier/DryBase/

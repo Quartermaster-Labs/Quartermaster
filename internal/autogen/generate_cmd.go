@@ -40,6 +40,55 @@ func cmdPath(p string) string {
 // drop-in template renders history deterministically instead.
 const qwenFixedChatTemplateFile = "templates/qwen-fixed-chat-template.jinja"
 
+// corsOriginsFlag locks a spawned llama-server down to localhost origins.
+//
+// llama-server defaults to --cors-origins '*' WITH credentials, which means it
+// echoes back whatever Origin it is given: any page you happen to visit can read
+// http://127.0.0.1:<upstream port>/props (model path + full launch args) and
+// /slots (live prompt and KV contents), and can drive generation. Binding to
+// 127.0.0.1 does not help — the browser is already inside the loopback. It is
+// also what llama-server warns about at init ("CORS is set to allow all origins
+// ('*') and no API key is set").
+//
+// Nothing in a browser is supposed to reach an upstream directly: the UI and
+// every API client go through quartermaster's own listener, which proxies
+// server-side and has no Origin to speak of. So the lockdown costs nothing.
+// 'localhost' is llama-server's special value for "reflect the Origin only if it
+// is localhost". Emitted early, so a user's extraArgs can still override it.
+const corsOriginsFlag = "--cors-origins localhost"
+
+// loadMode renders llama-server's --load-mode, the single flag that replaced
+// --mmap/--no-mmap, --mlock and -dio (all three now warn "DEPRECATED in favor of
+// `--load-mode`" at startup). Returns "" or a flag with ONE trailing space, so
+// it can be interpolated into the flag run without leaving a double space.
+//
+// Modes are an enum, not a set, so the three old booleans do not all survive
+// contact: there is no dio+mlock. DirectIO wins that one — it is a streaming
+// load path that bypasses the page cache, which is the opposite of what pinning
+// pages in RAM is for, so the pair was already self-defeating.
+//
+// mmap alone stays UNSET on purpose. The default is 'auto' ("mmap, unless a
+// device does not support it"), which is what we emitted before by omission;
+// forcing 'mmap' would take llama.cpp's device check out of the loop.
+//
+// Note this makes a generated config require a llama-server new enough to know
+// --load-mode. Every backend the installer fetches has it; a hand-pointed
+// binary from before the flag landed would fail to spawn on an unknown arg.
+func loadMode(mmap, mlock, dio bool) string {
+	switch {
+	case dio:
+		return "--load-mode dio "
+	case mmap && mlock:
+		return "--load-mode mmap+mlock "
+	case mlock:
+		return "--load-mode mlock "
+	case mmap:
+		return ""
+	default:
+		return "--load-mode none "
+	}
+}
+
 // needsQwenFixedChatTemplate reports whether a model should get
 // qwenFixedChatTemplateFile instead of its baked-in gguf template.
 //
@@ -107,25 +156,19 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	// demand-paging + natural OS page-caching of the on-CPU tensors. With NO CPU
 	// offload the weights are copied straight into VRAM, so mmap only leaves a
 	// redundant file-backed copy in host page cache — waste. So default to
-	// --no-mmap and only keep mmap when CPU offload is actually happening:
+	// mmap off and only keep it when CPU offload is actually happening:
 	//   - --n-cpu-moe > 0 (experts on CPU), or
 	//   - partial layer offload (ngl <= blocks => some layers on CPU).
-	// Unknown block count (parse miss) assumes GPU-resident => --no-mmap.
+	// Unknown block count (parse miss) assumes GPU-resident => mmap off.
 	// Explicit Mmap:"on"/"off" always wins over this default.
 	cpuOffload := ncpuMoe > 0 || (meta.BlockCount > 0 && int64(ngl) <= meta.BlockCount)
-	noMmapFlag := ""
-	if !cpuOffload {
-		noMmapFlag = "--no-mmap "
-	}
+	mmapOn := cpuOffload
 	if ov != nil && ov.Mmap == "off" {
-		noMmapFlag = "--no-mmap "
+		mmapOn = false
 	} else if ov != nil && ov.Mmap == "on" {
-		noMmapFlag = ""
+		mmapOn = true
 	}
-	mlockFlag := ""
-	if ov != nil && ov.Mlock {
-		mlockFlag = "--mlock "
-	}
+	loadModeFlag := loadMode(mmapOn, ov != nil && ov.Mlock, ov != nil && ov.DirectIo)
 	kvoFlag := ""
 	if kvInRam {
 		kvoFlag = "--no-kv-offload "
@@ -191,11 +234,12 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		fmt.Sprintf("-m %s", modelPath),
 		"--port ${PORT}",
 		"--host 127.0.0.1",
+		corsOriginsFlag,
 		fmt.Sprintf("-ngl %d", ngl),
 		fmt.Sprintf("-c %d", ctx),
 		fmt.Sprintf("-ub %d -b %d", ub, bTok),
 		fmt.Sprintf("-fa %s -ctk %s -ctv %s", fa, kvK, kvV),
-		fmt.Sprintf("--parallel %d %s%s%s--kv-unified --no-warmup --no-webui --metrics --props", parallel, noMmapFlag, mlockFlag, kvoFlag),
+		fmt.Sprintf("--parallel %d %s%s--kv-unified --no-warmup --no-ui --metrics --props", parallel, loadModeFlag, kvoFlag),
 	}
 	// Vision twin loads the projector for image input.
 	if prof.Vision && row.MmprojPath != "" {
@@ -268,10 +312,16 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	if ov != nil && ov.ReasoningBudget > 0 && reason != "off" {
 		lines = append(lines, fmt.Sprintf("--reasoning-budget %d", ov.ReasoningBudget))
 	}
-	// preserve_thinking keeps prior-turn <think> in history (Qwen3.6+); pointless
-	// when thinking is off. Escaped double-quotes survive both Windows + POSIX shlex.
+	// Keep prior-turn <think> in history (Qwen3.6+); pointless when thinking is
+	// off. --reasoning-preserve is llama.cpp's own knob for it — it sets the
+	// template's preserve_thinking variable itself, and llama-server logs a nag at
+	// init when a template supports preservation and the flag is absent. Verified
+	// equivalent to the old --chat-template-kwargs '{"preserve_thinking":true}' on
+	// both template wordings (3.8's preserve-by-default and 3.6's opt-in), and
+	// safe on a template that does not support it at all: llama-server warns
+	// "--reasoning-preserve has no effect" and carries on.
 	if ov != nil && ov.PreserveThinking && reason != "off" {
-		lines = append(lines, `--chat-template-kwargs "{\"preserve_thinking\":true}"`)
+		lines = append(lines, "--reasoning-preserve")
 	}
 	// Always emit so runtime matches our reserve (else llama-server defaults to 32).
 	ckptConstGB := GetKvCostModel(meta, kvK, kvV).ConstGB
@@ -336,9 +386,6 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		}
 		if ov.Prio > 0 {
 			lines = append(lines, fmt.Sprintf("--prio %d", ov.Prio))
-		}
-		if ov.DirectIo {
-			lines = append(lines, "-dio")
 		}
 		if ov.NoOpOffload {
 			lines = append(lines, "--no-op-offload")
