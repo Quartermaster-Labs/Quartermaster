@@ -224,17 +224,11 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		kvTarget = ov.VramTargetGB
 	}
 	kvDef := defaultKvQuant(s, meta, kvTarget, s.VramOverheadGB+specOh)
-	kvK, kvV := kvDef, kvDef
-	kvDefK, kvDefV := kvK, kvV
-	if ov != nil && ov.KvK != "" {
-		kvK = ov.KvK
+	ovKvK, ovKvV := "", ""
+	if ov != nil {
+		ovKvK, ovKvV = ov.KvK, ov.KvV
 	}
-	if ov != nil && ov.KvV != "" {
-		kvV = ov.KvV
-	}
-	if !ValidKvPair(kvK, kvV) {
-		kvK, kvV = kvDefK, kvDefV
-	}
+	kvK, kvV := resolveKvPair(ovKvK, ovKvV, kvDef, kvDef)
 
 	kvModel := GetKvCostModel(meta, kvK, kvV)
 	perTokGB := 0.0
@@ -414,16 +408,9 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		// kv and re-derive the cost slope/const for this profile (defaults to the
 		// model-wide values when the variant doesn't override kv).
 		// Variants inherit the model-wide kv quant; a variant's own kv wins.
-		ekvK, ekvV := kvK, kvV
-		if prof.KvK != "" {
-			ekvK = prof.KvK
-		}
-		if prof.KvV != "" {
-			ekvV = prof.KvV
-		}
-		if !ValidKvPair(ekvK, ekvV) {
-			ekvK, ekvV = kvK, kvV // fall back to the model-wide quant (f16 for MoE)
-		}
+		// A variant that pins only one side mirrors it; only a genuine mismatch
+		// falls back to the model-wide quant.
+		ekvK, ekvV := resolveKvPair(prof.KvK, prof.KvV, kvK, kvV)
 		ptg, kcg := perTokGB, kvConstGB
 		if ekvK != kvK || ekvV != kvV {
 			if m := GetKvCostModel(meta, ekvK, ekvV); m.OK {

@@ -90,17 +90,10 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		estTarget = in.TargetVramGB
 	}
 	kvDef := defaultKvQuant(s, meta, estTarget, s.VramOverheadGB+draftOverheadGB(spec, in.DraftGB))
-	kvK, kvV := kvDef, kvDef
-	kvDefK, kvDefV := kvK, kvV
-	if in.KvK != "" {
-		kvK = in.KvK
-	}
-	if in.KvV != "" {
-		kvV = in.KvV
-	}
-	if !ValidKvPair(kvK, kvV) {
-		kvK, kvV = kvDefK, kvDefV
-	}
+	// The editor sends kvK/kvV independently, so a form that resolves only one
+	// side must not sink the preview back to the fleet default — see
+	// resolveKvPair.
+	kvK, kvV := resolveKvPair(in.KvK, in.KvV, kvDef, kvDef)
 
 	perTokGB, kvConstGB := 0.0, 0.0
 	if m := GetKvCostModel(meta, kvK, kvV); m.OK {

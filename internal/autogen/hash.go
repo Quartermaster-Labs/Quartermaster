@@ -90,7 +90,7 @@ const hashCacheSuffix = ".modelhash"
 //	     from --chat-template-kwargs to --reasoning-preserve, and the deprecated
 //	     --no-webui / --mmap / --no-mmap / --mlock / -dio flags collapse into
 //	     --no-ui and the --load-mode enum.
-const genVersion = "v41"
+const genVersion = "v42"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

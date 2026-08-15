@@ -31,6 +31,31 @@ func ValidKvPair(kvK, kvV string) bool {
 	return kvK == kvV && kvQuantAllowed[kvK]
 }
 
+// resolveKvPair layers a possibly HALF-specified K/V pair over the defaults.
+// Fast flash attention needs matched K and V, so ValidKvPair demands K==V — but
+// treating a one-sided pin as invalid dropped BOTH sides back to the default,
+// which is the opposite of what the caller asked for. Mirror the given side
+// instead, and fall back only when neither side is set or the pair is a genuine
+// mismatch (two different quants, or an unsupported type).
+//
+// This is not cosmetic: the fleet default is f16 and a pin is usually the
+// cheaper q8_0, so a dropped half-pin silently doubles the KV reserve. On
+// Qwen3.8-27B at 64k that is the difference between -ngl 99 / 0 GB RAM and
+// -ngl 64 / 0.33 GB — the editor's estimate bar reported a layer spilled to RAM
+// for a config that emits and loads fully on the GPU.
+func resolveKvPair(kvK, kvV, defK, defV string) (string, string) {
+	if kvK == "" {
+		kvK = kvV
+	}
+	if kvV == "" {
+		kvV = kvK
+	}
+	if !ValidKvPair(kvK, kvV) {
+		return defK, defV
+	}
+	return kvK, kvV
+}
+
 // defaultKvQuant picks the fleet-wide default KV cache type for an LLM when no
 // per-model override is set. Quality-first: f16 is the baseline for EVERY arch,
 // not just MoE — a quantized KV's damage shows up in long-context recall and

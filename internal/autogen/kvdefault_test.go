@@ -36,6 +36,31 @@ func TestDefaultKvQuant_SettingPin(t *testing.T) {
 	}
 }
 
+// A one-sided pin mirrors rather than collapsing to the default. Dropping it
+// used to size the fleet default f16 for a model pinned to q8_0, which on a
+// tight budget costs a whole layer of offload in the editor's estimate.
+func TestResolveKvPair(t *testing.T) {
+	cases := []struct {
+		name         string
+		k, v         string
+		wantK, wantV string
+	}{
+		{"both blank => default", "", "", "f16", "f16"},
+		{"both set", "q8_0", "q8_0", "q8_0", "q8_0"},
+		{"K only mirrors to V", "q8_0", "", "q8_0", "q8_0"},
+		{"V only mirrors to K", "", "q8_0", "q8_0", "q8_0"},
+		{"genuine mismatch => default", "q8_0", "q5_0", "f16", "f16"},
+		{"unsupported type => default", "iq4_nl", "", "f16", "f16"},
+	}
+	for _, c := range cases {
+		gotK, gotV := resolveKvPair(c.k, c.v, "f16", "f16")
+		if gotK != c.wantK || gotV != c.wantV {
+			t.Errorf("%s: resolveKvPair(%q,%q) = %q,%q; want %q,%q",
+				c.name, c.k, c.v, gotK, gotV, c.wantK, c.wantV)
+		}
+	}
+}
+
 func TestValidKvPair(t *testing.T) {
 	for _, q := range []string{"f32", "f16", "bf16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0"} {
 		if !ValidKvPair(q, q) {
