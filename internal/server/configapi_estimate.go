@@ -17,8 +17,9 @@ import (
 
 // handleAPIModelEstimate previews the load plan (VRAM/RAM, ngl, n_cpu_moe,
 // chosen ctx) for a candidate tuning without persisting anything. Query params:
-// ctx, kvK, kvV, spec (strings/int), kvInRam (bool), vram (float target GB),
-// cpuOffload (int layers pinned to CPU).
+// ctx, kvK, kvV, spec, ropeScaling (strings), kvInRam (bool), vram (float target
+// GB), cpuOffload (int layers pinned to CPU), ctxCheckpoints, checkpointMinStep,
+// ub (ints).
 // Powers the editor's live memory estimate.
 // cmdArgv splits a rendered launch command into argv exactly the way the
 // process layer will, so a quoted path containing spaces ("C:\Program
@@ -75,6 +76,12 @@ func estimateInputFromCmd(cmd string) autogen.EstimateInput {
 			// the preview must read it back off the argv like -c itself.
 			if v, ok := next(); ok {
 				in.RopeScaling = v
+			}
+		case "-ub", "--ubatch-size":
+			// The compute buffer scales with the physical batch, so the preview must
+			// charge the same ub the argv runs with.
+			if v, ok := next(); ok {
+				in.Ub, _ = strconv.Atoi(v)
 			}
 		case "-ctk":
 			if v, ok := next(); ok {
@@ -206,6 +213,15 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 	}
 	if v := q.Get("checkpointMinStep"); v != "" {
 		in.CheckpointMinStep, _ = strconv.Atoi(v)
+	}
+	if v := q.Get("ub"); v != "" {
+		in.Ub, _ = strconv.Atoi(v)
+	}
+	if v := q.Get("ropeScaling"); v != "" {
+		// Decides whether the sizer may pick a ctx past the trained length; without
+		// it an editor preview of a rope-extended window silently sizes the clamped
+		// one and reports a KV reserve the launch won't have.
+		in.RopeScaling = v
 	}
 	if v := q.Get("ctx"); v != "" {
 		in.Ctx, _ = strconv.Atoi(v)

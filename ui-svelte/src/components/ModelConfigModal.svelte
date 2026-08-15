@@ -537,9 +537,13 @@
   function memKey(): string {
     return JSON.stringify([
       ctx, ctxAuto, kvK, kvV, kvInRam, spec, vramTarget, vramAuto, cpuOffload, cpuAuto, ctxCheckpoints,
+      // ub scales the compute buffer, -cms scales each checkpoint's KV term and
+      // rope scaling decides the ctx ceiling: all three move the estimate.
+      ub, adv.checkpointMinStep, adv.ropeScaling,
       selectedV?.ctx, selectedV?.kvK, selectedV?.kvV, selectedV?.spec,
       selectedV?.vramTargetGB, selectedV?.ub, selectedV?.ctxCheckpoints,
       selectedV?.kvInRam, selectedV?.cpuOffload,
+      selectedV?.checkpointMinStep, selectedV?.ropeScaling,
     ]);
   }
 
@@ -824,9 +828,13 @@
     const deps = [
       open, config, selectedVariant,
       ctx, ctxAuto, kvK, kvV, kvInRam, spec, vramTarget, vramAuto, cpuOffload, cpuAuto, ctxCheckpoints,
+      // ub scales the compute buffer, -cms scales each checkpoint's KV term and
+      // rope scaling decides the ctx ceiling: all three move the estimate.
+      ub, adv.checkpointMinStep, adv.ropeScaling,
       selectedV?.ctx, selectedV?.kvK, selectedV?.kvV, selectedV?.spec,
       selectedV?.vramTargetGB, selectedV?.ub, selectedV?.ctxCheckpoints,
       selectedV?.kvInRam, selectedV?.cpuOffload,
+      selectedV?.checkpointMinStep, selectedV?.ropeScaling,
     ];
     void deps;
     // Diffusion/TTS/vllm sizing isn't modeled by the llama sizer; skip the estimate.
@@ -888,6 +896,12 @@
             vram: selectedV.vramTargetGB ? Number(selectedV.vramTargetGB) : vramAuto ? undefined : Number(vramTarget),
             cpuOffload: selectedV.cpuOffload ? Number(selectedV.cpuOffload) : cpuAuto ? undefined : Number(cpuOffload),
             ctxCheckpoints: selectedV.ctxCheckpoints ?? undefined,
+            // Variant fields inherit the Default when blank, exactly as the
+            // generator merges them — send the resolved value or the preview
+            // sizes a launch shape neither entry has.
+            checkpointMinStep: Number(selectedV.checkpointMinStep || adv.checkpointMinStep) || undefined,
+            ub: Number(selectedV.ub || ub) || undefined,
+            ropeScaling: selectedV.ropeScaling || adv.ropeScaling || undefined,
             actual,
           }
         : {
@@ -901,6 +915,9 @@
             vram: vramAuto ? undefined : Number(vramTarget),
             cpuOffload: cpuAuto ? undefined : Number(cpuOffload),
             ctxCheckpoints: ctxCheckpoints ?? undefined,
+            checkpointMinStep: Number(adv.checkpointMinStep) || undefined,
+            ub: Number(ub) || undefined,
+            ropeScaling: adv.ropeScaling || undefined,
             actual,
           };
       estimate = await estimatePlan(estId, params);

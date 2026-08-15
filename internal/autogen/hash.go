@@ -70,7 +70,16 @@ const hashCacheSuffix = ".modelhash"
 //	     context_length, and a bare --rope-scaling kept llama.cpp's factor of 1).
 //	v36: per-model estRamGB beside estVramGB, so the Models table can show what a
 //	     partial offload costs in system memory before the model is loaded.
-const genVersion = "v37"
+//	v38: the checkpoint reserve is carried into every re-priced placement (a forced
+//	     or low-active-MoE offload used to drop it from both estVramGB and estRamGB,
+//	     reading ~0.3 GB low), and the long-context budget headroom moved from the
+//	     ctx-tier loop into sizeProfile so every long profile — tier, variant, a
+//	     pinned long ctx, and the editor preview — sizes against the same budget.
+//	v39: longCtxHeadroomGB is a floor on the total safety slack instead of an
+//	     addition — it now tops vramOverheadGB up rather than stacking on it, so a
+//	     long profile stops paying two independent 0.5 GB pads and recovers the
+//	     layer it was offloading for nothing.
+const genVersion = "v39"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

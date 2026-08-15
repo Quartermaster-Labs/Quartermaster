@@ -63,12 +63,12 @@ const smallCardVramGB = 12.0
 
 // effectiveUb picks the physical batch. Default 1024. Drop to 512 at high ctx
 // ONLY when the VRAM budget is small (< smallCardVramGB) — the auto-sized solo
-// profile (Ctx=0) learns its real ctx after sizing, so ctx>=65536 is checked
-// alongside prof.IsLong. budgetGB<=0 (unknown) keeps 1024 (prefer speed). An
-// explicit Ub override always wins.
+// profile (Ctx=0) learns its real ctx after sizing, so ctx>=longCtxThreshold is
+// checked alongside prof.IsLong. budgetGB<=0 (unknown) keeps 1024 (prefer
+// speed). An explicit Ub override always wins.
 func effectiveUb(prof profile, ov *Override, ctx int, budgetGB float64) int {
 	ub := 1024
-	if (prof.IsLong || ctx >= 65536) && budgetGB > 0 && budgetGB < smallCardVramGB {
+	if (prof.IsLong || ctx >= longCtxThreshold) && budgetGB > 0 && budgetGB < smallCardVramGB {
 		ub = 512
 	}
 	if ov != nil && ov.Ub > 0 {
@@ -476,13 +476,13 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 		CpuOffload:     ov.CpuOffload,
 		KvK:            kvK,
 		KvV:            kvV,
-		IsLong:         ov.Ctx >= 65536,
+		IsLong:         ov.Ctx >= longCtxThreshold,
 		CtxCheckpoints: ov.CtxCheckpoints,
 
 		CheckpointMinStep: ov.CheckpointMinStep,
 	}
 	prof.Overhead += computeBufferGB(meta, effectiveUb(prof, &ov, prof.Ctx, s.TargetVramGB), s.ComputeBufFactor)
-	ctx, plan, kvReserve, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, ov.KvInRam)
+	ctx, plan, kvReserve, _, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, ov.KvInRam)
 	if err != nil {
 		return "", err
 	}

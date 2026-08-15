@@ -113,6 +113,10 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 		Spec:         specTypes(args),
 		RopeScaling:  flagStr(args, "--rope-scaling"),
 		TargetVramGB: budgetGB, // EstimatePlan subtracts overhead via s
+		// The compute buffer is sized by the physical batch, so the live guard has
+		// to charge the -ub the argv actually launches with rather than re-deriving
+		// the auto pick and mis-sizing a model with a pinned ub.
+		Ub: atoiFlag(args, "-ub", "--ubatch-size"),
 	}
 	if c, ok := atoiFlagOK(args, "--ctx-checkpoints"); ok {
 		in.CtxCheckpoints = &c

@@ -93,11 +93,11 @@ func TestSizeProfile_CheckpointsShrinkCtx(t *testing.T) {
 	off := profile{Name: "x", Target: 5, CtxCheckpoints: &zero}
 	on := profile{Name: "x", Target: 5, CtxCheckpoints: &many}
 
-	ctxOff, _, _, err := sizeProfile(meta, s, off, ptg, kcg, 131072, false)
+	ctxOff, _, _, _, err := sizeProfile(meta, s, off, ptg, kcg, 131072, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctxOn, _, _, err := sizeProfile(meta, s, on, ptg, kcg, 131072, false)
+	ctxOn, _, _, _, err := sizeProfile(meta, s, on, ptg, kcg, 131072, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestSizeProfile_CheckpointsSplitAtPartialOffload(t *testing.T) {
 	const ptg, kcg = 0.0001, 0.2
 	prof := profile{Name: "x", Target: 8, Overhead: 0.5} // tight budget -> partial offload
 
-	ctx, plan, kvReserve, err := sizeProfile(meta, s, prof, ptg, kcg, 131072, false)
+	ctx, plan, kvReserve, _, err := sizeProfile(meta, s, prof, ptg, kcg, 131072, false)
 	if err != nil {
 		t.Fatal(err)
 	}

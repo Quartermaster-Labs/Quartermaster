@@ -7,16 +7,16 @@ package autogen
 // EstimateInput is the subset of editor fields that affect placement/memory.
 // Zero Ctx means "let the sizer pick". Zero TargetVramGB uses settings.
 type EstimateInput struct {
-	Ctx            int
-	KvK            string
-	KvV            string
-	KvInRam        bool
-	Spec           string
+	Ctx     int
+	KvK     string
+	KvV     string
+	KvInRam bool
+	Spec    string
 	// RopeScaling ("linear"/"yarn") lets Ctx exceed the model's trained length —
 	// the preview must know, or it silently sizes a clamped window and reports a
 	// KV reserve the real launch won't have.
-	RopeScaling  string
-	TargetVramGB float64
+	RopeScaling    string
+	TargetVramGB   float64
 	CpuOffload     int  // >0 pins layers offloaded to CPU, overriding the sizer
 	CtxCheckpoints *int // nil => llama default (32); 0 disables; reserves checkpoint VRAM
 	// CheckpointMinStep pins -cms (checkpoint spacing in prompt tokens), which
@@ -24,6 +24,11 @@ type EstimateInput struct {
 	CheckpointMinStep int
 	DraftGB           float64 // separate MTP/DFlash draft gguf weights (GB); 0 => baked-in or none
 	MmprojGB          float64 // "-vision" twin projector footprint (weights + CLIP reserve); 0 => none
+	// Ub pins -ub (physical batch). The compute buffer scales with it — ~0.5 GB
+	// between 512 and 1024 on a large-vocab model — so a preview that ignored a
+	// per-model Override.Ub charged a buffer the real launch never has. 0 => the
+	// same auto pick emit makes (effectiveUb).
+	Ub int
 }
 
 // EstimateResult is the previewed load plan for a candidate tuning.
@@ -110,16 +115,19 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		Spec:     in.Spec,
 		KvK:      kvK,
 		KvV:      kvV,
-		IsLong:   in.Ctx >= 65536,
+		IsLong:   in.Ctx >= longCtxThreshold,
 
 		CtxCheckpoints:    in.CtxCheckpoints,
 		CheckpointMinStep: in.CheckpointMinStep,
 	}
-	computeBufGB := computeBufferGB(meta, effectiveUb(prof, nil, prof.Ctx, target), s.ComputeBufFactor)
+	// Charge the ub the launch will actually run with: effectiveUb reads the
+	// override's pinned value, and passing nil here made the preview size a
+	// different compute buffer than emit did for the same model.
+	computeBufGB := computeBufferGB(meta, effectiveUb(prof, &Override{Ub: in.Ub}, prof.Ctx, target), s.ComputeBufFactor)
 	prof.Overhead += computeBufGB
 	prof.Overhead += in.MmprojGB // "-vision" projector weights + CLIP compute reserve
 
-	ctx, plan, kvReserve, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, in.KvInRam)
+	ctx, plan, kvReserve, planCkptGB, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, in.KvInRam)
 	if err != nil {
 		return EstimateResult{}, err
 	}
@@ -138,7 +146,12 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 	ngl, ncpuMoe := forceLowActiveMoE(meta, plan, prof, kvReserve)
 	if in.CpuOffload > 0 {
 		ngl, ncpuMoe = applyForcedOffload(meta, in.CpuOffload)
-		plan.EstVramGB, plan.EstRamGB = estForOffload(meta, prof, kvReserve, ngl, ncpuMoe)
+	}
+	// Any placement that differs from the one GetLoadPlan priced has to be
+	// re-priced: forceLowActiveMoE rewrites -ngl/--n-cpu-moe in place and used to
+	// leave plan.EstVramGB describing the placement it just discarded.
+	if ngl != plan.Ngl || ncpuMoe != plan.NCpuMoe {
+		plan.EstVramGB, plan.EstRamGB = estForOffload(meta, prof, kvReserve, planCkptGB, ngl, ncpuMoe)
 		plan.RamExceeded = s.MaxRamGB > 0 && plan.EstRamGB > s.MaxRamGB
 	}
 

@@ -35,8 +35,13 @@ type profile struct {
 	Target   float64
 	Overhead float64
 	Unlisted bool
-	Ctx      int  // 0 = auto-size; >0 forces that ctx via the manual-cap path
-	IsLong   bool // ctx-tier rung >= 64k (drops -ub to 512 only on a small-VRAM card)
+	Ctx      int // 0 = auto-size; >0 forces that ctx via the manual-cap path
+	// IsLong marks a profile whose context is pinned at or above
+	// longCtxThreshold (a ctx tier, a long named variant, or a long Ctx on the
+	// model itself). It tops the VRAM budget's safety slack up to
+	// longCtxHeadroomGB (see longCtxTarget) and drops -ub to 512 on a
+	// small-VRAM card.
+	IsLong bool
 	// Per-variant overrides. Empty/zero => inherit the model-wide override. Set
 	// only by named custom variants (Override.Variants); emitProfile and the
 	// kv-cost sizing prefer these over the model-wide values.
@@ -259,26 +264,28 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		soloTarget = override.VramTargetGB
 	}
 	profiles := []profile{{
-		Name:              name,
-		Target:            soloTarget,
-		Overhead:          s.VramOverheadGB + specOh,
-		Unlisted:          override.Unlisted,
-		Ctx:               override.Ctx,
+		Name:     name,
+		Target:   soloTarget,
+		Overhead: s.VramOverheadGB + specOh,
+		Unlisted: override.Unlisted,
+		Ctx:      override.Ctx,
+		// A model pinned to a long ctx is a long profile like any tier — it earns
+		// the same budget headroom (longCtxTarget) and the same -ub treatment. An
+		// auto ctx (0) is not: the sizer picks the window against the full budget.
+		IsLong:            override.Ctx >= longCtxThreshold,
 		CpuOffload:        override.CpuOffload,
 		CtxCheckpoints:    override.CtxCheckpoints,
 		CheckpointMinStep: override.CheckpointMinStep,
 	}}
 	for _, cv := range ctxVariants {
-		cvTarget := s.TargetVramGB
-		if cv >= 65536 {
-			cvTarget = s.TargetVramGB - 0.5
-		}
 		profiles = append(profiles, profile{
-			Name:              fmt.Sprintf("%s-%s", name, formatCtxTag(cv)),
-			Target:            cvTarget,
+			Name: fmt.Sprintf("%s-%s", name, formatCtxTag(cv)),
+			// Budget headroom for the long rungs is charged by longCtxTarget off
+			// IsLong, so every long profile (and the editor preview) gets it.
+			Target:            s.TargetVramGB,
 			Overhead:          s.VramOverheadGB + specOh,
 			Ctx:               cv,
-			IsLong:            cv >= 65536,
+			IsLong:            cv >= longCtxThreshold,
 			CtxCheckpoints:    override.CtxCheckpoints,
 			CheckpointMinStep: override.CheckpointMinStep,
 		})
@@ -327,7 +334,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			Overhead:          s.VramOverheadGB + vSpecOh,
 			Unlisted:          v.Unlisted,
 			Ctx:               v.Ctx,
-			IsLong:            v.Ctx >= 65536,
+			IsLong:            v.Ctx >= longCtxThreshold,
 			KvK:               v.KvK,
 			KvV:               v.KvV,
 			Spec:              v.Spec,
@@ -372,7 +379,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			}
 			if v.Ctx > 0 {
 				vp.Ctx = v.Ctx
-				vp.IsLong = v.Ctx >= 65536
+				vp.IsLong = v.Ctx >= longCtxThreshold
 			}
 			// Spec changes the draft overhead; recharge off the variant's spec.
 			if v.Spec != "" {
@@ -444,14 +451,20 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			}
 		}
 
-		ctx, plan, kvReserve, err := sizeProfile(meta, s, prof, ptg, kcg, pModelMax, pkvInRam)
+		ctx, plan, kvReserve, planCkptGB, err := sizeProfile(meta, s, prof, ptg, kcg, pModelMax, pkvInRam)
 		if err != nil {
 			return err
 		}
 		ngl, ncpuMoe := forceLowActiveMoE(meta, plan, prof, kvReserve)
 		if prof.CpuOffload > 0 {
 			ngl, ncpuMoe = applyForcedOffload(meta, prof.CpuOffload)
-			plan.EstVramGB, plan.EstRamGB = estForOffload(meta, prof, kvReserve, ngl, ncpuMoe)
+		}
+		// Re-price whenever the emitted placement is not the one GetLoadPlan
+		// costed, so the baked estVramGB/estRamGB describe the flags we actually
+		// write (forceLowActiveMoE rewrites them without touching the estimate).
+		if ngl != plan.Ngl || ncpuMoe != plan.NCpuMoe {
+			plan.EstVramGB, plan.EstRamGB = estForOffload(meta, prof, kvReserve, planCkptGB, ngl, ncpuMoe)
+			plan.RamExceeded = s.MaxRamGB > 0 && plan.EstRamGB > s.MaxRamGB
 		}
 
 		// Per-variant spec/reasoning override the model-wide values for emit.

@@ -594,6 +594,13 @@ export interface EstimateParams {
   cpuOffload?: number;
   /** null/undefined => llama default (32); 0 disables. */
   ctxCheckpoints?: number | null;
+  /** -cms checkpoint spacing: scales each snapshot's KV term. 0 => arch default. */
+  checkpointMinStep?: number;
+  /** -ub physical batch: the compute buffer scales with it. 0 => auto (1024/512). */
+  ub?: number;
+  /** "linear"/"yarn" let ctx exceed the trained length; "none" clamps to it.
+   * Without it the preview sizes a window the launch won't have. */
+  ropeScaling?: string;
   /** Seed the estimate from the model's loaded command (the running variant)
    * instead of re-sizing the solo profile with defaults. */
   actual?: boolean;
@@ -624,6 +631,9 @@ export async function estimatePlan(model: string, p: EstimateParams): Promise<Pl
   if (p.vram) q.set("vram", String(p.vram));
   if (p.cpuOffload) q.set("cpuOffload", String(p.cpuOffload));
   if (p.ctxCheckpoints != null) q.set("ctxCheckpoints", String(p.ctxCheckpoints));
+  if (p.checkpointMinStep) q.set("checkpointMinStep", String(p.checkpointMinStep));
+  if (p.ub) q.set("ub", String(p.ub));
+  if (p.ropeScaling) q.set("ropeScaling", p.ropeScaling);
   if (p.actual) q.set("actual", "true");
   const response = await fetch(`/api/models/${encodeURIComponent(model)}/estimate?${q.toString()}`);
   if (!response.ok) {

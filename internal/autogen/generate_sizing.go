@@ -10,10 +10,64 @@ import (
 	"math"
 )
 
+const (
+	// longCtxThreshold is the context at which a profile counts as long: the KV
+	// cache dominates the footprint and the compute buffer is exercised over a
+	// far bigger window, so the plan needs slack the short profiles don't.
+	longCtxThreshold = 65536
+	// longCtxHeadroomGB is the TOTAL safety slack a long profile should hold back.
+	// Fitting a long context to the last megabyte is exactly the case where WDDM
+	// demotes the overflow to shared memory instead of failing (see the package
+	// doc), so the budget is shaved rather than spent. It is a floor, not an
+	// addition — see longCtxTarget.
+	longCtxHeadroomGB = 0.5
+)
+
+// longCtxTarget applies that headroom to a profile's budget, TOPPING UP whatever
+// slack vramOverheadGB already holds back rather than stacking on top of it.
+//
+// Both knobs exist for the same reason (allocator/runtime slack so a tight fit
+// doesn't get demoted to shared memory), and charging both cost a long profile a
+// full extra 0.5 GB it never spent: on a 22.8 GB target with vramOverheadGB 0.5,
+// a 100k dense profile sized against 22.3, then GetLoadPlan subtracted the 0.5
+// again as cudaOverhead — 1.0 GB of pad, of which the estimate reported ~0.5 as
+// used VRAM that the launch never allocated. So the card measured ~1 GB below the
+// target and -ngl dropped a layer (and that layer's KV to RAM) for nothing.
+//
+// vramOverheadGB is already charged into every plan via prof.Overhead, so a long
+// profile only needs the difference. With the default 0.5 this is now a no-op;
+// raising vramOverheadGB shrinks it to zero rather than compounding.
+//
+// The headroom is charged HERE rather than inline at the ctx-tier call site in
+// Generate, which is why the editor's preview and the baked config used to
+// disagree: EstimatePlan flags IsLong on the same threshold but sized against the
+// full target. Charging it here means every long profile — ctx tier, named
+// variant, an explicit long Ctx on the model itself, and the preview — sizes
+// identically.
+func longCtxTarget(prof profile, vramOverheadGB float64) float64 {
+	headroom := longCtxHeadroomGB - vramOverheadGB
+	if headroom <= 0 {
+		return prof.Target
+	}
+	if prof.IsLong && prof.Target > headroom {
+		return prof.Target - headroom
+	}
+	return prof.Target
+}
+
 // sizeProfile computes the context window and load plan for one profile,
 // mirroring the dense / MoE / kv-in-ram / no-attn branches of Generate-Config.
-func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB float64, modelMax int, kvInRam bool) (ctx int, plan LoadPlan, kvReserve float64, err error) {
-	target := prof.Target
+//
+// ckptGB is the context-checkpoint reserve this profile charged into the plan
+// (0 when KV lives in RAM or the model has no attention dims). It is returned
+// separately from kvReserve — which stays the pure KV cost the UI reports — so
+// a caller that RE-derives the estimate for a pinned placement (estForOffload)
+// charges the same checkpoint bytes GetLoadPlan already did. Dropping it there
+// made a pinned/forced-offload estimate read ~ckptGB lower than the auto one
+// for the same placement, so the numbers didn't reconcile (22.4 auto vs
+// 21.8 + 0.3 pinned).
+func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB float64, modelMax int, kvInRam bool) (ctx int, plan LoadPlan, kvReserve, ckptGB float64, err error) {
+	target := longCtxTarget(prof, s.VramOverheadGB)
 	overhead := prof.Overhead
 
 	switch {
@@ -40,6 +94,7 @@ func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB fl
 			ckptCtxCeil = min(ckptCtxCeil, prof.Ctx)
 		}
 		ckpt := checkpointReserveGB(prof, perTokGB, kvConstGB, ckptCtxCeil, meta.FullAttnInterval > 0)
+		ckptGB = ckpt
 		// Checkpoints live wherever the KV cache does. MoE keeps KV (and thus its
 		// checkpoints) VRAM-resident even when expert weights spill to CPU via
 		// --n-cpu-moe, so they're a flat VRAM overhead. Dense models keep the KV
@@ -292,7 +347,16 @@ func applyForcedOffload(meta Metadata, n int) (ngl, ncpuMoe int) {
 // estForOffload recomputes the VRAM/RAM estimate for a forced placement so the
 // generated header comment (and the editor preview) reflect the pinned offload
 // rather than the auto sizer's numbers. Mirrors the cost model in plan.go.
-func estForOffload(meta Metadata, prof profile, kvReserve float64, ngl, ncpuMoe int) (estVram, estRam float64) {
+//
+// ckptGB is sizeProfile's checkpoint reserve and MUST be charged here too, the
+// same way sizeProfile charged it into the plan: flat VRAM on MoE (KV and its
+// snapshots stay GPU-resident under --n-cpu-moe), folded into the per-layer
+// reserve on dense (a CPU layer keeps its KV — and its checkpoint share — in
+// RAM). Omitting it silently under-reported every pinned placement by the
+// checkpoint reserve, so estVram + estRam no longer summed to the auto plan's
+// total and the config baked an optimistic estVramGB for the router to admit
+// against.
+func estForOffload(meta Metadata, prof profile, kvReserve, ckptGB float64, ngl, ncpuMoe int) (estVram, estRam float64) {
 	size := meta.FileSizeGB
 	blocks := float64(meta.BlockCount)
 	overhead := prof.Overhead
@@ -303,7 +367,7 @@ func estForOffload(meta Metadata, prof profile, kvReserve float64, ngl, ncpuMoe 
 		share := effectiveShare(meta, genMoeShareFor)
 		nonExpert := size * (1.0 - share)
 		expertGpuFrac := (blocks - float64(ncpuMoe)) / blocks
-		estVram = nonExpert + size*share*expertGpuFrac + kvReserve + overhead
+		estVram = nonExpert + size*share*expertGpuFrac + kvReserve + ckptGB + overhead
 		estRam = size * share * (float64(ncpuMoe) / blocks)
 		return round(estVram, 2), round(estRam, 2)
 	}
@@ -311,8 +375,8 @@ func estForOffload(meta Metadata, prof profile, kvReserve float64, ngl, ncpuMoe 
 	if gpuFrac > 1 {
 		gpuFrac = 1
 	}
-	estVram = gpuFrac*(size+kvReserve) + overhead
-	estRam = (1 - gpuFrac) * (size + kvReserve)
+	estVram = gpuFrac*(size+kvReserve+ckptGB) + overhead
+	estRam = (1 - gpuFrac) * (size + kvReserve + ckptGB)
 	return round(estVram, 2), round(estRam, 2)
 }
 
