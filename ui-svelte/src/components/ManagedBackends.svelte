@@ -375,8 +375,16 @@
         <section class="rounded-md border border-card-border bg-surface/40">
           <header class="flex items-center gap-2 px-3 py-2 border-b border-card-border">
             <span class="text-[0.8125rem] text-txtmain">{comp.name}</span>
+            <!-- The version chip says which BUILD of this backend is selected;
+                 it deliberately carries no "in use" colour, because several
+                 backends of one kind can each have a selected build while only
+                 one of them is what actually launches. That second, quite
+                 different fact gets its own chip below. -->
             {#if comp.active}
-              <span class="font-mono text-[0.6rem] rounded px-1.5 py-0.5 border border-primary text-primary">
+              <span
+                class="font-mono text-[0.6rem] rounded px-1.5 py-0.5 border border-card-border text-txtsecondary"
+                title="The build this backend would launch"
+              >
                 {comp.active.version} · {comp.active.variant}
               </span>
             {:else if comp.installed.length}
@@ -387,6 +395,26 @@
               <span class="font-mono text-[0.6rem] rounded px-1.5 py-0.5 border border-card-border text-txtsecondary">
                 manual setup
               </span>
+            {/if}
+            <!-- Exactly one card per group can carry the primary "in use" chip,
+                 so "which of my llama backends actually runs?" is answered by
+                 looking, not by reading three cards and comparing. -->
+            {#if comp.installed.length && comp.kind !== ""}
+              {#if comp.isDefault}
+                <span
+                  class="font-mono text-[0.6rem] rounded px-1.5 py-0.5 border border-primary text-primary"
+                  title={comp.defaultImplicit
+                    ? `Used for ${comp.class || comp.kind} models because it is the only backend registered for them — nothing is starred.`
+                    : `The ★ auto-pick for ${comp.class || comp.kind} models. Models pinned to another backend keep their pin.`}
+                >in use</span>
+              {:else}
+                <span
+                  class="font-mono text-[0.6rem] rounded px-1.5 py-0.5 border border-card-border text-txtsecondary"
+                  title={comp.defaultOwner
+                    ? `${comp.defaultOwner} runs for ${comp.class || comp.kind} models instead`
+                    : "Installed, but not what gets launched"}
+                >not in use</span>
+              {/if}
             {/if}
             {#if upd}
               <span class="font-mono text-[0.6rem] text-primary">update: {upd}</span>
@@ -531,11 +559,14 @@
               {#if comp.installed.length && comp.kind !== "" && !comp.isDefault}
                 <div class="flex flex-wrap items-center gap-2 rounded border border-card-border bg-surface/60 px-2 py-1.5">
                   <span class="text-[0.7rem] text-txtsecondary">
-                    {#if comp.defaultOwner}
+                    {#if comp.defaultOwner && comp.defaultImplicit}
+                      Installed, but not in use - <span class="text-txtmain font-mono">{comp.defaultOwner}</span> runs
+                      for this group because it was registered first. Nothing is starred.
+                    {:else if comp.defaultOwner}
                       Installed, but not in use - <span class="text-txtmain font-mono">{comp.defaultOwner}</span> is the
                       default for this group.
                     {:else}
-                      Installed, but not in use - no default is set for this group.
+                      Installed, but not in use - this group has no registry entry to launch from.
                     {/if}
                   </span>
                   <button
@@ -558,8 +589,17 @@
                       <span class="text-txtmain">{b.version}</span>
                       <span class="text-txtsecondary">{b.variant}</span>
                       <span class="text-txtsecondary">{fmtBytes(b.sizeBytes)}</span>
-                      {#if b.active}
+                      {#if b.active && (comp.isDefault || comp.kind === "")}
                         <span class="ml-auto inline-flex items-center gap-1 text-primary"><Check size={12} /> in use</span>
+                      {:else if b.active}
+                        <!-- The registry row points here, but the row itself is
+                             not what the class resolves to. Calling this "in
+                             use" is how two cards ended up both claiming it. -->
+                        <span
+                          class="ml-auto text-txtsecondary"
+                          title={comp.defaultOwner
+                            ? `Selected build of this backend - ${comp.defaultOwner} is what actually runs`
+                            : "Selected build of this backend"}>selected</span>
                       {:else if comp.kind !== ""}
                         <button
                           type="button"

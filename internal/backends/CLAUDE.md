@@ -74,10 +74,23 @@ therefore *coexist* with hand-entered rows in one registry, distinguished by
   only marks the new row as its class default when no row of that class exists
   yet, so a hand-entered backend the user set up earlier keeps winning and the
   managed build sits unused. That is the right default (their choice stands) but
-  it is invisible, so the catalog DTO carries `isDefault`/`defaultOwner` and the
-  card shows "Installed, but not in use — X is the default" with a
-  `POST /api/backends/default` action. `activate` is a different axis entirely:
-  it picks *which build of this component* the row points at, never ★.
+  it is invisible, so the catalog DTO carries
+  `isDefault`/`defaultOwner`/`defaultImplicit` and the card shows "Installed, but
+  not in use — X is the default" with a `POST /api/backends/default` action.
+  **"In use" is a per-class fact, "active" is a per-component one, and conflating
+  them is a real bug that shipped**: every component with an install has its own
+  registry row pointing at one of its builds, so painting that build "in use"
+  made three llama backends all claim it while only one launched. The build row
+  says *selected* unless the component also wins its class, and only the winning
+  card carries the primary "in use" chip. `activate` is a different axis
+  entirely: it picks *which build of this component* the row points at, never ★.
+- **`classDefault` must mirror `resolveBackend`, fallback included.** Auto-pick is
+  "the ★ row of the class, **else the first row of the class**" — so with no ★
+  anywhere one backend is still silently the winner. Reporting "no default is
+  set" on every card of that class (what the first cut did) leaves the user
+  unable to tell which binary runs; `defaultImplicit` marks a win that came from
+  list order so the UI can say "runs because it was registered first" instead of
+  calling it a default.
 - **Custom repos come in through `Manager.Sources`, a hook — not an import.** The user's tracked
   repos live in the autogen sidecar, but this package depends on the standard
   library alone, so `internal/server` supplies them as a `func() []Component`

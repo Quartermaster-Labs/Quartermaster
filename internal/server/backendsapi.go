@@ -54,13 +54,19 @@ type backendComponentDTO struct {
 	Variants  []backendVariantDTO   `json:"variants"`
 	Installed []backendInstalledDTO `json:"installed"`
 	Active    *backendInstalledDTO  `json:"active,omitempty"`
-	// IsDefault reports whether this component's registry row is the ★ auto-pick
-	// for its class, i.e. whether installing it actually changed what
-	// Quartermaster launches. DefaultOwner names the row that holds ★ instead —
+	// IsDefault reports whether this component's registry row is the one its
+	// class actually resolves to, i.e. whether installing it changed what
+	// Quartermaster launches. DefaultOwner names the row that wins instead —
 	// typically a hand-entered backend the user set up before installing this
-	// one, which silently keeps winning.
-	IsDefault    bool   `json:"isDefault"`
-	DefaultOwner string `json:"defaultOwner,omitempty"`
+	// one, which silently keeps winning. DefaultImplicit says that win came from
+	// being first of its class rather than from a deliberate ★; the UI must not
+	// call an accident a default, and must not claim nothing is in use.
+	IsDefault       bool   `json:"isDefault"`
+	DefaultOwner    string `json:"defaultOwner,omitempty"`
+	DefaultImplicit bool   `json:"defaultImplicit,omitempty"`
+	// Class groups the kinds that compete for one ★ (llama and vllm both serve
+	// text), so a card can name the group it wins or loses.
+	Class string `json:"class,omitempty"`
 }
 
 type backendCatalogResp struct {
@@ -174,36 +180,61 @@ func (s *Server) regenReload() error {
 	return nil
 }
 
-// classDefault reports whether this component's managed row holds ★ for its
-// class and, when it doesn't, the label of the row that does. Installing a
-// backend does not steal ★ from a row the user set up earlier, so without this
-// a managed install can sit on disk, up to date, and never actually be launched.
-func (s *Server) classDefault(c backends.Component) (isDefault bool, owner string) {
+// classDefault reports whether this component's managed row is the one the
+// launcher actually picks for its class, and when it isn't, the label of the row
+// that wins instead. Installing a backend does not steal ★ from a row the user
+// set up earlier, so without this a managed install can sit on disk, up to date,
+// and never actually be launched.
+//
+// It mirrors resolveBackend's precedence exactly — the ★ row of the class, else
+// the FIRST row of the class. That fallback is the part worth being careful
+// about: with two backends of one kind and no ★ anywhere, one of them is still
+// silently the winner, and reporting "no default is set" on both cards leaves
+// the user unable to tell which binary runs. implicit says the win came from
+// list order rather than a deliberate ★, which is worth wording differently.
+func (s *Server) classDefault(c backends.Component) (isDefault bool, owner string, implicit bool) {
 	if c.Kind == "" || s.autogen == nil {
-		return false, ""
+		return false, "", false
 	}
 	list, err := autogen.LoadSidecarBackendList(s.autogen.GeneratePath)
 	if err != nil {
-		return false, ""
+		return false, "", false
 	}
-	class := autogen.KindClass(c.Kind)
-	mine := managedEntry(list, c.ID)
+	return classDefaultFor(list, autogen.KindClass(c.Kind), managedEntry(list, c.ID))
+}
+
+// classDefaultFor is classDefault's decision, split out from the sidecar read so
+// it can be tested directly. mine is the index of this component's row, or -1.
+func classDefaultFor(list []autogen.BackendEntry, class string, mine int) (isDefault bool, owner string, implicit bool) {
+	starred, first := -1, -1
 	for i, e := range list {
-		if !e.Default || autogen.KindClass(e.Kind) != class {
+		if autogen.KindClass(e.Kind) != class {
 			continue
 		}
-		if i == mine {
-			return true, ""
+		if first < 0 {
+			first = i
 		}
-		label := e.Name
-		if label == "" {
-			label = e.Path
+		if e.Default && starred < 0 {
+			starred = i
 		}
-		return false, label
 	}
-	// No row of this class is starred: autogen falls back to its built-in
-	// default, so a managed install is still not what gets launched.
-	return false, ""
+	win := starred
+	if win < 0 {
+		win, implicit = first, true
+	}
+	if win < 0 {
+		// No row of this class at all: nothing resolves through the registry and
+		// autogen keeps its legacy derived exe.
+		return false, "", false
+	}
+	if win == mine {
+		return true, "", implicit
+	}
+	label := list[win].Name
+	if label == "" {
+		label = list[win].Path
+	}
+	return false, label, implicit
 }
 
 // setClassDefault moves ★ within one class onto the given row.
@@ -334,7 +365,8 @@ func (s *Server) handleAPIBackendCatalog(w http.ResponseWriter, r *http.Request)
 			}
 			dto.Installed = append(dto.Installed, row)
 		}
-		dto.IsDefault, dto.DefaultOwner = s.classDefault(c)
+		dto.IsDefault, dto.DefaultOwner, dto.DefaultImplicit = s.classDefault(c)
+		dto.Class = autogen.KindClass(c.Kind)
 		resp.Components = append(resp.Components, dto)
 	}
 	writeJSON(w, resp)

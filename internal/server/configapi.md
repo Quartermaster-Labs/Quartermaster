@@ -41,6 +41,15 @@ here 501s when `s.autogen == nil`** — they are the `-generate` surface. Route 
   replacing them: several backends have no installable upstream release.
 - **`GET /api/backends/catalog` is local-only and never calls GitHub**, so the Backends tab opens
   offline; releases are fetched lazily per component.
+- **`active` and `isDefault` are different questions; the UI must not answer them with one word.**
+  Every installed component has its own managed row pointing at one of its builds, so `active` is
+  true on *every* such card — it means "the build this backend would launch". Only the component
+  whose row wins its class is what actually launches. `classDefault` computes that with
+  `resolveBackend`'s precedence, **★ row of the class else first row of the class**, and returns
+  `defaultImplicit` when the win came from list order, so a card can say "runs because it was
+  registered first" rather than the card set claiming no default exists while one of them quietly
+  runs. Tracked repos made this visible: several user repos of one kind previously all painted their
+  build "in use".
 - **A tracked repo is just another catalog row.** `s.trackedSources` (`backendsources.go`) is wired
   into `Manager.Sources` in `server.New`, so `m.Catalog()`/`m.Find()` return the user's repos merged
   after the built-ins and every downstream path — install, activate, ★ default, rollback, the

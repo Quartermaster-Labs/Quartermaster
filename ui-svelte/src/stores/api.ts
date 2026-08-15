@@ -880,6 +880,11 @@ export interface ManagedComponent {
   // not change what Quartermaster actually launches. defaultOwner names it.
   isDefault: boolean;
   defaultOwner?: string;
+  // The win came from being first of its class, not from a deliberate ★ — say
+  // "used because it is first" rather than calling it the default.
+  defaultImplicit?: boolean;
+  // The group that competes for one ★ (llama and vllm are both "text").
+  class?: string;
   // True for a repo the user added themselves: same install controls, plus edit
   // and stop-tracking.
   custom?: boolean;
