@@ -181,12 +181,16 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 	// the settings menu matches what's actually loaded. Otherwise (config editor,
 	// unloaded, or an edited field) start blank so the sizer re-derives placement.
 	var in autogen.EstimateInput
+	// Context the pinned placement below was actually measured at, so a preview of
+	// a DIFFERENT window can discard the pin (see the ctx param).
+	seededCtx := 0
 	if q.Get("actual") == "true" {
 		seedCmd := cmd
 		if rc, running := s.local.LaunchedCmd(realID); running && rc != "" {
 			seedCmd = rc
 		}
 		in = estimateInputFromCmd(seedCmd)
+		seededCtx = in.Ctx
 		// Pin the actual GPU/CPU layer split from the running argv so EstimatePlan
 		// reports the loaded placement instead of re-sizing it against the budget.
 		if n, ok := forcedOffloadFromCmd(seedCmd, meta); ok {
@@ -225,6 +229,19 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 	}
 	if v := q.Get("ctx"); v != "" {
 		in.Ctx, _ = strconv.Atoi(v)
+	}
+	// The pinned layer split above describes ONE window: the one the process was
+	// launched with. The editor keeps sending actual=true while its own ctx field
+	// differs (it only drops the flag once a field is edited), so a freshly-seeded
+	// modal previewed every context with the running placement nailed on. On a
+	// model the spawn-time guard had shaved a layer off, that reported "1 layer in
+	// RAM / 0.3 GB" at 32k and 64k windows that fit entirely on the GPU — and
+	// non-monotonically, since moving the slider cleared the flag and the same
+	// model suddenly gained the layer back at a LARGER ctx. Different window =>
+	// re-derive the placement. An explicit cpuOffload query param is parsed after
+	// this and still wins, so a deliberate what-if is unaffected.
+	if seededCtx > 0 && in.Ctx != seededCtx {
+		in.CpuOffload = 0
 	}
 	if v := q.Get("vram"); v != "" {
 		in.TargetVramGB, _ = strconv.ParseFloat(v, 64)

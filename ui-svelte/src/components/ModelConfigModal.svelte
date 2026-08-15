@@ -521,6 +521,11 @@
   let estimate = $state<PlanEstimate | null>(null);
   let estimateError = $state<string | null>(null);
   let estTimer: ReturnType<typeof setTimeout> | undefined;
+  // Monotonic request id: dragging a slider outruns the 100ms debounce, and the
+  // responses are not ordered. Without this the LAST-ARRIVING reply wins rather
+  // than the last-fired one, so the bar can settle on a window the form has
+  // already left behind.
+  let estSeq = 0;
 
   // Baseline of the memory-affecting fields as they were SEEDED (saved config).
   // The estimate pins the layer split to the running argv only while the form
@@ -845,6 +850,7 @@
 
   async function runEstimate() {
     if (!modelId || !config) return;
+    const seq = ++estSeq;
     estimateError = null;
     try {
       // A variant INHERITS the model-wide override (Default form fields) and
@@ -920,8 +926,11 @@
             ropeScaling: adv.ropeScaling || undefined,
             actual,
           };
-      estimate = await estimatePlan(estId, params);
+      const res = await estimatePlan(estId, params);
+      if (seq !== estSeq) return; // a newer request is in flight — drop this reply
+      estimate = res;
     } catch (e) {
+      if (seq !== estSeq) return;
       estimateError = e instanceof Error ? e.message : String(e);
       estimate = null;
     }
