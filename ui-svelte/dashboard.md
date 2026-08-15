@@ -78,7 +78,9 @@ no installable release; managed rows appear there read-only, tagged "installed".
 
 **Track a repo** (`components/TrackRepoModal.svelte`) adds a GitHub repo the built-in catalog
 doesn't know about — a llama.cpp fork, an in-house engine — and it then renders as an ordinary
-card, tagged "tracked", with edit / stop-tracking. The hard constraint is that **the user never
+card, tagged "tracked", with edit / stop-tracking, sorted to the **top** of its group (the server
+appends sources after the built-ins so a custom id can't shadow one, but these are the rows the user
+came here to manage). The hard constraint is that **the user never
 writes an asset pattern**: the modal fetches a real release (`getBackendSourceAssets`), the user
 ticks the build they want, and the server derives the matching rule from that example
 (`internal/backends/derive.go`). So every field here is a picker over fetched data, which is also

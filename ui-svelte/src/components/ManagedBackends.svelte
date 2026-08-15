@@ -305,7 +305,16 @@
       if (list) list.push(c);
       else by.set(id, [c]);
     }
-    return [...by].map(([id, comps]) => ({ id, label: groupLabel(id), comps }));
+    // The server appends tracked repos after the built-ins (that ordering is
+    // what keeps a custom id from shadowing one), but in the UI they are the
+    // rows the user added on purpose and came here to manage, so lift them to
+    // the top of their group. Array.sort is stable, so the built-ins keep the
+    // catalog's deliberate order among themselves.
+    return [...by].map(([id, comps]) => ({
+      id,
+      label: groupLabel(id),
+      comps: [...comps].sort((a, b) => Number(!!b.custom) - Number(!!a.custom)),
+    }));
   });
 
   let tab = $state<string | null>(null);
