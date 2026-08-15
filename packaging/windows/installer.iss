@@ -89,6 +89,12 @@ Filename: "powershell.exe"; \
   StatusMsg: "Configuring existing inference backends..."; \
   Flags: runhidden waituntilterminated; \
   Check: IsExistingMode
+; Chat-title model (~79 MB). No longer shipped in the binary; prefetched here so
+; the first chat has titles immediately. The server fetches it lazily otherwise.
+Filename: "powershell.exe"; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\packaging\windows\fetch-backend.ps1"" -TitleModel -AppDir ""{app}"" -NoPause"; \
+  StatusMsg: "Downloading chat title model..."; \
+  Flags: runhidden waituntilterminated
 ; Optional helper, independent of the backend source mode above.
 Filename: "powershell.exe"; \
   Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\packaging\windows\fetch-backend.ps1"" -Components ""yt-dlp"" -AppDir ""{app}"" -NoPause"; \

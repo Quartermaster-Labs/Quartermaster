@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -90,62 +89,6 @@ func resolveTitlegen(generatePath string) (*titlegen, error) {
 		return nil, fmt.Errorf("no llama-completion binary beside %s (T5 title models cannot run under llama-server)", filepath.Base(server))
 	}
 	return &titlegen{exe: exe, model: model}, nil
-}
-
-// titlegenAsset is the vendored title model, embedded so reasoning titles are
-// core functionality in every install — no download step, no setup, no
-// per-machine registry entry. 79 MiB of binary buys a feature that would
-// otherwise silently not exist on a fresh box. See assets/README.md for
-// provenance and license.
-//
-//go:embed assets/titlegen-flan-t5-small-q8_0.gguf
-var titlegenAsset []byte
-
-const titlegenAssetName = "titlegen-flan-t5-small-q8_0.gguf"
-
-// titlegenExtractMu serializes the one-time extraction so two turns starting
-// together can't both write the temp file.
-var titlegenExtractMu sync.Mutex
-
-// titlegenModelPath resolves the title gguf: the QM_TITLEGEN_MODEL env var wins
-// (bring your own title model), else the embedded one, extracted once into
-// <dir(generatePath)>/titlegen. That folder is deliberately OUTSIDE the models
-// root so autogen's discovery walk never picks the title model up and publishes
-// it as a servable chat model — and it cannot be served anyway (llama-server has
-// no encoder-decoder path).
-func titlegenModelPath(generatePath string) string {
-	titlegenExtractMu.Lock()
-	defer titlegenExtractMu.Unlock()
-	if p := strings.TrimSpace(os.Getenv("QM_TITLEGEN_MODEL")); p != "" {
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
-		return ""
-	}
-	if generatePath == "" {
-		return ""
-	}
-	dir := filepath.Join(filepath.Dir(generatePath), "titlegen")
-	path := filepath.Join(dir, titlegenAssetName)
-	// Size check, not just existence: a truncated extraction (disk full, killed
-	// mid-write) would otherwise poison every later run.
-	if st, err := os.Stat(path); err == nil && st.Size() == int64(len(titlegenAsset)) {
-		return path
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return ""
-	}
-	// Write-then-rename so a concurrent reader never sees a partial file.
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, titlegenAsset, 0o644); err != nil {
-		os.Remove(tmp)
-		return ""
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return ""
-	}
-	return path
 }
 
 // pickLlamaExe returns the ★default llama-kind backend path, else the first one.

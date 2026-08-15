@@ -21,3 +21,7 @@ Output/
 
 # JS deps + tool caches.
 node_modules/
+
+# Vendored title model: fetched on first use / by the installer, not tracked.
+# See internal/server/assets/README.md and titlegen_asset.go.
+internal/server/assets/*.gguf

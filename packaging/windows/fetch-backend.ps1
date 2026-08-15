@@ -44,6 +44,10 @@ param(
     [string]$TtsExe,
     # Set settings.modelsRoot in the generate yaml (independent of server setup).
     [string]$ModelsRoot,
+    # Prefetch the chat-title model into <AppDir>\titlegen so the first chat has
+    # titles without waiting on a download. The server fetches it lazily anyway;
+    # this just moves the wait into the installer.
+    [switch]$TitleModel,
     [switch]$NoPause,
     [switch]$Test
 )
@@ -227,6 +231,36 @@ if ($LlamaExe -or $SdExe -or $TtsExe) {
     Write-Host "Done." -ForegroundColor Green
     if (-not $NoPause -and $Host.Name -eq 'ConsoleHost') { Write-Host "`nPress any key..."; [void][System.Console]::ReadKey($true) }
     return
+}
+
+# Chat-title model. A fixed release asset on our own repo rather than a "latest
+# release" lookup, so it is pinned by URL + hash instead of going through
+# $ASSET_PATTERNS. Keep both in step with internal/server/titlegen_asset.go.
+if ($TitleModel) {
+    $tgName = 'titlegen-flan-t5-small-q8_0.gguf'
+    $tgSha = 'a040e12a77a3da86491a4347296cfd16b76b41e6c6b19b58fe6f2dc072edccb9'
+    $tgUrl = "https://github.com/Quartermaster-Labs/quartermaster/releases/download/assets-v1/$tgName"
+    $tgDir = Join-Path $AppDir 'titlegen'
+    $tgPath = Join-Path $tgDir $tgName
+    try {
+        Write-Host '== chat title model ==' -ForegroundColor Cyan
+        if (Test-Path $tgPath) {
+            Write-Host "  already present: $tgPath" -ForegroundColor Green
+        }
+        else {
+            New-Item -ItemType Directory -Force -Path $tgDir | Out-Null
+            $tmp = "$tgPath.tmp"
+            Invoke-WebRequest -Uri $tgUrl -OutFile $tmp -UseBasicParsing
+            $got = (Get-FileHash -Path $tmp -Algorithm SHA256).Hash.ToLower()
+            if ($got -ne $tgSha) { Remove-Item $tmp -Force; throw "checksum mismatch: $got" }
+            Move-Item -Force $tmp $tgPath
+            Write-Host "  installed: $tgPath" -ForegroundColor Green
+        }
+    }
+    catch {
+        # Titles fall back to the chat model, so this is never fatal.
+        Write-Warning "title model failed (chat titles will fall back to the chat model): $($_.Exception.Message)"
+    }
 }
 
 $wanted = $Components.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }

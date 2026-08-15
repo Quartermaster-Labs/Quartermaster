@@ -1,6 +1,7 @@
 package server
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -134,25 +135,92 @@ func TestTitlegen_PickLlamaExe(t *testing.T) {
 	}
 }
 
-// The model must extract itself: a fresh install has no titlegen folder, and the
-// feature is meant to work with zero setup.
-func TestTitlegen_ExtractsEmbeddedModel(t *testing.T) {
+// writeFakeTitlegenCache lays down a cache entry of exactly the pinned size, so
+// resolution finds it and never reaches the network.
+func writeFakeTitlegenCache(t *testing.T, generatePath string) string {
+	t.Helper()
+	path := titlegenCachePath(generatePath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := f.Truncate(titlegenAssetSize); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// The model is no longer embedded: it is fetched once and cached beside the
+// generate control file. Resolution must find that cache without a download.
+func TestTitlegen_ResolvesCachedModel(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("QM_TITLEGEN_MODEL", "")
 	gen := filepath.Join(dir, "quartermaster-generate.yaml")
 
-	path := titlegenModelPath(gen)
-	if path == "" {
-		t.Fatal("no model path produced")
+	want := writeFakeTitlegenCache(t, gen)
+	if got := titlegenModelPath(gen); got != want {
+		t.Errorf("model path = %q, want the cached copy %q", got, want)
 	}
-	if want := filepath.Join(dir, "titlegen", titlegenAssetName); path != want {
-		t.Errorf("model path = %q, want %q", path, want)
+	// FetchTitlegenAsset must short-circuit on a complete cache rather than
+	// re-downloading 79 MiB on every start.
+	if got, err := FetchTitlegenAsset(gen); err != nil || got != want {
+		t.Errorf("FetchTitlegenAsset = %q, %v; want %q, nil", got, err, want)
 	}
-	// Second call must reuse the extracted file, not rewrite it.
-	if again := titlegenModelPath(gen); again != path {
-		t.Errorf("second resolve = %q, want %q", again, path)
+}
+
+// A truncated cache entry (killed download) must not be served as if complete —
+// llama-completion would fail on the partial gguf much later, and confusingly.
+func TestTitlegen_RejectsPartialCache(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("QM_TITLEGEN_MODEL", "")
+	gen := filepath.Join(dir, "quartermaster-generate.yaml")
+
+	path := writeFakeTitlegenCache(t, gen)
+	if err := os.Truncate(path, titlegenAssetSize/2); err != nil {
+		t.Fatal(err)
 	}
-	if titlegenModelPath("") != "" {
-		t.Error("no generate path should mean no title model")
+	if titlegenCached(path) {
+		t.Error("half-written cache reported as complete")
+	}
+}
+
+// QM_TITLEGEN_MODEL wins over the cache (bring your own title model), and a bad
+// value resolves to no model rather than silently falling back.
+func TestTitlegen_EnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	gen := filepath.Join(dir, "quartermaster-generate.yaml")
+	writeFakeTitlegenCache(t, gen)
+
+	mine := filepath.Join(dir, "mine.gguf")
+	if err := os.WriteFile(mine, []byte("gguf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("QM_TITLEGEN_MODEL", mine)
+	if got := titlegenModelPath(gen); got != mine {
+		t.Errorf("model path = %q, want the override %q", got, mine)
+	}
+
+	t.Setenv("QM_TITLEGEN_MODEL", filepath.Join(dir, "nope.gguf"))
+	if got := titlegenModelPath(gen); got != "" {
+		t.Errorf("missing override resolved to %q, want none", got)
+	}
+}
+
+// Before the generate control file is known there is nowhere to cache, so there
+// is no title model — and asking must not mark the fetch as failed for the run.
+func TestTitlegen_NoGeneratePath(t *testing.T) {
+	t.Setenv("QM_TITLEGEN_MODEL", "")
+	if got := titlegenModelPath(""); got != "" {
+		t.Errorf("no generate path resolved to %q, want none", got)
+	}
+	if titlegenFetchFailed {
+		t.Error("resolving without a generate path poisoned the fetch for the run")
+	}
+	if _, err := FetchTitlegenAsset(""); err == nil {
+		t.Error("FetchTitlegenAsset with no generate path should error")
 	}
 }
