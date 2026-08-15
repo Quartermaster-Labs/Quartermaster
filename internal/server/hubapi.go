@@ -38,6 +38,11 @@ type hubSearchResp struct {
 	Source string      `json:"source"`
 	Query  string      `json:"query"`
 	Models []hub.Model `json:"models"`
+	// Where the next page starts, and whether asking for one is worth a round
+	// trip. The browser loads more as the user scrolls rather than capping at a
+	// page size, so these two are the whole pagination contract.
+	NextSkip int  `json:"nextSkip"`
+	HasMore  bool `json:"hasMore"`
 }
 
 type hubCancelReq struct {
@@ -112,21 +117,31 @@ func (s *Server) handleAPIHubSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	maxParams, _ := strconv.ParseFloat(q.Get("maxParams"), 64)
-	models, err := src.Search(r.Context(), hub.Query{
+	maxAge, _ := strconv.Atoi(q.Get("maxAgeDays"))
+	skip, _ := strconv.Atoi(q.Get("skip"))
+	page, err := src.Search(r.Context(), hub.Query{
 		Text:       q.Get("q"),
 		Sort:       q.Get("sort"),
 		Kind:       q.Get("kind"),
 		Limit:      limit,
 		MaxParamsB: maxParams,
+		MaxAgeDays: maxAge,
+		Skip:       max(0, skip),
 	})
 	if err != nil {
 		s.sendHubError(w, r, err)
 		return
 	}
-	if models == nil {
-		models = []hub.Model{} // the UI iterates this; never send null
+	if page.Models == nil {
+		page.Models = []hub.Model{} // the UI iterates this; never send null
 	}
-	writeJSON(w, hubSearchResp{Source: src.ID(), Query: q.Get("q"), Models: models})
+	writeJSON(w, hubSearchResp{
+		Source:   src.ID(),
+		Query:    q.Get("q"),
+		Models:   page.Models,
+		NextSkip: page.NextSkip,
+		HasMore:  page.HasMore,
+	})
 }
 
 // handleAPIHubModel returns one repo page: metadata, README and file list.

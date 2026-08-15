@@ -782,6 +782,7 @@ func (s *Server) routes() {
 	mux.Handle("POST /api/hub/cancel", adminChain.ThenFunc(s.handleAPIHubCancel))
 	mux.Handle("POST /api/hub/pause", adminChain.ThenFunc(s.handleAPIHubPause))
 	mux.Handle("POST /api/hub/resume", adminChain.ThenFunc(s.handleAPIHubResume))
+	mux.Handle("POST /api/hub/reveal", adminChain.ThenFunc(s.handleAPIHubReveal))
 	mux.Handle("GET /api/kvcache", adminChain.ThenFunc(s.handleAPIKvCache))
 	mux.Handle("GET /api/canon", adminChain.ThenFunc(s.handleAPICanon))
 	// Per-category scan folder (Models tab folder icon) — opens the host's native

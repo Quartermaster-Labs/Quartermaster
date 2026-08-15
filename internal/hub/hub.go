@@ -38,6 +38,26 @@ type Query struct {
 	// parameters. 0 = no cap. A repo whose size cannot be read from its name is
 	// KEPT — see ParamsB.
 	MaxParamsB float64
+	// MaxAgeDays keeps only repos CREATED within N days ("trendy": what is both
+	// popular and new, since the list is already ordered by the chosen sort).
+	// 0 = any age. Repos stating no creation date are kept, same posture as
+	// MaxParamsB.
+	MaxAgeDays int
+	// Skip is the offset into the hub's own result list, for paging. The UI
+	// loads more as the user scrolls rather than capping at a page size.
+	Skip int
+}
+
+// Page is one slice of a hub's result list.
+//
+// NextSkip counts the hub's OWN rows, not the surviving ones: the adapters
+// over-fetch and then filter (size cap, age), so advancing by the number of
+// models returned here would silently re-request rows already shown — or skip
+// rows never shown.
+type Page struct {
+	Models   []Model `json:"models"`
+	NextSkip int     `json:"nextSkip"`
+	HasMore  bool    `json:"hasMore"`
 }
 
 // AvatarSource is an OPTIONAL extra a Source may implement: the publisher's
@@ -60,10 +80,14 @@ type Model struct {
 	Downloads int64     `json:"downloads"`
 	Likes     int64     `json:"likes"`
 	Updated   time.Time `json:"updated,omitzero"`
-	Pipeline  string    `json:"pipeline,omitempty"`
-	Tags      []string  `json:"tags,omitempty"`
-	Gated     bool      `json:"gated"`   // needs a license accepted on the hub
-	Private   bool      `json:"private"` // needs a token
+	// Created is when the repo was first published. It is what the "trendy"
+	// filter judges by: Updated moves for a README fix, so a two-year-old repo
+	// touched yesterday is not a new release.
+	Created  time.Time `json:"created,omitzero"`
+	Pipeline string    `json:"pipeline,omitempty"`
+	Tags     []string  `json:"tags,omitempty"`
+	Gated    bool      `json:"gated"`   // needs a license accepted on the hub
+	Private  bool      `json:"private"` // needs a token
 	// ParamsB is the size in billions of parameters read out of the repo NAME
 	// (see ParamsB), 0 when it states none. Sent so the browser renders the same
 	// number the size filter judged the repo by — a UI that parsed it again
@@ -99,7 +123,7 @@ type ModelDetail struct {
 type Source interface {
 	ID() string
 	Name() string
-	Search(ctx context.Context, q Query) ([]Model, error)
+	Search(ctx context.Context, q Query) (Page, error)
 	Detail(ctx context.Context, repoID string) (ModelDetail, error)
 	// FileURL builds the download URL for a repo-relative path.
 	FileURL(repoID, path string) (string, error)

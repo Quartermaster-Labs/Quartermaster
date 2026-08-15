@@ -11,6 +11,9 @@ export interface HubModel {
   downloads: number;
   likes: number;
   updated?: string;
+  // When the repo was first published — what "Trendy" judges by. `updated`
+  // moves for a README fix, so it cannot answer "is this a new release".
+  created?: string;
   pipeline?: string;
   tags?: string[];
   gated: boolean;
@@ -103,21 +106,65 @@ export function getHubSources(): Promise<HubSources> {
  */
 export const MAX_PARAMS_B = 120;
 
-export async function searchHub(
-  q: string,
-  sort = "downloads",
-  maxParamsB = MAX_PARAMS_B,
-  kind = "llm",
-  source = "hf",
-  limit = 30
-): Promise<HubModel[]> {
+/** TRENDY_DAYS is the window the "Trendy" filter calls a new release. */
+export const TRENDY_DAYS = 14;
+
+export interface HubSearchOpts {
+  q: string;
+  sort: string;
+  maxParamsB: number;
+  kind: string;
+  source: string;
+  limit: number;
+  /** 0 = any age; otherwise keep repos created within N days. */
+  maxAgeDays: number;
+  /** Offset into the HUB's own result list — see HubPage.nextSkip. */
+  skip: number;
+}
+
+export interface HubPage {
+  models: HubModel[];
+  // Where the next page starts. It counts the hub's rows, not the ones that
+  // survived the server-side size/age filters, so a caller must page by this
+  // number rather than by models.length or it will re-request or skip rows.
+  nextSkip: number;
+  hasMore: boolean;
+}
+
+export async function searchHub(opts: Partial<HubSearchOpts> = {}): Promise<HubPage> {
+  const {
+    q = "",
+    sort = "downloads",
+    maxParamsB = MAX_PARAMS_B,
+    kind = "llm",
+    source = "hf",
+    limit = 30,
+    maxAgeDays = 0,
+    skip = 0,
+  } = opts;
   const v = new URLSearchParams({ q, sort, source, limit: String(limit) });
   // Category tab. The hub ANDs its own filter tags, so this narrows server-side
   // — a 30-row page filtered here would mostly render an empty tab.
   if (kind) v.set("kind", kind);
   if (maxParamsB > 0) v.set("maxParams", String(maxParamsB));
-  const r = await hubFetch<{ models: HubModel[] }>(`/api/hub/search?${v}`);
-  return r.models ?? [];
+  if (maxAgeDays > 0) v.set("maxAgeDays", String(maxAgeDays));
+  if (skip > 0) v.set("skip", String(skip));
+  const r = await hubFetch<HubPage>(`/api/hub/search?${v}`);
+  return { models: r.models ?? [], nextSkip: r.nextSkip ?? skip + limit, hasMore: !!r.hasMore };
+}
+
+/**
+ * revealFolder opens a downloaded model's folder in the OS file manager.
+ *
+ * The server does the opening (the browser cannot), and only for paths inside
+ * the models root. No argument means the models root itself.
+ */
+export function revealFolder(path = ""): Promise<{ opened: string }> {
+  return hubFetch<{ opened: string }>("/api/hub/reveal", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
 }
 
 /**

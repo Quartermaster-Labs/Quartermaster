@@ -26,8 +26,8 @@ type fakeSource struct {
 
 func (f *fakeSource) ID() string   { return "fake" }
 func (f *fakeSource) Name() string { return "Fake" }
-func (f *fakeSource) Search(context.Context, Query) ([]Model, error) {
-	return []Model{{ID: "o/r", Source: "fake"}}, nil
+func (f *fakeSource) Search(context.Context, Query) (Page, error) {
+	return Page{Models: []Model{{ID: "o/r", Source: "fake"}}}, nil
 }
 func (f *fakeSource) Detail(_ context.Context, repo string) (ModelDetail, error) {
 	return ModelDetail{Model: Model{ID: repo, Source: "fake"}, Files: f.files}, nil

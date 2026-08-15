@@ -10,7 +10,7 @@
   import { link } from "svelte-spa-router";
   import { ArrowDownToLine, X, AlertTriangle, Check, Ban, Folder, Pause, Play } from "lucide-svelte";
   import HubAvatar from "./HubAvatar.svelte";
-  import { cancelHubDownload, pauseHubDownload, resumeHubDownload, humanBytes, type HubJob } from "../lib/hubApi";
+  import { cancelHubDownload, pauseHubDownload, resumeHubDownload, revealFolder, humanBytes, type HubJob } from "../lib/hubApi";
   import { hubJobs, hubRates, hubActiveCount, refreshHubJobs, isUnfinishedJob } from "../stores/hubJobs";
 
   let open = $state(false);
@@ -103,6 +103,19 @@
   function hubURL(id: string): string {
     return `https://huggingface.co/${id}`;
   }
+
+  // A path printed under a finished download is a string to read and retype;
+  // the server opens it in the file manager instead (loopback-gated, and only
+  // for paths inside the models root — see internal/server/revealfolder.go).
+  // No argument = the models root itself.
+  async function reveal(dir = ""): Promise<void> {
+    err = null;
+    try {
+      await revealFolder(dir);
+    } catch (e) {
+      err = e instanceof Error ? e.message : String(e);
+    }
+  }
 </script>
 
 <svelte:window
@@ -122,7 +135,7 @@
   <button
     class="relative flex items-center gap-1 px-1.5 py-1 rounded-md border border-transparent text-txtmain transition-colors {open
       ? 'bg-secondary/60 border-btn-border'
-      : 'hover:border-btn-border'}"
+      : 'hover:border-card-border hover:bg-secondary/40'}"
     onclick={toggle}
     title="Downloads"
     aria-label="Downloads"
@@ -248,19 +261,23 @@
               </div>
             {/if}
             {#if j.phase === "done" && j.dir}
-              <div class="flex items-center gap-1 text-[0.6rem] text-txtsecondary truncate">
-                <Folder class="w-3 h-3 shrink-0" />{j.dir}
-              </div>
+              <button
+                class="flex w-full items-center gap-1 text-left text-[0.6rem] text-txtsecondary hover:text-primary hover:underline transition-colors"
+                title="Open this folder"
+                onclick={() => reveal(j.dir)}
+              >
+                <Folder class="w-3 h-3 shrink-0" /><span class="truncate">{j.dir}</span>
+              </button>
             {/if}
           </div>
         </div>
       {/each}
     </div>
 
-    {#if $hubJobs.some((j) => j.phase === "done")}
-      <div class="px-3 py-1.5 border-t border-card-border text-[0.6rem] text-txtsecondary">
-        Finished downloads are in the config already — see the Models page.
-      </div>
-    {/if}
+    <div class="px-3 py-1.5 border-t border-card-border text-[0.6rem]">
+      <button class="inline-flex items-center gap-1 text-primary hover:underline" onclick={() => reveal()}>
+        <Folder class="w-3 h-3" /> Open models folder
+      </button>
+    </div>
   </div>
 {/if}

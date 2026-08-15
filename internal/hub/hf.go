@@ -108,6 +108,7 @@ type hfModelJSON struct {
 	Downloads    int64    `json:"downloads"`
 	Likes        int64    `json:"likes"`
 	LastModified string   `json:"lastModified"`
+	CreatedAt    string   `json:"createdAt"`
 	Pipeline     string   `json:"pipeline_tag"`
 	Tags         []string `json:"tags"`
 	Private      bool     `json:"private"`
@@ -149,6 +150,9 @@ func (m hfModelJSON) toModel() Model {
 	if t, err := time.Parse(time.RFC3339, m.LastModified); err == nil {
 		out.Updated = t
 	}
+	if t, err := time.Parse(time.RFC3339, m.CreatedAt); err == nil {
+		out.Created = t
+	}
 	return out
 }
 
@@ -184,7 +188,18 @@ func searchFilters(kind string) []string {
 	}
 }
 
-func (h *HF) Search(ctx context.Context, q Query) ([]Model, error) {
+// hfExpand is the field set every search asks for.
+//
+// `expand[]` is opt-in per field — asking for one drops all the others — so the
+// list has to name everything Model carries. It exists for `createdAt`, which
+// the plain listing does not return and which is the only honest input to the
+// "trendy" filter: `lastModified` moves for a README fix.
+var hfExpand = []string{
+	"author", "downloads", "likes", "lastModified", "createdAt",
+	"pipeline_tag", "tags", "gated", "private",
+}
+
+func (h *HF) Search(ctx context.Context, q Query) (Page, error) {
 	limit := q.Limit
 	if limit <= 0 || limit > 100 {
 		limit = 30
@@ -197,11 +212,11 @@ func (h *HF) Search(ctx context.Context, q Query) ([]Model, error) {
 	default:
 		sortBy = "downloads"
 	}
-	// The size cap is applied to the response, not by the hub — HF has no
-	// parameter-count filter — so ask for more rows than we intend to show or a
-	// page of large models comes back nearly empty.
+	// Neither the size cap nor the age gate is a hub filter — HF has no
+	// parameter-count filter and no created-after one — so ask for more rows
+	// than a page needs or a filtered page comes back nearly empty.
 	fetch := limit
-	if q.MaxParamsB > 0 {
+	if q.MaxParamsB > 0 || q.MaxAgeDays > 0 {
 		fetch = min(limit*3, 100)
 	}
 
@@ -212,26 +227,68 @@ func (h *HF) Search(ctx context.Context, q Query) ([]Model, error) {
 	for _, f := range searchFilters(q.Kind) {
 		v.Add("filter", f)
 	}
+	for _, f := range hfExpand {
+		v.Add("expand[]", f)
+	}
 	v.Set("sort", sortBy)
 	v.Set("direction", "-1")
 	v.Set("limit", fmt.Sprint(fetch))
+	if q.Skip > 0 {
+		v.Set("skip", fmt.Sprint(q.Skip))
+	}
 
 	key := "search:" + v.Encode()
 	if hit, ok := cacheGet[[]Model](h, key); ok {
-		return capParams(hit, q.MaxParamsB, limit), nil
+		return hfPage(hit, q, fetch), nil
 	}
 	var raw []hfModelJSON
 	if err := h.getJSON(ctx, hfAPI+"/api/models?"+v.Encode(), &raw); err != nil {
-		return nil, err
+		return Page{}, err
 	}
 	out := make([]Model, 0, len(raw))
 	for _, m := range raw {
 		out = append(out, m.toModel())
 	}
-	// Cache what the hub said, filter after: the cap is a per-request view of
+	// Cache what the hub said, filter after: the caps are a per-request view of
 	// the same page, so a capped search must not poison an uncapped one.
 	cachePut(h, key, out)
-	return capParams(out, q.MaxParamsB, limit), nil
+	return hfPage(out, q, fetch), nil
+}
+
+// hfPage applies the response-side filters and reports where the NEXT page
+// starts. The offset advances by what the hub returned, never by what survived
+// — the filters are a view of that page, not a re-ordering of the hub's list.
+//
+// Nothing is trimmed to Limit: Limit sizes the fetch, and trimming the survivors
+// would throw away rows the caller has already paid a round trip for and would
+// then have to re-request under a different offset.
+func hfPage(raw []Model, q Query, fetch int) Page {
+	out := capParams(raw, q.MaxParamsB, 0)
+	out = capAge(out, q.MaxAgeDays)
+	return Page{
+		Models:   out,
+		NextSkip: q.Skip + len(raw),
+		// A short page means the hub has nothing more under this query.
+		HasMore: len(raw) >= fetch && fetch > 0,
+	}
+}
+
+// capAge drops repos created longer than maxDays ago. A repo stating no
+// creation date is KEPT, the same posture as an unreadable parameter count:
+// this filter narrows a listing, and it should never be the reason a repo is
+// invisible for a fact about its metadata rather than about the model.
+func capAge(in []Model, maxDays int) []Model {
+	if maxDays <= 0 {
+		return in
+	}
+	cutoff := time.Now().AddDate(0, 0, -maxDays)
+	out := make([]Model, 0, len(in))
+	for _, m := range in {
+		if m.Created.IsZero() || m.Created.After(cutoff) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // capParams applies the size cap and trims to the requested page size.

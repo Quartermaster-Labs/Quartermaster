@@ -2,8 +2,8 @@
   // Model browser: browse a hub, read the repo, pick a file, download it into
   // the models folder. On completion the server regenerates the config and
   // hot-reloads, so the model appears in the Models table without a restart.
-  import { onMount } from "svelte";
-  import { Search, Download, X, ExternalLink, Lock, AlertTriangle, Check, Heart, ArrowDownToLine, Clock, RefreshCw, SlidersHorizontal } from "lucide-svelte";
+  import { onMount, onDestroy, tick } from "svelte";
+  import { Search, Download, X, ExternalLink, Lock, AlertTriangle, Check, Heart, ArrowDownToLine, Clock, RefreshCw, SlidersHorizontal, FolderOpen } from "lucide-svelte";
   import HubAvatar from "../components/HubAvatar.svelte";
   import { hubJobs, refreshHubJobs, isRunningJob } from "../stores/hubJobs";
   import {
@@ -17,7 +17,9 @@
     humanBytes,
     humanCount,
     humanCtx,
+    revealFolder,
     MAX_PARAMS_B,
+    TRENDY_DAYS,
     HubApiError,
     type HubModel,
     type HubDetail,
@@ -25,6 +27,17 @@
     type FitVerdict,
     type HubEstimate,
   } from "../lib/hubApi";
+  import LogSlider from "../components/LogSlider.svelte";
+  import {
+    SIZE_STOPS,
+    DOWNLOAD_STOPS,
+    AGE_STOPS,
+    capValue,
+    capStop,
+    fmtParamsStop,
+    fmtDownloadsStop,
+    fmtAgeStop,
+  } from "../lib/logScale";
   import { renderModelCard } from "../lib/hubMarkdown";
   import { MODEL_CATEGORIES, type ModelCategory } from "../lib/modelUtils";
   import { getSettings } from "../stores/api";
@@ -50,42 +63,45 @@
   let estimates = $state<Record<string, HubEstimate>>({});
 
   // Two kinds of filter in one menu, and the difference matters. `maxParamsB`
-  // and `limit` are HUB-side (the search is re-run; see searchFilters/capParams
-  // in internal/hub/hf.go) — narrowing locally would leave a 30-row page nearly
+  // and `trendy` are HUB-side (the search is re-run; see searchFilters/capParams
+  // /capAge in internal/hub/hf.go) — narrowing locally would leave a page nearly
   // empty. `minDownloads`/`maxAgeDays` are applied to the page already fetched,
   // because the hub has no filter for either and re-asking would change nothing.
   interface HubFilters {
     maxParamsB: number; // 0 = no cap
-    limit: number;
     minDownloads: number;
     maxAgeDays: number; // 0 = any age
+    // Trendy keeps only repos CREATED in the last TRENDY_DAYS. Judged on the
+    // creation date, not the last edit: a two-year-old repo whose README moved
+    // yesterday is not a new release, which is what `maxAgeDays` above answers.
+    trendy: boolean;
   }
-  // The size cap defaults ON: an unfiltered top-downloads page is mostly
-  // frontier-size repos this box can't run, which buries everything it can.
-  const DEFAULT_FILTERS: HubFilters = { maxParamsB: MAX_PARAMS_B, limit: 30, minDownloads: 0, maxAgeDays: 0 };
+  // Two filters default ON. The size cap, because an unfiltered top-downloads
+  // page is mostly frontier-size repos this box can't run, which buries
+  // everything it can — and trendy, because the same page is otherwise a
+  // permanent all-time chart where a model released this week never appears.
+  // The cost is real and worth knowing: a specific text search mostly returns
+  // repos older than two weeks, so the empty state offers to switch it off.
+  const DEFAULT_FILTERS: HubFilters = { maxParamsB: MAX_PARAMS_B, minDownloads: 0, maxAgeDays: 0, trendy: true };
   let filters = $state<HubFilters>({ ...DEFAULT_FILTERS });
 
-  const SIZE_CAPS = [
-    { v: 0, label: "Any" },
-    { v: 8, label: "8B" },
-    { v: 16, label: "16B" },
-    { v: 32, label: "32B" },
-    { v: 70, label: "70B" },
-    { v: 120, label: "120B" },
-  ];
-  const MIN_DOWNLOADS = [
-    { v: 0, label: "Any" },
-    { v: 100, label: "100+" },
-    { v: 1_000, label: "1k+" },
-    { v: 10_000, label: "10k+" },
-  ];
-  const AGES = [
-    { v: 0, label: "Any" },
-    { v: 30, label: "30d" },
-    { v: 180, label: "6mo" },
-    { v: 365, label: "1y" },
-  ];
-  const LIMITS = [30, 60, 100];
+  // Page size, not a result cap: the list keeps loading as it is scrolled, so
+  // this is only how much arrives per round trip. It is not a user-facing knob
+  // for that reason — "show me 100" and "show me everything" are the same
+  // request once scrolling loads more.
+  const PAGE_SIZE = 30;
+  // How many pages one scroll trigger may pull before giving up. A page can be
+  // emptied entirely by the server-side caps or the local ones, which leaves the
+  // list unchanged, fires no further scroll event, and would otherwise stall.
+  const MAX_AUTO_PAGES = 3;
+
+  let nextSkip = $state(0);
+  let hasMore = $state(false);
+  let loadingMore = $state(false);
+  // Bumped by every fresh search, so a page still in flight from the previous
+  // query cannot append its rows onto the new list.
+  let searchSeq = 0;
+  let resultsEl = $state<HTMLDivElement | null>(null);
 
   const filterCount = $derived(
     (Object.keys(DEFAULT_FILTERS) as (keyof HubFilters)[]).filter((k) => filters[k] !== DEFAULT_FILTERS[k]).length
@@ -95,7 +111,7 @@
   function setFilter<K extends keyof HubFilters>(k: K, v: HubFilters[K]): void {
     if (filters[k] === v) return;
     filters = { ...filters, [k]: v };
-    if (k === "maxParamsB" || k === "limit") runSearch();
+    if (k === "maxParamsB" || k === "trendy") runSearch();
   }
 
   function resetFilters(): void {
@@ -158,18 +174,117 @@
     await runSearch();
   });
 
+  // The shared half of every search — one page, whatever the current knobs say.
+  function fetchPage(skip: number) {
+    return searchHub({
+      q: query.trim(),
+      sort,
+      kind,
+      maxParamsB: filters.maxParamsB,
+      maxAgeDays: filters.trendy ? TRENDY_DAYS : 0,
+      limit: PAGE_SIZE,
+      skip,
+    });
+  }
+
+  // No "already searching, skip this one" guard: since the box searches as it is
+  // typed, a search starting while one is in flight is the NORMAL case, and
+  // dropping it would leave the list showing an older query's results. `searchSeq`
+  // is what makes that safe — only the newest response is allowed to land, and
+  // only it may clear the spinner.
   async function runSearch(): Promise<void> {
-    if (searching) return;
+    clearTimeout(typeTimer);
+    lastSearched = query.trim();
     searching = true;
     err = null;
+    const seq = ++searchSeq;
     try {
-      results = await searchHub(query.trim(), sort, filters.maxParamsB, kind, "hf", filters.limit);
+      const page = await fetchPage(0);
+      if (seq !== searchSeq) return;
+      results = page.models;
+      nextSkip = page.nextSkip;
+      hasMore = page.hasMore;
       searched = true;
       selected = null;
+      if (resultsEl) resultsEl.scrollTop = 0;
+      void fillViewport();
+    } catch (e) {
+      if (seq === searchSeq) err = e instanceof Error ? e.message : String(e);
+    } finally {
+      if (seq === searchSeq) searching = false;
+    }
+  }
+
+  // Search as the box is typed. Debounced because every run is a round trip to
+  // the hub and a per-keystroke one would be rate-limited long before it was
+  // useful — 300ms is under the gap between words but over the gap between
+  // letters, so a normal phrase costs one search rather than a dozen.
+  const TYPE_DEBOUNCE_MS = 300;
+  let typeTimer: ReturnType<typeof setTimeout> | undefined;
+  // What the visible list is a search FOR. Guards the case where the typing
+  // settles back on the text already searched — deleting a stray character and
+  // retyping it should not re-ask the hub the same question.
+  let lastSearched = "";
+
+  function onQueryInput(): void {
+    clearTimeout(typeTimer);
+    if (query.trim() === lastSearched) return;
+    typeTimer = setTimeout(runSearch, TYPE_DEBOUNCE_MS);
+  }
+
+  onDestroy(() => clearTimeout(typeTimer));
+
+  // Load the next page and append it. Dedup by id because the hub's ordering is
+  // not stable enough to guarantee a `skip` window never overlaps the last one,
+  // and a duplicate id would break the keyed `{#each}`.
+  async function loadMore(): Promise<void> {
+    if (searching || loadingMore || !hasMore) return;
+    loadingMore = true;
+    const seq = searchSeq;
+    try {
+      for (let i = 0; i < MAX_AUTO_PAGES; i++) {
+        const page = await fetchPage(nextSkip);
+        if (seq !== searchSeq) return;
+        nextSkip = page.nextSkip;
+        hasMore = page.hasMore;
+        const seen = new Set(results.map((m) => m.id));
+        const fresh = page.models.filter((m) => !seen.has(m.id));
+        if (fresh.length) {
+          results = [...results, ...fresh];
+          break;
+        }
+        if (!hasMore) break;
+      }
+    } catch (e) {
+      if (seq === searchSeq) err = e instanceof Error ? e.message : String(e);
+    } finally {
+      loadingMore = false;
+    }
+    if (seq === searchSeq) void fillViewport();
+  }
+
+  // A list too short to scroll can never ask for more, and the filters can make
+  // one out of a full page — so top it up until it overflows its pane or the hub
+  // runs out. Every round consumes hub rows, so this terminates.
+  async function fillViewport(): Promise<void> {
+    await tick();
+    if (!hasMore || loadingMore || !resultsEl) return;
+    if (resultsEl.scrollHeight <= resultsEl.clientHeight + 8) await loadMore();
+  }
+
+  function onResultsScroll(): void {
+    if (!resultsEl) return;
+    // Near the bottom, not at it: the next page should be arriving by the time
+    // the last row is read.
+    if (resultsEl.scrollHeight - resultsEl.scrollTop - resultsEl.clientHeight < 240) void loadMore();
+  }
+
+  async function openModelsFolder(): Promise<void> {
+    err = null;
+    try {
+      await revealFolder();
     } catch (e) {
       err = e instanceof Error ? e.message : String(e);
-    } finally {
-      searching = false;
     }
   }
 
@@ -368,6 +483,17 @@
           {c.label}
         </button>
       {/each}
+      <!-- Where everything on this page ends up. It sits on the category row
+           rather than in the footer because it is an action, and the footer line
+           that merely NAMED the folder was a path to read and retype. -->
+      <button
+        class="icon-btn ml-auto mb-1 mr-1 shrink-0"
+        onclick={openModelsFolder}
+        title={modelsRoot ? `Open ${modelsRoot}` : "Open the models folder"}
+        aria-label="Open the models folder"
+      >
+        <FolderOpen class="w-3.5 h-3.5" />
+      </button>
     </div>
 
     <!-- Toolbar: one row, search left, controls right (mirrors the Models page).
@@ -385,6 +511,7 @@
           class="w-full h-full pl-8 pr-7 py-0 rounded-full border border-card-border bg-background text-xs text-txtmain placeholder:text-txtsecondary focus:outline-none focus:border-primary transition-colors"
           placeholder="Search Hugging Face for GGUF models…"
           bind:value={query}
+          oninput={onQueryInput}
           onkeydown={(e) => e.key === "Enter" && runSearch()}
         />
         {#if query}
@@ -402,12 +529,6 @@
             <X class="w-3.5 h-3.5" />
           </button>
         {/if}
-      </div>
-
-      <div class="seg h-7">
-        {#each SORTS as s (s.id)}
-          <button type="button" aria-pressed={sort === s.id} onclick={() => setSort(s.id)}>{s.label}</button>
-        {/each}
       </div>
 
       <!-- Filters live in a menu rather than on the toolbar: the size cap was
@@ -432,44 +553,61 @@
           <div class="fixed inset-0 z-40" onclick={() => (showFilters = false)}></div>
 
           <div class="absolute left-0 top-8 z-50 w-[19rem] rounded-md border border-card-border bg-surface shadow-xl p-3 flex flex-col gap-3">
+            <!-- Sort is a category of listing, not a toolbar mode: it belongs
+                 beside the knobs that decide WHICH repos are listed, and it was
+                 a permanent three-button control for a choice made once. -->
             <div class="flex flex-col gap-1.5">
-              <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary">Max size</span>
-              <div class="seg h-6 flex-wrap">
-                {#each SIZE_CAPS as o (o.v)}
-                  <button type="button" aria-pressed={filters.maxParamsB === o.v} onclick={() => setFilter("maxParamsB", o.v)}>{o.label}</button>
+              <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary">Sort</span>
+              <div class="seg h-6">
+                {#each SORTS as s (s.id)}
+                  <button type="button" aria-pressed={sort === s.id} onclick={() => setSort(s.id)}>{s.label}</button>
                 {/each}
               </div>
+            </div>
+
+            <div class="flex flex-col gap-1.5">
+              <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary">Trendy</span>
+              <div class="seg h-6">
+                <button type="button" aria-pressed={filters.trendy} onclick={() => setFilter("trendy", true)}>On</button>
+                <button type="button" aria-pressed={!filters.trendy} onclick={() => setFilter("trendy", false)}>Off</button>
+              </div>
+              <span class="text-[0.6rem] text-txtsecondary">
+                Only repos published in the last {TRENDY_DAYS} days, ordered by the sort above — new releases people are already using. A repo
+                stating no publish date is shown. Turn it off to search the whole hub.
+              </span>
+            </div>
+
+            <!-- Sliders, not button rows: each of these spans orders of
+                 magnitude, and the stops are geometric so the fine end (2B vs
+                 4B, a day vs a week) gets as much travel as the coarse one. -->
+            <div class="flex flex-col gap-1.5">
+              <LogSlider
+                label="Max size"
+                stops={SIZE_STOPS}
+                value={capStop(filters.maxParamsB)}
+                format={fmtParamsStop}
+                commit={(s) => setFilter("maxParamsB", capValue(s))}
+              />
               <!-- Said plainly because it is the one filter that can hide a repo
                    for a reason that has nothing to do with the model. -->
               <span class="text-[0.6rem] text-txtsecondary">Read from the repo NAME. A repo that states no size is always shown.</span>
             </div>
 
-            <div class="flex flex-col gap-1.5">
-              <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary">Min downloads</span>
-              <div class="seg h-6 flex-wrap">
-                {#each MIN_DOWNLOADS as o (o.v)}
-                  <button type="button" aria-pressed={filters.minDownloads === o.v} onclick={() => setFilter("minDownloads", o.v)}>{o.label}</button>
-                {/each}
-              </div>
-            </div>
+            <LogSlider
+              label="Min downloads"
+              stops={DOWNLOAD_STOPS}
+              value={filters.minDownloads}
+              format={fmtDownloadsStop}
+              commit={(s) => setFilter("minDownloads", s)}
+            />
 
-            <div class="flex flex-col gap-1.5">
-              <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary">Updated within</span>
-              <div class="seg h-6 flex-wrap">
-                {#each AGES as o (o.v)}
-                  <button type="button" aria-pressed={filters.maxAgeDays === o.v} onclick={() => setFilter("maxAgeDays", o.v)}>{o.label}</button>
-                {/each}
-              </div>
-            </div>
-
-            <div class="flex flex-col gap-1.5">
-              <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary">Results</span>
-              <div class="seg h-6">
-                {#each LIMITS as n (n)}
-                  <button type="button" aria-pressed={filters.limit === n} onclick={() => setFilter("limit", n)}>{n}</button>
-                {/each}
-              </div>
-            </div>
+            <LogSlider
+              label="Updated within"
+              stops={AGE_STOPS}
+              value={capStop(filters.maxAgeDays)}
+              format={fmtAgeStop}
+              commit={(s) => setFilter("maxAgeDays", capValue(s))}
+            />
 
             <div class="flex items-center justify-between pt-1 border-t border-card-border-inner">
               <span class="text-[0.6rem] text-txtsecondary tabular-nums">{shown.length} of {results.length} shown</span>
@@ -504,11 +642,20 @@
 
     <!-- Results | detail -->
     <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[22rem_1fr] gap-3">
-      <div class="min-h-0 overflow-y-auto pretty-scroll rounded-md border border-card-border bg-surface">
+      <div bind:this={resultsEl} onscroll={onResultsScroll} class="min-h-0 overflow-y-auto pretty-scroll rounded-md border border-card-border bg-surface">
         {#if searching && !results.length}
           <div class="p-3 text-xs text-txtsecondary">Loading Hugging Face…</div>
         {:else if !searched}
           <div class="p-3 text-xs text-txtsecondary">Search a hub to get started.</div>
+        {:else if !results.length && filters.trendy}
+          <!-- Trendy is on by default and it is nearly always the reason a
+               deliberate search comes back empty: most repos worth searching for
+               by name are older than two weeks. Name it and offer the switch,
+               rather than reporting that the hub has nothing. -->
+          <div class="p-3 text-xs text-txtsecondary">
+            Nothing published in the last {TRENDY_DAYS} days matched.
+            <button class="text-primary hover:underline" onclick={() => setFilter("trendy", false)}>Search the whole hub</button>.
+          </div>
         {:else if !results.length}
           <div class="p-3 text-xs text-txtsecondary">No GGUF repos matched that search.</div>
         {:else if !shown.length}
@@ -551,6 +698,15 @@
               </div>
             </button>
           {/each}
+          <!-- The end of the list says which end it is: still loading, or the
+               hub had nothing further. A list that just stops reads as a cap. -->
+          {#if loadingMore}
+            <div class="p-3 text-center text-[0.65rem] text-txtsecondary">Loading more…</div>
+          {:else if hasMore}
+            <button class="w-full p-3 text-center text-[0.65rem] text-primary hover:underline" onclick={loadMore}>Load more</button>
+          {:else}
+            <div class="p-3 text-center text-[0.65rem] text-txtsecondary">End of results.</div>
+          {/if}
         {/if}
       </div>
 
@@ -667,9 +823,6 @@
     </div>
 
     <div class="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[0.6rem] text-txtsecondary">
-      {#if modelsRoot}
-        <span>Downloads land in <span class="text-txtmain">{modelsRoot}</span>, one folder per repo.</span>
-      {/if}
       {#if !hasToken}
         <span>No Hugging Face token set — gated repos will refuse.</span>
       {/if}
