@@ -12,9 +12,11 @@ settings:
   # Path to llama.cpp's llama-server executable.
   serverExe: llama-server
   targetVramGB: 7
-  # autoVram: measure free VRAM at startup and use it as targetVramGB (minus
-  # vramOverheadGB). Forces a regen each boot so the snapshot stays current.
-  # Leave false to use the static targetVramGB above.
+  # autoVram: measure free VRAM at startup and cap targetVramGB at it. The
+  # reading is used in full - vramOverheadGB is charged inside the plan, not
+  # deducted again here. Only ever tightens: a smaller static targetVramGB above
+  # stays a deliberate ceiling. Forces a regen each boot to keep the snapshot
+  # current. Leave false to use the static targetVramGB above.
   autoVram: false
   # vramOverheadGB: small slack held back from targetVramGB for allocator
   # fragmentation / CUDA spikes. targetVramGB already accounts for system/desktop

@@ -136,9 +136,18 @@ func ResolveAutoVram(s *Settings, logf func(string)) {
 	resolveAutoVram(s, logf)
 }
 
-// resolveAutoVram replaces s.TargetVramGB with the live free VRAM (minus
-// s.VramOverheadGB) when a GPU reading is available and sane. On any failure it
-// leaves the configured TargetVramGB untouched.
+// resolveAutoVram replaces s.TargetVramGB with the live free VRAM when a GPU
+// reading is available and sane. On any failure it leaves the configured
+// TargetVramGB untouched.
+//
+// The reading is used AS THE BUDGET, not minus vramOverheadGB. TargetVramGB is
+// the ceiling a plan's total footprint must fit under, and that footprint
+// (EstVramGB) already carries vramOverheadGB inside it — sizeProfile folds the
+// setting into prof.Overhead. Subtracting it here too spent the headroom twice
+// and made autoVram plan a further 0.5GB short of what the card had, which on a
+// tight fit is a whole extra layer pushed to CPU. Cap only, never raise: the
+// static TargetVramGB stays a user ceiling, so autoVram can tighten a budget the
+// desktop has eaten into but can't talk a plan past a deliberate limit.
 func resolveAutoVram(s *Settings, logf func(string)) {
 	freeGB, ok := SampleFreeVramGB(autoVramSampleTimeout)
 	if !ok {
@@ -147,19 +156,23 @@ func resolveAutoVram(s *Settings, logf func(string)) {
 		}
 		return
 	}
-	usable := freeGB - s.VramOverheadGB
-	if usable < autoVramFloorGB {
+	if freeGB < autoVramFloorGB {
 		if logf != nil {
-			logf(fmt.Sprintf("autoVram: free=%.2fGB - overhead=%.2fGB = %.2fGB below floor %.1fGB; keeping static targetVramGB=%g",
-				freeGB, s.VramOverheadGB, usable, autoVramFloorGB, s.TargetVramGB))
+			logf(fmt.Sprintf("autoVram: free=%.2fGB below floor %.1fGB; keeping static targetVramGB=%g",
+				freeGB, autoVramFloorGB, s.TargetVramGB))
+		}
+		return
+	}
+	if s.TargetVramGB > 0 && s.TargetVramGB <= freeGB {
+		if logf != nil {
+			logf(fmt.Sprintf("autoVram: free=%.2fGB; keeping tighter static targetVramGB=%g", freeGB, s.TargetVramGB))
 		}
 		return
 	}
 	if logf != nil {
-		logf(fmt.Sprintf("autoVram: free=%.2fGB - overhead=%.2fGB -> targetVramGB=%.2f (was %g)",
-			freeGB, s.VramOverheadGB, usable, s.TargetVramGB))
+		logf(fmt.Sprintf("autoVram: free=%.2fGB -> targetVramGB=%.2f (was %g)", freeGB, freeGB, s.TargetVramGB))
 	}
-	s.TargetVramGB = usable
+	s.TargetVramGB = freeGB
 }
 
 // freeVramGBFromStats picks the adapter with the largest total memory and

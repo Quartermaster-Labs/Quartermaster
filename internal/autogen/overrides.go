@@ -70,7 +70,10 @@ type Settings struct {
 	// deliberately configured to run mostly on CPU still loads. 0 => default
 	// 0.5; negative disables the floor (pure best-effort degradation).
 	MinGpuFraction float64 `yaml:"minGpuFraction"`
-	AutoVram       bool    `yaml:"autoVram"` // measure free VRAM at gen time, use it as TargetVramGB (minus VramOverheadGB)
+	// AutoVram measures free VRAM at gen time and caps TargetVramGB at it (the raw
+	// reading — VramOverheadGB is charged inside the plan, not deducted here). Only
+	// ever tightens: a static TargetVramGB below the reading stays a user ceiling.
+	AutoVram       bool    `yaml:"autoVram"`
 	VramOverheadGB float64 `yaml:"vramOverheadGB"`
 	// ComputeBufFactor scales the modeled compute buffer (logits + activations).
 	// 1.0 = the analytic estimate; tune against the "compute buffer size" llama
