@@ -45,9 +45,10 @@ type backendComponentDTO struct {
 	Name      string                `json:"name"`
 	Blurb     string                `json:"blurb"`
 	Repo      string                `json:"repo"`
-	Kind      string                `json:"kind"`            // "" = helper binary, never registered
-	Manual    bool                  `json:"manual"`          // engine we can drive but not install
-	Setup     string                `json:"setup,omitempty"` // shown instead of install controls
+	Kind      string                `json:"kind"`             // "" = helper binary, never registered
+	Manual    bool                  `json:"manual"`           // engine we can drive but not install
+	Setup     string                `json:"setup,omitempty"`  // shown instead of install controls
+	Custom    bool                  `json:"custom,omitempty"` // a repo the user tracks, editable/removable
 	Supported bool                  `json:"supported"`
 	Suggested string                `json:"suggested"` // variant preselected for this host
 	Variants  []backendVariantDTO   `json:"variants"`
@@ -110,7 +111,7 @@ func managedEntry(list []autogen.BackendEntry, comp string) int {
 // (yt-dlp) installs to disk and stops there. Regenerates + hot-reloads so the
 // new exe is used on each model's next load.
 func (s *Server) registerManagedBackend(inst backends.Installed) error {
-	comp, ok := backends.Find(inst.Component)
+	comp, ok := s.backends.Find(inst.Component)
 	if !ok || comp.Kind == "" {
 		return nil
 	}
@@ -290,8 +291,12 @@ func (s *Server) handleAPIBackendCatalog(w http.ResponseWriter, r *http.Request)
 	if resp.GPUs == nil {
 		resp.GPUs = []string{}
 	}
-	resp.Components = make([]backendComponentDTO, 0, len(backends.Catalog()))
-	for _, c := range backends.Catalog() {
+	// m.Catalog(), not the package-level one: it appends the user's tracked repos
+	// to the built-ins, which is what makes a custom source render as an ordinary
+	// card with the ordinary install controls.
+	cat := m.Catalog()
+	resp.Components = make([]backendComponentDTO, 0, len(cat))
+	for _, c := range cat {
 		installed := m.Installed(c.ID)
 		active := s.activeBuild(c.ID, installed)
 		if c.Kind == "" && active == nil && len(installed) > 0 {
@@ -303,7 +308,7 @@ func (s *Server) handleAPIBackendCatalog(w http.ResponseWriter, r *http.Request)
 		}
 		dto := backendComponentDTO{
 			ID: c.ID, Name: c.Name, Blurb: c.Blurb, Repo: c.Repo, Kind: c.Kind,
-			Manual: c.Manual, Setup: c.Setup,
+			Manual: c.Manual, Setup: c.Setup, Custom: c.Custom,
 			Supported: c.SupportedOn(runtime.GOOS),
 			Suggested: c.DefaultVariant(gpus, runtime.GOOS),
 			// Non-nil so the field marshals as [] rather than null: the UI treats
@@ -342,7 +347,7 @@ func (s *Server) handleAPIBackendReleases(w http.ResponseWriter, r *http.Request
 		return
 	}
 	id := r.PathValue("component")
-	comp, ok := backends.Find(id)
+	comp, ok := s.backends.Find(id)
 	if !ok {
 		shared.SendResponse(w, r, http.StatusNotFound, "unknown component")
 		return

@@ -113,7 +113,12 @@ type sidecar struct {
 	// exes; extra entries are stored for future per-model wiring but currently
 	// unused by generation.
 	BackendList []BackendEntry `yaml:"backendList,omitempty"`
-	Overrides   []Override     `yaml:"overrides"`
+	// BackendSources are user-tracked GitHub repos the in-app installer manages
+	// alongside its built-in catalog. Separate from BackendList: a source is a
+	// *place to download builds from*, a BackendEntry is an executable path the
+	// launcher uses. Installing from a source writes the entry.
+	BackendSources []BackendSource `yaml:"backendSources,omitempty"`
+	Overrides      []Override      `yaml:"overrides"`
 }
 
 // BackendExes holds the dashboard-editable backend executable paths. Empty field
@@ -146,6 +151,102 @@ type BackendEntry struct {
 	Component string `yaml:"component,omitempty"`
 	Version   string `yaml:"version,omitempty"`
 	Variant   string `yaml:"variant,omitempty"`
+}
+
+// BackendSource is one user-tracked GitHub repo: a backend the in-app installer
+// can download and keep updated even though it is not in the built-in catalog
+// (a llama.cpp fork with different GPU builds, a private engine, an in-house
+// server). It is the persisted half of internal/backends' Component — the
+// installer merges these on top of its static table.
+//
+// The user never writes an asset regex. They pick the asset they want out of a
+// real release and the installer derives Pattern from it, keeping Asset as the
+// example it came from so the pattern can be re-derived or diagnosed later.
+type BackendSource struct {
+	ID    string `yaml:"id"`
+	Name  string `yaml:"name"`
+	Blurb string `yaml:"blurb,omitempty"`
+	Repo  string `yaml:"repo"`           // owner/name on github.com
+	Kind  string `yaml:"kind"`           // registry kind: llama | sd | tts | asr | …
+	Exe   string `yaml:"exe"`            // executable to locate inside the archive
+	Bare  bool   `yaml:"bare,omitempty"` // the asset IS the executable
+	// AllowPrerelease lets "latest" resolve to a prerelease. Set automatically
+	// for repos that publish nothing but nightlies, which would otherwise never
+	// resolve to an installable release.
+	AllowPrerelease bool `yaml:"allowPrerelease,omitempty"`
+	// OS is the GOOS the source was configured on. A tracked repo is set up by
+	// picking from the asset list of the machine doing the picking, so its
+	// patterns are only meaningful there; the installer scopes them to this OS
+	// rather than pretending they are portable.
+	OS       string                 `yaml:"os,omitempty"`
+	Variants []BackendSourceVariant `yaml:"variants"`
+}
+
+// BackendSourceVariant is one build of a tracked source — a flavour the user
+// picked, not a slot they had to fill in. Adding a second GPU build is another
+// pick from the same list.
+type BackendSourceVariant struct {
+	ID      string `yaml:"id"`
+	Label   string `yaml:"label"`
+	Asset   string `yaml:"asset"`   // the example asset name the user chose
+	Pattern string `yaml:"pattern"` // derived from Asset; never hand-written
+	// Extras are additional assets unpacked alongside the primary one (a
+	// separately-shipped GPU runtime). Same derivation, best-effort at install.
+	Extras []BackendSourceExtra `yaml:"extras,omitempty"`
+}
+
+// BackendSourceExtra is one companion asset of a variant.
+type BackendSourceExtra struct {
+	Asset   string `yaml:"asset"`
+	Pattern string `yaml:"pattern"`
+}
+
+// LoadSidecarBackendSources returns the user's tracked backend repos.
+func LoadSidecarBackendSources(generatePath string) ([]BackendSource, error) {
+	sc, err := loadSidecar(generatePath)
+	if err != nil {
+		return nil, err
+	}
+	return sc.BackendSources, nil
+}
+
+// UpsertSidecarBackendSources replaces the tracked-repo list wholesale (the UI
+// sends all of it). Rows with no repo, no id or no usable variant are dropped:
+// they carry nothing installable and would only show up as a dead card.
+func UpsertSidecarBackendSources(generatePath string, list []BackendSource) error {
+	sc, err := loadSidecar(generatePath)
+	if err != nil {
+		return err
+	}
+	cleaned := make([]BackendSource, 0, len(list))
+	for _, s := range list {
+		s.ID = strings.TrimSpace(s.ID)
+		s.Repo = strings.TrimSpace(s.Repo)
+		s.Kind = strings.TrimSpace(s.Kind)
+		s.Exe = strings.TrimSpace(s.Exe)
+		s.Name = strings.TrimSpace(s.Name)
+		if s.ID == "" || s.Repo == "" {
+			continue
+		}
+		vs := make([]BackendSourceVariant, 0, len(s.Variants))
+		for _, v := range s.Variants {
+			if strings.TrimSpace(v.Pattern) == "" {
+				continue
+			}
+			vs = append(vs, v)
+		}
+		if len(vs) == 0 {
+			continue
+		}
+		s.Variants = vs
+		cleaned = append(cleaned, s)
+	}
+	if len(cleaned) == 0 {
+		sc.BackendSources = nil
+	} else {
+		sc.BackendSources = cleaned
+	}
+	return writeSidecar(generatePath, sc)
 }
 
 // loadSidecar reads the whole sidecar, returning a zero value when absent.

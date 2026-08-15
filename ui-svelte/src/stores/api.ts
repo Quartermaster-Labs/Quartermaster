@@ -880,6 +880,9 @@ export interface ManagedComponent {
   // not change what Quartermaster actually launches. defaultOwner names it.
   isDefault: boolean;
   defaultOwner?: string;
+  // True for a repo the user added themselves: same install controls, plus edit
+  // and stop-tracking.
+  custom?: boolean;
 }
 
 export interface BackendJob {
@@ -1015,6 +1018,124 @@ export async function uninstallBackend(component: string, version: string, varia
   if (!response.ok) {
     throw new Error(`Uninstall failed: ${await response.text()}`);
   }
+}
+
+// --- tracked backend repos ---
+//
+// A tracked source is a GitHub repo the built-in catalog doesn't know about,
+// added by the user. The deliberate omission in these types is an asset regex:
+// the user picks a real asset out of a real release and the server derives the
+// pattern from it. `pattern` comes back read-only, purely so the editor can show
+// what was derived; nothing in the UI ever sends one.
+
+export interface BackendSourceVariant {
+  id?: string;
+  label: string;
+  asset: string; // the example asset the user ticked
+  pattern?: string; // derived server-side; display only
+  extras?: string[]; // companion assets unpacked alongside (cudart zips etc.)
+}
+
+export interface BackendSource {
+  id?: string;
+  name: string;
+  blurb?: string;
+  repo: string;
+  kind: string; // autogen backend kind — decides which models can use it
+  exe: string; // executable to find inside the archive
+  bare?: boolean; // the asset IS the executable, nothing to unpack
+  allowPrerelease?: boolean;
+  os?: string;
+  tag?: string; // release the assets were picked from
+  variants: BackendSourceVariant[];
+}
+
+export interface BackendSourceAsset {
+  name: string;
+  size: number;
+  // The server's guess at whether this is a runnable build for this host; the
+  // picker shows these first but lets you tick anything.
+  recommended: boolean;
+}
+
+export interface BackendSourceAssets {
+  repo: string;
+  tag: string;
+  hasStable: boolean;
+  releases: BackendRelease[];
+  assets: BackendSourceAsset[];
+}
+
+// What an install would download right now — the preview shown in place of the
+// derived pattern, because a file name is something a user can actually judge.
+export interface BackendResolved {
+  component: string;
+  variant: string;
+  tag: string;
+  asset?: string;
+  error?: string;
+  closest?: string; // nearest asset by name, when nothing matched
+  score?: number;
+}
+
+export async function getBackendSources(): Promise<BackendSource[]> {
+  const response = await fetch("/api/backends/sources");
+  if (!response.ok) {
+    throw new BackendApiError(response.status, `Failed to load tracked repos: ${await response.text()}`);
+  }
+  return (await response.json()) ?? [];
+}
+
+// Lists one release's assets for the picker. Works on an untracked repo, which
+// is what the add-a-repo form needs.
+export async function getBackendSourceAssets(repo: string, tag = "", refresh = false): Promise<BackendSourceAssets> {
+  const params = new URLSearchParams({ repo });
+  if (tag) params.set("tag", tag);
+  if (refresh) params.set("refresh", "1");
+  const response = await fetch(`/api/backends/sources/assets?${params}`);
+  if (!response.ok) {
+    throw new BackendApiError(response.status, await response.text());
+  }
+  const body: BackendSourceAssets = await response.json();
+  body.assets ??= [];
+  body.releases ??= [];
+  return body;
+}
+
+// Creates or updates a tracked repo. Send the picked asset names and the tag
+// they came from; the server derives the match patterns.
+export async function saveBackendSource(src: BackendSource): Promise<BackendSource> {
+  const response = await fetch("/api/backends/sources", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(src),
+  });
+  if (!response.ok) {
+    throw new BackendApiError(response.status, await response.text());
+  }
+  return await response.json();
+}
+
+// Stops tracking a repo. Refused (409) while builds from it are installed.
+export async function deleteBackendSource(id: string): Promise<void> {
+  const response = await fetch("/api/backends/sources/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id }),
+  });
+  if (!response.ok) {
+    throw new BackendApiError(response.status, await response.text());
+  }
+}
+
+export async function resolveBackendAsset(component: string, variant: string, version = ""): Promise<BackendResolved> {
+  const params = new URLSearchParams({ variant });
+  if (version) params.set("version", version);
+  const response = await fetch(`/api/backends/${encodeURIComponent(component)}/resolve?${params}`);
+  if (!response.ok) {
+    throw new BackendApiError(response.status, await response.text());
+  }
+  return await response.json();
 }
 
 export async function resetSettings(): Promise<void> {

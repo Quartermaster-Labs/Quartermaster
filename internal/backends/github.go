@@ -98,6 +98,12 @@ func newGHClient() *ghClient {
 // Releases lists a repo's recent releases, newest first. Results are cached for
 // releaseTTL unless force is set (the UI's explicit "check for updates").
 func (g *ghClient) Releases(ctx context.Context, repo string, force bool) ([]Release, error) {
+	// The repo reaches this function from a user-editable tracked source, and it
+	// is interpolated into the API URL path below. Validate before it can move
+	// the request off api.github.com/repos/.
+	if err := ValidateRepo(repo); err != nil {
+		return nil, err
+	}
 	g.mu.Lock()
 	if c, ok := g.cache[repo]; ok && !force && time.Since(c.at) < releaseTTL {
 		g.mu.Unlock()
@@ -157,7 +163,10 @@ func (g *ghClient) Releases(ctx context.Context, repo string, force bool) ([]Rel
 // host can actually use; "latest" skips those it can't. Real-ESRGAN's newest
 // release is source-only, so without this "install latest" resolves to a
 // release with nothing to download.
-func pickRelease(rels []Release, tag string, installable func(Release) bool) (Release, bool) {
+// allowPre lets "latest" pick a prerelease outright, for a tracked repo that
+// only ever publishes nightlies — without it such a source resolves through the
+// degraded fallback below and can silently pin an old build.
+func pickRelease(rels []Release, tag string, allowPre bool, installable func(Release) bool) (Release, bool) {
 	usable := func(r Release) bool { return installable == nil || installable(r) }
 
 	tag = strings.TrimSpace(tag)
@@ -170,7 +179,7 @@ func pickRelease(rels []Release, tag string, installable func(Release) bool) (Re
 		return Release{}, false
 	}
 	for _, r := range rels {
-		if !r.Prerelease && usable(r) {
+		if (allowPre || !r.Prerelease) && usable(r) {
 			return r, true
 		}
 	}

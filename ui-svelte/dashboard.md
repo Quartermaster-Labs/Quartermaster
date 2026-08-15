@@ -76,6 +76,22 @@ kept side by side with Use (rollback) / Remove.
 Does **not** replace the manual rows below it — tts-server / sam3-server / a ROCm sd-server have
 no installable release; managed rows appear there read-only, tagged "installed".
 
+**Track a repo** (`components/TrackRepoModal.svelte`) adds a GitHub repo the built-in catalog
+doesn't know about — a llama.cpp fork, an in-house engine — and it then renders as an ordinary
+card, tagged "tracked", with edit / stop-tracking. The hard constraint is that **the user never
+writes an asset pattern**: the modal fetches a real release (`getBackendSourceAssets`), the user
+ticks the build they want, and the server derives the matching rule from that example
+(`internal/backends/derive.go`). So every field here is a picker over fetched data, which is also
+why the form cannot be filled in offline. Two consequences for anyone editing it:
+
+- **Never add a pattern/regex input.** If matching is wrong the fix is re-picking an asset, not
+  hand-editing a rule. The card shows `resolveBackendAsset`'s answer — the file name an install
+  would fetch right now, and the closest asset when nothing matches — because a file name is
+  something a user can judge and a derived regex is not.
+- `suggestLabel` mirrors `backends.SuggestLabel` only so a freshly ticked row is named without a
+  round trip; the server re-derives it, so drift is cosmetic. Companion files (llama.cpp's cudart
+  zips) are picked per build from the same asset list.
+
 ## `/models`, `/models/:category` — Models
 
 `routes/Models.svelte` → `components/ModelsPanel.svelte`. The whole catalog as **ONE spreadsheet

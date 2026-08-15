@@ -102,7 +102,7 @@ func (m *Manager) Installed(comp string) []Installed {
 // AllInstalled lists installed builds across every catalog component.
 func (m *Manager) AllInstalled() []Installed {
 	var out []Installed
-	for _, c := range Catalog() {
+	for _, c := range m.Catalog() {
 		out = append(out, m.Installed(c.ID)...)
 	}
 	return out

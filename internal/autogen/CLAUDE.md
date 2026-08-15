@@ -76,7 +76,12 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   `LoadSidecarCategoryRoots`/`UpsertSidecarRoot`, `LoadSidecarBackends`/`UpsertSidecarBackends`
   (backend exe paths — top-level so a VRAM reset can't wipe them; overlaid onto `Settings`
   BEFORE `applyDefaults` so a blank sd/tts derives as a sibling of a UI-set llama exe),
-  `LoadSidecarAPIKeys`/`UpsertSidecarAPIKey`/`DeleteSidecarAPIKey`.
+  `LoadSidecarAPIKeys`/`UpsertSidecarAPIKey`/`DeleteSidecarAPIKey`,
+  `LoadSidecarBackendSources`/`UpsertSidecarBackendSources` (**tracked GitHub repos the in-app
+  installer downloads builds from** — deliberately separate from `BackendList`: a
+  `BackendSource` is a *place to get builds*, a `BackendEntry` is an *executable path the
+  launcher uses*; installing from a source writes the entry. Rows with no id/repo or no variant
+  carrying a derived pattern are dropped on write).
 
 ## Data flow
 

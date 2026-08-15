@@ -260,6 +260,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	s.backends = backends.NewManager("", func(m string) { proxylog.Info(m) })
 	s.backends.GpuNames = s.gpuNames
 	s.backends.OnInstalled = s.registerManagedBackend
+	s.backends.Sources = s.trackedSources // user-tracked repos, merged over the built-in catalog
 	// The model browser writes into the models folder and then regenerates
 	// directly, rather than waiting on the -watch-models poll (up to 30s away,
 	// and only running at all when that flag is set).
@@ -769,6 +770,11 @@ func (s *Server) routes() {
 	mux.Handle("POST /api/backends/activate", adminChain.ThenFunc(s.handleAPIBackendActivate))
 	mux.Handle("POST /api/backends/default", adminChain.ThenFunc(s.handleAPIBackendDefault))
 	mux.Handle("POST /api/backends/uninstall", adminChain.ThenFunc(s.handleAPIBackendUninstall))
+	mux.Handle("GET /api/backends/{component}/resolve", adminChain.ThenFunc(s.handleAPIBackendResolve))
+	mux.Handle("GET /api/backends/sources", adminChain.ThenFunc(s.handleAPIBackendSourcesList))
+	mux.Handle("GET /api/backends/sources/assets", adminChain.ThenFunc(s.handleAPIBackendSourceAssets))
+	mux.Handle("POST /api/backends/sources", adminChain.ThenFunc(s.handleAPIBackendSourceSave))
+	mux.Handle("POST /api/backends/sources/delete", adminChain.ThenFunc(s.handleAPIBackendSourceDelete))
 
 	// Model browser + downloader. The {id...} wildcard is required: a repo id is
 	// "owner/name", i.e. it carries its own slash.

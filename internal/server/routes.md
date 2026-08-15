@@ -61,6 +61,18 @@ activate), `POST /api/backends/uninstall`.
 Distinct from `GET /api/backends` + `PUT /api/settings/backends`, which are the **hand-entered**
 registry.
 
+### Tracked custom repos (`backendsources.go`, admin-gated)
+
+`GET /api/backends/sources` (the tracked repos, in editable form), `GET
+/api/backends/sources/assets?repo=&tag=&refresh=1` (one release's asset list, for an
+**untracked** repo too — this is the picker that replaces typing a regex), `POST
+/api/backends/sources` (create/update; the server derives the asset patterns from the picked
+names), `POST /api/backends/sources/delete` (409 while builds are installed), and `GET
+/api/backends/{component}/resolve?variant=&version=` (the file an install would download now).
+
+A tracked repo is merged into the catalog, so it installs through the same
+`install`/`activate`/`default`/`uninstall` routes as a built-in.
+
 ## Model hub browser (`hubapi.go`, admin-gated)
 
 See [`hubapi.md`](hubapi.md).

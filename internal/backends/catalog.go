@@ -30,19 +30,25 @@ type Variant struct {
 	ID    string `json:"id"`    // vulkan | cuda | rocm | cpu | any
 	Label string `json:"label"` // human name for the picker
 	Note  string `json:"note,omitempty"`
-	// Patterns are asset-name regexes, most-preferred first.
-	Patterns map[string][]string `json:"-"`
+	// Patterns are asset-name regexes, most-preferred first. Hand-written for the
+	// built-in catalog; for a user-tracked source they are derived from the asset
+	// the user picked (see derive.go) and never shown.
+	Patterns map[string][]string `json:"patterns,omitempty"`
+	// Exemplar records, per GOOS, the asset name a derived pattern came from. Set
+	// only for tracked sources. It is what lets the UI say "you picked X" and what
+	// ClosestAsset compares against when upstream renames its assets.
+	Exemplar map[string]string `json:"exemplar,omitempty"`
 	// Extra assets are unpacked into the same directory as the primary one (the
 	// CUDA runtime zip llama.cpp ships separately). Best-effort: a miss warns.
 	// A pattern may contain the placeholder "{v}", which is replaced with the
 	// PairKey capture from the primary asset name and tried first — see PairKey.
-	Extra map[string][]string `json:"-"`
+	Extra map[string][]string `json:"extra,omitempty"`
 	// PairKey is a regex with one capture group, run against the chosen primary
 	// asset name. It exists because a release can ship several builds of the same
 	// variant (llama.cpp publishes CUDA 12.4 and 13.3 side by side, each with its
 	// own cudart zip) and pairing them by list order would eventually ship the
 	// wrong runtime. Empty => extras are matched by pattern alone.
-	PairKey string `json:"-"`
+	PairKey string `json:"pairKey,omitempty"`
 }
 
 // Component is one installable backend (or helper binary).
@@ -66,8 +72,17 @@ type Component struct {
 	// the install controls, and Install() refuses.
 	Manual bool `json:"manual"`
 	// Setup is the short "how do I actually get this" shown for a Manual entry.
-	Setup    string    `json:"setup,omitempty"`
-	Variants []Variant `json:"variants"`
+	Setup string `json:"setup,omitempty"`
+	// Custom marks a component the user added by tracking a repo, rather than one
+	// from the built-in table. Its patterns are derived, not curated, so the UI
+	// offers edit/remove and shows which asset each variant resolves to.
+	Custom bool `json:"custom,omitempty"`
+	// AllowPrerelease lets "latest" resolve to a prerelease. Off for the built-in
+	// catalog (upstream cuts stable releases); set automatically for a tracked
+	// repo that publishes nothing but nightlies, which would otherwise resolve to
+	// nothing installable.
+	AllowPrerelease bool      `json:"allowPrerelease,omitempty"`
+	Variants        []Variant `json:"variants"`
 }
 
 // ExeName returns the component's executable file name on the host OS.

@@ -26,7 +26,8 @@ therefore *coexist* with hand-entered rows in one registry, distinguished by
 | `catalog.go` | Package doc + the static `Component`/`Variant` table, asset-name matching (`SelectAsset`, `MatchAssets`), and GPU→variant selection (`SuggestVariant`, `DefaultVariant`). |
 | `github.go` | Releases API client: `Release`/`Asset`, `ghClient.Releases` (30 newest, 10-minute cache, `GITHUB_TOKEN` when set, explicit rate-limit message), `pickRelease`, `validAssetURL`. |
 | `install.go` | On-disk layout and I/O: `ComponentDir`/`InstallDir`, `Installed`/`AllInstalled`, the `.qm-install.json` manifest, `Uninstall`, `download` + `progressReader`, `extract` (zip / tar.gz) with `safeJoin`, `findExe`. |
-| `manager.go` | `Manager` — job list, phases, and the `run()` install goroutine (resolve → download → stage → extract → manifest → rename → `OnInstalled`). |
+| `derive.go` | Turns one **picked asset name** into a match pattern (`DerivePattern`, `DeriveUnique`), plus repo validation (`ValidateRepo`/`ParseRepo`), `SuggestLabel` and `ClosestAsset`. This is what lets a user track their own repo without writing a regex. |
+| `manager.go` | `Manager` — the `Sources` hook that merges user-tracked repos into the catalog (`Catalog`/`Find`), `Resolve` (what would be downloaded right now), the job list, phases, and the `run()` install goroutine (resolve → download → stage → extract → manifest → rename → `OnInstalled`). |
 | `backends_test.go` | Pins asset matching per component/OS, variant suggestion, zip-slip rejection, manifest-gated scanning, versioned dirs, release picking, URL allowlisting. |
 
 ## Important types & functions
@@ -77,6 +78,30 @@ therefore *coexist* with hand-entered rows in one registry, distinguished by
   card shows "Installed, but not in use — X is the default" with a
   `POST /api/backends/default` action. `activate` is a different axis entirely:
   it picks *which build of this component* the row points at, never ★.
+- **Custom repos come in through `Manager.Sources`, a hook — not an import.** The user's tracked
+  repos live in the autogen sidecar, but this package depends on the standard
+  library alone, so `internal/server` supplies them as a `func() []Component`
+  that `Catalog`/`Find` merge *after* the built-ins. A source whose id collides
+  with a built-in is dropped, so a user-controlled repo can never take over a
+  built-in's install directory or registry row.
+- **Patterns for tracked repos are DERIVED, never typed** (`derive.go`). The user
+  picks a real asset out of a real release; version-ish tokens (build numbers,
+  dates, shas, `rc1`) become wildcards and everything else stays literal, so
+  next week's build of the same flavour still matches. Two properties matter more
+  than the cleverness, because the result decides which binary gets executed:
+  `DeriveUnique` verifies against the whole release and **tightens rightmost-first
+  until exactly one asset matches** (this is what pins llama.cpp's side-by-side
+  CUDA 12.4/13.3 builds — the same guarantee `Variant.PairKey` gives the static
+  table, reached from an example instead of a hand-written capture); and when
+  nothing can be made unambiguous it **falls back to the literal file name**, so a
+  changed release surfaces as "re-pick this asset" rather than the wrong build on
+  disk. `Variant.Exemplar` keeps the picked name so `ClosestAsset` can say what
+  the nearest thing is when upstream renames its assets.
+- **Nightly-only repos need `Component.AllowPrerelease`.** `pickRelease` skips
+  prereleases for "latest", which resolves to *nothing* on a fork that only ever
+  publishes nightlies (lemonade's llamacpp-rocm is exactly this). The server sets
+  the flag automatically when a tracked repo's release history contains no stable
+  release, rather than asking the user about GitHub semantics.
 - **The catalog is the one maintenance point.** When upstream renames its release
   assets, the fix is a regex in `catalog.go` — and `TestBackends_MatchAssets`
   pins the current naming for every component, so a rename breaks the test rather

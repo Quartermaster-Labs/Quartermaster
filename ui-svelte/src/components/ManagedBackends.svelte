@@ -9,7 +9,7 @@
   // hand-entered path stays a first-class way to register a backend. A managed
   // install just writes the same registry row for you and keeps it updated.
   import { onMount, onDestroy } from "svelte";
-  import { Download, RefreshCw, Trash2, Check, ExternalLink, Star } from "lucide-svelte";
+  import { Download, RefreshCw, Trash2, Check, ExternalLink, Star, Plus, Pencil } from "lucide-svelte";
   import {
     getBackendCatalog,
     getBackendReleases,
@@ -19,12 +19,18 @@
     activateBackend,
     uninstallBackend,
     makeBackendDefault,
+    getBackendSources,
+    deleteBackendSource,
+    resolveBackendAsset,
     type BackendCatalog,
     type ManagedComponent,
     type BackendJob,
     type BackendRelease,
+    type BackendSource,
+    type BackendResolved,
   } from "../stores/api";
   import { backendClass } from "../lib/backends";
+  import TrackRepoModal from "./TrackRepoModal.svelte";
 
   // Called after an install/activate/uninstall so the parent can re-read the
   // registry it renders below us.
@@ -41,6 +47,16 @@
   let releases = $state<Record<string, BackendRelease[]>>({});
   let loadingRel = $state<Record<string, boolean>>({});
   let busy = $state<Record<string, boolean>>({}); // activate/uninstall in flight
+
+  // Tracked repos: the editable side of a custom component. The catalog renders
+  // them as ordinary cards; this is only what the edit form needs back.
+  let sources = $state<BackendSource[]>([]);
+  let editing = $state<BackendSource | null>(null);
+  let adding = $state(false);
+  // What each custom variant would download right now. A derived pattern is not
+  // something a user can judge, but a file name is — so the card shows the
+  // resolved asset instead of the rule behind it.
+  let resolved = $state<Record<string, BackendResolved>>({});
 
   const activeJob = (id: string): BackendJob | undefined =>
     jobs.find((j) => j.component === id && j.phase !== "done" && j.phase !== "error");
@@ -61,6 +77,13 @@
       // server caches release listings for 10 minutes so reopening is free.
       for (const comp of c.components) {
         if (comp.installed.length) void loadReleases(comp);
+      }
+      try {
+        sources = await getBackendSources();
+      } catch {
+        // No -generate control file: the built-in catalog still works, there is
+        // just nowhere to persist a tracked repo. Leave the list empty.
+        sources = [];
       }
       err = null;
     } catch (e) {
@@ -174,6 +197,36 @@
     }
   }
 
+  // --- tracked repos ---
+
+  const sourceFor = (id: string): BackendSource | undefined => sources.find((s) => s.id === id);
+
+  async function stopTracking(comp: ManagedComponent): Promise<void> {
+    busy[comp.id] = true;
+    err = null;
+    try {
+      await deleteBackendSource(comp.id);
+      await refresh();
+      onchanged?.();
+    } catch (e) {
+      err = e instanceof Error ? e.message : String(e);
+    } finally {
+      busy[comp.id] = false;
+    }
+  }
+
+  // Ask the server what the current selection would actually download. Keyed by
+  // component+variant so switching the flavour picker re-previews.
+  async function previewAsset(comp: ManagedComponent, variant: string, version: string): Promise<void> {
+    const key = `${comp.id}/${variant}/${version}`;
+    if (resolved[key]) return;
+    try {
+      resolved[key] = await resolveBackendAsset(comp.id, variant, version);
+    } catch {
+      // Offline or rate-limited: the card just doesn't show a preview line.
+    }
+  }
+
   function fmtBytes(n: number): string {
     if (!n) return "";
     const mb = n / (1024 * 1024);
@@ -272,6 +325,18 @@
     <div class="flex items-baseline gap-2 mb-1">
       <h6 class="!pb-0">Install a backend</h6>
       <span class="font-mono text-[0.65rem] text-txtsecondary truncate">{catalog.root}</span>
+      <!-- Anything that publishes release assets can be installed the same way
+           as the built-ins: pick a build from a real release, and the matching
+           rule is worked out from it. -->
+      <button
+        type="button"
+        class="btn btn--sm ml-auto shrink-0 inline-flex items-center gap-1 uppercase tracking-wide hover:border-primary hover:text-primary"
+        title="Install builds from a GitHub repo that isn't in the list"
+        onclick={() => {
+          editing = null;
+          adding = true;
+        }}><Plus size={12} /> Track a repo</button
+      >
     </div>
     <p class="text-[0.7rem] text-txtsecondary mb-3">
       Downloads the build from its upstream release and registers it below. Every version you install is kept, so you
@@ -328,11 +393,37 @@
             {:else if comp.active && releases[comp.id]}
               <span class="font-mono text-[0.6rem] text-txtsecondary">up to date</span>
             {/if}
+            {#if comp.custom}
+              <span
+                class="font-mono text-[0.6rem] rounded px-1.5 py-0.5 border border-card-border text-txtsecondary"
+                title="A repo you added"
+              >tracked</span>
+              <button
+                type="button"
+                class="ml-auto shrink-0 p-1 rounded text-txtsecondary hover:text-primary"
+                title="Edit this tracked repo"
+                aria-label="Edit this tracked repo"
+                onclick={() => {
+                  editing = sourceFor(comp.id) ?? null;
+                  adding = !!editing;
+                }}><Pencil size={13} /></button
+              >
+              <button
+                type="button"
+                class="shrink-0 p-1 rounded text-txtsecondary hover:text-error disabled:opacity-40"
+                title={comp.installed.length
+                  ? "Remove its installed builds before you can stop tracking it"
+                  : "Stop tracking this repo"}
+                aria-label="Stop tracking this repo"
+                disabled={!!busy[comp.id] || comp.installed.length > 0}
+                onclick={() => stopTracking(comp)}><Trash2 size={13} /></button
+              >
+            {/if}
             <a
               href={`https://github.com/${comp.repo}`}
               target="_blank"
               rel="noreferrer"
-              class="ml-auto shrink-0 text-txtsecondary hover:text-primary"
+              class="shrink-0 text-txtsecondary hover:text-primary {comp.custom ? '' : 'ml-auto'}"
               title={comp.repo}
               aria-label={`Open ${comp.repo} on GitHub`}
             ><ExternalLink size={13} /></a>
@@ -399,6 +490,29 @@
                   onclick={() => loadReleases(comp, true)}
                 ><RefreshCw size={12} class={loadingRel[comp.id] ? "animate-spin" : ""} /> Check</button>
               </div>
+
+              {#if comp.custom}
+                <!-- The rule that decides which file gets downloaded was derived
+                     from an example, never written by hand, so showing it would
+                     be showing a regex nobody chose. Show the file it currently
+                     picks instead — that is the thing a user can check. -->
+                {@const key = `${comp.id}/${variantSel[comp.id] ?? ""}/${versionSel[comp.id] ?? ""}`}
+                {@const res = resolved[key]}
+                <div class="font-mono text-[0.65rem] text-txtsecondary">
+                  {#if res?.asset}
+                    Downloads <span class="text-txtmain">{res.asset}</span> from {res.tag}
+                  {:else if res?.closest}
+                    Nothing matches in {res.tag} — closest is <span class="text-txtmain">{res.closest}</span>. Edit this
+                    repo and re-pick the build.
+                  {:else if res?.error}
+                    {res.error}
+                  {:else}
+                    <button type="button" class="underline hover:text-primary" onclick={() => previewAsset(comp, variantSel[comp.id] ?? "", versionSel[comp.id] ?? "")}
+                      >Show what this would download</button
+                    >
+                  {/if}
+                </div>
+              {/if}
 
               {#if job}
                 <div class="flex flex-col gap-1">
@@ -484,6 +598,23 @@
       <p class="mt-2 font-mono text-[0.65rem] text-error">{err}</p>
     {/if}
   </div>
+
+  {#if adding}
+    <TrackRepoModal
+      os={catalog.os}
+      source={editing}
+      onclose={() => {
+        adding = false;
+        editing = null;
+      }}
+      onsaved={async () => {
+        // A saved source changes the catalog, and its patterns changed with it.
+        resolved = {};
+        await refresh();
+        onchanged?.();
+      }}
+    />
+  {/if}
 {:else if available && err}
   <!-- The catalog never loaded. Say so instead of rendering nothing, which is
        indistinguishable from the feature not existing. -->

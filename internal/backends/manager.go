@@ -62,6 +62,11 @@ type Manager struct {
 	// OnInstalled is called after a successful install so the caller can point
 	// the backend registry at the new exe and regenerate the config. Optional.
 	OnInstalled func(Installed) error
+	// Sources supplies the user's tracked repos, merged after the built-in
+	// catalog by Catalog/Find. It is a hook rather than a field so this package
+	// keeps depending on the standard library alone — persistence lives in the
+	// autogen sidecar, which internal/server owns. Optional; nil => built-ins only.
+	Sources func() []Component
 
 	mu     sync.Mutex
 	jobs   map[string]*Job
@@ -103,13 +108,104 @@ func defaultRoot() string {
 // Root returns the install root (bin/ hangs off this).
 func (m *Manager) Root() string { return m.root }
 
+// Catalog returns the built-in components followed by the user's tracked
+// sources. A source whose id collides with a built-in is dropped rather than
+// shadowing it — ids are prefixed on creation, so a collision means a
+// hand-edited sidecar, and letting it through would let a tracked repo take over
+// a built-in's registry row.
+func (m *Manager) Catalog() []Component {
+	base := Catalog()
+	if m.Sources == nil {
+		return base
+	}
+	seen := make(map[string]bool, len(base))
+	for _, c := range base {
+		seen[strings.ToLower(c.ID)] = true
+	}
+	out := append([]Component(nil), base...)
+	for _, c := range m.Sources() {
+		id := strings.ToLower(strings.TrimSpace(c.ID))
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		c.Custom = true
+		out = append(out, c)
+	}
+	return out
+}
+
+// Find resolves a component id across built-ins and tracked sources. Every
+// caller that used to reach for the package-level Find must use this, or a
+// tracked repo becomes invisible the moment it is asked about by id.
+func (m *Manager) Find(id string) (Component, bool) {
+	for _, c := range m.Catalog() {
+		if strings.EqualFold(c.ID, id) {
+			return c, true
+		}
+	}
+	return Component{}, false
+}
+
 // Releases lists a component's recent releases (cached; force refetches).
 func (m *Manager) Releases(ctx context.Context, comp string, force bool) ([]Release, error) {
-	c, ok := Find(comp)
+	c, ok := m.Find(comp)
 	if !ok {
 		return nil, fmt.Errorf("unknown component %q", comp)
 	}
 	return m.gh.Releases(ctx, c.Repo, force)
+}
+
+// ReleasesForRepo lists releases for a repo that is not (yet) a component — the
+// asset picker in the "track a repo" form, which runs before anything is saved.
+func (m *Manager) ReleasesForRepo(ctx context.Context, repo string, force bool) ([]Release, error) {
+	return m.gh.Releases(ctx, repo, force)
+}
+
+// Resolve reports what an install would actually fetch right now: the release it
+// would resolve to and the asset name it would download. It is the preview the
+// UI shows in place of the derived pattern — a file name is something a user can
+// judge, a regex is not.
+//
+// closest/score are filled only when nothing matched, so the UI can say "assets
+// look renamed, the nearest is X" instead of a bare failure.
+func (m *Manager) Resolve(ctx context.Context, comp, variant, version string) (rel Release, asset string, closest string, score int, err error) {
+	c, ok := m.Find(comp)
+	if !ok {
+		return Release{}, "", "", 0, fmt.Errorf("unknown component %q", comp)
+	}
+	if c.Manual {
+		return Release{}, "", "", 0, fmt.Errorf("%s is not an installable component", c.Name)
+	}
+	if variant == "" {
+		variant = c.DefaultVariant(m.gpuNames(), runtime.GOOS)
+	}
+	rels, err := m.gh.Releases(ctx, c.Repo, false)
+	if err != nil {
+		return Release{}, "", "", 0, err
+	}
+	rel, ok = pickRelease(rels, version, c.AllowPrerelease, func(r Release) bool {
+		_, _, err := c.MatchAssets(variant, runtime.GOOS, r.AssetNames())
+		return err == nil
+	})
+	if !ok {
+		// No release ships a matching asset — for a tracked repo that usually
+		// means upstream renamed things, which is exactly when the closest-asset
+		// hint is worth the most. Fall back to the newest release so the caller
+		// gets something concrete to compare against instead of "not found".
+		if rel, ok = pickRelease(rels, version, true, nil); !ok {
+			return Release{}, "", "", 0, fmt.Errorf("no release found for %s", c.ID)
+		}
+	}
+	names := rel.AssetNames()
+	asset, _, err = c.MatchAssets(variant, runtime.GOOS, names)
+	if err != nil {
+		if v, ok := c.Variant(variant); ok && v.Exemplar[runtime.GOOS] != "" {
+			closest, score = ClosestAsset(v.Exemplar[runtime.GOOS], names)
+		}
+		return rel, "", closest, score, err
+	}
+	return rel, asset, "", 0, nil
 }
 
 // Jobs returns the job history, newest first.
@@ -149,7 +245,7 @@ func (m *Manager) update(id string, fn func(*Job)) {
 // Install starts a background install of one component build and returns the
 // job id. version "" or "latest" resolves to the newest non-prerelease.
 func (m *Manager) Install(comp, variant, version string) (string, error) {
-	c, ok := Find(comp)
+	c, ok := m.Find(comp)
 	if !ok {
 		return "", fmt.Errorf("unknown component %q", comp)
 	}
@@ -200,7 +296,7 @@ func (m *Manager) gpuNames() []string {
 
 // Suggest returns the variant a fresh install of comp should preselect.
 func (m *Manager) Suggest(comp string) string {
-	c, ok := Find(comp)
+	c, ok := m.Find(comp)
 	if !ok {
 		return ""
 	}
@@ -229,7 +325,7 @@ func (m *Manager) run(id string, c Component, variant, version string) {
 		fail(err)
 		return
 	}
-	rel, ok := pickRelease(rels, version, func(r Release) bool {
+	rel, ok := pickRelease(rels, version, c.AllowPrerelease, func(r Release) bool {
 		_, _, err := c.MatchAssets(variant, runtime.GOOS, r.AssetNames())
 		return err == nil
 	})

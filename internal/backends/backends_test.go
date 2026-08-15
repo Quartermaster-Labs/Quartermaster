@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -268,13 +269,13 @@ func TestBackends_PickRelease(t *testing.T) {
 		{Tag: "b2"},
 		{Tag: "b1"},
 	}
-	if r, _ := pickRelease(rels, "", nil); r.Tag != "b2" {
+	if r, _ := pickRelease(rels, "", false, nil); r.Tag != "b2" {
 		t.Errorf("latest skipped prerelease? got %s", r.Tag)
 	}
-	if r, _ := pickRelease(rels, "b1", nil); r.Tag != "b1" {
+	if r, _ := pickRelease(rels, "b1", false, nil); r.Tag != "b1" {
 		t.Errorf("exact tag: got %s", r.Tag)
 	}
-	if _, ok := pickRelease(rels, "b99", nil); ok {
+	if _, ok := pickRelease(rels, "b99", false, nil); ok {
 		t.Error("unknown tag should not resolve")
 	}
 	// A source-only newest release (Real-ESRGAN does this) must be skipped in
@@ -282,12 +283,181 @@ func TestBackends_PickRelease(t *testing.T) {
 	only := func(tag string) func(Release) bool {
 		return func(r Release) bool { return r.Tag == tag }
 	}
-	if r, _ := pickRelease(rels, "", only("b1")); r.Tag != "b1" {
+	if r, _ := pickRelease(rels, "", false, only("b1")); r.Tag != "b1" {
 		t.Errorf("latest should skip releases with no installable asset, got %s", r.Tag)
 	}
 	// Prereleases are still a better answer than nothing installable at all.
-	if r, _ := pickRelease(rels, "", only("b3")); r.Tag != "b3" {
+	if r, _ := pickRelease(rels, "", false, only("b3")); r.Tag != "b3" {
 		t.Errorf("should fall back to an installable prerelease, got %s", r.Tag)
+	}
+	// A repo that only ever publishes prereleases (nightly-only forks) opts in,
+	// and then "latest" means the newest release, full stop.
+	if r, _ := pickRelease(rels, "", true, nil); r.Tag != "b3" {
+		t.Errorf("allowPrerelease should take the newest release, got %s", r.Tag)
+	}
+}
+
+func TestBackends_ValidateRepo(t *testing.T) {
+	for _, ok := range []string{"ggml-org/llama.cpp", "lemonade-sdk/llamacpp-rocm", "a_b/c-d.e"} {
+		if err := ValidateRepo(ok); err != nil {
+			t.Errorf("%q rejected: %v", ok, err)
+		}
+	}
+	// Everything here would re-target the api.github.com URL the repo is
+	// interpolated into, so each must be refused before it can reach a request.
+	for _, bad := range []string{
+		"", "noslash", "a/b/c", "../../evil", "a/..", "./x",
+		"a/b?x=1", "a/b#f", "https://evil.example/a/b", "a b/c", "a/b/../..",
+	} {
+		if err := ValidateRepo(bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+func TestBackends_ParseRepo(t *testing.T) {
+	cases := map[string]string{
+		"ggml-org/llama.cpp":                             "ggml-org/llama.cpp",
+		"  ggml-org/llama.cpp  ":                         "ggml-org/llama.cpp",
+		"https://github.com/ggml-org/llama.cpp":          "ggml-org/llama.cpp",
+		"https://github.com/ggml-org/llama.cpp/":         "ggml-org/llama.cpp",
+		"https://github.com/ggml-org/llama.cpp.git":      "ggml-org/llama.cpp",
+		"https://github.com/ggml-org/llama.cpp/releases": "ggml-org/llama.cpp",
+	}
+	for in, want := range cases {
+		got, err := ParseRepo(in)
+		if err != nil || got != want {
+			t.Errorf("ParseRepo(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	if _, err := ParseRepo("https://evil.example/a/b"); err == nil {
+		t.Error("a non-github host should not parse into a repo reference")
+	}
+}
+
+// TestBackends_DeriveUnique is the safety net for the whole no-regex feature:
+// the pattern a user never sees is generated here, and a wrong one downloads and
+// runs the wrong binary.
+func TestBackends_DeriveUnique(t *testing.T) {
+	// The real llama.cpp Windows asset list — several flavours, plus two CUDA
+	// toolkit versions that differ ONLY in a version-ish token.
+	llama := []string{
+		"llama-b6543-bin-win-vulkan-x64.zip",
+		"llama-b6543-bin-win-cpu-x64.zip",
+		"llama-b6543-bin-win-cuda-12.4-x64.zip",
+		"llama-b6543-bin-win-cuda-13.3-x64.zip",
+		"cudart-llama-bin-win-cuda-12.4-x64.zip",
+		"cudart-llama-bin-win-cuda-13.3-x64.zip",
+	}
+	tests := []struct {
+		name  string
+		pick  string
+		all   []string
+		match []string // must match
+		miss  []string // must not match
+	}{
+		{
+			name:  "build number wildcarded",
+			pick:  "llama-b6543-bin-win-vulkan-x64.zip",
+			all:   llama,
+			match: []string{"llama-b6543-bin-win-vulkan-x64.zip", "llama-b7000-bin-win-vulkan-x64.zip"},
+			miss:  []string{"llama-b6543-bin-win-cpu-x64.zip", "llama-b6543-bin-win-cuda-12.4-x64.zip"},
+		},
+		{
+			// The toolkit version must survive as a literal or the install becomes
+			// a coin flip between the CUDA 12 and CUDA 13 builds.
+			name:  "cuda toolkit pinned, build number free",
+			pick:  "llama-b6543-bin-win-cuda-12.4-x64.zip",
+			all:   llama,
+			match: []string{"llama-b6543-bin-win-cuda-12.4-x64.zip", "llama-b7000-bin-win-cuda-12.4-x64.zip"},
+			miss:  []string{"llama-b6543-bin-win-cuda-13.3-x64.zip", "llama-b6543-bin-win-vulkan-x64.zip"},
+		},
+		{
+			name:  "lemonade rocm nightly",
+			pick:  "llama-b1247-ubuntu-rocm-gfx110X-x64.zip",
+			all:   []string{"llama-b1247-ubuntu-rocm-gfx110X-x64.zip", "llama-b1247-ubuntu-rocm-gfx120X-x64.zip"},
+			match: []string{"llama-b9999-ubuntu-rocm-gfx110X-x64.zip"},
+			miss:  []string{"llama-b1247-ubuntu-rocm-gfx120X-x64.zip"},
+		},
+		{
+			// Nothing identifying at all: fail closed on the literal name rather
+			// than derive "^.*$" and install whatever happens to be first.
+			name:  "all-version name falls back to literal",
+			pick:  "1.2.3",
+			all:   []string{"1.2.3", "1.2.4"},
+			match: []string{"1.2.3"},
+			miss:  []string{"1.2.4"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pat := DeriveUnique(tc.pick, tc.all)
+			re, err := regexp.Compile(pat)
+			if err != nil {
+				t.Fatalf("derived an uncompilable pattern %q: %v", pat, err)
+			}
+			// The derivation is only sound if it still identifies its own example
+			// uniquely within the release it came from.
+			hits := 0
+			for _, n := range tc.all {
+				if re.MatchString(n) {
+					hits++
+				}
+			}
+			if hits != 1 {
+				t.Errorf("pattern %q matches %d assets of the source release, want 1", pat, hits)
+			}
+			for _, n := range tc.match {
+				if !re.MatchString(n) {
+					t.Errorf("pattern %q does not match %q", pat, n)
+				}
+			}
+			for _, n := range tc.miss {
+				if re.MatchString(n) {
+					t.Errorf("pattern %q wrongly matches %q", pat, n)
+				}
+			}
+		})
+	}
+}
+
+func TestBackends_SuggestLabel(t *testing.T) {
+	cases := map[string]string{
+		"llama-b6543-bin-win-vulkan-x64.zip":      "llama win vulkan",
+		"llama-b1247-ubuntu-rocm-gfx110X-x64.zip": "llama ubuntu rocm gfx110X",
+		"sd-master-abc1234-bin-win-avx2-x64.zip":  "sd master win avx2",
+	}
+	for in, want := range cases {
+		if got := SuggestLabel(in); got != want {
+			t.Errorf("SuggestLabel(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestBackends_SourcesMerge covers the Manager.Sources hook: tracked repos are
+// visible to every downstream path, but must never shadow a built-in — a
+// collision would let a user-controlled repo take over a built-in's install
+// directory and registry row.
+func TestBackends_SourcesMerge(t *testing.T) {
+	m := NewManager(t.TempDir(), nil)
+	base := len(m.Catalog())
+	m.Sources = func() []Component {
+		return []Component{
+			{ID: "custom-me-fork", Name: "My fork", Repo: "me/fork", Kind: "llama",
+				Variants: []Variant{{ID: "win", Patterns: map[string][]string{"windows": {"^x\\.zip$"}}}}},
+			{ID: "llama-server", Name: "Impostor", Repo: "evil/repo"},
+		}
+	}
+	cat := m.Catalog()
+	if len(cat) != base+1 {
+		t.Fatalf("catalog has %d components, want %d (the shadowing entry must be dropped)", len(cat), base+1)
+	}
+	c, ok := m.Find("custom-me-fork")
+	if !ok || !c.Custom || c.Repo != "me/fork" {
+		t.Fatalf("tracked source not findable: %+v (ok=%v)", c, ok)
+	}
+	if b, _ := m.Find("llama-server"); b.Repo == "evil/repo" {
+		t.Error("a tracked source shadowed a built-in component")
 	}
 }
 
