@@ -23,7 +23,7 @@
   import { Image as ImageIcon, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Palette, Reply, Maximize2, Loader2 } from "lucide-svelte";
   import { scrollFade } from "../../lib/scrollFade";
   import type { ImageApiMode, SdApiLora, SdApiLoraRef } from "../../lib/types";
-  import { ASPECTS, SIZE_TIERS, aspectDims, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, DEFAULT_MAX_DIM, MAX_BATCH, defaultsFor, parseSdProgress, fmtDur } from "./imageGen";
+  import { ASPECTS, SIZE_TIERS, aspectDims, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, DEFAULT_MAX_DIM, MAX_BATCH, defaultsFor, settingsFor, parseSdProgress, fmtDur } from "./imageGen";
 
   // A conversational image tab: each user prompt becomes a turn, and the model
   // replies with an image. Follow-up prompts tweak the last image — Kontext gets
@@ -259,23 +259,28 @@
   let threadEl = $state<HTMLDivElement | undefined>();
   let fileInput = $state<HTMLInputElement | undefined>();
 
-  // Apply a preset model's safe gen defaults on FIRST load too, not only when the
-  // model changes. Distilled models (Flux Kontext, Z-Image-Turbo) blow out to a
-  // white image at the generic cfg=7; the persisted pref can carry that wrong
-  // value in from another model, so re-assert the preset whenever the id differs
-  // from what we last applied (null on mount → applies immediately). Non-preset
-  // models (defaultsFor → undefined) keep the user's persisted values untouched.
-  let lastModelForDefaults: string | null = null;
+  // Switching models resets the settings panel to that model's defaults — every
+  // field, including the ones a preset omits (they fall back to GENERIC_DEFAULTS
+  // via settingsFor). Carrying the previous model's values over silently
+  // mis-renders: distilled models (Flux Kontext, Z-Image-Turbo, qwen-rapid) burn
+  // out at the generic cfg=7, and the SDXL-anime booru negative leaks into
+  // everything downstream of it.
+  // Which model the panel was last reset for is PERSISTED, so a page reload
+  // doesn't wipe hand-tuned values — only an actual model switch does.
+  const defaultsModelStore = userPref<string>("playground-image-defaults-model", "");
   $effect(() => {
     const id = $selectedModelStore;
-    if (id === lastModelForDefaults) return;
-    lastModelForDefaults = id;
-    const d = defaultsFor(id);
-    if (!d) return;
+    if (!id || id === $defaultsModelStore) return;
+    $defaultsModelStore = id;
+    const d = settingsFor(id);
     $sdStepsStore = d.steps;
     $sdCfgScaleStore = d.cfg;
     $sdSamplerStore = d.sampler;
     $sdSchedulerStore = d.scheduler;
+    $sdNegativePromptStore = d.negative;
+    $sdDenoiseStore = d.denoise;
+    // Aspect/long-edge are the user's framing choice, so only a preset that
+    // names a size (SDXL-anime needs 1024 — 512 duplicates subjects) moves them.
     if (d.size) {
       const [w, h] = d.size.split("x").map(Number);
       const r = w / h;
@@ -284,8 +289,6 @@
       ).value;
       $longEdgeStore = String(Math.max(w, h));
     }
-    if (d.negative) $sdNegativePromptStore = d.negative;
-    if (d.denoise !== undefined) $sdDenoiseStore = d.denoise;
   });
 
   // Batch picks are indexed by turn position, which means something else in
@@ -706,7 +709,10 @@
     const t = s?.turns[idx];
     if (!s || !t) return;
     const prevTurns = s.turns;
-    setTurns(id, [...prevTurns.slice(0, idx), { prompt: t.prompt, refs: t.refs, images: [], model: t.model ?? $selectedModelStore }], true);
+    // Label with the model that will ACTUALLY run this — generate() always uses
+    // the current picker, so keeping the turn's old id after a model switch
+    // credits the new image to the wrong model.
+    setTurns(id, [...prevTurns.slice(0, idx), { prompt: t.prompt, refs: t.refs, images: [], model: $selectedModelStore }], true);
     await runTurn(id, idx, t.prompt, t.refs, null, () => {}, prevTurns);
   }
 

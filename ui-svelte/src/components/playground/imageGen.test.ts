@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { aspectDims, defaultsFor, fmtDur, parseSdProgress } from "./imageGen";
+import { SDXL_ANIME_NEG, aspectDims, defaultsFor, fmtDur, parseSdProgress, settingsFor } from "./imageGen";
 
 describe("aspectDims", () => {
   it("keeps squares square", () => {
@@ -77,5 +77,25 @@ describe("parseSdProgress", () => {
     const p = parseSdProgress(tail, 20);
     expect(p.phase).toBe("cond");
     expect(p).toMatchObject({ step: 0, totalSteps: 0, secPerIt: 0 });
+  });
+});
+
+describe("settingsFor", () => {
+  it("falls back to the generic settings for an unknown model", () => {
+    expect(settingsFor("some-random-sd15")).toEqual(
+      expect.objectContaining({ steps: 20, cfg: 7, sampler: "", scheduler: "", negative: "", denoise: 0.6 }),
+    );
+  });
+
+  it("clears a preset-only field when the next model omits it", () => {
+    expect(settingsFor("animagine-xl-3.1").negative).toBe(SDXL_ANIME_NEG);
+    // z-image has no negative/denoise of its own — must not inherit the anime one.
+    expect(settingsFor("z-image-turbo").negative).toBe("");
+    expect(settingsFor("z-image-turbo").denoise).toBe(0.6);
+  });
+
+  it("carries a preset's size through", () => {
+    expect(settingsFor("illustrious-xl").size).toBe("1024x1024");
+    expect(settingsFor("z-image-turbo").size).toBeUndefined();
   });
 });

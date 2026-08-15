@@ -78,6 +78,36 @@ export function defaultsFor(id: string) {
   return IMAGE_DEFAULTS.find((d) => l.includes(d.match));
 }
 
+// Fallback settings for a model with no entry above. Switching models must reset
+// the panel either way: leaving the previous model's preset in place (e.g. the
+// anime booru negative, or cfg 1.0 from a distilled model) silently mis-renders
+// the new one. Mirrors the userPref initial values.
+export const GENERIC_DEFAULTS = {
+  match: "",
+  steps: 20,
+  cfg: 7,
+  sampler: "",
+  scheduler: "",
+  negative: "",
+  denoise: 0.6,
+} satisfies (typeof IMAGE_DEFAULTS)[number];
+
+// The settings a model should load with: its preset, else the generic ones.
+// `negative`/`denoise` are always present here so a switch clears a stale preset
+// value instead of inheriting it.
+export function settingsFor(id: string) {
+  const d = defaultsFor(id) ?? GENERIC_DEFAULTS;
+  return {
+    steps: d.steps,
+    cfg: d.cfg,
+    sampler: d.sampler,
+    scheduler: d.scheduler,
+    negative: d.negative ?? GENERIC_DEFAULTS.negative,
+    denoise: d.denoise ?? GENERIC_DEFAULTS.denoise,
+    size: "size" in d ? d.size : undefined,
+  };
+}
+
 export type SdStagePhase = "encode" | "cond" | "sample" | "decode" | null;
 
 export interface SdProgress {
