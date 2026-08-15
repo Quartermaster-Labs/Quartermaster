@@ -195,26 +195,37 @@
     // <think> produces a fresh block each tool round (think → search → think →
     // answer). The rounds sit back-to-back, but a search whose offset lands in
     // the text gap between them surfaces as a top-level segment that would split
-    // the boxes. Hold such searches: if another think follows, fold them into
-    // the box (so it reads think → search → think as one); if answer text
-    // follows, flush them ahead of it so post-reasoning searches stay outside.
+    // the boxes. Hold EVERY search: if a think follows, fold it into that box
+    // (so it reads think → search → think as one, and the box's header names the
+    // activity); if answer text follows, flush ahead of it so post-answer
+    // searches stay outside and land in the "Sources" fold.
+    //
+    // Holding forward as well as backward matters for models that write a
+    // natural-language preamble before each tool call (Qwen3.8's template asks
+    // for exactly that): their rounds read text → search → think, so the search
+    // has no preceding think to attach to and used to fall through to the bottom
+    // fold — invisible while streaming and easy to miss afterwards.
     const merged: Segment[] = [];
     let pending: Extract<Segment, { kind: "search" }>[] = [];
     for (const seg of out) {
       const prev = merged[merged.length - 1];
       if (seg.kind === "think") {
+        const held: SubItem[] = pending.map((ps) => ({ type: "search", search: ps.search }));
         if (prev && prev.kind === "think") {
-          for (const ps of pending) prev.items.push({ type: "search", search: ps.search });
-          prev.items = [...prev.items, ...seg.items];
+          prev.items = [...prev.items, ...held, ...seg.items];
           prev.open = prev.open || seg.open;
           prev.ms += seg.ms; // coalesced rounds report their combined think time
           if (!prev.title) prev.title = seg.title; // first round's gist names the merged box
         } else {
-          merged.push(...pending, { ...seg, items: [...seg.items] });
+          merged.push({ ...seg, items: [...held, ...seg.items] });
         }
         pending = [];
-      } else if (seg.kind === "search" && prev && prev.kind === "think") {
-        pending.push(seg); // might be sandwiched between think rounds
+      } else if (seg.kind === "search") {
+        pending.push(seg); // might be followed by the think round it belongs to
+      } else if (!seg.text.trim()) {
+        // Whitespace-only gap (the "\n\n" between a tool call and the next
+        // <think>): transparent, so it must not flush the held searches.
+        merged.push(seg);
       } else {
         merged.push(...pending, seg);
         pending = [];
