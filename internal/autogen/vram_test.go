@@ -39,10 +39,31 @@ func TestAutogen_freeVramGBFromStats(t *testing.T) {
 	}
 }
 
+func TestAutogen_noteFreeVramGB_keepsIdleHighWaterMark(t *testing.T) {
+	// The mark stands in for "the card with none of our models resident". A later,
+	// lower reading is a model holding VRAM — sizing the next plan against it
+	// plans into the scraps — so only upward moves count.
+	ResetIdleFreeVramGB()
+	t.Cleanup(ResetIdleFreeVramGB)
+
+	if got := noteFreeVramGB(21.9); got != 21.9 {
+		t.Fatalf("first reading = %v, want 21.9", got)
+	}
+	if got := noteFreeVramGB(2.6); got != 21.9 {
+		t.Fatalf("reading taken with a model resident = %v, want the idle 21.9", got)
+	}
+	// VRAM freed elsewhere legitimately raises the mark.
+	if got := noteFreeVramGB(23.4); got != 23.4 {
+		t.Fatalf("higher reading = %v, want 23.4", got)
+	}
+}
+
 func TestAutogen_resolveAutoVram_postconditions(t *testing.T) {
 	// Hardware-agnostic: with a GPU present resolveAutoVram caps the target at the
 	// live free reading; without one it leaves the static value. Either way the
 	// target must stay strictly positive and never exceed the free reading.
+	ResetIdleFreeVramGB()
+	t.Cleanup(ResetIdleFreeVramGB)
 	const static = 7.0
 	s := &Settings{TargetVramGB: static, VramOverheadGB: 1.0, AutoVram: true}
 	resolveAutoVram(s, nil)
@@ -56,7 +77,9 @@ func TestAutogen_resolveAutoVram_postconditions(t *testing.T) {
 		}
 		return
 	}
-	if s.TargetVramGB > free {
+	// Tolerance, not a hard bound: resolveAutoVram budgets against the idle
+	// high-water mark, which legitimately sits at or above a sample taken later.
+	if s.TargetVramGB > free+0.5 {
 		t.Fatalf("live target %v exceeds free reading %v", s.TargetVramGB, free)
 	}
 	// A static ceiling tighter than free is a deliberate limit and must survive.

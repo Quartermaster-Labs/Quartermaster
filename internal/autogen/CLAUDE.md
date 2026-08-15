@@ -36,7 +36,7 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 | `overrides.go` | Control-file types (`GenerateFile`, `Settings`, `Override`, `VariantSpec`, `GroupSpec`), defaults, loading/merging, `globLike` (PowerShell `-like`). `Settings.RootList()`/`CategoryRoots`/`CategoryOrder` = multi-root scan folders. `Override` carries granular DRY, granular spec, and the image fields. |
 | `sidecar.go` | UI-owned overrides file (`quartermaster-overrides.yaml`): per-model overrides, the global settings patch, managed API keys, and the `BackendEntry` registry. |
 | `hash.go` | Inputs hashing + hash-gated regen (`InputsHash`, `EnsureConfig`, `CurrentInputsHash`). |
-| `vram.go` | Live free-VRAM sampling via `internal/perf` (`SampleFreeVramGB`, `resolveAutoVram`) for the `autoVram` setting. |
+| `vram.go` | Live free-VRAM sampling via `internal/perf` (`SampleFreeVramGB`, `resolveAutoVram`) for the `autoVram` setting. Budgets against the **idle high-water mark** (`noteFreeVramGB`), never the raw sample — autoVram re-resolves on every `EnsureConfig` *and* every estimate preview, both of which run while models are loaded. |
 | `liveoffload.go` | Spawn-time placement recompute (`LiveOffloadArgs`). → `liveoffload.md` |
 | `vllm.go` | Backend selection (`resolveBackend`, `resolveBackendPreferring`, `kindClass`) + the vllm emitter. → `backends.md` |
 | `rope.go` | `ropeCeiling`/`ropeFactor` — the only path that lifts the trained-ctx ceiling. → `sizing.md` |

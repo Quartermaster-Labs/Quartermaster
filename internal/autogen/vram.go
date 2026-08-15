@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -122,6 +123,45 @@ func totalVramGBFromStats(stats []perf.GpuStat) (float64, bool) {
 // need a tick before the first sample lands.
 const autoVramSampleTimeout = 8 * time.Second
 
+// idleFreeVramGB is the highest free-VRAM reading ever sampled, as float64 bits;
+// 0 means nothing sampled yet. It stands in for "the card with none of OUR
+// models resident", which is the only budget a load plan may be sized against.
+//
+// A raw live reading is not that budget. autoVram resolves on every EnsureConfig
+// AND on every estimate preview, and both run happily while a model is loaded —
+// at which point free VRAM is what the resident model left over (2.6GB of 24 on
+// a 27B), so the sizer plans the next load into the scraps and shoves the weights
+// to CPU. The preview showed "2.5 / 2.6 GB, GPU 2/65" for a model that was
+// running fine at 21.4GB, and a settings save in that state would have baked the
+// same budget into config.yaml.
+//
+// Taking the max is what makes it self-correcting: free VRAM peaks when nothing
+// of ours is loaded, so the startup sample (EnsureConfig runs before the router
+// loads anything) sets the mark and every mid-session sample is lower and
+// ignored. Freeing VRAM elsewhere raises it again. The mark can go stale-high if
+// the desktop grows its own usage mid-session, but that is the safe direction:
+// LiveOffloadArgs re-probes live free at spawn and only ever offloads MORE than
+// the baked plan, so an optimistic plan gets corrected at launch while a
+// pessimistic one is permanent.
+var idleFreeVramGB atomic.Uint64
+
+// noteFreeVramGB records a fresh reading and returns the idle high-water mark.
+func noteFreeVramGB(gb float64) float64 {
+	bits := math.Float64bits(gb)
+	for {
+		cur := idleFreeVramGB.Load()
+		if cur != 0 && math.Float64frombits(cur) >= gb {
+			return math.Float64frombits(cur)
+		}
+		if idleFreeVramGB.CompareAndSwap(cur, bits) {
+			return gb
+		}
+	}
+}
+
+// ResetIdleFreeVramGB clears the high-water mark. Tests only.
+func ResetIdleFreeVramGB() { idleFreeVramGB.Store(0) }
+
 // autoVramFloorGB is the smallest usable target we'll accept from a live
 // reading; below it we keep the static configured value instead.
 const autoVramFloorGB = 1.0
@@ -149,7 +189,18 @@ func ResolveAutoVram(s *Settings, logf func(string)) {
 // static TargetVramGB stays a user ceiling, so autoVram can tighten a budget the
 // desktop has eaten into but can't talk a plan past a deliberate limit.
 func resolveAutoVram(s *Settings, logf func(string)) {
-	freeGB, ok := SampleFreeVramGB(autoVramSampleTimeout)
+	sampledGB, ok := SampleFreeVramGB(autoVramSampleTimeout)
+	// Budget against the idle high-water mark, never the raw sample: a sample
+	// taken while one of our own models is resident describes the leftovers, not
+	// what the next load may use. See idleFreeVramGB.
+	freeGB := sampledGB
+	if ok {
+		freeGB = noteFreeVramGB(sampledGB)
+		if logf != nil && freeGB > sampledGB {
+			logf(fmt.Sprintf("autoVram: sampled free=%.2fGB with models resident; using idle free=%.2fGB",
+				sampledGB, freeGB))
+		}
+	}
 	if !ok {
 		if logf != nil {
 			logf(fmt.Sprintf("autoVram: no GPU reading; using static targetVramGB=%g", s.TargetVramGB))

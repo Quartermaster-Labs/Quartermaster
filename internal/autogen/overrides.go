@@ -73,6 +73,8 @@ type Settings struct {
 	// AutoVram measures free VRAM at gen time and caps TargetVramGB at it (the raw
 	// reading — VramOverheadGB is charged inside the plan, not deducted here). Only
 	// ever tightens: a static TargetVramGB below the reading stays a user ceiling.
+	// The reading used is the idle high-water mark, not the instantaneous sample,
+	// so re-resolving while a model is resident can't budget into its leftovers.
 	AutoVram       bool    `yaml:"autoVram"`
 	VramOverheadGB float64 `yaml:"vramOverheadGB"`
 	// ComputeBufFactor scales the modeled compute buffer (logits + activations).
