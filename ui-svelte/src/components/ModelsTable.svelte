@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../lib/tooltip";
   import { ChevronRight, Settings, Play, X, MessageCircle, Star, Search } from "lucide-svelte";
   import type { Model } from "../lib/types";
   import {
@@ -173,11 +174,16 @@
   // (rows must not show through) and the rule as an inset shadow.
   const thCls = "sticky top-0 z-20 bg-surface shadow-[inset_0_-1px_0_var(--color-card-border)]";
   // Same typography as the sort buttons, minus the button: these columns don't sort.
-  const headCls = "py-2 font-mono text-[0.55rem] font-normal uppercase tracking-wide text-txtsecondary";
+  const headCls = "py-2 text-micro font-medium uppercase tracking-wide text-txtsecondary";
 
-  const pillCls = (sel: boolean) =>
-    `rounded-full border px-2 py-0.5 font-mono text-[0.6rem] transition-colors ${
-      sel ? "bg-primary border-primary text-white" : "border-card-border text-txtsecondary hover:text-txtmain hover:border-primary/50"
+  // `btn-primary-text` rather than a hardcoded white: the light theme's primary
+  // is brown and wants the theme's own on-primary ink.
+  // `mono` only for the quant row — those pills carry literal quant strings
+  // (UD-Q4_K_XL). The variant pills next to them are labels (Default, game,
+  // vision) and read better in the UI face.
+  const pillCls = (sel: boolean, mono = false) =>
+    `rounded-full border px-2 py-0.5 text-micro transition-colors ${mono ? "font-mono" : "font-medium"} ${
+      sel ? "bg-primary border-primary text-btn-primary-text" : "border-card-border text-txtsecondary hover:text-txtmain hover:border-primary/50"
     }`;
 </script>
 
@@ -192,7 +198,7 @@
       <button
         class="btn btn--sm inline-flex items-center gap-1.5 hover:border-primary hover:text-primary"
         onclick={() => onPlay?.(m)}
-        title="Load and open in the playground"
+        use:tip={"Load and open in the playground"}
       >
         <MessageCircle class="w-3 h-3 shrink-0" />
         {playLabel?.(m) ?? "Chat"}
@@ -213,7 +219,7 @@
       class="btn btn--sm inline-flex items-center justify-center px-1.5 hover:border-primary hover:text-primary"
       onclick={() => onConfig(base.id, m.id)}
       aria-label="Edit parameters"
-      title="Edit parameters / variants"
+      use:tip={"Edit parameters / variants"}
     >
       <Settings class="w-3.5 h-3.5" />
     </button>
@@ -232,28 +238,30 @@
   <table class="w-full overflow-visible border-separate border-spacing-0 text-left">
     <thead>
       <tr>
-        <!-- The three non-sortable columns still get labelled: a blank header
-             cell reads as a rendering bug, and the ★ / family rail / action
-             columns are exactly the ones whose purpose isn't self-evident. -->
-        <th class="w-8 {thCls} {headCls}" title="Pinned favorites - click a star to pin a model to the top">
+        <!-- The non-sortable columns carry a tooltip and an sr-only name rather
+             than visible text: the ★ and family-rail columns are only a few
+             pixels wide, so a label there wraps or overflows its own column. -->
+        <th class="w-8 {thCls} {headCls}" use:tip={"Pinned favorites - click a star to pin a model to the top"}>
           <Star class="mx-auto w-3 h-3" />
           <span class="sr-only">Favorite</span>
         </th>
-        <th class="w-6 {thCls} {headCls} px-0 text-center" title="Finetune family - the rail spans every tune of one base model">FAM</th>
+        <th class="w-6 {thCls} {headCls} px-0" use:tip={"Finetune family - the rail spans every tune of one base model"}>
+          <span class="sr-only">Family</span>
+        </th>
         {#each SORTS as col (col.key)}
           <th class="font-normal {thCls} {col.num ? 'text-right' : ''} {col.key === 'name' ? '' : 'w-28'}">
             <div class="flex items-center {col.num ? 'justify-end' : ''}">
               <button
-                class="inline-flex items-center gap-1 px-3 py-2 font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary hover:text-txtmain"
+                class="inline-flex items-center gap-1 px-3 py-2 text-micro font-medium uppercase tracking-wide text-txtsecondary hover:text-txtmain"
                 onclick={() => onSort(col.key)}
-                title="Sort ascending → descending → off"
+                use:tip={"Sort ascending → descending → off"}
               >
                 {col.label}
-                <span class="text-[0.55rem] {sortKey === col.key ? 'text-primary' : 'opacity-0'}">{sortDir === "asc" ? "▲" : "▼"}</span>
+                <span class="text-micro {sortKey === col.key ? 'text-primary' : 'opacity-0'}">{sortDir === "asc" ? "▲" : "▼"}</span>
               </button>
               {#if col.key === "name"}
                 {#if searchOpen || search}
-                  <div class="relative flex-1 max-w-64">
+                  <div class="relative ml-auto w-64 max-w-full">
                     <input
                       bind:this={searchInput}
                       bind:value={search}
@@ -261,7 +269,7 @@
                       placeholder="Filter models…"
                       onkeydown={(e) => e.key === "Escape" && closeSearch()}
                       onblur={() => (searchOpen = !!search)}
-                      class="w-full rounded border border-card-border bg-background pl-2 pr-6 py-1 font-mono text-[0.65rem] focus:outline-none focus:border-primary"
+                      class="w-full rounded border border-card-border bg-background pl-2 pr-6 py-1 font-mono text-micro focus:outline-none focus:border-primary"
                     />
                     {#if search}
                       <button
@@ -274,7 +282,7 @@
                     {/if}
                   </div>
                 {:else}
-                  <button class="p-1 text-txtsecondary hover:text-txtmain" onclick={openSearch} aria-label="Search models" title="Search models  ( / )">
+                  <button class="ml-auto mr-2 p-1 text-txtsecondary hover:text-txtmain" onclick={openSearch} aria-label="Search models" use:tip={"Search models  ( / )"}>
                     <Search class="w-3.5 h-3.5" />
                   </button>
                 {/if}
@@ -282,7 +290,7 @@
             </div>
           </th>
         {/each}
-        <th class="w-56 {thCls} {headCls} px-3 text-right">Actions</th>
+        <th class="w-56 {thCls} {headCls} px-3 text-center">Actions</th>
       </tr>
     </thead>
     <tbody>
@@ -300,7 +308,7 @@
                 class="p-0.5 transition-colors {fav ? 'text-warning' : 'text-txtsecondary/40 hover:text-txtsecondary'}"
                 onclick={() => onFavorite(row.key)}
                 aria-label={fav ? "Unpin favorite" : "Pin as favorite"}
-                title={fav ? "Unpin from the top" : "Pin to the top"}
+                use:tip={fav ? "Unpin from the top" : "Pin to the top"}
               >
                 <Star class="w-3.5 h-3.5" fill={fav ? "currentColor" : "none"} />
               </button>
@@ -310,8 +318,8 @@
                    line itself marks both ends. Label runs bottom-up along it. -->
               <td rowspan={familySpan(group)} class="w-6 p-0 border-l-2 border-l-primary/60 bg-primary/[0.06]">
                 <div
-                  class="mx-auto flex items-center justify-center overflow-hidden font-mono text-[0.55rem] uppercase tracking-wide text-primary [writing-mode:vertical-rl] rotate-180"
-                  title="{group.label} - {group.rows.length} finetunes of one base model"
+                  class="mx-auto flex items-center justify-center overflow-hidden font-mono text-micro uppercase tracking-wide text-primary [writing-mode:vertical-rl] rotate-180"
+                  use:tip={`${group.label} - ${group.rows.length} finetunes of one base model`}
                 >
                   {group.label}
                 </div>
@@ -322,7 +330,7 @@
             <td class="py-2 pr-3 pl-3 align-top">
               <div class="flex items-center gap-2 min-w-0">
                 <span class="inline-block w-2 h-2 rounded-full shrink-0 {dotClass(m.state)}"></span>
-                <span class="font-mono text-xs text-txtmain break-all {row.unlisted ? 'opacity-70' : ''}" title={m.id}>
+                <span class="font-mono text-xs text-txtmain break-all {row.unlisted ? 'opacity-70' : ''}" use:tip={m.id}>
                   {rowLabel(row, display)}
                 </span>
                 {#if multiQuant}
@@ -330,20 +338,20 @@
                     class="p-0.5 shrink-0 text-txtsecondary hover:text-txtmain"
                     onclick={() => (expanded[row.key] = !expanded[row.key])}
                     aria-label="Show all quants"
-                    title="Compare every quant of this model"
+                    use:tip={"Compare every quant of this model"}
                   >
                     <ChevronRight class="w-3.5 h-3.5 transition-transform {expanded[row.key] ? 'rotate-90' : ''}" />
                   </button>
                 {/if}
                 {#if isLive(m)}
-                  <span class="font-mono text-[0.55rem] uppercase tracking-wide text-txtsecondary shrink-0">{m.state}</span>
+                  <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary shrink-0">{m.state}</span>
                 {/if}
               </div>
               {#if multiQuant || q.variants.length > 0}
                 <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
                   {#each row.quants as qe (qe.quant)}
                     {#if multiQuant}
-                      <button class={pillCls(qe.quant === q.quant)} onclick={() => (quantPick[row.key] = qe.quant)} title="Quant {qe.quant || 'unknown'}">
+                      <button class={pillCls(qe.quant === q.quant, true)} onclick={() => (quantPick[row.key] = qe.quant)} use:tip={`Quant ${qe.quant || 'unknown'}`}>
                         {qe.quant || "-"}
                         {#if qe.live}<span class="ml-1 inline-block w-1.5 h-1.5 rounded-full align-middle {dotClass(qe.base.state)}"></span>{/if}
                       </button>
@@ -353,7 +361,7 @@
                     {#if multiQuant}<span class="text-card-border">|</span>{/if}
                     <button class={pillCls(variantSelected(row, q.base.id))} onclick={() => pickVariant(row, q.base.id)}>Default</button>
                     {#each q.variants as v (v.model.id)}
-                      <button class={pillCls(variantSelected(row, v.model.id))} onclick={() => pickVariant(row, v.model.id)} title={v.model.id}>
+                      <button class={pillCls(variantSelected(row, v.model.id))} onclick={() => pickVariant(row, v.model.id)} use:tip={v.model.id}>
                         {v.label}
                         {#if isLive(v.model)}<span class="ml-1 inline-block w-1.5 h-1.5 rounded-full align-middle {dotClass(v.model.state)}"></span>{/if}
                       </button>
@@ -379,13 +387,13 @@
                 <td class="py-1.5 pr-3 pl-8">
                   <div class="flex items-center gap-2">
                     <span class="inline-block w-1.5 h-1.5 rounded-full shrink-0 {dotClass(qe.base.state)}"></span>
-                    <span class="font-mono text-[0.7rem] break-all" title={qe.base.id}>{qe.base.id}</span>
+                    <span class="font-mono text-micro break-all" use:tip={qe.base.id}>{qe.base.id}</span>
                   </div>
                 </td>
-                <td class="px-3 py-1.5 font-mono text-[0.7rem]">{qe.quant || "-"}</td>
-                <td class="px-3 py-1.5 text-right font-mono text-[0.7rem] tabular-nums">{fmtGB(qe.base.sizeGB)}</td>
-                <td class="px-3 py-1.5 text-right font-mono text-[0.7rem] tabular-nums">{fmtGB(qe.base.estVramGB)}</td>
-                <td class="px-3 py-1.5 text-right font-mono text-[0.7rem] tabular-nums {qe.base.estRamGB ? 'text-warning' : ''}">
+                <td class="px-3 py-1.5 font-mono text-micro">{qe.quant || "-"}</td>
+                <td class="px-3 py-1.5 text-right font-mono text-micro tabular-nums">{fmtGB(qe.base.sizeGB)}</td>
+                <td class="px-3 py-1.5 text-right font-mono text-micro tabular-nums">{fmtGB(qe.base.estVramGB)}</td>
+                <td class="px-3 py-1.5 text-right font-mono text-micro tabular-nums {qe.base.estRamGB ? 'text-warning' : ''}">
                   {fmtGB(qe.base.estRamGB)}
                 </td>
                 <td class="px-3 py-1.5">{@render actions(qe.base, qe.base, true)}</td>
@@ -395,7 +403,18 @@
         {/each}
       {:else}
         <tr>
-          <td colspan="8" class="px-3 py-6 text-center font-mono text-xs text-txtsecondary">No models match.</td>
+          <td colspan="8" class="px-3 py-12 text-center">
+            <div class="flex flex-col items-center gap-2 text-txtsecondary">
+              <Search class="w-6 h-6 opacity-40" />
+              <p class="text-sm text-txtmain">No models match</p>
+              <p class="text-label">
+                {#if search}Nothing matches <span class="font-mono text-txtmain">{search}</span>.{:else}No models in this category yet.{/if}
+              </p>
+              {#if search}
+                <button class="btn btn--sm mt-1" onclick={closeSearch}>Clear filter</button>
+              {/if}
+            </div>
+          </td>
         </tr>
       {/each}
     </tbody>

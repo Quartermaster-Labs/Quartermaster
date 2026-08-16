@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../lib/tooltip";
   import { metrics, getCapture } from "../stores/api";
   import ActivityStats from "../components/ActivityStats.svelte";
   import Tooltip from "../components/Tooltip.svelte";
@@ -273,7 +274,7 @@
           class="icon-btn"
           aria-pressed={columnsMenuOpen}
           onclick={() => (columnsMenuOpen = !columnsMenuOpen)}
-          title="Select columns"
+          use:tip={"Select columns"}
         ><Columns3 size={15} /></button>
         {#if columnsMenuOpen}
           <div class="absolute right-0 top-full mt-1 bg-surface border border-card-border rounded-md shadow-lg z-10 py-1 min-w-[16rem]" role="list">
@@ -345,7 +346,7 @@
                   {#if key === "id"}
                     <span class="text-txtsecondary">{metric.id + 1}</span>
                   {:else if key === "time"}
-                    <span class="text-txtsecondary" title={new Date(metric.timestamp).toLocaleString()}>{formatRelativeTime(metric.timestamp)}</span>
+                    <span class="text-txtsecondary" use:tip={new Date(metric.timestamp).toLocaleString()}>{formatRelativeTime(metric.timestamp)}</span>
                   {:else if key === "model"}
                     <span class="font-mono text-xs">{metric.model}</span>
                   {:else if key === "req_path"}

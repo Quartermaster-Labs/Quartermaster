@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../../lib/tooltip";
   import { Send, ChevronLeft, ChevronRight, Check } from "lucide-svelte";
   import { fly } from "svelte/transition";
   import { tick } from "svelte";
@@ -249,7 +250,7 @@
               : isDone(i)
                 ? 'w-1.5 bg-primary/50 hover:bg-primary'
                 : 'w-1.5 bg-txtsecondary/25 hover:bg-txtsecondary/50'}"
-            title={item.label}
+            use:tip={item.label}
             aria-label={item.label}
             onclick={() => go(i)}
             {disabled}

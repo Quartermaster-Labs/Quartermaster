@@ -65,7 +65,7 @@
       </span>
     </div>
     <div class="min-w-0 flex-1 py-1.5 pr-2.5 flex flex-col justify-center gap-0.5">
-      <div class="text-[10px] uppercase tracking-wide {onDark ? 'text-white/45' : 'text-txtsecondary'}">
+      <div class="text-micro font-medium uppercase tracking-wide {onDark ? 'text-white/45' : 'text-txtsecondary'}">
         YouTube
       </div>
       <!-- Placeholder bars while the lookup is in flight, so the card doesn't

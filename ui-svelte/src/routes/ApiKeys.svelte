@@ -1,10 +1,12 @@
 <script lang="ts">
+  import { tip } from "../lib/tooltip";
   import { onMount } from "svelte";
   import { Eye, EyeOff, Copy, Trash2, Plus, Check } from "lucide-svelte";
   import { models, listApiKeys, upsertApiKey, deleteApiKey } from "../stores/api";
   import { refreshInferenceKey } from "../lib/inferenceAuth";
   import { modelCategory, MODEL_CATEGORIES } from "../lib/modelUtils";
   import type { ApiKey } from "../lib/types";
+  import { askConfirm } from "../lib/confirm";
 
   let keys = $state<ApiKey[]>([]);
   // The auto-managed Playground key is hidden from the list; it exists only so
@@ -96,7 +98,13 @@
   }
 
   async function remove(name: string): Promise<void> {
-    if (!confirm(`Delete API key "${name}"? Apps using it will lose access.`)) return;
+    const ok = await askConfirm({
+      title: `Delete API key "${name}"?`,
+      body: "Apps using it will lose access.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await deleteApiKey(name);
       await load();
@@ -143,7 +151,7 @@
 
     <!-- Create -->
     <div class="card mb-4">
-      <h6 class="!pb-0 mb-3">New key</h6>
+      <h6 class="mb-3">New key</h6>
       <div class="flex flex-wrap items-end gap-3">
         <label class="flex flex-col gap-1">
           <span class="text-[0.7rem] uppercase tracking-wide text-txtsecondary">Name</span>
@@ -197,7 +205,7 @@
               <button
                 class="ml-auto btn btn--sm uppercase tracking-wide hover:border-error hover:text-error"
                 onclick={() => remove(k.name)}
-                title="Delete key"
+                use:tip={"Delete key"}
               >
                 <Trash2 size={14} />
               </button>
@@ -211,11 +219,11 @@
               <button
                 class="btn btn--sm"
                 onclick={() => (revealed = toggle(revealed, k.name))}
-                title={revealed.has(k.name) ? "Hide" : "Show"}
+                use:tip={revealed.has(k.name) ? "Hide" : "Show"}
               >
                 {#if revealed.has(k.name)}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
               </button>
-              <button class="btn btn--sm" onclick={() => copy(k.key)} title="Copy">
+              <button class="btn btn--sm" onclick={() => copy(k.key)} use:tip={"Copy"}>
                 {#if copied === k.key}<Check size={14} class="text-primary" />{:else}<Copy size={14} />{/if}
               </button>
             </div>

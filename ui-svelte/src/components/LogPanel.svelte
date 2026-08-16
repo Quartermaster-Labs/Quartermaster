@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { tip } from "../lib/tooltip";
   import { persistentStore } from "../stores/persistent";
-  import { Type, WrapText, Search, Copy, Check, X, ArrowDown } from "lucide-svelte";
+  import Select from "./Select.svelte";
+  import { Type, WrapText, Search, Copy, Check, X, ArrowDown, HelpCircle } from "lucide-svelte";
 
   interface Props {
     id: string;
@@ -33,6 +35,14 @@
   function clampFont(px: number): number {
     return Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(px)));
   }
+
+  // ctrl+scroll can land between presets, so the current size joins the list
+  // rather than leaving the picker showing a value it doesn't offer.
+  const fontOptions = $derived(
+    (FONT_PRESETS.includes($fontPxStore) ? FONT_PRESETS : [$fontPxStore, ...FONT_PRESETS].sort((a, b) => a - b)).map(
+      (px) => ({ value: String(px), label: `${px}px` }),
+    ),
+  );
 
   // ctrl/⌘ + wheel over the log body zooms it instead of scrolling the page.
   function handleWheel(e: WheelEvent): void {
@@ -111,36 +121,33 @@
 <div class="card flex flex-col h-full w-full p-0">
   <!-- Toolbar -->
   <div class="flex items-center gap-2 px-3 py-2 border-b border-card-border-inner">
-    <h6 class="!pb-0 truncate">{title}</h6>
+    <h6 class="truncate">{title}</h6>
     {#if subtitle}
       <span
-        class="shrink-0 inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-card-border text-txtsecondary text-[0.55rem] leading-none cursor-help"
-        title={subtitle}
-        aria-label={subtitle}>?</span>
+        class="shrink-0 inline-flex text-txtsecondary cursor-help hover:text-txtmain"
+        use:tip={subtitle}
+        aria-label={subtitle}><HelpCircle size={12} /></span>
     {/if}
-    <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary shrink-0">
+    <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary shrink-0">
       {lineCount.toLocaleString()} lines{#if filterRegex && lineCount !== totalLines}<span class="text-primary"> / {totalLines.toLocaleString()}</span>{/if}
     </span>
 
     <div class="flex gap-1 items-center ml-auto shrink-0">
-      <label class="flex items-center gap-1 text-txtsecondary" title="Font size - ctrl+scroll over the log also works">
+      <div class="flex items-center gap-1 text-txtsecondary">
         <Type size={14} />
-        <select
-          value={$fontPxStore}
-          onchange={(e) => fontPxStore.set(clampFont(Number(e.currentTarget.value)))}
-          class="rounded border border-card-border bg-surface py-0.5 pl-1 pr-0.5 font-mono text-[0.7rem] text-txtmain focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
-        >
-          {#if !FONT_PRESETS.includes($fontPxStore)}
-            <option value={$fontPxStore}>{$fontPxStore}px</option>
-          {/if}
-          {#each FONT_PRESETS as px (px)}
-            <option value={px}>{px}px</option>
-          {/each}
-        </select>
-      </label>
-      <button class="icon-btn" aria-pressed={$wrapTextStore} onclick={toggleWrapText} title="Toggle text wrap"><WrapText size={15} /></button>
-      <button class="icon-btn" aria-pressed={$showFilterStore} onclick={toggleFilter} title="Filter (regex)"><Search size={15} /></button>
-      <button class="icon-btn" onclick={copyLogs} title="Copy visible log">
+        <Select
+          value={String($fontPxStore)}
+          onchange={(v) => fontPxStore.set(clampFont(Number(v)))}
+          options={fontOptions}
+          mono
+          tooltip="Font size - ctrl+scroll over the log also works"
+          ariaLabel="Font size"
+          class="w-20"
+        />
+      </div>
+      <button class="icon-btn" aria-pressed={$wrapTextStore} onclick={toggleWrapText} use:tip={"Toggle text wrap"}><WrapText size={15} /></button>
+      <button class="icon-btn" aria-pressed={$showFilterStore} onclick={toggleFilter} use:tip={"Filter (regex)"}><Search size={15} /></button>
+      <button class="icon-btn" onclick={copyLogs} use:tip={"Copy visible log"}>
         {#if copied}<Check size={15} class="text-success" />{:else}<Copy size={15} />{/if}
       </button>
     </div>

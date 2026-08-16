@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../lib/tooltip";
   // The publisher's picture, with a real fallback.
   //
   // Three things can go wrong and all three land on the same default tile: the
@@ -28,7 +29,7 @@
   <span
     class="{size} rounded-md shrink-0 flex items-center justify-center text-white/85 border border-black/10"
     style="background: linear-gradient(140deg, hsl({hue(author)} 42% 42%), hsl({(hue(author) + 40) % 360} 42% 30%))"
-    title={author}
+    use:tip={author}
   >
     <Box class="w-1/2 h-1/2" strokeWidth={1.8} />
   </span>
@@ -42,7 +43,7 @@
       src={`/api/imgproxy?url=${encodeURIComponent(url)}`}
       alt=""
       loading="lazy"
-      title={author}
+      use:tip={author}
       class="{size} rounded-md object-cover shrink-0 border border-card-border bg-secondary"
       onerror={() => {
         broken = new Set(broken).add(url);

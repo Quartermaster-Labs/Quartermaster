@@ -18,6 +18,7 @@
     type BackendSourceVariant,
   } from "../stores/api";
   import { BACKEND_CLASSES } from "../lib/backends";
+  import Select, { type SelectOption } from "./Select.svelte";
 
   let {
     os,
@@ -78,6 +79,12 @@
   function onKindChange(): void {
     if (!exeTouched) exe = withExt(exeFor(kind));
   }
+
+  // Every engine of every class, flattened, with the class name as the group
+  // heading — the <Select> equivalent of the <optgroup> this used to be.
+  const kindOptions: SelectOption[] = BACKEND_CLASSES.flatMap((cls) =>
+    cls.engines.map((eng) => ({ value: eng.kind, label: eng.label, detail: eng.hint, group: cls.label })),
+  );
 
   async function find(nextTag = tag, refresh = false): Promise<void> {
     if (!repo.trim()) return;
@@ -182,7 +189,7 @@
 <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
   <div class="w-full max-w-3xl max-h-[90vh] flex flex-col rounded-md border border-card-border bg-surface shadow-xl">
     <header class="flex items-center gap-2 px-4 py-3 border-b border-card-border">
-      <h6 class="!pb-0">{source ? "Edit tracked repo" : "Track a backend repo"}</h6>
+      <h6 >{source ? "Edit tracked repo" : "Track a backend repo"}</h6>
       <button
         type="button"
         class="ml-auto p-1 rounded text-txtsecondary hover:text-txtmain"
@@ -222,15 +229,17 @@
         <div class="flex flex-col gap-2">
           <div class="flex flex-wrap items-center gap-2">
             <span class="text-[0.7rem] text-txtsecondary">Files in</span>
-            <select
+            <Select
               bind:value={tag}
-              onchange={() => find(tag)}
-              class="rounded border border-card-border bg-surface px-2 py-1 font-mono text-xs text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
-            >
-              {#each assets.releases as r (r.tag)}
-                <option value={r.tag}>{r.tag}{r.prerelease ? " (pre-release)" : ""}</option>
-              {/each}
-            </select>
+              onchange={(v) => find(v)}
+              mono
+              options={assets.releases.map((r) => ({
+                value: r.tag,
+                label: `${r.tag}${r.prerelease ? " (pre-release)" : ""}`,
+              }))}
+              ariaLabel="Release tag"
+              class="w-56"
+            />
             <label class="ml-auto inline-flex items-center gap-1.5 text-[0.7rem] text-txtsecondary">
               <input type="checkbox" bind:checked={showAll} class="accent-primary" />
               Show every file
@@ -301,19 +310,19 @@
                     </span>
                   {/each}
                   {#if freeAssets.length}
-                    <select
+                    <!-- An action menu, not a value: it stays parked on the
+                         placeholder and each pick appends a chip beside it. -->
+                    <Select
                       value=""
-                      onchange={(e) => {
-                        addExtra(v, e.currentTarget.value);
-                        e.currentTarget.value = "";
-                      }}
-                      class="rounded border border-card-border bg-surface px-1.5 py-0.5 font-mono text-[0.6rem] text-txtsecondary focus:outline-none"
-                    >
-                      <option value="">+ companion file…</option>
-                      {#each freeAssets as a (a.name)}
-                        <option value={a.name}>{a.name}</option>
-                      {/each}
-                    </select>
+                      onchange={(name) => name && addExtra(v, name)}
+                      mono
+                      options={[
+                        { value: "", label: "+ companion file…" },
+                        ...freeAssets.map((a) => ({ value: a.name, label: a.name })),
+                      ]}
+                      ariaLabel="Add companion file"
+                      class="w-44"
+                    />
                   {/if}
                 </div>
               </div>
@@ -326,21 +335,8 @@
              look for inside the downloaded archive. -->
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div class="flex flex-col gap-1">
-            <label class="text-[0.7rem] text-txtsecondary" for="track-kind">What is this backend?</label>
-            <select
-              id="track-kind"
-              bind:value={kind}
-              onchange={onKindChange}
-              class="rounded border border-card-border bg-surface px-2 py-1 text-xs text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
-            >
-              {#each BACKEND_CLASSES as cls (cls.id)}
-                <optgroup label={cls.label}>
-                  {#each cls.engines as eng (eng.kind)}
-                    <option value={eng.kind} title={eng.hint ?? ""}>{eng.label}</option>
-                  {/each}
-                </optgroup>
-              {/each}
-            </select>
+            <span class="text-[0.7rem] text-txtsecondary">What is this backend?</span>
+            <Select bind:value={kind} onchange={onKindChange} options={kindOptions} ariaLabel="What is this backend?" />
           </div>
 
           <div class="flex flex-col gap-1">

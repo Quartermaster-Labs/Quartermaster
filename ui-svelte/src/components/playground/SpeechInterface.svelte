@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../../lib/tooltip";
   import { get } from "svelte/store";
   import { models } from "../../stores/api";
   import { userPref } from "../../stores/prefs";
@@ -18,6 +19,7 @@
   import ModelSelector from "./ModelSelector.svelte";
   import { Volume2, VolumeX, Download, RefreshCw, Plus, Pencil, X, Save, Upload, Square, Check, MoreVertical, Trash2, Mic, ChevronLeft } from "lucide-svelte";
   import { scrollFade } from "../../lib/scrollFade";
+  import { askConfirm } from "../../lib/confirm";
   import AudioPlayer from "./AudioPlayer.svelte";
 
   // Speech studio. Left column (60%): a voice panel that fills the height (voice
@@ -163,7 +165,8 @@
   // to tts-server's /v1/voices/{name}). Only base-model clones are deletable.
   async function deleteVoice(name: string) {
     const model = $selectedModelStore;
-    if (!model || !name || !confirm(`Delete voice "${name}"?`)) return;
+    if (!model || !name) return;
+    if (!(await askConfirm({ title: `Delete voice "${name}"?`, confirmLabel: "Delete", danger: true }))) return;
     try {
       const resp = await fetch(`/v1/audio/voices/${encodeURIComponent(name)}?model=${encodeURIComponent(model)}`, {
         method: "DELETE",
@@ -649,7 +652,7 @@
               {#if !isVoiceDesign}
                 <span
                   class="w-1.5 h-1.5 rounded-full {modelReady ? 'bg-green-500' : 'bg-txtsecondary/40'}"
-                  title={modelReady ? "Model loaded - voice list is live" : "Model not loaded - voice list is from cache"}
+                  use:tip={modelReady ? "Model loaded - voice list is live" : "Model not loaded - voice list is from cache"}
                 ></span>
               {/if}
             </span>
@@ -658,7 +661,7 @@
                 class="p-1 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
                 onclick={refreshVoices}
                 disabled={isLoadingVoices || !$selectedModelStore}
-                title="Load the voices this model actually offers"
+                use:tip={"Load the voices this model actually offers"}
               >
                 <RefreshCw class="w-3.5 h-3.5 {isLoadingVoices ? 'animate-spin' : ''}" />
               </button>
@@ -690,7 +693,7 @@
                   <button
                     class="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 {$selectedPresetStore === p.name ? 'text-white/70 hover:text-white' : 'text-txtsecondary hover:text-primary'}"
                     onclick={() => openPreset(p)}
-                    title="Edit preset"
+                    use:tip={"Edit preset"}
                   >
                     <Pencil class="w-3.5 h-3.5" />
                   </button>
@@ -698,7 +701,7 @@
                     <button
                       class="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 {$selectedPresetStore === p.name ? 'text-white/70 hover:text-white' : 'text-txtsecondary hover:text-red-500'}"
                       onclick={() => deletePreset(p.name)}
-                      title="Delete preset"
+                      use:tip={"Delete preset"}
                     >
                       <Trash2 class="w-3.5 h-3.5" />
                     </button>
@@ -725,7 +728,7 @@
                     <button
                       class="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 {$selectedVoiceStore === v ? 'text-white/70 hover:text-white' : 'text-txtsecondary hover:text-red-500'}"
                       onclick={() => deleteVoice(v)}
-                      title="Delete voice"
+                      use:tip={"Delete voice"}
                     >
                       <Trash2 class="w-3.5 h-3.5" />
                     </button>
@@ -772,7 +775,7 @@
             </div>
 
             {#if isGenerating}
-              <button class="composer-icon-btn shrink-0" onclick={cancelGeneration} title="Stop">
+              <button class="composer-icon-btn shrink-0" onclick={cancelGeneration} use:tip={"Stop"}>
                 <Square class="w-[1.125rem] h-[1.125rem]" fill="currentColor" />
               </button>
             {/if}
@@ -804,8 +807,8 @@
                         onkeydown={editKeyDown}
                       ></textarea>
                       <div class="flex justify-end gap-1.5">
-                        <button class="p-1.5 rounded hover:bg-secondary text-txtsecondary" onclick={cancelEdit} title="Cancel"><X class="w-4 h-4" /></button>
-                        <button class="p-1.5 rounded hover:bg-secondary text-txtsecondary" onclick={saveEdit} title="Save & regenerate"><Save class="w-4 h-4" /></button>
+                        <button class="p-1.5 rounded hover:bg-secondary text-txtsecondary" onclick={cancelEdit} use:tip={"Cancel"}><X class="w-4 h-4" /></button>
+                        <button class="p-1.5 rounded hover:bg-secondary text-txtsecondary" onclick={saveEdit} use:tip={"Save & regenerate"}><Save class="w-4 h-4" /></button>
                       </div>
                     </div>
                   {:else}
@@ -814,7 +817,7 @@
                       <button
                         class="p-1 rounded hover:bg-secondary text-txtsecondary disabled:opacity-40"
                         onclick={() => (menuIdx = menuIdx === ti ? null : ti)}
-                        title="More"
+                        use:tip={"More"}
                       >
                         <MoreVertical class="w-4 h-4" />
                       </button>
@@ -859,7 +862,7 @@
                         <button
                           class="shrink-0 self-end p-1 rounded hover:bg-secondary text-txtsecondary"
                           onclick={() => downloadAudio(t)}
-                          title="Download"
+                          use:tip={"Download"}
                         >
                           <Download class="w-4 h-4" />
                         </button>
@@ -909,7 +912,7 @@
           <input type="range" min="0" max="1" step="0.01" bind:value={$volumeStore} class="flex-1 accent-primary" />
           <Volume2 class="w-4 h-4 text-txtsecondary shrink-0" />
           <span class="text-[0.6875rem] text-txtsecondary tabular-nums w-9 text-right">{Math.round($volumeStore * 100)}%</span>
-          <label class="shrink-0 flex items-center gap-1.5 pl-2 ml-1 border-l border-card-border text-[0.6875rem] uppercase tracking-wide text-txtsecondary cursor-pointer" title="Auto-play new clips">
+          <label class="shrink-0 flex items-center gap-1.5 pl-2 ml-1 border-l border-card-border text-[0.6875rem] uppercase tracking-wide text-txtsecondary cursor-pointer" use:tip={"Auto-play new clips"}>
             <input type="checkbox" class="accent-primary w-3.5 h-3.5" bind:checked={$autoPlayStore} />
             Auto-play
           </label>
@@ -923,14 +926,14 @@
         <div class="w-full max-w-lg flex flex-col gap-4 rounded-2xl border border-card-border bg-surface p-5 shadow-xl">
           <div class="flex items-center gap-2">
             {#if cloneStep !== "choose"}
-              <button class="p-1 -ml-1 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary" onclick={() => (cloneStep = "choose")} title="Back">
+              <button class="p-1 -ml-1 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary" onclick={() => (cloneStep = "choose")} use:tip={"Back"}>
                 <ChevronLeft class="w-4 h-4" />
               </button>
             {/if}
             <h3 class="flex-1 text-sm font-medium text-txtmain">
               {cloneStep === "choose" ? "Clone a voice" : cloneStep === "live" ? "Record live" : "Clone from clip"}
             </h3>
-            <button class="p-1 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary" onclick={closeClone} title="Close">
+            <button class="p-1 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary" onclick={closeClone} use:tip={"Close"}>
               <X class="w-4 h-4" />
             </button>
           </div>
@@ -1037,7 +1040,7 @@
         <div class="w-full max-w-lg flex flex-col gap-4 rounded-2xl border border-card-border bg-surface p-5 shadow-xl">
           <div class="flex items-center justify-between">
             <h3 class="text-sm font-medium text-txtmain">Design a voice</h3>
-            <button class="p-1 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary" onclick={() => (showPreset = false)} title="Close">
+            <button class="p-1 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary" onclick={() => (showPreset = false)} use:tip={"Close"}>
               <X class="w-4 h-4" />
             </button>
           </div>

@@ -3,6 +3,7 @@
   import Router from "svelte-spa-router";
   import Sidebar from "./components/Sidebar.svelte";
   import StatusRail from "./components/StatusRail.svelte";
+  import ConfirmHost from "./components/ConfirmHost.svelte";
   import Dashboard from "./routes/Dashboard.svelte";
   import Models from "./routes/Models.svelte";
   import Browse from "./routes/Browse.svelte";
@@ -78,6 +79,9 @@
     };
   });
 </script>
+
+<!-- One dialog host per app root; askConfirm() from anywhere renders here. -->
+<ConfirmHost />
 
 {#if mode === "playground"}
   <PlaygroundApp />

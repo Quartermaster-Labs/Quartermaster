@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../lib/tooltip";
   import { push } from "svelte-spa-router";
   import { models, inFlightRequests, unloadAllModels } from "../stores/api";
   import { latestGpu, latestSys } from "../stores/perf";
@@ -39,22 +40,24 @@
 </script>
 
 <div
-  class="flex items-center gap-4 border-b border-border bg-surface px-4 h-10 shrink-0 font-mono text-xs overflow-x-auto whitespace-nowrap pretty-scroll"
+  class="flex items-center gap-4 border-b border-border bg-surface shadow-inset-sm px-4 h-10 shrink-0 text-label overflow-x-auto whitespace-nowrap pretty-scroll"
 >
   <!-- Loaded model(s) -->
   <div class="flex items-center gap-2 min-w-0">
     {#if liveModels.length === 0}
       <span class="inline-block w-2 h-2 rounded-full bg-txtsecondary"></span>
-      <span class="text-txtsecondary uppercase tracking-wide">No model loaded</span>
+      <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">No model loaded</span>
     {:else}
       {#each liveModels as m (m.id)}
+        <!-- Chip, not bare text: it's the one clickable thing in a rail of
+             read-only readouts, so it needs to look pressable. -->
         <button
-          class="group flex items-center gap-1.5 min-w-0 transition-colors cursor-pointer"
+          class="group flex items-center gap-1.5 min-w-0 rounded border border-transparent px-1.5 py-0.5 transition-colors cursor-pointer hover:border-card-border hover:bg-secondary"
           onclick={() => openInModels(m)}
-          title="{m.id} - open in Models"
+          use:tip={`${m.id} - open in Models`}
         >
           <span class="inline-block w-2 h-2 rounded-full shrink-0 {dotClass(m.state)}"></span>
-          <span class="text-[0.6rem] uppercase tracking-widest text-txtsecondary truncate min-w-0 max-w-[14rem] group-hover:text-txtmain">{prettifyModelName(m.name || m.id)}</span>
+          <span class="font-mono text-micro text-txtsecondary truncate min-w-0 max-w-[14rem] group-hover:text-txtmain">{prettifyModelName(m.name || m.id)}</span>
         </button>
       {/each}
     {/if}
@@ -63,8 +66,8 @@
   <div class="h-4 w-px bg-border"></div>
 
   <!-- VRAM -->
-  <div class="flex items-center gap-2 w-56 shrink-0">
-    <span class="text-txtsecondary uppercase tracking-wide">VRAM</span>
+  <div class="flex items-center gap-2 w-72 shrink-0">
+    <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">VRAM</span>
     {#if $latestGpu}
       <div class="flex-1">
         <VramGauge
@@ -76,7 +79,7 @@
           height="0.4rem"
         />
       </div>
-      <span class="text-txtmain tabular-nums shrink-0">
+      <span class="font-mono text-micro text-txtmain tabular-nums shrink-0">
         {($latestGpu.mem_used_mb / 1024).toFixed(1)}/{($latestGpu.mem_total_mb / 1024).toFixed(1)}G
       </span>
     {:else}
@@ -88,8 +91,8 @@
   {#if $latestSys}
     <div class="h-4 w-px bg-border"></div>
     <div class="flex items-center gap-1.5 shrink-0">
-      <span class="text-txtsecondary uppercase tracking-wide">RAM</span>
-      <span class="text-txtmain tabular-nums">
+      <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">RAM</span>
+      <span class="font-mono text-micro text-txtmain tabular-nums">
         {($latestSys.mem_used_mb / 1024).toFixed(1)}/{($latestSys.mem_total_mb / 1024).toFixed(1)}G
       </span>
     </div>
@@ -98,8 +101,8 @@
   <!-- In-flight -->
   <div class="h-4 w-px bg-border"></div>
   <div class="flex items-center gap-1.5 shrink-0">
-    <span class="text-txtsecondary uppercase tracking-wide">Reqs</span>
-    <span class="text-txtmain tabular-nums">{$inFlightRequests} in-flight</span>
+    <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">In-flight</span>
+    <span class="font-mono text-micro text-txtmain tabular-nums">{$inFlightRequests}</span>
   </div>
 
   <!-- Downloads: an icon with a live count, opening a panel (see the component

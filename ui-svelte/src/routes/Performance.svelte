@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../lib/tooltip";
   import { onMount } from "svelte";
   import { fetchPerformance } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
@@ -374,7 +375,7 @@
   <!-- Toolbar -->
   <div class="flex items-center gap-3 flex-wrap">
     <div class="flex items-baseline gap-2">
-      <h6 class="!pb-0">Performance</h6>
+      <h6>Performance</h6>
       <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary border border-card-border rounded px-1.5 py-0.5">experimental</span>
     </div>
     <span class="text-xs text-txtsecondary hidden md:inline">Live system &amp; GPU telemetry - cadence and available metrics depend on the platform backend.</span>
@@ -386,7 +387,7 @@
           <button aria-pressed={$selectedInterval === i} onclick={() => handleIntervalChange(i)}>{intv.label}</button>
         {/each}
       </div>
-      <button class="icon-btn" title="Refresh now" onclick={manualRefresh} disabled={refreshing}>
+      <button class="icon-btn" use:tip={"Refresh now"} onclick={manualRefresh} disabled={refreshing}>
         <RefreshCw size={15} class={refreshing ? "animate-spin" : ""} />
       </button>
     </div>
@@ -425,7 +426,7 @@
 
   <!-- GPU Section -->
   <section class="space-y-3">
-    <h6 class="!pb-0 uppercase tracking-wide text-txtsecondary text-xs">GPU</h6>
+    <h6 class="uppercase tracking-wide text-txtsecondary">GPU</h6>
     {#if !hasGpuData}
       <p class="text-txtsecondary card p-4 text-sm">No GPU data available</p>
     {:else}
@@ -477,7 +478,7 @@
 
   <!-- System Section -->
   <section class="space-y-3">
-    <h6 class="!pb-0 uppercase tracking-wide text-txtsecondary text-xs">System</h6>
+    <h6 class="uppercase tracking-wide text-txtsecondary">System</h6>
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <PerformanceChart
         title="CPU Utilization (%)"

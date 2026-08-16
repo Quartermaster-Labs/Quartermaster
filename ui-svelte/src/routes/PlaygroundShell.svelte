@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip as tooltip } from "../lib/tooltip";
   import { get } from "svelte/store";
   import {
     selectedTabStore,
@@ -69,6 +70,7 @@
   import { MessageSquare, Image, Volume2, Mic, LogOut, Plus, Trash2, Settings, HelpCircle, BookOpen, SlidersHorizontal, Search, FileText, Pencil, BrainCircuit, RefreshCw, Square } from "lucide-svelte";
   import WikiModal from "../components/WikiModal.svelte";
   import ChatInterface from "../components/playground/ChatInterface.svelte";
+  import Select from "../components/Select.svelte";
   import ImageInterface from "../components/playground/ImageInterface.svelte";
   import AudioInterface from "../components/playground/AudioInterface.svelte";
   import SpeechInterface from "../components/playground/SpeechInterface.svelte";
@@ -590,7 +592,7 @@
       {@const active = $selectedTabStore === tab.id}
       <button
         onclick={() => clickTab(tab.id)}
-        title={tab.label}
+        use:tooltip={tab.label}
         class="w-full flex items-center pr-3 py-2 border-l-2 transition-colors {active
           ? 'border-primary text-txtmain bg-secondary/60'
           : 'border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40'}"
@@ -599,13 +601,13 @@
           <span class="relative">
             <tab.icon size={18} strokeWidth={active ? 2.4 : 1.8} class="shrink-0" />
             {#if tab.id === "chat" && $generatingChatId}
-              <span class="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary reason-glow" title="A chat is generating"></span>
+              <span class="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary reason-glow" use:tooltip={"A chat is generating"}></span>
             {/if}
             {#if tab.id === "images" && $generatingImageChatId}
-              <span class="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary reason-glow" title="An image is generating"></span>
+              <span class="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary reason-glow" use:tooltip={"An image is generating"}></span>
             {/if}
             {#if tab.id === "speech" && $generatingSpeechChatId}
-              <span class="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary reason-glow" title="Speech is generating"></span>
+              <span class="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary reason-glow" use:tooltip={"Speech is generating"}></span>
             {/if}
           </span>
         </span>
@@ -621,7 +623,7 @@
          own row like the tabs. -->
     <button
       onclick={() => { wikiArticleId = null; showWiki = true; }}
-      title="Help"
+      use:tooltip={"Help"}
       class="shrink-0 w-full flex items-center pr-3 py-2 border-l-2 border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
       <span class="w-14 shrink-0 -ml-0.5 flex items-center justify-center"><BookOpen size={18} class="shrink-0" /></span>
@@ -631,7 +633,7 @@
     </button>
     <button
       onclick={() => (showSettings = true)}
-      title="Settings"
+      use:tooltip={"Settings"}
       class="shrink-0 w-full flex items-center pr-3 py-2 border-l-2 border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
       <span class="w-14 shrink-0 -ml-0.5 flex items-center justify-center"><Settings size={18} class="shrink-0" /></span>
@@ -641,7 +643,7 @@
     </button>
     <button
       onclick={() => (confirmLogout = true)}
-      title="Log out ({$me})"
+      use:tooltip={`Log out (${$me})`}
       class="w-full flex items-center pr-3 py-2 border-l-2 border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
       <span class="w-14 shrink-0 -ml-0.5 flex items-center justify-center"><LogOut size={18} class="shrink-0" /></span>
@@ -817,7 +819,7 @@
       tabindex="-1"
     >
       {#snippet tip(text: string)}
-        <span class="inline-flex shrink-0 cursor-help text-txtsecondary/70 hover:text-txtsecondary" title={text}>
+        <span class="inline-flex shrink-0 cursor-help text-txtsecondary/70 hover:text-txtsecondary" use:tooltip={text}>
           <HelpCircle class="w-3.5 h-3.5" />
         </span>
       {/snippet}
@@ -847,16 +849,16 @@
         <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll p-4 flex flex-col gap-4">
           {#if settingsCat === "general"}
             <div class="flex flex-col gap-1">
-              <label class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary" for="theme-select">Theme</label>
-              <select
-                id="theme-select"
-                class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary"
+              <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">Theme</span>
+              <Select
                 bind:value={$themeMode}
-              >
-                <option value="system">System</option>
-                <option value="light">Light</option>
-                <option value="dark">Dark</option>
-              </select>
+                ariaLabel="Theme"
+                options={[
+                  { value: "system", label: "System" },
+                  { value: "light", label: "Light" },
+                  { value: "dark", label: "Dark" },
+                ]}
+              />
             </div>
 
             <div class="flex flex-col gap-1">
@@ -893,47 +895,41 @@
 
             <!-- Read-aloud TTS. Hidden outright when no TTS model is installed -
                  an empty picker for a feature the box can't do is just noise.
-                 Native <select> on purpose: this panel is a scroll container, and
-                 ModelSelector's absolutely-positioned menu is clipped by it, so
-                 its options landed further down the page instead of over the row.
-                 A native menu renders in the browser's own layer. -->
+                 <Select> rather than ModelSelector: this panel is a scroll
+                 container, and ModelSelector's absolutely-positioned menu is
+                 clipped by it, so its options landed further down the page
+                 instead of over the row. Select's menu is position:fixed. -->
             {#if $ttsModels.length > 0}
               <div class="flex flex-col gap-1">
-                <label class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary" for="tts-model">
+                <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">
                   Read Aloud {@render tip("Model behind the speaker button under each chat reply. Loading it can evict the chat model - one GPU, one pool.")}
-                </label>
+                </span>
                 <!-- Bound to the EFFECTIVE model (auto-picked when nothing is
                      chosen), so the row never reads "none" while the button works. -->
-                <select
-                  id="tts-model"
-                  class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary"
+                <Select
                   value={$effectiveTtsModel}
-                  onchange={(e) => chatTtsModelStore.set(e.currentTarget.value)}
-                >
-                  {#each $ttsModels as m (m.id)}
-                    <option value={m.id}>{m.id}</option>
-                  {/each}
-                </select>
+                  onchange={(v) => chatTtsModelStore.set(v)}
+                  mono
+                  ariaLabel="Read-aloud model"
+                  options={$ttsModels.map((m) => ({ value: m.id, label: m.id }))}
+                />
               </div>
 
               <div class="flex flex-col gap-1">
-                <label class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary" for="tts-voice">
+                <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">
                   Voice {@render tip("Speaker the read-aloud button uses. Shared with the Speech tab - one person, one voice. Refresh loads the model to ask it for the full list, including any cloned voices.")}
-                </label>
+                </span>
                 <div class="flex items-center gap-2">
-                  <select
-                    id="tts-voice"
-                    class="flex-1 min-w-0 px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary"
+                  <Select
                     bind:value={$chatTtsVoiceStore}
-                  >
-                    {#each ttsVoices as v (v)}
-                      <option value={v}>{voiceLabel(v)}</option>
-                    {/each}
-                  </select>
+                    ariaLabel="Voice"
+                    class="flex-1 min-w-0"
+                    options={ttsVoices.map((v) => ({ value: v, label: voiceLabel(v) }))}
+                  />
                   <button
                     type="button"
                     class="p-1.5 rounded-md border border-card-border text-txtsecondary hover:text-txtmain hover:border-primary/50 disabled:opacity-50 transition-colors"
-                    title={ttsTestAudio || ttsTestBusy
+                    use:tooltip={ttsTestAudio || ttsTestBusy
                       ? "Stop (or pick another voice to hear that one instead)"
                       : `Hear this voice (loads the TTS model). Says: "${VOICE_TEST_LINE}"`}
                     disabled={!$effectiveTtsModel}
@@ -948,7 +944,7 @@
                   <button
                     type="button"
                     class="p-1.5 rounded-md border border-card-border text-txtsecondary hover:text-txtmain hover:border-primary/50 disabled:opacity-50 transition-colors"
-                    title="Refresh voices (loads the TTS model)"
+                    use:tooltip={"Refresh voices (loads the TTS model)"}
                     disabled={ttsVoicesLoading || !$effectiveTtsModel}
                     onclick={refreshTtsVoices}
                   >
@@ -1032,10 +1028,10 @@
                         {m.source === "assistant" ? "Remembered by the assistant" : "Added by you"}{memDate(m.updatedAt) ? ` · ${memDate(m.updatedAt)}` : ""}
                       </span>
                     </div>
-                    <button type="button" class="shrink-0 p-1.5 rounded text-txtsecondary hover:text-txtmain" title="Edit" onclick={() => startEditMemory(m)}>
+                    <button type="button" class="shrink-0 p-1.5 rounded text-txtsecondary hover:text-txtmain" use:tooltip={"Edit"} onclick={() => startEditMemory(m)}>
                       <Pencil class="w-3.5 h-3.5" />
                     </button>
-                    <button type="button" class="shrink-0 p-1.5 rounded text-txtsecondary hover:text-red-400" title="Delete" disabled={memBusy} onclick={() => removeMemory(m.id)}>
+                    <button type="button" class="shrink-0 p-1.5 rounded text-txtsecondary hover:text-red-400" use:tooltip={"Delete"} disabled={memBusy} onclick={() => removeMemory(m.id)}>
                       <Trash2 class="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -1073,7 +1069,7 @@
                         />
                         <span class="flex-1 min-w-0 truncate text-sm {p.enabled ? 'text-txtmain' : 'text-txtsecondary'}">{meta.label}</span>
                         {#if p.enabled && !providerReady(p)}
-                          <span class="shrink-0 text-[0.65rem] uppercase tracking-wide text-amber-500" title="Enabled but not configured - it is skipped, not tried.">
+                          <span class="shrink-0 text-[0.65rem] uppercase tracking-wide text-amber-500" use:tooltip={"Enabled but not configured - it is skipped, not tried."}>
                             needs setup
                           </span>
                         {/if}
@@ -1081,14 +1077,14 @@
                           class="shrink-0 px-1 text-txtsecondary hover:text-txtmain disabled:opacity-30"
                           onclick={() => moveProvider(i, -1)}
                           disabled={i === 0}
-                          title="Try earlier"
+                          use:tooltip={"Try earlier"}
                           aria-label="Move {meta.label} up">↑</button
                         >
                         <button
                           class="shrink-0 px-1 text-txtsecondary hover:text-txtmain disabled:opacity-30"
                           onclick={() => moveProvider(i, 1)}
                           disabled={i === providers.length - 1}
-                          title="Try later"
+                          use:tooltip={"Try later"}
                           aria-label="Move {meta.label} down">↓</button
                         >
                       </div>
@@ -1130,14 +1126,14 @@
                             class="shrink-0 px-2.5 py-1 rounded-md border border-card-border bg-surface text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
                             onclick={() => testProvider(p)}
                             disabled={probe?.state === "testing" || !providerReady(p)}
-                            title="Run one query against this provider only"
+                            use:tooltip={"Run one query against this provider only"}
                           >
                             {probe?.state === "testing" ? "Testing…" : "Test"}
                           </button>
                           {#if probe?.state === "ok"}
                             <span class="text-xs text-green-500 min-w-0 truncate">{probe.msg}</span>
                           {:else if probe?.state === "fail"}
-                            <span class="text-xs text-red-500 min-w-0 truncate" title={probe.msg}>{probe.msg}</span>
+                            <span class="text-xs text-red-500 min-w-0 truncate" use:tooltip={probe.msg}>{probe.msg}</span>
                           {:else if meta.signupUrl}
                             <a class="text-xs text-txtsecondary hover:text-primary underline" href={meta.signupUrl} target="_blank" rel="noopener noreferrer">Get a key</a>
                           {/if}
@@ -1206,7 +1202,7 @@
                       <span class="text-xs text-txtsecondary truncate">{p.content.trim() || "Empty - no system prompt."}</span>
                     </span>
                   </button>
-                  <button type="button" class="shrink-0 p-1.5 rounded text-txtsecondary hover:text-txtmain" onclick={() => editPreset(p)} title="Edit preset">
+                  <button type="button" class="shrink-0 p-1.5 rounded text-txtsecondary hover:text-txtmain" onclick={() => editPreset(p)} use:tooltip={"Edit preset"}>
                     <Pencil class="w-3.5 h-3.5" />
                   </button>
                 </div>
@@ -1280,7 +1276,7 @@
             <div class="flex-1 min-w-0">
               <span class="flex items-center gap-1.5 text-[0.8125rem] font-medium text-txtmain">
                 {sec.label}
-                <span class="inline-flex shrink-0 cursor-help text-txtsecondary/70 hover:text-txtsecondary" title={sec.note}><HelpCircle class="w-3.5 h-3.5" /></span>
+                <span class="inline-flex shrink-0 cursor-help text-txtsecondary/70 hover:text-txtsecondary" use:tooltip={sec.note}><HelpCircle class="w-3.5 h-3.5" /></span>
               </span>
               <p class="text-xs text-txtsecondary truncate mt-0.5 {val.trim() ? '' : 'italic'}">{val.trim() ? val : sec.blank}</p>
             </div>
@@ -1293,7 +1289,7 @@
           <button
             class="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-card-border text-txtsecondary hover:text-red-500 hover:border-red-500 transition-colors text-sm"
             onclick={deletePreset}
-            title="Delete this preset"
+            use:tooltip={"Delete this preset"}
           >
             <Trash2 class="w-3.5 h-3.5" /> Delete
           </button>
@@ -1339,7 +1335,7 @@
         <button
           class="px-3 py-1.5 rounded-md border border-card-border text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors text-sm"
           onclick={revertSection}
-          title="Restore the default for this section"
+          use:tooltip={"Restore the default for this section"}
         >
           Revert to default
         </button>
@@ -1373,7 +1369,7 @@
       <button
         class="shrink-0 grid place-items-center w-6 h-6 rounded-md bg-[#141414] text-[#ededee] border border-card-border hover:bg-[#1e1e1e] hover:text-white transition-colors"
         onclick={onNew}
-        title={newTip}
+        use:tooltip={newTip}
         aria-label={newTip}
       >
         <Plus class="w-3.5 h-3.5" />
@@ -1389,7 +1385,7 @@
           : 'text-txtsecondary hover:text-txtmain hover:bg-white/[0.03]'}"
       >
         {#if session.id === generatingId}
-          <span class="w-1.5 h-1.5 shrink-0 rounded-full bg-primary reason-glow" title="Generating…"></span>
+          <span class="w-1.5 h-1.5 shrink-0 rounded-full bg-primary reason-glow" use:tooltip={"Generating…"}></span>
         {/if}
         {#if thumbsFor}
           {@const thumbs = thumbsFor(session.id)}
@@ -1401,13 +1397,13 @@
             </span>
           {/if}
         {/if}
-        <button class="flex-1 min-w-0 text-left truncate" onclick={() => onOpen(session.id)} title={session.title || emptyLabel}>
+        <button class="flex-1 min-w-0 text-left truncate" onclick={() => onOpen(session.id)} use:tooltip={session.title || emptyLabel}>
           {session.title || emptyLabel}
         </button>
         <button
           class="shrink-0 p-0.5 rounded text-txtsecondary opacity-0 group-hover/row:opacity-100 hover:text-red-500 transition-opacity"
           onclick={(e) => { e.stopPropagation(); onDelete(session.id); }}
-          title="Delete"
+          use:tooltip={"Delete"}
         >
           <Trash2 class="w-3.5 h-3.5" />
         </button>

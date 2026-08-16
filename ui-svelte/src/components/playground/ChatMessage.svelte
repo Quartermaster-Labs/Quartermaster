@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../../lib/tooltip";
   import { renderMarkdown, renderStreamingMarkdown, createStreamingCache } from "../../lib/markdown";
   import type { RenderedBlock } from "../../lib/markdown";
   import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronRight, Search, BookOpen, PenLine, Wrench, Reply, Youtube, FileText, ArrowRightLeft, Clock, Calculator, Ruler, CloudSun, Rss, Sparkles, Volume2, Loader2, Square, BrainCircuit } from "lucide-svelte";
@@ -694,7 +695,7 @@
           class="absolute left-full ml-2 -translate-y-1/2 z-10 p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary opacity-0 group-hover:opacity-100 transition-opacity"
           style="top: {replyY}px"
           onclick={onReply}
-          title="Reply to this message"
+          use:tip={"Reply to this message"}
         >
           <Reply class="w-4 h-4" />
         </button>
@@ -900,7 +901,7 @@
             <button
               class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary"
               onclick={onRegenerate}
-              title="Regenerate response"
+              use:tip={"Regenerate response"}
             >
               <RefreshCw class="w-4 h-4" />
             </button>
@@ -908,7 +909,7 @@
           <button
             class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary"
             onclick={copyToClipboard}
-            title={copied ? "Copied!" : "Copy to clipboard"}
+            use:tip={copied ? "Copied!" : "Copy to clipboard"}
           >
             {#if copied}
               <Check class="w-4 h-4 text-green-500" />
@@ -922,7 +923,7 @@
           <button
             class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 {speakState === 'idle' ? 'text-txtsecondary' : 'text-primary'}"
             onclick={toggleSpeak}
-            title={speakTitle}
+            use:tip={speakTitle}
           >
             {#if speakState === "loading"}
               <Loader2 class="w-4 h-4 animate-spin" />
@@ -962,14 +963,14 @@
             <button
               class="p-1.5 rounded hover:bg-white/20"
               onclick={cancelEdit}
-              title="Cancel"
+              use:tip={"Cancel"}
             >
               <X class="w-4 h-4" />
             </button>
             <button
               class="p-1.5 rounded hover:bg-white/20"
               onclick={saveEdit}
-              title="Save"
+              use:tip={"Save"}
             >
               <Save class="w-4 h-4" />
             </button>
@@ -999,7 +1000,7 @@
                 <button
                   class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[0.8125rem] hover:bg-white/10 transition-colors"
                   onclick={() => (openFile = openFile === `${fi}` ? null : `${fi}`)}
-                  title={openFile === `${fi}` ? "Hide contents" : "Show contents"}
+                  use:tip={openFile === `${fi}` ? "Hide contents" : "Show contents"}
                 >
                   <FileText class="w-3.5 h-3.5 shrink-0" />
                   <span class="truncate">{file.name}</span>
@@ -1027,7 +1028,7 @@
           <button
             class="absolute top-1.5 right-1.5 p-1 rounded-full opacity-0 group-hover:opacity-100 transition-all bg-white/10 text-white/70 hover:text-white hover:bg-white/25"
             onclick={startEdit}
-            title="Edit message"
+            use:tip={"Edit message"}
           >
             <Pencil class="w-3 h-3" />
           </button>
@@ -1061,7 +1062,7 @@
             target="_blank"
             rel="noopener noreferrer"
             class="inline-flex items-center gap-1.5 {pillWidth(src.title)} px-2 py-0.5 rounded-full border border-card-border bg-secondary/50 hover:bg-secondary text-xs text-txtsecondary hover:text-txtmain transition-colors"
-            title={src.url}
+            use:tip={src.url}
           >
             {#if faviconUrl(src.url)}
               <img src={faviconUrl(src.url)} alt="" class="w-3.5 h-3.5 shrink-0 rounded-sm" loading="lazy" onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")} />
@@ -1087,7 +1088,7 @@
     <button
       class="absolute top-4 right-4 p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors"
       onclick={() => closeModal()}
-      title="Close"
+      use:tip={"Close"}
     >
       <X class="w-6 h-6" />
     </button>

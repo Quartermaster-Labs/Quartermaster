@@ -17,8 +17,11 @@
     models,
   } from "../stores/api";
   import { get } from "svelte/store";
-  import { FolderOpen } from "lucide-svelte";
+  import { FolderOpen, HelpCircle } from "lucide-svelte";
+  import { tip } from "../lib/tooltip";
+  import { askConfirm } from "../lib/confirm";
   import VramGauge from "./VramGauge.svelte";
+  import Select, { type SelectOption } from "./Select.svelte";
   import { estimateSegments } from "../stores/vram";
   import { backendClass, engineLabel } from "../lib/backends";
   import {
@@ -628,6 +631,50 @@
   // llama.cpp's kv_cache_types, minus iq4_nl (no flash-attention KV kernel).
   const KV_OPTS = ["", "f32", "f16", "bf16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0"];
 
+  // Option lists for <Select>. The empty value means "not set" everywhere, but
+  // it reads as "default (auto)" on the Default tab and "inherit" on a variant
+  // tab, so each list comes in both flavours.
+  function optList(values: string[], emptyLabel: string): SelectOption[] {
+    return values.map((v) => ({ value: v, label: v === "" ? emptyLabel : v }));
+  }
+  const KV_SEL_DEFAULT = optList(KV_OPTS, "default (auto)");
+  const KV_SEL_INHERIT = optList(KV_OPTS, "inherit");
+  const SAMPLER_SEL_DEFAULT = optList(IMG_SAMPLERS,"default");
+  const SAMPLER_SEL_INHERIT = optList(IMG_SAMPLERS,"inherit");
+  const ONOFF_INHERIT: SelectOption[] = optList(["", "on", "off"], "inherit");
+  const ONOFF_INHERIT_OFF: SelectOption[] = [
+    { value: "inherit", label: "inherit (off)" },
+    { value: "on", label: "on" },
+    { value: "off", label: "off" },
+  ];
+  const ONOFF_INHERIT_PLAIN: SelectOption[] = [
+    { value: "inherit", label: "inherit" },
+    { value: "on", label: "on" },
+    { value: "off", label: "off" },
+  ];
+  const ROPE_SEL_AUTO = optList(["", "none", "linear", "yarn"], "auto");
+  const ROPE_SEL_INHERIT = optList(["", "none", "linear", "yarn"], "inherit");
+  const SPLIT_SEL_AUTO = optList(["", "none", "layer", "row", "tensor"], "auto");
+  const SPLIT_SEL_INHERIT = optList(["", "none", "layer", "row", "tensor"], "inherit");
+  const OFFLOAD_SEL_AUTO: SelectOption[] = [
+    { value: "", label: "auto (sizer decides)" },
+    { value: "on", label: "on (force offload)" },
+    { value: "off", label: "off (keep on GPU)" },
+  ];
+  const OFFLOAD_SEL_INHERIT: SelectOption[] = [
+    { value: "", label: "inherit" },
+    { value: "on", label: "on (force offload)" },
+    { value: "off", label: "off (keep on GPU)" },
+  ];
+  const backendSel = $derived<SelectOption[]>([
+    { value: "", label: "Auto (default)" },
+    ...classBackends.map((b) => ({
+      value: b.id,
+      label: `${b.name || engineLabel(b.kind)}${b.default ? " ★" : ""}`,
+      detail: engineLabel(b.kind),
+    })),
+  ]);
+
   // Slider ceiling = trained context length (fallback 32k). Floor 4k.
   const CTX_MIN = 4096;
   const nativeCtx = $derived(config?.maxCtx && config.maxCtx > CTX_MIN ? config.maxCtx : 32768);
@@ -1135,8 +1182,14 @@
 
   // Remove a tab from whichever bucket holds it (per-model variant, ctx tier, or
   // fleet-wide default variant). Fleet-wide removals save globally.
-  function removeVariantEntry(name: string) {
-    if (!confirm(`Delete variant "${name}"? This cannot be undone until you save.`)) return;
+  async function removeVariantEntry(name: string) {
+    const ok = await askConfirm({
+      title: `Delete variant "${name}"?`,
+      body: "This cannot be undone until you save.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     variants = variants.filter((v) => v.name !== name);
     ctxTiers = ctxTiers.filter((v) => v.name !== name);
     defaultVariants = defaultVariants.filter((v) => v.name !== name);
@@ -1223,7 +1276,13 @@
 
   async function reset() {
     if (!modelId) return;
-    if (!confirm("Reset this model to autogen defaults? Removes all custom params and variants.")) return;
+    const ok = await askConfirm({
+      title: "Reset this model to autogen defaults?",
+      body: "Removes all custom params and variants.",
+      confirmLabel: "Reset",
+      danger: true,
+    });
+    if (!ok) return;
     saving = true;
     error = null;
     try {
@@ -1261,7 +1320,7 @@
             <button
               type="button"
               class="text-base font-mono font-normal text-txtsecondary hover:text-txtmain hover:underline decoration-dotted"
-              title="Click to rename (advertised name; real id still routes, cascades to variants)"
+              use:tip={"Click to rename (advertised name; real id still routes, cascades to variants)"}
               onclick={() => { nameDraft = config?.displayName ?? ""; editingName = true; }}
             >{(config.displayName || config.id) + suffix}</button>
           {/if}
@@ -1278,7 +1337,7 @@
           <p class="font-mono text-xs text-error">{estimateError}</p>
         {:else if estimate}
           <div class="flex items-start gap-3">
-            <span class="font-mono text-[0.55rem] uppercase tracking-wider text-txtsecondary shrink-0 leading-tight pt-0.5">Est.<br />load</span>
+            <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary shrink-0 leading-tight pt-0.5">Est.<br />load</span>
             <div class="flex-1 min-w-0">
               <VramGauge
                 usedMb={estimate.estVramGB * 1024}
@@ -1291,18 +1350,18 @@
             </div>
             <div class="flex gap-3 font-mono text-[0.7rem] tabular-nums shrink-0">
               <div class="text-center leading-tight">
-                <div class="text-[0.5rem] uppercase tracking-wide text-txtsecondary">CTX</div>
+                <div class="text-micro font-medium uppercase tracking-wide text-txtsecondary">CTX</div>
                 <div class="text-txtmain">{fmtCtx(estimate.ctx)}</div>
               </div>
               <div class="text-center leading-tight">
-                <div class="text-[0.5rem] uppercase tracking-wide text-txtsecondary">RAM</div>
+                <div class="text-micro font-medium uppercase tracking-wide text-txtsecondary">RAM</div>
                 <div class={estimate.ramExceeded ? "text-error" : "text-txtmain"}>
                   {estimate.estRamGB.toFixed(1)}{estimate.maxRamGB ? `/${estimate.maxRamGB.toFixed(0)}` : ""}G
                 </div>
               </div>
               <div class="leading-tight">
-                <div title="GPU layers"><span class="text-txtsecondary">GPU</span> {nglDisplay(estimate.ngl, config.blockCount)}</div>
-                <div title="CPU-offloaded MoE layers"><span class="text-txtsecondary">MoE</span> {estimate.nCpuMoe}</div>
+                <div use:tip={"GPU layers"}><span class="text-txtsecondary">GPU</span> {nglDisplay(estimate.ngl, config.blockCount)}</div>
+                <div use:tip={"CPU-offloaded MoE layers"}><span class="text-txtsecondary">MoE</span> {estimate.nCpuMoe}</div>
               </div>
             </div>
           </div>
@@ -1319,11 +1378,15 @@
       {#if loading}
         <p class="text-txtsecondary">Loading…</p>
       {:else if error}
-        <p class="text-red-500 text-sm font-mono whitespace-pre-wrap">{error}</p>
+        <p class="text-error text-sm font-mono whitespace-pre-wrap">{error}</p>
       {/if}
 
       {#snippet hint(text: string)}
-        <span class="hint" title={text} aria-label={text}>?</span>
+        <!-- lucide glyph rather than the hand-drawn "?" bubble: that one needed a
+             sub-11px font to fit inside its circle, which the scale no longer has. -->
+        <span class="inline-flex shrink-0 text-txtsecondary cursor-help hover:text-txtmain" use:tip={text} aria-label={text}>
+          <HelpCircle size={12} />
+        </span>
       {/snippet}
 
       {#if config}
@@ -1331,12 +1394,7 @@
           <div class="flex items-center gap-2">
             <span class="text-txtsecondary text-sm">Backend</span>
             {@render hint("Which inference backend serves this model. Auto uses the ★ default for the model's class (Settings → Backends). Switching backend kind changes which knobs apply.")}
-            <select bind:value={backend} class="cfg-input ml-auto w-56">
-              <option value="">Auto (default)</option>
-              {#each classBackends as b (b.id)}
-                <option value={b.id}>{b.name || engineLabel(b.kind)}{b.default ? " ★" : ""} ({engineLabel(b.kind)})</option>
-              {/each}
-            </select>
+            <Select bind:value={backend} options={backendSel} ariaLabel="Backend" class="ml-auto w-56" />
           </div>
           {#if isVllm}
             <div class="rounded border border-card-border p-3 space-y-2">
@@ -1380,7 +1438,7 @@
                 onclick={() => (selectedV = v)}>{v.name || "(unnamed)"}</button>
               <button
                 type="button"
-                title="Remove preset"
+                use:tip={"Remove preset"}
                 aria-label="Remove preset {v.name}"
                 class="px-1.5 py-1 text-xs {selectedV === v ? 'bg-primary text-white hover:bg-black/25' : 'text-txtsecondary hover:text-error'}"
                 onclick={() => removeVariantEntry(v.name)}>×</button>
@@ -1388,8 +1446,8 @@
           {/each}
           <button
             type="button"
-            title="Add a generation preset (steps / cfg / size), inheriting this model's paths"
-            class="px-2.5 py-1 rounded text-xs font-semibold border border-dashed border-info text-info hover:bg-info hover:text-white transition-colors"
+            use:tip={"Add a generation preset (steps / cfg / size), inheriting this model's paths"}
+            class="px-2.5 py-1 rounded text-xs font-semibold border border-dashed border-info text-info hover:bg-info hover:text-btn-primary-text transition-colors"
             onclick={addImageVariantEntry}>+ preset</button>
         </div>
 
@@ -1469,9 +1527,7 @@
               Sampler
               {@render hint("--sampling-method. Default sampling method when a request omits it. Empty = sd-server default.")}
             </span>
-            <select bind:value={defaultSampler} class="cfg-input">
-              {#each IMG_SAMPLERS as o}<option value={o}>{o === "" ? "default" : o}</option>{/each}
-            </select>
+            <Select bind:value={defaultSampler} options={SAMPLER_SEL_DEFAULT} ariaLabel="Default sampler" />
           </label>
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
@@ -1493,11 +1549,7 @@
               CPU offload
               {@render hint("--offload-to-cpu. Page the diffusion weights to RAM (loaded to VRAM on use) to fit a tight budget. Auto = the sizer offloads when weights + compute don't fit the target.")}
             </span>
-            <select bind:value={offloadToCpu} class="cfg-input">
-              <option value="">auto (sizer decides)</option>
-              <option value="on">on (force offload)</option>
-              <option value="off">off (keep on GPU)</option>
-            </select>
+            <Select bind:value={offloadToCpu} options={OFFLOAD_SEL_AUTO} ariaLabel="Offload to CPU" />
           </label>
 
           <label class="flex flex-col gap-1 text-sm">
@@ -1604,9 +1656,7 @@
             </label>
             <label class="flex flex-col gap-1 text-sm col-span-2">
               <span class="text-txtsecondary flex items-center gap-1">Sampler{@render hint("--sampling-method for this preset. 'inherit' = the model default.")}</span>
-              <select bind:value={sv.defaultSampler} class="cfg-input">
-                {#each IMG_SAMPLERS as o}<option value={o}>{o === "" ? "inherit" : o}</option>{/each}
-              </select>
+              <Select bind:value={sv.defaultSampler} options={SAMPLER_SEL_INHERIT} ariaLabel="Sampler" />
             </label>
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-txtsecondary flex items-center gap-1">Width{@render hint("--width for this preset. Empty / 0 = inherit.")}</span>
@@ -1636,11 +1686,7 @@
                 CPU offload
                 {@render hint("--offload-to-cpu for this preset. Inherit = use the model's setting.")}
               </span>
-              <select bind:value={sv.offloadToCpu} class="cfg-input">
-                <option value="">inherit</option>
-                <option value="on">on (force offload)</option>
-                <option value="off">off (keep on GPU)</option>
-              </select>
+              <Select bind:value={sv.offloadToCpu} options={OFFLOAD_SEL_INHERIT} ariaLabel="Offload to CPU" />
             </label>
             <label class="flex items-center gap-2 text-sm col-span-2">
               <input type="checkbox" bind:checked={sv.unlisted} />
@@ -1774,7 +1820,7 @@
                 onclick={() => (selectedV = v)}>{v.name || "(unnamed)"}</button>
               <button
                 type="button"
-                title="Remove variant"
+                use:tip={"Remove variant"}
                 aria-label="Remove variant {v.name}"
                 class="px-1.5 py-1 text-xs {selectedV === v ? 'bg-primary text-white hover:bg-black/25' : 'text-txtsecondary hover:text-error'}"
                 onclick={() => removeVariantEntry(v.name)}>×</button>
@@ -1789,14 +1835,14 @@
             >
               <button
                 type="button"
-                title="Context tier"
+                use:tip={"Context tier"}
                 class="px-2.5 py-1 text-xs font-mono transition-colors {selectedV === v
                   ? 'bg-primary text-white'
                   : 'text-txtsecondary hover:text-txtmain'}"
                 onclick={() => (selectedV = v)}>{v.name || "(unnamed)"}</button>
               <button
                 type="button"
-                title="Remove ctx tier"
+                use:tip={"Remove ctx tier"}
                 aria-label="Remove ctx tier {v.name}"
                 class="px-1.5 py-1 text-xs {selectedV === v ? 'bg-primary text-white hover:bg-black/25' : 'text-txtsecondary hover:text-error'}"
                 onclick={() => removeVariantEntry(v.name)}>×</button>
@@ -1812,14 +1858,14 @@
             >
               <button
                 type="button"
-                title="Fleet-wide variant (shared by all models)"
+                use:tip={"Fleet-wide variant (shared by all models)"}
                 class="px-2.5 py-1 text-xs font-mono transition-colors {selectedV === v
                   ? 'bg-primary text-white'
                   : 'text-txtsecondary hover:text-txtmain'}"
                 onclick={() => (selectedV = v)}>{v.name || "(unnamed)"} <span class="opacity-60">⊕</span></button>
               <button
                 type="button"
-                title="Remove fleet-wide variant"
+                use:tip={"Remove fleet-wide variant"}
                 aria-label="Remove fleet-wide variant {v.name}"
                 class="px-1.5 py-1 text-xs {selectedV === v ? 'bg-primary text-white hover:bg-black/25' : 'text-txtsecondary hover:text-error'}"
                 onclick={() => removeVariantEntry(v.name)}>×</button>
@@ -1827,13 +1873,13 @@
           {/each}
           <button
             type="button"
-            title="Add a per-model variant (only this model)"
-            class="px-2.5 py-1 rounded text-xs font-semibold border border-dashed border-info text-info hover:bg-info hover:text-white transition-colors"
+            use:tip={"Add a per-model variant (only this model)"}
+            class="px-2.5 py-1 rounded text-xs font-semibold border border-dashed border-info text-info hover:bg-info hover:text-btn-primary-text transition-colors"
             onclick={addVariantEntry}>+ variant</button>
           <button
             type="button"
-            title="Add a fleet-wide variant shared by every model (e.g. a 32k ctx tier or a low-VRAM coexistence variant)"
-            class="px-2.5 py-1 rounded text-xs font-semibold border border-dashed border-success text-success hover:bg-success hover:text-white transition-colors"
+            use:tip={"Add a fleet-wide variant shared by every model (e.g. a 32k ctx tier or a low-VRAM coexistence variant)"}
+            class="px-2.5 py-1 rounded text-xs font-semibold border border-dashed border-success text-success hover:bg-success hover:text-btn-primary-text transition-colors"
             onclick={addDefaultVariantEntry}>+ fleet variant ⊕</button>
         </div>
 
@@ -1878,7 +1924,7 @@
               </div>
               <label
                 class="flex items-center gap-1.5 text-xs whitespace-nowrap {ropeOn ? 'text-warning' : 'text-txtsecondary'}"
-                title="Extend past the model's trained {fmtCtx(nativeCtx)} context with YaRN RoPE scaling (--rope-scaling yarn). The scale factor is derived from the ctx you pick. Quality degrades the further past native you go."
+                use:tip={`Extend past the model's trained ${fmtCtx(nativeCtx)} context with YaRN RoPE scaling (--rope-scaling yarn). The scale factor is derived from the ctx you pick. Quality degrades the further past native you go.`}
               >
                 <input
                   type="checkbox"
@@ -1932,18 +1978,14 @@
               KV cache K
               {@render hint("Quantization of the attention key cache. Lower bits = less VRAM, but quantized KV costs long-context recall well before it shows in perplexity. Default is f16, dropping to q8_0 only when f16 cannot reach the minimum context in the VRAM budget.")}
             </span>
-            <select bind:value={kvK} class="cfg-input">
-              {#each KV_OPTS as o}<option value={o}>{o === "" ? "default (auto)" : o}</option>{/each}
-            </select>
+            <Select bind:value={kvK} options={KV_SEL_DEFAULT} ariaLabel="KV cache K" />
           </label>
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               KV cache V
               {@render hint("Quantization of the attention value cache. Must match K for flash-attention. Same default as K.")}
             </span>
-            <select bind:value={kvV} class="cfg-input">
-              {#each KV_OPTS as o}<option value={o}>{o === "" ? "default (auto)" : o}</option>{/each}
-            </select>
+            <Select bind:value={kvV} options={KV_SEL_DEFAULT} ariaLabel="KV cache V" />
           </label>
 
           <div class="flex flex-col gap-1 text-sm">
@@ -2190,19 +2232,19 @@
             </label>
             <label class="flex items-center gap-2">
               <span class="text-txtsecondary flex items-center gap-1">Idle-slot cache {@render hint("--cache-idle-slots. Save idle slots to the prompt cache. inherit = llama default.")}</span>
-              <select bind:value={adv.cacheIdleSlots} class="cfg-input ml-auto"><option value="">inherit</option><option value="on">on</option><option value="off">off</option></select>
+              <Select bind:value={adv.cacheIdleSlots} options={ONOFF_INHERIT} ariaLabel="Cache idle slots" class="ml-auto w-32" />
             </label>
             <label class="flex items-center gap-2">
               <span class="text-txtsecondary flex items-center gap-1">Context shift {@render hint("--context-shift. Slide the window on overflow. inherit = llama default (off).")}</span>
-              <select bind:value={adv.contextShift} class="cfg-input ml-auto"><option value="">inherit</option><option value="on">on</option><option value="off">off</option></select>
+              <Select bind:value={adv.contextShift} options={ONOFF_INHERIT} ariaLabel="Context shift" class="ml-auto w-32" />
             </label>
             <label class="flex items-center gap-2">
               <span class="text-txtsecondary flex items-center gap-1">RoPE scaling {@render hint("--rope-scaling. Context-extension method. auto = from model.")}</span>
-              <select bind:value={adv.ropeScaling} class="cfg-input ml-auto"><option value="">auto</option><option value="none">none</option><option value="linear">linear</option><option value="yarn">yarn</option></select>
+              <Select bind:value={adv.ropeScaling} options={ROPE_SEL_AUTO} ariaLabel="RoPE scaling" class="ml-auto w-32" />
             </label>
             <label class="flex items-center gap-2">
               <span class="text-txtsecondary flex items-center gap-1">Split mode {@render hint("-sm. Multi-GPU split strategy. auto = from model.")}</span>
-              <select bind:value={adv.splitMode} class="cfg-input ml-auto"><option value="">auto</option><option value="none">none</option><option value="layer">layer</option><option value="row">row</option><option value="tensor">tensor</option></select>
+              <Select bind:value={adv.splitMode} options={SPLIT_SEL_AUTO} ariaLabel="Split mode" class="ml-auto w-32" />
             </label>
             <label class="flex items-center gap-2">
               <span class="text-txtsecondary flex items-center gap-1">RoPE scale {@render hint("--rope-scale. Context scaling factor (expand ctx by N). 0 = omit.")}</span>
@@ -2228,7 +2270,7 @@
               <span class="text-txtsecondary flex items-center gap-1 shrink-0">Chat template file {@render hint("--chat-template-file. Path to a .jinja chat template replacing the gguf's baked-in one - use a vendor-fixed template (e.g. Gemma, Qwen) without rebuilding the gguf. Empty = the baked-in template (or quartermaster's built-in Qwen 3.5/3.6 fix).")}</span>
               <input type="text" bind:value={adv.chatTemplateFile} class="cfg-input flex-1 ml-auto font-mono" placeholder="D:/LLM/Models/templates/gemma4.jinja" spellcheck="false" />
               <button
-                type="button" title="Browse for a .jinja template" aria-label="Browse for a chat template file"
+                type="button" use:tip={"Browse for a .jinja template"} aria-label="Browse for a chat template file"
                 class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
                 onclick={() => browseChatTemplate((p) => (adv.chatTemplateFile = p))}
               ><FolderOpen size={14} /></button>
@@ -2291,7 +2333,7 @@
                 {@render hint("The variant's id suffix and listen-name. The model loads as <base-id>-<name>.")}
               </span>
               {#if sv.name === "vision"}
-                <input type="text" value="vision" readonly class="cfg-input opacity-70" title="Reserved: the auto-generated vision twin that loads the mmproj image projector. Tune its ctx/VRAM/visibility here; uncheck Unlisted to surface it in the model picker." />
+                <input type="text" value="vision" readonly class="cfg-input opacity-70" use:tip={"Reserved: the auto-generated vision twin that loads the mmproj image projector. Tune its ctx/VRAM/visibility here; uncheck Unlisted to surface it in the model picker."} />
               {:else}
                 <input type="text" value={sv.name} oninput={renameSelectedVariant} class="cfg-input" placeholder="e.g. game, long, judge" />
               {/if}
@@ -2343,11 +2385,11 @@
 
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-txtsecondary">KV cache K</span>
-              <select bind:value={sv.kvK} class="cfg-input">{#each KV_OPTS as o}<option value={o}>{o === "" ? "inherit" : o}</option>{/each}</select>
+              <Select bind:value={sv.kvK} options={KV_SEL_INHERIT} ariaLabel="KV cache K" />
             </label>
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-txtsecondary">KV cache V</span>
-              <select bind:value={sv.kvV} class="cfg-input">{#each KV_OPTS as o}<option value={o}>{o === "" ? "inherit" : o}</option>{/each}</select>
+              <Select bind:value={sv.kvV} options={KV_SEL_INHERIT} ariaLabel="KV cache V" />
             </label>
 
             <div class="flex flex-col gap-1 text-sm">
@@ -2437,11 +2479,7 @@
                 DRY sampler
                 {@render hint("DRY repetition penalty. Inherit = model default (on). Off disables it for this variant (the judge variant turns it off).")}
               </span>
-              <select value={vDryValue()} onchange={(e) => setVDry((e.currentTarget as HTMLSelectElement).value)} class="cfg-input">
-                <option value="inherit">inherit (off)</option>
-                <option value="on">on</option>
-                <option value="off">off</option>
-              </select>
+              <Select value={vDryValue()} onchange={setVDry} options={ONOFF_INHERIT_OFF} ariaLabel="DRY sampler" />
               {#if vDryValue() !== "off"}
                 <div class="flex items-end gap-2">
                   <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">multiplier<input type="number" min="0" step="0.05" value={vnum(sv.dryMultiplier)} oninput={(e) => (sv.dryMultiplier = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="0.8" /></span>
@@ -2524,11 +2562,7 @@
                   Save KV cache to disk
                   {@render hint("Persist this variant's KV cache to disk so a long chat survives slot eviction and is restored instead of reprocessed. inherit = use the Default tab's setting. Needs the global slot-cache toggle on (Dashboard).")}
                 </span>
-                <select value={vSlotCacheValue()} onchange={(e) => setVSlotCache((e.currentTarget as HTMLSelectElement).value)} class="cfg-input ml-auto">
-                  <option value="inherit">inherit</option>
-                  <option value="on">on</option>
-                  <option value="off">off</option>
-                </select>
+                <Select value={vSlotCacheValue()} onchange={setVSlotCache} options={ONOFF_INHERIT_PLAIN} ariaLabel="Slot cache" class="ml-auto w-32" />
               </label>
             </div>
           </div>
@@ -2581,19 +2615,19 @@
               </label>
               <label class="flex items-center gap-2">
                 <span class="text-txtsecondary flex items-center gap-1">Idle-slot cache {@render hint("--cache-idle-slots. inherit = Default's value.")}</span>
-                <select value={sv.cacheIdleSlots ?? ""} onchange={(e) => (sv.cacheIdleSlots = (e.currentTarget as HTMLSelectElement).value)} class="cfg-input ml-auto"><option value="">inherit</option><option value="on">on</option><option value="off">off</option></select>
+                <Select value={sv.cacheIdleSlots ?? ""} onchange={(v) => (sv.cacheIdleSlots = v)} options={ONOFF_INHERIT} ariaLabel="Cache idle slots" class="ml-auto w-32" />
               </label>
               <label class="flex items-center gap-2">
                 <span class="text-txtsecondary flex items-center gap-1">Context shift {@render hint("--context-shift. inherit = Default's value.")}</span>
-                <select value={sv.contextShift ?? ""} onchange={(e) => (sv.contextShift = (e.currentTarget as HTMLSelectElement).value)} class="cfg-input ml-auto"><option value="">inherit</option><option value="on">on</option><option value="off">off</option></select>
+                <Select value={sv.contextShift ?? ""} onchange={(v) => (sv.contextShift = v)} options={ONOFF_INHERIT} ariaLabel="Context shift" class="ml-auto w-32" />
               </label>
               <label class="flex items-center gap-2">
                 <span class="text-txtsecondary flex items-center gap-1">RoPE scaling {@render hint("--rope-scaling. Context-extension method.")}</span>
-                <select value={sv.ropeScaling ?? ""} onchange={(e) => (sv.ropeScaling = (e.currentTarget as HTMLSelectElement).value)} class="cfg-input ml-auto"><option value="">inherit</option><option value="none">none</option><option value="linear">linear</option><option value="yarn">yarn</option></select>
+                <Select value={sv.ropeScaling ?? ""} onchange={(v) => (sv.ropeScaling = v)} options={ROPE_SEL_INHERIT} ariaLabel="RoPE scaling" class="ml-auto w-32" />
               </label>
               <label class="flex items-center gap-2">
                 <span class="text-txtsecondary flex items-center gap-1">Split mode {@render hint("-sm. Multi-GPU split strategy.")}</span>
-                <select value={sv.splitMode ?? ""} onchange={(e) => (sv.splitMode = (e.currentTarget as HTMLSelectElement).value)} class="cfg-input ml-auto"><option value="">inherit</option><option value="none">none</option><option value="layer">layer</option><option value="row">row</option><option value="tensor">tensor</option></select>
+                <Select value={sv.splitMode ?? ""} onchange={(v) => (sv.splitMode = v)} options={SPLIT_SEL_INHERIT} ariaLabel="Split mode" class="ml-auto w-32" />
               </label>
               <label class="flex items-center gap-2">
                 <span class="text-txtsecondary flex items-center gap-1">RoPE scale {@render hint("--rope-scale. Ctx scaling factor. 0 = inherit.")}</span>
@@ -2619,7 +2653,7 @@
                 <span class="text-txtsecondary flex items-center gap-1 shrink-0">Chat template file {@render hint("--chat-template-file. Path to a .jinja chat template replacing the gguf's baked-in one. Empty = inherit the model-wide value.")}</span>
                 <input type="text" value={sv.chatTemplateFile ?? ""} oninput={(e) => (sv.chatTemplateFile = (e.currentTarget as HTMLInputElement).value)} class="cfg-input flex-1 ml-auto font-mono" placeholder="inherit" spellcheck="false" />
                 <button
-                  type="button" title="Browse for a .jinja template" aria-label="Browse for a chat template file"
+                  type="button" use:tip={"Browse for a .jinja template"} aria-label="Browse for a chat template file"
                   class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
                   onclick={() => browseChatTemplate((p) => (sv.chatTemplateFile = p))}
                 ><FolderOpen size={14} /></button>
@@ -2686,23 +2720,5 @@
     border: 1px solid var(--color-card-border);
     color: var(--color-txtmain);
     font-size: 0.85rem;
-  }
-  .hint {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 14px;
-    height: 14px;
-    border-radius: 9999px;
-    border: 1px solid var(--color-card-border);
-    color: var(--color-txtsecondary);
-    font-size: 0.65rem;
-    line-height: 1;
-    cursor: help;
-    user-select: none;
-  }
-  .hint:hover {
-    color: var(--color-txtmain);
-    border-color: var(--color-txtmain);
   }
 </style>

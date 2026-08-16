@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../../lib/tooltip";
   import { Sparkles, Check } from "lucide-svelte";
   import type { ToolItem } from "./chatHelpers";
 
@@ -65,7 +66,7 @@
         : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
     onclick={() => (open = !open)}
     {disabled}
-    title={activeItem ? `${activeItem.label} mode` : "Tools"}
+    use:tip={activeItem ? `${activeItem.label} mode` : "Tools"}
   >
     <ToggleIcon class="w-[1.125rem] h-[1.125rem]" />
   </button>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../lib/tooltip";
   // Managed backend installs — download an inference-server build straight from
   // its upstream GitHub release, keep several versions side by side, switch
   // between them, and remove them.
@@ -41,6 +42,7 @@
   } from "../stores/api";
   import { backendClass } from "../lib/backends";
   import TrackRepoModal from "./TrackRepoModal.svelte";
+  import Select from "./Select.svelte";
 
   // Called after an install/activate/uninstall so the parent can re-read the
   // registry it renders below us.
@@ -342,7 +344,7 @@
 {#if available && catalog}
   <div class="mb-6">
     <div class="flex items-baseline gap-2 mb-1">
-      <h6 class="!pb-0">Install a backend</h6>
+      <h6 >Install a backend</h6>
       <span class="font-mono text-[0.65rem] text-txtsecondary truncate">{catalog.root}</span>
       <!-- Anything that publishes release assets can be installed the same way
            as the built-ins: pick a build from a real release, and the matching
@@ -350,7 +352,7 @@
       <button
         type="button"
         class="btn btn--sm ml-auto shrink-0 inline-flex items-center gap-1 uppercase tracking-wide hover:border-primary hover:text-primary"
-        title="Install builds from a GitHub repo that isn't in the list"
+        use:tip={"Install builds from a GitHub repo that isn't in the list"}
         onclick={() => {
           editing = null;
           adding = true;
@@ -379,7 +381,7 @@
             {g.label}
             <span class="font-mono text-[0.6rem] text-txtsecondary">{g.comps.length}</span>
             {#if groupHasUpdate(g)}
-              <span class="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-primary" title="Update available"></span>
+              <span class="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-primary" use:tip={"Update available"}></span>
             {/if}
           </button>
         {/each}
@@ -402,7 +404,7 @@
             {#if comp.active}
               <span
                 class="font-mono text-[0.6rem] rounded px-1.5 py-0.5 border border-card-border text-txtsecondary"
-                title="The build this backend would launch"
+                use:tip={"The build this backend would launch"}
               >
                 {comp.active.version} · {comp.active.variant}
               </span>
@@ -422,14 +424,14 @@
               {#if comp.isDefault}
                 <span
                   class="font-mono text-[0.6rem] rounded px-1.5 py-0.5 border border-primary text-primary"
-                  title={comp.defaultImplicit
+                  use:tip={comp.defaultImplicit
                     ? `Used for ${comp.class || comp.kind} models because it is the only backend registered for them — nothing is starred.`
                     : `The ★ auto-pick for ${comp.class || comp.kind} models. Models pinned to another backend keep their pin.`}
                 >in use</span>
               {:else}
                 <span
                   class="font-mono text-[0.6rem] rounded px-1.5 py-0.5 border border-card-border text-txtsecondary"
-                  title={comp.defaultOwner
+                  use:tip={comp.defaultOwner
                     ? `${comp.defaultOwner} runs for ${comp.class || comp.kind} models instead`
                     : "Installed, but not what gets launched"}
                 >not in use</span>
@@ -443,12 +445,12 @@
             {#if comp.custom}
               <span
                 class="font-mono text-[0.6rem] rounded px-1.5 py-0.5 border border-card-border text-txtsecondary"
-                title="A repo you added"
+                use:tip={"A repo you added"}
               >tracked</span>
               <button
                 type="button"
                 class="ml-auto shrink-0 p-1 rounded text-txtsecondary hover:text-primary"
-                title="Edit this tracked repo"
+                use:tip={"Edit this tracked repo"}
                 aria-label="Edit this tracked repo"
                 onclick={() => {
                   editing = sourceFor(comp.id) ?? null;
@@ -458,7 +460,7 @@
               <button
                 type="button"
                 class="shrink-0 p-1 rounded text-txtsecondary hover:text-error disabled:opacity-40"
-                title={comp.installed.length
+                use:tip={comp.installed.length
                   ? "Remove its installed builds before you can stop tracking it"
                   : "Stop tracking this repo"}
                 aria-label="Stop tracking this repo"
@@ -471,7 +473,7 @@
               target="_blank"
               rel="noreferrer"
               class="shrink-0 text-txtsecondary hover:text-primary {comp.custom ? '' : 'ml-auto'}"
-              title={comp.repo}
+              use:tip={comp.repo}
               aria-label={`Open ${comp.repo} on GitHub`}
             ><ExternalLink size={13} /></a>
           </header>
@@ -496,43 +498,51 @@
                    action twice. -->
               <div class="flex flex-wrap items-center gap-2 font-mono text-xs">
                 {#if comp.variants.length > 1}
-                  <select
+                  <Select
                     bind:value={variantSel[comp.id]}
-                    title="Build flavour - auto-selected from your GPU"
-                    class="w-40 shrink-0 rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
-                  >
-                    {#each comp.variants.filter((v) => v.available) as v (v.id)}
-                      <option value={v.id} title={v.note ?? ""}>
-                        {v.label}{v.id === comp.suggested ? " (detected)" : ""}
-                      </option>
-                    {/each}
-                  </select>
+                    options={comp.variants
+                      .filter((v) => v.available)
+                      .map((v) => ({
+                        value: v.id,
+                        label: `${v.label}${v.id === comp.suggested ? " (detected)" : ""}`,
+                        detail: v.note ?? undefined,
+                      }))}
+                    tooltip="Build flavour - auto-selected from your GPU"
+                    ariaLabel="Build flavour"
+                    class="w-40 shrink-0"
+                  />
                 {/if}
 
-                <select
+                <!-- The tag list is fetched when the menu opens, not on focus:
+                     the custom Select never focuses a native <select>, and
+                     opening is the moment the list is actually needed. -->
+                <Select
                   bind:value={versionSel[comp.id]}
-                  onfocus={() => loadReleases(comp)}
-                  title="Version - leave on latest unless you need a specific build"
-                  class="w-44 shrink-0 rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
-                >
-                  <option value="">Latest release</option>
-                  {#each releases[comp.id] ?? [] as r (r.tag)}
-                    <option value={r.tag}>{r.tag}{r.prerelease ? " (pre-release)" : ""}</option>
-                  {/each}
-                </select>
+                  onopen={() => loadReleases(comp)}
+                  options={[
+                    { value: "", label: "Latest release" },
+                    ...(releases[comp.id] ?? []).map((r) => ({
+                      value: r.tag,
+                      label: `${r.tag}${r.prerelease ? " (pre-release)" : ""}`,
+                    })),
+                  ]}
+                  tooltip="Version - leave on latest unless you need a specific build"
+                  ariaLabel="Version"
+                  class="w-44 shrink-0"
+                />
 
                 <button
                   type="button"
                   class="btn btn--sm inline-flex items-center gap-1 uppercase tracking-wide border-primary text-primary hover:bg-primary/10 disabled:opacity-50"
                   disabled={!!job}
-                  title="Download the selected flavour and version, then switch to it"
+                  use:tip={"Download the selected flavour and version, then switch to it"}
                   onclick={() => install(comp)}
                 ><Download size={12} /> {installLabel(comp, upd)}</button>
 
                 <button
                   type="button"
                   class="btn btn--sm inline-flex items-center gap-1 uppercase tracking-wide hover:border-primary hover:text-primary"
-                  title="Re-check upstream for new releases"
+                  use:tip={"Re-check upstream for new releases"}
                   disabled={!!loadingRel[comp.id]}
                   onclick={() => loadReleases(comp, true)}
                 ><RefreshCw size={12} class={loadingRel[comp.id] ? "animate-spin" : ""} /> Check</button>
@@ -609,7 +619,7 @@
                   <button
                     type="button"
                     class="btn btn--sm ml-auto inline-flex items-center gap-1 uppercase tracking-wide hover:border-primary hover:text-primary"
-                    title="Make this the ★ auto-pick for its group. Models pinned to another backend keep their pin."
+                    use:tip={"Make this the ★ auto-pick for its group. Models pinned to another backend keep their pin."}
                     disabled={!!busy[comp.id]}
                     onclick={() => makeDefault(comp)}
                   ><Star size={12} /> Use by default</button>
@@ -628,7 +638,7 @@
                       <span class="text-txtsecondary">{fmtBytes(b.sizeBytes)}</span>
                       {#if b.warning}
                         <!-- Which build is broken, when several are installed. -->
-                        <span class="text-warning" title={b.warning}><AlertTriangle size={12} /></span>
+                        <span class="text-warning" use:tip={b.warning}><AlertTriangle size={12} /></span>
                       {/if}
                       {#if b.active && (comp.isDefault || comp.kind === "")}
                         <span class="ml-auto inline-flex items-center gap-1 text-primary"><Check size={12} /> in use</span>
@@ -638,14 +648,14 @@
                              use" is how two cards ended up both claiming it. -->
                         <span
                           class="ml-auto text-txtsecondary"
-                          title={comp.defaultOwner
+                          use:tip={comp.defaultOwner
                             ? `Selected build of this backend - ${comp.defaultOwner} is what actually runs`
                             : "Selected build of this backend"}>selected</span>
                       {:else if comp.kind !== ""}
                         <button
                           type="button"
                           class="ml-auto btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary"
-                          title="Use this build"
+                          use:tip={"Use this build"}
                           disabled={!!busy[comp.id]}
                           onclick={() => activate(comp, b.version, b.variant)}
                         >Use</button>
@@ -657,7 +667,7 @@
                       {/if}
                       <button
                         type="button"
-                        title={b.active && comp.kind !== ""
+                        use:tip={b.active && comp.kind !== ""
                           ? "Switch to another version before removing this one"
                           : "Remove this build"}
                         aria-label="Remove this build"

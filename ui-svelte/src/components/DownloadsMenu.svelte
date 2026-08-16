@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../lib/tooltip";
   // Downloads, as a browser does it: one icon on the status rail with a live
   // count, opening a small panel of what is running and what recently landed.
   //
@@ -137,7 +138,7 @@
       ? 'bg-secondary/60 border-btn-border'
       : 'hover:border-card-border hover:bg-secondary/40'}"
     onclick={toggle}
-    title="Downloads"
+    use:tip={"Downloads"}
     aria-label="Downloads"
     aria-expanded={open}
   >
@@ -194,17 +195,17 @@
             </div>
             <span class="text-txtmain tabular-nums shrink-0">{pct(j)}%</span>
             {#if j.phase === "paused"}
-              <button class="icon-btn shrink-0" title="Resume from where it stopped" disabled={busy[j.id]} onclick={() => resume(j)}>
+              <button class="icon-btn shrink-0" use:tip={"Resume from where it stopped"} disabled={busy[j.id]} onclick={() => resume(j)}>
                 <Play class="w-3.5 h-3.5" />
               </button>
             {:else}
-              <button class="icon-btn shrink-0" title="Pause — every byte is kept" disabled={busy[j.id]} onclick={() => pause(j)}>
+              <button class="icon-btn shrink-0" use:tip={"Pause — every byte is kept"} disabled={busy[j.id]} onclick={() => pause(j)}>
                 <Pause class="w-3.5 h-3.5" />
               </button>
             {/if}
             <button
               class="icon-btn shrink-0 {confirming === j.id ? 'text-error' : ''}"
-              title="Cancel and delete what has downloaded"
+              use:tip={"Cancel and delete what has downloaded"}
               disabled={busy[j.id]}
               onclick={() => (confirming = confirming === j.id ? null : j.id)}
             >
@@ -263,7 +264,7 @@
             {#if j.phase === "done" && j.dir}
               <button
                 class="flex w-full items-center gap-1 text-left text-[0.6rem] text-txtsecondary hover:text-primary hover:underline transition-colors"
-                title="Open this folder"
+                use:tip={"Open this folder"}
                 onclick={() => reveal(j.dir)}
               >
                 <Folder class="w-3 h-3 shrink-0" /><span class="truncate">{j.dir}</span>

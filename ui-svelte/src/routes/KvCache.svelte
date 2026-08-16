@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../lib/tooltip";
   import { onDestroy } from "svelte";
   import { fetchKvCache, type KvCacheStats } from "../stores/api";
   import { observeTab } from "../stores/observe";
@@ -171,7 +172,7 @@
                       <td class="py-1 pr-2 text-txtsecondary">{f.key}</td>
                       <td class="py-1 pr-2 text-right">{fmtBytes(f.bytes)}</td>
                       <td class="py-1 pr-2 text-txtsecondary">{fmtTime(f.modAt)}</td>
-                      <td class="py-1 text-txtsecondary truncate max-w-[16rem]" title={f.preamble}>
+                      <td class="py-1 text-txtsecondary truncate max-w-[16rem]" use:tip={f.preamble}>
                         {f.preamble ?? ""}
                       </td>
                     </tr>
@@ -203,7 +204,7 @@
                       <td class="py-1 pr-2 text-txtsecondary">{f.key}</td>
                       <td class="py-1 pr-2 text-right">{fmtBytes(f.bytes)}</td>
                       <td class="py-1 pr-2 text-txtsecondary">{fmtTime(f.modAt)}</td>
-                      <td class="py-1 text-txtsecondary truncate max-w-[16rem]" title={f.preamble}>
+                      <td class="py-1 text-txtsecondary truncate max-w-[16rem]" use:tip={f.preamble}>
                         {f.preamble ?? ""}
                       </td>
                     </tr>

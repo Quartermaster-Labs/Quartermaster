@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../lib/tooltip";
   // Model browser: browse a hub, read the repo, pick a file, download it into
   // the models folder. On completion the server regenerates the config and
   // hot-reloads, so the model appears in the Models table without a restart.
@@ -489,7 +490,7 @@
       <button
         class="icon-btn ml-auto mb-1 mr-1 shrink-0"
         onclick={openModelsFolder}
-        title={modelsRoot ? `Open ${modelsRoot}` : "Open the models folder"}
+        use:tip={modelsRoot ? `Open ${modelsRoot}` : "Open the models folder"}
         aria-label="Open the models folder"
       >
         <FolderOpen class="w-3.5 h-3.5" />
@@ -519,7 +520,7 @@
                leaving the last query's results under an empty box. -->
           <button
             class="absolute right-2 top-1/2 -translate-y-1/2 text-txtsecondary hover:text-txtmain transition-colors"
-            title="Clear"
+            use:tip={"Clear"}
             aria-label="Clear the search"
             onclick={() => {
               query = "";
@@ -626,7 +627,7 @@
         class="icon-btn h-7 shrink-0"
         onclick={runSearch}
         disabled={searching}
-        title={query.trim() ? "Re-run this search" : "Refresh the listing"}
+        use:tip={query.trim() ? "Re-run this search" : "Refresh the listing"}
         aria-label="Refresh"
       >
         <RefreshCw class="w-3.5 h-3.5 {searching ? 'animate-spin' : ''}" />
@@ -722,7 +723,7 @@
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2 flex-wrap">
                 <h3 class="font-mono text-sm text-txtmain truncate">{selected.name}</h3>
-                <a class="text-txtsecondary hover:text-primary transition-colors" href={hubURL(selected.id)} target="_blank" rel="noreferrer" title="Open on Hugging Face">
+                <a class="text-txtsecondary hover:text-primary transition-colors" href={hubURL(selected.id)} target="_blank" rel="noreferrer" use:tip={"Open on Hugging Face"}>
                   <ExternalLink class="w-3.5 h-3.5" />
                 </a>
                 {#if selected.gated}
@@ -767,7 +768,7 @@
                       <td class="py-2 font-mono text-txtmain">
                         <span class="break-all">{q.label}</span>
                         {#if q.projector}
-                          <span class="ml-1 rounded bg-secondary px-1 py-0.5 text-[0.55rem] uppercase tracking-wide text-txtsecondary" title="Vision/audio projector — download it alongside the model's weights, not instead of them">
+                          <span class="ml-1 rounded bg-secondary px-1 py-0.5 text-micro font-medium uppercase tracking-wide text-txtsecondary" use:tip={"Vision/audio projector — download it alongside the model's weights, not instead of them"}>
                             projector
                           </span>
                         {/if}
@@ -779,14 +780,14 @@
                       <!-- A projector is a companion file, so "fits in VRAM" is the
                            wrong question: it is charged on top of whichever file
                            the user picks, never sized on its own. -->
-                      <td class="py-2 whitespace-nowrap {q.projector ? 'text-txtsecondary' : estimateClass(q, v)}" title={q.projector ? "" : estimateTitle(q)}>
+                      <td class="py-2 whitespace-nowrap {q.projector ? 'text-txtsecondary' : estimateClass(q, v)}" use:tip={q.projector ? "" : estimateTitle(q)}>
                         {q.projector ? "companion" : estimateLabel(q, v)}
                       </td>
                       <td class="py-2 text-right">
                         <button
                           class="icon-btn"
                           disabled={busyRepo}
-                          title={busyRepo ? "This repo already has a download running" : `Download ${q.label}`}
+                          use:tip={busyRepo ? "This repo already has a download running" : `Download ${q.label}`}
                           aria-label="Download {q.label}"
                           onclick={() => download(q)}
                         >

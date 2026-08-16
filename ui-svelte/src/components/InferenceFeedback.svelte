@@ -11,6 +11,7 @@
 </script>
 
 <script lang="ts">
+  import { tip } from "../lib/tooltip";
   import { inFlightRequests, metrics, liveTokens, upstreamLogs, backendMetrics } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
   import type { Model, ActivityLogEntry } from "../lib/types";
@@ -372,7 +373,7 @@
        taller than text alone — so the dot/label baselines line up across cards. -->
   <div class="relative flex items-center gap-2 shrink-0 min-h-[30px]">
     <span class="inline-block w-2.5 h-2.5 rounded-full {busy || loading ? 'bg-primary animate-pulse' : 'bg-txtsecondary'}"></span>
-    <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary">
+    <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">
       {statusText}{#if busy || loading}<span class="inline-block w-3 text-left text-primary">{dots}</span>{/if}
     </span>
     <!-- Progress %: model load while loading, prompt-processing (prefill) while
@@ -380,13 +381,13 @@
          tokens stream — the elapsed duration lives in the stat grid (shown once,
          not duplicated here). -->
     {#if busy && promptProgress >= 0}
-      <span class="ml-auto font-mono text-[0.6rem] tabular-nums text-primary" title="Prompt processing">{Math.round(promptProgress * 100)}%</span>
+      <span class="ml-auto font-mono text-micro tabular-nums text-primary" use:tip={"Prompt processing"}>{Math.round(promptProgress * 100)}%</span>
     {/if}
     <!-- Live backend KV-cache fill (from llama-server /slots): how full the
          context window is — the "about to evict / truncate" signal the
          per-request stats can't see. X/Y tok rides on the bar line. -->
     {#if activeBackend}
-      <div class="absolute left-1/2 -translate-x-1/2 flex items-center gap-1.5 font-mono text-[0.55rem]" title="KV cache fill">
+      <div class="absolute left-1/2 -translate-x-1/2 flex items-center gap-1.5 font-mono text-micro" use:tip={"KV cache fill"}>
         <pre class="m-0 leading-none whitespace-pre"><span class="text-primary">{kvBarHead.slice(0, kvHeadFill)}</span><span class="text-txtsecondary/30">{kvBarHead.slice(kvHeadFill)}</span></pre>
         <span class="tabular-nums text-txtsecondary">{fmtK(activeBackend.kv_cache_tokens)}/{fmtK(activeBackend.n_ctx)} tok</span>
         {#if activeBackend.requests_deferred > 0}<span class="tabular-nums text-amber-400">· {activeBackend.requests_deferred} q</span>{/if}
@@ -412,11 +413,11 @@
 
 <!-- Always-on stat grid. Live metrics (gen/duration/out) glow accent while
          generating; otherwise everything is neutral. -->
-    <div class="grid grid-cols-3 gap-x-4 gap-y-2 font-mono text-xs text-center shrink-0 w-full max-w-xs">
+    <div class="grid grid-cols-3 gap-x-4 gap-y-2 text-xs text-center shrink-0 w-full max-w-xs">
       {#each stats as s (s.label)}
         <div>
-          <div class="text-txtsecondary uppercase tracking-wide text-[0.55rem]">{s.label}</div>
-          <div class="tabular-nums {busy && s.live ? 'text-primary' : 'text-txtmain'}">{s.value}</div>
+          <div class="text-micro font-medium uppercase tracking-wide text-txtsecondary">{s.label}</div>
+          <div class="font-mono tabular-nums {busy && s.live ? 'text-primary' : 'text-txtmain'}">{s.value}</div>
         </div>
       {/each}
     </div>

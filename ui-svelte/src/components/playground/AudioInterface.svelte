@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../../lib/tooltip";
   import { get } from "svelte/store";
   import { models } from "../../stores/api";
   import { modelCategory } from "../../lib/modelUtils";
@@ -377,7 +378,7 @@
                     class="shrink-0 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#141414] text-white text-[0.8125rem] font-medium hover:opacity-90 disabled:opacity-40 transition-opacity"
                     onclick={startListening}
                     disabled={!hasModel}
-                    title={hasModel ? "Start listening" : "Select a model first"}
+                    use:tip={hasModel ? "Start listening" : "Select a model first"}
                   >
                     <Mic class="w-4 h-4" /> Start listening
                   </button>
@@ -507,13 +508,13 @@
                       <FileAudio class="w-3.5 h-3.5 shrink-0 text-txtsecondary" />
                     {/if}
                     <span class="flex-1 min-w-0 truncate text-[0.6875rem] uppercase tracking-wide text-txtsecondary">{e.label}</span>
-                    <button class="shrink-0 p-1 rounded hover:bg-secondary text-txtsecondary" onclick={() => copyEntry(e)} title="Copy">
+                    <button class="shrink-0 p-1 rounded hover:bg-secondary text-txtsecondary" onclick={() => copyEntry(e)} use:tip={"Copy"}>
                       {#if copiedId === e.id}<Check class="w-4 h-4 text-green-500" />{:else}<Copy class="w-4 h-4" />{/if}
                     </button>
-                    <button class="shrink-0 p-1 rounded hover:bg-secondary text-txtsecondary" onclick={() => downloadEntry(e)} title="Download .txt">
+                    <button class="shrink-0 p-1 rounded hover:bg-secondary text-txtsecondary" onclick={() => downloadEntry(e)} use:tip={"Download .txt"}>
                       <Download class="w-4 h-4" />
                     </button>
-                    <button class="shrink-0 p-1 rounded hover:bg-secondary text-txtsecondary hover:text-red-500" onclick={() => deleteEntry(e.id)} title="Delete">
+                    <button class="shrink-0 p-1 rounded hover:bg-secondary text-txtsecondary hover:text-red-500" onclick={() => deleteEntry(e.id)} use:tip={"Delete"}>
                       <Trash2 class="w-4 h-4" />
                     </button>
                   </div>

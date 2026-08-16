@@ -1,16 +1,48 @@
 @import "tailwindcss";
 @import "katex/dist/katex.min.css";
 @plugin "@tailwindcss/typography";
+
+/* Bundled webfonts — self-hosted latin subsets, no network fetch at runtime
+   (this app runs on a LAN box that may have no internet). Previously the stacks
+   only *named* JetBrains Mono without shipping it, so the app's whole look
+   silently depended on what the host machine happened to have installed. */
+@import "@fontsource/inter/latin-400.css";
+@import "@fontsource/inter/latin-500.css";
+@import "@fontsource/inter/latin-600.css";
+@import "@fontsource/inter/latin-700.css";
+@import "@fontsource/jetbrains-mono/latin-400.css";
+@import "@fontsource/jetbrains-mono/latin-500.css";
+@import "@fontsource/jetbrains-mono/latin-700.css";
+
 @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 
 @theme {
-  /* Fonts — mono-accent retro look. Local stacks, no webfont fetch (offline-safe). */
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --font-mono: "JetBrains Mono", "IBM Plex Mono", "Cascadia Code", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  /* Two roles, strictly split:
+       sans — chrome and prose: headings, labels, buttons, nav, body copy.
+       mono — DATA: model ids, quants, GB/token counts, flags, log lines,
+              launch commands. Anything the operator reads as a value.
+     Mono everywhere (the old default) made prose harder to read and flattened
+     the distinction that actually carries meaning here. */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 
-  /* Light — warm off-white + light cream surface + brown accent. */
+  /* Micro type scale. The app had five near-identical ad-hoc sizes below 12px
+     (0.55/0.6/0.65/0.7rem + text-xs); these are the three that survive. 0.6875rem
+     (11px) is the floor — 8.8px uppercase in a secondary colour was unreadable. */
+  --text-micro: 0.6875rem;
+  --text-micro--line-height: 1rem;
+  --text-label: 0.75rem;
+  --text-label--line-height: 1.125rem;
+
+  /* Light — warm off-white + light cream surface + brown accent. A deliberate
+     "paper" mode, not a washed-out copy of dark: the parchment ground and the
+     roasted-brown accent are the identity. */
   --color-background: rgba(240, 230, 214, 1);
   --color-surface: rgba(248, 240, 226, 1);
+  /* One step ABOVE surface for nested blocks (a <pre> inside a card, an inner
+     well). Nesting used to fall back to `background`, i.e. DARKER than its
+     parent, so a raised block read as a hole punched in the card. */
+  --color-surface-2: rgba(253, 249, 241, 1);
 
   /* text colors */
   --color-txtmain: rgba(26, 23, 20, 1);
@@ -34,7 +66,20 @@
   --color-focus-ring: rgba(120, 72, 40, 0.4);
   --color-select-caret: rgba(26, 23, 20, 0.8);
   --color-btn-border: rgba(40, 30, 20, 0.25);
+  /* Unchecked tick/radio outline. Its own token because --color-card-border is
+     tuned for large panels and disappears at 16px, while --color-btn-border is
+     only defined for the light theme. */
+  --color-control-border: rgba(40, 30, 20, 0.4);
   --color-dot: rgba(40, 30, 20, 0.06);
+  /* Ink-on-paper citation chip. Was a hardcoded #000/#fff in both themes, which
+     put a pure-black pill on a cream page. */
+  --color-cite-bg: rgba(58, 40, 26, 1);
+  --color-cite-text: rgba(250, 246, 238, 1);
+  /* Soft under-edge for the surfaces that should read as raised (status rail,
+     sticky headers). Bottom only: these sit flush under the title bar, where a
+     top highlight reads as a stray white seam rather than as depth. Everything
+     else stays flat — that's the retro intent. */
+  --shadow-inset-sm: inset 0 -1px 0 rgba(40, 30, 20, 0.06);
 }
 
 @layer theme {
@@ -44,6 +89,8 @@
        sits just above the bg for cards/inputs. */
     --color-background: rgba(34, 32, 30, 1);
     --color-surface: rgba(44, 42, 38, 1);
+    /* One step above surface — see the light-theme note. */
+    --color-surface-2: rgba(56, 53, 48, 1);
     /* text colors */
     --color-txtmain: rgba(237, 237, 238, 1);
     --color-txtsecondary: rgba(161, 161, 166, 0.85);
@@ -68,16 +115,35 @@
     --color-btn-primary-text: rgba(255, 250, 245, 1);
     --color-card-border: rgba(168, 168, 176, 0.15);
     --color-card-border-inner: rgba(168, 168, 176, 0.11);
-    --shadow-inset-sm: inset 0 1px 0 rgba(255, 255, 255, 0.06), inset 0 -1px 0 rgba(0, 0, 0, 0.25);
+    --shadow-inset-sm: inset 0 -1px 0 rgba(0, 0, 0, 0.25);
     --button-border-secondary: rgba(168, 168, 176, 0.18);
+    --color-control-border: rgba(190, 190, 198, 0.4);
     --color-dot: rgba(180, 180, 190, 0.09);
+    --color-cite-bg: rgba(18, 17, 16, 1);
+    --color-cite-text: rgba(237, 237, 238, 1);
   }
 }
 
 @layer base {
   body {
-    /* Retro look: mono everywhere by default. */
-    @apply bg-background text-txtmain font-mono;
+    /* Sans is the DEFAULT; data opts into mono explicitly. Most value-bearing
+       markup in the app already carries `font-mono` at the call site, so this
+       flip lands on chrome and prose without touching the numbers. */
+    @apply bg-background text-txtmain font-sans;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Visible keyboard focus, app-wide. `--color-focus-ring` was defined in both
+     themes and used nowhere: tabbing through 200+ controls showed nothing. */
+  :focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 1px;
+    border-radius: 0.25rem;
+  }
+  /* Pointer users never see it; only keyboard navigation does. */
+  :focus:not(:focus-visible) {
+    outline: none;
   }
 
   /* Form controls don't inherit font-family by default — force them onto the
@@ -118,32 +184,147 @@
     padding-right: 1.3rem !important;
   }
 
-  /* Headings carry the retro mono accent + tight tracking. */
+  /* Ticks and radios are drawn by us, not the OS. `accent-color` alone only
+     recoloured the fill — the box itself stayed the platform's (square corners,
+     a grey 1px chrome border, a different size on every OS), which read as the
+     one un-designed control on the page. appearance:none takes the whole thing
+     over; the semantics (indeterminate, form reset, screen-reader role, label
+     association) are untouched because it is still a real input.
+
+     Sized in em so a call site's `w-4 h-4`, `text-xs` etc. still lands. */
+  input[type="checkbox"],
+  input[type="radio"] {
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    flex-shrink: 0;
+    display: inline-block;
+    width: 1rem;
+    height: 1rem;
+    margin: 0;
+    border: 1px solid var(--color-control-border);
+    border-radius: 0.25rem;
+    background-color: var(--color-background);
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: 100%;
+    cursor: pointer;
+    transition:
+      background-color 120ms ease,
+      border-color 120ms ease,
+      box-shadow 120ms ease;
+  }
+  input[type="radio"] {
+    border-radius: 999px;
+  }
+
+  input[type="checkbox"]:hover:not(:disabled),
+  input[type="radio"]:hover:not(:disabled) {
+    border-color: var(--color-primary);
+  }
+
+  input[type="checkbox"]:checked,
+  input[type="checkbox"]:indeterminate,
+  input[type="radio"]:checked {
+    background-color: var(--color-primary);
+    border-color: var(--color-primary);
+  }
+
+  /* The glyph is a data-URI SVG because ::before/::after don't render on a
+     replaced element like <input>. Its stroke is hardcoded near-white: both
+     themes set --color-btn-primary-text to the same near-white, and a CSS var
+     can't reach inside a url() anyway. */
+  input[type="checkbox"]:checked {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23fffaf5' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'><path d='M3.5 8.5l3 3 6-6.5'/></svg>");
+  }
+  input[type="checkbox"]:indeterminate {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23fffaf5' stroke-width='2.25' stroke-linecap='round'><path d='M4 8h8'/></svg>");
+  }
+  /* The radio dot is a gradient rather than an SVG so it stays theme-driven. */
+  input[type="radio"]:checked {
+    background-image: radial-gradient(circle, var(--color-btn-primary-text) 0 32%, transparent 34%);
+  }
+
+  input[type="checkbox"]:disabled,
+  input[type="radio"]:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  /* Range sliders get a full restyle: accent-color alone leaves the chunky
+     native track, which is taller than every input beside it. */
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 1rem;
+    background: transparent;
+    cursor: pointer;
+  }
+  input[type="range"]:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 0.25rem;
+    border-radius: 999px;
+    background: var(--color-secondary-hover);
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 0.85rem;
+    height: 0.85rem;
+    border-radius: 999px;
+    background: var(--color-primary);
+    border: 2px solid var(--color-surface);
+    /* (track height - thumb height) / 2, to sit centred on the rail. */
+    margin-top: -0.3rem;
+  }
+  input[type="range"]::-moz-range-track {
+    height: 0.25rem;
+    border-radius: 999px;
+    background: var(--color-secondary-hover);
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 0.85rem;
+    height: 0.85rem;
+    border-radius: 999px;
+    background: var(--color-primary);
+    border: 2px solid var(--color-surface);
+  }
+
+  /* Heading scale for a DENSE operator tool, not an article. The old scale ran
+     h1:text-4xl → h6:text-base with a blanket `pb-4`, so every call site fought
+     it with `!pb-0` and picked its level by size rather than structure — which
+     is why `h6` became the de-facto section title in 13 places. It now IS the
+     section-label style, and no heading carries built-in spacing (pages compose
+     with flex gap). */
   h1,
   h2,
   h3,
   h4,
   h5,
   h6 {
-    @apply font-mono tracking-tight text-txtmain font-bold pb-4;
+    @apply font-sans tracking-tight text-txtmain;
   }
   h1 {
-    @apply text-4xl;
+    @apply text-2xl font-semibold;
   }
   h2 {
-    @apply text-3xl;
+    @apply text-xl font-semibold;
   }
   h3 {
-    @apply text-2xl;
+    @apply text-lg font-semibold;
   }
   h4 {
-    @apply text-xl;
+    @apply text-base font-semibold;
   }
   h5 {
-    @apply text-lg;
+    @apply text-sm font-semibold uppercase tracking-wide;
   }
+  /* Section label: the workhorse. Small, uppercase, quiet. */
   h6 {
-    @apply text-base;
+    @apply text-label font-semibold uppercase tracking-wide text-txtsecondary;
   }
 }
 
@@ -183,8 +364,8 @@
     font-weight: 600;
     line-height: 1;
     border-radius: 9999px;
-    background: #000;
-    color: #fff;
+    background: var(--color-cite-bg);
+    color: var(--color-cite-text);
     border: 1px solid transparent;
     transition: border-color 0.15s, color 0.15s;
   }
@@ -193,9 +374,9 @@
     color: var(--color-primary);
   }
 
-  /* Wiki citation chips share the base `.cite` shape — same black/white look,
-     same orange hover — so an in-app help-article link reads no differently
-     from a web source. */
+  /* Wiki citation chips share the base `.cite` shape — same themed fill, same
+     orange hover — so an in-app help-article link reads no differently from a
+     web source. */
   a.cite-wiki {
     cursor: pointer;
   }
@@ -203,7 +384,7 @@
   /* Navigation Header */
 
   .navlink {
-    @apply font-mono text-xs uppercase tracking-wider text-txtsecondary hover:bg-secondary hover:text-txtmain rounded-md px-2.5 py-1.5 transition-colors;
+    @apply text-label font-medium uppercase tracking-wider text-txtsecondary hover:bg-secondary hover:text-txtmain rounded-md px-2.5 py-1.5 transition-colors;
   }
   .navlink.active {
     @apply bg-primary text-navlink-active;
@@ -227,9 +408,15 @@
     @apply p-4 border-b border-card-border-inner;
   }
 
+  /* A nested well INSIDE a card (launch-command block, inner panel). Raised, not
+     sunken — see --color-surface-2. */
+  .well {
+    @apply rounded-md border border-card-border-inner bg-surface-2 p-2;
+  }
+
   /* Status Badges */
   .status {
-    @apply inline-block font-mono uppercase tracking-wide px-2 py-1 text-xs font-medium rounded;
+    @apply inline-block uppercase tracking-wide px-2 py-1 text-micro font-semibold rounded;
   }
 
   .status--ready {
@@ -286,7 +473,7 @@
     @apply inline-flex items-stretch rounded-md border border-card-border bg-surface overflow-hidden;
   }
   .seg > button {
-    @apply px-2.5 py-1 font-mono text-[0.7rem] uppercase tracking-wide text-txtsecondary transition-colors;
+    @apply px-2.5 py-1 text-micro font-medium uppercase tracking-wide text-txtsecondary transition-colors;
   }
   .seg > button + button {
     @apply border-l border-card-border;
@@ -323,13 +510,13 @@
     @apply flex flex-col gap-0.5 rounded-md border border-card-border bg-surface/60 px-3 py-2;
   }
   .tile__label {
-    @apply flex items-center gap-1.5 font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary;
+    @apply flex items-center gap-1.5 text-micro font-medium uppercase tracking-wide text-txtsecondary;
   }
   .tile__value {
     @apply font-mono text-lg leading-tight text-txtmain tabular-nums;
   }
   .tile__sub {
-    @apply font-mono text-[0.65rem] text-txtsecondary tabular-nums;
+    @apply font-mono text-micro text-txtsecondary tabular-nums;
   }
 }
 

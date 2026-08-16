@@ -1,4 +1,11 @@
 <script lang="ts">
+  import { HelpCircle } from "lucide-svelte";
+  import { tip } from "../lib/tooltip";
+
+  // A standalone ⓘ affordance. The tooltip itself is `lib/tooltip.ts` — this is
+  // only the glyph you hang it on. It used to draw its own bubble in hardcoded
+  // bg-gray-900/text-white with `whitespace-nowrap`, so it ignored the theme and
+  // ran off-screen on any multi-line string.
   interface Props {
     content: string;
   }
@@ -6,15 +13,6 @@
   let { content }: Props = $props();
 </script>
 
-<div class="relative group inline-block">
-  <span class="cursor-help">&#9432;</span>
-  <div
-    class="absolute top-full left-1/2 transform -translate-x-1/2 mt-2
-           px-3 py-2 bg-gray-900 text-white text-sm rounded-md
-           opacity-0 group-hover:opacity-100 transition-opacity
-           duration-200 pointer-events-none whitespace-nowrap z-50 normal-case"
-  >
-    {content}
-    <div class="absolute bottom-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-b-gray-900"></div>
-  </div>
-</div>
+<span class="inline-flex align-middle shrink-0 text-txtsecondary cursor-help hover:text-txtmain" use:tip={content}>
+  <HelpCircle size={13} />
+</span>

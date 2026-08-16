@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../lib/tooltip";
   // Horizontal VRAM usage bar. Two modes:
   //  - single (default): one fill from used/total. Color shifts flame → warning
   //    (>85%) → error (>95%, OOM risk).
@@ -40,7 +41,7 @@
         <div
           class="h-full {seg.class} transition-all duration-500"
           style="width: {segPct(seg.mb)}%"
-          title="{seg.label}: {gb(seg.mb)} GB - {seg.detail ?? ''}"
+          use:tip={`${seg.label}: ${gb(seg.mb)} GB - ${seg.detail ?? ''}`}
         ></div>
       {/each}
     {:else}
@@ -58,7 +59,7 @@
   {#if segments && segments.length && showLegend}
     <div class="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[0.65rem] text-txtsecondary">
       {#each segments as seg (seg.label)}
-        <span class="flex items-center gap-1.5" title={seg.detail}>
+        <span class="flex items-center gap-1.5" use:tip={seg.detail}>
           <span class="inline-block w-2 h-2 rounded-sm {seg.class}"></span>
           <span class="uppercase tracking-wide">{seg.label}</span>
           <span class="text-txtmain tabular-nums">{gb(seg.mb)}G</span>

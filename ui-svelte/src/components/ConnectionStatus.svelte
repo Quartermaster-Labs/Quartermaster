@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../lib/tooltip";
   import { connectionState } from "../stores/theme";
   import { versionInfo } from "../stores/api";
 
@@ -19,6 +20,6 @@
   );
 </script>
 
-<div class="flex items-center" title={tooltipText}>
+<div class="flex items-center" use:tip={tooltipText}>
   <span class="inline-block w-3 h-3 rounded-full {eventStatusColor} mr-2"></span>
 </div>

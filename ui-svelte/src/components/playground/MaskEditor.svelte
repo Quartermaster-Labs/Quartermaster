@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../../lib/tooltip";
   import { Eraser, X, Check, Brush, Square, MousePointer2, Lasso, Type, LoaderCircle, Sparkles } from "lucide-svelte";
   import { segment, type SamBox, type SamPoint } from "../../lib/samApi";
 
@@ -348,25 +349,25 @@
   </div>
 
   <div class="flex md:flex-col items-stretch gap-2 bg-surface border border-card-border rounded-lg p-2 md:w-[13rem]">
-    <button class="seg-tool {tool === 'brush' ? 'seg-active' : ''}" onclick={() => setTool("brush")} title="Brush (freehand)">
+    <button class="seg-tool {tool === 'brush' ? 'seg-active' : ''}" onclick={() => setTool("brush")} use:tip={"Brush (freehand)"}>
       <Brush class="w-4 h-4" /> Brush
     </button>
     {#if model}
-      <button class="seg-tool {tool === 'box' ? 'seg-active' : ''}" onclick={() => setTool("box")} title="Box select (AI)">
+      <button class="seg-tool {tool === 'box' ? 'seg-active' : ''}" onclick={() => setTool("box")} use:tip={"Box select (AI)"}>
         <Square class="w-4 h-4" /> Box <Sparkles class="w-3 h-3 ml-auto opacity-40" />
       </button>
-      <button class="seg-tool {tool === 'point' ? 'seg-active' : ''}" onclick={() => setTool("point")} title="Point select (AI)">
+      <button class="seg-tool {tool === 'point' ? 'seg-active' : ''}" onclick={() => setTool("point")} use:tip={"Point select (AI)"}>
         <MousePointer2 class="w-4 h-4" /> Point <Sparkles class="w-3 h-3 ml-auto opacity-40" />
       </button>
-      <button class="seg-tool {tool === 'lasso' ? 'seg-active' : ''}" onclick={() => setTool("lasso")} title="Lasso (freehand polygon)">
+      <button class="seg-tool {tool === 'lasso' ? 'seg-active' : ''}" onclick={() => setTool("lasso")} use:tip={"Lasso (freehand polygon)"}>
         <Lasso class="w-4 h-4" /> Lasso
       </button>
       {#if tool === "lasso"}
-        <button class="seg-tool" onclick={closeLasso} disabled={lasso.length < 3} title="Close the polygon">
+        <button class="seg-tool" onclick={closeLasso} disabled={lasso.length < 3} use:tip={"Close the polygon"}>
           <Check class="w-4 h-4" /> Close
         </button>
       {/if}
-      <button class="seg-tool {tool === 'text' ? 'seg-active' : ''}" onclick={() => setTool("text")} title="Text select (AI)">
+      <button class="seg-tool {tool === 'text' ? 'seg-active' : ''}" onclick={() => setTool("text")} use:tip={"Text select (AI)"}>
         <Type class="w-4 h-4" /> Text <Sparkles class="w-3 h-3 ml-auto opacity-40" />
       </button>
       {#if tool === "text"}
@@ -379,7 +380,7 @@
             disabled={busy}
             class="flex-1 min-w-0 bg-secondary/40 border border-card-border rounded px-2 py-1 text-xs text-txtmain placeholder:text-txtsecondary focus:outline-none focus:border-primary"
           />
-          <button class="seg-tool !px-2" onclick={runText} disabled={busy || !textPrompt.trim()} title="Segment by text">
+          <button class="seg-tool !px-2" onclick={runText} disabled={busy || !textPrompt.trim()} use:tip={"Segment by text"}>
             <Check class="w-4 h-4" />
           </button>
         </div>
@@ -396,13 +397,13 @@
 
     <div class="hidden md:block border-t border-card-border my-1"></div>
 
-    <button class="seg-tool" onclick={clear} title="Clear mask">
+    <button class="seg-tool" onclick={clear} use:tip={"Clear mask"}>
       <Eraser class="w-4 h-4" /> Clear
     </button>
-    <button class="seg-tool" onclick={onCancel} title="Cancel">
+    <button class="seg-tool" onclick={onCancel} use:tip={"Cancel"}>
       <X class="w-4 h-4" /> Cancel
     </button>
-    <button class="seg-tool !bg-primary !text-white hover:opacity-90" onclick={save} title="Use mask">
+    <button class="seg-tool !bg-primary !text-white hover:opacity-90" onclick={save} use:tip={"Use mask"}>
       <Check class="w-4 h-4" /> Done
     </button>
   </div>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../lib/tooltip";
   import { push } from "svelte-spa-router";
   import { get } from "svelte/store";
   import { Folder } from "lucide-svelte";
@@ -208,18 +209,18 @@
         onclick={pickFolder}
         disabled={picking}
         aria-label="Set models folder"
-        title={`Models folder${folderPath ? ": " + folderPath : ""} - click to choose`}
+        use:tip={`Models folder${folderPath ? ": " + folderPath : ""} - click to choose`}
       >
         <Folder class="w-3.5 h-3.5" />
       </button>
       <button
         class="btn btn--sm uppercase tracking-wide"
         onclick={() => showIdorNameStore.update((p) => (p === "name" ? "id" : "name"))}
-        title="Toggle id / name display"
+        use:tip={"Toggle id / name display"}
       >
         {$showIdorNameStore === "id" ? "ID" : "Name"}
       </button>
-      <button class="btn btn--sm uppercase tracking-wide" onclick={() => showUnlistedStore.update((p) => !p)} title="Show or hide unlisted models">
+      <button class="btn btn--sm uppercase tracking-wide" onclick={() => showUnlistedStore.update((p) => !p)} use:tip={"Show or hide unlisted models"}>
         {$showUnlistedStore ? "Hide unlisted" : "Show unlisted"}
       </button>
     </div>

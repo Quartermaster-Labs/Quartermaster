@@ -22,6 +22,10 @@ Output/
 # JS deps + tool caches.
 node_modules/
 
+# UI screenshot captures (ui-svelte/scripts/shots.mjs). Local visual-review
+# artifacts for before/after diffing — regenerated on demand, never shipped.
+ui-svelte/.shots/
+
 # Vendored title model: fetched on first use / by the installer, not tracked.
 # See internal/server/assets/README.md and titlegen_asset.go.
 internal/server/assets/*.gguf

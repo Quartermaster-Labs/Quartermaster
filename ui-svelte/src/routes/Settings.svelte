@@ -1,9 +1,11 @@
 <script lang="ts">
+  import { tip } from "../lib/tooltip";
   import { onMount } from "svelte";
-  import { SlidersHorizontal, HardDrive, Cpu, FolderOpen, Trash2, Star, Plus, Power } from "lucide-svelte";
+  import { SlidersHorizontal, HardDrive, Cpu, FolderOpen, Trash2, Star, Plus, Power, HelpCircle } from "lucide-svelte";
   import { getSettings, putSettings, putSlotCache, putBackends, pickFolder, pickBackend, resetSettings, getAutostart, putAutostart, type AppSettings, type BackendEntry, type AutostartStatus } from "../stores/api";
   import { BACKEND_CLASSES, backendClass, type BackendClassDef } from "../lib/backends";
   import ManagedBackends from "../components/ManagedBackends.svelte";
+  import Select from "../components/Select.svelte";
   import { latestGpu, latestSys } from "../stores/perf";
 
   // Category side-nav — mirrors the playground settings modal's pattern.
@@ -305,16 +307,18 @@
 
 <div class="flex flex-1 min-h-0">
   {#snippet hint(text: string)}
+    <!-- lucide glyph rather than a hand-drawn "?" bubble: the old one needed a
+         sub-11px font to fit its circle, which no longer exists in the scale. -->
     <span
-      class="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-card-border text-txtsecondary text-[0.55rem] leading-none cursor-help align-middle"
-      title={text}
-      aria-label={text}>?</span>
+      class="inline-flex shrink-0 align-middle text-txtsecondary cursor-help hover:text-txtmain"
+      use:tip={text}
+      aria-label={text}><HelpCircle size={12} /></span>
   {/snippet}
 
   {#if !settingsAvailable}
     <div class="flex-1 p-5">
       <div class="card">
-        <p class="font-mono text-xs text-txtsecondary">
+        <p class="text-label text-txtsecondary">
           Settings editing requires the server to run with <span class="text-txtmain">-generate</span>.
         </p>
       </div>
@@ -342,27 +346,27 @@
     <div>
       <div class="flex items-center justify-between mb-3">
         <div class="flex items-center gap-2">
-          <h6 class="!pb-0">Memory budget</h6>
+          <h6 >Memory budget</h6>
           {#if settings?.overridden}
-            <span class="font-mono text-[0.6rem] uppercase tracking-wide text-primary border border-primary/40 rounded px-1.5 py-0.5">custom</span>
+            <span class="text-micro font-medium uppercase tracking-wide text-primary border border-primary/40 rounded px-1.5 py-0.5">custom</span>
           {:else}
-            <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary">default</span>
+            <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">default</span>
           {/if}
           {#if settings?.autoVram}
-            <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary" title="Live free-VRAM is sampled at startup; saving a target disables this.">auto-vram</span>
+            <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary" use:tip={"Live free-VRAM is sampled at startup; saving a target disables this."}>auto-vram</span>
           {/if}
         </div>
         <button
           class="btn btn--sm uppercase tracking-wide"
           onclick={resetSettingsToDefault}
           disabled={savingSettings || !settings?.overridden}
-          title="Revert to the generate file's values"
+          use:tip={"Revert to the generate file's values"}
         >
           Reset
         </button>
       </div>
 
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 font-mono text-xs">
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-label">
         <label class="flex flex-col gap-1">
           <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
             Target VRAM (GB)
@@ -376,9 +380,9 @@
               tVram = Math.max(1, Math.round((tVram + (e.deltaY < 0 ? 0.5 : -0.5)) * 100) / 100);
               clampSettingsForm();
             }}
-            class="w-full rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary"
+            class="w-full font-mono rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary"
           />
-          <span class="text-[0.6rem] text-txtsecondary">default {settings?.defaults.targetVramGB}{gpuMaxGb ? ` · max ${gpuMaxGb}` : ""}</span>
+          <span class="text-micro text-txtsecondary">default {settings?.defaults.targetVramGB}{gpuMaxGb ? ` · max ${gpuMaxGb}` : ""}</span>
         </label>
         <label class="flex flex-col gap-1">
           <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
@@ -393,9 +397,9 @@
               tHead = Math.max(0, Math.round((tHead + (e.deltaY < 0 ? 0.25 : -0.25)) * 100) / 100);
               clampSettingsForm();
             }}
-            class="w-full rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary"
+            class="w-full font-mono rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary"
           />
-          <span class="text-[0.6rem] text-txtsecondary">default {settings?.defaults.vramOverheadGB}</span>
+          <span class="text-micro text-txtsecondary">default {settings?.defaults.vramOverheadGB}</span>
         </label>
         <label class="flex flex-col gap-1">
           <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
@@ -410,9 +414,9 @@
               tRam = Math.max(1, tRam + (e.deltaY < 0 ? 1 : -1));
               clampSettingsForm();
             }}
-            class="w-full rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary"
+            class="w-full font-mono rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary"
           />
-          <span class="text-[0.6rem] text-txtsecondary">default {settings?.defaults.maxRamGB}{sysMaxGb ? ` · max ${sysMaxGb}` : ""}</span>
+          <span class="text-micro text-txtsecondary">default {settings?.defaults.maxRamGB}{sysMaxGb ? ` · max ${sysMaxGb}` : ""}</span>
         </label>
         <label class="flex flex-col gap-1">
           <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
@@ -426,19 +430,19 @@
               e.preventDefault();
               tTtl = Math.max(0, Number(tTtl) + (e.deltaY < 0 ? 30 : -30));
             }}
-            class="w-full rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary"
+            class="w-full font-mono rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary"
           />
-          <span class="text-[0.6rem] text-txtsecondary">{ttlHuman} · default {settings?.defaults.ttlSec}</span>
+          <span class="text-micro text-txtsecondary">{ttlHuman} · default {settings?.defaults.ttlSec}</span>
         </label>
       </div>
 
       {#if settingsOverCapacity}
-        <p class="mt-2 font-mono text-[0.65rem] text-warning">⚠ Value exceeds installed hardware - will be clamped on save.</p>
+        <p class="mt-2 text-micro text-warning">⚠ Value exceeds installed hardware - will be clamped on save.</p>
       {/if}
 
       <div class="mt-3 flex items-center justify-between gap-3">
-        <span class="font-mono text-[0.65rem] text-txtsecondary">Changes save automatically, regenerate the config and hot-reload.</span>
-        <span class="font-mono text-[0.65rem]">
+        <span class="text-micro text-txtsecondary">Changes save automatically, regenerate the config and hot-reload.</span>
+        <span class="text-micro">
           {#if settingsErr}
             <span class="text-error">{settingsErr}</span>
           {:else if savingSettings}
@@ -455,7 +459,7 @@
     {#if autostart?.supported}
       <div>
         <div class="flex items-center gap-2 mb-3">
-          <h6 class="!pb-0">Startup</h6>
+          <h6 >Startup</h6>
           {@render hint("Launch quartermaster in the system tray when you log in to Windows. All quartermaster installs on this machine share ONE startup entry, so only one can start with the system - if another install owns it, take it over from here.")}
         </div>
 
@@ -463,7 +467,7 @@
           <label class="flex items-start justify-between gap-4 cursor-pointer">
             <span class="min-w-0">
               <span class="block text-sm text-txtmain">Start with system</span>
-              <span class="block mt-0.5 text-[0.65rem] text-txtsecondary">
+              <span class="block mt-0.5 text-micro text-txtsecondary">
                 Launch minimized to the tray when you sign in to Windows.
               </span>
             </span>
@@ -485,7 +489,7 @@
           </label>
 
           {#if autostart.enabled && !autostart.ownedByUs}
-            <div class="mt-3 rounded border border-warning/40 bg-warning/10 p-2 text-[0.65rem]">
+            <div class="mt-3 rounded border border-warning/40 bg-warning/10 p-2 text-micro">
               <div class="flex items-center justify-between gap-2">
                 <span class="text-warning">⚠ Owned by another quartermaster install</span>
                 <button
@@ -496,36 +500,36 @@
                   {autostartBusy ? "Working…" : "Take over"}
                 </button>
               </div>
-              <p class="mt-1.5 truncate font-mono text-txtsecondary" title={autostart.ownerExe}>
+              <p class="mt-1.5 truncate font-mono text-txtsecondary" use:tip={autostart.ownerExe}>
                 {autostart.ownerExe}
               </p>
             </div>
           {/if}
 
           {#if autostartErr}
-            <p class="mt-2 font-mono text-[0.65rem] text-error">{autostartErr}</p>
+            <p class="mt-2 text-micro text-error">{autostartErr}</p>
           {/if}
         </div>
       </div>
     {:else}
-      <p class="font-mono text-xs text-txtsecondary">No system options available on this platform.</p>
+      <p class="text-label text-txtsecondary">No system options available on this platform.</p>
     {/if}
     {:else if cat === "kvcache"}
     <!-- Slot KV-cache persistence -->
     <div>
       <div class="flex items-center justify-between mb-3">
         <div class="flex items-center gap-2">
-          <h6 class="!pb-0">KV-cache disk save</h6>
-          <span class="status bg-warning/10 text-warning text-[0.6rem] !px-1.5 !py-0.5">Experimental</span>
+          <h6 >KV-cache disk save</h6>
+          <span class="status bg-warning/10 text-warning text-micro !px-1.5 !py-0.5">Experimental</span>
           {@render hint("Persist a long conversation's KV cache to disk so it survives being evicted from the live slot, and is restored instead of reprocessed. Master switch: each model opts in via its config editor (\"Save KV cache to disk\").\n\nExperimental: reliable for standard transformer models. Hybrid/recurrent models (e.g. Qwen3.5/3.6 GatedDeltaNet) don't yet restore across a process swap - pending upstream llama.cpp (#20819); they still get warm same-process reuse.")}
         </div>
         <label class="flex items-center gap-2 text-sm">
           <input type="checkbox" bind:checked={slotEnable} />
-          <span class="text-txtsecondary uppercase tracking-wide font-mono text-[0.65rem]">Enable</span>
+          <span class="text-txtsecondary text-micro font-medium uppercase tracking-wide">Enable</span>
         </label>
       </div>
 
-      <div class="grid grid-cols-2 gap-3 font-mono text-xs">
+      <div class="grid grid-cols-2 gap-3 text-label">
         <label class="flex flex-col gap-1 col-span-2">
           <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
             Directory
@@ -534,7 +538,7 @@
           <div class="flex gap-2">
             <input
               type="text" bind:value={slotPath} placeholder="(.cache next to Quartermaster)" disabled={!slotEnable}
-              class="flex-1 rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+              class="flex-1 font-mono rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
             />
             <button
               type="button"
@@ -553,9 +557,9 @@
           </span>
           <input
             type="number" min="0" step="1000" bind:value={slotMinTokens} disabled={!slotEnable}
-            class="w-full rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+            class="w-full font-mono rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
           />
-          <span class="text-[0.6rem] text-txtsecondary">tokens · default 30000</span>
+          <span class="text-micro text-txtsecondary">tokens · default 30000</span>
         </label>
         <label class="flex flex-col gap-1">
           <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
@@ -564,9 +568,9 @@
           </span>
           <input
             type="number" min="0" step="1" bind:value={slotMaxDiskGB} disabled={!slotEnable}
-            class="w-full rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+            class="w-full font-mono rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
           />
-          <span class="text-[0.6rem] text-txtsecondary">GB · default 10</span>
+          <span class="text-micro text-txtsecondary">GB · default 10</span>
         </label>
         <label class="flex flex-col gap-1">
           <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
@@ -575,15 +579,15 @@
           </span>
           <input
             type="number" min="0" step="1" bind:value={slotMaxSessions} disabled={!slotEnable}
-            class="w-full rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+            class="w-full font-mono rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
           />
-          <span class="text-[0.6rem] text-txtsecondary">files · default 20</span>
+          <span class="text-micro text-txtsecondary">files · default 20</span>
         </label>
       </div>
 
       <div class="mt-3 flex items-center justify-between gap-3">
-        <span class="font-mono text-[0.65rem] text-txtsecondary">Changes save automatically, regenerate the config and hot-reload.</span>
-        <span class="font-mono text-[0.65rem]">
+        <span class="text-micro text-txtsecondary">Changes save automatically, regenerate the config and hot-reload.</span>
+        <span class="text-micro">
           {#if slotErr}
             <span class="text-error">{slotErr}</span>
           {:else if savingSlot}
@@ -600,7 +604,7 @@
       <ManagedBackends onchanged={loadSettings} />
 
       <div class="flex items-baseline gap-2 mb-1">
-        <h6 class="!pb-0">Backends</h6>
+        <h6 >Backends</h6>
         {@render hint("Inference server binaries Quartermaster can spawn, grouped by the kind of model they serve. On AMD/Intel GPUs point a row at a Vulkan (or ROCm/HIP) build - a CUDA build silently falls back to CPU. The ★ entry of a group is the auto-pick; a model can be pinned to any other entry of its group from its config editor.")}
       </div>
       <p class="text-[0.7rem] text-txtsecondary mb-4">
@@ -612,7 +616,7 @@
           <section class="rounded-md border border-card-border bg-surface/40">
             <header class="flex items-center gap-2 px-3 py-2 border-b border-card-border">
               <span class="text-[0.8125rem] text-txtmain">{g.cls.label}</span>
-              <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary border border-card-border rounded px-1.5 py-0.5">{g.cls.id}</span>
+              <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary border border-card-border rounded px-1.5 py-0.5">{g.cls.id}</span>
               <span class="text-[0.7rem] text-txtsecondary truncate">{g.cls.blurb}</span>
               <button
                 type="button"
@@ -630,23 +634,22 @@
                     <button
                       type="button"
                       class="shrink-0 p-1 rounded transition-colors {be.default ? 'text-primary' : 'text-txtsecondary hover:text-txtmain'}"
-                      title={be.default ? `Default ${g.cls.label.toLowerCase()} backend` : "Make the default for this group"}
+                      use:tip={be.default ? `Default ${g.cls.label.toLowerCase()} backend` : "Make the default for this group"}
                       aria-pressed={be.default}
                       onclick={() => setDefaultBackend(i)}
                     ><Star size={14} fill={be.default ? "currentColor" : "none"} /></button>
 
                     {#if g.cls.engines.length > 1}
-                      <select
-                        bind:value={be.kind} onchange={saveBackendsNow}
-                        title="Engine - decides which arg set is generated"
-                        class="w-28 shrink-0 rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
-                      >
-                        {#each g.cls.engines as e (e.kind)}
-                          <option value={e.kind}>{e.label}</option>
-                        {/each}
-                      </select>
+                      <Select
+                        bind:value={be.kind}
+                        onchange={saveBackendsNow}
+                        options={g.cls.engines.map((e) => ({ value: e.kind, label: e.label, detail: e.hint }))}
+                        tooltip="Engine - decides which arg set is generated"
+                        ariaLabel="Engine"
+                        class="w-28 shrink-0"
+                      />
                     {:else}
-                      <span class="w-28 shrink-0 px-2 py-1 text-txtsecondary truncate" title={g.cls.engines[0]?.hint ?? ""}>{g.cls.engines[0]?.label ?? be.kind}</span>
+                      <span class="w-28 shrink-0 px-2 py-1 text-txtsecondary truncate" use:tip={g.cls.engines[0]?.hint ?? ""}>{g.cls.engines[0]?.label ?? be.kind}</span>
                     {/if}
 
                     <input
@@ -656,20 +659,20 @@
                     <input
                       type="text" bind:value={be.path} placeholder="path to executable" onblur={saveBackendsNow}
                       readonly={be.managed}
-                      title={be.managed ? `Installed build ${be.version} (${be.variant}) - change it from Install a backend above` : ""}
+                      use:tip={be.managed ? `Installed build ${be.version} (${be.variant}) - change it from Install a backend above` : ""}
                       class="flex-1 min-w-0 rounded border border-card-border bg-surface px-2 py-1 text-txtmain placeholder:text-txtsecondary/60 focus:outline-none focus:ring-2 focus:ring-primary {be.managed ? 'opacity-60' : ''}"
                     />
                     {#if be.managed}
-                      <span class="shrink-0 font-mono text-[0.6rem] uppercase tracking-wide text-primary border border-primary rounded px-1.5 py-0.5">installed</span>
+                      <span class="shrink-0 text-micro font-medium uppercase tracking-wide text-primary border border-primary rounded px-1.5 py-0.5">installed</span>
                     {:else}
                       <button
-                        type="button" title="Browse…" aria-label="Browse for executable"
+                        type="button" use:tip={"Browse…"} aria-label="Browse for executable"
                         class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
                         onclick={() => browseBackend(i)}
                       ><FolderOpen size={14} /></button>
                     {/if}
                     <button
-                      type="button" title="Remove backend" aria-label="Remove backend"
+                      type="button" use:tip={"Remove backend"} aria-label="Remove backend"
                       class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-error hover:border-error transition-colors"
                       onclick={() => removeBackend(i)}
                     ><Trash2 size={14} /></button>
@@ -682,11 +685,11 @@
       </div>
 
       <div class="mt-3 flex items-center gap-3">
-        <span class="font-mono text-[0.65rem] text-txtsecondary">
+        <span class="text-micro text-txtsecondary">
           {savingBackends ? "Saving…" : backendsSaved ? "Saved - config regenerated; new paths apply on each model's next load." : "Autosaves on change; regenerates the config and hot-reloads."}
         </span>
         {#if backendsErr}
-          <span class="font-mono text-[0.65rem] text-error">{backendsErr}</span>
+          <span class="text-micro text-error">{backendsErr}</span>
         {/if}
       </div>
     </div>

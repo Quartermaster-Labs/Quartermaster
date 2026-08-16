@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip as tooltip } from "../../lib/tooltip";
   import { get } from "svelte/store";
   import { models, backendMetrics, loadModel } from "../../stores/api";
   import { summarizeConversation, generateTitle, COMPACT_AT, KEEP_RECENT } from "../../lib/chatCompact";
@@ -69,6 +70,7 @@
   import { modelCategory } from "../../lib/modelUtils";
   import { EFFORT_OFF, effortOptions, resolveEffort, requestEffort } from "../../lib/effort";
   import { scrollFade } from "../../lib/scrollFade";
+  import Select from "../Select.svelte";
   import { quotePrefix, fmtTokens, TEMP_STEPS, TEMP_LABELS, nearestTempIdx, currentDateLine, REWRITE_SYSTEM, MAX_IMAGES_PER_MESSAGE, validateImageFile, fileToDataUrl, type ToolItem } from "./chatHelpers";
 
   // Modes are per-conversation: switching chats drops back to a plain chat rather
@@ -1327,7 +1329,7 @@
       <button
         class="fixed z-30 inline-flex items-center justify-center rounded-lg bg-[#141414] text-[#ededee] p-1.5 shadow-lg hover:opacity-90 transition-opacity"
         style="left: {selReply.x + 4}px; top: {selReply.y + 4}px"
-        title="Reply to selection"
+        use:tooltip={"Reply to selection"}
         onmousedown={(e) => e.preventDefault()}
         onclick={replyToSelection}
       >
@@ -1365,7 +1367,7 @@
       {:else}
         {#each messages as message, idx (idx)}
           {#if idx === compactedCount && compactedCount > 0}
-            <div class="flex items-center gap-2 my-3 text-[0.7rem] uppercase tracking-wide text-txtsecondary" title="Messages above are summarized for the model; they're still shown here but not resent.">
+            <div class="flex items-center gap-2 my-3 text-[0.7rem] uppercase tracking-wide text-txtsecondary" use:tooltip={"Messages above are summarized for the model; they're still shown here but not resent."}>
               <span class="flex-1 h-px bg-card-border"></span>
               <span class="inline-flex items-center gap-1"><Brain class="w-3 h-3" /> Compacted - model sees a summary above</span>
               <span class="flex-1 h-px bg-card-border"></span>
@@ -1417,7 +1419,7 @@
           <button
             onclick={() => regenerateFromIndex($activeChatId, messages.length - 1)}
             class="inline-flex items-center gap-1.5 rounded-full bg-primary text-white px-3.5 py-1.5 text-xs font-medium shadow-lg hover:opacity-90 transition-opacity"
-            title="Generate a response for the last message"
+            use:tooltip={"Generate a response for the last message"}
           >
             <Sparkles class="w-3.5 h-3.5" />
             Generate response
@@ -1436,7 +1438,7 @@
 
       {#snippet chatSettingsPanel()}
         {#snippet tip(text: string)}
-          <span class="inline-flex shrink-0 cursor-help text-txtsecondary/70 hover:text-txtsecondary" title={text}>
+          <span class="inline-flex shrink-0 cursor-help text-txtsecondary/70 hover:text-txtsecondary" use:tooltip={text}>
             <HelpCircle class="w-3.5 h-3.5" />
           </span>
         {/snippet}
@@ -1463,23 +1465,20 @@
           </div>
         </div>
 
-        <label class="flex items-center justify-between gap-2 text-xs uppercase tracking-wide text-txtsecondary" for="chat-reasoning">
+        <div class="flex items-center justify-between gap-2 text-xs uppercase tracking-wide text-txtsecondary">
           <span class="flex items-center gap-1.5"><Brain class="w-3.5 h-3.5" /> Reasoning {@render tip(
             effortLadder.length > 0
               ? "How hard this model thinks before answering. The levels come from the model's own chat template. Changing it rewrites the top of the system prompt, so it re-reads the conversation — pick one and stay on it. Thinking Budget does not apply at these levels."
               : "Let the model think before answering (for reasoning-capable models). This model's template has no effort levels, so it is on or off.",
           )}</span>
-          <select
-            id="chat-reasoning"
-            class="w-32 px-2 py-1 rounded-md border border-card-border bg-surface text-xs normal-case text-txtmain focus:outline-none focus:border-primary"
+          <Select
             value={effort}
-            onchange={(e) => reasoningEffortStore.set(e.currentTarget.value)}
-          >
-            {#each effortChoices as opt (opt.value)}
-              <option value={opt.value}>{opt.label}</option>
-            {/each}
-          </select>
-        </label>
+            onchange={(v) => reasoningEffortStore.set(v)}
+            ariaLabel="Reasoning effort"
+            class="w-32 normal-case"
+            options={effortChoices.map((opt) => ({ value: opt.value, label: opt.label }))}
+          />
+        </div>
 
         <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-websearch">
           <span class="flex items-center gap-1.5"><Search class="w-3.5 h-3.5" /> Web Search {@render tip("Let the model search the web (via SearXNG) for fresh facts. Needs a tool-calling model. URL + rate limits are in the side-rail Settings.")}</span>
@@ -1539,7 +1538,7 @@
           >
             <div class="flex items-center justify-between">
               <span class="font-medium text-txtmain">Instructions</span>
-              <button class="inline-flex items-center justify-center p-1 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors" onclick={() => (showSysPrompt = false)} title="Close">
+              <button class="inline-flex items-center justify-center p-1 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors" onclick={() => (showSysPrompt = false)} use:tooltip={"Close"}>
                 <X class="w-4 h-4" />
               </button>
             </div>
@@ -1570,7 +1569,7 @@
               <button
                 class="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/75"
                 onclick={() => removeImage(idx)}
-                title="Remove image"
+                use:tooltip={"Remove image"}
               >
                 <X class="h-3 w-3" />
               </button>
@@ -1589,7 +1588,7 @@
               class="group flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[0.8125rem] max-w-[18rem] {doc.status === 'error'
                 ? 'border-red-500/50 bg-red-500/10 text-red-600 dark:text-red-400'
                 : 'border-card-border bg-surface text-txtsecondary'}"
-              title={doc.status === "error" ? doc.error : `${doc.name}${doc.note ? ` · ${doc.note}` : ""}`}
+              use:tooltip={doc.status === "error" ? doc.error : `${doc.name}${doc.note ? ` · ${doc.note}` : ""}`}
             >
               {#if doc.status === "loading"}
                 <Loader2 class="w-3.5 h-3.5 shrink-0 animate-spin text-primary" />
@@ -1607,7 +1606,7 @@
               <button
                 class="shrink-0 p-0.5 rounded-full hover:bg-secondary transition-colors"
                 onclick={() => removeDoc(doc.id)}
-                title="Remove file"
+                use:tooltip={"Remove file"}
               >
                 <X class="w-3.5 h-3.5" />
               </button>
@@ -1644,11 +1643,11 @@
           {#each queued as q, qi (qi)}
             <div class="flex items-center gap-2 self-end max-w-[80%] rounded-2xl bg-secondary/60 border border-card-border px-3 py-1.5 text-[0.8125rem]">
               <Clock class="w-3.5 h-3.5 shrink-0 text-txtsecondary" />
-              <span class="truncate" title={q}>{q}</span>
+              <span class="truncate" use:tooltip={q}>{q}</span>
               <button
                 class="shrink-0 p-0.5 rounded-full text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
                 onclick={() => (queued = queued.filter((_, i) => i !== qi))}
-                title="Remove from queue"
+                use:tooltip={"Remove from queue"}
               >
                 <X class="w-3.5 h-3.5" />
               </button>
@@ -1661,11 +1660,11 @@
       {#if replyingTo}
         <div class="flex items-center gap-2 mb-2 self-start max-w-full rounded-2xl bg-secondary/60 border border-card-border px-3 py-1.5 text-[0.8125rem]">
           <Reply class="w-3.5 h-3.5 shrink-0 text-primary" />
-          <span class="truncate text-txtsecondary" title={replyingTo}>Replying to: {replyingTo}</span>
+          <span class="truncate text-txtsecondary" use:tooltip={replyingTo}>Replying to: {replyingTo}</span>
           <button
             class="shrink-0 p-0.5 rounded-full text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
             onclick={() => (replyingTo = null)}
-            title="Cancel reply"
+            use:tooltip={"Cancel reply"}
           >
             <X class="w-3.5 h-3.5" />
           </button>
@@ -1701,7 +1700,7 @@
           class="composer-icon-btn"
           onclick={openAttach}
           disabled={isStreaming || !$selectedModelStore}
-          title={!$selectedModelStore
+          use:tooltip={!$selectedModelStore
             ? "Pick a model first"
             : canAttach
               ? visionTwin
@@ -1720,12 +1719,12 @@
         {#if ctxN > 0}
           <div
             class="flex items-center gap-1.5"
-            title="Context {fmtTokens(ctxUsed)} / {fmtTokens(ctxN)} tokens ({Math.round(ctxRatio * 100)}%)"
+            use:tooltip={`Context ${fmtTokens(ctxUsed)} / ${fmtTokens(ctxN)} tokens (${Math.round(ctxRatio * 100)}%)`}
           >
             <div class="h-0.5 w-16 rounded-full bg-secondary overflow-hidden">
               <div class="h-full rounded-full transition-all" style="width: {Math.max(ctxRatio * 100, 3)}%; background: {ctxColor};"></div>
             </div>
-            <span class="font-mono text-[0.55rem] tabular-nums text-txtsecondary leading-none">
+            <span class="font-mono text-micro tabular-nums text-txtsecondary leading-none">
               {fmtTokens(ctxUsed)}/{fmtTokens(ctxN)}
             </span>
           </div>

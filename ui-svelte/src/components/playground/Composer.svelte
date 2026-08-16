@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../../lib/tooltip";
   import type { Snippet } from "svelte";
   import { SlidersHorizontal, Square, X } from "lucide-svelte";
   import ModelSelector from "./ModelSelector.svelte";
@@ -79,7 +80,7 @@
       <button
         class="inline-flex items-center justify-center p-1 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
         onclick={() => (showSettings = false)}
-        title="Close"
+        use:tip={"Close"}
       >
         <X class="w-4 h-4" />
       </button>
@@ -119,7 +120,7 @@
         bind:this={settingsToggleEl}
         class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors {showSettings ? 'bg-secondary text-txtmain shadow-inner' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
         onclick={() => (showSettings = !showSettings)}
-        title={settingsTitle}
+        use:tip={settingsTitle}
       >
         <SlidersHorizontal class="w-[1.125rem] h-[1.125rem]" />
       </button>
@@ -127,7 +128,7 @@
         <button
           class="inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
           onclick={onStop}
-          title={stopTitle}
+          use:tip={stopTitle}
         >
           <Square class="w-[1.125rem] h-[1.125rem]" fill="currentColor" />
         </button>

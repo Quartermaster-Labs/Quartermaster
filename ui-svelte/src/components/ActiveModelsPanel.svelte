@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../lib/tooltip";
   import { get } from "svelte/store";
   import { slide } from "svelte/transition";
   import { push } from "svelte-spa-router";
@@ -6,6 +7,7 @@
   import { persistentStore } from "../stores/persistent";
   import { playgroundPort } from "../stores/playgroundAuth";
   import { prettifyModelName, modelCategory, type ModelCategory } from "../lib/modelUtils";
+  import { Settings, Square, Image, MessageCircle, HelpCircle } from "lucide-svelte";
   import type { Model } from "../lib/types";
   import ModelConfigModal from "./ModelConfigModal.svelte";
   import InferenceFeedback from "./InferenceFeedback.svelte";
@@ -145,18 +147,16 @@
 </script>
 
 {#snippet hint(text: string)}
-  <span
-    class="inline-flex items-center justify-center w-3 h-3 shrink-0 rounded-full border border-card-border text-txtsecondary text-[0.5rem] leading-none cursor-help normal-case hover:text-txtmain hover:border-txtmain"
-    title={text}
-    aria-label={text}>?</span>
+  <!-- lucide glyph rather than a hand-drawn "?" bubble: the old one needed a
+       sub-11px font to fit its circle, which no longer exists in the scale. -->
+  <span class="inline-flex shrink-0 text-txtsecondary cursor-help hover:text-txtmain" use:tip={text} aria-label={text}>
+    <HelpCircle size={12} />
+  </span>
 {/snippet}
-{#snippet stopIcon()}
-  <svg viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3 shrink-0" aria-hidden="true"><rect x="5" y="5" width="10" height="10" rx="1.5" /></svg>
-{/snippet}
-{#snippet roField(label: string, value: string, tip: string)}
+{#snippet roField(label: string, value: string, help: string)}
   <div>
-    <div class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">{label} {@render hint(tip)}</div>
-    <div class="text-txtmain tabular-nums pt-1.5 break-all">{value}</div>
+    <div class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">{label} {@render hint(help)}</div>
+    <div class="font-mono text-txtmain tabular-nums pt-1.5 break-all">{value}</div>
   </div>
 {/snippet}
 
@@ -174,30 +174,28 @@
           <div class="mb-3 last:mb-0">
             <div class="flex items-center gap-2">
               <span class="inline-block w-2.5 h-2.5 rounded-full {dotClass(m.state)}"></span>
-              <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary">{m.state}</span>
+              <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">{m.state}</span>
               <div class="ml-auto flex items-center gap-1.5">
                 <button
                   class="inline-flex items-center justify-center p-1.5 rounded-md border border-card-border text-txtsecondary hover:text-txtmain hover:bg-background transition-colors"
                   onclick={() => openConfig(m.id)}
                   aria-label="Edit parameters"
-                  title="Edit parameters / variants"
+                  use:tip={"Edit parameters / variants"}
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
-                    <path fill-rule="evenodd" d="M8.34 1.804A1 1 0 0 1 9.32 1h1.36a1 1 0 0 1 .98.804l.295 1.473c.497.144.97.342 1.41.587l1.25-.834a1 1 0 0 1 1.262.125l.962.962a1 1 0 0 1 .125 1.262l-.834 1.25c.245.44.443.913.587 1.41l1.473.294a1 1 0 0 1 .804.98v1.361a1 1 0 0 1-.804.98l-1.473.295a6.95 6.95 0 0 1-.587 1.41l.834 1.25a1 1 0 0 1-.125 1.262l-.962.962a1 1 0 0 1-1.262.125l-1.25-.834c-.44.245-.913.443-1.41.587l-.294 1.473a1 1 0 0 1-.98.804H9.32a1 1 0 0 1-.98-.804l-.295-1.473a6.95 6.95 0 0 1-1.41-.587l-1.25.834a1 1 0 0 1-1.262-.125l-.962-.962a1 1 0 0 1-.125-1.262l.834-1.25a6.95 6.95 0 0 1-.587-1.41l-1.473-.294A1 1 0 0 1 1 10.68V9.32a1 1 0 0 1 .804-.98l1.473-.295c.144-.497.342-.97.587-1.41l-.834-1.25a1 1 0 0 1 .125-1.262l.962-.962A1 1 0 0 1 5.38 3.03l1.25.834c.44-.245.913-.443 1.41-.587l.294-1.473ZM10 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" clip-rule="evenodd" />
-                  </svg>
+                  <Settings size={16} />
                 </button>
                 {#if playable(m)}
                   <button
                     class="btn btn--sm py-1.5 inline-flex items-center gap-1.5 uppercase tracking-wide hover:border-primary hover:text-primary"
                     onclick={() => chatWith(m)}
                     disabled={m.state !== "ready"}
-                    title="Open this model in the {playgroundTab(m)} playground"
+                    use:tip={`Open this model in the ${playgroundTab(m)} playground`}
                   >
                     {#if m.capabilities?.image_generation}
-                      <svg viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3 shrink-0" aria-hidden="true"><path fill-rule="evenodd" d="M1 5.25A2.25 2.25 0 0 1 3.25 3h13.5A2.25 2.25 0 0 1 19 5.25v9.5A2.25 2.25 0 0 1 16.75 17H3.25A2.25 2.25 0 0 1 1 14.75v-9.5Zm1.5 5.81v3.69c0 .414.336.75.75.75h13.5a.75.75 0 0 0 .75-.75v-2.69l-2.22-2.219a.75.75 0 0 0-1.06 0l-1.91 1.909.47.47a.75.75 0 1 1-1.06 1.06L6.53 8.091a.75.75 0 0 0-1.06 0l-2.97 2.97ZM12 7a1 1 0 1 1 2 0 1 1 0 0 1-2 0Z" clip-rule="evenodd" /></svg>
+                      <Image size={13} class="shrink-0" />
                       Generate
                     {:else}
-                      <svg viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3 shrink-0" aria-hidden="true"><path fill-rule="evenodd" d="M10 3c-4.418 0-8 2.91-8 6.5 0 1.66.77 3.17 2.03 4.32-.1.9-.42 1.78-.95 2.5a.5.5 0 0 0 .5.78c1.46-.25 2.7-.78 3.66-1.42.86.21 1.78.32 2.76.32 4.418 0 8-2.91 8-6.5S14.418 3 10 3Z" clip-rule="evenodd" /></svg>
+                      <MessageCircle size={13} class="shrink-0" />
                       {playLabel(m)}
                     {/if}
                   </button>
@@ -207,15 +205,18 @@
                   onclick={() => unloadSingleModel(m.id)}
                   disabled={m.state !== "ready"}
                 >
-                  {@render stopIcon()}
+                  <Square size={12} class="shrink-0" fill="currentColor" />
                   Unload
                 </button>
               </div>
             </div>
-            <div class="mt-1.5 font-mono text-sm uppercase tracking-widest text-txtsecondary break-words" title={m.id}>{display(m)}</div>
+            <!-- The card's title. Was mono + uppercase + tracking-widest in a
+                 secondary colour, i.e. the three least readable settings at once
+                 on the one string that identifies what's running. -->
+            <div class="mt-1.5 font-mono text-base font-medium text-txtmain break-words" use:tip={m.id}>{display(m)}</div>
 
             {#if cfg?.isImage}
-              <div class="mt-2 grid grid-cols-3 gap-x-3 gap-y-2 font-mono text-xs">
+              <div class="mt-2 grid grid-cols-3 gap-x-3 gap-y-2 text-label">
                 {@render roField("Steps", flags.steps ?? "-", "Sampling steps per image (--steps). More = slower, usually higher quality. Distilled/Turbo models want few (4–8).")}
                 {@render roField("CFG", flags.cfg ?? "-", "Classifier-free guidance scale (--cfg-scale). Turbo/distilled models REQUIRE 1.0 - higher blurs. Standard models use ~7.")}
                 {@render roField("Sampler", flags.sampler ?? "-", "Sampling method (--sampling-method). euler / euler_a are safe defaults; lcm pairs with low-step distilled models.")}
@@ -224,7 +225,7 @@
                 {@render roField("CPU offload", effCmd.includes("--offload-to-cpu") ? "on" : "off", "Page diffusion weights to RAM (--offload-to-cpu): saves VRAM, slower per step.")}
               </div>
             {:else if cfg}
-              <div class="mt-2 grid grid-cols-3 gap-x-3 gap-y-2 font-mono text-xs">
+              <div class="mt-2 grid grid-cols-3 gap-x-3 gap-y-2 text-label">
                 {@render roField("Ctx", flags.ctx ?? "-", "Context window (tokens) this model loaded with (-c), as sized by the autogen sizer to fit free VRAM.")}
                 {@render roField("GPU layers", nglDisplay(flags.ngl, cfg.blockCount ?? 0), "Layers resident on the GPU (-ngl), as chosen by the sizer for the current plan.")}
                 {@render roField("CPU MoE", flags.cpuMoe ?? "-", "Expert layers offloaded to the CPU (--n-cpu-moe) for MoE models.")}
@@ -237,8 +238,8 @@
 
             {#if cfg}
               <details class="mt-2">
-                <summary class="font-mono text-[0.65rem] text-txtsecondary cursor-pointer hover:text-txtmain">Launch command</summary>
-                <pre class="mt-1 whitespace-pre-wrap break-all font-mono text-[0.65rem] text-txtsecondary bg-background rounded p-2">{effCmd}</pre>
+                <summary class="text-micro text-txtsecondary cursor-pointer hover:text-txtmain">Launch command</summary>
+                <pre class="well mt-1 whitespace-pre-wrap break-all font-mono text-micro text-txtsecondary">{effCmd}</pre>
               </details>
             {/if}
           </div>

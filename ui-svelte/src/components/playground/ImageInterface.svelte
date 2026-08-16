@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../../lib/tooltip";
   import { get } from "svelte/store";
   import { models, upstreamLogs, unloadSingleModel } from "../../stores/api";
   import { userPref } from "../../stores/prefs";
@@ -925,8 +926,8 @@
                       onkeydown={editKeyDown}
                     ></textarea>
                     <div class="flex justify-end gap-1.5">
-                      <button class="p-1.5 rounded hover:bg-white/20" onclick={cancelEdit} title="Cancel"><X class="w-4 h-4" /></button>
-                      <button class="p-1.5 rounded hover:bg-white/20" onclick={saveEdit} title="Save & regenerate"><Save class="w-4 h-4" /></button>
+                      <button class="p-1.5 rounded hover:bg-white/20" onclick={cancelEdit} use:tip={"Cancel"}><X class="w-4 h-4" /></button>
+                      <button class="p-1.5 rounded hover:bg-white/20" onclick={saveEdit} use:tip={"Save & regenerate"}><Save class="w-4 h-4" /></button>
                     </div>
                   </div>
                 {:else}
@@ -935,7 +936,7 @@
                     class="absolute top-1.5 right-1.5 p-1 rounded-full opacity-0 group-hover:opacity-100 transition-all bg-white/10 text-white/70 hover:text-white hover:bg-white/25 disabled:hidden"
                     onclick={() => startEdit(ti)}
                     disabled={isGenerating}
-                    title="Edit prompt"
+                    use:tip={"Edit prompt"}
                   >
                     <Pencil class="w-3 h-3" />
                   </button>
@@ -954,7 +955,7 @@
                   <button
                     class="absolute top-1/2 left-full ml-2 -translate-y-1/2 z-10 p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary opacity-0 group-hover:opacity-100 transition-opacity"
                     onclick={() => replyWithImage(t.images[picked])}
-                    title="Reply - use this image as the source/reference"
+                    use:tip={"Reply - use this image as the source/reference"}
                   >
                     <Reply class="w-4 h-4" />
                   </button>
@@ -975,7 +976,7 @@
                           <button
                             class="absolute top-1 left-1 min-w-5 px-1 py-0.5 rounded text-[0.625rem] font-medium tabular-nums {ii === picked ? 'bg-primary text-white' : 'bg-black/50 text-white/80 hover:bg-black/70'}"
                             onclick={() => (pickedImg[ti] = ii)}
-                            title="Use this one for the actions below"
+                            use:tip={"Use this one for the actions below"}
                           >{ii + 1}</button>
                         {/if}
                       </div>
@@ -989,21 +990,21 @@
                       class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary disabled:opacity-40"
                       onclick={() => regenerate(ti)}
                       disabled={isGenerating}
-                      title="Regenerate"
+                      use:tip={"Regenerate"}
                     >
                       <RefreshCw class="w-4 h-4" />
                     </button>
                     <button
                       class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary"
                       onclick={() => copyImage(t.images[picked], ti)}
-                      title={copiedIdx === ti ? "Copied!" : "Copy image"}
+                      use:tip={copiedIdx === ti ? "Copied!" : "Copy image"}
                     >
                       {#if copiedIdx === ti}<Check class="w-4 h-4 text-green-500" />{:else}<Copy class="w-4 h-4" />{/if}
                     </button>
                     <button
                       class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary"
                       onclick={() => downloadImage(t.images[picked])}
-                      title="Download"
+                      use:tip={"Download"}
                     >
                       <Download class="w-4 h-4" />
                     </button>
@@ -1011,7 +1012,7 @@
                       class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary disabled:opacity-40"
                       onclick={() => runUpscale(t.images[picked], "m" + ti)}
                       disabled={upscaling !== null || isGenerating}
-                      title="Upscale ×4"
+                      use:tip={"Upscale ×4"}
                     >
                       {#if upscaling === "m" + ti}<Loader2 class="w-4 h-4 animate-spin" />{:else}<Maximize2 class="w-4 h-4" />{/if}
                     </button>
@@ -1098,7 +1099,7 @@
               <div class="flex flex-col gap-1">
                 <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
                   Batch
-                  <span class="cursor-help opacity-60" title="Images rendered per prompt (max {MAX_BATCH}). They render one after another - N images take N× the time - and the seed increments per image, so a pinned seed reproduces the first one.">(?)</span>
+                  <span class="cursor-help opacity-60" use:tip={`Images rendered per prompt (max ${MAX_BATCH}). They render one after another - N images take N× the time - and the seed increments per image, so a pinned seed reproduces the first one.`}>(?)</span>
                 </span>
                 <input type="number" min="1" max={MAX_BATCH} step="1" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdBatchStore} />
               </div>
@@ -1109,7 +1110,7 @@
             <div class="flex flex-col gap-1">
               <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
                 Tweak strength · {$sdDenoiseStore.toFixed(2)}
-                <span class="cursor-help opacity-60" title="How far each follow-up may stray from the previous image (non-Kontext models).">(?)</span>
+                <span class="cursor-help opacity-60" use:tip={"How far each follow-up may stray from the previous image (non-Kontext models)."}>(?)</span>
               </span>
               <input type="range" min="0" max="1" step="0.05" class="w-full accent-primary" bind:value={$sdDenoiseStore} />
             </div>
@@ -1127,14 +1128,14 @@
               <input type="checkbox" class="accent-primary" bind:checked={$sdToneAnchorStore} />
               <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
                 Tone anchor
-                <span class="cursor-help opacity-60" title="Pin reused-source brightness to the thread's first image so chained edits don't drift darker/brighter. Off = raw model output.">(?)</span>
+                <span class="cursor-help opacity-60" use:tip={"Pin reused-source brightness to the thread's first image so chained edits don't drift darker/brighter. Off = raw model output."}>(?)</span>
               </span>
             </label>
             <label class="flex items-center gap-2 cursor-pointer">
               <input type="checkbox" class="accent-primary" bind:checked={$sdKeepResStore} />
               <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
                 Keep resolution
-                <span class="cursor-help opacity-60" title="Edit at the source image's native size instead of resizing to the selected size.">(?)</span>
+                <span class="cursor-help opacity-60" use:tip={"Edit at the source image's native size instead of resizing to the selected size."}>(?)</span>
               </span>
             </label>
             <!-- LoRAs. The list comes from the backend's --lora-model-dir, so it
@@ -1143,7 +1144,7 @@
               <div class="flex items-center justify-between">
                 <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
                   LoRAs
-                  <span class="cursor-help opacity-60" title="Adapters found next to the model file. Listing them loads the model.">(?)</span>
+                  <span class="cursor-help opacity-60" use:tip={"Adapters found next to the model file. Listing them loads the model."}>(?)</span>
                 </span>
                 <button
                   class="text-xs text-primary hover:underline disabled:opacity-50"
@@ -1165,7 +1166,7 @@
                       checked={strength !== 0}
                       onchange={(e) => setLoraStrength(lora.path, (e.currentTarget as HTMLInputElement).checked ? 1 : 0)}
                     />
-                    <span class="text-xs truncate flex-1" title={lora.path}>{lora.name}</span>
+                    <span class="text-xs truncate flex-1" use:tip={lora.path}>{lora.name}</span>
                     <input
                       type="number"
                       min="-2"
@@ -1202,7 +1203,7 @@
             <button
               class="mt-1 shrink-0 text-txtsecondary hover:text-txtmain transition-colors"
               onclick={() => { $sdNegativePromptStore = ""; showNegative = false; }}
-              title="Remove negative prompt"
+              use:tip={"Remove negative prompt"}
               aria-label="Remove negative prompt"
             ><X class="w-3.5 h-3.5" /></button>
           </div>
@@ -1214,7 +1215,7 @@
           class="composer-icon-btn"
           onclick={() => fileInput?.click()}
           disabled={isGenerating}
-          title={supportsRefImages ? "Attach reference image(s)" : "Attach a source image to edit"}
+          use:tip={supportsRefImages ? "Attach reference image(s)" : "Attach a source image to edit"}
         >
           <Paperclip class="w-[1.125rem] h-[1.125rem]" />
         </button>
@@ -1223,7 +1224,7 @@
             class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {maskData && maskSource === baseImage ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
             onclick={() => (showMask = true)}
             disabled={isGenerating}
-            title={segmentModel ? "Inpaint - mask a region to change (brush or AI select)" : "Inpaint - mask a region to change (keeps the rest)"}
+            use:tip={segmentModel ? "Inpaint - mask a region to change (brush or AI select)" : "Inpaint - mask a region to change (keeps the rest)"}
           >
             <Brush class="w-[1.125rem] h-[1.125rem]" />
           </button>
@@ -1233,7 +1234,7 @@
             class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {styleRef ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
             onclick={() => styleInput?.click()}
             disabled={isGenerating}
-            title="Style transfer - apply the look of a reference image to the edit"
+            use:tip={"Style transfer - apply the look of a reference image to the edit"}
           >
             <Palette class="w-[1.125rem] h-[1.125rem]" />
           </button>
@@ -1242,7 +1243,7 @@
           <button
             class="inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
             onclick={() => (showNegative = true)}
-            title="Add negative prompt"
+            use:tip={"Add negative prompt"}
           >
             <Ban class="w-[1.125rem] h-[1.125rem]" />
           </button>
@@ -1254,7 +1255,7 @@
           class="composer-icon-btn"
           onclick={newThread}
           disabled={isGenerating || turns.length === 0}
-          title="New thread"
+          use:tip={"New thread"}
         >
           <Plus class="w-[1.125rem] h-[1.125rem]" />
         </button>
@@ -1275,7 +1276,7 @@
                   class="absolute top-0 left-0 w-5 h-5 flex items-center justify-center bg-black/60 text-white rounded-br opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-40 disabled:cursor-default"
                   onclick={() => runUpscale(img, "a" + i)}
                   disabled={upscaling !== null || isGenerating}
-                  title="Upscale ×4"
+                  use:tip={"Upscale ×4"}
                 >
                   {#if upscaling === "a" + i}<Loader2 class="w-3 h-3 animate-spin" />{:else}<Maximize2 class="w-3 h-3" />{/if}
                 </button>
@@ -1286,7 +1287,7 @@
           <p class="flex items-center gap-1.5 text-xs text-txtsecondary mb-2 px-2">
             <span>{supportsRefImages ? "Editing the last image (reference)" : isSdapi ? "Editing the last image (img2img)" : "Fresh generation each turn"}</span>
             {#if isSdapi}
-              <button class="hover:text-txtmain transition-colors" onclick={() => (skipBase = true)} title="New image instead - don't edit the last one">
+              <button class="hover:text-txtmain transition-colors" onclick={() => (skipBase = true)} use:tip={"New image instead - don't edit the last one"}>
                 <X class="w-3.5 h-3.5" />
               </button>
             {/if}
@@ -1294,7 +1295,7 @@
         {:else if skipBase && turns.length > 0 && isSdapi}
           <p class="flex items-center gap-1.5 text-xs text-txtsecondary mb-2 px-2">
             <span>New image - not editing the last one</span>
-            <button class="hover:text-txtmain transition-colors" onclick={() => (skipBase = false)} title="Edit the last image instead">
+            <button class="hover:text-txtmain transition-colors" onclick={() => (skipBase = false)} use:tip={"Edit the last image instead"}>
               <RefreshCw class="w-3.5 h-3.5" />
             </button>
           </p>

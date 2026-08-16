@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../../lib/tooltip";
   import { Play, Pause } from "lucide-svelte";
 
   // Custom audio clip player matching the playground design language (warm
@@ -124,7 +125,7 @@
   <button
     class="shrink-0 grid place-items-center w-9 h-9 rounded-full bg-[#141414] text-white hover:opacity-90 active:opacity-80 transition-opacity"
     onclick={toggle}
-    title={playing ? "Pause" : "Play"}
+    use:tip={playing ? "Pause" : "Play"}
   >
     {#if playing}
       <Pause class="w-4 h-4" fill="currentColor" />

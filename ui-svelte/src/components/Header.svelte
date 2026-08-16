@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../lib/tooltip";
   import { link } from "svelte-spa-router";
   import { screenWidth, toggleTheme, themeMode, appTitle, isNarrow } from "../stores/theme";
   import { currentRoute } from "../stores/route";
@@ -38,7 +39,7 @@
   {#if $screenWidth !== "xs" && $screenWidth !== "sm"}
     <h1
       contenteditable="true"
-      class="!text-xl !pb-0 p-0 outline-none hover:bg-secondary rounded px-1"
+      class="!text-xl p-0 outline-none hover:bg-secondary rounded px-1"
       onblur={handleBlur}
       onkeydown={handleKeyDown}
     >
@@ -82,7 +83,7 @@
     {@render navItem("/activity", "Activity")}
     {@render navItem("/logs", "Logs")}
     {@render navItem("/performance", "Performance")}
-    <button onclick={toggleTheme} title="Toggle theme (current: {$themeMode})">
+    <button onclick={toggleTheme} use:tip={`Toggle theme (current: ${$themeMode})`}>
       {#if $themeMode === "system"}
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5">
           <path d="M0,9c0-.552,.448-1,1-1H3.108c.147-.874,.472-1.721,1.006-2.471l-1.478-1.478c-.391-.391-.391-1.023,0-1.414s1.023-.391,1.414,0l1.478,1.478c.751-.534,1.598-.859,2.471-1.006V1c0-.552,.448-1,1-1s1,.448,1,1V3.108c.874,.147,1.725,.466,2.477,1.001l1.473-1.473c.391-.391,1.023-.391,1.414,0s.391,1.023,0,1.414L3.963,15.45c-.195,.195-.451,.293-.707,.293s-.512-.098-.707-.293c-.391-.391-.391-1.023,0-1.414l1.56-1.56c-.535-.751-.854-1.602-1.001-2.477H1c-.552,0-1-.448-1-1ZM23.707,.293c-.391-.391-1.023-.391-1.414,0L.293,22.293c-.391,.391-.391,1.023,0,1.414,.195,.195,.451,.293,.707,.293s.512-.098,.707-.293L23.707,1.707c.391-.391,.391-1.023,0-1.414Zm-.283,10.954c.32-.15,.538-.458,.572-.81,.034-.353-.121-.696-.407-.904-.858-.625-1.833-1.066-2.897-1.315-.335-.078-.69,.022-.934,.267l-8.392,8.391c-.244,.244-.345,.597-.267,.933,.843,3.646,4.047,6.191,7.792,6.191,1.695,0,3.32-.53,4.697-1.533,.286-.208,.441-.553,.407-.904-.034-.353-.251-.66-.572-.811-1.842-.861-3.033-2.727-3.033-4.752s1.19-3.891,3.033-4.753Z"/>

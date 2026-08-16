@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../../lib/tooltip";
   import { models } from "../../stores/api";
   import { groupModels, modelCategory, matchesCapabilities, type ModelCategory } from "../../lib/modelUtils";
   import { ChevronDown } from "lucide-svelte";
@@ -132,7 +133,7 @@
         class="max-w-full flex items-center gap-1 text-xs font-medium text-txtsecondary hover:text-txtmain focus:outline-none disabled:opacity-50 transition-colors"
         onclick={() => (open = !open)}
         onkeydown={(e) => e.key === "Escape" && (open = false)}
-        title={value || placeholder}
+        use:tip={value || placeholder}
       >
         <span class="truncate {value ? '' : 'text-txtsecondary'}">{value || placeholder}</span>
         <ChevronDown class="w-3.5 h-3.5 shrink-0 transition-transform {open ? 'rotate-180' : ''}" />
@@ -146,7 +147,7 @@
           : 'px-3 py-2'}"
         onclick={() => (open = !open)}
         onkeydown={(e) => e.key === "Escape" && (open = false)}
-        title={value || placeholder}
+        use:tip={value || placeholder}
       >
         <span class="truncate {value ? '' : 'text-txtsecondary'}">{value || placeholder}</span>
         <ChevronDown class="w-4 h-4 shrink-0 transition-transform {open ? 'rotate-180' : ''}" />

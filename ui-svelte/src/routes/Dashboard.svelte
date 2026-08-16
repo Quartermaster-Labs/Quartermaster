@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { tip } from "../lib/tooltip";
+  import { link } from "svelte-spa-router";
   import { models, loadModel, loadCounts } from "../stores/api";
   import { prettifyModelName } from "../lib/modelUtils";
   import ActiveModelsPanel from "../components/ActiveModelsPanel.svelte";
@@ -35,14 +37,14 @@
 </script>
 
 <div class="max-w-5xl mx-auto flex flex-col gap-4">
-  <h2 class="!pb-0">Dashboard</h2>
+  <h2>Dashboard</h2>
 
   <!-- Live models: launch params + inference feedback (empty until one loads) -->
   <ActiveModelsPanel category="all" />
 
   <!-- Quick load -->
   <div class="card">
-    <h6 class="!pb-0 mb-3">Quick load</h6>
+    <h6 class="mb-3">Quick load</h6>
     {#if loadable.length > 0}
       <div class="flex flex-wrap gap-2">
         {#each loadable as m (m.id)}
@@ -50,7 +52,7 @@
             class="flex items-center gap-2 rounded-md border border-card-border bg-surface px-3 py-1.5 font-mono text-sm text-txtmain shadow-sm transition-colors hover:border-primary hover:text-primary hover:bg-secondary/40 disabled:opacity-60 max-w-[18rem]"
             onclick={() => load(m)}
             disabled={busy[m.id]}
-            title={m.id}
+            use:tip={m.id}
           >
             <span class="w-1.5 h-1.5 rounded-full bg-txtsecondary shrink-0"></span>
             <span class="truncate">{busy[m.id] ? "Loading…" : prettifyModelName(m.name || m.id)}</span>
@@ -58,7 +60,9 @@
         {/each}
       </div>
     {:else}
-      <p class="font-mono text-xs text-txtsecondary">No idle models. Add some on the Models page.</p>
+      <p class="text-label text-txtsecondary">
+        No idle models. Add some on the <a href="/models" use:link class="text-primary hover:underline">Models</a> page.
+      </p>
     {/if}
   </div>
 </div>
