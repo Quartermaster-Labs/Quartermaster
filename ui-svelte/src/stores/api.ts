@@ -302,6 +302,13 @@ export interface ModelVariant {
   dryMultiplier?: number;
   dryBase?: number;
   dryAllowedLength?: number;
+  // Sampler defaults; null/undefined => inherit the model-wide value. Nullable
+  // rather than 0-gated: 0 is a real setting (greedy temp, min-p off).
+  temp?: number | null;
+  topK?: number | null;
+  topP?: number | null;
+  minP?: number | null;
+  presencePenalty?: number | null;
   specDraftNMax?: number;
   specDefault?: boolean;
   specNgramSizeN?: number;
@@ -385,6 +392,17 @@ export interface ModelOverride {
   dryMultiplier?: number; // 0/undefined => 0.8
   dryBase?: number; // 0/undefined => 1.75
   dryAllowedLength?: number; // 0/undefined => 3
+  // Server-side sampler defaults baked into the launch command; llama-server
+  // applies each only when a request omits that field. null/undefined => omit
+  // the flag, except topK/minP where an arch baseline may still apply (Qwen3 =>
+  // top-k 20, min-p 0). topK/minP have no OpenAI-API field, so the launch flag
+  // is the ONLY thing that ever sets them; temp/topP are overridden by almost
+  // every client request.
+  temp?: number | null;
+  topK?: number | null;
+  topP?: number | null;
+  minP?: number | null;
+  presencePenalty?: number | null;
   // Speculative-decode sub-knobs (emitted per spec backend; 0/false => omit).
   specDraftNMax?: number; // draft-mtp; 0 => 2
   specDefault?: boolean;

@@ -25,6 +25,7 @@
     IMG_SAMPLERS,
     fmtCtx,
     genDefaultKv,
+    genDefaultNum,
     genDefaultSpec,
     hoistChatTemplate,
     nglDisplay,
@@ -155,6 +156,11 @@
     slotPromptSimilarity: number | ""; ropeScaling: string; ropeScale: number | ""; ropeFreqBase: number | "";
     yarnOrigCtx: number | ""; splitMode: string; tensorSplit: string; mainGpu: number | ""; overrideTensor: string;
     chatTemplateFile: string;
+    // Sampler defaults. "" => omit the flag (llama's default, or the arch
+    // baseline for top-k/min-p); a number pins it, INCLUDING 0 — which is why
+    // these round-trip through null rather than the 0-means-inherit convention
+    // the knobs above use.
+    temp: number | ""; topK: number | ""; topP: number | ""; minP: number | ""; presencePenalty: number | "";
   };
   function blankAdv(): AdvKnobs {
     return {
@@ -164,6 +170,7 @@
       slotPromptSimilarity: "", ropeScaling: "", ropeScale: "", ropeFreqBase: "",
       yarnOrigCtx: "", splitMode: "", tensorSplit: "", mainGpu: "", overrideTensor: "",
       chatTemplateFile: "",
+      temp: "", topK: "", topP: "", minP: "", presencePenalty: "",
     };
   }
   let adv = $state<AdvKnobs>(blankAdv());
@@ -180,10 +187,20 @@
       yarnOrigCtx: o?.yarnOrigCtx || "", splitMode: o?.splitMode ?? "", tensorSplit: o?.tensorSplit ?? "",
       mainGpu: o?.mainGpu || "", overrideTensor: o?.overrideTensor ?? "",
       chatTemplateFile: o?.chatTemplateFile ?? "",
+      // `?? ""`, never `|| ""`: a saved 0 (greedy temp, min-p off) is a pin, and
+      // `||` would silently read it back as "inherit".
+      temp: o?.temp ?? "", topK: o?.topK ?? "", topP: o?.topP ?? "",
+      minP: o?.minP ?? "", presencePenalty: o?.presencePenalty ?? "",
     };
   }
   function advToOverride(): Partial<ModelOverride> {
     const n = (v: number | "") => (v === "" ? 0 : Number(v));
+    // Sampler defaults are nullable, so "inherit" is null rather than 0. Also
+    // guards null/undefined explicitly: Svelte's number binding writes null for
+    // an emptied input, and Number(null) is 0 — which here would silently pin
+    // greedy sampling instead of clearing the field.
+    const nn = (v: number | "" | null | undefined) =>
+      v === "" || v == null || Number.isNaN(Number(v)) ? null : Number(v);
     return {
       threadsBatch: n(adv.threadsBatch), prio: n(adv.prio), directIo: adv.directIo,
       noOpOffload: adv.noOpOffload, noRepack: adv.noRepack, kvKDraft: adv.kvKDraft, kvVDraft: adv.kvVDraft,
@@ -194,6 +211,8 @@
       yarnOrigCtx: n(adv.yarnOrigCtx), splitMode: adv.splitMode, tensorSplit: adv.tensorSplit,
       mainGpu: n(adv.mainGpu), overrideTensor: adv.overrideTensor,
       chatTemplateFile: adv.chatTemplateFile.trim(),
+      temp: nn(adv.temp), topK: nn(adv.topK), topP: nn(adv.topP),
+      minP: nn(adv.minP), presencePenalty: nn(adv.presencePenalty),
     };
   }
   // Native open-file dialog for the chat-template path (the dialog opens on the
@@ -314,6 +333,29 @@
     specNgramMinHits = p.specNgramMinHits;
     extraArgs = p.extraArgs;
     adv.chatTemplateFile = p.chatTemplateFile;
+    adv.temp = samplerDelta(p.temp, "--temp");
+    adv.topK = samplerDelta(p.topK, "--top-k");
+    adv.topP = samplerDelta(p.topP, "--top-p");
+    adv.minP = samplerDelta(p.minP, "--min-p");
+    adv.presencePenalty = samplerDelta(p.presencePenalty, "--presence-penalty");
+  }
+
+  // Capture a sampler value out of the launch box as a DELTA against what the
+  // generator already emits for this model (same trick as genDefaultKv for -ctk).
+  // Without it, blurring the box for any unrelated reason would convert autogen's
+  // arch-derived --top-k 20 / --min-p 0 baseline into an explicit per-model pin
+  // that then never tracks a future change to that baseline.
+  function samplerDelta(parsed: number | "", flag: string): number | "" {
+    return parsed === genDefaultNum(config, flag) ? "" : parsed;
+  }
+
+  // Placeholder for an empty sampler box: what this model launches with today,
+  // falling back to llama-server's own default when the flag isn't emitted at
+  // all. Explicit `=== ""` rather than `||` — the arch baseline emits --min-p 0,
+  // and a falsy test would advertise 0.05 on exactly the models that have one.
+  function samplerPlaceholder(flag: string, llamaDefault: number): string {
+    const v = genDefaultNum(config, flag);
+    return String(v === "" ? llamaDefault : v);
   }
 
   function applyImageParsedToDefault(p: ParsedImg) {
@@ -362,6 +404,16 @@
     v.specNgramSizeN = p.specNgramSizeN === "" ? 0 : Number(p.specNgramSizeN);
     v.specNgramSizeM = p.specNgramSizeM === "" ? 0 : Number(p.specNgramSizeM);
     v.specNgramMinHits = p.specNgramMinHits === "" ? 0 : Number(p.specNgramMinHits);
+    // Sampler defaults: "" (== the generator's own value) stays inherit → null.
+    const sv = (parsed: number | "", flag: string): number | null => {
+      const d = samplerDelta(parsed, flag);
+      return d === "" ? null : d;
+    };
+    v.temp = sv(p.temp, "--temp");
+    v.topK = sv(p.topK, "--top-k");
+    v.topP = sv(p.topP, "--top-p");
+    v.minP = sv(p.minP, "--min-p");
+    v.presencePenalty = sv(p.presencePenalty, "--presence-penalty");
     v.extraArgs = p.extraArgs.trim();
     // The variant box renders the inherited model-wide template too — capture it
     // as a delta so an untouched value stays "inherit" ("") instead of pinning.
@@ -477,6 +529,12 @@
       dryMultiplier: v.dryMultiplier || base.dryMultiplier || 0,
       dryBase: v.dryBase || base.dryBase || 0,
       dryAllowedLength: v.dryAllowedLength || base.dryAllowedLength || 0,
+      // Sampler defaults: `??` chain, not `||` — a pinned 0 must survive.
+      temp: v.temp ?? base.temp ?? null,
+      topK: v.topK ?? base.topK ?? null,
+      topP: v.topP ?? base.topP ?? null,
+      minP: v.minP ?? base.minP ?? null,
+      presencePenalty: v.presencePenalty ?? base.presencePenalty ?? null,
       specDraftNMax: v.specDraftNMax || base.specDraftNMax || 0,
       specDefault: v.specDefault || base.specDefault || false,
       specNgramSizeN: v.specNgramSizeN || base.specNgramSizeN || 0,
@@ -728,6 +786,7 @@
       kvInRam: false, cpuOffload: 0, flashAttn: "", mmap: "", mlock: false,
       threads: 0, parallel: 0, extraArgs: "", chatTemplateFile: "",
       dryMultiplier: 0, dryBase: 0, dryAllowedLength: 0,
+      temp: null, topK: null, topP: null, minP: null, presencePenalty: null,
       specDraftNMax: 0, specDefault: false, specNgramSizeN: 0, specNgramSizeM: 0, specNgramMinHits: 0,
       vaePath: "", clipLPath: "", clipGPath: "", t5Path: "", textEncoderPath: "",
       offloadToCpu: "", teOnCpu: "", vaeOnCpu: "", vaeTiling: "", diffusionFa: "",
@@ -757,6 +816,7 @@
       v.ctxCheckpoints == null && v.dry == null && v.preserveThinking == null && v.slotCache == null && !v.kvInRam && !v.cpuOffload &&
       !v.flashAttn && !v.mmap && !v.mlock && !v.threads && !v.parallel && !v.extraArgs && !v.chatTemplateFile &&
       !v.dryMultiplier && !v.dryBase && !v.dryAllowedLength &&
+      v.temp == null && v.topK == null && v.topP == null && v.minP == null && v.presencePenalty == null &&
       !v.specDraftNMax && !v.specDefault && !v.specNgramSizeN && !v.specNgramSizeM && !v.specNgramMinHits
     );
   }
@@ -1126,6 +1186,16 @@
   // placeholder (the inherited value) surfaces instead of a literal "0".
   function vnum(n: number | null | undefined): string {
     return n ? String(n) : "";
+  }
+  // vnum's null-aware twin for the sampler defaults, where 0 is a pinned value
+  // and only null/undefined means "inherit" — vnum would render a pinned 0 as an
+  // empty box, and the next save would read it back as inherit.
+  function vsamp(n: number | null | undefined): string {
+    return n == null ? "" : String(n);
+  }
+  function vsampSet(e: Event): number | null {
+    const s = (e.currentTarget as HTMLInputElement).value;
+    return s === "" || Number.isNaN(Number(s)) ? null : Number(s);
   }
 
   async function save() {
@@ -1939,6 +2009,21 @@
               </div>
             {/if}
           </label>
+
+          <div class="flex flex-col gap-1 text-sm col-span-2">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Sampler defaults
+              {@render hint("Server-side defaults, applied only to requests that omit the field. top-k and min-p have no OpenAI-API field, so a client cannot set them and these flags are the only thing that ever does; temperature / top-p / presence are overridden by almost every client request. Empty = the placeholder (what this model launches with today).")}
+            </span>
+            <div class="flex items-end gap-2">
+              <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">temp<input type="number" min="0" step="0.05" bind:value={adv.temp} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder={samplerPlaceholder("--temp", 0.8)} /></span>
+              <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">top-k<input type="number" min="0" step="1" bind:value={adv.topK} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder={samplerPlaceholder("--top-k", 40)} /></span>
+              <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">top-p<input type="number" min="0" max="1" step="0.01" bind:value={adv.topP} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder={samplerPlaceholder("--top-p", 0.95)} /></span>
+              <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">min-p<input type="number" min="0" max="1" step="0.01" bind:value={adv.minP} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder={samplerPlaceholder("--min-p", 0.05)} /></span>
+              <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">presence<input type="number" min="-2" max="2" step="0.1" bind:value={adv.presencePenalty} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder={samplerPlaceholder("--presence-penalty", 0)} /></span>
+            </div>
+          </div>
+
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               Parallel slots
@@ -2365,6 +2450,19 @@
                 </div>
               {/if}
             </label>
+            <div class="flex flex-col gap-1 text-sm">
+              <span class="text-txtsecondary flex items-center gap-1">
+                Sampler defaults
+                {@render hint("Server-side defaults for requests that omit the field. Empty = inherit the model-wide value. 0 is a real setting here (greedy temp, min-p off), so clear the box to inherit — don't type 0.")}
+              </span>
+              <div class="flex items-end gap-2">
+                <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">temp<input type="number" min="0" step="0.05" value={vsamp(sv.temp)} oninput={(e) => (sv.temp = vsampSet(e))} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder={samplerPlaceholder("--temp", 0.8)} /></span>
+                <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">top-k<input type="number" min="0" step="1" value={vsamp(sv.topK)} oninput={(e) => (sv.topK = vsampSet(e))} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder={samplerPlaceholder("--top-k", 40)} /></span>
+                <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">top-p<input type="number" min="0" max="1" step="0.01" value={vsamp(sv.topP)} oninput={(e) => (sv.topP = vsampSet(e))} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder={samplerPlaceholder("--top-p", 0.95)} /></span>
+                <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">min-p<input type="number" min="0" max="1" step="0.01" value={vsamp(sv.minP)} oninput={(e) => (sv.minP = vsampSet(e))} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder={samplerPlaceholder("--min-p", 0.05)} /></span>
+                <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">presence<input type="number" min="-2" max="2" step="0.1" value={vsamp(sv.presencePenalty)} oninput={(e) => (sv.presencePenalty = vsampSet(e))} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder={samplerPlaceholder("--presence-penalty", 0)} /></span>
+              </div>
+            </div>
 
           </div>
 

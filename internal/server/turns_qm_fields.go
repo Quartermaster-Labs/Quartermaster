@@ -96,6 +96,11 @@ var qmFieldDocs = map[string]string{
 	"dryMultiplier":    "DRY penalty multiplier; 0 = default",
 	"dryBase":          "DRY base; 0 = default",
 	"dryAllowedLength": "DRY allowed repeat length; 0 = default",
+	"temp":             "server-side default temperature; null = llama default (0.8). Most clients send their own, overriding this",
+	"topK":             "server-side default top-k; null = the arch baseline (20 on Qwen3) or llama default (40). No OpenAI field, so clients cannot override",
+	"topP":             "server-side default top-p; null = llama default (0.95)",
+	"minP":             "server-side default min-p; null = the arch baseline (0 on Qwen3) or llama default (0.05). No OpenAI field, so clients cannot override",
+	"presencePenalty":  "server-side default presence penalty; null = llama default (0)",
 	// Advanced
 	"threadsBatch":         "batch/prefill threads (-tb)",
 	"prio":                 "process priority (--prio)",

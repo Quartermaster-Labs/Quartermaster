@@ -90,7 +90,16 @@ const hashCacheSuffix = ".modelhash"
 //	     from --chat-template-kwargs to --reasoning-preserve, and the deprecated
 //	     --no-webui / --mmap / --no-mmap / --mlock / -dio flags collapse into
 //	     --no-ui and the --load-mode enum.
-const genVersion = "v42"
+//	v43: server-side sampler defaults (--temp/--top-k/--top-p/--min-p/
+//	     --presence-penalty). Qwen3-family models now emit --top-k 20 --min-p 0
+//	     from the arch baseline: neither knob has an OpenAI-API field, so no
+//	     client could reach them and every request silently ran on llama's
+//	     top-k 40 / min-p 0.05 instead of the values the model cards specify.
+//	v44: sampler baseline gains muse-glimmer (--top-k 64, no min-p — the card
+//	     pins one and not the other). Only matters for a config generated under
+//	     v43 for a muse-glimmer gguf already on disk; a newly downloaded model
+//	     regenerates through the inputs hash anyway.
+const genVersion = "v44"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

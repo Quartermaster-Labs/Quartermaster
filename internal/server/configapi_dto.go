@@ -49,11 +49,18 @@ type variantDTO struct {
 	DryMultiplier    float64 `json:"dryMultiplier"`
 	DryBase          float64 `json:"dryBase"`
 	DryAllowedLength int     `json:"dryAllowedLength"`
-	SpecDraftNMax    int     `json:"specDraftNMax"`
-	SpecDefault      bool    `json:"specDefault"`
-	SpecNgramSizeN   int     `json:"specNgramSizeN"`
-	SpecNgramSizeM   int     `json:"specNgramSizeM"`
-	SpecNgramMinHits int     `json:"specNgramMinHits"`
+	// Sampler defaults; null => inherit the model-wide value. Pointers because 0
+	// is a real setting for each (greedy temp, min-p off), not "unset".
+	Temp             *float64 `json:"temp"`
+	TopK             *int     `json:"topK"`
+	TopP             *float64 `json:"topP"`
+	MinP             *float64 `json:"minP"`
+	PresencePenalty  *float64 `json:"presencePenalty"`
+	SpecDraftNMax    int      `json:"specDraftNMax"`
+	SpecDefault      bool     `json:"specDefault"`
+	SpecNgramSizeN   int      `json:"specNgramSizeN"`
+	SpecNgramSizeM   int      `json:"specNgramSizeM"`
+	SpecNgramMinHits int      `json:"specNgramMinHits"`
 	// Advanced / power-user knobs; zero/empty => inherit the model-wide value.
 	ThreadsBatch         int     `json:"threadsBatch"`
 	Prio                 int     `json:"prio"`
@@ -141,6 +148,15 @@ type overrideDTO struct {
 	DryMultiplier    float64 `json:"dryMultiplier"`
 	DryBase          float64 `json:"dryBase"`
 	DryAllowedLength int     `json:"dryAllowedLength"`
+	// Sampler defaults baked into the launch command (llama-server applies them
+	// only when a request omits the field). null => omit the flag and take
+	// llama's default, except TopK/MinP where an arch baseline may still apply
+	// (autogen.defaultSamplerFor).
+	Temp            *float64 `json:"temp"`
+	TopK            *int     `json:"topK"`
+	TopP            *float64 `json:"topP"`
+	MinP            *float64 `json:"minP"`
+	PresencePenalty *float64 `json:"presencePenalty"`
 	// Speculative-decode sub-knobs, emitted per Spec backend; 0/false => omit.
 	SpecDraftNMax    int  `json:"specDraftNMax"`
 	SpecDefault      bool `json:"specDefault"`
@@ -190,21 +206,21 @@ type overrideDTO struct {
 }
 
 type modelConfigResp struct {
-	Id          string `json:"id"`
-	Gguf        string `json:"gguf"`
-	Cmd         string `json:"cmd"`
-	MaxCtx      int    `json:"maxCtx"`     // trained context length (slider ceiling); 0 if unknown
-	BlockCount  int    `json:"blockCount"` // transformer layers (denominator for -ngl); 0 if unknown
-	IsMTP       bool   `json:"isMTP"`      // model has nextn/MTP layers, or an mtp-* sidecar => draft-mtp usable
-	IsDflash    bool   `json:"isDflash"`   // paired *-dflash-*.gguf sidecar in the model's dir => draft-dflash usable
-	IsImage     bool   `json:"isImage"`    // diffusion model (sd-server) => image config form
-	IsAudio     bool   `json:"isAudio"`    // TTS or ASR model => audio config form
-	IsSam       bool   `json:"isSam"`      // SAM segmentation (sam3_server) => minimal segment form
+	Id         string `json:"id"`
+	Gguf       string `json:"gguf"`
+	Cmd        string `json:"cmd"`
+	MaxCtx     int    `json:"maxCtx"`     // trained context length (slider ceiling); 0 if unknown
+	BlockCount int    `json:"blockCount"` // transformer layers (denominator for -ngl); 0 if unknown
+	IsMTP      bool   `json:"isMTP"`      // model has nextn/MTP layers, or an mtp-* sidecar => draft-mtp usable
+	IsDflash   bool   `json:"isDflash"`   // paired *-dflash-*.gguf sidecar in the model's dir => draft-dflash usable
+	IsImage    bool   `json:"isImage"`    // diffusion model (sd-server) => image config form
+	IsAudio    bool   `json:"isAudio"`    // TTS or ASR model => audio config form
+	IsSam      bool   `json:"isSam"`      // SAM segmentation (sam3_server) => minimal segment form
 	// Class is the backend class this model resolves against (autogen kindClass):
 	// llm / image / tts / asr / segment. The UI filters the backend picker by it —
 	// TTS and ASR share one config form but not their engines, so the form flags
 	// above cannot stand in for it.
-	Class string `json:"class"`
+	Class       string `json:"class"`
 	HasOverride bool   `json:"hasOverride"`
 	// DisplayName is the UI-chosen advertised name for this base id ("" => none;
 	// the model advertises its real id). Renaming cascades to variant ids.
@@ -230,6 +246,7 @@ func variantToDTO(v autogen.VariantSpec) variantDTO {
 		Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
 		ChatTemplateFile: v.ChatTemplateFile,
 		DryMultiplier:    v.DryMultiplier, DryBase: v.DryBase, DryAllowedLength: v.DryAllowedLength,
+		Temp: v.Temp, TopK: v.TopK, TopP: v.TopP, MinP: v.MinP, PresencePenalty: v.PresencePenalty,
 		SpecDraftNMax: v.SpecDraftNMax, SpecDefault: v.SpecDefault,
 		SpecNgramSizeN: v.SpecNgramSizeN, SpecNgramSizeM: v.SpecNgramSizeM, SpecNgramMinHits: v.SpecNgramMinHits,
 		ThreadsBatch: v.ThreadsBatch, Prio: v.Prio, DirectIo: v.DirectIo, NoOpOffload: v.NoOpOffload, NoRepack: v.NoRepack,
@@ -262,6 +279,7 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		PreserveThinking: o.PreserveThinking,
 		Dry:              o.Dry,
 		DryMultiplier:    o.DryMultiplier, DryBase: o.DryBase, DryAllowedLength: o.DryAllowedLength,
+		Temp: o.Temp, TopK: o.TopK, TopP: o.TopP, MinP: o.MinP, PresencePenalty: o.PresencePenalty,
 		SpecDraftNMax: o.SpecDraftNMax, SpecDefault: o.SpecDefault,
 		SpecNgramSizeN: o.SpecNgramSizeN, SpecNgramSizeM: o.SpecNgramSizeM, SpecNgramMinHits: o.SpecNgramMinHits,
 		ThreadsBatch: o.ThreadsBatch, Prio: o.Prio, DirectIo: o.DirectIo, NoOpOffload: o.NoOpOffload, NoRepack: o.NoRepack,
@@ -293,6 +311,7 @@ func toVariantSpec(v variantDTO) autogen.VariantSpec {
 		Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
 		ChatTemplateFile: v.ChatTemplateFile,
 		DryMultiplier:    v.DryMultiplier, DryBase: v.DryBase, DryAllowedLength: v.DryAllowedLength,
+		Temp: v.Temp, TopK: v.TopK, TopP: v.TopP, MinP: v.MinP, PresencePenalty: v.PresencePenalty,
 		SpecDraftNMax: v.SpecDraftNMax, SpecDefault: v.SpecDefault,
 		SpecNgramSizeN: v.SpecNgramSizeN, SpecNgramSizeM: v.SpecNgramSizeM, SpecNgramMinHits: v.SpecNgramMinHits,
 		ThreadsBatch: v.ThreadsBatch, Prio: v.Prio, DirectIo: v.DirectIo, NoOpOffload: v.NoOpOffload, NoRepack: v.NoRepack,
@@ -344,6 +363,11 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.DryMultiplier = body.DryMultiplier
 	ov.DryBase = body.DryBase
 	ov.DryAllowedLength = body.DryAllowedLength
+	ov.Temp = body.Temp
+	ov.TopK = body.TopK
+	ov.TopP = body.TopP
+	ov.MinP = body.MinP
+	ov.PresencePenalty = body.PresencePenalty
 	ov.SpecDraftNMax = body.SpecDraftNMax
 	ov.SpecDefault = body.SpecDefault
 	ov.SpecNgramSizeN = body.SpecNgramSizeN
@@ -467,6 +491,23 @@ func applyVariantPatch(ov *autogen.Override, p variantDTO) {
 	}
 	if p.DryBase != 0 {
 		ov.DryBase = p.DryBase
+	}
+	// Sampler defaults are pointers, so the sparse patch keys on non-nil rather
+	// than non-zero — 0 is a value the user can legitimately mean here.
+	if p.Temp != nil {
+		ov.Temp = p.Temp
+	}
+	if p.TopK != nil {
+		ov.TopK = p.TopK
+	}
+	if p.TopP != nil {
+		ov.TopP = p.TopP
+	}
+	if p.MinP != nil {
+		ov.MinP = p.MinP
+	}
+	if p.PresencePenalty != nil {
+		ov.PresencePenalty = p.PresencePenalty
 	}
 	if p.DryAllowedLength != 0 {
 		ov.DryAllowedLength = p.DryAllowedLength

@@ -510,6 +510,23 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			if v.DryAllowedLength != 0 {
 				effOv.DryAllowedLength = v.DryAllowedLength
 			}
+			// Sampler defaults: nil => inherit, non-nil wins INCLUDING an explicit
+			// 0 (greedy temp / min-p off are real settings, not "unset").
+			if v.Temp != nil {
+				effOv.Temp = v.Temp
+			}
+			if v.TopK != nil {
+				effOv.TopK = v.TopK
+			}
+			if v.TopP != nil {
+				effOv.TopP = v.TopP
+			}
+			if v.MinP != nil {
+				effOv.MinP = v.MinP
+			}
+			if v.PresencePenalty != nil {
+				effOv.PresencePenalty = v.PresencePenalty
+			}
 			if v.SpecDraftNMax != 0 {
 				effOv.SpecDraftNMax = v.SpecDraftNMax
 			}

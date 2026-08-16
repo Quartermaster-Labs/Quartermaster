@@ -67,6 +67,15 @@ export interface ParsedCmd {
   dryMultiplier: number | "";
   dryBase: number | "";
   dryAllowedLength: number | "";
+  // Sampler defaults. "" => the flag is absent from the command (inherit /
+  // llama's default); a number is the pinned value, 0 included — --min-p 0 and
+  // --temp 0 are real settings, so these must never be collapsed to "" the way
+  // the zero-gated knobs above are.
+  temp: number | "";
+  topK: number | "";
+  topP: number | "";
+  minP: number | "";
+  presencePenalty: number | "";
   // Speculative sub-knobs (value "" / false => omit).
   specDraftNMax: number | "";
   specDefault: boolean;
@@ -84,6 +93,13 @@ export function hoistChatTemplate(extra: string): { extra: string; path: string 
   if (!m) return { extra, path: "" };
   const path = m[2].replace(/^"|"$/g, "");
   return { extra: (extra.slice(0, m.index) + " " + extra.slice(m.index! + m[0].length)).trim(), path };
+}
+
+// A flag value that keeps 0 distinct from absent: null/"" (flag not in the box)
+// => "", anything else => the number. The zero-gated knobs can use `x || ""`;
+// the sampler defaults cannot, since 0 is one of their meaningful values.
+function numFlag(s: string | null): number | "" {
+  return s !== null && s !== "" && !Number.isNaN(Number(s)) ? Number(s) : "";
 }
 
 // Parse a launch command into form fields + extraArgs passthrough. Computed
@@ -121,7 +137,12 @@ export function parseCmdFields(cmd: string): ParsedCmd {
     sNMax: string | null = null,
     sNgN: string | null = null,
     sNgM: string | null = null,
-    sNgHits: string | null = null;
+    sNgHits: string | null = null,
+    temp: string | null = null,
+    topK: string | null = null,
+    topP: string | null = null,
+    minP: string | null = null,
+    presP: string | null = null;
   const extras: string[] = [];
   for (; i < toks.length; i++) {
     const tk = toks[i];
@@ -152,6 +173,15 @@ export function parseCmdFields(cmd: string): ParsedCmd {
       }
       case "-dio": break;
       case "--no-kv-offload": noKv = true; break;
+      // Sampler defaults. Both spellings of each are accepted: the emitter uses
+      // the short form, but a hand-edited box (or a qm-tools write) may carry
+      // llama's long alias, and an unrecognised flag would bleed into extraArgs
+      // and then double-emit alongside the field's own copy.
+      case "--temp": case "--temperature": temp = val(); break;
+      case "--top-k": topK = val(); break;
+      case "--top-p": topP = val(); break;
+      case "--min-p": minP = val(); break;
+      case "--presence-penalty": presP = val(); break;
       case "--dry-multiplier": dMult = val(); break;
       case "--dry-base": dBase = val(); break;
       case "--dry-allowed-length": dAllow = val(); break;
@@ -192,6 +222,11 @@ export function parseCmdFields(cmd: string): ParsedCmd {
     dryMultiplier: dMult !== null && dMult !== "" ? Number(dMult) : "",
     dryBase: dBase !== null && dBase !== "" ? Number(dBase) : "",
     dryAllowedLength: dAllow !== null && dAllow !== "" ? Number(dAllow) : "",
+    temp: numFlag(temp),
+    topK: numFlag(topK),
+    topP: numFlag(topP),
+    minP: numFlag(minP),
+    presencePenalty: numFlag(presP),
     specDraftNMax: sNMax !== null && sNMax !== "" ? Number(sNMax) : "",
     specDefault: specDef,
     specNgramSizeN: sNgN !== null && sNgN !== "" ? Number(sNgN) : "",
@@ -294,6 +329,16 @@ export function genDefaultSpec(c: ModelConfig | null): string {
 export function genDefaultKv(c: ModelConfig | null): string {
   const m = /(?:^|\s)-ctk\s+(\S+)/.exec(c?.cmd ?? "");
   return m ? m[1] : "f16";
+}
+
+// The numeric value autogen emits for `flag` on THIS model, read off its
+// rendered command — the sampler-default counterpart to genDefaultKv. Lets a box
+// edit tell "the user pinned this" apart from "the generator's own default was
+// echoed back", so an arch-derived baseline is not silently frozen into an
+// explicit per-model pin. "" when the flag is absent or non-numeric.
+export function genDefaultNum(c: ModelConfig | null, flag: string): number | "" {
+  const m = new RegExp(`(?:^|\\s)${flag}\\s+(\\S+)`).exec(c?.cmd ?? "");
+  return m && m[1] !== "" && !Number.isNaN(Number(m[1])) ? Number(m[1]) : "";
 }
 
 // Does spec list s contain backend b?

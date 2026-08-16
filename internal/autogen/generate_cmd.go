@@ -117,6 +117,90 @@ func needsQwenFixedChatTemplate(meta Metadata) bool {
 	}
 }
 
+// defaultSamplerFor returns the arch-derived server-side sampler baseline for a
+// model: the values an override leaves nil fall back to. nil/nil => emit nothing
+// and take llama-server's own defaults.
+//
+// Only top-k and min-p are seeded, and deliberately so. Neither has an OpenAI-API
+// field, so a client physically cannot set them through /v1/chat/completions —
+// llama-server's defaults (top-k 40, min-p 0.05) are what every request gets, for
+// every model, forever, unless the launch command says otherwise. Temperature and
+// top-p are the opposite: near enough every client sends them, so a launch-flag
+// value would be overwritten on arrival and would only ever act as a floor. Those
+// stay opt-in per model.
+//
+// The Qwen3 family (3.x dense and MoE alike, all reporting "qwen3*" — see
+// needsQwenFixedChatTemplate on why arch can't distinguish the minors) documents
+// top_k 20 / min_p 0.0 across every model card, in both thinking and instruct
+// mode, so it is safe to apply without knowing which mode a request wants
+// (checked on the 3.6-27B and 3.8-27B cards; 3.6 additionally lists a coding
+// preset, which likewise moves only temperature). The
+// mode-dependent values (temperature, top-p, presence-penalty) are NOT seeded:
+// one process serves both modes here, so there is no single correct choice, and
+// they are the client-settable ones anyway.
+//
+// Muse Glimmer is the only other family found to pin a top-k. It asks for 64 —
+// wider than llama's 40, and constant across all four reasoning-strength levels —
+// but says nothing about min-p, so min-p stays nil rather than being invented.
+// That asymmetry is exactly why this returns two independent pointers instead of
+// a struct that would tempt a caller to fill both.
+//
+// A survey of ~19 current local models (Llama 3.x/4, Mistral, Magistral, Gemma 3,
+// Phi-4, DeepSeek R1/V3.1, GLM-4.6, gpt-oss, Kimi-K2, Nemotron Nano) turned up no
+// other top-k or min-p recommendation at all: the values those cards publish are
+// temperature and top-p, which clients send anyway. Absence here is a finding,
+// not a gap — for those models llama's own defaults are the documented state of
+// the art, so do not add speculative entries.
+func defaultSamplerFor(meta Metadata) (topK *int, minP *float64) {
+	arch := strings.ToLower(meta.Architecture)
+	switch {
+	case strings.HasPrefix(arch, "qwen3"):
+		k, p := 20, 0.0
+		return &k, &p
+	// Prefix, not equality, to match the convention llama.cpp uses for family
+	// members (qwen3 -> qwen3moe / qwen35moe): a future muse-glimmer MoE or minor
+	// would land on "muse-glimmer*" and should inherit the same top-k.
+	case strings.HasPrefix(arch, "muse-glimmer"):
+		k := 64
+		return &k, nil
+	}
+	return nil, nil
+}
+
+// samplerLines renders the sampler-default flags for a resolved override, layered
+// over the arch baseline. An override value always wins, including an explicit 0
+// (hence the pointers — 0 is a real, non-default value for each of these).
+func samplerLines(meta Metadata, ov *Override) []string {
+	topK, minP := defaultSamplerFor(meta)
+	var temp, topP, presence *float64
+	if ov != nil {
+		if ov.TopK != nil {
+			topK = ov.TopK
+		}
+		if ov.MinP != nil {
+			minP = ov.MinP
+		}
+		temp, topP, presence = ov.Temp, ov.TopP, ov.PresencePenalty
+	}
+	var out []string
+	if temp != nil {
+		out = append(out, fmt.Sprintf("--temp %g", *temp))
+	}
+	if topK != nil {
+		out = append(out, fmt.Sprintf("--top-k %d", *topK))
+	}
+	if topP != nil {
+		out = append(out, fmt.Sprintf("--top-p %g", *topP))
+	}
+	if minP != nil {
+		out = append(out, fmt.Sprintf("--min-p %g", *minP))
+	}
+	if presence != nil {
+		out = append(out, fmt.Sprintf("--presence-penalty %g", *presence))
+	}
+	return out
+}
+
 // smallCardVramGB is the budget below which a high-ctx profile falls back to
 // ub=512. The ub=1024 compute buffer (~0.5 GB larger) only fails to fit on a
 // genuinely small card at 64k+; bigger cards keep ub=1024 everywhere (bench:
@@ -362,6 +446,10 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		}
 		lines = append(lines, fmt.Sprintf("--dry-multiplier %g --dry-base %g --dry-allowed-length %d", mult, base, allow))
 	}
+	// Server-side sampler defaults (arch baseline + per-model override). These
+	// apply only to requests that omit the field, so a client stays in control of
+	// anything it actually sends.
+	lines = append(lines, samplerLines(meta, ov)...)
 	lines = append(lines, fmt.Sprintf("-t %d%s", threads, cpuMoeFlag))
 	// Slot KV persistence: expose llama-server's save/restore slot endpoints. Path
 	// is quoted (it lives under a per-user dir that may contain spaces) and matches

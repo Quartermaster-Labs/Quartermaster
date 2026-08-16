@@ -34,6 +34,96 @@ func TestBuildCmdLines_dry(t *testing.T) {
 	}
 }
 
+func f64ptr(f float64) *float64 { return &f }
+func intptr(i int) *int         { return &i }
+
+// joinCmdMeta is joinCmd with the gguf metadata under test (the sampler baseline
+// is arch-derived, so it can't use the zero Metadata).
+func joinCmdMeta(s Settings, meta Metadata, ov *Override) string {
+	s.applyDefaults()
+	prof := profile{Name: "t", Ctx: 8192}
+	return strings.Join(
+		buildCmdLines(s, meta, GgufRow{FullPath: "/m.gguf"}, prof, 8192, 99, 0, "q8_0", "q8_0", false, ov),
+		" ",
+	)
+}
+
+// No sampler flags for an unknown arch; the Qwen3 family gets the top-k/min-p
+// baseline its model cards specify (neither is reachable through the OpenAI API,
+// so the launch flag is the only thing that can set them).
+func TestBuildCmdLines_samplerBaseline(t *testing.T) {
+	s := Settings{}
+
+	for _, flag := range []string{"--temp", "--top-k", "--top-p", "--min-p", "--presence-penalty"} {
+		if got := joinCmdMeta(s, Metadata{Architecture: "llama"}, &Override{}); strings.Contains(got, flag) {
+			t.Fatalf("unknown arch should emit no sampler flags, got %s in: %s", flag, got)
+		}
+	}
+	for _, arch := range []string{"qwen3", "qwen3moe", "qwen35", "qwen35moe"} {
+		got := joinCmdMeta(s, Metadata{Architecture: arch}, &Override{})
+		if !strings.Contains(got, "--top-k 20") || !strings.Contains(got, "--min-p 0") {
+			t.Fatalf("%s should get the Qwen sampler baseline: %s", arch, got)
+		}
+		// Mode-dependent values stay unset: one process serves both thinking and
+		// instruct traffic, and the client sends these anyway.
+		if strings.Contains(got, "--temp") || strings.Contains(got, "--presence-penalty") {
+			t.Fatalf("%s should not seed mode-dependent samplers: %s", arch, got)
+		}
+	}
+}
+
+// Muse Glimmer pins top-k 64 (wider than llama's 40) but documents no min-p, so
+// the baseline must emit the one and leave the other to llama rather than
+// inventing a pairing. Prefix-matched, like the Qwen family.
+func TestBuildCmdLines_samplerMuseGlimmer(t *testing.T) {
+	s := Settings{}
+
+	for _, arch := range []string{"muse-glimmer", "muse-glimmermoe"} {
+		got := joinCmdMeta(s, Metadata{Architecture: arch}, &Override{})
+		if !strings.Contains(got, "--top-k 64") {
+			t.Fatalf("%s should get top-k 64: %s", arch, got)
+		}
+		if strings.Contains(got, "--min-p") {
+			t.Fatalf("%s documents no min-p, so none should be emitted: %s", arch, got)
+		}
+		for _, flag := range []string{"--temp", "--top-p", "--presence-penalty"} {
+			if strings.Contains(got, flag) {
+				t.Fatalf("%s should not seed client-settable %s: %s", arch, flag, got)
+			}
+		}
+	}
+
+	// An override still reaches the min-p the baseline deliberately left unset.
+	got := joinCmdMeta(s, Metadata{Architecture: "muse-glimmer"}, &Override{MinP: f64ptr(0)})
+	if !strings.Contains(got, "--min-p 0") || !strings.Contains(got, "--top-k 64") {
+		t.Fatalf("override min-p should apply alongside the baseline top-k: %s", got)
+	}
+}
+
+// An override wins over the baseline, and an explicit 0 is a value (greedy temp,
+// min-p disabled) rather than "unset" — the whole reason these fields are
+// pointers.
+func TestBuildCmdLines_samplerOverride(t *testing.T) {
+	s := Settings{}
+
+	got := joinCmdMeta(s, Metadata{Architecture: "qwen35"}, &Override{TopK: intptr(64), MinP: f64ptr(0.1)})
+	if !strings.Contains(got, "--top-k 64") || !strings.Contains(got, "--min-p 0.1") {
+		t.Fatalf("override should beat the arch baseline: %s", got)
+	}
+
+	got = joinCmdMeta(s, Metadata{Architecture: "llama"}, &Override{
+		Temp: f64ptr(0), TopP: f64ptr(0.8), MinP: f64ptr(0), PresencePenalty: f64ptr(1.5),
+	})
+	for _, want := range []string{"--temp 0", "--top-p 0.8", "--min-p 0", "--presence-penalty 1.5"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "--top-k") {
+		t.Fatalf("unset top-k should stay unset on a non-Qwen arch: %s", got)
+	}
+}
+
 // Speculative sub-knobs emit only for the matching backend; draft-n-max defaults
 // to 2 and is overridable; ngram-map-k4v knobs emit when set.
 func TestBuildCmdLines_specKnobs(t *testing.T) {

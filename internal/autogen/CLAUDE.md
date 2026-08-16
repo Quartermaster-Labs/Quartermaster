@@ -30,7 +30,7 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 | `plan.go` | VRAM budget → placement: `-ngl`/`--n-cpu-moe` for dense and MoE (`GetLoadPlan`, `densePlacement`); MoE expert-share table + `effectiveShare`. → `sizing.md` |
 | `generate.go` | Top-level orchestration (`Generate`): builds per-model profiles (solo, ctx tiers, named variants), sizes each, emits the YAML. `emitModel`/`RenderSoloCmd` **dispatch by model class** (SAM → image → embedding → TTS → ASR → LLM). This file is the profile loop; the three phases live in the siblings below. |
 | `generate_sizing.go` | Phase 1 — sizing math: `sizeProfile`, `--ctx-checkpoints` count + `checkpointReserveGB`, `forceLowActiveMoE`/`applyForcedOffload`/`estForOffload`, `computeBufferGB`, `MmprojVramGB`, `draftOverheadGB`. Pure arithmetic over `Metadata` + `Settings`. → `sizing.md` |
-| `generate_cmd.go` | Phase 2 — command rendering: `buildCmdLines` (the per-class argv builder) and `RenderSoloCmd` (same with a `${PORT}` placeholder, for the UI preview + ad-hoc commands), plus `effectiveUb`, `effectiveSpec`/`specHas`, `cmdPath`, `needsQwenFixedChatTemplate`. |
+| `generate_cmd.go` | Phase 2 — command rendering: `buildCmdLines` (the per-class argv builder) and `RenderSoloCmd` (same with a `${PORT}` placeholder, for the UI preview + ad-hoc commands), plus `effectiveUb`, `effectiveSpec`/`specHas`, `cmdPath`, `needsQwenFixedChatTemplate`, `defaultSamplerFor`/`samplerLines`. |
 | `generate_emit.go` | Phase 3 — YAML emission: non-model sections (`emitSlotCache`, `emitAPIKeys`, `emitGroupsAndListeners`, `writeGroup`) and per-model bits (`emitProfile`, `writeDisplayName`, `writeEstVram`/`writeEstRam`, `effortLevels`, `formatCtxTag`, `slugify`). |
 | `estimate.go` | One-shot preview (`EstimatePlan`) of a candidate tuning for the web editor; reuses the solo-profile sizing path without writing config. |
 | `overrides.go` | Control-file types (`GenerateFile`, `Settings`, `Override`, `VariantSpec`, `GroupSpec`), defaults, loading/merging, `globLike` (PowerShell `-like`). `Settings.RootList()`/`CategoryRoots`/`CategoryOrder` = multi-root scan folders. `Override` carries granular DRY, granular spec, and the image fields. |
@@ -102,8 +102,10 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
    is pinned). Non-LLM classes use their own paths — see `classes.md`.
 5. **Emit** — `emitProfile` writes each model's YAML `cmd` block. Per-model engine knobs on
    `Override` override the defaults here: `FlashAttn` (`-fa`), `Mmap`, `Mlock`, `Threads` (`-t`),
-   `Parallel`, `Ub` (`-ub/-b`), granular DRY and granular speculative sub-knobs. Zero/empty = the
-   generator default. `Override.ExtraArgs` are appended verbatim after the computed flags.
+   `Parallel`, `Ub` (`-ub/-b`), granular DRY, the sampler defaults (`--temp`/`--top-k`/`--top-p`/
+   `--min-p`/`--presence-penalty`, layered over the arch baseline) and granular speculative
+   sub-knobs. Zero/empty = the generator default (but see the sampler note below: those are
+   pointers, and 0 is a value). `Override.ExtraArgs` are appended verbatim after the computed flags.
    `buildCmdLines` is shared by `emitProfile` and `RenderSoloCmd` (the editor's launch-parameters
    preview, `PUT /api/models/{model}/preview`, no persistence). `emitGroupsAndListeners` assigns
    models to groups by name-glob (first match wins) and binds listen addresses; every group is an
@@ -144,6 +146,36 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   The config itself is cached via the `.modelhash` sidecar digest.
 - `gguf.go` parses the tensor section too (for expert share); a tensor of unknown ggml type
   leaves the share at 0 (arch-table fallback) rather than erroring the whole read.
+
+### Sampler defaults
+
+- **Only `--top-k` and `--min-p` get an arch baseline** (`defaultSamplerFor`,
+  `generate_cmd.go`): Qwen3-family models (`qwen3*`, all 3.x minors) emit `--top-k 20 --min-p 0`,
+  `muse-glimmer*` emits `--top-k 64` and NO min-p (its card pins one and not the other),
+  everything else emits nothing. The asymmetry is the point — neither knob has an OpenAI-API field, so a client
+  physically cannot set them and llama-server's defaults (top-k 40, min-p 0.05) are what every
+  request got, for every model, regardless of what the model card says. Temperature/top-p/
+  presence-penalty are sent by nearly every client, so a launch flag would be overwritten on
+  arrival; they stay opt-in per model. They are also the mode-dependent ones (Qwen documents
+  temp 1.0 thinking vs 0.7 instruct), and one process serves both modes, so there is no single
+  correct value to seed.
+- **`Temp`/`TopK`/`TopP`/`MinP`/`PresencePenalty` are POINTERS, unlike the zero-gated knobs
+  around them.** 0 is a meaningful, non-default value for every one (`--min-p 0` disables
+  truncation, `--temp 0` is greedy), so `0 => inherit` would make the exact values model cards
+  recommend unexpressible. Everything downstream must follow: the variant merge tests `!= nil`,
+  the DTO patch tests `!= nil`, and the UI reads them with `??` not `||` (`advFromOverride`,
+  `vsamp`/`vsampSet` in `ModelConfigModal.svelte`).
+- The UI's launch-command box parses these back (`parseCmdFields`), capturing them as a **delta
+  vs what the generator already emits** (`genDefaultNum`, same trick as `genDefaultKv` for
+  `-ctk`) — otherwise blurring the box for any unrelated reason freezes the arch baseline into
+  an explicit per-model pin that never tracks a future baseline change.
+- **Do not add speculative baseline entries.** A survey of ~19 current local models (Llama
+  3.x/4, Mistral, Magistral, Gemma 3, Phi-4, DeepSeek R1/V3.1, GLM-4.6, gpt-oss, Kimi-K2,
+  Nemotron Nano, Qwen2.5/QwQ) found no top-k or min-p recommendation outside Qwen3 and Muse
+  Glimmer — those cards publish temperature and top-p, which clients send anyway. The empty
+  default is the researched answer, not an unfinished table. Add a case only with a model card
+  in hand, and match on the arch string llama.cpp actually registers (check the GGUF metadata
+  or the upstream PR — the card's prose name is not the arch name).
 
 ### Chat template & reasoning effort
 

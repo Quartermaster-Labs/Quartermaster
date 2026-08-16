@@ -392,6 +392,27 @@ type Override struct {
 	DryMultiplier    float64 `yaml:"dryMultiplier"`
 	DryBase          float64 `yaml:"dryBase"`
 	DryAllowedLength int     `yaml:"dryAllowedLength"`
+	// --- Sampler defaults baked into the launch command ---
+	// llama-server applies each of these only when a request omits that field, so
+	// they are the server-side default for every client. nil => omit the flag and
+	// take llama's own default (temp 0.80 / top-k 40 / top-p 0.95 / min-p 0.05 /
+	// presence 0.0).
+	//
+	// Pointers, not zero-gated floats like the knobs around them: 0 is a
+	// MEANINGFUL, non-default value for every one of these (min-p 0 disables
+	// truncation, temp 0 is greedy, top-k 0 disables top-k), so a plain float64
+	// could not express the exact settings model cards recommend.
+	//
+	// TopK and MinP are the two that actually bite: neither has an OpenAI-API
+	// field, so almost no client ever sends them and the launch flag is the only
+	// thing that ever sets them. Temp/TopP are overwritten by nearly every
+	// request and are mostly a floor for clients that omit them. Mirrored on
+	// VariantSpec. See defaultSamplerFor for the arch-derived TopK/MinP baseline.
+	Temp            *float64 `yaml:"temp"`
+	TopK            *int     `yaml:"topK"`
+	TopP            *float64 `yaml:"topP"`
+	MinP            *float64 `yaml:"minP"`
+	PresencePenalty *float64 `yaml:"presencePenalty"`
 	// Speculative-decode sub-knobs, emitted only for the matching Spec backend;
 	// 0/false => omit (llama-server default). SpecDraftNMax defaults to 2 for
 	// draft-mtp, 6 for draft-dflash (a diffusion block tolerates a longer draft
@@ -563,11 +584,20 @@ type VariantSpec struct {
 	DryMultiplier    float64 `yaml:"dryMultiplier"`
 	DryBase          float64 `yaml:"dryBase"`
 	DryAllowedLength int     `yaml:"dryAllowedLength"`
-	SpecDraftNMax    int     `yaml:"specDraftNMax"`
-	SpecDefault      bool    `yaml:"specDefault"`
-	SpecNgramSizeN   int     `yaml:"specNgramSizeN"`
-	SpecNgramSizeM   int     `yaml:"specNgramSizeM"`
-	SpecNgramMinHits int     `yaml:"specNgramMinHits"`
+	// Sampler defaults mirroring Override; nil => inherit the model-wide value
+	// (and, failing that, the arch baseline / llama's default). Non-nil wins at
+	// merge, so a variant can pin greedy sampling (temp 0) on a model whose
+	// default is hot.
+	Temp             *float64 `yaml:"temp"`
+	TopK             *int     `yaml:"topK"`
+	TopP             *float64 `yaml:"topP"`
+	MinP             *float64 `yaml:"minP"`
+	PresencePenalty  *float64 `yaml:"presencePenalty"`
+	SpecDraftNMax    int      `yaml:"specDraftNMax"`
+	SpecDefault      bool     `yaml:"specDefault"`
+	SpecNgramSizeN   int      `yaml:"specNgramSizeN"`
+	SpecNgramSizeM   int      `yaml:"specNgramSizeM"`
+	SpecNgramMinHits int      `yaml:"specNgramMinHits"`
 	// Advanced / power-user knobs mirroring Override; zero/empty => inherit the
 	// model-wide value (a variant's own non-zero/non-empty value wins at merge).
 	ThreadsBatch         int     `yaml:"threadsBatch"`
