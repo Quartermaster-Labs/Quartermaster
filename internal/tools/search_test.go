@@ -1,7 +1,8 @@
-package server
+package tools
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,7 +15,7 @@ func clearSearchCache() {
 	searchCache.mu.Unlock()
 }
 
-func TestProxyManager_SearchChainFailsOver(t *testing.T) {
+func TestTools_SearchChainFailsOver(t *testing.T) {
 	clearSearchCache()
 	// SearXNG that always errors → the chain must fall through to the next
 	// provider rather than failing the search.
@@ -27,7 +28,7 @@ func TestProxyManager_SearchChainFailsOver(t *testing.T) {
 	}))
 	defer good.Close()
 
-	res, who, err := searchChain(context.Background(), []searchProviderCfg{
+	res, who, err := Search(context.Background(), []SearchProvider{
 		{ID: "searxng", Enabled: true, BaseURL: dead.URL},
 		{ID: "searxng", Enabled: true, BaseURL: good.URL},
 	}, "hello", 5)
@@ -39,11 +40,11 @@ func TestProxyManager_SearchChainFailsOver(t *testing.T) {
 	}
 }
 
-func TestProxyManager_SearchChainSkipsUnconfigured(t *testing.T) {
+func TestTools_SearchChainSkipsUnconfigured(t *testing.T) {
 	clearSearchCache()
 	// Enabled but keyless rows must be skipped, not attempted: a hop that cannot
 	// succeed is latency spent for nothing.
-	for _, p := range []searchProviderCfg{
+	for _, p := range []SearchProvider{
 		{ID: "brave", Enabled: true},
 		{ID: "google", Enabled: true, Key: "k"}, // missing cx
 		{ID: "searxng", Enabled: true},          // missing url
@@ -54,13 +55,13 @@ func TestProxyManager_SearchChainSkipsUnconfigured(t *testing.T) {
 			t.Fatalf("%+v should not be ready", p)
 		}
 	}
-	if _, _, err := searchChain(context.Background(), []searchProviderCfg{{ID: "brave", Enabled: true}}, "q", 5); err == nil ||
-		!strings.Contains(err.Error(), "no web search provider configured") {
-		t.Fatalf("want unconfigured error, got %v", err)
+	if _, _, err := Search(context.Background(), []SearchProvider{{ID: "brave", Enabled: true}}, "q", 5); err == nil ||
+		!errors.Is(err, ErrNoProviders) {
+		t.Fatalf("want ErrNoProviders, got %v", err)
 	}
 }
 
-func TestProxyManager_SearchChainEmptyIsAFailure(t *testing.T) {
+func TestTools_SearchChainEmptyIsAFailure(t *testing.T) {
 	clearSearchCache()
 	// A provider answering 200 with zero results is a failure for chain purposes
 	// — otherwise a rate-limited scraper's empty page ends the search.
@@ -73,7 +74,7 @@ func TestProxyManager_SearchChainEmptyIsAFailure(t *testing.T) {
 	}))
 	defer full.Close()
 
-	res, _, err := searchChain(context.Background(), []searchProviderCfg{
+	res, _, err := Search(context.Background(), []SearchProvider{
 		{ID: "searxng", Enabled: true, BaseURL: empty.URL},
 		{ID: "searxng", Enabled: true, BaseURL: full.URL},
 	}, "empties", 5)
@@ -82,11 +83,11 @@ func TestProxyManager_SearchChainEmptyIsAFailure(t *testing.T) {
 	}
 }
 
-func TestProxyManager_SearchCacheKeyedByProviderAndLimit(t *testing.T) {
+func TestTools_SearchCacheKeyedByProviderAndLimit(t *testing.T) {
 	clearSearchCache()
-	a := searchProviderCfg{ID: "searxng", BaseURL: "http://one:8888/"}
-	b := searchProviderCfg{ID: "brave", Key: "k"}
-	searchCachePut(a, "q", 5, []searchResult{{Title: "A"}})
+	a := SearchProvider{ID: "searxng", BaseURL: "http://one:8888/"}
+	b := SearchProvider{ID: "brave", Key: "k"}
+	searchCachePut(a, "q", 5, []Result{{Title: "A"}})
 
 	if _, ok := searchCacheGet(b, "q", 5); ok {
 		t.Fatal("brave must not be served searxng's cached answer")
@@ -95,12 +96,12 @@ func TestProxyManager_SearchCacheKeyedByProviderAndLimit(t *testing.T) {
 		t.Fatal("a wider re-ask must not hit the narrow cached answer")
 	}
 	// Key rotation must not evict: the key is a credential, not a scope.
-	if _, ok := searchCacheGet(searchProviderCfg{ID: "searxng", BaseURL: "http://one:8888"}, "q", 5); !ok {
+	if _, ok := searchCacheGet(SearchProvider{ID: "searxng", BaseURL: "http://one:8888"}, "q", 5); !ok {
 		t.Fatal("trailing-slash-normalized base should hit")
 	}
 }
 
-func TestProxyManager_DDGUnwrap(t *testing.T) {
+func TestTools_DDGUnwrap(t *testing.T) {
 	cases := map[string]string{
 		"//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fa&amp;rut=x": "https://example.com/a",
 		"https://example.org/direct":                                       "https://example.org/direct",
@@ -114,7 +115,7 @@ func TestProxyManager_DDGUnwrap(t *testing.T) {
 	}
 }
 
-func TestProxyManager_BraveAndGoogleParse(t *testing.T) {
+func TestTools_BraveAndGoogleParse(t *testing.T) {
 	clearSearchCache()
 	brave := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Subscription-Token") != "kk" {
@@ -145,5 +146,25 @@ func TestProxyManager_BraveAndGoogleParse(t *testing.T) {
 	req2, _ := http.NewRequest(http.MethodGet, bad.URL, nil)
 	if _, err := searchDo(req2); err == nil || !strings.Contains(err.Error(), "subscription token invalid") {
 		t.Fatalf("want upstream detail, got %v", err)
+	}
+}
+
+func TestTools_FormatSearchResults(t *testing.T) {
+	// Pin the stamped date: the model has to see the real one, so it is part of
+	// the contract, not incidental formatting.
+	orig := searchDate
+	searchDate = func() string { return "5 August 2026" }
+	defer func() { searchDate = orig }()
+
+	if got := FormatSearchResults("q", nil, nil); got != `No results found for "q". (Searched 5 August 2026.)` {
+		t.Errorf("empty format = %q", got)
+	}
+	rs := []Result{{Title: "T", URL: "http://x", Content: "snip"}}
+	got := FormatSearchResults("q", rs, []int{3})
+	if !strings.Contains(got, "5 August 2026") {
+		t.Errorf("format = %q, want the search date stamped", got)
+	}
+	if !strings.HasSuffix(got, "\n\n[3] T\nhttp://x\nsnip") {
+		t.Errorf("format = %q, want the numbered result block last", got)
 	}
 }

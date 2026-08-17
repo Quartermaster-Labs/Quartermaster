@@ -16,13 +16,18 @@ Everything is registered in `routes` (`server.go`). Model-dispatched routes (`mo
 
 Auth-gated but **not** model-dispatched (`discoveryChain`):
 
+- `GET /v1/models` (`api.go`) — catalog, scoped per listener and per API key.
 - `POST /v1/images/upscale` (`upscale.go` `handleUpscale`) — standalone ESRGAN upscale,
   exec-per-request, no scheduler entry and no VRAM swap. Distinct from `/v1/segment` (SAM),
   which IS a model-dispatched backend.
+- `POST /v1/tools/search`, `/v1/tools/youtube/transcript`, `/v1/tools/youtube/search`,
+  `/v1/tools/youtube/comments` (`toolsapi.go`) — tool **execution** for external AI projects:
+  the executors from `internal/tools`, same API-key credential as the inference routes, model-ready
+  JSON responses, OpenAI-shaped errors. Stateless per call (provider config in the body).
+  See [`tools.md`](tools.md#v1toolss-—-tool-execution-api).
 
 ## Catalog, ops and UI
 
-- `GET /v1/models` (`api.go`) — catalog, scoped per listener and per API key.
 - `GET /logs`, `/logs/stream[/{logMonitorID...}]`; `GET /health`, `/wol-health`, `/{$}` redirect;
   `GET /ui/`, `/favicon.ico` (embedded SPA); `GET /metrics` (Prometheus); `GET /unload`,
   `/running`; `GET /upstream`, `/upstream/{upstreamPath...}`.

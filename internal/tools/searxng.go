@@ -1,4 +1,4 @@
-package server
+package tools
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// searxngJSON is the ONE choke point every SearXNG query goes through — the
+// SearxngJSON is the ONE choke point every SearXNG query goes through — the
 // browser proxy (websearch.go) and the server-run turn loop (turnstools.go).
 //
 // Public SearXNG engines (duckduckgo/brave/startpage/google) are HTML scrapers
@@ -54,9 +54,9 @@ func searxSlot() chan struct{} {
 	return searxGate.sendSlot
 }
 
-// searxngJSON fetches <base>/search?q=..&format=json, rate-limited and cached.
+// SearxngJSON fetches <base>/search?q=..&format=json, rate-limited and cached.
 // Returns the raw JSON body so callers can either stream it on or decode it.
-func searxngJSON(ctx context.Context, baseURL, query string) ([]byte, error) {
+func SearxngJSON(ctx context.Context, baseURL, query string) ([]byte, error) {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if base == "" {
 		return nil, fmt.Errorf("SearXNG URL not set")
@@ -115,7 +115,7 @@ func searxngJSON(ctx context.Context, baseURL, query string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		snip, _ := readLimited(resp.Body, 512)
+		snip, _ := ReadLimited(resp.Body, 512)
 		return nil, fmt.Errorf("searxng %s: %s", resp.Status, snip)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))

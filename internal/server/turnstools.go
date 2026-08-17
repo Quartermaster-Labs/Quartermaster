@@ -1,14 +1,12 @@
 package server
 
 import (
-	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // Server-side ports of the playground's tool + reasoning helpers, so the turn
@@ -104,22 +102,11 @@ func formatWikiResults(query string, results []wikiArticle, numbers []int) strin
 }
 
 // --- web search (SearXNG) --------------------------------------------------
-
-type searchResult struct {
-	Title   string
-	URL     string
-	Content string
-}
-
-const (
-	// webDefaultResults is what a search returns when the model does not say.
-	// webMaxResults is the ceiling: results are prefill on every following turn
-	// of the conversation, so "as many as you like" is a context bill the user
-	// pays for the rest of the chat.
-	webDefaultResults = 5
-	webMaxResults     = 10
-	snippetMax        = 400
-)
+//
+// The executor (searchChain → tools.Search) and the result types moved to
+// internal/tools so the /v1/tools API shares them. This file keeps only the
+// turn-layer concern: parsing the model's `count` argument, which collapses
+// out-of-range values to tools.DefaultResults rather than failing the call.
 
 // parseSearchCount reads the optional `count` off a web_search call. Out-of-range
 // and missing values collapse to the default rather than failing the call: the
@@ -154,67 +141,6 @@ func parseSearchCount(raw string) int {
 	}
 	return webDefaultResults
 }
-
-// searxngSearch queries SearXNG's JSON API directly (server-side, no browser
-// CORS concern). Port of webSearch.ts searxngSearch, minus the /api/websearch
-// proxy hop (we ARE the server). Shares the rate-limited/cached gate in
-// searxng.go with the browser proxy.
-func searxngSearch(ctx context.Context, baseURL, query string, limit int) ([]searchResult, error) {
-	if limit < 1 || limit > webMaxResults {
-		limit = webDefaultResults
-	}
-	body, err := searxngJSON(ctx, baseURL, query)
-	if err != nil {
-		return nil, err
-	}
-	var parsed struct {
-		Results []struct {
-			Title   string `json:"title"`
-			URL     string `json:"url"`
-			Content string `json:"content"`
-		} `json:"results"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return nil, err
-	}
-	out := make([]searchResult, 0, limit)
-	for _, r := range parsed.Results {
-		if len(out) >= limit {
-			break
-		}
-		c := r.Content
-		if len(c) > snippetMax {
-			c = c[:snippetMax]
-		}
-		out = append(out, searchResult{Title: r.Title, URL: r.URL, Content: c})
-	}
-	return out, nil
-}
-
-// formatSearchResults renders the plain-text tool message. Port of webSearch.ts.
-//
-// The result header carries the current date. The system prompt already states
-// it, but that line sits at the very end of a long prefix and models still write
-// queries with their training-cutoff year ("best X 2025"). Stamping it on the
-// result puts the real date next to the thing being judged for freshness, and —
-// unlike putting it in the tool *description* — costs nothing in KV-prefix
-// stability, since tool results are volatile per-turn anyway.
-func formatSearchResults(query string, results []searchResult, numbers []int) string {
-	date := searchDate()
-	if len(results) == 0 {
-		return fmt.Sprintf("No results found for %q. (Searched %s.)", query, date)
-	}
-	var lines []string
-	for i, r := range results {
-		lines = append(lines, fmt.Sprintf("[%d] %s\n%s\n%s", numbers[i], r.Title, r.URL, r.Content))
-	}
-	return fmt.Sprintf("Search results for %q (searched %s - today's date, use it, not a year from memory, when a query is time-sensitive):\n\n%s",
-		query, date, strings.Join(lines, "\n\n"))
-}
-
-// searchDate is the wall-clock date stamped onto search results. Var, not a
-// call, so tests can pin it.
-var searchDate = func() string { return time.Now().Format("2 January 2006") }
 
 // --- reasoning markup (port of reasoning.ts) -------------------------------
 

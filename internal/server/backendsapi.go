@@ -367,7 +367,7 @@ func (s *Server) handleAPIBackendCatalog(w http.ResponseWriter, r *http.Request)
 		if c.Kind == "" && active == nil && len(installed) > 0 {
 			// A helper binary (yt-dlp) has no registry row to point at a build, so
 			// there is nothing to activate. Consumers take the newest install —
-			// Installed() sorts newest-first, and ytDlpPath takes [0] — so report
+			// Installed() sorts newest-first, and tools.DlpPath takes [0] — so report
 			// that one as active rather than showing an inert "use" control.
 			active = &installed[0]
 		}

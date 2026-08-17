@@ -7,7 +7,9 @@ context, request-body filters, in-flight counting, metrics/captures), and dispat
 requests between the local router and remote peers. It also serves the OpenAI-compatible catalog,
 the operations/UI JSON API, the embedded Svelte UI, and — fork additions — per-listener catalog
 scoping, live token streaming, the `-generate` config-editor endpoints, the model hub browser, the
-slot KV cache and the standalone playground app.
+slot KV cache, the standalone playground app, and the `/v1/tools/*` tool-execution API
+that external AI projects use to run the web-search / YouTube tools here instead of
+re-implementing them.
 
 ## Which doc
 
@@ -19,7 +21,7 @@ slot KV cache and the standalone playground app.
 | [`hubapi.md`](hubapi.md) | `/api/hub/*` — search, download jobs, the pre-download context sizer, reveal-folder |
 | [`slotcache.md`](slotcache.md) | Slot KV-cache persistence: preamble seeding, save/restore paths, pruning, the recurrent-arch skip |
 | [`playground.md`](playground.md) | The playground app + the **server-owned turn runner**: tool loop, reasoning-box titles, tool-call replay, the quartermaster MCP, assistant memory |
-| [`tools.md`](tools.md) | The chat tools' fetch paths: web-search chain, `fetch_page`/SSRF guard, YouTube, calc/units/datetime, weather, currency, feeds, imgproxy |
+| [`tools.md`](tools.md) | The chat tools' fetch paths (executors in `internal/tools`): web-search chain, `fetch_page`/SSRF guard, YouTube, calc/units/datetime, weather, currency, feeds, imgproxy — and the `/v1/tools/*` execution API (`toolsapi.go`) |
 
 Also here: `turns_design.md` — the turn runner's design notes.
 
@@ -62,6 +64,8 @@ Depends on:
 - `internal/autogen` — sidecar override/settings I/O, gguf metadata, load-plan estimation.
 - `internal/hub` — Hugging Face search + resumable downloads behind `/api/hub/*`.
 - `internal/backends` — managed backend installs behind `/api/backends/*`.
+- `internal/tools` — the web-search provider chain and YouTube executors, shared by the turn loop
+  (via the aliases in `toolsbridge.go`) and the `/v1/tools/*` API (`toolsapi.go`).
 - `internal/cache`, `internal/ring` — the capture cache and the metrics ring buffer.
 
 Called by: `quartermaster.go` (root entry) constructs the `Server` via `New`, wires `NewLoggers` and

@@ -1,4 +1,4 @@
-package server
+package tools
 
 import (
 	"context"
@@ -48,15 +48,6 @@ const (
 	// context.
 	ytCommentChars = 400
 
-	// Per-turn caps, mirroring maxYouTube/maxFetches.
-	maxYtBrowse = 4
-	// maxYtComments: "what do people say about these videos" is a normal ask
-	// about a whole search result page, and 2 cut it off mid-task. Cost per call
-	// is bounded by ytCommentMax/ytCommentChars (~4KB of context), so context is
-	// not the constraint; the shared per-IP rate limit with the transcript tool
-	// is, which is what keeps this well under maxYouTube.
-	maxYtComments = 6
-
 	ytBrowseCacheTTL = 15 * time.Minute
 	ytBrowseCacheMax = 32
 )
@@ -79,23 +70,23 @@ var ytPlaylistID = regexp.MustCompile(`^[A-Za-z0-9_-]{2,50}$`)
 // than pasted into a URL.
 var ytTabs = map[string]bool{"videos": true, "shorts": true, "streams": true}
 
-type ytVideo struct {
-	ID       string
-	Title    string
-	Channel  string
-	Duration int    // seconds, 0 if unknown/live
-	Views    int64  // -1 if unknown
-	Date     string // YYYY-MM-DD, empty if unknown
-	Live     string // "is_live", "was_live", "upcoming", or ""
-	Desc     string
+type Video struct {
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Channel  string `json:"channel"`
+	Duration int    `json:"duration"` // seconds, 0 if unknown/live
+	Views    int64  `json:"views"`    // -1 if unknown
+	Date     string `json:"date"`     // YYYY-MM-DD, empty if unknown
+	Live     string `json:"live"`     // "is_live", "was_live", "upcoming", or ""
+	Desc     string `json:"desc"`
 }
 
-type ytComment struct {
-	Author  string
-	Text    string
-	Likes   int64
-	Pinned  bool
-	ByOwner bool
+type Comment struct {
+	Author  string `json:"author"`
+	Text    string `json:"text"`
+	Likes   int64  `json:"likes"`
+	Pinned  bool   `json:"pinned"`
+	ByOwner bool   `json:"by_owner"`
 }
 
 // Cached as marshalled JSON so one map serves both result shapes (video lists
@@ -196,10 +187,10 @@ func ytChannelURL(s, tab string) (string, error) {
 
 // --- fetching ---------------------------------------------------------------
 
-// ytSearch runs a free-text YouTube search. The query goes into a single
+// SearchVideos runs a free-text YouTube search. The query goes into a single
 // "ytsearchN:<query>" argv element — yt-dlp's own search scheme, so there is no
 // URL to build and nothing to escape.
-func ytSearch(ctx context.Context, query string, limit int) ([]ytVideo, error) {
+func SearchVideos(ctx context.Context, query string, limit int) ([]Video, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, fmt.Errorf("no search query given")
@@ -209,8 +200,8 @@ func ytSearch(ctx context.Context, query string, limit int) ([]ytVideo, error) {
 	return ytFlatList(ctx, key, fmt.Sprintf("ytsearch%d:%s", limit, query), limit)
 }
 
-// ytChannelVideos lists a channel tab (or a playlist), newest first.
-func ytChannelVideos(ctx context.Context, channel, tab string, limit int) ([]ytVideo, error) {
+// ChannelVideos lists a channel tab (or a playlist), newest first.
+func ChannelVideos(ctx context.Context, channel, tab string, limit int) ([]Video, error) {
 	target, err := ytChannelURL(channel, tab)
 	if err != nil {
 		return nil, err
@@ -221,14 +212,14 @@ func ytChannelVideos(ctx context.Context, channel, tab string, limit int) ([]ytV
 
 // ytFlatList is the shared --flat-playlist call behind search and channel
 // listing: ONE metadata page, one JSON line per entry, no per-video requests.
-func ytFlatList(ctx context.Context, cacheKey, target string, limit int) ([]ytVideo, error) {
+func ytFlatList(ctx context.Context, cacheKey, target string, limit int) ([]Video, error) {
 	if hit, ok := ytBrowseGet(cacheKey); ok {
-		var vids []ytVideo
+		var vids []Video
 		if json.Unmarshal([]byte(hit), &vids) == nil {
 			return vids, nil
 		}
 	}
-	bin, err := ytDlpPath()
+	bin, err := DlpPath()
 	if err != nil {
 		return nil, err
 	}
@@ -262,8 +253,8 @@ func ytFlatList(ctx context.Context, cacheKey, target string, limit int) ([]ytVi
 // parseFlatJSON reads yt-dlp's one-JSON-object-per-line output. Fields present
 // in a flat entry vary by extractor and version, so every one is optional and a
 // line that doesn't parse is skipped rather than failing the call.
-func parseFlatJSON(s string, limit int) []ytVideo {
-	var out []ytVideo
+func parseFlatJSON(s string, limit int) []Video {
+	var out []Video
 	for _, line := range strings.Split(s, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "{") {
@@ -296,10 +287,10 @@ func parseFlatJSON(s string, limit int) []ytVideo {
 		}
 		// A channel's root listing can yield nested playlist entries; only real
 		// videos have an 11-char id.
-		if !ytVideoID.MatchString(e.ID) {
+		if !VideoID.MatchString(e.ID) {
 			continue
 		}
-		v := ytVideo{ID: e.ID, Title: e.Title, Views: -1}
+		v := Video{ID: e.ID, Title: e.Title, Views: -1}
 		for _, c := range []string{e.Channel, e.Uploader, e.PlChannel, e.PlUploader} {
 			if c != "" {
 				v.Channel = c
@@ -346,30 +337,30 @@ func ytDate(uploadDate string, ts, release *int64, year *int) string {
 	return ""
 }
 
-// fetchYouTubeComments pulls the top comments on one video.
+// GetComments pulls the top comments on one video.
 //
 // Replies are switched off outright (the 3rd/4th max_comments slots are 0):
 // a thread's replies are mostly argument between two strangers, they multiply
 // the continuation requests that make this the slow tool, and none of it is
 // what "what do people think of this video" is asking for.
-func fetchYouTubeComments(ctx context.Context, videoID string, limit int) ([]ytComment, ytTranscript, error) {
-	if !ytVideoID.MatchString(videoID) {
-		return nil, ytTranscript{}, fmt.Errorf("not a valid YouTube video id")
+func GetComments(ctx context.Context, videoID string, limit int) ([]Comment, Transcript, error) {
+	if !VideoID.MatchString(videoID) {
+		return nil, Transcript{}, fmt.Errorf("not a valid YouTube video id")
 	}
 	limit = clampInt(limit, 1, ytCommentMax, ytCommentDefault)
 	key := fmt.Sprintf("k\x00%d\x00%s", limit, videoID)
 	if hit, ok := ytBrowseGet(key); ok {
 		var cached struct {
-			C []ytComment
-			M ytTranscript
+			C []Comment
+			M Transcript
 		}
 		if json.Unmarshal([]byte(hit), &cached) == nil {
 			return cached.C, cached.M, nil
 		}
 	}
-	bin, err := ytDlpPath()
+	bin, err := DlpPath()
 	if err != nil {
-		return nil, ytTranscript{}, err
+		return nil, Transcript{}, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, ytCommentTimeout)
 	defer cancel()
@@ -402,16 +393,16 @@ func fetchYouTubeComments(ctx context.Context, videoID string, limit int) ([]ytC
 	}
 	if err := json.Unmarshal(out, &info); err != nil {
 		if ctx.Err() != nil {
-			return nil, ytTranscript{}, fmt.Errorf("yt-dlp timed out after %s (comment extraction is slow on heavily-commented videos)", ytCommentTimeout)
+			return nil, Transcript{}, fmt.Errorf("yt-dlp timed out after %s (comment extraction is slow on heavily-commented videos)", ytCommentTimeout)
 		}
 		if runErr != nil {
-			return nil, ytTranscript{}, fmt.Errorf("yt-dlp failed: %s", ytDlpErr(runErr))
+			return nil, Transcript{}, fmt.Errorf("yt-dlp failed: %s", ytDlpErr(runErr))
 		}
-		return nil, ytTranscript{}, fmt.Errorf("could not read comments for this video")
+		return nil, Transcript{}, fmt.Errorf("could not read comments for this video")
 	}
-	meta := ytTranscript{ID: videoID, Title: info.Title, Uploader: info.Uploader, Duration: int(info.Duration)}
+	meta := Transcript{ID: videoID, Title: info.Title, Uploader: info.Uploader, Duration: int(info.Duration)}
 
-	var cs []ytComment
+	var cs []Comment
 	for _, c := range info.Comments {
 		// Defence in depth: max_comments should already exclude replies, but a
 		// yt-dlp version that ignores the slot must not leak a reply tree in.
@@ -425,7 +416,7 @@ func fetchYouTubeComments(ctx context.Context, videoID string, limit int) ([]ytC
 		if len(text) > ytCommentChars {
 			text = strings.ToValidUTF8(text[:ytCommentChars], "") + "…"
 		}
-		cc := ytComment{Author: c.Author, Text: text, Likes: -1, Pinned: c.IsPinned, ByOwner: c.AuthorIsUp}
+		cc := Comment{Author: c.Author, Text: text, Likes: -1, Pinned: c.IsPinned, ByOwner: c.AuthorIsUp}
 		if c.LikeCount != nil {
 			cc.Likes = *c.LikeCount
 		}
@@ -438,8 +429,8 @@ func fetchYouTubeComments(ctx context.Context, videoID string, limit int) ([]ytC
 		return nil, meta, fmt.Errorf("this video has no comments, or they are disabled")
 	}
 	if b, err := json.Marshal(struct {
-		C []ytComment
-		M ytTranscript
+		C []Comment
+		M Transcript
 	}{cs, meta}); err == nil {
 		ytBrowsePut(key, string(b))
 	}
@@ -448,7 +439,7 @@ func fetchYouTubeComments(ctx context.Context, videoID string, limit int) ([]ytC
 
 // --- rendering --------------------------------------------------------------
 
-// formatYouTubeVideos renders a result list the model can pick from and cite.
+// FormatVideos renders a result list the model can pick from and cite.
 // Each line carries the watch URL verbatim so the follow-up youtube_transcript
 // call needs no id surgery.
 //
@@ -456,7 +447,7 @@ func fetchYouTubeComments(ctx context.Context, videoID string, limit int) ([]ytC
 // dates (the normal case for a search — see ytDate), says so outright. A model
 // shown an undated list will otherwise describe the first result as "the
 // latest", which is a claim nothing here supports.
-func formatYouTubeVideos(what string, vids []ytVideo, numbers []int, newestFirst bool) string {
+func FormatVideos(what string, vids []Video, numbers []int, newestFirst bool) string {
 	dated := false
 	for _, v := range vids {
 		if v.Date != "" {
@@ -479,7 +470,7 @@ func formatYouTubeVideos(what string, vids []ytVideo, numbers []int, newestFirst
 			fmt.Fprintf(&b, "[%d] ", numbers[i])
 		}
 		vurl := "https://www.youtube.com/watch?v=" + v.ID
-		b.WriteString(orURL(v.Title, vurl))
+		b.WriteString(OrURL(v.Title, vurl))
 		b.WriteString("\n" + vurl + "\n")
 		var meta []string
 		if v.Channel != "" {
@@ -497,7 +488,7 @@ func formatYouTubeVideos(what string, vids []ytVideo, numbers []int, newestFirst
 			meta = append(meta, "uploaded "+v.Date)
 		}
 		if v.Views >= 0 {
-			meta = append(meta, ytCount(v.Views)+" views")
+			meta = append(meta, Count(v.Views)+" views")
 		}
 		if len(meta) > 0 {
 			b.WriteString(strings.Join(meta, " · ") + "\n")
@@ -515,10 +506,10 @@ func formatYouTubeVideos(what string, vids []ytVideo, numbers []int, newestFirst
 	return b.String()
 }
 
-// formatYouTubeComments renders the comment block. The header states plainly
+// FormatComments renders the comment block. The header states plainly
 // what comments are (opinion, ranked by likes, not a sample of anything) —
 // models otherwise report "viewers say X" as if it were a measured result.
-func formatYouTubeComments(cs []ytComment, meta ytTranscript, citation int) string {
+func FormatComments(cs []Comment, meta Transcript, citation int) string {
 	var b strings.Builder
 	if citation > 0 {
 		fmt.Fprintf(&b, "[%d] ", citation)
@@ -543,7 +534,7 @@ func formatYouTubeComments(cs []ytComment, meta ytTranscript, citation int) stri
 			tags = append(tags, "pinned")
 		}
 		if c.Likes >= 0 {
-			tags = append(tags, ytCount(c.Likes)+" likes")
+			tags = append(tags, Count(c.Likes)+" likes")
 		}
 		if len(tags) > 0 {
 			b.WriteString(" (" + strings.Join(tags, ", ") + ")")
@@ -555,9 +546,9 @@ func formatYouTubeComments(cs []ytComment, meta ytTranscript, citation int) stri
 
 // --- small shared helpers ---------------------------------------------------
 
-// ytCount humanises a view/like count. Exact numbers past a few thousand are
+// Count humanises a view/like count. Exact numbers past a few thousand are
 // noise in a summary and cost tokens.
-func ytCount(n int64) string {
+func Count(n int64) string {
 	switch {
 	case n >= 1_000_000_000:
 		return fmt.Sprintf("%.1fB", float64(n)/1e9)

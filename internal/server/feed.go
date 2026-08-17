@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"html"
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -221,33 +219,6 @@ func parseFeedBody(body []byte, doc *feedDoc) error {
 	}
 	return nil
 }
-
-var feedTag = regexp.MustCompile(`(?s)<[^>]*>`)
-
-// cleanFeedText strips the markup feeds embed in descriptions and collapses the
-// whitespace, then truncates. Feed summaries are frequently a whole article's
-// HTML — unstripped, five items would swamp the context window.
-func cleanFeedText(s string, max int) string {
-	s = feedTag.ReplaceAllString(s, " ")
-	s = html.UnescapeString(s)
-	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > max {
-		// Cut on a rune boundary, then back to the last space so a word is not
-		// sliced in half.
-		cut := max
-		for cut > 0 && !utf8Start(s[cut]) {
-			cut--
-		}
-		s = strings.TrimSpace(s[:cut])
-		if i := strings.LastIndex(s, " "); i > max/2 {
-			s = s[:i]
-		}
-		s += "…"
-	}
-	return s
-}
-
-func utf8Start(b byte) bool { return b&0xC0 != 0x80 }
 
 func feedFirst(v ...string) string {
 	for _, s := range v {

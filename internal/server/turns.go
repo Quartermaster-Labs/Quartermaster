@@ -1583,13 +1583,6 @@ func citeByWiki(cs []turnCitation, id string) (int, bool) {
 	return 0, false
 }
 
-func orURL(title, url string) string {
-	if title != "" {
-		return title
-	}
-	return url
-}
-
 func sleepCtx(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
 	defer t.Stop()
@@ -1755,15 +1748,3 @@ func trailingAssistant(sess map[string]any) map[string]any {
 	return am
 }
 
-func readLimited(r interface{ Read([]byte) (int, error) }, n int64) (string, error) {
-	b := make([]byte, n)
-	total := 0
-	for int64(total) < n {
-		m, err := r.Read(b[total:])
-		total += m
-		if err != nil {
-			break
-		}
-	}
-	return string(b[:total]), nil
-}

@@ -1,11 +1,11 @@
-package server
+package tools
 
 import (
 	"strings"
 	"testing"
 )
 
-func TestParseYouTubeID(t *testing.T) {
+func TestTools_ParseVideoID(t *testing.T) {
 	cases := map[string]string{
 		"https://www.youtube.com/watch?v=dQw4w9WgXcQ":          "dQw4w9WgXcQ",
 		"https://youtube.com/watch?v=dQw4w9WgXcQ&t=872s":       "dQw4w9WgXcQ",
@@ -26,8 +26,8 @@ func TestParseYouTubeID(t *testing.T) {
 		"https://www.youtube.com/playlist?list=PLdQw4w9WgXcQ1": "",
 	}
 	for in, want := range cases {
-		if got := parseYouTubeID(in); got != want {
-			t.Errorf("parseYouTubeID(%q) = %q, want %q", in, got, want)
+		if got := ParseVideoID(in); got != want {
+			t.Errorf("ParseVideoID(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -36,7 +36,7 @@ func TestParseYouTubeID(t *testing.T) {
 // last line, and words carry inline <time><c> markup. Both must be gone, and
 // cues must fold into ~30s paragraphs with ONE timestamp each -- that is the
 // whole point of the tool being affordable in context.
-func TestVTTToParagraphs(t *testing.T) {
+func TestTools_VTTToParagraphs(t *testing.T) {
 	raw := "WEBVTT\nKind: captions\nLanguage: en\n\n" +
 		"00:00:01.199 --> 00:00:03.629 align:start position:0%\nhello and welcome\n\n" +
 		"00:00:03.629 --> 00:00:06.000 align:start position:0%\nhello and welcome\nto the <00:00:04.100><c> show</c>\n\n" +
@@ -60,7 +60,7 @@ func TestVTTToParagraphs(t *testing.T) {
 	}
 }
 
-func TestYTClock(t *testing.T) {
+func TestTools_YTClock(t *testing.T) {
 	for sec, want := range map[int]string{0: "0:00", 9: "0:09", 61: "1:01", 872: "14:32", 3600: "1:00:00", 3725: "1:02:05"} {
 		if got := ytClock(sec); got != want {
 			t.Errorf("ytClock(%d) = %q, want %q", sec, got, want)
@@ -71,7 +71,7 @@ func TestYTClock(t *testing.T) {
 // Truncation must keep whole paragraphs and report the timestamp it cut at, so
 // the model can say what it is missing instead of summarising a third of a
 // video as if it were the whole thing.
-func TestYTTruncateReportsCut(t *testing.T) {
+func TestTools_YTTruncateReportsCut(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < 200; i++ {
 		b.WriteString("[" + ytClock(i*30) + "] " + strings.Repeat("word ", 40) + "\n\n")
@@ -98,60 +98,46 @@ func TestYTTruncateReportsCut(t *testing.T) {
 	}
 }
 
-func TestFormatYouTubeTranscriptAnnouncesTruncation(t *testing.T) {
+func TestTools_FormatTranscriptAnnouncesTruncation(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < 4000; i++ {
 		b.WriteString("[" + ytClock(i*30) + "] " + strings.Repeat("word ", 40) + "\n\n")
 	}
-	tr := ytTranscript{ID: "dQw4w9WgXcQ", Title: "Long talk", Uploader: "Chan", Duration: 7200, Text: strings.TrimSpace(b.String())}
+	tr := Transcript{ID: "dQw4w9WgXcQ", Title: "Long talk", Uploader: "Chan", Duration: 7200, Text: strings.TrimSpace(b.String())}
 
-	out := formatYouTubeTranscript(tr, 3, 0)
+	out := FormatTranscript(tr, 3, 0)
 	for _, want := range []string{"[3] YouTube transcript", `"Long talk"`, "Chan, 2:00:00", "watch?v=dQw4w9WgXcQ", "INCOMPLETE", "transcript truncated at"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q", want)
 		}
 	}
 
-	short := formatYouTubeTranscript(ytTranscript{ID: "dQw4w9WgXcQ", Text: "[0:00] hi"}, 0, 0)
+	short := FormatTranscript(Transcript{ID: "dQw4w9WgXcQ", Text: "[0:00] hi"}, 0, 0)
 	if strings.Contains(short, "INCOMPLETE") || strings.HasPrefix(short, "[0]") {
 		t.Errorf("short transcript mis-annotated:\n%s", short)
 	}
 }
 
-func TestParseYouTubeArgs(t *testing.T) {
-	u, lang := parseYouTubeArgs(`{"url":" https://youtu.be/dQw4w9WgXcQ ","lang":"pt-BR"}`)
-	if u != "https://youtu.be/dQw4w9WgXcQ" || lang != "pt-BR" {
-		t.Errorf("got %q/%q", u, lang)
-	}
-	// Models routinely name the argument something else; accept the obvious alias.
-	if u, _ := parseYouTubeArgs(`{"video":"dQw4w9WgXcQ"}`); u != "dQw4w9WgXcQ" {
-		t.Errorf("video alias = %q", u)
-	}
-	if u, l := parseYouTubeArgs(`not json`); u != "" || l != "" {
-		t.Errorf("bad json = %q/%q, want empty", u, l)
-	}
-}
-
 // The language code goes into a yt-dlp argument; only well-formed codes may.
-func TestFetchYouTubeTranscriptRejectsBadInput(t *testing.T) {
-	if _, err := fetchYouTubeTranscript(t.Context(), "not-an-id", "en"); err == nil {
+func TestTools_GetTranscriptRejectsBadInput(t *testing.T) {
+	if _, err := GetTranscript(t.Context(), "not-an-id", "en"); err == nil {
 		t.Error("bad video id accepted")
 	}
-	if _, err := fetchYouTubeTranscript(t.Context(), "dQw4w9WgXcQ", "en; rm -rf /"); err == nil {
+	if _, err := GetTranscript(t.Context(), "dQw4w9WgXcQ", "en; rm -rf /"); err == nil {
 		t.Error("injected language code accepted")
 	}
 }
 
-// The per-turn transcript budget works by shrinking each fetch's ceiling, so a
+// The per-call transcript budget works by shrinking each fetch's ceiling, so a
 // long transcript must truncate to what is left — loudly, never silently.
-func TestFormatYouTubeTranscriptBudget(t *testing.T) {
+func TestTools_FormatTranscriptBudget(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < 4000; i++ {
 		b.WriteString("[0:30] some spoken words here\n\n")
 	}
-	tr := ytTranscript{ID: "dQw4w9WgXcQ", Title: "Long", Text: b.String()}
-	small := formatYouTubeTranscript(tr, 0, 500)
-	big := formatYouTubeTranscript(tr, 0, 0) // 0 = the per-video ceiling
+	tr := Transcript{ID: "dQw4w9WgXcQ", Title: "Long", Text: b.String()}
+	small := FormatTranscript(tr, 0, 500)
+	big := FormatTranscript(tr, 0, 0) // 0 = the per-video ceiling
 	if len(small) >= len(big) {
 		t.Errorf("budget ignored: small=%d big=%d", len(small), len(big))
 	}
@@ -159,7 +145,7 @@ func TestFormatYouTubeTranscriptBudget(t *testing.T) {
 		t.Errorf("truncation not announced:\n%s", small[:300])
 	}
 	// An over-large ask is clamped to the per-video ceiling, not honoured.
-	if got := formatYouTubeTranscript(tr, 0, 10*ytMaxTokens); len(got) != len(big) {
+	if got := FormatTranscript(tr, 0, 10*ytMaxTokens); len(got) != len(big) {
 		t.Errorf("ceiling not enforced: %d vs %d", len(got), len(big))
 	}
 }

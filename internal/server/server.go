@@ -662,6 +662,13 @@ func (s *Server) routes() {
 	// Standalone ESRGAN/RealESRGAN upscale (exec-per-request, not model-dispatched).
 	// Auth-gated like the inference API (discoveryChain) so an external key reaches it.
 	mux.Handle("POST /v1/images/upscale", discoveryChain.ThenFunc(s.handleUpscale))
+	// Tool execution APIs: external AI projects delegate web-search / YouTube
+	// tool calls here instead of re-implementing them. Same API-key credential
+	// as the inference routes (discoveryChain), data-plane responses.
+	mux.Handle("POST /v1/tools/search", discoveryChain.ThenFunc(s.handleToolSearch))
+	mux.Handle("POST /v1/tools/youtube/transcript", discoveryChain.ThenFunc(s.handleToolYouTubeTranscript))
+	mux.Handle("POST /v1/tools/youtube/search", discoveryChain.ThenFunc(s.handleToolYouTubeSearch))
+	mux.Handle("POST /v1/tools/youtube/comments", discoveryChain.ThenFunc(s.handleToolYouTubeComments))
 	mux.Handle("GET /logs", adminChain.ThenFunc(s.handleLogs))
 	mux.Handle("GET /logs/stream", adminChain.ThenFunc(s.handleLogStream))
 	mux.Handle("GET /logs/stream/{logMonitorID...}", adminChain.ThenFunc(s.handleLogStream))

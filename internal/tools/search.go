@@ -1,8 +1,9 @@
-package server
+package tools
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -29,7 +30,9 @@ import (
 // that is only spent when the free path failed.
 //
 // Providers are configured per playground user and arrive on the turn payload
-// (like the SearXNG URL always has) — they are never persisted into a chat.
+// (like the SearXNG URL always has); the /v1/tools/search API takes them in
+// the request body the same way. Either way they are never persisted into a
+// chat or config — stateless per call.
 
 const (
 	// searchHopTimeout bounds ONE provider attempt. Deliberately well under the
@@ -45,8 +48,8 @@ const (
 	searchCacheRows = 256
 )
 
-// searchProviderCfg is one row of the user's provider chain.
-type searchProviderCfg struct {
+// SearchProvider is one row of the user's provider chain.
+type SearchProvider struct {
 	ID      string `json:"id"`                // searxng | brave | tavily | duckduckgo | google
 	Enabled bool   `json:"enabled"`           // unchecked rows stay in the list, keeping their key
 	BaseURL string `json:"baseUrl,omitempty"` // searxng only
@@ -64,7 +67,7 @@ var searchProviderIDs = map[string]bool{
 // ready reports whether this row has everything its provider needs. An enabled
 // row missing its key is skipped silently: the chain's whole point is that a
 // half-configured provider costs a hop, not the search.
-func (c searchProviderCfg) ready() bool {
+func (c SearchProvider) ready() bool {
 	if !c.Enabled || !searchProviderIDs[c.ID] {
 		return false
 	}
@@ -79,25 +82,25 @@ func (c searchProviderCfg) ready() bool {
 	return true // duckduckgo: keyless
 }
 
-func (c searchProviderCfg) hopTimeout() time.Duration {
+func (c SearchProvider) hopTimeout() time.Duration {
 	if c.ID == "searxng" {
 		return searxngHopTimeout
 	}
 	return searchHopTimeout
 }
 
-// searchChain runs the configured providers in order and returns the first
+// Search runs the configured providers in order and returns the first
 // non-empty result set. Errors are accumulated so a total failure tells the
 // model (and the user) which providers were tried and why each one failed —
 // "Search failed: connection refused" with three providers configured is not a
 // debuggable message.
-func searchChain(ctx context.Context, providers []searchProviderCfg, query string, limit int) ([]searchResult, string, error) {
+func Search(ctx context.Context, providers []SearchProvider, query string, limit int) ([]Result, string, error) {
 	q := strings.TrimSpace(query)
 	if q == "" {
 		return nil, "", fmt.Errorf("missing query")
 	}
-	if limit < 1 || limit > webMaxResults {
-		limit = webDefaultResults
+	if limit < 1 || limit > MaxResults {
+		limit = DefaultResults
 	}
 	tried := 0
 	var probs []string
@@ -126,15 +129,15 @@ func searchChain(ctx context.Context, providers []searchProviderCfg, query strin
 		}
 	}
 	if tried == 0 {
-		return nil, "", fmt.Errorf("no web search provider configured")
+		return nil, "", ErrNoProviders
 	}
 	return nil, "", fmt.Errorf("all search providers failed (%s)", strings.Join(probs, "; "))
 }
 
-func runSearchProvider(ctx context.Context, p searchProviderCfg, query string, limit int) ([]searchResult, error) {
+func runSearchProvider(ctx context.Context, p SearchProvider, query string, limit int) ([]Result, error) {
 	switch p.ID {
 	case "searxng":
-		return searxngSearch(ctx, p.BaseURL, query, limit)
+		return SearxngSearch(ctx, p.BaseURL, query, limit)
 	case "brave":
 		return braveSearch(ctx, p.Key, query, limit)
 	case "tavily":
@@ -147,14 +150,14 @@ func runSearchProvider(ctx context.Context, p searchProviderCfg, query string, l
 	return nil, fmt.Errorf("unknown provider %q", p.ID)
 }
 
-// legacySearchChain builds a SearXNG-only chain from the old single-URL field,
+// LegacyChain builds a SearXNG-only chain from the old single-URL field,
 // so a turn payload (or a stored client) that predates provider config keeps
 // working unchanged.
-func legacySearchChain(baseURL string) []searchProviderCfg {
+func LegacyChain(baseURL string) []SearchProvider {
 	if strings.TrimSpace(baseURL) == "" {
 		return nil
 	}
-	return []searchProviderCfg{{ID: "searxng", Enabled: true, BaseURL: baseURL}}
+	return []SearchProvider{{ID: "searxng", Enabled: true, BaseURL: baseURL}}
 }
 
 // --- result cache ----------------------------------------------------------
@@ -166,7 +169,7 @@ func legacySearchChain(baseURL string) []searchProviderCfg {
 // narrower cached answer.
 
 type searchCacheEntry struct {
-	res []searchResult
+	res []Result
 	at  time.Time
 }
 
@@ -178,7 +181,7 @@ var searchCache struct {
 // cacheIdentity is what distinguishes two configurations of the same provider.
 // The API key is NOT part of it — it is a credential, not a scope, and hashing
 // it in would only mean a rotated key silently misses the cache.
-func (c searchProviderCfg) cacheIdentity() string {
+func (c SearchProvider) cacheIdentity() string {
 	if c.ID == "searxng" {
 		return "searxng\x00" + strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
 	}
@@ -188,11 +191,11 @@ func (c searchProviderCfg) cacheIdentity() string {
 	return c.ID
 }
 
-func searchCacheKey(c searchProviderCfg, query string, limit int) string {
+func searchCacheKey(c SearchProvider, query string, limit int) string {
 	return fmt.Sprintf("%s\x00%d\x00%s", c.cacheIdentity(), limit, query)
 }
 
-func searchCacheGet(c searchProviderCfg, query string, limit int) ([]searchResult, bool) {
+func searchCacheGet(c SearchProvider, query string, limit int) ([]Result, bool) {
 	searchCache.mu.Lock()
 	defer searchCache.mu.Unlock()
 	e, ok := searchCache.rows[searchCacheKey(c, query, limit)]
@@ -202,7 +205,7 @@ func searchCacheGet(c searchProviderCfg, query string, limit int) ([]searchResul
 	return e.res, true
 }
 
-func searchCachePut(c searchProviderCfg, query string, limit int, res []searchResult) {
+func searchCachePut(c SearchProvider, query string, limit int, res []Result) {
 	searchCache.mu.Lock()
 	defer searchCache.mu.Unlock()
 	if searchCache.rows == nil {
@@ -244,7 +247,7 @@ func searchDo(req *http.Request) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		snip, _ := readLimited(resp.Body, 300)
+		snip, _ := ReadLimited(resp.Body, 300)
 		return nil, fmt.Errorf("%s: %s", resp.Status, strings.Join(strings.Fields(snip), " "))
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 4<<20))
@@ -254,7 +257,7 @@ func searchDo(req *http.Request) ([]byte, error) {
 
 // braveSearch queries the Brave Search API. A real JSON contract rather than a
 // scraper, so it is the failover that actually holds up under an agent loop.
-func braveSearch(ctx context.Context, key, query string, limit int) ([]searchResult, error) {
+func braveSearch(ctx context.Context, key, query string, limit int) ([]Result, error) {
 	u, _ := url.Parse("https://api.search.brave.com/res/v1/web/search")
 	qs := url.Values{}
 	qs.Set("q", query)
@@ -286,13 +289,13 @@ func braveSearch(ctx context.Context, key, query string, limit int) ([]searchRes
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, err
 	}
-	out := make([]searchResult, 0, limit)
+	out := make([]Result, 0, limit)
 	for _, r := range parsed.Web.Results {
 		if len(out) >= limit {
 			break
 		}
 		// Brave marks query terms with <strong> in the description.
-		out = append(out, searchResult{Title: r.Title, URL: r.URL, Content: cleanFeedText(r.Description, snippetMax)})
+		out = append(out, Result{Title: r.Title, URL: r.URL, Content: CleanFeedText(r.Description, snippetMax)})
 	}
 	return out, nil
 }
@@ -302,7 +305,7 @@ func braveSearch(ctx context.Context, key, query string, limit int) ([]searchRes
 // tavilySearch queries Tavily, which is built for exactly this call site: its
 // `content` field is already extracted page text rather than a SERP snippet,
 // so a result is often enough on its own and saves a fetch_page round trip.
-func tavilySearch(ctx context.Context, key, query string, limit int) ([]searchResult, error) {
+func tavilySearch(ctx context.Context, key, query string, limit int) ([]Result, error) {
 	payload, _ := json.Marshal(map[string]any{
 		"query":       query,
 		"max_results": limit,
@@ -329,12 +332,12 @@ func tavilySearch(ctx context.Context, key, query string, limit int) ([]searchRe
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, err
 	}
-	out := make([]searchResult, 0, limit)
+	out := make([]Result, 0, limit)
 	for _, r := range parsed.Results {
 		if len(out) >= limit {
 			break
 		}
-		out = append(out, searchResult{Title: r.Title, URL: r.URL, Content: clipSnippet(r.Content)})
+		out = append(out, Result{Title: r.Title, URL: r.URL, Content: clipSnippet(r.Content)})
 	}
 	return out, nil
 }
@@ -344,7 +347,7 @@ func tavilySearch(ctx context.Context, key, query string, limit int) ([]searchRe
 // googleCSESearch queries a user's Programmable Search Engine. Best result
 // quality of the four, hardest cap (100/day free) — so it belongs late in a
 // chain, not first.
-func googleCSESearch(ctx context.Context, key, cx, query string, limit int) ([]searchResult, error) {
+func googleCSESearch(ctx context.Context, key, cx, query string, limit int) ([]Result, error) {
 	if limit > 10 {
 		limit = 10 // API ceiling per page; we never paginate
 	}
@@ -380,12 +383,12 @@ func googleCSESearch(ctx context.Context, key, cx, query string, limit int) ([]s
 	if parsed.Error.Message != "" {
 		return nil, fmt.Errorf("%s", parsed.Error.Message)
 	}
-	out := make([]searchResult, 0, limit)
+	out := make([]Result, 0, limit)
 	for _, r := range parsed.Items {
 		if len(out) >= limit {
 			break
 		}
-		out = append(out, searchResult{Title: r.Title, URL: r.Link, Content: clipSnippet(r.Snippet)})
+		out = append(out, Result{Title: r.Title, URL: r.Link, Content: clipSnippet(r.Snippet)})
 	}
 	return out, nil
 }
@@ -402,7 +405,7 @@ var (
 	ddgSnippetRE = regexp.MustCompile(`(?is)class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>`)
 )
 
-func ddgSearch(ctx context.Context, query string, limit int) ([]searchResult, error) {
+func ddgSearch(ctx context.Context, query string, limit int) ([]Result, error) {
 	form := url.Values{}
 	form.Set("q", query)
 	form.Set("kl", "wt-wt") // no region skew
@@ -425,7 +428,7 @@ func ddgSearch(ctx context.Context, query string, limit int) ([]searchResult, er
 	anchors := ddgAnchorRE.FindAllStringSubmatch(page, limit*2)
 	snips := ddgSnippetRE.FindAllStringSubmatch(page, limit*2)
 
-	out := make([]searchResult, 0, limit)
+	out := make([]Result, 0, limit)
 	for i, a := range anchors {
 		if len(out) >= limit {
 			break
@@ -436,9 +439,9 @@ func ddgSearch(ctx context.Context, query string, limit int) ([]searchResult, er
 		}
 		snippet := ""
 		if i < len(snips) {
-			snippet = cleanFeedText(snips[i][1], snippetMax)
+			snippet = CleanFeedText(snips[i][1], snippetMax)
 		}
-		out = append(out, searchResult{Title: cleanFeedText(a[2], 300), URL: link, Content: snippet})
+		out = append(out, Result{Title: CleanFeedText(a[2], 300), URL: link, Content: snippet})
 	}
 	if len(out) == 0 && strings.Contains(page, "anomaly") {
 		return nil, fmt.Errorf("rate-limited (bot challenge)")
@@ -467,3 +470,144 @@ func ddgUnwrap(href string) string {
 	}
 	return href
 }
+
+type Result struct {
+	Title   string `json:"title"`
+	URL     string `json:"url"`
+	Content string `json:"content"`
+}
+
+const (
+	// DefaultResults is what a search returns when the model does not say.
+	// MaxResults is the ceiling: results are prefill on every following turn
+	// of the conversation, so "as many as you like" is a context bill the user
+	// pays for the rest of the chat.
+	DefaultResults = 5
+	MaxResults     = 10
+	snippetMax     = 400
+)
+
+// SearxngSearch queries SearXNG's JSON API directly (server-side, no browser
+// CORS concern). Port of webSearch.ts searxngSearch, minus the /api/websearch
+// proxy hop (we ARE the server). Shares the rate-limited/cached gate in
+// searxng.go with the browser proxy.
+func SearxngSearch(ctx context.Context, baseURL, query string, limit int) ([]Result, error) {
+	if limit < 1 || limit > MaxResults {
+		limit = DefaultResults
+	}
+	body, err := SearxngJSON(ctx, baseURL, query)
+	if err != nil {
+		return nil, err
+	}
+	var parsed struct {
+		Results []struct {
+			Title   string `json:"title"`
+			URL     string `json:"url"`
+			Content string `json:"content"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, err
+	}
+	out := make([]Result, 0, limit)
+	for _, r := range parsed.Results {
+		if len(out) >= limit {
+			break
+		}
+		c := r.Content
+		if len(c) > snippetMax {
+			c = c[:snippetMax]
+		}
+		out = append(out, Result{Title: r.Title, URL: r.URL, Content: c})
+	}
+	return out, nil
+}
+
+// FormatSearchResults renders the plain-text tool message. Port of webSearch.ts.
+//
+// The result header carries the current date. The system prompt already states
+// it, but that line sits at the very end of a long prefix and models still write
+// queries with their training-cutoff year ("best X 2025"). Stamping it on the
+// result puts the real date next to the thing being judged for freshness, and —
+// unlike putting it in the tool *description* — costs nothing in KV-prefix
+// stability, since tool results are volatile per-turn anyway.
+func FormatSearchResults(query string, results []Result, numbers []int) string {
+	date := searchDate()
+	if len(results) == 0 {
+		return fmt.Sprintf("No results found for %q. (Searched %s.)", query, date)
+	}
+	var lines []string
+	for i, r := range results {
+		lines = append(lines, fmt.Sprintf("[%d] %s\n%s\n%s", numbers[i], r.Title, r.URL, r.Content))
+	}
+	return fmt.Sprintf("Search results for %q (searched %s - today's date, use it, not a year from memory, when a query is time-sensitive):\n\n%s",
+		query, date, strings.Join(lines, "\n\n"))
+}
+
+// searchDate is the wall-clock date stamped onto search results. Var, not a
+// call, so tests can pin it.
+var searchDate = func() string { return time.Now().Format("2 January 2006") }
+
+// ErrNoProviders is the chain's "nothing configured" failure, so HTTP callers
+// can map it to a 400 (caller's fault) instead of a 502 (upstream's fault).
+var ErrNoProviders = errors.New("no web search provider configured")
+
+// webSearchClient is the shared client for the key-based provider adapters
+// (brave/tavily/google). DDG and SearXNG build their own per timeout.
+var webSearchClient = &http.Client{Timeout: 15 * time.Second}
+
+// ReadLimited reads up to n bytes from r. Used on search provider responses:
+// a hostile endpoint streaming gigabytes must not become a memory bill.
+// Returns (read-so-far, nil) on a mid-read error — a truncated JSON body then
+// fails the unmarshal in the caller with a clean "bad response" error instead
+// of the read error leaking past the provider chain's error join.
+func ReadLimited(r interface{ Read([]byte) (int, error) }, n int64) (string, error) {
+	b := make([]byte, n)
+	total := 0
+	for int64(total) < n {
+		m, err := r.Read(b[total:])
+		total += m
+		if err != nil {
+			break
+		}
+	}
+	return string(b[:total]), nil
+}
+
+// OrURL returns the title when it is set, else the URL — the renderer's
+// fallback for a result with no title.
+func OrURL(title, url string) string {
+	if title != "" {
+		return title
+	}
+	return url
+}
+
+// feedTag matches an HTML/XML tag; the (?s) makes [^>] cross newlines so a
+// single ReplaceAllString strips the whole element, not just the delimiters.
+var feedTag = regexp.MustCompile(`(?s)<[^>]*>`)
+
+// CleanFeedText strips the markup feeds embed in descriptions and collapses the
+// whitespace, then truncates. Feed summaries are frequently a whole article's
+// HTML — unstripped, five items would swamp the context window.
+func CleanFeedText(s string, max int) string {
+	s = feedTag.ReplaceAllString(s, " ")
+	s = html.UnescapeString(s)
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > max {
+		// Cut on a rune boundary, then back to the last space so a word is not
+		// sliced in half.
+		cut := max
+		for cut > 0 && !utf8Start(s[cut]) {
+			cut--
+		}
+		s = strings.TrimSpace(s[:cut])
+		if i := strings.LastIndex(s, " "); i > max/2 {
+			s = s[:i]
+		}
+		s += "…"
+	}
+	return s
+}
+
+func utf8Start(b byte) bool { return b&0xC0 != 0x80 }

@@ -559,3 +559,47 @@ func TestServer_HandleTurnState(t *testing.T) {
 		t.Errorf("another user sees the turn: %+v", got)
 	}
 }
+
+// --- tool arg parsers (turn-layer: the model's JSON, tolerant of naming) ---
+
+func TestTurns_ParseYouTubeArgs(t *testing.T) {
+	u, lang := parseYouTubeArgs(`{"url":" https://youtu.be/dQw4w9WgXcQ ","lang":"pt-BR"}`)
+	if u != "https://youtu.be/dQw4w9WgXcQ" || lang != "pt-BR" {
+		t.Errorf("got %q/%q", u, lang)
+	}
+	// Models routinely name the argument something else; accept the obvious alias.
+	if u, _ := parseYouTubeArgs(`{"video":"dQw4w9WgXcQ"}`); u != "dQw4w9WgXcQ" {
+		t.Errorf("video alias = %q", u)
+	}
+	if u, l := parseYouTubeArgs(`not json`); u != "" || l != "" {
+		t.Errorf("bad json = %q/%q, want empty", u, l)
+	}
+}
+
+// Models name arguments whatever they feel like; the aliases are the whole
+// point of these parsers.
+func TestTurns_ParseYtSearchArgs(t *testing.T) {
+	a := parseYtSearchArgs(`{"query":"  rust async  ","limit":3}`)
+	if a.Query != "rust async" || a.Limit != 3 || a.Channel != "" {
+		t.Errorf("got %+v", a)
+	}
+	if a := parseYtSearchArgs(`{"q":"x","max_results":5}`); a.Query != "x" || a.Limit != 5 {
+		t.Errorf("aliases: %+v", a)
+	}
+	if a := parseYtSearchArgs(`{"handle":"@foo","tab":"shorts"}`); a.Channel != "@foo" || a.Tab != "shorts" {
+		t.Errorf("channel aliases: %+v", a)
+	}
+	if a := parseYtSearchArgs(`garbage`); a.Query != "" || a.Channel != "" || a.Limit != 0 {
+		t.Errorf("bad json = %+v, want zero", a)
+	}
+}
+
+func TestTurns_ParseYtCommentArgs(t *testing.T) {
+	u, n := parseYtCommentArgs(`{"url":" https://youtu.be/dQw4w9WgXcQ ","limit":5}`)
+	if u != "https://youtu.be/dQw4w9WgXcQ" || n != 5 {
+		t.Errorf("got %q/%d", u, n)
+	}
+	if u, n := parseYtCommentArgs(`{"video":"dQw4w9WgXcQ"}`); u != "dQw4w9WgXcQ" || n != 0 {
+		t.Errorf("alias = %q/%d", u, n)
+	}
+}

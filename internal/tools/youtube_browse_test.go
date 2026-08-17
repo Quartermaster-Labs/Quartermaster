@@ -1,4 +1,4 @@
-package server
+package tools
 
 import (
 	"strings"
@@ -7,7 +7,7 @@ import (
 
 // Everything ytChannelURL accepts is pasted into a URL that reaches yt-dlp's
 // argv, so this is the boundary that matters: forms in, and nothing else.
-func TestYtChannelURL(t *testing.T) {
+func TestTools_ChannelURL(t *testing.T) {
 	ok := []struct{ in, tab, want string }{
 		{"@LinusTechTips", "", "https://www.youtube.com/@LinusTechTips/videos"},
 		{"@LinusTechTips", "shorts", "https://www.youtube.com/@LinusTechTips/shorts"},
@@ -53,7 +53,7 @@ func TestYtChannelURL(t *testing.T) {
 
 // Flat entries vary by yt-dlp version and extractor: every field is optional,
 // non-video entries are dropped, and a garbage line must not kill the batch.
-func TestParseFlatJSON(t *testing.T) {
+func TestTools_ParseFlatJSON(t *testing.T) {
 	raw := strings.Join([]string{
 		`{"id":"dQw4w9WgXcQ","title":"A","channel":"Chan","duration":212.0,"view_count":1600000000,"upload_date":"20091025"}`,
 		`not json at all`,
@@ -84,16 +84,16 @@ func TestParseFlatJSON(t *testing.T) {
 	}
 }
 
-func TestYtCount(t *testing.T) {
+func TestTools_Count(t *testing.T) {
 	cases := map[int64]string{0: "0", 999: "999", 1500: "1.5K", 45000: "45K", 2_400_000: "2.4M", 1_600_000_000: "1.6B"}
 	for n, want := range cases {
-		if got := ytCount(n); got != want {
-			t.Errorf("ytCount(%d) = %q, want %q", n, got, want)
+		if got := Count(n); got != want {
+			t.Errorf("Count(%d) = %q, want %q", n, got, want)
 		}
 	}
 }
 
-func TestClampInt(t *testing.T) {
+func TestTools_ClampInt(t *testing.T) {
 	if got := clampInt(0, 1, 10, 8); got != 8 {
 		t.Errorf("unset = %d, want default 8", got)
 	}
@@ -105,47 +105,19 @@ func TestClampInt(t *testing.T) {
 	}
 }
 
-// Models name arguments whatever they feel like; the aliases are the whole
-// point of these parsers.
-func TestParseYtSearchArgs(t *testing.T) {
-	a := parseYtSearchArgs(`{"query":"  rust async  ","limit":3}`)
-	if a.Query != "rust async" || a.Limit != 3 || a.Channel != "" {
-		t.Errorf("got %+v", a)
-	}
-	if a := parseYtSearchArgs(`{"q":"x","max_results":5}`); a.Query != "x" || a.Limit != 5 {
-		t.Errorf("aliases: %+v", a)
-	}
-	if a := parseYtSearchArgs(`{"handle":"@foo","tab":"shorts"}`); a.Channel != "@foo" || a.Tab != "shorts" {
-		t.Errorf("channel aliases: %+v", a)
-	}
-	if a := parseYtSearchArgs(`garbage`); a.Query != "" || a.Channel != "" || a.Limit != 0 {
-		t.Errorf("bad json = %+v, want zero", a)
-	}
-}
-
-func TestParseYtCommentArgs(t *testing.T) {
-	u, n := parseYtCommentArgs(`{"url":" https://youtu.be/dQw4w9WgXcQ ","limit":5}`)
-	if u != "https://youtu.be/dQw4w9WgXcQ" || n != 5 {
-		t.Errorf("got %q/%d", u, n)
-	}
-	if u, n := parseYtCommentArgs(`{"video":"dQw4w9WgXcQ"}`); u != "dQw4w9WgXcQ" || n != 0 {
-		t.Errorf("alias = %q/%d", u, n)
-	}
-}
-
 // The id reaches argv, so a malformed one must never get that far.
-func TestFetchYouTubeCommentsRejectsBadID(t *testing.T) {
-	if _, _, err := fetchYouTubeComments(t.Context(), "not-an-id", 5); err == nil {
+func TestTools_GetCommentsRejectsBadID(t *testing.T) {
+	if _, _, err := GetComments(t.Context(), "not-an-id", 5); err == nil {
 		t.Error("bad video id accepted")
 	}
 }
 
 // A comment block that reads like the video's own content is the failure mode
 // worth guarding: the header must say what these are.
-func TestFormatYouTubeComments(t *testing.T) {
-	out := formatYouTubeComments(
-		[]ytComment{{Author: "someone", Text: "great video", Likes: 4200, Pinned: true}},
-		ytTranscript{ID: "dQw4w9WgXcQ", Title: "T"},
+func TestTools_FormatComments(t *testing.T) {
+	out := FormatComments(
+		[]Comment{{Author: "someone", Text: "great video", Likes: 4200, Pinned: true}},
+		Transcript{ID: "dQw4w9WgXcQ", Title: "T"},
 		2,
 	)
 	for _, want := range []string{"[2] ", "opinions", "watch?v=dQw4w9WgXcQ", "4.2K likes", "pinned"} {
@@ -155,8 +127,8 @@ func TestFormatYouTubeComments(t *testing.T) {
 	}
 }
 
-func TestFormatYouTubeVideos(t *testing.T) {
-	out := formatYouTubeVideos(`"x"`, []ytVideo{
+func TestTools_FormatVideos(t *testing.T) {
+	out := FormatVideos(`"x"`, []Video{
 		{ID: "dQw4w9WgXcQ", Title: "A", Channel: "Chan", Duration: 212, Views: 1600000000, Date: "2009-10-25"},
 		{ID: "aaaaaaaaaaa", Title: "B", Live: "is_live", Views: -1},
 	}, []int{1, 2}, false)
@@ -173,15 +145,15 @@ func TestFormatYouTubeVideos(t *testing.T) {
 
 // A dateless listing (the normal shape of a search result) must say so, or the
 // model calls the first hit "the latest video".
-func TestFormatYouTubeVideosDatelessSaysSo(t *testing.T) {
-	undated := formatYouTubeVideos("channel @x", []ytVideo{{ID: "dQw4w9WgXcQ", Title: "A", Views: -1}}, []int{1}, true)
+func TestTools_FormatVideosDatelessSaysSo(t *testing.T) {
+	undated := FormatVideos("channel @x", []Video{{ID: "dQw4w9WgXcQ", Title: "A", Views: -1}}, []int{1}, true)
 	if !strings.Contains(undated, "Upload dates are not available") {
 		t.Errorf("dateless listing did not disclaim dates:\n%s", undated)
 	}
 	if !strings.Contains(undated, "newest first") {
 		t.Errorf("channel listing did not state its ordering:\n%s", undated)
 	}
-	dated := formatYouTubeVideos("channel @x", []ytVideo{{ID: "dQw4w9WgXcQ", Title: "A", Views: -1, Date: "2024-01-02"}}, []int{1}, true)
+	dated := FormatVideos("channel @x", []Video{{ID: "dQw4w9WgXcQ", Title: "A", Views: -1, Date: "2024-01-02"}}, []int{1}, true)
 	if strings.Contains(dated, "Upload dates are not available") {
 		t.Errorf("dated listing wrongly disclaimed dates:\n%s", dated)
 	}

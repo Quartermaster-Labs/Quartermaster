@@ -1,7 +1,6 @@
 package server
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -54,22 +53,3 @@ func TestTurns_searchWiki(t *testing.T) {
 	}
 }
 
-func TestTurns_formatSearchResults(t *testing.T) {
-	// Pin the stamped date: the model has to see the real one, so it is part of
-	// the contract, not incidental formatting.
-	orig := searchDate
-	searchDate = func() string { return "5 August 2026" }
-	defer func() { searchDate = orig }()
-
-	if got := formatSearchResults("q", nil, nil); got != `No results found for "q". (Searched 5 August 2026.)` {
-		t.Errorf("empty format = %q", got)
-	}
-	rs := []searchResult{{Title: "T", URL: "http://x", Content: "snip"}}
-	got := formatSearchResults("q", rs, []int{3})
-	if !strings.Contains(got, "5 August 2026") {
-		t.Errorf("format = %q, want the search date stamped", got)
-	}
-	if !strings.HasSuffix(got, "\n\n[3] T\nhttp://x\nsnip") {
-		t.Errorf("format = %q, want the numbered result block last", got)
-	}
-}

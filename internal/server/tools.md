@@ -5,6 +5,11 @@ called from `turns.go`'s `runLoop` (see [`playground.md`](playground.md)); the f
 the browser say so. The client-side contracts they mirror live in `ui-svelte/src/lib/` and are
 documented in `ui-svelte/playground-tools.md`.
 
+The web-search and YouTube **executors** now live in `internal/tools` (one implementation shared
+by the turn loop and the `/v1/tools/*` API below); what stays in this package is the turn-layer
+policy — per-turn caps, citation numbering, result eventing — and the arg parsers in `turns.go`.
+See `../tools/CLAUDE.md` for the executor internals.
+
 Two rules run through the whole set:
 
 - **Every argument is model text.** URLs, currency codes, video ids, place names and expressions
@@ -15,10 +20,14 @@ Two rules run through the whole set:
 
 ## Web search
 
-| File | Role |
+The executor moved to `internal/tools` (`search.go` there, plus `searxng.go`); the turn loop
+reaches it through the aliases in `toolsbridge.go`. What follows describes the executor as it
+exists in that package.
+
+| File (in `internal/tools`) | Role |
 |---|---|
 | `search.go` | The **provider chain** — SearXNG is one hop, not the search. Ordered failover over `searxng` / `brave` / `tavily` / `duckduckgo` / `google` (Programmable Search). Each hop gets its own budget (`searchHopTimeout` 8s, `searxngHopTimeout` 12s) and an error, a timeout **or an empty result set** hands off to the next — empty counts as failure on purpose, since a rate-limited scraper answers 200 with nothing and treating that as success ends the search. `searchProviderCfg.ready()` skips an enabled-but-keyless row rather than spending a hop on it; `searchProviderIDs` is a whitelist because the id decides **which upstream the user's API key is sent to**. Results cached 10 min keyed `(provider identity, limit, query)` — **not** the API key, which is a credential rather than a scope, so a rotated key still hits. Providers arrive on the turn payload (`turnStart.SearchProviders`), in memory only, never written to `chats.json`. Total failure reports which providers were tried and why each failed. |
-| `searxng.go` | `searxngJSON` — the ONE choke point for every SearXNG query, from both the browser proxy and the turn loop. Public SearXNG engines are HTML scrapers that answer burst traffic with a CAPTCHA, after which SearXNG suspends the engine on exponential backoff — and an agent tool loop out-runs that threshold trivially. So: **one query in flight ever**, spaced by `minQueryGap` (1.5s), raw bodies cached per `(base, query)` for `cacheTTL` (10 min). The permit is a **1-slot channel, not a Mutex** — it is held across a multi-second HTTP call, and a `sync.Mutex` waiter cannot observe its own deadline, so one stalled query used to burn the budget of everything queued behind it. |
+| `searxng.go` | `SearxngJSON` — the ONE choke point for every SearXNG query, from both the browser proxy and the turn loop. Public SearXNG engines are HTML scrapers that answer burst traffic with a CAPTCHA, after which SearXNG suspends the engine on exponential backoff — and an agent tool loop out-runs that threshold trivially. So: **one query in flight ever**, spaced by `minQueryGap` (1.5s), raw bodies cached per `(base, query)` for `cacheTTL` (10 min). The permit is a **1-slot channel, not a Mutex** — it is held across a multi-second HTTP call, and a `sync.Mutex` waiter cannot observe its own deadline, so one stalled query used to burn the budget of everything queued behind it. |
 | `websearch.go` | `/api/websearch`. **POST** `{providers,q,limit}` runs the chain for the playground's per-provider Test button — POST, not GET, because the body carries API keys and a query string lands in the access log. **GET** `?url=&q=` is the original SearXNG-only same-origin proxy (`/search?format=json`), kept for older clients, dodging CORS. |
 
 `formatSearchResults` (in `turnstools.go`) **stamps today's date into the result header** — never
@@ -63,7 +72,13 @@ the model these are headlines, not articles: `fetch_page` the link before quotin
 
 ## YouTube
 
-**`youtube.go`** — the `youtube_transcript` fetch path. `parseYouTubeID` accepts
+The executors moved to `internal/tools` (`youtube.go` and `youtube_browse.go` there); the
+per-turn caps (`maxYouTube`, `ytTurnTokens`, `ytMinTranscript`, `maxYtBrowse`, `maxYtComments`)
+stay in `toolsbridge.go`. The arg parsers (`parseYouTubeArgs`, `parseYtSearchArgs`,
+`parseYtCommentArgs`) stay in `turns.go` — they are turn-layer tolerance for the model's JSON,
+not executor concerns.
+
+**`youtube.go`** (in `internal/tools`) — the `youtube_transcript` fetch path. `parseYouTubeID` accepts
 watch/`youtu.be`/shorts/embed/bare-id; **exec-per-request** `yt-dlp --skip-download --write-subs
 --write-auto-subs --sub-format vtt` into a temp dir (no `--convert-subs` — that needs ffmpeg),
 binary from PATH or beside the exe. `vttToParagraphs` strips cue timings, karaoke `<c>` markup and
@@ -77,7 +92,7 @@ and five shorts cost less than one long talk. `maxYouTube` (8) survives only as 
 since each call is a yt-dlp process against an IP YouTube can 429. **Video id + lang are
 regex-validated before reaching argv.**
 
-**`youtube_browse.go`** — the *discovery* tools. `youtube_search` = free-text (`ytsearchN:` scheme,
+**`youtube_browse.go`** (in `internal/tools`) — the *discovery* tools. `youtube_search` = free-text (`ytsearchN:` scheme,
 no URL to build) or a channel/playlist listing, both `--flat-playlist --dump-json` = ONE metadata
 page. `youtube_comments` = top-N via `--write-comments --dump-single-json`,
 `max_comments=N,N,0,0`.
@@ -139,3 +154,32 @@ attributed.
 The same file also serves **`GET /api/fx?from=&to=`** — the same `fetchFxRate` + 6h cache, exposed
 to the browser for the ask-wizard, which rewrites budget brackets the model wrote before it knew the
 user's currency. Codes go through `normCurrency` before touching a URL.
+
+## /v1/tools/* — tool execution API
+
+**`toolsapi.go`** — POST endpoints that let an external (usually local) AI project execute the
+same tools the playground runs, instead of re-implementing them. The caller keeps its own
+model-visible tool schemas and local wrappers; only execution is delegated. Responses are the
+same compact, model-consumable shapes the turn loop feeds a model, so a result drops into a
+context as-is.
+
+| Route | Body | Response |
+|---|---|---|
+| `POST /v1/tools/search` | `{query|q, limit|count?, providers: []SearchProvider}` | `{provider, results: []Result}` |
+| `POST /v1/tools/youtube/transcript` | `{url|video|id|link, lang?}` | the `Transcript` object |
+| `POST /v1/tools/youtube/search` | `{query|q?, channel|handle?, tab?, limit|count?}` — one of query/channel required | `{videos: []Video}` |
+| `POST /v1/tools/youtube/comments` | `{url|video|id|link, limit|count?}` | `{video, comments: []Comment}` |
+
+Conventions that matter:
+
+- **Same credential as the inference API**: the routes sit on `discoveryChain` (API-key auth),
+  not `adminChain` — these are data-plane calls, and an external key must reach them. They are
+  still **not** on the admin surface, so the admin-gating rule above is unaffected.
+- **Stateless per call.** Provider config arrives in the request body (exactly like the turn
+  payload) and is never persisted. Per-API-key provider storage is a possible later addition,
+  deliberately not built yet.
+- **Errors are OpenAI-shaped** `{"error":{"message":...}}`: 400 for missing/invalid args and
+  `tools.ErrNoProviders` (the *request* asked for a search with nothing to run it), 502 for
+  upstream failures, 503 for `tools.ErrDlpMissing` (the message doubles as the install hint).
+- **The executors already clamp** — `tools.Search` to `MaxResults`, the YouTube calls to their
+  per-call ceilings; the handlers pass limits through rather than re-capping.

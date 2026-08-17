@@ -4,14 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"time"
-)
 
-var webSearchClient = &http.Client{Timeout: 15 * time.Second}
+	"github.com/quartermaster-labs/quartermaster/internal/tools"
+)
 
 // handleAPIWebSearch runs a web search on the browser's behalf. Two shapes:
 //
-//   - POST {providers:[…], q, limit} — the provider chain (search.go). Used by
+//   - POST {providers:[…], q, limit} — the provider chain (internal/tools). Used by
 //     the playground's per-provider Test button. POST, not GET, because the
 //     body carries API keys and a query string lands in the access log.
 //   - GET ?url=<searxng base>&q=… — the original SearXNG-only proxy, kept for
@@ -36,7 +35,7 @@ func (s *Server) handleAPIWebSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := searxngJSON(r.Context(), base, q)
+	body, err := tools.SearxngJSON(r.Context(), base, q)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return

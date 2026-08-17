@@ -1,8 +1,9 @@
-package server
+package tools
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"net/url"
@@ -25,8 +26,9 @@ import (
 // rather than a hand-rolled scrape of the watch page's
 // ytInitialPlayerResponse.captions block. That scrape is ~50 lines and breaks
 // every time YouTube reshuffles the page or serves a bot check; yt-dlp exists
-// precisely to absorb that churn. Cost: one more external binary, resolved from
-// PATH (or beside the quartermaster exe) with a clear error when it's missing.
+// precisely to absorb that churn. Cost: one more external binary, resolved by
+// DlpPath (managed build, then PATH, then the bundle's bin\) with a clear
+// ErrDlpMissing error when it's absent.
 
 const (
 	// ytTimeout caps one fetch. A caption-only pull is a couple of network round
@@ -45,23 +47,12 @@ const (
 	ytMaxTokens = 12000
 	ytCacheTTL  = 30 * time.Minute
 	ytCacheMax  = 16
-	// Transcripts are capped per TURN by a token budget, not by a call count:
-	// "watch all five of these" is a legitimate ask, and five 2-minute shorts
-	// cost less than one 40-minute talk. maxYouTube stays only as a stop for a
-	// model looping over a playlist forever (each call is a yt-dlp process and a
-	// request to YouTube, so an unbounded loop is a hang and a 429, not just a
-	// context problem). ytTurnTokens is the real limiter; ytMinTranscript is the
-	// floor below which a further fetch is refused rather than served as a stub
-	// the model would narrate over.
-	maxYouTube      = 8
-	ytTurnTokens    = 40000
-	ytMinTranscript = 1500
 )
 
-// ytVideoID matches YouTube's 11-character video id. Everything handed to
+// VideoID matches YouTube's 11-character video id. Everything handed to
 // yt-dlp is rebuilt from a match of this, so a tool argument can never inject
 // an argument or a different URL.
-var ytVideoID = regexp.MustCompile(`^[A-Za-z0-9_-]{11}$`)
+var VideoID = regexp.MustCompile(`^[A-Za-z0-9_-]{11}$`)
 
 // ytLang guards the --sub-langs value the same way (e.g. "en", "pt-BR").
 var ytLang = regexp.MustCompile(`^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?$`)
@@ -73,12 +64,16 @@ var ytTagRE = regexp.MustCompile(`<[^>]*>`)
 // ytCueTimeRE matches a VTT cue timing line, capturing the start time.
 var ytCueTimeRE = regexp.MustCompile(`^(\d{2,}):(\d{2}):(\d{2})[.,](\d{3})\s+-->`)
 
-type ytTranscript struct {
-	ID       string
-	Title    string
-	Uploader string
-	Duration int // seconds, 0 if unknown
-	Text     string
+// ErrDlpMissing is the "no yt-dlp on this box" failure, so HTTP callers can
+// map it to a 503 (service capability absent) instead of a 502 (upstream fault).
+var ErrDlpMissing = errors.New("yt-dlp is not installed, so YouTube transcripts are unavailable. Install it from https://github.com/yt-dlp/yt-dlp (or re-run the quartermaster installer and tick the yt-dlp helper) and make sure it is on PATH or in the bundle's bin\\yt-dlp folder")
+
+type Transcript struct {
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Uploader string `json:"uploader"`
+	Duration int    `json:"duration"` // seconds, 0 if unknown
+	Text     string `json:"text"`
 }
 
 var ytCache struct {
@@ -87,18 +82,18 @@ var ytCache struct {
 }
 
 type ytCacheEntry struct {
-	tr ytTranscript
+	tr Transcript
 	at time.Time
 }
 
-// parseYouTubeID pulls the video id out of anything a model is likely to pass:
+// ParseVideoID pulls the video id out of anything a model is likely to pass:
 // a full watch URL, youtu.be short link, /shorts/, /embed/, or a bare id.
-func parseYouTubeID(s string) string {
+func ParseVideoID(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return ""
 	}
-	if ytVideoID.MatchString(s) {
+	if VideoID.MatchString(s) {
 		return s
 	}
 	// Normalise to something url-ish so a bare "youtube.com/watch?v=..." parses.
@@ -113,17 +108,17 @@ func parseYouTubeID(s string) string {
 	host := strings.TrimPrefix(strings.ToLower(u.Host), "www.")
 	switch host {
 	case "youtu.be":
-		if id := strings.Trim(u.Path, "/"); ytVideoID.MatchString(id) {
+		if id := strings.Trim(u.Path, "/"); VideoID.MatchString(id) {
 			return id
 		}
 	case "youtube.com", "m.youtube.com", "music.youtube.com", "youtube-nocookie.com":
-		if v := u.Query().Get("v"); ytVideoID.MatchString(v) {
+		if v := u.Query().Get("v"); VideoID.MatchString(v) {
 			return v
 		}
 		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 		for i, p := range parts {
 			if (p == "shorts" || p == "embed" || p == "v" || p == "live") && i+1 < len(parts) {
-				if ytVideoID.MatchString(parts[i+1]) {
+				if VideoID.MatchString(parts[i+1]) {
 					return parts[i+1]
 				}
 			}
@@ -132,10 +127,10 @@ func parseYouTubeID(s string) string {
 	return ""
 }
 
-// ytDlpPath finds the yt-dlp binary: a managed install first, then PATH, then
+// DlpPath finds the yt-dlp binary: a managed install first, then PATH, then
 // beside our own exe (the packaged-install case, where backends ship in the same
 // directory).
-func ytDlpPath() (string, error) {
+func DlpPath() (string, error) {
 	// A build the user installed from the Backends tab wins: it is the copy this
 	// app can keep updated, and it is only there because they asked for it. The
 	// manager is a plain directory scan, so building one here is cheap.
@@ -163,33 +158,33 @@ func ytDlpPath() (string, error) {
 			}
 		}
 	}
-	return "", fmt.Errorf("yt-dlp is not installed, so YouTube transcripts are unavailable. Install it from https://github.com/yt-dlp/yt-dlp (or re-run the quartermaster installer and tick the yt-dlp helper) and make sure it is on PATH or in the bundle's bin\\yt-dlp folder")
+	return "", ErrDlpMissing
 }
 
-// fetchYouTubeTranscript downloads captions for one video and returns them as
+// GetTranscript downloads captions for one video and returns them as
 // timestamped paragraphs. lang is a BCP-47-ish prefix ("en", "pt-BR"); empty
 // means English.
-func fetchYouTubeTranscript(ctx context.Context, videoID, lang string) (ytTranscript, error) {
-	if !ytVideoID.MatchString(videoID) {
-		return ytTranscript{}, fmt.Errorf("not a valid YouTube video id")
+func GetTranscript(ctx context.Context, videoID, lang string) (Transcript, error) {
+	if !VideoID.MatchString(videoID) {
+		return Transcript{}, fmt.Errorf("not a valid YouTube video id")
 	}
 	if lang == "" {
 		lang = "en"
 	}
 	if !ytLang.MatchString(lang) {
-		return ytTranscript{}, fmt.Errorf("invalid language code %q", lang)
+		return Transcript{}, fmt.Errorf("invalid language code %q", lang)
 	}
 	if tr, ok := ytCacheGet(videoID + "\x00" + lang); ok {
 		return tr, nil
 	}
 
-	bin, err := ytDlpPath()
+	bin, err := DlpPath()
 	if err != nil {
-		return ytTranscript{}, err
+		return Transcript{}, err
 	}
 	dir, err := os.MkdirTemp("", "qm-yt-")
 	if err != nil {
-		return ytTranscript{}, err
+		return Transcript{}, err
 	}
 	defer os.RemoveAll(dir)
 
@@ -219,7 +214,7 @@ func fetchYouTubeTranscript(ctx context.Context, videoID, lang string) (ytTransc
 	hideConsole(cmd)
 	stderr, runErr := cmd.CombinedOutput()
 
-	tr := ytTranscript{ID: videoID}
+	tr := Transcript{ID: videoID}
 	if b, err := os.ReadFile(out + ".info.json"); err == nil {
 		var info struct {
 			Title    string  `json:"title"`
@@ -234,24 +229,24 @@ func fetchYouTubeTranscript(ctx context.Context, videoID, lang string) (ytTransc
 	vtt, err := findVTT(dir, lang)
 	if err != nil {
 		if ctx.Err() != nil {
-			return ytTranscript{}, fmt.Errorf("yt-dlp timed out after %s", ytTimeout)
+			return Transcript{}, fmt.Errorf("yt-dlp timed out after %s", ytTimeout)
 		}
 		// No caption file: either the video has none in this language, or yt-dlp
 		// itself failed. Surface the real reason -- an empty transcript the model
 		// narrates over is the worst outcome.
 		if runErr != nil {
-			return ytTranscript{}, fmt.Errorf("yt-dlp failed: %s", firstLine(string(stderr)))
+			return Transcript{}, fmt.Errorf("yt-dlp failed: %s", firstLine(string(stderr)))
 		}
-		return ytTranscript{}, fmt.Errorf("no %s transcript available for this video (captions are disabled and no auto-caption exists)", lang)
+		return Transcript{}, fmt.Errorf("no %s transcript available for this video (captions are disabled and no auto-caption exists)", lang)
 	}
 
 	raw, err := os.ReadFile(vtt)
 	if err != nil {
-		return ytTranscript{}, err
+		return Transcript{}, err
 	}
 	tr.Text = vttToParagraphs(string(raw))
 	if strings.TrimSpace(tr.Text) == "" {
-		return ytTranscript{}, fmt.Errorf("transcript for this video is empty")
+		return Transcript{}, fmt.Errorf("transcript for this video is empty")
 	}
 	ytCachePut(videoID+"\x00"+lang, tr)
 	return tr, nil
@@ -357,11 +352,11 @@ func ytClock(sec int) string {
 	return fmt.Sprintf("%d:%02d", m, s)
 }
 
-// formatYouTubeTranscript renders the tool result the model sees: a header it
+// FormatTranscript renders the tool result the model sees: a header it
 // can cite from, then the paragraphs, truncated at ytMaxTokens with an explicit
 // marker. Truncation is announced in the header AND at the cut so the model
 // can't summarise the first third and present it as the whole video.
-func formatYouTubeTranscript(tr ytTranscript, citation, maxTokens int) string {
+func FormatTranscript(tr Transcript, citation, maxTokens int) string {
 	if maxTokens <= 0 || maxTokens > ytMaxTokens {
 		maxTokens = ytMaxTokens
 	}
@@ -426,17 +421,17 @@ func ytTruncate(text string, maxTokens int) (out string, cutAt string, truncated
 	return strings.Join(paras[:kept], "\n\n"), cutAt, true
 }
 
-func ytCacheGet(key string) (ytTranscript, bool) {
+func ytCacheGet(key string) (Transcript, bool) {
 	ytCache.mu.Lock()
 	defer ytCache.mu.Unlock()
 	e, ok := ytCache.m[key]
 	if !ok || time.Since(e.at) > ytCacheTTL {
-		return ytTranscript{}, false
+		return Transcript{}, false
 	}
 	return e.tr, true
 }
 
-func ytCachePut(key string, tr ytTranscript) {
+func ytCachePut(key string, tr Transcript) {
 	ytCache.mu.Lock()
 	defer ytCache.mu.Unlock()
 	if ytCache.m == nil {
