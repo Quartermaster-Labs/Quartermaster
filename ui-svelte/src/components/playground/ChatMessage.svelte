@@ -1263,30 +1263,9 @@
     color: var(--color-txtsecondary);
   }
 
-  .prose :global(code) {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    font-size: 0.875em;
-  }
-
-  .prose :global(pre code) {
-    background: none;
-    padding: 0;
-  }
-
-  .prose :global(code:not(pre code)) {
-    background-color: var(--color-surface);
-    padding: 0.125rem 0.25rem;
-    border-radius: 0.25rem;
-    border: 1px solid var(--color-border, rgba(128, 128, 128, 0.2));
-  }
-
-  /* @tailwindcss/typography wraps inline <code> in literal backtick
-     pseudo-elements (content: "`"). Strip them — the box styling already marks
-     code, and the stray backticks clipped ugly at line ends. */
-  .prose :global(code)::before,
-  .prose :global(code)::after {
-    content: none;
-  }
+  /* Inline/block <code> styling lives globally in index.css under
+     `.chat-prose` — shared with the Help wiki modal, which renders the same
+     markdown and was showing typography's literal backticks. */
 
   .prose :global(p) {
     margin: 0.5rem 0;

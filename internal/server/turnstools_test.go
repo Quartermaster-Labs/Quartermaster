@@ -47,9 +47,12 @@ func TestTurns_searchWiki(t *testing.T) {
 	if len(res) > wikiMaxResults {
 		t.Errorf("returned %d results, cap is %d", len(res), wikiMaxResults)
 	}
+	res = searchWiki("tools api for my own app")
+	if len(res) == 0 || res[0].ID != "tools-api" {
+		t.Errorf("top result = %v, want tools-api", res)
+	}
 	// No alphanumeric terms → no results.
 	if r := searchWiki("!!!"); r != nil {
 		t.Errorf("expected nil for term-less query, got %v", r)
 	}
 }
-

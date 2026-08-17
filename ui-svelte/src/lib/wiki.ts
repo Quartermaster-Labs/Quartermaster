@@ -26,7 +26,7 @@ export const WIKI_CATEGORIES: { title: string; ids: string[] }[] = [
   { title: "Models & config", ids: ["loading-models", "model-config", "config-variants", "autogen", "backends", "multi-listener"] },
   { title: "Playground", ids: ["playground-chat", "playground-login", "web-search", "youtube", "qm-tools", "images", "upscale", "segmentation", "speech-audio", "rerank-embed", "settings"] },
   { title: "Monitoring & VRAM", ids: ["observe", "gpu-memory", "slot-kv-cache"] },
-  { title: "API & access", ids: ["api-keys"] },
+  { title: "API & access", ids: ["api-keys", "tools-api"] },
   { title: "Troubleshooting", ids: ["troubleshooting", "known-issues"] },
 ];
 
@@ -50,7 +50,7 @@ export const WIKI_TOOL: ToolDef = {
   function: {
     name: "wiki_search",
     description:
-      "Search the quartermaster help wiki for how the platform works - loading/swapping models, per-model config, the playground (chat/images/speech), web search setup, API keys, GPU/VRAM, and troubleshooting. Use this whenever the user asks how to do something in quartermaster or hits a problem with it, so your answer matches the actual app.",
+      "Search the quartermaster help wiki for how the platform works - loading/swapping models, per-model config, the playground (chat/images/speech), web search setup, API keys, the /v1/tools API for external apps, GPU/VRAM, and troubleshooting. Use this whenever the user asks how to do something in quartermaster or hits a problem with it, so your answer matches the actual app.",
     parameters: {
       type: "object",
       properties: {
