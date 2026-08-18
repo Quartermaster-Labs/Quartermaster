@@ -2069,9 +2069,9 @@
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               Parallel slots
-              {@render hint("--parallel. Number of concurrent request slots. Empty = 1. Each slot splits the context window, so raise context too if you increase this.")}
+              {@render hint("--parallel. Concurrent conversation slots, each holding its own chat. Empty = 1, max 8. The context above is the window ONE conversation gets: N slots reserve N x that KV, so raising this shrinks the auto-sized context rather than over-committing VRAM.")}
             </span>
-            <input type="number" min="0" step="1" bind:value={parallel} use:wheelAdjust class="cfg-input" placeholder="1" />
+            <input type="number" min="0" max="8" step="1" bind:value={parallel} use:wheelAdjust class="cfg-input" placeholder="1" />
           </label>
 
           <label class="flex flex-col gap-1 text-sm">

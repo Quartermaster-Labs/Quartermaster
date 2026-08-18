@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -298,8 +300,16 @@ func TestSlotCache_RestoreOnLoad_NoFileSkips(t *testing.T) {
 		t.Error("no file => must not record pending restore")
 	}
 	sc.restoreOnLoad("m")
-	if sc.occupant["m"] != nil {
-		t.Error("no pending => no restore, occupant stays empty")
+	// The slot is CLAIMED for the incoming conversation (that is what stops a
+	// second conversation from being assigned the same slot), but nothing was
+	// restored into it and nothing has run there yet.
+	if occ := sc.occupant["m"]; occ != nil && occ.dirty {
+		t.Error("no pending => nothing restored or run, slot must not be dirty")
+	}
+	for _, ev := range sc.stats().Events {
+		if strings.HasPrefix(ev.Op, "restore") {
+			t.Errorf("no pending => no restore, got event %q", ev.Op)
+		}
 	}
 }
 
@@ -622,5 +632,151 @@ func TestSlotCache_EnforceCapsByCount(t *testing.T) {
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 2 {
 		t.Fatalf("expected 2 files after count-cap eviction, got %d", len(entries))
+	}
+}
+
+// fakeMultiBackend stands in for a llama-server launched with --parallel n:
+// /slots reports n slots (busy[i] marks one mid-generation) and
+// /slots/<i>?action=save writes the snapshot file, recording which slot it came
+// from so a test can assert the pin actually landed.
+func fakeMultiBackend(t *testing.T, n int, kvTokens int64, busy map[int]bool, saveDir string, saved map[string]int) *httptest.Server {
+	t.Helper()
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/slots" && r.Method == http.MethodGet {
+			parts := make([]string, 0, n)
+			for i := 0; i < n; i++ {
+				parts = append(parts, fmt.Sprintf(`{"id":%d,"n_prompt_tokens":%d,"n_ctx":100000,"is_processing":%v}`, i, kvTokens, busy[i]))
+			}
+			fmt.Fprintf(w, "[%s]", strings.Join(parts, ","))
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/slots/") {
+			idx, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/slots/"))
+			if err != nil || idx < 0 || idx >= n {
+				w.WriteHeader(http.StatusBadRequest) // llama-server rejects an out-of-range id_slot
+				return
+			}
+			body, _ := io.ReadAll(r.Body)
+			fn := gjson.GetBytes(body, "filename").String()
+			if r.URL.Query().Get("action") == "save" {
+				os.WriteFile(filepath.Join(saveDir, fn), []byte("kv"), 0o644)
+			}
+			mu.Lock()
+			saved[r.URL.Query().Get("action")+":"+fn] = idx
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == "/v1/chat/completions" {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// Two conversations against a 2-slot model get one slot each, and each stays put
+// when it comes back — the whole point of running more than one slot.
+func TestSlotCache_MultiSlot_PinsConversationsToOwnSlots(t *testing.T) {
+	dir := t.TempDir()
+	saved := map[string]int{}
+	srv := fakeMultiBackend(t, 2, 0, nil, dir, saved)
+	sc := newEvictTestCache(dir, srv.URL)
+	sc.slots = func(string) int { return 2 }
+
+	a := sc.onSwitch(context.Background(), "m", srv.URL, "convA", "")
+	sc.markResident("m", a, "convA", "")
+	b := sc.onSwitch(context.Background(), "m", srv.URL, "convB", "")
+	sc.markResident("m", b, "convB", "")
+	if a == b {
+		t.Fatalf("two conversations must land on different slots, both got %d", a)
+	}
+	if again := sc.onSwitch(context.Background(), "m", srv.URL, "convA", ""); again != a {
+		t.Errorf("conversation A moved slots: %d -> %d", a, again)
+	}
+}
+
+// With every slot occupied, a third conversation evicts the least-recently-used
+// slot that is NOT generating — stealing the busy one would restore over a live
+// stream.
+func TestSlotCache_MultiSlot_SkipsBusySlot(t *testing.T) {
+	dir := t.TempDir()
+	saved := map[string]int{}
+	// Slot 0 is the LRU one, but it is mid-generation, so slot 1 must be taken.
+	srv := fakeMultiBackend(t, 2, 0, map[int]bool{0: true}, dir, saved)
+	sc := newEvictTestCache(dir, srv.URL)
+	sc.slots = func(string) int { return 2 }
+
+	sc.markResident("m", 0, "convA", "")
+	sc.markResident("m", 1, "convB", "")
+
+	got := sc.onSwitch(context.Background(), "m", srv.URL, "convC", "")
+	if got != 1 {
+		t.Fatalf("expected the idle slot 1, got %d", got)
+	}
+}
+
+// A model swap must not throw away N-1 conversations: every occupied slot is
+// snapshotted before the process dies.
+func TestSlotCache_MultiSlot_SaveOnEvictAllSlots(t *testing.T) {
+	dir := t.TempDir()
+	saved := map[string]int{}
+	srv := fakeMultiBackend(t, 2, 35000, nil, dir, saved) // above the 30k worth-it gate
+	sc := newEvictTestCache(dir, srv.URL)
+	sc.slots = func(string) int { return 2 }
+
+	sc.markResident("m", 0, "convA", "")
+	sc.markResident("m", 1, "convB", "")
+	sc.saveOnEvict("m")
+
+	for _, k := range []string{"convA", "convB"} {
+		if _, err := os.Stat(filepath.Join(dir, fileName("m", k))); err != nil {
+			t.Errorf("expected %s snapshotted on evict: %v", k, err)
+		}
+	}
+	if saved["save:"+fileName("m", "convB")] != 1 {
+		t.Errorf("convB must be saved from slot 1, got slot %d", saved["save:"+fileName("m", "convB")])
+	}
+	if sc.occupant[sk("m", 1)] != nil {
+		t.Error("occupants dropped after evict-save (the slots are gone)")
+	}
+}
+
+// Restores name the slot the conversation was pinned to, not slot 0.
+func TestSlotCache_MultiSlot_RestoreTargetsPinnedSlot(t *testing.T) {
+	dir := t.TempDir()
+	saved := map[string]int{}
+	srv := fakeMultiBackend(t, 2, 0, nil, dir, saved)
+	sc := newEvictTestCache(dir, srv.URL)
+	sc.slots = func(string) int { return 2 }
+	os.WriteFile(filepath.Join(dir, fileName("m", "convB")), []byte("kv"), 0o644)
+
+	sc.markResident("m", 0, "convA", "") // slot 0 taken by a live conversation
+	idx := sc.markPendingRestore("m", "convB", "")
+	if idx == 0 {
+		t.Fatal("convB must not be pinned onto the slot convA holds")
+	}
+	sc.restoreOnLoad("m")
+	if got, ok := saved["restore:"+fileName("m", "convB")]; !ok || got != idx {
+		t.Errorf("restore targeted slot %d (present=%v), want %d", got, ok, idx)
+	}
+}
+
+// pinSlot must rewrite the body AND its length, or the reverse proxy advertises
+// a stale Content-Length and the upstream stalls.
+func TestPinSlot(t *testing.T) {
+	body := `{"model":"m","messages":[{"role":"user","content":"hi"}]}`
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	pinSlot(r, 3)
+	got, _ := io.ReadAll(r.Body)
+	if v := gjson.GetBytes(got, "id_slot").Int(); v != 3 {
+		t.Errorf("id_slot = %d, want 3", v)
+	}
+	if r.ContentLength != int64(len(got)) || r.Header.Get("Content-Length") != strconv.Itoa(len(got)) {
+		t.Errorf("Content-Length %d/%q != body %d", r.ContentLength, r.Header.Get("Content-Length"), len(got))
 	}
 }

@@ -360,7 +360,11 @@ type Override struct {
 	//   Mmap:      "" (on) | "on" | "off"            (off => --no-mmap; default mmap on)
 	//   Mlock:     false => no --mlock; true => --mlock (lock weights in RAM)
 	//   Threads:   0 => settings.Threads             (-t)
-	//   Parallel:  0 => 1                            (--parallel, concurrent slots)
+	//   Parallel:  0 => 1, capped at MaxParallelSlots (--parallel, concurrent
+	//              slots). Sizing treats the computed ctx as PER SLOT and charges
+	//              N x the KV cost; emit multiplies it back into -c, which
+	//              --kv-unified makes the shared pool. So raising this shrinks the
+	//              per-conversation window rather than over-committing VRAM.
 	//   Ub:        0 => auto (1024, 512 for >=64k ctx) (-ub/-b physical batch)
 	FlashAttn string `yaml:"flashAttn"`
 	Mmap      string `yaml:"mmap"`

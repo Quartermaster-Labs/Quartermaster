@@ -144,6 +144,14 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   dropped the draft chain + kv on every variant but the one the user hand-edited.
 - **Empty `modelsRoot` is valid, not an error** — the server boots with an empty catalog so a
   setup UI can point it at a folder later; discovery and hashing short-circuit on blank.
+- **`Parallel` > 1: sized per slot, emitted as a pool.** `--kv-unified` makes `-c` ONE KV buffer
+  shared by all `--parallel N` slots, so N conversations of the sized window need N x that pool.
+  `Generate` multiplies the per-token KV cost by `profileParallel` **before** `sizeProfile` (so the
+  clamp shrinks the per-slot ctx to what VRAM holds) and `emitProfile` multiplies the result back
+  out into `-c ctx*parallel`. Both read the slot count through `EffectiveParallel`/`profileParallel`
+  (variant wins over the model-wide override, capped at `MaxParallelSlots`) — if one side ever reads
+  a different number, the server either over-commits VRAM or hands slot 1 the whole card.
+  `/api/models` divides `-c` back down so the UI reports the per-conversation window.
 - **Determinism for tests** — `Generate` takes the timestamp as an argument (`DefaultNow()` is
   separate) so output is reproducible.
 - **Caching** — metadata by size+mtime (`metacache.go`); replacing a gguf invalidates its entry.

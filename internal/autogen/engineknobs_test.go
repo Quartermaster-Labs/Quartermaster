@@ -1,6 +1,7 @@
 package autogen
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -252,5 +253,70 @@ func TestEmitProfile_EngineDefaults(t *testing.T) {
 		if strings.Contains(out, unwanted) {
 			t.Errorf("unexpected %q in default emit:\n%s", unwanted, out)
 		}
+	}
+}
+
+// Multi-slot sizing contract: --kv-unified shares ONE KV pool across the slots,
+// so N slots each holding a full conversation cost N x the KV. Sizing charges
+// that by scaling the per-token cost, which yields a smaller PER-SLOT ctx; emit
+// then multiplies it back out into -c (the pool). The two must agree, or the
+// server either over-commits VRAM or hands slot 1 the whole card.
+func TestSizeProfile_SlotsShrinkPerSlotCtx(t *testing.T) {
+	meta := Metadata{Architecture: "llama", BlockCount: 32, HeadCountKv: 8, KeyLength: 128, ValueLength: 128, FileSizeGB: 4}
+	s := Settings{MaxRamGB: 32, DenseCtxLadder: []int{131072, 65536, 32768, 16384, 8192}, DenseMinCtx: 4096}
+	const ptg, kcg = 0.00002, 0.0
+	prof := profile{Name: "x", Target: 8}
+
+	one, _, _, _, err := sizeProfile(meta, s, prof, ptg, kcg, 131072, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two slots => the caller (Generate) doubles the per-token cost before sizing.
+	two, planTwo, kvTwo, _, err := sizeProfile(meta, s, prof, ptg*2, kcg, 131072, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !(two < one) {
+		t.Errorf("per-slot ctx with 2 slots=%d should be < single-slot=%d", two, one)
+	}
+	// The reserve covers the WHOLE pool (both slots at their per-slot ctx), and
+	// the placement still fits the VRAM target — that is the clamp working.
+	if want := KvReserveGB(two, ptg*2, kcg); math.Abs(kvTwo-want) > 1e-9 {
+		t.Errorf("kvReserve %.4f should price both slots (%.4f)", kvTwo, want)
+	}
+	if planTwo.EstVramGB > prof.Target {
+		t.Errorf("2-slot plan estimates %.2f GB over a %.2f GB target", planTwo.EstVramGB, prof.Target)
+	}
+}
+
+// -c is the SHARED pool under --kv-unified, so emit multiplies the per-slot ctx
+// by the slot count. EffectiveParallel is the single source of that number.
+func TestEmitProfile_ParallelScalesCtx(t *testing.T) {
+	emit := func(ov *Override) string {
+		var b strings.Builder
+		s := Settings{ServerExe: "llama-server", TtlSec: 600}
+		meta := Metadata{Architecture: "llama", BlockCount: 32}
+		row := GgufRow{FullPath: "/models/foo.gguf"}
+		emitProfile(&b, s, meta, row, profile{Name: "foo"}, 16384, 10, 0, LoadPlan{}, "q8_0", "q8_0", false, ov)
+		return b.String()
+	}
+
+	if out := emit(&Override{}); !strings.Contains(out, "-c 16384") || !strings.Contains(out, "--parallel 1") {
+		t.Errorf("single slot should emit the ctx as-is:\n%s", out)
+	}
+	if out := emit(&Override{Parallel: 4}); !strings.Contains(out, "-c 65536") || !strings.Contains(out, "--parallel 4") {
+		t.Errorf("4 slots should emit a 4x pool (-c 65536):\n%s", out)
+	}
+	// A typo must not size a pool nothing can hold.
+	if got := EffectiveParallel(&Override{Parallel: 400}); got != MaxParallelSlots {
+		t.Errorf("EffectiveParallel(400) = %d, want the %d cap", got, MaxParallelSlots)
+	}
+	if got := EffectiveParallel(nil); got != 1 {
+		t.Errorf("EffectiveParallel(nil) = %d, want 1", got)
+	}
+	// A variant's own parallel wins over the model-wide override (emit does the
+	// same merge, so sizing must not read a different number).
+	if got := profileParallel(profile{Variant: &VariantSpec{Parallel: 2}}, Override{Parallel: 4}); got != 2 {
+		t.Errorf("variant parallel should win: got %d, want 2", got)
 	}
 }

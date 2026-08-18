@@ -451,6 +451,19 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			}
 		}
 
+		// Multi-slot: --kv-unified gives every slot one shared KV pool, so N slots
+		// each holding a full-size conversation cost N x the KV. Charge that here —
+		// sizing then yields a PER-SLOT ctx that N of can actually fit (buildCmdLines
+		// multiplies it back out for -c), and every downstream number (kvReserve,
+		// checkpoint reserve, estVramGB) describes the whole pool. Sizing against the
+		// unscaled cost instead would hand slot 1 the whole card and let slots 2..N
+		// evict it mid-conversation.
+		pSlots := profileParallel(prof, override)
+		if pSlots > 1 {
+			ptg *= float64(pSlots)
+			kcg *= float64(pSlots)
+		}
+
 		ctx, plan, kvReserve, planCkptGB, err := sizeProfile(meta, s, prof, ptg, kcg, pModelMax, pkvInRam)
 		if err != nil {
 			return err

@@ -34,13 +34,16 @@ type kvCounters struct {
 
 // kvEvent is one recent cache action shown in the live event log.
 type kvEvent struct {
-	Time   time.Time `json:"time"`
-	Model  string    `json:"model"`
-	Op     string    `json:"op"` // save | restore-hit | restore-seed | seed-pending | miss | error
-	Key    string    `json:"key"`
-	Detail string    `json:"detail,omitempty"`
-	Bytes  int64     `json:"bytes,omitempty"`
-	Tokens int64     `json:"tokens,omitempty"`
+	Time  time.Time `json:"time"`
+	Model string    `json:"model"`
+	// Slot is the llama-server slot the op targeted. Always 0 on a single-slot
+	// model (the default), so the UI shows the column only when a model runs more.
+	Slot   int    `json:"slot"`
+	Op     string `json:"op"` // save | restore-hit | restore-seed | seed-pending | miss | error
+	Key    string `json:"key"`
+	Detail string `json:"detail,omitempty"`
+	Bytes  int64  `json:"bytes,omitempty"`
+	Tokens int64  `json:"tokens,omitempty"`
 }
 
 // record appends an event to the bounded ring and bumps the matching counter.
@@ -131,17 +134,33 @@ func (sc *slotCache) confirmReuse(model string, prompt, cached int) {
 
 // KVCacheStats is the /api/kvcache snapshot powering the Observe → KV Cache tab.
 type KVCacheStats struct {
-	Enabled   bool        `json:"enabled"`
-	Dir       string      `json:"dir"`
-	MaxBytes  int64       `json:"maxBytes"`
-	MaxFiles  int         `json:"maxFiles"`
-	DiskBytes int64       `json:"diskBytes"`
-	Counters  kvCounters  `json:"counters"`
-	Files     []kvFileRow `json:"files"`
+	Enabled   bool       `json:"enabled"`
+	Dir       string     `json:"dir"`
+	MaxBytes  int64      `json:"maxBytes"`
+	MaxFiles  int        `json:"maxFiles"`
+	DiskBytes int64      `json:"diskBytes"`
+	Counters  kvCounters `json:"counters"`
+	// Slots is the live per-slot residency of every model the cache is tracking:
+	// which conversation sits on which slot, and whether it has run since its last
+	// save. This is the view that makes a multi-slot model legible — without it a
+	// user setting parallel 4 has no way to see that their four agents each landed
+	// on their own slot instead of fighting over one.
+	Slots []kvSlotRow `json:"slots"`
+	Files []kvFileRow `json:"files"`
 	// PreambleFiles are the system+tools seed caches (distinct from per-conversation
 	// Files): one per agent/environment, reused to seed cold/warm loads.
 	PreambleFiles []kvFileRow `json:"preambleFiles"`
 	Events        []kvEvent   `json:"events"` // newest first
+}
+
+// kvSlotRow is one model slot and what currently occupies it.
+type kvSlotRow struct {
+	Model    string    `json:"model"`
+	Slot     int       `json:"slot"`
+	Key      string    `json:"key"`
+	Dirty    bool      `json:"dirty"` // has generated since its last save
+	LastUsed time.Time `json:"lastUsed"`
+	Preamble string    `json:"preamble,omitempty"`
 }
 
 // kvFileRow is one persisted session on disk.
@@ -163,6 +182,28 @@ func (sc *slotCache) stats() KVCacheStats {
 	out.Dir = sc.dir
 	out.MaxBytes = sc.maxBytes
 	out.MaxFiles = sc.maxFiles
+
+	sc.stateMu.Lock()
+	for slot, occ := range sc.occupant {
+		if occ == nil {
+			continue
+		}
+		out.Slots = append(out.Slots, kvSlotRow{
+			Model:    modelOf(slot),
+			Slot:     slotIndexOf(slot),
+			Key:      short(occ.key),
+			Dirty:    occ.dirty,
+			LastUsed: sc.lastUse[slot],
+			Preamble: preambleSnippet(occ.preamble),
+		})
+	}
+	sc.stateMu.Unlock()
+	sort.Slice(out.Slots, func(i, j int) bool {
+		if out.Slots[i].Model != out.Slots[j].Model {
+			return out.Slots[i].Model < out.Slots[j].Model
+		}
+		return out.Slots[i].Slot < out.Slots[j].Slot
+	})
 
 	sc.statsMu.Lock()
 	out.Counters = sc.counters

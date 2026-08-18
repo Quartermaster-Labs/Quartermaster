@@ -207,6 +207,33 @@ func samplerLines(meta Metadata, ov *Override) []string {
 // ub=512 costs ~52% prefill vs 1024).
 const smallCardVramGB = 12.0
 
+// MaxParallelSlots caps --parallel. Slots are cheap in code but not in VRAM:
+// every extra slot multiplies the KV pool sizing (see buildCmdLines), and the
+// slot cache keeps per-slot bookkeeping. 8 is far past any local multi-agent
+// setup; a typo of 400 would otherwise size a pool nothing can hold.
+const MaxParallelSlots = 8
+
+// profileParallel resolves the slot count for one profile the same way emit
+// does: the variant's own parallel wins over the model-wide override. It exists
+// so sizing can charge the slot multiplier BEFORE effOv is assembled.
+func profileParallel(prof profile, ov Override) int {
+	if v := prof.Variant; v != nil && v.Parallel > 0 {
+		return EffectiveParallel(&Override{Parallel: v.Parallel})
+	}
+	return EffectiveParallel(&ov)
+}
+
+// EffectiveParallel resolves llama-server's --parallel (server slot count) for a
+// model: the per-model/variant override, else 1, clamped to MaxParallelSlots.
+// Sizing (generate.go) and command emission (buildCmdLines) MUST agree on this
+// number — one charges N x KV per token, the other multiplies -c by it.
+func EffectiveParallel(ov *Override) int {
+	if ov == nil || ov.Parallel <= 0 {
+		return 1
+	}
+	return min(ov.Parallel, MaxParallelSlots)
+}
+
 // effectiveUb picks the physical batch. Default 1024. Drop to 512 at high ctx
 // ONLY when the VRAM budget is small (< smallCardVramGB) — the auto-sized solo
 // profile (Ctx=0) learns its real ctx after sizing, so ctx>=longCtxThreshold is
@@ -262,15 +289,12 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	if ov != nil && ov.FlashAttn != "" {
 		fa = ov.FlashAttn
 	}
-	// One slot by default. Multi-agent harnesses (Qwen Code = main + memory subagent)
-	// would benefit from 2 slots to avoid preamble thrash, but our disk save/restore
-	// hardcodes /slots/0 — with 2 slots, restores race the other slot's live generation
-	// (preamble-restore errors) and may target the wrong slot. Per-model override still
-	// available for anyone who wants more slots and accepts that tradeoff.
-	parallel := 1
-	if ov != nil && ov.Parallel > 0 {
-		parallel = ov.Parallel
-	}
+	// One slot by default; a per-model override raises it for multi-agent harnesses
+	// (Qwen Code = main + memory subagent, an IDE plugin + a CLI on the same model)
+	// that would otherwise thrash one slot's preamble. The slot cache pins each
+	// conversation to a slot (id_slot) and saves/restores that slot, so >1 is a
+	// supported configuration, not a foot-gun — see internal/server/slotcache.md.
+	parallel := EffectiveParallel(ov)
 	threads := s.Threads
 	if ov != nil && ov.Threads > 0 {
 		threads = ov.Threads
@@ -320,7 +344,11 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		"--host 127.0.0.1",
 		corsOriginsFlag,
 		fmt.Sprintf("-ngl %d", ngl),
-		fmt.Sprintf("-c %d", ctx),
+		// -c is the TOTAL KV pool: --kv-unified makes all slots share one buffer, so
+		// N slots each keeping the sized per-slot context needs N x that pool. ctx is
+		// already the PER-SLOT window (sizing charged N x the per-token KV cost and
+		// clamped to VRAM), so multiplying here is what actually reserves it.
+		fmt.Sprintf("-c %d", ctx*parallel),
 		fmt.Sprintf("-ub %d -b %d", ub, bTok),
 		fmt.Sprintf("-fa %s -ctk %s -ctv %s", fa, kvK, kvV),
 		fmt.Sprintf("--parallel %d %s%s--kv-unified --no-warmup --no-ui --metrics --props", parallel, loadModeFlag, kvoFlag),

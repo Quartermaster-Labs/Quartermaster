@@ -90,7 +90,7 @@ var qmFieldDocs = map[string]string{
 	"flashAttn":        "'on' / 'off' / '' = auto",
 	"mmap":             "'on' / 'off' / '' = the placement default",
 	"threads":          "generation threads (-t); 0 = auto",
-	"parallel":         "parallel slots (--parallel); 0 = auto",
+	"parallel":         "concurrent conversation slots (--parallel); 0 = 1. Context is sized per slot, so more slots = smaller window each",
 	// Sampler
 	"dry":              "DRY repetition sampler; null = on with defaults, false = disabled",
 	"dryMultiplier":    "DRY penalty multiplier; 0 = default",

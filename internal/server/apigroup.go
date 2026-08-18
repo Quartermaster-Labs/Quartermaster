@@ -34,9 +34,15 @@ type apiModel struct {
 	// so each port shows only its own models. Empty when ungrouped/unrestricted.
 	Group     string   `json:"group,omitempty"`
 	Listeners []string `json:"listeners,omitempty"`
-	// Ctx is the configured context size (-c / --ctx-size) the model launches
-	// with, 0 when its command takes no such flag (image/audio backends).
+	// Ctx is the context window ONE conversation gets, 0 when the command takes
+	// no such flag (image/audio backends). On a multi-slot model that is the
+	// launched -c divided by Slots: --kv-unified makes -c the shared pool across
+	// all slots, so reporting it raw would promise 4x the context any single chat
+	// can hold.
 	Ctx int `json:"ctx,omitempty"`
+	// Slots is the number of concurrent conversation slots the model serves
+	// (--parallel N). Omitted for the single-slot default.
+	Slots int `json:"slots,omitempty"`
 	// Quant is the weight type parsed out of the gguf filename ("Q4_K_M"), and
 	// SizeGB its on-disk size. Both drive the Models table's spreadsheet columns
 	// (and its grouping of one model's quants); "" / 0 when the command has no
@@ -107,9 +113,17 @@ func (s *Server) modelStatus() []apiModel {
 		}
 		_, capsMap, _, _ := renderCapabilities(mc.Capabilities)
 		gid := modelGroup[id]
+		info := config.ParseCmd(mc.Cmd)
 		ctxSize := 0
-		if v, ok := config.ParseCmd(mc.Cmd).Value("-c", "--ctx-size"); ok {
+		if v, ok := info.Value("-c", "--ctx-size"); ok {
 			ctxSize, _ = strconv.Atoi(strings.TrimSpace(v))
+		}
+		slots := 0
+		if v, ok := info.Value("-np", "--parallel"); ok {
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 1 {
+				slots = n
+				ctxSize /= n // -c is the shared pool; report the per-conversation share
+			}
 		}
 		family := modelFamily(mc.Cmd)
 		models = append(models, apiModel{
@@ -124,6 +138,7 @@ func (s *Server) modelStatus() []apiModel {
 			Group:        gid,
 			Listeners:    groupListeners[gid],
 			Ctx:          ctxSize,
+			Slots:        slots,
 			Quant:        quantFromPath(family),
 			SizeGB:       fileSizeGB(family),
 			EstVramGB:    mc.EstVramGB,

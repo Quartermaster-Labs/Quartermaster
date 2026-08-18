@@ -1,16 +1,17 @@
 # internal/server — slot KV cache (fork)
 
 `slotcache*.go` + `kvcacheapi.go`. Persists a llama-server **slot's KV** to disk so an expensive
-prefill isn't thrown away when the single live slot is reused. llama-server has **one slot
-(`/slots/0`)**; any new request can evict the resident conversation. This subsystem snapshots the
-KV before it's lost and restores it — instead of reprefilling — when that conversation, or one
-sharing its preamble, returns.
+prefill isn't thrown away when a live slot is reused. A model serves `--parallel N` slots (N=1 by
+default); any new request can evict a resident conversation. This subsystem snapshots the KV before
+it's lost and restores it — instead of reprefilling — when that conversation, or one sharing its
+preamble, returns.
 
 | File | Role |
 |---|---|
 | `slotcache.go` | The state machine: `middleware`, `onSwitch`, `restoreOnLoad`, `saveOnEvict`, `ensurePreambleSeed`, `synthPrefill`, plus the `/slots` HTTP calls. |
 | `slotcache_anchor.go` | How a request becomes a cache key: `sessionAnchor` (conversation id + stable system+tools preamble), `normalizeTimestamps`, `preambleHash`/`preambleKey`. |
 | `slotcache_disk.go` | Snapshot-directory layout and the pruning passes: `fileName`/`splitFileName`, `enforceCaps` (LRU by mtime), `prunePreambleFiles`, `dropStalePreambles`, `bestSeed`. Guarded by `diskMu`. |
+| `slotcache_slots.go` | Multi-slot mechanics: `sk`/`modelOf`/`slotIndexOf` (bookkeeping keys), `slotCount` (reads `-np/--parallel` off the configured cmd), `slotStates` (one `GET /slots` scrape), `acquire` (conversation → slot assignment) and `pinSlot` (`id_slot` body injection). |
 | `slotcache_stats.go` | Observability: `kvCounters`, the `kvEvent` ring, the pending-confirm queue (`pushAwait`/`confirmReuse`) pairing a restore with llama-server's reported reuse, and the `stats()` snapshot. Own `statsMu`. |
 | `kvcacheapi.go` | `GET /api/kvcache` — the monitoring snapshot (counters, recent events, on-disk files) for the Observe → KV Cache tab. |
 
@@ -88,9 +89,17 @@ After any restore, `awaitConfirm[model]` is set; the **next** request's upstream
   only** — user messages keep their timestamps, bare dates are untouched. Always on when the slot
   cache participates. This is *not* the same as `promptcanon.go`, which is always-on for every chat
   request regardless of participation (see [`http-core.md`](http-core.md)).
-- **Single slot, three locks.** All save/restore hit `/slots/0` (one per model — each model is its
-  own llama-server). `stateMu` guards bookkeeping maps and is never held across I/O; `slotMu` is
-  **per model id** (`lockModel`) and serializes that model's long work; `diskMu` serializes
+- **We own the slot mapping.** On a multi-slot model llama-server would otherwise pick the slot
+  itself (longest common prefix) and never tell us, while our save/restore has to name one
+  (`POST /slots/<id>?action=`). So `acquire` assigns the slot — sticky to the conversation, then any
+  free slot, then LRU **skipping slots mid-generation**, then plain LRU — claims it under `stateMu`
+  before any I/O, and `pinSlot` writes `id_slot` into the forwarded body so upstream honours it.
+  Bookkeeping keys are `model` for slot 0 and `model#N` above it, so single-slot models key exactly
+  as before. Caveat: a route that re-parses the body into fresh params (Anthropic `/v1/messages`)
+  can drop `id_slot`, degrading the pin to a hint — visible as confirm-miss, never a wrong answer.
+- **Three locks.** `stateMu` guards bookkeeping maps and is never held across I/O; `slotMu` is
+  **per model slot** (`lockSlot`) so a multi-GB save on slot 0 can't block a request landing on
+  slot 1; `diskMu` serializes
   directory-wide prune passes. Lock order `slotMu` → `stateMu`, `slotMu` → `diskMu`; `statsMu`
   nests into none. A single global lock here made a multi-GB save for model A block every other
   model — regression test `TestSlotCache_SaveDoesNotBlockOtherModels`.

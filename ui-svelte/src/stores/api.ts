@@ -1208,6 +1208,9 @@ export interface KvCacheCounters {
 export interface KvCacheEvent {
   time: string;
   model: string;
+  // llama-server slot the op targeted. 0 on single-slot models (the default),
+  // so the UI only shows it when a model actually runs more than one slot.
+  slot: number;
   op: string; // save | restore-hit | restore-seed | seed-pending | miss | error
   key: string;
   detail?: string;
@@ -1223,6 +1226,17 @@ export interface KvCacheFile {
   preamble?: string;
 }
 
+// KvCacheSlot is one live server slot and the conversation currently sitting on
+// it - the view that makes a multi-slot model (--parallel N) legible.
+export interface KvCacheSlot {
+  model: string;
+  slot: number;
+  key: string;
+  dirty: boolean; // has generated since its last save
+  lastUsed: string;
+  preamble?: string;
+}
+
 export interface KvCacheStats {
   enabled: boolean;
   dir?: string;
@@ -1233,6 +1247,7 @@ export interface KvCacheStats {
   files?: KvCacheFile[];
   preambleFiles?: KvCacheFile[];
   events?: KvCacheEvent[];
+  slots?: KvCacheSlot[];
 }
 
 export async function fetchKvCache(): Promise<KvCacheStats | null> {

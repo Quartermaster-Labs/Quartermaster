@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -226,6 +227,25 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		mc, ok := s.config().Models[id]
 		return ok && config.ParseCmd(mc.Cmd).Has("--slot-save-path")
 	}
+	// slotSlots reports how many llama-server slots a model launches with, read
+	// from the live config's cmd (--parallel N / -np N). The slot cache pins each
+	// conversation to one of them, so this number must match what the process was
+	// actually started with; a hot reload that changes it is picked up here.
+	slotSlots := func(id string) int {
+		mc, ok := s.config().Models[id]
+		if !ok {
+			return 1
+		}
+		v, ok := config.ParseCmd(mc.Cmd).Value("-np", "--parallel")
+		if !ok {
+			return 1
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil || n < 1 {
+			return 1
+		}
+		return n
+	}
 	// slotRecurrent reports whether a model loads a hybrid/recurrent gguf
 	// (GatedDeltaNet/SSM, full_attention_interval>0). Memoized per gguf path —
 	// ReadGgufMetadataCached is itself size+mtime cached, but skip even that for
@@ -251,7 +271,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		recurCache[gguf] = v
 		return v
 	}
-	s.slotCache = newSlotCache(cfg.SlotCache, s.runningProxies, slotParticipates, slotRecurrent, proxylog)
+	s.slotCache = newSlotCache(cfg.SlotCache, s.runningProxies, slotParticipates, slotSlots, slotRecurrent, proxylog)
 	s.promptCanon = newPromptCanon()
 	local.SetPreEvict(s.slotCache.saveOnEvict)    // save slot KV before a swap/unload kills the process
 	local.SetPostLoad(s.slotCache.restoreOnLoad)  // restore slot KV after a cold load, before serving
