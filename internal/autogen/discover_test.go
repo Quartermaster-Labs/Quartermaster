@@ -101,3 +101,48 @@ func TestDiscoverGgufModels_KeepsFlanT5(t *testing.T) {
 		t.Fatalf("want flan-t5 served, got %d rows", len(rows))
 	}
 }
+
+// A "FastMTP" head is skipped outright: not served as its own model, and not
+// paired as a -md draft either. Regression on both halves: it used to surface in
+// the catalog as a phantom second model (growing nonsensical 32k/64k ctx
+// variants of its own), and pairing it as a draft instead hard-failed the
+// llama-server launch, since its reduced 32768-row output.weight + d2t remap is
+// a vocab layout no build we ship can load.
+func TestDiscoverGgufModels_FastMtpSkipped(t *testing.T) {
+	dir := t.TempDir()
+	writeStub(t, dir, "Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-Q4_K_P.gguf", 1024)
+	writeStub(t, dir, "Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-FastMTP-32K.gguf", 256)
+
+	rows, err := DiscoverGgufModels(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want 1 served row, got %d: %+v", len(rows), rows)
+	}
+	if rows[0].DraftPath != "" || rows[0].DraftKind != "" {
+		t.Fatalf("FastMTP head paired as a draft: kind=%q path=%q", rows[0].DraftKind, rows[0].DraftPath)
+	}
+	// The config editor's "is a draft available for this dir" probe must agree.
+	if p, k, _ := DraftSidecarForDir(dir); p != "" || k != "" {
+		t.Fatalf("DraftSidecarForDir offered the FastMTP head: kind=%q path=%q", k, p)
+	}
+}
+
+// A model that merely advertises a baked-in MTP head in its file name is a real
+// model and must keep being served — the FastMTP rule must not swallow it.
+func TestDiscoverGgufModels_NativeMtpIsNotASidecar(t *testing.T) {
+	dir := t.TempDir()
+	writeStub(t, dir, "Qwen3.6-27B-uncensored-heretic-v2-Native-MTP-Preserved-Q4_K_M.gguf", 1024)
+
+	rows, err := DiscoverGgufModels(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want 1 served row, got %d: %+v", len(rows), rows)
+	}
+	if rows[0].DraftPath != "" {
+		t.Fatalf("DraftPath = %q, want empty", rows[0].DraftPath)
+	}
+}

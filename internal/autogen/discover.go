@@ -49,6 +49,28 @@ var (
 	// Separate MTP/draft sidecar (e.g. Gemma-4 ships "mtp-gemma-4-12B-it.gguf"
 	// alongside the main model). Loaded via -md + --spec-type draft-mtp, not served alone.
 	mtpFileRe = regexp.MustCompile(`(?i)^mtp[-_.]`)
+	// "FastMTP" heads ("...-Aggressive-FastMTP-32K.gguf") are skipped outright:
+	// neither served nor paired as a draft.
+	//
+	// The file is a well-formed reduced-vocab draft, not a broken one. It holds
+	// exactly the 19 tensors of the single nextn block (blk.64.nextn.*) with its
+	// output.weight shrunk to [n_embd, 32768] plus a `d2t` table remapping those
+	// draft ids back onto the parent's 248320-token vocab: the EAGLE-3 style
+	// convention, where the small head is the whole point of the speedup.
+	// Two independent reasons it must not become a -md sidecar:
+	//  1. No llama-server build we ship references `d2t` at all, so the loader
+	//     validates output.weight against the tokenizer's n_vocab and hard-fails
+	//     ("tensor 'output.weight' has wrong shape; expected 5120, 248320, got
+	//     5120, 32768"), taking the whole launch down with it.
+	//  2. It is redundant regardless: these repos bake the same nextn block into
+	//     the main gguf at full head size, so IsMTP is already true and
+	//     effectiveSpec drives draft-mtp off the baked layer with no -md.
+	//
+	// Revisit only if a build starts advertising reduced-vocab drafts. Kept
+	// distinct from mtpFileRe so a genuine sidecar still pairs. Deliberately
+	// pinned to "fastmtp", not a bare "mtp" infix, which would also swallow real
+	// models naming a baked-in head ("...-Native-MTP-Preserved-Q4_K_M.gguf").
+	fastMtpFileRe = regexp.MustCompile(`(?i)(^|[-_.])fast[-_.]?mtp([-_.]|\.gguf$)`)
 	// Separate DFlash draft sidecar (block-diffusion drafter, e.g.
 	// "Qwen3.6-35B-A3B-DFlash-Q8_0.gguf"). Unlike the MTP prefix convention,
 	// publishers embed "dflash" as an infix, so match anywhere in the name.
@@ -154,6 +176,11 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 			return nil
 		}
 		name := d.Name()
+		// Unloadable FastMTP head: not served, not paired. Checked ahead of the
+		// draft rules so it can never become a -md sidecar.
+		if fastMtpFileRe.MatchString(name) {
+			return nil
+		}
 		// Separate MTP or DFlash draft: record it for pairing, don't serve it as
 		// its own model. Checked in this order since an MTP sidecar never also
 		// matches the dflash infix.
