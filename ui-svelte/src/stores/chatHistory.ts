@@ -1,5 +1,5 @@
 import { get, writable } from "svelte/store";
-import type { ChatMessage } from "../lib/types";
+import { getTextContent, type ChatMessage } from "../lib/types";
 
 export interface ChatSession {
   id: string;
@@ -92,11 +92,67 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 let latest: ChatSession[] | null = null;
 let deadline = 0;
 
+// --- what actually reaches disk -------------------------------------------
+//
+// The store holds every session the tab has open, including throwaways: the
+// blank chat the "New chat" button just made, and turns where the model never
+// answered and the bubble carries nothing but "**Error:** …". Those used to be
+// PUT along with the rest and came back on the next load as history the user
+// never had. Persistence is therefore filtered, not the store — an open blank
+// chat still works, it just does not survive a reload until it holds an answer.
+
+// The test is written as "is this positively junk", NOT "is this good enough to
+// keep": a PUT is destructive (the server also GCs the media of a session that
+// disappears), so anything unrecognized — a shape from an older build, a session
+// whose messages aren't even an array — falls through to KEEP.
+//
+// The failure tail both the client (catch/SSE error) and the server
+// (turns.go flush) append to the assistant bubble. Stripped before deciding
+// whether a bubble holds a real answer, so a turn that streamed prose and THEN
+// died still counts as content worth keeping. Anchored at `\n\n` and greedy to
+// the end, so an answer that merely *mentions* an error mid-prose keeps the
+// prose in front of it and survives.
+const ERROR_TAIL = /\n\n\*\*Error:\*\*[\s\S]*$/;
+
+// Did this assistant turn produce anything at all? Text, reasoning, tool/search
+// work or a tool call all count — only a bubble that is empty (or nothing but an
+// error) counts as nothing.
+function produced(m: ChatMessage): boolean {
+  if (m.role !== "assistant") return false;
+  return (
+    getTextContent(m.content ?? "").replace(ERROR_TAIL, "").trim() !== "" ||
+    (m.reasoning_content ?? "").trim() !== "" ||
+    !!m.searches?.length ||
+    !!m.tool_calls?.length
+  );
+}
+
+// A session is disposable only when it is one of the two known throwaways: a
+// chat with no messages at all, or one where no assistant turn ever produced
+// anything. Per-chat `instructions` are a deliberate user act, so a chat set up
+// with them is kept even before its first turn.
+export function isDisposable(s: ChatSession): boolean {
+  if (!s || !Array.isArray(s.messages)) return false;
+  if (s.instructions?.trim()) return false;
+  if (s.messages.length === 0) return true;
+  return !s.messages.some(produced);
+}
+
+function keepable(sessions: ChatSession[], keepId?: string): ChatSession[] {
+  // The live turn is exempt: at the moment it starts, its session is only a user
+  // message plus an empty assistant bubble, and the server needs it on disk to
+  // have somewhere to write the answer. keepId names it explicitly for the
+  // pre-turn save (the generatingChatId mirror hasn't flushed yet at that point).
+  const live = keepId ?? get(generatingChatId);
+  if (!Array.isArray(sessions)) return sessions;
+  return sessions.filter((s) => s.id === live || !isDisposable(s));
+}
+
 function pushChats(sessions: ChatSession[]): void {
   fetch("/api/chats", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(sessions),
+    body: JSON.stringify(keepable(sessions)),
     keepalive: true,
   }).catch(() => {});
 }
@@ -135,12 +191,15 @@ if (typeof window !== "undefined") {
 // the new user message + empty assistant bubble) must be on disk FIRST. Awaited,
 // unlike the debounced auto-save. Merge-guard is a no-op here (no turn running
 // yet), so this writes the full array.
-export async function saveChatsNow(): Promise<void> {
+export async function saveChatsNow(keepId?: string): Promise<void> {
   try {
     await fetch("/api/chats", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(get(chatSessions)),
+      // keepId is the session the turn is about to run in: it holds only the user
+      // message + an empty assistant bubble, so the junk filter would drop it and
+      // the server would have nowhere to write the answer.
+      body: JSON.stringify(keepable(get(chatSessions), keepId)),
     });
   } catch {
     // ignore — the turn still runs; periodic flush will reconcile

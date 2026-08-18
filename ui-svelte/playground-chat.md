@@ -7,7 +7,9 @@ studios in [`playground-media.md`](playground-media.md).
 ## `ChatInterface.svelte`
 
 Chat with **vision** (paperclip image attach → `ContentPart`/`getImageUrls`), **Rewrite mode**
-(`sendRewrite` + side-by-side `RewriteDiff.svelte` via `lib/wordDiff.ts`), **web search**
+(`sendRewrite` + side-by-side `RewriteDiff.svelte` via `lib/wordDiff.ts`; tools are off but
+**reasoning is not** - deciding what to keep, cut and re-register is the hard part of a rewrite,
+and a no-think transform came back visibly worse), **web search**
 (`lib/webSearch.ts` → `/api/websearch`), a live KV context-usage bar, and **auto-compaction**
 (`lib/chatCompact.ts`: `summarizeConversation`/`generateTitle`, `COMPACT_AT`/`KEEP_RECENT`).
 
@@ -48,6 +50,33 @@ takes. Note that **Settings → Thinking Budget is disabled for a model with lev
 the level already is the budget, and cutting thinking off between rounds would rewrite the template's system
 block mid-conversation. Switching level mid-chat does the same, so it is a per-conversation choice, not a
 per-message one.
+
+### What gets saved (`stores/chatHistory.ts`)
+
+The store holds every session the tab has open; **persistence is filtered, not the store**
+(`isDisposable`, applied by `keepable()` inside `pushChats`/`saveChatsNow`). This kills the two
+kinds of junk history: the blank session "New chat" just made, and a turn where the model never
+answered and the bubble is nothing but `**Error:** ...`.
+
+The predicate is deliberately written as *is this positively junk*, not *is this good enough to
+keep* — a PUT is destructive (the server GCs the media of any session that vanishes from the
+array), so an unrecognized shape falls through to KEEP. A session is disposable only when it has
+no messages at all, or when **no** assistant turn in it produced anything (text, reasoning,
+searches or a tool call). Consequences worth knowing:
+
+- The error tail both the client and `turns.go` append is stripped before the check, so a reply
+  that streamed prose and *then* died is kept — as is a chat whose earlier turns answered and
+  only the last one failed, and an answer that merely quotes an `**Error:**` mid-prose.
+- A chat carrying per-chat `instructions` is kept even with no messages: setting them is a
+  deliberate act, not a stray "New chat" click.
+- The live turn is exempt. `saveChatsNow(id)` takes the id of the turn about to start — at that
+  moment the session is only a user message plus an empty assistant bubble, and the server needs
+  it on disk to have somewhere to write; `pushChats` exempts `generatingChatId` for the same
+  reason during streaming. As a second net, `guardedChatsPut` re-appends the generating session
+  if a PUT ever omits it.
+- The filter runs over the whole array, so junk saved by older builds is pruned on the next PUT.
+  An errored chat therefore disappears on the next flush after the turn ends, but stays on screen
+  until the tab is reloaded.
 
 ### Per-chat model memory
 

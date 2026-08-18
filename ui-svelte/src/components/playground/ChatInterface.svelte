@@ -787,11 +787,12 @@
     ];
 
     // Thinking budget: soft cumulative-thinking cap so models can't loop forever
-    // before answering. 0 = off; rewrites never think. Enforced server-side at
-    // round boundaries — once total thinking passes the budget, thinking is turned
-    // off for later rounds (never a mid-generation hard close, which derails a
-    // tool-using model mid-search).
-    const reasoningBudget = isRewrite ? 0 : $reasoningBudgetStore;
+    // before answering. 0 = off. Enforced server-side at round boundaries — once
+    // total thinking passes the budget, thinking is turned off for later rounds
+    // (never a mid-generation hard close, which derails a tool-using model
+    // mid-search). Rewrites think too: the transform is the hard part of the turn
+    // (tone, register, what to keep), and a no-reasoning rewrite is visibly worse.
+    const reasoningBudget = $reasoningBudgetStore;
     // One assistant bubble holds the whole turn: reasoning, any web searches
     // (as collapsible sections), and the final reply. The server writes into
     // this bubble (last message) as it streams; the tool plumbing it sends to
@@ -842,7 +843,7 @@
       // server drives the whole loop (model->tool->model, budget finalize,
       // citations) and writes into chats.json; this tab is just a viewer of the
       // SSE deltas and can be closed/refreshed without losing or stopping it.
-      await saveChatsNow();
+      await saveChatsNow(id);
       const res = await fetch("/api/chats/turn", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -853,11 +854,11 @@
           tools: turnTools.length ? turnTools : undefined,
           temperature: $temperatureStore,
           max_tokens: $maxTokensStore,
-          reasoning: !isRewrite && effort !== EFFORT_OFF,
+          reasoning: effort !== EFFORT_OFF,
           // Only ever a level the model advertised: the server forwards it as the
           // standard top-level reasoning_effort and the request filter translates
           // it into the template kwarg — the same path an external client takes.
-          reasoningEffort: isRewrite ? "" : requestEffort(effort),
+          reasoningEffort: requestEffort(effort),
           reasoningBudget,
           webSearch: webEnabled,
           searxngUrl: $searxngUrlStore, // legacy field: the server falls back to it when the chain is empty
