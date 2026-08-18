@@ -476,7 +476,54 @@ func TestSweepPartials_AgeGated(t *testing.T) {
 	}
 }
 
-func TestManager_RefusesSecondJobForSameRepo(t *testing.T) {
+func TestManager_QueuesSecondJobForSameRepo(t *testing.T) {
+	release := make(chan struct{})
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		<-release
+		_, _ = w.Write(make([]byte, 1<<20))
+	}))
+	defer srv.Close()
+
+	root := t.TempDir()
+	src := &fakeSource{base: srv.URL, files: []File{
+		{Path: "a.gguf", SizeBytes: 1 << 20},
+		{Path: "b.gguf", SizeBytes: 1 << 20},
+	}}
+	m := NewManager(func() string { return root }, nil, src)
+
+	first, err := m.Start(context.Background(), StartRequest{Source: "fake", Repo: "o/r", Files: []string{"a.gguf"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Picking a second file from the same repo is the ordinary case (two quants,
+	// or a model and its projector) — it waits its turn instead of erroring.
+	second, err := m.Start(context.Background(), StartRequest{Source: "fake", Repo: "o/r", Files: []string{"b.gguf"}})
+	if err != nil {
+		t.Fatalf("second job for the same repo was refused: %v", err)
+	}
+	if j, _ := m.Job(second); j.Phase != PhaseQueued {
+		t.Errorf("queued job is in phase %q, want %q", j.Phase, PhaseQueued)
+	}
+	if got := hits.Load(); got > 1 {
+		t.Errorf("%d concurrent transfers for one repo, want 1", got)
+	}
+
+	close(release)
+	waitJob(t, m, first)
+	waitJob(t, m, second)
+	if j, _ := m.Job(second); j.Phase != PhaseDone {
+		t.Errorf("queued job ended in %q (%s), want %q", j.Phase, j.Err, PhaseDone)
+	}
+	if _, err := os.Stat(filepath.Join(root, "o", "r", "b.gguf")); err != nil {
+		t.Errorf("the queued job never ran: %v", err)
+	}
+}
+
+// A job canceled before its turn takes nothing with it: the bytes under that
+// repo belong to whatever is running there.
+func TestManager_CancelQueuedJob(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-release

@@ -90,10 +90,14 @@ func (j Job) Done() bool {
 
 // Manager owns the download job list and the destination layout.
 //
-// One job runs per repo at a time (a second request for the same repo is
-// refused, not queued) — different repos download in parallel, as do the files
-// inside one job sequentially, which is deliberate: three concurrent 20 GB
-// pulls on one line finish no sooner and make every progress bar useless.
+// One job runs per repo at a time — a second request for the same repo is
+// QUEUED, not refused, and starts when the running one ends. Different repos
+// download in parallel, and the files inside one job run sequentially, which is
+// deliberate: three concurrent 20 GB pulls on one line finish no sooner and
+// make every progress bar useless. Queueing exists because the alternative was
+// an error at the moment of picking: two quants of one repo, or a model plus
+// its projector, are the ordinary case, and "come back in forty minutes and
+// click again" is not an answer.
 type Manager struct {
 	// ModelsRoot resolves the models folder at call time rather than at
 	// construction, because it is a config value that a live reload can change.
@@ -112,7 +116,11 @@ type Manager struct {
 	active map[string]context.CancelFunc // job id -> cancel
 	stop   map[string]string             // job id -> stopPause | stopCancel
 	byRepo map[string]string             // source/repo -> running job id
-	seq    int
+	// wait is the admission queue, oldest first: jobs registered while their
+	// repo was busy. They sit in PhaseQueued and are launched by pumpLocked
+	// when the repo frees up.
+	wait []string
+	seq  int
 }
 
 func NewManager(modelsRoot func() string, log func(string), sources ...Source) *Manager {
@@ -202,6 +210,16 @@ func (m *Manager) Pause(id string) error {
 	cancel, ok := m.active[id]
 	if ok {
 		m.stop[id] = stopPause
+	} else if m.dequeueLocked(id) {
+		// Never started: there is no transfer to stop and no bytes to keep, so
+		// parking it is just taking it out of the queue. It lands in the same
+		// phase as a paused transfer so Resume is the one verb that restarts
+		// either.
+		if j, known := m.jobs[id]; known {
+			j.Phase = PhasePaused
+		}
+		m.mu.Unlock()
+		return nil
 	}
 	m.mu.Unlock()
 	if !ok {
@@ -226,6 +244,15 @@ func (m *Manager) Cancel(id string) error {
 	var snap Job
 	if known {
 		snap = *j
+	}
+	// A job still in the admission queue never opened a file. Drop it from the
+	// queue and mark it canceled WITHOUT discarding anything: any `.part` under
+	// that repo belongs to whatever is running (or paused) there, not to this
+	// job, and deleting it would throw away someone else's bytes.
+	if !running && known && m.dequeueLocked(id) {
+		j.Phase, j.Finished = PhaseCanceled, time.Now()
+		m.mu.Unlock()
+		return nil
 	}
 	m.mu.Unlock()
 	if !known {
@@ -264,13 +291,15 @@ func (m *Manager) Resume(id string) error {
 		return fmt.Errorf("unknown hub %q", j.Source)
 	}
 	key := j.Source + "/" + j.Repo
-	if prev, busy := m.byRepo[key]; busy {
-		m.mu.Unlock()
-		return fmt.Errorf("a download for %s is already running (job %s)", j.Repo, prev)
-	}
 	j.Phase, j.Err, j.Gated = PhaseQueued, "", false
 	j.Finished = time.Time{}
-	m.launchLocked(id, key, src)
+	if _, busy := m.byRepo[key]; busy {
+		// The repo is busy, so this waits its turn rather than being refused —
+		// same admission rule as Start.
+		m.wait = append(m.wait, id)
+	} else {
+		m.launchLocked(id, key, src)
+	}
 	m.mu.Unlock()
 	return nil
 }
@@ -289,6 +318,9 @@ func (m *Manager) launchLocked(id, key string, src Source) {
 			delete(m.active, id)
 			delete(m.stop, id)
 			delete(m.byRepo, key)
+			// The repo just freed up: whatever was waiting on it starts here,
+			// which is the only place a queued job is ever launched from.
+			m.pumpLocked()
 			m.mu.Unlock()
 		}()
 		// A panic in here would otherwise take the whole process down with it —
@@ -309,6 +341,50 @@ func (m *Manager) launchLocked(id, key string, src Source) {
 		}()
 		m.run(runCtx, id, src)
 	}()
+}
+
+// pumpLocked launches every queued job whose repo is now free, oldest first.
+// Caller holds m.mu.
+//
+// It also drops entries that are no longer waiting for anything: a job canceled
+// or paused out of the queue leaves its id behind, and the history trim can
+// remove one outright.
+func (m *Manager) pumpLocked() {
+	kept := m.wait[:0]
+	for _, id := range m.wait {
+		j, ok := m.jobs[id]
+		if !ok || j.Phase != PhaseQueued {
+			continue
+		}
+		src, okSrc := m.src[j.Source]
+		if !okSrc {
+			j.Phase, j.Finished = PhaseError, time.Now()
+			j.Err = fmt.Sprintf("unknown hub %q", j.Source)
+			continue
+		}
+		key := j.Source + "/" + j.Repo
+		if _, busy := m.byRepo[key]; busy {
+			kept = append(kept, id)
+			continue
+		}
+		m.launchLocked(id, key, src)
+	}
+	m.wait = kept
+}
+
+// dequeueLocked removes a job from the admission queue and reports whether it
+// was there. Membership is the ONLY reliable test for "queued but not started":
+// a job is in PhaseQueued for the moment between launch and run()'s first
+// phase update too, and treating that one as unstarted would leave a live
+// transfer running behind a canceled row. Caller holds m.mu.
+func (m *Manager) dequeueLocked(id string) bool {
+	for i, w := range m.wait {
+		if w == id {
+			m.wait = append(m.wait[:i], m.wait[i+1:]...)
+			return true
+		}
+	}
+	return false
 }
 
 // discard removes what this job wrote: every `.part`, plus the files the job
@@ -420,10 +496,6 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (string, error) {
 
 	m.mu.Lock()
 	key := src.ID() + "/" + req.Repo
-	if prev, running := m.byRepo[key]; running {
-		m.mu.Unlock()
-		return "", fmt.Errorf("a download for %s is already running (job %s)", req.Repo, prev)
-	}
 	m.seq++
 	id := fmt.Sprintf("dl-%d-%d", time.Now().UnixNano()/1e6, m.seq)
 	m.jobs[id] = &Job{
@@ -440,7 +512,14 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (string, error) {
 		m.order = m.order[1:]
 		delete(m.jobs, old)
 	}
-	m.launchLocked(id, key, src)
+	if _, running := m.byRepo[key]; running {
+		// One transfer per repo, but a second pick is queued rather than
+		// refused: picking two quants, or a model and its projector, is the
+		// ordinary case and both belong in the same folder.
+		m.wait = append(m.wait, id)
+	} else {
+		m.launchLocked(id, key, src)
+	}
 	m.mu.Unlock()
 	return id, nil
 }
