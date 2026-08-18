@@ -224,3 +224,30 @@ func TestTitlegen_NoGeneratePath(t *testing.T) {
 		t.Error("FetchTitlegenAsset with no generate path should error")
 	}
 }
+
+func TestTitlegen_SanitizeTitle(t *testing.T) {
+	const src = "Comparing Q4_K_M against Q5_K_M for a 27B model on 24GB of VRAM."
+	cases := []struct {
+		title, source, want string
+	}{
+		{"I'm sorry", src, ""},
+		{"I am sorry, I can't help with that", src, ""},
+		{"Sorry, but there is no answer", src, ""},
+		{"I don't know", src, ""},
+		{"As an AI language model I cannot", src, ""},
+		{"Unfortunately, that is impossible", src, ""},
+		{"There is no such file", src, ""},
+		// Legitimate titles that merely start with a matching word stem.
+		{"Sorrycombe village history", src, "Sorrycombe village history"},
+		{"Choosing a quant for 24GB VRAM", src, "Choosing a quant for 24GB VRAM"},
+		{"Ideas for a birthday card", src, "Ideas for a birthday card"},
+		// The source really is about apologizing: keep the title.
+		{"I'm sorry for the delay", "Drafting an apology email to the customer", "I'm sorry for the delay"},
+		{"", src, ""},
+	}
+	for _, c := range cases {
+		if got := sanitizeTitle(c.title, c.source); got != c.want {
+			t.Errorf("sanitizeTitle(%q) = %q, want %q", c.title, got, c.want)
+		}
+	}
+}
