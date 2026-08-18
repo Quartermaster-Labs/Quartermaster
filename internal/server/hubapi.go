@@ -164,6 +164,17 @@ func (s *Server) handleAPIHubModel(w http.ResponseWriter, r *http.Request) {
 	if det.Files == nil {
 		det.Files = []hub.File{}
 	}
+	// Mark what is already downloaded, so the picker can say so on the row
+	// rather than offering a 20 GB pull the user already has. Done here rather
+	// than in the adapter: the disk is a property of this installation, not of
+	// the hub. A file shorter than the hub says it should be is a truncated
+	// copy, so it stays a download.
+	local := s.hub.LocalFiles(id)
+	for i, f := range det.Files {
+		if have, ok := local[f.Path]; ok && (f.SizeBytes <= 0 || have >= f.SizeBytes) {
+			det.Files[i].Local = true
+		}
+	}
 	writeJSON(w, det)
 }
 

@@ -34,6 +34,10 @@ export interface HubFile {
   // to a model's weights, not a model. Drives the badge, the sort order and the
   // "companion" fit column in the picker.
   projector?: boolean;
+  // Already in the models folder at the size the hub reports, filled in
+  // server-side (`Manager.LocalFiles`). A `.part` does not count — half a file
+  // is not a model, and that row stays a download.
+  local?: boolean;
 }
 
 export interface HubDetail extends HubModel {
@@ -268,6 +272,10 @@ export interface FileOption {
   files: HubFile[]; // every shard of this file — one logical download
   sizeBytes: number;
   projector: boolean; // an mmproj companion, not a model on its own
+  // Every shard is already on disk. Partly-downloaded sets are NOT local: one
+  // shard of three is not a model, so the row keeps its download button (which
+  // skips the shards already there).
+  local: boolean;
 }
 
 /**
@@ -289,11 +297,12 @@ export function groupFiles(files: HubFile[]): FileOption[] {
   for (const f of files) {
     let opt = by.get(f.group);
     if (!opt) {
-      opt = { group: f.group, label: baseName(f.group), files: [], sizeBytes: 0, projector: !!f.projector };
+      opt = { group: f.group, label: baseName(f.group), files: [], sizeBytes: 0, projector: !!f.projector, local: true };
       by.set(f.group, opt);
     }
     opt.files.push(f);
     opt.sizeBytes += f.sizeBytes;
+    opt.local = opt.local && !!f.local;
   }
   const out = [...by.values()];
   for (const o of out) o.files.sort((a, b) => (a.shard ?? 0) - (b.shard ?? 0));

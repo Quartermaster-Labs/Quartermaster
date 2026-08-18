@@ -532,18 +532,66 @@ func TestManager_CancelQueuedJob(t *testing.T) {
 	defer close(release)
 
 	root := t.TempDir()
-	src := &fakeSource{base: srv.URL, files: []File{{Path: "m.gguf", SizeBytes: 1 << 20}}}
+	src := &fakeSource{base: srv.URL, files: []File{
+		{Path: "a.gguf", SizeBytes: 1 << 20},
+		{Path: "b.gguf", SizeBytes: 1 << 20},
+	}}
 	m := NewManager(func() string { return root }, nil, src)
 
-	first, err := m.Start(context.Background(), StartRequest{Source: "fake", Repo: "o/r", Files: []string{"m.gguf"}})
+	first, err := m.Start(context.Background(), StartRequest{Source: "fake", Repo: "o/r", Files: []string{"a.gguf"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Start(context.Background(), StartRequest{Source: "fake", Repo: "o/r", Files: []string{"m.gguf"}}); err == nil {
-		t.Error("second concurrent job for the same repo was admitted")
+	second, err := m.Start(context.Background(), StartRequest{Source: "fake", Repo: "o/r", Files: []string{"b.gguf"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Cancel(second); err != nil {
+		t.Fatalf("canceling a queued job: %v", err)
+	}
+	if j, _ := m.Job(second); j.Phase != PhaseCanceled {
+		t.Errorf("canceled queued job is in phase %q", j.Phase)
+	}
+	// The running job is untouched by the other job's cancel.
+	if j, _ := m.Job(first); j.Done() {
+		t.Errorf("canceling the queued job stopped the running one (phase %q)", j.Phase)
 	}
 	m.Cancel(first)
 	waitJob(t, m, first)
+}
+
+// LocalFiles is what puts "downloaded" on a picker row, so it has to agree with
+// what the transfer actually leaves behind: a finished file counts, a `.part`
+// does not.
+func TestManager_LocalFiles(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "o", "r", "sub")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, size := range map[string]int{
+		filepath.Join(root, "o", "r", "done.gguf"):            2048,
+		filepath.Join(root, "o", "r", "half.gguf"+partSuffix): 10,
+		filepath.Join(dir, "nested.gguf"):                     7,
+	} {
+		if err := os.WriteFile(name, make([]byte, size), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := NewManager(func() string { return root }, nil)
+	got := m.LocalFiles("o/r")
+	if got["done.gguf"] != 2048 {
+		t.Errorf("done.gguf = %d, want 2048", got["done.gguf"])
+	}
+	if got["sub/nested.gguf"] != 7 {
+		t.Errorf("nested file missing or wrong size: %v", got)
+	}
+	if _, ok := got["half.gguf"]; ok {
+		t.Error("a .part was reported as a local file")
+	}
+	if len(m.LocalFiles("nobody/here")) != 0 {
+		t.Error("an unknown repo reported local files")
+	}
 }
 
 func TestManager_RejectsFileNotInRepo(t *testing.T) {

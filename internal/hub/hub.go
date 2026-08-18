@@ -110,6 +110,11 @@ type File struct {
 	// column "companion", since a projector is charged on top of whichever file
 	// you pick rather than sized on its own.
 	Projector bool `json:"projector,omitempty"`
+	// Local marks a file already sitting in the models folder at (at least) the
+	// size the hub reports. It is filled in by the HTTP layer, not by an
+	// adapter: what is on disk is a property of this installation, not of the
+	// hub. See Manager.LocalFiles and handleAPIHubModel.
+	Local bool `json:"local,omitempty"`
 }
 
 // ModelDetail is a repo page: metadata, README, and the full file list.

@@ -412,6 +412,48 @@ func (m *Manager) discard(j Job) {
 	}
 }
 
+// LocalFiles reports which of a repo's files are already on disk, as
+// repo-relative slash paths mapped to their size on disk. It is what lets the
+// picker say "downloaded" on a row instead of offering a 20 GB pull the user
+// already has.
+//
+// A `.part` is deliberately NOT reported: a half-file is not a model, and the
+// row for one should stay a download button. Sizes are returned rather than a
+// bool because only the caller knows what the hub said the file should weigh —
+// a short file is a truncated copy, not a download that is finished.
+//
+// Nothing here is authoritative about what quartermaster can load; it is a
+// filename-level "is this byte range on disk", which is exactly the question
+// the picker asks. An unreadable or missing repo folder is an empty map, never
+// an error: not having downloaded anything is the normal case.
+func (m *Manager) LocalFiles(repo string) map[string]int64 {
+	out := map[string]int64{}
+	root := strings.TrimSpace(m.ModelsRoot())
+	if root == "" || strings.TrimSpace(repo) == "" {
+		return out
+	}
+	dir := filepath.Join(root, RepoDirName(repo))
+	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(path, partSuffix) {
+			return nil
+		}
+		rel, relErr := filepath.Rel(dir, path)
+		if relErr != nil {
+			return nil
+		}
+		info, statErr := d.Info()
+		if statErr != nil {
+			return nil
+		}
+		out[filepath.ToSlash(rel)] = info.Size()
+		return nil
+	})
+	return out
+}
+
 // SweepPartials deletes `.part` files under root that nothing is downloading any
 // more and that have not been touched for maxAge. Orphans are otherwise
 // permanent: a job list lives in memory, so a crash or a kill leaves a 12 GB
