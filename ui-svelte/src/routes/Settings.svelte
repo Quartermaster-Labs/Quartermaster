@@ -6,6 +6,7 @@
   import { BACKEND_CLASSES, backendClass, type BackendClassDef } from "../lib/backends";
   import ManagedBackends from "../components/ManagedBackends.svelte";
   import Select from "../components/Select.svelte";
+  import Toggle from "../components/Toggle.svelte";
   import { latestGpu, latestSys } from "../stores/perf";
 
   // Category side-nav — mirrors the playground settings modal's pattern.
@@ -471,21 +472,12 @@
                 Launch minimized to the tray when you sign in to Windows.
               </span>
             </span>
-            <span class="relative inline-flex shrink-0 items-center mt-0.5">
-              <input
-                type="checkbox"
-                class="peer sr-only"
-                disabled={autostartBusy}
-                checked={autostart.enabled && autostart.ownedByUs}
-                onchange={(e) => toggleAutostart(e.currentTarget.checked)}
-              />
-              <span
-                class="h-5 w-9 rounded-full bg-card-border transition-colors peer-checked:bg-primary peer-disabled:opacity-50 peer-focus-visible:ring-2 peer-focus-visible:ring-primary"
-              ></span>
-              <span
-                class="pointer-events-none absolute left-0.5 h-4 w-4 rounded-full bg-surface shadow transition-transform peer-checked:translate-x-4"
-              ></span>
-            </span>
+            <Toggle
+              class="mt-0.5"
+              disabled={autostartBusy}
+              checked={autostart.enabled && autostart.ownedByUs}
+              onchange={(on) => toggleAutostart(on)}
+            />
           </label>
 
           {#if autostart.enabled && !autostart.ownedByUs}
@@ -524,7 +516,7 @@
           {@render hint("Persist a long conversation's KV cache to disk so it survives being evicted from the live slot, and is restored instead of reprocessed. Master switch: each model opts in via its config editor (\"Save KV cache to disk\").\n\nExperimental: reliable for standard transformer models. Hybrid/recurrent models (e.g. Qwen3.5/3.6 GatedDeltaNet) don't yet restore across a process swap - pending upstream llama.cpp (#20819); they still get warm same-process reuse.")}
         </div>
         <label class="flex items-center gap-2 text-sm">
-          <input type="checkbox" bind:checked={slotEnable} />
+          <Toggle size="sm" bind:checked={slotEnable} />
           <span class="text-txtsecondary text-micro font-medium uppercase tracking-wide">Enable</span>
         </label>
       </div>

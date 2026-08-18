@@ -19,6 +19,7 @@
   } from "../stores/api";
   import { BACKEND_CLASSES } from "../lib/backends";
   import Select, { type SelectOption } from "./Select.svelte";
+  import Toggle from "./Toggle.svelte";
 
   let {
     os,
@@ -241,7 +242,7 @@
               class="w-56"
             />
             <label class="ml-auto inline-flex items-center gap-1.5 text-[0.7rem] text-txtsecondary">
-              <input type="checkbox" bind:checked={showAll} class="accent-primary" />
+              <Toggle size="sm" bind:checked={showAll} />
               Show every file
             </label>
           </div>
@@ -349,7 +350,7 @@
               class="rounded border border-card-border bg-surface px-2 py-1 font-mono text-xs text-txtmain focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
             />
             <label class="inline-flex items-center gap-1.5 text-[0.7rem] text-txtsecondary">
-              <input type="checkbox" bind:checked={bare} class="accent-primary" />
+              <Toggle size="sm" bind:checked={bare} />
               The download is the executable itself
             </label>
           </div>

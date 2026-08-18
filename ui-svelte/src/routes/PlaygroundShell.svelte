@@ -71,6 +71,7 @@
   import WikiModal from "../components/WikiModal.svelte";
   import ChatInterface from "../components/playground/ChatInterface.svelte";
   import Select from "../components/Select.svelte";
+  import Toggle from "../components/Toggle.svelte";
   import ImageInterface from "../components/playground/ImageInterface.svelte";
   import AudioInterface from "../components/playground/AudioInterface.svelte";
   import SpeechInterface from "../components/playground/SpeechInterface.svelte";
@@ -974,7 +975,7 @@
           {:else if settingsCat === "memory"}
             <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="memory-enabled">
               <span class="flex items-center gap-1.5">Memory {@render tip("Let the assistant remember lasting facts about you across conversations. Remembered facts are added to the system prompt of every chat, so keeping the list short keeps chats fast.")}</span>
-              <input id="memory-enabled" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$memoryStore} />
+              <Toggle id="memory-enabled" bind:checked={$memoryStore} />
             </label>
 
             <p class="text-xs text-txtsecondary">
@@ -1044,7 +1045,7 @@
             <div class="flex flex-col gap-1.5">
               <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="websearch">
                 <span class="flex items-center gap-1.5">Web Search {@render tip("Let the model search the web for fresh facts. Needs a tool-calling model.")}</span>
-                <input id="websearch" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$webSearchStore} />
+                <Toggle id="websearch" bind:checked={$webSearchStore} />
               </label>
               {#if $webSearchStore}
                 <!-- Provider chain. Tried top to bottom; a provider that errors,
@@ -1060,10 +1061,9 @@
                     <div class="rounded-md border {p.enabled ? 'border-card-border' : 'border-card-border/50'} bg-surface/60 p-2 flex flex-col gap-1.5">
                       <div class="flex items-center gap-2">
                         <span class="font-mono text-[0.7rem] text-txtsecondary w-4 shrink-0">{i + 1}</span>
-                        <input
-                          type="checkbox"
-                          class="accent-primary w-4 h-4 shrink-0"
-                          aria-label="Enable {meta.label}"
+                        <Toggle
+                          size="sm"
+                          ariaLabel="Enable {meta.label}"
                           bind:checked={p.enabled}
                           onchange={saveProviders}
                         />
@@ -1162,7 +1162,7 @@
                 </div>
                 <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="search-dedupe">
                   <span class="flex items-center gap-1.5">Dedupe Queries {@render tip("Reuse the result when the model repeats the same query within a turn, instead of searching again.")}</span>
-                  <input id="search-dedupe" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$searchDedupeStore} />
+                  <Toggle id="search-dedupe" bind:checked={$searchDedupeStore} />
                 </label>
               {/if}
             </div>

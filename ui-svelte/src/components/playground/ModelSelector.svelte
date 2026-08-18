@@ -1,9 +1,21 @@
 <script lang="ts">
   import { tip } from "../../lib/tooltip";
   import { models } from "../../stores/api";
-  import { groupModels, modelCategory, matchesCapabilities, type ModelCategory } from "../../lib/modelUtils";
-  import { ChevronDown } from "lucide-svelte";
+  import { groupModels, modelCategory, matchesCapabilities, prettifyModelName, type ModelCategory } from "../../lib/modelUtils";
+  import { baseKey, familyOf } from "../../lib/modelTable";
+  import { ChevronDown, Star } from "lucide-svelte";
+  import { userPref } from "../../stores/prefs";
   import type { Model } from "../../lib/types";
+
+  // Starred models float to the top of their section. Keyed by the GROUP's root
+  // id (not the selected variant): starring is a statement about the model, so
+  // it survives switching variant. Server-backed like the rest of playground
+  // prefs, so the pins follow the user rather than the browser.
+  const favoritesStore = userPref<string[]>("modelFavorites", []);
+  let favSet = $derived(new Set($favoritesStore));
+  function toggleFavorite(key: string): void {
+    favoritesStore.update((f) => (f.includes(key) ? f.filter((k) => k !== key) : [...f, key]));
+  }
 
   interface Props {
     value: string;
@@ -91,11 +103,43 @@
     return out.sort((a, b) => a.base.value.localeCompare(b.base.value));
   }
 
+  // Starred groups first (buildGroups already sorted alphabetically, and sort is
+  // stable), so the pins keep their relative order within each section.
+  function pinned(groups: Group[]): Group[] {
+    return [...groups].sort((a, b) => Number(favSet.has(b.base.value)) - Number(favSet.has(a.base.value)));
+  }
+
+  // A finetune family and the id-groups under it — same axis the Models page
+  // uses (familyOf reduces a base id to <model><size>), so "thinkingcap-qwen3.6-
+  // 27b" and "qwen3.6-27b-heretic" sit under one heading here too.
+  type Family = { key: string; label: string; groups: Group[] };
+
+  // families clusters an ALREADY-ORDERED list without reordering it: a family
+  // takes the slot of its best-ranked member, so starring one finetune pulls its
+  // relatives up with it and the pin order stays legible.
+  function families(groups: Group[]): Family[] {
+    const out: Family[] = [];
+    const byKey = new Map<string, Family>();
+    for (const g of groups) {
+      const key = familyOf(baseKey(g.base.value));
+      const f = byKey.get(key);
+      if (f) {
+        f.groups.push(g);
+        continue;
+      }
+      const fresh = { key, label: prettifyModelName(key), groups: [g] };
+      byKey.set(key, fresh);
+      out.push(fresh);
+    }
+    return out;
+  }
+
   let sections = $derived.by(() => {
-    const out: { label: string; groups: Group[] }[] = [];
-    if (grouped.local.length > 0) out.push({ label: "Local", groups: buildGroups(grouped.local) });
+    const out: { label: string; families: Family[] }[] = [];
+    const build = (arr: Model[]) => families(pinned(buildGroups(arr)));
+    if (grouped.local.length > 0) out.push({ label: "Local", families: build(grouped.local) });
     for (const [peerId, peerModels] of Object.entries(grouped.peersByProvider).sort(([a], [b]) => a.localeCompare(b))) {
-      out.push({ label: `Peer: ${peerId}`, groups: buildGroups(peerModels) });
+      out.push({ label: `Peer: ${peerId}`, families: build(peerModels) });
     }
     return out;
   });
@@ -123,6 +167,52 @@
     return { destroy: () => document.removeEventListener("click", onClick, true) };
   }
 </script>
+
+{#snippet entry(g: Group)}
+  {@const fav = favSet.has(g.base.value)}
+  {#if g.variants.length > 0}
+    <!-- Model with variants: name header + Default + variant pills. -->
+    <div class="px-2.5 py-1.5">
+      <div class="flex items-start gap-1.5">
+        <button
+          type="button"
+          class="mt-0.5 shrink-0 p-0.5 transition-colors {fav ? 'text-warning' : 'text-txtsecondary/40 hover:text-txtsecondary'}"
+          onclick={(e) => (e.stopPropagation(), toggleFavorite(g.base.value))}
+          aria-label={fav ? "Unpin favorite" : "Pin as favorite"}
+          use:tip={fav ? "Unpin from the top" : "Pin to the top"}
+        >
+          <Star class="w-3.5 h-3.5" fill={fav ? "currentColor" : "none"} />
+        </button>
+        <div class="break-words font-medium text-txtmain">{g.base.label}</div>
+      </div>
+      <div class="mt-1.5 flex flex-wrap gap-1.5">
+        <button type="button" class={pillCls(g.base.value === value)} onclick={() => select(g.base.value)}>Default</button>
+        {#each g.variants as v (v.value)}
+          <button type="button" class={pillCls(v.value === value)} onclick={() => select(v.value)}>{v.label}</button>
+        {/each}
+      </div>
+    </div>
+  {:else}
+    <div class="flex items-start gap-1.5 px-2.5 py-1.5 hover:bg-secondary transition-colors">
+      <button
+        type="button"
+        class="mt-0.5 shrink-0 p-0.5 transition-colors {fav ? 'text-warning' : 'text-txtsecondary/40 hover:text-txtsecondary'}"
+        onclick={(e) => (e.stopPropagation(), toggleFavorite(g.base.value))}
+        aria-label={fav ? "Unpin favorite" : "Pin as favorite"}
+        use:tip={fav ? "Unpin from the top" : "Pin to the top"}
+      >
+        <Star class="w-3.5 h-3.5" fill={fav ? "currentColor" : "none"} />
+      </button>
+      <button
+        type="button"
+        class="flex-1 text-left break-words {g.base.value === value ? 'text-primary' : 'text-txtmain'}"
+        onclick={() => select(g.base.value)}
+      >
+        {g.base.label}
+      </button>
+    </div>
+  {/if}
+{/snippet}
 
 {#if hasModels}
   <div class="relative {ghost ? 'inline-block max-w-full' : compact ? 'w-full' : 'min-w-0 flex-1 basis-48'}" use:clickOutside>
@@ -162,26 +252,26 @@
       >
         {#each sections as sec (sec.label)}
           <div class="px-2.5 py-1 text-[0.65rem] uppercase tracking-wide text-txtsecondary">{sec.label}</div>
-          {#each sec.groups as g (g.base.value)}
-            {#if g.variants.length > 0}
-              <!-- Model with variants: name header + Default + variant pills. -->
-              <div class="px-2.5 py-1.5">
-                <div class="break-words font-medium text-txtmain">{g.base.label}</div>
-                <div class="mt-1.5 flex flex-wrap gap-1.5">
-                  <button type="button" class={pillCls(g.base.value === value)} onclick={() => select(g.base.value)}>Default</button>
-                  {#each g.variants as v (v.value)}
-                    <button type="button" class={pillCls(v.value === value)} onclick={() => select(v.value)}>{v.label}</button>
-                  {/each}
+          {#each sec.families as fam (fam.key)}
+            {#if fam.groups.length > 1}
+              <!-- Finetune family: one rail + heading over its members, same
+                   grouping axis the Models page uses. -->
+              <!-- my-2 (not my-0.5): adjacent families collapse to ONE margin,
+                   and with the same rail + tint on both a hairline gap reads as
+                   a single continuous block. Rounded ends close each family. -->
+              <div class="my-2 rounded-r border-l-2 border-l-primary/60 bg-primary/[0.06] pb-1">
+                <div
+                  class="px-2.5 pt-1 pb-0.5 font-mono text-[0.65rem] uppercase tracking-wide text-primary"
+                  use:tip={`${fam.label} - ${fam.groups.length} finetunes of one base model`}
+                >
+                  {fam.label}
                 </div>
+                {#each fam.groups as g (g.base.value)}
+                  {@render entry(g)}
+                {/each}
               </div>
             {:else}
-              <button
-                type="button"
-                class="w-full text-left break-words px-2.5 py-1.5 hover:bg-secondary transition-colors {g.base.value === value ? 'text-primary' : 'text-txtmain'}"
-                onclick={() => select(g.base.value)}
-              >
-                {g.base.label}
-              </button>
+              {@render entry(fam.groups[0])}
             {/if}
           {/each}
         {/each}

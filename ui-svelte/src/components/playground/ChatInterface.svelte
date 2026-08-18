@@ -71,6 +71,7 @@
   import { EFFORT_OFF, effortOptions, resolveEffort, requestEffort } from "../../lib/effort";
   import { scrollFade } from "../../lib/scrollFade";
   import Select from "../Select.svelte";
+  import Toggle from "../Toggle.svelte";
   import { quotePrefix, fmtTokens, TEMP_STEPS, TEMP_LABELS, nearestTempIdx, currentDateLine, REWRITE_SYSTEM, MAX_IMAGES_PER_MESSAGE, validateImageFile, fileToDataUrl, type ToolItem } from "./chatHelpers";
 
   // Modes are per-conversation: switching chats drops back to a plain chat rather
@@ -1483,22 +1484,22 @@
 
         <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-websearch">
           <span class="flex items-center gap-1.5"><Search class="w-3.5 h-3.5" /> Web Search {@render tip("Let the model search the web (via SearXNG) for fresh facts. Needs a tool-calling model. URL + rate limits are in the side-rail Settings.")}</span>
-          <input id="chat-websearch" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$webSearchStore} />
+          <Toggle id="chat-websearch" bind:checked={$webSearchStore} />
         </label>
 
         <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-extratools">
           <span class="flex items-center gap-1.5"><CloudSun class="w-3.5 h-3.5" /> Weather & Feeds {@render tip("Let the model read the live weather (Open-Meteo) and any RSS/Atom feed.")}</span>
-          <input id="chat-extratools" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$extraToolsStore} />
+          <Toggle id="chat-extratools" bind:checked={$extraToolsStore} />
         </label>
 
         <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-memory">
           <span class="flex items-center gap-1.5"><BrainCircuit class="w-3.5 h-3.5" /> Memory {@render tip("Let the model remember lasting facts about you across conversations. Remembered facts are added to every chat's system prompt; read, edit and delete them in Settings → Memory.")}</span>
-          <input id="chat-memory" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$memoryStore} />
+          <Toggle id="chat-memory" bind:checked={$memoryStore} />
         </label>
 
         <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-qmtools">
           <span class="flex items-center gap-1.5"><Wrench class="w-3.5 h-3.5" /> QM Tools {@render tip("Let the model inspect and tune this quartermaster instance - list installed models, read live VRAM/config, and change settings (hot-reloads, no eviction). Needs a tool-calling model. Requires -generate for edits.")}</span>
-          <input id="chat-qmtools" type="checkbox" class="accent-primary w-4 h-4" bind:checked={$qmToolsStore} />
+          <Toggle id="chat-qmtools" bind:checked={$qmToolsStore} />
         </label>
 
         <div class="flex flex-col gap-1">

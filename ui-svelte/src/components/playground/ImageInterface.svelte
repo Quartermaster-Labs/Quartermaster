@@ -19,6 +19,7 @@
   import { playgroundStores } from "../../stores/playgroundActivity";
   import MaskEditor from "./MaskEditor.svelte";
   import Select from "./Select.svelte";
+  import Toggle from "../Toggle.svelte";
   import Composer from "./Composer.svelte";
   import { autogrow } from "../../lib/autogrow";
   import { Image as ImageIcon, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Palette, Reply, Maximize2, Loader2 } from "lucide-svelte";
@@ -899,7 +900,7 @@
             <!-- User prompt (right) — matches chat: black bubble, no avatar. Source
                  / reference images fed into this turn ride inside the bubble. -->
             <div class="flex justify-end">
-              <div class="group relative max-w-[85%] rounded-2xl rounded-br-sm bg-[#141414] text-[#ededee] msg-tail-user px-3.5 py-2 flex flex-col gap-2">
+              <div class="group relative max-w-[85%] rounded-2xl rounded-br-none bg-[#141414] text-[#ededee] px-3.5 py-2 flex flex-col gap-2">
                 {#if t.maskPreview}
                   <!-- Inpaint mask: base with the regenerated region highlighted
                        (replaces the plain reference — it IS the base image). -->
@@ -1125,14 +1126,14 @@
               </div>
             </div>
             <label class="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" class="accent-primary" bind:checked={$sdToneAnchorStore} />
+              <Toggle size="sm" bind:checked={$sdToneAnchorStore} />
               <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
                 Tone anchor
                 <span class="cursor-help opacity-60" use:tip={"Pin reused-source brightness to the thread's first image so chained edits don't drift darker/brighter. Off = raw model output."}>(?)</span>
               </span>
             </label>
             <label class="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" class="accent-primary" bind:checked={$sdKeepResStore} />
+              <Toggle size="sm" bind:checked={$sdKeepResStore} />
               <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
                 Keep resolution
                 <span class="cursor-help opacity-60" use:tip={"Edit at the source image's native size instead of resizing to the selected size."}>(?)</span>
@@ -1389,17 +1390,7 @@
 {/if}
 
 <style>
-  /* Messenger-style bubble tail on the user prompt — matches the chat tab
-     (ChatMessage.svelte .msg-tail-user). */
-  .msg-tail-user::after {
-    content: "";
-    position: absolute;
-    bottom: 0;
-    right: -5px;
-    width: 0;
-    height: 0;
-    border: 6px solid transparent;
-    border-bottom: 0;
-    border-left-color: #141414;
-  }
+  /* The user prompt's tail corner is square (rounded-br-none on the bubble
+     div), matching the chat tab — see the note in ChatMessage.svelte on why
+     the old border-triangle tail is gone. */
 </style>

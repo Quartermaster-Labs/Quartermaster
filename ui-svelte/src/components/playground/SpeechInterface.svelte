@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tip } from "../../lib/tooltip";
+  import Toggle from "../Toggle.svelte";
   import { get } from "svelte/store";
   import { models } from "../../stores/api";
   import { userPref } from "../../stores/prefs";
@@ -913,7 +914,7 @@
           <Volume2 class="w-4 h-4 text-txtsecondary shrink-0" />
           <span class="text-[0.6875rem] text-txtsecondary tabular-nums w-9 text-right">{Math.round($volumeStore * 100)}%</span>
           <label class="shrink-0 flex items-center gap-1.5 pl-2 ml-1 border-l border-card-border text-[0.6875rem] uppercase tracking-wide text-txtsecondary cursor-pointer" use:tip={"Auto-play new clips"}>
-            <input type="checkbox" class="accent-primary w-3.5 h-3.5" bind:checked={$autoPlayStore} />
+            <Toggle size="sm" bind:checked={$autoPlayStore} />
             Auto-play
           </label>
         </div>

@@ -565,6 +565,28 @@ func (s *Server) handlePlaygroundMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"username": user})
 }
 
+// GET /api/inference-key — hands a working inference API key to logged-in
+// playground users. Remote playground browsers can't read /api/apikeys (admin,
+// this host only, by design), so without this their in-browser /v1 calls —
+// chat titles, auto-compaction, image/speech generation — would 401. The key
+// carries exactly the access the server-owned turn runner already exercises
+// (an unscoped key when one is configured, else the first key); with no keys
+// configured it is empty and clients send no auth header.
+func (s *Server) handlePlaygroundInferenceKey(w http.ResponseWriter, r *http.Request) {
+	p := s.playground
+	if p == nil {
+		http.Error(w, "playground not enabled", http.StatusNotImplemented)
+		return
+	}
+	// Mirrors the pgChain guard (requirePlaygroundOrAdmin): this host may read
+	// it outright; a remote playground caller must be logged in.
+	if !s.adminAllowed(r) && p.userFromRequest(r) == "" {
+		http.Error(w, "not logged in", http.StatusUnauthorized)
+		return
+	}
+	writeJSON(w, map[string]string{"key": s.pickSelfKey("")})
+}
+
 // cookieSecret returns the HMAC key for the session cookie, loading it from
 // DataDir/.cookie-secret on first use and minting a fresh 32-byte one if that
 // file is absent. Persisting it is what lets a login survive a restart; if the

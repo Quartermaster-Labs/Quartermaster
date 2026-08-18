@@ -110,8 +110,10 @@ func TestServer_AuthMiddleware(t *testing.T) {
 		if w.Code != http.StatusUnauthorized {
 			t.Errorf("status = %d, want 401", w.Code)
 		}
-		if w.Header().Get("WWW-Authenticate") == "" {
-			t.Error("missing WWW-Authenticate header")
+		// Bearer, never Basic: a Basic challenge makes browsers auto-prompt a
+		// native credential dialog for every unkeyed browser /v1 call.
+		if got := w.Header().Get("WWW-Authenticate"); got != `Bearer realm="quartermaster"` {
+			t.Errorf("WWW-Authenticate = %q, want the Bearer challenge", got)
 		}
 	})
 }

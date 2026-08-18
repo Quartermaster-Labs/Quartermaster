@@ -33,6 +33,10 @@ Auth-gated but **not** model-dispatched (`discoveryChain`):
   `/running`; `GET /upstream`, `/upstream/{upstreamPath...}`.
 - `POST /api/models/unload[/{model...}]`; `GET /api/events`, `/api/metrics`, `/api/performance`,
   `/api/version`, `/api/captures/{id}`.
+- `GET /api/inference-key` (pgChain) — a working inference key for logged-in playground browsers;
+  remote LAN clients can't read the admin-gated `/api/apikeys` list, and without a key their
+  direct `/v1` calls (titles, compaction, images, speech) would 401. Local callers read it
+  without a login cookie, like the rest of the admin surface.
 - `GET /api/catalog` — the whole local catalog as JSON (the `/api/events` `modelStatus` payload,
   pullable). Unlike `/v1/models` it **keeps unlisted variants and is NOT filtered by an API key's
   model scope**, which is why `quartermaster_inspect` reads it.

@@ -34,7 +34,11 @@ func CreateAuthMiddleware(cfg config.Config) chain.Middleware {
 				}
 			}
 			if !valid {
-				w.Header().Set("WWW-Authenticate", `Basic realm="quartermaster"`)
+				// Bearer, not Basic: browsers auto-prompt a native username/password
+				// dialog for a Basic challenge, which made every unkeyed browser /v1
+				// call (titles, compaction, images) pop a "sign in" box mid-chat.
+				// Bearer is also the scheme this API actually uses.
+				w.Header().Set("WWW-Authenticate", `Bearer realm="quartermaster"`)
 				shared.SendResponse(w, r, http.StatusUnauthorized, "unauthorized: invalid or missing API key")
 				return
 			}

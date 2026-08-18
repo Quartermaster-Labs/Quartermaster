@@ -22,6 +22,7 @@
   import { askConfirm } from "../lib/confirm";
   import VramGauge from "./VramGauge.svelte";
   import Select, { type SelectOption } from "./Select.svelte";
+  import Toggle from "./Toggle.svelte";
   import { estimateSegments } from "../stores/vram";
   import { backendClass, engineLabel } from "../lib/backends";
   import {
@@ -1500,7 +1501,7 @@
             </span>
             <div class="flex items-center gap-3">
               <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
-                <input type="checkbox" bind:checked={vramAuto} /> Auto
+                <Toggle size="sm" bind:checked={vramAuto} /> Auto
               </label>
               <input type="range" min="0" max={maxVram} step="0.5" bind:value={vramTarget} disabled={vramAuto} use:wheelAdjust class="flex-1 disabled:opacity-40" />
               <span class="text-xs text-txtsecondary font-mono whitespace-nowrap">max {maxVram.toFixed(0)}G</span>
@@ -1566,42 +1567,42 @@
           <div class="font-mono text-[0.6rem] uppercase tracking-wider text-txtsecondary mb-2">Toggles</div>
           <div class="grid grid-cols-2 gap-x-4 gap-y-2">
             <label class="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={teOnCpu !== "off"} onchange={(e) => (teOnCpu = (e.currentTarget as HTMLInputElement).checked ? "" : "off")} />
+              <Toggle size="sm" checked={teOnCpu !== "off"} onchange={(on) => (teOnCpu = on ? "" : "off")} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Text encoder on CPU
                 {@render hint("--backend te=cpu. Run the text encoder on the CPU (on by default). It runs once per generation, so it's the cheapest component to keep off the GPU. Turn off only if you have VRAM headroom.")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={vaeOnCpu === "on"} onchange={(e) => (vaeOnCpu = (e.currentTarget as HTMLInputElement).checked ? "on" : "")} />
+              <Toggle size="sm" checked={vaeOnCpu === "on"} onchange={(on) => (vaeOnCpu = on ? "on" : "")} />
               <span class="text-txtsecondary flex items-center gap-1">
                 VAE on CPU
                 {@render hint("--backend vae=cpu. Force the VAE decoder onto the CPU (off by default - it decodes on the GPU). Turn on if the GPU VAE outputs a blank/white image (a bf16 VAE whitens on some backends); costs decode speed.")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={vaeTiling !== "off"} onchange={(e) => (vaeTiling = (e.currentTarget as HTMLInputElement).checked ? "" : "off")} />
+              <Toggle size="sm" checked={vaeTiling !== "off"} onchange={(on) => (vaeTiling = on ? "" : "off")} />
               <span class="text-txtsecondary flex items-center gap-1">
                 VAE tiling
                 {@render hint("--vae-tiling. Tile the VAE decode to cap its VRAM spike (on by default). Decoding a full latent whole can OOM on a tight card. Quality is steps/cfg, not this.")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={diffusionFa !== "off"} onchange={(e) => (diffusionFa = (e.currentTarget as HTMLInputElement).checked ? "" : "off")} />
+              <Toggle size="sm" checked={diffusionFa !== "off"} onchange={(on) => (diffusionFa = on ? "" : "off")} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Diffusion flash-attn
                 {@render hint("--diffusion-fa. Flash attention for the diffusion model (on by default). Near-free VRAM saver.")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
-              <input type="checkbox" bind:checked={unlisted} />
+              <Toggle size="sm" bind:checked={unlisted} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Unlisted
                 {@render hint("Hide from /v1/models listings, but still loadable by exact id.")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
-              <input type="checkbox" bind:checked={skip} />
+              <Toggle size="sm" bind:checked={skip} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Skip (don't emit)
                 {@render hint("Exclude this model from the generated config entirely.")}
@@ -1675,7 +1676,7 @@
               </span>
               <div class="flex items-center gap-3">
                 <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
-                  <input type="checkbox" checked={!sv.vramTargetGB} onchange={(e) => setVVramAuto((e.currentTarget as HTMLInputElement).checked)} /> Auto
+                  <Toggle size="sm" checked={!sv.vramTargetGB} onchange={(on) => setVVramAuto(on)} /> Auto
                 </label>
                 <input type="range" min="0" max={maxVram} step="0.5" value={sv.vramTargetGB || 0} oninput={(e) => (sv.vramTargetGB = Number((e.currentTarget as HTMLInputElement).value))} disabled={!sv.vramTargetGB} use:wheelAdjust class="flex-1 disabled:opacity-40" />
                 <span class="text-xs text-txtsecondary font-mono whitespace-nowrap">max {maxVram.toFixed(0)}G</span>
@@ -1689,7 +1690,7 @@
               <Select bind:value={sv.offloadToCpu} options={OFFLOAD_SEL_INHERIT} ariaLabel="Offload to CPU" />
             </label>
             <label class="flex items-center gap-2 text-sm col-span-2">
-              <input type="checkbox" bind:checked={sv.unlisted} />
+              <Toggle size="sm" bind:checked={sv.unlisted} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Unlisted
                 {@render hint("Hide this preset from /v1/models, but keep it loadable by exact id.")}
@@ -1729,14 +1730,14 @@
             <input type="text" bind:value={extraArgs} class="cfg-input" placeholder="e.g. --temperature 0.7" spellcheck="false" />
           </label>
           <label class="flex items-center gap-2 text-sm">
-            <input type="checkbox" bind:checked={unlisted} />
+            <Toggle size="sm" bind:checked={unlisted} />
             <span class="text-txtsecondary flex items-center gap-1">
               Unlisted
               {@render hint("Hide from /v1/models listings, but still loadable by exact id.")}
             </span>
           </label>
           <label class="flex items-center gap-2 text-sm">
-            <input type="checkbox" bind:checked={skip} />
+            <Toggle size="sm" bind:checked={skip} />
             <span class="text-txtsecondary flex items-center gap-1">
               Skip (don't emit)
               {@render hint("Exclude this model from the generated config entirely.")}
@@ -1772,14 +1773,14 @@
             <input type="text" bind:value={extraArgs} class="cfg-input" placeholder="e.g. --no-gpu" spellcheck="false" />
           </label>
           <label class="flex items-center gap-2 text-sm">
-            <input type="checkbox" bind:checked={unlisted} />
+            <Toggle size="sm" bind:checked={unlisted} />
             <span class="text-txtsecondary flex items-center gap-1">
               Unlisted
               {@render hint("Hide from /v1/models listings, but still loadable by exact id.")}
             </span>
           </label>
           <label class="flex items-center gap-2 text-sm">
-            <input type="checkbox" bind:checked={skip} />
+            <Toggle size="sm" bind:checked={skip} />
             <span class="text-txtsecondary flex items-center gap-1">
               Skip (don't emit)
               {@render hint("Exclude this model from the generated config entirely.")}
@@ -1897,7 +1898,7 @@
             </span>
             <div class="flex items-center gap-3">
               <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
-                <input type="checkbox" bind:checked={ctxAuto} /> Auto
+                <Toggle size="sm" bind:checked={ctxAuto} /> Auto
               </label>
               <!-- The track carries a tick at the trained length; everything right
                    of it only works because RoPE is being stretched. -->
@@ -1926,11 +1927,7 @@
                 class="flex items-center gap-1.5 text-xs whitespace-nowrap {ropeOn ? 'text-warning' : 'text-txtsecondary'}"
                 use:tip={`Extend past the model's trained ${fmtCtx(nativeCtx)} context with YaRN RoPE scaling (--rope-scaling yarn). The scale factor is derived from the ctx you pick. Quality degrades the further past native you go.`}
               >
-                <input
-                  type="checkbox"
-                  checked={ropeOn}
-                  onchange={(e) => toggleRope(e.currentTarget.checked)}
-                /> RoPE
+                <Toggle size="sm" checked={ropeOn} onchange={(on) => toggleRope(on)} /> RoPE
               </label>
               <span class="text-xs text-txtsecondary font-mono whitespace-nowrap">max {fmtCtx(maxCtx)}</span>
             </div>
@@ -1951,7 +1948,7 @@
             </span>
             <div class="flex items-center gap-3">
               <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
-                <input type="checkbox" bind:checked={vramAuto} /> Auto
+                <Toggle size="sm" bind:checked={vramAuto} /> Auto
               </label>
               <input type="range" min="0" max={maxVram} step="0.5" bind:value={vramTarget} disabled={vramAuto} use:wheelAdjust class="flex-1 disabled:opacity-40" />
               <span class="text-xs text-txtsecondary font-mono whitespace-nowrap">max {maxVram.toFixed(0)}G</span>
@@ -1966,7 +1963,7 @@
             </span>
             <div class="flex items-center gap-3">
               <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
-                <input type="checkbox" bind:checked={cpuAuto} /> Auto
+                <Toggle size="sm" bind:checked={cpuAuto} /> Auto
               </label>
               <input type="range" min="0" max={maxOffload} step="1" bind:value={cpuOffload} disabled={cpuAuto} use:wheelAdjust class="flex-1 disabled:opacity-40" />
               <span class="text-xs text-txtsecondary font-mono whitespace-nowrap">max {maxOffload}</span>
@@ -2029,7 +2026,7 @@
               <input type="number" min="0" step="1" bind:value={specNgramMinHits} use:wheelAdjust class="cfg-input" placeholder="default" />
             </label>
             <label class="flex items-center gap-2 text-sm self-end">
-              <input type="checkbox" bind:checked={specDefault} />
+              <Toggle size="sm" bind:checked={specDefault} />
               <span class="text-txtsecondary flex items-center gap-1">
                 spec-default
                 {@render hint("--spec-default. Apply llama-server's built-in default speculative parameters.")}
@@ -2039,7 +2036,7 @@
 
           <label class="flex flex-col gap-1 text-sm col-span-2">
             <span class="text-txtsecondary flex items-center gap-1">
-              <input type="checkbox" bind:checked={dryOn} />
+              <Toggle size="sm" bind:checked={dryOn} />
               DRY sampler
               {@render hint("--dry-* repetition penalty. Off by default. Multiplier / base / allowed-length: empty = 0.8 / 1.75 / 3.")}
             </span>
@@ -2096,7 +2093,7 @@
             </span>
             <div class="flex items-center gap-2">
               <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
-                <input type="checkbox" checked={ctxCheckpoints == null} onchange={(e) => (ctxCheckpoints = (e.currentTarget as HTMLInputElement).checked ? null : 0)} /> Auto
+                <Toggle size="sm" checked={ctxCheckpoints == null} onchange={(on) => (ctxCheckpoints = on ? null : 0)} /> Auto
               </label>
               {#if ctxCheckpoints != null}
                 <input type="number" min="0" step="1" bind:value={ctxCheckpoints} use:wheelAdjust class="cfg-input flex-1" />
@@ -2111,14 +2108,14 @@
           <div class="font-mono text-[0.6rem] uppercase tracking-wider text-txtsecondary mb-2">Toggles</div>
           <div class="grid grid-cols-2 gap-x-4 gap-y-2">
             <label class="flex items-center gap-2 text-sm">
-              <input type="checkbox" bind:checked={reasoningOn} />
+              <Toggle size="sm" bind:checked={reasoningOn} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Reasoning
                 {@render hint("Chain-of-thought reasoning. On = llama.cpp auto-detects and exposes it (default). Off disables reasoning (--reasoning-format none).")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm" class:opacity-40={!reasoningOn}>
-              <input type="checkbox" bind:checked={preserveThinking} disabled={!reasoningOn} />
+              <Toggle size="sm" bind:checked={preserveThinking} disabled={!reasoningOn} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Preserve thinking
                 {@render hint("Keep prior-turn <think> blocks in chat history instead of stripping them (Qwen3.6+ via --reasoning-preserve). Avoids reasoning amnesia in multi-turn/agentic loops. Needs reasoning on, a template that supports preservation, and the client must send reasoning_content back.")}
@@ -2132,49 +2129,49 @@
               <input type="number" min="0" step="1000" bind:value={reasoningBudget} use:wheelAdjust disabled={!reasoningOn} class="cfg-input w-24 ml-auto" placeholder="none" />
             </label>
             <label class="flex items-center gap-2 text-sm">
-              <input type="checkbox" bind:checked={kvInRam} />
+              <Toggle size="sm" bind:checked={kvInRam} />
               <span class="text-txtsecondary flex items-center gap-1">
                 KV in RAM
                 {@render hint("Keep the KV cache in system RAM instead of VRAM (--no-kv-offload). Frees VRAM at the cost of speed.")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
-              <input type="checkbox" bind:checked={flashOn} />
+              <Toggle size="sm" bind:checked={flashOn} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Flash attention
                 {@render hint("-fa. On by default and required for a quantized KV cache (q8_0 etc.). Turn off only with an f16 KV cache.")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
-              <input type="checkbox" bind:checked={mmapOn} />
+              <Toggle size="sm" bind:checked={mmapOn} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Memory-map (mmap)
                 {@render hint("Memory-map weights from disk. Reflects the sizer's placement default: OFF (--no-mmap) when fully GPU-resident / expert-offloaded, ON when weights sit on CPU. Toggle to force either way.")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
-              <input type="checkbox" bind:checked={mlock} />
+              <Toggle size="sm" bind:checked={mlock} />
               <span class="text-txtsecondary flex items-center gap-1">
                 mlock
                 {@render hint("--mlock. Lock the model in RAM so the OS never swaps it out. Needs enough free RAM for the whole model.")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
-              <input type="checkbox" bind:checked={unlisted} />
+              <Toggle size="sm" bind:checked={unlisted} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Unlisted
                 {@render hint("Hide from /v1/models listings, but still loadable by exact id.")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
-              <input type="checkbox" bind:checked={skip} />
+              <Toggle size="sm" bind:checked={skip} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Skip (don't emit)
                 {@render hint("Exclude this model from the generated config entirely.")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
-              <input type="checkbox" bind:checked={slotCacheOn} />
+              <Toggle size="sm" bind:checked={slotCacheOn} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Save KV cache to disk
                 {@render hint("Persist this conversation's KV cache to disk so a long chat survives being evicted from the slot, and is restored instead of reprocessed. Needs the global slot-cache toggle on (Dashboard).")}
@@ -2276,19 +2273,19 @@
               ><FolderOpen size={14} /></button>
             </label>
             <label class="flex items-center gap-2">
-              <input type="checkbox" bind:checked={adv.directIo} />
+              <Toggle size="sm" bind:checked={adv.directIo} />
               <span class="text-txtsecondary flex items-center gap-1">Direct I/O {@render hint("-dio. DirectIO for faster cold model load where supported.")}</span>
             </label>
             <label class="flex items-center gap-2">
-              <input type="checkbox" bind:checked={adv.swaFull} />
+              <Toggle size="sm" bind:checked={adv.swaFull} />
               <span class="text-txtsecondary flex items-center gap-1">Full SWA cache {@render hint("--swa-full. Keep the full sliding-window KV cache (Gemma etc.).")}</span>
             </label>
             <label class="flex items-center gap-2">
-              <input type="checkbox" bind:checked={adv.noOpOffload} />
+              <Toggle size="sm" bind:checked={adv.noOpOffload} />
               <span class="text-txtsecondary flex items-center gap-1">No op-offload {@render hint("--no-op-offload. Keep host tensor ops on the CPU.")}</span>
             </label>
             <label class="flex items-center gap-2">
-              <input type="checkbox" bind:checked={adv.noRepack} />
+              <Toggle size="sm" bind:checked={adv.noRepack} />
               <span class="text-txtsecondary flex items-center gap-1">No repack {@render hint("--no-repack. Disable weight repacking at load.")}</span>
             </label>
           </div>
@@ -2346,7 +2343,7 @@
               </span>
               <div class="flex items-center gap-3">
                 <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
-                  <input type="checkbox" checked={!sv.vramTargetGB} onchange={(e) => setVVramAuto((e.currentTarget as HTMLInputElement).checked)} /> Auto
+                  <Toggle size="sm" checked={!sv.vramTargetGB} onchange={(on) => setVVramAuto(on)} /> Auto
                 </label>
                 <input type="range" min="0" max={maxVram} step="0.5" value={sv.vramTargetGB || 0} oninput={(e) => (sv.vramTargetGB = Number((e.currentTarget as HTMLInputElement).value))} disabled={!sv.vramTargetGB} use:wheelAdjust class="flex-1 disabled:opacity-40" />
                 <span class="text-xs text-txtsecondary font-mono whitespace-nowrap">max {maxVram.toFixed(0)}G</span>
@@ -2361,7 +2358,7 @@
               </span>
               <div class="flex items-center gap-3">
                 <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
-                  <input type="checkbox" checked={!sv.ctx} onchange={(e) => setVCtxAuto((e.currentTarget as HTMLInputElement).checked)} /> Auto
+                  <Toggle size="sm" checked={!sv.ctx} onchange={(on) => setVCtxAuto(on)} /> Auto
                 </label>
                 <input type="range" min={CTX_MIN} max={maxCtx} step="4096" value={sv.ctx || CTX_MIN} oninput={(e) => (sv.ctx = Number((e.currentTarget as HTMLInputElement).value))} disabled={!sv.ctx} use:wheelAdjust class="flex-1 disabled:opacity-40" />
                 <span class="text-xs text-txtsecondary font-mono whitespace-nowrap">max {fmtCtx(maxCtx)}</span>
@@ -2376,7 +2373,7 @@
               </span>
               <div class="flex items-center gap-3">
                 <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
-                  <input type="checkbox" checked={!sv.cpuOffload} onchange={(e) => setVOffloadAuto((e.currentTarget as HTMLInputElement).checked)} /> Auto
+                  <Toggle size="sm" checked={!sv.cpuOffload} onchange={(on) => setVOffloadAuto(on)} /> Auto
                 </label>
                 <input type="range" min="0" max={maxOffload} step="1" value={sv.cpuOffload || 0} oninput={(e) => (sv.cpuOffload = Number((e.currentTarget as HTMLInputElement).value))} disabled={!sv.cpuOffload} use:wheelAdjust class="flex-1 disabled:opacity-40" />
                 <span class="text-xs text-txtsecondary font-mono whitespace-nowrap">max {maxOffload}</span>
@@ -2430,7 +2427,7 @@
                 <input type="number" min="0" step="1" value={vnum(sv.specNgramMinHits)} oninput={(e) => (sv.specNgramMinHits = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input" placeholder="inherit" />
               </label>
               <label class="flex items-center gap-2 text-sm self-end">
-                <input type="checkbox" bind:checked={sv.specDefault} />
+                <Toggle size="sm" bind:checked={sv.specDefault} />
                 <span class="text-txtsecondary flex items-center gap-1">
                   spec-default
                   {@render hint("--spec-default for this variant.")}
@@ -2467,7 +2464,7 @@
               </span>
               <div class="flex items-center gap-2">
                 <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
-                  <input type="checkbox" checked={sv.ctxCheckpoints == null} onchange={(e) => setVCheckpointsInherit((e.currentTarget as HTMLInputElement).checked)} /> Inherit
+                  <Toggle size="sm" checked={sv.ctxCheckpoints == null} onchange={(on) => setVCheckpointsInherit(on)} /> Inherit
                 </label>
                 {#if sv.ctxCheckpoints != null}
                   <input type="number" min="0" step="1" bind:value={sv.ctxCheckpoints} use:wheelAdjust class="cfg-input flex-1" />
@@ -2509,49 +2506,49 @@
             <div class="font-mono text-[0.6rem] uppercase tracking-wider text-txtsecondary mb-2">Toggles</div>
             <div class="grid grid-cols-2 gap-x-4 gap-y-2">
               <label class="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={sv.reasoningFmt !== "off"} onchange={(e) => (sv.reasoningFmt = (e.currentTarget as HTMLInputElement).checked ? "" : "off")} />
+                <Toggle size="sm" checked={sv.reasoningFmt !== "off"} onchange={(on) => (sv.reasoningFmt = on ? "" : "off")} />
                 <span class="text-txtsecondary flex items-center gap-1">
                   Reasoning
                   {@render hint("Chain-of-thought reasoning. Off disables it (--reasoning-format none) for this variant.")}
                 </span>
               </label>
               <label class="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={sv.preserveThinking !== false} disabled={sv.reasoningFmt === "off"} onchange={(e) => (sv.preserveThinking = (e.currentTarget as HTMLInputElement).checked ? null : false)} />
+                <Toggle size="sm" checked={sv.preserveThinking !== false} disabled={sv.reasoningFmt === "off"} onchange={(on) => (sv.preserveThinking = on ? null : false)} />
                 <span class="text-txtsecondary flex items-center gap-1">
                   Preserve thinking
                   {@render hint("Keep prior-turn <think> blocks in chat history (Qwen3.6+). On by default for this variant; needs reasoning on.")}
                 </span>
               </label>
               <label class="flex items-center gap-2 text-sm">
-                <input type="checkbox" bind:checked={sv.kvInRam} />
+                <Toggle size="sm" bind:checked={sv.kvInRam} />
                 <span class="text-txtsecondary flex items-center gap-1">
                   KV in RAM
                   {@render hint("Keep this variant's KV cache in system RAM (--no-kv-offload). Frees VRAM at the cost of speed.")}
                 </span>
               </label>
               <label class="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={sv.flashAttn !== "off"} onchange={(e) => (sv.flashAttn = (e.currentTarget as HTMLInputElement).checked ? "" : "off")} />
+                <Toggle size="sm" checked={sv.flashAttn !== "off"} onchange={(on) => (sv.flashAttn = on ? "" : "off")} />
                 <span class="text-txtsecondary flex items-center gap-1">
                   Flash attention
                   {@render hint("-fa. On by default and required for a quantized KV cache. Turn off only with an f16 KV cache.")}
                 </span>
               </label>
               <label class="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={variantMmapOn(sv)} onchange={(e) => (sv.mmap = (e.currentTarget as HTMLInputElement).checked ? "on" : "off")} />
+                <Toggle size="sm" checked={variantMmapOn(sv)} onchange={(on) => (sv.mmap = on ? "on" : "off")} />
                 <span class="text-txtsecondary flex items-center gap-1">
                   Memory-map (mmap)
                   {@render hint("Memory-map weights from disk. Blank inherits this variant's placement default (--no-mmap when GPU-resident). Off forces --no-mmap, copying weights into RAM.")}
                 </span>
               </label>
               <label class="flex items-center gap-2 text-sm">
-                <input type="checkbox" bind:checked={sv.mlock} />
+                <Toggle size="sm" bind:checked={sv.mlock} />
                 <span class="text-txtsecondary flex items-center gap-1">
                   mlock
                   {@render hint("--mlock. Lock the model in RAM so the OS never swaps it out.")}
                 </span>
               </label>
               <label class="flex items-center gap-2 text-sm">
-                <input type="checkbox" bind:checked={sv.unlisted} />
+                <Toggle size="sm" bind:checked={sv.unlisted} />
                 <span class="text-txtsecondary flex items-center gap-1">
                   Unlisted
                   {@render hint("Hide this variant from /v1/models, but keep it loadable by exact id.")}
@@ -2659,19 +2656,19 @@
                 ><FolderOpen size={14} /></button>
               </label>
               <label class="flex items-center gap-2">
-                <input type="checkbox" checked={!!sv.directIo} onchange={(e) => (sv.directIo = (e.currentTarget as HTMLInputElement).checked)} />
+                <Toggle size="sm" checked={!!sv.directIo} onchange={(on) => (sv.directIo = on)} />
                 <span class="text-txtsecondary flex items-center gap-1">Direct I/O {@render hint("-dio. Faster cold model load where supported.")}</span>
               </label>
               <label class="flex items-center gap-2">
-                <input type="checkbox" checked={!!sv.swaFull} onchange={(e) => (sv.swaFull = (e.currentTarget as HTMLInputElement).checked)} />
+                <Toggle size="sm" checked={!!sv.swaFull} onchange={(on) => (sv.swaFull = on)} />
                 <span class="text-txtsecondary flex items-center gap-1">Full SWA cache {@render hint("--swa-full. Full sliding-window KV cache.")}</span>
               </label>
               <label class="flex items-center gap-2">
-                <input type="checkbox" checked={!!sv.noOpOffload} onchange={(e) => (sv.noOpOffload = (e.currentTarget as HTMLInputElement).checked)} />
+                <Toggle size="sm" checked={!!sv.noOpOffload} onchange={(on) => (sv.noOpOffload = on)} />
                 <span class="text-txtsecondary flex items-center gap-1">No op-offload {@render hint("--no-op-offload. Keep host tensor ops on CPU.")}</span>
               </label>
               <label class="flex items-center gap-2">
-                <input type="checkbox" checked={!!sv.noRepack} onchange={(e) => (sv.noRepack = (e.currentTarget as HTMLInputElement).checked)} />
+                <Toggle size="sm" checked={!!sv.noRepack} onchange={(on) => (sv.noRepack = on)} />
                 <span class="text-txtsecondary flex items-center gap-1">No repack {@render hint("--no-repack. Disable weight repacking at load.")}</span>
               </label>
             </div>

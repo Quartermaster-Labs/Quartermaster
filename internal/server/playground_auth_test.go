@@ -1,9 +1,11 @@
 package server
 
 import (
+	"encoding/json"
 	"io"
 	"strings"
 
+	"github.com/quartermaster-labs/quartermaster/internal/config"
 	"github.com/quartermaster-labs/quartermaster/internal/logmon"
 	"net/http"
 	"net/http/httptest"
@@ -112,6 +114,62 @@ func TestPlayground_SignupThenLogin(t *testing.T) {
 	}
 	if w := postCreds(t, s, "/auth/signup", "bob", "short"); w.Code != http.StatusBadRequest {
 		t.Fatalf("short password should 400, got %d", w.Code)
+	}
+}
+
+// GET /api/inference-key hands a working key to logged-in REMOTE playground
+// users: the /api/apikeys list stays admin-gated to the server host by design,
+// but the playground browser needs a key for its direct /v1 calls (chat
+// titles, auto-compaction, image/speech). Local callers read it without
+// logging in (they already have the open admin surface); remote callers must
+// carry a valid session cookie.
+func TestPlayground_InferenceKey(t *testing.T) {
+	newKeyServer := func() *Server {
+		s := &Server{playground: &Playground{DataDir: t.TempDir()}}
+		s.SetAdminAccess(true, nil) // production default: admin surface is local-only
+		s.cfg.Store(&config.Config{
+			RequiredAPIKeys: []string{"qm-scoped", "qm-full"},
+			APIKeyModels:    map[string][]string{"qm-scoped": {"m1"}},
+		})
+		return s
+	}
+	hit := func(s *Server, addr, cookie string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, "/api/inference-key", nil)
+		r.RemoteAddr = addr
+		if cookie != "" {
+			r.AddCookie(&http.Cookie{Name: pgCookie, Value: cookie})
+		}
+		w := httptest.NewRecorder()
+		s.handlePlaygroundInferenceKey(w, r)
+		return w
+	}
+	bodyKey := func(t *testing.T, w *httptest.ResponseRecorder) string {
+		t.Helper()
+		var out struct{ Key string }
+		if err := json.NewDecoder(w.Body).Decode(&out); err != nil {
+			t.Fatalf("decode %q: %v", w.Body.String(), err)
+		}
+		return out.Key
+	}
+	s := newKeyServer()
+	p := s.playground
+
+	if w := hit(s, "203.0.113.7:51000", ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("remote unauthenticated: want 401, got %d", w.Code)
+	}
+	if w := hit(s, "203.0.113.7:51000", "radu."); w.Code != http.StatusUnauthorized {
+		t.Fatalf("forged cookie: want 401, got %d", w.Code)
+	}
+	if got := bodyKey(t, hit(s, "203.0.113.7:51000", p.cookieValue("radu"))); got != "qm-full" {
+		t.Fatalf("logged-in remote: want the unscoped key, got %q", got)
+	}
+	if got := bodyKey(t, hit(s, "127.0.0.1:51001", "")); got != "qm-full" {
+		t.Fatalf("local admin without login: want the unscoped key, got %q", got)
+	}
+
+	s.cfg.Store(&config.Config{}) // no keys => auth middleware is a pass-through
+	if got := bodyKey(t, hit(s, "203.0.113.7:51002", p.cookieValue("radu"))); got != "" {
+		t.Fatalf("no keys configured: want empty key, got %q", got)
 	}
 }
 

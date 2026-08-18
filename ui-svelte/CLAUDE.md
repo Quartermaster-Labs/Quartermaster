@@ -110,6 +110,8 @@ Backend communication is centralized in `src/stores/api.ts`, with shared types i
   (dark/light via the `data-theme` attribute set in `App.svelte`). The `scrollFade` action
   (`lib/scrollFade.ts`) backs `.scroll-fade-y`. **Don't name a custom class after a Tailwind
   utility** — a `.collapse` of our own inherited `visibility: collapse` and hid the chat boxes.
+  Boolean settings use the `Toggle.svelte` switch (`size="sm"` in dense config grids), not a raw
+  `<input type="checkbox">`; tick boxes are only for multi-select lists (pick N of M).
 - **Tests:** pure-logic helpers carry colocated `*.test.ts` Vitest specs — mostly `src/lib/`, plus
   extracted component helpers (`playground/imageGen.test.ts`). Keep new utilities testable and add
   specs beside them.

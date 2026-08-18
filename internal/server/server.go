@@ -727,6 +727,8 @@ func (s *Server) routes() {
 	// pgChain — the handler drops the log/metrics streams for a playground caller
 	// (see handleAPIEvents) so the picker does not come with the server's logs.
 	mux.Handle("GET /api/events", pgChain.ThenFunc(s.handleAPIEvents))
+	// Inference key for logged-in playground browsers (see playground.go).
+	mux.Handle("GET /api/inference-key", pgChain.ThenFunc(s.handlePlaygroundInferenceKey))
 	mux.Handle("GET /api/metrics", adminChain.ThenFunc(s.handleAPIMetrics))
 	mux.Handle("GET /api/backend-metrics", adminChain.ThenFunc(s.handleAPIBackendMetrics))
 	mux.Handle("GET /api/performance", adminChain.ThenFunc(s.handleAPIPerformance))

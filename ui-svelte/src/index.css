@@ -66,6 +66,15 @@
   --color-focus-ring: rgba(120, 72, 40, 0.4);
   --color-select-caret: rgba(26, 23, 20, 0.8);
   --color-btn-border: rgba(40, 30, 20, 0.25);
+  /* Composer hover ring. The old hardcoded ring-white/15 was invisible on the
+     light cream surface (white on cream) — the outline read as broken/missing
+     on light-mode clients. Warm ink in light, soft white in dark. */
+  --color-composer-ring: rgba(40, 30, 20, 0.28);
+  /* Composer resting border — deliberately stronger than --color-card-border
+     (10% alpha): the box sits on a near-identical page background, so a faint
+     card border read as a broken/clipped outline on Retina light-theme
+     clients. Dark stays at the card value (it was fine there). */
+  --color-composer-border: rgba(40, 30, 20, 0.22);
   /* Unchecked tick/radio outline. Its own token because --color-card-border is
      tuned for large panels and disappears at 16px, while --color-btn-border is
      only defined for the light theme. */
@@ -115,6 +124,8 @@
     --color-btn-primary-text: rgba(255, 250, 245, 1);
     --color-card-border: rgba(168, 168, 176, 0.15);
     --color-card-border-inner: rgba(168, 168, 176, 0.11);
+    --color-composer-ring: rgba(255, 255, 255, 0.15);
+    --color-composer-border: rgba(168, 168, 176, 0.15);
     --shadow-inset-sm: inset 0 -1px 0 rgba(0, 0, 0, 0.25);
     --button-border-secondary: rgba(168, 168, 176, 0.18);
     --color-control-border: rgba(190, 190, 198, 0.4);
@@ -130,8 +141,11 @@
        markup in the app already carries `font-mono` at the call site, so this
        flip lands on chrome and prose without touching the numbers. */
     @apply bg-background text-txtmain font-sans;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
+    /* No -webkit-font-smoothing override: `antialiased` is a no-op on Windows
+       but visibly THINS every glyph on macOS (grey AA instead of native
+       subpixel) — on Retina the small mono rail title and body copy read as
+       faint, washed-out text while Windows clients looked normal. Leave
+       rendering to the platform. */
   }
 
   /* Visible keyboard focus, app-wide. `--color-focus-ring` was defined in both
@@ -573,7 +587,7 @@
      these, so a tweak to one (padding, hover ring, icon sizing) lands on both
      instead of drifting apart. */
   .composer-shell {
-    @apply flex flex-col gap-2 rounded-3xl border border-card-border bg-surface px-4 pt-3 pb-3 hover:ring-1 hover:ring-white/15 focus-within:border-primary transition-all;
+    @apply flex flex-col gap-2 rounded-3xl border border-composer-border bg-surface px-4 pt-3 pb-3 hover:ring-1 hover:ring-composer-ring focus-within:border-primary transition-all;
   }
   .composer-textarea {
     @apply w-full bg-transparent text-[0.8125rem] leading-relaxed resize-none focus:outline-none placeholder:text-txtsecondary pt-2 transition-[height] duration-200 ease-out;
