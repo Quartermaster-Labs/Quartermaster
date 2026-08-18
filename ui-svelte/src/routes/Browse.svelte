@@ -45,9 +45,9 @@
 
   let query = $state("");
   let sort = $state("downloads");
-  // Category tab, same ids as the Models page. "llm" is the default because it
-  // is what the other kinds are a minority of.
-  let kind = $state<ModelCategory>("llm");
+  // Category tab, same ids as the Models page plus "any". "llm" is the default
+  // because it is what the other kinds are a minority of.
+  let kind = $state<BrowseCategory>("llm");
   let results = $state<HubModel[]>([]);
   let selected = $state<HubDetail | null>(null);
   let modelsRoot = $state("");
@@ -139,9 +139,71 @@
   // it is not free, so it is derived once per repo rather than per re-render.
   const cardHTML = $derived(selected?.readme ? renderModelCard(selected.readme, selected.id) : "");
   // Jobs are in a store, not local state: a pull outlives this page. This page
-  // only asks whether the open repo is busy — monitoring downloads is the status
-  // rail's Downloads menu, which is the one place that draws them.
+  // only asks what the open repo already has in flight — monitoring downloads is
+  // the status rail's Downloads menu, which is the one place that draws them.
+  //
+  // Every path this repo is currently pulling. A second pick is no longer
+  // refused (the manager queues it), so what a row needs to know is whether IT
+  // is already on the way, not whether the repo is busy with something else.
+  const inFlight = $derived(
+    new Set(
+      $hubJobs
+        .filter((j) => isRunningJob(j) && j.repo === selected?.id)
+        .flatMap((j) => j.files.map((f) => f.path))
+    )
+  );
+  // A repo with a queue: the button still works, it just says where the pick
+  // lands. Counted per repo, not globally — different repos run in parallel.
   const busyRepo = $derived($hubJobs.some((j) => isRunningJob(j) && j.repo === selected?.id));
+
+  // A finished pull changes what is on disk, and the "downloaded" badge is read
+  // off disk — so the open repo has to be re-read once its job lands, or the row
+  // that just finished keeps offering the download until the page is reopened.
+  // Guarded by a signature rather than by the effect's own dependencies: the
+  // re-read reassigns `selected`, which would otherwise re-trigger it forever.
+  let lastDoneSig = "";
+  $effect(() => {
+    const id = selected?.id;
+    const sig = $hubJobs
+      .filter((j) => j.repo === id && j.phase === "done")
+      .map((j) => j.id)
+      .join(",");
+    const key = id + "|" + sig;
+    if (!id || key === lastDoneSig) return;
+    const first = lastDoneSig === "" || !lastDoneSig.startsWith(id + "|");
+    lastDoneSig = key;
+    // Opening a repo that already had finished jobs is not a change: the detail
+    // it was opened with already carries their files as local.
+    if (!first && sig) void reloadSelected(id);
+  });
+
+  // Re-read the open repo in place: same id, no spinner, and the estimates the
+  // sizer already filled in are kept.
+  async function reloadSelected(id: string): Promise<void> {
+    try {
+      const det = await getHubModel(id, selected?.source);
+      if (selected?.id === id) selected = det;
+    } catch {
+      // The row keeps the state it had; the next open re-reads anyway.
+    }
+  }
+
+  // What the row's button does. "local" wins over "downloading": a set already
+  // on disk is done regardless of what else is in flight.
+  function rowState(opt: FileOption): "local" | "downloading" | "ready" {
+    if (opt.local) return "local";
+    if (opt.files.some((f) => inFlight.has(f.path))) return "downloading";
+    return "ready";
+  }
+
+  // The Models page's categories plus "All". Every other tab pairs `gguf` with
+  // one of the hub's pipeline tags (see searchFilters in internal/hub/hf.go),
+  // so a repo tagged with something else — or with nothing — is invisible in
+  // all of them; "All" drops the filter entirely and is how you find it. The
+  // cost is honest: it also lists repos carrying no file we can load, which
+  // open with "this repo carries no GGUF files".
+  type BrowseCategory = ModelCategory | "any";
+  const BROWSE_CATEGORIES: { id: BrowseCategory; label: string }[] = [{ id: "any", label: "All" }, ...MODEL_CATEGORIES];
 
   const SORTS = [
     { id: "downloads", label: "Popular" },
@@ -295,7 +357,7 @@
     runSearch();
   }
 
-  function setKind(id: ModelCategory): void {
+  function setKind(id: BrowseCategory): void {
     if (kind === id) return;
     kind = id;
     // The open repo belongs to the category that was showing, so drop it rather
@@ -335,7 +397,9 @@
   async function sizeRepo(det: HubDetail): Promise<void> {
     // The planner is LLM-shaped (layers, KV, expert share). A diffusion or TTS
     // gguf has none of that, so asking would produce a confident wrong number.
-    if (kind !== "llm") return;
+    // Under "All" the tab says nothing about the repo, so the repo's own
+    // pipeline tag decides — that is the only signal there is.
+    if (kind !== "llm" && !(kind === "any" && isTextRepo(det))) return;
     // A projector is charged on top of whichever file is picked, so sizing it on
     // its own answers the wrong question — the row says "companion".
     const queue = groupFiles(det.files).filter((o) => !o.projector && o.files[0]?.path);
@@ -356,6 +420,13 @@
       }
     };
     await Promise.all(Array.from({ length: Math.min(SIZE_CONCURRENCY, queue.length) }, worker));
+  }
+
+  // Which repos the LLM sizer is allowed to be pointed at when the category tab
+  // no longer implies one. image-text-to-text is here because a VLM is an LLM
+  // with a projector, and its weights are planned exactly like any other.
+  function isTextRepo(det: HubDetail): boolean {
+    return det.pipeline === "text-generation" || det.pipeline === "image-text-to-text";
   }
 
   async function download(opt: FileOption): Promise<void> {
@@ -474,7 +545,7 @@
          done hub-side (see searchFilters in internal/hub/hf.go) — a 30-row page
          filtered here would leave most tabs empty. -->
     <div class="flex flex-wrap items-end gap-x-1 gap-y-2 border-b border-card-border shrink-0">
-      {#each MODEL_CATEGORIES as c (c.id)}
+      {#each BROWSE_CATEGORIES as c (c.id)}
         <button
           class="px-3 py-2 -mb-px border-b-2 font-mono text-xs uppercase tracking-wide transition-colors {kind === c.id
             ? 'border-primary text-txtmain'
@@ -761,6 +832,7 @@
                 <tbody>
                   {#each repoFiles as q, i (q.group)}
                     {@const v = verdictFor(q.sizeBytes, targetVramGB)}
+                    {@const st = rowState(q)}
                     <!-- Banded rows: a filename now runs the full width of the
                          cell and wraps, so the row borders alone stopped being
                          enough to tell one file's line from the next's. -->
@@ -775,6 +847,14 @@
                         {#if q.files.length > 1}
                           <span class="text-[0.65rem] text-txtsecondary">· {q.files.length} parts</span>
                         {/if}
+                        {#if q.local}
+                          <span
+                            class="ml-1 inline-flex items-center gap-0.5 rounded bg-success/15 px-1 py-0.5 text-micro font-medium uppercase tracking-wide text-success"
+                            use:tip={"Already in your models folder — nothing to download"}
+                          >
+                            <Check class="w-2.5 h-2.5" /> downloaded
+                          </span>
+                        {/if}
                       </td>
                       <td class="py-2 tabular-nums text-txtsecondary whitespace-nowrap">{humanBytes(q.sizeBytes)}</td>
                       <!-- A projector is a companion file, so "fits in VRAM" is the
@@ -786,12 +866,22 @@
                       <td class="py-2 text-right">
                         <button
                           class="icon-btn"
-                          disabled={busyRepo}
-                          use:tip={busyRepo ? "This repo already has a download running" : `Download ${q.label}`}
+                          disabled={st !== "ready"}
+                          use:tip={st === "local"
+                            ? "Already in your models folder"
+                            : st === "downloading"
+                              ? "This file is downloading — see the Downloads menu"
+                              : busyRepo
+                                ? `Queue ${q.label} behind this repo's running download`
+                                : `Download ${q.label}`}
                           aria-label="Download {q.label}"
                           onclick={() => download(q)}
                         >
-                          <Download class="w-3.5 h-3.5" />
+                          {#if st === "local"}
+                            <Check class="w-3.5 h-3.5 text-success" />
+                          {:else}
+                            <Download class="w-3.5 h-3.5" />
+                          {/if}
                         </button>
                       </td>
                     </tr>
@@ -799,7 +889,7 @@
                 </tbody>
               </table>
               <p class="mt-2 text-[0.65rem] text-txtsecondary">
-                {#if kind === "llm"}
+                {#if kind === "llm" || (selected && isTextRepo(selected))}
                   Context figures come from each file's GGUF header, read off the hub without downloading it, planned against your
                   {targetVramGB || "?"} GB VRAM target. A row still showing a plain fit verdict is one whose header hasn't been read (hover it for why).
                 {:else}
