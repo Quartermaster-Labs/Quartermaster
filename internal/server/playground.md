@@ -96,6 +96,10 @@ model would swap a model in, or contend for the slot, to produce six words of ch
   merging the streams makes the first "output" line a log line.
 - Best-effort by contract — no model, no CLI, a timeout or garbage all leave the UI on its local
   `thinkSummary()` heuristic.
+- **Refusal filter** (`sanitizeTitle`): the model sometimes *answers* the trace instead of naming it
+  ("I'm sorry", "As an AI language model", "There is no ..."), titling a quant-comparison box with an
+  apology. Such titles are dropped to "" — unless the source text itself is about apologizing —
+  so the box falls back to the local heuristic.
 - **Why FLAN and not a title fine-tune:** an article→headline model (tried at both t5-small and
   t5-base) is extractive in practice — it emits the input's own opening clause, which reads fine on
   reasoning prose but turns a chat opener into a truncated copy of the request. Instruction tuning

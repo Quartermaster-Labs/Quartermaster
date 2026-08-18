@@ -688,7 +688,7 @@
   <div
     onmousemove={role === "assistant" ? trackReply : undefined}
     class="relative group rounded-2xl px-3 py-2 text-[0.8125rem] {role === 'user'
-      ? 'max-w-[85%] bg-[#141414] text-[#ededee] rounded-br-sm msg-tail-user'
+      ? 'max-w-[85%] bg-[#141414] text-[#ededee] rounded-br-none'
       : (rewriteOriginal != null ? 'w-full' : 'w-full sm:w-4/5') + ' rounded-bl-sm'}"
   >
     {#if role === "assistant"}
@@ -727,13 +727,16 @@
            <think> blocks render in the timeline below instead. -->
       {#if reasoning_content || isReasoning}
         <div class="mb-3">
+          <!-- text-left: a <button> is centered by the UA, and a long busy label
+               ("Searching for \"…\"") wraps inside the flex item, so its second
+               line rendered centered while every other label stayed flush left. -->
           <button
-            class="flex items-center gap-1.5 text-sm text-txtsecondary hover:text-txtmain transition-colors group"
+            class="flex items-center gap-1.5 text-left text-sm text-txtsecondary hover:text-txtmain transition-colors group"
             onclick={() => showReasoning = !showReasoning}
           >
             <ChevronRight class="w-3.5 h-3.5 transition-transform {showReasoning ? 'rotate-90' : ''}" />
             {#if isSearching}
-              <span class="font-medium reason-shimmer-white thinking-dots">{busyLabel || "Searching"}</span>
+              <span class="font-medium reason-shimmer-white thinking-dots min-w-0">{busyLabel || "Searching"}</span>
             {:else if isReasoning}
               <span class="font-medium reason-shimmer-white thinking-dots">Thinking</span>
             {:else}
@@ -1103,27 +1106,11 @@
 {/if}
 
 <style>
-  /* Facebook-Messenger-style speech-bubble tail at the bottom corner. The
-     triangle inherits each bubble's fill so it reads as part of the bubble. */
-  .msg-tail-user::after,
-  .msg-tail-bot::after {
-    content: "";
-    position: absolute;
-    bottom: 0;
-    width: 0;
-    height: 0;
-    border: 6px solid transparent;
-    border-bottom: 0;
-  }
-  .msg-tail-user::after {
-    right: -5px;
-    border-left-color: #141414;
-  }
-  .msg-tail-bot::after {
-    left: -5px;
-    border-right-color: var(--color-surface);
-  }
-
+  /* The user bubble's tail corner is deliberately SQUARE (rounded-br-none on
+     the bubble div), not a CSS border-triangle: the old 0x0 ::after wedge left
+     a page-coloured sliver between its 45-degree hypotenuse and the bubble's
+     rounded corner, which rendered as a stray grey triangle on Retina/light-
+     theme clients (Mac Chrome) while looking fine on dark-theme ones. */
   .chat-prose {
     font-size: 0.8125rem;
     line-height: 1.55;

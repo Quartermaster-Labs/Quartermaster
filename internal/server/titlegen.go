@@ -165,7 +165,32 @@ func (tg *titlegen) title(ctx context.Context, text string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", filepath.Base(tg.exe), err)
 	}
-	return cleanTitlegenOutput(string(out), prompt), nil
+	return sanitizeTitle(cleanTitlegenOutput(string(out), prompt), text), nil
+}
+
+// titlegenRefusalRe matches the assistant-voice boilerplate an 80M instruction
+// tuned model falls back to when the few-shot shape doesn't catch: "I'm sorry, I
+// can't", "As an AI language model", "I don't know". It is answering the text as
+// if it were a question instead of naming it, and the result is a reasoning box
+// titled "I'm sorry" over a trace about quant sizes.
+var titlegenRefusalRe = regexp.MustCompile(`(?i)^(i(['’]m| am)? ?(so+rry|apolog)|sorry\b|i (can(['’]?t| ?not)|don['’]?t|do not|won['’]?t|am unable)|as an ai|unfortunately\b|there (is|are) no\b)`)
+
+// titlegenApologyRe finds a genuine apology in the SOURCE. A trace that really is
+// about apologizing may legitimately title itself that way, so the refusal filter
+// only fires when the source has nothing of the kind.
+var titlegenApologyRe = regexp.MustCompile(`(?i)(sorry|apolog|refus)`)
+
+// sanitizeTitle drops a title that answers the text rather than naming it.
+// Returning "" is the documented "no title" signal: the UI keeps its own local
+// heuristic, which is always better than a wrong apology.
+func sanitizeTitle(title, source string) string {
+	if title == "" || !titlegenRefusalRe.MatchString(title) {
+		return title
+	}
+	if titlegenApologyRe.MatchString(source) {
+		return title // the source really is about an apology/refusal
+	}
+	return ""
 }
 
 // titlegenShots is the few-shot prompt, shared by both callers. The shots are
