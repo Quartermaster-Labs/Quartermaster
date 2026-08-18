@@ -94,7 +94,10 @@ func emitASRModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, nam
 	// No estVramGB: parakeet runs on the CPU unless a user opts into GPU via
 	// extraArgs, so it occupies no VRAM budget and must never cost a chat model
 	// its residency. A GPU opt-in under-charges — an accepted trade for not
-	// evicting on every dictation.
+	// evicting on every dictation. The budget is only half of that promise:
+	// emitModel also files ASR models under coexistSets.ASR so the emitted "asr"
+	// group is persistent and non-exclusive, otherwise group membership alone
+	// would evict on every dictation regardless of the missing estimate.
 	// parakeet-server exposes no health route; readiness = socket open.
 	b.WriteString("    checkEndpoint: none\n")
 	if ov != nil && ov.Unlisted {

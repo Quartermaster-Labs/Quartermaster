@@ -16,6 +16,12 @@ everything that is not the LLM path. Backend *selection* is in
 TTS, ASR and SAM are **unsized** — small and fully resident, none of them touch the LLM
 KV/offload math, and none emit `estVramGB` (see `sizing.md`, "Emitted footprint").
 
+Unsized is only half of it: a model that costs no VRAM must also be exempt from **eviction**,
+or the group machinery undoes the exemption. SAM, CPU-only TTS.cpp and Parakeet ASR are
+collected into `coexistSets` (`generate_emit.go`) and emitted as their own `sam` / `tts` / `asr`
+groups — `exclusive:false`, `persistent:true`, `swap:false`, listed on every listener. GPU
+qwentts stays in the exclusive group, where it belongs.
+
 ## SAM (`sam.go`)
 
 `samCmdLines`/`emitSamModel` for `*.ggml` files, plus `samFallbackExe` — SAM has no legacy
@@ -69,6 +75,13 @@ qwentts gets talker `--model` + the discover-paired `--codec` + a per-model `voi
 (cloned voices survive restarts); TTS.cpp gets a lone `--model-path` (vocoder is baked in, no
 codec).
 
+**Grouping differs by engine.** qwentts runs on the GPU and gets an `estVramGB` + a normal
+exclusive group. TTS.cpp is CPU-only here (no CUDA/ROCm path upstream, `--use-metal` is macOS),
+costs no VRAM, and goes into the persistent `tts` coexistence group beside SAM — `emitModel`
+collects those names into `coexistSets.TTS`. In the exclusive group, a playground read-aloud
+click evicted the chat model that had just produced the reply, and the next turn cold-reloaded
+it.
+
 Shared: `checkEndpoint: /health`, `capabilities in:[text] out:[audio]` (what makes `/v1/models`
 report `audio_speech`), and the OpenAI surface `/v1/audio/speech` + `/v1/audio/voices` — so the
 playground Speech tab and read-aloud voice picker work against either.
@@ -104,3 +117,8 @@ filename fallback — deliberately narrow on `nemotron`, which also names NVIDIA
 20–36× realtime on CPU, so GPU is opt-in via `ExtraArgs`).
 `checkEndpoint: none` — parakeet-server documents no health route, so readiness = listen socket
 open. `capabilities in:[audio] out:[text]`.
+
+Placed in the persistent `asr` coexistence group (`coexistSets.ASR`) for the same reason it emits
+no `estVramGB`: dictating must not evict the chat model the transcript is headed for. A GPU
+opt-in through `ExtraArgs` keeps coexisting — the same accepted under-charge, and far cheaper
+than a full swap on every dictation.

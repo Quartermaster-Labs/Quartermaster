@@ -328,7 +328,9 @@
   // --- read aloud -----------------------------------------------------------
   // Speaks the answer through the TTS model picked in the chat settings. The
   // model is loaded on demand by the router like any other request, so the first
-  // click can take a while (and can evict the chat model — one GPU, one pool).
+  // click can take a while. A CPU-only TTS.cpp voice (Kokoro) sits in autogen's
+  // persistent "tts" coexistence group and evicts nothing; a GPU qwentts talker
+  // is exclusive and DOES swap the chat model out — one GPU, one pool.
   let speakState = $state<"idle" | "loading" | "playing">("idle");
   let speakErr = $state("");
   let audioEl: HTMLAudioElement | null = null;

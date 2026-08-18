@@ -134,28 +134,35 @@ func emitAPIKeys(b *strings.Builder, keys []APIKeyEntry) {
 // OWN members loaded side by side (swap:false) instead of swapping between them.
 // With no settings.groups the output is a single "exclusive" group over every model
 // (upstream default).
-func emitGroupsAndListeners(b *strings.Builder, s Settings, emitted, samNames []string) {
-	// SAM models are tiny and must coexist with whatever LLM/image model is loaded,
-	// so they go in their own group that never evicts and is never evicted (see
-	// writeSamGroup) — kept out of the exclusive swap groups below.
-	isSam := map[string]bool{}
-	for _, n := range samNames {
-		isSam[n] = true
+func emitGroupsAndListeners(b *strings.Builder, s Settings, emitted []string, cs coexistSets) {
+	// SAM masks, CPU-only TTS.cpp voices and CPU-only Parakeet ASR models are tiny,
+	// cost no VRAM, and are wanted ALONGSIDE whatever LLM/image model is loaded — a
+	// read-aloud click or a dictation must not swap the chat model out. They go in
+	// their own never-evicting groups (see writeCoexistGroup) and are kept out of
+	// the exclusive swap groups below.
+	groups := cs.groups(s)
+	inCoexist := map[string]bool{}
+	for _, g := range groups {
+		for _, n := range g.members {
+			inCoexist[n] = true
+		}
 	}
-	nonSam := emitted
-	if len(isSam) > 0 {
-		nonSam = nonSam[:0:0]
+	swappable := emitted
+	if len(inCoexist) > 0 {
+		swappable = swappable[:0:0]
 		for _, n := range emitted {
-			if !isSam[n] {
-				nonSam = append(nonSam, n)
+			if !inCoexist[n] {
+				swappable = append(swappable, n)
 			}
 		}
 	}
 
 	if len(s.Groups) == 0 {
 		b.WriteString("\ngroups:\n")
-		writeGroup(b, "exclusive", nonSam, false)
-		writeSamGroup(b, samNames)
+		writeGroup(b, "exclusive", swappable, false)
+		for _, g := range groups {
+			writeCoexistGroup(b, g.name, g.members)
+		}
 		return
 	}
 	coexist := make(map[string]bool, len(s.Groups))
@@ -179,7 +186,7 @@ func emitGroupsAndListeners(b *strings.Builder, s Settings, emitted, samNames []
 		addGroup(g.Name)
 	}
 	const defaultGroup = "default"
-	for _, name := range nonSam {
+	for _, name := range swappable {
 		assigned := ""
 		for _, g := range s.Groups {
 			for _, pat := range g.Match {
@@ -203,10 +210,15 @@ func emitGroupsAndListeners(b *strings.Builder, s Settings, emitted, samNames []
 	for _, name := range order {
 		writeGroup(b, name, members[name], coexist[name])
 	}
-	writeSamGroup(b, samNames)
+	for _, g := range groups {
+		writeCoexistGroup(b, g.name, g.members)
+	}
 
 	// listeners: address -> the groups it exposes (a group with no Listen binds
-	// no dedicated port but still groups for eviction).
+	// no dedicated port but still groups for eviction). The coexistence groups carry
+	// no Listen of their own, so they are appended to EVERY listener: a curated port
+	// must not lose its segmentation / read-aloud models purely because we moved them
+	// out of the exclusive group.
 	byAddr := map[string][]string{}
 	var addrOrder []string
 	for _, g := range s.Groups {
@@ -221,21 +233,71 @@ func emitGroupsAndListeners(b *strings.Builder, s Settings, emitted, samNames []
 	if len(addrOrder) == 0 {
 		return
 	}
+	var everywhere []string
+	for _, g := range groups {
+		everywhere = append(everywhere, g.name)
+	}
 	b.WriteString("\nlisteners:\n")
 	for _, addr := range addrOrder {
-		fmt.Fprintf(b, "  %q:\n    groups: [%s]\n", addr, strings.Join(byAddr[addr], ", "))
+		groups := append(append([]string{}, byAddr[addr]...), everywhere...)
+		fmt.Fprintf(b, "  %q:\n    groups: [%s]\n", addr, strings.Join(groups, ", "))
 	}
 }
 
-// writeSamGroup emits the coexistence group for SAM models: exclusive:false so
-// loading a SAM model evicts nothing, persistent:true so an exclusive LLM/image
-// load never evicts the SAM models, swap:false so multiple SAM models coexist
-// (they're tiny). Nothing emitted when there are no SAM models.
-func writeSamGroup(b *strings.Builder, members []string) {
+// coexistSets carries the model classes that must never take part in eviction:
+// they are tiny, run outside the VRAM budget, and are used WHILE a chat or image
+// model is resident. Sam is GPU-capable but placed live (see liveoffload.go); the
+// other two are CPU-only unless the user opts into GPU via extraArgs, an accepted
+// under-charge — the alternative is evicting a 27B on every dictation.
+type coexistSets struct {
+	Sam []string // SAM segmentation (*.ggml, sam3_server)
+	TTS []string // TTS.cpp voices (Kokoro & friends) — CPU-only, no CUDA/ROCm path
+	ASR []string // Parakeet transcription — CPU-only by default
+}
+
+// coexistGroup is one emitted never-evicting group. Empty ones are dropped, so a
+// config with no ASR models carries no "asr" group and no listener reference.
+type coexistGroup struct {
+	name    string
+	members []string
+}
+
+func (cs coexistSets) groups(s Settings) []coexistGroup {
+	var out []coexistGroup
+	for _, g := range []coexistGroup{
+		{"sam", cs.Sam},
+		{"tts", cs.TTS},
+		{"asr", cs.ASR},
+	} {
+		if len(g.members) > 0 {
+			out = append(out, coexistGroup{freeGroupName(s, g.name), g.members})
+		}
+	}
+	return out
+}
+
+// freeGroupName returns want, or want+"-auto" when a settings group already claims
+// that name. The coexistence groups are synthesised by us, and emitting a duplicate
+// YAML key would silently drop the user's group of the same name.
+func freeGroupName(s Settings, want string) string {
+	for _, g := range s.Groups {
+		if strings.EqualFold(strings.TrimSpace(g.Name), want) {
+			return want + "-auto"
+		}
+	}
+	return want
+}
+
+// writeCoexistGroup emits a zero-VRAM coexistence group (SAM segmentation, CPU-only
+// TTS.cpp voices, CPU-only Parakeet ASR): exclusive:false so loading a member evicts nothing,
+// persistent:true so an exclusive LLM/image load never evicts the members,
+// swap:false so several members coexist (they're all tiny). Nothing is emitted when
+// the group has no members.
+func writeCoexistGroup(b *strings.Builder, name string, members []string) {
 	if len(members) == 0 {
 		return
 	}
-	fmt.Fprintf(b, "  %s:\n", "sam")
+	fmt.Fprintf(b, "  %s:\n", name)
 	b.WriteString("    swap: false\n")
 	b.WriteString("    exclusive: false\n")
 	b.WriteString("    persistent: true\n")

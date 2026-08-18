@@ -108,8 +108,12 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
    pointers, and 0 is a value). `Override.ExtraArgs` are appended verbatim after the computed flags.
    `buildCmdLines` is shared by `emitProfile` and `RenderSoloCmd` (the editor's launch-parameters
    preview, `PUT /api/models/{model}/preview`, no persistence). `emitGroupsAndListeners` assigns
-   models to groups by name-glob (first match wins) and binds listen addresses; every group is an
-   exclusive swap group.
+   models to groups by name-glob (first match wins) and binds listen addresses; every glob-matched
+   group is an exclusive swap group. The synthesised **coexistence** groups are the exception:
+   SAM models, CPU-only TTS.cpp voices and CPU-only Parakeet ASR models are pulled out of the glob
+   assignment (`coexistSets` → `sam` / `tts` / `asr`, one group per non-empty class) and emitted by
+   `writeCoexistGroup` as `exclusive:false`, `persistent:true`, `swap:false`, so they neither evict
+   nor are evicted, and are appended to every listener since they bind no port of their own.
 
 ## Gotchas / conventions
 

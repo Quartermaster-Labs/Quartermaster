@@ -105,7 +105,15 @@ const hashCacheSuffix = ".modelhash"
 //	     launched 32x wider than checkpointReserveGB charged (~0.5 GB
 //	     under-reserved on qwen3.6-27b) and — with upstream #24176/#25472 —
 //	     evicted the previous turn's checkpoint on every turn.
-const genVersion = "v46"
+//	v47: CPU-only TTS.cpp voices (Kokoro & friends) and CPU-only Parakeet ASR
+//	     models move out of the exclusive swap group into persistent,
+//	     never-evicting "tts" / "asr" coexistence groups beside the SAM one.
+//	     They run on the CPU and are charged no VRAM, yet group membership
+//	     alone made a playground read-aloud click (or a dictation) evict the
+//	     chat model that produced the reply — and cold-reload it on the next
+//	     turn. Coexistence groups are also appended to every listener, since
+//	     they bind no port of their own.
+const genVersion = "v47"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

@@ -96,7 +96,7 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 	b.WriteString("models:\n")
 
 	var emitted []string
-	var samNames []string
+	var coexist coexistSets
 	seen := map[string]bool{}
 
 	for _, row := range rows {
@@ -114,24 +114,24 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 		// A single unparseable/misdetected gguf must not nuke the whole config
 		// (and with it startup): note it in-band and skip, keeping every other
 		// model servable.
-		if err := emitModel(&b, s, gf, row, ov, name, &emitted); err != nil {
+		if err := emitModel(&b, s, gf, row, ov, name, &emitted, &coexist); err != nil {
 			fmt.Fprintf(&b, "\n  # SKIPPED %q: %v\n", name, err)
 			continue
 		}
 		if row.IsSam {
-			samNames = append(samNames, name)
+			coexist.Sam = append(coexist.Sam, name)
 		}
 	}
 
 	emitExtraImageModels(&b, s, gf.Overrides, seen, &emitted)
 
-	emitGroupsAndListeners(&b, s, emitted, samNames)
+	emitGroupsAndListeners(&b, s, emitted, coexist)
 	return b.String(), nil
 }
 
 // emitModel reads metadata once and emits every profile (solo, ctx tiers, game)
 // for one discovered gguf.
-func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov *Override, name string, emitted *[]string) error {
+func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov *Override, name string, emitted *[]string, coexist *coexistSets) error {
 	// SAM models are raw *.ggml with no gguf header — route them before the
 	// metadata read (ReadGgufMetadata would fail). Served by sam3_server.
 	if row.IsSam {
@@ -182,6 +182,13 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	// emitTTSModel picks the engine from the registry (see ttsBackend).
 	if IsTTSModel(meta, row.FileName) {
 		emitTTSModel(b, s, row, ov, name, meta, emitted)
+		// TTS.cpp runs on the CPU and is charged no VRAM, so it belongs in the
+		// coexistence group rather than the exclusive one: speaking a reply must
+		// not evict the chat model that produced it. qwentts is on the GPU and
+		// stays exclusive.
+		if kind, _ := ttsBackend(s, row, ov, meta); kind == ttsKindTTSCpp {
+			coexist.TTS = append(coexist.TTS, name)
+		}
 		return nil
 	}
 
@@ -191,6 +198,12 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	// chat-able LLM catalog.
 	if IsASRModel(meta, row.FileName) {
 		emitASRModel(b, s, row, ov, name, meta.Architecture, emitted)
+		// Same reasoning as TTS.cpp above: parakeet runs on the CPU (20-36x
+		// realtime) and is charged no VRAM, so dictating must not evict the chat
+		// model the transcript is headed for. A GPU opt-in via extraArgs keeps
+		// coexisting — the same accepted under-charge emitASRModel already makes
+		// for estVramGB.
+		coexist.ASR = append(coexist.ASR, name)
 		return nil
 	}
 
