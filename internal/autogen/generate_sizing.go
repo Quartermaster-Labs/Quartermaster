@@ -171,10 +171,12 @@ func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB fl
 	return
 }
 
-// llamaDefaultCtxCheckpoints is llama-server's --ctx-checkpoints default when
+// LlamaDefaultCtxCheckpoints is llama-server's --ctx-checkpoints default when
 // the flag is omitted (PR #15293). Tuned for a multi-slot server; overkill for
-// local single-user serving, so we override it with defaultCtxCheckpoints.
-const llamaDefaultCtxCheckpoints = 32
+// local single-user serving, so we override it with defaultCtxCheckpoints. The
+// estimate paths charge it when an argv carries no --ctx-checkpoints, since that
+// is what such a launch really reserves.
+const LlamaDefaultCtxCheckpoints = 32
 
 // defaultCtxCheckpoints picks a sane checkpoint count for a model that doesn't
 // set ctxCheckpoints itself.
@@ -196,7 +198,7 @@ const llamaDefaultCtxCheckpoints = 32
 // SWA gets 3, not more: a checkpoint costs kvConstGB + perTokGB*minStep, and on
 // SWA the kvConstGB term (every local layer's whole window) dominates and is paid
 // per snapshot — 6 snapshots reserved GBs on gemma-class models and crowded out
-// the context. Rewind coverage is bought back by widening the spacing instead
+// the context. Its rewind coverage comes from spacing wider than the other archs
 // (defaultCheckpointMinStep), which only scales the cheap perTokGB term.
 func defaultCtxCheckpoints(kvConstGB float64, recurrent bool) int {
 	if recurrent {
@@ -211,13 +213,20 @@ func defaultCtxCheckpoints(kvConstGB float64, recurrent bool) int {
 // defaultCheckpointMinStep picks the -cms (minimum prompt-token spacing between
 // context checkpoints) for a model that doesn't pin one.
 //
-// SWA models get a wide 1024: with only 3 snapshots retained, spacing is what
-// decides how far back a divergent prompt can be restored from, and on SWA the
-// per-snapshot cost is dominated by the ctx-independent window state (kvConstGB),
-// so quadrupling the step adds only perTokGB*768 per snapshot — far cheaper than
-// paying kvConstGB again for extra snapshots. Everything else keeps llama's 256:
-// their kvConstGB is ~0, so snapshots are cheap and tight spacing restores more
-// of a diverging prompt.
+// Both values are far below llama's own 8192 default (llamaDefaultCheckpointMinStep),
+// which is what makes the spacing worth emitting at all: upstream creates a
+// checkpoint at every user message (#24176) and then evicts any checkpoint within
+// min-step of an earlier one (#25472), so at 8192 each new turn's checkpoint
+// deletes the previous turn's on any normal 1-3k-token exchange and a nominal 2-3
+// snapshots collapse to ~1 usable rewind point.
+//
+// SWA models get 1024 rather than 256: with only 3 snapshots retained, spacing is
+// what decides how far back a divergent prompt can be restored from, and on SWA
+// the per-snapshot cost is dominated by the ctx-independent window state
+// (kvConstGB), so quadrupling the step adds only perTokGB*768 per snapshot — far
+// cheaper than paying kvConstGB again for extra snapshots. Everything else gets
+// 256: their kvConstGB is ~0, so snapshots are cheap and tight spacing keeps a
+// checkpoint per turn instead of letting eviction thin them out.
 func defaultCheckpointMinStep(kvConstGB float64, recurrent bool) int {
 	if !recurrent && kvConstGB > 0 {
 		return swaCheckpointMinStep
@@ -237,11 +246,22 @@ func effectiveCheckpointMinStep(prof profile, kvConstGB float64, recurrent bool)
 	return defaultCheckpointMinStep(kvConstGB, recurrent)
 }
 
-// checkpointMinStep mirrors llama-server's --checkpoint-min-step default â€” the
-// minimum prompt-token spacing between context checkpoints. It is the floor for
-// the per-checkpoint global-KV term; the spacing actually emitted (and charged)
-// comes from effectiveCheckpointMinStep.
+// checkpointMinStep is OUR default -cms — the minimum prompt-token spacing
+// between context checkpoints for recurrent and plain-attention models. It is NOT
+// llama-server's default (that is llamaDefaultCheckpointMinStep, 32x larger); the
+// value is always emitted so the launch runs at the spacing checkpointReserveGB
+// charged for. The spacing actually emitted (and charged) comes from
+// effectiveCheckpointMinStep.
 const checkpointMinStep = 256
+
+// LlamaDefaultCheckpointMinStep is llama-server's own --checkpoint-min-step
+// default when the flag is omitted (verified on b10483: "default: 8192"). We
+// never launch at it — buildCmdLines always emits an explicit -cms — but an
+// argv that predates that (or one a user hand-wrote) does, so the estimate paths
+// that read a spacing back off a command line have to charge this when no -cms is
+// present, or they under-reserve the per-checkpoint global-KV term by 32x the
+// spacing they assumed.
+const LlamaDefaultCheckpointMinStep = 8192
 
 // effectiveCtxCheckpoints resolves the checkpoint count a profile will actually
 // run with: an explicit value (incl. 0 = disabled) when set, else the

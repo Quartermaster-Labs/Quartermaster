@@ -120,10 +120,19 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 	}
 	if c, ok := atoiFlagOK(args, "--ctx-checkpoints"); ok {
 		in.CtxCheckpoints = &c
+	} else {
+		// No flag in the argv means llama-server's own 32, not our arch default.
+		c := LlamaDefaultCtxCheckpoints
+		in.CtxCheckpoints = &c
 	}
 	// Spacing scales each checkpoint's global-KV term, so the live re-estimate has
-	// to charge the same step the baked argv runs with.
-	in.CheckpointMinStep = atoiFlag(args, "-cms", "--checkpoint-min-step")
+	// to charge the same step the baked argv runs with — and an argv with no -cms
+	// runs at llama's 8192, not at the arch default we would have emitted.
+	if step := atoiFlag(args, "-cms", "--checkpoint-min-step"); step > 0 {
+		in.CheckpointMinStep = step
+	} else {
+		in.CheckpointMinStep = LlamaDefaultCheckpointMinStep
+	}
 	// A "-vision" twin loads a CLIP projector via --mmproj. The model gguf (-m)
 	// carries no vision info, so EstimatePlan is projector-blind; charge the
 	// projector's weights + CLIP compute reserve here so the live guard sizes the

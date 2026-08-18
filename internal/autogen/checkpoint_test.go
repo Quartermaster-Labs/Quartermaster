@@ -22,7 +22,9 @@ func TestDefaultCtxCheckpoints_Recurrent(t *testing.T) {
 }
 
 // Spacing is arch-keyed: SWA widens to swaCheckpointMinStep so 3 snapshots still
-// cover a broad rewind range; recurrent and plain attention keep llama's 256. An
+// cover a broad rewind range; recurrent and plain attention get 256. Neither is
+// llama's own default (8192, LlamaDefaultCheckpointMinStep) — both are always
+// emitted so a launch runs at the spacing checkpointReserveGB charged for. An
 // explicit pin always wins.
 func TestCheckpointMinStep(t *testing.T) {
 	if s := defaultCheckpointMinStep(0.05, false); s != swaCheckpointMinStep {

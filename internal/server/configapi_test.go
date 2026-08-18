@@ -86,10 +86,18 @@ func TestEstimateInputFromCmd(t *testing.T) {
 		t.Error("KvInRam=false want true (--no-kv-offload present)")
 	}
 
-	// Omitted --ctx-checkpoints => nil (llama default applies downstream).
+	// Omitted checkpoint flags => llama-server's OWN defaults, not ours: a cmd
+	// without them really does run 32 snapshots at 8192 spacing, and charging our
+	// arch defaults (3 at 256) under-reserved the preview against the launch.
 	bare := estimateInputFromCmd("llama-server -c 32768 -ctk q8_0 -ctv q8_0")
-	if bare.CtxCheckpoints != nil {
-		t.Errorf("CtxCheckpoints=%v want nil when flag absent", bare.CtxCheckpoints)
+	if bare.CtxCheckpoints == nil || *bare.CtxCheckpoints != autogen.LlamaDefaultCtxCheckpoints {
+		t.Errorf("CtxCheckpoints=%v want %d when flag absent", bare.CtxCheckpoints, autogen.LlamaDefaultCtxCheckpoints)
+	}
+	if bare.CheckpointMinStep != autogen.LlamaDefaultCheckpointMinStep {
+		t.Errorf("CheckpointMinStep=%d want %d when -cms absent", bare.CheckpointMinStep, autogen.LlamaDefaultCheckpointMinStep)
+	}
+	if withCms := estimateInputFromCmd("llama-server -c 32768 -cms 512"); withCms.CheckpointMinStep != 512 {
+		t.Errorf("CheckpointMinStep=%d want 512 when -cms pinned", withCms.CheckpointMinStep)
 	}
 	if bare.KvInRam {
 		t.Error("KvInRam=true want false when --no-kv-offload absent")

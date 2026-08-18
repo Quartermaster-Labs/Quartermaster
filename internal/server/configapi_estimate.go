@@ -101,6 +101,18 @@ func estimateInputFromCmd(cmd string) autogen.EstimateInput {
 			}
 		}
 	}
+	// A cmd with no checkpoint flags runs at llama-server's OWN defaults (32
+	// snapshots spaced 8192 apart), not at the arch defaults the generator would
+	// have picked, so the preview has to charge those or it under-reserves the
+	// per-checkpoint global-KV term by up to 32x the spacing it assumed. Generated
+	// cmds always carry both flags; this only catches hand-written ones.
+	if in.CheckpointMinStep <= 0 {
+		in.CheckpointMinStep = autogen.LlamaDefaultCheckpointMinStep
+	}
+	if in.CtxCheckpoints == nil {
+		n := autogen.LlamaDefaultCtxCheckpoints
+		in.CtxCheckpoints = &n
+	}
 	return in
 }
 

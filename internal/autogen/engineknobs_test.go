@@ -131,10 +131,16 @@ func TestEmitProfile_AdvancedKnobs(t *testing.T) {
 	// Unset: none of the advanced flags appear.
 	var def strings.Builder
 	emitProfile(&def, s, meta, row, profile{Name: "foo"}, 8192, 10, 0, LoadPlan{}, "q8_0", "q8_0", false, &Override{})
-	for _, unwanted := range []string{"-tb ", "--prio", "-dio", "--no-op-offload", "--no-repack", "--cache-reuse", "-cram", "--cache-idle-slots", "--swa-full", "-cms", "--context-shift", "--spec-draft-n-min", "-sps", "--rope-scaling", "-sm ", "-ts ", "-mg ", "-ot "} {
+	for _, unwanted := range []string{"-tb ", "--prio", "-dio", "--no-op-offload", "--no-repack", "--cache-reuse", "-cram", "--cache-idle-slots", "--swa-full", "--context-shift", "--spec-draft-n-min", "-sps", "--rope-scaling", "-sm ", "-ts ", "-mg ", "-ot "} {
 		if strings.Contains(def.String(), unwanted) {
 			t.Errorf("unexpected %q emitted for a blank override:\n%s", unwanted, def.String())
 		}
+	}
+	// -cms is the exception: it is NOT a set-only knob. checkpointReserveGB always
+	// charges a spacing, and llama-server's own default (8192) is 32x our 256, so a
+	// blank override still has to pin the spacing the reserve assumed.
+	if !strings.Contains(def.String(), "-cms 256") {
+		t.Errorf("blank override should still pin the charged spacing -cms 256:\n%s", def.String())
 	}
 
 	// Set: each flag renders.

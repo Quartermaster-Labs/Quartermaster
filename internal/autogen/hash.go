@@ -99,7 +99,13 @@ const hashCacheSuffix = ".modelhash"
 //	     pins one and not the other). Only matters for a config generated under
 //	     v43 for a muse-glimmer gguf already on disk; a newly downloaded model
 //	     regenerates through the inputs hash anyway.
-const genVersion = "v44"
+//	v46: -cms is now emitted ALWAYS, not just when it differs from our own
+//	     default. llama-server's --checkpoint-min-step default is 8192, not the
+//	     256 the reserve assumed, so every recurrent and plain-attention model
+//	     launched 32x wider than checkpointReserveGB charged (~0.5 GB
+//	     under-reserved on qwen3.6-27b) and — with upstream #24176/#25472 —
+//	     evicted the previous turn's checkpoint on every turn.
+const genVersion = "v46"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

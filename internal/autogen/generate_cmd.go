@@ -413,16 +413,17 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	ckpts := effectiveCtxCheckpoints(prof, defaultCtxCheckpoints(ckptConstGB, ckptRecurrent))
 	lines = append(lines, fmt.Sprintf("--ctx-checkpoints %d", ckpts))
 	// Spacing is charged per checkpoint by checkpointReserveGB, so emit whatever it
-	// assumed. An ov-only pin (a preview profile built without the field) still
+	// assumed — ALWAYS, never "only when it differs from a default". llama-server's
+	// own default is 8192 (LlamaDefaultCheckpointMinStep), so omitting the flag
+	// launched every recurrent and plain-attention model 32x wider than the reserve
+	// charged for. An ov-only pin (a preview profile built without the field) still
 	// wins over the arch default.
 	if ckpts > 0 {
 		stepProf := prof
 		if stepProf.CheckpointMinStep == 0 && ov != nil {
 			stepProf.CheckpointMinStep = ov.CheckpointMinStep
 		}
-		if step := effectiveCheckpointMinStep(stepProf, ckptConstGB, ckptRecurrent); step != checkpointMinStep {
-			lines = append(lines, fmt.Sprintf("-cms %d", step))
-		}
+		lines = append(lines, fmt.Sprintf("-cms %d", effectiveCheckpointMinStep(stepProf, ckptConstGB, ckptRecurrent)))
 	}
 	// DRY sampler: defaults to settings.DryDefault (nil => off) and a per-model
 	// ov.Dry wins (nil => the default, false => off, true => on). Values default
