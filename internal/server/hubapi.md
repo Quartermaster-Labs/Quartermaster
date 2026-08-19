@@ -77,5 +77,7 @@ the models root itself. The path is **one argv element**, never interpolated int
 
 `openInFileManager` **starts and never waits** — Explorer exits non-zero on successful opens and
 `xdg-open` can outlive the handler, so only a failure to *spawn* is reported (that is the case
-worth telling the user about); a goroutine reaps the child. `hideConsole(cmd)`
-(`hidewindow_*.go`, shared with `upscale.go`) keeps a console window from flashing.
+worth telling the user about); a goroutine reaps the child. It deliberately does **not** call
+`hideConsole` — explorer/open/xdg-open are GUI launchers with no console to hide, and on Windows
+the `SW_HIDE` in that `STARTUPINFO` is inherited by the window the shell opens for us, so the call
+"succeeds" with nothing on screen.

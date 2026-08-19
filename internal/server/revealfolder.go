@@ -99,17 +99,23 @@ func revealTarget(rootAbs, want string) (string, error) {
 // opens, and `xdg-open` can outlive the request handler. A failure to *spawn*
 // is still reported — that is the case worth telling the user about (no
 // xdg-open installed), whereas an exit code here carries no information.
+//
+// Deliberately NOT run through hideConsole: all three of these are GUI
+// launchers with no console of their own to hide, and on Windows the SW_HIDE
+// in that STARTUPINFO is inherited by the window the shell opens on our
+// behalf — explorer then "succeeds" while nothing appears on screen, which is
+// exactly the silent no-op this button had.
 func openInFileManager(dir string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		cmd = exec.Command("explorer", dir)
+		// Explorer wants a native path; a request can carry forward slashes.
+		cmd = exec.Command("explorer", filepath.FromSlash(dir))
 	case "darwin":
 		cmd = exec.Command("open", dir)
 	default:
 		cmd = exec.Command("xdg-open", dir)
 	}
-	hideConsole(cmd)
 	if err := cmd.Start(); err != nil {
 		return err
 	}

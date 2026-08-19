@@ -263,7 +263,7 @@
             {/if}
             {#if j.phase === "done" && j.dir}
               <button
-                class="flex w-full items-center gap-1 text-left text-[0.6rem] text-txtsecondary hover:text-primary hover:underline transition-colors"
+                class="flex w-full cursor-pointer items-center gap-1 text-left text-[0.6rem] text-txtsecondary hover:text-primary hover:underline transition-colors"
                 use:tip={"Open this folder"}
                 onclick={() => reveal(j.dir)}
               >
@@ -276,7 +276,7 @@
     </div>
 
     <div class="px-3 py-1.5 border-t border-card-border text-[0.6rem]">
-      <button class="inline-flex items-center gap-1 text-primary hover:underline" onclick={() => reveal()}>
+      <button class="inline-flex cursor-pointer items-center gap-1 text-primary hover:underline" onclick={() => reveal()}>
         <Folder class="w-3 h-3" /> Open models folder
       </button>
     </div>
