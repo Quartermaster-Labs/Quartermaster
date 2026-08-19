@@ -203,17 +203,28 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   `needsQwenFixedChatTemplate(meta)` requires the arch family AND a non-preserving template.
   Only the flag and the level list are kept, not the ~10–100 KB source. An unrecognised template
   (no `preserve_thinking` logic at all) keeps the override, the pre-existing safe default.
-- **Overriding 3.8 is not free**: the drop-in has no `reasoning_effort` support, so 3.8's
-  low/medium/xhigh levels would be silently dropped — hence `effortLevels` (`generate_emit.go`)
-  reports nothing whenever a `--chat-template-file` is in play (user-supplied OR the built-in
-  Qwen fix). Only what survives that gate becomes the emitted `capabilities.reasoningEffort`.
-- **The effort ladder is read out of the template's own guard, never hardcoded.**
-  `effortLevelsRe` matches 3.8's `reasoning_effort not in ('xhigh', 'medium', 'low')` validation
-  line, so the advertised set is exactly what the jinja accepts. A template that *reads*
-  `reasoning_effort` but declares no such guard advertises **nothing**: the guard is what proves
-  an unknown value would `raise_exception` (llama.cpp forwards the kwarg verbatim, so that
-  surfaces as a 500). This is what `internal/server/http-core.md` (`reasoning_effort.go`) snaps
-  an OpenAI-ladder value onto.
+- **The ladder always describes the template that will actually run.** A
+  `--chat-template-file` replaces the baked template wholesale, so the gguf's levels say nothing
+  about the live renderer — `effortLevels` (`generate_emit.go`) therefore scans the **override
+  file** in the gguf template's place (memoized per path; one file is shared by every ctx variant
+  of every model using it). The built-in Qwen fix is the one exception, a hard `nil`: it has no
+  `reasoning_effort` logic at all, and its path only resolves from the server's cwd. Only what
+  survives that gate becomes the emitted `capabilities.reasoningEffort`.
+- **The effort ladder is read out of the template, never hardcoded.** Two shapes, in order:
+  - *Strict* — `effortLevelsRe` matches 3.8's `reasoning_effort not in ('xhigh', 'medium', 'low')`
+    validation line, so the advertised set is exactly what the jinja accepts.
+  - *Tolerant* — a template that reads `reasoning_effort` and folds it onto its own rungs without
+    validating it (the Qwen 3.8 drop-ins in circulation) declares no tuple, so `effortAssignRe`
+    reads the literals **assigned** to an effort-named variable (`set _initial_effort = 'xhigh'`),
+    not the ones compared against it — the comparisons are padded with OpenAI-ladder aliases the
+    template folds away. Gated on the template raising nothing about effort (`effortRaiseRe`,
+    which deliberately ignores the unrelated content raises every real template carries): with no
+    guard in play, a rung read wrong degrades to the template's own default rather than the 500
+    llama.cpp returns for an unknown kwarg value.
+
+  A template that reads `reasoning_effort`, names no rungs, and validates none advertises
+  **nothing**. This is what `internal/server/http-core.md` (`reasoning_effort.go`) snaps an
+  OpenAI-ladder value onto.
 
 ## Connections
 

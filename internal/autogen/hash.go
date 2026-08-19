@@ -113,7 +113,13 @@ const hashCacheSuffix = ".modelhash"
 //	     chat model that produced the reply — and cold-reload it on the next
 //	     turn. Coexistence groups are also appended to every listener, since
 //	     they bind no port of their own.
-const genVersion = "v48"
+//	v49: capabilities.reasoningEffort survives a --chat-template-file override.
+//	     The ladder is now read from the drop-in template itself instead of being
+//	     dropped wholesale, and templates that fold effort onto their own rungs
+//	     without validating it (no raise) have their rungs read from the
+//	     assignments. Every Qwen 3.8 running a drop-in template advertised no
+//	     ladder at all, so the playground offered a bare thinking on/off.
+const genVersion = "v49"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

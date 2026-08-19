@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -394,20 +395,49 @@ func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, pro
 }
 
 // effortLevels reports the reasoning-effort ladder to advertise for a model:
-// the values its baked chat template validates against, but ONLY when that
-// template is the one actually being run. A --chat-template-file override
-// (user-supplied or the built-in Qwen fix) replaces the template wholesale, so
-// the gguf's ladder says nothing about what the running renderer accepts —
-// advertising it there would have the server translate a client's
-// reasoning_effort into a kwarg the live template ignores.
+// the values the template ACTUALLY BEING RUN accepts. A --chat-template-file
+// override replaces the baked template wholesale, so the gguf's ladder says
+// nothing about the live renderer — advertising it there would have the server
+// translate a client's reasoning_effort into a kwarg the live template ignores.
+// The override file is therefore scanned in the gguf template's place: drop-in
+// templates are where effort support most often lives (llama.cpp ships no way
+// to ask the running server what kwargs its template reads), and the two Qwen
+// 3.8 templates in circulation both support the ladder while only one of them
+// declares it in a guard. An unreadable file advertises nothing, as before.
+//
+// The built-in Qwen fix is the one override that is known statically: it has no
+// reasoning_effort logic at all, so it stays a hard nil rather than a file read
+// of a path that is only resolvable from the server's cwd.
 func effortLevels(meta Metadata, ov *Override) []string {
 	if ov != nil && strings.TrimSpace(ov.ChatTemplateFile) != "" {
-		return nil
+		return chatTemplateFileEffortLevels(strings.TrimSpace(ov.ChatTemplateFile))
 	}
 	if needsQwenFixedChatTemplate(meta) {
 		return nil
 	}
 	return meta.ChatTemplateEffortLevels
+}
+
+// chatTemplateFileEffortLevels reads a drop-in .jinja template and pulls its
+// ladder out with the same scanner used on baked gguf templates. Results are
+// memoized: one template file is typically shared by every ctx variant of every
+// model that uses it, and this runs inside config generation.
+var chatTemplateEffortCache sync.Map // abs path -> []string
+
+func chatTemplateFileEffortLevels(path string) []string {
+	key := path
+	if abs, err := filepath.Abs(path); err == nil {
+		key = abs
+	}
+	if v, ok := chatTemplateEffortCache.Load(key); ok {
+		return v.([]string)
+	}
+	var levels []string
+	if b, err := os.ReadFile(path); err == nil {
+		_, levels = scanChatTemplate(string(b))
+	}
+	chatTemplateEffortCache.Store(key, levels)
+	return levels
 }
 
 func formatCtxTag(ctx int) string {

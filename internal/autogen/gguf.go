@@ -167,6 +167,33 @@ var effortLevelsRe = regexp.MustCompile(`reasoning_effort\s+not\s+in\s*\(([^)]*)
 // effortValueRe extracts one quoted value from that tuple.
 var effortValueRe = regexp.MustCompile(`['"]([A-Za-z0-9_-]+)['"]`)
 
+// effortAssignRe is the fallback for TOLERANT templates — ones that read
+// reasoning_effort but never validate it, so they declare no value tuple to
+// read. They instead normalize the request onto their own canonical rungs:
+//
+//	{%- elif _effort_raw == 'high' or _effort_raw == 'xhigh' %}
+//	    {%- set _initial_effort = 'xhigh' %}
+//
+// so the ladder is the set of literals ASSIGNED to an effort-named variable,
+// not the set compared against it (which is padded with OpenAI-ladder aliases
+// the template folds away). Only consulted when the guard regex finds nothing
+// and the template validates nothing — with no raise in play a level we get
+// wrong degrades to the template's own default instead of a 500.
+var effortAssignRe = regexp.MustCompile(`set\s+[A-Za-z0-9_]*[Ee]ffort[A-Za-z0-9_]*\s*=\s*['"]([A-Za-z0-9_-]+)['"]`)
+
+// effortRaiseRe asks the narrow question "does this template raise ABOUT
+// effort", not "does it raise at all": every one of these templates raises on
+// malformed content ("Unexpected item type in content"), so a blanket
+// raise_exception check would call every real template strict and suppress the
+// fallback. A raise that belongs to an effort guard is the body of the test
+// that names effort:
+//
+//	{%- if resolved_reasoning_effort not in (...) %} {{- raise_exception(...) }}
+//
+// so it is reachable from the word "effort" without crossing a `{%` — the
+// start of the next statement tag, which is where an unrelated raise lives.
+var effortRaiseRe = regexp.MustCompile(`(?is)effort(?:[^{]|\{[^%])*raise_exception`)
+
 // scanChatTemplate derives the chat-template feature flags stored on Metadata
 // from the raw jinja source. Matching is done on whitespace-collapsed text so
 // re-indentation by a converter doesn't defeat it; both markers are literal
@@ -181,6 +208,20 @@ func scanChatTemplate(tmpl string) (preservesThinking bool, effortLevels []strin
 	if m := effortLevelsRe.FindStringSubmatch(flat); m != nil {
 		for _, v := range effortValueRe.FindAllStringSubmatch(m[1], -1) {
 			effortLevels = append(effortLevels, strings.ToLower(v[1]))
+		}
+		return preservesThinking, effortLevels
+	}
+	if strings.Contains(flat, "reasoning_effort") && !effortRaiseRe.MatchString(flat) {
+		seen := map[string]bool{}
+		for _, v := range effortAssignRe.FindAllStringSubmatch(flat, -1) {
+			lvl := strings.ToLower(v[1])
+			// "none"/"off" is the enable_thinking switch, not a rung; the UI
+			// and the proxy both carry it separately.
+			if lvl == "none" || lvl == "off" || seen[lvl] {
+				continue
+			}
+			seen[lvl] = true
+			effortLevels = append(effortLevels, lvl)
 		}
 	}
 	return preservesThinking, effortLevels
