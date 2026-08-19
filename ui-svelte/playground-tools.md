@@ -81,13 +81,24 @@ cost, not by category**:
 Standing facts about the user that survive a chat. Storage in `internal/server/memories.go`.
 
 **Recall is by injection, not by a tool** — `memoryBlock($memories)` renders `- [<id>] <text>` lines
-into the system prompt of every turn, newest-updated first, cut at `MEMORY_BLOCK_LIMIT` (8k chars)
-with a count of what was omitted rather than a silent drop. A `memory_read` tool would sit in the
-KV-stable prefix and still only fire when the model thought to call it; injected facts are always in
-front of it. The trade runs the other way too: **a write changes the system prompt, so it
-invalidates the KV prefix of every chat** — which is why only `MEMORY_TOOLS` (`memory_save`,
-`memory_delete`) are advertised, and why `DEFAULT_MEMORY_PROMPT` (`opts.memory`) tells the model to
-save lasting facts only and to replace via `id` instead of accumulating near-duplicates.
+into the system prompt of every turn, cut at `MEMORY_BLOCK_LIMIT` (8k chars) with a count of what
+was omitted rather than a silent drop. A `memory_read` tool would sit in the KV-stable prefix and
+still only fire when the model thought to call it; injected facts are always in front of it, which
+is why only `MEMORY_TOOLS` (`memory_save`, `memory_delete`) are advertised.
+
+**The block uses two orders, and that is load-bearing.** The 8k budget is spent
+**newest-updated first**, so a block that has to be cut loses its stalest facts; the surviving
+entries are then rendered **oldest-`createdAt` first** (ties broken on id). That makes the block
+append-only: a save lands at the tail and every line above it stays byte-identical, so the KV prefix
+diverges at the end instead of at line one. Ordering the output by recency instead reshuffled the
+whole block on every write.
+
+**Duplicates are the store's problem, not the model's.** `DEFAULT_MEMORY_PROMPT` (`opts.memory`)
+used to tell the model to check its block before saving, to hold the write rate down. That bought a
+little prefill back by making recall unreliable, so the rule is gone: the prompt now says to save
+the moment a lasting fact appears, and `upsertMemory` (`internal/server/memories.go`) folds a
+restatement into the entry that already holds it. `id` is still the way to REPLACE a fact that has
+gone wrong.
 
 **On** by default (`memoryStore`, a `userPref`), off in Rewrite mode. The Configs checkbox gates the
 tools, the prompt line and the block together.

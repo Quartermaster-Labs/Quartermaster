@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Per-user assistant memory: short standing facts about the user that are worth
@@ -27,8 +28,16 @@ import (
 // half). A read tool would sit in the KV-stable prefix of every conversation and
 // still only fire when the model thought to call it; injected facts are always in
 // front of it. The cost is the other side of that trade — writing a memory
-// changes the system prompt, so it invalidates the KV prefix of every chat. That
-// is why the write tools are deliberately not chatty (see their descriptions).
+// changes the system prompt, so it invalidates the KV prefix of every chat.
+//
+// That cost is paid by the STORE, not by asking the model to hold back: a model
+// told to save sparingly saves the wrong things, and telling it to check the block
+// before saving only turns a duplicate into a duplicate it argued itself into.
+// Instead every save is deduplicated here (memoryDuplicateOf) — a restatement of
+// something already known writes nothing at all, and a near-restatement folds into
+// the entry that already exists. The injected block is rendered append-only
+// (createdAt order, see memoryBlock) so an ordinary save only changes bytes at its
+// tail instead of reshuffling every line above it.
 type memoryEntry struct {
 	ID   string   `json:"id"`
 	Text string   `json:"text"`           // the fact itself, one per entry
@@ -105,16 +114,123 @@ func newMemoryID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// upsertMemory creates or updates one entry. An empty in.ID creates; a non-empty
-// one that matches nothing is an error rather than a create, because the model
-// getting an id wrong means it is editing a memory it never read.
-func (p *Playground) upsertMemory(user string, in memoryEntry) (memoryEntry, error) {
+// memoryOutcome says what upsertMemory actually did. A save is not always a
+// create, and the caller has to be able to tell the model the truth — otherwise
+// it reports "saved that for you" over a write that never happened.
+type memoryOutcome int
+
+const (
+	memoryCreated   memoryOutcome = iota // a new entry
+	memoryUpdated                        // an explicit id replaced that entry
+	memoryMerged                         // a near-restatement folded into an existing entry
+	memoryDuplicate                      // already remembered verbatim; nothing written
+)
+
+// memoryDedupeJaccard is the word overlap above which two memories are treated as
+// the same fact. Deliberately high: folding two genuinely different facts into one
+// silently loses something the user asked to keep, while missing a near-duplicate
+// only costs one extra line. Pairs that differ by a single content word — "prefers
+// metric units" / "prefers imperial units" (0.5) — stay well clear of it.
+const memoryDedupeJaccard = 0.8
+
+// memoryContainWords is the minimum length for the containment rule, so a one- or
+// two-word memory cannot swallow every longer entry that happens to repeat it.
+const memoryContainWords = 3
+
+// normalizeMemoryText reduces a memory to what it asserts: lowercased, punctuation
+// dropped, whitespace collapsed. Two memories that normalize the same are the same
+// fact typed twice.
+func normalizeMemoryText(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	space := true // suppresses a leading separator too
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(r)
+			space = false
+		case !space:
+			b.WriteByte(' ')
+			space = true
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// memoryDuplicateOf reports whether `incoming` restates `existing`.
+//
+// Three rules, safest first: identical once normalized; one wholly contained in
+// the other ("Runs an RX 7900 XTX" inside "Runs an RX 7900 XTX with 24GB of VRAM"
+// — a refinement, not a second fact); or a word-set overlap at or above
+// memoryDedupeJaccard. Word sets rather than edit distance because a memory is a
+// sentence whose wording drifts between saves while its content words do not.
+func memoryDuplicateOf(existing, incoming string) bool {
+	a, b := normalizeMemoryText(existing), normalizeMemoryText(incoming)
+	if a == "" || b == "" {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	wa, wb := strings.Fields(a), strings.Fields(b)
+	short, long, shortN := a, b, len(wa)
+	if len(wb) < len(wa) {
+		short, long, shortN = b, a, len(wb)
+	}
+	if shortN >= memoryContainWords && strings.Contains(" "+long+" ", " "+short+" ") {
+		return true
+	}
+	return jaccardWords(wa, wb) >= memoryDedupeJaccard
+}
+
+// jaccardWords is |A INTERSECT B| / |A UNION B| over the two word sets.
+func jaccardWords(a, b []string) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	set := make(map[string]bool, len(a))
+	for _, w := range a {
+		set[w] = true
+	}
+	inter := 0
+	seen := make(map[string]bool, len(b))
+	for _, w := range b {
+		if seen[w] {
+			continue
+		}
+		seen[w] = true
+		if set[w] {
+			inter++
+		}
+	}
+	union := len(set) + len(seen) - inter
+	if union == 0 {
+		return 0
+	}
+	return float64(inter) / float64(union)
+}
+
+// mergeTags unions two tag lists through the usual normalization.
+func mergeTags(a, b []string) []string {
+	return cleanTags(append(append([]string{}, a...), b...))
+}
+
+// upsertMemory creates, updates, merges or no-ops one entry, saying which in the
+// returned memoryOutcome. An explicit in.ID replaces that entry; an id that
+// matches nothing is an error rather than a create, because the model getting an
+// id wrong means it is editing a memory it never read.
+//
+// An idless save is deduplicated against the whole list first (memoryDuplicateOf),
+// so the model may save a fact whenever it sees one without first proving to
+// itself that it is new. That is the point: restraint is the store's job, not a
+// judgement call handed to a model that is bad at it.
+func (p *Playground) upsertMemory(user string, in memoryEntry) (memoryEntry, memoryOutcome, error) {
 	in.Text = strings.TrimSpace(in.Text)
 	if in.Text == "" {
-		return memoryEntry{}, errMemory("a memory needs `text` - the fact to remember, in one or two sentences")
+		return memoryEntry{}, memoryCreated, errMemory("a memory needs `text` - the fact to remember, in one or two sentences")
 	}
 	if len([]rune(in.Text)) > maxMemoryLen {
-		return memoryEntry{}, errMemory("memory too long (max %d characters) - keep it to the fact itself", maxMemoryLen)
+		return memoryEntry{}, memoryCreated, errMemory("memory too long (max %d characters) - keep it to the fact itself", maxMemoryLen)
 	}
 	if in.Source != "user" {
 		in.Source = "assistant"
@@ -136,19 +252,48 @@ func (p *Playground) upsertMemory(user string, in memoryEntry) (memoryEntry, err
 			mems[i].Source = in.Source
 			mems[i].UpdatedAt = now
 			out := mems[i]
-			return out, p.saveMemoriesLocked(user, mems)
+			return out, memoryUpdated, p.saveMemoriesLocked(user, mems)
 		}
-		return memoryEntry{}, errMemory("no memory with id %q - list the memories you were given and use one of those ids, or omit id to save a new one", in.ID)
+		return memoryEntry{}, memoryUpdated, errMemory("no memory with id %q - list the memories you were given and use one of those ids, or omit id to save a new one", in.ID)
+	}
+
+	// Deduplicate before the cap check: re-saying something already remembered has
+	// to keep working on a full list — the write is a no-op, so there is nothing to
+	// refuse, and a "memory is full" error over a fact already stored is a lie.
+	for i := range mems {
+		if !memoryDuplicateOf(mems[i].Text, in.Text) {
+			continue
+		}
+		if normalizeMemoryText(mems[i].Text) == normalizeMemoryText(in.Text) {
+			// Verbatim restatement: write NOTHING, not even UpdatedAt. The injected
+			// block has to come back byte-identical, and a no-op that still touches
+			// the entry is a no-op that still costs a reprefill.
+			return mems[i], memoryDuplicate, nil
+		}
+		// Near-restatement: fold it into the entry that already exists. The longer
+		// text wins so a merge can never drop detail the other phrasing carried — a
+		// genuine shortening is a correction, which the model makes with an explicit
+		// id. CreatedAt is preserved, so the entry keeps its place in the
+		// append-only injected block instead of jumping to the end. Source is left
+		// alone too: an assistant restatement does not make a user's memory the
+		// model's own.
+		if len(in.Text) > len(mems[i].Text) {
+			mems[i].Text = in.Text
+		}
+		mems[i].Tags = mergeTags(mems[i].Tags, in.Tags)
+		mems[i].UpdatedAt = now
+		out := mems[i]
+		return out, memoryMerged, p.saveMemoriesLocked(user, mems)
 	}
 
 	if len(mems) >= maxMemories {
-		return memoryEntry{}, errMemory("memory is full (%d entries). Delete one that is stale or superseded before saving another", maxMemories)
+		return memoryEntry{}, memoryCreated, errMemory("memory is full (%d entries). Delete one that is stale or superseded before saving another", maxMemories)
 	}
 	in.ID = newMemoryID()
 	in.CreatedAt = now
 	in.UpdatedAt = now
 	mems = append(mems, in)
-	return in, p.saveMemoriesLocked(user, mems)
+	return in, memoryCreated, p.saveMemoriesLocked(user, mems)
 }
 
 // deleteMemory removes one entry by id, reporting whether it existed.
@@ -229,7 +374,7 @@ func (s *Server) handleMemories(w http.ResponseWriter, r *http.Request) {
 		// A memory typed or edited in the UI is the user's own, whatever the client
 		// sent — only the tool path may claim "assistant".
 		in.Source = "user"
-		out, err := p.upsertMemory(user, in)
+		out, _, err := p.upsertMemory(user, in)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return

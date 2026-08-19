@@ -219,9 +219,17 @@ owns the list (`DataDir/users/<user>/memories.json`) and every mutation is a per
 `ui-svelte/src/lib/memoryTools.ts`). **Write-only by design — there is no `memory_read`/
 `memory_list` tool.** Recall is by injection: the client renders `memoryBlock` into the system
 prompt every turn, so the facts are already in front of the model, while a read tool would sit in
-every conversation's KV-stable prefix and only fire when the model thought to call it. The cost runs
-the other way — a write changes the system prompt and so invalidates the KV prefix of **every**
-chat.
+every conversation's KV-stable prefix and only fire when the model thought to call it. A write does
+change the system prompt, but the block is rendered append-only, so an ordinary save moves the KV
+divergence point to the tail rather than to line one.
+
+**Dedupe lives here, not in the prompt.** An idless `upsertMemory` first scans for a near-duplicate
+(`memoryDuplicateOf`: normalized-equal, whole-string containment, or ≥0.8 word-set Jaccard). A
+verbatim restatement writes **nothing at all**, not even `UpdatedAt`; a near-restatement folds in —
+longer text wins, tags union, `CreatedAt` and `Source` survive. The outcome
+(`memoryCreated`/`Updated`/`Merged`/`Duplicate`) comes back to `memorySave`, which words the result
+accordingly: on a duplicate it explicitly tells the model NOT to announce a save that did not
+happen. This is what lets the prompt drop the old "check your block first" rule.
 
 No approval gate (unlike `quartermaster_configure`): writes are frequent and reversible, and
 visibility comes from the chat card plus the Settings panel. The save result **states that the new

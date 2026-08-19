@@ -28,11 +28,14 @@ export const DEFAULT_QM_PROMPT =
 
 // Appended when the memory tools are on. The memories THEMSELVES are injected
 // separately (lib/memoryTools.ts memoryBlock) — this is only the contract for
-// writing them. Kept short and strict on purpose: every save rewrites the system
-// prompt, which invalidates the KV prefix of every chat, so a model that saves
-// chattily costs the user a reprefill for something it will read once.
+// writing them. It used to tell the model to check its block before saving, on
+// the grounds that a save invalidates the KV prefix of every chat. That trade was
+// backwards: it bought a little prefill back by making recall unreliable, and a
+// model asked to audit its own block mostly talks itself into saving anyway. The
+// duplicate problem is now handled where it belongs — internal/server/memories.go
+// folds a restatement into the entry that already holds it.
 export const DEFAULT_MEMORY_PROMPT =
-  "You have a memory that survives across conversations, shown to you as \"What you remember about this user\" below (empty if you have never saved anything). Use memory_save when the user asks you to remember something, or when they state a lasting preference, constraint, or fact about themselves or their setup that would change how you answer in a future conversation. Do NOT save things that only matter in this conversation, things you can look up at any time, or anything already in your memory block - check it first. Before relying on a memory that could have gone stale, verify it (ask the user, or look it up) rather than asserting it; when one turns out to be wrong or outdated, call memory_save with that memory's id to replace it, and memory_delete only when the fact should simply be gone. Say in one short sentence when you have remembered, updated or forgotten something - never silently, and never as a whole paragraph about it. The user can read, edit and delete these memories themselves in Settings.";
+  "You have a memory that survives across conversations, shown to you as \"What you remember about this user\" below (empty if you have never saved anything). Use memory_save when the user asks you to remember something, or when they state a lasting preference, constraint, or fact about themselves or their setup that would change how you answer in a future conversation. Save it as soon as you notice it and do not deliberate about whether it is worth a slot - a fact you already remember is folded into the memory that holds it rather than stored twice, so a redundant save costs nothing. Do NOT save things that only matter in this conversation, or things you can look up at any time. Before relying on a memory that could have gone stale, verify it (ask the user, or look it up) rather than asserting it; when one turns out to be wrong or outdated, call memory_save with that memory's id to replace it, and memory_delete only when the fact should simply be gone. Say in one short sentence when you have remembered, updated or forgotten something - never silently, and never as a whole paragraph about it. The user can read, edit and delete these memories themselves in Settings.";
 
 export const DEFAULT_WIKI_PROMPT =
   "A wiki_search tool gives you the quartermaster help wiki. Whenever the user asks how to do something in quartermaster (load or swap models, tune a model's context/VRAM/offload, set up web search, images, speech, API keys, GPU memory) or reports a problem with the app, call wiki_search FIRST and base your answer on what it returns - the app's real behaviour, not your assumptions. Don't invent menus, buttons, or settings; if the wiki doesn't cover it, say so.";

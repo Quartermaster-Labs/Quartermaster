@@ -16,6 +16,10 @@ import (
 // every conversation to fetch text that is already there — and would only fire
 // when the model remembered to call it, which is exactly the failure the whole
 // feature exists to avoid.
+//
+// Nor is there a "check before you save" rule anywhere in the prompt: duplicates
+// are resolved by the store (upsertMemory), not by asking the model to audit its
+// own block first. See the package comment in memories.go.
 
 // dispatchMemory runs one memory tool call, returning (displayLabel, resultText).
 // The label is what the chat card shows, so it is the fact (or its id), not the
@@ -33,9 +37,10 @@ func (tm *turnManager) dispatchMemory(at *activeTurn, tc toolCall) (string, stri
 	return "memory", "Unknown memory tool."
 }
 
-// memorySave upserts one memory. An `id` updates that entry (the model is
-// expected to reuse an id it was given rather than accumulate near-duplicates);
-// no id creates one.
+// memorySave upserts one memory. An `id` updates that entry; without one the
+// store deduplicates (memories.go), so an idless save may create, fold into an
+// existing entry, or do nothing at all. The result says which — a model told
+// "saved" over a no-op goes on to tell the user something that did not happen.
 func (tm *turnManager) memorySave(at *activeTurn, args string) (string, string) {
 	var a struct {
 		ID   string   `json:"id"`
@@ -45,8 +50,7 @@ func (tm *turnManager) memorySave(at *activeTurn, args string) (string, string) 
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
 		return "memory", "memory_save needs a JSON object like {\"text\":\"…\"} (optionally \"id\" to update an existing memory and \"tags\")."
 	}
-	updating := strings.TrimSpace(a.ID) != ""
-	out, err := tm.pg.upsertMemory(at.user, memoryEntry{
+	out, outcome, err := tm.pg.upsertMemory(at.user, memoryEntry{
 		ID:     strings.TrimSpace(a.ID),
 		Text:   a.Text,
 		Tags:   a.Tags,
@@ -55,16 +59,26 @@ func (tm *turnManager) memorySave(at *activeTurn, args string) (string, string) 
 	if err != nil {
 		return "memory", "Could not save this memory: " + err.Error()
 	}
+	// Nothing was written, so there is nothing to announce — and the block the
+	// model is looking at already contains the fact, which is why it matched.
+	if outcome == memoryDuplicate {
+		return memoryLabel(out.Text), fmt.Sprintf(
+			"You already remember this, as memory %s: %s\n\nNothing was written and nothing changed. Do NOT tell the user you have just remembered it - if it is worth mentioning at all, say you already knew.",
+			out.ID, out.Text)
+	}
 	verb := "Saved"
-	if updating {
+	switch outcome {
+	case memoryUpdated:
 		verb = "Updated"
+	case memoryMerged:
+		verb = "Folded into an existing, near-identical"
 	}
 	// The id is echoed because it is the only handle the model has for a later
 	// correction, and the reminder about the next turn is load-bearing: the
 	// injected block was rendered before this call, so the fact is NOT in the
 	// prompt yet and a model that re-reads the block will think the save failed.
 	return memoryLabel(out.Text), fmt.Sprintf(
-		"%s memory %s: %s\n\nIt is stored now and will be in your memory block from the user's next message onward (not in the one you were given this turn). Tell the user plainly that you have remembered it.",
+		"%s memory %s, which now reads: %s\n\nIt is stored now and will be in your memory block from the user's next message onward (not in the one you were given this turn). Tell the user plainly that you have remembered it.",
 		verb, out.ID, out.Text)
 }
 

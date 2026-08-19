@@ -9,6 +9,11 @@ import type { ToolDef } from "./types";
 // prefix of every conversation and still only fire when the model thought to call
 // it — which is the exact failure memory exists to prevent. The write tools below
 // are the only memory surface the model gets.
+//
+// Duplicates are the STORE's problem, not the model's: internal/server/memories.go
+// folds a restatement into the entry that already exists, so nothing here asks the
+// model to audit its own block before saving. The block is rendered append-only
+// (see memoryBlock) so an ordinary save changes bytes only at its tail.
 export type MemoryEntry = {
   id: string;
   text: string;
@@ -27,14 +32,20 @@ export const MEMORY_BLOCK_LIMIT = 8000;
 // because that id is the only handle memory_save/memory_delete have for editing
 // an existing entry. Returns "" when there is nothing to inject, so an empty
 // memory adds no prefix at all.
+//
+// Two orders, deliberately. The BUDGET is spent newest-updated first, so a block
+// that has to be cut loses its stalest facts. The RENDER order is by creation,
+// oldest first, which makes the block append-only: a new memory lands at the end
+// and every line above it stays byte-identical. Sorting the output by recency
+// instead reshuffles the whole block on every write, moving the point where the
+// prompt diverges from the KV cache up to line one for a one-line change.
 export function memoryBlock(mems: MemoryEntry[]): string {
   if (!mems.length) return "";
-  // Newest first: if the block has to be cut, the cut falls on the stalest facts.
-  const sorted = [...mems].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  const lines: string[] = [];
+  const byRecency = [...mems].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const kept: MemoryEntry[] = [];
   let used = 0;
   let dropped = 0;
-  for (const m of sorted) {
+  for (const m of byRecency) {
     const text = (m.text || "").trim();
     if (!text) continue;
     const line = `- [${m.id}] ${text.replace(/\n+/g, " ")}`;
@@ -43,9 +54,13 @@ export function memoryBlock(mems: MemoryEntry[]): string {
       continue;
     }
     used += line.length + 1;
-    lines.push(line);
+    kept.push(m);
   }
-  if (!lines.length) return "";
+  if (!kept.length) return "";
+  // createdAt is unix SECONDS, so two memories saved in the same second tie —
+  // break on id to keep the order deterministic across renders.
+  kept.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.id.localeCompare(b.id));
+  const lines = kept.map((m) => `- [${m.id}] ${(m.text || "").trim().replace(/\n+/g, " ")}`);
   const tail = dropped
     ? `\n(${dropped} older ${dropped === 1 ? "memory is" : "memories are"} not shown here - say so if the answer depends on something you might be missing.)`
     : "";
@@ -57,7 +72,7 @@ export const MEMORY_SAVE_TOOL: ToolDef = {
   function: {
     name: "memory_save",
     description:
-      "Remember one durable fact about this user across conversations. Save when the user asks you to remember something, or when they state a lasting preference, constraint or detail about themselves or their setup that would change your answers later. Do NOT save: anything only relevant to this conversation, anything you can look up (their config - use quartermaster_inspect), or something already in your memory block. If a memory in that block is now wrong or outdated, pass its `id` to REPLACE it rather than saving a second, conflicting version. One fact per call, written in the third person about the user, self-contained enough to make sense with no conversation around it.",
+      "Remember one durable fact about this user across conversations. Save when the user asks you to remember something, or when they state a lasting preference, constraint or detail about themselves or their setup that would change your answers later. Save it the moment you see it - you do not need to check your memory block first, because a fact you already know is folded into the entry that holds it rather than stored twice. Do NOT save anything only relevant to this conversation, or anything you can look up (their config - use quartermaster_inspect). If a memory in your block is now wrong or outdated, pass its `id` to REPLACE it rather than saving a second, conflicting version. One fact per call, written in the third person about the user, self-contained enough to make sense with no conversation around it.",
     parameters: {
       type: "object",
       properties: {
