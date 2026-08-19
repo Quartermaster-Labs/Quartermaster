@@ -586,6 +586,7 @@ func (s *FIFO) drainQueue() {
 		}
 		if sw, ok := s.active[req.Model]; ok {
 			s.logger.Debugf("%s: queued request for model %s now joining in-flight swap", s.name, req.Model)
+			notifyPosition(req, 0)
 			sw.waiters = append(sw.waiters, req)
 			continue
 		}
@@ -593,6 +594,7 @@ func (s *FIFO) drainQueue() {
 		evict := s.planner.EvictionFor(req.Model, running)
 		if state == process.StateReady && len(evict) == 0 && !collidesWith(req.Model, evict, s.active) {
 			s.logger.Debugf("%s: queued request for model %s now served fast-path", s.name, req.Model)
+			notifyPosition(req, 0)
 			s.grantHandler(req, req.Model)
 			continue
 		}
@@ -614,6 +616,7 @@ func (s *FIFO) drainQueue() {
 			continue
 		}
 		s.logger.Debugf("%s: queued request for model %s now starting swap, evicting %v", s.name, req.Model, evict)
+		notifyPosition(req, 0)
 		s.startSwap(req, evict, running)
 	}
 	s.queued = remaining
@@ -772,22 +775,32 @@ func containsString(xs []string, s string) bool {
 }
 
 // broadcastQueuePositions sends each queued request its current 1-indexed
-// position. Sends are non-blocking: if the channel is full, the old value is
-// drained first so the consumer always sees the latest position.
+// position.
 func broadcastQueuePositions(queued []HandlerReq) {
 	for i, req := range queued {
-		pos := i + 1
+		notifyPosition(req, i+1)
+	}
+}
+
+// notifyPosition tells one request where it stands: a 1-indexed queue position,
+// or 0 for "no longer queued" -- promoted into a swap, or served outright. The
+// zero matters as much as the positions do: it is the only signal that the wait
+// stopped being a wait for a turn and became a model load, and the caller
+// (loadingWriter) narrates those two differently.
+//
+// Sends are non-blocking: if the channel is full, the old value is drained
+// first so the consumer always sees the latest position.
+func notifyPosition(req HandlerReq, pos int) {
+	select {
+	case req.PositionCh <- pos:
+	default:
+		select {
+		case <-req.PositionCh:
+		default:
+		}
 		select {
 		case req.PositionCh <- pos:
 		default:
-			select {
-			case <-req.PositionCh:
-			default:
-			}
-			select {
-			case req.PositionCh <- pos:
-			default:
-			}
 		}
 	}
 }

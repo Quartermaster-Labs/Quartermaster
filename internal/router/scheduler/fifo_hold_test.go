@@ -192,3 +192,30 @@ func TestFIFO_HoldDisabledByConfig(t *testing.T) {
 		t.Fatalf("StartSwap(b)=%d want 1 with holds disabled", got)
 	}
 }
+
+// A queued request is told its position, and told 0 when it leaves the queue.
+// The zero is the whole point: it is the only signal that the wait stopped
+// being a wait for a turn and became a model load, which is what the playground
+// renders as "Waiting its turn" versus "Loading model".
+func TestFIFO_PositionZeroOnPromotion(t *testing.T) {
+	eff := newFakeEffects()
+	eff.states["a"] = process.StateReady
+	eff.states["b"] = process.StateStopped
+	s := holdFIFO(&stubPlanner{evict: map[string][]string{"b": {"a"}}}, eff)
+
+	s.OnRequest(req("a"))
+	s.OnServeDone(ServeDoneEvent{ModelID: "a"})
+
+	r := req("b")
+	r.PositionCh = make(chan int, 1)
+	s.OnRequest(r) // queued behind a's hold
+	if got := <-r.PositionCh; got != 1 {
+		t.Fatalf("position=%d want 1 while queued", got)
+	}
+
+	expire(s, "a")
+	s.OnWake()
+	if got := <-r.PositionCh; got != 0 {
+		t.Fatalf("position=%d want 0 once promoted into the swap", got)
+	}
+}

@@ -16,7 +16,7 @@ A deep developer tutorial lives in `design.md` (same directory) — read it for 
 | `matrix.go` | `Matrix` router + `matrixSwapper` — eviction via the cost-based set solver. |
 | `matrix_solver.go` | `matrixSolver` — pure, lock-free set/cost solver (no process deps) used by `matrixSwapper`. |
 | `peer.go` | `Peer` router — pure reverse proxy to remote hosts; no local processes, no scheduler. |
-| `loading.go` | `loadingWriter` — streams an SSE "loading model…" placeholder to the client while a swap is in flight, as SSE **comment** frames (`: text`) so no conforming client can mistake it for model output. |
+| `loading.go` | `loadingWriter` — streams an SSE "loading model…" placeholder to the client while a swap is in flight, as SSE **comment** frames (`: text`) so no conforming client can mistake it for model output. One of those comments, `: qm-status: …`, is machine-readable (see the wait-status frame below). |
 | `loading_remarks.go` | Static list of whimsical loading-status remarks for `loadingWriter`. |
 | `scheduler/scheduler.go` | The three interfaces (`Scheduler`, `Swapper`, `Effects`), the event types (`HandlerReq`, `HandlerResp`, `SwapDone`, `ServeDoneEvent`), and `New()` (selects scheduler by config; only `fifo` today). |
 | `scheduler/fifo.go` | `FIFO` — the default and only `Scheduler`: queue, in-flight tracking, the request decision tree, and the idle-grace hold. |
@@ -58,6 +58,17 @@ time, because `ServeDoneEvent` carries only a model ID while the window is a pro
 *request* that asked for it. Holds are released outright when the model actually stops
 (`releaseHold` from `OnSwapDone`'s evict set and `OnUnload`) — protecting a process that no longer
 exists would keep a queued request waiting for nothing.
+
+**The wait-status frame.** A client waiting on a silent stream cannot tell *which* wait it is in:
+its model is loading, or its model is fine and another model is holding the GPU. Only the scheduler
+knows, so `loadingWriter.setStatus` publishes it as `: qm-status: waiting <pos>` / `: qm-status:
+loading` — still an SSE comment, invisible to every client that does not opt in, and sent
+immediately rather than through the narration ticker. The state comes from `PositionCh`: a 1-indexed
+position means queued, and **0 means promoted out of the queue** (`notifyPosition`, sent from each of
+`drainQueue`'s promotion paths). The playground reads it and shows "Waiting its turn"
+(`streamSSE`/`streamRound` in `internal/server/turns.go`); it only appears when the loading
+placeholder runs at all, so a request queued for a model that is *already resident* (concurrency
+limit) still waits silently.
 
 **`Effects.Wake` / `Scheduler.OnWake`.** A hold expiring is the only decision the scheduler makes on
 a *wall clock* rather than on an event that arrives by itself. `Wake(d)` arms a timer on the

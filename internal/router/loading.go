@@ -48,6 +48,11 @@ type loadingWriter struct {
 	pendingMu     sync.Mutex
 	pendingUpdate string
 
+	// statusMu guards the last status sent, so an unchanged one is not resent
+	// on every queue broadcast.
+	statusMu   sync.Mutex
+	lastStatus string
+
 	// writeMu serializes writes to the underlying writer and guards released.
 	// Once released is set, the streaming goroutine must not touch the writer
 	// again — ServeHTTP has reclaimed it (to run the real handler or to return)
@@ -80,7 +85,34 @@ func newLoadingWriter(logger *logmon.Monitor, modelName string, w http.ResponseW
 	s.Header().Set("Connection", "keep-alive")
 	s.WriteHeader(http.StatusOK)
 	s.sendComment(fmt.Sprintf("quartermaster loading model: %s", modelName))
+	// Loading until told otherwise: this writer only exists because the model
+	// was not ready, and a request that turns out to be queued learns so from
+	// its first position broadcast, a moment later.
+	s.setStatus("loading")
 	return s
+}
+
+// statusPrefix marks the one comment frame in this stream that is meant to be
+// PARSED rather than read. Everything else here is narration for a human
+// reading a curl -N; this tells a client which of the two waits it is in --
+// queued behind another model's turn, or watching its own model load -- so it
+// can say so instead of guessing. Still a comment, so it stays invisible to
+// every client that does not opt in.
+const statusPrefix = "qm-status: "
+
+// setStatus publishes a machine-readable wait state ("waiting 2", "loading").
+// Sent immediately rather than through pendingUpdate: the tick loop paces
+// narration, and a status the client renders should not wait its own turn
+// behind a whimsical remark. Deduped, because queue broadcasts repeat.
+func (s *loadingWriter) setStatus(status string) {
+	s.statusMu.Lock()
+	unchanged := s.lastStatus == status
+	s.lastStatus = status
+	s.statusMu.Unlock()
+	if unchanged {
+		return
+	}
+	s.sendComment(statusPrefix + status)
 }
 
 func (s *loadingWriter) setUpdate(msg string) {

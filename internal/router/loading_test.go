@@ -274,3 +274,32 @@ func extractComments(body string) string {
 	}
 	return result.String()
 }
+
+// The status frame is the one comment a client is meant to parse: it separates
+// "queued behind another model" from "your model is loading", which look
+// identical from the far end of a silent stream.
+func TestLoadingWriter_StatusFrames(t *testing.T) {
+	logger := logmon.NewWriter(io.Discard)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	lw := newLoadingWriter(logger, "test-model", w, req)
+	if got := strings.Count(w.Body.String(), ": "+statusPrefix+"loading\n"); got != 1 {
+		t.Fatalf("initial status frames = %d, want 1", got)
+	}
+
+	lw.setStatus("waiting 2")
+	lw.setStatus("waiting 2") // a repeated queue broadcast must not resend
+	if got := strings.Count(w.Body.String(), ": "+statusPrefix+"waiting 2\n"); got != 1 {
+		t.Errorf("waiting frames = %d, want 1 (deduped)", got)
+	}
+
+	lw.setStatus("loading")
+	if got := strings.Count(w.Body.String(), ": "+statusPrefix+"loading\n"); got != 2 {
+		t.Errorf("loading frames = %d, want 2 (the promotion is a change)", got)
+	}
+	// Still comments: nothing here may reach an OpenAI client as output.
+	if strings.Contains(w.Body.String(), "data:") {
+		t.Error("status frames must never be data frames")
+	}
+}

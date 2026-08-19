@@ -1327,8 +1327,34 @@ func (tm *turnManager) streamRound(ctx context.Context, at *activeTurn, start tu
 			lastFlush = now
 		}
 	}
+	// Two very different silences look identical from here: the model is
+	// loading, or the model is fine and another caller has it. The UI already
+	// says "Loading model…" for the first (it knows residency), so only the
+	// second needs a label -- and it is the one worth explaining, because
+	// nothing about the turn is wrong and the answer is not lost.
+	waiting := false
+	onStatus := func(state string, pos int) {
+		if state == "waiting" {
+			label := "Waiting its turn"
+			if pos > 1 {
+				label = fmt.Sprintf("%s (#%d)", label, pos)
+			}
+			at.setBusy(label)
+			waiting = true
+			return
+		}
+		// Loading, or the first token: clear OUR label only. A tool's busy
+		// label can already be up by the time a later round waits again.
+		if waiting {
+			at.setBusy("")
+			waiting = false
+		}
+	}
 
-	finish, err := tm.streamSSE(ctx, body, start.ChatID, at.authKey, onContent, onReasoning, onTool, onProgress)
+	finish, err := tm.streamSSE(ctx, body, start.ChatID, at.authKey, onContent, onReasoning, onTool, onProgress, onStatus)
+	if waiting {
+		at.setBusy("")
+	}
 	if err != nil {
 		return "", "", nil, "", err
 	}
@@ -1351,8 +1377,13 @@ const (
 
 // streamSSE POSTs a streamed chat completion to quartermaster's own inference
 // loopback and dispatches each delta to the callbacks. onReasoning/onTool/
-// onProgress may be nil. Returns the finish_reason.
-func (tm *turnManager) streamSSE(ctx context.Context, body map[string]any, chatID, authKey string, onContent func(string), onReasoning func(string), onTool func(int, string, string, string), onProgress func()) (string, error) {
+// onProgress/onStatus may be nil. Returns the finish_reason.
+//
+// onStatus reports the router's pre-stream wait (see loadingWriter): it is the
+// one SSE *comment* frame this loop reads instead of dropping, and it is called
+// with an empty state the moment real data arrives, since a first token ends
+// every wait by definition.
+func (tm *turnManager) streamSSE(ctx context.Context, body map[string]any, chatID, authKey string, onContent func(string), onReasoning func(string), onTool func(int, string, string, string), onProgress func(), onStatus func(string, int)) (string, error) {
 	buf, _ := json.Marshal(body)
 	url := strings.TrimRight(tm.pg.SelfBase, "/") + "/v1/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(buf))
@@ -1392,10 +1423,19 @@ func (tm *turnManager) streamSSE(ctx context.Context, body map[string]any, chatI
 	finish := ""
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	sawData := false
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if !strings.HasPrefix(line, "data:") {
+			if onStatus != nil && strings.HasPrefix(line, ": "+routerStatusPrefix) {
+				state, pos := parseWaitStatus(strings.TrimPrefix(line, ": "+routerStatusPrefix))
+				onStatus(state, pos)
+			}
 			continue
+		}
+		if !sawData && onStatus != nil {
+			sawData = true
+			onStatus("", 0)
 		}
 		data := strings.TrimSpace(line[5:])
 		if data == "[DONE]" {
@@ -1443,6 +1483,21 @@ func (tm *turnManager) streamSSE(ctx context.Context, body map[string]any, chatI
 		}
 	}
 	return finish, sc.Err()
+}
+
+// routerStatusPrefix marks the router's machine-readable wait frame. Kept as a
+// literal rather than imported from internal/router: this travels over the
+// loopback as SSE text, so the two ends are coupled by the wire format, not by
+// the Go symbol -- and the server must not start depending on the router's
+// unexported internals to read its own HTTP.
+const routerStatusPrefix = "qm-status: "
+
+// parseWaitStatus splits "waiting 2" / "loading" into a state and a 1-indexed
+// queue position (0 when it carries none).
+func parseWaitStatus(s string) (string, int) {
+	state, rest, _ := strings.Cut(strings.TrimSpace(s), " ")
+	pos, _ := strconv.Atoi(strings.TrimSpace(rest))
+	return state, pos
 }
 
 // --- small helpers --------------------------------------------------------

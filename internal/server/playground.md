@@ -92,6 +92,19 @@ list, `titlegenMopupBudget` (2.5s); spans it doesn't reach keep the UI's local h
   watching this answer arrive, so it waits much less behind a background agent's hold than an
   unattended API client would.
 
+### The "Waiting its turn" label
+
+The router narrates a pre-stream wait in SSE comment frames, and `streamSSE` reads exactly one of
+them: `: qm-status: waiting <pos>` / `: qm-status: loading` (see
+[`../router/CLAUDE.md`](../router/CLAUDE.md)). `waiting` raises the ordinary busy label —
+"Waiting its turn", plus `(#N)` when something else is queued ahead — so the user sees that nothing
+is wrong and the answer is not lost, only behind another model. `loading` clears it again, because
+the UI already says "Loading model…" from its own residency signal, and the first `data:` frame
+clears it unconditionally: a token ends every wait by definition.
+
+The clear is scoped to the label this round raised (`waiting` in `streamRound`), never a blanket
+`setBusy("")` — a tool's own label can be up by the time a later round waits again.
+
 ## `titlegen.go` — the title model
 
 One-line titles for collapsed reasoning boxes ("Thought for 2s · Weighing the two quant options").

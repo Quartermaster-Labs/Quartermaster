@@ -755,7 +755,14 @@ func (b *baseRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			for {
 				select {
 				case pos := <-hr.PositionCh:
-					lw.setUpdate(fmt.Sprintf("Queue position: #%d", pos))
+					if pos > 0 {
+						lw.setStatus(fmt.Sprintf("waiting %d", pos))
+						lw.setUpdate(fmt.Sprintf("Queue position: #%d", pos))
+					} else {
+						// Out of the queue: whatever this request is still
+						// waiting for, it is its own load now.
+						lw.setStatus("loading")
+					}
 				case <-swapCtx.Done():
 					return
 				}
