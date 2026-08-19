@@ -16,7 +16,7 @@ A deep developer tutorial lives in `design.md` (same directory) — read it for 
 | `matrix.go` | `Matrix` router + `matrixSwapper` — eviction via the cost-based set solver. |
 | `matrix_solver.go` | `matrixSolver` — pure, lock-free set/cost solver (no process deps) used by `matrixSwapper`. |
 | `peer.go` | `Peer` router — pure reverse proxy to remote hosts; no local processes, no scheduler. |
-| `loading.go` | `loadingWriter` — streams an SSE "loading model…" placeholder to the client while a swap is in flight. |
+| `loading.go` | `loadingWriter` — streams an SSE "loading model…" placeholder to the client while a swap is in flight, as SSE **comment** frames (`: text`) so no conforming client can mistake it for model output. |
 | `loading_remarks.go` | Static list of whimsical loading-status remarks for `loadingWriter`. |
 | `scheduler/scheduler.go` | The three interfaces (`Scheduler`, `Swapper`, `Effects`), the event types (`HandlerReq`, `HandlerResp`, `SwapDone`, `ServeDoneEvent`), and `New()` (selects scheduler by config; only `fifo` today). |
 | `scheduler/fifo.go` | `FIFO` — the default and only `Scheduler`: queue, in-flight tracking, and the request decision tree. |
@@ -50,6 +50,16 @@ The **eviction policy** is decoupled from scheduling. `groupSwapper` (`group.go`
 - **`Swapper.EvictionFor` must be pure** — no logging, no mutation, called many times per request (once per request and again for every queued request on each drain). Log only in `OnSwapStart`, which fires exactly once per real swap.
 - **The `GrantServe` boolean contract.** The caller's `Respond` channel is unbuffered, so a successful send proves the caller is still there and took the handler. Only increment `inFlight` when `GrantServe` returns true — a false return means the caller left, no `ServeDoneEvent` will arrive, and incrementing would strand the counter and permanently block future evictions.
 - **Two contexts in `baseRouter`.** `shutdownCtx` governs request machinery (stop granting / reject callers); `procCtx` governs process lifetime and is cancelled only *after* graceful `Stop()` reaps children. Don't conflate them.
+- **The loading placeholder must never emit `data:`.** It exists to hold the connection open
+  while a model loads; SSE comments do that and every conforming parser drops them. It used to send
+  synthetic `reasoning_content` deltas, which prepended fabricated reasoning to the assistant
+  message and carried none of the chunk fields a strict client expects. Progress goes beside the
+  stream, not inside it.
+- **`ServeHTTP` snapshots residency before queuing.** `isModelReady` is read *before* the request
+  goes to `handlerCh` — after that the run loop can load the model out from under the read. It
+  feeds both the loading placeholder and the `X-QM-Model-Loaded` header, which report the state the
+  request arrived to. `X-QM-Model`/`X-QM-Model-Loaded` are set before the placeholder flushes the
+  header; `X-QM-Wait-Ms` is set at grant time, so it lands only when no placeholder ran.
 - **`Peer` is the odd one out** — it has no scheduler, no processes, and no `run()` loop; it is a plain reverse proxy and only implements `Router`, not `LocalRouter`.
 
 ## Connections

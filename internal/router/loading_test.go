@@ -3,7 +3,6 @@ package router
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -32,16 +31,13 @@ func TestLoadingWriter_SSEHeadersAndInitialMessage(t *testing.T) {
 	}
 
 	body := w.Body.String()
-	if !strings.HasPrefix(body, "data: ") {
-		t.Errorf("expected SSE data: prefix, got: %s", body)
+	if !strings.HasPrefix(body, ": ") {
+		t.Errorf("expected SSE comment prefix, got: %s", body)
 	}
 
-	content := extractStreamedContent(body)
-	if !strings.Contains(content, "━━━━━\n") {
-		t.Errorf("missing separator in streamed content: %q", content)
-	}
-	if !strings.Contains(content, "quartermaster loading model: test-model\n") {
-		t.Errorf("missing initial message in streamed content: %q", content)
+	content := extractComments(body)
+	if !strings.Contains(content, "quartermaster loading model: test-model") {
+		t.Errorf("missing initial message in streamed comments: %q", content)
 	}
 }
 
@@ -93,8 +89,8 @@ func TestLoadingWriter_StartStopsOnCancel(t *testing.T) {
 	}
 
 	body := w.Body.String()
-	if !strings.Contains(body, "Done!") {
-		t.Errorf("expected Done! message, body: %s", body)
+	if !strings.Contains(body, "model ready") {
+		t.Errorf("expected ready message, body: %s", body)
 	}
 }
 
@@ -105,7 +101,6 @@ func TestLoadingWriter_StartShowsSetUpdate(t *testing.T) {
 
 	lw := newLoadingWriter(logger, "test-model", w, req)
 	lw.tickDuration = 10 * time.Millisecond
-	lw.charPerSecond = 0
 	lw.loopStarted = make(chan struct{})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -121,46 +116,77 @@ func TestLoadingWriter_StartShowsSetUpdate(t *testing.T) {
 	}
 
 	body := w.Body.String()
-	content := extractStreamedContent(body)
+	content := extractComments(body)
 	if !strings.Contains(content, "custom status message") {
 		t.Errorf("expected setUpdate message in output, got: %q", content)
 	}
 }
 
-func TestLoadingWriter_SendDataFormat(t *testing.T) {
+func TestLoadingWriter_SendCommentFormat(t *testing.T) {
 	logger := logmon.NewWriter(io.Discard)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
 	lw := newLoadingWriter(logger, "test-model", w, req)
-	lw.sendData("hello world")
 
-	body := w.Body.String()
-	if !strings.Contains(body, `"reasoning_content":"hello world"`) {
-		t.Errorf("expected reasoning_content in SSE data, body: %s", body)
-	}
-	if !strings.HasPrefix(body, "data: ") {
-		t.Errorf("expected data: prefix, got: %s", body)
+	before := w.Body.Len()
+	lw.sendComment("hello world")
+	frame := w.Body.String()[before:]
+
+	if frame != ": hello world\n\n" {
+		t.Errorf("comment frame: want %q, got %q", ": hello world\n\n", frame)
 	}
 }
 
-func TestLoadingWriter_SendLine(t *testing.T) {
+// A comment ends at its first newline, so an embedded one would turn the rest
+// of the text into an unintended SSE field.
+func TestLoadingWriter_SendCommentFlattensNewlines(t *testing.T) {
 	logger := logmon.NewWriter(io.Discard)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
 	lw := newLoadingWriter(logger, "test-model", w, req)
-	lw.charPerSecond = 0
 
-	// Capture only the content from this sendLine call
 	before := w.Body.Len()
-	lw.sendLine("line content")
-	after := w.Body.Len()
-	chunkBody := w.Body.String()[before:after]
+	lw.sendComment("line one\nline two\r\nline three")
+	frame := w.Body.String()[before:]
 
-	content := extractStreamedContent(chunkBody)
-	if content != "line content\n" {
-		t.Errorf("expected complete streamed line, got: %q", content)
+	if frame != ": line one line two  line three\n\n" {
+		t.Errorf("newlines not flattened, got %q", frame)
+	}
+}
+
+// The load placeholder must never reach the client as model output: everything
+// it emits is a comment, so a conforming SSE parser drops all of it.
+func TestLoadingWriter_NeverEmitsDataFrames(t *testing.T) {
+	logger := logmon.NewWriter(io.Discard)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	lw := newLoadingWriter(logger, "test-model", w, req)
+	lw.tickDuration = 5 * time.Millisecond
+	lw.loopStarted = make(chan struct{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go lw.start(ctx)
+	<-lw.loopStarted
+	lw.setUpdate("Queue position: #2")
+	time.Sleep(60 * time.Millisecond)
+	cancel()
+
+	if !lw.waitForCompletion(time.Second) {
+		t.Fatal("waitForCompletion timed out")
+	}
+
+	scanner := bufio.NewScanner(strings.NewReader(w.Body.String()))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, ":") {
+			t.Fatalf("non-comment line in loading stream: %q", line)
+		}
 	}
 }
 
@@ -171,7 +197,6 @@ func TestLoadingWriter_FlushesPeriodicallyDuringStatusUpdates(t *testing.T) {
 
 	lw := newLoadingWriter(logger, "test-model", w, req)
 	lw.tickDuration = 10 * time.Millisecond
-	lw.charPerSecond = 0
 	lw.loopStarted = make(chan struct{})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -187,9 +212,8 @@ func TestLoadingWriter_FlushesPeriodicallyDuringStatusUpdates(t *testing.T) {
 	<-done
 
 	body := w.Body.String()
-	lines := countSSEMessages(body)
-	if lines < 2 {
-		t.Errorf("expected multiple SSE messages from periodic updates, got %d", lines)
+	if got := countSSEMessages(body); got < 2 {
+		t.Errorf("expected multiple SSE messages from periodic updates, got %d", got)
 	}
 }
 
@@ -230,36 +254,23 @@ func countSSEMessages(s string) int {
 	scanner := bufio.NewScanner(strings.NewReader(s))
 	count := 0
 	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "data: ") {
+		if strings.HasPrefix(scanner.Text(), ":") {
 			count++
 		}
 	}
 	return count
 }
 
-func extractStreamedContent(body string) string {
+func extractComments(body string) string {
 	var result strings.Builder
 	scanner := bufio.NewScanner(strings.NewReader(body))
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+		if !strings.HasPrefix(line, ":") {
 			continue
 		}
-		jsonData := strings.TrimPrefix(line, "data: ")
-		var msg struct {
-			Choices []struct {
-				Delta struct {
-					ReasoningContent string `json:"reasoning_content"`
-				} `json:"delta"`
-			} `json:"choices"`
-		}
-		if err := json.Unmarshal([]byte(jsonData), &msg); err != nil {
-			continue
-		}
-		if len(msg.Choices) > 0 {
-			result.WriteString(msg.Choices[0].Delta.ReasoningContent)
-		}
+		result.WriteString(strings.TrimPrefix(strings.TrimPrefix(line, ":"), " "))
+		result.WriteString("\n")
 	}
 	return result.String()
 }

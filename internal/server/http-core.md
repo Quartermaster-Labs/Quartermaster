@@ -24,6 +24,7 @@ listed in [`routes.md`](routes.md).
 | `log.go` | Logger construction (`NewLoggers`), `/logs` + `/logs/stream` handlers, access-log middleware, `statusRecorder` (status/size capture + Flush/Hijack passthrough). |
 | `metrics.go` | `metricsMonitor` (token-usage parsing, bounded ring buffer, capture storage) and `responseBodyCopier` (tees the upstream response for metrics while streaming to the client). |
 | `metrics_middleware.go` | Middleware that resolves the model, buffers request body/headers for capture, restricts `Accept-Encoding`, tees the response, and records metrics after dispatch. |
+| `usagedetails.go` | Fork: fills the standard OpenAI usage detail fields llama-server only reports in its own `timings` (`prompt_tokens_details.cached_tokens`) or not at all (`completion_tokens_details.reasoning_tokens`, estimated — see below). |
 | `captures.go` | Request/response capture storage: per-route field masks, zstd+CBOR (de)compression, header redaction. |
 | `livemetrics.go` | Fork: `liveTokenCounter` — scans streaming SSE chunks and emits throttled `LiveTokensEvent`s for a live tokens/sec readout. |
 | `backendmetrics.go` | Fork: `backendMetricsMonitor` — polls each running llama-server's `/metrics`+`/slots` on a 2s ticker for KV-fill / slot-saturation / throughput gauges, **skipped while busy** (both share llama-server's inference task queue; `RequestsProcessing` comes from quartermaster's own in-flight counter instead). `/props` is fetched once per process lifetime (static). Caches per-model, emits `BackendMetricsEvent` over SSE; `GET /api/backend-metrics` snapshot. |
@@ -92,6 +93,18 @@ listed in [`routes.md`](routes.md).
   body stays parseable, and wraps the writer in `responseBodyCopier`. Both `responseBodyCopier` and
   `statusRecorder` forward `Flush`/`Hijack` so SSE and websocket upgrades keep working. Captures are
   off unless `CaptureBuffer > 0`.
+- **Usage-detail enrichment only ever adds.** `CreateUsageDetailsMiddleware` sits inside the
+  metrics tee and rewrites the outgoing usage object: `cached_tokens` from `timings.cache_n` (real)
+  and `reasoning_tokens` from the output-token count split by reasoning-vs-content text length
+  (an estimate, always written with a `reasoning_tokens_estimated: true` sibling — never emit one
+  without the other). A field the upstream already reported is left alone. Everything else degrades
+  to a byte-identical passthrough: non-200, compressed, non-JSON/SSE, unparseable. Single-shot JSON
+  is withheld until the handler returns so `Content-Length` can be corrected; SSE is rewritten
+  frame by frame (the usage chunk is last, so the text split is complete by then).
+- **`X-QM-*` response headers** (`router/base.go`): `X-QM-Model`, `X-QM-Model-Loaded` (did this
+  request pay for a load), `X-QM-Wait-Ms` (queue + load before dispatch). Set before the upstream
+  writes its header; invisible to OpenAI clients. Cross-origin browsers cannot read them without an
+  `Access-Control-Expose-Headers`, which is deliberately not set.
 - **Reload is in-place (`Server.ApplyConfig`).** The ONE long-lived `Server` (SSE streams, metrics
   history, slotCache saved KV, goroutines, running processes) survives a config change — only the
   config pointer and the cfg-derived handler swap. `s.cfg`/`s.listenerModels` are `atomic.Pointer`s

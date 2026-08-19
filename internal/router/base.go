@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -658,10 +659,21 @@ func (b *baseRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	arrived := time.Now()
+
 	data, err := shared.FetchContext(req, b.cfg())
 	if err != nil {
 		shared.SendError(w, req, err)
 		return
+	}
+
+	// Snapshot residency before the request is handed to the scheduler: once it
+	// is queued the run loop can load the model out from under this read, and
+	// both the loading placeholder and the X-QM-Model-Loaded header want to
+	// know the state this request arrived to, not the state it caused.
+	isModelReady := false
+	if p, ok := b.procs()[data.ModelID]; ok {
+		isModelReady = p.State() == process.StateReady
 	}
 
 	hr := scheduler.HandlerReq{
@@ -683,11 +695,20 @@ func (b *baseRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	isModelReady := false
-	if p, ok := b.procs()[data.ModelID]; ok {
-		isModelReady = p.State() == process.StateReady
-	}
 	shouldShowLoading := data.Streaming && data.SendLoadingState && isLoadingPath(req.URL.Path) && !isModelReady
+
+	// Publish what only the scheduler knows, before anything can write the
+	// response header. X-QM-* is namespaced and additive: an OpenAI client
+	// never sees it, a client that wants to know why a request was slow can
+	// read it without parsing the body. The loading placeholder flushes the
+	// header itself, so the wait time below lands only when it is not running.
+	respHeader := w.Header()
+	respHeader.Set("X-QM-Model", data.ModelID)
+	if isModelReady {
+		respHeader.Set("X-QM-Model-Loaded", "0")
+	} else {
+		respHeader.Set("X-QM-Model-Loaded", "1")
+	}
 
 	var lw *loadingWriter
 	cancelLoad := func() {}
@@ -746,5 +767,9 @@ func (b *baseRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		shared.SendError(w, req, resp.Err)
 		return
 	}
+
+	// Queue time plus any model load: everything between arriving here and the
+	// upstream being handed the request.
+	respHeader.Set("X-QM-Wait-Ms", strconv.FormatInt(time.Since(arrived).Milliseconds(), 10))
 	resp.HandleFunc(w, req)
 }

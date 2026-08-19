@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -389,5 +390,32 @@ func TestBaseRouter_Shutdown_StopsAllProcesses(t *testing.T) {
 	// Second Shutdown should report already in progress.
 	if err := b.Shutdown(0); err == nil {
 		t.Errorf("second Shutdown returned nil, want error")
+	}
+}
+
+func TestBaseRouter_ProgressHeaders(t *testing.T) {
+	a := newFakeProcess("a")
+	a.autoReady = true
+
+	b := newTestBase(t, map[string]process.Process{"a": a}, &stubPlanner{})
+
+	// Cold: the request pays for the load, so it is reported as such.
+	w := httptest.NewRecorder()
+	b.ServeHTTP(w, newRequest("a"))
+	if got := w.Header().Get("X-QM-Model"); got != "a" {
+		t.Errorf("X-QM-Model=%q want %q", got, "a")
+	}
+	if got := w.Header().Get("X-QM-Model-Loaded"); got != "1" {
+		t.Errorf("cold X-QM-Model-Loaded=%q want 1", got)
+	}
+	if _, err := strconv.Atoi(w.Header().Get("X-QM-Wait-Ms")); err != nil {
+		t.Errorf("X-QM-Wait-Ms=%q not an integer: %v", w.Header().Get("X-QM-Wait-Ms"), err)
+	}
+
+	// Warm: the model is already resident, nothing was loaded.
+	w2 := httptest.NewRecorder()
+	b.ServeHTTP(w2, newRequest("a"))
+	if got := w2.Header().Get("X-QM-Model-Loaded"); got != "0" {
+		t.Errorf("warm X-QM-Model-Loaded=%q want 0", got)
 	}
 }

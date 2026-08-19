@@ -2,7 +2,6 @@ package router
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -26,6 +25,17 @@ func isLoadingPath(path string) bool {
 	return false
 }
 
+// loadingWriter keeps a streaming client's connection alive while its model
+// loads, and narrates the wait on the way.
+//
+// It narrates in SSE *comment* frames (`: text`), never in `data:` frames. The
+// connection is held open either way, but a comment is discarded by every
+// conforming SSE parser, so nothing this writer emits can reach a client as
+// model output. It used to send synthetic `reasoning_content` deltas: those
+// prepended fabricated reasoning to the assistant message and carried none of
+// the chunk fields (id/object/model/created) a strict client expects. Whatever
+// is added here stays a comment -- progress belongs beside the stream, not
+// inside it.
 type loadingWriter struct {
 	hasWritten bool
 	writer     http.ResponseWriter
@@ -52,28 +62,24 @@ type loadingWriter struct {
 	loopStarted chan struct{}
 	// test-only: override the 1s tick interval
 	tickDuration time.Duration
-	// test-only: override character streaming speed (0 = no delay)
-	charPerSecond float64
 }
 
 func newLoadingWriter(logger *logmon.Monitor, modelName string, w http.ResponseWriter, req *http.Request) *loadingWriter {
 	s := &loadingWriter{
-		writer:        w,
-		req:           req,
-		ctx:           req.Context(),
-		logger:        logger,
-		modelName:     modelName,
-		startTime:     time.Now(),
-		tickDuration:  750 * time.Millisecond,
-		charPerSecond: 75,
+		writer:       w,
+		req:          req,
+		ctx:          req.Context(),
+		logger:       logger,
+		modelName:    modelName,
+		startTime:    time.Now(),
+		tickDuration: 750 * time.Millisecond,
 	}
 
 	s.Header().Set("Content-Type", "text/event-stream")
 	s.Header().Set("Cache-Control", "no-cache")
 	s.Header().Set("Connection", "keep-alive")
 	s.WriteHeader(http.StatusOK)
-	s.sendLine("━━━━━")
-	s.sendLine(fmt.Sprintf("quartermaster loading model: %s", modelName))
+	s.sendComment(fmt.Sprintf("quartermaster loading model: %s", modelName))
 	return s
 }
 
@@ -94,10 +100,7 @@ func (s *loadingWriter) start(ctx context.Context) {
 			return
 		}
 		duration := time.Since(s.startTime)
-		s.sendData("\n")
-		s.sendLine(fmt.Sprintf("Done! (%.2fs)", duration.Seconds()))
-		s.sendLine("━━━━━")
-		s.sendLine(" ")
+		s.sendComment(fmt.Sprintf("model ready (%.2fs)", duration.Seconds()))
 	}()
 
 	remarks := make([]string, len(loadingRemarks))
@@ -128,21 +131,19 @@ func (s *loadingWriter) start(ctx context.Context) {
 			s.pendingMu.Unlock()
 
 			if update != "" {
-				s.sendData("\n")
-				s.sendInline(update)
-				s.sendData(" ")
+				s.sendComment(update)
 				lastRemarkTime = time.Now()
 				nextRemarkIn = time.Duration(5+rand.Intn(5)) * time.Second
 			} else if time.Since(lastRemarkTime) >= nextRemarkIn {
 				remark := remarks[ri%len(remarks)]
 				ri++
-				s.sendData("\n")
-				s.sendInline(remark)
-				s.sendData(" ")
+				s.sendComment(remark)
 				lastRemarkTime = time.Now()
 				nextRemarkIn = time.Duration(5+rand.Intn(5)) * time.Second
 			} else {
-				s.sendData(".")
+				// bare keepalive comment: holds the connection without saying
+				// anything
+				s.sendComment("")
 			}
 		}
 	}
@@ -160,69 +161,13 @@ func (s *loadingWriter) waitForCompletion(timeout time.Duration) bool {
 	}
 }
 
-func (s *loadingWriter) sendInline(text string) {
-	chunkSize := 10
-	if s.charPerSecond > 0 {
-		chunkSize = max(3, int(s.charPerSecond)/15)
-	}
-
-	runes := []rune(text)
-	for i := 0; i < len(runes); {
-		select {
-		case <-s.ctx.Done():
-			return
-		default:
-		}
-
-		end := i + chunkSize
-		if end > len(runes) {
-			end = len(runes)
-		}
-		chunk := string(runes[i:end])
-		s.sendData(chunk)
-		i = end
-
-		if i < len(runes) && s.charPerSecond > 0 {
-			time.Sleep(time.Duration(float64(time.Second) * float64(len(chunk)) / s.charPerSecond))
-		}
-	}
-}
-
-func (s *loadingWriter) sendLine(line string) {
-	if line == "" {
-		s.sendData("\n")
-		return
-	}
-	s.sendInline(line)
-	s.sendData("\n")
-}
-
-func (s *loadingWriter) sendData(data string) {
-	type Delta struct {
-		ReasoningContent string `json:"reasoning_content"`
-	}
-	type Choice struct {
-		Delta Delta `json:"delta"`
-	}
-	type SSEMessage struct {
-		Choices []Choice `json:"choices"`
-	}
-
-	msg := SSEMessage{
-		Choices: []Choice{
-			{
-				Delta: Delta{
-					ReasoningContent: data,
-				},
-			},
-		},
-	}
-
-	jsonData, err := json.Marshal(msg)
-	if err != nil {
-		s.logger.Errorf("<%s> Failed to marshal SSE message: %v", s.modelName, err)
-		return
-	}
+// sendComment emits one SSE comment frame. Comments are the protocol's own
+// keepalive: they hold the connection open and every conforming parser drops
+// them, so this narration can never be mistaken for model output. An empty
+// text is a bare keepalive. Newlines would end the comment and turn the rest
+// into an unintended field, so they are flattened.
+func (s *loadingWriter) sendComment(text string) {
+	text = strings.NewReplacer("\r", " ", "\n", " ").Replace(text)
 
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -232,8 +177,8 @@ func (s *loadingWriter) sendData(data string) {
 		return
 	}
 
-	if _, err = fmt.Fprintf(s.writer, "data: %s\n\n", jsonData); err != nil {
-		s.logger.Debugf("<%s> Failed to write SSE data (client likely disconnected): %v", s.modelName, err)
+	if _, err := fmt.Fprintf(s.writer, ": %s\n\n", text); err != nil {
+		s.logger.Debugf("<%s> Failed to write SSE comment (client likely disconnected): %v", s.modelName, err)
 		return
 	}
 	if flusher, ok := s.writer.(http.Flusher); ok {

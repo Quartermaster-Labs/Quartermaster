@@ -631,7 +631,8 @@ func (s *Server) routes() {
 		CreateFormFilterMiddleware(cfg),
 		CreateInflightMiddleware(s.inflight),
 		CreateMetricsMiddleware(s.metrics, cfg),
-		s.promptCanon.middleware, // canonicalize the prompt before slotcache/upstream see it
+		CreateUsageDetailsMiddleware(), // inside the metrics tee: captures see what the client sees
+		s.promptCanon.middleware,       // canonicalize the prompt before slotcache/upstream see it
 		s.slotCache.middleware,
 	)
 	// API keys gate the external inference API only — they let other apps reach
