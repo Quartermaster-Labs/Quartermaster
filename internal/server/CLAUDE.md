@@ -19,7 +19,7 @@ re-implementing them.
 | [`http-core.md`](http-core.md) | The mux, chains and dispatch — `Server`/`New`/`localPeerHandler`, auth + admin gating, per-listener scoping, metrics teeing, in-place reload, synthetic `?ctx=`/backend variants, VRAM protection, reasoning-effort translation, prompt canonicalization, the embedded UI |
 | [`configapi.md`](configapi.md) | The `-generate` config editor + managed backend installs (`configapi*.go`, `backendsapi.go`, the pickers) |
 | [`hubapi.md`](hubapi.md) | `/api/hub/*` — search, download jobs, the pre-download context sizer, reveal-folder |
-| [`slotcache.md`](slotcache.md) | Slot KV-cache persistence: preamble seeding, save/restore paths, pruning, the recurrent-arch skip |
+| [`slotcache.md`](slotcache.md) | Slot KV-cache persistence: preamble seeding, save/restore paths, pruning, the recurrent-arch seed skip |
 | [`playground.md`](playground.md) | The playground app + the **server-owned turn runner**: tool loop, reasoning-box titles, tool-call replay, the quartermaster MCP, assistant memory |
 | [`tools.md`](tools.md) | The chat tools' fetch paths (executors in `internal/tools`): web-search chain, `fetch_page`/SSRF guard, YouTube, calc/units/datetime, weather, currency, feeds, imgproxy — and the `/v1/tools/*` execution API (`toolsapi.go`) |
 

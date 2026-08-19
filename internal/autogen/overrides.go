@@ -204,11 +204,14 @@ type EncoderSet struct {
 // SlotCacheSettings mirrors config.SlotCacheConfig; zero values fall back to the
 // server's defaults (30k tokens / 10 GB / 20 sessions).
 type SlotCacheSettings struct {
-	Enable        bool    `yaml:"enable"`
-	Path          string  `yaml:"path"`
-	MinSaveTokens int     `yaml:"minSaveTokens"`
-	MaxDiskGB     float64 `yaml:"maxDiskGB"`
-	MaxSessions   int     `yaml:"maxSessions"`
+	Enable        bool   `yaml:"enable"`
+	Path          string `yaml:"path"`
+	MinSaveTokens int    `yaml:"minSaveTokens"`
+	// RecurrentSeeds mirrors config.SlotCacheConfig.RecurrentSeeds: also run the
+	// partial-prefix seed paths on hybrid/recurrent archs. Measurement knob.
+	RecurrentSeeds bool    `yaml:"recurrentSeeds"`
+	MaxDiskGB      float64 `yaml:"maxDiskGB"`
+	MaxSessions    int     `yaml:"maxSessions"`
 }
 
 // APIKeyEntry is one named API key plus the model IDs it may reach. Name is a

@@ -243,6 +243,105 @@ def verdict(restored_req, kv0, kv1):
         print("  limitation (upstream llama.cpp #21831). Disk restore buys nothing here.")
 
 
+def chat_msgs(messages, conv_id, max_tokens=8):
+    """Send an explicit message list (so a turn can be APPENDED to verbatim) and
+    return the timings plus the assistant message exactly as the server rendered
+    it — replaying that object is what a real client does, and any divergence in
+    it would break the token prefix we are trying to reuse."""
+    body = {
+        "model": MODEL,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "stream": False,
+        "cache_prompt": True,
+    }
+    r = urllib.request.Request(
+        BASE + "/v1/chat/completions", data=json.dumps(body).encode(), method="POST"
+    )
+    r.add_header("Content-Type", "application/json")
+    r.add_header("Authorization", "Bearer " + KEY)
+    if conv_id:
+        r.add_header("X-Conversation-Id", conv_id)
+    t0 = time.time()
+    with urllib.request.urlopen(r, timeout=900) as resp:
+        raw = resp.read()
+    wall = time.time() - t0
+    j = json.loads(raw)
+    usage = j.get("usage", {}) or {}
+    det = usage.get("prompt_tokens_details") or {}
+    msg = (j.get("choices") or [{}])[0].get("message") or {}
+    return {
+        "wall": wall,
+        "prompt_tokens": usage.get("prompt_tokens"),
+        "cached_tokens": (det.get("cached_tokens", 0) or 0) if isinstance(det, dict) else 0,
+        "prompt_ms": (j.get("timings") or {}).get("prompt_ms"),
+        "message": msg,
+    }
+
+
+def mode_append(sysprompt):
+    """The realistic question: can a RESTORED recurrent state be continued FORWARD?
+
+    swap mode resends an identical prompt, which forces llama.cpp to back up one
+    token to produce logits — impossible on a rolling state, so it says nothing
+    about real use. Here each turn APPENDS (the pattern pi and every chat client
+    use), and a warm append runs first as the control: if the warm one reuses and
+    the post-restore one does not, the restore is what upstream rejects.
+    """
+    print(f"[append] forward continuation, warm control vs post-restore, ~{PROMPT_TOKENS} tok\n")
+    conv = "probe-append"
+    msgs = [
+        {"role": "system", "content": sysprompt},
+        {"role": "user", "content": make_prompt(PROMPT_TOKENS)},
+    ]
+    kv0 = kvcache()
+
+    r1 = chat_msgs(msgs, conv)
+    show_req("turn1 cold", r1)
+
+    # Append the assistant reply verbatim + a new user turn: a pure forward
+    # extension of the exact token sequence the slot already holds.
+    msgs.append(r1["message"])
+    msgs.append({"role": "user", "content": "In one short sentence: what did I send you?"})
+
+    r2 = chat_msgs(msgs, conv)
+    show_req("turn2 WARM", r2)
+    print(f"    ^ control: forward continuation with the model still loaded")
+
+    msgs.append(r2["message"])
+    msgs.append({"role": "user", "content": "And in one more short sentence: why?"})
+
+    print("  unloading model (saveOnEvict)...")
+    unload()
+
+    r3 = chat_msgs(msgs, conv)
+    show_req("turn3 RESTORED", r3)
+    print(f"    ^ the real question: same append, but after a save/reload cycle")
+
+    kv1 = kvcache()
+    print("\n  counter delta:", counters_diff(kv0, kv1))
+    print("  new events (newest first):")
+    for e in new_events(kv0, kv1):
+        print("   ", e.get("op"), e.get("key", ""), e.get("detail", ""), e.get("tokens", ""))
+
+    print("\n  === VERDICT ===")
+    warm_ok = r2["cached_tokens"] > 0
+    cold_ok = r3["cached_tokens"] > 0
+    print(f"  warm append   cached_tokens={r2['cached_tokens']:>6} of {r2['prompt_tokens']}")
+    print(f"  after restore cached_tokens={r3['cached_tokens']:>6} of {r3['prompt_tokens']}")
+    if not warm_ok:
+        print("  WARM APPEND ALREADY REUSES NOTHING - this model does not even continue")
+        print("  forward in-process, so the restore path is not what is failing.")
+    elif cold_ok:
+        print("  RESTORED STATE CONTINUES FORWARD. Save/reload is viable on this arch:")
+        if r1["prompt_ms"] and r3["prompt_ms"]:
+            print(f"  prefill {r1['prompt_ms']:.0f}ms cold vs {r3['prompt_ms']:.0f}ms restored.")
+    else:
+        print("  WARM REUSES, RESTORED DOES NOT. llama.cpp rejects a restored recurrent")
+        print("  state for continuation even though the live one continues fine - the")
+        print("  restore itself is the blocker, not the rewind.")
+
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "switch"
     preflight()
@@ -251,10 +350,12 @@ def main():
         mode_switch(sysprompt)
     elif mode == "swap":
         mode_swap(sysprompt)
+    elif mode == "append":
+        mode_append(sysprompt)
     elif mode == "pi":
         mode_pi(sysprompt)
     else:
-        print("unknown mode:", mode, "(use: switch | swap | pi)")
+        print("unknown mode:", mode, "(use: switch | swap | append | pi)")
         sys.exit(2)
 
 

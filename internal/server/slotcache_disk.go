@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -47,6 +48,7 @@ func (sc *slotCache) prunePreambleFiles(model string) {
 	for _, fl := range files[maxPreambleGenerations:] {
 		_ = os.Remove(fl.path)
 		_ = os.Remove(strings.TrimSuffix(fl.path, ".bin") + ".meta")
+		_ = os.Remove(strings.TrimSuffix(fl.path, ".bin") + ".len")
 	}
 }
 
@@ -100,8 +102,9 @@ func (sc *slotCache) enforceCaps(keepModel, keepKey string) {
 		if err := os.Remove(fl.path); err == nil {
 			total -= fl.size
 			files = files[:len(files)-1] // count drops by one (value irrelevant; we only read len)
-			// Drop the preamble sidecar too (best-effort): foo.bin -> foo.meta.
+			// Drop the sidecars too (best-effort): foo.bin -> foo.meta / foo.len.
 			_ = os.Remove(strings.TrimSuffix(fl.path, ".bin") + ".meta")
+			_ = os.Remove(strings.TrimSuffix(fl.path, ".bin") + ".len")
 		}
 	}
 }
@@ -115,6 +118,54 @@ func fileName(model, key string) string {
 // metaName is the preamble sidecar for a (model, conversation) KV snapshot.
 func metaName(model, key string) string {
 	return sanitize(model) + "__" + key + ".meta"
+}
+
+// lenName is the "how big was the request that produced this snapshot" sidecar.
+// See staleRestore for what it is for.
+func lenName(model, key string) string {
+	return sanitize(model) + "__" + key + ".len"
+}
+
+// writeSavedLen records the forwarded body size of the last request served by the
+// slot we just snapshotted. Best-effort: a missing .len simply disables the
+// staleRestore check for that file (the pre-existing behaviour).
+func (sc *slotCache) writeSavedLen(model, key string, bodyBytes int) {
+	if bodyBytes <= 0 {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(sc.dir, lenName(model, key)), []byte(strconv.Itoa(bodyBytes)), 0o644)
+}
+
+// staleRestore reports whether restoring `key` would be worse than useless: the
+// incoming request is SMALLER than the one that produced the snapshot, so the
+// saved state runs past the incoming prompt and serving it needs a rewind.
+//
+// Recurrent/hybrid archs only. A rolling state has no per-token history, so a
+// restore that must back up reuses nothing (measured: 0 of ~32k) and we still pay
+// the multi-hundred-MB read. Plain attention trims happily, so it is left alone.
+//
+// The comparison is forwarded-body BYTES, not tokens, because that is exact for
+// what we actually need to know. A conversation only ever grows, so for a given
+// conversation key the body length is monotonic; a shorter body means the client
+// went backwards (history edit, rewind, compaction) and the saved tail has
+// diverged. Token estimates cannot do this job — the case that motivated the check
+// had a 40-token gap on a 32k prompt.
+//
+// Conservative in one direction on purpose: >= saved always restores, so a real
+// forward continuation is never skipped. A missing or unparsable .len restores too.
+func (sc *slotCache) staleRestore(model, key string, bodyBytes int) bool {
+	if bodyBytes <= 0 || sc.recurrent == nil || !sc.recurrent(model) {
+		return false
+	}
+	raw, err := os.ReadFile(filepath.Join(sc.dir, lenName(model, key)))
+	if err != nil {
+		return false
+	}
+	saved, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || saved <= 0 {
+		return false
+	}
+	return bodyBytes < saved
 }
 
 var unsafeFile = regexp.MustCompile(`[^A-Za-z0-9._-]+`)

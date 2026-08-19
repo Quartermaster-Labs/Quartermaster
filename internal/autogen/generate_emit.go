@@ -81,6 +81,9 @@ func emitSlotCache(b *strings.Builder, sc SlotCacheSettings) {
 	if sc.MinSaveTokens > 0 {
 		fmt.Fprintf(b, "  minSaveTokens: %d\n", sc.MinSaveTokens)
 	}
+	if sc.RecurrentSeeds {
+		b.WriteString("  recurrentSeeds: true\n")
+	}
 	if sc.MaxDiskGB > 0 {
 		fmt.Fprintf(b, "  maxDiskGB: %g\n", sc.MaxDiskGB)
 	}

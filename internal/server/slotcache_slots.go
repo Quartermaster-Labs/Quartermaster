@@ -130,10 +130,11 @@ func busySet(states []slotState) map[int]bool {
 // occSnap is a lock-free copy of whoever held a slot before it was reassigned,
 // so the caller can save them without holding stateMu across the I/O.
 type occSnap struct {
-	key      string
-	preamble string
-	dirty    bool
-	occupied bool
+	key       string
+	preamble  string
+	dirty     bool
+	occupied  bool
+	bodyBytes int
 }
 
 // acquire pins a conversation to one of a model's slots and claims it,
@@ -185,7 +186,7 @@ func (sc *slotCache) acquire(model, key, preamble string, n int, busy map[int]bo
 	}
 
 	if o := sc.occupant[sk(model, pick)]; o != nil {
-		prev = occSnap{key: o.key, preamble: o.preamble, dirty: o.dirty, occupied: true}
+		prev = occSnap{key: o.key, preamble: o.preamble, dirty: o.dirty, occupied: true, bodyBytes: o.bodyBytes}
 	}
 	// Claim immediately: an occupant with the incoming key is what makes a
 	// concurrent acquire() for a THIRD conversation skip this slot as recently

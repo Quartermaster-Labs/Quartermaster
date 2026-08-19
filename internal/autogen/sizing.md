@@ -146,10 +146,12 @@ more snapshots**:
   matching the effOv merge at emit — unlike `ctxCheckpoints`, which is standalone per variant).
   `LiveOffloadArgs` and the config-editor estimate both parse `-cms`.
 
-This is the **in-RAM same-process** checkpoint path. The server's slot-cache **disk**
-partial-prefix seeding for hybrids is a separate mechanism, still gated off — see
-`internal/server/slotcache.md` (`recurrentSkip`); worth re-probing (`kvcache_probe.py swap`)
-now that #21831 landed.
+This is the **in-RAM same-process** checkpoint path, separate from the server's slot-cache **disk**
+path. On hybrids the disk path's *exact* save/restore works (measured 2026-08-19: 32,032 of 32,057
+tokens reused across a process restart, prefill 60.6s → 0.35s); only its *partial-prefix seeding*
+stays gated — see `internal/server/slotcache.md` (`seedSkip`). Repro is `kvcache_probe.py append`,
+not `swap` (`swap` resends an identical prompt, which needs a rewind and always looks like a miss
+on these archs).
 
 ## Speculative decoding / drafters
 

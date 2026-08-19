@@ -63,7 +63,7 @@ order:
    then smallest `.bin`. Over-restore (a sibling conversation whose tail diverges) is wasted I/O on
    plain attention and *harmful* on hybrid/recurrent — un-rewindable layers emit `non-consecutive
    token position N after M` plus a full reprocess. Recurrent/hybrid models skip the cache entirely;
-   see `recurrentSkip` below.
+   see `seedSkip` below (their exact restore still runs).
 
 After any restore, `awaitConfirm[model]` is set; the **next** request's upstream `cached_tokens`
 (`confirmReuse`, from the metrics monitor) is the proof the KV was actually reused (`confirm` /
@@ -110,18 +110,35 @@ After any restore, `awaitConfirm[model]` is set; the **next** request's upstream
   `confirm-miss`, no correctness harm. Upgrade path: mint via the request's own endpoint.
 - **Anthropic system.** `sessionAnchor` falls back to the top-level `"system"` field when there is
   no system-role message.
-- **Recurrent / hybrid: `recurrentSkip`** — save, exact restore AND partial-prefix seeding are all a
-  **no-op**. Whole-slot restore reuses **0 tokens** on GatedDeltaNet/SSM (the state is restorable
-  only at its exact saved length → full reprocess; llama.cpp #21831), so `middleware` bails before
-  reading the body. Detection: `newSlotCache`'s `recurrent` predicate reads the gguf
+- **Recurrent / hybrid: `seedSkip`** — save and **exact** conversation restore run normally; only
+  the **partial-prefix** paths (preamble mint/seed, `bestSeed`) are skipped. Measured on
+  Qwen3.8-27B (GatedDeltaNet/SSM hybrid, backend b10483): a cross-process exact restore after a
+  process kill reused **19,757 of 19,782 tokens**, prefill **34,444 ms → 349 ms**. The reason the
+  two cases differ: a rolling recurrent state is a running total, not a per-token list, so it can
+  only be *continued forward* from the exact position it was saved at. Appending a new turn needs
+  no rewind, so it works; any partial seed ends mid-conversation and would need a trim, which the
+  state cannot do (it surfaces as `non-consecutive token position N after M` + a full reprocess —
+  llama.cpp #21831). The earlier "recurrent reuses 0 tokens" measurement was an artifact of
+  resending an *identical* prompt, which forces a one-token rewind to produce logits.
+  Detection: `newSlotCache`'s `recurrent` predicate reads the gguf
   (`autogen.ReadGgufMetadataCached`) and treats `FullAttnInterval > 0` as recurrent. **SWA (Gemma)
-  and plain attention are NOT gated** — their restore does reuse. Ground truth is the KV Cache tab's
-  confirm-hit/miss ratio: if a new arch shows `confirm-miss` waste, extend
-  `recurrent`/`recurrentSkip`. Repro: `scripts/kvcache_probe.py switch` (warm) / `swap`
-  (cross-process). Drop the guards in `middleware`/`saveOnEvict`/`restoreOnLoad` only if #21831
-  lands. The *in-RAM same-process* checkpoint path is separate and already on
-  (`internal/autogen/sizing.md`, `--ctx-checkpoints 2`).
+  and plain attention are NOT gated at all.** The `slotCache.recurrentSeeds: true`
+  config key re-enables the seed paths, to re-test them on a newer backend. Repro: `scripts/kvcache_probe.py append` (the correct test —
+  turn 1 cold, turn 2 warm append, kill, turn 3 append after restore); `swap` resends an identical
+  prompt and will always look like a miss on these archs. The *in-RAM same-process* checkpoint path
+  is separate and already on (`internal/autogen/sizing.md`, `--ctx-checkpoints 2`).
+- **Backwards conversations: `staleRestore`** — on a recurrent arch, a restore is skipped when the
+  incoming request's forwarded body is **smaller** than the one that produced the snapshot
+  (`recurrent-skip-shorter`). The saved state then runs past the incoming prompt, so serving it
+  needs a rewind: 0 reuse, and we still pay a multi-hundred-MB read. Real conversations only grow,
+  so this fires on history edits, rewinds, compaction, and probe re-runs. The comparison is
+  **bytes, not tokens** — `save` writes the size to a `.len` sidecar beside the `.bin`/`.meta` (and
+  `enforceCaps`/`prunePreambleFiles` delete it alongside). Bytes are exact for the question asked:
+  for one conversation key the body length is monotonic, so shorter body ⇒ shorter prompt. A token
+  *estimate* cannot do this — the case that motivated the check was a 40-token gap on a 32k prompt.
+  Fails safe: `>=` always restores, and a missing/unparsable `.len` (files from an older build)
+  restores. Plain attention is never gated — it trims happily and benefits from the partial hit.
 - **Warm-slot skip (`preamble-warm`).** `onSwitch` does NOT restore the disk preamble when the slot
   already holds that exact preamble live — that would clobber valid live state, and skipping lets
   upstream reuse the prefix natively. The disk preamble earns its keep on a genuinely cold load,
-  **plain-attention models only**.
+  **plain-attention models only** (`seedSkip`).

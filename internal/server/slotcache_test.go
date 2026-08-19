@@ -229,7 +229,7 @@ func TestSlotCache_SaveDoesNotBlockOtherModels(t *testing.T) {
 	aDone := make(chan struct{})
 	go func() {
 		defer close(aDone)
-		sc.onSwitch(context.Background(), "a", srv.URL, "new", "")
+		sc.onSwitch(context.Background(), "a", srv.URL, "new", "", 0)
 	}()
 	<-saving // A now holds its model lock, parked mid-save
 
@@ -238,7 +238,7 @@ func TestSlotCache_SaveDoesNotBlockOtherModels(t *testing.T) {
 	bDone := make(chan struct{})
 	go func() {
 		defer close(bDone)
-		sc.onSwitch(context.Background(), "b", srv.URL, "k", "")
+		sc.onSwitch(context.Background(), "b", srv.URL, "k", "", 0)
 	}()
 	select {
 	case <-bDone:
@@ -275,7 +275,7 @@ func TestSlotCache_RestoreOnLoad(t *testing.T) {
 	// A prior eviction left a snapshot on disk.
 	os.WriteFile(filepath.Join(dir, fileName("m", "abc")), []byte("kv"), 0o644)
 
-	sc.markPendingRestore("m", "abc", "") // request arrived for cold model with saved KV
+	sc.markPendingRestore("m", "abc", "", 0) // request arrived for cold model with saved KV
 	if sc.pending["m"] != "abc" {
 		t.Fatal("expected pending restore recorded")
 	}
@@ -295,7 +295,7 @@ func TestSlotCache_RestoreOnLoad_NoFileSkips(t *testing.T) {
 	srv := fakeBackend(t, 0, dir)
 	sc := newEvictTestCache(dir, srv.URL)
 
-	sc.markPendingRestore("m", "abc", "") // nothing saved
+	sc.markPendingRestore("m", "abc", "", 0) // nothing saved
 	if _, ok := sc.pending["m"]; ok {
 		t.Error("no file => must not record pending restore")
 	}
@@ -452,36 +452,99 @@ func TestSlotCache_PrunePreambleLRU(t *testing.T) {
 	}
 }
 
-// Recurrent/hybrid models skip the slot cache entirely (H1): whole-slot restore
-// reuses 0 tokens on GatedDeltaNet/SSM even warm/same-process (measured), so
-// restoreOnLoad is a full no-op — no preamble mint, no partial seed, and no exact
-// restore either. It records nothing (not even a miss) and writes no files.
-func TestSlotCache_RecurrentSkipsAllRestore(t *testing.T) {
+// Recurrent archs skip the PARTIAL-prefix paths (preamble mint/seed) because those
+// need a rewind a rolling state cannot do — but the EXACT restore still runs, and is
+// the whole point: measured on Qwen3.8-27B, a cross-process exact restore reused
+// 19,757 of 19,782 tokens (prefill 34.4s -> 0.35s). See seedSkip.
+func TestSlotCache_RecurrentSkipsSeedsButRestoresExact(t *testing.T) {
 	dir := t.TempDir()
 	srv := fakeBackend(t, 0, dir)
 	sc := newEvictTestCache(dir, srv.URL)
 	sc.recurrent = func(string) bool { return true }
 
-	// Case A: cold, no exact file — must not mint/seed or record anything.
+	// Case A: cold, no exact file — must not mint or seed.
 	preamble := strings.Repeat("S", seedMinPrefixBytes+100) + "\x00tools\x00[]"
-	sc.markPendingRestore("m", "conv1", preamble)
+	sc.markPendingRestore("m", "conv1", preamble, 0)
 	sc.restoreOnLoad("m")
+	if sc.counters.PreambleMints != 0 || sc.counters.RestoreSeeds != 0 {
+		t.Fatalf("recurrent model must not mint or seed, got %+v", sc.counters)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("seed skip must write no files, got %d entries", len(entries))
+	}
 
-	// Case B: an EXACT saved file exists and is pending — a plain-attn model would
-	// restore-hit it; a recurrent model must still skip (0 reuse).
+	// Case B: an EXACT saved file exists and is pending — it MUST be restored.
 	exact := "conv2"
 	if err := os.WriteFile(filepath.Join(dir, fileName("m", exact)), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	sc.markPendingRestore("m", exact, preamble)
+	sc.markPendingRestore("m", exact, preamble, 0)
 	sc.restoreOnLoad("m")
-
-	if (sc.counters != kvCounters{}) {
-		t.Fatalf("recurrent model must record no cache activity, got %+v", sc.counters)
+	if sc.counters.RestoreHits != 1 {
+		t.Fatalf("recurrent model must restore an exact file, got %+v", sc.counters)
 	}
-	// Only the exact file we hand-wrote should exist; nothing minted/saved.
-	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
-		t.Errorf("recurrent skip must write no new files, got %d entries", len(entries))
+	if sc.counters.PreambleMints != 0 || sc.counters.RestoreSeeds != 0 {
+		t.Fatalf("exact restore must not also seed, got %+v", sc.counters)
+	}
+}
+
+// A conversation that went BACKWARDS (shorter body than the snapshot) must not be
+// restored on a recurrent arch: the saved state runs past the incoming prompt, so
+// serving it needs a rewind and reuses nothing while still paying the read.
+// Plain attention trims fine and must still restore.
+func TestSlotCache_StaleRestoreSkipsShorterOnRecurrent(t *testing.T) {
+	dir := t.TempDir()
+	srv := fakeBackend(t, 0, dir)
+
+	mk := func(recurrent bool) *slotCache {
+		sc := newEvictTestCache(dir, srv.URL)
+		sc.recurrent = func(string) bool { return recurrent }
+		return sc
+	}
+	// A snapshot produced by a 5000-byte request.
+	if err := os.WriteFile(filepath.Join(dir, fileName("m", "c")), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mk(true).writeSavedLen("m", "c", 5000)
+
+	cases := []struct {
+		name      string
+		recurrent bool
+		body      int
+		want      bool
+	}{
+		{"recurrent shorter", true, 4990, true},
+		{"recurrent equal", true, 5000, false},
+		{"recurrent longer", true, 5200, false},
+		{"plain attn shorter", false, 100, false},
+		{"unknown body size", true, 0, false},
+	}
+	for _, c := range cases {
+		if got := mk(c.recurrent).staleRestore("m", "c", c.body); got != c.want {
+			t.Errorf("%s: staleRestore = %v, want %v", c.name, got, c.want)
+		}
+	}
+
+	// No .len sidecar (a file saved by an older build) must still restore.
+	if err := os.WriteFile(filepath.Join(dir, fileName("m", "old")), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if mk(true).staleRestore("m", "old", 1) {
+		t.Error("a snapshot with no .len must not be skipped")
+	}
+
+	// End to end through the cold path: shorter body => no pending restore.
+	sc := mk(true)
+	sc.markPendingRestore("m", "c", "", 4990)
+	sc.restoreOnLoad("m")
+	if sc.counters.RestoreHits != 0 {
+		t.Fatalf("shorter body must not restore, got %+v", sc.counters)
+	}
+	sc2 := mk(true)
+	sc2.markPendingRestore("m", "c", "", 6000)
+	sc2.restoreOnLoad("m")
+	if sc2.counters.RestoreHits != 1 {
+		t.Fatalf("longer body must restore, got %+v", sc2.counters)
 	}
 }
 
@@ -496,7 +559,7 @@ func TestSlotCache_PreambleCache(t *testing.T) {
 	preamble := strings.Repeat("S", seedMinPrefixBytes+100) + "\x00tools\x00[]"
 	pfile := fileName("m", preambleKey(preambleHash(preamble)))
 
-	sc.markPendingRestore("m", "conv1", preamble) // cold, no exact file
+	sc.markPendingRestore("m", "conv1", preamble, 0) // cold, no exact file
 	sc.restoreOnLoad("m")
 	if sc.counters.PreambleMints != 1 {
 		t.Fatalf("expected 1 preamble mint, got %+v", sc.counters)
@@ -505,7 +568,7 @@ func TestSlotCache_PreambleCache(t *testing.T) {
 		t.Fatalf("preamble cache file not written: %v", err)
 	}
 
-	sc.markPendingRestore("m", "conv2", preamble) // different conversation, same preamble
+	sc.markPendingRestore("m", "conv2", preamble, 0) // different conversation, same preamble
 	sc.restoreOnLoad("m")
 	if sc.counters.PreambleMints != 1 || sc.counters.PreambleHits != 1 {
 		t.Fatalf("expected mint=1 hit=1, got %+v", sc.counters)
@@ -530,11 +593,11 @@ func TestSlotCache_PreambleCache_WarmSwitch(t *testing.T) {
 
 	preamble := strings.Repeat("S", seedMinPrefixBytes+100) + "\x00tools\x00[]"
 
-	sc.onSwitch(context.Background(), "m", srv.URL, "conv1", preamble) // warm, new convo
+	sc.onSwitch(context.Background(), "m", srv.URL, "conv1", preamble, 0) // warm, new convo
 	if sc.counters.PreambleMints != 1 {
 		t.Fatalf("warm switch should mint preamble, got %+v", sc.counters)
 	}
-	sc.onSwitch(context.Background(), "m", srv.URL, "conv2", preamble) // same preamble, new convo
+	sc.onSwitch(context.Background(), "m", srv.URL, "conv2", preamble, 0) // same preamble, new convo
 	if sc.counters.PreambleWarm != 1 || sc.counters.PreambleHits != 0 {
 		t.Fatalf("same-preamble warm switch should skip restore (warm=1 hit=0), got %+v", sc.counters)
 	}
@@ -568,11 +631,11 @@ func TestSlotCache_PreambleCache_DropsStale(t *testing.T) {
 	day2 := body + "date=2026-06-29" + "\x00tools\x00[]"
 	old := fileName("m", preambleKey(preambleHash(day1)))
 
-	sc.onSwitch(context.Background(), "m", srv.URL, "c1", day1) // mint day1
+	sc.onSwitch(context.Background(), "m", srv.URL, "c1", day1, 0) // mint day1
 	if _, err := os.Stat(filepath.Join(dir, old)); err != nil {
 		t.Fatalf("day1 preamble not written: %v", err)
 	}
-	sc.onSwitch(context.Background(), "m", srv.URL, "c2", day2) // mint day2 -> drops day1
+	sc.onSwitch(context.Background(), "m", srv.URL, "c2", day2, 0) // mint day2 -> drops day1
 	if _, err := os.Stat(filepath.Join(dir, old)); !os.IsNotExist(err) {
 		t.Errorf("stale day1 preamble should be deleted, stat err=%v", err)
 	}
@@ -688,14 +751,14 @@ func TestSlotCache_MultiSlot_PinsConversationsToOwnSlots(t *testing.T) {
 	sc := newEvictTestCache(dir, srv.URL)
 	sc.slots = func(string) int { return 2 }
 
-	a := sc.onSwitch(context.Background(), "m", srv.URL, "convA", "")
-	sc.markResident("m", a, "convA", "")
-	b := sc.onSwitch(context.Background(), "m", srv.URL, "convB", "")
-	sc.markResident("m", b, "convB", "")
+	a := sc.onSwitch(context.Background(), "m", srv.URL, "convA", "", 0)
+	sc.markResident("m", a, "convA", "", 0)
+	b := sc.onSwitch(context.Background(), "m", srv.URL, "convB", "", 0)
+	sc.markResident("m", b, "convB", "", 0)
 	if a == b {
 		t.Fatalf("two conversations must land on different slots, both got %d", a)
 	}
-	if again := sc.onSwitch(context.Background(), "m", srv.URL, "convA", ""); again != a {
+	if again := sc.onSwitch(context.Background(), "m", srv.URL, "convA", "", 0); again != a {
 		t.Errorf("conversation A moved slots: %d -> %d", a, again)
 	}
 }
@@ -711,10 +774,10 @@ func TestSlotCache_MultiSlot_SkipsBusySlot(t *testing.T) {
 	sc := newEvictTestCache(dir, srv.URL)
 	sc.slots = func(string) int { return 2 }
 
-	sc.markResident("m", 0, "convA", "")
-	sc.markResident("m", 1, "convB", "")
+	sc.markResident("m", 0, "convA", "", 0)
+	sc.markResident("m", 1, "convB", "", 0)
 
-	got := sc.onSwitch(context.Background(), "m", srv.URL, "convC", "")
+	got := sc.onSwitch(context.Background(), "m", srv.URL, "convC", "", 0)
 	if got != 1 {
 		t.Fatalf("expected the idle slot 1, got %d", got)
 	}
@@ -729,8 +792,8 @@ func TestSlotCache_MultiSlot_SaveOnEvictAllSlots(t *testing.T) {
 	sc := newEvictTestCache(dir, srv.URL)
 	sc.slots = func(string) int { return 2 }
 
-	sc.markResident("m", 0, "convA", "")
-	sc.markResident("m", 1, "convB", "")
+	sc.markResident("m", 0, "convA", "", 0)
+	sc.markResident("m", 1, "convB", "", 0)
 	sc.saveOnEvict("m")
 
 	for _, k := range []string{"convA", "convB"} {
@@ -755,8 +818,8 @@ func TestSlotCache_MultiSlot_RestoreTargetsPinnedSlot(t *testing.T) {
 	sc.slots = func(string) int { return 2 }
 	os.WriteFile(filepath.Join(dir, fileName("m", "convB")), []byte("kv"), 0o644)
 
-	sc.markResident("m", 0, "convA", "") // slot 0 taken by a live conversation
-	idx := sc.markPendingRestore("m", "convB", "")
+	sc.markResident("m", 0, "convA", "", 0) // slot 0 taken by a live conversation
+	idx := sc.markPendingRestore("m", "convB", "", 0)
 	if idx == 0 {
 		t.Fatal("convB must not be pinned onto the slot convA holds")
 	}

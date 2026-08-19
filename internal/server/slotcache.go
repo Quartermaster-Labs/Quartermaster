@@ -58,8 +58,12 @@ type slotCache struct {
 	// restore-hit but skip the partial-prefix paths (preamble cache + Tier-1 seed)
 	// for them — see restoreOnLoad. nil => treat all models as plain attention.
 	recurrent func(model string) bool
-	client    *http.Client
-	log       *logmon.Monitor
+	// recurrentSeeds also runs the partial-prefix seed paths on recurrent archs
+	// (config slotCache.recurrentSeeds). Off by default: those need a rewind. A
+	// measurement knob — re-test per backend build rather than assuming.
+	recurrentSeeds bool
+	client         *http.Client
+	log            *logmon.Monitor
 
 	// Locking is three-way, because the three things being protected have very
 	// different hold times:
@@ -143,9 +147,10 @@ const (
 
 // occInfo is the conversation currently resident in a model's slot.
 type occInfo struct {
-	key      string // stable conversation anchor hash
-	dirty    bool   // has run (generated) since its last save
-	preamble string // system + tools prefix, persisted as a .meta sidecar for seed matching
+	key       string // stable conversation anchor hash
+	dirty     bool   // has run (generated) since its last save
+	preamble  string // system + tools prefix, persisted as a .meta sidecar for seed matching
+	bodyBytes int    // forwarded body size of the last request served here (see staleRestore)
 }
 
 // newSlotCache builds the cache from config, applying defaults for unset knobs.
@@ -183,6 +188,7 @@ func newSlotCache(cfg config.SlotCacheConfig, running func() map[string]string, 
 		maxGB = 10
 	}
 	sc.maxBytes = int64(maxGB * (1 << 30))
+	sc.recurrentSeeds = cfg.RecurrentSeeds
 	sc.maxFiles = cfg.MaxSessions
 	if sc.maxFiles <= 0 {
 		sc.maxFiles = 20
@@ -210,26 +216,22 @@ func (sc *slotCache) middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r) // model opted out (no --slot-save-path) — stay out of its way
 			return
 		}
-		if sc.recurrentSkip(model) {
-			// Hybrid/recurrent arch: whole-slot save/restore reuses 0 tokens (see
-			// recurrentSkip). Skip all disk work — promptCanon has already stabilized
-			// the prefix for the native warm reuse that IS the win on these models.
-			next.ServeHTTP(w, r)
-			return
-		}
 		key, preamble, ok := sessionAnchor(r)
 		if !ok {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// sessionAnchor re-attached a (possibly rewritten) body and fixed
+		// ContentLength, so this is exactly what upstream will see.
+		body := int(r.ContentLength)
 		var idx int
 		if base, running := sc.running()[model]; running {
-			idx = sc.onSwitch(r.Context(), model, base, key, preamble)
+			idx = sc.onSwitch(r.Context(), model, base, key, preamble, body)
 		} else {
 			// Cold: model not loaded. The forwarded request will trigger a router
 			// load; arrange for its KV to be restored (exact match) or seeded from a
 			// similar session's prefix (Tier 1) once it readies.
-			idx = sc.markPendingRestore(model, key, preamble)
+			idx = sc.markPendingRestore(model, key, preamble, body)
 		}
 		// Pin the request to the slot we prepared, so llama-server serves it there
 		// instead of running its own prefix-match slot picker over state we just
@@ -239,21 +241,31 @@ func (sc *slotCache) middleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 		// The request generated (or at least ran), so that slot's KV changed.
-		sc.markResident(model, idx, key, preamble)
+		sc.markResident(model, idx, key, preamble, body)
 	})
 }
 
-// recurrentSkip reports whether a model is a hybrid/recurrent arch (GatedDeltaNet/
-// SSM, FullAttnInterval>0) for which the slot cache should do NOTHING. These models
-// can only restore their recurrent state at its exact saved length, so llama-server
-// reprocesses the whole prompt on restore — measured on Qwen3.6-35B-A3B: a warm,
-// same-process, exact whole-slot restore of a 31,993-token prompt reused 0 tokens
-// (confirm-miss, prefill 86.1s→85.5s). So save/restore is pure overhead here — a
-// multi-GB write under the global lock for zero benefit. We skip ALL disk work
-// (save + restore + partial-prefix seeding), not just seeding. The native warm
-// prefix reuse (stabilized by promptCanon) is the only win on these archs, and it
-// doesn't need us. Re-enable (drop this guard) if upstream llama.cpp #21831 lands.
-func (sc *slotCache) recurrentSkip(model string) bool {
+// seedSkip reports whether a model is a hybrid/recurrent arch (GatedDeltaNet/SSM,
+// FullAttnInterval>0) that cannot use the PARTIAL-prefix paths — the preamble cache
+// and the Tier-1 bestSeed. A rolling recurrent state has no per-token history, so it
+// can only ever be continued FORWARD from the exact position it was saved at; using a
+// state whose tail is not a prefix of the incoming prompt would need a rewind, and a
+// rewind is impossible. A minted preamble ends with an assistant-start plus a
+// generated token, so it is never a clean prefix of a real conversation — hence no
+// seeding here.
+//
+// EXACT conversation save/restore is NOT gated: it needs no rewind and it works.
+// Measured on Qwen3.8-27B (hybrid, backend b10483), cross-process — save 19,757
+// tokens, kill the process, reload, restore, append a turn: 19,757 of 19,782 reused,
+// prefill 34,444ms → 349ms. An earlier note claiming 0 reuse on these archs came from
+// resending an IDENTICAL prompt, which forces a one-token rewind to produce logits
+// and so is the one case that cannot work — it was never the real workload. Do not
+// re-broaden this guard without re-running `kvcache_probe.py append`, which tests
+// forward continuation and carries its own warm control.
+func (sc *slotCache) seedSkip(model string) bool {
+	if sc.recurrentSeeds {
+		return false // knob: re-test whether partial seeds work on a newer backend
+	}
 	return sc.recurrent != nil && sc.recurrent(model)
 }
 
@@ -304,7 +316,7 @@ func (sc *slotCache) setOccupant(model string, idx int, occ *occInfo) {
 // evicted from it if they are worth it, restore the incoming one if we have it on
 // disk, then mark the incoming as resident. Returns the slot index the caller
 // must pin the request to.
-func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble string) int {
+func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble string, bodyBytes int) int {
 	n := sc.slotCount(model)
 	// One /slots read covers every slot: it says which ones are mid-generation
 	// (never evict those) and how many tokens the outgoing conversation is worth
@@ -328,7 +340,7 @@ func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble st
 		// can't recover it either (it only sees whatever anchor took the slot next).
 		// The toks>=minTokens check is the worth-it gate.
 		if toks := tokensAt(states, idx); toks >= sc.minTokens {
-			if err := sc.save(ctx, base, model, idx, prev.key, prev.preamble); err != nil {
+			if err := sc.save(ctx, base, model, idx, prev.key, prev.preamble, prev.bodyBytes); err != nil {
 				sc.log.Warnf("slotcache: save %s/%s: %v", model, prev.key, err)
 				sc.record(kvEvent{Model: model, Slot: idx, Op: "error", Key: short(prev.key), Detail: "save"})
 			} else {
@@ -343,7 +355,9 @@ func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble st
 	// system+tools preamble cache (minting it on first sight) so a brand-new
 	// conversation on a warm model still reuses the shared prefix — the same Tier-1
 	// seed the cold path does, not just cold loads.
-	if sc.fileExists(model, key) {
+	if sc.fileExists(model, key) && sc.staleRestore(model, key, bodyBytes) {
+		sc.record(kvEvent{Model: model, Slot: idx, Op: "recurrent-skip-shorter", Key: short(key)})
+	} else if sc.fileExists(model, key) {
 		if err := sc.restore(ctx, base, model, idx, key); err != nil {
 			sc.log.Warnf("slotcache: restore %s/%s: %v", model, key, err)
 			sc.record(kvEvent{Model: model, Slot: idx, Op: "error", Key: short(key), Detail: "restore"})
@@ -358,6 +372,9 @@ func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble st
 		// preamble doesn't re-extend for a new continuation (confirm-miss, 0 reused).
 		// Leave the warm slot; the request reuses the shared prefix natively.
 		sc.record(kvEvent{Model: model, Slot: idx, Op: "preamble-warm"})
+	} else if sc.seedSkip(model) {
+		// Recurrent arch: a partial-prefix seed would need a rewind it cannot do.
+		sc.record(kvEvent{Model: model, Slot: idx, Op: "recurrent-skip-seed"})
 	} else if sc.ensurePreambleSeed(ctx, base, model, idx, preamble) {
 		sc.pushAwait(model, "preamble")
 	}
@@ -374,7 +391,7 @@ func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble st
 //
 // Cold means every slot is empty, so acquire() hands out 0, 1, 2… in arrival
 // order and several conversations racing the same cold load each get their own.
-func (sc *slotCache) markPendingRestore(model, key, preamble string) int {
+func (sc *slotCache) markPendingRestore(model, key, preamble string, bodyBytes int) int {
 	idx, _, same := sc.acquire(model, key, preamble, sc.slotCount(model), nil)
 	if same {
 		return idx // already pinned here by an earlier request in this cold window
@@ -382,7 +399,7 @@ func (sc *slotCache) markPendingRestore(model, key, preamble string) int {
 	sc.stateMu.Lock()
 	defer sc.stateMu.Unlock()
 	slot := sk(model, idx)
-	if sc.fileExists(model, key) {
+	if sc.fileExists(model, key) && !sc.staleRestore(model, key, bodyBytes) {
 		sc.pending[slot] = key
 		sc.pendingSeed[slot] = false
 		delete(sc.pendingPreamble, slot)
@@ -411,9 +428,6 @@ func (sc *slotCache) restoreOnLoad(model string) {
 	}
 	if sc.participates == nil || !sc.participates(model) {
 		return
-	}
-	if sc.recurrentSkip(model) {
-		return // hybrid: whole-slot restore yields 0 reuse — skip (see recurrentSkip)
 	}
 	for idx := 0; idx < sc.slotCount(model); idx++ {
 		sc.restoreSlotOnLoad(model, idx)
@@ -461,6 +475,12 @@ func (sc *slotCache) restoreSlotOnLoad(model string, idx int) {
 	// preamble cache on first sight. The conversation's own key is already claimed
 	// on this slot by markPendingRestore; markResident marks it dirty once the
 	// triggering request runs.
+	if sc.seedSkip(model) {
+		// Recurrent arch: seeds need a rewind (see seedSkip). The exact-restore path
+		// above is the one that works here, and it already returned if it hit.
+		sc.record(kvEvent{Model: model, Slot: idx, Op: "recurrent-skip-seed"})
+		return
+	}
 	if sc.ensurePreambleSeed(ctx, base, model, idx, preamble) {
 		sc.pushAwait(model, "preamble")
 		return
@@ -533,7 +553,9 @@ func (sc *slotCache) ensurePreambleSeed(ctx context.Context, base, model string,
 		sc.record(kvEvent{Model: model, Slot: idx, Op: "error", Key: short(hash), Detail: "preamble-mint"})
 		return false
 	}
-	if err := sc.save(ctx, base, model, idx, pkey, preamble); err != nil {
+	// 0: a minted preamble has no originating request body, so no .len is written
+	// (staleRestore has nothing to compare and stays out of the seed path anyway).
+	if err := sc.save(ctx, base, model, idx, pkey, preamble, 0); err != nil {
 		sc.record(kvEvent{Model: model, Slot: idx, Op: "error", Key: short(hash), Detail: "preamble-save"})
 		return false
 	}
@@ -605,9 +627,6 @@ func (sc *slotCache) saveOnEvict(model string) {
 	if sc.participates == nil || !sc.participates(model) {
 		return
 	}
-	if sc.recurrentSkip(model) {
-		return // hybrid: restore yields 0 reuse, so saving is pure overhead (see recurrentSkip)
-	}
 	base, running := sc.running()[model]
 	if !running {
 		return
@@ -631,7 +650,7 @@ func (sc *slotCache) saveSlotOnEvict(ctx context.Context, base, model string, id
 		return // nothing ran since the last save (or nothing resident)
 	}
 	if toks >= sc.minTokens {
-		if err := sc.save(ctx, base, model, idx, occKey, occPreamble); err != nil {
+		if err := sc.save(ctx, base, model, idx, occKey, occPreamble, occ.bodyBytes); err != nil {
 			sc.log.Warnf("slotcache: evict-save %s/%s: %v", model, occKey, err)
 			sc.record(kvEvent{Model: model, Slot: idx, Op: "error", Key: short(occKey), Detail: "evict-save"})
 		} else {
@@ -645,7 +664,7 @@ func (sc *slotCache) saveSlotOnEvict(ctx context.Context, base, model string, id
 }
 
 // markResident records that `key` now holds one of the model's slots and has run.
-func (sc *slotCache) markResident(model string, idx int, key, preamble string) {
+func (sc *slotCache) markResident(model string, idx int, key, preamble string, bodyBytes int) {
 	if model == "" {
 		return
 	}
@@ -659,16 +678,18 @@ func (sc *slotCache) markResident(model string, idx int, key, preamble string) {
 	}
 	occ.preamble = preamble
 	occ.dirty = true
+	occ.bodyBytes = bodyBytes
 	if sc.lastUse == nil {
 		sc.lastUse = map[string]time.Time{}
 	}
 	sc.lastUse[slot] = time.Now()
 }
 
-func (sc *slotCache) save(ctx context.Context, base, model string, idx int, key, preamble string) error {
+func (sc *slotCache) save(ctx context.Context, base, model string, idx int, key, preamble string, bodyBytes int) error {
 	if err := sc.slotAction(ctx, base, idx, "save", fileName(model, key)); err != nil {
 		return err
 	}
+	sc.writeSavedLen(model, key, bodyBytes)
 	// Persist the preamble snapshot alongside the KV so Tier-1 seeding can prefix-
 	// match future cold requests against it. Best-effort: a missing .meta just makes
 	// this file ineligible as a seed, never breaks restore.

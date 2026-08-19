@@ -199,6 +199,13 @@ type SlotCacheConfig struct {
 	// oldest (LRU) snapshots are evicted on save. 0 => 10 GB / 20 sessions.
 	MaxDiskGB   float64 `yaml:"maxDiskGB"`
 	MaxSessions int     `yaml:"maxSessions"`
+	// RecurrentSeeds also runs the PARTIAL-prefix paths (preamble cache, Tier-1 seed)
+	// on hybrid/recurrent archs. Off by default: a rolling recurrent state can only be
+	// continued forward from its exact saved position, and a partial seed would need a
+	// rewind. Exact conversation save/restore is NOT gated — that works on these archs
+	// (see slotCache.seedSkip). A measurement knob: turn it on to re-test partial seeds
+	// against a newer backend build, and read the KV Cache tab's confirm ratio.
+	RecurrentSeeds bool `yaml:"recurrentSeeds"`
 }
 
 // DefaultSlotCachePath is the snapshot dir used when SlotCacheConfig.Path is
