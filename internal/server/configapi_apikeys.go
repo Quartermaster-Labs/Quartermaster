@@ -41,6 +41,15 @@ func (s *Server) handleAPIKeysGet(w http.ResponseWriter, r *http.Request) {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Reap scope entries for models that are gone before listing, so a key never
+	// advertises (or keeps emitting into apiKeyModels) an id it can't reach.
+	if pruned, dropped := s.pruneDeadKeyScopes(keys); dropped {
+		if err := s.persistKeyScopes(pruned); err != nil {
+			shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+			return
+		}
+		keys, changed = pruned, true
+	}
 	// A reconciled key set only takes effect once the config is rebuilt so auth
 	// accepts (or stops accepting) the Playground key.
 	if changed && !s.regenAndReload(w, r) {
@@ -167,4 +176,53 @@ func sanitizeModelList(in []string) []string {
 		out = append(out, m)
 	}
 	return out
+}
+
+// pruneDeadKeyScopes drops model ids from every key's scope that no longer
+// resolve against the live catalog, so deleting or renaming a model also reaps
+// it from the keys that referenced it (otherwise a key accumulates ghost ids
+// forever and its scope list shows models it hasn't been able to reach in
+// months). Returns the cleaned list and whether anything changed.
+//
+// Two guards keep a transient catalog from silently widening access: nothing is
+// pruned when the catalog is empty (config not generated yet, models drive
+// missing), and a key whose ids ALL went missing is left untouched — emptying it
+// would read as "no scope" and hand that key full access.
+func (s *Server) pruneDeadKeyScopes(keys []autogen.APIKeyEntry) ([]autogen.APIKeyEntry, bool) {
+	cfg := s.config()
+	if len(cfg.Models) == 0 {
+		return keys, false
+	}
+	changed := false
+	out := make([]autogen.APIKeyEntry, len(keys))
+	copy(out, keys)
+	for i, k := range out {
+		if len(k.Models) == 0 {
+			continue
+		}
+		kept := make([]string, 0, len(k.Models))
+		for _, m := range k.Models {
+			if _, found := cfg.RealModelName(m); found {
+				kept = append(kept, m)
+			}
+		}
+		if len(kept) == len(k.Models) || len(kept) == 0 {
+			continue
+		}
+		s.proxylog.Infof("api key %q: dropped %d model(s) missing from the catalog", k.Name, len(k.Models)-len(kept))
+		out[i].Models = kept
+		changed = true
+	}
+	return out, changed
+}
+
+// persistKeyScopes writes back the pruned key list (one sidecar rewrite per
+// changed key; the list is tiny).
+func (s *Server) persistKeyScopes(keys []autogen.APIKeyEntry) error {
+	for _, k := range keys {
+		if _, err := autogen.UpsertSidecarAPIKey(s.autogen.GeneratePath, k); err != nil {
+			return err
+		}
+	}
+	return nil
 }

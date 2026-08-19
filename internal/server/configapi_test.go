@@ -1,9 +1,12 @@
 package server
 
 import (
+	"io"
 	"testing"
 
 	"github.com/quartermaster-labs/quartermaster/internal/autogen"
+	"github.com/quartermaster-labs/quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/logmon"
 )
 
 // applyOverrideDTO copies curated editor fields onto an Override without touching
@@ -150,4 +153,51 @@ func TestForcedOffloadFromCmd(t *testing.T) {
 	if _, ok := forcedOffloadFromCmd("llama-server -m x.gguf -c 8192", dense); ok {
 		t.Error("no -ngl/--n-cpu-moe: want ok=false")
 	}
+}
+
+// A key's scope must lose model ids that no longer exist in the catalog (a
+// deleted or renamed gguf), or the key advertises ghosts forever. The guards
+// matter more than the prune: an empty catalog, or a key whose every id went
+// missing, is left alone — emptying a scope reads as "full access".
+func TestPruneDeadKeyScopes(t *testing.T) {
+	newSrv := func(models ...string) *Server {
+		s := &Server{proxylog: logmon.NewWriter(io.Discard)}
+		mc := map[string]config.ModelConfig{}
+		for _, m := range models {
+			mc[m] = config.ModelConfig{}
+		}
+		s.cfg.Store(&config.Config{Models: mc})
+		return s
+	}
+	keys := func(models ...string) []autogen.APIKeyEntry {
+		return []autogen.APIKeyEntry{{Name: "pi", Key: "qm-1", Models: models}}
+	}
+
+	t.Run("drops ids missing from the catalog", func(t *testing.T) {
+		got, changed := newSrv("live", "other").pruneDeadKeyScopes(keys("live", "dead"))
+		if !changed || len(got[0].Models) != 1 || got[0].Models[0] != "live" {
+			t.Fatalf("models = %v changed=%v, want [live] true", got[0].Models, changed)
+		}
+	})
+
+	t.Run("empty catalog prunes nothing", func(t *testing.T) {
+		got, changed := newSrv().pruneDeadKeyScopes(keys("live", "dead"))
+		if changed || len(got[0].Models) != 2 {
+			t.Fatalf("models = %v changed=%v, want both kept", got[0].Models, changed)
+		}
+	})
+
+	t.Run("an all-dead scope is kept rather than emptied", func(t *testing.T) {
+		got, changed := newSrv("other").pruneDeadKeyScopes(keys("gone1", "gone2"))
+		if changed || len(got[0].Models) != 2 {
+			t.Fatalf("models = %v changed=%v, want both kept (empty = full access)", got[0].Models, changed)
+		}
+	})
+
+	t.Run("unscoped key untouched", func(t *testing.T) {
+		got, changed := newSrv("live").pruneDeadKeyScopes(keys())
+		if changed || len(got[0].Models) != 0 {
+			t.Fatalf("models = %v changed=%v, want unscoped", got[0].Models, changed)
+		}
+	})
 }
