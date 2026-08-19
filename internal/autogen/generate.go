@@ -413,7 +413,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	// of CPU expert offload, so it's flat VRAM overhead. Replaces the old flat
 	// 0.17 GB ubSoloOh fudge.
 	for i := range profiles {
-		profiles[i].Overhead += computeBufferGB(meta, effectiveUb(profiles[i], ov, profiles[i].Ctx, s.TargetVramGB), s.ComputeBufFactor)
+		profiles[i].Overhead += computeBufferGB(meta, effectiveUb(meta, profiles[i], ov, profiles[i].Ctx, s.TargetVramGB), s.ComputeBufFactor)
 	}
 
 	for _, prof := range profiles {

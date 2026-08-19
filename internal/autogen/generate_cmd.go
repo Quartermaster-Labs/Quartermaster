@@ -234,13 +234,34 @@ func EffectiveParallel(ov *Override) int {
 	return min(ov.Parallel, MaxParallelSlots)
 }
 
-// effectiveUb picks the physical batch. Default 1024. Drop to 512 at high ctx
-// ONLY when the VRAM budget is small (< smallCardVramGB) — the auto-sized solo
-// profile (Ctx=0) learns its real ctx after sizing, so ctx>=longCtxThreshold is
-// checked alongside prof.IsLong. budgetGB<=0 (unknown) keeps 1024 (prefer
-// speed). An explicit Ub override always wins.
-func effectiveUb(prof profile, ov *Override, ctx int, budgetGB float64) int {
-	ub := 1024
+// effectiveUb picks the physical batch. 512 for dense models, 1024 for MoE.
+// Drop to 512 at high ctx ONLY when the VRAM budget is small (< smallCardVramGB)
+// — the auto-sized solo profile (Ctx=0) learns its real ctx after sizing, so
+// ctx>=longCtxThreshold is checked alongside prof.IsLong. budgetGB<=0 (unknown)
+// keeps the class default. An explicit Ub override always wins.
+//
+// The dense/MoE split is benched, and the two classes want opposite things:
+//
+//   - Dense, fully GPU-resident: a bigger physical batch buys nothing. Measured
+//     on a 7900 XTX with Qwen3.8-27B-UD-Q4_K_XL (b=2048 held fixed), pp2048 was
+//     682 / 679 / 667 t/s at ub 512 / 1024 / 2048 — flat-to-inverted, with 512
+//     ~2% ahead at every depth tested (d0 682 vs 667, d16384 543 vs 532, d65536
+//     335 vs 327). Since computeBufferGB caps its vocab-scaled logits term at
+//     exactly computeLogitsTokens (1024), halving ub to 512 halves that term as
+//     well as activations — ~0.37GB of VRAM back on a 27B/151k-vocab model, for
+//     free-to-slightly-positive throughput. That headroom is worth more as ctx.
+//   - MoE with CPU expert offload: the opposite. A larger ub amortises the
+//     per-micro-batch PCIe expert fetch over more tokens — benched 380 -> 647
+//     t/s going ub 512 -> 1024 at b=2048 on the 8GB/32GB rig. Keep 1024.
+//
+// Keyed on meta.IsMoE rather than on whether offload was actually planned: a
+// fully-resident MoE has no fetch to amortise and would likely behave like the
+// dense case, but that is untested, so MoE keeps the conservative 1024.
+func effectiveUb(meta Metadata, prof profile, ov *Override, ctx int, budgetGB float64) int {
+	ub := 512
+	if meta.IsMoE {
+		ub = 1024
+	}
 	if (prof.IsLong || ctx >= longCtxThreshold) && budgetGB > 0 && budgetGB < smallCardVramGB {
 		ub = 512
 	}
@@ -300,7 +321,7 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		threads = ov.Threads
 	}
 
-	ub := effectiveUb(prof, ov, ctx, s.TargetVramGB)
+	ub := effectiveUb(meta, prof, ov, ctx, s.TargetVramGB)
 	// -b (logical batch) decoupled from -ub (physical/compute tile). A larger logical
 	// batch pipelines more ub-micro-batches per decode(), overlapping CPU expert-fetch
 	// with GPU compute on MoE offload — measured +38% pp at ub1024, +20% at ub512, for
@@ -660,7 +681,7 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 
 		CheckpointMinStep: ov.CheckpointMinStep,
 	}
-	prof.Overhead += computeBufferGB(meta, effectiveUb(prof, &ov, prof.Ctx, s.TargetVramGB), s.ComputeBufFactor)
+	prof.Overhead += computeBufferGB(meta, effectiveUb(meta, prof, &ov, prof.Ctx, s.TargetVramGB), s.ComputeBufFactor)
 	ctx, plan, kvReserve, _, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, ov.KvInRam)
 	if err != nil {
 		return "", err

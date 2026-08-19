@@ -113,7 +113,7 @@ const hashCacheSuffix = ".modelhash"
 //	     chat model that produced the reply — and cold-reload it on the next
 //	     turn. Coexistence groups are also appended to every listener, since
 //	     they bind no port of their own.
-const genVersion = "v47"
+const genVersion = "v48"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

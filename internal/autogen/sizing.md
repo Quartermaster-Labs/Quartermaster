@@ -64,9 +64,19 @@ line whenever desktop usage drifts a few hundred MB.
 
 Bench-validated, not folklore (Qwen3.5-35B-A3B IQ4_XS, 8 GB/32 GB rig):
 
-- **`-ub` is prefill-only** (decode flat) and scales monotonically with **no plateau
-  through 1024** — "smaller ub is faster" is false here. Keep ub high where VRAM fits;
-  `computeBufferGB` charges its ~1 GB so the sizer won't over-allocate ctx and spill.
+- **`-ub` is prefill-only** (decode flat) and, *on MoE with CPU expert offload*, scales
+  monotonically with **no plateau through 1024** — "smaller ub is faster" is false there.
+  A bigger micro-batch amortises the per-batch PCIe expert fetch (**380 → 647 t/s** going
+  512 → 1024 at `b=2048`). `computeBufferGB` charges its ~1 GB so the sizer won't
+  over-allocate ctx and spill.
+- **The dense default is 512, not 1024** (`effectiveUb` keys on `meta.IsMoE`). A
+  fully-GPU-resident dense model has no expert fetch to amortise, so the bigger batch buys
+  nothing: on a 7900 XTX with Qwen3.8-27B-UD-Q4_K_XL at `b=2048`, pp2048 measured
+  **682 / 679 / 667 t/s at ub 512 / 1024 / 2048** — flat-to-inverted, 512 ~2% ahead at
+  every depth (d0 682 vs 667, d16k 543 vs 532, d65k 335 vs 327). Because
+  `computeLogitsTokens` caps the vocab-scaled term at exactly 1024, halving ub halves both
+  that term and activations: **~0.37 GB back** on a 27B/151k-vocab model, better spent as
+  ctx. A fully-resident *MoE* is untested and conservatively keeps 1024.
 - **`-b` is decoupled from `-ub`, fixed at 2048** (clamped `>=ub`, `<=ctx`). A logical
   batch above the physical one pipelines more micro-batches per `decode()`, overlapping
   CPU expert-fetch with GPU compute: **+20–38% prefill, plateau at 2048, zero extra VRAM**

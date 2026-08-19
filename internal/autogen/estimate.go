@@ -134,7 +134,7 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 	// Charge the ub the launch will actually run with: effectiveUb reads the
 	// override's pinned value, and passing nil here made the preview size a
 	// different compute buffer than emit did for the same model.
-	computeBufGB := computeBufferGB(meta, effectiveUb(prof, &Override{Ub: in.Ub}, prof.Ctx, target), s.ComputeBufFactor)
+	computeBufGB := computeBufferGB(meta, effectiveUb(meta, prof, &Override{Ub: in.Ub}, prof.Ctx, target), s.ComputeBufFactor)
 	prof.Overhead += computeBufGB
 	prof.Overhead += in.MmprojGB // "-vision" projector weights + CLIP compute reserve
 
