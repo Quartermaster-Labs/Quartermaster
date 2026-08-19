@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -86,6 +87,10 @@ type baseRouter struct {
 	applyConfigCh chan applyConfigReq
 	swapDoneCh    chan scheduler.SwapDone
 	serveDoneCh   chan scheduler.ServeDoneEvent
+	// wakeCh carries timer-driven re-examinations of the queue (see Wake).
+	// Buffered 1 and written non-blockingly, so overlapping timers collapse
+	// into one drain and a fired timer can never block its own goroutine.
+	wakeCh chan struct{}
 
 	runDone chan struct{}
 
@@ -120,6 +125,7 @@ func newBaseRouter(
 		applyConfigCh: make(chan applyConfigReq),
 		swapDoneCh:    make(chan scheduler.SwapDone),
 		serveDoneCh:   make(chan scheduler.ServeDoneEvent),
+		wakeCh:        make(chan struct{}, 1),
 		runDone:       make(chan struct{}),
 	}
 	b.config.Store(&conf)
@@ -235,6 +241,10 @@ func (b *baseRouter) run() {
 
 		case ev := <-b.serveDoneCh:
 			b.schedule.OnServeDone(ev)
+
+		case <-b.wakeCh:
+			b.schedule.OnWake()
+			b.notifyProcessed()
 		}
 	}
 }
@@ -313,7 +323,28 @@ func (b *baseRouter) GrantServe(req scheduler.HandlerReq, modelID string) bool {
 	return b.grant(req, scheduler.HandlerResp{HandleFunc: b.trackedServe(modelID, p)})
 }
 
-// StopProcesses implements scheduler.Effects, stopping the named processes in
+// Wake implements scheduler.Effects. The scheduler calls it from the run loop
+// itself, so it must not block: it arms a timer and returns. When the timer
+// fires it nudges wakeCh, and the run loop calls OnWake.
+//
+// This is the only path by which a purely time-based decision reaches the
+// scheduler. Everything else it does is driven by an event that arrives on its
+// own (a request, a swap finishing, a handler returning); a hold expiring is
+// not — without this the model would stay protected until something unrelated
+// happened to drain the queue.
+func (b *baseRouter) Wake(d time.Duration) {
+	if d <= 0 {
+		d = time.Millisecond
+	}
+	time.AfterFunc(d, func() {
+		select {
+		case b.wakeCh <- struct{}{}:
+		default: // a drain is already pending; it will see this hold too
+		}
+	})
+}
+
+// StopProcesses stops the named processes in parallel and blocks until all
 // parallel and blocking until all have stopped.
 func (b *baseRouter) StopProcesses(timeout time.Duration, ids []string) {
 	var wg sync.WaitGroup
@@ -677,8 +708,11 @@ func (b *baseRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	hr := scheduler.HandlerReq{
-		Model: data.ModelID,
-		Ctx:   req.Context(),
+		Model:    data.ModelID,
+		Ctx:      req.Context(),
+		Arrived:  arrived,
+		Hold:     headerMs(req, "X-QM-Hold-Ms"),
+		Patience: headerMs(req, "X-QM-Patience-Ms"),
 		// Unbuffered: a successful send on Respond proves the waiter is
 		// alive and consuming. grant() relies on this to avoid handing a
 		// handleFunc to a cancelled waiter and leaking the inFlight count.
@@ -772,4 +806,27 @@ func (b *baseRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// upstream being handed the request.
 	respHeader.Set("X-QM-Wait-Ms", strconv.FormatInt(time.Since(arrived).Milliseconds(), 10))
 	resp.HandleFunc(w, req)
+}
+
+// headerMs reads an integer-milliseconds request header into a duration, for
+// the scheduler's two per-caller knobs (X-QM-Hold-Ms, X-QM-Patience-Ms).
+//
+// Three-state on purpose. Absent or unparseable returns 0, meaning "unset" --
+// the scheduler applies its configured default. An explicit "0" returns -1,
+// meaning "off", which the scheduler can tell apart from unset: a client that
+// knows its loop just ended sends 0 to drop its hold immediately, and that must
+// not read as "no opinion".
+func headerMs(req *http.Request, name string) time.Duration {
+	v := strings.TrimSpace(req.Header.Get(name))
+	if v == "" {
+		return 0
+	}
+	ms, err := strconv.Atoi(v)
+	if err != nil || ms < 0 {
+		return 0
+	}
+	if ms == 0 {
+		return -1
+	}
+	return time.Duration(ms) * time.Millisecond
 }

@@ -16,6 +16,29 @@ import (
 // the model config leaves concurrencyLimit unset.
 const defaultConcurrencyLimit = 10
 
+// The hold: an agent loop is a burst of requests separated by however long its
+// tool calls take, and between rounds it looks exactly like a finished
+// conversation. Without a hold, two competing loops on different models trade
+// the GPU every single round -- one tool call each, then a full reload -- which
+// costs far more in swaps than either loop spends generating.
+//
+// holdWindowDefault is how long a model stays un-evictable after its last
+// request drains. Sized to a tool call, not to a model load: too short and the
+// hold never fires at all, because the next round always arrives after it
+// lapsed.
+//
+// patienceDefault bounds the other side. A hold is renewed by every round, so
+// on its own it would let one loop keep the GPU indefinitely; a queued request
+// stops honouring holds once it has waited this long, takes the GPU, and
+// becomes the incumbent itself. Patience belongs to the WAITER rather than the
+// incumbent because only the waiter knows what the delay costs it -- five
+// minutes is right for a background agent and unbearable for someone watching
+// a chat, and both can be queued for the same model at once.
+const (
+	holdWindowDefault = 10 * time.Second
+	patienceDefault   = 5 * time.Minute
+)
+
 // activeSwap tracks one in-flight swap and the callers waiting on it.
 type activeSwap struct {
 	modelID string
@@ -60,6 +83,15 @@ type FIFO struct {
 	// deterministic without a fake clock.
 	useTick int64
 	lastUse map[string]int64
+
+	// hold maps model ID -> the instant its idle-grace window expires. Set when
+	// a model's last in-flight request drains, cleared when it lapses or the
+	// model stops. Only models with a live entry are protected.
+	hold map[string]time.Time
+	// holdFor maps model ID -> the window to apply when its next request
+	// drains, recorded at grant time because ServeDoneEvent carries only the
+	// model ID while the window is a property of the REQUEST that asked for it.
+	holdFor map[string]time.Duration
 }
 
 // NewFIFO builds a FIFO scheduler. Per-model concurrency limits are derived
@@ -78,6 +110,8 @@ func NewFIFO(name string, logger *logmon.Monitor, planner Swapper, cfg config.Fi
 		inFlight:    make(map[string]int),
 		imageModels: imageModels,
 		lastUse:     make(map[string]int64),
+		hold:        make(map[string]time.Time),
+		holdFor:     make(map[string]time.Duration),
 	}
 }
 
@@ -128,6 +162,11 @@ func (s *FIFO) ApplyConfig(conf config.Config, planner Swapper) {
 //     stopping us) — park in the queue for OnSwapDone to drain.
 //  5. Would evict a process that is still handling requests — park in the
 //     queue. OnServeDone will retry when the busy process drains.
+//
+//  5b. Would evict a model inside its hold window while this caller still has
+//     patience left — park in the queue. The hold lapsing, or this caller's
+//     patience running out, brings us back here via OnWake.
+//
 //  6. Otherwise — start a new swap. This may run in parallel with other active
 //     swaps when their evict sets don't intersect.
 func (s *FIFO) OnRequest(req HandlerReq) {
@@ -187,9 +226,109 @@ func (s *FIFO) OnRequest(req HandlerReq) {
 		return
 	}
 
+	// (5b) Would evict a model that is still inside its hold window.
+	if held, wait := s.heldAgainst(req, evict, time.Now()); held != "" {
+		s.logger.Debugf("%s: queuing request for model %s (%s held for another %s)", s.name, req.Model, held, wait.Round(time.Millisecond))
+		s.enqueue(req)
+		s.effects.Wake(wait)
+		return
+	}
+
 	// (6) Start a new (possibly parallel) swap.
 	s.logger.Debugf("%s: starting swap for model %s, evicting %v", s.name, req.Model, evict)
 	s.startSwap(req, evict, running)
+}
+
+// holdWindow is how long req's model should be protected once req drains: the
+// caller's own X-QM-Hold-Ms if it sent one, else the configured default.
+func (s *FIFO) holdWindow(req HandlerReq) time.Duration {
+	if req.Hold != 0 {
+		if req.Hold < 0 {
+			return 0
+		}
+		return req.Hold
+	}
+	if s.cfg.HoldMs != nil {
+		return time.Duration(*s.cfg.HoldMs) * time.Millisecond
+	}
+	return holdWindowDefault
+}
+
+// patience is how long req tolerates waiting behind another model's hold.
+func (s *FIFO) patience(req HandlerReq) time.Duration {
+	if req.Patience != 0 {
+		if req.Patience < 0 {
+			return 0
+		}
+		return req.Patience
+	}
+	if s.cfg.PatienceMs != nil {
+		return time.Duration(*s.cfg.PatienceMs) * time.Millisecond
+	}
+	return patienceDefault
+}
+
+// heldAgainst reports whether serving req would evict a model that is still
+// inside its hold window, returning that model and how long the caller must
+// wait for it. A caller past its patience is told "no": it has waited long
+// enough and now preempts the incumbent, which is what stops a hold renewed
+// every round from starving it. The wait returned is never longer than the
+// caller's remaining patience, so the OnWake it schedules lands when this
+// request becomes servable, whichever of the two deadlines comes first.
+func (s *FIFO) heldAgainst(req HandlerReq, evict []string, now time.Time) (string, time.Duration) {
+	if len(evict) == 0 || len(s.hold) == 0 {
+		return "", 0
+	}
+	left := s.patienceLeft(req, now)
+	if left <= 0 {
+		return "", 0
+	}
+	for _, id := range evict {
+		until, ok := s.hold[id]
+		if !ok {
+			continue
+		}
+		wait := until.Sub(now)
+		if wait <= 0 {
+			continue
+		}
+		if wait > left {
+			wait = left
+		}
+		return id, wait
+	}
+	return "", 0
+}
+
+// patienceLeft is how much of req's patience remains. A request with no Arrived
+// stamp (an internal caller, or a test building the struct by hand) is treated
+// as having just arrived rather than as having waited forever.
+func (s *FIFO) patienceLeft(req HandlerReq, now time.Time) time.Duration {
+	p := s.patience(req)
+	if p <= 0 {
+		return 0
+	}
+	if req.Arrived.IsZero() {
+		return p
+	}
+	return p - now.Sub(req.Arrived)
+}
+
+// expireHolds drops lapsed windows so the map tracks only live holds.
+func (s *FIFO) expireHolds(now time.Time) {
+	for id, until := range s.hold {
+		if !now.Before(until) {
+			delete(s.hold, id)
+		}
+	}
+}
+
+// releaseHold drops a model's hold outright, for when the model is stopped
+// (unloaded, or evicted by a swap): protecting a process that no longer exists
+// would keep a queued request waiting for nothing.
+func (s *FIFO) releaseHold(modelID string) {
+	delete(s.hold, modelID)
+	delete(s.holdFor, modelID)
 }
 
 // OnCancel removes a request whose client has disconnected from the queue and
@@ -245,6 +384,11 @@ func (s *FIFO) OnSwapDone(ev SwapDone) {
 		return
 	}
 	delete(s.active, ev.ModelID)
+	// Whatever this swap evicted is stopped now; a hold on a process that no
+	// longer exists would keep queued requests waiting for nothing.
+	for _, id := range sw.evict {
+		s.releaseHold(id)
+	}
 
 	for _, w := range sw.waiters {
 		if ev.Err != nil {
@@ -264,8 +408,23 @@ func (s *FIFO) OnServeDone(ev ServeDoneEvent) {
 	s.inFlight[ev.ModelID]--
 	if s.inFlight[ev.ModelID] <= 0 {
 		delete(s.inFlight, ev.ModelID)
+		// Going idle is the moment an agent loop is mid-tool-call, and the
+		// moment the scheduler used to hand the GPU away. Protect the model for
+		// one window, then drain anyway: a queued request that is out of
+		// patience still goes now, one that is not waits for the Wake.
+		if w := s.holdFor[ev.ModelID]; w > 0 {
+			s.hold[ev.ModelID] = time.Now().Add(w)
+			s.effects.Wake(w)
+		}
 		s.drainQueue()
 	}
+}
+
+// OnWake re-examines the queue after a hold window or a waiter's patience has
+// elapsed. Both are wall-clock deadlines that no other event announces.
+func (s *FIFO) OnWake() {
+	s.expireHolds(time.Now())
+	s.drainQueue()
 }
 
 // OnUnload reconciles router-owned state with the impending Stop, performs the
@@ -312,6 +471,9 @@ func (s *FIFO) OnUnload(targets []string, timeout time.Duration) {
 	// intentionally NOT cleared here: each dying handler will fire its tracked
 	// serve and reach OnServeDone in the normal way.
 	s.effects.StopProcesses(timeout, targets)
+	for _, id := range targets {
+		s.releaseHold(id)
+	}
 
 	// Removing entries from active above may have unblocked queued requests
 	// that previously collided with the now-cancelled swaps.
@@ -348,6 +510,10 @@ func (s *FIFO) grantHandler(req HandlerReq, modelID string) {
 	if s.effects.GrantServe(req, modelID) {
 		s.inFlight[modelID]++
 		s.touch(modelID)
+		// Recorded per grant, not per model config: the window belongs to
+		// whoever is driving this model right now, and the last caller to be
+		// granted is the one whose next round we would be protecting.
+		s.holdFor[modelID] = s.holdWindow(req)
 	}
 }
 
@@ -410,6 +576,7 @@ func (s *FIFO) drainQueue() {
 		return
 	}
 	pending := s.queued
+	now := time.Now()
 	var remaining []HandlerReq
 	for _, req := range pending {
 		state, ok := s.effects.ModelState(req.Model)
@@ -439,6 +606,11 @@ func (s *FIFO) drainQueue() {
 		}
 		if conflictsWithInFlight(evict, s.inFlight) {
 			remaining = append(remaining, req)
+			continue
+		}
+		if held, wait := s.heldAgainst(req, evict, now); held != "" {
+			remaining = append(remaining, req)
+			s.effects.Wake(wait)
 			continue
 		}
 		s.logger.Debugf("%s: queued request for model %s now starting swap, evicting %v", s.name, req.Model, evict)

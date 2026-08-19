@@ -63,6 +63,7 @@ type fakeEffects struct {
 	grants []grantRec
 	stops  []stopRec
 	aborts []string
+	wakes  []time.Duration
 }
 
 func newFakeEffects() *fakeEffects {
@@ -114,6 +115,13 @@ func (f *fakeEffects) AbortSwap(modelID string) {
 	f.aborts = append(f.aborts, modelID)
 }
 
+// Wake records the request instead of arming a real timer: the tests drive
+// OnWake themselves, so a hold's expiry is a deliberate step rather than a
+// sleep. The recorded durations are asserted on directly.
+func (f *fakeEffects) Wake(d time.Duration) {
+	f.wakes = append(f.wakes, d)
+}
+
 // served counts grants that handed modelID a handler and were received.
 func (f *fakeEffects) served(modelID string) int {
 	n := 0
@@ -147,9 +155,20 @@ func (f *fakeEffects) startsFor(modelID string) int {
 	return n
 }
 
+// newFIFO builds a scheduler with the idle-grace hold DISABLED. The hold
+// defers "a drained, so b may swap in" by a wall-clock window, which is
+// precisely the transition most of these tests assert on; they are about
+// eviction and queueing mechanics, so they opt out. Hold behaviour has its own
+// tests in fifo_hold_test.go.
 func newFIFO(planner Swapper, eff Effects) *FIFO {
-	return NewFIFO("test", logmon.NewWriter(io.Discard), planner, config.FifoConfig{}, nil, eff)
+	return newFIFOCfg(planner, eff, config.FifoConfig{HoldMs: intp(0)})
 }
+
+func newFIFOCfg(planner Swapper, eff Effects, cfg config.FifoConfig) *FIFO {
+	return NewFIFO("test", logmon.NewWriter(io.Discard), planner, cfg, nil, eff)
+}
+
+func intp(v int) *int { return &v }
 
 func req(model string) HandlerReq { return HandlerReq{Model: model} }
 
@@ -243,7 +262,7 @@ func TestFIFO_ImageRenderBlocksOtherSpawns(t *testing.T) {
 		"img": {Capabilities: config.ModelCapConfig{Out: []string{"image"}}},
 		"txt": {Capabilities: config.ModelCapConfig{Out: []string{"text"}}},
 	}
-	s := NewFIFO("test", logmon.NewWriter(io.Discard), planner, config.FifoConfig{}, models, eff)
+	s := NewFIFO("test", logmon.NewWriter(io.Discard), planner, config.FifoConfig{HoldMs: intp(0)}, models, eff)
 
 	// img starts rendering (fast path — already ready — so it goes in-flight).
 	s.OnRequest(req("img"))

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1338,6 +1339,16 @@ func (tm *turnManager) streamRound(ctx context.Context, at *activeTurn, start tu
 	return roundContent, roundReasoning, calls, finish, nil
 }
 
+// playgroundHoldMs / playgroundPatienceMs are the playground's side of the
+// scheduler's hold. The hold matches a tool round-trip (a web search plus the
+// model's own latency); the patience is deliberately far below the default
+// five minutes, because a turn nobody is watching and a turn someone is staring
+// at cost very different things to delay, and only the caller knows which it is.
+const (
+	playgroundHoldMs     = 10000
+	playgroundPatienceMs = 60000
+)
+
 // streamSSE POSTs a streamed chat completion to quartermaster's own inference
 // loopback and dispatches each delta to the callbacks. onReasoning/onTool/
 // onProgress may be nil. Returns the finish_reason.
@@ -1350,6 +1361,21 @@ func (tm *turnManager) streamSSE(ctx context.Context, body map[string]any, chatI
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Conversation-Id", chatID) // key the slot KV cache by conversation
+	// Scheduler hold + patience (internal/router/scheduler). A turn that offers
+	// tools may come back for another round after a tool call, and between
+	// rounds it looks to the scheduler exactly like a finished conversation --
+	// ask for the model to be held so the next round does not pay a reload. A
+	// turn with no tools cannot loop, so it releases the GPU at once.
+	//
+	// The patience is the other half: someone is watching this answer arrive,
+	// so it waits far less behind a background agent's hold than the five
+	// minutes an unattended API client gets.
+	if _, hasTools := body["tools"]; hasTools {
+		req.Header.Set("X-QM-Hold-Ms", strconv.Itoa(playgroundHoldMs))
+	} else {
+		req.Header.Set("X-QM-Hold-Ms", "0")
+	}
+	req.Header.Set("X-QM-Patience-Ms", strconv.Itoa(playgroundPatienceMs))
 	if authKey != "" {
 		req.Header.Set("Authorization", "Bearer "+authKey) // authenticate the loopback (API keys gate /v1)
 	}

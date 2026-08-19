@@ -79,6 +79,19 @@ the titler spawns the GPU-linked llama binary (CPU-only, but it still enumerates
 router may be swapping a model in for someone else. So the pass gets **one** deadline for the whole
 list, `titlegenMopupBudget` (2.5s); spans it doesn't reach keep the UI's local heuristic.
 
+### Scheduler hold headers
+
+`streamSSE` stamps two headers the router's scheduler reads (see
+[`../router/CLAUDE.md`](../router/CLAUDE.md)):
+
+- `X-QM-Hold-Ms` — `playgroundHoldMs` when the round offers tools (it may come back for another
+  round, and between rounds the scheduler cannot tell a mid-loop pause from a finished
+  conversation), `0` when it does not, since a tool-less turn cannot loop and should release the
+  GPU immediately.
+- `X-QM-Patience-Ms` — `playgroundPatienceMs` (60s), far below the 5-minute default: someone is
+  watching this answer arrive, so it waits much less behind a background agent's hold than an
+  unattended API client would.
+
 ## `titlegen.go` — the title model
 
 One-line titles for collapsed reasoning boxes ("Thought for 2s · Weighing the two quant options").

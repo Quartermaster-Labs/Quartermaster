@@ -237,6 +237,18 @@ type SchedulerSettings struct {
 
 type FifoConfig struct {
 	Priority map[string]int `yaml:"priority"` // model ID -> priority, default 0
+
+	// HoldMs is the idle-grace window: after the last in-flight request for a
+	// model finishes, that model is not evicted for another HoldMs, so an agent
+	// loop's next round finds it still warm instead of paying a full reload.
+	// nil = built-in default, 0 = holds disabled.
+	HoldMs *int `yaml:"holdMs"`
+
+	// PatienceMs is how long a queued request tolerates waiting behind another
+	// model's hold before the hold stops applying to it. It is what bounds the
+	// worst case: the incumbent keeps the GPU until the most impatient waiter
+	// runs out. nil = built-in default, 0 = never wait behind a hold.
+	PatienceMs *int `yaml:"patienceMs"`
 }
 
 type RouterConfig struct {

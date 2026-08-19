@@ -19,7 +19,7 @@ A deep developer tutorial lives in `design.md` (same directory) — read it for 
 | `loading.go` | `loadingWriter` — streams an SSE "loading model…" placeholder to the client while a swap is in flight, as SSE **comment** frames (`: text`) so no conforming client can mistake it for model output. |
 | `loading_remarks.go` | Static list of whimsical loading-status remarks for `loadingWriter`. |
 | `scheduler/scheduler.go` | The three interfaces (`Scheduler`, `Swapper`, `Effects`), the event types (`HandlerReq`, `HandlerResp`, `SwapDone`, `ServeDoneEvent`), and `New()` (selects scheduler by config; only `fifo` today). |
-| `scheduler/fifo.go` | `FIFO` — the default and only `Scheduler`: queue, in-flight tracking, and the request decision tree. |
+| `scheduler/fifo.go` | `FIFO` — the default and only `Scheduler`: queue, in-flight tracking, the request decision tree, and the idle-grace hold. |
 
 ## Important types & functions
 
@@ -34,6 +34,38 @@ A deep developer tutorial lives in `design.md` (same directory) — read it for 
 
 A request enters `baseRouter.ServeHTTP`, which resolves the model ID, builds a `HandlerReq` with an **unbuffered** `Respond` channel, and hands it to the run loop. The single `run()` goroutine turns that into `Scheduler.OnRequest`, which walks the decision tree above. When a swap is needed, the scheduler records it as active, asks the `Swapper` for the evict set, and calls `Effects.StartSwap`, which launches `doSwap` in the background and returns immediately — so the run loop never blocks on a model load. When `doSwap` finishes it posts `SwapDone`; `OnSwapDone` then grants every waiter that joined that swap and re-drains the queue. In-flight requests are tracked via `trackedServe` (`base.go`), which posts a `ServeDoneEvent` when the handler returns; a swap that would evict a busy model is deferred until its in-flight count reaches zero.
 
+**The idle-grace hold (fork).** An agent loop is a burst of requests separated by however long its
+tool calls take, and *between rounds it is indistinguishable from a finished conversation*. So two
+competing loops on different models used to trade the GPU every single round — one tool call each,
+then a full reload — spending more on swaps than either spent generating. The hold fixes that with
+two knobs that belong to opposite sides of the trade:
+
+- **Hold window** (`holdWindowDefault`, 10s; `fifo.holdMs`, `X-QM-Hold-Ms`). When a model's last
+  in-flight request drains, `OnServeDone` marks it un-evictable for one window. Sized to a *tool
+  call*, not a model load: a window shorter than the real gap never fires at all, because the next
+  round always arrives after it lapsed.
+- **Waiter patience** (`patienceDefault`, 5min; `fifo.patienceMs`, `X-QM-Patience-Ms`). A hold is
+  renewed by every round, so on its own it would let one loop keep the GPU forever. A queued request
+  stops honouring holds once it has waited out its patience, preempts the incumbent, and becomes the
+  incumbent itself. **Patience belongs to the waiter, not the incumbent** — only the waiter knows
+  what the delay costs it, five minutes is right for a background agent and unbearable for someone
+  watching a chat, and both can be queued for the same model at once. The playground stamps 60s on
+  its own turns (`playgroundPatienceMs`); an unattended API client gets the 5-minute default.
+
+Enforcement is one more queue predicate, step **(5b)** of `OnRequest` and the matching arm of
+`drainQueue`, via `heldAgainst`. Requests granted per caller: `holdFor[model]` is recorded at grant
+time, because `ServeDoneEvent` carries only a model ID while the window is a property of the
+*request* that asked for it. Holds are released outright when the model actually stops
+(`releaseHold` from `OnSwapDone`'s evict set and `OnUnload`) — protecting a process that no longer
+exists would keep a queued request waiting for nothing.
+
+**`Effects.Wake` / `Scheduler.OnWake`.** A hold expiring is the only decision the scheduler makes on
+a *wall clock* rather than on an event that arrives by itself. `Wake(d)` arms a timer on the
+baseRouter that nudges a buffered-1 `wakeCh`; the run loop turns that into `OnWake`, which expires
+lapsed holds and re-drains. Without it a held model would stay protected until something unrelated
+happened to drain the queue. The wait requested is capped at the caller's *remaining patience*, so
+the wake lands on whichever deadline comes first.
+
 **Abandoned-swap abort.** When a request queues behind an in-flight swap whose waiters have all disconnected (`activeSwap.waiters` empty), `reapAbandonedSwaps` (`fifo.go`) calls `Effects.AbortSwap` to Stop that loading model now instead of letting it finish only to be evicted for the queued request. AbortSwap is best-effort/async (`base.go`): stopping a `StateStarting` process aborts its start, `doSwap`'s `WaitReady` returns the error, and the resulting `SwapDone` clears the swap and re-drains the queue. Reap runs from `OnRequest` (collision case), `OnCancel`, and end of `drainQueue`. Swaps with live waiters are never aborted — their caller wants that model (no priority preemption).
 
 **VRAM-budget-aware multi-load (fork).** When `config.VramBudgetGB > 0`, `groupSwapper.EvictionFor` runs `budgetEviction` (`group.go`) *before* the static policy: the target is admitted whenever its `ModelConfig.EstVramGB` plus the resident set fits the budget, and only enough residents are evicted — least-recently-used first — to make it fit. That replaces "loading B evicts its whole exclusive group whether or not B would have fit". Four rules keep it safe: an **unknown target** estimate (0 — hand-written config, or a class the sizer doesn't model) returns `ok=false` and falls through to the legacy static policy, since admitting an unmeasured model against a budget is the case that OOMs the box; an **unknown resident** is always evicted (its footprint can't be accounted for); `persistent` groups are **charged but never evicted**; and eviction stops the moment the sum fits. The estimates come from autogen's emitted `estVramGB:` (see `internal/autogen/CLAUDE.md`), with synthetic `?ctx=` variants re-sized at mint time (`internal/server/variant.go`). Because ONE scheduler sees every group's residents, this accounting spans all listeners — the fork's cross-port eviction no longer rides on `exclusive`.
@@ -47,6 +79,12 @@ The **eviction policy** is decoupled from scheduling. `groupSwapper` (`group.go`
 - **One scheduler, shared by all listeners.** The architectural invariant of this fork: there must be exactly one `run()` loop / scheduler instance, and every HTTP listener routes through it. Two scheduler instances = two independent VRAM accountings = collisions on the single GPU. Never instantiate per-listener routers. (See the fork goal in the repo `CLAUDE.md`.)
 - **No locks in the scheduler.** Every `Scheduler` and `Effects` method runs on the single `run()` goroutine, serialized by the channel `select`. Scheduler state is plain maps/slices touched only from these callbacks — do **not** mutate scheduler state from a spawned goroutine. Slow work goes to `Effects.StartSwap` and comes back as a `SwapDone` event.
 - **Live config reload (`ApplyConfig`).** `baseRouter.config` and `baseRouter.processes` are `atomic.Pointer`s (read lock-free via `cfg()`/`procs()`), NOT frozen at construction. `LocalRouter.ApplyConfig(newCfg)` funnels a config swap through the run loop (`applyConfigCh` → `handleApplyConfig`) so it serialises with every scheduling decision: it validates via the concrete router's `plan(cfg)` closure first (bad config = clean no-op), then diffs the process set (retunes kept models via `process.SetConfig` for their next spawn, `makeProcess`+`applyHooks` for added ones, async `Stop` for removed ones), swaps both pointers COW, and calls `Scheduler.ApplyConfig` (planner + per-model limits/image set, preserving in-flight state). Running upstreams are never torn down — a changed model's new launch args apply on its next load. This retires the old destructive `server.New`+`Shutdown` reload. Concrete routers (`Group`/`Matrix`) supply `plan` + `makeProcess` right after `newBaseRouter`.
+- **The hold is currently granted per request, not per outcome.** Any request that drains grants
+  its model a window, including the last round of a loop and a one-shot chat turn — so a model can
+  sit protected for 10s after the work is genuinely over, and a user switching models in the UI can
+  wait it out. The playground already suppresses it for turns that offer no tools
+  (`X-QM-Hold-Ms: 0`, `streamSSE`), which cannot loop by construction. The general fix is to gate
+  the hold on `finish_reason == "tool_calls"` from the response tee; not built yet.
 - **`Swapper.EvictionFor` must be pure** — no logging, no mutation, called many times per request (once per request and again for every queued request on each drain). Log only in `OnSwapStart`, which fires exactly once per real swap.
 - **The `GrantServe` boolean contract.** The caller's `Respond` channel is unbuffered, so a successful send proves the caller is still there and took the handler. Only increment `inFlight` when `GrantServe` returns true — a false return means the caller left, no `ServeDoneEvent` will arrive, and incrementing would strand the counter and permanently block future evictions.
 - **Two contexts in `baseRouter`.** `shutdownCtx` governs request machinery (stop granting / reject callers); `procCtx` governs process lifetime and is cancelled only *after* graceful `Stop()` reaps children. Don't conflate them.

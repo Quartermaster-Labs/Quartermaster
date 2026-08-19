@@ -58,6 +58,11 @@ type Scheduler interface {
 	OnSwapDone(ev SwapDone)
 	// OnServeDone handles a tracked ServeHTTP finishing (in-flight decrement).
 	OnServeDone(ev ServeDoneEvent)
+	// OnWake handles a timer the scheduler asked for via Effects.Wake. It
+	// exists so a decision that is deferred until a WALL-CLOCK moment (a hold
+	// expiring, a waiter running out of patience) is re-examined even when no
+	// other event happens to arrive.
+	OnWake()
 	// OnUnload reconciles scheduler state for an unload, stops the targeted
 	// processes via Effects, and drains the queue. It must block until the
 	// targeted processes have stopped.
@@ -103,6 +108,10 @@ type Effects interface {
 	// StopProcesses stops the named processes in parallel and blocks until all
 	// have stopped. Unknown IDs are skipped.
 	StopProcesses(timeout time.Duration, ids []string)
+	// Wake asks for an OnWake callback on the run loop after d. Must be
+	// non-blocking (the scheduler calls it from the run loop itself) and may
+	// coalesce overlapping requests into one callback.
+	Wake(d time.Duration)
 }
 
 // New returns a Scheduler selected by conf.Routing.Scheduler.Use, configured
@@ -127,6 +136,22 @@ type HandlerReq struct {
 	Ctx        context.Context
 	Respond    chan HandlerResp
 	PositionCh chan int
+
+	// Arrived is when ServeHTTP received this request. Patience is measured
+	// from here, so time spent queued for ANY reason counts against it.
+	Arrived time.Time
+
+	// Hold is the idle-grace window this caller wants applied to its model once
+	// this request completes (X-QM-Hold-Ms). A client that knows it is mid-loop
+	// can ask for exactly as long as its tool calls take. 0 = unset (use the
+	// configured default), negative = explicitly none.
+	Hold time.Duration
+
+	// Patience is how long this caller tolerates waiting behind another model's
+	// hold (X-QM-Patience-Ms). 0 = unset (configured default), negative = none,
+	// i.e. this request ignores holds entirely. The playground sets a short one
+	// so a background agent loop cannot make an interactive turn look hung.
+	Patience time.Duration
 }
 
 // HandlerResp is the routing decision returned to a HandlerReq's caller: either
