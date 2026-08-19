@@ -151,6 +151,10 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 	if md, i := argVal(args, "-md"); i >= 0 {
 		if fi, statErr := os.Stat(md); statErr == nil {
 			in.DraftGB = float64(fi.Size()) / gib
+			// This file is on the launched cmd line, so it loads regardless of its
+			// name. Tag it with the kind the spec chain drafts with so the sizer's
+			// kind gate (matchedDraftSizeGB) keeps charging it.
+			in.DraftKind = specDraftKind(in.Spec)
 		} else if logf != nil {
 			logf(fmt.Sprintf("dynoffload: -md stat failed (%v); draft VRAM under-charged", statErr))
 		}
@@ -337,6 +341,18 @@ func hasFlag(args []string, name string) bool {
 		}
 	}
 	return false
+}
+
+// specDraftKind reports which draft sidecar kind a spec chain loads via -md
+// ("mtp"/"dflash", "" for a model-less chain like ngram-mod).
+func specDraftKind(spec string) string {
+	switch {
+	case specHas(spec, "draft-dflash"):
+		return "dflash"
+	case specHas(spec, "draft-mtp"):
+		return "mtp"
+	}
+	return ""
 }
 
 // specTypes joins every --spec-type value with "+", matching the form the

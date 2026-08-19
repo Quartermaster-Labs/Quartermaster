@@ -1,6 +1,7 @@
 package autogen
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -233,5 +234,52 @@ func TestBuildCmdLines_dflashNoDoubledFlags(t *testing.T) {
 		if n > 1 {
 			t.Fatalf("flag %q appears %d times: %v", flag, n, lines)
 		}
+	}
+}
+
+// The VRAM charge for a draft sidecar must follow the same kind gate the
+// emitter uses for -md. Qwen3.8-27B pairs a ~1 GB DFlash drafter to a model
+// that auto-defaults to its baked-in MTP head: the drafter is never attached,
+// so charging its weights reserved ~0.8 GB of VRAM nothing loads into.
+func TestDraftOverheadGB_kindGate(t *testing.T) {
+	const dflashGB = 1.06
+	mtpSpec := "draft-mtp+ngram-mod"
+
+	// DFlash sidecar in the dir, running on the baked-in MTP head -> flat 0.34.
+	if got := draftOverheadGB(mtpSpec, matchedDraftSizeGB(mtpSpec, "dflash", dflashGB)); got != 0.34 {
+		t.Fatalf("draft-mtp with a dflash sidecar charged %.2f GB, want the baked-in 0.34", got)
+	}
+	// Explicitly selected: the drafter really loads, charge its weights + pad.
+	if got := draftOverheadGB("draft-dflash", matchedDraftSizeGB("draft-dflash", "dflash", dflashGB)); math.Abs(got-(dflashGB+0.1)) > 1e-9 {
+		t.Fatalf("draft-dflash charged %.2f GB, want %.2f", got, dflashGB+0.1)
+	}
+	// Mirror case: an mtp sidecar must not be charged against a dflash spec.
+	if got := draftOverheadGB("draft-dflash", matchedDraftSizeGB("draft-dflash", "mtp", 0.46)); got != 0 {
+		t.Fatalf("draft-dflash with an mtp sidecar charged %.2f GB, want 0", got)
+	}
+	// A matched mtp sidecar (Gemma-4) still charges its real weights.
+	if got := draftOverheadGB(mtpSpec, matchedDraftSizeGB(mtpSpec, "mtp", 0.46)); math.Abs(got-0.56) > 1e-9 {
+		t.Fatalf("draft-mtp with an mtp sidecar charged %.2f GB, want %.2f", got, 0.46+0.1)
+	}
+	// No draft spec at all charges nothing, sidecar or not.
+	if got := draftOverheadGB("ngram-mod", matchedDraftSizeGB("ngram-mod", "dflash", dflashGB)); got != 0 {
+		t.Fatalf("ngram-mod charged %.2f GB, want 0", got)
+	}
+}
+
+// The sizing charge and the emitted cmd must agree: whenever no -md is emitted,
+// no sidecar weights may be charged.
+func TestBuildCmdLines_draftChargeMatchesMd(t *testing.T) {
+	s := Settings{ServerExe: "llama-server.exe"}
+	prof := profile{Name: "test", Target: 24, Ctx: 8192}
+	row := GgufRow{FullPath: "/m.gguf", DraftPath: "/m-DFlash-Q4_K_M.gguf", DraftKind: "dflash", DraftSizeGB: 1.06}
+	meta := Metadata{IsMTP: true} // baked-in head -> auto spec is draft-mtp
+
+	spec := effectiveSpec(meta, nil, row.DraftKind)
+	got := strings.Join(buildCmdLines(s, meta, row, prof, 8192, 99, 0, "q8_0", "q8_0", false, nil), " ")
+	hasMd := strings.Contains(got, "-md ")
+	charged := matchedDraftSizeGB(spec, row.DraftKind, row.DraftSizeGB) > 0
+	if hasMd != charged {
+		t.Fatalf("-md emitted = %v but sidecar weights charged = %v (spec %q): %s", hasMd, charged, spec, got)
 	}
 }

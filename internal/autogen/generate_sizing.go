@@ -520,7 +520,12 @@ func MmprojVramGB(mmprojPath string, fileSizeGB float64, s Settings) float64 {
 func draftOverheadGB(spec string, draftSizeGB float64) float64 {
 	switch {
 	case specHas(spec, "draft-dflash"):
-		return draftSizeGB + 0.1
+		if draftSizeGB > 0 {
+			return draftSizeGB + 0.1
+		}
+		// No sidecar attached (broken config: --spec-type draft-dflash with no
+		// -md). Nothing loads, so charge nothing rather than a bare pad.
+		return 0
 	case specHas(spec, "draft-mtp"):
 		if draftSizeGB > 0 {
 			return draftSizeGB + 0.1
@@ -529,4 +534,21 @@ func draftOverheadGB(spec string, draftSizeGB float64) float64 {
 	default:
 		return 0
 	}
+}
+
+// matchedDraftSizeGB returns a paired sidecar's on-disk size only when its kind
+// is the one the active spec chain will actually load as -md, mirroring the
+// mdMatches rule in buildCmdLines; 0 otherwise.
+//
+// Both conditions matter: a model dir can hold a DFlash drafter while the model
+// runs on a baked-in MTP head (Qwen3.8-27B does). Charging the sidecar there
+// reserved ~1 GB of VRAM for a draft the emitted cmd never attaches, which cost
+// real -ngl/ctx. Feeding 0 through drops draftOverheadGB back to the baked-in
+// 0.34 GB, which is what actually loads.
+func matchedDraftSizeGB(spec, draftKind string, draftSizeGB float64) float64 {
+	if (specHas(spec, "draft-mtp") && draftKind == "mtp") ||
+		(specHas(spec, "draft-dflash") && draftKind == "dflash") {
+		return draftSizeGB
+	}
+	return 0
 }

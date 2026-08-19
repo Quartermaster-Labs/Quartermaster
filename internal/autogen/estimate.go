@@ -89,7 +89,11 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 	if in.TargetVramGB > 0 {
 		estTarget = in.TargetVramGB
 	}
-	kvDef := defaultKvQuant(s, meta, estTarget, s.VramOverheadGB+draftOverheadGB(spec, in.DraftGB))
+	// Only charge the sidecar when the active spec will actually attach it as -md
+	// (see matchedDraftSizeGB): a dir can pair a DFlash drafter to a model that
+	// runs on a baked-in MTP head, and that drafter never loads.
+	draftGB := matchedDraftSizeGB(spec, in.DraftKind, in.DraftGB)
+	kvDef := defaultKvQuant(s, meta, estTarget, s.VramOverheadGB+draftOverheadGB(spec, draftGB))
 	// The editor sends kvK/kvV independently, so a form that resolves only one
 	// side must not sink the preview back to the fleet default — see
 	// resolveKvPair.
@@ -112,7 +116,7 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 	// draft file (Gemma-4's MTP sidecar, or any DFlash drafter — always separate)
 	// instead charges its real on-disk weights + a small KV/compute pad, so big
 	// drafts scale up rather than under-counting at 0.34.
-	specOh := draftOverheadGB(spec, in.DraftGB)
+	specOh := draftOverheadGB(spec, draftGB)
 
 	prof := profile{
 		Name:     "estimate",

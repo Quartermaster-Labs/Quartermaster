@@ -623,7 +623,9 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 	if ov.VramTargetGB > 0 {
 		soloTarget = ov.VramTargetGB
 	}
-	kvDef := defaultKvQuant(s, meta, soloTarget, s.VramOverheadGB+draftOverheadGB(effectiveSpec(meta, &ov, row.DraftKind), row.DraftSizeGB))
+	soloSpec := effectiveSpec(meta, &ov, row.DraftKind)
+	soloDraftGB := matchedDraftSizeGB(soloSpec, row.DraftKind, row.DraftSizeGB)
+	kvDef := defaultKvQuant(s, meta, soloTarget, s.VramOverheadGB+draftOverheadGB(soloSpec, soloDraftGB))
 	kvK, kvV := kvDef, kvDef
 	if ov.KvK != "" {
 		kvK = ov.KvK
@@ -644,7 +646,7 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 	if ov.VramTargetGB > 0 {
 		target = ov.VramTargetGB
 	}
-	specOh := draftOverheadGB(effectiveSpec(meta, &ov, row.DraftKind), row.DraftSizeGB)
+	specOh := draftOverheadGB(soloSpec, soloDraftGB)
 	prof := profile{
 		Name:           "preview",
 		Target:         target,

@@ -221,12 +221,12 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		s.ServerExe = be.Exe // this model's chosen llama build wins (local copy)
 	}
 
-	// Pre-placement (ngl not chosen yet): assume GPU-bound so a dflash sidecar
-	// charges its real draft VRAM. If the model turns out CPU-bound and emit
-	// downgrades to mtp, we've over-reserved by the draft size — conservative,
-	// never an under-count that could OOM.
+	// Charge the draft sidecar only when this spec chain actually attaches it as
+	// -md (matchedDraftSizeGB mirrors the emitter's kind gate). A dir pairing a
+	// DFlash drafter to a model that runs on its baked-in MTP head must fall back
+	// to the flat baked-in charge, not the drafter's weights.
 	modelSpec := effectiveSpec(meta, ov, row.DraftKind)
-	specOh := draftOverheadGB(modelSpec, row.DraftSizeGB)
+	specOh := draftOverheadGB(modelSpec, matchedDraftSizeGB(modelSpec, row.DraftKind, row.DraftSizeGB))
 
 	// KV quant: f16 unless it can't buy denseMinCtx in this model's budget, in
 	// which case q8_0 (see defaultKvQuant); settings.kvQuant pins it outright.
@@ -325,7 +325,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		if v.Spec != "" {
 			vEffSpec = v.Spec
 		}
-		vSpecOh := draftOverheadGB(vEffSpec, row.DraftSizeGB)
+		vSpecOh := draftOverheadGB(vEffSpec, matchedDraftSizeGB(vEffSpec, row.DraftKind, row.DraftSizeGB))
 		// Standalone: a blank ctx-checkpoints uses the generator default, not the
 		// model-wide override value.
 		vCheckpoints := v.CtxCheckpoints
@@ -390,7 +390,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			}
 			// Spec changes the draft overhead; recharge off the variant's spec.
 			if v.Spec != "" {
-				vp.Overhead = s.VramOverheadGB + draftOverheadGB(v.Spec, row.DraftSizeGB) + MmprojVramGB(row.MmprojPath, row.MmprojSizeGB, s)
+				vp.Overhead = s.VramOverheadGB + draftOverheadGB(v.Spec, matchedDraftSizeGB(v.Spec, row.DraftKind, row.DraftSizeGB)) + MmprojVramGB(row.MmprojPath, row.MmprojSizeGB, s)
 			}
 			vp.Unlisted = v.Unlisted
 			vp.KvK = v.KvK
