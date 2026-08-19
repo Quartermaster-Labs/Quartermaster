@@ -389,3 +389,27 @@ func TestServer_LogStream_UnknownID_Returns400(t *testing.T) {
 		t.Errorf("status=%d want 400", w.Code)
 	}
 }
+
+// runningProxies must report only READY models. A starting model's socket is
+// not listening yet, and the slot cache's warm path (which holds a slot gate
+// across the forwarded request) would deadlock against the post-start restore
+// that the same process still has to run.
+func TestServer_RunningProxies_ReadyOnly(t *testing.T) {
+	local := newStubRouter([]string{"ready", "starting", "stopping"}, "")
+	local.running = map[string]process.ProcessState{
+		"ready":    process.StateReady,
+		"starting": process.StateStarting,
+		"stopping": process.StateStopping,
+	}
+	s := newTestServer(local, nil)
+	s.cfg.Store(&config.Config{Models: map[string]config.ModelConfig{
+		"ready":    {Proxy: "http://127.0.0.1:1"},
+		"starting": {Proxy: "http://127.0.0.1:2"},
+		"stopping": {Proxy: "http://127.0.0.1:3"},
+	}})
+
+	got := s.runningProxies()
+	if len(got) != 1 || got["ready"] != "http://127.0.0.1:1" {
+		t.Errorf("expected only the ready model, got %v", got)
+	}
+}

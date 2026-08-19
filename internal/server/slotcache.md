@@ -113,12 +113,19 @@ After any restore, `awaitConfirm[model]` is set; the **next** request's upstream
   directory-wide prune passes. Lock order `slotMu` → `stateMu`, `slotMu` → `diskMu`; `statsMu`
   nests into none. A single global lock here made a multi-GB save for model A block every other
   model — regression test `TestSlotCache_SaveDoesNotBlockOtherModels`.
-- **The slot gate is a channel, not a mutex**, because two of its callers must be able to give up.
-  `lockSlotCtx` (request path) abandons the wait when the client disconnects rather than being
-  handed a slot nobody wants; `lockSlotWait` bounds the pre-stop save at `evictLockWait` (10s) —
-  that save runs on the process's OWN event loop, and an in-flight request holding the gate may
-  still need that loop, so an unbounded wait would pin the two against each other. A skipped save
-  costs one reprefill (logged as `error: evict-save busy`); a deadlock costs the server.
+- **The slot gate is a channel, not a mutex**, because every caller but one must be able to give
+  up. `lockSlotCtx` (request path) abandons the wait when the client disconnects rather than being
+  handed a slot nobody wants; `lockSlotWait` bounds BOTH process hooks — the pre-stop save and the
+  post-start restore — at `hookLockWait` (10s). Both hooks run on the process's OWN event loop
+  (`postStart` fires there before any `WaitReady` caller is woken), and the request holding the
+  gate is usually waiting on that very loop, so an unbounded wait pins the two against each other
+  and the model never becomes usable again. A skipped save/restore costs one reprefill (logged as
+  `error: evict-save busy` / `load-restore busy`); a deadlock costs the model until restart.
+- **Warm path means READY, not "not stopped".** `running()` is `Server.runningProxies`, which
+  filters to `StateReady` on purpose. `RunningModels()` also reports `StateStarting`; treating a
+  starting model as warm made the request take the gate and then wait for a ready signal that the
+  post-start restore — blocked on that same gate — could never emit. A model that is still loading
+  belongs on the cold path (`markPendingRestore` + `restoreOnLoad`).
 - **Stats lock.** `record()` uses `statsMu` so it is callable inside any `stateMu`/`slotMu` section
   without reentrancy.
 - **Cold mint template mismatch.** `synthPrefill` always mints via OpenAI `/v1/chat/completions`; a

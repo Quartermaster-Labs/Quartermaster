@@ -19,6 +19,7 @@ import (
 	"github.com/quartermaster-labs/quartermaster/internal/logmon"
 	"github.com/quartermaster-labs/quartermaster/internal/peimports"
 	"github.com/quartermaster-labs/quartermaster/internal/perf"
+	"github.com/quartermaster-labs/quartermaster/internal/process"
 	"github.com/quartermaster-labs/quartermaster/internal/router"
 	"github.com/quartermaster-labs/quartermaster/internal/shared"
 	"github.com/quartermaster-labs/quartermaster/internal/update"
@@ -530,13 +531,25 @@ func (s *Server) trackSystemVram(ctx context.Context) {
 	}
 }
 
-// runningProxies maps each running local model to its resolved upstream base
-// URL (cfg.Models[id].Proxy has ${PORT} already substituted at config load).
+// runningProxies maps each READY local model to its resolved upstream base URL
+// (cfg.Models[id].Proxy has ${PORT} already substituted at config load).
+//
+// Ready only, not merely non-stopped: RunningModels also reports StateStarting
+// and StateStopping, and a caller that treats a starting model as up is talking
+// to a socket that is not listening yet. It also broke the slot cache — the
+// warm path holds a slot gate across the forwarded request, so a request that
+// arrived mid-start took the gate and then waited for a ready signal that the
+// post-start hook (restoreSlotOnLoad, on the process event loop) could not
+// emit because it was blocked on that same gate. Starting models belong on the
+// cold path.
 func (s *Server) runningProxies() map[string]string {
 	running := s.local.RunningModels()
 	models := s.config().Models
 	out := make(map[string]string, len(running))
-	for id := range running {
+	for id, st := range running {
+		if st != process.StateReady {
+			continue
+		}
 		if mc, ok := models[id]; ok && mc.Proxy != "" {
 			out[id] = mc.Proxy
 		}

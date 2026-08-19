@@ -505,7 +505,18 @@ func (sc *slotCache) restoreOnLoad(model string) {
 // conversation pinned to it, else its agent's preamble cache, else a similar
 // session's prefix.
 func (sc *slotCache) restoreSlotOnLoad(model string, idx int) {
-	defer sc.lockSlot(model, idx)()
+	// Bounded for the same reason saveSlotOnEvict is: this runs in the process's
+	// post-start hook, on that process's own event loop, BEFORE any WaitReady
+	// caller is woken. Anything still holding this gate is a request waiting for
+	// that ready signal, so blocking here would wedge the model for good. A
+	// skipped restore costs one reprefill.
+	release, ok := sc.lockSlotWait(model, idx, hookLockWait)
+	if !ok {
+		sc.log.Warnf("slotcache: load-restore %s slot %d: still in use, skipped", model, idx)
+		sc.record(kvEvent{Model: model, Slot: idx, Op: "error", Detail: "load-restore busy"})
+		return
+	}
+	defer release()
 
 	slot := sk(model, idx)
 	sc.stateMu.Lock()
@@ -674,10 +685,13 @@ func (sc *slotCache) synthPrefill(ctx context.Context, base, model string, idx i
 	return nil
 }
 
-// evictLockWait caps how long a pre-stop save waits for a slot whose gate is
-// held by an in-flight request. Long enough to outlast a save/restore on a
-// multi-GB slot, short enough that a stuck request cannot hold up a shutdown.
-const evictLockWait = 10 * time.Second
+// hookLockWait caps how long a PROCESS HOOK (pre-stop save, post-start restore)
+// waits for a slot whose gate is held by an in-flight request. Both run on the
+// process's own event loop, which that request may still need, so neither may
+// wait forever. Long enough to outlast a save/restore on a multi-GB slot, short
+// enough that a stuck request cannot wedge the model. A var only so tests can
+// shrink it.
+var hookLockWait = 10 * time.Second
 
 // saveOnEvict persists a model's live slot KV just before its process is stopped
 // for eviction/unload. This is the path that handles a model SWAP — the common
@@ -720,7 +734,7 @@ func (sc *slotCache) saveSlotOnEvict(ctx context.Context, base, model string, id
 	// the gate may still need that loop to finish — waiting forever would pin the
 	// two against each other. A skipped save costs one reprefill; a deadlock here
 	// costs the server.
-	release, ok := sc.lockSlotWait(model, idx, evictLockWait)
+	release, ok := sc.lockSlotWait(model, idx, hookLockWait)
 	if !ok {
 		sc.log.Warnf("slotcache: evict-save %s slot %d: still in use, skipped", model, idx)
 		sc.record(kvEvent{Model: model, Slot: idx, Op: "error", Detail: "evict-save busy"})

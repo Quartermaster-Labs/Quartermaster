@@ -929,3 +929,33 @@ func TestSlotCache_LockSlotWaitGivesUp(t *testing.T) {
 		t.Fatal("gate not released")
 	}
 }
+
+// The post-start restore runs on the process's own event loop, before any
+// WaitReady caller is woken. If a request already holds the slot gate it is
+// waiting for exactly that wake-up, so the restore must give up rather than
+// deadlock the model.
+func TestSlotCache_RestoreOnLoad_GivesUpOnHeldGate(t *testing.T) {
+	dir := t.TempDir()
+	srv := fakeBackend(t, 0, dir)
+	sc := newEvictTestCache(dir, srv.URL)
+	os.WriteFile(filepath.Join(dir, fileName("m", "abc")), []byte("kv"), 0o644)
+	sc.markPendingRestore("m", "abc", "", 0)
+
+	release := sc.lockSlot("m", 0) // an in-flight request holds the slot
+	defer release()
+
+	prev := hookLockWait
+	hookLockWait = 20 * time.Millisecond
+	defer func() { hookLockWait = prev }()
+
+	done := make(chan struct{})
+	go func() {
+		sc.restoreOnLoad("m")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("restoreOnLoad blocked on a held slot gate - the model would never ready")
+	}
+}
