@@ -123,6 +123,9 @@ type turnManager struct {
 
 	mu     sync.Mutex
 	active map[string]*activeTurn // key = user
+
+	tgMu sync.Mutex
+	tg   *titlegen // resolved title model+CLI, memoized (titlegen.go)
 }
 
 func newTurnManager(pg *Playground, log *logmon.Monitor) *turnManager {

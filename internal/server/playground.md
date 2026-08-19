@@ -71,6 +71,14 @@ never fan out CPU processes against the generating model or stall the stream. `t
 **stops the worker and fills the gaps** between `endInline()` and the final `flush()`. A cancelled
 turn drains its queue and skips titling entirely.
 
+That mop-up sits between the last token and the turn's `done` event, and the UI gates the whole
+message footer (divider, word counts, regenerate/copy/speak) on `done` — so every second spent
+there is a second the finished answer sits on screen looking half-rendered. Per-title timeouts
+alone bounded it at `titlegenMaxSpans` x `titlegenTimeout`, and this is the machine's worst moment:
+the titler spawns the GPU-linked llama binary (CPU-only, but it still enumerates devices) while the
+router may be swapping a model in for someone else. So the pass gets **one** deadline for the whole
+list, `titlegenMopupBudget` (2.5s); spans it doesn't reach keep the UI's local heuristic.
+
 ## `titlegen.go` — the title model
 
 One-line titles for collapsed reasoning boxes ("Thought for 2s · Weighing the two quant options").
@@ -82,7 +90,8 @@ unavailable.
 
 **FLAN-T5-small** (80M, ~79 MiB Q8_0, `assets/titlegen-flan-t5-small-q8_0.gguf`, **`go:embed`ed**
 so it exists in every install) run **exec-per-request on CPU** (`-ngl 0`, mutex-serialized, 4s
-timeout) — no scheduler entry, no VRAM, no group eviction. Routing a title through the loaded chat
+timeout — the mutex is taken *before* the clock starts, else a run queued behind another one is
+killed on arrival and logged as a failure it never had) — no scheduler entry, no VRAM, no group eviction. Routing a title through the loaded chat
 model would swap a model in, or contend for the slot, to produce six words of chrome.
 
 - **It must run under `llama-completion`, never `llama-server`**: llama.cpp's server has no

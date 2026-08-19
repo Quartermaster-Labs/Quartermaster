@@ -97,12 +97,28 @@ After any restore, `awaitConfirm[model]` is set; the **next** request's upstream
   Bookkeeping keys are `model` for slot 0 and `model#N` above it, so single-slot models key exactly
   as before. Caveat: a route that re-parses the body into fresh params (Anthropic `/v1/messages`)
   can drop `id_slot`, degrading the pin to a hint — visible as confirm-miss, never a wrong answer.
+- **A restore is only worth what the next request does with it.** llama-server serves a slot's
+  queue in arrival order, so a restore that isn't atomic with the request it was made for is simply
+  overwritten by whatever else was already queued onto that slot — we pay the restore and still
+  reprefill from zero (`restore-hit` immediately followed by `confirm-miss ... 0 reused`). With one
+  slot and two conversations alternating on it that was a coin flip. So the slot gate is taken
+  inside `onSwitch` and released by `middleware` only **after the forwarded request has been
+  served**, moving the queueing from llama-server into the proxy. It is taken even when the
+  conversation is already resident (`same`), because being resident is exactly what the next
+  arrival would overwrite. Warm path only: on the cold path the forwarded request drives the load
+  and its post-start hook (`restoreSlotOnLoad`) needs the same gate.
 - **Three locks.** `stateMu` guards bookkeeping maps and is never held across I/O; `slotMu` is
   **per model slot** (`lockSlot`) so a multi-GB save on slot 0 can't block a request landing on
   slot 1; `diskMu` serializes
   directory-wide prune passes. Lock order `slotMu` → `stateMu`, `slotMu` → `diskMu`; `statsMu`
   nests into none. A single global lock here made a multi-GB save for model A block every other
   model — regression test `TestSlotCache_SaveDoesNotBlockOtherModels`.
+- **The slot gate is a channel, not a mutex**, because two of its callers must be able to give up.
+  `lockSlotCtx` (request path) abandons the wait when the client disconnects rather than being
+  handed a slot nobody wants; `lockSlotWait` bounds the pre-stop save at `evictLockWait` (10s) —
+  that save runs on the process's OWN event loop, and an in-flight request holding the gate may
+  still need that loop, so an unbounded wait would pin the two against each other. A skipped save
+  costs one reprefill (logged as `error: evict-save busy`); a deadlock costs the server.
 - **Stats lock.** `record()` uses `statsMu` so it is callable inside any `stateMu`/`slotMu` section
   without reentrancy.
 - **Cold mint template mismatch.** `synthPrefill` always mints via OpenAI `/v1/chat/completions`; a

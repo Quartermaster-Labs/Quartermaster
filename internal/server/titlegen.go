@@ -39,13 +39,25 @@ import (
 // titlegenMu serializes title runs. Each run is its own short-lived process, and
 // a turn asks for one title per reasoning span; letting a burst of them run
 // concurrently would spawn N CPU-saturating processes while the user's real
-// generation is still streaming.
+// generation is still streaming. Held for the whole of title(), including the
+// wait for the process.
 var titlegenMu sync.Mutex
 
 // titlegenTimeout caps one title run. A cold-cache CPU run of an 80M model is
 // well under a second; a second and a half is a hang, and a title is never worth
 // blocking a turn's persistence on.
 const titlegenTimeout = 4 * time.Second
+
+// titlegenMopupBudget caps the END-OF-TURN pass (titleReasoning) as a WHOLE, not
+// per title. That pass runs between the last token and the turn's "done" event,
+// so every second it spends is a second the answer sits on screen without its
+// footer, word counts or regenerate button — the turn is finished and the user
+// is looking at it. Per-title timeouts alone bounded this at 6x4s, and the
+// machine is at its slowest exactly here: the titler spawns the GPU-linked llama
+// binary (CPU-only via -ngl 0, but it still enumerates devices at startup) while
+// the router may be swapping a model in for someone else. Titles are best-effort
+// by contract; the UI keeps its local heuristic for whatever we don't reach.
+const titlegenMopupBudget = 2500 * time.Millisecond
 
 const (
 	titlegenMaxInput  = 1200 // chars of reasoning fed to the model (T5 ctx is small)
@@ -139,6 +151,17 @@ func (tg *titlegen) title(ctx context.Context, text string) (string, error) {
 	if prompt == "" {
 		return "", nil
 	}
+	// One title process at a time: a turn asks for one per reasoning span, and a
+	// burst of concurrent CPU-saturating spawns would compete with the model that
+	// is generating. Taken BEFORE the timeout starts — a run that started its
+	// clock while queued behind another one got killed on arrival and logged as a
+	// failure it never had.
+	titlegenMu.Lock()
+	defer titlegenMu.Unlock()
+	if ctx.Err() != nil {
+		return "", nil // caller's budget went while we waited; not an error
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, titlegenTimeout)
 	defer cancel()
 
@@ -159,13 +182,35 @@ func (tg *titlegen) title(ctx context.Context, text string) (string, error) {
 	// stdout ONLY: the CLI writes its load/sampler/perf log to stderr, timestamped
 	// (`0.00.184.451 I sampler seed: …`), and merging the two streams would leave
 	// the first line of "output" a log line rather than the title.
-	titlegenMu.Lock()
 	out, err := cmd.Output()
-	titlegenMu.Unlock()
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", filepath.Base(tg.exe), err)
 	}
 	return sanitizeTitle(cleanTitlegenOutput(string(out), prompt), text), nil
+}
+
+// titlegen resolves the title model + CLI once and reuses it for the life of the
+// server: the paths do not move, and both the streaming titler and the
+// end-of-turn mop-up want them on every turn. Only SUCCESS is memoized — a
+// failure is retried, so installing the title model does not need a restart.
+func (tm *turnManager) titlegen() *titlegen {
+	if tm.pg == nil {
+		return nil
+	}
+	tm.tgMu.Lock()
+	defer tm.tgMu.Unlock()
+	if tm.tg != nil {
+		return tm.tg
+	}
+	tg, err := resolveTitlegen(tm.pg.GeneratePath)
+	if err != nil {
+		if tm.log != nil {
+			tm.log.Warnf("titlegen: %v", err)
+		}
+		return nil
+	}
+	tm.tg = tg
+	return tg
 }
 
 // titlegenRefusalRe matches the assistant-voice boilerplate an 80M instruction
@@ -474,20 +519,11 @@ func (tm *turnManager) startTitler(ctx context.Context, at *activeTurn) {
 
 	go func() {
 		defer close(done)
-		var tg *titlegen
-		resolved := false
 		for j := range jobs {
 			if ctx.Err() != nil {
 				continue // turn cancelled: drain so senders never block, do no work
 			}
-			if !resolved {
-				resolved = true
-				g, err := resolveTitlegen(tm.pg.GeneratePath)
-				if err != nil && tm.log != nil {
-					tm.log.Warnf("titlegen: %v", err)
-				}
-				tg = g
-			}
+			tg := tm.titlegen()
 			if tg == nil {
 				continue
 			}
@@ -586,17 +622,18 @@ func (tm *turnManager) titleReasoning(ctx context.Context, at *activeTurn) {
 		return
 	}
 
-	tg, err := resolveTitlegen(tm.pg.GeneratePath)
-	if err != nil {
-		if tm.log != nil {
-			tm.log.Warnf("titlegen: %v", err)
-		}
-		return
-	}
+	tg := tm.titlegen()
 	if tg == nil {
 		return
 	}
+	// One deadline for the whole list, not one per title: this is the last thing
+	// between a finished answer and its "done" event.
+	ctx, cancel := context.WithTimeout(ctx, titlegenMopupBudget)
+	defer cancel()
 	for _, j := range todo {
+		if ctx.Err() != nil {
+			return // budget spent; the rest keep the UI's local heuristic
+		}
 		t, terr := tg.title(ctx, j.text)
 		if terr != nil {
 			if tm.log != nil {

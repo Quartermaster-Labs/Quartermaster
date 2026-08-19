@@ -229,7 +229,7 @@ func TestSlotCache_SaveDoesNotBlockOtherModels(t *testing.T) {
 	aDone := make(chan struct{})
 	go func() {
 		defer close(aDone)
-		sc.onSwitch(context.Background(), "a", srv.URL, "new", "", 0)
+		switchSlot(sc, context.Background(), "a", srv.URL, "new", "", 0)
 	}()
 	<-saving // A now holds its model lock, parked mid-save
 
@@ -238,7 +238,7 @@ func TestSlotCache_SaveDoesNotBlockOtherModels(t *testing.T) {
 	bDone := make(chan struct{})
 	go func() {
 		defer close(bDone)
-		sc.onSwitch(context.Background(), "b", srv.URL, "k", "", 0)
+		switchSlot(sc, context.Background(), "b", srv.URL, "k", "", 0)
 	}()
 	select {
 	case <-bDone:
@@ -593,11 +593,11 @@ func TestSlotCache_PreambleCache_WarmSwitch(t *testing.T) {
 
 	preamble := strings.Repeat("S", seedMinPrefixBytes+100) + "\x00tools\x00[]"
 
-	sc.onSwitch(context.Background(), "m", srv.URL, "conv1", preamble, 0) // warm, new convo
+	switchSlot(sc, context.Background(), "m", srv.URL, "conv1", preamble, 0) // warm, new convo
 	if sc.counters.PreambleMints != 1 {
 		t.Fatalf("warm switch should mint preamble, got %+v", sc.counters)
 	}
-	sc.onSwitch(context.Background(), "m", srv.URL, "conv2", preamble, 0) // same preamble, new convo
+	switchSlot(sc, context.Background(), "m", srv.URL, "conv2", preamble, 0) // same preamble, new convo
 	if sc.counters.PreambleWarm != 1 || sc.counters.PreambleHits != 0 {
 		t.Fatalf("same-preamble warm switch should skip restore (warm=1 hit=0), got %+v", sc.counters)
 	}
@@ -631,11 +631,11 @@ func TestSlotCache_PreambleCache_DropsStale(t *testing.T) {
 	day2 := body + "date=2026-06-29" + "\x00tools\x00[]"
 	old := fileName("m", preambleKey(preambleHash(day1)))
 
-	sc.onSwitch(context.Background(), "m", srv.URL, "c1", day1, 0) // mint day1
+	switchSlot(sc, context.Background(), "m", srv.URL, "c1", day1, 0) // mint day1
 	if _, err := os.Stat(filepath.Join(dir, old)); err != nil {
 		t.Fatalf("day1 preamble not written: %v", err)
 	}
-	sc.onSwitch(context.Background(), "m", srv.URL, "c2", day2, 0) // mint day2 -> drops day1
+	switchSlot(sc, context.Background(), "m", srv.URL, "c2", day2, 0) // mint day2 -> drops day1
 	if _, err := os.Stat(filepath.Join(dir, old)); !os.IsNotExist(err) {
 		t.Errorf("stale day1 preamble should be deleted, stat err=%v", err)
 	}
@@ -751,14 +751,14 @@ func TestSlotCache_MultiSlot_PinsConversationsToOwnSlots(t *testing.T) {
 	sc := newEvictTestCache(dir, srv.URL)
 	sc.slots = func(string) int { return 2 }
 
-	a := sc.onSwitch(context.Background(), "m", srv.URL, "convA", "", 0)
+	a := switchSlot(sc, context.Background(), "m", srv.URL, "convA", "", 0)
 	sc.markResident("m", a, "convA", "", 0)
-	b := sc.onSwitch(context.Background(), "m", srv.URL, "convB", "", 0)
+	b := switchSlot(sc, context.Background(), "m", srv.URL, "convB", "", 0)
 	sc.markResident("m", b, "convB", "", 0)
 	if a == b {
 		t.Fatalf("two conversations must land on different slots, both got %d", a)
 	}
-	if again := sc.onSwitch(context.Background(), "m", srv.URL, "convA", "", 0); again != a {
+	if again := switchSlot(sc, context.Background(), "m", srv.URL, "convA", "", 0); again != a {
 		t.Errorf("conversation A moved slots: %d -> %d", a, again)
 	}
 }
@@ -777,7 +777,7 @@ func TestSlotCache_MultiSlot_SkipsBusySlot(t *testing.T) {
 	sc.markResident("m", 0, "convA", "", 0)
 	sc.markResident("m", 1, "convB", "", 0)
 
-	got := sc.onSwitch(context.Background(), "m", srv.URL, "convC", "", 0)
+	got := switchSlot(sc, context.Background(), "m", srv.URL, "convC", "", 0)
 	if got != 1 {
 		t.Fatalf("expected the idle slot 1, got %d", got)
 	}
@@ -841,5 +841,91 @@ func TestPinSlot(t *testing.T) {
 	}
 	if r.ContentLength != int64(len(got)) || r.Header.Get("Content-Length") != strconv.Itoa(len(got)) {
 		t.Errorf("Content-Length %d/%q != body %d", r.ContentLength, r.Header.Get("Content-Length"), len(got))
+	}
+}
+
+// switchSlot is onSwitch as the middleware calls it: take the slot gate, prepare
+// the slot, then release once the "request" has been served. Tests that called
+// onSwitch directly would hold the gate forever and deadlock the next switch.
+func switchSlot(sc *slotCache, ctx context.Context, model, base, key, preamble string, bodyBytes int) int {
+	idx, release := sc.onSwitch(ctx, model, base, key, preamble, bodyBytes)
+	if release != nil {
+		release()
+	}
+	return idx
+}
+
+// The slot gate is held across the forwarded request, not just across the
+// save/restore: while one conversation's request is in flight, a second one must
+// not be able to prepare the same slot and be queued onto it. That window is
+// what turned a restore-hit into "confirm-miss, 0 reused" — llama-server served
+// the other conversation's queued request first and overwrote the KV we had just
+// restored.
+func TestSlotCache_SwitchHoldsSlotUntilRequestServed(t *testing.T) {
+	dir := t.TempDir()
+	srv := fakeBackend(t, 35000, dir)
+	sc := newEvictTestCache(dir, srv.URL)
+
+	idxA, release := sc.onSwitch(context.Background(), "m", srv.URL, "convA", "", 0)
+	if release == nil {
+		t.Fatal("onSwitch must hand back the slot gate it took")
+	}
+	sc.markResident("m", idxA, "convA", "", 0)
+
+	got := make(chan int, 1)
+	go func() {
+		idx, rel := sc.onSwitch(context.Background(), "m", srv.URL, "convB", "", 0)
+		if rel != nil {
+			rel()
+		}
+		got <- idx
+	}()
+	select {
+	case <-got:
+		t.Fatal("second conversation took the slot while the first request was still in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	release() // "request served"
+	select {
+	case <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second conversation never got the slot after the first released it")
+	}
+}
+
+// A client that disconnects while queued behind another conversation's
+// generation stops waiting, rather than being handed a slot it will never use.
+func TestSlotCache_SwitchAbandonsOnClientCancel(t *testing.T) {
+	dir := t.TempDir()
+	srv := fakeBackend(t, 35000, dir)
+	sc := newEvictTestCache(dir, srv.URL)
+
+	_, release := sc.onSwitch(context.Background(), "m", srv.URL, "convA", "", 0)
+	defer release()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, rel := sc.onSwitch(ctx, "m", srv.URL, "convB", "", 0); rel != nil {
+		rel()
+		t.Fatal("a cancelled request must not take the slot gate")
+	}
+}
+
+// The pre-stop save waits a bounded time for the gate: it runs on the process's
+// own event loop, which an in-flight request may still need, so waiting forever
+// would pin the two against each other.
+func TestSlotCache_LockSlotWaitGivesUp(t *testing.T) {
+	sc := &slotCache{}
+	release, ok := sc.lockSlotWait("m", 0, time.Second)
+	if !ok {
+		t.Fatal("an idle slot gate must be handed out")
+	}
+	if _, ok := sc.lockSlotWait("m", 0, 20*time.Millisecond); ok {
+		t.Fatal("a held slot gate must not be handed out twice")
+	}
+	release()
+	if _, ok := sc.lockSlotWait("m", 0, time.Second); !ok {
+		t.Fatal("gate not released")
 	}
 }

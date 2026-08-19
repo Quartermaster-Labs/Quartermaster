@@ -111,8 +111,11 @@ type slotCache struct {
 	// request correlation only if labels (not totals) start mattering.
 	awaitConfirm map[string][]string
 
-	// slotMu holds one mutex per model id (see lockModel). Guarded by stateMu.
-	slotMu map[string]*sync.Mutex
+	// slotMu holds one gate per slot (see lockSlot). Guarded by stateMu. A
+	// buffered channel rather than a sync.Mutex because the request path has to
+	// be able to give up waiting when its client disconnects, and the evict path
+	// has to be able to give up waiting at all (see saveSlotOnEvict).
+	slotMu map[string]chan struct{}
 	// diskMu serializes the directory-wide prune passes.
 	diskMu sync.Mutex
 
@@ -171,7 +174,7 @@ func newSlotCache(cfg config.SlotCacheConfig, running func() map[string]string, 
 		pendingSeed:     map[string]bool{},
 		pendingPreamble: map[string]string{},
 		awaitConfirm:    map[string][]string{},
-		slotMu:          map[string]*sync.Mutex{},
+		slotMu:          map[string]chan struct{}{},
 	}
 	if !sc.enabled {
 		return sc
@@ -226,7 +229,16 @@ func (sc *slotCache) middleware(next http.Handler) http.Handler {
 		body := int(r.ContentLength)
 		var idx int
 		if base, running := sc.running()[model]; running {
-			idx = sc.onSwitch(r.Context(), model, base, key, preamble, body)
+			var release func()
+			idx, release = sc.onSwitch(r.Context(), model, base, key, preamble, body)
+			// Held until the request has been served, so nothing else can be
+			// queued onto this slot between the restore and the request it was
+			// for. Only the warm path takes it: on the cold path the forwarded
+			// request drives the model's load, and its post-start hook
+			// (restoreSlotOnLoad) needs this same gate.
+			if release != nil {
+				defer release()
+			}
 		} else {
 			// Cold: model not loaded. The forwarded request will trigger a router
 			// load; arrange for its KV to be restored (exact match) or seeded from a
@@ -269,25 +281,59 @@ func (sc *slotCache) seedSkip(model string) bool {
 	return sc.recurrent != nil && sc.recurrent(model)
 }
 
-// lockSlot acquires the lock for ONE slot (model + index) and returns its
-// unlocker. Only two operations on the same slot of the same llama-server must
-// be serialized: different models are different processes, and different slots
-// of one process are independent save/restore tasks. The map is tiny (one entry
-// per slot ever seen) and never pruned.
-func (sc *slotCache) lockSlot(model string, idx int) func() {
+// slotGate returns the one-permit gate for a slot, creating it on first use.
+// Only operations on the same slot of the same llama-server must be serialized:
+// different models are different processes, and different slots of one process
+// are independent save/restore tasks. The map is tiny (one entry per slot ever
+// seen) and never pruned.
+func (sc *slotCache) slotGate(model string, idx int) chan struct{} {
 	sc.stateMu.Lock()
+	defer sc.stateMu.Unlock()
 	if sc.slotMu == nil { // zero-value slotCache (tests build literals)
-		sc.slotMu = map[string]*sync.Mutex{}
+		sc.slotMu = map[string]chan struct{}{}
 	}
 	key := sk(model, idx)
-	mu := sc.slotMu[key]
-	if mu == nil {
-		mu = &sync.Mutex{}
-		sc.slotMu[key] = mu
+	g := sc.slotMu[key]
+	if g == nil {
+		g = make(chan struct{}, 1)
+		sc.slotMu[key] = g
 	}
-	sc.stateMu.Unlock()
-	mu.Lock()
-	return mu.Unlock
+	return g
+}
+
+// lockSlot acquires a slot's gate and returns its releaser. Blocks.
+func (sc *slotCache) lockSlot(model string, idx int) func() {
+	g := sc.slotGate(model, idx)
+	g <- struct{}{}
+	return func() { <-g }
+}
+
+// lockSlotCtx is lockSlot for the REQUEST path, which holds the gate across the
+// forwarded request (see middleware) and so can be held up for as long as
+// another conversation's generation takes. A client that disconnects while
+// queued stops waiting instead of being handed a slot it no longer wants.
+func (sc *slotCache) lockSlotCtx(ctx context.Context, model string, idx int) (func(), bool) {
+	g := sc.slotGate(model, idx)
+	select {
+	case g <- struct{}{}:
+		return func() { <-g }, true
+	case <-ctx.Done():
+		return nil, false
+	}
+}
+
+// lockSlotWait is lockSlot with a deadline, for callers that must not block
+// indefinitely behind a request. Returns false if the gate stayed taken.
+func (sc *slotCache) lockSlotWait(model string, idx int, d time.Duration) (func(), bool) {
+	g := sc.slotGate(model, idx)
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case g <- struct{}{}:
+		return func() { <-g }, true
+	case <-t.C:
+		return nil, false
+	}
 }
 
 // occupantOf returns the model's current occupant plus a snapshot of its fields,
@@ -315,22 +361,43 @@ func (sc *slotCache) setOccupant(model string, idx int, occ *occInfo) {
 // warm model: pick the slot that conversation belongs on, save whoever is being
 // evicted from it if they are worth it, restore the incoming one if we have it on
 // disk, then mark the incoming as resident. Returns the slot index the caller
-// must pin the request to.
-func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble string, bodyBytes int) int {
+// must pin the request to, and the slot gate's releaser, which the caller holds
+// until the request it prepared the slot for has been served (nil when the gate
+// was abandoned).
+func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble string, bodyBytes int) (int, func()) {
 	n := sc.slotCount(model)
 	// One /slots read covers every slot: it says which ones are mid-generation
 	// (never evict those) and how many tokens the outgoing conversation is worth
 	// saving. Done BEFORE the slot lock so a save in flight on another slot of the
 	// same model doesn't serialize the read.
 	states := sc.slotStates(ctx, base)
-	idx, prev, same := sc.acquire(model, key, preamble, n, busySet(states))
-	if same {
-		return idx // same conversation continuing on its own slot — nothing to swap
-	}
+	busy := busySet(states)
+	idx, prev, same := sc.acquire(model, key, preamble, n, busy)
 
-	// Per-slot, not per-model: the save/restore below can take seconds on a
-	// multi-GB slot, and only requests landing on THIS slot must wait behind it.
-	defer sc.lockSlot(model, idx)()
+	// Per-slot, not per-model: only requests landing on THIS slot wait behind us.
+	//
+	// The gate is held THROUGH the forwarded request, not just across the
+	// save/restore below, and it is taken even when this conversation is already
+	// resident. llama-server serves a slot's queue in arrival order, so a restore
+	// that is not atomic with the request it was for is simply overwritten by
+	// whatever else was already queued for that slot — we pay for the restore and
+	// still reprefill from zero ("restore-hit" followed by "confirm-miss, 0
+	// reused"). With one slot and two conversations alternating on it, that was a
+	// coin flip. Serializing here moves the queueing from llama-server into the
+	// proxy, where the restore and the request it belongs to can be kept together.
+	release, ok := sc.lockSlotCtx(ctx, model, idx)
+	if !ok {
+		return idx, nil // client gave up while queued; nothing worth preparing
+	}
+	if same {
+		return idx, release // same conversation on its own slot — nothing to swap
+	}
+	// A slot that was mid-generation when we sized it up has finished by the time
+	// the gate came free, so the token count we read is the outgoing occupant's
+	// from before it answered — and the save gate below would judge them on it.
+	if busy[idx] {
+		states = sc.slotStates(ctx, base)
+	}
 
 	if prev.occupied && prev.dirty {
 		// Only persist a conversation big enough to be expensive to reprefill. No
@@ -378,7 +445,7 @@ func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble st
 	} else if sc.ensurePreambleSeed(ctx, base, model, idx, preamble) {
 		sc.pushAwait(model, "preamble")
 	}
-	return idx
+	return idx, release
 }
 
 // markPendingRestore records that, when `model` next reaches Ready, the slot
@@ -607,6 +674,11 @@ func (sc *slotCache) synthPrefill(ctx context.Context, base, model string, idx i
 	return nil
 }
 
+// evictLockWait caps how long a pre-stop save waits for a slot whose gate is
+// held by an in-flight request. Long enough to outlast a save/restore on a
+// multi-GB slot, short enough that a stuck request cannot hold up a shutdown.
+const evictLockWait = 10 * time.Second
+
 // saveOnEvict persists a model's live slot KV just before its process is stopped
 // for eviction/unload. This is the path that handles a model SWAP — the common
 // case onSwitch misses: onSwitch only fires when a new request arrives for the
@@ -643,7 +715,18 @@ func (sc *slotCache) saveOnEvict(model string) {
 // enough to be worth the disk write, then drops it from occupancy tracking (the
 // process — and with it the slot — is about to die).
 func (sc *slotCache) saveSlotOnEvict(ctx context.Context, base, model string, idx int, toks int64) {
-	defer sc.lockSlot(model, idx)()
+	// Bounded, unlike every other slot-gate caller. This runs in the process's
+	// pre-stop hook, on that process's own event loop, while a request holding
+	// the gate may still need that loop to finish — waiting forever would pin the
+	// two against each other. A skipped save costs one reprefill; a deadlock here
+	// costs the server.
+	release, ok := sc.lockSlotWait(model, idx, evictLockWait)
+	if !ok {
+		sc.log.Warnf("slotcache: evict-save %s slot %d: still in use, skipped", model, idx)
+		sc.record(kvEvent{Model: model, Slot: idx, Op: "error", Detail: "evict-save busy"})
+		return
+	}
+	defer release()
 
 	occ, occKey, occPreamble, occDirty := sc.occupantOf(model, idx)
 	if occ == nil || !occDirty {
