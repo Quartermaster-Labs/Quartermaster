@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseCmdFields, genDefaultNum } from "./modelCmdForm";
+import { parseCmdFields, genDefaultNum, specToggle } from "./modelCmdForm";
 import type { ModelConfig } from "../stores/api";
 
 // The sampler defaults are the one flag group where 0 is a real value, so the
@@ -41,5 +41,23 @@ describe("genDefaultNum", () => {
 
   it("does not match a longer flag that merely starts the same", () => {
     expect(genDefaultNum(cfg("llama-server --top-k 20"), "--top-p")).toBe("");
+  });
+});
+
+describe("specToggle", () => {
+  it("chains compatible backends and clears none", () => {
+    expect(specToggle("none", "ngram-mod", true)).toBe("ngram-mod");
+    expect(specToggle("ngram-mod", "ngram-map-k4v", true)).toBe("ngram-mod+ngram-map-k4v");
+  });
+
+  // The two draft backends share the single -md slot, so picking one must drop
+  // the other rather than emitting both --spec-type flags over one draft file.
+  it("keeps draft-mtp and draft-dflash exclusive", () => {
+    expect(specToggle("draft-mtp+ngram-mod", "draft-dflash", true)).toBe("ngram-mod+draft-dflash");
+    expect(specToggle("draft-dflash", "draft-mtp", true)).toBe("draft-mtp");
+  });
+
+  it("stores an explicit none when the last backend is cleared", () => {
+    expect(specToggle("ngram-mod", "ngram-mod", false)).toBe("none");
   });
 });

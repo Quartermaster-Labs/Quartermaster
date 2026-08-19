@@ -55,7 +55,7 @@
     class="{track} rounded-full bg-control-border transition-colors peer-checked:bg-primary peer-disabled:opacity-45 peer-focus-visible:ring-2 peer-focus-visible:ring-primary peer-focus-visible:ring-offset-1 peer-focus-visible:ring-offset-surface"
   ></span>
   <span
-    class="{knob} pointer-events-none absolute rounded-full bg-background shadow transition-transform peer-disabled:opacity-45"
+    class="{knob} pointer-events-none absolute rounded-full bg-background shadow transition-transform peer-checked:bg-btn-primary-text peer-disabled:opacity-45"
   ></span>
 </span>
 

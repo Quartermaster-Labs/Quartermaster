@@ -37,7 +37,6 @@
     parseCmdFields,
     parseCtx,
     parseImageCmdFields,
-    specHas,
     specToggle,
     type ParsedCmd,
     type ParsedImg,
@@ -1390,6 +1389,32 @@
         </span>
       {/snippet}
 
+      <!-- Speculative backend picker, shared by the Default and Variant tabs.
+           Three states in one row: Auto (spec unset => whatever the generator
+           picks, shown read-only beside the toggle), an explicit chain (chips),
+           and nothing picked (stored as "none" = speculation off). "none" is a
+           state rather than a chip of its own — as a peer checkbox it read like
+           a backend you could combine with the others. -->
+      {#snippet specRow(cur: string | undefined, set: (v: string) => void)}
+        {@const auto = (cur ?? "") === ""}
+        {@const picked = activeSpecs(cur)}
+        <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
+            <Toggle size="sm" checked={auto} onchange={(on) => set(on ? "" : picked.length ? picked.join("+") : "none")} /> Auto
+          </label>
+          {#if auto}
+            <span class="font-mono text-xs text-txtsecondary">{picked.length ? picked.join(" + ") : "none"}</span>
+          {:else}
+            {#each specBackends as b}
+              <button type="button" class="chip-toggle" aria-pressed={picked.includes(b)} onclick={() => set(specToggle(cur, b, !picked.includes(b)))}>{b}</button>
+            {/each}
+            {#if picked.length === 0}
+              <span class="text-xs text-txtsecondary">none — speculation off</span>
+            {/if}
+          {/if}
+        </div>
+      {/snippet}
+
       {#if config}
         {#if classBackends.length > 0}
           <div class="flex items-center gap-2">
@@ -1988,14 +2013,9 @@
           <div class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               Speculative
-              {@render hint("Speculative decoding backends. Chainable (e.g. draft-mtp + ngram-map-k4v). None checked = generator default; draft-mtp needs a model with MTP layers, draft-dflash needs a paired *-dflash-*.gguf sidecar.")}
+              {@render hint("Speculative decoding backends. Auto = the generator's pick. Turn Auto off to chain them by hand (e.g. draft-mtp + ngram-map-k4v); draft-mtp and draft-dflash are exclusive since they share the one draft-model slot. No chip picked = speculation off. draft-mtp needs a model with MTP layers, draft-dflash a paired *-dflash-*.gguf sidecar.")}
             </span>
-            <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-              {#each specBackends as b}
-                <label class="flex items-center gap-1"><input type="checkbox" checked={effSpecs.includes(b)} onchange={(e) => (spec = specToggle(spec, b, e.currentTarget.checked))} />{b}</label>
-              {/each}
-              <label class="flex items-center gap-1"><input type="checkbox" checked={specHas(spec, "none")} onchange={(e) => (spec = specToggle(spec, "none", e.currentTarget.checked))} />none</label>
-            </div>
+            {@render specRow(spec, (v) => (spec = v))}
           </div>
 
           {#if effSpecs.includes("draft-mtp") || effSpecs.includes("draft-dflash")}
@@ -2391,12 +2411,7 @@
 
             <div class="flex flex-col gap-1 text-sm">
               <span class="text-txtsecondary">Speculative</span>
-              <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-                {#each specBackends as b}
-                  <label class="flex items-center gap-1"><input type="checkbox" checked={vEffSpecs.includes(b)} onchange={(e) => (sv.spec = specToggle(sv.spec, b, e.currentTarget.checked))} />{b}</label>
-                {/each}
-                <label class="flex items-center gap-1"><input type="checkbox" checked={specHas(sv.spec, "none")} onchange={(e) => (sv.spec = specToggle(sv.spec, "none", e.currentTarget.checked))} />none</label>
-              </div>
+              {@render specRow(sv.spec, (v) => (sv.spec = v))}
             </div>
 
             {#if vEffSpecs.includes("draft-mtp") || vEffSpecs.includes("draft-dflash")}

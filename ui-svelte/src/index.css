@@ -502,6 +502,26 @@
     @apply bg-primary-hover;
   }
 
+  /* Multi-select chip — a standalone pill that toggles independently, unlike
+     .seg whose children are mutually exclusive and butt against each other.
+     Selected carries aria-pressed="true". Labels are flag names, so mono and
+     normal-case rather than .seg's uppercase tracking. */
+  .chip-toggle {
+    @apply inline-flex items-center rounded-full border border-card-border bg-surface px-2.5 py-0.5 font-mono text-xs text-txtsecondary transition-colors;
+  }
+  .chip-toggle:hover:not(:disabled) {
+    @apply bg-secondary text-txtmain cursor-pointer;
+  }
+  .chip-toggle[aria-pressed="true"] {
+    @apply bg-primary border-primary text-btn-primary-text;
+  }
+  .chip-toggle[aria-pressed="true"]:hover:not(:disabled) {
+    @apply bg-primary-hover text-btn-primary-text;
+  }
+  .chip-toggle:disabled {
+    @apply opacity-40 cursor-not-allowed;
+  }
+
   /* Icon-only affordance button (panel toolbars). */
   .icon-btn {
     @apply w-7 h-7 inline-flex items-center justify-center rounded border border-transparent text-txtsecondary transition-colors;

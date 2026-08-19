@@ -345,12 +345,21 @@ export function genDefaultNum(c: ModelConfig | null, flag: string): number | "" 
 export function specHas(s: string | undefined, b: string): boolean {
   return (s ?? "").split("+").includes(b);
 }
+// draft-mtp and draft-dflash are mutually exclusive: both drive the single -md
+// draft-model slot, so chaining them emits two --spec-type flags over one draft
+// file and half the pair launches against a drafter of the wrong arch.
+export const SPEC_DRAFT_BACKENDS = ["draft-mtp", "draft-dflash"];
+
 // Toggle backend b in the "+"-joined list s. "none" is exclusive (clears the
-// rest); checking a real backend clears "none".
+// rest); checking a real backend clears "none", and checking a draft backend
+// clears the other one.
 export function specToggle(s: string | undefined, b: string, on: boolean): string {
   if (b === "none") return on ? "none" : "";
   let parts = (s ?? "").split("+").filter(Boolean).filter((x) => x !== "none" && x !== b);
-  if (on) parts.push(b);
+  if (on) {
+    if (SPEC_DRAFT_BACKENDS.includes(b)) parts = parts.filter((x) => !SPEC_DRAFT_BACKENDS.includes(x));
+    parts.push(b);
+  }
   // Unchecking the last backend means "off" - store explicit "none" rather
   // than "" (empty would fall back to the MTP/ngram auto-default at emit).
   if (!on && parts.length === 0) return "none";
