@@ -87,7 +87,20 @@ type toolYouTubeTarget struct {
 	Count int    `json:"count"`
 }
 
-// resolve extracts the video id or reports the 400 already.
+// target returns the trimmed pointer-at-a-thing string, or reports the 400. Used
+// by the transcript route, which accepts any site yt-dlp handles and leaves the
+// vetting to tools.ParseMediaTarget.
+func (t toolYouTubeTarget) target(w http.ResponseWriter) (string, bool) {
+	s := strings.TrimSpace(firstNonEmpty(t.URL, t.Video, t.ID, t.Link))
+	if s == "" {
+		toolError(w, http.StatusBadRequest, `missing required field: "url" (the page of a video, talk, stream or episode - or a YouTube video id)`)
+		return "", false
+	}
+	return s, true
+}
+
+// resolve extracts the video id or reports the 400 already. YouTube-only paths
+// (comments) use this; anything id-shaped is what the extractor needs.
 func (t toolYouTubeTarget) resolve(w http.ResponseWriter) (id string, ok bool) {
 	target := strings.TrimSpace(firstNonEmpty(t.URL, t.Video, t.ID, t.Link))
 	if target == "" {
@@ -104,18 +117,27 @@ func (t toolYouTubeTarget) resolve(w http.ResponseWriter) (id string, ok bool) {
 // --- POST /v1/tools/youtube/transcript -------------------------------------
 
 // handleToolYouTubeTranscript fetches a transcript via yt-dlp and returns the
-// structured result (id/title/uploader/duration + ~30s timestamped paragraphs,
-// truncated at the per-video ceiling with an explicit INCOMPLETE marker).
+// structured result (id/url/site/title/uploader/duration + ~30s timestamped
+// paragraphs, truncated at the per-recording ceiling with an explicit
+// INCOMPLETE marker). Not YouTube-only despite the path: any page yt-dlp can
+// pull subtitles from works, and the route keeps its name because external
+// callers already point at it.
 func (s *Server) handleToolYouTubeTranscript(w http.ResponseWriter, r *http.Request) {
 	var req toolYouTubeTarget
 	if !decodeToolBody(w, r, &req) {
 		return
 	}
-	id, ok := req.resolve(w)
+	target, ok := req.target(w)
 	if !ok {
 		return
 	}
-	tr, err := tools.GetTranscript(r.Context(), id, strings.TrimSpace(req.Lang))
+	// Vet here as well as inside GetTranscript so a malformed or private-address
+	// target is a 400 the caller can fix, not a 502 that reads as our fault.
+	if _, err := tools.ParseMediaTarget(r.Context(), target); err != nil {
+		toolError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	tr, err := tools.GetTranscript(r.Context(), target, strings.TrimSpace(req.Lang))
 	if err != nil {
 		if errors.Is(err, tools.ErrDlpMissing) {
 			toolError(w, http.StatusServiceUnavailable, err.Error())

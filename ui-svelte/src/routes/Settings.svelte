@@ -513,7 +513,7 @@
         <div class="flex items-center gap-2">
           <h6 >KV-cache disk save</h6>
           <span class="status bg-warning/10 text-warning text-micro !px-1.5 !py-0.5">Experimental</span>
-          {@render hint("Persist a long conversation's KV cache to disk so it survives being evicted from the live slot, and is restored instead of reprocessed. Master switch: each model opts in via its config editor (\"Save KV cache to disk\").\n\nExperimental: reliable for standard transformer models. Hybrid/recurrent models (e.g. Qwen3.5/3.6 GatedDeltaNet) don't yet restore across a process swap - pending upstream llama.cpp (#20819); they still get warm same-process reuse.")}
+          {@render hint("Persist a long conversation's KV cache to disk so it survives being evicted from the live slot, and is restored instead of reprocessed. Master switch: each model opts in via its config editor (\"Save KV cache to disk\").\n\nExperimental: exact save/restore of a conversation works on both standard transformers and hybrid/recurrent models (e.g. Qwen3.5/3.6 GatedDeltaNet) - a restored session continues by appending, reusing ~100% of its tokens. What hybrids can't do is partial-prefix seeding (preamble mint / best-seed reuse): a recurrent state can be continued forward but never rewound or trimmed, so those paths are skipped automatically on recurrent models (slotCache.recurrentSeeds re-enables them for testing).")}
         </div>
         <label class="flex items-center gap-2 text-sm">
           <Toggle size="sm" bind:checked={slotEnable} />

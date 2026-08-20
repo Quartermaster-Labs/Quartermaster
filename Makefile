@@ -38,7 +38,6 @@ ui/node_modules:
 ui: ui/node_modules
 	cd ui-svelte && npm run build
 	touch internal/server/ui_dist/placeholder.txt
-	cp ui-svelte/src/lib/wikiArticles.json internal/server/wiki_articles.json
 
 # Build OSX binary
 mac: ui
@@ -238,4 +237,4 @@ test-ui:
 
 # Phony targets
 .PHONY: all clean ui mac windows versioninfo package-windows package-linux package-mac _package-nix simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy release release-public _build-release
-.PHONE: linux linux-arm64 linux-amd64
+.PHONY: linux linux-arm64 linux-amd64

@@ -139,7 +139,7 @@ therefore *coexist* with hand-entered rows in one registry, distinguished by
   never calls GitHub, so the settings tab opens instantly and works offline.
   `GITHUB_TOKEN` is used when present.
 - **`yt-dlp` is installed but not registered** (`Kind: ""`). It is a helper for
-  the chat `youtube_transcript` tool, not a backend;
+  the chat `media_transcript` tool, not a backend;
   `internal/server/youtube.go`'s `ytDlpPath` checks a managed install first, then
   PATH, then the bundle directory.
 - **Extras are best-effort, but must be *paired*.** A missing cudart zip logs and

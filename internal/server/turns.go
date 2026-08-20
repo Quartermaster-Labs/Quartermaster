@@ -127,14 +127,20 @@ type turnManager struct {
 
 	tgMu sync.Mutex
 	tg   *titlegen // resolved title model+CLI, memoized (titlegen.go)
+
+	// replays holds each turn's forwarded tool tail so the NEXT turn can send
+	// those exact bytes back instead of a rebuild that differs from them (see
+	// turnsrecord.go). In memory, LRU-bounded; a miss falls back to the rebuild.
+	replays *replayStore
 }
 
 func newTurnManager(pg *Playground, log *logmon.Monitor) *turnManager {
 	return &turnManager{
-		pg:     pg,
-		log:    log,
-		client: &http.Client{}, // no timeout: a turn may stream for minutes
-		active: map[string]*activeTurn{},
+		pg:      pg,
+		log:     log,
+		client:  &http.Client{}, // no timeout: a turn may stream for minutes
+		active:  map[string]*activeTurn{},
+		replays: newReplayStore(),
 	}
 }
 
@@ -327,7 +333,7 @@ func busyLabel(name, query string) string {
 		return "Reading the feed"
 	case "youtube_search":
 		return "Searching YouTube"
-	case "youtube_transcript":
+	case "media_transcript", "youtube_transcript":
 		return "Reading the transcript"
 	case "youtube_comments":
 		return "Reading the comments"
@@ -339,6 +345,32 @@ func busyLabel(name, query string) string {
 		return "Checking quartermaster"
 	case "quartermaster_configure":
 		return "Applying the config change"
+	}
+	return ""
+}
+
+// digestMinChars is how big a tool result has to be before the model's prefill
+// of it is worth a label. A short result (a date, a rate, three wiki lines) is
+// swallowed in the time it takes to paint one frame.
+const digestMinChars = 1500
+
+// digestLabel is what the user reads AFTER a tool returns and BEFORE the model
+// writes its next token: the round's tool output has to be prefilled, and a
+// long page is several seconds of complete silence with the tool card sitting
+// inside a collapsed reasoning trail. Without this the chat looks hung. Cleared
+// by the next round's first token (see onStatus in runRound).
+func digestLabel(name string) string {
+	switch name {
+	case "fetch_page":
+		return "Reading through the page"
+	case "fetch_feed":
+		return "Reading through the feed"
+	case "media_transcript", "youtube_transcript":
+		return "Reading through the transcript"
+	case "youtube_comments":
+		return "Reading through the comments"
+	case "web_search", "youtube_search", "wiki_search":
+		return "Reading through the results"
 	}
 	return ""
 }
@@ -678,6 +710,9 @@ func (tm *turnManager) run(ctx context.Context, user string, at *activeTurn, sta
 	kind, msg := "done", ""
 	if err := tm.runLoop(ctx, at, start); err != nil && ctx.Err() == nil {
 		kind, msg = "error", err.Error()
+		tm.log.Warnf("turn: %s on %s failed after %s: %v", user, start.Model, time.Since(began).Round(time.Millisecond), err)
+	} else {
+		tm.log.Debugf("turn: %s on %s %s in %s", user, start.Model, kind, time.Since(began).Round(time.Millisecond))
 	}
 	at.endInline()
 	at.mu.Lock()
@@ -712,13 +747,20 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 		return fmt.Errorf("bad messages: %w", err)
 	}
 	var apiTail []json.RawMessage
+	// spoken is the prose each recorded assistant message carries, in round
+	// order; the record needs it to know how much of the client's one stored
+	// answer was already sent inside the tail (turnsrecord.go, trimSpoken).
+	var spoken []string
+	// Record on EVERY exit, error and cancel included: a turn that died after two
+	// searches still gets those two results replayed exactly next time.
+	defer func() { tm.recordTurn(at, start.ChatID, apiTail, spoken) }()
 
 	useTools := len(start.Tools) > 0
 	// Put previous turns' tool calls and results back into the history the model
 	// reads (see turnsreplay.go). Only when tools are on: without them the model
 	// cannot answer a tool_calls message and the template may reject it.
 	if useTools {
-		base = replayToolCalls(base)
+		base = replayToolCalls(base, tm.replayLookup(start.ChatID))
 	}
 	maxTokens := 0
 	if start.MaxTokens != nil {
@@ -850,8 +892,12 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 		apiTail = append(apiTail, mustJSON(map[string]any{
 			"role": "assistant", "content": roundContent, "tool_calls": rawToolCalls(calls),
 		}))
+		spoken = append(spoken, roundContent)
 
 		contentLen, reasoningLen, during := at.lens()
+		// Label for the silence AFTER this round's tools return: the model has
+		// to prefill whatever they produced before it can write a token.
+		digest := ""
 		for _, tc := range calls {
 			// Models re-issue a call they already made — the same channel listing
 			// twice in one round, or again next round after ignoring the result.
@@ -870,6 +916,7 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 
 			citesBefore := citeOffset
 			query := parseToolQuery(tc.Args)
+			toolStart := time.Now()
 			// Live status for the duration of the call; cleared when it returns.
 			at.setBusy(busyLabel(tc.Name, query))
 			var resultText string
@@ -1069,21 +1116,26 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 						sources = append(sources, turnSource{Title: fd.Title, URL: fd.URL})
 					}
 				}
-			} else if tc.Name == "youtube_transcript" {
+			} else if tc.Name == "media_transcript" || tc.Name == "youtube_transcript" {
+				// The legacy name is still accepted: it sits in every stored chat
+				// and in replayed history, so a model that copies its own earlier
+				// call must not get "unknown tool".
 				kind = "youtube"
 				link, lang := parseYouTubeArgs(tc.Args)
 				query = link
-				vid := parseYouTubeID(link)
 				switch {
-				case vid == "":
-					resultText = fmt.Sprintf("%q is not a YouTube link. Pass the full video URL (or its 11-character video id).", link)
+				case strings.TrimSpace(link) == "":
+					resultText = "media_transcript needs a `url`: the page of the video, talk, stream or episode you want the captions of."
 				case ytCount >= maxYouTube:
 					resultText = fmt.Sprintf("Transcript limit reached (%d per turn). Answer with what you have.", maxYouTube)
 				case ytTurnTokens-ytTokens < ytMinTranscript:
-					resultText = fmt.Sprintf("Transcript budget for this turn is spent (~%d tokens of transcript already read, across %d video(s)). Answer from those; ask the user which remaining video matters most if you need another.", ytTokens, ytCount)
+					resultText = fmt.Sprintf("Transcript budget for this turn is spent (~%d tokens of transcript already read, across %d recording(s)). Answer from those; ask the user which remaining one matters most if you need another.", ytTokens, ytCount)
 				default:
 					ytCount++
-					tr, terr := fetchYouTubeTranscript(ctx, vid, lang)
+					// The raw link goes through: tools.ParseMediaTarget is what
+					// vets it (scheme, host, public address) before yt-dlp sees
+					// it, and it is not YouTube-specific.
+					tr, terr := fetchYouTubeTranscript(ctx, link, lang)
 					if terr != nil {
 						if ctx.Err() != nil {
 							return ctx.Err()
@@ -1092,7 +1144,10 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 						// narrates over is worse than no tool at all.
 						resultText = "Transcript unavailable: " + terr.Error()
 					} else {
-						vurl := "https://www.youtube.com/watch?v=" + vid
+						// tr.URL is yt-dlp's canonical page URL, which may differ
+						// from what the model passed (embed, share link, redirect).
+						// Citing the resolved one keeps the link clickable.
+						vurl := tr.URL
 						title := orURL(tr.Title, vurl)
 						query = title
 						n, ok := citeByURL(citations, vurl)
@@ -1248,6 +1303,16 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 			}
 
 			at.setBusy("")
+			if len(resultText) >= digestMinChars {
+				if d := digestLabel(tc.Name); d != "" {
+					digest = d
+				}
+			}
+			// The turn runner logged nothing at all, so a search chain falling
+			// through every provider, or yt-dlp taking 40s, was visible only as a
+			// stalled chat. Every tool call gets one line; the ones that came back
+			// as a failure message to the model get it at WARN.
+			tm.logToolCall(tc.Name, query, resultText, time.Since(toolStart))
 
 			// Cite reminder co-located with the numbered results (high compliance).
 			citeHint := ""
@@ -1271,7 +1336,42 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 				At: contentLen, ReasoningAt: reasoningLen, DuringReasoning: during, Sources: sources,
 			}, citations)
 		}
+		// Hold a label up across the prefill of the tool output. Cleared by the
+		// next round's first token (runRound's onStatus), or replaced by the
+		// next tool's own label.
+		at.setBusy(digest)
 		tm.flush("", at, false, "") // checkpoint after the tool round
+	}
+}
+
+// logSnip trims a value to n runes for a single log line, and keeps it to the
+// first line so a multi-line tool result can't wrap the log.
+func logSnip(s string, n int) string {
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.TrimSpace(s)
+	r := []rune(s)
+	if len(r) > n {
+		return string(r[:n]) + "..."
+	}
+	return s
+}
+
+// logToolCall records one executed tool call. Tool failures don't surface as Go
+// errors here - every branch turns them into prose for the model - so the level
+// is chosen from the shape of that prose rather than from an err value.
+func (tm *turnManager) logToolCall(name, query, result string, took time.Duration) {
+	if tm.log == nil {
+		return
+	}
+	line := fmt.Sprintf("tool: %s %s in %s", name, strconv.Quote(logSnip(query, 60)), took.Round(time.Millisecond))
+	switch {
+	case strings.Contains(result, "failed:"), strings.HasPrefix(result, "Could not "),
+		strings.Contains(result, "unavailable:"):
+		tm.log.Warnf("%s - %s", line, logSnip(result, 120))
+	default:
+		tm.log.Debug(line)
 	}
 }
 
@@ -1332,29 +1432,32 @@ func (tm *turnManager) streamRound(ctx context.Context, at *activeTurn, start tu
 	// says "Loading model…" for the first (it knows residency), so only the
 	// second needs a label -- and it is the one worth explaining, because
 	// nothing about the turn is wrong and the answer is not lost.
-	waiting := false
+	//
+	// A "loading" frame deliberately leaves the current label alone: on a later
+	// round the digest label is up, and the UI's own "Loading model…" line only
+	// renders on a bubble with no text yet.
 	onStatus := func(state string, pos int) {
-		if state == "waiting" {
+		switch state {
+		case "waiting":
 			label := "Waiting its turn"
 			if pos > 1 {
 				label = fmt.Sprintf("%s (#%d)", label, pos)
 			}
 			at.setBusy(label)
-			waiting = true
-			return
-		}
-		// Loading, or the first token: clear OUR label only. A tool's busy
-		// label can already be up by the time a later round waits again.
-		if waiting {
+		case "loading":
+			// leave the label alone (see above)
+		default:
+			// First token: whatever label is up belongs to the previous round --
+			// our own wait, or the digest label for the tool output this round
+			// has just finished prefilling. The model is writing now.
 			at.setBusy("")
-			waiting = false
 		}
 	}
 
 	finish, err := tm.streamSSE(ctx, body, start.ChatID, at.authKey, onContent, onReasoning, onTool, onProgress, onStatus)
-	if waiting {
-		at.setBusy("")
-	}
+	// A round that produced nothing (error, or an empty stream that never
+	// tripped onStatus) must not leave a stale label shimmering.
+	at.setBusy("")
 	if err != nil {
 		return "", "", nil, "", err
 	}
@@ -1831,4 +1934,3 @@ func trailingAssistant(sess map[string]any) map[string]any {
 	sess["messages"] = append(msgs, am)
 	return am
 }
-

@@ -35,9 +35,12 @@ var (
 
 const shutdownTimeout = 30 * time.Second
 
-// logTimeFormats maps the cfg.LogTimeFormat value to a Go time layout. An
-// unset or unrecognised value yields "" — no timestamp prefix.
+// logTimeFormats maps the cfg.LogTimeFormat value to a Go time layout.
+// An unset value means "clock" (see logTimeFormat below) and "none" turns the
+// timestamp off; an unrecognised value also yields "" — no timestamp prefix.
 var logTimeFormats = map[string]string{
+	"clock":       "15:04:05",
+	"none":        "",
 	"ansic":       time.ANSIC,
 	"unixdate":    time.UnixDate,
 	"rubydate":    time.RubyDate,
@@ -53,6 +56,18 @@ var logTimeFormats = map[string]string{
 	"stampmilli":  time.StampMilli,
 	"stampmicro":  time.StampMicro,
 	"stampnano":   time.StampNano,
+}
+
+// logTimeFormat resolves the configured timestamp layout. A log without times
+// can't answer "how long did that swap take" or "was that before or after I
+// hit send", so an unset value gets a wall clock rather than nothing; set
+// logTimeFormat to "none" for the old bare lines.
+func logTimeFormat(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return logTimeFormats["clock"]
+	}
+	return logTimeFormats[name]
 }
 
 // listenerAddrsChanged reports whether two configs declare a different set of
@@ -132,10 +147,19 @@ func main() {
 	// guard (LiveOffloadArgs) re-estimates on every load — so this has to run even
 	// without -generate, or a serve-only start sizes a Vulkan box as if it were CUDA.
 	// Best-effort; on no reading the CUDA default stands.
-	autogen.DetectGpuCompute(func(m string) { slog.Info(m) })
+	// GPU detection and autogen run BEFORE the config is loaded, and the log
+	// monitors do not exist until it is - so everything they reported used to go
+	// to stderr only, and the dashboard log pane began mid-story at "listening
+	// on". Buffer those lines and replay them into the proxy log below.
+	var startupLines []string
+	startupNote := func(m string) {
+		slog.Info(m)
+		startupLines = append(startupLines, m)
+	}
+	autogen.DetectGpuCompute(startupNote)
 
 	if *flagGenerate != "" {
-		if _, err := autogen.EnsureConfig(*flagGenerate, configPath, *flagModelsDir, func(m string) { slog.Info(m) }); err != nil {
+		if _, err := autogen.EnsureConfig(*flagGenerate, configPath, *flagModelsDir, startupNote); err != nil {
 			slog.Error("autogen failed", "error", err)
 			os.Exit(1)
 		}
@@ -166,7 +190,7 @@ func main() {
 		case "error":
 			level = logmon.LevelError
 		}
-		timeFormat := logTimeFormats[strings.ToLower(strings.TrimSpace(cfg.LogTimeFormat))]
+		timeFormat := logTimeFormat(cfg.LogTimeFormat)
 		for _, lg := range []*logmon.Monitor{proxyLog, upstreamLog} {
 			lg.SetLogLevel(level)
 			lg.SetLogTimeFormat(timeFormat)
@@ -174,6 +198,14 @@ func main() {
 	}
 
 	applyLogSettings(cfg)
+
+	// The first lines anyone reads. Which build is running and which config it
+	// loaded are the two facts every bug report needs; neither was logged.
+	proxyLog.Infof("quartermaster %s (commit %s, built %s) starting", version, commit, date)
+	proxyLog.Infof("config: %s - %d model(s)", configPath, len(cfg.Models))
+	for _, m := range startupLines {
+		proxyLog.Info(m)
+	}
 	proxyLog.Debugf("PID: %d", os.Getpid())
 
 	// On Windows, bind the process tree to a Job Object so every upstream
@@ -484,7 +516,7 @@ func main() {
 							continue
 						}
 						proxyLog.Info("watch-models: inputs changed, regenerating config")
-						if _, err := autogen.EnsureConfig(*flagGenerate, configPath, *flagModelsDir, func(m string) { proxyLog.Info(m) }); err != nil {
+						if _, err := autogen.EnsureConfig(*flagGenerate, configPath, *flagModelsDir, server.NoticeLogger(proxyLog)); err != nil {
 							proxyLog.Warnf("watch-models: regen failed: %v", err)
 							continue
 						}

@@ -132,7 +132,7 @@ func TestTools_FormatVideos(t *testing.T) {
 		{ID: "dQw4w9WgXcQ", Title: "A", Channel: "Chan", Duration: 212, Views: 1600000000, Date: "2009-10-25"},
 		{ID: "aaaaaaaaaaa", Title: "B", Live: "is_live", Views: -1},
 	}, []int{1, 2}, false)
-	for _, want := range []string{"[1] A", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "3:32", "1.6B views", "LIVE NOW", "relevance order", "youtube_transcript"} {
+	for _, want := range []string{"[1] A", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "3:32", "1.6B views", "LIVE NOW", "relevance order", "media_transcript"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}

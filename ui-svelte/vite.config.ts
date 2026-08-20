@@ -16,6 +16,9 @@ export default defineConfig({
     assetsDir: "assets",
   },
   server: {
+    // wiki.ts imports internal/server/wiki_articles.json (the single wiki
+    // corpus, which must live in the Go package for //go:embed).
+    fs: { allow: [".."] },
     // yes very insecure but who's running this thing
     // on the public internet for dev?! haha.
     host: "0.0.0.0",

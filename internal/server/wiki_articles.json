@@ -23,7 +23,7 @@
       "self-update",
       "version"
     ],
-    "body": "Quartermaster can update itself (Windows release builds only). When a newer version is available, the **Sidebar** shows an update control.\n\n- Clicking it downloads and launches the release installer, then the server shuts down gracefully so the installer can replace it.\n- Both the dashboard and playground briefly drop while it restarts - reload the page once the installer finishes.\n- Only release builds wired with the updater show this; a dev / self-compiled build won't."
+    "body": "Quartermaster can update itself (Windows release builds only). When a newer version is available, the **Sidebar** shows an update control.\n\n- Clicking it downloads and launches the release installer, then the server shuts down gracefully so the installer can replace it.\n- Both the dashboard and playground briefly drop while it restarts - reload the page once the installer finishes."
   },
   {
     "id": "loading-models",
@@ -36,9 +36,15 @@
       "stop",
       "evict",
       "vram",
+      "queue",
+      "wait",
+      "waiting its turn",
+      "hold",
+      "budget",
+      "coexist",
       "group"
     ],
-    "body": "You don't manually start models most of the time - sending a request to a model (from the playground or an API client) **loads it on demand**. If another model occupies the VRAM it needs, Quartermaster stops that one first (eviction).\n\n- **Models page** (dashboard): browse the catalog, click a model to load/unload it explicitly.\n- **Idle unload**: a model with an unload timeout stops itself after being idle, freeing VRAM.\n- **Swap groups**: models in the same group can't be resident at once; loading one evicts its group-mates. Models in different groups (and enough VRAM) can coexist.\n- First load of a large model is slow (reading weights from disk); subsequent swaps are faster while the file is warm in OS cache."
+    "body": "You don't manually start models most of the time - sending a request to a model (from the playground or an API client) **loads it on demand**. If the GPU can't fit it alongside what's already running, Quartermaster stops enough of the resident models to make room (eviction), then loads yours.\n\n- **Models page** (dashboard): browse the catalog, click a model to load or unload it explicitly.\n- **VRAM budget decides who coexists**: models stay resident together as long as their estimated VRAM fits the budget set in Settings. Only the least-recently-used ones are evicted, and only until the new model fits - a small model rarely costs you a big one.\n- **Requests queue, they don't fail.** A request for a model that isn't ready waits its turn; the connection is held open while the swap runs, and the playground shows *Loading…* or *Waiting its turn* (with your place in the queue) until it's granted.\n- **Turn holding**: when a model finishes a request it stays un-evictable for about 10 seconds. That gap is what an agent loop spends running a tool call, and without the hold two agent loops on different models would swap the GPU back and forth every round instead of generating. A waiting request that has been patient long enough preempts the hold anyway - the playground gives up waiting after 60s, an unattended API client after 5 minutes.\n- **Helpers coexist**: speech, transcription and segmentation models are kept out of the swap set, so reading a reply aloud doesn't evict the chat model you're talking to.\n- **Idle unload**: a model with an unload timeout stops itself after being idle, freeing VRAM.\n- First load of a large model is slow (reading weights from disk); subsequent swaps are faster while the file is warm in OS cache.\n\nAdvanced: `config.yaml` can also express coexistence and eviction as named groups. The generated config uses one exclusive group plus the helper groups above; there is no dashboard editor for groups, and with a VRAM budget set you rarely need to touch them."
   },
   {
     "id": "model-config",
@@ -53,11 +59,17 @@
       "variant",
       "tune",
       "params",
+      "parameters",
+      "flags",
+      "extra args",
       "gpu layers",
+      "kv cache",
+      "flash attention",
+      "threads",
       "backend",
       "vllm"
     ],
-    "body": "On the Models page, the cogwheel opens the per-model config editor. It shows the exact launch command and lets you tune:\n\n- **Context size (ctx)**: how many tokens the model can hold. Bigger ctx uses more KV-cache VRAM.\n- **Target VRAM**: a budget; Quartermaster computes GPU offload (`-ngl` / `--n-cpu-moe`) to fit. Lower target = more layers on CPU = slower but fits smaller cards.\n- **Backend**: which engine runs this model (llama.cpp, vLLM, ...). Leave on auto or pin one; see the Backends article. Config is stored per-backend.\n- **Variants**: alternate profiles of the same model (e.g. different ctx tiers) selectable per request.\n\n**Save & reload** applies changes live - a running model keeps serving under its old settings and the new ones take effect on its next load. The staging card shows what a running model is *actually* loaded with, which can differ from the pending config until it reloads."
+    "body": "On the Models page, the cogwheel opens the per-model config editor. It shows the exact launch command and lets you tune **every parameter the backend supports for that model** - the sizer's defaults are just a starting point, and anything you touch becomes a per-model override.\n\nThe knobs are grouped by how often they're needed. The ones you'll reach for first:\n\n- **Context size (ctx)**: how many tokens the model can hold. Bigger ctx uses more KV-cache VRAM.\n- **Target VRAM**: a budget; Quartermaster computes GPU offload (`-ngl` / `--n-cpu-moe`) to fit. Lower target = more layers on CPU = slower but fits smaller cards.\n- **Backend**: which engine runs this model (llama.cpp, vLLM, ...). Leave on auto or pin one; see the Backends article. Config is stored per-backend.\n\nUnder **Launch parameters** and **Advanced** you get the rest, and which ones appear depends on what kind of model it is (text, image, speech, embedding...): KV cache quantisation and whether KV lives in RAM, flash attention, speculative decoding, reasoning on/off and its budget, context checkpoints, threads, parallel slots, batch/ubatch sizes, mmap / mlock, a custom chat template, and more.\n\n- **Extra args**: a raw passthrough appended to the launch command, for any flag the editor doesn't model. Nothing is off-limits - if the backend accepts it, you can set it here.\n- **Variants**: alternate profiles of the same model (e.g. different ctx tiers) selectable per request, each able to override any of the above.\n\n**Save & reload** applies changes live - a running model keeps serving under its old settings and the new ones take effect on its next load. The staging card shows what a running model is *actually* loaded with, which can differ from the pending config until it reloads."
   },
   {
     "id": "config-variants",
@@ -93,14 +105,23 @@
   },
   {
     "id": "backends",
-    "title": "Backends (llama.cpp, vLLM, sd, tts)",
+    "title": "Backends (install, update, pick an engine)",
     "keywords": [
       "backend",
       "backends",
+      "install",
+      "update",
+      "rollback",
+      "version",
+      "catalog",
       "llama.cpp",
       "vllm",
       "sd-server",
       "tts",
+      "asr",
+      "sam",
+      "upscale",
+      "yt-dlp",
       "exe",
       "engine",
       "vulkan",
@@ -110,7 +131,7 @@
       "tensor parallel",
       "gpu-memory-utilization"
     ],
-    "body": "**Settings -> Backends** is a list of inference engines Quartermaster can launch. Each row is one binary: a **kind** (llama, vllm, sd, tts, or custom), a name, and the path to its executable. Click **+ Add backend** for more (e.g. a Vulkan *and* a ROCm llama build, or CUDA llama + vLLM), **✕** to remove.\n\n**Auto-pick (★).** Each backend can be starred as the default for its class (llm / image / tts). When a model loads, Quartermaster picks a backend by class: the model's explicit choice wins, else the ★-starred one, else the first of that kind. So with one llama build everything just works; add more and the star decides the default.\n\n**Per-model override.** In the cogwheel editor each model has a **Backend** dropdown (filtered to the backends valid for its class). Leave it on auto or pin a specific engine. Config is *keyed to the backend*: a model's llama tuning (ctx / target VRAM / variants) and its vLLM knobs are stored separately, so switching engines never wipes the other set.\n\n**vLLM.** Selecting a vLLM backend launches `vllm serve <gguf> --quantization gguf --gpu-memory-utilization <util> --max-model-len <ctx> [--tensor-parallel-size N]`. It reuses the same discovered GGUF. vLLM self-manages VRAM, so the llama estimate panel and offload/KV planner are hidden - you get two knobs: **GPU utilization** (fraction of VRAM, default 0.90) and **tensor-parallel size** (GPUs to shard across). Note vLLM is slow to start and not every GGUF architecture runs on it."
+    "body": "**Settings -> Backends** is where the inference engines live. It has two layers: the **managed catalog** on top (install and update engines from their upstream GitHub releases, LM-Studio style) and the plain **registry** below it (a row per binary: kind, name, path to the executable).\n\n**Installing an engine.** The catalog is tabbed by what a backend is *for* - Text, Image, Upscale, Speech, Transcription, Segmentation, Tools. Pick a component and **Install latest**, or choose an older release from its version list. Quartermaster matches the release asset to your GPU (CUDA / ROCm / Vulkan / CPU) and unpacks it into its own versioned folder, so several builds of the same engine can sit side by side and you can switch which one is **active** - or roll back - without redownloading. **Update** appears when upstream ships a newer release. **Track a repo** points the same machinery at any GitHub repo you follow, including your own builds.\n\n**Not everything is installable.** Engines with no upstream release - a locally built qwentts `tts-server`, `sam3_server`, a hand-patched sd-server - are added the old way: **+ Add backend**, pick the kind, browse to the exe. Managed and manual rows coexist in one registry and behave identically once registered. `yt-dlp` installs from the same catalog but is a helper tool, not a backend, so it never gets registered or starred.\n\n**Auto-pick (★).** Each backend can be starred as the default for its class (text / image / speech / transcription / segmentation / upscale). When a model loads, the model's explicit choice wins, else the ★-starred backend, else the only one registered for that class. With one llama build everything just works; add a second (say Vulkan *and* ROCm) and the star decides.\n\n**Per-model override.** In the cogwheel editor each model has a **Backend** dropdown, filtered to the backends valid for its class. Config is *keyed to the backend*: a model's llama tuning (ctx / target VRAM / variants) and its vLLM knobs are stored separately, so switching engines never wipes the other set.\n\n**vLLM.** Selecting a vLLM backend launches `vllm serve <gguf> --quantization gguf --gpu-memory-utilization <util> --max-model-len <ctx> [--tensor-parallel-size N]`, reusing the same discovered GGUF. vLLM self-manages VRAM, so the llama estimate panel and offload/KV planner are hidden - you get **GPU utilization** (fraction of VRAM, default 0.90) and **tensor-parallel size** (GPUs to shard across). It is slow to start and not every GGUF architecture runs on it."
   },
   {
     "id": "multi-listener",
@@ -138,59 +159,111 @@
       "conversation",
       "vision",
       "image attach",
+      "attachment",
+      "pdf",
+      "docx",
+      "file",
+      "audio",
+      "transcribe",
       "reasoning",
       "thinking",
+      "effort",
+      "reasoning level",
+      "tools",
+      "calculator",
+      "units",
+      "weather",
+      "feeds",
+      "memory",
+      "youtube",
       "rewrite",
+      "shopping",
+      "shopping assistant",
+      "buy",
       "history",
-      "compaction"
+      "compaction",
+      "compact",
+      "/compact",
+      "read aloud",
+      "speak",
+      "tts",
+      "speech speed",
+      "volume",
+      "highlight"
     ],
-    "body": "The Chat tab is a full chat client for your local models:\n\n- **Vision**: attach an image (paperclip) to a vision-capable model.\n- **Reasoning**: thinking models stream their reasoning into a collapsible box. A **Thinking Budget** (Settings) caps reasoning tokens so a model can't overthink forever.\n- **Web search**: optional - the model searches the web via SearXNG (see the web-search article).\n- **Wiki**: models can look up this help wiki to answer questions about Quartermaster.\n- **Rewrite mode**: send text with an instruction and get a side-by-side **word-level diff** (added / removed / changed) instead of a chat reply - good for editing prose or code in place.\n- **Runs server-side**: once you send, the answer is generated by the server, not your browser tab - so closing or refreshing the tab (or losing the connection) doesn't stop or lose it; reopen the chat and the in-progress answer is still streaming. Web search, wiki lookups, and tool approvals all continue server-side.\n- **History & auto-compaction**: chats are saved server-side per user. When a conversation reaches ~80% of the model's context window, the oldest turns (all but the most recent ~6 messages) are summarized by the model into a brief so the chat can continue past the raw context limit - the full transcript still shows in the UI, only what's *sent* to the model is compacted. A live bar shows how full the context is."
+    "body": "The Chat tab is a full chat client for your local models:\n\n- **Reasoning levels**: the Configs popover has a **Reasoning** dropdown whose levels come from the model's own chat template (typically None / Low / Medium / High / Extra high; a template with no ladder is just on/off). Higher = the model thinks longer before answering. Changing the level rewrites the top of the system prompt, so the conversation is re-read - pick one and stay on it. Reasoning streams into a collapsible box. The **Thinking Budget** (Settings) caps reasoning tokens for models with no ladder; it does not apply to the template levels.\n- **Attachments** (paperclip): images go to vision-capable models, but you can also attach **PDFs, Word documents (.docx), and plain-text files** (code, Markdown, CSV, JSON, YAML, logs, config...). Those are extracted to text in your browser and folded into your message, so *any* model can read them, no vision needed. Attaching an **audio file** transcribes it first with the ASR backend (which swaps that model into VRAM - you're warned before it does). Note: PDF extraction isn't OCR, so a scanned PDF yields no text and says so.\n- **Tools**: several are always on - the help **wiki**, a **clock/date** tool, an exact **calculator**, a **unit converter**, and **YouTube** (search, transcripts, comments). Optional toggles in the Configs popover: **Web Search** (SearXNG; also enables *fetch page*, so the model reads the real page instead of a snippet), **Weather & Feeds** (live weather, any RSS/Atom feed), **Memory** (lasting facts about you, reused in every chat, editable in Settings -> Memory), and **QM Tools** (inspect and, with your approval, tune this quartermaster instance - see its own article). Tool calls show up as chips in the transcript.\n- **Rewrite mode** (tools menu): send text with an instruction and get a side-by-side **word-level diff** (added / removed / changed) instead of a chat reply - good for editing prose or code in place. It's a self-contained transform: no tools run.\n- **Shopping assistant** (tools menu): a staged buying helper. It first pins down the brief - budget, currency and region, brands, must-have specs, condition - asking a short set of questions as clickable chips rather than a form; then it searches and reads actual shop pages for real prices; then it answers with a **comparison of product cards** (image, price, shop, specs, why it made the list, and a verdict) instead of a wall of text. **Shopping preferences** (country, currency, preferred shops) are a standing setting in the Configs popover, so it doesn't ask every time. Currency conversion is available to it too.\n- **Read aloud**: the speaker button under any assistant reply speaks it with the TTS model chosen in Settings. It dims while the audio is still being generated and turns bright white once the whole reply is ready; click again to stop. Next to it sit a **volume** slider and a **speed** menu (0.25x to 2x, pitch preserved) that apply immediately, mid-playback included, and are remembered per user. While it plays, the sentence being spoken is highlighted orange and everything already read is dimmed, so you can follow along or see where you stopped it. Code blocks, reasoning boxes and diagrams are skipped - only the prose is read.\n- **Per-chat instructions**: standing instructions layered on the built-in prompt, saved with that conversation.\n- **Runs server-side**: once you send, the answer is generated by the server, not your browser tab - so closing or refreshing the tab (or losing the connection) doesn't stop or lose it; reopen the chat and the in-progress answer is still streaming. Searches, tool calls and approvals all continue server-side.\n- **History & auto-compaction**: chats are saved server-side per user. When a conversation reaches ~80% of the model's context window, the oldest turns (all but the most recent ~6 messages) are summarized by the model into a brief so the chat can continue past the raw context limit - the full transcript still shows in the UI, only what's *sent* to the model is compacted. A live bar shows how full the context is - **click that bar (or type `/compact`) to compact on demand**, which is worth doing before a long tool-heavy answer rather than waiting for the 80% trigger."
   },
   {
     "id": "playground-login",
-    "title": "Playground accounts & login",
+    "title": "Playground accounts",
     "keywords": [
       "login",
       "log in",
       "sign in",
+      "signup",
+      "sign up",
+      "create account",
       "account",
       "username",
       "password",
       "register",
       "user",
       "auth",
-      "playground port"
+      "cookie",
+      "session",
+      "logout",
+      "playground port",
+      "per-user"
     ],
-    "body": "The playground runs on its own port and is gated behind a per-user login (separate from the open dashboard).\n\n- **First login registers you**: type any username + password and sign in - an unknown username is created automatically. This keeps each person's chats, image/speech threads, and settings separate.\n- **Per-user storage**: your chat history and preferences are saved server-side under your account; nothing is shared between users.\n- **Not secure by design**: credentials are stored in plaintext for a local / trusted-network tool. Do NOT expose the playground port to the internet or reuse a real password - it's a convenience separator, not real authentication.\n- **Logout** is in the side rail, next to your username."
+    "body": "The playground runs on its own port (`-playground-port`) and is gated behind a per-user account, separate from the open dashboard.\n\n- **Sign in or create an account.** The login screen has two modes: **Sign in** for an existing account and **Create account** for a new one. Signing up is a deliberate, separate step - a login form that registered whatever you typed turned every typo into a new empty account and made \"wrong password\" indistinguishable from \"no such user\". Usernames are 1-40 characters (letters, digits, `_`, `-`) and a new password must be at least 6 characters.\n- **Per-user storage.** Your chat, image and speech conversations, your playground preferences, your memories, and any media you generated are saved server-side under your account. Nothing is shared between users, and generated images/audio are stored as files in your own folder rather than inline in the history.\n- **Your session lasts 30 days.** Login is kept in an HttpOnly, HMAC-signed cookie, so closing the browser doesn't sign you out - and nobody can become another user just by editing a cookie.\n- **Passwords are hashed** (bcrypt) in `playground-data/users.json`; accounts created by older builds that stored plaintext are upgraded automatically the next time that user signs in.\n- **Still not real authentication.** It exists to keep separate people's chats apart on a trusted machine or LAN - there is no password reset, no roles, and no rate limiting on the login. Don't expose the playground port to the internet, and don't reuse a password that matters.\n- **Log out** from the side rail, next to your username (it asks for confirmation)."
   },
   {
     "id": "web-search",
-    "title": "Web search (SearXNG)",
+    "title": "Web search",
     "keywords": [
       "search",
       "web",
+      "web search",
       "searxng",
+      "brave",
+      "tavily",
+      "duckduckgo",
+      "google",
+      "provider",
+      "failover",
+      "api key",
       "internet",
       "tool",
       "cors",
+      "fetch page",
+      "citations",
       "current",
       "news"
     ],
-    "body": "Chat can let the model search the web for fresh or niche facts. It goes through a **SearXNG** instance you run.\n\nSetup (playground **Settings → Web Search**):\n1. Toggle Web Search on.\n2. Enter your SearXNG URL (e.g. `http://localhost:8888`) and hit **Test**.\n3. SearXNG must have **JSON format enabled** (`formats: [html, json]`).\n\n**Requirements** : the model must support **tool calling**.\nKnobs:\n- **Max/Turn** caps searches per message;\n- **Throttle ms** spaces requests so SearXNG's rate limiter doesn't trip;\n- **Dedupe** reuses the result for a repeated query.\n\nA bare \"Failed to fetch\" on Test is almost always CORS or a wrong host/port."
+    "body": "Chat can let the model search the web for fresh or niche facts. Search is an **ordered failover chain**, not a single endpoint: providers are tried top-first, and if one times out, gets rate-limited or returns nothing, the next one runs. That matters because the free, keyless options are scrapers - an agent loop out-runs their bot thresholds and starts collecting CAPTCHAs.\n\nConfigure it in playground **Settings -> Web Search**:\n1. Toggle **Web Search** on (the model must support **tool calling**).\n2. Enable the providers you want, fill in what each needs, and **Test** each row.\n3. Order them with the **arrows** - that's the failover order. Keyed providers only spend quota when everything above them failed, so put free ones first.\n\nProviders:\n- **SearXNG** - self-hosted, keyless. Give it your base URL (e.g. `http://localhost:8888`); it must have **JSON format enabled** (`formats: [html, json]`). Fast when its engines aren't rate-limited.\n- **Brave Search** - real JSON API, 2,000 queries/month free. The most reliable failover under an agent loop.\n- **Tavily** - built for LLMs, returns extracted page text rather than a snippet. ~1,000 credits/month free.\n- **DuckDuckGo** - keyless HTML scrape, no quota, but the same bot-challenge exposure as SearXNG. Last resort.\n- **Google Programmable Search** - best results, hardest cap (100 queries/day free). Needs an API key *and* a search-engine id (cx).\n\nKnobs:\n- **Max / Turn** caps searches per message - once hit, the model has to answer with what it found.\n- **Throttle ms** spaces requests so a rate limiter doesn't trip.\n- **Dedupe Queries** reuses the result when the model repeats a query within a turn.\n\n**Reading pages.** Turning web search on also gives the model *fetch page*, so it can open a result and read the real thing instead of answering from a snippet. Results are numbered and come back as citation chips under the answer.\n\nTroubleshooting: a bare \"Failed to fetch\" when testing SearXNG is almost always a wrong host/port or CORS. If every provider is off or half-configured the panel warns you - a search with nothing to run it on fails the tool call rather than silently returning nothing."
   },
   {
     "id": "youtube",
-    "title": "YouTube transcripts",
+    "title": "Video & audio transcripts (YouTube and beyond)",
     "keywords": [
       "youtube",
       "video",
       "transcript",
       "captions",
       "subtitles",
+      "comments",
+      "opinions",
+      "search videos",
+      "channel",
+      "playlist",
       "yt-dlp",
+      "vimeo",
+      "podcast",
+      "twitch",
+      "ted",
       "summarize"
     ],
-    "body": "Paste a YouTube link in Chat and the model can read the video's captions and summarise, quote or fact-check it. The model calls a `youtube_transcript` tool; quartermaster fetches the captions server-side and hands them back as `[m:ss]` paragraphs, so the model can point at a moment (\"at 14:32 they claim ...\") and link it back with `&t=872s`.\n\n**Requirements**\n- The model must support **tool calling**.\n- **yt-dlp** must be present. The Windows installer offers it as an optional helper (tick *yt-dlp* on the tasks page) and drops it in `bin/yt-dlp`; otherwise install it yourself and leave it on `PATH`. Without it the tool answers with an install hint instead of a transcript.\n\n**Limits**\n- Only videos that actually have captions (manual or auto-generated). If captions are off, the tool says so rather than inventing content - there is no audio-transcription fallback yet.\n- Long videos are truncated to fit the context window; the result is marked `INCOMPLETE` and the model is told to say so.\n- 2 transcripts per message; each video is cached for 30 minutes.\n- Non-English captions: ask for them by language (e.g. \"get the German transcript\")."
+    "body": "Paste a link to a video, talk, stream or podcast episode in Chat and the model can read its captions and summarise, quote or fact-check it. It calls a `media_transcript` tool; quartermaster fetches the captions server-side (yt-dlp) and hands them back as `[m:ss]` paragraphs, so the model can point at a moment (\"at 14:32 they claim ...\") and, on YouTube, link it back with `&t=872s`.\n\n**Not just YouTube.** yt-dlp extracts from around 1800 sites, so Vimeo, TED, Dailymotion, Twitch VODs, Rumble, PeerTube, SoundCloud, conference players and most podcast episode pages work the same way - anywhere subtitles are published. Pages with no captions at all come back saying so, and the model should tell you that rather than guess.\n\n**Finding videos.** The model can also *search* YouTube (`youtube_search`) and list a channel's or playlist's videos, so \"find me a recent video about X and tell me what it says\" works without you pasting a link first.\n\n**Comments.** With `youtube_comments` the model can read a video's top comments - useful for \"what do people say about this?\", spotting corrections the creator never made, or gauging whether a tutorial actually worked for anyone. Comments are presented to the model as *audience opinions*, explicitly not as the video's own claims, so it shouldn't quote a comment as fact.\n\n**Requirements**\n- The model must support **tool calling**.\n- **yt-dlp** must be present. Easiest: install it from **Settings -> Backends** (the *Tools* tab), which keeps it updatable. A copy on `PATH`, or the one the Windows installer drops in `bin/yt-dlp` when you tick the *yt-dlp* helper, also works. Without it the tools answer with an install hint instead of a transcript.\n\n**Limits**\n- Transcripts only exist for videos that actually have captions (manual or auto-generated). If captions are off, the tool says so rather than inventing content - there is no audio-transcription fallback.\n- A long video is truncated to fit the context window; the result is marked `INCOMPLETE` with the timestamp it stopped at, and the model is told to say so.\n- Comment fetching returns the top comments, not the whole thread.\n- Per-turn call counts and result caching are capped server-side so a looping model can't grind through videos; repeated fetches of the same video are served from cache.\n- Non-English captions: ask for them by language (e.g. \"get the German transcript\")."
   },
   {
     "id": "qm-tools",
@@ -204,13 +277,20 @@
       "introspection",
       "mcp",
       "self",
+      "logs",
+      "diagnose",
+      "estimate",
+      "what-if",
+      "backends",
+      "fields",
+      "variants",
       "change settings",
       "approve",
       "approval",
       "diff",
       "agent config"
     ],
-    "body": "**Quartermaster tools** let the chat assistant look at - and, with your approval, tune - the quartermaster instance it's running in. Toggle them per chat with the **QM Tools** switch in the chat menu (on by default, like Web Search). They only act on this running instance; they never load or unload models (that would evict the very model you're talking to).\n\n**Inspect (read-only).** The assistant can pull a compact, formatted view of your setup: what models are installed and their capabilities, what's loaded right now, live GPU/VRAM and RAM, the global memory settings, or one model's full config. Ask things like \"what models do I have?\", \"how much VRAM is free?\", or \"show my Qwen model's context and offload\".\n\n**Configure (approval-gated).** The assistant can change three kinds of settings:\n- **Global memory settings** - VRAM target, headroom, max RAM, idle-unload TTL (the dashboard Settings).\n- **Your playground preferences** - temperature, max tokens, thinking budget, web search on/off, and the search knobs. These are your own per-user prefs and take effect on your next page reload.\n- **A model's config** - context, KV quant, CPU offload, and the like.\n\n**You approve every change.** When the assistant wants to configure something, the chat pauses and shows a **before → after diff card** with **Accept** and **Deny**. Nothing is applied until you accept; deny (or ignore it - it times out after 5 minutes) and nothing happens. Accepting a global or model change hot-reloads the config in place - running models are **not** evicted, and a changed model's new launch args apply the next time it loads.\n\nQuartermaster tools need the server running with config editing enabled (`-generate`)."
+    "body": "**Quartermaster tools** let the chat assistant look at - and, with your approval, tune - the quartermaster instance it's running in. Toggle them per chat with **QM Tools** in the Configs popover (on by default). They only act on this running instance, and they never load or unload models - that would evict the very model you're talking to.\n\n**Inspect (read-only).** One slice per call, so the assistant pulls only what it needs:\n- **status / loaded / vram** - what's running right now, with idle-TTL, live GPU/VRAM and system RAM.\n- **models** - the whole installed catalog (not just loaded ones) with capabilities, context length, state and variant count.\n- **settings** - the global memory knobs.\n- **backends** - the registry: which executable and managed build each class runs, which is the ★ auto-pick, and whether any exe has gone missing from disk.\n- **a model id** - that model's effective config plus its variants, each shown as the exact launch-flag deviations from the base command.\n- **estimate** - a what-if load plan for a model: chosen context, GPU/CPU layer split, estimated VRAM against the budget and RAM against the cap. It can size a *proposed* tuning before suggesting it, and nothing is changed by asking.\n- **logs** - the last lines of quartermaster's own lifecycle log, or the raw backend output (where a CUDA/Vulkan allocation failure actually shows), or both. This is what lets it diagnose a load failure or crash you just hit.\n- **fields** - the complete list of settings it is able to change, with types.\n\nSo \"what models do I have?\", \"how much VRAM is free?\", \"why did that model fail to load?\" and \"would a 64k context still fit?\" are all answerable from the real state rather than a guess.\n\n**Configure (approval-gated).** It can change:\n- **Global memory settings** - VRAM target, headroom, max RAM, idle-unload TTL (the dashboard Settings).\n- **A model's config** - context, KV quant, CPU offload and the rest - or **one named variant** of it.\n- **Your playground preferences** - temperature, max tokens, thinking budget, web search on/off and the search knobs. These are your own per-user prefs and take effect on your next page reload.\n\n**You approve every change.** When the assistant wants to configure something, the chat pauses and shows a **before -> after diff card** with **Accept** and **Deny**. Nothing is applied until you accept; deny - or just ignore it, it times out - and nothing happens. Accepting a global or model change hot-reloads the config in place: running models are **not** evicted, and a changed model's new launch args apply the next time it loads.\n\nEditing needs the server running with config editing enabled (`-generate`); inspection works either way."
   },
   {
     "id": "images",
@@ -223,13 +303,22 @@
       "txt2img",
       "img2img",
       "inpaint",
-      "hires",
+      "mask",
+      "segment",
+      "reference",
       "kontext",
       "flux",
+      "qwen image edit",
       "cfg",
+      "seed",
+      "sampler",
+      "scheduler",
+      "lora",
+      "batch",
+      "negative prompt",
       "blurry"
     ],
-    "body": "The Images tab drives stable-diffusion.cpp models:\n\n- **txt2img** and **img2img** (needs a source image + a denoise strength).\n- **Hires fix**: a second upscaled pass for sharper detail (txt2img only).\n- **Reference images** (Kontext-class models): condition on a subject/style image while the prompt drives the edit.\n- **Inpainting**: open the mask editor to brush over the area to change (adjustable brush; white = regenerate, black = keep), then generate - only the painted region is redrawn.\n- **Style presets** keep a batch visually consistent.\n- **Upscale**: the ⤢ button on any generated image (or on an attached/uploaded image in the composer) runs a standalone ESRGAN upscaler - see the Upscaling article.\n\nTips: **turbo/lightning** checkpoints usually need **CFG = 1.0** - a higher CFG makes them blurry. SDXL/SD models need a **full checkpoint** (they can't be split-loaded from separate UNet + text-encoder files)."
+    "body": "The Images tab drives **stable-diffusion.cpp** models as a thread: every prompt adds a turn, and you can keep editing the last image or start a **New thread** for a fresh subject.\n\n**API mode** picks the route. **SDAPI** exposes the full control set below and can edit a previous image; **OpenAI** (`/v1/images/generations`) only ever generates fresh - it has no edit loop.\n\n**Framing**: choose an **aspect** (1:1 through 9:16) and a **size** (the long edge; the short edge snaps to a multiple of 64). Sizes above what a model handles are greyed out.\n\n**Controls** (SDAPI): steps, CFG, seed (-1 = random; a pinned seed reproduces the first image of a batch and increments from there), batch (up to 8, rendered one after another), tweak strength (how far a follow-up may stray from the previous image), sampler, scheduler, and an optional negative prompt. Switching models loads that model's known-good defaults, shown under the fields. Two toggles: **Tone anchor** pins reused-source brightness to the thread's first image so chained edits don't drift, and **Keep resolution** edits at the source image's native size.\n\n**LoRAs**: adapters sitting next to the model file, listed on demand via **Load list** (which loads the model), each with its own strength.\n\n**Editing an image**:\n\n- **Reply** on any image reuses it as the source for the next prompt.\n- **Reference images** (Kontext / Qwen-Image-Edit class): attach one or more images the model conditions on while the prompt drives the edit; the palette button does the same for **style transfer**.\n- **Inpainting**: the brush button opens the mask editor - paint the area to change with a brush or lasso, and with a segmentation model configured you can also select by box, by point, or by text (\"the sky\"). Only the masked region is redrawn.\n\nWhile a generation runs you get the live phase (encoding, prompt, sampling, decoding), step count, ETA and elapsed time. Each finished image has actions for regenerate, edit the prompt, copy, download, and **upscale x4** - see the Upscaling article.\n\nTips: **turbo/lightning/distilled** checkpoints usually need **CFG = 1.0** - a higher CFG makes them blurry or burnt. SDXL/SD models need a **full checkpoint** (they can't be split-loaded from separate UNet + text-encoder files)."
   },
   {
     "id": "upscale",
@@ -247,7 +336,7 @@
       "sharpen",
       "enhance"
     ],
-    "body": "Quartermaster can upscale any image with an ESRGAN model (e.g. 4x-UltraSharp) via the **realesrgan-ncnn-vulkan** runner.\n\n**In the Images tab:** click the ⤢ (Maximize) button on any generated image's action row, or hover an attached/uploaded image in the composer and click its ⤢ button. The upscaled result (4×) posts as a new turn below. One upscale runs at a time.\n\n**API:** `POST /v1/images/upscale` with JSON `{ \"image\": \"<data-url or base64>\", \"scale\": 4, \"model\": \"<optional model name>\" }` → `{ \"image\": \"data:image/png;base64,…\", \"model\", \"scale\" }`. Auth-gated like the inference API. Scale 2–4 (4x-UltraSharp is 4×-only). When `model` is omitted the server picks the first discovered upscaler.\n\n**How it works:** the upscaler is exec-per-request - not a loaded/swapped model, so it holds no persistent VRAM and doesn't evict anything. It's configured as a backend of **kind `upscale`** (its exe path); ncnn model files (`<name>.param` + `<name>.bin`) live in a `models/` folder beside the exe. A tile cap keeps peak VRAM low so an upscale coexists with a loaded generation model."
+    "body": "Quartermaster upscales any image with an ESRGAN/Real-ESRGAN model (e.g. 4x-UltraSharp) through the **realesrgan-ncnn-vulkan** runner.\n\n**In the Images tab:** click the maximize button on any generated image's action row, or hover an attached image in the composer and click its button. The upscaled result posts as a new turn below. One upscale runs at a time.\n\n**API:** `POST /v1/images/upscale` with `{ \"image\": \"<data-url or base64>\", \"scale\": 4, \"model\": \"<optional model name>\" }` -> `{ \"image\": \"data:image/png;base64,...\", \"model\", \"scale\" }`. Auth-gated like the inference API. Scale is 2-4; omit `model` and the first discovered one is used. A run is capped at two minutes.\n\n**Scale vs the model:** an ncnn ESRGAN net has a fixed ratio baked into its weights (read off its file name - `x4plus`, `4x-UltraSharp`, `up2x`). The upscaler always runs at that native ratio and the result is resampled down if you asked for less, so a 2x request against a 4x model still comes back correct.\n\n**Setup:** install **Real-ESRGAN (ncnn)** from the Backends tab - it ships its own ncnn model files - or point a backend of **kind `upscale`** at your own exe. Model files (`<name>.param` + `<name>.bin`) are discovered in a `models/` folder beside the exe, else next to the exe itself. The server must be running with config editing enabled (`-generate`).\n\n**How it works:** the upscaler is exec-per-request - not a loaded/swapped model, so it holds no persistent VRAM and evicts nothing. A tile cap keeps peak VRAM low so an upscale coexists with a loaded generation model."
   },
   {
     "id": "segmentation",
@@ -258,12 +347,15 @@
       "sam",
       "sam3",
       "mask",
+      "inpaint",
       "cutout",
       "object",
-      "detect",
-      "select object"
+      "select object",
+      "text select",
+      "box select",
+      "point select"
     ],
-    "body": "Quartermaster serves **SAM (Segment Anything)** models through the `sam3_server` backend for object segmentation - producing masks/cutouts of objects in an image.\n\n**API:** `POST /v1/segment` with the model id in the JSON body plus the input image and prompt (point/box/text depending on the model). The model is discovered from a `.ggml` file and served like any other backend - the first request loads it. SAM runs as a **coexisting persistent group** (it isn't swapped out by text/image models sharing the GPU).\n\n**Backend:** configured as a backend of **kind `sam`** (the `sam3_server` exe path) in the backend registry. See the Backends article for adding backend executables."
+    "body": "**SAM (Segment Anything)** models run through the `sam3_server` backend and turn an image plus a prompt into object masks.\n\n**Where you use it:** the inpaint mask editor in the Images tab. With a segmentation model configured, the mask tools grow three AI options beside the freehand brush and lasso - **box select** (drag a rectangle around the object), **point select** (click foreground/background points), and **text select** (type what to mask, e.g. \"the sky\"). The resulting mask feeds straight into the inpaint generation, so you can retouch an object without hand-painting its outline. A text prompt can match several instances; they are merged into one mask.\n\n**API:** `POST /v1/segment` with the model id, the image, and a `text`, `box`, or `points` prompt. The response carries each instance's score, bounding box, and a grayscale mask PNG (white = object).\n\n**Setup and placement:** the model is discovered from a `.ggml` file and served like any other backend - the first request loads it. It runs in a **coexisting persistent group**, so a text or image model never evicts it, and it is pinned to the **CPU** (the Vulkan path returns numerically broken masks), which costs no VRAM budget but makes a segment take a few seconds. Configure the backend as **kind `sam`** (the `sam3_server` exe path); see the Backends article."
   },
   {
     "id": "speech-audio",
@@ -282,9 +374,21 @@
       "voice design",
       "speaker",
       "preset",
-      "studio"
+      "studio",
+      "pronunciation",
+      "espeak",
+      "kokoro",
+      "ssml",
+      "emotion",
+      "pause",
+      "mispronounce",
+      "multilingual",
+      "language",
+      "french",
+      "japanese",
+      "mandarin"
     ],
-    "body": "Two playground tabs cover audio.\n\n**Speech (TTS)** is a small studio: type text on the left, pick a voice, and each generation becomes a waveform card in the clip library on the right. Cards can be played, edited (which regenerates), regenerated, downloaded (WAV), or deleted; a volume slider and Auto-play toggle sit pinned at the bottom, and clips are saved per user as threads.\n\nHow voices work depends on the model kind (auto-detected):\n- **Base model** - one default voice, plus **voice cloning**: click *Clone a voice* and either read the on-screen passage aloud (live mic) or upload a WAV/MP3 sample; an optional reference transcript improves the clone. Cloned voices are saved and reusable, and can be deleted.\n- **Custom-voice model** - ships its own set of named speakers; pick one from the list (no default).\n- **Voice-design model** - no fixed speakers. Instead you pick a **style preset** (a written description like \"a calm elderly man with a slight rasp\"). Several presets ship built-in, and you can *Design a voice* to save your own.\n\nUse the refresh button by the voice list to reload the voices a model actually offers.\n\n**Transcription (STT)** - upload an audio file and get the transcript from a speech-recognition model.\n\nBoth use the same on-demand loading as every other model - the first request loads the model."
+    "body": "Two playground tabs cover audio.\n\n**Speech (TTS)** is a small studio: type text on the left, pick a voice, and each generation becomes a waveform card in the clip library on the right. Cards can be played, edited (which regenerates), regenerated, downloaded (WAV), or deleted; a volume slider and Auto-play toggle sit pinned at the bottom, and clips are saved per user as threads.\n\nHow voices work depends on the model kind (auto-detected):\n- **Base model** - one default voice, plus **voice cloning**: click *Clone a voice* and either read the on-screen passage aloud (live mic) or upload a WAV/MP3 sample; an optional reference transcript improves the clone. Cloned voices are saved and reusable, and can be deleted.\n- **Custom-voice model** - ships its own set of named speakers; pick one from the list (no default).\n- **Voice-design model** - no fixed speakers. Instead you pick a **style preset** (a written description like \"a calm elderly man with a slight rasp\"). Several presets ship built-in, and you can *Design a voice* to save your own.\n\nUse the refresh button by the voice list to reload the voices a model actually offers.\n\n**Transcription (STT)** - upload an audio file and get the transcript from a speech-recognition model.\n\nBoth use the same on-demand loading as every other model - the first request loads the model.\n\n**Pronunciation**: TTS quality depends on how the model turns text into sounds. Kokoro builds ship in two flavours - one that phonemizes with **espeak-ng** and one with a smaller rule set baked into the model file (usually marked `no_espeak`). The baked-in one mangles a whole class of everyday words (\"messages\" comes out as \"messi\"), so prefer the espeak build if you have the choice. It also matters for **non-English voices**: Kokoro ships packs for British English, Spanish, French, Hindi, Italian, Japanese, Portuguese and Mandarin, and only the espeak build can phonemize them - the baked-in rule set is English-only, so those voices read foreign text with an English accent.\n\nKokoro takes **no emotion or pause markup**. SSML tags, `<break>`, or bracketed stage directions are not commands to it - they get read out loud as words. Punctuation is the only control you have: commas and semicolons produce a real pause, and sentence-ending marks split the text into separate spoken chunks. For expressive speech you need a model built for it (a voice-design or style-prompt model) rather than markup."
   },
   {
     "id": "rerank-embed",
@@ -297,7 +401,7 @@
       "search",
       "relevance"
     ],
-    "body": "Rerankers and embedding models have no playground UI - they are API-only.\n\n**Rerank**: a reranker model is served on `/v1/rerank`; give it a query and a list of documents and it scores each document's relevance, so an external app (a RAG pipeline) can order results.\n\n**Embeddings**: embedding models are served on the OpenAI-compatible `/v1/embeddings` endpoint for use by external apps (vector search, semantic similarity)."
+    "body": "Rerankers and embedding models have no playground UI - they are API-only, but they load, swap and share the VRAM budget like any other model.\n\n**Rerank**: served on `/v1/rerank` (`/rerank`, `/reranking` and `/v1/reranking` are accepted too). Give it a query and a list of documents and it scores each document's relevance, so an external app (a RAG pipeline) can order results.\n\n**Embeddings**: served on the OpenAI-compatible `/v1/embeddings` endpoint for vector search and semantic similarity.\n\nBoth take the model id in the JSON body like every other route, and both are gated by API keys and their model scopes."
   },
   {
     "id": "api-keys",
@@ -305,14 +409,22 @@
     "keywords": [
       "api",
       "key",
+      "apikey",
       "auth",
       "token",
+      "bearer",
+      "x-api-key",
       "openai",
       "access",
       "scope",
-      "endpoint"
+      "endpoint",
+      "dashboard",
+      "remote",
+      "admin-allow",
+      "lan",
+      "tailnet"
     ],
-    "body": "Quartermaster serves an **OpenAI-compatible API** (`/v1/chat/completions`, `/v1/embeddings`, image and audio routes), so existing OpenAI clients work by pointing at your server's URL.\n\nThe **API Keys** page (dashboard) creates keys and optionally **scopes** each key to a subset of models. Keys gate inference and model discovery; the dashboard itself stays open. Point any OpenAI SDK at the server base URL and use your key as the API key."
+    "body": "Quartermaster serves an **OpenAI-compatible API**, so existing clients work by pointing at your server's URL: `/v1/chat/completions`, `/v1/responses`, `/v1/completions`, `/v1/messages`, `/v1/embeddings`, `/v1/rerank`, `/v1/audio/speech` and `/v1/audio/transcriptions`, `/v1/images/generations` and `/v1/images/edits`, the `/sdapi/v1/*` image routes, `/v1/segment`, `/v1/images/upscale`, and the `/v1/tools/*` executors.\n\n**Keys.** The **API Keys** page (dashboard) creates a named key and shows it masked with reveal/copy, and you can delete one at any time. Managing keys needs the server running with config editing enabled (`-generate`). A key is accepted as `Authorization: Bearer <key>`, as the password half of Basic auth, or as an `x-api-key` header. When no keys are configured the API is open.\n\n**Scoping.** A key with no model scope has full access; pick models and it can only see and call those - `/v1/models` is filtered to the scope, so a scoped client's catalog matches what it may actually use. Scope can be edited after the key exists. Keys gate **inference and discovery** only; the `/v1/tools/*` endpoints accept any valid key and ignore model scope.\n\n**The dashboard has no key** - on purpose, so enabling keys can never lock you out of your own UI. Instead it is gated by **where the request comes from**: as soon as any API listener binds beyond loopback, the dashboard, ops and config-editor routes answer only to this host. Add trusted networks with `-admin-allow` (e.g. `100.64.0.0/10` for a tailnet), or `-admin-open` to restore the old wide-open behaviour. The inference API stays reachable either way - that's what the keys are for. The playground is separate again: its own port, its own per-user login (see Playground accounts)."
   },
   {
     "id": "tools-api",
@@ -337,7 +449,7 @@
       "brave",
       "yt-dlp"
     ],
-    "body": "Besides chat, quartermaster exposes the same tool **executors** the playground uses - web search and YouTube - as plain HTTP endpoints, so your own scripts, agents, and apps can call them instead of wiring up SearXNG, DuckDuckGo, or yt-dlp themselves.\n\nThey live on the `/v1` surface, so they are gated by the **same API keys** as inference (see *API keys and access*). Any valid key works; model scopes do not apply.\n\n**Endpoints** (all `POST`, JSON in and out):\n\n- `POST /v1/tools/search` - `{\"query\": \"...\", \"limit\": 5, \"providers\": [...]}` → `{\"provider\": \"...\", \"results\": [{title, url, content}]}`. **Providers are passed per call** - no config needed: `{\"id\":\"duckduckgo\"}` works keyless; also `{\"id\":\"searxng\",\"baseUrl\":\"http://localhost:8080\"}`, `{\"id\":\"brave\",\"key\":\"…\"}`, `{\"id\":\"tavily\",\"key\":\"…\"}`, `{\"id\":\"google\",\"key\":\"…\",\"cx\":\"…\"}`. The chain fails over until one answers. `limit` is 1–10.\n- `POST /v1/tools/youtube/transcript` - `{\"url\": \"https://youtu.be/…\"}` (or a bare 11-character video id), optional `lang` → `{id, title, uploader, duration, text}` with `[m:ss]` timestamps. Returns the **full** transcript - long videos come back long.\n- `POST /v1/tools/youtube/search` - `{\"query\": \"…\"}` or `{\"channel\": \"@handle\"}` (optional `tab`, `limit`) → `{\"videos\": [{id, title, channel, duration, views, …}]}`.\n- `POST /v1/tools/youtube/comments` - `{\"url\": \"…\"}` + `limit` → `{\"video\": {…}, \"comments\": [{author, text, likes, pinned, by_owner}]}`.\n\n**Requirements** - the same as chat: the YouTube endpoints need **yt-dlp** (they answer `503` with an install hint when it is missing); transcripts need a video that actually has captions.\n\n**Errors** are OpenAI-shaped `{\"error\": {\"message\": \"…\"}}`: `400` bad arguments, `502` upstream failure, `503` yt-dlp missing.\n\nTypical use: your app keeps its own tool schemas for the model and executes each tool call here. Example:\n\n```\ncurl -H \"Authorization: Bearer qm-…\" -H \"Content-Type: application/json\" \\n     -d '{\"query\":\"llama.cpp release\",\"providers\":[{\"id\":\"duckduckgo\"}]}' \\n     http://127.0.0.1:1250/v1/tools/search\n```"
+    "body": "Besides chat, quartermaster exposes the same tool **executors** the playground uses - web search and YouTube - as plain HTTP endpoints, so your own scripts, agents, and apps can call them instead of wiring up SearXNG, DuckDuckGo, or yt-dlp themselves.\n\nThey live on the `/v1` surface, so they are gated by the **same API keys** as inference (see *API keys and access*). Any valid key works; model scopes do not apply.\n\n**Endpoints** (all `POST`, JSON in and out):\n\n- `POST /v1/tools/search` - `{\"query\": \"...\", \"limit\": 5, \"providers\": [...]}` → `{\"provider\": \"...\", \"results\": [{title, url, content}]}`. **Providers are passed per call** - no config needed: `{\"id\":\"duckduckgo\"}` works keyless; also `{\"id\":\"searxng\",\"baseUrl\":\"http://localhost:8080\"}`, `{\"id\":\"brave\",\"key\":\"…\"}`, `{\"id\":\"tavily\",\"key\":\"…\"}`, `{\"id\":\"google\",\"key\":\"…\",\"cx\":\"…\"}`. The chain fails over until one answers. `limit` is optional and clamped to a sane ceiling.\n- `POST /v1/tools/youtube/transcript` - `{\"url\": \"https://youtu.be/…\"}` (or a bare 11-character video id), optional `lang` → `{id, title, uploader, duration, text}` with `[m:ss]` timestamps. Returns the **full** transcript - long videos come back long.\n- `POST /v1/tools/youtube/search` - `{\"query\": \"…\"}` or `{\"channel\": \"@handle\"}` (optional `tab`, `limit`) → `{\"videos\": [{id, title, channel, duration, views, …}]}`.\n- `POST /v1/tools/youtube/comments` - `{\"url\": \"…\"}` + `limit` → `{\"video\": {…}, \"comments\": [{author, text, likes, pinned, by_owner}]}`.\n\n**Requirements** - the same as chat: the YouTube endpoints need **yt-dlp** (they answer `503` with an install hint when it is missing); transcripts need a video that actually has captions.\n\n**Errors** are OpenAI-shaped `{\"error\": {\"message\": \"…\"}}`: `400` bad arguments, `502` upstream failure, `503` yt-dlp missing.\n\nTypical use: your app keeps its own tool schemas for the model and executes each tool call here. Example:\n\n```\ncurl http://127.0.0.1:1250/v1/tools/search \\\n  -H \"Authorization: Bearer qm-...\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"query\":\"llama.cpp release\",\"providers\":[{\"id\":\"duckduckgo\"}]}'\n```"
   },
   {
     "id": "observe",
@@ -348,12 +460,16 @@
       "activity",
       "metrics",
       "performance",
+      "charts",
+      "gpu",
       "kv cache",
+      "canonicalization",
       "monitor",
       "debug",
-      "tokens per second"
+      "tokens per second",
+      "capture"
     ],
-    "body": "The **Observe** page has tabbed monitoring:\n\n- **Activity**: per-request history - path, status, token counts, throughput, duration; drill into a captured request/response.\n- **Logs**: live proxy + upstream (llama-server) logs.\n- **Performance**: CPU, system RAM, and GPU charts over time.\n- **Context → KV Cache**: how much of each model's context window is filled, plus KV-cache disk-save hit/miss stats and prompt-canonicalization stats.\n\nLive metrics stream over SSE, so the page updates in real time while a model generates."
+    "body": "The **Observe** page has four tabs, plus a shared time window (5 min / 15 min / 1 hr / All) that filters Activity rows and trims the Performance charts.\n\n- **Activity**: per-request history. Summary tiles at the top (requests, cache hits, tokens processed and generated, median speed) with prompt-processing and token-generation histograms; below them a table you can filter by model / path / status, with a column picker you can reorder - id, time, model, path, status, content type, cached, prompt and generated tokens, prompt t/s, gen t/s, duration. Click a row's capture to open the full request/response body.\n- **Logs**: live logs, shown as **Both**, **Proxy** only (Quartermaster's own lifecycle log) or **Upstream** only (the backend's raw stdout). Each panel has a regex line filter, text wrap, and copy.\n- **Performance**: charts over time - GPU utilization, GPU memory, temperature (plus VRAM temperature and power draw where the card reports them), per-core CPU, memory and swap, load average, and network bandwidth. The refresh interval is selectable (off / 5s / 10s / 30s / 60s).\n- **Context**: two panels. **KV Cache** shows the live slots, the saved snapshot files, preamble mints, restore success rate, disk usage and recent save/restore activity (see the KV-cache article). **Prompt Canonicalization** shows how many requests were rewritten to a stable prefix, how many bytes that trimmed, and the recent rewrites.\n\nLive metrics stream over SSE, so the page updates in real time while a model generates."
   },
   {
     "id": "gpu-memory",
@@ -366,9 +482,14 @@
       "out of memory",
       "offload",
       "budget",
-      "foreign"
+      "foreign",
+      "headroom",
+      "weights",
+      "kv cache",
+      "checkpoints",
+      "compute buffer"
     ],
-    "body": "Quartermaster tracks GPU memory live and breaks it down (System / Weights / Draft / KV / Checkpoints / CUDA / Foreign). The VRAM budget already accounts for memory the system and other apps hold, so its estimates target *free* VRAM.\n\n- **Foreign**: VRAM held by llama-server/sd-server processes Quartermaster didn't spawn (a stray llama.cpp) - it counts these so it won't overcommit.\n- If a model won't load or crashes on load, the usual cause is **not enough free VRAM**. Lower that model's **Target VRAM** (more layers to CPU) or its **context size** in the cogwheel editor, or unload other models."
+    "body": "Quartermaster tracks GPU memory live; the gauge in the status rail breaks the used VRAM into labelled segments, and the VRAM budget already accounts for what the system and other apps hold, so its estimates target *free* VRAM.\n\n**The breakdown.** With a single model loaded and a fresh load-plan estimate for it you get the full split - **System** (OS and other apps), **Weights**, **Vision projector**, **Draft** (speculative/MTP model), **Compute buffer** (logits + activations), **KV cache**, **Checkpoints**, **Headroom** (the reserved safety margin), and **Overhead** (measured usage beyond the estimate). Otherwise - no estimate yet, or more than one model resident - the model side collapses to a single **Model(s)** segment. The estimated parts are fitted to the measured slice, so the bar always adds up to what the driver reports.\n\n- **System** is measured from an idle floor. If no idle sample has been seen yet (a model was already resident when the page loaded) the segment says *estimated*.\n- **Foreign**: VRAM held by llama-server/sd-server processes Quartermaster didn't spawn (a stray llama.cpp), listed by process name. It counts these so it won't overcommit.\n- If a model won't load or crashes on load, the usual cause is **not enough free VRAM**. Lower that model's **Target VRAM** (pushing more layers to CPU) or its **context size** in the cogwheel editor, or unload other models. The server-wide **Target VRAM** and **Headroom** live in dashboard Settings - raise Headroom if loads succeed but OOM moments later."
   },
   {
     "id": "slot-kv-cache",
@@ -395,21 +516,28 @@
   },
   {
     "id": "settings",
-    "title": "Playground settings (tokens, thinking)",
+    "title": "Playground settings",
     "keywords": [
       "settings",
       "max tokens",
       "thinking budget",
       "reasoning",
+      "effort",
       "temperature",
       "length",
-      "dashboard",
+      "theme",
+      "dark mode",
+      "read aloud",
+      "voice",
+      "tts",
       "memory",
-      "vram",
-      "backends",
-      "idle unload"
+      "remember",
+      "system prompt",
+      "persona",
+      "preset",
+      "dashboard"
     ],
-    "body": "Playground **Settings** (gear in the side rail):\n\n- **Max Tokens**: cap on a single response's length.\n- **Thinking Budget**: max reasoning tokens before a thinking model is forced to answer - stops it overthinking. 0 = unlimited. It's enforced as a clean server-side stop so the model's KV cache stays warm.\n- **Web Search**: see the web-search article.\n- **Temperature** (per-chat): higher = more varied/creative, lower = more focused.\n\nThese are the **playground** per-user settings (saved to your account; the assistant's Quartermaster tools can adjust them for you). The **dashboard** has a separate Settings modal for server-wide config - memory budget (Target VRAM / Headroom / Max RAM), idle unload, KV-cache disk save, and Backends - each covered in its own article."
+    "body": "Playground **Settings** (gear in the side rail) has four sections, all saved to your account:\n\n**General**\n\n- **Theme**: System, Light or Dark.\n- **Max Tokens**: cap on how long a single response can be.\n- **Thinking Budget**: max reasoning tokens before a thinking model is forced to answer - 0 = unlimited. It's a soft cut at a round boundary, so the KV cache stays warm. Models that expose their own **reasoning-effort levels** ignore it: the field is disabled for them and you pick the level in the chat composer instead.\n- **Read-aloud voice**: which TTS model and voice the speaker button on a message uses, with a preview button. Hidden when no TTS model is installed; refreshing the voice list loads that model.\n\n**Memory**: a switch plus the list of lasting facts the assistant keeps about you. It writes here when you tell it to remember something, and every entry is editable or deletable. These facts are prepended to every chat's system prompt, so a short list keeps chats fast and a wrong entry is worth deleting.\n\n**Web Search**: the provider chain and its limits - see the Web search article.\n\n**System Prompt**: choose **Built-in default** (Quartermaster's shipped persona), **None** (no system prompt at all), or one of your own presets. A preset bundles the persona plus its own web-search, wiki, YouTube and citation instructions, each editable section by section; the built-in default and its shipped tool prompts are never modified.\n\n**Temperature** is not here - it's per-chat, in the composer's config popover, because it's a per-conversation choice.\n\nThese are the **playground** per-user settings (the assistant's Quartermaster tools can adjust them for you). The **dashboard** has a separate Settings modal for server-wide config - memory budget (Target VRAM / Headroom / Max RAM), idle unload, KV-cache disk save, and Backends - each covered in its own article."
   },
   {
     "id": "known-issues",
@@ -448,8 +576,16 @@
       "wont load",
       "fails",
       "broken",
-      "fix"
+      "fix",
+      "401",
+      "503",
+      "waiting",
+      "queue",
+      "evicted",
+      "swap",
+      "dll",
+      "exited prematurely"
     ],
-    "body": "Common issues and fixes:\n\n- **Model won't load / crashes on load** → not enough free VRAM. Lower its Target VRAM or context in the cogwheel editor, or unload other models.\n- **Generation is slow** → too many layers on CPU (low VRAM target), or context is very large. Raise Target VRAM if you have headroom.\n- **Web search fails (\"Failed to fetch\")** → SearXNG unreachable, CORS-blocked, or JSON format not enabled. Re-check the URL with Test.\n- **Blurry images** → turbo/lightning checkpoints need CFG = 1.0. SDXL needs a full checkpoint file.\n- **Model swaps unexpectedly** → another request pulled in a group-mate and evicted yours; give heavy models their own swap group or enough VRAM to coexist.\n- **Config change didn't take effect** → running models keep old settings until they reload; the staging card shows what's actually loaded."
+    "body": "Common issues and fixes:\n\n- **Model won't load / crashes on load** -> usually not enough free VRAM. Lower its Target VRAM or context in the cogwheel editor, or unload other models. Check Observe -> Logs (Upstream) for what the backend actually said.\n- **\"Exited prematurely\" right after launch, nothing in the log** -> the backend exe couldn't load its DLLs. Quartermaster names the missing library in the proxy log (e.g. a ROCm/HIP runtime); install that runtime or switch to a build that ships it.\n- **Generation is slow** -> too many layers on CPU (low VRAM target), or a very large context. Raise Target VRAM if you have headroom, and check the model's split in the cogwheel editor's load plan.\n- **A long chat re-processes its whole prompt after a swap** -> that's a cold prefill. Turn on KV-cache disk save for that model so the cache survives eviction (see its article).\n- **Your request sits at \"Waiting its turn\"** -> another request holds the model, or one is queued ahead of you (the position is shown). It starts as soon as the model frees up; nothing is lost. If it happens constantly, the two models in play don't fit in VRAM together.\n- **Model swapped out while you weren't looking** -> a request for another model needed the VRAM, so the scheduler evicted the least recently used one. Give the model you care about more of the budget, or keep the other one unloaded.\n- **Web search fails** -> open Settings -> Web Search and hit **Test** on the provider row. A provider marked \"enabled but not configured\" is skipped, not tried; the chain falls through to the next one, so a working fallback (DuckDuckGo) hides a broken primary.\n- **YouTube tools answer 503** -> yt-dlp isn't installed or isn't on PATH. Install it from the Backends tab (Tools) or re-run the installer with the yt-dlp helper ticked. Transcripts also need a video that actually has captions.\n- **Blurry or burnt images** -> turbo/lightning/distilled checkpoints need CFG = 1.0. SDXL/SD need a full checkpoint file. See also Known issues for the AMD Vulkan allocation cap.\n- **A client gets 401** -> its API key is missing, wrong, or sent in a header the server doesn't read (use `Authorization: Bearer`, Basic password, or `x-api-key`).\n- **A model is missing from a client's `/v1/models`** -> the key is scoped to a subset of models, or the port it connects to has its own catalog. See API keys and access.\n- **The dashboard is unreachable from another machine** -> that's deliberate: binding beyond loopback restricts the admin surface to this host. Add the network with `-admin-allow`.\n- **Config change didn't take effect** -> most settings apply live, but a running model keeps the arguments it launched with until it reloads; the staging card shows what's actually running. Changing a listener's bind address needs a restart."
   }
 ]

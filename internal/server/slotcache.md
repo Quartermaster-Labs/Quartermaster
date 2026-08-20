@@ -80,6 +80,13 @@ After any restore, `awaitConfirm[model]` is set; the **next** request's upstream
   identical tools. It needs the full preamble in `.meta`, so preamble sidecars are stored
   **uncapped** (conversation `.meta` stays capped at `metaMaxBytes`).
 
+## Logging
+
+Every `record()` event is mirrored into the proxy log by `logEvent` (`slotcache_stats.go`):
+`save` / `restore-hit` / `restore-seed` at INFO, everything else (misses, confirms, preamble
+bookkeeping) at DEBUG. `error` events are skipped there — the call sites already Warn with the
+cause, so logging them twice would just duplicate.
+
 ## Gotchas
 
 - **We mutate the forwarded prompt (timestamp normalization).** `sessionAnchor` strips time-of-day

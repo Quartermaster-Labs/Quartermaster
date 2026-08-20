@@ -1,27 +1,34 @@
 import type { ToolDef } from "./types";
 
-// Advertised to playground models so a YouTube link in the conversation is
-// something they can actually read. The fetch happens server-side (yt-dlp,
-// dispatched in turns.go) — nothing here touches the network; this file is only
-// the contract shown to the model.
+// Advertised to playground models so a link to a talk, stream or episode in the
+// conversation is something they can actually read. The fetch happens
+// server-side (yt-dlp, dispatched in turns.go) — nothing here touches the
+// network; this file is only the contract shown to the model.
+//
+// yt-dlp is not a YouTube client: it extracts from ~1800 sites, and captions are
+// captions wherever they come from. The tool is named for what it does rather
+// than for one site, so the model actually tries it on a Vimeo or TED link
+// instead of announcing it cannot watch video. The two tools below stay
+// YouTube-specific because their mechanisms are: `ytsearch:` is a YouTube-only
+// scheme, and comment extraction exists for barely any other site.
 export const YOUTUBE_TOOL: ToolDef = {
   type: "function",
   function: {
-    name: "youtube_transcript",
+    name: "media_transcript",
     description:
-      "Fetch the transcript (captions) of a YouTube video so you can analyse, summarise, quote or fact-check it. Call this whenever the user gives a YouTube link or asks about a specific video - you cannot watch video, but this gives you what was said, in timestamped paragraphs. Long videos may come back truncated; the result says so explicitly when it does.",
+      "Fetch the transcript (captions/subtitles) of a video, talk, stream or podcast episode so you can analyse, summarise, quote or fact-check it. Works on YouTube and on hundreds of other sites - Vimeo, TED, Dailymotion, Twitch VODs, Rumble, PeerTube, SoundCloud, conference and news-site players, most podcast episode pages. Call this whenever the user gives a link to a recording or asks about a specific one - you cannot watch or listen, but this gives you what was said, in timestamped paragraphs. Not every page has captions and long recordings may come back truncated; the result says so explicitly, and you say so too rather than guessing.",
     parameters: {
       type: "object",
       properties: {
         url: {
           type: "string",
           description:
-            "The YouTube video URL (watch, youtu.be, shorts or embed form) or its 11-character video id",
+            "The page URL of the video or audio (any site, not just YouTube), or a bare 11-character YouTube video id",
         },
         lang: {
           type: "string",
           description:
-            "Optional caption language code, e.g. 'en' (default), 'de', 'pt-BR'. Only use when the video is not in English.",
+            "Optional caption language code, e.g. 'en' (default), 'de', 'pt-BR'. Only use when the recording is not in English.",
         },
       },
       required: ["url"],
@@ -39,7 +46,7 @@ export const YOUTUBE_SEARCH_TOOL: ToolDef = {
   function: {
     name: "youtube_search",
     description:
-      "Find YouTube videos: pass `query` to search all of YouTube, or `channel` to list what one channel has posted (newest first). Returns titles, links, channel, duration, upload date and view count - metadata only, never what was said in a video. Use it to find a video when the user has not given a link, to check what a channel recently covered, or to pick a video worth reading; then call youtube_transcript on the one you chose.",
+      "Find YouTube videos: pass `query` to search all of YouTube, or `channel` to list what one channel has posted (newest first). Returns titles, links, channel, duration, upload date and view count - metadata only, never what was said in a video. Use it to find a video when the user has not given a link, to check what a channel recently covered, or to pick a video worth reading; then call media_transcript on the one you chose.",
     parameters: {
       type: "object",
       properties: {

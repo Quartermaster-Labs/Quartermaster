@@ -113,5 +113,9 @@ the paid provider you just switched to.
   JSON-LD, chrome stripped). Advertised alongside web search. SSRF-guarded at dial on the
   resolved IP, so redirects and DNS rebinding are covered. Caps: 25 s, 4 MiB, 12k chars,
   8 fetches/turn, 15-min cache. JS-rendered pages return a clear error rather than a guess.
-- **`youtube_transcript`** (`internal/server/youtube.go`) — needs `yt-dlp` on `PATH` or beside
-  the exe; the Windows installer offers it as an optional task.
+- **`media_transcript`** (`internal/tools/youtube.go`) — captions for a video or audio page.
+  Works on YouTube *and* the other ~1800 sites yt-dlp extracts from (Vimeo, TED, Dailymotion,
+  Twitch VODs, Rumble, PeerTube, SoundCloud, most podcast episode pages) — whatever publishes
+  subtitles. Needs `yt-dlp` on `PATH` or beside the exe; the Windows installer offers it as an
+  optional task. `youtube_search` and `youtube_comments` stay YouTube-only: the `ytsearch:`
+  scheme and comment extraction exist for barely anything else.

@@ -279,6 +279,8 @@ func (s *Server) handleAPISlotCachePut(w http.ResponseWriter, r *http.Request) {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.proxylog.Infof("slot cache: enabled=%v minSaveTokens=%d maxDisk=%gGB maxSessions=%d",
+		body.Enable, body.MinSaveTokens, body.MaxDiskGB, body.MaxSessions)
 	if !s.regenAndReload(w, r) {
 		return
 	}
@@ -392,6 +394,11 @@ func (s *Server) handleAPISettingsPut(w http.ResponseWriter, r *http.Request) {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// These four numbers decide every model's context, offload and TTL, so a
+	// load that behaves differently than it did yesterday usually traces back
+	// to this line.
+	s.proxylog.Infof("settings: targetVram %.1fGB, overhead %.1fGB, maxRam %.1fGB, ttl %ds",
+		body.TargetVramGB, body.VramOverheadGB, body.MaxRamGB, body.TtlSec)
 	if !s.regenAndReload(w, r) {
 		return
 	}
@@ -408,6 +415,7 @@ func (s *Server) handleAPISettingsDelete(w http.ResponseWriter, r *http.Request)
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.proxylog.Info("settings: reset to the generate file's defaults")
 	if !s.regenAndReload(w, r) {
 		return
 	}

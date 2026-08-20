@@ -33,7 +33,7 @@ to load a static `-config` instead.
 
 ```sh
 # 1. Build + place the binary
-make build                                  # or: go build -o quartermaster .
+make linux-amd64                            # or: go build -o quartermaster .
 sudo install -D -m755 build/quartermaster-linux-amd64 /opt/quartermaster/quartermaster
 
 # 2. Config dir + control file
@@ -43,7 +43,11 @@ sudo cp quartermaster-generate.yaml /etc/quartermaster/
 # 3. Dedicated user
 sudo useradd --system --no-create-home llama || true
 
-# 4. Install + enable the unit (edit paths/ports/models root first)
+# 4. Let that user own its state dir (quartermaster writes bin/, .cache/ and
+#    playground-data/ beside its own binary)
+sudo chown -R llama:llama /opt/quartermaster
+
+# 5. Install + enable the unit (edit paths/ports/models root first)
 sudo cp packaging/systemd/quartermaster.service /etc/systemd/system/
 sudoedit /etc/systemd/system/quartermaster.service
 sudo systemctl daemon-reload

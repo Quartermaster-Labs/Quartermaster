@@ -23,7 +23,7 @@ const (
 const (
 	maxYouTube = 8
 	// ytTurnTokens is the real limiter; a turn may read this much transcript
-	// text (~tokens) across all its youtube_transcript calls.
+	// text (~tokens) across all its media_transcript calls.
 	ytTurnTokens = 40000
 	// ytMinTranscript is the floor below which a further fetch is refused
 	// rather than served as a stub the model would narrate over.

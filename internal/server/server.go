@@ -284,7 +284,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	s.metrics.onRecord = s.slotCache.confirmReuse // confirm restores actually reused KV (cached_tokens)
 	// The backend manager installs beside the running executable and calls back
 	// into the registry so a fresh install is usable without a restart.
-	s.backends = backends.NewManager("", func(m string) { proxylog.Info(m) })
+	s.backends = backends.NewManager("", noticeLogger(proxylog))
 	s.backends.GpuNames = s.gpuNames
 	s.backends.OnInstalled = s.registerManagedBackend
 	s.backends.Preflight = peimports.Hint // catch an archive shipped without its GPU runtime
@@ -294,7 +294,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	// and only running at all when that flag is set).
 	hfSrc := hub.NewHF()
 	hfSrc.Token = hubToken
-	s.hub = hub.NewManager(s.hubModelsRoot, func(m string) { proxylog.Info(m) }, hfSrc)
+	s.hub = hub.NewManager(s.hubModelsRoot, noticeLogger(proxylog), hfSrc)
 	s.hub.OnComplete = func(hub.Job) error { return s.regenReload() }
 	// Sweep abandoned `.part` files once, in the background. The job list is in
 	// memory, so a crash or a kill leaves a partial nothing will ever mention
@@ -304,11 +304,11 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	// so nothing live can be in the way. Backgrounded because it walks the whole
 	// models tree, which is on a spinning disk often enough.
 	go func() {
-		if n, freed := hub.SweepPartials(s.hubModelsRoot(), hubPartialMaxAge, func(m string) { proxylog.Info(m) }); n > 0 {
+		if n, freed := hub.SweepPartials(s.hubModelsRoot(), hubPartialMaxAge, noticeLogger(proxylog)); n > 0 {
 			proxylog.Infof("hub: removed %d orphaned partial download(s), freeing %.1f GB", n, float64(freed)/(1<<30))
 		}
 	}()
-	s.updater = update.New(updateRepo, build.Version, func(m string) { proxylog.Info(m) })
+	s.updater = update.New(updateRepo, build.Version, noticeLogger(proxylog))
 	go s.updater.Run(s.shutdownCtx)
 	s.routes()
 	s.startPreload()
@@ -588,13 +588,16 @@ func (s *Server) localPeerHandler(w http.ResponseWriter, r *http.Request) {
 	// Reject models that this listener does not expose. Peer models are not in
 	// any local group, so a restricted listener never routes to them.
 	if models, scoped := listenerModelSet(r); scoped && !models[data.ModelID] {
-		s.proxylog.Debugf("dispatch: model %q not exposed on this listener", data.ModelID)
+		// Warn, not Debug: from the caller's side this is an unexplained 404 on
+		// a model they can see in their own config, and the scoping that caused
+		// it is invisible to them.
+		s.proxylog.Warnf("dispatch: model %q is not exposed on this listener (404 to %s)", data.ModelID, clientIP(r))
 		shared.SendResponse(w, r, http.StatusNotFound, fmt.Sprintf("model %q is not available on this listener", data.Model))
 		return
 	}
 	// Reject models the request's API key is not scoped to reach.
 	if models, scoped := apiKeyModelSet(r); scoped && !models[data.ModelID] {
-		s.proxylog.Debugf("dispatch: model %q not permitted for this API key", data.ModelID)
+		s.proxylog.Warnf("dispatch: model %q is not permitted for this API key (403 to %s)", data.ModelID, clientIP(r))
 		shared.SendResponse(w, r, http.StatusForbidden, fmt.Sprintf("model %q is not available for this API key", data.Model))
 		return
 	}
@@ -653,7 +656,7 @@ func stripVersionPrefix(r *http.Request) {
 func (s *Server) routes() {
 	cfg := s.config()
 
-	authMW := CreateAuthMiddleware(cfg)
+	authMW := CreateAuthMiddleware(cfg, s.proxylog)
 	modelChain := chain.New(
 		authMW,
 		CreateRequestContextMiddleware(cfg),

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/quartermaster-labs/quartermaster/internal/config"
 )
 
 // GgufRow describes one discovered served model (one .gguf, or the first shard
@@ -120,7 +122,7 @@ func DiscoverGgufModelsMulti(roots []string, skipPatterns ...string) ([]GgufRow,
 			return nil, err
 		}
 		for _, row := range rows {
-			key := strings.ToLower(filepath.ToSlash(row.FullPath))
+			key := config.PathKey(row.FullPath)
 			if seen[key] {
 				continue
 			}

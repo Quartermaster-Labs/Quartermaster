@@ -117,8 +117,9 @@ func TestAutogen_Sidecar_upsertReplaceDelete(t *testing.T) {
 		t.Fatalf("insert failed: %+v", rows)
 	}
 
-	// Replace by Match (separator/case-insensitive) — not a second row.
-	if _, err := UpsertSidecarOverride(gen, Override{Match: `z:\m\a.gguf`, Ctx: 8192}); err != nil {
+	// Replace by Match — not a second row. (Whether a DIFFERENTLY CASED Match is
+	// the same key depends on the filesystem; see sidecar_{windows,posix}_test.go.)
+	if _, err := UpsertSidecarOverride(gen, Override{Match: "Z:/m/a.gguf", Ctx: 8192}); err != nil {
 		t.Fatal(err)
 	}
 	rows, _ = LoadSidecarOverrides(gen)

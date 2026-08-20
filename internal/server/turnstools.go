@@ -12,12 +12,13 @@ import (
 // Server-side ports of the playground's tool + reasoning helpers, so the turn
 // runner (turns.go) can drive the model→tool→model loop headlessly (survives a
 // closed tab). Kept behaviourally identical to the client originals:
-//   - wiki: ui-svelte/src/lib/wiki.ts (corpus shared via wiki_articles.json)
+//   - wiki: ui-svelte/src/lib/wiki.ts (imports the same wiki_articles.json)
 //   - web: ui-svelte/src/lib/webSearch.ts
 //   - reasoning: ui-svelte/src/lib/reasoning.ts
 
-// --- wiki corpus (single source: ui-svelte/src/lib/wikiArticles.json, copied
-// here by the Makefile `ui` target so Go can embed it) ---------------------
+// --- wiki corpus (THE single source; the Svelte UI imports this very file.
+// It lives here, not in ui-svelte/, because //go:embed cannot reference a
+// path outside its own package directory) --------------------------------
 
 //go:embed wiki_articles.json
 var wikiJSON []byte

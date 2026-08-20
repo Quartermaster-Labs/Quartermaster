@@ -482,11 +482,16 @@ func (s *Server) handlePlaygroundLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	stored, exists := users[username]
 	if !exists {
+		// Failed logins are the one playground event worth a WARN: a burst of them
+		// from one address is the only signal a password is being guessed, and
+		// until now the whole auth path was silent in the log.
+		s.proxylog.Warnf("playground: login rejected for %q from %s (no such user)", username, clientIP(r))
 		http.Error(w, "no such user — sign up first", http.StatusUnauthorized)
 		return
 	}
 	match, upgrade := checkPassword(stored, password)
 	if !match {
+		s.proxylog.Warnf("playground: login rejected for %q from %s (wrong password)", username, clientIP(r))
 		http.Error(w, "wrong password", http.StatusUnauthorized)
 		return
 	}
@@ -497,6 +502,7 @@ func (s *Server) handlePlaygroundLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	s.proxylog.Infof("playground: %q logged in from %s", username, clientIP(r))
 	p.setSessionCookie(w, r, username)
 	writeJSON(w, map[string]string{"username": username})
 }
@@ -536,9 +542,11 @@ func (s *Server) handlePlaygroundSignup(w http.ResponseWriter, r *http.Request) 
 	}
 	users[username] = hash
 	if err := p.saveUsers(users); err != nil {
+		s.proxylog.Errorf("playground: could not save new user %q: %v", username, err)
 		http.Error(w, "could not save user", http.StatusInternalServerError)
 		return
 	}
+	s.proxylog.Infof("playground: account %q created from %s", username, clientIP(r))
 
 	p.setSessionCookie(w, r, username)
 	writeJSON(w, map[string]string{"username": username})

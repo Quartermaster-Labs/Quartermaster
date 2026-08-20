@@ -117,11 +117,12 @@ healthCheckTimeout: 500
 # - Valid log levels: debug, info, warn, error
 logLevel: info
 
-# logTimeFormat: enables and sets the logging timestamp format
-# - optional, default (disabled): ""
-# - Valid values: "", "ansic", "unixdate", "rubydate", "rfc822", "rfc822z",
-#   "rfc850", "rfc1123", "rfc1123z", "rfc3339", "rfc3339nano", "kitchen",
-#   "stamp", "stampmilli", "stampmicro", and "stampnano".
+# logTimeFormat: sets the logging timestamp format
+# - optional, default: "clock" (a plain 15:04:05 wall clock); "none" logs
+#   without any timestamp
+# - Valid values: "clock", "none", "ansic", "unixdate", "rubydate", "rfc822",
+#   "rfc822z", "rfc850", "rfc1123", "rfc1123z", "rfc3339", "rfc3339nano",
+#   "kitchen", "stamp", "stampmilli", "stampmicro", and "stampnano".
 # - For more info, read: https://pkg.go.dev/time#pkg-constants
 logTimeFormat: ""
 

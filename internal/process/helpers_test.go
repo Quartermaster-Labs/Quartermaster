@@ -27,6 +27,14 @@ func TestMain(m *testing.M) {
 	} else {
 		simpleResponderPath = filepath.Join("..", "..", "build", fmt.Sprintf("simple-responder_%s_%s", goos, goarch))
 	}
+	// Absolutise: the helper path is relative to this package dir, but processes
+	// are spawned with cmd.Dir = spawnDir() (the running binary's directory —
+	// under `go test` that is the temp build dir, not the package dir), and a
+	// relative program path is resolved against Dir by exec. Left relative, every
+	// test that actually starts simple-responder fails to exec it.
+	if abs, err := filepath.Abs(simpleResponderPath); err == nil {
+		simpleResponderPath = abs
+	}
 	m.Run()
 }
 

@@ -1,11 +1,13 @@
 package server
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/quartermaster-labs/quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/logmon"
 )
 
 // TestServer_APIKeyScope checks that the auth middleware attaches a scoped key's
@@ -25,7 +27,7 @@ func TestServer_APIKeyScope(t *testing.T) {
 		})
 		r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 		r.Header.Set("Authorization", "Bearer pikey")
-		CreateAuthMiddleware(cfg)(final).ServeHTTP(httptest.NewRecorder(), r)
+		CreateAuthMiddleware(cfg, logmon.NewWriter(io.Discard))(final).ServeHTTP(httptest.NewRecorder(), r)
 		if !ok || !got["qwen-35b"] || !got["qwen-27b"] || got["other"] {
 			t.Fatalf("scope = %v ok=%v, want {qwen-35b,qwen-27b}", got, ok)
 		}
@@ -38,7 +40,7 @@ func TestServer_APIKeyScope(t *testing.T) {
 		})
 		r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 		r.Header.Set("Authorization", "Bearer adminkey")
-		CreateAuthMiddleware(cfg)(final).ServeHTTP(httptest.NewRecorder(), r)
+		CreateAuthMiddleware(cfg, logmon.NewWriter(io.Discard))(final).ServeHTTP(httptest.NewRecorder(), r)
 		if ok {
 			t.Fatal("admin key should be unrestricted (no scope in context)")
 		}
@@ -49,7 +51,7 @@ func TestServer_APIKeyScope(t *testing.T) {
 		r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 		r.Header.Set("Authorization", "Bearer nope")
 		w := httptest.NewRecorder()
-		CreateAuthMiddleware(cfg)(final).ServeHTTP(w, r)
+		CreateAuthMiddleware(cfg, logmon.NewWriter(io.Discard))(final).ServeHTTP(w, r)
 		if w.Code != http.StatusUnauthorized {
 			t.Errorf("invalid key = %d, want 401", w.Code)
 		}

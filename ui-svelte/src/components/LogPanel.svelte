@@ -77,6 +77,37 @@
   });
 
   const filteredLogs = $derived(filtered.text);
+
+  // Level colouring. A proxy line is "[hh:mm:ss] [LEVEL] message" (the
+  // timestamp is optional), so the prefix is dimmed and the body takes the
+  // level's colour; upstream backend lines carry no level tag and render
+  // plain. Built as one HTML string rather than a keyed {#each}: the log is a
+  // few thousand lines and re-renders on every streamed chunk.
+  const LEVEL_RE = /^(.{0,20}?\[(DEBUG|INFO|WARN|ERROR)\]\s?)(.*)$/;
+
+  const LEVEL_CLASS: Record<string, string> = {
+    DEBUG: "text-txtsecondary/70",
+    INFO: "",
+    WARN: "text-warning",
+    ERROR: "text-error",
+  };
+
+  function escapeHtml(text: string): string {
+    return text.replace(/[&<>]/g, (c) => (c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;"));
+  }
+
+  const highlighted = $derived.by(() =>
+    filteredLogs
+      .split("\n")
+      .map((line) => {
+        const m = LEVEL_RE.exec(line);
+        if (!m) return escapeHtml(line);
+        const cls = LEVEL_CLASS[m[2]] ?? "";
+        const prefixCls = m[2] === "WARN" || m[2] === "ERROR" ? cls : "text-txtsecondary/60";
+        return `<span class="${prefixCls}">${escapeHtml(m[1])}</span><span class="${cls}">${escapeHtml(m[3])}</span>`;
+      })
+      .join("\n"),
+  );
   const badRegex = $derived(filtered.bad);
   const totalLines = $derived(logData ? logData.split("\n").length : 0);
   const lineCount = $derived(filteredLogs ? filteredLogs.split("\n").length : 0);
@@ -112,7 +143,7 @@
 
   // Auto scroll to bottom when logs change, unless user has scrolled up
   $effect(() => {
-    if (preElement && filteredLogs && !userScrolledUp) {
+    if (preElement && highlighted && !userScrolledUp) {
       preElement.scrollTop = preElement.scrollHeight;
     }
   });
@@ -179,7 +210,7 @@
       onscroll={handleScroll}
       onwheel={handleWheel}
       style="font-size: {$fontPxStore}px; line-height: 1.45"
-      class="{textWrapClass} pretty-scroll h-full overflow-auto p-3">{filteredLogs}</pre>
+      class="{textWrapClass} pretty-scroll h-full overflow-auto p-3">{@html highlighted}</pre>
 
     <!-- Auto-follow is suspended while scrolled up; this jumps back and resumes. -->
     {#if userScrolledUp}

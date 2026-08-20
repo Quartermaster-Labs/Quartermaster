@@ -139,8 +139,12 @@ var catalog = []Component{
 				},
 			},
 			{
-				ID: "cuda", Label: "CUDA", Note: "NVIDIA only. Pulls the matching cudart runtime alongside.",
+				ID: "cuda", Label: "CUDA", Note: "NVIDIA only, Windows only. Pulls the matching cudart runtime alongside. Upstream publishes no Linux CUDA build, so an NVIDIA card on Linux uses the Vulkan variant.",
 				Patterns: map[string][]string{
+					// No osLinux entry on purpose: llama.cpp's release assets carry
+					// ubuntu builds for vulkan/rocm/cpu but none for CUDA, so there
+					// is nothing to match; DefaultVariant's len(Patterns[goos])
+					// guard is what steers a Linux NVIDIA host to Vulkan instead.
 					// Newest CUDA major first: upstream ships 12.x and 13.x of the
 					// same build, and the newer toolkit is the better default on a
 					// current driver.
@@ -206,8 +210,10 @@ var catalog = []Component{
 				},
 			},
 			{
-				ID: "cuda", Label: "CUDA", Note: "NVIDIA only. Pulls the matching cudart runtime alongside.",
+				ID: "cuda", Label: "CUDA", Note: "NVIDIA only, Windows only. Pulls the matching cudart runtime alongside. Upstream publishes no Linux CUDA build, so an NVIDIA card on Linux uses the Vulkan variant.",
 				Patterns: map[string][]string{
+					// Windows-only for the same reason as llama.cpp above: the
+					// upstream release carries no ubuntu CUDA asset to match.
 					osWin: {`(?i)^sd-.*-bin-win-cuda[0-9]*-x64\.zip$`, `(?i)^sd-.*cuda.*\.zip$`},
 				},
 				PairKey: `(?i)-cuda([0-9]+)-`,
@@ -253,7 +259,7 @@ var catalog = []Component{
 	{
 		ID:    "yt-dlp",
 		Name:  "yt-dlp",
-		Blurb: "Helper for the chat youtube_transcript tool. Not an inference backend.",
+		Blurb: "Helper for the chat media_transcript tool. Not an inference backend.",
 		Repo:  "yt-dlp/yt-dlp",
 		Kind:  "", // never registered as a backend
 		Exe:   map[string]string{osWin: "yt-dlp.exe", osMac: "yt-dlp_macos", "default": "yt-dlp"},

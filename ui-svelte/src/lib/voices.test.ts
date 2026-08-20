@@ -1,17 +1,21 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { VOICES_CACHE_KEY, saveVoicesCache, fetchVoices, safeVoice, voiceLabel, hasCachedVoices, cachedVoices, voiceSubstitution } from "./voices";
+import { VOICES_CACHE_KEY, saveVoicesCache, getVoicesCache, migrateVoicesCache, fetchVoices, safeVoice, voiceLabel, hasCachedVoices, cachedVoices, voiceSubstitution } from "./voices";
+import { clearPrefs } from "../stores/prefs";
 
-// The suite runs in node (no DOM); voices.ts guards on `window`, so provide the
-// two globals it actually touches.
+// The cache lives in the server-backed prefs blob now; clearPrefs() is the reset.
+// migrateVoicesCache still reads the retired localStorage key, and the suite runs
+// in node (no DOM), so stub the two globals it touches.
 const store = new Map<string, string>();
 const fakeLocalStorage = {
   getItem: (k: string) => store.get(k) ?? null,
   setItem: (k: string, v: string) => void store.set(k, v),
+  removeItem: (k: string) => void store.delete(k),
 };
 
 describe("voices", () => {
   beforeEach(() => {
     store.clear();
+    clearPrefs();
     vi.stubGlobal("window", {});
     vi.stubGlobal("localStorage", fakeLocalStorage);
   });
@@ -63,7 +67,36 @@ describe("voices", () => {
   it("caches under the shared key so the Speech tab and read-aloud agree", async () => {
     stubVoicesResponse({ Kokoro_Q8: ["af_heart"] });
     await fetchVoices("kokoro-q8");
-    expect(JSON.parse(fakeLocalStorage.getItem(VOICES_CACHE_KEY)!)["kokoro-q8"]).toEqual(["af_heart"]);
+    expect(getVoicesCache()["kokoro-q8"]).toEqual(["af_heart"]);
+  });
+
+  // Storing [""] for a model whose fetch failed made hasCachedVoices() true with
+  // a list holding only the default, and the picker's clamp then rewrote the
+  // user's saved voice to "". A refresh while the model was still loading was
+  // enough to lose the selection.
+  it("keeps the known list when a refresh fails", async () => {
+    saveVoicesCache({ kokoro: ["af_heart", "am_michael"] });
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 503 }) as unknown as Response));
+    expect(await fetchVoices("kokoro")).toEqual(["af_heart", "am_michael"]);
+    expect(getVoicesCache()["kokoro"]).toEqual(["af_heart", "am_michael"]);
+    expect(safeVoice("kokoro", "am_michael")).toBe("am_michael");
+  });
+
+  it("does not invent a cache entry when a first fetch fails", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("offline"); }));
+    expect(await fetchVoices("kokoro")).toEqual([""]);
+    expect(hasCachedVoices("kokoro")).toBe(false);
+  });
+
+  it("lifts a legacy localStorage cache into prefs exactly once", () => {
+    store.set(VOICES_CACHE_KEY, JSON.stringify({ kokoro: ["af_heart"], stale: [] }));
+    saveVoicesCache({ qwen: ["serena"] });
+    migrateVoicesCache();
+    expect(getVoicesCache()).toEqual({ qwen: ["serena"], kokoro: ["af_heart"] });
+    // Consumed: a later call finds nothing left to lift.
+    expect(fakeLocalStorage.getItem(VOICES_CACHE_KEY)).toBeNull();
+    migrateVoicesCache();
+    expect(getVoicesCache()).toEqual({ qwen: ["serena"], kokoro: ["af_heart"] });
   });
 
   // A model with a single unnamed voice and a model nobody asked about both

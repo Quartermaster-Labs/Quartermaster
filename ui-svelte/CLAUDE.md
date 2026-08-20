@@ -90,6 +90,28 @@ Backend communication is centralized in `src/stores/api.ts`, with shared types i
   download jobs, `stores/observe.ts` the Observe tab/window state, `stores/playgroundActivity.ts`
   the sidebar activity dot.
 
+## Chat compaction
+
+`lib/chatCompact.ts` + `ChatInterface.svelte` `compactNow()`. Folding is a **boundary move**, not a
+delete: `summary` + `compactedCount` say "resend the summary plus everything after index N"; the
+full transcript stays on disk and on screen (a divider marks the boundary).
+
+- **Automatic** — `maybeCompact()` after each turn, only once live KV usage crosses `COMPACT_AT`
+  (0.8).
+- **Manual** — `runManualCompact()`, from typing `/compact` in the composer (intercepted in
+  `sendMessage()`, exact match only, no attachments) or clicking the context bar next to the model
+  name. **No KV threshold**: asking for it by hand means compacting *before* the window fills, so a
+  "not full enough" refusal would defeat the point. Toasts what it did.
+
+The summary call runs with `enable_thinking: false` and strips any `<think>` block anyway: with
+reasoning on, the model can spend the whole `max_tokens` budget thinking and return an empty
+`content`, which used to surface as an intermittent "Compaction failed" on a healthy model. The
+manual toast now carries the reason.
+
+Both keep the last `KEEP_RECENT` (6) messages verbatim and snap the boundary forward to a `user`
+message, so the kept slice never starts on an orphaned assistant/tool reply whose `tool_calls` were
+summarized away.
+
 ## Conventions
 
 - **Svelte 5 runes** throughout — `$state`, `$derived`, `$effect`, `$props`; stores read with the

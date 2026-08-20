@@ -5,6 +5,7 @@
   import { loadImageChats, clearImageChats } from "../stores/imageHistory";
   import { loadSpeechChats, clearSpeechChats } from "../stores/speechHistory";
   import { loadPrefs, clearPrefs } from "../stores/prefs";
+  import { migrateVoicesCache } from "../lib/voices";
   import { loadMemories, clearMemories } from "../stores/memories";
   import { selectedTabStore, selectedModelStore, type PlaygroundTab } from "../stores/playground";
   import { userPref } from "../stores/prefs";
@@ -50,6 +51,9 @@
     if ($me) {
       chatsLoaded = false;
       Promise.all([loadChats(), loadImageChats(), loadSpeechChats(), loadPrefs(), loadMemories()]).then(() => {
+        // The TTS voice lists used to live in localStorage; fold anything left
+        // there into the now server-backed prefs blob. One-shot, post-hydration.
+        migrateVoicesCache();
         applyLaunchParams();
         chatsLoaded = true;
       });

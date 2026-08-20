@@ -49,6 +49,11 @@
   --color-txtsecondary: rgba(107, 98, 89, 1);
   --color-navlink-active: rgba(250, 246, 238, 1);
 
+  /* Read-aloud position. The light theme's primary is a dark brown, so the
+     speaking marker gets its own orange rather than reusing it. */
+  --color-speak: rgba(199, 88, 18, 1);
+  --color-speak-bg: rgba(199, 88, 18, 0.16);
+
   --color-primary: rgba(120, 72, 40, 1);
   --color-primary-hover: rgba(96, 56, 28, 1);
   --color-primary-active: rgba(76, 44, 20, 1);
@@ -105,6 +110,9 @@
     --color-txtsecondary: rgba(161, 161, 166, 0.85);
 
     --color-navlink-active: rgba(24, 24, 26, 1);
+
+    --color-speak: rgba(255, 150, 90, 1);
+    --color-speak-bg: rgba(255, 106, 43, 0.22);
 
     --color-primary: rgba(255, 106, 43, 1);
     --color-primary-hover: rgba(255, 130, 69, 1);
@@ -743,4 +751,17 @@
   background: none;
   padding: 0;
   border: 0;
+}
+
+/* Read-aloud position markers (lib/speechHighlight.ts). Painted through the CSS
+   Custom Highlight API, so these selectors match Ranges rather than elements and
+   only accept color / background-color / text-decoration / text-shadow. Nothing
+   in the DOM is wrapped, which is why the markers survive code-copy buttons,
+   diagram canvases and citation chips untouched. */
+::highlight(tts-active) {
+  background-color: var(--color-speak-bg);
+  color: var(--color-speak);
+}
+::highlight(tts-spoken) {
+  color: var(--color-txtsecondary);
 }

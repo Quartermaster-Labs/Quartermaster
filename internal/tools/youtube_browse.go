@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Discovery half of the YouTube tools. `youtube_transcript` (youtube.go) can
+// Discovery half of the YouTube tools. `media_transcript` (youtube.go) can
 // only read a video the user already named — so a model could analyse a link,
 // but not find one, not see what a channel has posted, and not read what people
 // said about it. These two tools close that:
@@ -440,7 +440,7 @@ func GetComments(ctx context.Context, videoID string, limit int) ([]Comment, Tra
 // --- rendering --------------------------------------------------------------
 
 // FormatVideos renders a result list the model can pick from and cite.
-// Each line carries the watch URL verbatim so the follow-up youtube_transcript
+// Each line carries the watch URL verbatim so the follow-up media_transcript
 // call needs no id surgery.
 //
 // The header states the ORDERING and, when the listing came back without upload
@@ -502,7 +502,7 @@ func FormatVideos(what string, vids []Video, numbers []int, newestFirst bool) st
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("These are titles and metadata only - nothing here tells you what was actually said in a video. Call youtube_transcript on one before summarising or quoting it.")
+	b.WriteString("These are titles and metadata only - nothing here tells you what was actually said in a video. Call media_transcript on one before summarising or quoting it.")
 	return b.String()
 }
 

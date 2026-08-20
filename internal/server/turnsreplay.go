@@ -42,7 +42,12 @@ const replayNote = "\n\n(Result from an earlier turn in this conversation, repla
 // replayToolCalls expands a client-sent history so prior turns' tool calls and
 // results are present as real tool messages. Messages without searches pass
 // through byte-identical.
-func replayToolCalls(msgs []json.RawMessage) []json.RawMessage {
+//
+// lookup (may be nil) offers the bytes the turn ACTUALLY forwarded when it ran,
+// which are preferred over anything rebuilt here: a rebuild that differs from
+// what upstream already holds rewrites the prompt prefix retroactively and costs
+// the conversation its KV cache. See turnsrecord.go.
+func replayToolCalls(msgs []json.RawMessage, lookup func([]turnSearch) *turnRecord) []json.RawMessage {
 	out := make([]json.RawMessage, 0, len(msgs))
 	for i, raw := range msgs {
 		var m struct {
@@ -53,6 +58,18 @@ func replayToolCalls(msgs []json.RawMessage) []json.RawMessage {
 		if json.Unmarshal(raw, &m) != nil || m.Role != "assistant" || len(m.Searches) == 0 {
 			out = append(out, raw)
 			continue
+		}
+		if lookup != nil {
+			if rec := lookup(m.Searches); rec != nil {
+				// Verbatim: the recorded tail already carries this turn's prose,
+				// its real tool-call ids, its untruncated results and their cite
+				// reminders, exactly as upstream saw them.
+				out = append(out, rec.msgs...)
+				out = append(out, mustJSON(map[string]any{
+					"role": "assistant", "content": rec.trimSpoken(m.Content),
+				}))
+				continue
+			}
 		}
 		var calls []any
 		var results []json.RawMessage
@@ -110,7 +127,7 @@ func replayCall(s turnSearch) (name, args string, ok bool) {
 	case "page":
 		return "fetch_page", mustArg("url", link), true
 	case "youtube":
-		return "youtube_transcript", mustArg("url", link), true
+		return "media_transcript", mustArg("url", link), true
 	case "youtube-comments":
 		return "youtube_comments", mustArg("url", link), true
 	case "feed":

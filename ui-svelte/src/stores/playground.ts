@@ -63,6 +63,14 @@ export const reasoningEffortStore = userPref<string>("playground-reasoning-effor
 // VOICE is shared — it is the same person's voice either way.
 export const chatTtsModelStore = userPref<string>("playground-chat-tts-model", "");
 export const chatTtsVoiceStore = userPref<string>("playground-speech-voice", "");
+// Playback shaping for read-aloud, live on the <audio> element rather than a
+// synthesis parameter: neither engine takes a rate or a gain, and re-synthesising
+// to change either would throw away the replay cache. Shared across messages and
+// persisted, because "too loud" / "too slow" is a property of the listener, not
+// of one reply. Rate is clamped to the dropdown's 0.25-2x range; browsers keep
+// pitch constant over it (preservesPitch), so 2x is fast, not chipmunked.
+export const chatTtsVolumeStore = userPref<number>("playground-speech-volume", 1);
+export const chatTtsRateStore = userPref<number>("playground-speech-rate", 1);
 // Installed TTS models, and the one read-aloud will actually use: the explicit
 // pick when it still exists, else the first installed model. Auto-selecting
 // rather than making the user choose keeps the speaker button working out of the

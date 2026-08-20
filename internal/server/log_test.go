@@ -119,13 +119,71 @@ func TestServer_RequestLogMiddleware(t *testing.T) {
 	t.Run("logs request", func(t *testing.T) {
 		r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 		r.RemoteAddr = "192.168.1.1:5000"
+		r.Header.Set("User-Agent", "curl/8.5.0")
 		mw(final).ServeHTTP(httptest.NewRecorder(), r)
 
 		line := string(proxylog.GetHistory())
-		for _, want := range []string{"192.168.1.1", "POST /v1/chat/completions", "201", "5"} {
+		for _, want := range []string{"POST /v1/chat/completions", "201", "5B", "192.168.1.1", "curl/8.5.0"} {
 			if !strings.Contains(line, want) {
 				t.Errorf("log line %q missing %q", line, want)
 			}
+		}
+	})
+
+	// A loopback caller and a browser UA are the overwhelmingly common case;
+	// repeating them on every line is what made the old format unreadable.
+	t.Run("omits loopback address and browser agent", func(t *testing.T) {
+		quiet := logmon.NewWriter(io.Discard)
+		r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		r.RemoteAddr = "127.0.0.1:5000"
+		r.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+		CreateRequestLogMiddleware(quiet)(final).ServeHTTP(httptest.NewRecorder(), r)
+
+		line := string(quiet.GetHistory())
+		for _, unwanted := range []string{"127.0.0.1", "Mozilla", "browser", "HTTP/1.1"} {
+			if strings.Contains(line, unwanted) {
+				t.Errorf("log line %q should not contain %q", line, unwanted)
+			}
+		}
+	})
+
+	// UI polling is demoted to DEBUG rather than dropped: it stays available
+	// under logLevel: debug without burying inference traffic at INFO.
+	t.Run("levels reflect the outcome", func(t *testing.T) {
+		cases := []struct {
+			name   string
+			method string
+			path   string
+			status int
+			want   string
+		}{
+			{"ui poll", http.MethodGet, "/api/models", http.StatusOK, "[DEBUG]"},
+			{"inference", http.MethodPost, "/v1/chat/completions", http.StatusOK, "[INFO]"},
+			{"rejected", http.MethodGet, "/api/models", http.StatusUnauthorized, "[WARN]"},
+			{"upstream error", http.MethodGet, "/api/models", http.StatusBadGateway, "[ERROR]"},
+		}
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				lg := logmon.NewWriter(io.Discard)
+				lg.SetLogLevel(logmon.LevelDebug)
+				h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(c.status) })
+				CreateRequestLogMiddleware(lg)(h).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(c.method, c.path, nil))
+				if line := string(lg.GetHistory()); !strings.Contains(line, c.want) {
+					t.Errorf("log line %q, want level %s", line, c.want)
+				}
+			})
+		}
+	})
+
+	t.Run("formats size and duration for humans", func(t *testing.T) {
+		if got := logSize(45_000); got != "43.9kB" {
+			t.Errorf("logSize(45000) = %q", got)
+		}
+		if got := logDuration(8*time.Second + 123456789*time.Nanosecond); got != "8.1s" {
+			t.Errorf("logDuration() = %q", got)
+		}
+		if got := logDuration(2500 * time.Microsecond); got != "2ms" {
+			t.Errorf("logDuration() = %q", got)
 		}
 	})
 

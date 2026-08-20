@@ -7,6 +7,7 @@ import (
 
 	"github.com/quartermaster-labs/quartermaster/internal/chain"
 	"github.com/quartermaster-labs/quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/logmon"
 	"github.com/quartermaster-labs/quartermaster/internal/shared"
 )
 
@@ -14,7 +15,11 @@ import (
 // config declares any. It accepts the key via Authorization: Bearer,
 // Authorization: Basic (password field), or x-api-key. When no keys are
 // configured the middleware is a pass-through.
-func CreateAuthMiddleware(cfg config.Config) chain.Middleware {
+//
+// A rejection is logged (never the key itself — only whether one was sent),
+// because "my client gets 401" is otherwise indistinguishable in the log from
+// "my client never reached the server".
+func CreateAuthMiddleware(cfg config.Config, proxylog *logmon.Monitor) chain.Middleware {
 	keys := cfg.RequiredAPIKeys
 	scopes := buildKeyScopes(cfg)
 	return func(next http.Handler) http.Handler {
@@ -34,6 +39,11 @@ func CreateAuthMiddleware(cfg config.Config) chain.Middleware {
 				}
 			}
 			if !valid {
+				reason := "invalid API key"
+				if provided == "" {
+					reason = "no API key sent"
+				}
+				proxylog.Warnf("auth: rejected %s %s from %s (%s)", r.Method, r.URL.Path, clientIP(r), reason)
 				// Bearer, not Basic: browsers auto-prompt a native username/password
 				// dialog for a Basic challenge, which made every unkeyed browser /v1
 				// call (titles, compaction, images) pop a "sign in" box mid-chat.

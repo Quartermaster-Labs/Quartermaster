@@ -81,6 +81,39 @@ func (sc *slotCache) record(ev kvEvent) {
 		sc.events = sc.events[len(sc.events)-kvEventRing:]
 	}
 	sc.statsMu.Unlock()
+
+	sc.logEvent(ev)
+}
+
+// logEvent mirrors an event into the proxy log. Until this existed the cache was
+// silent unless it FAILED (the call sites Warn on error), so the log showed the
+// cost of a swap but never the thing that paid for it - "restored 19k tokens
+// instead of reprefilling" was visible only to whoever had the monitoring tab
+// open at that second. Only the three ops that move real work land at Info;
+// the per-request confirmations and bookkeeping stay at Debug.
+func (sc *slotCache) logEvent(ev kvEvent) {
+	if sc.log == nil || ev.Op == "error" {
+		return // errors are already logged, with their cause, at the call site
+	}
+	line := "slotcache: " + ev.Op + " " + ev.Model
+	if ev.Slot > 0 {
+		line += fmt.Sprintf(" slot %d", ev.Slot)
+	}
+	if ev.Key != "" {
+		line += " " + ev.Key
+	}
+	if ev.Tokens > 0 {
+		line += fmt.Sprintf(" (%d tokens)", ev.Tokens)
+	}
+	if ev.Detail != "" {
+		line += " [" + ev.Detail + "]"
+	}
+	switch ev.Op {
+	case "save", "restore-hit", "restore-seed":
+		sc.log.Info(line)
+	default:
+		sc.log.Debug(line)
+	}
 }
 
 // awaitConfirmMax bounds the per-model pending-op FIFO so a model that mints/

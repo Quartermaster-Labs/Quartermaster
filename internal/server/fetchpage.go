@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quartermaster-labs/quartermaster/internal/shared"
 	"golang.org/x/net/html"
 )
 
@@ -85,32 +86,10 @@ func guardDial(network, address string, _ syscall.RawConn) error {
 	return nil
 }
 
-// cgnat covers 100.64.0.0/10 — tailnet addresses live there, and a tailnet host
-// is exactly as much "someone else's private network" as a LAN one.
-var cgnat = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
-
-func isPublicIP(ip net.IP) bool {
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
-		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() {
-		return false
-	}
-	if v4 := ip.To4(); v4 != nil {
-		if cgnat.Contains(v4) {
-			return false
-		}
-		// 0.0.0.0/8 and 240.0.0.0/4 (reserved) are not routable destinations.
-		if v4[0] == 0 || v4[0] >= 240 {
-			return false
-		}
-		return true
-	}
-	// IPv6: reject unique-local (fc00::/7) and IPv4-mapped forms of the above.
-	if len(ip) == net.IPv6len && ip[0]&0xfe == 0xfc {
-		return false
-	}
-	return true
-}
+// isPublicIP is shared.IsPublicIP: the yt-dlp executor enforces the same rule
+// on the host it is about to hand the downloader (internal/tools/youtube.go),
+// and two copies of a security check are two chances to fix only one of them.
+var isPublicIP = shared.IsPublicIP
 
 var pageClient = sync.OnceValue(func() *http.Client {
 	d := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second, Control: guardDial}

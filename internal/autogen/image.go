@@ -3,6 +3,8 @@ package autogen
 import (
 	"fmt"
 	"strings"
+
+	"github.com/quartermaster-labs/quartermaster/internal/config"
 )
 
 // imageArchs are general.architecture values that mark an all-in-one diffusion
@@ -578,7 +580,7 @@ func RenderExtraImageCmd(s Settings, m ExtraImageModel) string {
 // (the editor resolves a model to its -m/--diffusion-model gguf path).
 func FindExtraImageModel(s Settings, p string) (ExtraImageModel, bool) {
 	for _, m := range s.ExtraImageModels {
-		if strings.EqualFold(strings.ReplaceAll(m.ModelPath, "\\", "/"), strings.ReplaceAll(p, "\\", "/")) {
+		if config.PathEqual(m.ModelPath, p) {
 			return m, true
 		}
 	}

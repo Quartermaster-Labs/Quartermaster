@@ -78,19 +78,26 @@ stay in `toolsbridge.go`. The arg parsers (`parseYouTubeArgs`, `parseYtSearchArg
 `parseYtCommentArgs`) stay in `turns.go` — they are turn-layer tolerance for the model's JSON,
 not executor concerns.
 
-**`youtube.go`** (in `internal/tools`) — the `youtube_transcript` fetch path. `parseYouTubeID` accepts
-watch/`youtu.be`/shorts/embed/bare-id; **exec-per-request** `yt-dlp --skip-download --write-subs
+**`youtube.go`** (in `internal/tools`) — the `media_transcript` fetch path. **Not YouTube-only**:
+yt-dlp extracts from ~1800 sites and captions are captions, so the tool takes any page URL (Vimeo,
+TED, Twitch VODs, PeerTube, podcast episodes…). `ParseMediaTarget` vets it — bare id / watch /
+`youtu.be`/shorts/embed canonicalise to a watch URL, everything else must be `http(s)` on a public
+address (`shared.IsPublicIP`, the same rule `fetch_page` dials under). Then **exec-per-request** `yt-dlp --skip-download --write-subs
 --write-auto-subs --sub-format vtt` into a temp dir (no `--convert-subs` — that needs ffmpeg),
 binary from PATH or beside the exe. `vttToParagraphs` strips cue timings, karaoke `<c>` markup and
 the auto-caption rolling repeat into ~30s `[m:ss]` paragraphs (raw VTT is 2–3× the tokens).
 `formatYouTubeTranscript` adds the citable header, truncating at `ytMaxTokens` with an INCOMPLETE
-marker. 30-min cache, `ytTimeout`.
+marker. 30-min cache keyed on the canonical URL + lang, `ytTimeout`. The turn loop still records
+these as `kind:"youtube"` (stored chats and replayed history are full of it) and still answers to
+the old `youtube_transcript` name, so a model copying its own earlier call is not told "unknown
+tool".
 
 Per turn the limiter is a **token budget** (`ytTurnTokens` 40k, each fetch capped at what remains,
 refused below `ytMinTranscript`) rather than a call count — "watch all five of these" is legitimate
 and five shorts cost less than one long talk. `maxYouTube` (8) survives only as a runaway-loop stop,
-since each call is a yt-dlp process against an IP YouTube can 429. **Video id + lang are
-regex-validated before reaching argv.**
+since each call is a yt-dlp process against an IP YouTube can 429. **The target is rebuilt or
+URL-vetted, and lang regex-validated, before reaching argv** — but yt-dlp follows its own
+redirects, so this is a front-door check, not the dial-time guard `fetch_page` gets.
 
 **`youtube_browse.go`** (in `internal/tools`) — the *discovery* tools. `youtube_search` = free-text (`ytsearchN:` scheme,
 no URL to build) or a channel/playlist listing, both `--flat-playlist --dump-json` = ONE metadata

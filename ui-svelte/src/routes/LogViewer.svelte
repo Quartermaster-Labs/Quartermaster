@@ -16,7 +16,7 @@
   // What each stream actually carries — proxy = quartermaster's own events,
   // upstream = the raw stdout/stderr of whatever backend it spawned.
   const PROXY_HINT =
-    "Quartermaster's own log: startup/shutdown & config reload, HTTP access lines (method, path, status, bytes, duration - /metrics, /api/performance and health polls excluded), model scheduling (spawn command, health-check, TTL unload, exit status), preload and config-regeneration progress, and routing/API-key rejections.";
+    "Quartermaster's own log: startup/shutdown & config reload, HTTP access lines (method, path, status, size, duration), model scheduling (spawn command, health-check, TTL unload, exit status), preload and config-regeneration progress, and routing/API-key rejections. Failed requests log as WARN/ERROR; health, metrics and dashboard polling are hidden unless logLevel is debug.";
   const UPSTREAM_HINT =
     "Raw stdout + stderr of the spawned backends (llama-server / sd-server / tts-server / upscaler), interleaved across every running model - load progress, per-request timings, and backend errors.";
 </script>

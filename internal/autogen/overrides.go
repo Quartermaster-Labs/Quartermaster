@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/quartermaster-labs/quartermaster/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -251,7 +252,8 @@ var CategoryOrder = []string{"llm", "image", "tts", "transcribe"}
 
 // RootList returns the ordered, de-duplicated set of folders to scan: ModelsRoot
 // first, then each CategoryRoots value in CategoryOrder. Blank entries are
-// dropped; duplicates (case/separator-insensitive) collapse to the first.
+// dropped; duplicates collapse to the first, comparing separator-insensitively
+// always and case-insensitively only where the filesystem is (config.PathKey).
 func (s Settings) RootList() []string {
 	seen := map[string]bool{}
 	var out []string
@@ -260,7 +262,7 @@ func (s Settings) RootList() []string {
 		if p == "" {
 			return
 		}
-		key := strings.ToLower(filepath.ToSlash(p))
+		key := config.PathKey(p)
 		if seen[key] {
 			return
 		}

@@ -22,6 +22,7 @@ import (
 
 	"github.com/quartermaster-labs/quartermaster/internal/autogen"
 	"github.com/quartermaster-labs/quartermaster/internal/backends"
+	"github.com/quartermaster-labs/quartermaster/internal/config"
 	"github.com/quartermaster-labs/quartermaster/internal/peimports"
 	"github.com/quartermaster-labs/quartermaster/internal/shared"
 )
@@ -180,7 +181,7 @@ func (s *Server) regenReload() error {
 	if a == nil {
 		return nil
 	}
-	if _, err := autogen.EnsureConfig(a.GeneratePath, a.ConfigPath, a.ModelsDir, func(m string) { s.proxylog.Info(m) }); err != nil {
+	if _, err := autogen.EnsureConfig(a.GeneratePath, a.ConfigPath, a.ModelsDir, noticeLogger(s.proxylog)); err != nil {
 		return err
 	}
 	if a.Reload != nil {
@@ -276,7 +277,7 @@ func (s *Server) activeBuild(comp string, installed []backends.Installed) *backe
 		return nil
 	}
 	for k := range installed {
-		if strings.EqualFold(installed[k].Exe, list[i].Path) {
+		if config.PathEqual(installed[k].Exe, list[i].Path) {
 			return &installed[k]
 		}
 	}
@@ -500,6 +501,9 @@ func (s *Server) handleAPIBackendActivate(w http.ResponseWriter, r *http.Request
 		shared.SendResponse(w, r, http.StatusInternalServerError, "activating failed: "+err.Error())
 		return
 	}
+	// Which binary serves every model changed. When a model starts crashing or
+	// gets faster right after, this is the line that explains it.
+	s.proxylog.Infof("backends: activated %s %s (%s) -> %s", found.Component, found.Version, found.Variant, found.Exe)
 	writeJSON(w, map[string]string{"status": "activated", "exe": found.Exe})
 }
 
@@ -536,6 +540,7 @@ func (s *Server) handleAPIBackendDefault(w http.ResponseWriter, r *http.Request)
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.proxylog.Infof("backends: %s is now the default for its class", body.Component)
 	writeJSON(w, map[string]string{"status": "default"})
 }
 
@@ -561,5 +566,6 @@ func (s *Server) handleAPIBackendUninstall(w http.ResponseWriter, r *http.Reques
 		shared.SendResponse(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.proxylog.Infof("backends: uninstalled %s %s (%s)", body.Component, body.Version, body.Variant)
 	writeJSON(w, map[string]string{"status": "removed"})
 }

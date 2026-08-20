@@ -202,7 +202,14 @@
   let activeSession = $derived($chatSessions.find((s) => s.id === $activeChatId));
   let messages = $derived(activeSession?.messages ?? []);
   let compactedCount = $derived(activeSession?.compactedCount ?? 0);
-  let isCompacting = $state(false);
+  // Id of the chat currently being compacted, or "" — an id rather than a bool
+  // so the banner shows for a manual /compact too, which has no turn (and so no
+  // genId) to hang off.
+  let compactingId = $state("");
+  // Why the last compaction failed, for the manual toast. A bare "Compaction
+  // failed" sent the user hunting through the browser console for what is
+  // usually one sentence (model returned 503, produced only reasoning, ...).
+  let compactError = "";
 
   // Live context-window usage for the selected model (from backend KV metrics).
   // The bar fills with kv_cache_usage_ratio; colour steps yellow → orange → red
@@ -550,6 +557,15 @@
   }
 
   async function sendMessage() {
+    // Composer command, not a message: fold the older turns into the summary on
+    // demand. Only an exact "/compact" with nothing attached is intercepted — a
+    // message that merely starts with a slash is still a message. Ahead of the
+    // rewrite branch, so the command works in rewrite mode too.
+    if (/^\/compact$/i.test(userInput.trim()) && attachedImages.length === 0 && attachedDocs.length === 0) {
+      userInput = "";
+      await runManualCompact($activeChatId);
+      return;
+    }
     if ($rewriteStore) {
       await sendRewrite();
       return;
@@ -1125,9 +1141,16 @@
   async function maybeCompact(id: string, modelId: string, signal: AbortSignal) {
     const bm = get(backendMetrics)[modelId];
     if (!bm || !bm.n_ctx || bm.kv_cache_usage_ratio < COMPACT_AT) return;
+    await compactNow(id, modelId, signal);
+  }
 
+  // The compaction itself, shared by the automatic path and the manual
+  // /compact command. Returns how many messages the boundary moved by (0 =
+  // nothing to fold), or -1 if the summary call failed — the manual path needs
+  // to tell the user which of the three happened, the auto path ignores it.
+  async function compactNow(id: string, modelId: string, signal: AbortSignal): Promise<number> {
     const s = sessionById(id);
-    if (!s) return;
+    if (!s) return 0;
     const msgs = s.messages;
     const curCompacted = s.compactedCount ?? 0;
 
@@ -1136,20 +1159,52 @@
     // summarized away).
     let boundary = msgs.length - KEEP_RECENT;
     while (boundary < msgs.length && msgs[boundary].role !== "user") boundary++;
-    if (boundary <= curCompacted) return; // nothing new to summarize
+    if (boundary <= curCompacted) return 0; // nothing new to summarize
 
     // Summarize only the newly-folded slice; `summary` already covers the prefix.
     const fresh = msgs.slice(curCompacted, boundary);
-    isCompacting = true;
+    compactingId = id;
     try {
       const next = await summarizeConversation(modelId, fresh, s.summary ?? "", signal);
-      if (signal.aborted) return;
+      if (signal.aborted) return 0;
       patchSession(id, { summary: next, compactedCount: boundary });
+      return boundary - curCompacted;
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") throw e;
-      console.error("auto-compact failed:", e);
+      console.error("compact failed:", e);
+      compactError = e instanceof Error ? e.message : String(e);
+      return -1;
     } finally {
-      isCompacting = false;
+      compactingId = "";
+    }
+  }
+
+  // Manual compaction: "/compact" typed into the composer. Same fold as the
+  // automatic one, minus the KV-usage threshold — the point of asking for it by
+  // hand is to compact BEFORE the window is nearly full (e.g. right before a
+  // long tool-heavy turn), so a "not full enough yet" refusal would defeat it.
+  async function runManualCompact(id: string) {
+    const modelId = $selectedModelStore;
+    if (!modelId) {
+      showToast("Select a model first");
+      return;
+    }
+    if (isStreaming) {
+      showToast("Wait for the current response to finish");
+      return;
+    }
+    if (compactingId) {
+      showToast("Already compacting");
+      return;
+    }
+    compactError = "";
+    const moved = await compactNow(id, modelId, new AbortController().signal);
+    if (moved > 0) {
+      showToast(`Compacted ${moved} message${moved === 1 ? "" : "s"}`);
+    } else if (moved === 0) {
+      showToast(`Nothing to compact — the last ${KEEP_RECENT} messages always stay verbatim`);
+    } else {
+      showToast(`Compaction failed — ${compactError || "the conversation is unchanged"}`);
     }
   }
 
@@ -1341,14 +1396,6 @@
     <!-- Chat column — full-width so the whole pane scrolls; the message list and
          composer are width-constrained and centered inside. -->
     <div class="flex-1 flex flex-col min-w-0 min-h-0 w-full">
-    {#if isCompacting && genId === $activeChatId}
-      <div class="flex items-center gap-2 mb-2 shrink-0 w-full max-w-3xl mx-auto px-2">
-        <span class="inline-flex items-center gap-1.5 text-xs italic">
-          <span class="w-1.5 h-1.5 bg-primary rounded-full reason-glow"></span>
-          <span class="reason-shimmer-white font-medium">Compacting conversation…</span>
-        </span>
-      </div>
-    {/if}
     <!-- Messages area — scrolls across the full width; content centered within. -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
@@ -1409,6 +1456,20 @@
           />
           </div>
         {/each}
+      {/if}
+      <!-- Compaction status. Inside the scrolled column and after the last
+           message, not a strip at the top of the pane: it is the same kind of
+           "the assistant is busy" line as busyLabel, and reading it means
+           reading it where the conversation ended. It cannot ride ChatMessage's
+           busyLabel prop, because a compaction (manual especially) runs with no
+           assistant message in flight to hang the label on. -->
+      {#if compactingId === $activeChatId}
+        <div class="flex items-center gap-2 mt-1 mb-2">
+          <span class="inline-flex items-center gap-1.5 text-xs italic">
+            <span class="w-1.5 h-1.5 bg-primary rounded-full reason-glow"></span>
+            <span class="reason-shimmer-white font-medium">Compacting conversation…</span>
+          </span>
+        </div>
       {/if}
       </div>
     </div>
@@ -1717,11 +1778,15 @@
       {#snippet chatCtxBar()}
         <!-- Context-window usage: thin line (yellow → orange → red) plus the
              used/max token readout, so the bar says how much room is left and
-             not just "some". -->
+             not just "some". Clicking it compacts on demand — the same thing
+             typing /compact does, but findable: the moment you want it is the
+             moment you are looking at this bar. -->
         {#if ctxN > 0}
-          <div
-            class="flex items-center gap-1.5"
-            use:tooltip={`Context ${fmtTokens(ctxUsed)} / ${fmtTokens(ctxN)} tokens (${Math.round(ctxRatio * 100)}%)`}
+          <button
+            type="button"
+            class="flex items-center gap-1.5 hover:opacity-80 transition-opacity"
+            onclick={() => runManualCompact($activeChatId)}
+            use:tooltip={`Context ${fmtTokens(ctxUsed)} / ${fmtTokens(ctxN)} tokens (${Math.round(ctxRatio * 100)}%) · click to compact now`}
           >
             <div class="h-0.5 w-16 rounded-full bg-secondary overflow-hidden">
               <div class="h-full rounded-full transition-all" style="width: {Math.max(ctxRatio * 100, 3)}%; background: {ctxColor};"></div>
@@ -1729,7 +1794,7 @@
             <span class="font-mono text-micro tabular-nums text-txtsecondary leading-none">
               {fmtTokens(ctxUsed)}/{fmtTokens(ctxN)}
             </span>
-          </div>
+          </button>
         {/if}
       {/snippet}
 

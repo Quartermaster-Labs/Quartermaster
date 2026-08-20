@@ -21,8 +21,16 @@ const SUMMARY_PROMPT =
 // cleanTitle extracts a usable title from a raw model reply: drop any reasoning
 // block (closed or unclosed), take the last non-empty line, strip wrapping
 // quotes, cap at 48 chars. Pure so it can be unit-tested.
+// stripThink removes a reasoning block from a non-streaming reply, closed or
+// unclosed. \ackends that split reasoning into `reasoning_content` never put it
+// in `content`; templates that ignore enable_thinking do, so both callers here
+// have to cope with either shape.
+export function stripThink(text: string): string {
+  return text.replace(/<think>[\s\S]*?(<\/think>|$)/gi, "").trim();
+}
+
 export function cleanTitle(text: string): string {
-  const clean = text.replace(/<think>[\s\S]*?(<\/think>|$)/gi, "").trim();
+  const clean = stripThink(text);
   const line = clean.split("\n").map((l) => l.trim()).filter(Boolean).pop() ?? "";
   return line.replace(/^["']|["']$/g, "").slice(0, 48);
 }
@@ -104,22 +112,36 @@ export async function summarizeConversation(
   const res = await fetch("/v1/chat/completions", {
     method: "POST",
     headers: inferenceHeaders({ "Content-Type": "application/json" }),
+    // enable_thinking:false for the same reason generateTitle sets it, and it
+    // bites harder here: with reasoning on, the model can spend the entire
+    // budget inside <think> and return an EMPTY content, which surfaced as a
+    // flat "Compaction failed" on a perfectly healthy model -- and only
+    // sometimes, since it depends on how long it happened to think.
     body: JSON.stringify({
       model,
       messages: parts,
       stream: false,
       temperature: 0.3,
-      max_tokens: 1024,
+      max_tokens: 1536,
+      chat_template_kwargs: { enable_thinking: false },
     }),
     signal,
   });
   if (!res.ok) {
-    throw new Error(`compact failed: ${res.status} ${await res.text()}`);
+    throw new Error(`the model returned ${res.status}`);
   }
   const json = await res.json();
-  const text = json.choices?.[0]?.message?.content;
-  if (typeof text !== "string" || !text.trim()) {
-    throw new Error("compact produced no summary");
+  const choice = json.choices?.[0];
+  const text = typeof choice?.message?.content === "string" ? stripThink(choice.message.content) : "";
+  if (!text) {
+    // Say which empty this was: a template that ignored enable_thinking and
+    // thought anyway reads very differently from a backend that returned
+    // nothing at all, and the toast is the only place the user sees it.
+    throw new Error(
+      choice?.message?.reasoning_content
+        ? "the model produced only reasoning, no summary"
+        : `the model returned no summary (finish: ${choice?.finish_reason ?? "unknown"})`,
+    );
   }
-  return text.trim();
+  return text;
 }

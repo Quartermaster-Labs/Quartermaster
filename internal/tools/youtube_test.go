@@ -103,7 +103,7 @@ func TestTools_FormatTranscriptAnnouncesTruncation(t *testing.T) {
 	for i := 0; i < 4000; i++ {
 		b.WriteString("[" + ytClock(i*30) + "] " + strings.Repeat("word ", 40) + "\n\n")
 	}
-	tr := Transcript{ID: "dQw4w9WgXcQ", Title: "Long talk", Uploader: "Chan", Duration: 7200, Text: strings.TrimSpace(b.String())}
+	tr := Transcript{ID: "dQw4w9WgXcQ", URL: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", Site: "youtube.com", Title: "Long talk", Uploader: "Chan", Duration: 7200, Text: strings.TrimSpace(b.String())}
 
 	out := FormatTranscript(tr, 3, 0)
 	for _, want := range []string{"[3] YouTube transcript", `"Long talk"`, "Chan, 2:00:00", "watch?v=dQw4w9WgXcQ", "INCOMPLETE", "transcript truncated at"} {
@@ -112,13 +112,52 @@ func TestTools_FormatTranscriptAnnouncesTruncation(t *testing.T) {
 		}
 	}
 
-	short := FormatTranscript(Transcript{ID: "dQw4w9WgXcQ", Text: "[0:00] hi"}, 0, 0)
+	short := FormatTranscript(Transcript{ID: "dQw4w9WgXcQ", URL: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", Text: "[0:00] hi"}, 0, 0)
 	if strings.Contains(short, "INCOMPLETE") || strings.HasPrefix(short, "[0]") {
 		t.Errorf("short transcript mis-annotated:\n%s", short)
 	}
 }
 
-// The language code goes into a yt-dlp argument; only well-formed codes may.
+// Off YouTube there is no id, so the header must not claim YouTube and must not
+// offer a &t= deep link that would 404 on the other site.
+func TestTools_FormatTranscriptOffYouTube(t *testing.T) {
+	out := FormatTranscript(Transcript{URL: "https://vimeo.com/12345", Site: "vimeo.com", Title: "Talk", Text: "[0:00] hi"}, 0, 0)
+	if strings.Contains(out, "YouTube") || strings.Contains(out, "&t=") {
+		t.Errorf("non-YouTube transcript headed as YouTube: %q", out)
+	}
+	if !strings.Contains(out, "https://vimeo.com/12345") {
+		t.Errorf("source URL missing: %q", out)
+	}
+}
+
+// Everything handed to yt-dlp is vetted first: the target by ParseMediaTarget,
+// the language code by a strict regex.
+func TestTools_ParseMediaTarget(t *testing.T) {
+	// A bare id and every YouTube URL shape canonicalise to one watch URL, so
+	// the cache keys on it and two spellings of the same video hit once.
+	for _, in := range []string{"dQw4w9WgXcQ", "https://youtu.be/dQw4w9WgXcQ", "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=x"} {
+		got, err := ParseMediaTarget(t.Context(), in)
+		if err != nil {
+			t.Fatalf("ParseMediaTarget(%q): %v", in, err)
+		}
+		if got.ID != "dQw4w9WgXcQ" || got.URL != "https://www.youtube.com/watch?v=dQw4w9WgXcQ" {
+			t.Errorf("ParseMediaTarget(%q) = %+v", in, got)
+		}
+	}
+	// Any other site passes through with no id - that is the whole point.
+	got, err := ParseMediaTarget(t.Context(), "https://vimeo.com/12345")
+	if err != nil || got.ID != "" || got.Site != "vimeo.com" {
+		t.Errorf("vimeo: %+v err=%v", got, err)
+	}
+	// Rejected: not a URL, non-http schemes, credentials, and anything that
+	// resolves to an address the SSRF rule keeps yt-dlp away from.
+	for _, bad := range []string{"", "not a url", "file:///etc/passwd", "ftp://example.com/a", "http://user:pw@example.com/a", "http://127.0.0.1/a", "http://192.168.1.10/v.mp4", "http://localhost:9000/x"} {
+		if _, err := ParseMediaTarget(t.Context(), bad); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}
+
 func TestTools_GetTranscriptRejectsBadInput(t *testing.T) {
 	if _, err := GetTranscript(t.Context(), "not-an-id", "en"); err == nil {
 		t.Error("bad video id accepted")
@@ -135,7 +174,7 @@ func TestTools_FormatTranscriptBudget(t *testing.T) {
 	for i := 0; i < 4000; i++ {
 		b.WriteString("[0:30] some spoken words here\n\n")
 	}
-	tr := Transcript{ID: "dQw4w9WgXcQ", Title: "Long", Text: b.String()}
+	tr := Transcript{ID: "dQw4w9WgXcQ", URL: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", Title: "Long", Text: b.String()}
 	small := FormatTranscript(tr, 0, 500)
 	big := FormatTranscript(tr, 0, 0) // 0 = the per-video ceiling
 	if len(small) >= len(big) {

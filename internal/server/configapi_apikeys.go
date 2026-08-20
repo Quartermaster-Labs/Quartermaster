@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -115,6 +116,12 @@ func (s *Server) handleAPIKeyUpsert(w http.ResponseWriter, r *http.Request) {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Security-relevant, so it is logged by name and scope — never by secret.
+	scope := "all models"
+	if len(entry.Models) > 0 {
+		scope = fmt.Sprintf("%d model(s)", len(entry.Models))
+	}
+	s.proxylog.Infof("apikeys: saved key %q (%s)", entry.Name, scope)
 	// Add/drop the built-in Playground key as needed (e.g. first scoped key added,
 	// or a full-access key now makes it redundant) before the single reload.
 	if _, _, err := autogen.EnsureSidecarPlaygroundKey(s.autogen.GeneratePath); err != nil {
@@ -150,6 +157,7 @@ func (s *Server) handleAPIKeyDelete(w http.ResponseWriter, r *http.Request) {
 		shared.SendResponse(w, r, http.StatusNotFound, "key not found")
 		return
 	}
+	s.proxylog.Infof("apikeys: deleted key %q", name)
 	// Drop the built-in Playground key once the last user key is gone (so auth
 	// turns off), or reconcile it otherwise, before the single reload.
 	if _, _, err := autogen.EnsureSidecarPlaygroundKey(s.autogen.GeneratePath); err != nil {

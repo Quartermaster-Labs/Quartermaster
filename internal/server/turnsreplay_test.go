@@ -34,7 +34,7 @@ func TestReplayToolCalls(t *testing.T) {
 		}),
 		json.RawMessage(`{"role":"user","content":"and the rest?"}`),
 	}
-	got := msgsOf(t, replayToolCalls(in))
+	got := msgsOf(t, replayToolCalls(in, nil))
 	if len(got) != 7 {
 		t.Fatalf("got %d messages, want 7: %v", len(got), got)
 	}
@@ -47,7 +47,7 @@ func TestReplayToolCalls(t *testing.T) {
 		t.Fatalf("call block = %v", got[2])
 	}
 	fn := calls[0].(map[string]any)["function"].(map[string]any)
-	if fn["name"] != "youtube_transcript" {
+	if fn["name"] != "media_transcript" {
 		t.Errorf("name = %v", fn["name"])
 	}
 	// The stored Query is the resolved TITLE — replaying it as a url would teach
@@ -87,7 +87,7 @@ func TestReplayToolCallsPassthrough(t *testing.T) {
 			"searches": []turnSearch{{Query: "ctx", Results: "ok", Kind: "quartermaster"}},
 		}),
 	}
-	out := replayToolCalls(in)
+	out := replayToolCalls(in, nil)
 	if len(out) != 3 {
 		t.Fatalf("got %d messages, want 3", len(out))
 	}

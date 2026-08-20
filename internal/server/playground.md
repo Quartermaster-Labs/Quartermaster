@@ -98,12 +98,19 @@ The router narrates a pre-stream wait in SSE comment frames, and `streamSSE` rea
 them: `: qm-status: waiting <pos>` / `: qm-status: loading` (see
 [`../router/CLAUDE.md`](../router/CLAUDE.md)). `waiting` raises the ordinary busy label —
 "Waiting its turn", plus `(#N)` when something else is queued ahead — so the user sees that nothing
-is wrong and the answer is not lost, only behind another model. `loading` clears it again, because
-the UI already says "Loading model…" from its own residency signal, and the first `data:` frame
-clears it unconditionally: a token ends every wait by definition.
+is wrong and the answer is not lost, only behind another model. `loading` leaves whatever label is
+up alone (the UI says "Loading model…" from its own residency signal, but only on a bubble with no
+text yet — on a later round the digest label below is the one to keep). The first `data:` frame
+clears the label unconditionally: a token ends every wait, and every prefill, by definition.
 
-The clear is scoped to the label this round raised (`waiting` in `streamRound`), never a blanket
-`setBusy("")` — a tool's own label can be up by the time a later round waits again.
+### The digest label ("Reading through the page")
+
+A tool's label comes down the moment the tool returns, but the model then has to **prefill** what it
+returned before it can write a token — seconds of dead air for a long page, with the tool card
+itself sitting inside a collapsed reasoning trail. So a round whose tool produced ≥
+`digestMinChars` (1500) of text raises `digestLabel(name)` ("Reading through the page / the
+transcript / the results") for the length of that prefill, cleared by the next round's first token.
+Short results (a date, an FX rate) get none: a label that flashes on and off reads as a glitch.
 
 ## `titlegen.go` — the title model
 
@@ -191,6 +198,38 @@ when tools are on (a `tool_calls` message with no tools is unanswerable).
 - `quartermaster` searches are skipped: a config action is not reference data, and the kind doesn't
   say which of the two QM tools ran. `time`, `units` and `memory` are skipped too — see below.
 
+**The rebuild is the fallback, not the first choice** (`turnsrecord.go`). What it produces is close
+to, but not the same bytes as, what the turn loop forwarded when that turn ran: live puts the
+round's prose ON the `tool_calls` message (the rebuild empties it and glues that prose onto the
+front of the answer), sends the full result plus its cite reminder (the rebuild truncates at
+`replayResultMax` and appends `replayNote`), and uses the model's own tool-call ids (the rebuild
+invents `hist_i_j`). So a turn served with one set of bytes came back as another on the next
+message — **the prompt prefix changing retroactively, mid-conversation**. On plain attention that
+is a tail reprefill; on a recurrent/hybrid arch, which cannot rewind to an arbitrary earlier
+position, it is a total one: measured on qwen3.8-27b, `cached_tokens: 0` and 96 s of prefill on a
+56k prompt whose history was identical but for one tool block five messages back.
+
+So each turn records the exact tail it forwarded — assistant-with-calls, tool results, any nudge —
+and the next turn splices those bytes back in.
+
+- **Keyed by the turn's own search metadata** (`replayRecordKey`: chat id + each search's
+  kind/query/results), never by message index — compaction and edits shift indices, and a shifted
+  index would splice one turn's results under another turn's answer. Both sides compute it from the
+  same bytes, since the client hands the metadata straight back.
+- **`spoken` / `trimSpoken`.** The client concatenates every round's content into ONE stored
+  message, so replaying it whole would send the round prose twice — once inside the recorded
+  `tool_calls` message, once at the front of the answer. The record carries what it already said and
+  takes it back off.
+- **In memory, LRU-bounded** (`replayStoreMaxEntries` / `replayStoreMaxBytes`). Persisting it would
+  put megabytes of tool output into chats.json for the client to sync on every read, to save one
+  reprefill per conversation per restart. A miss — restart, eviction, an imported chat — falls back
+  to the rebuild, which is what every turn did before.
+- Recorded from a `defer`, so an errored or cancelled turn still replays the results it did get.
+- A hit replays a turn's tools **whatever their kind**, including the `memory`/`time`/`units`/
+  `quartermaster` calls the rebuild skips. That is not a regression of the rules below: those exist
+  because a *reconstructed* call is a claim about something that may never have happened, while a
+  recorded one is what upstream already has in its KV.
+
 ## `turns_qm.go` — the "quartermaster MCP"
 
 Dispatch for the `quartermaster_inspect` / `quartermaster_configure` chat tools (advertised in
@@ -271,7 +310,8 @@ visibility comes from the chat card plus the Settings panel. The save result **s
 memory is not in the block it was given this turn**, or a model that re-reads its context concludes
 the save failed and saves again.
 
-`"memory"` does **not** replay into history (`turnsreplay.go`) — the recorded query is the fact, not
-the call's arguments, and a replayed `memory_save` reads as a second save. `time` and `units` are
+`"memory"` does **not** get REBUILT into history (`turnsreplay.go`) — the recorded query is the
+fact, not the call's arguments, and a rebuilt `memory_save` reads as a second save. (A turn still in
+the verbatim record replays its real call and its real result, which says the memory was stored.) `time` and `units` are
 skipped for the mirror-image reason: they record a rendered label ("15.6 in → cm") rather than their
 arguments, so replaying them would put a call in the transcript that could not have been made.

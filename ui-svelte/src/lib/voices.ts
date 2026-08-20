@@ -1,14 +1,23 @@
+import { get } from "svelte/store";
 import { inferenceHeaders } from "./inferenceAuth";
+import { userPref } from "../stores/prefs";
 
 // Voice lists for a TTS model, shared by the Speech tab and the read-aloud
 // picker in Settings → General. Both need the same list for the same model, and
 // a second copy of the normalization would drift the moment tts-server changes a
 // field name.
 //
-// The list is CACHED in localStorage per model on purpose: GET /v1/audio/voices
-// proxies through to tts-server, so an uncached read forces a model load. Opening
-// a settings panel must never swap what's on the GPU — callers fetch only when
-// the model is already loaded, and render the cache otherwise.
+// The list is CACHED per model on purpose: GET /v1/audio/voices proxies through
+// to tts-server, so an uncached read forces a model load. Opening a settings
+// panel must never swap what's on the GPU — callers fetch only when the model is
+// already loaded, and render the cache otherwise.
+//
+// It lives in the SERVER-BACKED prefs blob rather than localStorage, because the
+// cache is not a nicety: without it the picker has nothing to list and, worse,
+// safeVoice() refuses to send any name at all, so the user's chosen voice
+// silently stops being used. Keeping it next to the voice pref itself means both
+// halves of "speak as af_bella" follow the person across browsers and survive a
+// site-data clear, instead of the name outliving the list that validates it.
 
 // v4: base models keep "" + cloned voices; kind-aware. Shared with the Speech
 // tab, so the key must stay in step with it.
@@ -17,23 +26,41 @@ export const VOICES_CACHE_KEY = "playground-speech-voices-cache-v4";
 // "" is the model's own default speaker — a base model has no named speakers.
 export const DEFAULT_VOICES = [""];
 
+const voicesCache = userPref<Record<string, string[]>>(VOICES_CACHE_KEY, {});
+
 export function getVoicesCache(): Record<string, string[]> {
-  if (typeof window === "undefined") return {};
-  try {
-    const saved = localStorage.getItem(VOICES_CACHE_KEY);
-    return saved ? JSON.parse(saved) : {};
-  } catch {
-    return {};
-  }
+  const c = get(voicesCache);
+  return c && typeof c === "object" && !Array.isArray(c) ? c : {};
 }
 
 export function saveVoicesCache(cache: Record<string, string[]>) {
+  voicesCache.set(cache);
+}
+
+// migrateVoicesCache lifts a pre-existing localStorage cache into the prefs blob
+// once, so moving the store doesn't make everyone re-load a TTS model just to
+// repopulate a list they already had. Call it after loadPrefs() has hydrated;
+// it never overwrites what the server already knows about a model.
+export function migrateVoicesCache() {
   if (typeof window === "undefined") return;
+  let old: Record<string, string[]>;
   try {
-    localStorage.setItem(VOICES_CACHE_KEY, JSON.stringify(cache));
-  } catch (e) {
-    console.error("Error saving voices cache", e);
+    const saved = localStorage.getItem(VOICES_CACHE_KEY);
+    if (!saved) return;
+    old = JSON.parse(saved);
+    localStorage.removeItem(VOICES_CACHE_KEY);
+  } catch {
+    return;
   }
+  if (!old || typeof old !== "object" || Array.isArray(old)) return;
+  const cache = getVoicesCache();
+  let added = false;
+  for (const [model, list] of Object.entries(old)) {
+    if (cache[model] || !Array.isArray(list) || !list.length) continue;
+    cache[model] = list;
+    added = true;
+  }
+  if (added) saveVoicesCache(cache);
 }
 
 export function cachedVoices(model: string): string[] {
@@ -53,7 +80,7 @@ export function hasCachedVoices(model: string): boolean {
 // fetchVoices asks the server for the model's real voice list and caches it.
 // Only call it for a model that is already loaded.
 export async function fetchVoices(model: string): Promise<string[]> {
-  let voices = DEFAULT_VOICES;
+  let voices: string[] | null = null;
   try {
     const response = await fetch(`/v1/audio/voices?model=${encodeURIComponent(model)}`, {
       headers: inferenceHeaders(),
@@ -80,8 +107,14 @@ export async function fetchVoices(model: string): Promise<string[]> {
       voices = speakers.length ? [...speakers, ...registered] : ["", ...registered];
     }
   } catch {
-    return DEFAULT_VOICES;
+    return cachedVoices(model);
   }
+  // A failed fetch must NOT reach the cache. The old code fell through and stored
+  // DEFAULT_VOICES ([""]) for the model, which made hasCachedVoices() true with a
+  // list holding nothing but the default — and the picker's clamp then rewrote the
+  // user's saved voice to "". A voices call while the model is still loading (or
+  // the 500 from tts.cpp's stale-response bug) was enough to lose the selection.
+  if (!voices) return cachedVoices(model);
   const cache = getVoicesCache();
   cache[model] = voices;
   saveVoicesCache(cache);

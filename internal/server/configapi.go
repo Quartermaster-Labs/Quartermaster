@@ -83,7 +83,7 @@ func (s *Server) findSidecarOverride(gguf string) (*autogen.Override, autogen.Ov
 		return nil, autogen.Override{}, err
 	}
 	for i := range rows {
-		if strings.EqualFold(filepathSlash(rows[i].Match), filepathSlash(gguf)) {
+		if config.PathEqual(rows[i].Match, gguf) {
 			return &rows[i], rows[i], nil
 		}
 	}
@@ -94,7 +94,7 @@ func (s *Server) findSidecarOverride(gguf string) (*autogen.Override, autogen.Ov
 // file and hot-reloads. Slow (reads gguf metadata) but it's a settings save.
 func (s *Server) regenAndReload(w http.ResponseWriter, r *http.Request) bool {
 	a := s.autogen
-	if _, err := autogen.EnsureConfig(a.GeneratePath, a.ConfigPath, a.ModelsDir, func(m string) { s.proxylog.Info(m) }); err != nil {
+	if _, err := autogen.EnsureConfig(a.GeneratePath, a.ConfigPath, a.ModelsDir, noticeLogger(s.proxylog)); err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, "regenerating config failed: "+err.Error())
 		return false
 	}
@@ -279,6 +279,10 @@ func (s *Server) handleAPIModelOverridePut(w http.ResponseWriter, r *http.Reques
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// An override rewrites the model's launch args on its next load, which is
+	// the usual answer to "why is it slower / why did it stop fitting today".
+	// The access log shows that a PUT happened; this says which model it hit.
+	s.proxylog.Infof("config: saved overrides for %s", filepath.Base(gguf))
 	if !s.regenAndReload(w, r) {
 		return
 	}
@@ -296,6 +300,7 @@ func (s *Server) handleAPIModelOverrideDelete(w http.ResponseWriter, r *http.Req
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.proxylog.Infof("config: reset overrides for %s to the autogen defaults", filepath.Base(gguf))
 	if !s.regenAndReload(w, r) {
 		return
 	}
@@ -507,6 +512,3 @@ func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
 }
-
-// filepathSlash normalizes separators for case/sep-insensitive path compares.
-func filepathSlash(p string) string { return strings.ReplaceAll(p, "\\", "/") }

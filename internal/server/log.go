@@ -153,6 +153,31 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// noticeLogger adapts a leveled Monitor to the plain func(string) progress
+// callback the subsystem managers (hub, backends, autogen, the updater) take.
+// Those managers report success and failure down the same channel, so "hub:
+// download failed: …" used to land at INFO right next to "downloaded" —
+// indistinguishable at a glance, invisible under logLevel: warn, and now
+// uncoloured in the log pane. Classifying on the message is crude, but it is
+// the only signal the callback carries, and the alternative is a leveled
+// callback threaded through four packages.
+func noticeLogger(lg *logmon.Monitor) func(string) {
+	return func(m string) {
+		l := strings.ToLower(m)
+		switch {
+		case strings.Contains(l, "failed"), strings.Contains(l, "error"),
+			strings.Contains(l, "panic"), strings.Contains(l, "warning"):
+			lg.Warn(m)
+		default:
+			lg.Info(m)
+		}
+	}
+}
+
+// NoticeLogger is noticeLogger for callers outside this package (the root
+// command wires the same callback into autogen at startup).
+func NoticeLogger(lg *logmon.Monitor) func(string) { return noticeLogger(lg) }
+
 // requestLogPathSkips lists path prefixes excluded from the access log because
 // they are polled frequently and would drown out useful entries.
 var requestLogPathSkips = []string{"/wol-health", "/api/performance", "/api/kvcache", "/metrics"}
@@ -211,13 +236,100 @@ func clientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
+// isLoopbackIP reports whether an address string is this machine talking to
+// itself — the common case, whose IP is noise in the access log.
+func isLoopbackIP(ip string) bool {
+	if ip == "" || ip == "::1" || ip == "localhost" {
+		return true
+	}
+	parsed := net.ParseIP(ip)
+	return parsed != nil && parsed.IsLoopback()
+}
+
+// shortAgent condenses a User-Agent down to something that fits on a log line:
+// browsers all collapse to "browser", and a tool keeps its "name/version"
+// token ("curl/8.5.0", "python-requests/2.31"). The rest of a modern UA string
+// is boilerplate that buries the parts of the line worth reading.
+func shortAgent(ua string) string {
+	ua = strings.TrimSpace(ua)
+	if ua == "" {
+		return ""
+	}
+	first := ua
+	if idx := strings.IndexByte(first, ' '); idx != -1 {
+		first = first[:idx]
+	}
+	if strings.HasPrefix(first, "Mozilla/") {
+		return "browser"
+	}
+	if len(first) > 28 {
+		first = first[:28]
+	}
+	return first
+}
+
+// logSize renders a response body size in units a human reads at a glance.
+func logSize(n int) string {
+	switch {
+	case n < 1024:
+		return fmt.Sprintf("%dB", n)
+	case n < 1024*1024:
+		return fmt.Sprintf("%.1fkB", float64(n)/1024)
+	default:
+		return fmt.Sprintf("%.1fMB", float64(n)/(1024*1024))
+	}
+}
+
+// logDuration renders a request duration at a fixed, low precision.
+// time.Duration's own String() prints full nanosecond precision
+// ("8.123456789s"), which is the single noisiest field in the old access log.
+func logDuration(d time.Duration) string {
+	switch {
+	case d < 100*time.Microsecond:
+		return "<0.1ms"
+	case d < time.Millisecond:
+		return fmt.Sprintf("%.1fms", float64(d)/float64(time.Millisecond))
+	case d < time.Second:
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	case d < time.Minute:
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	default:
+		return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+}
+
+// quietRequest reports whether a completed request is dashboard chatter rather
+// than something the operator cares about. The web UI fires a steady stream of
+// GETs at /api/… and /ui/… just by being open; logging those at INFO buries
+// the inference traffic. They drop to DEBUG instead of being skipped outright,
+// so `logLevel: debug` still shows everything. Anything that failed, and every
+// non-GET, stays at its normal level.
+func quietRequest(method, path string, status int) bool {
+	if status >= 400 || method != http.MethodGet {
+		return false
+	}
+	return strings.HasPrefix(path, "/api/") || path == "/api" ||
+		strings.HasPrefix(path, "/ui/") || path == "/ui" ||
+		path == "/favicon.ico"
+}
+
 // CreateRequestLogMiddleware returns middleware that records one access-log
-// line per request to proxylog, in the legacy format:
+// line per request to proxylog:
 //
-//	clientIP "METHOD PATH PROTO" status bodySize "UA" duration
+//	POST /v1/chat/completions 200 44.1kB 8.1s
 //
-// Frequently-polled health/metrics paths are skipped. The path is captured
-// before next runs because /upstream rewrites the request URL in place.
+// followed by the client IP when it is not loopback and by a short agent name
+// when the caller is not a browser. The HTTP version, the raw byte count, the
+// nanosecond-precision duration and the full User-Agent that the old format
+// carried are all dropped — they pushed the status and the path off the side of
+// the log pane without ever being the thing anyone was looking for.
+//
+// The level reflects the outcome, so the UI's colouring (and a logLevel of
+// warn) surfaces failures directly: 5xx logs at ERROR, 4xx at WARN, dashboard
+// polling at DEBUG, everything else at INFO.
+//
+// Frequently-polled health/metrics paths are skipped entirely. The path is
+// captured before next runs because /upstream rewrites the request URL in place.
 func CreateRequestLogMiddleware(proxylog *logmon.Monitor) chain.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -229,13 +341,30 @@ func CreateRequestLogMiddleware(proxylog *logmon.Monitor) chain.Middleware {
 			}
 
 			start := time.Now()
-			ip, method, path, proto, ua := clientIP(r), r.Method, r.URL.Path, r.Proto, r.UserAgent()
+			ip, method, path, ua := clientIP(r), r.Method, r.URL.Path, r.UserAgent()
 
 			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rec, r)
 
-			proxylog.Infof("Request %s \"%s %s %s\" %d %d \"%s\" %v",
-				ip, method, path, proto, rec.status, rec.size, ua, time.Since(start))
+			line := fmt.Sprintf("%s %s %d %s %s",
+				method, path, rec.status, logSize(rec.size), logDuration(time.Since(start)))
+			if !isLoopbackIP(ip) {
+				line += " " + ip
+			}
+			if agent := shortAgent(ua); agent != "" && agent != "browser" {
+				line += " " + agent
+			}
+
+			switch {
+			case rec.status >= 500:
+				proxylog.Error(line)
+			case rec.status >= 400:
+				proxylog.Warn(line)
+			case quietRequest(method, path, rec.status):
+				proxylog.Debug(line)
+			default:
+				proxylog.Info(line)
+			}
 		})
 	}
 }

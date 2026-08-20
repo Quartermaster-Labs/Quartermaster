@@ -247,6 +247,12 @@ func (w *Monitor) formatMessage(level string, msg string) []byte {
 }
 
 func (w *Monitor) log(level Level, msg string) {
+	// Nil-safe: a Monitor is a pure sink, and a partially-constructed owner (a
+	// test Server, a component built before its logger is wired) dropping a line
+	// is strictly better than panicking inside a log call.
+	if w == nil {
+		return
+	}
 	if level < w.level {
 		return
 	}

@@ -168,8 +168,9 @@ before a build runs.
 **Gap 1 — Request logging middleware missing -- Resolved.**
 
 `CreateRequestLogMiddleware` ([log.go](../internal/server/log.go)) records one
-access-log line per request to `s.proxylog` in the legacy format
-`clientIP "METHOD PATH PROTO" status bodySize "UA" duration`, skipping
+access-log line per request to `s.proxylog`. (The legacy format
+`clientIP "METHOD PATH PROTO" status bodySize "UA" duration` has since been
+replaced by the compact `METHOD PATH status size duration`.) It skips
 `/wol-health`, `/api/performance`, and `/metrics`. A `statusRecorder` captures
 the status/body size (forwarding `Flush` for SSE) and `clientIP` honours
 `X-Forwarded-For` / `X-Real-IP`. It is wired as the outermost middleware in

@@ -31,7 +31,7 @@ NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=read-only
 PrivateTmp=true
-ReadWritePaths=/etc/quartermaster
+ReadWritePaths=/etc/quartermaster /opt/quartermaster
 
 [Install]
 WantedBy=multi-user.target

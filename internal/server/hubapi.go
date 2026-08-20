@@ -221,6 +221,10 @@ func (s *Server) handleAPIHubDownload(w http.ResponseWriter, r *http.Request) {
 		s.sendHubError(w, r, err)
 		return
 	}
+	// The manager logs the finish ("… downloaded into …"); without this the
+	// start of a multi-gigabyte transfer — the part that explains the disk and
+	// network load for the next half hour — was never recorded.
+	s.proxylog.Infof("hub: downloading %s into %s", body.Repo, s.hubModelsRoot())
 	writeJSON(w, map[string]string{"jobId": id})
 }
 

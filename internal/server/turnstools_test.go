@@ -33,7 +33,7 @@ func TestTurns_harmonyToThink(t *testing.T) {
 }
 
 func TestTurns_searchWiki(t *testing.T) {
-	// Corpus must embed (Makefile copies wiki_articles.json into the package).
+	// Corpus must embed (wiki_articles.json lives in this package).
 	if len(wikiArticles) == 0 {
 		t.Fatal("wikiArticles empty — wiki_articles.json failed to embed")
 	}

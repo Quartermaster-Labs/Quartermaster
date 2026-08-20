@@ -6,17 +6,20 @@ import (
 	"testing"
 )
 
+// Platform-neutral half: order, blank-dropping, and exact-duplicate collapse.
+// Whether a *differently cased* root is a duplicate depends on the filesystem,
+// so that lives in categoryroots_{windows,posix}_test.go.
 func TestSettings_RootList_orderAndDedup(t *testing.T) {
 	s := Settings{
-		ModelsRoot: `E:\Models`,
+		ModelsRoot: `/srv/Models`,
 		CategoryRoots: map[string]string{
-			"image":      `E:\Image`,
-			"tts":        ``,          // blank dropped
-			"transcribe": `E:/models`, // dup of ModelsRoot (case/sep-insensitive)
+			"image":      `/srv/Image`,
+			"tts":        ``,            // blank dropped
+			"transcribe": `/srv/Models`, // exact dup of ModelsRoot
 		},
 	}
 	got := s.RootList()
-	want := []string{`E:\Models`, `E:\Image`}
+	want := []string{`/srv/Models`, `/srv/Image`}
 	if len(got) != len(want) {
 		t.Fatalf("RootList = %v, want %v", got, want)
 	}

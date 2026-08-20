@@ -50,9 +50,11 @@
       aria-label="Help"
     >
       <div class="flex items-center justify-between px-4 py-3 border-b border-card-border">
-        <div class="flex items-center gap-2 text-txtmain">
+        <div class="flex items-center gap-2 min-w-0 text-txtmain">
           <BookOpen size={18} class="text-primary" />
-          <span class="text-sm font-medium">Quartermaster Help</span>
+          <span class="text-sm font-medium shrink-0">Quartermaster Help</span>
+          <span class="text-txtsecondary text-xs">·</span>
+          <span class="text-txtsecondary text-xs truncate">Tip: you can ask the assistant in the playground for help with using quartermaster</span>
         </div>
         <button class="text-txtsecondary hover:text-txtmain transition-colors" onclick={close} aria-label="Close">
           <X size={18} />

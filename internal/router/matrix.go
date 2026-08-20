@@ -78,10 +78,13 @@ func (p *matrixSwapper) OnSwapStart(target string, running []string) {
 	result := p.solver.Solve(target, running)
 	switch {
 	case len(result.Evict) > 0:
-		p.logger.Infof("matrix: model=%s set=%s dsl=%q evict=%v target=%v cost=%d",
+		// "Who is being kicked out for whom" is logged once for every router by
+		// baseRouter.doSwap; what is solver-specific — the set membership, the
+		// raw DSL and the cost it minimised — belongs at Debug.
+		p.logger.Debugf("matrix: model=%s set=%s dsl=%q evict=%v target=%v cost=%d",
 			target, result.SetName, result.DSL, result.Evict, result.TargetSet, result.TotalCost)
 	case len(running) == 0:
-		p.logger.Infof("matrix: model=%s starting (no models running)", target)
+		p.logger.Debugf("matrix: model=%s starting (no models running)", target)
 	default:
 		p.logger.Debugf("matrix: model=%s already running in set=%s dsl=%q", target, result.SetName, result.DSL)
 	}

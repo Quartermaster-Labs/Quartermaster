@@ -140,6 +140,53 @@ count churns with every tool round.
 The speaker button under an assistant reply POSTs `/v1/audio/speech` (`lib/speechApi.ts`) with
 `effectiveTtsModel` and the Speech tab's voice.
 
+- **Chunked + pipelined** (`speakStreamed`): a speech request only returns once the *whole* clip is
+  synthesised, so speaking a long reply in one POST means waiting out the entire answer before the
+  first word is audible. `splitForSpeech` cuts the prose on sentence boundaries — a deliberately
+  short first chunk (140 chars) so sound starts fast, then 190 and 240 — and one request stays in flight
+  ahead of playback, so all but the first chunk are synthesised while earlier audio plays. Stopping
+  aborts the pending request, which is why `SPEAK_MAX` can be generous (12k chars): an over-long
+  reply is no longer one multi-minute request that has to finish before anything happens.
+- **Replayed, not regenerated**: the chunks are cached per message under `model|voice|text`, so a
+  second click on the speaker plays instantly and a voice change in Settings (or an edit to the
+  message) invalidates the cache. Capped at 24 MB per message — past that, later chunks still play
+  but aren't kept.
+- **Generated** vs **not**: the speaker icon brightens to `text-txtmain` once every chunk of the
+  current `model|voice|text` is cached, i.e. a click will replay without touching the model.
+  `speakStreamed` reports the chunking through `onChunks` so the message can tell "all of it" from
+  "some of it".
+- **Volume + speed** (`chatTtsVolumeStore`, `chatTtsRateStore`, persisted prefs): revealed on hover
+  over the speaker, because they are adjusted *while* listening and the pointer is already there.
+  Both act on the `<audio>` element, never on synthesis — neither engine takes a rate or a gain, and
+  re-synthesising to change one would throw away the replay cache. A run is many elements, so
+  `SpeakOptions.settings` is a **getter** re-read per chunk, and a `$effect` on `audioEl` applies a
+  mid-clip change to the element already playing. `preservesPitch` keeps 2x fast rather than
+  chipmunked. They render **inline** in the footer row (there is slack between the buttons and the
+  right-aligned word count) rather than in a popover; only the speed list is a dropdown, opening
+  upward because the row is at the bottom of the bubble, and ordered fastest-first so it reads
+  ascending on screen. The controls stay up while that list is open — by then the pointer is over
+  the list, not the button.
+- **Follow the reader** (`lib/speechHighlight.ts`): the chunk being spoken is tinted orange
+  (`::highlight(tts-active)`, `--color-speak`) and everything already spoken dims to
+  `--color-txtsecondary`. Painted with the **CSS Custom Highlight API** over `Range`s, so nothing in
+  the DOM is wrapped — code-copy buttons, diagram canvases, citation chips and `use:` actions are
+  untouched, and an unsupported browser simply shows no marker. Chunk → screen is a *fuzzy word
+  alignment*, not a substring search: `speechText()` has already flattened the markdown the reader
+  sees, so both sides are reduced to alphanumeric words and walked forward with a monotonic cursor
+  (a repeated sentence must not send the marker backwards) that tolerates on-screen words the speech
+  dropped. A chunk that won't align confidently yields `null` — nothing painted, cursor unmoved —
+  because guessing highlights the wrong sentence. Reasoning boxes and `pre` blocks are excluded from
+  the word stream (their text is on screen but never spoken); inline `code` is **not**, since its
+  text survives into the speech. Ranges are resolved once per run, off `onChunks`, and the position
+  advances on `onChunkPlaying`.
+- **One request at a time**: `generateSpeech` funnels every caller (read-aloud chunks, the Speech
+  tab, the Settings voice preview) through a single promise chain. tts-server generates on one
+  worker anyway, and TTS.cpp's completed-task map is keyed by an unseeded `rand()` that is never
+  erased on read — the more tasks in flight and in that map, the likelier a request is handed
+  ANOTHER task's result (the old voice's audio, or a 500 `Model returned an empty response.` when
+  the squatter is a voices task). One retry on that message covers the residual case; the real fix
+  is in tts.cpp's `simple_server_task`.
+
 - **Model**: the explicit `chatTtsModelStore` pick from the side-rail **Settings → General**, else
   the first installed TTS model (auto-picked so read-aloud works without a setup step). The button
   is not rendered at all when no TTS model is installed.
@@ -147,6 +194,15 @@ The speaker button under an assistant reply POSTs `/v1/audio/speech` (`lib/speec
   voice. The list comes from `lib/voices.ts` (`cachedVoices`/`fetchVoices`/`voiceLabel`), shared
   with the Speech tab so one normalization serves both qwentts's `{voices:[{name,kind}]}` **and**
   TTS.cpp's `{<model id>: [names]}` map.
+
+The **voice list** is cached in the server-backed prefs blob (`lib/voices.ts`), not localStorage.
+That cache is load-bearing, not a nicety: `GET /v1/audio/voices` proxies to tts-server, so an
+uncached read forces a model load, and without an entry `safeVoice()` sends `""` — the user's
+chosen voice silently stops being used while its name stays on screen. Keeping it beside the voice
+pref means both halves of "speak as af_bella" follow the person and survive a site-data clear.
+`fetchVoices` never writes a failed fetch into it: storing `DEFAULT_VOICES` on a non-OK response
+made `hasCachedVoices()` true with a list holding only the default, and the picker's clamp then
+rewrote the saved voice to `""` — a refresh while the model was still loading lost the selection.
 
 **The voice pref is one per user but voices are per engine**, so `generateSpeech` runs every
 caller's voice through `safeVoice(model, voice)`: an unknown name is not a 400 on TTS.cpp — its

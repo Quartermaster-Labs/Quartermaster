@@ -114,10 +114,11 @@ func TestToolsAPI_YouTubeValidation(t *testing.T) {
 		t.Errorf("transcript {}: status=%d msg=%q", w.Code, toolErrMessage(t, w))
 	}
 
-	// transcript: a non-YouTube URL is a 400, not a 502 — the caller can fix it.
-	w = postTool(t, s, "/v1/tools/youtube/transcript", `{"url":"https://vimeo.com/12345"}`)
-	if w.Code != http.StatusBadRequest || !strings.Contains(toolErrMessage(t, w), "could not extract") {
-		t.Errorf("bad url: status=%d msg=%q", w.Code, toolErrMessage(t, w))
+	// transcript: a private address is a 400, not a 502 — the caller can fix it.
+	// (A non-YouTube URL is no longer an error: yt-dlp handles hundreds of sites.)
+	w = postTool(t, s, "/v1/tools/youtube/transcript", `{"url":"http://192.168.1.10/video.mp4"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("private url: status=%d msg=%q", w.Code, toolErrMessage(t, w))
 	}
 
 	// search: neither query nor channel.

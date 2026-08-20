@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -416,6 +417,12 @@ func (p *ProcessCommand) run() {
 						}()
 					}
 				} else {
+					// The error travels back to whoever asked for the model, but
+					// that is an HTTP body the operator never sees. A failed load
+					// is exactly what someone opens this log to diagnose.
+					if !errors.Is(res.err, ErrStartAborted) {
+						p.proxyLogger.Errorf("<%s> failed to start: %v", p.id, res.err)
+					}
 					setState(StateStopped)
 					notifyWaiters(res.err)
 					req.respond <- res.err
@@ -472,6 +479,10 @@ func (p *ProcessCommand) run() {
 				if fp := p.preStop.Load(); fp != nil {
 					(*fp)()
 				}
+				// Counterpart to the "starting"/"ready" pair: without this the
+				// only unload the log ever mentioned was the TTL one, so a model
+				// evicted to make room for another just vanished.
+				p.proxyLogger.Infof("<%s> stopping", p.id)
 				setState(StateStopping)
 				p.killProcess(cmd, cmdCancel, cmdDone, stop.timeout)
 				cmd = nil
@@ -611,6 +622,14 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 
 	p.proxyLogger.Debugf("<%s> Executing start command: %s, cwd: %s, env: %s", p.id, strings.Join(args, " "), cmd.Dir, strings.Join(cfg.Env, ", "))
 
+	// A load is the longest thing quartermaster does — tens of seconds of
+	// nothing while a GGUF is read off disk. Announcing the spawn (and, below,
+	// how long it took to answer) is the difference between "it's working" and
+	// "it's hung": before this the proxy log said nothing at all until the
+	// health check passed.
+	startedAt := time.Now()
+	p.proxyLogger.Infof("<%s> starting %s", p.id, filepath.Base(resolveExe(args[0])))
+
 	cmdDone := make(chan struct{})
 	if err := cmd.Start(); err != nil {
 		cmdCancel()
@@ -630,10 +649,14 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 			// yields exit status 1), so this is not an error.
 			p.proxyLogger.Debugf("<%s> process stopped by quartermaster: %v", p.id, waitErr)
 		default:
+			// Not a state we asked for: the backend died on its own. This used
+			// to be Debug, so a model that crashed mid-session left the proxy
+			// log silent and the operator digging through the upstream stream
+			// to find out why their next request 502'd.
 			if exitErr, ok := waitErr.(*exec.ExitError); ok {
-				p.proxyLogger.Debugf("<%s> process exited: code=%d, err=%v", p.id, exitErr.ExitCode(), waitErr)
+				p.proxyLogger.Warnf("<%s> backend exited on its own with code %d (see the model's upstream log)", p.id, exitErr.ExitCode())
 			} else {
-				p.proxyLogger.Debugf("<%s> process exited with error: %v", p.id, waitErr)
+				p.proxyLogger.Warnf("<%s> backend exited on its own: %v", p.id, waitErr)
 			}
 		}
 		close(cmdDone)
@@ -663,6 +686,7 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 
 	checkEndpoint := strings.TrimSpace(cfg.CheckEndpoint)
 	if checkEndpoint == "none" {
+		p.proxyLogger.Infof("<%s> started as pid %d (no health check configured)", p.id, cmd.Process.Pid)
 		return startResult{cmd: cmd, cmdDone: cmdDone, cancel: cmdCancel, handlerFn: handlerFn, args: args}
 	}
 
@@ -693,7 +717,9 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		resp := rr.Result()
 		resp.Body.Close()
 		if resp.StatusCode == http.StatusOK {
-			p.proxyLogger.Infof("<%s> Health check passed on %s%s", p.id, cfg.Proxy, cfg.CheckEndpoint)
+			p.proxyLogger.Infof("<%s> ready in %s (pid %d)", p.id,
+				time.Since(startedAt).Round(100*time.Millisecond), cmd.Process.Pid)
+			p.proxyLogger.Debugf("<%s> health check passed on %s%s", p.id, cfg.Proxy, cfg.CheckEndpoint)
 			break
 		} else if startCtx.Err() != nil {
 			return abort(ErrStartAborted)

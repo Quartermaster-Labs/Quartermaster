@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/quartermaster-labs/quartermaster/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -698,8 +699,8 @@ func ClearSidecarSettings(generatePath string) (removed bool, err error) {
 }
 
 // matchKeyEqual compares two sidecar Match keys. UI-written keys are exact gguf
-// paths (no globs), so case- and separator-insensitive equality is the right
-// identity test.
+// paths (no globs), so path identity is the right test — separator-insensitive
+// always, case-insensitive only where the filesystem is (see config.PathEqual).
 func matchKeyEqual(a, b string) bool {
-	return strings.EqualFold(filepath.ToSlash(a), filepath.ToSlash(b))
+	return config.PathEqual(a, b)
 }

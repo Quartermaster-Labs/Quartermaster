@@ -1,5 +1,5 @@
 import type { ToolDef } from "./types";
-import articles from "./wikiArticles.json";
+import articles from "../../../internal/server/wiki_articles.json";
 
 // The quartermaster help wiki. ONE source of truth for both the in-app Help
 // button (WikiModal renders these articles) and the `wiki_search` tool the
@@ -14,8 +14,10 @@ export interface WikiArticle {
   body: string;
 }
 
-// Corpus data lives in wikiArticles.json (single source; Go embeds a build copy
-// at internal/server/wiki_articles.json for the server-side wiki_search tool).
+// Corpus data lives in internal/server/wiki_articles.json — the ONE copy. It
+// sits in the Go package because //go:embed cannot reach outside its own
+// directory (the server-side wiki_search tool embeds it); Vite imports it
+// from there, so there is no copy step to forget.
 export const WIKI_ARTICLES: WikiArticle[] = articles as WikiArticle[];
 
 // Sidebar grouping for the Help modal — one place, keyed by article id, so the

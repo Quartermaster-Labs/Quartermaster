@@ -401,6 +401,14 @@ func (b *baseRouter) trackedServe(modelID string, p process.Process) http.Handle
 func (b *baseRouter) doSwap(modelID string, toStop []string) {
 	timeout := b.healthCheckTimeout()
 
+	// The one line that explains why a model the operator was using went away.
+	// It lives here rather than in a Swapper so every router (group, matrix)
+	// reports evictions the same way; the swapper-specific arithmetic that led
+	// to this list stays at Debug in each Swapper's OnSwapStart.
+	if len(toStop) > 0 {
+		b.logger.Infof("%s: evicting %s to load %s", b.name, strings.Join(toStop, ", "), modelID)
+	}
+
 	procs := b.procs()
 	var wg sync.WaitGroup
 	for _, mID := range toStop {

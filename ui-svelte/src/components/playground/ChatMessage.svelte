@@ -2,9 +2,10 @@
   import { tip } from "../../lib/tooltip";
   import { renderMarkdown, renderStreamingMarkdown, createStreamingCache } from "../../lib/markdown";
   import type { RenderedBlock } from "../../lib/markdown";
-  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronRight, Search, BookOpen, PenLine, Wrench, Reply, Youtube, FileText, ArrowRightLeft, Clock, Calculator, Ruler, CloudSun, Rss, Sparkles, Volume2, Loader2, Square, BrainCircuit } from "lucide-svelte";
-  import { generateSpeech } from "../../lib/speechApi";
-  import { effectiveTtsModel, chatTtsVoiceStore } from "../../stores/playground";
+  import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronRight, Search, BookOpen, PenLine, Wrench, Reply, Youtube, FileText, ArrowRightLeft, Clock, Calculator, Ruler, CloudSun, Rss, Captions, Sparkles, Volume2, Volume1, VolumeX, Loader2, Square, BrainCircuit, Gauge } from "lucide-svelte";
+  import { speakStreamed } from "../../lib/speechApi";
+  import { speechRanges, showSpeechHighlight, clearSpeechHighlight } from "../../lib/speechHighlight";
+  import { effectiveTtsModel, chatTtsVoiceStore, chatTtsVolumeStore, chatTtsRateStore } from "../../stores/playground";
   import { getTextContent, getImageUrls } from "../../lib/types";
   import { splitFileBlocks } from "../../lib/attachments";
   import { activityLabel, harmonyToThink, thinkSummary } from "../../lib/reasoning";
@@ -331,15 +332,48 @@
   // click can take a while. A CPU-only TTS.cpp voice (Kokoro) sits in autogen's
   // persistent "tts" coexistence group and evicts nothing; a GPU qwentts talker
   // is exclusive and DOES swap the chat model out — one GPU, one pool.
+  //
+  // Synthesis is chunked and pipelined (see speakStreamed): the wait before the
+  // first word is one short sentence, not the whole answer, and the rest is
+  // synthesised while earlier chunks play.
   let speakState = $state<"idle" | "loading" | "playing">("idle");
   let speakErr = $state("");
-  let audioEl: HTMLAudioElement | null = null;
-  let audioUrl = "";
+  // $state, not a plain let: the volume/rate effect below re-applies itself
+  // whenever playback hands over to the next chunk's element.
+  let audioEl = $state<HTMLAudioElement | null>(null);
   let speakAbort: AbortController | null = null;
+  // Hover-revealed playback controls. The panel also has to stay up while the
+  // speed dropdown is open — the pointer is over the LIST by then, not the
+  // button, and a panel that vanished mid-pick would be unusable.
+  // Where the reader is, painted over the rendered reply (lib/speechHighlight).
+  // The ranges are resolved ONCE per run, when the chunking is known and before
+  // any audio plays: the reply is static by then, and re-walking the DOM per
+  // chunk would cost a full alignment pass every few seconds.
+  let proseEl = $state<HTMLElement | null>(null);
+  let speakRanges: (Range | null)[] = [];
+  // Identity token for the global CSS.highlights registry — stopping THIS
+  // message must not clear a highlight another message just installed.
+  const speakOwner = {};
+  let speakHover = $state(false);
+  let speedOpen = $state(false);
+  // Fastest first: the list opens UPWARD from the button, so descending here is
+  // ascending on screen — 2x sits at the top, 0.25x nearest the button.
+  const SPEEDS = [2, 1.75, 1.5, 1.25, 1, 0.75, 0.5, 0.25];
 
-  // Long answers: TTS cost is linear in characters and a 5k-word reply would tie
-  // up the GPU for minutes, so cut it at a paragraph boundary near the cap.
-  const SPEAK_MAX = 4000;
+  // Synthesised chunks for THIS message, so a second click replays instead of
+  // regenerating (the ask: hearing a reply twice shouldn't cost a second run
+  // through the model). Keyed on model|voice|text — changing the voice in
+  // Settings, editing the message or picking another TTS model all invalidate
+  // it, because the audio would no longer be what the button promises.
+  let speakCache = $state<{ key: string; blobs: Blob[]; bytes: number; total: number } | null>(null);
+  // A very long reply is minutes of WAV; keep the replay cache from pinning tens
+  // of megabytes per message. Past the cap later chunks simply aren't kept.
+  const SPEAK_CACHE_MAX_BYTES = 24 * 1024 * 1024;
+
+  // Long answers still get a cap, but a generous one: chunks are only synthesised
+  // as playback reaches them and stopping cancels the rest, so an over-long reply
+  // no longer costs a single multi-minute request. Cut at a paragraph boundary.
+  const SPEAK_MAX = 12000;
 
   // Markdown read aloud is unlistenable ("star star note star star"), so flatten
   // it to prose: drop code blocks outright, unwrap links/emphasis, strip list and
@@ -367,20 +401,54 @@
     return t;
   }
 
+  // What the cache WOULD be keyed on right now. Compared against the stored key
+  // so an edited message, a new voice or another TTS model reads as "not
+  // generated" without having to clear anything.
+  let speakKey = $derived(`${$effectiveTtsModel}|${$chatTtsVoiceStore}|${speechText(displayContent)}`);
+  // Every chunk is in hand: a click replays instantly and the model is not
+  // touched again. That is what the brighter icon promises.
+  let speakReady = $derived(
+    !!speakCache &&
+      speakCache.key === speakKey &&
+      speakCache.total > 0 &&
+      speakCache.blobs.filter(Boolean).length === speakCache.total,
+  );
+
+  // The sliders act on whatever element is playing right now; new elements pick
+  // the values up at creation (speakStreamed's `settings` getter).
+  $effect(() => {
+    if (!audioEl) return;
+    audioEl.volume = Math.min(1, Math.max(0, $chatTtsVolumeStore));
+    audioEl.preservesPitch = true;
+    audioEl.playbackRate = $chatTtsRateStore;
+  });
+
   let speakTitle = $derived(
     speakErr ? speakErr :
     speakState === "playing" ? "Stop" :
     speakState === "loading" ? "Generating speech…" :
+    speakReady ? "Read aloud (generated)" :
     "Read aloud",
   );
 
+  // Mute is a volume of 0 with the old level parked locally, so unmuting returns
+  // to where the slider was rather than to a full-blast default.
+  let preMuteVolume = 1;
+  function toggleMute() {
+    if ($chatTtsVolumeStore > 0) {
+      preMuteVolume = $chatTtsVolumeStore;
+      chatTtsVolumeStore.set(0);
+    } else {
+      chatTtsVolumeStore.set(preMuteVolume || 1);
+    }
+  }
+
   function stopSpeak() {
+    clearSpeechHighlight(speakOwner);
     speakAbort?.abort();
     speakAbort = null;
     audioEl?.pause();
     audioEl = null;
-    if (audioUrl) URL.revokeObjectURL(audioUrl);
-    audioUrl = "";
     speakState = "idle";
   }
 
@@ -396,18 +464,34 @@
     speakErr = "";
     speakState = "loading";
     speakAbort = new AbortController();
+    const abort = speakAbort;
+    const key = `${model}|${$chatTtsVoiceStore}|${text}`;
+    if (speakCache?.key !== key) speakCache = { key, blobs: [], bytes: 0, total: 0 };
+    const cache = speakCache;
+    // Every chunk already in hand means playback can start immediately.
+    if (cache.blobs[0]) speakState = "playing";
     try {
-      const blob = await generateSpeech(model, text, $chatTtsVoiceStore, speakAbort.signal);
-      if (!speakAbort) return; // stopped while generating
-      audioUrl = URL.createObjectURL(blob);
-      audioEl = new Audio(audioUrl);
-      audioEl.onended = stopSpeak;
-      audioEl.onerror = () => { speakErr = "Playback failed"; stopSpeak(); };
-      await audioEl.play();
-      speakState = "playing";
+      await speakStreamed(model, text, $chatTtsVoiceStore, {
+        signal: abort.signal,
+        cached: cache.blobs,
+        settings: () => ({ volume: $chatTtsVolumeStore, rate: $chatTtsRateStore }),
+        onChunks: (cs) => {
+          if (speakCache === cache) cache.total = cs.length;
+          speakRanges = proseEl ? speechRanges(proseEl, cs) : [];
+        },
+        onChunkPlaying: (i) => { if (speakAbort === abort) showSpeechHighlight(speakOwner, speakRanges, i); },
+        onChunk: (i, blob) => {
+          if (speakCache !== cache || cache.bytes + blob.size > SPEAK_CACHE_MAX_BYTES) return;
+          cache.blobs[i] = blob;
+          cache.bytes += blob.size;
+        },
+        onAudio: (el) => { if (speakAbort === abort) audioEl = el; },
+        onPlaying: () => { if (speakAbort === abort) speakState = "playing"; },
+      });
     } catch (e) {
       if ((e as Error)?.name !== "AbortError") speakErr = (e as Error)?.message ?? "Speech failed";
-      stopSpeak();
+    } finally {
+      if (speakAbort === abort) stopSpeak();
     }
   }
 
@@ -633,9 +717,14 @@
         <span class="font-medium truncate">Read comments: {search.query || "YouTube video"}</span>
       {:else if search.kind === "youtube"}
         <!-- Captions, not viewing: "Watched" claimed the model saw a video it
-             only read the transcript of. -->
-        <Youtube class="w-3 h-3 shrink-0" />
-        <span class="font-medium truncate">Read transcript: {search.query || "YouTube video"}</span>
+             only read the transcript of. The tool is not YouTube-only, so the
+             logo only appears when the source actually was YouTube. -->
+        {#if /youtube\.com|youtu\.be/.test(search.sources?.[0]?.url ?? "")}
+          <Youtube class="w-3 h-3 shrink-0" />
+        {:else}
+          <Captions class="w-3 h-3 shrink-0" />
+        {/if}
+        <span class="font-medium truncate">Read transcript: {search.query || "recording"}</span>
       {:else if search.kind === "page"}
         <FileText class="w-3 h-3 shrink-0" />
         <span class="font-medium truncate">Read page: {search.query || "web page"}</span>
@@ -772,7 +861,7 @@
       {#if rewriteOriginal != null}
         <RewriteDiff original={rewriteOriginal} rewritten={stripThinking(displayContent)} {isStreaming} {modelReady} />
       {:else}
-        <div class="prose prose-sm dark:prose-invert max-w-none chat-prose" use:codeBlockCopy use:wikiCiteClick use:diagramBlocks={!isStreaming}>
+        <div class="prose prose-sm dark:prose-invert max-w-none chat-prose" bind:this={proseEl} use:codeBlockCopy use:wikiCiteClick use:diagramBlocks={!isStreaming}>
           <!-- Ordered timeline: inline think boxes, search blocks, and answer text. -->
           {#each timeline as seg, si (si)}
             {#if seg.kind === "search"}
@@ -925,19 +1014,82 @@
           <!-- No TTS model installed → no speaker button, rather than a button
                that can only ever explain why it does nothing. -->
           {#if $effectiveTtsModel}
-          <button
-            class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 {speakState === 'idle' ? 'text-txtsecondary' : 'text-primary'}"
-            onclick={toggleSpeak}
-            use:tip={speakTitle}
+          <!-- Hovering the speaker reveals volume + speed INLINE, in the slack
+               between the buttons and the right-aligned word count. They live here
+               rather than in Settings because they are adjusted WHILE listening and
+               the pointer is already on this button; inline rather than in a
+               popover because the row has the room, and a floating panel is one
+               more thing to keep alive under the cursor. Both apply to the playing
+               element, so a change is audible immediately and does not re-run the
+               model. -->
+          <div
+            class="flex items-center gap-2"
+            onmouseenter={() => (speakHover = true)}
+            onmouseleave={() => { speakHover = false; speedOpen = false; }}
           >
-            {#if speakState === "loading"}
-              <Loader2 class="w-4 h-4 animate-spin" />
-            {:else if speakState === "playing"}
-              <Square class="w-4 h-4" fill="currentColor" />
-            {:else}
-              <Volume2 class="w-4 h-4" />
+            <button
+              class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 {speakState !== 'idle' ? 'text-primary' : speakReady ? 'text-txtmain' : 'text-txtsecondary'}"
+              onclick={toggleSpeak}
+              use:tip={speakTitle}
+            >
+              {#if speakState === "loading"}
+                <Loader2 class="w-4 h-4 animate-spin" />
+              {:else if speakState === "playing"}
+                <Square class="w-4 h-4" fill="currentColor" />
+              {:else}
+                <Volume2 class="w-4 h-4" />
+              {/if}
+            </button>
+            {#if speakHover || speedOpen}
+              <button
+                class="text-txtsecondary hover:text-txtmain"
+                onclick={toggleMute}
+                use:tip={$chatTtsVolumeStore === 0 ? "Unmute" : "Mute"}
+              >
+                {#if $chatTtsVolumeStore === 0}
+                  <VolumeX class="w-3.5 h-3.5" />
+                {:else if $chatTtsVolumeStore < 0.5}
+                  <Volume1 class="w-3.5 h-3.5" />
+                {:else}
+                  <Volume2 class="w-3.5 h-3.5" />
+                {/if}
+              </button>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                class="w-24 h-1 accent-primary cursor-pointer"
+                value={$chatTtsVolumeStore}
+                oninput={(e) => chatTtsVolumeStore.set(Number(e.currentTarget.value))}
+                aria-label="Speech volume"
+              />
+              <span class="relative">
+                <button
+                  class="flex items-center gap-1 rounded px-1 py-0.5 text-[0.6875rem] tabular-nums text-txtsecondary hover:bg-black/10 hover:text-txtmain dark:hover:bg-white/10"
+                  onclick={() => (speedOpen = !speedOpen)}
+                  use:tip={"Speech speed"}
+                >
+                  <Gauge class="w-3.5 h-3.5" />
+                  {$chatTtsRateStore}x
+                </button>
+                {#if speedOpen}
+                  <!-- Opens upward: this row sits at the BOTTOM of the bubble, so a
+                       downward list would fall outside it and over the next message. -->
+                  <div class="absolute bottom-full right-0 z-30 mb-1 overflow-hidden rounded border border-card-border bg-surface shadow-lg">
+                    {#each SPEEDS as sp (sp)}
+                      <button
+                        class="block w-full px-3 py-1 text-right text-[0.6875rem] tabular-nums hover:bg-black/10 dark:hover:bg-white/10 {sp === $chatTtsRateStore ? 'text-primary' : 'text-txtsecondary'}"
+                        onclick={() => { chatTtsRateStore.set(sp); speedOpen = false; }}
+                      >
+                        {sp}x
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              </span>
             {/if}
-          </button>
+          </div>
           {/if}
           <span class="ml-auto flex items-center gap-2 self-center text-[0.6875rem] text-txtsecondary tabular-nums">
             <span>{wordCount} {wordCount === 1 ? "word" : "words"}</span>

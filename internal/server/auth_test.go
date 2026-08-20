@@ -1,12 +1,14 @@
 package server
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/quartermaster-labs/quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/logmon"
 )
 
 func TestServer_SanitizeAccessControlRequestHeaders(t *testing.T) {
@@ -80,7 +82,7 @@ func TestServer_AuthMiddleware(t *testing.T) {
 	})
 
 	t.Run("no keys configured passes through", func(t *testing.T) {
-		mw := CreateAuthMiddleware(config.Config{})
+		mw := CreateAuthMiddleware(config.Config{}, logmon.NewWriter(io.Discard))
 		w := httptest.NewRecorder()
 		mw(final).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
 		if w.Code != http.StatusOK {
@@ -91,7 +93,7 @@ func TestServer_AuthMiddleware(t *testing.T) {
 	cfg := config.Config{RequiredAPIKeys: []string{"secret"}}
 
 	t.Run("valid key", func(t *testing.T) {
-		mw := CreateAuthMiddleware(cfg)
+		mw := CreateAuthMiddleware(cfg, logmon.NewWriter(io.Discard))
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
 		r.Header.Set("Authorization", "Bearer secret")
 		w := httptest.NewRecorder()
@@ -102,7 +104,7 @@ func TestServer_AuthMiddleware(t *testing.T) {
 	})
 
 	t.Run("invalid key", func(t *testing.T) {
-		mw := CreateAuthMiddleware(cfg)
+		mw := CreateAuthMiddleware(cfg, logmon.NewWriter(io.Discard))
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
 		r.Header.Set("Authorization", "Bearer wrong")
 		w := httptest.NewRecorder()

@@ -14,7 +14,7 @@ import (
 
 // Link unfurling for the playground chat: a YouTube URL pasted into any message
 // renders as a card (thumbnail + title + channel), Discord-style, whether or not
-// the model ever called youtube_transcript on it.
+// the model ever called media_transcript on it.
 //
 // Deliberately NOT yt-dlp. The transcript path shells out per request and pulls
 // caption tracks, which YouTube rate-limits (a 429 was hit during development);
