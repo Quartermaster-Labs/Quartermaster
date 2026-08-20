@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Chart, registerables } from "chart.js";
+  // Type-only: erased at build, so it does not pull chart.js into the main
+  // chunk. The runtime copy is imported on demand in onMount below.
+  import type { Chart as ChartJS } from "chart.js";
   import { isDarkMode } from "../stores/theme";
-
-  Chart.register(...registerables);
 
   interface Dataset {
     label: string;
@@ -24,7 +24,10 @@
   let { title, labels, datasets, yMin, yMax, yLabel, showLegend = true }: Props = $props();
 
   let canvas: HTMLCanvasElement;
-  let chart: Chart;
+  // $state.raw, not $state: a Chart instance must never be deep-proxied.
+  // Raw still makes the assignment reactive, so the effects below re-run
+  // once the async import resolves and the chart finally exists.
+  let chart = $state.raw<ChartJS | undefined>();
 
   function getChartColors(dark: boolean) {
     return {
@@ -94,26 +97,38 @@
   }
 
   onMount(() => {
-    chart = new Chart(canvas, {
-      type: "line",
-      data: {
-        labels: [...labels],
-        datasets: datasets.map((ds) => ({
-          label: ds.label,
-          data: [...ds.data],
-          borderColor: ds.borderColor,
-          backgroundColor: ds.borderColor + "20",
-          borderWidth: 1.5,
-          pointRadius: 0,
-          tension: 0.4,
-          fill: false,
-        })),
-      },
-      options: buildOptions($isDarkMode),
-    });
+    // chart.js is the single biggest dependency in the bundle and only two
+    // places need it (here, and the markdown chart blocks in lib/diagrams.ts).
+    // BOTH must import it dynamically: one static import anywhere folds it
+    // back into the main chunk and silently defeats the other split.
+    let disposed = false;
+    void (async () => {
+      const { Chart, registerables } = await import("chart.js");
+      Chart.register(...registerables);
+      if (disposed) return;
+      chart = new Chart(canvas, {
+        type: "line",
+        data: {
+          labels: [...labels],
+          datasets: datasets.map((ds) => ({
+            label: ds.label,
+            data: [...ds.data],
+            borderColor: ds.borderColor,
+            backgroundColor: ds.borderColor + "20",
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0.4,
+            fill: false,
+          })),
+        },
+        options: buildOptions($isDarkMode),
+      });
+    })();
 
     return () => {
-      chart.destroy();
+      disposed = true;
+      chart?.destroy();
+      chart = undefined;
     };
   });
 
