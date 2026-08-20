@@ -49,7 +49,12 @@ type Server struct {
 	// background goroutine off the perf monitor so it's captured even when no
 	// dashboard tab is open, and surfaced in /api/performance for the UI gauge.
 	// 0 = never observed an idle moment yet. See trackSystemVram.
-	systemVramMB   atomic.Int64
+	systemVramMB atomic.Int64
+
+	// vramGuard publishes the live VRAM ceiling the router admits against and
+	// sheds idle models under foreign GPU pressure. nil until WireDynamicOffload
+	// runs (hand-written -config, or a build with no perf monitor).
+	vramGuard      *vramGuard
 	inflight       *inflightCounter
 	metrics        *metricsMonitor
 	backendMetrics *backendMetricsMonitor
@@ -347,11 +352,32 @@ func (s *Server) WireDynamicOffload(settings autogen.Settings) {
 	if s.perf == nil {
 		return
 	}
+	// The runtime half of the guard: publish the live VRAM ceiling for the
+	// router's multi-load admission, and shed idle models when a foreign GPU app
+	// grows into the resident set. See vramguard.go.
+	guard := newVramGuard(s, settings)
+	s.vramGuard = guard
+	s.local.SetLiveVramBudget(guard.ceilingGB)
+	go guard.run(s.shutdownCtx)
+
 	s.local.SetSpawnArgs(func(modelID string, args []string) ([]string, error) {
 		logf := func(m string) { s.proxylog.Infof("<%s> %s", modelID, m) }
 		freeGB, ok := s.freeVramGB()
+		// A model refused for lack of VRAM moments ago on a reading that has not
+		// improved will be refused again, so short-circuit instead of paying the
+		// reclaim probe loop for every retry in a client's retry storm.
+		if cached, hit := guard.refusals.get(modelID, freeGB, ok); hit {
+			return nil, vramGuardRefusalNote(cached)
+		}
 		// offload against a given free reading; sample takes a FRESH probe on retry.
+		// lastFree tracks the reading the final verdict was made against, so a
+		// refusal is memoised against the number that actually produced it rather
+		// than the stale one we started from.
+		lastFree := freeGB
 		offload := func(free float64, freeOK bool) ([]string, error) {
+			if freeOK {
+				lastFree = free
+			}
 			return autogen.LiveOffloadArgs(settings, args, free, freeOK, logf)
 		}
 		n := 0
@@ -364,8 +390,15 @@ func (s *Server) WireDynamicOffload(settings autogen.Settings) {
 			}
 			return fresh, fok
 		}
-		return offloadWithReclaim(args, freeGB, ok, offload, sample,
+		out, err := offloadWithReclaim(args, freeGB, ok, offload, sample,
 			func() { time.Sleep(spawnVramReclaimDelay) }, spawnVramReclaimTries)
+		if err != nil {
+			guard.refusals.put(modelID, err, lastFree)
+		} else {
+			// A spawn that got through must not leave an older no behind it.
+			guard.refusals.clear(modelID)
+		}
+		return out, err
 	})
 }
 
@@ -457,24 +490,8 @@ func (s *Server) freeVramGB() (float64, bool) {
 		return 0, false
 	}
 	_, gpus := s.perf.Current()
-	latest := make(map[int]perf.GpuStat)
-	for _, g := range gpus {
-		if prev, seen := latest[g.ID]; !seen || g.Timestamp.After(prev.Timestamp) {
-			latest[g.ID] = g
-		}
-	}
-	best := -1
-	var bestStat perf.GpuStat
-	for _, g := range latest {
-		if g.MemTotalMB <= 0 {
-			continue
-		}
-		if best < 0 || g.MemTotalMB > bestStat.MemTotalMB {
-			best = g.ID
-			bestStat = g
-		}
-	}
-	if best < 0 {
+	bestStat, ok := largestGPU(gpus)
+	if !ok {
 		return 0, false
 	}
 	free := bestStat.MemTotalMB - bestStat.MemUsedMB

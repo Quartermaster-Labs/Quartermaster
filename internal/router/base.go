@@ -65,6 +65,12 @@ type baseRouter struct {
 	postLoadFn  atomic.Pointer[func(string)]
 	spawnArgsFn atomic.Pointer[func(string, []string) ([]string, error)]
 
+	// liveVram is the box the live VRAM-ceiling probe is dropped into. The
+	// concrete router allocates it BEFORE plan() runs (so every Swapper the plan
+	// rebuilds shares the same box) and leaves it nil when it has no budget
+	// policy to tighten - SetLiveVramBudget is then a no-op.
+	liveVram *liveVramHolder
+
 	// shutdownCtx governs the request machinery: cancelling it tells grant()
 	// and ServeHTTP to stop granting and reject callers. It is deliberately
 	// separate from procCtx — see procCtx below.
@@ -184,6 +190,11 @@ func (b *baseRouter) SetSpawnArgs(fn func(modelID string, args []string) ([]stri
 		p.SetSpawnArgs(func(args []string) ([]string, error) { return fn(id, args) })
 	}
 }
+
+// SetLiveVramBudget installs the live VRAM-ceiling probe. See LocalRouter. It
+// writes into the holder the concrete router allocated before plan(), so the
+// probe survives every ApplyConfig-driven Swapper rebuild without re-wiring.
+func (b *baseRouter) SetLiveVramBudget(fn LiveVramFn) { b.liveVram.set(fn) }
 
 // applyHooks wires the retained per-process hooks onto a single process — used
 // by ApplyConfig for a model it newly creates, so an added model gets the same

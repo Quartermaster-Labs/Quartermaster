@@ -65,3 +65,64 @@ is never blocked — only one degraded by what is currently resident. Negative =
 `LiveOffloadArgs` appends `--no-gpu` to every `.ggml`: the Vulkan SAM backend returns garbage
 on RX 7900 XTX (both PCS text and PVS box/point) while CPU is correct. See
 [`classes.md`](classes.md).
+
+## The runtime half: `vramguard.go` (server)
+
+The spawn guard only runs at exec, which leaves two holes: the router's admission
+(`groupSwapper.budgetEviction`) charges a *static* budget that ignores what a game is holding
+on the card, and nothing reacts *after* a load (a resident model is silently demoted into
+shared memory when another app starts, with no error and no log). `vramguard` (`internal/server/vramguard.go`)
+closes both from one sample taken on the perf monitor's own cadence (>=5s), so the admission
+path stays a lock-free atomic read.
+
+- **Live VRAM ceiling (admission).** The guard attributes the largest GPU's used memory between
+  quartermaster's own children and everyone else, and publishes a ceiling via the router's
+  `SetLiveVramBudget` probe (`router.LiveVramFn`); `budgetEviction` admits against
+  `min(vramBudgetGB, ceiling)`. The ceiling is measured as **foreign growth over an idle
+  baseline**, not as raw free VRAM:
+
+  ```
+  excess  = max(0, foreignMB − foreignFloorMB)      // floor = idle low-water mark
+  ceiling = vramBudgetGB − excess − oomGuardReserveGB   // and exactly vramBudgetGB when excess == 0
+  ```
+
+  The baseline matters: `total − foreign − reserve` reduces algebraically to `used > total −
+  reserve` once you compare it against the resident set's summed `estVramGB`, so it fires on a
+  perfectly healthy box whose card is legitimately full of *our own* well-planned models. The
+  compositor's ~1.5 GB is already priced into `targetVramGB` and every `estVramGB` carries its
+  own overhead pad — double-counting them would evict for nothing. Tracking excess over the
+  idle floor means an untroubled box sees **zero** behaviour change, and only a *new* foreign
+  claim (a game, a browser hitting the GPU) moves the ceiling. A missing or untrustworthy
+  reading (no telemetry, or per-process attribution that can't see our own children — counting
+  them as foreign would collapse the ceiling and evict everything) leaves the static budget in
+  force.
+- **Post-load watchdog (eviction).** When the resident set's summed `estVramGB` no longer fits
+  the ceiling and stays over it for the grace period, idle models are unloaded — largest-first
+  until the set fits — so the driver doesn't silently demote them. Only *idle* models are ever
+  touched: a model with a request in flight (or still starting) is excluded, since a failed
+  request is worse than a slow one, as are `persistent` members and CPU-only models (no
+  `estVramGB`, nothing to reclaim). If nothing idle can be shed, the guard logs and accepts
+  the degradation.
+- **Refusal memo.** "Insufficient VRAM" spawn refusals are memoised per model for 30s, so a
+  client retrying in a loop doesn't pay the full ~4s post-eviction reclaim probe on every
+  retry. The memo is invalidated by time or by free VRAM coming back, whichever lands first —
+  the moment another app releases the card the next request loads normally. A served model's
+  memo is cleared on successful spawn, and memoised refusals carry a "(cached; …)" note so the
+  log can tell a cached no from a freshly-probed one.
+
+Three settings (in `overrides.go`, all defaulted in `applyDefaults`):
+
+- `oomGuardReserveGB` (default **1.0**) — extra VRAM held back once foreign use is *already*
+  above the idle floor, for the other client's continued growth: a game that just claimed 8 GB is
+  still allocating. Charged only when `excess > 0`, so it never shrinks an untroubled box's
+  budget. Negative = explicit opt-out (admit into the raw leftovers).
+- `oomGuardEvict` (default **on**) — enables the post-load watchdog; `false` leaves resident
+  models alone and accepts the silent shared-memory degradation.
+- `oomGuardGraceSec` (default **30**) — how long the resident set must be over the ceiling
+  before the watchdog sheds anything, since VRAM pressure is spiky (a shader compile, a video
+  decode) and unloading on a transient spike costs a full reload for nothing.
+
+The idle floor itself is a low-water mark over the sampled foreign readings (the same shape as
+`Server.systemVramMB`), so the desktop compositor's steady baseline is learned rather than
+guessed, and it follows foreign usage back *down* when the other app exits — otherwise the first
+game of the session would keep the budget tight until restart.

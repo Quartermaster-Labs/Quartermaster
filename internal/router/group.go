@@ -17,6 +17,10 @@ func NewGroup(conf config.Config, proxylog, upstreamlog *logmon.Monitor) (*Group
 	// plan derives the eviction planner and the model→config set of every process
 	// the group router should run under a config. Shared by initial construction
 	// and ApplyConfig (live reload).
+	// One holder for every Swapper this router will ever build: plan() runs again
+	// on each ApplyConfig, and the probe is installed once, after construction.
+	liveVram := &liveVramHolder{}
+
 	plan := func(c config.Config) (scheduler.Swapper, map[string]config.ModelConfig, error) {
 		modelToGroup, err := buildModelToGroup(c)
 		if err != nil {
@@ -30,7 +34,7 @@ func NewGroup(conf config.Config, proxylog, upstreamlog *logmon.Monitor) (*Group
 			}
 			want[mid] = modelCfg
 		}
-		return &groupSwapper{config: c, modelToGroup: modelToGroup, logger: proxylog}, want, nil
+		return &groupSwapper{config: c, modelToGroup: modelToGroup, logger: proxylog, liveVram: liveVram}, want, nil
 	}
 
 	swapper, want, err := plan(conf)
@@ -43,6 +47,7 @@ func NewGroup(conf config.Config, proxylog, upstreamlog *logmon.Monitor) (*Group
 	if err != nil {
 		return nil, fmt.Errorf("creating base router: %w", err)
 	}
+	base.liveVram = liveVram
 	base.plan = plan
 	base.makeProcess = func(id string, mc config.ModelConfig) (process.Process, error) {
 		return process.New(base.procCtx, id, mc, logmon.NewWriter(upstreamlog), proxylog)
@@ -88,6 +93,9 @@ type groupSwapper struct {
 	config       config.Config
 	modelToGroup map[string]string
 	logger       *logmon.Monitor
+	// liveVram is the live VRAM-ceiling probe budgetEviction tightens against.
+	// Read-only here; nil in tests that only exercise the static policy.
+	liveVram *liveVramHolder
 }
 
 func (p *groupSwapper) EvictionFor(target string, running []string) []string {
@@ -156,10 +164,12 @@ func (p *groupSwapper) EvictionFor(target string, running []string) []string {
 //     unknown, so keeping it would silently overrun the budget; this degenerates
 //     to the legacy one-at-a-time behaviour for models the sizer can't measure.
 //
-// Purity: reads only config + the args, no mutation (see Swapper.EvictionFor).
+// Purity: reads only config, the args, and a live VRAM SNAPSHOT (a lock-free
+// read of a value the server samples elsewhere) - no mutation (see
+// Swapper.EvictionFor).
 func (p *groupSwapper) budgetEviction(target string, running []string) ([]string, bool) {
-	budget := p.config.VramBudgetGB
-	if budget <= 0 {
+	budget, ok := p.effectiveBudgetGB()
+	if !ok {
 		return nil, false
 	}
 	targetGB := p.config.Models[target].EstVramGB
@@ -204,6 +214,33 @@ func (p *groupSwapper) budgetEviction(target string, running []string) ([]string
 	return victims, true
 }
 
+// effectiveBudgetGB is the VRAM the resident model set is admitted into: the
+// configured vramBudgetGB, TIGHTENED to the live ceiling whenever a foreign GPU
+// client is holding memory the static budget assumed we had.
+//
+// This is the OOM guard's admission half. Without it the router happily evicts
+// residents to make room inside a 24 GB budget while a game holds 8 GB of the
+// card, and the spawn guard (autogen.LiveOffloadArgs) then refuses the load
+// anyway - the worst of both outcomes, since the evicted models are gone and
+// the requested one never arrives. Charging the foreign VRAM here instead means
+// the router either keeps fewer models co-resident or declines to disturb the
+// resident set at all.
+//
+// ok=false hands the decision back to the static group policy: no budget
+// configured. A missing or untrustworthy live reading is NOT a reason to fall
+// back - it just leaves the static budget in force, which is the behaviour that
+// shipped before the probe existed.
+func (p *groupSwapper) effectiveBudgetGB() (float64, bool) {
+	budget := p.config.VramBudgetGB
+	if budget <= 0 {
+		return 0, false
+	}
+	if live, ok := p.liveVram.ceiling(); ok && live < budget {
+		budget = live
+	}
+	return budget, true
+}
+
 // OnSwapStart logs the budget arithmetic behind this swap — the one place a
 // Swapper may log, since it fires once per real swap while EvictionFor runs on
 // every request and every queue drain.
@@ -217,6 +254,11 @@ func (p *groupSwapper) OnSwapStart(target string, running []string) {
 			residentGB += p.config.Models[id].EstVramGB
 		}
 	}
-	p.logger.Debugf("group: admitting %s (est %.2fGB) against resident %.2fGB of %.2fGB budget",
-		target, p.config.Models[target].EstVramGB, residentGB, p.config.VramBudgetGB)
+	budget, _ := p.effectiveBudgetGB()
+	note := ""
+	if budget < p.config.VramBudgetGB {
+		note = fmt.Sprintf(" (tightened from %.2fGB - foreign GPU use)", p.config.VramBudgetGB)
+	}
+	p.logger.Debugf("group: admitting %s (est %.2fGB) against resident %.2fGB of %.2fGB budget%s",
+		target, p.config.Models[target].EstVramGB, residentGB, budget, note)
 }

@@ -2,6 +2,7 @@ package router
 
 import (
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/quartermaster-labs/quartermaster/internal/config"
@@ -74,6 +75,13 @@ type LocalRouter interface {
 	// serving. Used to restore a saved slot KV on cold load.
 	SetPostLoad(fn func(modelID string))
 
+	// SetLiveVramBudget installs the live VRAM-ceiling probe the budget admission
+	// rule tightens against, so a foreign GPU client (a game, a browser) shrinks
+	// the budget the resident model set is admitted into instead of the router
+	// evicting for room that is not actually there. No-op on routers with no
+	// budget policy. Call once before serving.
+	SetLiveVramBudget(fn LiveVramFn)
+
 	// SetSpawnArgs installs a hook that rewrites a model's upstream argv at each
 	// spawn (after sanitization, before exec) — e.g. recompute -ngl/--n-cpu-moe
 	// from live free VRAM. Returning an error refuses that spawn. Call once
@@ -87,4 +95,41 @@ type LocalRouter interface {
 	// new launch args take effect on its next load. Returns an error (leaving the
 	// router untouched) when the config is invalid.
 	ApplyConfig(cfg config.Config) error
+}
+
+// LiveVramFn reports the VRAM (GB) the resident model set may occupy right now:
+// the GPU's total minus whatever is held by processes that are NOT our children
+// (desktop compositor, a game, a browser, a stray llama-server). ok=false means
+// "no trustworthy reading" — callers must then fall back to the static budget
+// rather than guess, because a wrong-low ceiling evicts everything for nothing.
+type LiveVramFn func() (float64, bool)
+
+// liveVramHolder carries a LiveVramFn from the server (which owns the perf
+// monitor) to the Swapper. It exists because the Swapper is rebuilt from scratch
+// on every ApplyConfig while the probe is installed once at startup: both sides
+// hold this one box instead of the function itself.
+//
+// A nil holder, or one never filled in, reads as "no reading" — that is the
+// case for routers with no budget policy (Matrix) and for any build with no
+// perf monitor.
+type liveVramHolder struct {
+	fn atomic.Pointer[LiveVramFn]
+}
+
+func (h *liveVramHolder) ceiling() (float64, bool) {
+	if h == nil {
+		return 0, false
+	}
+	fn := h.fn.Load()
+	if fn == nil {
+		return 0, false
+	}
+	return (*fn)()
+}
+
+func (h *liveVramHolder) set(fn LiveVramFn) {
+	if h == nil || fn == nil {
+		return
+	}
+	h.fn.Store(&fn)
 }

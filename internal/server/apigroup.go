@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -249,6 +250,13 @@ func (s *Server) handleAPIPerformance(w http.ResponseWriter, r *http.Request) {
 		"foreign":   s.foreignGPU(r.Context()),
 		// Idle system-VRAM floor (MiB) sampled server-side; 0 = not observed yet.
 		"system_mb": s.systemVramMB.Load(),
+		// OOM guard: VRAM (MiB) held by everything that is NOT one of our
+		// children, and the card total it is measured against. Unlike "foreign"
+		// above — which counts only stray llama-server/sd-server instances by name
+		// — this is the whole rest of the desktop (a game, a browser, the
+		// compositor), because that is what actually shrinks the budget the router
+		// admits models into. Omitted when there is no trustworthy reading.
+		"guard": s.vramGuardStats(),
 	})
 }
 
@@ -288,6 +296,28 @@ func (s *Server) foreignGPU(ctx context.Context) foreignVram {
 		}
 		out.MB += p.MemMB
 		out.Procs = append(out.Procs, p)
+	}
+	return out
+}
+
+// vramGuardStats reports the OOM guard's current view of the card for the
+// dashboard: foreign VRAM, the card total, and the ceiling the router admits
+// against. nil when the guard isn't wired (hand-written config, no perf
+// monitor) or has no trustworthy reading yet — the UI must then show nothing
+// rather than a zero, which would read as "nothing else is using the GPU".
+func (s *Server) vramGuardStats() map[string]any {
+	if s.vramGuard == nil {
+		return nil
+	}
+	foreignMB, floorMB, totalMB, ok := s.vramGuard.snapshot()
+	if !ok {
+		return nil
+	}
+	// floor_mb is the desktop's idle cost. Only foreign_mb ABOVE it is pressure —
+	// showing the raw foreign figure alone would make an idle box look loaded.
+	out := map[string]any{"foreign_mb": foreignMB, "floor_mb": floorMB, "total_mb": totalMB}
+	if ceilingGB, ok := s.vramGuard.ceilingGB(); ok {
+		out["ceiling_gb"] = math.Round(ceilingGB*10) / 10
 	}
 	return out
 }

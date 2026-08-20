@@ -70,6 +70,28 @@ type Settings struct {
 	// deliberately configured to run mostly on CPU still loads. 0 => default
 	// 0.5; negative disables the floor (pure best-effort degradation).
 	MinGpuFraction float64 `yaml:"minGpuFraction"`
+	// OomGuardReserveGB is extra VRAM held back from the resident model set for
+	// the OTHER GPU clients' growth. The live ceiling the router admits against
+	// is (vramBudgetGB - foreign usage ABOVE the idle baseline - this), so the
+	// reserve is charged only while a foreign client is actually growing: a game
+	// that has just claimed 8 GB is still allocating, and admitting a model into
+	// the exact leftovers means the next allocation of either side lands in
+	// shared memory. An untroubled box is charged nothing. 0 => default 1.0;
+	// negative disables the reserve (admit into the raw leftovers).
+	OomGuardReserveGB float64 `yaml:"oomGuardReserveGB"`
+	// OomGuardEvict enables the post-load watchdog: when foreign VRAM grows into
+	// the resident set's footprint and stays there for OomGuardGraceSec, IDLE
+	// models are unloaded until the set fits again. Without it the only guard is
+	// at spawn, and a model already resident when a game starts is silently
+	// demoted into shared memory by the driver - no error, just collapsed
+	// throughput. nil => default ON. Set false to leave resident models alone and
+	// accept the degradation.
+	OomGuardEvict *bool `yaml:"oomGuardEvict"`
+	// OomGuardGraceSec is how long the resident set must be over the live ceiling
+	// before the watchdog sheds anything. VRAM pressure is spiky - a shader
+	// compile, a video decode, a browser painting - and unloading a model on a
+	// transient spike costs a full reload for nothing. 0 => default 30.
+	OomGuardGraceSec int `yaml:"oomGuardGraceSec"`
 	// AutoVram measures free VRAM at gen time and caps TargetVramGB at it (the raw
 	// reading — VramOverheadGB is charged inside the plan, not deducted here). Only
 	// ever tightens: a static TargetVramGB below the reading stays a user ceiling.
@@ -689,6 +711,14 @@ func (s *Settings) applyDefaults() {
 		s.MinGpuFraction = 0.5
 	} else if s.MinGpuFraction < 0 {
 		s.MinGpuFraction = 0 // explicit opt-out: no floor, degrade instead of refuse
+	}
+	if s.OomGuardReserveGB == 0 {
+		s.OomGuardReserveGB = 1.0
+	} else if s.OomGuardReserveGB < 0 {
+		s.OomGuardReserveGB = 0 // explicit opt-out: admit into the raw leftovers
+	}
+	if s.OomGuardGraceSec == 0 {
+		s.OomGuardGraceSec = 30
 	}
 	if s.ComputeBufFactor == 0 {
 		s.ComputeBufFactor = 1.0
