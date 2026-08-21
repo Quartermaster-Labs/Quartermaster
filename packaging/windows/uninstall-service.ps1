@@ -73,7 +73,7 @@ if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
     & $nssm stop $ServiceName confirm 2>$null | Out-Null
     & $nssm remove $ServiceName confirm
     # Ensure the proxy is actually dead (nssm stop can leave a detached child).
-    Stop-Process -Name 'quartermaster-windows-amd64' -Force -ErrorAction SilentlyContinue
+    Stop-Process -Name 'Quartermaster', 'quartermaster-windows-amd64' -Force -ErrorAction SilentlyContinue
     Stop-Process -Name 'quartermaster' -Force -ErrorAction SilentlyContinue
     Write-Host "Removed and stopped." -ForegroundColor Green
 } else {

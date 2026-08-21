@@ -80,7 +80,7 @@ Pick one wrapper.
 ```powershell
 # Elevated PowerShell. nssm must be on PATH (https://nssm.cc).
 .\packaging\windows\install-service.ps1 `
-  -ExePath  C:\llama-qm\quartermaster-windows-amd64.exe `
+  -ExePath  C:\llama-qm\Quartermaster.exe `
   -Config   C:\llama-qm\config.yaml `
   -Generate C:\llama-qm\quartermaster-generate.yaml `
   -Listen   0.0.0.0:1250

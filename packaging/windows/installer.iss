@@ -2,7 +2,7 @@
 ;
 ; Per-user install (no UAC) into a writable location, because the app generates
 ; config\config.yaml at runtime and edits config\quartermaster-generate.yaml.
-; exe + start.cmd live in {app}; all config yaml lives in {app}\config; fetched
+; Quartermaster.exe lives in {app}; all config yaml lives in {app}\config; fetched
 ; backends go under {app}\bin\<component>.
 ;
 ; Compile (CI passes these via /D):
@@ -20,16 +20,26 @@
 ; The setup program then runs THIS installer with /VERYSILENT.
 ;
 ; So what is left here is only what Inno is uniquely good at and nothing else
-; provides: the Add/Remove Programs record, the Start Menu group, the
-; uninstaller, and an in-place upgrade keyed to a stable AppId.
+; provides: the Add/Remove Programs record, the Start Menu group and desktop
+; shortcut, the uninstaller, and an in-place upgrade keyed to a stable AppId.
 ;
 ; Nothing in here may prompt, and nothing may reach the network. A silent run
 ; still executes [Code], so a default-checked option would be silently applied
 ; to a user who never saw it -- which is exactly the bug the old ServersPage
 ; defaults would have caused once the setup program started driving this.
 
-#define MyAppName "quartermaster"
-#define MyAppExe  "quartermaster-windows-amd64.exe"
+; MyAppName is display text (Add/Remove Programs, the Start Menu group).
+; MyAppDir is the folder name, kept lowercase and UNCHANGED: it is the default
+; install path, and capitalising it would move where a fresh install lands while
+; upgrades (keyed to AppId) stayed put.
+#define MyAppName "Quartermaster"
+#define MyAppDir  "quartermaster"
+; The installed binary. NOT the release-asset name -- CI still publishes
+; quartermaster-windows-amd64.exe, because internal/update matches that asset
+; exactly and an install from before the rename must keep finding it. The
+; updater swaps whatever path it is running from, so the two names are free to
+; differ; [Files] below excludes the asset-named copy from {app}.
+#define MyAppExe  "Quartermaster.exe"
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0"
 #endif
@@ -45,9 +55,9 @@
 AppId={{A7E4C9D2-3B6F-4F1A-9C2E-2D7B8F0A1E55}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
-AppPublisher=radu0120
+AppPublisher=QuartermasterLabs
 AppPublisherURL=https://github.com/Quartermaster-Labs/quartermaster
-DefaultDirName={localappdata}\Programs\{#MyAppName}
+DefaultDirName={localappdata}\Programs\{#MyAppDir}
 ; Kept prompting for the manual-run path: the setup program always passes /DIR,
 ; so this page is only ever seen by someone who ran the inner installer directly.
 DisableDirPage=no
@@ -73,7 +83,7 @@ WizardStyle=modern
 ; Excludes: the staging dir is shared with the release build, which also puts the
 ; linux/darwin binaries and SHA256SUMS there for the in-app updater to download.
 ; Those are ~120MB of payload this installer must not carry.
-Source: "{#StagingDir}\*"; DestDir: "{app}"; Excludes: "quartermaster-linux-*,quartermaster-darwin-*,SHA256SUMS"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#StagingDir}\*"; DestDir: "{app}"; Excludes: "quartermaster-linux-*,quartermaster-darwin-*,quartermaster-windows-amd64.exe,SHA256SUMS"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; Seed the live generate file from the example, but never clobber a user's edits
 ; on upgrade, and leave it behind on uninstall (it holds their settings).
 ;
@@ -82,24 +92,48 @@ Source: "{#StagingDir}\*"; DestDir: "{app}"; Excludes: "quartermaster-linux-*,qu
 ; run will not overwrite what the wizard wrote.
 Source: "{#StagingDir}\config\quartermaster-generate.example.yaml"; DestDir: "{app}\config"; DestName: "quartermaster-generate.yaml"; Flags: onlyifdoesntexist uninsneveruninstall
 
+[InstallDelete]
+; The binary was renamed quartermaster-windows-amd64.exe -> Quartermaster.exe.
+; Drop the old name on upgrade, or {app} keeps two copies and anything still
+; pointing at the stale one (a hand-made shortcut, a Run-key entry the app wrote
+; before the rename) launches a binary that no longer gets updated.
+Type: files; Name: "{app}\quartermaster-windows-amd64.exe"
+
+; Unticking a shortcut has to REMOVE it, not just skip creating it. Inno leaves
+; icons from a previous install alone when their task is deselected, so an
+; upgrade (or a second wizard run over the same install) would otherwise be
+; unable to take a shortcut away once it had been granted.
+Type: filesandordirs; Name: "{group}"; Tasks: not startmenu
+Type: files; Name: "{autodesktop}\{#MyAppName}.lnk"; Tasks: not desktopicon
+
 [Tasks]
-; The only remaining task, and the only thing the setup program passes through
-; (/TASKS=autostart). Unchecked by default so a manual silent run with no /TASKS
-; installs nothing the user did not ask for.
-Name: autostart; Description: "Start quartermaster automatically when I log in"; GroupDescription: "Startup:"; Flags: unchecked
+; What the setup program passes through as a /TASKS= list. ALL of them are
+; unchecked by default, including the Start Menu group that used to be
+; unconditional: a silent run still executes this script, so a default-checked
+; task would be applied to someone who never saw the checkbox. The wizard ticks
+; Start Menu for the user, which is where that default belongs -- on the screen
+; that shows it.
+Name: startmenu; Description: "Add a Start Menu entry"; GroupDescription: "Shortcuts:"; Flags: unchecked
+Name: desktopicon; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
+Name: autostart; Description: "Start Quartermaster automatically when I log in"; GroupDescription: "Startup:"; Flags: unchecked
 
 [Icons]
-; IconFilename points at the exe so the shortcut wears the quartermaster icon
-; rather than the cmd.exe one -- start.cmd is a launcher, not the application.
-Name: "{group}\quartermaster"; Filename: "{app}\start.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\quartermaster-windows-amd64.exe"
-Name: "{group}\Edit generate config"; Filename: "notepad.exe"; Parameters: """{app}\config\quartermaster-generate.yaml"""; WorkingDir: "{app}"
-Name: "{group}\Uninstall quartermaster"; Filename: "{uninstallexe}"
-; Logon autostart (per-user Startup folder; console window is the live log).
-; "background" keeps the login launch tray-only: see start.cmd.
-Name: "{userstartup}\quartermaster"; Filename: "{app}\start.cmd"; Parameters: "background"; WorkingDir: "{app}"; Tasks: autostart; IconFilename: "{app}\quartermaster-windows-amd64.exe"
+; Straight to the exe: it supplies its own flags when it finds config\ next to
+; it (see bundle.go), so there is no launcher script to wear the wrong icon or
+; to flash a console window on the way to the dashboard.
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; WorkingDir: "{app}"; Tasks: startmenu
+Name: "{group}\Edit generate config"; Filename: "notepad.exe"; Parameters: """{app}\config\quartermaster-generate.yaml"""; WorkingDir: "{app}"; Tasks: startmenu
+Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"; Tasks: startmenu
+; Desktop shortcut. {autodesktop} resolves to the per-user desktop under
+; PrivilegesRequired=lowest, so this never writes to the all-users desktop.
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; WorkingDir: "{app}"; Tasks: desktopicon
+; Logon autostart (per-user Startup folder). -tray keeps the login launch
+; windowless: a window appearing unasked at every logon is not what ticking an
+; autostart box means.
+Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Parameters: "-tray"; WorkingDir: "{app}"; Tasks: autostart
 
 [Run]
 ; skipifsilent: under the setup program this never fires, because the wizard
 ; launches the app itself once it has finished installing backends -- starting
 ; it here would race a server against its own config being written.
-Filename: "{app}\start.cmd"; Description: "Launch quartermaster now"; Flags: postinstall shellexec skipifsilent nowait
+Filename: "{app}\{#MyAppExe}"; Description: "Launch {#MyAppName} now"; Flags: postinstall skipifsilent nowait

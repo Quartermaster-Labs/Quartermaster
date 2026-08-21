@@ -19,11 +19,11 @@
     "FileSubType": "00"
   },
   "StringFileInfo": {
-    "CompanyName": "radu0120",
+    "CompanyName": "QuartermasterLabs",
     "FileDescription": "Quartermaster",
     "InternalName": "quartermaster",
     "LegalCopyright": "Copyright (c) radu0120",
-    "OriginalFilename": "quartermaster.exe",
+    "OriginalFilename": "Quartermaster.exe",
     "ProductName": "Quartermaster",
     "FileVersion": "1.0.0.0",
     "ProductVersion": "1.0.0.0"

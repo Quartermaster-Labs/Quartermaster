@@ -21,6 +21,11 @@
   let modelsRoot = $state("");
   let variant = $state("");
   let picked = $state<Record<string, boolean>>({});
+  // Windows shortcut options. Start Menu is on by default because that is the
+  // one entry point a user expects to exist without having asked; a desktop
+  // icon and a login start are both things you opt in to.
+  let startMenu = $state(true);
+  let desktopIcon = $state(false);
   let autostart = $state(false);
 
   let scan = $state<ScanResult | null>(null);
@@ -84,6 +89,8 @@
         modelsRoot: modelsRoot.trim(),
         variant,
         components,
+        startMenu,
+        desktopIcon,
         autostart,
       });
       poll();
@@ -279,10 +286,23 @@
         </div>
 
         {#if isWindows}
-          <label class="mt-5 flex items-center gap-2 text-sm">
-            <input type="checkbox" bind:checked={autostart} />
-            Start Quartermaster when I log in
-          </label>
+          <!-- Re-running the wizard applies these as written: unticking one
+               removes the shortcut it made, so this is the current state of the
+               install, not an add-only list. -->
+          <div class="mt-5 flex flex-col gap-2 text-sm">
+            <label class="flex items-center gap-2">
+              <input type="checkbox" bind:checked={startMenu} />
+              Add a Start Menu entry
+            </label>
+            <label class="flex items-center gap-2">
+              <input type="checkbox" bind:checked={desktopIcon} />
+              Create a desktop shortcut
+            </label>
+            <label class="flex items-center gap-2">
+              <input type="checkbox" bind:checked={autostart} />
+              Start Quartermaster when I log in
+            </label>
+          </div>
         {/if}
       {:else if step === 1}
         <h2 class="text-base font-semibold">Where are your models?</h2>

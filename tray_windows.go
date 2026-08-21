@@ -24,8 +24,8 @@ var trayIcon []byte
 func runTray(openURL string, onOpenApp func(), onExit func(), exitChan <-chan struct{}) {
 	systray.Run(func() {
 		systray.SetIcon(trayIcon)
-		systray.SetTitle("quartermaster")
-		systray.SetTooltip("quartermaster")
+		systray.SetTitle("Quartermaster")
+		systray.SetTooltip("Quartermaster")
 
 		var mApp *systray.MenuItem
 		if onOpenApp != nil {

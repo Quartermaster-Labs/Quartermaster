@@ -36,15 +36,16 @@ everywhere and the 20 MB installer blob stays in the binary that ships it.
 | `ui_dist/` | The built wizard bundle. Holds a committed `.gitkeep` so the `//go:embed` compiles on a tree where the UI was never built. |
 | `cmd/quartermaster-setup/main.go` | `runtime.LockOSThread`, flags (`-dir`, `-browser`, `-v`), `Listen` → `runWindow` → browser fallback, `defaultInstallDir`, `fatal`. |
 | `cmd/quartermaster-setup/window_windows.go` | `runWindow` — creates the webview, hands it to `nativewin.Attach`, navigates, and closes it when the wizard signals done. The window mechanics themselves live in `internal/nativewin`, shared with the app window. |
-| `cmd/quartermaster-setup/place_windows.go` | `//go:embed inno/setup.exe`, `placeInno` (silent `/VERYSILENT /DIR= /TASKS= /LOG=`), `launch` via `start.cmd`. |
+| `cmd/quartermaster-setup/place_windows.go` | `//go:embed inno/setup.exe`, `placeInno` (silent `/VERYSILENT /DIR= /TASKS= /LOG=`), `launch` — starts the installed exe with no arguments (it supplies its own; see `bundle.go`). |
 | `cmd/quartermaster-setup/place_other.go`, `place_common.go` | Unix copy install; `placeCopy` is also the dev-build stand-in when no installer is embedded. |
 | `cmd/quartermaster-setup/window_other.go` | `runWindow` that always fails, so main falls back to the browser. Deliberate, not a gap. |
 
 ## Important types & functions
 
 - **`Choices`** — `Dir`, `ModelsRoot` (may be empty: "I'll pick later"), `Variant`, `Components`,
-  `Autostart`. Crosses the HTTP boundary as JSON and is handed whole to `Place`, because the
-  installer answers more than one question (`Autostart` → an Inno `/TASKS=` value).
+  `StartMenu`, `DesktopIcon`, `Autostart`. Crosses the HTTP boundary as JSON and is handed whole to
+  `Place`, because the installer answers more than one question (the last three become an Inno
+  `/TASKS=` list).
 - **`Status`** — one struct, one endpoint. There is nothing to correlate by id: the wizard has a
   single linear job. `Warnings` accumulate and are shown on the final screen.
 - **`Phase`** — `idle → placing → configuring → backends → done`, or `error`. The only thing the UI
@@ -97,7 +98,12 @@ everywhere and the 20 MB installer blob stays in the binary that ships it.
   job that `nativewin.ApplyIcon` does at runtime, and both are needed.
 - **Inno `[Code]` runs even under `/VERYSILENT`**, and `/TASKS=` is passed unconditionally including
   empty: Inno's default when the switch is absent is "whatever the script marks checked", which would
-  silently opt a user into a task they left unticked.
+  silently opt a user into a task they left unticked. Every task in the script (`startmenu`,
+  `desktopicon`, `autostart`) is therefore marked `unchecked` and decided here — including the Start
+  Menu group, which used to be unconditional. **Unticking removes**: Inno leaves icons from a
+  previous install alone when their task is deselected, so `[InstallDelete]` deletes `{group}` and
+  the desktop `.lnk` under `Tasks: not …`, which is what makes a second wizard run over an existing
+  install able to take a shortcut away rather than only add one.
 - **A dev build embeds a placeholder installer**, so `place` checks `len(innoSetup)` against
   `minInstallerBytes` and falls back to `placeCopy` rather than executing a 0-byte exe.
 - **The UI is a second bundle, not a dashboard route.** It must render before anything is installed
@@ -106,13 +112,24 @@ everywhere and the 20 MB installer blob stays in the binary that ships it.
 - **`native.isNative`** (`ui-svelte/src/lib/native.ts`) is the feature test for the whole native
   layer — the custom title bar and the Browse buttons render only when the bridge is present, so the
   browser fallback degrades to an ordinary page with no build flag.
-- **`start.cmd` launches the app window, the autostart shortcut does not.** Every entry point the
-  installer creates -- Start menu, post-install "Launch now", and the `{userstartup}` shortcut --
-  runs `packaging/windows/start.cmd`, so the UI flag lives there rather than in three shortcut
-  definitions. It defaults to `-app` (a desktop window, which implies `-tray`); the autostart
-  shortcut passes `background`, which drops it to `-tray` only. A window appearing unasked at every
-  login is not what ticking "start with Windows" means. Both `[Icons]` entries set `IconFilename` to
-  the exe, or the shortcut wears cmd.exe's icon.
+- **The exe carries its own launch flags; there is no launcher script any more.** Every entry point
+  the installer creates -- Start menu, post-install "Launch now", the `{userstartup}` shortcut, and
+  `launch()` here -- runs the exe directly. `bundle.go` (`applyBundleDefaults`) fills in `-config`,
+  `-generate`, both listeners, `-watch-config` and `-app` whenever it finds
+  `config\quartermaster-generate.yaml` beside the executable, resolving every path against the exe
+  directory and `chdir`-ing there, so the flag set lives in one place and a shortcut cannot get it
+  wrong. Only the autostart shortcut differs: it passes `-tray`, which suppresses the `-app`
+  default, because a window appearing unasked at every login is not what ticking "start with
+  Windows" means. `packaging/windows/start.cmd` is now a back-compat shim that forwards `%*` to the
+  exe, kept only for shortcuts left behind by older installs (it still accepts the old bare word
+  `background` as a synonym for `-tray`).
+- **The installed binary is `Quartermaster.exe`, the release asset is not.** CI still publishes
+  `quartermaster-windows-amd64.exe` because `internal/update.assetName()` matches that name exactly;
+  `build-release.ps1` stages a second copy under the capitalised name for the installer only, and
+  `installer.iss` excludes the asset-named one from `{app}` plus deletes it on upgrade. `launch()`
+  in `place_windows.go` tries both names, in that order, so a dev-tree `placeCopy` (which only has
+  the build artifact) still starts. `filepath.Glob` is case-sensitive, hence the explicit
+  `Quartermaster.exe` entry in `devCopyGlobs`.
 - **A second double-click raises the first window instead of failing.** `-app` probes
   `GET /api/app/show` on loopback before it touches the config, and exits if a running instance
   answers -- see `singleinstance.go`. Doing this later would be too late: the boot path in between

@@ -117,7 +117,11 @@ package-windows: windows
 	# on Windows a file-watcher often holds a handle and it fails "resource busy".)
 	mkdir -p $(PKG_WIN_DIR)/config
 	rm -rf $(PKG_WIN_DIR)/packaging $(PKG_WIN_DIR)/templates
-	cp $(BUILD_DIR)/$(APP_NAME)-windows-amd64.exe $(PKG_WIN_DIR)/
+	# Installed as Quartermaster.exe; the old lowercase build-artifact name is
+	# removed so a re-packaged bundle does not keep two copies, one of which
+	# would never be updated again.
+	cp $(BUILD_DIR)/$(APP_NAME)-windows-amd64.exe $(PKG_WIN_DIR)/Quartermaster.exe
+	rm -f $(PKG_WIN_DIR)/$(APP_NAME)-windows-amd64.exe
 	cp -r templates $(PKG_WIN_DIR)/templates
 	cp quartermaster-generate.example.yaml $(PKG_WIN_DIR)/config/quartermaster-generate.example.yaml
 	# Seed the runtime generate file from the example only when none exists yet,

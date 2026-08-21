@@ -50,7 +50,14 @@ type Choices struct {
 	ModelsRoot string   `json:"modelsRoot"` // may be empty: "I'll pick later"
 	Variant    string   `json:"variant"`    // vulkan | cuda | rocm | cpu
 	Components []string `json:"components"` // backend component ids to install
-	Autostart  bool     `json:"autostart"`
+
+	// Windows shortcut/startup options. Each maps to an Inno task name; on
+	// other platforms placeCopy ignores them. They are plain bools with no
+	// defaults on purpose -- the wizard UI owns the defaults (Start Menu on,
+	// the rest off), so a value arriving here is always one a user could see.
+	StartMenu   bool `json:"startMenu"`
+	DesktopIcon bool `json:"desktopIcon"`
+	Autostart   bool `json:"autostart"`
 }
 
 // Status is the whole of what the UI polls for. One struct, one endpoint: the
@@ -76,9 +83,10 @@ type Options struct {
 	// be idempotent: a user who backs up and re-runs must not get a broken tree.
 	//
 	// It takes the whole Choices rather than just the directory because the
-	// installer answers more than one question: Autostart maps to an Inno
-	// /TASKS= value, and passing it any other way would mean a second pass over
-	// the registry after the install had already finished.
+	// installer answers more than one question: StartMenu, DesktopIcon and
+	// Autostart map to Inno /TASKS= names, and passing them any other way would
+	// mean a second pass over the Start Menu and the registry after the install
+	// had already finished.
 	Place func(c Choices, log func(string)) error
 
 	// Launch starts the finished install. Called after the user clicks through

@@ -63,6 +63,8 @@ export type Choices = {
   modelsRoot: string;
   variant: string;
   components: string[];
+  startMenu: boolean;
+  desktopIcon: boolean;
   autostart: boolean;
 };
 

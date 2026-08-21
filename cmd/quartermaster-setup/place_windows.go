@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/quartermaster-labs/quartermaster/internal/setup"
@@ -67,10 +68,19 @@ func placeInno(c setup.Choices, log func(string)) error {
 
 	// /TASKS is passed unconditionally, including empty. Inno's default when
 	// the switch is absent is "whatever the script marks checked", so omitting
-	// it would silently opt a user in to a task they left unticked.
-	tasks := ""
+	// it would silently opt a user in to a task they left unticked. Every task
+	// the script declares is decided here, and the ones left out are actively
+	// removed by [InstallDelete] -- so re-running the wizard can take a
+	// shortcut away again, not just add one.
+	var tasks []string
+	if c.StartMenu {
+		tasks = append(tasks, "startmenu")
+	}
+	if c.DesktopIcon {
+		tasks = append(tasks, "desktopicon")
+	}
 	if c.Autostart {
-		tasks = "autostart"
+		tasks = append(tasks, "autostart")
 	}
 
 	logPath := filepath.Join(os.TempDir(), "quartermaster-install.log")
@@ -78,7 +88,7 @@ func placeInno(c setup.Choices, log func(string)) error {
 	cmd := exec.Command(path,
 		"/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
 		"/DIR="+c.Dir,
-		"/TASKS="+tasks,
+		"/TASKS="+strings.Join(tasks, ","),
 		"/LOG="+logPath,
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
@@ -92,19 +102,23 @@ func placeInno(c setup.Choices, log func(string)) error {
 
 // launch starts the finished install.
 //
-// start.cmd is preferred over the exe: it carries the flag set the app is meant
-// to run with (both listeners, the config paths, -watch-config, -tray), and
-// duplicating that argv here would mean two places to update whenever it
-// changes.
+// Straight to the exe, with no arguments: it reads config\quartermaster-generate.yaml
+// next to itself and fills in its own flag set (both listeners, the config
+// paths, -watch-config, -app). The old start.cmd hop existed only because that
+// argv used to live in the script; duplicating it here would have meant two
+// places to update.
 func launch(dir string) error {
-	if script := filepath.Join(dir, "start.cmd"); exists(script) {
-		cmd := exec.Command("cmd", "/c", "start.cmd")
-		cmd.Dir = dir
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-		return cmd.Start()
+	// Quartermaster.exe is what the installer lays down; the lowercase
+	// build-artifact name is what a dev-tree placeCopy brings along, and what an
+	// install from before the rename still has.
+	var exe string
+	for _, name := range []string{"Quartermaster.exe", "quartermaster-windows-amd64.exe"} {
+		if p := filepath.Join(dir, name); exists(p) {
+			exe = p
+			break
+		}
 	}
-	exe := filepath.Join(dir, "quartermaster-windows-amd64.exe")
-	if !exists(exe) {
+	if exe == "" {
 		return fmt.Errorf("nothing to launch in %s", dir)
 	}
 	cmd := exec.Command(exe)

@@ -21,7 +21,7 @@
   <name>quartermaster</name>
   <description>quartermaster fork — model proxy with startup config autogen.</description>
 
-  <executable>%BASE%\quartermaster-windows-amd64.exe</executable>
+  <executable>%BASE%\Quartermaster.exe</executable>
   <arguments>-config "%BASE%\config.yaml" -generate "%BASE%\quartermaster-generate.yaml" -listen 0.0.0.0:1250 -watch-config</arguments>
   <workingdirectory>%BASE%</workingdirectory>
 

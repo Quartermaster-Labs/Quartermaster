@@ -14,6 +14,9 @@ import (
 // cross-compiled artifact, and copying that wholesale would put a linux binary
 // and a 120MB update payload into the install directory.
 var devCopyGlobs = []string{
+	// filepath.Glob is case-sensitive even on Windows, so the installed name
+	// needs its own entry -- "quartermaster-*.exe" will not match it.
+	"Quartermaster.exe",
 	"quartermaster-*.exe",
 	"quartermaster-linux-*",
 	"quartermaster-darwin-*",
