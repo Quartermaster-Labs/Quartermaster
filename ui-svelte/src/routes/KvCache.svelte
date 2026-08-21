@@ -47,15 +47,36 @@
   const opStyle: Record<string, { cls: string; label: string }> = {
     confirm: { cls: "text-green-500", label: "reuse" },
     "confirm-miss": { cls: "text-red-500", label: "no reuse" },
-    "restore-hit": { cls: "text-green-400", label: "hit" },
+    "restore-hit": { cls: "text-sky-500", label: "load" },
     "restore-seed": { cls: "text-sky-500", label: "seed" },
     "seed-pending": { cls: "text-sky-400", label: "seed?" },
-    "preamble-hit": { cls: "text-green-400", label: "pre hit" },
+    "preamble-hit": { cls: "text-sky-500", label: "pre load" },
     "preamble-mint": { cls: "text-purple-400", label: "pre mint" },
     save: { cls: "text-amber-500", label: "save" },
     miss: { cls: "text-txtsecondary", label: "miss" },
     error: { cls: "text-red-500", label: "error" },
   };
+
+  // Reading a KV file off disk is NOT a cache hit - the upstream can load it and
+  // still reprefill the whole prompt (it does, on some architectures). So an op
+  // that loads KV is painted by its OUTCOME, and stays amber until the next
+  // request reports how many tokens it actually reused. Only `reused` goes green.
+  const outcomeStyle: Record<string, { cls: string; note: string }> = {
+    pending: { cls: "text-amber-500", note: "awaiting reuse" },
+    reused: { cls: "text-green-500", note: "reused" },
+    "no-reuse": { cls: "text-red-500", note: "reprefilled anyway" },
+    unconfirmed: { cls: "text-txtsecondary", note: "unconfirmed - model stopped first" },
+  };
+
+  function rowStyle(e: { op: string; outcome?: string }): {
+    cls: string;
+    label: string;
+    note: string;
+  } {
+    const base = opStyle[e.op] ?? { cls: "text-txtsecondary", label: e.op };
+    const out = e.outcome ? outcomeStyle[e.outcome] : undefined;
+    return out ? { cls: out.cls, label: base.label, note: out.note } : { ...base, note: "" };
+  }
 
   let kvTab = $state<"sessions" | "preamble">("sessions");
 
@@ -68,6 +89,9 @@
   const confirmPct = $derived(
     confirmTotal > 0 ? Math.round((100 * (counters?.confirmedReuses ?? 0)) / confirmTotal) : 0
   );
+  // Loads still waiting on their request. A big prefill can hold one of these open
+  // for minutes, which is exactly the window in which a "hit" used to look settled.
+  const pending = $derived((stats?.events ?? []).filter((e) => e.outcome === "pending").length);
   function fmtNum(n?: number): string {
     return (n ?? 0).toLocaleString();
   }
@@ -97,15 +121,19 @@
         <div class="text-2xl font-mono">{confirmPct}%</div>
         <div class="text-xs text-txtsecondary mt-0.5">
           {counters?.confirmedReuses ?? 0} reused / {counters?.confirmedMisses ?? 0} no-reuse
+          {#if pending}<span class="text-amber-500">· {pending} awaiting</span>{/if}
         </div>
       </div>
       <div class="card p-3">
-        <div class="text-xs text-txtsecondary">Restores · hits / seeds</div>
+        <div class="text-xs text-txtsecondary">KV files loaded · exact / seed</div>
         <div class="text-2xl font-mono">
           {counters?.restoreHits ?? 0}
           <span class="text-sky-500">/ {counters?.restoreSeeds ?? 0}</span>
         </div>
         <div class="text-xs text-txtsecondary mt-0.5">
+          reads attempted, not reuse - see restore success
+        </div>
+        <div class="text-xs text-txtsecondary">
           {counters?.saves ?? 0} saves · {counters?.misses ?? 0} miss · {counters?.errors ?? 0} err
         </div>
       </div>
@@ -260,21 +288,27 @@
 
       <!-- Recent events -->
       <div class="card p-3 min-h-0">
-        <div class="text-sm font-semibold mb-2">Recent activity</div>
+        <div class="text-sm font-semibold mb-2">
+          Recent activity
+          <span class="text-txtsecondary font-normal text-xs">
+            a load turns green only once a request confirms it reused the KV
+          </span>
+        </div>
         {#if !stats.events?.length}
           <div class="text-xs text-txtsecondary">No activity yet.</div>
         {:else}
           <div class="overflow-auto max-h-[28rem] font-mono text-xs pretty-scroll">
-            {#each stats.events as e (e.time + e.op + e.key)}
-              {@const s = opStyle[e.op] ?? { cls: "text-txtsecondary", label: e.op }}
+            {#each stats.events as e (e.seq ?? e.time + e.op + e.key)}
+              {@const s = rowStyle(e)}
               <div class="flex items-center gap-2 py-0.5 border-t border-border">
                 <span class="text-txtsecondary w-20 shrink-0">{fmtTime(e.time)}</span>
-                <span class="{s.cls} w-12 shrink-0">{s.label}</span>
+                <span class="{s.cls} w-16 shrink-0">{s.label}</span>
                 <span class="truncate">{e.model}</span>
                 {#if e.slot > 0}<span class="text-txtsecondary shrink-0">slot {e.slot}</span>{/if}
                 {#if e.key}<span class="text-txtsecondary">{e.key}</span>{/if}
                 {#if e.tokens}<span class="text-txtsecondary">· {e.tokens} tok</span>{/if}
                 {#if e.bytes}<span class="text-txtsecondary">· {fmtBytes(e.bytes)}</span>{/if}
+                {#if s.note}<span class="{s.cls} shrink-0">· {s.note}</span>{/if}
                 {#if e.detail}<span class="text-txtsecondary">· {e.detail}</span>{/if}
               </div>
             {/each}

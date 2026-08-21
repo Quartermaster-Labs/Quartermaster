@@ -1226,6 +1226,13 @@ export interface KvCacheEvent {
   detail?: string;
   bytes?: number;
   tokens?: number;
+  // Stable id of this event, used server-side to resolve `outcome` when the
+  // confirming request finally lands.
+  seq: number;
+  // Set only on ops that load KV and then wait to see whether it was reused:
+  // "pending" -> "reused" | "no-reuse" | "unconfirmed" (process died first).
+  // A loaded file is not a hit; only `reused` is.
+  outcome?: "pending" | "reused" | "no-reuse" | "unconfirmed";
 }
 
 export interface KvCacheFile {

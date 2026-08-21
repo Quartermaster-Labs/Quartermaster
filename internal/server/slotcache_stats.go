@@ -44,15 +44,29 @@ type kvEvent struct {
 	Detail string `json:"detail,omitempty"`
 	Bytes  int64  `json:"bytes,omitempty"`
 	Tokens int64  `json:"tokens,omitempty"`
+	// Seq identifies this event for the whole life of the ring, so a confirmation
+	// arriving later can resolve the event that caused it.
+	Seq uint64 `json:"seq"`
+	// Outcome is set only on the ops that await confirmation (restore/seed/preamble
+	// loads): "pending" until the next request reports its cached_tokens, then
+	// "reused" or "no-reuse", or "unconfirmed" if the model died first. Loading a
+	// file is NOT a cache hit — the reuse is. Until this existed the UI painted a
+	// restore green on the strength of the read alone, which reads as a hit even
+	// when the upstream went on to reprefill the whole prompt.
+	Outcome string `json:"outcome,omitempty"`
 }
 
-// record appends an event to the bounded ring and bumps the matching counter.
-// Safe to call while holding any other slotCache lock (uses a separate one).
-func (sc *slotCache) record(ev kvEvent) {
+// record appends an event to the bounded ring and bumps the matching counter,
+// returning the event's seq so a caller that expects a confirmation can pair the
+// two (see pushAwait). Safe to call while holding any other slotCache lock (uses
+// a separate one).
+func (sc *slotCache) record(ev kvEvent) uint64 {
 	if ev.Time.IsZero() {
 		ev.Time = time.Now()
 	}
 	sc.statsMu.Lock()
+	sc.seq++
+	ev.Seq = sc.seq
 	switch ev.Op {
 	case "save":
 		sc.counters.Saves++
@@ -83,14 +97,17 @@ func (sc *slotCache) record(ev kvEvent) {
 	sc.statsMu.Unlock()
 
 	sc.logEvent(ev)
+	return ev.Seq
 }
 
 // logEvent mirrors an event into the proxy log. Until this existed the cache was
 // silent unless it FAILED (the call sites Warn on error), so the log showed the
 // cost of a swap but never the thing that paid for it - "restored 19k tokens
 // instead of reprefilling" was visible only to whoever had the monitoring tab
-// open at that second. Only the three ops that move real work land at Info;
-// the per-request confirmations and bookkeeping stay at Debug.
+// open at that second. The ops that move real work land at Info, and so do the
+// confirmations that say whether that work paid off: a bare "restore-hit" in the
+// log is a file read, not a hit, and reading it as one is exactly the mistake
+// this pairing exists to prevent. Bookkeeping stays at Debug.
 func (sc *slotCache) logEvent(ev kvEvent) {
 	if sc.log == nil || ev.Op == "error" {
 		return // errors are already logged, with their cause, at the call site
@@ -109,7 +126,9 @@ func (sc *slotCache) logEvent(ev kvEvent) {
 		line += " [" + ev.Detail + "]"
 	}
 	switch ev.Op {
-	case "save", "restore-hit", "restore-seed":
+	case "restore-hit", "restore-seed":
+		sc.log.Info(line + " - awaiting reuse confirmation")
+	case "save", "confirm", "confirm-miss":
 		sc.log.Info(line)
 	default:
 		sc.log.Debug(line)
@@ -120,15 +139,70 @@ func (sc *slotCache) logEvent(ev kvEvent) {
 // restores but never receives a confirming request can't grow unbounded.
 const awaitConfirmMax = 16
 
-// pushAwait queues an op for the next request on model to confirm.
-func (sc *slotCache) pushAwait(model, op string) {
+// Outcome values for the ops that await confirmation (see kvEvent.Outcome).
+const (
+	outcomePending     = "pending"
+	outcomeReused      = "reused"
+	outcomeNoReuse     = "no-reuse"
+	outcomeUnconfirmed = "unconfirmed"
+)
+
+// awaitOp is one restore/seed/mint waiting for the next request on its model to
+// say whether the KV it loaded was actually reused. seq points back at the ring
+// event so the confirmation resolves the row the user is looking at.
+type awaitOp struct {
+	op  string
+	seq uint64
+}
+
+// pushAwait queues an op for the next request on model to confirm, and marks the
+// event that produced it pending so the UI shows a restore as unresolved rather
+// than as a win it hasn't earned yet. seq comes from the record() call that wrote
+// the event.
+func (sc *slotCache) pushAwait(model, op string, seq uint64) {
+	sc.setOutcome(seq, outcomePending)
 	sc.stateMu.Lock()
 	defer sc.stateMu.Unlock()
-	q := append(sc.awaitConfirm[model], op)
-	if len(q) > awaitConfirmMax {
-		q = q[len(q)-awaitConfirmMax:]
+	q := append(sc.awaitConfirm[model], awaitOp{op: op, seq: seq})
+	for len(q) > awaitConfirmMax {
+		sc.setOutcome(q[0].seq, outcomeUnconfirmed) // dropped: no request ever came
+		q = q[1:]
 	}
 	sc.awaitConfirm[model] = q
+}
+
+// dropAwait resolves everything still pending for a model as unconfirmed. Called
+// when its process is going away: the confirmation those ops were waiting for can
+// no longer arrive, and leaving them queued would hand the next process's first
+// request a confirmation belonging to the previous one.
+func (sc *slotCache) dropAwait(model string) {
+	sc.stateMu.Lock()
+	q := sc.awaitConfirm[model]
+	delete(sc.awaitConfirm, model)
+	sc.stateMu.Unlock()
+	for _, a := range q {
+		sc.setOutcome(a.seq, outcomeUnconfirmed)
+	}
+}
+
+// setOutcome resolves the ring event with this seq. A no-op once the event has
+// aged out of the ring — the outcome is a display detail, the counters are the
+// durable record.
+func (sc *slotCache) setOutcome(seq uint64, outcome string) {
+	if seq == 0 {
+		return
+	}
+	sc.statsMu.Lock()
+	defer sc.statsMu.Unlock()
+	for i := len(sc.events) - 1; i >= 0; i-- { // newest first: the match is near the end
+		if sc.events[i].Seq == seq {
+			sc.events[i].Outcome = outcome
+			return
+		}
+		if sc.events[i].Seq < seq {
+			return // ring is seq-ordered; nothing older can match
+		}
+	}
 }
 
 // confirmReuse is called by the metrics monitor after each successful request
@@ -146,7 +220,7 @@ func (sc *slotCache) confirmReuse(model string, prompt, cached int) {
 		sc.stateMu.Unlock()
 		return // not a post-restore request; warm-slot reuse isn't ours to claim
 	}
-	op := q[0] // FIFO: oldest pending op confirmed first
+	a := q[0] // FIFO: oldest pending op confirmed first
 	if len(q) == 1 {
 		delete(sc.awaitConfirm, model)
 	} else {
@@ -154,15 +228,17 @@ func (sc *slotCache) confirmReuse(model string, prompt, cached int) {
 	}
 	sc.stateMu.Unlock()
 	if cached > 0 {
+		sc.setOutcome(a.seq, outcomeReused)
 		sc.record(kvEvent{
 			Model:  model,
 			Op:     "confirm",
-			Detail: fmt.Sprintf("%s - %d of %d reused", strings.TrimPrefix(op, "restore-"), cached, cached+prompt),
+			Detail: fmt.Sprintf("%s - %d of %d reused", strings.TrimPrefix(a.op, "restore-"), cached, cached+prompt),
 			Tokens: int64(cached),
 		})
 		return
 	}
-	sc.record(kvEvent{Model: model, Op: "confirm-miss", Detail: op + " - 0 reused"})
+	sc.setOutcome(a.seq, outcomeNoReuse)
+	sc.record(kvEvent{Model: model, Op: "confirm-miss", Detail: a.op + " - 0 reused"})
 }
 
 // KVCacheStats is the /api/kvcache snapshot powering the Observe → KV Cache tab.

@@ -106,10 +106,12 @@ type slotCache struct {
 	// via cached_tokens. A queue (not a single slot) because one model can serve many
 	// agents at once (Qwen Code main + memory subagent share a model) — interleaved
 	// requests would otherwise overwrite each other's pending op and lose confirmations.
+	// Each entry carries the seq of the event that queued it, so the confirmation
+	// resolves that event's Outcome and not just a counter.
 	// ponytail: FIFO, so counts are right; under out-of-order completion the per-event
 	// op *label* can still mismatch the request that confirmed it — upgrade to per-
 	// request correlation only if labels (not totals) start mattering.
-	awaitConfirm map[string][]string
+	awaitConfirm map[string][]awaitOp
 
 	// slotMu holds one gate per slot (see lockSlot). Guarded by stateMu. A
 	// buffered channel rather than a sync.Mutex because the request path has to
@@ -125,6 +127,7 @@ type slotCache struct {
 	statsMu  sync.Mutex
 	counters kvCounters
 	events   []kvEvent // newest last, capped at kvEventRing
+	seq      uint64    // monotonic event id, so a late confirmation can find its event
 }
 
 // Tier-1 seed + monitoring tunables. ponytail: constants, not config knobs —
@@ -173,7 +176,7 @@ func newSlotCache(cfg config.SlotCacheConfig, running func() map[string]string, 
 		pending:         map[string]string{},
 		pendingSeed:     map[string]bool{},
 		pendingPreamble: map[string]string{},
-		awaitConfirm:    map[string][]string{},
+		awaitConfirm:    map[string][]awaitOp{},
 		slotMu:          map[string]chan struct{}{},
 	}
 	if !sc.enabled {
@@ -429,8 +432,8 @@ func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble st
 			sc.log.Warnf("slotcache: restore %s/%s: %v", model, key, err)
 			sc.record(kvEvent{Model: model, Slot: idx, Op: "error", Key: short(key), Detail: "restore"})
 		} else {
-			sc.record(kvEvent{Model: model, Slot: idx, Op: "restore-hit", Key: short(key)})
-			sc.pushAwait(model, "restore-hit") // expect a forwarded request to confirm reuse
+			seq := sc.record(kvEvent{Model: model, Slot: idx, Op: "restore-hit", Key: short(key)})
+			sc.pushAwait(model, "restore-hit", seq) // expect a forwarded request to confirm reuse
 		}
 	} else if prev.occupied && prev.preamble == preamble && preamble != "" {
 		// This slot already holds this exact preamble live (a different conversation
@@ -442,8 +445,8 @@ func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble st
 	} else if sc.seedSkip(model) {
 		// Recurrent arch: a partial-prefix seed would need a rewind it cannot do.
 		sc.record(kvEvent{Model: model, Slot: idx, Op: "recurrent-skip-seed"})
-	} else if sc.ensurePreambleSeed(ctx, base, model, idx, preamble) {
-		sc.pushAwait(model, "preamble")
+	} else if seq, ok := sc.ensurePreambleSeed(ctx, base, model, idx, preamble); ok {
+		sc.pushAwait(model, "preamble", seq)
 	}
 	return idx, release
 }
@@ -543,9 +546,9 @@ func (sc *slotCache) restoreSlotOnLoad(model string, idx int) {
 			sc.record(kvEvent{Model: model, Slot: idx, Op: "error", Key: short(key), Detail: "load-restore"})
 			return
 		}
-		sc.record(kvEvent{Model: model, Slot: idx, Op: "restore-hit", Key: short(key)})
+		seq := sc.record(kvEvent{Model: model, Slot: idx, Op: "restore-hit", Key: short(key)})
 		sc.setOccupant(model, idx, &occInfo{key: key}) // resident, not yet dirty (nothing ran)
-		sc.pushAwait(model, "restore-hit")
+		sc.pushAwait(model, "restore-hit", seq)
 		return
 	}
 
@@ -559,8 +562,8 @@ func (sc *slotCache) restoreSlotOnLoad(model string, idx int) {
 		sc.record(kvEvent{Model: model, Slot: idx, Op: "recurrent-skip-seed"})
 		return
 	}
-	if sc.ensurePreambleSeed(ctx, base, model, idx, preamble) {
-		sc.pushAwait(model, "preamble")
+	if seq, ok := sc.ensurePreambleSeed(ctx, base, model, idx, preamble); ok {
+		sc.pushAwait(model, "preamble", seq)
 		return
 	}
 	// Fallback: a similar prior session's prefix (handles preambles too short or
@@ -571,8 +574,8 @@ func (sc *slotCache) restoreSlotOnLoad(model string, idx int) {
 			sc.record(kvEvent{Model: model, Slot: idx, Op: "error", Key: short(seedKey), Detail: "load-seed"})
 			return
 		}
-		sc.record(kvEvent{Model: model, Slot: idx, Op: "restore-seed", Key: short(seedKey)})
-		sc.pushAwait(model, "restore-seed")
+		seq := sc.record(kvEvent{Model: model, Slot: idx, Op: "restore-seed", Key: short(seedKey)})
+		sc.pushAwait(model, "restore-seed", seq)
 		return
 	}
 	sc.record(kvEvent{Model: model, Slot: idx, Op: "miss"})
@@ -595,7 +598,9 @@ func (sc *slotCache) restoreSlotOnLoad(model string, idx int) {
 // assigned, before the triggering request is served. The prefill is pinned to
 // that slot (id_slot), so on a multi-slot server it never disturbs the other
 // conversations mid-flight.
-func (sc *slotCache) ensurePreambleSeed(ctx context.Context, base, model string, idx int, preamble string) bool {
+// Returns the seq of the event it recorded (for pushAwait) and whether the slot
+// now holds this preamble's KV.
+func (sc *slotCache) ensurePreambleSeed(ctx context.Context, base, model string, idx int, preamble string) (uint64, bool) {
 	sysRaw, _ := splitPreamble(preamble)
 	// ponytail: mint only when there's a real system prompt and the preamble is big
 	// enough to be worth a synth prefill + disk file. A tools-only preamble needs a
@@ -608,34 +613,34 @@ func (sc *slotCache) ensurePreambleSeed(ctx context.Context, base, model string,
 	// as a confirm-miss in the KV Cache tab, no correctness harm. Upgrade path: mint via
 	// the same endpoint the request used if that mismatch shows up in practice.
 	if sysRaw == "" || len(preamble) < seedMinPrefixBytes {
-		return false
+		return 0, false
 	}
 	hash := preambleHash(preamble)
 	pkey := preambleKey(hash)
 	if sc.fileExists(model, pkey) {
 		if err := sc.restore(ctx, base, model, idx, pkey); err != nil {
 			sc.record(kvEvent{Model: model, Slot: idx, Op: "error", Key: short(hash), Detail: "preamble-restore"})
-			return false
+			return 0, false
 		}
-		sc.record(kvEvent{Model: model, Slot: idx, Op: "preamble-hit", Key: short(hash)})
+		seq := sc.record(kvEvent{Model: model, Slot: idx, Op: "preamble-hit", Key: short(hash)})
 		// Touch mtime so prunePreambleFiles is LRU-by-use, not LRU-by-mint: a preamble
 		// minted once but restored often (pi's stable prompt) must not look "oldest" and
 		// get evicted when another environment mints on the same model.
 		now := time.Now()
 		_ = os.Chtimes(filepath.Join(sc.dir, fileName(model, pkey)), now, now)
-		return true
+		return seq, true
 	}
 	// Mint: a synthetic system+tools-only prefill leaves the preamble KV in the
 	// slot, which we then save as this agent's preamble cache.
 	if err := sc.synthPrefill(ctx, base, model, idx, preamble); err != nil {
 		sc.record(kvEvent{Model: model, Slot: idx, Op: "error", Key: short(hash), Detail: "preamble-mint"})
-		return false
+		return 0, false
 	}
 	// 0: a minted preamble has no originating request body, so no .len is written
 	// (staleRestore has nothing to compare and stays out of the seed path anyway).
 	if err := sc.save(ctx, base, model, idx, pkey, preamble, 0); err != nil {
 		sc.record(kvEvent{Model: model, Slot: idx, Op: "error", Key: short(hash), Detail: "preamble-save"})
-		return false
+		return 0, false
 	}
 	sc.dropStalePreambles(model, pkey, preamble) // delete this agent's prior date-bumped generations
 	sc.prunePreambleFiles(model)
@@ -643,8 +648,8 @@ func (sc *slotCache) ensurePreambleSeed(ctx context.Context, base, model string,
 	if fi, err := os.Stat(filepath.Join(sc.dir, fileName(model, pkey))); err == nil {
 		bytes = fi.Size()
 	}
-	sc.record(kvEvent{Model: model, Slot: idx, Op: "preamble-mint", Key: short(hash), Bytes: bytes})
-	return true
+	seq := sc.record(kvEvent{Model: model, Slot: idx, Op: "preamble-mint", Key: short(hash), Bytes: bytes})
+	return seq, true
 }
 
 // synthPrefill issues a system+tools-only chat request (max_tokens 1) so the
@@ -713,6 +718,11 @@ func (sc *slotCache) saveOnEvict(model string) {
 	if sc.participates == nil || !sc.participates(model) {
 		return
 	}
+	// This process is going away, so any restore still waiting on it will never be
+	// confirmed. Resolve those now: left queued, the next process's first request
+	// would confirm the DEAD process's restore, and the event that actually earned
+	// the reuse would sit "pending" forever.
+	defer sc.dropAwait(model)
 	base, running := sc.running()[model]
 	if !running {
 		return

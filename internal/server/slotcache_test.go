@@ -177,7 +177,7 @@ func newEvictTestCache(dir, base string) *slotCache {
 		pending:         map[string]string{},
 		pendingSeed:     map[string]bool{},
 		pendingPreamble: map[string]string{},
-		awaitConfirm:    map[string][]string{},
+		awaitConfirm:    map[string][]awaitOp{},
 	}
 	return sc
 }
@@ -385,31 +385,79 @@ func TestSlotCache_ConfirmReuse(t *testing.T) {
 	}
 
 	// Restore happened and the next request reused KV.
-	sc.pushAwait("m", "restore-hit")
+	hit := sc.await("m", "restore-hit")
+	if got := sc.outcomeOf(hit); got != outcomePending {
+		t.Fatalf("a restore is pending until a request confirms it, got %q", got)
+	}
 	sc.confirmReuse("m", 5000, 2680)
 	if sc.counters.ConfirmedReuses != 1 || sc.counters.CachedTokensSeen != 2680 {
 		t.Fatalf("confirmed reuse not recorded: %+v", sc.counters)
+	}
+	if got := sc.outcomeOf(hit); got != outcomeReused {
+		t.Errorf("confirmed restore must resolve to %q, got %q", outcomeReused, got)
 	}
 	if _, ok := sc.awaitConfirm["m"]; ok {
 		t.Error("awaitConfirm must clear after a confirmation")
 	}
 
-	// Restore happened but upstream cached nothing => confirm-miss.
-	sc.pushAwait("m", "restore-seed")
+	// Restore happened but upstream cached nothing => confirm-miss. This is the
+	// case that must never read as a hit: the file loaded, the prefill ran anyway.
+	seed := sc.await("m", "restore-seed")
 	sc.confirmReuse("m", 5000, 0)
 	if sc.counters.ConfirmedMisses != 1 || sc.counters.ConfirmedReuses != 1 {
 		t.Fatalf("confirm-miss not recorded: %+v", sc.counters)
 	}
+	if got := sc.outcomeOf(seed); got != outcomeNoReuse {
+		t.Errorf("unreused restore must resolve to %q, got %q", outcomeNoReuse, got)
+	}
 
 	// Two agents on one model interleave: both ops queue, both confirm (FIFO),
 	// neither overwrites the other.
-	sc.pushAwait("m", "preamble")
-	sc.pushAwait("m", "restore-hit")
+	sc.await("m", "preamble")
+	sc.await("m", "restore-hit")
 	sc.confirmReuse("m", 5000, 1000)
 	sc.confirmReuse("m", 5000, 2000)
 	if sc.counters.ConfirmedReuses != 3 || sc.counters.CachedTokensSeen != 2680+1000+2000 {
 		t.Fatalf("FIFO confirms not both counted: %+v", sc.counters)
 	}
+}
+
+// A restore whose process dies before any request lands is unconfirmed, not a
+// hit — and it must not leave a queued op for the NEXT process's first request
+// to accidentally confirm.
+func TestSlotCache_EvictDropsPendingConfirms(t *testing.T) {
+	sc := newEvictTestCache(t.TempDir(), "")
+	sc.running = func() map[string]string { return map[string]string{} } // process already gone
+
+	orphan := sc.await("m", "restore-hit")
+	sc.saveOnEvict("m")
+	if got := sc.outcomeOf(orphan); got != outcomeUnconfirmed {
+		t.Errorf("restore on a dying process must resolve to %q, got %q", outcomeUnconfirmed, got)
+	}
+	sc.confirmReuse("m", 5000, 4000)
+	if sc.counters.ConfirmedReuses != 0 {
+		t.Errorf("a new process's request confirmed the dead process's restore: %+v", sc.counters)
+	}
+}
+
+// await records the event a real restore would and queues it for confirmation,
+// returning its seq — the pairing the production call sites make.
+func (sc *slotCache) await(model, op string) uint64 {
+	seq := sc.record(kvEvent{Model: model, Op: op})
+	sc.pushAwait(model, op, seq)
+	return seq
+}
+
+// outcomeOf reads back the resolved outcome of one ring event.
+func (sc *slotCache) outcomeOf(seq uint64) string {
+	sc.statsMu.Lock()
+	defer sc.statsMu.Unlock()
+	for _, ev := range sc.events {
+		if ev.Seq == seq {
+			return ev.Outcome
+		}
+	}
+	return ""
 }
 
 // prunePreambleFiles is LRU-by-use: a touched (recently restored) preamble survives

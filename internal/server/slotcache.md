@@ -12,7 +12,7 @@ preamble, returns.
 | `slotcache_anchor.go` | How a request becomes a cache key: `sessionAnchor` (conversation id + stable system+tools preamble), `normalizeTimestamps`, `preambleHash`/`preambleKey`. |
 | `slotcache_disk.go` | Snapshot-directory layout and the pruning passes: `fileName`/`splitFileName`, `enforceCaps` (LRU by mtime), `prunePreambleFiles`, `dropStalePreambles`, `bestSeed`. Guarded by `diskMu`. |
 | `slotcache_slots.go` | Multi-slot mechanics: `sk`/`modelOf`/`slotIndexOf` (bookkeeping keys), `slotCount` (reads `-np/--parallel` off the configured cmd), `slotStates` (one `GET /slots` scrape), `acquire` (conversation → slot assignment) and `pinSlot` (`id_slot` body injection). |
-| `slotcache_stats.go` | Observability: `kvCounters`, the `kvEvent` ring, the pending-confirm queue (`pushAwait`/`confirmReuse`) pairing a restore with llama-server's reported reuse, and the `stats()` snapshot. Own `statsMu`. |
+| `slotcache_stats.go` | Observability: `kvCounters`, the `kvEvent` ring (each event carries a `Seq` and, for loads, an `Outcome`), the pending-confirm queue (`pushAwait`/`confirmReuse`/`dropAwait`/`setOutcome`) pairing a restore with llama-server's reported reuse, and the `stats()` snapshot. Own `statsMu`. |
 | `kvcacheapi.go` | `GET /api/kvcache` — the monitoring snapshot (counters, recent events, on-disk files) for the Observe → KV Cache tab. |
 
 ## When it's active
@@ -69,6 +69,18 @@ After any restore, `awaitConfirm[model]` is set; the **next** request's upstream
 (`confirmReuse`, from the metrics monitor) is the proof the KV was actually reused (`confirm` /
 `confirm-miss`), not merely loaded.
 
+**A load is not a hit.** Every op that reads KV off disk carries an `Outcome` on its ring event:
+`pending` the moment it is queued for confirmation, then `reused` / `no-reuse` when the request
+lands, or `unconfirmed` if the process died first (`dropAwait`, from the pre-stop hook — otherwise
+the next process's first request would confirm the dead one's restore). The queue entries carry the
+event `Seq`, so the confirmation resolves *the row the user is looking at*, not just a counter. The
+KV Cache tab paints those rows by outcome — amber while pending, green only on `reused` — and the
+proxy log spells it out (`restore-hit ... - awaiting reuse confirmation`, with `confirm` /
+`confirm-miss` promoted to INFO so the log carries the whole story). This exists because upstream
+can load a 3.5 GB state whose token list matches the request exactly (llama-server logging
+`f_keep = 1.000`) and still reprefill all 97k tokens; a green "hit" recorded at read time claimed a
+win that never happened, for the three minutes it took the prefill to finish.
+
 ## Pruning (three mechanisms)
 
 - **`enforceCaps`** — LRU by mtime within `maxDiskGB` / `maxSessions`. Preamble caches are
@@ -83,9 +95,12 @@ After any restore, `awaitConfirm[model]` is set; the **next** request's upstream
 ## Logging
 
 Every `record()` event is mirrored into the proxy log by `logEvent` (`slotcache_stats.go`):
-`save` / `restore-hit` / `restore-seed` at INFO, everything else (misses, confirms, preamble
-bookkeeping) at DEBUG. `error` events are skipped there — the call sites already Warn with the
-cause, so logging them twice would just duplicate.
+`save` / `restore-hit` / `restore-seed` and the `confirm` / `confirm-miss` that settle them at INFO,
+everything else (misses, preamble bookkeeping) at DEBUG. A restore line is explicitly marked
+`- awaiting reuse confirmation`: on its own it reports a file read, and the confirm line a few
+seconds (or minutes) later is the one that says whether it was worth anything. `error` events are
+skipped there — the call sites already Warn with the cause, so logging them twice would just
+duplicate.
 
 ## Gotchas
 
