@@ -119,7 +119,14 @@ const hashCacheSuffix = ".modelhash"
 //	     without validating it (no raise) have their rungs read from the
 //	     assignments. Every Qwen 3.8 running a drop-in template advertised no
 //	     ladder at all, so the playground offered a bare thinking on/off.
-const genVersion = "v49"
+//	v50: NO chat template is substituted automatically any more, and no model
+//	     family gets special treatment. The bundled Qwen 3.5/3.6 drop-in is gone
+//	     from the emit path: chat templates are the user's to manage, and the
+//	     substitute silently dropped whatever the baked template supported that
+//	     it did not. --chat-template-file is emitted only when the user sets a
+//	     chatTemplateFile override. Affected models now advertise their own
+//	     baked effort ladder rather than none.
+const genVersion = "v50"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

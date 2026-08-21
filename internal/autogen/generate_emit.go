@@ -405,15 +405,11 @@ func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, pro
 // 3.8 templates in circulation both support the ladder while only one of them
 // declares it in a guard. An unreadable file advertises nothing, as before.
 //
-// The built-in Qwen fix is the one override that is known statically: it has no
-// reasoning_effort logic at all, so it stays a hard nil rather than a file read
-// of a path that is only resolvable from the server's cwd.
+// With no override set the model runs its own baked template, so whatever the
+// gguf declared is what it accepts.
 func effortLevels(meta Metadata, ov *Override) []string {
 	if ov != nil && strings.TrimSpace(ov.ChatTemplateFile) != "" {
 		return chatTemplateFileEffortLevels(strings.TrimSpace(ov.ChatTemplateFile))
-	}
-	if needsQwenFixedChatTemplate(meta) {
-		return nil
 	}
 	return meta.ChatTemplateEffortLevels
 }

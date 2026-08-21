@@ -103,8 +103,9 @@ func TestEffortLevelsFromOverrideTemplate(t *testing.T) {
 		{"override template with a ladder", baked, &Override{ChatTemplateFile: tolerant}, []string{"medium", "low", "xhigh"}},
 		{"override template without one", baked, &Override{ChatTemplateFile: plain}, nil},
 		{"unreadable override advertises nothing", baked, &Override{ChatTemplateFile: filepath.Join(dir, "gone.jinja")}, nil},
-		// The built-in Qwen fix has no reasoning_effort logic at all.
-		{"built-in fix", Metadata{Architecture: "qwen35", ChatTemplateEffortLevels: []string{"xhigh"}}, nil, nil},
+		// No override => the model runs its own template, ladder and all, even
+		// for the archs whose template re-renders history.
+		{"history-mutating template keeps its ladder", Metadata{Architecture: "qwen35", ChatTemplateEffortLevels: []string{"xhigh"}}, nil, []string{"xhigh"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -115,37 +116,10 @@ func TestEffortLevelsFromOverrideTemplate(t *testing.T) {
 	}
 }
 
-// The qwen35/qwen35moe archs cover 3.5, 3.6 and 3.8 alike, so the baked
-// template's own behaviour — not the arch — decides whether the drop-in fix is
-// applied. An unknown template keeps the override (prior behaviour).
-func TestNeedsQwenFixedChatTemplate(t *testing.T) {
-	cases := []struct {
-		name string
-		meta Metadata
-		want bool
-	}{
-		{"qwen36 dense", Metadata{Architecture: "qwen35"}, true},
-		{"qwen36 moe", Metadata{Architecture: "qwen35moe"}, true},
-		{"qwen35 arch, unknown template", Metadata{Architecture: "qwen35"}, true},
-		{"qwen38 dense", Metadata{Architecture: "qwen35", ChatTemplatePreservesThinking: true}, false},
-		{"qwen38 moe", Metadata{Architecture: "qwen35moe", ChatTemplatePreservesThinking: true}, false},
-		{"arch case-insensitive", Metadata{Architecture: "Qwen35MoE"}, true},
-		{"other arch", Metadata{Architecture: "qwen3moe"}, false},
-		{"other arch, preserving template", Metadata{Architecture: "llama", ChatTemplatePreservesThinking: true}, false},
-		{"no arch", Metadata{}, false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := needsQwenFixedChatTemplate(c.meta); got != c.want {
-				t.Errorf("needsQwenFixedChatTemplate(%+v) = %v, want %v", c.meta, got, c.want)
-			}
-		})
-	}
-}
-
-// End to end through the argv builder: the override flag appears for 3.6 and is
-// absent for 3.8, and a user-supplied template still wins over both.
-func TestBuildCmdLines_QwenChatTemplateOverride(t *testing.T) {
+// End to end through the argv builder: --chat-template-file appears ONLY when
+// the user set one. Chat templates are user-managed; no model family gets a
+// substitute picked for it, however badly its baked template behaves.
+func TestBuildCmdLines_ChatTemplateOnlyWhenUserSet(t *testing.T) {
 	build := func(meta Metadata, ov *Override) string {
 		s := Settings{}
 		s.applyDefaults()
@@ -153,16 +127,15 @@ func TestBuildCmdLines_QwenChatTemplateOverride(t *testing.T) {
 		return strings.Join(buildCmdLines(s, meta, GgufRow{FullPath: "/m.gguf"}, prof, 8192, 99, 0, "q8_0", "q8_0", false, ov), " ")
 	}
 
-	qwen36 := Metadata{Architecture: "qwen35moe"}
-	qwen38 := Metadata{Architecture: "qwen35moe", ChatTemplatePreservesThinking: true, ChatTemplateEffortLevels: []string{"xhigh", "medium", "low"}}
+	mutating := Metadata{Architecture: "qwen35moe"}
+	preserving := Metadata{Architecture: "qwen35moe", ChatTemplatePreservesThinking: true, ChatTemplateEffortLevels: []string{"xhigh", "medium", "low"}}
 
-	if got := build(qwen36, nil); !strings.Contains(got, "--chat-template-file "+qwenFixedChatTemplateFile) {
-		t.Errorf("qwen3.6 should get the fixed template, got:\n%s", got)
+	for _, meta := range []Metadata{mutating, preserving} {
+		if got := build(meta, nil); strings.Contains(got, "--chat-template-file") {
+			t.Errorf("no override set, so no template flag; got:%s%s", "\n", got)
+		}
 	}
-	if got := build(qwen38, nil); strings.Contains(got, "--chat-template-file") {
-		t.Errorf("qwen3.8 should keep its baked template, got:\n%s", got)
-	}
-	if got := build(qwen38, &Override{ChatTemplateFile: "C:/my/tmpl.jinja"}); !strings.Contains(got, `--chat-template-file "C:/my/tmpl.jinja"`) {
-		t.Errorf("user template must win, got:\n%s", got)
+	if got := build(mutating, &Override{ChatTemplateFile: "C:/my/tmpl.jinja"}); !strings.Contains(got, `--chat-template-file "C:/my/tmpl.jinja"`) {
+		t.Errorf("user template must be emitted, got:%s%s", "\n", got)
 	}
 }

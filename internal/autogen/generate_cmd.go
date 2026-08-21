@@ -32,14 +32,6 @@ func cmdPath(p string) string {
 	return `"` + strings.ReplaceAll(p, `"`, "") + `"` // a `"` can't appear in a real path
 }
 
-// qwenFixedChatTemplateFile is the server-cwd-relative path to froggeric's
-// community chat-template fix for Qwen 3.5/3.6 (Apache-2.0, inherited from
-// Qwen; see templates/CREDITS.md). The official Qwen 3.5/3.6 templates
-// mutate already-rendered history on every turn, so llama.cpp's prefix
-// cache never matches and the whole prompt reprocesses each request; this
-// drop-in template renders history deterministically instead.
-const qwenFixedChatTemplateFile = "templates/qwen-fixed-chat-template.jinja"
-
 // corsOriginsFlag locks a spawned llama-server down to localhost origins.
 //
 // llama-server defaults to --cors-origins '*' WITH credentials, which means it
@@ -89,34 +81,6 @@ func loadMode(mmap, mlock, dio bool) string {
 	}
 }
 
-// needsQwenFixedChatTemplate reports whether a model should get
-// qwenFixedChatTemplateFile instead of its baked-in gguf template.
-//
-// Arch alone can't decide this. llama.cpp has not split out a separate arch per
-// Qwen minor: 3.5, 3.6 and 3.8 ggufs all report "qwen35" (dense) or "qwen35moe"
-// (MoE) — verified against real local ggufs, since none are exercised by
-// real_models_test.go's fixture set. But 3.8 fixed the history mutation
-// upstream: its template preserves prior-turn <think> by default
-//
-//	{%- if preserve_thinking is undefined or preserve_thinking is true ...
-//
-// where 3.5/3.6 opt in instead ("preserve_thinking is defined and ..."), so 3.8
-// already renders history deterministically and needs no override. Overriding it
-// anyway is not free: the drop-in template has no reasoning_effort support, so
-// 3.8's low/medium/xhigh effort levels are silently dropped.
-//
-// Hence: match the arch family, then defer to what the baked template actually
-// does. An unrecognised template (no preserve_thinking logic at all) keeps the
-// override — the pre-existing, safe behaviour.
-func needsQwenFixedChatTemplate(meta Metadata) bool {
-	switch strings.ToLower(meta.Architecture) {
-	case "qwen35", "qwen35moe":
-		return !meta.ChatTemplatePreservesThinking
-	default:
-		return false
-	}
-}
-
 // defaultSamplerFor returns the arch-derived server-side sampler baseline for a
 // model: the values an override leaves nil fall back to. nil/nil => emit nothing
 // and take llama-server's own defaults.
@@ -129,8 +93,9 @@ func needsQwenFixedChatTemplate(meta Metadata) bool {
 // value would be overwritten on arrival and would only ever act as a floor. Those
 // stay opt-in per model.
 //
-// The Qwen3 family (3.x dense and MoE alike, all reporting "qwen3*" — see
-// needsQwenFixedChatTemplate on why arch can't distinguish the minors) documents
+// The Qwen3 family (3.x dense and MoE alike, all reporting "qwen3*" — llama.cpp
+// has not split out a separate arch per Qwen minor, so 3.5, 3.6 and 3.8 are
+// indistinguishable here) documents
 // top_k 20 / min_p 0.0 across every model card, in both thinking and instruct
 // mode, so it is safe to apply without knowing which mode a request wants
 // (checked on the 3.6-27B and 3.8-27B cards; 3.6 additionally lists a coding
@@ -509,12 +474,12 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	if s.SlotCache.Enable && (ov == nil || ov.SlotCache == nil || *ov.SlotCache) {
 		lines = append(lines, fmt.Sprintf("--slot-save-path %q", slotKvPath(s.SlotCache)))
 	}
-	// A user-supplied template always wins over the arch-derived built-in fix.
-	// Quoted: user paths routinely contain spaces.
+	// Chat template: ONLY what the user asked for. A model's baked-in gguf
+	// template is otherwise left alone: chat templates are the user's to manage,
+	// and substituting one silently drops whatever the baked template supports
+	// that the replacement does not. Quoted: user paths routinely contain spaces.
 	if ov != nil && strings.TrimSpace(ov.ChatTemplateFile) != "" {
 		lines = append(lines, "--chat-template-file "+cmdPath(ov.ChatTemplateFile))
-	} else if needsQwenFixedChatTemplate(meta) {
-		lines = append(lines, fmt.Sprintf("--chat-template-file %s", qwenFixedChatTemplateFile))
 	}
 	// Advanced / power-user knobs. Each is gated on a set override field (zero/
 	// empty => omit), so a model with none of them set emits exactly as before.

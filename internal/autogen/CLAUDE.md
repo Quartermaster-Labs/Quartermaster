@@ -191,25 +191,25 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 
 ### Chat template & reasoning effort
 
-- **The Qwen chat-template override is gated on the TEMPLATE, not the arch.**
-  `qwenFixedChatTemplateFile` (froggeric's drop-in) exists because the official Qwen 3.5/3.6
-  templates strip prior-turn `<think>` from rendered history the moment a new user turn lands,
-  so llama.cpp's prefix cache never matches and the whole prompt reprocesses every request.
-  Arch can't select the affected models: 3.5, 3.6 **and 3.8** all report `qwen35`/`qwen35moe`.
-  3.8 fixed it upstream — its template reads `preserve_thinking is undefined or
-  preserve_thinking is true` where 3.6 reads `preserve_thinking is defined and ...`. So
-  `ReadGgufMetadata` decodes `tokenizer.chat_template` and `scanChatTemplate` derives
-  `ChatTemplatePreservesThinking` + `ChatTemplateEffortLevels` from it, and
-  `needsQwenFixedChatTemplate(meta)` requires the arch family AND a non-preserving template.
-  Only the flag and the level list are kept, not the ~10–100 KB source. An unrecognised template
-  (no `preserve_thinking` logic at all) keeps the override, the pre-existing safe default.
+- **No chat template is ever substituted automatically.** `--chat-template-file` is emitted
+  only when the model has a `chatTemplateFile` override. Chat templates are the user's to
+  download and wire up; shipping a curated replacement for one vendor's family played
+  favourites and silently dropped whatever the baked template supported that the replacement
+  did not (Qwen 3.8's reasoning-effort ladder, for one).
+- **`scanChatTemplate` still reads the baked template**, but only for the effort ladder.
+  `ReadGgufMetadata` decodes `tokenizer.chat_template` and derives `ChatTemplateEffortLevels`
+  (plus `ChatTemplatePreservesThinking`, which nothing consumes today) — the flag and the level
+  list are kept, never the ~10–100 KB source. Note that arch cannot distinguish Qwen minors:
+  3.5, 3.6 **and** 3.8 all report `qwen35`/`qwen35moe`, which is why nothing here branches on
+  arch to decide template behaviour.
 - **The ladder always describes the template that will actually run.** A
   `--chat-template-file` replaces the baked template wholesale, so the gguf's levels say nothing
   about the live renderer — `effortLevels` (`generate_emit.go`) therefore scans the **override
   file** in the gguf template's place (memoized per path; one file is shared by every ctx variant
-  of every model using it). The built-in Qwen fix is the one exception, a hard `nil`: it has no
-  `reasoning_effort` logic at all, and its path only resolves from the server's cwd. Only what
-  survives that gate becomes the emitted `capabilities.reasoningEffort`.
+  of every model using it). Whatever survives that scan becomes the emitted
+  `capabilities.reasoningEffort`. There is no longer a special case forcing `nil` for the old
+  bundled Qwen template, so a model with no override now advertises the ladder its own baked
+  template actually implements.
 - **The effort ladder is read out of the template, never hardcoded.** Two shapes, in order:
   - *Strict* — `effortLevelsRe` matches 3.8's `reasoning_effort not in ('xhigh', 'medium', 'low')`
     validation line, so the advertised set is exactly what the jinja accepts.
