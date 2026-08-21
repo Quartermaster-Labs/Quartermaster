@@ -56,8 +56,15 @@ linux-arm64: ui
 	GOOS=linux GOARCH=arm64 go build -ldflags="-X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE}" -o $(BUILD_DIR)/$(APP_NAME)-linux-arm64
 
 # Windows VERSIONINFO resource. resource_windows_amd64.syso is committed (Go links
-# any .syso in the main package automatically), so a normal build needs no tool.
-# Regenerate only after editing versioninfo.json. FileDescription is what the
+# any .syso in the main package automatically), and packaging/windows/build-release.ps1
+# calls `go build` directly -- so the committed file, not this rule, is what a
+# release actually ships. Commit it after it regenerates.
+#
+# These are FILE targets, not phony ones, so make rebuilds them exactly when
+# favicon.ico or versioninfo.json is newer and skips the tool otherwise. The
+# windows/setup-windows targets depend on them, because an icon change that only
+# touches favicon.ico used to leave the exe carrying the previous icon with no
+# warning. FileDescription is what the
 # Windows Startup apps list / Task Manager shows for the autostart entry, so it
 # must read "Quartermaster" — keep it in sync with the Run value name in
 # internal/server/autostart.go. NOTE: a 0.0.0.0 FixedFileInfo makes Windows drop
@@ -66,16 +73,23 @@ linux-arm64: ui
 # -icon embeds favicon.ico as the exe's application icon (resource ID 1). Without
 # it the exe has no icon at all, so Explorer, the taskbar, and the Startup apps
 # list all fall back to the blank generic-executable glyph.
-versioninfo:
-	go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -icon favicon.ico -o resource_windows_amd64.syso versioninfo.json
+QM_SYSO = resource_windows_amd64.syso
+SETUP_SYSO = cmd/quartermaster-setup/resource_windows_amd64.syso
+
+$(QM_SYSO): favicon.ico versioninfo.json
+	go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -icon favicon.ico -o $@ versioninfo.json
+
+versioninfo: $(QM_SYSO)
 
 # Same, for the setup program. Its own .syso, in its own package directory: a
 # .syso is linked by the main package that sits beside it, so the repo-root one
 # reaches the server binary and nothing else. Without this the wizard's exe has
 # the blank generic-executable glyph in Explorer AND in the taskbar, which is
 # the first thing a user sees of the app.
-versioninfo-setup:
-	go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -icon favicon.ico -o cmd/quartermaster-setup/resource_windows_amd64.syso cmd/quartermaster-setup/versioninfo.json
+$(SETUP_SYSO): favicon.ico cmd/quartermaster-setup/versioninfo.json
+	go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -icon favicon.ico -o $@ cmd/quartermaster-setup/versioninfo.json
+
+versioninfo-setup: $(SETUP_SYSO)
 
 # Build the first-run wizard's UI bundle (embedded into cmd/quartermaster-setup,
 # NOT into the server binary — see internal/setup/api.go).
@@ -92,12 +106,12 @@ ui-setup: ui-svelte/node_modules
 # loop. Copy the exe into build/quartermaster-windows/ first if you want it to
 # pick up start.cmd and the config examples too. The release build
 # (packaging/windows/build-release.ps1) is what embeds the real installer.
-setup-windows: ui-setup
+setup-windows: ui-setup $(SETUP_SYSO)
 	@echo "Building Windows setup program..."
 	GOOS=windows GOARCH=amd64 go build -ldflags="-H=windowsgui -X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE}" -o $(BUILD_DIR)/$(APP_NAME)-setup.exe ./cmd/quartermaster-setup
 
 # Build Windows binary
-windows: ui
+windows: ui $(QM_SYSO)
 	@echo "Building Windows binary..."
 	GOOS=windows GOARCH=amd64 go build -ldflags="-H=windowsgui -X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE}" -o $(BUILD_DIR)/$(APP_NAME)-windows-amd64.exe
 
