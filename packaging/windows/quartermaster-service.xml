@@ -25,6 +25,13 @@
   <arguments>-config "%BASE%\config.yaml" -generate "%BASE%\quartermaster-generate.yaml" -listen 0.0.0.0:1250 -watch-config</arguments>
   <workingdirectory>%BASE%</workingdirectory>
 
+  <!-- Tells the in-app updater it is supervised, so it stages an update and
+       reports "restart to finish" instead of relaunching itself. WinSW runs the
+       exe as a plain child process, which the Windows service API cannot see, so
+       this env var is the only signal available (internal/update/env_windows.go).
+       Finish a staged update with:  .\quartermaster-service.exe restart -->
+  <env name="QM_SUPERVISED" value="1"/>
+
   <startmode>Automatic</startmode>
   <onfailure action="restart" delay="5 sec"/>
 

@@ -24,6 +24,7 @@ import (
 	"github.com/quartermaster-labs/quartermaster/internal/process"
 	"github.com/quartermaster-labs/quartermaster/internal/server"
 	"github.com/quartermaster-labs/quartermaster/internal/shared"
+	"github.com/quartermaster-labs/quartermaster/internal/update"
 	"github.com/quartermaster-labs/quartermaster/internal/watcher"
 )
 
@@ -650,5 +651,22 @@ func main() {
 	} else {
 		<-exitChan
 	}
+
+	// An applied update swapped the binary at our own path while we ran. Now
+	// that teardown is done and the listen sockets are free, hand off to it:
+	// same argv, same cwd, detached. Only a self-managed (non-supervised)
+	// install gets here — under systemd or a Windows service the swap is left
+	// staged for the supervisor's own restart. See internal/update.
+	activeMu.RLock()
+	relaunch := activeSrv.RelaunchPending()
+	activeMu.RUnlock()
+	if relaunch {
+		if err := update.Spawn(); err != nil {
+			proxyLog.Warnf("update applied but relaunch failed (start quartermaster again to run the new version): %v", err)
+		} else {
+			proxyLog.Info("restarting into the updated build")
+		}
+	}
+
 	proxyLog.Info("shutdown complete")
 }

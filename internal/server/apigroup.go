@@ -330,11 +330,17 @@ func (s *Server) handleAPIVersion(w http.ResponseWriter, r *http.Request) {
 		"build_date": s.build.Date,
 	}
 	// Surface the update status so the UI can show an "update available" banner.
+	// blocked/restart come along so the banner can say what will actually happen
+	// (restart itself vs "restart the service to apply") instead of promising a
+	// seamless swap the environment won't allow.
 	if s.updater != nil && s.updater.Enabled() {
 		st := s.updater.Status()
 		out["update_available"] = st.Available
 		out["latest_version"] = st.Latest
 		out["release_url"] = st.ReleaseURL
+		out["update_blocked"] = st.Blocked
+		out["update_restart"] = st.Restart
+		out["update_phase"] = st.Phase
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)

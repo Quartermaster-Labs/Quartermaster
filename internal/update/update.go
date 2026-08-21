@@ -1,10 +1,42 @@
-// Package update checks the project's GitHub releases for a newer build and,
-// on Windows release builds, downloads and launches the setup installer.
+// Package update keeps a running quartermaster on the latest release by
+// swapping its own executable in place — no installer, no wizard, no user
+// interaction beyond one click.
 //
-// It is deliberately narrow: the check only runs for release builds (a
-// vMAJOR.MINOR.PATCH version, set by the release ldflags) on Windows, since the
-// only update mechanism is the Inno Setup installer (.exe). Dev/local builds and
-// non-Windows builds report "no update" and never poll.
+// # Why not the installer
+//
+// The first version of this package downloaded the Inno Setup installer and ran
+// it. That made every update an interactive reinstall: it re-asked for the
+// install directory and the models folder, and it re-ran the backend fetch,
+// which deleted the user's working llama.cpp build and replaced it with whatever
+// the wizard's defaults happened to be. An update that can silently repoint
+// serverExe at a different compute backend is not an update.
+//
+// # What this does instead
+//
+// The app is one self-contained binary: the UI is embedded, and backend
+// installs, config and user data all live outside it (see internal/backends).
+// So a new version IS a new file, and applying one is:
+//
+//	download the bare binary -> verify sha256 -> rename running exe aside ->
+//	rename new binary into its place -> restart
+//
+// Renaming a running executable is legal on Windows (only deleting/overwriting
+// it is not) and on every unix, so one code path covers all platforms. Both
+// renames are within the exe's own directory, so they are same-volume and
+// atomic, and the aside-copy makes the swap reversible: if the second rename
+// fails, the first is undone and the running install is untouched. The stale
+// .old file is swept on the next start, once nothing has it mapped.
+//
+// # Who restarts
+//
+// A desktop install (tray, start.cmd, a terminal) relaunches itself: teardown
+// completes, then main spawns the replacement with the same argv and cwd. A
+// supervised install (systemd, WinSW) does NOT — a server that bounces itself
+// without being asked is a fault, not a feature. There the swap is staged and
+// the UI reports that a restart will finish it; the next restart, whenever the
+// operator makes it, comes up on the new binary. Docker is refused outright:
+// the image is the unit of update there, and a swapped binary would vanish with
+// the container.
 package update
 
 import (
@@ -15,7 +47,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -26,22 +57,55 @@ import (
 )
 
 const (
-	pollInterval = 24 * time.Hour
+	pollInterval = 6 * time.Hour
 	httpTimeout  = 30 * time.Second
 	userAgent    = "quartermaster-updater"
 )
 
-// Status is the current check result, surfaced to the UI via /api/version.
+// Phase is where an in-flight update has got to. It mirrors backends.Job so the
+// UI can render both with the same progress component.
+const (
+	PhaseIdle        = "idle"
+	PhaseDownloading = "downloading"
+	PhaseVerifying   = "verifying"
+	PhaseStaging     = "staging"
+	PhaseReady       = "ready" // swapped; waiting on the restart
+	PhaseError       = "error"
+)
+
+// Restart modes: who brings the new binary up.
+const (
+	RestartAuto   = "auto"   // we relaunch ourselves once teardown finishes
+	RestartManual = "manual" // supervised: the operator (or the supervisor) restarts
+)
+
+// Status is the current check/apply state, surfaced to the UI via /api/version
+// and /api/update/status.
 type Status struct {
 	Current    string `json:"current"`
 	Latest     string `json:"latest"`
 	Available  bool   `json:"available"`
 	ReleaseURL string `json:"release_url"`
 
-	assetURL string // download URL for the setup .exe; not exposed to the client
+	// Blocked is non-empty when self-update cannot work here (Docker, a
+	// read-only install directory). It is a reason to show the user, not an
+	// error: they can still update by other means.
+	Blocked string `json:"blocked,omitempty"`
+	// Restart is RestartAuto or RestartManual — what happens after the swap.
+	Restart string `json:"restart"`
+
+	// Progress of an in-flight apply.
+	Phase string `json:"phase"`
+	Done  int64  `json:"done"`
+	Total int64  `json:"total"`
+	Err   string `json:"error,omitempty"`
+
+	assetURL string // download URL for the binary; never exposed to the client
+	sha256   string // expected digest, from the release metadata
 }
 
-// Checker polls GitHub releases and holds the latest known status.
+// Checker polls GitHub releases, holds the latest known status, and applies an
+// update on request.
 type Checker struct {
 	repo    string // "owner/name"
 	current string
@@ -50,6 +114,12 @@ type Checker struct {
 
 	mu     sync.RWMutex
 	status Status
+
+	// applying guards against two concurrent applies (a double-clicked button).
+	applying bool
+	// relaunch is set once the swap succeeded and this process should be
+	// replaced by the new binary after teardown. Read by main via Relaunch.
+	relaunch bool
 }
 
 // New builds a Checker for repo (owner/name) and the running build version.
@@ -57,31 +127,43 @@ func New(repo, current string, log func(string)) *Checker {
 	if log == nil {
 		log = func(string) {}
 	}
-	return &Checker{
+	c := &Checker{
 		repo:    repo,
 		current: current,
 		client:  &http.Client{Timeout: httpTimeout},
 		log:     log,
-		status:  Status{Current: current},
 	}
+	c.status = Status{
+		Current: current,
+		Phase:   PhaseIdle,
+		Blocked: blockedReason(),
+		Restart: restartMode(),
+	}
+	return c
 }
 
 // Enabled reports whether update checking applies to this build: a release
-// (semver) build on Windows, unless disabled via LQ_NO_UPDATE_CHECK.
+// (semver) build, on a platform we publish a binary for, that is not running
+// somewhere a binary swap would be wrong. Dev builds (version "local_<hash>")
+// never poll, so a working tree is never told it is out of date.
 func (c *Checker) Enabled() bool {
-	if runtime.GOOS != "windows" {
-		return false
-	}
 	if os.Getenv("LQ_NO_UPDATE_CHECK") != "" {
 		return false
 	}
-	_, ok := parseSemver(c.current)
-	return ok
+	if assetName() == "" {
+		return false
+	}
+	if _, ok := parseSemver(c.current); !ok {
+		return false
+	}
+	return true
 }
 
 // Run performs an initial check then polls every pollInterval until ctx is done.
-// It is a no-op for builds where Enabled() is false.
+// It is a no-op for builds where Enabled() is false. Any binary left aside by a
+// previous update is swept first — by now nothing has it mapped.
 func (c *Checker) Run(ctx context.Context) {
+	SweepOld(c.log)
 	if !c.Enabled() {
 		return
 	}
@@ -98,21 +180,32 @@ func (c *Checker) Run(ctx context.Context) {
 	}
 }
 
-// Status returns a copy of the latest known status (without the internal URL).
+// Status returns a copy of the latest known status (without internal fields).
 func (c *Checker) Status() Status {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	s := c.status
-	s.assetURL = ""
+	s.assetURL, s.sha256 = "", ""
 	return s
+}
+
+// Relaunch reports whether an update was applied and this process should be
+// replaced by the new binary once shutdown completes. Read by main after
+// teardown, so the replacement starts only after the listen sockets are freed.
+func (c *Checker) Relaunch() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.relaunch
 }
 
 type ghRelease struct {
 	TagName string `json:"tag_name"`
 	HTMLURL string `json:"html_url"`
 	Assets  []struct {
-		Name string `json:"name"`
-		URL  string `json:"browser_download_url"`
+		Name   string `json:"name"`
+		URL    string `json:"browser_download_url"`
+		Size   int64  `json:"size"`
+		Digest string `json:"digest"` // "sha256:<hex>", newer API only
 	} `json:"assets"`
 }
 
@@ -122,17 +215,48 @@ func (c *Checker) checkOnce(ctx context.Context) {
 		c.log("update check failed: " + err.Error())
 		return
 	}
-	asset := setupAsset(rel)
-	available := newer(c.current, rel.TagName) && asset != ""
+
+	want := assetName()
+	var url, digest string
+	var size int64
+	for _, a := range rel.Assets {
+		if a.Name == want {
+			url, digest, size = a.URL, a.Digest, a.Size
+			break
+		}
+	}
+	// The digest field is only on newer API responses; SHA256SUMS is published
+	// alongside the binaries for exactly this fallback. No digest from either
+	// source means no apply — we will not execute an unverified download.
+	sha := strings.TrimPrefix(digest, "sha256:")
+	if sha == "" && url != "" {
+		for _, a := range rel.Assets {
+			if strings.EqualFold(a.Name, "SHA256SUMS") {
+				sha = c.fetchSum(ctx, a.URL, want)
+				break
+			}
+		}
+	}
+
+	available := newer(c.current, rel.TagName) && url != "" && sha != ""
+	if newer(c.current, rel.TagName) && sha == "" {
+		c.log(fmt.Sprintf("release %s has no verifiable %s asset; not offering it", rel.TagName, want))
+	}
 
 	c.mu.Lock()
-	c.status = Status{
-		Current:    c.current,
-		Latest:     rel.TagName,
-		Available:  available,
-		ReleaseURL: rel.HTMLURL,
-		assetURL:   asset,
+	// Never clobber an apply in flight (or a completed one waiting on restart)
+	// with a poll result.
+	if c.status.Phase == PhaseIdle || c.status.Phase == PhaseError {
+		c.status.Phase, c.status.Err = PhaseIdle, ""
+		c.status.Total = size
 	}
+	c.status.Current = c.current
+	c.status.Latest = rel.TagName
+	c.status.Available = available
+	c.status.ReleaseURL = rel.HTMLURL
+	c.status.Blocked = blockedReason()
+	c.status.Restart = restartMode()
+	c.status.assetURL, c.status.sha256 = url, sha
 	c.mu.Unlock()
 
 	if available {
@@ -163,64 +287,60 @@ func (c *Checker) fetchLatest(ctx context.Context) (*ghRelease, error) {
 	return &rel, nil
 }
 
-// DownloadAndLaunch downloads the setup installer for the latest release into a
-// temp file and launches it (Windows only). The caller should shut the server
-// down shortly after so the installer can replace the running executable.
-func (c *Checker) DownloadAndLaunch(ctx context.Context) error {
-	if runtime.GOOS != "windows" {
-		return fmt.Errorf("auto-update is only supported on Windows")
+// fetchSum pulls one file's digest out of a SHA256SUMS asset ("<hex>  <name>"
+// per line, sha256sum's own format). "" when absent or malformed.
+func (c *Checker) fetchSum(ctx context.Context, src, name string) string {
+	if err := validAssetURL(src); err != nil {
+		return ""
 	}
-	c.mu.RLock()
-	st := c.status
-	c.mu.RUnlock()
-	if !st.Available || st.assetURL == "" {
-		return fmt.Errorf("no update available")
-	}
-	if err := validAssetURL(st.assetURL); err != nil {
-		return err
-	}
-
-	path := filepath.Join(os.TempDir(), fmt.Sprintf("quartermaster-setup-%s.exe", sanitize(st.Latest)))
-	if err := c.download(ctx, st.assetURL, path); err != nil {
-		return fmt.Errorf("download installer: %w", err)
-	}
-
-	cmd := exec.Command(path)
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("launch installer: %w", err)
-	}
-	c.log("launched installer " + path + "; shutting down to allow replacement")
-	return nil
-}
-
-func (c *Checker) download(ctx context.Context, src, dst string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src, nil)
 	if err != nil {
-		return err
+		return ""
 	}
 	req.Header.Set("User-Agent", userAgent)
-	// Larger timeout than the API client: the installer is tens of MB.
-	resp, err := (&http.Client{Timeout: 10 * time.Minute}).Do(req)
+	resp, err := c.client.Do(req)
 	if err != nil {
-		return err
+		return ""
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download: %s", resp.Status)
+		return ""
 	}
-	f, err := os.Create(dst)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 	if err != nil {
-		return err
+		return ""
 	}
-	defer f.Close()
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		return err
+	for _, line := range strings.Split(string(body), "\n") {
+		f := strings.Fields(line)
+		// The name may carry sha256sum's binary-mode "*" prefix.
+		if len(f) == 2 && strings.TrimPrefix(f[1], "*") == name && len(f[0]) == 64 {
+			return strings.ToLower(f[0])
+		}
 	}
-	return nil
+	return ""
+}
+
+// assetName is the release asset holding the binary for this platform, or ""
+// when we publish none for it. Matched exactly, so the Windows binary
+// (quartermaster-windows-amd64.exe) is never confused with the first-install
+// wizard (quartermaster-setup-vX.Y.Z.exe) sitting in the same release.
+func assetName() string {
+	switch runtime.GOOS + "/" + runtime.GOARCH {
+	case "windows/amd64":
+		return "quartermaster-windows-amd64.exe"
+	case "linux/amd64":
+		return "quartermaster-linux-amd64"
+	case "linux/arm64":
+		return "quartermaster-linux-arm64"
+	case "darwin/arm64":
+		return "quartermaster-darwin-arm64"
+	}
+	return ""
 }
 
 // validAssetURL only permits https downloads from GitHub-controlled hosts, so a
-// poisoned API response can't make us run an arbitrary executable.
+// poisoned API response can't point us at an arbitrary binary. The sha256 check
+// in apply is the real guarantee; this keeps the request itself in bounds.
 func validAssetURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -231,20 +351,9 @@ func validAssetURL(raw string) error {
 		strings.HasSuffix(host, ".github.com") ||
 		strings.HasSuffix(host, ".githubusercontent.com")
 	if u.Scheme != "https" || !ok {
-		return fmt.Errorf("refusing non-GitHub installer URL: %s", raw)
+		return fmt.Errorf("refusing non-GitHub download URL: %s", raw)
 	}
 	return nil
-}
-
-// setupAsset returns the browser download URL of the setup .exe asset, or "".
-func setupAsset(rel *ghRelease) string {
-	for _, a := range rel.Assets {
-		n := strings.ToLower(a.Name)
-		if strings.HasSuffix(n, ".exe") && strings.Contains(n, "setup") {
-			return a.URL
-		}
-	}
-	return ""
 }
 
 var semverRe = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)$`)
@@ -261,7 +370,9 @@ func parseSemver(v string) ([3]int, bool) {
 	return out, true
 }
 
-// newer reports whether b is a higher semver than a. False if either is unparseable.
+// newer reports whether b is a higher semver than a. False if either is
+// unparseable, which is what keeps a dev build (local_<hash>) and a prerelease
+// tag (v1.0.0-rc1) from ever being offered as an update.
 func newer(a, b string) bool {
 	pa, oka := parseSemver(a)
 	pb, okb := parseSemver(b)
@@ -276,6 +387,16 @@ func newer(a, b string) bool {
 	return false
 }
 
-var unsafeChars = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
-
-func sanitize(s string) string { return unsafeChars.ReplaceAllString(s, "_") }
+// exePath resolves the running executable, following symlinks so a
+// /usr/local/bin/quartermaster -> /opt/... install swaps the real file rather
+// than replacing the link.
+func exePath() (string, error) {
+	p, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		p = resolved
+	}
+	return p, nil
+}

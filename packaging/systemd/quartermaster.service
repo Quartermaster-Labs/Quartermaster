@@ -20,6 +20,16 @@ ExecStart=/opt/quartermaster/quartermaster \
   -listen 0.0.0.0:1250 \
   -watch-config
 
+# The in-app updater already detects systemd (INVOCATION_ID is set in every unit
+# it starts), so it stages the new binary and leaves the restart to you rather
+# than bouncing a service nobody asked it to bounce. Finish a staged update with
+# `systemctl restart quartermaster`. This var is belt-and-braces, and the way to
+# get the same behaviour under any other supervisor.
+Environment=QM_SUPERVISED=1
+
+# The swap renames the binary in WorkingDirectory, so that path must stay in
+# ReadWritePaths below or the updater reports the install as read-only.
+
 # Autogen scans every GGUF header on first start (tens of seconds for a large
 # models folder); keep the start timeout generous.
 TimeoutStartSec=180

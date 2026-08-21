@@ -1,0 +1,93 @@
+# internal/update
+
+## Purpose
+
+Keeps a running quartermaster on the latest release by **swapping its own executable in place** —
+no installer, no wizard, one click. Polls GitHub releases, verifies the download, renames the new
+binary over the running one, and (on a desktop install) relaunches into it.
+
+## Why there is no installer in this path
+
+The first version downloaded the Inno Setup installer and ran it. Every update was therefore an
+interactive reinstall: it re-asked for the install directory and the models folder, and it re-ran
+the backend fetch — which **deleted the user's working llama.cpp build** and replaced it with the
+wizard's default. An update that can silently repoint `serverExe` at a different compute backend is
+not an update.
+
+`packaging/windows/installer.iss` still exists, and still ships, but it is now **first-install
+only** and it no longer asks or fetches anything at all. The configuration pages and the
+`fetch-backend.ps1` runs are gone, replaced by `cmd/quartermaster-setup`, which embeds the
+installer and drives it silently. What Inno does now is place files, register the uninstaller and
+create the Start Menu group — none of which can repoint a working install at a different backend,
+so the upgrade-detection code it used to need is gone too.
+
+## The swap
+
+The app is one self-contained binary — the UI is embedded, and backends, config and user data all
+live outside it. So a new version *is* a new file:
+
+```
+download bare binary -> verify sha256 -> rename running exe aside -> rename new binary in -> restart
+```
+
+- **Renaming a running executable is legal** on Windows (only *deleting* or *overwriting* a mapped
+  image is refused) and on every unix. That single fact is what lets one code path cover all
+  platforms with no helper process, no restart shim, and no `MoveFileEx` reboot queue.
+- **Both renames stay inside the exe's own directory** (`.qm-update/`, a *sibling of the exe*, never
+  `%TEMP%`) — so neither can fail on a cross-device boundary, and each is atomic.
+- **The aside-copy is the rollback.** If the second rename fails, the first is undone and the
+  install is byte-for-byte what it was. Only if *both* fail is there a problem, and the error names
+  the file to move back by hand.
+- The stale `.old` is swept by `SweepOld` on the **next** start, when nothing has it mapped.
+- `renameRetry` absorbs the transient sharing violations Windows scanners and indexers produce.
+
+## Who restarts
+
+`restartMode()` decides, and it is re-read at apply time, not cached at startup.
+
+| Environment | `Restart` | Behaviour |
+|---|---|---|
+| Desktop (tray, `start.cmd`, a terminal) | `auto` | Swap, shut down, then `main` calls `Spawn()` — same argv, same cwd, detached |
+| Supervised (systemd, WinSW) | `manual` | Swap and stop. The UI says "restart the service to finish" |
+| Container | — | `Blocked`. The image is the unit of update; a swapped binary vanishes with the container |
+
+A server that bounces itself unasked is a fault, not a feature — hence `manual`. Note that both
+supervisor definitions restart **on failure only**, so "exit and let the supervisor pick it up"
+would simply have left the service down.
+
+Detection: `INVOCATION_ID`/`JOURNAL_STREAM` (systemd sets these in every unit, so existing installs
+need no unit-file change), `svc.IsWindowsService()`, or an explicit `QM_SUPERVISED=1` — which is
+what `packaging/windows/quartermaster-service.xml` sets, because **WinSW runs the exe as a plain
+child process that the Windows service API cannot see**.
+
+`Spawn()` is called by `main` *after* teardown completes, so the replacement never races the dying
+process for the listen sockets.
+
+## Gotchas
+
+- **Asset names are a contract.** `assetName()` must match what the release actually publishes
+  (`Makefile: dist`, `packaging/windows/build-release.ps1`). A name that drifts does not error —
+  that platform just silently stops seeing updates. Matching is **exact**, so
+  `quartermaster-windows-amd64.exe` is never confused with `quartermaster-setup-vX.Y.Z.exe` sitting
+  in the same release.
+- **No digest, no update.** The GitHub API's per-asset `digest` field is preferred, with a
+  `SHA256SUMS` asset as fallback. If neither yields a hash the release is *reported but not
+  offered*: executing an unverified download is the one failure this package cannot walk back.
+- **Dev builds never poll.** `parseSemver` rejects `local_<hash>`, so a working tree is never told
+  it is out of date — and `newer` returns false whenever *either* side is unparseable.
+- **Apply runs on the server's lifetime context, not the request's.** `POST /api/update` returns
+  202 immediately; a closing browser tab must not abort a swap already touching files on disk.
+- `blockedReason()` probes writability by **creating and removing a file**, not by reading mode
+  bits — an ACL, a read-only mount, or a different owner all produce a directory that *looks*
+  writable and is not.
+
+## Connections
+
+- `internal/server/update.go` — `POST /api/update`, `GET /api/update/status`, `RelaunchPending()`.
+  Both routes are on `adminChain`.
+- `internal/server/apigroup.go` — `/api/version` also carries `update_blocked`, `update_restart`,
+  `update_phase` so the sidebar can render the state without a second request.
+- `quartermaster.go` — runs `Checker.Run`, and after teardown calls `update.Spawn()` when
+  `RelaunchPending()`.
+- `ui-svelte/src/components/Sidebar.svelte` — the button, the progress polling, and the
+  blocked-install link-out.

@@ -198,10 +198,41 @@ export interface VersionInfo {
   build_date: string;
   commit: string;
   version: string;
-  // Present only on Windows release builds with update checking enabled.
+  // Present only on release builds (semver version) on a platform we publish a
+  // binary for. Dev builds never check, so these stay undefined.
   update_available?: boolean;
   latest_version?: string;
   release_url?: string;
+  // Non-empty when a self-update cannot work here (container, read-only install
+  // dir). A reason to show, not an error: the user can still update by hand.
+  update_blocked?: string;
+  // "auto" (we relaunch ourselves) or "manual" (supervised — the operator does).
+  update_restart?: string;
+  update_phase?: UpdatePhase;
+}
+
+export type UpdatePhase =
+  | "idle"
+  | "downloading"
+  | "verifying"
+  | "staging"
+  | "ready"
+  | "error";
+
+// GET /api/update/status — check + apply progress. Polled while an update runs;
+// the apply itself lives on the server's lifetime, so closing the tab does not
+// abort it and reopening picks the progress back up.
+export interface UpdateStatus {
+  current: string;
+  latest: string;
+  available: boolean;
+  release_url: string;
+  blocked?: string;
+  restart: string;
+  phase: UpdatePhase;
+  done: number;
+  total: number;
+  error?: string;
 }
 
 // A managed API key. `models` empty => the key may reach every model (full

@@ -43,7 +43,10 @@ Auth-gated but **not** model-dispatched (`discoveryChain`):
 - Context / observe extras: `GET /api/canon`, `/api/backend-metrics`, `/api/websearch`,
   `/api/youtube/meta`, `/api/imgproxy`, `/api/fx`.
 - Autostart: `GET`/`PUT /api/autostart` — **not** `-generate`-gated.
-- Self-update: `POST /api/update` (Windows release builds only).
+- Self-update: `POST /api/update` (start; returns **202** and applies in the background on the
+  server's own context), `GET /api/update/status` (phase + byte progress). Release builds on a
+  published platform — windows/amd64, linux/amd64, linux/arm64, darwin/arm64. See
+  [`internal/update`](../update/CLAUDE.md).
 
 ## Config editor — 501 without `-generate`
 

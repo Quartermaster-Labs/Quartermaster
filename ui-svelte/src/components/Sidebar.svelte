@@ -10,6 +10,7 @@
   import { versionInfo } from "../stores/api";
   import { playgroundPort } from "../stores/playgroundAuth";
   import { askConfirm, notify } from "../lib/confirm";
+  import type { UpdateStatus } from "../lib/types";
   const pages = [
     { path: "/", label: "Dashboard", icon: LayoutDashboard },
     // Models is ONE page now — the category split is tabs on the page itself,
@@ -41,31 +42,120 @@
     `Event Stream: ${$connectionState ?? "unknown"}\nAPI Version: ${$versionInfo?.version ?? "unknown"}\nCommit: ${$versionInfo?.commit?.substring(0, 7) ?? "unknown"}\nBuild Date: ${$versionInfo?.build_date ?? "unknown"}`
   );
 
-  // Auto-update: launch the installer (server downloads it, then shuts down to
-  // apply). Only shown when the backend reports an available release.
+  // Auto-update. The server downloads the new binary, verifies it, and renames
+  // it over the running exe — no installer, no wizard. POST /api/update returns
+  // 202 immediately and the work continues on the SERVER's lifetime, so we poll
+  // for progress rather than holding a request open across a 40MB download.
   let updating = $state(false);
+  let progress = $state<UpdateStatus | null>(null);
+  let poller: ReturnType<typeof setInterval> | null = null;
+
+  // Phase -> what the button says. "staging" is the rename pair: brief, but it
+  // is the only moment the install is mid-swap, so it gets its own label.
+  const phaseLabel: Record<string, string> = {
+    downloading: "Downloading…",
+    verifying: "Verifying…",
+    staging: "Installing…",
+    ready: "Restarting…",
+  };
+
+  let updateLabel = $derived.by(() => {
+    if (!updating) return "Update";
+    const p = progress?.phase ?? "";
+    if (p === "downloading" && progress && progress.total > 0) {
+      return `${Math.round((progress.done / progress.total) * 100)}%`;
+    }
+    return phaseLabel[p] ?? "Updating…";
+  });
+
+  function stopPolling(): void {
+    if (poller !== null) {
+      clearInterval(poller);
+      poller = null;
+    }
+  }
+
+  async function pollStatus(): Promise<void> {
+    let st: UpdateStatus;
+    try {
+      const r = await fetch("/api/update/status");
+      if (!r.ok) return;
+      st = await r.json();
+    } catch {
+      // The server going away mid-poll is the EXPECTED end of an auto-restart
+      // update, not a failure — keep the spinner and let the reload land.
+      return;
+    }
+    progress = st;
+
+    if (st.phase === "error") {
+      stopPolling();
+      updating = false;
+      await notify("Update failed", st.error || "The update did not complete.");
+      return;
+    }
+    if (st.phase !== "ready") return;
+
+    // Swapped. Who restarts depends on how this install is run.
+    stopPolling();
+    if (st.restart === "manual") {
+      updating = false;
+      await notify(
+        `Update to ${st.latest} installed`,
+        "Restart the quartermaster service to finish — the new version is already in place."
+      );
+      return;
+    }
+    // Auto: the server is shutting down and relaunching itself. Give it a moment
+    // to come back on the same port, then reload into the new build.
+    setTimeout(() => window.location.reload(), 4000);
+  }
+
   async function runUpdate(): Promise<void> {
     if (updating) return;
     const latest = $versionInfo.latest_version ?? "the latest version";
+    const auto = ($versionInfo.update_restart ?? "auto") === "auto";
     const ok = await askConfirm({
       title: `Update to ${latest}?`,
-      body: "The installer will launch and Quartermaster will shut down to apply it.",
+      body: auto
+        ? "Quartermaster will download the new version in the background, then restart itself. Any loaded model is unloaded."
+        : "Quartermaster will install the new version in the background. It runs as a service here, so restart the service when you're ready to switch to it.",
       confirmLabel: "Update",
     });
     if (!ok) return;
     updating = true;
+    progress = null;
     try {
       const r = await fetch("/api/update", { method: "POST" });
       if (!r.ok) {
         await notify("Update failed", await r.text());
         updating = false;
+        return;
       }
-      // On success the server shuts down; keep the spinner until the page drops.
     } catch (e) {
       await notify("Update failed", String(e));
       updating = false;
+      return;
     }
+    // 202 accepted — the work is running server-side now.
+    void pollStatus();
+    poller = setInterval(() => void pollStatus(), 1000);
   }
+
+  // The apply runs on the server, so a reload mid-download does not cancel it —
+  // but it does leave this component thinking nothing is happening, and a second
+  // click would just bounce off the already-in-progress guard. /api/version
+  // carries the phase, so pick the progress back up instead.
+  $effect(() => {
+    const phase = $versionInfo.update_phase;
+    if (updating || poller !== null) return;
+    if (phase !== "downloading" && phase !== "verifying" && phase !== "staging") return;
+    updating = true;
+    void pollStatus();
+    poller = setInterval(() => void pollStatus(), 1000);
+  });
+
+  $effect(() => stopPolling);
 
   // Shared label styling: zero-width + invisible at rest (no reserved space, so
   // the icon stays centered in the collapsed rail), grows in on hover.
@@ -168,15 +258,31 @@
         <Moon size={18} />
       {/if}
     </button>
-    {#if $versionInfo.update_available}
+    {#if $versionInfo.update_available && $versionInfo.update_blocked}
+      <!-- A new version exists but this install cannot swap its own binary
+           (container, read-only directory). Link to the release instead of
+           offering a button that can only fail. -->
+      <a
+        class="hidden group-hover/rail:inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-micro font-medium text-txtsecondary hover:bg-primary/10 transition-colors"
+        href={$versionInfo.release_url}
+        target="_blank"
+        rel="noopener noreferrer"
+        use:tip={`${$versionInfo.latest_version} is available, but cannot be installed automatically: ${$versionInfo.update_blocked}`}
+      >
+        <ArrowUpCircle size={13} />
+        {$versionInfo.latest_version}
+      </a>
+    {:else if $versionInfo.update_available}
       <button
         class="hidden group-hover/rail:inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-micro font-medium text-primary hover:bg-primary/10 transition-colors disabled:opacity-60"
         onclick={runUpdate}
         disabled={updating}
-        use:tip={`Update to ${$versionInfo.latest_version}`}
+        use:tip={updating
+          ? "Installing in the background — you can keep working until it restarts"
+          : `Update to ${$versionInfo.latest_version}`}
       >
         <ArrowUpCircle size={13} />
-        {updating ? "Updating…" : "Update"}
+        {updateLabel}
       </button>
     {/if}
     <span class="ml-auto hidden group-hover/rail:inline-block font-mono text-micro text-txtsecondary tabular-nums">
