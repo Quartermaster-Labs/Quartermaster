@@ -233,6 +233,11 @@ export interface UpdateStatus {
   done: number;
   total: number;
   error?: string;
+  // False on a dev build, or a platform we publish no binary for. Without it,
+  // "checked, you are current" and "this build never checks" look identical.
+  enabled?: boolean;
+  // RFC3339 stamp of the last successful poll; absent if none has landed yet.
+  checked_at?: string;
 }
 
 // A managed API key. `models` empty => the key may reach every model (full

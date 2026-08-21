@@ -775,6 +775,7 @@ func (s *Server) routes() {
 	mux.Handle("GET "+appWindowShowPath, apiChain.ThenFunc(s.handleAPIAppShow))
 	mux.Handle("POST /api/update", adminChain.ThenFunc(s.handleAPIUpdate))
 	mux.Handle("GET /api/update/status", adminChain.ThenFunc(s.handleAPIUpdateStatus))
+	mux.Handle("POST /api/update/check", adminChain.ThenFunc(s.handleAPIUpdateCheck))
 	mux.Handle("GET /api/captures/{id}", adminChain.ThenFunc(s.handleAPICapture))
 	// Chat-tool fetch paths: the playground calls all four from the browser, so
 	// they sit on pgChain. Each is a bounded outbound fetch (fetch_page's SSRF

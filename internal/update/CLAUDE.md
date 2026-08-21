@@ -47,7 +47,7 @@ download bare binary -> verify sha256 -> rename running exe aside -> rename new 
 
 | Environment | `Restart` | Behaviour |
 |---|---|---|
-| Desktop (tray, `start.cmd`, a terminal) | `auto` | Swap, shut down, then `main` calls `Spawn()` — same argv, same cwd, detached |
+| Desktop (tray, a shortcut, a terminal) | `auto` | Swap, shut down, then `main` calls `Spawn()` — same argv, same cwd, detached |
 | Supervised (systemd, WinSW) | `manual` | Swap and stop. The UI says "restart the service to finish" |
 | Container | — | `Blocked`. The image is the unit of update; a swapped binary vanishes with the container |
 
@@ -69,10 +69,16 @@ process for the listen sockets.
   (`Makefile: dist`, `packaging/windows/build-release.ps1`). A name that drifts does not error —
   that platform just silently stops seeing updates. Matching is **exact**, so
   `quartermaster-windows-amd64.exe` is never confused with `quartermaster-setup-vX.Y.Z.exe` sitting
-  in the same release.
+  in the same release. Note the Windows asset name is **not** the installed filename (which is
+  `Quartermaster.exe`) — `exePath()` swaps by path, so the two are free to differ, and the asset
+  name must stay frozen or pre-rename installs stop seeing updates.
 - **No digest, no update.** The GitHub API's per-asset `digest` field is preferred, with a
   `SHA256SUMS` asset as fallback. If neither yields a hash the release is *reported but not
   offered*: executing an unverified download is the one failure this package cannot walk back.
+- **`Status.Checked` is what makes the check button honest.** Without a timestamp, a check that
+  found nothing looks exactly like a button that did nothing — and `CheckNow` returns the fetch
+  error rather than only logging it for the same reason. A failed check deliberately leaves the
+  stamp alone, so a stale answer is never presented as freshly confirmed.
 - **Dev builds never poll.** `parseSemver` rejects `local_<hash>`, so a working tree is never told
   it is out of date — and `newer` returns false whenever *either* side is unparseable.
 - **Apply runs on the server's lifetime context, not the request's.** `POST /api/update` returns
@@ -83,11 +89,14 @@ process for the listen sockets.
 
 ## Connections
 
-- `internal/server/update.go` — `POST /api/update`, `GET /api/update/status`, `RelaunchPending()`.
-  Both routes are on `adminChain`.
+- `internal/server/update.go` — `POST /api/update`, `GET /api/update/status`,
+  `POST /api/update/check`, `RelaunchPending()`. All three routes are on `adminChain`.
 - `internal/server/apigroup.go` — `/api/version` also carries `update_blocked`, `update_restart`,
   `update_phase` so the sidebar can render the state without a second request.
 - `quartermaster.go` — runs `Checker.Run`, and after teardown calls `update.Spawn()` when
   `RelaunchPending()`.
-- `ui-svelte/src/components/Sidebar.svelte` — the button, the progress polling, and the
-  blocked-install link-out.
+- `ui-svelte/src/stores/update.ts` — the whole client state machine (apply, poll, on-demand
+  check), as a store rather than component state because **two** views show one process:
+  `Sidebar.svelte`'s button (only present when an update exists) and `SoftwareUpdate.svelte` in
+  Settings → System (always present — where "am I current?" gets answered, and where the check
+  button lives).

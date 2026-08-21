@@ -44,7 +44,10 @@ Auth-gated but **not** model-dispatched (`discoveryChain`):
   `/api/youtube/meta`, `/api/imgproxy`, `/api/fx`.
 - Autostart: `GET`/`PUT /api/autostart` — **not** `-generate`-gated.
 - Self-update: `POST /api/update` (start; returns **202** and applies in the background on the
-  server's own context), `GET /api/update/status` (phase + byte progress). Release builds on a
+  server's own context), `GET /api/update/status` (phase + byte progress),
+  `POST /api/update/check` (poll the release feed on demand and answer with the resulting status;
+  **502** when the feed is unreachable, so the UI can say so instead of showing a dead button).
+  Release builds on a
   published platform — windows/amd64, linux/amd64, linux/arm64, darwin/arm64. See
   [`internal/update`](../update/CLAUDE.md).
 

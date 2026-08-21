@@ -249,3 +249,76 @@ func TestUpdate_ApplyRefusesWithoutAVerifiedTarget(t *testing.T) {
 		t.Fatal("Apply without a digest should fail")
 	}
 }
+
+// CheckNow is what a user's "check for updates" click runs. It has to do two
+// things the six-hourly poll never had to: stamp when it ran, so the UI can say
+// the answer on screen is fresh, and RETURN the failure instead of only logging
+// it, so an offline machine gets an error rather than a button that appears to
+// do nothing.
+func TestUpdate_CheckNowStampsAndReportsFailure(t *testing.T) {
+	name := assetName()
+	if name == "" {
+		t.Skip("no published binary for this platform")
+	}
+	rel := ghRelease{TagName: "v9.9.9", HTMLURL: "https://example.invalid/r"}
+	rel.Assets = append(rel.Assets, struct {
+		Name   string `json:"name"`
+		URL    string `json:"browser_download_url"`
+		Size   int64  `json:"size"`
+		Digest string `json:"digest"`
+	}{
+		Name:   name,
+		URL:    "https://github.com/o/r/releases/download/v9.9.9/" + name,
+		Digest: "sha256:" + strings.Repeat("a", 64),
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(rel)
+	}))
+	defer srv.Close()
+
+	c := New("o/r", "v0.1.0", nil)
+	c.client = srv.Client()
+	c.client.Transport = rewriteHost{to: srv.Listener.Addr().String()}
+
+	if st := c.Status(); !st.Checked.IsZero() {
+		t.Fatalf("a fresh checker claims to have checked at %v", st.Checked)
+	}
+	if err := c.CheckNow(context.Background()); err != nil {
+		t.Fatalf("CheckNow: %v", err)
+	}
+	st := c.Status()
+	if st.Checked.IsZero() {
+		t.Error("a successful check left no timestamp, so the UI cannot tell it ran")
+	}
+	if !st.Available || st.Latest != "v9.9.9" {
+		t.Errorf("verifiable newer release was not offered: %+v", st)
+	}
+	if !st.Enabled {
+		t.Error("a semver build on a published platform reported enabled=false")
+	}
+
+	// Unreachable feed: the stamp must NOT move, or the UI would report a stale
+	// answer as freshly confirmed.
+	was := st.Checked
+	srv.Close()
+	if err := c.CheckNow(context.Background()); err == nil {
+		t.Error("CheckNow swallowed a dead release feed")
+	}
+	if got := c.Status().Checked; !got.Equal(was) {
+		t.Errorf("a failed check moved the timestamp: %v -> %v", was, got)
+	}
+}
+
+// A build from source has no release to compare against, so the check is not
+// merely useless there -- it must refuse, or the UI would offer a button that
+// polls GitHub and can never do anything with the answer.
+func TestUpdate_CheckNowRefusesForDevBuilds(t *testing.T) {
+	c := New("o/r", "local_abc1234", nil)
+	if err := c.CheckNow(context.Background()); err == nil {
+		t.Error("a dev build checked for updates")
+	}
+	if st := c.Status(); st.Enabled {
+		t.Error("a dev build reported enabled=true")
+	}
+}

@@ -29,7 +29,7 @@
 //
 // # Who restarts
 //
-// A desktop install (tray, start.cmd, a terminal) relaunches itself: teardown
+// A desktop install (tray, a shortcut, a terminal) relaunches itself: teardown
 // completes, then main spawns the replacement with the same argv and cwd. A
 // supervised install (systemd, WinSW) does NOT — a server that bounces itself
 // without being asked is a fault, not a feature. There the swap is staged and
@@ -42,6 +42,7 @@ package update
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -93,6 +94,16 @@ type Status struct {
 	Blocked string `json:"blocked,omitempty"`
 	// Restart is RestartAuto or RestartManual — what happens after the swap.
 	Restart string `json:"restart"`
+
+	// Enabled mirrors Checker.Enabled: false for a dev build, or a platform we
+	// publish no asset for. The UI needs the difference between "checked, you
+	// are current" and "this build never checks" — both otherwise look like an
+	// empty status.
+	Enabled bool `json:"enabled"`
+	// Checked is when the last successful poll landed, zero if none has. It is
+	// what makes a "Check for updates" button honest: without it, a check that
+	// found nothing is indistinguishable from a button that did nothing.
+	Checked time.Time `json:"checked_at,omitempty"`
 
 	// Progress of an in-flight apply.
 	Phase string `json:"phase"`
@@ -146,7 +157,11 @@ func New(repo, current string, log func(string)) *Checker {
 // (semver) build, on a platform we publish a binary for, that is not running
 // somewhere a binary swap would be wrong. Dev builds (version "local_<hash>")
 // never poll, so a working tree is never told it is out of date.
-func (c *Checker) Enabled() bool {
+func (c *Checker) Enabled() bool { return c.enabled() }
+
+// enabled is the lock-free half, so Status can report it without Enabled
+// re-taking a lock Status already holds.
+func (c *Checker) enabled() bool {
 	if os.Getenv("LQ_NO_UPDATE_CHECK") != "" {
 		return false
 	}
@@ -167,7 +182,7 @@ func (c *Checker) Run(ctx context.Context) {
 	if !c.Enabled() {
 		return
 	}
-	c.checkOnce(ctx)
+	_ = c.checkOnce(ctx)
 	t := time.NewTicker(pollInterval)
 	defer t.Stop()
 	for {
@@ -175,7 +190,7 @@ func (c *Checker) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			c.checkOnce(ctx)
+			_ = c.checkOnce(ctx)
 		}
 	}
 }
@@ -186,6 +201,7 @@ func (c *Checker) Status() Status {
 	defer c.mu.RUnlock()
 	s := c.status
 	s.assetURL, s.sha256 = "", ""
+	s.Enabled = c.enabled()
 	return s
 }
 
@@ -209,11 +225,11 @@ type ghRelease struct {
 	} `json:"assets"`
 }
 
-func (c *Checker) checkOnce(ctx context.Context) {
+func (c *Checker) checkOnce(ctx context.Context) error {
 	rel, err := c.fetchLatest(ctx)
 	if err != nil {
 		c.log("update check failed: " + err.Error())
-		return
+		return err
 	}
 
 	want := assetName()
@@ -256,12 +272,30 @@ func (c *Checker) checkOnce(ctx context.Context) {
 	c.status.ReleaseURL = rel.HTMLURL
 	c.status.Blocked = blockedReason()
 	c.status.Restart = restartMode()
+	c.status.Checked = time.Now()
 	c.status.assetURL, c.status.sha256 = url, sha
 	c.mu.Unlock()
 
 	if available {
 		c.log(fmt.Sprintf("update available: %s -> %s", c.current, rel.TagName))
 	}
+	return nil
+}
+
+// CheckNow polls GitHub immediately and reports whether the poll itself
+// succeeded, for a user who clicked "check for updates" rather than waiting out
+// the six-hour tick. It returns the network error rather than only logging it:
+// a button that silently does nothing when the machine is offline is worse than
+// no button.
+//
+// Safe to call while an apply is in flight -- checkOnce leaves a non-idle phase
+// alone -- and safe to call concurrently, the status write being the only
+// shared state.
+func (c *Checker) CheckNow(ctx context.Context) error {
+	if !c.enabled() {
+		return errors.New("this build does not check for updates")
+	}
+	return c.checkOnce(ctx)
 }
 
 func (c *Checker) fetchLatest(ctx context.Context) (*ghRelease, error) {
@@ -324,6 +358,12 @@ func (c *Checker) fetchSum(ctx context.Context, src, name string) string {
 // when we publish none for it. Matched exactly, so the Windows binary
 // (quartermaster-windows-amd64.exe) is never confused with the first-install
 // wizard (quartermaster-setup-vX.Y.Z.exe) sitting in the same release.
+//
+// These are ASSET names, not installed filenames. On Windows the installed
+// binary is Quartermaster.exe: the two deliberately differ, because exePath()
+// swaps whatever path this process runs from, while the asset name has to keep
+// matching what every already-installed version goes looking for. Renaming the
+// upload to follow the binary would cut those installs off from updates.
 func assetName() string {
 	switch runtime.GOOS + "/" + runtime.GOARCH {
 	case "windows/amd64":

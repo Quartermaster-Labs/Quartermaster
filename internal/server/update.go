@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -56,6 +57,31 @@ func (s *Server) handleAPIUpdateStatus(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(update.Status{Phase: update.PhaseIdle})
 		return
 	}
+	json.NewEncoder(w).Encode(s.updater.Status())
+}
+
+// handleAPIUpdateCheck polls the release feed on demand and answers with the
+// status the poll produced, so the caller needs no follow-up GET.
+//
+// The six-hourly poll already keeps the status fresh; this exists because a
+// user who just published (or just heard about) a release should not have to
+// wait out that tick, and because a "check for updates" control that only reads
+// a cached answer is a lie. Bounded by its own timeout rather than the
+// request's -- an unreachable GitHub must fail as a check, not hang the tab.
+func (s *Server) handleAPIUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	if s.updater == nil || !s.updater.Enabled() {
+		shared.SendResponse(w, r, http.StatusNotImplemented, "this build does not check for updates")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if err := s.updater.CheckNow(ctx); err != nil {
+		// 502, not 500: the failure is GitHub's or the network's, and the
+		// message is what the UI shows instead of a silent no-op.
+		shared.SendResponse(w, r, http.StatusBadGateway, "update check failed: "+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.updater.Status())
 }
 
