@@ -39,6 +39,10 @@
     "*": Dashboard,
   };
 
+  // Routes whose content owns the whole page surface (no outer gutter).
+  const FULL_BLEED = ["/models", "/models/:category", "/browse"];
+  const fullBleed = $derived(FULL_BLEED.includes($currentRoute));
+
   function handleRouteLoaded(event: { detail: { route: string | RegExp } }) {
     const route = event.detail.route;
     currentRoute.set(typeof route === "string" ? route : "/");
@@ -104,7 +108,10 @@
       <StatusRail />
 
       <main class="flex-1 overflow-auto pretty-scroll">
-        <div class="h-full p-4">
+        <!-- Table/browser pages are full-bleed: their own panels supply the
+             padding, so the content reaches the window edges instead of
+             floating in a framed box. -->
+        <div class="h-full {fullBleed ? '' : 'p-4'}">
           <Router {routes} on:routeLoaded={handleRouteLoaded} />
         </div>
       </main>

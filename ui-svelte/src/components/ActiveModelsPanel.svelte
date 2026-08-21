@@ -162,9 +162,12 @@
 
 {#if liveMembers.length > 0}
   <div class="shrink-0 h-72 min-h-[14rem]" transition:slide={{ duration: 250 }}>
-    <div class="grid h-full grid-cols-1 lg:grid-cols-2 gap-3">
+    <!-- One card, two halves: staging params and live feedback are the same
+         "what is running right now" surface, so a divider separates them rather
+         than a gap between two floating cards. -->
+    <div class="card h-full p-0 grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-card-border-inner">
       <!-- Active model settings -->
-      <div class="card h-full overflow-auto pretty-scroll">
+      <div class="h-full min-h-0 overflow-auto pretty-scroll p-4">
         {#each liveMembers as m (m.id)}
           {@const cfg = configs[m.id]}
           <!-- A running model keeps serving under the args it SPAWNED with, so show
@@ -247,7 +250,7 @@
       </div>
 
       <!-- Live inference feedback -->
-      <div class="h-full min-h-0">
+      <div class="h-full min-h-0 p-4">
         <InferenceFeedback models={liveMembers} />
       </div>
     </div>

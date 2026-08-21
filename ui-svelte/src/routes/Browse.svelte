@@ -51,7 +51,6 @@
   let results = $state<HubModel[]>([]);
   let selected = $state<HubDetail | null>(null);
   let modelsRoot = $state("");
-  let hasToken = $state(false);
   let targetVramGB = $state(0);
   let available = $state(true);
   let searching = $state(false);
@@ -215,7 +214,6 @@
     try {
       const s = await getHubSources();
       modelsRoot = s.modelsRoot;
-      hasToken = s.hasToken;
     } catch (e) {
       // 501 is the one case where the feature genuinely isn't in this build;
       // anything else is a fault the user needs to see rather than a blank tab.
@@ -536,15 +534,15 @@
 
 </script>
 
-<div class="flex flex-col h-full gap-3">
+<div class="flex flex-col h-full">
   {#if !available}
-    <div class="card text-sm text-txtsecondary">The model browser is unavailable in this build.</div>
+    <div class="card m-4 text-sm text-txtsecondary">The model browser is unavailable in this build.</div>
   {:else}
     <!-- Same category tabs, in the same order, as the Models page: what you can
          browse and what you already have are one vocabulary. The narrowing is
          done hub-side (see searchFilters in internal/hub/hf.go) — a 30-row page
          filtered here would leave most tabs empty. -->
-    <div class="flex flex-wrap items-end gap-x-1 gap-y-2 border-b border-card-border shrink-0">
+    <div class="flex flex-wrap items-end gap-x-1 gap-y-2 px-3 border-b border-card-border shrink-0">
       {#each BROWSE_CATEGORIES as c (c.id)}
         <button
           class="px-3 py-2 -mb-px border-b-2 font-mono text-xs uppercase tracking-wide transition-colors {kind === c.id
@@ -572,7 +570,7 @@
          Every control is pinned to the SAME h-7 — .btn, .seg and a bare input
          each compute their own height from padding, which is how the refresh
          button ended up shorter than the segmented controls beside it. -->
-    <div class="shrink-0 flex flex-wrap items-stretch gap-2">
+    <div class="shrink-0 flex flex-wrap items-stretch gap-2 px-3 py-2">
       <!-- Fixed width, not flex-1: a search box that grows to fill a 2560px
            window is a huge empty field for a two-word query. Border and radius
            are spelled out because this app has no `.input` class — the
@@ -706,15 +704,16 @@
     </div>
 
     {#if err}
-      <div class="shrink-0 flex items-start gap-2 rounded-md border border-error/40 bg-error/10 px-3 py-2 text-xs text-error">
+      <div class="shrink-0 mx-3 mb-2 flex items-start gap-2 rounded-md border border-error/40 bg-error/10 px-3 py-2 text-xs text-error">
         <AlertTriangle class="w-4 h-4 shrink-0 mt-px" />
         <span>{err}</span>
       </div>
     {/if}
 
-    <!-- Results | detail -->
-    <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[22rem_1fr] gap-3">
-      <div bind:this={resultsEl} onscroll={onResultsScroll} class="min-h-0 overflow-y-auto pretty-scroll rounded-md border border-card-border bg-surface">
+    <!-- Results | detail: ONE surface spanning the page, the picker and the
+         file/quant view separated by a divider rather than a gap. -->
+    <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[22rem_1fr] border-t border-card-border bg-surface divide-y lg:divide-y-0 lg:divide-x divide-card-border">
+      <div bind:this={resultsEl} onscroll={onResultsScroll} class="min-h-0 overflow-y-auto pretty-scroll">
         {#if searching && !results.length}
           <div class="p-3 text-xs text-txtsecondary">Loading Hugging Face…</div>
         {:else if !searched}
@@ -782,7 +781,7 @@
         {/if}
       </div>
 
-      <div class="min-h-0 overflow-y-auto pretty-scroll rounded-md border border-card-border bg-surface">
+      <div class="min-h-0 overflow-y-auto pretty-scroll">
         {#if loadingModel}
           <div class="p-4 text-xs text-txtsecondary">Loading the model page…</div>
         {:else if !selected}
@@ -913,16 +912,15 @@
       </div>
     </div>
 
-    <div class="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[0.6rem] text-txtsecondary">
-      {#if !hasToken}
-        <span>No Hugging Face token set — gated repos will refuse.</span>
-      {/if}
-      {#if $hubJobs.some((j) => j.phase === "done")}
+    <!-- Only rendered when it has something to say: an always-present footer
+         row cost the panes a strip of height to hold nothing. -->
+    {#if $hubJobs.some((j) => j.phase === "done")}
+      <div class="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1 font-mono text-[0.6rem] text-txtsecondary">
         <span class="inline-flex items-center gap-1 text-success">
           <Check class="w-3 h-3" /> Finished downloads are in the config already — check the Models page.
         </span>
-      {/if}
-    </div>
+      </div>
+    {/if}
   {/if}
 </div>
 

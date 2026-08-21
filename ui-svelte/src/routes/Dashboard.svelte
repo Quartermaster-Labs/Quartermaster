@@ -37,8 +37,6 @@
 </script>
 
 <div class="max-w-5xl mx-auto flex flex-col gap-4">
-  <h2>Dashboard</h2>
-
   <!-- Live models: launch params + inference feedback (empty until one loads) -->
   <ActiveModelsPanel category="all" />
 

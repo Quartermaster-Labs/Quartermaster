@@ -226,16 +226,17 @@
   </div>
 {/snippet}
 
-<div class="flex-1 min-h-0 overflow-auto pretty-scroll rounded-lg border border-card-border">
+<div class="flex-1 min-h-0 overflow-auto pretty-scroll">
   <!-- overflow-visible is what makes the sticky header work, and it is not
        cosmetic: the global `table` rule (index.css) sets overflow-hidden for its
        rounded corners, and any overflow value turns the table into its own
        clipping container - a sticky th then pins to the TABLE, which scrolls out
-       of the wrapper wholesale. The rounding lives on the wrapper here anyway.
+       of the wrapper wholesale. The page is full-bleed now, so border-0 drops
+       the frame that rule also applies and only the cell rules draw.
        border-separate (also from the global rule) is required too: sticky cells
        are unreliable under border-collapse. The header rule is an inset shadow
        on each th, since a collapsed bottom border would scroll away with it. -->
-  <table class="w-full overflow-visible border-separate border-spacing-0 text-left">
+  <table class="w-full overflow-visible border-0 rounded-none border-separate border-spacing-0 text-left">
     <thead>
       <tr>
         <!-- The non-sortable columns carry a tooltip and an sr-only name rather

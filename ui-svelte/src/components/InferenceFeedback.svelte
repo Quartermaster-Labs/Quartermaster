@@ -368,7 +368,7 @@
   }
 </script>
 
-<div class="card h-full flex flex-col min-h-0">
+<div class="h-full flex flex-col min-h-0">
   <!-- min-h matches the staging card's header row, whose icon buttons make it
        taller than text alone — so the dot/label baselines line up across cards. -->
   <div class="relative flex items-center gap-2 shrink-0 min-h-[30px]">

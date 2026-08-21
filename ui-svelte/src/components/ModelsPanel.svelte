@@ -175,10 +175,12 @@
   );
 </script>
 
-<div class="flex flex-col h-full gap-3">
+<!-- Full-bleed page: the panel IS the page background, so the toolbar rule and
+     the table both span edge to edge and only their contents are inset. -->
+<div class="flex flex-col h-full">
   <!-- One toolbar: category tabs left, table-wide controls right. Wraps rather
        than scrolls — a scrollbar under the tabs hides categories behind a drag. -->
-  <div class="flex flex-wrap items-end gap-x-1 gap-y-2 border-b border-card-border shrink-0">
+  <div class="flex flex-wrap items-end gap-x-1 gap-y-2 px-3 border-b border-card-border shrink-0">
     {#each MODEL_CATEGORIES as c (c.id)}
       <button
         class="px-3 py-2 -mb-px border-b-2 font-mono text-xs uppercase tracking-wide transition-colors {tab === c.id
