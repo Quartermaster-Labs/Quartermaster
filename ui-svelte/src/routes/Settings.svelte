@@ -1,22 +1,34 @@
 <script lang="ts">
   import { tip } from "../lib/tooltip";
   import { onMount } from "svelte";
-  import { SlidersHorizontal, HardDrive, Cpu, FolderOpen, Trash2, Star, Plus, Power, HelpCircle } from "lucide-svelte";
+  import { SlidersHorizontal, HardDrive, Cpu, FolderOpen, Trash2, Star, Plus, Power, HelpCircle, Palette } from "lucide-svelte";
   import { getSettings, putSettings, putSlotCache, putBackends, pickFolder, pickBackend, resetSettings, getAutostart, putAutostart, type AppSettings, type BackendEntry, type AutostartStatus } from "../stores/api";
   import { BACKEND_CLASSES, backendClass, type BackendClassDef } from "../lib/backends";
   import ManagedBackends from "../components/ManagedBackends.svelte";
+  import SoftwareUpdate from "../components/SoftwareUpdate.svelte";
   import Select from "../components/Select.svelte";
   import Toggle from "../components/Toggle.svelte";
+  import UIScaleControl from "../components/UIScaleControl.svelte";
+  import { themeMode, type ThemeMode } from "../stores/theme";
   import { latestGpu, latestSys } from "../stores/perf";
 
   // Category side-nav — mirrors the playground settings modal's pattern.
-  type SettingsCat = "general" | "kvcache" | "backends" | "system";
+  type SettingsCat = "appearance" | "general" | "kvcache" | "backends" | "system";
   let cat = $state<SettingsCat>("general");
   const cats: { id: SettingsCat; label: string; icon: typeof SlidersHorizontal }[] = [
+    { id: "appearance", label: "Appearance", icon: Palette },
     { id: "general", label: "Memory & Eviction", icon: SlidersHorizontal },
     { id: "kvcache", label: "KV Cache", icon: HardDrive },
     { id: "backends", label: "Backends", icon: Cpu },
     { id: "system", label: "System", icon: Power },
+  ];
+
+  // Appearance is client-only (localStorage), so it works even when the server
+  // was started without -generate and every other category is unavailable.
+  const themeOptions = [
+    { value: "system", label: "System", detail: "Follow the OS light/dark setting" },
+    { value: "light", label: "Light", detail: "" },
+    { value: "dark", label: "Dark", detail: "" },
   ];
 
   // --- Global settings (VRAM budget + idle eviction + slot KV) ---
@@ -316,16 +328,7 @@
       aria-label={text}><HelpCircle size={12} /></span>
   {/snippet}
 
-  {#if !settingsAvailable}
-    <div class="flex-1 p-5">
-      <div class="card">
-        <p class="text-label text-txtsecondary">
-          Settings editing requires the server to run with <span class="text-txtmain">-generate</span>.
-        </p>
-      </div>
-    </div>
-  {:else}
-    <!-- Category side-nav -->
+  <!-- Category side-nav -->
     <nav class="shrink-0 w-44 flex flex-col gap-0.5 py-3 border-r border-card-border bg-background/40">
       {#each cats as c (c.id)}
         {@const active = cat === c.id}
@@ -342,7 +345,52 @@
     </nav>
 
     <div class="flex-1 min-w-0 overflow-y-auto pretty-scroll p-4">
-    {#if cat === "general"}
+    {#if cat === "appearance"}
+    <!-- Client-only: theme + interface size both live in localStorage, so this
+         panel works with or without -generate. -->
+    <div>
+      <div class="flex items-center gap-2 mb-3">
+        <h6 >Appearance</h6>
+        {@render hint("How the dashboard is drawn. Both settings are stored in this browser (or app window) only - they are not part of the server config.")}
+      </div>
+
+      <div class="rounded border border-card-border bg-surface p-3 flex flex-col gap-3">
+        <div class="flex items-center justify-between gap-4">
+          <span class="min-w-0">
+            <span class="block text-sm text-txtmain">Theme</span>
+            <span class="block mt-0.5 text-micro text-txtsecondary">
+              Light, dark, or whatever the operating system is set to.
+            </span>
+          </span>
+          <Select
+            value={$themeMode}
+            onchange={(v) => themeMode.set(v as ThemeMode)}
+            options={themeOptions}
+            ariaLabel="Theme"
+            class="w-36 shrink-0"
+          />
+        </div>
+
+        <div class="flex items-center justify-between gap-4 border-t border-card-border pt-3">
+          <span class="min-w-0">
+            <span class="block text-sm text-txtmain">Interface size</span>
+            <span class="block mt-0.5 text-micro text-txtsecondary">
+              Scales the whole UI. Ctrl+Plus / Ctrl+Minus / Ctrl+0 do the same thing anywhere.
+            </span>
+          </span>
+          <UIScaleControl />
+        </div>
+      </div>
+    </div>
+
+    {:else if !settingsAvailable}
+    <div class="card">
+      <p class="text-label text-txtsecondary">
+        Settings editing requires the server to run with <span class="text-txtmain">-generate</span>.
+      </p>
+    </div>
+
+    {:else if cat === "general"}
     <!-- Memory budget + idle eviction -->
     <div>
       <div class="flex items-center justify-between mb-3">
@@ -456,7 +504,10 @@
     </div>
 
     {:else if cat === "system"}
-    <!-- Start with the system (Windows only) -->
+    <!-- The app itself first: which build is running, and how it gets newer. -->
+    <SoftwareUpdate />
+
+    <!-- Then how it starts (Windows only) -->
     {#if autostart?.supported}
       <div>
         <div class="flex items-center gap-2 mb-3">
@@ -504,7 +555,7 @@
         </div>
       </div>
     {:else}
-      <p class="text-label text-txtsecondary">No system options available on this platform.</p>
+      <p class="text-label text-txtsecondary">Starting with the system is a Windows-only option.</p>
     {/if}
     {:else if cat === "kvcache"}
     <!-- Slot KV-cache persistence -->
@@ -687,5 +738,4 @@
     </div>
     {/if}
     </div>
-  {/if}
 </div>

@@ -58,7 +58,8 @@ changing anything under `ui-svelte/`.
 | `src/routes/` | Top-level pages mounted by the router. |
 | `src/components/` | Reusable UI components (panels, modals, gauges, charts, tooltips). |
 | `src/components/TitleBar.svelte`, `WindowControls.svelte`, `src/lib/native.ts` | The native app window's caption + the `qm*` bridge. Feature-tested, never build-flagged — see Conventions. |
-| `src/components/UIScaleControl.svelte`, `src/stores/uiScale.ts` | Interface size (`--qm-scale` → `zoom`), with Ctrl+Plus/Minus/0. In the sidebar footer and the playground's General settings. |
+| `src/components/UIScaleControl.svelte`, `src/stores/uiScale.ts` | Interface size (`--qm-scale` → `zoom`) as a snapped slider, plus Ctrl+Plus/Minus/0. In Settings → Appearance (with the theme dropdown) and the playground's General settings — not in the sidebar footer. |
+| `src/components/SoftwareUpdate.svelte`, `src/stores/update.ts` | Which build is running, check for a newer one, apply it. Settings → System; shares its state with the sidebar's update button. |
 | `src/components/playground/` | The playground's per-mode interfaces and shared widgets. |
 | `src/stores/` | Backend state, SSE wiring, persisted prefs, theme, routing. |
 | `src/lib/` | Framework-agnostic helpers: API client modules, shared `types.ts`, markdown/histogram utilities, the `scrollFade` action. |
@@ -91,6 +92,10 @@ Backend communication is centralized in `src/stores/api.ts`, with shared types i
   (`me`/`login`/`logout`/`checkMe` via `/auth/*`, `playgroundPort`). `stores/hubJobs.ts` holds
   download jobs, `stores/observe.ts` the Observe tab/window state, `stores/playgroundActivity.ts`
   the sidebar activity dot.
+- **Self-update** lives in `stores/update.ts`, not in either component that shows it: the sidebar
+  button and Settings → System (`SoftwareUpdate.svelte`) are two windows onto ONE server-side
+  process, and component-local state gave each its own poller and its own idea of whether an
+  update was running.
 
 ## Chat compaction
 

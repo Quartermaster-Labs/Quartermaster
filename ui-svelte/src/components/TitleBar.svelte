@@ -7,9 +7,28 @@
   // A dedicated strip rather than window buttons tucked into StatusRail,
   // because StatusRail only exists in dashboard mode. Loading, login and the
   // playground shell would otherwise be windows with no way to close them.
+  import { push } from "svelte-spa-router";
   import * as native from "../lib/native";
   import { appTitle, connectionState, isDarkMode } from "../stores/theme";
+  import { versionInfo } from "../stores/api";
   import WindowControls from "./WindowControls.svelte";
+
+  // Only the dashboard has a router to go home to. In playground mode (a
+  // different port, decided by /api/mode) there is no "/" route, so the caller
+  // says whether the wordmark is a link at all rather than this component
+  // guessing and pushing a hash nothing listens to.
+  let { home = false }: { home?: boolean } = $props();
+
+  function goHome(): void {
+    push("/");
+  }
+
+  // The whole bar is a drag handle, and a drag is a mousedown the window
+  // manager steals -- the click never lands. Stopping propagation here keeps
+  // the wordmark a button while everything around it still moves the window.
+  function keepClickable(e: MouseEvent): void {
+    e.stopPropagation();
+  }
 
   // Same signal the tab title carries, which the native window has no tab to
   // show. Without it a disconnected app window looks identical to a working
@@ -34,6 +53,11 @@
     return () => cancelAnimationFrame(id);
   });
 
+  // The version only becomes known once the event stream connects, and the
+  // store's placeholder until then is the literal string "unknown" -- which is
+  // worse than nothing in a caption bar, so render nothing instead of it.
+  const version = $derived($versionInfo.version === "unknown" ? "" : $versionInfo.version);
+
   const dotClass = $derived(
     $connectionState === "connected"
       ? "bg-success"
@@ -55,7 +79,36 @@
     role="presentation"
   >
     <span class="inline-block h-2 w-2 shrink-0 rounded-full {dotClass}"></span>
-    <span class="truncate text-micro font-medium tracking-wide text-txtsecondary">{$appTitle}</span>
+    {#if home}
+      <!-- cursor-pointer is explicit: Tailwind v4's preflight gives buttons
+           `cursor: default`, so a bare <button> here would look inert. -->
+      <button
+        type="button"
+        class="cursor-pointer truncate text-micro font-medium tracking-wide text-txtsecondary transition-colors hover:text-txtmain"
+        onmousedown={keepClickable}
+        ondblclick={keepClickable}
+        onclick={goHome}
+        title="Go to the dashboard"
+      >
+        {$appTitle}
+      </button>
+    {:else}
+      <span class="truncate text-micro font-medium tracking-wide text-txtsecondary">{$appTitle}</span>
+    {/if}
+    <!-- Dimmer and monospaced so it reads as a build stamp beside the name
+         rather than as part of it -- $appTitle is user-editable, and the two
+         must not look like one string. shrink-0 keeps the version whole while
+         the title above it is the thing that truncates. -->
+    {#if version}
+      <span
+        class="shrink-0 font-mono text-micro tabular-nums text-txtsecondary/60"
+        title={`Version: ${version}
+Commit: ${$versionInfo.commit?.substring(0, 7) ?? "unknown"}
+Build date: ${$versionInfo.build_date ?? "unknown"}`}
+      >
+        {version}
+      </span>
+    {/if}
 
     <!-- Grows to fill, so the whole empty middle of the bar is draggable rather
          than just the few pixels around the wordmark. -->

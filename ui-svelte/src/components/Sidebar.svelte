@@ -1,17 +1,21 @@
 <script lang="ts">
-  import UIScaleControl from "./UIScaleControl.svelte";
   import { tip } from "../lib/tooltip";
   import { link } from "svelte-spa-router";
-  import { LayoutDashboard, Boxes, Layers, FlaskConical, Activity, KeyRound, Sun, Moon, MonitorCog, ArrowUpCircle, BookOpen, Settings } from "lucide-svelte";
+  import { LayoutDashboard, Boxes, Layers, FlaskConical, Activity, KeyRound, ArrowUpCircle, BookOpen, Settings } from "lucide-svelte";
   import WikiModal from "./WikiModal.svelte";
   import SettingsModal from "./SettingsModal.svelte";
-  import { toggleTheme, themeMode, connectionState } from "../stores/theme";
+  import { connectionState } from "../stores/theme";
   import { currentRoute } from "../stores/route";
   import { playgroundActivity } from "../stores/playgroundActivity";
   import { versionInfo } from "../stores/api";
   import { playgroundPort } from "../stores/playgroundAuth";
-  import { askConfirm, notify } from "../lib/confirm";
-  import type { UpdateStatus } from "../lib/types";
+  import {
+    updateStatus,
+    updateBusy,
+    applyUpdate,
+    resumePolling,
+    updateProgressLabel,
+  } from "../stores/update";
   const pages = [
     { path: "/", label: "Dashboard", icon: LayoutDashboard },
     // Models is ONE page now — the category split is tabs on the page itself,
@@ -37,126 +41,19 @@
     return path === "/" ? current === "/" : current.startsWith(path);
   }
 
-  // Connection health drives the version status bar (replaces the old dot).
-  let connOk = $derived($connectionState === "connected");
   let statusTooltip = $derived(
     `Event Stream: ${$connectionState ?? "unknown"}\nAPI Version: ${$versionInfo?.version ?? "unknown"}\nCommit: ${$versionInfo?.commit?.substring(0, 7) ?? "unknown"}\nBuild Date: ${$versionInfo?.build_date ?? "unknown"}`
   );
 
-  // Auto-update. The server downloads the new binary, verifies it, and renames
-  // it over the running exe — no installer, no wizard. POST /api/update returns
-  // 202 immediately and the work continues on the SERVER's lifetime, so we poll
-  // for progress rather than holding a request open across a 40MB download.
-  let updating = $state(false);
-  let progress = $state<UpdateStatus | null>(null);
-  let poller: ReturnType<typeof setInterval> | null = null;
-
-  // Phase -> what the button says. "staging" is the rename pair: brief, but it
-  // is the only moment the install is mid-swap, so it gets its own label.
-  const phaseLabel: Record<string, string> = {
-    downloading: "Downloading…",
-    verifying: "Verifying…",
-    staging: "Installing…",
-    ready: "Restarting…",
-  };
-
-  let updateLabel = $derived.by(() => {
-    if (!updating) return "Update";
-    const p = progress?.phase ?? "";
-    if (p === "downloading" && progress && progress.total > 0) {
-      return `${Math.round((progress.done / progress.total) * 100)}%`;
-    }
-    return phaseLabel[p] ?? "Updating…";
-  });
-
-  function stopPolling(): void {
-    if (poller !== null) {
-      clearInterval(poller);
-      poller = null;
-    }
-  }
-
-  async function pollStatus(): Promise<void> {
-    let st: UpdateStatus;
-    try {
-      const r = await fetch("/api/update/status");
-      if (!r.ok) return;
-      st = await r.json();
-    } catch {
-      // The server going away mid-poll is the EXPECTED end of an auto-restart
-      // update, not a failure — keep the spinner and let the reload land.
-      return;
-    }
-    progress = st;
-
-    if (st.phase === "error") {
-      stopPolling();
-      updating = false;
-      await notify("Update failed", st.error || "The update did not complete.");
-      return;
-    }
-    if (st.phase !== "ready") return;
-
-    // Swapped. Who restarts depends on how this install is run.
-    stopPolling();
-    if (st.restart === "manual") {
-      updating = false;
-      await notify(
-        `Update to ${st.latest} installed`,
-        "Restart the Quartermaster service to finish — the new version is already in place."
-      );
-      return;
-    }
-    // Auto: the server is shutting down and relaunching itself. Give it a moment
-    // to come back on the same port, then reload into the new build.
-    setTimeout(() => window.location.reload(), 4000);
-  }
-
-  async function runUpdate(): Promise<void> {
-    if (updating) return;
-    const latest = $versionInfo.latest_version ?? "the latest version";
-    const auto = ($versionInfo.update_restart ?? "auto") === "auto";
-    const ok = await askConfirm({
-      title: `Update to ${latest}?`,
-      body: auto
-        ? "Quartermaster will download the new version in the background, then restart itself. Any loaded model is unloaded."
-        : "Quartermaster will install the new version in the background. It runs as a service here, so restart the service when you're ready to switch to it.",
-      confirmLabel: "Update",
-    });
-    if (!ok) return;
-    updating = true;
-    progress = null;
-    try {
-      const r = await fetch("/api/update", { method: "POST" });
-      if (!r.ok) {
-        await notify("Update failed", await r.text());
-        updating = false;
-        return;
-      }
-    } catch (e) {
-      await notify("Update failed", String(e));
-      updating = false;
-      return;
-    }
-    // 202 accepted — the work is running server-side now.
-    void pollStatus();
-    poller = setInterval(() => void pollStatus(), 1000);
-  }
+  // Auto-update. The state machine lives in stores/update so the button here
+  // and the Settings → System section are the same update, not two: either can
+  // start one, and both watch it finish. See that file for why it polls.
+  let updateLabel = $derived(updateProgressLabel($updateStatus, $updateBusy));
 
   // The apply runs on the server, so a reload mid-download does not cancel it —
-  // but it does leave this component thinking nothing is happening, and a second
-  // click would just bounce off the already-in-progress guard. /api/version
+  // but it does leave this tab thinking nothing is happening. /api/version
   // carries the phase, so pick the progress back up instead.
-  $effect(() => {
-    const phase = $versionInfo.update_phase;
-    if (updating || poller !== null) return;
-    if (phase !== "downloading" && phase !== "verifying" && phase !== "staging") return;
-    updating = true;
-    void pollStatus();
-    poller = setInterval(() => void pollStatus(), 1000);
-  });
-
-  $effect(() => stopPolling);
+  $effect(() => resumePolling($versionInfo.update_phase));
 
   // Shared label styling: zero-width + invisible at rest (no reserved space, so
   // the icon stays centered in the collapsed rail), grows in on hover.
@@ -241,29 +138,11 @@
     <span class={labelClass}>Settings</span>
   </button>
 
-  <!-- Footer: theme toggle + version. Connection health is a full-height bar
-       flush against the sidebar's right edge, same weight as the orange
-       active-row accent — always visible, not just on hover. -->
-  <div class="relative pr-3 py-2 flex items-center gap-2" use:tip={statusTooltip}>
-    <button
-      class="w-14 shrink-0 flex items-center justify-center text-txtsecondary hover:text-txtmain transition-colors"
-      onclick={toggleTheme}
-      use:tip={`Toggle theme (current: ${$themeMode})`}
-      aria-label="Toggle theme"
-    >
-      {#if $themeMode === "system"}
-        <MonitorCog size={18} />
-      {:else if $themeMode === "light"}
-        <Sun size={18} />
-      {:else}
-        <Moon size={18} />
-      {/if}
-    </button>
-    <!-- Hover-only, like the update button and version below it: the collapsed
-         rail is 14 units of icon and has no room for a three-button group. -->
-    <div class="hidden group-hover/rail:flex" use:tip={"Interface size (Ctrl+Plus / Ctrl+Minus / Ctrl+0)"}>
-      <UIScaleControl compact />
-    </div>
+  <!-- Footer: update button + version, hover-only like the rest of the expanded
+       rail. Theme and interface size moved to Settings -> Appearance, and
+       connection health is the dot next to the title in the window caption —
+       the old full-height edge bar here said the same thing twice. -->
+  <div class="relative px-3 py-2 flex items-center gap-2" use:tip={statusTooltip}>
     {#if $versionInfo.update_available && $versionInfo.update_blocked}
       <!-- A new version exists but this install cannot swap its own binary
            (container, read-only directory). Link to the release instead of
@@ -281,9 +160,9 @@
     {:else if $versionInfo.update_available}
       <button
         class="hidden group-hover/rail:inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-micro font-medium text-primary hover:bg-primary/10 transition-colors disabled:opacity-60"
-        onclick={runUpdate}
-        disabled={updating}
-        use:tip={updating
+        onclick={() => applyUpdate()}
+        disabled={$updateBusy}
+        use:tip={$updateBusy
           ? "Installing in the background — you can keep working until it restarts"
           : `Update to ${$versionInfo.latest_version}`}
       >
@@ -294,7 +173,6 @@
     <span class="ml-auto hidden group-hover/rail:inline-block font-mono text-micro text-txtsecondary tabular-nums">
       {$versionInfo.version}
     </span>
-    <span class="absolute right-0 top-0 bottom-0 w-0.5 {connOk ? 'bg-success' : 'bg-error'}"></span>
   </div>
 </aside>
 

@@ -92,7 +92,7 @@
      Everything below it still measures itself in `h-screen`, which index.css
      shortens by the bar's height under [data-native] -- one rule instead of
      threading a height through every full-height root in the app. -->
-<TitleBar />
+<TitleBar home={mode === "dashboard"} />
 
 {#if mode === "playground"}
   <PlaygroundApp />
