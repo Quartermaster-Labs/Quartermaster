@@ -119,6 +119,11 @@ func main() {
 		os.Exit(0)
 	}
 
+	// A packaged install carries its own argv: double-clicking the exe is the
+	// supported way to start it, and the launcher script that used to supply
+	// these flags is gone. No-op outside an install -- see bundle.go.
+	bundleDir := applyBundleDefaults()
+
 	if *flagConfig == "" {
 		slog.Error("-config is required")
 		os.Exit(1)
@@ -165,6 +170,9 @@ func main() {
 	startupNote := func(m string) {
 		slog.Info(m)
 		startupLines = append(startupLines, m)
+	}
+	if bundleDir != "" {
+		startupNote("packaged install detected at " + bundleDir + "; unset flags defaulted (pass any flag to override)")
 	}
 	autogen.DetectGpuCompute(startupNote)
 
