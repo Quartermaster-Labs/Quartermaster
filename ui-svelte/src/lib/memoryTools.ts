@@ -12,8 +12,14 @@ import type { ToolDef } from "./types";
 //
 // Duplicates are the STORE's problem, not the model's: internal/server/memories.go
 // folds a restatement into the entry that already exists, so nothing here asks the
-// model to audit its own block before saving. The block is rendered append-only
-// (see memoryBlock) so an ordinary save changes bytes only at its tail.
+// model to audit its own block before saving. A paraphrase too loose to fold is
+// not left to pile up either — the store names the near-identical entry in the
+// tool RESULT, and the description below says what to do about it. Pointing at one
+// specific pair after the fact beats asking for a pre-flight scan of the whole
+// block: the model is deciding between two texts it can see, and it only has to
+// decide when there is actually something to decide. The block is rendered
+// append-only (see memoryBlock) so an ordinary save changes bytes only at its
+// tail.
 export type MemoryEntry = {
   id: string;
   text: string;
@@ -72,7 +78,7 @@ export const MEMORY_SAVE_TOOL: ToolDef = {
   function: {
     name: "memory_save",
     description:
-      "Remember one durable fact about this user across conversations. Save when the user asks you to remember something, or when they state a lasting preference, constraint or detail about themselves or their setup that would change your answers later. Save it the moment you see it - you do not need to check your memory block first, because a fact you already know is folded into the entry that holds it rather than stored twice. Do NOT save anything only relevant to this conversation, or anything you can look up (their config - use quartermaster_inspect). If a memory in your block is now wrong or outdated, pass its `id` to REPLACE it rather than saving a second, conflicting version. One fact per call, written in the third person about the user, self-contained enough to make sense with no conversation around it.",
+      "Remember one durable fact about this user across conversations. Save when the user asks you to remember something, or when they state a lasting preference, constraint or detail about themselves or their setup that would change your answers later. Save it the moment you see it - you do not need to check your memory block first, because a fact you already know in roughly these words is folded into the entry that holds it rather than stored twice. Different wording can slip past that, so if the result of a save names an existing memory that says something close, deal with it immediately: same fact means saving one combined text onto the older memory's id and deleting the new one; two different facts means keeping both. Do NOT save anything only relevant to this conversation, or anything you can look up (their config - use quartermaster_inspect). If a memory in your block is now wrong or outdated, pass its `id` to REPLACE it rather than saving a second, conflicting version. One fact per call, written in the third person about the user, self-contained enough to make sense with no conversation around it.",
     parameters: {
       type: "object",
       properties: {

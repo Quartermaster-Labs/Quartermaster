@@ -212,3 +212,73 @@ func TestMemoryDuplicateOf(t *testing.T) {
 		}
 	}
 }
+
+// A rephrasing that the merge threshold rightly leaves alone must still be
+// REPORTED, or the two entries quietly coexist forever. This is the case the
+// prompt used to hand-wave with "a redundant save costs nothing".
+func TestPlayground_MemoryNearestReportsRephrasing(t *testing.T) {
+	p := testPlayground(t)
+	first, _, _ := p.upsertMemory("bob", memoryEntry{Text: "Runs an RX 7900 XTX with 24GB of VRAM"})
+
+	second, outcome, err := p.upsertMemory("bob", memoryEntry{Text: "The user's GPU is an AMD RX 7900 XTX"})
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	// Not merged: too different to fold without risking a real second fact.
+	if outcome != memoryCreated {
+		t.Fatalf("outcome = %v, want memoryCreated", outcome)
+	}
+	near, ok := p.nearestMemory("bob", second.Text, second.ID)
+	if !ok {
+		t.Fatal("no near memory reported for an obvious rephrasing")
+	}
+	if near.ID != first.ID {
+		t.Fatalf("near = %q, want the first memory %q", near.ID, first.ID)
+	}
+}
+
+// The neighbour report is advisory, but a report on every unrelated save trains
+// the model to ignore it (or worse, to merge two facts that are not one).
+func TestPlayground_MemoryNearestIgnoresUnrelated(t *testing.T) {
+	p := testPlayground(t)
+	p.upsertMemory("bob", memoryEntry{Text: "Prefers metric units"})
+	p.upsertMemory("bob", memoryEntry{Text: "Works as a landscape photographer in Cluj"})
+
+	m, _, _ := p.upsertMemory("bob", memoryEntry{Text: "Is allergic to shellfish"})
+	if near, ok := p.nearestMemory("bob", m.Text, m.ID); ok {
+		t.Fatalf("unrelated memory reported as near: %q", near.Text)
+	}
+	// One shared content word is not a neighbour either.
+	m2, _, _ := p.upsertMemory("bob", memoryEntry{Text: "Prefers dark roast coffee"})
+	if near, ok := p.nearestMemory("bob", m2.Text, m2.ID); ok {
+		t.Fatalf("single shared word reported as near: %q", near.Text)
+	}
+}
+
+// The entry just written must never be its own neighbour, and the closest of
+// several candidates is the one worth naming.
+func TestPlayground_MemoryNearestPicksClosestAndSkipsSelf(t *testing.T) {
+	p := testPlayground(t)
+	p.upsertMemory("bob", memoryEntry{Text: "Owns a Sony camera"})
+	closest, _, _ := p.upsertMemory("bob", memoryEntry{Text: "Shoots landscapes on a Sony A7 camera body"})
+
+	m, _, _ := p.upsertMemory("bob", memoryEntry{Text: "Shoots landscapes with a Sony A7 body"})
+	near, ok := p.nearestMemory("bob", m.Text, m.ID)
+	if !ok {
+		t.Fatal("expected a near memory")
+	}
+	if near.ID == m.ID {
+		t.Fatal("a memory was reported as its own neighbour")
+	}
+	if near.ID != closest.ID {
+		t.Fatalf("near = %q, want the closest %q", near.Text, closest.Text)
+	}
+}
+
+func TestContentWords(t *testing.T) {
+	got := contentWords("The user is a fan of the Sony A7, and of Sony")
+	want := []string{"fan", "sony", "a7"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("contentWords = %v, want %v", got, want)
+	}
+}

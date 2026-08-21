@@ -345,6 +345,10 @@ func busyLabel(name, query string) string {
 		return "Checking quartermaster"
 	case "quartermaster_configure":
 		return "Applying the config change"
+	case "memory_save":
+		return "Remembering that"
+	case "memory_delete":
+		return "Forgetting that"
 	}
 	return ""
 }
@@ -371,6 +375,10 @@ func digestLabel(name string) string {
 		return "Reading through the comments"
 	case "web_search", "youtube_search", "wiki_search":
 		return "Reading through the results"
+	case "memory_save":
+		return "Remembering that"
+	case "memory_delete":
+		return "Forgetting that"
 	}
 	return ""
 }
@@ -1302,12 +1310,21 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 				}
 			}
 
-			at.setBusy("")
-			if len(resultText) >= digestMinChars {
-				if d := digestLabel(tc.Name); d != "" {
-					digest = d
-				}
+			// A digest label for the silence after this call. Normally earned by
+			// bulk (a long page takes seconds to prefill); a memory write returns
+			// two lines instantly, yet writing is the entire point of the call and
+			// the user has to see that it happened - so it is labelled on kind, not
+			// on size. Setting it here rather than clearing first keeps the label
+			// continuous: setBusy("") followed by the same string one line later
+			// paints as a flicker.
+			d := digestLabel(tc.Name)
+			if d != "" && len(resultText) < digestMinChars && kind != "memory" {
+				d = ""
 			}
+			if d != "" {
+				digest = d
+			}
+			at.setBusy(d)
 			// The turn runner logged nothing at all, so a search chain falling
 			// through every provider, or yt-dlp taking 40s, was visible only as a
 			// stalled chat. Every tool call gets one line; the ones that came back

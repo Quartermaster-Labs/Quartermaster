@@ -305,8 +305,20 @@ longer text wins, tags union, `CreatedAt` and `Source` survive. The outcome
 accordingly: on a duplicate it explicitly tells the model NOT to announce a save that did not
 happen. This is what lets the prompt drop the old "check your block first" rule.
 
+**A paraphrase is escalated, not merged.** The same fact in different words shares its content words
+but not its shape, so it lands nowhere near 0.8 and two entries would otherwise coexist forever.
+Loosening the merge threshold is the wrong fix — a merge is lossy. Instead `nearestMemory`
+(content-word Jaccard >= `memoryNearJaccard` 0.3, at least `memoryNearMinShared` 2 shared words,
+stop words including `user` stripped) finds the closest existing entry on a **create** and
+`memorySave` names it in the tool result, with the two calls that would merge them. The model is
+good at judging two texts put in front of it and bad at scanning its whole block unprompted, so the
+check happens after the write, on one specific pair, only when there is something to decide.
+
 No approval gate (unlike `quartermaster_configure`): writes are frequent and reversible, and
-visibility comes from the chat card plus the Settings panel. The save result **states that the new
+visibility comes from the live `Remembering that` / `Forgetting that` label (`busyLabel` +
+`digestLabel` in `turns.go`, the only digest labelled on kind rather than on result size — a memory
+write returns two lines instantly, and without it the write and the prefill after it read as an idle
+chat), plus the chat card and the Settings panel. The save result **states that the new
 memory is not in the block it was given this turn**, or a model that re-reads its context concludes
 the save failed and saves again.
 

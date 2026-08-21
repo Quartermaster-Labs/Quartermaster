@@ -38,6 +38,13 @@ import (
 // the entry that already exists. The injected block is rendered append-only
 // (createdAt order, see memoryBlock) so an ordinary save only changes bytes at its
 // tail instead of reshuffling every line above it.
+//
+// The one duplicate the store cannot settle by itself is the same fact in
+// different words, which is too far from the original to fold without risking the
+// loss of a real second fact. That case is escalated rather than guessed at:
+// nearestMemory finds the closest existing entry and turns_memory.go names it in
+// the tool result, so the model merges two texts it can see instead of auditing a
+// block it mostly skims.
 type memoryEntry struct {
 	ID   string   `json:"id"`
 	Text string   `json:"text"`           // the fact itself, one per entry
@@ -208,6 +215,110 @@ func jaccardWords(a, b []string) float64 {
 		return 0
 	}
 	return float64(inter) / float64(union)
+}
+
+// --- near-duplicate reporting ---------------------------------------------
+//
+// memoryDuplicateOf is deliberately strict, so it only catches a restatement in
+// roughly the same words. Real duplicates rarely look like that: the same fact
+// noticed in two different conversations comes back rephrased ("Runs an RX 7900
+// XTX with 24GB of VRAM" / "The user's GPU is an AMD RX 7900 XTX"), which shares
+// its content words but not its shape, and lands nowhere near the merge
+// threshold. Loosening that threshold is not the fix - a merge is lossy, and a
+// wrong one silently destroys a fact the user asked to keep.
+//
+// So the loose match does not merge, it TELLS. On a create the store finds the
+// nearest existing entry and hands it back to the model as part of the tool
+// result: here is the id, here is what it says, merge them yourself if it is the
+// same fact. That is the one form of duplicate-checking a model is actually good
+// at - judging two candidates put in front of it - as opposed to the form it is
+// bad at, which is auditing a forty-line block unprompted before every save.
+// Being wrong is cheap in this direction: a false neighbour costs a sentence the
+// model reads and ignores.
+
+// memoryNearJaccard is the content-word overlap at which two memories are worth
+// mentioning to each other. Far below memoryDedupeJaccard because nothing is
+// merged on it - the model decides - and a missed neighbour is the failure this
+// exists to prevent.
+const memoryNearJaccard = 0.3
+
+// memoryNearMinShared stops one incidental word in common from pairing two
+// unrelated one-liners, which the ratio alone permits when both are short.
+const memoryNearMinShared = 2
+
+// memoryStopWords are words that say nothing about WHICH fact a memory holds.
+// "user" is in here on purpose: memories are written in the third person about
+// the user, so it appears in most of them and inflates every overlap.
+var memoryStopWords = map[string]bool{
+	"a": true, "an": true, "and": true, "any": true, "are": true, "as": true, "at": true,
+	"be": true, "been": true, "but": true, "by": true, "do": true, "does": true, "for": true,
+	"from": true, "had": true, "has": true, "have": true, "he": true, "her": true, "him": true,
+	"his": true, "in": true, "is": true, "it": true, "its": true, "not": true, "of": true,
+	"on": true, "or": true, "she": true, "so": true, "than": true, "that": true,
+	"the": true, "their": true, "them": true, "they": true, "this": true, "to": true,
+	"up": true, "use": true, "user": true, "users": true, "was": true, "were": true,
+	"when": true, "which": true, "with": true, "would": true,
+}
+
+// contentWords is the normalized word set of a memory minus the stop words, so
+// two phrasings of one fact are compared on what they actually assert.
+func contentWords(s string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, w := range strings.Fields(normalizeMemoryText(s)) {
+		if memoryStopWords[w] || seen[w] {
+			continue
+		}
+		seen[w] = true
+		out = append(out, w)
+	}
+	return out
+}
+
+// memoryNearness scores two memories on shared content words, returning the
+// overlap ratio and the count of words they share.
+func memoryNearness(a, b string) (float64, int) {
+	wa, wb := contentWords(a), contentWords(b)
+	if len(wa) == 0 || len(wb) == 0 {
+		return 0, 0
+	}
+	set := make(map[string]bool, len(wa))
+	for _, w := range wa {
+		set[w] = true
+	}
+	shared := 0
+	for _, w := range wb {
+		if set[w] {
+			shared++
+		}
+	}
+	union := len(wa) + len(wb) - shared
+	if union == 0 {
+		return 0, shared
+	}
+	return float64(shared) / float64(union), shared
+}
+
+// nearestMemory returns the entry most similar to text, excluding excludeID (the
+// entry just written), or ok=false when nothing is close enough to be worth
+// mentioning. Read-only, and taken after the write, so a failure here can never
+// cost the save.
+func (p *Playground) nearestMemory(user, text, excludeID string) (memoryEntry, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var best memoryEntry
+	bestScore := 0.0
+	for _, m := range p.loadMemoriesLocked(user) {
+		if m.ID == excludeID {
+			continue
+		}
+		score, shared := memoryNearness(m.Text, text)
+		if shared < memoryNearMinShared || score < memoryNearJaccard || score <= bestScore {
+			continue
+		}
+		best, bestScore = m, score
+	}
+	return best, bestScore > 0
 }
 
 // mergeTags unions two tag lists through the usual normalization.

@@ -100,6 +100,14 @@ the moment a lasting fact appears, and `upsertMemory` (`internal/server/memories
 restatement into the entry that already holds it. `id` is still the way to REPLACE a fact that has
 gone wrong.
 
+What folding cannot catch is the same fact in **different words**, and the prompt no longer claims
+otherwise — it used to promise a redundant save "costs nothing", which is false exactly when the
+store misses. The store reports the near-identical entry back in the save's RESULT
+(`nearestMemory`), and both `DEFAULT_MEMORY_PROMPT` and the `memory_save` description now say what
+to do with that report: merge onto the older id and delete the new one, or keep both. It is a rule
+that fires on a concrete pair the model has just been handed, not a standing instruction to be
+careful.
+
 **On** by default (`memoryStore`, a `userPref`), off in Rewrite mode. The Configs checkbox gates the
 tools, the prompt line and the block together.
 
