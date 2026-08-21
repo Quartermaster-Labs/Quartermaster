@@ -195,8 +195,16 @@ func Scan(ctx context.Context, path string) ScanResult {
 		}
 		res.Count = len(r.rows)
 		var gb float64
+		// One drafter is shared by every quant in its dir and, since family.go,
+		// by every compatible sibling too — count each file once, not once per
+		// row that launches it.
+		counted := map[string]bool{}
 		for _, row := range r.rows {
-			gb += row.SizeGB + row.DraftSizeGB
+			gb += row.SizeGB
+			if row.DraftPath != "" && !counted[row.DraftPath] {
+				counted[row.DraftPath] = true
+				gb += row.DraftSizeGB
+			}
 		}
 		res.SizeGB = gb
 		return res

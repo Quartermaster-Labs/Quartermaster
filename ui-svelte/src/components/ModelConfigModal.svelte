@@ -627,6 +627,15 @@
   const selectedIsDefault = $derived(
     !!selectedV && defaultVariants.includes(selectedV),
   );
+  // Tooltip on the reserved "vision" variant's name field. When the projector
+  // was borrowed from a family member it names the file, so nobody hunts this
+  // model's own folder for an mmproj that isn't there.
+  const visionNameTip = $derived(
+    "Reserved: the auto-generated vision twin that loads the mmproj image projector. Tune its ctx/VRAM/visibility here; uncheck Unlisted to surface it in the model picker." +
+      (config?.mmprojInherited && config.mmprojPath
+        ? ` Projector: ${config.mmprojPath} (borrowed from a family member).`
+        : ""),
+  );
 
   // llama.cpp's kv_cache_types, minus iq4_nl (no flash-attention KV kernel).
   const KV_OPTS = ["", "f32", "f16", "bf16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0"];
@@ -1389,6 +1398,31 @@
         </span>
       {/snippet}
 
+      <!-- "Borrowed" badge for a sidecar that is not in this model's folder: it
+           came from a header-compatible family member (internal/autogen/family.go).
+           Without it the draft-mtp / draft-dflash chips — and the vision twin —
+           claim a capability the folder visibly has no file for, which reads as
+           a bug. Same wording for both so the badge means one thing. -->
+      {#snippet borrowedBadge(text: string)}
+        <span
+          class="rounded border border-card-border px-1.5 py-px text-[10px] uppercase tracking-wide text-txtsecondary cursor-help"
+          use:tip={text}>borrowed</span>
+      {/snippet}
+      {#snippet borrowedDraft()}
+        {#if config?.draftInherited}
+          {@render borrowedBadge(
+            `This model's folder ships no draft model. draft-* loads ${config.draftPath ?? "a sibling's drafter"}, borrowed from another quant or a finetune with the same architecture, layer count, embedding width and vocabulary. Put a drafter next to this model to use that one instead.`,
+          )}
+        {/if}
+      {/snippet}
+      {#snippet borrowedMmproj()}
+        {#if config?.mmprojInherited}
+          {@render borrowedBadge(
+            `This model's folder ships no image projector. The vision twin loads ${config.mmprojPath ?? "a sibling's projector"}, borrowed from another quant or a finetune with the same architecture, layer count, embedding width and vocabulary. Put an mmproj next to this model to use that one instead.`,
+          )}
+        {/if}
+      {/snippet}
+
       <!-- Speculative backend picker, shared by the Default and Variant tabs.
            Three states in one row: Auto (spec unset => whatever the generator
            picks, shown read-only beside the toggle), an explicit chain (chips),
@@ -2013,7 +2047,8 @@
           <div class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               Speculative
-              {@render hint("Speculative decoding backends. Auto = the generator's pick. Turn Auto off to chain them by hand (e.g. draft-mtp + ngram-map-k4v); draft-mtp and draft-dflash are exclusive since they share the one draft-model slot. No chip picked = speculation off. draft-mtp needs a model with MTP layers, draft-dflash a paired *-dflash-*.gguf sidecar.")}
+              {@render hint("Speculative decoding backends. Auto = the generator's pick. Turn Auto off to chain them by hand (e.g. draft-mtp + ngram-map-k4v); draft-mtp and draft-dflash are exclusive since they share the one draft-model slot. No chip picked = speculation off. draft-mtp needs a model with MTP layers, draft-dflash a paired *-dflash-*.gguf sidecar — either may be inherited from a model in the same family.")}
+              {@render borrowedDraft()}
             </span>
             {@render specRow(spec, (v) => (spec = v))}
           </div>
@@ -2284,7 +2319,7 @@
               <input type="text" bind:value={adv.overrideTensor} class="cfg-input flex-1 ml-auto font-mono" placeholder="regex=BUFFER" />
             </label>
             <label class="flex items-center gap-2 col-span-2">
-              <span class="text-txtsecondary flex items-center gap-1 shrink-0">Chat template file {@render hint("--chat-template-file. Path to a .jinja chat template replacing the gguf's baked-in one - use a vendor-fixed template (e.g. Gemma, Qwen) without rebuilding the gguf. Empty = the baked-in template (or quartermaster's built-in Qwen 3.5/3.6 fix).")}</span>
+              <span class="text-txtsecondary flex items-center gap-1 shrink-0">Chat template file {@render hint("--chat-template-file. Path to a .jinja chat template replacing the gguf's baked-in one - use a vendor-fixed template (e.g. Gemma, Qwen) without rebuilding the gguf. Empty = the baked-in template (or Quartermaster's built-in Qwen 3.5/3.6 fix).")}</span>
               <input type="text" bind:value={adv.chatTemplateFile} class="cfg-input flex-1 ml-auto font-mono" placeholder="D:/LLM/Models/templates/gemma4.jinja" spellcheck="false" />
               <button
                 type="button" use:tip={"Browse for a .jinja template"} aria-label="Browse for a chat template file"
@@ -2348,9 +2383,10 @@
               <span class="text-txtsecondary flex items-center gap-1">
                 Name (suffix)
                 {@render hint("The variant's id suffix and listen-name. The model loads as <base-id>-<name>.")}
+                {#if sv.name === "vision"}{@render borrowedMmproj()}{/if}
               </span>
               {#if sv.name === "vision"}
-                <input type="text" value="vision" readonly class="cfg-input opacity-70" use:tip={"Reserved: the auto-generated vision twin that loads the mmproj image projector. Tune its ctx/VRAM/visibility here; uncheck Unlisted to surface it in the model picker."} />
+                <input type="text" value="vision" readonly class="cfg-input opacity-70" use:tip={visionNameTip} />
               {:else}
                 <input type="text" value={sv.name} oninput={renameSelectedVariant} class="cfg-input" placeholder="e.g. game, long, judge" />
               {/if}
@@ -2410,7 +2446,10 @@
             </label>
 
             <div class="flex flex-col gap-1 text-sm">
-              <span class="text-txtsecondary">Speculative</span>
+              <span class="text-txtsecondary flex items-center gap-1">
+                Speculative
+                {@render borrowedDraft()}
+              </span>
               {@render specRow(sv.spec, (v) => (sv.spec = v))}
             </div>
 

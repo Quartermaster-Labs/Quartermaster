@@ -461,6 +461,16 @@ export interface ModelConfig {
   blockCount: number;
   isMTP: boolean;
   isDflash: boolean; // paired *-dflash-*.gguf sidecar => draft-dflash usable
+  /** The drafter is NOT in this model's folder — it is borrowed from a
+   *  header-compatible family member (another quant, or a finetune of the same
+   *  base). Surfaced so "draft-mtp available" doesn't read as a bug when the
+   *  folder visibly holds no drafter. */
+  draftInherited?: boolean;
+  draftPath?: string; // the drafter that would be loaded, wherever it lives
+  /** Same for the mmproj projector behind the "-vision" twin: borrowed from a
+   *  family member rather than shipped in this model's folder. */
+  mmprojInherited?: boolean;
+  mmprojPath?: string; // the projector the vision twin loads, wherever it lives
   isImage: boolean; // diffusion model => image config form
   isAudio: boolean; // TTS or ASR model => audio config form
   isSam?: boolean; // SAM segmentation (sam3_server) => minimal segment form

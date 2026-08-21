@@ -212,7 +212,17 @@ type modelConfigResp struct {
 	MaxCtx     int    `json:"maxCtx"`     // trained context length (slider ceiling); 0 if unknown
 	BlockCount int    `json:"blockCount"` // transformer layers (denominator for -ngl); 0 if unknown
 	IsMTP      bool   `json:"isMTP"`      // model has nextn/MTP layers, or an mtp-* sidecar => draft-mtp usable
-	IsDflash   bool   `json:"isDflash"`   // paired *-dflash-*.gguf sidecar in the model's dir => draft-dflash usable
+	IsDflash   bool   `json:"isDflash"`   // paired *-dflash-*.gguf sidecar => draft-dflash usable
+	// DraftInherited marks a drafter that is NOT in this model's folder: it was
+	// borrowed from a header-compatible family member (autogen/family.go). Without
+	// it the editor offers draft-mtp/draft-dflash for a folder that visibly holds
+	// no drafter, which reads as a bug. DraftPath is the file, so the UI can name it.
+	DraftInherited bool   `json:"draftInherited"`
+	DraftPath      string `json:"draftPath,omitempty"`
+	// Same for the vision projector behind the auto-generated "-vision" twin: it
+	// too can come from a family member rather than from this model's folder.
+	MmprojInherited bool   `json:"mmprojInherited"`
+	MmprojPath      string `json:"mmprojPath,omitempty"`
 	IsImage    bool   `json:"isImage"`    // diffusion model (sd-server) => image config form
 	IsAudio    bool   `json:"isAudio"`    // TTS or ASR model => audio config form
 	IsSam      bool   `json:"isSam"`      // SAM segmentation (sam3_server) => minimal segment form

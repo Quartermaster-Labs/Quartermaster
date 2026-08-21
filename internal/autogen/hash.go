@@ -126,7 +126,16 @@ const hashCacheSuffix = ".modelhash"
 //	     it did not. --chat-template-file is emitted only when the user sets a
 //	     chatTemplateFile override. Affected models now advertise their own
 //	     baked effort ladder rather than none.
-const genVersion = "v50"
+//	v51: draft ggufs and mmproj projectors are inherited across a model's family
+//	     (another quant of the same model, or a finetune at the same parameter
+//	     count) when a model's own dir ships none, gated on the donor and the
+//	     recipient agreeing on arch/n_embd/n_layer/n_vocab. Models that had no
+//	     sidecar beside them can now emit -md / a -vision twin.
+//	v52: MXFP4 is a recognised quant token, and an untabulated ggml tensor type
+//	     no longer aborts the tensor walk. Both together: an MXFP4 gguf used to
+//	     come back with VocabSize 0, which mis-sized its logits buffer and made
+//	     the v51 header gate refuse it every family sidecar.
+const genVersion = "v52"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

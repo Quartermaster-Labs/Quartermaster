@@ -7,7 +7,6 @@ package server
 import (
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 
 	"github.com/quartermaster-labs/quartermaster/internal/autogen"
@@ -267,7 +266,8 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 	if v := q.Get("cpuOffload"); v != "" {
 		in.CpuOffload, _ = strconv.Atoi(v)
 	}
-	// A paired draft sidecar (MTP/DFlash gguf in the model's dir) costs real VRAM
+	// A paired draft sidecar (an MTP/DFlash gguf in the model's dir, or one
+	// inherited from a family sibling — autogen/family.go) costs real VRAM
 	// once the active spec is a draft backend. The config-editor path starts blank
 	// (no -md in the cmd to stat), so seed DraftGB from the sidecar's on-disk size
 	// — otherwise draftOverheadGB charges only its flat 0.1 GB pad and the estimate
@@ -278,7 +278,7 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 	// gguf makes an otherwise-plain model draft-capable). Without it a model left
 	// on auto spec previews without the drafter's VRAM.
 	if in.DraftGB == 0 {
-		if _, kind, sizeGB := autogen.DraftSidecarForDir(filepath.Dir(gguf)); sizeGB > 0 {
+		if _, kind, sizeGB, _ := autogen.DraftSidecarFor(gf.Settings.RootList(), gguf); sizeGB > 0 {
 			in.DraftGB = sizeGB
 			in.DraftKind = kind
 		}

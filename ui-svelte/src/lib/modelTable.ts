@@ -53,6 +53,11 @@ const SIZE_RE = /^[a-z]?\d+(?:\.\d+)?[bm]$/i;
 // A MoE active-parameter tail: the "a3b" of "qwen3.6-35b-a3b".
 const MOE_RE = /^a\d+(?:\.\d+)?b$/i;
 
+// baseKey/familyOf have Go twins in internal/autogen/family.go (ModelBaseKey /
+// FamilyKey), where they decide which models may share a draft gguf or an mmproj
+// projector. Change the rules here and they must change there too, or a model
+// groups one way in this table and inherits sidecars another way.
+//
 // familyOf is the finetune detector: it reduces a base key to <model><size>, so
 // "thinkingcap-qwen3.6-27b" and "qwen3.6-27b-uncensored-heretic-v2" both resolve
 // to "qwen3.6-27b" and cluster under one heading. Deliberately keyed on the

@@ -51,6 +51,20 @@ type AutogenAdmin struct {
 // after every reload-time rebuild.
 func (s *Server) SetAutogenAdmin(a *AutogenAdmin) { s.autogen = a }
 
+// modelsRoots resolves the folders discovery scans (main root + category roots),
+// or nil when settings can't be loaded. Sidecar lookups that reach beyond a
+// model's own dir (an inherited drafter, autogen/family.go) need them.
+func (s *Server) modelsRoots() []string {
+	if s.autogen == nil {
+		return nil
+	}
+	gf, err := autogen.LoadGenerateFile(s.autogen.GeneratePath, s.autogen.ModelsDir)
+	if err != nil {
+		return nil
+	}
+	return gf.Settings.RootList()
+}
+
 // resolveModelGguf maps a requested model id/alias to (realID, gguf path, cmd).
 // Returns ok=false (and writes the HTTP error) when the model or its gguf can't
 // be found.
@@ -196,11 +210,19 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 		// MTP-capable via baked-in nextn layers, a paired mtp-* sidecar, or an
 		// already-active draft-mtp cmd. draft-dflash only via a paired sidecar
 		// (there's no baked-in dflash arch signal) or an already-active cmd.
-		_, draftKind, _ := autogen.DraftSidecarForDir(filepath.Dir(gguf))
+		// "Paired" includes a drafter inherited from a family sibling, which is
+		// what the generator would launch this model with (autogen/family.go).
+		roots := s.modelsRoots()
+		draftPath, draftKind, _, inherited := autogen.DraftSidecarFor(roots, gguf)
 		// --spec-type is repeatable and the emitter may put it on its own line, so
 		// match it as a token/value pair rather than as a raw substring.
 		resp.IsMTP = meta.IsMTP || draftKind == "mtp" || info.HasValue("draft-mtp", "--spec-type")
 		resp.IsDflash = draftKind == "dflash" || info.HasValue("draft-dflash", "--spec-type")
+		resp.DraftPath = draftPath
+		resp.DraftInherited = inherited
+		// The projector the "-vision" twin loads, and whether it came from this
+		// model's folder. Same roots, so the index behind it is already warm.
+		resp.MmprojPath, _, resp.MmprojInherited = autogen.MmprojSidecarFor(roots, gguf)
 	}
 	// Fleet-wide default variants (e.g. game) + the backend registry so the editor
 	// can surface + edit them.

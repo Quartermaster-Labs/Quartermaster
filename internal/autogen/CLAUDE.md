@@ -25,6 +25,7 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 |---|---|
 | `gguf.go` | GGUF header parser (`ReadGgufMetadata`): metadata KV section + tensor section → `Metadata`, plus `scanChatTemplate`. Package doc lives here. |
 | `discover.go` | Walks the models root(s) for `.gguf`, derives model IDs/quants/publishers, collapses split shards, skips mmproj projectors and diffusion encoders/VAEs. `DiscoverGgufModels` (single root) + `DiscoverGgufModelsMulti` (main root + per-UI-category `categoryRoots`). |
+| `family.go` | Sidecar inheritance across a model's family: `ModelBaseKey`/`FamilyKey` (Go twins of `baseKey`/`familyOf` in `ui-svelte/src/lib/modelTable.ts`), the header compatibility gate, `inheritSidecars` (fills blank `DraftPath`/`MmprojPath` from a compatible sibling) and `DraftSidecarFor` (the roots-aware `DraftSidecarForDir`). |
 | `metacache.go` | In-memory metadata cache keyed by file size+mtime (`ReadGgufMetadataCached`). |
 | `kvcost.go` | KV-cache cost model (`GetKvCostModel`) + context-budget math (`MaxCtxForBudget`, `KvReserveGB`, `RoundedCtx`, `GetDenseCtx`, `defaultKvQuant`). → `sizing.md` |
 | `plan.go` | VRAM budget → placement: `-ngl`/`--n-cpu-moe` for dense and MoE (`GetLoadPlan`, `densePlacement`); MoE expert-share table + `effectiveShare`. → `sizing.md` |
@@ -63,7 +64,9 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   `emitModel` and the API actually call.
 - `GgufRow` / `DiscoverGgufModels` (`discover.go`) — one served-model row per gguf (shard-1
   only), `ID = baseID-quant`; `DraftPath`/`DraftKind`/`DraftSizeGB` auto-pair a same-dir MTP
-  sidecar or DFlash drafter.
+  sidecar or DFlash drafter, `MmprojPath` a same-dir clip projector. When a dir ships neither,
+  `inheritSidecars` (`family.go`) borrows one from a compatible family member — see the gotcha
+  below.
 - `GetLoadPlan` (`plan.go`) — `-ngl`/`--n-cpu-moe` from a VRAM budget; MoE path uses a 0.5
   PCIe-thrash crossover, falling back to naive `-ngl` (`densePlacement`) past it.
 - `Generate` (`generate.go`) — discover → per-model `emitModel` → `emitGroupsAndListeners`.
@@ -142,6 +145,27 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   reasoning budget, preserve-thinking etc. flow down at generate time; a variant's own
   non-blank/non-zero field still wins. Was previously *standalone* over `Override{}`, which
   dropped the draft chain + kv on every variant but the one the user hand-edited.
+- **Drafters and projectors are FAMILY-wide, dir-local first.** A sidecar is published for a
+  model but downloaded next to one copy of it, so a second quant in its own folder — or a
+  finetune of a base that shipped an mmproj — used to see nothing. `inheritSidecars`
+  (`family.go`) fills only blank `DraftPath`/`MmprojPath`, so a model that ships its own drafter
+  always keeps it, and picks the closest donor: another quant of the same model (`ModelBaseKey`),
+  then the family's un-tuned base, then a peer finetune. **The name match alone never authorizes
+  a donation** — the donor's model and the recipient must also agree on arch, embedding length,
+  block count and vocab size (`sidecarCompatible`). That gate is not cosmetic: a drafter whose
+  vocab differs doesn't degrade, it aborts the launch (`tensor 'output.weight' has wrong shape`).
+  Consequences to keep in mind: a model that never had a `-vision` twin can grow one, `-md`
+  appears where no drafter is visible in the folder, and anything summing `DraftSizeGB` across
+  rows must dedupe on `DraftPath` (one file, many rows — `internal/setup/probe.go`). Per-model
+  opt-out is the existing spec override (no `draft-*` → no `-md`) and marking the vision twin
+  unlisted. `ModelBaseKey`/`FamilyKey` mirror `baseKey`/`familyOf` in
+  `ui-svelte/src/lib/modelTable.ts` — change one, change both.
+- **A new quant type needs TWO tables, and the header gate is why.** `quantRe` (`discover.go`)
+  names it, `ggmlTypeSize` (`gguf.go`) sizes its tensors. Miss the second and every gguf in that
+  quant comes back with `VocabSize` 0 — which mis-sizes the logits buffer AND makes
+  `sidecarCompatible` refuse it every family sidecar, silently. The tensor walk no longer aborts
+  on an untabulated type (only the MoE expert share degrades to 0), but adding the type is still
+  the fix. MXFP4 was the case that found this.
 - **Empty `modelsRoot` is valid, not an error** — the server boots with an empty catalog so a
   setup UI can point it at a folder later; discovery and hashing short-circuit on blank.
 - **`Parallel` > 1: sized per slot, emitted as a pool.** `--kv-unified` makes `-c` ONE KV buffer

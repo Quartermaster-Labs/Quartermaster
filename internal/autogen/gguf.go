@@ -260,6 +260,9 @@ var ggmlTypeSize = map[uint32][2]int64{
 	28: {1, 8},     // F64
 	29: {256, 56},  // IQ1_M
 	30: {1, 2},     // BF16
+	34: {256, 54},  // TQ1_0
+	35: {256, 66},  // TQ2_0
+	39: {32, 17},   // MXFP4 (1-byte E8M0 scale + 32 4-bit elements)
 }
 
 // ggufReader reads little-endian GGUF primitives from a seekable source. It is
@@ -956,7 +959,7 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 // i.e. it's a full checkpoint rather than a bare UNet.
 func readExpertShare(r *ggufReader, tensorCount uint64) (share float64, vocabElems int64, diffKind string, bakedEnc bool, err error) {
 	var expertBytes, totalBytes int64
-	var sawExpert, sawInputBlocks, sawLabelEmb bool
+	var sawExpert, sawInputBlocks, sawLabelEmb, unknownType bool
 	for i := uint64(0); i < tensorCount; i++ {
 		name, err := r.str()
 		if err != nil {
@@ -981,14 +984,22 @@ func readExpertShare(r *ggufReader, tensorCount uint64) (share float64, vocabEle
 		if _, err := r.u64(); err != nil { // offset (unused)
 			return 0, 0, "", false, err
 		}
+		// An unknown ggml type only costs us the BYTE accounting - the walk
+		// itself is fixed-width, and name/elems are already in hand. Keep going
+		// rather than failing the file: bailing here used to zero VocabSize for
+		// every gguf in a quant we had not tabulated yet (MXFP4), which silently
+		// refused it a family sidecar and mis-sized its logits buffer.
 		ts, ok := ggmlTypeSize[typ]
-		if !ok {
-			return 0, 0, "", false, fmt.Errorf("unknown ggml type %d for tensor %q", typ, name)
+		if ok {
+			bytes := elems / ts[0] * ts[1]
+			totalBytes += bytes
+			if strings.Contains(name, "_exps") {
+				expertBytes += bytes
+			}
+		} else {
+			unknownType = true
 		}
-		bytes := elems / ts[0] * ts[1]
-		totalBytes += bytes
 		if strings.Contains(name, "_exps") {
-			expertBytes += bytes
 			sawExpert = true
 		}
 		// token_embd.weight is the canonical vocab×embd tensor; output.weight is
@@ -1018,7 +1029,10 @@ func readExpertShare(r *ggufReader, tensorCount uint64) (share float64, vocabEle
 			diffKind = "sd1"
 		}
 	}
-	if !sawExpert || totalBytes <= 0 {
+	// An untabulated type makes the ratio meaningless (the missing tensors are
+	// exactly the ones whose share we would be reporting), so the share alone
+	// degrades to "unknown". Everything else here is type-independent.
+	if !sawExpert || totalBytes <= 0 || unknownType {
 		return 0, vocabElems, diffKind, bakedEnc, nil
 	}
 	return float64(expertBytes) / float64(totalBytes), vocabElems, diffKind, bakedEnc, nil

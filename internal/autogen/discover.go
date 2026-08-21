@@ -25,11 +25,15 @@ type GgufRow struct {
 	// Separate MTP or DFlash draft gguf sitting in the same dir, "" if none.
 	// MTP sidecars are named "mtp-*.gguf"; DFlash drafters carry "dflash"
 	// anywhere in the name (e.g. "Qwen3.6-35B-A3B-DFlash-Q8_0.gguf").
+	// When this dir has none, a header-compatible one from another quant of the
+	// same model or from a finetune sibling is inherited (family.go).
 	DraftPath   string
 	DraftKind   string  // "mtp" | "dflash"; "" when DraftPath == ""
 	DraftSizeGB float64 // on-disk size of DraftPath; 0 when DraftPath == ""
 	// Vision projector (clip-arch gguf) sitting in the same dir, if any. Loaded via
 	// --mmproj to enable image input; drives the auto-generated "-vision" variant.
+	// Inherited from a family sibling the same way DraftPath is when this dir
+	// ships none.
 	MmprojPath   string
 	MmprojSizeGB float64
 	// Qwen3-TTS audio codec (the "qwen-tokenizer-*hz" gguf) sitting in the same
@@ -44,9 +48,11 @@ type GgufRow struct {
 
 var (
 	shardRe = regexp.MustCompile(`-(\d{5})-of-\d{5}\.gguf$`)
-	// Quant tokens: Q4_0, Q6_K, Q4_K_M, IQ3_XS, Q8_0, F16, BF16, F32. Bounded by
-	// a separator before and a separator / .gguf after.
-	quantRe      = regexp.MustCompile(`(?i)[-_.](IQ\d+(?:_[A-Z0-9]+)*|Q\d+(?:_[A-Z0-9]+)*|F16|BF16|F32)(?:[._-]|\.gguf$)`)
+	// Quant tokens: Q4_0, Q6_K, Q4_K_M, IQ3_XS, Q8_0, F16, BF16, F32, MXFP4.
+	// Bounded by a separator before and a separator / .gguf after. MXFP4 leads
+	// the alternation only for readability - each branch is anchored, so order
+	// is not load-bearing here.
+	quantRe      = regexp.MustCompile(`(?i)[-_.](MXFP4(?:_[A-Z0-9]+)*|IQ\d+(?:_[A-Z0-9]+)*|Q\d+(?:_[A-Z0-9]+)*|F16|BF16|F32)(?:[._-]|\.gguf$)`)
 	ggufSuffixRe = regexp.MustCompile(`(?i)-GGUF$`)
 	// Separate MTP/draft sidecar (e.g. Gemma-4 ships "mtp-gemma-4-12B-it.gguf"
 	// alongside the main model). Loaded via -md + --spec-type draft-mtp, not served alone.
@@ -130,6 +136,10 @@ func DiscoverGgufModelsMulti(roots []string, skipPatterns ...string) ([]GgufRow,
 			all = append(all, row)
 		}
 	}
+	// Re-run inheritance over the union: each root's own pass could only see its
+	// own rows, so a model kept in one root and its finetune's drafter in another
+	// would never have met. Blanks only, so per-root results are preserved.
+	inheritSidecars(all)
 	return all, nil
 }
 
@@ -304,6 +314,12 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 			rows[i].CodecSizeGB = c.sizeGB
 		}
 	}
+	// Then let the models that got nothing borrow a drafter/projector from a
+	// compatible sibling: another quant of the same model, or a finetune of the
+	// same base. Dir-local always wins - this only fills blanks. See family.go.
+	// Deliberately NOT extended to the TTS codec: that one is sample-rate bound
+	// to its talker, and no second copy of it exists to borrow from.
+	inheritSidecars(rows)
 	return rows, nil
 }
 
