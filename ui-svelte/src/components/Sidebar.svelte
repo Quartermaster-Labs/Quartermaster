@@ -4,18 +4,11 @@
   import { LayoutDashboard, Boxes, Layers, FlaskConical, Activity, KeyRound, ArrowUpCircle, BookOpen, Settings } from "lucide-svelte";
   import WikiModal from "./WikiModal.svelte";
   import SettingsModal from "./SettingsModal.svelte";
-  import { connectionState } from "../stores/theme";
   import { currentRoute } from "../stores/route";
   import { playgroundActivity } from "../stores/playgroundActivity";
   import { versionInfo } from "../stores/api";
   import { playgroundPort } from "../stores/playgroundAuth";
-  import {
-    updateStatus,
-    updateBusy,
-    applyUpdate,
-    resumePolling,
-    updateProgressLabel,
-  } from "../stores/update";
+  import { updateStatus, updateBusy, resumePolling, updateProgressLabel } from "../stores/update";
   const pages = [
     { path: "/", label: "Dashboard", icon: LayoutDashboard },
     // Models is ONE page now — the category split is tabs on the page itself,
@@ -41,14 +34,13 @@
     return path === "/" ? current === "/" : current.startsWith(path);
   }
 
-  let statusTooltip = $derived(
-    `Event Stream: ${$connectionState ?? "unknown"}\nAPI Version: ${$versionInfo?.version ?? "unknown"}\nCommit: ${$versionInfo?.commit?.substring(0, 7) ?? "unknown"}\nBuild Date: ${$versionInfo?.build_date ?? "unknown"}`
+  // Applying an update is Settings -> System's job now that the rail has no
+  // footer; this only advertises that there is one, and names what is running.
+  let updateTooltip = $derived(
+    $versionInfo.update_available
+      ? `${updateProgressLabel($updateStatus, $updateBusy)} - ${$versionInfo.latest_version} available (Settings -> System)`
+      : `Settings - running ${$versionInfo?.version ?? "unknown"}`
   );
-
-  // Auto-update. The state machine lives in stores/update so the button here
-  // and the Settings → System section are the same update, not two: either can
-  // start one, and both watch it finish. See that file for why it polls.
-  let updateLabel = $derived(updateProgressLabel($updateStatus, $updateBusy));
 
   // The apply runs on the server, so a reload mid-download does not cancel it —
   // but it does leave this tab thinking nothing is happening. /api/version
@@ -62,7 +54,9 @@
 </script>
 
 <!-- Icons only at rest; expands on hover (mirrors the playground side rail). -->
-<aside class="group/rail flex flex-col gap-1 h-full w-14 hover:w-44 shrink-0 overflow-hidden transition-[width] duration-200 border-r border-border bg-surface py-2">
+<aside
+  class="group/rail absolute inset-y-0 left-0 flex flex-col gap-1 w-14 hover:w-44 overflow-hidden transition-[width] duration-200 border-r border-border bg-surface py-2 hover:shadow-xl hover:shadow-black/20"
+>
   <!-- Brand: collapses to "QM", expands to "Quartermaster Dashboard". Same
        fixed-spacer + growing-label pattern as nav rows below, so the label
        doesn't jump left/up when the rail expands. -->
@@ -125,55 +119,26 @@
     <span class={labelClass}>Help</span>
   </button>
 
-  <!-- Settings: below Help, above the theme/version footer. Opens as a modal,
-       not a route (matches the Help button). -->
+  <!-- Settings is the last row on the rail. It carries the update affordance
+       the version footer used to: build details live in Settings → System, and
+       an available update shows as a badge here rather than as its own row. -->
   <button
     type="button"
     onclick={() => (showSettings = true)}
     class="w-full flex items-center gap-3 pr-3 py-2 text-sm font-medium text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
+    use:tip={updateTooltip}
   >
-    <span class="w-14 shrink-0 flex items-center justify-center">
+    <span class="relative w-14 shrink-0 flex items-center justify-center">
       <Settings size={18} strokeWidth={1.8} />
+      {#if $versionInfo.update_available}
+        <span class="absolute top-0 right-3 w-1.5 h-1.5 rounded-full bg-primary"></span>
+      {/if}
     </span>
     <span class={labelClass}>Settings</span>
-  </button>
-
-  <!-- Footer: update button + version, hover-only like the rest of the expanded
-       rail. Theme and interface size moved to Settings -> Appearance, and
-       connection health is the dot next to the title in the window caption —
-       the old full-height edge bar here said the same thing twice. -->
-  <div class="relative px-3 py-2 flex items-center gap-2" use:tip={statusTooltip}>
-    {#if $versionInfo.update_available && $versionInfo.update_blocked}
-      <!-- A new version exists but this install cannot swap its own binary
-           (container, read-only directory). Link to the release instead of
-           offering a button that can only fail. -->
-      <a
-        class="hidden group-hover/rail:inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-micro font-medium text-txtsecondary hover:bg-primary/10 transition-colors"
-        href={$versionInfo.release_url}
-        target="_blank"
-        rel="noopener noreferrer"
-        use:tip={`${$versionInfo.latest_version} is available, but cannot be installed automatically: ${$versionInfo.update_blocked}`}
-      >
-        <ArrowUpCircle size={13} />
-        {$versionInfo.latest_version}
-      </a>
-    {:else if $versionInfo.update_available}
-      <button
-        class="hidden group-hover/rail:inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-micro font-medium text-primary hover:bg-primary/10 transition-colors disabled:opacity-60"
-        onclick={() => applyUpdate()}
-        disabled={$updateBusy}
-        use:tip={$updateBusy
-          ? "Installing in the background — you can keep working until it restarts"
-          : `Update to ${$versionInfo.latest_version}`}
-      >
-        <ArrowUpCircle size={13} />
-        {updateLabel}
-      </button>
+    {#if $versionInfo.update_available}
+      <ArrowUpCircle size={13} class="ml-auto mr-1 shrink-0 text-primary hidden group-hover/rail:inline-block" />
     {/if}
-    <span class="ml-auto hidden group-hover/rail:inline-block font-mono text-micro text-txtsecondary tabular-nums">
-      {$versionInfo.version}
-    </span>
-  </div>
+  </button>
 </aside>
 
 <WikiModal bind:open={showWiki} />

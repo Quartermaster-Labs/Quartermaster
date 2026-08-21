@@ -97,7 +97,7 @@
   }
 </script>
 
-<div class="h-full overflow-auto p-1 pretty-scroll">
+<div class="h-full overflow-auto pretty-scroll">
   {#if !stats}
     <div class="text-txtsecondary text-sm">Loading…</div>
   {:else if !stats.enabled}
@@ -107,16 +107,18 @@
       reuse conversation KV across model swaps.
     </div>
   {:else}
-    <!-- Summary cards -->
-    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-3">
-      <div class="card p-3">
+    <!-- Summary tiles: one card, hairline-separated. gap-px over the divider
+         colour draws the rules — unlike divide-x it stays correct when the grid
+         rewraps to 3 or 2 columns. -->
+    <div class="card p-0 mb-3 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-px bg-card-border-inner">
+      <div class="bg-surface p-3">
         <div class="text-xs text-txtsecondary">Tokens reused (confirmed)</div>
         <div class="text-2xl font-mono text-green-500">{fmtNum(counters?.cachedTokensSeen)}</div>
         <div class="text-xs text-txtsecondary mt-0.5">
           cached_tokens from upstream - actual prefill skipped
         </div>
       </div>
-      <div class="card p-3">
+      <div class="bg-surface p-3">
         <div class="text-xs text-txtsecondary">Restore success</div>
         <div class="text-2xl font-mono">{confirmPct}%</div>
         <div class="text-xs text-txtsecondary mt-0.5">
@@ -124,7 +126,7 @@
           {#if pending}<span class="text-amber-500">· {pending} awaiting</span>{/if}
         </div>
       </div>
-      <div class="card p-3">
+      <div class="bg-surface p-3">
         <div class="text-xs text-txtsecondary">KV files loaded · exact / seed</div>
         <div class="text-2xl font-mono">
           {counters?.restoreHits ?? 0}
@@ -137,7 +139,7 @@
           {counters?.saves ?? 0} saves · {counters?.misses ?? 0} miss · {counters?.errors ?? 0} err
         </div>
       </div>
-      <div class="card p-3">
+      <div class="bg-surface p-3">
         <div class="text-xs text-txtsecondary">Preamble seeds</div>
         <div class="text-2xl font-mono">
           {counters?.preambleHits ?? 0}
@@ -145,7 +147,7 @@
         </div>
         <div class="text-xs text-txtsecondary mt-0.5">cold-load hits / mints (system+tools)</div>
       </div>
-      <div class="card p-3">
+      <div class="bg-surface p-3">
         <div class="text-xs text-txtsecondary">Disk</div>
         <div class="text-2xl font-mono">{fmtBytes(stats.diskBytes)}</div>
         <div class="text-xs text-txtsecondary mt-0.5">
@@ -196,9 +198,10 @@
       </div>
     {/if}
 
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+    <!-- Saved files and the event log are one surface split by a divider. -->
+    <div class="card p-0 grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-card-border-inner">
       <!-- Persisted sessions + preamble caches: two tabs of one box -->
-      <div class="card p-3 min-h-0">
+      <div class="p-3 min-h-0">
         <div class="flex items-center gap-1 mb-2 border-b border-border">
           <button
             class="px-2 py-1 text-sm font-semibold border-b-2 -mb-px transition-colors {kvTab === 'sessions'
@@ -287,7 +290,7 @@
       </div>
 
       <!-- Recent events -->
-      <div class="card p-3 min-h-0">
+      <div class="p-3 min-h-0">
         <div class="text-sm font-semibold mb-2">
           Recent activity
           <span class="text-txtsecondary font-normal text-xs">

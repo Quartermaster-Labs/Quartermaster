@@ -169,10 +169,16 @@
 
   // Anything that moves the trigger under the popup closes it: re-measuring on
   // every scroll frame would be smoother but this list is never long-lived.
+  // Only a scroller that CONTAINS the trigger can move it, though — the capture
+  // listener sees every scroll on the page, and the log panel's auto-follow
+  // scrolls its <pre> on every streamed chunk, which shut this list again the
+  // instant it opened.
   $effect(() => {
     if (!open) return;
     const onScroll = (e: Event): void => {
-      if (list && e.target instanceof Node && list.contains(e.target)) return;
+      const t = e.target;
+      if (list && t instanceof Node && list.contains(t)) return;
+      if (t instanceof Node && trigger && !t.contains(trigger)) return;
       closeList(false);
     };
     const onResize = (): void => closeList(false);

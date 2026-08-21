@@ -21,30 +21,34 @@
     "Raw stdout + stderr of the spawned backends (llama-server / sd-server / tts-server / upscaler), interleaved across every running model - load progress, per-request timings, and backend errors.";
 </script>
 
-<div class="flex flex-col h-full w-full gap-2">
-  <div class="flex items-center gap-2">
-    <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary">Show</span>
-    <div class="seg">
-      <button aria-pressed={$viewModeStore === "panels"} onclick={() => viewModeStore.set("panels")}>Both</button>
-      <button aria-pressed={$viewModeStore === "proxy"} onclick={() => viewModeStore.set("proxy")}>Proxy</button>
-      <button aria-pressed={$viewModeStore === "upstream"} onclick={() => viewModeStore.set("upstream")}>Upstream</button>
-    </div>
+<!-- The stream picker rides in the panel header where the title used to be:
+     it names the stream you are looking at, so a separate labelled row above the
+     panels was a whole line of chrome saying the same thing twice. -->
+{#snippet streamPicker()}
+  <div class="seg shrink-0">
+    <button aria-pressed={$viewModeStore === "panels"} onclick={() => viewModeStore.set("panels")}>Both</button>
+    <button aria-pressed={$viewModeStore === "proxy"} onclick={() => viewModeStore.set("proxy")}>Proxy</button>
+    <button aria-pressed={$viewModeStore === "upstream"} onclick={() => viewModeStore.set("upstream")}>Upstream</button>
   </div>
+{/snippet}
 
+<div class="flex flex-col h-full w-full">
   <div class="flex-1 w-full overflow-hidden">
     {#if $viewModeStore === "panels"}
       <ResizablePanels {direction} storageKey="logviewer-panel-group">
         {#snippet leftPanel()}
-          <LogPanel id="proxy" title="Proxy Logs" subtitle={PROXY_HINT} logData={$proxyLogs} />
+          <LogPanel id="proxy" title="Proxy Logs" subtitle={PROXY_HINT} logData={$proxyLogs} header={streamPicker} />
         {/snippet}
         {#snippet rightPanel()}
+          <!-- Both panels are on screen, so only the left one carries the
+               picker; the right keeps its name so the two stay tellable apart. -->
           <LogPanel id="upstream" title="Upstream Logs" subtitle={UPSTREAM_HINT} logData={$upstreamLogs} />
         {/snippet}
       </ResizablePanels>
     {:else if $viewModeStore === "proxy"}
-      <LogPanel id="proxy" title="Proxy Logs" subtitle={PROXY_HINT} logData={$proxyLogs} />
+      <LogPanel id="proxy" title="Proxy Logs" subtitle={PROXY_HINT} logData={$proxyLogs} header={streamPicker} />
     {:else}
-      <LogPanel id="upstream" title="Upstream Logs" subtitle={UPSTREAM_HINT} logData={$upstreamLogs} />
+      <LogPanel id="upstream" title="Upstream Logs" subtitle={UPSTREAM_HINT} logData={$upstreamLogs} header={streamPicker} />
     {/if}
   </div>
 </div>

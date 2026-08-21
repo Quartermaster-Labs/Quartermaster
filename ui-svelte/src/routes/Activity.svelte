@@ -240,10 +240,12 @@
   }
 </script>
 
-<div class="p-2 flex flex-col gap-3">
+<!-- Stats strip and request table are one surface: the strip summarises the
+     very rows below it, so a divider separates them rather than a gap. -->
+<div class="card p-0 flex flex-col h-full min-h-0 divide-y divide-card-border-inner">
   <ActivityStats rows={windowMetrics} />
 
-  <div class="card p-0 flex flex-col min-h-[24rem]">
+  <div class="flex flex-col flex-1 min-h-0">
     <!-- Toolbar: row count + search + column picker -->
     <div class="flex items-center gap-2 px-3 py-2 border-b border-card-border-inner" bind:this={dropdownContainer}>
       <span class="font-mono text-[0.7rem] uppercase tracking-wide text-txtsecondary">

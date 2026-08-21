@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { Snippet } from "svelte";
   import { tip } from "../lib/tooltip";
   import { persistentStore } from "../stores/persistent";
   import Select from "./Select.svelte";
@@ -10,9 +11,16 @@
     /** One line explaining what this stream actually carries (shown as a ? hint). */
     subtitle?: string;
     logData: string;
+    /** Rendered in place of the title — the log viewer puts its stream picker here. */
+    header?: Snippet;
   }
 
-  let { id, title, subtitle, logData }: Props = $props();
+  let { id, title, subtitle, logData, header }: Props = $props();
+
+  // The filter popup is transient, unlike the font size and wrap prefs: a search
+  // box that reopens itself (with its old query gone) on every visit is noise.
+  let showFilter = $state(false);
+  let filterInput = $state<HTMLInputElement | undefined>();
 
   let filterRegex = $state("");
 
@@ -27,9 +35,6 @@
   const fontPxStore = persistentStore<number>(`logPanel-${id}-fontPx`, 12);
   // svelte-ignore state_referenced_locally
   const wrapTextStore = persistentStore<boolean>(`logPanel-${id}-wrapText`, false);
-  // svelte-ignore state_referenced_locally
-  const showFilterStore = persistentStore<boolean>(`logPanel-${id}-showFilter`, false);
-
   let textWrapClass = $derived($wrapTextStore ? "whitespace-pre-wrap" : "whitespace-pre");
 
   function clampFont(px: number): number {
@@ -56,13 +61,23 @@
   }
 
   function toggleFilter(): void {
-    if ($showFilterStore) {
-      showFilterStore.set(false);
-      filterRegex = "";
-    } else {
-      showFilterStore.set(true);
+    if (showFilter) {
+      closeFilter();
+      return;
     }
+    showFilter = true;
   }
+
+  function closeFilter(): void {
+    showFilter = false;
+    filterRegex = "";
+  }
+
+  // Focus on open, the way ctrl+F does — the popup is worthless if you still
+  // have to click into it.
+  $effect(() => {
+    if (showFilter) filterInput?.focus();
+  });
 
   // A half-typed regex ("[" etc.) shows every line rather than nothing, and
   // flags itself in the toolbar instead of silently doing nothing.
@@ -152,7 +167,11 @@
 <div class="card flex flex-col h-full w-full p-0">
   <!-- Toolbar -->
   <div class="flex items-center gap-2 px-3 py-2 border-b border-card-border-inner">
-    <h6 class="truncate">{title}</h6>
+    {#if header}
+      {@render header()}
+    {:else}
+      <h6 class="truncate">{title}</h6>
+    {/if}
     {#if subtitle}
       <span
         class="shrink-0 inline-flex text-txtsecondary cursor-help hover:text-txtmain"
@@ -177,32 +196,38 @@
         />
       </div>
       <button class="icon-btn" aria-pressed={$wrapTextStore} onclick={toggleWrapText} use:tip={"Toggle text wrap"}><WrapText size={15} /></button>
-      <button class="icon-btn" aria-pressed={$showFilterStore} onclick={toggleFilter} use:tip={"Filter (regex)"}><Search size={15} /></button>
+      <!-- Anchored popup, ctrl+F style: a full toolbar row for a box you use for
+           ten seconds cost the log a line of height permanently. -->
+      <div class="relative">
+        <button class="icon-btn" aria-pressed={showFilter} onclick={toggleFilter} use:tip={"Filter (regex)"}><Search size={15} /></button>
+        {#if showFilter}
+          <div class="absolute right-0 top-full mt-1 z-20 w-72 rounded-md border border-card-border bg-surface shadow-xl p-2 flex items-center gap-2">
+            <div class="relative flex-1">
+              <Search size={13} class="absolute left-2 top-1/2 -translate-y-1/2 text-txtsecondary pointer-events-none" />
+              <input
+                bind:this={filterInput}
+                type="text"
+                class="w-full font-mono text-xs border border-card-border bg-background pl-7 pr-6 py-1 rounded text-txtmain placeholder:text-txtsecondary/60 focus:outline-none focus:ring-2 focus:ring-primary {badRegex ? 'border-error' : ''}"
+                placeholder="filter lines (regex)"
+                bind:value={filterRegex}
+                onkeydown={(e) => e.key === "Escape" && closeFilter()}
+              />
+              {#if filterRegex}
+                <button class="absolute right-1.5 top-1/2 -translate-y-1/2 text-txtsecondary hover:text-txtmain" onclick={() => (filterRegex = "")} aria-label="Clear filter">
+                  <X size={13} />
+                </button>
+              {/if}
+            </div>
+            {#if badRegex}<span class="font-mono text-[0.6rem] text-error shrink-0">bad re</span>{/if}
+            <button class="icon-btn shrink-0" onclick={closeFilter} aria-label="Close filter"><X size={14} /></button>
+          </div>
+        {/if}
+      </div>
       <button class="icon-btn" onclick={copyLogs} use:tip={"Copy visible log"}>
         {#if copied}<Check size={15} class="text-success" />{:else}<Copy size={15} />{/if}
       </button>
     </div>
   </div>
-
-  {#if $showFilterStore}
-    <div class="flex gap-2 items-center px-3 py-2 border-b border-card-border-inner">
-      <div class="relative flex-1">
-        <Search size={13} class="absolute left-2 top-1/2 -translate-y-1/2 text-txtsecondary pointer-events-none" />
-        <input
-          type="text"
-          class="w-full font-mono text-xs border border-card-border bg-surface pl-7 pr-6 py-1 rounded text-txtmain placeholder:text-txtsecondary/60 focus:outline-none focus:ring-2 focus:ring-primary {badRegex ? 'border-error' : ''}"
-          placeholder="filter lines (regex)"
-          bind:value={filterRegex}
-        />
-        {#if filterRegex}
-          <button class="absolute right-1.5 top-1/2 -translate-y-1/2 text-txtsecondary hover:text-txtmain" onclick={() => (filterRegex = "")} aria-label="Clear filter">
-            <X size={13} />
-          </button>
-        {/if}
-      </div>
-      {#if badRegex}<span class="font-mono text-[0.65rem] text-error shrink-0">invalid regex</span>{/if}
-    </div>
-  {/if}
 
   <div class="relative flex-1 overflow-hidden bg-background font-mono">
     <pre

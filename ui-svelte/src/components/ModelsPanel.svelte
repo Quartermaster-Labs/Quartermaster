@@ -228,6 +228,8 @@
     </div>
   </div>
 
+  <div class="h-2 shrink-0"></div>
+
   <ModelsTable
     models={inTab}
     bind:search

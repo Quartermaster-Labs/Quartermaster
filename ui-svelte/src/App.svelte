@@ -102,7 +102,12 @@
   <PlaygroundApp />
 {:else if mode === "dashboard"}
   <div class="flex h-screen bg-background">
-    <Sidebar />
+    <!-- The slot reserves only the COLLAPSED width; the rail itself is absolute
+         inside it, so expanding on hover draws over the page like a curtain
+         instead of reflowing every layout to the right of it. -->
+    <div class="relative w-14 shrink-0 z-40">
+      <Sidebar />
+    </div>
 
     <div class="flex flex-col flex-1 min-w-0">
       <StatusRail />

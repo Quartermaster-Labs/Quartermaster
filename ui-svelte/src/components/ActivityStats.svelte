@@ -49,7 +49,7 @@
   });
 </script>
 
-<div class="card p-3">
+<div class="p-3">
   <!-- KPI row -->
   <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
     <div class="tile">

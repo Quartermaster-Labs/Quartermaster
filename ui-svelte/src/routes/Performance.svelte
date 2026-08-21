@@ -378,7 +378,6 @@
       <h6>Performance</h6>
       <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary border border-card-border rounded px-1.5 py-0.5">experimental</span>
     </div>
-    <span class="text-xs text-txtsecondary hidden md:inline">Live system &amp; GPU telemetry - cadence and available metrics depend on the platform backend.</span>
 
     <div class="flex items-center gap-2 ml-auto">
       <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary">Refresh</span>
