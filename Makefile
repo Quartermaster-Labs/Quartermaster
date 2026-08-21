@@ -31,11 +31,11 @@ test:
 test-all:
 	go test -race -count=1 ./internal/...
 
-ui/node_modules:
+ui-svelte/node_modules:
 	cd ui-svelte && npm install
 
-# build react UI
-ui: ui/node_modules
+# build the Svelte UI (embedded into every binary)
+ui: ui-svelte/node_modules
 	cd ui-svelte && npm run build
 	touch internal/server/ui_dist/placeholder.txt
 
@@ -68,6 +68,25 @@ linux-arm64: ui
 # list all fall back to the blank generic-executable glyph.
 versioninfo:
 	go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -icon favicon.ico -o resource_windows_amd64.syso versioninfo.json
+
+# Build the first-run wizard's UI bundle (embedded into cmd/quartermaster-setup,
+# NOT into the server binary — see internal/setup/api.go).
+ui-setup: ui-svelte/node_modules
+	cd ui-svelte && npm run build:setup
+
+# Build the setup program: a native window (WebView2) that asks the first-run
+# questions and drives the Inno installer silently.
+#
+# A dev build embeds only the zero-byte placeholder at cmd/quartermaster-setup/
+# inno/setup.exe, so it falls back to copying whatever quartermaster binaries sit
+# next to it — which makes this a runnable end-to-end test of the wizard (probe,
+# scan, backend download, config write, launch) with no Inno toolchain in the
+# loop. Copy the exe into build/quartermaster-windows/ first if you want it to
+# pick up start.cmd and the config examples too. The release build
+# (packaging/windows/build-release.ps1) is what embeds the real installer.
+setup-windows: ui-setup
+	@echo "Building Windows setup program..."
+	GOOS=windows GOARCH=amd64 go build -ldflags="-H=windowsgui -X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE}" -o $(BUILD_DIR)/$(APP_NAME)-setup.exe ./cmd/quartermaster-setup
 
 # Build Windows binary
 windows: ui
@@ -200,20 +219,64 @@ simple-responder-windows:
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
+# Build the four published binaries + SHA256SUMS into $(BUILD_DIR)/dist.
+#
+# This is the UPDATE deliverable: the app is one self-contained binary, so the
+# in-app updater (internal/update) downloads exactly one of these files and
+# renames it over the running exe. The names MUST match
+# internal/update.assetName() — a name that drifts means that platform silently
+# stops seeing updates.
+#
+# VERSION=vX.Y.Z stamps the release version; without it the binaries are marked
+# local_<hash> and, by design, never offer themselves an update.
+DIST_DIR = $(BUILD_DIR)/dist
+DIST_VERSION = $(if $(VERSION),$(VERSION),local_$(GIT_HASH))
+DIST_LDFLAGS = -X main.commit=$(GIT_HASH) -X main.version=$(DIST_VERSION) -X main.date=$(BUILD_DATE)
+dist: ui
+	@echo "Building release binaries ($(DIST_VERSION))..."
+	@mkdir -p $(DIST_DIR)
+	# CGO is off across the project, so all four targets cross-compile from any
+	# one host with nothing but the Go toolchain.
+	# -H=windowsgui: no console window on launch, including the relaunch that
+	# follows a self-update.
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-H=windowsgui $(DIST_LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-windows-amd64.exe
+	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="$(DIST_LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-linux-amd64
+	CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags="$(DIST_LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-linux-arm64
+	CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -ldflags="$(DIST_LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-darwin-arm64
+	# sha256sum's own format, which is what the updater's SHA256SUMS fallback
+	# parses. Generated from inside the dir so the entries are bare names.
+	@cd $(DIST_DIR) && rm -f SHA256SUMS && \
+		if command -v sha256sum >/dev/null 2>&1; then \
+			sha256sum $(APP_NAME)-* > SHA256SUMS; \
+		else \
+			shasum -a 256 $(APP_NAME)-* > SHA256SUMS; \
+		fi
+	@cat $(DIST_DIR)/SHA256SUMS
+	@echo "Done: $(DIST_DIR)"
+
 # GitHub repo for `gh` (avoids "no default remote" when multiple remotes exist).
 RELEASE_REPO ?= Quartermaster-Labs/quartermaster
 
-# Build the Windows binary + installer LOCALLY and upload the .exe to a GitHub
-# release (private-repo Actions minutes are metered; local build is free).
+# Build every release artifact LOCALLY and upload it to a GitHub release
+# (private-repo Actions minutes are metered; local build is free). Two kinds of
+# artifact ship: the four bare binaries + SHA256SUMS that the IN-APP UPDATER
+# downloads, and the Windows installer, which only ever runs on a FIRST install.
 #   make release                  -> latest existing vX.Y.Z tag, DRAFT
 #   make release-public           -> same, but PUBLIC
 #   make release VERSION=v0.5.1   -> creates that tag first, then releases it
-# Needs go, npm, gh (authed), and Inno Setup 6 (ISCC) installed locally.
+#   make release-binaries         -> binaries + sums only, no installer
+# Needs go, npm, gh (authed), and — unless -SkipInstaller — Inno Setup 6 (ISCC).
 release:
 	@$(MAKE) --no-print-directory _build-release DRAFT=true
 
 release-public:
 	@$(MAKE) --no-print-directory _build-release DRAFT=false
+
+# Skips ISCC entirely: a patch release that every existing install will pick up
+# through the updater does not need a new first-install wizard, and this is also
+# the fast way to test the update path itself.
+release-binaries:
+	@$(MAKE) --no-print-directory _build-release DRAFT=true RELEASE_EXTRA=-SkipInstaller
 
 _build-release:
 	@targ=""; \
@@ -224,7 +287,7 @@ _build-release:
 		targ="-Tag $(VERSION)"; \
 	fi; \
 	powershell -NoProfile -ExecutionPolicy Bypass \
-		-File packaging/windows/build-release.ps1 $$targ -Draft $(DRAFT) -Repo $(RELEASE_REPO)
+		-File packaging/windows/build-release.ps1 $$targ -Draft $(DRAFT) -Repo $(RELEASE_REPO) $(RELEASE_EXTRA)
 
 GOOS ?= $(shell go env GOOS 2>/dev/null || echo linux)
 GOARCH ?= $(shell go env GOARCH 2>/dev/null || echo amd64)
@@ -236,5 +299,5 @@ test-ui:
 	cd ui-svelte && npm ci && npm run check && npm test
 
 # Phony targets
-.PHONY: all clean ui mac windows versioninfo package-windows package-linux package-mac _package-nix simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy release release-public _build-release
+.PHONY: all clean ui dist mac windows versioninfo package-windows package-linux package-mac _package-nix simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy release release-public release-binaries _build-release
 .PHONY: linux linux-arm64 linux-amd64

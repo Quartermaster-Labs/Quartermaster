@@ -13,6 +13,12 @@ quartermaster-generate.yaml
 # UI build output; placeholder.txt is kept so the go:embed succeeds.
 internal/server/ui_dist/*
 
+# Same, for the first-run wizard's own bundle (ui-svelte/vite.setup.config.ts).
+# .gitkeep is NOT ignored: `//go:embed all:ui_dist` in internal/setup needs at
+# least one file present or the package will not compile on a fresh clone.
+internal/setup/ui_dist/*
+!internal/setup/ui_dist/.gitkeep
+
 # Release build output. packaging/windows/build-release.ps1 wipes and regenerates
 # staging/ on every run, and iscc writes the installer into Output/ — both are
 # pure build products (they were tracked by accident and cost ~52MB of history).

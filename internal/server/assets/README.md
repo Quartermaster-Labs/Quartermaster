@@ -6,10 +6,11 @@ The title model (see `../titlegen.go`): reasoning-box gists and chat titles.
 
 **Not in this repo, and not in the binary.** It is downloaded once on first use
 into `<dir(quartermaster-generate.yaml)>/titlegen/`, pinned by URL and SHA-256 in
-`../titlegen_asset.go`; the Windows installer prefetches it (`-TitleModel` in
-`packaging/windows/fetch-backend.ps1`) so a fresh install has titles working
-straight away. When it cannot be fetched, chat titles fall back to the chat model
-client-side — no error, just a slightly worse title.
+`../titlegen_asset.go`. The Windows installer used to prefetch it, through a
+`fetch-backend.ps1` run that no longer happens; the lazy path was always the real
+one, and every non-Windows install already relied on it. When it cannot be
+fetched, chat titles fall back to the chat model client-side — no error, just a
+slightly worse title.
 
 It used to be a `//go:embed`, which put 79 MiB into every clone, every release
 archive and every self-update for a feature that degrades gracefully.

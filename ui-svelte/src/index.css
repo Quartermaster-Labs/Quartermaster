@@ -1,5 +1,4 @@
 @import "tailwindcss";
-@import "katex/dist/katex.min.css";
 @plugin "@tailwindcss/typography";
 
 /* Bundled webfonts — self-hosted latin subsets, no network fetch at runtime

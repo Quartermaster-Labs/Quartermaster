@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Quartermaster Setup</title>
+    <script>
+      // Follow the OS before the first paint. Inline rather than in main.ts so
+      // there is no flash of the wrong theme while the bundle parses -- in a
+      // chrome-less window that flash reads as the app being broken, since
+      // there is no browser frame around it to explain what is loading.
+      if (window.matchMedia("(prefers-color-scheme: light)").matches) {
+        document.documentElement.setAttribute("data-theme", "light");
+      }
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/setup/main.ts"></script>
+  </body>
+</html>

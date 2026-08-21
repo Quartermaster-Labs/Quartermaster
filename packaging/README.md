@@ -9,11 +9,20 @@ creates that tag first. See `windows/installer.iss` + `windows/build-release.ps1
 
 Build runs locally because the repo is private (CI Actions minutes are metered).
 
-The wizard optionally downloads `llama-server` (llama.cpp) and `sd-server`
-(stable-diffusion.cpp) for a chosen backend (Vulkan/CUDA/CPU) into `bin\` and
-points `quartermaster-generate.yaml` at them — see `windows/fetch-backend.ps1`
-(self-test: `fetch-backend.ps1 -Test`). It can also add a logon-autostart
-shortcut. Installs per-user (no UAC) under `%LocalAppData%\Programs`.
+What users download is `cmd/quartermaster-setup`: a native-window wizard
+(WebView2, rendering the project's own Svelte UI) that asks where to install,
+where the models are, and which backends to fetch — then drives the Inno
+installer with `/VERYSILENT` for the Start Menu entry, the uninstall record and
+the in-place upgrade. The Inno `.exe` is embedded inside it and is not published
+on its own.
+
+Backends are downloaded by `internal/backends`, the same code the Settings page
+uses, so a first install and a later one behave identically: GPU-detected
+variant, versioned side-by-side install, staged download with rollback, and a
+PE-imports preflight that names a missing GPU runtime rather than failing at
+first launch. `windows/fetch-backend.ps1` did this job before and is no longer
+run by anything — it is kept only as a manual escape hatch. Installs per-user
+(no UAC) under `%LocalAppData%\Programs`.
 
 **Code signing** is off until you add repo secrets `SIGN_PFX_BASE64` (base64 of
 a `.pfx`) and `SIGN_PFX_PASSWORD`; CI then signs the binary + installer

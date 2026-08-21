@@ -250,8 +250,8 @@ func DlpPath() (string, error) {
 			return p, nil
 		}
 	}
-	// Bundle layout: the Windows installer's optional yt-dlp task drops it in
-	// bin\yt-dlp (fetch-backend.ps1), same as the inference backends.
+	// Bundle layout: internal/backends installs yt-dlp into bin\yt-dlp next to
+	// the exe, same as the inference backends.
 	if self, err := os.Executable(); err == nil {
 		dir := filepath.Dir(self)
 		for _, sub := range []string{"", filepath.Join("bin", "yt-dlp")} {
