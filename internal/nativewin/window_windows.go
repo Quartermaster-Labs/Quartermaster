@@ -78,8 +78,9 @@ type Options struct {
 	// process the user cannot reach.
 	HideOnClose bool
 
-	// OnClose replaces the default close action for the page's qmClose
-	// binding. nil terminates the webview, which is what the wizard wants.
+	// OnClose replaces the default close action, for every way of closing the
+	// window and not just the page's button. It takes precedence over
+	// HideOnClose. nil destroys the window, which is what the wizard wants.
 	OnClose func()
 }
 
@@ -117,16 +118,12 @@ func Attach(w webview2.WebView, o Options) uintptr {
 	_ = w.Bind("qmDrag", func() { w.Dispatch(func() { Drag(hwnd) }) })
 	_ = w.Bind("qmMinimize", func() { w.Dispatch(func() { showWindow(hwnd, swMinimize) }) })
 	_ = w.Bind("qmMaximize", func() { w.Dispatch(func() { ToggleMaximize(hwnd) }) })
-	_ = w.Bind("qmClose", func() {
-		w.Dispatch(func() {
-			switch {
-			case opts.OnClose != nil:
-				opts.OnClose()
-			default:
-				w.Terminate()
-			}
-		})
-	})
+	// Posted as WM_CLOSE rather than acted on here, so the page's X and the
+	// system's own close verbs (Alt+F4, the taskbar's Close, PostClose) all
+	// run the ONE policy in wndProc. Deciding it here as well is how the page
+	// button came to terminate the webview even under HideOnClose, destroying
+	// the window the tray's "Open" then had nothing left to show.
+	_ = w.Bind("qmClose", func() { PostClose(hwnd) })
 	// Returns "" when the user cancels, which the page treats as "keep what is
 	// in the box" -- a cancelled picker must not blank a path already typed.
 	_ = w.Bind("qmPickFolder", func(title, start string) (string, error) {
@@ -266,10 +263,16 @@ func subclass(hwnd uintptr) {
 func wndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	switch msg {
 	case wmClose:
-		// Returning without chaining is what suppresses the destroy: the
-		// window stays alive with its page loaded, so the next Show is
-		// instant.
-		if opts.HideOnClose {
+		// Every way of closing this window arrives here -- the page's own X
+		// posts WM_CLOSE rather than deciding for itself -- so this switch is
+		// the whole close policy. Returning without chaining is what
+		// suppresses the destroy: the window stays alive with its page
+		// loaded, so the next Show is instant.
+		switch {
+		case opts.OnClose != nil:
+			opts.OnClose()
+			return 0
+		case opts.HideOnClose:
 			Hide(hwnd)
 			return 0
 		}

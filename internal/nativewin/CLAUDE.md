@@ -35,7 +35,8 @@ constraints exclude all Go files", breaking the Docker build for a package it ne
   so a tray reopen is instant instead of a cold WebView2 start. The caller then **owns** getting it
   back on screen; a hidden window with no tray icon is a process the user cannot reach. The wizard
   passes the zero value, so its X really closes.
-- **`Options.OnClose`** — replaces the page's `qmClose` action. nil terminates the webview.
+- **`Options.OnClose`** — replaces the close action for *every* route into it, not just the page's
+  button; takes precedence over `HideOnClose`. nil destroys the window.
 - **Package-scope state** (`prevWndProc`, `opts`) — a process has exactly one of these windows. The
   wizard shows one and exits; the server's app window is its single main window. A second would need
   this keyed by hwnd, and neither program wants one.
@@ -61,6 +62,11 @@ constraints exclude all Go files", breaking the Docker build for a package it ne
   thickness, so overriding there pushes the page off-screen. The top edge stops being a resize handle
   and cannot be given back via `WM_NCHITTEST` — with no non-client area up there the hit test never
   reaches the window; the WebView2 child owns those pixels.
+- **There is exactly one close policy, and it lives in `WM_CLOSE`.** The page's `qmClose` binding only
+  *posts* `WM_CLOSE`; it decides nothing. It used to decide too, and since it checked `OnClose` but
+  not `HideOnClose` the title bar's X terminated the webview while Alt+F4 hid it — the tray's "Open"
+  was then dispatching onto a destroyed window. Any new close route (a menu item, a hotkey) posts
+  `WM_CLOSE` as well rather than growing a second copy of the rule.
 - **The subclass chains, it does not replace.** `GetWindowLongPtrW(GWLP_WNDPROC)` is stored and
   everything not rewritten is forwarded through `CallWindowProcW`, so go-webview2 keeps handling
   `WM_SIZE`, `WM_DESTROY` and the rest. Dropping the chain kills the window.
