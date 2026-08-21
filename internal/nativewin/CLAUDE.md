@@ -21,6 +21,7 @@ constraints exclude all Go files", breaking the Docker build for a package it ne
 | `folder_windows.go` | `PickFolder` — IFileDialog + `FOS_PICKFOLDERS` through raw COM vtable dispatch (`comCall`). |
 | `external_windows.go` | `OpenExternal` — hands an http(s) URL to the system browser via `rundll32 url.dll,FileProtocolHandler`. |
 | `placement_windows.go` | `Placement`, `GetPlacement`, `ApplyPlacement` — remembering where the window was. |
+| `statusbar_windows.go` | `hideStatusBar` — turns off WebView2's hover-a-link URL bubble. Reaches `ICoreWebView2Settings` by reflecting go-webview2's unexported `browser` field; best-effort, silent no-op if the shape changes. |
 
 ## Important types & functions
 

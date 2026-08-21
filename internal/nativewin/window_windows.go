@@ -111,6 +111,7 @@ func Attach(w webview2.WebView, o Options) uintptr {
 
 	ApplyIcon(hwnd)
 	frameless(hwnd)
+	hideStatusBar(w)
 
 	// Dispatch rather than a direct call: a binding runs on the UI thread from
 	// inside a WebView2 event handler, and both dragging and closing enter a
