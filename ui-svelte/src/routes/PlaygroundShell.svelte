@@ -1,4 +1,5 @@
 <script lang="ts">
+  import UIScaleControl from "../components/UIScaleControl.svelte";
   import { tip as tooltip } from "../lib/tooltip";
   import { get } from "svelte/store";
   import {
@@ -863,6 +864,11 @@
             </div>
 
             <div class="flex flex-col gap-1">
+              <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">Interface Size {@render tip("Scales the whole interface. The app window has no browser zoom of its own, so this is it. Ctrl+Plus / Ctrl+Minus / Ctrl+0 work anywhere.")}</span>
+              <UIScaleControl />
+            </div>
+
+            <div class="flex flex-col gap-1">
               <label class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary" for="max-tokens">Max Tokens {@render tip("Cap on how long a single response can be. Higher = longer possible replies.")}</label>
               <input
                 id="max-tokens"
@@ -1254,7 +1260,7 @@
 {#if presetEditor}
   <div class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onclick={() => (presetEditor = null)} role="presentation">
     <div
-      class="flex w-full max-w-2xl max-h-[85vh] flex-col gap-3 rounded-lg border border-card-border bg-surface p-4 shadow-xl"
+      class="flex w-full max-w-2xl max-h-[calc(85vh/var(--qm-scale))] flex-col gap-3 rounded-lg border border-card-border bg-surface p-4 shadow-xl"
       onclick={(e) => e.stopPropagation()}
       role="presentation"
     >
@@ -1311,7 +1317,7 @@
   {@const sec = PRESET_SECTIONS.find((s) => s.key === sectionEditor?.key)}
   <div class="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4" onclick={() => (sectionEditor = null)} role="presentation">
     <div
-      class="flex w-full max-w-3xl h-[80vh] max-h-[90vh] flex-col gap-3 rounded-lg border border-card-border bg-surface p-4 shadow-xl"
+      class="flex w-full max-w-3xl h-[calc(80vh/var(--qm-scale))] max-h-[calc(90vh/var(--qm-scale))] flex-col gap-3 rounded-lg border border-card-border bg-surface p-4 shadow-xl"
       onclick={(e) => e.stopPropagation()}
       role="presentation"
     >
@@ -1415,7 +1421,7 @@
 {#if historyOpen && (onChats || onImages || onSpeech)}
   <div class="fixed inset-0 z-30" onclick={() => (historyOpen = false)} role="presentation">
     <div
-      class="absolute left-[12rem] top-4 w-72 max-h-[80vh] flex flex-col p-2 rounded-lg border border-card-border bg-surface shadow-xl"
+      class="absolute left-[12rem] top-4 w-72 max-h-[calc(80vh/var(--qm-scale))] flex flex-col p-2 rounded-lg border border-card-border bg-surface shadow-xl"
       onclick={(e) => e.stopPropagation()}
       role="presentation"
     >

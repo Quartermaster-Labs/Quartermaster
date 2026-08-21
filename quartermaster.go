@@ -105,6 +105,7 @@ func main() {
 	flagPlaygroundPort := flag.String("playground-port", "", "serve the standalone playground app (per-user login + chat history) on this extra address, e.g. :8081")
 	flagNoUpdateCheck := flag.Bool("no-update-check", false, "disable checking GitHub for new releases (Windows release builds only)")
 	flagTray := flag.Bool("tray", false, "run as a desktop app: show a system-tray icon with Open/Exit (Windows only; no-op elsewhere)")
+	flagApp := flag.Bool("app", false, "open the dashboard in a native desktop window instead of a browser tab (implies -tray; Windows only, falls back to the browser elsewhere or when WebView2 is missing)")
 	flagAdminAllow := flag.String("admin-allow", "", "extra IPs/CIDRs (comma separated) allowed to reach the dashboard/admin endpoints when listening beyond loopback, e.g. 100.64.0.0/10 for a tailnet")
 	flagAdminOpen := flag.Bool("admin-open", false, "serve the unauthenticated dashboard/admin endpoints to every remote host (legacy behaviour; the inference API is unaffected)")
 	flag.Parse()
@@ -136,6 +137,14 @@ func main() {
 		} else {
 			listenAddr = ":8080"
 		}
+	}
+
+	// Single instance, before anything expensive: a second -app launch hands
+	// off to the one already running and exits. Only under -app -- a headless
+	// or CLI start has no window to raise, and its port conflict is a real
+	// error the operator should see.
+	if *flagApp && handOffToRunningInstance(listenAddr, useTLS) {
+		os.Exit(0)
 	}
 
 	configPath := *flagConfig
@@ -202,7 +211,7 @@ func main() {
 
 	// The first lines anyone reads. Which build is running and which config it
 	// loaded are the two facts every bug report needs; neither was logged.
-	proxyLog.Infof("quartermaster %s (commit %s, built %s) starting", version, commit, date)
+	proxyLog.Infof("Quartermaster %s (commit %s, built %s) starting", version, commit, date)
 	proxyLog.Infof("config: %s - %d model(s)", configPath, len(cfg.Models))
 	for _, m := range startupLines {
 		proxyLog.Info(m)
@@ -548,10 +557,10 @@ func main() {
 		go func() {
 			var startErr error
 			if useTLS {
-				proxyLog.Infof("quartermaster listening with TLS on https://%s", hs.Addr)
+				proxyLog.Infof("Quartermaster listening with TLS on https://%s", hs.Addr)
 				startErr = hs.ListenAndServeTLS(*flagCertFile, *flagKeyFile)
 			} else {
-				proxyLog.Infof("quartermaster listening on http://%s", hs.Addr)
+				proxyLog.Infof("Quartermaster listening on http://%s", hs.Addr)
 				startErr = hs.ListenAndServe()
 			}
 			if startErr != nil && !errors.Is(startErr, http.ErrServerClosed) {
@@ -562,7 +571,7 @@ func main() {
 
 		if !shared.IsLoopbackAddr(hs.Addr) {
 			_, port, _ := net.SplitHostPort(hs.Addr)
-			proxyLog.Infof("quartermaster is reachable by all hosts on the network, use loopback (e.g. localhost:%s) to restrict to this host only", port)
+			proxyLog.Infof("Quartermaster is reachable by all hosts on the network, use loopback (e.g. localhost:%s) to restrict to this host only", port)
 		}
 	}
 
@@ -638,7 +647,7 @@ func main() {
 	// Desktop mode: hold the main thread with a system-tray icon (Open/Exit)
 	// until shutdown. Without -tray, just wait for exitChan. The tray's "Exit"
 	// routes through triggerShutdown, so teardown is identical either way.
-	if *flagTray {
+	if *flagTray || *flagApp {
 		scheme := "http"
 		if useTLS {
 			scheme = "https"
@@ -647,7 +656,32 @@ func main() {
 		if _, port, err := net.SplitHostPort(listenAddrs[0]); err == nil && port != "" {
 			host = "localhost:" + port
 		}
-		runTray(scheme+"://"+host, triggerShutdown, exitChan)
+		url := scheme + "://" + host
+
+		// The window is just another HTTP client of the server that is already
+		// running, so it is started here rather than at boot: by this point the
+		// listener is up and the page it loads will not race the first request.
+		// A window that fails to appear is a warning, not a fatal -- the same
+		// dashboard is one browser tab away, and the server has models loaded.
+		var onOpenApp func()
+		if *flagApp {
+			win := startAppWindow(url)
+			if err := win.Ready(); err != nil {
+				proxyLog.Warnf("native window unavailable, use the browser instead (%s): %v", url, err)
+			} else {
+				onOpenApp = win.Show
+				// Lets a second launch raise this window instead of dying on
+				// the bound port. Set once, unlocked, like the shutdown hook
+				// above it: reload applies a new config to this same Server
+				// rather than building another, so there is nothing to re-wire.
+				activeSrv.SetShowAppHook(win.Show)
+				// Closing the window only hides it, so the window has to be
+				// destroyed explicitly or its thread outlives teardown.
+				defer win.Close()
+			}
+		}
+
+		runTray(url, onOpenApp, triggerShutdown, exitChan)
 	} else {
 		<-exitChan
 	}
@@ -662,7 +696,7 @@ func main() {
 	activeMu.RUnlock()
 	if relaunch {
 		if err := update.Spawn(); err != nil {
-			proxyLog.Warnf("update applied but relaunch failed (start quartermaster again to run the new version): %v", err)
+			proxyLog.Warnf("update applied but relaunch failed (start Quartermaster again to run the new version): %v", err)
 		} else {
 			proxyLog.Info("restarting into the updated build")
 		}

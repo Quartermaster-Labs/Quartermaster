@@ -1,7 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { Folder } from "lucide-svelte";
   import * as api from "./api";
   import type { Probe, ScanResult, Status } from "./api";
+  import Select from "../components/Select.svelte";
+  import * as native from "../lib/native";
+  import WindowControls from "../components/WindowControls.svelte";
 
   // Laid out as a classic installer -- fixed header, one panel of content, a
   // footer rail of Back/Next -- rather than as a web page. The window has no
@@ -132,12 +136,57 @@
   const gb = (n: number) => n.toFixed(1) + " GB";
   const noteFor = (id: string) =>
     (probe?.variants ?? []).find((v) => v.id === id)?.note ?? "";
+
+  // The variant list already carries a one-line note per option, so it maps
+  // straight onto Select's two-line rows -- which is half the reason the native
+  // <select> had to go: an <option> can only ever show the label, so the note
+  // had to be repeated underneath and only for the option already chosen.
+  const variantOptions = $derived(
+    (probe?.variants ?? []).map((v) => ({
+      value: v.id,
+      label: v.label,
+      detail: v.note || undefined,
+    })),
+  );
+
+  // The dialog always hands back a backslash path. The two boxes are seeded in
+  // different styles (the install dir from Windows, the models root normalised
+  // to forward slashes), and Go accepts either, so each keeps the style it is
+  // already showing rather than flipping under the user mid-edit.
+  async function browse(title: string, current: string): Promise<string> {
+    return native.pickFolder(title, current.trim().replace(/\//g, "\\"));
+  }
+
+  async function browseDir() {
+    const p = await browse("Where should Quartermaster go?", dir);
+    if (p) dir = p;
+  }
+
+  async function browseModels() {
+    const p = await browse("Where are your models?", modelsRoot);
+    if (p) modelsRoot = p.replace(/\\/g, "/");
+  }
 </script>
 
 <div class="flex h-screen flex-col bg-background text-txtmain">
-  <header class="flex items-baseline gap-3 border-b border-card-border px-8 py-5">
-    <h1 class="text-lg font-semibold tracking-tight">quartermaster</h1>
+  <!-- The window has no caption of its own (cmd/quartermaster-setup strips it),
+       so this header IS the title bar: the whole strip drags, double-click
+       maximises, and the three buttons on the right are the real system verbs
+       going through the native bridge. In the browser fallback there is no
+       bridge, so the buttons are simply not rendered and the strip is an
+       ordinary header again. -->
+  <header
+    class="titlebar relative flex items-baseline gap-3 border-b border-card-border px-8 py-5"
+    onmousedown={native.isNative ? native.dragWindow : undefined}
+    ondblclick={native.isNative ? native.toggleMaximize : undefined}
+    role="presentation"
+  >
+    <h1 class="text-lg font-semibold tracking-tight">Quartermaster</h1>
     <span class="text-label text-txtsecondary">First-time setup</span>
+
+    <div class="absolute right-0 top-0">
+      <WindowControls />
+    </div>
   </header>
 
   {#if loadError}
@@ -179,7 +228,7 @@
 
       {#if done}
         <p class="mt-2 text-sm text-txtsecondary">
-          quartermaster is installed in
+          Quartermaster is installed in
           <span class="font-mono">{status.installDir}</span>.
         </p>
       {/if}
@@ -199,7 +248,7 @@
     >
       <label class="flex items-center gap-2 text-sm" class:opacity-50={!done}>
         <input type="checkbox" bind:checked={launch} disabled={!done} />
-        Start quartermaster now
+        Start Quartermaster now
       </label>
       <button class="btn btn--primary" disabled={running} onclick={close}>
         {failed ? "Close" : "Finish"}
@@ -219,31 +268,41 @@
 
     <main class="flex-1 overflow-y-auto px-8 py-6">
       {#if step === 0}
-        <h2 class="text-base font-semibold">Where should quartermaster go?</h2>
-        <p class="mt-1 text-sm text-txtsecondary">
-          This holds the application itself — a few hundred megabytes. Models live
-          somewhere else and are never copied here.
-        </p>
-        <input class="mt-4 w-full font-mono text-sm" bind:value={dir} spellcheck="false" />
+        <h2 class="text-base font-semibold">Where should Quartermaster go?</h2>
+        <div class="mt-4 flex gap-2">
+          <input class="min-w-0 flex-1 font-mono text-sm" bind:value={dir} spellcheck="false" />
+          {#if native.isNative}
+            <button class="btn inline-flex shrink-0 items-center gap-1.5" onclick={browseDir}>
+              <Folder size={14} /> Browse
+            </button>
+          {/if}
+        </div>
 
         {#if isWindows}
           <label class="mt-5 flex items-center gap-2 text-sm">
             <input type="checkbox" bind:checked={autostart} />
-            Start quartermaster when I log in
+            Start Quartermaster when I log in
           </label>
         {/if}
       {:else if step === 1}
         <h2 class="text-base font-semibold">Where are your models?</h2>
         <p class="mt-1 text-sm text-txtsecondary">
-          Point this at a folder of GGUF files. quartermaster reads it in place and
+          Point this at a folder of GGUF files. Quartermaster reads it in place and
           writes nothing to it. You can leave it blank and set it later.
         </p>
-        <input
-          class="mt-4 w-full font-mono text-sm"
-          bind:value={modelsRoot}
-          spellcheck="false"
-          placeholder="e.g. D:/LLM/Models"
-        />
+        <div class="mt-4 flex gap-2">
+          <input
+            class="min-w-0 flex-1 font-mono text-sm"
+            bind:value={modelsRoot}
+            spellcheck="false"
+            placeholder="e.g. D:/LLM/Models"
+          />
+          {#if native.isNative}
+            <button class="btn inline-flex shrink-0 items-center gap-1.5" onclick={browseModels}>
+              <Folder size={14} /> Browse
+            </button>
+          {/if}
+        </div>
 
         <p class="mt-2 h-5 text-xs text-txtsecondary">
           {#if scanning}
@@ -251,7 +310,9 @@
           {:else if scan?.error}
             <span class="text-warning">{scan.error}</span>
           {:else if scan && !scan.exists}
-            <span class="text-warning">That folder does not exist yet.</span>
+            <span class="text-txtsecondary">
+              That folder does not exist yet, so it will be created.
+            </span>
           {:else if scan}
             <span class="text-success">
               Found {scan.count}
@@ -260,7 +321,7 @@
           {/if}
         </p>
       {:else}
-        <h2 class="text-base font-semibold">Which engines should I install?</h2>
+        <h2 class="text-base font-semibold">Which engines should Quartermaster install?</h2>
         <p class="mt-1 text-sm text-txtsecondary">
           These are downloaded now. Everything here can be changed later under
           Settings → Backends.
@@ -283,14 +344,15 @@
           {#if probe.gpus?.length}
             Detected: <span class="font-mono">{probe.gpus.join(", ")}</span>
           {:else}
-            No GPU detected — CPU builds will be used.
+            No GPU detected, so CPU builds will be used.
           {/if}
         </p>
-        <select class="mt-2 w-full text-sm" bind:value={variant}>
-          {#each probe.variants ?? [] as v}
-            <option value={v.id}>{v.label}</option>
-          {/each}
-        </select>
+        <Select
+          class="mt-2 w-full"
+          bind:value={variant}
+          options={variantOptions}
+          ariaLabel="Compute backend"
+        />
         {#if noteFor(variant)}
           <p class="mt-2 text-xs text-txtsecondary">{noteFor(variant)}</p>
         {/if}
@@ -311,3 +373,14 @@
     </footer>
   {/if}
 </div>
+
+<style>
+  /* Dragging a frameless window is a mousedown that never becomes a click: the
+     window manager takes the mouse mid-gesture. Without this the pointer sweeps
+     a text selection across the header on the way, and the selection stays
+     highlighted after the drag ends. */
+  .titlebar {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+</style>

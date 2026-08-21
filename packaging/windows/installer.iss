@@ -89,11 +89,14 @@ Source: "{#StagingDir}\config\quartermaster-generate.example.yaml"; DestDir: "{a
 Name: autostart; Description: "Start quartermaster automatically when I log in"; GroupDescription: "Startup:"; Flags: unchecked
 
 [Icons]
-Name: "{group}\quartermaster"; Filename: "{app}\start.cmd"; WorkingDir: "{app}"
+; IconFilename points at the exe so the shortcut wears the quartermaster icon
+; rather than the cmd.exe one -- start.cmd is a launcher, not the application.
+Name: "{group}\quartermaster"; Filename: "{app}\start.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\quartermaster-windows-amd64.exe"
 Name: "{group}\Edit generate config"; Filename: "notepad.exe"; Parameters: """{app}\config\quartermaster-generate.yaml"""; WorkingDir: "{app}"
 Name: "{group}\Uninstall quartermaster"; Filename: "{uninstallexe}"
 ; Logon autostart (per-user Startup folder; console window is the live log).
-Name: "{userstartup}\quartermaster"; Filename: "{app}\start.cmd"; WorkingDir: "{app}"; Tasks: autostart
+; "background" keeps the login launch tray-only: see start.cmd.
+Name: "{userstartup}\quartermaster"; Filename: "{app}\start.cmd"; Parameters: "background"; WorkingDir: "{app}"; Tasks: autostart; IconFilename: "{app}\quartermaster-windows-amd64.exe"
 
 [Run]
 ; skipifsilent: under the setup program this never fires, because the wizard

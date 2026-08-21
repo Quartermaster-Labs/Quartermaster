@@ -87,6 +87,11 @@ type Probe struct {
 // pickers; Settings -> Backends does all of that against the same manager once
 // the app is up. The wizard's job is to get one text and one image backend on
 // disk so the dashboard is not empty.
+//
+// All three default to selected. yt-dlp is a 20 MB single file with no runtime
+// of its own, and the alternative to installing it now is a chat model that
+// silently cannot read a YouTube link months later, with nothing on screen to
+// explain why.
 var probeComponents = []struct {
 	id       string
 	summary  string
@@ -94,7 +99,7 @@ var probeComponents = []struct {
 }{
 	{"llama-server", "Text models (GGUF). The one you almost certainly want.", true},
 	{"sd-server", "Image generation and editing.", true},
-	{"yt-dlp", "Lets chat models read YouTube transcripts. Small helper, not a backend.", false},
+	{"yt-dlp", "Lets chat models read YouTube transcripts. Small helper, not a backend.", true},
 }
 
 // NewProbe assembles the wizard's opening state.

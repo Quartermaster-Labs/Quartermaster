@@ -66,7 +66,7 @@ func (w *Wizard) Start(ctx context.Context, c Choices) error {
 // that can fetch it later from Settings, while a missing binary or an
 // unwritable generate file does not.
 func (w *Wizard) run(ctx context.Context, c Choices) error {
-	w.step(PhasePlacing, "Installing quartermaster")
+	w.step(PhasePlacing, "Installing Quartermaster")
 	if err := os.MkdirAll(c.Dir, 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", c.Dir, err)
 	}
@@ -89,6 +89,17 @@ func (w *Wizard) run(ctx context.Context, c Choices) error {
 	// that exists only on the machine the example was written on.
 	if err := setSettingsKey(genPath, "modelsRoot", c.ModelsRoot); err != nil {
 		return fmt.Errorf("setting modelsRoot: %w", err)
+	}
+	// Created rather than merely recorded: the wizard proposes a models folder
+	// that usually does not exist yet, and a config pointing at a missing
+	// directory means a first launch that finds nothing with no clue why. A
+	// failure here is a warning, not a fatal: the path may be on a drive that is
+	// not attached right now, which is a perfectly good answer to "where will
+	// your models live" and no reason to abandon an otherwise complete install.
+	if c.ModelsRoot != "" {
+		if err := os.MkdirAll(c.ModelsRoot, 0o755); err != nil {
+			w.warn(fmt.Sprintf("could not create %s: %v", c.ModelsRoot, err))
+		}
 	}
 
 	if len(c.Components) > 0 {

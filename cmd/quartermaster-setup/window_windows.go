@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
-	"unsafe"
 
 	webview2 "github.com/jchv/go-webview2"
+
+	"github.com/quartermaster-labs/quartermaster/internal/nativewin"
 )
 
 // Window geometry. Sized like an installer dialog rather than a browser: the
@@ -20,7 +20,7 @@ const (
 	winHeight = 660
 )
 
-// runWindow shows the wizard in a chrome-less WebView2 window and blocks until
+// runWindow shows the wizard in a frameless WebView2 window and blocks until
 // either the user closes it or the wizard signals it is finished.
 //
 // An error here is expected, not exceptional: WebView2 ships with Windows 11
@@ -46,6 +46,8 @@ func runWindow(url string, done <-chan struct{}) (err error) {
 		// window at all.
 		DataPath: filepath.Join(os.TempDir(), "quartermaster-setup-webview2"),
 		WindowOptions: webview2.WindowOptions{
+			// Still set even though no caption is drawn: this is what Alt-Tab,
+			// the taskbar preview and any window-list tool show.
 			Title:  "Quartermaster Setup",
 			Width:  winWidth,
 			Height: winHeight,
@@ -56,6 +58,11 @@ func runWindow(url string, done <-chan struct{}) (err error) {
 		return errors.New("the WebView2 runtime is not installed")
 	}
 	defer w.Destroy()
+
+	// Zero Options: the wizard's close button really does close it. Hiding to a
+	// tray would strand a process with no icon to reach it by -- the wizard has
+	// no tray.
+	nativewin.Attach(w, nativewin.Options{})
 
 	// HintMin, not HintFixed: the wizard's content is a normal responsive
 	// layout, and a user on a 125% display who cannot resize is stuck with
@@ -80,20 +87,6 @@ func runWindow(url string, done <-chan struct{}) (err error) {
 	return nil
 }
 
-var (
-	user32      = syscall.NewLazyDLL("user32.dll")
-	messageBoxW = user32.NewProc("MessageBoxW")
-)
-
 // showError puts a message on screen. The binary is built -H=windowsgui, so
 // this is the only channel that reaches a user who double-clicked it.
-func showError(msg string) {
-	const mbIconError = 0x00000010
-	title, _ := syscall.UTF16PtrFromString("Quartermaster Setup")
-	body, err := syscall.UTF16PtrFromString(msg)
-	if err != nil {
-		return
-	}
-	_, _, _ = messageBoxW.Call(0,
-		uintptr(unsafe.Pointer(body)), uintptr(unsafe.Pointer(title)), mbIconError)
-}
+func showError(msg string) { nativewin.MessageBox("Quartermaster Setup", msg) }

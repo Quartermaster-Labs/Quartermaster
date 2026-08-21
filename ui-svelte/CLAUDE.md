@@ -57,6 +57,8 @@ changing anything under `ui-svelte/`.
 | `src/routes/Login.svelte` | Playground username/password login (plaintext, registers unknown users). |
 | `src/routes/` | Top-level pages mounted by the router. |
 | `src/components/` | Reusable UI components (panels, modals, gauges, charts, tooltips). |
+| `src/components/TitleBar.svelte`, `WindowControls.svelte`, `src/lib/native.ts` | The native app window's caption + the `qm*` bridge. Feature-tested, never build-flagged — see Conventions. |
+| `src/components/UIScaleControl.svelte`, `src/stores/uiScale.ts` | Interface size (`--qm-scale` → `zoom`), with Ctrl+Plus/Minus/0. In the sidebar footer and the playground's General settings. |
 | `src/components/playground/` | The playground's per-mode interfaces and shared widgets. |
 | `src/stores/` | Backend state, SSE wiring, persisted prefs, theme, routing. |
 | `src/lib/` | Framework-agnostic helpers: API client modules, shared `types.ts`, markdown/histogram utilities, the `scrollFade` action. |
@@ -134,6 +136,28 @@ summarized away.
   utility** — a `.collapse` of our own inherited `visibility: collapse` and hid the chat boxes.
   Boolean settings use the `Toggle.svelte` switch (`size="sm"` in dense config grids), not a raw
   `<input type="checkbox">`; tick boxes are only for multi-select lists (pick N of M).
+- **The native window is a feature test, never a build flag.** `src/lib/native.ts` reports
+  `isNative` from the presence of the `qm*` functions `internal/nativewin` injects before it
+  navigates. The same bundle serves the browser and `quartermaster -app`; nothing is conditionally
+  compiled and nothing sniffs a user agent. Guard the WHOLE component on it, not just the buttons —
+  a title bar that renders empty in a browser costs 2rem of viewport for nothing.
+- **UI scale is `zoom` on `:root`, and viewport units must be divided by it.** The app window has no
+  browser chrome, and WebView2 gives it no zoom the user can reach: the built-in Ctrl+Plus does not
+  reach the page (measured), and go-webview2's `WebView` interface does not expose the controller's
+  `ZoomFactor`. So `stores/uiScale.ts` sets `--qm-scale` and `index.css` feeds it to `zoom` — which
+  scales layout, unlike a transform, so text stays crisp and clicks land where they look. **`zoom`
+  does not scale `vh`/`vw`**: at scale 1.25 a `100vh` box measures 1.25× the viewport (measured: 561
+  → 701). Every viewport unit in the app is therefore written
+  `calc(90vh/var(--qm-scale))`, never bare `90vh`. `position: fixed` and `inset-0` need no
+  correction — they already scale correctly.
+- **`h-screen` is shortened, not threaded.** The app measures full-height roots in `h-screen` in six
+  places. `index.css` redefines it as `100vh / var(--qm-scale)`, and again under `[data-native]` with the
+  title bar subtracted **after** the division — the bar is inside the zoomed document so its `2rem`
+  is already scaled, while `100vh` is not. Verified in WebView2 at 1.25: bar 40px + root 521px = the
+  561px viewport exactly. That way the
+  title bar fits without a height prop reaching any component. `main.ts` sets that attribute for the
+  dashboard bundle only — the wizard's title bar is inside its own `h-screen` root and must not
+  subtract twice.
 - **Tests:** pure-logic helpers carry colocated `*.test.ts` Vitest specs — mostly `src/lib/`, plus
   extracted component helpers (`playground/imageGen.test.ts`). Keep new utilities testable and add
   specs beside them.

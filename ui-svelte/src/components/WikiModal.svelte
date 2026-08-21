@@ -42,7 +42,7 @@
     tabindex="-1"
   >
     <div
-      class="w-full max-w-3xl h-[80vh] flex flex-col rounded-lg border border-card-border bg-surface shadow-xl overflow-hidden"
+      class="w-full max-w-3xl h-[calc(80vh/var(--qm-scale))] flex flex-col rounded-lg border border-card-border bg-surface shadow-xl overflow-hidden"
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => e.stopPropagation()}
       role="dialog"
@@ -54,7 +54,7 @@
           <BookOpen size={18} class="text-primary" />
           <span class="text-sm font-medium shrink-0">Quartermaster Help</span>
           <span class="text-txtsecondary text-xs">·</span>
-          <span class="text-txtsecondary text-xs truncate">Tip: you can ask the assistant in the playground for help with using quartermaster</span>
+          <span class="text-txtsecondary text-xs truncate">Tip: you can ask the assistant in the playground for help with using Quartermaster</span>
         </div>
         <button class="text-txtsecondary hover:text-txtmain transition-colors" onclick={close} aria-label="Close">
           <X size={18} />

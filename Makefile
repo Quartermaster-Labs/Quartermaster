@@ -69,6 +69,14 @@ linux-arm64: ui
 versioninfo:
 	go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -icon favicon.ico -o resource_windows_amd64.syso versioninfo.json
 
+# Same, for the setup program. Its own .syso, in its own package directory: a
+# .syso is linked by the main package that sits beside it, so the repo-root one
+# reaches the server binary and nothing else. Without this the wizard's exe has
+# the blank generic-executable glyph in Explorer AND in the taskbar, which is
+# the first thing a user sees of the app.
+versioninfo-setup:
+	go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -icon favicon.ico -o cmd/quartermaster-setup/resource_windows_amd64.syso cmd/quartermaster-setup/versioninfo.json
+
 # Build the first-run wizard's UI bundle (embedded into cmd/quartermaster-setup,
 # NOT into the server binary — see internal/setup/api.go).
 ui-setup: ui-svelte/node_modules
@@ -299,5 +307,5 @@ test-ui:
 	cd ui-svelte && npm ci && npm run check && npm test
 
 # Phony targets
-.PHONY: all clean ui dist mac windows versioninfo package-windows package-linux package-mac _package-nix simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy release release-public release-binaries _build-release
+.PHONY: all clean ui dist mac windows versioninfo versioninfo-setup ui-setup setup-windows package-windows package-linux package-mac _package-nix simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy release release-public release-binaries _build-release
 .PHONY: linux linux-arm64 linux-amd64

@@ -319,13 +319,13 @@
   role="dialog"
   aria-modal="true"
 >
-  <div class="relative max-w-[80vw] max-h-[72vh] leading-none">
+  <div class="relative max-w-[calc(80vw/var(--qm-scale))] max-h-[calc(72vh/var(--qm-scale))] leading-none">
     <img
       bind:this={imgEl}
       src={source}
       alt="mask source"
       onload={onImgLoad}
-      class="max-w-[80vw] max-h-[72vh] w-auto h-auto object-contain select-none pointer-events-none"
+      class="max-w-[calc(80vw/var(--qm-scale))] max-h-[calc(72vh/var(--qm-scale))] w-auto h-auto object-contain select-none pointer-events-none"
     />
     <canvas
       bind:this={maskEl}

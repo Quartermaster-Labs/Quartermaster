@@ -112,6 +112,10 @@ type Server struct {
 	updater      *update.Checker
 	shutdownHook func()
 
+	// showAppWindow raises the native desktop window (-app). nil headless; see
+	// appwindow.go.
+	showAppWindow func()
+
 	// playground, when set, enables the standalone playground app (separate
 	// port, per-user login + chat history). nil unless -playground-port is set.
 	// See playground.go.
@@ -767,6 +771,8 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/backend-metrics", adminChain.ThenFunc(s.handleAPIBackendMetrics))
 	mux.Handle("GET /api/performance", adminChain.ThenFunc(s.handleAPIPerformance))
 	mux.Handle("GET /api/version", apiChain.ThenFunc(s.handleAPIVersion))
+	// Loopback-only by its own check, not by the chain: see handleAPIAppShow.
+	mux.Handle("GET "+appWindowShowPath, apiChain.ThenFunc(s.handleAPIAppShow))
 	mux.Handle("POST /api/update", adminChain.ThenFunc(s.handleAPIUpdate))
 	mux.Handle("GET /api/update/status", adminChain.ThenFunc(s.handleAPIUpdateStatus))
 	mux.Handle("GET /api/captures/{id}", adminChain.ThenFunc(s.handleAPICapture))

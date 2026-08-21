@@ -38,7 +38,7 @@
       top = triggerRect.top - tooltipRect.height - margin;
     }
 
-    tooltipStyle = `left: ${left}px; top: ${top}px; max-width: calc(100vw - ${margin * 2}px);`;
+    tooltipStyle = `left: ${left}px; top: ${top}px; max-width: calc(100vw / var(--qm-scale) - ${margin * 2}px);`;
   }
 
   function onEnter() {

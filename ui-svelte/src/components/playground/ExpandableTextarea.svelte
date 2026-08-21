@@ -75,7 +75,7 @@
 
 {#if isExpanded}
   <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-    <div class="w-full max-w-4xl h-[80vh] flex flex-col bg-surface rounded-lg shadow-xl border border-card-border">
+    <div class="w-full max-w-4xl h-[calc(80vh/var(--qm-scale))] flex flex-col bg-surface rounded-lg shadow-xl border border-card-border">
       <!-- Header -->
       <div class="flex justify-between items-center p-4 border-b border-card-border">
         <h3 class="font-medium">Edit Text</h3>

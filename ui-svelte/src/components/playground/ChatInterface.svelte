@@ -1559,7 +1559,7 @@
         </label>
 
         <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-qmtools">
-          <span class="flex items-center gap-1.5"><Wrench class="w-3.5 h-3.5" /> QM Tools {@render tip("Let the model inspect and tune this quartermaster instance - list installed models, read live VRAM/config, and change settings (hot-reloads, no eviction). Needs a tool-calling model. Requires -generate for edits.")}</span>
+          <span class="flex items-center gap-1.5"><Wrench class="w-3.5 h-3.5" /> QM Tools {@render tip("Let the model inspect and tune this Quartermaster instance - list installed models, read live VRAM/config, and change settings (hot-reloads, no eviction). Needs a tool-calling model. Requires -generate for edits.")}</span>
           <Toggle id="chat-qmtools" bind:checked={$qmToolsStore} />
         </label>
 

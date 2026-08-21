@@ -1,4 +1,5 @@
 <script lang="ts">
+  import UIScaleControl from "./UIScaleControl.svelte";
   import { tip } from "../lib/tooltip";
   import { link } from "svelte-spa-router";
   import { LayoutDashboard, Boxes, Layers, FlaskConical, Activity, KeyRound, Sun, Moon, MonitorCog, ArrowUpCircle, BookOpen, Settings } from "lucide-svelte";
@@ -102,7 +103,7 @@
       updating = false;
       await notify(
         `Update to ${st.latest} installed`,
-        "Restart the quartermaster service to finish — the new version is already in place."
+        "Restart the Quartermaster service to finish — the new version is already in place."
       );
       return;
     }
@@ -258,6 +259,11 @@
         <Moon size={18} />
       {/if}
     </button>
+    <!-- Hover-only, like the update button and version below it: the collapsed
+         rail is 14 units of icon and has no room for a three-button group. -->
+    <div class="hidden group-hover/rail:flex" use:tip={"Interface size (Ctrl+Plus / Ctrl+Minus / Ctrl+0)"}>
+      <UIScaleControl compact />
+    </div>
     {#if $versionInfo.update_available && $versionInfo.update_blocked}
       <!-- A new version exists but this install cannot swap its own binary
            (container, read-only directory). Link to the release instead of

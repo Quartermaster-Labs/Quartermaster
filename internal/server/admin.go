@@ -102,7 +102,7 @@ func (s *Server) requireAdmin(next http.Handler) http.Handler {
 			s.proxylog.Warnf("denied admin request %s %s from %s (not loopback; use -admin-allow or -admin-open)",
 				r.Method, r.URL.Path, r.RemoteAddr)
 			shared.SendResponse(w, r, http.StatusForbidden,
-				"forbidden: admin endpoints are restricted to this host (start quartermaster with -admin-allow <cidr> or -admin-open to widen)")
+				"forbidden: admin endpoints are restricted to this host (start Quartermaster with -admin-allow <cidr> or -admin-open to widen)")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -143,7 +143,7 @@ func (s *Server) requirePlaygroundOrAdmin(loginRequired bool) chain.Middleware {
 			s.proxylog.Warnf("denied admin request %s %s from %s (not loopback; use -admin-allow or -admin-open)",
 				r.Method, r.URL.Path, r.RemoteAddr)
 			shared.SendResponse(w, r, http.StatusForbidden,
-				"forbidden: admin endpoints are restricted to this host (start quartermaster with -admin-allow <cidr> or -admin-open to widen)")
+				"forbidden: admin endpoints are restricted to this host (start Quartermaster with -admin-allow <cidr> or -admin-open to widen)")
 		})
 	}
 }

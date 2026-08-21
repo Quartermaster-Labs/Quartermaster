@@ -86,9 +86,9 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 	})
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "# quartermaster config - generated %s\n", nowRFC)
+	fmt.Fprintf(&b, "# Quartermaster config - generated %s\n", nowRFC)
 	fmt.Fprintf(&b, "# TargetVramGB=%g  MaxRamGB=%g  Threads=%d\n", s.TargetVramGB, s.MaxRamGB, s.Threads)
-	b.WriteString("# Regen: quartermaster startup (hash-gated)\n\n")
+	b.WriteString("# Regen: Quartermaster startup (hash-gated)\n\n")
 	fmt.Fprintf(&b, "healthCheckTimeout: %d\n\n", s.HealthCheckTimeout)
 	emitVramBudget(&b, s)
 	emitSlotCache(&b, s.SlotCache)

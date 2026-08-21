@@ -18,7 +18,7 @@
     tabindex="-1"
   >
     <div
-      class="w-full max-w-4xl h-[36rem] max-h-[85vh] flex flex-col rounded-lg border border-card-border bg-surface shadow-xl overflow-hidden"
+      class="w-full max-w-4xl h-[36rem] max-h-[calc(85vh/var(--qm-scale))] flex flex-col rounded-lg border border-card-border bg-surface shadow-xl overflow-hidden"
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => e.stopPropagation()}
       role="dialog"

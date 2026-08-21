@@ -188,7 +188,7 @@
 </script>
 
 <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-  <div class="w-full max-w-3xl max-h-[90vh] flex flex-col rounded-md border border-card-border bg-surface shadow-xl">
+  <div class="w-full max-w-3xl max-h-[calc(90vh/var(--qm-scale))] flex flex-col rounded-md border border-card-border bg-surface shadow-xl">
     <header class="flex items-center gap-2 px-4 py-3 border-b border-card-border">
       <h6 >{source ? "Edit tracked repo" : "Track a backend repo"}</h6>
       <button

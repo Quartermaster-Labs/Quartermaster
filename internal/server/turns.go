@@ -342,7 +342,7 @@ func busyLabel(name, query string) string {
 	case "get_weather":
 		return "Checking the weather"
 	case "quartermaster_inspect":
-		return "Checking quartermaster"
+		return "Checking Quartermaster"
 	case "quartermaster_configure":
 		return "Applying the config change"
 	case "memory_save":

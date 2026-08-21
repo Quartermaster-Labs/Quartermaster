@@ -764,3 +764,58 @@
 ::highlight(tts-spoken) {
   color: var(--color-txtsecondary);
 }
+
+/* ---- native app window (internal/nativewin, `quartermaster -app`) --------- */
+
+/* The window has no caption of its own, so App.svelte draws a 2rem title bar
+   above everything. That bar takes real space, but the app measures its
+   full-height roots in `h-screen` (100vh) in a dozen places -- the dashboard
+   shell, the playground shell, Login, both loading states -- so a bar in normal
+   flow would push each of them 2rem past the bottom of the window.
+
+   Shortening `h-screen` under the marker attribute fixes all of them at once,
+   and threads no height prop through any component. `[data-native] .h-screen`
+   outranks Tailwind's own `.h-screen` on specificity (0,2,0 vs 0,1,0), so
+   ordering against the utility layer does not matter.
+
+   main.ts sets the attribute only for the dashboard bundle. The wizard's title
+   bar lives INSIDE its h-screen root, so it must not be subtracted twice. */
+[data-native] {
+  --qm-titlebar-h: 2rem;
+}
+
+/* ---- UI scale (stores/uiScale.ts) --------------------------------------- */
+
+/* `zoom` rather than a transform: a transform scales a rendered layer, leaving
+   layout, hit-testing and scroll extents at the old size, while `zoom` scales
+   the layout itself -- fonts stay crisp and clicks land where they look.
+
+   The app window needs this because WebView2 has no zoom the user can reach:
+   its built-in Ctrl+Plus does not reach the page (measured), the controller's
+   ZoomFactor is not exposed by go-webview2's WebView interface, and a browser
+   tab's own zoom is not available to a frameless window. So the app owns it.
+
+   Applies in the browser too. Nothing here is app-only, and a 4K browser tab
+   has the same complaint. */
+:root {
+  --qm-scale: 1;
+  zoom: var(--qm-scale);
+}
+
+/* Viewport units are the one thing `zoom` does NOT scale: at scale 1.25 a
+   `100vh` box measures 1.25x the viewport and overflows (measured: viewport
+   561px, box 701px). Dividing by the scale restores it exactly. Anything using
+   vh/vw needs the same division -- see ui-svelte/CLAUDE.md.
+
+   `:root .h-screen` is (0,2,0) and outranks Tailwind's `.h-screen` (0,1,0), so
+   source order against the utility layer does not matter. */
+:root .h-screen {
+  height: calc(100vh / var(--qm-scale));
+}
+
+/* The title bar is INSIDE the zoomed document, so its 2rem is already scaled
+   while 100vh is not -- divide first, then subtract. Same specificity as the
+   rule above, so this one has to stay after it. */
+[data-native] .h-screen {
+  height: calc(100vh / var(--qm-scale) - var(--qm-titlebar-h));
+}

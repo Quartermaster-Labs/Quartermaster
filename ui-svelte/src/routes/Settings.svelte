@@ -461,7 +461,7 @@
       <div>
         <div class="flex items-center gap-2 mb-3">
           <h6 >Startup</h6>
-          {@render hint("Launch quartermaster in the system tray when you log in to Windows. All quartermaster installs on this machine share ONE startup entry, so only one can start with the system - if another install owns it, take it over from here.")}
+          {@render hint("Launch Quartermaster in the system tray when you log in to Windows. All Quartermaster installs on this machine share ONE startup entry, so only one can start with the system - if another install owns it, take it over from here.")}
         </div>
 
         <div class="rounded border border-card-border bg-surface p-3">
@@ -483,7 +483,7 @@
           {#if autostart.enabled && !autostart.ownedByUs}
             <div class="mt-3 rounded border border-warning/40 bg-warning/10 p-2 text-micro">
               <div class="flex items-center justify-between gap-2">
-                <span class="text-warning">⚠ Owned by another quartermaster install</span>
+                <span class="text-warning">⚠ Owned by another Quartermaster install</span>
                 <button
                   class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary"
                   disabled={autostartBusy}

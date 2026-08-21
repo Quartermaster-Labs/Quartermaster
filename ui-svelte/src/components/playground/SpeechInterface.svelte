@@ -755,7 +755,7 @@
         <div class="composer-shell shrink-0">
           <textarea
             bind:this={promptEl}
-            class="composer-textarea pretty-scroll min-h-[3.5rem] max-h-[50vh]"
+            class="composer-textarea pretty-scroll min-h-[3.5rem] max-h-[calc(50vh/var(--qm-scale))]"
             rows="2"
             placeholder={turns.length ? "Add another line to speak…" : "Enter text to convert to speech…"}
             disabled={isGenerating}

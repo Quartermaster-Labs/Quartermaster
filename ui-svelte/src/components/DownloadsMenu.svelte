@@ -164,7 +164,7 @@
 
   <!-- Fixed, not absolute: the status rail is an overflow-x-auto strip, which
        would clip a panel positioned inside it. -->
-  <div class="fixed right-3 top-11 z-50 w-[26rem] max-w-[calc(100vw-1.5rem)] rounded-md border border-card-border bg-surface shadow-xl font-mono text-xs overflow-hidden">
+  <div class="fixed right-3 top-11 z-50 w-[26rem] max-w-[calc(100vw/var(--qm-scale)-1.5rem)] rounded-md border border-card-border bg-surface shadow-xl font-mono text-xs overflow-hidden">
     <div class="flex items-center gap-2 px-3 py-2 border-b border-card-border">
       <span class="uppercase tracking-[0.15em] text-[0.6rem] text-txtsecondary">Downloads</span>
       <a href="/browse" use:link class="ml-auto text-[0.6rem] text-primary hover:underline" onclick={() => (open = false)}>Browse models</a>

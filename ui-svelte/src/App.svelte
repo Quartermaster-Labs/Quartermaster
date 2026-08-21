@@ -4,6 +4,7 @@
   import Sidebar from "./components/Sidebar.svelte";
   import StatusRail from "./components/StatusRail.svelte";
   import ConfirmHost from "./components/ConfirmHost.svelte";
+  import TitleBar from "./components/TitleBar.svelte";
   import Dashboard from "./routes/Dashboard.svelte";
   import Models from "./routes/Models.svelte";
   import Browse from "./routes/Browse.svelte";
@@ -82,6 +83,16 @@
 
 <!-- One dialog host per app root; askConfirm() from anywhere renders here. -->
 <ConfirmHost />
+
+<!-- The title bar sits OUTSIDE the mode switch on purpose: loading, the
+     playground login and the playground shell are all states the window can be
+     closed from, and only a bar that outlives the switch gives them a close
+     button. It renders nothing in a browser tab.
+
+     Everything below it still measures itself in `h-screen`, which index.css
+     shortens by the bar's height under [data-native] -- one rule instead of
+     threading a height through every full-height root in the app. -->
+<TitleBar />
 
 {#if mode === "playground"}
   <PlaygroundApp />
