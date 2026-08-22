@@ -486,7 +486,7 @@ func (s *Server) handlePlaygroundLogin(w http.ResponseWriter, r *http.Request) {
 		// from one address is the only signal a password is being guessed, and
 		// until now the whole auth path was silent in the log.
 		s.proxylog.Warnf("playground: login rejected for %q from %s (no such user)", username, clientIP(r))
-		http.Error(w, "no such user — sign up first", http.StatusUnauthorized)
+		http.Error(w, "no such user: sign up first", http.StatusUnauthorized)
 		return
 	}
 	match, upgrade := checkPassword(stored, password)

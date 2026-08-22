@@ -461,9 +461,9 @@ type AuthError struct {
 
 func (e *AuthError) Error() string {
 	if e.Repo != "" {
-		return fmt.Sprintf("access denied for %s (%d) — accept the license on the model page, or add a Hugging Face token", e.Repo, e.Status)
+		return fmt.Sprintf("access denied for %s (%d): accept the license on the model page, or add a Hugging Face token", e.Repo, e.Status)
 	}
-	return fmt.Sprintf("access denied by the hub (%d) — the repo is gated or private", e.Status)
+	return fmt.Sprintf("access denied by the hub (%d): the repo is gated or private", e.Status)
 }
 
 func cacheGet[T any](h *HF, key string) (T, bool) {

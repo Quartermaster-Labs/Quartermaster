@@ -15,14 +15,14 @@ import (
 // bind-mount appears) without the process restarting.
 func blockedReason() string {
 	if inContainer() {
-		return "running in a container — update the image instead (the swapped binary would vanish with the container)"
+		return "running in a container; update the image instead (the swapped binary would vanish with the container)"
 	}
 	exe, err := exePath()
 	if err != nil {
 		return "cannot locate the running executable"
 	}
 	if err := writable(filepath.Dir(exe)); err != nil {
-		return fmt.Sprintf("the install directory (%s) is not writable — update via your package manager or reinstall", filepath.Dir(exe))
+		return fmt.Sprintf("the install directory (%s) is not writable; update via your package manager or reinstall", filepath.Dir(exe))
 	}
 	return ""
 }

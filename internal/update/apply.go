@@ -148,7 +148,7 @@ func swap(exe, newBin, stage string) error {
 		if rbErr := renameRetry(old, exe); rbErr != nil {
 			// Both renames failed: the install has no binary at its own path.
 			// Say so loudly and name the file to move back by hand.
-			return fmt.Errorf("install new binary: %w; ROLLBACK ALSO FAILED (%v) — move %s back to %s manually", err, rbErr, old, exe)
+			return fmt.Errorf("install new binary: %w; ROLLBACK ALSO FAILED (%v); move %s back to %s manually", err, rbErr, old, exe)
 		}
 		return fmt.Errorf("install new binary (rolled back, install unchanged): %w", err)
 	}

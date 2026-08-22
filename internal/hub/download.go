@@ -335,7 +335,7 @@ func (m *Manager) launchLocked(id, key string, src Source) {
 				m.log(fmt.Sprintf("hub: PANIC in download job %s: %v\n%s", id, r, debug.Stack()))
 				m.update(id, func(j *Job) {
 					j.Phase, j.Finished = PhaseError, time.Now()
-					j.Err = fmt.Sprintf("internal error: %v (the files may still be on disk — see the log)", r)
+					j.Err = fmt.Sprintf("internal error: %v (the files may still be on disk; see the log)", r)
 				})
 			}
 		}()
@@ -532,7 +532,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (string, error) {
 
 	root := strings.TrimSpace(m.ModelsRoot())
 	if root == "" {
-		return "", errors.New("no models folder configured — set modelsRoot or pass -models-dir")
+		return "", errors.New("no models folder configured: set modelsRoot or pass -models-dir")
 	}
 	dir := filepath.Join(root, RepoDirName(req.Repo))
 

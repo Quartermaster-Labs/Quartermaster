@@ -223,7 +223,7 @@ func runtimeAdvice(names []string) string {
 	case cuda:
 		return "this build needs the NVIDIA CUDA runtime next to the executable or on PATH"
 	case driver:
-		return "this is a CUDA build and needs an NVIDIA driver — it cannot run on this GPU"
+		return "this is a CUDA build and needs an NVIDIA driver; it cannot run on this GPU"
 	case vc:
 		return "install the Microsoft Visual C++ redistributable"
 	}

@@ -79,7 +79,7 @@ func revealTarget(rootAbs, want string) (string, error) {
 		}
 		rel, err := filepath.Rel(rootAbs, abs)
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return "", fmt.Errorf("refusing to open %q — it is outside the models folder", want)
+			return "", fmt.Errorf("refusing to open %q: it is outside the models folder", want)
 		}
 		target = abs
 	}
