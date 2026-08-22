@@ -120,9 +120,9 @@ everywhere and the 20 MB installer blob stays in the binary that ships it.
   directory and `chdir`-ing there, so the flag set lives in one place and a shortcut cannot get it
   wrong. Only the autostart shortcut differs: it passes `-tray`, which suppresses the `-app`
   default, because a window appearing unasked at every login is not what ticking "start with
-  Windows" means. `packaging/windows/start.cmd` is now a back-compat shim that forwards `%*` to the
-  exe, kept only for shortcuts left behind by older installs (it still accepts the old bare word
-  `background` as a synonym for `-tray`).
+  Windows" means. There is no launcher script: `start.cmd` was retired once the flags moved into
+  `bundle.go`, and `installer.iss` deletes both the stale `{app}\start.cmd` and any `{userstartup}`
+  shortcut still aimed at it.
 - **The installed binary is `Quartermaster.exe`, the release asset is not.** CI still publishes
   `quartermaster-windows-amd64.exe` because `internal/update.assetName()` matches that name exactly;
   `build-release.ps1` stages a second copy under the capitalised name for the installer only, and

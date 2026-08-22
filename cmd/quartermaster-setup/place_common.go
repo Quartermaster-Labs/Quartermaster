@@ -20,7 +20,6 @@ var devCopyGlobs = []string{
 	"quartermaster-*.exe",
 	"quartermaster-linux-*",
 	"quartermaster-darwin-*",
-	"start.cmd",
 	"LICENSE*",
 	"README*",
 }

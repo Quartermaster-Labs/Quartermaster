@@ -79,7 +79,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
 
 [Files]
-; Everything staged by CI (binary, examples, start.cmd, packaging\, LICENSE, README).
+; Everything staged by CI (binary, examples, packaging\, LICENSE, README).
 ; Excludes: the staging dir is shared with the release build, which also puts the
 ; linux/darwin binaries and SHA256SUMS there for the in-app updater to download.
 ; Those are ~120MB of payload this installer must not carry.
@@ -99,12 +99,22 @@ Source: "{#StagingDir}\config\quartermaster-generate.example.yaml"; DestDir: "{a
 ; before the rename) launches a binary that no longer gets updated.
 Type: files; Name: "{app}\quartermaster-windows-amd64.exe"
 
+; start.cmd is gone: the exe carries its own launch flags (see bundle.go), so the
+; launcher script had nothing left to do. Drop the copy an older install left in
+; {app}, or a hand-made shortcut still pointing at it keeps working and keeps the
+; script alive by habit.
+Type: files; Name: "{app}\start.cmd"
+
 ; Unticking a shortcut has to REMOVE it, not just skip creating it. Inno leaves
 ; icons from a previous install alone when their task is deselected, so an
 ; upgrade (or a second wizard run over the same install) would otherwise be
 ; unable to take a shortcut away once it had been granted.
 Type: filesandordirs; Name: "{group}"; Tasks: not startmenu
 Type: files; Name: "{autodesktop}\{#MyAppName}.lnk"; Tasks: not desktopicon
+; The Startup folder needs the same treatment, and used to be the one place that
+; did not get it: an old link there pointed at start.cmd, and an upgrade with the
+; box unticked would have left it aimed at a deleted script.
+Type: files; Name: "{userstartup}\{#MyAppName}.lnk"; Tasks: not autostart
 
 [Tasks]
 ; What the setup program passes through as a /TASKS= list. ALL of them are

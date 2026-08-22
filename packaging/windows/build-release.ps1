@@ -161,7 +161,6 @@ if (-not $SkipInstaller) {
     New-Item -ItemType Directory -Force $stagingConfig | Out-Null
     Copy-Item config.example.yaml, quartermaster-generate.example.yaml $stagingConfig
     Copy-Item LICENSE.md, README.md $staging
-    Copy-Item packaging\windows\start.cmd (Join-Path $staging 'start.cmd')
     # The installed binary is Quartermaster.exe, but the RELEASE ASSET keeps the
     # old name: internal/update.assetName() matches it exactly, so renaming the
     # upload would cut every existing install off from updates. Staging holds

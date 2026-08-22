@@ -104,7 +104,7 @@ ui-setup: ui-svelte/node_modules
 # next to it — which makes this a runnable end-to-end test of the wizard (probe,
 # scan, backend download, config write, launch) with no Inno toolchain in the
 # loop. Copy the exe into build/quartermaster-windows/ first if you want it to
-# pick up start.cmd and the config examples too. The release build
+# pick up the config examples too. The release build
 # (packaging/windows/build-release.ps1) is what embeds the real installer.
 setup-windows: ui-setup $(SETUP_SYSO)
 	@echo "Building Windows setup program..."
@@ -146,7 +146,6 @@ package-windows: windows
 		cp quartermaster-generate.example.yaml $(PKG_WIN_DIR)/config/quartermaster-generate.yaml; \
 		echo "  seeded config/quartermaster-generate.yaml from example"; fi
 	cp config.example.yaml $(PKG_WIN_DIR)/config/config.example.yaml
-	cp packaging/windows/start.cmd $(PKG_WIN_DIR)/start.cmd
 	cp -r packaging $(PKG_WIN_DIR)/packaging
 	@echo "$(APP_NAME) $(GIT_HASH) built $(BUILD_DATE)" > $(PKG_WIN_DIR)/VERSION.txt
 	# Zip a CLEAN distributable, OPT-IN via ZIP=1. The bundle doubles as a live

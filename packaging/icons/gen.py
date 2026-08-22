@@ -40,6 +40,7 @@ except ImportError:
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PUBLIC = os.path.join(ROOT, "ui-svelte", "public")
+ASSETS = os.path.join(ROOT, "ui-svelte", "src", "assets")
 UI_DIST = os.path.join(ROOT, "internal", "server", "ui_dist")
 
 # The .exe resource is looked up by exact metric: nativewin/icon_windows.go asks
@@ -97,6 +98,11 @@ def main():
         os.path.join(ROOT, "favicon.ico"): ico,
         os.path.join(PUBLIC, "favicon.ico"): ico,
         os.path.join(PUBLIC, "favicon-96x96.png"): png_bytes(rs(96)),
+        # Bundled (not public/), because the UI is served under a base path and
+        # an import gets a hashed, base-correct URL. 64px: it renders at 16 in
+        # the title bar, with headroom for a 2x display and the interface-size
+        # zoom on top of that.
+        os.path.join(ASSETS, "mark.png"): png_bytes(rs(64)),
         os.path.join(PUBLIC, "apple-touch-icon.png"): png_bytes(on_plate(master, 180, 0.86)),
         os.path.join(PUBLIC, "web-app-manifest-192x192.png"): png_bytes(on_plate(master, 192, 0.78)),
         os.path.join(PUBLIC, "web-app-manifest-512x512.png"): png_bytes(on_plate(master, 512, 0.78)),
