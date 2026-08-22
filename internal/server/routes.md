@@ -61,7 +61,10 @@ See [`configapi.md`](configapi.md).
 flag-override cmd — no persistence, no reload); `PUT`/`DELETE /api/models/{model}/adhoc-load`
 (inject that cmd into the LIVE router; in-memory only, DELETE or any file reload reverts);
 `PUT`/`DELETE /api/models/{model}/display-name`; `GET`/`PUT`/`DELETE /api/settings`;
-`PUT /api/settings/slotcache`; `PUT /api/settings/backends`; `PUT /api/default-variants`;
+`PUT /api/settings/slotcache`; `PUT /api/settings/backends`; `PUT /api/settings/guards`;
+`PUT`/`DELETE /api/settings/advanced`; `GET`/`PUT /api/settings/app` (**ports, dashboard access,
+update polling, HF token — the only settings route that neither regenerates nor reloads; it takes
+effect at the next start**); `PUT /api/default-variants`;
 `POST /api/pick-folder` + `POST /api/settings/root/pick`; `POST /api/pick-file` (whitelisted
 kinds only — `pickfile_spec.go`); `GET`/`POST /api/apikeys` + `DELETE /api/apikeys/{name}`.
 

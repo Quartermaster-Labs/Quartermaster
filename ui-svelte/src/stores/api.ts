@@ -685,6 +685,38 @@ export interface AppSettings {
   slotCache: SlotCacheSettings;
   backends: BackendExes;
   backendList: BackendEntry[];
+  guards: GuardSettings;
+  guardsOverridden: boolean;
+  advanced: AdvancedSettings;
+  advancedDefaults: AdvancedSettings; // what the "restore defaults" button reverts to
+  advancedOverridden: boolean;
+}
+
+// OOM guard + GPU-usage admission. 0/negative are real values here, not "unset":
+// a 0 reserve admits into the raw leftovers, a 0-or-less minGpuFraction turns the
+// admission floor off entirely. Saved via putGuards.
+export interface GuardSettings {
+  oomGuardEvict: boolean;
+  oomGuardReserveGB: number;
+  oomGuardGraceSec: number; // must be >= 1; the server rejects 0 (use oomGuardEvict to disable)
+  minGpuFraction: number; // 0..1
+  multiResident: boolean;
+}
+
+// The advanced sizer knobs. GET always returns effective values (defaults
+// included, never blank). On PUT, 0/"" means "unpin this one" — the server maps
+// it back to nil so the computed default applies again; it never stores a zero.
+export interface AdvancedSettings {
+  computeBufFactor: number;
+  visionOverheadGB: number;
+  visionCtx: number;
+  moeCtxTarget: number;
+  denseMinCtx: number;
+  denseCtxLadder: number[];
+  threads: number;
+  healthCheckTimeout: number;
+  kvQuant: string; // "" = auto; else f32|f16|bf16|q8_0|q5_1|q5_0|q4_1|q4_0
+  loraDir: string; // "" = the image model's own folder
 }
 
 // Backend executable paths (llama-server / sd-server / tts-server). Blank => the
@@ -794,6 +826,99 @@ export async function putBackends(list: BackendEntry[]): Promise<void> {
   });
   if (!response.ok) {
     throw new Error(`Failed to save backends: ${response.status} ${await response.text()}`);
+  }
+}
+
+// Saves the OOM-guard + GPU-usage section. Sends only those fields: every other
+// global setting is carried forward server-side (MergeSettingsPatch), so this
+// cannot revert the memory or advanced sections.
+export async function putGuards(p: GuardSettings): Promise<void> {
+  const response = await fetch("/api/settings/guards", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(p),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to save guard settings: ${response.status} ${await response.text()}`);
+  }
+}
+
+// Saves the advanced sizer knobs. Send 0/"" for a field to un-pin it.
+export async function putAdvanced(p: AdvancedSettings): Promise<void> {
+  const response = await fetch("/api/settings/advanced", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(p),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to save advanced settings: ${response.status} ${await response.text()}`);
+  }
+}
+
+// Restores every advanced knob to its computed default, leaving the memory and
+// guard sections untouched.
+export async function resetAdvanced(): Promise<void> {
+  const response = await fetch("/api/settings/advanced", { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error(`Failed to reset advanced settings: ${response.status} ${await response.text()}`);
+  }
+}
+
+// --- Process-level settings (ports, remote access, updates, HF token) -------
+//
+// Separate from AppSettings above (which is the generated-config tuning) because
+// these are consumed by the process at startup, not by the config generator.
+// Saving one does NOT hot-reload: a bound socket cannot be moved, so the UI
+// diffs `settings` against `running` to say what still needs a restart.
+
+export interface ProcessSettings {
+  listen: string;
+  playgroundListen: string;
+  adminAllow: string;
+  adminOpen: boolean;
+  watchModels: boolean;
+  watchModelsIntervalSec: number;
+  updateCheck: boolean;
+  // Write-only: a GET never returns the token, only whether one is stored.
+  hfToken?: string;
+  hfTokenClear?: boolean;
+  hfTokenSet: boolean;
+}
+
+export interface ProcessSettingsResponse {
+  settings: ProcessSettings;
+  // What this process actually started with. Anything that differs from
+  // `settings` is saved-but-not-yet-live.
+  running: {
+    listen: string;
+    playgroundListen: string;
+    adminAllow: string;
+    adminOpen: boolean;
+    watchModels: boolean;
+    watchModelsIntervalSec: number;
+    updateCheck: boolean;
+  };
+  overridden: boolean;
+  // HF_TOKEN is set in the environment, which wins over anything stored here.
+  envToken: boolean;
+}
+
+export async function fetchProcessSettings(): Promise<ProcessSettingsResponse> {
+  const response = await fetch("/api/settings/app");
+  if (!response.ok) {
+    throw new Error(`Failed to fetch app settings: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function putProcessSettings(p: ProcessSettings): Promise<void> {
+  const response = await fetch("/api/settings/app", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(p),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to save app settings: ${response.status} ${await response.text()}`);
   }
 }
 

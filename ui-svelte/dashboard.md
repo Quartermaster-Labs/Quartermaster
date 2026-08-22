@@ -54,9 +54,35 @@ restated what the Models page already shows.
 ## Settings (`components/SettingsModal.svelte` wrapping `routes/Settings.svelte`)
 
 **Not a route** — opened as a modal from the Sidebar (same pattern as Help/`WikiModal`). Holds
-the global config knobs: memory budget (target VRAM / headroom / max RAM), **idle unload (ttl)**,
-and the experimental slot KV-cache disk-save section. All 501-gated on `-generate`; each save
-regenerates the config + hot-reloads.
+the global config knobs, in a category side-nav: **Appearance**, **General** (memory budget —
+target VRAM / headroom / max RAM — **idle unload (ttl)** on its own row, the OOM guard, GPU usage,
+and the Advanced disclosure), **KV cache** (fleet-wide KV type + the slot KV-cache disk-save
+section), **Backends** (managed installs, the manual registry, LoRA folder) and **System**
+(software update, Windows startup, network, models-folder watching, Quartermaster update checks, HF token). All
+501-gated on `-generate`.
+
+Three save shapes, and the difference is worth knowing before adding a knob:
+
+- **Autosave (debounced ~900 ms)** — memory, guards. Cheap to get wrong, instantly visible.
+- **Explicit Apply** — the Advanced sizer knobs, behind a "don't touch this" warning with a
+  *Restore defaults* button (`DELETE /api/settings/advanced`). A debounced regen fired on a
+  half-typed context ladder is exactly the failure the warning is about.
+- **Explicit Save, no reload** — the System tab's network/updates/token block
+  (`GET`/`PUT /api/settings/app`). These are read by the process at startup, not by the config
+  generator: the page diffs the saved values against `running` (what the process actually bound)
+  and names the fields still waiting on a restart. The HF token is write-only — the GET reports
+  only that one is stored — and the page warns when `HF_TOKEN` in the environment is shadowing it.
+
+The first two regenerate the config + hot-reload; the third cannot, because a bound socket cannot
+be moved under a live server.
+
+**Don't re-group the OOM guard card.** *Reserve (GB)* sits above the "shed idle models" toggle and
+is never disabled by it, because the two are read by different halves of `vramGuard`: the toggle
+gates the post-load watchdog alone, while the reserve is subtracted in `ceilingGB()` — the
+**admission** ceiling, consulted on every spawn regardless. *Grace (s)* is the watchdog-only knob
+and is correctly gated. Reserve is also not a second Headroom: headroom pads Quartermaster's own
+size estimate and is charged always, at generate time; the reserve is held back for *other* apps
+and only while one is growing past its idle baseline. See `internal/server/http-core.md`.
 
 ### Managed backend installs (`components/ManagedBackends.svelte`)
 

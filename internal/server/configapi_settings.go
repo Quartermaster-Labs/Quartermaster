@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/quartermaster-labs/quartermaster/internal/autogen"
@@ -22,6 +23,20 @@ func slotCachePathOrDefault(p string) string {
 		return p
 	}
 	return config.DefaultSlotCachePath()
+}
+
+// isDefaultSlotCachePath reports whether p names the same directory as the
+// exe-relative default. Compared as PATHS, not as strings: slotKvPath emits
+// forward slashes into the generated YAML while DefaultSlotCachePath returns
+// OS-native separators, so a raw `==` misses on Windows and freezes an absolute
+// install-relative path into the sidecar — the exact staleness the caller is
+// trying to avoid. Case-insensitive because the platform that has the separator
+// mismatch also has case-insensitive paths.
+func isDefaultSlotCachePath(p string) bool {
+	if strings.TrimSpace(p) == "" {
+		return false
+	}
+	return strings.EqualFold(filepath.Clean(p), filepath.Clean(config.DefaultSlotCachePath()))
 }
 
 // handleAPIPickFolder opens the host's native folder dialog and returns the
@@ -61,6 +76,16 @@ type settingsResp struct {
 	SlotCache     slotCacheDTO      `json:"slotCache"`   // on-disk slot KV persistence
 	Backends      backendsDTO       `json:"backends"`    // effective backend executable paths (legacy 3-slot view)
 	BackendList   []backendEntryDTO `json:"backendList"` // full backend registry (add/remove list)
+
+	// Guards is the OOM-guard + GPU-usage section, Advanced the sizer knobs.
+	// Both carry EFFECTIVE values (defaults included, never blanks) and each has
+	// its own -Overridden flag, because the two sections reset independently —
+	// see configapi_globals.go. AdvancedDefaults is what its reset reverts to.
+	Guards             guardsDTO   `json:"guards"`
+	GuardsOverridden   bool        `json:"guardsOverridden"`
+	Advanced           advancedDTO `json:"advanced"`
+	AdvancedDefaults   advancedDTO `json:"advancedDefaults"`
+	AdvancedOverridden bool        `json:"advancedOverridden"`
 }
 
 // backendsDTO mirrors the effective backend executable paths (llama-server /
@@ -193,7 +218,12 @@ func (s *Server) handleAPISettingsGet(w http.ResponseWriter, r *http.Request) {
 			TtsServerExe: gf.Settings.TtsServerExe,
 			AsrServerExe: gf.Settings.AsrServerExe,
 		},
-		BackendList: backendList,
+		BackendList:        backendList,
+		Guards:             guardsFromSettings(gf.Settings),
+		GuardsOverridden:   guardsOverridden(patch),
+		Advanced:           advancedFromSettings(gf.Settings),
+		AdvancedDefaults:   advancedFromSettings(base),
+		AdvancedOverridden: advancedOverridden(patch),
 	})
 }
 
@@ -265,15 +295,28 @@ func (s *Server) handleAPISlotCachePut(w http.ResponseWriter, r *http.Request) {
 	// blank when the path IS the current default so the exe-dir fallback stays
 	// live and tracks the binary.
 	path := strings.TrimSpace(body.Path)
-	if path == config.DefaultSlotCachePath() {
+	if isDefaultSlotCachePath(path) {
 		path = ""
 	}
+	// RecurrentSeeds is deliberately NOT in slotCacheDTO — it is a backend
+	// regression-test knob (see slotcache.md), not a setting, and turning it on
+	// makes hybrid models slower. But the sidecar block REPLACES the generate
+	// file's settings.slotCache wholesale, so writing a DTO-shaped struct here
+	// would silently drop a hand-authored recurrentSeeds: true and leave no way
+	// to get it back short of editing YAML. Carry it from the MERGED value
+	// (file + sidecar), which covers both the hand-authored and previously-saved
+	// cases.
+	recurrentSeeds := false
+	if merged, mErr := autogen.LoadGenerateFile(s.autogen.GeneratePath, s.autogen.ModelsDir); mErr == nil {
+		recurrentSeeds = merged.Settings.SlotCache.RecurrentSeeds
+	}
 	err := autogen.UpsertSidecarSlotCache(s.autogen.GeneratePath, autogen.SlotCacheSettings{
-		Enable:        body.Enable,
-		Path:          path,
-		MinSaveTokens: body.MinSaveTokens,
-		MaxDiskGB:     body.MaxDiskGB,
-		MaxSessions:   body.MaxSessions,
+		Enable:         body.Enable,
+		Path:           path,
+		MinSaveTokens:  body.MinSaveTokens,
+		MaxDiskGB:      body.MaxDiskGB,
+		MaxSessions:    body.MaxSessions,
+		RecurrentSeeds: recurrentSeeds,
 	})
 	if err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())

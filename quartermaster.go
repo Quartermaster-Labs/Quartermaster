@@ -110,9 +110,11 @@ func main() {
 	flagAdminOpen := flag.Bool("admin-open", false, "serve the unauthenticated dashboard/admin endpoints to every remote host (legacy behaviour; the inference API is unaffected)")
 	flag.Parse()
 
-	if *flagNoUpdateCheck {
-		os.Setenv("LQ_NO_UPDATE_CHECK", "1")
-	}
+	// Captured BEFORE anything sets a flag programmatically: flag.Visit reports
+	// "has been set", not "came from argv", and the precedence below (argv >
+	// stored app settings > bundle default) hinges on telling those apart.
+	argvGiven := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { argvGiven[f.Name] = true })
 
 	if *flagVersion {
 		fmt.Printf("version: %s (%s), built at %s\n", version, commit, date)
@@ -122,7 +124,31 @@ func main() {
 	// A packaged install carries its own argv: double-clicking the exe is the
 	// supported way to start it, and the launcher script that used to supply
 	// these flags is gone. No-op outside an install -- see bundle.go.
+	//
+	// Two stages, with the stored settings in between: stage one resolves the
+	// paths (including -generate, without which the settings cannot be read at
+	// all), then the dashboard's process-level settings fill in the ports and
+	// access policy, then stage two supplies the packaged listen addresses for
+	// whatever is still unset.
 	bundleDir := applyBundleDefaults()
+
+	if appCfg, err := autogen.LoadAppSettings(*flagGenerate); err != nil {
+		// Not fatal: a malformed app block must not make the server unstartable,
+		// because that block controls the very port you would use to fix it.
+		slog.Warn("ignoring stored app settings", "error", err)
+	} else {
+		applyAppSettings(flag.CommandLine, argvGiven, appCfg)
+		applyHfToken(appCfg)
+	}
+	if bundleDir != "" {
+		applyBundleNetDefaults(flag.CommandLine, bundleDir)
+	}
+
+	// Read after the flags are settled, not before: the stored update-check
+	// setting reaches this through -no-update-check.
+	if *flagNoUpdateCheck {
+		os.Setenv("LQ_NO_UPDATE_CHECK", "1")
+	}
 
 	if *flagConfig == "" {
 		slog.Error("-config is required")
@@ -302,7 +328,7 @@ func main() {
 		// Anchor user data to the bundle root (exe dir), NOT the config path:
 		// config now lives in a config/ subfolder, and playground-data must not
 		// follow it there. os.Executable failure falls back to CWD ("."), which
-		// start.cmd/NSSM already set to the bundle root.
+		// applyBundle's chdir (or NSSM) already set to the bundle root.
 		exePath, _ := os.Executable()
 		dataDir := filepath.Join(filepath.Dir(exePath), "playground-data")
 		playground = &server.Playground{Addr: pgAddr, DataDir: dataDir, SelfBase: server.LoopbackBase(listenAddr)}
@@ -346,6 +372,24 @@ func main() {
 		}
 		proxyLog.Info(msg + "; the inference API stays reachable (gate it with apiKeys)")
 	}
+
+	// Hand the settings page what this process actually resolved, so it can say
+	// which saved values are still waiting on a restart. Taken from the flags
+	// AFTER every source has had its turn (argv > stored settings > bundle
+	// defaults), which is why it is computed here and not next to server.New.
+	pgListen := ""
+	if playground != nil {
+		pgListen = playground.Addr
+	}
+	initialSrv.SetRunningApp(server.RunningApp{
+		Listen:                 listenAddr,
+		PlaygroundListen:       pgListen,
+		AdminAllow:             *flagAdminAllow,
+		AdminOpen:              *flagAdminOpen,
+		WatchModels:            *flagWatchModels && *flagGenerate != "",
+		WatchModelsIntervalSec: int(flagWatchModelsInterval.Seconds()),
+		UpdateCheck:            !*flagNoUpdateCheck,
+	})
 
 	httpServers := make([]*http.Server, 0, len(listenAddrs))
 	for _, addr := range listenAddrs {

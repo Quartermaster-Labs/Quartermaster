@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/quartermaster-labs/quartermaster/internal/config"
@@ -119,7 +120,13 @@ type sidecar struct {
 	// *place to download builds from*, a BackendEntry is an executable path the
 	// launcher uses. Installing from a source writes the entry.
 	BackendSources []BackendSource `yaml:"backendSources,omitempty"`
-	Overrides      []Override      `yaml:"overrides"`
+	// App is the process-level block (ports, remote access, update polling, HF
+	// token) the dashboard's network section owns. Top-level and outside
+	// SettingsPatch for the usual reason — a VRAM reset must not change which
+	// socket the next start binds — and read by main() before the config exists.
+	// See appsettings.go.
+	App       *AppSettings `yaml:"app,omitempty"`
+	Overrides []Override   `yaml:"overrides"`
 }
 
 // BackendExes holds the dashboard-editable backend executable paths. Empty field
@@ -327,7 +334,7 @@ func UpsertSidecarBackends(generatePath string, be BackendExes) error {
 	if err != nil {
 		return err
 	}
-	if be.ServerExe == "" && be.SdServerExe == "" && be.TtsServerExe == "" {
+	if be.ServerExe == "" && be.SdServerExe == "" && be.TtsServerExe == "" && be.AsrServerExe == "" {
 		sc.Backends = nil
 	} else {
 		sc.Backends = &be
@@ -406,7 +413,7 @@ func UpsertSidecarBackendList(generatePath string, list []BackendEntry) error {
 	}
 	sc.BackendList = cleaned
 	be := deriveBackendExes(cleaned)
-	if be.ServerExe == "" && be.SdServerExe == "" && be.TtsServerExe == "" {
+	if be.ServerExe == "" && be.SdServerExe == "" && be.TtsServerExe == "" && be.AsrServerExe == "" {
 		sc.Backends = nil
 	} else {
 		sc.Backends = &be
@@ -660,25 +667,58 @@ func DeleteSidecarAPIKey(generatePath, name string) (removed bool, err error) {
 	return true, nil
 }
 
-// UpsertSidecarSettings stores the global settings patch (dashboard edits),
-// preserving existing per-model overrides.
+// UpsertSidecarSettings MERGES the global settings patch (dashboard edits) into
+// the stored one, preserving existing per-model overrides.
+//
+// The merge is the contract, not an optimisation: the dashboard writes this
+// patch from several independent sections (memory, guards, GPU usage, advanced),
+// each PUTting only the fields it owns. A whole-struct replace here means saving
+// any one section silently reverts every other — see MergeSettingsPatch.
 func UpsertSidecarSettings(generatePath string, patch SettingsPatch) error {
 	sc, err := loadSidecar(generatePath)
 	if err != nil {
 		return err
 	}
-	// The dashboard VRAM editor doesn't touch DryDefault, so carry the existing
-	// value forward rather than wiping it on a VRAM save.
-	if sc.Settings != nil && patch.DryDefault == nil {
-		patch.DryDefault = sc.Settings.DryDefault
-	}
-	// Same carry-forward for the idle-eviction TTL: a VRAM-only save shouldn't
-	// wipe a previously-set TTL patch.
-	if sc.Settings != nil && patch.TtlSec == nil {
-		patch.TtlSec = sc.Settings.TtlSec
+	if sc.Settings != nil {
+		patch = MergeSettingsPatch(*sc.Settings, patch)
 	}
 	sc.Settings = &patch
 	return writeSidecar(generatePath, sc)
+}
+
+// ReplaceSidecarSettings stores the patch VERBATIM, without merging the stored
+// one forward. It is how a section clears its own fields: MergeSettingsPatch can
+// only ever set a field, so "restore this section to defaults" — nil out its
+// fields, keep everyone else's — is unexpressible through UpsertSidecarSettings.
+//
+// Callers must therefore hand it a patch derived from LoadSidecarSettings, not a
+// freshly built one, or they drop every other section's settings.
+func ReplaceSidecarSettings(generatePath string, patch SettingsPatch) error {
+	sc, err := loadSidecar(generatePath)
+	if err != nil {
+		return err
+	}
+	// An all-nil patch is an empty block; drop the key so the sidecar reads as
+	// "nothing pinned" rather than carrying a stub that looks like a setting.
+	if patchIsEmpty(patch) {
+		sc.Settings = nil
+	} else {
+		sc.Settings = &patch
+	}
+	return writeSidecar(generatePath, sc)
+}
+
+// patchIsEmpty reports whether no field of the patch is set. Reflective for the
+// same reason MergeSettingsPatch is: a hand-written field list rots the moment
+// someone adds a knob, and the failure is silent.
+func patchIsEmpty(p SettingsPatch) bool {
+	rv := reflect.ValueOf(p)
+	for i := 0; i < rv.NumField(); i++ {
+		if !rv.Field(i).IsNil() {
+			return false
+		}
+	}
+	return true
 }
 
 // ClearSidecarSettings removes the global settings patch (reset to default),

@@ -99,6 +99,12 @@ type Server struct {
 	// with -generate. See configapi.go.
 	autogen *AutogenAdmin
 
+	// runningApp is the process-level configuration actually in force (ports,
+	// remote access, update polling), so the settings page can show which saved
+	// values are still waiting on a restart. Written once by main via
+	// SetRunningApp before serving; read-only afterwards.
+	runningApp RunningApp
+
 	// variantMu serializes minting of synthetic per-request model variants
 	// (X-QM-Backend, ?ctx=N). Each mint is a read-modify-ApplyConfig cycle over
 	// the whole config, so without it two concurrent first-requests would each
@@ -844,6 +850,18 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/settings", adminChain.ThenFunc(s.handleAPISettingsPut))
 	mux.Handle("DELETE /api/settings", adminChain.ThenFunc(s.handleAPISettingsDelete))
 	mux.Handle("PUT /api/settings/slotcache", adminChain.ThenFunc(s.handleAPISlotCachePut))
+	// The other global-settings sections. Separate routes rather than fields on
+	// PUT /api/settings because each owns a disjoint slice of the settings patch
+	// and saves on its own — see configapi_globals.go. DELETE resets the advanced
+	// knobs only, leaving memory/guard settings alone.
+	mux.Handle("PUT /api/settings/guards", adminChain.ThenFunc(s.handleAPIGuardsPut))
+	mux.Handle("PUT /api/settings/advanced", adminChain.ThenFunc(s.handleAPIAdvancedPut))
+	mux.Handle("DELETE /api/settings/advanced", adminChain.ThenFunc(s.handleAPIAdvancedDelete))
+	// Process-level settings (ports, remote access, updates, HF token). Unlike
+	// every other settings route these do NOT regenerate or reload: they are
+	// read by main() at startup, so they take effect at the next launch.
+	mux.Handle("GET /api/settings/app", adminChain.ThenFunc(s.handleAPIAppSettingsGet))
+	mux.Handle("PUT /api/settings/app", adminChain.ThenFunc(s.handleAPIAppSettingsPut))
 	// "Start with the system" — OS state (Windows Run key), NOT autogen config,
 	// so it works without -generate and is shared across installs. See autostart.go.
 	mux.Handle("GET /api/autostart", adminChain.ThenFunc(s.handleAPIAutostartGet))

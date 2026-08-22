@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 
@@ -281,6 +282,9 @@ func (s Settings) RootList() []string {
 // so the hand-authored generate file keeps owning everything not touched in the
 // UI. Setting a manual TargetVramGB pairs with AutoVram=false so the live-VRAM
 // sampler doesn't clobber the user's choice.
+// EVERY field here must be a pointer, and the dashboard PUTs only the fields
+// its own section owns — see MergeSettingsPatch, which carries the rest forward.
+// TestSettingsPatch_AllFieldsArePointers enforces the first half of that rule.
 type SettingsPatch struct {
 	TargetVramGB   *float64 `yaml:"targetVramGB,omitempty"`
 	VramOverheadGB *float64 `yaml:"vramOverheadGB,omitempty"`
@@ -290,9 +294,61 @@ type SettingsPatch struct {
 	// TtlSec is the idle-eviction timeout (seconds) baked into every model's
 	// `ttl`. 0 => never auto-unload. nil => inherit the generate file / default.
 	TtlSec *int `yaml:"ttlSec,omitempty"`
+
+	// --- OOM guard (Settings.OomGuard*, consumed by internal/server/vramguard.go)
+	OomGuardEvict     *bool    `yaml:"oomGuardEvict,omitempty"`
+	OomGuardReserveGB *float64 `yaml:"oomGuardReserveGB,omitempty"`
+	OomGuardGraceSec  *int     `yaml:"oomGuardGraceSec,omitempty"`
+
+	// --- GPU usage / admission
+	MinGpuFraction *float64 `yaml:"minGpuFraction,omitempty"`
+	MultiResident  *bool    `yaml:"multiResident,omitempty"`
+
+	// --- Advanced sizer knobs. Wrong values here mis-size every model, which is
+	// why the UI hides them behind a warning and a per-section reset.
+	ComputeBufFactor   *float64 `yaml:"computeBufFactor,omitempty"`
+	VisionOverheadGB   *float64 `yaml:"visionOverheadGB,omitempty"`
+	VisionCtx          *int     `yaml:"visionCtx,omitempty"`
+	MoeCtxTarget       *int     `yaml:"moeCtxTarget,omitempty"`
+	DenseMinCtx        *int     `yaml:"denseMinCtx,omitempty"`
+	DenseCtxLadder     *[]int   `yaml:"denseCtxLadder,omitempty"`
+	Threads            *int     `yaml:"threads,omitempty"`
+	HealthCheckTimeout *int     `yaml:"healthCheckTimeout,omitempty"`
+
+	// --- Fleet-wide model knobs
+	KvQuant *string `yaml:"kvQuant,omitempty"`
+	LoraDir *string `yaml:"loraDir,omitempty"`
 }
 
-// apply overlays the patch's set fields onto s.
+// MergeSettingsPatch overlays next onto prev field-wise: a nil field in next
+// keeps prev's value.
+//
+// Reflection rather than 20 hand-written nil checks, because the hand-written
+// version is what this replaces and it had already lost the argument. The
+// dashboard writes the patch in SECTIONS — the memory form PUTs four fields, the
+// guard form three, the advanced form eight — and a whole-struct replace means
+// every save wipes every field the saving section doesn't model. That bug was
+// live for DryDefault and TtlSec, each fixed by its own bespoke carry-forward
+// line; adding fifteen more fields to that pattern is fifteen more chances to
+// forget one, and the symptom (a setting silently reverting a week later) is
+// close to undebuggable. Here, a new pointer field is carried forward by
+// construction.
+func MergeSettingsPatch(prev, next SettingsPatch) SettingsPatch {
+	out := next
+	pv, ov := reflect.ValueOf(prev), reflect.ValueOf(&out).Elem()
+	for i := 0; i < ov.NumField(); i++ {
+		if ov.Field(i).Kind() == reflect.Ptr && ov.Field(i).IsNil() {
+			ov.Field(i).Set(pv.Field(i))
+		}
+	}
+	return out
+}
+
+// apply overlays the patch's set fields onto s. Mirrors MergeSettingsPatch's
+// field-wise contract, but writes into the flat Settings (values, not pointers),
+// so it stays explicit — the target field names differ from the source ones only
+// by the dereference, and a reflect-based version here would silently do the
+// wrong thing for the two fields Settings itself stores as pointers.
 func (p *SettingsPatch) apply(s *Settings) {
 	if p == nil {
 		return
@@ -314,6 +370,51 @@ func (p *SettingsPatch) apply(s *Settings) {
 	}
 	if p.TtlSec != nil {
 		s.TtlSec = *p.TtlSec
+	}
+	if p.OomGuardEvict != nil {
+		s.OomGuardEvict = p.OomGuardEvict
+	}
+	if p.OomGuardReserveGB != nil {
+		s.OomGuardReserveGB = *p.OomGuardReserveGB
+	}
+	if p.OomGuardGraceSec != nil {
+		s.OomGuardGraceSec = *p.OomGuardGraceSec
+	}
+	if p.MinGpuFraction != nil {
+		s.MinGpuFraction = *p.MinGpuFraction
+	}
+	if p.MultiResident != nil {
+		s.MultiResident = p.MultiResident
+	}
+	if p.ComputeBufFactor != nil {
+		s.ComputeBufFactor = *p.ComputeBufFactor
+	}
+	if p.VisionOverheadGB != nil {
+		s.VisionOverheadGB = *p.VisionOverheadGB
+	}
+	if p.VisionCtx != nil {
+		s.VisionCtx = *p.VisionCtx
+	}
+	if p.MoeCtxTarget != nil {
+		s.MoeCtxTarget = *p.MoeCtxTarget
+	}
+	if p.DenseMinCtx != nil {
+		s.DenseMinCtx = *p.DenseMinCtx
+	}
+	if p.DenseCtxLadder != nil {
+		s.DenseCtxLadder = *p.DenseCtxLadder
+	}
+	if p.Threads != nil {
+		s.Threads = *p.Threads
+	}
+	if p.HealthCheckTimeout != nil {
+		s.HealthCheckTimeout = *p.HealthCheckTimeout
+	}
+	if p.KvQuant != nil {
+		s.KvQuant = *p.KvQuant
+	}
+	if p.LoraDir != nil {
+		s.LoraDir = *p.LoraDir
 	}
 }
 

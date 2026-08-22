@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 )
 
-// Packaged-install launch defaults — what start.cmd used to pass.
+// Packaged-install launch defaults.
 //
 // A packaged quartermaster is meant to be double-clicked, so the exe fills in
 // its own argv instead of a .cmd wrapper doing it. The launcher script was the
@@ -71,9 +71,9 @@ func applyBundleDefaults() string {
 	if !ok {
 		return ""
 	}
-	applyBundleFlags(flag.CommandLine, root)
+	applyBundlePaths(flag.CommandLine, root)
 
-	// Same as start.cmd's `cd /d "%~dp0"`. Relative paths inside the config
+	// Anchor the process at the bundle root. Relative paths inside the config
 	// (logs/, .cache/, a models root written as a sibling folder) are resolved
 	// against the CWD, and a shortcut or Run-key entry sets one we did not pick.
 	_ = os.Chdir(root)
@@ -81,46 +81,64 @@ func applyBundleDefaults() string {
 	return root
 }
 
-// applyBundleFlags is the argv half of applyBundleDefaults, split out so it can
-// be exercised against a throwaway FlagSet instead of the process's own.
-func applyBundleFlags(fs *flag.FlagSet, root string) {
-	given := map[string]bool{}
-	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
-
-	set := func(name, value string) {
-		if !given[name] {
-			_ = fs.Set(name, value)
-		}
-	}
+// applyBundlePaths is the FIRST of the two bundle stages: the file paths and the
+// window mode. Split from the network defaults below because -generate is
+// resolved here, and the stored app settings (which can override the listen
+// addresses) cannot be read until it is. Sequence in main():
+//
+//	applyBundlePaths -> LoadAppSettings(-generate) -> applyAppSettings ->
+//	applyBundleNetDefaults (fills only what is still unset)
+//
+// Split out from applyBundleDefaults so it can be exercised against a throwaway
+// FlagSet instead of the process's own.
+func applyBundlePaths(fs *flag.FlagSet, root string) {
+	set := bundleSetter(fs)
 
 	set("config", filepath.Join(root, "config", "config.yaml"))
 	set("generate", filepath.Join(root, "config", bundleMarker))
-	set("listen", bundleListen)
-	set("playground-port", bundlePlayground)
 	set("watch-config", "true")
 
 	// The window is the default face of a double-click, but never an override:
 	// asking for -tray (the login launch) must not also open a window, which is
 	// the whole point of starting minimised. -app implies -tray downstream.
-	switch {
-	case given["app"] || given["tray"]:
-		// The user said which one; leave it alone.
-	case trayOnlyRequested(fs):
-		set("tray", "true")
-	default:
+	if !flagGiven(fs, "app") && !flagGiven(fs, "tray") {
 		set("app", "true")
 	}
 }
 
-// trayOnlyRequested honours the bare word `background`, which is how the
-// pre-exe autostart shortcut asked start.cmd for a tray-only launch. Kept so an
-// upgrade over an old install does not turn its silent login start into a
-// window appearing at every logon.
-func trayOnlyRequested(fs *flag.FlagSet) bool {
-	for _, a := range fs.Args() {
-		if a == "background" {
-			return true
+// applyBundleNetDefaults is the SECOND bundle stage: the packaged listen
+// addresses. It runs last, so it fills in only what neither argv nor the stored
+// app settings supplied — those are the whole point of the setting, and a
+// default that overwrote them would make the dashboard's port field inert.
+func applyBundleNetDefaults(fs *flag.FlagSet, root string) {
+	_ = root // reserved: the addresses are constants today, not install-derived
+	set := bundleSetter(fs)
+	set("listen", bundleListen)
+	set("playground-port", bundlePlayground)
+}
+
+// bundleSetter returns a "set unless already set" helper. The already-set test
+// is taken ONCE, when the setter is built, and it covers flags set
+// programmatically as well as from argv — which is exactly what makes the two
+// stages compose: whatever stage one (or applyAppSettings) wrote counts as
+// given by the time stage two runs.
+func bundleSetter(fs *flag.FlagSet) func(name, value string) {
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+	return func(name, value string) {
+		if !given[name] {
+			_ = fs.Set(name, value)
 		}
 	}
-	return false
+}
+
+// flagGiven reports whether a flag has been set (from argv or programmatically).
+func flagGiven(fs *flag.FlagSet, name string) bool {
+	found := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
 }

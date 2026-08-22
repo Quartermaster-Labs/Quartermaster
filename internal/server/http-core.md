@@ -173,7 +173,7 @@ inherited**). `requestedCtx` reads the size off the `?ctx=` suffix or `X-QM-Ctx`
 
 ## OOM / VRAM protection (fork)
 
-Three pieces, all surfaced through `/api/performance`:
+Four pieces, all surfaced through `/api/performance`:
 
 - **Foreign VRAM** — `foreignGPU`/`foreignVram`/`isInferenceProc` (`apigroup.go`) tally GPU memory
   held by `llama-server`/`sd-server` processes this instance did NOT spawn
@@ -190,6 +190,17 @@ Three pieces, all surfaced through `/api/performance`:
   cold and `-ngl 64` after a swap. It therefore keeps probing until either the baked plan fits
   untouched or free VRAM stops climbing (`vramReclaimEpsilonGB`, reclaim finished). Costs one extra
   probe (~0.7 s) on a genuinely tight load.
+
+- **Post-load watchdog** — `vramGuard` (`vramguard.go`) sheds IDLE residents when foreign VRAM
+  grows into their footprint. It publishes **two** ceilings, and the difference is load-bearing:
+  `ceilingGB` (admission, fed to the router as `LiveVramFn`) charges the foreign excess *and*
+  `oomGuardReserveGB`; `shedCeilingGB` (the watchdog) charges the excess **only**. Charging the
+  reserve on both sides made the halves disagree about one model — a 21.8 GB resident under a
+  22.8 GB budget went over the shed ceiling the moment a browser tab took 0.2 GB, and the spawn
+  guard (which sizes against live *free* VRAM) reloaded it unchanged on the next request: an
+  endless unload/reload cycle that reads like a too-short `ttl`. Two further brakes: shedding needs
+  the overshoot to clear `vramGuardShedSlackGB` (estVramGB is an estimate, not a measurement), and
+  after a shed the guard sits out `cooldown()` (2× grace, ≥1 min) before shedding again.
 
 ## Reasoning effort: advertised, then translated (fork)
 

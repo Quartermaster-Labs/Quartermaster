@@ -35,6 +35,7 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 | `generate_emit.go` | Phase 3 — YAML emission: non-model sections (`emitSlotCache`, `emitAPIKeys`, `emitGroupsAndListeners`, `writeGroup`) and per-model bits (`emitProfile`, `writeDisplayName`, `writeEstVram`/`writeEstRam`, `effortLevels`, `formatCtxTag`, `slugify`). |
 | `estimate.go` | One-shot preview (`EstimatePlan`) of a candidate tuning for the web editor; reuses the solo-profile sizing path without writing config. |
 | `overrides.go` | Control-file types (`GenerateFile`, `Settings`, `Override`, `VariantSpec`, `GroupSpec`), defaults, loading/merging, `globLike` (PowerShell `-like`). `Settings.RootList()`/`CategoryRoots`/`CategoryOrder` = multi-root scan folders. `Override` carries granular DRY, granular spec, and the image fields. |
+| `appsettings.go` | **Process-level** settings (`AppSettings`): listen + playground addresses, the dashboard access policy, models-folder watching, update polling, HF token. Not part of `Settings` and never emitted into the config — `main()` reads them before the config exists, via `LoadAppSettings` (generate file's `settings.app`, then the sidecar's `app:` block). `UpsertSidecarApp`/`LoadSidecarApp` are the dashboard's side. |
 | `sidecar.go` | UI-owned overrides file (`quartermaster-overrides.yaml`): per-model overrides, the global settings patch, managed API keys, and the `BackendEntry` registry. |
 | `hash.go` | Inputs hashing + hash-gated regen (`InputsHash`, `EnsureConfig`, `CurrentInputsHash`). |
 | `vram.go` | Live free-VRAM sampling via `internal/perf` (`SampleFreeVramGB`, `resolveAutoVram`) for the `autoVram` setting. Budgets against the **idle high-water mark** (`noteFreeVramGB`), never the raw sample — autoVram re-resolves on every `EnsureConfig` *and* every estimate preview, both of which run while models are loaded. |
@@ -166,6 +167,19 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   `sidecarCompatible` refuse it every family sidecar, silently. The tensor walk no longer aborts
   on an untabulated type (only the MoE expert share degrades to 0), but adding the type is still
   the fix. MXFP4 was the case that found this.
+- **`AppSettings` is a REPLACE, and `SettingsPatch` is a MERGE — do not unify them.** The dashboard
+  renders the process-level block as one form and PUTs all of it, and its fields have no meaningful
+  "unset from this section" state: clearing `adminAllow` must actually clear it, which a merge
+  cannot express. `mergeAppSettings` (file → sidecar) is written out field by field rather than
+  reflected, because "unset" differs per field (`""`, `0`, `nil`) and one blanket rule turns a
+  deliberately-emptied `AdminAllow` back into the old value. Precedence:
+  `argv > sidecar app block > settings.app > built-in default` — argv wins so
+  `quartermaster.exe -listen 127.0.0.1:1250` can always rescue an install whose stored address no
+  longer binds.
+- **`ReplaceSidecarSettings` exists because `MergeSettingsPatch` can only SET.** A per-section
+  "restore defaults" (the advanced sizer knobs) has to nil that section's fields and store the
+  result verbatim; merging a patch full of nils is a no-op. Use it only after a read-modify-write
+  that preserves every other section's fields.
 - **Empty `modelsRoot` is valid, not an error** — the server boots with an empty catalog so a
   setup UI can point it at a folder later; discovery and hashing short-circuit on blank.
 - **`Parallel` > 1: sized per slot, emitted as a pool.** `--kv-unified` makes `-c` ONE KV buffer

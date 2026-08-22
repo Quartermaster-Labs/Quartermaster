@@ -9,6 +9,7 @@ here 501s when `s.autogen == nil`** — they are the `-generate` surface. Route 
 | `configapi.go` | Per-model override editor, named variants, display-name rename, cmd preview. Shared helpers live here: `resolveModelGguf`, `findSidecarOverride`, `regenAndReload`, `writeJSON`. |
 | `configapi_dto.go` | Wire types (`variantDTO`, `overrideDTO`, `modelConfigResp`) + conversions to/from `autogen.Override`/`VariantSpec` (`applyOverrideDTO`, `applyVariantPatch`). **Sparse by design: a zero field means "keep auto-computing".** |
 | `configapi_settings.go` | Global settings editor: the GPU-memory card (VRAM target / headroom / max-RAM + `ttlSec` idle eviction, `0` = never), the backend registry, slot-cache knobs, and the native folder/file pickers. |
+| `configapi_globals.go` | The remaining global sections, each owning a **disjoint** slice of `SettingsPatch` and PUTting only its own fields (that is what `autogen.MergeSettingsPatch` is for): the OOM guard + GPU-usage admission (`/api/settings/guards`), the advanced sizer knobs behind the warning disclosure (`/api/settings/advanced`, with a DELETE that restores defaults), and the process-level block (`/api/settings/app`). |
 | `configapi_estimate.go` | Load-plan estimate: rebuilds an `autogen.EstimateInput` from a *rendered launch command* (`estimateInputFromCmd`, `forcedOffloadFromCmd`) so the UI's VRAM/KV breakdown reflects what is actually configured. |
 | `configapi_adhoc.go` | Ad-hoc launch commands: `renderAdhocCmd` (a sparse patch over the effective override → a fully sized cmd with `${PORT}`) plus the load/unload endpoints that inject one into the live router **without persisting anything**. Also used by `ensureCtxVariant`. |
 | `configapi_apikeys.go` | The local admin API-key manager over the sidecar's managed keys (`autogen.{Load,Upsert,Delete}SidecarAPIKey`). Listing also reaps scope ids whose model left the catalog — never to empty (an empty scope means full access). |
@@ -19,6 +20,22 @@ here 501s when `s.autogen == nil`** — they are the `-generate` surface. Route 
 
 ## Gotchas
 
+- **`/api/settings/app` is the one settings route that does NOT regen or reload.** Ports, the
+  dashboard access policy, update polling and the HF token are read by `main()` at startup
+  (`internal/autogen/appsettings.go`), long before a `Server` exists — a bound socket cannot be
+  moved under a live server. So the handler writes the sidecar and says "restart to apply", and
+  `Server.SetRunningApp` records what the process actually resolved so the GET can report
+  saved-vs-running and the UI can name the fields still waiting. The HF token is **write-only**: a
+  GET returns only `hfTokenSet`, and an empty `hfToken` on a PUT means "keep the stored one"
+  (clearing is the explicit `hfTokenClear`).
+- **Clearing a field needs a replace, not a merge.** `MergeSettingsPatch` can only ever *set*, so
+  "restore this section to defaults" is inexpressible through `UpsertSidecarSettings`. The advanced
+  reset therefore read-modify-writes: nil out only its own ten fields, then
+  `autogen.ReplaceSidecarSettings` stores the result verbatim.
+- **Advanced knobs map 0/blank → nil on the way in.** `Settings.applyDefaults()` runs *before* the
+  patch is overlaid (`LoadGenerateFile`), so a stored `0` is never re-defaulted — it reaches the
+  sizer as zero (a zero-byte compute buffer, `-t 0`). The guard section is the deliberate opposite:
+  0 and negative are documented opt-outs there and are stored as typed.
 - **A save is a regen + hot reload.** A successful edit upserts the sidecar override/settings, calls
   `autogen.EnsureConfig`, then hot-reloads (the SIGHUP path). That is slow — it re-reads gguf
   metadata — and acceptable only because it is a settings save. The reload itself is in-place; see
