@@ -10,6 +10,10 @@
   import { push } from "svelte-spa-router";
   import * as native from "../lib/native";
   import { appTitle, connectionState, isDarkMode } from "../stores/theme";
+  // The same master art the tray, the taskbar and the favicon carry, derived
+  // by packaging/icons/gen.py. assets/logo.png is the older plated wordmark and
+  // would put a second, different icon on screen.
+  import mark from "../assets/mark.png";
   import { versionInfo } from "../stores/api";
   import WindowControls from "./WindowControls.svelte";
 
@@ -58,12 +62,24 @@
   // worse than nothing in a caption bar, so render nothing instead of it.
   const version = $derived($versionInfo.version === "unknown" ? "" : $versionInfo.version);
 
-  const dotClass = $derived(
+  // The mark carries the connection state the green dot used to: full colour
+  // when connected, pulsing and desaturated while connecting, greyed out and
+  // ringed in the error colour when the stream is down. Losing the signal
+  // entirely was not an option - the native window has no browser tab to fall
+  // back on, and a dead app otherwise looks exactly like a working one.
+  const markClass = $derived(
     $connectionState === "connected"
-      ? "bg-success"
+      ? ""
       : $connectionState === "connecting"
-        ? "bg-warning animate-pulse"
-        : "bg-error",
+        ? "saturate-50 opacity-70 animate-pulse"
+        : "grayscale opacity-60 ring-1 ring-error rounded-full",
+  );
+  const markTitle = $derived(
+    $connectionState === "connected"
+      ? "Connected"
+      : $connectionState === "connecting"
+        ? "Connecting..."
+        : "Disconnected",
   );
 </script>
 
@@ -73,12 +89,15 @@
 {#if native.isNative}
   <header
     bind:this={bar}
-    class="titlebar flex h-8 shrink-0 items-center gap-2 border-b border-border bg-surface pl-4"
+    class="titlebar flex h-8 shrink-0 items-center gap-2 bg-surface pl-4"
     onmousedown={native.dragWindow}
     ondblclick={native.toggleMaximize}
     role="presentation"
   >
-    <span class="inline-block h-2 w-2 shrink-0 rounded-full {dotClass}"></span>
+    <!-- No border-b: the side rail below is the same bg-surface, and a rule
+         across the top drew a line through what should read as one continuous
+         panel. The status rail separates itself by being a shade darker. -->
+    <img src={mark} alt="" title={markTitle} class="h-4 w-4 shrink-0 select-none object-contain transition-all {markClass}" draggable="false" />
     {#if home}
       <!-- cursor-pointer is explicit: Tailwind v4's preflight gives buttons
            `cursor: default`, so a bare <button> here would look inert. -->

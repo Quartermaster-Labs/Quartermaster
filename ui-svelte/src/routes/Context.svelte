@@ -14,17 +14,19 @@
   let sub = $state<"kvcache" | "canon">("kvcache");
 </script>
 
-<div class="flex flex-col h-full gap-3">
-  <div class="flex items-center gap-1 border-b border-border pb-2">
+<div class="flex flex-col h-full">
+  <!-- Sub-tabs in the same idiom as the Observe bar above them, one step
+       quieter (no uppercase weight fight between two stacked tab rows). -->
+  <div class="flex items-stretch gap-x-1 px-3 min-h-10 border-b border-card-border-inner shrink-0">
     {#each subTabs as t (t.key)}
       {@const active = sub === t.key}
       <button
-        class="flex items-center gap-2 px-3 py-1.5 text-sm font-semibold border-b-2 -mb-[0.5625rem] transition-colors {active
-          ? 'border-primary text-primary'
+        class="flex items-center gap-2 px-3 font-mono text-xs border-b-2 -mb-px transition-colors {active
+          ? 'border-primary text-txtmain'
           : 'border-transparent text-txtsecondary hover:text-txtmain'}"
         onclick={() => (sub = t.key)}
       >
-        <t.icon size={15} strokeWidth={active ? 2.4 : 1.8} />
+        <t.icon size={14} strokeWidth={active ? 2.4 : 1.8} />
         {t.label}
       </button>
     {/each}

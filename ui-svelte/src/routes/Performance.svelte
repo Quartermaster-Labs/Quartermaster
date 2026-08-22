@@ -369,15 +369,21 @@
   // Windows nvidia-smi path no longer queries power.draw (avoids WDDM stalls),
   // so only show the power chart when some backend actually reports it.
   const hasPower = $derived(filteredGpuStats.some((g) => g.power_draw_w > 0));
+
+  // The chart grids draw their rules as a 1px gap over a divider-coloured
+  // background, so an odd chart count leaves the empty half of the last row
+  // showing that colour as a block. A filler cell puts the surface back.
+  const gpuChartCount = $derived(3 + (hasVramTemp ? 1 : 0) + (hasPower ? 1 : 0));
+  const sysChartCount = $derived(3 + (netBandwidthDatasets.length > 0 ? 1 : 0));
 </script>
 
-<div class="space-y-5 p-2">
+<!-- Full-bleed: charts want width, and every band below spans the page and is
+     separated by a hairline rather than by a gutter. The tab bar above already
+     says "Performance", so this row carries only the knobs. -->
+<div class="flex flex-col bg-surface">
   <!-- Toolbar -->
-  <div class="flex items-center gap-3 flex-wrap">
-    <div class="flex items-baseline gap-2">
-      <h6>Performance</h6>
-      <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary border border-card-border rounded px-1.5 py-0.5">experimental</span>
-    </div>
+  <div class="flex items-center gap-3 flex-wrap px-3 py-1 min-h-10 border-b border-card-border-inner shrink-0">
+    <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary border border-card-border rounded px-1.5 py-0.5">experimental</span>
 
     <div class="flex items-center gap-2 ml-auto">
       <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary">Refresh</span>
@@ -394,7 +400,8 @@
 
   <!-- Latest-sample KPI strip -->
   {#if latestGpus.length > 0 || latestCpu || latestMemSwap}
-    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+    <!-- KPI chips, in the same idiom as the Activity tab's stats strip. -->
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 px-3 py-3 border-b border-card-border-inner shrink-0">
       {#each latestGpus as g (g.id)}
         <div class="tile">
           <span class="tile__label"><Cpu size={11} /> {g.name || `GPU ${g.id}`}</span>
@@ -424,12 +431,12 @@
   {/if}
 
   <!-- GPU Section -->
-  <section class="space-y-3">
-    <h6 class="uppercase tracking-wide text-txtsecondary">GPU</h6>
+  <section class="flex flex-col">
+    <h6 class="flex items-center px-3 h-10 border-b border-card-border-inner">GPU</h6>
     {#if !hasGpuData}
-      <p class="text-txtsecondary card p-4 text-sm">No GPU data available</p>
+      <p class="px-3 py-4 text-sm text-txtsecondary">No GPU data available</p>
     {:else}
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-px bg-card-border-inner border-b border-card-border-inner">
         <PerformanceChart
           title="GPU Utilization (%)"
           labels={gpuLabels}
@@ -471,14 +478,17 @@
             yLabel="W"
           />
         {/if}
+        {#if gpuChartCount % 2 === 1}
+          <div class="bg-surface hidden lg:block"></div>
+        {/if}
       </div>
     {/if}
   </section>
 
   <!-- System Section -->
-  <section class="space-y-3">
-    <h6 class="uppercase tracking-wide text-txtsecondary">System</h6>
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+  <section class="flex flex-col">
+    <h6 class="flex items-center px-3 h-10 border-b border-card-border-inner">System</h6>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-px bg-card-border-inner">
       <PerformanceChart
         title="CPU Utilization (%)"
         labels={sysLabels}
@@ -507,6 +517,9 @@
           yLabel="Mbit/s"
           showLegend={false}
         />
+      {/if}
+      {#if sysChartCount % 2 === 1}
+        <div class="bg-surface hidden lg:block"></div>
       {/if}
     </div>
   </section>

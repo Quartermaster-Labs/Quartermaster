@@ -70,7 +70,7 @@
     </span>
   </div>
   <p class="text-[0.7rem] text-txtsecondary mb-3">
-    Updates swap the running executable in place — no installer, no wizard. The previous binary is kept beside it until
+    Updates swap the running executable in place, with no installer and no wizard. The previous binary is kept beside it until
     the next start, so a bad update can be rolled back.
   </p>
 
@@ -83,7 +83,7 @@
       >{$versionInfo.version}</span>
 
       {#if !checks}
-        <span class="font-mono text-[0.6rem] text-txtsecondary">development build — never checks</span>
+        <span class="font-mono text-[0.6rem] text-txtsecondary">development build (never checks)</span>
       {:else if available}
         <span class="font-mono text-[0.6rem] text-primary">update: {latest}</span>
       {:else if $updateStatus?.checked_at}

@@ -237,7 +237,7 @@ export async function extractPdfText(file: File): Promise<{ text: string; pages:
     const text = parts.join("\n\n").trim();
     if (text.length < 16) {
       throw new Error(
-        `"${file.name}" has no extractable text — it is probably a scan. Text extraction is not OCR.`
+        `"${file.name}" has no extractable text; it is probably a scan. Text extraction is not OCR.`
       );
     }
     return { text, pages: doc.numPages };

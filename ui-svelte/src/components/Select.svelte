@@ -15,6 +15,7 @@
 </script>
 
 <script lang="ts">
+  import { cssZoom } from "../lib/uiZoom";
   import { ChevronDown, Check } from "lucide-svelte";
   import { tip } from "../lib/tooltip";
 
@@ -61,7 +62,9 @@
   // body's overflow clipping. It still lives inside this component's DOM, which
   // matters: a showModal() <dialog> paints in the browser's top layer, so a
   // popup portalled to <body> would be painted *under* the dialog it belongs to.
-  let pos = $state({ left: 0, top: 0, width: 0, maxHeight: 240, above: false });
+  // All local (post-zoom) pixels - place() converts. viewportH rides along so an
+  // upward-flipped list can anchor with `bottom` in the same units.
+  let pos = $state({ left: 0, top: 0, width: 0, maxHeight: 240, above: false, viewportH: 0 });
 
   const selected = $derived(options.findIndex((o) => o.value === (value ?? "")));
   const label = $derived(selected >= 0 ? options[selected].label : placeholder);
@@ -72,6 +75,10 @@
   function place(): void {
     if (!trigger) return;
     const r = trigger.getBoundingClientRect();
+    // Rect and viewport are visual pixels; the list's own left/top/width are
+    // local ones. Divide by the interface zoom or the list drifts off its
+    // trigger - see lib/uiZoom.ts.
+    const z = cssZoom(trigger);
     const below = window.innerHeight - r.bottom - GAP - EDGE;
     const above = r.top - GAP - EDGE;
     // Flip up only when the gap below is genuinely too small AND above is
@@ -79,11 +86,12 @@
     // than one that scrolls internally.
     const flip = below < 160 && above > below;
     pos = {
-      left: Math.max(EDGE, Math.min(r.left, window.innerWidth - r.width - EDGE)),
-      top: flip ? r.top - GAP : r.bottom + GAP,
-      width: r.width,
-      maxHeight: Math.max(120, Math.min(280, flip ? above : below)),
+      left: Math.max(EDGE, Math.min(r.left, window.innerWidth - r.width - EDGE)) / z,
+      top: (flip ? r.top - GAP : r.bottom + GAP) / z,
+      width: r.width / z,
+      maxHeight: Math.max(120, Math.min(280, flip ? above : below)) / z,
       above: flip,
+      viewportH: window.innerHeight / z,
     };
   }
 
@@ -229,7 +237,7 @@
       aria-label={ariaLabel}
       class="qm-select-list pretty-scroll {mono ? 'font-mono' : ''}"
       style="left:{pos.left}px; width:{pos.width}px; max-height:{pos.maxHeight}px; {pos.above
-        ? `bottom:${window.innerHeight - pos.top}px`
+        ? `bottom:${pos.viewportH - pos.top}px`
         : `top:${pos.top}px`}"
       onkeydown={onKeydown}
     >

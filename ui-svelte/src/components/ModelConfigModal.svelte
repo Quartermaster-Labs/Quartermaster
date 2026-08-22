@@ -1443,7 +1443,7 @@
               <button type="button" class="chip-toggle" aria-pressed={picked.includes(b)} onclick={() => set(specToggle(cur, b, !picked.includes(b)))}>{b}</button>
             {/each}
             {#if picked.length === 0}
-              <span class="text-xs text-txtsecondary">none — speculation off</span>
+              <span class="text-xs text-txtsecondary">none (speculation off)</span>
             {/if}
           {/if}
         </div>
@@ -2047,7 +2047,7 @@
           <div class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               Speculative
-              {@render hint("Speculative decoding backends. Auto = the generator's pick. Turn Auto off to chain them by hand (e.g. draft-mtp + ngram-map-k4v); draft-mtp and draft-dflash are exclusive since they share the one draft-model slot. No chip picked = speculation off. draft-mtp needs a model with MTP layers, draft-dflash a paired *-dflash-*.gguf sidecar — either may be inherited from a model in the same family.")}
+              {@render hint("Speculative decoding backends. Auto = the generator's pick. Turn Auto off to chain them by hand (e.g. draft-mtp + ngram-map-k4v); draft-mtp and draft-dflash are exclusive since they share the one draft-model slot. No chip picked = speculation off. draft-mtp needs a model with MTP layers, draft-dflash a paired *-dflash-*.gguf sidecar; either may be inherited from a model in the same family.")}
               {@render borrowedDraft()}
             </span>
             {@render specRow(spec, (v) => (spec = v))}
@@ -2542,7 +2542,7 @@
             <div class="flex flex-col gap-1 text-sm">
               <span class="text-txtsecondary flex items-center gap-1">
                 Sampler defaults
-                {@render hint("Server-side defaults for requests that omit the field. Empty = inherit the model-wide value. 0 is a real setting here (greedy temp, min-p off), so clear the box to inherit — don't type 0.")}
+                {@render hint("Server-side defaults for requests that omit the field. Empty = inherit the model-wide value. 0 is a real setting here (greedy temp, min-p off), so clear the box to inherit; don't type 0.")}
               </span>
               <div class="flex items-end gap-2">
                 <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">temp<input type="number" min="0" step="0.05" value={vsamp(sv.temp)} oninput={(e) => (sv.temp = vsampSet(e))} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder={samplerPlaceholder("--temp", 0.8)} /></span>

@@ -425,7 +425,7 @@
                 <span
                   class="font-mono text-[0.6rem] rounded px-1.5 py-0.5 border border-primary text-primary"
                   use:tip={comp.defaultImplicit
-                    ? `Used for ${comp.class || comp.kind} models because it is the only backend registered for them — nothing is starred.`
+                    ? `Used for ${comp.class || comp.kind} models because it is the only backend registered for them; nothing is starred.`
                     : `The ★ auto-pick for ${comp.class || comp.kind} models. Models pinned to another backend keep their pin.`}
                 >in use</span>
               {:else}
@@ -559,7 +559,7 @@
                   {#if res?.asset}
                     Downloads <span class="text-txtmain">{res.asset}</span> from {res.tag}
                   {:else if res?.closest}
-                    Nothing matches in {res.tag} — closest is <span class="text-txtmain">{res.closest}</span>. Edit this
+                    Nothing matches in {res.tag}, closest is <span class="text-txtmain">{res.closest}</span>. Edit this
                     repo and re-pick the build.
                   {:else if res?.error}
                     {res.error}

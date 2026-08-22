@@ -32,26 +32,28 @@
   const showWindow = $derived($observeTab === "activity" || $observeTab === "performance");
 </script>
 
-<div class="flex flex-col h-full gap-3">
+<!-- Full-bleed, and the same toolbar the Models and Browse pages use: these are
+     dense readouts, so the window gets spent on data rather than on a gutter
+     around a rounded box. -->
+<div class="flex flex-col h-full">
   <!-- Tab bar + shared time window -->
-  <div class="flex items-center justify-between border-b border-border pb-2">
-    <div class="flex items-center gap-1">
-      {#each tabs as t (t.key)}
-        {@const active = $observeTab === t.key}
-        <button
-          class="flex items-center gap-2 px-3 py-1.5 font-mono text-sm border-b-2 -mb-[0.5625rem] transition-colors {active
-            ? 'border-primary text-primary'
-            : 'border-transparent text-txtsecondary hover:text-txtmain'}"
-          onclick={() => observeTab.set(t.key)}
-        >
-          <t.icon size={15} strokeWidth={active ? 2.4 : 1.8} />
-          {t.label}
-        </button>
-      {/each}
-    </div>
+  <div class="flex items-stretch gap-x-1 px-3 min-h-10 border-b border-card-border shrink-0">
+    {#each tabs as t (t.key)}
+      {@const active = $observeTab === t.key}
+      <button
+        class="flex items-center gap-2 px-3 -mb-px border-b-2 font-mono text-xs uppercase tracking-wide transition-colors {active
+          ? 'border-primary text-txtmain'
+          : 'border-transparent text-txtsecondary hover:text-txtmain'}"
+        onclick={() => observeTab.set(t.key)}
+      >
+        <t.icon size={14} strokeWidth={active ? 2.4 : 1.8} />
+        {t.label}
+      </button>
+    {/each}
 
     {#if showWindow}
-      <div class="flex items-center gap-2">
+      <!-- self-stretch + items-center: centred on the row the tabs define. -->
+      <div class="ml-auto flex items-center gap-2 shrink-0 self-stretch">
         <span class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary">Window</span>
         <div class="seg">
           {#each OBSERVE_WINDOWS as win, i (win.label)}

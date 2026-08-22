@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tip } from "../lib/tooltip";
+  import { formatSpeed, formatDuration, formatRelativeTime } from "../lib/activityFormat";
   import { metrics, getCapture } from "../stores/api";
   import ActivityStats from "../components/ActivityStats.svelte";
   import Tooltip from "../components/Tooltip.svelte";
@@ -157,41 +158,6 @@
     }
   });
 
-  function formatSpeed(speed: number): string {
-    return speed < 0 ? "-" : speed.toFixed(1);
-  }
-
-  function formatDuration(ms: number): string {
-    return (ms / 1000).toFixed(2) + "s";
-  }
-
-  function formatRelativeTime(timestamp: string): string {
-    const now = new Date();
-    const date = new Date(timestamp);
-    const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
-
-    // Handle future dates by returning "just now"
-    if (diffInSeconds < 5) {
-      return "now";
-    }
-
-    if (diffInSeconds < 60) {
-      return `${diffInSeconds}s ago`;
-    }
-
-    const diffInMinutes = Math.floor(diffInSeconds / 60);
-    if (diffInMinutes < 60) {
-      return `${diffInMinutes}m ago`;
-    }
-
-    const diffInHours = Math.floor(diffInMinutes / 60);
-    if (diffInHours < 24) {
-      return `${diffInHours}h ago`;
-    }
-
-    return "a while ago";
-  }
-
   // Free-text row filter (model / path / status), applied on top of the shared
   // Observe time window.
   let search = $state("");
@@ -240,14 +206,15 @@
   }
 </script>
 
-<!-- Stats strip and request table are one surface: the strip summarises the
-     very rows below it, so a divider separates them rather than a gap. -->
-<div class="card p-0 flex flex-col h-full min-h-0 divide-y divide-card-border-inner">
+<!-- Stats strip and request table are one surface spanning the page: the strip
+     summarises the very rows below it, so a divider separates them rather than
+     a gap, and neither is boxed. -->
+<div class="bg-surface flex flex-col h-full min-h-0 divide-y divide-card-border-inner">
   <ActivityStats rows={windowMetrics} />
 
   <div class="flex flex-col flex-1 min-h-0">
     <!-- Toolbar: row count + search + column picker -->
-    <div class="flex items-center gap-2 px-3 py-2 border-b border-card-border-inner" bind:this={dropdownContainer}>
+    <div class="flex items-center gap-2 px-3 h-10 shrink-0 border-b border-card-border-inner" bind:this={dropdownContainer}>
       <span class="font-mono text-[0.7rem] uppercase tracking-wide text-txtsecondary">
         Requests
         <span class="text-txtmain">{sortedMetrics.length}</span>

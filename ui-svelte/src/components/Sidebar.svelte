@@ -55,18 +55,12 @@
 
 <!-- Icons only at rest; expands on hover (mirrors the playground side rail). -->
 <aside
-  class="group/rail absolute inset-y-0 left-0 flex flex-col gap-1 w-14 hover:w-44 overflow-hidden transition-[width] duration-200 border-r border-border bg-surface py-2 hover:shadow-xl hover:shadow-black/20"
+  class="group/rail absolute inset-y-0 left-0 flex flex-col w-14 hover:w-44 overflow-hidden transition-[width] duration-200 bg-surface pb-2 hover:shadow-xl hover:shadow-black/20"
 >
-  <!-- Brand: collapses to "QM", expands to "Quartermaster Dashboard". Same
-       fixed-spacer + growing-label pattern as nav rows below, so the label
-       doesn't jump left/up when the rail expands. -->
-  <div class="relative pb-2 h-9 flex items-center text-label font-semibold uppercase tracking-[0.2em] text-primary leading-tight">
-    <span class="w-14 shrink-0 flex items-center justify-center group-hover/rail:hidden">QM</span>
-    <span class="hidden group-hover/rail:block absolute left-0 top-1/2 -translate-y-[0.72rem] whitespace-nowrap pl-[1.2rem] leading-tight">Quartermaster<br />Dashboard</span>
-  </div>
-
+  <!-- No brand block: the mark and the name both sit on the title bar, so the
+       rail is nav and nothing else, starting at the top. -->
   <!-- Flat page list, no section headers -->
-  <nav class="flex-1 overflow-y-auto overflow-x-hidden pretty-scroll flex flex-col gap-1">
+  <nav class="flex-1 overflow-y-auto overflow-x-hidden pretty-scroll flex flex-col">
     {#each pages as p (p.path)}
       {@const active = isActive(p.path, $currentRoute)}
       {#if p.path === "/test" && playgroundURL}
@@ -75,7 +69,7 @@
           href={playgroundURL}
           target="_blank"
           rel="noopener"
-          class="relative flex items-center gap-3 pr-3 py-2 text-sm font-medium text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
+          class="relative flex items-center gap-3 pr-3 h-10 shrink-0 text-sm font-medium text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
         >
           <span class="w-14 shrink-0 flex items-center justify-center">
             <p.icon size={18} strokeWidth={1.8} />
@@ -89,7 +83,7 @@
         <a
           href={p.path}
           use:link
-          class="relative flex items-center gap-3 pr-3 py-2 text-sm font-medium transition-colors {active
+          class="relative flex items-center gap-3 pr-3 h-10 shrink-0 text-sm font-medium transition-colors {active
             ? 'text-txtmain bg-secondary/60'
             : 'text-txtsecondary hover:text-txtmain hover:bg-secondary/40'}"
         >
@@ -111,7 +105,7 @@
   <button
     type="button"
     onclick={() => (showWiki = true)}
-    class="w-full flex items-center gap-3 pr-3 py-2 text-sm font-medium text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
+    class="w-full flex items-center gap-3 pr-3 h-10 shrink-0 text-sm font-medium text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
   >
     <span class="w-14 shrink-0 flex items-center justify-center">
       <BookOpen size={18} strokeWidth={1.8} />
@@ -125,7 +119,7 @@
   <button
     type="button"
     onclick={() => (showSettings = true)}
-    class="w-full flex items-center gap-3 pr-3 py-2 text-sm font-medium text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
+    class="w-full flex items-center gap-3 pr-3 h-10 shrink-0 text-sm font-medium text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     use:tip={updateTooltip}
   >
     <span class="relative w-14 shrink-0 flex items-center justify-center">

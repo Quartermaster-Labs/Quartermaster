@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
+  import { cssZoom } from "../lib/uiZoom";
 
   interface Props {
     metadata: Record<string, string> | undefined;
@@ -38,7 +39,10 @@
       top = triggerRect.top - tooltipRect.height - margin;
     }
 
-    tooltipStyle = `left: ${left}px; top: ${top}px; max-width: calc(100vw / var(--qm-scale) - ${margin * 2}px);`;
+    // Visual pixels in, local pixels out: the interface zoom re-applies itself
+    // to whatever we write here. See lib/uiZoom.ts.
+    const z = cssZoom(tooltipEl);
+    tooltipStyle = `left: ${(left / z).toFixed(2)}px; top: ${(top / z).toFixed(2)}px; max-width: calc(100vw / var(--qm-scale) - ${margin * 2}px);`;
   }
 
   function onEnter() {

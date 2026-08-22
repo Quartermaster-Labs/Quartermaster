@@ -13,6 +13,8 @@
 // an in-tree absolute tooltip gets clipped by every `overflow-auto` ancestor,
 // and the rail, the model table and the config modal are all scroll containers.
 
+import { cssZoom } from "./uiZoom";
+
 let tipEl: HTMLDivElement | null = null;
 let showTimer: ReturnType<typeof setTimeout> | undefined;
 let activeTarget: HTMLElement | null = null;
@@ -50,16 +52,23 @@ function ensureEl(): HTMLDivElement {
 
 function place(target: HTMLElement, el: HTMLDivElement): void {
   const r = target.getBoundingClientRect();
-  const w = el.offsetWidth;
-  const h = el.offsetHeight;
+  // The tip's own rect, not offsetWidth/Height: at any interface size other than
+  // 100% the offset properties report LOCAL pixels while the target's rect is in
+  // visual ones, and mixing the two mis-centres the tip by the zoom factor.
+  const tr = el.getBoundingClientRect();
+  const w = tr.width;
+  const h = tr.height;
   // Above by default; flip below when the target sits near the top of the
   // viewport (the status rail and sticky table headers both do).
   const above = r.top - GAP - h >= EDGE;
   const top = above ? r.top - GAP - h : r.bottom + GAP;
   let left = r.left + r.width / 2 - w / 2;
   left = Math.max(EDGE, Math.min(left, window.innerWidth - w - EDGE));
-  el.style.top = `${Math.round(top)}px`;
-  el.style.left = `${Math.round(left)}px`;
+  // Everything above is in visual pixels; `top`/`left` are read back in the
+  // tip's local ones, which the zoom then re-multiplies. See lib/uiZoom.ts.
+  const z = cssZoom(el);
+  el.style.top = `${(Math.round(top) / z).toFixed(2)}px`;
+  el.style.left = `${(Math.round(left) / z).toFixed(2)}px`;
 }
 
 function hide(): void {

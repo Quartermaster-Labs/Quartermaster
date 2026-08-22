@@ -9,7 +9,7 @@
   // stores/hubJobs.ts; this component only draws it.
   import { onMount } from "svelte";
   import { link } from "svelte-spa-router";
-  import { ArrowDownToLine, X, AlertTriangle, Check, Ban, Folder, Pause, Play } from "lucide-svelte";
+  import { ArrowDownToLine, X, AlertTriangle, Check, Ban, FolderOpen, Pause, Play } from "lucide-svelte";
   import HubAvatar from "./HubAvatar.svelte";
   import { cancelHubDownload, pauseHubDownload, resumeHubDownload, revealFolder, humanBytes, type HubJob } from "../lib/hubApi";
   import { hubJobs, hubRates, hubActiveCount, refreshHubJobs, isUnfinishedJob } from "../stores/hubJobs";
@@ -199,7 +199,7 @@
                 <Play class="w-3.5 h-3.5" />
               </button>
             {:else}
-              <button class="icon-btn shrink-0" use:tip={"Pause — every byte is kept"} disabled={busy[j.id]} onclick={() => pause(j)}>
+              <button class="icon-btn shrink-0" use:tip={"Pause (every byte is kept)"} disabled={busy[j.id]} onclick={() => pause(j)}>
                 <Pause class="w-3.5 h-3.5" />
               </button>
             {/if}
@@ -267,7 +267,7 @@
                 use:tip={"Open this folder"}
                 onclick={() => reveal(j.dir)}
               >
-                <Folder class="w-3 h-3 shrink-0" /><span class="truncate">{j.dir}</span>
+                <FolderOpen class="w-3 h-3 shrink-0" /><span class="truncate">{j.dir}</span>
               </button>
             {/if}
           </div>
@@ -277,7 +277,7 @@
 
     <div class="px-3 py-1.5 border-t border-card-border text-[0.6rem]">
       <button class="inline-flex cursor-pointer items-center gap-1 text-primary hover:underline" onclick={() => reveal()}>
-        <Folder class="w-3 h-3" /> Open models folder
+        <FolderOpen class="w-3 h-3" /> Open models folder
       </button>
     </div>
   </div>

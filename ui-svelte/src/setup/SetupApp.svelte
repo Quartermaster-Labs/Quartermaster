@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Folder } from "lucide-svelte";
+  import { FolderOpen } from "lucide-svelte";
   import * as api from "./api";
   import type { Probe, ScanResult, Status } from "./api";
   import Select from "../components/Select.svelte";
@@ -280,7 +280,7 @@
           <input class="min-w-0 flex-1 font-mono text-sm" bind:value={dir} spellcheck="false" />
           {#if native.isNative}
             <button class="btn inline-flex shrink-0 items-center gap-1.5" onclick={browseDir}>
-              <Folder size={14} /> Browse
+              <FolderOpen size={14} /> Browse
             </button>
           {/if}
         </div>
@@ -319,7 +319,7 @@
           />
           {#if native.isNative}
             <button class="btn inline-flex shrink-0 items-center gap-1.5" onclick={browseModels}>
-              <Folder size={14} /> Browse
+              <FolderOpen size={14} /> Browse
             </button>
           {/if}
         </div>

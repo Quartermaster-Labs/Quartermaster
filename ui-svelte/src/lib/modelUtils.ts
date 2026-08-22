@@ -41,6 +41,22 @@ export function modelCategory(m: Model): ModelCategory {
   return "llm";
 }
 
+// How much of the GPU a loaded model is holding, for ranking several live models
+// against each other. The sizer's prediction comes first because that is what is
+// actually resident; the file size is the fallback for rows it never estimated
+// (exec-per-request backends, peers). Both are optional, so `||` rather than
+// `??`: a 0 here means "unknown", not "a zero-byte model".
+export function modelWeightGB(m: Model): number {
+  return m.estVramGB || m.sizeGB || 0;
+}
+
+// The one to name when the rail has room for a single model. Ties fall back to
+// the id so the pick is stable frame to frame rather than depending on the order
+// the server happened to list them in.
+export function largestModel(ms: Model[]): Model | undefined {
+  return ms.slice().sort((a, b) => modelWeightGB(b) - modelWeightGB(a) || a.id.localeCompare(b.id))[0];
+}
+
 export function matchesCapabilities(model: Model, required: string[], matchAny = false): boolean {
   if (!required.length) return true;
   if (!model.capabilities) return false;

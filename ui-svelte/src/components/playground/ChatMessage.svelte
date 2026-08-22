@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { cssZoom } from "../../lib/uiZoom";
   import { tip } from "../../lib/tooltip";
   import { renderMarkdown, renderStreamingMarkdown, createStreamingCache } from "../../lib/markdown";
   import type { RenderedBlock } from "../../lib/markdown";
@@ -507,7 +508,10 @@
     const top = el.getBoundingClientRect().top;
     const range = (document as any).caretRangeFromPoint?.(e.clientX, e.clientY) as Range | undefined;
     const rect = range?.getBoundingClientRect();
-    const y = rect && rect.height > 0 ? rect.top - top + rect.height / 2 : e.clientY - top;
+    // Both rects and clientY are visual pixels, but replyY is used as a local
+    // offset inside the (zoomed) message - see lib/uiZoom.ts.
+    const z = cssZoom(el);
+    const y = (rect && rect.height > 0 ? rect.top - top + rect.height / 2 : e.clientY - top) / z;
     replyY = Math.max(10, Math.min(el.clientHeight - 10, y));
   }
   // The ask wizard sits inside the assistant bubble, so the bubble's group-hover

@@ -248,7 +248,7 @@
           </div>
           <p class="text-[0.7rem] text-txtsecondary">
             Tick the build you want. Future releases are matched by what you tick here, so pick the flavour, not the
-            version — the version number is filled in automatically each time.
+            version; the version number is filled in automatically each time.
           </p>
 
           <div class="max-h-56 overflow-y-auto rounded border border-card-border divide-y divide-card-border">
@@ -377,7 +377,7 @@
       {:else if !loading}
         <p class="text-[0.7rem] text-txtsecondary">
           Paste a repository that publishes its builds as release assets. Its latest release is fetched so you can pick
-          the build you want — nothing here has to be typed by hand.
+          the build you want; nothing here has to be typed by hand.
         </p>
       {/if}
 

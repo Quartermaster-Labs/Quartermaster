@@ -194,7 +194,12 @@
   // c + p makes features drift toward lower columns). Reads as live throughput.
   const STREAM_W = 26;
   const STREAM_H = 3;
-  const STREAM_RAMP = " ⠂⠆⠖⠶⠷⠿"; // sparse → dense braille
+  // U+2800 BRAILLE PATTERN BLANK, not an ASCII space: the other six glyphs come
+  // from the braille block, and a space is a DIFFERENT advance width in most
+  // monospace faces (it falls back to another font). Since the number of blank
+  // cells changes every tick, each row's rendered width changed with it - and a
+  // centred <pre> re-centres on every frame, which is the side-to-side wobble.
+  const STREAM_RAMP = "⠀⠂⠆⠖⠶⠷⠿"; // sparse → dense braille
   // Warm gradient keyed to dot-density: dim ember → red → orange → amber → hot
   // yellow. Indexed by the ramp position so denser glyphs read "hotter".
   const STREAM_HEAT = [
@@ -283,7 +288,7 @@
   // The six stats are fixed and always rendered — only their values and colour
   // change. The three we can observe mid-stream (Gen rate, Duration, Out) glow
   // accent and update live; the rest we can't see until completion, so they show
-  // "—" while generating (never a stale value from the previous request) and the
+  // "-" while generating (never a stale value from the previous request) and the
   // final figure once idle. Idle => all neutral, all from the last request.
   // Time-to-first-token: live = the measured TTFT pushed once the first token
   // lands; final = the backend's prompt-eval time (prefill finishes right before

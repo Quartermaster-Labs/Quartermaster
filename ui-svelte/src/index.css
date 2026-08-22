@@ -42,6 +42,10 @@
      well). Nesting used to fall back to `background`, i.e. DARKER than its
      parent, so a raised block read as a hole punched in the card. */
   --color-surface-2: rgba(253, 249, 241, 1);
+  /* One step BELOW surface, for the status rail: it is a readout strip, not a
+     card, and sitting slightly recessed separates it from the title bar above
+     it without needing a rule between them. */
+  --color-rail: rgba(240, 232, 217, 1);
 
   /* text colors */
   --color-txtmain: rgba(26, 23, 20, 1);
@@ -104,6 +108,8 @@
     --color-surface: rgba(44, 42, 38, 1);
     /* One step above surface — see the light-theme note. */
     --color-surface-2: rgba(56, 53, 48, 1);
+    /* One step below surface - see the light-theme note. */
+    --color-rail: rgba(38, 36, 33, 1);
     /* text colors */
     --color-txtmain: rgba(237, 237, 238, 1);
     --color-txtsecondary: rgba(161, 161, 166, 0.85);

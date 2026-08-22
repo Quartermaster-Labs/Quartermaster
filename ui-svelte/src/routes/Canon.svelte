@@ -52,29 +52,30 @@
   );
 </script>
 
-<div class="h-full overflow-auto p-1 pretty-scroll">
+<!-- Bands, not boxes - see KvCache.svelte. -->
+<div class="h-full overflow-auto pretty-scroll bg-surface">
   {#if !stats}
-    <div class="text-txtsecondary text-sm">Loading…</div>
+    <div class="px-3 py-4 text-txtsecondary text-sm">Loading…</div>
   {:else}
-    <div class="card p-3 text-xs text-txtsecondary mb-3">
+    <div class="px-3 py-2.5 text-xs text-txtsecondary border-b border-card-border-inner">
       Volatile spans (e.g. sub-day timestamps) are stripped from the system prompt of every
       chat request so its stable prefix stays byte-identical turn-to-turn - letting llama-server
       reuse the KV cache instead of reprefilling. Non-lossy: the model still sees date granularity.
     </div>
 
-    <!-- Summary cards -->
-    <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
-      <div class="card p-3">
+    <!-- Summary band: hairline-separated cells, matching the KV Cache tab. -->
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-px bg-card-border-inner border-b border-card-border-inner">
+      <div class="bg-surface p-3">
         <div class="text-xs text-txtsecondary">Requests canonicalized</div>
         <div class="text-2xl font-mono text-green-500">{fmtNum(counters?.rewritten)}</div>
         <div class="text-xs text-txtsecondary mt-0.5">{rewritePct}% of {fmtNum(counters?.seen)} chat requests</div>
       </div>
-      <div class="card p-3">
+      <div class="bg-surface p-3">
         <div class="text-xs text-txtsecondary">Bytes trimmed</div>
         <div class="text-2xl font-mono">{fmtBytes(counters?.bytesRemoved)}</div>
         <div class="text-xs text-txtsecondary mt-0.5">total removed from prompts</div>
       </div>
-      <div class="card p-3">
+      <div class="bg-surface p-3">
         <div class="text-xs text-txtsecondary">Chat requests seen</div>
         <div class="text-2xl font-mono">{fmtNum(counters?.seen)}</div>
         <div class="text-xs text-txtsecondary mt-0.5">inspected for volatile spans</div>
@@ -82,7 +83,7 @@
     </div>
 
     <!-- Recent rewrites -->
-    <div class="card p-3 min-h-0">
+    <div class="p-3 min-h-0">
       <div class="text-sm font-semibold mb-2">Recent rewrites</div>
       {#if !stats.events?.length}
         <div class="text-xs text-txtsecondary">No rewrites yet - no client sent a volatile prefix.</div>

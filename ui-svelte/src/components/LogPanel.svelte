@@ -164,9 +164,11 @@
   });
 </script>
 
-<div class="card flex flex-col h-full w-full p-0">
+<!-- No card: the Observe page is full-bleed, so the panel IS the surface -
+     one or two of them tiling the whole area, split by the resizer. -->
+<div class="bg-surface flex flex-col h-full w-full">
   <!-- Toolbar -->
-  <div class="flex items-center gap-2 px-3 py-2 border-b border-card-border-inner">
+  <div class="flex items-center gap-2 px-3 h-10 shrink-0 border-b border-card-border-inner">
     {#if header}
       {@render header()}
     {:else}

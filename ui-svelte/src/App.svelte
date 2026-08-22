@@ -40,7 +40,7 @@
   };
 
   // Routes whose content owns the whole page surface (no outer gutter).
-  const FULL_BLEED = ["/models", "/models/:category", "/browse"];
+  const FULL_BLEED = ["/", "/models", "/models/:category", "/browse", "/api-keys", "/observe", "/logs", "/activity", "/performance"];
   const fullBleed = $derived(FULL_BLEED.includes($currentRoute));
 
   function handleRouteLoaded(event: { detail: { route: string | RegExp } }) {
@@ -105,14 +105,37 @@
     <!-- The slot reserves only the COLLAPSED width; the rail itself is absolute
          inside it, so expanding on hover draws over the page like a curtain
          instead of reflowing every layout to the right of it. -->
+    <!-- The rail draws no right border of its own: it runs the full window
+         height, so it would carry straight past the status rail's rounded
+         corner and end in mid-air under the title bar. main's left border
+         starts exactly where the corner finishes instead. -->
     <div class="relative w-14 shrink-0 z-40">
       <Sidebar />
     </div>
 
     <div class="flex flex-col flex-1 min-w-0">
-      <StatusRail />
+      <!-- The rail is a shade darker than the chrome, so its top-left corner is
+           rounded off against the side rail rather than butting into it. The
+           notch that carves out needs to show the SAME surface as the side rail
+           and the title bar around it - without this wrapper it would fall
+           through to bg-background and read as a chipped corner.
+           And when the FIRST rail row is the active one, that row's highlight is
+           what sits behind the notch: paint it under there too, or the curve
+           reads as a chip taken out of the highlight. The rail rows are h-10,
+           the same height as the status rail, so only the first one can ever be
+           behind it. -->
+      <div class="relative shrink-0 bg-surface">
+        {#if $currentRoute === "/"}
+          <span class="absolute inset-y-0 left-0 w-4 bg-secondary/60"></span>
+        {/if}
+        <!-- Positioned, so it paints over the underlay above and leaves it
+             visible only where the corner is cut away. -->
+        <div class="relative">
+          <StatusRail />
+        </div>
+      </div>
 
-      <main class="flex-1 overflow-auto pretty-scroll">
+      <main class="flex-1 overflow-auto border-l border-border pretty-scroll">
         <!-- Table/browser pages are full-bleed: their own panels supply the
              padding, so the content reaches the window edges instead of
              floating in a framed box. -->

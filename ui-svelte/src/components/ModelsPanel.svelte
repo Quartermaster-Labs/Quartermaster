@@ -2,7 +2,7 @@
   import { tip } from "../lib/tooltip";
   import { push } from "svelte-spa-router";
   import { get } from "svelte/store";
-  import { Folder } from "lucide-svelte";
+  import { FolderOpen, MoreVertical } from "lucide-svelte";
   import { models, loadModel, getSettings, pickModelsFolder } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
   import { playgroundPort } from "../stores/playgroundAuth";
@@ -93,6 +93,66 @@
     }
   }
 
+  // ---- Toolbar overflow --------------------------------------------------
+  // The table-wide controls used to wrap onto a second row the moment the window
+  // narrowed, which read as a broken toolbar. Instead they fold into a "..." menu.
+  //
+  // The test is "do the tabs and the FULL control set fit on one line", not
+  // "is the bar overflowing": measuring the live bar would flip back the instant
+  // folding freed the space, and then overflow again - a permanent flicker.
+  // `ctrlFull` is only ever sampled while expanded, so the threshold is a fixed
+  // number and the decision has no feedback loop.
+  let barEl = $state<HTMLElement | undefined>();
+  let tabsEl = $state<HTMLElement | undefined>();
+  let ctrlEl = $state<HTMLElement | undefined>();
+  let compact = $state(false);
+  let menuOpen = $state(false);
+  let ctrlFull = 0;
+
+  // Tailwind v4 needs an @reference to resolve utilities inside a component
+  // <style>, so shared row styling lives in a constant instead of a class.
+  const MENU_ROW =
+    "w-full flex items-center gap-2 px-3 py-1.5 text-left text-txtsecondary transition-colors " +
+    "hover:bg-secondary hover:text-txtmain hover:cursor-pointer " +
+    "disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-txtsecondary";
+
+  function measureBar(): void {
+    if (!barEl || !tabsEl || !ctrlEl) return;
+    if (!compact) ctrlFull = ctrlEl.offsetWidth;
+    if (!ctrlFull) return;
+    let tabsW = 0;
+    for (const c of tabsEl.children) tabsW += (c as HTMLElement).offsetWidth;
+    tabsW += 4 * Math.max(0, tabsEl.children.length - 1); // gap-x-1
+    const next = tabsW + ctrlFull + 32 > barEl.clientWidth; // 32 = px-3 gutters + breathing room
+    if (next !== compact) {
+      compact = next;
+      if (!next) menuOpen = false;
+    }
+  }
+
+  $effect(() => {
+    if (!barEl) return;
+    const ro = new ResizeObserver(measureBar);
+    ro.observe(barEl);
+    measureBar();
+    return () => ro.disconnect();
+  });
+  // Tab labels carry counts, so the tabs' natural width changes as models appear.
+  $effect(() => {
+    $models;
+    queueMicrotask(measureBar);
+  });
+
+  $effect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: PointerEvent): void => {
+      if (e.target instanceof Node && ctrlEl?.contains(e.target)) return;
+      menuOpen = false;
+    };
+    window.addEventListener("pointerdown", onDown, true);
+    return () => window.removeEventListener("pointerdown", onDown, true);
+  });
+
   // Every category except embed/segment has a playground tab (chat/images/
   // speech/audio). Embedders and rerankers have no interactive UI (API only);
   // SAM segmenters are driven from the Images playground's select tool.
@@ -178,12 +238,19 @@
 <!-- Full-bleed page: the panel IS the page background, so the toolbar rule and
      the table both span edge to edge and only their contents are inset. -->
 <div class="flex flex-col h-full">
-  <!-- One toolbar: category tabs left, table-wide controls right. Wraps rather
-       than scrolls — a scrollbar under the tabs hides categories behind a drag. -->
-  <div class="flex flex-wrap items-end gap-x-1 gap-y-2 px-3 border-b border-card-border shrink-0">
+  <!-- One toolbar: category tabs left, table-wide controls right. min-h-10 is the
+       app's row unit - a sidebar item and the status rail are both h-10, so every
+       page's first row lands on the same line as the chrome beside it. min-, not
+       fixed: the tabs may wrap, and a hard height would clip the second line.
+       items-stretch, so each tab fills that height and its underline sits on the
+       row's bottom edge rather than at the bottom of its own text box.
+       The tabs wrap rather than scroll — a scrollbar under them hides categories behind a drag —
+       and the controls fold into a "..." menu instead of taking a row of their own. -->
+  <div bind:this={barEl} class="flex items-stretch gap-x-1 px-3 min-h-10 border-b border-card-border shrink-0">
+    <div bind:this={tabsEl} class="flex flex-wrap items-stretch gap-x-1 gap-y-1 min-w-0">
     {#each MODEL_CATEGORIES as c (c.id)}
       <button
-        class="px-3 py-2 -mb-px border-b-2 font-mono text-xs uppercase tracking-wide transition-colors {tab === c.id
+        class="inline-flex items-center px-3 -mb-px border-b-2 font-mono text-xs uppercase tracking-wide transition-colors {tab === c.id
           ? 'border-primary text-txtmain'
           : 'border-transparent text-txtsecondary hover:text-txtmain'}"
         onclick={() => (tab = c.id)}
@@ -192,8 +259,12 @@
         <span class="ml-1.5 tabular-nums text-[0.65rem] text-txtsecondary">{tabCount(c.id)}</span>
       </button>
     {/each}
+    </div>
 
-    <div class="ml-auto flex items-center gap-2 pb-1.5">
+    <!-- self-stretch + items-center, not a bottom pad: the row is as tall as the
+         tab buttons, so stretching to it and centring inside is what actually
+         puts the controls on the row's midline. A pad only guesses at it. -->
+    <div bind:this={ctrlEl} class="ml-auto flex items-center gap-2 shrink-0 self-stretch">
       <div class="flex items-center rounded border border-card-border overflow-hidden">
         {#each [{ id: "all", label: "All" }, { id: "loaded", label: "Loaded" }, { id: "idle", label: "Idle" }] as f (f.id)}
           <button
@@ -206,29 +277,75 @@
           </button>
         {/each}
       </div>
-      <button
-        class="btn btn--sm inline-flex items-center justify-center disabled:opacity-50"
-        onclick={pickFolder}
-        disabled={picking}
-        aria-label="Set models folder"
-        use:tip={`Models folder${folderPath ? ": " + folderPath : ""} - click to choose`}
-      >
-        <Folder class="w-3.5 h-3.5" />
-      </button>
-      <button
-        class="btn btn--sm uppercase tracking-wide"
-        onclick={() => showIdorNameStore.update((p) => (p === "name" ? "id" : "name"))}
-        use:tip={"Toggle id / name display"}
-      >
-        {$showIdorNameStore === "id" ? "ID" : "Name"}
-      </button>
-      <button class="btn btn--sm uppercase tracking-wide" onclick={() => showUnlistedStore.update((p) => !p)} use:tip={"Show or hide unlisted models"}>
-        {$showUnlistedStore ? "Hide unlisted" : "Show unlisted"}
-      </button>
+      {#if compact}
+        <!-- Same three controls, folded. Anchored to the button rather than the
+             toolbar so it stays put when the tabs wrap to a second line. -->
+        <!-- Bare glyph, not a .btn: it sits among framed controls but is the
+             affordance for the frames that were folded away, so a second box
+             around it read as one more control rather than as their handle.
+             self-stretch gives its hit area the full toolbar row. -->
+        <div class="relative self-stretch flex">
+          <button
+            class="flex items-center justify-center px-1.5 cursor-pointer text-txtsecondary transition-colors hover:text-txtmain"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            aria-label="Table options"
+            onclick={() => (menuOpen = !menuOpen)}
+            use:tip={"Table options"}
+          >
+            <MoreVertical class="w-4 h-4" />
+          </button>
+          {#if menuOpen}
+            <div
+              class="absolute right-0 top-full mt-1 z-30 w-56 rounded-md border border-card-border bg-surface shadow-xl py-1 text-sm"
+              role="menu"
+              tabindex="-1"
+            >
+              <button class={MENU_ROW} role="menuitem" disabled={picking} onclick={() => { menuOpen = false; pickFolder(); }}>
+                <FolderOpen class="w-3.5 h-3.5 shrink-0" />
+                <span class="flex flex-col items-start min-w-0">
+                  <span>Models folder</span>
+                  {#if folderPath}<span class="max-w-full truncate font-mono text-[0.6rem] text-txtsecondary">{folderPath}</span>{/if}
+                </span>
+              </button>
+              <button
+                class={MENU_ROW}
+                role="menuitem"
+                onclick={() => showIdorNameStore.update((p) => (p === "name" ? "id" : "name"))}
+              >
+                <span class="w-3.5 shrink-0"></span>
+                <span>Show {$showIdorNameStore === "id" ? "names" : "ids"}</span>
+              </button>
+              <button class={MENU_ROW} role="menuitem" onclick={() => showUnlistedStore.update((p) => !p)}>
+                <span class="w-3.5 shrink-0"></span>
+                <span>{$showUnlistedStore ? "Hide unlisted" : "Show unlisted"}</span>
+              </button>
+            </div>
+          {/if}
+        </div>
+      {:else}
+        <button
+          class="btn btn--sm inline-flex items-center justify-center disabled:opacity-50"
+          onclick={pickFolder}
+          disabled={picking}
+          aria-label="Set models folder"
+          use:tip={`Models folder${folderPath ? ": " + folderPath : ""} - click to choose`}
+        >
+          <FolderOpen class="w-3.5 h-3.5" />
+        </button>
+        <button
+          class="btn btn--sm uppercase tracking-wide"
+          onclick={() => showIdorNameStore.update((p) => (p === "name" ? "id" : "name"))}
+          use:tip={"Toggle id / name display"}
+        >
+          {$showIdorNameStore === "id" ? "ID" : "Name"}
+        </button>
+        <button class="btn btn--sm uppercase tracking-wide" onclick={() => showUnlistedStore.update((p) => !p)} use:tip={"Show or hide unlisted models"}>
+          {$showUnlistedStore ? "Hide unlisted" : "Show unlisted"}
+        </button>
+      {/if}
     </div>
   </div>
-
-  <div class="h-2 shrink-0"></div>
 
   <ModelsTable
     models={inTab}

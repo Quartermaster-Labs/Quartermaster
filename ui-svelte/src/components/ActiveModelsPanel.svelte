@@ -6,7 +6,7 @@
   import { models, unloadSingleModel, getModelConfig, type ModelConfig } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
   import { playgroundPort } from "../stores/playgroundAuth";
-  import { prettifyModelName, modelCategory, type ModelCategory } from "../lib/modelUtils";
+  import { prettifyModelName, modelCategory, modelWeightGB, type ModelCategory } from "../lib/modelUtils";
   import { Settings, Square, Image, MessageCircle, HelpCircle } from "lucide-svelte";
   import type { Model } from "../lib/types";
   import ModelConfigModal from "./ModelConfigModal.svelte";
@@ -43,6 +43,21 @@
       (m) => !m.peerID && isLive(m) && (category === "all" || modelCategory(m) === category),
     ),
   );
+
+  // Two models fit in VRAM often enough (a small vision or embedding model beside
+  // an LLM), and stacking both param blocks in one scrolling column buried the
+  // second one. One at a time, selected by a tab strip - the same idiom the pages
+  // use, on the same h-10 row unit.
+  const ordered = $derived(
+    liveMembers.slice().sort((a, b) => modelWeightGB(b) - modelWeightGB(a) || a.id.localeCompare(b.id)),
+  );
+  let selId = $state("");
+  const shown = $derived.by(() => {
+    if (ordered.length <= 1) return ordered;
+    // Falls back to the biggest whenever the selection is stale - the selected
+    // model unloaded, or nothing has been picked yet.
+    return [ordered.find((m) => m.id === selId) ?? ordered[0]];
+  });
 
   // --- Active model launch params (fetched per member) ---
   let configs = $state<Record<string, ModelConfig>>({});
@@ -162,13 +177,32 @@
 
 {#if liveMembers.length > 0}
   <div class="shrink-0 h-72 min-h-[14rem]" transition:slide={{ duration: 250 }}>
-    <!-- One card, two halves: staging params and live feedback are the same
-         "what is running right now" surface, so a divider separates them rather
-         than a gap between two floating cards. -->
-    <div class="card h-full p-0 grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-card-border-inner">
+    <!-- No card: this is a BAND on a full-bleed page, so it spans the width and
+         is closed off by the next band's hairline rather than by its own border.
+         Two halves, because staging params and live feedback are the same "what
+         is running right now" surface - a divider between them, not a gap. -->
+    <div class="bg-surface h-full grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-card-border-inner">
       <!-- Active model settings -->
-      <div class="h-full min-h-0 overflow-auto pretty-scroll p-4">
-        {#each liveMembers as m (m.id)}
+      <div class="h-full min-h-0 flex flex-col">
+        {#if ordered.length > 1}
+          <div class="flex items-stretch gap-x-1 px-3 h-10 shrink-0 border-b border-card-border-inner overflow-x-auto pretty-scroll">
+            {#each ordered as m (m.id)}
+              {@const active = shown[0]?.id === m.id}
+              <button
+                class="inline-flex items-center gap-1.5 px-2 -mb-px shrink-0 border-b-2 font-mono text-micro transition-colors {active
+                  ? 'border-primary text-txtmain'
+                  : 'border-transparent text-txtsecondary hover:text-txtmain'}"
+                onclick={() => (selId = m.id)}
+                use:tip={m.id}
+              >
+                <span class="inline-block w-2 h-2 rounded-full shrink-0 {dotClass(m.state)}"></span>
+                <span class="truncate max-w-[10rem]">{prettifyModelName(m.name || m.id)}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+        <div class="flex-1 min-h-0 overflow-auto pretty-scroll p-4">
+        {#each shown as m (m.id)}
           {@const cfg = configs[m.id]}
           <!-- A running model keeps serving under the args it SPAWNED with, so show
                m.runningCmd (actual launched argv) rather than the pending config. -->
@@ -247,6 +281,7 @@
             {/if}
           </div>
         {/each}
+        </div>
       </div>
 
       <!-- Live inference feedback -->

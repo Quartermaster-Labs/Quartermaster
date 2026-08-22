@@ -4,6 +4,8 @@
   // chunk. The runtime copy is imported on demand in onMount below.
   import type { Chart as ChartJS } from "chart.js";
   import { isDarkMode } from "../stores/theme";
+  import { uiScale } from "../stores/uiScale";
+  import { cssZoom } from "../lib/uiZoom";
 
   interface Dataset {
     label: string;
@@ -40,9 +42,37 @@
     };
   }
 
+  // The canvas backing store has to cover the interface zoom as well as the
+  // display's own pixel ratio: chart.js sizes it from the element's LOCAL css
+  // size (canvas.clientWidth), which `zoom` then paints larger. Without this the
+  // charts are a blurry upscale at any interface size above 100%.
+  function backingRatio(): number {
+    return (window.devicePixelRatio || 1) * cssZoom(canvas);
+  }
+
+  // chart.js derives the hit position from the native event, and its own idea of
+  // where the canvas is. Under `zoom` those disagree (see lib/uiZoom.ts), which
+  // put the tooltip on the wrong sample. Recompute from the bounding rect - the
+  // one measurement that is unambiguously in visual pixels - and divide.
+  const zoomFix = {
+    id: "qm-zoom-fix",
+    beforeEvent(c: ChartJS, args: { event: { type: string; x: number | null; y: number | null; native: Event | null } }) {
+      const ev = args.event;
+      // mouseout carries no position; writing one keeps the tooltip alive.
+      if (!ev || ev.type === "mouseout") return;
+      const ne = ev.native as MouseEvent | null;
+      if (!ne || typeof ne.clientX !== "number") return;
+      const r = c.canvas.getBoundingClientRect();
+      const z = cssZoom(c.canvas);
+      ev.x = (ne.clientX - r.left) / z;
+      ev.y = (ne.clientY - r.top) / z;
+    },
+  };
+
   function buildOptions(dark: boolean) {
     const colors = getChartColors(dark);
     return {
+      devicePixelRatio: backingRatio(),
       responsive: true,
       maintainAspectRatio: false,
       animation: false as const,
@@ -122,6 +152,7 @@
           })),
         },
         options: buildOptions($isDarkMode),
+        plugins: [zoomFix],
       });
     })();
 
@@ -135,7 +166,11 @@
   $effect(() => {
     if (!chart) return;
     const _dark = $isDarkMode;
+    // $uiScale is a dependency, not an argument: a zoom change means a new
+    // backing ratio, and resize() is what re-allocates the canvas for it.
+    void $uiScale;
     chart.options = buildOptions(_dark);
+    chart.resize();
     chart.update("none");
   });
 
@@ -158,6 +193,8 @@
   });
 </script>
 
-<div class="card p-4 h-[300px]">
+<!-- No card: the charts tile a hairline grid that spans the page, so the
+     separation between them is the parent's gap-px, not a border each. -->
+<div class="bg-surface p-4 h-[300px]">
   <canvas bind:this={canvas}></canvas>
 </div>

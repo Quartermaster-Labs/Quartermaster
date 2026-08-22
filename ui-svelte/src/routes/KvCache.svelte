@@ -97,11 +97,13 @@
   }
 </script>
 
-<div class="h-full overflow-auto pretty-scroll">
+<!-- Bands, not boxes: each section spans the page and is closed off by a
+     hairline, so the readout reads as one continuous surface. -->
+<div class="h-full overflow-auto pretty-scroll bg-surface">
   {#if !stats}
-    <div class="text-txtsecondary text-sm">Loading…</div>
+    <div class="px-3 py-4 text-txtsecondary text-sm">Loading…</div>
   {:else if !stats.enabled}
-    <div class="card p-4 text-sm text-txtsecondary">
+    <div class="px-3 py-4 text-sm text-txtsecondary">
       Slot KV cache is <span class="text-txtmain font-semibold">disabled</span>. Enable it in the
       dashboard GPU-memory settings (and give models <code>--slot-save-path</code>) to persist and
       reuse conversation KV across model swaps.
@@ -110,7 +112,7 @@
     <!-- Summary tiles: one card, hairline-separated. gap-px over the divider
          colour draws the rules — unlike divide-x it stays correct when the grid
          rewraps to 3 or 2 columns. -->
-    <div class="card p-0 mb-3 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-px bg-card-border-inner">
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-px bg-card-border-inner border-b border-card-border-inner">
       <div class="bg-surface p-3">
         <div class="text-xs text-txtsecondary">Tokens reused (confirmed)</div>
         <div class="text-2xl font-mono text-green-500">{fmtNum(counters?.cachedTokensSeen)}</div>
@@ -158,7 +160,7 @@
 
     <!-- Live slots: only meaningful once some model runs more than one slot -->
     {#if stats.slots?.length}
-      <div class="card p-3 mb-3">
+      <div class="p-3 border-b border-card-border-inner">
         <div class="text-sm font-semibold mb-2">
           Live slots
           <span class="text-txtsecondary font-normal text-xs">
@@ -199,7 +201,7 @@
     {/if}
 
     <!-- Saved files and the event log are one surface split by a divider. -->
-    <div class="card p-0 grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-card-border-inner">
+    <div class="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-card-border-inner">
       <!-- Persisted sessions + preamble caches: two tabs of one box -->
       <div class="p-3 min-h-0">
         <div class="flex items-center gap-1 mb-2 border-b border-border">

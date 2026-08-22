@@ -172,9 +172,13 @@
   // thead/tr is unreliable and its collapsed bottom border scrolls away with the
   // body regardless — so each th carries the offset, its own opaque background
   // (rows must not show through) and the rule as an inset shadow.
-  const thCls = "sticky top-0 z-20 bg-surface shadow-[inset_0_-1px_0_var(--color-card-border)]";
+  // h-10 p-0: one status-rail row tall, the same height as a sidebar item, so the
+  // header lines up with the chrome above it. p-0 is load-bearing - the global
+  // `table th` rule adds p-2 on top of whatever the cell's own content pads with,
+  // and the sort BUTTONS pad too, which is what stacked the header up to 48px.
+  const thCls = "sticky top-0 z-20 h-10 p-0 bg-surface shadow-[inset_0_-1px_0_var(--color-card-border)]";
   // Same typography as the sort buttons, minus the button: these columns don't sort.
-  const headCls = "py-2 text-micro font-medium uppercase tracking-wide text-txtsecondary";
+  const headCls = "text-micro font-medium uppercase tracking-wide text-txtsecondary";
 
   // `btn-primary-text` rather than a hardcoded white: the light theme's primary
   // is brown and wants the theme's own on-primary ink.
@@ -251,9 +255,9 @@
         </th>
         {#each SORTS as col (col.key)}
           <th class="font-normal {thCls} {col.num ? 'text-right' : ''} {col.key === 'name' ? '' : 'w-28'}">
-            <div class="flex items-center {col.num ? 'justify-end' : ''}">
+            <div class="flex items-center h-10 {col.num ? 'justify-end' : ''}">
               <button
-                class="inline-flex items-center gap-1 px-3 py-2 text-micro font-medium uppercase tracking-wide text-txtsecondary hover:text-txtmain"
+                class="inline-flex items-center gap-1 px-3 h-10 text-micro font-medium uppercase tracking-wide text-txtsecondary hover:text-txtmain"
                 onclick={() => onSort(col.key)}
                 use:tip={"Sort ascending → descending → off"}
               >

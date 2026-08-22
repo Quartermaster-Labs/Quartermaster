@@ -581,9 +581,13 @@
 </script>
 
 <div class="h-screen flex bg-background">
-  <!-- Side rail: icons only at rest; expands on hover. Same width hover or with the chat list open. -->
+  <!-- Side rail: icons only at rest; expands on hover. Same width hover or with the chat list open.
+       The slot reserves only the RESTING width - the rail itself is absolute inside it, so a
+       hover expansion draws over the tab like a curtain instead of reflowing it. Pinning the
+       chat list open still widens the slot: that one is a deliberate, persistent layout change. -->
+  <div class="relative shrink-0 z-40 {historyOpen ? 'w-44' : 'w-14'}">
   <nav
-    class="group/rail relative z-40 shrink-0 {historyOpen ? 'w-44' : 'w-14'} hover:w-44 transition-[width] duration-200 overflow-hidden flex flex-col gap-1 py-2 border-r border-border bg-surface"
+    class="group/rail absolute inset-y-0 left-0 {historyOpen ? 'w-44' : 'w-14'} hover:w-44 transition-[width] duration-200 overflow-hidden flex flex-col gap-1 py-2 border-r border-border bg-surface hover:shadow-xl hover:shadow-black/20"
   >
     <div class="relative pb-2 h-9 flex items-center font-mono text-xs uppercase tracking-[0.2em] text-primary leading-tight">
       <span class="w-14 shrink-0 flex items-center justify-center group-hover/rail:hidden {historyOpen ? 'hidden' : ''}">QM</span>
@@ -654,6 +658,7 @@
       </span>
     </button>
   </nav>
+  </div>
 
   <!-- Tab content -->
   <main class="flex-1 min-w-0 px-4 pb-4">

@@ -116,7 +116,7 @@ async function pollStatus(): Promise<void> {
     updateBusy.set(false);
     await notify(
       `Update to ${st.latest} installed`,
-      "Restart the Quartermaster service to finish — the new version is already in place.",
+      "Restart the Quartermaster service to finish; the new version is already in place.",
     );
     return;
   }

@@ -468,8 +468,8 @@
   // short phrase without the estimate becoming unaccountable.
   function estimateTitle(opt: FileOption): string {
     const e = estimates[opt.group];
-    if (!e) return "Sized from file size alone — reading this file's header…";
-    if (e.err) return `Could not read this file's header (${e.err}) — falling back to a size-only guess.`;
+    if (!e) return "Sized from file size alone; reading this file's header…";
+    if (e.err) return `Could not read this file's header (${e.err}); falling back to a size-only guess.`;
     const parts = [`≈${e.estVramGB.toFixed(1)} GB of your ${e.targetVramGB} GB target`];
     if (e.maxCtx) parts.push(`trained ceiling ${humanCtx(e.maxCtx)}`);
     if (e.offload) parts.push("part of the model runs on the CPU");
@@ -542,10 +542,10 @@
          browse and what you already have are one vocabulary. The narrowing is
          done hub-side (see searchFilters in internal/hub/hf.go) — a 30-row page
          filtered here would leave most tabs empty. -->
-    <div class="flex flex-wrap items-end gap-x-1 gap-y-2 px-3 border-b border-card-border shrink-0">
+    <div class="flex flex-wrap items-stretch gap-x-1 gap-y-2 px-3 min-h-10 border-b border-card-border shrink-0">
       {#each BROWSE_CATEGORIES as c (c.id)}
         <button
-          class="px-3 py-2 -mb-px border-b-2 font-mono text-xs uppercase tracking-wide transition-colors {kind === c.id
+          class="inline-flex items-center px-3 -mb-px border-b-2 font-mono text-xs uppercase tracking-wide transition-colors {kind === c.id
             ? 'border-primary text-txtmain'
             : 'border-transparent text-txtsecondary hover:text-txtmain'}"
           onclick={() => setKind(c.id)}
@@ -557,7 +557,7 @@
            rather than in the footer because it is an action, and the footer line
            that merely NAMED the folder was a path to read and retype. -->
       <button
-        class="icon-btn ml-auto mb-1 mr-1 shrink-0"
+        class="icon-btn ml-auto mr-1 shrink-0 self-center"
         onclick={openModelsFolder}
         use:tip={modelsRoot ? `Open ${modelsRoot}` : "Open the models folder"}
         aria-label="Open the models folder"
@@ -569,8 +569,10 @@
     <!-- Toolbar: one row, search left, controls right (mirrors the Models page).
          Every control is pinned to the SAME h-7 — .btn, .seg and a bare input
          each compute their own height from padding, which is how the refresh
-         button ended up shorter than the segmented controls beside it. -->
-    <div class="shrink-0 flex flex-wrap items-stretch gap-2 px-3 py-2">
+         button ended up shorter than the segmented controls beside it.
+         Same surface as the results below: the knobs and what they produce are
+         one panel, and a lighter strip only split it in two. -->
+    <div class="shrink-0 flex flex-wrap items-stretch gap-2 px-3 py-1.5 bg-surface">
       <!-- Fixed width, not flex-1: a search box that grows to fill a 2560px
            window is a huge empty field for a two-word query. Border and radius
            are spelled out because this app has no `.input` class — the
@@ -642,7 +644,7 @@
                 <button type="button" aria-pressed={!filters.trendy} onclick={() => setFilter("trendy", false)}>Off</button>
               </div>
               <span class="text-[0.6rem] text-txtsecondary">
-                Only repos published in the last {TRENDY_DAYS} days, ordered by the sort above — new releases people are already using. A repo
+                Only repos published in the last {TRENDY_DAYS} days, ordered by the sort above: new releases people are already using. A repo
                 stating no publish date is shown. Turn it off to search the whole hub.
               </span>
             </div>
@@ -797,7 +799,7 @@
                   <ExternalLink class="w-3.5 h-3.5" />
                 </a>
                 {#if selected.gated}
-                  <span class="status status--starting">gated — accept the license first</span>
+                  <span class="status status--starting">gated: accept the license first</span>
                 {/if}
               </div>
               <div class="text-[0.7rem] text-txtsecondary">{selected.author}</div>
@@ -839,7 +841,7 @@
                       <td class="py-2 font-mono text-txtmain">
                         <span class="break-all">{q.label}</span>
                         {#if q.projector}
-                          <span class="ml-1 rounded bg-secondary px-1 py-0.5 text-micro font-medium uppercase tracking-wide text-txtsecondary" use:tip={"Vision/audio projector — download it alongside the model's weights, not instead of them"}>
+                          <span class="ml-1 rounded bg-secondary px-1 py-0.5 text-micro font-medium uppercase tracking-wide text-txtsecondary" use:tip={"Vision/audio projector: download it alongside the model's weights, not instead of them"}>
                             projector
                           </span>
                         {/if}
@@ -849,7 +851,7 @@
                         {#if q.local}
                           <span
                             class="ml-1 inline-flex items-center gap-0.5 rounded bg-success/15 px-1 py-0.5 text-micro font-medium uppercase tracking-wide text-success"
-                            use:tip={"Already in your models folder — nothing to download"}
+                            use:tip={"Already in your models folder, nothing to download"}
                           >
                             <Check class="w-2.5 h-2.5" /> downloaded
                           </span>
@@ -869,7 +871,7 @@
                           use:tip={st === "local"
                             ? "Already in your models folder"
                             : st === "downloading"
-                              ? "This file is downloading — see the Downloads menu"
+                              ? "This file is downloading; see the Downloads menu"
                               : busyRepo
                                 ? `Queue ${q.label} behind this repo's running download`
                                 : `Download ${q.label}`}
@@ -892,7 +894,7 @@
                   Context figures come from each file's GGUF header, read off the hub without downloading it, planned against your
                   {targetVramGB || "?"} GB VRAM target. A row still showing a plain fit verdict is one whose header hasn't been read (hover it for why).
                 {:else}
-                  This estimate is from file size against your {targetVramGB || "?"} GB VRAM target — a hint, not the sizer. The model's own config page
+                  This estimate is from file size against your {targetVramGB || "?"} GB VRAM target: a hint, not the sizer. The model's own config page
                   has the real numbers once it is downloaded.
                 {/if}
               </p>
@@ -917,7 +919,7 @@
     {#if $hubJobs.some((j) => j.phase === "done")}
       <div class="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1 font-mono text-[0.6rem] text-txtsecondary">
         <span class="inline-flex items-center gap-1 text-success">
-          <Check class="w-3 h-3" /> Finished downloads are in the config already — check the Models page.
+          <Check class="w-3 h-3" /> Finished downloads are in the config already; check the Models page.
         </span>
       </div>
     {/if}

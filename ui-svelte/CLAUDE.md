@@ -141,6 +141,12 @@ summarized away.
   utility** — a `.collapse` of our own inherited `visibility: collapse` and hid the chat boxes.
   Boolean settings use the `Toggle.svelte` switch (`size="sm"` in dense config grids), not a raw
   `<input type="checkbox">`; tick boxes are only for multi-select lists (pick N of M).
+- **`h-10` is the app's row unit.** A sidebar item, the status rail and every page's first
+  toolbar row are all 40px, so the chrome and the page content share one horizontal grid. Give a
+  toolbar `min-h-10` (not `h-10`) wherever its contents can wrap, and `items-stretch` on a tab bar
+  so each tab's underline sits on the ROW's bottom edge instead of its own text box's. Table headers
+  pay for this twice: the global `table th` rule adds `p-2` on top of whatever the cell's content
+  pads with, so a header whose cells hold padded buttons needs `p-0` on the `th`.
 - **The native window is a feature test, never a build flag.** `src/lib/native.ts` reports
   `isNative` from the presence of the `qm*` functions `internal/nativewin` injects before it
   navigates. The same bundle serves the browser and `quartermaster -app`; nothing is conditionally
@@ -154,7 +160,25 @@ summarized away.
   does not scale `vh`/`vw`**: at scale 1.25 a `100vh` box measures 1.25× the viewport (measured: 561
   → 701). Every viewport unit in the app is therefore written
   `calc(90vh/var(--qm-scale))`, never bare `90vh`. `position: fixed` and `inset-0` need no
-  correction — they already scale correctly.
+  correction — they already scale correctly. A coordinate you *compute* for a fixed element does,
+  though; see the next bullet.
+- **A control that changes the zoom must commit on release, not on input.** `UIScaleControl`'s
+  slider resizes itself: applying every intermediate `input` value re-lays-out its own track and
+  thumb under the cursor mid-drag, so the pointer lands on a different fraction of the track than a
+  frame earlier, which feeds the next value — the slider fights the hand and runs to an end stop.
+  It writes the store from `change` (pointer release / keyboard commit) and keeps a local `preview`
+  for the `%` label, leaving the `<input>` uncontrolled during the drag so the browser moves the
+  thumb natively. Same rule for anything else that ever drives `--qm-scale`.
+- **Anything anchored to a `getBoundingClientRect()` must divide by the zoom.** Rects, `innerWidth`
+  /`innerHeight` and `clientX`/`clientY` are VISUAL pixels (they already include the zoom), but a
+  `left`/`top` written into a style is in the element's LOCAL pixels, which the browser then
+  multiplies by that same zoom again. `el.style.left = rect.left + "px"` therefore lands at
+  `rect.left * scale` — right at 100%, and drifting further from the target the further it sits from
+  the top-left corner. That is what untethered every tooltip and popup at any other interface size.
+  `lib/uiZoom.ts` (`cssZoom`, `toLocalPx`) is the correction; `lib/tooltip.ts`, `Select`,
+  `MetadataTooltip` and the chat reply anchors all go through it. Ratio math like
+  `(e.clientX - r.left) / r.width` is already zoom-safe — both operands are visual — and needs none
+  of this.
 - **`h-screen` is shortened, not threaded.** The app measures full-height roots in `h-screen` in six
   places. `index.css` redefines it as `100vh / var(--qm-scale)`, and again under `[data-native]` with the
   title bar subtracted **after** the division — the bar is inside the zoomed document so its `2rem`

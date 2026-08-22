@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { matchesCapabilities, groupModels } from "./modelUtils";
+import { matchesCapabilities, groupModels, modelWeightGB, largestModel } from "./modelUtils";
 import type { Model } from "./types";
 
 function makeModel(overrides: Partial<Model> = {}): Model {
@@ -109,5 +109,41 @@ describe("groupModels", () => {
     const result = groupModels(models, []);
     expect(result.localMatching).toHaveLength(0);
     expect(result.local).toHaveLength(3);
+  });
+});
+
+describe("modelWeightGB", () => {
+  it("prefers the sizer's VRAM estimate over the file size", () => {
+    expect(modelWeightGB(makeModel({ estVramGB: 18, sizeGB: 22 }))).toBe(18);
+  });
+  it("falls back to the file size, then to zero", () => {
+    expect(modelWeightGB(makeModel({ sizeGB: 4.5 }))).toBe(4.5);
+    expect(modelWeightGB(makeModel())).toBe(0);
+  });
+});
+
+describe("largestModel", () => {
+  it("names the heaviest resident model", () => {
+    const big = makeModel({ id: "big", estVramGB: 18 });
+    const small = makeModel({ id: "small", estVramGB: 1.2 });
+    expect(largestModel([small, big])?.id).toBe("big");
+  });
+  // Otherwise the rail would rename itself whenever the server reordered its
+  // model list, which it does on every reload.
+  it("breaks ties on id so the pick is stable", () => {
+    const a = makeModel({ id: "aaa", estVramGB: 8 });
+    const b = makeModel({ id: "bbb", estVramGB: 8 });
+    expect(largestModel([b, a])?.id).toBe("aaa");
+    expect(largestModel([a, b])?.id).toBe("aaa");
+  });
+  it("returns undefined for an empty list", () => {
+    expect(largestModel([])).toBeUndefined();
+  });
+  it("does not mutate the caller's array", () => {
+    const a = makeModel({ id: "aaa", estVramGB: 1 });
+    const b = makeModel({ id: "bbb", estVramGB: 9 });
+    const list = [a, b];
+    largestModel(list);
+    expect(list[0].id).toBe("aaa");
   });
 });

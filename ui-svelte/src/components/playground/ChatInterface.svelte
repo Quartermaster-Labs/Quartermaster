@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { cssZoom } from "../../lib/uiZoom";
   import { tip as tooltip } from "../../lib/tooltip";
   import { get } from "svelte/store";
   import { models, backendMetrics, loadModel } from "../../stores/api";
@@ -264,7 +265,10 @@
     const range = sel.getRangeAt(0);
     const rects = range.getClientRects();
     const rect = rects[rects.length - 1] ?? range.getBoundingClientRect();
-    selReply = { text, x: rect.right, y: rect.bottom };
+    // The button is `fixed`, so its coordinates are local pixels that the
+    // interface zoom scales again - convert out of the rect's visual ones.
+    const z = cssZoom(document.body);
+    selReply = { text, x: rect.right / z, y: rect.bottom / z };
   }
   function replyToSelection() {
     if (!selReply) return;
@@ -1202,9 +1206,9 @@
     if (moved > 0) {
       showToast(`Compacted ${moved} message${moved === 1 ? "" : "s"}`);
     } else if (moved === 0) {
-      showToast(`Nothing to compact — the last ${KEEP_RECENT} messages always stay verbatim`);
+      showToast(`Nothing to compact; the last ${KEEP_RECENT} messages always stay verbatim`);
     } else {
-      showToast(`Compaction failed — ${compactError || "the conversation is unchanged"}`);
+      showToast(`Compaction failed: ${compactError || "the conversation is unchanged"}`);
     }
   }
 
@@ -1257,7 +1261,7 @@
   // Read one document into the text the model will actually see.
   async function extractDoc(file: File): Promise<{ text: string; note?: string }> {
     if (file.size > MAX_DOC_BYTES) {
-      throw new Error(`"${file.name}" is ${(file.size / 1024 / 1024).toFixed(0)}MB — too large to read.`);
+      throw new Error(`"${file.name}" is ${(file.size / 1024 / 1024).toFixed(0)}MB, too large to read.`);
     }
     const kind = classifyAttachment(file);
     if (kind === "pdf") {
@@ -1270,7 +1274,7 @@
       // ASR backend, which shares the one GPU pool with the chat model.
       const asr = pickTranscribeModel($models);
       if (!asr) throw new Error("No transcription model is installed, so audio can't be attached.");
-      if (asr.state !== "ready") showToast(`Loading ${asr.name} to transcribe — this swaps out the chat model`);
+      if (asr.state !== "ready") showToast(`Loading ${asr.name} to transcribe; this swaps out the chat model`);
       const res = await transcribeAudio(asr.id, file);
       const text = (res.text ?? "").trim();
       if (!text) throw new Error(`Nothing was transcribed from "${file.name}".`);
@@ -1333,7 +1337,7 @@
     }
     if (docs.length > 0) await processDocFiles(docs);
     if (rejected.length > 0 && !imageError) {
-      imageError = `Can't read ${rejected.join(", ")} — unsupported file type.`;
+      imageError = `Can't read ${rejected.join(", ")}: unsupported file type.`;
     }
   }
 
@@ -1531,7 +1535,7 @@
         <div class="flex items-center justify-between gap-2 text-xs uppercase tracking-wide text-txtsecondary">
           <span class="flex items-center gap-1.5"><Brain class="w-3.5 h-3.5" /> Reasoning {@render tip(
             effortLadder.length > 0
-              ? "How hard this model thinks before answering. The levels come from the model's own chat template. Changing it rewrites the top of the system prompt, so it re-reads the conversation — pick one and stay on it. Thinking Budget does not apply at these levels."
+              ? "How hard this model thinks before answering. The levels come from the model's own chat template. Changing it rewrites the top of the system prompt, so it re-reads the conversation, so pick one and stay on it. Thinking Budget does not apply at these levels."
               : "Let the model think before answering (for reasoning-capable models). This model's template has no effort levels, so it is on or off.",
           )}</span>
           <Select
@@ -1769,7 +1773,7 @@
               ? visionTwin
                 ? "Attach a file or image (an image loads the vision projector)"
                 : "Attach a file or image"
-              : "Attach a file (text, PDF, Word, audio) — this model can't read images"}
+              : "Attach a file (text, PDF, Word, audio); this model can't read images"}
         >
           <Paperclip class="w-[1.125rem] h-[1.125rem]" />
         </button>
