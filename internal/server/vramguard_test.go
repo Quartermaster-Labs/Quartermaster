@@ -387,3 +387,64 @@ func TestVramGuard_SheddableSkipsStarting(t *testing.T) {
 		t.Fatalf("shed %v, want %v (loading must not be interrupted)", got, want)
 	}
 }
+
+// The thrash regression. A resident model sized just under the budget, with a
+// browser tab holding a fraction of a GB above the idle floor: the shed ceiling
+// must still clear it. Charging OomGuardReserveGB here (as the admission ceiling
+// does) put 21.8GB over a 21.6GB ceiling, the watchdog unloaded the model, and
+// the spawn guard - which sizes against live free VRAM - reloaded it unchanged
+// on the next request, every couple of minutes, forever.
+func TestVramGuard_NoShedWhenReserveIsTheOnlyPressure(t *testing.T) {
+	g := newGuard(t, map[string]float64{"llm": 21.8}, nil, nil)
+	cfg := g.s.config()
+	cfg.VramBudgetGB = 22.8
+	g.s.cfg.Store(&cfg)
+	pressure(g, 205) // 0.2GB above the idle floor
+
+	if got, _ := g.ceilingGB(); got > 21.8 {
+		t.Fatalf("admission ceiling %v, want the reserve still charged there", got)
+	}
+	if got, _ := g.shedCeilingGB(); got < 22.5 {
+		t.Fatalf("shed ceiling %v, want ~22.6 (excess only, no reserve)", got)
+	}
+	g.watchdog()
+	if !g.overSince.IsZero() {
+		t.Fatal("watchdog armed on 0.2GB of foreign VRAM; the model fits")
+	}
+}
+
+// Having shed once, the guard sits out the cooldown even while the reading still
+// says it is over - the model it killed is reloaded by the next request and
+// would otherwise be killed again on the very next sample.
+func TestVramGuard_CooldownAfterShed(t *testing.T) {
+	g := newGuard(t, map[string]float64{"a": 10}, nil, nil)
+	g.settings.OomGuardGraceSec = 0
+	pressure(g, 20480)
+	g.watchdog()
+	g.watchdog() // sheds
+	if g.lastShed.IsZero() {
+		t.Fatal("shed did not stamp lastShed")
+	}
+	before := g.s.local.(*guardRouter).unloadCalls.Load()
+	g.watchdog()
+	g.watchdog()
+	if n := g.s.local.(*guardRouter).unloadCalls.Load(); n != before {
+		t.Fatalf("shed again during the cooldown (%d unloads, want %d)", n, before)
+	}
+}
+
+// The slack absorbs estimate noise, but a real overshoot still sheds.
+func TestVramGuard_ShedSlackAbsorbsNoiseOnly(t *testing.T) {
+	g := newGuard(t, map[string]float64{"a": 10.3}, nil, nil)
+	pressure(g, 14336) // 14GB taken: shed ceiling 24-14 = 10GB, resident 10.3
+	g.watchdog()
+	if !g.overSince.IsZero() {
+		t.Fatal("armed on a 0.3GB overshoot, inside the slack")
+	}
+	g2 := newGuard(t, map[string]float64{"a": 11.5}, nil, nil)
+	pressure(g2, 14336) // same ceiling, 1.5GB over: past the slack
+	g2.watchdog()
+	if g2.overSince.IsZero() {
+		t.Fatal("did not arm on a 1.5GB overshoot")
+	}
+}

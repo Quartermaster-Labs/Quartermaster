@@ -61,6 +61,10 @@ type vramGuard struct {
 	overSince time.Time
 	// untrusted suppresses repeat logging of the "can't attribute VRAM" state.
 	untrusted bool
+	// lastShed is when the watchdog last unloaded something; zero until it has.
+	// It gates the cooldown that keeps a shed from becoming a loop. Same
+	// goroutine as overSince.
+	lastShed time.Time
 
 	refusals vramRefusals
 }
@@ -108,6 +112,43 @@ func (g *vramGuard) ceilingGB() (float64, bool) {
 		gb = 0
 	}
 	return gb, true
+}
+
+// shedCeilingGB is the watchdog's ceiling, and it is deliberately LOOSER than
+// the admission ceiling above: it charges the foreign excess but NOT
+// OomGuardReserveGB.
+//
+// The reserve is headroom for admitting a NEW model into whatever is left of the
+// card. Charging it here too made the two halves disagree about the same
+// resident model: with a 22.8GB budget and a 21.8GB resident, the first 0.2GB a
+// browser tab took dropped the shed ceiling to 21.6GB, the watchdog unloaded the
+// model, and the spawn guard - which sizes against live FREE VRAM, where 22.8GB
+// was sitting available - re-admitted it unchanged on the next request. The
+// model unloaded and reloaded every couple of minutes forever, which reads to a
+// user exactly like a too-short ttl. Anything sized within OomGuardReserveGB of
+// the budget was condemned to that loop.
+//
+// Worse, the reserve landed as a step, not a ramp: below the floor the ceiling
+// was the full budget, one MiB above it the budget minus a whole extra GB. A
+// ceiling that decides whether to KILL a running model has to be continuous in
+// the pressure it is reacting to, or a trivial blip evicts a model that fits.
+func (g *vramGuard) shedCeilingGB() (float64, bool) {
+	totalMB := g.totalMB.Load()
+	if !g.trusted.Load() || totalMB <= 0 {
+		return 0, false
+	}
+	budget := g.s.config().VramBudgetGB
+	if budget <= 0 {
+		budget = float64(totalMB) / 1024.0
+	}
+	excess := float64(g.foreignMB.Load()-g.foreignFloorMB.Load()) / 1024.0
+	if excess <= 0 {
+		return budget, true
+	}
+	if gb := budget - excess; gb > 0 {
+		return gb, true
+	}
+	return 0, true
 }
 
 // snapshot reports the current foreign tally, its idle baseline, and the card
@@ -224,14 +265,24 @@ func (g *vramGuard) watchdog() {
 	if g.settings.OomGuardEvict != nil && !*g.settings.OomGuardEvict {
 		return
 	}
-	ceiling, ok := g.ceilingGB()
+	ceiling, ok := g.shedCeilingGB()
 	if !ok {
 		g.overSince = time.Time{}
 		return
 	}
-	victims, residentGB := g.sheddable(ceiling)
+	// A model shed here is reloaded by the very next request, so a shed that does
+	// not clear real pressure is a pure loss: the user pays a full reload (and a
+	// KV cache restore) for nothing. Two guards against that. The slack keeps a
+	// resident set that is merely a rounding error over the ceiling - estVramGB is
+	// an estimate, not a measurement - from being killed on the difference. The
+	// cooldown bounds the damage if the arithmetic is wrong anyway: whatever we
+	// shed, we do not shed again until the pressure has had time to be real.
+	victims, residentGB := g.sheddable(ceiling + vramGuardShedSlackGB)
 	if len(victims) == 0 {
 		g.overSince = time.Time{}
+		return
+	}
+	if !g.lastShed.IsZero() && time.Since(g.lastShed) < g.cooldown() {
 		return
 	}
 	if g.overSince.IsZero() {
@@ -244,6 +295,7 @@ func (g *vramGuard) watchdog() {
 		return
 	}
 	g.overSince = time.Time{}
+	g.lastShed = time.Now()
 
 	g.s.proxylog.Warnf("vramguard: unloading %v to free VRAM - resident %.1fGB over a %.1fGB live ceiling (%.1fGB held by other GPU apps)",
 		victims, residentGB, ceiling, float64(g.foreignMB.Load())/1024.0)
@@ -313,6 +365,25 @@ func (g *vramGuard) sheddable(ceilingGB float64) ([]string, float64) {
 		victims = append(victims, c.id)
 	}
 	return victims, total
+}
+
+// vramGuardShedSlackGB is how far the resident set may exceed the shed ceiling
+// before the watchdog acts. estVramGB is a planning estimate with its own pads,
+// so an overshoot this small is noise, and shedding on noise costs a reload to
+// reclaim VRAM nothing was waiting for.
+const vramGuardShedSlackGB = 0.5
+
+// cooldown is the quiet period after a shed. A model that came back is charged
+// against the ceiling again immediately, so without this the guard can shed the
+// same model on the next sample, forever. Two grace periods, floored at a
+// minute: long enough that a model reloaded by a waiting request gets to serve
+// it, short enough that a game arriving mid-session is still handled promptly.
+func (g *vramGuard) cooldown() time.Duration {
+	d := 2 * time.Duration(g.settings.OomGuardGraceSec) * time.Second
+	if d < time.Minute {
+		d = time.Minute
+	}
+	return d
 }
 
 // vramGuardUnloadTimeout bounds the graceful stop of a model the watchdog sheds.
