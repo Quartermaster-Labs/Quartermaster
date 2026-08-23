@@ -423,6 +423,11 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 				vp.CheckpointMinStep = v.CheckpointMinStep
 			}
 			vp.Variant = v
+			// The vision variant IS the twin, so its pin outranks the model-wide
+			// one; blank keeps whatever Default set.
+			if p := strings.ToLower(strings.TrimSpace(v.Mmproj)); p != "" {
+				vp.MmprojPin = p
+			}
 		}
 		// A "ram" pin is applied here rather than in the sizing loop so the
 		// variant re-charge above (which rebuilds Overhead from scratch for a
@@ -431,7 +436,11 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			vp.Overhead -= mmprojOh
 			vp.CpuMmproj = true
 		}
-		profiles = append(profiles, vp)
+		// "none" from the vision variant lands here rather than at the gate above,
+		// which only sees the model-wide value; either way no twin is emitted.
+		if vp.MmprojPin != "none" {
+			profiles = append(profiles, vp)
+		}
 	}
 
 	// Charge the GPU compute buffer (logits + activations + CUDA runtime) per

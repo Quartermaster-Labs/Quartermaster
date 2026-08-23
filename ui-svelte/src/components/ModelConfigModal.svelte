@@ -669,6 +669,14 @@
     { value: "ram", label: "in RAM (slow images, no VRAM)" },
     { value: "none", label: "none (no vision twin)" },
   ];
+  // The variant copy inherits rather than autos: blank on the vision tab keeps
+  // whatever Default picked, so an untouched variant emits the same twin.
+  const MMPROJ_SEL_INHERIT: SelectOption[] = [
+    { value: "", label: "inherit (Default's pick)" },
+    { value: "gpu", label: "on GPU (fast images)" },
+    { value: "ram", label: "in RAM (slow images, no VRAM)" },
+    { value: "none", label: "none (no vision twin)" },
+  ];
   const ROPE_SEL_AUTO = optList(["", "none", "linear", "yarn"], "auto");
   const ROPE_SEL_INHERIT = optList(["", "none", "linear", "yarn"], "inherit");
   const SPLIT_SEL_AUTO = optList(["", "none", "layer", "row", "tensor"], "auto");
@@ -2457,6 +2465,15 @@
               </div>
             </label>
 
+            {#if sv.name === "vision"}
+              <label class="flex flex-col gap-1 text-sm col-span-2">
+                <span class="text-txtsecondary flex items-center gap-1">
+                  Image projector
+                  {@render hint("Where this twin's CLIP projector lives. Inherit uses the Default tab's pick (auto = on the GPU while it costs neither GPU layers nor a quarter of the context window). On GPU pins it there - fastest image encode, paid for in context/offload on every request. In RAM (--no-mmproj-offload) frees that VRAM and encodes on the CPU: seconds per image, token speed untouched. None emits no vision twin at all.")}
+                </span>
+                <Select bind:value={sv.mmproj} options={MMPROJ_SEL_INHERIT} ariaLabel="Image projector placement" />
+              </label>
+            {/if}
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-txtsecondary">KV cache K</span>
               <Select bind:value={sv.kvK} options={KV_SEL_INHERIT} ariaLabel="KV cache K" />

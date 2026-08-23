@@ -298,6 +298,8 @@ export interface ModelVariant {
   parallel?: number;
   extraArgs?: string;
   chatTemplateFile?: string; // .jinja path; "" => inherit model-wide
+  // Only read on the reserved "vision" variant: "" (inherit) | "gpu" | "ram" | "none".
+  mmproj?: string;
   // Sampler / speculative sub-knobs (0/empty => inherit model-wide).
   dryMultiplier?: number;
   dryBase?: number;

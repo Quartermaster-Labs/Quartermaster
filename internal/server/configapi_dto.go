@@ -45,6 +45,9 @@ type variantDTO struct {
 	Parallel         int    `json:"parallel"`
 	ExtraArgs        string `json:"extraArgs"`
 	ChatTemplateFile string `json:"chatTemplateFile"`
+	// Mmproj is meaningful only on the reserved "vision" variant; see
+	// autogen.VariantSpec.Mmproj.
+	Mmproj string `json:"mmproj"`
 	// Sampler / speculative sub-knobs (Dry on/off is the *bool field above).
 	DryMultiplier    float64 `json:"dryMultiplier"`
 	DryBase          float64 `json:"dryBase"`
@@ -257,8 +260,8 @@ func variantToDTO(v autogen.VariantSpec) variantDTO {
 		KvInRam: v.KvInRam, CpuOffload: v.CpuOffload,
 		FlashAttn: v.FlashAttn, Mmap: v.Mmap, Mlock: v.Mlock,
 		Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
-		ChatTemplateFile: v.ChatTemplateFile,
-		DryMultiplier:    v.DryMultiplier, DryBase: v.DryBase, DryAllowedLength: v.DryAllowedLength,
+		ChatTemplateFile: v.ChatTemplateFile, Mmproj: v.Mmproj,
+		DryMultiplier: v.DryMultiplier, DryBase: v.DryBase, DryAllowedLength: v.DryAllowedLength,
 		Temp: v.Temp, TopK: v.TopK, TopP: v.TopP, MinP: v.MinP, PresencePenalty: v.PresencePenalty,
 		SpecDraftNMax: v.SpecDraftNMax, SpecDefault: v.SpecDefault,
 		SpecNgramSizeN: v.SpecNgramSizeN, SpecNgramSizeM: v.SpecNgramSizeM, SpecNgramMinHits: v.SpecNgramMinHits,
@@ -322,8 +325,8 @@ func toVariantSpec(v variantDTO) autogen.VariantSpec {
 		KvInRam: v.KvInRam, CpuOffload: v.CpuOffload,
 		FlashAttn: v.FlashAttn, Mmap: v.Mmap, Mlock: v.Mlock,
 		Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
-		ChatTemplateFile: v.ChatTemplateFile,
-		DryMultiplier:    v.DryMultiplier, DryBase: v.DryBase, DryAllowedLength: v.DryAllowedLength,
+		ChatTemplateFile: v.ChatTemplateFile, Mmproj: v.Mmproj,
+		DryMultiplier: v.DryMultiplier, DryBase: v.DryBase, DryAllowedLength: v.DryAllowedLength,
 		Temp: v.Temp, TopK: v.TopK, TopP: v.TopP, MinP: v.MinP, PresencePenalty: v.PresencePenalty,
 		SpecDraftNMax: v.SpecDraftNMax, SpecDefault: v.SpecDefault,
 		SpecNgramSizeN: v.SpecNgramSizeN, SpecNgramSizeM: v.SpecNgramSizeM, SpecNgramMinHits: v.SpecNgramMinHits,

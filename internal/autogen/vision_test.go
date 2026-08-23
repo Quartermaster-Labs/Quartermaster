@@ -115,3 +115,45 @@ func TestAutogen_Generate_MmprojPin(t *testing.T) {
 		t.Error(`mmproj "none": expected no --mmproj flag anywhere`)
 	}
 }
+
+// The reserved "vision" variant is the only variant whose profile carries a
+// projector, so its pin has to beat the model-wide one - including "none",
+// which is checked past the twin-construction gate.
+func TestAutogen_Generate_MmprojPin_VisionVariant(t *testing.T) {
+	if _, err := os.Stat(realModelsRoot); err != nil {
+		t.Skipf("models root %s absent", realModelsRoot)
+	}
+	gen := func(model, variant string) string {
+		t.Helper()
+		gf := GenerateFile{
+			Settings: Settings{ModelsRoot: realModelsRoot},
+			Overrides: []Override{{
+				Match:    "*",
+				Mmproj:   model,
+				Variants: []VariantSpec{{Name: "vision", Mmproj: variant}},
+			}},
+		}
+		gf.Settings.applyDefaults()
+		out, err := Generate(gf, "T")
+		if err != nil {
+			t.Fatalf("generate(%q/%q): %v", model, variant, err)
+		}
+		return out
+	}
+
+	if auto := gen("", ""); !strings.Contains(auto, "-vision\":") {
+		t.Skip("no model in the tree ships an mmproj; nothing to pin")
+	}
+	if got := gen("gpu", "ram"); !strings.Contains(got, "--no-mmproj-offload") {
+		t.Error(`variant "ram" over model "gpu": expected --no-mmproj-offload`)
+	}
+	if got := gen("ram", "gpu"); strings.Contains(got, "--no-mmproj-offload") {
+		t.Error(`variant "gpu" over model "ram": expected the projector back in VRAM`)
+	}
+	// Checked on the flag, not the id: an image-class model treats a variant
+	// named "vision" as an ordinary image variant, so "<name>-vision" still
+	// appears for those - but only a llama twin ever emits --mmproj.
+	if got := gen("", "none"); strings.Contains(got, "--mmproj ") {
+		t.Error(`variant "none": expected no projector loaded anywhere`)
+	}
+}

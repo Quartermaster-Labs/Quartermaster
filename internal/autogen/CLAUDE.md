@@ -78,7 +78,12 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   flag, so all three price the same launch. `Override.Mmproj` pins the decision per model —
   `gpu` / `ram` skip the dual sizing, `none` emits no twin at all (unlike an unlisted twin,
   which still builds). Surfaced as the "Image projector" dropdown on the model config modal's
-  Default tab, shown only when the model has a projector.
+  Default tab, shown only when the model has a projector. `VariantSpec.Mmproj` repeats the knob
+  on the reserved `vision` variant and OUTRANKS the model-wide pin there (blank = inherit); it
+  is deliberately absent from every other variant tab, because no other variant's profile loads
+  a projector at all. Careful: an image-class model routes through `emitImageModel` before the
+  twin gate, so a variant literally named `vision` is an ordinary image variant for those —
+  assert on `--mmproj`, not on the `-vision` id.
 - `GetLoadPlan` (`plan.go`) — `-ngl`/`--n-cpu-moe` from a VRAM budget; MoE path uses a 0.5
   PCIe-thrash crossover, falling back to naive `-ngl` (`densePlacement`) past it.
 - `Generate` (`generate.go`) — discover → per-model `emitModel` → `emitGroupsAndListeners`.

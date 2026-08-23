@@ -724,6 +724,12 @@ type VariantSpec struct {
 	ExtraArgs  string `yaml:"extraArgs"`
 	// ChatTemplateFile mirrors Override; empty => inherit the model-wide value.
 	ChatTemplateFile string `yaml:"chatTemplateFile"`
+	// Mmproj pins the image projector's placement, but ONLY on the reserved
+	// "vision" variant - it is the one variant that tunes a profile carrying an
+	// mmproj at all. Same vocabulary as Override.Mmproj ("gpu"/"ram"/"none");
+	// empty inherits the model-wide value, so an untouched variant changes
+	// nothing. Ignored on every other variant, whose profile loads no projector.
+	Mmproj string `yaml:"mmproj"`
 	// Sampler / speculative sub-knobs mirroring Override; 0/empty => inherit the
 	// model-wide value. (Dry on/off is the *bool field above.)
 	DryMultiplier    float64 `yaml:"dryMultiplier"`

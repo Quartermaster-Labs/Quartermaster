@@ -149,7 +149,10 @@ const hashCacheSuffix = ".modelhash"
 //	     tower on the GPU displaced text layers or cost more than a quarter of
 //	     the context window. Changes both the emitted argv and the twin's
 //	     estVram/ctx, so every existing config has to regenerate.
-const genVersion = "v54"
+//	v55: the reserved "vision" variant carries its own mmproj placement, so a
+//	     pin set there (gpu/ram/none) now decides the twin's argv - and its
+//	     VRAM - instead of the model-wide value alone.
+const genVersion = "v55"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the
