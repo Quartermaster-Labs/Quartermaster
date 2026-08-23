@@ -1412,14 +1412,14 @@
     <!-- Messages area — scrolls across the full width; content centered within. -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="flex-1 min-h-0 overflow-y-auto [overflow-anchor:none] pretty-scroll scroll-fade-b mb-4"
+      class="flex-1 min-h-0 overflow-y-auto [overflow-anchor:none] pretty-scroll scroll-fade-b mb-2"
       bind:this={messagesContainer}
       onscroll={handleMessagesScroll}
       onmousedown={() => (selReply = null)}
       onmouseup={onSelection}
       use:scrollFade
     >
-      <div class="w-full max-w-3xl mx-auto px-2 pt-4 pb-6 {messages.length === 0 ? 'h-full' : ''}" bind:this={messagesInner}>
+      <div class="w-full max-w-3xl mx-auto px-2 pt-4 pb-2 {messages.length === 0 ? 'h-full' : ''}" bind:this={messagesInner}>
       {#if messages.length === 0}
         <div class="h-full flex flex-col items-center justify-center gap-3 text-txtsecondary">
           <MessagesSquare class="w-10 h-10 opacity-40" strokeWidth={1.5} />

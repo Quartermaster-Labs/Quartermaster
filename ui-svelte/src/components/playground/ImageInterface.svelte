@@ -883,8 +883,8 @@
          width-constrained and centered inside, matching the chat tab. -->
     <div class="flex-1 flex flex-col min-w-0 min-h-0 w-full">
       <!-- Thread -->
-      <div bind:this={threadEl} class="flex-1 min-h-0 overflow-y-auto pretty-scroll scroll-fade-b mb-4" use:scrollFade>
-        <div class="w-full max-w-3xl mx-auto px-2 pt-4 flex flex-col gap-4 pb-8 {turns.length === 0 && !isGenerating ? 'h-full' : ''}">
+      <div bind:this={threadEl} class="flex-1 min-h-0 overflow-y-auto pretty-scroll scroll-fade-b mb-2" use:scrollFade>
+        <div class="w-full max-w-3xl mx-auto px-2 pt-4 flex flex-col gap-4 pb-2 {turns.length === 0 && !isGenerating ? 'h-full' : ''}">
           {#if turns.length === 0 && !isGenerating}
             <div class="h-full flex flex-col items-center justify-center gap-3 text-txtsecondary">
               <ImageIcon class="w-10 h-10 opacity-40" strokeWidth={1.5} />
