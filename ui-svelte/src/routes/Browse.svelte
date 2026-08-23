@@ -865,24 +865,31 @@
             {#if !repoFiles.length}
               <div class="text-xs text-txtsecondary">This repo carries no GGUF files.</div>
             {:else}
-              <table class="w-full text-xs">
+              <!-- data-table: the grid-free variant (index.css). This table had
+                   the full cell grid AND zebra banding AND per-row borders -
+                   three separators doing one job. Header type matches the rest
+                   of the app's tables: text-micro in the UI face, not an ad-hoc
+                   0.6rem mono. -->
+              <table class="data-table w-full text-xs">
                 <thead>
-                  <tr class="text-txtsecondary text-left">
-                    <th class="font-mono text-[0.6rem] uppercase tracking-wide pb-1.5">File</th>
-                    <th class="font-mono text-[0.6rem] uppercase tracking-wide pb-1.5 whitespace-nowrap">Size</th>
-                    <th class="font-mono text-[0.6rem] uppercase tracking-wide pb-1.5">Estimate</th>
-                    <th></th>
+                  <tr class="rule text-txtsecondary text-left">
+                    <th class="text-micro font-medium uppercase tracking-wide pb-1.5 pl-0">File</th>
+                    <th class="text-micro font-medium uppercase tracking-wide pb-1.5 px-3 whitespace-nowrap">Size</th>
+                    <th class="text-micro font-medium uppercase tracking-wide pb-1.5 px-3">Estimate</th>
+                    <th class="pr-0"></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {#each repoFiles as q, i (q.group)}
+                  {#each repoFiles as q (q.group)}
                     {@const v = verdictFor(q.sizeBytes, targetVramGB)}
                     {@const st = rowState(q)}
-                    <!-- Banded rows: a filename now runs the full width of the
-                         cell and wraps, so the row borders alone stopped being
-                         enough to tell one file's line from the next's. -->
-                    <tr class="border-t border-card-border-inner hover:bg-secondary/30 transition-colors {i % 2 ? 'bg-secondary/15' : ''}">
-                      <td class="py-2 font-mono text-txtmain">
+                    <!-- The rule rides the CELLS (the `rule` class), not the
+                         <tr>: the global table rule sets border-separate, under
+                         which a border on a table ROW is never painted at all -
+                         which is why the old border-t here drew nothing and the
+                         zebra banding had to stand in for it. -->
+                    <tr class="rule hover:bg-secondary/30 transition-colors">
+                      <td class="py-2.5 pl-0 pr-3 align-top font-mono text-txtmain">
                         <span class="break-all">{q.label}</span>
                         {#if q.projector}
                           <span class="ml-1 rounded bg-secondary px-1 py-0.5 text-micro font-medium uppercase tracking-wide text-txtsecondary" use:tip={"Vision/audio projector: download it alongside the model's weights, not instead of them"}>
@@ -908,14 +915,14 @@
                           </span>
                         {/if}
                       </td>
-                      <td class="py-2 tabular-nums text-txtsecondary whitespace-nowrap">{humanBytes(q.sizeBytes)}</td>
+                      <td class="py-2.5 px-3 align-top tabular-nums text-txtsecondary whitespace-nowrap">{humanBytes(q.sizeBytes)}</td>
                       <!-- A projector is a companion file, so "fits in VRAM" is the
                            wrong question: it is charged on top of whichever file
                            the user picks, never sized on its own. -->
-                      <td class="py-2 whitespace-nowrap {q.projector ? 'text-txtsecondary' : estimateClass(q, v)}" use:tip={q.projector ? "" : estimateTitle(q)}>
+                      <td class="py-2.5 px-3 align-top whitespace-nowrap {q.projector ? 'text-txtsecondary' : estimateClass(q, v)}" use:tip={q.projector ? "" : estimateTitle(q)}>
                         {q.projector ? "companion" : estimateLabel(q, v)}
                       </td>
-                      <td class="py-2 text-right whitespace-nowrap">
+                      <td class="py-2.5 pl-3 pr-0 align-top text-right whitespace-nowrap">
                         <button
                           class="icon-btn"
                           disabled={st !== "ready" && st !== "stale"}

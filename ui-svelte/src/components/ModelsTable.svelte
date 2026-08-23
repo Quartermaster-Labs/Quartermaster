@@ -101,9 +101,6 @@
   // rows: they carry different weights, sizes and behaviour, so folding them into
   // one row would let "load Qwen3.6-27B" quietly start an uncensored tune.
   let groups = $derived(groupFamilies(rows));
-  // Zebra parity is assigned across the whole table, not per group, so the
-  // striping doesn't restart mid-list.
-  let stripe = $derived(new Map(groups.flatMap((g) => g.rows).map((r, i) => [r.key, i % 2 === 1])));
   // Which rows belong to a family of more than one tune (they get the rail).
   let grouped = $derived(new Set(groups.filter((g) => g.rows.length > 1).flatMap((g) => g.rows.map((r) => r.key))));
 
@@ -136,12 +133,18 @@
     return selectedModel(row).id === id;
   }
 
-  const SORTS: { key: SortKey; label: string; num?: boolean }[] = [
+  // The numbers are four characters wide ("18.2"); it was the HEADER holding
+  // these columns open - "EST VRAM" in tracking-wide uppercase measures wider
+  // than any value under it, and under table-layout:auto the header's
+  // min-content wins over any w- hint. So the estimate moves into the tooltip
+  // and the label shrinks to the unit, which is what actually buys the Model
+  // column its space back.
+  const SORTS: { key: SortKey; label: string; num?: boolean; hint?: string }[] = [
     { key: "name", label: "Model" },
     { key: "quant", label: "Quant" },
-    { key: "size", label: "Size", num: true },
-    { key: "vram", label: "Est VRAM", num: true },
-    { key: "ram", label: "Est RAM", num: true },
+    { key: "size", label: "Size", num: true, hint: "Weights on disk" },
+    { key: "vram", label: "VRAM", num: true, hint: "Estimated VRAM at this model's configured context" },
+    { key: "ram", label: "RAM", num: true, hint: "Estimated system RAM - the part that will not fit in VRAM" },
   ];
 
   function dotClass(s: string): string {
@@ -151,12 +154,14 @@
     return "bg-txtsecondary/60";
   }
 
-  // Rows carry no rules — alternating bands do the separating. A loaded row
-  // overrides the band entirely (left accent + tint, green ready / amber
-  // transitional): it is what the operator came to the page for, and that reads
-  // at a glance across a long table.
-  function rowTone(live: boolean, s: string, odd: boolean): string {
-    if (!live) return `${odd ? "bg-secondary/25" : ""} hover:bg-secondary/50`;
+  // One hairline (the `rule` class) separates rows; zebra banding on top of it
+  // was a second separator doing the same job, and the two together are what
+  // made the page read as a spreadsheet. A loaded row still overrides the
+  // background entirely (left accent + tint, green ready / amber transitional):
+  // it is what the operator came to the page for, and that reads at a glance
+  // across a long table.
+  function rowTone(live: boolean, s: string): string {
+    if (!live) return "hover:bg-secondary/50";
     if (s === "ready") return "bg-success/[0.07] hover:bg-success/[0.12]";
     return "bg-warning/[0.07] hover:bg-warning/[0.12]";
   }
@@ -240,26 +245,26 @@
        border-separate (also from the global rule) is required too: sticky cells
        are unreliable under border-collapse. The header rule is an inset shadow
        on each th, since a collapsed bottom border would scroll away with it. -->
-  <table class="w-full overflow-visible border-0 rounded-none border-separate border-spacing-0 text-left">
+  <table class="data-table w-full overflow-visible border-0 rounded-none border-separate border-spacing-0 text-left">
     <thead>
       <tr>
         <!-- The non-sortable columns carry a tooltip and an sr-only name rather
              than visible text: the ★ and family-rail columns are only a few
              pixels wide, so a label there wraps or overflows its own column. -->
+        <th class="w-6 {thCls} {headCls} px-0" use:tip={"Finetune family - the rail spans every tune of one base model"}>
+          <span class="sr-only">Family</span>
+        </th>
         <th class="w-8 {thCls} {headCls}" use:tip={"Pinned favorites - click a star to pin a model to the top"}>
           <Star class="mx-auto w-3 h-3" />
           <span class="sr-only">Favorite</span>
         </th>
-        <th class="w-6 {thCls} {headCls} px-0" use:tip={"Finetune family - the rail spans every tune of one base model"}>
-          <span class="sr-only">Family</span>
-        </th>
         {#each SORTS as col (col.key)}
-          <th class="font-normal {thCls} {col.num ? 'text-right' : ''} {col.key === 'name' ? '' : 'w-28'}">
+          <th class="font-normal {thCls} {col.num ? 'text-right' : ''} {col.key === 'name' ? '' : col.num ? 'w-20' : 'w-28'}">
             <div class="flex items-center h-10 {col.num ? 'justify-end' : ''}">
               <button
-                class="inline-flex items-center gap-1 px-3 h-10 text-micro font-medium uppercase tracking-wide text-txtsecondary hover:text-txtmain"
+                class="inline-flex items-center gap-1 {col.num ? 'px-2' : 'px-3'} h-10 text-micro font-medium uppercase tracking-wide text-txtsecondary hover:text-txtmain"
                 onclick={() => onSort(col.key)}
-                use:tip={"Sort ascending → descending → off"}
+                use:tip={col.hint ? `${col.hint}  ·  sort ascending → descending → off` : "Sort ascending → descending → off"}
               >
                 {col.label}
                 <span class="text-micro {sortKey === col.key ? 'text-primary' : 'opacity-0'}">{sortDir === "asc" ? "▲" : "▼"}</span>
@@ -304,20 +309,12 @@
           {@const q = selectedQuant(row)}
           {@const m = selectedModel(row)}
           {@const multiQuant = row.quants.length > 1}
-          {@const odd = stripe.get(row.key) ?? false}
           {@const fav = favSet.has(row.key)}
           {@const inFamily = grouped.has(row.key)}
-          <tr class="transition-colors {rowTone(row.live, m.state, odd)}">
-            <td class="pl-2 align-top py-2 {rowAccent(row.live, m.state)}">
-              <button
-                class="p-0.5 transition-colors {fav ? 'text-warning' : 'text-txtsecondary/40 hover:text-txtsecondary'}"
-                onclick={() => onFavorite(row.key)}
-                aria-label={fav ? "Unpin favorite" : "Pin as favorite"}
-                use:tip={fav ? "Unpin from the top" : "Pin to the top"}
-              >
-                <Star class="w-3.5 h-3.5" fill={fav ? "currentColor" : "none"} />
-              </button>
-            </td>
+          <!-- An expanded model and its quant sub-rows are one block: the rule
+               is held back until the last sub-row so nothing cuts through it. -->
+          {@const openBlock = (expanded[row.key] ?? false) && multiQuant}
+          <tr class="transition-colors {openBlock ? '' : 'rule'} {rowTone(row.live, m.state)}">
             {#if inFamily && ri === 0}
               <!-- Family rail: one cell spanning every row of the family, so the
                    line itself marks both ends. Label runs bottom-up along it. -->
@@ -332,7 +329,19 @@
             {:else if !inFamily}
               <td class="w-6"></td>
             {/if}
-            <td class="py-2 pr-3 pl-3 align-top">
+            <!-- Star sits right of the family gutter, so every row's accent
+                 stripe lines up on one vertical line, railed or not. -->
+            <td class="pl-2 align-top py-2.5 {rowAccent(row.live, m.state)}">
+              <button
+                class="p-0.5 transition-colors {fav ? 'text-warning' : 'text-txtsecondary/40 hover:text-txtsecondary'}"
+                onclick={() => onFavorite(row.key)}
+                aria-label={fav ? "Unpin favorite" : "Pin as favorite"}
+                use:tip={fav ? "Unpin from the top" : "Pin to the top"}
+              >
+                <Star class="w-3.5 h-3.5" fill={fav ? "currentColor" : "none"} />
+              </button>
+            </td>
+            <td class="py-2.5 pr-3 pl-3 align-top">
               <div class="flex items-center gap-2 min-w-0">
                 <span class="inline-block w-2 h-2 rounded-full shrink-0 {dotClass(m.state)}"></span>
                 <span class="font-mono text-xs text-txtmain break-all {row.unlisted ? 'opacity-70' : ''}" use:tip={m.id}>
@@ -353,42 +362,51 @@
                 {/if}
               </div>
               {#if multiQuant || q.variants.length > 0}
-                <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
-                  {#each row.quants as qe (qe.quant)}
-                    {#if multiQuant}
-                      <button class={pillCls(qe.quant === q.quant, true)} onclick={() => (quantPick[row.key] = qe.quant)} use:tip={`Quant ${qe.quant || 'unknown'}`}>
-                        {qe.quant || "-"}
-                        {#if qe.live}<span class="ml-1 inline-block w-1.5 h-1.5 rounded-full align-middle {dotClass(qe.base.state)}"></span>{/if}
-                      </button>
-                    {/if}
-                  {/each}
+                <!-- Two independent choices (which quant, then which variant OF
+                     that quant), so they get two ruled rows rather than one
+                     inline run split by a "|" - wrapping used to break the run
+                     at an arbitrary point and put quants and variants on the
+                     same visual line. w-fit on the wrapper keeps the rule as
+                     wide as the pills themselves, not the whole Model column. -->
+                <div class="mt-1.5 w-fit">
+                  {#if multiQuant}
+                    <div class="flex flex-wrap items-center gap-1.5">
+                      {#each row.quants as qe (qe.quant)}
+                        <button class={pillCls(qe.quant === q.quant, true)} onclick={() => (quantPick[row.key] = qe.quant)} use:tip={`Quant ${qe.quant || 'unknown'}`}>
+                          {qe.quant || "-"}
+                          {#if qe.live}<span class="ml-1 inline-block w-1.5 h-1.5 rounded-full align-middle {dotClass(qe.base.state)}"></span>{/if}
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
                   {#if q.variants.length > 0}
-                    {#if multiQuant}<span class="text-card-border">|</span>{/if}
-                    <button class={pillCls(variantSelected(row, q.base.id))} onclick={() => pickVariant(row, q.base.id)}>Default</button>
-                    {#each q.variants as v (v.model.id)}
-                      <button class={pillCls(variantSelected(row, v.model.id))} onclick={() => pickVariant(row, v.model.id)} use:tip={v.model.id}>
-                        {v.label}
-                        {#if isLive(v.model)}<span class="ml-1 inline-block w-1.5 h-1.5 rounded-full align-middle {dotClass(v.model.state)}"></span>{/if}
-                      </button>
-                    {/each}
+                    <div class="flex flex-wrap items-center gap-1.5 {multiQuant ? 'mt-1.5 border-t border-card-border/45 pt-1.5' : ''}">
+                      <button class={pillCls(variantSelected(row, q.base.id))} onclick={() => pickVariant(row, q.base.id)}>Default</button>
+                      {#each q.variants as v (v.model.id)}
+                        <button class={pillCls(variantSelected(row, v.model.id))} onclick={() => pickVariant(row, v.model.id)} use:tip={v.model.id}>
+                          {v.label}
+                          {#if isLive(v.model)}<span class="ml-1 inline-block w-1.5 h-1.5 rounded-full align-middle {dotClass(v.model.state)}"></span>{/if}
+                        </button>
+                      {/each}
+                    </div>
                   {/if}
                 </div>
               {/if}
             </td>
-            <td class="px-3 py-2 align-top font-mono text-xs text-txtsecondary">{q.quant || "-"}</td>
-            <td class="px-3 py-2 align-top text-right font-mono text-xs tabular-nums text-txtmain">{fmtGB(m.sizeGB)}</td>
-            <td class="px-3 py-2 align-top text-right font-mono text-xs tabular-nums text-txtmain">{fmtGB(m.estVramGB)}</td>
-            <td class="px-3 py-2 align-top text-right font-mono text-xs tabular-nums {m.estRamGB ? 'text-warning' : 'text-txtsecondary'}">
+            <td class="px-3 py-2.5 align-top font-mono text-xs text-txtsecondary">{q.quant || "-"}</td>
+            <td class="px-3 py-2.5 align-top text-right font-mono text-xs tabular-nums text-txtmain">{fmtGB(m.sizeGB)}</td>
+            <td class="px-3 py-2.5 align-top text-right font-mono text-xs tabular-nums text-txtmain">{fmtGB(m.estVramGB)}</td>
+            <td class="px-3 py-2.5 align-top text-right font-mono text-xs tabular-nums {m.estRamGB ? 'text-warning' : 'text-txtsecondary'}">
               {fmtGB(m.estRamGB)}
             </td>
-            <td class="px-3 py-2 align-top">{@render actions(m, q.base, false)}</td>
+            <td class="px-3 py-2.5 align-top">{@render actions(m, q.base, false)}</td>
           </tr>
 
           {#if expanded[row.key] && multiQuant}
-            {#each row.quants as qe (qe.quant)}
-              <tr class="text-txtsecondary {rowTone(qe.live, qe.base.state, odd)}">
-                <td class={rowAccent(qe.live, qe.base.state)}></td>
+            {#each row.quants as qe, qi (qe.quant)}
+              <tr class="text-txtsecondary {qi === row.quants.length - 1 ? 'rule' : ''} {rowTone(qe.live, qe.base.state)}">
                 {#if !inFamily}<td class="w-6"></td>{/if}
+                <td class={rowAccent(qe.live, qe.base.state)}></td>
                 <td class="py-1.5 pr-3 pl-8">
                   <div class="flex items-center gap-2">
                     <span class="inline-block w-1.5 h-1.5 rounded-full shrink-0 {dotClass(qe.base.state)}"></span>

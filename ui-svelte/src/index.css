@@ -379,6 +379,37 @@
     @apply border-r border-card-border;
   }
 
+  /* Data table: the grid-free table, for long scannable catalogues.
+     A border on every cell is the spreadsheet tell, and it competes with the
+     two vertical rules that actually MEAN something (the finetune rail, the
+     live-state accent) - so rows are told apart by one hairline plus their own
+     padding instead of by a grid.
+     Deliberately sets NO padding: `.data-table td` (0,1,1) would outrank the
+     cells' own px-/py- utilities (0,1,0) and flatten the sub-row indent. */
+  .data-table {
+    @apply border-0 rounded-none;
+  }
+  .data-table th:not(:last-child),
+  .data-table td:not(:last-child) {
+    @apply border-r-0;
+  }
+  .data-table th,
+  .data-table td {
+    @apply border-b-0;
+  }
+  /* The rule is opt-in per ROW, not automatic per cell, so a run of rows that
+     belong together (a model plus its expanded quants) reads as one block and
+     closes once at its end. Put it on the header row too where the header
+     doesn't already draw its own (ModelsTable uses a sticky inset shadow). */
+  .data-table tr.rule > th,
+  .data-table tr.rule > td {
+    @apply border-b border-card-border/45;
+  }
+  /* After .rule, so it wins the specificity tie: nothing hangs off the bottom. */
+  .data-table tbody tr:last-child > td {
+    @apply border-b-0;
+  }
+
   /* Inline citation chips — small superscript badges the chat renders for a
      model's "[n]" source markers (see markdown.ts rehypeCitations). */
   a.cite {

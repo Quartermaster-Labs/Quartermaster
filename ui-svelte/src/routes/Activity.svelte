@@ -284,9 +284,13 @@
     </div>
 
     <div class="flex-1 overflow-auto pretty-scroll">
-    <table class="min-w-full !border-0 !rounded-none">
+    <!-- data-table (index.css): drops the per-cell grid the global `table` rule
+         paints, and carries the frame reset that used to need !important here.
+         Rows stay at py-2 rather than the catalogue's py-2.5 - this is a
+         one-line-per-request log, and rows per screen is the point. -->
+    <table class="data-table min-w-full">
       <thead>
-        <tr class="text-left text-[0.65rem] uppercase tracking-wide text-txtsecondary">
+        <tr class="rule text-left text-micro uppercase tracking-wide text-txtsecondary">
           {#each activeVisibleColumns as key (key)}
             <th class="sticky top-0 z-[1] bg-surface px-3 py-2 font-medium whitespace-nowrap {NUMERIC.has(key) ? 'text-right' : ''}">
               {#if key === "cached"}
@@ -309,7 +313,7 @@
           </tr>
         {:else}
           {#each sortedMetrics as metric (metric.id)}
-            <tr class="whitespace-nowrap text-sm hover:bg-secondary/40 transition-colors">
+            <tr class="rule whitespace-nowrap text-sm hover:bg-secondary/40 transition-colors">
               {#each activeVisibleColumns as key (key)}
                 <td class="px-3 py-2 {NUMERIC.has(key) ? 'text-right font-mono tabular-nums' : ''}">
                   {#if key === "id"}

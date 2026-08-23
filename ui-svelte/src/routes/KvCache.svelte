@@ -168,28 +168,28 @@
           </span>
         </div>
         <div class="overflow-auto max-h-[14rem] pretty-scroll">
-          <table class="w-full text-xs font-mono">
+          <table class="data-table w-full text-xs font-mono">
             <thead class="text-txtsecondary text-left sticky top-0 bg-background">
-              <tr>
-                <th class="py-1 pr-2">Model</th>
-                <th class="py-1 pr-2 text-right">Slot</th>
-                <th class="py-1 pr-2">Key</th>
-                <th class="py-1 pr-2">State</th>
-                <th class="py-1 pr-2">Last used</th>
-                <th class="py-1">Preamble</th>
+              <tr class="rule">
+                <th class="py-1.5 pr-2">Model</th>
+                <th class="py-1.5 pr-2 text-right">Slot</th>
+                <th class="py-1.5 pr-2">Key</th>
+                <th class="py-1.5 pr-2">State</th>
+                <th class="py-1.5 pr-2">Last used</th>
+                <th class="py-1.5">Preamble</th>
               </tr>
             </thead>
             <tbody>
               {#each stats.slots as sl (sl.model + "#" + sl.slot)}
-                <tr class="border-t border-border">
-                  <td class="py-1 pr-2">{sl.model}</td>
-                  <td class="py-1 pr-2 text-right">{sl.slot}</td>
-                  <td class="py-1 pr-2 text-txtsecondary">{sl.key}</td>
-                  <td class="py-1 pr-2 {sl.dirty ? 'text-amber-500' : 'text-txtsecondary'}">
+                <tr class="rule">
+                  <td class="py-1.5 pr-2">{sl.model}</td>
+                  <td class="py-1.5 pr-2 text-right">{sl.slot}</td>
+                  <td class="py-1.5 pr-2 text-txtsecondary">{sl.key}</td>
+                  <td class="py-1.5 pr-2 {sl.dirty ? 'text-amber-500' : 'text-txtsecondary'}">
                     {sl.dirty ? "unsaved" : "saved"}
                   </td>
-                  <td class="py-1 pr-2 text-txtsecondary">{fmtTime(sl.lastUsed)}</td>
-                  <td class="py-1 text-txtsecondary truncate max-w-[16rem]" use:tip={sl.preamble}>
+                  <td class="py-1.5 pr-2 text-txtsecondary">{fmtTime(sl.lastUsed)}</td>
+                  <td class="py-1.5 text-txtsecondary truncate max-w-[16rem]" use:tip={sl.preamble}>
                     {sl.preamble ?? ""}
                   </td>
                 </tr>
@@ -230,24 +230,24 @@
             <div class="text-xs text-txtsecondary">No saved KV files yet.</div>
           {:else}
             <div class="overflow-auto max-h-[28rem] pretty-scroll">
-              <table class="w-full text-xs font-mono">
+              <table class="data-table w-full text-xs font-mono">
                 <thead class="text-txtsecondary text-left sticky top-0 bg-background">
-                  <tr>
-                    <th class="py-1 pr-2">Model</th>
-                    <th class="py-1 pr-2">Key</th>
-                    <th class="py-1 pr-2 text-right">Size</th>
-                    <th class="py-1 pr-2">Saved</th>
-                    <th class="py-1">Preamble</th>
+                  <tr class="rule">
+                    <th class="py-1.5 pr-2">Model</th>
+                    <th class="py-1.5 pr-2">Key</th>
+                    <th class="py-1.5 pr-2 text-right">Size</th>
+                    <th class="py-1.5 pr-2">Saved</th>
+                    <th class="py-1.5">Preamble</th>
                   </tr>
                 </thead>
                 <tbody>
                   {#each stats.files as f (f.model + f.key)}
-                    <tr class="border-t border-border">
-                      <td class="py-1 pr-2">{f.model}</td>
-                      <td class="py-1 pr-2 text-txtsecondary">{f.key}</td>
-                      <td class="py-1 pr-2 text-right">{fmtBytes(f.bytes)}</td>
-                      <td class="py-1 pr-2 text-txtsecondary">{fmtTime(f.modAt)}</td>
-                      <td class="py-1 text-txtsecondary truncate max-w-[16rem]" use:tip={f.preamble}>
+                    <tr class="rule">
+                      <td class="py-1.5 pr-2">{f.model}</td>
+                      <td class="py-1.5 pr-2 text-txtsecondary">{f.key}</td>
+                      <td class="py-1.5 pr-2 text-right">{fmtBytes(f.bytes)}</td>
+                      <td class="py-1.5 pr-2 text-txtsecondary">{fmtTime(f.modAt)}</td>
+                      <td class="py-1.5 text-txtsecondary truncate max-w-[16rem]" use:tip={f.preamble}>
                         {f.preamble ?? ""}
                       </td>
                     </tr>
@@ -262,24 +262,24 @@
             <div class="text-xs text-txtsecondary">No preamble caches yet.</div>
           {:else}
             <div class="overflow-auto max-h-[28rem] pretty-scroll">
-              <table class="w-full text-xs font-mono">
+              <table class="data-table w-full text-xs font-mono">
                 <thead class="text-txtsecondary text-left sticky top-0 bg-background">
-                  <tr>
-                    <th class="py-1 pr-2">Model</th>
-                    <th class="py-1 pr-2">Hash</th>
-                    <th class="py-1 pr-2 text-right">Size</th>
-                    <th class="py-1 pr-2">Minted</th>
-                    <th class="py-1">Preamble</th>
+                  <tr class="rule">
+                    <th class="py-1.5 pr-2">Model</th>
+                    <th class="py-1.5 pr-2">Hash</th>
+                    <th class="py-1.5 pr-2 text-right">Size</th>
+                    <th class="py-1.5 pr-2">Minted</th>
+                    <th class="py-1.5">Preamble</th>
                   </tr>
                 </thead>
                 <tbody>
                   {#each stats.preambleFiles as f (f.model + f.key)}
-                    <tr class="border-t border-border">
-                      <td class="py-1 pr-2">{f.model}</td>
-                      <td class="py-1 pr-2 text-txtsecondary">{f.key}</td>
-                      <td class="py-1 pr-2 text-right">{fmtBytes(f.bytes)}</td>
-                      <td class="py-1 pr-2 text-txtsecondary">{fmtTime(f.modAt)}</td>
-                      <td class="py-1 text-txtsecondary truncate max-w-[16rem]" use:tip={f.preamble}>
+                    <tr class="rule">
+                      <td class="py-1.5 pr-2">{f.model}</td>
+                      <td class="py-1.5 pr-2 text-txtsecondary">{f.key}</td>
+                      <td class="py-1.5 pr-2 text-right">{fmtBytes(f.bytes)}</td>
+                      <td class="py-1.5 pr-2 text-txtsecondary">{fmtTime(f.modAt)}</td>
+                      <td class="py-1.5 text-txtsecondary truncate max-w-[16rem]" use:tip={f.preamble}>
                         {f.preamble ?? ""}
                       </td>
                     </tr>
