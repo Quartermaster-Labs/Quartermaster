@@ -176,6 +176,40 @@
     if (!first && sig) void reloadSelected(id);
   });
 
+  // The footer note is news about a pull that just landed, not a state: the
+  // server keeps finished jobs in its list (the Downloads menu reads them as
+  // history), so a bare "any done job" stayed true until twenty newer jobs
+  // pushed it out — which pinned the note to the page. "News" has a shelf
+  // life: the job's finished timestamp decides it. The flag arms one timer per
+  // newly completed job (the signature re-keys it), which is what makes the
+  // note leave on its own. The timer, not the derived, does the hiding: after
+  // the last job lands the store stops polling, so a pure time check would
+  // freeze mid-window and stick again.
+  const DONE_REMINDER_MS = 15 * 60 * 1000;
+  const freshDoneSig = $derived(
+    $hubJobs
+      .filter((j) => j.phase === "done" && j.finished && Date.now() - Date.parse(j.finished) < DONE_REMINDER_MS)
+      .map((j) => j.id)
+      .join(",")
+  );
+  let finishedVisible = $state(false);
+  $effect(() => {
+    const sig = freshDoneSig;
+    if (!sig) {
+      finishedVisible = false;
+      return;
+    }
+    finishedVisible = true;
+    const t = setTimeout(() => (finishedVisible = false), DONE_REMINDER_MS);
+    return () => clearTimeout(t);
+  });
+  // The X means "seen it": the timer only re-arms when the signature changes,
+  // i.e. when a NEW job completes, so dismissing doesn't hide the next
+  // completion, and a dismissal isn't re-shown by the same news re-ticking.
+  function dismissDone(): void {
+    finishedVisible = false;
+  }
+
   // Re-read the open repo in place: same id, no spinner, and the estimates the
   // sizer already filled in are kept.
   async function reloadSelected(id: string): Promise<void> {
@@ -950,13 +984,17 @@
       </div>
     </div>
 
-    <!-- Only rendered when it has something to say: an always-present footer
-         row cost the panes a strip of height to hold nothing. -->
-    {#if $hubJobs.some((j) => j.phase === "done")}
+    <!-- Only rendered while a completion is still news (see finishedVisible):
+         an always-present footer row cost the panes a strip of height to hold
+         nothing, and a persistent one cost the same strip forever. -->
+    {#if finishedVisible}
       <div class="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1 font-mono text-[0.6rem] text-txtsecondary">
         <span class="inline-flex items-center gap-1 text-success">
           <Check class="w-3 h-3" /> Finished downloads are in the config already; check the Models page.
         </span>
+        <button class="icon-btn ml-auto" use:tip={"Got it"} aria-label="Dismiss" onclick={dismissDone}>
+          <X class="w-3 h-3" />
+        </button>
       </div>
     {/if}
   {/if}
