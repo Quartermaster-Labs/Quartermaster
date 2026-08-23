@@ -870,13 +870,18 @@
                    three separators doing one job. Header type matches the rest
                    of the app's tables: text-micro in the UI face, not an ad-hoc
                    0.6rem mono. -->
-              <table class="data-table w-full text-xs">
+              <!-- The table BLEEDS 8px past its panel on both sides while the
+                   edge cells pad back in by the same amount: the row hover has
+                   room to breathe around the text, and the text itself still
+                   lines up with the panel's own p-4 content edge. Padding the
+                   cells alone would have shunted every column right instead. -->
+              <table class="data-table -mx-2 w-[calc(100%+1rem)] text-xs">
                 <thead>
                   <tr class="rule text-txtsecondary text-left">
-                    <th class="text-micro font-medium uppercase tracking-wide pb-1.5 pl-0">File</th>
+                    <th class="text-micro font-medium uppercase tracking-wide pb-1.5 pl-2 pr-3">File</th>
                     <th class="text-micro font-medium uppercase tracking-wide pb-1.5 px-3 whitespace-nowrap">Size</th>
                     <th class="text-micro font-medium uppercase tracking-wide pb-1.5 px-3">Estimate</th>
-                    <th class="pr-0"></th>
+                    <th class="pr-2"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -889,7 +894,7 @@
                          which is why the old border-t here drew nothing and the
                          zebra banding had to stand in for it. -->
                     <tr class="rule hover:bg-secondary/30 transition-colors">
-                      <td class="py-2.5 pl-0 pr-3 align-top font-mono text-txtmain">
+                      <td class="py-2.5 pl-2 pr-3 align-top font-mono text-txtmain">
                         <span class="break-all">{q.label}</span>
                         {#if q.projector}
                           <span class="ml-1 rounded bg-secondary px-1 py-0.5 text-micro font-medium uppercase tracking-wide text-txtsecondary" use:tip={"Vision/audio projector: download it alongside the model's weights, not instead of them"}>
@@ -922,7 +927,7 @@
                       <td class="py-2.5 px-3 align-top whitespace-nowrap {q.projector ? 'text-txtsecondary' : estimateClass(q, v)}" use:tip={q.projector ? "" : estimateTitle(q)}>
                         {q.projector ? "companion" : estimateLabel(q, v)}
                       </td>
-                      <td class="py-2.5 pl-3 pr-0 align-top text-right whitespace-nowrap">
+                      <td class="py-2.5 pl-3 pr-2 align-top text-right whitespace-nowrap">
                         <button
                           class="icon-btn"
                           disabled={st !== "ready" && st !== "stale"}
