@@ -107,6 +107,8 @@
   let cpuAuto = $state(true);
   let globalTargetGB = $state(0); // global VRAM budget; slider ceiling for vramTarget
   let spec = $state("");
+  // Vision-twin projector placement: "" auto | "gpu" | "ram" | "none".
+  let mmprojMode = $state("");
   // Boolean toggles. Stored as strings on the override ("" = default-on, "off" =
   // forced off); surfaced here as plain on/off checkboxes (auto state dropped).
   let reasoningOn = $state(true); // false => reasoningFmt "off"
@@ -661,6 +663,12 @@
     { value: "on", label: "on" },
     { value: "off", label: "off" },
   ];
+  const MMPROJ_SEL: SelectOption[] = [
+    { value: "", label: "auto (sizer decides)" },
+    { value: "gpu", label: "on GPU (fast images)" },
+    { value: "ram", label: "in RAM (slow images, no VRAM)" },
+    { value: "none", label: "none (no vision twin)" },
+  ];
   const ROPE_SEL_AUTO = optList(["", "none", "linear", "yarn"], "auto");
   const ROPE_SEL_INHERIT = optList(["", "none", "linear", "yarn"], "inherit");
   const SPLIT_SEL_AUTO = optList(["", "none", "layer", "row", "tensor"], "auto");
@@ -762,6 +770,7 @@
     cpuAuto = !o?.cpuOffload;
     cpuOffload = o?.cpuOffload || 0;
     spec = o?.spec ?? "";
+    mmprojMode = o?.mmproj ?? "";
     backend = o?.backend ?? "";
     vllmGpuUtil = o?.vllmGpuUtil ? o.vllmGpuUtil : "";
     vllmTensorParallel = o?.vllmTensorParallel ? o.vllmTensorParallel : "";
@@ -1087,6 +1096,7 @@
       vllmTensorParallel: vllmTensorParallel === "" ? 0 : Number(vllmTensorParallel),
       vllmTokenizer,
       spec,
+      mmproj: mmprojMode,
       reasoningFmt: reasoningOn ? "" : "off",
       reasoningBudget: reasoningBudget === "" ? 0 : Number(reasoningBudget),
       preserveThinking: reasoningOn && preserveThinking,
@@ -2052,6 +2062,17 @@
             </span>
             {@render specRow(spec, (v) => (spec = v))}
           </div>
+
+          {#if config?.mmprojPath}
+            <label class="flex flex-col gap-1 text-sm">
+              <span class="text-txtsecondary flex items-center gap-1">
+                Image projector
+                {@render hint("Where the vision twin's CLIP projector lives. Auto keeps it on the GPU while it costs neither GPU layers nor a quarter of the context window, and moves it to RAM otherwise. On GPU pins it there — fastest image encode, paid for in context/offload on every request. In RAM (--no-mmproj-offload) frees that VRAM and encodes images on the CPU instead: seconds per image, but token speed is untouched. None emits no vision twin at all.")}
+                {@render borrowedMmproj()}
+              </span>
+              <Select bind:value={mmprojMode} options={MMPROJ_SEL} ariaLabel="Image projector placement" />
+            </label>
+          {/if}
 
           {#if effSpecs.includes("draft-mtp") || effSpecs.includes("draft-dflash")}
             <label class="flex flex-col gap-1 text-sm">

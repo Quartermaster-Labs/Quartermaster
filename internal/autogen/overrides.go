@@ -482,6 +482,19 @@ type Override struct {
 	// sizer. 0 => auto. MoE models offload expert layers (--n-cpu-moe N); dense
 	// models drop GPU layers (-ngl = blocks-N).
 	CpuOffload int `yaml:"cpuOffload"`
+	// Mmproj places the CLIP image projector behind the auto-generated "-vision"
+	// twin. Only meaningful for a model that has a projector (own or inherited):
+	//
+	//	""     auto - sized both ways, GPU while it costs neither layer placement
+	//	       nor a quarter of the context window (see cpuMmprojWins)
+	//	"gpu"  pin the projector in VRAM: fastest image encode, and the twin pays
+	//	       for it in ctx/offload
+	//	"ram"  pin it in RAM (--no-mmproj-offload): free VRAM, slow image encode
+	//	"none" emit no vision twin at all
+	//
+	// "none" is not the same as marking the twin unlisted: unlisted still builds
+	// and can still be loaded by id, this removes the profile.
+	Mmproj string `yaml:"mmproj"`
 	// Engine knobs surfaced from llama-server. Zero/empty => the generator's
 	// default (shown in parentheses):
 	//   FlashAttn: "" (on) | "on" | "off" | "auto"  (-fa; required for quantized KV)

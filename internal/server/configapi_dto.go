@@ -121,21 +121,24 @@ type overrideDTO struct {
 	KvInRam            bool    `json:"kvInRam"`
 	VramTargetGB       float64 `json:"vramTargetGB"`
 	CpuOffload         int     `json:"cpuOffload"`
-	Spec               string  `json:"spec"`
-	ReasoningFmt       string  `json:"reasoningFmt"`
-	ReasoningBudget    int     `json:"reasoningBudget"`
-	FlashAttn          string  `json:"flashAttn"`
-	Mmap               string  `json:"mmap"`
-	Mlock              bool    `json:"mlock"`
-	Threads            int     `json:"threads"`
-	Parallel           int     `json:"parallel"`
-	Ub                 int     `json:"ub"`
-	ExtraArgs          string  `json:"extraArgs"`
-	ChatTemplateFile   string  `json:"chatTemplateFile"`
-	Unlisted           bool    `json:"unlisted"`
-	Skip               bool    `json:"skip"`
-	SlotCache          *bool   `json:"slotCache"`   // opt this model into on-disk slot KV persistence; nil => default on
-	CtxVariants        []int   `json:"ctxVariants"` // per-model ctx tiers (e.g. 32768, 65536)
+	// Mmproj places the vision twin's CLIP projector: "" auto | "gpu" | "ram"
+	// (--no-mmproj-offload) | "none" (no twin at all).
+	Mmproj           string `json:"mmproj"`
+	Spec             string `json:"spec"`
+	ReasoningFmt     string `json:"reasoningFmt"`
+	ReasoningBudget  int    `json:"reasoningBudget"`
+	FlashAttn        string `json:"flashAttn"`
+	Mmap             string `json:"mmap"`
+	Mlock            bool   `json:"mlock"`
+	Threads          int    `json:"threads"`
+	Parallel         int    `json:"parallel"`
+	Ub               int    `json:"ub"`
+	ExtraArgs        string `json:"extraArgs"`
+	ChatTemplateFile string `json:"chatTemplateFile"`
+	Unlisted         bool   `json:"unlisted"`
+	Skip             bool   `json:"skip"`
+	SlotCache        *bool  `json:"slotCache"`   // opt this model into on-disk slot KV persistence; nil => default on
+	CtxVariants      []int  `json:"ctxVariants"` // per-model ctx tiers (e.g. 32768, 65536)
 	// PreserveThinking keeps prior-turn <think> in chat history (Qwen3.6+); only
 	// meaningful when reasoning is on.
 	PreserveThinking bool `json:"preserveThinking"`
@@ -223,9 +226,9 @@ type modelConfigResp struct {
 	// too can come from a family member rather than from this model's folder.
 	MmprojInherited bool   `json:"mmprojInherited"`
 	MmprojPath      string `json:"mmprojPath,omitempty"`
-	IsImage    bool   `json:"isImage"`    // diffusion model (sd-server) => image config form
-	IsAudio    bool   `json:"isAudio"`    // TTS or ASR model => audio config form
-	IsSam      bool   `json:"isSam"`      // SAM segmentation (sam3_server) => minimal segment form
+	IsImage         bool   `json:"isImage"` // diffusion model (sd-server) => image config form
+	IsAudio         bool   `json:"isAudio"` // TTS or ASR model => audio config form
+	IsSam           bool   `json:"isSam"`   // SAM segmentation (sam3_server) => minimal segment form
 	// Class is the backend class this model resolves against (autogen kindClass):
 	// llm / image / tts / asr / segment. The UI filters the backend picker by it —
 	// TTS and ASR share one config form but not their engines, so the form flags
@@ -278,7 +281,7 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		Backend: o.Backend, VllmGpuUtil: o.VllmGpuUtil, VllmTensorParallel: o.VllmTensorParallel,
 		VllmTokenizer: o.VllmTokenizer,
 		Ctx:           o.Ctx, KvK: o.KvK, KvV: o.KvV, KvInRam: o.KvInRam,
-		VramTargetGB: o.VramTargetGB, CpuOffload: o.CpuOffload,
+		VramTargetGB: o.VramTargetGB, CpuOffload: o.CpuOffload, Mmproj: o.Mmproj,
 		Spec: o.Spec, ReasoningFmt: o.ReasoningFmt, ReasoningBudget: o.ReasoningBudget,
 		FlashAttn: o.FlashAttn, Mmap: o.Mmap, Mlock: o.Mlock,
 		Threads: o.Threads, Parallel: o.Parallel, Ub: o.Ub,
@@ -352,6 +355,7 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.KvInRam = body.KvInRam
 	ov.VramTargetGB = body.VramTargetGB
 	ov.CpuOffload = body.CpuOffload
+	ov.Mmproj = body.Mmproj
 	ov.Spec = body.Spec
 	ov.ReasoningFmt = body.ReasoningFmt
 	ov.ReasoningBudget = body.ReasoningBudget

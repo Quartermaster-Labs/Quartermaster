@@ -373,6 +373,10 @@ export interface ModelOverride {
   reasoningFmt?: string;
   reasoningBudget?: number; // --reasoning-budget token cap; 0/undefined => no cap
   preserveThinking?: boolean; // keep prior-turn <think> in history (Qwen3.6+); needs reasoning on
+  /** Vision-twin projector placement: "" auto (sized both ways) | "gpu" (pin in
+   * VRAM) | "ram" (--no-mmproj-offload, slow encode, no VRAM) | "none" (no
+   * vision twin at all). Only meaningful for a model with a projector. */
+  mmproj?: string;
   flashAttn?: string; // "" (on) | "on" | "off" | "auto"
   mmap?: string; // "" (auto) | "on" | "off"
   mlock?: boolean;

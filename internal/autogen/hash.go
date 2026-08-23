@@ -135,7 +135,21 @@ const hashCacheSuffix = ".modelhash"
 //	     no longer aborts the tensor walk. Both together: an MXFP4 gguf used to
 //	     come back with VocabSize 0, which mis-sized its logits buffer and made
 //	     the v51 header gate refuse it every family sidecar.
-const genVersion = "v52"
+//	v53: quant tokens are recognised by FAMILY (Q/IQ, TQ, FP with its vendor
+//	     prefix, BF/F) from one shared pattern in internal/quant, instead of
+//	     from four hand-kept enumerations that had never heard of NVFP4. An
+//	     unrecognised token is not cosmetic: the id never gets cut at it, so the
+//	     model shares no base key with its own other quants (no sidecar
+//	     inheritance) and every ctx tier and vision twin lists as a model of its
+//	     own. ggml types 40 (NVFP4) and 41 (Q1_0) are tabulated too, and ids no
+//	     longer re-append a quant the file name already spells mid-name, so
+//	     "…-NVFP4-MTP-MID-HIGH" keeps the id it had.
+//	v54: a "-vision" twin is sized twice — projector in VRAM and projector on
+//	     the CPU — and emits --no-mmproj-offload whenever holding the CLIP
+//	     tower on the GPU displaced text layers or cost more than a quarter of
+//	     the context window. Changes both the emitted argv and the twin's
+//	     estVram/ctx, so every existing config has to regenerate.
+const genVersion = "v54"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

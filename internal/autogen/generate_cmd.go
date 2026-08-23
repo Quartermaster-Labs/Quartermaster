@@ -339,9 +339,14 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		fmt.Sprintf("-fa %s -ctk %s -ctv %s", fa, kvK, kvV),
 		fmt.Sprintf("--parallel %d %s%s--kv-unified --no-warmup --no-ui --metrics --props", parallel, loadModeFlag, kvoFlag),
 	}
-	// Vision twin loads the projector for image input.
+	// Vision twin loads the projector for image input. --no-mmproj-offload keeps
+	// the CLIP tower on the CPU: no VRAM for the projector (the sizer already
+	// priced the twin that way), slower image encode, same token throughput.
 	if prof.Vision && row.MmprojPath != "" {
 		lines = append(lines, fmt.Sprintf("--mmproj %s", strings.ReplaceAll(row.MmprojPath, "\\", "/")))
+		if prof.CpuMmproj {
+			lines = append(lines, "--no-mmproj-offload")
+		}
 	}
 	// spec is a "+"-joined list of backends (draft-mtp / draft-dflash / ngram-map-k4v
 	// / ngram-mod / none); llama-server accepts them chained, so emit one --spec-type

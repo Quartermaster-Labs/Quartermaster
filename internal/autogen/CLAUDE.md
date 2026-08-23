@@ -30,7 +30,7 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 | `kvcost.go` | KV-cache cost model (`GetKvCostModel`) + context-budget math (`MaxCtxForBudget`, `KvReserveGB`, `RoundedCtx`, `GetDenseCtx`, `defaultKvQuant`). → `sizing.md` |
 | `plan.go` | VRAM budget → placement: `-ngl`/`--n-cpu-moe` for dense and MoE (`GetLoadPlan`, `densePlacement`); MoE expert-share table + `effectiveShare`. → `sizing.md` |
 | `generate.go` | Top-level orchestration (`Generate`): builds per-model profiles (solo, ctx tiers, named variants), sizes each, emits the YAML. `emitModel`/`RenderSoloCmd` **dispatch by model class** (SAM → image → embedding → TTS → ASR → LLM). This file is the profile loop; the three phases live in the siblings below. |
-| `generate_sizing.go` | Phase 1 — sizing math: `sizeProfile`, `--ctx-checkpoints` count + `checkpointReserveGB`, `forceLowActiveMoE`/`applyForcedOffload`/`estForOffload`, `computeBufferGB`, `MmprojVramGB`, `draftOverheadGB`. Pure arithmetic over `Metadata` + `Settings`. → `sizing.md` |
+| `generate_sizing.go` | Phase 1 — sizing math: `sizeProfile`, `--ctx-checkpoints` count + `checkpointReserveGB`, `forceLowActiveMoE`/`applyForcedOffload`/`estForOffload`, `computeBufferGB`, `MmprojVramGB`, `cpuMmprojWins`, `draftOverheadGB`. Pure arithmetic over `Metadata` + `Settings`. → `sizing.md` |
 | `generate_cmd.go` | Phase 2 — command rendering: `buildCmdLines` (the per-class argv builder) and `RenderSoloCmd` (same with a `${PORT}` placeholder, for the UI preview + ad-hoc commands), plus `effectiveUb`, `effectiveSpec`/`specHas`, `cmdPath`, `needsQwenFixedChatTemplate`, `defaultSamplerFor`/`samplerLines`. |
 | `generate_emit.go` | Phase 3 — YAML emission: non-model sections (`emitSlotCache`, `emitAPIKeys`, `emitGroupsAndListeners`, `writeGroup`) and per-model bits (`emitProfile`, `writeDisplayName`, `writeEstVram`/`writeEstRam`, `effortLevels`, `formatCtxTag`, `slugify`). |
 | `estimate.go` | One-shot preview (`EstimatePlan`) of a candidate tuning for the web editor; reuses the solo-profile sizing path without writing config. |
@@ -68,6 +68,17 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   sidecar or DFlash drafter, `MmprojPath` a same-dir clip projector. When a dir ships neither,
   `inheritSidecars` (`family.go`) borrows one from a compatible family member — see the gotcha
   below.
+- Vision twin projector placement (`generate.go` profile loop + `cpuMmprojWins`) — every
+  `-vision` twin is sized TWICE: once with the CLIP projector resident in VRAM (`MmprojGB`
+  charged to `Overhead`) and once with it on the CPU. The CPU sizing wins, and the twin emits
+  `--no-mmproj-offload`, when the GPU-resident projector displaced text layers (lower `-ngl` /
+  more `--n-cpu-moe`) or cost more than a quarter of the context window. Placement first: that
+  tax is per token, the CPU encode is a one-off per image. `LiveOffloadArgs` and the editor
+  preview (`configapi_estimate.go`) both skip the `MmprojGB` charge when the argv carries the
+  flag, so all three price the same launch. `Override.Mmproj` pins the decision per model —
+  `gpu` / `ram` skip the dual sizing, `none` emits no twin at all (unlike an unlisted twin,
+  which still builds). Surfaced as the "Image projector" dropdown on the model config modal's
+  Default tab, shown only when the model has a projector.
 - `GetLoadPlan` (`plan.go`) — `-ngl`/`--n-cpu-moe` from a VRAM budget; MoE path uses a 0.5
   PCIe-thrash crossover, falling back to naive `-ngl` (`densePlacement`) past it.
 - `Generate` (`generate.go`) — discover → per-model `emitModel` → `emitGroupsAndListeners`.

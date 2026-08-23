@@ -34,14 +34,18 @@ export const IMG_SAMPLERS = ["", "euler_a", "euler", "heun", "dpm2", "dpmpp2s_a"
 // --chat-template-file is NOT here: it has its own case below that captures the
 // path into the advanced field. Swallowing it silently dropped a template set
 // any other way (qm-tools/hand-edited extraArgs) on the first box blur.
-export const IGNORE_VALUE = new Set(["-m", "--port", "--host", "--cors-origins", "-c", "-ngl", "--n-cpu-moe", "-b", "--ctx-checkpoints", "--chat-template-kwargs", "-md", "--slot-save-path"]);
+export const IGNORE_VALUE = new Set(["-m", "--port", "--host", "--cors-origins", "-c", "-ngl", "--n-cpu-moe", "-b", "--ctx-checkpoints", "--chat-template-kwargs", "-md", "--slot-save-path", "--mmproj"]);
 // autogen's arch-derived template fix (internal/autogen/generate.go
 // qwenFixedChatTemplateFile) — matched by suffix so it is never mistaken for a
 // user-chosen template.
 export const BUILTIN_CHAT_TEMPLATE = "templates/qwen-fixed-chat-template.jinja";
 // Value-less flags owned elsewhere: --reasoning-preserve belongs to the
-// preserve-thinking toggle (which is read off the override, not the box).
-export const IGNORE_BOOL = new Set(["--kv-unified", "--no-warmup", "--no-webui", "--no-ui", "--jinja", "--metrics", "--props", "--reasoning-preserve", "--no-reasoning-preserve"]);
+// preserve-thinking toggle (which is read off the override, not the box), and
+// --no-mmproj-offload to the vision-projector dropdown. Its --mmproj partner is
+// in IGNORE_VALUE for the same reason: both are re-emitted from the projector
+// discovery + the override, so letting either bleed into extraArgs would
+// double-emit them on the first blur.
+export const IGNORE_BOOL = new Set(["--kv-unified", "--no-warmup", "--no-webui", "--no-ui", "--jinja", "--metrics", "--props", "--reasoning-preserve", "--no-reasoning-preserve", "--no-mmproj-offload"]);
 
 // Parsed launch-flag bundle shared by the Default form and a variant. Booleans
 // are normalized to the form's on/off sense; computed flags are dropped.

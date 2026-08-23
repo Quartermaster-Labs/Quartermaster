@@ -67,6 +67,19 @@ type profile struct {
 	// Vision marks the auto-generated "-vision" twin: emits --mmproj <projector>
 	// and an image-input capabilities block so the playground can attach images.
 	Vision bool
+	// MmprojGB is the projector footprint (weights + CLIP compute reserve) this
+	// vision twin charges as VRAM overhead. Kept separate from Overhead so the
+	// sizer can price the twin a second time with the projector on the CPU.
+	MmprojGB float64
+	// MmprojPin is the model override's explicit placement for the projector
+	// ("gpu"/"ram"); "" leaves the sizer's auto fallback in charge.
+	MmprojPin string
+	// CpuMmproj emits --no-mmproj-offload: the CLIP projector runs on the CPU, so
+	// it costs no VRAM and the twin keeps the ctx/layer placement it would have
+	// had without vision, at the price of a slow (host-side) image encode. Set by
+	// the sizer only when the GPU-resident projector actually costs placement or
+	// a quarter of the context window (see cpuMmprojWins).
+	CpuMmproj bool
 }
 
 // Generate discovers models under gf.Settings.ModelsRoot and returns a complete
@@ -359,11 +372,17 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	// by default (a distinct served id, scopeable by API keys); the config editor's
 	// reserved "vision" variant can still mark it unlisted. Charged the projector's
 	// file size as flat VRAM overhead.
-	if row.MmprojPath != "" {
+	// "none" drops the twin outright: a projector the user does not want wired
+	// (a family-inherited one they judge wrong for this finetune, or vision they
+	// simply never use) should cost no served id at all.
+	if row.MmprojPath != "" && !strings.EqualFold(override.Mmproj, "none") {
+		mmprojOh := MmprojVramGB(row.MmprojPath, row.MmprojSizeGB, s)
 		vp := profile{
 			Name:              fmt.Sprintf("%s-vision", name),
 			Target:            soloTarget,
-			Overhead:          s.VramOverheadGB + specOh + MmprojVramGB(row.MmprojPath, row.MmprojSizeGB, s),
+			Overhead:          s.VramOverheadGB + specOh + mmprojOh,
+			MmprojGB:          mmprojOh,
+			MmprojPin:         strings.ToLower(strings.TrimSpace(override.Mmproj)),
 			Ctx:               override.Ctx,
 			CheckpointMinStep: override.CheckpointMinStep,
 			Vision:            true,
@@ -390,7 +409,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			}
 			// Spec changes the draft overhead; recharge off the variant's spec.
 			if v.Spec != "" {
-				vp.Overhead = s.VramOverheadGB + draftOverheadGB(v.Spec, matchedDraftSizeGB(v.Spec, row.DraftKind, row.DraftSizeGB)) + MmprojVramGB(row.MmprojPath, row.MmprojSizeGB, s)
+				vp.Overhead = s.VramOverheadGB + draftOverheadGB(v.Spec, matchedDraftSizeGB(v.Spec, row.DraftKind, row.DraftSizeGB)) + mmprojOh
 			}
 			vp.Unlisted = v.Unlisted
 			vp.KvK = v.KvK
@@ -404,6 +423,13 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 				vp.CheckpointMinStep = v.CheckpointMinStep
 			}
 			vp.Variant = v
+		}
+		// A "ram" pin is applied here rather than in the sizing loop so the
+		// variant re-charge above (which rebuilds Overhead from scratch for a
+		// vision variant with its own spec) can't hand the projector back.
+		if vp.MmprojPin == "ram" {
+			vp.Overhead -= mmprojOh
+			vp.CpuMmproj = true
 		}
 		profiles = append(profiles, vp)
 	}
@@ -467,6 +493,24 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		ctx, plan, kvReserve, planCkptGB, err := sizeProfile(meta, s, prof, ptg, kcg, pModelMax, pkvInRam)
 		if err != nil {
 			return err
+		}
+		// A "-vision" twin holds the CLIP projector in VRAM by default, and the
+		// sizer pays for it out of the same budget as the text model: fewer GPU
+		// layers, or a smaller window. llama-server's --no-mmproj-offload moves the
+		// projector to the CPU, which costs image-encode latency ONCE per image but
+		// nothing per token. So price the twin both ways and keep the projector on
+		// the GPU only while it is affordable — the fallback is what lets any model
+		// with a compatible projector carry a vision twin without the text side
+		// paying for it.
+		if prof.Vision && prof.MmprojGB > 0 && prof.MmprojPin == "" {
+			cpuProf := prof
+			cpuProf.Overhead -= prof.MmprojGB
+			cpuProf.CpuMmproj = true
+			cCtx, cPlan, cKvReserve, cCkptGB, cErr := sizeProfile(meta, s, cpuProf, ptg, kcg, pModelMax, pkvInRam)
+			if cErr == nil && cpuMmprojWins(plan, ctx, cPlan, cCtx) {
+				prof = cpuProf
+				ctx, plan, kvReserve, planCkptGB = cCtx, cPlan, cKvReserve, cCkptGB
+			}
 		}
 		ngl, ncpuMoe := forceLowActiveMoE(meta, plan, prof, kvReserve)
 		if prof.CpuOffload > 0 {

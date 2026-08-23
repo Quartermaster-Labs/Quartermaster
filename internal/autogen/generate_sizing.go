@@ -511,6 +511,36 @@ func MmprojVramGB(mmprojPath string, fileSizeGB float64, s Settings) float64 {
 	return fileSizeGB + buf
 }
 
+// cpuMmprojGainCtx is the share of the projector-free context window a vision
+// twin must keep before the projector is worth its VRAM. Below it, the CLIP
+// buffer has eaten a quarter of the window and the CPU encode is the better
+// trade — a one-off cost per image against a window that shrinks every request.
+const cpuMmprojGainCtx = 0.75
+
+// cpuMmprojWins compares a vision twin sized with the CLIP projector resident in
+// VRAM against the same twin sized with it on the CPU (--no-mmproj-offload), and
+// reports whether the CPU placement is the better deal.
+//
+// Two things make it better, in order of weight:
+//
+//  1. PLACEMENT. The projector displaced text layers onto the CPU (a lower -ngl,
+//     or more --n-cpu-moe experts). That tax is paid on every token of every
+//     request, image or not, so trading it for a slower image encode is always
+//     right.
+//  2. WINDOW. Placement is unchanged but the projector cost more than a quarter
+//     of the context window it could otherwise have had.
+//
+// Neither firing means the projector fits in the slack and belongs on the GPU,
+// where the image encode is an order of magnitude faster.
+func cpuMmprojWins(gpuPlan LoadPlan, gpuCtx int, cpuPlan LoadPlan, cpuCtx int) bool {
+	if cpuPlan.Ngl > gpuPlan.Ngl || cpuPlan.NCpuMoe < gpuPlan.NCpuMoe {
+		return true
+	}
+	// Only ever move the projector for a window the GPU placement cannot match;
+	// an equal (or larger) window means the projector was free.
+	return cpuCtx > gpuCtx && float64(gpuCtx) < cpuMmprojGainCtx*float64(cpuCtx)
+}
+
 // draftOverheadGB returns the VRAM overhead to charge for the active spec
 // chain's draft model. A baked-in MTP nextn layer with no separate weights
 // file is a flat ~0.34 GB (KV+compute). A separate draft gguf — an MTP

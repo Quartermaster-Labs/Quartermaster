@@ -138,7 +138,10 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 	// projector's weights + CLIP compute reserve here so the live guard sizes the
 	// twin like the baked plan did, instead of under-offloading and leaving too
 	// little free VRAM once the projector + image buffers load.
-	if mm, i := argVal(args, "--mmproj"); i >= 0 {
+	// ... unless the argv also carries --no-mmproj-offload, which parks the CLIP
+	// tower in RAM. Then the projector costs no VRAM at all and charging it would
+	// make the guard offload text layers the baked plan meant to keep on the GPU.
+	if mm, i := argVal(args, "--mmproj"); i >= 0 && !hasFlag(args, "--no-mmproj-offload") {
 		if fi, statErr := os.Stat(mm); statErr == nil {
 			in.MmprojGB = MmprojVramGB(mm, float64(fi.Size())/gib, s)
 		} else if logf != nil {

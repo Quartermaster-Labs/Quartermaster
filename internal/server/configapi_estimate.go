@@ -157,6 +157,16 @@ func forcedOffloadFromCmd(cmd string, meta autogen.Metadata) (int, bool) {
 
 // mmprojPathFromCmd returns the "--mmproj" projector path in a rendered command,
 // or "" when the command loads no projector (non-vision model).
+// cmdHasFlag reports whether a launch command line carries a bare flag token.
+func cmdHasFlag(cmd, flag string) bool {
+	for _, tok := range cmdArgv(cmd) {
+		if tok == flag {
+			return true
+		}
+	}
+	return false
+}
+
 func mmprojPathFromCmd(cmd string) string {
 	toks := cmdArgv(cmd)
 	for i := 0; i+1 < len(toks); i++ {
@@ -289,7 +299,9 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 	// Overhead (mmprojVramGB) so the editor bar and the status-rail breakdown size
 	// the vision load correctly — otherwise the sizer picks an unaffordably large
 	// ctx and the projector's VRAM is misattributed to the CUDA slice.
-	if in.MmprojGB == 0 {
+	// A twin launched with --no-mmproj-offload runs the CLIP tower on the CPU, so
+	// it has no projector footprint to charge — preview it the way it launches.
+	if in.MmprojGB == 0 && !cmdHasFlag(cmd, "--no-mmproj-offload") {
 		if mp := mmprojPathFromCmd(cmd); mp != "" {
 			if fi, err := os.Stat(mp); err == nil {
 				// Same footprint generate-time bakes: projector weights + the

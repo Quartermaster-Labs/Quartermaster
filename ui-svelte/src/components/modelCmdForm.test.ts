@@ -61,3 +61,16 @@ describe("specToggle", () => {
     expect(specToggle("ngram-mod", "ngram-mod", false)).toBe("none");
   });
 });
+
+// The vision twin's projector flags are owned by the "Image projector" dropdown
+// (--no-mmproj-offload) and by sidecar discovery (--mmproj). Neither may land in
+// extraArgs: the emitter writes its own copy, so a leaked one double-emits from
+// the first blur of the launch box onward.
+describe("parseCmdFields mmproj flags", () => {
+  it("keeps --mmproj and --no-mmproj-offload out of extraArgs", () => {
+    const p = parseCmdFields(
+      "llama-server -m x.gguf --mmproj C:/models/mmproj.gguf --no-mmproj-offload --foo bar",
+    );
+    expect(p.extraArgs).toBe("--foo bar");
+  });
+});
