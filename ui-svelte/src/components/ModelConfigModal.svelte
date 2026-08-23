@@ -17,7 +17,7 @@
     models,
   } from "../stores/api";
   import { get } from "svelte/store";
-  import { FolderOpen, HelpCircle } from "lucide-svelte";
+  import { FolderOpen, HelpCircle, X } from "lucide-svelte";
   import { tip } from "../lib/tooltip";
   import { askConfirm } from "../lib/confirm";
   import VramGauge from "./VramGauge.svelte";
@@ -250,6 +250,9 @@
   // but saved globally; a snapshot detects edits so we only PUT when changed.
   let defaultVariants = $state<ModelVariant[]>([]);
   let origDefaultVariants = $state("");
+  // Serialized form state as last loaded/saved, for the unsaved-changes guard.
+  // "" = nothing loaded yet, which must not read as dirty.
+  let origOverride = $state("");
 
   // Two-way launch-parameters box. cmdDraft is the editable command text. Form
   // edits re-render it from the backend (renderCmd); editing the box parses known
@@ -949,6 +952,11 @@
         }),
       );
       variantCmds = cmds;
+      // Taken from buildOverride(), not from cfg.override: the seed fills in
+      // effective values (a blank vision variant, the sizer's ctx) that the
+      // stored override doesn't carry, and comparing against the raw stored
+      // copy would report every freshly opened model as dirty.
+      origOverride = JSON.stringify(buildOverride());
     } catch (e) {
       // Drop the previous model's config: `config` is what the whole body renders
       // from, so keeping it on a failed load showed the LAST model's settings under
@@ -1278,6 +1286,40 @@
     return s === "" || Number.isNaN(Number(s)) ? null : Number(s);
   }
 
+  // A native <dialog> only closes on Escape; its ::backdrop is part of the
+  // dialog element itself, so an outside click arrives here with the dialog as
+  // target. Hit-test the box rather than trusting target === dialogEl: the panel
+  // is a child that fills it, but a Select popover or a drag that starts inside
+  // and ends outside would otherwise read as a backdrop click. mousedown (not
+  // click) so releasing a text selection past the edge doesn't dismiss it.
+  function backdropClose(e: MouseEvent) {
+    if (e.target !== dialogEl) return;
+    const r = dialogEl.getBoundingClientRect();
+    const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+    if (!inside) void requestClose();
+  }
+
+  const dirty = $derived.by(
+    () =>
+      origOverride !== "" &&
+      (JSON.stringify(buildOverride()) !== origOverride || JSON.stringify(defaultVariants) !== origDefaultVariants),
+  );
+
+  // Every dismissal path (X, Close, Escape, backdrop) funnels through here so
+  // the guard can't be walked around; Save/Reset close on their own terms.
+  async function requestClose() {
+    if (dirty) {
+      const ok = await askConfirm({
+        title: "Discard unsaved changes?",
+        body: "The edits to this model's parameters have not been saved.",
+        confirmLabel: "Discard",
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    dialogEl?.close();
+  }
+
   async function save() {
     if (!modelId) return;
     saving = true;
@@ -1326,6 +1368,13 @@
 <dialog
   bind:this={dialogEl}
   onclose={onclose}
+  oncancel={(e) => {
+    // Escape fires "cancel" and would close before the guard can ask; take the
+    // dismissal over ourselves instead.
+    e.preventDefault();
+    void requestClose();
+  }}
+  onmousedown={backdropClose}
   class="bg-surface text-txtmain rounded-lg shadow-xl max-w-[640px] w-full max-h-[calc(90vh/var(--qm-scale))] p-0 backdrop:bg-black/50 m-auto"
 >
   <div class="flex flex-col max-h-[calc(90vh/var(--qm-scale))]">
@@ -1353,7 +1402,9 @@
           {/if}
         {/if}
       </h2>
-      <button onclick={() => dialogEl?.close()} class="text-txtsecondary hover:text-txtmain text-2xl leading-none">&times;</button>
+      <button onclick={requestClose} class="text-txtsecondary hover:text-txtmain transition-colors" aria-label="Close">
+        <X size={18} />
+      </button>
     </div>
 
     <!-- Sticky live estimate: stays pinned above the scrolling form so the memory
@@ -2792,7 +2843,7 @@
     <div class="p-4 border-t border-card-border flex justify-between items-center">
       <button onclick={reset} class="btn btn--sm" disabled={saving || !config?.hasOverride}>Reset to default</button>
       <div class="flex gap-2">
-        <button onclick={() => dialogEl?.close()} class="btn btn--sm">Close</button>
+        <button onclick={requestClose} class="btn btn--sm">Close</button>
         <button onclick={save} class="btn btn--sm btn--primary !text-white" disabled={saving || loading}>
           {saving ? "Saving…" : saved ? "Saved ✓" : "Save & reload"}
         </button>
