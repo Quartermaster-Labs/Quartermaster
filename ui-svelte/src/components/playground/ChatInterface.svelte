@@ -513,8 +513,12 @@
     selReply = null; // rects go stale once the list scrolls
     if (!messagesContainer) return;
     const { scrollTop, scrollHeight, clientHeight } = messagesContainer;
-    // Consider "at bottom" if within 40px of the bottom
-    userScrolledUp = scrollHeight - scrollTop - clientHeight > 40;
+    // "At bottom" only means actually at the bottom — a small tolerance absorbs
+    // sub-pixel rounding. A wider band (this was 40px) read as a rubber band:
+    // the user scrolled up a little, was still inside the band, and the next
+    // streamed token snapped them hard to the end. 8px keeps follow-while-at-
+    // bottom stable without ever yanking a reader back down.
+    userScrolledUp = scrollHeight - scrollTop - clientHeight > 8;
   }
 
   // Pin the view to the newest content unless the user has scrolled away.
@@ -528,15 +532,20 @@
     if (messages.length > 0 && messagesContainer && !userScrolledUp) pinToBottom();
   });
 
-  // Re-pin on any content height change, not just on a new message: collapsing
-  // or expanding a reasoning/tool box mid-stream resizes the list without
-  // touching `messages`, and the browser then clamps scrollTop wherever the
-  // shrink left it. Together with `overflow-anchor: none` on the container (see
-  // the markup) this is what keeps a collapse from stranding the view above the
-  // still-growing reply with no way back down short of a reload.
+  // Re-pin on content height changes only while this chat's assistant is
+  // generating: a streamed token grows the content, and without the pin the
+  // reply scrolls out of view. Same for a reasoning/tool box toggled mid-stream
+  // — it resizes the list without touching `messages`, and with
+  // `overflow-anchor: none` on the container the pin is the only way back down.
+  // Outside a stream the list is static and height changes (late image loads,
+  // lazy mermaid/katex renders, a box the user toggles) must not yank a reader
+  // sitting at the old bottom to a moved one: the user owns the scroll
+  // position then.
   $effect(() => {
     if (!messagesInner) return;
-    const ro = new ResizeObserver(() => pinToBottom());
+    const ro = new ResizeObserver(() => {
+      if (genId === $activeChatId) pinToBottom();
+    });
     ro.observe(messagesInner);
     return () => ro.disconnect();
   });
@@ -1406,7 +1415,6 @@
       class="flex-1 min-h-0 overflow-y-auto [overflow-anchor:none] pretty-scroll scroll-fade-b mb-4"
       bind:this={messagesContainer}
       onscroll={handleMessagesScroll}
-      onwheel={(e) => { if (e.deltaY < 0) userScrolledUp = true; }}
       onmousedown={() => (selReply = null)}
       onmouseup={onSelection}
       use:scrollFade
