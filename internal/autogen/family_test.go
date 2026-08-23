@@ -35,6 +35,9 @@ func TestModelBaseKeyAndFamilyKey(t *testing.T) {
 		{"qwen3.8-27b-i1", "qwen3.8-27b", "qwen3.8-27b"},
 		// MXFP4 is a quant token like any other.
 		{"qwen3.8-27b-mxfp4", "qwen3.8-27b", "qwen3.8-27b"},
+		// So is NVFP4 - and a publisher who trails the build tag rather than the
+		// quant leaves it mid-id, where the cut still has to land on it.
+		{"qwen3.8-27b-nvfp4-mtp-mid-high", "qwen3.8-27b", "qwen3.8-27b"},
 	}
 	for _, c := range cases {
 		if got := ModelBaseKey(c.id); got != c.base {

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/quartermaster-labs/quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/quant"
 )
 
 // GgufRow describes one discovered served model (one .gguf, or the first shard
@@ -47,12 +48,7 @@ type GgufRow struct {
 }
 
 var (
-	shardRe = regexp.MustCompile(`-(\d{5})-of-\d{5}\.gguf$`)
-	// Quant tokens: Q4_0, Q6_K, Q4_K_M, IQ3_XS, Q8_0, F16, BF16, F32, MXFP4.
-	// Bounded by a separator before and a separator / .gguf after. MXFP4 leads
-	// the alternation only for readability - each branch is anchored, so order
-	// is not load-bearing here.
-	quantRe      = regexp.MustCompile(`(?i)[-_.](MXFP4(?:_[A-Z0-9]+)*|IQ\d+(?:_[A-Z0-9]+)*|Q\d+(?:_[A-Z0-9]+)*|F16|BF16|F32)(?:[._-]|\.gguf$)`)
+	shardRe      = regexp.MustCompile(`-(\d{5})-of-\d{5}\.gguf$`)
 	ggufSuffixRe = regexp.MustCompile(`(?i)-GGUF$`)
 	// Separate MTP/draft sidecar (e.g. Gemma-4 ships "mtp-gemma-4-12B-it.gguf"
 	// alongside the main model). Loaded via -md + --spec-type draft-mtp, not served alone.
@@ -108,12 +104,21 @@ var (
 )
 
 // quantFromName extracts the quant token (upper-cased) from a gguf file name,
-// or "" when none is present.
-func quantFromName(name string) string {
-	if mm := quantRe.FindStringSubmatch(name); mm != nil {
-		return strings.ToUpper(mm[1])
-	}
-	return ""
+// or "" when none is present. Thin alias for the shared matcher in
+// internal/quant, which is where the token shape itself lives.
+func quantFromName(name string) string { return quant.FromName(name) }
+
+// hasQuantPart reports whether an already-lowercased base id carries quant as a
+// whole separator-bounded part. The quant is stripped from the base name only
+// when it TRAILS it, so a publisher who writes the build tag last
+// ("Qwen3.8-27B-NVFP4-MTP-MID-HIGH") leaves it embedded - and appending it again
+// would mint "…-nvfp4-mtp-mid-high-nvfp4". The id is the key every override,
+// favourite and client request is written against, so it stays the name the file
+// already spells. Bounded on both sides because the token itself contains "_"
+// (Q4_K_M), which rules out splitting the id into parts.
+func hasQuantPart(baseKey, quant string) bool {
+	re := regexp.MustCompile(`(?i)(^|[-_.])` + regexp.QuoteMeta(quant) + `([-_.]|$)`)
+	return re.MatchString(baseKey)
 }
 
 // DiscoverGgufModelsMulti walks each root and returns the union of rows,
@@ -276,7 +281,7 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 		}
 		baseKey := strings.ToLower(ggufSuffixRe.ReplaceAllString(base, ""))
 		idKey := baseKey
-		if quant != "" {
+		if quant != "" && !hasQuantPart(baseKey, quant) {
 			idKey = fmt.Sprintf("%s-%s", baseKey, strings.ToLower(quant))
 		}
 

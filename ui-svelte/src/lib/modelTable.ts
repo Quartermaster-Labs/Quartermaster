@@ -4,20 +4,11 @@
 // modelTable.test.ts.
 import type { Model } from "./types";
 import { prettifyModelName } from "./modelUtils";
-
-// Quant tokens as they appear in a gguf-derived model id. Mirrors the server's
-// quantFromPath (internal/server/modelmeta.go) so a model whose payload predates
-// the field still groups correctly.
-const QUANT_RE = /^(?:I?Q\d+(?:_[A-Za-z0-9]+)*|BF16|FP16|F16|F32|FP8|MXFP4)$/i;
-
-// Recipe markers that belong to the quant rather than the model name: unsloth
-// writes "UD-Q4_K_XL" (dynamic), mradermacher "i1-Q4_K_M" (imatrix).
-const QUANT_PREFIX_RE = /^(?:UD|i1)$/i;
+import { QUANT_RE, QUANT_PREFIX_RE, CRUMB_RE } from "./quant";
 
 // quantIndex finds the FIRST quant-shaped part of an id. First, not last: what
-// follows a quant is a build tag ("-MTP", "-preserved"), and autogen appends the
-// quant a second time when the filename didn't end in it, so the last match is
-// often the duplicate. Never index 0 — an id that IS a quant has no base left.
+// follows a quant is a build tag ("-MTP", "-preserved", "-MID-HIGH"), never a
+// second weight type. Never index 0 — an id that IS a quant has no base left.
 function quantIndex(parts: string[]): number {
   for (let i = 1; i < parts.length; i++) if (QUANT_RE.test(parts[i])) return i;
   return -1;
@@ -37,8 +28,8 @@ export function quantOf(m: Model): string {
 // baseKey is an id with everything from the quant onwards cut off, so the same
 // model at Q4_K_M and Q8_0 lands on ONE row. It cuts rather than removes the one
 // part, because both variant suffixes ("…-Q4_K_M-32k") and build tags
-// ("…-q4_k_m-mtp-q4_k_m") trail the quant — splicing would leave every tier on a
-// row of its own and strand quant crumbs in the display name.
+// ("…-nvfp4-mtp-mid-high") trail the quant — splicing would leave every tier on
+// a row of its own and strand quant crumbs in the display name.
 export function baseKey(id: string): string {
   const parts = id.split("-");
   while (parts.length > 1 && /^gguf$/i.test(parts[parts.length - 1])) parts.pop();
@@ -273,12 +264,6 @@ export function fmtGB(v: number | undefined): string {
   if (!v || v <= 0) return "-";
   return v >= 100 ? v.toFixed(0) : v.toFixed(1);
 }
-
-// Crumbs a quant leaves in a DISPLAY name. autogen strips the quant from the id
-// only when it trails the filename, and prettifying splits what's left on "_":
-// "ThinkingCap-Qwen3.6-27B-Q4_K_M-MTP" arrives named "Thinkingcap Qwen3.6 27b K
-// M". Trailing-only and word-shaped, so "…V2 Native Mtp Preserved" is untouched.
-const CRUMB_RE = /^(?:UD|I1|K|M|S|L|X{1,2}[SLM]|I?Q\d+(?:_[A-Za-z0-9]+)*|BF16|FP16|F16|F32|FP8|MXFP4)$/i;
 
 // stripQuantCrumbs drops those trailing fragments. It never returns empty: a
 // name that is ALL crumbs is the model's real name (a "Q8" nickname), not debris.

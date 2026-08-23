@@ -6,25 +6,32 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/quartermaster-labs/quartermaster/internal/quant"
 )
 
 // Quantization / weight-type token as it appears in a gguf filename
-// ("...-Q4_K_M.gguf", "...-IQ3_XXS-00001-of-00002.gguf", "...-BF16.gguf").
+// ("...-Q4_K_M.gguf", "...-IQ3_XXS-00001-of-00002.gguf", "...-BF16.gguf"), plus
+// the recipe markers written immediately before one: unsloth's "UD" (dynamic)
+// and mradermacher's "i1" (imatrix), as in "…-UD-Q4_K_XL.gguf".
+//
+// Both come from internal/quant, the one place the token shape is written down
+// (the Models table in the UI mirrors it) — a weight type this misses is a model
+// whose every ctx tier and vision twin shows up as a row of its own.
+//
 // Matched against whole '-'-separated parts of the name (never '_', which is
 // INSIDE the token) so a model whose name merely contains something
 // quant-shaped is not mistaken for one.
-var quantPart = regexp.MustCompile(`(?i)^(?:I?Q\d+(?:_[A-Z0-9]+)*|BF16|FP16|F16|F32|FP8|MXFP4)$`)
-
-// quantPrefix are recipe markers that belong to the quant, not to the model
-// name: unsloth's "UD" (dynamic) and mradermacher's "i1" (imatrix) are always
-// written immediately before the token — "…-UD-Q4_K_XL.gguf".
-var quantPrefix = regexp.MustCompile(`(?i)^(?:UD|i1)$`)
+var (
+	quantPart   = quant.TokenRe
+	quantPrefix = quant.PrefixRe
+)
 
 // quantFromPath extracts the quantization label from a gguf path, "" when the
 // filename carries none. The FIRST matching part wins: everything after it is
-// a build tag ("-MTP", "-00001-of-00002") rather than another weight type, and
-// the generated model id can carry the quant twice (autogen only strips it when
-// it is the trailing token, so "…-Q4_K_M-MTP" becomes "…-q4_k_m-mtp-q4_k_m").
+// a build tag ("-MTP", "-MID-HIGH", "-00001-of-00002") rather than another
+// weight type, so a mid-name quant ("…-NVFP4-MTP-MID-HIGH") is read off the
+// same part autogen's id derivation leaves in place.
 func quantFromPath(path string) string {
 	if path == "" {
 		return ""

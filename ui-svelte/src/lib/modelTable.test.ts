@@ -45,6 +45,26 @@ describe("quantOf", () => {
   it("is empty when the id carries no quant", () => {
     expect(quantOf(mk("sam3-large"))).toBe("");
   });
+
+  it("reads an FP4 token sitting mid-id", () => {
+    expect(quantOf(mk("qwen3.8-27b-nvfp4-mtp-mid-high"))).toBe("NVFP4");
+    expect(quantOf(mk("gpt-oss-20b-mxfp4"))).toBe("MXFP4");
+  });
+
+  it("covers the whole quant families, not a hand-kept list", () => {
+    // One per family the shared pattern recognises — see internal/quant.
+    expect(quantOf(mk("gpt-oss-20b-mxfp4_moe"))).toBe("MXFP4_MOE");
+    expect(quantOf(mk("bitnet-2b-tq1_0"))).toBe("TQ1_0");
+    expect(quantOf(mk("qwen3.6-27b-iq4_ks"))).toBe("IQ4_KS"); // ik_llama.cpp
+    expect(quantOf(mk("qwen3.8-27b-q1_0"))).toBe("Q1_0");
+    expect(quantOf(mk("some-model-8b-bf16"))).toBe("BF16");
+  });
+
+  it("does not mistake a name part for a quant", () => {
+    for (const id of ["qwen3.8-27b-mtp-mid-high", "gemma-4-12b-it", "sam3-large"]) {
+      expect(quantOf(mk(id))).toBe("");
+    }
+  });
 });
 
 describe("baseKey", () => {
@@ -115,6 +135,21 @@ describe("buildRows", () => {
     const q4 = buildRows(models).find((r) => r.key === "qwen3-32b")!.quants.find((q) => q.quant === "Q4_K_M")!;
     expect(q4.base.id).toBe("qwen3-32b-Q4_K_M");
     expect(q4.variants.map((v) => v.label)).toEqual(["32k"]);
+  });
+
+  it("folds an NVFP4 model's ctx tiers and vision twin into ONE row", () => {
+    // The quant sits mid-id here, so before NVFP4 was a recognised token every
+    // one of these cut nowhere and stood alone as its own "model".
+    const rows = buildRows([
+      mk("qwen3.8-27b-nvfp4-mtp-mid-high", { sizeGB: 15.8 }),
+      mk("qwen3.8-27b-nvfp4-mtp-mid-high-32k", { sizeGB: 15.8 }),
+      mk("qwen3.8-27b-nvfp4-mtp-mid-high-vision", { sizeGB: 15.8 }),
+      mk("qwen3.8-27b-q4_k_m", { sizeGB: 16.5 }),
+    ]);
+    expect(rows.map((r) => r.key)).toEqual(["qwen3.8-27b"]);
+    const nvfp4 = rows[0].quants.find((q) => q.quant === "NVFP4")!;
+    expect(nvfp4.base.id).toBe("qwen3.8-27b-nvfp4-mtp-mid-high");
+    expect(nvfp4.variants.map((v) => v.label)).toEqual(["32k", "vision"]);
   });
 
   it("marks a row live when any member is loaded, and unlisted only when all are", () => {

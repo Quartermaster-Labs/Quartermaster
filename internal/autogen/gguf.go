@@ -228,8 +228,15 @@ func scanChatTemplate(tmpl string) (preservesThinking bool, effortLevels []strin
 }
 
 // ggmlTypeSize maps a ggml tensor type to (block size in elements, bytes per
-// block). bytes(tensor) = n_elements / blockElems * blockBytes. Covers the
-// quants seen in local ggufs; unknown types make a tensor unsizable.
+// block). bytes(tensor) = n_elements / blockElems * blockBytes.
+//
+// The numbers are ggml's own: the enum in ggml/include/ggml.h fixes the type
+// ids, and each block struct in ggml/src/ggml-common.h fixes its pair (QK_* is
+// the block size, sizeof(block_*) the byte count). An id we don't list only
+// costs the BYTE accounting - the tensor walk keeps going and returns
+// unknownType, which suppresses the MoE expert share rather than failing the
+// file (see readExpertShare). Removed types (4/5, 31-33, 36-38) are absent on
+// purpose: no gguf still carries them.
 var ggmlTypeSize = map[uint32][2]int64{
 	0:  {1, 4},     // F32
 	1:  {1, 2},     // F16
@@ -263,6 +270,8 @@ var ggmlTypeSize = map[uint32][2]int64{
 	34: {256, 54},  // TQ1_0
 	35: {256, 66},  // TQ2_0
 	39: {32, 17},   // MXFP4 (1-byte E8M0 scale + 32 4-bit elements)
+	40: {64, 36},   // NVFP4 (4x 1-byte E4M3 sub-scales + 64 4-bit elements)
+	41: {128, 18},  // Q1_0  (1.125 bpw: fp16 delta + 128 1-bit elements)
 }
 
 // ggufReader reads little-endian GGUF primitives from a seekable source. It is

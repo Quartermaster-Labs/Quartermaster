@@ -146,3 +146,49 @@ func TestDiscoverGgufModels_NativeMtpIsNotASidecar(t *testing.T) {
 		t.Fatalf("DraftPath = %q, want empty", rows[0].DraftPath)
 	}
 }
+
+// An NVFP4 gguf whose quant sits MID-name ("…-NVFP4-MTP-MID-HIGH") is a quant of
+// its model, not a model of its own: the row carries the token in Quant, and the
+// id is left exactly as the file spells it rather than gaining a second "-nvfp4"
+// tail. Both matter downstream - the Models table cuts a row's key at the quant,
+// so an unrecognised one gave every ctx tier and the vision twin a row apiece.
+func TestDiscoverGgufModels_NVFP4MidNameQuant(t *testing.T) {
+	dir := t.TempDir()
+	writeStub(t, dir, "Qwen3.8-27B-NVFP4-MTP-MID-HIGH.gguf", 1024)
+
+	rows, err := DiscoverGgufModels(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want 1 served row, got %d: %+v", len(rows), rows)
+	}
+	if rows[0].Quant != "NVFP4" {
+		t.Fatalf("Quant = %q, want NVFP4", rows[0].Quant)
+	}
+	const want = "qwen3.8-27b-nvfp4-mtp-mid-high"
+	if rows[0].ID != want {
+		t.Fatalf("ID = %q, want %q (no duplicated quant tail)", rows[0].ID, want)
+	}
+	if got := ModelBaseKey(rows[0].BaseID); got != "qwen3.8-27b" {
+		t.Fatalf("ModelBaseKey(%q) = %q, want qwen3.8-27b", rows[0].BaseID, got)
+	}
+}
+
+// A trailing quant is still stripped from the base and re-appended to the id -
+// the mid-name rule must not stop the common layout from producing an id.
+func TestDiscoverGgufModels_TrailingQuantStillAppended(t *testing.T) {
+	dir := t.TempDir()
+	writeStub(t, dir, "Qwen3.8-27B-NVFP4.gguf", 1024)
+
+	rows, err := DiscoverGgufModels(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want 1 served row, got %d", len(rows))
+	}
+	if rows[0].BaseID != "qwen3.8-27b" || rows[0].ID != "qwen3.8-27b-nvfp4" {
+		t.Fatalf("BaseID/ID = %q/%q", rows[0].BaseID, rows[0].ID)
+	}
+}

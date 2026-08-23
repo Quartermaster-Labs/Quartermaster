@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/quartermaster-labs/quartermaster/internal/config"
+	"github.com/quartermaster-labs/quartermaster/internal/quant"
 )
 
 // Family-scoped sidecar inheritance.
@@ -41,11 +42,6 @@ import (
 // inherited projector creates can be marked unlisted.
 
 var (
-	// Quant token as it appears in a model id. Mirrors QUANT_RE in modelTable.ts.
-	quantTokenRe = regexp.MustCompile(`(?i)^(?:I?Q\d+(?:_[A-Za-z0-9]+)*|BF16|FP16|F16|F32|FP8|MXFP4)$`)
-	// Recipe markers that belong to the quant, not the name: unsloth's dynamic
-	// "UD-Q4_K_XL", mradermacher's imatrix "i1-Q4_K_M".
-	quantPrefixRe = regexp.MustCompile(`(?i)^(?:UD|i1)$`)
 	// A parameter count as publishers write it: 27b, 4b, 0.6b, 350m, gemma's e2b.
 	sizeTokenRe = regexp.MustCompile(`(?i)^[a-z]?\d+(?:\.\d+)?[bm]$`)
 	// A MoE active-parameter tail: the "a3b" of "qwen3.6-35b-a3b".
@@ -55,17 +51,11 @@ var (
 )
 
 // quantTokenIndex finds the FIRST quant-shaped part of a split id. First, not
-// last: what follows a quant is a build tag ("-MTP", "-preserved"), and id
-// derivation appends the quant a second time when the file name did not end in
-// it, so the last match is often the duplicate. Never index 0 - an id that IS a
-// quant has no base left.
+// last: what follows a quant is a build tag ("-MTP", "-preserved", "-MID-HIGH"),
+// never a second weight type. Never index 0 - an id that IS a quant has no base
+// left.
 func quantTokenIndex(parts []string) int {
-	for i := 1; i < len(parts); i++ {
-		if quantTokenRe.MatchString(parts[i]) {
-			return i
-		}
-	}
-	return -1
+	return quant.PartIndex(parts)
 }
 
 // ModelBaseKey cuts an id at the quant, so the same model at Q4_K_M and at Q8_0
@@ -76,10 +66,7 @@ func ModelBaseKey(id string) string {
 	for len(parts) > 1 && parts[len(parts)-1] == "gguf" {
 		parts = parts[:len(parts)-1]
 	}
-	i := quantTokenIndex(parts)
-	if i > 1 && quantPrefixRe.MatchString(parts[i-1]) {
-		i--
-	}
+	i := quantTokenIndex(parts) // already folds a UD/i1 marker in front of the token
 	if i > 0 {
 		parts = parts[:i]
 	}
@@ -87,7 +74,7 @@ func ModelBaseKey(id string) string {
 	// quant off "Qwen3.8-27B-UD-Q4_K_XL" and leaves BaseID "qwen3.8-27b-ud".
 	// Popping it here is what makes unsloth's dynamic quants twins of the same
 	// model's plain quants instead of a family of their own.
-	for len(parts) > 1 && quantPrefixRe.MatchString(parts[len(parts)-1]) {
+	for len(parts) > 1 && quant.PrefixRe.MatchString(parts[len(parts)-1]) {
 		parts = parts[:len(parts)-1]
 	}
 	return strings.Join(parts, "-")
