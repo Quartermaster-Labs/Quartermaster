@@ -169,9 +169,28 @@ func (s *Server) handleAPIHubModel(w http.ResponseWriter, r *http.Request) {
 	// than in the adapter: the disk is a property of this installation, not of
 	// the hub. A file shorter than the hub says it should be is a truncated
 	// copy, so it stays a download.
+	//
+	// A name is not an identity, though. Publishers re-upload a quant in place,
+	// often at a byte count within rounding of the old one, and on size alone
+	// the new revision reads as "already downloaded" — the user's only way out
+	// being to rename or delete the file by hand. So where we recorded the id
+	// we fetched at and the hub now states a different one, the row is Local
+	// AND Stale: it is on disk, and it is not what the repo is serving. Both
+	// ids have to be present for that call — an absent one is "no opinion", and
+	// claiming an update on a file we know nothing about would send the user
+	// after 40 GB they already have.
 	local := s.hub.LocalFiles(id)
 	for i, f := range det.Files {
-		if have, ok := local[f.Path]; ok && (f.SizeBytes <= 0 || have >= f.SizeBytes) {
+		have, ok := local[f.Path]
+		if !ok {
+			continue
+		}
+		superseded := have.OID != "" && f.OID != "" && have.OID != f.OID
+		if superseded {
+			det.Files[i].Local, det.Files[i].Stale = true, true
+			continue
+		}
+		if f.SizeBytes <= 0 || have.Size >= f.SizeBytes {
 			det.Files[i].Local = true
 		}
 	}

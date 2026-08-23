@@ -580,17 +580,97 @@ func TestManager_LocalFiles(t *testing.T) {
 	}
 	m := NewManager(func() string { return root }, nil)
 	got := m.LocalFiles("o/r")
-	if got["done.gguf"] != 2048 {
-		t.Errorf("done.gguf = %d, want 2048", got["done.gguf"])
+	if got["done.gguf"].Size != 2048 {
+		t.Errorf("done.gguf = %d, want 2048", got["done.gguf"].Size)
 	}
-	if got["sub/nested.gguf"] != 7 {
+	if got["sub/nested.gguf"].Size != 7 {
 		t.Errorf("nested file missing or wrong size: %v", got)
 	}
 	if _, ok := got["half.gguf"]; ok {
 		t.Error("a .part was reported as a local file")
 	}
+	// Nothing recorded these, so they carry no identity — which is what keeps
+	// a hand-copied file from ever being called stale.
+	if got["done.gguf"].OID != "" {
+		t.Errorf("an unrecorded file reported an identity: %q", got["done.gguf"].OID)
+	}
 	if len(m.LocalFiles("nobody/here")) != 0 {
 		t.Error("an unknown repo reported local files")
+	}
+}
+
+// A manifest is only believed while it still describes the file next to it.
+// Recording an id and then letting the bytes change behind our back must drop
+// the id, not keep vouching for a file that is gone.
+func TestManager_LocalFilesManifest(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "o", "r")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.gguf"), make([]byte, 100), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(func() string { return root }, nil)
+	m.recordManifest(dir, "a.gguf", manifestEntry{Size: 100, OID: "sha-one"})
+
+	if got := m.LocalFiles("o/r"); got["a.gguf"].OID != "sha-one" {
+		t.Errorf("recorded identity not reported: %+v", got["a.gguf"])
+	}
+	// The manifest itself is our bookkeeping, not a repo file.
+	if _, ok := m.LocalFiles("o/r")[manifestName]; ok {
+		t.Error("the manifest was reported as a downloaded file")
+	}
+	// Same name, different bytes, written by something that is not us.
+	if err := os.WriteFile(filepath.Join(dir, "a.gguf"), make([]byte, 140), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.LocalFiles("o/r"); got["a.gguf"].OID != "" {
+		t.Errorf("a replaced file kept the old identity: %+v", got["a.gguf"])
+	}
+}
+
+// The bug this whole path exists for: a repo re-uploads a quant under the same
+// name, at a size a byte comparison cannot tell apart. Skipping it is what used
+// to force the user to rename or delete the file by hand.
+func TestManager_HaveCurrent(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "o", "r")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.gguf"), make([]byte, 100), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(func() string { return root }, nil)
+	m.recordManifest(dir, "a.gguf", manifestEntry{Size: 100, OID: "old"})
+	man := readManifest(dir)
+
+	cases := []struct {
+		name  string
+		f     JobFile
+		force bool
+		want  bool
+	}{
+		{"same revision is skipped", JobFile{Path: "a.gguf", Size: 100, OID: "old"}, false, true},
+		{"replaced upstream at the same size is refetched", JobFile{Path: "a.gguf", Size: 100, OID: "new"}, false, false},
+		{"force refetches regardless", JobFile{Path: "a.gguf", Size: 100, OID: "old"}, true, false},
+		{"a hub stating no id falls back to size", JobFile{Path: "a.gguf", Size: 100}, false, true},
+		{"a truncated copy is refetched", JobFile{Path: "a.gguf", Size: 4096, OID: "old"}, false, false},
+		{"a file we do not have is fetched", JobFile{Path: "b.gguf", Size: 100, OID: "new"}, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := m.haveCurrent(dir, tc.f, man, tc.force); got != tc.want {
+				t.Errorf("haveCurrent = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	// No manifest at all — the hand-copied case. There is nothing to compare
+	// against, so the size test stands and the file is left alone.
+	if !m.haveCurrent(dir, JobFile{Path: "a.gguf", Size: 100, OID: "new"}, manifest{Files: map[string]manifestEntry{}}, false) {
+		t.Error("an unrecorded file was refetched on an id we never had")
 	}
 }
 

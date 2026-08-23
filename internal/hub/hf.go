@@ -121,8 +121,14 @@ type hfModelJSON struct {
 type hfSibling struct {
 	Path string `json:"rfilename"`
 	Size int64  `json:"size"`
-	LFS  *struct {
-		Size int64 `json:"size"`
+	// Oid is the git blob sha of a plain file. Non-LFS in a GGUF repo means a
+	// README or a config, so in practice the LFS oid below is the one that
+	// matters — but taking both costs nothing and keeps the identity defined
+	// for every file we might download.
+	Oid string `json:"oid"`
+	LFS *struct {
+		Size int64  `json:"size"`
+		Oid  string `json:"oid"`
 	} `json:"lfs"`
 }
 
@@ -369,9 +375,17 @@ func (h *HF) Detail(ctx context.Context, repoID string) (ModelDetail, error) {
 		if !IsModelFile(s.Path) {
 			continue
 		}
-		f := File{Path: s.Path, SizeBytes: s.Size}
-		if f.SizeBytes == 0 && s.LFS != nil {
-			f.SizeBytes = s.LFS.Size
+		f := File{Path: s.Path, SizeBytes: s.Size, OID: s.Oid}
+		if s.LFS != nil {
+			if f.SizeBytes == 0 {
+				f.SizeBytes = s.LFS.Size
+			}
+			// The LFS oid identifies the CONTENT; the plain oid identifies the
+			// pointer file that stands in for it, which changes for reasons the
+			// bytes don't. Prefer the content id wherever there is one.
+			if s.LFS.Oid != "" {
+				f.OID = s.LFS.Oid
+			}
 		}
 		classify(&f)
 		det.Files = append(det.Files, f)

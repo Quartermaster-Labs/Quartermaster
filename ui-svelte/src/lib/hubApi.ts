@@ -38,6 +38,11 @@ export interface HubFile {
   // server-side (`Manager.LocalFiles`). A `.part` does not count — half a file
   // is not a model, and that row stays a download.
   local?: boolean;
+  // Local, but the repo has since replaced this file under the same name: what
+  // is on disk was fetched at a content id the hub no longer serves. Set only
+  // when both ids are known, so it never fires on a hand-copied file we have
+  // no record of. Downloading it overwrites the old copy.
+  stale?: boolean;
 }
 
 export interface HubDetail extends HubModel {
@@ -233,11 +238,21 @@ export async function getHubJobs(): Promise<HubJob[]> {
   return jobs ?? [];
 }
 
-export function startHubDownload(repo: string, files: string[], label = "", source = "hf"): Promise<{ jobId: string }> {
+// force refetches files already on disk. The server detects an upstream
+// replacement on its own (see hub.haveCurrent); this is the override for what
+// it cannot see — a file swapped behind its back, or one downloaded before it
+// started recording what it fetched.
+export function startHubDownload(
+  repo: string,
+  files: string[],
+  label = "",
+  source = "hf",
+  force = false
+): Promise<{ jobId: string }> {
   return hubFetch<{ jobId: string }>("/api/hub/download", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source, repo, files, label }),
+    body: JSON.stringify({ source, repo, files, label, force }),
   });
 }
 
@@ -276,6 +291,10 @@ export interface FileOption {
   // shard of three is not a model, so the row keeps its download button (which
   // skips the shards already there).
   local: boolean;
+  // ANY shard has been replaced upstream. Unlike `local` this is an OR: the set
+  // is one model, so one superseded shard makes the whole thing the old
+  // revision, and re-downloading fetches exactly the shards that moved.
+  stale: boolean;
 }
 
 /**
@@ -297,12 +316,13 @@ export function groupFiles(files: HubFile[]): FileOption[] {
   for (const f of files) {
     let opt = by.get(f.group);
     if (!opt) {
-      opt = { group: f.group, label: baseName(f.group), files: [], sizeBytes: 0, projector: !!f.projector, local: true };
+      opt = { group: f.group, label: baseName(f.group), files: [], sizeBytes: 0, projector: !!f.projector, local: true, stale: false };
       by.set(f.group, opt);
     }
     opt.files.push(f);
     opt.sizeBytes += f.sizeBytes;
     opt.local = opt.local && !!f.local;
+    opt.stale = opt.stale || !!f.stale;
   }
   const out = [...by.values()];
   for (const o of out) o.files.sort((a, b) => (a.shard ?? 0) - (b.shard ?? 0));

@@ -129,6 +129,29 @@ marker or suffix mislabelled the row instead of failing), and two files could re
 tag — `mmproj-F16.gguf` rendered as a bare "F16", identical in the table to the model's own F16
 weights.
 
+### "downloaded" is a content check, not a name check
+
+A row carries a green **downloaded** badge when every shard is on disk at the size the hub reports.
+That test on its own was wrong in one common case: a publisher re-uploads a quant **in place**,
+under the same filename, and a rebuild at the same quant lands within bytes of the old one — so
+the new revision read as already downloaded, the button rendered as a disabled tick, and the only
+way to get the update was to go rename or delete the file by hand.
+
+So the server records the hub's content id for each file it downloads (`.quartermaster-hub.json`
+in the repo folder; see [`internal/hub/CLAUDE.md`](../internal/hub/CLAUDE.md)) and compares it on
+the next visit. `HubFile.stale` means *on disk, but not what the repo is serving now*: the row
+gets an amber **update available** badge and a live button, and `rowState()` ranks `stale` above
+`local` for exactly that reason. `groupFiles` ORs `stale` across shards where it ANDs `local` —
+the set is one model, so one superseded shard makes the whole thing the old revision — and the
+job then refetches only the shards whose id actually moved.
+
+Both ids have to be known for that call, so a **hand-copied** file — one we have no record of —
+is never called stale. That is what the second button on a `downloaded` row is for: it passes
+`force`, which refetches regardless. It covers what the server cannot see (a file swapped outside
+quartermaster, or one downloaded before the manifest existed) and means no row can ever again
+strand the user with a manual fix. Either way the old copy stays in place until the new file is
+renamed over it, so a canceled update leaves a working model behind.
+
 The server-side `HubFile.projector` flag still drives three things a name can't: a `projector`
 badge; sorting projectors **below** the models (as the smallest file in a repo one otherwise
 sorted first, where it read as the cheap option); and "companion" in place of the fits/spills

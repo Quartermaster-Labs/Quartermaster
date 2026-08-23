@@ -115,6 +115,19 @@ type File struct {
 	// adapter: what is on disk is a property of this installation, not of the
 	// hub. See Manager.LocalFiles and handleAPIHubModel.
 	Local bool `json:"local,omitempty"`
+	// Stale marks a Local file the hub has since REPLACED under the same name:
+	// what is on disk was fetched at a content id the repo no longer serves.
+	// Publishers requant in place all the time — a fixed chat template or a
+	// corrected tokenizer barely moves the byte count — so size alone reads the
+	// new revision as "already downloaded" and the user has to rename or delete
+	// the file by hand to get it. See Manager.LocalFiles.
+	Stale bool `json:"stale,omitempty"`
+	// OID is the hub's content id for this revision of the file (for Hugging
+	// Face, the LFS sha256). It is compared as an opaque string and never
+	// computed here: hashing a 20 GB file to render a picker row is not on.
+	// What makes the comparison possible is that the id we downloaded AT is
+	// recorded next to the bytes — see the repo manifest in download.go.
+	OID string `json:"oid,omitempty"`
 }
 
 // ModelDetail is a repo page: metadata, README, and the full file list.

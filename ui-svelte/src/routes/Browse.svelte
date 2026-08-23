@@ -187,9 +187,14 @@
     }
   }
 
-  // What the row's button does. "local" wins over "downloading": a set already
-  // on disk is done regardless of what else is in flight.
-  function rowState(opt: FileOption): "local" | "downloading" | "ready" {
+  // What the row's button does. "stale" outranks "local": the set is on disk,
+  // but the repo has replaced it under the same name, so the row is actionable
+  // rather than finished — that case used to render as a disabled tick and the
+  // only way to get the new revision was to rename or delete the file by hand.
+  // "local" still wins over "downloading": a set already on disk is done
+  // regardless of what else is in flight.
+  function rowState(opt: FileOption): "local" | "stale" | "downloading" | "ready" {
+    if (opt.stale) return "stale";
     if (opt.local) return "local";
     if (opt.files.some((f) => inFlight.has(f.path))) return "downloading";
     return "ready";
@@ -427,7 +432,11 @@
     return det.pipeline === "text-generation" || det.pipeline === "image-text-to-text";
   }
 
-  async function download(opt: FileOption): Promise<void> {
+  // force is for a set the server cannot tell is out of date — a file replaced
+  // outside quartermaster, or one that predates the download manifest. An
+  // upstream replacement it CAN see (opt.stale) needs no flag: the job refetches
+  // exactly the shards whose content id moved.
+  async function download(opt: FileOption, force = false): Promise<void> {
     if (!selected) return;
     err = null;
     try {
@@ -435,7 +444,8 @@
         selected.id,
         opt.files.map((f) => f.path),
         opt.label,
-        selected.source
+        selected.source,
+        force
       );
       await refreshHubJobs();
     } catch (e) {
@@ -848,7 +858,14 @@
                         {#if q.files.length > 1}
                           <span class="text-[0.65rem] text-txtsecondary">· {q.files.length} parts</span>
                         {/if}
-                        {#if q.local}
+                        {#if q.stale}
+                          <span
+                            class="ml-1 inline-flex items-center gap-0.5 rounded bg-amber-500/15 px-1 py-0.5 text-micro font-medium uppercase tracking-wide text-amber-500"
+                            use:tip={"In your models folder, but the repo has replaced this file under the same name. Downloading it overwrites your copy."}
+                          >
+                            <RefreshCw class="w-2.5 h-2.5" /> update available
+                          </span>
+                        {:else if q.local}
                           <span
                             class="ml-1 inline-flex items-center gap-0.5 rounded bg-success/15 px-1 py-0.5 text-micro font-medium uppercase tracking-wide text-success"
                             use:tip={"Already in your models folder, nothing to download"}
@@ -864,26 +881,45 @@
                       <td class="py-2 whitespace-nowrap {q.projector ? 'text-txtsecondary' : estimateClass(q, v)}" use:tip={q.projector ? "" : estimateTitle(q)}>
                         {q.projector ? "companion" : estimateLabel(q, v)}
                       </td>
-                      <td class="py-2 text-right">
+                      <td class="py-2 text-right whitespace-nowrap">
                         <button
                           class="icon-btn"
-                          disabled={st !== "ready"}
+                          disabled={st !== "ready" && st !== "stale"}
                           use:tip={st === "local"
                             ? "Already in your models folder"
-                            : st === "downloading"
-                              ? "This file is downloading; see the Downloads menu"
-                              : busyRepo
-                                ? `Queue ${q.label} behind this repo's running download`
-                                : `Download ${q.label}`}
-                          aria-label="Download {q.label}"
+                            : st === "stale"
+                              ? `Get the current version of ${q.label}, replacing your copy`
+                              : st === "downloading"
+                                ? "This file is downloading; see the Downloads menu"
+                                : busyRepo
+                                  ? `Queue ${q.label} behind this repo's running download`
+                                  : `Download ${q.label}`}
+                          aria-label={st === "stale" ? `Update ${q.label}` : `Download ${q.label}`}
                           onclick={() => download(q)}
                         >
-                          {#if st === "local"}
+                          {#if st === "stale"}
+                            <RefreshCw class="w-3.5 h-3.5 text-amber-500" />
+                          {:else if st === "local"}
                             <Check class="w-3.5 h-3.5 text-success" />
                           {:else}
                             <Download class="w-3.5 h-3.5" />
                           {/if}
                         </button>
+                        <!-- The escape hatch for what the server cannot see: a
+                             file replaced outside quartermaster, or one from
+                             before it recorded what it fetched. Without it, the
+                             only fix for a wrongly-"downloaded" row was to go
+                             rename or delete the file by hand. -->
+                        {#if st === "local"}
+                          <button
+                            class="icon-btn"
+                            use:tip={`Download ${q.label} again, replacing your copy`}
+                            aria-label="Re-download {q.label}"
+                            onclick={() => download(q, true)}
+                          >
+                            <RefreshCw class="w-3.5 h-3.5" />
+                          </button>
+                        {/if}
                       </td>
                     </tr>
                   {/each}
