@@ -52,7 +52,13 @@
     document.documentElement.setAttribute("data-theme", $isDarkMode ? "dark" : "light");
   });
 
+  // Dashboard only: the playground owns its own tab title (see PlaygroundApp).
+  // This effect re-runs on every connection change, so without the mode guard it
+  // would overwrite the playground's title a moment after mount, as soon as the
+  // event stream connected. While mode is still "loading" nobody writes, so a
+  // playground tab never flashes the dashboard title.
   $effect(() => {
+    if (mode !== "dashboard") return;
     const icon = $connectionState === "connecting" ? "\u{1F7E1}" : $connectionState === "connected" ? "\u{1F7E2}" : "\u{1F534}";
     document.title = `${icon} ${$appTitle}`;
   });

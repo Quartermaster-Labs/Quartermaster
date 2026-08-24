@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { me, checkMe } from "../stores/playgroundAuth";
-  import { loadChats, clearChats, startChat } from "../stores/chatHistory";
-  import { loadImageChats, clearImageChats } from "../stores/imageHistory";
-  import { loadSpeechChats, clearSpeechChats } from "../stores/speechHistory";
+  import { loadChats, clearChats, startChat, chatSessions, activeChatId, generatingChatId } from "../stores/chatHistory";
+  import { loadImageChats, clearImageChats, imageSessions, activeImageChatId, generatingImageChatId } from "../stores/imageHistory";
+  import { loadSpeechChats, clearSpeechChats, speechSessions, activeSpeechChatId, generatingSpeechChatId } from "../stores/speechHistory";
   import { loadPrefs, clearPrefs } from "../stores/prefs";
   import { migrateVoicesCache } from "../lib/voices";
   import { loadMemories, clearMemories } from "../stores/memories";
@@ -40,7 +40,6 @@
   let chatsLoaded = $state(false);
 
   onMount(async () => {
-    document.title = "Quartermaster Playground";
     await checkMe();
     ready = true;
   });
@@ -65,6 +64,35 @@
       clearMemories();
       chatsLoaded = false;
     }
+  });
+
+  // The playground's tab title: <hat> <state> <thread> - Quartermaster Playground.
+  // Single writer for this app: App.svelte's connection-dot title is guarded to
+  // dashboard mode, and onMount no longer touches it (an effect always wins over
+  // a one-shot mount write anyway).
+  const APP_ICON = "\u{1F3A9}"; // top hat, standing in for the mark the favicon carries
+
+  // Any tab generating lights the bolt, not just the visible one -- the title is
+  // read when the browser tab is in the background, where "which playground tab
+  // was open" is exactly what you cannot see.
+  const busy = $derived(!!($generatingChatId || $generatingImageChatId || $generatingSpeechChatId));
+
+  // The thread name follows the OPEN tab. Each tab keeps its own sessions +
+  // active id; the audio tab has no threads, so it contributes no name.
+  const threadTitle = $derived.by(() => {
+    let t = "";
+    if ($selectedTabStore === "chat") t = $chatSessions.find((c) => c.id === $activeChatId)?.title ?? "";
+    else if ($selectedTabStore === "images") t = $imageSessions.find((c) => c.id === $activeImageChatId)?.title ?? "";
+    else if ($selectedTabStore === "speech") t = $speechSessions.find((c) => c.id === $activeSpeechChatId)?.title ?? "";
+    t = t.trim();
+    return t.length > 48 ? t.slice(0, 47) + "\u2026" : t;
+  });
+
+  $effect(() => {
+    const state = busy ? "\u26A1" : "\u2705";
+    // Empty segments drop out, so the login screen and the audio tab get a clean
+    // "<hat> <state> - Quartermaster Playground" with no dangling separator.
+    document.title = [`${APP_ICON} ${state}`, threadTitle, "Quartermaster Playground"].filter(Boolean).join(" \u2014 ");
   });
 </script>
 
