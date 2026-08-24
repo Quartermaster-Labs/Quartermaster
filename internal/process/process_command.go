@@ -611,11 +611,15 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 	// cmd.WaitDelay only acts as the inherited-pipe backstop measured from
 	// process exit (see killProcess).
 	cmdCtx, cmdCancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(cmdCtx, resolveExe(args[0]), args[1:]...)
+	resolvedExe := resolveExe(args[0])
+	cmd := exec.CommandContext(cmdCtx, resolvedExe, args[1:]...)
 	cmd.Stderr = p.processLogger
 	cmd.Stdout = p.processLogger
 	cmd.Dir = spawnDir()
 	cmd.Env = append(cmd.Environ(), cfg.Env...)
+	// Self-contained backends (Vulkan/ROCm bundles) need their own directory
+	// on the loader path for TRANSITIVE deps — see exeLibEnv.
+	cmd.Env = exeLibEnv(cmd.Env, resolvedExe)
 	cmd.Cancel = func() error { return p.sendStopSignal(cmd) }
 	cmd.WaitDelay = p.waitDelay
 	setProcAttributes(cmd)
