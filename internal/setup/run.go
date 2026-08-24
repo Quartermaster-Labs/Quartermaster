@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -80,8 +81,25 @@ func (w *Wizard) run(ctx context.Context, c Choices) error {
 
 	w.step(PhaseConfiguring, "Writing configuration")
 	genPath := filepath.Join(c.Dir, "config", "quartermaster-generate.yaml")
-	if err := ensureGenerate(genPath); err != nil {
+	created, err := ensureGenerate(genPath)
+	if err != nil {
 		return err
+	}
+	// Size the memory budgets to THIS box, once, on the file we just created.
+	// The seeded example carries the author's numbers (7 GB VRAM, 24 GB RAM),
+	// which are wrong on every machine that is not that one — a 12 GB card left
+	// 5 GB idle, and a 16 GB box got a RAM ceiling it could never reach, so the
+	// ceiling that exists to stop a plan from swapping bound nothing.
+	//
+	// Written into the FILE rather than left to the runtime probe (which also
+	// covers this case) so the numbers are visible where the user edits them,
+	// and so the Settings page's "default" — what its reset button reverts to —
+	// is this machine's measurement rather than a placeholder.
+	//
+	// Only on creation. Re-running the installer over an existing install must
+	// not overwrite budgets the user has since tuned.
+	if created {
+		w.seedBudgets(genPath)
 	}
 	// An empty modelsRoot is a legitimate answer ("I'll pick a folder later"),
 	// and it still has to be written: the seeded file carries the example's
@@ -115,20 +133,48 @@ func (w *Wizard) run(ctx context.Context, c Choices) error {
 // autogen.EnsureConfig reads this file and fails hard if it is absent, so the
 // wizard cannot leave the step to first boot. Seeding from the example is
 // preferred purely for its comments; see minimalGenerate.
-func ensureGenerate(path string) error {
+// It reports whether it created the file, so first-run-only seeding (hardware
+// budgets) can skip an install that is being repaired or upgraded in place.
+func ensureGenerate(path string) (created bool, err error) {
 	if _, err := os.Stat(path); err == nil {
-		return nil
+		return false, nil
 	} else if !os.IsNotExist(err) {
-		return err
+		return false, err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+		return false, err
 	}
 	example := filepath.Join(filepath.Dir(path), "quartermaster-generate.example.yaml")
 	if b, err := os.ReadFile(example); err == nil && len(b) > 0 {
-		return os.WriteFile(path, b, 0o644)
+		return true, os.WriteFile(path, b, 0o644)
 	}
-	return os.WriteFile(path, []byte(minimalGenerate), 0o644)
+	return true, os.WriteFile(path, []byte(minimalGenerate), 0o644)
+}
+
+// seedBudgets writes this machine's measured VRAM/RAM budgets into a
+// just-created generate file. Every failure is a warning: an unmeasurable box
+// (no GPU telemetry, a locked-down OS) still gets a working install on the
+// built-in placeholders, and the Settings page can fix either number in a click.
+func (w *Wizard) seedBudgets(genPath string) {
+	if gb, ok := autogen.RecommendedVramGB(); ok {
+		if err := setSettingsKey(genPath, "targetVramGB", formatGB(gb)); err != nil {
+			w.warn(fmt.Sprintf("could not set targetVramGB: %v", err))
+		}
+	} else {
+		w.warn("no GPU reading; keeping the built-in VRAM budget (set it in Settings)")
+	}
+	if gb, ok := autogen.RecommendedRamGB(); ok {
+		if err := setSettingsKey(genPath, "maxRamGB", formatGB(gb)); err != nil {
+			w.warn(fmt.Sprintf("could not set maxRamGB: %v", err))
+		}
+	}
+}
+
+// formatGB renders a budget as a plain YAML float ("11.9"), never in exponent
+// form and never quoted — setSettingsKey writes the value verbatim, and a
+// quoted scalar would fail to unmarshal into the float64 field at next boot.
+func formatGB(gb float64) string {
+	return strconv.FormatFloat(gb, 'f', 1, 64)
 }
 
 // installBackends downloads each chosen component and records it in the sidecar

@@ -30,7 +30,7 @@ everywhere and the 20 MB installer blob stays in the binary that ships it.
 |---|---|
 | `setup.go` | Package doc, `Phase`, `Choices`, `Status`, `Options`, `Wizard` + the state mutators (`step`, `fail`, `warn`) and the run token. |
 | `api.go` | `Handler()` (the five `/api/setup/*` endpoints), `guard` (token + loopback Host), `serveUI` (embedded bundle, token injected into `index.html`), `Listen()`. `//go:embed all:ui_dist`. |
-| `run.go` | The install itself: `Start`, `run`, `ensureGenerate`, `installBackends`, `awaitJob`, `registerBackend`, `Finish`. |
+| `run.go` | The install itself: `Start`, `run`, `ensureGenerate` (reports whether it created the file), `seedBudgets` (measures this box's VRAM/RAM into the freshly created generate file — first run only, never over a repair run), `installBackends`, `awaitJob`, `registerBackend`, `Finish`. |
 | `probe.go` | Opening state: `GpuNames`, `NewProbe` (variant list from the llama-server catalog entry, `probeComponents`), and `Scan` — the real discovery walk over a candidate models folder. |
 | `yaml.go` | `setSettingsKey` — line-level, comment-preserving edit of `settings.<key>` in the generate file. `minimalGenerate` for when there is no example to seed from. |
 | `ui_dist/` | The built wizard bundle. Holds a committed `.gitkeep` so the `//go:embed` compiles on a tree where the UI was never built. |

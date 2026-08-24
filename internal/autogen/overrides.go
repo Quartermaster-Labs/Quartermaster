@@ -823,11 +823,22 @@ func (s *Settings) applyDefaults() {
 			s.AsrServerExe = "parakeet-server"
 		}
 	}
+	// The budget placeholders. LoadGenerateFile replaces both with a live
+	// hardware reading when the file/sidecar left them unset (seedHardwareBudgets),
+	// so these only survive on a box with no GPU telemetry and no OS memory
+	// reading — deliberately small, because the cost of guessing low is a model
+	// sized conservatively and the cost of guessing high is a load that OOMs.
 	if s.TargetVramGB == 0 {
 		s.TargetVramGB = 7
 	}
+	// vramOverheadGB is pure allocator slack: targetVramGB is already the free
+	// VRAM, so the desktop's own usage is outside the budget rather than
+	// something this has to reserve for. 1.0 was double-counting that, and on a
+	// 12 GB card it cost a dense model a whole layer for nothing. 0.5 also
+	// matches the example file and longCtxHeadroomGB, which makes the long-context
+	// top-up in longCtxTarget an exact no-op instead of a partial one.
 	if s.VramOverheadGB == 0 {
-		s.VramOverheadGB = 1.0
+		s.VramOverheadGB = 0.5
 	}
 	if s.MinGpuFraction == 0 {
 		s.MinGpuFraction = 0.5
@@ -852,7 +863,7 @@ func (s *Settings) applyDefaults() {
 		s.VisionCtx = 8192
 	}
 	if s.MaxRamGB == 0 {
-		s.MaxRamGB = 24
+		s.MaxRamGB = 24 // placeholder; see TargetVramGB above
 	}
 	if s.MoeCtxTarget == 0 {
 		s.MoeCtxTarget = 65536
@@ -902,6 +913,10 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 	if err := yaml.Unmarshal(data, &gf); err != nil {
 		return GenerateFile{}, fmt.Errorf("parsing %s: %w", path, err)
 	}
+	// Capture "the file said nothing about the memory budgets" BEFORE
+	// applyDefaults writes its placeholders over the zero values, so
+	// seedHardwareBudgets below can tell an unset knob from a deliberate one.
+	vramUnset, ramUnset := gf.Settings.TargetVramGB == 0, gf.Settings.MaxRamGB == 0
 	// Overlay UI-owned backend-exe paths BEFORE applyDefaults so an empty
 	// sd/tts-server derives as a sibling of the (possibly UI-set) llama exe.
 	be, err := LoadSidecarBackends(path)
@@ -937,6 +952,16 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 		return GenerateFile{}, err
 	}
 	patch.apply(&gf.Settings)
+	if patch != nil {
+		vramUnset = vramUnset && patch.TargetVramGB == nil
+		ramUnset = ramUnset && patch.MaxRamGB == nil
+	}
+	// Measure the box for anything neither the file nor the dashboard pinned.
+	// Done here rather than in applyDefaults so the ONE cached probe covers every
+	// consumer of the merged settings — startup, hot reload, and the editor's
+	// preview all size against the same budget instead of the preview quietly
+	// using the placeholder the emitter replaced.
+	seedHardwareBudgets(&gf.Settings, vramUnset, ramUnset)
 	// UI-owned fleet-wide default variants replace the file's list wholesale.
 	sideDV, err := LoadSidecarDefaultVariants(path)
 	if err != nil {

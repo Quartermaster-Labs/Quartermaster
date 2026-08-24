@@ -11,6 +11,11 @@ settings:
   modelsRoot: ""
   # Path to llama.cpp's llama-server executable.
   serverExe: llama-server
+  # targetVramGB: the VRAM a model's whole footprint (weights + KV + compute
+  # buffers + overhead) must fit under. The setup wizard MEASURES this on first
+  # run and rewrites the line below with your card's free VRAM; delete the line
+  # entirely and it is re-measured at every startup instead. The value here is
+  # only the fallback for a box with no GPU telemetry.
   targetVramGB: 7
   # autoVram: measure free VRAM at startup and cap targetVramGB at it. The
   # reading is used in full - vramOverheadGB is charged inside the plan, not
@@ -22,6 +27,9 @@ settings:
   # fragmentation / CUDA spikes. targetVramGB already accounts for system/desktop
   # VRAM, so this does NOT need to reserve room for the OS — keep it small.
   vramOverheadGB: 0.5
+  # maxRamGB: the RAM ceiling a plan may spill CPU-offloaded weights and KV into.
+  # Measured and rewritten by the setup wizard the same way as targetVramGB, from
+  # the memory actually available on this machine.
   maxRamGB: 24
   moeCtxTarget: 65536
   denseCtxLadder: [131072, 65536, 32768]
