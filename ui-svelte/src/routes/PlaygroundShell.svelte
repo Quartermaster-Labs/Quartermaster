@@ -580,7 +580,7 @@
   }
 </script>
 
-<div class="h-screen flex bg-chrome">
+<div class="relative h-screen flex bg-chrome">
   <!-- Side rail: icons only at rest; expands on hover. Same width hover or with the chat list open.
        The slot reserves only the RESTING width - the rail itself is absolute inside it, so a
        hover expansion draws over the tab like a curtain instead of reflowing it. Pinning the
@@ -660,13 +660,21 @@
   </nav>
   </div>
 
-  <!-- Tab content. It paints the PAGE tone against the rail's chrome tone and
-       rounds its top-left corner off against it - the same seam the dashboard
-       draws between its side rail and its status rail. There is no border
-       anywhere along it: the shade change is the whole separator, and a rule
-       would have to stop dead at the curve. The 8px radius sits inside the 16px
-       gutter, so no child can square the corner off. -->
-  <main class="flex-1 min-w-0 rounded-tl-lg bg-background px-4 pb-4">
+  <!-- The notch <main>'s rounded corner carves out shows the root's bg-chrome,
+       the same tone as the rail. When the FIRST rail row is the active one its
+       highlight is what belongs behind the notch, so paint that under there
+       too. Rail rows are h-10, so only the first can ever reach the corner.
+       Sits before <main> in the DOM and <main> is `relative`, so it paints over
+       this and leaves it showing only where the corner is cut away. -->
+  {#if $selectedTabStore === tabs[0].id}
+    <span class="absolute top-0 h-10 w-4 bg-secondary/60 {historyOpen ? 'left-44' : 'left-14'}"></span>
+  {/if}
+
+  <!-- Tab content. Hairlines on its top and left edges are the whole separator
+       from the title bar above and the rail beside it, meeting in the rounded
+       corner - the same L the dashboard draws around its status rail. The 8px
+       radius sits inside the 16px gutter, so no child can square it off. -->
+  <main class="relative flex-1 min-w-0 rounded-tl-lg border-t border-l border-border bg-background px-4 pb-4">
     <div class="h-full" class:tab-hidden={$selectedTabStore !== "chat"}><ChatInterface /></div>
     <div class="h-full" class:tab-hidden={$selectedTabStore !== "images"}><ImageInterface /></div>
     <div class="h-full" class:tab-hidden={$selectedTabStore !== "speech"}><SpeechInterface /></div>

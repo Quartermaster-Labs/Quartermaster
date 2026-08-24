@@ -149,38 +149,37 @@
     <!-- The slot reserves only the COLLAPSED width; the rail itself is absolute
          inside it, so expanding on hover draws over the page like a curtain
          instead of reflowing every layout to the right of it. -->
-    <!-- No right border, and none anywhere along this seam: the chrome, the
-         status rail and the page separate themselves by tone alone. A rule
-         here would also have to stop dead at the rail's rounded corner and
-         end in mid-air under the title bar. -->
+    <!-- The rule between the rail and everything right of it lives on the
+         status rail and on <main>, not here: put on this slot it would run
+         under the title bar too, and it has to follow the rail's rounded
+         corner rather than cut straight past it. -->
     <div class="relative w-14 shrink-0 z-40">
       <Sidebar />
     </div>
 
     <div class="flex flex-col flex-1 min-w-0">
-      <!-- The rail keeps its own tone, a clear step above the chrome, so its
-           top-left corner can round off against the side rail rather than
-           butting into it. The notch that carves out has to show
-           the SAME tone as the side rail and the title bar around it - without
-           this wrapper it would fall through to bg-background and read as a
-           chipped corner rather than a curve.
-           And when the FIRST rail row is the active one, that row's highlight
-           is what sits behind the notch: paint it under there too, or the curve
-           reads as a chip taken out of the highlight. The rail rows are h-10,
-           the same height as the status rail, so only the first one can ever be
-           behind it. -->
+      <!-- The notch the rail's rounded corner carves out has to show the SAME
+           tone as the side rail beside it - without this wrapper it falls
+           through to bg-background and reads as a chip bitten out of the frame
+           rather than as the rail continuing behind the curve.
+           And when the FIRST sidebar row is the active one, that row's
+           highlight is what sits behind the notch, so paint it under there too.
+           Sidebar rows are h-10, the same height as the status rail, so only
+           the first one can ever be behind it. -->
       <div class="relative shrink-0 bg-chrome">
         {#if $currentRoute === "/"}
           <span class="absolute inset-y-0 left-0 w-4 bg-secondary/60"></span>
         {/if}
-        <!-- Positioned, so it paints over the underlay above and leaves it
-             visible only where the corner is cut away. -->
+        <!-- Positioned, so it paints over the underlay and leaves it visible
+             only where the corner is cut away. -->
         <div class="relative">
           <StatusRail />
         </div>
       </div>
 
-      <main class="flex-1 overflow-auto pretty-scroll">
+      <!-- border-l picks the rule up where the status rail's ends and carries
+           it to the bottom of the window. -->
+      <main class="flex-1 overflow-auto border-l border-border pretty-scroll">
         <!-- Table/browser pages are full-bleed: their own panels supply the
              padding, so the content reaches the window edges instead of
              floating in a framed box. -->
