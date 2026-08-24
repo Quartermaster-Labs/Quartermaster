@@ -54,13 +54,25 @@ type Server struct {
 	// vramGuard publishes the live VRAM ceiling the router admits against and
 	// sheds idle models under foreign GPU pressure. nil until WireDynamicOffload
 	// runs (hand-written -config, or a build with no perf monitor).
-	vramGuard      *vramGuard
-	inflight       *inflightCounter
-	metrics        *metricsMonitor
-	backendMetrics *backendMetricsMonitor
-	slotCache      *slotCache
-	promptCanon    *promptCanon
-	build          BuildInfo
+	vramGuard *vramGuard
+	// offloadSettings is the autogen Settings the spawn-time offload guard and
+	// the vramGuard size against (targetVramGB, overheads, minGpuFraction, the
+	// oomGuard* knobs). Held behind a pointer, NOT captured by value in the
+	// closures, because the dashboard can edit these while we run: a settings
+	// save rewrites the sidecar, regenerates config.yaml and hot-reloads, and
+	// UpdateOffloadSettings re-publishes the merged file here so the next spawn
+	// plans against the new budget. Captured by value, every load after a target
+	// change was still sized against the target the process STARTED with —
+	// raising it in the UI changed the baked config but not the live guard, which
+	// then re-planned a fitting model down to a fraction of its layers and
+	// refused it on the minGpuFraction floor. nil until WireDynamicOffload runs.
+	offloadSettings atomic.Pointer[autogen.Settings]
+	inflight        *inflightCounter
+	metrics         *metricsMonitor
+	backendMetrics  *backendMetricsMonitor
+	slotCache       *slotCache
+	promptCanon     *promptCanon
+	build           BuildInfo
 
 	local router.LocalRouter
 	peer  router.Router
@@ -352,6 +364,28 @@ func (s *Server) config() config.Config { return *s.cfg.Load() }
 // after it launches the installer (so the running exe can be replaced).
 func (s *Server) SetShutdownHook(fn func()) { s.shutdownHook = fn }
 
+// UpdateOffloadSettings re-publishes the autogen Settings the spawn guard and
+// vramGuard read, so a live settings edit (dashboard VRAM target, headroom, OOM
+// guard knobs) takes effect on the next model load instead of only on restart.
+// Safe to call on every hot reload: it swaps a pointer, it does not re-wire the
+// spawn hook or start a second guard goroutine. No-op before WireDynamicOffload
+// (nothing reads the value on a hand-written -config or a perf-less build).
+func (s *Server) UpdateOffloadSettings(settings autogen.Settings) {
+	if s.offloadSettings.Load() == nil {
+		return
+	}
+	s.offloadSettings.Store(&settings)
+}
+
+// offloadSettingsVal snapshots the current offload settings. Zero value before
+// WireDynamicOffload, which only the (unreachable) unwired paths can observe.
+func (s *Server) offloadSettingsVal() autogen.Settings {
+	if p := s.offloadSettings.Load(); p != nil {
+		return *p
+	}
+	return autogen.Settings{}
+}
+
 // WireDynamicOffload installs the spawn-time argv rewriter that re-derives each
 // model's GPU/CPU layer placement from the VRAM free RIGHT NOW (via the perf
 // monitor), so a config plan sized when more VRAM was free can't OOM. It only
@@ -362,10 +396,11 @@ func (s *Server) WireDynamicOffload(settings autogen.Settings) {
 	if s.perf == nil {
 		return
 	}
+	s.offloadSettings.Store(&settings)
 	// The runtime half of the guard: publish the live VRAM ceiling for the
 	// router's multi-load admission, and shed idle models when a foreign GPU app
 	// grows into the resident set. See vramguard.go.
-	guard := newVramGuard(s, settings)
+	guard := newVramGuard(s)
 	s.vramGuard = guard
 	s.local.SetLiveVramBudget(guard.ceilingGB)
 	go guard.run(s.shutdownCtx)
@@ -388,7 +423,7 @@ func (s *Server) WireDynamicOffload(settings autogen.Settings) {
 			if freeOK {
 				lastFree = free
 			}
-			return autogen.LiveOffloadArgs(settings, args, free, freeOK, logf)
+			return autogen.LiveOffloadArgs(s.offloadSettingsVal(), args, free, freeOK, logf)
 		}
 		n := 0
 		sample := func() (float64, bool) {

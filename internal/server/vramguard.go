@@ -36,8 +36,7 @@ import (
 // vramGuard samples how much of the GPU is held by processes that are NOT our
 // children and publishes the ceiling the resident model set must fit under.
 type vramGuard struct {
-	s        *Server
-	settings autogen.Settings
+	s *Server
 
 	// trusted marks the published reading usable. False when there is no GPU
 	// telemetry, or when per-process attribution doesn't cover our own children —
@@ -69,11 +68,16 @@ type vramGuard struct {
 	refusals vramRefusals
 }
 
-// newVramGuard builds the guard. settings supplies the tunables
-// (oomGuardReserveGB / oomGuardEvict / oomGuardGraceSec), already defaulted.
-func newVramGuard(s *Server, settings autogen.Settings) *vramGuard {
-	return &vramGuard{s: s, settings: settings}
+// newVramGuard builds the guard. Its tunables (oomGuardReserveGB /
+// oomGuardEvict / oomGuardGraceSec) are read per-use from the Server's live
+// offload settings rather than snapshotted here, so a dashboard edit reaches a
+// guard that was started once at boot and outlives every hot reload.
+func newVramGuard(s *Server) *vramGuard {
+	return &vramGuard{s: s}
 }
+
+// settings is the live autogen Settings snapshot this guard judges against.
+func (g *vramGuard) settings() autogen.Settings { return g.s.offloadSettingsVal() }
 
 // ceilingGB is the router-facing probe (router.LiveVramFn): the VRAM the
 // resident model set may occupy right now. ok=false means "no trustworthy
@@ -107,7 +111,7 @@ func (g *vramGuard) ceilingGB() (float64, bool) {
 	if excess <= 0 {
 		return budget, true // nothing beyond the usual desktop: budget as configured
 	}
-	gb := budget - excess - g.settings.OomGuardReserveGB
+	gb := budget - excess - g.settings().OomGuardReserveGB
 	if gb < 0 {
 		gb = 0
 	}
@@ -262,7 +266,7 @@ func (g *vramGuard) foreignMB4(ctx context.Context, best perf.GpuStat) (int64, b
 // trades a slow answer for a failed one, which is strictly worse — if nothing
 // idle is left to shed, the guard logs and accepts the degradation.
 func (g *vramGuard) watchdog() {
-	if g.settings.OomGuardEvict != nil && !*g.settings.OomGuardEvict {
+	if evict := g.settings().OomGuardEvict; evict != nil && !*evict {
 		return
 	}
 	ceiling, ok := g.shedCeilingGB()
@@ -288,10 +292,10 @@ func (g *vramGuard) watchdog() {
 	if g.overSince.IsZero() {
 		g.overSince = time.Now()
 		g.s.proxylog.Infof("vramguard: resident models (%.1fGB) no longer fit the live ceiling (%.1fGB, %.1fGB held by other GPU apps) - watching for %ds",
-			residentGB, ceiling, float64(g.foreignMB.Load())/1024.0, g.settings.OomGuardGraceSec)
+			residentGB, ceiling, float64(g.foreignMB.Load())/1024.0, g.settings().OomGuardGraceSec)
 		return
 	}
-	if time.Since(g.overSince) < time.Duration(g.settings.OomGuardGraceSec)*time.Second {
+	if time.Since(g.overSince) < time.Duration(g.settings().OomGuardGraceSec)*time.Second {
 		return
 	}
 	g.overSince = time.Time{}
@@ -379,7 +383,7 @@ const vramGuardShedSlackGB = 0.5
 // minute: long enough that a model reloaded by a waiting request gets to serve
 // it, short enough that a game arriving mid-session is still handled promptly.
 func (g *vramGuard) cooldown() time.Duration {
-	d := 2 * time.Duration(g.settings.OomGuardGraceSec) * time.Second
+	d := 2 * time.Duration(g.settings().OomGuardGraceSec) * time.Second
 	if d < time.Minute {
 		d = time.Minute
 	}

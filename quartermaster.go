@@ -478,6 +478,21 @@ func main() {
 
 		applyLogSettings(newCfg)
 
+		// Re-publish the generate-file settings (targetVramGB, headroom, OOM guard
+		// knobs) to the spawn-time offload guard. The dashboard's settings form
+		// writes the sidecar, regenerates config.yaml and lands here; without this
+		// the guard kept sizing every load against the settings this process
+		// STARTED with, so raising the VRAM target changed the baked plans but not
+		// the live re-plan — and a model that fit was cut to a fraction of its
+		// layers and refused on the minGpuFraction floor until a restart.
+		if *flagGenerate != "" {
+			if gf, gerr := autogen.LoadGenerateFile(*flagGenerate, *flagModelsDir); gerr != nil {
+				proxyLog.Warnf("offload settings not refreshed: %v", gerr)
+			} else {
+				srv.UpdateOffloadSettings(gf.Settings)
+			}
+		}
+
 		// Per-listener catalog scoping refreshed live via ApplyConfig, but binding/
 		// unbinding a physical listen socket still needs a restart. Warn if the
 		// declared listener set changed (rare for a settings edit).

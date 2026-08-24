@@ -65,7 +65,16 @@ func newGuard(t *testing.T, est map[string]float64, persistent []string, infligh
 			},
 		},
 	})
-	return newVramGuard(s, autogen.Settings{OomGuardReserveGB: 1, OomGuardGraceSec: 30})
+	s.offloadSettings.Store(&autogen.Settings{OomGuardReserveGB: 1, OomGuardGraceSec: 30})
+	return newVramGuard(s)
+}
+
+// tune edits the settings the guard reads (they live on the Server now, so a
+// test tweaks them through the same pointer swap a live reload uses).
+func tune(g *vramGuard, f func(*autogen.Settings)) {
+	next := g.settings()
+	f(&next)
+	g.s.offloadSettings.Store(&next)
 }
 
 // pressure publishes a trusted reading of excessMB of foreign VRAM above a zero
@@ -259,7 +268,7 @@ func TestVramGuard_WatchdogWaitsOutTheGrace(t *testing.T) {
 // Once the grace has elapsed the victims are unloaded.
 func TestVramGuard_WatchdogUnloadsAfterGrace(t *testing.T) {
 	g := newGuard(t, map[string]float64{"a": 10}, nil, nil)
-	g.settings.OomGuardGraceSec = 0
+	tune(g, func(s *autogen.Settings) { s.OomGuardGraceSec = 0 })
 	pressure(g, 20480)
 	g.watchdog() // starts the clock
 	g.watchdog() // grace of 0 has elapsed
@@ -277,8 +286,7 @@ func TestVramGuard_WatchdogUnloadsAfterGrace(t *testing.T) {
 func TestVramGuard_WatchdogDisabled(t *testing.T) {
 	g := newGuard(t, map[string]float64{"a": 10}, nil, nil)
 	off := false
-	g.settings.OomGuardEvict = &off
-	g.settings.OomGuardGraceSec = 0
+	tune(g, func(s *autogen.Settings) { s.OomGuardEvict, s.OomGuardGraceSec = &off, 0 })
 	pressure(g, 20480)
 	g.watchdog()
 	g.watchdog()
@@ -418,7 +426,7 @@ func TestVramGuard_NoShedWhenReserveIsTheOnlyPressure(t *testing.T) {
 // would otherwise be killed again on the very next sample.
 func TestVramGuard_CooldownAfterShed(t *testing.T) {
 	g := newGuard(t, map[string]float64{"a": 10}, nil, nil)
-	g.settings.OomGuardGraceSec = 0
+	tune(g, func(s *autogen.Settings) { s.OomGuardGraceSec = 0 })
 	pressure(g, 20480)
 	g.watchdog()
 	g.watchdog() // sheds
@@ -446,5 +454,34 @@ func TestVramGuard_ShedSlackAbsorbsNoiseOnly(t *testing.T) {
 	g2.watchdog()
 	if g2.overSince.IsZero() {
 		t.Fatal("did not arm on a 1.5GB overshoot")
+	}
+}
+
+// A settings edit reaches the already-running guard. The spawn-time offload
+// guard used to capture autogen.Settings by value at boot, so raising
+// targetVramGB in the dashboard regenerated every baked plan but left the live
+// re-plan sizing against the old budget — a model that fit was cut to a
+// fraction of its layers and refused on the minGpuFraction floor until restart.
+func TestVramGuard_SettingsRefreshedLive(t *testing.T) {
+	g := newGuard(t, map[string]float64{"a": 10}, nil, nil)
+	if got := g.settings().OomGuardReserveGB; got != 1 {
+		t.Fatalf("reserve = %v want 1", got)
+	}
+	g.s.UpdateOffloadSettings(autogen.Settings{TargetVramGB: 22.8, OomGuardReserveGB: 2})
+	if got := g.settings().OomGuardReserveGB; got != 2 {
+		t.Errorf("reserve after update = %v want 2", got)
+	}
+	if got := g.s.offloadSettingsVal().TargetVramGB; got != 22.8 {
+		t.Errorf("target after update = %v want 22.8", got)
+	}
+}
+
+// Before WireDynamicOffload nothing reads these settings, and publishing them
+// from a reload must not make an unwired server start acting on them.
+func TestVramGuard_UpdateOffloadSettingsUnwired(t *testing.T) {
+	s := &Server{}
+	s.UpdateOffloadSettings(autogen.Settings{TargetVramGB: 22.8})
+	if s.offloadSettings.Load() != nil {
+		t.Error("unwired server stored offload settings")
 	}
 }
