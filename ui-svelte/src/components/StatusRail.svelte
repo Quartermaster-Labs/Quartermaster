@@ -66,7 +66,7 @@
 </script>
 
 <div
-  class="flex items-center gap-4 rounded-tl-lg border-y border-l border-border bg-rail shadow-inset-sm px-4 h-10 shrink-0 text-label overflow-x-auto whitespace-nowrap pretty-scroll"
+  class="flex items-center gap-4 rounded-tl-lg bg-rail px-4 h-10 shrink-0 text-label overflow-x-auto whitespace-nowrap pretty-scroll"
 >
   <!-- Loaded model(s) -->
   <div class="flex items-center gap-2 min-w-0">

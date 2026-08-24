@@ -580,30 +580,30 @@
   }
 </script>
 
-<div class="h-screen flex bg-background">
+<div class="h-screen flex bg-chrome">
   <!-- Side rail: icons only at rest; expands on hover. Same width hover or with the chat list open.
        The slot reserves only the RESTING width - the rail itself is absolute inside it, so a
        hover expansion draws over the tab like a curtain instead of reflowing it. Pinning the
        chat list open still widens the slot: that one is a deliberate, persistent layout change. -->
   <div class="relative shrink-0 z-40 {historyOpen ? 'w-44' : 'w-14'}">
   <nav
-    class="group/rail absolute inset-y-0 left-0 {historyOpen ? 'w-44' : 'w-14'} hover:w-44 transition-[width] duration-200 overflow-hidden flex flex-col gap-1 py-2 border-r border-border bg-surface hover:shadow-xl hover:shadow-black/20"
+    class="group/rail absolute inset-y-0 left-0 {historyOpen ? 'w-44' : 'w-14'} hover:w-44 transition-[width] duration-200 overflow-hidden flex flex-col bg-chrome pb-2 hover:shadow-xl hover:shadow-black/20"
   >
-    <div class="relative pb-2 h-9 flex items-center font-mono text-xs uppercase tracking-[0.2em] text-primary leading-tight">
-      <span class="w-14 shrink-0 flex items-center justify-center group-hover/rail:hidden {historyOpen ? 'hidden' : ''}">QM</span>
-      <span class="{historyOpen ? 'block' : 'hidden'} group-hover/rail:block absolute left-0 top-1/2 -translate-y-[0.72rem] whitespace-nowrap pl-[1.2rem] leading-tight">Quartermaster<br />Playground</span>
-    </div>
-    <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pretty-scroll flex flex-col gap-1">
+    <!-- No brand block: the title bar carries the mark and the name, so the
+         rail is nav and nothing else, starting at the top (mirrors the
+         dashboard side rail). -->
+    <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pretty-scroll flex flex-col">
     {#each tabs as tab (tab.id)}
       {@const active = $selectedTabStore === tab.id}
       <button
         onclick={() => clickTab(tab.id)}
         use:tooltip={tab.label}
-        class="w-full flex items-center pr-3 py-2 border-l-2 transition-colors {active
-          ? 'border-primary text-txtmain bg-secondary/60'
-          : 'border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40'}"
+        class="relative w-full flex items-center gap-3 pr-3 h-10 shrink-0 text-sm transition-colors {active
+          ? 'text-txtmain bg-secondary/60'
+          : 'text-txtsecondary hover:text-txtmain hover:bg-secondary/40'}"
       >
-        <span class="w-14 shrink-0 -ml-0.5 flex items-center justify-center">
+        <span class="absolute left-0 top-0 bottom-0 w-0.5 {active ? 'bg-primary' : 'bg-transparent'}"></span>
+        <span class="w-14 shrink-0 flex items-center justify-center">
           <span class="relative">
             <tab.icon size={18} strokeWidth={active ? 2.4 : 1.8} class="shrink-0" />
             {#if tab.id === "chat" && $generatingChatId}
@@ -630,9 +630,9 @@
     <button
       onclick={() => { wikiArticleId = null; showWiki = true; }}
       use:tooltip={"Help"}
-      class="shrink-0 w-full flex items-center pr-3 py-2 border-l-2 border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
+      class="w-full flex items-center gap-3 pr-3 h-10 shrink-0 text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
-      <span class="w-14 shrink-0 -ml-0.5 flex items-center justify-center"><BookOpen size={18} class="shrink-0" /></span>
+      <span class="w-14 shrink-0 flex items-center justify-center"><BookOpen size={18} class="shrink-0" /></span>
       <span class="font-mono text-sm whitespace-nowrap {historyOpen ? 'opacity-100' : 'opacity-0'} group-hover/rail:opacity-100 transition-opacity">
         Help
       </span>
@@ -640,9 +640,9 @@
     <button
       onclick={() => (showSettings = true)}
       use:tooltip={"Settings"}
-      class="shrink-0 w-full flex items-center pr-3 py-2 border-l-2 border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
+      class="w-full flex items-center gap-3 pr-3 h-10 shrink-0 text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
-      <span class="w-14 shrink-0 -ml-0.5 flex items-center justify-center"><Settings size={18} class="shrink-0" /></span>
+      <span class="w-14 shrink-0 flex items-center justify-center"><Settings size={18} class="shrink-0" /></span>
       <span class="font-mono text-sm whitespace-nowrap {historyOpen ? 'opacity-100' : 'opacity-0'} group-hover/rail:opacity-100 transition-opacity">
         Settings
       </span>
@@ -650,9 +650,9 @@
     <button
       onclick={() => (confirmLogout = true)}
       use:tooltip={`Log out (${$me})`}
-      class="w-full flex items-center pr-3 py-2 border-l-2 border-transparent text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
+      class="w-full flex items-center gap-3 pr-3 h-10 shrink-0 text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
-      <span class="w-14 shrink-0 -ml-0.5 flex items-center justify-center"><LogOut size={18} class="shrink-0" /></span>
+      <span class="w-14 shrink-0 flex items-center justify-center"><LogOut size={18} class="shrink-0" /></span>
       <span class="font-mono text-sm whitespace-nowrap truncate {historyOpen ? 'opacity-100' : 'opacity-0'} group-hover/rail:opacity-100 transition-opacity">
         {$me}
       </span>
@@ -660,8 +660,13 @@
   </nav>
   </div>
 
-  <!-- Tab content -->
-  <main class="flex-1 min-w-0 px-4 pb-4">
+  <!-- Tab content. It paints the PAGE tone against the rail's chrome tone and
+       rounds its top-left corner off against it - the same seam the dashboard
+       draws between its side rail and its status rail. There is no border
+       anywhere along it: the shade change is the whole separator, and a rule
+       would have to stop dead at the curve. The 8px radius sits inside the 16px
+       gutter, so no child can square the corner off. -->
+  <main class="flex-1 min-w-0 rounded-tl-lg bg-background px-4 pb-4">
     <div class="h-full" class:tab-hidden={$selectedTabStore !== "chat"}><ChatInterface /></div>
     <div class="h-full" class:tab-hidden={$selectedTabStore !== "images"}><ImageInterface /></div>
     <div class="h-full" class:tab-hidden={$selectedTabStore !== "speech"}><SpeechInterface /></div>

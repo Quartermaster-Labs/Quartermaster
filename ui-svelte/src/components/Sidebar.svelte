@@ -67,7 +67,7 @@
 
 <!-- Icons only at rest; expands on hover (mirrors the playground side rail). -->
 <aside
-  class="group/rail absolute inset-y-0 left-0 flex flex-col w-14 hover:w-44 overflow-hidden transition-[width] duration-200 bg-surface pb-2 hover:shadow-xl hover:shadow-black/20"
+  class="group/rail absolute inset-y-0 left-0 flex flex-col w-14 hover:w-44 overflow-hidden transition-[width] duration-200 bg-chrome pb-2 hover:shadow-xl hover:shadow-black/20"
 >
   <!-- No brand block: the mark and the name both sit on the title bar, so the
        rail is nav and nothing else, starting at the top. -->

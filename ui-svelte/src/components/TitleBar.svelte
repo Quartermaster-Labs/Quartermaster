@@ -57,7 +57,7 @@
   // corner. Handing the frame this bar's own rendered colour hides both.
   //
   // Read from the element rather than from a token, so it stays right whatever
-  // `bg-surface` resolves to, and re-read on every theme flip. The rAF is not
+  // `bg-chrome` resolves to, and re-read on every theme flip. The rAF is not
   // decoration: `data-theme` is set by an effect of its own, and reading the
   // computed style in the same tick can catch the colour the bar is leaving.
   let bar = $state<HTMLElement | null>(null);
@@ -103,14 +103,15 @@
 {#if native.isNative}
   <header
     bind:this={bar}
-    class="titlebar flex h-8 shrink-0 items-center gap-2 bg-surface pl-4"
+    class="titlebar flex h-8 shrink-0 items-center gap-2 bg-chrome pl-4"
     onmousedown={native.dragWindow}
     ondblclick={native.toggleMaximize}
     role="presentation"
   >
-    <!-- No border-b: the side rail below is the same bg-surface, and a rule
-         across the top drew a line through what should read as one continuous
-         panel. The status rail separates itself by being a shade darker. -->
+    <!-- No border-b: the side rail and the status rail below are the same
+         bg-chrome, and a rule across the top drew a line through what should
+         read as one continuous frame. Tone alone separates chrome from
+         content. -->
     <img src={mark} alt="" title={markTitle} class="h-4 w-4 shrink-0 select-none object-contain transition-all {markClass}" draggable="false" />
     {#if home}
       <!-- cursor-pointer is explicit: Tailwind v4's preflight gives buttons
