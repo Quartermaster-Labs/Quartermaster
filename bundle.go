@@ -99,8 +99,10 @@ func applyBundlePaths(fs *flag.FlagSet, root string) {
 	set("watch-config", "true")
 
 	// The window is the default face of a double-click, but never an override:
-	// asking for -tray (the login launch) must not also open a window, which is
-	// the whole point of starting minimised. -app implies -tray downstream.
+	// asking for -tray (the login launch) must not also open one, which is the
+	// whole point of starting minimised. -app implies -tray downstream. Note
+	// this decides only whether a window is OPENED at startup -- a -tray start
+	// still has one a click away, built on demand (see appLauncher).
 	if !flagGiven(fs, "app") && !flagGiven(fs, "tray") {
 		set("app", "true")
 	}

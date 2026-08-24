@@ -104,7 +104,7 @@ func main() {
 	flagWatchModelsInterval := flag.Duration("watch-models-interval", 5*time.Second, "poll interval for -watch-models")
 	flagPlaygroundPort := flag.String("playground-port", "", "serve the standalone playground app (per-user login + chat history) on this extra address, e.g. :8081")
 	flagNoUpdateCheck := flag.Bool("no-update-check", false, "disable checking GitHub for new releases (Windows release builds only)")
-	flagTray := flag.Bool("tray", false, "run as a desktop app: show a system-tray icon with Open/Exit (Windows only; no-op elsewhere)")
+	flagTray := flag.Bool("tray", false, "start minimised to the system tray: no window until one is asked for, via the tray icon or a second launch (Windows only; no-op elsewhere)")
 	flagApp := flag.Bool("app", false, "open the dashboard in a native desktop window instead of a browser tab (implies -tray; Windows only, falls back to the browser elsewhere or when WebView2 is missing)")
 	flagAdminAllow := flag.String("admin-allow", "", "extra IPs/CIDRs (comma separated) allowed to reach the dashboard/admin endpoints when listening beyond loopback, e.g. 100.64.0.0/10 for a tailnet")
 	flagAdminOpen := flag.Bool("admin-open", false, "serve the unauthenticated dashboard/admin endpoints to every remote host (legacy behaviour; the inference API is unaffected)")
@@ -726,29 +726,37 @@ func main() {
 		url := scheme + "://" + host
 
 		// The window is just another HTTP client of the server that is already
-		// running, so it is started here rather than at boot: by this point the
+		// running, so it is built here rather than at boot: by this point the
 		// listener is up and the page it loads will not race the first request.
 		// A window that fails to appear is a warning, not a fatal -- the same
 		// dashboard is one browser tab away, and the server has models loaded.
-		var onOpenApp func()
-		if *flagApp {
-			win := startAppWindow(url)
-			if err := win.Ready(); err != nil {
+		//
+		// The launcher exists in BOTH modes, and the only difference between
+		// them is whether it is opened now. -tray (the autostart launch) starts
+		// minimised, but it still has a window to go back to; wiring the tray
+		// item and the hand-off hook only under -app is what used to leave an
+		// autostarted instance browser-only for the rest of its life.
+		app := &appLauncher{
+			url: url,
+			onFail: func(err error) {
 				proxyLog.Warnf("native window unavailable, use the browser instead (%s): %v", url, err)
-			} else {
-				onOpenApp = win.Show
-				// Lets a second launch raise this window instead of dying on
-				// the bound port. Set once, unlocked, like the shutdown hook
-				// above it: reload applies a new config to this same Server
-				// rather than building another, so there is nothing to re-wire.
-				activeSrv.SetShowAppHook(win.Show)
-				// Closing the window only hides it, so the window has to be
-				// destroyed explicitly or its thread outlives teardown.
-				defer win.Close()
-			}
+			},
+			browser: func() { openInBrowser(url) },
+		}
+		// Lets a second launch raise this window instead of dying on the bound
+		// port. Set once, unlocked, like the shutdown hook above it: reload
+		// applies a new config to this same Server rather than building
+		// another, so there is nothing to re-wire.
+		activeSrv.SetShowAppHook(app.Open)
+		// Closing the window only hides it, so one that was opened has to be
+		// destroyed explicitly or its thread outlives teardown.
+		defer app.Close()
+
+		if *flagApp {
+			app.Open()
 		}
 
-		runTray(url, onOpenApp, triggerShutdown, exitChan)
+		runTray(url, app.Open, triggerShutdown, exitChan)
 	} else {
 		<-exitChan
 	}

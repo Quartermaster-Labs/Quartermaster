@@ -53,12 +53,18 @@ func runTray(openURL string, onOpenApp func(), onExit func(), exitChan <-chan st
 				case <-appClicks:
 					onOpenApp()
 				case <-mOpen.ClickedCh:
-					// rundll32 opens the URL without flashing a console window.
-					_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", openURL).Start()
+					openInBrowser(openURL)
 				case <-mExit.ClickedCh:
 					onExit()
 				}
 			}
 		}()
 	}, nil)
+}
+
+// openInBrowser hands the dashboard URL to the default browser. rundll32
+// rather than `cmd /c start`: start would flash a console window, and it also
+// treats the first quoted argument as a window title.
+func openInBrowser(url string) {
+	_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
 }
