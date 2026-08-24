@@ -498,7 +498,9 @@ type Override struct {
 	// Engine knobs surfaced from llama-server. Zero/empty => the generator's
 	// default (shown in parentheses):
 	//   FlashAttn: "" (on) | "on" | "off" | "auto"  (-fa; required for quantized KV)
-	//   Mmap:      "" (on) | "on" | "off"            (off => --no-mmap; default mmap on)
+	//   Mmap:      "" | "on" | "off"                 ("" => placement-gated: mmap
+	//              only where weights sit on the CPU, --load-mode none otherwise;
+	//              see buildCmdLines. "on"/"off" force it either way)
 	//   Mlock:     false => no --mlock; true => --mlock (lock weights in RAM)
 	//   Threads:   0 => settings.Threads             (-t)
 	//   Parallel:  0 => 1, capped at MaxParallelSlots (--parallel, concurrent
@@ -525,10 +527,16 @@ type Override struct {
 	// (llama-server warns and carries on). Requires the client to send
 	// reasoning_content back on assistant messages.
 	//
-	// Plain bool, so false means "off or never set" and we emit nothing rather
-	// than --no-reasoning-preserve: a template that preserves by default (3.8)
-	// therefore cannot be forced to strip from here. Needs a tri-state to fix.
-	PreserveThinking bool `yaml:"preserveThinking"`
+	// nil => ON. Reasoning amnesia across turns is the wrong default for an
+	// agentic loop: the model re-derives what it already worked out last turn,
+	// and on a template that preserves by default (3.8) omitting the flag was
+	// never "off" anyway - it was "whatever the template does". So the generator
+	// states it, and *false is the only way to get stripping.
+	//
+	// Still a POINTER, not a plain bool: as a bool, false could not be told from
+	// "never set", so every save through the config editor stamped the default
+	// onto the model and no default could ever be changed again.
+	PreserveThinking *bool `yaml:"preserveThinking"`
 	// Dry sampler (repetition penalty). Dry==nil => the fleet default (off);
 	// *Dry==true emits the flags, *Dry==false omits them. DryMultiplier/DryBase/
 	// DryAllowedLength override the defaults (0.8 / 1.75 / 3); 0 => default.

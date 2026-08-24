@@ -254,3 +254,16 @@ of letting the server silently clamp it. Its pure launch-command↔form helpers 
 `modelCmdForm.ts`: `parseCmdFields`/`parseImageCmdFields`, the flag sets the form owns,
 `specHas`/`specToggle`, `fmtCtx`/`nglDisplay`/`parseCtx`. Anything that reads component state stays
 in the `.svelte`.
+
+**Checkboxes over tri-state overrides write a DELTA, never a value.** `mmap` (`"" | "on" | "off"`)
+and `preserveThinking` (`null | false`) both have a generator default the user usually agrees
+with — mmap follows the sizer's placement (on only where weights sit on the CPU, `--load-mode
+none` otherwise), preserve-thinking is on wherever reasoning is. A binary checkbox that saves
+`mmapOn ? "on" : "off"` stamps that default into the sidecar as an explicit pin, so the model
+stops tracking its own placement the first time the modal is opened and saved for any unrelated
+reason — which is exactly how a fleet ends up mmap-on while fully GPU-resident. So the save
+compares against the inherited value (`mmapInheritOn` / `variantMmapInherit`, both read from the
+launch args via `noNoMmap`) and writes `""`/`null` on agreement. Two consequences: read the
+inherit state through `noNoMmap`, which understands `--load-mode`, never by grepping the retired
+`--no-mmap`; and keep `variantFromDefault`'s mapping keyed on `=== false`, since `null` is now a
+legitimate stored value that a truthiness test would flip to `false`.

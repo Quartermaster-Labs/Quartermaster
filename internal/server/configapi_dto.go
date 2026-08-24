@@ -143,8 +143,11 @@ type overrideDTO struct {
 	SlotCache        *bool  `json:"slotCache"`   // opt this model into on-disk slot KV persistence; nil => default on
 	CtxVariants      []int  `json:"ctxVariants"` // per-model ctx tiers (e.g. 32768, 65536)
 	// PreserveThinking keeps prior-turn <think> in chat history (Qwen3.6+); only
-	// meaningful when reasoning is on.
-	PreserveThinking bool `json:"preserveThinking"`
+	// meaningful when reasoning is on. null/absent => on (the generator default),
+	// false => stripped. A plain bool here would have made every save of an
+	// untouched modal stamp an explicit value, which is how the old default-off
+	// got frozen onto 13 models.
+	PreserveThinking *bool `json:"preserveThinking"`
 	// CtxCheckpoints is the model-wide --ctx-checkpoints default. nil => omit
 	// (auto); 0 disables. Variants inherit it unless they set their own.
 	CtxCheckpoints *int         `json:"ctxCheckpoints"`
@@ -471,7 +474,7 @@ func applyVariantPatch(ov *autogen.Override, p variantDTO) {
 		ov.CtxCheckpoints = p.CtxCheckpoints
 	}
 	if p.PreserveThinking != nil {
-		ov.PreserveThinking = *p.PreserveThinking
+		ov.PreserveThinking = p.PreserveThinking
 	}
 	if p.SlotCache != nil {
 		ov.SlotCache = p.SlotCache

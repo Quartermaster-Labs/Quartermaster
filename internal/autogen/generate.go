@@ -549,8 +549,11 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		// over the model-wide override (zero/empty => inherit the override value).
 		if v := prof.Variant; v != nil {
 			// Inherit the model's preserve-thinking; an explicit variant value wins.
+			// Both are *bool with the same nil = on meaning, so this is a pointer
+			// assignment, not a deref: a nil variant value must leave the model's
+			// own setting (which may be an explicit false) alone.
 			if v.PreserveThinking != nil {
-				effOv.PreserveThinking = *v.PreserveThinking
+				effOv.PreserveThinking = v.PreserveThinking
 			}
 			if v.SlotCache != nil {
 				effOv.SlotCache = v.SlotCache

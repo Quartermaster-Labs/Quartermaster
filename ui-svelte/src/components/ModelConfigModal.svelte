@@ -112,7 +112,7 @@
   // Boolean toggles. Stored as strings on the override ("" = default-on, "off" =
   // forced off); surfaced here as plain on/off checkboxes (auto state dropped).
   let reasoningOn = $state(true); // false => reasoningFmt "off"
-  let preserveThinking = $state(false); // keep prior-turn <think> in history (needs reasoning on)
+  let preserveThinking = $state(true); // keep prior-turn <think> in history (needs reasoning on); default ON
   let reasoningBudget = $state<number | "">(""); // --reasoning-budget token cap; "" => no cap
   let flashOn = $state(true); // false => flashAttn "off"
   let mmapOn = $state(true); // false => mmap "off" (--no-mmap)
@@ -122,7 +122,7 @@
   // (Default + variant tabs) truthfully instead of always-on.
   // ponytail: base cmd is the best available proxy — per-variant cmds aren't
   // fetched, so a variant with different offload than base can read stale.
-  const mmapInheritOn = $derived(!/(?:^|\s)--no-mmap(?:\s|$)/.test(config?.cmd ?? ""));
+  const mmapInheritOn = $derived(noNoMmap(config?.cmd ?? ""));
   // Per-variant launch cmds, keyed by variant name, fetched at load() (each
   // variant is its own served id "<base>-<name>"). Lets a blank variant mmap
   // checkbox read that variant's own placement default instead of the base's.
@@ -130,10 +130,12 @@
   // True when a variant's mmap checkbox should show checked: explicit override
   // wins; blank inherits from the variant's own cmd, falling back to the base
   // until that fetch lands.
-  function variantMmapOn(v: ModelVariant): boolean {
-    if (v.mmap) return v.mmap !== "off";
+  function variantMmapInherit(v: ModelVariant): boolean {
     const c = variantCmds[v.name];
     return c != null ? noNoMmap(c) : mmapInheritOn;
+  }
+  function variantMmapOn(v: ModelVariant): boolean {
+    return v.mmap ? v.mmap !== "off" : variantMmapInherit(v);
   }
   let mlock = $state(false);
   let threads = $state<number | "">(""); // "" = global default
@@ -388,10 +390,10 @@
     // as a delta vs the generator default so an unchanged value stays "inherit" ("").
     const genSpec = genDefaultSpec(config);
     v.flashAttn = p.flashOn ? "" : "off";
-    // mmap is tri-state ("" inherits the placement default, which is --no-mmap for
-    // fully-offloaded models). The checkbox is binary, so checked forces "on" to
-    // stay authoritative over that default. See save handler + inline variant editor.
-    v.mmap = p.mmapOn ? "on" : "off";
+    // mmap is tri-state ("" inherits the placement default: mmap only where
+    // weights sit on the CPU). Pin it only when the parsed cmd disagrees with
+    // that default. See save handler + inline variant editor.
+    v.mmap = p.mmapOn === variantMmapInherit(v) ? "" : p.mmapOn ? "on" : "off";
     v.mlock = p.mlock;
     v.kvInRam = p.kvInRam;
     v.reasoningFmt = p.reasoningOn ? "" : "off";
@@ -788,7 +790,7 @@
     vllmTokenizer = o?.vllmTokenizer ?? "";
     reasoningOn = (o?.reasoningFmt ?? "") !== "off";
     reasoningBudget = o?.reasoningBudget ? o.reasoningBudget : "";
-    preserveThinking = o?.preserveThinking ?? false;
+    preserveThinking = o?.preserveThinking ?? true;
     flashOn = (o?.flashAttn ?? "") !== "off";
     // mmap blank (inherit) => reflect the placement default the sizer actually
     // emitted (--no-mmap for GPU-resident/expert-offloaded models), read from the
@@ -1115,9 +1117,14 @@
       mmproj: mmprojMode,
       reasoningFmt: reasoningOn ? "" : "off",
       reasoningBudget: reasoningBudget === "" ? 0 : Number(reasoningBudget),
-      preserveThinking: reasoningOn && preserveThinking,
+      // null = "not set", which the generator reads as ON. Only an explicit
+      // false strips --reasoning-preserve, so agreeing with the default must not
+      // pin the model to it.
+      preserveThinking: reasoningOn && preserveThinking ? null : false,
       flashAttn: flashOn ? "" : "off",
-      mmap: mmapOn ? "on" : "off",
+      // Same shape for mmap: "" lets the sizer keep deciding per placement
+      // (mmap only where weights sit on the CPU). Pin only a disagreement.
+      mmap: mmapOn === mmapInheritOn ? "" : mmapOn ? "on" : "off",
       mlock,
       threads: threads === "" ? 0 : Number(threads),
       parallel: parallel === "" ? 0 : Number(parallel),
@@ -1176,7 +1183,7 @@
       kvK: o.kvK ?? "", kvV: o.kvV ?? "", kvInRam: o.kvInRam ?? false,
       spec: (config?.isMTP || config?.isDflash) && (!o.spec || o.spec === "none") ? genDefaultSpec(config) : (o.spec ?? ""),
       reasoningFmt: o.reasoningFmt ?? "",
-      preserveThinking: o.preserveThinking ? null : false,
+      preserveThinking: o.preserveThinking === false ? false : null,
       flashAttn: o.flashAttn ?? "", mmap: o.mmap ?? "", mlock: o.mlock ?? false,
       threads: o.threads ?? 0, parallel: o.parallel ?? 0, ub: o.ub ?? 0,
       dry: o.dry ?? null,
@@ -2281,7 +2288,7 @@
               <Toggle size="sm" bind:checked={mmapOn} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Memory-map (mmap)
-                {@render hint("Memory-map weights from disk. Reflects the sizer's placement default: OFF (--no-mmap) when fully GPU-resident / expert-offloaded, ON when weights sit on CPU. Toggle to force either way.")}
+                {@render hint("Memory-map weights from disk. Follows the sizer's placement default: OFF (--load-mode none) when fully GPU-resident / expert-offloaded, ON when weights sit on CPU. Toggle to force either way.")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
@@ -2677,10 +2684,10 @@
                 </span>
               </label>
               <label class="flex items-center gap-2 text-sm">
-                <Toggle size="sm" checked={variantMmapOn(sv)} onchange={(on) => (sv.mmap = on ? "on" : "off")} />
+                <Toggle size="sm" checked={variantMmapOn(sv)} onchange={(on) => (sv.mmap = on === variantMmapInherit(sv) ? "" : on ? "on" : "off")} />
                 <span class="text-txtsecondary flex items-center gap-1">
                   Memory-map (mmap)
-                  {@render hint("Memory-map weights from disk. Blank inherits this variant's placement default (--no-mmap when GPU-resident). Off forces --no-mmap, copying weights into RAM.")}
+                  {@render hint("Memory-map weights from disk. Follows this variant's placement default (off when GPU-resident). Off forces --load-mode none, reading weights into RAM up front.")}
                 </span>
               </label>
               <label class="flex items-center gap-2 text-sm">

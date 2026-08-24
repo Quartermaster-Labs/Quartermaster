@@ -152,7 +152,9 @@ const hashCacheSuffix = ".modelhash"
 //	v55: the reserved "vision" variant carries its own mmproj placement, so a
 //	     pin set there (gpu/ram/none) now decides the twin's argv - and its
 //	     VRAM - instead of the model-wide value alone.
-const genVersion = "v55"
+//	v56: --reasoning-preserve is emitted by DEFAULT wherever reasoning is on
+//	     (Override.PreserveThinking nil => on); only an explicit false strips.
+const genVersion = "v56"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

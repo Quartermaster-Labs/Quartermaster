@@ -423,7 +423,9 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	// both template wordings (3.8's preserve-by-default and 3.6's opt-in), and
 	// safe on a template that does not support it at all: llama-server warns
 	// "--reasoning-preserve has no effect" and carries on.
-	if ov != nil && ov.PreserveThinking && reason != "off" {
+	// Default ON (nil), so a model with no override still keeps its thinking; only
+	// an explicit false strips. See Override.PreserveThinking.
+	if reason != "off" && (ov == nil || ov.PreserveThinking == nil || *ov.PreserveThinking) {
 		lines = append(lines, "--reasoning-preserve")
 	}
 	// Always emit so runtime matches our reserve (else llama-server defaults to 32).

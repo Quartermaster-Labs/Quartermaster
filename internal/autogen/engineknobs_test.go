@@ -70,7 +70,7 @@ func TestComputeBufferGB(t *testing.T) {
 // mmap is placement-gated: on when CPU offload happens (--n-cpu-moe or partial
 // layer offload), --load-mode none when fully GPU-resident. Explicit Mmap:on/off
 // wins. mmap-on is llama-server's own default, so it emits no flag at all.
-func TestEmitProfile_MmapDefaultOn(t *testing.T) {
+func TestEmitProfile_MmapPlacementGated(t *testing.T) {
 	s := Settings{ServerExe: "llama-server", Threads: 7, TtlSec: 600, MaxRamGB: 32}
 	meta := Metadata{Architecture: "qwen3moe", BlockCount: 48, IsMoE: true}
 	row := GgufRow{FullPath: "/models/foo.gguf"}
@@ -188,9 +188,10 @@ func TestEmitProfile_PreserveThinking(t *testing.T) {
 	s := Settings{ServerExe: "llama-server", Threads: 7, TtlSec: 600}
 	meta := Metadata{Architecture: "qwen3", BlockCount: 32}
 	row := GgufRow{FullPath: "/models/foo.gguf"}
+	yes, no := true, false
 
 	var on strings.Builder
-	emitProfile(&on, s, meta, row, profile{Name: "foo"}, 8192, 10, 0, LoadPlan{}, "q8_0", "q8_0", false, &Override{PreserveThinking: true})
+	emitProfile(&on, s, meta, row, profile{Name: "foo"}, 8192, 10, 0, LoadPlan{}, "q8_0", "q8_0", false, &Override{PreserveThinking: &yes})
 	if !strings.Contains(on.String(), "--reasoning-preserve") {
 		t.Errorf("missing --reasoning-preserve:\n%s", on.String())
 	}
@@ -201,9 +202,26 @@ func TestEmitProfile_PreserveThinking(t *testing.T) {
 
 	// reasoning off => nothing to preserve.
 	var off strings.Builder
-	emitProfile(&off, s, meta, row, profile{Name: "judge", ReasoningFmt: "off"}, 8192, 10, 0, LoadPlan{}, "q8_0", "q8_0", false, &Override{PreserveThinking: true})
+	emitProfile(&off, s, meta, row, profile{Name: "judge", ReasoningFmt: "off"}, 8192, 10, 0, LoadPlan{}, "q8_0", "q8_0", false, &Override{PreserveThinking: &yes})
 	if strings.Contains(off.String(), "reasoning-preserve") {
 		t.Errorf("--reasoning-preserve emitted despite reasoning off:\n%s", off.String())
+	}
+
+	// No override at all, and an override that simply never set the field: both
+	// preserve. Reasoning amnesia is not something a model opts IN to.
+	for name, ov := range map[string]*Override{"no override": nil, "unset field": {}} {
+		var def strings.Builder
+		emitProfile(&def, s, meta, row, profile{Name: "foo"}, 8192, 10, 0, LoadPlan{}, "q8_0", "q8_0", false, ov)
+		if !strings.Contains(def.String(), "--reasoning-preserve") {
+			t.Errorf("%s: --reasoning-preserve should default on:\n%s", name, def.String())
+		}
+	}
+
+	// Explicit false is the ONLY way to strip - that is what the pointer buys.
+	var stripped strings.Builder
+	emitProfile(&stripped, s, meta, row, profile{Name: "foo"}, 8192, 10, 0, LoadPlan{}, "q8_0", "q8_0", false, &Override{PreserveThinking: &no})
+	if strings.Contains(stripped.String(), "reasoning-preserve") {
+		t.Errorf("explicit PreserveThinking:false should strip:\n%s", stripped.String())
 	}
 }
 
