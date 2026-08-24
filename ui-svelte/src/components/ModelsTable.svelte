@@ -115,19 +115,19 @@
   // The quant a row is showing: the explicit pick when it still exists, else the
   // loaded one, else the largest.
   function selectedQuant(row: ModelRow): QuantEntry {
-    return row.quants.find((q) => q.quant === quantPick[row.key]) ?? pickQuant(row);
+    return row.quants.find((q) => q.key === quantPick[row.key]) ?? pickQuant(row);
   }
 
   // The model a row's numbers and actions refer to: the picked variant of the
   // picked quant, else that quant's base.
   function selectedModel(row: ModelRow): Model {
     const q = selectedQuant(row);
-    const key = `${row.key} ${q.quant}`;
+    const key = `${row.key} ${q.key}`;
     return q.variants.find((v) => v.model.id === variantPick[key])?.model ?? q.base;
   }
 
   function pickVariant(row: ModelRow, id: string): void {
-    variantPick[`${row.key} ${selectedQuant(row).quant}`] = id;
+    variantPick[`${row.key} ${selectedQuant(row).key}`] = id;
   }
   function variantSelected(row: ModelRow, id: string): boolean {
     return selectedModel(row).id === id;
@@ -371,8 +371,8 @@
                 <div class="mt-1.5 w-fit">
                   {#if multiQuant}
                     <div class="flex flex-wrap items-center gap-1.5">
-                      {#each row.quants as qe (qe.quant)}
-                        <button class={pillCls(qe.quant === q.quant, true)} onclick={() => (quantPick[row.key] = qe.quant)} use:tip={`Quant ${qe.quant || 'unknown'}`}>
+                      {#each row.quants as qe (qe.key)}
+                        <button class={pillCls(qe.key === q.key, true)} onclick={() => (quantPick[row.key] = qe.key)} use:tip={qe.quant ? `Quant ${qe.quant}` : `Unrecognised weight type - ${qe.base.id}`}>
                           {qe.quant || "-"}
                           {#if qe.live}<span class="ml-1 inline-block w-1.5 h-1.5 rounded-full align-middle {dotClass(qe.base.state)}"></span>{/if}
                         </button>
@@ -403,7 +403,7 @@
           </tr>
 
           {#if expanded[row.key] && multiQuant}
-            {#each row.quants as qe, qi (qe.quant)}
+            {#each row.quants as qe, qi (qe.key)}
               <tr class="text-txtsecondary {qi === row.quants.length - 1 ? 'rule' : ''} {rowTone(qe.live, qe.base.state)}">
                 {#if !inFamily}<td class="w-6"></td>{/if}
                 <td class={rowAccent(qe.live, qe.base.state)}></td>

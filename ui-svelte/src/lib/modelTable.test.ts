@@ -152,6 +152,58 @@ describe("buildRows", () => {
     expect(nvfp4.variants.map((v) => v.label)).toEqual(["32k", "vision"]);
   });
 
+  it("folds a CUSTOM-named quant's variants on the gguf, not on the id", () => {
+    // "mix-q-k" is not a shape the quant pattern knows, so baseKey cuts nowhere
+    // and every tier used to stand alone as a model of its own. The -m path the
+    // server ships says otherwise: one file, one row, four pills.
+    const gguf = "D:/LLM/Models/mixq/Qwen3.8-27B-mix-q-k.gguf";
+    const rows = buildRows([
+      mk("qwen3.8-27b-mix-q-k", { family: gguf, sizeGB: 16 }),
+      mk("qwen3.8-27b-mix-q-k-32k", { family: gguf, sizeGB: 16 }),
+      mk("qwen3.8-27b-mix-q-k-64k", { family: gguf, sizeGB: 16 }),
+      mk("qwen3.8-27b-mix-q-k-game", { family: gguf, sizeGB: 16 }),
+      mk("qwen3.8-27b-mix-q-k-vision", { family: gguf, sizeGB: 16 }),
+    ]);
+    expect(rows.map((r) => r.key)).toEqual(["qwen3.8-27b-mix-q-k"]);
+    expect(rows[0].quants).toHaveLength(1);
+    expect(rows[0].quants[0].variants.map((v) => v.label)).toEqual(["32k", "64k", "game", "vision"]);
+  });
+
+  it("keeps a custom quant's separate rebuild apart - it is a different gguf", () => {
+    // …-mtp is its own file, so it stays its own entry rather than being fused
+    // with the plain build just because neither id parses to a quant.
+    const rows = buildRows([
+      mk("qwen3.8-27b-mix-q-k", { family: "D:/m/mix-q-k.gguf" }),
+      mk("qwen3.8-27b-mix-q-k-32k", { family: "D:/m/mix-q-k.gguf" }),
+      mk("qwen3.8-27b-mix-q-k-mtp", { family: "D:/m/mix-q-k-mtp.gguf" }),
+      mk("qwen3.8-27b-mix-q-k-mtp-32k", { family: "D:/m/mix-q-k-mtp.gguf" }),
+    ]);
+    expect(rows.map((r) => r.key).sort()).toEqual(["qwen3.8-27b-mix-q-k", "qwen3.8-27b-mix-q-k-mtp"]);
+    for (const r of rows) expect(r.quants[0].variants.map((v) => v.label)).toEqual(["32k"]);
+    // Both rows land under one heading, so they still read as one model.
+    expect(new Set(rows.map((r) => r.family))).toEqual(new Set(["qwen3.8-27b"]));
+  });
+
+  it("still merges two copies of the SAME recognised quant across folders", () => {
+    const rows = buildRows([
+      mk("qwen3-32b-q8_0", { family: "D:/a/qwen3-32b-q8_0.gguf" }),
+      mk("qwen3-32b-q8_0-32k", { family: "D:/a/qwen3-32b-q8_0.gguf" }),
+      mk("qwen3-32b-q8_0-copy", { family: "D:/b/qwen3-32b-q8_0.gguf" }),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].quants).toHaveLength(1);
+    expect(rows[0].quants[0].variants.map((v) => v.label)).toEqual(["32k", "copy"]);
+  });
+
+  it("gives every quant entry a key unique within its row", () => {
+    const rows = buildRows([
+      mk("qwen3.8-27b-q4_k_m", { family: "D:/a.gguf" }),
+      mk("qwen3.8-27b-bf16", { family: "D:/b.gguf" }),
+    ]);
+    const keys = rows[0].quants.map((q) => q.key);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
   it("marks a row live when any member is loaded, and unlisted only when all are", () => {
     const rows = buildRows([mk("m-Q4_K_M", { unlisted: true }), mk("m-Q8_0", { state: "ready" })]);
     expect(rows[0].live).toBe(true);

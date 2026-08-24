@@ -151,6 +151,17 @@ Both `quantOf`/`baseKey` take the **first** quant-shaped part, not the last (mir
 `quantFromPath`), and fold a `UD`/`i1` recipe marker into the quant — or `-UD-` and a duplicated
 trailing quant leak into the displayed name.
 
+**Variants group on the gguf, not on the id.** `clusterModels` buckets the catalog by `family` —
+the `-m` path the server already ships (`internal/server/family.go`) — and only then reads a quant
+off the cluster's shortest id. That is what makes a *custom-named* quant survive: `mix-q-k`,
+`q4km-clone` and `v3-control` are shapes `internal/quant.Pattern` cannot match, `baseKey` finds
+nothing to cut at and returns the whole id, so before this every ctx tier and vision twin of one
+file stood alone (20 rows for 3 models in a real catalog). The path says they are one file, and a
+row is one file. Two clusters merge into one quant entry only when they agree on a REAL token, so
+a custom quant and its separate `-mtp` rebuild stay two entries under one family heading rather
+than being fused because neither parsed. `QuantEntry.key` (quant, else the gguf) is what the pills
+key on — `quant` is `""` for all of these and cannot be an identity.
+
 ### A third axis: family
 
 `familyOf` is the finetune detector — it reduces a base key to `<model><param count>`, so

@@ -71,8 +71,12 @@ export interface VariantEntry {
   label: string;
 }
 
-// One quant of one model, with its variants.
+// One quant of one model, with its variants. key identifies the entry WITHIN its
+// row and is what the table keys its pills on: `quant` cannot, because an id
+// whose weight type the pattern does not recognise leaves it "" and a row may
+// hold two such entries (a custom quant and its MTP rebuild).
 export interface QuantEntry {
+  key: string;
   quant: string; // "" when the id carries none
   base: Model;
   variants: VariantEntry[];
@@ -101,14 +105,44 @@ function suffix(id: string, base: string): string {
 
 // buildQuant collapses the models of ONE quant into base + variants. The base is
 // the shortest id (variants are always the base plus a suffix).
-function buildQuant(quant: string, members: Model[]): QuantEntry {
+function buildQuant(key: string, members: Model[]): QuantEntry {
   const sorted = [...members].sort((a, b) => a.id.length - b.id.length || a.id.localeCompare(b.id));
   const base = sorted[0];
+  const quant = quantOf(base);
   const variants = sorted
     .slice(1)
     .map((m) => ({ model: m, label: suffix(m.id, base.id) }))
     .sort((a, b) => a.label.localeCompare(b.label));
-  return { quant, base, variants, live: sorted.some(isLive) };
+  return { key, quant, base, variants, live: sorted.some(isLive) };
+}
+
+// A cluster is the set of served ids that are ONE gguf: the base plus every
+// variant autogen emits from it (ctx tiers, "-game", the "-vision" twin). The
+// server hands us that identity for free as `family`, the -m path — and unlike
+// the id it survives a weight type the quant pattern has never heard of, which
+// is exactly when the id-derived grouping collapses: baseKey finds no token to
+// cut at, returns the whole id, and every tier of ONE model becomes a row of its
+// own (qwen3.8-27b-mix-q-k did this: 5 rows for 1 model).
+//
+// So the gguf, not the id, decides which models share a quant entry, and the
+// entry's base id then decides the row. Models with no family (peers, upstreams
+// quartermaster does not launch) keep the id-only path.
+//
+// This axis has no Go twin: internal/autogen/family.go groups FILES on disk,
+// where the path is the identity already and the question does not arise.
+function clusterModels(models: Model[]): Model[][] {
+  const byGguf = new Map<string, Model[]>();
+  const loose: Model[][] = [];
+  for (const m of models) {
+    if (!m.family) {
+      loose.push([m]);
+      continue;
+    }
+    const c = byGguf.get(m.family);
+    if (c) c.push(m);
+    else byGguf.set(m.family, [m]);
+  }
+  return [...byGguf.values(), ...loose];
 }
 
 // buildRows groups a flat model list by model, then by quant. Quants are ordered
@@ -116,19 +150,27 @@ function buildQuant(quant: string, members: Model[]): QuantEntry {
 // entries last.
 export function buildRows(models: Model[]): ModelRow[] {
   const byBase = new Map<string, Map<string, Model[]>>();
-  for (const m of models) {
-    const q = quantOf(m);
-    const key = baseKey(m.id);
+  for (const cluster of clusterModels(models)) {
+    // The shortest id in a cluster is its base — every variant is that id plus a
+    // suffix — so it, not an arbitrary member, names the row and the quant.
+    const base = cluster.reduce((a, b) => (b.id.length < a.id.length || (b.id.length === a.id.length && b.id < a.id) ? b : a));
+    const q = quantOf(base);
+    const key = baseKey(base.id);
+    // Two clusters merge into one quant entry only when they agree on a REAL
+    // quant token — two folders holding the same Q8_0 download. With no token to
+    // agree on, the gguf keeps them apart rather than fusing a custom quant with
+    // an unrelated one that also failed to parse.
+    const qKey = q || base.family || base.id;
     const quants = byBase.get(key) ?? new Map<string, Model[]>();
-    quants.set(q, [...(quants.get(q) ?? []), m]);
+    quants.set(qKey, [...(quants.get(qKey) ?? []), ...cluster]);
     byBase.set(key, quants);
   }
 
   const rows: ModelRow[] = [];
   for (const [key, quants] of byBase) {
     const entries = [...quants.entries()]
-      .map(([q, members]) => buildQuant(q, members))
-      .sort((a, b) => (b.base.sizeGB ?? 0) - (a.base.sizeGB ?? 0) || a.quant.localeCompare(b.quant));
+      .map(([qKey, members]) => buildQuant(qKey, members))
+      .sort((a, b) => (b.base.sizeGB ?? 0) - (a.base.sizeGB ?? 0) || a.quant.localeCompare(b.quant) || a.key.localeCompare(b.key));
     rows.push({
       key,
       label: key,
