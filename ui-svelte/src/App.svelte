@@ -158,9 +158,9 @@
     </div>
 
     <div class="flex flex-col flex-1 min-w-0">
-      <!-- The rail is a shade darker than the page and a shade lighter than the
-           chrome, so its top-left corner can round off against the side rail
-           rather than butting into it. The notch that carves out has to show
+      <!-- The rail keeps its own tone, a clear step above the chrome, so its
+           top-left corner can round off against the side rail rather than
+           butting into it. The notch that carves out has to show
            the SAME tone as the side rail and the title bar around it - without
            this wrapper it would fall through to bg-background and read as a
            chipped corner rather than a curve.

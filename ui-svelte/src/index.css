@@ -42,16 +42,21 @@
      well). Nesting used to fall back to `background`, i.e. DARKER than its
      parent, so a raised block read as a hole punched in the card. */
   --color-surface-2: rgba(253, 249, 241, 1);
-  /* The app chrome: title bar and side rail. Deliberately BELOW background,
-     not above it - the chrome is the frame the document sits in, so the
-     content area reads as lifted out of it. That tonal step is the only
-     separator the chrome gets; nothing along this seam draws a rule. */
-  --color-chrome: rgba(218, 205, 183, 1);
-  /* The status rail, one step IN FRONT of the chrome and one behind the page.
-     It needs its own tone because its top-left corner is rounded off against
-     the side rail: with no border to draw that curve, the corner is only
-     visible as a change of colour. */
-  --color-rail: rgba(230, 219, 199, 1);
+  /* The app chrome: title bar and side rails. Sits a hair ABOVE the page rather
+     than below it - close enough to read as one continuous ground, with the
+     page barely settling into its frame. Deliberately picked flush: an earlier
+     pass put the chrome 3-4 L* under the page and it read as a dark gutter
+     with the app sitting in it.
+     The cost is that the rounded corners along this seam (the dashboard status
+     rail's, the playground main's) have almost no tone to draw themselves with
+     - see the note on --color-rail. Widen this gap if they need to show. */
+  --color-chrome: rgba(241, 231, 215, 1);
+  /* One step BELOW surface, for the status rail: it is a readout strip, not a
+     card, and sitting slightly recessed separates it from the title bar above
+     it without needing a rule between them. It also sits well ABOVE the
+     chrome, which is what draws its rounded top-left corner now that the
+     corner has no border of its own. */
+  --color-rail: rgba(240, 232, 217, 1);
 
   /* text colors */
   --color-txtmain: rgba(26, 23, 20, 1);
@@ -97,7 +102,8 @@
   /* Ink-on-paper citation chip. Was a hardcoded #000/#fff in both themes, which
      put a pure-black pill on a cream page. */
   --color-cite-bg: rgba(58, 40, 26, 1);
-  --color-cite-text: rgba(250, 246, 238, 1);}
+  --color-cite-text: rgba(250, 246, 238, 1);
+}
 
 @layer theme {
   /* over ride theme for dark mode */
@@ -109,9 +115,9 @@
     /* One step above surface — see the light-theme note. */
     --color-surface-2: rgba(56, 53, 48, 1);
     /* The chrome - see the light-theme note. Below background, not above. */
-    --color-chrome: rgba(21, 20, 18, 1);
-    /* Between the chrome and the page - see the light-theme note. */
-    --color-rail: rgba(28, 26, 24, 1);
+    --color-chrome: rgba(35, 33, 29, 1);
+    /* One step below surface - see the light-theme note. */
+    --color-rail: rgba(38, 36, 33, 1);
     /* text colors */
     --color-txtmain: rgba(237, 237, 238, 1);
     --color-txtsecondary: rgba(161, 161, 166, 0.85);

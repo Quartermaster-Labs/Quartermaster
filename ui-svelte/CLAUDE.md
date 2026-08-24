@@ -194,15 +194,17 @@ corpse. Tested in `lib/sessionSync.test.ts`, including that race.
   utility** — a `.collapse` of our own inherited `visibility: collapse` and hid the chat boxes.
   Boolean settings use the `Toggle.svelte` switch (`size="sm"` in dense config grids), not a raw
   `<input type="checkbox">`; tick boxes are only for multi-select lists (pick N of M).
-- **Chrome is a colour, not a border.** Four tones step forward in the same order in both themes:
-  `--color-chrome` (title bar + both apps' side rails) < `--color-rail` (the dashboard's status
-  rail) < `--color-background` (the page) < `--color-surface` (cards). Chrome sits *below* background, so the page reads as
-  lifted out of its frame. Those steps are the ONLY separators along that seam - no `border-l` on
-  `<main>`, no `border-b` under the title bar, no rule around the status rail. The rail keeps its
-  own tone because its `rounded-tl-lg` corner is drawn purely by the colour change against the
-  side rail; give it `bg-chrome` and the corner disappears. The playground has no status rail, so
-  it cuts the same curve the other way: its `<main>` paints `bg-background rounded-tl-lg` over a
-  `bg-chrome` root.
+- **Chrome is a colour, not a border.** `--color-chrome` (title bar + both apps' side rails) is the
+  ONLY tone below `--color-background`; everything else steps up from the page
+  (`--color-rail` for the dashboard's status rail, then `--color-surface`, `--color-surface-2`). The
+  chrome sitting below is what makes the page read as lifted out of its frame, and that step is the
+  ONLY separator along the seam - no `border-l` on `<main>`, no `border-b` under the title bar, no
+  rule around the status rail. Keep the step small: ~4 L\* under the page in light, ~3 in dark. It
+  only has to be *readable*, and a chrome that reads as its own dark slab makes the app look like it
+  is sitting in a gutter. The status rail keeps its own tone because its `rounded-tl-lg` corner is
+  drawn purely by the colour change against the side rail; give it `bg-chrome` and the corner
+  disappears. The playground has no status rail, so it cuts the same curve the other way: its
+  `<main>` paints `bg-background rounded-tl-lg` over a `bg-chrome` root.
 - **`h-10` is the app's row unit.** A sidebar item, the status rail and every page's first
   toolbar row are all 40px, so the chrome and the page content share one horizontal grid. Give a
   toolbar `min-h-10` (not `h-10`) wherever its contents can wrap, and `items-stretch` on a tab bar
