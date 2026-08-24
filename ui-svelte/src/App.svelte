@@ -18,6 +18,9 @@
   import { initScreenWidth, initSystemThemeListener, isDarkMode, appTitle, connectionState } from "./stores/theme";
   import { currentRoute } from "./stores/route";
   import { playgroundPort } from "./stores/playgroundAuth";
+  import { get } from "svelte/store";
+  import { appTabs, activeTabId, setTabState } from "./stores/appTabs";
+  import { openExternal } from "./lib/native";
 
   // The playground is now a separate app served on its own port. /api/mode tells
   // us which one to render: the operator dashboard or the standalone playground.
@@ -61,6 +64,37 @@
     if (mode !== "dashboard") return;
     const icon = $connectionState === "connecting" ? "\u{1F7E1}" : $connectionState === "connected" ? "\u{1F7E2}" : "\u{1F534}";
     document.title = `${icon} ${$appTitle}`;
+  });
+
+  // The origin every tab frame lives on. Used to authenticate their messages:
+  // a postMessage carries whatever the sender chose, and one of the two things
+  // they can ask for -- open this URL in the system browser -- is a shell
+  // execution path. (The Go side validates the scheme too; this is the first of
+  // the two gates, not the only one.)
+  const playgroundOrigin = $derived(
+    $playgroundPort ? `${window.location.protocol}//${window.location.hostname}:${$playgroundPort}` : "",
+  );
+
+  // The tab frames' half of this wire is lib/embed.ts. They report a label and a
+  // busy flag because cross-origin means the strip can read neither from them.
+  $effect(() => {
+    const origin = playgroundOrigin;
+    if (!origin) return;
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin !== origin) return;
+      const d = e.data as { type?: string; tab?: string; label?: string; busy?: boolean; url?: string } | null;
+      if (!d || typeof d !== "object" || typeof d.tab !== "string") return;
+      // A message naming a tab we do not have is stale (a frame unloading after
+      // its close) or forged; either way there is nothing to apply it to.
+      // get(), not $appTabs: reading the store here would make the effect depend
+      // on it, so every label and busy flip would tear the listener down and
+      // re-add it -- and a message landing in that gap would be lost.
+      if (!get(appTabs).some((t) => t.id === d.tab)) return;
+      if (d.type === "qm-tab-state") setTabState(d.tab, String(d.label ?? ""), !!d.busy);
+      else if (d.type === "qm-tab-external" && typeof d.url === "string") openExternal(d.url);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
   });
 
   onMount(() => {
@@ -107,7 +141,11 @@
 {#if mode === "playground"}
   <PlaygroundApp />
 {:else if mode === "dashboard"}
-  <div class="flex h-screen bg-background">
+  <!-- Hidden rather than unmounted while a tab is in front: the dashboard holds
+       router state, the open log stream and the metrics history, and rebuilding
+       all of it on every tab switch would make the strip feel like navigation
+       instead of like tabs. -->
+  <div class="flex h-screen bg-background" style:display={$activeTabId ? "none" : null}>
     <!-- The slot reserves only the COLLAPSED width; the rail itself is absolute
          inside it, so expanding on hover draws over the page like a curtain
          instead of reflowing every layout to the right of it. -->
@@ -154,3 +192,22 @@
 {:else}
   <div class="h-screen bg-background"></div>
 {/if}
+
+<!-- Tab frames. Kept MOUNTED whichever one is in front, which is the whole
+     reason a tab is a frame and not a route: a turn in flight is a streaming
+     fetch owned by that document, so unmounting the background tab -- or
+     navigating the single webview away from it -- would abort the generation.
+     Outside the mode switch so a frame survives anything the shell does.
+
+     `allow` is not optional. A cross-origin frame is denied microphone and
+     clipboard by default, which would break recording in the speech and audio
+     tabs and every copy button in chat, silently and only inside the app. -->
+{#each $appTabs as tab (tab.id)}
+  <iframe
+    src={tab.url}
+    title={tab.label}
+    class="block h-screen w-full border-0"
+    allow="microphone; clipboard-read; clipboard-write; autoplay"
+    style:display={$activeTabId === tab.id ? null : "none"}
+  ></iframe>
+{/each}

@@ -9,6 +9,7 @@
   import { loadMemories, clearMemories } from "../stores/memories";
   import { selectedTabStore, selectedModelStore, type PlaygroundTab } from "../stores/playground";
   import { userPref } from "../stores/prefs";
+  import { isEmbedded, embedTabId, postToShell } from "../lib/embed";
   import Login from "./Login.svelte";
   import PlaygroundShell from "./PlaygroundShell.svelte";
 
@@ -33,7 +34,18 @@
         startChat(model);
       }
     }
-    if (model || tab) history.replaceState(null, "", window.location.pathname + window.location.hash);
+    // The embed params survive the strip: they are what makes this document a
+    // tab, and a frame that reloads without them comes back as a stray copy of
+    // the playground with a title bar of its own.
+    if (model || tab) {
+      const keep = new URLSearchParams();
+      for (const k of ["qmtab", "qmshell"]) {
+        const v = p.get(k);
+        if (v) keep.set(k, v);
+      }
+      const q = keep.toString();
+      history.replaceState(null, "", window.location.pathname + (q ? `?${q}` : "") + window.location.hash);
+    }
   }
 
   let ready = $state(false); // initial /auth/me check done
@@ -66,11 +78,13 @@
     }
   });
 
-  // The playground's tab title: <hat> <state> <thread> - Quartermaster Playground.
+  // The playground's tab title: <state> <thread> - Quartermaster Playground.
   // Single writer for this app: App.svelte's connection-dot title is guarded to
   // dashboard mode, and onMount no longer touches it (an effect always wins over
   // a one-shot mount write anyway).
-  const APP_ICON = "\u{1F3A9}"; // top hat, standing in for the mark the favicon carries
+  //
+  // No app icon in the string: the favicon IS the hat, and the browser draws it
+  // immediately to the left of this text.
 
   // Any tab generating lights the bolt, not just the visible one -- the title is
   // read when the browser tab is in the background, where "which playground tab
@@ -88,11 +102,19 @@
     return t.length > 48 ? t.slice(0, 47) + "\u2026" : t;
   });
 
+  // As an app-window tab the same two facts go up the postMessage wire instead
+  // of into a title no tab strip can read. Same derivations, one more consumer:
+  // the strip draws the label as text and the busy flag as its bolt.
+  $effect(() => {
+    if (!isEmbedded) return;
+    postToShell({ type: "qm-tab-state", tab: embedTabId, label: threadTitle || "Playground", busy });
+  });
+
   $effect(() => {
     const state = busy ? "\u26A1" : "\u2705";
     // Empty segments drop out, so the login screen and the audio tab get a clean
-    // "<hat> <state> - Quartermaster Playground" with no dangling separator.
-    document.title = [`${APP_ICON} ${state}`, threadTitle, "Quartermaster Playground"].filter(Boolean).join(" \u2014 ");
+    // "<state> - Quartermaster Playground" with no dangling separator.
+    document.title = [state, threadTitle, "Quartermaster Playground"].filter(Boolean).join(" — ");
   });
 </script>
 

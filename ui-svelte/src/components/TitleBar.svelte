@@ -16,6 +16,16 @@
   import mark from "../assets/mark.png";
   import { versionInfo } from "../stores/api";
   import WindowControls from "./WindowControls.svelte";
+  import TabStrip from "./TabStrip.svelte";
+  import { showDashboard } from "../stores/appTabs";
+  import { playgroundPort } from "../stores/playgroundAuth";
+
+  // The playground runs on its own port; the strip needs its URL both to open a
+  // tab and to hand one to the real browser. Empty when it is not enabled, which
+  // is what hides the strip's + button.
+  const playgroundURL = $derived(
+    $playgroundPort ? `${window.location.protocol}//${window.location.hostname}:${$playgroundPort}/ui/` : "",
+  );
 
   // Only the dashboard has a router to go home to. In playground mode (a
   // different port, decided by /api/mode) there is no "/" route, so the caller
@@ -23,7 +33,11 @@
   // guessing and pushing a hash nothing listens to.
   let { home = false }: { home?: boolean } = $props();
 
+  // The wordmark is the ONLY way back to the dashboard -- it is not a tab, it is
+  // what the window is, with tabs opened on top of it. So this both drops the
+  // active tab and puts the router back on the dashboard's own home page.
   function goHome(): void {
+    showDashboard();
     push("/");
   }
 
@@ -127,6 +141,12 @@ Build date: ${$versionInfo.build_date ?? "unknown"}`}
       >
         {version}
       </span>
+    {/if}
+
+    <!-- Tabs sit between the build stamp and the empty middle: they read as
+         opened ON the app rather than as part of its name. -->
+    {#if home}
+      <TabStrip {playgroundURL} />
     {/if}
 
     <!-- Grows to fill, so the whole empty middle of the bar is draggable rather

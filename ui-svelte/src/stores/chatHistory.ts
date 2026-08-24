@@ -1,4 +1,6 @@
 import { get, writable } from "svelte/store";
+import { scopedKey } from "../lib/tabScope";
+import { syncSessions } from "../lib/sessionSync";
 import { getTextContent, type ChatMessage } from "../lib/types";
 
 export interface ChatSession {
@@ -34,7 +36,9 @@ export const chatSessions = writable<ChatSession[]>([]);
 
 // Which chat reopens with the tab. Persisted to localStorage (per browser) so a
 // reload/reopen returns to the chat you were on instead of an arbitrary one.
-const LAST_ACTIVE_KEY = "playground-active-chat";
+// Scoped per tab: every app-window tab is a frame on this one origin, so an
+// unscoped key would have two tabs writing each other's open thread.
+const LAST_ACTIVE_KEY = scopedKey("playground-active-chat");
 let lastActive = "";
 try {
   lastActive = localStorage.getItem(LAST_ACTIVE_KEY) ?? "";
@@ -247,3 +251,10 @@ export function deriveTitle(messages: ChatMessage[]): string {
       : first.content.map((p) => (p.type === "text" ? p.text : "")).join(" ");
   return text.trim().slice(0, 48) || "New chat";
 }
+
+// Converge with every other document on this origin -- other app-window tabs
+// and any browser tab. Each of them owns this whole list and PUTs the whole
+// list, so without it the last flush silently deletes what another added.
+// The generating session is exempt from the merge: it is being written a
+// token at a time here and every remote copy of it is already stale.
+syncSessions("chats", chatSessions, () => get(generatingChatId));

@@ -1,4 +1,6 @@
-import { writable } from "svelte/store";
+import { get, writable } from "svelte/store";
+import { scopedKey } from "../lib/tabScope";
+import { syncSessions } from "../lib/sessionSync";
 
 // One turn in a speech thread: the text spoken, the voice used, and the
 // generated audio (a base64 data URL so it survives a reload / server round-trip,
@@ -23,7 +25,9 @@ export interface SpeechSession {
 // shell mounts; changes push back debounced.
 export const speechSessions = writable<SpeechSession[]>([]);
 
-const LAST_ACTIVE_KEY = "playground-active-speech-chat";
+// Scoped per tab: every app-window tab is a frame on this one origin, so an
+// unscoped key would have two tabs writing each other's open thread.
+const LAST_ACTIVE_KEY = scopedKey("playground-active-speech-chat");
 let lastActive = "";
 try {
   lastActive = localStorage.getItem(LAST_ACTIVE_KEY) ?? "";
@@ -87,3 +91,10 @@ export function deriveSpeechTitle(turns: Turn[]): string {
   const first = turns.find((t) => t.text.trim());
   return first ? first.text.trim().slice(0, 48) : "New speech";
 }
+
+// Converge with every other document on this origin -- other app-window tabs
+// and any browser tab. Each of them owns this whole list and PUTs the whole
+// list, so without it the last flush silently deletes what another added.
+// The generating session is exempt from the merge: it is being written a
+// token at a time here and every remote copy of it is already stale.
+syncSessions("speech", speechSessions, () => get(generatingSpeechChatId));

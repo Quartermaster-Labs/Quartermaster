@@ -9,6 +9,18 @@
   import { versionInfo } from "../stores/api";
   import { playgroundPort } from "../stores/playgroundAuth";
   import { updateStatus, updateBusy, resumePolling, updateProgressLabel } from "../stores/update";
+  import { isNative } from "../lib/native";
+  import { openTab } from "../stores/appTabs";
+
+  // The app window has tabs of its own, so the playground opens INTO one instead
+  // of being handed to the system browser. The anchor is kept as the href for the
+  // browser case (and for middle-click / "copy link"), and only intercepted where
+  // there is a strip to open it in.
+  function openPlayground(e: MouseEvent): void {
+    if (!isNative) return;
+    e.preventDefault();
+    openTab(playgroundURL);
+  }
   const pages = [
     { path: "/", label: "Dashboard", icon: LayoutDashboard },
     // Models is ONE page now — the category split is tabs on the page itself,
@@ -64,11 +76,13 @@
     {#each pages as p (p.path)}
       {@const active = isActive(p.path, $currentRoute)}
       {#if p.path === "/test" && playgroundURL}
-        <!-- Playground is a separate app on its own port: link out to it. -->
+        <!-- Playground is a separate app on its own port: a tab in the app
+             window, a browser tab in a browser. -->
         <a
           href={playgroundURL}
           target="_blank"
           rel="noopener"
+          onclick={openPlayground}
           class="relative flex items-center gap-3 pr-3 h-10 shrink-0 text-sm font-medium text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
         >
           <span class="w-14 shrink-0 flex items-center justify-center">

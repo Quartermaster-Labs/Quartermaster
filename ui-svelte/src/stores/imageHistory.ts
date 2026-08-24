@@ -1,4 +1,6 @@
-import { writable } from "svelte/store";
+import { get, writable } from "svelte/store";
+import { scopedKey } from "../lib/tabScope";
+import { syncSessions } from "../lib/sessionSync";
 
 // One turn in an image thread: a prompt, the source/reference images fed into it,
 // and the generated result. Mirrors the chat tab's message model but for images.
@@ -19,7 +21,9 @@ export interface ImageSession {
 // loadImageChats() before the shell mounts; changes push back debounced.
 export const imageSessions = writable<ImageSession[]>([]);
 
-const LAST_ACTIVE_KEY = "playground-active-image-chat";
+// Scoped per tab: every app-window tab is a frame on this one origin, so an
+// unscoped key would have two tabs writing each other's open thread.
+const LAST_ACTIVE_KEY = scopedKey("playground-active-image-chat");
 let lastActive = "";
 try {
   lastActive = localStorage.getItem(LAST_ACTIVE_KEY) ?? "";
@@ -83,3 +87,10 @@ export function deriveImageTitle(turns: Turn[]): string {
   const first = turns.find((t) => t.prompt.trim());
   return first ? first.prompt.trim().slice(0, 48) : "New image";
 }
+
+// Converge with every other document on this origin -- other app-window tabs
+// and any browser tab. Each of them owns this whole list and PUTs the whole
+// list, so without it the last flush silently deletes what another added.
+// The generating session is exempt from the merge: it is being written a
+// token at a time here and every remote copy of it is already stale.
+syncSessions("images", imageSessions, () => get(generatingImageChatId));

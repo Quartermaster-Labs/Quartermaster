@@ -6,6 +6,8 @@
   import { models, loadModel, getSettings, pickModelsFolder } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
   import { playgroundPort } from "../stores/playgroundAuth";
+  import { isNative } from "../lib/native";
+  import { openTab } from "../stores/appTabs";
   import { modelCategory, MODEL_CATEGORIES, type ModelCategory } from "../lib/modelUtils";
   import { nextSort, type SortDir, type SortKey, type StateFilter } from "../lib/modelTable";
   import type { Model } from "../lib/types";
@@ -186,6 +188,12 @@
       return;
     }
     const u = `${window.location.protocol}//${window.location.hostname}:${port}/ui/?model=${encodeURIComponent(m.id)}&tab=${playgroundTab(m)}`;
+    // In the app window this is a tab, not a trip to the system browser --
+    // window.open is routed to openExternal there (lib/native.ts).
+    if (isNative) {
+      openTab(u);
+      return;
+    }
     window.open(u, "_blank", "noopener");
   }
 

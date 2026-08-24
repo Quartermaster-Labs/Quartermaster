@@ -60,6 +60,8 @@ changing anything under `ui-svelte/`.
 | `src/components/TitleBar.svelte`, `WindowControls.svelte`, `src/lib/native.ts` | The native app window's caption + the `qm*` bridge. Feature-tested, never build-flagged — see Conventions. |
 | `src/components/UIScaleControl.svelte`, `src/stores/uiScale.ts` | Interface size (`--qm-scale` → `zoom`) as a snapped slider, plus Ctrl+Plus/Minus/0. In Settings → Appearance (with the theme dropdown) and the playground's General settings — not in the sidebar footer. |
 | `src/components/SoftwareUpdate.svelte`, `src/stores/update.ts` | Which build is running, check for a newer one, apply it. Settings → System; shares its state with the sidebar's update button. |
+| `src/components/TabStrip.svelte`, `src/stores/appTabs.ts` | The app window's browser-style tabs (shell side). |
+| `src/lib/embed.ts`, `src/lib/tabScope.ts`, `src/lib/sessionSync.ts` | The frame side of a tab: embed detection + the postMessage wire, per-tab storage keys, cross-document history convergence. |
 | `src/components/playground/` | The playground's per-mode interfaces and shared widgets. |
 | `src/stores/` | Backend state, SSE wiring, persisted prefs, theme, routing. |
 | `src/lib/` | Framework-agnostic helpers: API client modules, shared `types.ts`, markdown/histogram utilities, the `scrollFade` action. |
@@ -118,6 +120,57 @@ manual toast now carries the reason.
 Both keep the last `KEEP_RECENT` (6) messages verbatim and snap the boundary forward to a `user`
 message, so the kept slice never starts on an orphaned assistant/tool reply whose `tool_calls` were
 summarized away.
+
+## App-window tabs
+
+The app window carries browser-style tabs on its title bar. **The dashboard is not one of them** —
+it is what the window *is*, and the wordmark is always the way back to it (`activeTabId === ""`).
+Tabs are what gets opened on top: today the playground, which lives on its own port.
+
+- **A tab is a cross-origin `<iframe>`, and it had to be.** Pointing the single WebView2 at the
+  playground instead would tear down its JS context, and a turn in flight is a streaming `fetch`
+  owned by that context — every glance at the dashboard would abort the generation. Frames stay
+  mounted (`display:none` when not in front), so a background tab keeps streaming. The dashboard is
+  hidden the same way rather than unmounted: it holds router state, the log stream and the metrics
+  history.
+- **Zero Go changes.** Nothing serves `X-Frame-Options`/`frame-ancestors`, and the playground cookie
+  is `SameSite=Lax` — a port is not part of a *site*, so `:1250` → `:1251` is same-site and the frame
+  stays logged in. Right-click → browser reuses `qmOpenExternal`.
+- **Cross-origin means the shell can read nothing from the frame** — not `document.title`, not a
+  store. The tab label and the generating bolt arrive as `postMessage` (`lib/embed.ts`, both ends),
+  addressed to the exact shell origin passed in as `?qmshell=`, never `"*"`: the label is the user's
+  chat title.
+- **`isNative` is a feature test AND an embed check** (`lib/native.ts`). WebView2 runs its
+  document-creation scripts in every frame, so an embedded playground *sees* `window.qmDrag`, while
+  `chrome.webview` (what the bindings post through) is exposed only to the top document. Without the
+  embed check the frame draws a second title bar whose every button throws. `openExternal` in a
+  frame asks the shell to make the call.
+- **The frame needs `allow="microphone; clipboard-read; clipboard-write; autoplay"`.** A cross-origin
+  frame is denied all of it by default, which would break speech/audio recording and every copy
+  button — silently, and only inside the app.
+- **The bar stays `h-8`.** `index.css` keys `--qm-titlebar-h` off it and shortens every `h-screen`
+  root by that, so a taller bar is a relayout of both apps, not a style tweak. Tabs are 24px pills
+  inside the 32px bar, and every control on the bar must `stopPropagation` on `mousedown` or the
+  window drag eats the click.
+- **Per-tab state is opt-in, not automatic.** All tabs are frames on ONE origin, so they share one
+  `localStorage`. `lib/tabScope.ts` suffixes only the three "which thread is open" pointers with the
+  tab id; prefs and caches stay shared on purpose. Ids count up from zero each window session, so the
+  first tab reopens on the thread it had.
+
+### Cross-document history convergence
+
+`lib/sessionSync.ts`. Each of the three history stores holds the **whole** list and PUTs the whole
+list, so two documents are two owners of one blob and the last flush wins — create a chat in one and
+the other's next PUT deletes it, taking its media (the server GCs a vanished session's files). This
+predates tabs; two browser tabs on the playground port always had it. Tabs make it routine.
+
+The fix is convergence, not locking: every document broadcasts its list (debounced 400 ms, because
+`patchLast` rewrites it per token) and merges what it receives, so the racing PUTs carry the same
+content. Merge order: the **locally generating session always wins** (it is being written a token at
+a time; any remote copy is stale by definition), then higher `updatedAt`, then deletions. Deletions
+travel explicitly *and* leave a 60 s **tombstone** — naming the deletion is not enough on its own,
+because the other document's in-flight broadcast was composed before it heard and still carries the
+corpse. Tested in `lib/sessionSync.test.ts`, including that race.
 
 ## Conventions
 

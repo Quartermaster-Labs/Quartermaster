@@ -14,6 +14,8 @@
 // the page down with it: losing the ability to drag the window is a papercut,
 // losing an install -- or a chat mid-generation -- is not.
 
+import { isEmbedded, postToShell, embedTabId } from "./embed";
+
 interface NativeWindow {
   qmDrag?: () => Promise<void>;
   qmMinimize?: () => Promise<void>;
@@ -26,8 +28,17 @@ interface NativeWindow {
 
 const w = (typeof window === "undefined" ? {} : window) as NativeWindow;
 
-/** True when running inside the WebView2 window rather than a browser tab. */
-export const isNative = typeof w.qmDrag === "function";
+/**
+ * True when this document IS the app window -- not merely inside it.
+ *
+ * The feature test alone is not enough any more. WebView2 runs its
+ * document-creation scripts in every frame, so a tab's embedded playground sees
+ * these bindings too, while `window.chrome.webview` (what they post through) is
+ * exposed only to the top document -- so in a frame they exist and throw. The
+ * embed check is therefore not a preference: without it the frame would draw a
+ * second title bar whose every button silently fails.
+ */
+export const isNative = typeof w.qmDrag === "function" && !isEmbedded;
 
 export function dragWindow(): void {
   void w.qmDrag?.().catch(() => {});
@@ -96,6 +107,12 @@ export async function pickFolder(
  * URLs are dropped on the Go side -- the binding is a shell execution path.
  */
 export function openExternal(url: string): void {
+  // A tab frame cannot reach the binding (chrome.webview is top-document only),
+  // so it asks the shell to make the call on its behalf.
+  if (isEmbedded) {
+    postToShell({ type: "qm-tab-external", tab: embedTabId, url });
+    return;
+  }
   void w.qmOpenExternal?.(url).catch(() => {});
 }
 
@@ -117,7 +134,10 @@ export function openExternal(url: string): void {
  * No-op outside the native window, so the browser keeps its ordinary tabs.
  */
 export function installExternalLinkHandler(): () => void {
-  if (!isNative) return () => {};
+  // A tab frame needs this every bit as much as the window does: it has no
+  // chrome either, and a Hugging Face page loaded into a 32px-capped frame is a
+  // dead end with no way back. openExternal routes it up to the shell.
+  if (!isNative && !isEmbedded) return () => {};
 
   const onClick = (e: MouseEvent) => {
     // Let modified clicks through untouched: ctrl/shift/middle-click mean

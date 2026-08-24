@@ -6,6 +6,8 @@
   import { models, unloadSingleModel, getModelConfig, type ModelConfig } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
   import { playgroundPort } from "../stores/playgroundAuth";
+  import { isNative } from "../lib/native";
+  import { openTab } from "../stores/appTabs";
   import { prettifyModelName, modelCategory, modelWeightGB, type ModelCategory } from "../lib/modelUtils";
   import { Settings, Square, Image, MessageCircle, HelpCircle } from "lucide-svelte";
   import type { Model } from "../lib/types";
@@ -100,6 +102,12 @@
       return;
     }
     const u = `${window.location.protocol}//${window.location.hostname}:${port}/ui/?model=${encodeURIComponent(m.id)}&tab=${tab}`;
+    // In the app window this is a tab, not a trip to the system browser --
+    // window.open is routed to openExternal there (lib/native.ts).
+    if (isNative) {
+      openTab(u);
+      return;
+    }
     window.open(u, "_blank", "noopener");
   }
 
