@@ -11,7 +11,7 @@ listed in [`routes.md`](routes.md).
 | `server.go` | `Server` struct, `New`, the route table (`routes`), local/peer dispatch (`localPeerHandler`), version-prefix stripping, preload kickoff, graceful shutdown. |
 | `api.go` | `/v1/models` listing + capability rendering, `/running`, `/unload`, `/metrics` (Prometheus), `/upstream/...` passthrough, model-in-path resolution, preload machinery. |
 | `apigroup.go` | UI-facing `/api/*` JSON endpoints: the SSE event stream, unload, metrics/performance/version/capture, and the `modelStatus` payload (fork: tags each model with `family`, `group`, `listeners`, plus the Models-table columns `quant`/`sizeGB`/`estVramGB`/`estRamGB`). |
-| `modelmeta.go` | Model file facts for the Models table: `quantFromPath` (the **first** quant-shaped `-`-part of the gguf name — what follows is a build tag (`-MTP`, `-00001-of-00002`), and autogen only strips the quant when it ends the filename, so an id can carry it twice; a preceding `UD`/`i1` recipe marker is folded in, `UD-Q4_K_XL`) and `fileSizeGB` (shard-set aware via the `-00001-of-000NN` glob). Both feed `modelStatus`, which re-renders on every SSE tick, so sizes are cached in a `sync.Map` — one stat per path per process. |
+| `modelmeta.go` | Model file facts for the Models table. `quantFromPath` reads the **first** quant-shaped `-`-part of the gguf name (what follows is a build tag (`-MTP`, `-00001-of-000NN`), and autogen only strips the quant when it ends the filename, so an id can carry it twice; a preceding `UD`/`i1` recipe marker is folded in, `UD-Q4_K_XL`). `modelKeys` adds the table's grouping axes from the gguf HEADER (`autogen.IdentityOf`) with the id rules as fallback — see the gotcha below. `fileSizeGB` is shard-set aware via the `-00001-of-000NN` glob. All feed `modelStatus`, which re-renders on every SSE tick, so sizes AND identities are cached in a `sync.Map` — one stat per path per process. |
 | `auth.go` | Auth, request-context and CORS middleware; `Access-Control-Request-Headers` sanitization. |
 | `admin.go` | Fork: the remote-address gate for the unauthenticated admin surface (`adminChain`). `SetAdminAccess(localOnly, allow)` + `ParseAdminAllow`. |
 | `apikeyscope.go` | Fork: per-key model scoping — `buildKeyScopes` (`cfg.APIKeyModels` → key ⇒ allowed-model set, dropping empty lists as unrestricted), `withKeyScope`, `apiKeyModelSet` (`ok=false` = unrestricted). Read by the auth middleware, `handleListModels` and `localPeerHandler`. |
@@ -88,6 +88,20 @@ listed in [`routes.md`](routes.md).
   invariant making cross-listener VRAM accounting and eviction correct.
 
 ## Dispatch and config gotchas
+
+- **The Models table groups on what the GGUF says it is, not on its name.** `modelKeys`
+  (`modelmeta.go`) stamps `modelKey` (one model = one row, a pill per quant) and `familyKey`
+  (finetunes of one base) into every `/api/events` model, reading `autogen.IdentityOf` - the
+  header's `general.basename`/`size_label`/`finetune` - and falling back to `autogen.ModelBaseKey`/
+  `FamilyKey` for the ~1/3 of files that carry no identity KVs. **The UI must not re-derive
+  either from the id**; guessing where a name ends and a quant begins is what put one model on
+  five rows (`Qwen3.8-27B-mix-q-k-mtp`). The two key spaces are deliberately un-namespaced: a
+  header key and an id key that spell the same string ARE the same model.
+- **`quant` and `quantLabel` are not interchangeable, and only `quant` may merge.** `quant` stays
+  the token in the FILENAME, because the table also fuses two folders' copies of a model on it and
+  that fusion must rest on a name both files agreed on. `quantLabel` is the tensor-derived truth
+  (`Metadata.QuantLabel`), sent only when the filename named nothing, and is display-only - two
+  unrelated hand-built quants can both compute `Q3_K mix` without being one download.
 
 - **Metrics teeing.** `CreateMetricsMiddleware` resolves the model up front (priming
   `shared.FetchContext`'s fast path), restricts `Accept-Encoding` to gzip/deflate so the buffered

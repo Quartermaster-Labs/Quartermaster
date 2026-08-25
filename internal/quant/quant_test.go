@@ -106,17 +106,78 @@ func TestPatternMirrorsUI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the UI mirror: %v", err)
 	}
-	const marker = "export const QUANT_PATTERN = String.raw`"
-	i := strings.Index(string(b), marker)
-	if i < 0 {
-		t.Fatalf("%s no longer declares QUANT_PATTERN as a String.raw literal", path)
+	src := string(b)
+	// Every pattern the table's grouping depends on, not just the weight types:
+	// a mix run the TS half does not know reads as part of the model name there
+	// and as a quant here, which is the same one-model-many-rows bug.
+	for _, m := range []struct{ konst, goVal string }{
+		{"QUANT_PATTERN", Pattern},
+		{"MIX_PATTERN", MixPattern},
+		{"CRUMB_PATTERN", CrumbPattern},
+	} {
+		marker := "export const " + m.konst + " = String.raw`"
+		i := strings.Index(src, marker)
+		if i < 0 {
+			t.Errorf("%s no longer declares %s as a String.raw literal", path, m.konst)
+			continue
+		}
+		rest := src[i+len(marker):]
+		j := strings.Index(rest, "`")
+		if j < 0 {
+			t.Errorf("%s: unterminated %s literal", path, m.konst)
+			continue
+		}
+		if got := rest[:j]; got != m.goVal {
+			t.Errorf("%s drifted between Go and the UI:\n  go: %s\n  ts: %s", m.konst, m.goVal, got)
+		}
 	}
-	rest := string(b)[i+len(marker):]
-	j := strings.Index(rest, "`")
-	if j < 0 {
-		t.Fatalf("%s: unterminated QUANT_PATTERN literal", path)
+}
+
+// A hand-mixed quant: no named recipe, just "mix" and the types that went in.
+// The whole run is the token, and what follows it is the build tag - so the id
+// still cuts at "mix" and every ctx tier of the file lands on ONE row.
+func TestMixRuns(t *testing.T) {
+	names := []struct{ name, want string }{
+		{"Qwen3.8-27B-mix-q-k-mtp.gguf", "MIX-Q-K"},
+		{"Qwen3.8-27B-mix-q-k.gguf", "MIX-Q-K"}, // run ends at the extension, not inside it
+		{"Qwen3.8-27B-MIXED-Q6_K-Q4_K_M-mtp.gguf", "MIXED-Q6_K-Q4_K_M"},
+		{"Qwen3.8-27B-q8_0-mix.gguf", "Q8_0"}, // a named recipe still wins
+		{"openhermes-mix-2.5.gguf", ""},       // a bare marker is a NAME
+		{"Qwen3.8-27B-mix.gguf", ""},          // ditto, even on a real model
 	}
-	if got := rest[:j]; got != Pattern {
-		t.Errorf("quant pattern drifted between Go and the UI:\n  go: %s\n  ts: %s", Pattern, got)
+	for _, c := range names {
+		if got := FromName(c.name); got != c.want {
+			t.Errorf("FromName(%q) = %q, want %q", c.name, got, c.want)
+		}
+	}
+	ids := []struct {
+		id   string
+		want int
+	}{
+		{"qwen3.8-27b-mix-q-k-mtp", 2},
+		{"qwen3.8-27b-mix-q-k-mtp-32k", 2},
+		{"openhermes-mix-2.5", -1},
+		{"mix-q-k-model", -1}, // index 0 is never a cut point
+	}
+	for _, c := range ids {
+		if got := PartIndex(strings.Split(c.id, "-")); got != c.want {
+			t.Errorf("PartIndex(%q) = %d, want %d", c.id, got, c.want)
+		}
+	}
+}
+
+// FromParts is the file-name scanner the server reads a row's `quant` with. It
+// differs from PartIndex in one way only: it will match at index 0.
+func TestFromParts(t *testing.T) {
+	cases := []struct{ name, want string }{
+		{"Qwen3.8-27B-mix-q-k-mtp", "MIX-Q-K"},
+		{"Qwen3.8-27B-UD-Q4_K_XL", "UD-Q4_K_XL"},
+		{"Q8_0", "Q8_0"},
+		{"Llama-3.1-8B-Instruct", ""},
+	}
+	for _, c := range cases {
+		if got := FromParts(strings.Split(c.name, "-")); got != c.want {
+			t.Errorf("FromParts(%q) = %q, want %q", c.name, got, c.want)
+		}
 	}
 }

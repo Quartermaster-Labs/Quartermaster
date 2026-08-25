@@ -40,10 +40,22 @@ export interface Model {
   listeners?: string[];
   // Configured context size (-c), 0 when the backend takes no such flag.
   ctx?: number;
-  // Weight type parsed from the gguf filename ("Q4_K_M") and the file's on-disk
+  // Weight type parsed from the gguf FILENAME ("Q4_K_M") and the file's on-disk
   // size in GiB. The Models table groups a model's quants by these.
   quant?: string;
   sizeGB?: number;
+  // The same weight type read off the gguf's TENSORS ("Q4_K", "IQ4_XS mix"),
+  // sent only when the filename named none. Display only — never a grouping key:
+  // two unrelated builds can compute the same label without being the same
+  // download, which is exactly what `quant` is asserted to mean.
+  quantLabel?: string;
+  // What the gguf says it IS, keyed for grouping: models sharing modelKey are
+  // one model (one row, a pill per quant), rows sharing familyKey are finetunes
+  // of one base. Server-derived from the gguf header where it carries an
+  // identity and from the id otherwise — do not re-derive either from the id
+  // here, that guessing game is what made one model show up as several rows.
+  modelKey?: string;
+  familyKey?: string;
   // Autogen sizer's predicted footprint. estRamGB is non-zero only when part of
   // the weights is served from system memory (partial offload).
   estVramGB?: number;

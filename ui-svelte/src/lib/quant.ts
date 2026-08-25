@@ -21,8 +21,25 @@ export const QUANT_RE = new RegExp(`^(?:${QUANT_PATTERN})$`, "i");
 // writes "UD-Q4_K_XL" (dynamic), mradermacher "i1-Q4_K_M" (imatrix).
 export const QUANT_PREFIX_RE = /^(?:UD|i1)$/i;
 
+// MIRROR: MIX_PATTERN / CRUMB_PATTERN must stay byte-identical to MixPattern /
+// CrumbPattern in internal/quant/quant.go, guarded by the same mirror test.
+//
+// A hand-mixed quant ("Qwen3.8-27B-mix-q-k-mtp") has no canonical spelling -
+// only the convention of saying "mix" and then listing the types that went in -
+// so it is matched as a RUN of '-'-separated parts rather than one token: the
+// marker plus the fragments after it, stopping at the build tag. A bare "-mix-"
+// is deliberately not a quant: it is also an ordinary word in model names, and
+// only "mix" followed by a fragment cannot be anything but a weight type.
+export const MIX_PATTERN = String.raw`MIX(?:ED)?`;
+// ONE fragment a mix run may absorb: the letters a K-quant recipe is spelled
+// with once "-" has separated them.
+export const CRUMB_PATTERN = String.raw`[QKSML]|X{1,2}[SLM]`;
+
+export const MIX_RE = new RegExp(`^(?:${MIX_PATTERN})$`, "i");
+export const CRUMB_PART_RE = new RegExp(`^(?:${CRUMB_PATTERN})$`, "i");
+
 // Crumbs a quant leaves in a DISPLAY name. autogen strips the quant from the id
 // only when it trails the filename, and prettifying splits what's left on "_":
 // "ThinkingCap-Qwen3.6-27B-Q4_K_M-MTP" arrives named "Thinkingcap Qwen3.6 27b K
 // M". The bare letters are the tail of a split K-quant, not tokens of their own.
-export const CRUMB_RE = new RegExp(`^(?:UD|I1|K|M|S|L|X{1,2}[SLM]|${QUANT_PATTERN})$`, "i");
+export const CRUMB_RE = new RegExp(`^(?:UD|I1|${MIX_PATTERN}|${CRUMB_PATTERN}|${QUANT_PATTERN})$`, "i");

@@ -53,6 +53,25 @@ type Metadata struct {
 	Architecture string
 	BlockCount   int64
 
+	// QuantLabel is how the file is quantized according to its TENSORS - the
+	// heaviest weight type, or "<type> mix" when no type dominates. Empty when
+	// the tensor section can't be judged. This is the only trustworthy source:
+	// general.file_type is self-declared and routinely wrong, and a filename is
+	// whoever-uploaded-it's opinion. See quantLabelFrom.
+	QuantLabel string
+
+	// BaseName / SizeLabel / FineTune / GeneralName are the identity KVs, raw
+	// and unjudged (general.basename, .size_label, .finetune, .name). They are
+	// what a model IS according to whoever converted it, which is the only
+	// identity a renamed download still carries. Frequently absent (most
+	// diffusion ggufs and hand-converted models write none) and occasionally
+	// junk (a git SHA in .finetune, a hex blob in .name), so nothing consumes
+	// them directly - identityFrom sanity-filters them first.
+	BaseName    string
+	SizeLabel   string
+	FineTune    string
+	GeneralName string
+
 	// GeneralType is the gguf "general.type" KV ("diffusion" for an image model,
 	// absent/"model" for a normal LLM). Some diffusion GGUFs (e.g. HiDream-O1,
 	// whose transformer is Qwen-based) report a non-image general.architecture
@@ -235,7 +254,7 @@ func scanChatTemplate(tmpl string) (preservesThinking bool, effortLevels []strin
 // the block size, sizeof(block_*) the byte count). An id we don't list only
 // costs the BYTE accounting - the tensor walk keeps going and returns
 // unknownType, which suppresses the MoE expert share rather than failing the
-// file (see readExpertShare). Removed types (4/5, 31-33, 36-38) are absent on
+// file (see readTensorScan). Removed types (4/5, 31-33, 36-38) are absent on
 // purpose: no gguf still carries them.
 var ggmlTypeSize = map[uint32][2]int64{
 	0:  {1, 4},     // F32
@@ -557,6 +576,18 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 	var nextnLayers, poolingType *int64
 	var visImageSize, visPatchSize, visEmbd, visFFN, visBlocks, visHeads, visMerge *int64
 
+	// The publisher's own words for what this file IS. Written by convert_hf_
+	// to_gguf from the source repo's name, so they are the only identity in the
+	// file that does not depend on whoever renamed the download. Any of them can
+	// be absent, blank or junk - see identityFrom, which is what judges them.
+	var baseName, sizeLabel, fineTune, generalName string
+	idKVs := map[string]*string{
+		"general.basename":   &baseName,
+		"general.size_label": &sizeLabel,
+		"general.finetune":   &fineTune,
+		"general.name":       &generalName,
+	}
+
 	pi := func(v int64) *int64 { return &v }
 	pf := func(v float64) *float64 { return &v }
 	ps := func(v string) *string { return &v }
@@ -596,6 +627,13 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 				return Metadata{}, err
 			}
 			chatTmpl = s
+			matched = true
+		} else if dst, ok := idKVs[key]; ok && t == ggufString {
+			_, _, s, err := r.readScalar(t)
+			if err != nil {
+				return Metadata{}, err
+			}
+			*dst = s
 			matched = true
 		} else if arch != "" {
 			pfx := arch + "."
@@ -838,7 +876,9 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 	// to derive the expert-weight share exactly (replaces the per-arch heuristic).
 	// The reader is now positioned at the first tensor info. Failures leave the
 	// share at 0 so the caller falls back to the arch table.
-	expertShare, vocabElems, diffKind, bakedEnc, _ := readExpertShare(r, tensorCount)
+	scan, _ := readTensorScan(r, tensorCount)
+	expertShare, vocabElems, diffKind, bakedEnc := scan.expertShare, scan.vocabElems, scan.diffKind, scan.bakedEnc
+	quantLabel := quantLabelFrom(scan.typeBytes)
 	var vocab int64
 	if vocabElems > 0 && embeddingLength != nil && *embeddingLength > 0 {
 		vocab = vocabElems / *embeddingLength
@@ -938,6 +978,11 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 		SsmConvKernel:     deref(ssmConvKernel),
 		SsmStateSize:      deref(ssmStateSize),
 		VocabSize:         vocab,
+		QuantLabel:        quantLabel,
+		BaseName:          baseName,
+		SizeLabel:         sizeLabel,
+		FineTune:          fineTune,
+		GeneralName:       generalName,
 		DiffusionKind:     diffKind,
 		HasBakedEncoders:  bakedEnc,
 		PoolingType:       deref(poolingType),
@@ -956,7 +1001,7 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 	return m, nil
 }
 
-// readExpertShare parses the GGUF tensor info section (the reader must be
+// readTensorScan parses the GGUF tensor info section (the reader must be
 // positioned at the first tensor info) and returns the fraction of on-disk
 // weight bytes held by expert tensors (name contains "_exps"), plus the element
 // count of the token_embd.weight (or output.weight) tensor (= n_embd*n_vocab,
@@ -966,32 +1011,40 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 // metadata-stripped converted model), else "". bakedEnc is true when the file
 // also carries its text encoder(s) (conditioner.embedders/cond_stage_model),
 // i.e. it's a full checkpoint rather than a bare UNet.
-func readExpertShare(r *ggufReader, tensorCount uint64) (share float64, vocabElems int64, diffKind string, bakedEnc bool, err error) {
+func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err error) {
+	var share float64
+	var vocabElems int64
+	var diffKind string
+	var bakedEnc bool
 	var expertBytes, totalBytes int64
 	var sawExpert, sawInputBlocks, sawLabelEmb, unknownType bool
+	typeBytes := map[uint32]int64{}
+	out := func() tensorScan {
+		return tensorScan{expertShare: share, vocabElems: vocabElems, diffKind: diffKind, bakedEnc: bakedEnc, typeBytes: typeBytes}
+	}
 	for i := uint64(0); i < tensorCount; i++ {
 		name, err := r.str()
 		if err != nil {
-			return 0, 0, "", false, err
+			return out(), err
 		}
 		nDims, err := r.u32()
 		if err != nil {
-			return 0, 0, "", false, err
+			return out(), err
 		}
 		elems := int64(1)
 		for d := uint32(0); d < nDims; d++ {
 			dim, err := r.u64()
 			if err != nil {
-				return 0, 0, "", false, err
+				return out(), err
 			}
 			elems *= int64(dim)
 		}
 		typ, err := r.u32()
 		if err != nil {
-			return 0, 0, "", false, err
+			return out(), err
 		}
 		if _, err := r.u64(); err != nil { // offset (unused)
-			return 0, 0, "", false, err
+			return out(), err
 		}
 		// An unknown ggml type only costs us the BYTE accounting - the walk
 		// itself is fixed-width, and name/elems are already in hand. Keep going
@@ -1002,11 +1055,13 @@ func readExpertShare(r *ggufReader, tensorCount uint64) (share float64, vocabEle
 		if ok {
 			bytes := elems / ts[0] * ts[1]
 			totalBytes += bytes
+			typeBytes[typ] += bytes
 			if strings.Contains(name, "_exps") {
 				expertBytes += bytes
 			}
 		} else {
 			unknownType = true
+			typeBytes[typ] += 0 // presence is what QuantLabel needs; bytes are unknowable
 		}
 		if strings.Contains(name, "_exps") {
 			sawExpert = true
@@ -1041,10 +1096,10 @@ func readExpertShare(r *ggufReader, tensorCount uint64) (share float64, vocabEle
 	// An untabulated type makes the ratio meaningless (the missing tensors are
 	// exactly the ones whose share we would be reporting), so the share alone
 	// degrades to "unknown". Everything else here is type-independent.
-	if !sawExpert || totalBytes <= 0 || unknownType {
-		return 0, vocabElems, diffKind, bakedEnc, nil
+	if !(!sawExpert || totalBytes <= 0 || unknownType) {
+		share = float64(expertBytes) / float64(totalBytes)
 	}
-	return float64(expertBytes) / float64(totalBytes), vocabElems, diffKind, bakedEnc, nil
+	return out(), nil
 }
 
 const gib = 1024 * 1024 * 1024

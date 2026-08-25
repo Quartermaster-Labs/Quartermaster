@@ -4,25 +4,54 @@
 // modelTable.test.ts.
 import type { Model } from "./types";
 import { prettifyModelName } from "./modelUtils";
-import { QUANT_RE, QUANT_PREFIX_RE, CRUMB_RE } from "./quant";
+import { QUANT_RE, QUANT_PREFIX_RE, CRUMB_RE, MIX_RE, CRUMB_PART_RE } from "./quant";
+
+// runEnd returns the index one past the last part of the token starting at
+// parts[i] — i + 1 for every token but a hand-mixed one, which spans the marker
+// plus every fragment after it ("mix-q-k" out of "…-mix-q-k-mtp").
+function runEnd(parts: string[], i: number): number {
+  if (!MIX_RE.test(parts[i])) return i + 1;
+  let j = i + 1;
+  while (j < parts.length && (CRUMB_PART_RE.test(parts[j]) || QUANT_RE.test(parts[j]))) j++;
+  return j;
+}
+
+// isMixStart: a mix marker counts as a quant only when a fragment follows it —
+// "mix" alone is also an ordinary word in a model name, and cutting an id there
+// would strand half the name.
+function isMixStart(parts: string[], i: number): boolean {
+  return MIX_RE.test(parts[i]) && runEnd(parts, i) > i + 1;
+}
 
 // quantIndex finds the FIRST quant-shaped part of an id. First, not last: what
 // follows a quant is a build tag ("-MTP", "-preserved", "-MID-HIGH"), never a
 // second weight type. Never index 0 — an id that IS a quant has no base left.
 function quantIndex(parts: string[]): number {
-  for (let i = 1; i < parts.length; i++) if (QUANT_RE.test(parts[i])) return i;
+  for (let i = 1; i < parts.length; i++) if (QUANT_RE.test(parts[i]) || isMixStart(parts, i)) return i;
   return -1;
 }
 
-// quantOf returns the model's weight type: the server-parsed field when present,
-// else derived from the id, with a UD/i1 prefix folded in.
-export function quantOf(m: Model): string {
+// quantMergeKey is the weight type as the file was NAMED: the server's parse of
+// the filename, else the id's own. It is what lets two clusters (the same
+// download sitting in two folders) collapse into one pill, so it may only ever
+// be a name both files actually agreed on - never a computed label, because two
+// unrelated hand-built quants can both come out "Q3_K mix" and are not one
+// download. Empty when the name says nothing, which keeps such files apart.
+function quantMergeKey(m: Model): string {
   if (m.quant) return m.quant.toUpperCase();
   const parts = m.id.split("-");
   const i = quantIndex(parts);
   if (i < 0) return "";
-  const withPrefix = i > 1 && QUANT_PREFIX_RE.test(parts[i - 1]) ? `${parts[i - 1]}-${parts[i]}` : parts[i];
-  return withPrefix.toUpperCase();
+  const start = i > 1 && QUANT_PREFIX_RE.test(parts[i - 1]) ? i - 1 : i;
+  return parts.slice(start, runEnd(parts, i)).join("-").toUpperCase();
+}
+
+// quantOf is the same thing for DISPLAY, and falls back one step further: a file
+// whose name names no weight type shows the tensor-derived truth ("IQ4_XS mix")
+// rather than a blank pill. The name still wins where there is one - "UD-Q4_K_XL"
+// is what was downloaded, even though its tensors are mostly Q5_K.
+export function quantOf(m: Model): string {
+  return quantMergeKey(m) || (m.quantLabel ?? "").toUpperCase();
 }
 
 // baseKey is an id with everything from the quant onwards cut off, so the same
@@ -85,9 +114,15 @@ export interface QuantEntry {
 
 // One table row = one model, whatever quants exist for it.
 export interface ModelRow {
+  // key groups the row (server-derived, see Model.modelKey); label names it, and
+  // is always id-derived - a header key is built to compare, not to read, and
+  // "Qwen2.5 Vl Instruct 7b Instruct" is not what the row should say.
   key: string;
   label: string;
+  // family is the finetune cluster's key; familyLabel is the id-derived name to
+  // show for it, for the same reason label exists.
   family: string;
+  familyLabel: string;
   quants: QuantEntry[];
   live: boolean;
   unlisted: boolean;
@@ -154,8 +189,8 @@ export function buildRows(models: Model[]): ModelRow[] {
     // The shortest id in a cluster is its base — every variant is that id plus a
     // suffix — so it, not an arbitrary member, names the row and the quant.
     const base = cluster.reduce((a, b) => (b.id.length < a.id.length || (b.id.length === a.id.length && b.id < a.id) ? b : a));
-    const q = quantOf(base);
-    const key = baseKey(base.id);
+    const q = quantMergeKey(base);
+    const key = base.modelKey || baseKey(base.id);
     // Two clusters merge into one quant entry only when they agree on a REAL
     // quant token — two folders holding the same Q8_0 download. With no token to
     // agree on, the gguf keeps them apart rather than fusing a custom quant with
@@ -171,10 +206,15 @@ export function buildRows(models: Model[]): ModelRow[] {
     const entries = [...quants.entries()]
       .map(([qKey, members]) => buildQuant(qKey, members))
       .sort((a, b) => (b.base.sizeGB ?? 0) - (a.base.sizeGB ?? 0) || a.quant.localeCompare(b.quant) || a.key.localeCompare(b.key));
+    // Name the row after its shortest base id, not after whichever quant sorted
+    // first: the label must not change when a bigger quant is downloaded.
+    const head = entries.reduce((a, b) => (b.base.id.length < a.base.id.length || (b.base.id.length === a.base.id.length && b.base.id < a.base.id) ? b : a)).base;
+    const label = baseKey(head.id);
     rows.push({
       key,
-      label: key,
-      family: familyOf(key),
+      label,
+      family: head.familyKey || familyOf(label),
+      familyLabel: familyOf(label),
       quants: entries,
       live: entries.some((e) => e.live),
       unlisted: entries.every((e) => e.base.unlisted),
@@ -293,7 +333,7 @@ export function groupFamilies(rows: ModelRow[]): FamilyGroup[] {
       g.rows.push(r);
       continue;
     }
-    const fresh = { key: r.family, label: prettifyModelName(r.family), rows: [r] };
+    const fresh = { key: r.family, label: prettifyModelName(r.familyLabel || r.family), rows: [r] };
     byKey.set(r.family, fresh);
     out.push(fresh);
   }

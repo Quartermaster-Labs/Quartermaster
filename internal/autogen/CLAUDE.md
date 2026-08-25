@@ -26,6 +26,8 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 | `gguf.go` | GGUF header parser (`ReadGgufMetadata`): metadata KV section + tensor section → `Metadata`, plus `scanChatTemplate`. Package doc lives here. |
 | `discover.go` | Walks the models root(s) for `.gguf`, derives model IDs/quants/publishers, collapses split shards, skips mmproj projectors and diffusion encoders/VAEs. `DiscoverGgufModels` (single root) + `DiscoverGgufModelsMulti` (main root + per-UI-category `categoryRoots`). |
 | `family.go` | Sidecar inheritance across a model's family: `ModelBaseKey`/`FamilyKey` (Go twins of `baseKey`/`familyOf` in `ui-svelte/src/lib/modelTable.ts`), the header compatibility gate, `inheritSidecars` (fills blank `DraftPath`/`MmprojPath` from a compatible sibling) and `DraftSidecarFor` (the roots-aware `DraftSidecarForDir`). |
+| `identity.go` | `IdentityOf`/`identityFrom` — the gguf's OWN identity (header `general.basename`/`size_label`/`finetune`) folded into the Models table's two grouping keys, with junk (commit hashes, "source") filtered out. Empty keys = this file identifies nothing; the caller falls back to `ModelBaseKey`/`FamilyKey`. |
+| `quantlabel.go` | `quantLabelFrom` — how a file is ACTUALLY quantized, from the byte-weighted tensor-type histogram (`"Q4_K"`, `"IQ4_XS mix"`), plus `ggmlTypeName` and the `tensorScan` struct the tensor walk returns. |
 | `metacache.go` | In-memory metadata cache keyed by file size+mtime (`ReadGgufMetadataCached`). |
 | `kvcost.go` | KV-cache cost model (`GetKvCostModel`) + context-budget math (`MaxCtxForBudget`, `KvReserveGB`, `RoundedCtx`, `GetDenseCtx`, `defaultKvQuant`). → `sizing.md` |
 | `plan.go` | VRAM budget → placement: `-ngl`/`--n-cpu-moe` for dense and MoE (`GetLoadPlan`, `densePlacement`); MoE expert-share table + `effectiveShare`. → `sizing.md` |
@@ -51,8 +53,13 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   attention dims, RoPE/SWA/SSM fields, `IsMoE`, `IsMTP`, `ExpertWeightShare`, `PoolingType`,
   `ChatTemplatePreservesThinking`/`ChatTemplateEffortLevels`). Optional fields are 0 when
   absent; consumers guard on `> 0`. `PoolingType` is the authoritative embedder signal.
-- `ReadGgufMetadata` — parses the metadata KV section, then `readExpertShare` sums tensor
-  bytes to derive the exact expert-weight share.
+  `Metadata` also carries what the file says about ITSELF: `QuantLabel` (tensor-derived, see
+  `quantlabel.go`) and the raw identity KVs `BaseName`/`SizeLabel`/`FineTune`/`GeneralName`.
+  Those four are unjudged - frequently absent, occasionally a commit hash - so read them through
+  `IdentityOf`, never directly.
+- `ReadGgufMetadata` — parses the metadata KV section, then `readTensorScan` walks the tensor
+  section once for everything the weights themselves answer: the expert-weight share, the vocab
+  element count, the diffusion markers, and the type histogram `QuantLabel` comes from.
 - `ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64)` — the same parser over
   an **already-open source**, which is what lets the model browser size a repo file it has not
   downloaded (`internal/server/hubapi.md` hands it a `bytes.Reader` over a Range-fetched
@@ -178,8 +185,10 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   opt-out is the existing spec override (no `draft-*` → no `-md`) and marking the vision twin
   unlisted. `ModelBaseKey`/`FamilyKey` mirror `baseKey`/`familyOf` in
   `ui-svelte/src/lib/modelTable.ts` — change one, change both.
-- **A new quant type needs TWO tables, and the header gate is why.** `quantRe` (`discover.go`)
-  names it, `ggmlTypeSize` (`gguf.go`) sizes its tensors. Miss the second and every gguf in that
+- **A new quant type needs THREE tables, and the header gate is why.** `quantRe` (`discover.go`)
+  names it in a FILENAME, `ggmlTypeSize` (`gguf.go`) sizes its tensors, `ggmlTypeName`
+  (`quantlabel.go`) names the TYPE id (a type that can be weighed but not named makes every file
+  carrying it unlabelled — `TestGgmlTypeTablesAgree` asserts the pair). Miss the second and every gguf in that
   quant comes back with `VocabSize` 0 — which mis-sizes the logits buffer AND makes
   `sidecarCompatible` refuse it every family sidecar, silently. The tensor walk no longer aborts
   on an untabulated type (only the MoE expert share degrades to 0), but adding the type is still

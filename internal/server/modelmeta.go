@@ -7,47 +7,77 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/quartermaster-labs/quartermaster/internal/autogen"
 	"github.com/quartermaster-labs/quartermaster/internal/quant"
 )
 
-// Quantization / weight-type token as it appears in a gguf filename
-// ("...-Q4_K_M.gguf", "...-IQ3_XXS-00001-of-00002.gguf", "...-BF16.gguf"), plus
-// the recipe markers written immediately before one: unsloth's "UD" (dynamic)
-// and mradermacher's "i1" (imatrix), as in "…-UD-Q4_K_XL.gguf".
-//
-// Both come from internal/quant, the one place the token shape is written down
-// (the Models table in the UI mirrors it) — a weight type this misses is a model
+// quantFromPath extracts the quantization label from a gguf path ("...-Q4_K_M",
+// "...-UD-Q4_K_XL", "...-mix-q-k-mtp"), "" when the filename carries none. The
+// token shape lives in internal/quant, the one place it is written down (the
+// Models table in the UI mirrors it) - a weight type this misses is a model
 // whose every ctx tier and vision twin shows up as a row of its own.
 //
-// Matched against whole '-'-separated parts of the name (never '_', which is
-// INSIDE the token) so a model whose name merely contains something
-// quant-shaped is not mistaken for one.
-var (
-	quantPart   = quant.TokenRe
-	quantPrefix = quant.PrefixRe
-)
-
-// quantFromPath extracts the quantization label from a gguf path, "" when the
-// filename carries none. The FIRST matching part wins: everything after it is
-// a build tag ("-MTP", "-MID-HIGH", "-00001-of-00002") rather than another
-// weight type, so a mid-name quant ("…-NVFP4-MTP-MID-HIGH") is read off the
-// same part autogen's id derivation leaves in place.
+// The FIRST matching part wins: everything after it is a build tag ("-MTP",
+// "-MID-HIGH", "-00001-of-00002") rather than another weight type, so a mid-name
+// quant is read off the same part autogen's id derivation leaves in place.
 func quantFromPath(path string) string {
 	if path == "" {
 		return ""
 	}
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	parts := strings.Split(name, "-")
-	for i, part := range parts {
-		if !quantPart.MatchString(part) {
-			continue
-		}
-		if i > 0 && quantPrefix.MatchString(parts[i-1]) {
-			return strings.ToUpper(parts[i-1] + "-" + part)
-		}
-		return strings.ToUpper(part)
+	return quant.FromParts(strings.Split(name, "-"))
+}
+
+// identCache memoizes a gguf's header identity per path, for the same reason
+// sizeCache exists: modelStatus rebuilds every row on every SSE tick, and while
+// autogen's metadata cache makes a repeat read cheap, it still stats the file.
+var identCache sync.Map // path -> autogen.Identity
+
+func modelIdentity(path string) autogen.Identity {
+	if path == "" {
+		return autogen.Identity{}
 	}
-	return ""
+	if v, ok := identCache.Load(path); ok {
+		return v.(autogen.Identity)
+	}
+	id := autogen.IdentityOf(path)
+	identCache.Store(path, id)
+	return id
+}
+
+// modelKeys is everything the Models table needs to place one model that it
+// cannot work out from the id.
+//
+// modelKey / familyKey are the grouping axes: files sharing modelKey are one
+// model (one row, one pill per quant), rows sharing familyKey are finetunes of
+// one base. The gguf HEADER answers both when it can - it is the only identity
+// a renamed download still carries - and the id-derived rules answer for files
+// that carry no identity KVs (diffusion ggufs, hand conversions). The two key
+// spaces deliberately share a namespace rather than being tagged apart: when a
+// header key and an id key spell the same string, the files ARE the same model,
+// and landing them on one row is the right answer.
+//
+// quant stays exactly what it was - the token in the FILENAME, empty when the
+// name carries none - because the table also merges two folders' models on it,
+// and that merge must only happen on a name both files actually agreed on.
+// quantLabel is the tensor-derived truth, offered alongside as a DISPLAY
+// fallback for the files whose name says nothing: it names a hand-mixed build
+// "IQ4_XS mix" instead of leaving the pill blank, without ever fusing two
+// unrelated builds that happen to compute the same label.
+func modelKeys(path, id string) (quant, quantLabel, modelKey, familyKey string) {
+	ident := modelIdentity(path)
+	quant = quantFromPath(path)
+	if quant == "" {
+		quantLabel = ident.QuantLabel
+	}
+	modelKey, familyKey = ident.ModelKey, ident.FamilyKey
+	if modelKey == "" {
+		modelKey = autogen.ModelBaseKey(id)
+	}
+	if familyKey == "" {
+		familyKey = autogen.FamilyKey(id)
+	}
+	return quant, quantLabel, modelKey, familyKey
 }
 
 // sizeCache memoizes on-disk gguf sizes: modelStatus runs on every SSE tick and

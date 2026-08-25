@@ -36,6 +36,12 @@ describe("quantOf", () => {
     expect(quantOf(mk("some-model-70b-i1-Q4_K_M"))).toBe("I1-Q4_K_M");
   });
 
+  it("reads a hand-mixed quant as the whole run, minus the build tag", () => {
+    expect(quantOf(mk("qwen3.8-27b-mix-q-k-mtp"))).toBe("MIX-Q-K");
+    expect(quantOf(mk("qwen3.8-27b-mixed-q6_k-q4_k_m"))).toBe("MIXED-Q6_K-Q4_K_M");
+    expect(quantOf(mk("openhermes-mix-2.5"))).toBe(""); // a bare marker is a name
+  });
+
   it("takes the FIRST quant, not a trailing duplicate", () => {
     // autogen only strips the quant when it ends the filename, so a
     // "…-Q4_K_M-MTP.gguf" is served as "…-q4_k_m-mtp-q4_k_m".
@@ -83,6 +89,12 @@ describe("baseKey", () => {
 
   it("leaves no quant crumbs behind a build tag", () => {
     expect(baseKey("thinkingcap-qwen3.6-27b-q4_k_m-mtp-q4_k_m")).toBe("thinkingcap-qwen3.6-27b");
+  });
+
+  it("cuts at a hand-mixed quant, tag and all", () => {
+    expect(baseKey("qwen3.8-27b-mix-q-k-mtp")).toBe("qwen3.8-27b");
+    expect(baseKey("qwen3.8-27b-mix-q-k-mtp-32k")).toBe("qwen3.8-27b");
+    expect(baseKey("openhermes-mix-2.5")).toBe("openhermes-mix-2.5");
   });
 
   it("keeps a variant suffix out of the key", () => {
@@ -152,36 +164,67 @@ describe("buildRows", () => {
     expect(nvfp4.variants.map((v) => v.label)).toEqual(["32k", "vision"]);
   });
 
-  it("folds a CUSTOM-named quant's variants on the gguf, not on the id", () => {
-    // "mix-q-k" is not a shape the quant pattern knows, so baseKey cuts nowhere
-    // and every tier used to stand alone as a model of its own. The -m path the
-    // server ships says otherwise: one file, one row, four pills.
+  it("reads a hand-mixed quant as a quant, and lands it on the model's own row", () => {
+    // "mix-q-k" is not a NAMED recipe, so it is matched as a run: the marker plus
+    // the fragments after it, stopping at the build tag. Without that the id cuts
+    // nowhere and the whole build stands apart from the model's other quants.
     const gguf = "D:/LLM/Models/mixq/Qwen3.8-27B-mix-q-k.gguf";
     const rows = buildRows([
+      mk("qwen3.8-27b-q8_0", { family: "D:/LLM/Models/q8/Qwen3.8-27B-q8_0.gguf", sizeGB: 28 }),
       mk("qwen3.8-27b-mix-q-k", { family: gguf, sizeGB: 16 }),
       mk("qwen3.8-27b-mix-q-k-32k", { family: gguf, sizeGB: 16 }),
       mk("qwen3.8-27b-mix-q-k-64k", { family: gguf, sizeGB: 16 }),
       mk("qwen3.8-27b-mix-q-k-game", { family: gguf, sizeGB: 16 }),
       mk("qwen3.8-27b-mix-q-k-vision", { family: gguf, sizeGB: 16 }),
     ]);
-    expect(rows.map((r) => r.key)).toEqual(["qwen3.8-27b-mix-q-k"]);
+    expect(rows.map((r) => r.key)).toEqual(["qwen3.8-27b"]);
+    expect(rows[0].quants.map((q) => q.quant)).toEqual(["Q8_0", "MIX-Q-K"]);
+    const mix = rows[0].quants.find((q) => q.quant === "MIX-Q-K")!;
+    expect(mix.variants.map((v) => v.label)).toEqual(["32k", "64k", "game", "vision"]);
+  });
+
+  it("folds an unparseable quant's variants on the gguf, not on the id", () => {
+    // The gguf fallback still carries whatever the token rules never learn: one
+    // -m path, one row, four pills, however the weight type is spelled.
+    const gguf = "D:/LLM/Models/odd/Qwen3.8-27B-secretsauce.gguf";
+    const rows = buildRows([
+      mk("qwen3.8-27b-secretsauce", { family: gguf, sizeGB: 16 }),
+      mk("qwen3.8-27b-secretsauce-32k", { family: gguf, sizeGB: 16 }),
+      mk("qwen3.8-27b-secretsauce-64k", { family: gguf, sizeGB: 16 }),
+      mk("qwen3.8-27b-secretsauce-game", { family: gguf, sizeGB: 16 }),
+      mk("qwen3.8-27b-secretsauce-vision", { family: gguf, sizeGB: 16 }),
+    ]);
+    expect(rows.map((r) => r.key)).toEqual(["qwen3.8-27b-secretsauce"]);
     expect(rows[0].quants).toHaveLength(1);
     expect(rows[0].quants[0].variants.map((v) => v.label)).toEqual(["32k", "64k", "game", "vision"]);
   });
 
-  it("keeps a custom quant's separate rebuild apart - it is a different gguf", () => {
-    // …-mtp is its own file, so it stays its own entry rather than being fused
-    // with the plain build just because neither id parses to a quant.
+  it("keeps two unparseable builds apart - they are different ggufs", () => {
+    // Neither id parses to a quant, so there is no token for them to agree on and
+    // the gguf keeps them apart rather than fusing two unrelated weight types.
     const rows = buildRows([
-      mk("qwen3.8-27b-mix-q-k", { family: "D:/m/mix-q-k.gguf" }),
-      mk("qwen3.8-27b-mix-q-k-32k", { family: "D:/m/mix-q-k.gguf" }),
-      mk("qwen3.8-27b-mix-q-k-mtp", { family: "D:/m/mix-q-k-mtp.gguf" }),
-      mk("qwen3.8-27b-mix-q-k-mtp-32k", { family: "D:/m/mix-q-k-mtp.gguf" }),
+      mk("qwen3.8-27b-secretsauce", { family: "D:/m/secretsauce.gguf" }),
+      mk("qwen3.8-27b-secretsauce-32k", { family: "D:/m/secretsauce.gguf" }),
+      mk("qwen3.8-27b-secretsauce-mtp", { family: "D:/m/secretsauce-mtp.gguf" }),
+      mk("qwen3.8-27b-secretsauce-mtp-32k", { family: "D:/m/secretsauce-mtp.gguf" }),
     ]);
-    expect(rows.map((r) => r.key).sort()).toEqual(["qwen3.8-27b-mix-q-k", "qwen3.8-27b-mix-q-k-mtp"]);
+    expect(rows.map((r) => r.key).sort()).toEqual(["qwen3.8-27b-secretsauce", "qwen3.8-27b-secretsauce-mtp"]);
     for (const r of rows) expect(r.quants[0].variants.map((v) => v.label)).toEqual(["32k"]);
     // Both rows land under one heading, so they still read as one model.
     expect(new Set(rows.map((r) => r.family))).toEqual(new Set(["qwen3.8-27b"]));
+  });
+
+  it("merges a mix build with its own MTP rebuild, as it does for a named quant", () => {
+    // Same weight type, two files: the rebuild is a variant of the pill, exactly
+    // as "…-q4_k_m" and "…-q4_k_m-mtp" have always behaved.
+    const rows = buildRows([
+      mk("qwen3.8-27b-mix-q-k", { family: "D:/m/mix-q-k.gguf" }),
+      mk("qwen3.8-27b-mix-q-k-mtp", { family: "D:/m/mix-q-k-mtp.gguf" }),
+      mk("qwen3.8-27b-mix-q-k-mtp-32k", { family: "D:/m/mix-q-k-mtp.gguf" }),
+    ]);
+    expect(rows.map((r) => r.key)).toEqual(["qwen3.8-27b"]);
+    expect(rows[0].quants).toHaveLength(1);
+    expect(rows[0].quants[0].variants.map((v) => v.label)).toEqual(["mtp", "mtp-32k"]);
   });
 
   it("still merges two copies of the SAME recognised quant across folders", () => {
@@ -340,5 +383,60 @@ describe("fmtGB", () => {
     expect(fmtGB(undefined)).toBe("-");
     expect(fmtGB(0)).toBe("-");
     expect(fmtGB(128)).toBe("128");
+  });
+});
+
+// The server reads a gguf's own header for who it is (internal/autogen/identity.go)
+// and hands the table two opaque keys. They exist so this file stops GUESSING
+// where a model's name ends and its quant begins - the guess is what put one
+// model on several rows in the first place.
+describe("server-derived identity", () => {
+  it("groups on the header key even when the ids share no prefix", () => {
+    // Two publishers' copies of one model, named nothing alike. Only the header
+    // knows they are the same thing.
+    const rows = buildRows([
+      mk("qwen3.8-27b-handmix", { family: "D:/m/a.gguf", modelKey: "qwen3.8-27b", quantLabel: "IQ4_XS mix", sizeGB: 16 }),
+      mk("unsloth-qwen-3.8-27b-instruct", { family: "D:/m/b.gguf", modelKey: "qwen3.8-27b", quant: "UD-Q4_K_XL", sizeGB: 18 }),
+    ]);
+    expect(rows.map((r) => r.key)).toEqual(["qwen3.8-27b"]);
+    expect(rows[0].quants.map((q) => q.quant)).toEqual(["UD-Q4_K_XL", "IQ4_XS MIX"]);
+  });
+
+  it("names the row from the id, never from the key", () => {
+    // Header keys are built to compare: the size label is folded out and the
+    // finetune appended, so they read badly. The label stays id-derived.
+    const rows = buildRows([
+      mk("qwen2.5-vl-7b-instruct-q8_0", {
+        family: "D:/m/a.gguf",
+        modelKey: "qwen2.5-vl-instruct-7b-instruct",
+        familyKey: "qwen2.5-vl-instruct-7b",
+        quant: "Q8_0",
+      }),
+    ]);
+    expect(rows[0].key).toBe("qwen2.5-vl-instruct-7b-instruct");
+    expect(rows[0].label).toBe("qwen2.5-vl-7b-instruct");
+    // familyOf keeps <name><size>, and for this id that is "vl-7b" - the row
+    // label, not the header key, is what the heading reads from.
+    expect(groupFamilies(rows)[0].label).toBe("Vl 7b");
+  });
+
+  it("keeps two builds apart on a computed label - it is not an agreement", () => {
+    // Both files compute "Q3_K mix" off their tensors, which says nothing about
+    // them being the same download. Only a name both files carry may merge them.
+    const rows = buildRows([
+      mk("qwen3.8-27b-handmixed", { family: "D:/m/a.gguf", modelKey: "qwen3.8-27b", quantLabel: "Q3_K mix" }),
+      mk("qwen3.8-27b-otherbuild", { family: "D:/m/b.gguf", modelKey: "qwen3.8-27b", quantLabel: "Q3_K mix" }),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].quants).toHaveLength(2);
+  });
+
+  it("falls back to the id rules for a file whose header says nothing", () => {
+    // A third of real ggufs (diffusion, hand conversions) carry no identity KVs.
+    const rows = buildRows([
+      mk("qwen3.8-27b-q8_0", { family: "D:/m/a.gguf", quant: "Q8_0" }),
+      mk("qwen3.8-27b-q4_k_m", { family: "D:/m/b.gguf", quant: "Q4_K_M" }),
+    ]);
+    expect(rows.map((r) => r.key)).toEqual(["qwen3.8-27b"]);
   });
 });

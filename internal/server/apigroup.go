@@ -44,12 +44,25 @@ type apiModel struct {
 	// Slots is the number of concurrent conversation slots the model serves
 	// (--parallel N). Omitted for the single-slot default.
 	Slots int `json:"slots,omitempty"`
-	// Quant is the weight type parsed out of the gguf filename ("Q4_K_M"), and
-	// SizeGB its on-disk size. Both drive the Models table's spreadsheet columns
-	// (and its grouping of one model's quants); "" / 0 when the command has no
-	// model path or the file is unreadable.
-	Quant  string  `json:"quant,omitempty"`
-	SizeGB float64 `json:"sizeGB,omitempty"`
+	// ModelKey / FamilyKey are the Models table's grouping keys, derived from the
+	// gguf HEADER where it carries an identity and from the model id otherwise
+	// (see modelKeys). Rows sharing a ModelKey are one model listed once with a
+	// pill per quant; rows sharing a FamilyKey are finetunes of one base. The UI
+	// must not re-derive these from the id - that guessing game is what made one
+	// model show up as several rows.
+	ModelKey  string `json:"modelKey,omitempty"`
+	FamilyKey string `json:"familyKey,omitempty"`
+	// Quant is the weight type named by the gguf FILENAME ("Q4_K_M"), and SizeGB
+	// its on-disk size. Both drive the Models table's spreadsheet columns; "" / 0
+	// when the command has no model path or the file is unreadable.
+	//
+	// QuantLabel is the same fact read off the TENSORS ("Q4_K", "IQ4_XS mix"),
+	// sent only when the filename named nothing, and is display-only: the table
+	// merges two folders' copies of a model on Quant, and a computed label two
+	// unrelated builds happen to share is not that agreement. See modelKeys.
+	Quant      string  `json:"quant,omitempty"`
+	QuantLabel string  `json:"quantLabel,omitempty"`
+	SizeGB     float64 `json:"sizeGB,omitempty"`
 	// EstVramGB / EstRamGB are the autogen sizer's predicted footprint for this
 	// model, carried in the generated config. EstVramGB is also the router's
 	// admission input; EstRamGB is non-zero only when weights are CPU-offloaded.
@@ -127,6 +140,7 @@ func (s *Server) modelStatus() []apiModel {
 			}
 		}
 		family := modelFamily(mc.Cmd)
+		quantName, quantLabel, modelKey, familyKey := modelKeys(family, id)
 		models = append(models, apiModel{
 			Id:           id,
 			Name:         mc.Name,
@@ -140,7 +154,10 @@ func (s *Server) modelStatus() []apiModel {
 			Listeners:    groupListeners[gid],
 			Ctx:          ctxSize,
 			Slots:        slots,
-			Quant:        quantFromPath(family),
+			ModelKey:     modelKey,
+			FamilyKey:    familyKey,
+			Quant:        quantName,
+			QuantLabel:   quantLabel,
 			SizeGB:       fileSizeGB(family),
 			EstVramGB:    mc.EstVramGB,
 			EstRamGB:     mc.EstRamGB,

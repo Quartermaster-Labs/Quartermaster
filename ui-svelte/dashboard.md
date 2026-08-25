@@ -138,7 +138,21 @@ below the table.
 
 ### Two grouping axes, one row per model
 
-`lib/modelTable.ts` (pure, spec'd in `modelTable.test.ts`) does all of it. `quantOf` + `baseKey`
+**The server decides who is who.** Every model in the payload carries `modelKey` (one model = one
+row) and `familyKey` (finetunes of one base), read out of the gguf's own header — the publisher's
+`general.basename`/`size_label`/`finetune`, which survive any rename — with the id rules as the
+fallback for the ~1/3 of files that carry no identity KVs. `buildRows` uses them verbatim and only
+falls back to `baseKey`/`familyOf` when they are absent. **Do not re-derive them here.** Guessing
+where a name ends and a quant begins was a losing game: every publisher spells a quant differently,
+and one that no pattern reads (`Qwen3.8-27B-mix-q-k-mtp`) put one model on five rows.
+
+The key groups the row; the **label** is still id-derived, because a header key is built to compare
+and not to read (`qwen2.5-vl-instruct-7b-instruct`). Same for `familyLabel` vs `family`.
+
+The id-derived rules below are therefore the FALLBACK path, not the primary one — they still run
+for every headerless file, so they still have to be right.
+
+`lib/modelTable.ts` (pure, spec'd in `modelTable.test.ts`) does the rest. `quantOf` + `baseKey`
 collapse every **quant** of a model onto one row, and within a quant the shortest id is the base
 while its longer siblings become **variant** pills (same look as the playground `ModelSelector`).
 
@@ -151,16 +165,29 @@ Both `quantOf`/`baseKey` take the **first** quant-shaped part, not the last (mir
 `quantFromPath`), and fold a `UD`/`i1` recipe marker into the quant — or `-UD-` and a duplicated
 trailing quant leak into the displayed name.
 
+**A hand-mixed quant is a RUN of parts, not one token.** A gguf quantized per-tensor has no named
+recipe, only its author's label — `Qwen3.8-27B-mix-q-k-mtp` — so `MIX_PATTERN`/`CRUMB_PATTERN`
+(mirrored from `internal/quant`, and checked by the same Go mirror test) match the marker plus the
+fragments after it and stop at the build tag: quant `MIX-Q-K`, base key `qwen3.8-27b`, i.e. another
+pill on the model's own row next to `Q8_0` and `BF16`. A *bare* `-mix-` is deliberately not a quant
+— it is also an ordinary word in a model name (`openhermes-mix-2.5`), and only `mix` followed by a
+fragment cannot be anything else.
+
 **Variants group on the gguf, not on the id.** `clusterModels` buckets the catalog by `family` —
 the `-m` path the server already ships (`internal/server/family.go`) — and only then reads a quant
-off the cluster's shortest id. That is what makes a *custom-named* quant survive: `mix-q-k`,
-`q4km-clone` and `v3-control` are shapes `internal/quant.Pattern` cannot match, `baseKey` finds
-nothing to cut at and returns the whole id, so before this every ctx tier and vision twin of one
-file stood alone (20 rows for 3 models in a real catalog). The path says they are one file, and a
-row is one file. Two clusters merge into one quant entry only when they agree on a REAL token, so
-a custom quant and its separate `-mtp` rebuild stay two entries under one family heading rather
-than being fused because neither parsed. `QuantEntry.key` (quant, else the gguf) is what the pills
-key on — `quant` is `""` for all of these and cannot be an identity.
+off the cluster's shortest id. That is the backstop for whatever the token rules never learn
+(`q4km-clone`, `v3-control`): `baseKey` finds nothing to cut at and returns the whole id, so
+without it every ctx tier and vision twin of one file stands alone (20 rows for 3 models in a real
+catalog). The path says they are one file, and a row is one file. Two clusters merge into one quant entry only when they agree on a REAL token, so
+two unparsed builds stay two entries under one family heading rather than being fused because
+neither parsed. `QuantEntry.key` (quant, else the gguf) is what the pills key on — `quant` is `""`
+for those and cannot be an identity.
+
+**A pill may SHOW more than it may MERGE on.** The server also sends `quantLabel`, the weight type
+read off the file's tensors (`IQ4_XS mix`) — honest, but computed, so `quantMergeKey` ignores it
+and only `quantOf` falls back to it. A blank pill becomes a real answer; two unrelated hand-built
+quants that happen to compute the same label still stay two entries, because a computed string is
+not two files agreeing on a name.
 
 ### A third axis: family
 
