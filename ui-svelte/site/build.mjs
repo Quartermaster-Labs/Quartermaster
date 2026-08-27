@@ -39,7 +39,8 @@ const CATEGORIES = path.join(UI, "src", "lib", "wiki-categories.json");
 const IMAGES = path.join(ROOT, "docs", "assets");
 const FONTS = path.join(UI, "node_modules", "@fontsource");
 
-const { REPO, UPSTREAM, HERO, ICONS, FEATURES, GALLERY, INSTALL } = await import("./content.mjs");
+const { REPO, UPSTREAM, HERO, PILLS, SECTIONS, STORY, ICONS, FEATURES, GALLERY, INSTALL } =
+  await import("./content.mjs");
 
 // ── args ───────────────────────────────────────────────────────────────────
 
@@ -224,6 +225,19 @@ function latestRelease() {
 
 // ── landing page ───────────────────────────────────────────────────────────
 
+// One centred masthead per section: accent eyebrow with its icon, the heading,
+// and an optional sub-lede. Sections are keyed by DOM id so the copy lives in
+// content.mjs and the markup is identical everywhere.
+function sectionHead(key) {
+  const s = SECTIONS[key];
+  if (!s) return "";
+  return `<div class="section-head" data-reveal>
+      <span class="eyebrow">${icon(s.icon, 15)} ${esc(s.eyebrow)}</span>
+      <h2>${esc(s.title)}</h2>
+      ${s.sub ? `<p>${esc(s.sub)}</p>` : ""}
+    </div>`;
+}
+
 function renderHero(release, hero) {
   const primary = release
     ? `<a class="btn btn-primary" href="${release.url}">${icon("windows", 18)} Download for Windows</a>`
@@ -232,7 +246,13 @@ function renderHero(release, hero) {
     ? `${esc(release.tag)}${release.prerelease ? " (pre-release)" : ""} · ${fmtSize(release.size)} · <a href="${REPO}/releases">all releases</a> · Docker and source below`
     : `See <a href="${REPO}/releases">releases</a> for builds, or install with Docker or from source below.`;
 
+  const pills = PILLS.map((p) => `<li>${esc(p)}</li>`).join("");
+
+  // The mesh is three blurred gradient blobs drifting on long, offset CSS
+  // keyframes — no canvas, no rAF loop, nothing repainting on the main thread,
+  // and `prefers-reduced-motion` parks them where they start.
   return `<section class="hero">
+  <div class="mesh" aria-hidden="true"><i></i><i></i><i></i></div>
   <div class="wrap">
     <span class="eyebrow"><b>◆</b> ${esc(HERO.eyebrow)}</span>
     <h1>${esc(hero[0])} <span class="accent">${esc(hero[1])}</span> ${esc(hero[2])}</h1>
@@ -242,6 +262,7 @@ function renderHero(release, hero) {
       <a class="btn btn-ghost" href="#install">Other install options</a>
       <a class="btn btn-ghost" href="docs/index.html">${icon("book", 18)} Read the guide</a>
     </div>
+    <ul class="pills">${pills}</ul>
     <p class="cta-note">${note}</p>
   </div>
 </section>`;
@@ -262,54 +283,61 @@ function shotFrame(file, alt, label, light = null) {
   </div>`;
 }
 
+// Collapsed vertical slats that expand on hover. The first is open in the
+// markup, so with JS off (or before it runs) the section is still a screenshot
+// with a caption rather than a row of empty bars — the expansion is an
+// enhancement, not the thing that makes it legible.
 function renderGallery(shots) {
   if (!shots.length) return "";
-  const tabs = shots
-    .map(
-      (s, i) =>
-        `<button class="tab" type="button" role="tab" aria-selected="${i === 0}" aria-controls="shot-${i}">${esc(s.label)}</button>`,
-    )
-    .join("");
-  const figures = shots
-    .map(
-      (s, i) =>
-        `<figure id="shot-${i}" role="tabpanel"${i === 0 ? "" : " hidden"}>
-      ${shotFrame(s.file, `${s.label} — ${s.caption}`, `localhost:1250/ui/`, s.light)}
-      <figcaption>${esc(s.caption)}</figcaption>
-    </figure>`,
-    )
+  const img = (src, cls, alt) =>
+    `<img src="assets/img/${esc(src)}"${cls ? ` class="${cls}"` : ""} alt="${esc(alt)}" loading="lazy" decoding="async">`;
+
+  const slats = shots
+    .map((s, i) => {
+      const alt = `${s.label} — ${s.caption}`;
+      const pic = s.light ? img(s.file, "only-dark", alt) + img(s.light, "only-light", "") : img(s.file, "", alt);
+      return `<button class="slat${i === 0 ? " is-open" : ""}" type="button" aria-expanded="${i === 0}">
+      <span class="slat-spine">${icon(s.icon ?? "monitor", 18)}<b>${esc(s.label)}</b></span>
+      <span class="slat-panel">
+        <span class="slat-shot">${pic}</span>
+        <span class="slat-caption"><b>${esc(s.label)}</b>${esc(s.caption)}</span>
+      </span>
+    </button>`;
+    })
     .join("\n");
 
   return `<section id="screens">
   <div class="wrap">
-    <div class="section-head">
-      <h2>The whole engine has a front end</h2>
-      <p>Not a config file and a log tail — a dashboard for what is loaded, what it is doing, and what it costs in VRAM, plus a playground to actually use the models.</p>
-    </div>
-    <div class="tabs" role="tablist">${tabs}</div>
-    <div class="gallery">${figures}</div>
+    ${sectionHead("screens")}
+    <div class="slats" data-reveal>${slats}</div>
   </div>
 </section>`;
 }
 
+// Hover opens on a pointer; click and keyboard focus open everywhere else, so
+// the strip works on a phone and from the Tab key, not just under a mouse.
 const GALLERY_SCRIPT = `<script>
 (function () {
-  var tabs = [].slice.call(document.querySelectorAll(".tabs .tab"));
-  tabs.forEach(function (tab) {
-    tab.addEventListener("click", function () {
-      tabs.forEach(function (t) {
-        var on = t === tab;
-        t.setAttribute("aria-selected", String(on));
-        document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
-      });
+  var slats = [].slice.call(document.querySelectorAll(".slats .slat"));
+  if (!slats.length) return;
+  function open(el) {
+    slats.forEach(function (s) {
+      var on = s === el;
+      s.classList.toggle("is-open", on);
+      s.setAttribute("aria-expanded", String(on));
     });
+  }
+  slats.forEach(function (s) {
+    s.addEventListener("mouseenter", function () { if (matchMedia("(hover: hover)").matches) open(s); });
+    s.addEventListener("focus", function () { open(s); });
+    s.addEventListener("click", function () { open(s); });
   });
 })();
 </script>`;
 
 function renderFeatures() {
   const cards = FEATURES.map(
-    (f) => `<article class="card">
+    (f, i) => `<article class="card" data-reveal style="--d:${(i % 3) * 60}ms">
       <div class="ico">${icon(f.icon)}</div>
       <h3>${esc(f.title)}${f.neu ? '<span class="new">new in fork</span>' : ""}</h3>
       <p>${esc(f.body)}</p>
@@ -318,26 +346,84 @@ function renderFeatures() {
 
   return `<section id="features">
   <div class="wrap">
-    <div class="section-head">
-      <h2>One binary, one config file, every model you own</h2>
-      <p>quartermaster keeps llama-swap's on-demand swapping and OpenAI/Anthropic-compatible proxy, and adds the parts that make a multi-model box run itself.</p>
-    </div>
+    ${sectionHead("features")}
     <div class="grid">${cards}</div>
   </div>
 </section>`;
 }
 
+// The one section written in the first person. It sits between the screenshots
+// and the docs so the page has somewhere to stop being a spec sheet.
+function renderStory() {
+  return `<section id="story">
+  <div class="wrap narrow">
+    ${sectionHead("story")}
+    <div class="story" data-reveal>${STORY.map((p) => `<p>${esc(p)}</p>`).join("\n      ")}</div>
+    <p class="story-foot"><a class="btn btn-ghost" href="${UPSTREAM}">See llama-swap, where it started</a></p>
+  </div>
+</section>`;
+}
+
+// A shell block that looks like a shell: a prompt glyph on each command, dimmed
+// trailing comments, and a Copy button. The prompt and the comment styling are
+// markup, never text — the button copies `code` verbatim, so what lands on the
+// clipboard is exactly what you'd type.
+function terminal(code, label) {
+  const lines = code.split("\n");
+  const html = lines
+    .map((line, i) => {
+      const cont = i > 0 && /\\\s*$/.test(lines[i - 1]);
+      const m = line.match(/^(.*?)(\s{2,}#.*)$/);
+      const body = m ? `${esc(m[1])}<span class="cm">${esc(m[2])}</span>` : esc(line);
+      return `<span class="ln${cont ? " cont" : ""}">${body}</span>`;
+    })
+    .join("");
+  return `<div class="term">
+        <div class="term-bar"><i></i><i></i><i></i><span>${esc(label)}</span>
+          <button class="copy" type="button" data-copy="${esc(code)}">${icon("copy", 13)}<b>Copy</b></button>
+        </div>
+        <pre><code>${html}</code></pre>
+      </div>`;
+}
+
+const COPY_SCRIPT = `<script>
+(function () {
+  [].forEach.call(document.querySelectorAll(".copy"), function (btn) {
+    btn.addEventListener("click", function () {
+      var text = btn.getAttribute("data-copy");
+      var done = function () {
+        btn.classList.add("ok");
+        setTimeout(function () { btn.classList.remove("ok"); }, 1400);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, fallback);
+      } else fallback();
+      function fallback() {
+        // http:// origins and older Safari have no async clipboard — the
+        // deprecated path still works there and this is one short string.
+        var ta = document.createElement("textarea");
+        ta.value = text; ta.setAttribute("readonly", "");
+        ta.style.cssText = "position:fixed;top:-1000px";
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand("copy"); done(); } catch (e) {}
+        document.body.removeChild(ta);
+      }
+    });
+  });
+})();
+</script>`;
+
 function renderInstall(release) {
-  const cards = INSTALL.map((c) => {
+  const cards = INSTALL.map((c, i) => {
     let action = "";
     if (c.download) {
       action = release
         ? `<a class="btn btn-primary" href="${release.url}">Download ${esc(release.tag)} · ${fmtSize(release.size)}</a>`
         : `<a class="btn btn-primary" href="${REPO}/releases/latest">Go to releases</a>`;
     } else if (c.code) {
-      action = `<pre><code>${esc(c.code)}</code></pre>`;
+      action = terminal(c.code, c.title.toLowerCase());
     }
-    return `<article class="card">
+    return `<article class="card" data-reveal style="--d:${i * 60}ms">
       <div class="ico">${icon(c.icon)}</div>
       <h3>${esc(c.title)}</h3>
       <p>${esc(c.body)}</p>
@@ -347,14 +433,38 @@ function renderInstall(release) {
 
   return `<section id="install">
   <div class="wrap">
-    <div class="section-head">
-      <h2>Install</h2>
-      <p>The Windows installer and the Docker image bring the inference backends with them. From source, you supply your own.</p>
-    </div>
+    ${sectionHead("install")}
     <div class="grid">${cards}</div>
   </div>
 </section>`;
 }
+
+// Scroll reveals, with three separate ways of never leaving content hidden:
+//
+//   1. the hiding class is added by JS, so no-JS keeps the page fully visible;
+//   2. `prefers-reduced-motion` skips the whole thing;
+//   3. a 2.5s failsafe unhides everything even if the observer never fires.
+//
+// (3) is not paranoia — the site this design borrows from ships unguarded
+// reveals, and its own full-page screenshot comes back blank below the fold.
+const REVEAL_SCRIPT = `<script>
+(function () {
+  var els = [].slice.call(document.querySelectorAll("[data-reveal]"));
+  if (!els.length) return;
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches || !("IntersectionObserver" in window)) return;
+  var show = function (el) { el.classList.add("in"); };
+  els.forEach(function (el) { el.classList.add("reveal"); });
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return;
+      show(e.target);
+      io.unobserve(e.target);
+    });
+  }, { rootMargin: "0px 0px -8% 0px", threshold: 0.02 });
+  els.forEach(function (el) { io.observe(el); });
+  setTimeout(function () { els.forEach(show); }, 2500);
+})();
+</script>`;
 
 function renderDocsTeaser(articles, categories) {
   const byId = new Map(articles.map((a) => [a.id, a]));
@@ -365,7 +475,7 @@ function renderDocsTeaser(articles, categories) {
         .filter(Boolean)
         .map((a) => `<li><a href="docs/${a.id}.html">${esc(a.title)}</a></li>`)
         .join("");
-      return `<article class="card">
+      return `<article class="card" data-reveal>
       <h3>${esc(c.title)}</h3>
       <ul class="topic-list">${links}</ul>
     </article>`;
@@ -374,10 +484,7 @@ function renderDocsTeaser(articles, categories) {
 
   return `<section id="docs">
   <div class="wrap">
-    <div class="section-head">
-      <h2>The manual, before you install anything</h2>
-      <p>These are the same help articles the app ships with — the ones behind the <strong>Help</strong> button in the sidebar, and the ones the playground assistant searches when you ask it how something works.</p>
-    </div>
+    ${sectionHead("docs")}
     <div class="grid">${cards}</div>
   </div>
 </section>`;
@@ -472,6 +579,8 @@ const FONT_FILES = [
   ["inter/files/inter-latin-600-normal.woff2", "inter-600.woff2"],
   ["inter/files/inter-latin-700-normal.woff2", "inter-700.woff2"],
   ["jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2", "jetbrains-mono-400.woff2"],
+  ["jetbrains-mono/files/jetbrains-mono-latin-500-normal.woff2", "jetbrains-mono-500.woff2"],
+  ["jetbrains-mono/files/jetbrains-mono-latin-700-normal.woff2", "jetbrains-mono-700.woff2"],
 ];
 
 // Screenshots the site wants but docs/assets/ doesn't have yet: named on stdout
@@ -563,14 +672,15 @@ async function main() {
     title: "quartermaster — run any local model, on demand",
     description: HERO.lede,
     ogImage: hero?.file,
-    extraScripts: shots.length ? GALLERY_SCRIPT : "",
+    extraScripts: [COPY_SCRIPT, shots.length ? GALLERY_SCRIPT : "", REVEAL_SCRIPT].join("\n"),
     body: [
       renderHero(release, HERO.title),
       hero
-        ? `<div class="wrap">${shotFrame(hero.file, "The quartermaster dashboard", "localhost:1250/ui/", hero.light)}</div>`
+        ? `<div class="wrap" data-reveal>${shotFrame(hero.file, "The quartermaster dashboard", "localhost:1250/ui/", hero.light)}</div>`
         : "",
       renderFeatures(),
       renderGallery(shots.filter((s) => s !== hero)),
+      renderStory(),
       renderInstall(release),
       renderDocsTeaser(articles, categories),
     ].join("\n"),

@@ -19,6 +19,76 @@ export const HERO = {
     "them on demand behind one OpenAI- and Anthropic-compatible API.",
 };
 
+// Under the hero CTAs: the five things someone is scanning for before they
+// decide to read further. Short enough to take in without reading.
+export const PILLS = [
+  "Runs on your hardware",
+  "Bring your own models",
+  "OpenAI + Anthropic API",
+  "Text · image · audio",
+  "No telemetry",
+];
+
+// Each section opens with an accent eyebrow, a centred heading and a sub-lede.
+// Keyed by the section's DOM id so build.mjs can render them uniformly.
+export const SECTIONS = {
+  features: {
+    eyebrow: "One binary, every model",
+    icon: "box",
+    title: "It works the machine out for you",
+    sub:
+      "quartermaster keeps llama-swap's on-demand swapping and OpenAI/Anthropic-compatible proxy, " +
+      "and adds the parts that make a multi-model box run itself.",
+  },
+  screens: {
+    eyebrow: "See it in action",
+    icon: "eye",
+    title: "The whole engine has a front end",
+    sub:
+      "Not a config file and a log tail. Hover a panel to open it — what is loaded, what it is " +
+      "doing, what it costs in VRAM, and a playground to actually use it.",
+  },
+  install: {
+    eyebrow: "Get started",
+    icon: "terminal",
+    title: "Three ways in",
+    sub:
+      "The Windows installer and the Docker image bring the inference backends with them. " +
+      "From source, you supply your own.",
+  },
+  story: {
+    eyebrow: "How it actually started",
+    icon: "compass",
+    title: "A config file I got tired of writing",
+    sub: null,
+  },
+  docs: {
+    eyebrow: "Read before you install",
+    icon: "book",
+    title: "The manual ships inside the app",
+    sub:
+      "These are the same help articles behind the Help button in the sidebar — and the ones the " +
+      "playground assistant searches when you ask it how something works.",
+  },
+};
+
+// First person, on purpose: the one place on the site with a voice rather than a
+// feature list. Rewrite this in your own words — it is the part nobody else can
+// generate for you.
+export const STORY = [
+  "quartermaster began as a fork of llama-swap, because swapping models on demand was obviously " +
+    "the right idea and everything around it was still manual. Every model meant another " +
+    "hand-written block of config: how much context, how many layers on the GPU, how big the KV " +
+    "cache, whether the experts go on the CPU. Guess high and it dies on load. Guess low and half " +
+    "the card sits idle. Then a new quant lands and you do it again.",
+  "So it grew in the obvious direction: read the GGUF header, measure the VRAM that is actually " +
+    "free, and compute the numbers instead of typing them. Once that worked, the rest followed — " +
+    "image and audio backends in the same catalog, several ports sharing one scheduler, a " +
+    "KV-cache that survives being evicted, and a UI that shows what the box is doing rather than " +
+    "a log you have to tail.",
+  "It does not track upstream any more. It is its own thing now.",
+];
+
 // Lucide (ISC) path data, inlined so the page makes no third-party request.
 // Same icon set the app itself uses, so a feature card and its screen match.
 export const ICONS = {
@@ -35,6 +105,14 @@ export const ICONS = {
   terminal: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
   book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
   box: '<path d="M21 8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+  compass: '<circle cx="12" cy="12" r="10"/><path d="m16.2 7.8-2.9 6.5-6.5 2.9 2.9-6.5z"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  monitor: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-4.6-4.6a2 2 0 0 0-2.8 0L3 21"/>',
 };
 
 // `neu` marks the things this fork added on top of llama-swap. The badge is the
@@ -107,17 +185,17 @@ export const FEATURES = [
   },
 ];
 
-// Screenshots shown in the tabbed gallery. `file` is a name under docs/assets/;
-// an entry whose file is missing is skipped with a warning at build time rather
-// than shipping a broken <img>, so the gallery grows as shots are captured.
+// The hover-to-expand panel strip. `file` is a name under docs/assets/; an entry
+// whose file is missing is skipped with a warning at build time rather than
+// shipping a broken <img>, so the strip grows as shots are captured.
 // Capture with `npm run shots -- --demo`, adopt with `npm run site -- --adopt`.
 export const GALLERY = [
-  { file: "dashboard.png", label: "Dashboard", caption: "Loaded models, live VRAM and throughput at a glance." },
-  { file: "models.png", label: "Models", caption: "Every discovered model, grouped by GGUF with its variants." },
-  { file: "model-config.png", label: "Per-model config", caption: "Edit context, KV and speculative decoding — or reset to the computed default." },
-  { file: "observe.png", label: "Observe", caption: "Activity, logs and performance on one page." },
-  { file: "browse.png", label: "Model hub", caption: "Search Hugging Face, pick a quant, download straight into your models folder." },
-  { file: "images.png", label: "Image models", caption: "Diffusion backends sit in the same catalog as the text ones." },
+  { file: "dashboard.png", icon: "monitor", label: "Dashboard", caption: "Loaded models, live VRAM and throughput at a glance." },
+  { file: "models.png", icon: "layers", label: "Models", caption: "Every discovered model, grouped by GGUF with its variants." },
+  { file: "model-config.png", icon: "sliders", label: "Per-model config", caption: "Edit context, KV and speculative decoding — or reset to the computed default." },
+  { file: "observe.png", icon: "activity", label: "Observe", caption: "Activity, logs and performance on one page." },
+  { file: "browse.png", icon: "search", label: "Model hub", caption: "Search Hugging Face, pick a quant, download into your models folder." },
+  { file: "images.png", icon: "image", label: "Image models", caption: "Diffusion backends sit in the same catalog as the text ones." },
 ];
 
 export const INSTALL = [
