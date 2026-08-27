@@ -1,5 +1,6 @@
 import type { ToolDef } from "./types";
 import articles from "../../../internal/server/wiki_articles.json";
+import categories from "./wiki-categories.json";
 
 // The quartermaster help wiki. ONE source of truth for both the in-app Help
 // button (WikiModal renders these articles) and the `wiki_search` tool the
@@ -22,15 +23,13 @@ export const WIKI_ARTICLES: WikiArticle[] = articles as WikiArticle[];
 
 // Sidebar grouping for the Help modal — one place, keyed by article id, so the
 // articles themselves stay a flat list (search/tool don't care about groups).
-// Order here is the display order; any id not listed falls under "More".
-export const WIKI_CATEGORIES: { title: string; ids: string[] }[] = [
-  { title: "Getting started", ids: ["overview", "updating"] },
-  { title: "Models & config", ids: ["loading-models", "model-config", "config-variants", "autogen", "backends", "multi-listener"] },
-  { title: "Playground", ids: ["playground-chat", "playground-login", "web-search", "youtube", "qm-tools", "images", "upscale", "segmentation", "speech-audio", "rerank-embed", "settings"] },
-  { title: "Monitoring & VRAM", ids: ["observe", "gpu-memory", "slot-kv-cache"] },
-  { title: "API & access", ids: ["api-keys", "tools-api"] },
-  { title: "Troubleshooting", ids: ["troubleshooting", "known-issues"] },
-];
+// Order there is the display order; any id not listed falls under "More".
+//
+// JSON rather than a const here because scripts/wiki-docs.mjs renders the same
+// grouping into docs/ and is plain node — it cannot import a .ts module, and a
+// second hand-kept copy of the ordering is exactly the drift this file exists
+// to avoid.
+export const WIKI_CATEGORIES: { title: string; ids: string[] }[] = categories;
 
 // Group articles into their display categories, keeping only groups with a
 // member in `list` (so it works for both the full list and search results).

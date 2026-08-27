@@ -1,121 +1,37 @@
-# Enable web search
+<!-- Generated from internal/server/wiki_articles.json by ui-svelte/scripts/wiki-docs.mjs. Edit the JSON, not this file. -->
 
-The playground can hand the model a `web_search` tool it calls mid-conversation, plus
-`fetch_page` to read one of the results in full. Search itself is **not** a single endpoint —
-it is an ordered **provider chain** with failover, configured per playground user.
+# Web search
 
-Nothing is enabled by default: with no provider configured the tool reports
-`no web search provider configured` instead of guessing.
+Chat can let the model search the web for fresh or niche facts. Search is an **ordered failover chain**, not a single endpoint: providers are tried top-first, and if one times out, gets rate-limited or returns nothing, the next one runs. That matters because the free, keyless options are scrapers - an agent loop out-runs their bot thresholds and starts collecting CAPTCHAs.
 
-## Why a chain
+Configure it in playground **Settings -> Web Search**:
+1. Toggle **Web Search** on (the model must support **tool calling**).
+2. Enable the providers you want, fill in what each needs, and **Test** each row.
+3. Order them with the **arrows** - that's the failover order. Keyed providers only spend quota when everything above them failed, so put free ones first.
 
-SearXNG is the right default — local, keyless, no quota — but its public engines are HTML
-scrapers. They answer burst traffic with a CAPTCHA, SearXNG then suspends the engine on
-exponential backoff, and the remaining engines are what the query waits on. An agent tool
-loop out-runs that threshold trivially, so the failure you actually see is a *timeout*, not
-an error page — and with one provider that timeout ends the tool call.
+Providers:
+- **SearXNG** - self-hosted, keyless. Give it your base URL (e.g. `http://localhost:8888`); it must have **JSON format enabled** (`formats: [html, json]`). Fast when its engines aren't rate-limited.
+- **Brave Search** - real JSON API, 2,000 queries/month free (sign up at https://brave.com/search/api/). The most reliable failover under an agent loop.
+- **Tavily** - built for LLMs, returns extracted page text rather than a snippet. ~1,000 credits/month free (sign up at https://tavily.com/).
+- **DuckDuckGo** - keyless HTML scrape, no quota, but the same bot-challenge exposure as SearXNG. Last resort.
+- **Google Programmable Search** - best results, hardest cap (100 queries/day free). Needs an API key *and* a search-engine id (cx), from https://programmablesearch.google.com/.
 
-So: providers are tried in order, each with its own budget. One that errors, times out, or
-returns nothing hands off to the next. Keep the free/local one first; keyed APIs sit behind
-it as backup quota that is only spent when the free path failed.
+Knobs:
+- **Max / Turn** caps searches per message - once hit, the model has to answer with what it found.
+- **Throttle ms** spaces requests so a rate limiter doesn't trip.
+- **Dedupe Queries** reuses the result when the model repeats a query within a turn.
 
-Implementation: `internal/server/search.go` (dispatch, cache), `internal/server/websearch.go`
-(the `/api/websearch` proxy), `ui-svelte/src/lib/webSearch.ts` (config shape + tool def).
+**Reading pages.** Turning web search on also gives the model *fetch page*, so it can open a result and read the real thing instead of answering from a snippet. Results are numbered and come back as citation chips under the answer.
 
-## Providers
+Troubleshooting: a bare "Failed to fetch" when testing SearXNG is almost always a wrong host/port or CORS. If every provider is off or half-configured the panel warns you - a search with nothing to run it on fails the tool call rather than silently returning nothing.
 
-| Provider | Needs | Free tier | Notes |
-|---|---|---|---|
-| **SearXNG** | Instance URL | unlimited (self-hosted) | Keyless, local. Needs JSON format enabled. Fast when its engines aren't rate-limited. |
-| **Brave Search** | API key | ~2,000 queries/month | Real JSON API. The most reliable failover under an agent loop. [Sign up](https://brave.com/search/api/) |
-| **Tavily** | API key | ~1,000 credits/month | Built for LLMs — returns extracted page text, not just a snippet, so it often saves a `fetch_page` round trip. [Sign up](https://tavily.com/) |
-| **DuckDuckGo** | nothing | unlimited-ish | Keyless HTML scrape. Same bot-challenge exposure as SearXNG — last resort only. |
-| **Google Programmable Search** | API key + engine id (`cx`) | 100 queries/day | Best results, hardest cap — belongs late in a chain, never first. [Sign up](https://programmablesearch.google.com/) |
-
-An **enabled row missing its credentials is skipped**, not attempted: a half-configured
-provider should cost nothing, not a hop.
-
-Keys are stored per playground user and sent on the turn payload. They are **never written
-into a chat**, and the browser never talks to a provider directly — every query goes through
-quartermaster (no CORS, no key in client-side JS).
-
-## Configure it
-
-1. Open the playground (its own port, `-playground-port`) and log in.
-2. Side rail → **Settings** → **Web Search**.
-3. Tick the providers you want, fill in URL/key/`cx`.
-4. Order the rows with the ▲/▼ arrows — **row order is the failover order**.
-5. Hit **Test** on a row. It probes *that row alone*, so a chain test can't silently pass on
-   the provider below the one you're configuring.
-6. Turn the per-message **web search** toggle on in the chat composer.
-
-Rate controls live on the same pane — max searches per turn (default 5), throttle between
-queries (default 500 ms), and dedupe of repeat queries. These exist to keep a runaway agent
-loop from hammering a self-hosted SearXNG.
-
-## Standing up SearXNG
-
-SearXNG is a Python app + a Redis/Valkey cache — there is no single-binary bundle, so run it
-in Docker:
-
-```bash
+**Standing up SearXNG.** It is a Python app plus a Redis/Valkey cache, so the easy path is Docker:
+```
 docker run -d --name valkey valkey/valkey:alpine
-docker run -d --name searxng -p 8888:8080 \
-  --link valkey \
-  -v ./searxng:/etc/searxng \
-  searxng/searxng
+docker run -d --name searxng -p 8888:8080 --link valkey -v ./searxng:/etc/searxng searxng/searxng
 ```
+Then set `formats: [html, json]` under `search:` in `searxng/settings.yml` (JSON is off by default and quartermaster needs it), restart, and check by hand with `curl "http://localhost:8888/search?q=test&format=json"` - an HTML body back means the setting did not take. A bare Python install in a VM or WSL works the same way; only the URL matters. Queries are throttled to one every 1.5s process-wide with a 10-minute cache, so an agent loop cannot hammer your instance.
 
-Then edit `searxng/settings.yml` — **quartermaster needs the JSON format**, which SearXNG
-disables by default:
+**Keys are per playground user**, sent on the turn payload and never written into a chat. The browser never talks to a provider directly - every query goes out through quartermaster, so there is no CORS to fight and no key sitting in client-side JS. An enabled row missing its credentials is skipped rather than attempted, so a half-configured provider costs nothing.
 
-```yaml
-search:
-  formats:
-    - html
-    - json
-```
-
-Restart the container, and paste `http://localhost:8888` into the SearXNG row.
-
-Verify by hand:
-
-```bash
-curl 'http://localhost:8888/search?q=test&format=json'
-```
-
-An HTML body back means `formats: [html, json]` didn't take.
-
-Non-Docker installs work the same way — bare Python in a VM/WSL is fine, only the URL matters.
-
-### Rate limiting
-
-Queries to SearXNG go through one choke point (`internal/server/searxng.go`): min 1.5 s
-between queries process-wide, plus a 10-minute result cache. The chain's own cache is keyed
-by provider + query + result count, so a cached SearXNG answer is never served in place of
-the paid provider you just switched to.
-
-## Troubleshooting
-
-| Symptom | Cause |
-|---|---|
-| `no web search provider configured` | No row enabled, or every enabled row is missing its key/URL. |
-| `all search providers failed (…)` | Each provider's own error is listed — read the parenthesis. |
-| SearXNG: results in the browser, empty via quartermaster | JSON format not enabled (`formats: [html, json]`). |
-| SearXNG: timeouts under an agent loop | Its engines are CAPTCHA-suspended. Expected — add Brave or Tavily as the next hop. |
-| DuckDuckGo: `rate-limited (bot challenge)` | Same thing, no fix. It is a fallback, not a primary. |
-| Brave: `422` / `subscription token invalid` | Wrong or unsubscribed key — the upstream message is passed through verbatim. |
-| Google: `Daily Limit Exceeded` | 100/day free cap. Move it lower in the chain. |
-
-## Related tools
-
-- **`fetch_page`** (`internal/server/fetchpage.go`) — reads ONE page server-side (text +
-  JSON-LD, chrome stripped). Advertised alongside web search. SSRF-guarded at dial on the
-  resolved IP, so redirects and DNS rebinding are covered. Caps: 25 s, 4 MiB, 12k chars,
-  8 fetches/turn, 15-min cache. JS-rendered pages return a clear error rather than a guess.
-- **`media_transcript`** (`internal/tools/youtube.go`) — captions for a video or audio page.
-  Works on YouTube *and* the other ~1800 sites yt-dlp extracts from (Vimeo, TED, Dailymotion,
-  Twitch VODs, Rumble, PeerTube, SoundCloud, most podcast episode pages) — whatever publishes
-  subtitles. Needs `yt-dlp` on `PATH` or beside the exe; the Windows installer offers it as an
-  optional task. `youtube_search` and `youtube_comments` stay YouTube-only: the `ytsearch:`
-  scheme and comment extraction exist for barely anything else.
+More symptoms: `all search providers failed (...)` lists each provider's own error in the parenthesis - read it. Brave `422` / "subscription token invalid" is a wrong or unsubscribed key, passed through verbatim. Google "Daily Limit Exceeded" is the 100/day free cap; move it lower in the chain. DuckDuckGo `rate-limited (bot challenge)` has no fix - it is a fallback, not a primary.

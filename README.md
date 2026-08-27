@@ -24,6 +24,9 @@ Built in Go for performance and simplicity — a single binary and one config fi
 your inference backends (llama-server, stable-diffusion.cpp, etc.); the Windows installer and unified
 Docker image bundle them for you.
 
+📖 **[User guide](docs/)** — the same help wiki the app ships with, readable before you install
+anything.
+
 ## Features
 
 > 🆕 marks additions made in this fork; the rest is inherited from llama-swap.

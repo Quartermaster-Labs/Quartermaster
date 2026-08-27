@@ -43,6 +43,7 @@ The app is mounted under `base: "/ui/"`.
 | `npm run build` | Production build into `ui_dist` (`--emptyOutDir`). |
 | `npm run check` | `svelte-check` type checking. |
 | `npm test` / `npm run test:watch` | Vitest unit tests. |
+| `npm run docs` | Renders the help wiki (`internal/server/wiki_articles.json` + `src/lib/wiki-categories.json`) into the repo's `docs/` tree. `-- --check` fails instead of writing, for CI. Run it after editing an article; `docs/*.md` is generated and never hand-edited. |
 
 From the repo root, **`make test-ui`** runs `npm ci && npm run check && npm test`. Run it after
 changing anything under `ui-svelte/`.
