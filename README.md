@@ -64,7 +64,6 @@ Docker image bundle them for you.
   - **llama-server** — rerank, infill, completion
   - **Stable Diffusion** — SDAPI txt2img / img2img / loras
   - **Ops** — `/upstream/:model`, `/running`, unload, `/logs[/stream]`, `/health`, `/metrics` (Prometheus)
-  - See the [configuration docs](docs/configuration.md) for the full endpoint list.
 - ✅ API Key support - define keys to restrict access to API endpoints
 - ✅ Customizable
   - Run concurrent models with a custom DSL swap matrix
@@ -204,7 +203,8 @@ Almost all configuration settings are optional and can be added one step at a ti
   - `${PORT}` automatic port variables for dynamic port assignment
   - `filters` rewrite parts of requests before sending to the upstream server
 
-See the [configuration documentation](docs/configuration.md) for all options.
+Every option is documented inline in [`config.example.yaml`](config.example.yaml), which the
+installer also drops next to your runtime config.
 
 ## How does quartermaster work?
 
