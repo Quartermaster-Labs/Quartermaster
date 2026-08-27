@@ -8,13 +8,14 @@
 //   npm run shots                        # capture into .shots/current
 //   npm run shots -- --label before      # capture into .shots/before
 //   npm run shots -- --url http://localhost:8080
+//   npm run shots -- --native            # with the app window's own chrome
 //
 // The app is hash-routed under /ui/, uses SSE (so `networkidle` never fires —
 // we settle on a selector plus a fixed delay), and reads its theme from the
 // `theme-mode` localStorage key, which we seed per run rather than clicking the
 // sidebar toggle.
 import { chromium } from "playwright";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -30,6 +31,7 @@ function parseArgs(argv) {
     height: 900,
     settle: 1200,
     only: null,
+    native: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const [flag, inline] = argv[i].split(/=(.*)/s);
@@ -43,6 +45,7 @@ function parseArgs(argv) {
       case "--height": out.height = Number(val()); break;
       case "--settle": out.settle = Number(val()); break;
       case "--only": out.only = val().split(","); break;
+      case "--native": out.native = true; break;
       default:
         if (flag.startsWith("--")) throw new Error(`unknown flag: ${flag}`);
     }
@@ -110,8 +113,17 @@ async function main() {
   }
 
   const outDir = path.join(opts.out, opts.label);
-  await rm(outDir, { recursive: true, force: true });
+  // Clear only this run's own half of the label. Wiping the directory outright
+  // would make `--native` and a plain run mutually exclusive within one label,
+  // which is the opposite of what the shared naming is for -- and would silently
+  // delete the "before" set someone captured five minutes earlier. Stale shots
+  // of the same kind still go, so a renamed or deleted SHOTS entry cannot leave
+  // a ghost behind.
+  const mine = (f) => f.endsWith("--native.png") === opts.native;
   await mkdir(outDir, { recursive: true });
+  for (const f of await readdir(outDir)) {
+    if (f.endsWith(".png") && mine(f)) await rm(path.join(outDir, f));
+  }
 
   const browser = await chromium.launch();
   const manifest = [];
@@ -133,11 +145,43 @@ async function main() {
         } catch {}
       }, theme);
 
+      // --native: shoot the app window's chrome, not the browser's view of the
+      // same page. `isNative` is a module-load feature test on the `qm*`
+      // bindings internal/nativewin injects (lib/native.ts) -- no build flag and
+      // no user-agent sniffing -- so defining them before the bundle's first
+      // script is the whole trick. That renders TitleBar, TabStrip and
+      // WindowControls, and gets main.ts to set `data-native`, which index.css
+      // keys the shortened h-screen off: every page re-lays-out at the app
+      // window's real height rather than the browser's.
+      //
+      // Every binding resolves rather than throwing, because the app's calls are
+      // fire-and-forget and a rejection here would only show up as console
+      // noise. What this CANNOT reproduce is the part DWM composites and
+      // Chromium never sees: the rounded corners, the frame colour
+      // qmCaptionColor sets, and the window shadow. Those need a real window
+      // capture.
+      if (opts.native) {
+        await ctx.addInitScript(() => {
+          const noop = () => Promise.resolve();
+          Object.assign(window, {
+            qmDrag: noop,
+            qmMinimize: noop,
+            qmMaximize: noop,
+            qmClose: noop,
+            qmCaptionColor: noop,
+            qmOpenExternal: noop,
+            qmPickFolder: () => Promise.resolve(""),
+          });
+        });
+      }
+
       const page = await ctx.newPage();
       page.on("pageerror", (e) => warnings.push(`[${theme}] page error: ${e.message}`));
 
       for (const shot of shots) {
-        const file = `${shot.name}--${theme}--${width}.png`;
+        // The suffix is part of the name, not a separate directory, so a native
+        // and a browser run share one label and diff side by side.
+        const file = `${shot.name}--${theme}--${width}${opts.native ? "--native" : ""}.png`;
         try {
           // about:blank first: `goto` to a URL differing only in its hash does
           // NOT reload the document, so without this every shot would inherit
@@ -163,8 +207,8 @@ async function main() {
 
   await browser.close();
   await writeFile(
-    path.join(outDir, "manifest.json"),
-    JSON.stringify({ url: opts.url, label: opts.label, themes: opts.themes, widths: opts.widths, shots: manifest, warnings }, null, 2),
+    path.join(outDir, opts.native ? "manifest-native.json" : "manifest.json"),
+    JSON.stringify({ url: opts.url, label: opts.label, native: opts.native, themes: opts.themes, widths: opts.widths, shots: manifest, warnings }, null, 2),
   );
 
   console.log(`\n${manifest.length} shots → ${outDir}`);
