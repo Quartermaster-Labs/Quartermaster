@@ -124,7 +124,8 @@ export function openExternal(url: string): void {
  * way:
  *
  *   1. `<a target="_blank">`, caught in the CAPTURE phase so a component's own
- *      click handler cannot consume the event first.
+ *      click handler cannot consume the event first. `data-qm-inapp` on the
+ *      anchor opts a link back out -- see the check below.
  *   2. `window.open(...)`, monkey-patched, because a script call never produces
  *      a click to intercept.
  *
@@ -163,6 +164,14 @@ export function installExternalLinkHandler(): () => void {
     // to the Downloads folder with its own progress flyout, which is what the
     // playground's image/audio/transcript save buttons already rely on.
     if (a.hasAttribute("download")) return;
+    // The shell's own escape hatch. This handler runs in the capture phase
+    // precisely so a component cannot consume the click first -- which also
+    // means a component can never opt OUT by calling preventDefault in its own
+    // onclick, because that runs later. A link the app window means to handle
+    // itself (the sidebar's Playground entry, which opens an in-app tab rather
+    // than leaving) says so declaratively instead. The href stays real so the
+    // same markup is an ordinary link in a browser.
+    if (a.hasAttribute("data-qm-inapp")) return;
 
     // Resolve against the document so a relative href is compared as the
     // absolute URL it will actually navigate to.

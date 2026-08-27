@@ -77,11 +77,18 @@
       {@const active = isActive(p.path, $currentRoute)}
       {#if p.path === "/test" && playgroundURL}
         <!-- Playground is a separate app on its own port: a tab in the app
-             window, a browser tab in a browser. -->
+             window, a browser tab in a browser.
+
+             data-qm-inapp is what makes the app-window half work. The external
+             link handler is a CAPTURE-phase listener on the document, so it
+             fires before openPlayground and would send this straight to the
+             system browser -- preventDefault here is too late to stop it. The
+             attribute is the opt-out; see installExternalLinkHandler. -->
         <a
           href={playgroundURL}
           target="_blank"
           rel="noopener"
+          data-qm-inapp
           onclick={openPlayground}
           class="relative flex items-center gap-3 pr-3 h-10 shrink-0 text-sm font-medium text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
         >

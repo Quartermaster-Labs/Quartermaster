@@ -20,11 +20,13 @@ function clickLink(
   href: string,
   target?: string,
   download?: boolean,
+  inApp?: boolean,
 ): string | undefined {
   const a = document.createElement("a");
   a.href = href;
   if (target) a.target = target;
   if (download) a.setAttribute("download", "");
+  if (inApp) a.setAttribute("data-qm-inapp", "");
   document.body.appendChild(a);
   a.dispatchEvent(
     new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }),
@@ -96,6 +98,18 @@ describe("installExternalLinkHandler", () => {
     // the browser. The download attribute has to outrank both.
     expect(
       clickLink("https://example.com/report.csv", "_blank", true),
+    ).toBeUndefined();
+  });
+
+  it("leaves a data-qm-inapp link to the app", async () => {
+    const native = await loadNative(true);
+    teardown = native.installExternalLinkHandler();
+    // The sidebar's Playground entry: another origin (its own port) AND a new
+    // window, so it would otherwise go straight to the system browser. The
+    // handler is capture-phase, so the component's own preventDefault runs too
+    // late to stop it -- the attribute is the only thing that can.
+    expect(
+      clickLink("https://example.com:1250/ui/", "_blank", false, true),
     ).toBeUndefined();
   });
 

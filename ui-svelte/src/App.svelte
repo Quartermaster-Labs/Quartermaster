@@ -201,12 +201,17 @@
 
      `allow` is not optional. A cross-origin frame is denied microphone and
      clipboard by default, which would break recording in the speech and audio
-     tabs and every copy button in chat, silently and only inside the app. -->
+     tabs and every copy button in chat, silently and only inside the app.
+
+     `bg-background` is on the FRAME ELEMENT, not just inside the frame: a fresh
+     iframe paints the UA white until its document has content, so without this
+     opening a tab flashes white before the playground's own canvas appears.
+     The document's half of the same problem is handled inline in index.html. -->
 {#each $appTabs as tab (tab.id)}
   <iframe
     src={tab.url}
     title={tab.label}
-    class="block h-screen w-full border-0"
+    class="block h-screen w-full border-0 bg-background"
     allow="microphone; clipboard-read; clipboard-write; autoplay"
     style:display={$activeTabId === tab.id ? null : "none"}
   ></iframe>

@@ -20,10 +20,14 @@
 
   let menu = $state<{ id: string; x: number; y: number } | null>(null);
 
+  // Anchored to the TAB, not to the cursor: a browser hangs a tab menu off the
+  // tab itself, and right-clicking near a pill's edge should not fling the menu
+  // to wherever the pointer happened to be.
   function openMenu(e: MouseEvent, id: string): void {
     e.preventDefault(); // WebView2 would otherwise show Chromium's own menu
     e.stopPropagation();
-    menu = { id, x: e.clientX, y: e.clientY };
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    menu = { id, x: r.left, y: r.bottom + 4 };
   }
 
   function sendToBrowser(id: string, alsoClose: boolean): void {
@@ -121,12 +125,21 @@
 </div>
 
 {#if menu}
-  <!-- Fixed to the viewport at the cursor: the strip itself is inside a 32px bar
-       with overflow of its own, so a menu positioned within it would be clipped
-       to a sliver. -->
+  <!-- Fixed to the viewport, under the tab: the strip itself is inside a 32px
+       bar with overflow of its own, so a menu positioned within it would be
+       clipped to a sliver.
+
+       Every coordinate is divided by --qm-scale. :root carries `zoom`, and the
+       rect this was measured from is in unzoomed viewport pixels while a fixed
+       box inside the zoomed document is laid out in zoomed ones -- so at scale
+       1.25 an undivided `left` put the menu 25% of the way across the window
+       from the tab it belongs to. Same correction as the vh rules in index.css.
+
+       The min() keeps a menu opened on a far-right tab inside the window; 11rem
+       is the min-width above, and 100vw needs the same division. -->
   <div
     class="fixed z-[100] min-w-[11rem] overflow-hidden rounded-md border border-border bg-surface py-1 text-sm shadow-xl shadow-black/30"
-    style="left: {menu.x}px; top: {menu.y}px"
+    style="left: min({menu.x}px / var(--qm-scale), 100vw / var(--qm-scale) - 11rem); top: calc({menu.y}px / var(--qm-scale))"
     role="menu"
     tabindex="-1"
     onmousedown={(e) => e.stopPropagation()}
