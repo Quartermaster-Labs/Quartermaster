@@ -122,7 +122,7 @@ ${THEME_BOOT}
 ${body}
 <footer class="site-footer">
   <div class="wrap">
-    <span>MIT licensed. A fork of <a href="${UPSTREAM}">llama-swap</a>, diverged into its own project.</span>
+    <span>MIT licensed. Originally forked from <a href="${UPSTREAM}">llama-swap</a>.</span>
     <span class="spacer"><a href="${REPO}">Source</a></span>
     <span><a href="${REPO}/releases">Releases</a></span>
     <span><a href="${up}docs/index.html">User guide</a></span>
@@ -343,15 +343,9 @@ const GALLERY_SCRIPT = `<script>
 </script>`;
 
 function renderFeatures() {
-  // The badge sits on the icon row, not inline after the title: a title that
-  // wraps would otherwise strand it mid-sentence, and it is a property of the
-  // card rather than of the last word of its heading.
   const cards = FEATURES.map(
     (f, i) => `<article class="card" data-reveal style="--d:${(i % 3) * 60}ms">
-      <div class="card-top">
-        <div class="ico">${icon(f.icon)}</div>
-        ${f.neu ? '<span class="new">new in fork</span>' : ""}
-      </div>
+      <div class="ico">${icon(f.icon)}</div>
       <h3>${esc(f.title)}</h3>
       <p>${esc(f.body)}</p>
     </article>`,

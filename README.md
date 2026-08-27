@@ -1,76 +1,67 @@
-![quartermaster dashboard](docs/assets/dashboard.png)
+![Quartermaster dashboard](docs/assets/dashboard.webp)
 ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/Quartermaster-Labs/quartermaster/total)
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Quartermaster-Labs/quartermaster/go-ci.yml)
 ![GitHub Repo stars](https://img.shields.io/github/stars/Quartermaster-Labs/quartermaster)
 
-# quartermaster
+# Quartermaster
 
-> **Fork of [llama-swap](https://github.com/mostlygeek/llama-swap) (MIT).** quartermaster
-> started as a fork and has since diverged into its own project — it does **not** track upstream
-> and has no plan to merge back. It keeps llama-swap's core (on-demand model swapping, OpenAI-compatible
-> proxy, text/image/audio support, Anthropic API, single Go binary) and layers on automatic config
-> generation, VRAM-aware load planning, multi-port catalogs with cross-port eviction, and a
-> redesigned web UI with a standalone playground.
-
-Run **any** generative AI model on your machine — text, image, audio — and hot-swap between them on
-demand. quartermaster works with any OpenAI- or Anthropic-API-compatible server.
+Run **any** generative AI model on your machine (text, image, audio) and hot-swap between them on
+demand. Quartermaster works with any OpenAI- or Anthropic-API-compatible server.
 
 A **hassle-free yet fully customizable inference engine**: point it at your models folder and it
-auto-generates a near-optimal setup — VRAM-aware context, GPU offload, and KV sizing computed per
-model — so a less technical user gets a great config out of the box, while power users can tune every
+auto-generates a near-optimal setup, with VRAM-aware context, GPU offload and KV sizing computed per
+model, so a less technical user gets a great config out of the box while power users can tune every
 knob.
 
-Built in Go for performance and simplicity — a single binary and one config file. It orchestrates
+Built in Go for performance and simplicity: a single binary and one config file. It orchestrates
 your inference backends (llama-server, stable-diffusion.cpp, etc.); the Windows installer and unified
 Docker image bundle them for you.
 
-🌐 **[quartermaster-labs.github.io/quartermaster](https://quartermaster-labs.github.io/quartermaster/)** —
+🌐 **[quartermaster-labs.github.io/quartermaster](https://quartermaster-labs.github.io/quartermaster/)**:
 downloads, screenshots and the full user guide.
-📖 **[User guide](docs/)** — the same help wiki the app ships with, readable before you install
+📖 **[User guide](docs/)**: the same help wiki the app ships with, readable before you install
 anything.
 
 ## Features
 
-> 🆕 marks additions made in this fork; the rest is inherited from llama-swap.
-
-- 🆕 **Automatic config generation** — discovers your GGUFs and emits a working config at startup
+- **Automatic config generation**: discovers your GGUFs and emits a working config at startup
   (`-generate`). Kills hand-baked per-model config variants: ctx, GPU offload, CPU-MoE split, and
   KV-cache sizing are computed at runtime per model and per architecture (Gemma SWA, Qwen3.5/3.6 SSM,
   LFM2, etc.).
-- 🆕 **VRAM-aware load planning** — samples free VRAM at startup and sizes models to fit. Per-arch
+- **VRAM-aware load planning**: samples free VRAM at startup and sizes models to fit. Per-arch
   KV math, derived MoE expert byte fractions, and a compute-buffer estimate keep large-vocab models
   from spilling.
-- 🆕 **KV-cache persistence to disk** — snapshots a llama-server slot's KV-cache before
+- **KV-cache persistence to disk**: snapshots a llama-server slot's KV-cache before
   eviction and restores it (instead of re-prefilling) when the conversation returns, so an expensive
   long chat survives being swapped out by a throwaway request. Also seeds brand-new conversations
   from a per-agent system+tools preamble cache to skip re-prefilling the static prefix.
-- 🆕 **Multi-port catalogs + cross-port eviction** — bind N listeners on one shared
+- **Multi-port catalogs + cross-port eviction**: bind N listeners on one shared
   router/scheduler, each with its own `/v1/models` view; loading a model on one port evicts a
   VRAM-exclusive model on another. One process, one GPU accounting.
-- 🆕 **Live model reload** — watches the models folder and hot-reloads on add/remove without a
+- **Live model reload**: watches the models folder and hot-reloads on add/remove without a
   restart (`-watch-models`).
-- 🆕 **Redesigned web UI** — LM Studio-style per-model parameter editor (edit ctx/KV/spec, create
+- **Redesigned web UI**: LM Studio-style per-model parameter editor (edit ctx/KV/spec, create
   named variants, reset to autogen default), collapsible variant groups, segmented VRAM/RAM gauges
   (system vs model), and a unified Observe page (activity + logs + performance).
-- 🆕 **Standalone playground** — split onto its own port (`-playground-port`) with per-user login,
+- **Standalone playground**: split onto its own port (`-playground-port`) with per-user login,
   server-side chat history, and a side-rail for Chats / Images / Speech / Transcription.
-- 🆕 **Per-key model scoping** — API keys can be restricted to specific models, not just all-or-nothing.
-- 🆕 **Safe LAN/tailnet exposure** — bind the API to `0.0.0.0` (or a tailnet address) and the
-  dashboard, ops and config-editor endpoints — which are deliberately key-free so a bad key can
-  never lock you out of your own UI — automatically answer to this host only. Widen with
+- **Per-key model scoping**: API keys can be restricted to specific models, not just all-or-nothing.
+- **Safe LAN/tailnet exposure**: bind the API to `0.0.0.0` (or a tailnet address) and the
+  dashboard, ops and config-editor endpoints (which are deliberately key-free so a bad key can
+  never lock you out of your own UI) automatically answer to this host only. Widen with
   `-admin-allow 100.64.0.0/10`, or drop the gate entirely with `-admin-open`.
-- ✅ Easy to deploy and configure: one binary, one configuration file; orchestrates your inference backends (llama-server, stable-diffusion.cpp, …)
-- ✅ On-demand model switching
-- ✅ Use any local OpenAI compatible server (llama.cpp, vllm, tabbyAPI, stable-diffusion.cpp, etc.)
-  - future proof, upgrade your inference servers at any time.
-- ✅ Broad API coverage:
-  - **OpenAI** — chat/completions, responses, embeddings, models, audio (speech/transcription/voices), images (generation/edits)
-  - **Anthropic** — messages, count_tokens
-  - **llama-server** — rerank, infill, completion
-  - **Stable Diffusion** — SDAPI txt2img / img2img / loras
-  - **Ops** — `/upstream/:model`, `/running`, unload, `/logs[/stream]`, `/health`, `/metrics` (Prometheus)
-- ✅ API Key support - define keys to restrict access to API endpoints
-- ✅ Customizable
+- **On-demand model switching**: a request naming a model that isn't loaded swaps it in and evicts
+  whatever no longer fits. One binary, one configuration file, no manual load step.
+- **Any OpenAI-compatible backend**: llama.cpp, ik_llama.cpp, vllm, tabbyAPI, stable-diffusion.cpp,
+  whisper.cpp and others. Upgrade your inference servers whenever you like; nothing here is pinned
+  to a build.
+- **Broad API coverage**:
+  - **OpenAI**: chat/completions, responses, embeddings, models, audio (speech/transcription/voices), images (generation/edits)
+  - **Anthropic**: messages, count_tokens
+  - **llama-server**: rerank, infill, completion
+  - **Stable Diffusion**: SDAPI txt2img / img2img / loras
+  - **Ops**: `/upstream/:model`, `/running`, unload, `/logs[/stream]`, `/health`, `/metrics` (Prometheus)
+- **Customizable when you want it to be**:
   - Run concurrent models with a custom DSL swap matrix
   - Automatic unloading of models after timeout by setting a `ttl`
   - Docker and Podman support using `cmd` and `cmdStop` together
@@ -79,7 +70,7 @@ anything.
 
 ### Web UI
 
-quartermaster includes a real time web interface with a playground for testing out all sorts of local models:
+Quartermaster includes a real time web interface with a playground for testing out all sorts of local models:
 
 <img width="1125" height="876" alt="image" src="https://github.com/user-attachments/assets/8ee41947-97af-463d-b0f0-8e9c478fac07" />
 
@@ -103,26 +94,26 @@ Real time log streaming:
 
 The built-in playground is a full chat client over your local models (plus Images, Speech and
 Transcription tabs). It can run on its own port with per-user login
-(`-playground-port`). Fork additions to the chat experience:
+(`-playground-port`).
 
-- **Web search** — toggle a `web_search` tool the model can call mid-conversation, plus `fetch_page`
-  to read a result in full. Providers are an ordered failover chain — your own
+- **Web search**: toggle a `web_search` tool the model can call mid-conversation, plus `fetch_page`
+  to read a result in full. Providers are an ordered failover chain: your own
   [SearXNG](https://github.com/searxng/searxng) instance first (keyless, local), Brave / Tavily /
-  DuckDuckGo / Google behind it — proxied server-side (`/api/websearch`), so no key in the browser
+  DuckDuckGo / Google behind it, proxied server-side (`/api/websearch`), so no key in the browser
   and no CORS headaches. See the [web search guide](docs/web-search.md).
-- **Clean reasoning toggle** — reasoning ("thinking") models stream their thought process into a
+- **Clean reasoning toggle**: reasoning ("thinking") models stream their thought process into a
   collapsible block, kept out of the final answer. Flip it off to hide thinking entirely.
-- **Rewrite tool** — a text-transformation mode: paste prose + an instruction ("make it formal",
+- **Rewrite tool**: a text-transformation mode. Paste prose plus an instruction ("make it formal",
   "translate to pirate"), and the result renders as a side-by-side **word-level diff** against the
   original so you see exactly what changed.
-- **Chat sessions** — conversations are saved server-side per user (not just localStorage), with a
+- **Chat sessions**: conversations are saved server-side per user (not just localStorage), with a
   history flyout to switch between and delete past chats.
 
 ## Installation
 
 Pick whichever fits you:
 
-1. **Windows installer** — easiest; bundles/fetches the inference backends
+1. **Windows installer**: easiest; bundles/fetches the inference backends
 2. Docker (unified container)
 3. Release binary (any OS)
 4. From source
@@ -135,17 +126,17 @@ Download the latest `quartermaster-setup-*.exe` from the
 It's a per-user install (no admin/UAC needed). The wizard:
 
 - downloads the inference backends (`llama-server` / `sd-server`) for your chosen acceleration
-  (vulkan / cuda / cpu) — so you don't hunt them down yourself,
+  (vulkan / cuda / cpu), so you don't hunt them down yourself,
 - seeds a starter `quartermaster-generate.yaml` you can edit, and
 - optionally adds a logon-autostart shortcut.
 
-On first run it discovers your GGUFs and auto-generates a config — point it at your models folder and
+On first run it discovers your GGUFs and auto-generates a config: point it at your models folder and
 go.
 
 ### Docker Install ([download images](https://github.com/Quartermaster-Labs/quartermaster/pkgs/container/quartermaster))
 
 The unified container bundles llama-server, ik-llama-server, stable-diffusion.cpp,
-whisper.cpp and quartermaster. It is built for `cuda` and `vulkan` backends.
+whisper.cpp and Quartermaster. It is built for `cuda` and `vulkan` backends.
 
 ```shell
 $ docker pull ghcr.io/quartermaster-labs/quartermaster:unified-cuda   # or :unified-vulkan
@@ -211,27 +202,27 @@ Almost all configuration settings are optional and can be added one step at a ti
 Every option is documented inline in [`config.example.yaml`](config.example.yaml), which the
 installer also drops next to your runtime config.
 
-## How does quartermaster work?
+## How does Quartermaster work?
 
-When a request hits an OpenAI- or Anthropic-compatible endpoint, quartermaster reads the
+When a request hits an OpenAI- or Anthropic-compatible endpoint, Quartermaster reads the
 `model` value and loads the right upstream server to serve it. If the wrong server is running, it's
-replaced with the correct one — that's the "swap." The upstream is spawned on demand and torn down on
+replaced with the correct one. That's the "swap." The upstream is spawned on demand and torn down on
 a `ttl`, so only what you're using holds VRAM.
 
-Most setups never write that upstream command by hand. With `-generate`, quartermaster discovers
+Most setups never write that upstream command by hand. With `-generate`, Quartermaster discovers
 your GGUFs at startup and emits a config for them: it reads each model's metadata, estimates its VRAM
 footprint, and computes a near-optimal context length, GPU/CPU layer split, and KV-cache sizing to fit
-your hardware. You can then tune any of it — per model, or as named variants — from the web UI or by
+your hardware. You can then tune any of it (per model, or as named variants) from the web UI or by
 editing `quartermaster-generate.yaml`; changes hot-reload.
 
-In the most basic configuration quartermaster handles one model at a time. For more advanced use
+In the most basic configuration Quartermaster handles one model at a time. For more advanced use
 cases, a `matrix` runs multiple models concurrently, and multi-port listeners give each a scoped
 catalog while a single shared scheduler keeps VRAM accounting honest across ports. You have complete
 control over how your system resources are used.
 
 ## Reverse Proxy Configuration (nginx)
 
-If you deploy quartermaster behind nginx, disable response buffering for streaming endpoints. By default, nginx buffers responses which breaks Server‑Sent Events (SSE) and streaming chat completion.
+If you deploy Quartermaster behind nginx, disable response buffering for streaming endpoints. By default, nginx buffers responses which breaks Server‑Sent Events (SSE) and streaming chat completion.
 
 Recommended nginx configuration snippets:
 
@@ -251,7 +242,7 @@ location /v1/chat/completions {
 }
 ```
 
-As a safeguard, quartermaster also sets `X-Accel-Buffering: no` on SSE responses. However, explicitly disabling `proxy_buffering` at your reverse proxy is still recommended for reliable streaming behavior.
+As a safeguard, Quartermaster also sets `X-Accel-Buffering: no` on SSE responses. However, explicitly disabling `proxy_buffering` at your reverse proxy is still recommended for reliable streaming behavior.
 
 ## Monitoring Logs on the CLI
 
@@ -280,9 +271,15 @@ curl -Ns 'http://host/logs/stream?no-history'
 
 ## Do I need to use llama.cpp's server (llama-server)?
 
-Any OpenAI compatible server would work. quartermaster was originally designed for llama-server and it is the best supported.
+Any OpenAI compatible server would work. Quartermaster was originally designed for llama-server and it is the best supported.
 
 For Python based inference servers like vllm or tabbyAPI it is recommended to run them via podman or docker. This provides clean environment isolation as well as responding correctly to `SIGTERM` signals for proper shutdown.
+
+## License and origins
+
+MIT. Quartermaster started as a fork of
+[llama-swap](https://github.com/mostlygeek/llama-swap) (MIT) and has since diverged into its own
+project: it does not track upstream and has no plan to merge back.
 
 ## Star History
 

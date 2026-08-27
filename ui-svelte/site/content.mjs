@@ -37,8 +37,8 @@ export const SECTIONS = {
     icon: "box",
     title: "It works the machine out for you",
     sub:
-      "Quartermaster keeps llama-swap's on-demand swapping and OpenAI/Anthropic-compatible proxy, " +
-      "and adds the parts that make a multi-model box run itself.",
+      "One endpoint in front of every model you own, and the sizing decisions made for you " +
+      "instead of by you.",
   },
   screens: {
     eyebrow: "See it in action",
@@ -74,20 +74,23 @@ export const SECTIONS = {
 
 // First person, on purpose: the one place on the site with a voice rather than a
 // feature list. Rewrite this in your own words, it is the part nobody else can
-// generate for you. The first mention of llama-swap is linked automatically, so
-// there is no need for a separate "go see upstream" button.
+// generate for you.
+//
+// This is also the ONLY place in the body copy that names llama-swap, and it is
+// linked automatically by renderStory(). The attribution belongs here and in the
+// footer; repeating it in the feature grid just told a first-time reader to go
+// evaluate a different project before this one.
 export const STORY = [
-  "Quartermaster began as a fork of llama-swap, because swapping models on demand was obviously " +
-    "the right idea and everything around it was still manual. Every model meant another " +
-    "hand-written block of config: how much context, how many layers on the GPU, how big the KV " +
-    "cache, whether the experts go on the CPU. Guess high and it dies on load. Guess low and half " +
-    "the card sits idle. Then a new quant lands and you do it again.",
-  "So it grew in the obvious direction: read the GGUF header, measure the VRAM that is actually " +
-    "free, and compute the numbers instead of typing them. Once that worked, the rest followed. " +
-    "Image and audio backends in the same catalog, several ports sharing one scheduler, a " +
-    "KV-cache that survives being evicted, and a UI that shows what the box is doing rather than " +
-    "a log you have to tail.",
-  "It does not track upstream any more. It is its own thing now.",
+  "Every model meant another hand-written block of config: how much context, how many layers on " +
+    "the GPU, how big the KV cache, whether the experts go on the CPU. Guess high and it dies on " +
+    "load. Guess low and half the card sits idle. Then a new quant lands and you do it again.",
+  "It started as a fork of llama-swap, which had the swapping right, and grew in the obvious " +
+    "direction from there: read the GGUF header, measure the VRAM that is actually free, and " +
+    "compute the numbers instead of typing them. Once that worked the rest followed. Image and " +
+    "audio backends in the same catalog, several ports sharing one scheduler, a KV-cache that " +
+    "survives being evicted, and a UI that shows what the box is doing rather than a log you have " +
+    "to tail.",
+  "It is its own thing now.",
 ];
 
 // Lucide (ISC) path data, inlined so the page makes no third-party request.
@@ -116,14 +119,14 @@ export const ICONS = {
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-4.6-4.6a2 2 0 0 0-2.8 0L3 21"/>',
 };
 
-// `neu` marks the things this fork added on top of llama-swap. The badge is the
-// honest version of "features" on a fork's landing page: it says what you get
-// here that you would not get upstream, without pretending the rest is ours.
+// These describe what Quartermaster does, not what it added to something else.
+// The cards used to carry a "new in fork" badge; it only parses for a reader who
+// already knows the upstream feature list, and turned the grid into a diff
+// against a project they would have to go read first.
 export const FEATURES = [
   {
     icon: "wand",
     title: "Config that writes itself",
-    neu: true,
     body:
       "Point it at a folder. Every GGUF is identified from its own header, and context length, " +
       "GPU offload, CPU-MoE split and KV-cache sizing are computed per model and per architecture " +
@@ -132,7 +135,6 @@ export const FEATURES = [
   {
     icon: "gauge",
     title: "VRAM-aware load planning",
-    neu: true,
     body:
       "Samples free VRAM at startup and sizes each model to actually fit, including the compute " +
       "buffer large-vocab models spill on. Live per-model VRAM and RAM gauges while it runs.",
@@ -142,12 +144,11 @@ export const FEATURES = [
     title: "On-demand model swapping",
     body:
       "One endpoint, every model. A request naming a model that isn't loaded swaps it in, evicting " +
-      "whatever no longer fits. Inherited from llama-swap and kept at the core.",
+      "whatever no longer fits, and holds the group together when several have to coexist.",
   },
   {
     icon: "save",
     title: "KV-cache that survives eviction",
-    neu: true,
     body:
       "Snapshots a slot's KV-cache to disk before the model is evicted and restores it when the " +
       "conversation comes back, so a long chat isn't re-prefilled because a throwaway request " +
@@ -156,7 +157,6 @@ export const FEATURES = [
   {
     icon: "network",
     title: "Multi-port catalogs",
-    neu: true,
     body:
       "Bind several listeners on one shared scheduler, each with its own /v1/models view. Loading " +
       "on one port can evict on another: one process, one GPU accounting.",
@@ -171,7 +171,6 @@ export const FEATURES = [
   {
     icon: "play",
     title: "A playground, not just a proxy",
-    neu: true,
     body:
       "Chat with tool calling and web search, generate and edit images, speak and transcribe, on " +
       "its own port with per-user login and server-side history.",
@@ -179,7 +178,6 @@ export const FEATURES = [
   {
     icon: "shield",
     title: "Safe to put on your LAN",
-    neu: true,
     body:
       "API keys can be scoped to individual models. Bind the API to your tailnet and the dashboard " +
       "and config endpoints answer to localhost only unless you widen them yourself.",

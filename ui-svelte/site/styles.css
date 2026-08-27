@@ -172,7 +172,6 @@ h3,
 .eyebrow,
 .pills li,
 .slat b,
-.card .new,
 .docs-nav h4,
 .site-nav,
 .shot-bar span,
@@ -643,14 +642,6 @@ section {
   transition: border-color 0.15s, transform 0.15s;
 }
 
-/* Icon left, badge right, on one line above the title. */
-.card-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
-
 .card:hover {
   border-color: var(--border);
   transform: translateY(-2px);
@@ -678,20 +669,6 @@ section {
   border-radius: 0.6rem;
   background: color-mix(in srgb, var(--primary) 14%, transparent);
   color: var(--primary);
-}
-
-.card .new {
-  flex: none;
-  padding: 0.12rem 0.45rem;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--primary) 16%, transparent);
-  color: var(--primary);
-  font-size: 0.58rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  line-height: 1.5;
-  text-transform: uppercase;
-  white-space: nowrap;
 }
 
 /* ── Install ─────────────────────────────────────────────────────────────── */
