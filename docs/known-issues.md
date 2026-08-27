@@ -13,6 +13,6 @@ Symptom: image gen returns `500 - generate_image returned no results`; sd-server
 This means the backend binary you are running is a **CUDA-compiled** build, but no NVIDIA GPU is present (e.g. on an AMD box). At startup llama.cpp/sd.cpp probe for a CUDA device, fail, log this line, then fall back to CPU (slow). It is harmless as a message but means that process is NOT on the GPU. Fix: point Settings -> Backends at a Vulkan (or ROCm) build. A binary compiled without CUDA never prints this line.
 
 **AMD GPUs report VRAM only - no temperature / fan / power.**
-On non-NVIDIA Windows GPUs, quartermaster reads VRAM (total/used) and utilization via DXGI + PDH, but the driver does not expose temp/fan/power the way nvidia-smi does, so those gauges stay blank. Expected, not a bug.
+On non-NVIDIA Windows GPUs, Quartermaster reads VRAM (total/used) and utilization via DXGI + PDH, but the driver does not expose temp/fan/power the way nvidia-smi does, so those gauges stay blank. Expected, not a bug.
 
 **Choosing Vulkan vs ROCm/HIP on AMD.** For text (llama-server), Vulkan is the easy, working default. For image generation, prefer ROCm/HIP where you need higher resolution, because of the Vulkan 2 GiB single-allocation cap above.

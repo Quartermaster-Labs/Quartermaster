@@ -185,7 +185,10 @@ h3,
   position: sticky;
   top: 0;
   z-index: 20;
-  backdrop-filter: blur(14px) saturate(140%);
+  /* A backdrop filter re-blurs whatever is under the header on every scrolled
+   * frame, so the radius is kept small and the saturate pass dropped: over a
+   * full-width screenshot the expensive version is visible as jank. */
+  backdrop-filter: blur(9px);
   background: color-mix(in srgb, var(--bg) 82%, transparent);
   border-bottom: 1px solid var(--border-soft);
 }
@@ -417,6 +420,9 @@ h1 .accent {
   height: 46rem;
   overflow: hidden;
   pointer-events: none;
+  /* Keeps the blurred layers from being considered when anything outside the
+   * hero repaints. */
+  contain: paint;
   mask-image: radial-gradient(ellipse 80% 65% at 50% 30%, #000 35%, transparent 78%);
 }
 
@@ -424,7 +430,7 @@ h1 .accent {
   position: absolute;
   display: block;
   border-radius: 50%;
-  filter: blur(70px);
+  filter: blur(60px);
   opacity: 0.55;
   will-change: transform;
 }
@@ -456,21 +462,25 @@ h1 .accent {
   animation: drift-a 41s ease-in-out infinite alternate-reverse;
 }
 
+/* Translation only. Scaling a blurred layer makes the compositor re-rasterize
+ * the blur every frame, which is exactly the kind of work that shows up as a
+ * stutter the moment you start scrolling; moving one is a matrix change and
+ * costs nothing. */
 @keyframes drift-a {
   from {
-    transform: translate3d(-6%, -4%, 0) scale(1);
+    transform: translate3d(-7%, -5%, 0);
   }
   to {
-    transform: translate3d(8%, 6%, 0) scale(1.18);
+    transform: translate3d(9%, 7%, 0);
   }
 }
 
 @keyframes drift-b {
   from {
-    transform: translate3d(5%, 3%, 0) scale(1.12);
+    transform: translate3d(6%, 4%, 0);
   }
   to {
-    transform: translate3d(-7%, -5%, 0) scale(0.94);
+    transform: translate3d(-8%, -6%, 0);
   }
 }
 
@@ -613,17 +623,27 @@ section {
   display: grid;
   gap: 1rem;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  /* Cards size to their own content instead of stretching to the tallest in the
-   * row — otherwise one long feature blows up the whole band. */
-  align-items: start;
+  /* Cards stretch to a common height per row. Ragged bottoms read as broken
+   * layout even when the copy lengths honestly differ. */
+  align-items: stretch;
 }
 
 .card {
+  display: flex;
+  flex-direction: column;
   padding: 1.4rem;
   border-radius: 0.85rem;
   border: 1px solid var(--border-soft);
   background: var(--surface);
   transition: border-color 0.15s, transform 0.15s;
+}
+
+/* Icon left, badge right, on one line above the title. */
+.card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
 }
 
 .card:hover {
@@ -656,17 +676,17 @@ section {
 }
 
 .card .new {
-  display: inline-block;
-  margin-left: 0.45rem;
-  padding: 0.05rem 0.4rem;
+  flex: none;
+  padding: 0.12rem 0.45rem;
   border-radius: 999px;
   background: color-mix(in srgb, var(--primary) 16%, transparent);
   color: var(--primary);
-  font-size: 0.62rem;
+  font-size: 0.58rem;
   font-weight: 700;
   letter-spacing: 0.06em;
+  line-height: 1.5;
   text-transform: uppercase;
-  vertical-align: 2px;
+  white-space: nowrap;
 }
 
 /* ── Install ─────────────────────────────────────────────────────────────── */
@@ -820,9 +840,10 @@ pre {
   font-weight: 600;
 }
 
-.story-foot {
-  margin: 2rem 0 0;
-  text-align: center;
+.story a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 /* ── Gallery: hover-to-expand slats ──────────────────────────────────────── */

@@ -2,7 +2,7 @@
 
 # Tools API (search & YouTube for your own apps)
 
-Besides chat, quartermaster exposes the same tool **executors** the playground uses - web search and YouTube - as plain HTTP endpoints, so your own scripts, agents, and apps can call them instead of wiring up SearXNG, DuckDuckGo, or yt-dlp themselves.
+Besides chat, Quartermaster exposes the same tool **executors** the playground uses - web search and YouTube - as plain HTTP endpoints, so your own scripts, agents, and apps can call them instead of wiring up SearXNG, DuckDuckGo, or yt-dlp themselves.
 
 They live on the `/v1` surface, so they are gated by the **same API keys** as inference (see *API keys and access*). Any valid key works; model scopes do not apply.
 

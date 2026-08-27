@@ -14,7 +14,7 @@ export const HERO = {
   // `accent` is rendered as gradient text inside the <h1>.
   title: ["Run", "any model", "on your own machine."],
   lede:
-    "quartermaster is a local inference engine for text, image and audio models — point it at " +
+    "Quartermaster is a local inference engine for text, image and audio models. Point it at " +
     "your models folder and it works out a near-optimal setup per model, then hot-swaps between " +
     "them on demand behind one OpenAI- and Anthropic-compatible API.",
 };
@@ -37,7 +37,7 @@ export const SECTIONS = {
     icon: "box",
     title: "It works the machine out for you",
     sub:
-      "quartermaster keeps llama-swap's on-demand swapping and OpenAI/Anthropic-compatible proxy, " +
+      "Quartermaster keeps llama-swap's on-demand swapping and OpenAI/Anthropic-compatible proxy, " +
       "and adds the parts that make a multi-model box run itself.",
   },
   screens: {
@@ -45,7 +45,7 @@ export const SECTIONS = {
     icon: "eye",
     title: "The whole engine has a front end",
     sub:
-      "Not a config file and a log tail. Hover a panel to open it — what is loaded, what it is " +
+      "Not a config file and a log tail. Hover a panel to open it: what is loaded, what it is " +
       "doing, what it costs in VRAM, and a playground to actually use it.",
   },
   install: {
@@ -67,23 +67,24 @@ export const SECTIONS = {
     icon: "book",
     title: "The manual ships inside the app",
     sub:
-      "These are the same help articles behind the Help button in the sidebar — and the ones the " +
+      "These are the same help articles behind the Help button in the sidebar, and the ones the " +
       "playground assistant searches when you ask it how something works.",
   },
 };
 
 // First person, on purpose: the one place on the site with a voice rather than a
-// feature list. Rewrite this in your own words — it is the part nobody else can
-// generate for you.
+// feature list. Rewrite this in your own words, it is the part nobody else can
+// generate for you. The first mention of llama-swap is linked automatically, so
+// there is no need for a separate "go see upstream" button.
 export const STORY = [
-  "quartermaster began as a fork of llama-swap, because swapping models on demand was obviously " +
+  "Quartermaster began as a fork of llama-swap, because swapping models on demand was obviously " +
     "the right idea and everything around it was still manual. Every model meant another " +
     "hand-written block of config: how much context, how many layers on the GPU, how big the KV " +
     "cache, whether the experts go on the CPU. Guess high and it dies on load. Guess low and half " +
     "the card sits idle. Then a new quant lands and you do it again.",
   "So it grew in the obvious direction: read the GGUF header, measure the VRAM that is actually " +
-    "free, and compute the numbers instead of typing them. Once that worked, the rest followed — " +
-    "image and audio backends in the same catalog, several ports sharing one scheduler, a " +
+    "free, and compute the numbers instead of typing them. Once that worked, the rest followed. " +
+    "Image and audio backends in the same catalog, several ports sharing one scheduler, a " +
     "KV-cache that survives being evicted, and a UI that shows what the box is doing rather than " +
     "a log you have to tail.",
   "It does not track upstream any more. It is its own thing now.",
@@ -126,7 +127,7 @@ export const FEATURES = [
     body:
       "Point it at a folder. Every GGUF is identified from its own header, and context length, " +
       "GPU offload, CPU-MoE split and KV-cache sizing are computed per model and per architecture " +
-      "— no hand-baked config variant per quant.",
+      "with no hand-baked config variant per quant.",
   },
   {
     icon: "gauge",
@@ -141,7 +142,7 @@ export const FEATURES = [
     title: "On-demand model swapping",
     body:
       "One endpoint, every model. A request naming a model that isn't loaded swaps it in, evicting " +
-      "whatever no longer fits — inherited from llama-swap and kept at the core.",
+      "whatever no longer fits. Inherited from llama-swap and kept at the core.",
   },
   {
     icon: "save",
@@ -158,21 +159,21 @@ export const FEATURES = [
     neu: true,
     body:
       "Bind several listeners on one shared scheduler, each with its own /v1/models view. Loading " +
-      "on one port can evict on another — one process, one GPU accounting.",
+      "on one port can evict on another: one process, one GPU accounting.",
   },
   {
     icon: "layers",
     title: "Text, image, audio, and more",
     body:
       "Orchestrates llama-server, stable-diffusion.cpp, TTS and transcription servers, rerank and " +
-      "embedding models, upscaling and segmentation — behind one OpenAI-compatible surface.",
+      "embedding models, upscaling and segmentation, behind one OpenAI-compatible surface.",
   },
   {
     icon: "play",
     title: "A playground, not just a proxy",
     neu: true,
     body:
-      "Chat with tool calling and web search, generate and edit images, speak and transcribe — on " +
+      "Chat with tool calling and web search, generate and edit images, speak and transcribe, on " +
       "its own port with per-user login and server-side history.",
   },
   {
@@ -192,7 +193,7 @@ export const FEATURES = [
 export const GALLERY = [
   { file: "dashboard.png", icon: "monitor", label: "Dashboard", caption: "Loaded models, live VRAM and throughput at a glance." },
   { file: "models.png", icon: "layers", label: "Models", caption: "Every discovered model, grouped by GGUF with its variants." },
-  { file: "model-config.png", icon: "sliders", label: "Per-model config", caption: "Edit context, KV and speculative decoding — or reset to the computed default." },
+  { file: "model-config.png", icon: "sliders", label: "Per-model config", caption: "Edit context, KV and speculative decoding, or reset to the computed default." },
   { file: "observe.png", icon: "activity", label: "Observe", caption: "Activity, logs and performance on one page." },
   { file: "browse.png", icon: "search", label: "Model hub", caption: "Search Hugging Face, pick a quant, download into your models folder." },
   { file: "images.png", icon: "image", label: "Image models", caption: "Diffusion backends sit in the same catalog as the text ones." },
@@ -203,7 +204,7 @@ export const INSTALL = [
     icon: "windows",
     title: "Windows installer",
     body:
-      "A per-user install — no admin rights. The first-run wizard fetches the inference backends, " +
+      "A per-user install, no admin rights needed. The first-run wizard fetches the inference backends, " +
       "asks for your models folder, and generates a config before the window opens.",
     // Filled in by build.mjs from the latest GitHub release.
     download: true,
@@ -212,7 +213,7 @@ export const INSTALL = [
     icon: "container",
     title: "Docker",
     body:
-      "The unified image bundles the backends. Tags are published per compute backend — swap " +
+      "The unified image bundles the backends. Tags are published per compute backend: swap " +
       "unified-cuda for unified-vulkan on AMD or Intel.",
     code:
       "docker run --gpus all -p 1250:1250 -v ./models:/models \\\n" +

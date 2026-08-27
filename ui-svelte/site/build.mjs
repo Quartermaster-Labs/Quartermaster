@@ -109,7 +109,7 @@ ${THEME_BOOT}
 <body>
 <header class="site-header">
   <div class="wrap">
-    <a class="brand" href="${up}index.html">${MARK} quartermaster</a>
+    <a class="brand" href="${up}index.html">${MARK} Quartermaster</a>
     <nav class="site-nav">
       <a href="${up}index.html#features" class="hide-sm">Features</a>
       <a href="${up}index.html#install" class="hide-sm">Install</a>
@@ -294,7 +294,7 @@ function renderGallery(shots) {
 
   const slats = shots
     .map((s, i) => {
-      const alt = `${s.label} — ${s.caption}`;
+      const alt = `${s.label}: ${s.caption}`;
       const pic = s.light ? img(s.file, "only-dark", alt) + img(s.light, "only-light", "") : img(s.file, "", alt);
       return `<button class="slat${i === 0 ? " is-open" : ""}" type="button" aria-expanded="${i === 0}">
       <span class="slat-spine">${icon(s.icon ?? "monitor", 18)}<b>${esc(s.label)}</b></span>
@@ -336,10 +336,16 @@ const GALLERY_SCRIPT = `<script>
 </script>`;
 
 function renderFeatures() {
+  // The badge sits on the icon row, not inline after the title: a title that
+  // wraps would otherwise strand it mid-sentence, and it is a property of the
+  // card rather than of the last word of its heading.
   const cards = FEATURES.map(
     (f, i) => `<article class="card" data-reveal style="--d:${(i % 3) * 60}ms">
-      <div class="ico">${icon(f.icon)}</div>
-      <h3>${esc(f.title)}${f.neu ? '<span class="new">new in fork</span>' : ""}</h3>
+      <div class="card-top">
+        <div class="ico">${icon(f.icon)}</div>
+        ${f.neu ? '<span class="new">new in fork</span>' : ""}
+      </div>
+      <h3>${esc(f.title)}</h3>
       <p>${esc(f.body)}</p>
     </article>`,
   ).join("\n");
@@ -355,11 +361,23 @@ function renderFeatures() {
 // The one section written in the first person. It sits between the screenshots
 // and the docs so the page has somewhere to stop being a spec sheet.
 function renderStory() {
+  // Upstream gets a link on its first mention in the prose rather than a button
+  // underneath: the sentence already says what llama-swap is to us, so a
+  // separate CTA would only be a second, weaker way of saying it.
+  let linked = false;
+  const paras = STORY.map((p) => {
+    let html = esc(p);
+    if (!linked && html.includes("llama-swap")) {
+      html = html.replace("llama-swap", `<a href="${UPSTREAM}">llama-swap</a>`);
+      linked = true;
+    }
+    return `<p>${html}</p>`;
+  }).join("\n      ");
+
   return `<section id="story">
   <div class="wrap narrow">
     ${sectionHead("story")}
-    <div class="story" data-reveal>${STORY.map((p) => `<p>${esc(p)}</p>`).join("\n      ")}</div>
-    <p class="story-foot"><a class="btn btn-ghost" href="${UPSTREAM}">See llama-swap, where it started</a></p>
+    <div class="story" data-reveal>${paras}</div>
   </div>
 </section>`;
 }
@@ -516,7 +534,7 @@ function docsNav(articles, categories, currentId) {
 async function renderArticlePage(a, articles, categories) {
   const body = await toHtml(a.body);
   return page({
-    title: `${a.title} — quartermaster`,
+    title: `${a.title} · Quartermaster`,
     description: summarize(a.body),
     depth: 1,
     body: `<main class="wrap docs-layout">
@@ -524,7 +542,7 @@ async function renderArticlePage(a, articles, categories) {
   <article class="prose">
     <h1>${esc(a.title)}</h1>
     ${body}
-    <p class="docs-foot">This page is generated from the help wiki that ships inside the app — the same text you get from the <strong>Help</strong> button, and the same text the playground assistant searches. Corrections go to <a href="${REPO}/blob/main/internal/server/wiki_articles.json"><code>wiki_articles.json</code></a>.</p>
+    <p class="docs-foot">This page is generated from the help wiki that ships inside the app: the same text you get from the <strong>Help</strong> button, and the same text the playground assistant searches. Corrections go to <a href="${REPO}/blob/main/internal/server/wiki_articles.json"><code>wiki_articles.json</code></a>.</p>
   </article>
 </main>`,
   });
@@ -553,16 +571,16 @@ function renderDocsIndex(articles, categories) {
     .join("\n");
 
   return page({
-    title: "User guide — quartermaster",
+    title: "User guide · Quartermaster",
     description:
-      "How to load models, tune per-model config, use the playground, set up web search, scope API keys and read the VRAM gauges in quartermaster.",
+      "How to load models, tune per-model config, use the playground, set up web search, scope API keys and read the VRAM gauges in Quartermaster.",
     depth: 1,
     body: `<main class="wrap docs-layout">
   <aside class="docs-nav">${docsNav(articles, categories, null)}</aside>
   <article class="prose">
     <h1>User guide</h1>
-    <p>The help wiki that ships with the app, published here so you can read it before installing anything. Inside quartermaster the same articles are one click away under <strong>Help</strong>, and the playground assistant searches them to answer questions about the app itself.</p>
-    <p>Looking for how quartermaster works <em>inside</em>? That lives beside the code it describes — see the subsystem table in <a href="${REPO}/blob/main/CLAUDE.md">CLAUDE.md</a>.</p>
+    <p>The help wiki that ships with the app, published here so you can read it before installing anything. Inside Quartermaster the same articles are one click away under <strong>Help</strong>, and the playground assistant searches them to answer questions about the app itself.</p>
+    <p>Looking for how Quartermaster works <em>inside</em>? That lives beside the code it describes: see the subsystem table in <a href="${REPO}/blob/main/CLAUDE.md">CLAUDE.md</a>.</p>
     ${sections}
   </article>
 </main>`,
@@ -663,20 +681,23 @@ async function main() {
   await writeFile(path.join(OUT, ".nojekyll"), "");
 
   const release = latestRelease();
-  console.log(release ? `release: ${release.tag} (${release.url})` : "release: none found — CTA falls back to /releases/latest");
+  console.log(release ? `release: ${release.tag} (${release.url})` : "release: none found, CTA falls back to /releases/latest");
 
   const shots = await collectShots();
   const hero = shots.find((s) => s.file === "dashboard.png") ?? shots[0];
 
   const landing = page({
-    title: "quartermaster — run any local model, on demand",
+    title: "Quartermaster · run any local model, on demand",
     description: HERO.lede,
     ogImage: hero?.file,
     extraScripts: [COPY_SCRIPT, shots.length ? GALLERY_SCRIPT : "", REVEAL_SCRIPT].join("\n"),
     body: [
       renderHero(release, HERO.title),
       hero
-        ? `<div class="wrap" data-reveal>${shotFrame(hero.file, "The quartermaster dashboard", "localhost:1250/ui/", hero.light)}</div>`
+        // Deliberately not revealed: it is a full-width PNG right at the fold,
+        // and fading a texture that size in mid-scroll is the one thing on this
+        // page heavy enough to drop frames. It is already on screen anyway.
+        ? `<div class="wrap">${shotFrame(hero.file, "The Quartermaster dashboard", "localhost:1250/ui/", hero.light)}</div>`
         : "",
       renderFeatures(),
       renderGallery(shots.filter((s) => s !== hero)),

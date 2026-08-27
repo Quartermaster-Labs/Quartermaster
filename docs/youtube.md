@@ -2,7 +2,7 @@
 
 # Video & audio transcripts (YouTube and beyond)
 
-Paste a link to a video, talk, stream or podcast episode in Chat and the model can read its captions and summarise, quote or fact-check it. It calls a `media_transcript` tool; quartermaster fetches the captions server-side (yt-dlp) and hands them back as `[m:ss]` paragraphs, so the model can point at a moment ("at 14:32 they claim ...") and, on YouTube, link it back with `&t=872s`.
+Paste a link to a video, talk, stream or podcast episode in Chat and the model can read its captions and summarise, quote or fact-check it. It calls a `media_transcript` tool; Quartermaster fetches the captions server-side (yt-dlp) and hands them back as `[m:ss]` paragraphs, so the model can point at a moment ("at 14:32 they claim ...") and, on YouTube, link it back with `&t=872s`.
 
 **Not just YouTube.** yt-dlp extracts from around 1800 sites, so Vimeo, TED, Dailymotion, Twitch VODs, Rumble, PeerTube, SoundCloud, conference players and most podcast episode pages work the same way - anywhere subtitles are published. Pages with no captions at all come back saying so, and the model should tell you that rather than guess.
 
