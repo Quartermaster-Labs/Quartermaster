@@ -279,11 +279,49 @@ const eagerImg = (html) =>
 // sibling for every screenshot and swap them by theme; that doubled the asset
 // weight of the page to spare a light-mode visitor the sight of a dark
 // rectangle, which is what a screenshot of a dark app looks like anywhere.
+//
+// `dims` comes from SHOT_DIMS (the webp header, read at build time). It does two
+// things: the width/height attributes give the browser the aspect ratio before
+// the bytes arrive, so a page of half-megapixel screenshots doesn't reflow as
+// they land; and a taller-than-wide shot gets `.portrait`, which stops the CSS
+// from stretching a cropped modal across the full 1120px column.
 function shotFrame(file, alt, label) {
-  return `<div class="shot">
+  const d = SHOT_DIMS.get(file);
+  const size = d ? ` width="${d.w}" height="${d.h}"` : "";
+  const cls = d && d.h > d.w ? "shot portrait" : "shot";
+  return `<div class="${cls}">
     <div class="shot-bar"><i></i><i></i><i></i><span>${esc(label)}</span></div>
-    <img src="assets/img/${esc(file)}" alt="${esc(alt)}" loading="lazy" decoding="async">
+    <img src="assets/img/${esc(file)}" alt="${esc(alt)}"${size} loading="lazy" decoding="async">
   </div>`;
+}
+
+// Pixel dimensions of every shot in docs/assets, by filename. Filled once at
+// build time by measureShots().
+const SHOT_DIMS = new Map();
+
+// The webp header carries the canvas size in plain bytes, so the dimensions are
+// readable without decoding the image. That matters here: the only raster
+// decoder this repo has is the browser Playwright drives, and launching it is
+// deliberately confined to --adopt so the Pages runner never installs one.
+// Three container flavours, because the encoder picks per image.
+function webpSize(b) {
+  if (b.length < 30 || b.toString("ascii", 0, 4) !== "RIFF" || b.toString("ascii", 8, 12) !== "WEBP") return null;
+  const tag = b.toString("ascii", 12, 16);
+  if (tag === "VP8X") return { w: (b.readUIntLE(24, 3) & 0xffffff) + 1, h: (b.readUIntLE(27, 3) & 0xffffff) + 1 };
+  if (tag === "VP8 ") return { w: b.readUInt16LE(26) & 0x3fff, h: b.readUInt16LE(28) & 0x3fff };
+  if (tag === "VP8L") {
+    const n = b.readUInt32LE(21);
+    return { w: (n & 0x3fff) + 1, h: ((n >> 14) & 0x3fff) + 1 };
+  }
+  return null;
+}
+
+async function measureShots() {
+  for (const f of await readdir(IMAGES).catch(() => [])) {
+    if (!f.endsWith(".webp")) continue;
+    const size = webpSize(await readFile(path.join(IMAGES, f)));
+    if (size) SHOT_DIMS.set(f, size);
+  }
 }
 
 // Clicking the picture advances, which is what people try first; the tabs jump
@@ -829,6 +867,7 @@ async function main() {
   const release = latestRelease();
   console.log(release ? `release: ${release.tag} (${release.url})` : "release: none found, CTA falls back to /releases/latest");
 
+  await measureShots();
   const showcase = await collectShowcase();
   const haveImages = new Set(await readdir(IMAGES).catch(() => []));
   const heroFile = "dashboard.webp";

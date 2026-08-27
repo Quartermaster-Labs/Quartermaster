@@ -538,6 +538,15 @@ h1 .accent {
   height: auto;
 }
 
+/* A cropped modal is taller than it is wide. Stretched across the full column
+ * it renders about twice its captured size - soft, and too tall to take in at
+ * a glance - so the frame hugs it at roughly the width it was shot at instead
+ * of the width the column offers. */
+.shot.portrait {
+  width: min(100%, 32rem);
+  margin-inline: auto;
+}
+
 /* ── Sections ────────────────────────────────────────────────────────────── */
 
 section {
