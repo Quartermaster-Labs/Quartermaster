@@ -94,12 +94,62 @@ function parseArgs(argv) {
 //   clip      {selector, pad} to photograph ONE element instead of the viewport
 //   storage   localStorage seeded before the app's first script runs
 //   focus     playground: which canned thread the load opens on
+// Which repo the browse shot opens. Author-qualified on purpose: a bare model
+// name ranks strangers' abliterated forks above the canonical repo, and the
+// model card sits in frame under the file table. A 27B with a SHORT ladder is
+// deliberate too -- its four rungs straddle a 24 GB card, so the estimate
+// column shows its whole verdict range instead of fourteen rows of "fits on
+// GPU", which is what a 12B's twenty-quant ladder photographs as.
+const [BROWSE_AUTHOR, BROWSE_NAME] = "lmstudio-community/gemma-3-27b-it-GGUF".split("/");
+// Space-separated, not slash-qualified: the hub's full-text search does not
+// treat a repo id as an exact lookup.
+const BROWSE_QUERY = `${BROWSE_AUTHOR} ${BROWSE_NAME}`;
+
 const SHOTS = [
   { name: "dashboard", at: "#/", wait: "main" },
   { name: "dashboard-rail-open", at: "#/", wait: "main", prepare: async (p) => { await p.hover("aside"); await p.waitForTimeout(400); } },
   { name: "models", at: "#/models", wait: "table" },
   { name: "models-image", at: "#/models/image", wait: "table" },
-  { name: "browse", at: "#/browse", wait: "main" },
+  // Browse is a two-pane route, and the right pane is the half worth showing --
+  // the quant table with the fit verdict against this box's VRAM. Left alone it
+  // photographs as "Pick a repo to see its files and model card.", so the shot
+  // searches for a repo and opens it. A deliberate query also keeps the picture
+  // off whatever the hub happens to be trending that morning.
+  {
+    name: "browse",
+    at: "#/browse",
+    wait: "main",
+    prepare: async (p) => {
+      const box = p.getByPlaceholder("Search Hugging Face").first();
+      await box.fill(BROWSE_QUERY);
+      await box.press("Enter");
+      await p.waitForTimeout(2500);
+      // Browse opens filtered to the last 14 days, and the repo we want is a
+      // year old -- that empty state offers its own "search the whole hub"
+      // escape hatch, so take it rather than reaching into the filter panel.
+      const whole = p.getByRole("button", { name: /whole hub/i }).first();
+      if (await whole.count()) {
+        await whole.click();
+        await p.waitForTimeout(2500);
+      }
+      // The hub is live, so neither the result set nor its ordering is
+      // guaranteed. Prefer the row that is actually the repo we asked for;
+      // settle for the top row; say so if the search came back empty rather
+      // than quietly shooting the placeholder pane.
+      // Pinned to the result row's own class set. A looser "button with mono
+      // text" matched the header's loaded-model chip, and clicking that
+      // navigated to the models page -- a shot of the wrong route that still
+      // reported success.
+      const rows = p.locator("button.border-card-border-inner");
+      const named = rows.filter({ hasText: BROWSE_NAME }).filter({ hasText: BROWSE_AUTHOR }).first();
+      const hit = await named.count();
+      if (!hit && !(await rows.count())) return `no hub results for "${BROWSE_QUERY}" — right pane left empty`;
+      await (hit ? named : rows.first()).click();
+      await p.waitForSelector("table.data-table tbody tr", { timeout: 15000 });
+      await p.waitForTimeout(600);
+      if (!hit) return `hub did not return ${BROWSE_AUTHOR}/${BROWSE_NAME} — shot opened the top result instead`;
+    },
+  },
   // Observe is one route with four tabs, so each tab is its own shot. We click
   // the tab rather than deep-linking #/performance & co: the tab is also
   // remembered in localStorage, so the hash alone cannot be trusted to win, and
@@ -319,11 +369,24 @@ async function main() {
   // shared naming is for -- and would silently delete the "before" set someone
   // captured five minutes earlier. Stale shots of the SAME kind still go, so a
   // renamed or deleted SHOTS entry cannot leave a ghost behind.
-  const NAMED = /^.*--(?:dark|light)--\d+(.*)\.png$/;
+  //
+  // ...but a --only run is not a full run, and sweeping its whole kind would
+  // delete the shots it is NOT retaking. A one-shot `--only` follow-up did
+  // exactly that to a complete ten-shot set captured minutes earlier: same kind,
+  // so the sweep took all ten and the run put back one. With --only the sweep is
+  // limited to the selected names, which is the same ghost-prevention the full
+  // sweep does, scoped to what this run actually replaces.
+  //
+  // (The manifest is still per-run and so lists only what this run took. Nothing
+  // reads it -- site/build.mjs adopts by filename -- it is a record of the run.)
+  const NAMED = /^(.*)--(?:dark|light)--\d+(.*)\.png$/;
+  const picked = opts.only ? new Set(shots.map((s) => s.name)) : null;
   await mkdir(outDir, { recursive: true });
   for (const f of await readdir(outDir)) {
     const m = NAMED.exec(f);
-    if (m && m[1] === suffix) await rm(path.join(outDir, f));
+    if (!m || m[2] !== suffix) continue;
+    if (picked && !picked.has(m[1])) continue;
+    await rm(path.join(outDir, f));
   }
 
   const warnings = [];
