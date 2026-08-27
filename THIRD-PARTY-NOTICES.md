@@ -68,12 +68,11 @@ under the Apache License, Version 2.0. A copy of the license is available at
 <https://www.apache.org/licenses/LICENSE-2.0>. The upstream `LICENSE` and
 `NOTICE` files ship inside the `pdfjs-dist` package.
 
-## Model weights and templates
+## Model weights
 
 | Asset | Source | License |
 | --- | --- | --- |
 | `titlegen-flan-t5-small-q8_0.gguf` — the chat-title model, downloaded on first use (see [`internal/server/assets/README.md`](internal/server/assets/README.md)) | [google/flan-t5-small](https://huggingface.co/google/flan-t5-small), converted to GGUF and quantized to Q8_0 | Apache-2.0 |
-| `templates/qwen-fixed-chat-template.jinja` | [froggeric/Qwen-Fixed-Chat-Templates](https://huggingface.co/froggeric/Qwen-Fixed-Chat-Templates) | Apache-2.0 (inherited from Qwen) — see [`templates/CREDITS.md`](templates/CREDITS.md) |
 
 **Apache-2.0 notice (flan-t5-small):** Copyright © Google LLC, licensed under
 the Apache License, Version 2.0, available at

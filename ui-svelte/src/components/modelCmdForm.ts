@@ -35,9 +35,11 @@ export const IMG_SAMPLERS = ["", "euler_a", "euler", "heun", "dpm2", "dpmpp2s_a"
 // path into the advanced field. Swallowing it silently dropped a template set
 // any other way (qm-tools/hand-edited extraArgs) on the first box blur.
 export const IGNORE_VALUE = new Set(["-m", "--port", "--host", "--cors-origins", "-c", "-ngl", "--n-cpu-moe", "-b", "--ctx-checkpoints", "--chat-template-kwargs", "-md", "--slot-save-path", "--mmproj"]);
-// autogen's arch-derived template fix (internal/autogen/generate.go
-// qwenFixedChatTemplateFile) — matched by suffix so it is never mistaken for a
-// user-chosen template.
+// Legacy: an older build shipped this template in the package and autogen
+// pointed --chat-template-file at it. Neither is true any more (the folder is
+// gone, and templates are user-managed), but a config written by that build can
+// still carry the path — matched by suffix so an upgraded install does not
+// present a dead path as if the user had chosen it.
 export const BUILTIN_CHAT_TEMPLATE = "templates/qwen-fixed-chat-template.jinja";
 // Value-less flags owned elsewhere: --reasoning-preserve belongs to the
 // preserve-thinking toggle (which is read off the override, not the box), and
@@ -218,8 +220,8 @@ export function parseCmdFields(cmd: string): ParsedCmd {
     parallel: par !== null ? Number(par) : "",
     ub: u !== null ? Number(u) : "",
     extraArgs: extras.join(" "),
-    // autogen's own Qwen 3.5/3.6 fix is arch-derived - leave it owned by the
-    // generator instead of pinning its path into the user's field.
+    // Drop the path an older build baked in (see BUILTIN_CHAT_TEMPLATE) rather
+    // than pinning a file we no longer ship into the user's field.
     chatTemplateFile: ctFile && !ctFile.includes(BUILTIN_CHAT_TEMPLATE) ? ctFile : "",
     // DRY is on iff any --dry-* flag survived in the box.
     dryOn: dMult !== null || dBase !== null || dAllow !== null,

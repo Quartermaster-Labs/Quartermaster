@@ -130,13 +130,14 @@ package-windows: windows
 	# were renamed/removed across versions. (No `rm -rf` of the bundle dir itself:
 	# on Windows a file-watcher often holds a handle and it fails "resource busy".)
 	mkdir -p $(PKG_WIN_DIR)/config
+	# templates/ is no longer shipped; the rm stays so an existing install that
+	# still has the folder from an older package loses it on the next re-package.
 	rm -rf $(PKG_WIN_DIR)/packaging $(PKG_WIN_DIR)/templates
 	# Installed as Quartermaster.exe; the old lowercase build-artifact name is
 	# removed so a re-packaged bundle does not keep two copies, one of which
 	# would never be updated again.
 	cp $(BUILD_DIR)/$(APP_NAME)-windows-amd64.exe $(PKG_WIN_DIR)/Quartermaster.exe
 	rm -f $(PKG_WIN_DIR)/$(APP_NAME)-windows-amd64.exe
-	cp -r templates $(PKG_WIN_DIR)/templates
 	cp quartermaster-generate.example.yaml $(PKG_WIN_DIR)/config/quartermaster-generate.example.yaml
 	# Seed the runtime generate file from the example only when none exists yet,
 	# so a re-package never clobbers the user's edited quartermaster-generate.yaml.
@@ -205,7 +206,6 @@ _package-nix:
 	mkdir -p $(PKG_NIX_DIR)/config
 	rm -rf $(PKG_NIX_DIR)/packaging $(PKG_NIX_DIR)/templates
 	cp $(BUILD_DIR)/$(NIX_BIN) $(PKG_NIX_DIR)/
-	cp -r templates $(PKG_NIX_DIR)/templates
 	cp quartermaster-generate.example.yaml $(PKG_NIX_DIR)/config/quartermaster-generate.example.yaml
 	@if [ -f $(PKG_NIX_DIR)/config/quartermaster-generate.yaml ]; then \
 		echo "  kept existing config/quartermaster-generate.yaml"; \
@@ -316,13 +316,10 @@ _build-release:
 
 GOOS ?= $(shell go env GOOS 2>/dev/null || echo linux)
 GOARCH ?= $(shell go env GOARCH 2>/dev/null || echo amd64)
-wol-proxy: $(BUILD_DIR)
-	@echo "Building wol-proxy"
-	go build -o $(BUILD_DIR)/wol-proxy-$(GOOS)-$(GOARCH)-$(shell date +%Y-%m-%d) cmd/wol-proxy/wol-proxy.go
 
 test-ui:
 	cd ui-svelte && npm ci && npm run check && npm test
 
 # Phony targets
-.PHONY: all clean ui dist mac windows versioninfo versioninfo-setup ui-setup setup-windows package-windows package-linux package-mac _package-nix simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy release release-public release-binaries _build-release
+.PHONY: all clean ui dist mac windows versioninfo versioninfo-setup ui-setup setup-windows package-windows package-linux package-mac _package-nix simple-responder simple-responder-windows test test-all test-dev test-ui release release-public release-binaries _build-release
 .PHONY: linux linux-arm64 linux-amd64

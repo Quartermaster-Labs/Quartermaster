@@ -161,7 +161,7 @@ type Metadata struct {
 	// or preserve_thinking is true"). False for the 3.5/3.6 wording
 	// ("preserve_thinking is defined and ..."), which strips them and so
 	// re-renders history differently every turn, and false for any template
-	// with no preserve_thinking logic at all. See needsQwenFixedChatTemplate.
+	// with no preserve_thinking logic at all.
 	ChatTemplatePreservesThinking bool
 
 	// ChatTemplateEffortLevels are the reasoning-effort values the baked-in chat
