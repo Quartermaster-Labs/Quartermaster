@@ -1,4 +1,4 @@
-![quartermaster header image](docs/assets/hero3.webp)
+![quartermaster dashboard](docs/assets/dashboard.png)
 ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/Quartermaster-Labs/quartermaster/total)
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Quartermaster-Labs/quartermaster/go-ci.yml)
 ![GitHub Repo stars](https://img.shields.io/github/stars/Quartermaster-Labs/quartermaster)
