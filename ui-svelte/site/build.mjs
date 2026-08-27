@@ -714,6 +714,7 @@ const SHOT_SOURCE = {
   "dashboard.webp": "dashboard",
   "models.webp": "models",
   "model-config.webp": "model-config-modal",
+  "model-config-args.webp": "model-config-args",
   "vram-gauge.webp": "model-config-vram",
   "browse.webp": "browse",
   "images.webp": "models-image",

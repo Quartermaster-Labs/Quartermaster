@@ -195,6 +195,38 @@ const SHOTS = [
     // still reads as a dialog rather than a floating form.
     clip: { selector: "dialog", pad: 12 },
   },
+  // The escape hatch: the whole llama-server command line, editable, with the
+  // form's own fields folded into it. The point of the picture is that the UI
+  // is a layer over the flags rather than a replacement for them, so it is the
+  // command that has to be legible -- hence the same dialog crop, scrolled to
+  // the fold instead of the top of the form.
+  {
+    name: "model-config-args",
+    at: "#/models",
+    wait: "table",
+    clip: { selector: "dialog", pad: 12 },
+    prepare: async (p) => {
+      const note = await openModelConfig(p);
+      if (note) return note;
+      const fold = p.locator('dialog details:has(> summary:has-text("Launch parameters"))').first();
+      if (!(await fold.count())) return "no Launch parameters fold — the modal opened on a non-llama backend";
+      await fold.evaluate((d) => (d.open = true));
+      await p.waitForTimeout(400);
+      // The textarea defaults to 6 rows and the command is longer than that,
+      // so it photographed cut off mid-flag. Growing it to its content is a
+      // state the field already has -- it is resize-y, and this is the drag a
+      // reader would do themselves.
+      await fold.locator("textarea").evaluate((t) => {
+        t.style.height = "auto";
+        t.style.height = `${t.scrollHeight}px`;
+      });
+      await p.waitForTimeout(300);
+      // block:"end" rather than "center": the fold sits last in the form, so
+      // centring it leaves half the crop on empty space below the command.
+      await fold.evaluate((d) => d.scrollIntoView({ block: "end" }));
+      await p.waitForTimeout(600);
+    },
+  },
   // The load-plan strip on its own. It is a thin band inside a tall modal, so a
   // full-viewport shot of the same screen buries the one thing this is meant to
   // show. `pad` keeps the modal's own edges in frame — a bar cropped to its

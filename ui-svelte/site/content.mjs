@@ -154,6 +154,14 @@ export const SHOWCASE = [
         label: "Per-model parameters",
         caption: "Context, KV cache, offload and speculative decoding, with the computed default one click away.",
       },
+      {
+        file: "model-config-args.webp",
+        label: "Fully customizable",
+        caption:
+          "The whole llama-server command line is right there and editable. Edits fold back into the fields " +
+          "above, and flags Quartermaster doesn't model are kept verbatim — the UI is a layer over the flags, " +
+          "not a replacement for them.",
+      },
     ],
   },
   {
