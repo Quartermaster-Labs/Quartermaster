@@ -188,6 +188,12 @@ const SHOTS = [
     at: "#/models",
     wait: "table",
     prepare: openModelConfig,
+    // Cropped to the panel. The modal is about 60% of the viewport's width, so
+    // a full-frame shot scaled into a showcase card left its field labels too
+    // small to read -- and the rest of the frame is the models table, which is
+    // already its own screenshot. The pad keeps a sliver of dimmed page so it
+    // still reads as a dialog rather than a floating form.
+    clip: { selector: "dialog", pad: 12 },
   },
   // The load-plan strip on its own. It is a thin band inside a tall modal, so a
   // full-viewport shot of the same screen buries the one thing this is meant to
