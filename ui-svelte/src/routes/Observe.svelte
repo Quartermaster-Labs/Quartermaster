@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { observeTab, observeWindowIdx, OBSERVE_WINDOWS, type ObserveTab } from "../stores/observe";
   import { currentRoute } from "../stores/route";
   import { Activity as ActivityIcon, ScrollText, Gauge, Layers } from "lucide-svelte";
@@ -22,7 +21,17 @@
     "/performance": "performance",
   };
 
-  onMount(() => {
+  // Seed from the hash, NOT from `currentRoute`: that store is written by
+  // App's `routeLoaded` handler, which svelte-spa-router fires only AFTER this
+  // component has mounted. A cold load of #/performance would read the store's
+  // "/" default, match nothing, and leave the persisted tab in place.
+  const seed = legacy[location.hash.replace(/^#/, "").split("?")[0]];
+  if (seed) observeTab.set(seed);
+
+  // ...and keep following the route afterwards, for navigation between the
+  // legacy hashes while Observe stays mounted (the router reuses the same
+  // component, so onMount never runs a second time).
+  $effect(() => {
     const t = legacy[$currentRoute];
     if (t) observeTab.set(t);
   });

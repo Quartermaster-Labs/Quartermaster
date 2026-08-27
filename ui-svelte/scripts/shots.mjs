@@ -9,12 +9,14 @@
 //   npm run shots -- --label before      # capture into .shots/before
 //   npm run shots -- --url http://localhost:8080
 //   npm run shots -- --native            # with the app window's own chrome
+//   npm run shots -- --demo              # with a model loaded and traffic behind it
 //
 // The app is hash-routed under /ui/, uses SSE (so `networkidle` never fires —
 // we settle on a selector plus a fixed delay), and reads its theme from the
 // `theme-mode` localStorage key, which we seed per run rather than clicking the
 // sidebar toggle.
 import { chromium } from "playwright";
+import { buildDemo, installDemo, recordCatalog } from "./shot-demo.mjs";
 import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,6 +34,10 @@ function parseArgs(argv) {
     settle: 1200,
     only: null,
     native: false,
+    demo: false,
+    demoModel: undefined,
+    tps: undefined,
+    pps: undefined,
   };
   for (let i = 0; i < argv.length; i++) {
     const [flag, inline] = argv[i].split(/=(.*)/s);
@@ -46,6 +52,10 @@ function parseArgs(argv) {
       case "--settle": out.settle = Number(val()); break;
       case "--only": out.only = val().split(","); break;
       case "--native": out.native = true; break;
+      case "--demo": out.demo = true; break;
+      case "--demo-model": out.demo = true; out.demoModel = val(); break;
+      case "--demo-tps": out.demo = true; out.tps = Number(val()); break;
+      case "--demo-pps": out.demo = true; out.pps = Number(val()); break;
       default:
         if (flag.startsWith("--")) throw new Error(`unknown flag: ${flag}`);
     }
@@ -63,7 +73,20 @@ const SHOTS = [
   { name: "models", at: "#/models", wait: "table" },
   { name: "models-image", at: "#/models/image", wait: "table" },
   { name: "browse", at: "#/browse", wait: "main" },
-  { name: "observe", at: "#/observe", wait: "main" },
+  // Observe is one route with four tabs, so each tab is its own shot. We click
+  // the tab rather than deep-linking #/performance & co: the tab is also
+  // remembered in localStorage, so the hash alone cannot be trusted to win, and
+  // a click is what a user does anyway. These are the shots --demo exists for --
+  // on an idle instance they photograph as four empty panes.
+  ...["Activity", "Logs", "Performance", "Context"].map((tab) => ({
+    name: `observe-${tab.toLowerCase()}`,
+    at: "#/observe",
+    wait: "main",
+    prepare: async (p) => {
+      await p.getByRole("button", { name: tab, exact: true }).first().click();
+      await p.waitForTimeout(900);
+    },
+  })),
   { name: "api-keys", at: "#/api-keys", wait: "main" },
   {
     name: "settings-modal",
@@ -113,21 +136,40 @@ async function main() {
   }
 
   const outDir = path.join(opts.out, opts.label);
-  // Clear only this run's own half of the label. Wiping the directory outright
-  // would make `--native` and a plain run mutually exclusive within one label,
-  // which is the opposite of what the shared naming is for -- and would silently
-  // delete the "before" set someone captured five minutes earlier. Stale shots
-  // of the same kind still go, so a renamed or deleted SHOTS entry cannot leave
-  // a ghost behind.
-  const mine = (f) => f.endsWith("--native.png") === opts.native;
+  // What KIND of run this is, carried in every filename it writes. Kinds share
+  // one label directory so they diff side by side.
+  const suffix = `${opts.native ? "--native" : ""}${opts.demo ? "--demo" : ""}`;
+  // Clear only this run's own kind. Wiping the directory outright would make the
+  // kinds mutually exclusive within a label, which is the opposite of what the
+  // shared naming is for -- and would silently delete the "before" set someone
+  // captured five minutes earlier. Stale shots of the SAME kind still go, so a
+  // renamed or deleted SHOTS entry cannot leave a ghost behind.
+  const NAMED = /^.*--(?:dark|light)--\d+(.*)\.png$/;
   await mkdir(outDir, { recursive: true });
   for (const f of await readdir(outDir)) {
-    if (f.endsWith(".png") && mine(f)) await rm(path.join(outDir, f));
+    const m = NAMED.exec(f);
+    if (m && m[1] === suffix) await rm(path.join(outDir, f));
+  }
+
+  const warnings = [];
+
+  // Recorded once, replayed into every context: the catalog is real (read off
+  // the instance's own event stream, the only place the UI can learn it), and
+  // only the state on top of it is synthesized. Nothing here loads a model or
+  // sends an inference request. See scripts/shot-demo.mjs.
+  let demo = null;
+  if (opts.demo) {
+    const { models, logs } = await recordCatalog(opts.url);
+    const perf = await fetch(`${opts.url}/api/performance`).then((r) => r.json()).catch(() => null);
+    demo = buildDemo(models, perf, { model: opts.demoModel, tps: opts.tps, pps: opts.pps, logs });
+    console.log(`  demo: ${models.length} models, showing ${demo.model.id} loaded`);
+    if (opts.demoModel && demo.model.id !== opts.demoModel) {
+      warnings.push(`--demo-model ${opts.demoModel} is not in the catalog; fell back to ${demo.model.id}`);
+    }
   }
 
   const browser = await chromium.launch();
   const manifest = [];
-  const warnings = [];
 
   for (const theme of opts.themes) {
     for (const width of opts.widths) {
@@ -175,13 +217,15 @@ async function main() {
         });
       }
 
+      if (demo) await installDemo(ctx, demo);
+
       const page = await ctx.newPage();
       page.on("pageerror", (e) => warnings.push(`[${theme}] page error: ${e.message}`));
 
       for (const shot of shots) {
-        // The suffix is part of the name, not a separate directory, so a native
-        // and a browser run share one label and diff side by side.
-        const file = `${shot.name}--${theme}--${width}${opts.native ? "--native" : ""}.png`;
+        // The suffix is part of the name, not a separate directory, so the kinds
+        // share one label and diff side by side.
+        const file = `${shot.name}--${theme}--${width}${suffix}.png`;
         try {
           // about:blank first: `goto` to a URL differing only in its hash does
           // NOT reload the document, so without this every shot would inherit
@@ -207,8 +251,8 @@ async function main() {
 
   await browser.close();
   await writeFile(
-    path.join(outDir, opts.native ? "manifest-native.json" : "manifest.json"),
-    JSON.stringify({ url: opts.url, label: opts.label, native: opts.native, themes: opts.themes, widths: opts.widths, shots: manifest, warnings }, null, 2),
+    path.join(outDir, `manifest${suffix || "--plain"}.json`),
+    JSON.stringify({ url: opts.url, label: opts.label, native: opts.native, demo: demo?.model.id ?? false, themes: opts.themes, widths: opts.widths, shots: manifest, warnings }, null, 2),
   );
 
   console.log(`\n${manifest.length} shots → ${outDir}`);
