@@ -29,6 +29,11 @@ Output/
 node_modules/
 __pycache__/
 
+# Public site build (ui-svelte/site/build.mjs). Deployed straight to GitHub
+# Pages by .github/workflows/pages.yml — generated HTML has no reader inside the
+# repo, so committing it would only give it a way to go stale.
+.site/
+
 # UI screenshot captures (ui-svelte/scripts/shots.mjs). Local visual-review
 # artifacts for before/after diffing — regenerated on demand, never shipped.
 ui-svelte/.shots/

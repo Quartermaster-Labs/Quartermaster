@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "shots": "node scripts/shots.mjs",
     "build:setup": "vite build --config vite.setup.config.ts",
-    "docs": "node scripts/wiki-docs.mjs"
+    "docs": "node scripts/wiki-docs.mjs",
+    "site": "node site/build.mjs"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.0.0",

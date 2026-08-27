@@ -1,0 +1,82 @@
+name: Pages
+
+# Builds the public site (landing page + the help wiki as HTML) and deploys it
+# to GitHub Pages. The site is generated, never committed — see .gitignore.
+#
+# `release: published` is in here on purpose: the download button resolves the
+# real installer asset URL at build time (the file name carries the version, so
+# there is no stable /releases/latest/download/ path), which means a new release
+# has to rebuild the page or the button keeps pointing at the old .exe.
+#
+# One-time setup: Settings → Pages → Source = "GitHub Actions".
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'ui-svelte/site/**'
+      - 'ui-svelte/package-lock.json'
+      - 'internal/server/wiki_articles.json'
+      - 'ui-svelte/src/lib/wiki-categories.json'
+      - 'docs/assets/**'
+      - '.github/workflows/pages.yml'
+
+  release:
+    types: [published]
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never two deploys at once, but do not cancel a running one: the second would
+# publish over a half-uploaded artifact.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # 6.4.0
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: ui-svelte/package-lock.json
+
+      - name: Install deps
+        working-directory: ui-svelte
+        run: npm ci
+
+      - name: Check docs/ is in sync with the wiki corpus
+        working-directory: ui-svelte
+        run: npm run docs -- --check
+
+      - name: Build site
+        working-directory: ui-svelte
+        run: npm run site
+        env:
+          # The build shells out to `gh` to resolve the latest installer asset.
+          GH_TOKEN: ${{ github.token }}
+
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # 6.0.0
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # 5.0.0
+        with:
+          path: .site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # 5.0.0

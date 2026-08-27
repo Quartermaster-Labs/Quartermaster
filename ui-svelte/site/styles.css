@@ -1,0 +1,809 @@
+/* quartermaster.dev — the marketing/docs site.
+ *
+ * Palette is lifted verbatim from the app (ui-svelte/src/index.css) so the page
+ * and the screenshots on it are the same object: warm charcoal + orange in dark,
+ * brown on cream in light. Dark is the default; light follows the OS and the
+ * header toggle overrides both via [data-theme] on <html>.
+ *
+ * Hand-written, no framework: the whole site is ~10 static pages and Tailwind's
+ * build step would only exist to be configured. */
+
+:root,
+:root[data-theme="dark"] {
+  --bg: rgb(34 32 30);
+  --surface: rgb(44 42 38);
+  --surface-2: rgb(56 53 48);
+  --text: rgb(237 237 238);
+  --muted: rgb(161 161 166 / 0.85);
+  --primary: rgb(255 106 43);
+  --primary-hover: rgb(255 130 69);
+  --on-primary: rgb(255 250 245);
+  --border: rgb(168 168 176 / 0.2);
+  --border-soft: rgb(168 168 176 / 0.11);
+  --dot: rgb(180 180 190 / 0.09);
+  --shadow: 0 24px 60px -20px rgb(0 0 0 / 0.6);
+  --glow: rgb(255 106 43 / 0.16);
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: rgb(240 230 214);
+    --surface: rgb(248 240 226);
+    --surface-2: rgb(253 249 241);
+    --text: rgb(26 23 20);
+    --muted: rgb(107 98 89);
+    --primary: rgb(120 72 40);
+    --primary-hover: rgb(96 56 28);
+    --on-primary: rgb(250 246 238);
+    --border: rgb(40 30 20 / 0.18);
+    --border-soft: rgb(40 30 20 / 0.1);
+    --dot: rgb(40 30 20 / 0.06);
+    --shadow: 0 24px 60px -24px rgb(60 40 20 / 0.28);
+    --glow: rgb(199 88 18 / 0.14);
+    color-scheme: light;
+  }
+}
+
+:root[data-theme="light"] {
+  --bg: rgb(240 230 214);
+  --surface: rgb(248 240 226);
+  --surface-2: rgb(253 249 241);
+  --text: rgb(26 23 20);
+  --muted: rgb(107 98 89);
+  --primary: rgb(120 72 40);
+  --primary-hover: rgb(96 56 28);
+  --on-primary: rgb(250 246 238);
+  --border: rgb(40 30 20 / 0.18);
+  --border-soft: rgb(40 30 20 / 0.1);
+  --dot: rgb(40 30 20 / 0.06);
+  --shadow: 0 24px 60px -24px rgb(60 40 20 / 0.28);
+  --glow: rgb(199 88 18 / 0.14);
+  color-scheme: light;
+}
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/inter-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("fonts/inter-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("fonts/inter-700.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/jetbrains-mono-400.woff2") format("woff2");
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  /* Anchors land below the sticky header rather than under it. */
+  scroll-padding-top: 5.5rem;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* The dotted ground the app uses on its own empty states, at page scale. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  background-image: radial-gradient(var(--dot) 1px, transparent 1px);
+  background-size: 22px 22px;
+  pointer-events: none;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+code,
+kbd,
+pre {
+  font-family: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
+.wrap {
+  width: min(100% - 2.5rem, 1120px);
+  margin-inline: auto;
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  backdrop-filter: blur(14px) saturate(140%);
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.site-header .wrap {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  height: 4rem;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-size: 1.05rem;
+}
+
+.brand svg {
+  color: var(--primary);
+}
+
+.site-nav {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  margin-left: auto;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.site-nav a:hover {
+  color: var(--text);
+}
+
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  color: var(--text);
+  background: var(--surface);
+}
+
+/* The toggle shows the theme you'd switch TO, so exactly one glyph is live. */
+.icon-btn .moon {
+  display: none;
+}
+:root[data-theme="light"] .icon-btn .moon {
+  display: block;
+}
+:root[data-theme="light"] .icon-btn .sun {
+  display: none;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .icon-btn .moon {
+    display: block;
+  }
+  :root:not([data-theme="dark"]) .icon-btn .sun {
+    display: none;
+  }
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1.25rem;
+  border-radius: 0.7rem;
+  border: 1px solid transparent;
+  font-weight: 600;
+  font-size: 0.95rem;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: var(--on-primary);
+  box-shadow: 0 8px 24px -10px var(--primary);
+}
+
+.btn-primary:hover {
+  background: var(--primary-hover);
+}
+
+.btn-ghost {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.btn-ghost:hover {
+  background: var(--surface);
+}
+
+/* ── Hero ────────────────────────────────────────────────────────────────── */
+
+.hero {
+  position: relative;
+  padding: clamp(3.5rem, 9vw, 7rem) 0 3rem;
+  text-align: center;
+  overflow: clip;
+}
+
+.hero::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: -22rem;
+  left: 50%;
+  translate: -50% 0;
+  width: min(1100px, 130vw);
+  aspect-ratio: 1;
+  background: radial-gradient(circle at center, var(--glow), transparent 62%);
+  pointer-events: none;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.eyebrow b {
+  color: var(--primary);
+  font-weight: 700;
+}
+
+h1 {
+  margin: 1.4rem auto 0;
+  max-width: 16ch;
+  font-size: clamp(2.4rem, 6.2vw, 4rem);
+  line-height: 1.05;
+  letter-spacing: -0.035em;
+  font-weight: 700;
+}
+
+h1 .accent {
+  background: linear-gradient(100deg, var(--primary), var(--primary-hover));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.lede {
+  margin: 1.25rem auto 0;
+  max-width: 62ch;
+  color: var(--muted);
+  font-size: clamp(1rem, 1.6vw, 1.15rem);
+}
+
+.cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 2rem;
+}
+
+.cta-note {
+  margin-top: 0.9rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.cta-note a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ── Screenshot frame ────────────────────────────────────────────────────── */
+
+.shot {
+  margin-top: 3.5rem;
+  border-radius: 0.9rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.shot-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--surface);
+}
+
+.shot-bar i {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.shot-bar span {
+  margin-left: 0.5rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-family: "JetBrains Mono", monospace;
+}
+
+.shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* A dark app screenshot on a cream page (or the reverse) reads as a picture of
+ * some other program. Where both captures exist the page shows the one matching
+ * the reader's theme; where only one does, `.only-dark` is simply absent and the
+ * single image stays visible. */
+.only-light {
+  display: none;
+}
+:root[data-theme="light"] .only-light {
+  display: block;
+}
+:root[data-theme="light"] .only-dark {
+  display: none;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .only-light {
+    display: block;
+  }
+  :root:not([data-theme="dark"]) .only-dark {
+    display: none;
+  }
+}
+
+/* ── Sections ────────────────────────────────────────────────────────────── */
+
+section {
+  padding: clamp(3rem, 7vw, 5.5rem) 0;
+}
+
+.section-head {
+  max-width: 58ch;
+  margin-bottom: 2.5rem;
+}
+
+.section-head h2 {
+  margin: 0;
+  font-size: clamp(1.6rem, 3.2vw, 2.1rem);
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+}
+
+.section-head p {
+  margin: 0.75rem 0 0;
+  color: var(--muted);
+}
+
+.grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  /* Cards size to their own content instead of stretching to the tallest in the
+   * row — otherwise one long feature blows up the whole band. */
+  align-items: start;
+}
+
+.card {
+  padding: 1.4rem;
+  border-radius: 0.85rem;
+  border: 1px solid var(--border-soft);
+  background: var(--surface);
+  transition: border-color 0.15s, transform 0.15s;
+}
+
+.card:hover {
+  border-color: var(--border);
+  transform: translateY(-2px);
+}
+
+.card h3 {
+  margin: 0.9rem 0 0.4rem;
+  font-size: 1.02rem;
+  letter-spacing: -0.015em;
+}
+
+.card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.card .ico {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.6rem;
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  color: var(--primary);
+}
+
+.card .new {
+  display: inline-block;
+  margin-left: 0.45rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+  color: var(--primary);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  vertical-align: 2px;
+}
+
+/* ── Install ─────────────────────────────────────────────────────────────── */
+
+#install .card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+#install .card p {
+  flex: 1;
+}
+
+pre {
+  margin: 0;
+  padding: 0.8rem 0.9rem;
+  border-radius: 0.6rem;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-2);
+  overflow-x: auto;
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+
+/* An install command must be readable at a glance, not discovered by scrolling
+ * a box sideways — so these wrap, with the continuation indented. Code inside a
+ * docs article keeps `pre` (config YAML relies on its columns). */
+#install pre {
+  font-size: 0.74rem;
+}
+
+#install pre code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ── Gallery ─────────────────────────────────────────────────────────────── */
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 1.25rem;
+}
+
+.tab {
+  padding: 0.45rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab[aria-selected="true"] {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--on-primary);
+}
+
+.gallery figure {
+  margin: 0;
+}
+
+.gallery figure[hidden] {
+  display: none;
+}
+
+.gallery figcaption {
+  margin-top: 0.85rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+/* ── Docs teaser + footer ────────────────────────────────────────────────── */
+
+.topic-list {
+  margin: 0.9rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.topic-list a {
+  display: inline-block;
+  padding: 0.25rem 0.6rem;
+  border-radius: 0.45rem;
+  border: 1px solid var(--border-soft);
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.topic-list a:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
+.site-footer {
+  border-top: 1px solid var(--border-soft);
+  padding: 2.5rem 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.site-footer .wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 2rem;
+  align-items: center;
+}
+
+.site-footer a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.site-footer .spacer {
+  margin-left: auto;
+}
+
+/* ── Docs pages ──────────────────────────────────────────────────────────── */
+
+.docs-layout {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  gap: 3rem;
+  align-items: start;
+  padding: 3rem 0 5rem;
+}
+
+.docs-nav {
+  position: sticky;
+  top: 5.5rem;
+  max-height: calc(100vh - 7rem);
+  overflow-y: auto;
+  font-size: 0.88rem;
+}
+
+.docs-nav h4 {
+  margin: 1.4rem 0 0.5rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.docs-nav h4:first-child {
+  margin-top: 0;
+}
+
+.docs-nav ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.docs-nav a {
+  display: block;
+  padding: 0.28rem 0.6rem;
+  margin-left: -0.6rem;
+  border-radius: 0.4rem;
+  color: var(--muted);
+}
+
+.docs-nav a:hover {
+  color: var(--text);
+  background: var(--surface);
+}
+
+.docs-nav a[aria-current="page"] {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  font-weight: 600;
+}
+
+.prose {
+  max-width: 74ch;
+}
+
+.prose h1 {
+  margin: 0 0 1.5rem;
+  max-width: none;
+  font-size: clamp(1.9rem, 4vw, 2.5rem);
+  text-align: left;
+}
+
+.prose h2 {
+  margin: 2.4rem 0 0.8rem;
+  font-size: 1.3rem;
+  letter-spacing: -0.02em;
+}
+
+.prose h3 {
+  margin: 1.8rem 0 0.6rem;
+  font-size: 1.05rem;
+}
+
+.prose p,
+.prose li {
+  color: var(--muted);
+}
+
+.prose strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.prose a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.prose ul,
+.prose ol {
+  padding-left: 1.3rem;
+}
+
+.prose li {
+  margin: 0.35rem 0;
+}
+
+.prose :not(pre) > code {
+  padding: 0.12em 0.38em;
+  border-radius: 0.35rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  font-size: 0.86em;
+  color: var(--text);
+}
+
+.prose pre {
+  margin: 1.2rem 0;
+  padding: 1rem 1.1rem;
+  font-size: 0.82rem;
+}
+
+.prose table {
+  width: 100%;
+  margin: 1.2rem 0;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.prose th,
+.prose td {
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border-soft);
+  text-align: left;
+  color: var(--muted);
+}
+
+.prose th {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.prose blockquote {
+  margin: 1.2rem 0;
+  padding: 0.2rem 0 0.2rem 1rem;
+  border-left: 3px solid var(--primary);
+  color: var(--muted);
+}
+
+.prose hr {
+  margin: 2.5rem 0;
+  border: 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+/* Anchor links appear on heading hover — never in the tab order or the a11y
+ * tree, since the heading text right next to them already says where you are. */
+.prose .anchor {
+  margin-left: 0.4rem;
+  color: var(--muted);
+  opacity: 0;
+  text-decoration: none;
+  font-weight: 400;
+}
+
+.prose h2:hover .anchor,
+.prose h3:hover .anchor {
+  opacity: 1;
+}
+
+.docs-foot {
+  margin-top: 3.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border-soft);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+@media (max-width: 900px) {
+  .docs-layout {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+  }
+
+  .docs-nav {
+    position: static;
+    max-height: none;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border-soft);
+  }
+
+  .site-nav .hide-sm {
+    display: none;
+  }
+}

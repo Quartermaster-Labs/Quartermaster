@@ -24,6 +24,8 @@ Built in Go for performance and simplicity — a single binary and one config fi
 your inference backends (llama-server, stable-diffusion.cpp, etc.); the Windows installer and unified
 Docker image bundle them for you.
 
+🌐 **[quartermaster-labs.github.io/quartermaster](https://quartermaster-labs.github.io/quartermaster/)** —
+downloads, screenshots and the full user guide.
 📖 **[User guide](docs/)** — the same help wiki the app ships with, readable before you install
 anything.
 

@@ -44,6 +44,7 @@ The app is mounted under `base: "/ui/"`.
 | `npm run check` | `svelte-check` type checking. |
 | `npm test` / `npm run test:watch` | Vitest unit tests. |
 | `npm run docs` | Renders the help wiki (`internal/server/wiki_articles.json` + `src/lib/wiki-categories.json`) into the repo's `docs/` tree. `-- --check` fails instead of writing, for CI. Run it after editing an article; `docs/*.md` is generated and never hand-edited. |
+| `npm run site` | Builds the public GitHub Pages site into `.site/` (gitignored) — landing page from `site/content.mjs`, `/docs/*` from the same wiki corpus. `-- --serve` previews it on :4321; `-- --adopt .shots/current` pulls fresh screenshots into `docs/assets/`. Deployed by `.github/workflows/pages.yml`; you never need to run it to publish. |
 
 From the repo root, **`make test-ui`** runs `npm ci && npm run check && npm test`. Run it after
 changing anything under `ui-svelte/`.
@@ -67,6 +68,7 @@ changing anything under `ui-svelte/`.
 | `src/stores/` | Backend state, SSE wiring, persisted prefs, theme, routing. |
 | `src/lib/` | Framework-agnostic helpers: API client modules, shared `types.ts`, markdown/histogram utilities, the `scrollFade` action. |
 | `index.css` | Theme tokens, dark/light variables, shared component classes (`.card`, `.scroll-fade-y`). |
+| `site/` | The public GitHub Pages site — `build.mjs` (generator), `content.mjs` (landing copy), `styles.css`. Standalone: plain node + the repo's existing remark/rehype deps, no Svelte, no Vite. Its `/docs` half is the same wiki corpus as the Help modal. |
 | `vite.config.ts`, `svelte.config.js`, `tsconfig.json` | Build / compiler / TS configuration. |
 
 ## State / API
