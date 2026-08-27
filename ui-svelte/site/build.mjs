@@ -39,7 +39,7 @@ const CATEGORIES = path.join(UI, "src", "lib", "wiki-categories.json");
 const IMAGES = path.join(ROOT, "docs", "assets");
 const FONTS = path.join(UI, "node_modules", "@fontsource");
 
-const { REPO, UPSTREAM, HERO, PILLS, SECTIONS, STORY, ICONS, FEATURES, GALLERY, INSTALL } =
+const { REPO, UPSTREAM, HERO, PILLS, SECTIONS, STORY, ICONS, SHOWCASE, MORE, INSTALL } =
   await import("./content.mjs");
 
 // ── args ───────────────────────────────────────────────────────────────────
@@ -290,60 +290,121 @@ function shotFrame(file, alt, label, light = null) {
   </div>`;
 }
 
-// Collapsed vertical slats that expand on hover. The first is open in the
-// markup, so with JS off (or before it runs) the section is still a screenshot
-// with a caption rather than a row of empty bars — the expansion is an
-// enhancement, not the thing that makes it legible.
-function renderGallery(shots) {
-  if (!shots.length) return "";
-  const img = (src, cls, alt) =>
-    `<img src="assets/img/${esc(src)}"${cls ? ` class="${cls}"` : ""} alt="${esc(alt)}" loading="lazy" decoding="async">`;
-
-  const slats = shots
-    .map((s, i) => {
-      const alt = `${s.label}: ${s.caption}`;
-      const pic = s.light ? img(s.file, "only-dark", alt) + img(s.light, "only-light", "") : img(s.file, "", alt);
-      return `<button class="slat${i === 0 ? " is-open" : ""}" type="button" aria-expanded="${i === 0}">
-      <span class="slat-spine">${icon(s.icon ?? "monitor", 18)}<b>${esc(s.label)}</b></span>
-      <span class="slat-panel">
-        <span class="slat-shot">${pic}</span>
-        <span class="slat-caption"><b>${esc(s.label)}</b>${esc(s.caption)}</span>
-      </span>
-    </button>`;
-    })
-    .join("\n");
-
-  return `<section id="screens">
-  <div class="wrap">
-    ${sectionHead("screens")}
-    <div class="slats" data-reveal>${slats}</div>
-  </div>
-</section>`;
-}
-
-// Hover opens on a pointer; click and keyboard focus open everywhere else, so
-// the strip works on a phone and from the Tab key, not just under a mouse.
+// Clicking the picture advances, which is what people try first; the tabs jump
+// to a specific shot; arrow keys work once a tab has focus. Nothing here runs
+// before the markup is already legible.
 const GALLERY_SCRIPT = `<script>
 (function () {
-  var slats = [].slice.call(document.querySelectorAll(".slats .slat"));
-  if (!slats.length) return;
-  function open(el) {
-    slats.forEach(function (s) {
-      var on = s === el;
-      s.classList.toggle("is-open", on);
-      s.setAttribute("aria-expanded", String(on));
+  [].forEach.call(document.querySelectorAll("[data-gal]"), function (gal) {
+    var tabs = [].slice.call(gal.querySelectorAll(".gal-tab"));
+    var panels = [].slice.call(gal.querySelectorAll(".gal-panel"));
+    if (tabs.length < 2) return;
+    var at = 0;
+    function show(next, focus) {
+      at = (next + tabs.length) % tabs.length;
+      tabs.forEach(function (t, i) {
+        var on = i === at;
+        t.classList.toggle("is-current", on);
+        t.setAttribute("aria-selected", String(on));
+        t.tabIndex = on ? 0 : -1;
+        panels[i].classList.toggle("is-current", on);
+        panels[i].hidden = !on;
+      });
+      if (focus) tabs[at].focus();
+    }
+    tabs.forEach(function (t, i) {
+      t.addEventListener("click", function () { show(i); });
+      t.addEventListener("keydown", function (e) {
+        if (e.key === "ArrowRight") { e.preventDefault(); show(at + 1, true); }
+        else if (e.key === "ArrowLeft") { e.preventDefault(); show(at - 1, true); }
+      });
     });
-  }
-  slats.forEach(function (s) {
-    s.addEventListener("mouseenter", function () { if (matchMedia("(hover: hover)").matches) open(s); });
-    s.addEventListener("focus", function () { open(s); });
-    s.addEventListener("click", function () { open(s); });
+    panels.forEach(function (p) {
+      var shot = p.querySelector(".shot");
+      if (!shot) return;
+      shot.addEventListener("click", function () { show(at + 1); });
+      shot.classList.add("is-clickable");
+    });
   });
 })();
 </script>`;
 
-function renderFeatures() {
-  const cards = FEATURES.map(
+// Two or more shots become a gallery: one large frame, a labelled tab per shot
+// under it, and the frame itself advances to the next on click.
+//
+// Every panel is in the markup and the first is current, so with JS off this is
+// a screenshot with a caption rather than an empty box. The tabs are real
+// buttons in a tablist, so this is reachable from the keyboard and not just from
+// a pointer.
+function renderShotGallery(id, shots) {
+  const panels = shots
+    .map(
+      (s, i) => `<div class="gal-panel${i === 0 ? " is-current" : ""}" id="${id}-p${i}" role="tabpanel"
+        aria-labelledby="${id}-t${i}"${i === 0 ? "" : " hidden"}>
+        ${shotFrame(s.file, `${s.label}: ${s.caption}`, s.label, s.light)}
+        <p class="gal-caption"><b>${esc(s.label)}</b>${esc(s.caption)}</p>
+      </div>`,
+    )
+    .join("\n");
+
+  const tabs = shots
+    .map(
+      (s, i) => `<button class="gal-tab${i === 0 ? " is-current" : ""}" type="button" role="tab"
+        id="${id}-t${i}" aria-controls="${id}-p${i}" aria-selected="${i === 0}" tabindex="${i === 0 ? 0 : -1}">
+        <span class="gal-n">${i + 1}</span>${esc(s.label)}</button>`,
+    )
+    .join("\n");
+
+  return `<div class="gal" data-gal>
+    <div class="gal-stage">${panels}</div>
+    <div class="gal-tabs" role="tablist" aria-label="Screenshots">${tabs}</div>
+  </div>`;
+}
+
+// Each showcase is its own scroll-into block. A single shot sits beside the
+// copy and the side alternates down the page; a gallery needs the full width, so
+// the copy goes above it instead.
+function renderShowcase(entry, index) {
+  const { id, shots = [] } = entry;
+  const gallery = shots.length > 1;
+  const points = entry.points?.length
+    ? `<ul class="sc-points">${entry.points.map((p) => `<li>${icon("check", 15)}<span>${esc(p)}</span></li>`).join("")}</ul>`
+    : "";
+
+  const copy = `<div class="sc-copy" data-reveal>
+      <span class="eyebrow">${icon(entry.icon, 15)} ${esc(entry.eyebrow)}</span>
+      <h3>${esc(entry.title)}</h3>
+      <p>${esc(entry.body)}</p>
+      ${points}
+    </div>`;
+
+  // A section whose shots have not been captured yet still says its piece.
+  if (!shots.length) return `<section class="sc sc-bare" id="${id}"><div class="wrap narrow">${copy}</div></section>`;
+
+  if (gallery) {
+    return `<section class="sc sc-wide" id="${id}">
+  <div class="wrap">
+    ${copy}
+    <div data-reveal>${renderShotGallery(id, shots)}</div>
+  </div>
+</section>`;
+  }
+
+  const media = `<div class="sc-media" data-reveal>
+      ${shotFrame(shots[0].file, `${shots[0].label}: ${shots[0].caption}`, shots[0].label, shots[0].light)}
+      <p class="gal-caption"><b>${esc(shots[0].label)}</b>${esc(shots[0].caption)}</p>
+    </div>`;
+
+  return `<section class="sc sc-split${index % 2 ? " is-flipped" : ""}" id="${id}">
+  <div class="wrap">
+    <div class="sc-row">${copy}${media}</div>
+  </div>
+</section>`;
+}
+
+function renderFeatures(showcase) {
+  const blocks = showcase.map(renderShowcase).join("\n");
+  const cards = MORE.map(
     (f, i) => `<article class="card" data-reveal style="--d:${(i % 3) * 60}ms">
       <div class="ico">${icon(f.icon)}</div>
       <h3>${esc(f.title)}</h3>
@@ -354,6 +415,12 @@ function renderFeatures() {
   return `<section id="features">
   <div class="wrap">
     ${sectionHead("features")}
+  </div>
+</section>
+${blocks}
+<section id="more">
+  <div class="wrap">
+    ${sectionHead("more")}
     <div class="grid">${cards}</div>
   </div>
 </section>`;
@@ -602,32 +669,50 @@ const FONT_FILES = [
   ["jetbrains-mono/files/jetbrains-mono-latin-700-normal.woff2", "jetbrains-mono-700.woff2"],
 ];
 
-// Screenshots the site wants but docs/assets/ doesn't have yet: named on stdout
-// rather than shipped as broken images, with the command that produces them.
-async function collectShots() {
+// Resolve every showcase's shots against what is actually in docs/assets/, and
+// return the showcase with the missing ones dropped. Screenshots the site wants
+// but doesn't have are named on stdout rather than shipped as broken images: a
+// section with nothing left renders as copy alone and the page still holds
+// together, so the site is publishable before the capture run happens.
+async function collectShowcase() {
   const have = new Set(await readdir(IMAGES).catch(() => []));
   const lightOf = (f) => f.replace(/\.webp$/, "-light.webp");
-  const found = GALLERY.filter((s) => have.has(s.file)).map((s) => ({
-    ...s,
-    light: have.has(lightOf(s.file)) ? lightOf(s.file) : null,
+  const missing = [];
+
+  const resolved = SHOWCASE.map((entry) => ({
+    ...entry,
+    shots: entry.shots.flatMap((s) => {
+      if (!have.has(s.file)) {
+        missing.push(s.file);
+        return [];
+      }
+      return [{ ...s, light: have.has(lightOf(s.file)) ? lightOf(s.file) : null }];
+    }),
   }));
-  const missing = GALLERY.filter((s) => !have.has(s.file));
+
   if (missing.length) {
-    console.warn(`  ! ${missing.length} screenshot(s) not in docs/assets, skipped: ${missing.map((s) => s.file).join(", ")}`);
+    console.warn(`  ! ${missing.length} screenshot(s) not in docs/assets, skipped: ${missing.join(", ")}`);
     console.warn(`    capture with: npm run shots -- --demo   then: npm run site -- --adopt .shots/current`);
+    const orphan = missing.filter((f) => !Object.keys(SHOT_SOURCE).includes(f));
+    if (orphan.length) {
+      console.warn(`    no capture recipe for: ${orphan.join(", ")} — see site/content.mjs SHOWCASE`);
+    }
   }
-  return found;
+  return resolved;
 }
 
 // Copy the dark demo capture of each gallery shot out of a .shots run and into
 // docs/assets under the site's own name. .shots/ is gitignored (local visual
 // diffing); the site's images have to be committed because the Pages build has
 // no running instance to capture from.
+// Left-hand side is the name the site uses, right-hand side is the `npm run
+// shots` entry that produces it. A site shot with no entry here has no capture
+// recipe yet and must be dropped in by hand; collectShowcase() says which.
 const SHOT_SOURCE = {
   "dashboard.webp": "dashboard",
   "models.webp": "models",
   "model-config.webp": "model-config-modal",
-  "observe.webp": "observe-activity",
+  "vram-gauge.webp": "model-config-vram",
   "browse.webp": "browse",
   "images.webp": "models-image",
 };
@@ -733,14 +818,19 @@ async function main() {
   const release = latestRelease();
   console.log(release ? `release: ${release.tag} (${release.url})` : "release: none found, CTA falls back to /releases/latest");
 
-  const shots = await collectShots();
-  const hero = shots.find((s) => s.file === "dashboard.webp") ?? shots[0];
+  const showcase = await collectShowcase();
+  const haveImages = new Set(await readdir(IMAGES).catch(() => []));
+  const heroFile = "dashboard.webp";
+  const hero = haveImages.has(heroFile)
+    ? { file: heroFile, light: haveImages.has("dashboard-light.webp") ? "dashboard-light.webp" : null }
+    : null;
+  const galleries = showcase.some((s) => s.shots.length > 1);
 
   const landing = page({
     title: "Quartermaster · run any local model, on demand",
     description: HERO.lede,
     ogImage: hero?.file,
-    extraScripts: [COPY_SCRIPT, shots.length ? GALLERY_SCRIPT : "", REVEAL_SCRIPT].join("\n"),
+    extraScripts: [COPY_SCRIPT, galleries ? GALLERY_SCRIPT : "", REVEAL_SCRIPT].join("\n"),
     body: [
       renderHero(release, HERO.title),
       hero
@@ -749,8 +839,7 @@ async function main() {
         // page heavy enough to drop frames. It is already on screen anyway.
         ? `<div class="wrap">${eagerImg(shotFrame(hero.file, "The Quartermaster dashboard", "localhost:1250/ui/", hero.light))}</div>`
         : "",
-      renderFeatures(),
-      renderGallery(shots.filter((s) => s !== hero)),
+      renderFeatures(showcase),
       renderStory(),
       renderInstall(release),
       renderDocsTeaser(articles, categories),

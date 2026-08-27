@@ -37,16 +37,16 @@ export const SECTIONS = {
     icon: "box",
     title: "It works the machine out for you",
     sub:
-      "One endpoint in front of every model you own, and the sizing decisions made for you " +
-      "instead of by you.",
+      "One endpoint in front of every model you own, the sizing decisions made for you instead " +
+      "of by you, and a front end for all of it.",
   },
-  screens: {
-    eyebrow: "See it in action",
-    icon: "eye",
-    title: "The whole engine has a front end",
+  more: {
+    eyebrow: "And much more",
+    icon: "box",
+    title: "The rest of what it does",
     sub:
-      "Not a config file and a log tail. Hover a panel to open it: what is loaded, what it is " +
-      "doing, what it costs in VRAM, and a playground to actually use it.",
+      "Less photogenic, no less load-bearing. These are the parts that keep a multi-model box " +
+      "honest once it is running unattended.",
   },
   install: {
     eyebrow: "Get started",
@@ -117,28 +117,115 @@ export const ICONS = {
   activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-4.6-4.6a2 2 0 0 0-2.8 0L3 21"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
 };
 
-// These describe what Quartermaster does, not what it added to something else.
-// The cards used to carry a "new in fork" badge; it only parses for a reader who
-// already knows the upstream feature list, and turned the grid into a diff
-// against a project they would have to go read first.
-export const FEATURES = [
+// The four claims worth a picture, each its own scroll-into section with the
+// screenshot that proves it. A claim next to its evidence beats a strip of
+// anonymous screenshots twenty lines further down, which is what this replaced.
+//
+// `shots` are names under docs/assets/. A shot that isn't there yet is dropped
+// at build time with a warning rather than shipped as a broken image, so a
+// section degrades to its copy and the page still holds together. One shot
+// renders as a framed still beside the copy; two or more render as a gallery
+// under it, one at a time, with labelled tabs.
+//
+// `hero: true` marks the shot that also appears full-width under the hero, so
+// the same picture is not shown twice.
+export const SHOWCASE = [
   {
+    id: "config",
     icon: "wand",
-    title: "Config that writes itself",
+    eyebrow: "Automatic configuration",
+    title: "Config that writes itself, then hands you the pen",
     body:
-      "Point it at a folder. Every GGUF is identified from its own header, and context length, " +
-      "GPU offload, CPU-MoE split and KV-cache sizing are computed per model and per architecture " +
-      "with no hand-baked config variant per quant.",
+      "Point it at a folder. Every GGUF is identified from its own header, and context length, GPU " +
+      "offload, CPU-MoE split and KV-cache sizing are computed per model and per architecture. No " +
+      "hand-written config block per model, and no second block when a new quant lands.",
+    points: [
+      "Every computed number is an editable field, not a wall you have to work around.",
+      "Save a tuned set as a named variant and run it alongside the default: a long-context one for " +
+        "documents, a lean one for quick calls.",
+      "Changed your mind? Reset one field, or the whole model, back to what it computed.",
+    ],
+    shots: [
+      {
+        file: "model-config.webp",
+        label: "Per-model parameters",
+        caption: "Context, KV cache, offload and speculative decoding, with the computed default one click away.",
+      },
+    ],
   },
   {
+    id: "vram",
     icon: "gauge",
-    title: "VRAM-aware load planning",
+    eyebrow: "Load planning",
+    title: "It knows what will fit before it loads it",
     body:
-      "Samples free VRAM at startup and sizes each model to actually fit, including the compute " +
-      "buffer large-vocab models spill on. Live per-model VRAM and RAM gauges while it runs.",
+      "Free VRAM is sampled at startup and every model is sized against what is actually left, not " +
+      "against the number on the box. The gauge breaks a load down the way the card sees it, so an " +
+      "estimate that is about to go wrong is visible before you press load rather than after the " +
+      "driver kills the process.",
+    points: [
+      "Weights, KV cache and compute buffer are accounted separately, per architecture.",
+      "The compute buffer is the one large-vocab models silently spill on. It is priced in.",
+      "System usage is part of the budget, so the number is what is free for you, not what is free in theory.",
+    ],
+    shots: [
+      {
+        file: "vram-gauge.webp",
+        label: "VRAM breakdown",
+        caption: "One bar per segment: weights, KV cache, compute buffer, and what the rest of the system already holds.",
+      },
+    ],
   },
+  {
+    id: "playground",
+    icon: "play",
+    eyebrow: "Text, image and audio",
+    title: "A playground, not just a proxy",
+    body:
+      "It orchestrates llama-server, stable-diffusion.cpp, TTS and transcription servers, rerank and " +
+      "embedding models, upscaling and segmentation, all behind one OpenAI-compatible surface. Then " +
+      "it gives you a front end for them, on its own port with per-user login and server-side " +
+      "history, so a model is usable the moment it is discovered.",
+    points: [
+      "Chat with tool calling and web search, and a reasoning stream you can collapse or hide.",
+      "Generate and edit images against the same catalog, LoRAs and reference images included.",
+      "Speak and transcribe without leaving the tab.",
+    ],
+    shots: [
+      { file: "pg-chat.webp", label: "Chat", caption: "An ordinary conversation, with the thinking stream kept out of the answer." },
+      { file: "pg-tools.webp", label: "Tools and web search", caption: "The model calling out mid-conversation and reading a result in full." },
+      { file: "pg-image.webp", label: "Image generation", caption: "Diffusion models in the same catalog, driven from the same UI." },
+      { file: "pg-speech.webp", label: "Speech", caption: "Text to speech and transcription against your local voices." },
+    ],
+  },
+  {
+    id: "catalog",
+    icon: "layers",
+    eyebrow: "Getting and keeping models",
+    title: "Find a model, download it, run it",
+    body:
+      "Search Hugging Face from inside the app, compare quants against the VRAM you actually have, " +
+      "and download into your models folder with the transfer resumable if it breaks. What lands is " +
+      "picked up and configured without a restart.",
+    points: [
+      "Quants are listed with the fit already worked out, so the pick is not a guess.",
+      "Variants of one GGUF group together instead of flooding the list.",
+      "Text and image models share the catalog and the same management surface.",
+    ],
+    shots: [
+      { file: "browse.webp", label: "Model hub", caption: "Search, pick a quant, download into your models folder." },
+      { file: "models.webp", label: "Manage models", caption: "Every discovered model, grouped by GGUF, with its variants under it." },
+      { file: "images.webp", label: "Image models", caption: "Diffusion backends sit in the same catalog as the text ones." },
+    ],
+  },
+];
+
+// Everything that does not need a picture to land. Kept as compact cards under
+// "and much more" so the showcase above stays four claims rather than twelve.
+export const MORE = [
   {
     icon: "refresh",
     title: "On-demand model swapping",
@@ -162,18 +249,11 @@ export const FEATURES = [
       "on one port can evict on another: one process, one GPU accounting.",
   },
   {
-    icon: "layers",
-    title: "Text, image, audio, and more",
+    icon: "activity",
+    title: "Observe what it is doing",
     body:
-      "Orchestrates llama-server, stable-diffusion.cpp, TTS and transcription servers, rerank and " +
-      "embedding models, upscaling and segmentation, behind one OpenAI-compatible surface.",
-  },
-  {
-    icon: "play",
-    title: "A playground, not just a proxy",
-    body:
-      "Chat with tool calling and web search, generate and edit images, speak and transcribe, on " +
-      "its own port with per-user login and server-side history.",
+      "Activity, streaming logs, per-model performance and context use on one page, so a slow " +
+      "request is something you can look at rather than guess about.",
   },
   {
     icon: "shield",
@@ -182,19 +262,13 @@ export const FEATURES = [
       "API keys can be scoped to individual models. Bind the API to your tailnet and the dashboard " +
       "and config endpoints answer to localhost only unless you widen them yourself.",
   },
-];
-
-// The hover-to-expand panel strip. `file` is a name under docs/assets/; an entry
-// whose file is missing is skipped with a warning at build time rather than
-// shipping a broken <img>, so the strip grows as shots are captured.
-// Capture with `npm run shots -- --demo`, adopt with `npm run site -- --adopt`.
-export const GALLERY = [
-  { file: "dashboard.webp", icon: "monitor", label: "Dashboard", caption: "Loaded models, live VRAM and throughput at a glance." },
-  { file: "models.webp", icon: "layers", label: "Models", caption: "Every discovered model, grouped by GGUF with its variants." },
-  { file: "model-config.webp", icon: "sliders", label: "Per-model config", caption: "Edit context, KV and speculative decoding, or reset to the computed default." },
-  { file: "observe.webp", icon: "activity", label: "Observe", caption: "Activity, logs and performance on one page." },
-  { file: "browse.webp", icon: "search", label: "Model hub", caption: "Search Hugging Face, pick a quant, download into your models folder." },
-  { file: "images.webp", icon: "image", label: "Image models", caption: "Diffusion backends sit in the same catalog as the text ones." },
+  {
+    icon: "terminal",
+    title: "Scriptable all the way down",
+    body:
+      "Prometheus metrics, a log stream you can pipe, ops endpoints for load and unload, and a " +
+      "config file that hot-reloads when you edit it.",
+  },
 ];
 
 export const INSTALL = [
