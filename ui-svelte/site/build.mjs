@@ -692,7 +692,14 @@ async function collectShowcase() {
 
   if (missing.length) {
     console.warn(`  ! ${missing.length} screenshot(s) not in docs/assets, skipped: ${missing.join(", ")}`);
-    console.warn(`    capture with: npm run shots -- --demo   then: npm run site -- --adopt .shots/current`);
+    // The playground is a second app on its own port and is opt-in, so a run
+    // without the flag comes back having silently skipped exactly the shots
+    // this line was supposed to tell you how to get.
+    const flags = missing.some((f) => f.startsWith("pg-")) ? "--demo --playground" : "--demo";
+    console.warn(`    capture with: npm run shots -- ${flags}   then: npm run site -- --adopt .shots/current`);
+    if (missing.includes("pg-image.webp")) {
+      console.warn(`    pg-image also needs: --playground-image <file> --playground-prompt "<the prompt that made it>"`);
+    }
     const orphan = missing.filter((f) => !Object.keys(SHOT_SOURCE).includes(f));
     if (orphan.length) {
       console.warn(`    no capture recipe for: ${orphan.join(", ")} — see site/content.mjs SHOWCASE`);
@@ -715,6 +722,14 @@ const SHOT_SOURCE = {
   "vram-gauge.webp": "model-config-vram",
   "browse.webp": "browse",
   "images.webp": "models-image",
+  // The playground half. These come from `npm run shots -- --playground`, which
+  // photographs canned threads against a write-refusing route rather than the
+  // operator's own conversations; pg-image additionally needs a picture handed
+  // to it (--playground-image), because a generated one cannot be synthesized.
+  "pg-chat.webp": "pg-chat",
+  "pg-tools.webp": "pg-tools",
+  "pg-image.webp": "pg-image",
+  "pg-speech.webp": "pg-speech",
 };
 
 // The shots harness captures at device scale, which on this machine means

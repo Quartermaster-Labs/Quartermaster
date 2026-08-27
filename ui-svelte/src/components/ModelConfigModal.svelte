@@ -1417,7 +1417,9 @@
     <!-- Sticky live estimate: stays pinned above the scrolling form so the memory
          cost of the current tuning is always visible while editing. -->
     {#if config && !loading && !imageMode && !audioMode && !samMode && !isVllm}
-      <div class="px-4 py-2 border-b border-card-border bg-background/60 shrink-0">
+      <!-- data-shot: the crop anchor for the site's load-plan screenshot
+           (scripts/shots.mjs, "model-config-vram"). Not a style hook. -->
+      <div data-shot="load-plan" class="px-4 py-2 border-b border-card-border bg-background/60 shrink-0">
         {#if estimateError}
           <p class="font-mono text-xs text-error">{estimateError}</p>
         {:else if estimate}
