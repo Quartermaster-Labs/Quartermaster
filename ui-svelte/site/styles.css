@@ -538,28 +538,6 @@ h1 .accent {
   height: auto;
 }
 
-/* A dark app screenshot on a cream page (or the reverse) reads as a picture of
- * some other program. Where both captures exist the page shows the one matching
- * the reader's theme; where only one does, `.only-dark` is simply absent and the
- * single image stays visible. */
-.only-light {
-  display: none;
-}
-:root[data-theme="light"] .only-light {
-  display: block;
-}
-:root[data-theme="light"] .only-dark {
-  display: none;
-}
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) .only-light {
-    display: block;
-  }
-  :root:not([data-theme="dark"]) .only-dark {
-    display: none;
-  }
-}
-
 /* ── Sections ────────────────────────────────────────────────────────────── */
 
 section {

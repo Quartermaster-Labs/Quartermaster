@@ -275,18 +275,14 @@ function renderHero(release, hero) {
 const eagerImg = (html) =>
   html.replace(/ loading="lazy" decoding="async"/g, ' loading="eager" fetchpriority="high" decoding="async"');
 
-// `light` is the sibling capture (dashboard-light.webp next to dashboard.webp)
-// when docs/assets has one; the CSS picks by theme. The dark one keeps the alt
-// text and the light one is decorative, so a screen reader hears it once.
-function shotFrame(file, alt, label, light = null) {
-  const img = (src, cls, a) =>
-    `<img src="assets/img/${esc(src)}"${cls ? ` class="${cls}"` : ""} alt="${esc(a)}" loading="lazy" decoding="async">`;
-  const body = light
-    ? img(file, "only-dark", alt) + img(light, "only-light", "")
-    : img(file, "", alt);
+// One capture per shot, always the dark one. The site used to ship a light
+// sibling for every screenshot and swap them by theme; that doubled the asset
+// weight of the page to spare a light-mode visitor the sight of a dark
+// rectangle, which is what a screenshot of a dark app looks like anywhere.
+function shotFrame(file, alt, label) {
   return `<div class="shot">
     <div class="shot-bar"><i></i><i></i><i></i><span>${esc(label)}</span></div>
-    ${body}
+    <img src="assets/img/${esc(file)}" alt="${esc(alt)}" loading="lazy" decoding="async">
   </div>`;
 }
 
@@ -341,7 +337,7 @@ function renderShotGallery(id, shots) {
     .map(
       (s, i) => `<div class="gal-panel${i === 0 ? " is-current" : ""}" id="${id}-p${i}" role="tabpanel"
         aria-labelledby="${id}-t${i}"${i === 0 ? "" : " hidden"}>
-        ${shotFrame(s.file, `${s.label}: ${s.caption}`, s.label, s.light)}
+        ${shotFrame(s.file, `${s.label}: ${s.caption}`, s.label)}
         <p class="gal-caption"><b>${esc(s.label)}</b>${esc(s.caption)}</p>
       </div>`,
     )
@@ -391,7 +387,7 @@ function renderShowcase(entry, index) {
   }
 
   const media = `<div class="sc-media" data-reveal>
-      ${shotFrame(shots[0].file, `${shots[0].label}: ${shots[0].caption}`, shots[0].label, shots[0].light)}
+      ${shotFrame(shots[0].file, `${shots[0].label}: ${shots[0].caption}`, shots[0].label)}
       <p class="gal-caption"><b>${esc(shots[0].label)}</b>${esc(shots[0].caption)}</p>
     </div>`;
 
@@ -676,7 +672,6 @@ const FONT_FILES = [
 // together, so the site is publishable before the capture run happens.
 async function collectShowcase() {
   const have = new Set(await readdir(IMAGES).catch(() => []));
-  const lightOf = (f) => f.replace(/\.webp$/, "-light.webp");
   const missing = [];
 
   const resolved = SHOWCASE.map((entry) => ({
@@ -686,7 +681,7 @@ async function collectShowcase() {
         missing.push(s.file);
         return [];
       }
-      return [{ ...s, light: have.has(lightOf(s.file)) ? lightOf(s.file) : null }];
+      return [s];
     }),
   }));
 
@@ -789,15 +784,15 @@ async function adopt(dir) {
     throw new Error(`no such shots directory: ${from}`);
   });
   const jobs = [];
+  // Dark only. The harness still captures both themes -- they are the same run
+  // and the light ones are worth having when reviewing a shot -- but the site
+  // ships one picture per screenshot.
   for (const [target, shot] of Object.entries(SHOT_SOURCE)) {
-    for (const theme of ["dark", "light"]) {
-      // Prefer the demo capture (a model loaded, traffic behind it) over an empty one.
-      const match =
-        files.find((f) => f.startsWith(`${shot}--${theme}--`) && f.endsWith("--demo.png")) ||
-        files.find((f) => f.startsWith(`${shot}--${theme}--`) && f.endsWith(".png"));
-      if (!match) continue;
-      jobs.push([match, theme === "dark" ? target : target.replace(/\.webp$/, "-light.webp")]);
-    }
+    // Prefer the demo capture (a model loaded, traffic behind it) over an empty one.
+    const match =
+      files.find((f) => f.startsWith(`${shot}--dark--`) && f.endsWith("--demo.png")) ||
+      files.find((f) => f.startsWith(`${shot}--dark--`) && f.endsWith(".png"));
+    if (match) jobs.push([match, target]);
   }
   if (!jobs.length) throw new Error(`no matching shots in ${from} (expected e.g. dashboard--dark--1440--demo.png)`);
   const n = await optimizeInto(jobs, from);
@@ -837,7 +832,7 @@ async function main() {
   const haveImages = new Set(await readdir(IMAGES).catch(() => []));
   const heroFile = "dashboard.webp";
   const hero = haveImages.has(heroFile)
-    ? { file: heroFile, light: haveImages.has("dashboard-light.webp") ? "dashboard-light.webp" : null }
+    ? { file: heroFile }
     : null;
   const galleries = showcase.some((s) => s.shots.length > 1);
 
@@ -852,7 +847,7 @@ async function main() {
         // Deliberately not revealed: it is a full-width PNG right at the fold,
         // and fading a texture that size in mid-scroll is the one thing on this
         // page heavy enough to drop frames. It is already on screen anyway.
-        ? `<div class="wrap">${eagerImg(shotFrame(hero.file, "The Quartermaster dashboard", "localhost:1250/ui/", hero.light))}</div>`
+        ? `<div class="wrap">${eagerImg(shotFrame(hero.file, "The Quartermaster dashboard", "Dashboard"))}</div>`
         : "",
       renderFeatures(showcase),
       renderStory(),
