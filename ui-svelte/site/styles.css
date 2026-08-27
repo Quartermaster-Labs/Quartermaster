@@ -136,7 +136,12 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* The dotted ground the app uses on its own empty states, at page scale. */
+/* The dotted ground the app uses on its own empty states, at page scale.
+ *
+ * A fixed element under scrolling content is repainted with the scroll unless
+ * it owns a compositor layer, and a 22px gradient tile across the viewport is
+ * not a cheap repaint. translateZ promotes it once; after that the scroll is a
+ * matrix change on the layers above it and this one is never touched. */
 body::before {
   content: "";
   position: fixed;
@@ -145,6 +150,7 @@ body::before {
   background-image: radial-gradient(var(--dot) 1px, transparent 1px);
   background-size: 22px 22px;
   pointer-events: none;
+  transform: translateZ(0);
 }
 
 a {
@@ -185,11 +191,11 @@ h3,
   position: sticky;
   top: 0;
   z-index: 20;
-  /* A backdrop filter re-blurs whatever is under the header on every scrolled
-   * frame, so the radius is kept small and the saturate pass dropped: over a
-   * full-width screenshot the expensive version is visible as jank. */
-  backdrop-filter: blur(9px);
-  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  /* No backdrop-filter. A frosted header re-blurs whatever is beneath it on
+   * every single scrolled frame, and what scrolls beneath this one is a
+   * full-bleed screenshot: the most expensive backdrop there is. A nearly
+   * opaque bar reads the same at a glance and costs one composite. */
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
   border-bottom: 1px solid var(--border-soft);
 }
 
@@ -409,10 +415,14 @@ h1 .accent {
   font-size: 0.75rem;
 }
 
-/* Three blurred blobs on long, offset drifts. This is a gradient mesh done with
- * three divs and two keyframes rather than a canvas: the compositor animates
- * translate/scale off the main thread, so it costs nothing while you scroll and
- * degrades to a static wash the moment motion is unwelcome. */
+/* Three soft blobs on long, offset drifts: a gradient mesh made of three divs
+ * and two keyframes.
+ *
+ * The softness is a radial-gradient that fades to transparent, NOT filter:
+ * blur(), and the container has no mask. Both of those are per-frame GPU work
+ * on a layer that overlaps the sticky header and the hero screenshot, and that
+ * showed up as stutter in the first screen of scrolling. A gradient is painted
+ * once into a texture and then only translated. */
 .mesh {
   position: absolute;
   z-index: -1;
@@ -420,45 +430,40 @@ h1 .accent {
   height: 46rem;
   overflow: hidden;
   pointer-events: none;
-  /* Keeps the blurred layers from being considered when anything outside the
-   * hero repaints. */
-  contain: paint;
-  mask-image: radial-gradient(ellipse 80% 65% at 50% 30%, #000 35%, transparent 78%);
+  contain: strict;
 }
 
 .mesh i {
   position: absolute;
   display: block;
-  border-radius: 50%;
-  filter: blur(60px);
-  opacity: 0.55;
+  opacity: 0.75;
   will-change: transform;
 }
 
 .mesh i:nth-child(1) {
-  top: 2%;
-  left: 22%;
-  width: 34rem;
-  height: 26rem;
-  background: color-mix(in srgb, var(--primary) 42%, transparent);
+  top: -6%;
+  left: 14%;
+  width: 46rem;
+  height: 36rem;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--primary) 34%, transparent), transparent);
   animation: drift-a 26s ease-in-out infinite alternate;
 }
 
 .mesh i:nth-child(2) {
-  top: 16%;
-  right: 14%;
-  width: 30rem;
-  height: 24rem;
-  background: color-mix(in srgb, var(--primary-hover) 30%, transparent);
+  top: 8%;
+  right: 6%;
+  width: 42rem;
+  height: 34rem;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--primary-hover) 26%, transparent), transparent);
   animation: drift-b 34s ease-in-out infinite alternate;
 }
 
 .mesh i:nth-child(3) {
-  top: 30%;
-  left: 44%;
-  width: 26rem;
-  height: 20rem;
-  background: color-mix(in srgb, var(--text) 12%, transparent);
+  top: 22%;
+  left: 38%;
+  width: 36rem;
+  height: 28rem;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--text) 10%, transparent), transparent);
   animation: drift-a 41s ease-in-out infinite alternate-reverse;
 }
 

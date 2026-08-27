@@ -191,12 +191,12 @@ export const FEATURES = [
 // shipping a broken <img>, so the strip grows as shots are captured.
 // Capture with `npm run shots -- --demo`, adopt with `npm run site -- --adopt`.
 export const GALLERY = [
-  { file: "dashboard.png", icon: "monitor", label: "Dashboard", caption: "Loaded models, live VRAM and throughput at a glance." },
-  { file: "models.png", icon: "layers", label: "Models", caption: "Every discovered model, grouped by GGUF with its variants." },
-  { file: "model-config.png", icon: "sliders", label: "Per-model config", caption: "Edit context, KV and speculative decoding, or reset to the computed default." },
-  { file: "observe.png", icon: "activity", label: "Observe", caption: "Activity, logs and performance on one page." },
-  { file: "browse.png", icon: "search", label: "Model hub", caption: "Search Hugging Face, pick a quant, download into your models folder." },
-  { file: "images.png", icon: "image", label: "Image models", caption: "Diffusion backends sit in the same catalog as the text ones." },
+  { file: "dashboard.webp", icon: "monitor", label: "Dashboard", caption: "Loaded models, live VRAM and throughput at a glance." },
+  { file: "models.webp", icon: "layers", label: "Models", caption: "Every discovered model, grouped by GGUF with its variants." },
+  { file: "model-config.webp", icon: "sliders", label: "Per-model config", caption: "Edit context, KV and speculative decoding, or reset to the computed default." },
+  { file: "observe.webp", icon: "activity", label: "Observe", caption: "Activity, logs and performance on one page." },
+  { file: "browse.webp", icon: "search", label: "Model hub", caption: "Search Hugging Face, pick a quant, download into your models folder." },
+  { file: "images.webp", icon: "image", label: "Image models", caption: "Diffusion backends sit in the same catalog as the text ones." },
 ];
 
 export const INSTALL = [

@@ -268,7 +268,14 @@ function renderHero(release, hero) {
 </section>`;
 }
 
-// `light` is the sibling capture (dashboard-light.png next to dashboard.png)
+// The hero image is the one picture on the page that is already on screen when
+// you arrive, so it loads eagerly and at high priority. Left lazy it decodes on
+// the first scroll instead, and a screenshot is a big bitmap to decode and
+// upload in the middle of a gesture: that alone is a visible stutter.
+const eagerImg = (html) =>
+  html.replace(/ loading="lazy" decoding="async"/g, ' loading="eager" fetchpriority="high" decoding="async"');
+
+// `light` is the sibling capture (dashboard-light.webp next to dashboard.webp)
 // when docs/assets has one; the CSS picks by theme. The dark one keeps the alt
 // text and the light one is decorative, so a screen reader hears it once.
 function shotFrame(file, alt, label, light = null) {
@@ -605,7 +612,7 @@ const FONT_FILES = [
 // rather than shipped as broken images, with the command that produces them.
 async function collectShots() {
   const have = new Set(await readdir(IMAGES).catch(() => []));
-  const lightOf = (f) => f.replace(/\.png$/, "-light.png");
+  const lightOf = (f) => f.replace(/\.webp$/, "-light.webp");
   const found = GALLERY.filter((s) => have.has(s.file)).map((s) => ({
     ...s,
     light: have.has(lightOf(s.file)) ? lightOf(s.file) : null,
@@ -623,20 +630,71 @@ async function collectShots() {
 // diffing); the site's images have to be committed because the Pages build has
 // no running instance to capture from.
 const SHOT_SOURCE = {
-  "dashboard.png": "dashboard",
-  "models.png": "models",
-  "model-config.png": "model-config-modal",
-  "observe.png": "observe-activity",
-  "browse.png": "browse",
-  "images.png": "models-image",
+  "dashboard.webp": "dashboard",
+  "models.webp": "models",
+  "model-config.webp": "model-config-modal",
+  "observe.webp": "observe-activity",
+  "browse.webp": "browse",
+  "images.webp": "models-image",
 };
+
+// The shots harness captures at device scale, which on this machine means
+// 2880px wide. The page never shows one wider than ~1120 CSS px, so shipping
+// the raw capture costs a ~20MB decoded bitmap and a downscale on the GPU for a
+// picture nobody can see the detail in. Half that width is still retina-sharp
+// at the size it renders.
+const MAX_SHOT_WIDTH = 1600;
+const WEBP_QUALITY = 0.9;
+
+// Re-encoding needs a raster decoder, and the only one this repo already
+// depends on is the browser Playwright drives (a devDependency, and the same
+// one that produced the captures). Deliberately confined to --adopt: the Pages
+// runner only ever copies files that were committed already resized, so CI
+// never installs a browser for this.
+async function optimizeInto(files, from) {
+  const { chromium } = await import("playwright");
+  const browser = await chromium.launch();
+  const page = await browser.newPage();
+  try {
+    let n = 0;
+    for (const [src, target] of files) {
+      // Passed as a data URL rather than a file:// path: an about:blank page
+      // cannot read file:// (EncodingError), and a data URL keeps the canvas
+      // untainted so toDataURL still works.
+      const dataUrl = `data:image/png;base64,${(await readFile(path.join(from, src))).toString("base64")}`;
+      const out = await page.evaluate(
+        async ([url, maxW, q]) => {
+          const img = new Image();
+          img.src = url;
+          await img.decode();
+          const scale = Math.min(1, maxW / img.naturalWidth);
+          const c = document.createElement("canvas");
+          c.width = Math.round(img.naturalWidth * scale);
+          c.height = Math.round(img.naturalHeight * scale);
+          const ctx = c.getContext("2d");
+          ctx.imageSmoothingQuality = "high";
+          ctx.drawImage(img, 0, 0, c.width, c.height);
+          return { data: c.toDataURL("image/webp", q).split(",")[1], w: c.width, h: c.height };
+        },
+        [dataUrl, MAX_SHOT_WIDTH, WEBP_QUALITY],
+      );
+      const buf = Buffer.from(out.data, "base64");
+      await writeFile(path.join(IMAGES, target), buf);
+      console.log(`  ✓ ${src} → docs/assets/${target} (${out.w}×${out.h}, ${(buf.length / 1024) | 0} KB)`);
+      n++;
+    }
+    return n;
+  } finally {
+    await browser.close();
+  }
+}
 
 async function adopt(dir) {
   const from = path.resolve(UI, dir);
   const files = await readdir(from).catch(() => {
     throw new Error(`no such shots directory: ${from}`);
   });
-  let n = 0;
+  const jobs = [];
   for (const [target, shot] of Object.entries(SHOT_SOURCE)) {
     for (const theme of ["dark", "light"]) {
       // Prefer the demo capture (a model loaded, traffic behind it) over an empty one.
@@ -644,13 +702,11 @@ async function adopt(dir) {
         files.find((f) => f.startsWith(`${shot}--${theme}--`) && f.endsWith("--demo.png")) ||
         files.find((f) => f.startsWith(`${shot}--${theme}--`) && f.endsWith(".png"));
       if (!match) continue;
-      const name = theme === "dark" ? target : target.replace(/\.png$/, "-light.png");
-      await cp(path.join(from, match), path.join(IMAGES, name));
-      console.log(`  ✓ ${match} → docs/assets/${name}`);
-      n++;
+      jobs.push([match, theme === "dark" ? target : target.replace(/\.webp$/, "-light.webp")]);
     }
   }
-  if (!n) throw new Error(`no matching shots in ${from} (expected e.g. dashboard--dark--1440--demo.png)`);
+  if (!jobs.length) throw new Error(`no matching shots in ${from} (expected e.g. dashboard--dark--1440--demo.png)`);
+  const n = await optimizeInto(jobs, from);
   console.log(`adopted ${n} screenshot(s); commit docs/assets/ to publish them`);
 }
 
@@ -684,7 +740,7 @@ async function main() {
   console.log(release ? `release: ${release.tag} (${release.url})` : "release: none found, CTA falls back to /releases/latest");
 
   const shots = await collectShots();
-  const hero = shots.find((s) => s.file === "dashboard.png") ?? shots[0];
+  const hero = shots.find((s) => s.file === "dashboard.webp") ?? shots[0];
 
   const landing = page({
     title: "Quartermaster · run any local model, on demand",
@@ -697,7 +753,7 @@ async function main() {
         // Deliberately not revealed: it is a full-width PNG right at the fold,
         // and fading a texture that size in mid-scroll is the one thing on this
         // page heavy enough to drop frames. It is already on screen anyway.
-        ? `<div class="wrap">${shotFrame(hero.file, "The Quartermaster dashboard", "localhost:1250/ui/", hero.light)}</div>`
+        ? `<div class="wrap">${eagerImg(shotFrame(hero.file, "The Quartermaster dashboard", "localhost:1250/ui/", hero.light))}</div>`
         : "",
       renderFeatures(),
       renderGallery(shots.filter((s) => s !== hero)),
@@ -717,7 +773,7 @@ async function main() {
   if (argv.includes("--serve")) {
     const { createServer } = await import("node:http");
     const { createReadStream } = await import("node:fs");
-    const types = { ".html": "text/html", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2" };
+    const types = { ".html": "text/html", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".webp": "image/webp", ".woff2": "font/woff2" };
     createServer((req, res) => {
       let p = path.join(OUT, decodeURIComponent(req.url.split("?")[0]));
       if (p.endsWith(path.sep) || !path.extname(p)) p = path.join(p, "index.html");
