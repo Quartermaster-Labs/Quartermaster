@@ -374,5 +374,5 @@ export const INSTALL_NOTE = {
   before: "Prefer to build it yourself? ",
   href: REPO + "#building-from-source",
   link: "Building from source",
-  after: " — Go 1.24+ and Node for the UI, one binary out the other end.",
+  after: " takes Go 1.24+ and Node for the UI, one binary out the other end.",
 };
