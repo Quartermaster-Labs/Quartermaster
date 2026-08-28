@@ -1,4 +1,4 @@
-/* quartermaster.dev — the marketing/docs site.
+/* quartermaster.dev: the marketing/docs site.
  *
  * Palette is lifted verbatim from the app (ui-svelte/src/index.css) so the page
  * and the screenshots on it are the same object: warm charcoal + orange in dark,
@@ -133,7 +133,7 @@
 
 /* Mono for headings and every bit of chrome (nav, buttons, labels, tabs); Inter
  * for anything you actually read a paragraph of. The app is a console for a
- * machine — its typography should say so — but a docs page set in mono is a
+ * machine (its typography should say so), but a docs page set in mono is a
  * docs page nobody finishes. */
 :root {
   --mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
@@ -452,7 +452,7 @@ h3,
 }
 
 /* Mono runs wide, so the display sizes come down a notch from the Inter-era
- * values and the tracking backs off — negative tracking that flatters a
+ * values and the tracking backs off: negative tracking that flatters a
  * grotesque just smears a monospace face. */
 h1 {
   margin: 1.4rem auto 0;
@@ -700,7 +700,7 @@ section {
 
 /* Scroll reveals. The hidden state only exists once JS has added `.reveal`, so
  * a page with JS off, a crawler, or a screenshotter that never fires the
- * observer all see the finished page — the animation can only ever be the
+ * observer all see the finished page, and the animation can only ever be the
  * difference between "arrives" and "was already there". */
 .reveal {
   opacity: 0;
@@ -862,7 +862,7 @@ pre {
   border-color: var(--border);
 }
 
-/* Confirmation lives on the button that was clicked — no toast, no layout
+/* Confirmation lives on the button that was clicked: no toast, no layout
  * shift, and it says the same thing whether the async clipboard API was
  * available or the textarea fallback ran. */
 .copy.ok {
@@ -883,7 +883,7 @@ pre {
 }
 
 /* An install command must be readable at a glance, not discovered by scrolling
- * a box sideways — so these wrap. Code inside a docs article keeps `pre`
+ * a box sideways, so these wrap. Code inside a docs article keeps `pre`
  * (config YAML relies on its columns). */
 .term .ln {
   display: block;
@@ -1366,7 +1366,7 @@ pre {
   border-top: 1px solid var(--border-soft);
 }
 
-/* Anchor links appear on heading hover — never in the tab order or the a11y
+/* Anchor links appear on heading hover, never in the tab order or the a11y
  * tree, since the heading text right next to them already says where you are. */
 .prose .anchor {
   margin-left: 0.4rem;

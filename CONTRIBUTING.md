@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for looking. quartermaster is a small project — issues and PRs are both
+Thanks for looking. quartermaster is a small project, and issues and PRs are both
 welcome, and the bar is "does it work and does it fit", not ceremony.
 
 ## Before you write code
@@ -10,7 +10,7 @@ welcome, and the bar is "does it work and does it fit", not ceremony.
   because nearly every real bug here is a launch-command or VRAM-fit problem, and
   those two things answer it immediately.
 - **Question?** Use Discussions, not an issue.
-- **Security bug?** Don't open an issue — see [`SECURITY.md`](SECURITY.md).
+- **Security bug?** Don't open an issue: see [`SECURITY.md`](SECURITY.md).
 - **Feature or refactor?** Open an issue first if it is more than an afternoon of
   work. quartermaster has opinions (below) that are cheaper to discuss than to
   discover in review.
@@ -26,7 +26,7 @@ make ui          # build the Svelte app into internal/server/ui_dist
 go build ./...
 ```
 
-`internal/server/ui_dist` is generated and untracked, but it is `go:embed`ed —
+`internal/server/ui_dist` is generated and untracked, but it is `go:embed`ed,
 so `make ui` (or at least one `npm run build`) has to run before the Go build
 will succeed on a fresh clone.
 
@@ -44,12 +44,12 @@ tests use a stub upstream (`cmd/simple-responder`) rather than real inference.
 
 ```sh
 make test-dev    # fast: go test -short + staticcheck
-make test-all    # full, with -race — run this before opening a PR
+make test-all    # full, with -race; run before opening a PR
 make test-ui     # svelte-check + vitest, after changes under ui-svelte/
 ```
 
 Fix every staticcheck finding you introduce. Test naming follows the existing
-convention — `TestProxyManager_<name>`, `TestProcessGroup_<name>`, and so on.
+convention: `TestProxyManager_<name>`, `TestProcessGroup_<name>`, and so on.
 
 Run `gofmt -w` on Go files before committing. CI runs the Go tests on Linux and
 Windows and the UI tests separately; all three must be green.
@@ -57,14 +57,14 @@ Windows and the UI tests separately; all three must be green.
 ## Finding your way around
 
 Each subsystem has its own `CLAUDE.md` with the file layout, the types that
-matter and the gotchas — start from the table in the root
+matter and the gotchas: start from the table in the root
 [`CLAUDE.md`](CLAUDE.md) and read the one for the area you're touching. Those
 files are documentation for humans too, despite the name; if your change makes
 one of them wrong, update it in the same PR.
 
 ## Things that will get a PR sent back
 
-These aren't style preferences — each one has broken something before:
+These aren't style preferences: each one has broken something before:
 
 - **Splitting into multiple processes.** Multi-listener operation and
   cross-port eviction require ONE process with N listeners sharing ONE
@@ -76,7 +76,7 @@ These aren't style preferences — each one has broken something before:
   address. A new `/api/*` ops or editor route goes on `adminChain`. Getting this
   wrong publishes the config editor to whatever address the port is bound to.
 - **Interrogating a launch command with `strings.Contains`.** Use
-  `config.ParseCmd` — substring tests break on line-wrapped flags and match
+  `config.ParseCmd`: substring tests break on line-wrapped flags and match
   prefixes of longer flags.
 - **Adding volatile text to the KV-stable prompt prefix.** Tool descriptions and
   system-prompt lines are cache state; putting today's date in a tool
@@ -101,7 +101,7 @@ These aren't style preferences — each one has broken something before:
   - key change 2
   ```
 
-  `scope` is the subsystem — `server`, `autogen`, `backends`, `ui`, and so on.
+  `scope` is the subsystem: `server`, `autogen`, `backends`, `ui`, and so on.
 
 - Describe what changed and why. Skip the test plan; say how you verified it if
   it isn't obvious.

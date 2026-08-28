@@ -5,12 +5,12 @@
 //
 // The corpus is ONE file, internal/server/wiki_articles.json: the Go server
 // embeds it for the `wiki_search` tool, the Help modal renders it, and this
-// script publishes it. Nobody hand-writes a page under docs/ — an edit there is
+// script publishes it. Nobody hand-writes a page under docs/: an edit there is
 // lost on the next run, which is why every generated file says so at the top.
 //
 // Why publish at all, when the same text is a click away inside the app: the
 // audience is people looking at the repo who have not installed anything yet,
-// and search engines. That is also the whole scope — anything about internals
+// and search engines. That is also the whole scope: anything about internals
 // belongs in the subsystem docs next to the code it describes, not here.
 import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -48,7 +48,7 @@ function renderIndex(articles, categories) {
 
 # Quartermaster user guide
 
-The same help wiki the app ships with — reachable in-app from **Help** in the sidebar,
+The same help wiki the app ships with, reachable in-app from **Help** in the sidebar,
 and searchable by the playground assistant itself via its \`wiki_search\` tool.
 
 Looking for how quartermaster works *inside*? That lives beside the code it

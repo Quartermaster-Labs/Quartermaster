@@ -12,7 +12,7 @@ Include what you'd want if you were fixing it: the version (`/api/version` or
 or steps that reproduce it.
 
 You'll get an acknowledgement within a few days. This is a small project without
-a paid security team, so please don't expect an enterprise SLA — but real issues
+a paid security team, so please don't expect an enterprise SLA, but real issues
 get fixed and credited.
 
 ## Supported versions
@@ -29,7 +29,7 @@ configure them. Knowing where the boundaries are is most of the story:
 (`/logs`, `/unload`, `/running`, `/upstream/…`) and the config editor
 (`/api/settings`, `/api/models/…`, `/api/backends/…`, `/api/hub/…`) carry **no
 authentication at all**. They are gated by *remote address*: loopback only, plus
-anything you add with `-admin-allow <cidr>`. This is deliberate — API keys gate
+anything you add with `-admin-allow <cidr>`. This is deliberate: API keys gate
 the inference API, so enabling them can never lock you out of your own UI.
 
 By design, anything that reaches the admin surface can run commands as you: the
@@ -43,7 +43,7 @@ surface stays restricted to this host automatically when you do.
 
 **The playground login is not a security boundary.** It exists to keep chat
 history separate per person on a shared machine. Passwords are hashed, and the
-session cookie is HMAC-signed so it can't be forged — but anyone who can reach
+session cookie is HMAC-signed so it can't be forged, but anyone who can reach
 the port can create an account, and a playground user reaches the inference API,
 the chat tools' outbound fetches, and the model list. Don't put it on the open
 internet; a tailnet or LAN you trust is the intended deployment.
@@ -63,10 +63,10 @@ internet; a tailnet or LAN you trust is the intended deployment.
 ### Not in scope
 
 - Admin endpoints being unauthenticated on loopback, or reachable from a range
-  you added with `-admin-allow` / `-admin-open` — that's the documented design
+  you added with `-admin-allow` / `-admin-open`, which is the documented design
 - The playground login being registration-open or lacking rate limiting
 - Anything requiring an attacker who can already write your config file, your
   models folder, or the binaries quartermaster launches
-- Vulnerabilities in llama.cpp, stable-diffusion.cpp or other backends —
+- Vulnerabilities in llama.cpp, stable-diffusion.cpp or other backends;
   report those upstream
 - Denial of service by loading a model that doesn't fit in VRAM

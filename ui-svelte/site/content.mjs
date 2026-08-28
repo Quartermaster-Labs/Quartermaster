@@ -125,7 +125,7 @@ export const ICONS = {
 };
 
 // Platform marks. These are FILLED closed paths, not stroke outlines, so
-// build.mjs renders anything named here with `fill` instead of `stroke` — the
+// build.mjs renders anything named here with `fill` instead of `stroke`: the
 // two cannot share one <svg> element's attributes.
 //
 // linux/apple/docker are Simple Icons (CC0). `windows` is our own four-pane

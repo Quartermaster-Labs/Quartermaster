@@ -2,7 +2,7 @@
 
 # Quartermaster user guide
 
-The same help wiki the app ships with — reachable in-app from **Help** in the sidebar,
+The same help wiki the app ships with, reachable in-app from **Help** in the sidebar,
 and searchable by the playground assistant itself via its `wiki_search` tool.
 
 Looking for how quartermaster works *inside*? That lives beside the code it

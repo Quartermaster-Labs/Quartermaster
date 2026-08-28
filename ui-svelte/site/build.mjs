@@ -6,17 +6,17 @@
 //
 // Two halves, one corpus:
 //
-//   landing page  — site/content.mjs, hand-written marketing copy
-//   /docs/*       — internal/server/wiki_articles.json, the SAME articles the
+//   landing page  from site/content.mjs, hand-written marketing copy
+//   /docs/*       from internal/server/wiki_articles.json, the SAME articles the
 //                   app's Help modal renders and the `wiki_search` tool reads
 //
 // So the guide on the website cannot drift from the guide in the app: there is
 // one file, and three renderers (Go tool, Svelte modal, this). docs/ in the repo
-// is a fourth (ui-svelte/scripts/wiki-docs.mjs) — markdown for people reading on
+// is a fourth (ui-svelte/scripts/wiki-docs.mjs): markdown for people reading on
 // GitHub, HTML for people who haven't cloned anything.
 //
 // Output is NOT committed. It is a build product with no reader inside the repo,
-// and .github/workflows/pages.yml regenerates it on every push — committing it
+// and .github/workflows/pages.yml regenerates it on every push, so committing it
 // would only create something that can go stale.
 import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
@@ -92,7 +92,7 @@ document.getElementById("theme").addEventListener("click", function () {
 const MARK = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS.box}</svg>`;
 
 // `depth` is how far the page sits below the site root, so every href stays
-// relative — that way the site works at github.io/quartermaster/, at a custom
+// relative, so the site works at github.io/quartermaster/, at a custom
 // domain, and from a file:// preview without a base-URL setting to get wrong.
 function page({ title, description, body, depth = 0, extraScripts = "", ogImage = null }) {
   const up = depth === 0 ? "" : "../".repeat(depth);
@@ -181,7 +181,7 @@ const md = unified()
 
 const toHtml = async (source) => String(await md.process(source));
 
-// First sentence of the body, markdown stripped — the <meta description> and the
+// First sentence of the body, markdown stripped: the <meta description> and the
 // blurb under each card in the docs index.
 function summarize(body, max = 165) {
   const text = body
@@ -201,7 +201,7 @@ function summarize(body, max = 165) {
 const fmtSize = (n) => `${(n / 1024 / 1024).toFixed(0)} MB`;
 
 // The installer asset name carries the version, so there is no stable
-// /releases/latest/download/<name> URL to hard-code — we resolve the real one at
+// /releases/latest/download/<name> URL to hard-code, so we resolve the real one at
 // build time. The Pages workflow also runs on `release: published`, so the
 // button is rebuilt when a release lands. No gh, no releases, or a network
 // failure all degrade to the releases page rather than failing the build.
@@ -254,7 +254,7 @@ function sectionHead(key) {
  * product actually shows you while a model is decoding, not a stock glow.
  *
  * Each streak is one element carrying its own timing as custom properties, and
- * the animation spends only the first third of its cycle in flight — the rest is
+ * the animation spends only the first third of its cycle in flight, and the rest is
  * parked offscreen at zero opacity. That dead time is what makes them arrive at
  * irregular intervals with a handful visible at once, out of nothing but CSS: no
  * rAF loop, no canvas, no main-thread work at all. Negative delays start the
@@ -265,7 +265,7 @@ function sectionHead(key) {
  * every rebuild into a noisy diff.
  */
 function renderEmbers(n = 7) {
-  // mulberry32 — small, fast, and stable across Node versions, which a hash of
+  // mulberry32: small, fast, and stable across Node versions, which a hash of
   // Math.random()'s state would not be.
   let seed = 0x9e3779b9;
   const rnd = () => {
@@ -291,7 +291,7 @@ function renderEmbers(n = 7) {
   // that reads as a rhythm rather than a loop.
   const CYCLE = 36;
   // Fraction of the cycle spent crossing; the rest is parked offscreen at zero
-  // opacity. MUST match the ember-run keyframes in styles.css — the keyframe
+  // opacity. MUST match the ember-run keyframes in styles.css: the keyframe
   // stops are literal percentages and cannot read a custom property.
   const FLIGHT = 0.33;
 
@@ -309,7 +309,7 @@ function renderEmbers(n = 7) {
    * Phases are spread evenly round the cycle, so the streaks that can overlap are
    * the ones ADJACENT IN PHASE: at FLIGHT = 0.33 that is roughly two either side.
    * Stepping two lanes per phase slot puts those neighbours two lanes apart,
-   * while lane-adjacent pairs end up four phase slots apart — 4/7 of a cycle,
+   * while lane-adjacent pairs end up four phase slots apart, 4/7 of a cycle,
    * far more than a flight lasts, so they can never share the screen.
    *
    * The step and the lane count have to be coprime, or the walk revisits lanes
@@ -354,7 +354,7 @@ function renderEmbers(n = 7) {
   // own and the draw succeeds immediately; if a future edit widens them past what
   // the spacing can absorb, that is a build-time error rather than a hero that
   // quietly goes back to drawing lines.
-  if (collides(set)) throw new Error("embers: no arrangement satisfies MIN_GAP_TOGETHER — widen the band, cut n, or lower FLIGHT");
+  if (collides(set)) throw new Error("embers: no arrangement satisfies MIN_GAP_TOGETHER: widen the band, cut n, or lower FLIGHT");
 
   const streaks = set
     .map(
@@ -378,7 +378,7 @@ function renderHero(release, hero) {
   const pills = PILLS.map((p) => `<li>${esc(p)}</li>`).join("");
 
   // The mesh is three blurred gradient blobs drifting on long, offset CSS
-  // keyframes — no canvas, no rAF loop, nothing repainting on the main thread,
+  // keyframes: no canvas, no rAF loop, nothing repainting on the main thread,
   // and `prefers-reduced-motion` parks them where they start.
   return `<section class="hero">
   <div class="mesh" aria-hidden="true"><i></i><i></i><i></i></div>
@@ -616,7 +616,7 @@ function renderStory() {
 
 // A shell block that looks like a shell: a prompt glyph on each command, dimmed
 // trailing comments, and a Copy button. The prompt and the comment styling are
-// markup, never text — the button copies `code` verbatim, so what lands on the
+// markup, never text: the button copies `code` verbatim, so what lands on the
 // clipboard is exactly what you'd type.
 function terminal(code, label) {
   const lines = code.split("\n");
@@ -649,7 +649,7 @@ const COPY_SCRIPT = `<script>
         navigator.clipboard.writeText(text).then(done, fallback);
       } else fallback();
       function fallback() {
-        // http:// origins and older Safari have no async clipboard — the
+        // http:// origins and older Safari have no async clipboard, and the
         // deprecated path still works there and this is one short string.
         var ta = document.createElement("textarea");
         ta.value = text; ta.setAttribute("readonly", "");
@@ -691,7 +691,7 @@ function renderInstall(release) {
   }).join("\n");
 
   // Building from source is a fourth thing you can do but not a fourth
-  // audience, and the grid fits three cards at this width — a fourth sits alone
+  // audience, and the grid fits three cards at this width, and a fourth sits alone
   // on a row of its own, which is a lot of furniture for the path fewest
   // readers take. It gets a line under the grid pointing at the instructions.
   const note = INSTALL_NOTE
@@ -713,7 +713,7 @@ function renderInstall(release) {
 //   2. `prefers-reduced-motion` skips the whole thing;
 //   3. a 2.5s failsafe unhides everything even if the observer never fires.
 //
-// (3) is not paranoia — the site this design borrows from ships unguarded
+// (3) is not paranoia: the site this design borrows from ships unguarded
 // reveals, and its own full-page screenshot comes back blank below the fold.
 const REVEAL_SCRIPT = `<script>
 (function () {
@@ -885,7 +885,7 @@ async function collectShowcase() {
     }
     const orphan = missing.filter((f) => !Object.keys(SHOT_SOURCE).includes(f));
     if (orphan.length) {
-      console.warn(`    no capture recipe for: ${orphan.join(", ")} — see site/content.mjs SHOWCASE`);
+      console.warn(`    no capture recipe for: ${orphan.join(", ")} (see site/content.mjs SHOWCASE)`);
     }
   }
   return resolved;
