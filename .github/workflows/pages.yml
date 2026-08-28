@@ -8,7 +8,14 @@ name: Pages
 # there is no stable /releases/latest/download/ path), which means a new release
 # has to rebuild the page or the button keeps pointing at the old .exe.
 #
-# One-time setup: Settings → Pages → Source = "GitHub Actions".
+# No manual setup. `configure-pages` below runs with `enablement: true`, so the
+# first successful run turns Pages on for the repo and points it at Actions
+# itself; Settings → Pages needs no visit.
+#
+# Until the repo is public this workflow SKIPS rather than runs. Pages on a
+# private repo needs a paid plan, so a run today would fail on the deploy step
+# and mail a red X for every push to the site -- with the guard, flipping the
+# repo to public and pushing (or hitting "Run workflow") is the whole launch.
 
 on:
   push:
@@ -40,6 +47,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Present on every repo-scoped event, workflow_dispatch included, so a manual
+    # run while private is skipped too rather than failing halfway.
+    if: github.event.repository.private == false
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
 
@@ -65,7 +75,12 @@ jobs:
           # The build shells out to `gh` to resolve the latest installer asset.
           GH_TOKEN: ${{ github.token }}
 
+      # enablement: turn Pages on if it is off. This is what removes the manual
+      # "Source = GitHub Actions" click -- it needs the `pages: write` permission
+      # already granted above, and it is a no-op once Pages exists.
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # 6.0.0
+        with:
+          enablement: true
 
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # 5.0.0
         with:
