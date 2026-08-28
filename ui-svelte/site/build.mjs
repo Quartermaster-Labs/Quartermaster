@@ -221,7 +221,11 @@ function latestRelease() {
         stdio: ["ignore", "pipe", "ignore"],
       }),
     );
-    const exe = view.assets.find((a) => a.name.endsWith(".exe"));
+    // Matched by prefix, not by extension: the release also carries
+    // quartermaster-windows-amd64.exe (the raw server binary the updater
+    // fetches), and a "Download" button pointing at that would hand a first-time
+    // visitor the one artifact with no wizard behind it.
+    const exe = view.assets.find((a) => a.name.startsWith("quartermaster-setup-") && a.name.endsWith(".exe"));
     if (!exe) return null;
     return { tag: view.tagName, url: exe.url, size: exe.size, prerelease: rel.isPrerelease };
   } catch {
@@ -674,8 +678,8 @@ function renderInstall(release) {
       action = terminal(c.code, c.title.toLowerCase());
     } else if (c.link) {
       // A platform whose asset name we cannot resolve to one file (linux/mac
-      // ship four bare binaries, not an installer): link the releases page and
-      // let the reader pick their arch, rather than guessing it for them.
+      // ship a wizard and a bare binary per arch): link the releases page and
+      // let the reader pick, rather than guessing an arch for them.
       action = `<a class="btn btn-ghost" href="${c.link.href}">${esc(c.link.label)}</a>`;
     }
     // A card can carry more than one mark: "Linux and macOS" is ONE download

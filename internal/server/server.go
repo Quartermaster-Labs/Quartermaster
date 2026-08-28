@@ -25,8 +25,10 @@ import (
 	"github.com/quartermaster-labs/quartermaster/internal/update"
 )
 
-// updateRepo is the GitHub repo (owner/name) the auto-updater polls for releases.
-const updateRepo = "Quartermaster-Labs/quartermaster"
+// updateRepo is the GitHub repo (owner/name) the auto-updater polls for
+// releases. Defined in internal/update because the first-run wizard fetches the
+// binary from the same place, and the two must not drift apart.
+const updateRepo = update.Repo
 
 // Server owns the HTTP mux, cross-cutting middleware, and the local/peer model
 // dispatch. It supersedes router.Server: it builds the local and peer routers

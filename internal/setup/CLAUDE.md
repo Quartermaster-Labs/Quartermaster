@@ -37,7 +37,7 @@ everywhere and the 20 MB installer blob stays in the binary that ships it.
 | `cmd/quartermaster-setup/main.go` | `runtime.LockOSThread`, flags (`-dir`, `-browser`, `-v`), `Listen` → `runWindow` → browser fallback, `defaultInstallDir`, `fatal`. |
 | `cmd/quartermaster-setup/window_windows.go` | `runWindow` — creates the webview, hands it to `nativewin.Attach`, navigates, and closes it when the wizard signals done. The window mechanics themselves live in `internal/nativewin`, shared with the app window. |
 | `cmd/quartermaster-setup/place_windows.go` | `//go:embed inno/setup.exe`, `placeInno` (silent `/VERYSILENT /DIR= /TASKS= /LOG=`), `launch` — starts the installed exe with no arguments (it supplies its own; see `bundle.go`). |
-| `cmd/quartermaster-setup/place_other.go`, `place_common.go` | Unix copy install; `placeCopy` is also the dev-build stand-in when no installer is embedded. |
+| `cmd/quartermaster-setup/place_other.go`, `place_common.go` | Unix install: `placeCopy` when a binary sits beside the wizard, `update.FetchBinary` when none does. `placeCopy` is also the dev-build stand-in on Windows when no installer is embedded. |
 | `cmd/quartermaster-setup/window_other.go` | `runWindow` that always fails, so main falls back to the browser. Deliberate, not a gap. |
 
 ## Important types & functions
@@ -104,6 +104,14 @@ everywhere and the 20 MB installer blob stays in the binary that ships it.
   previous install alone when their task is deselected, so `[InstallDelete]` deletes `{group}` and
   the desktop `.lnk` under `Tasks: not …`, which is what makes a second wizard run over an existing
   install able to take a shortcut away rather than only add one.
+- **The unix wizard is a bootstrapper, not a copier.** Windows carries its payload (the embedded
+  Inno package); unix has nothing to embed, so `place` copies the binary beside it when there is one
+  (an unpacked tarball, a dev tree) and otherwise downloads the release asset through
+  `update.FetchBinary`, verified against the release digest. `hasSiblingBinary` is what picks, and it
+  matches `binaryGlobs` only: a stray `LICENSE` in a Downloads folder must not be read as a payload
+  and send the install down a copy path with no binary in it. The setup programs ship as
+  `quartermaster-setup-{linux-amd64,linux-arm64,darwin-arm64}`, built in `build-release.ps1` step 5b
+  and hashed into `SHA256SUMS` with everything else.
 - **A dev build embeds a placeholder installer**, so `place` checks `len(innoSetup)` against
   `minInstallerBytes` and falls back to `placeCopy` rather than executing a 0-byte exe.
 - **The UI is a second bundle, not a dashboard route.** It must render before anything is installed

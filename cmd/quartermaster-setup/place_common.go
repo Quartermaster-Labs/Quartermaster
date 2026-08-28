@@ -8,28 +8,40 @@ import (
 	"strings"
 )
 
-// devCopyGlobs are the things a dev build brings along when there is no
-// installer embedded. This is deliberately a short allow-list rather than a
-// whole-directory copy: the setup binary lives in build/ next to every
-// cross-compiled artifact, and copying that wholesale would put a linux binary
-// and a 120MB update payload into the install directory.
-var devCopyGlobs = []string{
+// binaryGlobs are the server binaries a copy install moves. This is
+// deliberately a short allow-list rather than a whole-directory copy: the setup
+// binary lives in build/ next to every cross-compiled artifact, and copying
+// that wholesale would put a linux binary and a 120MB update payload into the
+// install directory.
+//
+// Kept separate from docGlobs because their presence answers a different
+// question: hasSiblingBinary uses THIS list to decide whether there is anything
+// to copy at all, and a stray LICENSE in a Downloads folder must not be
+// mistaken for a payload.
+var binaryGlobs = []string{
 	// filepath.Glob is case-sensitive even on Windows, so the installed name
 	// needs its own entry -- "quartermaster-*.exe" will not match it.
 	"Quartermaster.exe",
 	"quartermaster-*.exe",
 	"quartermaster-linux-*",
 	"quartermaster-darwin-*",
+}
+
+// docGlobs ride along with a copy install when they happen to be there.
+var docGlobs = []string{
 	"LICENSE*",
 	"README*",
 }
 
-// placeCopy is the dev-tree stand-in for the installer: it copies the binaries
-// sitting beside the setup executable into the install directory.
+// placeCopy copies the binaries sitting beside the setup executable into the
+// install directory.
 //
-// It exists so the wizard can be exercised end to end from a plain "go build"
-// without an Inno toolchain in the loop. It does not register an uninstaller or
-// a Start Menu entry, which is exactly why it is not the shipping path.
+// On Windows it is the dev-tree stand-in for the installer, so the wizard can
+// be exercised end to end from a plain "go build" without an Inno toolchain in
+// the loop. It does not register an uninstaller or a Start Menu entry, which is
+// exactly why it is not the shipping path there. On unix it IS a shipping path:
+// a tarball unpacked into a directory is the install convention, and place()
+// only falls back to downloading when nothing came along in the box.
 func placeCopy(dir string, log func(string)) error {
 	self, err := os.Executable()
 	if err != nil {
@@ -38,7 +50,7 @@ func placeCopy(dir string, log func(string)) error {
 	src := filepath.Dir(self)
 
 	var copied int
-	for _, glob := range devCopyGlobs {
+	for _, glob := range append(append([]string{}, binaryGlobs...), docGlobs...) {
 		matches, _ := filepath.Glob(filepath.Join(src, glob))
 		for _, m := range matches {
 			// Never copy ourselves in: the setup binary is not part of an

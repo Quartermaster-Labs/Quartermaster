@@ -349,10 +349,10 @@ export const INSTALL = [
     icons: ["linux", "apple"],
     title: "Linux and macOS",
     body:
-      "One static binary, nothing to install: amd64 and arm64 for Linux, Apple silicon for macOS. " +
-      "Run it, point it at your models folder, and install the backends you want from Settings. A " +
-      "systemd unit ships alongside it for a headless box.",
-    link: { href: REPO + "/releases/latest", label: "Binaries on the releases page" },
+      "The same wizard, in your browser: it fetches a verified binary, the backends for your GPU, and " +
+      "a config built from your models folder. Or take the bare static binary instead, amd64 and arm64 " +
+      "for Linux and Apple silicon for macOS, and install the backends later from Settings.",
+    link: { href: REPO + "/releases/latest", label: "Downloads on the releases page" },
   },
   {
     icon: "docker",

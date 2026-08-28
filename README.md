@@ -205,23 +205,29 @@ managed install.
 
 ## Installation
 
-Windows, Linux, macOS and Docker, from the same single binary. The installer and the Docker image
-bring the inference backends with them; everywhere else you install them from Settings on first run,
-or point at ones you already have.
+Windows, Linux, macOS and Docker, from the same single binary. The setup program and the Docker
+image bring the inference backends with them; take the bare binary instead and you install them from
+Settings on first run, or point at ones you already have.
 
-### Windows installer (recommended)
+### Setup program (recommended)
 
-Download the latest `quartermaster-setup-*.exe` from the
-[releases page](https://github.com/Quartermaster-Labs/quartermaster/releases) and run it.
+Download the one for your machine from the
+[releases page](https://github.com/Quartermaster-Labs/quartermaster/releases) and run it:
+`quartermaster-setup-*.exe` on Windows, `quartermaster-setup-linux-amd64`,
+`quartermaster-setup-linux-arm64` or `quartermaster-setup-darwin-arm64` elsewhere (`chmod +x` it
+first).
 
-It is a per-user install, so no admin rights and no UAC prompt. The first-run wizard:
+It is a per-user install, so no admin rights, and no UAC prompt on Windows. The wizard:
 
+- asks where to install and fetches the server binary itself, verified against the release checksum,
 - downloads the inference backends (`llama-server`, `sd-server`) for your chosen acceleration
   (vulkan, cuda or cpu), so you do not have to hunt them down,
 - asks for your models folder and generates a config from what is in it,
-- and optionally adds a logon-autostart shortcut.
+- and on Windows optionally adds Start Menu, desktop and logon-autostart shortcuts.
 
-The window it opens is the app itself, not a browser pointed at localhost.
+On Windows the window it opens is the app itself, not a browser pointed at localhost. Off Windows
+there is no WebView to embed, so the same wizard opens in your default browser on a loopback port,
+which is also what you get over ssh with `-browser`. Every step is identical either way.
 
 ### Docker
 
@@ -243,10 +249,16 @@ Run workflow), or locally with `docker/unified/build-image.sh --cuda`.
 
 ### Linux and macOS binaries
 
-One static binary, nothing to install: amd64 and arm64 for Linux, Apple silicon for macOS. Grab the
-archive from the [releases page](https://github.com/Quartermaster-Labs/quartermaster/releases), run
-it, point it at your models folder, and install the backends you want from Settings. A systemd unit
-ships alongside it for a headless box.
+The setup program above is the easy path. If you would rather skip it, the server is one static
+binary with nothing to install: amd64 and arm64 for Linux, Apple silicon for macOS. Download
+`quartermaster-linux-amd64`, `quartermaster-linux-arm64` or `quartermaster-darwin-arm64` from the
+[releases page](https://github.com/Quartermaster-Labs/quartermaster/releases), `chmod +x` it, point
+it at your models folder, and install the backends you want from Settings. Verify any download,
+wizard included, against the `SHA256SUMS` published beside it. For a headless box, the systemd unit
+in [`packaging/systemd`](packaging/systemd) needs only its paths filled in.
+
+These builds are not code-signed, so macOS quarantines them on first run: clear it with
+`xattr -d com.apple.quarantine ./quartermaster-darwin-arm64`, or right-click and Open.
 
 ### Building from source
 

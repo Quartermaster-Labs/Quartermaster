@@ -152,6 +152,10 @@ Write-Host "SHA256SUMS:" -ForegroundColor DarkGray
 $sumLines | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
 
 $uploads = @($binaries) + @($sumsPath)
+# Filled in below and hashed into SHA256SUMS once every one of them is final.
+# The wizards cannot be hashed with the server binaries above because the
+# Windows one does not exist yet: it embeds an installer that ISCC has not built.
+$setups = @()
 
 # 5. Installer bundle + ISCC. Only the first-install path needs this; the extra
 # files staged here (configs, launcher, packaging tree) are what the wizard lays
@@ -207,6 +211,48 @@ if (-not $SkipInstaller) {
     if ($env:SIGN_PFX_BASE64) { & (Join-Path $PSScriptRoot 'sign.ps1') $setup }
     Write-Host "installer: $setup" -ForegroundColor Green
     $uploads += $setup
+    $setups += $setup
+}
+
+# 5b. The unix wizards. Same program, no embedded payload: place() there copies
+# the binary sitting beside it, and downloads the verified release asset when a
+# lone setup file has nothing to copy. That is why these ship even though there
+# is no Inno package behind them, and why they are built here rather than in the
+# $targets loop, which produces server binaries only.
+#
+# Names are unversioned, unlike the Windows setup: the site links at
+# /releases/latest, and a stable name is one a script or a README can hard-code.
+if (-not $SkipInstaller) {
+    $nixSetups = @(
+        @{ os = 'linux'; arch = 'amd64'; name = 'quartermaster-setup-linux-amd64' }
+        @{ os = 'linux'; arch = 'arm64'; name = 'quartermaster-setup-linux-arm64' }
+        @{ os = 'darwin'; arch = 'arm64'; name = 'quartermaster-setup-darwin-arm64' }
+    )
+    foreach ($t in $nixSetups) {
+        $out = Join-Path $staging $t.name
+        Write-Host "  building $($t.name)" -ForegroundColor DarkGray
+        $env:GOOS = $t.os
+        $env:GOARCH = $t.arch
+        go build -ldflags $ldBase -o $out .\cmd\quartermaster-setup
+        if ($LASTEXITCODE -ne 0) { Die "go build failed for the $($t.os)/$($t.arch) setup program" }
+        $uploads += $out
+        $setups += $out
+    }
+    Remove-Item Env:GOOS, Env:GOARCH -ErrorAction SilentlyContinue
+}
+
+# The wizards are appended to SHA256SUMS rather than left out of it, so "verify
+# what you downloaded" is one instruction covering every asset on the page. The
+# updater reads this file by exact asset name, so extra lines are invisible to
+# it. Appended AFTER signing, for the same reason the binaries were hashed after
+# it: a signature changes the bytes.
+if ($setups.Count -gt 0) {
+    $extra = foreach ($f in $setups) {
+        $h = (Get-FileHash -Algorithm SHA256 $f).Hash.ToLower()
+        "$h  $(Split-Path -Leaf $f)"
+    }
+    [System.IO.File]::AppendAllText($sumsPath, (($extra -join "`n") + "`n"), [System.Text.Encoding]::ASCII)
+    $extra | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
 }
 
 # 6. Push the tag, create the release if missing, upload everything.

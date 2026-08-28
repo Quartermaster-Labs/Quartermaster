@@ -63,6 +63,19 @@ child process that the Windows service API cannot see**.
 `Spawn()` is called by `main` *after* teardown completes, so the replacement never races the dying
 process for the listen sockets.
 
+## The other consumer: first install
+
+`FetchBinary` (`fetch.go`) is the same lookup and the same verification, pointed at a directory
+instead of at the running exe. `cmd/quartermaster-setup` calls it on unix when a lone setup download
+has no binary beside it to copy, which is what lets one downloaded file install the whole thing
+where there is no Inno package to embed. `Repo` lives here too, so the wizard and the updater cannot
+disagree about which repository an install belongs to.
+
+It deliberately does **not** reuse `Checker.Apply`: nothing is being replaced, there is no rollback
+to arrange and no restart to decide, and the caller is a wizard with its own progress UI. What it
+does reuse is the part that matters, `assetName` + digest + `SHA256SUMS` fallback, so a first install
+is verified to exactly the standard an update is.
+
 ## Gotchas
 
 - **Asset names are a contract.** `assetName()` must match what the release actually publishes
