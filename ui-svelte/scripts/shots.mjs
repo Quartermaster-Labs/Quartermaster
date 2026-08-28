@@ -26,7 +26,7 @@
 // fixtures — see scripts/shot-playground.mjs, which also explains why that
 // context refuses every write.
 import { chromium } from "playwright";
-import { buildDemo, installDemo, pickModel, recordCatalog } from "./shot-demo.mjs";
+import { buildDemo, installDemo, pickImageModel, pickModel, recordCatalog } from "./shot-demo.mjs";
 import { buildPlayground, installPlayground, pgStorage, CHAT_ID, SHOP_ID, IMAGE_ID, SPEECH_ID } from "./shot-playground.mjs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -174,6 +174,26 @@ const SHOTS = [
       await p.waitForTimeout(600);
     },
   },
+  // Settings -> Backends: the managed-install cards on top of the hand-entered
+  // registry they write into, which is the whole "bring your own backend" claim
+  // in one frame. The category is component state, not a route, so there is no
+  // hash to deep-link -- the shot clicks the nav item the way a user does.
+  // Clipped to the dialog for the same reason model-config-modal is: full-frame,
+  // the panel's rows scale down too far to read in a showcase card.
+  {
+    name: "settings-backends",
+    at: "#/",
+    wait: "main",
+    prepare: async (p) => {
+      await p.getByRole("button", { name: "Settings" }).first().click();
+      await p.waitForTimeout(600);
+      await p.getByRole("button", { name: "Backends", exact: true }).first().click();
+      // Managed cards resolve their catalog over the network; give it longer
+      // than a tab switch would need or the shot catches the empty state.
+      await p.waitForTimeout(1800);
+    },
+    clip: { selector: "[role=dialog]", pad: 12 },
+  },
   {
     name: "help-modal",
     at: "#/",
@@ -271,6 +291,11 @@ const SHOTS = [
       // separate count span, so its text is "Sources (3)".
       const fold = p.locator('details:has(summary:has-text("Sources"))').first();
       if (!(await fold.count())) return "no Sources fold — the thread rendered no answer-phase search";
+      // Centred, which only frames the whole report because the fixture keeps it
+      // to two cards on one grid row: three cards wrap to a second row, the
+      // thread outgrows the frame, and either the pictures or these chips end up
+      // off-screen. The report and the tool call are one story -- both belong in
+      // the shot.
       await fold.evaluate((d) => {
         d.open = true;
         d.scrollIntoView({ block: "center" });
@@ -454,7 +479,7 @@ async function main() {
     if (opts.playground) {
       playground = buildPlayground({
         model: demo?.model ?? pickModel(models),
-        imageModel: models.find((m) => m.capabilities?.image_generation),
+        imageModel: pickImageModel(models),
         speechModel: models.find((m) => m.capabilities?.audio_speech),
         imageTurn: await loadImageTurn(opts.playgroundImage, opts.playgroundPrompt),
       });

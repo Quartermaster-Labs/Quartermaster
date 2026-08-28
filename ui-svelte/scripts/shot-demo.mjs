@@ -79,6 +79,40 @@ export function pickModel(models, wanted = PREFERRED_MODEL) {
   return fits[0] ?? models[0];
 }
 
+// Image models a shot must not land on, matched against the id. Two separate
+// reasons, one list:
+//   - an id that says "nsfw" is going on a public landing page verbatim, in the
+//     composer's model picker and in the dashboard's traffic rows;
+//   - an SDXL-anime model auto-fills the booru quality-tag negative
+//     (SDXL_ANIME_NEG in imageGen.ts), which opens with the same word and is
+//     applied on model switch, so seeding a clean negative in the fixture does
+//     not survive hydration.
+// This is about which model a SCREENSHOT is taken of, not a judgement about the
+// models themselves -- either is a perfectly ordinary thing to have installed.
+const IMAGE_SHOT_AVOID = /nsfw|anima|pony|illustrious|noob/i;
+
+// Substring, not an exact id: the quant suffix moves (z-image-turbo-q8_0 today,
+// something else after a requant) and the shot should follow the model, not the
+// file it happens to be stored as.
+const PREFERRED_IMAGE_MODEL = "z-image-turbo";
+
+/**
+ * The image model to photograph.
+ *
+ * Deliberate rather than "first one in the catalog": the catalog arrives in
+ * whatever order the config lists it, so leaving this to `find` means the shot
+ * changes model whenever a row is added above the old one. Preference first,
+ * then anything that is not on the avoid list, then whatever there is.
+ */
+export function pickImageModel(models) {
+  const usable = models.filter((m) => m.capabilities?.image_generation && !VARIANT.test(m.id));
+  return (
+    usable.find((m) => m.id.includes(PREFERRED_IMAGE_MODEL)) ??
+    usable.find((m) => !IMAGE_SHOT_AVOID.test(m.id)) ??
+    usable[0]
+  );
+}
+
 /**
  * Reads the live catalog off the instance's own event stream.
  *
@@ -169,7 +203,7 @@ export function buildDemo(models, perf, opts = {}) {
   const doctored = models.map((m) => (m.id === star.id ? { ...m, state: "ready" } : m));
 
   // Something for the multi-modal rows to point at, when the catalog has one.
-  const imageModel = models.find((m) => m.capabilities?.image_generation && !VARIANT.test(m.id));
+  const imageModel = pickImageModel(models);
   const speechModel = models.find((m) => m.capabilities?.audio_speech && !VARIANT.test(m.id));
 
   const chat = TRAFFIC.map((t, i) => {

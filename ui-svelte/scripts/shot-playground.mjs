@@ -46,47 +46,35 @@ export const PG_USER = "demo";
 // Chat thread: an ordinary conversation.
 // ---------------------------------------------------------------------------
 
-// Deliberately not a conversation about quartermaster. The shot is meant to show
-// what the app is FOR -- a local model you actually ask things -- and an app
-// demoing itself talking about itself photographs as a hall of mirrors.
+// Deliberately not a conversation about quartermaster, and deliberately not a
+// coding question either. Quartermaster serves whatever model you point it at;
+// it is not a coding assistant, and a chat shot full of Python teaches the
+// opposite. An ordinary household question shows the same thing the shot is
+// actually about -- reasoning kept out of the answer, a structured reply -- with
+// no claim about what the product is for riding on it.
 const CHAT_TURNS = [
   {
     role: "user",
-    content: "I have a 40 GB CSV of taxi trips and pandas OOMs on read_csv. What are my options, ranked by how much I have to rewrite?",
+    content: "I'm cooking risotto for eight on Saturday and I've only ever made it for two. What actually changes when I scale it up?",
   },
   {
     role: "assistant",
     reasoning_content:
-      "The file is far bigger than RAM, so the question is really about streaming versus columnar storage. Cheapest first: chunked reads change almost no code, dtype narrowing is a one-line win, Polars/DuckDB are a rewrite but a small one, and converting to Parquet pays off if this file gets read more than once.",
-    reasoningTitle: "Ordering the options by rewrite cost",
-    reasoningTimeMs: 4200,
-    genTimeMs: 19400,
-    content: `Ranked by how much of your code has to change:
+      "Scaling risotto is not a straight multiplication: the rice-to-liquid ratio holds, but the pan does not. Eight portions is roughly four times the rice, and in a normal pan that means a deeper bed, slower evaporation and rice that steams instead of agitating. The other thing that breaks is timing -- you cannot plate eight bowls at the same eighteen-minute mark unless you stop the cooking partway, which restaurants do routinely.",
+    reasoningTitle: "Working out what does and does not scale linearly",
+    reasoningTimeMs: 3800,
+    genTimeMs: 16200,
+    content: `Three things change, and only one of them is the shopping list.
 
-**1. Chunk it (no rewrite).** \`read_csv\` takes an iterator. You aggregate per chunk and combine at the end:
+**The ratio holds, the pan does not.** Rice and stock scale straight up — about 80 g of rice a head, so 640 g, and roughly a litre of stock per 250 g of rice. What does not scale is the surface area. Four times the rice in the same pan gives you a deep bed that steams rather than simmers, and the grains stop rubbing against each other, which is where the starch comes from. Use your widest pan, and if the rice is more than about 2 cm deep, cook it in two pans.
 
-\`\`\`python
-totals = None
-for chunk in pd.read_csv("trips.csv", chunksize=1_000_000):
-    part = chunk.groupby("pickup_zone")["fare"].sum()
-    totals = part if totals is None else totals.add(part, fill_value=0)
-\`\`\`
+**Stir less, not more.** The constant-stirring rule is really "keep the grains moving", and a wide, full pan does much of that on its own. Stirring a large batch as hard as a small one breaks the grains and turns it gluey.
 
-Works for anything associative — sums, counts, min/max. Medians and exact distinct counts do not survive this.
+**Split the cooking.** This is the part that saves Saturday. Cook it to roughly 15 minutes — the grain still chalky in the middle — then spread it thin on a tray and let it stop. It will hold for a couple of hours. Ten minutes before you eat, back in the pan with hot stock for the last stretch, then the butter and cheese off the heat. Restaurants do exactly this, and it is the only way eight bowls arrive at once.
 
-**2. Narrow the dtypes (one line).** Pandas reads every integer as int64 and every string as object. Passing \`dtype=\` with \`int32\`/\`float32\` and \`category\` for the low-cardinality columns routinely cuts the footprint by half or better, which may be all you need.
+Two smaller ones: warm the stock, or it drops the pan temperature every ladle; and salt the stock rather than the finished dish, because 640 g of rice takes a surprising amount and you cannot fix it at the end.
 
-**3. Switch the reader (small rewrite).** Polars streams and DuckDB queries the CSV in place:
-
-\`\`\`sql
-SELECT pickup_zone, avg(fare) FROM 'trips.csv' GROUP BY 1;
-\`\`\`
-
-Neither loads the file into memory. DuckDB is the shortest path if what you have is really a SQL question.
-
-**4. Convert to Parquet once (rewrite, then never again).** Columnar and compressed, so a query that touches three columns reads three columns. Worth it the moment you are going to read this file more than twice.
-
-If you tell me what the query actually is, I can tell you which of these is enough — most trip-data questions are group-bys, and those are fine at step 1.`,
+If you tell me which risotto, I can tell you where in that timeline the other ingredients go — mushrooms and seafood want opposite ends of it.`,
   },
 ];
 
@@ -96,87 +84,134 @@ If you tell me what the query actually is, I can tell you which of these is enou
 
 // This one carries a `searches` block (the collapsible web-search sections) AND
 // a ```products fence (the card grid), because they are the same story: the
-// model went and looked, then reported. Product images are left empty on
-// purpose -- a card with no image renders its monogram, and inventing product
-// photography for a screenshot is a line worth not crossing.
+// model went and looked, then reported.
+//
+// Every brand, shop, review site and URL below is INVENTED, on the `.example`
+// TLD that RFC 2606 reserves for exactly this. A demo shot of a shopping report
+// necessarily puts prices and opinions next to product names; hanging those on
+// real monitors from real retailers would mean publishing claims we made up
+// about somebody's actual product. Fictional ones demonstrate the feature just
+// as well and assert nothing about anyone.
+//
+// The pictures are drawn here too -- see PRODUCT_ART -- because a fictional
+// monitor has no photograph, and the empty-image monogram the cards fell back to
+// was the thing that looked broken in the shot.
 const SHOP_TURNS = [
   { role: "user", content: "I need a 27\" 1440p monitor for programming, under 400 EUR, ideally height-adjustable. I'm in Germany." },
   {
     role: "assistant",
     content: `**Brief:** 27" 1440p, primarily text work, budget 400 EUR, height-adjustable stand, shipping to Germany. Prioritising panel uniformity and stand ergonomics over refresh rate.
 
-I checked current listings and opened the product pages for the three that fit.
+I checked current listings and opened the product pages for the two that came in under budget with a stand worth having.
 
 \`\`\`products
 {
-  "pick": "The Dell S2722QC is the one I would buy: the stand does everything and the panel is the calmest of the three for text.",
+  "pick": "The Lumeva PX27-Q is the one I would buy: the stand does everything and the panel is the calmer of the two for text.",
   "products": [
     {
-      "name": "Dell S2721DGF",
+      "name": "Lumeva PX27-Q",
       "price": "349,00 EUR",
-      "shop": "Dell Germany",
-      "url": "https://www.dell.com",
-      "image": "",
+      "shop": "Nordkauf",
+      "url": "https://www.nordkauf.example/p/lumeva-px27q",
+      "image": "https://cdn.nordkauf.example/lumeva-px27q.png",
       "specs": ["27\\" IPS, 2560x1440", "165 Hz, 1 ms", "Height / tilt / swivel / pivot", "USB-C 65 W"],
-      "why": "Best stand of the three and the only one with a single-cable laptop setup.",
+      "why": "Better stand, and the only one with a single-cable laptop setup.",
       "badge": "Best overall",
       "cite": 1
     },
     {
-      "name": "LG 27QN880-B",
-      "price": "319,00 EUR",
-      "shop": "MediaMarkt",
-      "url": "https://www.mediamarkt.de",
-      "image": "",
-      "specs": ["27\\" IPS, 2560x1440", "75 Hz", "Ergo arm, clamps to the desk", "USB-C 90 W"],
-      "why": "The arm frees the whole desk surface; 75 Hz is the trade-off.",
-      "badge": "Best for desk space",
-      "cite": 2
-    },
-    {
-      "name": "AOC Q27G3XMN",
+      "name": "Kalder Q27 Vivid",
       "price": "289,00 EUR",
-      "shop": "Amazon.de",
-      "url": "https://www.amazon.de",
-      "image": "",
+      "shop": "elektro24",
+      "url": "https://www.elektro24.example/dp/kalder-q27-vivid",
+      "image": "https://cdn.elektro24.example/kalder-q27-vivid.png",
       "specs": ["27\\" VA, 2560x1440", "180 Hz, mini-LED", "Height / tilt / pivot", "HDR1000"],
-      "why": "Cheapest of the three and by far the best HDR, but VA text is softer than IPS.",
+      "why": "Cheaper, and by far the better HDR, but VA text is softer than IPS.",
       "badge": "Cheapest",
-      "cite": 3
+      "cite": 2
     }
   ]
 }
 \`\`\`
 
-What I could not verify: none of the three pages state panel uniformity per unit, and the AOC listing does not say which mini-LED revision ships in the EU.`,
+What I could not verify: neither page states panel uniformity per unit, and the Kalder listing does not say which mini-LED revision ships in the EU.`,
     model: "",
     genTimeMs: 41800,
     searches: [
       {
-        query: "27 zoll 1440p monitor höhenverstellbar test 2026",
+        query: "27 zoll 1440p monitor h\u00f6henverstellbar test 2026",
         kind: "web",
         at: 0,
         results: "12 results",
         sources: [
-          { title: "Monitor-Testberichte 2026 — Prad.de", url: "https://www.prad.de" },
-          { title: "Die besten 27-Zoll-Monitore — heise online", url: "https://www.heise.de" },
+          { title: "Monitor-Testberichte 2026 \u2014 Displaytest.de", url: "https://www.displaytest.example" },
+          { title: "Die besten 27-Zoll-Monitore \u2014 Technikbrief", url: "https://www.technikbrief.example" },
         ],
       },
       {
-        query: "Dell S2721DGF Preis Deutschland",
+        query: "Lumeva PX27-Q Preis Deutschland",
         kind: "page",
         at: 0,
-        results: "dell.de — product page",
-        sources: [{ title: "Dell S2721DGF — Dell Deutschland", url: "https://www.dell.com" }],
+        results: "nordkauf.example \u2014 product page",
+        sources: [{ title: "Lumeva PX27-Q \u2014 Nordkauf", url: "https://www.nordkauf.example/p/lumeva-px27q" }],
       },
     ],
     citations: [
-      { n: 1, title: "Dell S2721DGF — Dell Deutschland", url: "https://www.dell.com" },
-      { n: 2, title: "LG 27QN880-B — MediaMarkt", url: "https://www.mediamarkt.de" },
-      { n: 3, title: "AOC Q27G3XMN — Amazon.de", url: "https://www.amazon.de" },
+      { n: 1, title: "Lumeva PX27-Q \u2014 Nordkauf", url: "https://www.nordkauf.example/p/lumeva-px27q" },
+      { n: 2, title: "Kalder Q27 Vivid \u2014 elektro24", url: "https://www.elektro24.example/dp/kalder-q27-vivid" },
     ],
   },
 ];
+
+// ---------------------------------------------------------------------------
+// Product pictures.
+// ---------------------------------------------------------------------------
+
+// The cards resolve `image` through `/api/imgproxy` (productBlock.ts), so the
+// harness answers that endpoint for these three URLs rather than let the server
+// dial a domain that deliberately does not exist. SVG rather than a raster: it
+// is text in a fixture file, it stays sharp at whatever deviceScaleFactor the
+// shot uses, and there is no binary blob to carry in the repo.
+//
+// Deliberately a flat studio render and not an attempt at a photograph. The shot
+// is about the card grid, and three obviously different silhouettes photograph
+// better than three near-identical black rectangles would.
+
+const SHELL = `<linearGradient id="shell" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#565d66"/><stop offset="1" stop-color="#2b2f36"/></linearGradient>`;
+const GLASS = `<linearGradient id="glass" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2d4356"/><stop offset="0.55" stop-color="#1c2a38"/><stop offset="1" stop-color="#243a4c"/></linearGradient>`;
+
+/** Wraps a drawing in the shared canvas, defs and contact shadow. */
+const art = (body, defs = "") =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 200" width="320" height="200">` +
+  `<defs>${SHELL}${GLASS}` +
+  `<radialGradient id="floor" cx="0.5" cy="0.5"><stop offset="0" stop-color="#000" stop-opacity="0.42"/><stop offset="1" stop-color="#000" stop-opacity="0"/></radialGradient>` +
+  `${defs}</defs>` +
+  `<ellipse cx="160" cy="190" rx="96" ry="9" fill="url(#floor)"/>${body}</svg>`;
+
+/** One screen: frame, glass, and the diagonal sheen that reads as "display off". */
+const panel = (x, y, w, h) =>
+  `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="7" fill="url(#shell)"/>` +
+  `<rect x="${x + 5}" y="${y + 5}" width="${w - 10}" height="${h - 14}" rx="3" fill="url(#glass)"/>` +
+  `<path d="M${x + 5} ${y + h - 9} L${x + w - 32} ${y + 5} L${x + w - 5} ${y + 5} L${x + 5} ${y + h - 9} Z" fill="#fff" opacity="0.05"/>` +
+  `<rect x="${x + w / 2 - 14}" y="${y + h - 7}" width="28" height="2" rx="1" fill="#7e8794" opacity="0.7"/>`;
+
+export const PRODUCT_ART = {
+  // Pedestal stand: the plain one, and the widest panel of the three.
+  "https://cdn.nordkauf.example/lumeva-px27q.png": art(
+    panel(28, 22, 264, 128) +
+      `<rect x="150" y="150" width="20" height="26" rx="3" fill="url(#shell)"/>` +
+      `<rect x="112" y="176" width="96" height="8" rx="4" fill="url(#shell)"/>`,
+  ),
+  // Curved mini-LED, V-foot, and the only lit one -- it is the HDR pick.
+  "https://cdn.elektro24.example/kalder-q27-vivid.png": art(
+    `<path d="M32 24 q128 -12 256 0 l0 118 q-128 12 -256 0 Z" fill="url(#shell)"/>` +
+      `<path d="M40 31 q120 -11 240 0 l0 104 q-120 11 -240 0 Z" fill="url(#hdr)"/>` +
+      `<path d="M40 128 L272 34 L280 34 L40 135 Z" fill="#fff" opacity="0.06"/>` +
+      `<rect x="152" y="146" width="16" height="22" rx="3" fill="url(#shell)"/>` +
+      `<path d="M160 166 L106 186 L124 186 L160 173 L196 186 L214 186 Z" fill="url(#shell)"/>`,
+    `<linearGradient id="hdr" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3b2a4e"/><stop offset="0.5" stop-color="#1d2740"/><stop offset="1" stop-color="#4a2f3a"/></linearGradient>`,
+  ),
+};
 
 // ---------------------------------------------------------------------------
 // Speech thread.
@@ -271,7 +306,7 @@ export function buildPlayground({ model, imageModel, speechModel, imageTurn } = 
   const chats = [
     {
       id: CHAT_ID,
-      title: "Reading a 40 GB CSV without OOMing",
+      title: "Risotto for eight instead of two",
       titled: true,
       model: id,
       updatedAt: now - 4 * 60_000,
@@ -287,8 +322,8 @@ export function buildPlayground({ model, imageModel, speechModel, imageTurn } = 
     },
     // Two more in the rail, so the history list is not two rows long. No
     // messages worth photographing -- they exist to look like a used app.
-    { id: "shot-old-1", title: "Draft release notes for 0.7", titled: true, model: id, updatedAt: now - 3 * 3600_000, messages: CHAT_TURNS.map(stamp) },
-    { id: "shot-old-2", title: "Explain this stack trace", titled: true, model: id, updatedAt: now - 26 * 3600_000, messages: CHAT_TURNS.map(stamp) },
+    { id: "shot-old-1", title: "Rewrite this email so it sounds less annoyed", titled: true, model: id, updatedAt: now - 3 * 3600_000, messages: CHAT_TURNS.map(stamp) },
+    { id: "shot-old-2", title: "What is actually in mineral sunscreen?", titled: true, model: id, updatedAt: now - 26 * 3600_000, messages: CHAT_TURNS.map(stamp) },
   ];
 
   const imageChats = imageTurn
@@ -342,6 +377,12 @@ export function buildPlayground({ model, imageModel, speechModel, imageTurn } = 
       ? { "playground-speech-voices-cache-v4": { [speechModel.id]: ["", ...KOKORO_VOICES] } }
       : {}),
     "playground-shopping-prefs": "Germany, EUR, prefer shops that ship within the EU",
+    // The Images tab photographs whatever image model the catalog offers, and an
+    // SDXL-anime model auto-fills the booru quality-tag negative (SDXL_ANIME_NEG
+    // in imageGen.ts) -- which opens with the word "nsfw" and lands, at 1440px,
+    // in the middle of a public landing page. Seeding an ordinary negative keeps
+    // the row honest (it IS what that field holds) without the vocabulary.
+    "playground-sdapi-negative-prompt": "blurry, low quality, watermark, text",
   };
 
   return { user: PG_USER, chats, imageChats, speechChats, prefs, memories: [] };
@@ -409,6 +450,16 @@ export async function installPlayground(context, fixture, onWrite = () => {}) {
     if (method !== "GET" && method !== "HEAD") {
       onWrite(`${method} ${pathname}`);
       return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    }
+
+    // Product pictures. The cards ask the server to fetch these (productBlock
+    // proxies rather than hotlinks); the URLs are invented, so answer them here
+    // instead of watching three DNS failures become three broken-image icons.
+    if (pathname === "/api/imgproxy") {
+      const target = new URL(req.url()).searchParams.get("url") ?? "";
+      if (target in PRODUCT_ART) {
+        return route.fulfill({ contentType: "image/svg+xml", body: PRODUCT_ART[target] });
+      }
     }
 
     if (pathname in canned) {

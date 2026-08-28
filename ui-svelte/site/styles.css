@@ -23,6 +23,16 @@
   --dot: rgb(180 180 190 / 0.09);
   --shadow: 0 24px 60px -20px rgb(0 0 0 / 0.6);
   --glow: rgb(255 106 43 / 0.16);
+  /* The app's own inference ramp (STREAM_HEAT in InferenceFeedback.svelte):
+     dim ember -> red -> orange -> amber -> hot yellow. Tail to tip along a
+     streak, so the leading edge is the hot end. */
+  --ember-tail: rgb(185 28 28);
+  --ember-core: rgb(234 88 12);
+  --ember-tip: rgb(251 191 36);
+  --ember-hot: rgb(253 224 71);
+  /* One dial for the whole effect, so the light theme can pull it back without
+     restating every colour. */
+  --ember-a: 1;
   color-scheme: dark;
 }
 
@@ -41,6 +51,14 @@
     --dot: rgb(40 30 20 / 0.06);
     --shadow: 0 24px 60px -24px rgb(60 40 20 / 0.28);
     --glow: rgb(199 88 18 / 0.14);
+    /* Deeper on parchment: the dark theme's yellows read as smudges on a
+       light ground, and the whole effect needs about half the strength to
+       sit at the same visual weight. */
+    --ember-tail: rgb(153 27 27);
+    --ember-core: rgb(194 65 12);
+    --ember-tip: rgb(217 119 6);
+    --ember-hot: rgb(234 158 11);
+    --ember-a: 0.55;
     color-scheme: light;
   }
 }
@@ -59,6 +77,14 @@
   --dot: rgb(40 30 20 / 0.06);
   --shadow: 0 24px 60px -24px rgb(60 40 20 / 0.28);
   --glow: rgb(199 88 18 / 0.14);
+  /* Deeper on parchment: the dark theme's yellows read as smudges on a
+     light ground, and the whole effect needs about half the strength to
+     sit at the same visual weight. */
+  --ember-tail: rgb(153 27 27);
+  --ember-core: rgb(194 65 12);
+  --ember-tip: rgb(217 119 6);
+  --ember-hot: rgb(234 158 11);
+  --ember-a: 0.55;
   color-scheme: light;
 }
 
@@ -315,17 +341,95 @@ h3,
   overflow: clip;
 }
 
-.hero::after {
-  content: "";
+/* Ember streaks: the hero's one piece of decoration, in the colours the app
+ * paints while a model is decoding. Markup comes from renderEmbers() in
+ * build.mjs, which hands each streak its own --top/--w/--h/--dur/--delay/--peak.
+ *
+ * `contain: strict` needs an explicit size, which the fixed height gives it; it
+ * is what keeps seven animating children from invalidating layout anywhere else
+ * on the page. */
+.embers {
   position: absolute;
   z-index: -1;
-  top: -22rem;
-  left: 50%;
-  translate: -50% 0;
-  width: min(1100px, 130vw);
-  aspect-ratio: 1;
-  background: radial-gradient(circle at center, var(--glow), transparent 62%);
+  inset: 0 0 auto;
+  height: 44rem;
+  overflow: hidden;
   pointer-events: none;
+  contain: strict;
+}
+
+/* Two elements per streak on purpose. The wrapper does nothing but translate --
+ * a matrix change the compositor handles by itself -- while the blurred trail
+ * and the crisp filament are painted ONCE into that layer and never
+ * re-rasterized. Blurring the animated element itself, or scaling it, would redo
+ * the blur every frame: the same trap the .mesh comment below describes. */
+.embers i {
+  position: absolute;
+  top: var(--top);
+  left: 0;
+  width: var(--w);
+  height: var(--h);
+  opacity: 0;
+  will-change: transform, opacity;
+  animation: ember-run var(--dur) linear var(--delay) infinite;
+}
+
+.embers i::before,
+.embers i::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+/* The trail: soft, wide, and hotter toward the leading (right) edge. */
+.embers i::before {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--ember-tail) 34%,
+    var(--ember-core) 68%,
+    var(--ember-tip) 88%,
+    transparent 100%
+  );
+  filter: blur(5px);
+}
+
+/* The filament: a hairline of the hot end of the ramp, only near the head, so a
+ * streak has a definite front instead of fading out at both ends. */
+.embers i::after {
+  top: 50%;
+  height: 1px;
+  translate: 0 -50%;
+  background: linear-gradient(90deg, transparent 55%, var(--ember-hot) 92%, transparent 100%);
+  opacity: 0.7;
+}
+
+/* Only the first third of the cycle is flight; the rest is parked offscreen at
+ * zero opacity. Seven streaks with different durations and negative delays then
+ * arrive at intervals that never line up, and typically one to three are in
+ * frame -- an irregular rhythm out of nothing but staggered CSS timing. */
+@keyframes ember-run {
+  0% {
+    transform: translate3d(calc(-1 * (var(--w) + 6rem)), 0, 0);
+    opacity: 0;
+  }
+  4% {
+    opacity: calc(var(--peak) * var(--ember-a));
+  }
+  26% {
+    opacity: calc(var(--peak) * var(--ember-a));
+  }
+  33%,
+  100% {
+    transform: translate3d(calc(100vw + 6rem), 0, 0);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .embers {
+    display: none;
+  }
 }
 
 .eyebrow {
@@ -431,10 +535,12 @@ h1 .accent {
   contain: strict;
 }
 
+/* Dimmer than it was: with the ember streaks carrying the hero, the mesh is now
+   the ambient ground they cross rather than the effect itself. */
 .mesh i {
   position: absolute;
   display: block;
-  opacity: 0.75;
+  opacity: 0.45;
   will-change: transform;
 }
 
@@ -647,11 +753,18 @@ section {
   font-size: 0.9rem;
 }
 
+/* Flex, not a single grid cell: a card may carry two marks (Linux + Apple are
+   one download), and the badge grows sideways to hold them instead of stacking
+   the second one out of the box. min-width keeps the single-mark case square. */
 .card .ico {
-  display: grid;
-  place-items: center;
-  width: 2.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  width: fit-content;
+  min-width: 2.25rem;
   height: 2.25rem;
+  padding-inline: 0.45rem;
   border-radius: 0.6rem;
   background: color-mix(in srgb, var(--primary) 14%, transparent);
   color: var(--primary);
@@ -667,6 +780,23 @@ section {
 
 #install .card p {
   flex: 1;
+}
+
+.install-note {
+  margin: 1.25rem 0 0;
+  text-align: center;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.install-note a {
+  color: var(--primary);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--primary) 45%, transparent);
+}
+
+.install-note a:hover {
+  border-bottom-color: var(--primary);
 }
 
 pre {

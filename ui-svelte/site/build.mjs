@@ -39,7 +39,7 @@ const CATEGORIES = path.join(UI, "src", "lib", "wiki-categories.json");
 const IMAGES = path.join(ROOT, "docs", "assets");
 const FONTS = path.join(UI, "node_modules", "@fontsource");
 
-const { REPO, UPSTREAM, HERO, PILLS, SECTIONS, STORY, ICONS, SHOWCASE, MORE, INSTALL } =
+const { REPO, UPSTREAM, HERO, PILLS, SECTIONS, STORY, ICONS, BRAND_ICONS, SHOWCASE, MORE, INSTALL, INSTALL_NOTE } =
   await import("./content.mjs");
 
 // ── args ───────────────────────────────────────────────────────────────────
@@ -58,8 +58,14 @@ const ADOPT = flag("--adopt", null);
 const esc = (s) =>
   String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+// Two icon sets, one helper. A Lucide glyph is an open outline drawn with
+// `stroke` and no fill; a platform mark is a closed shape that is `fill` and no
+// stroke. Render either one with the other's attributes and you get an
+// invisible icon or a solid blob, so the set a name belongs to picks them.
 const icon = (name, size = 20) =>
-  `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] ?? ""}</svg>`;
+  BRAND_ICONS[name]
+    ? `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="currentColor" aria-hidden="true">${BRAND_ICONS[name]}</svg>`
+    : `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] ?? ""}</svg>`;
 
 // Applied before first paint so a light-mode visitor never sees a dark flash.
 // Kept as one inline statement rather than a file: an external script is a
@@ -231,11 +237,134 @@ function latestRelease() {
 function sectionHead(key) {
   const s = SECTIONS[key];
   if (!s) return "";
+  // The eyebrow is optional: a section whose heading already says the thing does
+  // not need a smaller line above saying it again.
   return `<div class="section-head" data-reveal>
-      <span class="eyebrow">${icon(s.icon, 15)} ${esc(s.eyebrow)}</span>
+      ${s.eyebrow ? `<span class="eyebrow">${icon(s.icon, 15)} ${esc(s.eyebrow)}</span>` : ""}
       <h2>${esc(s.title)}</h2>
       ${s.sub ? `<p>${esc(s.sub)}</p>` : ""}
     </div>`;
+}
+
+/**
+ * The ember streaks behind the hero.
+ *
+ * Same colour ramp the app's own inference readout uses (STREAM_HEAT in
+ * InferenceFeedback.svelte): the page's one piece of decoration is the thing the
+ * product actually shows you while a model is decoding, not a stock glow.
+ *
+ * Each streak is one element carrying its own timing as custom properties, and
+ * the animation spends only the first third of its cycle in flight — the rest is
+ * parked offscreen at zero opacity. That dead time is what makes them arrive at
+ * irregular intervals with a handful visible at once, out of nothing but CSS: no
+ * rAF loop, no canvas, no main-thread work at all. Negative delays start the
+ * cycle mid-flight so the hero is never empty on first paint.
+ *
+ * The numbers come from a SEEDED generator, not Math.random: the build output is
+ * committed and diffed, and a hero that reshuffles itself on every run turns
+ * every rebuild into a noisy diff.
+ */
+function renderEmbers(n = 7) {
+  // mulberry32 — small, fast, and stable across Node versions, which a hash of
+  // Math.random()'s state would not be.
+  let seed = 0x9e3779b9;
+  const rnd = () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const pick = (lo, hi) => lo + rnd() * (hi - lo);
+
+  // ONE period for every streak, and this is the whole trick.
+  //
+  // The obvious design gives each streak its own duration, which looks more
+  // organic and cannot be made safe: with unrelated periods, any two streaks
+  // eventually drift into flying together, so a pair that is nicely separated on
+  // load lines up minutes later. Rejection sampling does not fix that either --
+  // it can only sample a finite window and call it clean.
+  //
+  // Sharing the period makes the whole arrangement exactly periodic, so checking
+  // ONE cycle proves it for every cycle. The cost is that the hero repeats every
+  // CYCLE seconds; with seven streaks of different width, height and opacity
+  // that reads as a rhythm rather than a loop.
+  const CYCLE = 36;
+  // Fraction of the cycle spent crossing; the rest is parked offscreen at zero
+  // opacity. MUST match the ember-run keyframes in styles.css — the keyframe
+  // stops are literal percentages and cannot read a custom property.
+  const FLIGHT = 0.33;
+
+  const TOP_LO = 4;
+  const TOP_HI = 88;
+  const LANES = n;
+  const STEP = (TOP_HI - TOP_LO) / LANES;
+  // Two streaks in flight at the same time must be at least this far apart, or
+  // the eye joins them into one rule drawn across the page.
+  const MIN_GAP_TOGETHER = 16;
+
+  /**
+   * Lane order.
+   *
+   * Phases are spread evenly round the cycle, so the streaks that can overlap are
+   * the ones ADJACENT IN PHASE: at FLIGHT = 0.33 that is roughly two either side.
+   * Stepping two lanes per phase slot puts those neighbours two lanes apart,
+   * while lane-adjacent pairs end up four phase slots apart — 4/7 of a cycle,
+   * far more than a flight lasts, so they can never share the screen.
+   *
+   * The step and the lane count have to be coprime, or the walk revisits lanes
+   * and leaves others empty.
+   */
+  const LANE_STEP = 2;
+
+  function draw() {
+    return Array.from({ length: n }, (_, k) => {
+      const lane = (k * LANE_STEP) % LANES;
+      // Jitter inside the lane so the heights do not read as evenly ruled, which
+      // would be its own kind of "forms a line".
+      const top = TOP_LO + (lane + 0.5) * STEP + pick(-0.22, 0.22) * STEP;
+      // Negative delay: every streak starts mid-cycle, so the hero is never empty
+      // on first paint and the arrivals are staggered from the first second.
+      const phase = (k + pick(0.35, 0.65)) / n;
+      return { top, phase, delay: -phase * CYCLE, w: pick(16, 34), h: pick(2, 5), peak: pick(0.18, 0.5) };
+    });
+  }
+
+  /**
+   * Exact, because everything shares CYCLE: one pass over one period covers all
+   * of time. Returns true if any two streaks are ever mid-flight together while
+   * closer than MIN_GAP_TOGETHER.
+   */
+  function collides(set) {
+    for (let t = 0; t < CYCLE; t += 0.05) {
+      const flying = set.filter((e) => ((t - e.delay) % CYCLE) / CYCLE < FLIGHT);
+      for (let a = 0; a < flying.length; a++) {
+        for (let b = a + 1; b < flying.length; b++) {
+          if (Math.abs(flying[a].top - flying[b].top) < MIN_GAP_TOGETHER) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  let set = draw();
+  let tries = 0;
+  while (collides(set) && ++tries < 200) set = draw();
+  // The jitter ranges are chosen so the lane geometry satisfies the rule on its
+  // own and the draw succeeds immediately; if a future edit widens them past what
+  // the spacing can absorb, that is a build-time error rather than a hero that
+  // quietly goes back to drawing lines.
+  if (collides(set)) throw new Error("embers: no arrangement satisfies MIN_GAP_TOGETHER — widen the band, cut n, or lower FLIGHT");
+
+  const streaks = set
+    .map(
+      (e) =>
+        `<i style="--top:${e.top.toFixed(1)}%;--w:${e.w.toFixed(1)}rem;--h:${e.h.toFixed(1)}px;` +
+        `--dur:${CYCLE}s;--delay:${e.delay.toFixed(1)}s;--peak:${e.peak.toFixed(2)}"></i>`,
+    )
+    .join("");
+
+  return `<div class="embers" aria-hidden="true">${streaks}</div>`;
 }
 
 function renderHero(release, hero) {
@@ -253,8 +382,9 @@ function renderHero(release, hero) {
   // and `prefers-reduced-motion` parks them where they start.
   return `<section class="hero">
   <div class="mesh" aria-hidden="true"><i></i><i></i><i></i></div>
+  ${renderEmbers()}
   <div class="wrap">
-    <span class="eyebrow"><b>◆</b> ${esc(HERO.eyebrow)}</span>
+    ${HERO.eyebrow ? `<span class="eyebrow"><b>◆</b> ${esc(HERO.eyebrow)}</span>` : ""}
     <h1>${esc(hero[0])} <span class="accent">${esc(hero[1])}</span> ${esc(hero[2])}</h1>
     <p class="lede">${esc(HERO.lede)}</p>
     <div class="cta-row">
@@ -542,19 +672,37 @@ function renderInstall(release) {
         : `<a class="btn btn-primary" href="${REPO}/releases/latest">Go to releases</a>`;
     } else if (c.code) {
       action = terminal(c.code, c.title.toLowerCase());
+    } else if (c.link) {
+      // A platform whose asset name we cannot resolve to one file (linux/mac
+      // ship four bare binaries, not an installer): link the releases page and
+      // let the reader pick their arch, rather than guessing it for them.
+      action = `<a class="btn btn-ghost" href="${c.link.href}">${esc(c.link.label)}</a>`;
     }
+    // A card can carry more than one mark: "Linux and macOS" is ONE download
+    // and two platforms, and splitting it in two so each gets its own icon
+    // would claim they are two different builds.
+    const marks = (c.icons ?? [c.icon]).map((n) => icon(n)).join("");
     return `<article class="card" data-reveal style="--d:${i * 60}ms">
-      <div class="ico">${icon(c.icon)}</div>
+      <div class="ico">${marks}</div>
       <h3>${esc(c.title)}</h3>
       <p>${esc(c.body)}</p>
       ${action}
     </article>`;
   }).join("\n");
 
+  // Building from source is a fourth thing you can do but not a fourth
+  // audience, and the grid fits three cards at this width — a fourth sits alone
+  // on a row of its own, which is a lot of furniture for the path fewest
+  // readers take. It gets a line under the grid pointing at the instructions.
+  const note = INSTALL_NOTE
+    ? `<p class="install-note" data-reveal>${esc(INSTALL_NOTE.before)}<a href="${INSTALL_NOTE.href}">${esc(INSTALL_NOTE.link)}</a>${esc(INSTALL_NOTE.after)}</p>`
+    : "";
+
   return `<section id="install">
   <div class="wrap">
     ${sectionHead("install")}
     <div class="grid">${cards}</div>
+    ${note}
   </div>
 </section>`;
 }
@@ -714,7 +862,9 @@ async function collectShowcase() {
 
   const resolved = SHOWCASE.map((entry) => ({
     ...entry,
-    shots: entry.shots.flatMap((s) => {
+    // A copy-only section (no shots captured, or none intended) is legal here
+    // exactly as it is in renderShowcase, which defaults the same way.
+    shots: (entry.shots ?? []).flatMap((s) => {
       if (!have.has(s.file)) {
         missing.push(s.file);
         return [];
@@ -751,6 +901,7 @@ async function collectShowcase() {
 const SHOT_SOURCE = {
   "dashboard.webp": "dashboard",
   "models.webp": "models",
+  "backends.webp": "settings-backends",
   "model-config.webp": "model-config-modal",
   "model-config-args.webp": "model-config-args",
   "vram-gauge.webp": "model-config-vram",
