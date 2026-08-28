@@ -5,12 +5,20 @@ on:
     branches: ["main"]
     # only run when backend source changes
     # cmd/ is excluded because it contains utilities without tests
+    #
+    # config-schema.json / config.example.yaml are listed because the test that
+    # validates one against the other (TestConfig_ExampleMatchesSchema) lives in
+    # ./internal/config and so already runs here. Editing only those two files
+    # matches no Go path, which is the whole reason a separate schema workflow
+    # existed; naming them here replaces it.
     paths:
       - "**/*.go"
       - "!cmd/**"
       - "go.mod"
       - "go.sum"
       - "Makefile"
+      - "config-schema.json"
+      - "config.example.yaml"
       - ".github/workflows/go-ci.yml"
 
   pull_request:
@@ -21,6 +29,8 @@ on:
       - "go.mod"
       - "go.sum"
       - "Makefile"
+      - "config-schema.json"
+      - "config.example.yaml"
       - ".github/workflows/go-ci.yml"
 
   # Allows manual triggering of the workflow
