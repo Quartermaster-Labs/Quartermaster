@@ -1402,6 +1402,97 @@
     color: var(--color-txtmain);
   }
 
+  /* An ```svg block rendered as a picture (lib/diagrams.ts). One card with two
+     modes: the toolbar is always on, and exactly one of .svg-out / <pre> below
+     it is displayed. The <pre> lives INSIDE this figure, so its own border has
+     to go or the card reads as two stacked boxes. */
+  .prose :global(.svg-block) {
+    margin: 0.75rem 0;
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    background: var(--color-surface);
+    overflow: hidden;
+  }
+
+  .prose :global(.svg-block .svg-tools) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.25rem 0.375rem;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .prose :global(.svg-block .svg-modes) {
+    display: flex;
+    gap: 0.125rem;
+  }
+
+  .prose :global(.svg-mode-btn) {
+    padding: 0.125rem 0.5rem;
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    border-radius: 0.25rem;
+    border: 1px solid transparent;
+    color: var(--color-txtsecondary);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .prose :global(.svg-mode-btn:hover) {
+    color: var(--color-txtmain);
+  }
+
+  .prose :global(.svg-mode-btn.active) {
+    border-color: var(--color-border);
+    background: var(--color-secondary);
+    color: var(--color-txtmain);
+  }
+
+  /* Same button as .code-copy-btn, minus the absolute positioning: this one
+     sits in the toolbar so it survives preview mode, where the <pre> it would
+     otherwise hang off is hidden. */
+  .prose :global(.svg-copy-btn) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.25rem;
+    border-radius: 0.25rem;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-txtsecondary);
+    cursor: pointer;
+    transition: background-color 0.15s;
+    line-height: 0;
+  }
+
+  .prose :global(.svg-copy-btn:hover) {
+    background: var(--color-secondary);
+  }
+
+  .prose :global(.svg-copy-btn.copied) {
+    color: var(--color-success);
+  }
+
+  .prose :global(.svg-block .svg-out) {
+    display: flex;
+    justify-content: center;
+    padding: 0.75rem;
+    overflow-x: auto;
+  }
+
+  .prose :global(.svg-block .svg-out svg) {
+    max-height: 26rem;
+  }
+
+  .prose :global(.svg-block pre) {
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    padding-right: 0.75rem;
+  }
+
   .prose :global(.diagram-error) {
     margin: 0.5rem 0 -0.25rem;
     font-size: 0.75rem;

@@ -276,6 +276,24 @@ re-shows the fence.
 `DEFAULT_DIAGRAM_PROMPT` (`lib/systemPrompt.ts`, `opts.diagrams`) is what tells the model it can
 draw — it is on for every chat turn, so **keep it byte-stable or the KV prefix breaks**.
 
+### SVG blocks (`lib/svgSanitize.ts`)
+
+The same action also picks up a fenced block that **is** an SVG document and swaps it for a card
+with two modes: **Preview** (default) and **Source**, plus a copy button. Matching is on the
+CONTENT, not on a language class -- a model writes the same markup under ```svg, ```xml, ```html or
+no language at all -- so the rule is "opens with `<svg`, closes with `</svg>`".
+
+Unlike a mermaid/chart fence, this source becomes **live markup in our own document**, so it goes
+through `sanitizeSvg` first (inert `DOMParser`, XML then HTML as a fallback for slightly malformed
+output): scripts, `foreignObject`, `on*` handlers, non-fragment/`data:` URLs and SMIL animations of
+`href` are stripped, and every `id` is namespaced so two answers' `<linearGradient id="a">` cannot
+resolve to each other. Spec in `lib/svgSanitize.test.ts`.
+
+The copy button sits on the card's **toolbar**, not floating inside the `<pre>` like every other
+code block's: the `<pre>` is hidden in preview mode. `renderSvgBlock` sets `data-copy-btn` on it
+(and removes any button already attached) so `ChatMessage`'s `codeBlockCopy` action leaves it alone
+instead of adding a second one.
+
 ## Links open in a new tab (`lib/markdown.ts` `rehypeExternalLinks`)
 
 Every rendered `http(s)` anchor gets `target="_blank"` + `rel="noopener noreferrer"`. The chat IS
