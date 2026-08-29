@@ -184,8 +184,7 @@
        ordinary header again. -->
   <header
     class="titlebar relative flex items-baseline gap-3 border-b border-card-border px-8 py-5"
-    onmousedown={native.isNative ? native.dragWindow : undefined}
-    ondblclick={native.isNative ? native.toggleMaximize : undefined}
+    onmousedown={native.isNative ? native.titleBarMouseDown : undefined}
     role="presentation"
   >
     <h1 class="text-lg font-semibold tracking-tight">Quartermaster</h1>

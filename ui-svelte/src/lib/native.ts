@@ -44,6 +44,44 @@ export function dragWindow(): void {
   void w.qmDrag?.().catch(() => {});
 }
 
+// A native drag eats the click that would have become a double-click, so the
+// title bar has to count the presses itself.
+//
+// qmDrag ends in WM_NCLBUTTONDOWN/HTCAPTION, which puts Windows into its own
+// modal move loop for the rest of the gesture: the webview never sees the
+// mouseup, so it never synthesizes a `click`, so a plain `ondblclick` on the
+// bar can never fire. Matching the OS rule here (two presses inside the
+// double-click time, within a few pixels of each other on SCREEN -- client
+// coordinates move with the window while it is being dragged) restores the
+// verb without giving up drag-from-anywhere.
+const DOUBLE_CLICK_MS = 500; // Windows' default GetDoubleClickTime
+const DOUBLE_CLICK_SLOP = 4; // px, roughly SM_CXDOUBLECLK
+let lastDownAt = 0;
+let lastDownX = 0;
+let lastDownY = 0;
+
+/**
+ * Title-bar mousedown: starts a window drag, or maximises on the second press.
+ *
+ * Use this INSTEAD of `dragWindow` + `ondblclick` -- a surviving `ondblclick`
+ * would toggle a second time on the rare gesture where the click does land.
+ */
+export function titleBarMouseDown(e: MouseEvent): void {
+  if (e.button !== 0) return;
+  const near =
+    Math.abs(e.screenX - lastDownX) <= DOUBLE_CLICK_SLOP &&
+    Math.abs(e.screenY - lastDownY) <= DOUBLE_CLICK_SLOP;
+  if (near && e.timeStamp - lastDownAt <= DOUBLE_CLICK_MS) {
+    lastDownAt = 0; // a triple click must not toggle twice
+    toggleMaximize();
+    return;
+  }
+  lastDownAt = e.timeStamp;
+  lastDownX = e.screenX;
+  lastDownY = e.screenY;
+  dragWindow();
+}
+
 export function minimizeWindow(): void {
   void w.qmMinimize?.().catch(() => {});
 }

@@ -16,7 +16,7 @@ constraints exclude all Go files", breaking the Docker build for a package it ne
 | File | Role |
 |---|---|
 | `doc.go` | Package doc. Untagged, and that is the point (above). |
-| `window_windows.go` | `Options`, `Attach`, `frameless`, `subclass`/`wndProc`, `Drag`, `ToggleMaximize`, `Show`/`Hide`/`Visible`/`PostClose`, `MessageBox`, `winIndex`. |
+| `window_windows.go` | `Options`, `Attach`, `frameless`, `subclass`/`wndProc`, `frameThickness`, `setBackgroundBrush`, `Drag`, `ToggleMaximize`, `Show`/`Hide`/`Visible`/`PostClose`, `MessageBox`, `winIndex`. |
 | `icon_windows.go` | `ApplyIcon` — the window/taskbar/Alt-Tab icon, a different thing from the file icon. Loads `RT_GROUP_ICON` id 1 from its own module, so it works in any binary carrying a `.syso`. |
 | `folder_windows.go` | `PickFolder` — IFileDialog + `FOS_PICKFOLDERS` through raw COM vtable dispatch (`comCall`). |
 | `external_windows.go` | `OpenExternal` — hands an http(s) URL to the system browser via `rundll32 url.dll,FileProtocolHandler`. |
@@ -51,18 +51,33 @@ constraints exclude all Go files", breaking the Docker build for a package it ne
   size does not, the embedded browser stays laid out for the old rect, and the class registers no
   background brush — so the uncovered strip shows a stale pale bar. `frameless` sends a bare
   `WM_SIZE`; the library's handler refits from `GetClientRect` and ignores the parameters.
-- **`WS_THICKFRAME` survives the strip on purpose.** It is what keeps edge resizing, Aero snap and
-  the maximise animation working; a plain `WS_POPUP` loses all three. It is not free — see next.
-- **Clearing `WS_CAPTION` leaves the frame's TOP edge behind.** DWM draws a thick-frame window's top
-  border at `SM_CYSIZEFRAME + SM_CXPADDEDBORDER` (4+4) while the other three edges get 1px. Measured
-  insets around the client area: caption on `top=31 left=1 right=1 bottom=1`, caption stripped
-  `top=7 …` — a 7px pale strip that reads as a leftover title bar, and that `DWMWA_BORDER_COLOR`
-  cannot touch (it colours the 1px outline, not the frame). `wndProc` answers `WM_NCCALCSIZE` by
-  restoring `rgrc[0].Top` after the default handler has inset it, taking the top to 0. **Maximised is
-  deliberately left to the default**: a zoomed window's rect overhangs the work area by the frame
-  thickness, so overriding there pushes the page off-screen. The top edge stops being a resize handle
-  and cannot be given back via `WM_NCHITTEST` — with no non-client area up there the hit test never
-  reaches the window; the WebView2 child owns those pixels.
+- **`WS_CAPTION` and `WS_THICKFRAME` both survive the strip on purpose.** Nothing draws a caption:
+  `WM_NCCALCSIZE` takes the top inset to 0, so the client area covers those pixels and there is no
+  non-client space left to paint one into. The bit is kept because **it is what Windows animates** -
+  a window without it is not a caption window and DWM skips the maximise/restore transition, which is
+  why this window used to snap to full screen instantly while every other app on the desktop grew
+  into it. Chromium and Electron build their frameless windows the same way. `WS_THICKFRAME` is what
+  keeps edge resizing and Aero snap; a plain `WS_POPUP` loses the lot. It is not free - see next.
+- **`WM_NCCALCSIZE` is what removes the title bar, and the caption is not the only thing up there.**
+  The default handler insets the client rect by the caption AND by the frame's top edge, which DWM
+  draws at `SM_CYSIZEFRAME + SM_CXPADDEDBORDER` (4+4) while the other three edges get 1px. Measured
+  insets around the client area: caption on `top=31 left=1 right=1 bottom=1`, caption bit cleared
+  `top=7 ...` - so dropping the style bit alone still left a 7px pale strip that read as a leftover
+  title bar, and that `DWMWA_BORDER_COLOR` cannot touch (it colours the 1px outline, not the frame).
+  `wndProc` restores `rgrc[0].Top` after the default handler has inset it, taking the top to 0 in one
+  move whatever the caption's height on this display. **Maximised gives the frame back but not the
+  caption** (`top += frameThickness()`): a zoomed window's rect deliberately overhangs the work area
+  on every edge, so a client starting at the window's own top would begin off-screen and the monitor
+  would cut off the first rows of the page. The top edge stops being a resize handle and cannot be
+  given back via `WM_NCHITTEST` - with no non-client area up there the hit test never reaches the
+  window; the WebView2 child owns those pixels.
+- **A drag swallows the double-click, so the page counts the presses.** `Drag` ends in
+  `WM_NCLBUTTONDOWN/HTCAPTION`, which puts Windows in its own modal move loop for the rest of the
+  gesture: the webview never sees the mouseup, never synthesizes a `click`, and a plain `ondblclick`
+  on the title bar can therefore never fire. `ui-svelte/src/lib/native.ts` `titleBarMouseDown`
+  applies the OS rule itself (two presses inside 500 ms within 4 screen px = maximise, otherwise
+  drag) and both title bars call it INSTEAD of `qmDrag` + `ondblclick`.
+
 - **There is exactly one close policy, and it lives in `WM_CLOSE`.** The page's `qmClose` binding only
   *posts* `WM_CLOSE`; it decides nothing. It used to decide too, and since it checked `OnClose` but
   not `HideOnClose` the title bar's X terminated the webview while Alt+F4 hid it — the tray's "Open"
@@ -94,6 +109,14 @@ constraints exclude all Go files", breaking the Docker build for a package it ne
   since been unplugged (`MonitorFromRect` with `MONITOR_DEFAULTTONULL` returning 0) applies the size
   only, with `SWP_NOMOVE`, so the window keeps its centred position instead of opening off-screen. A
   minimised window is never restored minimised — there would be nothing to click.
+- **The class background brush is the maximise animation's floor.** go-webview2 registers no useful
+  one, so a client pixel nothing has drawn yet keeps whatever was last composited there - visible
+  when DWM grows the window a frame ahead of WebView2's next paint, as a strip of stale content down
+  the new right/bottom edge. `SetCaptionColor` also installs a solid brush in that colour
+  (`setBackgroundBrush`), so the gap flashes the app's own chrome instead. Only ever delete the brush
+  this package created (`ourBrush`): `SetClassLongPtr` hands back the previous one, which on the
+  first call can be a SYSTEM brush, and deleting one of those corrupts it process-wide.
+
 - **The two white corner dots are the window FRAME, and the page has to dye it.** Windows 11 rounds
   the corners and DWM draws the frame beneath that mask; with the top inset at 0 the client covers
   the whole top edge except where the corner arc meets it, leaving a 1-2px stub of frame in each top

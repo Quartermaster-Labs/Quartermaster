@@ -16,12 +16,18 @@ const (
 	gwlStyle    = -16
 	gwlpWndProc = -4
 
-	wsPopup        = 0x80000000
+	gclpHbrBackground = -10
+
+	wsCaption      = 0x00C00000
+	wsSysMenu      = 0x00080000
 	wsThickFrame   = 0x00040000
 	wsMinimizeBox  = 0x00020000
 	wsMaximizeBox  = 0x00010000
 	wsClipChildren = 0x02000000
 	wsVisible      = 0x10000000
+
+	smCyFrame        = 33
+	smCxPaddedBorder = 92
 
 	swpFrameChanged = 0x0020
 	swpNoMove       = 0x0002
@@ -51,8 +57,12 @@ const (
 
 var (
 	user32  = syscall.NewLazyDLL("user32.dll")
+	gdi32   = syscall.NewLazyDLL("gdi32.dll")
 	dwmapi  = syscall.NewLazyDLL("dwmapi.dll")
 	dwmAttr = dwmapi.NewProc("DwmSetWindowAttribute")
+
+	createSolidBrush = gdi32.NewProc("CreateSolidBrush")
+	deleteObject     = gdi32.NewProc("DeleteObject")
 
 	messageBoxW       = user32.NewProc("MessageBoxW")
 	getWindowLongPtrW = user32.NewProc("GetWindowLongPtrW")
@@ -142,17 +152,26 @@ func Attach(w webview2.WebView, o Options) uintptr {
 // frameless turns the library's WS_OVERLAPPEDWINDOW into a window the page can
 // draw its own header into.
 //
-// WS_THICKFRAME survives on purpose. It is the non-client area, so it costs no
-// pixels the page can see, and it is what keeps edge resizing, Aero snap and
-// the maximise animation working -- all of which a plain WS_POPUP silently
-// loses. WS_MINIMIZEBOX/WS_MAXIMIZEBOX are likewise kept for the taskbar's
-// right-click menu and for Win+Down, even though nothing draws them.
+// **The style keeps WS_CAPTION.** Nothing draws a caption -- WM_NCCALCSIZE below
+// takes the top inset to 0, so the client area covers the pixels it would have
+// occupied and there is no non-client space left for it to paint into. The bit
+// is kept because it is what Windows animates: a window without it is not a
+// caption window, and DWM skips the maximise/restore transition for it
+// entirely, which is why this window used to SNAP to full screen while every
+// other app on the desktop grew into it. Same reason Chromium and Electron
+// build their frameless windows this way rather than out of WS_POPUP.
+//
+// WS_THICKFRAME survives on the same principle: it is the non-client area, so
+// it costs no pixels the page can see, and it is what keeps edge resizing and
+// Aero snap. WS_SYSMENU/WS_MINIMIZEBOX/WS_MAXIMIZEBOX are kept for the
+// taskbar's right-click menu, Alt+Space and Win+Down, even though nothing
+// draws them.
 func frameless(hwnd uintptr) {
 	if hwnd == 0 {
 		return
 	}
-	style := uintptr(wsPopup | wsThickFrame | wsMinimizeBox | wsMaximizeBox |
-		wsClipChildren | wsVisible)
+	style := uintptr(wsCaption | wsSysMenu | wsThickFrame | wsMinimizeBox |
+		wsMaximizeBox | wsClipChildren | wsVisible)
 	_, _, _ = setWindowLongPtrW.Call(hwnd, winIndex(gwlStyle), style)
 
 	subclass(hwnd)
@@ -215,6 +234,38 @@ func SetCaptionColor(hwnd uintptr, r, g, b int) {
 	color := clamp(r) | clamp(g)<<8 | clamp(b)<<16
 	_, _, _ = dwmAttr.Call(hwnd, dwmwaCaptionColor,
 		uintptr(unsafe.Pointer(&color)), unsafe.Sizeof(color))
+	setBackgroundBrush(hwnd, color)
+}
+
+// ourBrush is the class background brush this package created, and the only one
+// it may destroy: SetClassLongPtr hands back whatever was there before, which
+// on the first call is go-webview2's own registration and can be a SYSTEM brush
+// (COLOR_WINDOW+1). Deleting one of those corrupts it process-wide.
+var ourBrush uintptr
+
+// setBackgroundBrush paints the client area the title bar's own colour whenever
+// something uncovers it.
+//
+// The window class registers no useful background, so any client pixel nothing
+// has drawn yet keeps whatever was last composited there. It shows during a
+// maximise: DWM grows the window a frame ahead of WebView2's next paint, and
+// the strip of new client area on the right and bottom flashes with stale
+// content for a frame or two. An erase to the chrome colour turns that into a
+// flash of the app's own background, which reads as part of the animation
+// instead of as garbage.
+//
+// The colour is the page's, for the same reason SetCaptionColor's is: it has to
+// follow the theme, and the theme lives in the browser's storage.
+func setBackgroundBrush(hwnd uintptr, color uint32) {
+	brush, _, _ := createSolidBrush.Call(uintptr(color))
+	if brush == 0 {
+		return
+	}
+	_, _, _ = setClassLongPtrW.Call(hwnd, winIndex(gclpHbrBackground), brush)
+	if ourBrush != 0 {
+		_, _, _ = deleteObject.Call(ourBrush)
+	}
+	ourBrush = brush
 }
 
 // winRect is the Win32 RECT. Win32 rects are half-open and in screen
@@ -232,15 +283,16 @@ type ncCalcSizeParams struct {
 // subclass displaces the window procedure so we can answer two messages the
 // library does not.
 //
-// WM_NCCALCSIZE removes the last 7 pixels of default window header. Clearing
-// WS_CAPTION takes the title bar but NOT the frame's top edge: DWM draws a
-// WS_THICKFRAME window's top border at SM_CYSIZEFRAME+SM_CXPADDEDBORDER (4+4 on
-// a 100% display) while the other three edges get 1px. Measured on a stripped
-// window: top=7 left=1 right=1 bottom=1. That asymmetric strip is the pale bar
-// above the page, and DWMWA_BORDER_COLOR does not touch it -- that attribute
-// colours the 1px outline, not the frame it surrounds. Letting the default
-// handler inset all four edges and then putting the top back where it started
-// is what reclaims it.
+// WM_NCCALCSIZE is what actually removes the title bar, since the style no
+// longer does (see frameless). The default handler insets the client rect by
+// the caption AND by the frame's top edge, which DWM draws at
+// SM_CYSIZEFRAME+SM_CXPADDEDBORDER (4+4 on a 100% display) while the other
+// three edges get 1px -- measured, with the caption bit cleared: top=7 left=1
+// right=1 bottom=1. Both are pale strips above the page that DWMWA_BORDER_COLOR
+// cannot touch (that attribute colours the 1px outline, not the frame it
+// surrounds). Letting the default handler inset all four edges and then putting
+// the top back where it started reclaims the lot in one move, whatever the
+// caption's height on this display.
 //
 // The cost is the top edge as a resize handle. It cannot be given back with
 // WM_NCHITTEST either: with no non-client area up there the hit test never
@@ -280,23 +332,45 @@ func wndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 
 	case wmNcCalcSize:
 		// wparam == 0 means the simple form, where lparam is a bare RECT and
-		// there is nothing to preserve. Maximised is left alone on purpose: a
-		// zoomed window's rect deliberately overhangs the work area by the
-		// frame thickness, so the default inset is what lands the client
-		// exactly on the screen edge. Overriding it there pushes the top of
-		// the page off-screen.
+		// there is nothing to preserve.
 		if wparam != 0 && lparam != 0 {
-			if zoomed, _, _ := isZoomed.Call(hwnd); zoomed == 0 {
-				p := (*ncCalcSizeParams)(unsafe.Pointer(lparam))
-				top := p.rgrc[0].Top
-				ret, _, _ := callWindowProcW.Call(prevWndProc, hwnd, msg, wparam, lparam)
-				p.rgrc[0].Top = top
-				return ret
+			p := (*ncCalcSizeParams)(unsafe.Pointer(lparam))
+			top := p.rgrc[0].Top
+			ret, _, _ := callWindowProcW.Call(prevWndProc, hwnd, msg, wparam, lparam)
+			// Restored: the client takes the whole window, caption included.
+			//
+			// Maximised: it cannot. A zoomed window's rect deliberately
+			// overhangs the work area by the frame thickness on every edge, so
+			// a client that started at the window's own top would begin
+			// off-screen and the first rows of the page would be cut off by the
+			// monitor. Giving back exactly the frame -- and not the caption on
+			// top of it, which is what the default handler also inset -- lands
+			// the client on the screen edge with the title bar's first pixel
+			// visible.
+			if zoomed, _, _ := isZoomed.Call(hwnd); zoomed != 0 {
+				top += int32(frameThickness())
 			}
+			p.rgrc[0].Top = top
+			return ret
 		}
 	}
 	ret, _, _ := callWindowProcW.Call(prevWndProc, hwnd, msg, wparam, lparam)
 	return ret
+}
+
+// frameThickness is how far a maximised window overhangs the work area on each
+// edge: the sizing border plus the padded border Windows adds around it.
+//
+// Read every time rather than cached -- it moves with the display's DPI, and
+// this window can be dragged to a monitor with a different one. (The process is
+// DPI-unaware today, so these come back at 96 DPI, which is also the scale the
+// rects in WM_NCCALCSIZE are virtualized to. That stays consistent if the
+// process ever becomes aware, since the metrics would scale with the rects.)
+func frameThickness() int {
+	// getSystemMetrics is declared once for the package, in icon_windows.go.
+	cy, _, _ := getSystemMetrics.Call(smCyFrame)
+	pad, _, _ := getSystemMetrics.Call(smCxPaddedBorder)
+	return int(int32(cy)) + int(int32(pad))
 }
 
 // Drag hands the mouse to the window manager mid-click, which is how a custom

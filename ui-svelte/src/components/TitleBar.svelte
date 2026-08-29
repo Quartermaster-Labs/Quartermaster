@@ -1,8 +1,9 @@
 <script lang="ts">
   // The app window's title bar. The window has no caption of its own
   // (internal/nativewin strips it), so this strip IS the caption: the whole
-  // width drags, double-click maximises, and the buttons on the right are the
-  // real system verbs.
+  // width drags, double-click maximises (counted in `titleBarMouseDown` -- a
+  // native drag swallows the click a dblclick event would need), and the
+  // buttons on the right are the real system verbs.
   //
   // A dedicated strip rather than window buttons tucked into StatusRail,
   // because StatusRail only exists in dashboard mode. Loading, login and the
@@ -104,8 +105,7 @@
   <header
     bind:this={bar}
     class="titlebar flex h-8 shrink-0 items-center gap-2 bg-chrome pl-4"
-    onmousedown={native.dragWindow}
-    ondblclick={native.toggleMaximize}
+    onmousedown={native.titleBarMouseDown}
     role="presentation"
   >
     <!-- No border-b: the side rail and the status rail below are the same
