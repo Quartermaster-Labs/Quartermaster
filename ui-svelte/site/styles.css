@@ -17,6 +17,11 @@
   --muted: rgb(161 161 166 / 0.85);
   --primary: rgb(255 106 43);
   --primary-hover: rgb(255 130 69);
+  /* The header mark's second tone. The mark draws its bright parts in
+     currentColor (.brand svg takes --primary), so only the deep one needs
+     stating; on the light ground it tracks --primary down rather than keeping
+     the app's bright orange, which washes out on cream. */
+  --mark-deep: rgb(184 65 14);
   --on-primary: rgb(255 250 245);
   --border: rgb(168 168 176 / 0.2);
   --border-soft: rgb(168 168 176 / 0.11);
@@ -45,6 +50,7 @@
     --muted: rgb(107 98 89);
     --primary: rgb(120 72 40);
     --primary-hover: rgb(96 56 28);
+    --mark-deep: rgb(86 44 13);
     --on-primary: rgb(250 246 238);
     --border: rgb(40 30 20 / 0.18);
     --border-soft: rgb(40 30 20 / 0.1);
@@ -71,6 +77,7 @@
   --muted: rgb(107 98 89);
   --primary: rgb(120 72 40);
   --primary-hover: rgb(96 56 28);
+  --mark-deep: rgb(86 44 13);
   --on-primary: rgb(250 246 238);
   --border: rgb(40 30 20 / 0.18);
   --border-soft: rgb(40 30 20 / 0.1);

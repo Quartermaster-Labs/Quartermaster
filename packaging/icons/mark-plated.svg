@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" fill="none">
+<defs><linearGradient id="plate" x1="0%" y1="0%" x2="100%" y2="100%">
+<stop offset="0" stop-color="#262A31"/><stop offset="1" stop-color="#141519"/>
+</linearGradient></defs>
+<rect width="256" height="256" rx="56.32" fill="url(#plate)"/>
+<g transform="translate(30.72 30.72) scale(0.76)">
+  <path d="M128.00 128.00 L192.35 192.35" stroke="#B8410E" stroke-width="18" stroke-linecap="butt"/>
+  <path d="M128.00 128.00 L63.65 192.35" stroke="#B8410E" stroke-width="18" stroke-linecap="butt"/>
+  <path d="M128.00 128.00 L63.65 63.65" stroke="#B8410E" stroke-width="18" stroke-linecap="butt"/>
+  <path d="M128.00 128.00 L192.35 63.65" stroke="#B8410E" stroke-width="18" stroke-linecap="butt"/>
+  <circle cx="128" cy="128" r="91" fill="none" stroke="#FF6A2B" stroke-width="26"/>
+  <path d="M232.00 128.00 L247.00 128.00" stroke="#B8410E" stroke-width="18" stroke-linecap="round"/>
+  <path d="M201.54 201.54 L212.15 212.15" stroke="#B8410E" stroke-width="18" stroke-linecap="round"/>
+  <path d="M128.00 232.00 L128.00 247.00" stroke="#B8410E" stroke-width="18" stroke-linecap="round"/>
+  <path d="M54.46 201.54 L43.85 212.15" stroke="#B8410E" stroke-width="18" stroke-linecap="round"/>
+  <path d="M24.00 128.00 L9.00 128.00" stroke="#B8410E" stroke-width="18" stroke-linecap="round"/>
+  <path d="M54.46 54.46 L43.85 43.85" stroke="#B8410E" stroke-width="18" stroke-linecap="round"/>
+  <path d="M128.00 24.00 L128.00 9.00" stroke="#B8410E" stroke-width="18" stroke-linecap="round"/>
+  <path d="M201.54 54.46 L212.15 43.85" stroke="#B8410E" stroke-width="18" stroke-linecap="round"/>
+  <circle cx="128" cy="128" r="25" fill="#FF6A2B"/>
+</g>
+</svg>

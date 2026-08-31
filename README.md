@@ -1,3 +1,5 @@
+<img src="docs/assets/mark.png" width="64" alt="">
+
 ![Quartermaster dashboard](docs/assets/dashboard.webp)
 
 ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/Quartermaster-Labs/quartermaster/total)
