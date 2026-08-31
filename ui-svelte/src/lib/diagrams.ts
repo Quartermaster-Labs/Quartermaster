@@ -17,6 +17,7 @@
 import { get } from "svelte/store";
 import { isDarkMode } from "../stores/theme";
 import { sanitizeSvg } from "./svgSanitize";
+import { cssZoom } from "./uiZoom";
 
 // Chart types we accept from a model-authored config. Chart.js will happily
 // build anything its registry knows; the allowlist keeps a malformed/hostile
@@ -81,6 +82,12 @@ async function renderChart(host: HTMLElement, src: string, dark: boolean) {
       responsive: true,
       maintainAspectRatio: false,
       ...(cfg.options ?? {}),
+      // chart.js sizes the backing store from the canvas's LOCAL css size, so
+      // its default ratio misses the interface zoom `--qm-scale` puts on :root
+      // and the chart comes out a blurry upscale at any size above 100%. Same
+      // correction the dashboard's own charts make (PerformanceChart.svelte);
+      // the canvas is in the DOM by now, so its zoom is readable.
+      devicePixelRatio: (window.devicePixelRatio || 1) * cssZoom(canvas),
       // Theme last: a model config shouldn't be able to hand us unreadable
       // black-on-black axes.
       plugins: {

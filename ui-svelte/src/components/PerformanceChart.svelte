@@ -5,6 +5,7 @@
   import type { Chart as ChartJS } from "chart.js";
   import { isDarkMode } from "../stores/theme";
   import { uiScale } from "../stores/uiScale";
+  import { pixelRatio } from "../stores/pixelRatio";
   import { cssZoom } from "../lib/uiZoom";
 
   interface Dataset {
@@ -46,8 +47,15 @@
   // display's own pixel ratio: chart.js sizes it from the element's LOCAL css
   // size (canvas.clientWidth), which `zoom` then paints larger. Without this the
   // charts are a blurry upscale at any interface size above 100%.
+  //
+  // The display ratio comes from the store, not from `window.devicePixelRatio`,
+  // so that a ratio which moves after mount (browser zoom, a display-scale
+  // change, a drag to a monitor with a different scale) re-runs the effect
+  // below. Pinning `options.devicePixelRatio` also disables chart.js's own
+  // ratio watcher - it compares against the platform value and we have just
+  // overridden it - so this store is the only thing left watching.
   function backingRatio(): number {
-    return (window.devicePixelRatio || 1) * cssZoom(canvas);
+    return $pixelRatio * cssZoom(canvas);
   }
 
   // chart.js derives the hit position from the native event, and its own idea of
@@ -166,9 +174,11 @@
   $effect(() => {
     if (!chart) return;
     const _dark = $isDarkMode;
-    // $uiScale is a dependency, not an argument: a zoom change means a new
-    // backing ratio, and resize() is what re-allocates the canvas for it.
+    // $uiScale and $pixelRatio are dependencies, not arguments: either moving
+    // means a new backing ratio, and resize() is what re-allocates the canvas
+    // for it.
     void $uiScale;
+    void $pixelRatio;
     chart.options = buildOptions(_dark);
     chart.resize();
     chart.update("none");
