@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tip } from "../lib/tooltip";
   import { link } from "svelte-spa-router";
-  import { LayoutDashboard, Boxes, Layers, FlaskConical, Activity, KeyRound, ArrowUpCircle, BookOpen, Settings } from "lucide-svelte";
+  import { LayoutDashboard, BrainCircuit, CloudDownload, MessagesSquare, Radar, KeyRound, ArrowUpCircle, BookOpen, Settings } from "lucide-svelte";
   import WikiModal from "./WikiModal.svelte";
   import SettingsModal from "./SettingsModal.svelte";
   import { currentRoute } from "../stores/route";
@@ -25,12 +25,12 @@
     { path: "/", label: "Dashboard", icon: LayoutDashboard },
     // Models is ONE page now — the category split is tabs on the page itself,
     // so a sub-menu duplicating them would be two controls for one choice.
-    { path: "/models", label: "Models", icon: Boxes },
+    { path: "/models", label: "Models", icon: BrainCircuit },
     // Acquiring a model is its own task, not a view of the local catalog, so it
     // gets a page rather than another category tab on Models.
-    { path: "/browse", label: "Browse", icon: Layers },
-    { path: "/test", label: "Playground", icon: FlaskConical },
-    { path: "/observe", label: "Observe", icon: Activity },
+    { path: "/browse", label: "Browse", icon: CloudDownload },
+    { path: "/test", label: "Playground", icon: MessagesSquare },
+    { path: "/observe", label: "Observe", icon: Radar },
     { path: "/api-keys", label: "API Keys", icon: KeyRound },
   ];
 

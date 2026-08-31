@@ -1,6 +1,6 @@
 <script lang="ts">
   import { playgroundPort } from "../stores/playgroundAuth";
-  import { FlaskConical } from "lucide-svelte";
+  import { MessagesSquare } from "lucide-svelte";
   import { isNative } from "../lib/native";
   import { openTab } from "../stores/appTabs";
 
@@ -18,7 +18,7 @@
 </script>
 
 <div class="h-full flex flex-col items-center justify-center gap-3 text-txtsecondary">
-  <FlaskConical class="w-10 h-10 opacity-40" strokeWidth={1.5} />
+  <MessagesSquare class="w-10 h-10 opacity-40" strokeWidth={1.5} />
   {#if url}
     <p>The playground now runs as a separate app.</p>
     <!-- data-qm-inapp: same capture-phase problem as the sidebar's entry --
