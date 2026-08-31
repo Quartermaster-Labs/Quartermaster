@@ -36,7 +36,7 @@ const turnFlushInterval = 2 * time.Second
 // turnDelta is one SSE frame. Replace=true carries a full snapshot (sent once on
 // subscribe so a reopened tab syncs), Replace=false is an incremental append.
 type turnDelta struct {
-	Kind    string          `json:"kind"` // content | reasoning | search | thinkMs | titles | done | error
+	Kind    string          `json:"kind"` // content | reasoning | search | thinkMs | titles | answer | done | error
 	Text    string          `json:"text,omitempty"`
 	Replace bool            `json:"replace,omitempty"`
 	Msg     string          `json:"msg,omitempty"`
@@ -77,6 +77,11 @@ type activeTurn struct {
 	reasoning   string
 	reasoningMs int64
 	genMs       int64
+	// answered is set the moment the prose is final, which is NOT when the turn
+	// finishes: the end-of-turn title mop-up (titlegen.go) sits between the two
+	// and may spend titlegenMopupBudget on a CPU model. Viewers are told at this
+	// point so the reply stops reading as "still writing".
+	answered    bool
 	searches    []turnSearch
 	citations   []turnCitation
 	authKey     string // configured API key injected into the loopback self-call (empty = keys off)
@@ -449,6 +454,11 @@ func (at *activeTurn) subscribe() (chan turnDelta, []turnDelta, bool) {
 		snap = append(snap, turnDelta{Kind: "reasoning", Text: at.reasoning, Replace: true})
 	}
 	snap = append(snap, turnDelta{Kind: "content", Text: at.content, Replace: true})
+	if at.answered {
+		// Reattached during the title mop-up: the answer is written, so don't
+		// show it as generating for the rest of that budget.
+		snap = append(snap, turnDelta{Kind: "answer", GenMs: at.genMs})
+	}
 	if at.busy != "" {
 		// A tab that reattaches mid-search must see the search, not a silent gap.
 		snap = append(snap, turnDelta{Kind: "busy", Text: at.busy})
@@ -733,6 +743,11 @@ func (tm *turnManager) run(ctx context.Context, user string, at *activeTurn, sta
 		at.content = cleaned
 		at.fan(turnDelta{Kind: "content", Text: cleaned, Replace: true})
 	}
+	// The prose is final HERE. "done" is still seconds away (title mop-up, then
+	// the flush), and everything the UI holds back until a reply stops moving --
+	// the footer, Sources, the rendered diagram/SVG cards -- only needs this.
+	at.answered = true
+	at.fan(turnDelta{Kind: "answer", GenMs: at.genMs})
 	at.mu.Unlock()
 
 	// Reasoning-box titles, before the final flush so they persist with the answer.

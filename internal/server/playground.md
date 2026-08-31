@@ -71,9 +71,13 @@ never fan out CPU processes against the generating model or stall the stream. `t
 **stops the worker and fills the gaps** between `endInline()` and the final `flush()`. A cancelled
 turn drains its queue and skips titling entirely.
 
-That mop-up sits between the last token and the turn's `done` event, and the UI gates the whole
-message footer (divider, word counts, regenerate/copy/speak) on `done` — so every second spent
-there is a second the finished answer sits on screen looking half-rendered. Per-title timeouts
+That mop-up sits between the last token and the turn's `done` event, so the UI is **not** told the
+answer is finished by `done`. `run` fans an **`answer`** delta (with `genMs`) the moment the prose is
+final, before the mop-up, and `subscribe()` replays it — everything the bubble holds back until the
+reply stops moving (the footer, Sources, the rendered diagram/SVG cards, the ask wizard) keys off
+that, while the composer stays locked on `done` because the server still owns one turn per user.
+Without it every second in the mop-up was a second the finished answer sat on screen looking
+half-rendered. Per-title timeouts
 alone bounded it at `titlegenMaxSpans` x `titlegenTimeout`, and this is the machine's worst moment:
 the titler spawns the GPU-linked llama binary (CPU-only, but it still enumerates devices) while the
 router may be swapping a model in for someone else. So the pass gets **one** deadline for the whole

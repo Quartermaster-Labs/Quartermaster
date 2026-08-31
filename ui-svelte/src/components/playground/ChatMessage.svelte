@@ -1,7 +1,7 @@
 <script lang="ts">
   import { cssZoom } from "../../lib/uiZoom";
   import { tip } from "../../lib/tooltip";
-  import { renderMarkdown, renderStreamingMarkdown, createStreamingCache } from "../../lib/markdown";
+  import { renderMarkdown, renderStreamingMarkdown, finalizeStreamingMarkdown, createStreamingCache } from "../../lib/markdown";
   import type { RenderedBlock } from "../../lib/markdown";
   import { Copy, Check, Pencil, X, Save, RefreshCw, ChevronRight, Search, BookOpen, PenLine, Wrench, Reply, Youtube, FileText, ArrowRightLeft, Clock, Calculator, Ruler, CloudSun, Rss, Captions, Sparkles, Volume2, Volume1, VolumeX, Loader2, Square, BrainCircuit, Gauge } from "lucide-svelte";
   import { speakStreamed } from "../../lib/speechApi";
@@ -315,16 +315,22 @@
 
   let streamingCache = createStreamingCache();
   // Render a text segment: incremental (streaming) only for the live last one.
+  // The FINAL render of a streamed segment goes through finalizeStreamingMarkdown
+  // rather than a plain renderMarkdown: the latter returns one block that
+  // replaces everything the stream built, which would tear down and redraw every
+  // diagram/SVG card already on screen the moment the answer landed.
   function renderTextSeg(seg: { text: string; idx: number }): { blocks: RenderedBlock[]; pendingHtml: string } {
-    if (isStreaming && seg.idx === lastTextIdx) {
-      return renderStreamingMarkdown(seg.text, streamingCache, citations ?? []);
+    if (seg.idx === lastTextIdx) {
+      if (isStreaming) return renderStreamingMarkdown(seg.text, streamingCache, citations ?? []);
+      return { blocks: finalizeStreamingMarkdown(seg.text, streamingCache, citations ?? []), pendingHtml: "" };
     }
     return { blocks: [{ id: -1, html: renderMarkdown(seg.text, citations ?? []) }], pendingHtml: "" };
   }
-  $effect(() => {
-    // Reset the streaming cache when a turn finishes so the next one starts clean.
-    if (!isStreaming) streamingCache = createStreamingCache();
-  });
+  // No explicit reset: the cache is per component instance, and
+  // renderStreamingMarkdown already re-renders from scratch whenever the text
+  // stops being a continuation of what it holds (a regenerate, a server
+  // snapshot). Clearing it on "turn finished" is what the finished render now
+  // depends on, so it can't be cleared there any more.
   let copied = $state(false);
 
   // --- read aloud -----------------------------------------------------------
@@ -865,7 +871,7 @@
       {#if rewriteOriginal != null}
         <RewriteDiff original={rewriteOriginal} rewritten={stripThinking(displayContent)} {isStreaming} {modelReady} />
       {:else}
-        <div class="prose prose-sm dark:prose-invert max-w-none chat-prose" bind:this={proseEl} use:codeBlockCopy use:wikiCiteClick use:diagramBlocks={!isStreaming}>
+        <div class="prose prose-sm dark:prose-invert max-w-none chat-prose" bind:this={proseEl} use:codeBlockCopy use:wikiCiteClick use:diagramBlocks>
           <!-- Ordered timeline: inline think boxes, search blocks, and answer text. -->
           {#each timeline as seg, si (si)}
             {#if seg.kind === "search"}

@@ -211,78 +211,95 @@ function renderSvgBlock(pre: HTMLElement, code: HTMLElement, src: string, id: nu
  *
  * Also swaps any code block that holds a whole SVG document for a preview.
  *
- * `enabled` is the "message is finished" gate — scanning mid-stream would try to
- * parse a half-written diagram, fail, and burn the block. Pass `!isStreaming`.
+ * Runs DURING the stream, per block. The gate is not "the message is finished"
+ * but "this block is finished": `markOpenFence` (lib/markdown.ts) tags the one
+ * code block the model is still writing, and only that one is skipped — parsing
+ * a half-written diagram fails and burns the block, so it is left alone until
+ * its fence closes and the streaming renderer moves it into a settled block.
+ * A picture the model drew in its first paragraph therefore appears there,
+ * rather than after the last token of a long answer.
  */
-export function diagramBlocks(node: HTMLElement, enabled = true) {
-  let on = enabled;
+export function diagramBlocks(node: HTMLElement) {
   let scanning = false;
+  let dirty = false;
 
+  // A token landing while we await mermaid must not be dropped: re-run instead.
+  // Looped, not recursed — a fast stream can dirty every pass.
   async function scan() {
-    if (!on || scanning) return;
+    if (scanning) {
+      dirty = true;
+      return;
+    }
     scanning = true;
     try {
-      const blocks = node.querySelectorAll<HTMLElement>(
-        "code.language-mermaid:not([data-diagram]), code.language-chart:not([data-diagram])"
-      );
-      const dark = get(isDarkMode);
-
-      // SVG blocks are matched on their CONTENT, not on a language class: a
-      // model asked for a picture writes ```svg, ```xml or ```html for the same
-      // markup, and some write no language at all. A block that opens with
-      // `<svg` and closes with `</svg>` is an SVG document whatever it was
-      // labelled -- and nothing else is.
-      for (const code of node.querySelectorAll<HTMLElement>("pre > code:not([data-svg])")) {
-        const src = (code.textContent ?? "").trim();
-        if (!/^<svg[\s>]/i.test(src) || !/<\/svg>$/i.test(src)) continue;
-        const pre = code.parentElement;
-        if (!pre) continue;
-        code.setAttribute("data-svg", "done");
-        if (!renderSvgBlock(pre, code, src, svgSeq++)) code.setAttribute("data-svg", "error");
-      }
-      for (const code of blocks) {
-        const pre = code.closest("pre");
-        const src = (code.textContent ?? "").trim();
-        if (!pre || !src) continue;
-        code.setAttribute("data-diagram", "done");
-
-        const fig = document.createElement("figure");
-        fig.className = "diagram-block";
-        const out = document.createElement("div");
-        out.className = "diagram-out";
-        fig.appendChild(out);
-        try {
-          if (code.classList.contains("language-mermaid")) await renderMermaid(out, src, dark);
-          else await renderChart(out, src, dark);
-        } catch (e) {
-          // Keep the source visible instead of swallowing it — a diagram the
-          // model got slightly wrong is still readable as text.
-          code.setAttribute("data-diagram", "error");
-          const msg = document.createElement("div");
-          msg.className = "diagram-error";
-          msg.textContent = `Couldn't draw this ${code.classList.contains("language-mermaid") ? "diagram" : "chart"}: ${
-            e instanceof Error ? e.message.split("\n")[0] : String(e)
-          }`;
-          pre.before(msg);
-          continue;
-        }
-        // Rendered: swap the code block for the picture, with the source one
-        // click away (the code-copy button still works on the hidden <pre>).
-        const toggle = document.createElement("button");
-        toggle.type = "button";
-        toggle.className = "diagram-src-btn";
-        toggle.textContent = "Source";
-        toggle.addEventListener("click", () => {
-          const shown = pre.style.display !== "none";
-          pre.style.display = shown ? "none" : "";
-          toggle.classList.toggle("open", !shown);
-        });
-        fig.appendChild(toggle);
-        pre.style.display = "none";
-        pre.before(fig);
-      }
+      do {
+        dirty = false;
+        await scanOnce();
+      } while (dirty);
     } finally {
       scanning = false;
+    }
+  }
+
+  async function scanOnce() {
+    const blocks = node.querySelectorAll<HTMLElement>(
+      "pre:not([data-open-fence]) > code.language-mermaid:not([data-diagram]), pre:not([data-open-fence]) > code.language-chart:not([data-diagram])"
+    );
+    const dark = get(isDarkMode);
+
+    // SVG blocks are matched on their CONTENT, not on a language class: a
+    // model asked for a picture writes ```svg, ```xml or ```html for the same
+    // markup, and some write no language at all. A block that opens with
+    // `<svg` and closes with `</svg>` is an SVG document whatever it was
+    // labelled -- and nothing else is.
+    for (const code of node.querySelectorAll<HTMLElement>("pre:not([data-open-fence]) > code:not([data-svg])")) {
+      const src = (code.textContent ?? "").trim();
+      if (!/^<svg[\s>]/i.test(src) || !/<\/svg>$/i.test(src)) continue;
+      const pre = code.parentElement;
+      if (!pre) continue;
+      code.setAttribute("data-svg", "done");
+      if (!renderSvgBlock(pre, code, src, svgSeq++)) code.setAttribute("data-svg", "error");
+    }
+    for (const code of blocks) {
+      const pre = code.closest("pre");
+      const src = (code.textContent ?? "").trim();
+      if (!pre || !src) continue;
+      code.setAttribute("data-diagram", "done");
+
+      const fig = document.createElement("figure");
+      fig.className = "diagram-block";
+      const out = document.createElement("div");
+      out.className = "diagram-out";
+      fig.appendChild(out);
+      try {
+        if (code.classList.contains("language-mermaid")) await renderMermaid(out, src, dark);
+        else await renderChart(out, src, dark);
+      } catch (e) {
+        // Keep the source visible instead of swallowing it — a diagram the
+        // model got slightly wrong is still readable as text.
+        code.setAttribute("data-diagram", "error");
+        const msg = document.createElement("div");
+        msg.className = "diagram-error";
+        msg.textContent = `Couldn't draw this ${code.classList.contains("language-mermaid") ? "diagram" : "chart"}: ${
+          e instanceof Error ? e.message.split("\n")[0] : String(e)
+        }`;
+        pre.before(msg);
+        continue;
+      }
+      // Rendered: swap the code block for the picture, with the source one
+      // click away (the code-copy button still works on the hidden <pre>).
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "diagram-src-btn";
+      toggle.textContent = "Source";
+      toggle.addEventListener("click", () => {
+        const shown = pre.style.display !== "none";
+        pre.style.display = shown ? "none" : "";
+        toggle.classList.toggle("open", !shown);
+      });
+      fig.appendChild(toggle);
+      pre.style.display = "none";
+      pre.before(fig);
     }
   }
 
@@ -291,10 +308,6 @@ export function diagramBlocks(node: HTMLElement, enabled = true) {
   mo.observe(node, { childList: true, subtree: true });
 
   return {
-    update(next: boolean) {
-      on = next;
-      void scan();
-    },
     destroy: () => mo.disconnect(),
   };
 }

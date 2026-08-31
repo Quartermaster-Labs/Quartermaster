@@ -237,7 +237,20 @@ export function splitCompleteBlocks(text: string): { complete: string; pending: 
 }
 
 export function closePendingBlock(pending: string): string {
-  if (!pending) return "";
+  return scanPending(pending).closed;
+}
+
+/**
+ * Closes an unterminated fence/math block in the still-streaming tail, and says
+ * whether it had to.
+ *
+ * `openFence` is what lets a consumer tell a code block that is FINISHED from
+ * one the model is halfway through writing: the closing fence is synthetic, so
+ * the source inside is a fragment. `renderStreamingMarkdown` uses it to mark
+ * that block in the HTML, and `diagrams.ts` refuses to render a marked block.
+ */
+export function scanPending(pending: string): { closed: string; openFence: boolean } {
+  if (!pending) return { closed: "", openFence: false };
 
   const lines = pending.split("\n");
   let inFence = false;
@@ -284,9 +297,19 @@ export function closePendingBlock(pending: string): string {
     }
   }
 
-  if (inFence) return pending + "\n" + fenceStr;
-  if (inMathBlock) return pending + "\n" + mathClose;
-  return pending;
+  if (inFence) return { closed: pending + "\n" + fenceStr, openFence: true };
+  if (inMathBlock) return { closed: pending + "\n" + mathClose, openFence: false };
+  return { closed: pending, openFence: false };
+}
+
+// Tags the last <pre> in a rendered fragment as still being written. Done on the
+// HTML string rather than in the DOM because the caller ({@html}) never gets a
+// handle on the element, and an unterminated fence is always the LAST block of
+// the pending tail: a fence that closed has moved into the `complete` half.
+export function markOpenFence(html: string): string {
+  const i = html.lastIndexOf("<pre");
+  if (i < 0) return html;
+  return html.slice(0, i + 4) + ' data-open-fence="true"' + html.slice(i + 4);
 }
 
 export interface RenderedBlock {
@@ -330,11 +353,41 @@ export function renderStreamingMarkdown(
 
   let pendingHtml = "";
   if (pending) {
-    const closed = closePendingBlock(pending);
+    const { closed, openFence } = scanPending(pending);
     pendingHtml = renderMarkdown(closed, citations);
+    if (openFence) pendingHtml = markOpenFence(pendingHtml);
   }
 
   return { blocks: cache.blocks, pendingHtml };
+}
+
+/**
+ * The last render of a message whose stream just ended.
+ *
+ * Not the same as `renderMarkdown(whole text)`: that returns ONE block, which
+ * replaces every element the stream had already put in the DOM -- throwing away
+ * the mermaid/chart/SVG cards `diagrams.ts` drew as each fence closed, only to
+ * redraw them a frame later. Treating the full text as complete and appending
+ * just the tail keeps the settled DOM (and its pictures) exactly where it is.
+ *
+ * Falls back to a single fresh block when the text is not a continuation of what
+ * was streamed -- a server snapshot rewrote it, or this message never streamed
+ * in this tab at all.
+ */
+export function finalizeStreamingMarkdown(
+  text: string,
+  cache: StreamingCache,
+  citations: Citation[] = [],
+): RenderedBlock[] {
+  if (!cache.completeKey || !text.startsWith(cache.completeKey)) {
+    return [{ id: -1, html: renderMarkdown(text, citations) }];
+  }
+  const tail = text.slice(cache.completeKey.length);
+  if (tail) {
+    cache.blocks = [...cache.blocks, { id: cache.nextId++, html: renderMarkdown(tail, citations) }];
+  }
+  cache.completeKey = text;
+  return cache.blocks;
 }
 
 // Convert \[...\] to $$...$$ and \(...\) to $...$

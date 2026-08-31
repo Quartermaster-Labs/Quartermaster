@@ -287,6 +287,13 @@
     toastTimer = setTimeout(() => (toast = ""), 1500);
   }
   let isStreaming = $derived(genId !== null);
+  // The prose of the live turn is final, but the turn itself hasn't ended: the
+  // server is still running its end-of-turn title mop-up (up to ~2.5s of CPU
+  // model) before it sends `done`. Everything the bubble holds back until the
+  // reply stops moving keys off THIS, not off isStreaming, so the footer,
+  // Sources and the diagram/SVG cards land with the last token. The composer
+  // stays locked on isStreaming: the server still owns one turn per user.
+  let answerDone = $state(false);
   let isReasoning = $state(false);
   // What the server says the turn is doing right now ("Searching for …"). A tool
   // call only produces a search card once it FINISHES, so this is the only signal
@@ -767,6 +774,7 @@
     const original = isRewrite ? getTextContent(reqUser.content) : "";
 
     genId = id;
+    answerDone = false;
     isReasoning = false;
     busyLabel = "";
     reasoningStartTime = 0;
@@ -950,6 +958,7 @@
         patchSession(id, { messages: sessionById(id)!.messages.slice(0, -1) });
       }
       genId = null;
+      answerDone = false;
       isReasoning = false;
       busyLabel = "";
       abortController = null;
@@ -1073,8 +1082,16 @@
         // Lives on the bubble only for the turn; the post-turn sync drops it.
         if (d.data) patchLast(id, (m) => ({ ...m, approval: d.data }));
         break;
+      case "answer":
+        // Prose is final; the stream stays open for the `titles` snapshot and
+        // `done`. Carries genMs so the footer's timing is right immediately.
+        busyLabel = "";
+        answerDone = true;
+        if (d.genMs) patchLast(id, (m) => (m.role === "assistant" ? { ...m, genTimeMs: d.genMs } : m));
+        break;
       case "done":
         busyLabel = "";
+        answerDone = true;
         if (d.genMs) patchLast(id, (m) => (m.role === "assistant" ? { ...m, genTimeMs: d.genMs } : m));
         break;
       case "error":
@@ -1112,6 +1129,7 @@
       return;
     }
     genId = id;
+    answerDone = false;
     isReasoning = false;
     busyLabel = "";
     reasoningStartTime = 0;
@@ -1129,6 +1147,7 @@
       // ignore — partial answer is persisted server-side
     } finally {
       genId = null;
+      answerDone = false;
       isReasoning = false;
       busyLabel = "";
       abortController = null;
@@ -1451,7 +1470,7 @@
             onApprove={respondApproval}
             rewriteInstruction={message.rewriteInstruction}
             rewriteOriginal={message.rewriteOriginal}
-            isStreaming={genId === $activeChatId && idx === messages.length - 1 && message.role === "assistant"}
+            isStreaming={genId === $activeChatId && !answerDone && idx === messages.length - 1 && message.role === "assistant"}
             isReasoning={isReasoning && genId === $activeChatId && idx === messages.length - 1 && message.role === "assistant"}
             isSearching={isSearching && genId === $activeChatId && idx === messages.length - 1 && message.role === "assistant"}
             {busyLabel}
@@ -1462,7 +1481,7 @@
               ? () => regenerateFromIndex($activeChatId, idx - 1)
               : undefined}
             onReply={message.role === "assistant" ? () => { replyTo(idx); inputEl?.focus(); } : undefined}
-            onAskAnswer={message.role === "assistant" && idx === messages.length - 1 && genId !== $activeChatId
+            onAskAnswer={message.role === "assistant" && idx === messages.length - 1 && (genId !== $activeChatId || answerDone)
               ? (text) => { userInput = text; void sendMessage(); }
               : undefined}
           />

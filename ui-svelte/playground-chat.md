@@ -17,6 +17,17 @@ Pure helpers live in `chatHelpers.ts` (`quotePrefix`, `TEMP_STEPS`/`TEMP_LABELS`
 `nearestTempIdx`, `currentDateLine`, `REWRITE_SYSTEM`, attach limits + `validateImageFile`/
 `fileToDataUrl`).
 
+### Finished before the turn is
+
+`isStreaming` on a bubble is `genId === activeChatId && !answerDone`, not just `genId`. The server
+sends an **`answer`** delta the moment the prose is final; `done` comes later, after the end-of-turn
+reasoning-title mop-up (up to `titlegenMopupBudget`, 2.5s of CPU model) and the final flush. Gating
+on `done` meant the footer, Sources, the ask wizard and every rendered diagram appeared seconds
+after the last token, which reads as a hang.
+
+The **composer** deliberately still gates on `genId` (`isStreaming` in `ChatInterface`): the server
+runs one turn per user, so the next send has to wait for the real end of this one.
+
 ### Generation is server-run
 
 The client POSTs to `/api/chats/turn` and subscribes to `/api/chats/turn/stream` (SSE). The
@@ -132,8 +143,9 @@ model summarizing prose it was handed works, naming a topic from a chat opener d
 the opening clause. The VRAM argument doesn't apply either: the title is generated right after that
 model streamed the first answer, so it is already resident.
 
-**Sources** renders only when `!isStreaming` — mid-stream it pins under the growing answer and its
-count churns with every tool round.
+**Sources** renders only when the answer is done — mid-stream it pins under the growing answer and
+its count churns with every tool round. "Done" here means the server's `answer` delta, not `done`:
+see [Finished before the turn is](#finished-before-the-turn-is).
 
 ## `ChatMessage.svelte` — read-aloud
 
@@ -267,7 +279,19 @@ deliberately leaves those two languages **unhighlighted** so the raw source surv
 `diagramBlocks` Svelte action (used on the assistant prose in `ChatMessage.svelte`) draws them after
 the HTML lands in the DOM.
 
-Gated on `!isStreaming` — scanning mid-stream would parse a half-written diagram and burn the block.
+**Gated per block, not per message.** Scanning a half-written diagram parses garbage and burns the
+block, so the thing that has to be finished is the *fence*, not the answer: `renderStreamingMarkdown`
+already splits the settled prose from the still-moving tail, and `markOpenFence` (`lib/markdown.ts`)
+tags the one code block whose closing fence it had to synthesize. `diagramBlocks` skips
+`pre[data-open-fence]` and draws everything else as it lands, so a picture in the first paragraph
+appears there instead of after the last token.
+
+The final render of a streamed message goes through `finalizeStreamingMarkdown`, not a plain
+`renderMarkdown` of the whole text: the latter returns ONE block that replaces every element the
+stream put in the DOM, tearing down the cards already drawn only to redraw them a frame later. It
+appends just the tail to the streaming cache instead, and falls back to a single fresh block when
+the text isn't a continuation (a regenerate, a server snapshot, a message loaded from history).
+
 Mermaid is `import()`ed on first use (it self-splits one chunk per diagram type, main bundle
 unaffected) and runs `securityLevel: "strict"`; a render failure leaves the code block visible with
 a one-line note instead of swallowing the answer. Rendered blocks get a **Source** toggle that

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { renderMarkdown, escapeHtml, splitCompleteBlocks, closePendingBlock, normalizeLatexDelimiters, renderStreamingMarkdown, createStreamingCache } from "./markdown";
+import { renderMarkdown, escapeHtml, splitCompleteBlocks, closePendingBlock, normalizeLatexDelimiters, renderStreamingMarkdown, finalizeStreamingMarkdown, createStreamingCache } from "./markdown";
 
 describe("renderMarkdown", () => {
   describe("basic markdown", () => {
@@ -496,5 +496,69 @@ describe("external links", () => {
     const html = renderMarkdown("Fact [1].", [{ n: 1, title: "Help", url: "", wikiId: "kv-cache" }]);
     expect(html).toContain('data-wiki-id="kv-cache"');
     expect(html).not.toContain('target="_blank"');
+  });
+});
+
+describe("open-fence marking", () => {
+  const OPEN = "Here is one:\n\n```mermaid\ngraph TD;\nA-->B;";
+
+  it("marks the block the model is still writing", () => {
+    const cache = createStreamingCache();
+    const { pendingHtml } = renderStreamingMarkdown(OPEN, cache);
+    expect(pendingHtml).toContain('data-open-fence="true"');
+  });
+
+  it("drops the mark once the fence closes", () => {
+    const cache = createStreamingCache();
+    renderStreamingMarkdown(OPEN, cache);
+    const { blocks, pendingHtml } = renderStreamingMarkdown(OPEN + "\n```", cache);
+    expect(pendingHtml).not.toContain("data-open-fence");
+    // The closed fence moved into a settled block, which is what makes it
+    // renderable mid-stream.
+    expect(blocks.map((b) => b.html).join("")).toContain("language-mermaid");
+  });
+
+  it("leaves a pending paragraph with no fence alone", () => {
+    const cache = createStreamingCache();
+    const { pendingHtml } = renderStreamingMarkdown("Done.\n\nStill writ", cache);
+    expect(pendingHtml).not.toContain("data-open-fence");
+  });
+});
+
+describe("finalizeStreamingMarkdown", () => {
+  it("keeps the streamed blocks and appends only the tail", () => {
+    const cache = createStreamingCache();
+    renderStreamingMarkdown("# Hi\n\nOne.\n\nTw", cache);
+    const settled = cache.blocks;
+    expect(settled.length).toBeGreaterThan(0);
+
+    const blocks = finalizeStreamingMarkdown("# Hi\n\nOne.\n\nTwo.", cache);
+    // Every block the stream built is still there, same identity, so the DOM
+    // (and any diagram rendered into it) survives the end of the turn.
+    expect(blocks.slice(0, settled.length)).toEqual(settled);
+    expect(blocks).toHaveLength(settled.length + 1);
+    expect(blocks.at(-1)!.html).toContain("Two.");
+  });
+
+  it("is idempotent", () => {
+    const cache = createStreamingCache();
+    renderStreamingMarkdown("# Hi\n\nOne.\n\nTw", cache);
+    const first = finalizeStreamingMarkdown("# Hi\n\nOne.\n\nTwo.", cache);
+    const second = finalizeStreamingMarkdown("# Hi\n\nOne.\n\nTwo.", cache);
+    expect(second).toBe(first);
+  });
+
+  it("re-renders from scratch when the text is not a continuation", () => {
+    const cache = createStreamingCache();
+    renderStreamingMarkdown("# Hi\n\nOne.\n\nTw", cache);
+    const blocks = finalizeStreamingMarkdown("Completely different answer.", cache);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].html).toContain("Completely different answer.");
+  });
+
+  it("renders a never-streamed message as one block", () => {
+    const blocks = finalizeStreamingMarkdown("# Hi\n\nOne.", createStreamingCache());
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].html).toContain("<h1>Hi</h1>");
   });
 });
