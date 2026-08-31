@@ -234,6 +234,16 @@ corpse. Tested in `lib/sessionSync.test.ts`, including that race.
   `calc(90vh/var(--qm-scale))`, never bare `90vh`. `position: fixed` and `inset-0` need no
   correction — they already scale correctly. A coordinate you *compute* for a fixed element does,
   though; see the next bullet.
+- **The three caption buttons are the one thing exempt from the UI scale.** `WindowControls`'
+  wrapper carries `zoom: calc(1 / var(--qm-scale, 1))`, and `zoom` compounds down the tree, so the
+  reciprocal multiplies back to 1 and minimise/maximise/close stay the 46x34 Windows itself draws at
+  100%. The title bar around them still scales - that is the app's own chrome - but these are system
+  verbs reached for by muscle memory, and they are in the corner every other window puts them in.
+  They are `self-start`, not centred by the bar's `items-center`: once the bar scales and they do
+  not, centring leaves them floating mid-strip with a band of chrome above, where Windows hangs them
+  off the top-right corner and lets the slack fall below. Height is the bar's own 32, so at 100%
+  they fill it exactly and never bleed into the content underneath. The fallback `1` matters: the
+  wizard shares this component and never sets `--qm-scale`.
 - **A control that changes the zoom must commit on release, not on input.** `UIScaleControl`'s
   slider resizes itself: applying every intermediate `input` value re-lays-out its own track and
   thumb under the cursor mid-drag, so the pointer lands on a different fraction of the track than a
