@@ -1,6 +1,4 @@
-<img src="docs/assets/mark.png" width="64" alt="">
-
-![Quartermaster dashboard](docs/assets/dashboard.webp)
+![Quartermaster](docs/assets/social-preview.png)
 
 ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/Quartermaster-Labs/quartermaster/total)
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Quartermaster-Labs/quartermaster/go-ci.yml)
@@ -19,6 +17,8 @@ It is a single Go binary and one YAML file. It does not run models itself: it or
 inference servers you already trust (llama-server, stable-diffusion.cpp, whisper.cpp, vLLM, TabbyAPI
 and anything else that speaks HTTP), decides what fits in your VRAM, launches them with computed
 flags, and tears them down when they are idle.
+
+![Quartermaster dashboard](docs/assets/dashboard.webp)
 
 - Runs on your hardware
 - Bring your own models

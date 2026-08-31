@@ -109,9 +109,11 @@ def site_font(weight, size):
 def social_card():
     """The 1280x640 card GitHub shows when the repo is linked somewhere.
 
-    This is the only per-repo image GitHub hosts: the avatar beside the repo
-    name belongs to the owner account, not the repo. Upload it under
-    Settings -> General -> Social preview.
+    It doubles as the README's lead image, which is why it lands in
+    docs/assets/ with the screenshots rather than beside the build tooling. On
+    GitHub it is also the only per-repo image the site hosts (the avatar beside
+    the repo name belongs to the owner account, not the repo): upload the same
+    file under Settings -> General -> Social preview.
     """
     from PIL import ImageDraw
 
@@ -208,12 +210,10 @@ def main():
             {mark.O_BRAND: "currentColor", mark.O_DEEP: "var(--mark-deep)"}).encode()
         card = social_card()
         if card is not None:
-            files[os.path.join(HERE, "social-preview.png")] = png_bytes(card)
+            files[os.path.join(ROOT, "docs", "assets", "social-preview.png")] = png_bytes(card)
         else:
             print("  (no fontTools; social-preview.png left as is)", file=sys.stderr)
 
-    # The README's own mark, above the dashboard shot.
-    files[os.path.join(ROOT, "docs", "assets", "mark.png")] = png_bytes(mark.render(128))
 
     for path, data in files.items():
         with open(path, "wb") as fh:
