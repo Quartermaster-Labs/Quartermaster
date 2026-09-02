@@ -301,7 +301,19 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		recurCache[gguf] = v
 		return v
 	}
-	s.slotCache = newSlotCache(cfg.SlotCache, s.runningProxies, slotParticipates, slotSlots, slotRecurrent, proxylog)
+	// slotPreamble reports whether a model may keep PREAMBLE caches (the shared
+	// system+tools seed), on top of participating at all. Live-config read like
+	// its siblings: fleet switch AND per-model, both defaulting on so a model
+	// that opted into slot persistence gets both halves unless told otherwise.
+	slotPreamble := func(id string) bool {
+		c := s.config()
+		if c.SlotCache.PreambleCaches != nil && !*c.SlotCache.PreambleCaches {
+			return false
+		}
+		mc, ok := c.Models[id]
+		return ok && (mc.SlotCachePreamble == nil || *mc.SlotCachePreamble)
+	}
+	s.slotCache = newSlotCache(cfg.SlotCache, s.runningProxies, slotParticipates, slotSlots, slotRecurrent, slotPreamble, proxylog)
 	s.promptCanon = newPromptCanon()
 	local.SetPreEvict(s.slotCache.saveOnEvict)    // save slot KV before a swap/unload kills the process
 	local.SetPostLoad(s.slotCache.restoreOnLoad)  // restore slot KV after a cold load, before serving

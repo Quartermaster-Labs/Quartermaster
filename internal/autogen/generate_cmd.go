@@ -475,10 +475,10 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	lines = append(lines, fmt.Sprintf("-t %d%s", threads, cpuMoeFlag))
 	// Slot KV persistence: expose llama-server's save/restore slot endpoints. Path
 	// is quoted (it lives under a per-user dir that may contain spaces) and matches
-	// the emitted slotCache.path the server's LRU uses. Per-model SlotCache defaults
-	// on (nil), so the master switch alone enables every model; a model opts out
-	// with slotCache:false.
-	if s.SlotCache.Enable && (ov == nil || ov.SlotCache == nil || *ov.SlotCache) {
+	// the emitted slotCache.path the server's LRU uses. Per-model SlotCache is
+	// OPT-IN (nil => off): the master switch only arms the feature, and a model
+	// joins with slotCache:true from its config editor.
+	if s.SlotCache.Enable && ov != nil && ov.SlotCache != nil && *ov.SlotCache {
 		lines = append(lines, fmt.Sprintf("--slot-save-path %q", slotKvPath(s.SlotCache)))
 	}
 	// Chat template: ONLY what the user asked for. A model's baked-in gguf

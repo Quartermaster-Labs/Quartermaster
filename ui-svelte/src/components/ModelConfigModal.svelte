@@ -236,10 +236,15 @@
 
   let unlisted = $state(false);
   let skip = $state(false);
-  // Opt this model into on-disk slot KV persistence (--slot-save-path). On by
-  // default so the global slot-cache toggle (Dashboard) alone enables it; only
-  // takes effect when that master switch is also on. Uncheck to opt this model out.
-  let slotCacheOn = $state(true);
+  // Opt this model into on-disk slot KV persistence (--slot-save-path). OFF by
+  // default: the global toggle only arms the feature, so a fleet doesn't start
+  // strewing snapshots and preamble caches across every model that ever gets a
+  // big prefill. Only takes effect when that master switch is also on.
+  let slotCacheOn = $state(false);
+  // The preamble half of the above: the shared system+tools KV minted once per
+  // agent and reused as a seed. On by default for a model that opted in; turn it
+  // off to keep conversation snapshots without the unprompted preamble files.
+  let slotCachePreambleOn = $state(true);
   // Model-wide --ctx-checkpoints default; null => auto (sizer/llama default),
   // explicit (incl. 0) pins it. Variants inherit this unless they set their own.
   let ctxCheckpoints = $state<number | null>(null);
@@ -527,7 +532,7 @@
       reasoningFmt: v.reasoningFmt || base.reasoningFmt || "",
       // preserve-thinking defaults on for reasoning variants; off when reasoning off.
       preserveThinking: v.reasoningFmt !== "off" && (v.preserveThinking ?? true),
-      slotCache: v.slotCache ?? base.slotCache ?? true,
+      slotCache: v.slotCache ?? base.slotCache ?? false,
       flashAttn: v.flashAttn || base.flashAttn || "",
       mmap: v.mmap || base.mmap || "",
       mlock: v.mlock ?? base.mlock ?? false,
@@ -824,7 +829,8 @@
     }
     unlisted = o?.unlisted ?? false;
     skip = o?.skip ?? false;
-    slotCacheOn = o?.slotCache ?? true;
+    slotCacheOn = o?.slotCache ?? false;
+    slotCachePreambleOn = o?.slotCachePreamble ?? true;
     ctxCheckpoints = o?.ctxCheckpoints ?? null;
     variants = (o?.variants ?? []).map((v) => {
       const c = { ...v };
@@ -1143,6 +1149,9 @@
       unlisted,
       skip,
       slotCache: slotCacheOn,
+      // Only meaningful when the model persists at all; sent as null when on so an
+      // untouched model never freezes an explicit value into its override.
+      slotCachePreamble: slotCachePreambleOn ? null : false,
       ctxCheckpoints,
       // ctx tiers with nothing but a ctx stay compact ints; any with extra knobs
       // promote to named variants alongside the explicit ones.
@@ -2318,7 +2327,14 @@
               <Toggle size="sm" bind:checked={slotCacheOn} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Save KV cache to disk
-                {@render hint("Persist this conversation's KV cache to disk so a long chat survives being evicted from the slot, and is restored instead of reprocessed. Needs the global slot-cache toggle on (Dashboard).")}
+                {@render hint("Persist this model's conversations to disk (one file per chat) so a long chat survives being evicted from the slot, and is restored instead of reprocessed. Opt-in per model, and needs the global slot-cache toggle on (Settings -> KV cache) - otherwise every model in the fleet would start leaving snapshots behind.")}
+              </span>
+            </label>
+            <label class="flex items-center gap-2 text-sm {slotCacheOn ? '' : 'opacity-50'}">
+              <Toggle size="sm" bind:checked={slotCachePreambleOn} disabled={!slotCacheOn} />
+              <span class="text-txtsecondary flex items-center gap-1">
+                Preamble caches
+                {@render hint("The other half of the above: one shared system+tools KV per agent (not per chat), minted unprompted on that agent's first request and reused as the seed of every cold load with the same preamble. Hundreds of MB each and exempt from the disk / session caps (newest 3 per model kept), so it can be turned off on its own while conversation snapshots keep saving. Skipped automatically on hybrid/recurrent models.")}
               </span>
             </label>
           </div>

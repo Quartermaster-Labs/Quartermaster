@@ -21,6 +21,20 @@ Two gates: `cfg.SlotCache.Enable` (global; `dir`/`minSaveTokens`/`maxDiskGB`/`ma
 per-model `participates(model)`, true only when the model's cmd carries `--slot-save-path`.
 Non-participating models are left alone; a disabled cache is a branchless no-op middleware.
 
+**Per-model is OPT-IN.** autogen emits `--slot-save-path` only for `override.slotCache: true`
+(`generate_cmd.go`), so the global switch arms the feature and each model is enrolled from its
+config editor. It used to default on, which meant flipping one dashboard toggle started strewing
+conversation snapshots and (worse, because they are minted unprompted and cap-exempt) preamble
+caches across every model in the fleet.
+
+**Preamble caches gate separately.** `preambleOK(model)` (wired in `server.go`, checked at the top
+of `ensurePreambleSeed`) is `cfg.SlotCache.PreambleCaches` (fleet-wide, nil => on) AND the model's
+`slotCachePreamble` config key (nil => on; autogen emits it only in the false case). Off means
+neither mint nor restore of a preamble file, with conversation save/restore untouched. The split
+exists because the two halves cost differently: a session snapshot is written only for a
+conversation the user actually ran and is LRU-pruned by `enforceCaps`, while a preamble cache is
+minted by a synthetic prefill on an agent's FIRST request and is exempt from that cap.
+
 **Wiring.** `slotCache.middleware` sits in the model-dispatch chain. Cross-swap persistence also
 needs two router process hooks: **pre-stop → `saveOnEvict`** and **post-start → `restoreOnLoad`**
 (after Ready, before the triggering request is served). Without those hooks the cold path is dead —

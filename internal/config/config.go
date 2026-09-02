@@ -206,6 +206,14 @@ type SlotCacheConfig struct {
 	// (see slotCache.seedSkip). A measurement knob: turn it on to re-test partial seeds
 	// against a newer backend build, and read the KV Cache tab's confirm ratio.
 	RecurrentSeeds bool `yaml:"recurrentSeeds"`
+	// PreambleCaches is the fleet-wide switch for the PREAMBLE half of the cache:
+	// the shared system+tools KV seed minted once per (model, agent preamble) and
+	// restored on every cold load. nil => on. Set false to keep conversation
+	// snapshots but never mint a preamble file — those are minted unprompted (a
+	// synthetic prefill), are hundreds of MB, and are exempt from the LRU cap, so
+	// they are the half worth being able to switch off on its own. A per-model
+	// ModelConfig.SlotCachePreamble narrows it further.
+	PreambleCaches *bool `yaml:"preambleCaches"`
 }
 
 // DefaultSlotCachePath is the snapshot dir used when SlotCacheConfig.Path is

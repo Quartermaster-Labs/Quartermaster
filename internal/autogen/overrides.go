@@ -236,6 +236,9 @@ type SlotCacheSettings struct {
 	RecurrentSeeds bool    `yaml:"recurrentSeeds"`
 	MaxDiskGB      float64 `yaml:"maxDiskGB"`
 	MaxSessions    int     `yaml:"maxSessions"`
+	// PreambleCaches mirrors config.SlotCacheConfig.PreambleCaches: the fleet-wide
+	// switch for the preamble (system+tools seed) half of the cache. nil => on.
+	PreambleCaches *bool `yaml:"preambleCaches"`
 }
 
 // APIKeyEntry is one named API key plus the model IDs it may reach. Name is a
@@ -675,10 +678,16 @@ type Override struct {
 	Skip           bool    `yaml:"skip"`
 	// SlotCache opts this model into on-disk slot KV persistence: emits
 	// --slot-save-path so the server's slotCache can save/restore its conversation
-	// KV. nil => default on (so the dashboard master switch alone enables it for
-	// every model); false => explicitly opt this model out. No-op unless
-	// settings.slotCache.enable is also on (the master switch).
+	// KV. OPT-IN: nil/absent => off, so enabling the dashboard master switch does
+	// not start littering snapshots and preamble caches for every model in the
+	// fleet; set true on the models whose prefills are actually worth keeping.
+	// No-op unless settings.slotCache.enable is also on (the master switch).
 	SlotCache *bool `yaml:"slotCache"`
+	// SlotCachePreamble opts this model out of the PREAMBLE half only (the shared
+	// system+tools seed minted per agent), keeping conversation snapshots. nil =>
+	// on for a model that set SlotCache. Emitted as the model's
+	// slotCachePreamble config key, which the server reads per request.
+	SlotCachePreamble *bool `yaml:"slotCachePreamble"`
 	// Variants are named custom profiles emitted in addition to the solo model:
 	// each becomes "<model>-<name>" with its own ctx/VRAM/kv/spec. Use-case
 	// agnostic — the UI's "create variant" flow writes these.
@@ -893,9 +902,10 @@ func (s *Settings) applyDefaults() {
 	}
 	// Slot KV-cache persistence is OFF by default (the master switch); the
 	// server-default knobs below are still pre-filled so the dashboard shows real
-	// numbers, not 0. Per-model SlotCache defaults ON (nil), so flipping the
-	// single dashboard switch enables persistence for every model at once - a
-	// model opts OUT by setting slotCache:false. Enable's zero value (false) is
+	// numbers, not 0. Per-model SlotCache is OPT-IN (nil => off), so the master
+	// switch arms the feature and each model is enrolled from its config editor -
+	// otherwise every model in the fleet starts leaving snapshots and preamble
+	// caches behind on its first big prefill. Enable's zero value (false) is
 	// the default; turn it on via the dashboard (writes enable:true to the
 	// sidecar, which overlays this).
 	if s.SlotCache.MinSaveTokens == 0 {

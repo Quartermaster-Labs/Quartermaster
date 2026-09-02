@@ -389,7 +389,11 @@ export interface ModelOverride {
   chatTemplateFile?: string; // --chat-template-file path; "" => the gguf's baked-in template
   unlisted?: boolean;
   skip?: boolean;
-  slotCache?: boolean; // opt this model into on-disk slot KV persistence (needs the global toggle on)
+  slotCache?: boolean; // opt this model into on-disk slot KV persistence (opt-in; needs the global toggle on)
+  // Preamble (shared system+tools seed) half only. undefined/null => on for a
+  // model that set slotCache; false => conversation snapshots but never mint a
+  // preamble cache for it.
+  slotCachePreamble?: boolean | null;
   ctxVariants?: number[]; // per-model ctx tiers (e.g. 32768, 65536)
   ctxCheckpoints?: number | null; // model-wide --ctx-checkpoints; null/undefined => auto, 0 disables
   variants?: ModelVariant[];
@@ -759,6 +763,9 @@ export interface SlotCacheSettings {
   minSaveTokens: number;
   maxDiskGB: number;
   maxSessions: number;
+  // Fleet-wide switch for the preamble half (the shared system+tools seed minted
+  // per agent). Sessions keep saving when this is off.
+  preambleCaches: boolean;
 }
 
 export async function getSettings(): Promise<AppSettings> {

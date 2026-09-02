@@ -62,8 +62,13 @@ type slotCache struct {
 	// (config slotCache.recurrentSeeds). Off by default: those need a rewind. A
 	// measurement knob — re-test per backend build rather than assuming.
 	recurrentSeeds bool
-	client         *http.Client
-	log            *logmon.Monitor
+	// preambleOK reports whether a model may use PREAMBLE caches at all (fleet
+	// switch + per-model slotCachePreamble). Conversation snapshots are not
+	// affected. nil => allowed, so direct struct construction (tests) keeps the
+	// full behaviour.
+	preambleOK func(model string) bool
+	client     *http.Client
+	log        *logmon.Monitor
 
 	// Locking is three-way, because the three things being protected have very
 	// different hold times:
@@ -161,7 +166,7 @@ type occInfo struct {
 
 // newSlotCache builds the cache from config, applying defaults for unset knobs.
 // Returns a disabled cache when the feature is off so callers can stay branchless.
-func newSlotCache(cfg config.SlotCacheConfig, running func() map[string]string, participates func(string) bool, slots func(string) int, recurrent func(string) bool, log *logmon.Monitor) *slotCache {
+func newSlotCache(cfg config.SlotCacheConfig, running func() map[string]string, participates func(string) bool, slots func(string) int, recurrent func(string) bool, preambleOK func(string) bool, log *logmon.Monitor) *slotCache {
 	sc := &slotCache{
 		enabled:         cfg.Enable,
 		dir:             cfg.Path,
@@ -169,6 +174,7 @@ func newSlotCache(cfg config.SlotCacheConfig, running func() map[string]string, 
 		participates:    participates,
 		slots:           slots,
 		recurrent:       recurrent,
+		preambleOK:      preambleOK,
 		log:             log,
 		client:          &http.Client{Timeout: 60 * time.Second}, // a large save/restore can be slow
 		occupant:        map[string]*occInfo{},
@@ -613,6 +619,11 @@ func (sc *slotCache) ensurePreambleSeed(ctx context.Context, base, model string,
 	// as a confirm-miss in the KV Cache tab, no correctness harm. Upgrade path: mint via
 	// the same endpoint the request used if that mismatch shows up in practice.
 	if sysRaw == "" || len(preamble) < seedMinPrefixBytes {
+		return 0, false
+	}
+	// Opted out (fleet-wide or per-model): never mint, and don't restore a file a
+	// previous opt-in left behind. Conversation snapshots are unaffected.
+	if sc.preambleOK != nil && !sc.preambleOK(model) {
 		return 0, false
 	}
 	hash := preambleHash(preamble)

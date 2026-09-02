@@ -140,8 +140,11 @@ type overrideDTO struct {
 	ChatTemplateFile string `json:"chatTemplateFile"`
 	Unlisted         bool   `json:"unlisted"`
 	Skip             bool   `json:"skip"`
-	SlotCache        *bool  `json:"slotCache"`   // opt this model into on-disk slot KV persistence; nil => default on
-	CtxVariants      []int  `json:"ctxVariants"` // per-model ctx tiers (e.g. 32768, 65536)
+	SlotCache        *bool  `json:"slotCache"` // opt this model into on-disk slot KV persistence; nil/absent => OFF (opt-in)
+	// SlotCachePreamble opts the model out of the preamble (shared system+tools
+	// seed) half only, keeping conversation snapshots. nil/absent => on.
+	SlotCachePreamble *bool `json:"slotCachePreamble"`
+	CtxVariants       []int `json:"ctxVariants"` // per-model ctx tiers (e.g. 32768, 65536)
 	// PreserveThinking keeps prior-turn <think> in chat history (Qwen3.6+); only
 	// meaningful when reasoning is on. null/absent => on (the generator default),
 	// false => stripped. A plain bool here would have made every save of an
@@ -294,7 +297,8 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		ExtraArgs:        o.ExtraArgs,
 		ChatTemplateFile: o.ChatTemplateFile,
 		Unlisted:         o.Unlisted, Skip: o.Skip, SlotCache: o.SlotCache,
-		CtxVariants: o.CtxVariants, CtxCheckpoints: o.CtxCheckpoints,
+		SlotCachePreamble: o.SlotCachePreamble,
+		CtxVariants:       o.CtxVariants, CtxCheckpoints: o.CtxCheckpoints,
 		PreserveThinking: o.PreserveThinking,
 		Dry:              o.Dry,
 		DryMultiplier:    o.DryMultiplier, DryBase: o.DryBase, DryAllowedLength: o.DryAllowedLength,
@@ -376,6 +380,7 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.Unlisted = body.Unlisted
 	ov.Skip = body.Skip
 	ov.SlotCache = body.SlotCache
+	ov.SlotCachePreamble = body.SlotCachePreamble
 	ov.CtxVariants = body.CtxVariants
 	ov.CtxCheckpoints = body.CtxCheckpoints
 	ov.PreserveThinking = body.PreserveThinking

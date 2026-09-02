@@ -124,6 +124,10 @@ type slotCacheDTO struct {
 	MinSaveTokens int     `json:"minSaveTokens"`
 	MaxDiskGB     float64 `json:"maxDiskGB"`
 	MaxSessions   int     `json:"maxSessions"`
+	// PreambleCaches is the preamble (shared system+tools seed) half of the
+	// feature. Plain bool, not a tri-state: the dashboard always sends a value,
+	// and true is what an absent config key means anyway.
+	PreambleCaches bool `json:"preambleCaches"`
 }
 
 type settingsPutDTO struct {
@@ -211,6 +215,8 @@ func (s *Server) handleAPISettingsGet(w http.ResponseWriter, r *http.Request) {
 			MinSaveTokens: gf.Settings.SlotCache.MinSaveTokens,
 			MaxDiskGB:     gf.Settings.SlotCache.MaxDiskGB,
 			MaxSessions:   gf.Settings.SlotCache.MaxSessions,
+			// nil (never saved / hand-authored file) => on.
+			PreambleCaches: gf.Settings.SlotCache.PreambleCaches == nil || *gf.Settings.SlotCache.PreambleCaches,
 		},
 		Backends: backendsDTO{
 			ServerExe:    gf.Settings.ServerExe,
@@ -317,13 +323,14 @@ func (s *Server) handleAPISlotCachePut(w http.ResponseWriter, r *http.Request) {
 		MaxDiskGB:      body.MaxDiskGB,
 		MaxSessions:    body.MaxSessions,
 		RecurrentSeeds: recurrentSeeds,
+		PreambleCaches: &body.PreambleCaches,
 	})
 	if err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.proxylog.Infof("slot cache: enabled=%v minSaveTokens=%d maxDisk=%gGB maxSessions=%d",
-		body.Enable, body.MinSaveTokens, body.MaxDiskGB, body.MaxSessions)
+	s.proxylog.Infof("slot cache: enabled=%v minSaveTokens=%d maxDisk=%gGB maxSessions=%d preambleCaches=%v",
+		body.Enable, body.MinSaveTokens, body.MaxDiskGB, body.MaxSessions, body.PreambleCaches)
 	if !s.regenAndReload(w, r) {
 		return
 	}

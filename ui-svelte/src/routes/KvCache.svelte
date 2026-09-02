@@ -1,8 +1,17 @@
 <script lang="ts">
   import { tip } from "../lib/tooltip";
+  import { HelpCircle } from "lucide-svelte";
   import { onDestroy } from "svelte";
   import { fetchKvCache, type KvCacheStats } from "../stores/api";
   import { observeTab } from "../stores/observe";
+
+  // The two file categories differ in a way that is not obvious from the tables:
+  // sessions are per chat and user-triggered, preamble caches are per agent and
+  // minted unprompted. Spelled out in the tab tooltips.
+  const SESSIONS_HELP =
+    "One file per conversation: the whole slot KV of a chat, saved when it is about to be evicted and restored (instead of reprocessed) when that chat comes back. Keyed by the conversation, so a chat overwrites its own file each turn. Only saved past the min-context threshold, and LRU-pruned to the disk / session caps in Settings.\n\nPer model: enable \"Save KV cache to disk\" in the model config editor.";
+  const PREAMBLE_HELP =
+    "One file per (model, agent): the system prompt + tool definitions alone, prefilled once and reused as a seed by every cold load that sends the same preamble. That is why they appear without you starting a chat: the first request from an agent mints one. They are big, exempt from the LRU disk cap (only the newest 3 per model are kept), and skipped on hybrid/recurrent models, which cannot rewind a partial prefix.\n\nPer model: \"Preamble caches\" in the model config editor; fleet-wide in Settings -> KV cache.";
 
   let stats = $state<KvCacheStats | null>(null);
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -214,6 +223,7 @@
             Persisted sessions
             <span class="text-txtsecondary font-normal">{stats.files?.length ?? 0}</span>
           </button>
+          {@render hint(SESSIONS_HELP)}
           <button
             class="px-2 py-1 text-sm font-semibold border-b-2 -mb-px transition-colors {kvTab === 'preamble'
               ? 'border-primary text-primary'
@@ -223,6 +233,7 @@
             Preamble caches
             <span class="text-txtsecondary font-normal">{stats.preambleFiles?.length ?? 0}</span>
           </button>
+          {@render hint(PREAMBLE_HELP)}
         </div>
 
         {#if kvTab === "sessions"}
@@ -323,3 +334,10 @@
     </div>
   {/if}
 </div>
+
+{#snippet hint(text: string)}
+  <span
+    class="inline-flex shrink-0 align-middle text-txtsecondary cursor-help hover:text-txtmain"
+    use:tip={text}
+    aria-label={text}><HelpCircle size={12} /></span>
+{/snippet}

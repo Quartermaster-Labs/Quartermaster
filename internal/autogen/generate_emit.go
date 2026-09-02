@@ -91,6 +91,10 @@ func emitSlotCache(b *strings.Builder, sc SlotCacheSettings) {
 	if sc.MaxSessions > 0 {
 		fmt.Fprintf(b, "  maxSessions: %d\n", sc.MaxSessions)
 	}
+	// Only the off case is emitted: absent means on, matching config's *bool.
+	if sc.PreambleCaches != nil && !*sc.PreambleCaches {
+		b.WriteString("  preambleCaches: false\n")
+	}
 	b.WriteString("\n")
 }
 
@@ -380,6 +384,13 @@ func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, pro
 	writeDisplayName(b, s, prof.Name)
 	if prof.Unlisted {
 		b.WriteString("    unlisted: true\n")
+	}
+	// Per-model preamble opt-out, read by the server's slot cache. Only meaningful
+	// for a model that actually persists (it got --slot-save-path above), and only
+	// the off case is emitted - absent means on.
+	if ov != nil && ov.SlotCachePreamble != nil && !*ov.SlotCachePreamble &&
+		s.SlotCache.Enable && ov.SlotCache != nil && *ov.SlotCache {
+		b.WriteString("    slotCachePreamble: false\n")
 	}
 	effort := effortLevels(meta, ov)
 	if prof.Vision || len(effort) > 0 {

@@ -132,6 +132,15 @@ type ModelConfig struct {
 	// cost of a partial offload is visible before loading.
 	EstRamGB float64 `yaml:"estRamGB"`
 
+	// SlotCachePreamble opts this model out of PREAMBLE caches (the shared
+	// system+tools KV seed that is minted once per agent and reused by every
+	// load) while leaving its per-conversation snapshots alone. nil/absent =>
+	// on, so a model that opted into slot persistence at all gets both halves.
+	// The whole-feature per-model gate stays the cmd's --slot-save-path; this is
+	// the finer knob, because a preamble cache is minted unprompted (a synthetic
+	// prefill) and is exempt from the LRU disk cap.
+	SlotCachePreamble *bool `yaml:"slotCachePreamble"`
+
 	// Copy of HealthCheckTimeout from global config
 	HealthCheckTimeout int `yaml:"healthCheckTimeout"`
 }
