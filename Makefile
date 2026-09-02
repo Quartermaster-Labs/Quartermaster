@@ -284,9 +284,12 @@ dist: ui
 RELEASE_REPO ?= Quartermaster-Labs/Quartermaster
 
 # Build every release artifact LOCALLY and upload it to a GitHub release
-# (private-repo Actions minutes are metered; local build is free). Two kinds of
-# artifact ship: the four bare binaries + SHA256SUMS that the IN-APP UPDATER
-# downloads, and the Windows installer, which only ever runs on a FIRST install.
+# (private-repo Actions minutes are metered; local build is free). What ships by
+# default is the setup programs (one per platform) + SHA256SUMS, and nothing
+# else: a release page is a download page. The four bare server binaries are
+# still BUILT -- the Windows one is the installer's payload -- but publishing
+# them is opt-in via -PublishBinaries, which the updater and the unix wizards
+# need. See the .PARAMETER block in build-release.ps1 for what that costs.
 #   make release VERSION=v0.5.1          -> DRAFT release of that tag
 #   make release-public VERSION=v0.5.1   -> same, but PUBLIC
 #   make release-binaries VERSION=v0.5.1 -> binaries + sums only, no installer
@@ -306,7 +309,7 @@ release-public:
 # through the updater does not need a new first-install wizard, and this is also
 # the fast way to test the update path itself.
 release-binaries:
-	@$(MAKE) --no-print-directory _build-release DRAFT=true RELEASE_EXTRA=-SkipInstaller
+	@$(MAKE) --no-print-directory _build-release DRAFT=true RELEASE_EXTRA="-SkipInstaller -PublishBinaries"
 
 _build-release:
 	@if [ -z "$(VERSION)" ]; then \

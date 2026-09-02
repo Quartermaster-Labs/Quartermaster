@@ -39,7 +39,23 @@
 
 .PARAMETER SkipInstaller
   Build and upload only the bare binaries. Useful for a patch release that no
-  new user will first-install from, and for testing the updater path.
+  new user will first-install from, and for testing the updater path. Implies
+  -PublishBinaries, since otherwise there would be nothing to upload.
+
+.PARAMETER PublishBinaries
+  Also upload the four bare server binaries. OFF by default: a release page is
+  a download page, and the server binary sitting next to the setup program is
+  the file a visitor is most likely to take by mistake.
+
+  Leaving them off has two consequences, both silent, and neither is a bug in
+  this script:
+    * the in-app updater (internal/update) looks for its platform's binary by
+      exact name and treats a miss as "no update available", so installs stop
+      updating with nothing logged;
+    * a unix setup program run on its own has no sibling binary to copy and
+      downloads the release asset instead (cmd/quartermaster-setup/place_other.go),
+      so Linux and macOS first installs fail.
+  Pass this switch for any release those two are expected to work from.
 #>
 [CmdletBinding()]
 param(
@@ -50,11 +66,15 @@ param(
     [string]$Draft = 'true',
     [string]$Repo = 'Quartermaster-Labs/Quartermaster',
     [switch]$SkipUi,
-    [switch]$SkipInstaller
+    [switch]$SkipInstaller,
+    [switch]$PublishBinaries
 )
 
 $ErrorActionPreference = 'Stop'
 $isDraft = ($Draft -eq 'true')
+# Without the wizards there is nothing else to publish, so this combination
+# would create an empty release rather than a binaries-only one.
+if ($SkipInstaller) { $PublishBinaries = $true }
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 Set-Location $root
 
@@ -170,27 +190,13 @@ if ($env:SIGN_PFX_BASE64) {
     & (Join-Path $PSScriptRoot 'sign.ps1') $winExe
 }
 
-# 4. SHA256SUMS, in sha256sum's own format ("<hex>  <name>").
-#
-# The updater prefers the GitHub API's per-asset `digest` field and falls back to
-# this file, so it covers older API responses and lets a user verify a manual
-# download by hand. Written LAST among the binaries, and only over files that are
-# final (signing already happened above).
+# 4. The upload set. SHA256SUMS is written in step 5c, once every artifact in it
+# is final: the Windows wizard does not exist yet (it embeds an installer ISCC
+# has not built), and signing changes bytes, so hashing anything now would
+# publish a digest for a file that is about to change.
 $sumsPath = Join-Path $staging 'SHA256SUMS'
-$sumLines = foreach ($b in $binaries) {
-    $h = (Get-FileHash -Algorithm SHA256 $b).Hash.ToLower()
-    "$h  $(Split-Path -Leaf $b)"
-}
-# ASCII + LF: this file is parsed on linux too, and a BOM would corrupt the first
-# entry's hash.
-[System.IO.File]::WriteAllText($sumsPath, (($sumLines -join "`n") + "`n"), [System.Text.Encoding]::ASCII)
-Write-Host "SHA256SUMS:" -ForegroundColor DarkGray
-$sumLines | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
-
-$uploads = @($binaries) + @($sumsPath)
-# Filled in below and hashed into SHA256SUMS once every one of them is final.
-# The wizards cannot be hashed with the server binaries above because the
-# Windows one does not exist yet: it embeds an installer that ISCC has not built.
+$uploads = @()
+if ($PublishBinaries) { $uploads += $binaries }
 $setups = @()
 
 # 5. Installer bundle + ISCC. Only the first-install path needs this; the extra
@@ -277,19 +283,24 @@ if (-not $SkipInstaller) {
     Remove-Item Env:GOOS, Env:GOARCH -ErrorAction SilentlyContinue
 }
 
-# The wizards are appended to SHA256SUMS rather than left out of it, so "verify
-# what you downloaded" is one instruction covering every asset on the page. The
-# updater reads this file by exact asset name, so extra lines are invisible to
-# it. Appended AFTER signing, for the same reason the binaries were hashed after
-# it: a signature changes the bytes.
-if ($setups.Count -gt 0) {
-    $extra = foreach ($f in $setups) {
-        $h = (Get-FileHash -Algorithm SHA256 $f).Hash.ToLower()
-        "$h  $(Split-Path -Leaf $f)"
-    }
-    [System.IO.File]::AppendAllText($sumsPath, (($extra -join "`n") + "`n"), [System.Text.Encoding]::ASCII)
-    $extra | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+# 5c. SHA256SUMS, in sha256sum's own format ("<hex>  <name>"), over exactly the
+# files being uploaded and no others: a line for an asset that is not on the
+# release is worse than no line, because "verify what you downloaded" then fails
+# for a file nobody can download. Written last, after every signature.
+#
+# The updater prefers the GitHub API's per-asset `digest` field and falls back to
+# this file, which covers older API responses and lets a user check a manual
+# download by hand.
+$sumLines = foreach ($f in $uploads) {
+    $h = (Get-FileHash -Algorithm SHA256 $f).Hash.ToLower()
+    "$h  $(Split-Path -Leaf $f)"
 }
+# ASCII + LF: this file is parsed on linux too, and a BOM would corrupt the first
+# entry's hash.
+[System.IO.File]::WriteAllText($sumsPath, (($sumLines -join "`n") + "`n"), [System.Text.Encoding]::ASCII)
+Write-Host "SHA256SUMS:" -ForegroundColor DarkGray
+$sumLines | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+$uploads += $sumsPath
 
 # 6. Push the tag, create the release if missing, upload everything.
 #
@@ -311,9 +322,7 @@ first launch:
 
 ``xattr -d com.apple.quarantine ./quartermaster-setup-darwin-arm64``
 
-The bare ``quartermaster-*`` binaries are not a download. They are the payload
-the in-app updater fetches, and what the unix setup program pulls when it is run
-on its own. ``SHA256SUMS`` covers every file here.
+``SHA256SUMS`` covers every file here.
 "@
 
 git push origin $Tag
