@@ -612,6 +612,15 @@ h1 .accent {
   }
 }
 
+.cta-note code {
+  padding: 0.1rem 0.3rem;
+  border-radius: 0.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  user-select: all;
+}
+
 .cta-note a {
   text-decoration: underline;
   text-underline-offset: 3px;

@@ -416,6 +416,16 @@ function renderDownloads(release) {
   }).join("\n      ");
 }
 
+// Shown only on macOS, by the same data-os pass that picks the button. There
+// is no Apple Developer ID behind this project, so the darwin binary is
+// unsigned and un-notarized: downloaded through a browser it arrives with the
+// quarantine attribute and Gatekeeper refuses it outright, usually claiming it
+// is damaged. Hiding the download would not make the platform work; the one
+// command that does is worth more than a missing button.
+const MAC_NOTE =
+  '<p class="cta-note" data-os="mac" hidden>No signed macOS build yet. After downloading: '
+  + '<code>xattr -d com.apple.quarantine ./quartermaster-setup-darwin-arm64</code></p>';
+
 function renderHero(release, hero) {
   const primary = renderDownloads(release);
   const note = release
@@ -441,6 +451,7 @@ function renderHero(release, hero) {
     </div>
     <ul class="pills">${pills}</ul>
     <p class="cta-note">${note}</p>
+    ${MAC_NOTE}
   </div>
 </section>`;
 }
@@ -762,14 +773,15 @@ function renderInstall(release) {
 //
 // (3) is not paranoia: the site this design borrows from ships unguarded
 // reveals, and its own full-page screenshot comes back blank below the fold.
-// Swaps the hero download button for the visitor's platform. Reads
+// Shows the hero download button (and any note) for the visitor's platform.
+// Reads
 // userAgentData first (navigator.platform is deprecated and frozen in some
 // browsers) and falls back to the UA string. An unrecognised platform is left
 // on Windows: it is the majority, and the note links every other build.
 const OS_SCRIPT = `<script>
 (function () {
-  var btns = [].slice.call(document.querySelectorAll("[data-os]"));
-  if (!btns.length) return;
+  var els = [].slice.call(document.querySelectorAll("[data-os]"));
+  if (!els.length) return;
   var p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
   var ua = navigator.userAgent || "";
   // Order matters: an Android UA says Linux, and a Mac says neither, so test
@@ -777,7 +789,7 @@ const OS_SCRIPT = `<script>
   var os = /mac|iphone|ipad/i.test(p + ua) ? "mac"
     : /linux|android|cros/i.test(p + ua) ? "linux"
     : "windows";
-  btns.forEach(function (b) { b.hidden = b.dataset.os !== os; });
+  els.forEach(function (el) { el.hidden = el.dataset.os !== os; });
 })();
 </script>`;
 
