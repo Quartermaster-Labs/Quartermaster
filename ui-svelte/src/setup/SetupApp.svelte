@@ -145,6 +145,16 @@
   }
 
   const gb = (n: number) => n.toFixed(1) + " GB";
+
+  // The unit has to follow the number. A backend archive is tens to a couple of
+  // hundred megabytes, so formatting the download counters in GB rounded every
+  // one of them to "0.0 GB of 0.0 GB" beside a bar that was visibly moving: the
+  // progress was right and the label said nothing.
+  const size = (n: number) => {
+    if (n >= 1e9) return (n / 1e9).toFixed(1) + " GB";
+    if (n >= 1e6) return (n / 1e6).toFixed(0) + " MB";
+    return (n / 1e3).toFixed(0) + " KB";
+  };
   const noteFor = (id: string) =>
     (probe?.variants ?? []).find((v) => v.id === id)?.note ?? "";
 
@@ -227,7 +237,7 @@
         </div>
         {#if status.total}
           <p class="mt-2 font-mono text-micro text-txtsecondary">
-            {gb(status.downloaded / 1e9)} of {gb(status.total / 1e9)}
+            {size(status.downloaded)} of {size(status.total)}
           </p>
         {/if}
       {/if}
