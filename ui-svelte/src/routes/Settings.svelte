@@ -963,7 +963,7 @@
           <label class="flex flex-col gap-1 col-span-2">
             <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
               Dense context ladder
-              {@render hint("The context sizes tried for a dense model, largest first: the sizer takes the first rung whose KV cache fits the budget. Comma-separated; entries that are not positive numbers are dropped.")}
+              {@render hint("Context ceiling for a dense model, largest first: the top rung caps how far the sizer may grow the window, and within that cap it takes the largest context whose KV cache fits the budget (rounded to 4096). Keep the top rung at or above the trained window of your largest-context model, or that model will be pinned below it. Comma-separated; entries that are not positive numbers are dropped.")}
             </span>
             <input type="text" bind:value={aLadder} spellcheck="false" class="w-full font-mono rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary" />
             <span class="text-micro text-txtsecondary">default {(settings?.advancedDefaults.denseCtxLadder ?? []).join(", ")}</span>

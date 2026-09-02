@@ -242,7 +242,12 @@ func GetDenseCtx(p DenseCtxParams) DenseCtxResult {
 		kvAt99 = 0.1
 	}
 	ctxAt99 := MaxCtxForBudget(kvAt99, p.PerTokGB, p.KvConstGB)
-	top := min(p.ModelMax, p.Ladder[0])
+	// The ladder's top rung is a ceiling, not a target: with no ladder at all the
+	// only ceiling is the model's own trained window.
+	top := p.ModelMax
+	if len(p.Ladder) > 0 {
+		top = min(p.ModelMax, p.Ladder[0])
+	}
 
 	// 1. Reaches the floor fully on GPU -> max ctx up to the ladder top. Fast.
 	if ctxAt99 >= p.MinCtx {

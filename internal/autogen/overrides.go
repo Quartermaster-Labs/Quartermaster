@@ -886,7 +886,13 @@ func (s *Settings) applyDefaults() {
 		s.MoeCtxTarget = 65536
 	}
 	if len(s.DenseCtxLadder) == 0 {
-		s.DenseCtxLadder = []int{131072, 65536, 32768}
+		// The top rung is the ceiling GetDenseCtx sizes against, so it has to sit
+		// at or above the largest trained window in circulation: a ladder topping
+		// out at 128k pinned every 256k/512k/1M model to 128k and left the VRAM
+		// those extra tokens would have used sitting idle. The rungs below the top
+		// are documentation of the usual tiers; the sizer picks the largest window
+		// that actually fits and rounds it to a 4096 boundary.
+		s.DenseCtxLadder = []int{1048576, 524288, 262144, 131072, 65536, 32768}
 	}
 	if s.DenseMinCtx == 0 {
 		s.DenseMinCtx = 32768

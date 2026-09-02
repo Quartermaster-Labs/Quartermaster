@@ -175,7 +175,11 @@ func (s *Server) hubEstimate(r *http.Request, src hub.Source, repo, path string,
 	}
 	out.Ctx = est.Ctx
 	out.MaxCtx = int(meta.ContextLength)
-	out.AtMax = out.MaxCtx > 0 && out.Ctx >= out.MaxCtx
+	// Within one rounding step counts as the whole window. The sizer floors its
+	// pick to a 4096 boundary, so a model trained at, say, 128000 tokens tops out
+	// at 124928 and would otherwise never read as "max" no matter how much VRAM
+	// the row is sized against.
+	out.AtMax = out.MaxCtx > 0 && out.Ctx+4096 > out.MaxCtx
 	out.EstVram = est.EstVramGB
 	out.Fits = est.EstVramGB <= set.TargetVramGB
 	// A plan that leaves layers (or experts) on the CPU still "fits" the budget —
