@@ -21,17 +21,20 @@
     e.preventDefault();
     openTab(playgroundURL);
   }
+  // `hint` is the tooltip, and it says what the page is FOR rather than
+  // repeating `label`: the same hover that raises the tip also expands the rail
+  // and reveals the label, so echoing it would be two copies of one word.
   const pages = [
-    { path: "/", label: "Dashboard", icon: LayoutDashboard },
+    { path: "/", label: "Dashboard", icon: LayoutDashboard, hint: "Fleet overview: what is loaded, VRAM in use, and live throughput" },
     // Models is ONE page now — the category split is tabs on the page itself,
     // so a sub-menu duplicating them would be two controls for one choice.
-    { path: "/models", label: "Models", icon: BrainCircuit },
+    { path: "/models", label: "Models", icon: BrainCircuit, hint: "The local catalog: per-model launch config, load and unload" },
     // Acquiring a model is its own task, not a view of the local catalog, so it
     // gets a page rather than another category tab on Models.
-    { path: "/browse", label: "Browse", icon: CloudDownload },
-    { path: "/test", label: "Playground", icon: MessagesSquare },
-    { path: "/observe", label: "Observe", icon: Radar },
-    { path: "/api-keys", label: "API Keys", icon: KeyRound },
+    { path: "/browse", label: "Browse", icon: CloudDownload, hint: "Search Hugging Face, pick a quant, download into the models folder" },
+    { path: "/test", label: "Playground", icon: MessagesSquare, hint: "Chat, images, speech and transcription, on its own port" },
+    { path: "/observe", label: "Observe", icon: Radar, hint: "Activity, logs, GPU performance and context/KV cache" },
+    { path: "/api-keys", label: "API Keys", icon: KeyRound, hint: "Issue keys and scope them to models (inference and discovery only)" },
   ];
 
   // The playground runs on its own port; link out to it when configured.
@@ -90,6 +93,7 @@
           rel="noopener"
           data-qm-inapp
           onclick={openPlayground}
+          use:tip={p.hint}
           class="relative flex items-center gap-3 pr-3 h-10 shrink-0 text-sm font-medium text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
         >
           <span class="w-14 shrink-0 flex items-center justify-center">
@@ -104,6 +108,7 @@
         <a
           href={p.path}
           use:link
+          use:tip={p.hint}
           class="relative flex items-center gap-3 pr-3 h-10 shrink-0 text-sm font-medium transition-colors {active
             ? 'text-txtmain bg-secondary/60'
             : 'text-txtsecondary hover:text-txtmain hover:bg-secondary/40'}"
@@ -126,6 +131,7 @@
   <button
     type="button"
     onclick={() => (showWiki = true)}
+    use:tip={"The quartermaster wiki: loading, config, backends, troubleshooting"}
     class="w-full flex items-center gap-3 pr-3 h-10 shrink-0 text-sm font-medium text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
   >
     <span class="w-14 shrink-0 flex items-center justify-center">

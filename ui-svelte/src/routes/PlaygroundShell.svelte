@@ -79,11 +79,14 @@
 
   type Tab = PlaygroundTab;
 
-  const tabs: { id: Tab; label: string; icon: typeof MessageSquare }[] = [
-    { id: "chat", label: "Chats", icon: MessageSquare },
-    { id: "images", label: "Images", icon: Image },
-    { id: "speech", label: "Speech", icon: Volume2 },
-    { id: "audio", label: "Transcription", icon: Mic },
+  // `hint` is the tooltip. It says what the tab is FOR rather than repeating
+  // `label`: the same hover that raises the tip also expands the rail and
+  // reveals the label, so echoing it would be two copies of one word.
+  const tabs: { id: Tab; label: string; hint: string; icon: typeof MessageSquare }[] = [
+    { id: "chat", label: "Chats", hint: "Text chat with tools, reasoning and web search", icon: MessageSquare },
+    { id: "images", label: "Images", hint: "Generate, edit, mask and upscale images", icon: Image },
+    { id: "speech", label: "Speech", hint: "Text to speech: pick a voice and read text aloud", icon: Volume2 },
+    { id: "audio", label: "Transcription", hint: "Transcribe recorded or uploaded audio to text", icon: Mic },
   ];
 
   let onChats = $derived($selectedTabStore === "chat");
@@ -597,7 +600,7 @@
       {@const active = $selectedTabStore === tab.id}
       <button
         onclick={() => clickTab(tab.id)}
-        use:tooltip={tab.label}
+        use:tooltip={tab.hint}
         class="relative w-full flex items-center gap-3 pr-3 h-10 shrink-0 text-sm transition-colors {active
           ? 'text-txtmain bg-secondary/60'
           : 'text-txtsecondary hover:text-txtmain hover:bg-secondary/40'}"
@@ -629,7 +632,7 @@
          own row like the tabs. -->
     <button
       onclick={() => { wikiArticleId = null; showWiki = true; }}
-      use:tooltip={"Help"}
+      use:tooltip={"The quartermaster wiki: loading, config, backends, troubleshooting"}
       class="w-full flex items-center gap-3 pr-3 h-10 shrink-0 text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
       <span class="w-14 shrink-0 flex items-center justify-center"><BookOpen size={18} class="shrink-0" /></span>
@@ -639,7 +642,7 @@
     </button>
     <button
       onclick={() => (showSettings = true)}
-      use:tooltip={"Settings"}
+      use:tooltip={"Theme, memory, web search and the system prompt"}
       class="w-full flex items-center gap-3 pr-3 h-10 shrink-0 text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
       <span class="w-14 shrink-0 flex items-center justify-center"><Settings size={18} class="shrink-0" /></span>
