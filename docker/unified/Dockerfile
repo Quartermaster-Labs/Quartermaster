@@ -56,7 +56,7 @@ FROM builder-base-${BACKEND} AS builder-base
 FROM builder-base AS whisper-build
 ARG BACKEND=cuda
 ARG WHISPER_COMMIT_HASH=master
-COPY install-whisper.sh /build/
+COPY docker/unified/install-whisper.sh /build/
 RUN --mount=type=cache,id=ccache-${BACKEND},target=/ccache \
     --mount=type=cache,id=whisper-${BACKEND},target=/src/whisper.cpp/build \
     BACKEND=${BACKEND} bash /build/install-whisper.sh "${WHISPER_COMMIT_HASH}"
@@ -66,7 +66,7 @@ RUN --mount=type=cache,id=ccache-${BACKEND},target=/ccache \
 FROM builder-base AS sd-build
 ARG BACKEND=cuda
 ARG SD_COMMIT_HASH=master
-COPY install-sd.sh /build/
+COPY docker/unified/install-sd.sh /build/
 RUN --mount=type=cache,id=ccache-${BACKEND},target=/ccache \
     --mount=type=cache,id=sd-${BACKEND},target=/src/stable-diffusion.cpp/build \
     BACKEND=${BACKEND} bash /build/install-sd.sh "${SD_COMMIT_HASH}"
@@ -76,7 +76,7 @@ RUN --mount=type=cache,id=ccache-${BACKEND},target=/ccache \
 FROM builder-base AS llama-build
 ARG BACKEND=cuda
 ARG LLAMA_COMMIT_HASH=master
-COPY install-llama.sh /build/
+COPY docker/unified/install-llama.sh /build/
 RUN --mount=type=cache,id=ccache-${BACKEND},target=/ccache \
     --mount=type=cache,id=llama-${BACKEND},target=/src/llama.cpp/build \
     BACKEND=${BACKEND} bash /build/install-llama.sh "${LLAMA_COMMIT_HASH}"
@@ -94,7 +94,7 @@ RUN mkdir -p /install/bin
 
 FROM builder-base-cuda AS ik-llama-cuda
 ARG IK_LLAMA_COMMIT_HASH=main
-COPY install-ik-llama.sh /build/
+COPY docker/unified/install-ik-llama.sh /build/
 RUN --mount=type=cache,id=ccache-cuda,target=/ccache \
     --mount=type=cache,id=ik-llama-cuda,target=/src/ik_llama.cpp/build \
     bash /build/install-ik-llama.sh "${IK_LLAMA_COMMIT_HASH}"
@@ -102,12 +102,59 @@ RUN --mount=type=cache,id=ccache-cuda,target=/ccache \
 ARG BACKEND=cuda
 FROM ik-llama-${BACKEND} AS ik-llama-build
 
-# ── Download quartermaster release binary ────────────────────────────────
+# ── Build quartermaster from source ──────────────────────
+#
+# Two stages, because the toolchains do not overlap and neither of them is in
+# builder-base: the dashboard is Vite 8 / Svelte 5 and wants Node 24 (Ubuntu
+# 24.04 ships Node 18, too old to run the build), while the server is Go 1.26.
+#
+# The order is a hard requirement, not a preference. `vite build` writes into
+# internal/server/ui_dist, and `//go:embed ui_dist` in internal/server/ui.go
+# compiles that directory INTO the binary -- a Go build that runs first yields
+# a server whose dashboard is an empty embed.
 
-FROM builder-base AS quartermaster-download
-ARG LS_VERSION=latest
-COPY install-quartermaster.sh /build/
-RUN bash /build/install-quartermaster.sh "${LS_VERSION}"
+FROM node:24-bookworm-slim AS quartermaster-ui
+# The build context is the REPO ROOT, and the source is COPYed rather than
+# cloned: the repo is private, so `git fetch` inside a build stage has no
+# credentials and dies with "could not read Username for https://github.com".
+# Copying also means a local build tests the working tree you are sitting in.
+WORKDIR /src/quartermaster/ui-svelte
+# Manifests first, so editing Go or Svelte source does not re-run `npm ci`.
+# .npmrc is not optional: it carries legacy-peer-deps=true, and without it
+# `npm ci` fails outright on @tailwindcss/vite, which still declares a peer
+# range of vite ^5||^6||^7 while this project is on vite 8.
+COPY ui-svelte/package.json ui-svelte/package-lock.json ui-svelte/.npmrc ./
+RUN --mount=type=cache,id=npm,target=/root/.npm npm ci
+# node_modules is not in the context (.dockerignore), so this merge leaves the
+# tree installed above intact.
+COPY . /src/quartermaster
+# Dropped in the layer that used it: the Go stage copies this whole /src, and
+# build-only dependencies would otherwise ride along into it.
+RUN npm run build && rm -rf node_modules
+
+# ──
+
+FROM golang:1.26 AS quartermaster-build
+# `local_<hash>` is deliberately not parseable as a version: internal/update
+# reads an unparseable version as a dev build and never polls GitHub or swaps
+# the binary. That is the only correct behaviour in a container, where a
+# self-applied update is erased by the next `docker run`.
+ARG QM_COMMIT=unknown
+ARG QM_VERSION=local_unknown
+COPY --from=quartermaster-ui /src/quartermaster /src/quartermaster
+WORKDIR /src/quartermaster
+RUN mkdir -p /install/bin && echo "${QM_VERSION}" > /install/quartermaster-version
+# CGO_ENABLED=0 keeps the README's "one static binary" true, and spares the
+# runtime stage from having to match golang:1.26's libc.
+RUN --mount=type=cache,id=go-mod,target=/go/pkg/mod \
+    --mount=type=cache,id=go-build,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -trimpath \
+      -ldflags "-s -w \
+        -X main.version=${QM_VERSION} \
+        -X main.commit=${QM_COMMIT} \
+        -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      -o /install/bin/quartermaster ./cmd/quartermaster && \
+    test -x /install/bin/quartermaster
 
 # ── Runtime bases ─────────────────────────────────────────────────────
 
@@ -184,12 +231,12 @@ COPY --from=ik-llama-build /install/bin/ /usr/local/bin/
 RUN pip install uv --break-system-packages
 
 # Copy quartermaster binary
-COPY --from=quartermaster-download /install/bin/quartermaster /usr/local/bin/
-COPY --from=quartermaster-download /install/quartermaster-version /tmp/
+COPY --from=quartermaster-build /install/bin/quartermaster /usr/local/bin/
+COPY --from=quartermaster-build /install/quartermaster-version /tmp/
 
 RUN ldconfig
 
-COPY config.example.yaml /etc/quartermaster/config/config.yaml
+COPY docker/unified/config.example.yaml /etc/quartermaster/config/config.yaml
 
 # Version tracking
 RUN echo "llama.cpp: ${LLAMA_COMMIT_HASH}" > /versions.txt && \

@@ -21,10 +21,6 @@ on:
         description: "ik_llama.cpp commit hash, tag, or branch (CUDA only)"
         required: false
         default: "main"
-      ls_version:
-        description: "quartermaster version (e.g. v198, latest, main)"
-        required: false
-        default: "main"
       build_cuda:
         description: "Build CUDA image"
         type: boolean
@@ -109,7 +105,6 @@ jobs:
           WHISPER_REF: ${{ inputs.whisper_ref || 'master' }}
           SD_REF: ${{ inputs.sd_ref || 'master' }}
           IK_LLAMA_REF: ${{ inputs.ik_llama_ref || 'main' }}
-          LS_VERSION: ${{ inputs.ls_version || 'main' }}
           DOCKER_IMAGE_TAG: ghcr.io/quartermaster-labs/quartermaster:unified-${{ matrix.backend }}
           # When running under act, use the local builder that has warm ccache.
           # On GitHub Actions, BUILDX_BUILDER is unset so docker uses the builder

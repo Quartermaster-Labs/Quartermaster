@@ -1,0 +1,38 @@
+# The Docker build context is the REPO ROOT (docker/unified/build-image.sh
+# passes it), because the source has to be COPYed in: the repo is private, so a
+# container cannot clone it. Everything below would otherwise be uploaded to the
+# daemon on every build.
+#
+# NOTE: these are NOT gitignore patterns. Docker matches each pattern against
+# the whole path from the context root, so a bare `node_modules` excludes only
+# a top-level one and misses ui-svelte/node_modules (263 MB). Anything that can
+# appear at depth needs the explicit `**/` prefix.
+
+# Build output. build/ alone is 1.5 GB once a packaged bundle with downloaded
+# backend binaries lives in it.
+build/
+**/dist/
+**/*.exe
+**/*.syso
+
+# Regenerated inside the image by `npm ci` and `vite build`. Copying the host's
+# copies in would waste the transfer and risk shipping a stale dashboard.
+**/node_modules/
+internal/server/ui_dist/
+internal/setup/ui_dist/
+
+# 79 MB title model: gitignored, and fetched at runtime from the assets-v1
+# release (see internal/server/titlegen_asset.go).
+internal/server/assets/*.gguf
+
+# Not needed to compile: version stamping is passed in as a build arg.
+.git/
+.github/
+
+# Local runtime state and secrets.
+**/*.log
+**/logs/
+**/playground-data/
+quartermaster-generate.yaml
+quartermaster-overrides.yaml
+config.yaml

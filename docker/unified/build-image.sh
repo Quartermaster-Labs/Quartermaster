@@ -10,7 +10,6 @@
 #   LLAMA_REF=v1.2.3 ./build-image.sh --cuda             # Pin llama.cpp to a tag
 #   WHISPER_REF=v1.0.0 ./build-image.sh --vulkan         # Pin whisper.cpp to a tag
 #   SD_REF=master ./build-image.sh --cuda                # Pin stable-diffusion.cpp to a branch
-#   LS_VERSION=170 ./build-image.sh --cuda               # Override quartermaster version
 #   IK_LLAMA_REF=main ./build-image.sh --cuda            # Pin ik_llama.cpp to main branch (CUDA only)
 #
 
@@ -45,8 +44,7 @@ for arg in "$@"; do
             echo "  WHISPER_REF          Pin whisper.cpp to a commit, tag, or branch"
             echo "  SD_REF               Pin stable-diffusion.cpp to a commit, tag, or branch"
             echo "  IK_LLAMA_REF         Pin ik_llama.cpp to a commit, tag, or branch (CUDA only)"
-            echo "  LS_VERSION           Override quartermaster version (e.g., '170' or 'latest')"
-            exit 0
+                        exit 0
             ;;
     esac
 done
@@ -60,11 +58,15 @@ fi
 
 DOCKER_IMAGE_TAG="${DOCKER_IMAGE_TAG:-quartermaster:unified-${BACKEND}}"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The build context is the repo root, not this directory: the Dockerfile COPYs
+# the Go and Svelte source it compiles. See .dockerignore for what is kept out.
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
 # Git repository URLs
 LLAMA_REPO="https://github.com/ggml-org/llama.cpp.git"
 WHISPER_REPO="https://github.com/ggml-org/whisper.cpp.git"
 SD_REPO="https://github.com/leejet/stable-diffusion.cpp.git"
-LQ_REPO="https://github.com/Quartermaster-Labs/quartermaster.git"
 IK_LLAMA_REPO="https://github.com/ikawrakow/ik_llama.cpp.git"
 
 # Resolve a git ref (commit hash, tag, or branch) to a full commit hash.
@@ -173,18 +175,19 @@ else
     echo "ik_llama.cpp: skipped (vulkan build)"
 fi
 
-# Resolve quartermaster ref
-if [[ -n "${LS_VERSION:-}" ]]; then
-    LS_HASH=$(resolve_ref "${LQ_REPO}" "${LS_VERSION}") || exit 1
-    echo "quartermaster: ${LS_VERSION} -> ${LS_HASH}"
-else
-    LS_HASH=$(get_latest_hash "${LQ_REPO}")
-    if [[ -z "${LS_HASH}" ]]; then
-        echo "ERROR: Could not determine latest commit for quartermaster" >&2
-        exit 1
-    fi
-    echo "quartermaster: latest HEAD: ${LS_HASH}"
+# Stamp quartermaster from the LOCAL checkout. It is not resolved against a
+# remote like the C++ projects are: the repo is private, so the build COPYs the
+# working tree in rather than cloning it, and the version must describe what was
+# actually copied. The trailing "+" mirrors the Makefile's dirty marker.
+QM_COMMIT=$(git -C "${REPO_ROOT}" rev-parse --short HEAD)
+if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain)" ]]; then
+    QM_COMMIT="${QM_COMMIT}+"
 fi
+QM_VERSION="local_${QM_COMMIT}"
+if [[ -n "${LS_VERSION:-}" ]]; then
+    echo "Note: LS_VERSION is ignored; the image is built from the working tree."
+fi
+echo "quartermaster: working tree at ${QM_COMMIT}"
 
 echo ""
 echo "=========================================="
@@ -192,7 +195,7 @@ echo "Starting Docker build..."
 echo "=========================================="
 echo ""
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 
 BUILD_ARGS=(
     --build-arg "BACKEND=${BACKEND}"
@@ -200,7 +203,8 @@ BUILD_ARGS=(
     --build-arg "WHISPER_COMMIT_HASH=${WHISPER_HASH}"
     --build-arg "SD_COMMIT_HASH=${SD_HASH}"
     --build-arg "IK_LLAMA_COMMIT_HASH=${IK_LLAMA_HASH}"
-    --build-arg "LS_VERSION=${LS_HASH}"
+    --build-arg "QM_COMMIT=${QM_COMMIT}"
+    --build-arg "QM_VERSION=${QM_VERSION}"
     -t "${DOCKER_IMAGE_TAG}"
     -f "${SCRIPT_DIR}/Dockerfile"
 )
@@ -217,7 +221,7 @@ elif [[ "${GITHUB_ACTIONS:-}" == "true" && "${ACT:-}" != "true" ]]; then
     echo "Note: Using registry cache (${CACHE_REF})"
 fi
 
-DOCKER_BUILDKIT=1 docker buildx build --load "${BUILD_ARGS[@]}" "${SCRIPT_DIR}"
+DOCKER_BUILDKIT=1 docker buildx build --load "${BUILD_ARGS[@]}" "${REPO_ROOT}"
 
 echo ""
 echo "=========================================="

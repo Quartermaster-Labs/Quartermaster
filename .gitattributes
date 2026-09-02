@@ -1,0 +1,8 @@
+# Shell scripts and Dockerfiles are executed by Linux containers and CI, where a
+# CRLF line ending is a syntax error (`set: -\r: invalid option`), not a cosmetic
+# difference. Windows checkouts have core.autocrlf=true, so without this every
+# .sh in docker/ and packaging/ arrives with CRLF and a local Docker build dies
+# in its first RUN. CI never noticed: its runners check out on Linux.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.Dockerfile text eol=lf
