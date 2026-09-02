@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { login, signup } from "../stores/playgroundAuth";
+  import { onMount } from "svelte";
+  import { Eye, EyeOff } from "lucide-svelte";
+  import { login, signup, anyAccounts } from "../stores/playgroundAuth";
 
   // Two panes, one component: the fields are identical and the only differences
   // are the endpoint, the confirm box and the copy.
@@ -7,6 +9,7 @@
   let username = $state("");
   let password = $state("");
   let confirm = $state("");
+  let reveal = $state(false);
   let error = $state("");
   let busy = $state(false);
 
@@ -19,7 +22,17 @@
       (!signingUp || (password.length >= 6 && confirm === password)),
   );
 
+  // First launch has no accounts at all, so asking for a password nobody has set
+  // is a dead end. Open on the sign-up pane instead. Only flips the default —
+  // once the user has touched the switch, whatever they picked stands.
+  let touched = $state(false);
+  onMount(async () => {
+    const any = await anyAccounts();
+    if (any === false && !touched) mode = "signup";
+  });
+
   function switchMode(next: "login" | "signup") {
+    touched = true;
     mode = next;
     error = "";
     confirm = "";
@@ -59,16 +72,32 @@
       autocomplete="username"
       bind:value={username}
     />
-    <input
-      type="password"
-      class="px-3 py-2 rounded-md border border-card-border bg-background text-txtmain focus:outline-none focus:border-primary"
-      placeholder="Password"
-      autocomplete={signingUp ? "new-password" : "current-password"}
-      bind:value={password}
-    />
+    <div class="relative">
+      <input
+        type={reveal ? "text" : "password"}
+        class="w-full pl-3 pr-10 py-2 rounded-md border border-card-border bg-background text-txtmain focus:outline-none focus:border-primary"
+        placeholder="Password"
+        autocomplete={signingUp ? "new-password" : "current-password"}
+        bind:value={password}
+      />
+      <button
+        type="button"
+        tabindex="-1"
+        aria-label={reveal ? "Hide password" : "Show password"}
+        title={reveal ? "Hide password" : "Show password"}
+        class="absolute right-1 top-1/2 -translate-y-1/2 p-1.5 rounded text-txtsecondary hover:text-txtmain transition-colors"
+        onclick={() => (reveal = !reveal)}
+      >
+        {#if reveal}
+          <EyeOff size={16} />
+        {:else}
+          <Eye size={16} />
+        {/if}
+      </button>
+    </div>
     {#if signingUp}
       <input
-        type="password"
+        type={reveal ? "text" : "password"}
         class="px-3 py-2 rounded-md border border-card-border bg-background text-txtmain focus:outline-none focus:border-primary"
         placeholder="Confirm password"
         autocomplete="new-password"
@@ -101,5 +130,9 @@
     >
       {signingUp ? "Already have an account? Sign in" : "No account? Create one"}
     </button>
+    <p class="pt-1 border-t border-card-border text-[0.7rem] leading-relaxed text-txtsecondary">
+      This is a local account on this machine only. It keeps each person's chats, settings and
+      generated media separate; nothing is sent anywhere and there is no password recovery.
+    </p>
   </form>
 </div>

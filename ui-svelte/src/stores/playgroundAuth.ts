@@ -22,6 +22,20 @@ export async function checkMe(): Promise<void> {
   }
 }
 
+// Whether the server has any account at all. null while unknown. The login
+// form opens on the sign-up pane when this is false, so a first launch does not
+// ask for credentials that cannot exist yet.
+export async function anyAccounts(): Promise<boolean | null> {
+  try {
+    const r = await fetch("/auth/accounts");
+    if (!r.ok) return null;
+    const j = await r.json();
+    return !!j.any;
+  } catch {
+    return null;
+  }
+}
+
 async function credentials(path: string, username: string, password: string): Promise<void> {
   const r = await fetch(path, {
     method: "POST",

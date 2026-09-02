@@ -209,3 +209,36 @@ func TestPlayground_LegacyPlaintextUpgrades(t *testing.T) {
 		t.Fatalf("login should still work after the upgrade, got %d", w.Code)
 	}
 }
+
+// GET /auth/accounts is what makes the login form open on the sign-up pane the
+// first time the app is launched, so it must read false on an empty data dir
+// and true the moment an account exists.
+func TestPlayground_AccountsAny(t *testing.T) {
+	s := &Server{playground: &Playground{DataDir: t.TempDir()}}
+
+	any := func() bool {
+		t.Helper()
+		w := httptest.NewRecorder()
+		s.handlePlaygroundAccounts(w, httptest.NewRequest(http.MethodGet, "/auth/accounts", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("accounts should 200, got %d: %s", w.Code, w.Body)
+		}
+		var body struct {
+			Any bool `json:"any"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("bad json: %v", err)
+		}
+		return body.Any
+	}
+
+	if any() {
+		t.Fatal("fresh install should report no accounts")
+	}
+	if w := postCreds(t, s, "/auth/signup", "alice", "hunter22"); w.Code != http.StatusOK {
+		t.Fatalf("signup should succeed, got %d: %s", w.Code, w.Body)
+	}
+	if !any() {
+		t.Fatal("should report an account after signup")
+	}
+}

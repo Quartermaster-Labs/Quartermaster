@@ -849,6 +849,7 @@ func (s *Server) routes() {
 	mux.Handle("POST /auth/signup", apiChain.ThenFunc(s.handlePlaygroundSignup))
 	mux.Handle("POST /auth/logout", apiChain.ThenFunc(s.handlePlaygroundLogout))
 	mux.Handle("GET /auth/me", apiChain.ThenFunc(s.handlePlaygroundMe))
+	mux.Handle("GET /auth/accounts", apiChain.ThenFunc(s.handlePlaygroundAccounts))
 	mux.Handle("GET /api/chats", apiChain.ThenFunc(s.handlePlaygroundChats))
 	mux.Handle("PUT /api/chats", apiChain.ThenFunc(s.handlePlaygroundChats))
 	mux.Handle("GET /api/prefs", apiChain.ThenFunc(s.handlePlaygroundPrefs))

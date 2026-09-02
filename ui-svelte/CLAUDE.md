@@ -57,7 +57,7 @@ changing anything under `ui-svelte/`.
 | `src/main.ts`, `src/App.svelte` | Entry point + root. `App.svelte` fetches `/api/mode` and renders either the dashboard shell (Sidebar + StatusRail + Router) **or** the standalone `PlaygroundApp`. |
 | `src/routes/PlaygroundApp.svelte` | Playground root: gates the app behind login (`playgroundAuth` `me`), hydrates server-backed chats/prefs, then mounts `PlaygroundShell`. |
 | `src/routes/PlaygroundShell.svelte` | Playground shell: icon side-rail (Chat / Images / Speech / Transcription, hover-expand), chat-history flyout, logout + username, and the playground Settings modal (**General / Memory / Search / Prompt**). |
-| `src/routes/Login.svelte` | Playground username/password login (plaintext, registers unknown users). |
+| `src/routes/Login.svelte` | Playground username/password sign-in **and** sign-up (hashed; unknown users are rejected, not registered). Opens on the sign-up pane when `GET /auth/accounts` says no account exists yet. |
 | `src/routes/` | Top-level pages mounted by the router. |
 | `src/components/` | Reusable UI components (panels, modals, gauges, charts, tooltips). |
 | `src/components/TitleBar.svelte`, `WindowControls.svelte`, `src/lib/native.ts` | The native app window's caption + the `qm*` bridge. Feature-tested, never build-flagged — see Conventions. |

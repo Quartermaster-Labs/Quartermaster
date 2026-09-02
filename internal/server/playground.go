@@ -552,6 +552,27 @@ func (s *Server) handlePlaygroundSignup(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, map[string]string{"username": username})
 }
 
+// GET /auth/accounts — whether any playground account exists yet. The login
+// form uses it to open on the sign-up pane the first time the app is launched,
+// instead of asking for credentials nobody has created. Unauthenticated by
+// necessity (it is what the logged-out form asks) and it leaks nothing the
+// login error "no such user: sign up first" does not already say.
+func (s *Server) handlePlaygroundAccounts(w http.ResponseWriter, r *http.Request) {
+	p := s.playground
+	if p == nil {
+		http.Error(w, "playground not enabled", http.StatusNotImplemented)
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	users, err := p.loadUsers()
+	if err != nil {
+		http.Error(w, "could not read users", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]bool{"any": len(users) > 0})
+}
+
 // POST /auth/logout — clears the cookie.
 func (s *Server) handlePlaygroundLogout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: pgCookie, Value: "", Path: "/", MaxAge: -1})
