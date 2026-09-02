@@ -322,3 +322,67 @@ func TestUpdate_CheckNowRefusesForDevBuilds(t *testing.T) {
 		t.Error("a dev build reported enabled=true")
 	}
 }
+
+// The four published asset names live in three places: assetName's switch, the
+// `dist` target in the Makefile, and the $targets table in
+// packaging/windows/build-release.ps1. assetName matches an asset EXACTLY and a
+// miss is silent -- checkOnce simply finds no asset for this platform and
+// reports no update -- so a rename on one side cuts every installed copy of
+// that platform off from updates with nothing logged anywhere. This test is the
+// only thing that notices.
+//
+// It reads the release scripts as text rather than deriving anything from
+// runtime.GOOS, so all four are checked from whichever OS runs the suite. The
+// literal list below is a fourth copy on purpose: it is the assertion, and the
+// point is that changing one copy without the others fails here.
+func TestUpdate_AssetNamesMatchReleaseScripts(t *testing.T) {
+	names := []string{
+		"quartermaster-windows-amd64.exe",
+		"quartermaster-linux-amd64",
+		"quartermaster-linux-arm64",
+		"quartermaster-darwin-arm64",
+	}
+	if n := assetName(); n != "" {
+		found := false
+		for _, want := range names {
+			if n == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("assetName() = %q, which is not one of the published assets %v", n, names)
+		}
+	}
+
+	// Only the lines that write into $(DIST_DIR) count: PKG_NIX_BIN_* and the
+	// per-platform dev targets carry similar-looking names, and matching those
+	// would let the actual release target drift while the test stayed green.
+	mk, err := os.ReadFile(filepath.Join("..", "..", "Makefile"))
+	if err != nil {
+		t.Fatalf("read Makefile: %v", err)
+	}
+	var dist []string
+	for _, ln := range strings.Split(string(mk), "\n") {
+		if strings.Contains(ln, "$(DIST_DIR)/") {
+			dist = append(dist, strings.ReplaceAll(ln, "$(APP_NAME)", "quartermaster"))
+		}
+	}
+	if len(dist) == 0 {
+		t.Fatal("Makefile has no $(DIST_DIR)/ lines; the dist target moved or was renamed")
+	}
+	mkText := strings.Join(dist, "\n")
+
+	ps, err := os.ReadFile(filepath.Join("..", "..", "packaging", "windows", "build-release.ps1"))
+	if err != nil {
+		t.Fatalf("read build-release.ps1: %v", err)
+	}
+
+	for _, want := range names {
+		if !strings.Contains(mkText, want) {
+			t.Errorf("Makefile dist target does not build %q; the updater will never find it", want)
+		}
+		if !strings.Contains(string(ps), want) {
+			t.Errorf("build-release.ps1 does not build %q; the updater will never find it", want)
+		}
+	}
+}

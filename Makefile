@@ -287,10 +287,14 @@ RELEASE_REPO ?= Quartermaster-Labs/Quartermaster
 # (private-repo Actions minutes are metered; local build is free). Two kinds of
 # artifact ship: the four bare binaries + SHA256SUMS that the IN-APP UPDATER
 # downloads, and the Windows installer, which only ever runs on a FIRST install.
-#   make release                  -> latest existing vX.Y.Z tag, DRAFT
-#   make release-public           -> same, but PUBLIC
-#   make release VERSION=v0.5.1   -> creates that tag first, then releases it
-#   make release-binaries         -> binaries + sums only, no installer
+#   make release VERSION=v0.5.1          -> DRAFT release of that tag
+#   make release-public VERSION=v0.5.1   -> same, but PUBLIC
+#   make release-binaries VERSION=v0.5.1 -> binaries + sums only, no installer
+#
+# VERSION is MANDATORY. It used to default to the highest existing tag, which
+# built whatever HEAD was and published it under a version that tag need not
+# point at. build-release.ps1 also refuses a dirty tree, and refuses a tag that
+# already exists anywhere but HEAD.
 # Needs go, npm, gh (authed), and — unless -SkipInstaller — Inno Setup 6 (ISCC).
 release:
 	@$(MAKE) --no-print-directory _build-release DRAFT=true
@@ -305,15 +309,16 @@ release-binaries:
 	@$(MAKE) --no-print-directory _build-release DRAFT=true RELEASE_EXTRA=-SkipInstaller
 
 _build-release:
-	@targ=""; \
-	if [ -n "$(VERSION)" ]; then \
-		echo "$(VERSION)" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$$' || { \
-			echo "Error: VERSION must be vMAJOR.MINOR.PATCH (e.g. v0.5.1)" >&2; exit 1; }; \
-		git rev-parse "$(VERSION)" >/dev/null 2>&1 || git tag "$(VERSION)"; \
-		targ="-Tag $(VERSION)"; \
-	fi; \
+	@if [ -z "$(VERSION)" ]; then \
+		echo "Error: VERSION=vMAJOR.MINOR.PATCH is required (e.g. make release VERSION=v0.5.1)" >&2; exit 1; fi
+	@echo "$(VERSION)" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$$' || { \
+		echo "Error: VERSION must be vMAJOR.MINOR.PATCH (e.g. v0.5.1)" >&2; exit 1; }
+	# Created on HEAD when it does not exist yet. build-release.ps1 then verifies
+	# the tag IS HEAD, so a tag that already lives on another commit stops the
+	# release instead of quietly shipping that commit under this version.
+	@git rev-parse "$(VERSION)" >/dev/null 2>&1 || git tag "$(VERSION)"
 	powershell -NoProfile -ExecutionPolicy Bypass \
-		-File packaging/windows/build-release.ps1 $$targ -Draft $(DRAFT) -Repo $(RELEASE_REPO) $(RELEASE_EXTRA)
+		-File packaging/windows/build-release.ps1 -Tag $(VERSION) -Draft $(DRAFT) -Repo $(RELEASE_REPO) $(RELEASE_EXTRA)
 
 GOOS ?= $(shell go env GOOS 2>/dev/null || echo linux)
 GOARCH ?= $(shell go env GOARCH 2>/dev/null || echo amd64)

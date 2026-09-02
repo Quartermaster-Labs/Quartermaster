@@ -25,7 +25,8 @@
   toolchain beyond Go itself.
 
 .PARAMETER Tag
-  Release tag (vX.Y.Z). Defaults to the highest existing semver git tag.
+  Release tag (vX.Y.Z). Required, and it must already point at HEAD (or not
+  exist yet, in which case it is created on HEAD). Never inferred: see below.
 
 .PARAMETER Draft
   Create/keep the GitHub release as a draft (default). Pass -Draft false to publish.
@@ -59,12 +60,30 @@ Set-Location $root
 
 function Die($m) { Write-Error $m; exit 1 }
 
-# Tag: explicit, else highest vX.Y.Z.
-if (-not $Tag) {
-    $Tag = (git tag --sort=-v:refname | Where-Object { $_ -match '^v[0-9]+\.[0-9]+\.[0-9]+$' } | Select-Object -First 1)
-    if (-not $Tag) { Die "no vX.Y.Z tag found; create one or pass -Tag vX.Y.Z" }
-}
+# The tag is never inferred. Defaulting to the highest existing tag built
+# whatever HEAD happened to be and published it under a version that tag may
+# not point at; a release has to name the version it is releasing.
+if (-not $Tag) { Die "-Tag vX.Y.Z is required (make release VERSION=vX.Y.Z)" }
 if ($Tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { Die "Tag must be vMAJOR.MINOR.PATCH (e.g. v0.5.1)" }
+
+# $Tag is stamped into every binary (-X main.version) and the updater hands that
+# string to users as the version they are running, so the build has to come from
+# exactly the source the tag names. Two ways it would not: uncommitted edits, or
+# a tag that already exists somewhere other than HEAD. Both are refused here
+# rather than discovered later from a binary that lies about its provenance.
+$dirty = (git status --porcelain)
+if ($dirty) {
+    $dirty | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+    Die "working tree is dirty; commit or stash before releasing"
+}
+$head = (git rev-parse HEAD).Trim()
+git rev-parse -q --verify "refs/tags/$Tag" *> $null
+if ($LASTEXITCODE -eq 0) {
+    $at = (git rev-list -n 1 $Tag).Trim()
+    if ($at -ne $head) { Die "$Tag points at $at, not HEAD ($head); check out the tag, or move it" }
+} else {
+    Write-Host "  $Tag is new; it will be created on $($head.Substring(0, 7))" -ForegroundColor DarkGray
+}
 
 $iscc = $null
 if (-not $SkipInstaller) {
