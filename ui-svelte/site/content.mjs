@@ -6,7 +6,7 @@
 // the `wiki_search` tool read. Anything a user might also need while the app is
 // open belongs in an article, not on this page.
 
-export const REPO = "https://github.com/Quartermaster-Labs/quartermaster";
+export const REPO = "https://github.com/Quartermaster-Labs/Quartermaster";
 export const UPSTREAM = "https://github.com/mostlygeek/llama-swap";
 
 export const HERO = {

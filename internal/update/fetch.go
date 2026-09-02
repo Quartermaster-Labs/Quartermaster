@@ -15,7 +15,7 @@ import (
 // first-run wizard have to agree on it: the wizard downloads the binary the
 // updater will later replace in place, and a disagreement would mean an install
 // that can never be updated.
-const Repo = "Quartermaster-Labs/quartermaster"
+const Repo = "Quartermaster-Labs/Quartermaster"
 
 // FetchBinary downloads this platform's server binary from repo's latest
 // release into dir and returns the path it wrote.

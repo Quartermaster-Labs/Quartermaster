@@ -20,7 +20,7 @@ welcome, and the bar is "does it work and does it fit", not ceremony.
 You need **Go** (version from [`go.mod`](go.mod)) and **Node 20+** for the UI.
 
 ```sh
-git clone https://github.com/Quartermaster-Labs/quartermaster
+git clone https://github.com/Quartermaster-Labs/Quartermaster
 cd quartermaster
 make ui          # build the Svelte app into internal/server/ui_dist
 go build ./...

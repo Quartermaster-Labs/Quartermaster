@@ -56,7 +56,7 @@ AppId={{A7E4C9D2-3B6F-4F1A-9C2E-2D7B8F0A1E55}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher=QuartermasterLabs
-AppPublisherURL=https://github.com/Quartermaster-Labs/quartermaster
+AppPublisherURL=https://github.com/Quartermaster-Labs/Quartermaster
 DefaultDirName={localappdata}\Programs\{#MyAppDir}
 ; Kept prompting for the manual-run path: the setup program always passes /DIR,
 ; so this page is only ever seen by someone who ran the inner installer directly.

@@ -281,7 +281,7 @@ dist: ui
 	@echo "Done: $(DIST_DIR)"
 
 # GitHub repo for `gh` (avoids "no default remote" when multiple remotes exist).
-RELEASE_REPO ?= Quartermaster-Labs/quartermaster
+RELEASE_REPO ?= Quartermaster-Labs/Quartermaster
 
 # Build every release artifact LOCALLY and upload it to a GitHub release
 # (private-repo Actions minutes are metered; local build is free). Two kinds of

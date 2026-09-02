@@ -1,6 +1,6 @@
 [Unit]
 Description=quartermaster — all-in-one local inference engine with startup config autogen
-Documentation=https://github.com/Quartermaster-Labs/quartermaster
+Documentation=https://github.com/Quartermaster-Labs/Quartermaster
 After=network-online.target
 Wants=network-online.target
 

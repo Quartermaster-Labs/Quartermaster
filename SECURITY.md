@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Report privately through GitHub's
-[**Report a vulnerability**](https://github.com/Quartermaster-Labs/quartermaster/security/advisories/new)
+[**Report a vulnerability**](https://github.com/Quartermaster-Labs/Quartermaster/security/advisories/new)
 form. Please don't open a public issue for a security bug.
 
 Include what you'd want if you were fixing it: the version (`/api/version` or

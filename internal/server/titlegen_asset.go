@@ -27,7 +27,7 @@ const (
 	// Hugging Face repo: what we need is a specific f16 conversion quantized to
 	// Q8_0, not the source safetensors, and pinning our own copy means the hash
 	// below stays valid regardless of what upstream re-uploads.
-	titlegenAssetURL = "https://github.com/Quartermaster-Labs/quartermaster/releases/download/assets-v1/" + titlegenAssetName
+	titlegenAssetURL = "https://github.com/Quartermaster-Labs/Quartermaster/releases/download/assets-v1/" + titlegenAssetName
 
 	// titlegenAssetSHA256 pins the exact bytes. A download that does not match is
 	// discarded — a proxy's error page saved as a .gguf is otherwise a confusing

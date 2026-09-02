@@ -47,7 +47,7 @@ param(
     # args verbatim and can't evaluate $true/$false.
     [ValidateSet('true', 'false')]
     [string]$Draft = 'true',
-    [string]$Repo = 'Quartermaster-Labs/quartermaster',
+    [string]$Repo = 'Quartermaster-Labs/Quartermaster',
     [switch]$SkipUi,
     [switch]$SkipInstaller
 )

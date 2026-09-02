@@ -50,7 +50,7 @@ const flag = (name, fallback) => {
   return i === -1 ? fallback : argv[i + 1];
 };
 const OUT = path.resolve(flag("--out", path.join(ROOT, ".site")));
-const SITE_URL = (flag("--url", "https://quartermaster-labs.github.io/quartermaster")).replace(/\/+$/, "");
+const SITE_URL = (flag("--url", "https://quartermaster-labs.github.io/Quartermaster")).replace(/\/+$/, "");
 const ADOPT = flag("--adopt", null);
 
 // ── html helpers ───────────────────────────────────────────────────────────
@@ -97,7 +97,7 @@ document.getElementById("theme").addEventListener("click", function () {
 const MARK = (await readFile(path.join(HERE, "mark-inline.svg"), "utf8")).trim();
 
 // `depth` is how far the page sits below the site root, so every href stays
-// relative, so the site works at github.io/quartermaster/, at a custom
+// relative, so the site works at github.io/Quartermaster/, at a custom
 // domain, and from a file:// preview without a base-URL setting to get wrong.
 function page({ title, description, body, depth = 0, extraScripts = "", ogImage = null }) {
   const up = depth === 0 ? "" : "../".repeat(depth);

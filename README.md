@@ -1,9 +1,9 @@
 ![Quartermaster](docs/assets/social-preview.png)
 
-![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/Quartermaster-Labs/quartermaster/total)
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Quartermaster-Labs/quartermaster/go-ci.yml)
-![GitHub Repo stars](https://img.shields.io/github/stars/Quartermaster-Labs/quartermaster)
-![License](https://img.shields.io/github/license/Quartermaster-Labs/quartermaster)
+![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/Quartermaster-Labs/Quartermaster/total)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Quartermaster-Labs/Quartermaster/go-ci.yml)
+![GitHub Repo stars](https://img.shields.io/github/stars/Quartermaster-Labs/Quartermaster)
+![License](https://img.shields.io/github/license/Quartermaster-Labs/Quartermaster)
 
 # Quartermaster
 
@@ -26,7 +26,7 @@ flags, and tears them down when they are idle.
 - Text, image and audio
 - No telemetry
 
-**Website: [quartermaster-labs.github.io/quartermaster](https://quartermaster-labs.github.io/quartermaster/)**
+**Website: [quartermaster-labs.github.io/Quartermaster](https://quartermaster-labs.github.io/Quartermaster/)**
 for downloads, screenshots and the full user guide.
 **[User guide](docs/):** the same help wiki the app ships with, readable before you install anything.
 
@@ -214,7 +214,7 @@ Settings on first run, or point at ones you already have.
 ### Setup program (recommended)
 
 Download the one for your machine from the
-[releases page](https://github.com/Quartermaster-Labs/quartermaster/releases) and run it:
+[releases page](https://github.com/Quartermaster-Labs/Quartermaster/releases) and run it:
 `quartermaster-setup-*.exe` on Windows, `quartermaster-setup-linux-amd64`,
 `quartermaster-setup-linux-arm64` or `quartermaster-setup-darwin-arm64` elsewhere (`chmod +x` it
 first).
@@ -258,7 +258,7 @@ npm stages are quick. Each run pins llama.cpp, whisper.cpp, stable-diffusion.cpp
 to a resolved commit, so `LLAMA_REF=b1234 docker/unified/build-image.sh --vulkan` reproduces an
 exact combination.
 
-[Published images](https://github.com/Quartermaster-Labs/quartermaster/pkgs/container/quartermaster)
+[Published images](https://github.com/Quartermaster-Labs/Quartermaster/pkgs/container/quartermaster)
 come from the same build, run on demand from `.github/workflows/unified-docker.yml` (Actions, Build
 Unified Docker Image, Run workflow).
 
@@ -267,7 +267,7 @@ Unified Docker Image, Run workflow).
 The setup program above is the easy path. If you would rather skip it, the server is one static
 binary with nothing to install: amd64 and arm64 for Linux, Apple silicon for macOS. Download
 `quartermaster-linux-amd64`, `quartermaster-linux-arm64` or `quartermaster-darwin-arm64` from the
-[releases page](https://github.com/Quartermaster-Labs/quartermaster/releases), `chmod +x` it, point
+[releases page](https://github.com/Quartermaster-Labs/Quartermaster/releases), `chmod +x` it, point
 it at your models folder, and install the backends you want from Settings. Verify any download,
 wizard included, against the `SHA256SUMS` published beside it. For a headless box, the systemd unit
 in [`packaging/systemd`](packaging/systemd) needs only its paths filled in.
@@ -281,7 +281,7 @@ compiled yourself is not quarantined.
 Requires Go 1.26+ (see `go.mod`) and Node.js 24 for the UI.
 
 ```shell
-git clone https://github.com/Quartermaster-Labs/quartermaster.git
+git clone https://github.com/Quartermaster-Labs/Quartermaster.git
 cd quartermaster
 make windows        # or: make mac, make linux
 ```
@@ -429,7 +429,7 @@ No telemetry. Release builds check GitHub for updates, and that is the only outb
 its own. Development builds do not even do that.
 
 **Where is the documentation?**
-In [`docs/`](docs/), on the [website](https://quartermaster-labs.github.io/quartermaster/), and
+In [`docs/`](docs/), on the [website](https://quartermaster-labs.github.io/Quartermaster/), and
 inside the app behind the Help button. All three are generated from the same corpus, and the
 playground assistant searches it as a tool.
 
@@ -444,4 +444,4 @@ back.
 > [!NOTE]
 > Thank you to everyone who has given this project a star.
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Quartermaster-Labs/quartermaster&type=Date)](https://www.star-history.com/#Quartermaster-Labs/quartermaster&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Quartermaster-Labs/Quartermaster&type=Date)](https://www.star-history.com/#Quartermaster-Labs/Quartermaster&Date)
