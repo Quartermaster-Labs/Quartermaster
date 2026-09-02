@@ -618,8 +618,8 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 	cmd.Dir = spawnDir()
 	cmd.Env = append(cmd.Environ(), cfg.Env...)
 	// Self-contained backends (Vulkan/ROCm bundles) need their own directory
-	// on the loader path for TRANSITIVE deps — see exeLibEnv.
-	cmd.Env = exeLibEnv(cmd.Env, resolvedExe)
+	// on the loader path for TRANSITIVE deps — see ExeLibEnv.
+	cmd.Env = ExeLibEnv(cmd.Env, resolvedExe)
 	cmd.Cancel = func() error { return p.sendStopSignal(cmd) }
 	cmd.WaitDelay = p.waitDelay
 	setProcAttributes(cmd)

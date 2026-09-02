@@ -130,9 +130,20 @@ therefore *coexist* with hand-entered rows in one registry, distinguished by
 - **Two hostile-input guards, both tested.** `validAssetURL` (https + a GitHub
   host allowlist, copied from `internal/update`) so a poisoned API response can't
   make us fetch and run an arbitrary binary; `safeJoin` so a crafted archive
-  can't write outside the install directory. `extractTarGz` skips symlinks and
-  devices deliberately — no backend archive needs them, and a link is the other
-  half of a path-escape trick.
+  can't write outside the install directory. Both extractors skip devices and
+  fifos deliberately.
+- **Links must be kept, and are the other half of a path-escape trick.**
+  llama.cpp's Linux bundles ship every library as a SONAME chain of symlinks
+  (`libllama-common.so` → `.so.0` → `.so.0.3.0`) and the ELF headers reference
+  the MIDDLE name, so an extractor that drops links leaves a bundle that cannot
+  load: every spawn dies with `libllama-common.so.0: cannot open shared object
+  file`, whatever is on `LD_LIBRARY_PATH`. `applyLinks` defers them to a second
+  pass (an archive lists links before their target), rejects any target that
+  resolves outside the install directory (a leading `/` counts as absolute even
+  on Windows), and falls back to copying the target where symlinks need a
+  privilege. A zip stores a symlink as a tiny entry whose *content* is the
+  target path; written out verbatim it becomes a text file wearing a library's
+  name, so it gets the same treatment.
 - **Rate limits are real.** Unauthenticated GitHub API calls are 60/hour per IP,
   which is why release listings are cached for 10 minutes and only fetched when
   the user opens a version picker or hits Check — the catalog endpoint itself

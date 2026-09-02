@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/quartermaster-labs/quartermaster/internal/autogen"
+	"github.com/quartermaster-labs/quartermaster/internal/process"
 )
 
 // Title generation for collapsed reasoning boxes ("Thought for 2s · <gist>").
@@ -178,6 +179,10 @@ func (tg *titlegen) title(ctx context.Context, text string) (string, error) {
 		"--simple-io",
 	)
 	hideConsole(cmd) // no CLI window popup (Windows)
+	// The CLI sits inside a llama.cpp bundle and links that bundle's .so files;
+	// without its own directory on the loader path it dies on Linux before it
+	// prints a thing, and every title silently falls back. See process.ExeLibEnv.
+	cmd.Env = process.ExeLibEnv(os.Environ(), tg.exe)
 
 	// stdout ONLY: the CLI writes its load/sampler/perf log to stderr, timestamped
 	// (`0.00.184.451 I sampler seed: …`), and merging the two streams would leave

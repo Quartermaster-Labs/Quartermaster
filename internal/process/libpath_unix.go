@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// exeLibEnv prepends the directory containing the backend executable to the
+// ExeLibEnv prepends the directory containing the backend executable to the
 // dynamic-loader search path (LD_LIBRARY_PATH, DYLD_LIBRARY_PATH on darwin).
 //
 // Why: self-contained bundles (e.g. llama.cpp's Vulkan/ROCm tarballs) ship
@@ -24,7 +24,7 @@ import (
 // The prepend is skipped when the exe's directory is one of the loader's
 // default search locations, so a system-installed backend (/usr/bin/llama-
 // server) keeps exactly its current library resolution.
-func exeLibEnv(env []string, exe string) []string {
+func ExeLibEnv(env []string, exe string) []string {
 	dir := filepath.Dir(exe)
 	if dir == "" || dir == "." || isDefaultLibDir(dir) {
 		return env

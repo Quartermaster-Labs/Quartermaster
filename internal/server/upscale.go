@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/quartermaster-labs/quartermaster/internal/autogen"
+	"github.com/quartermaster-labs/quartermaster/internal/process"
 )
 
 // upscaleMu serializes upscale runs. The ncnn upscaler holds GPU memory for the
@@ -121,7 +122,8 @@ func (s *Server) handleUpscale(w http.ResponseWriter, r *http.Request) {
 		"-t", "200",
 		"-f", "png",
 	)
-	hideConsole(cmd) // no CLI window popup (Windows)
+	hideConsole(cmd)                               // no CLI window popup (Windows)
+	cmd.Env = process.ExeLibEnv(os.Environ(), bin) // the ncnn bundle ships its own .so files
 
 	upscaleMu.Lock()
 	out, runErr := cmd.CombinedOutput()

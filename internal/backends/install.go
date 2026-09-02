@@ -259,6 +259,7 @@ func extractZip(src, dir string) error {
 		return err
 	}
 	defer zr.Close()
+	var links []linkEntry
 	for _, f := range zr.File {
 		dst, err := safeJoin(dir, f.Name)
 		if err != nil {
@@ -277,13 +278,26 @@ func extractZip(src, dir string) error {
 		if err != nil {
 			return err
 		}
+		// A zip symlink is a tiny entry whose CONTENT is the target path; written
+		// out verbatim it becomes a text file with a library's name, which the
+		// loader rejects as a bad ELF instead of following. Defer it like a tar
+		// link so the SONAME chain survives (see applyLinks).
+		if f.Mode()&os.ModeSymlink != 0 {
+			target, err := io.ReadAll(io.LimitReader(rc, 4096))
+			rc.Close()
+			if err != nil {
+				return err
+			}
+			links = append(links, linkEntry{dst: dst, target: string(target)})
+			continue
+		}
 		err = writeFile(dst, rc, f.Mode())
 		rc.Close()
 		if err != nil {
 			return err
 		}
 	}
-	return nil
+	return applyLinks(dir, links)
 }
 
 func extractTarGz(src, dir string) error {
@@ -298,10 +312,11 @@ func extractTarGz(src, dir string) error {
 	}
 	defer gz.Close()
 	tr := tar.NewReader(gz)
+	var links []linkEntry
 	for {
 		h, err := tr.Next()
 		if errors.Is(err, io.EOF) {
-			return nil
+			return applyLinks(dir, links)
 		}
 		if err != nil {
 			return err
@@ -322,9 +337,13 @@ func extractTarGz(src, dir string) error {
 			if err := writeFile(dst, tr, os.FileMode(h.Mode)); err != nil {
 				return err
 			}
+		case tar.TypeSymlink:
+			links = append(links, linkEntry{dst: dst, target: h.Linkname})
+		case tar.TypeLink:
+			links = append(links, linkEntry{dst: dst, target: h.Linkname, hard: true})
 		default:
-			// Symlinks and devices are skipped: no backend archive needs them, and
-			// a link is the other half of a path-escape trick.
+			// Devices, fifos and the rest are skipped: no backend archive needs
+			// them, and they are the other half of a path-escape trick.
 		}
 	}
 }
@@ -340,6 +359,92 @@ func writeFile(dst string, r io.Reader, mode os.FileMode) error {
 	defer out.Close()
 	_, err = io.Copy(out, r)
 	return err
+}
+
+// linkEntry is one archived symlink (or hard link), held back until every
+// regular file has been written: an archive is free to list a link before the
+// file it points at.
+type linkEntry struct {
+	dst    string // absolute path of the link itself
+	target string // link text, exactly as the archive stores it
+	hard   bool
+}
+
+// applyLinks materialises the deferred links.
+//
+// Why this matters: llama.cpp's Linux bundles ship each library as a SONAME
+// chain of symlinks (libllama-common.so -> .so.0 -> .so.0.3.0), and the ELF
+// headers reference the MIDDLE name. Dropping the links left only the versioned
+// files on disk, so every spawn died with "libllama-common.so.0: cannot open
+// shared object file" no matter what was on LD_LIBRARY_PATH.
+//
+// Rounds, not one pass: on Windows a symlink needs a privilege most accounts
+// lack, so the fallback copies the target - which has to exist first, and a
+// chain's links can appear in any order. A round that resolves nothing means
+// the rest are dangling (target absent from the archive); that is left alone
+// rather than failing the install, since nothing may ever load them.
+func applyLinks(dir string, links []linkEntry) error {
+	for len(links) > 0 {
+		var stuck []linkEntry
+		for _, l := range links {
+			done, err := applyLink(dir, l)
+			if err != nil {
+				return err
+			}
+			if !done {
+				stuck = append(stuck, l)
+			}
+		}
+		if len(stuck) == len(links) {
+			return nil
+		}
+		links = stuck
+	}
+	return nil
+}
+
+// applyLink writes one link, or reports false when it needs another round.
+func applyLink(dir string, l linkEntry) (bool, error) {
+	// A link is the other half of a path-escape trick, so resolve where it
+	// actually points and refuse anything outside the install directory. A
+	// symlink's text is relative to the link, a tar hard link's to the archive
+	// root.
+	base := dir
+	if !l.hard {
+		base = filepath.Dir(l.dst)
+	}
+	// Archives are unix-shaped, so "/etc/passwd" is an absolute target even on
+	// Windows, where filepath.IsAbs would call it relative and join it INTO the
+	// install directory.
+	target := filepath.FromSlash(l.target)
+	if target == "" || filepath.IsAbs(target) || strings.HasPrefix(l.target, "/") || filepath.VolumeName(target) != "" {
+		return false, fmt.Errorf("unsafe archive link: %s -> %s", filepath.Base(l.dst), l.target)
+	}
+	abs := filepath.Join(base, target)
+	if rel, err := filepath.Rel(dir, abs); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false, fmt.Errorf("unsafe archive link: %s -> %s", filepath.Base(l.dst), l.target)
+	}
+	_ = os.Remove(l.dst) // a re-extract over a previous install
+	if !l.hard {
+		// Dangling is fine here: a real symlink resolves whenever the target
+		// lands, so this needs no ordering.
+		if err := os.Symlink(target, l.dst); err == nil {
+			return true, nil
+		}
+	}
+	st, err := os.Stat(abs)
+	if err != nil {
+		return false, nil // target not written yet - retry next round
+	}
+	if !st.Mode().IsRegular() {
+		return false, nil
+	}
+	if l.hard {
+		if err := os.Link(abs, l.dst); err == nil {
+			return true, nil
+		}
+	}
+	return true, copyFile(abs, l.dst) // 0o755: every link in a backend bundle is a library or an exe
 }
 
 // findExe locates the component's executable anywhere under dir (release zips

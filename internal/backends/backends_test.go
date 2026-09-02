@@ -1,7 +1,9 @@
 package backends
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"compress/gzip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -472,6 +474,87 @@ func TestBackends_ValidAssetURL(t *testing.T) {
 	} {
 		if err := validAssetURL(bad); err == nil {
 			t.Errorf("accepted %s", bad)
+		}
+	}
+}
+
+// writeTarGz builds a tar.gz from regular-file and symlink entries. Symlink
+// entries are given as "name -> target".
+func writeTarGz(t *testing.T, path string, entries []string) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	for _, e := range entries {
+		name, target, isLink := strings.Cut(e, " -> ")
+		h := &tar.Header{Name: name, Mode: 0o755, Typeflag: tar.TypeReg, Size: int64(len(name))}
+		if isLink {
+			h = &tar.Header{Name: name, Mode: 0o777, Typeflag: tar.TypeSymlink, Linkname: target}
+		}
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if !isLink {
+			if _, err := tw.Write([]byte(name)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// llama.cpp's Linux bundles ship every library as a SONAME chain of symlinks
+// and the ELF headers name the middle link, so an extractor that drops links
+// produces a bundle that cannot load. The links are also listed BEFORE their
+// target here, as the real tarball does.
+func TestBackends_ExtractKeepsSonameChain(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "bundle.tar.gz")
+	writeTarGz(t, src, []string{
+		"b1/libllama-common.so -> libllama-common.so.0",
+		"b1/libllama-common.so.0 -> libllama-common.so.0.3.0",
+		"b1/libllama-common.so.0.3.0",
+		"b1/llama-server",
+	})
+	dest := filepath.Join(dir, "install")
+	if err := extract(src, dest); err != nil {
+		t.Fatal(err)
+	}
+	// Stat follows the link, so this fails on both a missing link and a broken
+	// chain - and passes on the copy fallback used where symlinks need rights.
+	for _, name := range []string{"libllama-common.so", "libllama-common.so.0", "libllama-common.so.0.3.0"} {
+		st, err := os.Stat(filepath.Join(dest, "b1", name))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if st.Size() == 0 {
+			t.Errorf("%s resolved to an empty file", name)
+		}
+	}
+}
+
+// A symlink is the other half of a path-escape trick: the link itself stays
+// inside the install directory while its target does not.
+func TestBackends_ExtractRejectsLinkEscape(t *testing.T) {
+	for _, target := range []string{"../../escaped.txt", "/etc/passwd"} {
+		dir := t.TempDir()
+		src := filepath.Join(dir, "evil.tar.gz")
+		writeTarGz(t, src, []string{"b1/inside.so -> " + target})
+		dest := filepath.Join(dir, "install")
+		if err := extract(src, dest); err == nil {
+			t.Fatalf("target %q: expected extract to reject the link", target)
+		}
+		if _, err := os.Lstat(filepath.Join(dest, "b1", "inside.so")); err == nil {
+			t.Errorf("target %q: escaping link was created anyway", target)
 		}
 	}
 }

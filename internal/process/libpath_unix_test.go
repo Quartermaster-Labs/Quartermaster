@@ -8,7 +8,7 @@ import (
 )
 
 func TestProcessCommand_exeLibEnv_prependsExeDir(t *testing.T) {
-	got := exeLibEnv([]string{"PATH=/usr/bin"}, "/opt/bundles/llama-b1/llama-server")
+	got := ExeLibEnv([]string{"PATH=/usr/bin"}, "/opt/bundles/llama-b1/llama-server")
 	if len(got) != 2 {
 		t.Fatalf("expected 2 entries, got %d: %v", len(got), got)
 	}
@@ -22,7 +22,7 @@ func TestProcessCommand_exeLibEnv_prependsExeDir(t *testing.T) {
 }
 
 func TestProcessCommand_exeLibEnv_preservesExistingValue(t *testing.T) {
-	got := exeLibEnv(
+	got := ExeLibEnv(
 		[]string{"LD_LIBRARY_PATH=/existing/dir", "A=1"},
 		"/opt/bundles/llama-b1/llama-server",
 	)
@@ -43,7 +43,7 @@ func TestProcessCommand_exeLibEnv_skipsDefaultLibDirs(t *testing.T) {
 		"/lib64/llama-server",
 		"/usr/local/lib/llama-server",
 	} {
-		if got := exeLibEnv(env, exe); len(got) != len(env) {
+		if got := ExeLibEnv(env, exe); len(got) != len(env) {
 			t.Fatalf("%s: env changed: %v", exe, got)
 		}
 	}
@@ -52,7 +52,7 @@ func TestProcessCommand_exeLibEnv_skipsDefaultLibDirs(t *testing.T) {
 func TestProcessCommand_exeLibEnv_skipsBareAndRelativeNames(t *testing.T) {
 	env := []string{"PATH=/usr/bin"}
 	for _, exe := range []string{"llama-server", "./llama-server", ""} {
-		if got := exeLibEnv(env, exe); len(got) != len(env) {
+		if got := ExeLibEnv(env, exe); len(got) != len(env) {
 			t.Fatalf("%q: env changed: %v", exe, got)
 		}
 	}
