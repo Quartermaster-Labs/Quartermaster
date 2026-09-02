@@ -105,6 +105,7 @@ func main() {
 	flagPlaygroundPort := flag.String("playground-port", "", "serve the standalone playground app (per-user login + chat history) on this extra address, e.g. :8081")
 	flagNoUpdateCheck := flag.Bool("no-update-check", false, "disable checking GitHub for new releases (Windows release builds only)")
 	flagTray := flag.Bool("tray", false, "start minimised to the system tray: no window until one is asked for, via the tray icon or a second launch (Windows only; no-op elsewhere)")
+	flagQuit := flag.Bool("quit", false, "ask a Quartermaster already running on this port to shut down, wait for it, and exit (what the installer and uninstaller run before touching the files)")
 	flagApp := flag.Bool("app", false, "open the dashboard in a native desktop window instead of a browser tab (implies -tray; Windows only, falls back to the browser elsewhere or when WebView2 is missing)")
 	flagAdminAllow := flag.String("admin-allow", "", "extra IPs/CIDRs (comma separated) allowed to reach the dashboard/admin endpoints when listening beyond loopback, e.g. 100.64.0.0/10 for a tailnet")
 	flagAdminOpen := flag.Bool("admin-open", false, "serve the unauthenticated dashboard/admin endpoints to every remote host (legacy behaviour; the inference API is unaffected)")
@@ -168,6 +169,14 @@ func main() {
 		} else {
 			listenAddr = ":8080"
 		}
+	}
+
+	// Before the single-instance check and before anything expensive: -quit is
+	// not a way to start the server, it is a way to stop one. It has to run
+	// after the settings above, though, and only after them -- the stored
+	// listen address is how it finds the instance it is being asked to stop.
+	if *flagQuit {
+		os.Exit(quitRunningInstance(listenAddr, useTLS))
 	}
 
 	// Single instance, before anything expensive: a second -app launch hands

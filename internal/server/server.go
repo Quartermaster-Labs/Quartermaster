@@ -828,6 +828,8 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/version", apiChain.ThenFunc(s.handleAPIVersion))
 	// Loopback-only by its own check, not by the chain: see handleAPIAppShow.
 	mux.Handle("GET "+appWindowShowPath, apiChain.ThenFunc(s.handleAPIAppShow))
+	// Same deal: loopback + a header the browser cannot forge cross-origin.
+	mux.Handle("POST "+appQuitPath, apiChain.ThenFunc(s.handleAPIAppQuit))
 	mux.Handle("POST /api/update", adminChain.ThenFunc(s.handleAPIUpdate))
 	mux.Handle("GET /api/update/status", adminChain.ThenFunc(s.handleAPIUpdateStatus))
 	mux.Handle("POST /api/update/check", adminChain.ThenFunc(s.handleAPIUpdateCheck))

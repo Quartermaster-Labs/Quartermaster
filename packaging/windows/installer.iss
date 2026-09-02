@@ -145,8 +145,49 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; WorkingDir: "
 ; autostart box means.
 Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Parameters: "-tray"; WorkingDir: "{app}"; Tasks: autostart
 
+[UninstallRun]
+; Quartermaster is a tray app: its close button hides the window and leaves the
+; server running, so an uninstall walks into an exe it cannot delete and ends on
+; "some components could not be removed". Inno's Restart Manager pass does not
+; save it, because the only thing it can ask a program to do is close its window
+; -- the exact thing this app is built to survive.
+;
+; -quit asks the running instance to shut down the way the tray's Exit does and
+; waits for the port to go quiet (cmd/quartermaster/quit.go). Not a taskkill:
+; the llama-server children are what hold the files under bin\ open, and
+; orphaning them leaves the directory just as undeletable, with the VRAM still
+; allocated. [UninstallRun] runs before any file is removed, which is the only
+; ordering that helps.
+;
+; skipifdoesntexist covers the hand-deleted install; the exit code is ignored on
+; purpose, because a failure here should still let the uninstall proceed and
+; report what it could not remove, exactly as it does today.
+Filename: "{app}\{#MyAppExe}"; Parameters: "-quit"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "quitrunning"
+
 [Run]
 ; skipifsilent: under the setup program this never fires, because the wizard
 ; launches the app itself once it has finished installing backends -- starting
 ; it here would race a server against its own config being written.
 Filename: "{app}\{#MyAppExe}"; Description: "Launch {#MyAppName} now"; Flags: postinstall skipifsilent nowait
+
+[Code]
+// The install-side half of the [UninstallRun] entry above. An upgrade over a
+// running Quartermaster hits the same wall the uninstall does -- the exe is in
+// use, so [Files] cannot replace it -- and PrepareToInstall is the last hook
+// that runs before anything is copied.
+//
+// Errors are swallowed deliberately. A first install has no {app}\ exe to run,
+// a downgrade may be running a build with no -quit flag, and neither is a reason
+// to refuse an install: returning a non-empty string here aborts setup, and
+// files-in-use is a failure the user can act on while "setup refused to start"
+// is not.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Exe: String;
+  Code: Integer;
+begin
+  Result := '';
+  Exe := ExpandConstant('{app}\{#MyAppExe}');
+  if FileExists(Exe) then
+    Exec(Exe, '-quit', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code);
+end;

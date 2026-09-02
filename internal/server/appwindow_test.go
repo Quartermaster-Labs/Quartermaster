@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // The endpoint pops a window onto the operator's screen, so the guard is the
@@ -50,6 +51,70 @@ func TestServer_AppShow(t *testing.T) {
 			}
 			if shown != tc.wantShown {
 				t.Errorf("window shown = %v, want %v", shown, tc.wantShown)
+			}
+		})
+	}
+}
+
+// The uninstaller's shutdown endpoint. It stops the server, so every gate on it
+// is the feature: a page the user is reading in another tab must not be able to
+// reach it, and neither must anything off the machine.
+func TestServer_AppQuit(t *testing.T) {
+	cases := []struct {
+		name       string
+		method     string
+		remoteAddr string
+		header     bool
+		hooked     bool
+		wantCode   int
+		wantQuit   bool
+	}{
+		{"loopback post with the header", http.MethodPost, "127.0.0.1:51000", true, true, http.StatusOK, true},
+		{"loopback v6", http.MethodPost, "[::1]:51000", true, true, http.StatusOK, true},
+		// No header means it could have come from a cross-origin form post,
+		// which is the one shape a browser can produce without a preflight.
+		{"loopback post without the header", http.MethodPost, "127.0.0.1:51000", false, true, http.StatusNotFound, false},
+		// GET is what an <img> or a stray link would produce; the route is
+		// registered POST-only, so the mux answers before the handler does.
+		{"loopback get", http.MethodGet, "127.0.0.1:51000", true, true, http.StatusMethodNotAllowed, false},
+		{"remote host", http.MethodPost, "192.0.2.9:51000", true, true, http.StatusNotFound, false},
+		{"no shutdown hook", http.MethodPost, "127.0.0.1:51000", true, false, http.StatusNotFound, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
+			quit := make(chan struct{})
+			if tc.hooked {
+				s.SetShutdownHook(func() { close(quit) })
+			}
+
+			r := httptest.NewRequest(tc.method, appQuitPath, nil)
+			r.RemoteAddr = tc.remoteAddr
+			// Trusted by the access log, never by this handler.
+			r.Header.Set("X-Forwarded-For", "127.0.0.1")
+			if tc.header {
+				r.Header.Set("X-Quartermaster-Quit", "1")
+			}
+
+			w := httptest.NewRecorder()
+			s.ServeHTTP(w, r)
+
+			if w.Code != tc.wantCode {
+				t.Errorf("status = %d, want %d (body %q)", w.Code, tc.wantCode, w.Body.String())
+			}
+			// The hook runs in a goroutine so the reply is written first, so
+			// this waits rather than reads a flag: a bare check would pass for
+			// the wrong reason on a slow scheduler.
+			select {
+			case <-quit:
+				if !tc.wantQuit {
+					t.Error("shutdown was triggered by a request that must not be able to")
+				}
+			case <-time.After(300 * time.Millisecond):
+				if tc.wantQuit {
+					t.Error("shutdown was not triggered")
+				}
 			}
 		})
 	}
