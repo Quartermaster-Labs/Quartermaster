@@ -132,7 +132,7 @@ def social_card():
             px[x, y] = tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
 
     d = ImageDraw.Draw(card)
-    title, tag = "Quartermaster", "Run any model on your own machine."
+    title, tag = "Quartermaster", "Run any model without tuning a single flag."
     # Lay the lockup out from the type's real ink extents rather than from the
     # nominal line heights: Inter's ascent leaves enough slack above the
     # lowercase that a nominal centring visibly rides high.
