@@ -726,8 +726,10 @@ func main() {
 		url := scheme + "://" + host
 
 		// The window is just another HTTP client of the server that is already
-		// running, so it is built here rather than at boot: by this point the
-		// listener is up and the page it loads will not race the first request.
+		// running, so it is built here rather than at boot. The listeners above
+		// are started in goroutines, so "already running" is not something this
+		// point in the code can promise: the launcher waits for the socket to
+		// accept before it navigates, and does not assume.
 		// A window that fails to appear is a warning, not a fatal -- the same
 		// dashboard is one browser tab away, and the server has models loaded.
 		//

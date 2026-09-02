@@ -107,7 +107,13 @@
     // Decide which app this port serves.
     (async () => {
       try {
-        const r = await fetch("/api/mode");
+        // Timed out rather than left open-ended: this fetch is the only thing
+        // standing between "loading" and a rendered page, and "loading" draws
+        // nothing but the title bar. A request that hangs -- a server still
+        // busy with its first-run scan, a listener that accepted and then
+        // stalled -- would otherwise leave a permanently blank window. The
+        // catch below already has the right answer for not knowing.
+        const r = await fetch("/api/mode", { signal: AbortSignal.timeout(8000) });
         const j = await r.json();
         playgroundPort.set(j.playgroundPort ?? "");
         mode = j.playground ? "playground" : "dashboard";

@@ -1,6 +1,17 @@
 package main
 
-import "sync"
+import (
+	"net"
+	"net/url"
+	"sync"
+	"time"
+)
+
+// serverWait bounds how long the first window waits for the listener to start
+// accepting. Generous, because the cost of being wrong in each direction is not
+// symmetric: waiting a moment longer than necessary is invisible, and navigating
+// too early is a window that shows an error page (or nothing) and never retries.
+const serverWait = 10 * time.Second
 
 // appLauncher owns the native window LAZILY: nothing is built until someone
 // actually asks for it.
@@ -45,6 +56,13 @@ func (l *appLauncher) open() {
 	case l.win != nil:
 		l.win.Show()
 	default:
+		// The listener is started as a goroutine a few lines before this is
+		// first called, so "the server is up" was an assumption, not a fact. It
+		// is almost always true within a microsecond, and the almost is the
+		// whole bug: a navigation that loses that race gets ERR_CONNECTION_
+		// REFUSED, and WebView2 has no reload button and no retry, so the window
+		// stays on that page until the process is restarted.
+		waitForServer(l.url)
 		win := startAppWindow(l.url)
 		if err := win.Ready(); err != nil {
 			l.broken = true
@@ -54,6 +72,37 @@ func (l *appLauncher) open() {
 		}
 		l.win = win
 		win.Show()
+	}
+}
+
+// waitForServer blocks until the loopback listener accepts a connection, or
+// serverWait passes.
+//
+// A successful dial is proof enough: net/http is serving the moment its
+// listener is bound, so there is no window where the socket accepts and the
+// handler is not there yet. A timeout falls through and navigates anyway --
+// whatever is wrong at that point, an error page the user can see beats a
+// window that never opens.
+func waitForServer(rawURL string) {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return
+	}
+	deadline := time.Now().Add(serverWait)
+	for {
+		// Dialing the host as written, not a resolved address: "localhost" can
+		// resolve to ::1 first while the server holds 127.0.0.1, and the
+		// dialer's own fallback across the resolved addresses is what makes
+		// this probe agree with what the webview will do a moment later.
+		c, err := net.DialTimeout("tcp", u.Host, time.Second)
+		if err == nil {
+			c.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
 }
 

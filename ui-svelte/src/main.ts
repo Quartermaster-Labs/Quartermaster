@@ -6,7 +6,7 @@ import "katex/dist/katex.min.css";
 import "highlight.js/styles/github-dark.css";
 import App from "./App.svelte";
 import { mount } from "svelte";
-import { isNative, installExternalLinkHandler } from "./lib/native";
+import { isNative, installExternalLinkHandler, signalAppReady } from "./lib/native";
 import { initUIScale } from "./stores/uiScale";
 
 // Marks the document as running inside the app window, which index.css keys the
@@ -30,5 +30,11 @@ installExternalLinkHandler();
 const app = mount(App, {
   target: document.getElementById("app")!,
 });
+
+// After mount, so it means what the native window reads it as: the bundle
+// parsed, ran, and produced a component tree. Anything that throws above this
+// line leaves the window blank and the signal unsent, which is exactly the case
+// the window's watchdog exists to recover from.
+signalAppReady();
 
 export default app;

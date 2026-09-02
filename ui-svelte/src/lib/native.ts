@@ -24,6 +24,7 @@ interface NativeWindow {
   qmPickFolder?: (title: string, start: string) => Promise<string>;
   qmOpenExternal?: (url: string) => Promise<void>;
   qmCaptionColor?: (r: number, g: number, b: number) => Promise<void>;
+  qmAppReady?: () => Promise<void>;
 }
 
 const w = (typeof window === "undefined" ? {} : window) as NativeWindow;
@@ -246,4 +247,25 @@ export function installExternalLinkHandler(): () => void {
     document.removeEventListener("click", onClick, true);
     window.open = realOpen;
   };
+}
+
+/**
+ * Tells the app window that the bundle got as far as mounting.
+ *
+ * The window watches for this and reloads itself if it never arrives, because
+ * WebView2 offers no reload button and no retry: a first navigation that fails
+ * -- or a page that loads and then throws before it renders -- is a white
+ * window until the process is restarted. That is a real bug users hit on the
+ * first launch after an install, and this one call is the whole detector.
+ *
+ * Sent from every document that has the binding, frames included: a frame
+ * reporting that it mounted is still true, and the window only ever asks
+ * whether SOMETHING came up. Fire and forget, like every other call here.
+ */
+export function signalAppReady(): void {
+  try {
+    void w.qmAppReady?.();
+  } catch {
+    /* no window underneath, or the binding is gone -- nothing to do */
+  }
 }

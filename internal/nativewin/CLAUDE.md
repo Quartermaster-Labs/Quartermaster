@@ -33,6 +33,9 @@ constraints exclude all Go files", breaking the Docker build for a package it ne
   Must be called **on the thread that created `w` and pumps its loop**. It registers the bindings
   itself rather than leaving them to callers because they have to exist before `Navigate` — a caller
   that forgets gets a page whose title bar silently does nothing.
+  Not the only binding the page sees: `cmd/quartermaster/appwindow_windows.go` adds `qmAppReady`
+  (the page's "I mounted" signal, watched by `watchFirstPaint`) between `Attach` and `Navigate`, on
+  the same must-exist-before-`Navigate` rule.
 - **`Options.HideOnClose`** — turns the close button into "hide", leaving the webview warm (~150 MB)
   so a tray reopen is instant instead of a cold WebView2 start. The caller then **owns** getting it
   back on screen; a hidden window with no tray icon is a process the user cannot reach. The wizard

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"time"
 
 	webview2 "github.com/jchv/go-webview2"
 
@@ -21,6 +22,19 @@ import (
 const (
 	appWinWidth  = 1280
 	appWinHeight = 820
+)
+
+// How long the window waits for the page to say it mounted before reloading it,
+// and how many times it will do that.
+//
+// Generous on purpose. The load being watched is the worst one the app ever
+// does: a cold WebView2 profile, an empty HTTP cache and the whole dashboard
+// bundle, on a laptop that has just finished running an installer. Reloading a
+// page that was two seconds from painting is a bigger regression than the bug
+// this catches, so the grace is set well past a slow-but-working start.
+const (
+	firstPaintGrace   = 12 * time.Second
+	firstPaintRetries = 2
 )
 
 // appWindow is the native dashboard window: a WebView2 pointed at our own
@@ -118,11 +132,34 @@ func (aw *appWindow) run(url string) {
 		nativewin.ApplyPlacement(aw.hwnd, p)
 	}
 
+	// The page's own "I am up" signal, bound BEFORE the navigation so it is
+	// installed in the document that navigation creates. It carries no data and
+	// means one thing: the bundle executed and Svelte mounted, so whatever the
+	// window is showing, it is not blank.
+	painted := make(chan struct{})
+	var paintedOnce sync.Once
+	_ = w.Bind("qmAppReady", func() { paintedOnce.Do(func() { close(painted) }) })
+
 	// HintMin, not HintFixed: the dashboard is a responsive layout and a user
 	// who cannot resize is stuck with whatever the default clips.
 	w.SetSize(nativewin.Px(appWinWidth), nativewin.Px(appWinHeight), webview2.HintMin)
 	w.Navigate(url)
 	markReady()
+
+	// WebView2 gives a failed navigation no reload button and no retry, so a
+	// first load that goes wrong -- refused, hung, or a bundle that threw before
+	// it mounted -- is a white window for the life of the process. That is
+	// exactly what the first launch straight out of the installer showed, and
+	// why closing it from the tray and starting again "fixed" it: the second
+	// process navigated a second time. This is that second navigation, without
+	// the restart.
+	//
+	// close(stopWatch) is registered AFTER the deferred Destroy, so it runs
+	// FIRST: dispatching onto a webview that has already been destroyed is a
+	// use-after-free, and the watchdog is the one thing here that outlives Run.
+	stopWatch := make(chan struct{})
+	go watchFirstPaint(w, url, painted, stopWatch)
+	defer close(stopWatch)
 
 	w.Run() // blocks, pumping THIS thread's message loop, until Terminate
 
@@ -131,6 +168,32 @@ func (aw *appWindow) run(url string) {
 	// still choosing is pure waste. Run has returned, so this is the last state
 	// the window was in, read on the thread that owns it.
 	savePlacement(aw.hwnd)
+}
+
+// watchFirstPaint reloads the page if it never reported that it mounted.
+//
+// Deliberately blind to WHY. NavigationCompleted is not exposed by
+// go-webview2, and the failures worth surviving here do not all show up as a
+// failed navigation anyway -- a document that loads and then throws is a
+// perfectly successful navigation and an equally white window. What the page
+// itself can say is that it got as far as mounting, so that is the signal, and
+// its absence is the fault condition regardless of cause.
+func watchFirstPaint(w webview2.WebView, url string, painted, stop <-chan struct{}) {
+	for i := 0; i < firstPaintRetries; i++ {
+		select {
+		case <-painted:
+			return
+		case <-stop:
+			return
+		case <-time.After(firstPaintGrace):
+		}
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		w.Dispatch(func() { w.Navigate(url) })
+	}
 }
 
 // placementFile is small enough that a torn write only costs the window its
