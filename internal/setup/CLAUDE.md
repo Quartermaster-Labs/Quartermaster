@@ -126,7 +126,14 @@ everywhere and the 20 MB installer blob stays in the binary that ships it.
   against its own directory and a menu launch inherits the desktop's cwd; and `Exec=` is quoted per
   the desktop-entry spec, not the shell's, so an install path with a space still launches. Failures
   are logged, never fatal: the server is already on disk, and a read-only `~/.local` is not a reason
-  to fail an install. macOS gets nothing yet (a `.app` bundle plus a LaunchAgent is a different
+  to fail an install.
+- **A Linux binary cannot carry its own icon.** There is no ELF equivalent of the Windows `.syso`
+  resource, so a file manager draws the generic executable icon for the installed server and for the
+  downloaded wizard. `setFileIcon` sets GVFS `metadata::custom-icon` on both, which Nautilus and the
+  other GLib file managers honour; Dolphin and Thunar ignore it, and the attribute lives in the
+  user's metadata database rather than in the file, so it does not travel with a copy. The desktop
+  entry's `Icon=` is the mechanism that actually matters, and it takes a theme NAME, which is why
+  `writeIcon` returns both a name and a path. macOS gets nothing yet (a `.app` bundle plus a LaunchAgent is a different
   shape of work) and the UI hides the block there.
 - **A dev build embeds placeholders**, zero-byte files committed at `inno/setup.exe` and
   `payload/server`, so `place` size-checks both payloads (`minInstallerBytes`, `minServerBytes`)

@@ -61,6 +61,15 @@ func TestSetup_AutostartEntryStartsQuiet(t *testing.T) {
 	}
 }
 
+func TestSetup_IconURIEscapes(t *testing.T) {
+	// An ELF carries no icon, so this URI is the only thing standing between the
+	// installed binary and a generic gear in the file manager. It is parsed as a
+	// URI, and plenty of real home directories have a space in them.
+	if got, want := iconURI("/home/a b/.local/share/icons/q.png"), "file:///home/a%20b/.local/share/icons/q.png"; got != want {
+		t.Errorf("iconURI = %q, want %q", got, want)
+	}
+}
+
 func TestSetup_ApplyShortcutsWritesAndRemoves(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -90,6 +99,11 @@ func TestSetup_ApplyShortcutsWritesAndRemoves(t *testing.T) {
 	}
 	if exists(desk) {
 		t.Error("desktop shortcut written without being asked for")
+	}
+	// Written unconditionally: every entry references it by theme name, and the
+	// per-file icon needs a URI for it.
+	if !exists(filepath.Join(home, "data", "icons", "hicolor", "512x512", "apps", "quartermaster.png")) {
+		t.Error("icon not written into the hicolor theme")
 	}
 
 	// A re-run is the current state of the install, not an add-only list.

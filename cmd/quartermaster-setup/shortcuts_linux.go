@@ -15,6 +15,7 @@ package main
 import (
 	_ "embed"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,21 +52,31 @@ const desktopFile = "quartermaster.desktop"
 // the Windows [InstallDelete] section gives, and the reason the UI can describe
 // these as the current state of the install rather than an add-only list.
 func applyShortcuts(c setup.Choices, log func(string)) {
-	if !c.StartMenu && !c.DesktopIcon && !c.Autostart {
-		// Nothing wanted and nothing to clean up on a first install; a re-run
-		// that unticks everything still lands in the loop below.
-		if !anyEntryExists() {
-			return
-		}
-	}
-
 	exe, err := installedBinary(c.Dir)
 	if err != nil {
 		log(fmt.Sprintf("skipping shortcuts: %v", err))
 		return
 	}
 
-	icon := writeIcon(log)
+	// Unconditional, because it is not one of the three choices: the icon is
+	// what every entry below points at by name, and it is also the file the
+	// per-file icon needs a URI for.
+	icon, iconPath := writeIcon(log)
+
+	// An ELF binary cannot carry an icon the way a Windows PE carries one in its
+	// resources, so a file manager draws the generic "executable" gear for both
+	// the installed server and this wizard. GVFS metadata is the one lever that
+	// changes that, and it costs two exec calls.
+	setFileIcon(exe, iconPath)
+	if self, err := os.Executable(); err == nil {
+		setFileIcon(self, iconPath)
+	}
+
+	if !c.StartMenu && !c.DesktopIcon && !c.Autostart && !anyEntryExists() {
+		// Nothing wanted and nothing to clean up. A re-run that unticks
+		// everything still falls through to the loop, which removes.
+		return
+	}
 
 	// The menu and desktop entries open the dashboard; the autostart one must
 	// not. -tray off Windows means "run, show nothing" (cmd/quartermaster/
@@ -187,25 +198,58 @@ func trust(path string) {
 	_ = exec.Command(gio, "set", path, "metadata::trusted", "true").Run()
 }
 
-// writeIcon puts the mark where the icon theme will find it and returns the
-// name to reference, or "" if it could not be written.
+// writeIcon puts the mark where the icon theme will find it, returning the
+// theme NAME for Icon= and the absolute path for anything that needs a URI.
+// Both are "" if it could not be written.
 //
 // hicolor/512x512/apps is the fallback theme every other theme inherits from,
 // so an icon there is found whatever the user's theme is. The Icon= key then
-// carries a NAME, not a path: that is what lets the theme scale it, and what
+// carries a name, not a path: that is what lets the theme scale it, and what
 // makes the entry survive the icon being replaced by a different size later.
-func writeIcon(log func(string)) string {
+// The per-file icon below cannot use a theme name, hence the second return.
+func writeIcon(log func(string)) (name, path string) {
 	dir := filepath.Join(dataHome(), "icons", "hicolor", "512x512", "apps")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		log(fmt.Sprintf("could not write the icon: %v", err))
-		return ""
+		return "", ""
 	}
-	path := filepath.Join(dir, "quartermaster.png")
+	path = filepath.Join(dir, "quartermaster.png")
 	if err := os.WriteFile(path, appIcon, 0o644); err != nil {
 		log(fmt.Sprintf("could not write the icon: %v", err))
-		return ""
+		return "", ""
 	}
-	return "quartermaster"
+	return "quartermaster", path
+}
+
+// setFileIcon asks the file manager to draw one specific file with the mark.
+//
+// This is NOT the same mechanism as Icon= in a desktop entry, and it is the
+// only one available for a bare executable: an ELF has no resource section for
+// an icon, so unlike a Windows .exe there is nothing to compile in. What exists
+// instead is GVFS's per-file metadata, which Nautilus (and the other GLib file
+// managers) reads as metadata::custom-icon.
+//
+// Deliberately best effort and never reported. gio is absent on KDE and on a
+// minimal install; Dolphin and Thunar do not read this attribute at all; and
+// the attribute is stored in the user's GVFS metadata database, so it does not
+// survive being copied to another machine. It is a nicety on the desktops that
+// support it, and the desktop entries above are what actually matter.
+func setFileIcon(path, iconPath string) {
+	if iconPath == "" {
+		return
+	}
+	gio, err := exec.LookPath("gio")
+	if err != nil {
+		return
+	}
+	_ = exec.Command(gio, "set", "-t", "string", path, "metadata::custom-icon", iconURI(iconPath)).Run()
+}
+
+// iconURI renders a path as the file:// URI metadata::custom-icon expects. The
+// value is parsed as a URI, so a home directory with a space or a non-ASCII
+// character has to be escaped or it resolves to nothing.
+func iconURI(path string) string {
+	return (&url.URL{Scheme: "file", Path: path}).String()
 }
 
 // refreshMenu nudges the desktop's caches.
