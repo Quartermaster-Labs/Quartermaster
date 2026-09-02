@@ -85,6 +85,23 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "  $Tag is new; it will be created on $($head.Substring(0, 7))" -ForegroundColor DarkGray
 }
 
+# origin's copy of the tag is the one the RELEASE names, and it is checked here
+# rather than at the push in step 6, because a tag push that origin rejects is
+# not a reason to stop: the assets still go up, and the release ends up naming a
+# commit that is not the one its binaries were built from. Refusing before the
+# build also saves the twenty minutes it would otherwise waste.
+$remoteRef = (git ls-remote --tags origin "refs/tags/$Tag" | Select-Object -First 1)
+if ($LASTEXITCODE -ne 0) { Die "git ls-remote failed; cannot tell where origin has $Tag" }
+if ($remoteRef) {
+    $remoteAt = ($remoteRef -split '\s+')[0]
+    if ($remoteAt -ne $head) {
+        Die ("origin already has $Tag at $remoteAt, not HEAD ($head)." + [Environment]::NewLine +
+             "Move it (nothing consumes a tag on an unpublished release):" + [Environment]::NewLine +
+             "  git push origin :refs/tags/$Tag" + [Environment]::NewLine +
+             "  git push origin $Tag")
+    }
+}
+
 $iscc = $null
 if (-not $SkipInstaller) {
     $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
@@ -300,6 +317,11 @@ on its own. ``SHA256SUMS`` covers every file here.
 "@
 
 git push origin $Tag
+# Unchecked, this is how a release gets assets from one commit and a tag from
+# another: git reports the rejection on stderr and returns non-zero, and the
+# upload below happily continued. The pre-flight above should have caught the
+# common cause already; anything reaching here is a surprise worth stopping for.
+if ($LASTEXITCODE -ne 0) { Die "git push origin $Tag failed; not uploading assets under a tag origin does not have" }
 $exists = $false
 try { gh release view $Tag -R $Repo *> $null; $exists = ($LASTEXITCODE -eq 0) } catch { $exists = $false }
 if (-not $exists) {
