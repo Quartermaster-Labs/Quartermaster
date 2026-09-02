@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,6 +16,32 @@ import (
 	"github.com/quartermaster-labs/quartermaster/internal/update"
 )
 
+// serverBinary is the quartermaster server for THIS platform, embedded at build
+// time -- the unix counterpart of the Inno installer the Windows wizard carries
+// (place_windows.go). One wizard is built per GOOS/GOARCH, and
+// packaging/windows/build-release.ps1 copies the matching server binary over the
+// placeholder before each one, so the payload always belongs to the wizard
+// around it.
+//
+// It exists because the release publishes setup programs only. Without a
+// payload, a wizard downloaded on its own had nothing to install and fell back
+// to fetching a release asset that is no longer there. Embedding is also what
+// Windows already does, so "the setup program contains the application" is now
+// true on every platform rather than on one.
+//
+// The committed file is a zero-byte placeholder: a dev build embeds that and
+// falls through to the copy and download branches, which is what keeps
+// `go build ./cmd/quartermaster-setup` a runnable end-to-end test of the wizard.
+//
+//go:embed payload/server
+var serverBinary []byte
+
+// minServerBytes tells a real payload from the placeholder. The server binary
+// embeds the whole web UI and runs to tens of megabytes; nothing legitimate is
+// anywhere near this small. Same guard, same reason, as minInstallerBytes on
+// Windows.
+const minServerBytes = 4 << 20
+
 // place installs by copying what came in the box, or by fetching the release
 // binary when nothing did.
 //
@@ -24,16 +51,21 @@ import (
 // replaces the binary in place, so a package manager would only add a second
 // update path fighting the first.
 //
-// The download branch is what makes the setup program worth publishing on its
-// own for unix. Downloaded alone into ~/Downloads it has nothing beside it to
-// copy, so it fetches the same verified asset the updater would, and the user
-// gets the models-folder and backend steps from a single file rather than
-// having to know that Settings can do the same job after the fact. Copying
-// wins when both are present: it is faster, it works offline, and a tarball's
-// binary is the one the user chose to run.
+// Three sources, in this order: a binary beside this program, the embedded
+// payload, then the network.
+//
+// A sibling wins over the payload because a tarball's binary is the one the
+// user chose to run, and because it keeps a dev tree exercising the same code
+// path it always did. The download stays last as a fallback rather than being
+// deleted: a wizard built without a payload (a dev build, or -SkipInstaller)
+// still installs when the release happens to carry binaries, and the failure it
+// reports names something a user can act on.
 func place(c setup.Choices, log func(string)) error {
 	if hasSiblingBinary() {
 		return placeCopy(c.Dir, log)
+	}
+	if len(serverBinary) >= minServerBytes {
+		return placeEmbedded(c.Dir, log)
 	}
 	log("no binary alongside this installer; fetching the latest release")
 	// Not the request's context: Start runs on context.Background for the same
@@ -45,6 +77,36 @@ func place(c setup.Choices, log func(string)) error {
 		}
 	}, log)
 	return err
+}
+
+// placeEmbedded writes the payload into the install directory under the name
+// the rest of the program expects: installedBinary globs quartermaster-<GOOS>-*
+// and the in-app updater swaps by path, so the file has to carry GOOS and
+// GOARCH rather than being called "quartermaster".
+//
+// Written to a temporary name in the DESTINATION directory and renamed, not
+// streamed into place: rename is atomic within a filesystem, so an install
+// interrupted half way leaves no half-written binary for launch() to find and
+// run. Same reasoning as copyFile, and the same .part suffix.
+func placeEmbedded(dir string, log func(string)) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("creating %s: %w", dir, err)
+	}
+	dst := filepath.Join(dir, fmt.Sprintf("quartermaster-%s-%s", runtime.GOOS, runtime.GOARCH))
+	tmp := dst + ".part"
+
+	// 0o755 at creation, not a later chmod: the file is executable from the
+	// moment it exists, so there is no window in which the rename could publish
+	// a binary nobody can run.
+	if err := os.WriteFile(tmp, serverBinary, 0o755); err != nil {
+		return fmt.Errorf("writing %s: %w", dst, err)
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("writing %s: %w", dst, err)
+	}
+	log(fmt.Sprintf("installed %s (%d MB)", filepath.Base(dst), len(serverBinary)>>20))
+	return nil
 }
 
 // hasSiblingBinary reports whether a server binary sits next to this program,

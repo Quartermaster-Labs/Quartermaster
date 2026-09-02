@@ -288,8 +288,9 @@ RELEASE_REPO ?= Quartermaster-Labs/Quartermaster
 # default is the setup programs (one per platform) + SHA256SUMS, and nothing
 # else: a release page is a download page. The four bare server binaries are
 # still BUILT -- the Windows one is the installer's payload -- but publishing
-# them is opt-in via -PublishBinaries, which the updater and the unix wizards
-# need. See the .PARAMETER block in build-release.ps1 for what that costs.
+# them is opt-in via -PublishBinaries, which only the in-app updater needs; every
+# setup program carries its own payload. See the .PARAMETER block in
+# build-release.ps1 for what leaving them off costs.
 #   make release VERSION=v0.5.1          -> DRAFT release of that tag
 #   make release-public VERSION=v0.5.1   -> same, but PUBLIC
 #   make release-binaries VERSION=v0.5.1 -> binaries + sums only, no installer

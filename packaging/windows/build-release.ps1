@@ -47,15 +47,14 @@
   a download page, and the server binary sitting next to the setup program is
   the file a visitor is most likely to take by mistake.
 
-  Leaving them off has two consequences, both silent, and neither is a bug in
-  this script:
-    * the in-app updater (internal/update) looks for its platform's binary by
-      exact name and treats a miss as "no update available", so installs stop
-      updating with nothing logged;
-    * a unix setup program run on its own has no sibling binary to copy and
-      downloads the release asset instead (cmd/quartermaster-setup/place_other.go),
-      so Linux and macOS first installs fail.
-  Pass this switch for any release those two are expected to work from.
+  Leaving them off costs one thing, and it is silent: the in-app updater
+  (internal/update) looks for its platform's binary by exact name and treats a
+  miss as "no update available", so existing installs stop updating with nothing
+  logged. Pass this switch for any release the updater is expected to work from.
+
+  First installs are unaffected on every platform: each setup program carries
+  its own payload (the Inno package on Windows, the server binary itself on
+  linux and darwin), so none of them needs an asset off the release page.
 #>
 [CmdletBinding()]
 param(
@@ -256,11 +255,17 @@ if (-not $SkipInstaller) {
     $setups += $setup
 }
 
-# 5b. The unix wizards. Same program, no embedded payload: place() there copies
-# the binary sitting beside it, and downloads the verified release asset when a
-# lone setup file has nothing to copy. That is why these ship even though there
-# is no Inno package behind them, and why they are built here rather than in the
-# $targets loop, which produces server binaries only.
+# 5b. The unix wizards, each carrying the server binary for its own platform.
+#
+# The Windows wizard embeds an Inno package; these embed the binary directly,
+# because a tarball unpacked into a directory is the unix install convention and
+# there is no package worth embedding instead. The payload matters more than it
+# used to: the release publishes setup programs only, so a wizard with nothing
+# inside it would have no binary to install and no asset to download either.
+#
+# The copy-over-the-placeholder dance is the same one the Inno embed uses above,
+# and for the same reason -- //go:embed reads a path, not a variable -- except
+# that it runs once per target, since each wizard has to carry its own arch.
 #
 # Names are unversioned, unlike the Windows setup: the site links at
 # /releases/latest, and a stable name is one a script or a README can hard-code.
@@ -270,17 +275,28 @@ if (-not $SkipInstaller) {
         @{ os = 'linux'; arch = 'arm64'; name = 'quartermaster-setup-linux-arm64' }
         @{ os = 'darwin'; arch = 'arm64'; name = 'quartermaster-setup-darwin-arm64' }
     )
-    foreach ($t in $nixSetups) {
-        $out = Join-Path $staging $t.name
-        Write-Host "  building $($t.name)" -ForegroundColor DarkGray
-        $env:GOOS = $t.os
-        $env:GOARCH = $t.arch
-        go build -ldflags $ldBase -o $out .\cmd\quartermaster-setup
-        if ($LASTEXITCODE -ne 0) { Die "go build failed for the $($t.os)/$($t.arch) setup program" }
-        $uploads += $out
-        $setups += $out
+    $payload = Join-Path $root 'cmd\quartermaster-setup\payload\server'
+    try {
+        foreach ($t in $nixSetups) {
+            $out = Join-Path $staging $t.name
+            $srv = Join-Path $staging "quartermaster-$($t.os)-$($t.arch)"
+            if (-not (Test-Path $srv)) { Die "no server binary at $srv to embed in $($t.name)" }
+            Copy-Item $srv $payload -Force
+            Write-Host "  building $($t.name)" -ForegroundColor DarkGray
+            $env:GOOS = $t.os
+            $env:GOARCH = $t.arch
+            go build -ldflags $ldBase -o $out .\cmd\quartermaster-setup
+            if ($LASTEXITCODE -ne 0) { Die "go build failed for the $($t.os)/$($t.arch) setup program" }
+            $uploads += $out
+            $setups += $out
+        }
     }
-    Remove-Item Env:GOOS, Env:GOARCH -ErrorAction SilentlyContinue
+    finally {
+        Remove-Item Env:GOOS, Env:GOARCH -ErrorAction SilentlyContinue
+        # Restore the committed placeholder, so a release build never leaves a
+        # multi-megabyte blob staged in git. Same guarantee as the Inno embed.
+        New-Item -ItemType File -Path $payload -Force | Out-Null
+    }
 }
 
 # 5c. SHA256SUMS, in sha256sum's own format ("<hex>  <name>"), over exactly the

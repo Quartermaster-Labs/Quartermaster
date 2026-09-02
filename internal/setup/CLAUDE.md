@@ -37,7 +37,7 @@ everywhere and the 20 MB installer blob stays in the binary that ships it.
 | `cmd/quartermaster-setup/main.go` | `runtime.LockOSThread`, flags (`-dir`, `-browser`, `-v`), `Listen` → `runWindow` → browser fallback, `defaultInstallDir`, `fatal`. |
 | `cmd/quartermaster-setup/window_windows.go` | `runWindow` — creates the webview, hands it to `nativewin.Attach`, navigates, and closes it when the wizard signals done. The window mechanics themselves live in `internal/nativewin`, shared with the app window. |
 | `cmd/quartermaster-setup/place_windows.go` | `//go:embed inno/setup.exe`, `placeInno` (silent `/VERYSILENT /DIR= /TASKS= /LOG=`), `launch` — starts the installed exe with no arguments (it supplies its own; see `bundle.go`). |
-| `cmd/quartermaster-setup/place_other.go`, `place_common.go` | Unix install: `placeCopy` when a binary sits beside the wizard, `update.FetchBinary` when none does. `placeCopy` is also the dev-build stand-in on Windows when no installer is embedded. |
+| `cmd/quartermaster-setup/place_other.go`, `place_common.go` | Unix install: `placeCopy` when a binary sits beside the wizard, else `placeEmbedded` (the `payload/server` embed), else `update.FetchBinary`. `placeCopy` is also the dev-build stand-in on Windows when no installer is embedded. |
 | `cmd/quartermaster-setup/window_other.go` | `runWindow` that always fails, so main falls back to the browser. Deliberate, not a gap. |
 
 ## Important types & functions
@@ -104,16 +104,23 @@ everywhere and the 20 MB installer blob stays in the binary that ships it.
   previous install alone when their task is deselected, so `[InstallDelete]` deletes `{group}` and
   the desktop `.lnk` under `Tasks: not …`, which is what makes a second wizard run over an existing
   install able to take a shortcut away rather than only add one.
-- **The unix wizard is a bootstrapper, not a copier.** Windows carries its payload (the embedded
-  Inno package); unix has nothing to embed, so `place` copies the binary beside it when there is one
-  (an unpacked tarball, a dev tree) and otherwise downloads the release asset through
-  `update.FetchBinary`, verified against the release digest. `hasSiblingBinary` is what picks, and it
-  matches `binaryGlobs` only: a stray `LICENSE` in a Downloads folder must not be read as a payload
-  and send the install down a copy path with no binary in it. The setup programs ship as
+- **Every wizard carries its own payload.** Windows embeds the Inno package; unix embeds the server
+  binary itself (`payload/server`, `//go:embed` in `place_other.go`), because the release publishes
+  setup programs only and a wizard downloaded on its own would otherwise have nothing to install.
+  `place` picks in three steps: a binary beside it (an unpacked tarball, a dev tree) via
+  `placeCopy`, then `placeEmbedded`, then `update.FetchBinary` against the release digest. A sibling
+  outranks the payload because a tarball's binary is the one the user chose to run;
+  `hasSiblingBinary` matches `binaryGlobs` only, so a stray `LICENSE` in a Downloads folder cannot
+  be read as a payload and send the install down a copy path with no binary in it. `placeEmbedded`
+  writes `quartermaster-<GOOS>-<GOARCH>` (the name `installedBinary` globs for) via `.part` +
+  rename, so an interrupted install leaves nothing runnable behind. The setup programs ship as
   `quartermaster-setup-{linux-amd64,linux-arm64,darwin-arm64}`, built in `build-release.ps1` step 5b
   and hashed into `SHA256SUMS` with everything else.
-- **A dev build embeds a placeholder installer**, so `place` checks `len(innoSetup)` against
-  `minInstallerBytes` and falls back to `placeCopy` rather than executing a 0-byte exe.
+- **A dev build embeds placeholders**, zero-byte files committed at `inno/setup.exe` and
+  `payload/server`, so `place` size-checks both payloads (`minInstallerBytes`, `minServerBytes`)
+  rather than executing a 0-byte exe or installing an empty file. `build-release.ps1` copies the
+  real artifact over the placeholder, builds, and restores the zero-byte file in a `finally`, so a
+  release build never leaves a multi-megabyte blob staged in git.
 - **The UI is a second bundle, not a dashboard route.** It must render before anything is installed
   and must not carry chart.js/mermaid/katex to draw three steps. Build it with
   `npm run build:setup`; a binary built without it serves an explanatory string, not a blank window.
