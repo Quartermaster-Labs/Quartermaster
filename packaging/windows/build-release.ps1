@@ -275,16 +275,45 @@ if ($setups.Count -gt 0) {
 }
 
 # 6. Push the tag, create the release if missing, upload everything.
+#
+# The body says which of the eight assets to click. Every one of them has to be
+# on the release -- the bare binaries are what the in-app updater renames over
+# the running exe, and what a lone unix setup file downloads for itself
+# (cmd/quartermaster-setup/place_other.go) -- but only three are a download a
+# person makes, and a release page listing them all with no explanation invites
+# someone to grab the server binary and wonder why nothing installs.
+$notes = @"
+Download the setup program for your platform:
+
+- **Windows** -- ``quartermaster-setup-$Tag.exe``
+- **Linux** -- ``quartermaster-setup-linux-amd64`` (or ``-linux-arm64``)
+- **macOS, Apple silicon** -- ``quartermaster-setup-darwin-arm64``
+
+There is no signed macOS build yet, so clear the quarantine flag before the
+first launch:
+
+``xattr -d com.apple.quarantine ./quartermaster-setup-darwin-arm64``
+
+The bare ``quartermaster-*`` binaries are not a download. They are the payload
+the in-app updater fetches, and what the unix setup program pulls when it is run
+on its own. ``SHA256SUMS`` covers every file here.
+"@
+
 git push origin $Tag
 $exists = $false
 try { gh release view $Tag -R $Repo *> $null; $exists = ($LASTEXITCODE -eq 0) } catch { $exists = $false }
 if (-not $exists) {
     # Build the arg list rather than interpolating a flag variable: an empty
     # string is still passed as an argument, and `gh release create ""` fails.
-    $createArgs = @('release', 'create', $Tag, '-R', $Repo, '--title', $Tag, '--notes', "quartermaster $Tag")
+    $createArgs = @('release', 'create', $Tag, '-R', $Repo, '--title', $Tag, '--notes', $notes)
     if ($isDraft) { $createArgs += '--draft' }
     gh @createArgs
     if ($LASTEXITCODE -ne 0) { Die "gh release create failed" }
+} else {
+    # A re-run is usually a fixed build of the same tag, so the body is rewritten
+    # rather than left at whatever the first attempt wrote.
+    gh release edit $Tag -R $Repo --notes $notes
+    if ($LASTEXITCODE -ne 0) { Die "gh release edit (notes) failed" }
 }
 gh release upload $Tag @uploads -R $Repo --clobber
 if ($LASTEXITCODE -ne 0) { Die "gh release upload failed" }
