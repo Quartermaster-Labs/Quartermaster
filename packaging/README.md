@@ -1,11 +1,11 @@
 # Windows installer (local build)
 
-`make release` builds a per-user Windows installer
-(`quartermaster-setup-vX.Y.Z.exe`) via Inno Setup **locally** and uploads
-it to a GitHub Release (draft). `make release-public` publishes it. Needs go,
-npm, `gh` (authed), and Inno Setup 6 (`choco install innosetup -y`). Bare
-`make release` uses the latest `vX.Y.Z` tag; `make release VERSION=v0.5.1`
-creates that tag first. See `windows/installer.iss` + `windows/build-release.ps1`.
+`make release VERSION=vX.Y.Z` builds the setup program for every platform
+(`quartermaster-setup-<os>-<arch>-vX.Y.Z`, the Windows one wrapping an Inno
+installer) **locally** and uploads them to a GitHub Release (draft).
+`make release-public` publishes it. Needs go, npm, `gh` (authed), and Inno
+Setup 6 (`choco install innosetup -y`). VERSION is required and must match the
+tag; the script refuses a dirty tree or a tag that is not HEAD. See `windows/installer.iss` + `windows/build-release.ps1`.
 
 Build runs locally because the repo is private (CI Actions minutes are metered).
 

@@ -216,9 +216,9 @@ Settings on first run, or point at ones you already have.
 
 Download the one for your machine from the
 [releases page](https://github.com/Quartermaster-Labs/Quartermaster/releases) and run it:
-`quartermaster-setup-*.exe` on Windows, `quartermaster-setup-linux-amd64`,
-`quartermaster-setup-linux-arm64` or `quartermaster-setup-darwin-arm64` elsewhere (`chmod +x` it
-first).
+`quartermaster-setup-windows-amd64-vX.Y.Z.exe` on Windows,
+`quartermaster-setup-linux-amd64-vX.Y.Z`, `-linux-arm64-` or `-darwin-arm64-` elsewhere (`chmod +x`
+it first).
 
 It is a per-user install, so no admin rights, and no UAC prompt on Windows. The wizard:
 

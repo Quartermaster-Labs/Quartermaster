@@ -81,7 +81,7 @@ is verified to exactly the standard an update is.
 - **Asset names are a contract.** `assetName()` must match what the release actually publishes
   (`Makefile: dist`, `packaging/windows/build-release.ps1`). A name that drifts does not error —
   that platform just silently stops seeing updates. Matching is **exact**, so
-  `quartermaster-windows-amd64.exe` is never confused with `quartermaster-setup-vX.Y.Z.exe` sitting
+  `quartermaster-windows-amd64.exe` is never confused with `quartermaster-setup-windows-amd64-vX.Y.Z.exe` sitting
   in the same release. Note the Windows asset name is **not** the installed filename (which is
   `Quartermaster.exe`) — `exePath()` swaps by path, so the two are free to differ, and the asset
   name must stay frozen or pre-rename installs stop seeing updates.

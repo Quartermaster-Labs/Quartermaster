@@ -357,7 +357,7 @@ func (c *Checker) fetchSum(ctx context.Context, src, name string) string {
 // assetName is the release asset holding the binary for this platform, or ""
 // when we publish none for it. Matched exactly, so the Windows binary
 // (quartermaster-windows-amd64.exe) is never confused with the first-install
-// wizard (quartermaster-setup-vX.Y.Z.exe) sitting in the same release.
+// wizard (quartermaster-setup-windows-amd64-vX.Y.Z.exe) sitting in the same release.
 //
 // These are ASSET names, not installed filenames. On Windows the installed
 // binary is Quartermaster.exe: the two deliberately differ, because exePath()

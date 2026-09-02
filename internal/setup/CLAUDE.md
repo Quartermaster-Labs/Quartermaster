@@ -115,8 +115,10 @@ everywhere and the 20 MB installer blob stays in the binary that ships it.
   be read as a payload and send the install down a copy path with no binary in it. `placeEmbedded`
   writes `quartermaster-<GOOS>-<GOARCH>` (the name `installedBinary` globs for) via `.part` +
   rename, so an interrupted install leaves nothing runnable behind. The setup programs ship as
-  `quartermaster-setup-{linux-amd64,linux-arm64,darwin-arm64}`, built in `build-release.ps1` step 5b
-  and hashed into `SHA256SUMS` with everything else.
+  `quartermaster-setup-{linux-amd64,linux-arm64,darwin-arm64}-vX.Y.Z`, built in `build-release.ps1`
+  step 5b and hashed into `SHA256SUMS` with everything else. Every published name carries the
+  platform and the version, Windows included; nothing resolves a setup program by a fixed name (the
+  site reads the asset list at build time), so the names serve the Downloads folder instead.
 - **The three shortcut options are not Windows-only any more.** `StartMenu`, `DesktopIcon` and
   `Autostart` map to Inno `/TASKS=` on Windows and to XDG desktop entries on Linux
   (`shortcuts_linux.go`), so `SetupApp.svelte` shows the block for both and relabels "Start Menu" as

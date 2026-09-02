@@ -71,7 +71,7 @@ func TestUpdate_AssetNameIsExact(t *testing.T) {
 		t.Fatalf("asset name %q must not match the installer", name)
 	}
 	for _, other := range []string{
-		"quartermaster-setup-v0.8.0.exe",
+		"quartermaster-setup-windows-amd64-v0.8.0.exe",
 		"SHA256SUMS",
 		"quartermaster-linux-amd64.tar.gz",
 	} {

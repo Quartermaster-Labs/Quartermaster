@@ -13,8 +13,10 @@
        + rename. The names here MUST match internal/update.assetName() exactly
        — an update that cannot find its asset silently never offers itself.
 
-    2. The setup program (quartermaster-setup-vX.Y.Z.exe), Windows FIRST
-       INSTALL only. This is a native-window wizard (cmd/quartermaster-setup)
+    2. The setup programs (quartermaster-setup-<os>-<arch>-vX.Y.Z), one per
+       platform, FIRST INSTALL only. Every published name carries both the
+       platform and the version: a file that has been in a Downloads folder for
+       six months has to say what it is and how old it is. This is a native-window wizard (cmd/quartermaster-setup)
        with the Inno installer EMBEDDED inside it: the wizard asks the
        questions and downloads the backends, and drives Inno silently for the
        Start Menu entry and the uninstall record. Existing installs never run
@@ -233,8 +235,9 @@ if (-not $SkipInstaller) {
     $embed = Join-Path $root 'cmd\quartermaster-setup\inno\setup.exe'
     Copy-Item $inno $embed -Force
     try {
-        $setup = Join-Path $outdir "quartermaster-setup-$Tag.exe"
-        Write-Host "  building quartermaster-setup-$Tag.exe" -ForegroundColor DarkGray
+        $setupName = "quartermaster-setup-windows-amd64-$Tag.exe"
+        $setup = Join-Path $outdir $setupName
+        Write-Host "  building $setupName" -ForegroundColor DarkGray
         $env:GOOS = 'windows'
         $env:GOARCH = 'amd64'
         # -H=windowsgui for the same reason as the server binary, and more so:
@@ -267,13 +270,16 @@ if (-not $SkipInstaller) {
 # and for the same reason -- //go:embed reads a path, not a variable -- except
 # that it runs once per target, since each wizard has to carry its own arch.
 #
-# Names are unversioned, unlike the Windows setup: the site links at
-# /releases/latest, and a stable name is one a script or a README can hard-code.
+# Names carry the platform AND the version, matching the Windows one. Nothing
+# resolves a setup program by a fixed name -- the site reads the release's asset
+# list at build time (ui-svelte/site/build.mjs) and the updater only ever looks
+# for the bare server binaries -- so the naming is free to serve the person
+# looking at a Downloads folder instead.
 if (-not $SkipInstaller) {
     $nixSetups = @(
-        @{ os = 'linux'; arch = 'amd64'; name = 'quartermaster-setup-linux-amd64' }
-        @{ os = 'linux'; arch = 'arm64'; name = 'quartermaster-setup-linux-arm64' }
-        @{ os = 'darwin'; arch = 'arm64'; name = 'quartermaster-setup-darwin-arm64' }
+        @{ os = 'linux'; arch = 'amd64'; name = "quartermaster-setup-linux-amd64-$Tag" }
+        @{ os = 'linux'; arch = 'arm64'; name = "quartermaster-setup-linux-arm64-$Tag" }
+        @{ os = 'darwin'; arch = 'arm64'; name = "quartermaster-setup-darwin-arm64-$Tag" }
     )
     $payload = Join-Path $root 'cmd\quartermaster-setup\payload\server'
     try {
@@ -329,14 +335,14 @@ $uploads += $sumsPath
 $notes = @"
 Download the setup program for your platform:
 
-- **Windows** -- ``quartermaster-setup-$Tag.exe``
-- **Linux** -- ``quartermaster-setup-linux-amd64`` (or ``-linux-arm64``)
-- **macOS, Apple silicon** -- ``quartermaster-setup-darwin-arm64``
+- **Windows** -- ``quartermaster-setup-windows-amd64-$Tag.exe``
+- **Linux** -- ``quartermaster-setup-linux-amd64-$Tag`` (or ``-linux-arm64-$Tag``)
+- **macOS, Apple silicon** -- ``quartermaster-setup-darwin-arm64-$Tag``
 
-There is no signed macOS build yet, so clear the quarantine flag before the
-first launch:
+The unix ones need ``chmod +x`` first. There is no signed macOS build yet, so
+clear the quarantine flag before the first launch:
 
-``xattr -d com.apple.quarantine ./quartermaster-setup-darwin-arm64``
+``xattr -d com.apple.quarantine ./quartermaster-setup-darwin-arm64-$Tag``
 
 ``SHA256SUMS`` covers every file here.
 "@

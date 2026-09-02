@@ -226,30 +226,32 @@ function latestRelease() {
         stdio: ["ignore", "pipe", "ignore"],
       }),
     );
-    // Matched by prefix, not by extension: the release also carries
-    // quartermaster-windows-amd64.exe (the raw server binary the updater
-    // fetches), and a "Download" button pointing at that would hand a first-time
-    // visitor the one artifact with no wizard behind it.
-    const exe = view.assets.find((a) => a.name.startsWith("quartermaster-setup-") && a.name.endsWith(".exe"));
+    // Every asset name ends in the version, so all of these are prefix matches
+    // rather than equality: hard-coding a full name would mean editing this file
+    // on every release. The prefix has to include the platform, because the
+    // release also carries quartermaster-windows-amd64.exe (the raw server
+    // binary the updater fetches), and a "Download" button pointing at that
+    // would hand a first-time visitor the one artifact with no wizard behind it.
+    const asset = (prefix) => {
+      const a = view.assets.find((x) => x.name.startsWith(prefix));
+      return a ? { url: a.url, size: a.size, name: a.name } : null;
+    };
+    const exe = asset("quartermaster-setup-windows-amd64-");
     if (!exe) return null;
     // One wizard per platform for the hero button. Linux resolves to amd64:
     // arm64 exists in the same release, but nothing in a browser reliably
     // reports the CPU (userAgentData's `architecture` is Chromium-only and
     // async), and guessing wrong hands someone a binary that will not exec.
     // The note under the button links every asset for that case.
-    const asset = (name) => {
-      const a = view.assets.find((x) => x.name === name);
-      return a ? { url: a.url, size: a.size } : null;
-    };
     return {
       tag: view.tagName,
       url: exe.url,
       size: exe.size,
       prerelease: rel.isPrerelease,
       perOS: {
-        windows: { url: exe.url, size: exe.size },
-        linux: asset("quartermaster-setup-linux-amd64"),
-        mac: asset("quartermaster-setup-darwin-arm64"),
+        windows: exe,
+        linux: asset("quartermaster-setup-linux-amd64-"),
+        mac: asset("quartermaster-setup-darwin-arm64-"),
       },
     };
   } catch {
@@ -422,9 +424,15 @@ function renderDownloads(release) {
 // quarantine attribute and Gatekeeper refuses it outright, usually claiming it
 // is damaged. Hiding the download would not make the platform work; the one
 // command that does is worth more than a missing button.
-const MAC_NOTE =
-  '<p class="cta-note" data-os="mac" hidden>No signed macOS build yet. After downloading: '
-  + '<code>xattr -d com.apple.quarantine ./quartermaster-setup-darwin-arm64</code></p>';
+// Built from the release's own asset list rather than written out, because the
+// filename carries the version: a hard-coded command would send someone to a
+// file that is one release out of date, and xattr on a path that does not exist
+// fails with an error about the wrong thing.
+const macNote = (release) => {
+  const name = release?.perOS?.mac?.name ?? "quartermaster-setup-darwin-arm64-*";
+  return '<p class="cta-note" data-os="mac" hidden>No signed macOS build yet. After downloading: '
+    + `<code>xattr -d com.apple.quarantine ./${esc(name)}</code></p>`;
+};
 
 function renderHero(release, hero) {
   const primary = renderDownloads(release);
@@ -451,7 +459,7 @@ function renderHero(release, hero) {
     </div>
     <ul class="pills">${pills}</ul>
     <p class="cta-note">${note}</p>
-    ${MAC_NOTE}
+    ${macNote(release)}
   </div>
 </section>`;
 }
