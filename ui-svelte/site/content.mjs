@@ -341,28 +341,30 @@ export const INSTALL = [
     title: "Windows installer",
     body:
       "A per-user install, no admin rights needed. The first-run wizard fetches the inference backends, " +
-      "asks for your models folder, and generates a config before the window opens.",
-    // Filled in by build.mjs from the latest GitHub release.
+      "asks for your models folder, and generates a config before the window opens. Nothing is published " +
+      "yet, so build the installer yourself with make setup-windows.",
+    // Filled in by build.mjs once there is a GitHub release to point at.
     download: true,
   },
   {
     icons: ["linux", "apple"],
     title: "Linux and macOS",
     body:
-      "The same wizard, in your browser: it fetches a verified binary, the backends for your GPU, and " +
-      "a config built from your models folder. Or take the bare static binary instead, amd64 and arm64 " +
-      "for Linux and Apple silicon for macOS, and install the backends later from Settings.",
-    link: { href: REPO + "/releases/latest", label: "Downloads on the releases page" },
+      "One static binary, amd64 and arm64 for Linux and Apple silicon for macOS: make linux or make mac " +
+      "builds it, and the backends for your GPU install later from Settings. There are no published " +
+      "downloads yet, so this is a source build too.",
+    link: { href: REPO + "#building-from-source", label: "Building from source" },
   },
   {
     icon: "docker",
     title: "Docker",
     body:
-      "The unified image bundles the backends. Tags are published per compute backend: swap " +
-      "unified-cuda for unified-vulkan on AMD or Intel.",
+      "The unified image builds llama.cpp, stable-diffusion.cpp and whisper.cpp from source and " +
+      "bundles them with the server. Nothing is published to a registry yet, so build it yourself: " +
+      "swap --cuda for --vulkan on AMD or Intel.",
     code:
-      "docker run --gpus all -p 1250:1250 -v ./models:/models \\\n" +
-      "  ghcr.io/quartermaster-labs/quartermaster:unified-cuda",
+      "docker/unified/build-image.sh --cuda\n" +
+      "docker run --gpus all -p 1250:1250 -v ./models:/models quartermaster:unified-cuda",
   },
 ];
 
@@ -374,5 +376,5 @@ export const INSTALL_NOTE = {
   before: "Prefer to build it yourself? ",
   href: REPO + "#building-from-source",
   link: "Building from source",
-  after: " takes Go 1.24+ and Node for the UI, one binary out the other end.",
+  after: " takes Go 1.26+ and Node 24 for the UI, one binary out the other end.",
 };
