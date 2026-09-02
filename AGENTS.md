@@ -6,7 +6,7 @@ Started as a fork of [llama-swap](https://github.com/mostlygeek/llama-swap) (MIT
 
 Goal: an **all-in-one local inference engine** — not just text model swapping, but image, audio, and more, with **flexible automated model defaults** (runtime-computed ctx / offload / KV instead of hand-baked config variants).
 
-Current work & roadmap: see [`TODO.md`](TODO.md).
+Current work & roadmap: see `TODO.md` (local, not tracked).
 
 ## Where things live
 
