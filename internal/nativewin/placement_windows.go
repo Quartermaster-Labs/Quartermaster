@@ -37,9 +37,16 @@ type windowPlacement struct {
 }
 
 // Placement is where a window was last time, in a form worth writing to disk.
+//
+// DPI records the scale the rect was measured at. The rect is in PHYSICAL
+// pixels, so the same window is 940 wide at 100% and 1410 at 150%: a caller
+// reading a file back has no way to tell a genuinely small window from one
+// saved on a different display, or by a build that was not DPI-aware, unless
+// the number travels with it.
 type Placement struct {
 	X, Y, W, H int32
 	Maximized  bool
+	DPI        int32 `json:"dpi,omitempty"`
 }
 
 // GetPlacement reads the window's position for saving.
@@ -69,6 +76,7 @@ func GetPlacement(hwnd uintptr) (Placement, bool) {
 	zoomed, _, _ := isZoomed.Call(hwnd)
 	r := wp.rcNormalPosition
 	return Placement{
+		DPI:       int32(windowDPI(hwnd)),
 		X:         r.Left,
 		Y:         r.Top,
 		W:         r.Right - r.Left,

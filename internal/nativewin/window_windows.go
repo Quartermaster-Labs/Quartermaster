@@ -348,11 +348,20 @@ func wndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 			// the client on the screen edge with the title bar's first pixel
 			// visible.
 			if zoomed, _, _ := isZoomed.Call(hwnd); zoomed != 0 {
-				top += int32(frameThickness())
+				top += int32(frameThickness(hwnd))
 			}
 			p.rgrc[0].Top = top
 			return ret
 		}
+
+	case wmDpiChanged:
+		// Only ever delivered because the process is per-monitor aware: the
+		// window has crossed onto a display with a different scale, and Windows
+		// is handing us the rect that keeps it the same apparent size. Taking
+		// it is the whole of the work; WebView2 re-renders the page at the new
+		// scale on its own.
+		applyDpiChange(hwnd, lparam)
+		return 0
 	}
 	ret, _, _ := callWindowProcW.Call(prevWndProc, hwnd, msg, wparam, lparam)
 	return ret
@@ -361,16 +370,14 @@ func wndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 // frameThickness is how far a maximised window overhangs the work area on each
 // edge: the sizing border plus the padded border Windows adds around it.
 //
-// Read every time rather than cached -- it moves with the display's DPI, and
-// this window can be dragged to a monitor with a different one. (The process is
-// DPI-unaware today, so these come back at 96 DPI, which is also the scale the
-// rects in WM_NCCALCSIZE are virtualized to. That stays consistent if the
-// process ever becomes aware, since the metrics would scale with the rects.)
-func frameThickness() int {
-	// getSystemMetrics is declared once for the package, in icon_windows.go.
-	cy, _, _ := getSystemMetrics.Call(smCyFrame)
-	pad, _, _ := getSystemMetrics.Call(smCxPaddedBorder)
-	return int(int32(cy)) + int(int32(pad))
+// Read every time rather than cached, and read for THIS window's display: the
+// process is per-monitor DPI aware (dpi_windows.go), so both the metrics and
+// the rects in WM_NCCALCSIZE are in physical pixels, and a window dragged from
+// a 150% laptop panel to a 100% monitor needs the smaller frame from the moment
+// it lands. systemMetric is what keeps the two in step -- GetSystemMetrics
+// alone would keep answering for the primary display.
+func frameThickness(hwnd uintptr) int {
+	return systemMetric(hwnd, smCyFrame) + systemMetric(hwnd, smCxPaddedBorder)
 }
 
 // Drag hands the mouse to the window manager mid-click, which is how a custom

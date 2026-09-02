@@ -21,6 +21,7 @@ constraints exclude all Go files", breaking the Docker build for a package it ne
 | `folder_windows.go` | `PickFolder` — IFileDialog + `FOS_PICKFOLDERS` through raw COM vtable dispatch (`comCall`). |
 | `external_windows.go` | `OpenExternal` — hands an http(s) URL to the system browser via `rundll32 url.dll,FileProtocolHandler`. |
 | `placement_windows.go` | `Placement`, `GetPlacement`, `ApplyPlacement` — remembering where the window was. |
+| `dpi_windows.go` | `EnableDPIAwareness`, `SystemDPI`, `Px`, `systemMetric`, `applyDpiChange` — per-monitor DPI awareness and the pixel conversions it forces on everyone else. |
 | `statusbar_windows.go` | `hideStatusBar` — turns off WebView2's hover-a-link URL bubble. Reaches `ICoreWebView2Settings` by reflecting go-webview2's unexported `browser` field; best-effort, silent no-op if the shape changes. |
 
 ## Important types & functions
@@ -127,11 +128,26 @@ constraints exclude all Go files", breaking the Docker build for a package it ne
   paints the frame the title bar's own colour instead, so the stubs vanish and the rounded corners
   stay. The colour must come from the page (`TitleBar.svelte`) because it depends on the theme, which
   lives in the browser's storage.
-- **The process is DPI-unaware, deliberately for now.** No manifest, no
-  `SetProcessDpiAwarenessContext`, and none in go-webview2 either, so Windows bitmap-stretches the
-  window on a scaled display: right size, blurry text. Making it aware also turns `Options`/`SetSize`
-  dimensions into physical pixels and DPI-scales the `WM_NCCALCSIZE` frame insets, so it is a change
-  with three moving parts, not a one-liner — written up in `TODO.md` under Feature 12.
+- **The process is per-monitor-v2 DPI aware, and every caller pays for it.** `EnableDPIAwareness`
+  must run **before** `webview2.NewWithOptions` in each `main` — a window's awareness is fixed when
+  it is created, so a late call leaves the only window that matters bitmap-stretched (right size,
+  blurry text, which is exactly the bug it fixes and is invisible at 100%). go-webview2 does not do
+  this for you, and there is no manifest doing it either. Three consequences, all handled, none
+  optional:
+  **(1)** every dimension crossing the Win32 boundary is now PHYSICAL pixels, so window sizes go
+  through `Px()` (940 wide asked for raw would come out two thirds size at 150%);
+  **(2)** `GetSystemMetrics` answers for the *primary* display regardless of where the window is, so
+  the `WM_NCCALCSIZE` frame maths uses `systemMetric` → `GetSystemMetricsForDpi` with
+  `GetDpiForWindow`;
+  **(3)** `WM_DPICHANGED` now arrives when the window crosses onto a differently-scaled monitor, and
+  the suggested rect in `lparam` must be applied verbatim (`applyDpiChange`) or the window keeps its
+  old physical size while the page re-lays out at the new scale.
+- **A `Placement` without a `dpi` field is not restorable.** The saved rect is in physical pixels, so
+  a file written by the pre-awareness build is in virtualized 96-DPI units and restoring it opens a
+  two-thirds-size window on a 150% display. `GetPlacement` stamps `DPI`; `loadPlacement` in
+  `cmd/quartermaster` discards a record without one. Rescaling instead would be wrong — the position
+  is in virtual-desktop coordinates that moved when the process became aware — and the cost of
+  discarding is one centred window, once.
 - **`go vet -unsafeptr` complains** about the `uintptr → *NCCALCSIZE_PARAMS` and COM vtable
   conversions. Both are the documented Win32 pattern — the pointer comes from the OS, not from Go's
   heap. `unsafeptr` is not in `go test`'s default vet subset, so `make test-dev` stays green.

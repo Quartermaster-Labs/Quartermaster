@@ -72,6 +72,11 @@ func (aw *appWindow) run(url string) {
 		}
 	}()
 
+	// Before the window exists, and it has to be: a window's DPI awareness is
+	// fixed when it is created, so this is the difference between a crisp app
+	// and a bitmap-stretched one on any display that is not at 100%.
+	nativewin.EnableDPIAwareness()
+
 	w := webview2.NewWithOptions(webview2.WebViewOptions{
 		Debug:     os.Getenv("QM_APP_DEBUG") != "",
 		AutoFocus: true,
@@ -82,9 +87,13 @@ func (aw *appWindow) run(url string) {
 		WindowOptions: webview2.WindowOptions{
 			// No caption is drawn, but this is what Alt-Tab, the taskbar
 			// preview and every window-list tool show.
-			Title:  "Quartermaster",
-			Width:  appWinWidth,
-			Height: appWinHeight,
+			Title: "Quartermaster",
+			// Px, because an aware process is talking physical pixels: the
+			// constants stay the size the design was drawn at and this is the
+			// one place that converts. Without it the window would come out
+			// two thirds of its intended size on a 150% display.
+			Width:  uint(nativewin.Px(appWinWidth)),
+			Height: uint(nativewin.Px(appWinHeight)),
 			Center: true,
 		},
 	})
@@ -111,7 +120,7 @@ func (aw *appWindow) run(url string) {
 
 	// HintMin, not HintFixed: the dashboard is a responsive layout and a user
 	// who cannot resize is stuck with whatever the default clips.
-	w.SetSize(appWinWidth, appWinHeight, webview2.HintMin)
+	w.SetSize(nativewin.Px(appWinWidth), nativewin.Px(appWinHeight), webview2.HintMin)
 	w.Navigate(url)
 	markReady()
 
@@ -134,6 +143,15 @@ func loadPlacement() (nativewin.Placement, bool) {
 	b, err := os.ReadFile(placementFile())
 	if err != nil || json.Unmarshal(b, &p) != nil {
 		return p, false
+	}
+	// No dpi field means the file was written by a build that was not DPI-aware,
+	// so the rect is in virtualized 96-DPI units and restoring it verbatim would
+	// open a two-thirds-size window on a 150% display. Discarding it costs the
+	// user one centred window, once, and is right at every scale; rescaling it
+	// would not be, because the position is in virtual-desktop coordinates that
+	// moved when the process became aware.
+	if p.DPI == 0 {
+		return nativewin.Placement{}, false
 	}
 	return p, true
 }

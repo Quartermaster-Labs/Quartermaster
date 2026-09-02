@@ -36,6 +36,11 @@ func runWindow(url string, done <-chan struct{}) (err error) {
 		}
 	}()
 
+	// Before the window exists: a window's DPI awareness is fixed when it is
+	// created. The wizard is the first thing a user ever sees of this program,
+	// and on a scaled laptop panel an unaware one is visibly blurry.
+	nativewin.EnableDPIAwareness()
+
 	w := webview2.NewWithOptions(webview2.WebViewOptions{
 		Debug:     os.Getenv("QM_SETUP_DEBUG") != "",
 		AutoFocus: true,
@@ -48,9 +53,11 @@ func runWindow(url string, done <-chan struct{}) (err error) {
 		WindowOptions: webview2.WindowOptions{
 			// Still set even though no caption is drawn: this is what Alt-Tab,
 			// the taskbar preview and any window-list tool show.
-			Title:  "Quartermaster Setup",
-			Width:  winWidth,
-			Height: winHeight,
+			Title: "Quartermaster Setup",
+			// Physical pixels now that the process is aware; the constants stay
+			// the size the layout was designed at. See nativewin.Px.
+			Width:  uint(nativewin.Px(winWidth)),
+			Height: uint(nativewin.Px(winHeight)),
 			Center: true,
 		},
 	})
@@ -67,7 +74,7 @@ func runWindow(url string, done <-chan struct{}) (err error) {
 	// HintMin, not HintFixed: the wizard's content is a normal responsive
 	// layout, and a user on a 125% display who cannot resize is stuck with
 	// whatever the fixed size clips.
-	w.SetSize(winWidth, winHeight, webview2.HintMin)
+	w.SetSize(nativewin.Px(winWidth), nativewin.Px(winHeight), webview2.HintMin)
 	w.Navigate(url)
 
 	// Close the window when the wizard says it is done. The goroutine is joined

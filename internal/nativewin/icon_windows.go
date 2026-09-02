@@ -56,8 +56,8 @@ func ApplyIcon(hwnd uintptr) {
 		return
 	}
 	hinst, _, _ := getModuleHandleW.Call(0)
-	big := loadIconResource(hinst, smCXIcon, smCYIcon)
-	small := loadIconResource(hinst, smCXSmIcon, smCYSmIcon)
+	big := loadIconResource(hinst, hwnd, smCXIcon, smCYIcon)
+	small := loadIconResource(hinst, hwnd, smCXSmIcon, smCYSmIcon)
 	if big == 0 && small == 0 {
 		return
 	}
@@ -78,10 +78,15 @@ func ApplyIcon(hwnd uintptr) {
 // loadIconResource loads the binary's icon at the size Windows wants for a
 // given slot, picking the closest frame in the .ico rather than rescaling one.
 //
+// The sizes are read for the window's own display, not the primary one: a
+// per-monitor-aware process gets 32px from GetSystemMetrics whatever the scale,
+// and a 32px frame blown up to the 48px slot a 150% display actually draws is
+// the mushy taskbar icon this function exists to avoid.
+//
 // Returns 0 in a dev build, which has no .syso linked in at all.
-func loadIconResource(hinst uintptr, cxMetric, cyMetric int) uintptr {
-	cx, _, _ := getSystemMetrics.Call(uintptr(cxMetric))
-	cy, _, _ := getSystemMetrics.Call(uintptr(cyMetric))
+func loadIconResource(hinst, hwnd uintptr, cxMetric, cyMetric int) uintptr {
+	cx := uintptr(systemMetric(hwnd, cxMetric))
+	cy := uintptr(systemMetric(hwnd, cyMetric))
 	// LR_SHARED: the handle is owned by the module and must not be destroyed,
 	// which suits an icon that lives as long as the process.
 	h, _, _ := loadImageW.Call(hinst, iconResourceID, imageIcon, cx, cy, lrShared)
