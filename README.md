@@ -7,11 +7,12 @@
 
 # Quartermaster
 
-**Run any model on your own machine.**
+**Run any model without tuning a single flag.**
+*Text, image and audio, all on one machine.*
 
-Quartermaster is a local inference platform for text, image and audio models. Point it at your
-models folder and it works out a near-optimal setup per model, then hot-swaps between them on demand
-behind one OpenAI- and Anthropic-compatible API.
+Quartermaster is an all-in-one local inference platform. Point it at your models folder: it works
+out what fits in your VRAM, launches each model with computed flags, and hot-swaps between them on
+demand behind one OpenAI- and Anthropic-compatible API.
 
 It is a single Go binary and one YAML file. It does not run models itself: it orchestrates the
 inference servers you already trust (llama-server, stable-diffusion.cpp, whisper.cpp, vLLM, TabbyAPI

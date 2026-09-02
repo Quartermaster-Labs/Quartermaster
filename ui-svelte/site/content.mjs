@@ -10,15 +10,16 @@ export const REPO = "https://github.com/Quartermaster-Labs/Quartermaster";
 export const UPSTREAM = "https://github.com/mostlygeek/llama-swap";
 
 export const HERO = {
-  // Optional. Left empty on purpose: the <h1> under it already says this, and
-  // the two lines stacked read as the same sentence twice.
-  eyebrow: "",
+  // The secondary claim. The <h1> says what Quartermaster spares you; this says
+  // how wide "any model" reaches, which is the half a text-only runner cannot
+  // match. Kept short: it is read in the same glance as the headline.
+  eyebrow: "Text, image and audio, all on one machine",
   // `accent` is rendered as gradient text inside the <h1>.
-  title: ["Run", "any model", "on your own machine"],
+  title: ["Run any model", "without tuning", "a single flag"],
   lede:
-    "Quartermaster is a local inference platform for text, image and audio models. Point it at " +
-    "your models folder and it works out a near-optimal setup per model, then hot-swaps between " +
-    "them on demand behind one OpenAI- and Anthropic-compatible API.",
+    "Quartermaster is an all-in-one local inference platform. Point it at your models folder: it " +
+    "works out what fits in your VRAM, launches each model with computed flags, and hot-swaps " +
+    "between them on demand behind one OpenAI- and Anthropic-compatible API.",
 };
 
 // Under the hero CTAs: the five things someone is scanning for before they
