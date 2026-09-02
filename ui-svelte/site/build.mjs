@@ -232,7 +232,26 @@ function latestRelease() {
     // visitor the one artifact with no wizard behind it.
     const exe = view.assets.find((a) => a.name.startsWith("quartermaster-setup-") && a.name.endsWith(".exe"));
     if (!exe) return null;
-    return { tag: view.tagName, url: exe.url, size: exe.size, prerelease: rel.isPrerelease };
+    // One wizard per platform for the hero button. Linux resolves to amd64:
+    // arm64 exists in the same release, but nothing in a browser reliably
+    // reports the CPU (userAgentData's `architecture` is Chromium-only and
+    // async), and guessing wrong hands someone a binary that will not exec.
+    // The note under the button links every asset for that case.
+    const asset = (name) => {
+      const a = view.assets.find((x) => x.name === name);
+      return a ? { url: a.url, size: a.size } : null;
+    };
+    return {
+      tag: view.tagName,
+      url: exe.url,
+      size: exe.size,
+      prerelease: rel.isPrerelease,
+      perOS: {
+        windows: { url: exe.url, size: exe.size },
+        linux: asset("quartermaster-setup-linux-amd64"),
+        mac: asset("quartermaster-setup-darwin-arm64"),
+      },
+    };
   } catch {
     return null;
   }
@@ -376,12 +395,31 @@ function renderEmbers(n = 7) {
   return `<div class="embers" aria-hidden="true">${streaks}</div>`;
 }
 
+// The download button comes in three, one per platform, and all but Windows
+// ship `hidden`; OS_SCRIPT unhides the one that matches. Rendering all three
+// rather than rewriting one in JS keeps the platform mark an <svg> the
+// generator already knows how to draw, and leaves a no-JS visitor with the
+// Windows button rather than no button at all.
+const DOWNLOADS = [
+  { os: "windows", mark: "windows", label: "Windows" },
+  { os: "linux", mark: "linux", label: "Linux" },
+  { os: "mac", mark: "apple", label: "macOS" },
+];
+
+function renderDownloads(release) {
+  return DOWNLOADS.map(({ os, mark, label }) => {
+    const per = release?.perOS?.[os];
+    const href = per ? per.url : `${REPO}/releases/latest`;
+    const size = per ? ` · ${fmtSize(per.size)}` : "";
+    const hide = os === "windows" ? "" : " hidden";
+    return `<a class="btn btn-primary" data-os="${os}" href="${href}"${hide}>${icon(mark, 18)} Download for ${label}${size}</a>`;
+  }).join("\n      ");
+}
+
 function renderHero(release, hero) {
-  const primary = release
-    ? `<a class="btn btn-primary" href="${release.url}">${icon("windows", 18)} Download for Windows</a>`
-    : `<a class="btn btn-primary" href="${REPO}/releases/latest">${icon("windows", 18)} Download</a>`;
+  const primary = renderDownloads(release);
   const note = release
-    ? `${esc(release.tag)}${release.prerelease ? " (pre-release)" : ""} · ${fmtSize(release.size)} · <a href="${REPO}/releases">all releases</a> · Docker and source below`
+    ? `${esc(release.tag)}${release.prerelease ? " (pre-release)" : ""} · <a href="${REPO}/releases">all releases</a> · Docker and source below`
     : `See <a href="${REPO}/releases">releases</a> for builds, or install with Docker or from source below.`;
 
   const pills = PILLS.map((p) => `<li>${esc(p)}</li>`).join("");
@@ -724,6 +762,25 @@ function renderInstall(release) {
 //
 // (3) is not paranoia: the site this design borrows from ships unguarded
 // reveals, and its own full-page screenshot comes back blank below the fold.
+// Swaps the hero download button for the visitor's platform. Reads
+// userAgentData first (navigator.platform is deprecated and frozen in some
+// browsers) and falls back to the UA string. An unrecognised platform is left
+// on Windows: it is the majority, and the note links every other build.
+const OS_SCRIPT = `<script>
+(function () {
+  var btns = [].slice.call(document.querySelectorAll("[data-os]"));
+  if (!btns.length) return;
+  var p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
+  var ua = navigator.userAgent || "";
+  // Order matters: an Android UA says Linux, and a Mac says neither, so test
+  // the specific strings first and let Windows be what is left over.
+  var os = /mac|iphone|ipad/i.test(p + ua) ? "mac"
+    : /linux|android|cros/i.test(p + ua) ? "linux"
+    : "windows";
+  btns.forEach(function (b) { b.hidden = b.dataset.os !== os; });
+})();
+</script>`;
+
 const REVEAL_SCRIPT = `<script>
 (function () {
   var els = [].slice.call(document.querySelectorAll("[data-reveal]"));
@@ -1039,7 +1096,7 @@ async function main() {
     title: "Quartermaster · run any local model, on demand",
     description: HERO.lede,
     ogImage: hero?.file,
-    extraScripts: [COPY_SCRIPT, galleries ? GALLERY_SCRIPT : "", REVEAL_SCRIPT].join("\n"),
+    extraScripts: [COPY_SCRIPT, galleries ? GALLERY_SCRIPT : "", OS_SCRIPT, REVEAL_SCRIPT].join("\n"),
     body: [
       renderHero(release, HERO.title),
       hero

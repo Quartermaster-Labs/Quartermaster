@@ -301,6 +301,12 @@ h3,
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 
+/* `display` on a class beats the hidden attribute, and the hero renders one
+   download button per platform with all but the matching one hidden. */
+[hidden] {
+  display: none !important;
+}
+
 .btn {
   display: inline-flex;
   align-items: center;

@@ -10,10 +10,11 @@ export const REPO = "https://github.com/Quartermaster-Labs/Quartermaster";
 export const UPSTREAM = "https://github.com/mostlygeek/llama-swap";
 
 export const HERO = {
-  // The secondary claim. The <h1> says what Quartermaster spares you; this says
-  // how wide "any model" reaches, which is the half a text-only runner cannot
-  // match. Kept short: it is read in the same glance as the headline.
-  eyebrow: "Text, image and audio, all on one machine",
+  // Left empty on purpose. An eyebrow above the <h1> is a boxed, monospaced,
+  // accented line, so it wins the first glance whatever it says, which is the
+  // wrong order: the headline is the claim. The reach it carried (text, image
+  // and audio) is in the pills and in the lede.
+  eyebrow: "",
   // `accent` is rendered as gradient text inside the <h1>.
   title: ["Run any model", "without tuning", "a single flag"],
   lede:
