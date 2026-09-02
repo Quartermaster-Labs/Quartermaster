@@ -211,17 +211,13 @@ Windows, Linux, macOS and Docker, from the same single binary. The setup program
 image bring the inference backends with them; take the bare binary instead and you install them from
 Settings on first run, or point at ones you already have.
 
-**No binaries are published yet.** The repo has no release, so nothing is available to download and
-the ghcr.io images do not exist. Today the ways in are [building from
-source](#building-from-source) and [building the Docker image](#docker); the two download-based
-sections below describe what the release will carry when there is one.
+### Setup program (recommended)
 
-### Setup program (recommended, once released)
-
-The wizard will ship as `quartermaster-setup-*.exe` on Windows and `quartermaster-setup-linux-amd64`,
-`quartermaster-setup-linux-arm64` or `quartermaster-setup-darwin-arm64` elsewhere. Build it today
-with `make setup-windows`. Note that it fetches the server binary from the releases page at run
-time, so it cannot finish a real install until a release exists: use the source build below instead.
+Download the one for your machine from the
+[releases page](https://github.com/Quartermaster-Labs/quartermaster/releases) and run it:
+`quartermaster-setup-*.exe` on Windows, `quartermaster-setup-linux-amd64`,
+`quartermaster-setup-linux-arm64` or `quartermaster-setup-darwin-arm64` elsewhere (`chmod +x` it
+first).
 
 It is a per-user install, so no admin rights, and no UAC prompt on Windows. The wizard:
 
@@ -238,33 +234,45 @@ which is also what you get over ssh with `-browser`. Every step is identical eit
 ### Docker
 
 The unified image bundles llama-server, ik-llama-server, stable-diffusion.cpp, whisper.cpp and
-Quartermaster, and builds all of them from source. Nothing is published to a registry yet, so build
-it yourself:
+Quartermaster, all built from source. Tags are published per compute backend.
+
+```shell
+docker pull ghcr.io/quartermaster-labs/quartermaster:unified-cuda   # or :unified-vulkan
+
+docker run -it --rm --gpus all -p 9292:8080 \
+  -v /path/to/models:/models \
+  -v /path/to/custom/config.yaml:/etc/quartermaster/config/config.yaml \
+  ghcr.io/quartermaster-labs/quartermaster:unified-cuda
+```
+
+To build it yourself instead:
 
 ```shell
 docker/unified/build-image.sh --cuda     # NVIDIA
 docker/unified/build-image.sh --vulkan   # AMD and everything else
-
-docker run -it --rm --gpus all -p 9292:8080   -v /path/to/models:/models   -v /path/to/custom/config.yaml:/etc/quartermaster/config/config.yaml   quartermaster:unified-cuda
 ```
 
-It builds from your working tree, not from a git ref, so what you have checked out is what the image
-runs. Expect a long first build: four C++ projects compile from source, and only the Go and npm
-stages are quick. Each run pins llama.cpp, whisper.cpp, stable-diffusion.cpp and ik_llama.cpp to a resolved
-commit, so `LLAMA_REF=b1234 docker/unified/build-image.sh --vulkan` reproduces an exact combination.
-The same build runs in CI from `.github/workflows/unified-docker.yml` (Actions, Build Unified Docker
-Image, Run workflow), which pushes to ghcr.io when it is given a runner large enough to finish.
+That builds from your working tree, not from a git ref, so what you have checked out is what the
+image runs. Expect a long first build: four C++ projects compile from source, and only the Go and
+npm stages are quick. Each run pins llama.cpp, whisper.cpp, stable-diffusion.cpp and ik_llama.cpp
+to a resolved commit, so `LLAMA_REF=b1234 docker/unified/build-image.sh --vulkan` reproduces an
+exact combination.
+
+[Published images](https://github.com/Quartermaster-Labs/quartermaster/pkgs/container/quartermaster)
+come from the same build, run on demand from `.github/workflows/unified-docker.yml` (Actions, Build
+Unified Docker Image, Run workflow).
 
 ### Linux and macOS binaries
 
-The server is one static binary with nothing to install: amd64 and arm64 for Linux, Apple silicon
-for macOS. `make linux` or `make mac` leaves it in `build/`; a release will publish the same three
-files as `quartermaster-linux-amd64`, `quartermaster-linux-arm64` and `quartermaster-darwin-arm64`,
-to be verified against the `SHA256SUMS` beside them. Either way, `chmod +x` it, point it at your
-models folder, and install the backends you want from Settings. For a headless box, the systemd unit
+The setup program above is the easy path. If you would rather skip it, the server is one static
+binary with nothing to install: amd64 and arm64 for Linux, Apple silicon for macOS. Download
+`quartermaster-linux-amd64`, `quartermaster-linux-arm64` or `quartermaster-darwin-arm64` from the
+[releases page](https://github.com/Quartermaster-Labs/quartermaster/releases), `chmod +x` it, point
+it at your models folder, and install the backends you want from Settings. Verify any download,
+wizard included, against the `SHA256SUMS` published beside it. For a headless box, the systemd unit
 in [`packaging/systemd`](packaging/systemd) needs only its paths filled in.
 
-Downloaded builds are not code-signed, so macOS quarantines them on first run: clear it with
+These builds are not code-signed, so macOS quarantines them on first run: clear it with
 `xattr -d com.apple.quarantine ./quartermaster-darwin-arm64`, or right-click and Open. A binary you
 compiled yourself is not quarantined.
 

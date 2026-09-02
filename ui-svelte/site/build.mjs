@@ -379,10 +379,10 @@ function renderEmbers(n = 7) {
 function renderHero(release, hero) {
   const primary = release
     ? `<a class="btn btn-primary" href="${release.url}">${icon("windows", 18)} Download for Windows</a>`
-    : `<a class="btn btn-primary" href="${REPO}#building-from-source">${icon("terminal", 18)} Build from source</a>`;
+    : `<a class="btn btn-primary" href="${REPO}/releases/latest">${icon("windows", 18)} Download</a>`;
   const note = release
     ? `${esc(release.tag)}${release.prerelease ? " (pre-release)" : ""} · ${fmtSize(release.size)} · <a href="${REPO}/releases">all releases</a> · Docker and source below`
-    : `No published builds yet · <a href="${REPO}#building-from-source">build it from source</a>, or use Docker below`;
+    : `See <a href="${REPO}/releases">releases</a> for builds, or install with Docker or from source below.`;
 
   const pills = PILLS.map((p) => `<li>${esc(p)}</li>`).join("");
 
@@ -678,7 +678,7 @@ function renderInstall(release) {
     if (c.download) {
       action = release
         ? `<a class="btn btn-primary" href="${release.url}">Download ${esc(release.tag)} · ${fmtSize(release.size)}</a>`
-        : `<a class="btn btn-primary" href="${REPO}#building-from-source">Build from source</a>`;
+        : `<a class="btn btn-primary" href="${REPO}/releases/latest">Go to releases</a>`;
     } else if (c.code) {
       action = terminal(c.code, c.title.toLowerCase());
     } else if (c.link) {
@@ -1024,7 +1024,7 @@ async function main() {
   await writeFile(path.join(OUT, ".nojekyll"), "");
 
   const release = latestRelease();
-  console.log(release ? `release: ${release.tag} (${release.url})` : "release: none found, CTA falls back to building from source");
+  console.log(release ? `release: ${release.tag} (${release.url})` : "release: none found, CTA falls back to /releases/latest");
 
   await measureShots();
   const showcase = await collectShowcase();
