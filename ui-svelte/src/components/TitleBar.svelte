@@ -10,6 +10,7 @@
   // playground shell would otherwise be windows with no way to close them.
   import { push } from "svelte-spa-router";
   import * as native from "../lib/native";
+  import { tip } from "../lib/tooltip";
   import { appTitle, connectionState, isDarkMode } from "../stores/theme";
   // The same master art the tray, the taskbar and the favicon carry, derived
   // by packaging/icons/gen.py. assets/logo.png is the older plated wordmark and
@@ -112,7 +113,7 @@
          bg-chrome, and a rule across the top drew a line through what should
          read as one continuous frame. Tone alone separates chrome from
          content. -->
-    <img src={mark} alt="" title={markTitle} class="h-4 w-4 shrink-0 select-none object-contain transition-all {markClass}" draggable="false" />
+    <img src={mark} alt="" aria-hidden="true" use:tip={markTitle} class="h-4 w-4 shrink-0 select-none object-contain transition-all {markClass}" draggable="false" />
     {#if home}
       <!-- cursor-pointer is explicit: Tailwind v4's preflight gives buttons
            `cursor: default`, so a bare <button> here would look inert. -->
@@ -122,7 +123,7 @@
         onmousedown={keepClickable}
         ondblclick={keepClickable}
         onclick={goHome}
-        title="Go to the dashboard"
+        use:tip={"Go to the dashboard"}
       >
         {$appTitle}
       </button>
@@ -136,7 +137,7 @@
     {#if version}
       <span
         class="shrink-0 font-mono text-micro tabular-nums text-txtsecondary/60"
-        title={`Version: ${version}
+        use:tip={`Version: ${version}
 Commit: ${$versionInfo.commit?.substring(0, 7) ?? "unknown"}
 Build date: ${$versionInfo.build_date ?? "unknown"}`}
       >

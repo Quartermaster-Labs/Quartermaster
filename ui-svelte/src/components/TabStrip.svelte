@@ -8,6 +8,7 @@
   import { Zap, X, Plus, ExternalLink } from "lucide-svelte";
   import { appTabs, activeTabId, focusTab, closeTab, openTab } from "../stores/appTabs";
   import * as native from "../lib/native";
+  import { tip } from "../lib/tooltip";
 
   let { playgroundURL = "" }: { playgroundURL?: string } = $props();
 
@@ -87,7 +88,7 @@
         class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 truncate text-left"
         role="tab"
         aria-selected={active}
-        title={tab.label}
+        use:tip={tab.label}
         onclick={() => focusTab(tab.id)}
       >
         {#if tab.busy}
@@ -100,7 +101,7 @@
       <button
         type="button"
         class="shrink-0 cursor-pointer rounded p-0.5 text-txtsecondary opacity-0 transition-opacity hover:bg-secondary hover:text-txtmain group-hover/tab:opacity-100 {active ? 'opacity-70' : ''}"
-        title="Close tab"
+        use:tip={"Close tab"}
         aria-label="Close tab"
         onclick={() => closeTab(tab.id)}
       >
@@ -113,7 +114,7 @@
     <button
       type="button"
       class="shrink-0 cursor-pointer rounded p-1 text-txtsecondary transition-colors hover:bg-secondary/40 hover:text-txtmain"
-      title="New playground tab"
+      use:tip={"New playground tab"}
       aria-label="New playground tab"
       onmousedown={keepClickable}
       ondblclick={keepClickable}

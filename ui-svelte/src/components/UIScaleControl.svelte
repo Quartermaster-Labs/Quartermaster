@@ -1,6 +1,7 @@
 <script lang="ts">
   import { RotateCcw } from "lucide-svelte";
   import { uiScale, setScale, resetScale, MIN_SCALE, MAX_SCALE, SCALE_STEP } from "../stores/uiScale";
+  import { tip } from "../lib/tooltip";
 
   // A snapped range rather than +/- buttons: the whole span is 14 steps, so
   // dragging reaches any size in one gesture, and `step` does the snapping the
@@ -46,7 +47,7 @@
     onchange={(e) => commit(Number((e.currentTarget as HTMLInputElement).value))}
     aria-label="Interface size"
     aria-valuetext="{pct}%"
-    title="Interface size, applies when you let go (Ctrl+Plus / Ctrl+Minus / Ctrl+0)"
+    use:tip={"Interface size, applies when you let go (Ctrl+Plus / Ctrl+Minus / Ctrl+0)"}
     class="w-40"
   />
 
@@ -59,7 +60,7 @@
     onclick={resetScale}
     disabled={atDefault}
     aria-label="Reset interface size to 100%"
-    title="Reset to 100% (Ctrl+0)"
+    use:tip={"Reset to 100% (Ctrl+0)"}
   >
     <RotateCcw size={14} />
   </button>
