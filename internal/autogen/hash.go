@@ -154,7 +154,12 @@ const hashCacheSuffix = ".modelhash"
 //	     VRAM - instead of the model-wide value alone.
 //	v56: --reasoning-preserve is emitted by DEFAULT wherever reasoning is on
 //	     (Override.PreserveThinking nil => on); only an explicit false strips.
-const genVersion = "v56"
+//	v57: the dense context ladder no longer tops out at 128k, and an install
+//	     carrying the old shipped ladder (in the generate file or the settings
+//	     sidecar) is migrated onto the new one. Every dense model trained past
+//	     128k gets a larger -c and a larger KV reserve, so the emitted argv and
+//	     the estimates change for inputs that did not.
+const genVersion = "v57"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

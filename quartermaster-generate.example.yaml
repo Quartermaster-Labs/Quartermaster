@@ -32,7 +32,11 @@ settings:
   # the memory actually available on this machine.
   maxRamGB: 24
   moeCtxTarget: 65536
-  denseCtxLadder: [131072, 65536, 32768]
+  # denseCtxLadder: the TOP rung is the context ceiling the sizer may grow a dense
+  # model to; within it the largest window whose KV cache fits the VRAM budget
+  # wins. Keep the top at or above the trained window of your largest-context
+  # model or that model is pinned below its own ceiling with VRAM left unused.
+  denseCtxLadder: [1048576, 524288, 262144, 131072, 65536, 32768]
   denseMinCtx: 32768
   threads: 7
   ttlSec: 600

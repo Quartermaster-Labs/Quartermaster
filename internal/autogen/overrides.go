@@ -815,6 +815,39 @@ type VariantSpec struct {
 }
 
 // applyDefaults fills zero-valued settings with the PowerShell defaults.
+// defaultDenseCtxLadder is the dense context ladder used when nothing pins one.
+// Its TOP rung is the ceiling GetDenseCtx sizes against, so it has to sit at or
+// above the largest trained window in circulation: a ladder topping out at 128k
+// pinned every 256k/512k/1M model there and left the VRAM those extra tokens
+// would have used sitting idle (gemma-4-12B-it-qat is trained to 262144 and was
+// being loaded at 131072 with 10 GB of a 22.8 GB budget unspent). The rungs
+// below the top are documentation of the usual tiers: the sizer picks the
+// largest window that actually fits and rounds it to a 4096 boundary.
+func defaultDenseCtxLadder() []int {
+	return []int{1048576, 524288, 262144, 131072, 65536, 32768}
+}
+
+// legacyDenseCtxLadder is the ladder shipped before the ceiling was raised.
+var legacyDenseCtxLadder = []int{131072, 65536, 32768}
+
+// dropLegacyCtxLadder clears a ladder that is EXACTLY the old shipped default so
+// applyDefaults re-seeds the current one. Both the generate file and the UI
+// settings sidecar persist every knob they were shown, including ones the user
+// never touched, so an install made before the ceiling moved carries the 128k cap
+// forever and raising the default alone changes nothing. Any other ladder is a
+// deliberate cap and is left exactly as written.
+func (s *Settings) dropLegacyCtxLadder() {
+	if len(s.DenseCtxLadder) != len(legacyDenseCtxLadder) {
+		return
+	}
+	for i, v := range s.DenseCtxLadder {
+		if v != legacyDenseCtxLadder[i] {
+			return
+		}
+	}
+	s.DenseCtxLadder = nil
+}
+
 func (s *Settings) applyDefaults() {
 	if s.ServerExe == "" {
 		s.ServerExe = "llama-server"
@@ -885,14 +918,9 @@ func (s *Settings) applyDefaults() {
 	if s.MoeCtxTarget == 0 {
 		s.MoeCtxTarget = 65536
 	}
+	s.dropLegacyCtxLadder()
 	if len(s.DenseCtxLadder) == 0 {
-		// The top rung is the ceiling GetDenseCtx sizes against, so it has to sit
-		// at or above the largest trained window in circulation: a ladder topping
-		// out at 128k pinned every 256k/512k/1M model to 128k and left the VRAM
-		// those extra tokens would have used sitting idle. The rungs below the top
-		// are documentation of the usual tiers; the sizer picks the largest window
-		// that actually fits and rounds it to a 4096 boundary.
-		s.DenseCtxLadder = []int{1048576, 524288, 262144, 131072, 65536, 32768}
+		s.DenseCtxLadder = defaultDenseCtxLadder()
 	}
 	if s.DenseMinCtx == 0 {
 		s.DenseMinCtx = 32768
@@ -976,6 +1004,12 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 		return GenerateFile{}, err
 	}
 	patch.apply(&gf.Settings)
+	// The sidecar overlay lands after applyDefaults, so a legacy ladder persisted
+	// by the dashboard has to be migrated again here or it wins.
+	gf.Settings.dropLegacyCtxLadder()
+	if len(gf.Settings.DenseCtxLadder) == 0 {
+		gf.Settings.DenseCtxLadder = defaultDenseCtxLadder()
+	}
 	if patch != nil {
 		vramUnset = vramUnset && patch.TargetVramGB == nil
 		ramUnset = ramUnset && patch.MaxRamGB == nil
