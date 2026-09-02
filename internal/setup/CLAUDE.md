@@ -38,6 +38,7 @@ everywhere and the 20 MB installer blob stays in the binary that ships it.
 | `cmd/quartermaster-setup/window_windows.go` | `runWindow` — creates the webview, hands it to `nativewin.Attach`, navigates, and closes it when the wizard signals done. The window mechanics themselves live in `internal/nativewin`, shared with the app window. |
 | `cmd/quartermaster-setup/place_windows.go` | `//go:embed inno/setup.exe`, `placeInno` (silent `/VERYSILENT /DIR= /TASKS= /LOG=`), `launch` — starts the installed exe with no arguments (it supplies its own; see `bundle.go`). |
 | `cmd/quartermaster-setup/place_other.go`, `place_common.go` | Unix install: `placeCopy` when a binary sits beside the wizard, else `placeEmbedded` (the `payload/server` embed), else `update.FetchBinary`. `placeCopy` is also the dev-build stand-in on Windows when no installer is embedded. |
+| `cmd/quartermaster-setup/shortcuts_linux.go`, `shortcuts_other.go` | Linux XDG desktop entries: application menu, desktop icon, `~/.config/autostart` (with `-tray`). No-op on darwin. |
 | `cmd/quartermaster-setup/window_other.go` | `runWindow` that always fails, so main falls back to the browser. Deliberate, not a gap. |
 
 ## Important types & functions
@@ -116,6 +117,17 @@ everywhere and the 20 MB installer blob stays in the binary that ships it.
   rename, so an interrupted install leaves nothing runnable behind. The setup programs ship as
   `quartermaster-setup-{linux-amd64,linux-arm64,darwin-arm64}`, built in `build-release.ps1` step 5b
   and hashed into `SHA256SUMS` with everything else.
+- **The three shortcut options are not Windows-only any more.** `StartMenu`, `DesktopIcon` and
+  `Autostart` map to Inno `/TASKS=` on Windows and to XDG desktop entries on Linux
+  (`shortcuts_linux.go`), so `SetupApp.svelte` shows the block for both and relabels "Start Menu" as
+  "application menu" on Linux. Three things there are load-bearing: the autostart entry passes
+  `-tray`, because the packaged default is `-app` and `-app` off Windows means `xdg-open` (a browser
+  tab at every login); `Path=` is set, because the server resolves config, models and backends
+  against its own directory and a menu launch inherits the desktop's cwd; and `Exec=` is quoted per
+  the desktop-entry spec, not the shell's, so an install path with a space still launches. Failures
+  are logged, never fatal: the server is already on disk, and a read-only `~/.local` is not a reason
+  to fail an install. macOS gets nothing yet (a `.app` bundle plus a LaunchAgent is a different
+  shape of work) and the UI hides the block there.
 - **A dev build embeds placeholders**, zero-byte files committed at `inno/setup.exe` and
   `payload/server`, so `place` size-checks both payloads (`minInstallerBytes`, `minServerBytes`)
   rather than executing a 0-byte exe or installing an empty file. `build-release.ps1` copies the

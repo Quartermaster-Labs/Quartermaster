@@ -61,6 +61,16 @@ const minServerBytes = 4 << 20
 // still installs when the release happens to carry binaries, and the failure it
 // reports names something a user can act on.
 func place(c setup.Choices, log func(string)) error {
+	if err := placeBinary(c, log); err != nil {
+		return err
+	}
+	// After the binary, and never fatal: the shortcuts point AT the installed
+	// file, and an install with no menu entry still works.
+	applyShortcuts(c, log)
+	return nil
+}
+
+func placeBinary(c setup.Choices, log func(string)) error {
 	if hasSiblingBinary() {
 		return placeCopy(c.Dir, log)
 	}
