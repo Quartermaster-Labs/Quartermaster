@@ -42,21 +42,22 @@ ui: ui-svelte/node_modules
 # Build OSX binary
 mac: ui
 	@echo "Building Mac binary..."
-	GOOS=darwin GOARCH=arm64 go build -ldflags="-X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE}" -o $(BUILD_DIR)/$(APP_NAME)-darwin-arm64
+	GOOS=darwin GOARCH=arm64 go build -ldflags="-X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE}" -o $(BUILD_DIR)/$(APP_NAME)-darwin-arm64 ./cmd/quartermaster
 
 # Build Linux binary
 linux: linux-arm64 linux-amd64
 
 linux-amd64: ui
 	@echo "Building Linux AMD64 binary..."
-	GOOS=linux GOARCH=amd64 go build -ldflags="-X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE}" -o $(BUILD_DIR)/$(APP_NAME)-linux-amd64
+	GOOS=linux GOARCH=amd64 go build -ldflags="-X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE}" -o $(BUILD_DIR)/$(APP_NAME)-linux-amd64 ./cmd/quartermaster
 
 linux-arm64: ui
 	@echo "Building Linux ARM64 binary..."
-	GOOS=linux GOARCH=arm64 go build -ldflags="-X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE}" -o $(BUILD_DIR)/$(APP_NAME)-linux-arm64
+	GOOS=linux GOARCH=arm64 go build -ldflags="-X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE}" -o $(BUILD_DIR)/$(APP_NAME)-linux-arm64 ./cmd/quartermaster
 
-# Windows VERSIONINFO resource. resource_windows_amd64.syso is committed (Go links
-# any .syso in the main package automatically), and packaging/windows/build-release.ps1
+# Windows VERSIONINFO resource. cmd/quartermaster/resource_windows_amd64.syso is
+# committed (Go links any .syso in the main package automatically, which is why it
+# and favicon.ico live beside the main package rather than at the repo root), and packaging/windows/build-release.ps1
 # calls `go build` directly -- so the committed file, not this rule, is what a
 # release actually ships. Commit it after it regenerates.
 #
@@ -73,21 +74,21 @@ linux-arm64: ui
 # -icon embeds favicon.ico as the exe's application icon (resource ID 1). Without
 # it the exe has no icon at all, so Explorer, the taskbar, and the Startup apps
 # list all fall back to the blank generic-executable glyph.
-QM_SYSO = resource_windows_amd64.syso
+QM_SYSO = cmd/quartermaster/resource_windows_amd64.syso
 SETUP_SYSO = cmd/quartermaster-setup/resource_windows_amd64.syso
 
-$(QM_SYSO): favicon.ico versioninfo.json
-	go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -icon favicon.ico -o $@ versioninfo.json
+$(QM_SYSO): cmd/quartermaster/favicon.ico cmd/quartermaster/versioninfo.json
+	go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -icon cmd/quartermaster/favicon.ico -o $@ cmd/quartermaster/versioninfo.json
 
 versioninfo: $(QM_SYSO)
 
 # Same, for the setup program. Its own .syso, in its own package directory: a
-# .syso is linked by the main package that sits beside it, so the repo-root one
-# reaches the server binary and nothing else. Without this the wizard's exe has
+# .syso is linked by the main package that sits beside it, so the cmd/quartermaster
+# one reaches the server binary and nothing else. Without this the wizard's exe has
 # the blank generic-executable glyph in Explorer AND in the taskbar, which is
 # the first thing a user sees of the app.
-$(SETUP_SYSO): favicon.ico cmd/quartermaster-setup/versioninfo.json
-	go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -icon favicon.ico -o $@ cmd/quartermaster-setup/versioninfo.json
+$(SETUP_SYSO): cmd/quartermaster/favicon.ico cmd/quartermaster-setup/versioninfo.json
+	go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -icon cmd/quartermaster/favicon.ico -o $@ cmd/quartermaster-setup/versioninfo.json
 
 versioninfo-setup: $(SETUP_SYSO)
 
@@ -113,7 +114,7 @@ setup-windows: ui-setup $(SETUP_SYSO)
 # Build Windows binary
 windows: ui $(QM_SYSO)
 	@echo "Building Windows binary..."
-	GOOS=windows GOARCH=amd64 go build -ldflags="-H=windowsgui -X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE}" -o $(BUILD_DIR)/$(APP_NAME)-windows-amd64.exe
+	GOOS=windows GOARCH=amd64 go build -ldflags="-H=windowsgui -X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE}" -o $(BUILD_DIR)/$(APP_NAME)-windows-amd64.exe ./cmd/quartermaster
 
 # Assemble a runnable Windows folder + zip (binary, configs, launcher, service files).
 # NOTE: llama-server.exe (llama.cpp) and GGUF models are NOT bundled — separate
@@ -264,10 +265,10 @@ dist: ui
 	# one host with nothing but the Go toolchain.
 	# -H=windowsgui: no console window on launch, including the relaunch that
 	# follows a self-update.
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-H=windowsgui $(DIST_LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-windows-amd64.exe
-	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="$(DIST_LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-linux-amd64
-	CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags="$(DIST_LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-linux-arm64
-	CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -ldflags="$(DIST_LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-darwin-arm64
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-H=windowsgui $(DIST_LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-windows-amd64.exe ./cmd/quartermaster
+	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="$(DIST_LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-linux-amd64 ./cmd/quartermaster
+	CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags="$(DIST_LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-linux-arm64 ./cmd/quartermaster
+	CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -ldflags="$(DIST_LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-darwin-arm64 ./cmd/quartermaster
 	# sha256sum's own format, which is what the updater's SHA256SUMS fallback
 	# parses. Generated from inside the dir so the entries are bare names.
 	@cd $(DIST_DIR) && rm -f SHA256SUMS && \

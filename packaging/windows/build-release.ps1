@@ -120,7 +120,7 @@ foreach ($t in $targets) {
     Write-Host "  building $($t.name)" -ForegroundColor DarkGray
     $env:GOOS = $t.os
     $env:GOARCH = $t.arch
-    go build -ldflags $t.ld -o $out .
+    go build -ldflags $t.ld -o $out .\cmd\quartermaster
     if ($LASTEXITCODE -ne 0) { Die "go build failed for $($t.os)/$($t.arch)" }
     $binaries += $out
 }

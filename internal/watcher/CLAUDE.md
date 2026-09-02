@@ -22,7 +22,7 @@ A simple cross-platform config-file watcher based on `os.Stat` polling rather th
 
 ## Connections
 
-Standard-library-only leaf package. Consumed by the application entry/config layer (`quartermaster.go` / `internal/config`) to trigger config reloads; the `OnChange` callback typically emits a `ConfigFileChangedEvent` (see `internal/shared/events.go`).
+Standard-library-only leaf package. Consumed by the application entry/config layer (`cmd/quartermaster/quartermaster.go` / `internal/config`) to trigger config reloads; the `OnChange` callback typically emits a `ConfigFileChangedEvent` (see `internal/shared/events.go`).
 
 ## Gotchas
 

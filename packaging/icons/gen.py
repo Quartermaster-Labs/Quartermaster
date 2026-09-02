@@ -171,10 +171,10 @@ def main():
     naked, plated = mark.render, mark.render_plated
 
     files = {
-        # repo root: goversioninfo -icon, tray_windows.go //go:embed, and
+        # cmd/quartermaster: goversioninfo -icon, tray_windows.go //go:embed, and
         # installer.iss SetupIconFile all read this one file. Plated: it lands
         # on the taskbar, the tray, and the desktop.
-        os.path.join(ROOT, "favicon.ico"): ico_bytes(plated),
+        os.path.join(ROOT, "cmd", "quartermaster", "favicon.ico"): ico_bytes(plated),
         os.path.join(ROOT, "icon.png"): png_bytes(plated(512)),
         # The browser tab: naked, and served three ways because index.html links
         # all three and browsers disagree about which they prefer.

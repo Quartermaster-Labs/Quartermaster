@@ -23,7 +23,7 @@ and drove VRAM spillover.
 - **`VocabSize`** comes from `token_embd.weight`/`output.weight` tensor elems ÷
   `EmbeddingLength` (`gguf.go`); 0 dims → flat `computeFallbackGB`.
 - **`DetectGpuCompute` must run before anything sizes a model** — hence its
-  unconditional call in `quartermaster.go`. It used to sit inside the `-generate`
+  unconditional call in `cmd/quartermaster/quartermaster.go`. It used to sit inside the `-generate`
   branch, so a serve-only start sized a Vulkan box as CUDA.
 - `effectiveUb` is shared by sizer and emit, so the charged ub matches the emitted `-ub`.
 

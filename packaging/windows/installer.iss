@@ -69,7 +69,7 @@ OutputDir={#OutputDir}
 ; what users download. This is the inner payload it embeds.
 OutputBaseFilename=quartermaster-inno-{#MyAppVersion}
 ; Wizard/setup icon and the Apps & Features entry icon. The path is relative to
-; this .iss, i.e. the repo-root favicon.ico that is also embedded in the exe.
+; this .iss, i.e. the cmd/quartermaster favicon.ico that is also embedded in the exe.
 SetupIconFile=..\..\favicon.ico
 UninstallDisplayIcon={app}\{#MyAppExe}
 Compression=lzma2

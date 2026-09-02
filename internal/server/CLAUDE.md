@@ -68,5 +68,5 @@ Depends on:
   (via the aliases in `toolsbridge.go`) and the `/v1/tools/*` API (`toolsapi.go`).
 - `internal/cache`, `internal/ring` — the capture cache and the metrics ring buffer.
 
-Called by: `quartermaster.go` (root entry) constructs the `Server` via `New`, wires `NewLoggers` and
+Called by: `cmd/quartermaster/quartermaster.go` (the entry point) constructs the `Server` via `New`, wires `NewLoggers` and
 `SetAutogenAdmin`, and drives each listen address through `ServeListener`.

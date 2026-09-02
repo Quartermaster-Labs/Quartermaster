@@ -67,4 +67,4 @@ Each `models:` entry (`ModelConfig`) carries `cmd`, `cmdStop`, `proxy`, `aliases
 - `internal/process` (`process_command.go`) — reads `ModelConfig` for spawning (`SanitizedCommand`, env, timeouts, `cmdStop`).
 - `internal/server` (routes, `/v1/models`, filters, auth) — uses `Filters`, capabilities, peers, and `ListenerModelSets`/`ListenerAddrs` for per-listener catalogs.
 - `internal/perf` — driven by `PerformanceConfig`.
-- `internal/shared`, `cmd/monitor-test`, and the entry point `quartermaster.go`.
+- `internal/shared`, `cmd/monitor-test`, and the entry point `cmd/quartermaster/quartermaster.go`.

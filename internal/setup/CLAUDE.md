@@ -92,7 +92,7 @@ everywhere and the 20 MB installer blob stays in the binary that ships it.
   fix, the drag/min/max/close bindings, the icon and the folder picker all live in
   [`internal/nativewin`](../nativewin/CLAUDE.md) — read that before touching anything that draws.
 - **A `.syso` is linked by the `main` package beside it**, which is why
-  `cmd/quartermaster-setup/resource_windows_amd64.syso` exists separately from the repo-root one
+  `cmd/quartermaster-setup/resource_windows_amd64.syso` exists separately from the `cmd/quartermaster` one
   (`make versioninfo-setup`; both are committed, so a release build picks them up with no script
   change). That resource is the **file** icon Explorer shows; the taskbar/Alt-Tab icon is a separate
   job that `nativewin.ApplyIcon` does at runtime, and both are needed.

@@ -106,7 +106,7 @@ is verified to exactly the standard an update is.
   `POST /api/update/check`, `RelaunchPending()`. All three routes are on `adminChain`.
 - `internal/server/apigroup.go` — `/api/version` also carries `update_blocked`, `update_restart`,
   `update_phase` so the sidebar can render the state without a second request.
-- `quartermaster.go` — runs `Checker.Run`, and after teardown calls `update.Spawn()` when
+- `cmd/quartermaster/quartermaster.go` — runs `Checker.Run`, and after teardown calls `update.Spawn()` when
   `RelaunchPending()`.
 - `ui-svelte/src/stores/update.ts` — the whole client state machine (apply, poll, on-demand
   check), as a store rather than component state because **two** views show one process:

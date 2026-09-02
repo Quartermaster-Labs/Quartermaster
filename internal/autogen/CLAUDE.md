@@ -294,7 +294,7 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 
 - **Depends on:** `internal/perf` and `internal/logmon` (live GPU/VRAM telemetry in `vram.go`);
   `gopkg.in/yaml.v3`.
-- **Called by:** `quartermaster.go` at startup — `EnsureConfig` regenerates the config before
+- **Called by:** `cmd/quartermaster/quartermaster.go` at startup — `EnsureConfig` regenerates the config before
   the router loads it, and `-watch-models`/reload paths use `CachedConfigHash`/`CurrentInputsHash`
   to detect changes. `internal/server` config API reads/writes sidecar overrides and settings,
   previews tunings via `EstimatePlan` + `ReadGgufMetadataCached`, and triggers `EnsureConfig` on
