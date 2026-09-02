@@ -69,8 +69,11 @@ OutputDir={#OutputDir}
 ; what users download. This is the inner payload it embeds.
 OutputBaseFilename=quartermaster-inno-{#MyAppVersion}
 ; Wizard/setup icon and the Apps & Features entry icon. The path is relative to
-; this .iss, i.e. the cmd/quartermaster favicon.ico that is also embedded in the exe.
-SetupIconFile=..\..\favicon.ico
+; this .iss. It reaches into cmd/quartermaster because that is where the icon has to
+; live: Go links a .syso only from the main package directory and //go:embed cannot
+; reach above it, so the exe's own icon source sits there and this points at the
+; same file rather than keeping a second copy in sync.
+SetupIconFile=..\..\cmd\quartermaster\favicon.ico
 UninstallDisplayIcon={app}\{#MyAppExe}
 Compression=lzma2
 SolidCompression=yes
