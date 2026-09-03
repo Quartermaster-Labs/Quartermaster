@@ -196,7 +196,11 @@ $winExe = Join-Path $staging 'quartermaster-windows-amd64.exe'
 
 # 3. Optional sign (Windows binary) — gated on the pfx env var, same as CI.
 # Signed BEFORE hashing, or the published digest would not match the shipped file.
-if ($env:SIGN_PFX_BASE64) {
+# PFX_B64 / PFX_PASS, the names sign.ps1 itself reads. They used to be gated on
+# SIGN_PFX_BASE64 here, which matched nothing: setting it signed nothing (the
+# script no-ops on an unset PFX_B64) and setting PFX_B64 alone never reached the
+# script at all, so the whole path was dead in both directions.
+if ($env:PFX_B64) {
     & (Join-Path $PSScriptRoot 'sign.ps1') $winExe
 }
 
@@ -235,7 +239,7 @@ if (-not $SkipInstaller) {
     # afterwards is impossible, and an unsigned inner installer would trip
     # SmartScreen the moment the wizard extracted and ran it.
     $inno = (Resolve-Path (Join-Path $outdir "quartermaster-inno-$Tag.exe")).Path
-    if ($env:SIGN_PFX_BASE64) { & (Join-Path $PSScriptRoot 'sign.ps1') $inno }
+    if ($env:PFX_B64) { & (Join-Path $PSScriptRoot 'sign.ps1') $inno }
 
     # The embed target is a committed zero-byte placeholder so the package still
     # compiles in a dev tree (place_windows.go checks the size and falls back to
@@ -261,7 +265,7 @@ if (-not $SkipInstaller) {
     }
 
     $setup = (Resolve-Path $setup).Path
-    if ($env:SIGN_PFX_BASE64) { & (Join-Path $PSScriptRoot 'sign.ps1') $setup }
+    if ($env:PFX_B64) { & (Join-Path $PSScriptRoot 'sign.ps1') $setup }
     Write-Host "installer: $setup" -ForegroundColor Green
     $uploads += $setup
     $setups += $setup
