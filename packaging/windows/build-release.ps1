@@ -1,8 +1,11 @@
 <#
 .SYNOPSIS
-  Build every release artifact LOCALLY and upload them to a GitHub release.
-  Replaces the CI runner (private repo Actions minutes are metered; local build
-  is free).
+  Build every release artifact and upload them to a GitHub release. Runs either
+  from a developer's machine (make release) or from .github/workflows/release.yml,
+  which installs the toolchain and calls this same script rather than restating
+  the steps in YAML: two builders would drift, and the one that ships would be
+  the one nobody tested. It predates that workflow, from when metered Actions
+  minutes on a private repo made a local build the cheap option.
 
 .DESCRIPTION
   Produces two kinds of artifact, for two different audiences:

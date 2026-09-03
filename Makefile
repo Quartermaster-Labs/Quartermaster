@@ -283,8 +283,9 @@ dist: ui
 # GitHub repo for `gh` (avoids "no default remote" when multiple remotes exist).
 RELEASE_REPO ?= Quartermaster-Labs/Quartermaster
 
-# Build every release artifact LOCALLY and upload it to a GitHub release
-# (private-repo Actions minutes are metered; local build is free). What ships is
+# Build every release artifact locally and upload it to a GitHub release. The
+# Release workflow runs this very script on a runner, so the two paths cannot
+# drift; this one stays for debugging a release without pushing a tag. What ships is
 # the setup programs (one per platform), the four bare server binaries and
 # SHA256SUMS. The binaries are the in-app updater's payload and the headless
 # install README documents, so a release without them both breaks updates for
