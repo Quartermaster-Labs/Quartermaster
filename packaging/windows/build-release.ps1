@@ -382,7 +382,30 @@ if (-not $Notes) {
         if (-not $Notes) { $Notes = "- no code changes since $prevTag" }
         $Notes += "`n`n**Full changelog**: https://github.com/$Repo/compare/$prevTag...$Tag"
     } else {
-        $Notes = "First public release."
+        # No previous version tag means this IS the first release, and a
+        # changelog against nothing is not a description of it. Say what the
+        # thing is instead, since for exactly one release the notes have no
+        # changes to report and every reader is arriving cold.
+        $Notes = @"
+**Quartermaster's first public release.**
+
+Run any model without tuning a single flag. Point it at your models folder: every GGUF is
+identified from its own header, the VRAM that is actually free is measured, and context length,
+GPU offload, CPU-MoE split and KV sizing are computed per model. Models then hot-swap on demand
+behind one OpenAI- and Anthropic-compatible API.
+
+- **Text, image and audio in one catalog**, served by the inference servers you already trust:
+  llama-server, stable-diffusion.cpp, whisper.cpp, vLLM, TabbyAPI, anything that speaks HTTP.
+- **One scheduler behind every listener**, so everything loaded evicts against a single shared
+  VRAM budget instead of colliding.
+- **A dashboard and a playground**: live VRAM and throughput, per-model tuning, plus chat,
+  images, speech and transcription.
+- **A Hugging Face browser and managed backends**, so a model or a new llama.cpp build is a
+  click rather than an afternoon.
+- **Self-updating** from here on: later releases install themselves from inside the app.
+
+Runs on your hardware. Bring your own models. No telemetry.
+"@
     }
 }
 
