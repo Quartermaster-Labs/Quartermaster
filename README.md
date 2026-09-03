@@ -1,9 +1,15 @@
 ![Quartermaster](docs/assets/social-preview.png)
 
-![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/Quartermaster-Labs/Quartermaster/total)
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Quartermaster-Labs/Quartermaster/go-ci.yml)
-![GitHub Repo stars](https://img.shields.io/github/stars/Quartermaster-Labs/Quartermaster)
-![License](https://img.shields.io/github/license/Quartermaster-Labs/Quartermaster)
+<!-- The ?cacheSeconds= suffix is not decoration. GitHub serves every external
+image through camo.githubusercontent.com, which caches by SOURCE URL: while this
+repo was private, shields.io got a 404 from the GitHub API and rendered "-", and
+camo kept serving those. Changing the URL is the only way to evict them, so if
+a badge is ever stuck on stale data, bump this number rather than waiting. -->
+
+![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/Quartermaster-Labs/Quartermaster/total?cacheSeconds=3600)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Quartermaster-Labs/Quartermaster/go-ci.yml?branch=main&cacheSeconds=3600)
+![GitHub Repo stars](https://img.shields.io/github/stars/Quartermaster-Labs/Quartermaster?cacheSeconds=3600)
+![License](https://img.shields.io/github/license/Quartermaster-Labs/Quartermaster?cacheSeconds=3600)
 
 # Quartermaster
 

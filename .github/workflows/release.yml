@@ -1,0 +1,106 @@
+name: Release
+
+# Builds every release artifact on a runner instead of a developer's machine and
+# uploads them to a DRAFT GitHub release. This workflow deliberately owns no
+# build logic of its own: it installs the toolchain and then calls
+# packaging/windows/build-release.ps1, the same script `make release` runs. Two
+# builders would drift, and the one that ships would be the one nobody tested.
+#
+# Everything cross-compiles from this single Windows runner because CGO is off
+# across the project, so linux/amd64, linux/arm64 and darwin/arm64 all come out
+# of the same job as the Windows wizard.
+#
+# Dispatch it from the ref you want to release. Pick an existing tag to rebuild
+# exactly that commit; pick a branch and the tag is created on its HEAD, which
+# is what the Makefile does locally. build-release.ps1 then refuses to continue
+# if the tag is not HEAD or origin already has it somewhere else, so a mis-picked
+# ref fails before the build rather than shipping the wrong commit.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (vMAJOR.MINOR.PATCH)'
+        required: true
+        type: string
+      draft:
+        description: 'Leave the release as a draft (publish it by hand afterwards)'
+        required: true
+        default: 'true'
+        type: choice
+        options: [ 'true', 'false' ]
+
+# The token pushes the tag and creates/edits the release. actions/checkout leaves
+# it configured as the credential for `git push`, so the script's own push works
+# with no extra setup.
+permissions:
+  contents: write
+
+# A release is not safe to run twice at once: both runs would push the same tag
+# and --clobber the same assets.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
+        with:
+          # The script compares HEAD against the tag both locally and on origin,
+          # so it needs the tags and real history, not a depth-1 checkout.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # 6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # 6.4.0
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: ui-svelte/package-lock.json
+
+      # Present on the runner image today, but that is not a guarantee the image
+      # keeps: without it the script dies after the UI and all four binaries are
+      # already built. Checking costs a second.
+      - name: Ensure Inno Setup 6
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") -and
+              -not (Get-Command ISCC.exe -ErrorAction SilentlyContinue)) {
+            choco install innosetup -y --no-progress
+          }
+
+      # Mirrors the Makefile: created on HEAD when it does not exist yet, and
+      # lightweight so it needs no committer identity. build-release.ps1 verifies
+      # it actually IS HEAD, which is what catches a tag left on another commit.
+      - name: Tag HEAD if the tag is new
+        shell: bash
+        run: git rev-parse "${{ inputs.tag }}" >/dev/null 2>&1 || git tag "${{ inputs.tag }}"
+
+      # Run through cmd so the script is launched by `powershell` (5.1), the
+      # interpreter the Makefile uses, rather than the `pwsh` (7) that GitHub
+      # would otherwise default to on Windows. A CI release is then the same
+      # procedure as a local one, not a PowerShell 7 variant of it.
+      - name: Build and upload release assets
+        shell: cmd
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signing hook. sign.ps1 exits 0 when PFX_B64 is unset, so this is inert
+          # until the secrets exist; adding them starts signing the server binary,
+          # the inner Inno payload and the outer wizard with nothing else to change.
+          # Fork pull requests cannot read secrets, and this workflow only runs on
+          # manual dispatch, so the key is never exposed to untrusted code.
+          PFX_B64: ${{ secrets.PFX_B64 }}
+          PFX_PASS: ${{ secrets.PFX_PASS }}
+        run: >
+          powershell -NoProfile -ExecutionPolicy Bypass
+          -File packaging/windows/build-release.ps1
+          -Tag ${{ inputs.tag }}
+          -Draft ${{ inputs.draft }}
+          -Repo ${{ github.repository }}
