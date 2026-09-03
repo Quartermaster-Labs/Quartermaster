@@ -11,11 +11,28 @@
 
 ARG BACKEND=cuda
 
+# BUILD_JOBS caps `cmake --build -j` in every compile stage. Empty means
+# $(nproc), which is right locally and wrong in CI: BuildKit runs whisper-build,
+# sd-build and llama-build concurrently because they are independent stages, so
+# on a 4-core runner an unbounded -j gives 12 parallel C++ compiles for no gain
+# (there are still only 4 cores) and enough resident memory to get the runner
+# OOM-killed. A CI build passes 2.
+ARG BUILD_JOBS=
+
 # ── Builder bases ──────────────────────────────────────────────────────
 
 FROM nvidia/cuda:12.9.1-devel-ubuntu24.04 AS builder-base-cuda
 
-ARG CMAKE_CUDA_ARCHITECTURES="60;61;75;86;89"
+# Turing, Ampere, Ada. Pascal (60;61) is dropped: ggml's CUDA kernels want at
+# least sm_70 to be worth anything, and a Pascal card is better served by the
+# vulkan image. `-real` suppresses PTX, which halves device codegen per arch at
+# the cost of forward compatibility with an architecture not listed here, so a
+# newer card wants an explicit --build-arg rather than JIT from PTX.
+#
+# This list is the single biggest lever on build time: every entry compiles
+# every .cu file again, and the five-arch default with PTX is what pushed the
+# CUDA job past GitHub's hard 6h ceiling.
+ARG CMAKE_CUDA_ARCHITECTURES="75-real;86-real;89-real"
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}
 ENV CCACHE_DIR=/ccache
@@ -55,31 +72,34 @@ FROM builder-base-${BACKEND} AS builder-base
 
 FROM builder-base AS whisper-build
 ARG BACKEND=cuda
+ARG BUILD_JOBS=
 ARG WHISPER_COMMIT_HASH=master
 COPY docker/unified/install-whisper.sh /build/
 RUN --mount=type=cache,id=ccache-${BACKEND},target=/ccache \
     --mount=type=cache,id=whisper-${BACKEND},target=/src/whisper.cpp/build \
-    BACKEND=${BACKEND} bash /build/install-whisper.sh "${WHISPER_COMMIT_HASH}"
+    BACKEND=${BACKEND} BUILD_JOBS=${BUILD_JOBS} bash /build/install-whisper.sh "${WHISPER_COMMIT_HASH}"
 
 # ── Build stable-diffusion.cpp ────────────────────────────────────────
 
 FROM builder-base AS sd-build
 ARG BACKEND=cuda
+ARG BUILD_JOBS=
 ARG SD_COMMIT_HASH=master
 COPY docker/unified/install-sd.sh /build/
 RUN --mount=type=cache,id=ccache-${BACKEND},target=/ccache \
     --mount=type=cache,id=sd-${BACKEND},target=/src/stable-diffusion.cpp/build \
-    BACKEND=${BACKEND} bash /build/install-sd.sh "${SD_COMMIT_HASH}"
+    BACKEND=${BACKEND} BUILD_JOBS=${BUILD_JOBS} bash /build/install-sd.sh "${SD_COMMIT_HASH}"
 
 # ── Build llama.cpp (slowest build, run last) ─────────────────────────
 
 FROM builder-base AS llama-build
 ARG BACKEND=cuda
+ARG BUILD_JOBS=
 ARG LLAMA_COMMIT_HASH=master
 COPY docker/unified/install-llama.sh /build/
 RUN --mount=type=cache,id=ccache-${BACKEND},target=/ccache \
     --mount=type=cache,id=llama-${BACKEND},target=/src/llama.cpp/build \
-    BACKEND=${BACKEND} bash /build/install-llama.sh "${LLAMA_COMMIT_HASH}"
+    BACKEND=${BACKEND} BUILD_JOBS=${BUILD_JOBS} bash /build/install-llama.sh "${LLAMA_COMMIT_HASH}"
 
 # ── Build ik_llama.cpp (CUDA only) ────────────────────────────────────
 #
@@ -93,11 +113,12 @@ FROM builder-base-vulkan AS ik-llama-vulkan
 RUN mkdir -p /install/bin
 
 FROM builder-base-cuda AS ik-llama-cuda
+ARG BUILD_JOBS=
 ARG IK_LLAMA_COMMIT_HASH=main
 COPY docker/unified/install-ik-llama.sh /build/
 RUN --mount=type=cache,id=ccache-cuda,target=/ccache \
     --mount=type=cache,id=ik-llama-cuda,target=/src/ik_llama.cpp/build \
-    bash /build/install-ik-llama.sh "${IK_LLAMA_COMMIT_HASH}"
+    BUILD_JOBS=${BUILD_JOBS} bash /build/install-ik-llama.sh "${IK_LLAMA_COMMIT_HASH}"
 
 ARG BACKEND=cuda
 FROM ik-llama-${BACKEND} AS ik-llama-build

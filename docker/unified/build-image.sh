@@ -44,6 +44,11 @@ for arg in "$@"; do
             echo "  WHISPER_REF          Pin whisper.cpp to a commit, tag, or branch"
             echo "  SD_REF               Pin stable-diffusion.cpp to a commit, tag, or branch"
             echo "  IK_LLAMA_REF         Pin ik_llama.cpp to a commit, tag, or branch (CUDA only)"
+            echo "  LLAMA_HASH, WHISPER_HASH, SD_HASH, IK_LLAMA_HASH"
+            echo "                       Skip ref resolution and use these commits verbatim"
+            echo "  BUILD_JOBS           cmake -j per compile stage (default: nproc)"
+            echo "  BUILD_TARGET         Build one stage and export only its cache, then stop"
+            echo "                       (whisper-build, sd-build, llama-build, ik-llama-build)"
                         exit 0
             ;;
     esac
@@ -118,8 +123,17 @@ echo "quartermaster Unified Build (${BACKEND})"
 echo "=========================================="
 echo ""
 
+# A caller may skip resolution entirely by exporting the hashes it wants
+# (LLAMA_HASH, WHISPER_HASH, SD_HASH, IK_LLAMA_HASH). That is not an
+# optimisation: the CI workflow splits one image across several jobs, and if
+# each job resolved "master" for itself they would land on different upstream
+# commits minutes apart, share no build cache, and assemble an image out of
+# mismatched parts.
+
 # Resolve llama.cpp ref
-if [[ -n "${LLAMA_REF:-}" ]]; then
+if [[ -n "${LLAMA_HASH:-}" ]]; then
+    echo "llama.cpp: pinned ${LLAMA_HASH}"
+elif [[ -n "${LLAMA_REF:-}" ]]; then
     LLAMA_HASH=$(resolve_ref "${LLAMA_REPO}" "${LLAMA_REF}") || exit 1
     echo "llama.cpp: ${LLAMA_REF} -> ${LLAMA_HASH}"
 else
@@ -132,7 +146,9 @@ else
 fi
 
 # Resolve whisper.cpp ref
-if [[ -n "${WHISPER_REF:-}" ]]; then
+if [[ -n "${WHISPER_HASH:-}" ]]; then
+    echo "whisper.cpp: pinned ${WHISPER_HASH}"
+elif [[ -n "${WHISPER_REF:-}" ]]; then
     WHISPER_HASH=$(resolve_ref "${WHISPER_REPO}" "${WHISPER_REF}") || exit 1
     echo "whisper.cpp: ${WHISPER_REF} -> ${WHISPER_HASH}"
 else
@@ -145,7 +161,9 @@ else
 fi
 
 # Resolve stable-diffusion.cpp ref
-if [[ -n "${SD_REF:-}" ]]; then
+if [[ -n "${SD_HASH:-}" ]]; then
+    echo "stable-diffusion.cpp: pinned ${SD_HASH}"
+elif [[ -n "${SD_REF:-}" ]]; then
     SD_HASH=$(resolve_ref "${SD_REPO}" "${SD_REF}") || exit 1
     echo "stable-diffusion.cpp: ${SD_REF} -> ${SD_HASH}"
 else
@@ -159,7 +177,9 @@ fi
 
 # Resolve ik_llama.cpp ref (CUDA only)
 if [[ "$BACKEND" == "cuda" ]]; then
-    if [[ -n "${IK_LLAMA_REF:-}" ]]; then
+    if [[ -n "${IK_LLAMA_HASH:-}" ]]; then
+        echo "ik_llama.cpp: pinned ${IK_LLAMA_HASH}"
+    elif [[ -n "${IK_LLAMA_REF:-}" ]]; then
         IK_LLAMA_HASH=$(resolve_ref "${IK_LLAMA_REPO}" "${IK_LLAMA_REF}") || exit 1
         echo "ik_llama.cpp: ${IK_LLAMA_REF} -> ${IK_LLAMA_HASH}"
     else
@@ -199,29 +219,67 @@ echo ""
 
 BUILD_ARGS=(
     --build-arg "BACKEND=${BACKEND}"
+    --build-arg "BUILD_JOBS=${BUILD_JOBS:-}"
     --build-arg "LLAMA_COMMIT_HASH=${LLAMA_HASH}"
     --build-arg "WHISPER_COMMIT_HASH=${WHISPER_HASH}"
     --build-arg "SD_COMMIT_HASH=${SD_HASH}"
     --build-arg "IK_LLAMA_COMMIT_HASH=${IK_LLAMA_HASH}"
     --build-arg "QM_COMMIT=${QM_COMMIT}"
     --build-arg "QM_VERSION=${QM_VERSION}"
-    -t "${DOCKER_IMAGE_TAG}"
     -f "${SCRIPT_DIR}/Dockerfile"
 )
+
+# The stages a split build warms one at a time. Order is irrelevant; each is
+# independent, which is exactly why they can be one job each.
+STAGE_TARGETS=(whisper-build sd-build llama-build ik-llama-build)
+
+CACHE_BASE="ghcr.io/quartermaster-labs/quartermaster:unified-${BACKEND}-cache"
 
 if [[ "$NO_CACHE" == true ]]; then
     BUILD_ARGS+=(--no-cache)
     echo "Note: Building without cache"
 elif [[ "${GITHUB_ACTIONS:-}" == "true" && "${ACT:-}" != "true" ]]; then
-    CACHE_REF="ghcr.io/quartermaster-labs/quartermaster:unified-${BACKEND}-cache"
-    BUILD_ARGS+=(
-        --cache-from "type=registry,ref=${CACHE_REF}"
-        --cache-to "type=registry,ref=${CACHE_REF},mode=max"
-    )
-    echo "Note: Using registry cache (${CACHE_REF})"
+    if [[ -n "${BUILD_TARGET:-}" ]]; then
+        # One stage, one cache ref. A shared ref would have the concurrent stage
+        # jobs overwrite each other's manifest, and the last writer would win.
+        BUILD_ARGS+=(
+            --cache-from "type=registry,ref=${CACHE_BASE}-${BUILD_TARGET}"
+            --cache-to "type=registry,ref=${CACHE_BASE}-${BUILD_TARGET},mode=max"
+        )
+        echo "Note: Warming stage cache (${CACHE_BASE}-${BUILD_TARGET})"
+    else
+        # Assembly reads every stage cache the warm-up jobs wrote, so the only
+        # thing left to compile is whatever missed.
+        for stage in "${STAGE_TARGETS[@]}"; do
+            BUILD_ARGS+=(--cache-from "type=registry,ref=${CACHE_BASE}-${stage}")
+        done
+        BUILD_ARGS+=(
+            --cache-from "type=registry,ref=${CACHE_BASE}"
+            --cache-to "type=registry,ref=${CACHE_BASE},mode=max"
+        )
+        echo "Note: Using registry cache (${CACHE_BASE} + ${#STAGE_TARGETS[@]} stage refs)"
+    fi
 fi
 
-DOCKER_BUILDKIT=1 docker buildx build --load "${BUILD_ARGS[@]}" "${REPO_ROOT}"
+# A stage build compiles one project and exports its cache, nothing more. There
+# is no image to load, tag, verify or run: the point is that the next job's
+# assembly finds the objects already built. GitHub caps a job at 6 hours, so
+# splitting the work is what keeps the total under the ceiling no matter how
+# much there is of it.
+if [[ -n "${BUILD_TARGET:-}" ]]; then
+    echo "Stage build: ${BUILD_TARGET} (${BACKEND})"
+    if [[ "${BACKEND}" == "vulkan" && "${BUILD_TARGET}" == "ik-llama-build" ]]; then
+        echo "Nothing to do: ik_llama.cpp is CUDA only."
+        exit 0
+    fi
+    DOCKER_BUILDKIT=1 docker buildx build --target "${BUILD_TARGET}" \
+        "${BUILD_ARGS[@]}" "${REPO_ROOT}"
+    echo "Stage cache written for ${BUILD_TARGET}."
+    exit 0
+fi
+
+DOCKER_BUILDKIT=1 docker buildx build --load -t "${DOCKER_IMAGE_TAG}" \
+    "${BUILD_ARGS[@]}" "${REPO_ROOT}"
 
 echo ""
 echo "=========================================="
