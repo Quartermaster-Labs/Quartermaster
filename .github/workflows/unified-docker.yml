@@ -17,10 +17,6 @@ on:
         description: "stable-diffusion.cpp commit hash, tag, or branch"
         required: false
         default: "master"
-      ik_llama_ref:
-        description: "ik_llama.cpp commit hash, tag, or branch (CUDA only)"
-        required: false
-        default: "main"
       build_cuda:
         description: "Build CUDA image"
         type: boolean
@@ -49,7 +45,6 @@ jobs:
       llama_hash: ${{ steps.refs.outputs.llama_hash }}
       whisper_hash: ${{ steps.refs.outputs.whisper_hash }}
       sd_hash: ${{ steps.refs.outputs.sd_hash }}
-      ik_llama_hash: ${{ steps.refs.outputs.ik_llama_hash }}
     steps:
       # Resolve every upstream ref ONCE, here, and hand the commits to every
       # job below. Each job resolving "master" for itself would pick up whatever
@@ -73,7 +68,6 @@ jobs:
             echo "llama_hash=$(resolve https://github.com/ggml-org/llama.cpp.git "${{ inputs.llama_cpp_ref || 'master' }}")"
             echo "whisper_hash=$(resolve https://github.com/ggml-org/whisper.cpp.git "${{ inputs.whisper_ref || 'master' }}")"
             echo "sd_hash=$(resolve https://github.com/leejet/stable-diffusion.cpp.git "${{ inputs.sd_ref || 'master' }}")"
-            echo "ik_llama_hash=$(resolve https://github.com/ikawrakow/ik_llama.cpp.git "${{ inputs.ik_llama_ref || 'main' }}")"
           } >> "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
 
@@ -103,7 +97,7 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(needs.setup.outputs.matrix) }}
-        stage: [whisper-build, sd-build, llama-build, ik-llama-build]
+        stage: [whisper-build, sd-build, llama-build]
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
@@ -134,7 +128,6 @@ jobs:
           LLAMA_HASH: ${{ needs.setup.outputs.llama_hash }}
           WHISPER_HASH: ${{ needs.setup.outputs.whisper_hash }}
           SD_HASH: ${{ needs.setup.outputs.sd_hash }}
-          IK_LLAMA_HASH: ${{ needs.setup.outputs.ik_llama_hash }}
         run: |
           chmod +x docker/unified/build-image.sh
           docker/unified/build-image.sh --${{ matrix.backend }}
@@ -186,7 +179,6 @@ jobs:
           LLAMA_HASH: ${{ needs.setup.outputs.llama_hash }}
           WHISPER_HASH: ${{ needs.setup.outputs.whisper_hash }}
           SD_HASH: ${{ needs.setup.outputs.sd_hash }}
-          IK_LLAMA_HASH: ${{ needs.setup.outputs.ik_llama_hash }}
           BUILD_JOBS: 2
           DOCKER_IMAGE_TAG: ghcr.io/quartermaster-labs/quartermaster:unified-${{ matrix.backend }}
           # When running under act, use the local builder that has warm ccache.

@@ -10,7 +10,6 @@
 #   LLAMA_REF=v1.2.3 ./build-image.sh --cuda             # Pin llama.cpp to a tag
 #   WHISPER_REF=v1.0.0 ./build-image.sh --vulkan         # Pin whisper.cpp to a tag
 #   SD_REF=master ./build-image.sh --cuda                # Pin stable-diffusion.cpp to a branch
-#   IK_LLAMA_REF=main ./build-image.sh --cuda            # Pin ik_llama.cpp to main branch (CUDA only)
 #
 
 set -euo pipefail
@@ -43,12 +42,11 @@ for arg in "$@"; do
             echo "  LLAMA_REF            Pin llama.cpp to a commit, tag, or branch"
             echo "  WHISPER_REF          Pin whisper.cpp to a commit, tag, or branch"
             echo "  SD_REF               Pin stable-diffusion.cpp to a commit, tag, or branch"
-            echo "  IK_LLAMA_REF         Pin ik_llama.cpp to a commit, tag, or branch (CUDA only)"
-            echo "  LLAMA_HASH, WHISPER_HASH, SD_HASH, IK_LLAMA_HASH"
+            echo "  LLAMA_HASH, WHISPER_HASH, SD_HASH"
             echo "                       Skip ref resolution and use these commits verbatim"
             echo "  BUILD_JOBS           cmake -j per compile stage (default: nproc)"
             echo "  BUILD_TARGET         Build one stage and export only its cache, then stop"
-            echo "                       (whisper-build, sd-build, llama-build, ik-llama-build)"
+            echo "                       (whisper-build, sd-build, llama-build)"
                         exit 0
             ;;
     esac
@@ -72,7 +70,6 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 LLAMA_REPO="https://github.com/ggml-org/llama.cpp.git"
 WHISPER_REPO="https://github.com/ggml-org/whisper.cpp.git"
 SD_REPO="https://github.com/leejet/stable-diffusion.cpp.git"
-IK_LLAMA_REPO="https://github.com/ikawrakow/ik_llama.cpp.git"
 
 # Resolve a git ref (commit hash, tag, or branch) to a full commit hash.
 # Requires only: git, network access to the remote.
@@ -124,7 +121,7 @@ echo "=========================================="
 echo ""
 
 # A caller may skip resolution entirely by exporting the hashes it wants
-# (LLAMA_HASH, WHISPER_HASH, SD_HASH, IK_LLAMA_HASH). That is not an
+# (LLAMA_HASH, WHISPER_HASH, SD_HASH). That is not an
 # optimisation: the CI workflow splits one image across several jobs, and if
 # each job resolved "master" for itself they would land on different upstream
 # commits minutes apart, share no build cache, and assemble an image out of
@@ -175,26 +172,6 @@ else
     echo "stable-diffusion.cpp: latest HEAD: ${SD_HASH}"
 fi
 
-# Resolve ik_llama.cpp ref (CUDA only)
-if [[ "$BACKEND" == "cuda" ]]; then
-    if [[ -n "${IK_LLAMA_HASH:-}" ]]; then
-        echo "ik_llama.cpp: pinned ${IK_LLAMA_HASH}"
-    elif [[ -n "${IK_LLAMA_REF:-}" ]]; then
-        IK_LLAMA_HASH=$(resolve_ref "${IK_LLAMA_REPO}" "${IK_LLAMA_REF}") || exit 1
-        echo "ik_llama.cpp: ${IK_LLAMA_REF} -> ${IK_LLAMA_HASH}"
-    else
-        IK_LLAMA_HASH=$(get_latest_hash "${IK_LLAMA_REPO}")
-        if [[ -z "${IK_LLAMA_HASH}" ]]; then
-            echo "ERROR: Could not determine latest commit for ik_llama.cpp" >&2
-            exit 1
-        fi
-        echo "ik_llama.cpp: latest HEAD: ${IK_LLAMA_HASH}"
-    fi
-else
-    IK_LLAMA_HASH="n/a"
-    echo "ik_llama.cpp: skipped (vulkan build)"
-fi
-
 # Stamp quartermaster from the LOCAL checkout. It is not resolved against a
 # remote like the C++ projects are: the repo is private, so the build COPYs the
 # working tree in rather than cloning it, and the version must describe what was
@@ -215,15 +192,12 @@ echo "Starting Docker build..."
 echo "=========================================="
 echo ""
 
-
-
 BUILD_ARGS=(
     --build-arg "BACKEND=${BACKEND}"
     --build-arg "BUILD_JOBS=${BUILD_JOBS:-}"
     --build-arg "LLAMA_COMMIT_HASH=${LLAMA_HASH}"
     --build-arg "WHISPER_COMMIT_HASH=${WHISPER_HASH}"
     --build-arg "SD_COMMIT_HASH=${SD_HASH}"
-    --build-arg "IK_LLAMA_COMMIT_HASH=${IK_LLAMA_HASH}"
     --build-arg "QM_COMMIT=${QM_COMMIT}"
     --build-arg "QM_VERSION=${QM_VERSION}"
     -f "${SCRIPT_DIR}/Dockerfile"
@@ -231,7 +205,7 @@ BUILD_ARGS=(
 
 # The stages a split build warms one at a time. Order is irrelevant; each is
 # independent, which is exactly why they can be one job each.
-STAGE_TARGETS=(whisper-build sd-build llama-build ik-llama-build)
+STAGE_TARGETS=(whisper-build sd-build llama-build)
 
 CACHE_BASE="ghcr.io/quartermaster-labs/quartermaster:unified-${BACKEND}-cache"
 
@@ -268,10 +242,6 @@ fi
 # much there is of it.
 if [[ -n "${BUILD_TARGET:-}" ]]; then
     echo "Stage build: ${BUILD_TARGET} (${BACKEND})"
-    if [[ "${BACKEND}" == "vulkan" && "${BUILD_TARGET}" == "ik-llama-build" ]]; then
-        echo "Nothing to do: ik_llama.cpp is CUDA only."
-        exit 0
-    fi
     DOCKER_BUILDKIT=1 docker buildx build --target "${BUILD_TARGET}" \
         "${BUILD_ARGS[@]}" "${REPO_ROOT}"
     echo "Stage cache written for ${BUILD_TARGET}."
@@ -288,9 +258,6 @@ echo "=========================================="
 echo ""
 
 EXPECTED_BINARIES=(llama-server llama-cli whisper-server whisper-cli sd-server sd-cli quartermaster)
-if [[ "$BACKEND" == "cuda" ]]; then
-    EXPECTED_BINARIES+=(ik-llama-server)
-fi
 
 MISSING_BINARIES=()
 for binary in "${EXPECTED_BINARIES[@]}"; do
@@ -311,9 +278,6 @@ if [[ ${#MISSING_BINARIES[@]} -gt 0 ]]; then
 fi
 
 VERIFIED_LIST="llama-server, llama-cli, whisper-server, whisper-cli, sd-server, sd-cli, quartermaster"
-if [[ "$BACKEND" == "cuda" ]]; then
-    VERIFIED_LIST="${VERIFIED_LIST}, ik-llama-server"
-fi
 echo "All expected binaries verified: ${VERIFIED_LIST}"
 
 echo ""
@@ -348,9 +312,6 @@ echo "Built with:"
 echo "  llama.cpp:            ${LLAMA_HASH}"
 echo "  whisper.cpp:          ${WHISPER_HASH}"
 echo "  stable-diffusion.cpp: ${SD_HASH}"
-if [[ "$BACKEND" == "cuda" ]]; then
-    echo "  ik_llama.cpp:         ${IK_LLAMA_HASH}"
-fi
 echo "  quartermaster:           $(docker run --rm --entrypoint cat "${DOCKER_IMAGE_TAG}" /versions.txt | grep quartermaster | cut -d' ' -f2-)"
 echo ""
 if [[ "$BACKEND" == "vulkan" ]]; then

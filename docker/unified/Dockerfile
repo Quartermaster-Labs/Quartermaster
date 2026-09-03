@@ -101,28 +101,6 @@ RUN --mount=type=cache,id=ccache-${BACKEND},target=/ccache \
     --mount=type=cache,id=llama-${BACKEND},target=/src/llama.cpp/build \
     BACKEND=${BACKEND} BUILD_JOBS=${BUILD_JOBS} bash /build/install-llama.sh "${LLAMA_COMMIT_HASH}"
 
-# ── Build ik_llama.cpp (CUDA only) ────────────────────────────────────
-#
-# Two named stages allow ARG BACKEND to select at build time:
-#   - ik-llama-cuda  : real build (from builder-base-cuda)
-#   - ik-llama-vulkan: no-op (empty /install/bin, skips CUDA pull entirely)
-# BuildKit only evaluates the selected branch, so vulkan builds never
-# pull nvidia/cuda:*-devel or compile ik_llama.cpp.
-
-FROM builder-base-vulkan AS ik-llama-vulkan
-RUN mkdir -p /install/bin
-
-FROM builder-base-cuda AS ik-llama-cuda
-ARG BUILD_JOBS=
-ARG IK_LLAMA_COMMIT_HASH=main
-COPY docker/unified/install-ik-llama.sh /build/
-RUN --mount=type=cache,id=ccache-cuda,target=/ccache \
-    --mount=type=cache,id=ik-llama-cuda,target=/src/ik_llama.cpp/build \
-    BUILD_JOBS=${BUILD_JOBS} bash /build/install-ik-llama.sh "${IK_LLAMA_COMMIT_HASH}"
-
-ARG BACKEND=cuda
-FROM ik-llama-${BACKEND} AS ik-llama-build
-
 # ── Build quartermaster from source ──────────────────────
 #
 # Two stages, because the toolchains do not overlap and neither of them is in
@@ -213,7 +191,6 @@ ARG BACKEND=cuda
 ARG LLAMA_COMMIT_HASH=unknown
 ARG WHISPER_COMMIT_HASH=unknown
 ARG SD_COMMIT_HASH=unknown
-ARG IK_LLAMA_COMMIT_HASH=unknown
 ARG RUN_UID=0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -245,9 +222,6 @@ COPY --from=sd-build /install/lib/ /usr/local/lib/
 COPY --from=llama-build /install/bin/llama-server /usr/local/bin/
 COPY --from=llama-build /install/bin/llama-cli /usr/local/bin/
 
-# Copy ik-llama-server (CUDA only; empty copy for vulkan)
-COPY --from=ik-llama-build /install/bin/ /usr/local/bin/
-
 # Install uv
 RUN pip install uv --break-system-packages
 
@@ -263,7 +237,6 @@ COPY docker/unified/config.example.yaml /etc/quartermaster/config/config.yaml
 RUN echo "llama.cpp: ${LLAMA_COMMIT_HASH}" > /versions.txt && \
     echo "whisper.cpp: ${WHISPER_COMMIT_HASH}" >> /versions.txt && \
     echo "stable-diffusion.cpp: ${SD_COMMIT_HASH}" >> /versions.txt && \
-    echo "ik_llama.cpp: ${IK_LLAMA_COMMIT_HASH}" >> /versions.txt && \
     echo "quartermaster: $(cat /tmp/quartermaster-version)" >> /versions.txt && \
     echo "backend: ${BACKEND}" >> /versions.txt && \
     echo "build_timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /versions.txt

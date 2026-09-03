@@ -240,7 +240,7 @@ which is also what you get over ssh with `-browser`. Every step is identical eit
 
 ### Docker
 
-The unified image bundles llama-server, ik-llama-server, stable-diffusion.cpp, whisper.cpp and
+The unified image bundles llama-server, stable-diffusion.cpp, whisper.cpp and
 Quartermaster, all built from source. Tags are published per compute backend.
 
 ```shell
@@ -260,8 +260,8 @@ docker/unified/build-image.sh --vulkan   # AMD and everything else
 ```
 
 That builds from your working tree, not from a git ref, so what you have checked out is what the
-image runs. Expect a long first build: four C++ projects compile from source, and only the Go and
-npm stages are quick. Each run pins llama.cpp, whisper.cpp, stable-diffusion.cpp and ik_llama.cpp
+image runs. Expect a long first build: three C++ projects compile from source, and only the Go and
+npm stages are quick. Each run pins llama.cpp, whisper.cpp and stable-diffusion.cpp
 to a resolved commit, so `LLAMA_REF=b1234 docker/unified/build-image.sh --vulkan` reproduces an
 exact combination.
 
