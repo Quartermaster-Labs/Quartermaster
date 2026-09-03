@@ -107,19 +107,15 @@ func TestPEImports_MissingTransitiveDep(t *testing.T) {
 	dir := t.TempDir()
 	exe := filepath.Join(dir, "sd-server.exe")
 	dll := filepath.Join(dir, "stable-diffusion.dll")
-	buildPE(t, exe, []string{"stable-diffusion.dll", "KERNEL32.dll"})
+	// No KERNEL32 here on purpose. It resolves from System32 on Windows and from
+	// nowhere on a Linux runner, where it would arrive as a third missing dep owned
+	// by the exe rather than the dll, and Hint drops its "imported by" clause as
+	// soon as the deps stop sharing one parent. The attribution this test is about
+	// is platform-independent; the fixture should be too.
+	buildPE(t, exe, []string{"stable-diffusion.dll"})
 	buildPE(t, dll, []string{"amdhip64_7.dll", "hipblas.dll", "api-ms-win-crt-heap-l1-1-0.dll"})
 
-	// KERNEL32 resolves from System32 on Windows and has nowhere to resolve from
-	// on a Linux CI runner, where it lands in Missing as a third entry. It is
-	// dropped rather than asserted on so this test checks the attribution logic
-	// on both, which is the part that is actually platform-independent.
-	var got []Dep
-	for _, d := range Missing(exe) {
-		if !strings.EqualFold(d.Name, "KERNEL32.dll") {
-			got = append(got, d)
-		}
-	}
+	got := Missing(exe)
 	if len(got) != 2 {
 		t.Fatalf("Missing = %+v, want 2 entries", got)
 	}
