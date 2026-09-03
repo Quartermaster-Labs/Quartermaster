@@ -40,6 +40,26 @@ jobs:
             gofmt -l .
             exit 1
           fi
+      # `make test-all` is `go test ./internal/...`, so without this nothing in CI
+      # ever compiles the binaries that actually ship. cmd/quartermaster (with
+      # bundle.go) and the whole cmd/quartermaster-setup wizard could fail to
+      # build and this job would still be green: the breakage would surface from
+      # `make release`, after the tag naming that commit already exists. The old
+      # path filters said the quiet part out loud, excluding cmd/ "because it
+      # contains utilities without tests" — true of the tests, not of the build.
+      #
+      # CGO is off across the project, so this one Linux runner covers every
+      # target the release publishes, Windows and macOS included.
+      - name: Build the shipped commands for every release target
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go build ./...
+          for target in windows/amd64 linux/amd64 linux/arm64 darwin/arm64; do
+            echo "== $target"
+            GOOS="${target%/*}" GOARCH="${target#*/}"               go build -o /dev/null ./cmd/quartermaster ./cmd/quartermaster-setup
+          done
+
       # cache simple-responder to save the build time
       - name: Restore Simple Responder
         id: restore-simple-responder
