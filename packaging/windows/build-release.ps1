@@ -367,15 +367,21 @@ $uploads += $sumsPath
 
 # The changelog is the commit log, so there is no separate file to drift from
 # it -- which is what makes the "scope: short subject" commit format load
-# bearing: a subject line IS a changelog entry. describe on $Tag^ names the tag
-# before this one, and -match keeps it to version tags: describe answers with
-# the nearest tag of ANY kind, so a non-release tag in the history (assets-v1)
-# would otherwise become the range's start. On the very first release there is
-# no previous tag at all, and the range would collapse to "every commit ever",
-# which is not a changelog, so that case says something true instead.
+# bearing: a subject line IS a changelog entry. The previous release is the
+# highest v* tag reachable from this one's parent: --list keeps a non-release
+# tag in the history (assets-v1) out of it, and --merged keeps a LATER release
+# on another line out of it too.
+#
+# Deliberately not `git describe`: with no tag to find it fails, and a native
+# command's stderr under $ErrorActionPreference = 'Stop' is a terminating
+# NativeCommandError that `2>$null` does not stop. It killed the first release
+# built after the tags were cleared, at the last step, with every asset already
+# compiled. `git tag --list` writes nothing and exits 0 when it matches nothing.
+# On the very first release there is then no previous tag at all, and a range
+# from nothing would collapse to "every commit ever", which is not a changelog,
+# so that case says something else entirely.
 if (-not $Notes) {
-    $prevTag = (git describe --tags --abbrev=0 --match "v[0-9]*" "$Tag^" 2>$null)
-    if ($LASTEXITCODE -ne 0) { $prevTag = '' }
+    $prevTag = @(git tag --list "v[0-9]*" --merged "$Tag^" --sort=-v:refname)[0]
     if ($prevTag) {
         $subjects = @(git log --no-merges --pretty=format:%s "$prevTag..$Tag")
         $Notes = (($subjects | Where-Object { $_ } | ForEach-Object { "- $_" }) -join "`n")
