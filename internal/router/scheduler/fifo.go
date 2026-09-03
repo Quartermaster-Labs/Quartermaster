@@ -153,17 +153,21 @@ func (s *FIFO) ApplyConfig(conf config.Config, planner Swapper) {
 // The decision tree, in order:
 //
 //  1. Unknown model — respond with ErrModelNotFound and move on.
+//
 //  2. A swap to the same model is already in flight — attach this waiter so
 //     one swap serves all callers that asked for the same model.
+//
 //  3. Fast path — the target process is already ready, the planner sees
 //     nothing to evict, and no in-flight swap is evicting it. Hand back its
 //     ServeHTTP immediately.
+//
 //  4. Would collide with an in-flight swap (we'd stop their target, or they're
 //     stopping us) — park in the queue for OnSwapDone to drain.
+//
 //  5. Would evict a process that is still handling requests — park in the
 //     queue. OnServeDone will retry when the busy process drains.
 //
-//  5b. Would evict a model inside its hold window while this caller still has
+//     5b. Would evict a model inside its hold window while this caller still has
 //     patience left — park in the queue. The hold lapsing, or this caller's
 //     patience running out, brings us back here via OnWake.
 //

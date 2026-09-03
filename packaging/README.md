@@ -24,10 +24,19 @@ first launch. `windows/fetch-backend.ps1` did this job before and is no longer
 run by anything — it is kept only as a manual escape hatch. Installs per-user
 (no UAC) under `%LocalAppData%\Programs`.
 
-**Code signing** is off until you add repo secrets `SIGN_PFX_BASE64` (base64 of
-a `.pfx`) and `SIGN_PFX_PASSWORD`; CI then signs the binary + installer
-(`windows/sign.ps1`). For a free OSS cert, apply to SignPath Foundation and swap
-the sign step for their action. Unsigned builds trip SmartScreen until then.
+**Code signing** is off until `PFX_B64` (base64 of a `.pfx`) and `PFX_PASS` are
+set, as repo secrets for the Release workflow or as env vars for a local
+`make release`. `windows/sign.ps1` then signs the server binary, the inner Inno
+payload and the outer wizard; it exits 0 when `PFX_B64` is unset, so nothing else
+changes when the secrets are absent. Note that no public CA has issued an
+exportable `.pfx` since the CA/Browser Forum moved code-signing keys onto
+hardware tokens in June 2023, so this path now suits a legacy cert or an HSM
+export only. The current options are SignPath Foundation (free for open source,
+they hold the key, and it requires the CI-built artifacts the Release workflow
+now produces) or Azure Trusted Signing (~$10/month, signs via `signtool /dlib`
+rather than a `.pfx`, so it needs a new branch in `sign.ps1`). Unsigned builds
+trip SmartScreen until then, and an unsigned installer also shows no icon in the
+SmartScreen and UAC dialogs, which suppress it for want of a verified publisher.
 
 # Running quartermaster as a service
 
