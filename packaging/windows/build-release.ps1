@@ -44,19 +44,23 @@
   new user will first-install from, and for testing the updater path. Implies
   -PublishBinaries, since otherwise there would be nothing to upload.
 
+.PARAMETER SkipBinaries
+  Do NOT upload the four bare server binaries. Almost never what you want, and
+  the damage is silent: the in-app updater (internal/update) looks for its
+  platform's binary by exact name and treats a miss as "no update available", so
+  every existing install stops updating with nothing logged anywhere. README's
+  "Linux and macOS binaries" section also sends people to the release page for
+  exactly these files, so a release without them documents a download that is
+  not there.
+
+  The reason to want them gone is that a release page is a download page, and
+  the server binary sitting next to the setup program is the file a visitor is
+  most likely to take by mistake. That is handled in the notes instead: they
+  name the setup programs first and put everything else behind a collapsed
+  "who is this for" section, which renders above the asset list.
+
 .PARAMETER PublishBinaries
-  Also upload the four bare server binaries. OFF by default: a release page is
-  a download page, and the server binary sitting next to the setup program is
-  the file a visitor is most likely to take by mistake.
-
-  Leaving them off costs one thing, and it is silent: the in-app updater
-  (internal/update) looks for its platform's binary by exact name and treats a
-  miss as "no update available", so existing installs stop updating with nothing
-  logged. Pass this switch for any release the updater is expected to work from.
-
-  First installs are unaffected on every platform: each setup program carries
-  its own payload (the Inno package on Windows, the server binary itself on
-  linux and darwin), so none of them needs an asset off the release page.
+  Kept for callers that pass it. Binaries are published unless -SkipBinaries.
 #>
 [CmdletBinding()]
 param(
@@ -68,7 +72,8 @@ param(
     [string]$Repo = 'Quartermaster-Labs/Quartermaster',
     [switch]$SkipUi,
     [switch]$SkipInstaller,
-    [switch]$PublishBinaries
+    [switch]$PublishBinaries,
+    [switch]$SkipBinaries
 )
 
 $ErrorActionPreference = 'Stop'
@@ -76,6 +81,10 @@ $isDraft = ($Draft -eq 'true')
 # Without the wizards there is nothing else to publish, so this combination
 # would create an empty release rather than a binaries-only one.
 if ($SkipInstaller) { $PublishBinaries = $true }
+# Default ON. The switch above stays for callers that pass it explicitly; this
+# is what makes "make release" publish an updatable release without remembering
+# a flag, and -SkipBinaries the deliberate way to opt out.
+if (-not $SkipBinaries) { $PublishBinaries = $true }
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 Set-Location $root
 
@@ -328,10 +337,14 @@ $uploads += $sumsPath
 #
 # The body says which of the eight assets to click. Every one of them has to be
 # on the release -- the bare binaries are what the in-app updater renames over
-# the running exe, and what a lone unix setup file downloads for itself
-# (cmd/quartermaster-setup/place_other.go) -- but only three are a download a
-# person makes, and a release page listing them all with no explanation invites
-# someone to grab the server binary and wonder why nothing installs.
+# the running exe, what a lone unix setup file downloads for itself
+# (cmd/quartermaster-setup/place_other.go), and the headless install README
+# documents -- but only three are the download a first-time visitor wants. The
+# body renders directly above the asset list, so it is the only place that can
+# say so before someone scrolls into the files and guesses: setup programs by
+# name first, everything else behind a collapsed section that says who it is
+# for. Hiding an asset is not an option GitHub offers, and renaming the
+# binaries would cut installed copies off from updates.
 $notes = @"
 Download the setup program for your platform:
 
@@ -345,6 +358,22 @@ clear the quarantine flag before the first launch:
 ``xattr -d com.apple.quarantine ./quartermaster-setup-darwin-arm64-$Tag``
 
 ``SHA256SUMS`` covers every file here.
+
+<details>
+<summary><b>The other files, and who they are for</b></summary>
+
+``quartermaster-windows-amd64.exe`` and ``quartermaster-linux-amd64`` /
+``-linux-arm64`` / ``-darwin-arm64`` are the bare server binary, not an
+installer. Nothing about them creates a Start Menu entry, a desktop shortcut or
+an uninstall record. They are published for two reasons:
+
+- the in-app updater downloads one to replace the running binary, so a release
+  without them silently stops every existing install from updating;
+- a headless Linux or macOS box can run one directly: ``chmod +x``, point it at
+  a models folder, and install backends from Settings.
+
+**Installing for the first time? Take a ``quartermaster-setup-...`` file above.**
+</details>
 "@
 
 git push origin $Tag
