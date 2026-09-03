@@ -110,12 +110,20 @@ func TestPEImports_MissingTransitiveDep(t *testing.T) {
 	buildPE(t, exe, []string{"stable-diffusion.dll", "KERNEL32.dll"})
 	buildPE(t, dll, []string{"amdhip64_7.dll", "hipblas.dll", "api-ms-win-crt-heap-l1-1-0.dll"})
 
-	got := Missing(exe)
+	// KERNEL32 resolves from System32 on Windows and has nowhere to resolve from
+	// on a Linux CI runner, where it lands in Missing as a third entry. It is
+	// dropped rather than asserted on so this test checks the attribution logic
+	// on both, which is the part that is actually platform-independent.
+	var got []Dep
+	for _, d := range Missing(exe) {
+		if !strings.EqualFold(d.Name, "KERNEL32.dll") {
+			got = append(got, d)
+		}
+	}
 	if len(got) != 2 {
 		t.Fatalf("Missing = %+v, want 2 entries", got)
 	}
-	// Sorted by name, so amdhip64_7 first. KERNEL32 resolves from System32 on
-	// Windows and is absent elsewhere, so it is deliberately not asserted on.
+	// Sorted by name, so amdhip64_7 first.
 	if got[0].Name != "amdhip64_7.dll" || got[1].Name != "hipblas.dll" {
 		t.Fatalf("missing names = %+v", got)
 	}
