@@ -46,6 +46,19 @@ on:
   release:
     types: [published]
 
+  # A release published BY the Release workflow does not fire `release:
+  # published` above: GitHub deliberately does not let events raised with the
+  # default GITHUB_TOKEN start further workflow runs, or a workflow could loop
+  # itself. So the trigger that used to be enough stopped being enough the
+  # moment releases moved from a laptop to CI, and silently: the release
+  # succeeds, the site keeps advertising the previous version's installer.
+  # workflow_run is the documented way to chain onto it, and it runs at the
+  # default branch ref rather than at the tag, so it also sidesteps the
+  # environment tag policy noted above.
+  workflow_run:
+    workflows: [ "Release" ]
+    types: [ completed ]
+
   workflow_dispatch:
 
 permissions:
@@ -63,8 +76,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
     # Present on every repo-scoped event, workflow_dispatch included, so a manual
-    # run while private is skipped too rather than failing halfway.
-    if: github.event.repository.private == false
+    # run while private is skipped too rather than failing halfway. The second
+    # clause is for workflow_run only: that event fires whatever the Release run
+    # concluded, and a failed release has nothing new to advertise.
+    if: >-
+      github.event.repository.private == false &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
 
