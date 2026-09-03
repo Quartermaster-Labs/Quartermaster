@@ -63,6 +63,16 @@ child process that the Windows service API cannot see**.
 `Spawn()` is called by `main` *after* teardown completes, so the replacement never races the dying
 process for the listen sockets.
 
+**On Windows the replacement must break out of the job object**, and this is not optional:
+`process.SetupTreeCleanup` puts quartermaster in a job with `KILL_ON_JOB_CLOSE` so a crash reaps the
+backends, job membership is inherited, and the replacement was therefore killed by the OS a
+heartbeat after it started, every time, silently, because `cmd.Start()` had already returned
+success. `detachedAttr` adds `CREATE_BREAKAWAY_FROM_JOB` and the job is created `BREAKAWAY_OK`;
+`Spawn` retries without the flag if some outer job refuses, since a replacement that runs and might
+be reaped beats one that never started. Note the fix lives in the OUTGOING binary: an install
+updating *away* from a build that predates it still gets the old behaviour once, because that build
+is the one doing the spawning.
+
 ## The other consumer: first install
 
 `FetchBinary` (`fetch.go`) is the same lookup and the same verification, pointed at a directory

@@ -412,9 +412,12 @@ function renderDownloads(release) {
   return DOWNLOADS.map(({ os, mark, label }) => {
     const per = release?.perOS?.[os];
     const href = per ? per.url : `${REPO}/releases/latest`;
-    const size = per ? ` · ${fmtSize(per.size)}` : "";
     const hide = os === "windows" ? "" : " hidden";
-    return `<a class="btn btn-primary" data-os="${os}" href="${href}"${hide}>${icon(mark, 18)} Download for ${label}${size}</a>`;
+    // No file size here: this is the first thing on the page, and a number
+    // nobody is deciding on only dilutes the one call to action. The download
+    // section further down still carries it, where it is actually a detail
+    // someone might want.
+    return `<a class="btn btn-primary" data-os="${os}" href="${href}"${hide}>${icon(mark, 18)} Download for ${label}</a>`;
   }).join("\n      ");
 }
 

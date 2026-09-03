@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 )
 
 // blockedReason explains why a binary swap cannot work in this environment, or
@@ -85,9 +86,25 @@ func Spawn() error {
 	if err != nil {
 		cwd = filepath.Dir(exe)
 	}
-	cmd := exec.Command(exe, os.Args[1:]...)
-	cmd.Dir = cwd
-	cmd.Env = os.Environ()
-	cmd.SysProcAttr = detachedAttr()
-	return cmd.Start()
+	start := func(attr *syscall.SysProcAttr) error {
+		cmd := exec.Command(exe, os.Args[1:]...)
+		cmd.Dir = cwd
+		cmd.Env = os.Environ()
+		cmd.SysProcAttr = attr
+		return cmd.Start()
+	}
+
+	err = start(detachedAttr())
+	if err == nil {
+		return nil
+	}
+	// The preferred attributes can be refused as a set (see detachedAttr on
+	// windows: breaking out of a job the OS will not let us leave). Retry with
+	// whatever the platform can still offer before giving up on the restart.
+	if alt := detachedAttrFallback(); alt != nil {
+		if altErr := start(alt); altErr == nil {
+			return nil
+		}
+	}
+	return err
 }

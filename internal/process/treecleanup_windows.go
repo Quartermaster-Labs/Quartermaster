@@ -20,6 +20,15 @@ import (
 // The job handle is intentionally leaked for the lifetime of the process: the
 // kill-on-close behaviour fires when the last handle is released, which the OS
 // does when the process exits.
+//
+// JOB_OBJECT_LIMIT_BREAKAWAY_OK is what keeps the self-updater alive. Job
+// membership is inherited by every child, and kill-on-close does not care that
+// a child is a whole new quartermaster: update.Spawn starts the replacement,
+// this process exits, the job closes, and the OS kills the replacement a
+// heartbeat after it started. BREAKAWAY_OK does not change what a normal spawn
+// does (a backend still lands in the job and is still reaped): it only makes
+// CREATE_BREAKAWAY_FROM_JOB legal for the one caller that asks, which is the
+// relaunch in internal/update.
 func SetupTreeCleanup() error {
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
@@ -28,7 +37,7 @@ func SetupTreeCleanup() error {
 
 	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{
 		BasicLimitInformation: windows.JOBOBJECT_BASIC_LIMIT_INFORMATION{
-			LimitFlags: windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+			LimitFlags: windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | windows.JOB_OBJECT_LIMIT_BREAKAWAY_OK,
 		},
 	}
 	if _, err := windows.SetInformationJobObject(

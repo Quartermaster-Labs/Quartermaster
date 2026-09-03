@@ -30,3 +30,8 @@ func supervised() bool {
 func detachedAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{Setsid: true}
 }
+
+// detachedAttrFallback has nothing to retry with here: Setsid is the only
+// attribute, and it does not fail for a reason a second attempt would fix. Only
+// the Windows build has a start that can be refused for its creation flags.
+func detachedAttrFallback() *syscall.SysProcAttr { return nil }
