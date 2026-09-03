@@ -1,37 +1,23 @@
 name: Linux CI
 
+# Deliberately unfiltered. This used to list the paths that "affect the backend"
+# (Go files, go.mod, the Makefile, and config-schema.json / config.example.yaml
+# because TestConfig_ExampleMatchesSchema validates one against the other). The
+# list was always a guess at which files can break a build, and the guess was
+# wrong: a .gitignore edit silently swallowed internal/server/ui_dist's embed
+# placeholder, so the whole server package stopped compiling on a fresh clone and
+# no run was triggered to say so. The badge in README reports this workflow as
+# the state of main, which is only true if every push to main actually runs it.
+#
+# The filters were worth having when Actions minutes were metered on a private
+# repo. They are free now, and a few minutes of runner time on a docs-only commit
+# is a much better trade than a class of change CI cannot see.
 on:
   push:
     branches: ["main"]
-    # only run when backend source changes
-    # cmd/ is excluded because it contains utilities without tests
-    #
-    # config-schema.json / config.example.yaml are listed because the test that
-    # validates one against the other (TestConfig_ExampleMatchesSchema) lives in
-    # ./internal/config and so already runs here. Editing only those two files
-    # matches no Go path, which is the whole reason a separate schema workflow
-    # existed; naming them here replaces it.
-    paths:
-      - "**/*.go"
-      - "!cmd/**"
-      - "go.mod"
-      - "go.sum"
-      - "Makefile"
-      - "config-schema.json"
-      - "config.example.yaml"
-      - ".github/workflows/go-ci.yml"
 
   pull_request:
     branches: ["main"]
-    paths:
-      - "**/*.go"
-      - "!cmd/**"
-      - "go.mod"
-      - "go.sum"
-      - "Makefile"
-      - "config-schema.json"
-      - "config.example.yaml"
-      - ".github/workflows/go-ci.yml"
 
   # Allows manual triggering of the workflow
   workflow_dispatch:

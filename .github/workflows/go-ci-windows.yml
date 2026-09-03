@@ -1,27 +1,15 @@
 name: Windows CI
 
+# Unfiltered, for the reasons spelled out in go-ci.yml: a path list is a guess at
+# which files can break the build, and the .gitignore change that broke the
+# ui_dist embed matched none of them. This is also the only job that exercises
+# the Windows-tagged perf code, so it should not be skippable by accident.
 on:
   push:
     branches: [ "main" ]
-    # only run when backend source changes
-    # cmd/ is excluded because it contains utilities without tests
-    paths:
-      - '**/*.go'
-      - '!cmd/**'
-      - 'go.mod'
-      - 'go.sum'
-      - 'Makefile'
-      - '.github/workflows/go-ci-windows.yml'
 
   pull_request:
     branches: [ "main" ]
-    paths:
-      - '**/*.go'
-      - '!cmd/**'
-      - 'go.mod'
-      - 'go.sum'
-      - 'Makefile'
-      - '.github/workflows/go-ci-windows.yml'
 
   # Allows manual triggering of the workflow
   workflow_dispatch:
