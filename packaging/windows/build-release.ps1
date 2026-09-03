@@ -58,12 +58,18 @@
 
   The reason to want them gone is that a release page is a download page, and
   the server binary sitting next to the setup program is the file a visitor is
-  most likely to take by mistake. That is handled in the notes instead: they
-  name the setup programs first and put everything else behind a collapsed
-  "who is this for" section, which renders above the asset list.
+  most likely to take by mistake. That is handled in the notes instead: the
+  setup programs are named under "Instructions" and everything else sits behind
+  a collapsed "who is this for" section, both of which render above the asset
+  list.
 
 .PARAMETER PublishBinaries
   Kept for callers that pass it. Binaries are published unless -SkipBinaries.
+
+.PARAMETER Notes
+  The patch notes shown at the top of the release body. Omitted, the commit
+  subjects between the previous tag and this one are listed instead, which is
+  why the commit format matters: "scope: short subject" is the changelog line.
 #>
 [CmdletBinding()]
 param(
@@ -73,6 +79,9 @@ param(
     [ValidateSet('true', 'false')]
     [string]$Draft = 'true',
     [string]$Repo = 'Quartermaster-Labs/Quartermaster',
+    # Hand-written patch notes for the release body. Left empty, the subjects of
+    # the commits since the previous tag are used instead.
+    [string]$Notes,
     [switch]$SkipUi,
     [switch]$SkipInstaller,
     [switch]$PublishBinaries,
@@ -342,17 +351,50 @@ $uploads += $sumsPath
 
 # 6. Push the tag, create the release if missing, upload everything.
 #
-# The body says which of the eight assets to click. Every one of them has to be
-# on the release -- the bare binaries are what the in-app updater renames over
-# the running exe, what a lone unix setup file downloads for itself
-# (cmd/quartermaster-setup/place_other.go), and the headless install README
-# documents -- but only three are the download a first-time visitor wants. The
-# body renders directly above the asset list, so it is the only place that can
-# say so before someone scrolls into the files and guesses: setup programs by
-# name first, everything else behind a collapsed section that says who it is
-# for. Hiding an asset is not an option GitHub offers, and renaming the
-# binaries would cut installed copies off from updates.
-$notes = @"
+# The body leads with patch notes, because that is what a release page is for:
+# whoever opens v1.0.2 wants to know what changed in it. Everything procedural
+# sits behind <details>, in the order it is needed -- "Instructions" (which of
+# the eight assets to click, plus the chmod and quarantine steps a first launch
+# fails without), then who the remaining files are for.
+#
+# Every asset has to BE on the release: the bare binaries are what the in-app
+# updater renames over the running exe, what a lone unix setup file downloads
+# for itself (cmd/quartermaster-setup/place_other.go), and what the headless
+# install README documents. Only three of them are the download a first-time
+# visitor wants, though, and the body is the only thing that renders above the
+# asset list to say which. Hiding an asset is not something GitHub offers, and
+# renaming the binaries would cut installed copies off from updates.
+
+# The changelog is the commit log, so there is no separate file to drift from
+# it -- which is what makes the "scope: short subject" commit format load
+# bearing: a subject line IS a changelog entry. describe on $Tag^ names the tag
+# before this one, and -match keeps it to version tags: describe answers with
+# the nearest tag of ANY kind, so a non-release tag in the history (assets-v1)
+# would otherwise become the range's start. On the very first release there is
+# no previous tag at all, and the range would collapse to "every commit ever",
+# which is not a changelog, so that case says something true instead.
+if (-not $Notes) {
+    $prevTag = (git describe --tags --abbrev=0 --match "v[0-9]*" "$Tag^" 2>$null)
+    if ($LASTEXITCODE -ne 0) { $prevTag = '' }
+    if ($prevTag) {
+        $subjects = @(git log --no-merges --pretty=format:%s "$prevTag..$Tag")
+        $Notes = (($subjects | Where-Object { $_ } | ForEach-Object { "- $_" }) -join "`n")
+        if (-not $Notes) { $Notes = "- no code changes since $prevTag" }
+        $Notes += "`n`n**Full changelog**: https://github.com/$Repo/compare/$prevTag...$Tag"
+    } else {
+        $Notes = "First public release."
+    }
+}
+
+# $body, not $notes: PowerShell variable names are case insensitive, so a
+# $notes here would be the same variable as the -Notes parameter it is built
+# from.
+$body = @"
+$Notes
+
+<details>
+<summary><b>Instructions</b></summary>
+
 Download the setup program for your platform:
 
 - **Windows** -- ``quartermaster-setup-windows-amd64-$Tag.exe``
@@ -365,6 +407,7 @@ clear the quarantine flag before the first launch:
 ``xattr -d com.apple.quarantine ./quartermaster-setup-darwin-arm64-$Tag``
 
 ``SHA256SUMS`` covers every file here.
+</details>
 
 <details>
 <summary><b>The other files, and who they are for</b></summary>
@@ -379,7 +422,8 @@ an uninstall record. They are published for two reasons:
 - a headless Linux or macOS box can run one directly: ``chmod +x``, point it at
   a models folder, and install backends from Settings.
 
-**Installing for the first time? Take a ``quartermaster-setup-...`` file above.**
+**Installing for the first time? Take a ``quartermaster-setup-...`` file from
+the instructions above.**
 </details>
 "@
 
@@ -394,14 +438,14 @@ try { gh release view $Tag -R $Repo *> $null; $exists = ($LASTEXITCODE -eq 0) } 
 if (-not $exists) {
     # Build the arg list rather than interpolating a flag variable: an empty
     # string is still passed as an argument, and `gh release create ""` fails.
-    $createArgs = @('release', 'create', $Tag, '-R', $Repo, '--title', $Tag, '--notes', $notes)
+    $createArgs = @('release', 'create', $Tag, '-R', $Repo, '--title', $Tag, '--notes', $body)
     if ($isDraft) { $createArgs += '--draft' }
     gh @createArgs
     if ($LASTEXITCODE -ne 0) { Die "gh release create failed" }
 } else {
     # A re-run is usually a fixed build of the same tag, so the body is rewritten
     # rather than left at whatever the first attempt wrote.
-    gh release edit $Tag -R $Repo --notes $notes
+    gh release edit $Tag -R $Repo --notes $body
     if ($LASTEXITCODE -ne 0) { Die "gh release edit (notes) failed" }
 }
 gh release upload $Tag @uploads -R $Repo --clobber
