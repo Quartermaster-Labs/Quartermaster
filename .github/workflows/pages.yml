@@ -8,14 +8,29 @@ name: Pages
 # there is no stable /releases/latest/download/ path), which means a new release
 # has to rebuild the page or the button keeps pointing at the old .exe.
 #
-# No manual setup. `configure-pages` below runs with `enablement: true`, so the
-# first successful run turns Pages on for the repo and points it at Actions
-# itself; Settings → Pages needs no visit.
+# Two one-time setup steps this file used to claim it handled by itself. It did
+# not, and both failed the first real run (v1.0.0), so they are written down
+# here rather than rediscovered: neither survives a fork or a re-created repo.
+#
+#   1. The Pages site has to be CREATED by an owner token. `configure-pages`
+#      below runs with `enablement: true`, but GITHUB_TOKEN cannot create a
+#      Pages site even with the `pages: write` granted above -- it fails with
+#      "Create Pages site failed: Resource not accessible by integration". It
+#      can only deploy to a site that already exists. One call fixes it:
+#        gh api --method POST repos/OWNER/REPO/pages -f build_type=workflow
+#
+#   2. The github-pages ENVIRONMENT has to allow tags. GitHub creates it with a
+#      deployment branch policy of the default branch only, and the
+#      `release: published` trigger below runs at the TAG ref, not on main, so
+#      the deploy job was rejected: "Tag v1.0.0 is not allowed to deploy to
+#      github-pages due to environment protection rules". Add a `v*` policy of
+#      type TAG (Settings -> Environments -> github-pages -> Deployment
+#      branches and tags), or:
+#        gh api --method POST #          repos/OWNER/REPO/environments/github-pages/deployment-branch-policies #          -f name='v*' -f type=tag
 #
 # Until the repo is public this workflow SKIPS rather than runs. Pages on a
-# private repo needs a paid plan, so a run today would fail on the deploy step
-# and mail a red X for every push to the site -- with the guard, flipping the
-# repo to public and pushing (or hitting "Run workflow") is the whole launch.
+# private repo needs a paid plan, so a run while private would fail on the
+# deploy step and mail a red X for every push to the site.
 
 on:
   push:
