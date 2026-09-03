@@ -10,8 +10,11 @@ dist/
 # Ship quartermaster-generate.example.yaml as the template instead.
 quartermaster-generate.yaml
 
-# UI build output; placeholder.txt is kept so the go:embed succeeds.
+# UI build output; placeholder.txt is kept so the go:embed succeeds. It has to be
+# a plain filename, not .gitkeep: `//go:embed ui_dist` in internal/server has no
+# `all:` prefix, so it skips dot-prefixed files and would find nothing to embed.
 internal/server/ui_dist/*
+!internal/server/ui_dist/placeholder.txt
 
 # Same, for the first-run wizard's own bundle (ui-svelte/vite.setup.config.ts).
 # .gitkeep is NOT ignored: `//go:embed all:ui_dist` in internal/setup needs at
