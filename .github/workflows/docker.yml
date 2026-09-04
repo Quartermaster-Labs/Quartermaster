@@ -40,6 +40,18 @@ on:
     workflows: [ "Release" ]
     types: [ completed ]
 
+  # And the other half of that chain. Release defaults to leaving the release a
+  # DRAFT, and the workflow_run above then finds no published release to build
+  # (see the meta step) and skips. Publishing it is done by a human with their
+  # own token rather than by GITHUB_TOKEN, so unlike everything else in this
+  # file that event does fire a workflow, and it carries the tag directly.
+  #
+  # The two paths never both build: a release published by Release itself is
+  # published with GITHUB_TOKEN, so it fires nothing here and the workflow_run
+  # chain is what builds it.
+  release:
+    types: [ published ]
+
 permissions:
   contents: read
   packages: write
@@ -53,13 +65,13 @@ jobs:
     # A Release that failed or was cancelled must not publish an image.
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     steps:
-      # Which commit to build, and under which tags. Three ways in, and only
+      # Which commit to build, and under which tags. Four ways in, and only
       # this step knows the difference:
       #
       #   push of a v* tag   the tag is the ref (a tag pushed by a human)
       #   workflow_run       the ref is the default branch, so the tag has to
-      #                      be looked up: the newest published release is the
-      #                      one Release just made
+      #                      be looked up, and it may not be publishable yet
+      #   release published  the event carries the tag; nothing to look up
       #   workflow_dispatch  :edge, unless dispatched at a tag on purpose
       #
       # A release build gets :latest and :vX.Y.Z; anything else gets :edge
@@ -72,12 +84,35 @@ jobs:
         run: |
           set -euo pipefail
           tag=""
-          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
-            tag=$(gh release view -R "${GITHUB_REPOSITORY}" --json tagName -q .tagName)
-            if [[ -z "${tag}" ]]; then
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            tag="${{ github.event.release.tag_name }}"
+          elif [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            # `gh release view` answers with the newest PUBLISHED release, and
+            # Release defaults to leaving its release a draft. It pushes the tag
+            # either way, so after a draft release this used to resolve the
+            # PREVIOUS version, check it out, and re-push :latest at it -- a
+            # green run that rebuilt v1.0.2 while v1.0.3 sat in a drawer, and
+            # then no image at all for v1.0.3, because publishing it fires no
+            # trigger this workflow had.
+            #
+            # Comparing the two answers the question without needing to see the
+            # draft (listing drafts wants push access; a git ref needs only
+            # contents: read): the newest v* tag IS the release just cut, so if
+            # it is not also the newest published one, it is not ready to ship.
+            refs=$(gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/v" --jq '.[].ref')
+            newest=$(echo "${refs}" | sed 's#^refs/tags/##' | sort -V | tail -1)
+            published=$(gh release view -R "${GITHUB_REPOSITORY}" --json tagName -q .tagName || true)
+            if [[ -z "${published}" ]]; then
               echo "Release finished but no published release was found" >&2
               exit 1
             fi
+            if [[ "${newest}" != "${published}" ]]; then
+              echo "Newest tag ${newest} is not published (${published} is)."
+              echo "Leaving the image alone; publishing the release builds it."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            tag="${published}"
           elif [[ "${{ github.ref_type }}" == "tag" ]]; then
             tag="${{ github.ref_name }}"
           fi
@@ -103,6 +138,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Checkout code
+        if: ${{ steps.meta.outputs.skip != 'true' }}
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
         with:
           ref: ${{ steps.meta.outputs.ref }}
@@ -111,10 +147,11 @@ jobs:
       # stages are pinned to $BUILDPLATFORM and only the runtime layers are
       # per-arch, so there is no QEMU step here on purpose.
       - name: Set up Docker Buildx
+        if: ${{ steps.meta.outputs.skip != 'true' }}
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Log in to GitHub Container Registry
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
+        if: ${{ steps.meta.outputs.skip != 'true' && (github.event_name != 'workflow_dispatch' || inputs.push) }}
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
           registry: ghcr.io
@@ -122,6 +159,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
+        if: ${{ steps.meta.outputs.skip != 'true' }}
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: .

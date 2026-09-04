@@ -45,6 +45,27 @@ whole push.
 origin does not have, so a rejected push leaves no tag, no release and no
 half-uploaded artifacts. Re-dispatching is the whole recovery.
 
+**A third, and it only bites the draft path.** `release.yml` defaults to
+leaving the release a **draft**, and `gh release view` answers with the newest
+*published* release: draft releases are visible only to push access. The tag is
+pushed either way, so `docker.yml`'s `workflow_run` chain used to resolve the
+*previous* version, check it out and re-push `:latest` at it -- a green run that
+rebuilt `v1.0.2` while `v1.0.3` sat unpublished, followed by no image at all for
+`v1.0.3`, because publishing a draft fired no trigger the workflow had. Both
+halves are fixed and both are needed:
+
+- the `workflow_run` path now compares the newest `v*` **git tag** against the
+  newest published release and skips when they differ. Comparing sidesteps the
+  permission question entirely -- listing drafts wants push access, listing a
+  git ref needs only `contents: read`.
+- `release: types: [published]` is now a trigger. It is the one event here that
+  a human raises with their own token rather than `GITHUB_TOKEN`, so unlike
+  everything else in this file it does start a run. The two paths never double
+  build: a release published by `release.yml` itself is published with
+  `GITHUB_TOKEN` and fires nothing, leaving it to the `workflow_run` chain.
+
+So `draft: true` now costs nothing: publish when ready and the image follows.
+
 Two more, cheaper: `workflow_dispatch` is only offered for workflows on the
 **default branch**, so a branch-only workflow cannot be dispatched at all; and
 `pages.yml` documents two one-time setup steps (creating the Pages site with an
