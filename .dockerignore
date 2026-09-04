@@ -1,5 +1,5 @@
-# The Docker build context is the REPO ROOT (docker/unified/build-image.sh
-# passes it), because the source has to be COPYed in: the repo is private, so a
+# The Docker build context is the REPO ROOT (docker/app/Dockerfile expects it),
+# because the source has to be COPYed in: the repo is private, so a
 # container cannot clone it. Everything below would otherwise be uploaded to the
 # daemon on every build.
 #

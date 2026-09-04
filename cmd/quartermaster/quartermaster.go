@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/quartermaster-labs/quartermaster/internal/autogen"
+	"github.com/quartermaster-labs/quartermaster/internal/backends"
 	"github.com/quartermaster-labs/quartermaster/internal/config"
 	"github.com/quartermaster-labs/quartermaster/internal/event"
 	"github.com/quartermaster-labs/quartermaster/internal/logmon"
@@ -212,6 +213,17 @@ func main() {
 	autogen.DetectGpuCompute(startupNote)
 
 	if *flagGenerate != "" {
+		// Reconcile the backend registry with what is actually on disk BEFORE
+		// generating: a build that arrived without going through an install --
+		// baked into a container image, restored from a backup, copied between
+		// machines -- is otherwise listed as installed and never launched. The
+		// sidecar feeds autogen's inputs hash, so writing it first means the
+		// config generated below already points at the adopted build.
+		if n, err := server.AdoptInstalledBackends(*flagGenerate, backends.NewManager("", startupNote), startupNote); err != nil {
+			startupNote("backend adoption failed: " + err.Error())
+		} else if n > 0 {
+			startupNote(fmt.Sprintf("registered %d backend(s) already installed on disk", n))
+		}
 		if _, err := autogen.EnsureConfig(*flagGenerate, configPath, *flagModelsDir, startupNote); err != nil {
 			slog.Error("autogen failed", "error", err)
 			os.Exit(1)

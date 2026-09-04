@@ -360,12 +360,12 @@ export const INSTALL = [
     icon: "docker",
     title: "Docker",
     body:
-      "The unified image builds llama.cpp, stable-diffusion.cpp and whisper.cpp from source and " +
-      "bundles them with the server. Tags are published per compute backend: swap unified-cuda for " +
-      "unified-vulkan on AMD or Intel, or build the image yourself with docker/unified/build-image.sh.",
+      "One image, for linux/amd64 and linux/arm64, and it serves the moment it starts: llama-server " +
+      "and sd-server ship inside it, the same upstream Vulkan builds a desktop install downloads. " +
+      "Point it at your models folder and open the dashboard.",
     code:
-      "docker run --gpus all -p 1250:1250 -v ./models:/models \\\n" +
-      "  ghcr.io/quartermaster-labs/quartermaster:unified-cuda",
+      "docker run -p 127.0.0.1:1250:8080 -v ./models:/data/models \\\n" +
+      "  ghcr.io/quartermaster-labs/quartermaster:latest",
   },
 ];
 

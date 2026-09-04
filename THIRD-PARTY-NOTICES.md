@@ -79,11 +79,16 @@ the Apache License, Version 2.0, available at
 <https://www.apache.org/licenses/LICENSE-2.0>. The GGUF conversion is a
 derivative of those weights and carries the same license.
 
-## Programs quartermaster launches (not bundled, not modified)
+## Programs quartermaster launches (unmodified)
 
-These are separate executables you install — via the Windows installer, the
-unified Docker image, or by hand. quartermaster starts them as subprocesses; it
+These are separate executables you install - via the setup wizard, from
+Settings -> Backends, or by hand. quartermaster starts them as subprocesses; it
 does not link against them, and each keeps its own license.
+
+The Docker image is the one place they are redistributed: it bakes in
+upstream's own prebuilt `llama-server` and `sd-server` release archives,
+unmodified and unpacked as published, so their copyright notices travel with
+them. Both are MIT; the table below names the projects those binaries come from.
 
 | Program | Project | License |
 | --- | --- | --- |

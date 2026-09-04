@@ -105,10 +105,19 @@ func NewManager(root string, log func(string)) *Manager {
 	}
 }
 
-// defaultRoot is the directory holding the running executable — the same
+// defaultRoot is the directory holding the running executable - the same
 // bundle-relative layout the Windows installer and every other runtime path in
 // this project use.
+//
+// QM_BACKENDS_DIR overrides it, which is what makes the container image work:
+// there the executable lives on a read-only image layer, so installs would land
+// somewhere that vanishes on the next `docker run`. Pointing this at a mounted
+// volume is the whole fix, and it costs no flag plumbing because every caller
+// that wants the default passes "".
 func defaultRoot() string {
+	if v := strings.TrimSpace(os.Getenv("QM_BACKENDS_DIR")); v != "" {
+		return v
+	}
 	if self, err := os.Executable(); err == nil {
 		return filepath.Dir(self)
 	}

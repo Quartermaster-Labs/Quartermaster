@@ -1,0 +1,90 @@
+name: Build Docker Image
+
+# One image: the Quartermaster server, for linux/amd64 and linux/arm64.
+#
+# The image this replaced compiled llama.cpp, whisper.cpp and
+# stable-diffusion.cpp from source, once per compute backend. That was hours of
+# CI per run, it needed a per-project cache-warming matrix to fit inside
+# GitHub's 6h job ceiling, and it produced an appliance whose backends were
+# built differently from the ones every desktop install downloads. Backends are
+# now fetched at runtime from upstream's releases, the same way they are
+# everywhere else, so this workflow compiles Go and npm and nothing more.
+#
+# Publishing on a release tag rather than on every push: the image is a
+# distribution channel and it should carry the same versions the releases page
+# does.
+
+on:
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Push to ghcr.io (off = build only)"
+        type: boolean
+        required: false
+        default: true
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/quartermaster-labs/quartermaster
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
+
+      # linux/arm64 is a cross-compile, not an emulated build: both build
+      # stages are pinned to $BUILDPLATFORM and only the runtime layers are
+      # per-arch, so there is no QEMU step here on purpose.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - name: Log in to GitHub Container Registry
+        if: ${{ github.event_name == 'push' || inputs.push }}
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # A tag build is a release and gets :latest and :vX.Y.Z. Anything else is
+      # a manual build and gets :edge only, so a dispatch can never quietly
+      # move :latest off the last release.
+      - name: Work out tags and version
+        id: meta
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            version="${{ github.ref_name }}"
+            tags="${IMAGE}:${version},${IMAGE}:latest"
+          else
+            version="local_${GITHUB_SHA::12}"
+            tags="${IMAGE}:edge"
+          fi
+          {
+            echo "version=${version}"
+            echo "tags=${tags}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: docker/app/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' || inputs.push }}
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            QM_VERSION=${{ steps.meta.outputs.version }}
+            QM_COMMIT=${{ github.sha }}
+          # GitHub Actions cache, not a registry cache: the layers worth
+          # keeping here are the npm and Go module downloads, which are small
+          # enough that the 10 GB Actions cache holds them comfortably.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

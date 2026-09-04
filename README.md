@@ -240,34 +240,42 @@ which is also what you get over ssh with `-browser`. Every step is identical eit
 
 ### Docker
 
-The unified image bundles llama-server, stable-diffusion.cpp, whisper.cpp and
-Quartermaster, all built from source. Tags are published per compute backend.
+One image, and it serves the moment it starts: the server, the dashboard, and
+working backends. `llama-server` and `sd-server` are baked in, downloaded at
+build time from the same upstream releases a desktop install uses, so a
+container and a laptop run identical binaries. They are the Vulkan builds,
+which cover NVIDIA, AMD and Intel and fall back to CPU when no GPU is visible.
 
 ```shell
-docker pull ghcr.io/quartermaster-labs/quartermaster:unified-cuda   # or :unified-vulkan
-
-docker run -it --rm --gpus all -p 9292:8080 \
-  -v /path/to/models:/models \
-  -v /path/to/custom/config.yaml:/etc/quartermaster/config/config.yaml \
-  ghcr.io/quartermaster-labs/quartermaster:unified-cuda
+docker run -d --name quartermaster \
+  -p 127.0.0.1:1250:8080 \
+  -v /path/to/models:/data/models \
+  ghcr.io/quartermaster-labs/quartermaster:latest
 ```
 
-To build it yourself instead:
+Your models and the generated config live under `/data`. The backends sit on an
+image path, not on that volume, so a run with no volume at all still works; to
+keep extra backends you install from Settings, mount a *named* volume at
+`/opt/quartermaster/backends`. Add `--gpus all` for NVIDIA, or
+`--device /dev/dri -v /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro` for
+AMD and Intel; the image carries the Vulkan loader, the driver comes from the
+host.
+
+The port is published on loopback because the container starts with
+`-admin-open`: Docker NATs every request through the bridge gateway, so the
+"this host only" check the desktop build uses cannot tell your browser from the
+network and would fail closed on `/ui/`. Publish on `0.0.0.0` when you mean to
+share the dashboard. To build it yourself instead:
 
 ```shell
-docker/unified/build-image.sh --cuda     # NVIDIA
-docker/unified/build-image.sh --vulkan   # AMD and everything else
+docker buildx build -f docker/app/Dockerfile -t quartermaster:local .
 ```
 
-That builds from your working tree, not from a git ref, so what you have checked out is what the
-image runs. Expect a long first build: three C++ projects compile from source, and only the Go and
-npm stages are quick. Each run pins llama.cpp, whisper.cpp and stable-diffusion.cpp
-to a resolved commit, so `LLAMA_REF=b1234 docker/unified/build-image.sh --vulkan` reproduces an
-exact combination.
-
-[Published images](https://github.com/Quartermaster-Labs/Quartermaster/pkgs/container/quartermaster)
-come from the same build, run on demand from `.github/workflows/unified-docker.yml` (Actions, Build
-Unified Docker Image, Run workflow).
+That builds from your working tree, not from a git ref. `linux/amd64` and
+`linux/arm64` images are published on each release tag from
+`.github/workflows/docker.yml`; arm64 carries `llama-server` only, because
+stable-diffusion.cpp publishes no Linux arm64 build. See
+[`docker/app/README.md`](docker/app/README.md) for the rest.
 
 ### Linux and macOS binaries
 

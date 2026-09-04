@@ -70,6 +70,15 @@ therefore *coexist* with hand-entered rows in one registry, distinguished by
 
 ## Gotchas / conventions
 
+- **The install root is the exe's own directory, and `QM_BACKENDS_DIR` overrides
+  it.** `defaultRoot()` matches the bundle-relative layout the Windows installer
+  and every other runtime path uses, which is wrong in exactly one place: a
+  container, where the exe sits on a read-only image layer and every install
+  would vanish with the next `docker run`. `docker/app/Dockerfile` sets the env
+  var to a directory under the mounted `/data` volume. Note the binary itself
+  deliberately stays outside that volume: mounting one over it would shadow the
+  newer binary on every image update.
+
 - **An install never steals ★ from an existing row.** `registerManagedBackend`
   only marks the new row as its class default when no row of that class exists
   yet, so a hand-entered backend the user set up earlier keeps winning and the
