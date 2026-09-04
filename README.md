@@ -249,13 +249,17 @@ which cover NVIDIA, AMD and Intel and fall back to CPU when no GPU is visible.
 ```shell
 docker run -d --name quartermaster \
   -p 127.0.0.1:1250:8080 \
+  -v quartermaster-data:/data \
   -v /path/to/models:/data/models \
   ghcr.io/quartermaster-labs/quartermaster:latest
 ```
 
-Your models and the generated config live under `/data`. The backends sit on an
-image path, not on that volume, so a run with no volume at all still works; to
-keep extra backends you install from Settings, mount a *named* volume at
+Your models and the generated config live under `/data`, and the named volume
+above is what carries them across an update: the image declares `/data` as a
+volume, so a run without that flag gets an anonymous one, orphaned the moment
+you recreate the container. The backends sit on an image path, not on that
+volume, so a run with no volume at all still works; to keep extra backends you
+install from Settings, mount a *named* volume at
 `/opt/quartermaster/backends`. Add `--gpus all` for NVIDIA, or
 `--device /dev/dri -v /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro` for
 AMD and Intel; the image carries the Vulkan loader, the driver comes from the

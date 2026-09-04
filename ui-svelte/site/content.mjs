@@ -364,8 +364,8 @@ export const INSTALL = [
       "and sd-server ship inside it, the same upstream Vulkan builds a desktop install downloads. " +
       "Point it at your models folder and open the dashboard.",
     code:
-      "docker run -p 127.0.0.1:1250:8080 -v ./models:/data/models \\\n" +
-      "  ghcr.io/quartermaster-labs/quartermaster:latest",
+      "docker run -p 127.0.0.1:1250:8080 -v quartermaster-data:/data \\\n" +
+      "  -v ./models:/data/models ghcr.io/quartermaster-labs/quartermaster:latest",
   },
 ];
 

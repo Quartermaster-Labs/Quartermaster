@@ -27,6 +27,7 @@ visible.
 ```shell
 docker run -d --name quartermaster \
   -p 127.0.0.1:1250:8080 \
+  -v quartermaster-data:/data \
   -v /path/to/models:/data/models \
   ghcr.io/quartermaster-labs/quartermaster:latest
 ```
@@ -35,6 +36,7 @@ Then open <http://localhost:1250>.
 
 | Path | What |
 |---|---|
+| `/data` | everything you own. Mount a **named** volume here, or updating loses it |
 | `/data/models` | your GGUFs. Mount your real models folder here |
 | `/data/config` | the autogen control file and the generated `config.yaml` |
 | `/opt/quartermaster/backends` | the baked-in backends (`QM_BACKENDS_DIR`) |
@@ -124,7 +126,23 @@ docker buildx build -f docker/app/Dockerfile \
   -t quartermaster:local .
 ```
 
-## Self-update
+## Updating
 
-Blocked, by design: the image is the unit of update, and a binary swapped
-inside a container is erased by the next `docker run`. Pull a new tag instead.
+The in-place binary swap the desktop build uses is blocked here, by design: the
+image is the unit of update, and a binary swapped inside a container is erased
+by the next `docker run`. The dashboard still *checks*, so Settings -> System
+tells you when a release exists; it points you at the image rather than
+offering an Install button.
+
+```shell
+docker pull ghcr.io/quartermaster-labs/quartermaster:latest
+docker rm -f quartermaster
+docker run -d --name quartermaster ...   # the same flags as before
+```
+
+That is lossless only if `/data` is a **named** volume. `VOLUME ["/data"]` in
+the Dockerfile means a run that does not mount it gets a fresh *anonymous*
+volume, which the `docker rm` above then orphans: the generated config, your
+API keys and anything downloaded from the hub go with it, and the new container
+starts empty. `-v quartermaster-data:/data` is what makes the recreate a no-op
+for your data.

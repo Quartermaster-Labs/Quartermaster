@@ -92,6 +92,12 @@ Built by `docker.yml` from `docker/app/Dockerfile`. User-facing docs live in
   with no volume at all must still work. A *named* volume there is seeded from
   the image by Docker (verified), so extra installs persist; a *bind mount* would
   shadow the baked-in builds, which is why the path is not under `/data`.
+- **`/data` must be a NAMED volume or an update is destructive.** The Dockerfile
+  declares `VOLUME ["/data"]`, so a run that does not mount it gets an anonymous
+  volume; updating means `rm` + `run`, which orphans it and takes the generated
+  config, API keys and hub downloads with it. Every doc's `docker run` therefore
+  passes `-v quartermaster-data:/data`, and the models bind mount nests inside
+  it. Do not drop that flag from an example.
 - **The image starts with `-admin-open` on purpose.** Docker NAT erases the
   request origin: publishing a port makes every request arrive from the bridge
   gateway, so the loopback check in `internal/server/admin.go` cannot tell the
