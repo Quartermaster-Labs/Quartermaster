@@ -65,6 +65,8 @@ put a key in front of it.
 
 ## GPUs
 
+**On a Linux host:**
+
 - **NVIDIA** - install the [container
   toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/)
   and add `--gpus all`.
@@ -72,6 +74,16 @@ put a key in front of it.
   `--device /dev/dri -v /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro`.
   The image carries the Vulkan *loader* only; the driver comes from the host.
 - **No GPU** - it still serves, on CPU. Expect diffusion to be very slow.
+
+**On Docker Desktop (Windows/macOS) there is no Vulkan device**, and this is
+not a flag you are missing. Containers run inside a VM: on Windows the GPU
+arrives as `/dev/dxg` plus `libd3d12.so`, which is the D3D12 path, and no
+Vulkan ICD exists to register against the loader. Measured on an RX 7900 XTX
+with `--device=/dev/dxg -v /usr/lib/wsl:/usr/lib/wsl`, llama-server reports
+`Available devices: (none)`. NVIDIA is the exception worth trying, since its
+WSL driver does ship a Vulkan ICD: `--gpus all`, with the container toolkit
+installed inside your WSL distribution. AMD's route is ROCm-on-WSL, which needs
+the ROCm build rather than the bundled Vulkan one.
 
 ROCm is not bundled: it would add ~460 MB compressed for one vendor. Install it
 from Settings -> Backends if you want it, over a named volume so it persists.
