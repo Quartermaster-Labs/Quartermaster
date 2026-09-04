@@ -103,7 +103,10 @@ is verified to exactly the standard an update is.
   error rather than only logging it for the same reason. A failed check deliberately leaves the
   stamp alone, so a stale answer is never presented as freshly confirmed.
 - **Dev builds never poll.** `parseSemver` rejects `local_<hash>`, so a working tree is never told
-  it is out of date — and `newer` returns false whenever *either* side is unparseable.
+  it is out of date — and `newer` returns false whenever *either* side is unparseable. The Docker
+  image's non-release builds rely on the same property under a different name, `edge_<sha>`
+  (see [`.github/CLAUDE.md`](../../.github/CLAUDE.md)); keep any new build-version scheme
+  unparseable unless it really is a release.
 - **Apply runs on the server's lifetime context, not the request's.** `POST /api/update` returns
   202 immediately; a closing browser tab must not abort a swap already touching files on disk.
 - `blockedReason()` probes writability by **creating and removing a file**, not by reading mode

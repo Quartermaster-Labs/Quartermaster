@@ -39,6 +39,7 @@ Logic under `internal/`. Each subsystem has its own `CLAUDE.md` — read that fo
 | Config watcher | [`internal/watcher/CLAUDE.md`](internal/watcher/CLAUDE.md) | Stat-polling config reload (pkg `configwatcher`) |
 | First-run wizard | [`internal/setup/CLAUDE.md`](internal/setup/CLAUDE.md) | Native-window setup program: asks, installs backends, drives the Inno installer silently (`cmd/quartermaster-setup`) |
 | Self-update | [`internal/update/CLAUDE.md`](internal/update/CLAUDE.md) | GitHub release poll + in-place binary swap + self-relaunch. All platforms; **release** builds only — dev/local never polls |
+| CI / release / image | [`.github/CLAUDE.md`](.github/CLAUDE.md) | What each workflow does, the two `GITHUB_TOKEN` rules that silently break releases, how to cut one, and the Docker image's design and gaps |
 
 ## Architectural invariant
 
