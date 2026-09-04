@@ -433,7 +433,21 @@ func TestVramGuard_CooldownAfterShed(t *testing.T) {
 	if g.lastShed.IsZero() {
 		t.Fatal("shed did not stamp lastShed")
 	}
-	before := g.s.local.(*guardRouter).unloadCalls.Load()
+	// The shed is asynchronous (vramguard.go: `go g.s.local.Unload`), so its
+	// increment can land after watchdog() returns. Waiting for it before the
+	// baseline is what makes this test about the cooldown rather than about the
+	// scheduler: reading `before` too early counts the FIRST shed as a second one.
+	before := int32(0)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if before = g.s.local.(*guardRouter).unloadCalls.Load(); before > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if before == 0 {
+		t.Fatal("the first shed never unloaded anything")
+	}
 	g.watchdog()
 	g.watchdog()
 	if n := g.s.local.(*guardRouter).unloadCalls.Load(); n != before {
