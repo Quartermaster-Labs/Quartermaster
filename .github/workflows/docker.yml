@@ -26,6 +26,20 @@ on:
     tags:
       - "v*"
 
+  # A release tag pushed BY the Release workflow does not fire the trigger
+  # above: GitHub does not let events raised with the default GITHUB_TOKEN
+  # start further workflow runs, or a workflow could loop itself. Releases run
+  # in CI, so that trigger has been dead since they left a laptop -- v1.0.1 was
+  # tagged and no image was built, which is how this was found. pages.yml hit
+  # the same wall and documents it.
+  #
+  # workflow_run is the documented way to chain onto it. It runs at the DEFAULT
+  # BRANCH ref rather than at the tag, so the tag cannot be read from the
+  # context: the checkout step below resolves the newest release instead.
+  workflow_run:
+    workflows: [ "Release" ]
+    types: [ completed ]
+
 permissions:
   contents: read
   packages: write
@@ -36,9 +50,62 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # A Release that failed or was cancelled must not publish an image.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     steps:
+      # Which commit to build, and under which tags. Three ways in, and only
+      # this step knows the difference:
+      #
+      #   push of a v* tag   the tag is the ref (a tag pushed by a human)
+      #   workflow_run       the ref is the default branch, so the tag has to
+      #                      be looked up: the newest published release is the
+      #                      one Release just made
+      #   workflow_dispatch  :edge, unless dispatched at a tag on purpose
+      #
+      # A release build gets :latest and :vX.Y.Z; anything else gets :edge
+      # only, so a dispatch can never quietly move :latest off the last
+      # release.
+      - name: Work out the ref, tags and version
+        id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag=""
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            tag=$(gh release view -R "${GITHUB_REPOSITORY}" --json tagName -q .tagName)
+            if [[ -z "${tag}" ]]; then
+              echo "Release finished but no published release was found" >&2
+              exit 1
+            fi
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            tag="${{ github.ref_name }}"
+          fi
+
+          if [[ -n "${tag}" ]]; then
+            ref="${tag}"
+            version="${tag}"
+            tags="${IMAGE}:${version},${IMAGE}:latest"
+          else
+            ref="${GITHUB_SHA}"
+            # Not "local_": this is a CI image anyone can pull, and calling it
+            # a local build is a lie the dashboard then repeats. Still
+            # unparseable as semver, which is what keeps internal/update from
+            # polling for a release it could not apply anyway.
+            version="edge_${GITHUB_SHA::12}"
+            tags="${IMAGE}:edge"
+          fi
+
+          {
+            echo "ref=${ref}"
+            echo "version=${version}"
+            echo "tags=${tags}"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
+        with:
+          ref: ${{ steps.meta.outputs.ref }}
 
       # linux/arm64 is a cross-compile, not an emulated build: both build
       # stages are pinned to $BUILDPLATFORM and only the runtime layers are
@@ -47,30 +114,12 @@ jobs:
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Log in to GitHub Container Registry
-        if: ${{ github.event_name == 'push' || inputs.push }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      # A tag build is a release and gets :latest and :vX.Y.Z. Anything else is
-      # a manual build and gets :edge only, so a dispatch can never quietly
-      # move :latest off the last release.
-      - name: Work out tags and version
-        id: meta
-        run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            version="${{ github.ref_name }}"
-            tags="${IMAGE}:${version},${IMAGE}:latest"
-          else
-            version="local_${GITHUB_SHA::12}"
-            tags="${IMAGE}:edge"
-          fi
-          {
-            echo "version=${version}"
-            echo "tags=${tags}"
-          } >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
@@ -78,7 +127,7 @@ jobs:
           context: .
           file: docker/app/Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name == 'push' || inputs.push }}
+          push: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
           build-args: |
             QM_VERSION=${{ steps.meta.outputs.version }}
