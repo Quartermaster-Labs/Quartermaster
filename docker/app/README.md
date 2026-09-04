@@ -28,7 +28,7 @@ visible.
 docker run -d --name quartermaster \
   -p 127.0.0.1:1250:8080 \
   -v /path/to/models:/data/models \
-  ghcr.io/quartermaster-labs/quartermaster:latest
+  ghcr.io/quartermaster-labs/quartermaster:edge
 ```
 
 Then open <http://localhost:1250>.
@@ -90,6 +90,20 @@ Vulkan one.
 
 ROCm is not bundled: it would add ~460 MB compressed for one vendor. Install it
 from Settings -> Backends if you want it, over a named volume so it persists.
+
+## Tags
+
+| Tag | What it is |
+|---|---|
+| `:edge` | the current build of `main`. Rebuilt on demand, and what to pull today |
+| `:latest` | the newest release. Moves only on a `v*` tag |
+| `:vX.Y.Z` | one release, pinned. Use this in a compose file you care about |
+
+`:latest` does not resolve yet: it follows release tags, and the newest release
+predates this image. The next release publishes it.
+
+A dispatch of `.github/workflows/docker.yml` can only write `:edge`, so a manual
+build can never quietly move `:latest` off the last release.
 
 ## Build it yourself
 
