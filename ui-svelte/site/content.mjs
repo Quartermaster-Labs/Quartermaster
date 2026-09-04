@@ -365,7 +365,7 @@ export const INSTALL = [
       "Point it at your models folder and open the dashboard.",
     code:
       "docker run -p 127.0.0.1:1250:8080 -v ./models:/data/models \\\n" +
-      "  ghcr.io/quartermaster-labs/quartermaster:edge",
+      "  ghcr.io/quartermaster-labs/quartermaster:latest",
   },
 ];
 

@@ -250,7 +250,7 @@ which cover NVIDIA, AMD and Intel and fall back to CPU when no GPU is visible.
 docker run -d --name quartermaster \
   -p 127.0.0.1:1250:8080 \
   -v /path/to/models:/data/models \
-  ghcr.io/quartermaster-labs/quartermaster:edge
+  ghcr.io/quartermaster-labs/quartermaster:latest
 ```
 
 Your models and the generated config live under `/data`. The backends sit on an
@@ -275,10 +275,8 @@ That builds from your working tree, not from a git ref. Both images are
 `linux/amd64` and `linux/arm64`; arm64 carries `llama-server` only, because
 stable-diffusion.cpp publishes no Linux arm64 build.
 
-`:edge` is the current build of `main`, and it is what to pull today. `:latest`
-and `:vX.Y.Z` are cut from release tags, so they will start carrying this image
-at the next release: until then `:latest` does not resolve. See
-[`docker/app/README.md`](docker/app/README.md) for the rest.
+`:latest` is the newest release, `:vX.Y.Z` pins one, and `:edge` is the current
+build of `main`. See [`docker/app/README.md`](docker/app/README.md) for the rest.
 
 ### Linux and macOS binaries
 
