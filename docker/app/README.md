@@ -76,14 +76,17 @@ put a key in front of it.
 - **No GPU** - it still serves, on CPU. Expect diffusion to be very slow.
 
 **On Docker Desktop (Windows/macOS) there is no Vulkan device**, and this is
-not a flag you are missing. Containers run inside a VM: on Windows the GPU
-arrives as `/dev/dxg` plus `libd3d12.so`, which is the D3D12 path, and no
-Vulkan ICD exists to register against the loader. Measured on an RX 7900 XTX
-with `--device=/dev/dxg -v /usr/lib/wsl:/usr/lib/wsl`, llama-server reports
-`Available devices: (none)`. NVIDIA is the exception worth trying, since its
-WSL driver does ship a Vulkan ICD: `--gpus all`, with the container toolkit
-installed inside your WSL distribution. AMD's route is ROCm-on-WSL, which needs
-the ROCm build rather than the bundled Vulkan one.
+not a flag you are missing, nor a driver you can install. Containers run inside
+a VM, and on Windows all that reaches Linux is `/dev/dxg`, a shim onto the
+Windows GPU stack. Mesa's AMD driver (RADV) reaches its GPU through a DRM
+render node at `/dev/dri`, which WSL2 never creates, so it loads and enumerates
+nothing: measured on an RX 7900 XTX with a healthy host driver,
+`llama-server --list-devices` answers `Available devices: (none)`. NVIDIA is
+the exception, because its Windows driver ships a Linux Vulkan ICD into
+`/usr/lib/wsl/lib` that speaks `/dev/dxg` directly rather than DRM: `--gpus
+all`, with the container toolkit installed in your WSL distribution. AMD's
+route is ROCm-on-WSL, which needs the ROCm build rather than the bundled
+Vulkan one.
 
 ROCm is not bundled: it would add ~460 MB compressed for one vendor. Install it
 from Settings -> Backends if you want it, over a named volume so it persists.
