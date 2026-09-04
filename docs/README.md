@@ -44,6 +44,7 @@ describes: see the subsystem table in [`CLAUDE.md`](../CLAUDE.md).
 
 ## API & access
 
+- [HTTP API reference](http-api.md)
 - [API keys and access](api-keys.md)
 - [Tools API (search & YouTube for your own apps)](tools-api.md)
 

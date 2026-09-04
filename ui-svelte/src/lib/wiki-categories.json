@@ -3,6 +3,6 @@
   { "title": "Models & config", "ids": ["loading-models", "model-config", "config-variants", "autogen", "backends", "multi-listener"] },
   { "title": "Playground", "ids": ["playground-chat", "playground-login", "web-search", "youtube", "qm-tools", "images", "upscale", "segmentation", "speech-audio", "rerank-embed", "settings"] },
   { "title": "Monitoring & VRAM", "ids": ["observe", "gpu-memory", "slot-kv-cache"] },
-  { "title": "API & access", "ids": ["api-keys", "tools-api"] },
+  { "title": "API & access", "ids": ["http-api", "api-keys", "tools-api"] },
   { "title": "Troubleshooting", "ids": ["troubleshooting", "known-issues"] }
 ]
