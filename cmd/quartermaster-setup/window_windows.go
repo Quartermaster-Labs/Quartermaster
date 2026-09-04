@@ -97,3 +97,7 @@ func runWindow(url string, done <-chan struct{}) (err error) {
 // showError puts a message on screen. The binary is built -H=windowsgui, so
 // this is the only channel that reaches a user who double-clicked it.
 func showError(msg string) { nativewin.MessageBox("Quartermaster Setup", msg) }
+
+// announceURL is a no-op on Windows: the binary is built -H=windowsgui and has
+// no console to write to, and the native window is the normal path anyway.
+func announceURL(string) {}

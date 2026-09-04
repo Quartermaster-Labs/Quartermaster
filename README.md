@@ -238,6 +238,12 @@ On Windows the window it opens is the app itself, not a browser pointed at local
 there is no WebView to embed, so the same wizard opens in your default browser on a loopback port,
 which is also what you get over ssh with `-browser`. Every step is identical either way.
 
+The wizard *is* that server, so the terminal you started it from stays busy until you finish: that
+is the wizard waiting for you, not a hang. It prints the address it is serving on; open that
+yourself if no browser appeared. On macOS the setup program is quarantined like any unsigned
+download, so `xattr -d com.apple.quarantine ./quartermaster-setup-darwin-arm64-vX.Y.Z` first, or
+right-click and Open.
+
 ### Docker
 
 One image, and it serves the moment it starts: the server, the dashboard, and

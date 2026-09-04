@@ -89,6 +89,14 @@ everywhere and the 20 MB installer blob stays in the binary that ships it.
   **`X-QM-Setup-Token` header** — a custom header forces a CORS preflight, which is answered with no
   CORS headers at all — plus `isLoopbackHost` against DNS rebinding. The token is injected into
   `index.html` at serve time so it never appears in a URL a referrer could carry off-machine.
+- **Off Windows the wizard ALWAYS takes the browser fallback, and must say so out loud.**
+  `runWindow` in `window_other.go` is a permanent stub that returns an error, so macOS and Linux
+  reach `openBrowser`. That reports only whether the helper could be *started*: `open` and
+  `xdg-open` exit non-zero long after `cmd.Start()` returned, and the `Wait` goroutine discards it.
+  A silent failure therefore left the process blocking on `wiz.Done()` with no output whatsoever,
+  which a macOS user reported as a hang. `announceURL` (unix only; a no-op on the `-H=windowsgui`
+  Windows build) prints the loopback URL unconditionally before the browser is opened. Do not make
+  it conditional on `-v`.
 - **The window itself is not this package's problem.** Frameless setup, the `WM_NCCALCSIZE` top-edge
   fix, the drag/min/max/close bindings, the icon and the folder picker all live in
   [`internal/nativewin`](../nativewin/CLAUDE.md) — read that before touching anything that draws.

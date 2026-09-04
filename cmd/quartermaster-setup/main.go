@@ -80,6 +80,7 @@ func main() {
 		}
 	}
 
+	announceURL(url)
 	if err := openBrowser(url); err != nil {
 		fatal("could not open a window or a browser.\n\nOpen this address manually:\n%s\n\n%v", url, err)
 	}

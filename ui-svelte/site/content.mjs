@@ -352,8 +352,14 @@ export const INSTALL = [
     title: "Linux and macOS",
     body:
       "The same wizard, in your browser: it fetches a verified binary, the backends for your GPU, and " +
-      "a config built from your models folder. Or take the bare static binary instead, amd64 and arm64 " +
-      "for Linux and Apple silicon for macOS, and install the backends later from Settings.",
+      "a config built from your models folder. It prints the address it serves on and holds the terminal " +
+      "until you finish, so open that address if no browser appears. On macOS clear the quarantine flag " +
+      "first. Or take the bare static binary instead, amd64 and arm64 for Linux and Apple silicon for " +
+      "macOS, and install the backends later from Settings.",
+    code:
+      "chmod +x quartermaster-setup-darwin-arm64-*\n" +
+      "xattr -d com.apple.quarantine quartermaster-setup-darwin-arm64-*\n" +
+      "./quartermaster-setup-darwin-arm64-*",
     link: { href: REPO + "/releases/latest", label: "Downloads on the releases page" },
   },
   {
