@@ -51,7 +51,10 @@ func TestBackends_MatchAssets(t *testing.T) {
 		{"vulkan", osLinux, "llama-b10240-bin-ubuntu-vulkan-x64.tar.gz", ""},
 		{"rocm", osLinux, "llama-b10240-bin-ubuntu-rocm-7.2-x64.tar.gz", ""},
 		{"cpu", osLinux, "llama-b10240-bin-ubuntu-x64.tar.gz", ""},
-		{"cpu", osMac, "llama-b10240-bin-macos-arm64.tar.gz", ""},
+		// The macOS arm64 asset is the Metal build, not a CPU one; only the
+		// Intel x64 asset is unaccelerated.
+		{"metal", osMac, "llama-b10240-bin-macos-arm64.tar.gz", ""},
+		{"cpu", osMac, "llama-b10240-bin-macos-x64.tar.gz", ""},
 	}
 	for _, c := range cases {
 		got, extra, err := llama.MatchAssets(c.variant, c.goos, names)
@@ -97,7 +100,9 @@ func TestBackends_MatchAssets(t *testing.T) {
 		{"vulkan", osLinux, "sd-master-eb7f35c-bin-Linux-Ubuntu-24.04-x86_64-vulkan.zip", ""},
 		{"rocm", osLinux, "sd-master-eb7f35c-bin-Linux-Ubuntu-24.04-x86_64-rocm-7.14.0.zip", ""},
 		{"cpu", osLinux, "sd-master-eb7f35c-bin-Linux-Ubuntu-24.04-x86_64.zip", ""},
-		{"cpu", osMac, "sd-master-eb7f35c-bin-Darwin-macOS-26.5.2-arm64.zip", ""},
+		// Upstream ships ONE macOS asset and it is a Metal build (the dylib links
+		// Metal.framework), so it is the metal variant and darwin has no cpu build.
+		{"metal", osMac, "sd-master-eb7f35c-bin-Darwin-macOS-26.5.2-arm64.zip", ""},
 	}
 	for _, c := range sdCases {
 		got, extra, err := sd.MatchAssets(c.variant, c.goos, sdNames)
@@ -113,6 +118,15 @@ func TestBackends_MatchAssets(t *testing.T) {
 		if c.wantExtra != "" && (len(extra) != 1 || extra[0] != c.wantExtra) {
 			t.Errorf("sd %s/%s: extras %v want [%s]", c.variant, c.goos, extra, c.wantExtra)
 		}
+	}
+
+	// Asking for a build upstream does not publish must fail loudly rather than
+	// fall through to another variant's asset.
+	if _, _, err := sd.MatchAssets("cpu", osMac, sdNames); err == nil {
+		t.Error("sd cpu/darwin should have no published build")
+	}
+	if got := sd.DefaultVariant(nil, osMac); got != "metal" {
+		t.Errorf("sd default variant on darwin = %q want metal", got)
 	}
 
 	// Real-ESRGAN's assets live on an older tag than its newest release.
@@ -157,6 +171,7 @@ func TestBackends_SuggestVariant(t *testing.T) {
 		{[]string{"AMD Radeon RX 7900 XTX"}, "vulkan"},
 		{[]string{"Intel(R) Arc(TM) A770"}, "vulkan"},
 		{[]string{"AMD Radeon Graphics", "NVIDIA RTX 4090"}, "cuda"}, // discrete NVIDIA wins
+		{[]string{"Apple M3 Max"}, "metal"},
 		{nil, "cpu"},
 	}
 	for _, c := range cases {
@@ -168,6 +183,14 @@ func TestBackends_SuggestVariant(t *testing.T) {
 	up, _ := Find("upscaler")
 	if got := up.DefaultVariant([]string{"NVIDIA RTX 4090"}, osWin); got != "any" {
 		t.Errorf("upscaler default variant = %q want any", got)
+	}
+	// An Apple-silicon Mac must land on the Metal build even when the GPU probe
+	// reports nothing, rather than on the Intel CPU asset.
+	llama, _ := Find("llama-server")
+	for _, gpus := range [][]string{nil, {"Apple M3 Max"}} {
+		if got := llama.DefaultVariant(gpus, osMac); got != "metal" {
+			t.Errorf("llama default variant on darwin (gpus=%v) = %q want metal", gpus, got)
+		}
 	}
 }
 

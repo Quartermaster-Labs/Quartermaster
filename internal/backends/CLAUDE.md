@@ -124,6 +124,25 @@ therefore *coexist* with hand-entered rows in one registry, distinguished by
   publishes nightlies (lemonade's llamacpp-rocm is exactly this). The server sets
   the flag automatically when a tracked repo's release history contains no stable
   release, rather than asking the user about GitHub semantics.
+- **macOS acceleration is a variant, not an afterthought.** llama.cpp builds
+  `macos-arm64` with Metal ON and `macos-x64` with it OFF, so the two darwin
+  assets are different flavours and lumping both under `cpu` (what shipped
+  first) meant an Apple-silicon Mac silently installed the right binary under
+  the label "No GPU acceleration" and the picker offered no Metal entry at all.
+  stable-diffusion.cpp had the same mislabel from the other direction: its CI
+  passes no `-DSD_METAL`, but ggml defaults `GGML_METAL` to ON on Apple, and the
+  shipped `libstable-diffusion.dylib` does link `Metal.framework`/`MetalKit` and
+  carry the ggml-metal kernels (verified against the release asset, not the
+  workflow file: the build flags say nothing because the default is what wins).
+  Its one darwin asset is therefore `metal` and darwin has **no** sd `cpu` build
+  at all. They are now separate variants, `SuggestVariant` returns `metal` for an
+  Apple GPU, and `DefaultVariant` prefers a published Metal build on darwin
+  outright:
+  macOS GPU probing can come back empty, and the empty-list fallback is `cpu`,
+  which on darwin is now the *Intel* asset. Both the settings tab and the
+  first-run wizard (`internal/setup/probe.go`) build their picker by filtering
+  variants on `len(v.Patterns[GOOS])`, so a new variant needs no UI change.
+
 - **The catalog is the one maintenance point.** When upstream renames its release
   assets, the fix is a regex in `catalog.go` — and `TestBackends_MatchAssets`
   pins the current naming for every component, so a rename breaks the test rather

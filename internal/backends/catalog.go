@@ -27,7 +27,7 @@ import (
 // and Extra are keyed by GOOS; a component with no entry for the host OS cannot
 // be installed there.
 type Variant struct {
-	ID    string `json:"id"`    // vulkan | cuda | rocm | cpu | any
+	ID    string `json:"id"`    // vulkan | cuda | rocm | metal | cpu | any
 	Label string `json:"label"` // human name for the picker
 	Note  string `json:"note,omitempty"`
 	// Patterns are asset-name regexes, most-preferred first. Hand-written for the
@@ -165,11 +165,20 @@ var catalog = []Component{
 				},
 			},
 			{
-				ID: "cpu", Label: "CPU", Note: "No GPU acceleration.",
+				ID: "metal", Label: "Metal", Note: "Apple silicon only. The macOS arm64 build is GPU-accelerated through Metal; there is nothing else to install on an M-series Mac.",
+				Patterns: map[string][]string{
+					// Upstream builds macos-arm64 with Metal ON and macos-x64 with it
+					// OFF, so the arm64 asset is the GPU build and belongs here rather
+					// than under CPU, where it used to sit unlabelled.
+					osMac: {`^llama-.*-bin-macos-arm64\.tar\.gz$`, `^llama-.*-bin-macos-arm64\.zip$`},
+				},
+			},
+			{
+				ID: "cpu", Label: "CPU", Note: "No GPU acceleration. On macOS this is the Intel (x64) build.",
 				Patterns: map[string][]string{
 					osWin:   {`^llama-.*-bin-win-cpu-x64\.zip$`, `^llama-.*-bin-win-avx2-x64\.zip$`},
 					osLinux: {`^llama-.*-bin-ubuntu-x64\.tar\.gz$`, `^llama-.*-bin-ubuntu-x64\.zip$`},
-					osMac:   {`^llama-.*-bin-macos-arm64\.tar\.gz$`, `^llama-.*-bin-macos-arm64\.zip$`, `^llama-.*-bin-macos-x64\.tar\.gz$`},
+					osMac:   {`^llama-.*-bin-macos-x64\.tar\.gz$`, `^llama-.*-bin-macos-x64\.zip$`},
 				},
 			},
 		},
@@ -229,11 +238,21 @@ var catalog = []Component{
 				},
 			},
 			{
+				ID: "metal", Label: "Metal", Note: "Apple silicon only. Upstream's single macOS build links Metal and MetalKit, so it is the accelerated one - there is nothing else to install on a Mac.",
+				Patterns: map[string][]string{
+					// Upstream's macOS job passes no -DSD_METAL, but ggml defaults
+					// GGML_METAL to ON on Apple, and the shipped
+					// libstable-diffusion.dylib does link Metal.framework and carry
+					// the ggml-metal kernels. One asset, and it is a GPU build, so
+					// darwin has no cpu entry at all rather than a mislabelled one.
+					osMac: {`(?i)^sd-.*(darwin|macos).*\.zip$`},
+				},
+			},
+			{
 				ID: "cpu", Label: "CPU", Note: "No GPU acceleration - very slow for diffusion.",
 				Patterns: map[string][]string{
 					osWin:   {`(?i)^sd-.*-bin-win-cpu-x64\.zip$`, `(?i)^sd-.*-bin-win-avx2-x64\.zip$`, `(?i)^sd-.*avx2.*\.zip$`},
 					osLinux: {`(?i)^sd-.*bin-linux-ubuntu-[0-9.]+-x86_64\.zip$`, `(?i)^sd-.*ubuntu.*(avx2|cpu).*\.zip$`},
-					osMac:   {`(?i)^sd-.*(darwin|macos).*\.zip$`},
 				},
 			},
 		},
@@ -362,9 +381,10 @@ func expandPairKey(patterns []string, pairKey, primary string) []string {
 }
 
 // SuggestVariant maps the host's GPU names onto the variant a fresh install
-// should preselect. NVIDIA gets CUDA, everything else with a discrete GPU gets
-// Vulkan, and a machine with no detected GPU gets CPU. The user can always
-// override in the picker — this only decides the default selection.
+// should preselect. Apple silicon gets Metal, NVIDIA gets CUDA, everything else
+// with a discrete GPU gets Vulkan, and a machine with no detected GPU gets CPU.
+// The user can always override in the picker — this only decides the default
+// selection.
 //
 // AMD deliberately defaults to Vulkan rather than ROCm even though ROCm is
 // usually faster: the Vulkan build runs on any driver, while the ROCm one is
@@ -378,8 +398,10 @@ func SuggestVariant(gpuNames []string) string {
 		case strings.Contains(l, "nvidia") || strings.Contains(l, "geforce") ||
 			strings.Contains(l, "quadro") || strings.Contains(l, "tesla") || strings.Contains(l, "rtx"):
 			return "cuda" // a discrete NVIDIA card wins outright
+		case strings.Contains(l, "apple"):
+			return "metal" // Apple silicon has no other accelerated path
 		case strings.Contains(l, "amd") || strings.Contains(l, "radeon") || strings.Contains(l, "intel") ||
-			strings.Contains(l, "arc") || strings.Contains(l, "apple"):
+			strings.Contains(l, "arc"):
 			seen = "vulkan"
 		default:
 			if strings.TrimSpace(l) != "" && seen == "" {
@@ -398,6 +420,15 @@ func SuggestVariant(gpuNames []string) string {
 // with only an "any" build ignores the GPU suggestion).
 func (c Component) DefaultVariant(gpuNames []string, goos string) string {
 	want := SuggestVariant(gpuNames)
+	// On macOS, Metal is the only acceleration there is, and GPU names are not
+	// always reported. Preferring a published Metal build over the suggestion
+	// keeps an Apple-silicon host off the Intel CPU asset when the probe came
+	// back empty; the picker still lists everything.
+	if goos == osMac {
+		if v, ok := c.Variant("metal"); ok && len(v.Patterns[goos]) > 0 {
+			return v.ID
+		}
+	}
 	if v, ok := c.Variant(want); ok && len(v.Patterns[goos]) > 0 {
 		return want
 	}

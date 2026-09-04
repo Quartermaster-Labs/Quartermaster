@@ -48,7 +48,7 @@ const (
 type Choices struct {
 	Dir        string   `json:"dir"`        // install directory
 	ModelsRoot string   `json:"modelsRoot"` // may be empty: "I'll pick later"
-	Variant    string   `json:"variant"`    // vulkan | cuda | rocm | cpu
+	Variant    string   `json:"variant"`    // vulkan | cuda | rocm | metal | cpu
 	Components []string `json:"components"` // backend component ids to install
 
 	// Windows shortcut/startup options. Each maps to an Inno task name; on
