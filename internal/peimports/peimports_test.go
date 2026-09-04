@@ -112,15 +112,23 @@ func TestPEImports_MissingTransitiveDep(t *testing.T) {
 	// by the exe rather than the dll, and Hint drops its "imported by" clause as
 	// soon as the deps stop sharing one parent. The attribution this test is about
 	// is platform-independent; the fixture should be too.
+	// The HIP libraries carry a -qmtest suffix so that NO real machine can own
+	// them. Named exactly as upstream imports them, this test fails on a host
+	// with AMD drivers installed: amdhip64_7.dll is then a real file in
+	// System32, lookup resolves it like the loader would, and only one of the
+	// two deps comes back missing. It passed on CI and failed on precisely the
+	// hardware the feature exists for. The prefixes are what matter here --
+	// runtimeHint keys off "amdhip"/"hip", not off the full name -- so the
+	// classification under test is unchanged.
 	buildPE(t, exe, []string{"stable-diffusion.dll"})
-	buildPE(t, dll, []string{"amdhip64_7.dll", "hipblas.dll", "api-ms-win-crt-heap-l1-1-0.dll"})
+	buildPE(t, dll, []string{"amdhip64-qmtest.dll", "hipblas-qmtest.dll", "api-ms-win-crt-heap-l1-1-0.dll"})
 
 	got := Missing(exe)
 	if len(got) != 2 {
 		t.Fatalf("Missing = %+v, want 2 entries", got)
 	}
-	// Sorted by name, so amdhip64_7 first.
-	if got[0].Name != "amdhip64_7.dll" || got[1].Name != "hipblas.dll" {
+	// Sorted by name, so amdhip64 first.
+	if got[0].Name != "amdhip64-qmtest.dll" || got[1].Name != "hipblas-qmtest.dll" {
 		t.Fatalf("missing names = %+v", got)
 	}
 	for _, d := range got {
@@ -130,7 +138,7 @@ func TestPEImports_MissingTransitiveDep(t *testing.T) {
 	}
 
 	hint := Hint(exe)
-	for _, want := range []string{"sd-server.exe", "amdhip64_7.dll", "hipblas.dll",
+	for _, want := range []string{"sd-server.exe", "amdhip64-qmtest.dll", "hipblas-qmtest.dll",
 		"imported by stable-diffusion.dll", "AMD ROCm/HIP runtime"} {
 		if !strings.Contains(hint, want) {
 			t.Errorf("Hint missing %q:\n%s", want, hint)
