@@ -251,7 +251,9 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *En
 	// projector come from the scan, matched on the caption width the DiT states
 	// (condHidden 3584 = Qwen2.5-VL-7B). --flow-shift is NOT wired: it is a
 	// sampling knob with no structural tell, so LongCat-Edit still wants
-	// `extraArgs: "--flow-shift 3"` on its override row.
+	// `extraArgs: "--flow-shift 3.16"` on its override row (exp(1.15), its
+	// scheduler's base_shift == max_shift, so unlike flux.1 it does not vary
+	// with canvas size).
 	case strings.Contains(n, "longcat"):
 		c.vae = req("vae", enc.FluxVae)
 		c.llm = req("llm", llmDefault)

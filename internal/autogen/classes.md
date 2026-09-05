@@ -98,7 +98,9 @@ thing that cannot be read off the weights: LongCat-Image-Edit and plain LongCat-
 identical `img_in`/`txt_in` shapes (the reference image enters as extra sequence tokens, not
 extra input channels), so `editModelRe` name-detects it, with `llmVision: on|off` and
 `llmVisionPath` as the escape hatches. Sampling knobs stay hand-wired: LongCat-Edit still wants
-`extraArgs: "--flow-shift 3"`, which has no structural tell.
+`extraArgs: "--flow-shift 3.16"`, which has no structural tell (the value is
+exp(base_shift) from the model's own scheduler config, not something the gguf
+states).
 
 ## Embedding (`embedding.go`)
 
