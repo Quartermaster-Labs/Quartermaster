@@ -98,4 +98,27 @@ describe("settingsFor", () => {
     expect(settingsFor("illustrious-xl").size).toBe("1024x1024");
     expect(settingsFor("z-image-turbo").size).toBeUndefined();
   });
+
+  it("lets the model's own launch defaults win over the table", () => {
+    // The whole point: a model configured with defaultCfg/defaultSteps must not
+    // be reset to the generic 20/7 just because it has no preset row.
+    const d = settingsFor("longcat-image-edit-turbo", { steps: 12, cfg: 1 });
+    expect(d.steps).toBe(12);
+    expect(d.cfg).toBe(1);
+    // Even a model WITH a preset defers to what it is actually launched with.
+    expect(settingsFor("animagine-xl-3.1", { cfg: 4.5 }).cfg).toBe(4.5);
+  });
+
+  it("keeps the preset for fields the launch line does not state", () => {
+    const d = settingsFor("animagine-xl-3.1", { cfg: 4.5 });
+    expect(d.steps).toBe(28);
+    expect(d.sampler).toBe("euler_a");
+    expect(d.negative).toBe(SDXL_ANIME_NEG);
+    expect(d.size).toBe("1024x1024");
+  });
+
+  it("takes a size only when both edges are named", () => {
+    expect(settingsFor("z-image-turbo", { width: 1024, height: 768 }).size).toBe("1024x768");
+    expect(settingsFor("illustrious-xl", { width: 1024 }).size).toBe("1024x1024");
+  });
 });

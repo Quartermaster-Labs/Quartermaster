@@ -274,7 +274,7 @@
     const id = $selectedModelStore;
     if (!id || id === $defaultsModelStore) return;
     $defaultsModelStore = id;
-    const d = settingsFor(id);
+    const d = settingsFor(id, $models.find((m) => m.id === id)?.genDefaults);
     $sdStepsStore = d.steps;
     $sdCfgScaleStore = d.cfg;
     $sdSamplerStore = d.sampler;
@@ -362,9 +362,16 @@
   // Clamp the persisted batch pref — a hand-edited pref (or an old value) must not
   // queue 200 renders behind one prompt.
   let batchCount = $derived(Math.min(MAX_BATCH, Math.max(1, Math.round($sdBatchStore || 1))));
-  let modelDefaults = $derived(defaultsFor($selectedModelStore));
+  // The hint line under the settings panel shows the SAME resolution the reset
+  // effect applies, so what it claims is the model default is what a switch
+  // actually sets. maxDim has no launch-line equivalent, so it stays table-only.
+  let modelGen = $derived($models.find((m) => m.id === $selectedModelStore)?.genDefaults);
+  let modelPreset = $derived(defaultsFor($selectedModelStore));
+  let modelDefaults = $derived(
+    modelPreset || modelGen ? settingsFor($selectedModelStore, modelGen) : undefined
+  );
   // Largest long edge the current model handles (tiers above are greyed out).
-  let modelMax = $derived(modelDefaults?.maxDim ?? DEFAULT_MAX_DIM);
+  let modelMax = $derived(modelPreset?.maxDim ?? DEFAULT_MAX_DIM);
   let aspectOptions = $derived(ASPECTS.map((a) => ({ value: a.value, label: a.label })));
   // Size tiers for the chosen aspect, labelled with the concrete WxH; tiers over
   // the model's cap are disabled.
@@ -1106,7 +1113,7 @@
               </div>
             </div>
             {#if modelDefaults}
-              <p class="text-xs text-txtsecondary -mt-1">Model default · {modelDefaults.steps} steps · cfg {modelDefaults.cfg} · {modelDefaults.sampler}</p>
+              <p class="text-xs text-txtsecondary -mt-1">Model default · {modelDefaults.steps} steps · cfg {modelDefaults.cfg}{modelDefaults.sampler ? ` · ${modelDefaults.sampler}` : ""}</p>
             {/if}
             <div class="flex flex-col gap-1">
               <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
