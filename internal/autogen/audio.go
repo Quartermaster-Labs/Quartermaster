@@ -246,6 +246,7 @@ func emitTTSModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, nam
 		fmt.Fprintf(b, "    useModelName: %q\n", ttscppModelName(row))
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
+	writeSingleDeviceEnv(b, s)
 	// VRAM admission: qwentts runs on the GPU, so charge its talker + codec
 	// weights plus a small pad. TTS.cpp is CPU-only here (no CUDA/ROCm path
 	// upstream, --use-metal is macOS), so it costs no VRAM and gets no estimate

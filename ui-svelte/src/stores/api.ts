@@ -713,6 +713,9 @@ export interface GuardSettings {
   oomGuardGraceSec: number; // must be >= 1; the server rejects 0 (use oomGuardEvict to disable)
   minGpuFraction: number; // 0..1
   multiResident: boolean;
+  // Split one model across every eligible GPU (-sm layer + --tensor-split).
+  // Off pins every model to a single card.
+  multiGpu: boolean;
 }
 
 // The advanced sizer knobs. GET always returns effective values (defaults
@@ -729,6 +732,7 @@ export interface AdvancedSettings {
   healthCheckTimeout: number;
   kvQuant: string; // "" = auto; else f32|f16|bf16|q8_0|q5_1|q5_0|q4_1|q4_0
   loraDir: string; // "" = the image model's own folder
+  minGpuVramGB: number; // smallest adapter that counts as inference VRAM (0 = default 3)
 }
 
 // Backend executable paths (llama-server / sd-server / tts-server). Blank => the

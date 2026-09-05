@@ -101,22 +101,19 @@ func SampleTotalVramGB(timeout time.Duration) (gb float64, ok bool) {
 	}
 }
 
-// totalVramGBFromStats picks the adapter with the largest total memory and
-// returns its total VRAM in GB. Split out for unit testing without a real GPU.
+// totalVramGBFromStats returns the POOLED physical VRAM of every eligible
+// adapter. Split out for unit testing without a real GPU.
+//
+// Was "the largest adapter's total". Pooling is what makes the figure mean the
+// same thing as the budget it is compared against (see freeVramGBFromStats);
+// adapters below the eligibility floor are excluded from both, so an iGPU's
+// slice of system memory never inflates either.
 func totalVramGBFromStats(stats []perf.GpuStat) (float64, bool) {
-	best := -1
-	for i := range stats {
-		if stats[i].MemTotalMB <= 0 {
-			continue
-		}
-		if best < 0 || stats[i].MemTotalMB > stats[best].MemTotalMB {
-			best = i
-		}
-	}
-	if best < 0 {
+	set := gpuSetFromStats(stats, minInferenceVramGB)
+	if len(set) == 0 {
 		return 0, false
 	}
-	return float64(stats[best].MemTotalMB) / 1024.0, true
+	return set.TotalGB(), true
 }
 
 // autoVramSampleTimeout bounds the one-shot probe; some backends (nvidia-smi)
@@ -171,6 +168,10 @@ const autoVramFloorGB = 1.0
 // EnsureConfig bakes into the config. No-op when AutoVram is off.
 func ResolveAutoVram(s *Settings, logf func(string)) {
 	if !s.AutoVram {
+		// The device set is a hardware fact the sizer needs either way: it
+		// decides the extra-device overhead and the tensor-split ratio even when
+		// the BUDGET stays the static targetVramGB.
+		ResolveGpuSet(s, logf)
 		return
 	}
 	resolveAutoVram(s, logf)
@@ -189,7 +190,16 @@ func ResolveAutoVram(s *Settings, logf func(string)) {
 // static TargetVramGB stays a user ceiling, so autoVram can tighten a budget the
 // desktop has eaten into but can't talk a plan past a deliberate limit.
 func resolveAutoVram(s *Settings, logf func(string)) {
-	sampledGB, ok := SampleFreeVramGB(autoVramSampleTimeout)
+	// Resolve the eligible device set first: it decides how many cards the
+	// budget below pools, and every later sizing decision in this pass reads it
+	// off the settings rather than taking a second, differently-timed sample.
+	ResolveGpuSet(s, logf)
+	sampledGB, ok := 0.0, false
+	if len(s.Gpus) > 0 {
+		sampledGB, ok = s.Gpus.FreeGB(), true
+	} else {
+		sampledGB, ok = SampleFreeVramGB(autoVramSampleTimeout)
+	}
 	// Budget against the idle high-water mark, never the raw sample: a sample
 	// taken while one of our own models is resident describes the leftovers, not
 	// what the next load may use. See idleFreeVramGB.
@@ -226,24 +236,20 @@ func resolveAutoVram(s *Settings, logf func(string)) {
 	s.TargetVramGB = freeGB
 }
 
-// freeVramGBFromStats picks the adapter with the largest total memory and
-// returns its free VRAM in GB. Split out for unit testing without a real GPU.
+// freeVramGBFromStats returns the POOLED free VRAM of every eligible adapter.
+// Split out for unit testing without a real GPU.
+//
+// Was "the largest adapter's free VRAM", which on a two-card box left the
+// second card's memory invisible to every budget in the program (issue #4).
+// Pooling is only sound because the fixed per-device costs are charged as
+// overhead and the emitted --tensor-split matches the same per-device
+// remainders: see the header comment in gpuset.go. A caller that has turned
+// multiGpu off never reaches here with more than one device: ResolveGpuSet pins
+// the set to the main card first.
 func freeVramGBFromStats(stats []perf.GpuStat) (float64, bool) {
-	best := -1
-	for i := range stats {
-		if stats[i].MemTotalMB <= 0 {
-			continue
-		}
-		if best < 0 || stats[i].MemTotalMB > stats[best].MemTotalMB {
-			best = i
-		}
-	}
-	if best < 0 {
+	set := gpuSetFromStats(stats, minInferenceVramGB)
+	if len(set) == 0 {
 		return 0, false
 	}
-	free := stats[best].MemTotalMB - stats[best].MemUsedMB
-	if free < 0 {
-		free = 0
-	}
-	return float64(free) / 1024.0, true
+	return set.FreeGB(), true
 }

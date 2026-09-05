@@ -437,7 +437,13 @@ func (s *Server) WireDynamicOffload(settings autogen.Settings) {
 			if freeOK {
 				lastFree = free
 			}
-			return autogen.LiveOffloadArgs(s.offloadSettingsVal(), args, free, freeOK, logf)
+			// Hand the guard the LIVE per-device picture too, so a baked
+			// --tensor-split can be re-derived against the card that is
+			// actually free rather than the one that was free at generate
+			// time. offloadSettingsVal returns a copy, so this is local.
+			sv := s.offloadSettingsVal()
+			sv.Gpus = s.liveGpuSet(sv.MultiGpuEnabled())
+			return autogen.LiveOffloadArgs(sv, args, free, freeOK, logf)
 		}
 		n := 0
 		sample := func() (float64, bool) {
@@ -542,14 +548,30 @@ const (
 // so a flat compare would loop for nothing.
 const vramReclaimEpsilonGB = 0.15
 
-// freeVramGB returns the free VRAM (GB) of the largest GPU from the most recent
-// perf sample. ok is false when there's no GPU telemetry yet.
+// liveGpuSet is the per-device view of the most recent perf sample, un-smoothed:
+// what each eligible card has free right now. Feeds the spawn guard's
+// --tensor-split retune; empty when there is no GPU telemetry, which the guard
+// reads as "keep the baked ratio".
+func (s *Server) liveGpuSet(multi bool) autogen.GpuSet {
+	if s.perf == nil {
+		return nil
+	}
+	_, gpus := s.perf.Current()
+	return autogen.LiveGpuSet(gpus, multi)
+}
+
+// freeVramGB returns the POOLED free VRAM (GB) across every eligible adapter in
+// the most recent perf sample. ok is false when there's no GPU telemetry yet.
+//
+// Pooled to match the sizer: a model planned across two cards has to be admitted
+// and reclaim-probed against the same budget it was planned against. Collapses
+// to one card when multiGpu is off.
 func (s *Server) freeVramGB() (float64, bool) {
 	if s.perf == nil {
 		return 0, false
 	}
 	_, gpus := s.perf.Current()
-	bestStat, ok := largestGPU(gpus)
+	bestStat, ok := pooledGPUStat(gpus, s.offloadSettingsVal().MultiGpuEnabled())
 	if !ok {
 		return 0, false
 	}
@@ -584,19 +606,11 @@ func (s *Server) trackSystemVram(ctx context.Context) {
 			if len(s.local.RunningModels()) != 0 {
 				continue
 			}
-			// Largest-GPU used VRAM, matching freeVramGB's GPU choice.
-			best := -1
-			var bestStat perf.GpuStat
-			for _, g := range gpus {
-				if g.MemTotalMB <= 0 {
-					continue
-				}
-				if best < 0 || g.MemTotalMB > bestStat.MemTotalMB {
-					best = g.ID
-					bestStat = g
-				}
-			}
-			if best < 0 {
+			// Pooled used VRAM over the eligible set, matching freeVramGB.
+			// The floor is subtracted from a pooled budget, so it has to be
+			// the whole set's idle cost, not one card's.
+			bestStat, ok := pooledGPUStat(gpus, s.offloadSettingsVal().MultiGpuEnabled())
+			if !ok {
 				continue
 			}
 			used := int64(bestStat.MemUsedMB)

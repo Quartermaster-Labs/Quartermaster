@@ -63,8 +63,13 @@ type EstimateResult struct {
 	ComputeBufGB float64 `json:"computeBufGB"`
 	MmprojGB     float64 `json:"mmprojGB"`
 	OverheadGB   float64 `json:"overheadGB"`
-	RamExceeded  bool    `json:"ramExceeded"`
-	IsMoE        bool    `json:"isMoE"`
+	// FixedGB is the whole non-splittable share of EstVramGB: compute buffer,
+	// CUDA context, projector, draft, safety headroom. On a --tensor-split load
+	// these live on --main-gpu alone, so the spawn guard charges FixedGB to the
+	// main device before it re-derives the ratio.
+	FixedGB     float64 `json:"fixedGB"`
+	RamExceeded bool    `json:"ramExceeded"`
+	IsMoE       bool    `json:"isMoE"`
 }
 
 // EstimatePlan sizes one candidate tuning against the given settings + gguf
@@ -191,6 +196,7 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		ComputeBufGB: computeBufGB,
 		MmprojGB:     in.MmprojGB,
 		OverheadGB:   s.VramOverheadGB,
+		FixedGB:      prof.Overhead,
 		RamExceeded:  plan.RamExceeded,
 		IsMoE:        meta.IsMoE,
 	}, nil

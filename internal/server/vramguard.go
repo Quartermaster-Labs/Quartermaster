@@ -189,7 +189,7 @@ func (g *vramGuard) run(ctx context.Context) {
 // no longer fits it, runs the watchdog. Split out from run so the accounting is
 // testable without a perf monitor.
 func (g *vramGuard) sample(ctx context.Context, gpus []perf.GpuStat) {
-	best, ok := largestGPU(gpus)
+	best, ok := g.pooledGPU(gpus)
 	if !ok {
 		g.trusted.Store(false)
 		return
@@ -395,28 +395,39 @@ func (g *vramGuard) cooldown() time.Duration {
 // that leaks its allocation defeats that.
 const vramGuardUnloadTimeout = 30 * time.Second
 
-// largestGPU picks the adapter with the most total memory from a sample history,
-// keeping only each ID's newest reading. Same choice rule as freeVramGB and the
-// autogen sizer, so every VRAM decision talks about the same card.
-func largestGPU(gpus []perf.GpuStat) (perf.GpuStat, bool) {
-	latest := make(map[int]perf.GpuStat)
-	for _, g := range gpus {
-		if prev, seen := latest[g.ID]; !seen || g.Timestamp.After(prev.Timestamp) {
-			latest[g.ID] = g
+// pooledGPU collapses a sample history into the ONE reading the guard reasons
+// about: the summed total and used memory of every eligible adapter. Pooled,
+// because the sizer plans a model against the pooled budget and emits a matching
+// --tensor-split (issue #4); a ceiling derived from the biggest card alone would
+// shed models that fit across the pair perfectly well. With multiGpu off the set
+// collapses back to the single device the sizer pins to, which is the behaviour
+// that shipped before.
+//
+// The returned stat is synthetic: only MemTotalMB and MemUsedMB are meaningful,
+// and they are exactly what sample and foreignMB4 read. Per-process attribution
+// needs no per-device split either, since QueryComputeApps reports a pid's usage
+// across every adapter it touches.
+func (g *vramGuard) pooledGPU(gpus []perf.GpuStat) (perf.GpuStat, bool) {
+	return pooledGPUStat(gpus, g.settings().MultiGpuEnabled())
+}
+
+func pooledGPUStat(gpus []perf.GpuStat, multi bool) (perf.GpuStat, bool) {
+	eligible := autogen.EligibleGpuStats(gpus, multi)
+	if len(eligible) == 0 {
+		return perf.GpuStat{}, false
+	}
+	out := perf.GpuStat{ID: eligible[0].ID, Name: eligible[0].Name, Timestamp: eligible[0].Timestamp}
+	for _, e := range eligible {
+		out.MemTotalMB += e.MemTotalMB
+		out.MemUsedMB += e.MemUsedMB
+		if e.Timestamp.After(out.Timestamp) {
+			out.Timestamp = e.Timestamp
 		}
 	}
-	best := -1
-	var bestStat perf.GpuStat
-	for _, g := range latest {
-		if g.MemTotalMB <= 0 {
-			continue
-		}
-		if best < 0 || g.MemTotalMB > bestStat.MemTotalMB {
-			best = g.ID
-			bestStat = g
-		}
+	if out.MemUsedMB > out.MemTotalMB {
+		out.MemUsedMB = out.MemTotalMB
 	}
-	return bestStat, best >= 0
+	return out, true
 }
 
 // vramRefusals memoises "insufficient VRAM" spawn refusals. Without it every

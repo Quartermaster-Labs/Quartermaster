@@ -60,6 +60,23 @@ spawn is refused when the live plan falls under `settings.minGpuFraction` (defau
 *generated* plan is already CPU-heavy (deliberate `cpuOffload`, a model bigger than the card)
 is never blocked — only one degraded by what is currently resident. Negative = explicit opt-out.
 
+## The split ratio is re-derived at spawn
+
+`retuneTensorSplit`. Everything else in `LiveOffloadArgs` adjusts HOW MUCH of a model goes to
+the GPU; this decides WHERE it lands.
+
+A baked `--tensor-split` was computed at generate time from each card's **idle** free VRAM. By
+spawn time another model, or a game, can be sitting on one card only, and the stale ratio still
+sends that card its full share of the layers: the total fits the pooled budget and the load OOMs
+anyway. So the ratio and `--main-gpu` are rebuilt from the live per-device reading, charging
+`EstimateResult.FixedGB` (the whole non-splittable share: compute buffer, CUDA context,
+projector, headroom) to the main device exactly as generate does.
+
+The live reading is deliberately NOT the idle high-water mark `SampleGpuSet` applies: the sizer
+wants an idle budget, the spawn guard wants the truth. `Server.liveGpuSet` builds it from the
+perf monitor's most recent sample and hands it over on `Settings.Gpus`, so this costs no extra
+probe. No device set (no telemetry) or no `--tensor-split` in the argv leaves the argv untouched.
+
 ## SAM is always CPU
 
 `LiveOffloadArgs` appends `--no-gpu` to every `.ggml`: the Vulkan SAM backend returns garbage
@@ -75,7 +92,9 @@ shared memory when another app starts, with no error and no log). `vramguard` (`
 closes both from one sample taken on the perf monitor's own cadence (>=5s), so the admission
 path stays a lock-free atomic read.
 
-- **Live VRAM ceiling (admission).** The guard attributes the largest GPU's used memory between
+- **Live VRAM ceiling (admission).** The guard attributes the POOLED used memory of every
+  eligible adapter (`pooledGPUStat`, same eligibility rule as the sizer via
+  `autogen.EligibleGpuStats`) between
   quartermaster's own children and everyone else, and publishes a ceiling via the router's
   `SetLiveVramBudget` probe (`router.LiveVramFn`); `budgetEviction` admits against
   `min(vramBudgetGB, ceiling)`. The ceiling is measured as **foreign growth over an idle

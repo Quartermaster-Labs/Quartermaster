@@ -379,6 +379,14 @@ func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, pro
 		fmt.Fprintf(b, "      %s\n", line)
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
+	// A split is expressed in TELEMETRY device order (nvidia-smi / DXGI), but the
+	// CUDA runtime enumerates FASTEST_FIRST by default, so on a mismatched pair
+	// the two orders disagree and the ratio lands on the wrong cards - silently,
+	// with no error and a model that OOMs the small one. Pinning bus order makes
+	// the ordinal mean one thing everywhere. Ignored by a Vulkan/ROCm build.
+	if len(prof.TensorSplit) > 1 {
+		fmt.Fprintf(b, "    env:\n      - %q\n", cudaOrderEnv)
+	}
 	writeEstVram(b, plan.EstVramGB)
 	writeEstRam(b, plan.EstRamGB)
 	writeDisplayName(b, s, prof.Name)

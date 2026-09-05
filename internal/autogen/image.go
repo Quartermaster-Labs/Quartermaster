@@ -777,6 +777,7 @@ func emitExtraImageModels(b *strings.Builder, s Settings, overrides []Override, 
 			fmt.Fprintf(b, "      %s\n", line)
 		}
 		fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
+		writeSingleDeviceEnv(b, s)
 		writeEstVram(b, extraImageBudget(s, m))
 		b.WriteString("    checkEndpoint: /\n")
 		if m.Unlisted {
@@ -811,6 +812,7 @@ func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, n
 		fmt.Fprintf(b, "      %s\n", line)
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
+	writeSingleDeviceEnv(b, s)
 	// Admission estimate = the --max-vram cap sd-server is told to stay inside.
 	// True peak during sampling/VAE decode runs above it, which is why the
 	// scheduler additionally refuses to spawn anything while a render is in

@@ -41,8 +41,9 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 | `sidecar.go` | UI-owned overrides file (`quartermaster-overrides.yaml`): per-model overrides, the global settings patch, managed API keys, and the `BackendEntry` registry. |
 | `hash.go` | Inputs hashing + hash-gated regen (`InputsHash`, `EnsureConfig`, `CurrentInputsHash`). |
 | `budgets.go` | Hardware-derived STARTING budgets: `RecommendedVramGB` (free VRAM) / `RecommendedRamGB` (available RAM), and `seedHardwareBudgets`, which `LoadGenerateFile` uses to replace `applyDefaults`' 7 GB/24 GB placeholders when neither the file nor the sidecar pinned them. One cached probe per process. |
-| `vram.go` | Live free-VRAM sampling via `internal/perf` (`SampleFreeVramGB`, `resolveAutoVram`) for the `autoVram` setting. Budgets against the **idle high-water mark** (`noteFreeVramGB`), never the raw sample — autoVram re-resolves on every `EnsureConfig` *and* every estimate preview, both of which run while models are loaded. |
-| `liveoffload.go` | Spawn-time placement recompute (`LiveOffloadArgs`). → `liveoffload.md` |
+| `vram.go` | Live free-VRAM sampling via `internal/perf` (`SampleFreeVramGB`, `resolveAutoVram`) for the `autoVram` setting. POOLED across every eligible adapter since issue #4, via `gpuset.go`. Budgets against the **idle high-water mark** (`noteFreeVramGB`), never the raw sample — autoVram re-resolves on every `EnsureConfig` *and* every estimate preview, both of which run while models are loaded. |
+| `gpuset.go` | Multi-GPU device set (`GpuSet`, `GpuDevice`): eligibility (`gpuSetFromStats`, `EligibleGpuStats`, `LiveGpuSet`), pooled `FreeGB`/`TotalGB`, `MainIndex`, the `--tensor-split` ratio (`TensorSplit`, `FormatSplit`), the extra-device overhead the sizer must charge (`ExtraDeviceOverheadGB`), and `ResolveGpuSet` (60s-cached resolve into `Settings.Gpus`). The header comment carries the split math. |
+| `liveoffload.go` | Spawn-time placement recompute (`LiveOffloadArgs`), including the live `--tensor-split` retune (`retuneTensorSplit`). → `liveoffload.md` |
 | `vllm.go` | Backend selection (`resolveBackend`, `resolveBackendPreferring`, `kindClass`) + the vllm emitter. → `backends.md` |
 | `rope.go` | `ropeCeiling`/`ropeFactor` — the only path that lifts the trained-ctx ceiling. → `sizing.md` |
 | `encoderpool.go` | Diffusion component auto-discovery: classifies every VAE / CLIP / T5 / text-encoder LLM on disk from its header (safetensors tensor table or gguf metadata), pairs each encoder with the mmproj beside it, and fills the blanks in `settings.encoders`. Matched to a DiT by `Metadata.CondHidden`. -> `classes.md` |
@@ -156,6 +157,24 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   `config.yaml` survives even after a rebuild+restart. `genVersion` (folded into
   `buildHashInput`) forces a one-time regen. **Bump it whenever the emitted YAML changes for
   identical inputs.**
+- **The VRAM budget is POOLED across GPUs, and that is only safe because of the split.** Since
+  issue #4 `freeVramGBFromStats`/`totalVramGBFromStats` sum every eligible adapter instead of
+  picking the largest one. Three things have to stay true together, or a two-card box OOMs on the
+  small card while the sizer reports a comfortable fit:
+  1. every device past the main one is charged `ExtraDeviceOverheadGB` into `prof.Overhead`;
+  2. `prof.TensorSplit` is derived from the FINISHED `Overhead` (`generate.go`, the compute-buffer
+     loop), because llama.cpp keeps the fixed costs (logits/output buffer, CUDA context) on
+     `--main-gpu` alone while it splits layers and their KV by the ratio;
+  3. `-sm layer --main-gpu N --tensor-split a,b` is actually emitted, alongside
+     `env: CUDA_DEVICE_ORDER=PCI_BUS_ID`. Without that env the CUDA runtime's `FASTEST_FIRST`
+     default can reverse the pair and apply the ratio backwards, silently.
+  Adapters below `minGpuVramGB` (3 GB) are dropped: an iGPU reports a slice of system RAM as
+  dedicated VRAM, and pooling it invents budget. `multiGpu: false` collapses everything back to
+  the single device `MainIndex` picks.
+- **Single-device backends need an explicit pin.** sd-server, tts-server, whisper and the
+  embedding server have no split of their own, so on a multi-GPU box `writeSingleDeviceEnv`
+  emits `CUDA_VISIBLE_DEVICES=<main>` for them. Without it the CUDA runtime picks a card the
+  sizer did not budget, and not necessarily the same one twice. SAM is exempt: it runs on the CPU.
 - **Sidecar SHADOWS the file row, it does not field-merge.** Override resolution is row-level
   first-match (sidecar rows prepended), so a sidecar row replaces the matching file row
   wholesale. A UI save must therefore write a *superset*: the config editor seeds the sidecar

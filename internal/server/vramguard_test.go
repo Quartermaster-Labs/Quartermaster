@@ -353,20 +353,37 @@ func TestVramRefusals_ClearOnSuccess(t *testing.T) {
 	}
 }
 
-// largestGPU picks the biggest card and keeps only each ID's newest sample, so
-// every VRAM decision in the process talks about the same adapter.
-func TestLargestGPU_PicksBiggestNewest(t *testing.T) {
+// pooledGPUStat sums every eligible card and keeps only each ID's newest sample,
+// so the guard's ceiling describes the same pooled budget the sizer planned the
+// resident models against. With multi off it collapses to the main device.
+func TestPooledGPUStat_SumsEligibleNewest(t *testing.T) {
 	now := time.Now()
-	got, ok := largestGPU([]perf.GpuStat{
+	hist := []perf.GpuStat{
 		{ID: 0, MemTotalMB: 8192, MemUsedMB: 100, Timestamp: now},
 		{ID: 1, MemTotalMB: 24576, MemUsedMB: 999, Timestamp: now.Add(-time.Minute)},
 		{ID: 1, MemTotalMB: 24576, MemUsedMB: 4096, Timestamp: now},
-	})
-	if !ok || got.ID != 1 || got.MemUsedMB != 4096 {
-		t.Fatalf("largestGPU = %+v ok=%v, want the newest ID 1 sample", got, ok)
 	}
-	if _, ok := largestGPU(nil); ok {
+	got, ok := pooledGPUStat(hist, true)
+	if !ok || got.MemTotalMB != 8192+24576 || got.MemUsedMB != 100+4096 {
+		t.Fatalf("pooledGPUStat(multi) = %+v ok=%v, want both cards' newest samples summed", got, ok)
+	}
+	// Single-device mode pins to the card with the most FREE memory: ID 1 has
+	// 20480 MiB free against ID 0's 8092.
+	got, ok = pooledGPUStat(hist, false)
+	if !ok || got.MemTotalMB != 24576 || got.MemUsedMB != 4096 {
+		t.Fatalf("pooledGPUStat(single) = %+v ok=%v, want only the newest ID 1 sample", got, ok)
+	}
+	if _, ok := pooledGPUStat(nil, true); ok {
 		t.Fatal("empty history reported a GPU")
+	}
+	// An adapter under the inference floor (an iGPU slicing system RAM) is not
+	// budget: pooling it would invent VRAM no card has.
+	got, ok = pooledGPUStat([]perf.GpuStat{
+		{ID: 0, MemTotalMB: 2048, MemUsedMB: 128, Timestamp: now},
+		{ID: 1, MemTotalMB: 12288, MemUsedMB: 1024, Timestamp: now},
+	}, true)
+	if !ok || got.MemTotalMB != 12288 {
+		t.Fatalf("pooledGPUStat = %+v ok=%v, want the iGPU dropped", got, ok)
 	}
 }
 
