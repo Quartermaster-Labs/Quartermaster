@@ -84,6 +84,18 @@ runner (CGO is off project-wide), so the Windows wizard, `linux/amd64`,
 The tag is created on the dispatched ref's HEAD, and the script refuses to
 continue if the tag is not HEAD or origin already has it elsewhere.
 
+**A tag with a suffix (`v1.0.4-rc1`) makes the release a prerelease**, which is
+how a build gets handed to one tester without offering it to everyone. Two
+independent mechanisms keep it away from the rest: the updater polls
+`/releases/latest`, which GitHub answers without prereleases, and
+`internal/update`'s `semverRe` cannot parse a suffixed version, so `newer()`
+returns false even if the release is published by mistake. A plain `vX.Y.Z`
+ticked prerelease by hand has only the first of those, and burns a real version
+number on a test build. `docker.yml`'s tag-vs-published comparison already skips
+it, so no image is retagged either. Dispatch it from the feature branch: the tag
+then pins a commit that a squash-merge orphans, so delete the tag and the
+prerelease once testing is done.
+
 ## The Docker image
 
 Built by `docker.yml` from `docker/app/Dockerfile`. User-facing docs live in

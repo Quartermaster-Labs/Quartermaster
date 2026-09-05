@@ -316,8 +316,11 @@ release-binaries:
 _build-release:
 	@if [ -z "$(VERSION)" ]; then \
 		echo "Error: VERSION=vMAJOR.MINOR.PATCH is required (e.g. make release VERSION=v0.5.1)" >&2; exit 1; fi
-	@echo "$(VERSION)" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$$' || { \
-		echo "Error: VERSION must be vMAJOR.MINOR.PATCH (e.g. v0.5.1)" >&2; exit 1; }
+	# Kept in step with build-release.ps1's own check: a -SUFFIX is allowed and
+	# makes the GitHub release a prerelease. Diverging here would reject locally
+	# what the CI path accepts.
+	@echo "$(VERSION)" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$$' || { \
+		echo "Error: VERSION must be vMAJOR.MINOR.PATCH, optionally -SUFFIX (e.g. v0.5.1, v0.5.1-rc1)" >&2; exit 1; }
 	# Created on HEAD when it does not exist yet. build-release.ps1 then verifies
 	# the tag IS HEAD, so a tag that already lives on another commit stops the
 	# release instead of quietly shipping that commit under this version.
