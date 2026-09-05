@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"os"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -287,11 +286,28 @@ func (s *Server) activeBuild(comp string, installed []backends.Installed) *backe
 // preflightCache memoises peimports.Hint per installed build. The catalog is
 // polled while the Backends tab is open and the walk opens every DLL beside the
 // exe, so recomputing it per request would turn an idle tab into steady disk
-// traffic. An install directory is immutable once committed (versioned dirs are
-// never written in place — a reinstall replaces the whole tree), and the exe's
-// modtime keys the entry so a replaced build is re-checked rather than
-// inheriting the old verdict.
-var preflightCache sync.Map // exePath+"\x00"+modtime -> string
+// traffic.
+//
+// The entry expires as well as being keyed by the exe modtime, because an
+// install directory is NOT immutable: completing a build means dropping the
+// missing libraries in beside an executable nobody touches, so its modtime is
+// unchanged. Keyed on modtime alone, a build the user had just fixed by hand
+// went on reporting the DLL it no longer lacked for as long as the process
+// lived, with the card's size figure (an uncached directory walk) updating
+// around it as the only sign anything had happened.
+var preflightCache sync.Map // exePath -> preflightEntry
+
+// preflightTTL is how long a verdict is trusted. Long enough that an open tab
+// polling every couple of seconds triggers one import walk a minute per build,
+// short enough that a hand-fixed build clears its warning while the user is
+// still looking at the page.
+const preflightTTL = 30 * time.Second
+
+type preflightEntry struct {
+	hint    string
+	modTime int64
+	at      time.Time
+}
 
 // buildWarning reports why an installed build cannot run, or "" when it looks
 // fine. Cached; see preflightCache.
@@ -300,12 +316,15 @@ func buildWarning(exe string) string {
 	if err != nil {
 		return ""
 	}
-	key := exe + "\x00" + strconv.FormatInt(st.ModTime().UnixNano(), 10)
-	if v, ok := preflightCache.Load(key); ok {
-		return v.(string)
+	mod := st.ModTime().UnixNano()
+	if v, ok := preflightCache.Load(exe); ok {
+		e := v.(preflightEntry)
+		if e.modTime == mod && time.Since(e.at) < preflightTTL {
+			return e.hint
+		}
 	}
 	hint := peimports.Hint(exe)
-	preflightCache.Store(key, hint)
+	preflightCache.Store(exe, preflightEntry{hint: hint, modTime: mod, at: time.Now()})
 	return hint
 }
 

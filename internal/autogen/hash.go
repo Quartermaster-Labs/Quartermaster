@@ -159,7 +159,7 @@ const hashCacheSuffix = ".modelhash"
 //	     sidecar) is migrated onto the new one. Every dense model trained past
 //	     128k gets a larger -c and a larger KV reserve, so the emitted argv and
 //	     the estimates change for inputs that did not.
-const genVersion = "v57"
+const genVersion = "v58"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

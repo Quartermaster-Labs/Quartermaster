@@ -75,6 +75,63 @@ func TestBackends_MatchAssets(t *testing.T) {
 		t.Error("expected an error when no asset matches")
 	}
 
+	// Upstream renamed the Windows ROCm asset (hip-radeon -> rocm-<toolkit>) and
+	// added arm64 CUDA. Verbatim from b10819: with only the old pattern the rocm
+	// variant matched nothing here, which is how a live release went uninstallable
+	// while the b10240 list above still passed.
+	current := []string{
+		"cudart-llama-bin-win-cuda-12.4-x64.zip",
+		"cudart-llama-bin-win-cuda-13.3-x64.zip",
+		"cudart-llama-bin-win-cuda-13.4-arm64.zip",
+		"llama-b10819-bin-android-arm64.tar.gz",
+		"llama-b10819-bin-macos-arm64.tar.gz",
+		"llama-b10819-bin-macos-x64.tar.gz",
+		"llama-b10819-bin-ubuntu-arm64.tar.gz",
+		"llama-b10819-bin-ubuntu-openvino-2026.3.1-x64.tar.gz",
+		"llama-b10819-bin-ubuntu-rocm-10.0-x64.tar.gz",
+		"llama-b10819-bin-ubuntu-s390x.tar.gz",
+		"llama-b10819-bin-ubuntu-sycl-fp16-x64.tar.gz",
+		"llama-b10819-bin-ubuntu-sycl-fp32-x64.tar.gz",
+		"llama-b10819-bin-ubuntu-vulkan-arm64.tar.gz",
+		"llama-b10819-bin-ubuntu-vulkan-x64.tar.gz",
+		"llama-b10819-bin-ubuntu-x64.tar.gz",
+		"llama-b10819-bin-win-cpu-arm64.zip",
+		"llama-b10819-bin-win-cpu-x64.zip",
+		"llama-b10819-bin-win-cuda-12.4-x64.zip",
+		"llama-b10819-bin-win-cuda-13.3-x64.zip",
+		"llama-b10819-bin-win-cuda-13.4-arm64.zip",
+		"llama-b10819-bin-win-opencl-adreno-arm64.zip",
+		"llama-b10819-bin-win-openvino-2026.3.1-x64.zip",
+		"llama-b10819-bin-win-rocm-10.0-x64.zip",
+		"llama-b10819-bin-win-sycl-x64.zip",
+		"llama-b10819-bin-win-vulkan-x64.zip",
+		"llama-b10819-ui.tar.gz",
+		"llama-b10819-xcframework.zip",
+	}
+	currentCases := []struct {
+		variant, goos, want string
+		wantExtra           string
+	}{
+		{"rocm", osWin, "llama-b10819-bin-win-rocm-10.0-x64.zip", ""},
+		{"rocm", osLinux, "llama-b10819-bin-ubuntu-rocm-10.0-x64.tar.gz", ""},
+		{"vulkan", osWin, "llama-b10819-bin-win-vulkan-x64.zip", ""},
+		{"cuda", osWin, "llama-b10819-bin-win-cuda-13.3-x64.zip", "cudart-llama-bin-win-cuda-13.3-x64.zip"},
+		{"cpu", osWin, "llama-b10819-bin-win-cpu-x64.zip", ""},
+		{"metal", osMac, "llama-b10819-bin-macos-arm64.tar.gz", ""},
+	}
+	for _, c := range currentCases {
+		got, extra, err := llama.MatchAssets(c.variant, c.goos, current)
+		if err != nil {
+			t.Fatalf("b10819 %s/%s: %v", c.variant, c.goos, err)
+		}
+		if got != c.want {
+			t.Errorf("b10819 %s/%s: got %q want %q", c.variant, c.goos, got, c.want)
+		}
+		if c.wantExtra != "" && (len(extra) != 1 || extra[0] != c.wantExtra) {
+			t.Errorf("b10819 %s/%s: extras %v want [%s]", c.variant, c.goos, extra, c.wantExtra)
+		}
+	}
+
 	// stable-diffusion.cpp: capitalised platform segments, its own cudart zip,
 	// and an upstream ROCm build. Verbatim from release master-809-eb7f35c.
 	sd, _ := Find("sd-server")

@@ -45,6 +45,7 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 | `liveoffload.go` | Spawn-time placement recompute (`LiveOffloadArgs`). → `liveoffload.md` |
 | `vllm.go` | Backend selection (`resolveBackend`, `resolveBackendPreferring`, `kindClass`) + the vllm emitter. → `backends.md` |
 | `rope.go` | `ropeCeiling`/`ropeFactor` — the only path that lifts the trained-ctx ceiling. → `sizing.md` |
+| `encoderpool.go` | Diffusion component auto-discovery: classifies every VAE / CLIP / T5 / text-encoder LLM on disk from its header (safetensors tensor table or gguf metadata), pairs each encoder with the mmproj beside it, and fills the blanks in `settings.encoders`. Matched to a DiT by `Metadata.CondHidden`. -> `classes.md` |
 | `audio.go`, `asr.go`, `sam.go`, `image.go`, `embedding.go` | Non-LLM class emitters. → `classes.md` |
 
 ## Important types & functions
@@ -185,6 +186,15 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   opt-out is the existing spec override (no `draft-*` → no `-md`) and marking the vision twin
   unlisted. `ModelBaseKey`/`FamilyKey` mirror `baseKey`/`familyOf` in
   `ui-svelte/src/lib/modelTable.ts` — change one, change both.
+- **`settings.encoders` is now a PIN, not the source.** Diffusion component paths are
+  discovered structurally (`encoderpool.go`, see `classes.md`), and `fillEncoderSet` fills only
+  the roles left blank, so a declared path always wins and no existing config changes behaviour.
+  Two consequences worth remembering: the pool holds every ordinary chat gguf too (any decoder
+  can be a text encoder), so a change to how candidates are ranked can silently re-point a
+  working image model, and `resolveComponents` therefore takes both the pool and the DiT's
+  `CondHidden` - a caller that passes 0 gets the declared-only behaviour, which is exactly what
+  the older tests assert.
+
 - **A new quant type needs THREE tables, and the header gate is why.** `quantRe` (`discover.go`)
   names it in a FILENAME, `ggmlTypeSize` (`gguf.go`) sizes its tensors, `ggmlTypeName`
   (`quantlabel.go`) names the TYPE id (a type that can be weighed but not named makes every file

@@ -163,7 +163,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	// reveals the real arch name to add to imageArchs.
 	imgArch := effectiveImageArch(meta)
 	if isImageArch(imgArch) {
-		emitImageModel(b, s, row, ov, name, imgArch, meta.HasBakedEncoders, emitted)
+		emitImageModel(b, s, row, ov, name, imgArch, meta.HasBakedEncoders, meta.CondHidden, emitted)
 		// Named variants are emitted as separate "<name>-<variant>" sd-server
 		// entries. Each inherits the model's component paths/placement and overrides
 		// only its own generation preset. Fleet-wide defaultVariants are llama-shaped
@@ -174,7 +174,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 					continue
 				}
 				vov := mergeImageVariant(*ov, v)
-				emitImageModel(b, s, row, &vov, name+"-"+v.Name, imgArch, meta.HasBakedEncoders, emitted)
+				emitImageModel(b, s, row, &vov, name+"-"+v.Name, imgArch, meta.HasBakedEncoders, meta.CondHidden, emitted)
 			}
 		}
 		return nil

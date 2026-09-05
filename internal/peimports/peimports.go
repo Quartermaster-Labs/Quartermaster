@@ -219,7 +219,13 @@ func runtimeAdvice(names []string) string {
 	}
 	switch {
 	case hip:
-		return "this build needs the AMD ROCm/HIP runtime next to the executable or on PATH"
+		// Deliberately not "or on PATH", which is the advice that wastes the
+		// most time here: AMD's HIP SDK installs these libraries as
+		// libhipblas.dll while ROCm-pip-built binaries import hipblas.dll, so
+		// putting the SDK on PATH resolves nothing. The libraries have to sit
+		// beside the exe under the names the import table asks for, and the
+		// working copies come from a ROCm build that links them dynamically.
+		return "copy the AMD ROCm/HIP runtime libraries next to the executable (PATH does not help: the HIP SDK names them lib*.dll)"
 	case cuda:
 		return "this build needs the NVIDIA CUDA runtime next to the executable or on PATH"
 	case driver:

@@ -651,6 +651,14 @@ type Override struct {
 	ClipGPath       string `yaml:"clipGPath"`       // --clip_g
 	T5Path          string `yaml:"t5Path"`          // --t5xxl
 	TextEncoderPath string `yaml:"textEncoderPath"` // --llm (Z-Image / Lumina text encoder)
+	// LlmVision gates --llm_vision, the vision projector (mmproj) that pairs with
+	// the --llm text encoder. "" => auto: edit/reference models (name-detected, see
+	// wantsVisionEncoder) get the projector found beside their encoder, everything
+	// else gets none. "on"/"off" pin it.
+	LlmVision string `yaml:"llmVision"`
+	// LlmVisionPath pins the --llm_vision projector file, winning over the
+	// directory pairing. Empty => auto (see LlmVision).
+	LlmVisionPath string `yaml:"llmVisionPath"`
 	// LoraDir is this model's `--lora-model-dir`. Empty => settings.loraDir, and
 	// if that is empty too, the directory the model gguf itself lives in.
 	LoraDir string `yaml:"loraDir"`
@@ -801,6 +809,8 @@ type VariantSpec struct {
 	ClipGPath       string  `yaml:"clipGPath"`
 	T5Path          string  `yaml:"t5Path"`
 	TextEncoderPath string  `yaml:"textEncoderPath"`
+	LlmVision       string  `yaml:"llmVision"`
+	LlmVisionPath   string  `yaml:"llmVisionPath"`
 	LoraDir         string  `yaml:"loraDir"`
 	OffloadToCpu    string  `yaml:"offloadToCpu"`
 	TeOnCpu         string  `yaml:"teOnCpu"`

@@ -79,7 +79,12 @@ type Metadata struct {
 	// the arch tag doesn't self-identify. See effectiveImageArch.
 	GeneralType string
 
-	// DiffusionKind is a tensor-name-sniffed diffusion arch ("sdxl"/"sd1") for a
+	// CondHidden is the hidden width of the text encoder a diffusion transformer
+	// expects (see tensorScan.condHidden). 0 for anything that is not a DiT with
+	// a recognised caption projection.
+	CondHidden int64
+
+	// DiffusionKind is a tensor-name-sniffed diffusion arch ("sdxl"/"sd1"/"flux") for a
 	// UNet gguf that carries no general.architecture — stable-diffusion.cpp's
 	// `convert` strips the metadata KVs, so a converted SDXL UNet reports
 	// Architecture="" but still has input_blocks/label_emb tensors. Empty when the
@@ -984,6 +989,7 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 		FineTune:          fineTune,
 		GeneralName:       generalName,
 		DiffusionKind:     diffKind,
+		CondHidden:        scan.condHidden,
 		HasBakedEncoders:  bakedEnc,
 		PoolingType:       deref(poolingType),
 		IsMoE:             expertCount != nil && *expertCount > 0,
@@ -1007,8 +1013,9 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 // count of the token_embd.weight (or output.weight) tensor (= n_embd*n_vocab,
 // for vocab sizing). Share is 0 when no expert tensors are found or any tensor
 // uses an unknown ggml type; vocabElems is 0 when neither tensor is present.
-// diffKind is "sdxl"/"sd1" when the tensor names mark a diffusion UNet (a
-// metadata-stripped converted model), else "". bakedEnc is true when the file
+// diffKind is "sdxl"/"sd1" when the tensor names mark a diffusion UNet, or
+// "flux" when they mark a BFL-format MMDiT (double_blocks), for a
+// metadata-stripped converted model; else "". bakedEnc is true when the file
 // also carries its text encoder(s) (conditioner.embedders/cond_stage_model),
 // i.e. it's a full checkpoint rather than a bare UNet.
 func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err error) {
@@ -1017,10 +1024,11 @@ func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err err
 	var diffKind string
 	var bakedEnc bool
 	var expertBytes, totalBytes int64
-	var sawExpert, sawInputBlocks, sawLabelEmb, unknownType bool
+	var sawExpert, sawInputBlocks, sawLabelEmb, sawDoubleBlocks, unknownType bool
+	condDims := map[string]int64{}
 	typeBytes := map[uint32]int64{}
 	out := func() tensorScan {
-		return tensorScan{expertShare: share, vocabElems: vocabElems, diffKind: diffKind, bakedEnc: bakedEnc, typeBytes: typeBytes}
+		return tensorScan{expertShare: share, vocabElems: vocabElems, diffKind: diffKind, bakedEnc: bakedEnc, condHidden: condHiddenFrom(condDims), typeBytes: typeBytes}
 	}
 	for i := uint64(0); i < tensorCount; i++ {
 		name, err := r.str()
@@ -1032,10 +1040,14 @@ func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err err
 			return out(), err
 		}
 		elems := int64(1)
+		var firstDim int64
 		for d := uint32(0); d < nDims; d++ {
 			dim, err := r.u64()
 			if err != nil {
 				return out(), err
+			}
+			if d == 0 {
+				firstDim = int64(dim)
 			}
 			elems *= int64(dim)
 		}
@@ -1080,18 +1092,34 @@ func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err err
 		if strings.Contains(name, "label_emb.") {
 			sawLabelEmb = true
 		}
+		// BFL-format MMDiT marker (flux.1, chroma, LongCat-Image). Some
+		// publishers convert with the KVs stripped, so this is the only signal
+		// that the file is a diffusion transformer at all. It says "flux tensor
+		// layout", not "is flux.1": resolveComponents still name-detects the
+		// families that share the layout but not the encoders.
+		if strings.Contains(name, "double_blocks.") {
+			sawDoubleBlocks = true
+		}
+		// Caption-projection width: the hidden size of the text encoder this DiT
+		// was trained against. Recorded by name here, ranked in condHiddenFrom.
+		if _, want := condTensors[name]; want && nDims > 0 {
+			condDims[name] = firstDim
+		}
 		// Baked text encoder = full checkpoint. SDXL bakes both encoders under
 		// conditioner.embedders.{0,1}; older SD1 checkpoints use cond_stage_model.
 		if strings.Contains(name, "conditioner.embedders.") || strings.Contains(name, "cond_stage_model.") {
 			bakedEnc = true
 		}
 	}
-	if sawInputBlocks {
+	switch {
+	case sawInputBlocks:
 		if sawLabelEmb {
 			diffKind = "sdxl"
 		} else {
 			diffKind = "sd1"
 		}
+	case sawDoubleBlocks:
+		diffKind = "flux"
 	}
 	// An untabulated type makes the ratio meaningless (the missing tensors are
 	// exactly the ones whose share we would be reporting), so the share alone

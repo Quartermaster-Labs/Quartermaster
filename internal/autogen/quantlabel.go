@@ -11,6 +11,13 @@ type tensorScan struct {
 	vocabElems  int64
 	diffKind    string
 	bakedEnc    bool
+	// condHidden is the hidden width of the TEXT ENCODER a diffusion transformer
+	// expects, read off the tensor that projects caption embeddings into the DiT
+	// (ne[0] is that projection input width). It is what lets the encoder pool
+	// pick the right --llm/--t5xxl with no per-model table: 4096 = T5-XXL,
+	// 3584 = Qwen2.5-VL-7B, 3072 = Ministral-3B, 2560 = Qwen3-4B. 0 for a file
+	// with no recognised projection (every non-diffusion model).
+	condHidden int64
 
 	// typeBytes is on-disk bytes per ggml type id. A type missing from
 	// ggmlTypeSize can't be weighed, so it is recorded with 0 bytes: its
@@ -108,4 +115,37 @@ func fillerLabel(typeBytes map[uint32]int64) string {
 		return ""
 	}
 	return ggmlTypeName[ids[0]]
+}
+
+// condTensors are the tensors that project text-encoder embeddings into a
+// diffusion transformer, ranked most to least specific. Their ne[0] is the
+// encoder hidden width the model was trained against, which is the only
+// machine-readable statement of "which text encoder do I need". Verified against
+// flux (txt_in 4096 = T5-XXL), LongCat and Qwen-Image-Edit (txt_in 3584 =
+// Qwen2.5-VL-7B), Z-Image (cap_embedder 2560 = Qwen3-4B), ERNIE (text_proj 3072
+// = Ministral-3B) and Krea2 (txtfusion 2560 = Qwen3-VL-4B).
+var condTensorOrder = []string{
+	"txt_in.weight",
+	"cap_embedder.1.weight",
+	"text_proj.weight",
+	"context_embedder.weight",
+	"txtfusion.layerwise_blocks.0.prenorm.scale",
+}
+
+var condTensors = func() map[string]struct{} {
+	m := make(map[string]struct{}, len(condTensorOrder))
+	for _, n := range condTensorOrder {
+		m[n] = struct{}{}
+	}
+	return m
+}()
+
+// condHiddenFrom picks the highest-ranked caption projection actually present.
+func condHiddenFrom(dims map[string]int64) int64 {
+	for _, n := range condTensorOrder {
+		if d := dims[n]; d > 0 {
+			return d
+		}
+	}
+	return 0
 }
