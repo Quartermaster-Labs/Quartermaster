@@ -97,6 +97,7 @@ type variantDTO struct {
 	OffloadToCpu    string  `json:"offloadToCpu"`
 	TeOnCpu         string  `json:"teOnCpu"`
 	VaeOnCpu        string  `json:"vaeOnCpu"`
+	RefEdit         string  `json:"refEdit"`
 	VaeTiling       string  `json:"vaeTiling"`
 	DiffusionFa     string  `json:"diffusionFa"`
 	DefaultSteps    int     `json:"defaultSteps"`
@@ -208,6 +209,7 @@ type overrideDTO struct {
 	OffloadToCpu    string  `json:"offloadToCpu"`
 	TeOnCpu         string  `json:"teOnCpu"`
 	VaeOnCpu        string  `json:"vaeOnCpu"`
+	RefEdit         string  `json:"refEdit"`
 	VaeTiling       string  `json:"vaeTiling"`
 	DiffusionFa     string  `json:"diffusionFa"`
 	DefaultSteps    int     `json:"defaultSteps"`
@@ -279,7 +281,7 @@ func variantToDTO(v autogen.VariantSpec) variantDTO {
 		SplitMode: v.SplitMode, TensorSplit: v.TensorSplit, MainGpu: v.MainGpu, OverrideTensor: v.OverrideTensor,
 		VaePath: v.VaePath, ClipLPath: v.ClipLPath, ClipGPath: v.ClipGPath,
 		T5Path: v.T5Path, TextEncoderPath: v.TextEncoderPath,
-		OffloadToCpu: v.OffloadToCpu, TeOnCpu: v.TeOnCpu, VaeOnCpu: v.VaeOnCpu, VaeTiling: v.VaeTiling, DiffusionFa: v.DiffusionFa,
+		OffloadToCpu: v.OffloadToCpu, TeOnCpu: v.TeOnCpu, VaeOnCpu: v.VaeOnCpu, VaeTiling: v.VaeTiling, DiffusionFa: v.DiffusionFa, RefEdit: v.RefEdit,
 		DefaultSteps: v.DefaultSteps, DefaultCfg: v.DefaultCfg, DefaultSampler: v.DefaultSampler,
 		DefaultWidth: v.DefaultWidth, DefaultHeight: v.DefaultHeight,
 	}
@@ -313,7 +315,7 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		SplitMode: o.SplitMode, TensorSplit: o.TensorSplit, MainGpu: o.MainGpu, OverrideTensor: o.OverrideTensor,
 		VaePath: o.VaePath, ClipLPath: o.ClipLPath, ClipGPath: o.ClipGPath,
 		T5Path: o.T5Path, TextEncoderPath: o.TextEncoderPath,
-		OffloadToCpu: o.OffloadToCpu, TeOnCpu: o.TeOnCpu, VaeOnCpu: o.VaeOnCpu, VaeTiling: o.VaeTiling, DiffusionFa: o.DiffusionFa,
+		OffloadToCpu: o.OffloadToCpu, TeOnCpu: o.TeOnCpu, VaeOnCpu: o.VaeOnCpu, VaeTiling: o.VaeTiling, DiffusionFa: o.DiffusionFa, RefEdit: o.RefEdit,
 		DefaultSteps: o.DefaultSteps, DefaultCfg: o.DefaultCfg, DefaultSampler: o.DefaultSampler,
 		DefaultWidth: o.DefaultWidth, DefaultHeight: o.DefaultHeight,
 	}
@@ -345,7 +347,7 @@ func toVariantSpec(v variantDTO) autogen.VariantSpec {
 		SplitMode: v.SplitMode, TensorSplit: v.TensorSplit, MainGpu: v.MainGpu, OverrideTensor: v.OverrideTensor,
 		VaePath: v.VaePath, ClipLPath: v.ClipLPath, ClipGPath: v.ClipGPath,
 		T5Path: v.T5Path, TextEncoderPath: v.TextEncoderPath,
-		OffloadToCpu: v.OffloadToCpu, TeOnCpu: v.TeOnCpu, VaeOnCpu: v.VaeOnCpu, VaeTiling: v.VaeTiling, DiffusionFa: v.DiffusionFa,
+		OffloadToCpu: v.OffloadToCpu, TeOnCpu: v.TeOnCpu, VaeOnCpu: v.VaeOnCpu, VaeTiling: v.VaeTiling, DiffusionFa: v.DiffusionFa, RefEdit: v.RefEdit,
 		DefaultSteps: v.DefaultSteps, DefaultCfg: v.DefaultCfg, DefaultSampler: v.DefaultSampler,
 		DefaultWidth: v.DefaultWidth, DefaultHeight: v.DefaultHeight,
 	}
@@ -429,6 +431,7 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.OffloadToCpu = body.OffloadToCpu
 	ov.TeOnCpu = body.TeOnCpu
 	ov.VaeOnCpu = body.VaeOnCpu
+	ov.RefEdit = body.RefEdit
 	ov.VaeTiling = body.VaeTiling
 	ov.DiffusionFa = body.DiffusionFa
 	ov.DefaultSteps = body.DefaultSteps
@@ -641,6 +644,9 @@ func applyVariantPatch(ov *autogen.Override, p variantDTO) {
 	}
 	if p.TeOnCpu != "" {
 		ov.TeOnCpu = p.TeOnCpu
+	}
+	if p.RefEdit != "" {
+		ov.RefEdit = p.RefEdit
 	}
 	if p.VaeOnCpu != "" {
 		ov.VaeOnCpu = p.VaeOnCpu

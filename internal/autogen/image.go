@@ -517,6 +517,9 @@ func mergeImageVariant(base Override, v VariantSpec) Override {
 	if v.TextEncoderPath != "" {
 		o.TextEncoderPath = v.TextEncoderPath
 	}
+	if v.RefEdit != "" {
+		o.RefEdit = v.RefEdit
+	}
 	if v.LlmVision != "" {
 		o.LlmVision = v.LlmVision
 	}

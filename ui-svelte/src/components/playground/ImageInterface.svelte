@@ -360,13 +360,13 @@
   // LongCat edits come out artifacted.
   // The id list stays as a fallback for a catalog generated before that
   // capability existed, so an un-regenerated config keeps working.
+  // The server is the only judge of this: autogen advertises `in: [text, image]`
+  // for a reference-edit model, from the per-model `refEdit` toggle (auto = name
+  // detection). Do NOT re-add a substring list here - the routes differ (a
+  // reference edit keeps the full step count, img2img scales it by the denoise
+  // strength), so a model missing from a client-side list renders artifacts.
   let supportsRefImages = $derived(
-    (() => {
-      const m = $models.find((x) => x.id === $selectedModelStore);
-      if (m?.capabilities?.image_to_image) return true;
-      const l = $selectedModelStore.toLowerCase();
-      return l.includes("kontext") || l.includes("qwen-image-edit") || l.includes("qwen-rapid");
-    })()
+    $models.find((x) => x.id === $selectedModelStore)?.capabilities?.image_to_image === true
   );
   // Clamp the persisted batch pref — a hand-edited pref (or an old value) must not
   // queue 200 renders behind one prompt.

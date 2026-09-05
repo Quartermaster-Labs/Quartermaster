@@ -290,6 +290,10 @@
   let vaeOnCpu = $state(""); // "" gpu (default) | "on" cpu
   let vaeTiling = $state(""); // "" on | "off"
   let diffusionFa = $state(""); // "" on | "off"
+  // Reference edit: does this model take its source image as an edit reference
+  // (extra conditioning tokens) rather than an img2img base? Not detectable from
+  // the weights - a base and an edit checkpoint have identical tensor shapes.
+  let refEdit = $state(""); // "" auto (name detection) | "on" | "off"
   // Generation defaults baked into the launch cmd; "" => sd-server default.
   let defaultSteps = $state<number | "">("");
   let defaultCfg = $state<number | "">("");
@@ -701,6 +705,16 @@
     { value: "on", label: "on (force offload)" },
     { value: "off", label: "off (keep on GPU)" },
   ];
+  const REFEDIT_SEL_AUTO: SelectOption[] = [
+    { value: "", label: "auto (detect from name)" },
+    { value: "on", label: "on (reference edit)" },
+    { value: "off", label: "off (img2img)" },
+  ];
+  const REFEDIT_SEL_INHERIT: SelectOption[] = [
+    { value: "", label: "inherit" },
+    { value: "on", label: "on (reference edit)" },
+    { value: "off", label: "off (img2img)" },
+  ];
   const backendSel = $derived<SelectOption[]>([
     { value: "", label: "Auto (default)" },
     ...classBackends.map((b) => ({
@@ -853,6 +867,7 @@
     vaeOnCpu = o?.vaeOnCpu ?? "";
     vaeTiling = o?.vaeTiling ?? "";
     diffusionFa = o?.diffusionFa ?? "";
+    refEdit = o?.refEdit ?? "";
     defaultSteps = o?.defaultSteps ? o.defaultSteps : "";
     defaultCfg = o?.defaultCfg ? o.defaultCfg : "";
     defaultSampler = o?.defaultSampler ?? "";
@@ -873,7 +888,7 @@
       temp: null, topK: null, topP: null, minP: null, presencePenalty: null,
       specDraftNMax: 0, specDefault: false, specNgramSizeN: 0, specNgramSizeM: 0, specNgramMinHits: 0,
       vaePath: "", clipLPath: "", clipGPath: "", t5Path: "", textEncoderPath: "",
-      offloadToCpu: "", teOnCpu: "", vaeOnCpu: "", vaeTiling: "", diffusionFa: "",
+      offloadToCpu: "", teOnCpu: "", vaeOnCpu: "", vaeTiling: "", diffusionFa: "", refEdit: "",
       defaultSteps: 0, defaultCfg: 0, defaultSampler: "", defaultWidth: 0, defaultHeight: 0,
     };
   }
@@ -1168,6 +1183,7 @@
       vaeOnCpu,
       vaeTiling,
       diffusionFa,
+      refEdit,
       defaultSteps: defaultSteps === "" ? 0 : Number(defaultSteps),
       defaultCfg: defaultCfg === "" ? 0 : Number(defaultCfg),
       defaultSampler,
@@ -1699,6 +1715,14 @@
             <Select bind:value={offloadToCpu} options={OFFLOAD_SEL_AUTO} ariaLabel="Offload to CPU" />
           </label>
 
+          <label class="flex flex-col gap-1 text-sm col-span-2">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Reference edit
+              {@render hint("Does this model take an input image as an edit reference (Kontext / Qwen-Image-Edit / LongCat) rather than an img2img base? Reference edits keep the full step count; img2img cuts it by the denoise strength, which is what causes heavy artifacting on a low-step turbo model. Auto detects it from the model name.")}
+            </span>
+            <Select bind:value={refEdit} options={REFEDIT_SEL_AUTO} ariaLabel="Reference edit" />
+          </label>
+
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               Threads
@@ -1834,6 +1858,13 @@
                 {@render hint("--offload-to-cpu for this preset. Inherit = use the model's setting.")}
               </span>
               <Select bind:value={sv.offloadToCpu} options={OFFLOAD_SEL_INHERIT} ariaLabel="Offload to CPU" />
+            </label>
+            <label class="flex flex-col gap-1 text-sm col-span-2">
+              <span class="text-txtsecondary flex items-center gap-1">
+                Reference edit
+                {@render hint("Treat an input image as an edit reference for this preset. Inherit = use the model's setting.")}
+              </span>
+              <Select bind:value={sv.refEdit} options={REFEDIT_SEL_INHERIT} ariaLabel="Reference edit" />
             </label>
             <label class="flex items-center gap-2 text-sm col-span-2">
               <Toggle size="sm" bind:checked={sv.unlisted} />

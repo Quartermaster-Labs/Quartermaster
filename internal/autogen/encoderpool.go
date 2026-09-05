@@ -534,6 +534,15 @@ var refEditRe = regexp.MustCompile(`(?i)(^|[-_. ])(edit|rapid|kontext)([-_. ]|$)
 // tensor shapes. An explicit llmVision pin doubles as the escape hatch.
 func IsReferenceEditModel(name string, ov *Override) bool {
 	if ov != nil {
+		// refEdit is the field that means exactly this, so it wins outright.
+		switch ov.RefEdit {
+		case "on":
+			return true
+		case "off":
+			return false
+		}
+		// An llmVision pin is the older, narrower spelling: a user who pinned a
+		// vision projector on has said this model consumes a reference image.
 		switch ov.LlmVision {
 		case "on":
 			return true
