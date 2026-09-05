@@ -778,7 +778,11 @@ func emitExtraImageModels(b *strings.Builder, s Settings, overrides []Override, 
 			b.WriteString("    unlisted: true\n")
 		}
 		b.WriteString("    capabilities:\n")
-		b.WriteString("      in: [text]\n")
+		if IsReferenceEditModel(name, ov) {
+			b.WriteString("      in: [text, image]\n")
+		} else {
+			b.WriteString("      in: [text]\n")
+		}
 		b.WriteString("      out: [image]\n")
 		*emitted = append(*emitted, name)
 	}
@@ -814,7 +818,16 @@ func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, n
 		b.WriteString("    unlisted: true\n")
 	}
 	b.WriteString("    capabilities:\n")
-	b.WriteString("      in: [text]\n")
+	// A reference-edit model declares an image INPUT, which is what tells the
+	// playground to send the source as a reference (extra_images) instead of an
+	// img2img base. That distinction is not cosmetic: the img2img route scales
+	// the step count by the denoise strength, so an 8-step distill silently ran
+	// 4 steps and produced artifacted output.
+	if IsReferenceEditModel(name, ov) {
+		b.WriteString("      in: [text, image]\n")
+	} else {
+		b.WriteString("      in: [text]\n")
+	}
 	b.WriteString("      out: [image]\n")
 	writeDisplayName(b, s, name)
 	*emitted = append(*emitted, name)

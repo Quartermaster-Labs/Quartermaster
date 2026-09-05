@@ -518,6 +518,32 @@ var editModelRe = regexp.MustCompile(`(?i)(^|[-_. ])(edit|rapid|kontext|instruct
 // wantsVisionEncoder reports whether this model should get --llm_vision. Only
 // llm-conditioned families are candidates: flux.1 edit models condition through
 // T5, which has no vision tower at all.
+// refEditRe matches models that take their source image as a REFERENCE (extra
+// sequence tokens) rather than as an img2img denoise base. Deliberately
+// narrower than editModelRe: inpaint/redux models are edits too, but they want
+// the masked img2img route, and routing them through reference images would
+// redraw the whole frame instead of honouring the mask.
+var refEditRe = regexp.MustCompile(`(?i)(^|[-_. ])(edit|rapid|kontext)([-_. ]|$)`)
+
+// IsReferenceEditModel reports whether a model conditions on a reference image.
+// It is what the emitted `in: [text, image]` capability is keyed on, so the
+// client can route an edit to the reference path instead of guessing from the
+// model id. Like the projector pairing this is name detection, because the
+// distinction is not structural: the reference enters as extra sequence tokens,
+// not as extra input channels, so a base and an edit checkpoint have identical
+// tensor shapes. An explicit llmVision pin doubles as the escape hatch.
+func IsReferenceEditModel(name string, ov *Override) bool {
+	if ov != nil {
+		switch ov.LlmVision {
+		case "on":
+			return true
+		case "off":
+			return false
+		}
+	}
+	return refEditRe.MatchString(name)
+}
+
 func wantsVisionEncoder(arch, name string, ov *Override) bool {
 	if ov != nil {
 		switch ov.LlmVision {
