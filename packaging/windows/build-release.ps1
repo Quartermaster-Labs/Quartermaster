@@ -30,8 +30,10 @@
   toolchain beyond Go itself.
 
 .PARAMETER Tag
-  Release tag (vX.Y.Z). Required, and it must already point at HEAD (or not
-  exist yet, in which case it is created on HEAD). Never inferred: see below.
+  Release tag (vX.Y.Z, or vX.Y.Z-<suffix> for a prerelease). Required, and it
+  must already point at HEAD (or not exist yet, in which case it is created on
+  HEAD). Never inferred: see below. A tag carrying a suffix marks the GitHub
+  release as a prerelease: see the regex below for why that is worth having.
 
 .PARAMETER Draft
   Create/keep the GitHub release as a draft (default). Pass -Draft false to publish.
@@ -106,7 +108,16 @@ function Die($m) { Write-Error $m; exit 1 }
 # whatever HEAD happened to be and published it under a version that tag may
 # not point at; a release has to name the version it is releasing.
 if (-not $Tag) { Die "-Tag vX.Y.Z is required (make release VERSION=vX.Y.Z)" }
-if ($Tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { Die "Tag must be vMAJOR.MINOR.PATCH (e.g. v0.5.1)" }
+# The suffix is what makes a test build safe to hand to one person. Two
+# independent mechanisms then keep it away from everyone else: the updater polls
+# /releases/latest, which GitHub answers without prereleases, AND
+# internal/update's semverRe refuses to parse a suffixed version, so newer()
+# returns false even if the release is later published by mistake. A plain
+# vX.Y.Z marked prerelease by hand has only the first of those.
+if ($Tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+    Die "Tag must be vMAJOR.MINOR.PATCH, optionally -SUFFIX for a prerelease (e.g. v0.5.1, v0.5.1-rc1)"
+}
+$isPrerelease = $Tag.Contains('-')
 
 # $Tag is stamped into every binary (-X main.version) and the updater hands that
 # string to users as the version they are running, so the build has to come from
@@ -469,12 +480,13 @@ if (-not $exists) {
     # string is still passed as an argument, and `gh release create ""` fails.
     $createArgs = @('release', 'create', $Tag, '-R', $Repo, '--title', $Tag, '--notes', $body)
     if ($isDraft) { $createArgs += '--draft' }
+    if ($isPrerelease) { $createArgs += '--prerelease' }
     gh @createArgs
     if ($LASTEXITCODE -ne 0) { Die "gh release create failed" }
 } else {
     # A re-run is usually a fixed build of the same tag, so the body is rewritten
     # rather than left at whatever the first attempt wrote.
-    gh release edit $Tag -R $Repo --notes $body
+    gh release edit $Tag -R $Repo --notes $body --prerelease=$($isPrerelease.ToString().ToLower())
     if ($LASTEXITCODE -ne 0) { Die "gh release edit (notes) failed" }
 }
 gh release upload $Tag @uploads -R $Repo --clobber
@@ -488,4 +500,4 @@ if (-not $isDraft) {
     if ($LASTEXITCODE -ne 0) { Die "gh release edit failed" }
 }
 
-Write-Host "Done. $Tag (draft=$isDraft) -> https://github.com/$Repo/releases" -ForegroundColor Green
+Write-Host "Done. $Tag (draft=$isDraft, prerelease=$isPrerelease) -> https://github.com/$Repo/releases" -ForegroundColor Green

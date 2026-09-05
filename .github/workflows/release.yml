@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (vMAJOR.MINOR.PATCH)'
+        description: 'Release tag (vMAJOR.MINOR.PATCH, or -SUFFIX for a prerelease)'
         required: true
         type: string
       draft:
