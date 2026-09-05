@@ -159,8 +159,14 @@ var catalog = []Component{
 			},
 			{
 				ID: "rocm", Label: "ROCm / HIP", Note: "AMD only. Usually faster than Vulkan on RDNA3, and not subject to Vulkan's 2 GB allocation cap.",
+				// Upstream renamed the Windows asset from -bin-win-hip-radeon-x64
+				// to -bin-win-rocm-<toolkit>-x64 (b10733 onwards); the old name is
+				// kept as a fallback for an older tag the user might pin, but it
+				// appears in none of the 60 newest releases. With only the old
+				// pattern this variant matched nothing on Windows at all - the
+				// picker offered ROCm and every install failed to resolve.
 				Patterns: map[string][]string{
-					osWin:   {`^llama-.*-bin-win-hip-radeon-x64\.zip$`, `^llama-.*-bin-win-hip-.*x64\.zip$`},
+					osWin:   {`^llama-.*-bin-win-rocm-.*x64\.zip$`, `^llama-.*-bin-win-hip-radeon-x64\.zip$`, `^llama-.*-bin-win-hip-.*x64\.zip$`},
 					osLinux: {`^llama-.*-bin-ubuntu-rocm-.*-x64\.tar\.gz$`, `^llama-.*-bin-ubuntu-rocm-.*-x64\.zip$`},
 				},
 			},
