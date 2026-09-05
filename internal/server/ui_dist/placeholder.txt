@@ -1,0 +1,7 @@
+Placeholder so `//go:embed ui_dist` in ../ui.go has something to embed on a
+fresh clone, before `make ui` has built the real Svelte bundle over the top of
+it. Without a tracked file here the whole internal/server package fails to
+compile with "pattern ui_dist: no matching files found".
+
+It cannot be named .gitkeep: the embed directive has no `all:` prefix, so it
+ignores files whose names start with a dot or an underscore.
