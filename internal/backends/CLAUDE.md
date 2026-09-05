@@ -218,7 +218,22 @@ therefore *coexist* with hand-entered rows in one registry, distinguished by
   the missing library on `Job.Warning`; the same check runs per build in the
   catalog DTO, because a job scrolls away and the broken build does not. The
   install still succeeds — the bits are on disk and work the moment the runtime
-  sits beside them.
+  sits beside them, which is the user's job: we diagnose, we do not repair.
+  Completing the install automatically was tried and dropped, because there is
+  nothing dependable to complete it *from*. The obvious donor, the user's own
+  llama.cpp ROCm install, is not one: the published
+  `llama-*-bin-win-rocm-*-x64.zip` was read entry by entry (b10819) and carries
+  `amdhip64_7.dll`, `amd_comgr.dll` and `rocm_kpack.dll` but **no**
+  `hipblas.dll`, `rocblas.dll` or `libhipblaslt.dll`, and no Tensile kernel trees
+  at all, because its 939 MB `ggml-hip.dll` static-links rocBLAS and hipBLASLt.
+  Only a dynamically linked ROCm build (lemonade's llamacpp-rocm) has the files
+  to give, so any automatic copy would half-complete most machines and hand back
+  a build that still dies at load with evidence that something worked. Two more
+  traps for anyone reopening this: rocBLAS/hipBLASLt load per-gfx-target kernels
+  as *data*, so no import graph names them (upstream packaged gfx1151 only; an
+  RX 7900 XTX needs gfx1100 added beside them), and a backend's `hipblas.dll`
+  expects its own `rocblas.dll` exports, so half-replacing a matched set is its
+  own load failure.
 - **The newest release is not always installable.** Real-ESRGAN's latest tag is
   source-only. `pickRelease` takes an `installable` predicate and, for "latest",
   skips releases with no matching asset for the requested variant/OS.
