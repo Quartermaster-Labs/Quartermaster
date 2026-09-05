@@ -159,7 +159,7 @@ const hashCacheSuffix = ".modelhash"
 //	     sidecar) is migrated onto the new one. Every dense model trained past
 //	     128k gets a larger -c and a larger KV reserve, so the emitted argv and
 //	     the estimates change for inputs that did not.
-const genVersion = "v59"
+const genVersion = "v60"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the
@@ -317,9 +317,10 @@ func EnsureConfig(generatePath, outConfigPath, modelsDirOverride string, logf fu
 		return false, nil
 	}
 
-	if gf.Settings.AutoVram {
-		resolveAutoVram(&gf.Settings, logf)
-	}
+	// Resolve the eligible GPU set on every regen, not only under autoVram: the
+	// split ratio and the extra-device overhead are hardware facts the sizer needs
+	// whether or not the BUDGET is being re-measured. ResolveAutoVram does both.
+	ResolveAutoVram(&gf.Settings, logf)
 
 	if logf != nil {
 		if strings.TrimSpace(gf.Settings.ModelsRoot) == "" {

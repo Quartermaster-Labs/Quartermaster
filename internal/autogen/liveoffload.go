@@ -205,15 +205,59 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 			logf(fmt.Sprintf("dynoffload: free=%.1fGB est=%.1fGB -> baked plan kept (-ngl %d --n-cpu-moe %d)",
 				freeGB, res.EstVramGB, bakedNgl, bakedNcpu))
 		}
-		return args, nil
+		return retuneTensorSplit(s, args, res.FixedGB, logf), nil
 	}
 
-	out := rewriteOffload(args, nglIdx, ncIdx, res.Ngl, res.NCpuMoe)
+	out := retuneTensorSplit(s, rewriteOffload(args, nglIdx, ncIdx, res.Ngl, res.NCpuMoe), res.FixedGB, logf)
 	if logf != nil {
 		logf(fmt.Sprintf("dynoffload: free=%.1fGB -> -ngl %d->%d --n-cpu-moe %d->%d (est %.1fGB)",
 			freeGB, bakedNgl, res.Ngl, bakedNcpu, res.NCpuMoe, res.EstVramGB))
 	}
 	return out, nil
+}
+
+// retuneTensorSplit rewrites a baked --tensor-split (and its --main-gpu) from
+// the device set as it looks NOW. Everything else in this file adjusts HOW MUCH
+// of a model goes to the GPU; this decides WHERE it lands.
+//
+// The baked ratio was computed at generate time from each card's idle free VRAM.
+// By spawn time another model, or a game, can be sitting on one card only, and
+// the stale ratio then still sends that card its full share of the layers: the
+// total fits the pooled budget, the load OOMs anyway. Re-deriving from the live
+// per-device reading is the only way the pooled sizing stays honest.
+//
+// mainFixedGB is the plan's non-splittable cost (compute buffer, CUDA context,
+// projector, headroom). llama.cpp puts all of it on --main-gpu, so it is charged
+// to that device before the ratio is normalised, exactly as generate does.
+//
+// A no-op when the argv has no --tensor-split (single-GPU box, or a hand-pinned
+// config), or when s.Gpus is empty because the caller had no live telemetry: the
+// baked ratio is then still the best guess available.
+func retuneTensorSplit(s Settings, args []string, mainFixedGB float64, logf func(string)) []string {
+	baked, idx := argVal(args, "--tensor-split", "-ts")
+	if idx < 0 {
+		return args
+	}
+	set := s.GpuSetOrEmpty()
+	if !set.Multi() {
+		return args
+	}
+	split := set.TensorSplit(mainFixedGB)
+	if len(split) < 2 {
+		return args
+	}
+	next := FormatSplit(split)
+	main := set.MainIndex()
+	out := append([]string(nil), args...)
+	out[idx] = next
+	if _, mi := argVal(out, "--main-gpu", "-mg"); mi >= 0 {
+		out[mi] = strconv.Itoa(main)
+	}
+	if logf != nil && next != baked {
+		logf(fmt.Sprintf("dynoffload: --tensor-split %s -> %s (main gpu %d, %.1fGB fixed)",
+			baked, next, main, mainFixedGB))
+	}
+	return out
 }
 
 // liveBudgetGB is the VRAM the spawn-time sizer is allowed to plan into: the

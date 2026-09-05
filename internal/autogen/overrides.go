@@ -101,6 +101,23 @@ type Settings struct {
 	// so re-resolving while a model is resident can't budget into its leftovers.
 	AutoVram       bool    `yaml:"autoVram"`
 	VramOverheadGB float64 `yaml:"vramOverheadGB"`
+	// MultiGpu pools every eligible adapter into one budget and emits
+	// `-sm layer` / `--main-gpu` / `--tensor-split` so a model splits across the
+	// cards instead of being sized against the largest one and leaving the rest
+	// unused. nil => default ON; it only does anything on a box with more than
+	// one eligible device. Set false to pin every plan to the single card with
+	// the most free VRAM (the pre-multi-GPU behaviour).
+	MultiGpu *bool `yaml:"multiGpu"`
+	// MinGpuVramGB is the eligibility floor for pooling. An iGPU reports a slice
+	// of system memory as dedicated VRAM, and pooling that invents budget the
+	// sizer will plan a model into, while a split that hands real layers to an
+	// iGPU is slower than not splitting at all. 0 => default 3.0.
+	MinGpuVramGB float64 `yaml:"minGpuVramGB"`
+	// Gpus is the RESOLVED eligible device set for this generate pass, filled by
+	// ResolveGpuSet from live telemetry. Never serialised: it describes the box,
+	// not the user's intent, and a stale copy in a config file would size a plan
+	// for hardware that is no longer there.
+	Gpus GpuSet `yaml:"-"`
 	// ComputeBufFactor scales the modeled compute buffer (logits + activations).
 	// 1.0 = the analytic estimate; tune against the "compute buffer size" llama
 	// prints at load if your build/arch differs. 0 => default 1.0. Measure PEAK
@@ -306,6 +323,8 @@ type SettingsPatch struct {
 	// --- GPU usage / admission
 	MinGpuFraction *float64 `yaml:"minGpuFraction,omitempty"`
 	MultiResident  *bool    `yaml:"multiResident,omitempty"`
+	MultiGpu       *bool    `yaml:"multiGpu,omitempty"`
+	MinGpuVramGB   *float64 `yaml:"minGpuVramGB,omitempty"`
 
 	// --- Advanced sizer knobs. Wrong values here mis-size every model, which is
 	// why the UI hides them behind a warning and a per-section reset.
@@ -385,6 +404,12 @@ func (p *SettingsPatch) apply(s *Settings) {
 	}
 	if p.MinGpuFraction != nil {
 		s.MinGpuFraction = *p.MinGpuFraction
+	}
+	if p.MultiGpu != nil {
+		s.MultiGpu = p.MultiGpu
+	}
+	if p.MinGpuVramGB != nil {
+		s.MinGpuVramGB = *p.MinGpuVramGB
 	}
 	if p.MultiResident != nil {
 		s.MultiResident = p.MultiResident
@@ -871,6 +896,9 @@ func (s *Settings) applyDefaults() {
 	if s.ServerExe == "" {
 		s.ServerExe = "llama-server"
 	}
+	if s.MinGpuVramGB == 0 {
+		s.MinGpuVramGB = minInferenceVramGB
+	}
 	if s.SdServerExe == "" {
 		if strings.ContainsAny(s.ServerExe, `/\`) {
 			s.SdServerExe = filepath.Join(filepath.Dir(s.ServerExe), "sd-server")
@@ -1218,4 +1246,20 @@ func globLike(pattern, s string) bool {
 		globCache[pattern] = re
 	}
 	return re.MatchString(strings.ReplaceAll(s, "\\", "/"))
+}
+
+// MultiGpuEnabled reports whether a plan may span every eligible adapter
+// (default on). It says nothing about how many the box HAS: a single-GPU
+// machine resolves to a one-device set and every multi-GPU path no-ops.
+func (s Settings) MultiGpuEnabled() bool {
+	return s.MultiGpu == nil || *s.MultiGpu
+}
+
+// GpuSetOrEmpty is the resolved device set, or nil when telemetry never
+// answered. Consumers treat nil as "single GPU, budget as before".
+func (s Settings) GpuSetOrEmpty() GpuSet {
+	if !s.MultiGpuEnabled() {
+		return nil
+	}
+	return s.Gpus
 }

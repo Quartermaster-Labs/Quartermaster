@@ -33,6 +33,10 @@ type guardsDTO struct {
 	OomGuardGraceSec  int     `json:"oomGuardGraceSec"`
 	MinGpuFraction    float64 `json:"minGpuFraction"`
 	MultiResident     bool    `json:"multiResident"`
+	// MultiGpu lets one model be split across every eligible adapter
+	// (-sm layer + --tensor-split). Off pins everything to a single card, the
+	// behaviour before issue #4.
+	MultiGpu bool `json:"multiGpu"`
 }
 
 // advancedDTO is the sizer knobs behind the "advanced" warning. Pointers, and
@@ -53,6 +57,10 @@ type advancedDTO struct {
 	HealthCheckTimeout *int     `json:"healthCheckTimeout"`
 	KvQuant            *string  `json:"kvQuant"`
 	LoraDir            *string  `json:"loraDir"`
+	// MinGpuVramGB is the floor an adapter must clear to count as inference
+	// VRAM at all. An iGPU reports a slice of system RAM as dedicated memory,
+	// and pooling that into the budget invents VRAM no card has.
+	MinGpuVramGB *float64 `json:"minGpuVramGB"`
 }
 
 // kvQuantValues is the accepted -ctk/-ctv set, plus "" for auto. Whitelisted
@@ -70,6 +78,7 @@ func guardsFromSettings(s autogen.Settings) guardsDTO {
 	evict := s.OomGuardEvict == nil || *s.OomGuardEvict
 	multi := s.MultiResident == nil || *s.MultiResident
 	return guardsDTO{
+		MultiGpu:          s.MultiGpuEnabled(),
 		OomGuardEvict:     evict,
 		OomGuardReserveGB: s.OomGuardReserveGB,
 		OomGuardGraceSec:  s.OomGuardGraceSec,
@@ -95,6 +104,7 @@ func advancedFromSettings(s autogen.Settings) advancedDTO {
 		HealthCheckTimeout: &s.HealthCheckTimeout,
 		KvQuant:            &s.KvQuant,
 		LoraDir:            &s.LoraDir,
+		MinGpuVramGB:       &s.MinGpuVramGB,
 	}
 }
 
@@ -106,7 +116,8 @@ func advancedOverridden(p *autogen.SettingsPatch) bool {
 	}
 	return p.ComputeBufFactor != nil || p.VisionOverheadGB != nil || p.VisionCtx != nil ||
 		p.MoeCtxTarget != nil || p.DenseMinCtx != nil || p.DenseCtxLadder != nil ||
-		p.Threads != nil || p.HealthCheckTimeout != nil || p.KvQuant != nil || p.LoraDir != nil
+		p.Threads != nil || p.HealthCheckTimeout != nil || p.KvQuant != nil || p.LoraDir != nil ||
+		p.MinGpuVramGB != nil
 }
 
 // guardsOverridden reports the same for the guard / GPU-usage sections.
@@ -115,7 +126,7 @@ func guardsOverridden(p *autogen.SettingsPatch) bool {
 		return false
 	}
 	return p.OomGuardEvict != nil || p.OomGuardReserveGB != nil || p.OomGuardGraceSec != nil ||
-		p.MinGpuFraction != nil || p.MultiResident != nil
+		p.MinGpuFraction != nil || p.MultiResident != nil || p.MultiGpu != nil
 }
 
 // handleAPIGuardsPut writes the OOM-guard + GPU-usage settings.
@@ -149,13 +160,14 @@ func (s *Server) handleAPIGuardsPut(w http.ResponseWriter, r *http.Request) {
 		OomGuardGraceSec:  &body.OomGuardGraceSec,
 		MinGpuFraction:    &body.MinGpuFraction,
 		MultiResident:     &body.MultiResident,
+		MultiGpu:          &body.MultiGpu,
 	}
 	if err := autogen.UpsertSidecarSettings(s.autogen.GeneratePath, patch); err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.proxylog.Infof("guards: oomGuardEvict=%v reserve=%.1fGB grace=%ds minGpuFraction=%.2f multiResident=%v",
-		body.OomGuardEvict, body.OomGuardReserveGB, body.OomGuardGraceSec, body.MinGpuFraction, body.MultiResident)
+	s.proxylog.Infof("guards: oomGuardEvict=%v reserve=%.1fGB grace=%ds minGpuFraction=%.2f multiResident=%v multiGpu=%v",
+		body.OomGuardEvict, body.OomGuardReserveGB, body.OomGuardGraceSec, body.MinGpuFraction, body.MultiResident, body.MultiGpu)
 	if !s.regenAndReload(w, r) {
 		return
 	}
@@ -180,6 +192,7 @@ func (s *Server) handleAPIAdvancedPut(w http.ResponseWriter, r *http.Request) {
 	}{
 		{"computeBufFactor", body.ComputeBufFactor},
 		{"visionOverheadGB", body.VisionOverheadGB},
+		{"minGpuVramGB", body.MinGpuVramGB},
 	} {
 		if f.v != nil && *f.v < 0 {
 			shared.SendResponse(w, r, http.StatusBadRequest, f.name+" must be >= 0")
@@ -223,6 +236,7 @@ func (s *Server) handleAPIAdvancedPut(w http.ResponseWriter, r *http.Request) {
 		HealthCheckTimeout: nilIfZeroI(body.HealthCheckTimeout),
 		KvQuant:            body.KvQuant,
 		LoraDir:            body.LoraDir,
+		MinGpuVramGB:       nilIfZeroF(body.MinGpuVramGB),
 	}
 	if body.DenseCtxLadder != nil && len(*body.DenseCtxLadder) > 0 {
 		patch.DenseCtxLadder = body.DenseCtxLadder
@@ -293,6 +307,7 @@ func (s *Server) clearAdvancedPatch() error {
 	next.HealthCheckTimeout = nil
 	next.KvQuant = nil
 	next.LoraDir = nil
+	next.MinGpuVramGB = nil
 	return autogen.ReplaceSidecarSettings(s.autogen.GeneratePath, next)
 }
 
@@ -319,6 +334,9 @@ func describeAdvanced(p autogen.SettingsPatch) string {
 	var parts []string
 	if p.ComputeBufFactor != nil {
 		parts = append(parts, "computeBufFactor="+strconv.FormatFloat(*p.ComputeBufFactor, 'g', -1, 64))
+	}
+	if p.MinGpuVramGB != nil {
+		parts = append(parts, "minGpuVramGB="+strconv.FormatFloat(*p.MinGpuVramGB, 'g', -1, 64))
 	}
 	if p.VisionOverheadGB != nil {
 		parts = append(parts, "visionOverheadGB="+strconv.FormatFloat(*p.VisionOverheadGB, 'g', -1, 64))

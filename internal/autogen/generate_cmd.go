@@ -339,6 +339,21 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		fmt.Sprintf("-fa %s -ctk %s -ctv %s", fa, kvK, kvV),
 		fmt.Sprintf("--parallel %d %s%s--kv-unified --no-warmup --no-ui --metrics --props", parallel, loadModeFlag, kvoFlag),
 	}
+	// Multi-GPU: split the layers (and, under -sm layer, their KV with them)
+	// across every eligible card, pinning the buffers that do NOT split to the
+	// device with the most free memory. Emitted only when the sizer actually
+	// resolved a split, so a single-GPU box and a box with no telemetry both
+	// produce byte-identical output to before.
+	//
+	// -sm layer, not row: row-split needs the interconnect to carry activations
+	// per layer and is a loss on consumer boards with no NVLink, which is what a
+	// mismatched desktop pair is.
+	if len(prof.TensorSplit) > 1 && ngl > 0 {
+		lines = append(lines,
+			fmt.Sprintf("-sm layer --main-gpu %d", prof.MainGpu),
+			fmt.Sprintf("--tensor-split %s", FormatSplit(prof.TensorSplit)),
+		)
+	}
 	// Vision twin loads the projector for image input. --no-mmproj-offload keeps
 	// the CLIP tower on the CPU: no VRAM for the projector (the sizer already
 	// priced the twin that way), slower image encode, same token throughput.
