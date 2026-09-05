@@ -351,13 +351,22 @@
   let hasModels = $derived($models.some((m) => !m.unlisted));
   let isSdapi = $derived($apiModeStore === "sdapi");
   // Reference-edit models take the source as a ref (extra_images → ref_images),
-  // NOT an img2img denoise base: Kontext, and Qwen-Image-Edit (incl. the distilled
-  // "rapid" merges whose id drops the "edit" token, e.g. qwen-rapid-nsfw).
+  // NOT an img2img denoise base. The server decides: autogen declares an image
+  // INPUT (in: [text, image] → image_to_image) for the models it wired a
+  // reference path for, which is the same detection that pairs their vision
+  // projector, so the two can never disagree.
+  // Getting this wrong is not cosmetic — the img2img route scales steps by the
+  // denoise strength (8-step distill × 0.6 = 4 steps), which is what made
+  // LongCat edits come out artifacted.
+  // The id list stays as a fallback for a catalog generated before that
+  // capability existed, so an un-regenerated config keeps working.
+  // The server is the only judge of this: autogen advertises `in: [text, image]`
+  // for a reference-edit model, from the per-model `refEdit` toggle (auto = name
+  // detection). Do NOT re-add a substring list here - the routes differ (a
+  // reference edit keeps the full step count, img2img scales it by the denoise
+  // strength), so a model missing from a client-side list renders artifacts.
   let supportsRefImages = $derived(
-    (() => {
-      const l = $selectedModelStore.toLowerCase();
-      return l.includes("kontext") || l.includes("qwen-image-edit") || l.includes("qwen-rapid");
-    })()
+    $models.find((x) => x.id === $selectedModelStore)?.capabilities?.image_to_image === true
   );
   // Clamp the persisted batch pref — a hand-edited pref (or an old value) must not
   // queue 200 renders behind one prompt.

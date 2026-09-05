@@ -351,6 +351,7 @@ export interface ModelVariant {
   vaeOnCpu?: string;
   vaeTiling?: string;
   diffusionFa?: string;
+  refEdit?: string;
   defaultSteps?: number;
   defaultCfg?: number;
   defaultSampler?: string;
@@ -455,6 +456,7 @@ export interface ModelOverride {
   vaeOnCpu?: string;
   vaeTiling?: string;
   diffusionFa?: string;
+  refEdit?: string;
   // Generation defaults (0/empty => sd-server default).
   defaultSteps?: number;
   defaultCfg?: number;

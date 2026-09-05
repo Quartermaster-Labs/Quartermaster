@@ -116,6 +116,7 @@ var qmFieldDocs = map[string]string{
 	"vaePath":        "external VAE file",
 	"offloadToCpu":   "sd-server component offload spec",
 	"diffusionFa":    "'on' / 'off' - diffusion flash-attention",
+	"refEdit":        "'on' / 'off' - takes its source image as a reference edit rather than an img2img base",
 	"defaultSteps":   "default sampling steps for this image model",
 	"defaultCfg":     "default CFG scale",
 	"defaultSampler": "default sampler name",

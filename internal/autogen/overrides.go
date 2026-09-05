@@ -655,6 +655,14 @@ type Override struct {
 	// the --llm text encoder. "" => auto: edit/reference models (name-detected, see
 	// wantsVisionEncoder) get the projector found beside their encoder, everything
 	// else gets none. "on"/"off" pin it.
+	// RefEdit gates whether this model takes its source image as a REFERENCE
+	// (extra sequence tokens) rather than as an img2img denoise base, which is
+	// what the emitted `in: [text, image]` capability tells the client. "" =>
+	// auto (name detection, see IsReferenceEditModel), "on"/"off" pin it. The
+	// distinction is not structural - a base and an edit checkpoint have
+	// identical tensor shapes - so this toggle is the reliable answer for a
+	// model whose name does not follow the "-edit-" convention.
+	RefEdit   string `yaml:"refEdit"`
 	LlmVision string `yaml:"llmVision"`
 	// LlmVisionPath pins the --llm_vision projector file, winning over the
 	// directory pairing. Empty => auto (see LlmVision).
@@ -809,6 +817,7 @@ type VariantSpec struct {
 	ClipGPath       string  `yaml:"clipGPath"`
 	T5Path          string  `yaml:"t5Path"`
 	TextEncoderPath string  `yaml:"textEncoderPath"`
+	RefEdit         string  `yaml:"refEdit"`
 	LlmVision       string  `yaml:"llmVision"`
 	LlmVisionPath   string  `yaml:"llmVisionPath"`
 	LoraDir         string  `yaml:"loraDir"`

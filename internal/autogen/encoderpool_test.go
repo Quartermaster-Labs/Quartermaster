@@ -297,3 +297,30 @@ func TestAutogen_condHiddenFrom(t *testing.T) {
 		t.Errorf("unrelated = %d, want 0", got)
 	}
 }
+
+func TestAutogen_IsReferenceEditModel(t *testing.T) {
+	cases := []struct {
+		name string
+		ov   *Override
+		want bool
+	}{
+		{name: "LongCat-Image-Edit-Turbo-Q8_0", want: true},
+		{name: "Qwen-Rapid-NSFW", want: true},
+		{name: "flux1-kontext-dev", want: true},
+		{name: "LongCat-Image-Q8_0", want: false},
+		{name: "Z-Image-Turbo", want: false},
+		{name: "credit-model", want: false},
+		// Narrower than wantsVisionEncoder on purpose: an inpaint model is an
+		// edit, but it wants the MASKED img2img route. Sending its source as a
+		// reference would redraw the whole frame and ignore the mask.
+		{name: "sd15-inpaint", want: false},
+		{name: "flux1-fill-dev", want: false},
+		{name: "LongCat-Image-Edit", ov: &Override{LlmVision: "off"}, want: false},
+		{name: "LongCat-Image", ov: &Override{LlmVision: "on"}, want: true},
+	}
+	for _, tc := range cases {
+		if got := IsReferenceEditModel(tc.name, tc.ov); got != tc.want {
+			t.Errorf("IsReferenceEditModel(%q) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
