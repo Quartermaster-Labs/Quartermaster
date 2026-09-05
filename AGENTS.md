@@ -59,6 +59,7 @@ Go module (`go.mod`). `Makefile` at root. Build binaries into `./build/`. Window
 
 - Summaries: only include details needing further action; else "Done."
 - PRs (`gh` CLI): short, focused on changes, no test plan, summary in commit-message style.
+- Branches: features go on `<dev_name>/<feature>` (e.g. `radu0120/encoder-pool`), one branch per feature, opened as a PR against `main`. Never commit a feature straight to `main`.
 - Commit format:
 
   ```

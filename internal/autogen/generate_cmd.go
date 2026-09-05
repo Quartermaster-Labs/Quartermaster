@@ -581,7 +581,7 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 	}
 	// Diffusion models render an sd-server command, not a llama-server one.
 	if imgArch := effectiveImageArch(meta); isImageArch(imgArch) {
-		lines, _, _, _ := imageCmdLines(s, row, &ov, imgArch, row.FullPath)
+		lines, _, _, _ := imageCmdLines(s, row, &ov, imgArch, row.FullPath, meta.CondHidden)
 		return strings.Join(lines, " "), nil
 	}
 	// Embedders render a minimal --embeddings command (no KV/spec sizing).

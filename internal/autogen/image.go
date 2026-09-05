@@ -178,7 +178,7 @@ func resolveLoraDir(s Settings, ovDir, modelPath string) string {
 // imageComponents are the resolved VAE / text-encoder file paths for one
 // diffusion model. Empty = not attached (the family doesn't need it, or it's
 // missing from the pool — see resolveComponents' missing list).
-type imageComponents struct{ vae, clipL, clipG, t5, llm string }
+type imageComponents struct{ vae, clipL, clipG, t5, llm, llmVision string }
 
 // resolveComponents decides which component files a bare diffusion GGUF needs
 // from its architecture, draws them from the shared Settings.Encoders pool, then
@@ -194,9 +194,34 @@ type imageComponents struct{ vae, clipL, clipG, t5, llm string }
 // ponytail: sd3 / qwen_image arms omitted — no such model on disk yet. Add an arm
 // (and any new EncoderSet field) when one lands; the "# arch=..." YAML comment on
 // the fallthrough names the arch to wire.
-func resolveComponents(enc EncoderSet, ov *Override, arch, name string) (c imageComponents, missing []string) {
+func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *EncoderPool, condHidden int64) (c imageComponents, missing []string) {
 	a := strings.ToLower(strings.TrimSpace(arch))
 	n := strings.ToLower(name)
+	// Fill every blank pool field from what is actually on disk before the arch
+	// arms read it, so a machine that declared no settings.encoders at all still
+	// wires a complete command.
+	enc = fillEncoderSet(enc, pool)
+	// The text encoder is picked by MATCHING WIDTHS, not by name: the DiT states
+	// the encoder hidden size it was trained against, and each candidate reports
+	// its own. That beats the single global EncoderSet.QwenLlm field, which
+	// cannot be right for two models that want different encoders (Z-Image wants
+	// Qwen3-4B where LongCat wants Qwen2.5-VL-7B), so a structural match wins
+	// over the declared field. A per-model Override still wins over both, below.
+	wantVision := wantsVisionEncoder(a, n, ov)
+	autoLlm, autoVision := pool.Llm(condHidden, wantVision)
+	if autoLlm == "" && wantVision {
+		// No vision-capable encoder of that width: fall back to a text-only one
+		// rather than emitting nothing, and let the missing projector show up as
+		// the model producing unconditioned output rather than as a dead server.
+		autoLlm, autoVision = pool.Llm(condHidden, false)
+	}
+	llmDefault := autoLlm
+	if llmDefault == "" {
+		llmDefault = enc.QwenLlm
+	}
+	if wantVision {
+		c.llmVision = autoVision
+	}
 	req := func(role, path string) string {
 		if path == "" {
 			missing = append(missing, role)
@@ -216,7 +241,20 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string) (c image
 	// disk yet; add a case here (and an EncoderSet field) when one lands.
 	case strings.Contains(n, "klein") || strings.Contains(n, "flux2") || strings.Contains(n, "flux-2"):
 		c.vae = req("vae", enc.Flux2Vae)
-		c.llm = req("llm", enc.QwenLlm)
+		c.llm = req("llm", llmDefault)
+	// LongCat-Image / LongCat-Image-Edit ship their DiT in BFL (flux) tensor
+	// layout, so every converter tags them general.architecture "flux" (and
+	// stduhpf's quants carry no KVs at all: the double_blocks sniff in
+	// readTensorScan lands them here too). They are not flux.1: clip_l/t5 are
+	// gone in favour of a Qwen2.5-VL LLM encoder, while the VAE IS flux.1's ae.
+	// Name-detect like chroma. The encoder and (for the edit variant) its vision
+	// projector come from the scan, matched on the caption width the DiT states
+	// (condHidden 3584 = Qwen2.5-VL-7B). --flow-shift is NOT wired: it is a
+	// sampling knob with no structural tell, so LongCat-Edit still wants
+	// `extraArgs: "--flow-shift 3"` on its override row.
+	case strings.Contains(n, "longcat"):
+		c.vae = req("vae", enc.FluxVae)
+		c.llm = req("llm", llmDefault)
 	case a == "flux" || strings.HasPrefix(a, "flux"):
 		c.vae = req("vae", enc.FluxVae)
 		c.clipL = req("clip_l", enc.ClipL)
@@ -226,7 +264,30 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string) (c image
 	// them — sd.cpp can't version-detect a split SDXL (bare UNet + external CLIPs).
 	case strings.HasPrefix(a, "lumina") || a == "z_image" || strings.Contains(n, "z-image"):
 		c.vae = req("vae", enc.ZimageVae)
-		c.llm = req("llm", enc.QwenLlm)
+		c.llm = req("llm", llmDefault)
+	// Qwen-Image lineage (Qwen-Image / Qwen-Image-Edit / Qwen-Rapid) and the
+	// Wan-derived DiTs (Krea, ERNIE-Image) condition on an LLM and carry no
+	// CLIP/T5 at all. Their VAEs split by arch: the wan/qwen_image 3D causal VAE
+	// for the former, flux.2's 32-channel AE for ERNIE.
+	//
+	// The Wan-2.1 and Qwen-Image VAEs are structurally IDENTICAL (same 194
+	// tensors, every dimension equal), so nothing in either file distinguishes
+	// them and the model name is the only signal available: hence the hints.
+	// Wrong pick here is a colour-shifted decode, not a crash.
+	case a == "qwen_image" || a == "wan" || strings.Contains(n, "qwen-image") || strings.Contains(n, "qwen_image"):
+		if a == "wan" && !strings.Contains(n, "wan") {
+			// ERNIE-Image reports arch "wan" but is a flux.2-latent model.
+			c.vae = req("vae", firstNonEmpty(enc.Flux2Vae, pool.Vae(VaeFamilyFlux2)))
+		} else {
+			c.vae = req("vae", pool.Vae(VaeFamilyWan3D, wan3dHints(n)...))
+		}
+		c.llm = req("llm", llmDefault)
+	}
+	// A projector with no encoder to attach it to is incoherent argv: sd-server
+	// would take --llm_vision with no --llm. Only the arms above decide whether
+	// this model has an LLM encoder at all.
+	if c.llm == "" {
+		c.llmVision = ""
 	}
 	// Explicit per-model override wins over the arch-wired pool default, and clears
 	// the role from the missing list (an override can supply what the pool lacks).
@@ -248,6 +309,21 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string) (c image
 		set("clip_g", ov.ClipGPath, &c.clipG)
 		set("t5xxl", ov.T5Path, &c.t5)
 		set("llm", ov.TextEncoderPath, &c.llm)
+		// An explicit projector path always wins; when the encoder itself was
+		// overridden the auto-paired projector belonged to a DIFFERENT file, so
+		// drop it unless the override supplies its own.
+		if ov.TextEncoderPath != "" && ov.LlmVisionPath == "" {
+			c.llmVision = projectorBeside(ov.TextEncoderPath, pool)
+		}
+		if ov.LlmVisionPath != "" {
+			c.llmVision = ov.LlmVisionPath
+		}
+		if ov.LlmVision == "off" {
+			c.llmVision = ""
+		}
+		if ov.LlmVision == "on" && c.llmVision == "" {
+			c.llmVision = projectorBeside(c.llm, pool)
+		}
 	}
 	return c, missing
 }
@@ -257,7 +333,7 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string) (c image
 // by emitImageModel (YAML emit) and RenderSoloCmd (editor launch-parameters
 // preview), so the box matches a save. Also returns the resolved VRAM budget and
 // offload decision for the YAML comment, and any required-but-missing encoder roles.
-func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string) (lines []string, budget float64, offload bool, missing []string) {
+func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, condHidden int64) (lines []string, budget float64, offload bool, missing []string) {
 	modelPath := strings.ReplaceAll(row.FullPath, "\\", "/")
 
 	// Budget mirrors the LLM sizer: target minus headroom. A per-model
@@ -317,7 +393,7 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string) (li
 	// Split archs draw component files from the shared pool (per-model override wins).
 	var comp imageComponents
 	if !fullCkpt {
-		comp, missing = resolveComponents(s.Encoders, ov, arch, name)
+		comp, missing = resolveComponents(s.Encoders, ov, arch, name, encoderPoolFor(s.RootList()), condHidden)
 	}
 	if p := imageArg(comp.vae); p != "" {
 		lines = append(lines, "--vae "+p)
@@ -333,6 +409,14 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string) (li
 	}
 	if p := imageArg(comp.llm); p != "" {
 		lines = append(lines, "--llm "+p)
+	}
+	// The vision tower of the text encoder, needed by edit pipelines that
+	// condition on a reference image. Auto-paired to the chosen --llm (its
+	// sibling mmproj), never hand-typed. Without it an edit model does not
+	// error: it reports "vision disabled" and emits an image unrelated to the
+	// reference, so a wrong-looking result is the only symptom.
+	if p := imageArg(comp.llmVision); p != "" {
+		lines = append(lines, "--llm_vision "+p)
 	}
 	var ovLoraDir string
 	if ov != nil {
@@ -432,6 +516,12 @@ func mergeImageVariant(base Override, v VariantSpec) Override {
 	}
 	if v.TextEncoderPath != "" {
 		o.TextEncoderPath = v.TextEncoderPath
+	}
+	if v.LlmVision != "" {
+		o.LlmVision = v.LlmVision
+	}
+	if v.LlmVisionPath != "" {
+		o.LlmVisionPath = v.LlmVisionPath
 	}
 	if v.LoraDir != "" {
 		o.LoraDir = v.LoraDir
@@ -694,8 +784,8 @@ func emitExtraImageModels(b *strings.Builder, s Settings, overrides []Override, 
 	}
 }
 
-func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, name, arch string, bakedEnc bool, emitted *[]string) {
-	lines, budget, offload, missing := imageCmdLines(s, row, ov, arch, name)
+func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, name, arch string, bakedEnc bool, condHidden int64, emitted *[]string) {
+	lines, budget, offload, missing := imageCmdLines(s, row, ov, arch, name, condHidden)
 
 	fmt.Fprintf(b, "\n  # arch=%s size=%gGB (image model, sd-server, max-vram=%gGB, offload=%t)\n", arch, row.SizeGB, budget, offload)
 	// SD/SDXL served as -m full checkpoints: if this gguf has no baked encoders it
@@ -728,4 +818,24 @@ func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, n
 	b.WriteString("      out: [image]\n")
 	writeDisplayName(b, s, name)
 	*emitted = append(*emitted, name)
+}
+
+// wan3dHints orders the two indistinguishable 3D causal VAEs by what the model
+// name says its lineage is. Wan/Krea take wan_2.1_vae, everything else in the
+// Qwen-Image family takes qwen_image_vae.
+func wan3dHints(name string) []string {
+	if strings.Contains(name, "krea") || strings.Contains(name, "wan") {
+		return []string{"wan_2.1", "wan2.1", "wan"}
+	}
+	return []string{"qwen_image", "qwen-image"}
+}
+
+// firstNonEmpty returns the first non-blank of its arguments.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }

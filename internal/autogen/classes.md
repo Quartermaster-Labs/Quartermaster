@@ -43,8 +43,8 @@ Per-model image knobs live on `Override` (`VaePath`/`ClipLPath`/`ClipGPath`/`T5P
 
 ### Diffusion encoders/VAEs are dropped at discovery, not paired
 
-A T5-XXL / UMT5 / CLIP-L/G / VAE gguf is a *component* of an image model —
-`image.go`'s `resolveComponents` wires it in by explicit path from `settings.encoders`, so
+A T5-XXL / UMT5 / CLIP-L/G / VAE gguf is a *component* of an image model:
+`image.go`'s `resolveComponents` wires it in as a `--vae`/`--clip_l`/`--t5xxl`/`--llm` path, so
 discovery has nothing to pair it to. Left alone it parses as an ordinary gguf, gets emitted as
 a llama-server row and shows up in the UI as an LLM ("T5 V1 1 Xxl Encoder") — an encoder-only
 stack with no decoder and no chat template, which can't generate.
@@ -54,6 +54,51 @@ stack with no decoder and no chat template, which can't generate.
 header arch. **Both rules are deliberately narrow on `t5`**: bare arch `t5` and a name like
 `flan-t5-large` are a real seq2seq LLM llama.cpp serves, so only `t5encoder`/`umt5` and the
 encoder-shaped names are excluded.
+
+### Components are DISCOVERED, not declared (`encoderpool.go`)
+
+`settings.encoders` used to be the only source of those paths: one hand-written path per role,
+per machine, which broke on every models-tree move and made a newly downloaded diffusion model
+a config chore. `ScanEncoderPool` now classifies every component on disk from its header, and
+`fillEncoderSet` fills only the roles the user left blank (**a declared path always wins**, so
+existing configs are untouched).
+
+Everything it keys on is structural, because filenames are not: three unrelated files on the
+dev box are all named `ae.safetensors`, and two of those are byte-identical copies.
+
+| Role | Signal | What it separates |
+|---|---|---|
+| VAE | `decoder.conv_in.weight` shape[1] | latent channels: 4 = SD/SDXL, 16 = flux.1 `ae`, 32 = flux.2/ERNIE |
+| VAE (3D) | `conv1.weight` is 5-dim | the Wan-2.1 causal VAE (Wan / Krea / Qwen-Image) |
+| CLIP | `text_model.embeddings.token_embedding.weight` shape[1] | 768 = CLIP-L, 1280 = CLIP-G |
+| T5 | `encoder.block.0.layer.0.SelfAttention.q.weight` | widest wins (T5-XXL is 4096) |
+| LLM | gguf `embedding_length` / `model.embed_tokens` shape[1] | matched against the DiT (below) |
+
+`.safetensors` costs one header read (8-byte LE length + JSON table at offset 0), so the price
+is independent of file size; ggufs come through `ReadGgufMetadataCached`. Scans are cached per
+root set for 30s (`encoderPoolFor`), since a regen runs on every settings save and watcher tick.
+
+**The DiT states the encoder it wants.** `Metadata.CondHidden` (`quantlabel.go`'s
+`condTensorOrder`, filled by the tensor walk) is `ne[0]` of the caption projection —
+`txt_in.weight`, `cap_embedder.1.weight`, `text_proj.weight`, `context_embedder.weight` or
+LongCat's `txtfusion...prenorm.scale`, in that order. Matching it to an encoder's hidden width
+picks the right file with no name table: 3584 = Qwen2.5-VL-7B (LongCat, Qwen-Image-Edit),
+2560 = Qwen3-4B (Z-Image, Krea), 3072 = Ministral-3B (ERNIE), 4096 = T5-XXL (flux).
+
+Width is **not** an identity on its own (five unrelated 2560-wide models are installed here), so
+ties break on `encoderArchRank` first: Qwen > Mistral > Gemma/Llama > unknown. That table is
+shipped knowledge about what DiTs are trained against, not per-machine tuning. Drafter sidecars
+(`mtp-*`, dflash) and pooled embedders are excluded outright: their widths collide with real
+encoders and neither can condition anything.
+
+**`--llm_vision` pairs by directory.** `pairProjectors` attaches each encoder gguf to the
+`mmproj-*` beside it, the same convention `inheritSidecars` uses for vision LLMs, so the
+projector for a chosen `--llm` is simply its neighbour. Whether a model *wants* one is the one
+thing that cannot be read off the weights: LongCat-Image-Edit and plain LongCat-Image have
+identical `img_in`/`txt_in` shapes (the reference image enters as extra sequence tokens, not
+extra input channels), so `editModelRe` name-detects it, with `llmVision: on|off` and
+`llmVisionPath` as the escape hatches. Sampling knobs stay hand-wired: LongCat-Edit still wants
+`extraArgs: "--flow-shift 3"`, which has no structural tell.
 
 ## Embedding (`embedding.go`)
 
