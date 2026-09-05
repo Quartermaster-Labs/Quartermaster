@@ -92,19 +92,42 @@ export const GENERIC_DEFAULTS = {
   denoise: 0.6,
 } satisfies (typeof IMAGE_DEFAULTS)[number];
 
-// The settings a model should load with: its preset, else the generic ones.
+// What the model itself says it wants, read off its launch line by the server
+// (apiModel.genDefaults). Absent fields = the flag was not emitted, i.e. no
+// opinion, so the preset/generic value stands.
+export interface ModelGenDefaults {
+  steps?: number;
+  cfg?: number;
+  sampler?: string;
+  width?: number;
+  height?: number;
+}
+
+// The settings a model should load with, in precedence order:
+//   1. what the model is actually LAUNCHED with (`gen`, from its own argv)
+//   2. its entry in IMAGE_DEFAULTS
+//   3. GENERIC_DEFAULTS
+// The model's own configuration has to win over the table below it, otherwise
+// setting defaultCfg on a model does nothing visible: the playground puts an
+// explicit cfg_scale on every /sdapi request, so the launch flag it overrides is
+// the very thing the user just configured. The table stays as the source for
+// what the command line cannot express (scheduler, negative prompt, denoise) and
+// for models that declare nothing.
 // `negative`/`denoise` are always present here so a switch clears a stale preset
 // value instead of inheriting it.
-export function settingsFor(id: string) {
+export function settingsFor(id: string, gen?: ModelGenDefaults) {
   const d = defaultsFor(id) ?? GENERIC_DEFAULTS;
+  const presetSize = "size" in d ? d.size : undefined;
   return {
-    steps: d.steps,
-    cfg: d.cfg,
-    sampler: d.sampler,
+    steps: gen?.steps || d.steps,
+    cfg: gen?.cfg || d.cfg,
+    sampler: gen?.sampler || d.sampler,
     scheduler: d.scheduler,
     negative: d.negative ?? GENERIC_DEFAULTS.negative,
     denoise: d.denoise ?? GENERIC_DEFAULTS.denoise,
-    size: "size" in d ? d.size : undefined,
+    // Only a launch line naming BOTH edges states a size; one alone is a
+    // half-specified canvas the aspect picker cannot honour.
+    size: gen?.width && gen?.height ? `${gen.width}x${gen.height}` : presetSize,
   };
 }
 

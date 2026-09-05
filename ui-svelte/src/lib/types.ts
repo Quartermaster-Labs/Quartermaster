@@ -23,6 +23,14 @@ export interface ModelCapabilities {
   reasoning_effort?: string[];
 }
 
+export interface ModelGenDefaults {
+  steps?: number;
+  cfg?: number;
+  sampler?: string;
+  width?: number;
+  height?: number;
+}
+
 export interface Model {
   id: string;
   state: ModelStatus;
@@ -31,6 +39,10 @@ export interface Model {
   unlisted: boolean;
   peerID: string;
   capabilities?: ModelCapabilities;
+  // Image-generation defaults read off this model's own launch line
+  // (--steps/--cfg-scale/--sampling-method/--width/--height). Absent for
+  // non-image models, and per-field absent when the flag was not emitted.
+  genDefaults?: ModelGenDefaults;
   // Gguf path shared by a model's variants (ctx tiers, game, judge). Rows with
   // the same family are collapsed into one group. Empty => ungrouped.
   family?: string;

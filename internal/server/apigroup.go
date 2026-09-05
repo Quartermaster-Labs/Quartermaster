@@ -68,11 +68,56 @@ type apiModel struct {
 	// admission input; EstRamGB is non-zero only when weights are CPU-offloaded.
 	EstVramGB float64 `json:"estVramGB,omitempty"`
 	EstRamGB  float64 `json:"estRamGB,omitempty"`
+	// GenDefaults are the image-generation defaults this model is launched with,
+	// read back off its own command line (--steps/--cfg-scale/...). The playground
+	// sends an explicit value on EVERY /sdapi request, so those launch flags are
+	// otherwise dead: a per-request field always wins. Surfacing them lets the UI
+	// seed its panel from the model's real configuration instead of a hardcoded
+	// substring table. nil for anything that is not an image model.
+	GenDefaults *apiGenDefaults `json:"genDefaults,omitempty"`
 	// RunningCmd is the actual argv the process spawned with, set only while the
 	// model is running. It differs from the config command after a live config
 	// edit (new args apply on next load) or a spawn-time offload rewrite, so the
 	// UI shows what the model is REALLY loaded with, not the pending config.
 	RunningCmd string `json:"runningCmd,omitempty"`
+}
+
+// apiGenDefaults is the sd-server generation defaults carried on a model's
+// launch line. Zero/empty fields mean the flag is absent, i.e. the model states
+// no opinion and the client should keep its own default.
+type apiGenDefaults struct {
+	Steps   int     `json:"steps,omitempty"`
+	Cfg     float64 `json:"cfg,omitempty"`
+	Sampler string  `json:"sampler,omitempty"`
+	Width   int     `json:"width,omitempty"`
+	Height  int     `json:"height,omitempty"`
+}
+
+// genDefaults reads the generation flags autogen emitted onto an image model's
+// command line. It is deliberately parsed from the command rather than carried
+// as separate config fields: the command is what the process actually runs
+// with, so a hand-edited cmd cannot drift from what the UI reports.
+func genDefaults(info *config.CmdInfo) *apiGenDefaults {
+	g := &apiGenDefaults{}
+	if v, ok := info.Value("--steps"); ok {
+		g.Steps, _ = strconv.Atoi(strings.TrimSpace(v))
+	}
+	if v, ok := info.Value("--cfg-scale"); ok {
+		g.Cfg, _ = strconv.ParseFloat(strings.TrimSpace(v), 64)
+	}
+	if v, ok := info.Value("--sampling-method"); ok {
+		g.Sampler = strings.TrimSpace(v)
+	}
+	if v, ok := info.Value("--width", "-W"); ok {
+		g.Width, _ = strconv.Atoi(strings.TrimSpace(v))
+	}
+	if v, ok := info.Value("--height", "-H"); ok {
+		g.Height, _ = strconv.Atoi(strings.TrimSpace(v))
+	}
+	if *g == (apiGenDefaults{}) {
+		return nil
+	}
+	return g
 }
 
 // groupIndex maps each model ID to its group name (first group listing it as a
@@ -159,6 +204,7 @@ func (s *Server) modelStatus() []apiModel {
 			Quant:        quantName,
 			QuantLabel:   quantLabel,
 			SizeGB:       fileSizeGB(family),
+			GenDefaults:  genDefaults(info),
 			EstVramGB:    mc.EstVramGB,
 			EstRamGB:     mc.EstRamGB,
 			RunningCmd:   runningCmd,
