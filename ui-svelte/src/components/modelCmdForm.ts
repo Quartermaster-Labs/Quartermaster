@@ -89,6 +89,10 @@ export interface ParsedCmd {
   // the user deleted the flag. Kept as null rather than "" because the caller
   // has to tell "not in the text" from the pinned 0 that disables checkpointing.
   ctxCheckpoints: number | null;
+  // -cms as it stands in the box, "" when the flag is absent. autogen always
+  // emits it, so an unparsed copy would land in extraArgs and be appended a
+  // SECOND time on the next render - one more per round trip.
+  checkpointMinStep: number | "";
   // Speculative sub-knobs (value "" / false => omit).
   specDraftNMax: number | "";
   specDefault: boolean;
@@ -106,6 +110,22 @@ export function hoistChatTemplate(extra: string): { extra: string; path: string 
   if (!m) return { extra, path: "" };
   const path = m[2].replace(/^"|"$/g, "");
   return { extra: (extra.slice(0, m.index) + " " + extra.slice(m.index! + m[0].length)).trim(), path };
+}
+
+// Pull a `-cms <n>` / `--checkpoint-min-step <n>` pair out of a free-form
+// extraArgs string, returning the remaining args plus the value ("" when
+// absent). Installs written before the box parsed -cms captured it into
+// extraArgs, where the emitter appends it after its own computed copy: harmless
+// to llama-server (last wins) but it grows by one on every box round trip, and
+// it silently overrides the sizer's spacing. Hoisted back into the field on
+// load, exactly like a template smuggled in through extraArgs.
+export function hoistCms(extra: string): { extra: string; step: number | "" } {
+  const m = extra.match(/(^|\s)(?:-cms|--checkpoint-min-step)\s+(\d+)/);
+  if (!m) return { extra, step: "" };
+  return {
+    extra: (extra.slice(0, m.index) + " " + extra.slice(m.index! + m[0].length)).replace(/\s+/g, " ").trim(),
+    step: Number(m[2]),
+  };
 }
 
 // A flag value that keeps 0 distinct from absent: null/"" (flag not in the box)
@@ -140,7 +160,8 @@ export function parseCmdFields(cmd: string): ParsedCmd {
     reason: string | null = null,
     rBudget: string | null = null,
     ctFile: string | null = null,
-    ckpt: string | null = null;
+    ckpt: string | null = null,
+    cms: string | null = null;
   let noMmap = false,
     mlockF = false,
     noKv = false,
@@ -200,6 +221,9 @@ export function parseCmdFields(cmd: string): ParsedCmd {
       case "--dry-base": dBase = val(); break;
       case "--dry-allowed-length": dAllow = val(); break;
       case "--ctx-checkpoints": ckpt = val(); break;
+      // Both spellings: the emitter writes the short one, a hand-edited box or a
+      // qm-tools write may carry llama's long alias.
+      case "-cms": case "--checkpoint-min-step": cms = val(); break;
       case "--spec-draft-n-max": sNMax = val(); break;
       case "--spec-default": specDef = true; break;
       case "--spec-ngram-map-k4v-size-n": sNgN = val(); break;
@@ -243,6 +267,7 @@ export function parseCmdFields(cmd: string): ParsedCmd {
     minP: numFlag(minP),
     presencePenalty: numFlag(presP),
     ctxCheckpoints: ckpt !== null && ckpt !== "" && !Number.isNaN(Number(ckpt)) ? Number(ckpt) : null,
+    checkpointMinStep: numFlag(cms),
     specDraftNMax: sNMax !== null && sNMax !== "" ? Number(sNMax) : "",
     specDefault: specDef,
     specNgramSizeN: sNgN !== null && sNgN !== "" ? Number(sNgN) : "",

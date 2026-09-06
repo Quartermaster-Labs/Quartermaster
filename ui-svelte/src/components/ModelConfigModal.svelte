@@ -34,6 +34,7 @@
     cmdNum,
     genDefaultSpec,
     hoistChatTemplate,
+    hoistCms,
     nglDisplay,
     noNoMmap,
     parseCmdFields,
@@ -365,6 +366,7 @@
     extraArgs = p.extraArgs;
     ctxCheckpoints = ckptEdit(p.ctxCheckpoints, ctxCheckpoints);
     adv.chatTemplateFile = p.chatTemplateFile;
+    adv.checkpointMinStep = cmsEdit(p.checkpointMinStep, adv.checkpointMinStep);
     adv.temp = samplerDelta(p.temp, "--temp");
     adv.topK = samplerDelta(p.topK, "--top-k");
     adv.topP = samplerDelta(p.topP, "--top-p");
@@ -386,6 +388,20 @@
   function ckptEdit(parsed: number | null, current: number | null): number | null {
     const shown = cmdNum(cmdRendered, "--ctx-checkpoints");
     if (parsed === null) return shown === "" ? current : 0;
+    if (parsed === shown) return current;
+    return parsed;
+  }
+
+  // -cms out of the box. Same shape as ckptEdit, and for the same reason:
+  // autogen ALWAYS emits this flag, so a value identical to the rendered one
+  // means "untouched" and must keep whatever the field held - otherwise a blur
+  // for some unrelated edit freezes the sizer's computed spacing into a pin that
+  // then never tracks a future change to it. There is no "no -cms" state to
+  // round-trip to, so deleting the flag reads as 0 (let the sizer pick) and the
+  // flag reappears on the next render.
+  function cmsEdit(parsed: number | "", current: number | ""): number | "" {
+    const shown = cmdNum(cmdRendered, "-cms");
+    if (parsed === "") return shown === "" ? current : 0;
     if (parsed === shown) return current;
     return parsed;
   }
@@ -464,6 +480,7 @@
     // ("") instead of pinning, and deleting a flag the model-wide sets becomes
     // an explicit "none" rather than silently inheriting it straight back.
     v.ctxCheckpoints = ckptEdit(p.ctxCheckpoints, v.ctxCheckpoints ?? null);
+    v.checkpointMinStep = Number(cmsEdit(p.checkpointMinStep, v.checkpointMinStep ?? "")) || 0;
     v.extraArgs = deltaStr(p.extraArgs.trim(), extraArgs);
     v.chatTemplateFile = deltaStr(p.chatTemplateFile, adv.chatTemplateFile);
   }
@@ -902,6 +919,14 @@
         extraArgs = h.extra;
         if (!adv.chatTemplateFile) adv.chatTemplateFile = h.path;
       }
+      // Same for a -cms captured into extraArgs before the box parsed it: left
+      // there it is emitted a second time after the sizer's own copy, and grows
+      // by one more on every round trip through the launch box.
+      const c = hoistCms(extraArgs);
+      if (c.step !== "") {
+        extraArgs = c.extra;
+        if (!adv.checkpointMinStep) adv.checkpointMinStep = c.step;
+      }
     }
     unlisted = o?.unlisted ?? false;
     skip = o?.skip ?? false;
@@ -914,6 +939,11 @@
       if (h.path) {
         c.extraArgs = h.extra;
         if (!c.chatTemplateFile) c.chatTemplateFile = h.path;
+      }
+      const m = hoistCms(c.extraArgs ?? "");
+      if (m.step !== "") {
+        c.extraArgs = m.extra;
+        if (!c.checkpointMinStep) c.checkpointMinStep = m.step;
       }
       return c;
     });
