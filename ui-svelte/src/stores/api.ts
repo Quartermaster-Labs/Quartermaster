@@ -298,6 +298,9 @@ export interface ModelVariant {
   parallel?: number;
   extraArgs?: string;
   chatTemplateFile?: string; // .jinja path; "" => inherit model-wide
+  // Only read on the reserved "vision" variant: the projector gguf this twin
+  // loads. "" => inherit the model-wide mmprojFile; "none" => back to discovery.
+  mmprojFile?: string;
   // Only read on the reserved "vision" variant: "" (inherit) | "gpu" | "ram" | "none".
   mmproj?: string;
   // Sampler / speculative sub-knobs (0/empty => inherit model-wide).
@@ -388,6 +391,10 @@ export interface ModelOverride {
   ub?: number; // 0 => auto (physical batch -ub/-b)
   extraArgs?: string; // extra llama-server flags appended verbatim (passthrough)
   chatTemplateFile?: string; // --chat-template-file path; "" => the gguf's baked-in template
+  // --mmproj path. "" => whatever discovery pairs (dir-local, or a family
+  // sibling's). Set => that file, and the "-vision" twin exists even when
+  // nothing was discovered.
+  mmprojFile?: string;
   unlisted?: boolean;
   skip?: boolean;
   slotCache?: boolean; // opt this model into on-disk slot KV persistence (opt-in; needs the global toggle on)

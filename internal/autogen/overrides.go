@@ -637,10 +637,29 @@ type Override struct {
 	// editable launch-parameters box into here.
 	ExtraArgs string `yaml:"extraArgs"`
 	// ChatTemplateFile is a path to a .jinja chat template that replaces the
-	// gguf's baked-in one (--chat-template-file). Empty => the baked-in template,
-	// except for archs autogen ships a known-good fix for (Qwen 3.5/3.6); a
-	// non-empty value always wins over that built-in fix.
+	// gguf's baked-in one (--chat-template-file). Empty => the baked-in template.
+	// No arch gets a substitute picked for it (see buildCmdLines); the built-in
+	// Qwen 3.5/3.6 fix this comment used to describe is gone.
+	//
+	// On a VARIANT this field is sentinel-aware: empty inherits the model-wide
+	// value and NoneSentinel drops it. See inherit.go.
 	ChatTemplateFile string `yaml:"chatTemplateFile"`
+	// MmprojFile names the vision projector explicitly (--mmproj), for the case
+	// discovery cannot serve: one shared mmproj kept in a folder of its own and
+	// pointed at by several models. Discovery only pairs a projector sitting in
+	// the gguf's own directory, or in a family sibling's (inheritSidecars), and
+	// that rule is deliberately NOT widened - a projector is bound to a specific
+	// vision tower, so an auto-paired stranger yields a twin that loads clean and
+	// hallucinates on every image. Naming the file is the user stating intent.
+	//
+	// Set => used instead of anything discovery found, AND it creates the
+	// "-vision" twin for a model that paired with nothing. Mmproj "none" still
+	// wins (no twin at all). Distinct from Mmproj, which is the projector's
+	// PLACEMENT ("" auto / gpu / ram / none), not its path.
+	//
+	// On a VARIANT this field is sentinel-aware: empty inherits the model-wide
+	// value and NoneSentinel drops it. See inherit.go.
+	MmprojFile string `yaml:"mmprojFile"`
 	// --- Image (diffusion / sd-server) knobs ---
 	// Only consumed for image-arch models (emitImageModel / imageCmdLines); ignored
 	// by the llama-server path. The component paths are the external VAE + text
@@ -744,9 +763,15 @@ type VariantSpec struct {
 	// settings.slotCache.enable like the model-wide flag.
 	SlotCache *bool `yaml:"slotCache"`
 	// Engine knobs mirroring Override, so a variant can carry the full launch
-	// shape (the UI's "full settings page" for a variant). Named variants are
-	// STANDALONE: zero/empty => the generator default, NOT the model-wide Override
-	// (the Default tab and a variant are independent profiles).
+	// shape (the UI's "full settings page" for a variant). Zero/empty => INHERIT
+	// the model-wide Override; the variant's own non-zero value wins at merge
+	// (see the effOv chain in buildProfiles). This comment used to claim variants
+	// were standalone, which the merge code has never done.
+	//
+	// Because empty means inherit, the free-form string knobs below take
+	// NoneSentinel ("none") to mean "explicitly nothing" - otherwise a variant of
+	// a model that pins a chat template / extra args / tensor placement has no
+	// way to run without it. See inherit.go.
 	KvInRam    bool   `yaml:"kvInRam"`
 	CpuOffload int    `yaml:"cpuOffload"`
 	FlashAttn  string `yaml:"flashAttn"`
@@ -757,6 +782,9 @@ type VariantSpec struct {
 	ExtraArgs  string `yaml:"extraArgs"`
 	// ChatTemplateFile mirrors Override; empty => inherit the model-wide value.
 	ChatTemplateFile string `yaml:"chatTemplateFile"`
+	// MmprojFile mirrors Override; empty => inherit the model-wide value, "none"
+	// => no explicit projector (fall back to whatever discovery paired).
+	MmprojFile string `yaml:"mmprojFile"`
 	// Mmproj pins the image projector's placement, but ONLY on the reserved
 	// "vision" variant - it is the one variant that tunes a profile carrying an
 	// mmproj at all. Same vocabulary as Override.Mmproj ("gpu"/"ram"/"none");
@@ -1112,6 +1140,10 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 		if strings.TrimSpace(o.Match) == "" {
 			return GenerateFile{}, fmt.Errorf("overrides[%d]: match is required", i)
 		}
+		// A model-level "none" is redundant (empty already means no flag) but a
+		// user who learned the sentinel on a variant will write it here too;
+		// clear it once, centrally, so it can never reach the emitter as a path.
+		NormalizeNone(&gf.Overrides[i])
 	}
 	return gf, nil
 }

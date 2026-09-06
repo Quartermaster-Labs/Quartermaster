@@ -375,8 +375,18 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	// "none" drops the twin outright: a projector the user does not want wired
 	// (a family-inherited one they judge wrong for this finetune, or vision they
 	// simply never use) should cost no served id at all.
-	if row.MmprojPath != "" && !strings.EqualFold(override.Mmproj, "none") {
-		mmprojOh := MmprojVramGB(row.MmprojPath, row.MmprojSizeGB, s)
+	// The projector is whatever the override names, falling back to discovery.
+	// An explicit path is also what CREATES the twin: a model that paired with
+	// nothing has no twin at all today, and that is the whole point of the field
+	// (one shared mmproj in its own folder, pointed at by several models).
+	// The reserved "vision" variant may name its own, with the usual sentinel.
+	mmprojFile := override.MmprojFile
+	if v := visionSpec; v != nil {
+		mmprojFile = inheritStr(v.MmprojFile, mmprojFile)
+	}
+	mmprojPath, mmprojSizeGB := mmprojFor(row, mmprojFile)
+	if mmprojPath != "" && !strings.EqualFold(override.Mmproj, "none") {
+		mmprojOh := MmprojVramGB(mmprojPath, mmprojSizeGB, s)
 		vp := profile{
 			Name:              fmt.Sprintf("%s-vision", name),
 			Target:            soloTarget,
@@ -573,12 +583,10 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			if v.Parallel > 0 {
 				effOv.Parallel = v.Parallel
 			}
-			if strings.TrimSpace(v.ExtraArgs) != "" {
-				effOv.ExtraArgs = v.ExtraArgs
-			}
-			if strings.TrimSpace(v.ChatTemplateFile) != "" {
-				effOv.ChatTemplateFile = v.ChatTemplateFile
-			}
+			// Free-form string knobs (chat template, extra args, tensor
+			// placement, draft KV) resolve through the shared sentinel rule:
+			// empty inherits, "none" forces the knob off. See inherit.go.
+			mergeInheritStrings(&effOv, v)
 			// Sampler / speculative sub-knobs: non-zero/non-nil variant value wins.
 			if v.Dry != nil {
 				effOv.Dry = v.Dry
@@ -640,12 +648,6 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			if v.NoRepack {
 				effOv.NoRepack = true
 			}
-			if v.KvKDraft != "" {
-				effOv.KvKDraft = v.KvKDraft
-			}
-			if v.KvVDraft != "" {
-				effOv.KvVDraft = v.KvVDraft
-			}
 			if v.CacheReuse != 0 {
 				effOv.CacheReuse = v.CacheReuse
 			}
@@ -685,14 +687,8 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			if v.SplitMode != "" {
 				effOv.SplitMode = v.SplitMode
 			}
-			if v.TensorSplit != "" {
-				effOv.TensorSplit = v.TensorSplit
-			}
 			if v.MainGpu != 0 {
 				effOv.MainGpu = v.MainGpu
-			}
-			if v.OverrideTensor != "" {
-				effOv.OverrideTensor = v.OverrideTensor
 			}
 		}
 		emitProfile(b, s, meta, row, prof, ctx, ngl, ncpuMoe, plan, ekvK, ekvV, pkvInRam, &effOv)

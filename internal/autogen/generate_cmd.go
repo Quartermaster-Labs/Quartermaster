@@ -7,6 +7,7 @@ package autogen
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -244,6 +245,17 @@ func effectiveUb(meta Metadata, prof profile, ov *Override, ctx int, budgetGB fl
 // block) and RenderSoloCmd (which joins them for the editor preview). Any
 // Override.ExtraArgs are appended verbatim as a final line.
 func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ngl, ncpuMoe int, kvK, kvV string, kvInRam bool, ov *Override) []string {
+	// extraArgs is appended verbatim at the end, so anything in it that we also
+	// emit ourselves lands on the line TWICE. -cms is the one that actually
+	// happened: the launch-box editor did not parse it, so it survived a round
+	// trip into extraArgs, and every later trip appended one more copy. Hoist it
+	// back out here and treat it as the pin it was meant to be, so a config
+	// written by an older UI self-heals on the next generate.
+	extraArgs, extraCms := "", 0
+	if ov != nil {
+		extraArgs, extraCms = hoistCmsFromExtra(ov.ExtraArgs)
+	}
+
 	cpuMoeFlag := ""
 	if ncpuMoe > 0 {
 		cpuMoeFlag = fmt.Sprintf(" --n-cpu-moe %d", ncpuMoe)
@@ -342,8 +354,16 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	// Vision twin loads the projector for image input. --no-mmproj-offload keeps
 	// the CLIP tower on the CPU: no VRAM for the projector (the sizer already
 	// priced the twin that way), slower image encode, same token throughput.
-	if prof.Vision && row.MmprojPath != "" {
-		lines = append(lines, fmt.Sprintf("--mmproj %s", strings.ReplaceAll(row.MmprojPath, "\\", "/")))
+	// ov is the EFFECTIVE override here (model-wide with the vision variant's
+	// knobs merged in), so an explicit mmprojFile - from either level - is
+	// already resolved by the time the argv is rendered.
+	mmprojFileOv := ""
+	if ov != nil {
+		mmprojFileOv = ov.MmprojFile
+	}
+	mmprojPath, _ := mmprojFor(row, mmprojFileOv)
+	if prof.Vision && mmprojPath != "" {
+		lines = append(lines, fmt.Sprintf("--mmproj %s", strings.ReplaceAll(mmprojPath, "\\", "/")))
 		if prof.CpuMmproj {
 			lines = append(lines, "--no-mmproj-offload")
 		}
@@ -443,6 +463,9 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		stepProf := prof
 		if stepProf.CheckpointMinStep == 0 && ov != nil {
 			stepProf.CheckpointMinStep = ov.CheckpointMinStep
+		}
+		if stepProf.CheckpointMinStep == 0 {
+			stepProf.CheckpointMinStep = extraCms
 		}
 		lines = append(lines, fmt.Sprintf("-cms %d", effectiveCheckpointMinStep(stepProf, ckptConstGB, ckptRecurrent)))
 	}
@@ -563,12 +586,38 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 			lines = append(lines, fmt.Sprintf("-ot %s", ov.OverrideTensor))
 		}
 	}
-	if ov != nil {
-		if extra := strings.TrimSpace(ov.ExtraArgs); extra != "" {
-			lines = append(lines, extra)
-		}
+	if extra := strings.TrimSpace(extraArgs); extra != "" {
+		lines = append(lines, extra)
 	}
 	return lines
+}
+
+// hoistCmsFromExtra splits a `-cms <n>` (or its `--checkpoint-min-step` alias)
+// out of a free-form extraArgs string, returning the rest and the value (0 when
+// absent). Only the FIRST is hoisted as a value; any further copies are dropped,
+// since a stale config can hold several and llama-server would just take the
+// last. Matched on whitespace boundaries so `--not-cms 256` is left alone.
+func hoistCmsFromExtra(extra string) (string, int) {
+	if !strings.Contains(extra, "cms") && !strings.Contains(extra, "checkpoint-min-step") {
+		return extra, 0
+	}
+	f := strings.Fields(extra)
+	out := make([]string, 0, len(f))
+	step := 0
+	for i := 0; i < len(f); i++ {
+		if f[i] != "-cms" && f[i] != "--checkpoint-min-step" {
+			out = append(out, f[i])
+			continue
+		}
+		if i+1 >= len(f) {
+			continue // dangling flag: drop it, we emit our own
+		}
+		if n, err := strconv.Atoi(f[i+1]); err == nil && step == 0 {
+			step = n
+		}
+		i++
+	}
+	return strings.Join(out, " "), step
 }
 
 // RenderSoloCmd previews the full launch command for a candidate override,

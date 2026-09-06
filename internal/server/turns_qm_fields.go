@@ -82,6 +82,7 @@ var qmFieldDocs = map[string]string{
 	"preserveThinking": "keep prior-turn <think> blocks in the chat history",
 	"spec":             "speculative decoding spec (e.g. draft-mtp, draft-dflash, ngram-mod)",
 	"chatTemplateFile": "path to a .jinja chat template replacing the gguf's baked-in one (--chat-template-file). Use THIS field, never extraArgs",
+	"mmprojFile":       "path to the vision projector gguf (--mmproj) when it does not sit beside the model; also creates the -vision twin. Use THIS field, never extraArgs",
 	"extraArgs":        "extra backend flags appended verbatim. Only for flags with no field of their own",
 	"backend":          "backend registry id to launch with; '' = the class default",
 	"slotCache":        "opt into on-disk slot-KV persistence; null = default (on)",
