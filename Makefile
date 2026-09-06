@@ -35,9 +35,14 @@ ui-svelte/node_modules:
 	cd ui-svelte && npm install
 
 # build the Svelte UI (embedded into every binary)
+# vite empties the out dir, taking the tracked placeholder with it. `touch` used
+# to put it back as a ZERO-BYTE file, which compiles (the embed only needs a file
+# to exist) but silently destroys the note explaining why the file may not be
+# deleted - and left every UI build with a dirty working tree. Copy the real
+# content back instead, from a source outside the directory vite wipes.
 ui: ui-svelte/node_modules
 	cd ui-svelte && npm run build
-	touch internal/server/ui_dist/placeholder.txt
+	cp internal/server/ui_dist_placeholder.txt internal/server/ui_dist/placeholder.txt
 
 # Build OSX binary
 mac: ui
