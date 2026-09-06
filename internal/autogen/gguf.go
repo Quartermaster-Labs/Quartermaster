@@ -13,6 +13,7 @@ import (
 	"math"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -519,6 +520,41 @@ func (r *ggufReader) readIntArray() ([]int64, error) {
 	return out, nil
 }
 
+// ggufSetSizeBytes reports the bytes a gguf really charges: its own size, or the
+// summed size of every shard when path is one file of a split set
+// ("<model>-00001-of-00004.gguf"). llama-server is handed shard 1 and opens the
+// siblings itself, so discovery represents the whole set by that one file - but
+// the weights figure the VRAM sizer charges is the whole set, not the shard.
+// Stat'ing shard 1 alone reported an 80B MoE as a quarter of its real size,
+// which offloaded it whole (-ngl 99, no --n-cpu-moe) and spent the phantom slack
+// on context; on Windows the driver spills the overflow into system RAM rather
+// than failing, so the only symptom was a very slow run.
+//
+// A sibling that cannot be stat'd is skipped rather than fatal: a short total
+// still beats a quarter one, and a truncated set is llama.cpp's error to report.
+func ggufSetSizeBytes(path string, own int64) int64 {
+	loc := shardRe.FindStringSubmatchIndex(path)
+	if loc == nil {
+		return own
+	}
+	idx, errIdx := strconv.Atoi(path[loc[2]:loc[3]])
+	count, errCount := strconv.Atoi(path[loc[4]:loc[5]])
+	if errIdx != nil || errCount != nil || count <= 1 || idx < 1 || idx > count {
+		return own
+	}
+	prefix := path[:loc[0]]
+	total := own
+	for i := 1; i <= count; i++ {
+		if i == idx {
+			continue
+		}
+		if fi, err := os.Stat(fmt.Sprintf("%s-%05d-of-%05d.gguf", prefix, i, count)); err == nil {
+			total += fi.Size()
+		}
+	}
+	return total
+}
+
 // ReadGgufMetadata parses the metadata KV section of a GGUF file. Tensor
 // descriptors are not read, so the work is bounded to the header.
 func ReadGgufMetadata(path string) (Metadata, error) {
@@ -531,7 +567,7 @@ func ReadGgufMetadata(path string) (Metadata, error) {
 		return Metadata{}, err
 	}
 	defer f.Close()
-	return ReadGgufMetadataFrom(f, path, fi.Size())
+	return ReadGgufMetadataFrom(f, path, ggufSetSizeBytes(path, fi.Size()))
 }
 
 // ReadGgufMetadataFrom is ReadGgufMetadata over an already-open source. Callers
