@@ -152,16 +152,19 @@ func ensureGenerate(path string) (created bool, err error) {
 }
 
 // seedBudgets writes this machine's measured VRAM/RAM budgets into a
-// just-created generate file. Every failure is a warning: an unmeasurable box
-// (no GPU telemetry, a locked-down OS) still gets a working install on the
-// built-in placeholders, and the Settings page can fix either number in a click.
+// just-created generate file. Every failure is a warning, and a soft one now
+// that the example file ships both knobs commented out: a box that cannot be
+// measured here leaves them unset, which is what makes the runtime probe
+// (seedHardwareBudgets) measure them again on every startup. Writing them into
+// the file is still worth doing, so the numbers are visible where the user
+// edits them and so a later boot with a busy GPU cannot shrink the budget.
 func (w *Wizard) seedBudgets(genPath string) {
 	if gb, ok := autogen.RecommendedVramGB(); ok {
 		if err := setSettingsKey(genPath, "targetVramGB", formatGB(gb)); err != nil {
 			w.warn(fmt.Sprintf("could not set targetVramGB: %v", err))
 		}
 	} else {
-		w.warn("no GPU reading; keeping the built-in VRAM budget (set it in Settings)")
+		w.warn("no GPU reading; the VRAM budget will be measured at startup instead (or set it in Settings)")
 	}
 	if gb, ok := autogen.RecommendedRamGB(); ok {
 		if err := setSettingsKey(genPath, "maxRamGB", formatGB(gb)); err != nil {
