@@ -61,7 +61,14 @@
     if (rates.length === 0) return 0;
     return rates.reduce((a, b) => a + b, 0) / rates.length;
   });
+  // FREE, not used - the odd one out. Every other tile in the strip is a
+  // consumption figure, and the status rail reports the same GPU as used/total,
+  // so "0.7G of 24G" here reads as "0.7 in use" at a glance and looks like it
+  // contradicts Task Manager. The tile keeps reporting free (that is the number
+  // you want when deciding what still fits) and spells the used side out beside
+  // it, so the two readings visibly add up to the total.
   const vramFreeGB = $derived($latestGpu ? ($latestGpu.mem_total_mb - $latestGpu.mem_used_mb) / 1024 : null);
+  const vramUsedGB = $derived($latestGpu ? $latestGpu.mem_used_mb / 1024 : null);
 
   const recent = $derived($metrics.slice(0, 8));
 
@@ -148,10 +155,12 @@
         <span class="tile__sub">approx.</span>
       </div>
       <div class="tile">
-        <span class="tile__label" use:tip={"VRAM not currently allocated, as reported by the GPU - not an estimate of what will fit."}>VRAM free</span>
+        <span class="tile__label" use:tip={"VRAM not currently allocated, as reported by the GPU - not an estimate of what will fit. The big number is what is FREE; the line below it is what is in use."}>VRAM free</span>
         <span class="tile__value">{vramFreeGB === null ? "-" : vramFreeGB.toFixed(1) + "G"}</span>
-        <span class="tile__sub">
-          {$latestGpu ? `of ${($latestGpu.mem_total_mb / 1024).toFixed(0)}G` : "no GPU reading"}
+        <span class="tile__sub truncate">
+          {$latestGpu
+            ? `of ${($latestGpu.mem_total_mb / 1024).toFixed(0)}G · ${vramUsedGB!.toFixed(1)}G in use`
+            : "no GPU reading"}
         </span>
       </div>
       <div class="tile">
