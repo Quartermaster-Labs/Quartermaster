@@ -118,6 +118,39 @@ func main() {
 	argvGiven := map[string]bool{}
 	flag.Visit(func(f *flag.Flag) { argvGiven[f.Name] = true })
 
+	// Go's flag package stops parsing at the first NON-flag argument and hands
+	// the rest back as positionals, which this program has none of. Left
+	// unchecked that turns a typo into a silent half-configured start: a
+	// launcher written as
+	//
+	//	quartermaster -config -models-dir /models /etc/config.yaml -generate ...
+	//
+	// gives -config the literal value "-models-dir" (a String flag eats the
+	// next argv entry whatever it looks like), then stops at /etc/config.yaml,
+	// so -generate, -listen and -admin-allow are quietly dropped. The server
+	// still comes up, serves a stale config and never regenerates -- a failure
+	// that reads as "the new build changed nothing" (issue #4). Refuse instead,
+	// and name both halves: the token that ended parsing, and the flag whose
+	// value swallowed a flag.
+	// The swallowed-value check comes first: it names the CAUSE, while NArg only
+	// names the token where parsing gave up, which is one argument too late.
+	var swallowed []string
+	flag.Visit(func(f *flag.Flag) {
+		if v := f.Value.String(); strings.HasPrefix(v, "-") {
+			swallowed = append(swallowed, "-"+f.Name+" "+v)
+		}
+	})
+	if len(swallowed) > 0 {
+		slog.Error("a flag was given a value that is itself a flag, so it ate the next argument: check the argument order",
+			"flags", strings.Join(swallowed, ", "))
+		os.Exit(2)
+	}
+	if flag.NArg() > 0 {
+		slog.Error("unexpected argument: flags after it were ignored, so this start would be half-configured",
+			"argument", flag.Arg(0), "ignored", strings.Join(flag.Args()[1:], " "))
+		os.Exit(2)
+	}
+
 	if *flagVersion {
 		fmt.Printf("version: %s (%s), built at %s\n", version, commit, date)
 		os.Exit(0)

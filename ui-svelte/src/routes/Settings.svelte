@@ -217,8 +217,24 @@
     }
   }
 
-  // Physical ceilings from live telemetry. 0 means "telemetry not in yet".
-  const gpuMaxGb = $derived($latestGpu ? Math.floor($latestGpu.mem_total_mb / 1024) : 0);
+  // Physical ceilings. 0 means "not known yet", which leaves the field uncapped
+  // rather than clamping it to nothing.
+  //
+  // The VRAM ceiling is POOLED across every inference-eligible adapter and comes
+  // from the server (settings.gpu), not from the perf poll. $latestGpu is the
+  // newest entry of a flat sample history that interleaves devices, so on a
+  // multi-GPU box it is whichever card the monitor enumerated last: a 12 GB +
+  // 16 GB pair read as 15, clampSettingsForm pushed anything larger back down,
+  // and the pooled budget the sizer plans splits against could not be entered at
+  // all (issue #4). It stays a fallback for a server too old to send the block.
+  const gpus = $derived(settings?.gpu?.devices ?? []);
+  const gpuMaxGb = $derived(
+    settings?.gpu && settings.gpu.totalGB > 0
+      ? Math.floor(settings.gpu.totalGB)
+      : $latestGpu
+        ? Math.floor($latestGpu.mem_total_mb / 1024)
+        : 0,
+  );
   const sysMaxGb = $derived($latestSys ? Math.floor($latestSys.mem_total_mb / 1024) : 0);
 
   const settingsDirty = $derived(
@@ -730,7 +746,14 @@
             }}
             class="w-full font-mono rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary"
           />
-          <span class="text-micro text-txtsecondary">default {settings?.defaults.targetVramGB}{gpuMaxGb ? ` · max ${gpuMaxGb}` : ""}</span>
+          <span class="text-micro text-txtsecondary">
+            default {settings?.defaults.targetVramGB}{gpuMaxGb ? ` · max ${gpuMaxGb}` : ""}
+            {#if gpus.length > 1}
+              <span use:tip={`Pooled across ${gpus.length} GPUs: ${gpus.map((g) => `${g.index}:${g.name} ${g.totalGB.toFixed(0)}GB`).join(", ")}. A model larger than one card is split over them with --tensor-split.`}
+                >({gpus.map((g) => g.totalGB.toFixed(0)).join(" + ")})</span
+              >
+            {/if}
+          </span>
         </label>
         <label class="flex flex-col gap-1">
           <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
