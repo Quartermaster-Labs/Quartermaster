@@ -637,9 +637,12 @@ type Override struct {
 	// editable launch-parameters box into here.
 	ExtraArgs string `yaml:"extraArgs"`
 	// ChatTemplateFile is a path to a .jinja chat template that replaces the
-	// gguf's baked-in one (--chat-template-file). Empty => the baked-in template,
-	// except for archs autogen ships a known-good fix for (Qwen 3.5/3.6); a
-	// non-empty value always wins over that built-in fix.
+	// gguf's baked-in one (--chat-template-file). Empty => the baked-in template.
+	// No arch gets a substitute picked for it (see buildCmdLines); the built-in
+	// Qwen 3.5/3.6 fix this comment used to describe is gone.
+	//
+	// On a VARIANT this field is sentinel-aware: empty inherits the model-wide
+	// value and NoneSentinel drops it. See inherit.go.
 	ChatTemplateFile string `yaml:"chatTemplateFile"`
 	// --- Image (diffusion / sd-server) knobs ---
 	// Only consumed for image-arch models (emitImageModel / imageCmdLines); ignored
@@ -744,9 +747,15 @@ type VariantSpec struct {
 	// settings.slotCache.enable like the model-wide flag.
 	SlotCache *bool `yaml:"slotCache"`
 	// Engine knobs mirroring Override, so a variant can carry the full launch
-	// shape (the UI's "full settings page" for a variant). Named variants are
-	// STANDALONE: zero/empty => the generator default, NOT the model-wide Override
-	// (the Default tab and a variant are independent profiles).
+	// shape (the UI's "full settings page" for a variant). Zero/empty => INHERIT
+	// the model-wide Override; the variant's own non-zero value wins at merge
+	// (see the effOv chain in buildProfiles). This comment used to claim variants
+	// were standalone, which the merge code has never done.
+	//
+	// Because empty means inherit, the free-form string knobs below take
+	// NoneSentinel ("none") to mean "explicitly nothing" - otherwise a variant of
+	// a model that pins a chat template / extra args / tensor placement has no
+	// way to run without it. See inherit.go.
 	KvInRam    bool   `yaml:"kvInRam"`
 	CpuOffload int    `yaml:"cpuOffload"`
 	FlashAttn  string `yaml:"flashAttn"`
@@ -1112,6 +1121,10 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 		if strings.TrimSpace(o.Match) == "" {
 			return GenerateFile{}, fmt.Errorf("overrides[%d]: match is required", i)
 		}
+		// A model-level "none" is redundant (empty already means no flag) but a
+		// user who learned the sentinel on a variant will write it here too;
+		// clear it once, centrally, so it can never reach the emitter as a path.
+		NormalizeNone(&gf.Overrides[i])
 	}
 	return gf, nil
 }

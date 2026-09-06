@@ -23,7 +23,9 @@ import (
 // Relative paths resolve against the server's cwd, like the built-in template.
 func chatTemplateErr(p string) string {
 	p = strings.TrimSpace(p)
-	if p == "" {
+	// "" inherits / omits the flag; autogen.NoneSentinel is the variant's way to
+	// say "explicitly no template". Neither names a file to stat.
+	if p == "" || strings.EqualFold(p, autogen.NoneSentinel) {
 		return ""
 	}
 	st, err := os.Stat(p)

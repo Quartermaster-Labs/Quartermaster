@@ -30,6 +30,7 @@
     fmtCtx,
     genDefaultKv,
     genDefaultNum,
+    cmdNum,
     genDefaultSpec,
     hoistChatTemplate,
     nglDisplay,
@@ -55,6 +56,8 @@
   let { modelId, open, onclose, openForId = "" }: Props = $props();
 
   let dialogEl: HTMLDialogElement | undefined = $state();
+  // The scrolling body, so a post-save re-seed can restore the reading position.
+  let bodyEl: HTMLDivElement | undefined = $state();
 
   let loading = $state(false);
   let saving = $state(false);
@@ -266,6 +269,12 @@
   // flags back into the form (parseCmd, on blur) and stashes anything autogen
   // doesn't model into extraArgs (passthrough, appended to the emitted command).
   let cmdDraft = $state("");
+  // The command the render effect last produced, i.e. what the box held before
+  // the user touched it. A blur compares against this, not against the model's
+  // autogen baseline: for a flag the generator ALWAYS emits, the text alone
+  // cannot say whether a value is a pin or the computed default, so "the user
+  // did not touch it" is the only safe read of an unchanged value.
+  let cmdRendered = $state("");
   let extraArgs = $state("");
 
   // --- Backend selection (per-model) ---
@@ -351,6 +360,7 @@
     specNgramSizeM = p.specNgramSizeM;
     specNgramMinHits = p.specNgramMinHits;
     extraArgs = p.extraArgs;
+    ctxCheckpoints = ckptEdit(p.ctxCheckpoints, ctxCheckpoints);
     adv.chatTemplateFile = p.chatTemplateFile;
     adv.temp = samplerDelta(p.temp, "--temp");
     adv.topK = samplerDelta(p.topK, "--top-k");
@@ -364,6 +374,19 @@
   // Without it, blurring the box for any unrelated reason would convert autogen's
   // arch-derived --top-k 20 / --min-p 0 baseline into an explicit per-model pin
   // that then never tracks a future change to that baseline.
+  // --ctx-checkpoints out of the box. autogen ALWAYS emits this flag (llama-server
+  // otherwise keeps 32 snapshots and silently overflows VRAM), so "absent from the
+  // box" cannot round-trip as "absent from the command" - it means the user wants
+  // checkpointing off, which is the pinned 0. A value left exactly as rendered is
+  // treated as untouched and keeps whatever the field held (auto, or a pin), so a
+  // blur for some unrelated edit never freezes the computed default into a pin.
+  function ckptEdit(parsed: number | null, current: number | null): number | null {
+    const shown = cmdNum(cmdRendered, "--ctx-checkpoints");
+    if (parsed === null) return shown === "" ? current : 0;
+    if (parsed === shown) return current;
+    return parsed;
+  }
+
   function samplerDelta(parsed: number | "", flag: string): number | "" {
     return parsed === genDefaultNum(config, flag) ? "" : parsed;
   }
@@ -433,10 +456,13 @@
     v.topP = sv(p.topP, "--top-p");
     v.minP = sv(p.minP, "--min-p");
     v.presencePenalty = sv(p.presencePenalty, "--presence-penalty");
-    v.extraArgs = p.extraArgs.trim();
-    // The variant box renders the inherited model-wide template too — capture it
-    // as a delta so an untouched value stays "inherit" ("") instead of pinning.
-    v.chatTemplateFile = p.chatTemplateFile === adv.chatTemplateFile.trim() ? "" : p.chatTemplateFile;
+    // The variant box renders the INHERITED model-wide values too, so these are
+    // captured as a delta against the Default tab: unchanged stays "inherit"
+    // ("") instead of pinning, and deleting a flag the model-wide sets becomes
+    // an explicit "none" rather than silently inheriting it straight back.
+    v.ctxCheckpoints = ckptEdit(p.ctxCheckpoints, v.ctxCheckpoints ?? null);
+    v.extraArgs = deltaStr(p.extraArgs.trim(), extraArgs);
+    v.chatTemplateFile = deltaStr(p.chatTemplateFile, adv.chatTemplateFile);
   }
 
   function onCmdInput(e: Event) {
@@ -484,11 +510,35 @@
     cmdTimer = setTimeout(async () => {
       try {
         cmdDraft = await previewCmd(modelId!, ov);
+        cmdRendered = cmdDraft;
       } catch {
         /* leave the last good command in the box */
       }
     }, 150);
   });
+
+  // Resolve one inheriting free-form string knob the same way autogen does
+  // (internal/autogen/inherit.go): blank inherits the model-wide value, the
+  // literal "none" forces the knob off, anything else pins. Kept in sync by
+  // hand — the preview must render the command the generator will emit, and a
+  // plain `||` chain would show `--chat-template-file none`.
+  const NONE_SENTINEL = "none";
+  const isNone = (v: string | undefined): boolean => (v ?? "").trim().toLowerCase() === NONE_SENTINEL;
+  function inheritStr(variant: string | undefined, model: string | undefined): string {
+    const v = (variant ?? "").trim();
+    if (v === "") return model ?? "";
+    if (v.toLowerCase() === NONE_SENTINEL) return "";
+    return variant ?? "";
+  }
+
+  // Inverse of inheritStr: turn a variant's fully-rendered value back into the
+  // delta the config file stores.
+  function deltaStr(parsed: string, model: string): string {
+    const m = (model ?? "").trim();
+    if (parsed === m) return "";
+    if (parsed === "" && m !== "") return NONE_SENTINEL;
+    return parsed;
+  }
 
   // A named variant INHERITS the model-wide override (the Default tab) and layers
   // its own non-blank fields on top — same as the generate path. So the preview
@@ -501,11 +551,11 @@
       const base = buildOverride();
       return {
         ...base,
-        vaePath: v.vaePath || base.vaePath,
-        clipLPath: v.clipLPath || base.clipLPath,
-        clipGPath: v.clipGPath || base.clipGPath,
-        t5Path: v.t5Path || base.t5Path,
-        textEncoderPath: v.textEncoderPath || base.textEncoderPath,
+        vaePath: inheritStr(v.vaePath, base.vaePath),
+        clipLPath: inheritStr(v.clipLPath, base.clipLPath),
+        clipGPath: inheritStr(v.clipGPath, base.clipGPath),
+        t5Path: inheritStr(v.t5Path, base.t5Path),
+        textEncoderPath: inheritStr(v.textEncoderPath, base.textEncoderPath),
         offloadToCpu: v.offloadToCpu || base.offloadToCpu,
         teOnCpu: v.teOnCpu || base.teOnCpu,
         vaeOnCpu: v.vaeOnCpu || base.vaeOnCpu,
@@ -518,7 +568,7 @@
         defaultSampler: v.defaultSampler || base.defaultSampler,
         defaultWidth: v.defaultWidth || base.defaultWidth,
         defaultHeight: v.defaultHeight || base.defaultHeight,
-        extraArgs: v.extraArgs || base.extraArgs,
+        extraArgs: inheritStr(v.extraArgs, base.extraArgs),
         unlisted: v.unlisted ?? false,
         variants: [],
       };
@@ -543,7 +593,7 @@
       threads: v.threads || base.threads || 0,
       parallel: v.parallel || base.parallel || 0,
       ub: v.ub || base.ub || 0,
-      extraArgs: v.extraArgs || base.extraArgs || "",
+      extraArgs: inheritStr(v.extraArgs, base.extraArgs),
       dry: v.dry ?? base.dry ?? null,
       dryMultiplier: v.dryMultiplier || base.dryMultiplier || 0,
       dryBase: v.dryBase || base.dryBase || 0,
@@ -565,8 +615,8 @@
       directIo: v.directIo ?? base.directIo ?? false,
       noOpOffload: v.noOpOffload ?? base.noOpOffload ?? false,
       noRepack: v.noRepack ?? base.noRepack ?? false,
-      kvKDraft: v.kvKDraft || base.kvKDraft || "",
-      kvVDraft: v.kvVDraft || base.kvVDraft || "",
+      kvKDraft: inheritStr(v.kvKDraft, base.kvKDraft),
+      kvVDraft: inheritStr(v.kvVDraft, base.kvVDraft),
       cacheReuse: v.cacheReuse || base.cacheReuse || 0,
       cacheRamMB: v.cacheRamMB || base.cacheRamMB || 0,
       cacheIdleSlots: v.cacheIdleSlots || base.cacheIdleSlots || "",
@@ -580,10 +630,10 @@
       ropeFreqBase: v.ropeFreqBase || base.ropeFreqBase || 0,
       yarnOrigCtx: v.yarnOrigCtx || base.yarnOrigCtx || 0,
       splitMode: v.splitMode || base.splitMode || "",
-      tensorSplit: v.tensorSplit || base.tensorSplit || "",
+      tensorSplit: inheritStr(v.tensorSplit, base.tensorSplit),
       mainGpu: v.mainGpu || base.mainGpu || 0,
-      overrideTensor: v.overrideTensor || base.overrideTensor || "",
-      chatTemplateFile: v.chatTemplateFile || base.chatTemplateFile || "",
+      overrideTensor: inheritStr(v.overrideTensor, base.overrideTensor),
+      chatTemplateFile: inheritStr(v.chatTemplateFile, base.chatTemplateFile),
       ctxCheckpoints: v.ctxCheckpoints ?? null,
       // variant-local: never inherited from the base.
       unlisted: v.unlisted ?? false,
@@ -920,8 +970,14 @@
     );
   }
 
-  async function load() {
+  // keepView: re-seed in place after a save instead of landing on the tab the
+  // modal was originally opened for. Saving from a variant used to drop you back
+  // on Default at the top of the page - the config had not changed tab, only the
+  // re-seed had forgotten which one you were on.
+  async function load(keepView = false) {
     if (!modelId) return;
+    const keepName = keepView ? (selectedV?.name ?? "") : "";
+    const keepScroll = keepView ? (bodyEl?.scrollTop ?? 0) : 0;
     loading = true;
     error = null;
     try {
@@ -936,6 +992,7 @@
       const o = cfg.override;
       autoCtx = parseCtx(cfg.cmd);
       cmdDraft = cfg.cmd; // render effect refreshes this to the canonical (${PORT}) form
+      cmdRendered = cfg.cmd;
       seedFromOverride(o);
       defaultVariants = (cfg.defaultVariants ?? []).map((v) => ({ ...v }));
       origDefaultVariants = JSON.stringify(defaultVariants);
@@ -950,8 +1007,8 @@
       // Land on the clicked row's variant: the model id ends with "-<name>" for
       // a variant/tier, or is the bare base for Default. Match the longest name so a
       // name that's a suffix of another doesn't win.
-      let chosen = "";
-      if (openForId) {
+      let chosen = keepName;
+      if (!chosen && openForId) {
         for (const v of [...variants, ...ctxTiers, ...defaultVariants]) {
           if (openForId.endsWith("-" + v.name) && v.name.length > chosen.length) chosen = v.name;
         }
@@ -959,6 +1016,9 @@
       selectedV = chosen
         ? ([...variants, ...ctxTiers, ...defaultVariants].find((v) => v.name === chosen) ?? null)
         : null;
+      // The re-seed re-renders the body, which resets its scroll. Put it back on
+      // the next frame, once the new content has laid out.
+      if (keepScroll > 0) requestAnimationFrame(() => bodyEl?.scrollTo({ top: keepScroll }));
       // Fetch each variant's own launch cmd so blank mmap checkboxes reflect that
       // variant's placement (not the base's). Best-effort, parallel, non-blocking.
       const idSet = new Set(get(models).map((m) => m.id));
@@ -1363,8 +1423,9 @@
         await putDefaultVariants(defaultVariants);
       }
       // Stay open — the live reload applies in the background. Re-seed from the
-      // regenerated config so the modal reflects what actually got saved.
-      await load();
+      // regenerated config so the modal reflects what actually got saved, without
+      // moving the user off the tab they saved from.
+      await load(true);
       saved = true;
       clearTimeout(savedTimer);
       savedTimer = setTimeout(() => (saved = false), 2000);
@@ -1486,7 +1547,7 @@
       </div>
     {/if}
 
-    <div class="overflow-y-auto flex-1 p-4 space-y-4 pretty-scroll">
+    <div bind:this={bodyEl} class="overflow-y-auto flex-1 p-4 space-y-4 pretty-scroll">
       {#if loading}
         <p class="text-txtsecondary">Loading…</p>
       {:else if error}
@@ -2499,7 +2560,9 @@
           ></textarea>
           <p class="text-xs text-txtsecondary mt-1">
             Edits sync with the fields above on blur. Flags autogen doesn't model are kept verbatim;
-            <code>-c</code>/<code>-ngl</code>/<code>--n-cpu-moe</code> stay sizer-controlled.
+            <code>-c</code>/<code>-ngl</code>/<code>--n-cpu-moe</code>/<code>-b</code> stay
+            sizer-controlled and come back on the next render. <code>--ctx-checkpoints</code> is
+            always emitted: deleting it sets checkpoints to 0 rather than dropping the flag.
           </p>
           <p class="text-xs text-txtsecondary mt-1 font-mono break-all">{config.gguf}</p>
         </details>
@@ -2838,21 +2901,28 @@
                 <input type="number" min="0" step="1024" value={vnum(sv.yarnOrigCtx)} oninput={(e) => (sv.yarnOrigCtx = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input w-24 ml-auto" placeholder="inherit" />
               </label>
               <label class="flex items-center gap-2">
-                <span class="text-txtsecondary flex items-center gap-1">Tensor split {@render hint("-ts. Per-GPU proportion, e.g. 3,1.")}</span>
-                <input type="text" value={sv.tensorSplit ?? ""} oninput={(e) => (sv.tensorSplit = (e.currentTarget as HTMLInputElement).value)} class="cfg-input w-24 ml-auto" placeholder="inherit" />
+                <span class="text-txtsecondary flex items-center gap-1">Tensor split {@render hint("-ts. Per-GPU proportion, e.g. 3,1. Empty inherits the model-wide value; none forces it off.")}</span>
+                <input type="text" value={sv.tensorSplit ?? ""} oninput={(e) => (sv.tensorSplit = (e.currentTarget as HTMLInputElement).value)} class="cfg-input w-24 ml-auto" placeholder="inherit / none" />
               </label>
               <label class="flex items-center gap-2 col-span-2">
-                <span class="text-txtsecondary flex items-center gap-1 shrink-0">Override tensor {@render hint("-ot. Manual tensor→buffer placement, e.g. exps=CPU.")}</span>
-                <input type="text" value={sv.overrideTensor ?? ""} oninput={(e) => (sv.overrideTensor = (e.currentTarget as HTMLInputElement).value)} class="cfg-input flex-1 ml-auto font-mono" placeholder="inherit" />
+                <span class="text-txtsecondary flex items-center gap-1 shrink-0">Override tensor {@render hint("-ot. Manual tensor→buffer placement, e.g. exps=CPU. Empty inherits the model-wide value; none forces it off.")}</span>
+                <input type="text" value={sv.overrideTensor ?? ""} oninput={(e) => (sv.overrideTensor = (e.currentTarget as HTMLInputElement).value)} class="cfg-input flex-1 ml-auto font-mono" placeholder="inherit / none" />
               </label>
               <label class="flex items-center gap-2 col-span-2">
-                <span class="text-txtsecondary flex items-center gap-1 shrink-0">Chat template file {@render hint("--chat-template-file. Path to a .jinja chat template replacing the gguf's baked-in one. Empty = inherit the model-wide value.")}</span>
-                <input type="text" value={sv.chatTemplateFile ?? ""} oninput={(e) => (sv.chatTemplateFile = (e.currentTarget as HTMLInputElement).value)} class="cfg-input flex-1 ml-auto font-mono" placeholder="inherit" spellcheck="false" />
+                <span class="text-txtsecondary flex items-center gap-1 shrink-0">Chat template file {@render hint("--chat-template-file. Path to a .jinja chat template replacing the gguf's baked-in one. Empty inherits the model-wide value; none forces it off (the gguf's baked-in template).")}</span>
+                <input type="text" value={sv.chatTemplateFile ?? ""} oninput={(e) => (sv.chatTemplateFile = (e.currentTarget as HTMLInputElement).value)} class="cfg-input flex-1 ml-auto font-mono" placeholder="inherit / none" spellcheck="false" />
                 <button
                   type="button" use:tip={"Browse for a .jinja template"} aria-label="Browse for a chat template file"
                   class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
                   onclick={() => browseChatTemplate((p) => (sv.chatTemplateFile = p))}
                 ><FolderOpen size={14} /></button>
+                <button
+                  type="button"
+                  use:tip={"No template: run this variant on the gguf's baked-in one, ignoring the model-wide pin"}
+                  aria-pressed={isNone(sv.chatTemplateFile)}
+                  class="shrink-0 px-1.5 py-1 rounded border text-xs transition-colors {isNone(sv.chatTemplateFile) ? 'border-primary text-primary' : 'border-transparent text-txtsecondary hover:text-primary hover:border-primary'}"
+                  onclick={() => (sv.chatTemplateFile = isNone(sv.chatTemplateFile) ? "" : NONE_SENTINEL)}
+                >None</button>
               </label>
               <label class="flex items-center gap-2">
                 <Toggle size="sm" checked={!!sv.directIo} onchange={(on) => (sv.directIo = on)} />
@@ -2888,7 +2958,9 @@
             ></textarea>
             <p class="text-xs text-txtsecondary mt-1">
               Edits sync with the fields above on blur. Flags autogen doesn't model are kept verbatim;
-              <code>-c</code>/<code>-ngl</code>/<code>--n-cpu-moe</code> stay sizer-controlled.
+              <code>-c</code>/<code>-ngl</code>/<code>--n-cpu-moe</code>/<code>-b</code> stay
+              sizer-controlled and come back on the next render. <code>--ctx-checkpoints</code> is
+              always emitted: deleting it sets checkpoints to 0 rather than dropping the flag.
             </p>
           </details>
         {/if}

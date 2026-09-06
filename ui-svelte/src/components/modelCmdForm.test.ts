@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseCmdFields, genDefaultNum, specToggle } from "./modelCmdForm";
+import { parseCmdFields, genDefaultNum, cmdNum, specToggle } from "./modelCmdForm";
 import type { ModelConfig } from "../stores/api";
 
 // The sampler defaults are the one flag group where 0 is a real value, so the
@@ -72,5 +72,25 @@ describe("parseCmdFields mmproj flags", () => {
       "llama-server -m x.gguf --mmproj C:/models/mmproj.gguf --no-mmproj-offload --foo bar",
     );
     expect(p.extraArgs).toBe("--foo bar");
+  });
+});
+
+describe("parseCmdFields --ctx-checkpoints", () => {
+  it("captures the value instead of swallowing it", () => {
+    expect(parseCmdFields("llama-server -m x.gguf --ctx-checkpoints 2").ctxCheckpoints).toBe(2);
+    expect(parseCmdFields("llama-server -m x.gguf --ctx-checkpoints 0").ctxCheckpoints).toBe(0);
+  });
+  it("reports null when the user deleted the flag", () => {
+    expect(parseCmdFields("llama-server -m x.gguf -c 4096").ctxCheckpoints).toBeNull();
+  });
+  it("never bleeds into extraArgs", () => {
+    expect(parseCmdFields("llama-server -m x.gguf --ctx-checkpoints 2").extraArgs).toBe("");
+  });
+});
+
+describe("cmdNum", () => {
+  it("reads a flag off any command text, not just the model baseline", () => {
+    expect(cmdNum("llama-server --ctx-checkpoints 3 -c 8192", "--ctx-checkpoints")).toBe(3);
+    expect(cmdNum("llama-server -c 8192", "--ctx-checkpoints")).toBe("");
   });
 });

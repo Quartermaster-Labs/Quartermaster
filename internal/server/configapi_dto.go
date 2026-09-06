@@ -443,6 +443,11 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	for _, v := range body.Variants {
 		ov.Variants = append(ov.Variants, toVariantSpec(v))
 	}
+	// Resolve a model-level "none" here rather than only at config load: this DTO
+	// also feeds the launch-command preview, which renders without ever reading
+	// the config file. The variants above are deliberately left alone - on a
+	// variant the sentinel is meaningful, not redundant.
+	autogen.NormalizeNone(ov)
 }
 
 // applyVariantPatch layers only the NON-ZERO fields of a variantDTO patch onto

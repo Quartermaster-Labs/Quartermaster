@@ -270,6 +270,25 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   download and wire up; shipping a curated replacement for one vendor's family played
   favourites and silently dropped whatever the baked template supported that the replacement
   did not (Qwen 3.8's reasoning-effort ladder, for one).
+- **A variant can drop an inherited template with `chatTemplateFile: none`.** Empty means
+  "inherit the model-wide value" on every free-form string a variant carries, which left no
+  way to say "this profile runs on the gguf's baked-in template". `inherit.go` gives the off
+  state a name (`NoneSentinel`, matching the `mmproj: none` vocabulary) and owns the whole
+  rule: `inheritStr` at merge, `NormalizeNone` on every door an `Override` comes in
+  through so a sentinel written at MODEL level can never reach the emitter as a literal
+  path. **Both doors, not just the config file:** `LoadGenerateFile` covers the file, and
+  `applyOverrideDTO` covers the editor — `handleAPIModelCmdPreview` renders the
+  launch-command box straight from that DTO without ever reading the config, so a sentinel
+  left unresolved there shows `--chat-template-file "none"` and the preview silently
+  disagrees with what saving produces. Never normalize a `VariantSpec`; there the sentinel
+  is the point. It covers the free-form/path knobs
+  only — `chatTemplateFile`, `extraArgs`, `tensorSplit`, `overrideTensor`, `kvKDraft`/
+  `kvVDraft`, and the sd-server component paths. The enums are deliberately excluded: they
+  already spell out their own off state (`flashAttn: off`, `mmproj: none`, `ropeScaling:
+  none`), and a second spelling would be ambiguous. `ModelConfigModal.svelte` keeps hand-kept
+  twins (`inheritStr`/`deltaStr`) so the previewed command matches what the generator emits,
+  and so deleting a flag from a variant's launch box saves as `none` rather than silently
+  inheriting it straight back.
 - **`scanChatTemplate` still reads the baked template**, but only for the effort ladder.
   `ReadGgufMetadata` decodes `tokenizer.chat_template` and derives `ChatTemplateEffortLevels`
   (plus `ChatTemplatePreservesThinking`, which nothing consumes today) — the flag and the level
