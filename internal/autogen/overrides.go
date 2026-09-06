@@ -926,7 +926,7 @@ func (s *Settings) applyDefaults() {
 	// reading — deliberately small, because the cost of guessing low is a model
 	// sized conservatively and the cost of guessing high is a load that OOMs.
 	if s.TargetVramGB == 0 {
-		s.TargetVramGB = 7
+		s.TargetVramGB = fallbackVramGB
 	}
 	// vramOverheadGB is pure allocator slack: targetVramGB is already the free
 	// VRAM, so the desktop's own usage is outside the budget rather than
@@ -960,7 +960,7 @@ func (s *Settings) applyDefaults() {
 		s.VisionCtx = 8192
 	}
 	if s.MaxRamGB == 0 {
-		s.MaxRamGB = 24 // placeholder; see TargetVramGB above
+		s.MaxRamGB = fallbackRamGB // placeholder; see TargetVramGB above
 	}
 	if s.MoeCtxTarget == 0 {
 		s.MoeCtxTarget = 65536
@@ -1000,6 +1000,30 @@ func (s *Settings) applyDefaults() {
 	}
 }
 
+// fallbackVramGB / fallbackRamGB are the last-resort budgets applyDefaults
+// writes when nothing measured the box, and (because the pre-1.0.4 example
+// shipped them as literals) also the fingerprint isShippedLegacyBudgets looks
+// for. Changing either number changes what counts as an untouched file, so the
+// two uses have to move together.
+const (
+	fallbackVramGB = 7.0
+	fallbackRamGB  = 24.0
+)
+
+// isShippedLegacyBudgets reports whether a generate file carries EXACTLY the
+// budget pair the pre-1.0.4 example shipped, which is the fingerprint of a file
+// nobody has tuned rather than a decision anyone made.
+//
+// Both must match. The example always wrote the two together, so a file that
+// agrees on one and not the other has been edited by hand, and a hand-edited
+// number is the user's. That is also the escape hatch for a box where 7/24
+// happens to be right: change either value, or set it in Settings (which pins
+// it in the sidecar, checked separately below). The alternative to a rule this
+// blunt is leaving every existing install on a budget measured from nothing.
+func isShippedLegacyBudgets(s Settings) bool {
+	return s.TargetVramGB == fallbackVramGB && s.MaxRamGB == fallbackRamGB
+}
+
 // LoadGenerateFile reads and validates an autogen control file. Settings
 // defaults are applied. modelsDirOverride (from --models-dir) wins over the
 // file's modelsRoot when non-empty.
@@ -1016,6 +1040,17 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 	// applyDefaults writes its placeholders over the zero values, so
 	// seedHardwareBudgets below can tell an unset knob from a deliberate one.
 	vramUnset, ramUnset := gf.Settings.TargetVramGB == 0, gf.Settings.MaxRamGB == 0
+	// ... and treat the pair the OLD example shipped as saying nothing either.
+	// Commenting the knobs out of the example fixed the file a NEW install
+	// writes, and nothing else: the installer preserves config/ on purpose and
+	// the in-app updater only swaps the binary, so every install made before
+	// that change still carries a literal 7/24 that the probe below then
+	// correctly declines to overwrite. Left alone, the one machine the numbers
+	// were ever right for is the author's, and everyone else stays pinned to a
+	// budget nothing measured.
+	if isShippedLegacyBudgets(gf.Settings) {
+		vramUnset, ramUnset = true, true
+	}
 	// Overlay UI-owned backend-exe paths BEFORE applyDefaults so an empty
 	// sd/tts-server derives as a sibling of the (possibly UI-set) llama exe.
 	be, err := LoadSidecarBackends(path)

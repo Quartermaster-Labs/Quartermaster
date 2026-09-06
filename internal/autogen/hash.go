@@ -176,7 +176,7 @@ const hashCacheSuffix = ".modelhash"
 //	     quarter of itself, so the plan offloaded it whole and spent the phantom
 //	     slack on context. Every split model's -ngl/--n-cpu-moe/-c changes for
 //	     inputs that did not.
-const genVersion = "v62"
+const genVersion = "v63"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the
