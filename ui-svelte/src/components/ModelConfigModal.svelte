@@ -17,6 +17,7 @@
     models,
   } from "../stores/api";
   import { get } from "svelte/store";
+  import { tick } from "svelte";
   import { FolderOpen, HelpCircle, X } from "lucide-svelte";
   import { tip } from "../lib/tooltip";
   import { askConfirm } from "../lib/confirm";
@@ -954,6 +955,7 @@
     // Select the ARRAY's element, not the raw literal: $state wraps elements in a
     // proxy, so `selectedV = nv` never `===` the rendered tab and nothing lights up.
     selectedV = variants[variants.length - 1];
+    focusVariantName();
   }
 
   // True when a ctx tier carries nothing but its ctx value, so it round-trips as
@@ -1291,6 +1293,7 @@
     variants = [...variants, variantFromDefault(name)];
     // Select the proxied array element (see addImageVariantEntry).
     selectedV = variants[variants.length - 1];
+    focusVariantName();
   }
 
   // Add a fresh fleet-wide variant (shared by every model) and select it. Saved
@@ -1305,6 +1308,7 @@
     // variant: it inherits at creation, then drifts independently (standalone).
     defaultVariants = [...defaultVariants, variantFromDefault(name)];
     selectedV = defaultVariants[defaultVariants.length - 1];
+    focusVariantName();
   }
 
   // Remove a tab from whichever bucket holds it (per-model variant, ctx tier, or
@@ -1355,6 +1359,22 @@
   function setVSlotCache(val: string) {
     if (selectedV) selectedV.slotCache = val === "inherit" ? null : val === "on";
   }
+  // The selected variant's name field, so a freshly added variant can put the
+  // caret in it. Only one of the two name inputs (image preset / llm variant) is
+  // ever mounted, so a single ref is enough.
+  let nameInput = $state<HTMLInputElement | null>(null);
+
+  // A new variant is born holding a placeholder ("variant", "preset2") that is
+  // never what the user meant to keep, and the name drives the served id, so the
+  // first thing they always do is rename it. Focus the field and SELECT the
+  // placeholder, so the next keystroke replaces it instead of appending to it.
+  // tick() first: the field only enters the DOM once the new tab's panel renders.
+  async function focusVariantName() {
+    await tick();
+    nameInput?.focus();
+    nameInput?.select();
+  }
+
   // Renaming the selected variant must move the selection pointer with it so the
   // derived `selectedV` keeps resolving to the same array element.
   function renameSelectedVariant(e: Event) {
@@ -1874,7 +1894,7 @@
                 Name (suffix)
                 {@render hint("The preset's id suffix. Loads as <base-id>-<name>.")}
               </span>
-              <input type="text" value={sv.name} oninput={renameSelectedVariant} class="cfg-input" placeholder="e.g. fast, quality, hd" />
+              <input type="text" bind:this={nameInput} value={sv.name} oninput={renameSelectedVariant} class="cfg-input" placeholder="e.g. fast, quality, hd" />
             </label>
 
             <div class="col-span-2 font-mono text-[0.6rem] uppercase tracking-wider text-txtsecondary mt-1">Generation defaults</div>
@@ -2587,7 +2607,7 @@
               {#if sv.name === "vision"}
                 <input type="text" value="vision" readonly class="cfg-input opacity-70" use:tip={visionNameTip} />
               {:else}
-                <input type="text" value={sv.name} oninput={renameSelectedVariant} class="cfg-input" placeholder="e.g. game, long, judge" />
+                <input type="text" bind:this={nameInput} value={sv.name} oninput={renameSelectedVariant} class="cfg-input" placeholder="e.g. game, long, judge" />
               {/if}
             </label>
             <label class="flex flex-col gap-1 text-sm">
