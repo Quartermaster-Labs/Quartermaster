@@ -375,8 +375,18 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	// "none" drops the twin outright: a projector the user does not want wired
 	// (a family-inherited one they judge wrong for this finetune, or vision they
 	// simply never use) should cost no served id at all.
-	if row.MmprojPath != "" && !strings.EqualFold(override.Mmproj, "none") {
-		mmprojOh := MmprojVramGB(row.MmprojPath, row.MmprojSizeGB, s)
+	// The projector is whatever the override names, falling back to discovery.
+	// An explicit path is also what CREATES the twin: a model that paired with
+	// nothing has no twin at all today, and that is the whole point of the field
+	// (one shared mmproj in its own folder, pointed at by several models).
+	// The reserved "vision" variant may name its own, with the usual sentinel.
+	mmprojFile := override.MmprojFile
+	if v := visionSpec; v != nil {
+		mmprojFile = inheritStr(v.MmprojFile, mmprojFile)
+	}
+	mmprojPath, mmprojSizeGB := mmprojFor(row, mmprojFile)
+	if mmprojPath != "" && !strings.EqualFold(override.Mmproj, "none") {
+		mmprojOh := MmprojVramGB(mmprojPath, mmprojSizeGB, s)
 		vp := profile{
 			Name:              fmt.Sprintf("%s-vision", name),
 			Target:            soloTarget,

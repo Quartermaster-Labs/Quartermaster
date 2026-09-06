@@ -342,8 +342,16 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	// Vision twin loads the projector for image input. --no-mmproj-offload keeps
 	// the CLIP tower on the CPU: no VRAM for the projector (the sizer already
 	// priced the twin that way), slower image encode, same token throughput.
-	if prof.Vision && row.MmprojPath != "" {
-		lines = append(lines, fmt.Sprintf("--mmproj %s", strings.ReplaceAll(row.MmprojPath, "\\", "/")))
+	// ov is the EFFECTIVE override here (model-wide with the vision variant's
+	// knobs merged in), so an explicit mmprojFile - from either level - is
+	// already resolved by the time the argv is rendered.
+	mmprojFileOv := ""
+	if ov != nil {
+		mmprojFileOv = ov.MmprojFile
+	}
+	mmprojPath, _ := mmprojFor(row, mmprojFileOv)
+	if prof.Vision && mmprojPath != "" {
+		lines = append(lines, fmt.Sprintf("--mmproj %s", strings.ReplaceAll(mmprojPath, "\\", "/")))
 		if prof.CpuMmproj {
 			lines = append(lines, "--no-mmproj-offload")
 		}

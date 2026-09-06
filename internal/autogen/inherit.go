@@ -58,6 +58,7 @@ func clearNone(s string) string {
 // non-empty-wins chain in buildProfiles.
 func mergeInheritStrings(eff *Override, v *VariantSpec) {
 	eff.ChatTemplateFile = inheritStr(v.ChatTemplateFile, eff.ChatTemplateFile)
+	eff.MmprojFile = inheritStr(v.MmprojFile, eff.MmprojFile)
 	eff.ExtraArgs = inheritStr(v.ExtraArgs, eff.ExtraArgs)
 	eff.TensorSplit = inheritStr(v.TensorSplit, eff.TensorSplit)
 	eff.OverrideTensor = inheritStr(v.OverrideTensor, eff.OverrideTensor)
@@ -93,6 +94,7 @@ func mergeInheritImageStrings(o *Override, v *VariantSpec) {
 // Never call it on a VariantSpec. There the sentinel is the whole point.
 func NormalizeNone(o *Override) {
 	o.ChatTemplateFile = clearNone(o.ChatTemplateFile)
+	o.MmprojFile = clearNone(o.MmprojFile)
 	o.ExtraArgs = clearNone(o.ExtraArgs)
 	o.TensorSplit = clearNone(o.TensorSplit)
 	o.OverrideTensor = clearNone(o.OverrideTensor)

@@ -166,7 +166,7 @@
     swaFull: boolean; checkpointMinStep: number | ""; contextShift: string; specDraftNMin: number | "";
     slotPromptSimilarity: number | ""; ropeScaling: string; ropeScale: number | ""; ropeFreqBase: number | "";
     yarnOrigCtx: number | ""; splitMode: string; tensorSplit: string; mainGpu: number | ""; overrideTensor: string;
-    chatTemplateFile: string;
+    chatTemplateFile: string; mmprojFile: string;
     // Sampler defaults. "" => omit the flag (llama's default, or the arch
     // baseline for top-k/min-p); a number pins it, INCLUDING 0 — which is why
     // these round-trip through null rather than the 0-means-inherit convention
@@ -180,7 +180,7 @@
       swaFull: false, checkpointMinStep: "", contextShift: "", specDraftNMin: "",
       slotPromptSimilarity: "", ropeScaling: "", ropeScale: "", ropeFreqBase: "",
       yarnOrigCtx: "", splitMode: "", tensorSplit: "", mainGpu: "", overrideTensor: "",
-      chatTemplateFile: "",
+      chatTemplateFile: "", mmprojFile: "",
       temp: "", topK: "", topP: "", minP: "", presencePenalty: "",
     };
   }
@@ -197,7 +197,7 @@
       ropeScaling: o?.ropeScaling ?? "", ropeScale: o?.ropeScale || "", ropeFreqBase: o?.ropeFreqBase || "",
       yarnOrigCtx: o?.yarnOrigCtx || "", splitMode: o?.splitMode ?? "", tensorSplit: o?.tensorSplit ?? "",
       mainGpu: o?.mainGpu || "", overrideTensor: o?.overrideTensor ?? "",
-      chatTemplateFile: o?.chatTemplateFile ?? "",
+      chatTemplateFile: o?.chatTemplateFile ?? "", mmprojFile: o?.mmprojFile ?? "",
       // `?? ""`, never `|| ""`: a saved 0 (greedy temp, min-p off) is a pin, and
       // `||` would silently read it back as "inherit".
       temp: o?.temp ?? "", topK: o?.topK ?? "", topP: o?.topP ?? "",
@@ -221,17 +221,19 @@
       ropeScaling: adv.ropeScaling, ropeScale: n(adv.ropeScale), ropeFreqBase: n(adv.ropeFreqBase),
       yarnOrigCtx: n(adv.yarnOrigCtx), splitMode: adv.splitMode, tensorSplit: adv.tensorSplit,
       mainGpu: n(adv.mainGpu), overrideTensor: adv.overrideTensor,
-      chatTemplateFile: adv.chatTemplateFile.trim(),
+      chatTemplateFile: adv.chatTemplateFile.trim(), mmprojFile: adv.mmprojFile.trim(),
       temp: nn(adv.temp), topK: nn(adv.topK), topP: nn(adv.topP),
       minP: nn(adv.minP), presencePenalty: nn(adv.presencePenalty),
     };
   }
-  // Native open-file dialog for the chat-template path (the dialog opens on the
-  // server host — the operator's own machine for a local install). Returns null
-  // on cancel or on a platform with no picker, leaving the text field alone.
-  async function browseChatTemplate(apply: (path: string) => void): Promise<void> {
+  // Native open-file dialog for a path field (the dialog opens on the server
+  // host — the operator's own machine for a local install). The kind is a
+  // server-side whitelist key (pickfile_spec.go), never a filter built here.
+  // Returns null on cancel or on a platform with no picker, leaving the field
+  // alone.
+  async function browseFile(kind: string, apply: (path: string) => void): Promise<void> {
     try {
-      const picked = await pickFileOfKind("template");
+      const picked = await pickFileOfKind(kind);
       if (picked) apply(picked);
     } catch {
       // picker failed — the field stays typable, no need to nag
@@ -635,6 +637,7 @@
       mainGpu: v.mainGpu || base.mainGpu || 0,
       overrideTensor: inheritStr(v.overrideTensor, base.overrideTensor),
       chatTemplateFile: inheritStr(v.chatTemplateFile, base.chatTemplateFile),
+      mmprojFile: inheritStr(v.mmprojFile, base.mmprojFile),
       ctxCheckpoints: v.ctxCheckpoints ?? null,
       // variant-local: never inherited from the base.
       unlisted: v.unlisted ?? false,
@@ -697,11 +700,19 @@
   // Tooltip on the reserved "vision" variant's name field. When the projector
   // was borrowed from a family member it names the file, so nobody hunts this
   // model's own folder for an mmproj that isn't there.
+  // The projector this model's twin actually loads, in three distinguishable
+  // states: pinned by hand (mmprojFile beats everything), borrowed from a family
+  // sibling, or simply sitting in the model's own folder. Only the first two are
+  // worth saying out loud - a dir-local projector is what everyone expects.
+  const mmprojPinned = $derived(adv.mmprojFile.trim());
+  const mmprojResolved = $derived(mmprojPinned || config?.mmprojPath || "");
   const visionNameTip = $derived(
     "Reserved: the auto-generated vision twin that loads the mmproj image projector. Tune its ctx/VRAM/visibility here; uncheck Unlisted to surface it in the model picker." +
-      (config?.mmprojInherited && config.mmprojPath
-        ? ` Projector: ${config.mmprojPath} (borrowed from a family member).`
-        : ""),
+      (mmprojPinned
+        ? ` Projector: ${mmprojPinned} (pinned by hand, discovery ignored).`
+        : config?.mmprojInherited && config.mmprojPath
+          ? ` Projector: ${config.mmprojPath} (borrowed from a family member).`
+          : ""),
   );
 
   // llama.cpp's kv_cache_types, minus iq4_nl (no flash-attention KV kernel).
@@ -934,7 +945,7 @@
       reasoningFmt: "", unlisted: false, ctxCheckpoints: null, dry: null, preserveThinking: null,
       slotCache: null,
       kvInRam: false, cpuOffload: 0, flashAttn: "", mmap: "", mlock: false,
-      threads: 0, parallel: 0, extraArgs: "", chatTemplateFile: "",
+      threads: 0, parallel: 0, extraArgs: "", chatTemplateFile: "", mmprojFile: "",
       dryMultiplier: 0, dryBase: 0, dryAllowedLength: 0,
       temp: null, topK: null, topP: null, minP: null, presencePenalty: null,
       specDraftNMax: 0, specDefault: false, specNgramSizeN: 0, specNgramSizeM: 0, specNgramMinHits: 0,
@@ -965,7 +976,7 @@
       !v.vramTargetGB && !v.kvK && !v.kvV && !v.spec && !v.ub &&
       !v.reasoningFmt && !v.unlisted &&
       v.ctxCheckpoints == null && v.dry == null && v.preserveThinking == null && v.slotCache == null && !v.kvInRam && !v.cpuOffload &&
-      !v.flashAttn && !v.mmap && !v.mlock && !v.threads && !v.parallel && !v.extraArgs && !v.chatTemplateFile &&
+      !v.flashAttn && !v.mmap && !v.mlock && !v.threads && !v.parallel && !v.extraArgs && !v.chatTemplateFile && !v.mmprojFile &&
       !v.dryMultiplier && !v.dryBase && !v.dryAllowedLength &&
       v.temp == null && v.topK == null && v.topP == null && v.minP == null && v.presencePenalty == null &&
       !v.specDraftNMax && !v.specDefault && !v.specNgramSizeN && !v.specNgramSizeM && !v.specNgramMinHits
@@ -1587,22 +1598,29 @@
            Without it the draft-mtp / draft-dflash chips — and the vision twin —
            claim a capability the folder visibly has no file for, which reads as
            a bug. Same wording for both so the badge means one thing. -->
-      {#snippet borrowedBadge(text: string)}
+      {#snippet borrowedBadge(text: string, label: string)}
         <span
           class="rounded border border-card-border px-1.5 py-px text-[10px] uppercase tracking-wide text-txtsecondary cursor-help"
-          use:tip={text}>borrowed</span>
+          use:tip={text}>{label}</span>
       {/snippet}
       {#snippet borrowedDraft()}
         {#if config?.draftInherited}
           {@render borrowedBadge(
             `This model's folder ships no draft model. draft-* loads ${config.draftPath ?? "a sibling's drafter"}, borrowed from another quant or a finetune with the same architecture, layer count, embedding width and vocabulary. Put a drafter next to this model to use that one instead.`,
+            "borrowed",
           )}
         {/if}
       {/snippet}
       {#snippet borrowedMmproj()}
-        {#if config?.mmprojInherited}
+        {#if mmprojPinned}
+          {@render borrowedBadge(
+            `Projector file set by hand: the vision twin loads ${mmprojPinned}. Discovery and family inheritance are ignored while this is set - clear the Projector file field to go back to them.`,
+            "pinned",
+          )}
+        {:else if config?.mmprojInherited}
           {@render borrowedBadge(
             `This model's folder ships no image projector. The vision twin loads ${config.mmprojPath ?? "a sibling's projector"}, borrowed from another quant or a finetune with the same architecture, layer count, embedding width and vocabulary. Put an mmproj next to this model to use that one instead.`,
+            "borrowed",
           )}
         {/if}
       {/snippet}
@@ -2252,7 +2270,7 @@
             {@render specRow(spec, (v) => (spec = v))}
           </div>
 
-          {#if config?.mmprojPath}
+          {#if mmprojResolved}
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-txtsecondary flex items-center gap-1">
                 Image projector
@@ -2262,6 +2280,22 @@
               <Select bind:value={mmprojMode} options={MMPROJ_SEL} ariaLabel="Image projector placement" />
             </label>
           {/if}
+
+          <label class="flex flex-col gap-1 text-sm col-span-2">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Projector file
+              {@render hint("--mmproj. The vision projector gguf this model's twin loads. Empty = whatever sits in the model's own folder, or is borrowed from a family member. Set it when one shared projector lives in a folder of its own, pointed at by several models: an explicit path also CREATES the vision twin for a model that pairs with nothing. Discovery is deliberately not widened - a projector belongs to one vision tower, and an unrelated one loads clean and then hallucinates on every image - so the path is checked to be a clip gguf when you save.")}
+              {@render borrowedMmproj()}
+            </span>
+            <div class="flex items-center gap-2">
+              <input type="text" bind:value={adv.mmprojFile} class="cfg-input flex-1 font-mono" placeholder={config?.mmprojPath || "D:/LLM/Models/mmproj/qwen3vl-mmproj-f16.gguf"} spellcheck="false" />
+              <button
+                type="button" use:tip={"Browse for a projector .gguf"} aria-label="Browse for a vision projector file"
+                class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
+                onclick={() => browseFile("mmproj", (p) => (adv.mmprojFile = p))}
+              ><FolderOpen size={14} /></button>
+            </div>
+          </label>
 
           {#if effSpecs.includes("draft-mtp") || effSpecs.includes("draft-dflash")}
             <label class="flex flex-col gap-1 text-sm">
@@ -2541,7 +2575,7 @@
               <button
                 type="button" use:tip={"Browse for a .jinja template"} aria-label="Browse for a chat template file"
                 class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
-                onclick={() => browseChatTemplate((p) => (adv.chatTemplateFile = p))}
+                onclick={() => browseFile("template", (p) => (adv.chatTemplateFile = p))}
               ><FolderOpen size={14} /></button>
             </label>
             <label class="flex items-center gap-2">
@@ -2662,6 +2696,27 @@
                   {@render hint("Where this twin's CLIP projector lives. Inherit uses the Default tab's pick (auto = on the GPU while it costs neither GPU layers nor a quarter of the context window). On GPU pins it there - fastest image encode, paid for in context/offload on every request. In RAM (--no-mmproj-offload) frees that VRAM and encodes on the CPU: seconds per image, token speed untouched. None emits no vision twin at all.")}
                 </span>
                 <Select bind:value={sv.mmproj} options={MMPROJ_SEL_INHERIT} ariaLabel="Image projector placement" />
+              </label>
+              <label class="flex flex-col gap-1 text-sm col-span-2">
+                <span class="text-txtsecondary flex items-center gap-1">
+                  Projector file
+                  {@render hint("--mmproj. The projector gguf this twin loads. Empty inherits the Default tab's path; none forces it back to discovery (the projector next to the model, or a family member's).")}
+                </span>
+                <div class="flex items-center gap-2">
+                  <input type="text" value={sv.mmprojFile ?? ""} oninput={(e) => (sv.mmprojFile = (e.currentTarget as HTMLInputElement).value)} class="cfg-input flex-1 font-mono" placeholder="inherit / none" spellcheck="false" />
+                  <button
+                    type="button" use:tip={"Browse for a projector .gguf"} aria-label="Browse for a vision projector file"
+                    class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
+                    onclick={() => browseFile("mmproj", (p) => (sv.mmprojFile = p))}
+                  ><FolderOpen size={14} /></button>
+                  <button
+                    type="button"
+                    use:tip={"No pinned projector: this twin goes back to discovery, ignoring the model-wide path"}
+                    aria-pressed={isNone(sv.mmprojFile)}
+                    class="shrink-0 px-1.5 py-1 rounded border text-xs transition-colors {isNone(sv.mmprojFile) ? 'border-primary text-primary' : 'border-transparent text-txtsecondary hover:text-primary hover:border-primary'}"
+                    onclick={() => (sv.mmprojFile = isNone(sv.mmprojFile) ? "" : NONE_SENTINEL)}
+                  >None</button>
+                </div>
               </label>
             {/if}
             <label class="flex flex-col gap-1 text-sm">
@@ -2934,7 +2989,7 @@
                 <button
                   type="button" use:tip={"Browse for a .jinja template"} aria-label="Browse for a chat template file"
                   class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
-                  onclick={() => browseChatTemplate((p) => (sv.chatTemplateFile = p))}
+                  onclick={() => browseFile("template", (p) => (sv.chatTemplateFile = p))}
                 ><FolderOpen size={14} /></button>
                 <button
                   type="button"

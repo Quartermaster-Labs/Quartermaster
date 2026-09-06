@@ -45,6 +45,9 @@ type variantDTO struct {
 	Parallel         int    `json:"parallel"`
 	ExtraArgs        string `json:"extraArgs"`
 	ChatTemplateFile string `json:"chatTemplateFile"`
+	// MmprojFile pins the projector path; empty inherits the model-wide value,
+	// autogen.NoneSentinel falls back to discovery. See autogen.Override.
+	MmprojFile string `json:"mmprojFile"`
 	// Mmproj is meaningful only on the reserved "vision" variant; see
 	// autogen.VariantSpec.Mmproj.
 	Mmproj string `json:"mmproj"`
@@ -139,6 +142,7 @@ type overrideDTO struct {
 	Ub               int    `json:"ub"`
 	ExtraArgs        string `json:"extraArgs"`
 	ChatTemplateFile string `json:"chatTemplateFile"`
+	MmprojFile       string `json:"mmprojFile"`
 	Unlisted         bool   `json:"unlisted"`
 	Skip             bool   `json:"skip"`
 	SlotCache        *bool  `json:"slotCache"` // opt this model into on-disk slot KV persistence; nil/absent => OFF (opt-in)
@@ -268,7 +272,7 @@ func variantToDTO(v autogen.VariantSpec) variantDTO {
 		KvInRam: v.KvInRam, CpuOffload: v.CpuOffload,
 		FlashAttn: v.FlashAttn, Mmap: v.Mmap, Mlock: v.Mlock,
 		Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
-		ChatTemplateFile: v.ChatTemplateFile, Mmproj: v.Mmproj,
+		ChatTemplateFile: v.ChatTemplateFile, MmprojFile: v.MmprojFile, Mmproj: v.Mmproj,
 		DryMultiplier: v.DryMultiplier, DryBase: v.DryBase, DryAllowedLength: v.DryAllowedLength,
 		Temp: v.Temp, TopK: v.TopK, TopP: v.TopP, MinP: v.MinP, PresencePenalty: v.PresencePenalty,
 		SpecDraftNMax: v.SpecDraftNMax, SpecDefault: v.SpecDefault,
@@ -298,6 +302,7 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		Threads: o.Threads, Parallel: o.Parallel, Ub: o.Ub,
 		ExtraArgs:        o.ExtraArgs,
 		ChatTemplateFile: o.ChatTemplateFile,
+		MmprojFile:       o.MmprojFile,
 		Unlisted:         o.Unlisted, Skip: o.Skip, SlotCache: o.SlotCache,
 		SlotCachePreamble: o.SlotCachePreamble,
 		CtxVariants:       o.CtxVariants, CtxCheckpoints: o.CtxCheckpoints,
@@ -334,7 +339,7 @@ func toVariantSpec(v variantDTO) autogen.VariantSpec {
 		KvInRam: v.KvInRam, CpuOffload: v.CpuOffload,
 		FlashAttn: v.FlashAttn, Mmap: v.Mmap, Mlock: v.Mlock,
 		Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
-		ChatTemplateFile: v.ChatTemplateFile, Mmproj: v.Mmproj,
+		ChatTemplateFile: v.ChatTemplateFile, MmprojFile: v.MmprojFile, Mmproj: v.Mmproj,
 		DryMultiplier: v.DryMultiplier, DryBase: v.DryBase, DryAllowedLength: v.DryAllowedLength,
 		Temp: v.Temp, TopK: v.TopK, TopP: v.TopP, MinP: v.MinP, PresencePenalty: v.PresencePenalty,
 		SpecDraftNMax: v.SpecDraftNMax, SpecDefault: v.SpecDefault,
@@ -379,6 +384,7 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.Ub = body.Ub
 	ov.ExtraArgs = strings.TrimSpace(body.ExtraArgs)
 	ov.ChatTemplateFile = strings.TrimSpace(body.ChatTemplateFile)
+	ov.MmprojFile = strings.TrimSpace(body.MmprojFile)
 	ov.Unlisted = body.Unlisted
 	ov.Skip = body.Skip
 	ov.SlotCache = body.SlotCache
@@ -518,6 +524,9 @@ func applyVariantPatch(ov *autogen.Override, p variantDTO) {
 	}
 	if strings.TrimSpace(p.ChatTemplateFile) != "" {
 		ov.ChatTemplateFile = strings.TrimSpace(p.ChatTemplateFile)
+	}
+	if strings.TrimSpace(p.MmprojFile) != "" {
+		ov.MmprojFile = strings.TrimSpace(p.MmprojFile)
 	}
 	if p.DryMultiplier != 0 {
 		ov.DryMultiplier = p.DryMultiplier

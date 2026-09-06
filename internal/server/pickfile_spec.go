@@ -25,4 +25,9 @@ var pickSpecs = map[string]filePickSpec{
 		WinFilter:      "Chat templates (*.jinja;*.j2;*.jinja2)|*.jinja;*.j2;*.jinja2|All files (*.*)|*.*",
 		ZenityPatterns: []string{"Chat templates | *.jinja *.j2 *.jinja2", "All files | *"},
 	},
+	"mmproj": {
+		Title:          "Select vision projector (mmproj gguf)",
+		WinFilter:      "GGUF models (*.gguf)|*.gguf|All files (*.*)|*.*",
+		ZenityPatterns: []string{"GGUF models | *.gguf", "All files | *"},
+	},
 }

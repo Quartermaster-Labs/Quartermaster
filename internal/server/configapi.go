@@ -38,6 +38,40 @@ func chatTemplateErr(p string) string {
 	return ""
 }
 
+// mmprojFileErr validates an explicit --mmproj path at SAVE time. Same two
+// checks as chatTemplateErr (missing, directory) plus one that has no
+// chat-template equivalent: the file must be a CLIP projector.
+//
+// That last check is the safety net standing in for the auto-pairing this field
+// deliberately does not widen. A wrong projector is not a load failure the user
+// gets to see: llama-server starts clean, the twin serves, and every image
+// answer is confabulated. Pointing the field at a normal model gguf is the easy
+// way to land there, and the gguf header says plainly which is which - the same
+// rule MmprojSidecarForDir pairs by, never a filename guess.
+func mmprojFileErr(p string) string {
+	p = strings.TrimSpace(p)
+	// "" falls back to discovery; autogen.NoneSentinel is a variant saying
+	// "explicitly not the model-wide path". Neither names a file to stat.
+	if p == "" || strings.EqualFold(p, autogen.NoneSentinel) {
+		return ""
+	}
+	st, err := os.Stat(p)
+	if err != nil {
+		return "mmproj projector file not found: " + p
+	}
+	if st.IsDir() {
+		return "mmproj path is a directory, not a file: " + p
+	}
+	meta, err := autogen.ReadGgufMetadataCached(p)
+	if err != nil {
+		return "mmproj file is not a readable gguf: " + p
+	}
+	if meta.Architecture != "clip" {
+		return "not a vision projector: " + p + " has gguf architecture " + meta.Architecture + ", want clip"
+	}
+	return ""
+}
+
 // AutogenAdmin carries everything the per-model config endpoints need to edit
 // the UI-owned override sidecar, regenerate the config, and hot-reload. It is
 // set by main only when the server was started with -generate; otherwise the
@@ -286,6 +320,10 @@ func (s *Server) handleAPIModelOverridePut(w http.ResponseWriter, r *http.Reques
 		shared.SendResponse(w, r, http.StatusBadRequest, msg)
 		return
 	}
+	if msg := mmprojFileErr(body.MmprojFile); msg != "" {
+		shared.SendResponse(w, r, http.StatusBadRequest, msg)
+		return
+	}
 	// Base the sidecar row on the hand-authored FILE override so its file-only
 	// fields (ctxVariants, quant) survive — the sidecar row shadows the file row
 	// wholesale, so anything the editor doesn't carry would otherwise be lost. The
@@ -453,6 +491,10 @@ func (s *Server) handleAPIModelVariantPost(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if msg := chatTemplateErr(v.ChatTemplateFile); msg != "" {
+		shared.SendResponse(w, r, http.StatusBadRequest, msg)
+		return
+	}
+	if msg := mmprojFileErr(v.MmprojFile); msg != "" {
 		shared.SendResponse(w, r, http.StatusBadRequest, msg)
 		return
 	}

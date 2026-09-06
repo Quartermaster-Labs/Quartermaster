@@ -87,7 +87,8 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   flag, so all three price the same launch. `Override.Mmproj` pins the decision per model —
   `gpu` / `ram` skip the dual sizing, `none` emits no twin at all (unlike an unlisted twin,
   which still builds). Surfaced as the "Image projector" dropdown on the model config modal's
-  Default tab, shown only when the model has a projector. `VariantSpec.Mmproj` repeats the knob
+  Default tab, shown only when the model resolves to a projector at all (discovered, or named
+  by `mmprojFile` below). `VariantSpec.Mmproj` repeats the knob
   on the reserved `vision` variant and OUTRANKS the model-wide pin there (blank = inherit); it
   is deliberately absent from every other variant tab, because no other variant's profile loads
   a projector at all. Careful: an image-class model routes through `emitImageModel` before the
@@ -180,6 +181,20 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   a donation** — the donor's model and the recipient must also agree on arch, embedding length,
   block count and vocab size (`sidecarCompatible`). That gate is not cosmetic: a drafter whose
   vocab differs doesn't degrade, it aborts the launch (`tensor 'output.weight' has wrong shape`).
+- **`Override.MmprojFile` names a projector outright, and CREATES the twin.** Discovery only
+  ever sees a projector in the model's own folder or in a family sibling's, so one shared
+  mmproj kept in a folder of its own is invisible: no twin, no explanation, and hand-typing
+  `--mmproj` into the launch box is swallowed by `IGNORE_VALUE` (`modelCmdForm.ts`) on purpose.
+  `mmprojFile` (model-wide, or on the reserved `vision` variant with the usual sentinel) is
+  resolved by `mmprojFor` (`family.go`) and beats discovery entirely; `mmproj: none` still
+  wins over it, since placement is checked past the twin gate. The path is `os.Stat`'d there
+  rather than read off `GgufRow.MmprojSizeGB` — that size describes DISCOVERY's file, and
+  pricing an override's projector at another file's size is how a twin ends up sized against
+  VRAM it will not have. **Automatic pairing is deliberately NOT widened to match**: a
+  projector is bound to one vision tower, so an auto-paired unrelated one would load clean and
+  then hallucinate on every image. `mmprojFileErr` (`configapi.go`) is the safety net that
+  replaces it — save rejects a path that is missing, a directory, or whose gguf header is not
+  `architecture == "clip"`, the same rule `MmprojSidecarForDir` pairs by.
   Consequences to keep in mind: a model that never had a `-vision` twin can grow one, `-md`
   appears where no drafter is visible in the folder, and anything summing `DraftSizeGB` across
   rows must dedupe on `DraftPath` (one file, many rows — `internal/setup/probe.go`). Per-model
