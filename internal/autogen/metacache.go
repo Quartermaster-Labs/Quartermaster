@@ -28,6 +28,11 @@ type cachedMeta struct {
 // stale fingerprint it falls back to a full header read via ReadGgufMetadata and
 // caches the result. Safe for concurrent use. When the path can't be stat'd it
 // degrades to an uncached read (ReadGgufMetadata reports the real error).
+//
+// For a split set the fingerprint is shard 1's alone, so replacing only a later
+// shard does not invalidate the entry even though FileSizeGB sums the whole set
+// (ggufSetSizeBytes). Re-quantizing a model rewrites shard 1 too, so the case
+// that matters in practice still invalidates.
 func ReadGgufMetadataCached(path string) (Metadata, error) {
 	key := filepath.ToSlash(path)
 	fi, statErr := os.Stat(path)

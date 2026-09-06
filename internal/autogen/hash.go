@@ -170,7 +170,13 @@ const hashCacheSuffix = ".modelhash"
 //	     was appended AFTER the computed copy (and grew by one per trip). Any
 //	     config carrying one now emits a single -cms, and the hoisted value acts
 //	     as the pin it was meant to be.
-const genVersion = "v61"
+//	v62: a split gguf is charged the whole set's bytes, not shard 1's. Discovery
+//	     represents a set by its first shard (correct: llama-server opens the
+//	     siblings itself), but stat'ing that one file sized an 80B MoE at a
+//	     quarter of itself, so the plan offloaded it whole and spent the phantom
+//	     slack on context. Every split model's -ngl/--n-cpu-moe/-c changes for
+//	     inputs that did not.
+const genVersion = "v62"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the
