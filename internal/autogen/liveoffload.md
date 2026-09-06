@@ -1,7 +1,7 @@
 # autogen — spawn-time placement guard (`liveoffload.go`)
 
-Re-derives `-ngl` / `--n-cpu-moe` from free VRAM *right now*, so a stale baked plan
-can't OOM. Generate-time math lives in [`sizing.md`](sizing.md).
+Re-derives `-ngl` / `--n-cpu-moe` (and, when that would cost a layer, `-c`) from free VRAM
+*right now*, so a stale baked plan can't OOM. Generate-time math lives in [`sizing.md`](sizing.md).
 
 ## It is a spawn-time guard, NOT a regen
 
@@ -12,6 +12,7 @@ emitted argv (`-m`/`-c`/`-ctk`/`-ctv`/`--spec-type`/`--ctx-checkpoints`/`-cms`/`
 
 - **It only ever offloads MORE** than the baked plan (raises `--n-cpu-moe` / lowers `-ngl`).
   Ample VRAM or a hand-pinned `cpuOffload` is left untouched.
+- Before it spills anything, it tries to pay in **context** instead - see below.
 - If `EstVramGB > freeGB` even at the planner's max offload it returns an error and the
   spawn is **refused** — a clean load failure, not an OOM crash.
 - **Fails open**: non-`.gguf` cmd, no `-ngl`, unreadable gguf, or no GPU telemetry all pass
@@ -31,6 +32,30 @@ after the load, with Discord/Steam/explorer/a VR runtime adding ~1.2 GB more. A 
 same config "fit reliably" one day and stuttered the next. Capping at the target makes that
 setting bind on the load path too (it used to apply only at generate time), which is what
 makes the split deterministic day to day.
+
+## Context is trimmed before a layer is spilled
+
+When the live budget lands a little under what the baked plan assumed, the sizer's own answer
+is a *placement* change: a dense model drops one layer, which sends that layer's weights **and
+its KV** to RAM to be crossed on every token, just to reclaim a few tenths of a GB. That is a
+bad trade against giving up a few thousand tokens of window: it is the `64/65 layers` case.
+
+So when the live plan is worse than the baked one, `trimCtxForPlacement` first walks `-c` down
+in whole 4096-token blocks per slot, looking for the largest window that keeps the **baked**
+placement under the live budget. If it finds one, only `-c` is rewritten (`rewriteCtx`) and the
+placement rewrite never happens; if it doesn't, the guard falls through to the old behaviour
+and spills as before.
+
+- The step is `4096 x --parallel` because `-c` is TOTAL context (`--kv-unified` shares one KV
+  pool across slots): a step that isn't a whole slot-block leaves each slot on a non-multiple of
+  the block the sizer rounds to.
+- `ctxTrimFloorFrac` (0.6) bounds the trim. Below ~60% of the configured window the *window* is
+  the thing the user notices, and spilling a layer becomes the better trade again.
+- The trim runs **before** the `minGpuFraction` refusal, so trimming can also rescue a load that
+  would otherwise be refused outright.
+- Only the argv is rewritten. The config keeps its full window, so the next spawn gets it back
+  when the desktop hands the VRAM back: the launched context now varies per spawn the same way
+  `-ngl` already did.
 
 ## Drafters and vision twins are charged
 
