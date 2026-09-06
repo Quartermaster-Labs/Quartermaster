@@ -143,3 +143,84 @@ func TestLiveOffload_BudgetCap(t *testing.T) {
 		t.Fatalf("unset target: got %v want 12.0", got)
 	}
 }
+
+// The whole point of the ctx trim: when the live budget lands a hair under what
+// the baked plan assumed, the sizer's answer is to spill a layer (a dense
+// model's weights AND its KV to RAM, crossed every token) to buy back a few
+// tenths of a GB. Giving up a block of context buys the same VRAM and costs
+// only window, so trimCtxForPlacement has to find a smaller ctx that keeps the
+// baked placement rather than letting the placement rewrite happen.
+func TestLiveOffload_TrimCtxKeepsBakedPlacement(t *testing.T) {
+	meta := Metadata{
+		Architecture: "llama", BlockCount: 32,
+		HeadCountKv: 8, KeyLength: 128, ValueLength: 128,
+		ContextLength: 131072, EmbeddingLength: 4096,
+		FileSizeGB: 12,
+	}
+	s := Settings{
+		TargetVramGB: 24, VramOverheadGB: 0.5, MaxRamGB: 64,
+		DenseCtxLadder: []int{131072, 65536, 32768}, DenseMinCtx: 4096,
+	}
+	in := EstimateInput{Ctx: 32768, KvK: "q8_0", KvV: "q8_0", TargetVramGB: 24}
+
+	baked, err := EstimatePlan(s, meta, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if baked.Ngl < int(meta.BlockCount) {
+		t.Fatalf("setup: expected a whole-model fit at 24GB, got ngl=%d", baked.Ngl)
+	}
+
+	// Walk the budget down until the sizer first gives up a layer. That is the
+	// "64/65" the user reported, reproduced without guessing a magic number.
+	var short EstimateResult
+	tight := in
+	for b := 23.9; b > 12; b -= 0.1 {
+		tight.TargetVramGB = b
+		short, err = EstimatePlan(s, meta, tight)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if short.Ngl < baked.Ngl {
+			break
+		}
+	}
+	if short.Ngl >= baked.Ngl {
+		t.Fatalf("setup: never lost a layer down to 12GB (ngl=%d)", short.Ngl)
+	}
+
+	ctx, trimmed, ok := trimCtxForPlacement(s, meta, tight, 1, baked.Ngl, baked.NCpuMoe)
+	if !ok {
+		t.Fatalf("no trim found at %.1fGB (ngl would drop %d->%d)", tight.TargetVramGB, baked.Ngl, short.Ngl)
+	}
+	if ctx >= in.Ctx || ctx%4096 != 0 {
+		t.Fatalf("trimmed ctx = %d, want a smaller multiple of 4096", ctx)
+	}
+	if ctx < int(float64(in.Ctx)*ctxTrimFloorFrac) {
+		t.Fatalf("trimmed ctx %d is below the %.0f%% floor", ctx, ctxTrimFloorFrac*100)
+	}
+	if trimmed.Ngl < baked.Ngl || trimmed.NCpuMoe > baked.NCpuMoe {
+		t.Fatalf("trim did not restore the baked placement: ngl=%d ncpumoe=%d", trimmed.Ngl, trimmed.NCpuMoe)
+	}
+}
+
+// The step is per-slot: with --parallel 4 the total -c has to move in 4x4096
+// blocks, or each slot ends up holding a non-multiple of the sizer's block.
+func TestLiveOffload_TrimStepsWholeSlots(t *testing.T) {
+	if got := argSlots([]string{"-m", "x.gguf", "-np", "4"}); got != 4 {
+		t.Fatalf("slots = %d want 4", got)
+	}
+	if got := argSlots([]string{"-m", "x.gguf"}); got != 1 {
+		t.Fatalf("slots default = %d want 1", got)
+	}
+
+	args := []string{"-m", "x.gguf", "-c", "32768", "-ngl", "99"}
+	_, idx := argVal(args, "-c", "--ctx-size")
+	out := rewriteCtx(args, idx, 24576)
+	if !reflect.DeepEqual(out, []string{"-m", "x.gguf", "-c", "24576", "-ngl", "99"}) {
+		t.Fatalf("rewriteCtx: %v", out)
+	}
+	if args[3] != "32768" {
+		t.Fatalf("rewriteCtx mutated its input: %v", args)
+	}
+}
