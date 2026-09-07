@@ -44,3 +44,7 @@ ui-svelte/.shots/
 # Vendored title model: fetched on first use / by the installer, not tracked.
 # See internal/server/assets/README.md and titlegen_asset.go.
 internal/server/assets/*.gguf
+
+# Stray go build output at the repo root (the real binaries go to build/).
+/quartermaster.exe
+/quartermaster
