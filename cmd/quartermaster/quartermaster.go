@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quartermaster-labs/quartermaster/internal/apppaths"
 	"github.com/quartermaster-labs/quartermaster/internal/autogen"
 	"github.com/quartermaster-labs/quartermaster/internal/backends"
 	"github.com/quartermaster-labs/quartermaster/internal/config"
@@ -176,10 +177,8 @@ func main() {
 	// argument.
 	var userConfigDir string
 	if bundleDir == "" {
-		root, err := userConfigRoot()
-		if err != nil {
-			slog.Warn("no per-user config directory available; pass -config", "error", err)
-		} else if dir, err := applyUserConfigDefaults(flag.CommandLine, argvGiven, root, !*flagQuit); err != nil {
+		root := apppaths.ConfigDir()
+		if dir, err := applyUserConfigDefaults(flag.CommandLine, argvGiven, root, !*flagQuit); err != nil {
 			slog.Warn("could not prepare the per-user config directory; pass -config", "dir", root, "error", err)
 		} else {
 			userConfigDir = dir

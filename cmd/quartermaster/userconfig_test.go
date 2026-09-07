@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/quartermaster-labs/quartermaster/internal/apppaths"
 	"github.com/quartermaster-labs/quartermaster/internal/autogen"
 )
 
@@ -93,10 +94,7 @@ func TestSeedGenerateFile_KeepsExisting(t *testing.T) {
 }
 
 func TestUserConfigRoot(t *testing.T) {
-	root, err := userConfigRoot()
-	if err != nil {
-		t.Skipf("no user config dir on this machine: %v", err)
-	}
+	root := apppaths.ConfigDir()
 	if !strings.HasSuffix(root, string(os.PathSeparator)+"quartermaster") {
 		t.Errorf("root = %q, want it to end in a quartermaster directory", root)
 	}

@@ -4,6 +4,8 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+
+	"github.com/quartermaster-labs/quartermaster/internal/apppaths"
 )
 
 // Packaged-install launch defaults.
@@ -28,35 +30,14 @@ const (
 	bundleMarker = "quartermaster-generate.yaml"
 )
 
-// bundleRoot reports the packaged install directory, and whether this process
-// is running inside one.
-//
-// The marker is config/quartermaster-generate.yaml: it is what the installer
-// seeds and the setup wizard edits, so its presence next to the exe means "this
-// is an install, not a `go build` output or a binary on someone's PATH". A dev
-// build keeps the old behaviour — no flags, no server, "-config is required".
-func bundleRoot() (string, bool) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", false
-	}
-	return bundleRootOf(exe)
-}
+// bundleRoot and bundleRootOf report the packaged install directory, and whether
+// this process is running inside one. Both are thin aliases: the detection moved
+// to internal/apppaths when the runtime paths below the exe did, because the
+// same "is this an install" answer decides where backends and the cache go, and
+// those are resolved deep in packages that cannot import main.
+func bundleRoot() (string, bool) { return apppaths.BundleRoot() }
 
-// bundleRootOf is bundleRoot with the executable path passed in, so a test can
-// point it at a layout on disk instead of at the test binary.
-func bundleRootOf(exe string) (string, bool) {
-	// EvalSymlinks so a symlinked exe resolves to the real install, not to the
-	// link's directory (packagers and $HOME/bin links both do this).
-	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = resolved
-	}
-	root := filepath.Dir(exe)
-	if _, err := os.Stat(filepath.Join(root, "config", bundleMarker)); err != nil {
-		return "", false
-	}
-	return root, true
-}
+func bundleRootOf(exe string) (string, bool) { return apppaths.BundleRootOf(exe) }
 
 // applyBundleDefaults fills in the flags a double-click cannot pass.
 //

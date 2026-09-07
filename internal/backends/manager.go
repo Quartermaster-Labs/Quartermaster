@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/quartermaster-labs/quartermaster/internal/apppaths"
 )
 
 // Job phases, in order. A job ends in "done" or "error".
@@ -105,24 +107,25 @@ func NewManager(root string, log func(string)) *Manager {
 	}
 }
 
-// defaultRoot is the directory holding the running executable - the same
-// bundle-relative layout the Windows installer and every other runtime path in
-// this project use.
+// defaultRoot is the install directory for a packaged quartermaster - the same
+// bundle-relative layout the Windows installer uses - and the per-user data
+// directory for anything else (see internal/apppaths).
 //
-// QM_BACKENDS_DIR overrides it, which is what makes the container image work:
-// there the executable lives on a read-only image layer, so installs would land
-// somewhere that vanishes on the next `docker run`. Pointing this at a mounted
-// volume is the whole fix, and it costs no flag plumbing because every caller
-// that wants the default passes "".
+// The split matters most here: backends are the biggest thing this program
+// writes, and a binary on $PATH cannot write beside itself. Resolving to the
+// exe's directory turned "install llama.cpp from the Backends tab" into a
+// permission error on every Linux install that was not the wizard's.
+//
+// QM_BACKENDS_DIR still overrides both, which is what makes the container image
+// work: there the executable lives on a read-only image layer, so installs would
+// land somewhere that vanishes on the next `docker run`. Pointing this at a
+// mounted volume is the whole fix, and it costs no flag plumbing because every
+// caller that wants the default passes "".
 func defaultRoot() string {
 	if v := strings.TrimSpace(os.Getenv("QM_BACKENDS_DIR")); v != "" {
 		return v
 	}
-	if self, err := os.Executable(); err == nil {
-		return filepath.Dir(self)
-	}
-	wd, _ := os.Getwd()
-	return wd
+	return apppaths.DataDir()
 }
 
 // Root returns the install root (bin/ hangs off this).

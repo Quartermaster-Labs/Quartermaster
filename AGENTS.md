@@ -32,6 +32,7 @@ Logic under `internal/`. Each subsystem has its own `CLAUDE.md` — read that fo
 | GPU / VRAM monitor | [`internal/perf/CLAUDE.md`](internal/perf/CLAUDE.md) | Live VRAM (Windows D3DKMT/PDH, darwin, unix), prometheus |
 | Web UI | [`ui-svelte/CLAUDE.md`](ui-svelte/CLAUDE.md) | Svelte 5 + Vite dashboard + model playground |
 | PE imports | `internal/peimports/peimports.go` (package doc) | Walks a Windows binary's import graph to name the DLL it is missing — turns a silent `0xC0000135` exit into "needs the AMD ROCm/HIP runtime" |
+| App paths | `internal/apppaths/apppaths.go` (package doc) | The one answer to "where does state live": install-relative for a packaged install, per-user config/data/cache dirs for a bare binary |
 | Cache | [`internal/cache/CLAUDE.md`](internal/cache/CLAUDE.md) | FIFO byte cache |
 | Handler chain | [`internal/chain/CLAUDE.md`](internal/chain/CLAUDE.md) | `http.Handler` middleware composer |
 | Event bus | [`internal/event/CLAUDE.md`](internal/event/CLAUDE.md) | Generic pub/sub |

@@ -15,6 +15,8 @@ import (
 
 	"github.com/billziss-gh/golib/shlex"
 	"gopkg.in/yaml.v3"
+
+	"github.com/quartermaster-labs/quartermaster/internal/apppaths"
 )
 
 const DEFAULT_GROUP_ID = "(default)"
@@ -217,15 +219,12 @@ type SlotCacheConfig struct {
 }
 
 // DefaultSlotCachePath is the snapshot dir used when SlotCacheConfig.Path is
-// blank: a ".cache" folder next to the quartermaster binary (gitignored via
-// build/). Absolute so both llama-server (--slot-save-path) and the server's LRU
-// agree regardless of each process's working directory. Kept in sync with
-// autogen.slotKvPath.
+// blank: the install's .cache folder, or the per-user cache directory for a
+// binary that owns no directory of its own (see internal/apppaths). Absolute so
+// both llama-server (--slot-save-path) and the server's LRU agree regardless of
+// each process's working directory. Kept in sync with autogen.slotKvPath.
 func DefaultSlotCachePath() string {
-	if exe, err := os.Executable(); err == nil {
-		return filepath.Join(filepath.Dir(exe), ".cache", "slotkv")
-	}
-	return filepath.Join(os.TempDir(), "quartermaster", "slotkv")
+	return filepath.Join(apppaths.CacheDir(), "slotkv")
 }
 
 // RoutingConfig is the canonical, normalized routing/scheduling configuration.

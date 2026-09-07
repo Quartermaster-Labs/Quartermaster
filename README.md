@@ -303,8 +303,15 @@ platform's per-user config directory (`$XDG_CONFIG_HOME/quartermaster` on Linux,
 variable and falling back to `~/.config`; `~/Library/Application Support/quartermaster` on macOS;
 `%AppData%\quartermaster` on Windows), seeds a control file there on first launch, generates a
 config from it and serves the dashboard, where you point it at a models folder and install
-backends. The binary itself stays wherever you put it. Add `-models-dir /path/to/models` to skip
-the first dashboard visit.
+backends. The binary itself stays wherever you put it, and it never writes beside itself: on Linux
+downloaded backends go to `$XDG_DATA_HOME/quartermaster` (else `~/.local/share`) and the slot-KV
+snapshots to `$XDG_CACHE_HOME/quartermaster` (else `~/.cache`), so the binary can live on a
+read-only or root-owned path like `/usr/local/bin`. macOS and Windows use their own per-user
+directories. `QM_BACKENDS_DIR` still overrides the backend location, which is how the container
+image points it at a volume. Add `-models-dir /path/to/models` to skip the first dashboard visit.
+
+An install made by the setup program is unchanged: it keeps config, backends and cache inside the
+install directory, so deleting that folder is still a complete uninstall.
 
 Naming a path opts out, and it opts out of both halves: `-config mine.yaml` on its own is loaded
 as written and never regenerated, because `-generate` names the control file that `-config` is

@@ -22,28 +22,12 @@ import (
 // That used to be a bare "-config is required", which is a strange first
 // impression for a program whose whole point is that it configures itself.
 //
-// The binary stays wherever it is; only the state moves. See userConfigRoot for
-// why this is not literally XDG.
+// The binary stays wherever it is; only the state moves. The directory itself
+// comes from apppaths.ConfigDir, which explains why this is not literally XDG.
 const (
 	userConfigName   = "config.yaml"
 	userGenerateName = "quartermaster-generate.yaml"
 )
-
-// userConfigRoot reports the per-user config directory for quartermaster.
-//
-// os.UserConfigDir rather than a hand-rolled $XDG_CONFIG_HOME: on Linux it IS
-// the XDG lookup (the variable, else ~/.config), and on the other two desktop
-// platforms it gives the native answer instead -- ~/Library/Application Support
-// on macOS, %AppData% on Windows -- which is what a user of those platforms
-// actually expects. Spelling XDG out by hand would be right on one platform and
-// wrong on two.
-func userConfigRoot() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "quartermaster"), nil
-}
 
 // applyUserConfigDefaults fills in -config and -generate from the per-user
 // config directory. Returns the directory when the defaults were applied, ""
