@@ -182,7 +182,11 @@ const hashCacheSuffix = ".modelhash"
 //	     --tensor-split (plus CUDA_DEVICE_ORDER=PCI_BUS_ID, so llama.cpp's
 //	     device order matches the telemetry order the split positions mean).
 //	     Every model on a multi-GPU box changes budget and argv for inputs that
-//	     did not.
+//	     did not. The split is planned against each card's stable capacity, not
+//	     the free reading of the moment the config was generated: a card busy
+//	     for that one sample used to bake a single-device plan that spawn time
+//	     could not repair, since the live retune rewrites an existing
+//	     --tensor-split and cannot add one.
 const genVersion = "v63"
 
 // InputsHash digests everything that can change the generated config: the set of

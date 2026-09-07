@@ -486,16 +486,16 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		// Every device past the main one pays its own runtime context, and none
 		// of it splits, so it is overhead against the POOLED budget, charged
 		// before the split ratio is derived from what is left. Order matters:
-		// TensorSplit reads the FINISHED Overhead as the main device's fixed
+		// PlanTensorSplit reads the FINISHED Overhead as the main device's fixed
 		// cost, which is what makes the pooled budget reachable without any one
 		// card going over (gpuset.go), so it has to run after the compute-buffer
 		// and drafter-graph charges above.
 		profiles[i].MainGpu = -1
 		if gpus.Multi() {
 			profiles[i].Overhead += gpus.ExtraDeviceOverheadGB()
-			profiles[i].TensorSplit = gpus.TensorSplit(profiles[i].Overhead)
+			profiles[i].TensorSplit = gpus.PlanTensorSplit(profiles[i].Overhead)
 			if profiles[i].TensorSplit != nil {
-				profiles[i].MainGpu = gpus.MainIndex()
+				profiles[i].MainGpu = gpus.PlanMainIndex()
 			}
 		}
 	}

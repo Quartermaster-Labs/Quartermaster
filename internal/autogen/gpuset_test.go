@@ -118,6 +118,68 @@ func TestAutogen_TensorSplit(t *testing.T) {
 	}
 }
 
+// PlanTensorSplit is the generate-time twin: same derivation, but over each
+// card's stable capacity, and never nil for a set worth splitting. A config is
+// a long-lived artifact planned off one cold sample, and spawn time can retune
+// a baked ratio but cannot add one to an argv that has none, so a card busy for
+// that single sample must not bake a plan without a split in it. See issue #4.
+func TestAutogen_PlanTensorSplit(t *testing.T) {
+	// Non-CUDA, matching TestAutogen_TensorSplit: perDeviceFixedGB is 0.4.
+	setCudaGPU(t, false)
+
+	// Both cards idle: the plan and the live derivation agree, because the
+	// floor never raises a reading that is already above it.
+	idle := GpuSet{
+		{Index: 0, TotalGB: 12, FreeGB: 11},
+		{Index: 1, TotalGB: 16, FreeGB: 15},
+	}
+	if got := idle.PlanTensorSplit(2); len(got) != 2 || got[0] != 0.45 || got[1] != 0.55 {
+		t.Fatalf("idle PlanTensorSplit = %v, want the same [0.45 0.55] as the live split", got)
+	}
+	if got := idle.PlanMainIndex(); got != 1 {
+		t.Fatalf("idle PlanMainIndex = %d, want 1", got)
+	}
+
+	// The case the bake used to get wrong: the big card is mid-load at the one
+	// moment the generate pass samples. The live derivation writes it off (0.06
+	// of the layers) and hands the fixed costs to the small card; the plan
+	// floors it at 85% of its own VRAM, keeps it main, and gives it the larger
+	// share. Spawn time can walk that back, and could not have walked a
+	// missing split forward.
+	busy := GpuSet{
+		{Index: 0, TotalGB: 12, FreeGB: 11},
+		{Index: 1, TotalGB: 16, FreeGB: 1},
+	}
+	if got := busy.MainIndex(); got != 0 {
+		t.Fatalf("live MainIndex = %d, want the idle small card", got)
+	}
+	if got := busy.PlanMainIndex(); got != 1 {
+		t.Fatalf("PlanMainIndex = %d, want the momentarily busy big card", got)
+	}
+	if got := busy.PlanTensorSplit(2); len(got) != 2 || got[0] != 0.48 || got[1] != 0.52 {
+		t.Fatalf("busy PlanTensorSplit = %v, want [0.48 0.52]", got)
+	}
+
+	// No arrangement fits: the live split gives up and returns nil, the plan
+	// falls back to the physical ratio so the flags still exist for the retune
+	// to rewrite.
+	tiny := GpuSet{
+		{Index: 0, TotalGB: 0.3, FreeGB: 0},
+		{Index: 1, TotalGB: 0.3, FreeGB: 0},
+	}
+	if got := tiny.TensorSplit(5); got != nil {
+		t.Fatalf("live TensorSplit with no room = %v, want nil", got)
+	}
+	if got := tiny.PlanTensorSplit(5); len(got) != 2 || got[0] != 0.5 || got[1] != 0.5 {
+		t.Fatalf("PlanTensorSplit fallback = %v, want the physical ratio [0.5 0.5]", got)
+	}
+
+	// A single card is still no split at all.
+	if got := (GpuSet{{Index: 0, TotalGB: 12, FreeGB: 12}}).PlanTensorSplit(1); got != nil {
+		t.Fatalf("single-device PlanTensorSplit = %v, want nil", got)
+	}
+}
+
 // EligibleGpuStats is what the server's guard and VRAM tracker call. It has to
 // apply the same floor as the sizer, and collapse to the sizer's main device
 // when multiGpu is off.

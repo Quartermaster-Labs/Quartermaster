@@ -27,6 +27,15 @@ package autogen
 // with prof.Overhead. So multi-GPU sizing needs no vector solver: hand the
 // sizer the summed budget, add the extra devices' fixed cost to Overhead, and
 // derive the split from the same numbers. TensorSplit is that derivation.
+//
+// FreeGB_i means two different things depending on who is asking, which is why
+// the derivation comes in a pair. The spawn-time retune wants the live reading,
+// occupancy included, so it stops sending layers to a card another model is
+// sitting on. A config being GENERATED wants stable capacity instead: it is a
+// long-lived artifact planned off a single cold sample, and a card that happens
+// to be busy for that one sample must not bake a plan with no --tensor-split in
+// it, because spawn time can retune a ratio but can never add one. Plan* are
+// the generate-time twins; see splitPlanIdleFrac.
 
 import (
 	"context"
@@ -91,16 +100,63 @@ func (g GpuSet) Multi() bool { return len(g) > 1 }
 // driving the displays is routinely the larger one.
 //
 // Returns -1 for an empty set.
-func (g GpuSet) MainIndex() int {
+//
+// This is the LIVE pick, for the spawn-time retune. A generate-time plan wants
+// PlanMainIndex, which applies the same rule to the planning capacity.
+func (g GpuSet) MainIndex() int { return g.mainIndexBy(GpuDevice.liveCapacityGB) }
+
+// PlanMainIndex is MainIndex for a config being generated: the device with the
+// most PLANNING capacity. A cold generate takes a single telemetry sample, and
+// the card that happens to be busy for that one moment must not hand the fixed
+// costs to the smaller card for the life of the config.
+func (g GpuSet) PlanMainIndex() int { return g.mainIndexBy(GpuDevice.planCapacityGB) }
+
+func (g GpuSet) mainIndexBy(capOf func(GpuDevice) float64) int {
 	best := -1
-	var bestFree float64
+	var bestCap float64
 	for _, d := range g {
-		if best < 0 || d.FreeGB > bestFree {
-			best, bestFree = d.Index, d.FreeGB
+		c := capOf(d)
+		if best < 0 || c > bestCap {
+			best, bestCap = d.Index, c
 		}
 	}
 	return best
 }
+
+// splitPlanIdleFrac is the share of a card's own VRAM a GENERATE-time plan
+// assumes it can reach, even when the card reads busy at the moment we sample.
+//
+// The idle high-water FreeGB is the right number once this process has watched
+// a card sit idle, but a config is generated at startup off a single sample, so
+// on a cold run the high-water IS that sample. A card occupied just then would
+// bake a plan that places nothing on it, and that bake is long-lived: the config
+// is regenerated only when the inputs hash changes, while the occupancy that
+// produced the reading is momentary.
+//
+// The recovery at spawn time is one-sided. dynoffload can lower -ngl and raise
+// --n-cpu-moe, and retuneTensorSplit can re-derive an existing ratio from the
+// live per-device reading, but nothing can ADD a --tensor-split to an argv that
+// has none: an optimistic bake is recoverable and a pessimistic one is not. So
+// the plan floors each device at the share of its own VRAM a card in ordinary
+// use (a desktop, a driver, someone else's app) still leaves free, and lets the
+// spawn-time retune deal with whatever is actually resident.
+const splitPlanIdleFrac = 0.85
+
+// planCapacityGB is the capacity a generate-time plan budgets this device at:
+// its idle high-water free reading, floored at splitPlanIdleFrac of its own
+// VRAM. A floor, never a cap, so a card genuinely watched idle keeps its
+// measured figure and a card sampled mid-load is not written off.
+func (d GpuDevice) planCapacityGB() float64 {
+	floor := d.TotalGB * splitPlanIdleFrac
+	if d.FreeGB > floor {
+		return d.FreeGB
+	}
+	return floor
+}
+
+// liveCapacityGB is the capacity a spawn-time retune plans against: what the
+// card reports free right now, with whatever is resident on it counted.
+func (d GpuDevice) liveCapacityGB() float64 { return d.FreeGB }
 
 // perDeviceFixedGB is the runtime context each ADDITIONAL device costs. It is
 // the same per-device constant computeBufferGB charges the main device, so it
@@ -141,7 +197,49 @@ func (g GpuSet) TensorSplit(mainFixedGB float64) []float64 {
 	if len(g) < 2 {
 		return nil
 	}
-	main := g.MainIndex()
+	return g.splitBy(GpuDevice.liveCapacityGB, g.MainIndex(), mainFixedGB)
+}
+
+// PlanTensorSplit is the ratio a GENERATED config carries: the same derivation
+// over the planning capacity instead of the live reading, and, for a set worth
+// splitting at all, never nil.
+//
+// The nil is the point. The ratio itself barely matters, because the spawn-time
+// retune re-derives it from live telemetry on every load; what cannot be
+// recovered is the split's EXISTENCE, since retuneTensorSplit rewrites a baked
+// --tensor-split and has no way to add one. A generate pass that caught a card
+// mid-load used to bake a single-device plan that the runtime then outgrew
+// silently: dynoffload would raise the offload to the pooled budget while the
+// argv still carried no placement instruction at all, leaving llama.cpp to
+// split by its own default and put more on a card than the sizer ever counted.
+// See issue #4.
+func (g GpuSet) PlanTensorSplit(mainFixedGB float64) []float64 {
+	if len(g) < 2 {
+		return nil
+	}
+	if split := g.splitBy(GpuDevice.planCapacityGB, g.PlanMainIndex(), mainFixedGB); split != nil {
+		return split
+	}
+	// Every device swallowed whole by its own fixed cost, which means the plan
+	// does not fit on this box in any arrangement. Fall back to the physical
+	// ratio (llama.cpp's own default placement) rather than to no split: the
+	// flags have to exist for the retune to have something to rewrite.
+	total := g.TotalGB()
+	if total <= 0 {
+		return nil
+	}
+	out := make([]float64, len(g))
+	for i, d := range g {
+		out[i] = math.Round(d.TotalGB/total*100) / 100
+	}
+	return out
+}
+
+// splitBy is the shared derivation: each device's capacity less its fixed cost,
+// normalised. main is the device index carrying mainFixedGB (-1 for none).
+// Returns nil when no device has room left, which the two callers read
+// differently.
+func (g GpuSet) splitBy(capOf func(GpuDevice) float64, main int, mainFixedGB float64) []float64 {
 	rem := make([]float64, len(g))
 	var sum float64
 	for i, d := range g {
@@ -149,7 +247,7 @@ func (g GpuSet) TensorSplit(mainFixedGB float64) []float64 {
 		if d.Index == main {
 			fixed = mainFixedGB
 		}
-		r := d.FreeGB - fixed
+		r := capOf(d) - fixed
 		if r < 0 {
 			r = 0
 		}
@@ -330,7 +428,7 @@ func ResolveGpuSet(s *Settings, logf func(string)) {
 		return
 	}
 	if !s.MultiGpuEnabled() && len(set) > 1 {
-		main := set.MainIndex()
+		main := set.PlanMainIndex()
 		for _, d := range set {
 			if d.Index == main {
 				set = GpuSet{d}
@@ -345,9 +443,17 @@ func ResolveGpuSet(s *Settings, logf func(string)) {
 	names := make([]string, len(set))
 	for i, d := range set {
 		names[i] = fmt.Sprintf("%d:%s %.1f/%.1fGB free", d.Index, d.Name, d.FreeGB, d.TotalGB)
+		// A card busy at this instant is planned against its stable capacity,
+		// so say so: otherwise the emitted --tensor-split reads as wrong
+		// against the free figure on the same line, and this log is what a bug
+		// report pastes.
+		if c := d.planCapacityGB(); c > d.FreeGB {
+			names[i] += fmt.Sprintf(" (plan %.1fGB)", c)
+		}
 	}
+	// The main device the PLAN picks, which is the one the config will name.
 	logf(fmt.Sprintf("multi-gpu: %d devices [%s] -> pooled budget %.2fGB, main gpu %d",
-		len(set), strings.Join(names, ", "), set.FreeGB(), set.MainIndex()))
+		len(set), strings.Join(names, ", "), set.FreeGB(), set.PlanMainIndex()))
 }
 
 // EligibleGpuStats is the exported eligibility rule, for callers outside this
@@ -426,5 +532,5 @@ func writeSingleDeviceEnv(b *strings.Builder, s Settings) {
 		return
 	}
 	fmt.Fprintf(b, "    env:\n      - %q\n      - %q\n",
-		cudaOrderEnv, fmt.Sprintf("CUDA_VISIBLE_DEVICES=%d", set.MainIndex()))
+		cudaOrderEnv, fmt.Sprintf("CUDA_VISIBLE_DEVICES=%d", set.PlanMainIndex()))
 }
