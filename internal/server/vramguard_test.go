@@ -387,6 +387,34 @@ func TestPooledGPUStat_SumsEligibleNewest(t *testing.T) {
 	}
 }
 
+// pooledVramStats is what the dashboard gauge draws. It has to report the pooled
+// pair, not one card: the gauge is how a user judges whether a model fits, and on
+// the 12 GB + 16 GB box in issue #4 it drew a 16 GB bar while the router was
+// admitting against 28.
+func TestPooledVramStats_ReportsWholeMachine(t *testing.T) {
+	now := time.Now()
+	hist := []perf.GpuStat{
+		{ID: 0, MemTotalMB: 12288, MemUsedMB: 4, Timestamp: now},
+		{ID: 1, MemTotalMB: 16376, MemUsedMB: 4, Timestamp: now},
+	}
+	got := pooledVramStats(hist, true)
+	if got == nil || got.TotalMB != 12288+16376 || got.UsedMB != 8 || got.Devices != 2 {
+		t.Fatalf("pooledVramStats(multi) = %+v, want both cards summed over 2 devices", got)
+	}
+	// multiGpu off is a real setting, not just a fallback: the gauge then has to
+	// show the one card the router will actually load on, or it promises VRAM the
+	// sizer will never plan against.
+	got = pooledVramStats(hist, false)
+	if got == nil || got.TotalMB != 16376 || got.Devices != 1 {
+		t.Fatalf("pooledVramStats(single) = %+v, want only the main device", got)
+	}
+	// nil, not a zeroed bar: the UI renders "no GPU reading" for it, and a 0/0
+	// gauge would read as a card with nothing free.
+	if got := pooledVramStats(nil, true); got != nil {
+		t.Fatalf("pooledVramStats(no telemetry) = %+v, want nil", got)
+	}
+}
+
 // sort.Slice is stable enough for the victim order the tests assert; this guards
 // the assumption that equal-size candidates don't reorder the assertions above.
 func TestVramGuard_SheddableDeterministicOnTies(t *testing.T) {

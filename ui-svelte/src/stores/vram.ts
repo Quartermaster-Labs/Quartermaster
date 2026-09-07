@@ -1,5 +1,5 @@
 import { derived, writable } from "svelte/store";
-import { latestGpu, foreignVram, systemVram } from "./perf";
+import { vramTotals, foreignVram, systemVram } from "./perf";
 import { models, estimatePlan, type PlanEstimate } from "./api";
 
 // VRAM split: "system" (OS + other apps + game) vs the loaded llama-server. We
@@ -200,14 +200,14 @@ function foreignSeg(mb: number, procs?: { name: string }[]): VramSegment[] {
 }
 
 export const vramBreakdown = derived(
-  [latestGpu, models, activeEstimates, foreignVram, systemVram],
+  [vramTotals, models, activeEstimates, foreignVram, systemVram],
   ([$gpu, $models, $ests, $foreign, $sysVram]): VramBreakdown | null => {
     if (!$gpu) return null;
 
     const live = $models.filter(
       (m) => m.state === "ready" || m.state === "starting" || m.state === "stopping",
     );
-    const rawUsed = $gpu.mem_used_mb;
+    const rawUsed = $gpu.usedMb;
     // Carve foreign VRAM out of the total before splitting the rest into
     // system / model components; it gets its own red segment.
     const foreignMb = Math.min(Math.max(0, $foreign?.mb ?? 0), rawUsed);
@@ -229,7 +229,7 @@ export const vramBreakdown = derived(
       // "Model(s)" slice even though nothing is loaded.
       return {
         usedMb: rawUsed,
-        totalMb: $gpu.mem_total_mb,
+        totalMb: $gpu.totalMb,
         segments: [{ label: "System", mb: used, class: "bg-info", detail: "OS, other apps" }, ...foreign],
       };
     }
@@ -272,7 +272,7 @@ export const vramBreakdown = derived(
     // many that is.
     const split = modelMb > 0 ? loadedSegments(live, $ests, modelMb) : null;
     if (split) {
-      return { usedMb: rawUsed, totalMb: $gpu.mem_total_mb, segments: [systemSeg, ...split, ...foreign] };
+      return { usedMb: rawUsed, totalMb: $gpu.totalMb, segments: [systemSeg, ...split, ...foreign] };
     }
 
     // Fallback: undifferentiated model slice (a model still loading, or an
@@ -280,7 +280,7 @@ export const vramBreakdown = derived(
     const modelNames = live.map((m) => m.name || m.id);
     return {
       usedMb: rawUsed,
-      totalMb: $gpu.mem_total_mb,
+      totalMb: $gpu.totalMb,
       segments: [
         systemSeg,
         {

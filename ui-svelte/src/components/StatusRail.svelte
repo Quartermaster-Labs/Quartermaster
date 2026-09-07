@@ -2,7 +2,7 @@
   import { tip } from "../lib/tooltip";
   import { push } from "svelte-spa-router";
   import { models, inFlightRequests, unloadAllModels } from "../stores/api";
-  import { latestGpu, latestSys } from "../stores/perf";
+  import { latestSys, vramTotals } from "../stores/perf";
   import { vramBreakdown } from "../stores/vram";
   import { prettifyModelName, modelCategory, largestModel, modelWeightGB } from "../lib/modelUtils";
   import type { Model } from "../lib/types";
@@ -97,11 +97,11 @@
   <!-- VRAM -->
   <div class="flex items-center gap-2 w-72 shrink-0">
     <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">VRAM</span>
-    {#if $latestGpu}
+    {#if $vramTotals}
       <div class="flex-1">
         <VramGauge
-          usedMb={$latestGpu.mem_used_mb}
-          totalMb={$latestGpu.mem_total_mb}
+          usedMb={$vramTotals.usedMb}
+          totalMb={$vramTotals.totalMb}
           segments={$vramBreakdown?.segments}
           showLabel={false}
           showLegend={false}
@@ -109,7 +109,7 @@
         />
       </div>
       <span class="font-mono text-micro text-txtmain tabular-nums shrink-0">
-        {($latestGpu.mem_used_mb / 1024).toFixed(1)}/{($latestGpu.mem_total_mb / 1024).toFixed(1)}G
+        {($vramTotals.usedMb / 1024).toFixed(1)}/{($vramTotals.totalMb / 1024).toFixed(1)}G
       </span>
     {:else}
       <span class="text-txtsecondary">-</span>

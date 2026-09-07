@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quartermaster-labs/quartermaster/internal/autogen"
 	"github.com/quartermaster-labs/quartermaster/internal/config"
 	"github.com/quartermaster-labs/quartermaster/internal/event"
 	"github.com/quartermaster-labs/quartermaster/internal/perf"
@@ -283,6 +284,12 @@ func (s *Server) handleAPIPerformance(w http.ResponseWriter, r *http.Request) {
 
 	sysStats, gpuStats := s.perf.Current()
 
+	// Computed BEFORE the ?after= filter below. Pooling needs one sample per
+	// device, and the filter is a plain timestamp cut that can drop a card whose
+	// newest reading happens to predate the cursor, which would silently halve
+	// the pooled total for that poll.
+	pooled := pooledVramStats(gpuStats, s.offloadSettingsVal().MultiGpuEnabled())
+
 	if afterStr := r.URL.Query().Get("after"); afterStr != "" {
 		after, err := time.Parse(time.RFC3339, afterStr)
 		if err != nil {
@@ -310,7 +317,13 @@ func (s *Server) handleAPIPerformance(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"sys_stats": sysStats,
 		"gpu_stats": gpuStats,
-		"foreign":   s.foreignGPU(r.Context()),
+		// The VRAM gauge's numbers, pooled across every eligible adapter. The
+		// gauge cannot derive these from gpu_stats: that is a flat per-device
+		// history, so "the newest entry" is whichever card the monitor
+		// enumerated last, and a 12 GB + 16 GB pair drew a 16 GB bar (issue #4).
+		// Null when there is no GPU telemetry, which the UI shows as no reading.
+		"gpu_pooled": pooled,
+		"foreign":    s.foreignGPU(r.Context()),
 		// Idle system-VRAM floor (MiB) sampled server-side; 0 = not observed yet.
 		"system_mb": s.systemVramMB.Load(),
 		// OOM guard: VRAM (MiB) held by everything that is NOT one of our
@@ -361,6 +374,33 @@ func (s *Server) foreignGPU(ctx context.Context) foreignVram {
 		out.Procs = append(out.Procs, p)
 	}
 	return out
+}
+
+// pooledVram is the VRAM gauge's view of the machine: one bar covering every
+// adapter the router will actually load on, matching the pooled budget it admits
+// against. Devices is carried so the UI can say "across 2 GPUs" rather than
+// leaving a 28 GB total looking like a card nobody owns.
+type pooledVram struct {
+	UsedMB  int `json:"used_mb"`
+	TotalMB int `json:"total_mb"`
+	Devices int `json:"devices"`
+}
+
+// pooledVramStats sums the newest reading of each eligible adapter. nil when
+// there is no usable telemetry, so the UI renders "no GPU reading" instead of a
+// zeroed bar. Deliberately NOT a perf.GpuStat: the pooled figure is only
+// meaningful for memory, and a synthetic stat would carry a temperature and a
+// power draw that belong to no physical card.
+func pooledVramStats(gpus []perf.GpuStat, multi bool) *pooledVram {
+	eligible := autogen.EligibleGpuStats(gpus, multi)
+	if len(eligible) == 0 {
+		return nil
+	}
+	stat, ok := pooledGPUStat(gpus, multi)
+	if !ok {
+		return nil
+	}
+	return &pooledVram{UsedMB: stat.MemUsedMB, TotalMB: stat.MemTotalMB, Devices: len(eligible)}
 }
 
 // vramGuardStats reports the OOM guard's current view of the card for the

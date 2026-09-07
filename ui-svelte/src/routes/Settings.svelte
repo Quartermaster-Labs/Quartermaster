@@ -10,7 +10,7 @@
   import Toggle from "../components/Toggle.svelte";
   import UIScaleControl from "../components/UIScaleControl.svelte";
   import { themeMode, type ThemeMode } from "../stores/theme";
-  import { latestGpu, latestSys } from "../stores/perf";
+  import { latestSys, vramTotals } from "../stores/perf";
 
   // Category side-nav — mirrors the playground settings modal's pattern.
   type SettingsCat = "appearance" | "general" | "kvcache" | "backends" | "system";
@@ -221,18 +221,17 @@
   // rather than clamping it to nothing.
   //
   // The VRAM ceiling is POOLED across every inference-eligible adapter and comes
-  // from the server (settings.gpu), not from the perf poll. $latestGpu is the
-  // newest entry of a flat sample history that interleaves devices, so on a
-  // multi-GPU box it is whichever card the monitor enumerated last: a 12 GB +
-  // 16 GB pair read as 15, clampSettingsForm pushed anything larger back down,
-  // and the pooled budget the sizer plans splits against could not be entered at
-  // all (issue #4). It stays a fallback for a server too old to send the block.
+  // from the server (settings.gpu), not from the perf poll. Reading it off a
+  // single card is what made a 12 GB + 16 GB pair cap at 15: clampSettingsForm
+  // pushed anything larger back down, so the pooled budget the sizer plans
+  // splits against could not be entered at all (issue #4). $vramTotals is the
+  // fallback for a server too old to send the block, and is itself pooled.
   const gpus = $derived(settings?.gpu?.devices ?? []);
   const gpuMaxGb = $derived(
     settings?.gpu && settings.gpu.totalGB > 0
       ? Math.floor(settings.gpu.totalGB)
-      : $latestGpu
-        ? Math.floor($latestGpu.mem_total_mb / 1024)
+      : $vramTotals
+        ? Math.floor($vramTotals.totalMb / 1024)
         : 0,
   );
   const sysMaxGb = $derived($latestSys ? Math.floor($latestSys.mem_total_mb / 1024) : 0);
