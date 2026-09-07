@@ -11,7 +11,9 @@ Current work & roadmap: see `TODO.md` (local, not tracked).
 ## Where things live
 
 Go project. Entry `cmd/quartermaster/` (`quartermaster.go`, plus `bundle.go`: the launch flags a
-packaged install supplies for itself, so the exe is double-clickable and needs no launcher script).
+packaged install supplies for itself, so the exe is double-clickable and needs no launcher script,
+and `userconfig.go`: the same idea for a bare binary, defaulting `-config`/`-generate` into the
+per-user config directory so a clean system boots with no flags).
 Its `favicon.ico`, `versioninfo.json` and `resource_windows_amd64.syso` sit in that same directory
 because Go links a `.syso` only from the main package dir and `//go:embed` cannot reach above it.
 Logic under `internal/`. Each subsystem has its own `CLAUDE.md` — read that for files, types, `file:line` refs, and gotchas.

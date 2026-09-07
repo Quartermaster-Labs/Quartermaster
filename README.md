@@ -298,6 +298,22 @@ it at your models folder, and install the backends you want from Settings. Verif
 wizard included, against the `SHA256SUMS` published beside it. For a headless box, the systemd unit
 in [`packaging/systemd`](packaging/systemd) needs only its paths filled in.
 
+Run with no flags at all and it configures itself: with no `-config`, the binary uses your
+platform's per-user config directory (`$XDG_CONFIG_HOME/quartermaster` on Linux, honouring the
+variable and falling back to `~/.config`; `~/Library/Application Support/quartermaster` on macOS;
+`%AppData%\quartermaster` on Windows), seeds a control file there on first launch, generates a
+config from it and serves the dashboard, where you point it at a models folder and install
+backends. The binary itself stays wherever you put it. Add `-models-dir /path/to/models` to skip
+the first dashboard visit.
+
+Naming a path opts out, and it opts out of both halves: `-config mine.yaml` on its own is loaded
+as written and never regenerated, because `-generate` names the control file that `-config` is
+generated **from** and defaulting one next to a config you wrote would overwrite it on the next
+boot. To autogen into paths you choose, give both: `-config mine.yaml -generate mine-generate.yaml`.
+`-no-generate` keeps the defaulted paths but makes the config file read-only to the server: no
+startup regen, no `-watch-models` regen, and no config editing in the dashboard, since that editor
+works by regenerating and hot-reloading.
+
 These builds are not code-signed, so macOS quarantines them on first run: clear it with
 `xattr -d com.apple.quarantine ./quartermaster-darwin-arm64`, or right-click and Open. A binary you
 compiled yourself is not quarantined.

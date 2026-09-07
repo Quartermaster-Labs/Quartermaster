@@ -6,19 +6,6 @@ import (
 	"strings"
 )
 
-// minimalGenerate is written when there is no example to seed from.
-//
-// autogen.Settings.applyDefaults fills every zero-valued knob, so a file with
-// nothing but modelsRoot is fully functional — what is lost is the example's
-// explanatory comments, not behaviour. The pointer to the example is there so
-// a user who wants the annotated version knows one exists.
-const minimalGenerate = `# Quartermaster autogen control file, created by the setup wizard.
-# Every unset knob falls back to its built-in default; see
-# quartermaster-generate.example.yaml in the repository for the annotated form.
-settings:
-  modelsRoot: ""
-`
-
 // settingsKeyRe matches an indented "key:" line inside a block.
 func settingsKeyRe(key string) *regexp.Regexp {
 	return regexp.MustCompile(`^(\s+)` + regexp.QuoteMeta(key) + `:.*$`)

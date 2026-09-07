@@ -1034,6 +1034,21 @@ func (s *Settings) applyDefaults() {
 	}
 }
 
+// MinimalGenerateFile is the control file written when a caller has to create
+// one from nothing: the setup wizard on a fresh install, and a bare binary
+// bootstrapping its own config directory.
+//
+// applyDefaults fills every zero-valued knob, so a file with nothing but
+// modelsRoot is fully functional -- what is lost against the shipped example is
+// its explanatory comments, not behaviour. The pointer to the example is there
+// so a user who wants the annotated version knows one exists.
+const MinimalGenerateFile = `# Quartermaster autogen control file.
+# Every unset knob falls back to its built-in default; see
+# quartermaster-generate.example.yaml in the repository for the annotated form.
+settings:
+  modelsRoot: ""
+`
+
 // LoadGenerateFile reads and validates an autogen control file. Settings
 // defaults are applied. modelsDirOverride (from --models-dir) wins over the
 // file's modelsRoot when non-empty.
