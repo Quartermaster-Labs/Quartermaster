@@ -590,10 +590,15 @@ type Override struct {
 	//   DirectIo:     -dio (faster cold load)
 	//   NoOpOffload:  --no-op-offload
 	//   NoRepack:     --no-repack
-	//   KvKDraft/KvVDraft: "" => llama f16       (-ctkd/-ctvd, draft KV quant; draft models only)
+	//   KvKDraft/KvVDraft: "" => match -ctk/-ctv  (-ctkd/-ctvd, draft KV quant; also
+	//                     applies to a baked-in MTP head, whose own context llama
+	//                     would otherwise run on f16)
 	//   CacheReuse:   0 => off                   (--cache-reuse N, prefix KV-shift reuse)
 	//   CacheRamMB:   0 => llama default (8192)  (-cram, prompt-cache size MiB)
 	//   CacheIdleSlots: "" | "on" | "off"        (--cache-idle-slots / --no-)
+	//   LogVerbosity: 0 => backend default       (-lv N, log verbosity threshold;
+	//                     raise it to make llama-server print its load-time buffer
+	//                     report, which some builds hide at their own default)
 	//   SwaFull:      --swa-full (full SWA cache)
 	//   CheckpointMinStep: 0 => llama default    (-cms, ctx-checkpoint spacing)
 	//   ContextShift: "" | "on" | "off"          (--context-shift / --no-)
@@ -617,6 +622,7 @@ type Override struct {
 	CacheReuse           int     `yaml:"cacheReuse"`
 	CacheRamMB           int     `yaml:"cacheRamMB"`
 	CacheIdleSlots       string  `yaml:"cacheIdleSlots"`
+	LogVerbosity         int     `yaml:"logVerbosity"`
 	SwaFull              bool    `yaml:"swaFull"`
 	CheckpointMinStep    int     `yaml:"checkpointMinStep"`
 	ContextShift         string  `yaml:"contextShift"`

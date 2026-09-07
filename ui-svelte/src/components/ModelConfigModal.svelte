@@ -163,7 +163,7 @@
   // Numeric fields hold "" (=inherit/omit) or a number; tri-states hold ""/"on"/"off".
   type AdvKnobs = {
     threadsBatch: number | ""; prio: number | ""; directIo: boolean; noOpOffload: boolean; noRepack: boolean;
-    kvKDraft: string; kvVDraft: string; cacheReuse: number | ""; cacheRamMB: number | ""; cacheIdleSlots: string;
+    kvKDraft: string; kvVDraft: string; cacheReuse: number | ""; logVerbosity: number | ""; cacheRamMB: number | ""; cacheIdleSlots: string;
     swaFull: boolean; checkpointMinStep: number | ""; contextShift: string; specDraftNMin: number | "";
     slotPromptSimilarity: number | ""; ropeScaling: string; ropeScale: number | ""; ropeFreqBase: number | "";
     yarnOrigCtx: number | ""; splitMode: string; tensorSplit: string; mainGpu: number | ""; overrideTensor: string;
@@ -177,7 +177,7 @@
   function blankAdv(): AdvKnobs {
     return {
       threadsBatch: "", prio: "", directIo: false, noOpOffload: false, noRepack: false,
-      kvKDraft: "", kvVDraft: "", cacheReuse: "", cacheRamMB: "", cacheIdleSlots: "",
+      kvKDraft: "", kvVDraft: "", cacheReuse: "", logVerbosity: "", cacheRamMB: "", cacheIdleSlots: "",
       swaFull: false, checkpointMinStep: "", contextShift: "", specDraftNMin: "",
       slotPromptSimilarity: "", ropeScaling: "", ropeScale: "", ropeFreqBase: "",
       yarnOrigCtx: "", splitMode: "", tensorSplit: "", mainGpu: "", overrideTensor: "",
@@ -192,7 +192,7 @@
       threadsBatch: o?.threadsBatch || "", prio: o?.prio || "", directIo: o?.directIo ?? false,
       noOpOffload: o?.noOpOffload ?? false, noRepack: o?.noRepack ?? false,
       kvKDraft: o?.kvKDraft ?? "", kvVDraft: o?.kvVDraft ?? "",
-      cacheReuse: o?.cacheReuse || "", cacheRamMB: o?.cacheRamMB || "", cacheIdleSlots: o?.cacheIdleSlots ?? "",
+      cacheReuse: o?.cacheReuse || "", logVerbosity: o?.logVerbosity || "", cacheRamMB: o?.cacheRamMB || "", cacheIdleSlots: o?.cacheIdleSlots ?? "",
       swaFull: o?.swaFull ?? false, checkpointMinStep: o?.checkpointMinStep || "", contextShift: o?.contextShift ?? "",
       specDraftNMin: o?.specDraftNMin || "", slotPromptSimilarity: o?.slotPromptSimilarity || "",
       ropeScaling: o?.ropeScaling ?? "", ropeScale: o?.ropeScale || "", ropeFreqBase: o?.ropeFreqBase || "",
@@ -216,7 +216,7 @@
     return {
       threadsBatch: n(adv.threadsBatch), prio: n(adv.prio), directIo: adv.directIo,
       noOpOffload: adv.noOpOffload, noRepack: adv.noRepack, kvKDraft: adv.kvKDraft, kvVDraft: adv.kvVDraft,
-      cacheReuse: n(adv.cacheReuse), cacheRamMB: n(adv.cacheRamMB), cacheIdleSlots: adv.cacheIdleSlots,
+      cacheReuse: n(adv.cacheReuse), logVerbosity: n(adv.logVerbosity), cacheRamMB: n(adv.cacheRamMB), cacheIdleSlots: adv.cacheIdleSlots,
       swaFull: adv.swaFull, checkpointMinStep: n(adv.checkpointMinStep), contextShift: adv.contextShift,
       specDraftNMin: n(adv.specDraftNMin), slotPromptSimilarity: n(adv.slotPromptSimilarity),
       ropeScaling: adv.ropeScaling, ropeScale: n(adv.ropeScale), ropeFreqBase: n(adv.ropeFreqBase),
@@ -2536,6 +2536,10 @@
               <input type="number" min="0" step="64" bind:value={adv.cacheReuse} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="off" />
             </label>
             <label class="flex items-center gap-2">
+              <span class="text-txtsecondary flex items-center gap-1">Log verbosity {@render hint("-lv N. llama-server log verbosity threshold. Raise it to capture the load-time buffer-size report in the model log. Empty = backend default.")}</span>
+              <input type="number" min="0" step="1" bind:value={adv.logVerbosity} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="default" />
+            </label>
+            <label class="flex items-center gap-2">
               <span class="text-txtsecondary flex items-center gap-1">Cache RAM (MiB) {@render hint("-cram. Max prompt-cache size in MiB. Empty = llama default (8192).")}</span>
               <input type="number" min="0" step="512" bind:value={adv.cacheRamMB} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="8192" />
             </label>
@@ -2556,11 +2560,11 @@
               <input type="number" min="0" step="1" bind:value={adv.mainGpu} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="0" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Draft KV-K {@render hint("-ctkd. Draft/spec model K cache type. Empty = f16.")}</span>
+              <span class="text-txtsecondary flex items-center gap-1">Draft KV-K {@render hint("-ctkd. Draft/spec context K cache type, including a baked-in MTP head. Empty = match KV-K.")}</span>
               <input type="text" bind:value={adv.kvKDraft} class="cfg-input w-20 ml-auto" placeholder="f16" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Draft KV-V {@render hint("-ctvd. Draft/spec model V cache type. Empty = f16.")}</span>
+              <span class="text-txtsecondary flex items-center gap-1">Draft KV-V {@render hint("-ctvd. Draft/spec context V cache type, including a baked-in MTP head. Empty = match KV-V.")}</span>
               <input type="text" bind:value={adv.kvVDraft} class="cfg-input w-20 ml-auto" placeholder="f16" />
             </label>
             <label class="flex items-center gap-2">

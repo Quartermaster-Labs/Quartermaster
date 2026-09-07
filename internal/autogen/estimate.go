@@ -29,6 +29,12 @@ type EstimateInput struct {
 	// per-model Override.Ub charged a buffer the real launch never has. 0 => the
 	// same auto pick emit makes (effectiveUb).
 	Ub int
+	// KvKDraft/KvVDraft pin the draft context's cache type (-ctkd/-ctvd). Empty
+	// means "whatever the emitter would default to", i.e. the main K/V quant. A
+	// caller reconstructing a HAND-WRITTEN argv that carries -ctk but no -ctkd
+	// must pass "f16" explicitly, because that is what llama uses there.
+	KvKDraft string
+	KvVDraft string
 	// DraftKind is the paired draft sidecar's kind ("mtp"/"dflash", "" for none),
 	// as DraftSidecarForDir reports it. Only consulted when Spec is empty, to
 	// resolve the same auto spec the emitter picks — see EstimatePlan.
@@ -49,13 +55,17 @@ type EstimateResult struct {
 	// EstVramGB via overhead, broken out so the UI can attribute it separately
 	// from model weights).
 	CheckpointGB float64 `json:"checkpointGB"`
-	// DraftGB is the VRAM charged for the speculative draft / MTP nextn layer
-	// (baked-in ~0.34 GB or a separate draft gguf's weights + pad). Folded into
+	// DraftGB is the VRAM charged for the speculative draft / MTP nextn layer: a
+	// baked-in nextn head costs its compute pad, its own compute GRAPH and its
+	// OWN ctx-scaled KV cache (a second llama_context over the same model at the
+	// same window), a separate draft gguf its weights + pad. Folded into
 	// EstVramGB via overhead; broken out so the UI can attribute it separately
 	// from the main model weights. 0 when no draft-mtp spec is active.
 	DraftGB float64 `json:"draftGB"`
-	// ComputeBufGB is the GPU compute buffer (logits + activations + the CUDA
-	// context constant when a CUDA GPU is in use). MmprojGB is a "-vision" twin's
+	// ComputeBufGB is the GPU compute buffer: the main context's graph (logits +
+	// activations) plus the fixed per-process runtime constant for the backend in
+	// use (see runtimeCtxGB). A baked-in MTP drafter's own graph is NOT in here,
+	// it is charged to DraftGB. MmprojGB is a "-vision" twin's
 	// projector weights + CLIP reserve (0 for non-vision). OverheadGB is the global
 	// vramOverheadGB safety headroom. All three are folded into EstVramGB via
 	// overhead; broken out so the UI can label them separately from the model
@@ -77,9 +87,9 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 	// the preview's KV reserve matches what a save would emit.
 	// An empty spec means AUTO, not "no drafter" — the emitter runs every model
 	// through effectiveSpec, which hands an MTP-capable gguf draft-mtp+ngram-mod
-	// and charges its 0.34 GB (or the sidecar's real weights). The preview used to
-	// read "" as no spec and charge 0, so a model left on auto spec previewed
-	// 0.34 GB lighter than it bakes. On a tight budget that is the whole margin:
+	// and charges its drafter (the pad plus its ctx-scaled KV, or the sidecar's
+	// real weights). The preview used to read "" as no spec and charge 0, so a
+	// model left on auto spec previewed a whole drafter lighter than it bakes. On a tight budget that is the whole margin:
 	// Qwen3.8-27B at 106k previewed -ngl 99 / 0 GB RAM and emitted -ngl 64 / 0.32.
 	spec := in.Spec
 	if spec == "" {
@@ -112,11 +122,16 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		target = in.TargetVramGB
 	}
 
-	// Draft overhead: baked-in MTP nextn layer ~0.34 GB (KV+compute). A separate
-	// draft file (Gemma-4's MTP sidecar, or any DFlash drafter — always separate)
-	// instead charges its real on-disk weights + a small KV/compute pad, so big
-	// drafts scale up rather than under-counting at 0.34.
+	// Draft overhead: a baked-in MTP nextn layer costs its compute pad here. A
+	// separate draft file (Gemma-4's MTP sidecar, or any DFlash drafter, always
+	// separate) instead charges its real on-disk weights + a small KV/compute pad,
+	// so big drafts scale up rather than under-counting.
 	specOh := draftOverheadGB(spec, draftGB)
+	// ...plus, for a baked-in nextn head, its own KV over the whole window. That
+	// part is a slope, so it has to reach the sizer as one: charging it as flat
+	// overhead would price it at a ctx the sizer had not picked yet.
+	dKvK, dKvV := draftKvPair(in.KvKDraft, in.KvVDraft, kvK, kvV)
+	draftSlopeGB := mtpDraftSlopeFor(meta, spec, dKvK, dKvV, draftGB)
 
 	prof := profile{
 		Name:     "estimate",
@@ -130,12 +145,18 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 
 		CtxCheckpoints:    in.CtxCheckpoints,
 		CheckpointMinStep: in.CheckpointMinStep,
+		DraftSlopeGB:      draftSlopeGB,
 	}
 	// Charge the ub the launch will actually run with: effectiveUb reads the
 	// override's pinned value, and passing nil here made the preview size a
 	// different compute buffer than emit did for the same model.
-	computeBufGB := computeBufferGB(meta, effectiveUb(meta, prof, &Override{Ub: in.Ub}, prof.Ctx, target), s.ComputeBufFactor)
-	prof.Overhead += computeBufGB
+	computeUb := effectiveUb(meta, prof, &Override{Ub: in.Ub}, prof.Ctx, target)
+	computeBufGB := computeBufferGB(meta, computeUb, s.ComputeBufFactor)
+	// The baked-in drafter's second context allocates a graph of its own at the
+	// same ub. It is reported under Draft rather than folded into the compute
+	// buffer, so the UI keeps attributing it to the thing that caused it.
+	draftComputeGB := mtpDraftComputeGB(meta, spec, draftGB, computeUb, s.ComputeBufFactor)
+	prof.Overhead += computeBufGB + draftComputeGB
 	prof.Overhead += in.MmprojGB // "-vision" projector weights + CLIP compute reserve
 
 	ctx, plan, kvReserve, planCkptGB, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, in.KvInRam)
@@ -177,6 +198,18 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		checkpointGB *= gpuFrac
 	}
 
+	// sizeProfile folds the drafter's KV into kvReserve (it sizes against the
+	// combined slope). Split it back out so the UI's KV segment stays the main
+	// cache and the Draft segment shows what the drafter actually costs.
+	// KV-in-RAM is the exception: that branch sizes against the main slope alone
+	// (the reserve it reports is a flat RAM-side placeholder), so there is
+	// nothing folded in to take back out.
+	draftKvGB := 0.0
+	if !in.KvInRam {
+		draftKvGB = min(draftSlopeGB*float64(ctx), kvReserve)
+		kvReserve -= draftKvGB
+	}
+
 	return EstimateResult{
 		Ctx:          ctx,
 		Ngl:          ngl,
@@ -187,7 +220,7 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		MaxRamGB:     s.MaxRamGB,
 		KvReserveGB:  kvReserve,
 		CheckpointGB: checkpointGB,
-		DraftGB:      specOh,
+		DraftGB:      specOh + draftComputeGB + draftKvGB,
 		ComputeBufGB: computeBufGB,
 		MmprojGB:     in.MmprojGB,
 		OverheadGB:   s.VramOverheadGB,

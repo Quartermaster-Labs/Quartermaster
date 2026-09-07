@@ -8,9 +8,11 @@ import { models, estimatePlan, type PlanEstimate } from "./api";
 // model usage ≈ live used − baseline. Before the first idle sample the baseline
 // is unknown, so everything is attributed to system (safe under-report).
 //
-// When a single model is loaded we further break its slice into model weights /
-// KV cache / CUDA-runtime overhead using the load-plan estimate (the only source
-// we have for the component split — the driver only reports a single total).
+// Whenever we hold a load-plan estimate for EVERY loaded model we further break
+// their slice into model weights / KV cache / runtime overhead (the estimate is
+// the only source we have for the component split — the driver only reports a
+// single total). With two models loaded this used to give up and paint one flat
+// "Model(s)" block, which is exactly when the split is most useful.
 let baselineMb: number | null = null;
 
 export interface VramSegment {
@@ -62,26 +64,125 @@ export function estimateSegments(est: PlanEstimate, kvInRam = false): VramSegmen
   return segs;
 }
 
-// Plan estimate for the currently loaded model, refreshed when the active model
-// changes. Drives the weights/KV/overhead component split.
-const activeEstimate = writable<{ id: string; est: PlanEstimate } | null>(null);
-let estFetchId: string | null = null;
+// Plan estimates for the loaded models, keyed by model id. Refreshed as models
+// come and go: an id already fetched (or in flight) is never re-fetched, and an
+// id that leaves the ready set is dropped, so a swap costs exactly one request
+// for the model that actually arrived.
+const activeEstimates = writable<Record<string, PlanEstimate>>({});
+let estCache: Record<string, PlanEstimate> = {};
+// In-flight ids double as the "do we still want this?" flag: an id deleted here
+// by an unload makes the late-arriving response drop on the floor instead of
+// resurrecting a model that is gone.
+const estInflight = new Set<string>();
 
 models.subscribe(($models) => {
-  const ready = $models.filter((m) => m.state === "ready");
-  if (ready.length === 1) {
-    const id = ready[0].id;
-    if (estFetchId !== id) {
-      estFetchId = id;
-      estimatePlan(id, { actual: true })
-        .then((est) => activeEstimate.set({ id, est }))
-        .catch(() => activeEstimate.set(null));
+  const ready = $models.filter((m) => m.state === "ready").map((m) => m.id);
+  const readySet = new Set(ready);
+  let dropped = false;
+  for (const id of Object.keys(estCache)) {
+    if (!readySet.has(id)) {
+      delete estCache[id];
+      dropped = true;
     }
-  } else {
-    estFetchId = null;
-    activeEstimate.set(null);
+  }
+  for (const id of [...estInflight]) if (!readySet.has(id)) estInflight.delete(id);
+  if (dropped) {
+    estCache = { ...estCache };
+    activeEstimates.set(estCache);
+  }
+  for (const id of ready) {
+    if (estCache[id] || estInflight.has(id)) continue;
+    estInflight.add(id);
+    estimatePlan(id, { actual: true })
+      .then((est) => {
+        if (!estInflight.delete(id)) return; // unloaded while we were fetching
+        estCache = { ...estCache, [id]: est };
+        activeEstimates.set(estCache);
+      })
+      .catch(() => {
+        estInflight.delete(id);
+      });
   }
 });
+
+/** The bits of a Model this store needs, so the split can be unit-tested. */
+export interface VramModelRef {
+  id: string;
+  name?: string;
+}
+
+// loadedSegments splits the measured model slice (modelMb) into per-component
+// segments, summing the same component across ALL loaded models: two models put
+// their weights in one "Weights" segment, their caches in one "KV cache", and so
+// on. Aggregating by component rather than by model keeps the legend the same
+// seven colors no matter how many models are resident, and keeps the bar
+// readable when a third one loads.
+//
+// Returns null when any loaded model has no estimate yet (mid-load, or the
+// estimate request failed), which is the caller's cue to fall back to the flat
+// undifferentiated slice.
+export function loadedSegments(
+  live: VramModelRef[],
+  estimates: Record<string, PlanEstimate>,
+  modelMb: number,
+): VramSegment[] | null {
+  if (live.length === 0) return null;
+  const ests = live.map((m) => estimates[m.id]);
+  if (ests.some((e) => !e)) return null;
+
+  const parts = ests.map((e) => {
+    const kv = Math.max(0, e.kvReserveGB * 1024);
+    const ckpt = Math.max(0, (e.checkpointGB ?? 0) * 1024);
+    // Draft/MTP is charged in VRAM whatever the KV placement, so it is its own
+    // slice rather than part of KV.
+    const draft = Math.max(0, (e.draftGB ?? 0) * 1024);
+    const compute = Math.max(0, (e.computeBufGB ?? 0) * 1024);
+    const mmproj = Math.max(0, (e.mmprojGB ?? 0) * 1024);
+    const headroom = Math.max(0, (e.overheadGB ?? 0) * 1024);
+    const total = Math.max(0, e.estVramGB * 1024);
+    // estVramGB folds every reserve in; subtract each to leave the pure
+    // model-file weights share (why the total exceeds the raw gguf size).
+    const weights = Math.max(0, total - kv - ckpt - draft - compute - mmproj - headroom);
+    return { kv, ckpt, draft, compute, mmproj, headroom, total, weights, ctx: e.ctx };
+  });
+  const sum = (pick: (p: (typeof parts)[number]) => number) =>
+    parts.reduce((a, p) => a + pick(p), 0);
+  const estTotalMb = sum((p) => p.total);
+
+  // Fit the estimated components inside the measured model slice. If the
+  // measurement exceeds the estimate, the surplus is unaccounted runtime
+  // overhead. If it's under, scale the components down proportionally.
+  let scale = 1;
+  let surplusMb = 0;
+  if (estTotalMb <= modelMb) {
+    surplusMb = modelMb - estTotalMb;
+  } else {
+    scale = estTotalMb > 0 ? modelMb / estTotalMb : 0;
+  }
+
+  const names = live.map((m) => m.name || m.id);
+  // One model reads as "<name> ...", several as "<a> + <b> ...", so a hover on
+  // the shared segment still says whose VRAM is in it.
+  const who = names.join(" + ");
+  const ctxDetail =
+    parts.length === 1
+      ? `ctx ${parts[0].ctx}`
+      : names.map((n, i) => `${n} ctx ${parts[i].ctx}`).join(", ");
+
+  const segments: VramSegment[] = [];
+  const push = (label: string, mb: number, cls: string, detail: string) => {
+    if (mb > 0) segments.push({ label, mb, class: cls, detail });
+  };
+  push("Weights", sum((p) => p.weights) * scale, "bg-primary", `${who} model file weights on GPU`);
+  push("Vision projector", sum((p) => p.mmproj) * scale, "bg-primary/60", `${who} mmproj weights + CLIP compute reserve`);
+  push("Draft", sum((p) => p.draft) * scale, "bg-primary/40", `${who} speculative draft / MTP model on GPU`);
+  push("Compute buffer", sum((p) => p.compute) * scale, "bg-success", `${who} logits + activations`);
+  push("KV cache", sum((p) => p.kv) * scale, "bg-warning", `${who} attention cache (${ctxDetail})`);
+  push("Checkpoints", sum((p) => p.ckpt) * scale, "bg-error", `${who} context-checkpoint KV snapshots`);
+  push("Headroom", sum((p) => p.headroom) * scale, "bg-txtsecondary/30", "reserved safety headroom (vramOverheadGB)");
+  push("Overhead", surplusMb, "bg-success/60", "measured runtime overhead beyond the estimate");
+  return segments;
+}
 
 // foreignSeg builds the red "Foreign" segment for VRAM held by a llama-server
 // we didn't spawn. Returns [] when none detected.
@@ -99,8 +200,8 @@ function foreignSeg(mb: number, procs?: { name: string }[]): VramSegment[] {
 }
 
 export const vramBreakdown = derived(
-  [latestGpu, models, activeEstimate, foreignVram, systemVram],
-  ([$gpu, $models, $est, $foreign, $sysVram]): VramBreakdown | null => {
+  [latestGpu, models, activeEstimates, foreignVram, systemVram],
+  ([$gpu, $models, $ests, $foreign, $sysVram]): VramBreakdown | null => {
     if (!$gpu) return null;
 
     const live = $models.filter(
@@ -133,10 +234,16 @@ export const vramBreakdown = derived(
       };
     }
 
+    // Total estimated VRAM across the loaded models, or null while any of them
+    // is still missing an estimate (a model mid-load has none yet).
+    const estTotalMb = live.every((m) => $ests[m.id])
+      ? live.reduce((a, m) => a + $ests[m.id].estVramGB * 1024, 0)
+      : null;
+
     // System floor. Prefer the server-measured idle floor (sampled even with no
     // dashboard open), then the browser's own idle baseline. If neither caught an
-    // idle sample (e.g. a model was already resident at page load) but we have a
-    // load-plan estimate for the single loaded model, fall back to
+    // idle sample (e.g. a model was already resident at page load) but we have
+    // load-plan estimates for everything loaded, fall back to
     // used − estimated-model-VRAM so the model slice still shows instead of
     // being attributed entirely to "System".
     let sysFloor: number;
@@ -145,8 +252,8 @@ export const vramBreakdown = derived(
       sysFloor = Math.min($sysVram, used);
     } else if (baselineMb !== null) {
       sysFloor = Math.min(baselineMb, used);
-    } else if ($est && live.length === 1 && live[0].id === $est.id) {
-      sysFloor = Math.max(0, used - $est.est.estVramGB * 1024);
+    } else if (estTotalMb !== null) {
+      sysFloor = Math.max(0, used - estTotalMb);
       measured = false;
     } else {
       sysFloor = used;
@@ -161,60 +268,15 @@ export const vramBreakdown = derived(
       detail: "OS, other apps" + (measured ? "" : " (estimated - no idle baseline yet)"),
     };
 
-    // Component split when we have a fresh estimate for the single loaded model.
-    if (modelMb > 0 && $est && live.length === 1 && live[0].id === $est.id) {
-      const estTotalMb = $est.est.estVramGB * 1024;
-      const kvEstMb = Math.max(0, $est.est.kvReserveGB * 1024);
-      const ckptEstMb = Math.max(0, ($est.est.checkpointGB ?? 0) * 1024);
-      const draftEstMb = Math.max(0, ($est.est.draftGB ?? 0) * 1024);
-      const computeEstMb = Math.max(0, ($est.est.computeBufGB ?? 0) * 1024);
-      const mmprojEstMb = Math.max(0, ($est.est.mmprojGB ?? 0) * 1024);
-      const headroomEstMb = Math.max(0, ($est.est.overheadGB ?? 0) * 1024);
-      // estVramGB folds KV, checkpoints, draft, compute buffer, vision projector and
-      // headroom in; subtract each to leave the pure model-file weights share.
-      const weightsEstMb = Math.max(0, estTotalMb - kvEstMb - ckptEstMb - draftEstMb - computeEstMb - mmprojEstMb - headroomEstMb);
-
-      // Fit the estimated components inside the measured model slice. If the
-      // measurement exceeds the estimate, the surplus is unaccounted runtime
-      // overhead. If it's under, scale the components down proportionally.
-      let scale = 1;
-      let surplusMb = 0;
-      if (estTotalMb <= modelMb) {
-        surplusMb = modelMb - estTotalMb;
-      } else {
-        scale = estTotalMb > 0 ? modelMb / estTotalMb : 0;
-      }
-      const weightsMb = weightsEstMb * scale;
-      const kvMb = kvEstMb * scale;
-      const ckptMb = ckptEstMb * scale;
-      const draftMb = draftEstMb * scale;
-      const computeMb = computeEstMb * scale;
-      const mmprojMb = mmprojEstMb * scale;
-      const headroomMb = headroomEstMb * scale;
-
-      const name = live[0].name || live[0].id;
-      const segments: VramSegment[] = [systemSeg];
-      if (weightsMb > 0)
-        segments.push({ label: "Weights", mb: weightsMb, class: "bg-primary", detail: `${name} model file weights on GPU` });
-      if (mmprojMb > 0)
-        segments.push({ label: "Vision projector", mb: mmprojMb, class: "bg-primary/60", detail: `${name} mmproj weights + CLIP compute reserve` });
-      if (draftMb > 0)
-        segments.push({ label: "Draft", mb: draftMb, class: "bg-primary/40", detail: `${name} speculative draft / MTP model on GPU` });
-      if (computeMb > 0)
-        segments.push({ label: "Compute buffer", mb: computeMb, class: "bg-success", detail: `${name} logits + activations` });
-      if (kvMb > 0)
-        segments.push({ label: "KV cache", mb: kvMb, class: "bg-warning", detail: `${name} attention cache (ctx ${$est.est.ctx})` });
-      if (ckptMb > 0)
-        segments.push({ label: "Checkpoints", mb: ckptMb, class: "bg-error", detail: `${name} context-checkpoint KV snapshots` });
-      if (headroomMb > 0)
-        segments.push({ label: "Headroom", mb: headroomMb, class: "bg-txtsecondary/30", detail: "reserved safety headroom (vramOverheadGB)" });
-      if (surplusMb > 0)
-        segments.push({ label: "Overhead", mb: surplusMb, class: "bg-success/60", detail: "measured runtime overhead beyond the estimate" });
-      segments.push(...foreign);
-      return { usedMb: rawUsed, totalMb: $gpu.mem_total_mb, segments };
+    // Component split whenever every loaded model has a fresh estimate, however
+    // many that is.
+    const split = modelMb > 0 ? loadedSegments(live, $ests, modelMb) : null;
+    if (split) {
+      return { usedMb: rawUsed, totalMb: $gpu.mem_total_mb, segments: [systemSeg, ...split, ...foreign] };
     }
 
-    // Fallback: undifferentiated model slice (no estimate, or >1 model).
+    // Fallback: undifferentiated model slice (a model still loading, or an
+    // estimate request that failed).
     const modelNames = live.map((m) => m.name || m.id);
     return {
       usedMb: rawUsed,

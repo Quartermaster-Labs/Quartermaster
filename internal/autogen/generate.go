@@ -54,6 +54,12 @@ type profile struct {
 	// prompt-prefix checkpoint cache). nil => inherit the model-wide value, else
 	// the llama-server default (32). See effectiveCtxCheckpoints.
 	CtxCheckpoints *int
+	// DraftSlopeGB is the per-token VRAM (GB) the baked-in MTP drafter's own KV
+	// cache adds on top of the main model's, at this profile's draft KV quant.
+	// See mtpDraftSlopeGB: the drafter is a second llama_context over the same
+	// model at the SAME n_ctx, so its cost scales with the window and has to be
+	// part of the slope the sizer solves ctx against, not a flat overhead.
+	DraftSlopeGB float64
 	// CheckpointMinStep, when > 0, is the resolved -cms (checkpoint spacing in
 	// prompt tokens) for this profile. 0 => the arch default from
 	// defaultCheckpointMinStep. Both the emitted flag and the VRAM reserve read
@@ -453,12 +459,20 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		}
 	}
 
-	// Charge the GPU compute buffer (logits + activations + CUDA runtime) per
-	// profile; it scales with the physical batch and lives on the GPU regardless
-	// of CPU expert offload, so it's flat VRAM overhead. Replaces the old flat
-	// 0.17 GB ubSoloOh fudge.
+	// Charge the GPU compute buffer (logits + activations + the GPU runtime
+	// constant) per profile; it scales with the physical batch and lives on the
+	// GPU regardless of CPU expert offload, so it's flat VRAM overhead. Replaces
+	// the old flat 0.17 GB ubSoloOh fudge. A baked-in MTP drafter runs a second
+	// llama_context and is charged its own graph on top, at the same ub.
 	for i := range profiles {
-		profiles[i].Overhead += computeBufferGB(meta, effectiveUb(meta, profiles[i], ov, profiles[i].Ctx, s.TargetVramGB), s.ComputeBufFactor)
+		ub := effectiveUb(meta, profiles[i], ov, profiles[i].Ctx, s.TargetVramGB)
+		pspec := modelSpec
+		if profiles[i].Spec != "" {
+			pspec = profiles[i].Spec
+		}
+		pDraftGB := matchedDraftSizeGB(pspec, row.DraftKind, row.DraftSizeGB)
+		profiles[i].Overhead += computeBufferGB(meta, ub, s.ComputeBufFactor) +
+			mtpDraftComputeGB(meta, pspec, pDraftGB, ub, s.ComputeBufFactor)
 	}
 
 	for _, prof := range profiles {
@@ -507,6 +521,21 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		if pSlots > 1 {
 			ptg *= float64(pSlots)
 			kcg *= float64(pSlots)
+		}
+
+		// A baked-in MTP head runs as a second context over the same model at the
+		// same window, so its KV is a per-token cost on top of ptg, not a flat
+		// overhead (draftOverheadGB now only charges its compute pad). Resolve it
+		// per profile: a variant can carry its own spec chain and its own kv quant,
+		// and -ctkd follows the effective main quant.
+		pspec := modelSpec
+		if prof.Spec != "" {
+			pspec = prof.Spec
+		}
+		pdKvK, pdKvV := draftKvPair(override.KvKDraft, override.KvVDraft, ekvK, ekvV)
+		prof.DraftSlopeGB = mtpDraftSlopeFor(meta, pspec, pdKvK, pdKvV, matchedDraftSizeGB(pspec, row.DraftKind, row.DraftSizeGB))
+		if pSlots > 1 {
+			prof.DraftSlopeGB *= float64(pSlots)
 		}
 
 		ctx, plan, kvReserve, planCkptGB, err := sizeProfile(meta, s, prof, ptg, kcg, pModelMax, pkvInRam)

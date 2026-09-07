@@ -106,10 +106,15 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 	}
 
 	in := EstimateInput{
-		Ctx:          atoiFlag(args, "-c", "--ctx-size"),
-		KvK:          flagStr(args, "-ctk", "--cache-type-k"),
-		KvV:          flagStr(args, "-ctv", "--cache-type-v"),
-		KvInRam:      hasFlag(args, "--no-kv-offload"),
+		Ctx:     atoiFlag(args, "-c", "--ctx-size"),
+		KvK:     flagStr(args, "-ctk", "--cache-type-k"),
+		KvV:     flagStr(args, "-ctv", "--cache-type-v"),
+		KvInRam: hasFlag(args, "--no-kv-offload"),
+		// Draft cache type. An argv without -ctkd really does run the draft
+		// context on f16 (llama's own default is independent of -ctk), so pin f16
+		// rather than letting the sizer assume the emitter's matched default.
+		KvKDraft:     flagStrDef(args, "f16", "-ctkd", "--cache-type-k-draft"),
+		KvVDraft:     flagStrDef(args, "f16", "-ctvd", "--cache-type-v-draft"),
 		Spec:         specTypes(args),
 		RopeScaling:  flagStr(args, "--rope-scaling"),
 		TargetVramGB: budgetGB, // EstimatePlan subtracts overhead via s
@@ -149,8 +154,8 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 		}
 	}
 	// A separate draft gguf (-md: MTP sidecar or any DFlash drafter) has real
-	// weights on disk; charge its actual size instead of the flat 0.34 GB
-	// baked-in-MTP default so a big drafter doesn't get under-charged here.
+	// weights on disk; charge its actual size instead of the small baked-in-MTP
+	// pad so a big drafter doesn't get under-charged here.
 	if md, i := argVal(args, "-md"); i >= 0 {
 		if fi, statErr := os.Stat(md); statErr == nil {
 			in.DraftGB = float64(fi.Size()) / gib
@@ -396,6 +401,15 @@ func argVal(args []string, names ...string) (string, int) {
 func flagStr(args []string, names ...string) string {
 	v, _ := argVal(args, names...)
 	return v
+}
+
+// flagStrDef is flagStr with a fallback for a flag the argv omits, for the cases
+// where "absent" means a specific llama default rather than "let us choose".
+func flagStrDef(args []string, def string, names ...string) string {
+	if v, idx := argVal(args, names...); idx >= 0 && v != "" {
+		return v
+	}
+	return def
 }
 
 func atoiFlag(args []string, names ...string) int {

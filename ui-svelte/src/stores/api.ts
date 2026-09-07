@@ -438,6 +438,7 @@ export interface ModelOverride {
   cacheReuse?: number;
   cacheRamMB?: number;
   cacheIdleSlots?: string;
+  logVerbosity?: number;
   swaFull?: boolean;
   checkpointMinStep?: number;
   contextShift?: string;

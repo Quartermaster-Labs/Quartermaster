@@ -191,6 +191,7 @@ type overrideDTO struct {
 	CacheReuse           int     `json:"cacheReuse"`
 	CacheRamMB           int     `json:"cacheRamMB"`
 	CacheIdleSlots       string  `json:"cacheIdleSlots"`
+	LogVerbosity         int     `json:"logVerbosity"`
 	SwaFull              bool    `json:"swaFull"`
 	CheckpointMinStep    int     `json:"checkpointMinStep"`
 	ContextShift         string  `json:"contextShift"`
@@ -314,7 +315,8 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		SpecNgramSizeN: o.SpecNgramSizeN, SpecNgramSizeM: o.SpecNgramSizeM, SpecNgramMinHits: o.SpecNgramMinHits,
 		ThreadsBatch: o.ThreadsBatch, Prio: o.Prio, DirectIo: o.DirectIo, NoOpOffload: o.NoOpOffload, NoRepack: o.NoRepack,
 		KvKDraft: o.KvKDraft, KvVDraft: o.KvVDraft, CacheReuse: o.CacheReuse, CacheRamMB: o.CacheRamMB, CacheIdleSlots: o.CacheIdleSlots,
-		SwaFull: o.SwaFull, CheckpointMinStep: o.CheckpointMinStep, ContextShift: o.ContextShift,
+		LogVerbosity: o.LogVerbosity,
+		SwaFull:      o.SwaFull, CheckpointMinStep: o.CheckpointMinStep, ContextShift: o.ContextShift,
 		SpecDraftNMin: o.SpecDraftNMin, SlotPromptSimilarity: o.SlotPromptSimilarity,
 		RopeScaling: o.RopeScaling, RopeScale: o.RopeScale, RopeFreqBase: o.RopeFreqBase, YarnOrigCtx: o.YarnOrigCtx,
 		SplitMode: o.SplitMode, TensorSplit: o.TensorSplit, MainGpu: o.MainGpu, OverrideTensor: o.OverrideTensor,
@@ -416,6 +418,7 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.CacheReuse = body.CacheReuse
 	ov.CacheRamMB = body.CacheRamMB
 	ov.CacheIdleSlots = body.CacheIdleSlots
+	ov.LogVerbosity = body.LogVerbosity
 	ov.SwaFull = body.SwaFull
 	ov.CheckpointMinStep = body.CheckpointMinStep
 	ov.ContextShift = body.ContextShift

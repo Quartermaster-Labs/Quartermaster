@@ -90,6 +90,14 @@ func estimateInputFromCmd(cmd string) autogen.EstimateInput {
 			if v, ok := next(); ok {
 				in.KvV = v
 			}
+		case "-ctkd", "--cache-type-k-draft":
+			if v, ok := next(); ok {
+				in.KvKDraft = v
+			}
+		case "-ctvd", "--cache-type-v-draft":
+			if v, ok := next(); ok {
+				in.KvVDraft = v
+			}
 		case "--no-kv-offload":
 			in.KvInRam = true
 		case "-md", "--model-draft", "--spec-draft-model":
@@ -107,6 +115,15 @@ func estimateInputFromCmd(cmd string) autogen.EstimateInput {
 	// cmds always carry both flags; this only catches hand-written ones.
 	if in.CheckpointMinStep <= 0 {
 		in.CheckpointMinStep = autogen.LlamaDefaultCheckpointMinStep
+	}
+	// Same rule for the draft cache type: a cmd with no -ctkd runs the MTP draft
+	// context on llama's f16 default whatever -ctk says, so the preview must
+	// charge f16 rather than the emitter's matched-to-main default.
+	if in.KvKDraft == "" {
+		in.KvKDraft = "f16"
+	}
+	if in.KvVDraft == "" {
+		in.KvVDraft = "f16"
 	}
 	if in.CtxCheckpoints == nil {
 		n := autogen.LlamaDefaultCtxCheckpoints

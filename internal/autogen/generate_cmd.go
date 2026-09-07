@@ -405,16 +405,21 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		if row.DraftPath != "" && mdMatches {
 			lines = append(lines, fmt.Sprintf("-md %s", strings.ReplaceAll(row.DraftPath, "\\", "/")))
 			lines = append(lines, "-ngld 99")
-			// Draft KV quant (-ctkd/-ctvd). "" => llama's f16 default; a matched
-			// quant here shrinks the resident draft's KV VRAM (fa is global, so the
-			// same flash-attn that gates main quant KV covers the draft too).
-			if ov != nil && ov.KvKDraft != "" {
-				lines = append(lines, fmt.Sprintf("-ctkd %s", ov.KvKDraft))
-			}
-			if ov != nil && ov.KvVDraft != "" {
-				lines = append(lines, fmt.Sprintf("-ctvd %s", ov.KvVDraft))
-			}
 		}
+		// Draft KV quant (-ctkd/-ctvd), defaulted to the model's OWN -ctk/-ctv.
+		// This is not "draft models only": a baked-in MTP head has no -md and
+		// still gets a full second context whose cache type comes from this same
+		// field, and llama's default for it is f16 no matter what -ctk says. On
+		// Qwen3.8-27B at 160k that lone nextn layer was paying 0.61 GB of f16 KV
+		// while the main cache ran q8_0; matching them halves it for free. Flash
+		// attention is global, so the same fa that licenses a quantized main KV
+		// covers the draft's. An override still wins on either side.
+		ovDraftK, ovDraftV := "", ""
+		if ov != nil {
+			ovDraftK, ovDraftV = ov.KvKDraft, ov.KvVDraft
+		}
+		dKvK, dKvV := draftKvPair(ovDraftK, ovDraftV, kvK, kvV)
+		lines = append(lines, fmt.Sprintf("-ctkd %s -ctvd %s", dKvK, dKvV))
 	}
 	if specHas(spec, "ngram-map-k4v") && ov != nil {
 		if ov.SpecDefault {
@@ -531,6 +536,9 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		}
 		if ov.CacheRamMB > 0 {
 			lines = append(lines, fmt.Sprintf("-cram %d", ov.CacheRamMB))
+		}
+		if ov.LogVerbosity > 0 {
+			lines = append(lines, fmt.Sprintf("-lv %d", ov.LogVerbosity))
 		}
 		switch ov.CacheIdleSlots {
 		case "on":
@@ -702,7 +710,15 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 
 		CheckpointMinStep: ov.CheckpointMinStep,
 	}
-	prof.Overhead += computeBufferGB(meta, effectiveUb(meta, prof, &ov, prof.Ctx, s.TargetVramGB), s.ComputeBufFactor)
+	soloUb := effectiveUb(meta, prof, &ov, prof.Ctx, s.TargetVramGB)
+	// ...plus the second llama_context a baked-in MTP drafter runs, which
+	// allocates a graph of its own at that same ub (see mtpDraftComputeGB).
+	prof.Overhead += computeBufferGB(meta, soloUb, s.ComputeBufFactor) +
+		mtpDraftComputeGB(meta, soloSpec, soloDraftGB, soloUb, s.ComputeBufFactor)
+	// The baked-in MTP drafter's own KV scales with the window, so it belongs in
+	// the slope the sizer solves ctx against (see mtpDraftSlopeFor).
+	sdKvK, sdKvV := draftKvPair(ov.KvKDraft, ov.KvVDraft, kvK, kvV)
+	prof.DraftSlopeGB = mtpDraftSlopeFor(meta, soloSpec, sdKvK, sdKvV, soloDraftGB)
 	ctx, plan, kvReserve, _, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, ov.KvInRam)
 	if err != nil {
 		return "", err
