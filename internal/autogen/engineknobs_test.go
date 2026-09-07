@@ -59,11 +59,18 @@ func TestComputeBufferGB(t *testing.T) {
 		t.Errorf("missing dims: got %.3f, want fallback %.3f", fb, computeFallbackGB)
 	}
 
-	// Non-CUDA GPU (Vulkan/ROCm) drops the fixed CUDA-context constant.
+	// A non-CUDA GPU (Vulkan/ROCm) swaps the runtime constant rather than
+	// dropping it: measured per-process, the HIP runtime reserves MORE than the
+	// CUDA one, so charging 0 there under-committed by ~0.4 GB per model.
 	cudaGPU.Store(false)
 	defer cudaGPU.Store(true)
-	if d := got - computeBufferGB(meta, 1024, 1.0); d < computeCudaCtxGB-0.001 || d > computeCudaCtxGB+0.001 {
-		t.Errorf("non-CUDA should drop the %.2f CUDA-ctx constant, dropped %.3f", computeCudaCtxGB, d)
+	want := computeHipCtxGB - computeCudaCtxGB
+	if d := computeBufferGB(meta, 1024, 1.0) - got; math.Abs(d-want) > 0.001 {
+		t.Errorf("non-CUDA should swap in the %.2f HIP-ctx constant (delta %+.2f), got %+.3f", computeHipCtxGB, want, d)
+	}
+	// The fallback is a whole-buffer figure, so it must not move with the backend.
+	if fb := computeBufferGB(Metadata{}, 1024, 1.0); fb != computeFallbackGB {
+		t.Errorf("non-CUDA fallback: got %.3f, want %.3f", fb, computeFallbackGB)
 	}
 }
 
@@ -132,7 +139,7 @@ func TestEmitProfile_AdvancedKnobs(t *testing.T) {
 	// Unset: none of the advanced flags appear.
 	var def strings.Builder
 	emitProfile(&def, s, meta, row, profile{Name: "foo"}, 8192, 10, 0, LoadPlan{}, "q8_0", "q8_0", false, &Override{})
-	for _, unwanted := range []string{"-tb ", "--prio", "-dio", "--no-op-offload", "--no-repack", "--cache-reuse", "-cram", "--cache-idle-slots", "--swa-full", "--context-shift", "--spec-draft-n-min", "-sps", "--rope-scaling", "-sm ", "-ts ", "-mg ", "-ot "} {
+	for _, unwanted := range []string{"-tb ", "--prio", "-dio", "--no-op-offload", "--no-repack", "--cache-reuse", "-lv ", "-cram", "--cache-idle-slots", "--swa-full", "--context-shift", "--spec-draft-n-min", "-sps", "--rope-scaling", "-sm ", "-ts ", "-mg ", "-ot "} {
 		if strings.Contains(def.String(), unwanted) {
 			t.Errorf("unexpected %q emitted for a blank override:\n%s", unwanted, def.String())
 		}
@@ -147,7 +154,7 @@ func TestEmitProfile_AdvancedKnobs(t *testing.T) {
 	// Set: each flag renders.
 	ov := &Override{
 		ThreadsBatch: 12, Prio: 2, DirectIo: true, NoOpOffload: true, NoRepack: true,
-		CacheReuse: 256, CacheRamMB: 4096, CacheIdleSlots: "off", SwaFull: true,
+		CacheReuse: 256, LogVerbosity: 5, CacheRamMB: 4096, CacheIdleSlots: "off", SwaFull: true,
 		CheckpointMinStep: 2048, ContextShift: "on", SpecDraftNMin: 1, SlotPromptSimilarity: 0.5,
 		RopeScaling: "yarn", RopeScale: 2, RopeFreqBase: 1000000, YarnOrigCtx: 4096,
 		SplitMode: "row", TensorSplit: "3,1", MainGpu: 1, OverrideTensor: "exps=CPU",
@@ -155,7 +162,7 @@ func TestEmitProfile_AdvancedKnobs(t *testing.T) {
 	var on strings.Builder
 	emitProfile(&on, s, meta, row, profile{Name: "foo"}, 8192, 10, 0, LoadPlan{}, "q8_0", "q8_0", false, ov)
 	out := on.String()
-	for _, want := range []string{"-tb 12", "--prio 2", "--no-op-offload", "--no-repack", "--cache-reuse 256", "--load-mode dio", "-cram 4096", "--no-cache-idle-slots", "--swa-full", "-cms 2048", "--context-shift", "--spec-draft-n-min 1", "-sps 0.5", "--rope-scaling yarn", "--rope-scale 2", "--rope-freq-base 1e+06", "--yarn-orig-ctx 4096", "-sm row", "-ts 3,1", "-mg 1", "-ot exps=CPU"} {
+	for _, want := range []string{"-tb 12", "--prio 2", "--no-op-offload", "--no-repack", "--cache-reuse 256", "-lv 5", "--load-mode dio", "-cram 4096", "--no-cache-idle-slots", "--swa-full", "-cms 2048", "--context-shift", "--spec-draft-n-min 1", "-sps 0.5", "--rope-scaling yarn", "--rope-scale 2", "--rope-freq-base 1e+06", "--yarn-orig-ctx 4096", "-sm row", "-ts 3,1", "-mg 1", "-ot exps=CPU"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in emit:\n%s", want, out)
 		}

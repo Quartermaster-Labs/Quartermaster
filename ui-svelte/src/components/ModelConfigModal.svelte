@@ -17,6 +17,7 @@
     models,
   } from "../stores/api";
   import { get } from "svelte/store";
+  import { tick } from "svelte";
   import { FolderOpen, HelpCircle, X } from "lucide-svelte";
   import { tip } from "../lib/tooltip";
   import { askConfirm } from "../lib/confirm";
@@ -30,8 +31,10 @@
     fmtCtx,
     genDefaultKv,
     genDefaultNum,
+    cmdNum,
     genDefaultSpec,
     hoistChatTemplate,
+    hoistCms,
     nglDisplay,
     noNoMmap,
     parseCmdFields,
@@ -55,6 +58,8 @@
   let { modelId, open, onclose, openForId = "" }: Props = $props();
 
   let dialogEl: HTMLDialogElement | undefined = $state();
+  // The scrolling body, so a post-save re-seed can restore the reading position.
+  let bodyEl: HTMLDivElement | undefined = $state();
 
   let loading = $state(false);
   let saving = $state(false);
@@ -158,11 +163,11 @@
   // Numeric fields hold "" (=inherit/omit) or a number; tri-states hold ""/"on"/"off".
   type AdvKnobs = {
     threadsBatch: number | ""; prio: number | ""; directIo: boolean; noOpOffload: boolean; noRepack: boolean;
-    kvKDraft: string; kvVDraft: string; cacheReuse: number | ""; cacheRamMB: number | ""; cacheIdleSlots: string;
+    kvKDraft: string; kvVDraft: string; cacheReuse: number | ""; logVerbosity: number | ""; cacheRamMB: number | ""; cacheIdleSlots: string;
     swaFull: boolean; checkpointMinStep: number | ""; contextShift: string; specDraftNMin: number | "";
     slotPromptSimilarity: number | ""; ropeScaling: string; ropeScale: number | ""; ropeFreqBase: number | "";
     yarnOrigCtx: number | ""; splitMode: string; tensorSplit: string; mainGpu: number | ""; overrideTensor: string;
-    chatTemplateFile: string;
+    chatTemplateFile: string; mmprojFile: string;
     // Sampler defaults. "" => omit the flag (llama's default, or the arch
     // baseline for top-k/min-p); a number pins it, INCLUDING 0 — which is why
     // these round-trip through null rather than the 0-means-inherit convention
@@ -172,11 +177,11 @@
   function blankAdv(): AdvKnobs {
     return {
       threadsBatch: "", prio: "", directIo: false, noOpOffload: false, noRepack: false,
-      kvKDraft: "", kvVDraft: "", cacheReuse: "", cacheRamMB: "", cacheIdleSlots: "",
+      kvKDraft: "", kvVDraft: "", cacheReuse: "", logVerbosity: "", cacheRamMB: "", cacheIdleSlots: "",
       swaFull: false, checkpointMinStep: "", contextShift: "", specDraftNMin: "",
       slotPromptSimilarity: "", ropeScaling: "", ropeScale: "", ropeFreqBase: "",
       yarnOrigCtx: "", splitMode: "", tensorSplit: "", mainGpu: "", overrideTensor: "",
-      chatTemplateFile: "",
+      chatTemplateFile: "", mmprojFile: "",
       temp: "", topK: "", topP: "", minP: "", presencePenalty: "",
     };
   }
@@ -187,13 +192,13 @@
       threadsBatch: o?.threadsBatch || "", prio: o?.prio || "", directIo: o?.directIo ?? false,
       noOpOffload: o?.noOpOffload ?? false, noRepack: o?.noRepack ?? false,
       kvKDraft: o?.kvKDraft ?? "", kvVDraft: o?.kvVDraft ?? "",
-      cacheReuse: o?.cacheReuse || "", cacheRamMB: o?.cacheRamMB || "", cacheIdleSlots: o?.cacheIdleSlots ?? "",
+      cacheReuse: o?.cacheReuse || "", logVerbosity: o?.logVerbosity || "", cacheRamMB: o?.cacheRamMB || "", cacheIdleSlots: o?.cacheIdleSlots ?? "",
       swaFull: o?.swaFull ?? false, checkpointMinStep: o?.checkpointMinStep || "", contextShift: o?.contextShift ?? "",
       specDraftNMin: o?.specDraftNMin || "", slotPromptSimilarity: o?.slotPromptSimilarity || "",
       ropeScaling: o?.ropeScaling ?? "", ropeScale: o?.ropeScale || "", ropeFreqBase: o?.ropeFreqBase || "",
       yarnOrigCtx: o?.yarnOrigCtx || "", splitMode: o?.splitMode ?? "", tensorSplit: o?.tensorSplit ?? "",
       mainGpu: o?.mainGpu || "", overrideTensor: o?.overrideTensor ?? "",
-      chatTemplateFile: o?.chatTemplateFile ?? "",
+      chatTemplateFile: o?.chatTemplateFile ?? "", mmprojFile: o?.mmprojFile ?? "",
       // `?? ""`, never `|| ""`: a saved 0 (greedy temp, min-p off) is a pin, and
       // `||` would silently read it back as "inherit".
       temp: o?.temp ?? "", topK: o?.topK ?? "", topP: o?.topP ?? "",
@@ -211,23 +216,25 @@
     return {
       threadsBatch: n(adv.threadsBatch), prio: n(adv.prio), directIo: adv.directIo,
       noOpOffload: adv.noOpOffload, noRepack: adv.noRepack, kvKDraft: adv.kvKDraft, kvVDraft: adv.kvVDraft,
-      cacheReuse: n(adv.cacheReuse), cacheRamMB: n(adv.cacheRamMB), cacheIdleSlots: adv.cacheIdleSlots,
+      cacheReuse: n(adv.cacheReuse), logVerbosity: n(adv.logVerbosity), cacheRamMB: n(adv.cacheRamMB), cacheIdleSlots: adv.cacheIdleSlots,
       swaFull: adv.swaFull, checkpointMinStep: n(adv.checkpointMinStep), contextShift: adv.contextShift,
       specDraftNMin: n(adv.specDraftNMin), slotPromptSimilarity: n(adv.slotPromptSimilarity),
       ropeScaling: adv.ropeScaling, ropeScale: n(adv.ropeScale), ropeFreqBase: n(adv.ropeFreqBase),
       yarnOrigCtx: n(adv.yarnOrigCtx), splitMode: adv.splitMode, tensorSplit: adv.tensorSplit,
       mainGpu: n(adv.mainGpu), overrideTensor: adv.overrideTensor,
-      chatTemplateFile: adv.chatTemplateFile.trim(),
+      chatTemplateFile: adv.chatTemplateFile.trim(), mmprojFile: adv.mmprojFile.trim(),
       temp: nn(adv.temp), topK: nn(adv.topK), topP: nn(adv.topP),
       minP: nn(adv.minP), presencePenalty: nn(adv.presencePenalty),
     };
   }
-  // Native open-file dialog for the chat-template path (the dialog opens on the
-  // server host — the operator's own machine for a local install). Returns null
-  // on cancel or on a platform with no picker, leaving the text field alone.
-  async function browseChatTemplate(apply: (path: string) => void): Promise<void> {
+  // Native open-file dialog for a path field (the dialog opens on the server
+  // host — the operator's own machine for a local install). The kind is a
+  // server-side whitelist key (pickfile_spec.go), never a filter built here.
+  // Returns null on cancel or on a platform with no picker, leaving the field
+  // alone.
+  async function browseFile(kind: string, apply: (path: string) => void): Promise<void> {
     try {
-      const picked = await pickFileOfKind("template");
+      const picked = await pickFileOfKind(kind);
       if (picked) apply(picked);
     } catch {
       // picker failed — the field stays typable, no need to nag
@@ -266,6 +273,12 @@
   // flags back into the form (parseCmd, on blur) and stashes anything autogen
   // doesn't model into extraArgs (passthrough, appended to the emitted command).
   let cmdDraft = $state("");
+  // The command the render effect last produced, i.e. what the box held before
+  // the user touched it. A blur compares against this, not against the model's
+  // autogen baseline: for a flag the generator ALWAYS emits, the text alone
+  // cannot say whether a value is a pin or the computed default, so "the user
+  // did not touch it" is the only safe read of an unchanged value.
+  let cmdRendered = $state("");
   let extraArgs = $state("");
 
   // --- Backend selection (per-model) ---
@@ -351,7 +364,9 @@
     specNgramSizeM = p.specNgramSizeM;
     specNgramMinHits = p.specNgramMinHits;
     extraArgs = p.extraArgs;
+    ctxCheckpoints = ckptEdit(p.ctxCheckpoints, ctxCheckpoints);
     adv.chatTemplateFile = p.chatTemplateFile;
+    adv.checkpointMinStep = cmsEdit(p.checkpointMinStep, adv.checkpointMinStep);
     adv.temp = samplerDelta(p.temp, "--temp");
     adv.topK = samplerDelta(p.topK, "--top-k");
     adv.topP = samplerDelta(p.topP, "--top-p");
@@ -364,6 +379,33 @@
   // Without it, blurring the box for any unrelated reason would convert autogen's
   // arch-derived --top-k 20 / --min-p 0 baseline into an explicit per-model pin
   // that then never tracks a future change to that baseline.
+  // --ctx-checkpoints out of the box. autogen ALWAYS emits this flag (llama-server
+  // otherwise keeps 32 snapshots and silently overflows VRAM), so "absent from the
+  // box" cannot round-trip as "absent from the command" - it means the user wants
+  // checkpointing off, which is the pinned 0. A value left exactly as rendered is
+  // treated as untouched and keeps whatever the field held (auto, or a pin), so a
+  // blur for some unrelated edit never freezes the computed default into a pin.
+  function ckptEdit(parsed: number | null, current: number | null): number | null {
+    const shown = cmdNum(cmdRendered, "--ctx-checkpoints");
+    if (parsed === null) return shown === "" ? current : 0;
+    if (parsed === shown) return current;
+    return parsed;
+  }
+
+  // -cms out of the box. Same shape as ckptEdit, and for the same reason:
+  // autogen ALWAYS emits this flag, so a value identical to the rendered one
+  // means "untouched" and must keep whatever the field held - otherwise a blur
+  // for some unrelated edit freezes the sizer's computed spacing into a pin that
+  // then never tracks a future change to it. There is no "no -cms" state to
+  // round-trip to, so deleting the flag reads as 0 (let the sizer pick) and the
+  // flag reappears on the next render.
+  function cmsEdit(parsed: number | "", current: number | ""): number | "" {
+    const shown = cmdNum(cmdRendered, "-cms");
+    if (parsed === "") return shown === "" ? current : 0;
+    if (parsed === shown) return current;
+    return parsed;
+  }
+
   function samplerDelta(parsed: number | "", flag: string): number | "" {
     return parsed === genDefaultNum(config, flag) ? "" : parsed;
   }
@@ -433,10 +475,14 @@
     v.topP = sv(p.topP, "--top-p");
     v.minP = sv(p.minP, "--min-p");
     v.presencePenalty = sv(p.presencePenalty, "--presence-penalty");
-    v.extraArgs = p.extraArgs.trim();
-    // The variant box renders the inherited model-wide template too — capture it
-    // as a delta so an untouched value stays "inherit" ("") instead of pinning.
-    v.chatTemplateFile = p.chatTemplateFile === adv.chatTemplateFile.trim() ? "" : p.chatTemplateFile;
+    // The variant box renders the INHERITED model-wide values too, so these are
+    // captured as a delta against the Default tab: unchanged stays "inherit"
+    // ("") instead of pinning, and deleting a flag the model-wide sets becomes
+    // an explicit "none" rather than silently inheriting it straight back.
+    v.ctxCheckpoints = ckptEdit(p.ctxCheckpoints, v.ctxCheckpoints ?? null);
+    v.checkpointMinStep = Number(cmsEdit(p.checkpointMinStep, v.checkpointMinStep ?? "")) || 0;
+    v.extraArgs = deltaStr(p.extraArgs.trim(), extraArgs);
+    v.chatTemplateFile = deltaStr(p.chatTemplateFile, adv.chatTemplateFile);
   }
 
   function onCmdInput(e: Event) {
@@ -484,11 +530,35 @@
     cmdTimer = setTimeout(async () => {
       try {
         cmdDraft = await previewCmd(modelId!, ov);
+        cmdRendered = cmdDraft;
       } catch {
         /* leave the last good command in the box */
       }
     }, 150);
   });
+
+  // Resolve one inheriting free-form string knob the same way autogen does
+  // (internal/autogen/inherit.go): blank inherits the model-wide value, the
+  // literal "none" forces the knob off, anything else pins. Kept in sync by
+  // hand — the preview must render the command the generator will emit, and a
+  // plain `||` chain would show `--chat-template-file none`.
+  const NONE_SENTINEL = "none";
+  const isNone = (v: string | undefined): boolean => (v ?? "").trim().toLowerCase() === NONE_SENTINEL;
+  function inheritStr(variant: string | undefined, model: string | undefined): string {
+    const v = (variant ?? "").trim();
+    if (v === "") return model ?? "";
+    if (v.toLowerCase() === NONE_SENTINEL) return "";
+    return variant ?? "";
+  }
+
+  // Inverse of inheritStr: turn a variant's fully-rendered value back into the
+  // delta the config file stores.
+  function deltaStr(parsed: string, model: string): string {
+    const m = (model ?? "").trim();
+    if (parsed === m) return "";
+    if (parsed === "" && m !== "") return NONE_SENTINEL;
+    return parsed;
+  }
 
   // A named variant INHERITS the model-wide override (the Default tab) and layers
   // its own non-blank fields on top — same as the generate path. So the preview
@@ -501,11 +571,11 @@
       const base = buildOverride();
       return {
         ...base,
-        vaePath: v.vaePath || base.vaePath,
-        clipLPath: v.clipLPath || base.clipLPath,
-        clipGPath: v.clipGPath || base.clipGPath,
-        t5Path: v.t5Path || base.t5Path,
-        textEncoderPath: v.textEncoderPath || base.textEncoderPath,
+        vaePath: inheritStr(v.vaePath, base.vaePath),
+        clipLPath: inheritStr(v.clipLPath, base.clipLPath),
+        clipGPath: inheritStr(v.clipGPath, base.clipGPath),
+        t5Path: inheritStr(v.t5Path, base.t5Path),
+        textEncoderPath: inheritStr(v.textEncoderPath, base.textEncoderPath),
         offloadToCpu: v.offloadToCpu || base.offloadToCpu,
         teOnCpu: v.teOnCpu || base.teOnCpu,
         vaeOnCpu: v.vaeOnCpu || base.vaeOnCpu,
@@ -518,7 +588,7 @@
         defaultSampler: v.defaultSampler || base.defaultSampler,
         defaultWidth: v.defaultWidth || base.defaultWidth,
         defaultHeight: v.defaultHeight || base.defaultHeight,
-        extraArgs: v.extraArgs || base.extraArgs,
+        extraArgs: inheritStr(v.extraArgs, base.extraArgs),
         unlisted: v.unlisted ?? false,
         variants: [],
       };
@@ -543,7 +613,7 @@
       threads: v.threads || base.threads || 0,
       parallel: v.parallel || base.parallel || 0,
       ub: v.ub || base.ub || 0,
-      extraArgs: v.extraArgs || base.extraArgs || "",
+      extraArgs: inheritStr(v.extraArgs, base.extraArgs),
       dry: v.dry ?? base.dry ?? null,
       dryMultiplier: v.dryMultiplier || base.dryMultiplier || 0,
       dryBase: v.dryBase || base.dryBase || 0,
@@ -565,8 +635,8 @@
       directIo: v.directIo ?? base.directIo ?? false,
       noOpOffload: v.noOpOffload ?? base.noOpOffload ?? false,
       noRepack: v.noRepack ?? base.noRepack ?? false,
-      kvKDraft: v.kvKDraft || base.kvKDraft || "",
-      kvVDraft: v.kvVDraft || base.kvVDraft || "",
+      kvKDraft: inheritStr(v.kvKDraft, base.kvKDraft),
+      kvVDraft: inheritStr(v.kvVDraft, base.kvVDraft),
       cacheReuse: v.cacheReuse || base.cacheReuse || 0,
       cacheRamMB: v.cacheRamMB || base.cacheRamMB || 0,
       cacheIdleSlots: v.cacheIdleSlots || base.cacheIdleSlots || "",
@@ -580,10 +650,11 @@
       ropeFreqBase: v.ropeFreqBase || base.ropeFreqBase || 0,
       yarnOrigCtx: v.yarnOrigCtx || base.yarnOrigCtx || 0,
       splitMode: v.splitMode || base.splitMode || "",
-      tensorSplit: v.tensorSplit || base.tensorSplit || "",
+      tensorSplit: inheritStr(v.tensorSplit, base.tensorSplit),
       mainGpu: v.mainGpu || base.mainGpu || 0,
-      overrideTensor: v.overrideTensor || base.overrideTensor || "",
-      chatTemplateFile: v.chatTemplateFile || base.chatTemplateFile || "",
+      overrideTensor: inheritStr(v.overrideTensor, base.overrideTensor),
+      chatTemplateFile: inheritStr(v.chatTemplateFile, base.chatTemplateFile),
+      mmprojFile: inheritStr(v.mmprojFile, base.mmprojFile),
       ctxCheckpoints: v.ctxCheckpoints ?? null,
       // variant-local: never inherited from the base.
       unlisted: v.unlisted ?? false,
@@ -646,11 +717,19 @@
   // Tooltip on the reserved "vision" variant's name field. When the projector
   // was borrowed from a family member it names the file, so nobody hunts this
   // model's own folder for an mmproj that isn't there.
+  // The projector this model's twin actually loads, in three distinguishable
+  // states: pinned by hand (mmprojFile beats everything), borrowed from a family
+  // sibling, or simply sitting in the model's own folder. Only the first two are
+  // worth saying out loud - a dir-local projector is what everyone expects.
+  const mmprojPinned = $derived(adv.mmprojFile.trim());
+  const mmprojResolved = $derived(mmprojPinned || config?.mmprojPath || "");
   const visionNameTip = $derived(
     "Reserved: the auto-generated vision twin that loads the mmproj image projector. Tune its ctx/VRAM/visibility here; uncheck Unlisted to surface it in the model picker." +
-      (config?.mmprojInherited && config.mmprojPath
-        ? ` Projector: ${config.mmprojPath} (borrowed from a family member).`
-        : ""),
+      (mmprojPinned
+        ? ` Projector: ${mmprojPinned} (pinned by hand, discovery ignored).`
+        : config?.mmprojInherited && config.mmprojPath
+          ? ` Projector: ${config.mmprojPath} (borrowed from a family member).`
+          : ""),
   );
 
   // llama.cpp's kv_cache_types, minus iq4_nl (no flash-attention KV kernel).
@@ -840,6 +919,14 @@
         extraArgs = h.extra;
         if (!adv.chatTemplateFile) adv.chatTemplateFile = h.path;
       }
+      // Same for a -cms captured into extraArgs before the box parsed it: left
+      // there it is emitted a second time after the sizer's own copy, and grows
+      // by one more on every round trip through the launch box.
+      const c = hoistCms(extraArgs);
+      if (c.step !== "") {
+        extraArgs = c.extra;
+        if (!adv.checkpointMinStep) adv.checkpointMinStep = c.step;
+      }
     }
     unlisted = o?.unlisted ?? false;
     skip = o?.skip ?? false;
@@ -852,6 +939,11 @@
       if (h.path) {
         c.extraArgs = h.extra;
         if (!c.chatTemplateFile) c.chatTemplateFile = h.path;
+      }
+      const m = hoistCms(c.extraArgs ?? "");
+      if (m.step !== "") {
+        c.extraArgs = m.extra;
+        if (!c.checkpointMinStep) c.checkpointMinStep = m.step;
       }
       return c;
     });
@@ -883,7 +975,7 @@
       reasoningFmt: "", unlisted: false, ctxCheckpoints: null, dry: null, preserveThinking: null,
       slotCache: null,
       kvInRam: false, cpuOffload: 0, flashAttn: "", mmap: "", mlock: false,
-      threads: 0, parallel: 0, extraArgs: "", chatTemplateFile: "",
+      threads: 0, parallel: 0, extraArgs: "", chatTemplateFile: "", mmprojFile: "",
       dryMultiplier: 0, dryBase: 0, dryAllowedLength: 0,
       temp: null, topK: null, topP: null, minP: null, presencePenalty: null,
       specDraftNMax: 0, specDefault: false, specNgramSizeN: 0, specNgramSizeM: 0, specNgramMinHits: 0,
@@ -904,6 +996,7 @@
     // Select the ARRAY's element, not the raw literal: $state wraps elements in a
     // proxy, so `selectedV = nv` never `===` the rendered tab and nothing lights up.
     selectedV = variants[variants.length - 1];
+    focusVariantName();
   }
 
   // True when a ctx tier carries nothing but its ctx value, so it round-trips as
@@ -913,15 +1006,21 @@
       !v.vramTargetGB && !v.kvK && !v.kvV && !v.spec && !v.ub &&
       !v.reasoningFmt && !v.unlisted &&
       v.ctxCheckpoints == null && v.dry == null && v.preserveThinking == null && v.slotCache == null && !v.kvInRam && !v.cpuOffload &&
-      !v.flashAttn && !v.mmap && !v.mlock && !v.threads && !v.parallel && !v.extraArgs && !v.chatTemplateFile &&
+      !v.flashAttn && !v.mmap && !v.mlock && !v.threads && !v.parallel && !v.extraArgs && !v.chatTemplateFile && !v.mmprojFile &&
       !v.dryMultiplier && !v.dryBase && !v.dryAllowedLength &&
       v.temp == null && v.topK == null && v.topP == null && v.minP == null && v.presencePenalty == null &&
       !v.specDraftNMax && !v.specDefault && !v.specNgramSizeN && !v.specNgramSizeM && !v.specNgramMinHits
     );
   }
 
-  async function load() {
+  // keepView: re-seed in place after a save instead of landing on the tab the
+  // modal was originally opened for. Saving from a variant used to drop you back
+  // on Default at the top of the page - the config had not changed tab, only the
+  // re-seed had forgotten which one you were on.
+  async function load(keepView = false) {
     if (!modelId) return;
+    const keepName = keepView ? (selectedV?.name ?? "") : "";
+    const keepScroll = keepView ? (bodyEl?.scrollTop ?? 0) : 0;
     loading = true;
     error = null;
     try {
@@ -936,6 +1035,7 @@
       const o = cfg.override;
       autoCtx = parseCtx(cfg.cmd);
       cmdDraft = cfg.cmd; // render effect refreshes this to the canonical (${PORT}) form
+      cmdRendered = cfg.cmd;
       seedFromOverride(o);
       defaultVariants = (cfg.defaultVariants ?? []).map((v) => ({ ...v }));
       origDefaultVariants = JSON.stringify(defaultVariants);
@@ -950,8 +1050,8 @@
       // Land on the clicked row's variant: the model id ends with "-<name>" for
       // a variant/tier, or is the bare base for Default. Match the longest name so a
       // name that's a suffix of another doesn't win.
-      let chosen = "";
-      if (openForId) {
+      let chosen = keepName;
+      if (!chosen && openForId) {
         for (const v of [...variants, ...ctxTiers, ...defaultVariants]) {
           if (openForId.endsWith("-" + v.name) && v.name.length > chosen.length) chosen = v.name;
         }
@@ -959,6 +1059,9 @@
       selectedV = chosen
         ? ([...variants, ...ctxTiers, ...defaultVariants].find((v) => v.name === chosen) ?? null)
         : null;
+      // The re-seed re-renders the body, which resets its scroll. Put it back on
+      // the next frame, once the new content has laid out.
+      if (keepScroll > 0) requestAnimationFrame(() => bodyEl?.scrollTo({ top: keepScroll }));
       // Fetch each variant's own launch cmd so blank mmap checkboxes reflect that
       // variant's placement (not the base's). Best-effort, parallel, non-blocking.
       const idSet = new Set(get(models).map((m) => m.id));
@@ -1231,6 +1334,7 @@
     variants = [...variants, variantFromDefault(name)];
     // Select the proxied array element (see addImageVariantEntry).
     selectedV = variants[variants.length - 1];
+    focusVariantName();
   }
 
   // Add a fresh fleet-wide variant (shared by every model) and select it. Saved
@@ -1245,6 +1349,7 @@
     // variant: it inherits at creation, then drifts independently (standalone).
     defaultVariants = [...defaultVariants, variantFromDefault(name)];
     selectedV = defaultVariants[defaultVariants.length - 1];
+    focusVariantName();
   }
 
   // Remove a tab from whichever bucket holds it (per-model variant, ctx tier, or
@@ -1295,6 +1400,22 @@
   function setVSlotCache(val: string) {
     if (selectedV) selectedV.slotCache = val === "inherit" ? null : val === "on";
   }
+  // The selected variant's name field, so a freshly added variant can put the
+  // caret in it. Only one of the two name inputs (image preset / llm variant) is
+  // ever mounted, so a single ref is enough.
+  let nameInput = $state<HTMLInputElement | null>(null);
+
+  // A new variant is born holding a placeholder ("variant", "preset2") that is
+  // never what the user meant to keep, and the name drives the served id, so the
+  // first thing they always do is rename it. Focus the field and SELECT the
+  // placeholder, so the next keystroke replaces it instead of appending to it.
+  // tick() first: the field only enters the DOM once the new tab's panel renders.
+  async function focusVariantName() {
+    await tick();
+    nameInput?.focus();
+    nameInput?.select();
+  }
+
   // Renaming the selected variant must move the selection pointer with it so the
   // derived `selectedV` keeps resolving to the same array element.
   function renameSelectedVariant(e: Event) {
@@ -1363,8 +1484,9 @@
         await putDefaultVariants(defaultVariants);
       }
       // Stay open — the live reload applies in the background. Re-seed from the
-      // regenerated config so the modal reflects what actually got saved.
-      await load();
+      // regenerated config so the modal reflects what actually got saved, without
+      // moving the user off the tab they saved from.
+      await load(true);
       saved = true;
       clearTimeout(savedTimer);
       savedTimer = setTimeout(() => (saved = false), 2000);
@@ -1486,7 +1608,7 @@
       </div>
     {/if}
 
-    <div class="overflow-y-auto flex-1 p-4 space-y-4 pretty-scroll">
+    <div bind:this={bodyEl} class="overflow-y-auto flex-1 p-4 space-y-4 pretty-scroll">
       {#if loading}
         <p class="text-txtsecondary">Loading…</p>
       {:else if error}
@@ -1506,22 +1628,29 @@
            Without it the draft-mtp / draft-dflash chips — and the vision twin —
            claim a capability the folder visibly has no file for, which reads as
            a bug. Same wording for both so the badge means one thing. -->
-      {#snippet borrowedBadge(text: string)}
+      {#snippet borrowedBadge(text: string, label: string)}
         <span
           class="rounded border border-card-border px-1.5 py-px text-[10px] uppercase tracking-wide text-txtsecondary cursor-help"
-          use:tip={text}>borrowed</span>
+          use:tip={text}>{label}</span>
       {/snippet}
       {#snippet borrowedDraft()}
         {#if config?.draftInherited}
           {@render borrowedBadge(
             `This model's folder ships no draft model. draft-* loads ${config.draftPath ?? "a sibling's drafter"}, borrowed from another quant or a finetune with the same architecture, layer count, embedding width and vocabulary. Put a drafter next to this model to use that one instead.`,
+            "borrowed",
           )}
         {/if}
       {/snippet}
       {#snippet borrowedMmproj()}
-        {#if config?.mmprojInherited}
+        {#if mmprojPinned}
+          {@render borrowedBadge(
+            `Projector file set by hand: the vision twin loads ${mmprojPinned}. Discovery and family inheritance are ignored while this is set - clear the Projector file field to go back to them.`,
+            "pinned",
+          )}
+        {:else if config?.mmprojInherited}
           {@render borrowedBadge(
             `This model's folder ships no image projector. The vision twin loads ${config.mmprojPath ?? "a sibling's projector"}, borrowed from another quant or a finetune with the same architecture, layer count, embedding width and vocabulary. Put an mmproj next to this model to use that one instead.`,
+            "borrowed",
           )}
         {/if}
       {/snippet}
@@ -1813,7 +1942,7 @@
                 Name (suffix)
                 {@render hint("The preset's id suffix. Loads as <base-id>-<name>.")}
               </span>
-              <input type="text" value={sv.name} oninput={renameSelectedVariant} class="cfg-input" placeholder="e.g. fast, quality, hd" />
+              <input type="text" bind:this={nameInput} value={sv.name} oninput={renameSelectedVariant} class="cfg-input" placeholder="e.g. fast, quality, hd" />
             </label>
 
             <div class="col-span-2 font-mono text-[0.6rem] uppercase tracking-wider text-txtsecondary mt-1">Generation defaults</div>
@@ -2171,7 +2300,7 @@
             {@render specRow(spec, (v) => (spec = v))}
           </div>
 
-          {#if config?.mmprojPath}
+          {#if mmprojResolved}
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-txtsecondary flex items-center gap-1">
                 Image projector
@@ -2181,6 +2310,22 @@
               <Select bind:value={mmprojMode} options={MMPROJ_SEL} ariaLabel="Image projector placement" />
             </label>
           {/if}
+
+          <label class="flex flex-col gap-1 text-sm col-span-2">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Projector file
+              {@render hint("--mmproj. The vision projector gguf this model's twin loads. Empty = whatever sits in the model's own folder, or is borrowed from a family member. Set it when one shared projector lives in a folder of its own, pointed at by several models: an explicit path also CREATES the vision twin for a model that pairs with nothing. Discovery is deliberately not widened - a projector belongs to one vision tower, and an unrelated one loads clean and then hallucinates on every image - so the path is checked to be a clip gguf when you save.")}
+              {@render borrowedMmproj()}
+            </span>
+            <div class="flex items-center gap-2">
+              <input type="text" bind:value={adv.mmprojFile} class="cfg-input flex-1 font-mono" placeholder={config?.mmprojPath || "D:/LLM/Models/mmproj/qwen3vl-mmproj-f16.gguf"} spellcheck="false" />
+              <button
+                type="button" use:tip={"Browse for a projector .gguf"} aria-label="Browse for a vision projector file"
+                class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
+                onclick={() => browseFile("mmproj", (p) => (adv.mmprojFile = p))}
+              ><FolderOpen size={14} /></button>
+            </div>
+          </label>
 
           {#if effSpecs.includes("draft-mtp") || effSpecs.includes("draft-dflash")}
             <label class="flex flex-col gap-1 text-sm">
@@ -2391,6 +2536,10 @@
               <input type="number" min="0" step="64" bind:value={adv.cacheReuse} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="off" />
             </label>
             <label class="flex items-center gap-2">
+              <span class="text-txtsecondary flex items-center gap-1">Log verbosity {@render hint("-lv N. llama-server log verbosity threshold. Raise it to capture the load-time buffer-size report in the model log. Empty = backend default.")}</span>
+              <input type="number" min="0" step="1" bind:value={adv.logVerbosity} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="default" />
+            </label>
+            <label class="flex items-center gap-2">
               <span class="text-txtsecondary flex items-center gap-1">Cache RAM (MiB) {@render hint("-cram. Max prompt-cache size in MiB. Empty = llama default (8192).")}</span>
               <input type="number" min="0" step="512" bind:value={adv.cacheRamMB} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="8192" />
             </label>
@@ -2411,11 +2560,11 @@
               <input type="number" min="0" step="1" bind:value={adv.mainGpu} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="0" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Draft KV-K {@render hint("-ctkd. Draft/spec model K cache type. Empty = f16.")}</span>
+              <span class="text-txtsecondary flex items-center gap-1">Draft KV-K {@render hint("-ctkd. Draft/spec context K cache type, including a baked-in MTP head. Empty = match KV-K.")}</span>
               <input type="text" bind:value={adv.kvKDraft} class="cfg-input w-20 ml-auto" placeholder="f16" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Draft KV-V {@render hint("-ctvd. Draft/spec model V cache type. Empty = f16.")}</span>
+              <span class="text-txtsecondary flex items-center gap-1">Draft KV-V {@render hint("-ctvd. Draft/spec context V cache type, including a baked-in MTP head. Empty = match KV-V.")}</span>
               <input type="text" bind:value={adv.kvVDraft} class="cfg-input w-20 ml-auto" placeholder="f16" />
             </label>
             <label class="flex items-center gap-2">
@@ -2460,7 +2609,7 @@
               <button
                 type="button" use:tip={"Browse for a .jinja template"} aria-label="Browse for a chat template file"
                 class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
-                onclick={() => browseChatTemplate((p) => (adv.chatTemplateFile = p))}
+                onclick={() => browseFile("template", (p) => (adv.chatTemplateFile = p))}
               ><FolderOpen size={14} /></button>
             </label>
             <label class="flex items-center gap-2">
@@ -2499,7 +2648,9 @@
           ></textarea>
           <p class="text-xs text-txtsecondary mt-1">
             Edits sync with the fields above on blur. Flags autogen doesn't model are kept verbatim;
-            <code>-c</code>/<code>-ngl</code>/<code>--n-cpu-moe</code> stay sizer-controlled.
+            <code>-c</code>/<code>-ngl</code>/<code>--n-cpu-moe</code>/<code>-b</code> stay
+            sizer-controlled and come back on the next render. <code>--ctx-checkpoints</code> is
+            always emitted: deleting it sets checkpoints to 0 rather than dropping the flag.
           </p>
           <p class="text-xs text-txtsecondary mt-1 font-mono break-all">{config.gguf}</p>
         </details>
@@ -2524,7 +2675,7 @@
               {#if sv.name === "vision"}
                 <input type="text" value="vision" readonly class="cfg-input opacity-70" use:tip={visionNameTip} />
               {:else}
-                <input type="text" value={sv.name} oninput={renameSelectedVariant} class="cfg-input" placeholder="e.g. game, long, judge" />
+                <input type="text" bind:this={nameInput} value={sv.name} oninput={renameSelectedVariant} class="cfg-input" placeholder="e.g. game, long, judge" />
               {/if}
             </label>
             <label class="flex flex-col gap-1 text-sm">
@@ -2579,6 +2730,27 @@
                   {@render hint("Where this twin's CLIP projector lives. Inherit uses the Default tab's pick (auto = on the GPU while it costs neither GPU layers nor a quarter of the context window). On GPU pins it there - fastest image encode, paid for in context/offload on every request. In RAM (--no-mmproj-offload) frees that VRAM and encodes on the CPU: seconds per image, token speed untouched. None emits no vision twin at all.")}
                 </span>
                 <Select bind:value={sv.mmproj} options={MMPROJ_SEL_INHERIT} ariaLabel="Image projector placement" />
+              </label>
+              <label class="flex flex-col gap-1 text-sm col-span-2">
+                <span class="text-txtsecondary flex items-center gap-1">
+                  Projector file
+                  {@render hint("--mmproj. The projector gguf this twin loads. Empty inherits the Default tab's path; none forces it back to discovery (the projector next to the model, or a family member's).")}
+                </span>
+                <div class="flex items-center gap-2">
+                  <input type="text" value={sv.mmprojFile ?? ""} oninput={(e) => (sv.mmprojFile = (e.currentTarget as HTMLInputElement).value)} class="cfg-input flex-1 font-mono" placeholder="inherit / none" spellcheck="false" />
+                  <button
+                    type="button" use:tip={"Browse for a projector .gguf"} aria-label="Browse for a vision projector file"
+                    class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
+                    onclick={() => browseFile("mmproj", (p) => (sv.mmprojFile = p))}
+                  ><FolderOpen size={14} /></button>
+                  <button
+                    type="button"
+                    use:tip={"No pinned projector: this twin goes back to discovery, ignoring the model-wide path"}
+                    aria-pressed={isNone(sv.mmprojFile)}
+                    class="shrink-0 px-1.5 py-1 rounded border text-xs transition-colors {isNone(sv.mmprojFile) ? 'border-primary text-primary' : 'border-transparent text-txtsecondary hover:text-primary hover:border-primary'}"
+                    onclick={() => (sv.mmprojFile = isNone(sv.mmprojFile) ? "" : NONE_SENTINEL)}
+                  >None</button>
+                </div>
               </label>
             {/if}
             <label class="flex flex-col gap-1 text-sm">
@@ -2838,21 +3010,28 @@
                 <input type="number" min="0" step="1024" value={vnum(sv.yarnOrigCtx)} oninput={(e) => (sv.yarnOrigCtx = Number((e.currentTarget as HTMLInputElement).value))} use:wheelAdjust class="cfg-input w-24 ml-auto" placeholder="inherit" />
               </label>
               <label class="flex items-center gap-2">
-                <span class="text-txtsecondary flex items-center gap-1">Tensor split {@render hint("-ts. Per-GPU proportion, e.g. 3,1.")}</span>
-                <input type="text" value={sv.tensorSplit ?? ""} oninput={(e) => (sv.tensorSplit = (e.currentTarget as HTMLInputElement).value)} class="cfg-input w-24 ml-auto" placeholder="inherit" />
+                <span class="text-txtsecondary flex items-center gap-1">Tensor split {@render hint("-ts. Per-GPU proportion, e.g. 3,1. Empty inherits the model-wide value; none forces it off.")}</span>
+                <input type="text" value={sv.tensorSplit ?? ""} oninput={(e) => (sv.tensorSplit = (e.currentTarget as HTMLInputElement).value)} class="cfg-input w-24 ml-auto" placeholder="inherit / none" />
               </label>
               <label class="flex items-center gap-2 col-span-2">
-                <span class="text-txtsecondary flex items-center gap-1 shrink-0">Override tensor {@render hint("-ot. Manual tensor→buffer placement, e.g. exps=CPU.")}</span>
-                <input type="text" value={sv.overrideTensor ?? ""} oninput={(e) => (sv.overrideTensor = (e.currentTarget as HTMLInputElement).value)} class="cfg-input flex-1 ml-auto font-mono" placeholder="inherit" />
+                <span class="text-txtsecondary flex items-center gap-1 shrink-0">Override tensor {@render hint("-ot. Manual tensor→buffer placement, e.g. exps=CPU. Empty inherits the model-wide value; none forces it off.")}</span>
+                <input type="text" value={sv.overrideTensor ?? ""} oninput={(e) => (sv.overrideTensor = (e.currentTarget as HTMLInputElement).value)} class="cfg-input flex-1 ml-auto font-mono" placeholder="inherit / none" />
               </label>
               <label class="flex items-center gap-2 col-span-2">
-                <span class="text-txtsecondary flex items-center gap-1 shrink-0">Chat template file {@render hint("--chat-template-file. Path to a .jinja chat template replacing the gguf's baked-in one. Empty = inherit the model-wide value.")}</span>
-                <input type="text" value={sv.chatTemplateFile ?? ""} oninput={(e) => (sv.chatTemplateFile = (e.currentTarget as HTMLInputElement).value)} class="cfg-input flex-1 ml-auto font-mono" placeholder="inherit" spellcheck="false" />
+                <span class="text-txtsecondary flex items-center gap-1 shrink-0">Chat template file {@render hint("--chat-template-file. Path to a .jinja chat template replacing the gguf's baked-in one. Empty inherits the model-wide value; none forces it off (the gguf's baked-in template).")}</span>
+                <input type="text" value={sv.chatTemplateFile ?? ""} oninput={(e) => (sv.chatTemplateFile = (e.currentTarget as HTMLInputElement).value)} class="cfg-input flex-1 ml-auto font-mono" placeholder="inherit / none" spellcheck="false" />
                 <button
                   type="button" use:tip={"Browse for a .jinja template"} aria-label="Browse for a chat template file"
                   class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
-                  onclick={() => browseChatTemplate((p) => (sv.chatTemplateFile = p))}
+                  onclick={() => browseFile("template", (p) => (sv.chatTemplateFile = p))}
                 ><FolderOpen size={14} /></button>
+                <button
+                  type="button"
+                  use:tip={"No template: run this variant on the gguf's baked-in one, ignoring the model-wide pin"}
+                  aria-pressed={isNone(sv.chatTemplateFile)}
+                  class="shrink-0 px-1.5 py-1 rounded border text-xs transition-colors {isNone(sv.chatTemplateFile) ? 'border-primary text-primary' : 'border-transparent text-txtsecondary hover:text-primary hover:border-primary'}"
+                  onclick={() => (sv.chatTemplateFile = isNone(sv.chatTemplateFile) ? "" : NONE_SENTINEL)}
+                >None</button>
               </label>
               <label class="flex items-center gap-2">
                 <Toggle size="sm" checked={!!sv.directIo} onchange={(on) => (sv.directIo = on)} />
@@ -2888,7 +3067,9 @@
             ></textarea>
             <p class="text-xs text-txtsecondary mt-1">
               Edits sync with the fields above on blur. Flags autogen doesn't model are kept verbatim;
-              <code>-c</code>/<code>-ngl</code>/<code>--n-cpu-moe</code> stay sizer-controlled.
+              <code>-c</code>/<code>-ngl</code>/<code>--n-cpu-moe</code>/<code>-b</code> stay
+              sizer-controlled and come back on the next render. <code>--ctx-checkpoints</code> is
+              always emitted: deleting it sets checkpoints to 0 rather than dropping the flag.
             </p>
           </details>
         {/if}

@@ -364,6 +364,27 @@ func MmprojSidecarForDir(dir string) (path string, sizeGB float64) {
 	return "", 0
 }
 
+// mmprojFor resolves which projector a model's "-vision" twin loads and how big
+// it is: the explicit mmprojFile override when it names one, else whatever
+// discovery paired (dir-local, or inherited from a family sibling).
+//
+// The size cannot come from the row: GgufRow.MmprojSizeGB describes discovery's
+// file, and pricing an override's projector at another file's size is how a twin
+// ends up sized against 0.5 GB of VRAM it will not have. So an explicit path is
+// stat'd. A path that does not exist yields 0 and is left to save-time
+// validation (configapi) rather than dropped here, which would silently emit no
+// twin for a path the user can see in the editor.
+func mmprojFor(row GgufRow, mmprojFile string) (path string, sizeGB float64) {
+	p := strings.TrimSpace(mmprojFile)
+	if p == "" {
+		return row.MmprojPath, row.MmprojSizeGB
+	}
+	if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+		return p, round(float64(fi.Size())/gib, 2)
+	}
+	return p, 0
+}
+
 // MmprojSidecarFor is DraftSidecarFor for the vision projector: the one in the
 // model's own dir, else the one inherited from a family sibling. It answers what
 // the "-vision" twin actually loads, which is not something the model's folder

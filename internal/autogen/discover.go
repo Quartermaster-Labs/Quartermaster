@@ -48,7 +48,7 @@ type GgufRow struct {
 }
 
 var (
-	shardRe      = regexp.MustCompile(`-(\d{5})-of-\d{5}\.gguf$`)
+	shardRe      = regexp.MustCompile(`-(\d{5})-of-(\d{5})\.gguf$`)
 	ggufSuffixRe = regexp.MustCompile(`(?i)-GGUF$`)
 	// Separate MTP/draft sidecar (e.g. Gemma-4 ships "mtp-gemma-4-12B-it.gguf"
 	// alongside the main model). Loaded via -md + --spec-type draft-mtp, not served alone.
@@ -286,12 +286,13 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 		}
 
 		rows = append(rows, GgufRow{
-			ID:        idKey,
-			BaseID:    baseKey,
-			FullPath:  path,
-			FileName:  name,
-			Quant:     quant,
-			SizeGB:    round(float64(fi.Size())/gib, 2),
+			ID:       idKey,
+			BaseID:   baseKey,
+			FullPath: path,
+			FileName: name,
+			Quant:    quant,
+			// Split set: the whole set's bytes, not shard 1's. See ggufSetSizeBytes.
+			SizeGB:    round(float64(ggufSetSizeBytes(path, fi.Size()))/gib, 2),
 			Publisher: pubName,
 			Repo:      repoName,
 		})

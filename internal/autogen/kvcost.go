@@ -189,6 +189,35 @@ func GetKvCostModel(meta Metadata, kvK, kvV string) KvCostModel {
 	}
 }
 
+// mtpDraftSlopeGB is the per-token VRAM cost (GB) of the BAKED-IN MTP drafter's
+// own KV cache — i.e. what --spec-type draft-mtp reserves on top of the main
+// model's when the gguf carries its own nextn layers and no separate -md file is
+// attached.
+//
+// llama-server does not run the nextn head inside the main context. It creates a
+// second llama_context over the SAME model
+// (server-context.cpp, "creating MTP draft context against the target model"),
+// inheriting the target's cparams — n_ctx included — and filtering its KV cache
+// to the nextn layers only (llama-model.cpp: `il >= hparams.n_layer()`; on
+// hybrid qwen35 that cache is plain attention, not the hybrid wrapper, so there
+// is no second copy of the recurrent state). So the drafter costs
+// nextn_layers worth of full-attention KV over the WHOLE context window, which
+// is why the old flat 0.34 GB charge was wrong in both directions: ~3x too fat at
+// a 32k tier and ~2x too thin at 160k.
+//
+// kvK/kvV are the DRAFT cache types (-ctkd/-ctvd), not the main ones: the draft
+// context takes params.speculative.draft.cache_type_k, which llama defaults to
+// f16 regardless of -ctk. See draftKvPair.
+func mtpDraftSlopeGB(meta Metadata, kvK, kvV string) float64 {
+	nextn := meta.NextnLayers
+	kvHeads := meta.HeadCountKv
+	if nextn <= 0 || kvHeads <= 0 || meta.KeyLength <= 0 || meta.ValueLength <= 0 {
+		return 0
+	}
+	perTok := float64(kvHeads) * (float64(meta.KeyLength)*kvByteWidth(kvK) + float64(meta.ValueLength)*kvByteWidth(kvV))
+	return float64(nextn) * perTok / gib
+}
+
 // MaxCtxForBudget returns the largest ctx that fits a VRAM/RAM budget given the
 // slope+const KV model. 0 when nothing fits.
 func MaxCtxForBudget(budgetGB, slopeGB, constGB float64) int {

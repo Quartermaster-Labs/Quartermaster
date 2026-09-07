@@ -473,12 +473,26 @@ git push origin $Tag
 # upload below happily continued. The pre-flight above should have caught the
 # common cause already; anything reaching here is a surprise worth stopping for.
 if ($LASTEXITCODE -ne 0) { Die "git push origin $Tag failed; not uploading assets under a tag origin does not have" }
+# --notes-file, never --notes: PowerShell 5.1 hands a native command an
+# argument by wrapping it in quotes WITHOUT escaping the quotes inside it, so
+# the moment a commit subject carries one the argument ends early and the rest
+# of the body re-splits on whitespace into positional arguments. Everything
+# gh takes positionally after the tag is an asset path, so it stat()s the
+# wreckage: v1.0.4 died on `GetFileAttributesEx use (:` with every binary,
+# the installer and the tag already pushed, because the changelog line was
+# `ui: stop the dashboard VRAM tile reading as "in use"`. The changelog IS the
+# commit log, so no rule about subject lines can be relied on here. A path has
+# no quoting to get wrong. Written with no BOM: gh copies these bytes into the
+# release body verbatim.
+$notesFile = Join-Path ([System.IO.Path]::GetTempPath()) "quartermaster-notes-$Tag.md"
+[System.IO.File]::WriteAllText($notesFile, $body, (New-Object System.Text.UTF8Encoding $false))
+
 $exists = $false
 try { gh release view $Tag -R $Repo *> $null; $exists = ($LASTEXITCODE -eq 0) } catch { $exists = $false }
 if (-not $exists) {
     # Build the arg list rather than interpolating a flag variable: an empty
     # string is still passed as an argument, and `gh release create ""` fails.
-    $createArgs = @('release', 'create', $Tag, '-R', $Repo, '--title', $Tag, '--notes', $body)
+    $createArgs = @('release', 'create', $Tag, '-R', $Repo, '--title', $Tag, '--notes-file', $notesFile)
     if ($isDraft) { $createArgs += '--draft' }
     if ($isPrerelease) { $createArgs += '--prerelease' }
     gh @createArgs
@@ -486,9 +500,10 @@ if (-not $exists) {
 } else {
     # A re-run is usually a fixed build of the same tag, so the body is rewritten
     # rather than left at whatever the first attempt wrote.
-    gh release edit $Tag -R $Repo --notes $body --prerelease=$($isPrerelease.ToString().ToLower())
+    gh release edit $Tag -R $Repo --notes-file $notesFile --prerelease=$($isPrerelease.ToString().ToLower())
     if ($LASTEXITCODE -ne 0) { Die "gh release edit (notes) failed" }
 }
+Remove-Item -LiteralPath $notesFile -Force -ErrorAction SilentlyContinue
 gh release upload $Tag @uploads -R $Repo --clobber
 if ($LASTEXITCODE -ne 0) { Die "gh release upload failed" }
 

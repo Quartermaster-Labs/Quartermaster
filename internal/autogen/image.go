@@ -504,32 +504,14 @@ func mergeImageVariant(base Override, v VariantSpec) Override {
 	o := base
 	o.Variants = nil
 	o.Unlisted = v.Unlisted
-	if v.VaePath != "" {
-		o.VaePath = v.VaePath
-	}
-	if v.ClipLPath != "" {
-		o.ClipLPath = v.ClipLPath
-	}
-	if v.ClipGPath != "" {
-		o.ClipGPath = v.ClipGPath
-	}
-	if v.T5Path != "" {
-		o.T5Path = v.T5Path
-	}
-	if v.TextEncoderPath != "" {
-		o.TextEncoderPath = v.TextEncoderPath
-	}
+	// Component paths resolve through the shared sentinel rule: empty inherits
+	// the model-wide path, "none" drops the encoder for this preset only.
+	mergeInheritImageStrings(&o, &v)
 	if v.RefEdit != "" {
 		o.RefEdit = v.RefEdit
 	}
 	if v.LlmVision != "" {
 		o.LlmVision = v.LlmVision
-	}
-	if v.LlmVisionPath != "" {
-		o.LlmVisionPath = v.LlmVisionPath
-	}
-	if v.LoraDir != "" {
-		o.LoraDir = v.LoraDir
 	}
 	if v.OffloadToCpu != "" {
 		o.OffloadToCpu = v.OffloadToCpu

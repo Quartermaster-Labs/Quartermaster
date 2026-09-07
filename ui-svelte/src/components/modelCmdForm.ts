@@ -27,14 +27,17 @@ export const IMG_SAMPLERS = ["", "euler_a", "euler", "heun", "dpm2", "dpmpp2s_a"
 // the box so editing them never flips a form "auto" toggle or pins a value.
 // Value-flags owned by other controls (sliders / toggles / sizer), swallowed
 // when parsing so they never bleed into extraArgs and double-emit:
-//   -c/-ngl/--n-cpu-moe/-b  sizer; --ctx-checkpoints  its own field;
+//   -c/-ngl/--n-cpu-moe/-b  sizer;
 //   --chat-template-kwargs  legacy preserve-thinking form, still swallowed so an
 //   older saved command does not bleed into extraArgs; -md  draft path;
 //   --slot-save-path  the slotCacheOn toggle.
 // --chat-template-file is NOT here: it has its own case below that captures the
 // path into the advanced field. Swallowing it silently dropped a template set
 // any other way (qm-tools/hand-edited extraArgs) on the first box blur.
-export const IGNORE_VALUE = new Set(["-m", "--port", "--host", "--cors-origins", "-c", "-ngl", "--n-cpu-moe", "-b", "--ctx-checkpoints", "--chat-template-kwargs", "-md", "--slot-save-path", "--mmproj"]);
+// --ctx-checkpoints is not here either, for the same reason: swallowing it made
+// the box lie, since deleting it from the text left the field (and so the next
+// render) untouched. It parses into ParsedCmd.ctxCheckpoints instead.
+export const IGNORE_VALUE = new Set(["-m", "--port", "--host", "--cors-origins", "-c", "-ngl", "--n-cpu-moe", "-b", "--chat-template-kwargs", "-md", "--slot-save-path", "--mmproj"]);
 // Legacy: an older build shipped this template in the package and autogen
 // pointed --chat-template-file at it. Neither is true any more (the folder is
 // gone, and templates are user-managed), but a config written by that build can
@@ -82,6 +85,14 @@ export interface ParsedCmd {
   topP: number | "";
   minP: number | "";
   presencePenalty: number | "";
+  // --ctx-checkpoints as it stands in the box: a number when present, null when
+  // the user deleted the flag. Kept as null rather than "" because the caller
+  // has to tell "not in the text" from the pinned 0 that disables checkpointing.
+  ctxCheckpoints: number | null;
+  // -cms as it stands in the box, "" when the flag is absent. autogen always
+  // emits it, so an unparsed copy would land in extraArgs and be appended a
+  // SECOND time on the next render - one more per round trip.
+  checkpointMinStep: number | "";
   // Speculative sub-knobs (value "" / false => omit).
   specDraftNMax: number | "";
   specDefault: boolean;
@@ -99,6 +110,22 @@ export function hoistChatTemplate(extra: string): { extra: string; path: string 
   if (!m) return { extra, path: "" };
   const path = m[2].replace(/^"|"$/g, "");
   return { extra: (extra.slice(0, m.index) + " " + extra.slice(m.index! + m[0].length)).trim(), path };
+}
+
+// Pull a `-cms <n>` / `--checkpoint-min-step <n>` pair out of a free-form
+// extraArgs string, returning the remaining args plus the value ("" when
+// absent). Installs written before the box parsed -cms captured it into
+// extraArgs, where the emitter appends it after its own computed copy: harmless
+// to llama-server (last wins) but it grows by one on every box round trip, and
+// it silently overrides the sizer's spacing. Hoisted back into the field on
+// load, exactly like a template smuggled in through extraArgs.
+export function hoistCms(extra: string): { extra: string; step: number | "" } {
+  const m = extra.match(/(^|\s)(?:-cms|--checkpoint-min-step)\s+(\d+)/);
+  if (!m) return { extra, step: "" };
+  return {
+    extra: (extra.slice(0, m.index) + " " + extra.slice(m.index! + m[0].length)).replace(/\s+/g, " ").trim(),
+    step: Number(m[2]),
+  };
 }
 
 // A flag value that keeps 0 distinct from absent: null/"" (flag not in the box)
@@ -132,7 +159,9 @@ export function parseCmdFields(cmd: string): ParsedCmd {
     sp: string | null = null,
     reason: string | null = null,
     rBudget: string | null = null,
-    ctFile: string | null = null;
+    ctFile: string | null = null,
+    ckpt: string | null = null,
+    cms: string | null = null;
   let noMmap = false,
     mlockF = false,
     noKv = false,
@@ -191,6 +220,10 @@ export function parseCmdFields(cmd: string): ParsedCmd {
       case "--dry-multiplier": dMult = val(); break;
       case "--dry-base": dBase = val(); break;
       case "--dry-allowed-length": dAllow = val(); break;
+      case "--ctx-checkpoints": ckpt = val(); break;
+      // Both spellings: the emitter writes the short one, a hand-edited box or a
+      // qm-tools write may carry llama's long alias.
+      case "-cms": case "--checkpoint-min-step": cms = val(); break;
       case "--spec-draft-n-max": sNMax = val(); break;
       case "--spec-default": specDef = true; break;
       case "--spec-ngram-map-k4v-size-n": sNgN = val(); break;
@@ -233,6 +266,8 @@ export function parseCmdFields(cmd: string): ParsedCmd {
     topP: numFlag(topP),
     minP: numFlag(minP),
     presencePenalty: numFlag(presP),
+    ctxCheckpoints: ckpt !== null && ckpt !== "" && !Number.isNaN(Number(ckpt)) ? Number(ckpt) : null,
+    checkpointMinStep: numFlag(cms),
     specDraftNMax: sNMax !== null && sNMax !== "" ? Number(sNMax) : "",
     specDefault: specDef,
     specNgramSizeN: sNgN !== null && sNgN !== "" ? Number(sNgN) : "",
@@ -343,7 +378,15 @@ export function genDefaultKv(c: ModelConfig | null): string {
 // echoed back", so an arch-derived baseline is not silently frozen into an
 // explicit per-model pin. "" when the flag is absent or non-numeric.
 export function genDefaultNum(c: ModelConfig | null, flag: string): number | "" {
-  const m = new RegExp(`(?:^|\\s)${flag}\\s+(\\S+)`).exec(c?.cmd ?? "");
+  return cmdNum(c?.cmd ?? "", flag);
+}
+
+// The numeric value ANY rendered command carries for `flag` ("" when the flag is
+// absent or valueless). Same read as genDefaultNum against arbitrary text: a box
+// edit is judged against the command the render effect last produced, which is
+// the only way to tell "the user changed this" from "the user left it alone".
+export function cmdNum(cmd: string, flag: string): number | "" {
+  const m = new RegExp(`(?:^|\\s)${flag}\\s+(\\S+)`).exec(cmd);
   return m && m[1] !== "" && !Number.isNaN(Number(m[1])) ? Number(m[1]) : "";
 }
 

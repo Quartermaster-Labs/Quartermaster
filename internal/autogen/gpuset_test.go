@@ -67,18 +67,21 @@ func TestAutogen_gpuSetFromStats(t *testing.T) {
 // that ratio every per-device constraint binds at once, which is what makes the
 // POOLED budget safe to size against.
 func TestAutogen_TensorSplit(t *testing.T) {
-	setCudaGPU(t, false) // perDeviceFixedGB == 0, so the arithmetic is exact
+	// Non-CUDA on purpose: perDeviceFixedGB is computeHipCtxGB (0.4), the case
+	// that used to be charged 0 and hand a Vulkan/ROCm box a free extra device.
+	setCudaGPU(t, false)
 
 	set := GpuSet{
 		{Index: 0, TotalGB: 12, FreeGB: 11},
 		{Index: 1, TotalGB: 16, FreeGB: 15},
 	}
-	// 2 GB of fixed cost on the main device (ID 1, most free): 11 and 13 of 24.
+	// 2 GB of fixed cost on the main device (ID 1, most free) and 0.4 on the
+	// other: 10.6 and 13 of 23.6.
 	split := set.TensorSplit(2)
-	if len(split) != 2 || split[0] != 0.46 || split[1] != 0.54 {
-		t.Fatalf("TensorSplit = %v, want [0.46 0.54]", split)
+	if len(split) != 2 || split[0] != 0.45 || split[1] != 0.55 {
+		t.Fatalf("TensorSplit = %v, want [0.45 0.55]", split)
 	}
-	if got := FormatSplit(split); got != "0.46,0.54" {
+	if got := FormatSplit(split); got != "0.45,0.55" {
 		t.Fatalf("FormatSplit = %q", got)
 	}
 	// A device with no room left after its fixed cost gets nothing, and the
@@ -101,8 +104,9 @@ func TestAutogen_TensorSplit(t *testing.T) {
 	if split := (GpuSet{{Index: 0, FreeGB: 12}}).TensorSplit(1); split != nil {
 		t.Fatalf("single-device TensorSplit = %v, want nil", split)
 	}
-	if got := set.ExtraDeviceOverheadGB(); got != 0 {
-		t.Fatalf("non-CUDA extra-device overhead = %.2f, want 0", got)
+	// One extra device, so one runtime context, at the backend's own constant.
+	if got := set.ExtraDeviceOverheadGB(); got != computeHipCtxGB {
+		t.Fatalf("non-CUDA extra-device overhead = %.2f, want %.2f", got, computeHipCtxGB)
 	}
 
 	setCudaGPU(t, true)
@@ -212,8 +216,9 @@ func TestAutogen_retuneTensorSplit(t *testing.T) {
 		{Index: 1, TotalGB: 16, FreeGB: 15},
 	}}
 	got := retuneTensorSplit(s, args, 5, nil)
-	if got[len(got)-1] != "0.09,0.91" {
-		t.Fatalf("--tensor-split = %q, want the live ratio 0.09,0.91", got[len(got)-1])
+	// 1-0.4=0.6 on card 0 against 15-5=10 on the main card: 0.06 and 0.94.
+	if got[len(got)-1] != "0.06,0.94" {
+		t.Fatalf("--tensor-split = %q, want the live ratio 0.06,0.94", got[len(got)-1])
 	}
 	if got[6] != "1" {
 		t.Fatalf("--main-gpu = %q, want 1", got[5])

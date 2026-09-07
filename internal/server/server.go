@@ -47,10 +47,11 @@ type Server struct {
 
 	perf *perf.Monitor
 	// systemVramMB is the idle system VRAM floor (MiB) on the largest GPU: the
-	// min used-VRAM observed while zero models were running. Sampled by a
-	// background goroutine off the perf monitor so it's captured even when no
-	// dashboard tab is open, and surfaced in /api/performance for the UI gauge.
-	// 0 = never observed an idle moment yet. See trackSystemVram.
+	// min used-VRAM observed across the MOST RECENT idle stretch (a run of perf
+	// samples with zero models running). Sampled by a background goroutine off
+	// the perf monitor so it's captured even when no dashboard tab is open, and
+	// surfaced in /api/performance for the UI gauge. 0 = never observed a long
+	// enough idle stretch yet. See trackSystemVram.
 	systemVramMB atomic.Int64
 
 	// vramGuard publishes the live VRAM ceiling the router admits against and
@@ -582,19 +583,44 @@ func (s *Server) freeVramGB() (float64, bool) {
 	return float64(free) / 1024.0, true
 }
 
+// idleFloorMinSamples is how many consecutive idle GPU samples an idle stretch
+// must produce before its minimum is published as the system floor. The first
+// sample after an unload is untrustworthy — the driver has not necessarily freed
+// the model's VRAM yet — so publishing it would pin the floor a whole model too
+// high. Two samples (~10s at the perf monitor's cadence) is enough for the
+// reading to settle without making a short idle gap unmeasurable.
+const idleFloorMinSamples = 2
+
 // trackSystemVram records the idle system-VRAM floor by subscribing to the perf
-// monitor and, on every GPU sample taken while no model is running, keeping the
-// MINIMUM used-VRAM seen on the largest GPU. Runs independent of the dashboard
-// so the floor is captured even with no UI tab open (the old browser-only
-// baseline never ran unless the VRAM widget was mounted). ponytail: ceiling — if
-// a model stays resident from boot with no idle gap, the floor is never sampled
-// and the UI falls back to its estimate; captured on the first unload.
+// monitor and keeping the MINIMUM used-VRAM seen on the largest GPU across the
+// current idle stretch — a run of samples with zero models running. Runs
+// independent of the dashboard so the floor is captured even with no UI tab open
+// (the old browser-only baseline never ran unless the VRAM widget was mounted).
+//
+// The floor is per-stretch, not all-time, and is republished (UP as well as
+// down) at the end of every idle gap. An all-time minimum silently rots: it gets
+// pinned at whatever the desktop cost during its quietest moment — typically
+// right after startup, before the app window, a browser and the compositor have
+// claimed theirs — and is never revised. Everything the desktop grows past that
+// point then lands in the dashboard's "Overhead" segment, which is a residual
+// (measured model slice - estimate) and so inherits the whole error. Measured on
+// an idle RX 7900 XTX: floor stuck at 616 MB while the card actually idled at
+// 1729 MB, inflating a model's unexplained overhead by 1.1 GB.
+//
+// ponytail: ceiling — if a model stays resident from boot with no idle gap, the
+// floor is never sampled and the UI falls back to its estimate; captured on the
+// first unload. vramGuard.foreignFloorMB is an all-time minimum of the same
+// shape and has the same rot; it is a budget input rather than a display
+// residual, so it is left alone here.
 func (s *Server) trackSystemVram(ctx context.Context) {
 	if s.perf == nil {
 		return
 	}
 	_, gpuCh, unsub := s.perf.Subscribe()
 	defer unsub()
+	// Minimum used-VRAM within the current idle stretch, and how many samples it
+	// has seen. stretchMin < 0 = not currently idle (or the stretch just reset).
+	stretchMin, stretchN := int64(-1), 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -604,6 +630,9 @@ func (s *Server) trackSystemVram(ctx context.Context) {
 				return
 			}
 			if len(s.local.RunningModels()) != 0 {
+				// A model is resident: end the stretch. The published floor stays
+				// as it was until the next idle stretch qualifies.
+				stretchMin, stretchN = -1, 0
 				continue
 			}
 			// Pooled used VRAM over the eligible set, matching freeVramGB.
@@ -614,8 +643,12 @@ func (s *Server) trackSystemVram(ctx context.Context) {
 				continue
 			}
 			used := int64(bestStat.MemUsedMB)
-			if cur := s.systemVramMB.Load(); cur == 0 || used < cur {
-				s.systemVramMB.Store(used)
+			if stretchMin < 0 || used < stretchMin {
+				stretchMin = used
+			}
+			stretchN++
+			if stretchN >= idleFloorMinSamples {
+				s.systemVramMB.Store(stretchMin)
 			}
 		}
 	}

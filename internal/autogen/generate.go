@@ -54,6 +54,12 @@ type profile struct {
 	// prompt-prefix checkpoint cache). nil => inherit the model-wide value, else
 	// the llama-server default (32). See effectiveCtxCheckpoints.
 	CtxCheckpoints *int
+	// DraftSlopeGB is the per-token VRAM (GB) the baked-in MTP drafter's own KV
+	// cache adds on top of the main model's, at this profile's draft KV quant.
+	// See mtpDraftSlopeGB: the drafter is a second llama_context over the same
+	// model at the SAME n_ctx, so its cost scales with the window and has to be
+	// part of the slope the sizer solves ctx against, not a flat overhead.
+	DraftSlopeGB float64
 	// CheckpointMinStep, when > 0, is the resolved -cms (checkpoint spacing in
 	// prompt tokens) for this profile. 0 => the arch default from
 	// defaultCheckpointMinStep. Both the emitted flag and the VRAM reserve read
@@ -384,8 +390,18 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	// "none" drops the twin outright: a projector the user does not want wired
 	// (a family-inherited one they judge wrong for this finetune, or vision they
 	// simply never use) should cost no served id at all.
-	if row.MmprojPath != "" && !strings.EqualFold(override.Mmproj, "none") {
-		mmprojOh := MmprojVramGB(row.MmprojPath, row.MmprojSizeGB, s)
+	// The projector is whatever the override names, falling back to discovery.
+	// An explicit path is also what CREATES the twin: a model that paired with
+	// nothing has no twin at all today, and that is the whole point of the field
+	// (one shared mmproj in its own folder, pointed at by several models).
+	// The reserved "vision" variant may name its own, with the usual sentinel.
+	mmprojFile := override.MmprojFile
+	if v := visionSpec; v != nil {
+		mmprojFile = inheritStr(v.MmprojFile, mmprojFile)
+	}
+	mmprojPath, mmprojSizeGB := mmprojFor(row, mmprojFile)
+	if mmprojPath != "" && !strings.EqualFold(override.Mmproj, "none") {
+		mmprojOh := MmprojVramGB(mmprojPath, mmprojSizeGB, s)
 		vp := profile{
 			Name:              fmt.Sprintf("%s-vision", name),
 			Target:            soloTarget,
@@ -452,19 +468,28 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		}
 	}
 
-	// Charge the GPU compute buffer (logits + activations + CUDA runtime) per
-	// profile; it scales with the physical batch and lives on the GPU regardless
-	// of CPU expert offload, so it's flat VRAM overhead. Replaces the old flat
-	// 0.17 GB ubSoloOh fudge.
+	// Charge the GPU compute buffer (logits + activations + the GPU runtime
+	// constant) per profile; it scales with the physical batch and lives on the
+	// GPU regardless of CPU expert offload, so it's flat VRAM overhead. Replaces
+	// the old flat 0.17 GB ubSoloOh fudge. A baked-in MTP drafter runs a second
+	// llama_context and is charged its own graph on top, at the same ub.
 	gpus := s.GpuSetOrEmpty()
 	for i := range profiles {
-		profiles[i].Overhead += computeBufferGB(meta, effectiveUb(meta, profiles[i], ov, profiles[i].Ctx, s.TargetVramGB), s.ComputeBufFactor)
+		ub := effectiveUb(meta, profiles[i], ov, profiles[i].Ctx, s.TargetVramGB)
+		pspec := modelSpec
+		if profiles[i].Spec != "" {
+			pspec = profiles[i].Spec
+		}
+		pDraftGB := matchedDraftSizeGB(pspec, row.DraftKind, row.DraftSizeGB)
+		profiles[i].Overhead += computeBufferGB(meta, ub, s.ComputeBufFactor) +
+			mtpDraftComputeGB(meta, pspec, pDraftGB, ub, s.ComputeBufFactor)
 		// Every device past the main one pays its own runtime context, and none
 		// of it splits, so it is overhead against the POOLED budget, charged
 		// before the split ratio is derived from what is left. Order matters:
-		// TensorSplit reads the finished Overhead as the main device's fixed
+		// TensorSplit reads the FINISHED Overhead as the main device's fixed
 		// cost, which is what makes the pooled budget reachable without any one
-		// card going over (gpuset.go).
+		// card going over (gpuset.go), so it has to run after the compute-buffer
+		// and drafter-graph charges above.
 		profiles[i].MainGpu = -1
 		if gpus.Multi() {
 			profiles[i].Overhead += gpus.ExtraDeviceOverheadGB()
@@ -521,6 +546,21 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		if pSlots > 1 {
 			ptg *= float64(pSlots)
 			kcg *= float64(pSlots)
+		}
+
+		// A baked-in MTP head runs as a second context over the same model at the
+		// same window, so its KV is a per-token cost on top of ptg, not a flat
+		// overhead (draftOverheadGB now only charges its compute pad). Resolve it
+		// per profile: a variant can carry its own spec chain and its own kv quant,
+		// and -ctkd follows the effective main quant.
+		pspec := modelSpec
+		if prof.Spec != "" {
+			pspec = prof.Spec
+		}
+		pdKvK, pdKvV := draftKvPair(override.KvKDraft, override.KvVDraft, ekvK, ekvV)
+		prof.DraftSlopeGB = mtpDraftSlopeFor(meta, pspec, pdKvK, pdKvV, matchedDraftSizeGB(pspec, row.DraftKind, row.DraftSizeGB))
+		if pSlots > 1 {
+			prof.DraftSlopeGB *= float64(pSlots)
 		}
 
 		ctx, plan, kvReserve, planCkptGB, err := sizeProfile(meta, s, prof, ptg, kcg, pModelMax, pkvInRam)
@@ -597,12 +637,10 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			if v.Parallel > 0 {
 				effOv.Parallel = v.Parallel
 			}
-			if strings.TrimSpace(v.ExtraArgs) != "" {
-				effOv.ExtraArgs = v.ExtraArgs
-			}
-			if strings.TrimSpace(v.ChatTemplateFile) != "" {
-				effOv.ChatTemplateFile = v.ChatTemplateFile
-			}
+			// Free-form string knobs (chat template, extra args, tensor
+			// placement, draft KV) resolve through the shared sentinel rule:
+			// empty inherits, "none" forces the knob off. See inherit.go.
+			mergeInheritStrings(&effOv, v)
 			// Sampler / speculative sub-knobs: non-zero/non-nil variant value wins.
 			if v.Dry != nil {
 				effOv.Dry = v.Dry
@@ -664,12 +702,6 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			if v.NoRepack {
 				effOv.NoRepack = true
 			}
-			if v.KvKDraft != "" {
-				effOv.KvKDraft = v.KvKDraft
-			}
-			if v.KvVDraft != "" {
-				effOv.KvVDraft = v.KvVDraft
-			}
 			if v.CacheReuse != 0 {
 				effOv.CacheReuse = v.CacheReuse
 			}
@@ -709,14 +741,8 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			if v.SplitMode != "" {
 				effOv.SplitMode = v.SplitMode
 			}
-			if v.TensorSplit != "" {
-				effOv.TensorSplit = v.TensorSplit
-			}
 			if v.MainGpu != 0 {
 				effOv.MainGpu = v.MainGpu
-			}
-			if v.OverrideTensor != "" {
-				effOv.OverrideTensor = v.OverrideTensor
 			}
 		}
 		emitProfile(b, s, meta, row, prof, ctx, ngl, ncpuMoe, plan, ekvK, ekvV, pkvInRam, &effOv)

@@ -7,6 +7,7 @@ package autogen
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -244,6 +245,17 @@ func effectiveUb(meta Metadata, prof profile, ov *Override, ctx int, budgetGB fl
 // block) and RenderSoloCmd (which joins them for the editor preview). Any
 // Override.ExtraArgs are appended verbatim as a final line.
 func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ngl, ncpuMoe int, kvK, kvV string, kvInRam bool, ov *Override) []string {
+	// extraArgs is appended verbatim at the end, so anything in it that we also
+	// emit ourselves lands on the line TWICE. -cms is the one that actually
+	// happened: the launch-box editor did not parse it, so it survived a round
+	// trip into extraArgs, and every later trip appended one more copy. Hoist it
+	// back out here and treat it as the pin it was meant to be, so a config
+	// written by an older UI self-heals on the next generate.
+	extraArgs, extraCms := "", 0
+	if ov != nil {
+		extraArgs, extraCms = hoistCmsFromExtra(ov.ExtraArgs)
+	}
+
 	cpuMoeFlag := ""
 	if ncpuMoe > 0 {
 		cpuMoeFlag = fmt.Sprintf(" --n-cpu-moe %d", ncpuMoe)
@@ -357,8 +369,16 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	// Vision twin loads the projector for image input. --no-mmproj-offload keeps
 	// the CLIP tower on the CPU: no VRAM for the projector (the sizer already
 	// priced the twin that way), slower image encode, same token throughput.
-	if prof.Vision && row.MmprojPath != "" {
-		lines = append(lines, fmt.Sprintf("--mmproj %s", strings.ReplaceAll(row.MmprojPath, "\\", "/")))
+	// ov is the EFFECTIVE override here (model-wide with the vision variant's
+	// knobs merged in), so an explicit mmprojFile - from either level - is
+	// already resolved by the time the argv is rendered.
+	mmprojFileOv := ""
+	if ov != nil {
+		mmprojFileOv = ov.MmprojFile
+	}
+	mmprojPath, _ := mmprojFor(row, mmprojFileOv)
+	if prof.Vision && mmprojPath != "" {
+		lines = append(lines, fmt.Sprintf("--mmproj %s", strings.ReplaceAll(mmprojPath, "\\", "/")))
 		if prof.CpuMmproj {
 			lines = append(lines, "--no-mmproj-offload")
 		}
@@ -400,16 +420,21 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		if row.DraftPath != "" && mdMatches {
 			lines = append(lines, fmt.Sprintf("-md %s", strings.ReplaceAll(row.DraftPath, "\\", "/")))
 			lines = append(lines, "-ngld 99")
-			// Draft KV quant (-ctkd/-ctvd). "" => llama's f16 default; a matched
-			// quant here shrinks the resident draft's KV VRAM (fa is global, so the
-			// same flash-attn that gates main quant KV covers the draft too).
-			if ov != nil && ov.KvKDraft != "" {
-				lines = append(lines, fmt.Sprintf("-ctkd %s", ov.KvKDraft))
-			}
-			if ov != nil && ov.KvVDraft != "" {
-				lines = append(lines, fmt.Sprintf("-ctvd %s", ov.KvVDraft))
-			}
 		}
+		// Draft KV quant (-ctkd/-ctvd), defaulted to the model's OWN -ctk/-ctv.
+		// This is not "draft models only": a baked-in MTP head has no -md and
+		// still gets a full second context whose cache type comes from this same
+		// field, and llama's default for it is f16 no matter what -ctk says. On
+		// Qwen3.8-27B at 160k that lone nextn layer was paying 0.61 GB of f16 KV
+		// while the main cache ran q8_0; matching them halves it for free. Flash
+		// attention is global, so the same fa that licenses a quantized main KV
+		// covers the draft's. An override still wins on either side.
+		ovDraftK, ovDraftV := "", ""
+		if ov != nil {
+			ovDraftK, ovDraftV = ov.KvKDraft, ov.KvVDraft
+		}
+		dKvK, dKvV := draftKvPair(ovDraftK, ovDraftV, kvK, kvV)
+		lines = append(lines, fmt.Sprintf("-ctkd %s -ctvd %s", dKvK, dKvV))
 	}
 	if specHas(spec, "ngram-map-k4v") && ov != nil {
 		if ov.SpecDefault {
@@ -458,6 +483,9 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		stepProf := prof
 		if stepProf.CheckpointMinStep == 0 && ov != nil {
 			stepProf.CheckpointMinStep = ov.CheckpointMinStep
+		}
+		if stepProf.CheckpointMinStep == 0 {
+			stepProf.CheckpointMinStep = extraCms
 		}
 		lines = append(lines, fmt.Sprintf("-cms %d", effectiveCheckpointMinStep(stepProf, ckptConstGB, ckptRecurrent)))
 	}
@@ -524,6 +552,9 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		if ov.CacheRamMB > 0 {
 			lines = append(lines, fmt.Sprintf("-cram %d", ov.CacheRamMB))
 		}
+		if ov.LogVerbosity > 0 {
+			lines = append(lines, fmt.Sprintf("-lv %d", ov.LogVerbosity))
+		}
 		switch ov.CacheIdleSlots {
 		case "on":
 			lines = append(lines, "--cache-idle-slots")
@@ -578,12 +609,38 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 			lines = append(lines, fmt.Sprintf("-ot %s", ov.OverrideTensor))
 		}
 	}
-	if ov != nil {
-		if extra := strings.TrimSpace(ov.ExtraArgs); extra != "" {
-			lines = append(lines, extra)
-		}
+	if extra := strings.TrimSpace(extraArgs); extra != "" {
+		lines = append(lines, extra)
 	}
 	return lines
+}
+
+// hoistCmsFromExtra splits a `-cms <n>` (or its `--checkpoint-min-step` alias)
+// out of a free-form extraArgs string, returning the rest and the value (0 when
+// absent). Only the FIRST is hoisted as a value; any further copies are dropped,
+// since a stale config can hold several and llama-server would just take the
+// last. Matched on whitespace boundaries so `--not-cms 256` is left alone.
+func hoistCmsFromExtra(extra string) (string, int) {
+	if !strings.Contains(extra, "cms") && !strings.Contains(extra, "checkpoint-min-step") {
+		return extra, 0
+	}
+	f := strings.Fields(extra)
+	out := make([]string, 0, len(f))
+	step := 0
+	for i := 0; i < len(f); i++ {
+		if f[i] != "-cms" && f[i] != "--checkpoint-min-step" {
+			out = append(out, f[i])
+			continue
+		}
+		if i+1 >= len(f) {
+			continue // dangling flag: drop it, we emit our own
+		}
+		if n, err := strconv.Atoi(f[i+1]); err == nil && step == 0 {
+			step = n
+		}
+		i++
+	}
+	return strings.Join(out, " "), step
 }
 
 // RenderSoloCmd previews the full launch command for a candidate override,
@@ -668,7 +725,15 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 
 		CheckpointMinStep: ov.CheckpointMinStep,
 	}
-	prof.Overhead += computeBufferGB(meta, effectiveUb(meta, prof, &ov, prof.Ctx, s.TargetVramGB), s.ComputeBufFactor)
+	soloUb := effectiveUb(meta, prof, &ov, prof.Ctx, s.TargetVramGB)
+	// ...plus the second llama_context a baked-in MTP drafter runs, which
+	// allocates a graph of its own at that same ub (see mtpDraftComputeGB).
+	prof.Overhead += computeBufferGB(meta, soloUb, s.ComputeBufFactor) +
+		mtpDraftComputeGB(meta, soloSpec, soloDraftGB, soloUb, s.ComputeBufFactor)
+	// The baked-in MTP drafter's own KV scales with the window, so it belongs in
+	// the slope the sizer solves ctx against (see mtpDraftSlopeFor).
+	sdKvK, sdKvV := draftKvPair(ov.KvKDraft, ov.KvVDraft, kvK, kvV)
+	prof.DraftSlopeGB = mtpDraftSlopeFor(meta, soloSpec, sdKvK, sdKvV, soloDraftGB)
 	ctx, plan, kvReserve, _, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, ov.KvInRam)
 	if err != nil {
 		return "", err

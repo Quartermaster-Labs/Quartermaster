@@ -159,7 +159,31 @@ const hashCacheSuffix = ".modelhash"
 //	     sidecar) is migrated onto the new one. Every dense model trained past
 //	     128k gets a larger -c and a larger KV reserve, so the emitted argv and
 //	     the estimates change for inputs that did not.
-const genVersion = "v60"
+//	v60: a model can name its vision projector explicitly (mmprojFile), which
+//	     overrides discovery AND creates a "-vision" twin for a model whose
+//	     own folder (and whose family) ships no mmproj at all. Auto-pairing is
+//	     deliberately not widened (a projector belongs to one vision tower), but
+//	     a shared projector kept in a folder of its own is now reachable, so a
+//	     config can gain a twin and an --mmproj it did not have.
+//	v61: -cms is hoisted back out of extraArgs. The launch-box editor did not
+//	     parse the flag, so an edit round trip pushed it into extraArgs, where it
+//	     was appended AFTER the computed copy (and grew by one per trip). Any
+//	     config carrying one now emits a single -cms, and the hoisted value acts
+//	     as the pin it was meant to be.
+//	v62: a split gguf is charged the whole set's bytes, not shard 1's. Discovery
+//	     represents a set by its first shard (correct: llama-server opens the
+//	     siblings itself), but stat'ing that one file sized an 80B MoE at a
+//	     quarter of itself, so the plan offloaded it whole and spent the phantom
+//	     slack on context. Every split model's -ngl/--n-cpu-moe/-c changes for
+//	     inputs that did not.
+//	v63: a model larger than one card is split across every eligible GPU. The
+//	     VRAM budget is pooled across the set instead of taken from the largest
+//	     adapter, and a plan that needs more than one device emits -sm layer
+//	     --tensor-split (plus CUDA_DEVICE_ORDER=PCI_BUS_ID, so llama.cpp's
+//	     device order matches the telemetry order the split positions mean).
+//	     Every model on a multi-GPU box changes budget and argv for inputs that
+//	     did not.
+const genVersion = "v63"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

@@ -583,7 +583,11 @@
   }
 </script>
 
-<div class="relative h-screen flex bg-chrome">
+<!-- overflow-hidden: the shell is exactly one viewport tall and every pane owns
+     its own scroller, so anything that escapes (a popover, a dropdown) is a bug
+     that would otherwise show up as document scrollbars on both axes. Tooltips
+     and modals are `fixed` off <body>, so clipping here does not reach them. -->
+<div class="relative h-screen flex bg-chrome overflow-hidden">
   <!-- Side rail: icons only at rest; expands on hover. Same width hover or with the chat list open.
        The slot reserves only the RESTING width - the rail itself is absolute inside it, so a
        hover expansion draws over the tab like a curtain instead of reflowing it. Pinning the

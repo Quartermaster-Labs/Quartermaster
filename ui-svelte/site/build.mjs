@@ -218,7 +218,13 @@ function latestRelease() {
         stdio: ["ignore", "pipe", "ignore"],
       }),
     );
-    const rel = list.find((r) => !r.isDraft && /^v\d+\.\d+/.test(r.tagName));
+    // Prereleases are skipped, not just drafts. A prerelease exists to go to one
+    // tester by hand; the updater already ignores it (/releases/latest omits it,
+    // and internal/update's semverRe will not parse a suffixed tag), and the
+    // download button is the last path by which a test build could still reach
+    // an ordinary visitor. The isPrerelease field below stays wired so the label
+    // still works if that policy is ever relaxed.
+    const rel = list.find((r) => !r.isDraft && !r.isPrerelease && /^v\d+\.\d+/.test(r.tagName));
     if (!rel) return null;
     const view = JSON.parse(
       execFileSync("gh", ["release", "view", rel.tagName, "--json", "tagName,publishedAt,assets"], {

@@ -116,6 +116,18 @@ func TestWatcher_DetectsSizeChangeWithSameModTime(t *testing.T) {
 }
 
 func TestWatcher_SymlinkTargetSwap(t *testing.T) {
+	// Windows cannot run this one. The scenario is the k8s ConfigMap projection
+	// described in the package doc, a Linux container concern with no Windows
+	// equivalent, and the mechanics fight each other here: Run's os.Stat poll
+	// holds a transient handle on the path, while os.Rename is MoveFileEx with
+	// MOVEFILE_REPLACE_EXISTING, which fails with ERROR_ACCESS_DENIED (not a
+	// sharing violation, so the error reads misleadingly) when the destination
+	// is open. Whether a poll lands inside the rename is a coin flip, so letting
+	// this run on Windows buys nothing but an intermittently red CI.
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink swap is a k8s/Linux pattern; MoveFileEx races the stat poll on Windows")
+	}
+
 	dir := t.TempDir()
 	targetA := filepath.Join(dir, "targetA")
 	targetB := filepath.Join(dir, "targetB")
@@ -125,9 +137,6 @@ func TestWatcher_SymlinkTargetSwap(t *testing.T) {
 	require.NoError(t, os.WriteFile(targetB, []byte("BBBBBBBB"), 0o644))
 
 	if err := os.Symlink(targetA, link); err != nil {
-		if runtime.GOOS == "windows" {
-			t.Skipf("symlink creation requires privilege on Windows: %v", err)
-		}
 		t.Fatalf("os.Symlink: %v", err)
 	}
 

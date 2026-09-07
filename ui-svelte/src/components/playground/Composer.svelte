@@ -74,7 +74,15 @@
 </script>
 
 {#if showSettings}
-  <div use:closeOnOutside class="absolute bottom-full right-0 mb-2 w-80 z-20 flex flex-col gap-3 p-4 rounded-lg border border-card-border bg-surface shadow-lg text-[0.8125rem]">
+  <!-- max-h/overflow: the image panel is tall enough to run past the top of a
+       short window. It has to scroll itself, because the shell clips rather than
+       letting the document grow a pair of scrollbars. 100vh needs the `zoom`
+       division (see index.css); 9rem leaves room for the composer below it. -->
+  <div
+    use:closeOnOutside
+    class="absolute bottom-full right-0 mb-2 w-80 z-20 flex flex-col gap-3 p-4 rounded-lg border border-card-border bg-surface shadow-lg text-[0.8125rem] overflow-y-auto overscroll-contain pretty-scroll"
+    style="max-height: calc(100vh / var(--qm-scale) - 9rem)"
+  >
     <div class="flex items-center justify-between">
       <span class="font-medium text-txtmain">{settingsTitle}</span>
       <button

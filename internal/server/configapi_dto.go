@@ -45,6 +45,9 @@ type variantDTO struct {
 	Parallel         int    `json:"parallel"`
 	ExtraArgs        string `json:"extraArgs"`
 	ChatTemplateFile string `json:"chatTemplateFile"`
+	// MmprojFile pins the projector path; empty inherits the model-wide value,
+	// autogen.NoneSentinel falls back to discovery. See autogen.Override.
+	MmprojFile string `json:"mmprojFile"`
 	// Mmproj is meaningful only on the reserved "vision" variant; see
 	// autogen.VariantSpec.Mmproj.
 	Mmproj string `json:"mmproj"`
@@ -139,6 +142,7 @@ type overrideDTO struct {
 	Ub               int    `json:"ub"`
 	ExtraArgs        string `json:"extraArgs"`
 	ChatTemplateFile string `json:"chatTemplateFile"`
+	MmprojFile       string `json:"mmprojFile"`
 	Unlisted         bool   `json:"unlisted"`
 	Skip             bool   `json:"skip"`
 	SlotCache        *bool  `json:"slotCache"` // opt this model into on-disk slot KV persistence; nil/absent => OFF (opt-in)
@@ -187,6 +191,7 @@ type overrideDTO struct {
 	CacheReuse           int     `json:"cacheReuse"`
 	CacheRamMB           int     `json:"cacheRamMB"`
 	CacheIdleSlots       string  `json:"cacheIdleSlots"`
+	LogVerbosity         int     `json:"logVerbosity"`
 	SwaFull              bool    `json:"swaFull"`
 	CheckpointMinStep    int     `json:"checkpointMinStep"`
 	ContextShift         string  `json:"contextShift"`
@@ -268,7 +273,7 @@ func variantToDTO(v autogen.VariantSpec) variantDTO {
 		KvInRam: v.KvInRam, CpuOffload: v.CpuOffload,
 		FlashAttn: v.FlashAttn, Mmap: v.Mmap, Mlock: v.Mlock,
 		Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
-		ChatTemplateFile: v.ChatTemplateFile, Mmproj: v.Mmproj,
+		ChatTemplateFile: v.ChatTemplateFile, MmprojFile: v.MmprojFile, Mmproj: v.Mmproj,
 		DryMultiplier: v.DryMultiplier, DryBase: v.DryBase, DryAllowedLength: v.DryAllowedLength,
 		Temp: v.Temp, TopK: v.TopK, TopP: v.TopP, MinP: v.MinP, PresencePenalty: v.PresencePenalty,
 		SpecDraftNMax: v.SpecDraftNMax, SpecDefault: v.SpecDefault,
@@ -298,6 +303,7 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		Threads: o.Threads, Parallel: o.Parallel, Ub: o.Ub,
 		ExtraArgs:        o.ExtraArgs,
 		ChatTemplateFile: o.ChatTemplateFile,
+		MmprojFile:       o.MmprojFile,
 		Unlisted:         o.Unlisted, Skip: o.Skip, SlotCache: o.SlotCache,
 		SlotCachePreamble: o.SlotCachePreamble,
 		CtxVariants:       o.CtxVariants, CtxCheckpoints: o.CtxCheckpoints,
@@ -309,7 +315,8 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		SpecNgramSizeN: o.SpecNgramSizeN, SpecNgramSizeM: o.SpecNgramSizeM, SpecNgramMinHits: o.SpecNgramMinHits,
 		ThreadsBatch: o.ThreadsBatch, Prio: o.Prio, DirectIo: o.DirectIo, NoOpOffload: o.NoOpOffload, NoRepack: o.NoRepack,
 		KvKDraft: o.KvKDraft, KvVDraft: o.KvVDraft, CacheReuse: o.CacheReuse, CacheRamMB: o.CacheRamMB, CacheIdleSlots: o.CacheIdleSlots,
-		SwaFull: o.SwaFull, CheckpointMinStep: o.CheckpointMinStep, ContextShift: o.ContextShift,
+		LogVerbosity: o.LogVerbosity,
+		SwaFull:      o.SwaFull, CheckpointMinStep: o.CheckpointMinStep, ContextShift: o.ContextShift,
 		SpecDraftNMin: o.SpecDraftNMin, SlotPromptSimilarity: o.SlotPromptSimilarity,
 		RopeScaling: o.RopeScaling, RopeScale: o.RopeScale, RopeFreqBase: o.RopeFreqBase, YarnOrigCtx: o.YarnOrigCtx,
 		SplitMode: o.SplitMode, TensorSplit: o.TensorSplit, MainGpu: o.MainGpu, OverrideTensor: o.OverrideTensor,
@@ -334,7 +341,7 @@ func toVariantSpec(v variantDTO) autogen.VariantSpec {
 		KvInRam: v.KvInRam, CpuOffload: v.CpuOffload,
 		FlashAttn: v.FlashAttn, Mmap: v.Mmap, Mlock: v.Mlock,
 		Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
-		ChatTemplateFile: v.ChatTemplateFile, Mmproj: v.Mmproj,
+		ChatTemplateFile: v.ChatTemplateFile, MmprojFile: v.MmprojFile, Mmproj: v.Mmproj,
 		DryMultiplier: v.DryMultiplier, DryBase: v.DryBase, DryAllowedLength: v.DryAllowedLength,
 		Temp: v.Temp, TopK: v.TopK, TopP: v.TopP, MinP: v.MinP, PresencePenalty: v.PresencePenalty,
 		SpecDraftNMax: v.SpecDraftNMax, SpecDefault: v.SpecDefault,
@@ -379,6 +386,7 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.Ub = body.Ub
 	ov.ExtraArgs = strings.TrimSpace(body.ExtraArgs)
 	ov.ChatTemplateFile = strings.TrimSpace(body.ChatTemplateFile)
+	ov.MmprojFile = strings.TrimSpace(body.MmprojFile)
 	ov.Unlisted = body.Unlisted
 	ov.Skip = body.Skip
 	ov.SlotCache = body.SlotCache
@@ -410,6 +418,7 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.CacheReuse = body.CacheReuse
 	ov.CacheRamMB = body.CacheRamMB
 	ov.CacheIdleSlots = body.CacheIdleSlots
+	ov.LogVerbosity = body.LogVerbosity
 	ov.SwaFull = body.SwaFull
 	ov.CheckpointMinStep = body.CheckpointMinStep
 	ov.ContextShift = body.ContextShift
@@ -443,6 +452,11 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	for _, v := range body.Variants {
 		ov.Variants = append(ov.Variants, toVariantSpec(v))
 	}
+	// Resolve a model-level "none" here rather than only at config load: this DTO
+	// also feeds the launch-command preview, which renders without ever reading
+	// the config file. The variants above are deliberately left alone - on a
+	// variant the sentinel is meaningful, not redundant.
+	autogen.NormalizeNone(ov)
 }
 
 // applyVariantPatch layers only the NON-ZERO fields of a variantDTO patch onto
@@ -513,6 +527,9 @@ func applyVariantPatch(ov *autogen.Override, p variantDTO) {
 	}
 	if strings.TrimSpace(p.ChatTemplateFile) != "" {
 		ov.ChatTemplateFile = strings.TrimSpace(p.ChatTemplateFile)
+	}
+	if strings.TrimSpace(p.MmprojFile) != "" {
+		ov.MmprojFile = strings.TrimSpace(p.MmprojFile)
 	}
 	if p.DryMultiplier != 0 {
 		ov.DryMultiplier = p.DryMultiplier

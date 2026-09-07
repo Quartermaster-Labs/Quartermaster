@@ -106,10 +106,15 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 	}
 
 	in := EstimateInput{
-		Ctx:          atoiFlag(args, "-c", "--ctx-size"),
-		KvK:          flagStr(args, "-ctk", "--cache-type-k"),
-		KvV:          flagStr(args, "-ctv", "--cache-type-v"),
-		KvInRam:      hasFlag(args, "--no-kv-offload"),
+		Ctx:     atoiFlag(args, "-c", "--ctx-size"),
+		KvK:     flagStr(args, "-ctk", "--cache-type-k"),
+		KvV:     flagStr(args, "-ctv", "--cache-type-v"),
+		KvInRam: hasFlag(args, "--no-kv-offload"),
+		// Draft cache type. An argv without -ctkd really does run the draft
+		// context on f16 (llama's own default is independent of -ctk), so pin f16
+		// rather than letting the sizer assume the emitter's matched default.
+		KvKDraft:     flagStrDef(args, "f16", "-ctkd", "--cache-type-k-draft"),
+		KvVDraft:     flagStrDef(args, "f16", "-ctvd", "--cache-type-v-draft"),
 		Spec:         specTypes(args),
 		RopeScaling:  flagStr(args, "--rope-scaling"),
 		TargetVramGB: budgetGB, // EstimatePlan subtracts overhead via s
@@ -149,8 +154,8 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 		}
 	}
 	// A separate draft gguf (-md: MTP sidecar or any DFlash drafter) has real
-	// weights on disk; charge its actual size instead of the flat 0.34 GB
-	// baked-in-MTP default so a big drafter doesn't get under-charged here.
+	// weights on disk; charge its actual size instead of the small baked-in-MTP
+	// pad so a big drafter doesn't get under-charged here.
 	if md, i := argVal(args, "-md"); i >= 0 {
 		if fi, statErr := os.Stat(md); statErr == nil {
 			in.DraftGB = float64(fi.Size()) / gib
@@ -177,6 +182,26 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 	if res.EstVramGB > freeGB {
 		return nil, fmt.Errorf("insufficient VRAM to load %s: needs ~%.1fGB at max CPU offload but only %.1fGB free - close other GPU apps and retry",
 			filepath.Base(model), res.EstVramGB, freeGB)
+	}
+
+	// Context is the cheaper currency. When the live reading falls a little short
+	// of what the baked plan assumed, the planner pays for the difference in
+	// PLACEMENT: a dense model drops a layer - its weights AND its KV to RAM,
+	// crossed on every token - to reclaim what a few thousand tokens of window
+	// would have covered. Shrink the window first and keep the baked placement if
+	// that fits. Only the argv is rewritten, so the config keeps its full window
+	// for the next spawn, when the desktop may have handed the VRAM back.
+	if res.Ngl < bakedNgl || res.NCpuMoe > bakedNcpu {
+		if _, ctxIdx := argVal(args, "-c", "--ctx-size"); ctxIdx >= 0 {
+			if ctx, trimmed, ok := trimCtxForPlacement(s, meta, in, argSlots(args), bakedNgl, bakedNcpu); ok {
+				if logf != nil {
+					logf(fmt.Sprintf("dynoffload: free=%.1fGB -> -c %d->%d instead of -ngl %d->%d (est %.1fGB)",
+						freeGB, in.Ctx, ctx, bakedNgl, res.Ngl, trimmed.EstVramGB))
+				}
+				args = rewriteCtx(args, ctxIdx, ctx)
+				in.Ctx, res = ctx, trimmed
+			}
+		}
 	}
 
 	// Admission floor. Without one, multi-resident loading always "succeeds":
@@ -348,6 +373,61 @@ func rewriteOffload(args []string, nglIdx, ncIdx, newNgl, newNcpu int) []string 
 	return out
 }
 
+// ctxTrimFloorFrac bounds how far the guard may shrink the launch window to buy
+// back a layer. Below ~60% of the configured window the window itself is the
+// thing the user notices (a conversation that used to fit now doesn't), and
+// spilling a layer becomes the better trade.
+const ctxTrimFloorFrac = 0.6
+
+// trimCtxForPlacement looks for the largest context <= the baked one that keeps
+// the BAKED placement under the live budget, stepping down one 4096-token block
+// per slot at a time. Returns the trimmed TOTAL -c value and its estimate.
+//
+// -c is total context (per-slot x --parallel, because --kv-unified shares one KV
+// pool), so the step is scaled by the slot count: anything else would leave slots
+// holding a non-multiple of the 4096 block the sizer rounds to, and the next
+// probe would re-round to the same place and loop without progress.
+func trimCtxForPlacement(s Settings, meta Metadata, in EstimateInput, slots, bakedNgl, bakedNcpu int) (int, EstimateResult, bool) {
+	if in.Ctx <= 0 {
+		return 0, EstimateResult{}, false
+	}
+	if slots < 1 {
+		slots = 1
+	}
+	step := 4096 * slots
+	floor := int(float64(in.Ctx) * ctxTrimFloorFrac)
+	probe := in
+	for ctx := in.Ctx - step; ctx >= step && ctx >= floor; ctx -= step {
+		probe.Ctx = ctx
+		res, err := EstimatePlan(s, meta, probe)
+		if err != nil {
+			return 0, EstimateResult{}, false
+		}
+		if res.Ngl >= bakedNgl && res.NCpuMoe <= bakedNcpu {
+			return ctx, res, true
+		}
+	}
+	return 0, EstimateResult{}, false
+}
+
+// rewriteCtx is rewriteOffload's twin for -c: copy, assign by index. The flag is
+// always present when this is called (the caller got the index from argVal), so
+// there is no append path.
+func rewriteCtx(args []string, ctxIdx, ctx int) []string {
+	out := append([]string(nil), args...)
+	out[ctxIdx] = strconv.Itoa(ctx)
+	return out
+}
+
+// argSlots is the launched --parallel value (1 when unset), i.e. how many slots
+// the total -c is divided across.
+func argSlots(args []string) int {
+	if n := atoiFlag(args, "-np", "--parallel"); n > 0 {
+		return n
+	}
+	return 1
+}
+
 // argVal returns the value following the first matching flag and the index of
 // that value (-1 if absent). Args are already shlex-split, so flag and value are
 // adjacent tokens.
@@ -365,6 +445,15 @@ func argVal(args []string, names ...string) (string, int) {
 func flagStr(args []string, names ...string) string {
 	v, _ := argVal(args, names...)
 	return v
+}
+
+// flagStrDef is flagStr with a fallback for a flag the argv omits, for the cases
+// where "absent" means a specific llama default rather than "let us choose".
+func flagStrDef(args []string, def string, names ...string) string {
+	if v, idx := argVal(args, names...); idx >= 0 && v != "" {
+		return v
+	}
+	return def
 }
 
 func atoiFlag(args []string, names ...string) int {

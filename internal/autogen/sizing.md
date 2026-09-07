@@ -45,11 +45,23 @@ device `MainIndex` picks, which is the pre-issue-#4 behaviour.
 ## Compute buffer
 
 **Modeled, not a flat fudge.** `computeBufferGB` (`generate_sizing.go`) =
-logits (`VocabSize*min(ub,computeLogitsTokens)*4`) + activations
-(`ub*EmbeddingLength*~8*4`) + a fixed CUDA-ctx constant (`computeCudaCtxGB=0.3`,
-charged only when `usingCudaGPU()`), scaled by `settings.computeBufFactor`.
+`runtimeCtxGB()` + `computeGraphGB()`, scaled by `settings.computeBufFactor`.
 Replaced a flat `ubSoloOh=0.17` that undercounted by >1 GB on large-vocab models
 and drove VRAM spillover.
+
+- **`computeGraphGB` is per-CONTEXT**: logits (`VocabSize*min(ub,computeLogitsTokens)*4`)
+  + activations (`ub*EmbeddingLength*~8*4`). Split out because a second
+  `llama_context` over the same model (the baked-in MTP drafter) allocates its
+  own graph, see the drafter section below.
+- **`runtimeCtxGB` is per-PROCESS**, charged once per llama-server whatever the
+  context count: `computeCudaCtxGB=0.3` (CUDA runtime + cuBLAS workspace) when
+  `usingCudaGPU()`, else `computeHipCtxGB=0.4`. The non-CUDA figure used to be
+  **0**, on the reasoning that a CUDA number would not transfer. It transfers and
+  then some: measured against PDH per-process dedicated VRAM on an RX 7900 XTX
+  (ROCm gfx1100), qwen3-4b-instruct Q6_K at ctx 16384 held 5.00 GiB against
+  4.60 GiB of modeled components, and a Qwen3.8-27B left the same ~0.4 GiB
+  unexplained. Two unrelated models landing on the same figure is what promoted
+  it from a ponytail to a constant.
 
 - **`computeLogitsTokens` is 1024, not 256.** llama.cpp sizes the output *tensor*
   by `n_outputs`, but the measured CUDA compute buffer still grows with the
@@ -211,8 +223,30 @@ on these archs).
   overrides either.
 - **Never opt in on dense/CPU-bound models:** on Dense-27B it merely ties mtp on decode, costs
   1.43 GB resident, and the draft's own prefill craters pp by −55%.
-- Any separate draft file is charged via `draftOverheadGB` = real on-disk size + 0.1 GB pad
-  (the flat 0.34 GB is only for a baked-in MTP nextn layer with no file).
+- Any separate draft file is charged via `draftOverheadGB` = real on-disk size + 0.1 GB pad.
+- A **baked-in MTP nextn layer** (no file) is charged in three parts: its own compute
+  **graph** (`mtpDraftComputeGB`, = `computeGraphGB` at the same ub, since the draft
+  context inherits `params_base` and so projects over the same vocabulary at the same
+  physical batch: on Qwen3.8-27B that logits term alone is 0.47 GiB of a 0.55 GiB
+  buffer), a flat `mtpDraftPadGB` (0.15 GB, now only the second context's non-graph
+  allocations: its scheduler and state buffers), plus a **ctx-scaled KV slope**,
+  `mtpDraftSlopeGB` =
+  `nextn_predict_layers x n_kv_heads x (k_len*bK + v_len*bV)`, carried in
+  `profile.DraftSlopeGB` and added to the per-token slope the sizer solves ctx against.
+  llama-server does not run the nextn head inside the main context: it builds a **second
+  `llama_context` over the same model** at the target's full `n_ctx`, filtered to the nextn
+  layers, so the drafter's KV grows with the window. The old flat 0.34 GB was ~3x too fat at
+  32k and half the real cost at 160k (Qwen3.8-27B: 1 nextn layer, 0.61 GB of f16 KV at
+  159744). The graph charge replaced `mtpDraftPadGB` carrying all of it, which was ~4x
+  short: Qwen3.8-27B at ctx 114688 measured 15.82 GiB per-process against 13.95 GiB of
+  modeled components. It rides in `EstimateResult.DraftGB`, not `ComputeBufGB`, and is
+  skipped for a separate draft gguf (already priced by its weights) or when the gguf
+  carries no vocab/embd dims (pad only, as `computeBufferGB` falls back to
+  `computeFallbackGB`).
+- That second context takes its cache type from `-ctkd`/`-ctvd`, which llama defaults to
+  **f16 regardless of `-ctk`**. `buildCmdLines` therefore emits both for ANY active draft
+  spec (not just when a `-md` file is attached), defaulted to the model's own `-ctk`/`-ctv`,
+  which halves the drafter's KV on a q8_0 model. `Override.KvKDraft/KvVDraft` still win.
 
 ## RoPE scaling
 

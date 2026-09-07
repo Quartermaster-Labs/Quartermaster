@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseCmdFields, genDefaultNum, specToggle } from "./modelCmdForm";
+import { parseCmdFields, genDefaultNum, cmdNum, specToggle, hoistCms } from "./modelCmdForm";
 import type { ModelConfig } from "../stores/api";
 
 // The sampler defaults are the one flag group where 0 is a real value, so the
@@ -72,5 +72,61 @@ describe("parseCmdFields mmproj flags", () => {
       "llama-server -m x.gguf --mmproj C:/models/mmproj.gguf --no-mmproj-offload --foo bar",
     );
     expect(p.extraArgs).toBe("--foo bar");
+  });
+});
+
+describe("parseCmdFields --ctx-checkpoints", () => {
+  it("captures the value instead of swallowing it", () => {
+    expect(parseCmdFields("llama-server -m x.gguf --ctx-checkpoints 2").ctxCheckpoints).toBe(2);
+    expect(parseCmdFields("llama-server -m x.gguf --ctx-checkpoints 0").ctxCheckpoints).toBe(0);
+  });
+  it("reports null when the user deleted the flag", () => {
+    expect(parseCmdFields("llama-server -m x.gguf -c 4096").ctxCheckpoints).toBeNull();
+  });
+  it("never bleeds into extraArgs", () => {
+    expect(parseCmdFields("llama-server -m x.gguf --ctx-checkpoints 2").extraArgs).toBe("");
+  });
+});
+
+// -cms is the flag that proved this whole class of bug: autogen emits it on
+// every text model, the box did not parse it, so it landed in extraArgs and was
+// re-appended after the generated copy - once more per round trip through the
+// launch box.
+describe("parseCmdFields -cms", () => {
+  it("captures both spellings", () => {
+    expect(parseCmdFields("llama-server -m x.gguf -cms 256").checkpointMinStep).toBe(256);
+    expect(parseCmdFields("llama-server -m x.gguf --checkpoint-min-step 512").checkpointMinStep).toBe(512);
+  });
+  it("reports \"\" when the user deleted the flag", () => {
+    expect(parseCmdFields("llama-server -m x.gguf -c 4096").checkpointMinStep).toBe("");
+  });
+  it("never bleeds into extraArgs", () => {
+    expect(parseCmdFields("llama-server -m x.gguf -cms 256 --foo bar").extraArgs).toBe("--foo bar");
+    expect(parseCmdFields("llama-server -m x.gguf --checkpoint-min-step 256").extraArgs).toBe("");
+  });
+});
+
+// Installs saved before the parse existed carry the flag inside extraArgs.
+// Hoisting it back into the field on load is what actually stops the duplicate
+// the user already has on disk.
+describe("hoistCms", () => {
+  it("pulls the flag out and returns the rest", () => {
+    expect(hoistCms("-cms 256")).toEqual({ extra: "", step: 256 });
+    expect(hoistCms("--foo bar -cms 256 --baz")).toEqual({ extra: "--foo bar --baz", step: 256 });
+    expect(hoistCms("--checkpoint-min-step 512 --foo")).toEqual({ extra: "--foo", step: 512 });
+  });
+  it("leaves an extraArgs without it untouched", () => {
+    expect(hoistCms("--foo bar")).toEqual({ extra: "--foo bar", step: "" });
+    expect(hoistCms("")).toEqual({ extra: "", step: "" });
+  });
+  it("does not match a longer flag that merely ends in -cms", () => {
+    expect(hoistCms("--not-cms 256").step).toBe("");
+  });
+});
+
+describe("cmdNum", () => {
+  it("reads a flag off any command text, not just the model baseline", () => {
+    expect(cmdNum("llama-server --ctx-checkpoints 3 -c 8192", "--ctx-checkpoints")).toBe(3);
+    expect(cmdNum("llama-server -c 8192", "--ctx-checkpoints")).toBe("");
   });
 });

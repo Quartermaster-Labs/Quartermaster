@@ -102,19 +102,17 @@ func (g GpuSet) MainIndex() int {
 	return best
 }
 
-// perDeviceFixedGB is the runtime context each ADDITIONAL device costs. It
-// mirrors computeBufferGB's treatment of the main device: the constant is a
-// CUDA-runtime figure, so it is charged only on CUDA, and a Vulkan/ROCm
-// multi-GPU box gets 0 here for the same reason it gets 0 there.
+// perDeviceFixedGB is the runtime context each ADDITIONAL device costs. It is
+// the same per-device constant computeBufferGB charges the main device, so it
+// tracks whichever backend is in use (runtimeCtxGB).
 //
-// ponytail: one constant for every extra device. A per-backend figure belongs
-// here if a non-CUDA multi-GPU build proves to cost something measurable.
-func perDeviceFixedGB() float64 {
-	if usingCudaGPU() {
-		return computeCudaCtxGB
-	}
-	return 0
-}
+// It used to return 0 on anything but CUDA, on the reasoning that the constant
+// was a CUDA-runtime figure that would not transfer. Measurement said otherwise:
+// the Vulkan/ROCm runtime reserves MORE than CUDA does, not nothing, so a
+// non-CUDA two-card box was silently handed a whole extra device's runtime as
+// free budget. The main-device charge was corrected in #24; this is the same
+// constant seen from the extra devices' side.
+func perDeviceFixedGB() float64 { return runtimeCtxGB() }
 
 // ExtraDeviceOverheadGB is what the SIZER must add to a profile's overhead
 // before budgeting against FreeGB(): every device past the main one pays its
