@@ -707,7 +707,11 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 
 		CheckpointMinStep: ov.CheckpointMinStep,
 	}
-	prof.Overhead += computeBufferGB(meta, effectiveUb(meta, prof, &ov, prof.Ctx, s.TargetVramGB), s.ComputeBufFactor)
+	soloUb := effectiveUb(meta, prof, &ov, prof.Ctx, s.TargetVramGB)
+	// ...plus the second llama_context a baked-in MTP drafter runs, which
+	// allocates a graph of its own at that same ub (see mtpDraftComputeGB).
+	prof.Overhead += computeBufferGB(meta, soloUb, s.ComputeBufFactor) +
+		mtpDraftComputeGB(meta, soloSpec, soloDraftGB, soloUb, s.ComputeBufFactor)
 	// The baked-in MTP drafter's own KV scales with the window, so it belongs in
 	// the slope the sizer solves ctx against (see mtpDraftSlopeFor).
 	sdKvK, sdKvV := draftKvPair(ov.KvKDraft, ov.KvVDraft, kvK, kvV)

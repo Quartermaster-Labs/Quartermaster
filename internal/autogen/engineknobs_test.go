@@ -59,11 +59,18 @@ func TestComputeBufferGB(t *testing.T) {
 		t.Errorf("missing dims: got %.3f, want fallback %.3f", fb, computeFallbackGB)
 	}
 
-	// Non-CUDA GPU (Vulkan/ROCm) drops the fixed CUDA-context constant.
+	// A non-CUDA GPU (Vulkan/ROCm) swaps the runtime constant rather than
+	// dropping it: measured per-process, the HIP runtime reserves MORE than the
+	// CUDA one, so charging 0 there under-committed by ~0.4 GB per model.
 	cudaGPU.Store(false)
 	defer cudaGPU.Store(true)
-	if d := got - computeBufferGB(meta, 1024, 1.0); d < computeCudaCtxGB-0.001 || d > computeCudaCtxGB+0.001 {
-		t.Errorf("non-CUDA should drop the %.2f CUDA-ctx constant, dropped %.3f", computeCudaCtxGB, d)
+	want := computeHipCtxGB - computeCudaCtxGB
+	if d := computeBufferGB(meta, 1024, 1.0) - got; math.Abs(d-want) > 0.001 {
+		t.Errorf("non-CUDA should swap in the %.2f HIP-ctx constant (delta %+.2f), got %+.3f", computeHipCtxGB, want, d)
+	}
+	// The fallback is a whole-buffer figure, so it must not move with the backend.
+	if fb := computeBufferGB(Metadata{}, 1024, 1.0); fb != computeFallbackGB {
+		t.Errorf("non-CUDA fallback: got %.3f, want %.3f", fb, computeFallbackGB)
 	}
 }
 

@@ -13,10 +13,11 @@ import (
 	"github.com/quartermaster-labs/quartermaster/internal/perf"
 )
 
-// cudaGPU records whether the serving GPU is CUDA (NVIDIA). It gates the fixed
-// CUDA-context term in computeBufferGB — that cost is a CUDA-runtime figure and
-// shouldn't be charged on Vulkan/ROCm (AMD/Intel). Defaults to true (assume
-// CUDA) so NVIDIA boxes and tests are unchanged until DetectGpuCompute flips it.
+// cudaGPU records whether the serving GPU is CUDA (NVIDIA). It picks which
+// fixed per-process runtime constant runtimeCtxGB charges: computeCudaCtxGB for
+// the CUDA runtime + cuBLAS workspace, computeHipCtxGB for a Vulkan/ROCm one
+// (AMD/Intel), which measured LARGER, not zero. Defaults to true (assume CUDA)
+// so NVIDIA boxes and tests are unchanged until DetectGpuCompute flips it.
 var cudaGPU atomic.Bool
 
 func init() { cudaGPU.Store(true) }

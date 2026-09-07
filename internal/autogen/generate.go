@@ -459,12 +459,20 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		}
 	}
 
-	// Charge the GPU compute buffer (logits + activations + CUDA runtime) per
-	// profile; it scales with the physical batch and lives on the GPU regardless
-	// of CPU expert offload, so it's flat VRAM overhead. Replaces the old flat
-	// 0.17 GB ubSoloOh fudge.
+	// Charge the GPU compute buffer (logits + activations + the GPU runtime
+	// constant) per profile; it scales with the physical batch and lives on the
+	// GPU regardless of CPU expert offload, so it's flat VRAM overhead. Replaces
+	// the old flat 0.17 GB ubSoloOh fudge. A baked-in MTP drafter runs a second
+	// llama_context and is charged its own graph on top, at the same ub.
 	for i := range profiles {
-		profiles[i].Overhead += computeBufferGB(meta, effectiveUb(meta, profiles[i], ov, profiles[i].Ctx, s.TargetVramGB), s.ComputeBufFactor)
+		ub := effectiveUb(meta, profiles[i], ov, profiles[i].Ctx, s.TargetVramGB)
+		pspec := modelSpec
+		if profiles[i].Spec != "" {
+			pspec = profiles[i].Spec
+		}
+		pDraftGB := matchedDraftSizeGB(pspec, row.DraftKind, row.DraftSizeGB)
+		profiles[i].Overhead += computeBufferGB(meta, ub, s.ComputeBufFactor) +
+			mtpDraftComputeGB(meta, pspec, pDraftGB, ub, s.ComputeBufFactor)
 	}
 
 	for _, prof := range profiles {

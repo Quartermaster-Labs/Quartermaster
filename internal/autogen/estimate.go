@@ -56,14 +56,16 @@ type EstimateResult struct {
 	// from model weights).
 	CheckpointGB float64 `json:"checkpointGB"`
 	// DraftGB is the VRAM charged for the speculative draft / MTP nextn layer: a
-	// baked-in nextn head costs its compute pad plus its OWN ctx-scaled KV cache
-	// (a second llama_context over the same model at the same window), a separate
-	// draft gguf its weights + pad. Folded into
+	// baked-in nextn head costs its compute pad, its own compute GRAPH and its
+	// OWN ctx-scaled KV cache (a second llama_context over the same model at the
+	// same window), a separate draft gguf its weights + pad. Folded into
 	// EstVramGB via overhead; broken out so the UI can attribute it separately
 	// from the main model weights. 0 when no draft-mtp spec is active.
 	DraftGB float64 `json:"draftGB"`
-	// ComputeBufGB is the GPU compute buffer (logits + activations + the CUDA
-	// context constant when a CUDA GPU is in use). MmprojGB is a "-vision" twin's
+	// ComputeBufGB is the GPU compute buffer: the main context's graph (logits +
+	// activations) plus the fixed per-process runtime constant for the backend in
+	// use (see runtimeCtxGB). A baked-in MTP drafter's own graph is NOT in here,
+	// it is charged to DraftGB. MmprojGB is a "-vision" twin's
 	// projector weights + CLIP reserve (0 for non-vision). OverheadGB is the global
 	// vramOverheadGB safety headroom. All three are folded into EstVramGB via
 	// overhead; broken out so the UI can label them separately from the model
@@ -148,8 +150,13 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 	// Charge the ub the launch will actually run with: effectiveUb reads the
 	// override's pinned value, and passing nil here made the preview size a
 	// different compute buffer than emit did for the same model.
-	computeBufGB := computeBufferGB(meta, effectiveUb(meta, prof, &Override{Ub: in.Ub}, prof.Ctx, target), s.ComputeBufFactor)
-	prof.Overhead += computeBufGB
+	computeUb := effectiveUb(meta, prof, &Override{Ub: in.Ub}, prof.Ctx, target)
+	computeBufGB := computeBufferGB(meta, computeUb, s.ComputeBufFactor)
+	// The baked-in drafter's second context allocates a graph of its own at the
+	// same ub. It is reported under Draft rather than folded into the compute
+	// buffer, so the UI keeps attributing it to the thing that caused it.
+	draftComputeGB := mtpDraftComputeGB(meta, spec, draftGB, computeUb, s.ComputeBufFactor)
+	prof.Overhead += computeBufGB + draftComputeGB
 	prof.Overhead += in.MmprojGB // "-vision" projector weights + CLIP compute reserve
 
 	ctx, plan, kvReserve, planCkptGB, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, in.KvInRam)
@@ -213,7 +220,7 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		MaxRamGB:     s.MaxRamGB,
 		KvReserveGB:  kvReserve,
 		CheckpointGB: checkpointGB,
-		DraftGB:      specOh + draftKvGB,
+		DraftGB:      specOh + draftComputeGB + draftKvGB,
 		ComputeBufGB: computeBufGB,
 		MmprojGB:     in.MmprojGB,
 		OverheadGB:   s.VramOverheadGB,

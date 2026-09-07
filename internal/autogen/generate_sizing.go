@@ -430,9 +430,20 @@ func estForOffload(meta Metadata, prof profile, kvReserve, ckptGB float64, ngl, 
 const (
 	computeActCopies    = 8.0
 	computeCudaCtxGB    = 0.3
+	computeHipCtxGB     = 0.4
 	computeLogitsTokens = 1024.0
 	computeFallbackGB   = 0.17 // vocab/embd dims missing => prior flat estimate
 )
+
+// computeHipCtxGB is the same fixed per-PROCESS runtime cost for a non-CUDA
+// (ROCm/HIP, Vulkan) build: the runtime's own context, its kernel code objects
+// and the BLAS workspace, none of which the analytic graph term below covers.
+// It used to be charged as 0, on the reasoning that the CUDA figure would not
+// transfer. Measured on an RX 7900 XTX (ROCm gfx1100 build) against PDH
+// per-process dedicated VRAM: qwen3-4b-instruct Q6_K at ctx 16384 held 5.00 GiB
+// against 4.60 GiB of modeled components, and a Qwen3.8-27B measured earlier
+// left the same ~0.4 GiB unexplained. Two unrelated models landing on the same
+// figure is what promoted this from a ponytail to a constant.
 
 // Do NOT scale this model down on Vulkan/ROCm without measuring PEAK, not idle.
 // An idle process (post-load, one short prompt) holds ~1.9GB less than the same
@@ -444,30 +455,47 @@ const (
 // peak-modeling estimate makes the compute term look ~1.6GB fat when it is not,
 // and a factor derived that way plans straight into a driver spill.
 
-// computeBufferGB estimates the GPU compute buffer (logits + activations + CUDA
-// runtime) for a given physical batch (ub). This lives on the GPU regardless of
-// CPU expert offload, so it is charged as flat VRAM overhead.
-func computeBufferGB(meta Metadata, ub int, factor float64) float64 {
+// computeGraphGB is the per-CONTEXT half of the compute buffer: the logits
+// tensor plus a handful of n_ubatch*n_embd activation copies. It is split out
+// from computeBufferGB because a second llama_context over the same model (the
+// baked-in MTP drafter, see mtpDraftComputeGB) allocates its own graph while
+// sharing the process-wide runtime constant. ok=false means the gguf carried no
+// vocab/embd dims to model it with.
+func computeGraphGB(meta Metadata, ub int, factor float64) (float64, bool) {
 	if factor <= 0 {
 		factor = 1.0
 	}
 	embd := float64(meta.EmbeddingLength)
 	vocab := float64(meta.VocabSize)
 	if embd <= 0 || vocab <= 0 || ub <= 0 {
-		return computeFallbackGB
+		return 0, false
 	}
 	logits := vocab * math.Min(float64(ub), computeLogitsTokens) * 4.0
 	acts := float64(ub) * embd * computeActCopies * 4.0
-	// The fixed CUDA-context constant is a CUDA-runtime cost; only charge it when a
-	// CUDA (NVIDIA) GPU is actually in use. On Vulkan/ROCm (AMD/Intel) the runtime
-	// context buffer differs, so charging the CUDA figure over-counts.
-	// ponytail: Vulkan/ROCm get 0 here rather than their own constant — add a
-	// per-backend value if a non-CUDA build's context buffer proves to matter.
-	ctxOh := 0.0
+	return factor * (logits + acts) / gib, true
+}
+
+// runtimeCtxGB is the fixed per-PROCESS GPU-runtime cost, picked by the backend
+// actually in use: the two runtimes reserve different amounts, and both were
+// measured rather than assumed. Charged once per llama-server, NOT once per
+// llama_context - a second context (the MTP drafter) shares the process.
+func runtimeCtxGB() float64 {
 	if usingCudaGPU() {
-		ctxOh = computeCudaCtxGB
+		return computeCudaCtxGB
 	}
-	return ctxOh + factor*(logits+acts)/gib
+	return computeHipCtxGB
+}
+
+// computeBufferGB estimates the GPU compute buffer for a given physical batch
+// (ub): the main context's graph plus the process-wide runtime constant. This
+// lives on the GPU regardless of CPU expert offload, so it is charged as flat
+// VRAM overhead.
+func computeBufferGB(meta Metadata, ub int, factor float64) float64 {
+	graph, ok := computeGraphGB(meta, ub, factor)
+	if !ok {
+		return computeFallbackGB
+	}
+	return runtimeCtxGB() + graph
 }
 
 // clipComputeBufferGB models the CLIP vision tower's peak GPU compute buffer from
@@ -550,11 +578,13 @@ func cpuMmprojWins(gpuPlan LoadPlan, gpuCtx int, cpuPlan LoadPlan, cpuCtx int) b
 	return cpuCtx > gpuCtx && float64(gpuCtx) < cpuMmprojGainCtx*float64(cpuCtx)
 }
 
-// mtpDraftPadGB is the CONSTANT part of a baked-in MTP drafter's footprint: its
-// own compute buffer and graph allocations. The KV part is deliberately not
-// here, it is ctx-scaled by mtpDraftSlopeGB and carried in profile.DraftSlopeGB.
-// The flat 0.34 GB this replaces tried to be both at once and was ~3x too fat at
-// a 32k window while under-charging by half at 160k.
+// mtpDraftPadGB is what is left of a baked-in MTP drafter's footprint once the
+// two modeled parts are taken out: its KV is ctx-scaled by mtpDraftSlopeGB and
+// carried in profile.DraftSlopeGB, its compute graph is modeled from the gguf
+// dims by mtpDraftComputeGB. This pad covers only the second llama_context's
+// remaining fixed allocations (its scheduler, its state buffers). The flat
+// 0.34 GB it replaced tried to be all three at once and was ~3x too fat at a 32k
+// window while under-charging by half at 160k.
 const mtpDraftPadGB = 0.15
 
 // draftOverheadGB returns the CTX-INDEPENDENT VRAM overhead to charge for the
@@ -618,6 +648,41 @@ func mtpDraftSlopeFor(meta Metadata, spec, kvKDraft, kvVDraft string, draftSizeG
 		return 0
 	}
 	return mtpDraftSlopeGB(meta, kvKDraft, kvVDraft)
+}
+
+// mtpDraftComputeGB is the compute-graph VRAM the BAKED-IN MTP drafter's own
+// llama_context allocates, on top of the main model's. Same gate as
+// mtpDraftSlopeFor: only the baked-in nextn head runs a second context over the
+// target model, and only when no separate draft gguf is attached.
+//
+// It is charged the FULL graph term, not a share of it. The drafter runs one
+// nextn layer instead of sixty-five, but the graph is dominated by the logits
+// tensor (n_vocab * ub * 4), and the draft context inherits params_base, so it
+// projects over the SAME vocabulary at the SAME ubatch as the target: on
+// Qwen3.8-27B (vocab 248320, ub 512) that term alone is 0.47 GiB of the 0.55 GiB
+// buffer. The activation half is layer-independent too (ggml-alloc reuses one
+// set of n_ubatch*n_embd scratch tensors down the stack), so the only thing this
+// over-charges is a rounding error's worth of per-layer scratch.
+//
+// What this replaces: mtpDraftPadGB alone, a flat 0.15 GB that was meant to
+// cover exactly this and was ~4x short. Measured against PDH per-process
+// dedicated VRAM on an RX 7900 XTX (ROCm), Qwen3.8-27B at ctx 114688 held
+// 15.82 GiB against 13.95 GiB of modeled components; ~0.4 of that gap is the
+// process runtime constant (computeHipCtxGB) and the drafter's graph is the
+// largest single piece of what is left. The pad stays on top for the second
+// context's non-graph allocations (its scheduler, its own state buffers).
+//
+// Returns 0 when the dims are missing, leaving draftOverheadGB's flat pad as the
+// whole charge, exactly as computeBufferGB falls back to computeFallbackGB.
+func mtpDraftComputeGB(meta Metadata, spec string, draftSizeGB float64, ub int, factor float64) float64 {
+	if !specHas(spec, "draft-mtp") || draftSizeGB > 0 {
+		return 0
+	}
+	graph, ok := computeGraphGB(meta, ub, factor)
+	if !ok {
+		return 0
+	}
+	return graph
 }
 
 // draftKvPair resolves the -ctkd/-ctvd pair a launch will run with: the model's

@@ -122,3 +122,65 @@ func TestBuildCmdLines_draftKvFollowsMain(t *testing.T) {
 		t.Fatalf("draft KV emitted without a draft spec: %s", got)
 	}
 }
+
+// qwen38MetaDims is the same model with the two dims a compute graph needs. The
+// gguf carries them; qwen38Meta leaves them off so the KV tests above exercise
+// the KV math alone.
+func qwen38MetaDims() Metadata {
+	m := qwen38Meta()
+	m.EmbeddingLength, m.VocabSize = 5120, 248320
+	return m
+}
+
+// The baked-in drafter is a second llama_context over the same model, inheriting
+// n_ctx and n_ubatch, so it allocates a second compute graph: same vocabulary,
+// same physical batch, hence the same size. It is charged only when the drafter
+// really is baked in - an external draft gguf is already priced by its weights.
+func TestMtpDraftComputeGB(t *testing.T) {
+	meta := qwen38MetaDims()
+	graph, ok := computeGraphGB(meta, 512, 1.0)
+	if !ok || graph <= 0 {
+		t.Fatalf("test assumption broken: graph=%g ok=%v", graph, ok)
+	}
+
+	if got := mtpDraftComputeGB(meta, "draft-mtp", 0, 512, 1.0); got != graph {
+		t.Errorf("baked-in MTP: got %.4f, want the full graph %.4f", got, graph)
+	}
+	// A matched draft gguf: its context is a different, much smaller model.
+	if got := mtpDraftComputeGB(meta, "draft-mtp", 1.2, 512, 1.0); got != 0 {
+		t.Errorf("external draft model should not be charged the target graph, got %.4f", got)
+	}
+	// No draft backend at all.
+	if got := mtpDraftComputeGB(meta, "ngram", 0, 512, 1.0); got != 0 {
+		t.Errorf("no draft-mtp spec: got %.4f, want 0", got)
+	}
+	// Missing dims leave draftOverheadGB's flat pad as the whole charge.
+	if got := mtpDraftComputeGB(qwen38Meta(), "draft-mtp", 0, 512, 1.0); got != 0 {
+		t.Errorf("missing dims: got %.4f, want 0 (pad only)", got)
+	}
+}
+
+// The drafter's graph rides in DraftGB, not ComputeBufGB: the UI attributes it
+// to the draft segment, and the process-wide runtime constant is charged once.
+func TestEstimatePlan_mtpDraftChargesItsOwnGraph(t *testing.T) {
+	meta := qwen38MetaDims()
+	s := Settings{TargetVramGB: 40, VramOverheadGB: 1, ComputeBufFactor: 1}
+	s.applyDefaults()
+
+	got, err := EstimatePlan(s, meta, EstimateInput{Ctx: 32768, KvK: "q8_0", KvV: "q8_0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// ComputeBufGB is runtime + ONE graph, so the graph the drafter copies is
+	// recoverable from it without having to re-derive the effective ubatch.
+	graph := got.ComputeBufGB - runtimeCtxGB()
+	if graph <= 0 {
+		t.Fatalf("compute buffer %.4f is below the runtime constant %.4f", got.ComputeBufGB, runtimeCtxGB())
+	}
+	slope := mtpDraftSlopeGB(meta, "q8_0", "q8_0")
+	want := mtpDraftPadGB + graph + slope*float64(got.Ctx)
+	if math.Abs(got.DraftGB-want) > 1e-9 {
+		t.Fatalf("draft charge=%.4f want %.4f (pad %.2f + graph %.4f + KV %.4f)",
+			got.DraftGB, want, mtpDraftPadGB, graph, slope*float64(got.Ctx))
+	}
+}
