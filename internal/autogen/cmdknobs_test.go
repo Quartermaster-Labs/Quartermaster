@@ -245,9 +245,10 @@ func TestDraftOverheadGB_kindGate(t *testing.T) {
 	const dflashGB = 1.06
 	mtpSpec := "draft-mtp+ngram-mod"
 
-	// DFlash sidecar in the dir, running on the baked-in MTP head -> flat 0.34.
-	if got := draftOverheadGB(mtpSpec, matchedDraftSizeGB(mtpSpec, "dflash", dflashGB)); got != 0.34 {
-		t.Fatalf("draft-mtp with a dflash sidecar charged %.2f GB, want the baked-in 0.34", got)
+	// DFlash sidecar in the dir, running on the baked-in MTP head -> the baked-in
+	// compute pad only (its KV is ctx-scaled by mtpDraftSlopeFor, not charged here).
+	if got := draftOverheadGB(mtpSpec, matchedDraftSizeGB(mtpSpec, "dflash", dflashGB)); got != mtpDraftPadGB {
+		t.Fatalf("draft-mtp with a dflash sidecar charged %.2f GB, want the baked-in pad %.2f", got, mtpDraftPadGB)
 	}
 	// Explicitly selected: the drafter really loads, charge its weights + pad.
 	if got := draftOverheadGB("draft-dflash", matchedDraftSizeGB("draft-dflash", "dflash", dflashGB)); math.Abs(got-(dflashGB+0.1)) > 1e-9 {

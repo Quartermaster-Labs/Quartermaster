@@ -174,8 +174,20 @@ on these archs).
   overrides either.
 - **Never opt in on dense/CPU-bound models:** on Dense-27B it merely ties mtp on decode, costs
   1.43 GB resident, and the draft's own prefill craters pp by −55%.
-- Any separate draft file is charged via `draftOverheadGB` = real on-disk size + 0.1 GB pad
-  (the flat 0.34 GB is only for a baked-in MTP nextn layer with no file).
+- Any separate draft file is charged via `draftOverheadGB` = real on-disk size + 0.1 GB pad.
+- A **baked-in MTP nextn layer** (no file) is charged in two parts: a flat `mtpDraftPadGB`
+  (0.15 GB, its compute buffer) plus a **ctx-scaled KV slope**, `mtpDraftSlopeGB` =
+  `nextn_predict_layers x n_kv_heads x (k_len*bK + v_len*bV)`, carried in
+  `profile.DraftSlopeGB` and added to the per-token slope the sizer solves ctx against.
+  llama-server does not run the nextn head inside the main context: it builds a **second
+  `llama_context` over the same model** at the target's full `n_ctx`, filtered to the nextn
+  layers, so the drafter's KV grows with the window. The old flat 0.34 GB was ~3x too fat at
+  32k and half the real cost at 160k (Qwen3.8-27B: 1 nextn layer, 0.61 GB of f16 KV at
+  159744).
+- That second context takes its cache type from `-ctkd`/`-ctvd`, which llama defaults to
+  **f16 regardless of `-ctk`**. `buildCmdLines` therefore emits both for ANY active draft
+  spec (not just when a `-md` file is attached), defaulted to the model's own `-ctk`/`-ctv`,
+  which halves the drafter's KV on a q8_0 model. `Override.KvKDraft/KvVDraft` still win.
 
 ## RoPE scaling
 

@@ -2556,11 +2556,11 @@
               <input type="number" min="0" step="1" bind:value={adv.mainGpu} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="0" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Draft KV-K {@render hint("-ctkd. Draft/spec model K cache type. Empty = f16.")}</span>
+              <span class="text-txtsecondary flex items-center gap-1">Draft KV-K {@render hint("-ctkd. Draft/spec context K cache type, including a baked-in MTP head. Empty = match KV-K.")}</span>
               <input type="text" bind:value={adv.kvKDraft} class="cfg-input w-20 ml-auto" placeholder="f16" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Draft KV-V {@render hint("-ctvd. Draft/spec model V cache type. Empty = f16.")}</span>
+              <span class="text-txtsecondary flex items-center gap-1">Draft KV-V {@render hint("-ctvd. Draft/spec context V cache type, including a baked-in MTP head. Empty = match KV-V.")}</span>
               <input type="text" bind:value={adv.kvVDraft} class="cfg-input w-20 ml-auto" placeholder="f16" />
             </label>
             <label class="flex items-center gap-2">

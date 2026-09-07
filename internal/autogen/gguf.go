@@ -144,6 +144,13 @@ type Metadata struct {
 	// can use --spec-type draft-mtp.
 	IsMTP bool
 
+	// NextnLayers is how many of those layers there are. It is not a detail:
+	// llama-server builds the baked-MTP drafter as a SECOND context over the same
+	// model, whose KV cache covers exactly these layers at the target's full
+	// n_ctx, so the draft's VRAM scales with the context window. See
+	// mtpDraftSlopeGB.
+	NextnLayers int64
+
 	// ExpertWeightShare is the fraction of on-disk weight bytes in expert
 	// tensors (*_exps.weight), derived from the tensor section. 0 when not MoE
 	// or the tensor section could not be sized. Replaces the per-arch heuristic.
@@ -1030,6 +1037,7 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 		PoolingType:       deref(poolingType),
 		IsMoE:             expertCount != nil && *expertCount > 0,
 		IsMTP:             nextnLayers != nil && *nextnLayers > 0,
+		NextnLayers:       deref(nextnLayers),
 		ExpertWeightShare: expertShare,
 		VisionImageSize:   deref(visImageSize),
 		VisionPatchSize:   deref(visPatchSize),

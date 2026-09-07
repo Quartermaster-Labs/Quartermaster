@@ -61,9 +61,11 @@ and spills as before.
 
 - A `-md` in the argv (separate MTP sidecar or DFlash drafter) is stat'd for its real
   on-disk size into `EstimateInput.DraftGB`, matching what generate-time bakes into the
-  model's `Overhead` via `draftOverheadGB`. This previously used the flat 0.34 GB
-  baked-in-MTP default regardless of the file's actual size, undercharging a
-  multi-hundred-MB drafter.
+  model's `Overhead` via `draftOverheadGB`. This previously used a flat baked-in-MTP
+  default regardless of the file's actual size, undercharging a multi-hundred-MB drafter.
+- `-ctkd`/`-ctvd` are read off the argv too, defaulting to **f16** when absent (llama's own
+  default for the draft context, whatever `-ctk` says) so the baked-in MTP drafter's KV is
+  priced at what the launch really runs.
 - A `--mmproj` charges the projector's weights (its gguf size) **plus**
   `settings.visionOverheadGB` (default 1.0 GB) for the CLIP compute buffer — via
   `EstimateInput.MmprojGB` (`mmprojVramGB`), the same footprint generate-time bakes into the

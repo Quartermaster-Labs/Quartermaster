@@ -89,6 +89,15 @@ func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB fl
 		kvReserve = KvReserveGB(ctx, perTokGB, kvConstGB)
 
 	case perTokGB > 0:
+		// The baked-in MTP drafter's KV is a second cache over the same window, so
+		// every ctx-vs-VRAM decision below solves against slope+draftSlope, not the
+		// main slope alone. Checkpoints keep the pure perTokGB: a checkpoint is a
+		// snapshot of the MAIN KV cache only, the drafter has none.
+		//
+		// kvReserve therefore comes back including the drafter's share. Callers
+		// that report a separate "Draft" figure subtract DraftSlopeGB*ctx again
+		// (see EstimatePlan); the sizing itself only cares about the total.
+		sizeSlope := perTokGB + prof.DraftSlopeGB
 		ckptCtxCeil := modelMax
 		if prof.Ctx != 0 {
 			ckptCtxCeil = min(ckptCtxCeil, prof.Ctx)
@@ -120,13 +129,13 @@ func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB fl
 					if kvBudget < 0.1 {
 						kvBudget = 0.1
 					}
-					ctx = RoundedCtx(float64(min(modelMax, MaxCtxForBudget(kvBudget, perTokGB, kvConstGB))))
+					ctx = RoundedCtx(float64(min(modelMax, MaxCtxForBudget(kvBudget, sizeSlope, kvConstGB))))
 				} else {
 					maxKvVram := target - nonExpert - overhead
 					if maxKvVram < 0.1 {
 						maxKvVram = 0.1
 					}
-					maxCtxVram := MaxCtxForBudget(maxKvVram, perTokGB, kvConstGB)
+					maxCtxVram := MaxCtxForBudget(maxKvVram, sizeSlope, kvConstGB)
 					ctx = RoundedCtx(float64(min(min(modelMax, s.MoeCtxTarget), maxCtxVram)))
 				}
 			}
@@ -140,7 +149,7 @@ func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB fl
 			// Size ctx conservatively against the checkpoint cost (overhead+ckpt),
 			// but keep ckpt out of overhead so placement can split it per-layer.
 			d := GetDenseCtx(DenseCtxParams{
-				ModelMax: modelMax, PerTokGB: perTokGB, KvConstGB: kvConstGB,
+				ModelMax: modelMax, PerTokGB: sizeSlope, KvConstGB: kvConstGB,
 				FileSizeGB: meta.FileSizeGB, TargetVramGB: target, Overhead: overhead + ckpt,
 				Ladder: ladder, MinCtx: minCtx, AllowOffload: prof.Ctx != 0,
 			})
@@ -150,7 +159,7 @@ func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB fl
 			}
 			placementCkpt = ckpt
 		}
-		kvReserve = KvReserveGB(ctx, perTokGB, kvConstGB)
+		kvReserve = KvReserveGB(ctx, sizeSlope, kvConstGB)
 		plan, err = GetLoadPlan(meta, planOpt(target, s.MaxRamGB, kvReserve+placementCkpt, overhead))
 		if err != nil {
 			return
@@ -541,9 +550,17 @@ func cpuMmprojWins(gpuPlan LoadPlan, gpuCtx int, cpuPlan LoadPlan, cpuCtx int) b
 	return cpuCtx > gpuCtx && float64(gpuCtx) < cpuMmprojGainCtx*float64(cpuCtx)
 }
 
-// draftOverheadGB returns the VRAM overhead to charge for the active spec
-// chain's draft model. A baked-in MTP nextn layer with no separate weights
-// file is a flat ~0.34 GB (KV+compute). A separate draft gguf — an MTP
+// mtpDraftPadGB is the CONSTANT part of a baked-in MTP drafter's footprint: its
+// own compute buffer and graph allocations. The KV part is deliberately not
+// here, it is ctx-scaled by mtpDraftSlopeGB and carried in profile.DraftSlopeGB.
+// The flat 0.34 GB this replaces tried to be both at once and was ~3x too fat at
+// a 32k window while under-charging by half at 160k.
+const mtpDraftPadGB = 0.15
+
+// draftOverheadGB returns the CTX-INDEPENDENT VRAM overhead to charge for the
+// active spec chain's draft model. A baked-in MTP nextn layer with no separate
+// weights file costs only the compute pad here (mtpDraftPadGB); its KV rides on
+// the ctx-scaled slope instead, see mtpDraftSlopeFor. A separate draft gguf — an MTP
 // sidecar (Gemma-4) or any DFlash block-diffusion drafter, which is always a
 // separate file — charges its real on-disk weight size plus a small
 // KV/compute pad instead, so large drafts scale up rather than under-counting.
@@ -560,7 +577,7 @@ func draftOverheadGB(spec string, draftSizeGB float64) float64 {
 		if draftSizeGB > 0 {
 			return draftSizeGB + 0.1
 		}
-		return 0.34
+		return mtpDraftPadGB
 	default:
 		return 0
 	}
@@ -573,12 +590,39 @@ func draftOverheadGB(spec string, draftSizeGB float64) float64 {
 // Both conditions matter: a model dir can hold a DFlash drafter while the model
 // runs on a baked-in MTP head (Qwen3.8-27B does). Charging the sidecar there
 // reserved ~1 GB of VRAM for a draft the emitted cmd never attaches, which cost
-// real -ngl/ctx. Feeding 0 through drops draftOverheadGB back to the baked-in
-// 0.34 GB, which is what actually loads.
+// real -ngl/ctx. Feeding 0 through drops the charge back to the baked-in head
+// (draftOverheadGB's pad plus the ctx-scaled mtpDraftSlopeFor), which is what
+// actually loads.
 func matchedDraftSizeGB(spec, draftKind string, draftSizeGB float64) float64 {
 	if (specHas(spec, "draft-mtp") && draftKind == "mtp") ||
 		(specHas(spec, "draft-dflash") && draftKind == "dflash") {
 		return draftSizeGB
 	}
 	return 0
+}
+
+// mtpDraftSlopeFor returns the per-token VRAM slope (GB/token) that the active
+// spec chain's BAKED-IN MTP drafter adds on top of the main KV cache, or 0 when
+// no such drafter loads.
+//
+// Only the baked-in case scales this way: a separate draft gguf is a different
+// model with its own dims, charged its on-disk weights plus a pad by
+// draftOverheadGB, so a non-zero draftSizeGB means "not our case".
+//
+// kvKDraft/kvVDraft are the DRAFT cache types (-ctkd/-ctvd), which buildCmdLines
+// now emits defaulted to the model's own -ctk/-ctv. Pass what will actually be
+// emitted rather than the main quant: llama's own default for the draft context
+// is f16 whatever -ctk says, so a hand-written argv with no -ctkd really pays f16.
+func mtpDraftSlopeFor(meta Metadata, spec, kvKDraft, kvVDraft string, draftSizeGB float64) float64 {
+	if !specHas(spec, "draft-mtp") || draftSizeGB > 0 {
+		return 0
+	}
+	return mtpDraftSlopeGB(meta, kvKDraft, kvVDraft)
+}
+
+// draftKvPair resolves the -ctkd/-ctvd pair a launch will run with: the model's
+// own K/V quant unless the override pins the draft side separately.
+// buildCmdLines emits exactly this pair, so sizing and emission cannot drift.
+func draftKvPair(ovKvKDraft, ovKvVDraft, kvK, kvV string) (string, string) {
+	return resolveKvPair(ovKvKDraft, ovKvVDraft, kvK, kvV)
 }
