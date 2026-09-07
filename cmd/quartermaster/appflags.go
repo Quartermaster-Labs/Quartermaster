@@ -45,6 +45,13 @@ func applyAppSettings(fs *flag.FlagSet, argvGiven map[string]bool, app autogen.A
 	if app.AdminOpen != nil {
 		set("admin-open", strconv.FormatBool(*app.AdminOpen))
 	}
+	// Both or neither: the server exits when only one is set, and filling in a
+	// lone stored half under a -tls-cert-file the user typed would turn a
+	// deliberate override into a startup failure.
+	if app.TlsCertFile != "" && app.TlsKeyFile != "" {
+		set("tls-cert-file", app.TlsCertFile)
+		set("tls-key-file", app.TlsKeyFile)
+	}
 	if app.WatchModels != nil {
 		set("watch-models", strconv.FormatBool(*app.WatchModels))
 	}

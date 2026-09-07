@@ -45,6 +45,12 @@ type AppSettings struct {
 	// password, so this hands config editing and the model hub to anyone who can
 	// reach the port. Restart to apply.
 	AdminOpen *bool `yaml:"adminOpen,omitempty"`
+	// TlsCertFile and TlsKeyFile serve the API and dashboard over HTTPS. Both
+	// are required together; the server refuses to start with one of them. Paths
+	// are read by the server process, so they must be readable by the account it
+	// runs as. Restart to apply.
+	TlsCertFile string `yaml:"tlsCertFile,omitempty"`
+	TlsKeyFile  string `yaml:"tlsKeyFile,omitempty"`
 	// WatchModels re-scans the models folder periodically and hot-reloads when it
 	// changes. Defaults to on.
 	WatchModels *bool `yaml:"watchModels,omitempty"`
@@ -118,6 +124,12 @@ func mergeAppSettings(base, next AppSettings) AppSettings {
 	}
 	if next.AdminOpen != nil {
 		out.AdminOpen = next.AdminOpen
+	}
+	if next.TlsCertFile != "" {
+		out.TlsCertFile = next.TlsCertFile
+	}
+	if next.TlsKeyFile != "" {
+		out.TlsKeyFile = next.TlsKeyFile
 	}
 	if next.WatchModels != nil {
 		out.WatchModels = next.WatchModels

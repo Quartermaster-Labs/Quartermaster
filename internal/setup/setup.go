@@ -29,6 +29,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"sync"
+
+	"github.com/quartermaster-labs/quartermaster/internal/autogen"
 )
 
 // Phase is the coarse state of the install, and the only thing the UI switches
@@ -92,6 +94,16 @@ type Options struct {
 	// Launch starts the finished install. Called after the user clicks through
 	// the last step, immediately before the wizard exits.
 	Launch func(dir string) error
+
+	// App holds process-level settings supplied on the setup binary's own
+	// command line, written into the install's generate file before it first
+	// starts. Zero fields are left alone.
+	//
+	// This is how a headless install becomes reachable at all: the admin surface
+	// fails closed the moment the API binds beyond loopback, and the dashboard,
+	// which is the only other place to set adminAllow, sits behind that same
+	// gate. Without this the operator must hand-edit YAML over SSH afterwards.
+	App autogen.AppSettings
 
 	// Log receives progress lines. Optional.
 	Log func(string)

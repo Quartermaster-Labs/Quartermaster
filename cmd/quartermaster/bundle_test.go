@@ -24,6 +24,8 @@ func newBundleFlags() *flag.FlagSet {
 	fs.Bool("tray", false, "")
 	fs.String("admin-allow", "", "")
 	fs.Bool("admin-open", false, "")
+	fs.String("tls-cert-file", "", "")
+	fs.String("tls-key-file", "", "")
 	fs.Bool("watch-models", true, "")
 	fs.Duration("watch-models-interval", 5*time.Second, "")
 	fs.Bool("no-update-check", false, "")
