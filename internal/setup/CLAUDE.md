@@ -32,9 +32,10 @@ everywhere and the 20 MB installer blob stays in the binary that ships it.
 | `api.go` | `Handler()` (the five `/api/setup/*` endpoints), `guard` (token + loopback Host), `serveUI` (embedded bundle, token injected into `index.html`), `Listen()`. `//go:embed all:ui_dist`. |
 | `run.go` | The install itself: `Start`, `run`, `ensureGenerate` (reports whether it created the file), `seedBudgets` (measures this box's VRAM/RAM into the freshly created generate file — first run only, never over a repair run), `installBackends`, `awaitJob`, `registerBackend`, `Finish`. |
 | `probe.go` | Opening state: `GpuNames`, `NewProbe` (variant list from the llama-server catalog entry, `probeComponents`), and `Scan` — the real discovery walk over a candidate models folder. |
-| `yaml.go` | `setSettingsKey` — line-level, comment-preserving edit of `settings.<key>` in the generate file. `minimalGenerate` for when there is no example to seed from. |
+| `yaml.go` | `setSettingsKey` — line-level, comment-preserving edit of `settings.<key>` in the generate file. `setAppKey` — the same one level deeper, for the nested `settings.app.<key>` block. `readYamlLines`/`writeYamlLines` hold the shared line-ending handling. |
+| `cmd/quartermaster-setup/headless.go` | `-headless`: `headlessChoices` (argv + `NewProbe` defaults) and `runHeadless` (poll `Status`, report to stderr, `Finish`). No window, no browser, no HTTP listener. |
 | `ui_dist/` | The built wizard bundle. Holds a committed `.gitkeep` so the `//go:embed` compiles on a tree where the UI was never built. |
-| `cmd/quartermaster-setup/main.go` | `runtime.LockOSThread`, flags (`-dir`, `-browser`, `-v`), `Listen` → `runWindow` → browser fallback, `defaultInstallDir`, `fatal`. |
+| `cmd/quartermaster-setup/main.go` | `runtime.LockOSThread`, flags (`-dir`, `-browser`, `-v`, `-headless` + its answers, and the process-level `-admin-allow`/`-admin-open`/`-tls-*`), `Listen` → `runWindow` → browser fallback, `defaultInstallDir`, `fatal`/`noDialog`. |
 | `cmd/quartermaster-setup/window_windows.go` | `runWindow` — creates the webview, hands it to `nativewin.Attach`, navigates, and closes it when the wizard signals done. The window mechanics themselves live in `internal/nativewin`, shared with the app window. |
 | `cmd/quartermaster-setup/place_windows.go` | `//go:embed inno/setup.exe`, `placeInno` (silent `/VERYSILENT /DIR= /TASKS= /LOG=`), `launch` — starts the installed exe with no arguments (it supplies its own; see `bundle.go`). |
 | `cmd/quartermaster-setup/place_other.go`, `place_common.go` | Unix install: `placeCopy` when a binary sits beside the wizard, else `placeEmbedded` (the `payload/server` embed), else `update.FetchBinary`. `placeCopy` is also the dev-build stand-in on Windows when no installer is embedded. |
@@ -81,6 +82,24 @@ everywhere and the 20 MB installer blob stays in the binary that ships it.
   did).
 - **`runWindow`** (Windows) — creates the webview, strips the caption, applies the icon, binds
   `qmDrag` / `qmMinimize` / `qmMaximize` / `qmClose` / `qmPickFolder`, then navigates.
+
+### Headless installs and the admin gate
+
+`-headless` exists because the interactive path needs three things a server does not have: a
+display for the window, a browser for the fallback, and a local operator for the loopback-bound,
+Host-checked API (`api.go`). It answers the same `Choices` from argv and runs the same
+`Wizard.Start`, so there is one install path, not two.
+
+`Options.App` (`autogen.AppSettings`) carries `-admin-allow`, `-admin-open` and the TLS files into
+`settings.app` of the generate file, via `applyAppSettings` in `run.go`. This is not a convenience:
+as soon as the API binds beyond loopback the admin surface answers only to the server itself, and
+the dashboard, the other place to set `adminAllow`, sits behind that same gate. A remote install
+without these flags comes up unreachable and has to be repaired over SSH.
+
+It writes the **generate file, not the sidecar**. Precedence is
+`argv > sidecar > settings.app > default`, so an installer-written value is a baseline the dashboard
+can still override; writing the sidecar would let a repair run silently overrule the running
+install's own settings.
 
 ## Gotchas / conventions
 

@@ -28,6 +28,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/quartermaster-labs/quartermaster/internal/autogen"
 	"github.com/quartermaster-labs/quartermaster/internal/setup"
 )
 
@@ -45,8 +46,49 @@ func main() {
 		dir     = flag.String("dir", defaultInstallDir(), "default install directory")
 		browser = flag.Bool("browser", false, "skip the native window and use the default browser")
 		verbose = flag.Bool("v", false, "log progress to stderr")
+
+		// Headless install: no window, no browser, answers from argv.
+		headless   = flag.Bool("headless", false, "install without a UI, taking every answer from these flags (for servers with no display)")
+		modelsDir  = flag.String("models-dir", "", "where the models live; empty means choose later in the dashboard")
+		variant    = flag.String("variant", "", "compute backend variant (vulkan, cuda, rocm, metal, cpu); default: the one recommended for this machine")
+		components = flag.String("components", "", "comma-separated backends to install, or \"none\"; default: the recommended set")
+		noLaunch   = flag.Bool("no-launch", false, "do not start Quartermaster when the install finishes")
+
+		// Process-level settings written into the install's generate file. A
+		// server published beyond loopback serves its admin surface to itself
+		// only, so an install meant to be administered from another machine has
+		// to be told so here: the dashboard, the other place to set this, is
+		// behind the very gate being configured.
+		adminAllow = flag.String("admin-allow", "", "extra IPs/CIDRs (comma separated) allowed to reach the dashboard/admin endpoints, e.g. 192.168.1.0/24")
+		adminOpen  = flag.Bool("admin-open", false, "serve the unauthenticated dashboard/admin endpoints to every remote host")
+		tlsCert    = flag.String("tls-cert-file", "", "TLS certificate file for the installed server")
+		tlsKey     = flag.String("tls-key-file", "", "TLS key file for the installed server")
 	)
 	flag.Parse()
+
+	// Both or neither: quartermaster exits at startup with one of them, and a
+	// remote install that refuses to boot is the worst thing this binary can
+	// leave behind. Fail here, where the operator is still watching.
+	// A headless run has nobody to show a dialog to, and on Windows fatal()
+	// would otherwise block on a message box no one can dismiss.
+	noDialog = *headless
+
+	if (*tlsCert == "") != (*tlsKey == "") {
+		fatal("-tls-cert-file and -tls-key-file must be given together")
+	}
+	app := autogen.AppSettings{
+		AdminAllow:  *adminAllow,
+		TlsCertFile: *tlsCert,
+		TlsKeyFile:  *tlsKey,
+	}
+	// Only a flag the operator actually typed becomes a stored value: the
+	// setting is tri-state, and writing adminOpen: false on every run would
+	// overwrite a deliberate true on the next repair install.
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "admin-open" {
+			app.AdminOpen = adminOpen
+		}
+	})
 
 	logf := func(string) {}
 	if *verbose {
@@ -58,8 +100,13 @@ func main() {
 		DefaultDir: *dir,
 		Place:      place,
 		Launch:     launch,
+		App:        app,
 		Log:        logf,
 	})
+
+	if *headless {
+		os.Exit(runHeadless(wiz, headlessChoices(*dir, *modelsDir, *variant, *components), !*noLaunch))
+	}
 
 	url, stop, err := wiz.Listen()
 	if err != nil {
@@ -120,6 +167,12 @@ func defaultInstallDir() string {
 func fatal(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	_, _ = io.WriteString(os.Stderr, msg+"\n")
-	showError(msg)
+	if !noDialog {
+		showError(msg)
+	}
 	os.Exit(1)
 }
+
+// noDialog suppresses fatal's message box. Set for -headless, where stderr is
+// the only surface the operator can see.
+var noDialog bool

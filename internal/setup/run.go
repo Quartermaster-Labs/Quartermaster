@@ -120,6 +120,14 @@ func (w *Wizard) run(ctx context.Context, c Choices) error {
 		}
 	}
 
+	// The command line's process-level settings, written after the file exists
+	// and before anything starts it. A failure here is fatal rather than a
+	// warning: the operator passed these because the install is remote, and one
+	// that comes up unreachable cannot be fixed from where they are.
+	if err := w.applyAppSettings(genPath); err != nil {
+		return err
+	}
+
 	if len(c.Components) > 0 {
 		w.step(PhaseBackends, "Downloading backends")
 		w.installBackends(ctx, c, genPath)
@@ -149,6 +157,39 @@ func ensureGenerate(path string) (created bool, err error) {
 		return true, os.WriteFile(path, b, 0o644)
 	}
 	return true, os.WriteFile(path, []byte(autogen.MinimalGenerateFile), 0o644)
+}
+
+// applyAppSettings writes Options.App into the install's generate file.
+//
+// Only non-zero fields are written, so a run that passed none of these flags
+// leaves the file exactly as the example seeded it. They land under
+// settings.app, the lowest-precedence layer above the built-in defaults, which
+// leaves both argv and anything the dashboard later saves free to override
+// them; see autogen.AppSettings for the full order.
+func (w *Wizard) applyAppSettings(genPath string) error {
+	app := w.opts.App
+	for _, kv := range []struct{ key, value string }{
+		{"adminAllow", app.AdminAllow},
+		{"tlsCertFile", app.TlsCertFile},
+		{"tlsKeyFile", app.TlsKeyFile},
+	} {
+		if kv.value == "" {
+			continue
+		}
+		if err := setAppKey(genPath, kv.key, kv.value); err != nil {
+			return fmt.Errorf("setting %s: %w", kv.key, err)
+		}
+	}
+	// A pointer, so "the operator asked for false" stays distinguishable from
+	// "not mentioned", and writing an explicit false is still worth doing: it
+	// pins the closed answer against an example file that could later ship a
+	// different one.
+	if app.AdminOpen != nil {
+		if err := setAppKey(genPath, "adminOpen", strconv.FormatBool(*app.AdminOpen)); err != nil {
+			return fmt.Errorf("setting adminOpen: %w", err)
+		}
+	}
+	return nil
 }
 
 // seedBudgets writes this machine's measured VRAM/RAM budgets into a
