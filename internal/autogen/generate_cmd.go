@@ -537,6 +537,9 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		if ov.CacheRamMB > 0 {
 			lines = append(lines, fmt.Sprintf("-cram %d", ov.CacheRamMB))
 		}
+		if ov.LogVerbosity > 0 {
+			lines = append(lines, fmt.Sprintf("-lv %d", ov.LogVerbosity))
+		}
 		switch ov.CacheIdleSlots {
 		case "on":
 			lines = append(lines, "--cache-idle-slots")
