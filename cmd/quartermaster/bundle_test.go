@@ -192,3 +192,47 @@ func TestAppSettings_BeatBundleDefaults(t *testing.T) {
 		t.Errorf("playground-port = %q, want the stored setting", got)
 	}
 }
+
+// samePath decides whether -config and -generate name one file. Getting it
+// wrong in either direction is costly: a false negative lets the regen loop
+// through (issue #4), a false positive refuses a legitimate start.
+func TestSamePath(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.yaml")
+	gen := filepath.Join(dir, "quartermaster-generate.yaml")
+
+	if samePath(cfg, gen) {
+		t.Fatal("the two packaged paths were read as one file")
+	}
+	if !samePath(cfg, cfg) {
+		t.Fatal("a path is not equal to itself")
+	}
+	// Neither file exists yet, which is the first-run case: -config is the
+	// output path and is routinely absent. The lexical half has to carry it.
+	if !samePath(cfg, filepath.Join(dir, ".", "config.yaml")) {
+		t.Fatal("a '.' segment made one path look like two")
+	}
+	if !samePath(cfg, filepath.Join(dir, "sub", "..", "config.yaml")) {
+		t.Fatal("a '..' segment made one path look like two")
+	}
+	// An empty flag is "unset", never a match: -generate is optional.
+	if samePath(cfg, "") || samePath("", cfg) {
+		t.Fatal("an unset flag matched a set one")
+	}
+
+	// Relative against absolute, resolved through the working directory.
+	if err := os.WriteFile(cfg, []byte("healthCheckTimeout: 300\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if !samePath("config.yaml", cfg) {
+		t.Fatal("a relative path did not match its own absolute form")
+	}
+}

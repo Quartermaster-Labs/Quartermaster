@@ -190,6 +190,26 @@ func main() {
 		os.Exit(1)
 	}
 
+	// -generate names the INPUT control file (settings + overrides); -config is
+	// the config generated FROM it. Pointing both at one path is quietly
+	// destructive in two ways at once, and neither is recoverable downstream:
+	//
+	//   - EnsureConfig reads the settings and then writes the generated config
+	//     over the file it read them from, so targetVramGB and everything else
+	//     the dashboard saves is erased on the next regen. The Settings page
+	//     appears to work and forgets on restart.
+	//   - the generate file is also a hash INPUT, so writing it invalidates the
+	//     hash that gated the write. With -watch-models that is a regen loop:
+	//     one full model scan and config rewrite per poll, forever.
+	//
+	// Both were reported as "the new build changed nothing" (issue #4), because
+	// the only visible symptom is settings that never take. Refuse instead.
+	if *flagGenerate != "" && samePath(*flagConfig, *flagGenerate) {
+		slog.Error("-config and -generate name the same file: -generate is the control file that -config is generated FROM, so every regen would overwrite it",
+			"path", *flagConfig)
+		os.Exit(2)
+	}
+
 	useTLS := *flagCertFile != "" || *flagKeyFile != ""
 	if (*flagCertFile != "" && *flagKeyFile == "") || (*flagCertFile == "" && *flagKeyFile != "") {
 		slog.Error("both -tls-cert-file and -tls-key-file must be provided for TLS")
@@ -834,4 +854,28 @@ func main() {
 	}
 
 	proxyLog.Info("shutdown complete")
+}
+
+// samePath reports whether two path flags name one file. Lexical comparison
+// first (it works for a path that does not exist yet, which -config routinely
+// is on a first run), then a stat identity check so a symlink, a "." segment or
+// a Windows case difference is not read as two separate files.
+func samePath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	ap, aerr := filepath.Abs(a)
+	bp, berr := filepath.Abs(b)
+	if aerr == nil && berr == nil && filepath.Clean(ap) == filepath.Clean(bp) {
+		return true
+	}
+	ai, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	bi, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(ai, bi)
 }
