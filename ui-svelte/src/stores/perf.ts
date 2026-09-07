@@ -1,5 +1,5 @@
-import { writable } from "svelte/store";
-import type { GpuStat, SysStat } from "../lib/types";
+import { derived, writable } from "svelte/store";
+import type { GpuStat, PooledVram, SysStat } from "../lib/types";
 import { fetchPerformance } from "./api";
 
 // Latest sampled GPU/system stats, used by the always-on status rail + dashboard
@@ -7,6 +7,29 @@ import { fetchPerformance } from "./api";
 // which screen is open.
 export const latestGpu = writable<GpuStat | null>(null);
 export const latestSys = writable<SysStat | null>(null);
+
+// VRAM pooled across every inference-eligible adapter, straight from the server.
+export const pooledVram = writable<PooledVram | null>(null);
+
+// The one VRAM reading every gauge should use: pooled when the server offers it,
+// otherwise the newest single device.
+//
+// latestGpu is the last entry of a flat per-device history, so on a multi-GPU box
+// it is whichever card the monitor enumerated last. A 12 GB + 16 GB pair drew a
+// 16 GB bar while the router was admitting against 28 (issue #4). It stays the
+// fallback for a server too old to send gpu_pooled, and for temperature, power
+// and utilisation, which stay per-card because a pooled figure for those would
+// describe no physical device.
+export const vramTotals = derived(
+  [pooledVram, latestGpu],
+  ([$pooled, $gpu]): { usedMb: number; totalMb: number; devices: number } | null => {
+    if ($pooled && $pooled.total_mb > 0) {
+      return { usedMb: $pooled.used_mb, totalMb: $pooled.total_mb, devices: $pooled.devices };
+    }
+    if ($gpu) return { usedMb: $gpu.mem_used_mb, totalMb: $gpu.mem_total_mb, devices: 1 };
+    return null;
+  },
+);
 
 // GPU memory (MiB) held by foreign llama-server/sd-server processes we didn't
 // spawn. Drives a red "Foreign" segment on the VRAM gauge.
@@ -27,6 +50,9 @@ export function startPerfPolling(intervalMs = 2000): () => void {
     const data = await fetchPerformance(lastTs);
     if (!data) return;
     foreignVram.set(data.foreign ?? { mb: 0 });
+    // undefined (old server) and null (no telemetry) both mean "no pooled
+    // reading"; vramTotals falls back to the single device for either.
+    pooledVram.set(data.gpu_pooled ?? null);
     if (typeof data.system_mb === "number") systemVram.set(data.system_mb);
     if (data.gpu_stats?.length) {
       const g = data.gpu_stats[data.gpu_stats.length - 1];

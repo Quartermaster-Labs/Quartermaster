@@ -132,7 +132,7 @@ func (w *Wizard) run(ctx context.Context, c Choices) error {
 //
 // autogen.EnsureConfig reads this file and fails hard if it is absent, so the
 // wizard cannot leave the step to first boot. Seeding from the example is
-// preferred purely for its comments; see minimalGenerate.
+// preferred purely for its comments; see autogen.MinimalGenerateFile.
 // It reports whether it created the file, so first-run-only seeding (hardware
 // budgets) can skip an install that is being repaired or upgraded in place.
 func ensureGenerate(path string) (created bool, err error) {
@@ -148,7 +148,7 @@ func ensureGenerate(path string) (created bool, err error) {
 	if b, err := os.ReadFile(example); err == nil && len(b) > 0 {
 		return true, os.WriteFile(path, b, 0o644)
 	}
-	return true, os.WriteFile(path, []byte(minimalGenerate), 0o644)
+	return true, os.WriteFile(path, []byte(autogen.MinimalGenerateFile), 0o644)
 }
 
 // seedBudgets writes this machine's measured VRAM/RAM budgets into a

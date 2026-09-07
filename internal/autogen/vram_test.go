@@ -18,12 +18,26 @@ func TestAutogen_freeVramGBFromStats(t *testing.T) {
 		{"single", []perf.GpuStat{{MemTotalMB: 8192, MemUsedMB: 1024}}, 7.0, true},
 		{"used exceeds total clamps to 0", []perf.GpuStat{{MemTotalMB: 8192, MemUsedMB: 9000}}, 0, true},
 		{
-			"picks largest total",
+			// An iGPU reports a slice of system RAM as dedicated VRAM. Pooling
+			// it would invent budget no card has, so it is dropped below the
+			// inference floor and only the dGPU counts.
+			"drops the iGPU below the floor",
 			[]perf.GpuStat{
-				{MemTotalMB: 2048, MemUsedMB: 0},    // iGPU, 2GB free
-				{MemTotalMB: 8192, MemUsedMB: 2048}, // dGPU, 6GB free
+				{ID: 0, MemTotalMB: 2048, MemUsedMB: 0},    // iGPU, 2GB free
+				{ID: 1, MemTotalMB: 8192, MemUsedMB: 2048}, // dGPU, 6GB free
 			},
 			6.0, true,
+		},
+		{
+			// Two real cards POOL. This is the rule that changed for issue #4:
+			// the old sizer reported the largest adapter alone (6.0 here) and
+			// left the second card's VRAM unused.
+			"pools two eligible cards",
+			[]perf.GpuStat{
+				{ID: 0, MemTotalMB: 12288, MemUsedMB: 1024},
+				{ID: 1, MemTotalMB: 16384, MemUsedMB: 4096},
+			},
+			23.0, true,
 		},
 	}
 	for _, tc := range cases {

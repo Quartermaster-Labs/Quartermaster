@@ -176,7 +176,18 @@ const hashCacheSuffix = ".modelhash"
 //	     quarter of itself, so the plan offloaded it whole and spent the phantom
 //	     slack on context. Every split model's -ngl/--n-cpu-moe/-c changes for
 //	     inputs that did not.
-const genVersion = "v62"
+//	v63: a model larger than one card is split across every eligible GPU. The
+//	     VRAM budget is pooled across the set instead of taken from the largest
+//	     adapter, and a plan that needs more than one device emits -sm layer
+//	     --tensor-split (plus CUDA_DEVICE_ORDER=PCI_BUS_ID, so llama.cpp's
+//	     device order matches the telemetry order the split positions mean).
+//	     Every model on a multi-GPU box changes budget and argv for inputs that
+//	     did not. The split is planned against each card's stable capacity, not
+//	     the free reading of the moment the config was generated: a card busy
+//	     for that one sample used to bake a single-device plan that spawn time
+//	     could not repair, since the live retune rewrites an existing
+//	     --tensor-split and cannot add one.
+const genVersion = "v63"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the
@@ -334,9 +345,10 @@ func EnsureConfig(generatePath, outConfigPath, modelsDirOverride string, logf fu
 		return false, nil
 	}
 
-	if gf.Settings.AutoVram {
-		resolveAutoVram(&gf.Settings, logf)
-	}
+	// Resolve the eligible GPU set on every regen, not only under autoVram: the
+	// split ratio and the extra-device overhead are hardware facts the sizer needs
+	// whether or not the BUDGET is being re-measured. ResolveAutoVram does both.
+	ResolveAutoVram(&gf.Settings, logf)
 
 	if logf != nil {
 		if strings.TrimSpace(gf.Settings.ModelsRoot) == "" {

@@ -353,20 +353,65 @@ func TestVramRefusals_ClearOnSuccess(t *testing.T) {
 	}
 }
 
-// largestGPU picks the biggest card and keeps only each ID's newest sample, so
-// every VRAM decision in the process talks about the same adapter.
-func TestLargestGPU_PicksBiggestNewest(t *testing.T) {
+// pooledGPUStat sums every eligible card and keeps only each ID's newest sample,
+// so the guard's ceiling describes the same pooled budget the sizer planned the
+// resident models against. With multi off it collapses to the main device.
+func TestPooledGPUStat_SumsEligibleNewest(t *testing.T) {
 	now := time.Now()
-	got, ok := largestGPU([]perf.GpuStat{
+	hist := []perf.GpuStat{
 		{ID: 0, MemTotalMB: 8192, MemUsedMB: 100, Timestamp: now},
 		{ID: 1, MemTotalMB: 24576, MemUsedMB: 999, Timestamp: now.Add(-time.Minute)},
 		{ID: 1, MemTotalMB: 24576, MemUsedMB: 4096, Timestamp: now},
-	})
-	if !ok || got.ID != 1 || got.MemUsedMB != 4096 {
-		t.Fatalf("largestGPU = %+v ok=%v, want the newest ID 1 sample", got, ok)
 	}
-	if _, ok := largestGPU(nil); ok {
+	got, ok := pooledGPUStat(hist, true)
+	if !ok || got.MemTotalMB != 8192+24576 || got.MemUsedMB != 100+4096 {
+		t.Fatalf("pooledGPUStat(multi) = %+v ok=%v, want both cards' newest samples summed", got, ok)
+	}
+	// Single-device mode pins to the card with the most FREE memory: ID 1 has
+	// 20480 MiB free against ID 0's 8092.
+	got, ok = pooledGPUStat(hist, false)
+	if !ok || got.MemTotalMB != 24576 || got.MemUsedMB != 4096 {
+		t.Fatalf("pooledGPUStat(single) = %+v ok=%v, want only the newest ID 1 sample", got, ok)
+	}
+	if _, ok := pooledGPUStat(nil, true); ok {
 		t.Fatal("empty history reported a GPU")
+	}
+	// An adapter under the inference floor (an iGPU slicing system RAM) is not
+	// budget: pooling it would invent VRAM no card has.
+	got, ok = pooledGPUStat([]perf.GpuStat{
+		{ID: 0, MemTotalMB: 2048, MemUsedMB: 128, Timestamp: now},
+		{ID: 1, MemTotalMB: 12288, MemUsedMB: 1024, Timestamp: now},
+	}, true)
+	if !ok || got.MemTotalMB != 12288 {
+		t.Fatalf("pooledGPUStat = %+v ok=%v, want the iGPU dropped", got, ok)
+	}
+}
+
+// pooledVramStats is what the dashboard gauge draws. It has to report the pooled
+// pair, not one card: the gauge is how a user judges whether a model fits, and on
+// the 12 GB + 16 GB box in issue #4 it drew a 16 GB bar while the router was
+// admitting against 28.
+func TestPooledVramStats_ReportsWholeMachine(t *testing.T) {
+	now := time.Now()
+	hist := []perf.GpuStat{
+		{ID: 0, MemTotalMB: 12288, MemUsedMB: 4, Timestamp: now},
+		{ID: 1, MemTotalMB: 16376, MemUsedMB: 4, Timestamp: now},
+	}
+	got := pooledVramStats(hist, true)
+	if got == nil || got.TotalMB != 12288+16376 || got.UsedMB != 8 || got.Devices != 2 {
+		t.Fatalf("pooledVramStats(multi) = %+v, want both cards summed over 2 devices", got)
+	}
+	// multiGpu off is a real setting, not just a fallback: the gauge then has to
+	// show the one card the router will actually load on, or it promises VRAM the
+	// sizer will never plan against.
+	got = pooledVramStats(hist, false)
+	if got == nil || got.TotalMB != 16376 || got.Devices != 1 {
+		t.Fatalf("pooledVramStats(single) = %+v, want only the main device", got)
+	}
+	// nil, not a zeroed bar: the UI renders "no GPU reading" for it, and a 0/0
+	// gauge would read as a card with nothing free.
+	if got := pooledVramStats(nil, true); got != nil {
+		t.Fatalf("pooledVramStats(no telemetry) = %+v, want nil", got)
 	}
 }
 

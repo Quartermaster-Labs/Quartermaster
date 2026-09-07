@@ -11,21 +11,20 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/quartermaster-labs/quartermaster/internal/apppaths"
 )
 
 // slotKvPath resolves the slot-cache snapshot dir as forward-slash text shared
-// by the --slot-save-path flag and the emitted slotCache.path. Blank Path falls
-// back to a ".cache" folder next to the quartermaster binary (kept in sync with
-// config.DefaultSlotCachePath; duplicated here so autogen stays free of an
-// internal/config import).
+// by the --slot-save-path flag and the emitted slotCache.path. A blank Path
+// falls back to the shared cache directory -- the same one
+// config.DefaultSlotCachePath returns, which is what keeps the emitted config
+// and the server's own LRU pointed at one directory. Both resolve it through
+// internal/apppaths so autogen still needs no internal/config import.
 func slotKvPath(sc SlotCacheSettings) string {
 	p := sc.Path
 	if p == "" {
-		if exe, err := os.Executable(); err == nil {
-			p = filepath.Join(filepath.Dir(exe), ".cache", "slotkv")
-		} else {
-			p = filepath.Join(os.TempDir(), "quartermaster", "slotkv")
-		}
+		p = filepath.Join(apppaths.CacheDir(), "slotkv")
 	}
 	return strings.ReplaceAll(p, "\\", "/")
 }
@@ -379,6 +378,14 @@ func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, pro
 		fmt.Fprintf(b, "      %s\n", line)
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
+	// A split is expressed in TELEMETRY device order (nvidia-smi / DXGI), but the
+	// CUDA runtime enumerates FASTEST_FIRST by default, so on a mismatched pair
+	// the two orders disagree and the ratio lands on the wrong cards - silently,
+	// with no error and a model that OOMs the small one. Pinning bus order makes
+	// the ordinal mean one thing everywhere. Ignored by a Vulkan/ROCm build.
+	if len(prof.TensorSplit) > 1 {
+		fmt.Fprintf(b, "    env:\n      - %q\n", cudaOrderEnv)
+	}
 	writeEstVram(b, plan.EstVramGB)
 	writeEstRam(b, plan.EstRamGB)
 	writeDisplayName(b, s, prof.Name)

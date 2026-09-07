@@ -91,6 +91,7 @@ func emitASRModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, nam
 		fmt.Fprintf(b, "      %s\n", line)
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
+	writeSingleDeviceEnv(b, s)
 	// No estVramGB: parakeet runs on the CPU unless a user opts into GPU via
 	// extraArgs, so it occupies no VRAM budget and must never cost a chat model
 	// its residency. A GPU opt-in under-charges — an accepted trade for not

@@ -710,6 +710,21 @@ export interface AppSettings {
   advanced: AdvancedSettings;
   advancedDefaults: AdvancedSettings; // what the "restore defaults" button reverts to
   advancedOverridden: boolean;
+  // Physical GPU ceiling, pooled across every INFERENCE-ELIGIBLE adapter. The
+  // server owns this rather than the perf poll, because eligibility is policy
+  // (an inference floor, and multiGpu off collapsing to one card) and the perf
+  // stream is a flat sample history whose newest entry is an arbitrary device.
+  gpu: GpuCapacity;
+}
+
+// GpuCapacity mirrors the server's eligible-adapter set. Empty devices means
+// telemetry has not answered yet, NOT "no GPU" - treat totalGB 0 as unknown and
+// leave the form uncapped rather than clamping every field to zero.
+export interface GpuCapacity {
+  devices: { index: number; name: string; totalGB: number; freeGB: number }[];
+  totalGB: number;
+  freeGB: number;
+  multi: boolean; // more than one eligible adapter, with splitting enabled
 }
 
 // OOM guard + GPU-usage admission. 0/negative are real values here, not "unset":
@@ -721,6 +736,9 @@ export interface GuardSettings {
   oomGuardGraceSec: number; // must be >= 1; the server rejects 0 (use oomGuardEvict to disable)
   minGpuFraction: number; // 0..1
   multiResident: boolean;
+  // Split one model across every eligible GPU (-sm layer + --tensor-split).
+  // Off pins every model to a single card.
+  multiGpu: boolean;
 }
 
 // The advanced sizer knobs. GET always returns effective values (defaults
@@ -737,6 +755,7 @@ export interface AdvancedSettings {
   healthCheckTimeout: number;
   kvQuant: string; // "" = auto; else f32|f16|bf16|q8_0|q5_1|q5_0|q4_1|q4_0
   loraDir: string; // "" = the image model's own folder
+  minGpuVramGB: number; // smallest adapter that counts as inference VRAM (0 = default 3)
 }
 
 // Backend executable paths (llama-server / sd-server / tts-server). Blank => the

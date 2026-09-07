@@ -19,6 +19,8 @@ import (
 
 	"github.com/quartermaster-labs/quartermaster/internal/backends"
 	"github.com/quartermaster-labs/quartermaster/internal/shared"
+
+	"github.com/quartermaster-labs/quartermaster/internal/apppaths"
 )
 
 // The media_transcript tool: given a link to a video or audio page, hand the
@@ -250,10 +252,16 @@ func DlpPath() (string, error) {
 			return p, nil
 		}
 	}
-	// Bundle layout: internal/backends installs yt-dlp into bin\yt-dlp next to
-	// the exe, same as the inference backends.
+	// Bundle layout: internal/backends installs yt-dlp into bin/yt-dlp under its
+	// root, same as the inference backends. Both roots are searched because they
+	// differ for an unpackaged binary -- the data directory is where an install
+	// lands today, the exe directory is where one may already sit from before the
+	// split (and is still the answer for a packaged install).
+	roots := []string{apppaths.DataDir()}
 	if self, err := os.Executable(); err == nil {
-		dir := filepath.Dir(self)
+		roots = append(roots, filepath.Dir(self))
+	}
+	for _, dir := range roots {
 		for _, sub := range []string{"", filepath.Join("bin", "yt-dlp")} {
 			for _, n := range names {
 				p := filepath.Join(dir, sub, n)

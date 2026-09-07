@@ -192,9 +192,21 @@ export interface ForeignGpuProc {
   mem_mb: number;
 }
 
+// VRAM pooled across every adapter the router will load on, computed server-side.
+// gpu_stats is a flat per-device history, so its newest entry is one card; on a
+// multi-GPU box the gauge has to use this instead (issue #4).
+export interface PooledVram {
+  used_mb: number;
+  total_mb: number;
+  devices: number;
+}
+
 export interface PerformanceResponse {
   sys_stats: SysStat[];
   gpu_stats: GpuStat[];
+  // Null when there is no GPU telemetry; absent from a server too old to send it,
+  // in which case the gauge falls back to the newest single device.
+  gpu_pooled?: PooledVram | null;
   // Current-snapshot tally of GPU memory held by llama-server/sd-server
   // processes we did not spawn (a stray llama.cpp). Always present.
   foreign?: { mb: number; procs?: ForeignGpuProc[] };

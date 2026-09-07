@@ -5,6 +5,43 @@ derived. Read this before touching `plan.go`, `kvcost.go`, `generate_sizing.go`
 or any `estVramGB` producer. Spawn-time re-sizing lives in
 [`liveoffload.md`](liveoffload.md).
 
+## Multiple GPUs
+
+`gpuset.go`. Every eligible adapter is POOLED into one budget, and the model is split across
+them with `-sm layer --main-gpu N --tensor-split a,b`. Before issue #4 the sizer picked the
+largest adapter and left the rest of the box idle: a 12 GB + 16 GB pair budgeted 16.
+
+Pooling on its own is a bug, not a feature. With `-sm layer` llama.cpp divides layers **and
+their KV** by the tensor-split ratio, but the fixed costs (logits/output buffer, CUDA runtime
+context) live on `--main-gpu` alone. A naive "12 + 16 = 28 GB" therefore OOMs the small card
+while the sizer reports a comfortable fit. The formulation that holds:
+
+```
+splittable_i <= FreeGB_i - fixed_i          # per device
+ratio_i       = (FreeGB_i - fixed_i) / sum_j(FreeGB_j - fixed_j)
+```
+
+Under that ratio every per-device constraint binds at the same moment, so the pooled budget
+`sum(FreeGB)` is exactly reachable **provided the fixed costs are charged as overhead**. The
+existing scalar sizer already does that (`prof.Overhead`), so no vector solver is needed: the
+main device's whole `Overhead` and one `computeCudaCtxGB` per extra device
+(`ExtraDeviceOverheadGB`) go in, and `TensorSplit` reads the finished `Overhead` back out.
+
+Three details that are easy to get wrong:
+
+- **Order.** `prof.TensorSplit` must be computed AFTER the compute buffer is folded into
+  `Overhead`, or the main device is under-charged.
+- **Device ordinals.** nvidia-smi enumerates by PCI bus id; the CUDA runtime defaults to
+  `CUDA_DEVICE_ORDER=FASTEST_FIRST`. On a mismatched pair those disagree and the split lands on
+  the wrong cards silently, so `emitProfile` emits `env: - "CUDA_DEVICE_ORDER=PCI_BUS_ID"`
+  alongside the flags.
+- **Eligibility.** An adapter under `minGpuVramGB` (default 3) is dropped. An iGPU reports a
+  slice of system RAM as dedicated VRAM: pooling it invents budget, and splitting real layers
+  onto it is slower than not splitting at all.
+
+`multiGpu: false` collapses everything (budget, split, guard, wizard seed) back to the single
+device `MainIndex` picks, which is the pre-issue-#4 behaviour.
+
 ## Compute buffer
 
 **Modeled, not a flat fudge.** `computeBufferGB` (`generate_sizing.go`) =

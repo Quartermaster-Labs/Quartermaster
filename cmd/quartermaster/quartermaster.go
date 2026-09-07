@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quartermaster-labs/quartermaster/internal/apppaths"
 	"github.com/quartermaster-labs/quartermaster/internal/autogen"
 	"github.com/quartermaster-labs/quartermaster/internal/backends"
 	"github.com/quartermaster-labs/quartermaster/internal/config"
@@ -100,6 +101,7 @@ func main() {
 	flagVersion := flag.Bool("version", false, "show version and exit")
 	flagWatchConfig := flag.Bool("watch-config", false, "reload config on file change")
 	flagGenerate := flag.String("generate", "", "path to autogen control file (settings + overrides); generates -config from local GGUFs on startup (hash-gated)")
+	flagNoGenerate := flag.Bool("no-generate", false, "never (re)generate the -config file from -generate; load whatever config is already on disk")
 	flagModelsDir := flag.String("models-dir", "", "models root for -generate (overrides settings.modelsRoot)")
 	flagWatchModels := flag.Bool("watch-models", true, "periodically re-scan the models folder and hot-reload when it changes (requires -generate); on by default, pass -watch-models=false to disable")
 	flagWatchModelsInterval := flag.Duration("watch-models-interval", 5*time.Second, "poll interval for -watch-models")
@@ -118,6 +120,39 @@ func main() {
 	argvGiven := map[string]bool{}
 	flag.Visit(func(f *flag.Flag) { argvGiven[f.Name] = true })
 
+	// Go's flag package stops parsing at the first NON-flag argument and hands
+	// the rest back as positionals, which this program has none of. Left
+	// unchecked that turns a typo into a silent half-configured start: a
+	// launcher written as
+	//
+	//	quartermaster -config -models-dir /models /etc/config.yaml -generate ...
+	//
+	// gives -config the literal value "-models-dir" (a String flag eats the
+	// next argv entry whatever it looks like), then stops at /etc/config.yaml,
+	// so -generate, -listen and -admin-allow are quietly dropped. The server
+	// still comes up, serves a stale config and never regenerates -- a failure
+	// that reads as "the new build changed nothing" (issue #4). Refuse instead,
+	// and name both halves: the token that ended parsing, and the flag whose
+	// value swallowed a flag.
+	// The swallowed-value check comes first: it names the CAUSE, while NArg only
+	// names the token where parsing gave up, which is one argument too late.
+	var swallowed []string
+	flag.Visit(func(f *flag.Flag) {
+		if v := f.Value.String(); strings.HasPrefix(v, "-") {
+			swallowed = append(swallowed, "-"+f.Name+" "+v)
+		}
+	})
+	if len(swallowed) > 0 {
+		slog.Error("a flag was given a value that is itself a flag, so it ate the next argument: check the argument order",
+			"flags", strings.Join(swallowed, ", "))
+		os.Exit(2)
+	}
+	if flag.NArg() > 0 {
+		slog.Error("unexpected argument: flags after it were ignored, so this start would be half-configured",
+			"argument", flag.Arg(0), "ignored", strings.Join(flag.Args()[1:], " "))
+		os.Exit(2)
+	}
+
 	if *flagVersion {
 		fmt.Printf("version: %s (%s), built at %s\n", version, commit, date)
 		os.Exit(0)
@@ -133,6 +168,22 @@ func main() {
 	// access policy, then stage two supplies the packaged listen addresses for
 	// whatever is still unset.
 	bundleDir := applyBundleDefaults()
+
+	// Third tier, for the shape neither of the others covers: a binary outside a
+	// packaged install, run with no -config. It defaults both paths into the
+	// per-user config directory and seeds a control file there, so a clean
+	// system boots to the dashboard instead of to "-config is required".
+	// Under -quit it resolves paths without creating any: see the create
+	// argument.
+	var userConfigDir string
+	if bundleDir == "" {
+		root := apppaths.ConfigDir()
+		if dir, err := applyUserConfigDefaults(flag.CommandLine, argvGiven, root, !*flagQuit); err != nil {
+			slog.Warn("could not prepare the per-user config directory; pass -config", "dir", root, "error", err)
+		} else {
+			userConfigDir = dir
+		}
+	}
 
 	if appCfg, err := autogen.LoadAppSettings(*flagGenerate); err != nil {
 		// Not fatal: a malformed app block must not make the server unstartable,
@@ -152,9 +203,36 @@ func main() {
 		os.Setenv("LQ_NO_UPDATE_CHECK", "1")
 	}
 
-	if *flagConfig == "" {
-		slog.Error("-config is required")
+	// Only reachable when the per-user default above could not be applied: the
+	// home directory is unreadable, its config dir is not writable, or -generate
+	// was given on its own (which claims one half of the pair, so the other half
+	// has to be named too -- see applyUserConfigDefaults).
+	// Not under -quit: stopping an instance needs a listen address, not a
+	// config, and demanding one here is what used to make -quit unusable from a
+	// binary that was never installed.
+	if *flagConfig == "" && !*flagQuit {
+		slog.Error("-config is required: it could not be defaulted because -generate was given without it, or the per-user config directory is unavailable")
 		os.Exit(1)
+	}
+
+	// -generate names the INPUT control file (settings + overrides); -config is
+	// the config generated FROM it. Pointing both at one path is quietly
+	// destructive in two ways at once, and neither is recoverable downstream:
+	//
+	//   - EnsureConfig reads the settings and then writes the generated config
+	//     over the file it read them from, so targetVramGB and everything else
+	//     the dashboard saves is erased on the next regen. The Settings page
+	//     appears to work and forgets on restart.
+	//   - the generate file is also a hash INPUT, so writing it invalidates the
+	//     hash that gated the write. With -watch-models that is a regen loop:
+	//     one full model scan and config rewrite per poll, forever.
+	//
+	// Both were reported as "the new build changed nothing" (issue #4), because
+	// the only visible symptom is settings that never take. Refuse instead.
+	if *flagGenerate != "" && samePath(*flagConfig, *flagGenerate) {
+		slog.Error("-config and -generate name the same file: -generate is the control file that -config is generated FROM, so every regen would overwrite it",
+			"path", *flagConfig)
+		os.Exit(2)
 	}
 
 	useTLS := *flagCertFile != "" || *flagKeyFile != ""
@@ -190,6 +268,23 @@ func main() {
 
 	configPath := *flagConfig
 
+	// -no-generate makes the config file read-only to this process, and this is
+	// the single switch that enforces it: every path that WRITES config.yaml --
+	// the startup regen, the -watch-models loop, and the dashboard's model and
+	// settings editors, which all funnel through autogen.EnsureConfig -- keys off
+	// autogenPath rather than -generate. Reads keep using -generate: the app
+	// settings and the offload knobs still come out of the control file, they
+	// just cannot cause a write.
+	//
+	// The cost is deliberate and worth knowing: -no-generate also greys out
+	// config editing in the UI, because "edit a model, regenerate, hot-reload" IS
+	// how that editor works. A launch that wanted the editor should drop the flag
+	// and let the generator own the file.
+	autogenPath := *flagGenerate
+	if *flagNoGenerate {
+		autogenPath = ""
+	}
+
 	// Autogen: when -generate is set, (re)generate -config from the local GGUF
 	// tree before loading. Hash-gated, so an unchanged models folder + control
 	// file skips the scan. -config is the output path here.
@@ -210,21 +305,27 @@ func main() {
 	if bundleDir != "" {
 		startupNote("packaged install detected at " + bundleDir + "; unset flags defaulted (pass any flag to override)")
 	}
+	if userConfigDir != "" {
+		startupNote("no -config given; using the per-user config directory " + userConfigDir)
+	}
+	if *flagNoGenerate && *flagGenerate != "" {
+		startupNote("-no-generate: " + configPath + " is loaded as it is on disk, never regenerated (config editing in the UI is off)")
+	}
 	autogen.DetectGpuCompute(startupNote)
 
-	if *flagGenerate != "" {
+	if autogenPath != "" {
 		// Reconcile the backend registry with what is actually on disk BEFORE
 		// generating: a build that arrived without going through an install --
 		// baked into a container image, restored from a backup, copied between
 		// machines -- is otherwise listed as installed and never launched. The
 		// sidecar feeds autogen's inputs hash, so writing it first means the
 		// config generated below already points at the adopted build.
-		if n, err := server.AdoptInstalledBackends(*flagGenerate, backends.NewManager("", startupNote), startupNote); err != nil {
+		if n, err := server.AdoptInstalledBackends(autogenPath, backends.NewManager("", startupNote), startupNote); err != nil {
 			startupNote("backend adoption failed: " + err.Error())
 		} else if n > 0 {
 			startupNote(fmt.Sprintf("registered %d backend(s) already installed on disk", n))
 		}
-		if _, err := autogen.EnsureConfig(*flagGenerate, configPath, *flagModelsDir, startupNote); err != nil {
+		if _, err := autogen.EnsureConfig(autogenPath, configPath, *flagModelsDir, startupNote); err != nil {
 			slog.Error("autogen failed", "error", err)
 			os.Exit(1)
 		}
@@ -407,7 +508,7 @@ func main() {
 		PlaygroundListen:       pgListen,
 		AdminAllow:             *flagAdminAllow,
 		AdminOpen:              *flagAdminOpen,
-		WatchModels:            *flagWatchModels && *flagGenerate != "",
+		WatchModels:            *flagWatchModels && autogenPath != "",
 		WatchModelsIntervalSec: int(flagWatchModelsInterval.Seconds()),
 		UpdateCheck:            !*flagNoUpdateCheck,
 	})
@@ -532,19 +633,21 @@ func main() {
 	// Enable the UI model-config editor only when generating from a control
 	// file: it edits the sidecar next to -generate, regenerates -config, and
 	// hot-reloads via the closure above.
-	if *flagGenerate != "" {
+	if autogenPath != "" {
 		autogenAdmin = &server.AutogenAdmin{
-			GeneratePath: *flagGenerate,
+			GeneratePath: autogenPath,
 			ConfigPath:   configPath,
 			ModelsDir:    *flagModelsDir,
 			Reload:       reload,
 		}
 		initialSrv.SetAutogenAdmin(autogenAdmin)
-		if playground != nil {
-			// Lets the turn runner find the backend registry (and with it the CPU
-			// title model) without reaching into the per-reload Server.
-			playground.GeneratePath = *flagGenerate
-		}
+	}
+	if playground != nil {
+		// Lets the turn runner find the backend registry (and with it the CPU
+		// title model) without reaching into the per-reload Server. Read-only, so
+		// it is keyed to -generate rather than autogenPath: -no-generate should
+		// cost the title model nothing.
+		playground.GeneratePath = *flagGenerate
 	}
 
 	watcherCtx, watcherCancel := context.WithCancel(context.Background())
@@ -581,9 +684,13 @@ func main() {
 			}
 		})
 		switch {
-		case *flagGenerate == "":
+		case autogenPath == "":
 			if watchModelsSet {
-				proxyLog.Warn("-watch-models ignored: it requires -generate")
+				if *flagNoGenerate {
+					proxyLog.Warn("-watch-models ignored: -no-generate forbids the regen it would trigger")
+				} else {
+					proxyLog.Warn("-watch-models ignored: it requires -generate")
+				}
 			}
 		default:
 			if *flagWatchConfig {
@@ -605,7 +712,7 @@ func main() {
 					case <-watcherCtx.Done():
 						return
 					case <-ticker.C:
-						cur, err := autogen.CurrentInputsHash(*flagGenerate, *flagModelsDir)
+						cur, err := autogen.CurrentInputsHash(autogenPath, *flagModelsDir)
 						if err != nil {
 							proxyLog.Warnf("watch-models: hashing inputs failed: %v", err)
 							continue
@@ -614,7 +721,7 @@ func main() {
 							continue
 						}
 						proxyLog.Info("watch-models: inputs changed, regenerating config")
-						if _, err := autogen.EnsureConfig(*flagGenerate, configPath, *flagModelsDir, server.NoticeLogger(proxyLog)); err != nil {
+						if _, err := autogen.EnsureConfig(autogenPath, configPath, *flagModelsDir, server.NoticeLogger(proxyLog)); err != nil {
 							proxyLog.Warnf("watch-models: regen failed: %v", err)
 							continue
 						}
@@ -801,4 +908,28 @@ func main() {
 	}
 
 	proxyLog.Info("shutdown complete")
+}
+
+// samePath reports whether two path flags name one file. Lexical comparison
+// first (it works for a path that does not exist yet, which -config routinely
+// is on a first run), then a stat identity check so a symlink, a "." segment or
+// a Windows case difference is not read as two separate files.
+func samePath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	ap, aerr := filepath.Abs(a)
+	bp, berr := filepath.Abs(b)
+	if aerr == nil && berr == nil && filepath.Clean(ap) == filepath.Clean(bp) {
+		return true
+	}
+	ai, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	bi, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(ai, bi)
 }

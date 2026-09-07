@@ -86,6 +86,55 @@ type settingsResp struct {
 	Advanced           advancedDTO `json:"advanced"`
 	AdvancedDefaults   advancedDTO `json:"advancedDefaults"`
 	AdvancedOverridden bool        `json:"advancedOverridden"`
+
+	// Gpu is the physical ceiling the VRAM fields are validated against.
+	Gpu gpuCapacityDTO `json:"gpu"`
+}
+
+// gpuDeviceDTO is one inference-eligible adapter, exactly as the sizer sees it.
+// Index is the TELEMETRY ordinal, the same one --tensor-split positions mean.
+type gpuDeviceDTO struct {
+	Index   int     `json:"index"`
+	Name    string  `json:"name"`
+	TotalGB float64 `json:"totalGB"`
+	FreeGB  float64 `json:"freeGB"`
+}
+
+// gpuCapacityDTO is the pooled eligible-adapter capacity, and it has to be
+// computed HERE rather than in the dashboard, because eligibility is policy:
+// an inference floor that drops an iGPU's slice of system memory, and multiGpu
+// off collapsing the set to the single card the sizer pins to. The dashboard
+// used to derive its ceiling from its own telemetry poll as "the last sample in
+// the buffer", which on a two-card box is whichever adapter the monitor
+// enumerated last -- so a 12 GB + 16 GB pair capped Target VRAM at 15, clamped
+// anything larger straight back down, and left the pooled budget the sizer was
+// built for unreachable from the UI (issue #4).
+type gpuCapacityDTO struct {
+	Devices []gpuDeviceDTO `json:"devices"`
+	TotalGB float64        `json:"totalGB"`
+	FreeGB  float64        `json:"freeGB"`
+	// Multi is true only when a split is actually on the table: more than one
+	// eligible adapter AND the multiGpu knob left on.
+	Multi bool `json:"multi"`
+}
+
+// gpuCapacity reports the eligible adapters for the given multi-GPU setting.
+// Empty (not an error) when telemetry has not answered yet; the dashboard then
+// keeps whatever ceiling it had rather than clamping against a zero.
+func (s *Server) gpuCapacity(multi bool) gpuCapacityDTO {
+	set := s.liveGpuSet(multi)
+	out := gpuCapacityDTO{
+		Devices: make([]gpuDeviceDTO, 0, len(set)),
+		TotalGB: set.TotalGB(),
+		FreeGB:  set.FreeGB(),
+		Multi:   multi && len(set) > 1,
+	}
+	for _, d := range set {
+		out.Devices = append(out.Devices, gpuDeviceDTO{
+			Index: d.Index, Name: d.Name, TotalGB: d.TotalGB, FreeGB: d.FreeGB,
+		})
+	}
+	return out
 }
 
 // backendsDTO mirrors the effective backend executable paths (llama-server /
@@ -230,6 +279,7 @@ func (s *Server) handleAPISettingsGet(w http.ResponseWriter, r *http.Request) {
 		Advanced:           advancedFromSettings(gf.Settings),
 		AdvancedDefaults:   advancedFromSettings(base),
 		AdvancedOverridden: advancedOverridden(patch),
+		Gpu:                s.gpuCapacity(gf.Settings.MultiGpuEnabled()),
 	})
 }
 

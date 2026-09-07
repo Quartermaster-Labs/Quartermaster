@@ -10,7 +10,7 @@
   import Toggle from "../components/Toggle.svelte";
   import UIScaleControl from "../components/UIScaleControl.svelte";
   import { themeMode, type ThemeMode } from "../stores/theme";
-  import { latestGpu, latestSys } from "../stores/perf";
+  import { latestSys, vramTotals } from "../stores/perf";
 
   // Category side-nav — mirrors the playground settings modal's pattern.
   type SettingsCat = "appearance" | "general" | "kvcache" | "backends" | "system";
@@ -217,8 +217,23 @@
     }
   }
 
-  // Physical ceilings from live telemetry. 0 means "telemetry not in yet".
-  const gpuMaxGb = $derived($latestGpu ? Math.floor($latestGpu.mem_total_mb / 1024) : 0);
+  // Physical ceilings. 0 means "not known yet", which leaves the field uncapped
+  // rather than clamping it to nothing.
+  //
+  // The VRAM ceiling is POOLED across every inference-eligible adapter and comes
+  // from the server (settings.gpu), not from the perf poll. Reading it off a
+  // single card is what made a 12 GB + 16 GB pair cap at 15: clampSettingsForm
+  // pushed anything larger back down, so the pooled budget the sizer plans
+  // splits against could not be entered at all (issue #4). $vramTotals is the
+  // fallback for a server too old to send the block, and is itself pooled.
+  const gpus = $derived(settings?.gpu?.devices ?? []);
+  const gpuMaxGb = $derived(
+    settings?.gpu && settings.gpu.totalGB > 0
+      ? Math.floor(settings.gpu.totalGB)
+      : $vramTotals
+        ? Math.floor($vramTotals.totalMb / 1024)
+        : 0,
+  );
   const sysMaxGb = $derived($latestSys ? Math.floor($latestSys.mem_total_mb / 1024) : 0);
 
   const settingsDirty = $derived(
@@ -295,6 +310,7 @@
   let gGrace = $state(30);
   let gMinGpu = $state(0.5);
   let gMulti = $state(true);
+  let gMultiGpu = $state(true);
   let savingGuards = $state(false);
   let guardsErr = $state<string | null>(null);
   let guardsSaved = $state(false);
@@ -306,7 +322,8 @@
         Number(gReserve) !== settings.guards.oomGuardReserveGB ||
         Number(gGrace) !== settings.guards.oomGuardGraceSec ||
         Number(gMinGpu) !== settings.guards.minGpuFraction ||
-        gMulti !== settings.guards.multiResident),
+        gMulti !== settings.guards.multiResident ||
+        gMultiGpu !== settings.guards.multiGpu),
   );
 
   async function saveGuards(): Promise<void> {
@@ -324,6 +341,7 @@
         oomGuardGraceSec: Number(gGrace) || 1,
         minGpuFraction: Number(gMinGpu) || 0,
         multiResident: gMulti,
+        multiGpu: gMultiGpu,
       });
       await loadSettings();
       guardsSaved = true;
@@ -339,7 +357,7 @@
   let guardsAutosaveTimer: ReturnType<typeof setTimeout> | undefined;
   $effect(() => {
     if (!guardsDirty || savingGuards) return;
-    void gEvict; void gReserve; void gGrace; void gMinGpu; void gMulti;
+    void gEvict; void gReserve; void gGrace; void gMinGpu; void gMulti; void gMultiGpu;
     clearTimeout(guardsAutosaveTimer);
     guardsAutosaveTimer = setTimeout(saveGuards, 900);
     return () => clearTimeout(guardsAutosaveTimer);
@@ -358,6 +376,7 @@
   let advOpen = $state(false);
   let aCompute = $state(1);
   let aVisionOverhead = $state(1);
+  let aMinGpuVram = $state(3);
   let aVisionCtx = $state(8192);
   let aMoeCtx = $state(65536);
   let aDenseMin = $state(32768);
@@ -388,6 +407,7 @@
     gGrace = s.guards.oomGuardGraceSec;
     gMinGpu = s.guards.minGpuFraction;
     gMulti = s.guards.multiResident;
+    gMultiGpu = s.guards.multiGpu;
     aCompute = s.advanced.computeBufFactor;
     aVisionOverhead = s.advanced.visionOverheadGB;
     aVisionCtx = s.advanced.visionCtx;
@@ -398,6 +418,7 @@
     aHealth = s.advanced.healthCheckTimeout;
     aKv = s.advanced.kvQuant;
     aLora = s.advanced.loraDir;
+    aMinGpuVram = s.advanced.minGpuVramGB;
   }
 
   // A blank/garbage entry is dropped rather than sent as 0 - the endpoint
@@ -425,6 +446,7 @@
         healthCheckTimeout: Number(aHealth) || 0,
         kvQuant: aKv,
         loraDir: aLora.trim(),
+        minGpuVramGB: Number(aMinGpuVram) || 0,
       });
       await loadSettings();
       advSaved = true;
@@ -723,7 +745,14 @@
             }}
             class="w-full font-mono rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary"
           />
-          <span class="text-micro text-txtsecondary">default {settings?.defaults.targetVramGB}{gpuMaxGb ? ` · max ${gpuMaxGb}` : ""}</span>
+          <span class="text-micro text-txtsecondary">
+            default {settings?.defaults.targetVramGB}{gpuMaxGb ? ` · max ${gpuMaxGb}` : ""}
+            {#if gpus.length > 1}
+              <span use:tip={`Pooled across ${gpus.length} GPUs: ${gpus.map((g) => `${g.index}:${g.name} ${g.totalGB.toFixed(0)}GB`).join(", ")}. A model larger than one card is split over them with --tensor-split.`}
+                >({gpus.map((g) => g.totalGB.toFixed(0)).join(" + ")})</span
+              >
+            {/if}
+          </span>
         </label>
         <label class="flex flex-col gap-1">
           <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
@@ -886,6 +915,17 @@
       </label>
 
       <label class="flex items-start gap-3">
+        <Toggle size="sm" checked={gMultiGpu} onchange={(v: boolean) => (gMultiGpu = v)} />
+        <span class="text-label">
+          <span class="text-txtmain flex items-center gap-1">
+            Split models across GPUs
+            {@render hint("Pools every eligible GPU into one VRAM budget and splits a model over them (-sm layer + --tensor-split), sized so no single card goes over. Turn it off to pin every model to one card, which is what a single-GPU box does anyway.")}
+          </span>
+          <span class="text-micro text-txtsecondary">Off: one card only, budgeted and loaded as a single GPU.</span>
+        </span>
+      </label>
+
+      <label class="flex items-start gap-3">
         <Toggle size="sm" checked={gMulti} onchange={(v: boolean) => (gMulti = v)} />
         <span class="text-label">
           <span class="text-txtmain flex items-center gap-1">
@@ -935,6 +975,14 @@
             </span>
             <input type="number" min="0" step="0.25" bind:value={aVisionOverhead} class="w-full font-mono rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary" />
             <span class="text-micro text-txtsecondary">default {settings?.advancedDefaults.visionOverheadGB}</span>
+          </label>
+          <label class="flex flex-col gap-1">
+            <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
+              Min GPU VRAM (GB)
+              {@render hint("Smallest adapter that counts as inference VRAM. Below this a GPU is ignored entirely, so an integrated GPU reporting a slice of system memory as its own does not inflate the pooled budget or take a share of a split model.")}
+            </span>
+            <input type="number" min="0" step="0.5" bind:value={aMinGpuVram} class="w-full font-mono rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary" />
+            <span class="text-micro text-txtsecondary">default {settings?.advancedDefaults.minGpuVramGB}</span>
           </label>
           <label class="flex flex-col gap-1">
             <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">

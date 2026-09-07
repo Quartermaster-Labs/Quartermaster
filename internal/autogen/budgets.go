@@ -25,9 +25,17 @@ package autogen
 import (
 	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/shirou/gopsutil/v4/mem"
 )
+
+// seedMultiGpu carries the settings' pooling decision into hardwareBudgets,
+// which is a process-wide OnceValues and so cannot take an argument. Defaults
+// to true, matching Settings.MultiGpuEnabled's nil default.
+var seedMultiGpu atomic.Bool
+
+func init() { seedMultiGpu.Store(true) }
 
 const (
 	// recommendedVramFloorGB / recommendedRamFloorGB are the readings below which
@@ -39,9 +47,37 @@ const (
 )
 
 // RecommendedVramGB is the VRAM budget a fresh install should start from: the
-// free VRAM on the largest adapter right now. ok is false with no GPU telemetry
-// or a reading below the floor, and the caller then keeps its static default.
+// POOLED free VRAM across every eligible adapter right now. ok is false with no
+// GPU telemetry or a reading below the floor, and the caller then keeps its
+// static default.
+//
+// Pooled, because the wizard's seed is what a two-card box lives with until
+// someone edits it: seeding the largest card alone is how a 12 GB + 16 GB
+// machine ended up with targetVramGB 11.9 and half its VRAM unused (issue #4).
 func RecommendedVramGB() (float64, bool) {
+	return recommendedVramGB(true)
+}
+
+// recommendedVramGB pools when multi is set, and otherwise reports only the
+// device --main-gpu would pick. A user who has turned multiGpu off must not be
+// handed a budget that describes memory no single card has.
+func recommendedVramGB(multi bool) (float64, bool) {
+	if !multi {
+		set, ok := SampleGpuSet(autoVramSampleTimeout, minInferenceVramGB)
+		if !ok {
+			return 0, false
+		}
+		main := set.MainIndex()
+		for _, d := range set {
+			if d.Index == main {
+				if d.FreeGB < recommendedVramFloorGB {
+					return 0, false
+				}
+				return floorGB(d.FreeGB), true
+			}
+		}
+		return 0, false
+	}
 	gb, ok := SampleFreeVramGB(autoVramSampleTimeout)
 	if !ok || gb < recommendedVramFloorGB {
 		return 0, false
@@ -82,7 +118,7 @@ func floorGB(gb float64) float64 { return math.Floor(gb*10) / 10 }
 // this a box with no budgets in its generate file would re-probe the GPU on each
 // settings save.
 var hardwareBudgets = sync.OnceValues(func() (float64, float64) {
-	vram, vok := RecommendedVramGB()
+	vram, vok := recommendedVramGB(seedMultiGpu.Load())
 	if !vok {
 		vram = 0
 	}
@@ -102,6 +138,11 @@ func seedHardwareBudgets(s *Settings, vramUnset, ramUnset bool) {
 	if !vramUnset && !ramUnset {
 		return
 	}
+	// The probe is cached for the process, so the pooling decision has to be
+	// visible to it before it runs. A box with multiGpu off must be seeded from
+	// one card: a pooled figure is memory no single adapter has, and the sizer
+	// would plan every model past what fits.
+	seedMultiGpu.Store(s.MultiGpuEnabled())
 	vram, ram := hardwareBudgets()
 	if vramUnset && vram > 0 {
 		s.TargetVramGB = vram

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/quartermaster-labs/quartermaster/internal/autogen"
 	"gopkg.in/yaml.v3"
 )
 
@@ -27,7 +28,7 @@ func TestSetup_ensureGenerateReportsCreation(t *testing.T) {
 // exponent-formatted scalar would fail to unmarshal into the float64 field.
 func TestSetup_seededBudgetParsesAsFloat(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "quartermaster-generate.yaml")
-	if err := os.WriteFile(path, []byte(minimalGenerate), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(autogen.MinimalGenerateFile), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := setSettingsKey(path, "targetVramGB", formatGB(11.9)); err != nil {

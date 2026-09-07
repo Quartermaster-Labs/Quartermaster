@@ -80,6 +80,15 @@ type profile struct {
 	// MmprojPin is the model override's explicit placement for the projector
 	// ("gpu"/"ram"); "" leaves the sizer's auto fallback in charge.
 	MmprojPin string
+	// TensorSplit is the resolved per-device layer ratio for a multi-GPU plan,
+	// one entry per eligible device in Index order, or nil for a single-GPU box
+	// (and for every non-llama class, none of which can split). Derived by the
+	// SIZER rather than the renderer because it depends on Overhead, which is
+	// only final after the compute buffer is charged: see gpuset.go.
+	TensorSplit []float64
+	// MainGpu is the device index --main-gpu pins the non-splittable buffers to.
+	// -1 when there is nothing to pin (single GPU / no telemetry).
+	MainGpu int
 	// CpuMmproj emits --no-mmproj-offload: the CLIP projector runs on the CPU, so
 	// it costs no VRAM and the twin keeps the ctx/layer placement it would have
 	// had without vision, at the price of a slow (host-side) image encode. Set by
@@ -464,6 +473,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	// GPU regardless of CPU expert offload, so it's flat VRAM overhead. Replaces
 	// the old flat 0.17 GB ubSoloOh fudge. A baked-in MTP drafter runs a second
 	// llama_context and is charged its own graph on top, at the same ub.
+	gpus := s.GpuSetOrEmpty()
 	for i := range profiles {
 		ub := effectiveUb(meta, profiles[i], ov, profiles[i].Ctx, s.TargetVramGB)
 		pspec := modelSpec
@@ -473,6 +483,21 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		pDraftGB := matchedDraftSizeGB(pspec, row.DraftKind, row.DraftSizeGB)
 		profiles[i].Overhead += computeBufferGB(meta, ub, s.ComputeBufFactor) +
 			mtpDraftComputeGB(meta, pspec, pDraftGB, ub, s.ComputeBufFactor)
+		// Every device past the main one pays its own runtime context, and none
+		// of it splits, so it is overhead against the POOLED budget, charged
+		// before the split ratio is derived from what is left. Order matters:
+		// PlanTensorSplit reads the FINISHED Overhead as the main device's fixed
+		// cost, which is what makes the pooled budget reachable without any one
+		// card going over (gpuset.go), so it has to run after the compute-buffer
+		// and drafter-graph charges above.
+		profiles[i].MainGpu = -1
+		if gpus.Multi() {
+			profiles[i].Overhead += gpus.ExtraDeviceOverheadGB()
+			profiles[i].TensorSplit = gpus.PlanTensorSplit(profiles[i].Overhead)
+			if profiles[i].TensorSplit != nil {
+				profiles[i].MainGpu = gpus.PlanMainIndex()
+			}
+		}
 	}
 
 	for _, prof := range profiles {
