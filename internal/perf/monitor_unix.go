@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -162,26 +163,66 @@ func tryNvidiaSmi(ctx context.Context, every time.Duration, logger *logmon.Monit
 
 	go func() {
 		defer close(ch)
-
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line == "" {
-				continue
+		scanNvidiaSmi(stdout, func(stats []GpuStat) {
+			select {
+			case ch <- stats:
+			default:
 			}
-
-			stat := ParseNvidiaSmiLine(line)
-			if stat != nil {
-				select {
-				case ch <- []GpuStat{*stat}:
-				default:
-				}
-			}
-		}
+		})
 		cmd.Wait()
 	}()
 
 	return ch, nil
+}
+
+// scanNvidiaSmi reads --loop output and calls send once per PASS, with every
+// adapter of that pass in one slice.
+//
+// This used to send one slice per LINE, which made every snapshot describe a
+// single adapter. The live Monitor hid it, because it accumulates messages into
+// a ring and so eventually holds them all; the one-shot probes did not. They
+// take a single receive (SampleFreeVramGB, SampleGpuSet, SampleTotalVramGB), so
+// on a two-card box they saw whichever adapter nvidia-smi happened to list
+// first and budgeted the whole machine against it: a 12 GB + 16 GB pair seeded
+// targetVramGB from the 12 GB card and left half the VRAM unreachable, on a
+// build whose pooling arithmetic was correct and was simply never handed the
+// second device (issue #4). The LACT and rocm-smi readers already send whole
+// snapshots; this is the odd one out.
+//
+// nvidia-smi marks no pass boundary, so the boundary is inferred from the index
+// column: a line whose index does not increase is the next pass starting. That
+// costs one poll interval of latency on the FIRST snapshot only (a pass is
+// published when the next one begins) and nothing thereafter, which is well
+// inside every probe's timeout. Reading a device count up front would remove
+// even that, but only by adding a query field an older driver could reject, and
+// the failure there is silent loss of all GPU telemetry.
+func scanNvidiaSmi(r io.Reader, send func([]GpuStat)) {
+	flush := func(batch []GpuStat) {
+		if len(batch) > 0 {
+			send(batch)
+		}
+	}
+
+	var batch []GpuStat
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		stat := ParseNvidiaSmiLine(line)
+		if stat == nil {
+			continue
+		}
+		if len(batch) > 0 && stat.ID <= batch[0].ID {
+			flush(batch)
+			batch = nil
+		}
+		batch = append(batch, *stat)
+	}
+	// The last pass has no successor to close it, so a bounded run (no --loop)
+	// still reports.
+	flush(batch)
 }
 
 func tryRocmSmi(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuStat, error) {
