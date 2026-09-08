@@ -244,6 +244,21 @@ func effectiveUb(meta Metadata, prof profile, ov *Override, ctx int, budgetGB fl
 // indentation), shared by emitProfile (which writes them as a YAML `cmd: >`
 // block) and RenderSoloCmd (which joins them for the editor preview). Any
 // Override.ExtraArgs are appended verbatim as a final line.
+// pinsOwnSplit reports whether the user hand-wrote the --tensor-split vector for
+// this model, in which case we must NOT emit --device.
+//
+// A hand-written ratio is positional against whatever list the backend would
+// have enumerated on its own, which is what it meant when the user typed it.
+// --device replaces that list with ours, in main-last order, so the same string
+// would silently start addressing a different pair of cards. The override is
+// appended after the generated flags and wins on the last-flag-parsed rule, so
+// it survives either way: the choice here is only whether it lands on the cards
+// the user meant. Same refusal contract as everywhere else in this path, a split
+// that cannot be mapped is not rearranged.
+func pinsOwnSplit(ov *Override) bool {
+	return ov != nil && strings.TrimSpace(ov.TensorSplit) != ""
+}
+
 func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ngl, ncpuMoe int, kvK, kvV string, kvInRam bool, ov *Override) []string {
 	// extraArgs is appended verbatim at the end, so anything in it that we also
 	// emit ourselves lands on the line TWICE. -cms is the one that actually
@@ -382,7 +397,7 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		// issue #4 was tested on.
 		split := fmt.Sprintf("-sm layer --main-gpu %d", prof.MainGpu)
 		ts := prof.TensorSplit
-		if devs, order := DeviceFlagFor(s.ServerExe, s.GpuSetOrEmpty(), prof.MainGpu); devs != "" {
+		if devs, order := DeviceFlagFor(s.ServerExe, s.GpuSetOrEmpty(), prof.MainGpu); devs != "" && !pinsOwnSplit(ov) {
 			ts = PermuteSplit(ts, order)
 			split = fmt.Sprintf("--device %s -sm layer --main-gpu %d", devs, len(order)-1)
 		}

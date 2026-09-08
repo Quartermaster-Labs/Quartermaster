@@ -53,11 +53,49 @@ type BackendDevice struct {
 	TotalGB float64
 }
 
-// backendProbeTimeout bounds --list-devices. Enumerating adapters initialises
+// backendProbeTimeout bounds ONE --list-devices. Enumerating adapters initialises
 // the compute backend (a driver call, not a model load) and exits, so this is
 // deliberately generous rather than tight: a cold Vulkan loader on a headless
 // box is slow, and a timeout here costs a correct split for the whole config.
 const backendProbeTimeout = 15 * time.Second
+
+// backendProbeBudget bounds ALL of them together. A generate can reach up to
+// five distinct backend binaries (llama, sd-server, tts-server, whisper,
+// embedding), each probed once, so the generous per-probe window multiplies into
+// a startup that visibly hangs on a box where every backend is wedged. The
+// budget is spent by elapsed probe time and never refilled: the first probe
+// still gets the full window (the llama split is the one worth waiting for), and
+// once it is gone the rest fail instantly instead of each paying again.
+//
+// Not a rate limit and not per-exe. Failures are already cached per binary, so
+// this only ever bites on the first pass, which is exactly the pass a user is
+// sitting through.
+const backendProbeBudget = 20 * time.Second
+
+var (
+	probeBudgetMu   sync.Mutex
+	probeBudgetLeft = backendProbeBudget
+)
+
+// takeProbeBudget returns how long the next probe may run, or 0 when the shared
+// budget is exhausted.
+func takeProbeBudget() time.Duration {
+	probeBudgetMu.Lock()
+	defer probeBudgetMu.Unlock()
+	if probeBudgetLeft <= 0 {
+		return 0
+	}
+	if probeBudgetLeft < backendProbeTimeout {
+		return probeBudgetLeft
+	}
+	return backendProbeTimeout
+}
+
+func spendProbeBudget(d time.Duration) {
+	probeBudgetMu.Lock()
+	defer probeBudgetMu.Unlock()
+	probeBudgetLeft -= d
+}
 
 // llamaDeviceRe matches llama-server's listing:
 //
@@ -102,8 +140,8 @@ func ListBackendDevices(exe string) ([]BackendDevice, error) {
 
 	backendDevMu.Lock()
 	// A failed probe is cached too. The failure is a property of this binary (no
-	// such flag, missing runtime), and re-running a 15s probe once per model
-	// would dominate generation on a box where it can never succeed.
+	// such flag, missing runtime), and re-running the probe once per model would
+	// dominate generation on a box where it can never succeed.
 	backendDevCache[key] = devs
 	backendDevMu.Unlock()
 
@@ -122,7 +160,14 @@ func ListBackendDevices(exe string) ([]BackendDevice, error) {
 func probeEnv() []string { return append(os.Environ(), cudaOrderEnv) }
 
 func probeBackendDevices(exe string) ([]BackendDevice, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), backendProbeTimeout)
+	budget := takeProbeBudget()
+	if budget <= 0 {
+		return nil, fmt.Errorf("%s --list-devices: probe budget exhausted", exe)
+	}
+	started := time.Now()
+	defer func() { spendProbeBudget(time.Since(started)) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, exe, "--list-devices")

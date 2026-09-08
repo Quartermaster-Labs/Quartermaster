@@ -236,3 +236,50 @@ func TestAutogen_SingleGpu_EmitsNothingNew(t *testing.T) {
 		t.Fatalf("single-GPU writeSingleDeviceEnv emitted %q, want nothing", b.String())
 	}
 }
+
+// A generate reaches up to five distinct backend binaries. The per-probe window
+// is deliberately generous, so without a shared budget a box where every backend
+// is wedged multiplies it into a startup that visibly hangs.
+func TestAutogen_ProbeBudget_BoundsTheWholeGenerate(t *testing.T) {
+	probeBudgetMu.Lock()
+	saved := probeBudgetLeft
+	probeBudgetMu.Unlock()
+	t.Cleanup(func() {
+		probeBudgetMu.Lock()
+		probeBudgetLeft = saved
+		probeBudgetMu.Unlock()
+	})
+
+	if d := takeProbeBudget(); d != backendProbeTimeout {
+		t.Fatalf("first probe window = %v, want the full %v", d, backendProbeTimeout)
+	}
+	spendProbeBudget(backendProbeTimeout)
+	if d := takeProbeBudget(); d <= 0 || d > backendProbeBudget-backendProbeTimeout {
+		t.Fatalf("second probe window = %v, want what is left of %v", d, backendProbeBudget)
+	}
+	spendProbeBudget(backendProbeBudget)
+	if d := takeProbeBudget(); d != 0 {
+		t.Fatalf("exhausted probe window = %v, want 0", d)
+	}
+	if _, err := probeBackendDevices(filepath.Join(t.TempDir(), "nope")); err == nil {
+		t.Fatal("probe with no budget returned no error")
+	}
+}
+
+// A hand-written --tensor-split is positional against the list the backend would
+// have enumerated on its own. --device replaces that list in main-last order, so
+// emitting both would silently point the user's ratio at a different pair.
+func TestAutogen_PinsOwnSplit(t *testing.T) {
+	if pinsOwnSplit(nil) {
+		t.Fatal("no override pins nothing")
+	}
+	if pinsOwnSplit(&Override{}) {
+		t.Fatal("blank tensorSplit pins nothing")
+	}
+	if pinsOwnSplit(&Override{TensorSplit: "  "}) {
+		t.Fatal("whitespace tensorSplit pins nothing")
+	}
+	if !pinsOwnSplit(&Override{TensorSplit: "3,1"}) {
+		t.Fatal("a hand-written ratio must suppress --device")
+	}
+}

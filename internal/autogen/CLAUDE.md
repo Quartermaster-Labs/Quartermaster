@@ -221,6 +221,12 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   rewrites `--device`, `--tensor-split` and `--main-gpu` together, and rewrites NOTHING when the
   probe fails on an argv that carries `--device`: a split written in set order against a list in
   main-last order would hand each card the other's ratio, which is worse than the stale one.
+  For the same reason `--device` is suppressed entirely when an override pins `tensorSplit`
+  (`pinsOwnSplit`, `generate_cmd.go`): a hand-written ratio is positional against the list the
+  backend would have enumerated by itself, so renaming the list under it re-points the user's
+  own numbers at different cards. Cost is bounded twice over: `backendProbeTimeout` caps one
+  probe, `backendProbeBudget` caps all of them together, since a generate can reach five
+  distinct backend binaries and the per-probe window is deliberately generous.
 - **Sidecar SHADOWS the file row, it does not field-merge.** Override resolution is row-level
   first-match (sidecar rows prepended), so a sidecar row replaces the matching file row
   wholesale. A UI save must therefore write a *superset*: the config editor seeds the sidecar
