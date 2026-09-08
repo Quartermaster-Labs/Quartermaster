@@ -164,6 +164,18 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 	prof.Overhead += computeBufGB + draftComputeGB
 	prof.Overhead += in.MmprojGB // "-vision" projector weights + CLIP compute reserve
 
+	// Everything charged so far lands on --main-gpu alone, so this is the figure
+	// the spawn guard re-derives the ratio from (FixedGB below). Every device
+	// past the main one pays its own runtime context on top; that part is not
+	// splittable either, but it belongs to the POOLED budget rather than to the
+	// main card, so it is added after FixedGB is taken. Generate does the same,
+	// and the two must agree or a spawn-time retune moves the split for no reason
+	// other than which code path computed it.
+	mainFixedGB := prof.Overhead
+	if gpus := s.GpuSetOrEmpty(); gpus.Multi() {
+		prof.Overhead += gpus.ExtraDeviceOverheadGB()
+	}
+
 	ctx, plan, kvReserve, planCkptGB, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, in.KvInRam)
 	if err != nil {
 		return EstimateResult{}, err
@@ -229,7 +241,7 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		ComputeBufGB: computeBufGB,
 		MmprojGB:     in.MmprojGB,
 		OverheadGB:   s.VramOverheadGB,
-		FixedGB:      prof.Overhead,
+		FixedGB:      mainFixedGB,
 		RamExceeded:  plan.RamExceeded,
 		IsMoE:        meta.IsMoE,
 	}, nil

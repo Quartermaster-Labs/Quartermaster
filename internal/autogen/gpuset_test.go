@@ -295,3 +295,36 @@ func TestAutogen_retuneTensorSplit(t *testing.T) {
 		t.Fatalf("single-GPU argv changed: %v", got)
 	}
 }
+
+// The extra devices' runtime context must never reach splitBy as part of the
+// MAIN device's fixed cost: splitBy already charges perDeviceFixedGB to each
+// non-main device, so folding ExtraDeviceOverheadGB in bills the secondary
+// card's runtime twice, and both charges land on the main card's side of the
+// ratio. Issue #4's box is the shape it hurts: a 16 GB main card beside a 12 GB
+// one, where every point of ratio shifted off the main GPU lands on the card
+// that ran out of memory.
+func TestAutogen_TensorSplit_ExcludesExtraDeviceOverhead(t *testing.T) {
+	setCudaGPU(t, false)
+
+	set := GpuSet{
+		{Index: 0, TotalGB: 12, FreeGB: 11}, // RTX 3060
+		{Index: 1, TotalGB: 16, FreeGB: 15}, // RTX 4070 Ti SUPER, the main device
+	}
+	const overhead = 2.0
+
+	// Correct: 15-2 = 13 on main, 11-0.4 = 10.6 on the other, 23.6 total.
+	want := set.TensorSplit(overhead)
+	if len(want) != 2 || want[0] != 0.45 || want[1] != 0.55 {
+		t.Fatalf("TensorSplit(%.1f) = %v, want [0.45 0.55]", overhead, want)
+	}
+
+	// What the generate path used to pass. The second card's 0.4 GB is deducted
+	// from the main card as well as from itself, so the ratio tips toward the
+	// smaller card by exactly the amount that was double-counted.
+	doubled := set.TensorSplit(overhead + set.ExtraDeviceOverheadGB())
+	if doubled[0] <= want[0] {
+		t.Fatalf("double-charged split %v is not biased toward the secondary card vs %v; "+
+			"the regression this guards is no longer observable and the test needs new numbers",
+			doubled, want)
+	}
+}

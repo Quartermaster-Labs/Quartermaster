@@ -182,10 +182,12 @@ func (g GpuSet) ExtraDeviceOverheadGB() float64 {
 
 // TensorSplit is the --tensor-split ratio, one entry per device in Index order.
 //
-// mainFixedGB is the whole non-splittable footprint the main device carries
-// (prof.Overhead, which by this point already folds in the compute buffer, the
-// spec/draft overhead and the projector). Each other device is charged
-// perDeviceFixedGB. The remainder is what layers and KV may occupy, and the
+// mainFixedGB is the non-splittable footprint the MAIN device carries: the
+// compute buffer, the runtime context, the spec/draft overhead and the
+// projector. Each other device is charged perDeviceFixedGB here, so mainFixedGB
+// must NOT include ExtraDeviceOverheadGB: that term is the other devices'
+// runtime seen from the pooled budget's side, and passing it in bills the same
+// bytes to both cards, shifting layers off the main GPU onto one with no room. The remainder is what layers and KV may occupy, and the
 // ratio is that remainder normalised, which is precisely the ratio under which
 // the pooled budget is reachable without any single card going over.
 //

@@ -492,8 +492,15 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		// and drafter-graph charges above.
 		profiles[i].MainGpu = -1
 		if gpus.Multi() {
+			// The main device's fixed cost is the overhead as it stands HERE.
+			// ExtraDeviceOverheadGB is the OTHER devices' runtime contexts, which
+			// splitBy already charges to each of them individually; folding it in
+			// as well billed the secondary card's runtime twice, once to the main
+			// card's side of the ratio, and pushed layers off the main GPU onto a
+			// card that had no room for them.
+			mainFixedGB := profiles[i].Overhead
 			profiles[i].Overhead += gpus.ExtraDeviceOverheadGB()
-			profiles[i].TensorSplit = gpus.PlanTensorSplit(profiles[i].Overhead)
+			profiles[i].TensorSplit = gpus.PlanTensorSplit(mainFixedGB)
 			if profiles[i].TensorSplit != nil {
 				profiles[i].MainGpu = gpus.PlanMainIndex()
 			}

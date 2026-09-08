@@ -187,7 +187,7 @@ const hashCacheSuffix = ".modelhash"
 //	     for that one sample used to bake a single-device plan that spawn time
 //	     could not repair, since the live retune rewrites an existing
 //	     --tensor-split and cannot add one.
-const genVersion = "v63"
+const genVersion = "v64"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the
