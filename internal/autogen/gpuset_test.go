@@ -1,6 +1,7 @@
 package autogen
 
 import (
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -293,5 +294,118 @@ func TestAutogen_retuneTensorSplit(t *testing.T) {
 	plain := []string{"llama-server", "-m", "/m.gguf"}
 	if got := retuneTensorSplit(s, plain, 1, nil); !reflect.DeepEqual(got, plain) {
 		t.Fatalf("single-GPU argv changed: %v", got)
+	}
+}
+
+// The extra devices' runtime context must never reach splitBy as part of the
+// MAIN device's fixed cost: splitBy already charges perDeviceFixedGB to each
+// non-main device, so folding ExtraDeviceOverheadGB in bills the secondary
+// card's runtime twice, and both charges land on the main card's side of the
+// ratio. Issue #4's box is the shape it hurts: a 16 GB main card beside a 12 GB
+// one, where every point of ratio shifted off the main GPU lands on the card
+// that ran out of memory.
+func TestAutogen_TensorSplit_ExcludesExtraDeviceOverhead(t *testing.T) {
+	setCudaGPU(t, false)
+
+	set := GpuSet{
+		{Index: 0, TotalGB: 12, FreeGB: 11}, // RTX 3060
+		{Index: 1, TotalGB: 16, FreeGB: 15}, // RTX 4070 Ti SUPER, the main device
+	}
+	const overhead = 2.0
+
+	// Correct: 15-2 = 13 on main, 11-0.4 = 10.6 on the other, 23.6 total.
+	want := set.TensorSplit(overhead)
+	if len(want) != 2 || want[0] != 0.45 || want[1] != 0.55 {
+		t.Fatalf("TensorSplit(%.1f) = %v, want [0.45 0.55]", overhead, want)
+	}
+
+	// What the generate path used to pass. The second card's 0.4 GB is deducted
+	// from the main card as well as from itself, so the ratio tips toward the
+	// smaller card by exactly the amount that was double-counted.
+	doubled := set.TensorSplit(overhead + set.ExtraDeviceOverheadGB())
+	if doubled[0] <= want[0] {
+		t.Fatalf("double-charged split %v is not biased toward the secondary card vs %v; "+
+			"the regression this guards is no longer observable and the test needs new numbers",
+			doubled, want)
+	}
+}
+
+// Once generate pins the device list with --device, --main-gpu is a position in
+// THAT list. The spawn-time retune rewrites --main-gpu, so it has to follow the
+// same rule or it puts back the telemetry ordinal the naming was meant to
+// replace: here main is telemetry index 3, which is position 1 of the pinned
+// pair.
+func TestAutogen_retuneTensorSplit_PinnedDeviceList(t *testing.T) {
+	setCudaGPU(t, false)
+	s := Settings{Gpus: GpuSet{
+		{Index: 0, TotalGB: 12, FreeGB: 1},
+		{Index: 3, TotalGB: 16, FreeGB: 15},
+	}}
+	// A pinned list whose order cannot be re-derived (no probeable backend exe
+	// here) is left completely alone. Rewriting --tensor-split in SET order
+	// against a list written in main-last order would hand each card the other's
+	// ratio, which is worse than the stale ratio it replaced.
+	named := []string{"llama-server", "-m", "/m.gguf", "--device", "Vulkan1,Vulkan0",
+		"-sm", "layer", "--main-gpu", "1", "--tensor-split", "0.5,0.5"}
+	got := retuneTensorSplit(s, named, 5, nil)
+	if got[10] != "0.5,0.5" || got[8] != "1" || got[4] != "Vulkan1,Vulkan0" {
+		t.Fatalf("retune rewrote an unmappable pinned launch: %v", got[4:])
+	}
+
+	// Same set, no --device: the telemetry index is still the best stand-in for
+	// the backend's own ordinal, and the split is already in set order.
+	unnamed := []string{"llama-server", "-m", "/m.gguf", "-sm", "layer", "--main-gpu", "0", "--tensor-split", "0.5,0.5"}
+	reg := retuneTensorSplit(s, unnamed, 5, nil)
+	if reg[6] != "3" {
+		t.Fatalf("unnamed --main-gpu = %q, want the telemetry index 3", reg[6])
+	}
+	if reg[8] == "0.5,0.5" {
+		t.Fatalf("unnamed --tensor-split was not retuned: %q", reg[8])
+	}
+}
+
+// A backend device id carries both halves of the pin: which enumeration to
+// filter, and which ordinal in it. Getting the pairing wrong does not fail
+// loudly, it silently runs the model on a card the sizer did not budget.
+func TestAutogen_visibleDevicesEnvFor(t *testing.T) {
+	want := map[string][2]string{
+		"CUDA0":   {"CUDA_VISIBLE_DEVICES", "0"},
+		"Vulkan1": {"GGML_VK_VISIBLE_DEVICES", "1"},
+		"ROCm2":   {"HIP_VISIBLE_DEVICES", "2"},
+	}
+	for id, w := range want {
+		name, ord, ok := visibleDevicesEnvFor(id)
+		if !ok || name != w[0] || ord != w[1] {
+			t.Errorf("visibleDevicesEnvFor(%q) = %q,%q,%v; want %q,%q,true", id, name, ord, ok, w[0], w[1])
+		}
+	}
+	// An unrecognised backend, and an id with no ordinal at all, get nothing
+	// rather than a guess.
+	for _, id := range []string{"SYCL0", "Metal0", "Vulkan", "0"} {
+		if _, _, ok := visibleDevicesEnvFor(id); ok {
+			t.Errorf("visibleDevicesEnvFor(%q) claimed a pin", id)
+		}
+	}
+}
+
+// With no probe to go on, CUDA still pins from the telemetry index (PCI bus
+// order makes the two agree) and everything else emits nothing, which is what
+// shipped.
+func TestAutogen_singleDeviceEnvFor_NoProbe(t *testing.T) {
+	set := GpuSet{
+		{Index: 0, TotalGB: 12, FreeGB: 11},
+		{Index: 1, TotalGB: 16, FreeGB: 15},
+	}
+	missing := filepath.Join(t.TempDir(), "not-a-backend")
+
+	setCudaGPU(t, true)
+	pin, isCuda := singleDeviceEnvFor(missing, set)
+	if pin != "CUDA_VISIBLE_DEVICES=1" || !isCuda {
+		t.Fatalf("CUDA fallback = %q,%v; want CUDA_VISIBLE_DEVICES=1,true", pin, isCuda)
+	}
+
+	setCudaGPU(t, false)
+	if pin, _ := singleDeviceEnvFor(missing, set); pin != "" {
+		t.Fatalf("non-CUDA with no probe = %q, want no pin", pin)
 	}
 }

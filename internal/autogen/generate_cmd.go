@@ -244,6 +244,21 @@ func effectiveUb(meta Metadata, prof profile, ov *Override, ctx int, budgetGB fl
 // indentation), shared by emitProfile (which writes them as a YAML `cmd: >`
 // block) and RenderSoloCmd (which joins them for the editor preview). Any
 // Override.ExtraArgs are appended verbatim as a final line.
+// pinsOwnSplit reports whether the user hand-wrote the --tensor-split vector for
+// this model, in which case we must NOT emit --device.
+//
+// A hand-written ratio is positional against whatever list the backend would
+// have enumerated on its own, which is what it meant when the user typed it.
+// --device replaces that list with ours, in main-last order, so the same string
+// would silently start addressing a different pair of cards. The override is
+// appended after the generated flags and wins on the last-flag-parsed rule, so
+// it survives either way: the choice here is only whether it lands on the cards
+// the user meant. Same refusal contract as everywhere else in this path, a split
+// that cannot be mapped is not rearranged.
+func pinsOwnSplit(ov *Override) bool {
+	return ov != nil && strings.TrimSpace(ov.TensorSplit) != ""
+}
+
 func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ngl, ncpuMoe int, kvK, kvV string, kvInRam bool, ov *Override) []string {
 	// extraArgs is appended verbatim at the end, so anything in it that we also
 	// emit ourselves lands on the line TWICE. -cms is the one that actually
@@ -361,9 +376,34 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	// per layer and is a loss on consumer boards with no NVLink, which is what a
 	// mismatched desktop pair is.
 	if len(prof.TensorSplit) > 1 && ngl > 0 {
+		// --main-gpu is INERT under -sm layer. Measured, not inferred: at a fixed
+		// --device list, --main-gpu 0 and --main-gpu 1 produced byte-identical
+		// model, KV and compute buffer lines. It is kept because it costs nothing
+		// and is the correct pin for anyone who puts -sm none or -sm row in
+		// extraArgs, but nothing here should be read as controlling placement.
+		//
+		// What DOES control placement under layer split is the ORDER of the device
+		// list: llama.cpp puts the non-splittable output weight on the device
+		// listed last. MainLastOrder puts the plan's main device there, and
+		// PermuteSplit moves --tensor-split with it so both flags still address the
+		// same cards. That is what makes the main device's larger fixed budget
+		// (mainFixedGB, see splitBy) land on the card that was charged for it.
+		//
+		// Naming the devices is also what makes the positions mean anything:
+		// without --device they are positions in the BACKEND's list, which counts
+		// adapters we filtered out and need not be in our order, and Vulkan/ROCm
+		// have no CUDA_DEVICE_ORDER to pin it with. When the list cannot be
+		// resolved the flags stay as they were, which is what shipped and what
+		// issue #4 was tested on.
+		split := fmt.Sprintf("-sm layer --main-gpu %d", prof.MainGpu)
+		ts := prof.TensorSplit
+		if devs, order := DeviceFlagFor(s.ServerExe, s.GpuSetOrEmpty(), prof.MainGpu); devs != "" && !pinsOwnSplit(ov) {
+			ts = PermuteSplit(ts, order)
+			split = fmt.Sprintf("--device %s -sm layer --main-gpu %d", devs, len(order)-1)
+		}
 		lines = append(lines,
-			fmt.Sprintf("-sm layer --main-gpu %d", prof.MainGpu),
-			fmt.Sprintf("--tensor-split %s", FormatSplit(prof.TensorSplit)),
+			split,
+			fmt.Sprintf("--tensor-split %s", FormatSplit(ts)),
 		)
 	}
 	// Vision twin loads the projector for image input. --no-mmproj-offload keeps

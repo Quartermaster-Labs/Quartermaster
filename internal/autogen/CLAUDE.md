@@ -43,6 +43,7 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 | `budgets.go` | Hardware-derived STARTING budgets: `RecommendedVramGB` (free VRAM) / `RecommendedRamGB` (available RAM), and `seedHardwareBudgets`, which `LoadGenerateFile` uses to replace `applyDefaults`' 7 GB/24 GB placeholders when neither the file nor the sidecar pinned them. One cached probe per process. |
 | `vram.go` | Live free-VRAM sampling via `internal/perf` (`SampleFreeVramGB`, `resolveAutoVram`) for the `autoVram` setting. POOLED across every eligible adapter since issue #4, via `gpuset.go`. Budgets against the **idle high-water mark** (`noteFreeVramGB`), never the raw sample — autoVram re-resolves on every `EnsureConfig` *and* every estimate preview, both of which run while models are loaded. |
 | `gpuset.go` | Multi-GPU device set (`GpuSet`, `GpuDevice`): eligibility (`gpuSetFromStats`, `EligibleGpuStats`, `LiveGpuSet`), pooled `FreeGB`/`TotalGB`, `MainIndex`, the `--tensor-split` ratio (`TensorSplit`, `FormatSplit`), the extra-device overhead the sizer must charge (`ExtraDeviceOverheadGB`), and `ResolveGpuSet` (60s-cached resolve into `Settings.Gpus`). The header comment carries the split math. |
+| `backenddev.go` | What the BACKEND calls each device (`ListBackendDevices` over `--list-devices`, memoised per binary), and the map from a resolved `GpuSet` onto those ids (`BackendIDs`, `DeviceFlagFor`). Refuses on any unmatched device so the caller degrades to unnamed placement. |
 | `liveoffload.go` | Spawn-time placement recompute (`LiveOffloadArgs`), including the live `--tensor-split` retune (`retuneTensorSplit`). → `liveoffload.md` |
 | `vllm.go` | Backend selection (`resolveBackend`, `resolveBackendPreferring`, `kindClass`) + the vllm emitter. → `backends.md` |
 | `rope.go` | `ropeCeiling`/`ropeFactor` — the only path that lifts the trained-ctx ceiling. → `sizing.md` |
@@ -164,18 +165,68 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   small card while the sizer reports a comfortable fit:
   1. every device past the main one is charged `ExtraDeviceOverheadGB` into `prof.Overhead`;
   2. `prof.TensorSplit` is derived from the FINISHED `Overhead` (`generate.go`, the compute-buffer
-     loop), because llama.cpp keeps the fixed costs (logits/output buffer, CUDA context) on
-     `--main-gpu` alone while it splits layers and their KV by the ratio;
+     loop), because llama.cpp keeps the fixed costs (the output weight matrix, CUDA context) on
+     ONE device while it splits layers and their KV by the ratio. **That device is the LAST one
+     in the device list, and `--main-gpu` has nothing to do with it.** Measured on a Vulkan build
+     (`llama-server -lv 10 -sm layer -ts 0.5,0.5`, two adapters): reversing `--device` moved a
+     ~146 MiB surplus in `load_tensors: ... model buffer size` from one card to the other, while
+     `--main-gpu 0` and `--main-gpu 1` at a fixed list produced byte-identical model, KV and
+     compute buffer lines. So the ORDER is the instruction. `GpuSet.MainLastOrder` puts the
+     sizer's main device (`PlanMainIndex`, the card with the most capacity, the one charged
+     `mainFixedGB`) at the end of the `--device` list, and `PermuteSplit` moves `--tensor-split`
+     with it so both flags still address the same cards. Two incidentals from the same log:
+     `token_embd.weight` falls to `CPU_Mapped` when it cannot use the host buffer type, and the
+     logits output buffer sits on `Vulkan_Host`, not on a device;
   3. `-sm layer --main-gpu N --tensor-split a,b` is actually emitted, alongside
      `env: CUDA_DEVICE_ORDER=PCI_BUS_ID`. Without that env the CUDA runtime's `FASTEST_FIRST`
-     default can reverse the pair and apply the ratio backwards, silently.
+     default can reverse the pair and apply the ratio backwards, silently. None of this is
+     CUDA-only: the split flags are vendor-neutral llama.cpp arguments and are field-proven on
+     Vulkan (issue #4). Only the ORDER PIN is CUDA-specific, which is what `--device` replaces.
+
+  **`mainFixedGB` must not include `ExtraDeviceOverheadGB`.** `splitBy` already charges
+  `perDeviceFixedGB` to every non-main device; passing the pooled figure in as the main device's
+  fixed cost billed the secondary card's runtime twice, both times against the main card's side
+  of the ratio, and tipped layers onto the card least able to hold them. `generate.go` takes the
+  main figure before adding the extras; `EstimatePlan` reports it as `FixedGB` and adds the
+  extras to the pool afterwards, so the config and the spawn-time retune derive the same split.
   Adapters below `minGpuVramGB` (3 GB) are dropped: an iGPU reports a slice of system RAM as
   dedicated VRAM, and pooling it invents budget. `multiGpu: false` collapses everything back to
   the single device `MainIndex` picks.
-- **Single-device backends need an explicit pin.** sd-server, tts-server, whisper and the
-  embedding server have no split of their own, so on a multi-GPU box `writeSingleDeviceEnv`
-  emits `CUDA_VISIBLE_DEVICES=<main>` for them. Without it the CUDA runtime picks a card the
-  sizer did not budget, and not necessarily the same one twice. SAM is exempt: it runs on the CPU.
+- **Single-device backends need an explicit pin, and the ordinal in it is the BACKEND's.**
+  sd-server, tts-server, whisper and the embedding server have no split of their own, so on a
+  multi-GPU box `writeSingleDeviceEnv` pins each to the plan's main device. Without it the
+  runtime picks a card the sizer did not budget, and not necessarily the same one twice. SAM is
+  exempt: it runs on the CPU. The variable and its value both come from
+  `singleDeviceEnvFor` -> `backenddev.go`'s probe: a ggml device id ("Vulkan1") names the
+  enumeration to filter and the ordinal to give it, which is the only way to get the Vulkan or
+  ROCm value right, since the telemetry index is a different enumeration. CUDA alone has a
+  fallback when the probe fails, because `CUDA_DEVICE_ORDER=PCI_BUS_ID` makes the runtime's
+  ordinal agree with nvidia-smi's; everything else emits nothing rather than a guess.
+- **The backend's device list is not ours, in order or in set** (`backenddev.go`). `--main-gpu`
+  and `--tensor-split` are positions in the BACKEND's list, but the plan derives them from the
+  telemetry ordinal, and an adapter we filtered out is still counted there. `DeviceFlagFor`
+  closes the gap by emitting `--device <ids>` so the list llama.cpp indexes into is the one we
+  handed it, and `--main-gpu` becomes a position in the resolved `GpuSet`. The probe doubles as
+  the capability check: a build without `--device` has no `--list-devices` either, so it cannot
+  be handed a flag it would reject. Everything refuses rather than guesses -- an unmatched
+  device yields no ids at all -- so a box that cannot be mapped emits exactly what shipped.
+  `DeviceFlagFor` returns the ORDER it built the list in as well as the ids, and the caller must
+  apply it to `--tensor-split`. **The probe runs under `CUDA_DEVICE_ORDER=PCI_BUS_ID`
+  (`probeEnv`), because the launch does.** The CUDA runtime defaults to `FASTEST_FIRST`, so a
+  listing read under the inherited environment numbers a mismatched pair the other way round,
+  and the id read off it names the OTHER card once handed to a bus-ordered process: the exact
+  reversal `--device` exists to prevent, arrived at by a different route. Vulkan and ROCm
+  ignore the variable. `retuneTensorSplit` re-derives that list from the LIVE main
+  device rather than trusting the baked one (the live main need not be the one generate picked),
+  rewrites `--device`, `--tensor-split` and `--main-gpu` together, and rewrites NOTHING when the
+  probe fails on an argv that carries `--device`: a split written in set order against a list in
+  main-last order would hand each card the other's ratio, which is worse than the stale one.
+  For the same reason `--device` is suppressed entirely when an override pins `tensorSplit`
+  (`pinsOwnSplit`, `generate_cmd.go`): a hand-written ratio is positional against the list the
+  backend would have enumerated by itself, so renaming the list under it re-points the user's
+  own numbers at different cards. Cost is bounded twice over: `backendProbeTimeout` caps one
+  probe, `backendProbeBudget` caps all of them together, since a generate can reach five
+  distinct backend binaries and the per-probe window is deliberately generous.
 - **Sidecar SHADOWS the file row, it does not field-merge.** Override resolution is row-level
   first-match (sidecar rows prepended), so a sidecar row replaces the matching file row
   wholesale. A UI save must therefore write a *superset*: the config editor seeds the sidecar

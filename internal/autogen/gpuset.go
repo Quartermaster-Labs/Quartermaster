@@ -182,12 +182,16 @@ func (g GpuSet) ExtraDeviceOverheadGB() float64 {
 
 // TensorSplit is the --tensor-split ratio, one entry per device in Index order.
 //
-// mainFixedGB is the whole non-splittable footprint the main device carries
-// (prof.Overhead, which by this point already folds in the compute buffer, the
-// spec/draft overhead and the projector). Each other device is charged
-// perDeviceFixedGB. The remainder is what layers and KV may occupy, and the
-// ratio is that remainder normalised, which is precisely the ratio under which
-// the pooled budget is reachable without any single card going over.
+// mainFixedGB is the non-splittable footprint the MAIN device carries: the
+// compute buffer, the runtime context, the spec/draft overhead and the
+// projector. Each other device is charged perDeviceFixedGB here, so mainFixedGB
+// must NOT include ExtraDeviceOverheadGB: that term is the other devices'
+// runtime seen from the pooled budget's side, and passing it in bills the same
+// bytes to both cards, shifting layers off the main GPU onto one with no room.
+//
+// The remainder is what layers and KV may occupy, and the ratio is that
+// remainder normalised, which is precisely the ratio under which the pooled
+// budget is reachable without any single card going over.
 //
 // A device with no room left after its fixed cost gets 0, and llama.cpp will
 // place nothing on it. Returns nil for a set that isn't worth splitting or when
@@ -262,6 +266,57 @@ func (g GpuSet) splitBy(capOf func(GpuDevice) float64, main int, mainFixedGB flo
 		// Two decimals: llama.cpp normalises the vector itself, and a long
 		// mantissa in the config buys nothing but an unreadable command line.
 		out[i] = math.Round(r/sum*100) / 100
+	}
+	return out
+}
+
+// MainLastOrder returns the positions of g in the order the devices must be
+// handed to llama.cpp: every other device first, in their existing relative
+// order, and the main device LAST. Returns nil when mainIndex names no device
+// in g.
+//
+// Last is not arbitrary. Measured on a Vulkan build (llama-server -lv 10,
+// -sm layer, -ts 0.5,0.5, two devices): the device listed LAST carries the
+// non-splittable output weight on top of its layer share, and the surplus moves
+// with the list rather than with --main-gpu. Reversing --device swapped a
+// ~146MiB surplus from one card's model buffer to the other's, while
+// --main-gpu 0 and --main-gpu 1 at a fixed list produced byte-identical model,
+// KV and compute buffers.
+//
+// So the ordering IS the placement instruction, and mainFixedGB is only charged
+// to the right card if that card is last. See splitBy, which prices the main
+// device differently from the rest.
+func (g GpuSet) MainLastOrder(mainIndex int) []int {
+	pos := -1
+	for i, d := range g {
+		if d.Index == mainIndex {
+			pos = i
+			break
+		}
+	}
+	if pos < 0 {
+		return nil
+	}
+	out := make([]int, 0, len(g))
+	for i := range g {
+		if i != pos {
+			out = append(out, i)
+		}
+	}
+	return append(out, pos)
+}
+
+// PermuteSplit reorders a ratio vector to match an order from MainLastOrder, so
+// --tensor-split keeps addressing the same devices as the --device list beside
+// it. A mismatched length is returned unchanged: a split that cannot be mapped
+// must not be silently rearranged onto the wrong cards.
+func PermuteSplit(split []float64, order []int) []float64 {
+	if len(order) != len(split) {
+		return split
+	}
+	out := make([]float64, len(split))
+	for i, p := range order {
+		out[i] = split[p]
 	}
 	return out
 }
@@ -520,17 +575,86 @@ func LiveGpuSet(stats []perf.GpuStat, multi bool) GpuSet {
 // split pins to, enumerated by PCI bus so the ordinal means here what it means
 // in nvidia-smi.
 //
-// A no-op on a single-GPU box (nothing to disambiguate), on a non-CUDA GPU
-// (these variables mean nothing to Vulkan or ROCm), and when the device set was
-// never resolved.
-func writeSingleDeviceEnv(b *strings.Builder, s Settings) {
-	if !usingCudaGPU() {
-		return
-	}
+// Vulkan and ROCm have the same problem and their own variables for it, but the
+// ordinal those take is the BACKEND's, which telemetry does not supply: it used
+// to be a no-op there, leaving a two-card Vulkan box to whichever adapter ggml
+// enumerated first. singleDeviceEnvFor asks the binary instead, so the pin is
+// derived rather than assumed.
+//
+// A no-op on a single-GPU box (nothing to disambiguate), when the device set was
+// never resolved, and when neither the probe nor the CUDA fallback can name the
+// device.
+func writeSingleDeviceEnv(b *strings.Builder, s Settings, exe string) {
 	set := s.GpuSetOrEmpty()
 	if !set.Multi() {
 		return
 	}
-	fmt.Fprintf(b, "    env:\n      - %q\n      - %q\n",
-		cudaOrderEnv, fmt.Sprintf("CUDA_VISIBLE_DEVICES=%d", set.PlanMainIndex()))
+	pin, isCuda := singleDeviceEnvFor(exe, set)
+	if pin == "" {
+		return
+	}
+	b.WriteString("    env:\n")
+	// CUDA_DEVICE_ORDER only means anything alongside CUDA_VISIBLE_DEVICES, and
+	// it is what makes the ordinal in it mean what nvidia-smi means.
+	if isCuda {
+		fmt.Fprintf(b, "      - %q\n", cudaOrderEnv)
+	}
+	fmt.Fprintf(b, "      - %q\n", pin)
+}
+
+// singleDeviceEnvFor returns the NAME=VALUE pin for the plan's main device as
+// this backend enumerates it, and whether it is the CUDA one.
+//
+// Preferred path: ask the binary what it calls its devices and read the ordinal
+// off the id it gives the main card ("Vulkan1" -> 1). That is the only way to
+// get a Vulkan or ROCm ordinal right, because the telemetry index is a different
+// enumeration and using it directly would pin the wrong adapter, silently.
+//
+// Fallback: CUDA alone, where CUDA_DEVICE_ORDER=PCI_BUS_ID makes the runtime's
+// ordinal agree with nvidia-smi's, so the telemetry index IS the right value.
+// Everything else refuses, which is the behaviour that shipped.
+func singleDeviceEnvFor(exe string, set GpuSet) (string, bool) {
+	main := set.PlanMainIndex()
+	if devs, err := ListBackendDevices(exe); err == nil {
+		if ids := set.BackendIDs(devs); len(ids) == len(set) {
+			for i, d := range set {
+				if d.Index != main {
+					continue
+				}
+				if name, ord, ok := visibleDevicesEnvFor(ids[i]); ok {
+					return name + "=" + ord, name == "CUDA_VISIBLE_DEVICES"
+				}
+				break
+			}
+		}
+	}
+	if usingCudaGPU() {
+		return fmt.Sprintf("CUDA_VISIBLE_DEVICES=%d", main), true
+	}
+	return "", false
+}
+
+// visibleDevicesEnvFor splits a backend device id into the variable that filters
+// that backend's device list and the ordinal to give it. The id carries both:
+// ggml names devices "<backend><ordinal>", and each backend's filter variable
+// indexes the same enumeration the id was numbered from.
+//
+// An unrecognised backend gets nothing rather than a guess. A filter variable
+// aimed at the wrong enumeration does not fail loudly, it just runs the model on
+// a card the sizer did not budget.
+func visibleDevicesEnvFor(id string) (string, string, bool) {
+	cut := strings.IndexFunc(id, func(r rune) bool { return r >= '0' && r <= '9' })
+	if cut <= 0 {
+		return "", "", false
+	}
+	ord := id[cut:]
+	switch strings.ToLower(id[:cut]) {
+	case "cuda":
+		return "CUDA_VISIBLE_DEVICES", ord, true
+	case "vulkan", "vk":
+		return "GGML_VK_VISIBLE_DEVICES", ord, true
+	case "rocm", "hip":
+		return "HIP_VISIBLE_DEVICES", ord, true
+	}
+	return "", "", false
 }
