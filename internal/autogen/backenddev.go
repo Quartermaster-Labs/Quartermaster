@@ -255,15 +255,24 @@ func normaliseDeviceName(s string) string {
 }
 
 // DeviceFlagFor resolves the `--device` value for a multi-GPU launch of exe,
-// together with the POSITION that `--main-gpu` must name once the list is
-// pinned. Returns "" and -1 when the devices cannot be named, and the caller
-// then emits what it emitted before.
+// together with the ORDER that value was built in: a permutation of g's
+// positions (see GpuSet.MainLastOrder) that the caller must apply to
+// --tensor-split so the two flags address the same cards. Returns "" and nil
+// when the devices cannot be named, and the caller then emits what it emitted
+// before.
 //
-// Naming the devices changes what --main-gpu and --tensor-split index into.
+// The order is the point, not just the names. Under -sm layer llama.cpp puts
+// the non-splittable output weight on the device listed LAST and ignores
+// --main-gpu entirely (measured; see MainLastOrder). So naming the devices is
+// what finally makes the sizer's choice of main device an instruction instead
+// of a hope: the plan's main card goes at the end of the list, which is where
+// the fixed cost it was charged actually lands.
+//
+// Naming them also changes what --main-gpu and --tensor-split index into.
 // Without --device they are positions in the BACKEND's full device list, which
 // includes adapters we filtered out and need not be in our order; with it they
-// are positions in the list we just handed over, so main becomes g's own
-// position rather than a telemetry ordinal.
+// are positions in the list we just handed over, so main is always the last
+// one.
 //
 // The probe doubles as the capability check. A build old enough to lack
 // --device is also old enough to lack --list-devices, so it fails to parse and
@@ -273,27 +282,25 @@ func normaliseDeviceName(s string) string {
 // Cost: one memoised subprocess per backend binary per process. The UI's launch
 // preview renders through the same path, so the first render after a backend
 // swap can pay the probe.
-func DeviceFlagFor(exe string, g GpuSet, mainIndex int) (string, int) {
+func DeviceFlagFor(exe string, g GpuSet, mainIndex int) (string, []int) {
 	if !g.Multi() {
-		return "", -1
+		return "", nil
 	}
-	pos := -1
-	for i, d := range g {
-		if d.Index == mainIndex {
-			pos = i
-			break
-		}
-	}
-	if pos < 0 {
-		return "", -1
+	order := g.MainLastOrder(mainIndex)
+	if order == nil {
+		return "", nil
 	}
 	devs, err := ListBackendDevices(exe)
 	if err != nil {
-		return "", -1
+		return "", nil
 	}
 	ids := g.BackendIDs(devs)
 	if len(ids) != len(g) {
-		return "", -1
+		return "", nil
 	}
-	return strings.Join(ids, ","), pos
+	ordered := make([]string, len(order))
+	for i, p := range order {
+		ordered[i] = ids[p]
+	}
+	return strings.Join(ordered, ","), order
 }

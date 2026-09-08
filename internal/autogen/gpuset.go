@@ -268,6 +268,57 @@ func (g GpuSet) splitBy(capOf func(GpuDevice) float64, main int, mainFixedGB flo
 	return out
 }
 
+// MainLastOrder returns the positions of g in the order the devices must be
+// handed to llama.cpp: every other device first, in their existing relative
+// order, and the main device LAST. Returns nil when mainIndex names no device
+// in g.
+//
+// Last is not arbitrary. Measured on a Vulkan build (llama-server -lv 10,
+// -sm layer, -ts 0.5,0.5, two devices): the device listed LAST carries the
+// non-splittable output weight on top of its layer share, and the surplus moves
+// with the list rather than with --main-gpu. Reversing --device swapped a
+// ~146MiB surplus from one card's model buffer to the other's, while
+// --main-gpu 0 and --main-gpu 1 at a fixed list produced byte-identical model,
+// KV and compute buffers.
+//
+// So the ordering IS the placement instruction, and mainFixedGB is only charged
+// to the right card if that card is last. See splitBy, which prices the main
+// device differently from the rest.
+func (g GpuSet) MainLastOrder(mainIndex int) []int {
+	pos := -1
+	for i, d := range g {
+		if d.Index == mainIndex {
+			pos = i
+			break
+		}
+	}
+	if pos < 0 {
+		return nil
+	}
+	out := make([]int, 0, len(g))
+	for i := range g {
+		if i != pos {
+			out = append(out, i)
+		}
+	}
+	return append(out, pos)
+}
+
+// PermuteSplit reorders a ratio vector to match an order from MainLastOrder, so
+// --tensor-split keeps addressing the same devices as the --device list beside
+// it. A mismatched length is returned unchanged: a split that cannot be mapped
+// must not be silently rearranged onto the wrong cards.
+func PermuteSplit(split []float64, order []int) []float64 {
+	if len(order) != len(split) {
+		return split
+	}
+	out := make([]float64, len(split))
+	for i, p := range order {
+		out[i] = split[p]
+	}
+	return out
+}
+
 // FormatSplit renders a ratio vector as llama.cpp's comma-separated argument.
 func FormatSplit(split []float64) string {
 	parts := make([]string, len(split))

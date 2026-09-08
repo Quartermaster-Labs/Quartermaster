@@ -156,18 +156,50 @@ func TestAutogen_DeviceFlagFor_Refusals(t *testing.T) {
 		{Index: 3, Name: "NVIDIA GeForce RTX 4070 Ti SUPER", TotalGB: 16, FreeGB: 15},
 	}
 	// No probe can help a set that isn't split.
-	if devs, pos := DeviceFlagFor("llama-server", GpuSet{two[0]}, 0); devs != "" || pos != -1 {
-		t.Fatalf("single-device DeviceFlagFor = %q,%d, want \"\",-1", devs, pos)
+	if devs, order := DeviceFlagFor("llama-server", GpuSet{two[0]}, 0); devs != "" || order != nil {
+		t.Fatalf("single-device DeviceFlagFor = %q,%v, want \"\",nil", devs, order)
 	}
 	// A main index that names no device in the set: nothing to pin it to.
-	if devs, pos := DeviceFlagFor("llama-server", two, 1); devs != "" || pos != -1 {
-		t.Fatalf("unknown main index = %q,%d, want \"\",-1", devs, pos)
+	if devs, order := DeviceFlagFor("llama-server", two, 1); devs != "" || order != nil {
+		t.Fatalf("unknown main index = %q,%v, want \"\",nil", devs, order)
 	}
 	// A binary that cannot be run at all degrades to unnamed placement rather
-	// than to an error. Note the gap this closes on the way: main is TELEMETRY
-	// index 3, which is position 1 in the set, and only the named form can say
-	// so.
-	if devs, pos := DeviceFlagFor(filepath.Join(t.TempDir(), "not-a-backend"), two, 3); devs != "" || pos != -1 {
-		t.Fatalf("missing exe = %q,%d, want \"\",-1", devs, pos)
+	// than to an error.
+	if devs, order := DeviceFlagFor(filepath.Join(t.TempDir(), "not-a-backend"), two, 3); devs != "" || order != nil {
+		t.Fatalf("missing exe = %q,%v, want \"\",nil", devs, order)
+	}
+}
+
+// The placement rule the whole ordering rests on: measured on a Vulkan build,
+// -sm layer puts the non-splittable output weight on the device listed LAST and
+// ignores --main-gpu. So the main device has to be last, and everything else
+// keeps its relative order (the split vector is only meaningful positionally).
+func TestAutogen_MainLastOrder(t *testing.T) {
+	three := GpuSet{
+		{Index: 0, Name: "a", TotalGB: 12, FreeGB: 11},
+		{Index: 3, Name: "b", TotalGB: 16, FreeGB: 15},
+		{Index: 7, Name: "c", TotalGB: 24, FreeGB: 23},
+	}
+	// Main is telemetry index 3, which is POSITION 1. Only the named form can
+	// say so, and it must end up last.
+	got := three.MainLastOrder(3)
+	if len(got) != 3 || got[0] != 0 || got[1] != 2 || got[2] != 1 {
+		t.Fatalf("MainLastOrder(3) = %v, want [0 2 1]", got)
+	}
+	// Already last: an identity permutation, not a rotation.
+	if got := three.MainLastOrder(7); len(got) != 3 || got[0] != 0 || got[1] != 1 || got[2] != 2 {
+		t.Fatalf("MainLastOrder(7) = %v, want [0 1 2]", got)
+	}
+	if got := three.MainLastOrder(9); got != nil {
+		t.Fatalf("MainLastOrder of an absent index = %v, want nil", got)
+	}
+	// The split must travel with the list or each card gets the other's ratio.
+	if got := PermuteSplit([]float64{0.2, 0.3, 0.5}, []int{0, 2, 1}); got[0] != 0.2 || got[1] != 0.5 || got[2] != 0.3 {
+		t.Fatalf("PermuteSplit = %v, want [0.2 0.5 0.3]", got)
+	}
+	// A length that cannot be mapped is left alone rather than rearranged.
+	in := []float64{0.5, 0.5}
+	if got := PermuteSplit(in, []int{0, 2, 1}); len(got) != 2 || got[0] != 0.5 {
+		t.Fatalf("PermuteSplit with a mismatched order = %v, want the input back", got)
 	}
 }

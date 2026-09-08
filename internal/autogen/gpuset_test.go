@@ -341,21 +341,26 @@ func TestAutogen_retuneTensorSplit_PinnedDeviceList(t *testing.T) {
 		{Index: 0, TotalGB: 12, FreeGB: 1},
 		{Index: 3, TotalGB: 16, FreeGB: 15},
 	}}
+	// A pinned list whose order cannot be re-derived (no probeable backend exe
+	// here) is left completely alone. Rewriting --tensor-split in SET order
+	// against a list written in main-last order would hand each card the other's
+	// ratio, which is worse than the stale ratio it replaced.
 	named := []string{"llama-server", "-m", "/m.gguf", "--device", "Vulkan1,Vulkan0",
 		"-sm", "layer", "--main-gpu", "1", "--tensor-split", "0.5,0.5"}
 	got := retuneTensorSplit(s, named, 5, nil)
-	if got[8] != "1" {
-		t.Fatalf("--main-gpu = %q, want the position 1, not the telemetry index 3", got[8])
-	}
-	if got[4] != "Vulkan1,Vulkan0" {
-		t.Fatalf("retune touched --device: %q", got[4])
+	if got[10] != "0.5,0.5" || got[8] != "1" || got[4] != "Vulkan1,Vulkan0" {
+		t.Fatalf("retune rewrote an unmappable pinned launch: %v", got[4:])
 	}
 
 	// Same set, no --device: the telemetry index is still the best stand-in for
-	// the backend's own ordinal.
+	// the backend's own ordinal, and the split is already in set order.
 	unnamed := []string{"llama-server", "-m", "/m.gguf", "-sm", "layer", "--main-gpu", "0", "--tensor-split", "0.5,0.5"}
-	if got := retuneTensorSplit(s, unnamed, 5, nil); got[6] != "3" {
-		t.Fatalf("unnamed --main-gpu = %q, want the telemetry index 3", got[6])
+	reg := retuneTensorSplit(s, unnamed, 5, nil)
+	if reg[6] != "3" {
+		t.Fatalf("unnamed --main-gpu = %q, want the telemetry index 3", reg[6])
+	}
+	if reg[8] == "0.5,0.5" {
+		t.Fatalf("unnamed --tensor-split was not retuned: %q", reg[8])
 	}
 }
 

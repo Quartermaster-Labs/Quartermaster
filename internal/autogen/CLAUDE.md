@@ -165,17 +165,18 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   small card while the sizer reports a comfortable fit:
   1. every device past the main one is charged `ExtraDeviceOverheadGB` into `prof.Overhead`;
   2. `prof.TensorSplit` is derived from the FINISHED `Overhead` (`generate.go`, the compute-buffer
-     loop), because llama.cpp keeps the fixed costs (logits/output buffer, CUDA context) on ONE
-     device while it splits layers and their KV by the ratio. **Which device that is, is an
-     assumption, not an instruction.** `llama-server --help` documents `-mg` as applying to
-     split-mode `none` (the whole model) or `row` (intermediate results and KV) - layer split is
-     not in that list, and layer split is what we always emit, so the `--main-gpu` we emit is
-     inert and llama.cpp picks the carrier itself. The sizer charges those costs to
-     `PlanMainIndex` (the card with the most capacity); on issue #4's box that is also the last
-     device in the split, so the two coincided. A box where they do not would have the fixed
-     costs land on a card the sizer budgeted as carrying only its own runtime. Confirming
-     llama.cpp's actual rule, and if needed ordering the `--device` list so our main device is
-     the one it picks, is open work;
+     loop), because llama.cpp keeps the fixed costs (the output weight matrix, CUDA context) on
+     ONE device while it splits layers and their KV by the ratio. **That device is the LAST one
+     in the device list, and `--main-gpu` has nothing to do with it.** Measured on a Vulkan build
+     (`llama-server -lv 10 -sm layer -ts 0.5,0.5`, two adapters): reversing `--device` moved a
+     ~146 MiB surplus in `load_tensors: ... model buffer size` from one card to the other, while
+     `--main-gpu 0` and `--main-gpu 1` at a fixed list produced byte-identical model, KV and
+     compute buffer lines. So the ORDER is the instruction. `GpuSet.MainLastOrder` puts the
+     sizer's main device (`PlanMainIndex`, the card with the most capacity, the one charged
+     `mainFixedGB`) at the end of the `--device` list, and `PermuteSplit` moves `--tensor-split`
+     with it so both flags still address the same cards. Two incidentals from the same log:
+     `token_embd.weight` falls to `CPU_Mapped` when it cannot use the host buffer type, and the
+     logits output buffer sits on `Vulkan_Host`, not on a device;
   3. `-sm layer --main-gpu N --tensor-split a,b` is actually emitted, alongside
      `env: CUDA_DEVICE_ORDER=PCI_BUS_ID`. Without that env the CUDA runtime's `FASTEST_FIRST`
      default can reverse the pair and apply the ratio backwards, silently. None of this is
@@ -209,8 +210,12 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   the capability check: a build without `--device` has no `--list-devices` either, so it cannot
   be handed a flag it would reject. Everything refuses rather than guesses -- an unmatched
   device yields no ids at all -- so a box that cannot be mapped emits exactly what shipped.
-  `retuneTensorSplit` reads the same rule: it rewrites `--main-gpu` as a position when the argv
-  carries `--device`, and as the telemetry index when it does not.
+  `DeviceFlagFor` returns the ORDER it built the list in as well as the ids, and the caller must
+  apply it to `--tensor-split`. `retuneTensorSplit` re-derives that list from the LIVE main
+  device rather than trusting the baked one (the live main need not be the one generate picked),
+  rewrites `--device`, `--tensor-split` and `--main-gpu` together, and rewrites NOTHING when the
+  probe fails on an argv that carries `--device`: a split written in set order against a list in
+  main-last order would hand each card the other's ratio, which is worse than the stale one.
 - **Sidecar SHADOWS the file row, it does not field-merge.** Override resolution is row-level
   first-match (sidecar rows prepended), so a sidecar row replaces the matching file row
   wholesale. A UI save must therefore write a *superset*: the config editor seeds the sidecar

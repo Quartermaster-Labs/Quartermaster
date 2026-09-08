@@ -361,31 +361,34 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	// per layer and is a loss on consumer boards with no NVLink, which is what a
 	// mismatched desktop pair is.
 	if len(prof.TensorSplit) > 1 && ngl > 0 {
-		// --main-gpu is INERT under -sm layer. llama-server --help documents -mg
-		// as "the GPU to use for the model (with split-mode = none), or for
-		// intermediate results and KV (with split-mode = row)"; layer split is
-		// not in that list, and layer split is what we always emit. It is kept
-		// because it costs nothing and is the correct pin for anyone who puts
-		// -sm none or -sm row in extraArgs, but nothing here should be read as
-		// controlling placement: under -sm layer llama.cpp decides for itself
-		// which device carries the non-splittable buffers, and the sizer's
-		// choice of main device (gpuset.go) is an assumption about that, not an
-		// instruction to it.
+		// --main-gpu is INERT under -sm layer. Measured, not inferred: at a fixed
+		// --device list, --main-gpu 0 and --main-gpu 1 produced byte-identical
+		// model, KV and compute buffer lines. It is kept because it costs nothing
+		// and is the correct pin for anyone who puts -sm none or -sm row in
+		// extraArgs, but nothing here should be read as controlling placement.
 		//
-		// Name the devices when the backend can be asked what it calls them.
-		// --main-gpu and --tensor-split are positions in the backend's device
-		// list, not telemetry ordinals: an adapter we filtered out is still
-		// counted there, and Vulkan/ROCm have no CUDA_DEVICE_ORDER to pin the
-		// order with. --device replaces that list with ours, so the positions
-		// mean what the plan meant. When it cannot be resolved the flags stay as
-		// they were, which is what shipped and what issue #4 was tested on.
+		// What DOES control placement under layer split is the ORDER of the device
+		// list: llama.cpp puts the non-splittable output weight on the device
+		// listed last. MainLastOrder puts the plan's main device there, and
+		// PermuteSplit moves --tensor-split with it so both flags still address the
+		// same cards. That is what makes the main device's larger fixed budget
+		// (mainFixedGB, see splitBy) land on the card that was charged for it.
+		//
+		// Naming the devices is also what makes the positions mean anything:
+		// without --device they are positions in the BACKEND's list, which counts
+		// adapters we filtered out and need not be in our order, and Vulkan/ROCm
+		// have no CUDA_DEVICE_ORDER to pin it with. When the list cannot be
+		// resolved the flags stay as they were, which is what shipped and what
+		// issue #4 was tested on.
 		split := fmt.Sprintf("-sm layer --main-gpu %d", prof.MainGpu)
-		if devs, mainPos := DeviceFlagFor(s.ServerExe, s.GpuSetOrEmpty(), prof.MainGpu); devs != "" {
-			split = fmt.Sprintf("--device %s -sm layer --main-gpu %d", devs, mainPos)
+		ts := prof.TensorSplit
+		if devs, order := DeviceFlagFor(s.ServerExe, s.GpuSetOrEmpty(), prof.MainGpu); devs != "" {
+			ts = PermuteSplit(ts, order)
+			split = fmt.Sprintf("--device %s -sm layer --main-gpu %d", devs, len(order)-1)
 		}
 		lines = append(lines,
 			split,
-			fmt.Sprintf("--tensor-split %s", FormatSplit(prof.TensorSplit)),
+			fmt.Sprintf("--tensor-split %s", FormatSplit(ts)),
 		)
 	}
 	// Vision twin loads the projector for image input. --no-mmproj-offload keeps

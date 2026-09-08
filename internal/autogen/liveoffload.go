@@ -271,23 +271,34 @@ func retuneTensorSplit(s Settings, args []string, mainFixedGB float64, logf func
 	if len(split) < 2 {
 		return args
 	}
-	next := FormatSplit(split)
 	main := set.MainIndex()
 	out := append([]string(nil), args...)
-	out[idx] = next
-	// --main-gpu is a position in whatever device list the launch runs with. If
-	// generate pinned that list with --device, it is a position in OUR set; with
-	// no --device it is the backend's own ordinal, which is what the telemetry
-	// index has always stood in for. Rewriting it as an index under a pinned
-	// list would point at a device the list may not even contain.
+	// --main-gpu and --tensor-split are positions in whatever device list the
+	// launch runs with. With no --device that list is the backend's own, which
+	// the telemetry index has always stood in for, and the split is already in
+	// set order.
+	//
+	// With --device, generate pinned the list AND its order: main last, because
+	// that is the position llama.cpp gives the non-splittable output weight
+	// under -sm layer (see GpuSet.MainLastOrder). The live main device need not
+	// be the one generate picked, so the list is re-derived here rather than
+	// trusted, and the freshly computed split is permuted to match it.
+	//
+	// If the devices cannot be named now (a probe that worked at generate time
+	// and not at spawn), the baked list stays and NOTHING is rewritten: a split
+	// written in set order against a list in main-last order would hand each
+	// card the other's ratio, which is worse than the stale ratio it replaced.
 	if _, dev := argVal(out, "--device", "-dev"); dev >= 0 {
-		for i, d := range set {
-			if d.Index == main {
-				main = i
-				break
-			}
+		devs, order := DeviceFlagFor(s.ServerExe, set, main)
+		if devs == "" {
+			return args
 		}
+		out[dev] = devs
+		split = PermuteSplit(split, order)
+		main = len(order) - 1
 	}
+	next := FormatSplit(split)
+	out[idx] = next
 	if _, mi := argVal(out, "--main-gpu", "-mg"); mi >= 0 {
 		out[mi] = strconv.Itoa(main)
 	}
