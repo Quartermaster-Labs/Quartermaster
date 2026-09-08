@@ -2556,7 +2556,7 @@
               <input type="number" min="0" max="1" step="0.05" bind:value={adv.slotPromptSimilarity} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="off" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Main GPU {@render hint("-mg. Primary GPU index. Empty = the device quartermaster picked (the one with the most capacity), not GPU 0.")}</span>
+              <span class="text-txtsecondary flex items-center gap-1">Main GPU {@render hint("-mg. Primary GPU index. Applies only with split mode none or row; the default layer split ignores it. Empty = the device quartermaster picked (the one with the most capacity), not GPU 0.")}</span>
               <input type="number" min="0" step="1" bind:value={adv.mainGpu} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="auto" />
             </label>
             <label class="flex items-center gap-2">

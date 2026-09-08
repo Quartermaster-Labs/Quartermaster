@@ -361,6 +361,17 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	// per layer and is a loss on consumer boards with no NVLink, which is what a
 	// mismatched desktop pair is.
 	if len(prof.TensorSplit) > 1 && ngl > 0 {
+		// --main-gpu is INERT under -sm layer. llama-server --help documents -mg
+		// as "the GPU to use for the model (with split-mode = none), or for
+		// intermediate results and KV (with split-mode = row)"; layer split is
+		// not in that list, and layer split is what we always emit. It is kept
+		// because it costs nothing and is the correct pin for anyone who puts
+		// -sm none or -sm row in extraArgs, but nothing here should be read as
+		// controlling placement: under -sm layer llama.cpp decides for itself
+		// which device carries the non-splittable buffers, and the sizer's
+		// choice of main device (gpuset.go) is an assumption about that, not an
+		// instruction to it.
+		//
 		// Name the devices when the backend can be asked what it calls them.
 		// --main-gpu and --tensor-split are positions in the backend's device
 		// list, not telemetry ordinals: an adapter we filtered out is still

@@ -165,8 +165,17 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   small card while the sizer reports a comfortable fit:
   1. every device past the main one is charged `ExtraDeviceOverheadGB` into `prof.Overhead`;
   2. `prof.TensorSplit` is derived from the FINISHED `Overhead` (`generate.go`, the compute-buffer
-     loop), because llama.cpp keeps the fixed costs (logits/output buffer, CUDA context) on
-     `--main-gpu` alone while it splits layers and their KV by the ratio;
+     loop), because llama.cpp keeps the fixed costs (logits/output buffer, CUDA context) on ONE
+     device while it splits layers and their KV by the ratio. **Which device that is, is an
+     assumption, not an instruction.** `llama-server --help` documents `-mg` as applying to
+     split-mode `none` (the whole model) or `row` (intermediate results and KV) - layer split is
+     not in that list, and layer split is what we always emit, so the `--main-gpu` we emit is
+     inert and llama.cpp picks the carrier itself. The sizer charges those costs to
+     `PlanMainIndex` (the card with the most capacity); on issue #4's box that is also the last
+     device in the split, so the two coincided. A box where they do not would have the fixed
+     costs land on a card the sizer budgeted as carrying only its own runtime. Confirming
+     llama.cpp's actual rule, and if needed ordering the `--device` list so our main device is
+     the one it picks, is open work;
   3. `-sm layer --main-gpu N --tensor-split a,b` is actually emitted, alongside
      `env: CUDA_DEVICE_ORDER=PCI_BUS_ID`. Without that env the CUDA runtime's `FASTEST_FIRST`
      default can reverse the pair and apply the ratio backwards, silently. None of this is
