@@ -2556,8 +2556,8 @@
               <input type="number" min="0" max="1" step="0.05" bind:value={adv.slotPromptSimilarity} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="off" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Main GPU {@render hint("-mg. Primary GPU index. 0 = GPU 0.")}</span>
-              <input type="number" min="0" step="1" bind:value={adv.mainGpu} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="0" />
+              <span class="text-txtsecondary flex items-center gap-1">Main GPU {@render hint("-mg. Primary GPU index. Empty = the device quartermaster picked (the one with the most capacity), not GPU 0.")}</span>
+              <input type="number" min="0" step="1" bind:value={adv.mainGpu} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="auto" />
             </label>
             <label class="flex items-center gap-2">
               <span class="text-txtsecondary flex items-center gap-1">Draft KV-K {@render hint("-ctkd. Draft/spec context K cache type, including a baked-in MTP head. Empty = match KV-K.")}</span>
@@ -2596,8 +2596,8 @@
               <input type="number" min="0" step="1024" bind:value={adv.yarnOrigCtx} use:wheelAdjust class="cfg-input w-24 ml-auto" placeholder="auto" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Tensor split {@render hint("-ts. Per-GPU proportion, comma list e.g. 3,1. Empty = omit.")}</span>
-              <input type="text" bind:value={adv.tensorSplit} class="cfg-input w-24 ml-auto" placeholder="3,1" />
+              <span class="text-txtsecondary flex items-center gap-1">Tensor split {@render hint("-ts. Per-GPU proportion, comma list e.g. 3,1. Empty = the split quartermaster generated across your GPUs.")}</span>
+              <input type="text" bind:value={adv.tensorSplit} class="cfg-input w-24 ml-auto" placeholder="auto" />
             </label>
             <label class="flex items-center gap-2 col-span-2">
               <span class="text-txtsecondary flex items-center gap-1 shrink-0">Override tensor {@render hint("-ot. Manual tensor→buffer placement pattern, e.g. exps=CPU. Empty = omit.")}</span>
