@@ -211,7 +211,12 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   be handed a flag it would reject. Everything refuses rather than guesses -- an unmatched
   device yields no ids at all -- so a box that cannot be mapped emits exactly what shipped.
   `DeviceFlagFor` returns the ORDER it built the list in as well as the ids, and the caller must
-  apply it to `--tensor-split`. `retuneTensorSplit` re-derives that list from the LIVE main
+  apply it to `--tensor-split`. **The probe runs under `CUDA_DEVICE_ORDER=PCI_BUS_ID`
+  (`probeEnv`), because the launch does.** The CUDA runtime defaults to `FASTEST_FIRST`, so a
+  listing read under the inherited environment numbers a mismatched pair the other way round,
+  and the id read off it names the OTHER card once handed to a bus-ordered process: the exact
+  reversal `--device` exists to prevent, arrived at by a different route. Vulkan and ROCm
+  ignore the variable. `retuneTensorSplit` re-derives that list from the LIVE main
   device rather than trusting the baked one (the live main need not be the one generate picked),
   rewrites `--device`, `--tensor-split` and `--main-gpu` together, and rewrites NOTHING when the
   probe fails on an argv that carries `--device`: a split written in set order against a list in

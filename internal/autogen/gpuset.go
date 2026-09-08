@@ -187,9 +187,11 @@ func (g GpuSet) ExtraDeviceOverheadGB() float64 {
 // projector. Each other device is charged perDeviceFixedGB here, so mainFixedGB
 // must NOT include ExtraDeviceOverheadGB: that term is the other devices'
 // runtime seen from the pooled budget's side, and passing it in bills the same
-// bytes to both cards, shifting layers off the main GPU onto one with no room. The remainder is what layers and KV may occupy, and the
-// ratio is that remainder normalised, which is precisely the ratio under which
-// the pooled budget is reachable without any single card going over.
+// bytes to both cards, shifting layers off the main GPU onto one with no room.
+//
+// The remainder is what layers and KV may occupy, and the ratio is that
+// remainder normalised, which is precisely the ratio under which the pooled
+// budget is reachable without any single card going over.
 //
 // A device with no room left after its fixed cost gets 0, and llama.cpp will
 // place nothing on it. Returns nil for a set that isn't worth splitting or when

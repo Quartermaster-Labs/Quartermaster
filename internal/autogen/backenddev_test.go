@@ -2,6 +2,7 @@ package autogen
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -201,5 +202,37 @@ func TestAutogen_MainLastOrder(t *testing.T) {
 	in := []float64{0.5, 0.5}
 	if got := PermuteSplit(in, []int{0, 2, 1}); len(got) != 2 || got[0] != 0.5 {
 		t.Fatalf("PermuteSplit with a mismatched order = %v, want the input back", got)
+	}
+}
+
+// The probe has to enumerate the way the LAUNCH will. Every multi-GPU config we
+// emit carries CUDA_DEVICE_ORDER=PCI_BUS_ID, while the CUDA runtime defaults to
+// FASTEST_FIRST: a listing read under the inherited environment numbers a
+// mismatched pair the other way round, so "CUDA0" handed back to a bus-ordered
+// process names the OTHER card. That reversal is the exact failure --device
+// exists to prevent, and it is silent.
+func TestAutogen_ProbeEnv_PinsBusOrder(t *testing.T) {
+	var found bool
+	for _, kv := range probeEnv() {
+		if kv == cudaOrderEnv {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("probe environment does not pin %s", cudaOrderEnv)
+	}
+}
+
+// A single-GPU box is the population that never asked for any of this. It must
+// get no probe, no --device and no env block: byte-identical to what shipped.
+func TestAutogen_SingleGpu_EmitsNothingNew(t *testing.T) {
+	one := GpuSet{{Index: 0, Name: "NVIDIA GeForce RTX 4090", TotalGB: 24, FreeGB: 23}}
+	if devs, order := DeviceFlagFor(filepath.Join(t.TempDir(), "nope"), one, 0); devs != "" || order != nil {
+		t.Fatalf("single-GPU DeviceFlagFor = %q,%v, want no flags", devs, order)
+	}
+	var b strings.Builder
+	writeSingleDeviceEnv(&b, Settings{Gpus: one}, filepath.Join(t.TempDir(), "nope"))
+	if b.String() != "" {
+		t.Fatalf("single-GPU writeSingleDeviceEnv emitted %q, want nothing", b.String())
 	}
 }

@@ -116,13 +116,27 @@ func ListBackendDevices(exe string) ([]BackendDevice, error) {
 	return devs, nil
 }
 
+// probeEnv is the environment the listing must be read under: the caller's, plus
+// the same bus-order pin every multi-GPU launch carries. Split out so the pin is
+// assertable without running a backend.
+func probeEnv() []string { return append(os.Environ(), cudaOrderEnv) }
+
 func probeBackendDevices(exe string) ([]BackendDevice, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), backendProbeTimeout)
 	defer cancel()
 
+	cmd := exec.CommandContext(ctx, exe, "--list-devices")
+	// The probe MUST enumerate the way the launch will. Every multi-GPU config
+	// we emit carries CUDA_DEVICE_ORDER=PCI_BUS_ID (generate_emit.go, and
+	// writeSingleDeviceEnv), but the CUDA runtime defaults to FASTEST_FIRST, so
+	// a probe run under the inherited environment numbers a mismatched pair the
+	// other way round. Reading "CUDA0" off that listing and handing it back to a
+	// process running under PCI_BUS_ID names the OTHER card, silently: exactly
+	// the reversal --device exists to prevent. Vulkan and ROCm ignore it.
+	cmd.Env = probeEnv()
 	// Some backends print the listing on stderr and the banner on stdout, and
 	// which does what has moved across releases. Read the pair.
-	out, err := exec.CommandContext(ctx, exe, "--list-devices").CombinedOutput()
+	out, err := cmd.CombinedOutput()
 	if err != nil && len(out) == 0 {
 		return nil, fmt.Errorf("%s --list-devices: %w", exe, err)
 	}
