@@ -374,6 +374,9 @@
   // context ladder that regenerates the config on a 900ms timer is exactly the
   // failure mode the warning above them is about. They get an explicit Apply.
   let advOpen = $state(false);
+  // The hand-editable backend registry. Collapsed by default: it is the
+  // low-level view of what the managed installs above already write for you.
+  let backendRegOpen = $state(false);
   let aCompute = $state(1);
   let aVisionOverhead = $state(1);
   let aMinGpuVram = $state(3);
@@ -1437,9 +1440,19 @@
       <ManagedBackends onchanged={loadSettings} />
 
       <div class="flex items-baseline gap-2 mb-1">
-        <h6 >Backends</h6>
-        {@render hint("Inference server binaries Quartermaster can spawn, grouped by the kind of model they serve. On AMD/Intel GPUs point a row at a Vulkan (or ROCm/HIP) build - a CUDA build silently falls back to CPU. The ★ entry of a group is the auto-pick; a model can be pinned to any other entry of its group from its config editor.")}
+        <button
+          class="flex items-baseline gap-2 text-txtsecondary hover:text-txtmain"
+          onclick={() => (backendRegOpen = !backendRegOpen)}
+          aria-expanded={backendRegOpen}
+        >
+          <h6 class="!m-0">Registered binaries</h6>
+          <span class="text-micro">{backendRegOpen ? "▾" : "▸"}</span>
+          <span class="text-micro font-mono text-txtsecondary">{backends.length}</span>
+        </button>
+        {@render hint("Every inference server binary Quartermaster can spawn, grouped by the kind of model it serves - the installs above plus any path you enter by hand. On AMD/Intel GPUs point a row at a Vulkan (or ROCm/HIP) build - a CUDA build silently falls back to CPU. The ★ entry of a group is the auto-pick; a model can be pinned to any other entry of its group from its config editor.")}
       </div>
+
+      {#if backendRegOpen}
       <p class="text-[0.7rem] text-txtsecondary mb-4">
         Blank groups fall back to the built-in defaults (llama-server on PATH, sd/tts as siblings).
       </p>
@@ -1525,6 +1538,7 @@
           <span class="text-micro text-error">{backendsErr}</span>
         {/if}
       </div>
+      {/if}
 
       <div class="mt-6">
         <div class="flex items-baseline gap-2 mb-1">

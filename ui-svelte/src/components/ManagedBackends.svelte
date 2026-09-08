@@ -713,4 +713,26 @@
     <h6>Install a backend</h6>
     <p class="mt-1 font-mono text-[0.65rem] text-error">{err}</p>
   </div>
+{:else if available}
+  <!-- First paint, catalog still in flight. Rendering nothing here let the
+       registry below sit at the top of the tab and then get shoved down when
+       the fetch landed; a skeleton of the same shape holds the space so the
+       section fades in instead of pushing the page around. -->
+  <div class="mb-6" aria-busy="true">
+    <div class="flex items-baseline gap-2 mb-1">
+      <h6>Install a backend</h6>
+    </div>
+    <p class="text-[0.7rem] text-txtsecondary mb-3">
+      Downloads the build from its upstream release and registers it below. Every version you install is kept, so you
+      can switch back at any time.
+    </p>
+    <div class="animate-pulse">
+      <div class="h-8 mb-3 border-b border-card-border"></div>
+      <div class="flex flex-col gap-3">
+        {#each [0, 1, 2] as i (i)}
+          <div class="h-[5.5rem] rounded-md border border-card-border bg-surface/40"></div>
+        {/each}
+      </div>
+    </div>
+  </div>
 {/if}
