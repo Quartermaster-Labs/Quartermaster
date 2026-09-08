@@ -1,6 +1,7 @@
 package autogen
 
 import (
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -326,5 +327,80 @@ func TestAutogen_TensorSplit_ExcludesExtraDeviceOverhead(t *testing.T) {
 		t.Fatalf("double-charged split %v is not biased toward the secondary card vs %v; "+
 			"the regression this guards is no longer observable and the test needs new numbers",
 			doubled, want)
+	}
+}
+
+// Once generate pins the device list with --device, --main-gpu is a position in
+// THAT list. The spawn-time retune rewrites --main-gpu, so it has to follow the
+// same rule or it puts back the telemetry ordinal the naming was meant to
+// replace: here main is telemetry index 3, which is position 1 of the pinned
+// pair.
+func TestAutogen_retuneTensorSplit_PinnedDeviceList(t *testing.T) {
+	setCudaGPU(t, false)
+	s := Settings{Gpus: GpuSet{
+		{Index: 0, TotalGB: 12, FreeGB: 1},
+		{Index: 3, TotalGB: 16, FreeGB: 15},
+	}}
+	named := []string{"llama-server", "-m", "/m.gguf", "--device", "Vulkan1,Vulkan0",
+		"-sm", "layer", "--main-gpu", "1", "--tensor-split", "0.5,0.5"}
+	got := retuneTensorSplit(s, named, 5, nil)
+	if got[8] != "1" {
+		t.Fatalf("--main-gpu = %q, want the position 1, not the telemetry index 3", got[8])
+	}
+	if got[4] != "Vulkan1,Vulkan0" {
+		t.Fatalf("retune touched --device: %q", got[4])
+	}
+
+	// Same set, no --device: the telemetry index is still the best stand-in for
+	// the backend's own ordinal.
+	unnamed := []string{"llama-server", "-m", "/m.gguf", "-sm", "layer", "--main-gpu", "0", "--tensor-split", "0.5,0.5"}
+	if got := retuneTensorSplit(s, unnamed, 5, nil); got[6] != "3" {
+		t.Fatalf("unnamed --main-gpu = %q, want the telemetry index 3", got[6])
+	}
+}
+
+// A backend device id carries both halves of the pin: which enumeration to
+// filter, and which ordinal in it. Getting the pairing wrong does not fail
+// loudly, it silently runs the model on a card the sizer did not budget.
+func TestAutogen_visibleDevicesEnvFor(t *testing.T) {
+	want := map[string][2]string{
+		"CUDA0":   {"CUDA_VISIBLE_DEVICES", "0"},
+		"Vulkan1": {"GGML_VK_VISIBLE_DEVICES", "1"},
+		"ROCm2":   {"HIP_VISIBLE_DEVICES", "2"},
+	}
+	for id, w := range want {
+		name, ord, ok := visibleDevicesEnvFor(id)
+		if !ok || name != w[0] || ord != w[1] {
+			t.Errorf("visibleDevicesEnvFor(%q) = %q,%q,%v; want %q,%q,true", id, name, ord, ok, w[0], w[1])
+		}
+	}
+	// An unrecognised backend, and an id with no ordinal at all, get nothing
+	// rather than a guess.
+	for _, id := range []string{"SYCL0", "Metal0", "Vulkan", "0"} {
+		if _, _, ok := visibleDevicesEnvFor(id); ok {
+			t.Errorf("visibleDevicesEnvFor(%q) claimed a pin", id)
+		}
+	}
+}
+
+// With no probe to go on, CUDA still pins from the telemetry index (PCI bus
+// order makes the two agree) and everything else emits nothing, which is what
+// shipped.
+func TestAutogen_singleDeviceEnvFor_NoProbe(t *testing.T) {
+	set := GpuSet{
+		{Index: 0, TotalGB: 12, FreeGB: 11},
+		{Index: 1, TotalGB: 16, FreeGB: 15},
+	}
+	missing := filepath.Join(t.TempDir(), "not-a-backend")
+
+	setCudaGPU(t, true)
+	pin, isCuda := singleDeviceEnvFor(missing, set)
+	if pin != "CUDA_VISIBLE_DEVICES=1" || !isCuda {
+		t.Fatalf("CUDA fallback = %q,%v; want CUDA_VISIBLE_DEVICES=1,true", pin, isCuda)
+	}
+
+	setCudaGPU(t, false)
+	if pin, _ := singleDeviceEnvFor(missing, set); pin != "" {
+		t.Fatalf("non-CUDA with no probe = %q, want no pin", pin)
 	}
 }

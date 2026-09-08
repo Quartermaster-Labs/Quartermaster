@@ -113,7 +113,7 @@ func emitEmbeddingModel(b *strings.Builder, s Settings, row GgufRow, ov *Overrid
 		fmt.Fprintf(b, "      %s\n", line)
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
-	writeSingleDeviceEnv(b, s)
+	writeSingleDeviceEnv(b, s, s.ServerExe)
 	// Embedders are small, fully offloaded and their KV is one short sequence:
 	// weights plus a flat pad is close enough for admission.
 	writeEstVram(b, row.SizeGB+embeddingOverheadGB)

@@ -361,8 +361,19 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 	// per layer and is a loss on consumer boards with no NVLink, which is what a
 	// mismatched desktop pair is.
 	if len(prof.TensorSplit) > 1 && ngl > 0 {
+		// Name the devices when the backend can be asked what it calls them.
+		// --main-gpu and --tensor-split are positions in the backend's device
+		// list, not telemetry ordinals: an adapter we filtered out is still
+		// counted there, and Vulkan/ROCm have no CUDA_DEVICE_ORDER to pin the
+		// order with. --device replaces that list with ours, so the positions
+		// mean what the plan meant. When it cannot be resolved the flags stay as
+		// they were, which is what shipped and what issue #4 was tested on.
+		split := fmt.Sprintf("-sm layer --main-gpu %d", prof.MainGpu)
+		if devs, mainPos := DeviceFlagFor(s.ServerExe, s.GpuSetOrEmpty(), prof.MainGpu); devs != "" {
+			split = fmt.Sprintf("--device %s -sm layer --main-gpu %d", devs, mainPos)
+		}
 		lines = append(lines,
-			fmt.Sprintf("-sm layer --main-gpu %d", prof.MainGpu),
+			split,
 			fmt.Sprintf("--tensor-split %s", FormatSplit(prof.TensorSplit)),
 		)
 	}

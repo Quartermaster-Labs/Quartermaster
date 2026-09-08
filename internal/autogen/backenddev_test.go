@@ -1,6 +1,9 @@
 package autogen
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 // Real output from llama-server b10837-vulkan on a box with a discrete card and
 // an APU's integrated adapter. Two things matter here and both are load-bearing:
@@ -141,5 +144,30 @@ func TestAutogen_DeviceNamesMatch(t *testing.T) {
 		if deviceNamesMatch(p[0], p[1]) {
 			t.Errorf("deviceNamesMatch(%q, %q) = true, want false", p[0], p[1])
 		}
+	}
+}
+
+// DeviceFlagFor's refusal paths, which are the ones that decide whether a
+// launch keeps the argv that shipped. The probing path needs a real backend
+// binary and is covered by parseBackendDevices + BackendIDs above.
+func TestAutogen_DeviceFlagFor_Refusals(t *testing.T) {
+	two := GpuSet{
+		{Index: 0, Name: "NVIDIA GeForce RTX 3060", TotalGB: 12, FreeGB: 11},
+		{Index: 3, Name: "NVIDIA GeForce RTX 4070 Ti SUPER", TotalGB: 16, FreeGB: 15},
+	}
+	// No probe can help a set that isn't split.
+	if devs, pos := DeviceFlagFor("llama-server", GpuSet{two[0]}, 0); devs != "" || pos != -1 {
+		t.Fatalf("single-device DeviceFlagFor = %q,%d, want \"\",-1", devs, pos)
+	}
+	// A main index that names no device in the set: nothing to pin it to.
+	if devs, pos := DeviceFlagFor("llama-server", two, 1); devs != "" || pos != -1 {
+		t.Fatalf("unknown main index = %q,%d, want \"\",-1", devs, pos)
+	}
+	// A binary that cannot be run at all degrades to unnamed placement rather
+	// than to an error. Note the gap this closes on the way: main is TELEMETRY
+	// index 3, which is position 1 in the set, and only the named form can say
+	// so.
+	if devs, pos := DeviceFlagFor(filepath.Join(t.TempDir(), "not-a-backend"), two, 3); devs != "" || pos != -1 {
+		t.Fatalf("missing exe = %q,%d, want \"\",-1", devs, pos)
 	}
 }

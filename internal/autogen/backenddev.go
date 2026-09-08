@@ -253,3 +253,47 @@ var deviceNameNoise = strings.NewReplacer(
 func normaliseDeviceName(s string) string {
 	return deviceNameNoise.Replace(strings.ToLower(strings.TrimSpace(s)))
 }
+
+// DeviceFlagFor resolves the `--device` value for a multi-GPU launch of exe,
+// together with the POSITION that `--main-gpu` must name once the list is
+// pinned. Returns "" and -1 when the devices cannot be named, and the caller
+// then emits what it emitted before.
+//
+// Naming the devices changes what --main-gpu and --tensor-split index into.
+// Without --device they are positions in the BACKEND's full device list, which
+// includes adapters we filtered out and need not be in our order; with it they
+// are positions in the list we just handed over, so main becomes g's own
+// position rather than a telemetry ordinal.
+//
+// The probe doubles as the capability check. A build old enough to lack
+// --device is also old enough to lack --list-devices, so it fails to parse and
+// gets no flag: there is no version to compare and no way to emit an argument
+// the binary will reject.
+//
+// Cost: one memoised subprocess per backend binary per process. The UI's launch
+// preview renders through the same path, so the first render after a backend
+// swap can pay the probe.
+func DeviceFlagFor(exe string, g GpuSet, mainIndex int) (string, int) {
+	if !g.Multi() {
+		return "", -1
+	}
+	pos := -1
+	for i, d := range g {
+		if d.Index == mainIndex {
+			pos = i
+			break
+		}
+	}
+	if pos < 0 {
+		return "", -1
+	}
+	devs, err := ListBackendDevices(exe)
+	if err != nil {
+		return "", -1
+	}
+	ids := g.BackendIDs(devs)
+	if len(ids) != len(g) {
+		return "", -1
+	}
+	return strings.Join(ids, ","), pos
+}

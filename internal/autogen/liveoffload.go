@@ -275,6 +275,19 @@ func retuneTensorSplit(s Settings, args []string, mainFixedGB float64, logf func
 	main := set.MainIndex()
 	out := append([]string(nil), args...)
 	out[idx] = next
+	// --main-gpu is a position in whatever device list the launch runs with. If
+	// generate pinned that list with --device, it is a position in OUR set; with
+	// no --device it is the backend's own ordinal, which is what the telemetry
+	// index has always stood in for. Rewriting it as an index under a pinned
+	// list would point at a device the list may not even contain.
+	if _, dev := argVal(out, "--device", "-dev"); dev >= 0 {
+		for i, d := range set {
+			if d.Index == main {
+				main = i
+				break
+			}
+		}
+	}
 	if _, mi := argVal(out, "--main-gpu", "-mg"); mi >= 0 {
 		out[mi] = strconv.Itoa(main)
 	}

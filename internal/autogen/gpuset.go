@@ -522,17 +522,86 @@ func LiveGpuSet(stats []perf.GpuStat, multi bool) GpuSet {
 // split pins to, enumerated by PCI bus so the ordinal means here what it means
 // in nvidia-smi.
 //
-// A no-op on a single-GPU box (nothing to disambiguate), on a non-CUDA GPU
-// (these variables mean nothing to Vulkan or ROCm), and when the device set was
-// never resolved.
-func writeSingleDeviceEnv(b *strings.Builder, s Settings) {
-	if !usingCudaGPU() {
-		return
-	}
+// Vulkan and ROCm have the same problem and their own variables for it, but the
+// ordinal those take is the BACKEND's, which telemetry does not supply: it used
+// to be a no-op there, leaving a two-card Vulkan box to whichever adapter ggml
+// enumerated first. singleDeviceEnvFor asks the binary instead, so the pin is
+// derived rather than assumed.
+//
+// A no-op on a single-GPU box (nothing to disambiguate), when the device set was
+// never resolved, and when neither the probe nor the CUDA fallback can name the
+// device.
+func writeSingleDeviceEnv(b *strings.Builder, s Settings, exe string) {
 	set := s.GpuSetOrEmpty()
 	if !set.Multi() {
 		return
 	}
-	fmt.Fprintf(b, "    env:\n      - %q\n      - %q\n",
-		cudaOrderEnv, fmt.Sprintf("CUDA_VISIBLE_DEVICES=%d", set.PlanMainIndex()))
+	pin, isCuda := singleDeviceEnvFor(exe, set)
+	if pin == "" {
+		return
+	}
+	b.WriteString("    env:\n")
+	// CUDA_DEVICE_ORDER only means anything alongside CUDA_VISIBLE_DEVICES, and
+	// it is what makes the ordinal in it mean what nvidia-smi means.
+	if isCuda {
+		fmt.Fprintf(b, "      - %q\n", cudaOrderEnv)
+	}
+	fmt.Fprintf(b, "      - %q\n", pin)
+}
+
+// singleDeviceEnvFor returns the NAME=VALUE pin for the plan's main device as
+// this backend enumerates it, and whether it is the CUDA one.
+//
+// Preferred path: ask the binary what it calls its devices and read the ordinal
+// off the id it gives the main card ("Vulkan1" -> 1). That is the only way to
+// get a Vulkan or ROCm ordinal right, because the telemetry index is a different
+// enumeration and using it directly would pin the wrong adapter, silently.
+//
+// Fallback: CUDA alone, where CUDA_DEVICE_ORDER=PCI_BUS_ID makes the runtime's
+// ordinal agree with nvidia-smi's, so the telemetry index IS the right value.
+// Everything else refuses, which is the behaviour that shipped.
+func singleDeviceEnvFor(exe string, set GpuSet) (string, bool) {
+	main := set.PlanMainIndex()
+	if devs, err := ListBackendDevices(exe); err == nil {
+		if ids := set.BackendIDs(devs); len(ids) == len(set) {
+			for i, d := range set {
+				if d.Index != main {
+					continue
+				}
+				if name, ord, ok := visibleDevicesEnvFor(ids[i]); ok {
+					return name + "=" + ord, name == "CUDA_VISIBLE_DEVICES"
+				}
+				break
+			}
+		}
+	}
+	if usingCudaGPU() {
+		return fmt.Sprintf("CUDA_VISIBLE_DEVICES=%d", main), true
+	}
+	return "", false
+}
+
+// visibleDevicesEnvFor splits a backend device id into the variable that filters
+// that backend's device list and the ordinal to give it. The id carries both:
+// ggml names devices "<backend><ordinal>", and each backend's filter variable
+// indexes the same enumeration the id was numbered from.
+//
+// An unrecognised backend gets nothing rather than a guess. A filter variable
+// aimed at the wrong enumeration does not fail loudly, it just runs the model on
+// a card the sizer did not budget.
+func visibleDevicesEnvFor(id string) (string, string, bool) {
+	cut := strings.IndexFunc(id, func(r rune) bool { return r >= '0' && r <= '9' })
+	if cut <= 0 {
+		return "", "", false
+	}
+	ord := id[cut:]
+	switch strings.ToLower(id[:cut]) {
+	case "cuda":
+		return "CUDA_VISIBLE_DEVICES", ord, true
+	case "vulkan", "vk":
+		return "GGML_VK_VISIBLE_DEVICES", ord, true
+	case "rocm", "hip":
+		return "HIP_VISIBLE_DEVICES", ord, true
+	}
+	return "", "", false
 }
