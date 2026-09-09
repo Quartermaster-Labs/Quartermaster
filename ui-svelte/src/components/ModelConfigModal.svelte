@@ -112,7 +112,9 @@
   let cpuAuto = $state(true);
   let globalTargetGB = $state(0); // global VRAM budget; slider ceiling for vramTarget
   let spec = $state("");
-  // Vision-twin projector placement: "" auto | "gpu" | "ram" | "none".
+  // Projector placement for this model's TEXT ids (default + ctx tiers + named
+  // variants): "" / "ram" = host RAM, "gpu" = VRAM, "none" = no image input at
+  // all. The -vision twin has its own pin on the reserved vision variant.
   let mmprojMode = $state("");
   // Boolean toggles. Stored as strings on the override ("" = default-on, "off" =
   // forced off); surfaced here as plain on/off checkboxes (auto state dropped).
@@ -756,16 +758,18 @@
     { value: "on", label: "on" },
     { value: "off", label: "off" },
   ];
+  // Default tab: where the projector sits on the text ids (default + ctx tiers
+  // + named variants). Blank IS "ram", so the two share an entry - a stored
+  // "ram" normalises to "" on load.
   const MMPROJ_SEL: SelectOption[] = [
-    { value: "", label: "auto (sizer decides)" },
-    { value: "gpu", label: "on GPU (fast images)" },
-    { value: "ram", label: "in RAM (slow images, no VRAM)" },
-    { value: "none", label: "none (no vision twin)" },
+    { value: "", label: "in RAM (default, no VRAM cost)" },
+    { value: "gpu", label: "on GPU (fast images, costs VRAM)" },
+    { value: "none", label: "none (no image input)" },
   ];
-  // The variant copy inherits rather than autos: blank on the vision tab keeps
-  // whatever Default picked, so an untouched variant emits the same twin.
+  // The vision tab places the TWIN's projector, and only the twin's. Blank is
+  // the twin's own default (VRAM), not the Default tab's pick.
   const MMPROJ_SEL_INHERIT: SelectOption[] = [
-    { value: "", label: "inherit (Default's pick)" },
+    { value: "", label: "on GPU (twin default)" },
     { value: "gpu", label: "on GPU (fast images)" },
     { value: "ram", label: "in RAM (slow images, no VRAM)" },
     { value: "none", label: "none (no vision twin)" },
@@ -881,7 +885,8 @@
     cpuAuto = !o?.cpuOffload;
     cpuOffload = o?.cpuOffload || 0;
     spec = o?.spec ?? "";
-    mmprojMode = o?.mmproj ?? "";
+    // "ram" and blank are the same placement; collapse so the select matches.
+    mmprojMode = (o?.mmproj ?? "") === "ram" ? "" : (o?.mmproj ?? "");
     backend = o?.backend ?? "";
     vllmGpuUtil = o?.vllmGpuUtil ? o.vllmGpuUtil : "";
     vllmTensorParallel = o?.vllmTensorParallel ? o.vllmTensorParallel : "";
@@ -2304,7 +2309,7 @@
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-txtsecondary flex items-center gap-1">
                 Image projector
-                {@render hint("Where the vision twin's CLIP projector lives. Auto keeps it on the GPU while it costs neither GPU layers nor a quarter of the context window, and moves it to RAM otherwise. On GPU pins it there — fastest image encode, paid for in context/offload on every request. In RAM (--no-mmproj-offload) frees that VRAM and encodes images on the CPU instead: seconds per image, but token speed is untouched. None emits no vision twin at all.")}
+                {@render hint("Where this model's CLIP projector lives on its normal ids (default, context tiers, named variants) - every one of them loads it, so any of them takes images. In RAM (--no-mmproj-offload) is the default: no VRAM at all, so the context window and layer placement are exactly what they would be without images, paid for by a one-off CPU encode of each image sent. On GPU pins it in VRAM here too: fastest encode, and every request pays for it in context/offload whether it carries an image or not. None wires no projector anywhere and drops the vision twin. The twin is pinned separately, on its own tab.")}
                 {@render borrowedMmproj()}
               </span>
               <Select bind:value={mmprojMode} options={MMPROJ_SEL} ariaLabel="Image projector placement" />
@@ -2727,7 +2732,7 @@
               <label class="flex flex-col gap-1 text-sm col-span-2">
                 <span class="text-txtsecondary flex items-center gap-1">
                   Image projector
-                  {@render hint("Where this twin's CLIP projector lives. Inherit uses the Default tab's pick (auto = on the GPU while it costs neither GPU layers nor a quarter of the context window). On GPU pins it there - fastest image encode, paid for in context/offload on every request. In RAM (--no-mmproj-offload) frees that VRAM and encodes on the CPU: seconds per image, token speed untouched. None emits no vision twin at all.")}
+                  {@render hint("Where THIS twin's CLIP projector lives, and only this twin's: the Default tab pins the other ids. Blank keeps the twin on the GPU, which is what it exists for - the fastest image encode, paid for in context/offload on every request. In RAM (--no-mmproj-offload) frees that VRAM and encodes on the CPU: seconds per image, token speed untouched. None drops the twin; the other ids keep taking images.")}
                 </span>
                 <Select bind:value={sv.mmproj} options={MMPROJ_SEL_INHERIT} ariaLabel="Image projector placement" />
               </label>

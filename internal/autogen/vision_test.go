@@ -2,6 +2,7 @@ package autogen
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -31,36 +32,105 @@ func TestClipComputeBufferGB(t *testing.T) {
 	}
 }
 
-// The vision twin's projector is only worth its VRAM while it costs neither
-// layer placement nor a meaningful slice of the context window; otherwise the
-// sizer parks the CLIP tower on the CPU (--no-mmproj-offload).
-func TestCpuMmprojWins(t *testing.T) {
-	full := LoadPlan{Ngl: 99}
-	spilled := LoadPlan{Ngl: 60}
-	moeFull := LoadPlan{Ngl: 99, NCpuMoe: 0}
-	moeSpilled := LoadPlan{Ngl: 99, NCpuMoe: 12}
-
-	tests := []struct {
-		name             string
-		gpuPlan, cpuPlan LoadPlan
-		gpuCtx, cpuCtx   int
-		want             bool
-	}{
-		// Placement: the projector pushed dense layers / MoE experts off the GPU.
-		// That tax is per token, so the CPU encode always wins — even at equal ctx.
-		{"dense layers displaced", spilled, full, 32768, 32768, true},
-		{"moe experts displaced", moeSpilled, moeFull, 32768, 32768, true},
-		// Window: same placement, but the projector ate more than a quarter of it.
-		{"window halved", full, full, 16384, 32768, true},
-		{"window barely dented", full, full, 28672, 32768, false},
-		// The projector fit in the slack — keep the fast GPU encode.
-		{"projector free", full, full, 32768, 32768, false},
+// A served id that cannot take an image is a trap: llama-server loads the CLIP
+// projector at spawn and nowhere else, so a process launched without --mmproj
+// answers every image with "image input is not supported" until it is evicted.
+// Every profile of a model that HAS a projector therefore loads one. Placement
+// is what differs: the default and its tiers keep it in RAM, where it costs no
+// VRAM and so cannot shrink the window or push layers off the GPU, while the
+// "-vision" twin pays for GPU residency to encode fast.
+func TestAutogen_Generate_ProjectorOnEveryProfile(t *testing.T) {
+	if _, err := os.Stat(realModelsRoot); err != nil {
+		t.Skipf("models root %s absent", realModelsRoot)
 	}
-	for _, tc := range tests {
-		if got := cpuMmprojWins(tc.gpuPlan, tc.gpuCtx, tc.cpuPlan, tc.cpuCtx); got != tc.want {
-			t.Errorf("%s: cpuMmprojWins = %v, want %v", tc.name, got, tc.want)
+	target := firstModelWithProjector(t)
+
+	gen := func(ov Override) map[string]string {
+		t.Helper()
+		ov.Match = "*" + filepath.Base(target.FullPath)
+		gf := GenerateFile{
+			Settings:  Settings{ModelsRoot: realModelsRoot},
+			Overrides: []Override{ov},
+		}
+		gf.Settings.applyDefaults()
+		out, err := Generate(gf, "T")
+		if err != nil {
+			t.Fatalf("generate: %v", err)
+		}
+		// Keep only the blocks launching THIS gguf; every other model in the
+		// tree is untouched by the override.
+		got := blocksFor(out, target.FullPath)
+		if len(got) == 0 {
+			t.Fatalf("no emitted block loads %s", target.FullPath)
+		}
+		return got
+	}
+
+	proj := "--mmproj " + strings.ReplaceAll(target.MmprojPath, "\\", "/")
+	blocks := gen(Override{})
+	twins := 0
+	for id, cmd := range blocks {
+		if !strings.Contains(cmd, proj) {
+			t.Errorf("%s: no %q - this id 500s on every image", id, proj)
+			continue
+		}
+		onCPU := strings.Contains(cmd, "--no-mmproj-offload")
+		if isTwin := strings.HasSuffix(id, "-vision"); isTwin {
+			twins++
+			if onCPU {
+				t.Errorf("%s: the vision twin exists to hold the projector in VRAM, got --no-mmproj-offload", id)
+			}
+		} else if !onCPU {
+			t.Errorf("%s: default/tier profiles must keep the projector in RAM, got no --no-mmproj-offload", id)
 		}
 	}
+	if twins != 1 {
+		t.Errorf("got %d vision twins, want exactly 1", twins)
+	}
+
+	// The Default tab's pin buys VRAM residency for the non-twin profiles; it
+	// never reaches the twin, which is already GPU-resident.
+	for id, cmd := range gen(Override{Mmproj: "gpu"}) {
+		if strings.Contains(cmd, "--no-mmproj-offload") {
+			t.Errorf("%s: mmproj=gpu must pin the projector in VRAM everywhere", id)
+		}
+	}
+	// "none" opts the model out of vision entirely - no projector, no twin.
+	for id, cmd := range gen(Override{Mmproj: "none"}) {
+		if strings.Contains(cmd, "--mmproj") {
+			t.Errorf("%s: mmproj=none must emit no projector", id)
+		}
+		if strings.HasSuffix(id, "-vision") {
+			t.Errorf("mmproj=none still emitted the twin %s", id)
+		}
+	}
+}
+
+// blocksFor keeps the emitted blocks that launch one gguf. The path is its own
+// folded cmd line, so the match ends at the newline: "-m <path>" is a prefix of
+// nothing else, but a bare Contains would also hit a longer sibling path.
+func blocksFor(out, ggufPath string) map[string]string {
+	want := "-m " + strings.ReplaceAll(ggufPath, "\\", "/") + "\n"
+	got := map[string]string{}
+	for id, cmd := range modelBlocks(out) {
+		if strings.Contains(cmd, want) {
+			got[id] = cmd
+		}
+	}
+	return got
+}
+
+// modelBlocks splits a generated config into served id -> cmd text.
+func modelBlocks(out string) map[string]string {
+	blocks := map[string]string{}
+	for _, chunk := range strings.Split(out, "\n  \"")[1:] {
+		id, rest, ok := strings.Cut(chunk, "\":\n")
+		if !ok {
+			continue
+		}
+		blocks[id] = rest
+	}
+	return blocks
 }
 
 // The spawn-time guard must agree with the baked plan: an argv carrying
@@ -116,19 +186,21 @@ func TestAutogen_Generate_MmprojPin(t *testing.T) {
 	}
 }
 
-// The reserved "vision" variant is the only variant whose profile carries a
-// projector, so its pin has to beat the model-wide one - including "none",
-// which is checked past the twin-construction gate.
+// Two pins, two audiences: the model-wide one (the config modal's Default tab)
+// places the projector on the default profile and its tiers, the reserved
+// "vision" variant places it on the twin. Neither reaches the other's profiles,
+// so a variant "none" drops the twin while the text ids keep image input.
 func TestAutogen_Generate_MmprojPin_VisionVariant(t *testing.T) {
 	if _, err := os.Stat(realModelsRoot); err != nil {
 		t.Skipf("models root %s absent", realModelsRoot)
 	}
-	gen := func(model, variant string) string {
+	target := firstModelWithProjector(t)
+	gen := func(model, variant string) (twin string, others map[string]string) {
 		t.Helper()
 		gf := GenerateFile{
 			Settings: Settings{ModelsRoot: realModelsRoot},
 			Overrides: []Override{{
-				Match:    "*",
+				Match:    "*" + filepath.Base(target.FullPath),
 				Mmproj:   model,
 				Variants: []VariantSpec{{Name: "vision", Mmproj: variant}},
 			}},
@@ -138,22 +210,72 @@ func TestAutogen_Generate_MmprojPin_VisionVariant(t *testing.T) {
 		if err != nil {
 			t.Fatalf("generate(%q/%q): %v", model, variant, err)
 		}
-		return out
+		others = map[string]string{}
+		for id, cmd := range blocksFor(out, target.FullPath) {
+			if strings.HasSuffix(id, "-vision") {
+				twin = cmd
+				continue
+			}
+			others[id] = cmd
+		}
+		if len(others) == 0 {
+			t.Fatalf("generate(%q/%q): no non-twin block for %s", model, variant, target.FullPath)
+		}
+		return twin, others
 	}
 
-	if auto := gen("", ""); !strings.Contains(auto, "-vision\":") {
-		t.Skip("no model in the tree ships an mmproj; nothing to pin")
+	// Model "gpu" + variant "ram": exactly inverted from the defaults.
+	twin, others := gen("gpu", "ram")
+	if !strings.Contains(twin, "--no-mmproj-offload") {
+		t.Error(`variant "ram": expected the twin's projector in RAM`)
 	}
-	if got := gen("gpu", "ram"); !strings.Contains(got, "--no-mmproj-offload") {
-		t.Error(`variant "ram" over model "gpu": expected --no-mmproj-offload`)
+	for id, cmd := range others {
+		if strings.Contains(cmd, "--no-mmproj-offload") {
+			t.Errorf(`%s: model pin "gpu" must hold the projector in VRAM`, id)
+		}
 	}
-	if got := gen("ram", "gpu"); strings.Contains(got, "--no-mmproj-offload") {
-		t.Error(`variant "gpu" over model "ram": expected the projector back in VRAM`)
+
+	twin, others = gen("ram", "gpu")
+	if strings.Contains(twin, "--no-mmproj-offload") {
+		t.Error(`variant "gpu": expected the twin's projector back in VRAM`)
 	}
-	// Checked on the flag, not the id: an image-class model treats a variant
-	// named "vision" as an ordinary image variant, so "<name>-vision" still
-	// appears for those - but only a llama twin ever emits --mmproj.
-	if got := gen("", "none"); strings.Contains(got, "--mmproj ") {
-		t.Error(`variant "none": expected no projector loaded anywhere`)
+	for id, cmd := range others {
+		if !strings.Contains(cmd, "--no-mmproj-offload") {
+			t.Errorf(`%s: model pin "ram" must keep the projector off the GPU`, id)
+		}
 	}
+
+	// A variant "none" is checked past the twin-construction gate, so it drops
+	// the twin - and only the twin. The text ids still take images.
+	twin, others = gen("", "none")
+	if twin != "" {
+		t.Error(`variant "none": expected no vision twin`)
+	}
+	for id, cmd := range others {
+		if !strings.Contains(cmd, "--mmproj ") {
+			t.Errorf(`%s: variant "none" must not disarm the other profiles`, id)
+		}
+	}
+}
+
+// firstModelWithProjector picks an ordinary text LLM that discovery paired with
+// a CLIP projector, skipping the image and SAM classes that never grow a twin.
+func firstModelWithProjector(t *testing.T) GgufRow {
+	t.Helper()
+	rows, err := DiscoverGgufModelsMulti([]string{realModelsRoot})
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	for _, r := range rows {
+		if r.MmprojPath == "" || r.IsSam {
+			continue
+		}
+		meta, err := ReadGgufMetadataCached(r.FullPath)
+		if err != nil || meta.BlockCount == 0 || meta.Architecture == "clip" || isImageArch(meta.Architecture) {
+			continue
+		}
+		return r
+	}
+	t.Skip("no text model with a paired projector in the tree")
+	return GgufRow{}
 }

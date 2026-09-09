@@ -136,7 +136,9 @@ func TestAutogen_Generate_MmprojFileCreatesTwin(t *testing.T) {
 	if got, want := twins(set), twins(base)+1; got != want {
 		t.Errorf("explicit mmprojFile: %d vision twins, want %d (the override must create one)", got, want)
 	}
-	if got, want := strings.Count(set, flag), strings.Count(base, flag)+1; got != want {
+	// The projector lands on EVERY profile of the target, not just the twin, so
+	// the delta is the target's whole block count rather than a flat +1.
+	if got, want := strings.Count(set, flag), strings.Count(base, flag)+len(blocksFor(set, target.FullPath)); got != want {
 		t.Errorf("explicit mmprojFile: %d uses of %q, want %d", got, flag, want)
 	}
 
@@ -198,10 +200,13 @@ func TestAutogen_Generate_MmprojFileBeatsDirLocal(t *testing.T) {
 	base := gen()
 	out := gen(Override{Match: "*" + filepath.Base(withProj.FullPath), MmprojFile: other})
 
-	if got, want := strings.Count(out, otherFlag), strings.Count(base, otherFlag)+1; got != want {
+	// Every profile of the target carries a projector, so the swap moves n uses
+	// at once, where n is how many blocks that gguf emits.
+	n := len(blocksFor(out, withProj.FullPath))
+	if got, want := strings.Count(out, otherFlag), strings.Count(base, otherFlag)+n; got != want {
 		t.Errorf("explicit %q: %d uses, want %d", other, got, want)
 	}
-	if got, want := strings.Count(out, localFlag), strings.Count(base, localFlag)-1; got != want {
+	if got, want := strings.Count(out, localFlag), strings.Count(base, localFlag)-n; got != want {
 		t.Errorf("dir-local %q: %d uses, want %d (the override must replace it)", withProj.MmprojPath, got, want)
 	}
 }
