@@ -70,15 +70,22 @@ type profile struct {
 	// layer over the model-wide override at emit so a variant carries the full
 	// launch shape. Solo/ctx-tier profiles leave this nil and use the override.
 	Variant *VariantSpec
-	// Vision marks the auto-generated "-vision" twin: emits --mmproj <projector>
-	// and an image-input capabilities block so the playground can attach images.
+	// Vision marks a profile that loads the CLIP projector: emits --mmproj
+	// <projector> and an image-input capabilities block so a client can send
+	// images. EVERY profile of a model with a projector carries this, not just
+	// the "-vision" twin — a served id that silently rejects images is a trap,
+	// since llama-server can only load a projector at spawn time and answers an
+	// image with "image input is not supported" for the life of the process.
+	// The twin remains as the id whose projector is GPU-resident.
 	Vision bool
 	// MmprojGB is the projector footprint (weights + CLIP compute reserve) this
-	// vision twin charges as VRAM overhead. Kept separate from Overhead so the
-	// sizer can price the twin a second time with the projector on the CPU.
+	// profile charges as VRAM overhead. Zero when CpuMmproj puts it in RAM.
 	MmprojGB float64
-	// MmprojPin is the model override's explicit placement for the projector
-	// ("gpu"/"ram"); "" leaves the sizer's auto fallback in charge.
+	// MmprojPin is the resolved projector placement for this profile, "gpu" or
+	// "ram". Defaults differ by profile: the "-vision" twin is GPU-resident (it
+	// exists to encode images fast), every other profile keeps it in RAM (vision
+	// is the exception there, and the text side must not pay for it). The Default
+	// tab's mmproj override sets the former, the "vision" variant's the latter.
 	MmprojPin string
 	// TensorSplit is the resolved per-device layer ratio for a multi-GPU plan,
 	// one entry per eligible device in Index order, or nil for a single-GPU box
@@ -90,10 +97,11 @@ type profile struct {
 	// -1 when there is nothing to pin (single GPU / no telemetry).
 	MainGpu int
 	// CpuMmproj emits --no-mmproj-offload: the CLIP projector runs on the CPU, so
-	// it costs no VRAM and the twin keeps the ctx/layer placement it would have
-	// had without vision, at the price of a slow (host-side) image encode. Set by
-	// the sizer only when the GPU-resident projector actually costs placement or
-	// a quarter of the context window (see cpuMmprojWins).
+	// it costs no VRAM and the profile keeps the ctx/layer placement it would
+	// have had without vision, at the price of a slow (host-side) image encode.
+	// That trade is why it is the default everywhere except the "-vision" twin:
+	// the encode is a one-off per image, while VRAM spent on a projector is paid
+	// by every token of every request, image or not.
 	CpuMmproj bool
 }
 
@@ -400,14 +408,42 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		mmprojFile = inheritStr(v.MmprojFile, mmprojFile)
 	}
 	mmprojPath, mmprojSizeGB := mmprojFor(row, mmprojFile)
-	if mmprojPath != "" && !strings.EqualFold(override.Mmproj, "none") {
+	modelPin := strings.ToLower(strings.TrimSpace(override.Mmproj))
+	if mmprojPath != "" && modelPin != "none" {
 		mmprojOh := MmprojVramGB(mmprojPath, mmprojSizeGB, s)
+		// Every OTHER profile of this model loads the projector too, in RAM
+		// (--no-mmproj-offload). A projector on the CPU costs no VRAM and so
+		// changes neither the context window nor the layer placement these
+		// profiles would have had without it — the only cost is a one-off encode
+		// per image, on the requests that actually carry one. That makes "wire it
+		// everywhere" strictly better than the alternative, which was a default id
+		// that 500s on an image for the life of the process. The Default tab's
+		// mmproj pin overrides the placement ("gpu" to pay VRAM for a fast encode
+		// here too); "none" above opts the model out of vision entirely.
+		defPin := modelPin
+		if defPin == "" {
+			defPin = "ram"
+		}
+		for i := range profiles {
+			p := &profiles[i]
+			p.Vision = true
+			p.MmprojPin = defPin
+			if defPin == "ram" {
+				p.CpuMmproj = true
+			} else {
+				p.MmprojGB = mmprojOh
+				p.Overhead += mmprojOh
+			}
+		}
+		// The twin is the id that pays VRAM for the projector, so its default is
+		// the opposite: GPU-resident, for an image encode an order of magnitude
+		// faster than the host-side one. The reserved "vision" variant re-pins it.
 		vp := profile{
 			Name:              fmt.Sprintf("%s-vision", name),
 			Target:            soloTarget,
 			Overhead:          s.VramOverheadGB + specOh + mmprojOh,
 			MmprojGB:          mmprojOh,
-			MmprojPin:         strings.ToLower(strings.TrimSpace(override.Mmproj)),
+			MmprojPin:         "gpu",
 			Ctx:               override.Ctx,
 			CheckpointMinStep: override.CheckpointMinStep,
 			Vision:            true,
@@ -448,17 +484,19 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 				vp.CheckpointMinStep = v.CheckpointMinStep
 			}
 			vp.Variant = v
-			// The vision variant IS the twin, so its pin outranks the model-wide
-			// one; blank keeps whatever Default set.
+			// The vision variant IS the twin, so it is the only thing that repins
+			// the twin's projector; blank keeps the GPU default above. The Default
+			// tab's pin governs the other profiles and never reaches here.
 			if p := strings.ToLower(strings.TrimSpace(v.Mmproj)); p != "" {
 				vp.MmprojPin = p
 			}
 		}
-		// A "ram" pin is applied here rather than in the sizing loop so the
-		// variant re-charge above (which rebuilds Overhead from scratch for a
-		// vision variant with its own spec) can't hand the projector back.
+		// A "ram" pin is applied here rather than at construction so the variant
+		// re-charge above (which rebuilds Overhead from scratch for a vision
+		// variant with its own spec) can't hand the projector back.
 		if vp.MmprojPin == "ram" {
 			vp.Overhead -= mmprojOh
+			vp.MmprojGB = 0
 			vp.CpuMmproj = true
 		}
 		// "none" from the vision variant lands here rather than at the gate above,
@@ -573,24 +611,6 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		ctx, plan, kvReserve, planCkptGB, err := sizeProfile(meta, s, prof, ptg, kcg, pModelMax, pkvInRam)
 		if err != nil {
 			return err
-		}
-		// A "-vision" twin holds the CLIP projector in VRAM by default, and the
-		// sizer pays for it out of the same budget as the text model: fewer GPU
-		// layers, or a smaller window. llama-server's --no-mmproj-offload moves the
-		// projector to the CPU, which costs image-encode latency ONCE per image but
-		// nothing per token. So price the twin both ways and keep the projector on
-		// the GPU only while it is affordable — the fallback is what lets any model
-		// with a compatible projector carry a vision twin without the text side
-		// paying for it.
-		if prof.Vision && prof.MmprojGB > 0 && prof.MmprojPin == "" {
-			cpuProf := prof
-			cpuProf.Overhead -= prof.MmprojGB
-			cpuProf.CpuMmproj = true
-			cCtx, cPlan, cKvReserve, cCkptGB, cErr := sizeProfile(meta, s, cpuProf, ptg, kcg, pModelMax, pkvInRam)
-			if cErr == nil && cpuMmprojWins(plan, ctx, cPlan, cCtx) {
-				prof = cpuProf
-				ctx, plan, kvReserve, planCkptGB = cCtx, cPlan, cKvReserve, cCkptGB
-			}
 		}
 		ngl, ncpuMoe := forceLowActiveMoE(meta, plan, prof, kvReserve)
 		if prof.CpuOffload > 0 {

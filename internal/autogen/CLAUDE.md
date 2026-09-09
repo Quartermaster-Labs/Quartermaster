@@ -32,7 +32,7 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 | `kvcost.go` | KV-cache cost model (`GetKvCostModel`) + context-budget math (`MaxCtxForBudget`, `KvReserveGB`, `RoundedCtx`, `GetDenseCtx`, `defaultKvQuant`). → `sizing.md` |
 | `plan.go` | VRAM budget → placement: `-ngl`/`--n-cpu-moe` for dense and MoE (`GetLoadPlan`, `densePlacement`); MoE expert-share table + `effectiveShare`. → `sizing.md` |
 | `generate.go` | Top-level orchestration (`Generate`): builds per-model profiles (solo, ctx tiers, named variants), sizes each, emits the YAML. `emitModel`/`RenderSoloCmd` **dispatch by model class** (SAM → image → embedding → TTS → ASR → LLM). This file is the profile loop; the three phases live in the siblings below. |
-| `generate_sizing.go` | Phase 1 — sizing math: `sizeProfile`, `--ctx-checkpoints` count + `checkpointReserveGB`, `forceLowActiveMoE`/`applyForcedOffload`/`estForOffload`, `computeBufferGB`, `MmprojVramGB`, `cpuMmprojWins`, `draftOverheadGB`. Pure arithmetic over `Metadata` + `Settings`. → `sizing.md` |
+| `generate_sizing.go` | Phase 1 — sizing math: `sizeProfile`, `--ctx-checkpoints` count + `checkpointReserveGB`, `forceLowActiveMoE`/`applyForcedOffload`/`estForOffload`, `computeBufferGB`, `MmprojVramGB`, `draftOverheadGB`. Pure arithmetic over `Metadata` + `Settings`. → `sizing.md` |
 | `generate_cmd.go` | Phase 2 — command rendering: `buildCmdLines` (the per-class argv builder) and `RenderSoloCmd` (same with a `${PORT}` placeholder, for the UI preview + ad-hoc commands), plus `effectiveUb`, `effectiveSpec`/`specHas`, `cmdPath`, `needsQwenFixedChatTemplate`, `defaultSamplerFor`/`samplerLines`. |
 | `generate_emit.go` | Phase 3 — YAML emission: non-model sections (`emitSlotCache`, `emitAPIKeys`, `emitGroupsAndListeners`, `writeGroup`) and per-model bits (`emitProfile`, `writeDisplayName`, `writeEstVram`/`writeEstRam`, `effortLevels`, `formatCtxTag`, `slugify`). |
 | `estimate.go` | One-shot preview (`EstimatePlan`) of a candidate tuning for the web editor; reuses the solo-profile sizing path without writing config. |
@@ -79,23 +79,27 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   sidecar or DFlash drafter, `MmprojPath` a same-dir clip projector. When a dir ships neither,
   `inheritSidecars` (`family.go`) borrows one from a compatible family member — see the gotcha
   below.
-- Vision twin projector placement (`generate.go` profile loop + `cpuMmprojWins`) — every
-  `-vision` twin is sized TWICE: once with the CLIP projector resident in VRAM (`MmprojGB`
-  charged to `Overhead`) and once with it on the CPU. The CPU sizing wins, and the twin emits
-  `--no-mmproj-offload`, when the GPU-resident projector displaced text layers (lower `-ngl` /
-  more `--n-cpu-moe`) or cost more than a quarter of the context window. Placement first: that
-  tax is per token, the CPU encode is a one-off per image. `LiveOffloadArgs` and the editor
-  preview (`configapi_estimate.go`) both skip the `MmprojGB` charge when the argv carries the
-  flag, so all three price the same launch. `Override.Mmproj` pins the decision per model —
-  `gpu` / `ram` skip the dual sizing, `none` emits no twin at all (unlike an unlisted twin,
-  which still builds). Surfaced as the "Image projector" dropdown on the model config modal's
-  Default tab, shown only when the model resolves to a projector at all (discovered, or named
-  by `mmprojFile` below). `VariantSpec.Mmproj` repeats the knob
-  on the reserved `vision` variant and OUTRANKS the model-wide pin there (blank = inherit); it
-  is deliberately absent from every other variant tab, because no other variant's profile loads
-  a projector at all. Careful: an image-class model routes through `emitImageModel` before the
-  twin gate, so a variant literally named `vision` is an ordinary image variant for those —
-  assert on `--mmproj`, not on the `-vision` id.
+- Projector placement (`generate.go` profile loop) — if a model resolves to a projector, EVERY
+  profile of it loads one (`prof.Vision`), not just the `-vision` twin. llama-server reads
+  `--mmproj` at spawn and nowhere else, so a served id launched without it answers every image
+  with `image input is not supported` for the life of the process: a text id that silently
+  rejects images is a trap, and the router never inspects the body to route around it. What
+  differs is placement. Default profile, ctx tiers and named variants get the projector in RAM
+  (`CpuMmproj` → `--no-mmproj-offload`): zero VRAM, so the window and the layer placement are
+  exactly what they would have been without it, at the cost of a one-off host-side encode on
+  the requests that actually carry an image. The `-vision` twin is the id that pays VRAM for it
+  (`MmprojGB` charged to `Overhead`), which is what it exists for. `LiveOffloadArgs` and the
+  editor preview (`configapi_estimate.go`) both skip the `MmprojGB` charge when the argv
+  carries the flag, so all three price the same launch. Two pins, two audiences:
+  `Override.Mmproj` (the "Image projector" dropdown on the model config modal's Default tab,
+  shown only when a projector resolves at all) places it on the non-twin profiles — `gpu` buys
+  VRAM residency there too, `none` opts the whole model out of vision including the twin.
+  `VariantSpec.Mmproj` on the reserved `vision` variant places the TWIN's, and is the only
+  thing that does; blank keeps the GPU default, `none` there drops the twin alone and leaves
+  the text ids taking images. It is deliberately absent from every other variant tab, since
+  those inherit the model-wide pin. Careful: an image-class model routes through
+  `emitImageModel` before the twin gate, so a variant literally named `vision` is an ordinary
+  image variant for those — assert on `--mmproj`, not on the `-vision` id.
 - `GetLoadPlan` (`plan.go`) — `-ngl`/`--n-cpu-moe` from a VRAM budget; MoE path uses a 0.5
   PCIe-thrash crossover, falling back to naive `-ngl` (`densePlacement`) past it.
 - `Generate` (`generate.go`) — discover → per-model `emitModel` → `emitGroupsAndListeners`.
