@@ -30,7 +30,7 @@ import time
 import urllib.request
 
 BASE = os.environ.get("QM_BASE", "http://localhost:1250").rstrip("/")
-KEY = os.environ.get("QM_KEY", "qm-7f9ead612acb74ed4e6d23f0c758d129dbad9c434b4f17bb")
+KEY = os.environ.get("QM_KEY", "")
 MODEL = os.environ.get("QM_MODEL", "qwen3.6-35b-a3b-ud-q4_k_xl-64k")
 PROMPT_TOKENS = int(os.environ.get("QM_PROMPT_TOKENS", "32000"))
 
@@ -344,6 +344,10 @@ def mode_append(sysprompt):
 
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "switch"
+    if not KEY:
+        print("QM_KEY is unset. Export one of the keys from your config.yaml apiKeys")
+        print("before running, e.g.  QM_KEY=qm-... python scripts/kvcache_probe.py")
+        sys.exit(2)
     preflight()
     sysprompt = "You are the quartermaster. Answer tersely."
     if mode == "switch":
