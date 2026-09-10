@@ -32,8 +32,14 @@ type Process interface {
 	WaitReady(context.Context) error
 
 	// Stop blocks until the process has terminated. It returns nil when
-	// the process terminated as expected (exit 0)
+	// the process terminated as expected (exit 0). Equivalent to
+	// StopWithReason(StopManual, timeout).
 	Stop(timeout time.Duration) error
+
+	// StopWithReason is Stop, tagged with WHY the teardown is happening. The
+	// reason is handed to the pre-stop hook, which uses it to decide whether
+	// the shutdown is worth spending time on (see StopReason).
+	StopWithReason(reason StopReason, timeout time.Duration) error
 
 	// State returns the current state of the process
 	// Note: this is a snapshot of the state at the time of the call
@@ -62,8 +68,10 @@ type Process interface {
 	// SetPreStop installs a hook run once just before the process is torn down
 	// (by TTL, eviction, or explicit Stop), while it is still serving. Used to
 	// snapshot live state — e.g. persist the slot KV — before the upstream dies.
+	// It is passed the reason for the teardown so it can skip work that is not
+	// worth the delay (a hand-unloaded model nobody is waiting for).
 	// Call once before serving; safe for concurrent set via atomic store.
-	SetPreStop(fn func())
+	SetPreStop(fn func(StopReason))
 
 	// SetPostStart installs a hook run once each time the process becomes Ready,
 	// before any queued request is granted. Used to prime live state — e.g.
@@ -89,3 +97,27 @@ type Process interface {
 	// spawn-time offload rewrite, differs from the current config command.
 	LaunchedCmd() string
 }
+
+// StopReason says why a process is being torn down. It exists so the pre-stop
+// hook can tell a teardown the user is WAITING ON from one they will come back
+// from: persisting a multi-gigabyte slot KV is worth a few seconds when the
+// model is going to be needed again, and is pure dead time when the operator
+// just pressed Unload.
+type StopReason uint8
+
+const (
+	// StopManual is an operator-initiated unload (the Unload button / API), and
+	// the zero value, so any caller that does not care gets the conservative
+	// "somebody is watching this, don't dawdle" behaviour.
+	StopManual StopReason = iota
+	// StopTTL is the idle timer expiring on a model that was left loaded.
+	StopTTL
+	// StopEvict is an eviction to make room for a different model. The evicted
+	// model did not choose to go: whoever was using it will be back, and will
+	// pay a cold prefill for it.
+	StopEvict
+	// StopShutdown is the whole app going away.
+	StopShutdown
+	// StopConfig is a config reload dropping a model that no longer exists.
+	StopConfig
+)

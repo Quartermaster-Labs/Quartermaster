@@ -103,6 +103,7 @@ type runReq struct {
 }
 
 type stopReq struct {
+	reason  StopReason
 	timeout time.Duration
 	respond chan error
 }
@@ -163,7 +164,7 @@ type ProcessCommand struct {
 	// Stop (TTL idle, eviction, or explicit). Fired while still StateReady so it
 	// can reach the live upstream (e.g. save its slot KV). Atomic: set from another
 	// goroutine at startup, read by run().
-	preStop atomic.Pointer[func()]
+	preStop atomic.Pointer[func(StopReason)]
 
 	// postStart, when set, runs once each time the process reaches StateReady,
 	// before WaitReady callers are woken - so it can prime the upstream (e.g.
@@ -226,7 +227,7 @@ func (p *ProcessCommand) LaunchedCmd() string {
 }
 
 // SetPreStop installs the pre-teardown hook. See Process.SetPreStop.
-func (p *ProcessCommand) SetPreStop(fn func()) { p.preStop.Store(&fn) }
+func (p *ProcessCommand) SetPreStop(fn func(StopReason)) { p.preStop.Store(&fn) }
 
 // SetPostStart installs the post-ready hook. See Process.SetPostStart.
 func (p *ProcessCommand) SetPostStart(fn func()) { p.postStart.Store(&fn) }
@@ -410,7 +411,7 @@ func (p *ProcessCommand) run() {
 								}
 								if time.Since(time.Unix(0, p.lastUse.Load())) > ttlDuration {
 									p.proxyLogger.Infof("<%s> Unloading model, TTL of %ds reached", p.id, unloadAfter)
-									p.Stop(10 * time.Second)
+									p.StopWithReason(StopTTL, 10*time.Second)
 									return
 								}
 							}
@@ -477,7 +478,7 @@ func (p *ProcessCommand) run() {
 				// Fire the pre-stop hook while still StateReady so it can reach the
 				// live upstream (e.g. save slot KV) before we kill it.
 				if fp := p.preStop.Load(); fp != nil {
-					(*fp)()
+					(*fp)(stop.reason)
 				}
 				// Counterpart to the "starting"/"ready" pair: without this the
 				// only unload the log ever mentioned was the TTL one, so a model
@@ -879,7 +880,13 @@ func (p *ProcessCommand) WaitReady(ctx context.Context) error {
 }
 
 func (p *ProcessCommand) Stop(timeout time.Duration) error {
+	return p.StopWithReason(StopManual, timeout)
+}
+
+// StopWithReason implements Process.StopWithReason.
+func (p *ProcessCommand) StopWithReason(reason StopReason, timeout time.Duration) error {
 	req := stopReq{
+		reason:  reason,
 		timeout: timeout,
 		respond: make(chan error, 1),
 	}

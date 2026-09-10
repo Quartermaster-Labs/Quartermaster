@@ -61,7 +61,7 @@ type baseRouter struct {
 	// it newly creates for added models. Set once (before serving) via SetPreEvict
 	// /SetPostLoad/SetSpawnArgs; stored atomically since ApplyConfig reads them on
 	// the run goroutine while Set* writes from the constructing goroutine.
-	preEvictFn  atomic.Pointer[func(string)]
+	preEvictFn  atomic.Pointer[func(string, process.StopReason)]
 	postLoadFn  atomic.Pointer[func(string)]
 	spawnArgsFn atomic.Pointer[func(string, []string) ([]string, error)]
 
@@ -156,14 +156,16 @@ func (b *baseRouter) procs() map[string]process.Process { return *b.processes.Lo
 
 // SetPreEvict installs a save-before-stop hook on every managed process. The
 // process fires it (with its model ID bound) just before tearing down for ANY
-// reason — TTL idle unload, eviction, or explicit Stop — so the slot KV cache
-// can snapshot the conversation before the upstream dies. Call once before
-// serving; the process map is fixed at construction.
-func (b *baseRouter) SetPreEvict(fn func(modelID string)) {
+// reason — TTL idle unload, eviction, shutdown, or an explicit Stop — so the
+// slot KV cache can snapshot the conversation before the upstream dies. The
+// reason comes with it: the hook, not this layer, decides which teardowns are
+// worth the delay. Call once before serving; the process map is fixed at
+// construction.
+func (b *baseRouter) SetPreEvict(fn func(modelID string, reason process.StopReason)) {
 	b.preEvictFn.Store(&fn)
 	for id, p := range b.procs() {
 		id := id
-		p.SetPreStop(func() { fn(id) })
+		p.SetPreStop(func(r process.StopReason) { fn(id, r) })
 	}
 }
 
@@ -202,7 +204,7 @@ func (b *baseRouter) SetLiveVramBudget(fn LiveVramFn) { b.liveVram.set(fn) }
 func (b *baseRouter) applyHooks(id string, p process.Process) {
 	if fp := b.preEvictFn.Load(); fp != nil {
 		fn := *fp
-		p.SetPreStop(func() { fn(id) })
+		p.SetPreStop(func(r process.StopReason) { fn(id, r) })
 	}
 	if fp := b.postLoadFn.Load(); fp != nil {
 		fn := *fp
@@ -419,7 +421,9 @@ func (b *baseRouter) doSwap(modelID string, toStop []string) {
 		wg.Add(1)
 		go func(p process.Process, id string) {
 			defer wg.Done()
-			if err := p.Stop(timeout); err != nil {
+			// StopEvict, not a plain Stop: an evicted model is coming back, so
+			// the pre-stop hook snapshots its KV. A hand-pressed Unload does not.
+			if err := p.StopWithReason(process.StopEvict, timeout); err != nil {
 				b.logger.Warnf("%s: stopping %s failed: %v", b.name, id, err)
 			}
 		}(p, mID)
@@ -476,7 +480,7 @@ func (b *baseRouter) handleShutdown(req shutdownReq) {
 		wg.Add(1)
 		go func(id string, p process.Process) {
 			defer wg.Done()
-			if err := p.Stop(stopTimeout); err != nil {
+			if err := p.StopWithReason(process.StopShutdown, stopTimeout); err != nil {
 				b.logger.Warnf("%s failed to stop process %s: %v", b.name, id, err)
 			}
 		}(i, p)
@@ -679,7 +683,7 @@ func (b *baseRouter) handleApplyConfig(newCfg config.Config) error {
 				wg.Add(1)
 				go func(p process.Process) {
 					defer wg.Done()
-					if err := p.Stop(timeout); err != nil {
+					if err := p.StopWithReason(process.StopConfig, timeout); err != nil {
 						b.logger.Warnf("%s: stopping removed process failed: %v", b.name, err)
 					}
 				}(p)

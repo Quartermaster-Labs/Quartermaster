@@ -54,12 +54,20 @@ func TestBaseRouter_SetPreEvict(t *testing.T) {
 	b := newTestBase(t, map[string]process.Process{"a": a}, &stubPlanner{})
 
 	var got atomic.Pointer[string]
-	b.SetPreEvict(func(id string) { got.Store(&id) })
+	var gotReason atomic.Uint32
+	b.SetPreEvict(func(id string, r process.StopReason) {
+		got.Store(&id)
+		gotReason.Store(uint32(r))
+	})
 
 	b.Unload(time.Second, "a")
 
 	if p := got.Load(); p == nil || *p != "a" {
 		t.Fatalf("preEvict hook not fired with model id; got %v", p)
+	}
+	// An operator-driven Unload is the reason that must NOT trigger a KV save.
+	if r := process.StopReason(gotReason.Load()); r != process.StopManual {
+		t.Errorf("Unload reported reason %d, want StopManual", r)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/quartermaster-labs/quartermaster/internal/config"
 	"github.com/quartermaster-labs/quartermaster/internal/logmon"
+	"github.com/quartermaster-labs/quartermaster/internal/process"
 	"github.com/quartermaster-labs/quartermaster/internal/shared"
 )
 
@@ -709,6 +710,29 @@ func (sc *slotCache) synthPrefill(ctx context.Context, base, model string, idx i
 // shrink it.
 var hookLockWait = 10 * time.Second
 
+// worthSavingOn reports whether a teardown for this reason justifies the seconds
+// a multi-gigabyte KV snapshot costs. The test is not "will the snapshot ever be
+// useful" — it nearly always would be — but "is somebody sitting there waiting
+// for this teardown to finish, with nothing to show for the wait".
+//
+//   - TTL: the model went idle on its own; nobody is watching the clock, and the
+//     next request for it is a cold load that the snapshot turns into a restore.
+//   - Eviction: the model did not choose to leave, and whoever was using it will
+//     be back. This is the hand-off case — two people sharing one GPU, each
+//     evicting the other's model between turns — and it is the reason this cache
+//     exists: seconds of snapshot against a full cold reprefill on the way back.
+//   - Manual unload, shutdown, config-reload removal: somebody is standing there
+//     watching the model refuse to go away, for a snapshot that may never be read
+//     back. Those are pure dead time.
+func worthSavingOn(reason process.StopReason) bool {
+	switch reason {
+	case process.StopTTL, process.StopEvict:
+		return true
+	default:
+		return false
+	}
+}
+
 // saveOnEvict persists a model's live slot KV just before its process is stopped
 // for eviction/unload. This is the path that handles a model SWAP — the common
 // case onSwitch misses: onSwitch only fires when a new request arrives for the
@@ -722,7 +746,10 @@ var hookLockWait = 10 * time.Second
 // Gated on cost only (per-slot tokens >= minTokens): an expensive-to-reprefill
 // conversation is worth saving regardless of whether it's an interactive chat or
 // an agentic run with a single user turn. (onSwitch uses the same cost-only gate.)
-func (sc *slotCache) saveOnEvict(model string) {
+// It is also gated on WHY the process is stopping — see worthSavingOn. When the
+// save is skipped the bookkeeping still runs: the process dies either way, so the
+// occupants and pending restores it owned have to go with it.
+func (sc *slotCache) saveOnEvict(model string, reason process.StopReason) {
 	if sc == nil || !sc.enabled || model == "" {
 		return
 	}
@@ -734,6 +761,10 @@ func (sc *slotCache) saveOnEvict(model string) {
 	// would confirm the DEAD process's restore, and the event that actually earned
 	// the reuse would sit "pending" forever.
 	defer sc.dropAwait(model)
+	if !worthSavingOn(reason) {
+		sc.dropOccupants(model)
+		return
+	}
 	base, running := sc.running()[model]
 	if !running {
 		return
@@ -779,6 +810,20 @@ func (sc *slotCache) saveSlotOnEvict(ctx context.Context, base, model string, id
 	sc.stateMu.Lock()
 	delete(sc.occupant, sk(model, idx))
 	sc.stateMu.Unlock()
+}
+
+// dropOccupants forgets every slot this model owned, without saving them. Used
+// when a teardown is not worth a snapshot: the slots die with the process, and a
+// stale occupant would otherwise make the next load think a conversation is
+// still resident.
+func (sc *slotCache) dropOccupants(model string) {
+	sc.stateMu.Lock()
+	defer sc.stateMu.Unlock()
+	for k := range sc.occupant {
+		if modelOf(k) == model {
+			delete(sc.occupant, k)
+		}
+	}
 }
 
 // markResident records that `key` now holds one of the model's slots and has run.

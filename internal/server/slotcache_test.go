@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/quartermaster-labs/quartermaster/internal/logmon"
+	"github.com/quartermaster-labs/quartermaster/internal/process"
 	"github.com/tidwall/gjson"
 )
 
@@ -188,7 +189,7 @@ func TestSlotCache_SaveOnEvict(t *testing.T) {
 	sc := newEvictTestCache(dir, srv.URL)
 	sc.occupant["m"] = &occInfo{key: "abc", dirty: true} // 1-user-turn pi run
 
-	sc.saveOnEvict("m")
+	sc.saveOnEvict("m", process.StopTTL)
 
 	if _, err := os.Stat(filepath.Join(dir, fileName("m", "abc"))); err != nil {
 		t.Fatalf("expected KV snapshot written on evict, got %v", err)
@@ -259,7 +260,7 @@ func TestSlotCache_SaveOnEvict_BelowThresholdSkips(t *testing.T) {
 	sc := newEvictTestCache(dir, srv.URL)
 	sc.occupant["m"] = &occInfo{key: "abc", dirty: true}
 
-	sc.saveOnEvict("m")
+	sc.saveOnEvict("m", process.StopTTL)
 
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
 		t.Errorf("cheap conversation must not be saved, got %d files", len(entries))
@@ -430,7 +431,7 @@ func TestSlotCache_EvictDropsPendingConfirms(t *testing.T) {
 	sc.running = func() map[string]string { return map[string]string{} } // process already gone
 
 	orphan := sc.await("m", "restore-hit")
-	sc.saveOnEvict("m")
+	sc.saveOnEvict("m", process.StopTTL)
 	if got := sc.outcomeOf(orphan); got != outcomeUnconfirmed {
 		t.Errorf("restore on a dying process must resolve to %q, got %q", outcomeUnconfirmed, got)
 	}
@@ -842,7 +843,7 @@ func TestSlotCache_MultiSlot_SaveOnEvictAllSlots(t *testing.T) {
 
 	sc.markResident("m", 0, "convA", "", 0)
 	sc.markResident("m", 1, "convB", "", 0)
-	sc.saveOnEvict("m")
+	sc.saveOnEvict("m", process.StopTTL)
 
 	for _, k := range []string{"convA", "convB"} {
 		if _, err := os.Stat(filepath.Join(dir, fileName("m", k))); err != nil {
@@ -1005,5 +1006,44 @@ func TestSlotCache_RestoreOnLoad_GivesUpOnHeldGate(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("restoreOnLoad blocked on a held slot gate - the model would never ready")
+	}
+}
+
+// A hand-pressed Unload must not spend seconds writing a snapshot: the operator
+// is standing there waiting for the model to go away. The occupant must still be
+// forgotten, because the slot dies with the process either way.
+func TestSlotCache_ManualUnloadSkipsSave(t *testing.T) {
+	for _, reason := range []process.StopReason{process.StopManual, process.StopShutdown, process.StopConfig} {
+		dir := t.TempDir()
+		srv := fakeBackend(t, 35000, dir) // well above the save threshold
+		sc := newEvictTestCache(dir, srv.URL)
+		sc.occupant["m"] = &occInfo{key: "abc", dirty: true}
+
+		sc.saveOnEvict("m", reason)
+
+		if _, err := os.Stat(filepath.Join(dir, fileName("m", "abc"))); err == nil {
+			t.Errorf("reason %d: wrote a KV snapshot; only TTL and eviction should", reason)
+		}
+		if sc.occupant["m"] != nil {
+			t.Errorf("reason %d: occupant survived a teardown", reason)
+		}
+	}
+}
+
+// The two teardowns worth waiting for: an idle TTL unload (nobody is watching)
+// and an eviction (the evicted model did not choose to go, and whoever was using
+// it will be back to a full cold prefill without this).
+func TestSlotCache_TTLAndEvictSave(t *testing.T) {
+	for _, reason := range []process.StopReason{process.StopTTL, process.StopEvict} {
+		dir := t.TempDir()
+		srv := fakeBackend(t, 35000, dir)
+		sc := newEvictTestCache(dir, srv.URL)
+		sc.occupant["m"] = &occInfo{key: "abc", dirty: true}
+
+		sc.saveOnEvict("m", reason)
+
+		if _, err := os.Stat(filepath.Join(dir, fileName("m", "abc"))); err != nil {
+			t.Errorf("reason %d: expected a KV snapshot, got %v", reason, err)
+		}
 	}
 }
