@@ -1,6 +1,9 @@
 package tools
 
 import (
+	"context"
+	"fmt"
+	"net"
 	"strings"
 	"testing"
 )
@@ -133,6 +136,18 @@ func TestTools_FormatTranscriptOffYouTube(t *testing.T) {
 // Everything handed to yt-dlp is vetted first: the target by ParseMediaTarget,
 // the language code by a strict regex.
 func TestTools_ParseMediaTarget(t *testing.T) {
+	// Stub DNS: the guard's job under test is the decision it makes about an
+	// address, not whether this machine can reach a resolver. CI has no
+	// outbound DNS, so a real lookup rejected vimeo.com for the wrong reason.
+	restore := lookupIPAddr
+	lookupIPAddr = func(_ context.Context, host string) ([]net.IPAddr, error) {
+		if host == "vimeo.com" {
+			return []net.IPAddr{{IP: net.ParseIP("151.101.128.1")}}, nil
+		}
+		return nil, fmt.Errorf("no such host: %s", host)
+	}
+	t.Cleanup(func() { lookupIPAddr = restore })
+
 	// A bare id and every YouTube URL shape canonicalise to one watch URL, so
 	// the cache keys on it and two spellings of the same video hit once.
 	for _, in := range []string{"dQw4w9WgXcQ", "https://youtu.be/dQw4w9WgXcQ", "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=x"} {

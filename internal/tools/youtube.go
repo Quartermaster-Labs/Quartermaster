@@ -205,6 +205,14 @@ func ParseMediaTarget(ctx context.Context, s string) (MediaTarget, error) {
 	return MediaTarget{URL: u.String(), Site: strings.TrimPrefix(host, "www.")}, nil
 }
 
+// lookupIPAddr is the DNS seam guardMediaHost resolves through. It is a var so
+// tests can vet the guard's decisions without a working resolver: CI sandboxes
+// have no outbound DNS, and a real lookup there failed the guard for a reason
+// (no answer) that the test was not trying to exercise.
+var lookupIPAddr = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+	return net.DefaultResolver.LookupIPAddr(ctx, host)
+}
+
 // guardMediaHost rejects a host that points anywhere but the public internet.
 // See the package comment: this is a front-door check because yt-dlp dials for
 // itself, so a public name that redirects to a private one still gets through.
@@ -219,7 +227,7 @@ func guardMediaHost(ctx context.Context, host string) error {
 	}
 	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	ips, err := net.DefaultResolver.LookupIPAddr(rctx, host)
+	ips, err := lookupIPAddr(rctx, host)
 	if err != nil {
 		return fmt.Errorf("could not resolve %s", host)
 	}
