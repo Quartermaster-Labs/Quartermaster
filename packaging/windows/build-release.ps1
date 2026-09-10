@@ -102,7 +102,22 @@ if (-not $SkipBinaries) { $PublishBinaries = $true }
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 Set-Location $root
 
-function Die($m) { Write-Error $m; exit 1 }
+# The Windows VERSIONINFO resources are regenerated in place for the build (step
+# 1b) and put back afterwards, so every exit path has to restore them: a leftover
+# stamped .syso is both a lie for the next dev build and a dirty working tree the
+# next release refuses to start from. Defined above Die because Die calls it, and
+# a Die that dies on CommandNotFoundException reports the wrong failure.
+$script:sysoBackup = @{}
+function Restore-Versioninfo {
+    foreach ($path in @($script:sysoBackup.Keys)) {
+        $bak = $script:sysoBackup[$path]
+        if ($bak) { Move-Item -Force -LiteralPath $bak -Destination $path }
+        else { Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $path }
+    }
+    $script:sysoBackup = @{}
+}
+
+function Die($m) { Restore-Versioninfo; Write-Error $m; exit 1 }
 
 # The tag is never inferred. Defaulting to the highest existing tag built
 # whatever HEAD happened to be and published it under a version that tag may
@@ -176,6 +191,50 @@ if (-not $SkipUi) {
     npm run build:setup
     if ($LASTEXITCODE -ne 0) { Pop-Location; Die "npm run build:setup failed" }
     Pop-Location
+}
+
+# 1b. Windows VERSIONINFO resources, stamped with $Tag.
+#
+# cmd/*/resource_windows_amd64.syso is committed and `go build` links whatever
+# copy is on disk, so a release that did not regenerate them shipped the number
+# the JSON happened to carry: every release up to v1.0.5 called itself 1.0.0.0 in
+# Explorer's Properties tab, in Task Manager, and to anything that inspects a PE.
+# goversioninfo's -ver-*/-product-ver- flags override the JSON without editing it,
+# so nothing has to be bumped by hand and no file is left modified for the tag.
+#
+# FixedFileInfo is four integers with nowhere to put a prerelease suffix, so
+# v1.0.4-rc1 stamps 1.0.4.0 there and keeps the full string in ProductVersion,
+# which is free text. The Makefile does the same from the newest existing tag;
+# here the tag is usually one that does not exist yet, which is why the version
+# comes from the parameter rather than from git.
+#
+# This runs before anything sets GOOS/GOARCH: `go run` of a build tool with those
+# set cross-compiles the tool and then cannot execute it.
+$null = $Tag -match '^v([0-9]+)\.([0-9]+)\.([0-9]+)'
+$viMajor, $viMinor, $viPatch = $Matches[1], $Matches[2], $Matches[3]
+# The four-integer FixedFileInfo and the free-text string table, respectively.
+$viFixed = "$viMajor.$viMinor.$viPatch.0"
+$viString = $Tag.TrimStart('v')
+Write-Host "  stamping version resources $viFixed / $viString" -ForegroundColor DarkGray
+foreach ($vi in @(
+    @{ json = 'cmd\quartermaster\versioninfo.json'; syso = 'cmd\quartermaster\resource_windows_amd64.syso' }
+    @{ json = 'cmd\quartermaster-setup\versioninfo.json'; syso = 'cmd\quartermaster-setup\resource_windows_amd64.syso' }
+)) {
+    # Registered BEFORE the tool runs, so a failure half way through the second
+    # resource still restores the first one Die put back.
+    $bak = $null
+    if (Test-Path $vi.syso) {
+        $bak = "$($vi.syso).release-backup"
+        Copy-Item -Force -LiteralPath $vi.syso -Destination $bak
+    }
+    $script:sysoBackup[$vi.syso] = $bak
+    go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 `
+        -icon cmd\quartermaster\favicon.ico `
+        -ver-major $viMajor -ver-minor $viMinor -ver-patch $viPatch -ver-build 0 `
+        -product-ver-major $viMajor -product-ver-minor $viMinor -product-ver-patch $viPatch -product-ver-build 0 `
+        -file-version $viFixed -product-version $viString `
+        -o $vi.syso $vi.json
+    if ($LASTEXITCODE -ne 0) { Die "goversioninfo failed for $($vi.json)" }
 }
 
 # 2. Binaries. One staging dir for everything: the Windows binary the installer
@@ -359,6 +418,11 @@ $sumLines = foreach ($f in $uploads) {
 Write-Host "SHA256SUMS:" -ForegroundColor DarkGray
 $sumLines | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
 $uploads += $sumsPath
+
+# Every binary is built; the stamped resources have done their job. Put the
+# committed ones back before the tree is read again, so a local `make release`
+# ends where it started.
+Restore-Versioninfo
 
 # 6. Push the tag, create the release if missing, upload everything.
 #

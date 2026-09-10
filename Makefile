@@ -62,9 +62,12 @@ linux-arm64: ui
 
 # Windows VERSIONINFO resource. cmd/quartermaster/resource_windows_amd64.syso is
 # committed (Go links any .syso in the main package automatically, which is why it
-# and favicon.ico live beside the main package rather than at the repo root), and packaging/windows/build-release.ps1
-# calls `go build` directly -- so the committed file, not this rule, is what a
-# release actually ships. Commit it after it regenerates.
+# and favicon.ico live beside the main package rather than at the repo root), and
+# `go build` links whatever copy is on disk. A RELEASE does not use the committed
+# one: packaging/windows/build-release.ps1 regenerates both resources from the tag
+# it is releasing and puts the committed bytes back afterwards. This rule is what
+# dev and packaging builds get, so it stamps the newest existing tag instead.
+# Commit the .syso after it regenerates.
 #
 # These are FILE targets, not phony ones, so make rebuilds them exactly when
 # favicon.ico or versioninfo.json is newer and skips the tool otherwise. The
@@ -79,11 +82,40 @@ linux-arm64: ui
 # -icon embeds favicon.ico as the exe's application icon (resource ID 1). Without
 # it the exe has no icon at all, so Explorer, the taskbar, and the Startup apps
 # list all fall back to the blank generic-executable glyph.
+# The version stamped into both Windows VERSIONINFO resources. The two
+# versioninfo.json files carry 1.0.0.0 as a placeholder and nothing bumps them by
+# hand: the number comes from the newest release tag, via goversioninfo's
+# -ver-*/-product-ver-* overrides, which beat the JSON without touching it.
+# packaging/windows/build-release.ps1 does the same thing from the tag it is
+# releasing, so a release exe is stamped even when its tag does not exist yet.
+#
+# Prerelease tags (v1.0.4-rc1) are filtered out: FixedFileInfo is four integers
+# with nowhere to put a suffix, and a dev build should not claim to BE the rc.
+# With no tags at all VI_FLAGS is empty and the JSON's own values are used --
+# note a 0.0.0.0 FixedFileInfo makes Windows drop the whole string table, which
+# is why the placeholder in the JSON is not zero.
+VI_TAG := $(firstword $(filter-out %-%,$(shell git tag --list "v[0-9]*.[0-9]*.[0-9]*" --sort=-v:refname)))
+VI_VER := $(patsubst v%,%,$(VI_TAG))
+VI_PARTS := $(subst ., ,$(VI_VER))
+ifneq ($(VI_VER),)
+VI_FLAGS := -ver-major $(word 1,$(VI_PARTS)) -ver-minor $(word 2,$(VI_PARTS)) -ver-patch $(word 3,$(VI_PARTS)) -ver-build 0 	-product-ver-major $(word 1,$(VI_PARTS)) -product-ver-minor $(word 2,$(VI_PARTS)) -product-ver-patch $(word 3,$(VI_PARTS)) -product-ver-build 0 	-file-version $(VI_VER).0 -product-version $(VI_VER)
+endif
+
+# A file target cannot see that `git tag` moved, so the version is carried in a
+# stamp FILENAME: a new tag names a file that does not exist, the rule runs, and
+# its fresh mtime pulls both .syso files with it. Without this the resources
+# would keep whatever version they were generated at until the JSON or the icon
+# happened to change.
+VI_STAMP = $(BUILD_DIR)/versioninfo-$(VI_VER).stamp
+
+$(VI_STAMP):
+	@mkdir -p $(BUILD_DIR) && rm -f $(BUILD_DIR)/versioninfo-*.stamp && touch $@
+
 QM_SYSO = cmd/quartermaster/resource_windows_amd64.syso
 SETUP_SYSO = cmd/quartermaster-setup/resource_windows_amd64.syso
 
-$(QM_SYSO): cmd/quartermaster/favicon.ico cmd/quartermaster/versioninfo.json
-	go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -icon cmd/quartermaster/favicon.ico -o $@ cmd/quartermaster/versioninfo.json
+$(QM_SYSO): cmd/quartermaster/favicon.ico cmd/quartermaster/versioninfo.json $(VI_STAMP)
+	go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -icon cmd/quartermaster/favicon.ico $(VI_FLAGS) -o $@ cmd/quartermaster/versioninfo.json
 
 versioninfo: $(QM_SYSO)
 
@@ -92,8 +124,8 @@ versioninfo: $(QM_SYSO)
 # one reaches the server binary and nothing else. Without this the wizard's exe has
 # the blank generic-executable glyph in Explorer AND in the taskbar, which is
 # the first thing a user sees of the app.
-$(SETUP_SYSO): cmd/quartermaster/favicon.ico cmd/quartermaster-setup/versioninfo.json
-	go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -icon cmd/quartermaster/favicon.ico -o $@ cmd/quartermaster-setup/versioninfo.json
+$(SETUP_SYSO): cmd/quartermaster/favicon.ico cmd/quartermaster-setup/versioninfo.json $(VI_STAMP)
+	go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -icon cmd/quartermaster/favicon.ico $(VI_FLAGS) -o $@ cmd/quartermaster-setup/versioninfo.json
 
 versioninfo-setup: $(SETUP_SYSO)
 
