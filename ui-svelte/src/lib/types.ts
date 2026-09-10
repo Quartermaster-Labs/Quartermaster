@@ -213,6 +213,16 @@ export interface PerformanceResponse {
   // Idle system-VRAM floor (MiB) sampled server-side (min used while no model
   // running). 0 = not observed yet. Preferred over the browser-only baseline.
   system_mb?: number;
+  // The OOM guard's live view: foreign_mb is VRAM held by everything that is NOT
+  // one of our children, measured per-process on EVERY sample (unlike system_mb,
+  // which freezes for as long as a model is resident). null/absent = no
+  // trustworthy per-process attribution, or a server too old to send it.
+  guard?: {
+    foreign_mb: number;
+    floor_mb: number;
+    total_mb: number;
+    ceiling_gb?: number;
+  } | null;
 }
 
 export interface APIEventEnvelope {

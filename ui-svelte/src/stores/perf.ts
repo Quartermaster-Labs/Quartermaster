@@ -42,6 +42,17 @@ export const foreignVram = writable<{ mb: number; procs?: { pid: number; name: s
 // observed. The VRAM gauge prefers this over its own browser-only baseline.
 export const systemVram = writable<number>(0);
 
+// GPU memory (MiB) held by everything that is NOT one of our children, measured
+// per-process on every server sample and published by the OOM guard. This is the
+// LIVE answer to "what are the OS and other apps using", where systemVram above
+// is only a floor sampled while no model was loaded - it freezes for as long as a
+// model stays resident, so a game or a Blender/Unity session opened afterwards
+// never moves it and its VRAM leaks into the gauge's model slice (and from there
+// into the "Overhead" residual). null = the guard has no trustworthy reading (no
+// per-process source, or one of our children not yet visible to it), which is the
+// gauge's cue to fall back to the idle floor.
+export const guardForeignVram = writable<number | null>(null);
+
 let timer: ReturnType<typeof setInterval> | null = null;
 let lastTs: string | undefined;
 
@@ -54,6 +65,9 @@ export function startPerfPolling(intervalMs = 2000): () => void {
     // reading"; vramTotals falls back to the single device for either.
     pooledVram.set(data.gpu_pooled ?? null);
     if (typeof data.system_mb === "number") systemVram.set(data.system_mb);
+    guardForeignVram.set(
+      typeof data.guard?.foreign_mb === "number" ? data.guard.foreign_mb : null,
+    );
     if (data.gpu_stats?.length) {
       const g = data.gpu_stats[data.gpu_stats.length - 1];
       latestGpu.set(g);
