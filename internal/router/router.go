@@ -68,7 +68,7 @@ type LocalRouter interface {
 
 	// SetPreEvict installs a hook called with a model ID just before its process
 	// is stopped for eviction/unload, while still Ready. Call once before serving.
-	SetPreEvict(fn func(modelID string))
+	SetPreEvict(fn func(modelID string, reason process.StopReason))
 
 	// SetPostLoad installs a hook called with a model ID each time its process
 	// becomes Ready, before the triggering request is served. Call once before

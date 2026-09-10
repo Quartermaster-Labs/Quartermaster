@@ -316,7 +316,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	}
 	s.slotCache = newSlotCache(cfg.SlotCache, s.runningProxies, slotParticipates, slotSlots, slotRecurrent, slotPreamble, proxylog)
 	s.promptCanon = newPromptCanon()
-	local.SetPreEvict(s.slotCache.saveOnEvict)    // save slot KV before a swap/unload kills the process
+	local.SetPreEvict(s.slotCache.saveOnEvict)    // save slot KV before a swap/TTL unload kills the process
 	local.SetPostLoad(s.slotCache.restoreOnLoad)  // restore slot KV after a cold load, before serving
 	s.metrics.onRecord = s.slotCache.confirmReuse // confirm restores actually reused KV (cached_tokens)
 	// The backend manager installs beside the running executable and calls back

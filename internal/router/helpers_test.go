@@ -55,13 +55,14 @@ type fakeProcess struct {
 	// Stop calls can be in flight simultaneously.
 	stopBlock chan struct{}
 
-	preStop    atomic.Pointer[func()]
+	preStop    atomic.Pointer[func(process.StopReason)]
 	postStart  atomic.Pointer[func()]
 	lastConfig atomic.Pointer[config.ModelConfig] // last SetConfig, for ApplyConfig tests
 
-	runCalls   atomic.Int32
-	stopCalls  atomic.Int32
-	serveCalls atomic.Int32
+	runCalls       atomic.Int32
+	stopCalls      atomic.Int32
+	lastStopReason atomic.Uint32
+	serveCalls     atomic.Int32
 
 	// inFlightServe counts ServeHTTP calls currently inside the handler.
 	// stoppedWhileServing flips true if Stop is ever called while that
@@ -139,17 +140,22 @@ func (f *fakeProcess) Run(_ time.Duration) error {
 	return nil
 }
 
-func (f *fakeProcess) SetPreStop(fn func())   { f.preStop.Store(&fn) }
-func (f *fakeProcess) SetPostStart(fn func()) { f.postStart.Store(&fn) }
+func (f *fakeProcess) SetPreStop(fn func(process.StopReason)) { f.preStop.Store(&fn) }
+func (f *fakeProcess) SetPostStart(fn func())                 { f.postStart.Store(&fn) }
 
 func (f *fakeProcess) SetSpawnArgs(_ func([]string) ([]string, error)) {}
 func (f *fakeProcess) SetConfig(c config.ModelConfig)                  { f.lastConfig.Store(&c) }
 func (f *fakeProcess) LaunchedCmd() string                             { return "" }
 
-func (f *fakeProcess) Stop(_ time.Duration) error {
+func (f *fakeProcess) Stop(timeout time.Duration) error {
+	return f.StopWithReason(process.StopManual, timeout)
+}
+
+func (f *fakeProcess) StopWithReason(reason process.StopReason, _ time.Duration) error {
 	f.stopCalls.Add(1)
+	f.lastStopReason.Store(uint32(reason))
 	if fp := f.preStop.Load(); fp != nil {
-		(*fp)()
+		(*fp)(reason)
 	}
 	if f.inFlightServe.Load() > 0 {
 		f.stoppedWhileServing.Store(true)

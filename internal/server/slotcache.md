@@ -59,8 +59,27 @@ if restore never fires, check they're called.
 - **COLD** (`saveOnEvict`): evicting A to load B kills A's process with no A request to trigger a
   save — the pre-stop hook snapshots it.
 
-"Worth saving" = live KV ≥ `minSaveTokens`. **Cost is the only gate**, with no turn-count gate: a
-single-turn chat with a long answer is still expensive to reprefill.
+"Worth saving" = live KV ≥ `minSaveTokens`. **Cost is the only gate** on WHAT is saved, with no
+turn-count gate: a single-turn chat with a long answer is still expensive to reprefill.
+
+**WHEN it saves is gated separately** (`worthSavingOn`), on the `process.StopReason` the router
+tags the teardown with. A snapshot is multi-gigabyte and sits on the critical path, so it only
+runs for teardowns nobody is waiting through:
+
+| Reason | Saves | Why |
+|---|---|---|
+| `StopTTL` | yes | The model went idle on its own; nobody is watching, and the next request for it is a cold load the snapshot turns into a restore. |
+| `StopEvict` | yes | The model did not choose to leave. This is the **hand-off** case this cache exists for: two people sharing one GPU, each evicting the other's model between turns. Seconds of snapshot against a full cold reprefill on the way back. |
+| `StopManual` | no | The operator pressed Unload and is watching the model refuse to go away. |
+| `StopShutdown` / `StopConfig` | no | The app is quitting, or the model is gone from the config — a person is waiting on a snapshot that may never be read. |
+
+The split is "did somebody ASK for this teardown". A swap and a TTL expiry both end with the model
+being wanted again; an Unload, a quit and a config removal end with a person watching a progress
+bar for a cache they did not request.
+
+When a save is skipped the bookkeeping still runs: pending restores are resolved (`dropAwait`) and
+the model's occupants are forgotten (`dropOccupants`), because the slots die with the process
+either way.
 
 ## Restore / seed path (preamble caches + Tier-1)
 

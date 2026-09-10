@@ -48,7 +48,7 @@ func (s *stubRouter) RunningModels() map[string]process.ProcessState          { 
 func (s *stubRouter) RunningPIDs() []int                                      { return nil }
 func (s *stubRouter) SetLiveVramBudget(fn router.LiveVramFn)                  {}
 func (s *stubRouter) Unload(_ time.Duration, _ ...string)                     { s.unloadCalls.Add(1) }
-func (s *stubRouter) SetPreEvict(_ func(string))                              {}
+func (s *stubRouter) SetPreEvict(_ func(string, process.StopReason))          {}
 func (s *stubRouter) SetPostLoad(_ func(string))                              {}
 func (s *stubRouter) SetSpawnArgs(_ func(string, []string) ([]string, error)) {}
 func (s *stubRouter) ApplyConfig(_ config.Config) error                       { return nil }
