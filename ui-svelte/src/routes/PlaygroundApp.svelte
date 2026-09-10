@@ -10,6 +10,7 @@
   import { selectedTabStore, selectedModelStore, type PlaygroundTab } from "../stores/playground";
   import { userPref } from "../stores/prefs";
   import { isEmbedded, embedTabId, postToShell } from "../lib/embed";
+  import { guardWindowDrop } from "../lib/dropZone";
   import Login from "./Login.svelte";
   import PlaygroundShell from "./PlaygroundShell.svelte";
 
@@ -52,6 +53,11 @@
   let chatsLoaded = $state(false);
 
   onMount(async () => {
+    // A file dropped anywhere OUTSIDE a composer's drop zone would otherwise
+    // navigate the page to it, discarding the open chat and any turn streaming
+    // into it. Installed once for the whole playground, before login: a stray
+    // drop on the sign-in screen is just as fatal.
+    guardWindowDrop();
     await checkMe();
     ready = true;
   });
