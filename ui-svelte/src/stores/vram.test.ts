@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { loadedSegments } from "./vram";
+import { loadedSegments, systemFloorMb, systemDetail } from "./vram";
 import type { PlanEstimate } from "./api";
 
 // A plausible estimate: 10 GB total = 6 weights + 2 KV + 0.5 draft + 0.5
@@ -57,5 +57,64 @@ describe("loadedSegments", () => {
   it("gives up when any loaded model has no estimate", () => {
     expect(loadedSegments([{ id: "a" }, { id: "b" }], { a: est() }, 15 * 1024)).toBeNull();
     expect(loadedSegments([], {}, 0)).toBeNull();
+  });
+});
+
+describe("systemFloorMb", () => {
+  const base = {
+    usedMb: 20 * 1024,
+    strayForeignMb: 0,
+    guardForeignMb: null as number | null,
+    serverIdleMb: 0,
+    browserBaselineMb: null as number | null,
+    estTotalMb: null as number | null,
+  };
+
+  // The bug: the idle floor is sampled only while nothing is loaded, so an app
+  // that claims VRAM after a model went resident (a game, Blender, Unity) never
+  // moved it. Its 6 GB was counted as model usage and surfaced as "Overhead".
+  it("prefers the live per-process reading over a stale idle floor", () => {
+    const { mb, source } = systemFloorMb({
+      ...base,
+      guardForeignMb: 7 * 1024, // desktop 0.9 GB at sample time + 6 GB since
+      serverIdleMb: 0.9 * 1024,
+    });
+    expect(mb).toBe(7 * 1024);
+    expect(source).toBe("live");
+    expect(systemDetail(source)).toContain("live");
+  });
+
+  // The stray llama-server already has its own red segment; counting it in
+  // System as well would draw the same VRAM twice.
+  it("subtracts the stray-inference slice from the live reading", () => {
+    const { mb } = systemFloorMb({
+      ...base,
+      usedMb: 18 * 1024, // stray already carved out by the caller
+      guardForeignMb: 5 * 1024,
+      strayForeignMb: 2 * 1024,
+    });
+    expect(mb).toBe(3 * 1024);
+  });
+
+  it("falls back to the server idle floor, then the tab baseline, then the estimate", () => {
+    expect(systemFloorMb({ ...base, serverIdleMb: 2048, browserBaselineMb: 4096 })).toEqual({
+      mb: 2048,
+      source: "idle",
+    });
+    expect(systemFloorMb({ ...base, browserBaselineMb: 4096 })).toEqual({
+      mb: 4096,
+      source: "baseline",
+    });
+    expect(systemFloorMb({ ...base, estTotalMb: 12 * 1024 })).toEqual({
+      mb: 8 * 1024,
+      source: "estimate",
+    });
+    // Nothing to go on: attribute it all to System rather than invent a model slice.
+    expect(systemFloorMb(base)).toEqual({ mb: 20 * 1024, source: "unknown" });
+  });
+
+  it("clamps to the used total and to zero", () => {
+    expect(systemFloorMb({ ...base, guardForeignMb: 99 * 1024 }).mb).toBe(20 * 1024);
+    expect(systemFloorMb({ ...base, guardForeignMb: 100, strayForeignMb: 900 }).mb).toBe(0);
   });
 });

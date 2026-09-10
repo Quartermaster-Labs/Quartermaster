@@ -1,12 +1,16 @@
 import { derived, writable } from "svelte/store";
-import { vramTotals, foreignVram, systemVram } from "./perf";
+import { vramTotals, foreignVram, systemVram, guardForeignVram } from "./perf";
 import { models, estimatePlan, type PlanEstimate } from "./api";
 
-// VRAM split: "system" (OS + other apps + game) vs the loaded llama-server. We
-// can't query per-process VRAM portably, so we sample an idle baseline: whenever
-// no model is loaded, the live used VRAM IS the system floor. Once a model loads,
-// model usage ≈ live used − baseline. Before the first idle sample the baseline
-// is unknown, so everything is attributed to system (safe under-report).
+// VRAM split: "system" (OS + other apps + game) vs the loaded llama-server.
+// Where per-process attribution exists (nvidia-smi, or the Windows PDH counter on
+// AMD/Intel) the server measures the split directly and the gauge just uses it -
+// see systemFloorMb. Where it does not, we fall back to sampling an idle
+// baseline: whenever no model is loaded, the live used VRAM IS the system floor,
+// and once a model loads model usage ≈ live used − baseline. That fallback goes
+// stale the moment another app claims VRAM while a model is resident, which is
+// why it is the fallback and not the primary. Before the first idle sample the
+// baseline is unknown, so everything is attributed to system (safe under-report).
 //
 // Whenever we hold a load-plan estimate for EVERY loaded model we further break
 // their slice into model weights / KV cache / runtime overhead (the estimate is
@@ -184,6 +188,68 @@ export function loadedSegments(
   return segments;
 }
 
+/** Where the "System" figure came from, which decides how the hover explains it. */
+export type SystemFloorSource = "live" | "idle" | "baseline" | "estimate" | "unknown";
+
+export interface SystemFloorInput {
+  /** Used VRAM with the stray-inference slice already carved out. */
+  usedMb: number;
+  /** The stray llama-server/sd-server slice, which gets its own segment. */
+  strayForeignMb: number;
+  /** Live per-process "not ours" measurement from the OOM guard; null if untrusted. */
+  guardForeignMb: number | null;
+  /** Server-sampled idle floor; 0 = never observed a long enough idle stretch. */
+  serverIdleMb: number;
+  /** This tab's own idle baseline; null before it ever saw an idle sample. */
+  browserBaselineMb: number | null;
+  /** Summed load-plan estimate for the loaded models; null if any is missing. */
+  estTotalMb: number | null;
+}
+
+// systemFloorMb decides how much of the card belongs to the OS and other apps.
+//
+// The preference order matters, and the live reading has to come first. The idle
+// floors below it are sampled ONLY while no model is loaded, so they freeze for
+// as long as one stays resident: an app that claims VRAM afterwards (a game,
+// Blender, Unity) never moves them, and every MiB it takes is misread as model
+// usage - which then lands in the "Overhead" residual, since that segment is just
+// measured-minus-estimated. The guard's figure is a per-process attribution
+// recomputed on every sample, so it tracks those apps as they come and go.
+//
+// The guard counts stray llama-servers as foreign too, but the gauge already
+// draws those as their own red segment, so they are subtracted out rather than
+// counted twice.
+export function systemFloorMb(i: SystemFloorInput): { mb: number; source: SystemFloorSource } {
+  const clamp = (mb: number) => Math.min(Math.max(0, mb), Math.max(0, i.usedMb));
+  if (i.guardForeignMb !== null) {
+    return { mb: clamp(i.guardForeignMb - i.strayForeignMb), source: "live" };
+  }
+  if (i.serverIdleMb > 0) return { mb: clamp(i.serverIdleMb), source: "idle" };
+  if (i.browserBaselineMb !== null) return { mb: clamp(i.browserBaselineMb), source: "baseline" };
+  // No idle sample anywhere (a model was already resident at page load). Back
+  // out the model slice from its estimate so it still shows, instead of painting
+  // the whole card as System.
+  if (i.estTotalMb !== null) return { mb: clamp(i.usedMb - i.estTotalMb), source: "estimate" };
+  return { mb: clamp(i.usedMb), source: "unknown" };
+}
+
+// systemDetail is the hover text for the System segment, naming how the figure
+// was arrived at so a surprising number is debuggable from the UI alone.
+export function systemDetail(source: SystemFloorSource): string {
+  switch (source) {
+    case "live":
+      return "OS, other apps (live per-process measurement)";
+    case "idle":
+      return "OS, other apps (idle floor - apps started since a model loaded may show under Overhead)";
+    case "baseline":
+      return "OS, other apps (this tab's idle baseline)";
+    case "estimate":
+      return "OS, other apps (estimated - no idle baseline yet)";
+    default:
+      return "OS, other apps";
+  }
+}
+
 // foreignSeg builds the red "Foreign" segment for VRAM held by a llama-server
 // we didn't spawn. Returns [] when none detected.
 function foreignSeg(mb: number, procs?: { name: string }[]): VramSegment[] {
@@ -200,8 +266,8 @@ function foreignSeg(mb: number, procs?: { name: string }[]): VramSegment[] {
 }
 
 export const vramBreakdown = derived(
-  [vramTotals, models, activeEstimates, foreignVram, systemVram],
-  ([$gpu, $models, $ests, $foreign, $sysVram]): VramBreakdown | null => {
+  [vramTotals, models, activeEstimates, foreignVram, systemVram, guardForeignVram],
+  ([$gpu, $models, $ests, $foreign, $sysVram, $guardForeign]): VramBreakdown | null => {
     if (!$gpu) return null;
 
     const live = $models.filter(
@@ -240,32 +306,21 @@ export const vramBreakdown = derived(
       ? live.reduce((a, m) => a + $ests[m.id].estVramGB * 1024, 0)
       : null;
 
-    // System floor. Prefer the server-measured idle floor (sampled even with no
-    // dashboard open), then the browser's own idle baseline. If neither caught an
-    // idle sample (e.g. a model was already resident at page load) but we have
-    // load-plan estimates for everything loaded, fall back to
-    // used − estimated-model-VRAM so the model slice still shows instead of
-    // being attributed entirely to "System".
-    let sysFloor: number;
-    let measured = true;
-    if ($sysVram > 0) {
-      sysFloor = Math.min($sysVram, used);
-    } else if (baselineMb !== null) {
-      sysFloor = Math.min(baselineMb, used);
-    } else if (estTotalMb !== null) {
-      sysFloor = Math.max(0, used - estTotalMb);
-      measured = false;
-    } else {
-      sysFloor = used;
-      measured = false;
-    }
+    const { mb: sysFloor, source } = systemFloorMb({
+      usedMb: used,
+      strayForeignMb: foreignMb,
+      guardForeignMb: $guardForeign,
+      serverIdleMb: $sysVram,
+      browserBaselineMb: baselineMb,
+      estTotalMb,
+    });
     const modelMb = Math.max(0, used - sysFloor);
 
     const systemSeg: VramSegment = {
       label: "System",
       mb: sysFloor,
       class: "bg-info",
-      detail: "OS, other apps" + (measured ? "" : " (estimated - no idle baseline yet)"),
+      detail: systemDetail(source),
     };
 
     // Component split whenever every loaded model has a fresh estimate, however
