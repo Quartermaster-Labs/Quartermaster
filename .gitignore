@@ -48,3 +48,8 @@ internal/server/assets/*.gguf
 # Stray go build output at the repo root (the real binaries go to build/).
 /quartermaster.exe
 /quartermaster
+
+# Committed VERSIONINFO resources are regenerated from the tag for a release
+# build and restored afterwards; this is the copy held while that runs. It only
+# survives a run killed between the two (packaging/windows/build-release.ps1).
+*.release-backup

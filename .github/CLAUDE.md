@@ -81,6 +81,19 @@ ships would be the one nobody tested. Everything cross-compiles from one Windows
 runner (CGO is off project-wide), so the Windows wizard, `linux/amd64`,
 `linux/arm64` and `darwin/arm64` all come out of a single job.
 
+The Windows version resources are stamped from the tag, not from a file anyone
+remembers to bump. `cmd/*/resource_windows_amd64.syso` is committed and `go
+build` links whichever copy is on disk, so every release up to `v1.0.5` shipped
+the `1.0.0.0` placeholder its `versioninfo.json` carries -- in Explorer's
+Properties tab, in Task Manager, and to anything that reads a PE. The script now
+regenerates both resources with `goversioninfo`'s `-ver-*` overrides before
+building and restores the committed bytes afterwards (`Restore-Versioninfo`,
+which `Die` also calls), because a leftover stamped `.syso` is a dirty tree the
+next release refuses to start from. A prerelease suffix lives only in the
+`ProductVersion` string: `FixedFileInfo` is four integers, so `v1.0.4-rc1` is
+`1.0.4.0` there. Dev and `make package-windows` builds get the same treatment
+from the Makefile, using the newest existing tag.
+
 The tag is created on the dispatched ref's HEAD, and the script refuses to
 continue if the tag is not HEAD or origin already has it elsewhere.
 
