@@ -18,7 +18,7 @@ import (
 
 func TestServer_NewLoggers(t *testing.T) {
 	t.Run("proxy mode routes proxy into muxlog, discards upstream", func(t *testing.T) {
-		mux, proxy, upstream := NewLoggers(config.LogToStdoutProxy)
+		mux, proxy, upstream := NewLoggers(config.LogToStdoutProxy, nil)
 		proxy.Info("PROXYLINE")
 		upstream.Info("UPSTREAMLINE")
 		h := string(mux.GetHistory())
@@ -31,7 +31,7 @@ func TestServer_NewLoggers(t *testing.T) {
 	})
 
 	t.Run("both mode routes proxy and upstream into muxlog", func(t *testing.T) {
-		mux, proxy, upstream := NewLoggers(config.LogToStdoutBoth)
+		mux, proxy, upstream := NewLoggers(config.LogToStdoutBoth, nil)
 		proxy.Info("PROXYLINE")
 		upstream.Info("UPSTREAMLINE")
 		h := string(mux.GetHistory())
@@ -41,11 +41,32 @@ func TestServer_NewLoggers(t *testing.T) {
 	})
 
 	t.Run("none mode discards everything from muxlog", func(t *testing.T) {
-		mux, proxy, upstream := NewLoggers(config.LogToStdoutNone)
+		mux, proxy, upstream := NewLoggers(config.LogToStdoutNone, nil)
 		proxy.Info("PROXYLINE")
 		upstream.Info("UPSTREAMLINE")
 		if len(mux.GetHistory()) != 0 {
 			t.Errorf("muxlog should be empty, got %q", mux.GetHistory())
+		}
+	})
+
+	t.Run("the file mirrors the console stream", func(t *testing.T) {
+		var file strings.Builder
+		mux, proxy, upstream := NewLoggers(config.LogToStdoutBoth, &file)
+		proxy.Info("PROXYLINE")
+		upstream.Info("UPSTREAMLINE")
+		if !strings.Contains(file.String(), "PROXYLINE") || !strings.Contains(file.String(), "UPSTREAMLINE") {
+			t.Errorf("file missing mirrored lines: %q", file.String())
+		}
+		_ = mux
+	})
+
+	t.Run("none mode still discards from the file", func(t *testing.T) {
+		var file strings.Builder
+		_, proxy, upstream := NewLoggers(config.LogToStdoutNone, &file)
+		proxy.Info("PROXYLINE")
+		upstream.Info("UPSTREAMLINE")
+		if file.String() != "" {
+			t.Errorf("file should stay empty under logToStdout none, got %q", file.String())
 		}
 	})
 }

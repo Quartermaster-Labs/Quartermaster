@@ -23,6 +23,8 @@
   import Composer from "./Composer.svelte";
   import { autogrow } from "../../lib/autogrow";
   import { Image as ImageIcon, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Palette, Reply, Maximize2, Loader2 } from "lucide-svelte";
+  import { dropZone } from "../../lib/dropZone";
+  import { classifyAttachment } from "../../lib/attachments";
   import { scrollFade } from "../../lib/scrollFade";
   import type { ImageApiMode, SdApiLora, SdApiLoraRef } from "../../lib/types";
   import { ASPECTS, SIZE_TIERS, aspectDims, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, DEFAULT_MAX_DIM, MAX_BATCH, defaultsFor, settingsFor, parseSdProgress, fmtDur } from "./imageGen";
@@ -819,6 +821,21 @@
     attachFiles(files);
   }
 
+  // Drop onto the image pane. Unlike the chat tab this takes images ONLY:
+  // attachFiles data-URLs whatever it is handed, so a dropped PDF would become
+  // a base image that is silently broken all the way to the backend.
+  let dropActive = $state(false);
+  let dropError = $state("");
+  let dropErrTimer: ReturnType<typeof setTimeout> | undefined;
+  function handleDrop(files: File[], skipped: string[]) {
+    const images = files.filter((f) => classifyAttachment(f) === "image");
+    const rejected = [...skipped, ...files.filter((f) => !images.includes(f)).map((f) => f.name)];
+    if (images.length > 0) attachFiles(images);
+    dropError = rejected.length > 0 ? `Only images can be dropped here (skipped ${rejected.join(", ")}).` : "";
+    clearTimeout(dropErrTimer);
+    if (dropError) dropErrTimer = setTimeout(() => (dropError = ""), 4000);
+  }
+
   // Copy the rendered image to the clipboard as a PNG blob. copiedIdx flashes the
   // check on the turn that was copied. Silent no-op where the browser blocks
   // image clipboard writes.
@@ -888,7 +905,20 @@
   }
 </script>
 
-<div class="flex flex-col h-full">
+<div
+  class="relative flex flex-col h-full"
+  use:dropZone={{ onFiles: handleDrop, onActive: (v) => (dropActive = v), enabled: hasModels }}
+>
+  <!-- pointer-events-none: see ChatInterface — an overlay that takes pointer
+       events becomes the drag target and flickers itself off. -->
+  {#if dropActive}
+    <div class="pointer-events-none absolute inset-2 z-30 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-primary bg-surface/85 backdrop-blur-[2px]">
+      <Paperclip class="w-7 h-7 text-primary" />
+      <span class="text-sm font-medium text-txtmain">Drop to use as the base image</span>
+      <span class="text-xs text-txtsecondary">Images only</span>
+    </div>
+  {/if}
+
   {#if !hasModels}
     <div class="flex-1 flex flex-col items-center justify-center gap-3 text-txtsecondary">
       <ImageIcon class="w-10 h-10 opacity-40" strokeWidth={1.5} />
@@ -1347,6 +1377,12 @@
               <span>Style reference set - its look is applied to the edit</span>
               <button class="text-txtsecondary hover:text-txtmain" onclick={() => (styleRef = null)}>clear</button>
             </div>
+          </div>
+        {/if}
+
+        {#if dropError}
+          <div class="mb-2 p-2 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded text-sm">
+            {dropError}
           </div>
         {/if}
 

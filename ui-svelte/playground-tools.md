@@ -198,7 +198,8 @@ goes *beside* the page's own price, never in place of it.
 
 ## File attachments (`lib/attachments.ts` + the composer's doc chips)
 
-The paperclip takes text/code, PDF, DOCX and audio, not just images.
+The paperclip takes text/code, PDF, DOCX and audio, not just images. Files can also be **pasted** or
+**dragged onto the pane** (see below).
 
 **Extraction runs in the browser and the result is folded into the user's own message** as a
 `<file name="…" note="…">…</file>` block (`buildFileBlock`/`splitFileBlocks`, `</file>` in the body
@@ -225,6 +226,32 @@ string and would dump raw document text into the textarea).
 - **Audio** posts to `/v1/audio/transcriptions` via `pickTranscribeModel`, which prefers an
   **already-ready** ASR model and toasts before swapping, since loading one evicts the chat model.
 
+### Drag-and-drop (`lib/dropZone.ts`)
+
+Files can be dropped anywhere in the **chat pane** or the **image pane**, not just on the composer:
+the transcript is most of the surface, and a drag shouldn't have to hit a 3rem textarea. The drop
+feeds the same `processFiles` the picker and paste already use, so every rule above (classification,
+vision swap, budget, chips) applies unchanged.
+
+The action exists because three things break a naive `ondrop`:
+
+- **`dragover` must `preventDefault()`** or `drop` never fires — the default for a drag over a page
+  is "not a drop target".
+- **`dragenter`/`dragleave` fire per child element**, so a boolean flickers off as the cursor crosses
+  a bubble. A depth counter fixes it, reset on `drop` and on a window `dragend` (a drag ending
+  outside the node sends no final `dragleave`). The overlay is `pointer-events-none` for the same
+  reason: one that took pointer events would become the drag target itself and flicker off.
+- **An unhandled drop NAVIGATES the browser to the file**, discarding the open chat and aborting a
+  streaming turn. `guardWindowDrop()` (called once from `PlaygroundApp`, before login) makes a miss a
+  no-op; both its handlers bail on `defaultPrevented`, which a real zone has already set by the time
+  the event bubbles up, so it never steals a drop the composer wanted.
+
+A dropped **folder** is named and rejected rather than half-attached: it arrives in
+`dataTransfer.files` as a zero-type File that throws on read, and only `dataTransfer.items` +
+`webkitGetAsEntry()` tell it from a real file. The image pane additionally takes **images only** —
+its `attachFiles` data-URLs whatever it is handed, so a dropped PDF would become a silently broken
+base image.
+
 ### Size is checked at attach time, not at send
 
 `estimateTokens` (~4 chars/token) against `docBudgetTokens` = 40% of the window (live `n_ctx`, else
@@ -242,5 +269,6 @@ is still being read, so a half-extracted set can't go out.
 | `chatCompact.ts` | auto-compaction + conversation title gen |
 | `wordDiff.ts` | rewrite diff |
 | `reasoning.ts` | Harmony/reasoning parsing, `thinkSummary`, `activityLabel` |
+| `dropZone.ts` | `dropZone` action + `guardWindowDrop` — drag-and-drop file attachment; see above |
 | `inferenceAuth.ts` | `refreshInferenceKey`/`inferenceHeaders` — auto-attach API key to playground inference |
 | `modelUtils.ts` | `modelCategory`/`MODEL_CATEGORIES`, drives the Models tabs + key scoping |

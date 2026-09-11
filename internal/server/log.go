@@ -23,31 +23,43 @@ import (
 // muxlog accumulates a combined history for the /logs endpoints, while each
 // monitor keeps its own per-source history and event subscribers.
 //
+// file (nil disables it) mirrors the console stream into the persistent log
+// file: a GUI launch has no console, so without this the access log and
+// every subsystem notice (the hub's panic hook included) would die with the
+// process. logToStdout still governs the CONSOLE only; "none" keeps discarding
+// these streams entirely, file or not.
+//
 // Behaviour matches the legacy ProxyManager:
 //
 //   - none:     everything discarded
-//   - both:     proxy + upstream both routed to muxlog -> stdout
-//   - upstream: only upstream routed to muxlog -> stdout; proxy discarded
-//   - proxy:    only proxy routed to muxlog -> stdout; upstream discarded
+//   - both:     proxy + upstream both routed to muxlog -> console (+ file)
+//   - upstream: only upstream routed to muxlog -> console (+ file); proxy discarded
+//   - proxy:    only proxy routed to muxlog -> console (+ file); upstream discarded
 //
 // An empty or unrecognised value behaves like "proxy".
-func NewLoggers(logToStdout string) (muxlog, proxylog, upstreamlog *logmon.Monitor) {
+func NewLoggers(logToStdout string, file io.Writer) (muxlog, proxylog, upstreamlog *logmon.Monitor) {
+	var out io.Writer = os.Stdout
+	if file != nil {
+		// The file goes FIRST: io.MultiWriter stops at the first failed writer,
+		// and a GUI process's console handle is not one that succeeds.
+		out = io.MultiWriter(file, os.Stdout)
+	}
 	switch logToStdout {
 	case config.LogToStdoutNone:
 		muxlog = logmon.NewWriter(io.Discard)
 		proxylog = logmon.NewWriter(io.Discard)
 		upstreamlog = logmon.NewWriter(io.Discard)
 	case config.LogToStdoutBoth:
-		muxlog = logmon.NewWriter(os.Stdout)
+		muxlog = logmon.NewWriter(out)
 		proxylog = logmon.NewWriter(muxlog)
 		upstreamlog = logmon.NewWriter(muxlog)
 	case config.LogToStdoutUpstream:
-		muxlog = logmon.NewWriter(os.Stdout)
+		muxlog = logmon.NewWriter(out)
 		proxylog = logmon.NewWriter(io.Discard)
 		upstreamlog = logmon.NewWriter(muxlog)
 	default:
 		// config.LogToStdoutProxy, and the fallback for an unset value.
-		muxlog = logmon.NewWriter(os.Stdout)
+		muxlog = logmon.NewWriter(out)
 		proxylog = logmon.NewWriter(muxlog)
 		upstreamlog = logmon.NewWriter(io.Discard)
 	}

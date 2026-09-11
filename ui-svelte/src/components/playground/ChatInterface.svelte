@@ -71,6 +71,7 @@
   import { modelCategory } from "../../lib/modelUtils";
   import { EFFORT_OFF, effortOptions, resolveEffort, requestEffort } from "../../lib/effort";
   import { scrollFade } from "../../lib/scrollFade";
+  import { dropZone } from "../../lib/dropZone";
   import Select from "../Select.svelte";
   import Toggle from "../Toggle.svelte";
   import { quotePrefix, fmtTokens, TEMP_STEPS, TEMP_LABELS, nearestTempIdx, currentDateLine, REWRITE_SYSTEM, MAX_IMAGES_PER_MESSAGE, validateImageFile, fileToDataUrl, type ToolItem } from "./chatHelpers";
@@ -328,6 +329,8 @@
   let attachedDocs = $state<AttachedDoc[]>([]);
   let fileInput = $state<HTMLInputElement | null>(null);
   let imageError = $state<string | null>(null);
+  // Painted by the dropZone action while an OS file drag hovers the pane.
+  let dropActive = $state(false);
 
   let hasModels = $derived($models.some((m) => !m.unlisted));
   // Image input needs a vision-capable model; without one the backend 500s
@@ -1403,9 +1406,38 @@
     event.preventDefault();
     await processFiles(files);
   }
+
+  // Drop anywhere in the chat pane, not just on the composer: the transcript is
+  // most of the surface, and aiming at a 2rem-tall textarea is the kind of
+  // precision a drag shouldn't need.
+  async function handleDrop(files: File[], skipped: string[]) {
+    if (files.length > 0) await processFiles(files);
+    else imageError = null;
+    // processFiles clears imageError first, so a folder can only be reported
+    // once the file half has had its say.
+    if (skipped.length > 0 && !imageError) {
+      imageError = `Can't attach ${skipped.join(", ")}: drop the files, not the folder.`;
+    }
+  }
 </script>
 
-<div class="flex flex-col h-full">
+<div
+  class="relative flex flex-col h-full"
+  use:dropZone={{ onFiles: handleDrop, onActive: (v) => (dropActive = v), enabled: hasModels }}
+>
+  <!-- Drop overlay. `pointer-events-none` is load-bearing: an overlay that took
+       pointer events would itself become the drag target the moment it appeared,
+       firing dragleave on the pane underneath and flickering itself back off. -->
+  {#if dropActive}
+    <div class="pointer-events-none absolute inset-2 z-30 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-primary bg-surface/85 backdrop-blur-[2px]">
+      <Paperclip class="w-7 h-7 text-primary" />
+      <span class="text-sm font-medium text-txtmain">Drop to attach</span>
+      <span class="text-xs text-txtsecondary">
+        {canAttach ? "Images, text, code, PDF, Word or audio" : "Text, code, PDF, Word or audio - this model can't read images"}
+      </span>
+    </div>
+  {/if}
+
   <!-- Empty state for no models configured -->
   {#if !hasModels}
     <div class="flex-1 flex flex-col items-center justify-center gap-3 text-txtsecondary">
