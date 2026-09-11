@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // hashCacheSuffix is appended to the output config path to store the digest of
@@ -275,11 +276,28 @@ func buildHashInput(roots []string, rawGenerate, sidecarBytes []byte) []byte {
 	return out
 }
 
+// regenMu serializes every inputs walk and config write of this process.
+// EnsureConfig is reached from several goroutines at once — the hub
+// download-completion hook (regenerate + hot-reload over a models tree that
+// JUST changed), the watch-models poller, the UI settings save, and the
+// backend install goroutine — and each one walks the models tree, prunes the
+// sidecar and rewrites the config + hash cache. Two of them at once can interleave
+// their writes and tear config.yaml, and a hash walk running over a sidecar
+// mid-prune sees bytes that are neither revision. One mutex keeps every walk
+// and every write whole; it is held for the duration of the scan, which is
+// the slow part, so callers that only need a change check (CurrentInputsHash)
+// pay the same price instead of racing the writer.
+var regenMu sync.Mutex
+
 // CurrentInputsHash computes the inputs hash for the generate file's present
 // state (models folder + generate bytes + sidecar). It is the same value
 // EnsureConfig compares against its cache, so callers can cheaply detect whether
-// a regen would produce a different config without running one.
+// a regen would produce a different config without running one. Serialized
+// with EnsureConfig via regenMu: a walk that ran concurrently with a regen
+// could hash a sidecar mid-prune and report a change that is already applied.
 func CurrentInputsHash(generatePath, modelsDirOverride string) (string, error) {
+	regenMu.Lock()
+	defer regenMu.Unlock()
 	rawGenerate, err := os.ReadFile(generatePath)
 	if err != nil {
 		return "", fmt.Errorf("reading generate file: %w", err)
@@ -303,7 +321,13 @@ func CachedConfigHash(outConfigPath string) string {
 // inputs changed (or the config is missing), and skips regeneration otherwise.
 // modelsDirOverride (from --models-dir) wins over the file's settings.modelsRoot.
 // logf receives one human-readable status line. Returns whether a regen ran.
+//
+// The whole scan-and-write is serialized under regenMu, so a download that
+// lands in the models folder can trigger a completion-hook regen and a
+// watch-models poll in the same instant without their writes interleaving.
 func EnsureConfig(generatePath, outConfigPath, modelsDirOverride string, logf func(string)) (regenerated bool, err error) {
+	regenMu.Lock()
+	defer regenMu.Unlock()
 	rawGenerate, err := os.ReadFile(generatePath)
 	if err != nil {
 		return false, fmt.Errorf("reading generate file: %w", err)

@@ -129,6 +129,10 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
    bytes (`InputsHash`/`InputsHashRoots` when extra category roots exist). If the stored
    `.modelhash` matches and the output exists, regeneration is skipped. `autoVram` always forces
    a regen (the live VRAM snapshot isn't visible to the hash) and re-samples via `resolveAutoVram`.
+   The whole walk-and-write is serialized under one package-level mutex shared with
+   `CurrentInputsHash`: the hub download-completion regen, the watch-models poll and a UI save
+   can all land in the same instant, and two of them interleaving their scans and `config.yaml`
+   writes tears the file.
 3. **Discover** — `DiscoverGgufModels`/`DiscoverGgufModelsMulti` walk the roots; `Generate`
    sorts rows and resolves each row's `Override` by path glob (+ optional quant).
 4. **Size** — `emitModel` dispatches by class, reads metadata (cached), resolves KV quant,
