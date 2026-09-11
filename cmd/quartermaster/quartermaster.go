@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -110,6 +111,7 @@ func main() {
 	flagTray := flag.Bool("tray", false, "start minimised to the system tray: no window until one is asked for, via the tray icon or a second launch (Windows only; no-op elsewhere)")
 	flagQuit := flag.Bool("quit", false, "ask a Quartermaster already running on this port to shut down, wait for it, and exit (what the installer and uninstaller run before touching the files)")
 	flagApp := flag.Bool("app", false, "open the dashboard in a native desktop window instead of a browser tab (implies -tray; Windows only, falls back to the browser elsewhere or when WebView2 is missing)")
+	flagLogFile := flag.String("log-file", filepath.Join(apppaths.DataDir(), "logs", "quartermaster.log"), "persistent log file: the app log, the proxy/upstream logs and, on Windows, the runtime fatal-error dump all land here (pass an empty string to disable)")
 	flagAdminAllow := flag.String("admin-allow", "", "extra IPs/CIDRs (comma separated) allowed to reach the dashboard/admin endpoints when listening beyond loopback, e.g. 100.64.0.0/10 for a tailnet")
 	flagAdminOpen := flag.Bool("admin-open", false, "serve the unauthenticated dashboard/admin endpoints to every remote host (legacy behaviour; the inference API is unaffected)")
 	flag.Parse()
@@ -119,6 +121,28 @@ func main() {
 	// stored app settings > bundle default) hinges on telling those apart.
 	argvGiven := map[string]bool{}
 	flag.Visit(func(f *flag.Flag) { argvGiven[f.Name] = true })
+
+	// Persistent log file, opened before the first log line is worth keeping
+	// (the checks below already emit errors). A GUI launch has no console, so
+	// without this a panic or a `fatal error:` exits into the void and the
+	// crash is undiagnosable: the slog stream and the log monitors are routed
+	// here, and on Windows the runtime's own fatal dump is re-pointed here too
+	// (it writes fd 2 directly, past the os.Stderr reassignment).
+	console := os.Stderr
+	var logFile *fileLog
+	if *flagLogFile != "" {
+		if fl, err := newFileLog(*flagLogFile, defaultLogMaxBytes); err != nil {
+			slog.Error("file logging disabled: could not open the log file", "path", *flagLogFile, "error", err)
+		} else {
+			logFile = fl
+		}
+	}
+	if logFile != nil {
+		os.Stderr = logFile.f
+		redirectStderr(logFile.f)
+		slog.SetDefault(slog.New(slog.NewTextHandler(io.MultiWriter(logFile, console), nil)))
+		defer logFile.Close()
+	}
 
 	// Go's flag package stops parsing at the first NON-flag argument and hands
 	// the rest back as positionals, which this program has none of. Left
@@ -339,8 +363,9 @@ func main() {
 
 	// Loggers are wired per cfg.LogToStdout: proxy/upstream feed muxLog, which
 	// owns the combined history served by /logs. They outlive config reloads,
-	// so a LogToStdout change requires a restart to take effect.
-	muxLog, proxyLog, upstreamLog := server.NewLoggers(cfg.LogToStdout)
+	// so a LogToStdout change requires a restart to take effect. logFile
+	// mirrors the console stream into the persistent log (nil when disabled).
+	muxLog, proxyLog, upstreamLog := server.NewLoggers(cfg.LogToStdout, logFile)
 
 	if len(cfg.Profiles) > 0 {
 		proxyLog.Warn("Profile functionality has been removed in favor of Groups. See the README for more information.")
