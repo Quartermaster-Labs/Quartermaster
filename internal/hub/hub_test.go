@@ -69,6 +69,82 @@ func TestIsModelFile(t *testing.T) {
 	}
 }
 
+// A repo that ships any GGUF stays a quant repo: its configs, tokenizer and
+// README are noise beside the files a loader can open.
+func TestSelectFiles_QuantRepo(t *testing.T) {
+	files := []File{
+		{Path: "Qwen3-8B-Q4_K_M.gguf"},
+		{Path: "Qwen3-8B-Q5_K_M.gguf"},
+		{Path: "mmproj-F16.gguf"},
+		{Path: "config.json"},
+		{Path: "tokenizer.json"},
+		{Path: "model.safetensors"},
+		{Path: "README.md"},
+		{Path: ".gitattributes"},
+	}
+	got := SelectFiles("unsloth/Qwen3-8B-GGUF", files)
+	want := []string{"Qwen3-8B-Q4_K_M.gguf", "Qwen3-8B-Q5_K_M.gguf", "mmproj-F16.gguf"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d files, want %d: %+v", len(got), len(want), got)
+	}
+	for i, p := range want {
+		if got[i].Path != p {
+			t.Errorf("file[%d] = %q, want %q", i, got[i].Path, p)
+		}
+	}
+}
+
+// A TRELLIS.2 repo is a component set: the safetensors and the manifests that
+// name them ARE the model, they land on disk as one folder, and every one of
+// them shares a group key so the picker offers the set as a single row. The
+// transformers scaffolding (tokenizer, preprocessor, chat template) stays out.
+func TestSelectFiles_ComponentSet(t *testing.T) {
+	files := []File{
+		{Path: "pipeline.json"},
+		{Path: "texturing_pipeline.json"},
+		{Path: "ckpts/shape_slat_flow.safetensors"},
+		{Path: "ckpts/shape_slat_flow.json"},
+		{Path: "ckpts/texture_flow.safetensors"},
+		{Path: "ckpts/texture_flow.json"},
+		{Path: "config.json"},
+		{Path: "tokenizer.json"},
+		{Path: "preprocessor_config.json"},
+		{Path: "chat_template.jinja"},
+		{Path: "README.md"},
+		{Path: "images/teaser.png"},
+	}
+	got := SelectFiles("microsoft/TRELLIS.2-4B", files)
+	want := map[string]bool{
+		"pipeline.json":                     true,
+		"texturing_pipeline.json":           true,
+		"ckpts/shape_slat_flow.safetensors": true,
+		"ckpts/shape_slat_flow.json":        true,
+		"ckpts/texture_flow.safetensors":    true,
+		"ckpts/texture_flow.json":           true,
+		"config.json":                       true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d files, want %d: %+v", len(got), len(want), got)
+	}
+	for _, f := range got {
+		if !want[f.Path] {
+			t.Errorf("unexpected file %q", f.Path)
+		}
+		if f.Group != "microsoft/TRELLIS.2-4B" {
+			t.Errorf("%q: group = %q, want the repo id so the set is one picker row", f.Path, f.Group)
+		}
+	}
+}
+
+// Neither a quant file nor a component file: nothing can be loaded, so the
+// picker must be empty rather than offering a README as a download.
+func TestSelectFiles_UnloadableRepo(t *testing.T) {
+	got := SelectFiles("someone/notes", []File{{Path: "README.md"}, {Path: "train.py"}, {Path: "tokenizer.json"}})
+	if len(got) != 0 {
+		t.Fatalf("want no files, got %+v", got)
+	}
+}
+
 func TestHF_CheckURL(t *testing.T) {
 	h := NewHF()
 	ok := []string{

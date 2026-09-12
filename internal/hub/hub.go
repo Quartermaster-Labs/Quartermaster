@@ -252,3 +252,78 @@ func IsModelFile(path string) bool {
 	}
 	return false
 }
+
+// ComponentSetFile reports whether path belongs to a COMPONENT SET: the weights
+// and manifests of a model that is a folder rather than a single file. TRELLIS.2
+// is what this exists for — safetensors under ckpts/ plus the pipeline.json that
+// names them — and the same shape covers the safetensors image models a
+// hand-written config points sd-server at.
+//
+// The json filter is deliberately narrow. A transformers repo carries
+// tokenizer.json, preprocessor_config.json, generation_config.json,
+// special_tokens_map.json and chat templates, none of which any engine here
+// reads; listing them would add tens of rows per repo that do nothing when
+// downloaded. What counts: the three pipeline/config manifests at the repo root,
+// and the per-checkpoint manifests under ckpts/ (the loader wants one
+// .safetensors per ckpts/*.json).
+func ComponentSetFile(path string) bool {
+	if IsModelFile(path) {
+		return true
+	}
+	lower := strings.ToLower(path)
+	if strings.HasSuffix(lower, ".safetensors") {
+		return true
+	}
+	if !strings.HasSuffix(lower, ".json") {
+		return false
+	}
+	base := lower
+	if i := strings.LastIndex(base, "/"); i >= 0 {
+		base = base[i+1:]
+	}
+	switch base {
+	case "config.json", "pipeline.json", "texturing_pipeline.json":
+		return true
+	}
+	// The per-checkpoint manifests (one .safetensors per ckpts/<name>.json). The
+	// leading slash is prepended so the test is segment-anchored either way: a
+	// path that STARTS with ckpts/ has no separator before it to match on.
+	return strings.Contains("/"+lower, "/ckpts/")
+}
+
+// SelectFiles applies the listing policy for ONE repo, which is why it takes the
+// whole file list rather than answering per path.
+//
+//   - A repo shipping any quant file is a QUANT repo: only those files are
+//     offered. This is the historical behaviour, and it is what keeps a llama
+//     repo's tokenizer and configs out of the picker.
+//   - A repo with none is a COMPONENT SET, where the weights and manifests ARE
+//     the model. Every listed file then shares one group key — the repo id — so
+//     the picker renders the whole set as a single row and downloads it
+//     complete. Half a set is not a model: safetensors with no pipeline.json
+//     beside them cannot be loaded by anything, so offering the pieces
+//     separately would only invite exactly that.
+func SelectFiles(repoID string, files []File) []File {
+	quant := false
+	for _, f := range files {
+		if IsModelFile(f.Path) {
+			quant = true
+			break
+		}
+	}
+	out := make([]File, 0, len(files))
+	for _, f := range files {
+		if quant {
+			if IsModelFile(f.Path) {
+				out = append(out, f)
+			}
+			continue
+		}
+		if !ComponentSetFile(f.Path) {
+			continue
+		}
+		f.Group = repoID
+		out = append(out, f)
+	}
+	return out
+}
