@@ -257,7 +257,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	s.cfg.Store(&cfg)
 	lm := cfg.ListenerModelSets()
 	s.listenerModels.Store(&lm)
-	s.backendMetrics = newBackendMetricsMonitor(s.runningProxies, s.inflight.Current, s.local.Inflight, proxylog)
+	s.backendMetrics = newBackendMetricsMonitor(s.llamaProxies, s.inflight.Current, s.local.Inflight, proxylog)
 	go s.backendMetrics.run(s.shutdownCtx)
 	go s.trackSystemVram(s.shutdownCtx)
 	// slotParticipates/slotRecurrent read the LIVE config (s.config()) so a hot
@@ -684,6 +684,24 @@ func (s *Server) runningProxies() map[string]string {
 		}
 		if mc, ok := models[id]; ok && mc.Proxy != "" {
 			out[id] = mc.Proxy
+		}
+	}
+	return out
+}
+
+// llamaProxies is runningProxies narrowed to the backends the metrics monitor
+// can actually read. /metrics, /slots and /props are llama.cpp's API: scraping
+// them on any other backend is a 404 every 2s in that process's log, and on a
+// single-threaded one (trellis2-server) a connection held open for the length of
+// a generation. The slot cache keeps the unfiltered map -- it gates itself on
+// --slot-save-path, which only a llama-server command carries.
+func (s *Server) llamaProxies() map[string]string {
+	all := s.runningProxies()
+	models := s.config().Models
+	out := make(map[string]string, len(all))
+	for id, base := range all {
+		if mc, ok := models[id]; ok && runsLlamaServer(mc.Cmd) {
+			out[id] = base
 		}
 	}
 	return out
