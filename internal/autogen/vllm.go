@@ -52,6 +52,8 @@ func kindClass(kind string) string {
 		return "segment"
 	case "upscale", "realesrgan", "esrgan":
 		return "upscale"
+	case "trellis2", "trellis", "3d":
+		return "3d"
 	}
 	return ""
 }
