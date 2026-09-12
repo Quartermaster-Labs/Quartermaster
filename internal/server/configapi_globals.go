@@ -61,6 +61,15 @@ type advancedDTO struct {
 	// VRAM at all. An iGPU reports a slice of system RAM as dedicated memory,
 	// and pooling that into the budget invents VRAM no card has.
 	MinGpuVramGB *float64 `json:"minGpuVramGB"`
+	// SharedMemory is how the system-memory pool a GPU can address (AMD GTT,
+	// CUDA host mapping) counts toward that budget: auto counts it only for an
+	// integrated device whose dedicated hole is under the floor, on counts it
+	// for any device, off for none. Empty means auto.
+	SharedMemory *string `json:"sharedMemory"`
+	// PoolIntegratedGpu lets an integrated device be a split target beside a
+	// real card. It is a PAIRING rule: an APU with no other GPU gets the whole
+	// budget either way.
+	PoolIntegratedGpu *bool `json:"poolIntegratedGpu"`
 }
 
 // kvQuantValues is the accepted -ctk/-ctv set, plus "" for auto. Whitelisted
@@ -70,6 +79,13 @@ type advancedDTO struct {
 var kvQuantValues = map[string]bool{
 	"": true, "f32": true, "f16": true, "bf16": true,
 	"q8_0": true, "q5_1": true, "q5_0": true, "q4_1": true, "q4_0": true,
+}
+
+// sharedMemoryValues is the accepted sharedMemory set, plus "" for auto. An
+// unknown value would fall back to auto in SharedMemoryMode anyway; validating
+// here means the UI says so instead of silently ignoring the pin.
+var sharedMemoryValues = map[string]bool{
+	"": true, autogen.SharedMemoryAuto: true, autogen.SharedMemoryOn: true, autogen.SharedMemoryOff: true,
 }
 
 // guardsFromSettings reads the effective guard values. The two tri-state
@@ -93,6 +109,8 @@ func guardsFromSettings(s autogen.Settings) guardsDTO {
 // Whether a value is user-set is reported separately (advancedOverridden).
 func advancedFromSettings(s autogen.Settings) advancedDTO {
 	ladder := append([]int(nil), s.DenseCtxLadder...)
+	shared := s.SharedMemoryMode()
+	poolIntegrated := s.PoolIntegratedEnabled()
 	return advancedDTO{
 		ComputeBufFactor:   &s.ComputeBufFactor,
 		VisionOverheadGB:   &s.VisionOverheadGB,
@@ -105,6 +123,8 @@ func advancedFromSettings(s autogen.Settings) advancedDTO {
 		KvQuant:            &s.KvQuant,
 		LoraDir:            &s.LoraDir,
 		MinGpuVramGB:       &s.MinGpuVramGB,
+		SharedMemory:       &shared,
+		PoolIntegratedGpu:  &poolIntegrated,
 	}
 }
 
@@ -117,7 +137,7 @@ func advancedOverridden(p *autogen.SettingsPatch) bool {
 	return p.ComputeBufFactor != nil || p.VisionOverheadGB != nil || p.VisionCtx != nil ||
 		p.MoeCtxTarget != nil || p.DenseMinCtx != nil || p.DenseCtxLadder != nil ||
 		p.Threads != nil || p.HealthCheckTimeout != nil || p.KvQuant != nil || p.LoraDir != nil ||
-		p.MinGpuVramGB != nil
+		p.MinGpuVramGB != nil || p.SharedMemory != nil || p.PoolIntegrated != nil
 }
 
 // guardsOverridden reports the same for the guard / GPU-usage sections.
@@ -218,6 +238,10 @@ func (s *Server) handleAPIAdvancedPut(w http.ResponseWriter, r *http.Request) {
 		shared.SendResponse(w, r, http.StatusBadRequest, "unknown kvQuant (want one of: f32 f16 bf16 q8_0 q5_1 q5_0 q4_1 q4_0, or empty for auto)")
 		return
 	}
+	if body.SharedMemory != nil && !sharedMemoryValues[strings.TrimSpace(strings.ToLower(*body.SharedMemory))] {
+		shared.SendResponse(w, r, http.StatusBadRequest, "unknown sharedMemory (want auto, on or off)")
+		return
+	}
 	if body.DenseCtxLadder != nil {
 		for _, v := range *body.DenseCtxLadder {
 			if v <= 0 {
@@ -237,6 +261,8 @@ func (s *Server) handleAPIAdvancedPut(w http.ResponseWriter, r *http.Request) {
 		KvQuant:            body.KvQuant,
 		LoraDir:            body.LoraDir,
 		MinGpuVramGB:       nilIfZeroF(body.MinGpuVramGB),
+		SharedMemory:       body.SharedMemory,
+		PoolIntegrated:     body.PoolIntegratedGpu,
 	}
 	if body.DenseCtxLadder != nil && len(*body.DenseCtxLadder) > 0 {
 		patch.DenseCtxLadder = body.DenseCtxLadder
@@ -248,6 +274,11 @@ func (s *Server) handleAPIAdvancedPut(w http.ResponseWriter, r *http.Request) {
 	}
 	if patch.LoraDir != nil && strings.TrimSpace(*patch.LoraDir) == "" {
 		patch.LoraDir = nil
+	}
+	// Same for a blank sharedMemory: it is the default, and storing it would
+	// make the section report itself as customised.
+	if patch.SharedMemory != nil && strings.TrimSpace(*patch.SharedMemory) == "" {
+		patch.SharedMemory = nil
 	}
 	// Every field of this section is being rewritten, so clear the stored ones
 	// first: a plain merge would keep a knob the user just blanked. Only THIS
@@ -308,6 +339,8 @@ func (s *Server) clearAdvancedPatch() error {
 	next.KvQuant = nil
 	next.LoraDir = nil
 	next.MinGpuVramGB = nil
+	next.SharedMemory = nil
+	next.PoolIntegrated = nil
 	return autogen.ReplaceSidecarSettings(s.autogen.GeneratePath, next)
 }
 
@@ -368,6 +401,12 @@ func describeAdvanced(p autogen.SettingsPatch) string {
 	}
 	if p.LoraDir != nil {
 		parts = append(parts, "loraDir="+*p.LoraDir)
+	}
+	if p.SharedMemory != nil {
+		parts = append(parts, "sharedMemory="+*p.SharedMemory)
+	}
+	if p.PoolIntegrated != nil {
+		parts = append(parts, "poolIntegratedGpu="+strconv.FormatBool(*p.PoolIntegrated))
 	}
 	if len(parts) == 0 {
 		return "all defaults"

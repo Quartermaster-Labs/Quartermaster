@@ -288,7 +288,7 @@ func (s *Server) handleAPIPerformance(w http.ResponseWriter, r *http.Request) {
 	// device, and the filter is a plain timestamp cut that can drop a card whose
 	// newest reading happens to predate the cursor, which would silently halve
 	// the pooled total for that poll.
-	pooled := pooledVramStats(gpuStats, s.offloadSettingsVal().MultiGpuEnabled())
+	pooled := pooledVramStats(gpuStats, s.offloadSettingsVal().MultiGpuEnabled(), s.offloadSettingsVal().DevicePolicy())
 
 	if afterStr := r.URL.Query().Get("after"); afterStr != "" {
 		after, err := time.Parse(time.RFC3339, afterStr)
@@ -391,12 +391,12 @@ type pooledVram struct {
 // zeroed bar. Deliberately NOT a perf.GpuStat: the pooled figure is only
 // meaningful for memory, and a synthetic stat would carry a temperature and a
 // power draw that belong to no physical card.
-func pooledVramStats(gpus []perf.GpuStat, multi bool) *pooledVram {
-	eligible := autogen.EligibleGpuStats(gpus, multi)
+func pooledVramStats(gpus []perf.GpuStat, multi bool, policy autogen.GpuPolicy) *pooledVram {
+	eligible := autogen.EligibleGpuStats(gpus, multi, policy)
 	if len(eligible) == 0 {
 		return nil
 	}
-	stat, ok := pooledGPUStat(gpus, multi)
+	stat, ok := pooledGPUStat(gpus, multi, policy)
 	if !ok {
 		return nil
 	}

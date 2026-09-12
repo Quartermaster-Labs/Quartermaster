@@ -35,9 +35,14 @@ Three details that are easy to get wrong:
   `CUDA_DEVICE_ORDER=FASTEST_FIRST`. On a mismatched pair those disagree and the split lands on
   the wrong cards silently, so `emitProfile` emits `env: - "CUDA_DEVICE_ORDER=PCI_BUS_ID"`
   alongside the flags.
-- **Eligibility.** An adapter under `minGpuVramGB` (default 3) is dropped. An iGPU reports a
-  slice of system RAM as dedicated VRAM: pooling it invents budget, and splitting real layers
-  onto it is slower than not splitting at all.
+- **Eligibility.** An adapter under `minGpuVramGB` (default 3) is dropped. The floor is applied
+  to the device's total **after** the shared system-memory pool is folded in, and only a device
+  that looks integrated (an APU) has that pool counted at all (`settings.sharedMemory`, default
+  `auto`) — a discrete card's host aperture is slower than its own VRAM, so it is never budget.
+  Without this an APU's 2 GB BIOS carve-out sat under the floor and the only GPU in the machine
+  was invisible to every budget (issue #37). Whether an integrated GPU may be a *split target*
+  beside a real card is a separate, default-off knob (`poolIntegratedGpu`): an APU with no other
+  GPU gets the whole budget regardless.
 
 `multiGpu: false` collapses everything (budget, split, guard, wizard seed) back to the single
 device `MainIndex` picks, which is the pre-issue-#4 behaviour.

@@ -188,7 +188,13 @@ const hashCacheSuffix = ".modelhash"
 //	     for that one sample used to bake a single-device plan that spawn time
 //	     could not repair, since the live retune rewrites an existing
 //	     --tensor-split and cannot add one.
-const genVersion = "v66"
+//	v67: an integrated GPU's shared system-memory pool counts toward its budget.
+//	     A 780M with a 2GB BIOS carve-out used to sit under the 3GB inference
+//	     floor and be dropped entirely, so an APU-only box sized against no
+//	     GPU at all and put every layer on the CPU (issue #37). The reading is
+//	     now carve-out + GTT, and the device is one the sizer can plan on, so
+//	     -ngl/--tensor-split/-c all change for inputs that did not.
+const genVersion = "v67"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

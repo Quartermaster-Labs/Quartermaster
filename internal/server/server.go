@@ -443,12 +443,13 @@ func (s *Server) WireDynamicOffload(settings autogen.Settings) {
 			// actually free rather than the one that was free at generate
 			// time. offloadSettingsVal returns a copy, so this is local.
 			sv := s.offloadSettingsVal()
-			sv.Gpus = s.liveGpuSet(sv.MultiGpuEnabled())
+			sv.Gpus = s.liveGpuSet(sv.MultiGpuEnabled(), sv.DevicePolicy())
 			return autogen.LiveOffloadArgs(sv, args, free, freeOK, logf)
 		}
 		n := 0
+		samplePolicy := s.offloadSettingsVal().DevicePolicy()
 		sample := func() (float64, bool) {
-			fresh, fok := autogen.SampleFreeVramGB(spawnVramSampleTimeout)
+			fresh, fok := autogen.SampleFreeVramGB(spawnVramSampleTimeout, samplePolicy)
 			if fok {
 				n++
 				logf(fmt.Sprintf("dynoffload: re-probe %d/%d - free now %.1fGB (post-eviction reclaim)",
@@ -553,12 +554,12 @@ const vramReclaimEpsilonGB = 0.15
 // what each eligible card has free right now. Feeds the spawn guard's
 // --tensor-split retune; empty when there is no GPU telemetry, which the guard
 // reads as "keep the baked ratio".
-func (s *Server) liveGpuSet(multi bool) autogen.GpuSet {
+func (s *Server) liveGpuSet(multi bool, policy autogen.GpuPolicy) autogen.GpuSet {
 	if s.perf == nil {
 		return nil
 	}
 	_, gpus := s.perf.Current()
-	return autogen.LiveGpuSet(gpus, multi)
+	return autogen.LiveGpuSet(gpus, multi, policy)
 }
 
 // freeVramGB returns the POOLED free VRAM (GB) across every eligible adapter in
@@ -572,7 +573,7 @@ func (s *Server) freeVramGB() (float64, bool) {
 		return 0, false
 	}
 	_, gpus := s.perf.Current()
-	bestStat, ok := pooledGPUStat(gpus, s.offloadSettingsVal().MultiGpuEnabled())
+	bestStat, ok := pooledGPUStat(gpus, s.offloadSettingsVal().MultiGpuEnabled(), s.offloadSettingsVal().DevicePolicy())
 	if !ok {
 		return 0, false
 	}
@@ -638,7 +639,7 @@ func (s *Server) trackSystemVram(ctx context.Context) {
 			// Pooled used VRAM over the eligible set, matching freeVramGB.
 			// The floor is subtracted from a pooled budget, so it has to be
 			// the whole set's idle cost, not one card's.
-			bestStat, ok := pooledGPUStat(gpus, s.offloadSettingsVal().MultiGpuEnabled())
+			bestStat, ok := pooledGPUStat(gpus, s.offloadSettingsVal().MultiGpuEnabled(), s.offloadSettingsVal().DevicePolicy())
 			if !ok {
 				continue
 			}

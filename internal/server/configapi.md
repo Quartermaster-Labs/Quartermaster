@@ -30,8 +30,14 @@ here 501s when `s.autogen == nil`** — they are the `-generate` surface. Route 
   (clearing is the explicit `hfTokenClear`).
 - **Clearing a field needs a replace, not a merge.** `MergeSettingsPatch` can only ever *set*, so
   "restore this section to defaults" is inexpressible through `UpsertSidecarSettings`. The advanced
-  reset therefore read-modify-writes: nil out only its own ten fields, then
+  reset therefore read-modify-writes: nil out only its own twelve fields, then
   `autogen.ReplaceSidecarSettings` stores the result verbatim.
+- **The device-policy knobs are VALIDATED, not just typed.** `sharedMemory` is whitelisted to
+  `auto|on|off` (an unknown pin would silently fall back to auto inside `SharedMemoryMode`), and
+  the GET reports the EFFECTIVE mode so the UI never shows a blank. Both knobs reach the sizer as
+  an `autogen.GpuPolicy` — see the device-policy bullet in [`../autogen/CLAUDE.md`](../autogen/CLAUDE.md),
+  and `GET /api/settings`'s `gpu.devices[]` for the per-adapter `integrated`/`sharedTotalGB`
+  the Values tab shows.
 - **Advanced knobs map 0/blank → nil on the way in.** `Settings.applyDefaults()` runs *before* the
   patch is overlaid (`LoadGenerateFile`), so a stored `0` is never re-defaulted — it reaches the
   sizer as zero (a zero-byte compute buffer, `-t 0`). The guard section is the deliberate opposite:

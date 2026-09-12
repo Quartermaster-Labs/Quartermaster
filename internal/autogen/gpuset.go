@@ -46,6 +46,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/quartermaster-labs/quartermaster/internal/logmon"
@@ -67,6 +68,19 @@ type GpuDevice struct {
 	Name    string
 	TotalGB float64
 	FreeGB  float64
+	// Integrated marks a device that allocates out of SYSTEM memory — an APU's
+	// GPU — as opposed to a card with its own VRAM. Topology, not policy: it is
+	// set even when the shared pool is not counted (sharedMemory: off), because
+	// the rule it feeds is about which devices may share a split.
+	Integrated bool
+	// SharedTotalGB is the system-memory pool the device can address as reported
+	// by the platform (0 when it reports none). SharedFreeGB is how much of that
+	// pool is COUNTED in FreeGB: zero both for a discrete card's host aperture
+	// and for an integrated device whose pool the settings excluded. The two
+	// differ exactly when shared memory was reported but not budgeted, which is
+	// what makes "%.1fGB of this budget is really RAM" answerable.
+	SharedTotalGB float64
+	SharedFreeGB  float64
 }
 
 // GpuSet is the eligible adapters, ordered by Index.
@@ -382,49 +396,301 @@ func ResetIdleFreeByDevice() {
 	lastResolvedAt = time.Time{}
 }
 
-// gpuSetFromStats builds the eligible set from a telemetry sample: newest
-// reading per device id, adapters below minTotalGB dropped, ordered by index.
-// Split out for unit testing without a real GPU.
-func gpuSetFromStats(stats []perf.GpuStat, minTotalGB float64) GpuSet {
-	if minTotalGB <= 0 {
-		minTotalGB = minInferenceVramGB
+// SharedMemory modes. The system-memory pool a GPU can address is the whole
+// story on an APU and a host-side aperture on a discrete card, and the telemetry
+// carries no flag that tells the two apart — a 780M and a 6600 both report
+// "VRAM" plus a GTT several times larger. So the user gets the last word.
+const (
+	// SharedMemoryAuto counts the shared pool only for a device that looks like
+	// an APU: a name marker, or a dedicated pool small enough and a shared pool
+	// large enough that no discrete card has that shape. Default.
+	SharedMemoryAuto = "auto"
+	// SharedMemoryOff never counts it: the pre-#37 behaviour, and the escape
+	// hatch if auto guesses wrong on a discrete card.
+	SharedMemoryOff = "off"
+	// SharedMemoryOn counts it for every device that reports one.
+	SharedMemoryOn = "on"
+)
+
+// GpuPolicy is the user's device-selection policy, passed to the set builders
+// explicitly rather than read from a package global, so the sizer, the OOM
+// guard and the spawn-time retune cannot disagree about which devices count.
+// Build it from Settings with DevicePolicy.
+type GpuPolicy struct {
+	// MinTotalGB is the eligibility floor, applied to the device's TOTAL after
+	// the shared pool (when counted) is folded in. 0 => minInferenceVramGB.
+	MinTotalGB float64
+	// SharedMemory is SharedMemoryAuto / Off / On.
+	SharedMemory string
+	// PoolIntegrated allows an integrated GPU to be a split target beside a
+	// dedicated card. See Settings.PoolIntegratedGpu.
+	PoolIntegrated bool
+}
+
+// minTotalGB resolves the floor, with the same default the wizard writes out.
+func (p GpuPolicy) minTotalGB() float64 {
+	if p.MinTotalGB <= 0 {
+		return minInferenceVramGB
 	}
-	// The server hands us a sample HISTORY, the one-shot probe hands us a single
-	// sample; keeping the newest per id is correct for both.
+	return p.MinTotalGB
+}
+
+// probePolicy is the device-selection policy for the one-shot probes that cannot
+// take a Settings argument: the hardware-budget seed (a process-wide OnceValues)
+// and vllm's per-process card probe. Stored from the settings before any of them
+// run — seedHardwareBudgets and ResolveGpuSet both do it — and the zero value
+// means auto with the default floor, i.e. exactly the behaviour these probes had
+// before the policy existed.
+var probePolicy atomic.Value // holds GpuPolicy
+
+// setProbePolicy records the policy the one-shot probes should use.
+func setProbePolicy(p GpuPolicy) { probePolicy.Store(p) }
+
+// currentProbePolicy returns the last recorded policy.
+func currentProbePolicy() GpuPolicy {
+	if v := probePolicy.Load(); v != nil {
+		if p, ok := v.(GpuPolicy); ok {
+			return p
+		}
+	}
+	return GpuPolicy{}
+}
+
+// latestGpuStats is the newest reading per device id, ordered by id. The server
+// hands us a sample HISTORY, the one-shot probe a single sample; keeping the
+// newest per id is correct for both.
+func latestGpuStats(stats []perf.GpuStat) []perf.GpuStat {
 	latest := make(map[int]perf.GpuStat, len(stats))
 	for _, g := range stats {
 		if prev, seen := latest[g.ID]; !seen || g.Timestamp.After(prev.Timestamp) {
 			latest[g.ID] = g
 		}
 	}
-	var out GpuSet
+	out := make([]perf.GpuStat, 0, len(latest))
 	for _, g := range latest {
-		if g.MemTotalMB <= 0 {
+		out = append(out, g)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// gpuSetFromStats builds the eligible set from a telemetry sample: newest
+// reading per device id, adapters below the floor dropped, ordered by index.
+// Split out for unit testing without a real GPU.
+func gpuSetFromStats(stats []perf.GpuStat, policy GpuPolicy) GpuSet {
+	minTotalGB := policy.minTotalGB()
+	var out GpuSet
+	for _, g := range latestGpuStats(stats) {
+		integrated := detectedIntegrated(g)
+		counted := sharedPoolCounts(g, policy.SharedMemory)
+		eff := effectiveGpuStat(g, counted)
+		if eff.MemTotalMB <= 0 {
 			continue
 		}
-		totalGB := float64(g.MemTotalMB) / 1024.0
+		totalGB := float64(eff.MemTotalMB) / 1024.0
 		if totalGB < minTotalGB {
 			continue
 		}
-		free := g.MemTotalMB - g.MemUsedMB
+		free := eff.MemTotalMB - eff.MemUsedMB
 		if free < 0 {
 			free = 0
 		}
-		out = append(out, GpuDevice{
-			Index:   g.ID,
-			Name:    g.Name,
-			TotalGB: totalGB,
-			FreeGB:  float64(free) / 1024.0,
-		})
+		dev := GpuDevice{
+			Index:      g.ID,
+			Name:       g.Name,
+			TotalGB:    totalGB,
+			FreeGB:     float64(free) / 1024.0,
+			Integrated: integrated,
+		}
+		if g.SharedTotalMB > 0 {
+			dev.SharedTotalGB = float64(g.SharedTotalMB) / 1024.0
+		}
+		if counted {
+			sharedFree := g.SharedTotalMB - g.SharedUsedMB
+			if sharedFree > 0 {
+				dev.SharedFreeGB = float64(sharedFree) / 1024.0
+			}
+		}
+		out = append(out, dev)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Index < out[j].Index })
+	return dropUnpooledIntegrated(out, policy.PoolIntegrated)
+}
+
+// dropUnpooledIntegrated keeps an integrated GPU out of a set that also holds a
+// dedicated card, unless the user has explicitly allowed the pairing.
+//
+// The eligibility floor used to carry this rule, by making the device invisible
+// outright — which on an APU box also hid the only GPU in the machine, from
+// every budget in the program (issue #37). The rule was never about the device,
+// though: it is about PAIRING one with a card that does the job better, so it is
+// applied to the set. A set of nothing but integrated devices is returned
+// unchanged, which is the APU-only box.
+func dropUnpooledIntegrated(set GpuSet, allow bool) GpuSet {
+	if allow || len(set) < 2 {
+		return set
+	}
+	hasDedicated := false
+	for _, d := range set {
+		if !d.Integrated {
+			hasDedicated = true
+			break
+		}
+	}
+	if !hasDedicated {
+		return set
+	}
+	out := make(GpuSet, 0, len(set))
+	for _, d := range set {
+		if !d.Integrated {
+			out = append(out, d)
+		}
+	}
 	return out
+}
+
+// maxIntegratedDedicatedGB and integratedSharedRatio bound AUTO's shape test:
+// a device is treated as integrated when its own pool is small AND the shared
+// pool dwarfs it. A discrete card in a large-RAM machine reports a big GTT too,
+// so the ratio carries the weight — an 8GB card with a 16GB aperture is 2x.
+// Exceeding either bound only means the pool is not counted, which is the
+// conservative answer.
+const (
+	maxIntegratedDedicatedGB = 8.0
+	integratedSharedRatio    = 3.0
+)
+
+// apuNameMarkers name an APU where the shape test cannot. "Ryzen" appears in
+// rocm-smi's Card Series on an APU and never on a discrete card; "Radeon
+// Graphics" is the generic name an APU's iGPU reports (a card reports "Radeon
+// RX ...").
+var apuNameMarkers = []string{"ryzen", "athlon", "radeon graphics"}
+
+// detectedIntegrated reports the device's TOPOLOGY: does it allocate out of
+// system memory? Independent of whether the pool is counted, so the pooling
+// rule and the budget rule can differ (a user may budget a discrete card's host
+// aperture without wanting it treated as an iGPU).
+func detectedIntegrated(g perf.GpuStat) bool {
+	if g.MemTotalMB <= 0 || g.SharedTotalMB <= 0 {
+		return false
+	}
+	name := strings.ToLower(g.Name)
+	for _, marker := range apuNameMarkers {
+		if strings.Contains(name, marker) {
+			return true
+		}
+	}
+	dedicated := float64(g.MemTotalMB)
+	return dedicated <= maxIntegratedDedicatedGB*1024 &&
+		float64(g.SharedTotalMB) >= integratedSharedRatio*dedicated
+}
+
+// sharedPoolCounts reports whether this device's shared pool is budget under
+// the given mode. Only AUTO guesses, and it guesses conservatively: see
+// detectedIntegrated, which refuses to call a large card integrated even when it
+// reports a large aperture.
+func sharedPoolCounts(g perf.GpuStat, mode string) bool {
+	if g.SharedTotalMB <= 0 {
+		return false
+	}
+	switch mode {
+	case SharedMemoryOff:
+		return false
+	case SharedMemoryOn:
+		return true
+	default:
+		return detectedIntegrated(g)
+	}
+}
+
+// effectiveGpuStat is the device with its counted pool folded into the memory
+// figures every budget computation reads. The RAW stat keeps the two pools
+// apart for display and for the platform readers; only the folded one is
+// allowed to answer "how much can this device hold".
+func effectiveGpuStat(g perf.GpuStat, counted bool) perf.GpuStat {
+	if !counted {
+		return g
+	}
+	// Both pools are summed, including USED. On an APU a driver may report a
+	// shared allocation under both headings, which overstates used and so
+	// understates free: the sizer then offloads a layer or two more than it had
+	// to, and the model still loads. Understating free is the safe direction to
+	// be wrong in, and the alternative (taking the larger pool instead of the
+	// sum) would hide real memory on Linux, where GTT genuinely grows past the
+	// carve-out.
+	g.MemTotalMB += g.SharedTotalMB
+	g.MemUsedMB += g.SharedUsedMB
+	return g
+}
+
+// DescribeGpuStats renders one telemetry reading for a human: what each adapter
+// reported, what the policy made of it, and what the eligible set adds up to.
+// cmd/monitor-test prints it, so a report from a machine we do not have arrives
+// with the classification already attached -- which is what issue #37 (an APU
+// whose only GPU was invisible) needed and could not get.
+func DescribeGpuStats(stats []perf.GpuStat, multi bool, policy GpuPolicy) []string {
+	set := gpuSetFromStats(stats, policy)
+	kept := make(map[int]bool, len(set))
+	for _, d := range set {
+		kept[d.Index] = true
+	}
+	var lines []string
+	for _, g := range latestGpuStats(stats) {
+		integrated := detectedIntegrated(g)
+		counted := sharedPoolCounts(g, policy.SharedMemory)
+		eff := effectiveGpuStat(g, counted)
+		topology := "dedicated"
+		if integrated {
+			topology = "integrated"
+		}
+		line := fmt.Sprintf("  [%d] %-28s %s %6d MB used / %6d MB total",
+			g.ID, truncName(g.Name, 28), topology, g.MemUsedMB, g.MemTotalMB)
+		if g.SharedTotalMB > 0 {
+			line += fmt.Sprintf("  + shared %6d MB used / %6d MB total (%s)",
+				g.SharedUsedMB, g.SharedTotalMB, onOff(counted))
+		}
+		usableGB := float64(eff.MemTotalMB) / 1024.0
+		if counted {
+			line += fmt.Sprintf("  => %5.1f GB usable", usableGB)
+		}
+		switch {
+		case usableGB < policy.minTotalGB():
+			line += fmt.Sprintf("  DROPPED (under the %.1f GB floor)", policy.minTotalGB())
+		case !kept[g.ID]:
+			line += "  EXCLUDED (an integrated GPU is not a split target unless poolIntegratedGpu is on)"
+		}
+		lines = append(lines, line)
+	}
+	if len(set) == 0 {
+		return append(lines, "  eligible budget: none (no GPU counts; the sizer keeps its static budget)")
+	}
+	mode := "single"
+	if multi {
+		mode = "multi"
+	}
+	lines = append(lines, fmt.Sprintf("  eligible budget (%s): %.1f GB total, %.1f GB free over %d device(s)",
+		mode, set.TotalGB(), set.FreeGB(), len(set)))
+	return lines
+}
+
+// truncName keeps the diagnostic table aligned on a long adapter name.
+func truncName(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n-1] + "…"
+}
+
+func onOff(b bool) string {
+	if b {
+		return "counted"
+	}
+	return "not counted"
 }
 
 // SampleGpuSet takes one telemetry snapshot and returns the eligible devices.
 // ok is false when no GPU telemetry is available within timeout, and the caller
 // keeps whatever static budget it had.
-func SampleGpuSet(timeout time.Duration, minTotalGB float64) (GpuSet, bool) {
+func SampleGpuSet(timeout time.Duration, policy GpuPolicy) (GpuSet, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -434,7 +700,7 @@ func SampleGpuSet(timeout time.Duration, minTotalGB float64) (GpuSet, bool) {
 	}
 	select {
 	case stats := <-gpuCh:
-		set := gpuSetFromStats(stats, minTotalGB)
+		set := gpuSetFromStats(stats, policy)
 		if len(set) == 0 {
 			return nil, false
 		}
@@ -470,6 +736,11 @@ func LastGpuSet() GpuSet {
 // multi-GPU off, which pins the set to the single main device and reproduces
 // the pre-multi-GPU behaviour exactly.
 func ResolveGpuSet(s *Settings, logf func(string)) {
+	// The one-shot probes a generate pass makes on its own (vllm's card total)
+	// cannot see the Settings, so seed them with the same policy this resolve is
+	// using. Idempotent: same source, same value.
+	setProbePolicy(s.DevicePolicy())
+
 	idleFreeMu.Lock()
 	cached := lastResolvedSet
 	fresh := len(cached) > 0 && time.Since(lastResolvedAt) < gpuSetCacheTTL
@@ -477,7 +748,7 @@ func ResolveGpuSet(s *Settings, logf func(string)) {
 
 	set, ok := cached, fresh
 	if !ok {
-		set, ok = SampleGpuSet(autoVramSampleTimeout, s.MinGpuVramGB)
+		set, ok = SampleGpuSet(autoVramSampleTimeout, s.DevicePolicy())
 	}
 	if !ok {
 		return
@@ -492,12 +763,27 @@ func ResolveGpuSet(s *Settings, logf func(string)) {
 		}
 	}
 	s.Gpus = set
-	if logf == nil || len(set) < 2 {
+	if logf == nil {
+		return
+	}
+	// An APU box has ONE device, which is exactly the box this fork could not
+	// see at all before #37 — and the box a bug report is about. Say what the
+	// budget is and how much of it is host memory, or "the GPU is still
+	// invisible" arrives with nothing to check.
+	if len(set) == 1 {
+		d := set[0]
+		if d.Integrated && d.SharedFreeGB > 0 {
+			logf(fmt.Sprintf("gpu: %s is an integrated GPU; free %.2fGB (%.2fGB dedicated + %.2fGB shared system memory)",
+				d.Name, d.FreeGB, d.FreeGB-d.SharedFreeGB, d.SharedFreeGB))
+		}
 		return
 	}
 	names := make([]string, len(set))
 	for i, d := range set {
 		names[i] = fmt.Sprintf("%d:%s %.1f/%.1fGB free", d.Index, d.Name, d.FreeGB, d.TotalGB)
+		if d.Integrated && d.SharedFreeGB > 0 {
+			names[i] += fmt.Sprintf(" (integrated, %.1fGB shared)", d.SharedFreeGB)
+		}
 		// A card busy at this instant is planned against its stable capacity,
 		// so say so: otherwise the emitted --tensor-split reads as wrong
 		// against the free figure on the same line, and this log is what a bug
@@ -514,14 +800,21 @@ func ResolveGpuSet(s *Settings, logf func(string)) {
 // EligibleGpuStats is the exported eligibility rule, for callers outside this
 // package that hold a raw perf sample history and must describe the SAME cards
 // the sizer planned against: newest sample per device id, adapters under the
-// inference floor dropped, and (when multi is false) everything but the device
+// inference floor dropped, integrated devices kept out of a mixed set unless the
+// policy allows it, and (when multi is false) everything but the device
 // --main-gpu would pick removed.
+//
+// The returned stats are the FOLDED ones — an integrated device's shared pool is
+// already inside MemTotalMB/MemUsedMB — because the callers pool those figures
+// and compare the result against a budget the sizer derived from the same fold.
+// Returning the raw stats here is how the guard and the gauge would end up
+// describing a card the plan never used.
 //
 // The server's OOM guard and idle-VRAM tracker call it. Before issue #4 they
 // each open-coded "largest adapter", which is how a two-card box got a ceiling
 // describing one card while the models were sized for both.
-func EligibleGpuStats(stats []perf.GpuStat, multi bool) []perf.GpuStat {
-	set := gpuSetFromStats(stats, minInferenceVramGB)
+func EligibleGpuStats(stats []perf.GpuStat, multi bool, policy GpuPolicy) []perf.GpuStat {
+	set := gpuSetFromStats(stats, policy)
 	if len(set) == 0 {
 		return nil
 	}
@@ -548,7 +841,7 @@ func EligibleGpuStats(stats []perf.GpuStat, multi bool) []perf.GpuStat {
 	}
 	out := make([]perf.GpuStat, 0, len(latest))
 	for _, g := range latest {
-		out = append(out, g)
+		out = append(out, effectiveGpuStat(g, sharedPoolCounts(g, policy.SharedMemory)))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
@@ -563,8 +856,8 @@ func EligibleGpuStats(stats []perf.GpuStat, multi bool) []perf.GpuStat {
 // That distinction is what makes a stale --tensor-split dangerous: a ratio built
 // from idle capacity keeps sending a third of the layers to a card another model
 // is already sitting on. See retuneTensorSplit.
-func LiveGpuSet(stats []perf.GpuStat, multi bool) GpuSet {
-	return gpuSetFromStats(EligibleGpuStats(stats, multi), minInferenceVramGB)
+func LiveGpuSet(stats []perf.GpuStat, multi bool, policy GpuPolicy) GpuSet {
+	return gpuSetFromStats(EligibleGpuStats(stats, multi, policy), policy)
 }
 
 // writeSingleDeviceEnv emits the env block a SINGLE-DEVICE backend needs on a

@@ -108,11 +108,26 @@ type Settings struct {
 	// one eligible device. Set false to pin every plan to the single card with
 	// the most free VRAM (the pre-multi-GPU behaviour).
 	MultiGpu *bool `yaml:"multiGpu"`
-	// MinGpuVramGB is the eligibility floor for pooling. An iGPU reports a slice
-	// of system memory as dedicated VRAM, and pooling that invents budget the
-	// sizer will plan a model into, while a split that hands real layers to an
-	// iGPU is slower than not splitting at all. 0 => default 3.0.
+	// MinGpuVramGB is the eligibility floor: an adapter whose total capacity is
+	// below it is not an inference target. It is applied AFTER an integrated
+	// GPU's shared system memory is counted, so an APU's BIOS carveout alone no
+	// longer decides the question (issue #37). Raise it above a device's total to
+	// keep that device out of the budget entirely. 0 => default 3.0.
 	MinGpuVramGB float64 `yaml:"minGpuVramGB"`
+	// SharedMemory decides whether the system-memory pool a GPU can address
+	// (AMD's GTT, which rocm-smi reports as "GTT Total Memory") counts toward the
+	// VRAM budget: "auto" (default) counts it for a device that looks like an
+	// APU, "on" for every device that reports one, "off" for none. Empty means
+	// auto. The telemetry cannot answer the question by itself — a discrete card
+	// reports a host aperture of the same shape — so "off" is also the escape
+	// hatch when auto guesses wrong.
+	SharedMemory string `yaml:"sharedMemory"`
+	// PoolIntegratedGpu allows an integrated GPU to be a --tensor-split target
+	// beside a dedicated card. nil => default false: the APU still gets the whole
+	// budget when it is the only GPU, but real layers are not split onto one that
+	// borrows the CPU's memory, which is slower than not splitting at all. Set it
+	// true only on a box where that is genuinely wanted.
+	PoolIntegratedGpu *bool `yaml:"poolIntegratedGpu"`
 	// Gpus is the RESOLVED eligible device set for this generate pass, filled by
 	// ResolveGpuSet from live telemetry. Never serialised: it describes the box,
 	// not the user's intent, and a stale copy in a config file would size a plan
@@ -320,11 +335,16 @@ type SettingsPatch struct {
 	OomGuardReserveGB *float64 `yaml:"oomGuardReserveGB,omitempty"`
 	OomGuardGraceSec  *int     `yaml:"oomGuardGraceSec,omitempty"`
 
-	// --- GPU usage / admission
+	// --- GPU usage / admission. The last three are also the device policy
+	// (Settings.DevicePolicy): which adapters count, and whether an integrated
+	// GPU's shared system memory is part of the budget. The Advanced section edits
+	// all three, so clearAdvancedPatch clears them as well.
 	MinGpuFraction *float64 `yaml:"minGpuFraction,omitempty"`
 	MultiResident  *bool    `yaml:"multiResident,omitempty"`
 	MultiGpu       *bool    `yaml:"multiGpu,omitempty"`
 	MinGpuVramGB   *float64 `yaml:"minGpuVramGB,omitempty"`
+	SharedMemory   *string  `yaml:"sharedMemory,omitempty"`
+	PoolIntegrated *bool    `yaml:"poolIntegratedGpu,omitempty"`
 
 	// --- Advanced sizer knobs. Wrong values here mis-size every model, which is
 	// why the UI hides them behind a warning and a per-section reset.
@@ -410,6 +430,12 @@ func (p *SettingsPatch) apply(s *Settings) {
 	}
 	if p.MinGpuVramGB != nil {
 		s.MinGpuVramGB = *p.MinGpuVramGB
+	}
+	if p.SharedMemory != nil {
+		s.SharedMemory = *p.SharedMemory
+	}
+	if p.PoolIntegrated != nil {
+		s.PoolIntegratedGpu = p.PoolIntegrated
 	}
 	if p.MultiResident != nil {
 		s.MultiResident = p.MultiResident
@@ -936,6 +962,9 @@ func (s *Settings) applyDefaults() {
 	if s.MinGpuVramGB == 0 {
 		s.MinGpuVramGB = minInferenceVramGB
 	}
+	if s.SharedMemory == "" {
+		s.SharedMemory = SharedMemoryAuto
+	}
 	if s.SdServerExe == "" {
 		if strings.ContainsAny(s.ServerExe, `/\`) {
 			s.SdServerExe = filepath.Join(filepath.Dir(s.ServerExe), "sd-server")
@@ -1309,6 +1338,35 @@ func globLike(pattern, s string) bool {
 // machine resolves to a one-device set and every multi-GPU path no-ops.
 func (s Settings) MultiGpuEnabled() bool {
 	return s.MultiGpu == nil || *s.MultiGpu
+}
+
+// SharedMemoryMode resolves the sharedMemory setting to one of
+// SharedMemoryAuto / Off / On; anything unrecognised (including empty) is auto,
+// so a typo in the generate file cannot silently disable the pool.
+func (s Settings) SharedMemoryMode() string {
+	switch s.SharedMemory {
+	case SharedMemoryOff, SharedMemoryOn:
+		return s.SharedMemory
+	default:
+		return SharedMemoryAuto
+	}
+}
+
+// PoolIntegratedEnabled reports whether an integrated GPU may be pooled into a
+// split beside a dedicated card. Default false: see PoolIntegratedGpu.
+func (s Settings) PoolIntegratedEnabled() bool {
+	return s.PoolIntegratedGpu != nil && *s.PoolIntegratedGpu
+}
+
+// DevicePolicy is the device-selection policy these settings describe, for the
+// set builders in gpuset.go. Passed explicitly so the sizer, the OOM guard and
+// the spawn-time retune are all answering with the same one.
+func (s Settings) DevicePolicy() GpuPolicy {
+	return GpuPolicy{
+		MinTotalGB:     s.MinGpuVramGB,
+		SharedMemory:   s.SharedMemoryMode(),
+		PoolIntegrated: s.PoolIntegratedEnabled(),
+	}
 }
 
 // GpuSetOrEmpty is the resolved device set, or nil when telemetry never

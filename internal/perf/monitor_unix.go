@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,8 +14,8 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/quartermaster-labs/quartermaster/internal/logmon"
@@ -225,6 +226,40 @@ func scanNvidiaSmi(r io.Reader, send func([]GpuStat)) {
 	flush(batch)
 }
 
+// rocmSmiMemArgs picks the --showmeminfo types for this rocm-smi build. It
+// always wants vram; gtt is the SHARED pool (system RAM the GPU can address),
+// which on an APU is the memory the GPU actually allocates from while vram is
+// only the BIOS carve-out. The two are separate argv entries because the option
+// is nargs='+' (--showmeminfo TYPE [TYPE ...]).
+//
+// The extra type is PROBED, not assumed. An older rocm-smi that rejects "gtt"
+// fails the whole invocation, and on a box where this is the only working
+// backend that means losing GPU telemetry outright — a worse regression than
+// the missing pool. A build that refuses it keeps the pre-#37 vram-only
+// behaviour.
+// Memoized for the process: the CLI surface cannot change while we run, and the
+// probe is a full rocm-smi invocation, which must not be charged to a caller's
+// sample timeout on every monitor start. A failed probe sticks to vram-only,
+// which is conservative — the sample still arrives.
+var (
+	rocmMemArgsOnce sync.Once
+	rocmMemArgsVal  []string
+)
+
+func rocmSmiMemArgs(ctx context.Context, logger *logmon.Monitor) []string {
+	rocmMemArgsOnce.Do(func() {
+		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if err := exec.CommandContext(probeCtx, "rocm-smi", "-i", "--showmeminfo", "vram", "gtt", "--csv").Run(); err == nil {
+			rocmMemArgsVal = []string{"vram", "gtt"}
+			return
+		}
+		logger.Debug("rocm-smi does not accept --showmeminfo gtt; shared memory will not be reported")
+		rocmMemArgsVal = []string{"vram"}
+	})
+	return rocmMemArgsVal
+}
+
 func tryRocmSmi(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuStat, error) {
 	if _, err := exec.LookPath("rocm-smi"); err != nil {
 		return nil, ErrNoGpuTool
@@ -241,41 +276,44 @@ func tryRocmSmi(ctx context.Context, every time.Duration, logger *logmon.Monitor
 		ticker := time.NewTicker(every)
 		defer ticker.Stop()
 
+		// Resolved on the first poll, not here: the probe costs one rocm-smi
+		// invocation, and doing it before the ticker starts would delay the first
+		// sample that a one-shot caller is waiting on.
+		var args []string
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				if args == nil {
+					args = []string{"-i", "-P", "-t", "-f", "-u", "--showmemuse", "--showmeminfo"}
+					args = append(args, rocmSmiMemArgs(ctx, logger)...)
+					args = append(args, "--showproductname", "--csv")
+				}
 				pollCtx, cancel := context.WithTimeout(ctx, pollTimeout)
-				cmd := exec.CommandContext(pollCtx, "rocm-smi", "-i", "-P", "-t", "-f", "-u", "--showmemuse", "--showmeminfo", "vram", "--showproductname", "--csv")
+				cmd := exec.CommandContext(pollCtx, "rocm-smi", args...)
 				out, err := cmd.Output()
 				timedOut := pollCtx.Err() == context.DeadlineExceeded
 				cancel()
 				if err != nil {
 					if timedOut {
 						logger.Debug("rocm-smi timed out")
+					} else {
+						// ExitError carries the tool's stderr (Output captures it when
+						// the command fails), which is the only way to tell an unsupported
+						// flag from a driver/permission problem on a remote box.
+						detail := ""
+						var ee *exec.ExitError
+						if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+							detail = ": " + strings.TrimSpace(string(ee.Stderr))
+						}
+						logger.Debug("rocm-smi failed: " + err.Error() + detail)
 					}
 					continue
 				}
 
-				stats := make([]GpuStat, 0)
-				scanner := bufio.NewScanner(strings.NewReader(string(out)))
-				var header string
-				for scanner.Scan() {
-					line := strings.TrimSpace(scanner.Text())
-					if line == "" {
-						continue
-					}
-					if strings.HasPrefix(line, "device,") {
-						header = line
-						continue
-					}
-
-					stat := parseRocmSmiLine(header, line)
-					if stat != nil {
-						stats = append(stats, *stat)
-					}
-				}
+				stats := parseRocmSmiCSV(out)
 
 				if len(stats) > 0 {
 					select {
@@ -288,90 +326,6 @@ func tryRocmSmi(ctx context.Context, every time.Duration, logger *logmon.Monitor
 	}()
 
 	return ch, nil
-}
-
-func parseRocmSmiLine(header string, line string) *GpuStat {
-	if header == "" || line == "" {
-		return nil
-	}
-	labels := strings.Split(header, ",")
-	fields := strings.Split(line, ",")
-	if len(labels) != len(fields) {
-		return nil
-	}
-
-	result := &GpuStat{
-		Timestamp: time.Now(),
-		ID:        -1,
-	}
-
-	var device string
-	var deviceName string
-	var cardSeries string
-	var gfxVersion string
-
-	const toMB = 1024 * 1024
-
-	for i, col := range labels {
-		val := strings.TrimSpace(fields[i])
-		switch col {
-		case "device":
-			device = val
-			id, err := strconv.Atoi(strings.TrimPrefix(val, "card"))
-			if err != nil {
-				return nil
-			}
-			result.ID = id
-		case "Device Name":
-			deviceName = val
-		case "GUID":
-			result.UUID = val
-		case "Temperature (Sensor edge) (C)":
-			tempC, _ := strconv.ParseFloat(val, 64)
-			result.TempC = int(tempC)
-		case "Temperature (Sensor memory) (C)":
-			vramTempC, _ := strconv.ParseFloat(val, 64)
-			result.VramTempC = int(vramTempC)
-		case "Fan speed (%)":
-			fanSpeed, _ := strconv.ParseFloat(val, 64)
-			result.FanSpeedPct = fanSpeed
-		case "Current Socket Graphics Package Power (W)":
-			fallthrough
-		case "Average Graphics Package Power (W)":
-			powerDraw, _ := strconv.ParseFloat(val, 64)
-			result.PowerDrawW = powerDraw
-		case "GPU use (%)":
-			gpuUtil, _ := strconv.ParseFloat(val, 64)
-			result.GpuUtilPct = gpuUtil
-		case "GPU Memory Allocated (VRAM%)":
-			memUtil, _ := strconv.ParseFloat(val, 64)
-			result.MemUtilPct = memUtil
-		case "VRAM Total Memory (B)":
-			memTotal, _ := strconv.ParseUint(val, 10, 64)
-			result.MemTotalMB = int(memTotal / toMB)
-		case "VRAM Total Used Memory (B)":
-			memUsed, _ := strconv.ParseUint(val, 10, 64)
-			result.MemUsedMB = int(memUsed / toMB)
-		case "Card Series":
-			cardSeries = val
-		case "GFX Version":
-			gfxVersion = val
-		}
-	}
-
-	if result.ID == -1 {
-		return nil
-	}
-
-	name := device
-	if cardSeries != "" && cardSeries != "N/A" {
-		name = cardSeries + " " + device + " (" + gfxVersion + ")"
-	} else if deviceName != "" && deviceName != "N/A" {
-		name = deviceName + " " + device + " (" + gfxVersion + ")"
-	}
-	result.Name = name
-
-	return result
 }
 
 func trySysfs(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuStat, error) {

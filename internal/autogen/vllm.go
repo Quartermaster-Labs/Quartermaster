@@ -315,7 +315,10 @@ func vllmGpuUtil(s Settings, ov *Override) (util float64, note string) {
 // a GPU query is not free, and the card does not change size while we run. The
 // function variable is the seam tests use to supply a card without a GPU.
 var cachedTotalVramGB = sync.OnceValues(func() (float64, bool) {
-	return SampleTotalVramGB(autoVramSampleTimeout)
+	// currentProbePolicy, not a Settings: this probe is memoised for the process
+	// and filled lazily during sizing, but ResolveGpuSet has always run by then
+	// (both EnsureConfig and the estimate preview resolve the device set first).
+	return SampleTotalVramGB(autoVramSampleTimeout, currentProbePolicy())
 })
 
 // round2 trims float noise out of a derived utilization so the emitted flag
