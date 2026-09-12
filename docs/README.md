@@ -20,6 +20,7 @@ describes: see the subsystem table in [`CLAUDE.md`](../CLAUDE.md).
 - [Config variants (normal vs fleet-wide)](config-variants.md)
 - [Automatic config generation](autogen.md)
 - [Backends (install, update, pick an engine)](backends.md)
+- [3D generation (TRELLIS.2)](three-d-generation.md)
 - [Multiple ports & per-port model catalogs](multi-listener.md)
 
 ## Playground
