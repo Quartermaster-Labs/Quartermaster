@@ -215,6 +215,12 @@ func trellisCmdLines(s Settings, row GgufRow, ov *Override) ([]string, error) {
 		"--host 127.0.0.1",
 		"--port ${PORT}",
 		fmt.Sprintf("--model-cache-budget-mib %d", trellisCacheBudgetMiB),
+		// The upstream default keeps the full mesh (5.5M triangles, ~180 MB at the
+		// 512 profile). Simplify is the better default for a served model: ~1M
+		// triangles and a ~40 MB GLB, which is what a viewer or a slicer wants.
+		// A user who wants the full mesh adds --mesh-postprocess-no-simplify to the
+		// extra args, which land last and win.
+		"--mesh-postprocess-simplify",
 	)
 	if ov != nil {
 		if extra := strings.TrimSpace(ov.ExtraArgs); extra != "" {

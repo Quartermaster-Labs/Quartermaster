@@ -85,6 +85,8 @@ Per-request options, all query parameters (the same names the backend's own CLI 
 
 Expect roughly a minute and a half per 512-profile image on a discrete GPU, plus a few seconds for the first request, which loads the weights.
 
+The mesh is **simplified by default** (about 1 million triangles, a 40 MB GLB) because a served model is normally viewed or sliced rather than archived. Add `--mesh-postprocess-no-simplify` to the model's *Extra launch arguments* to keep the full mesh instead - roughly 5.5 million triangles and a 180 MB file at the 512 profile - and `--mesh-decimation-target N` to aim the simplify pass at a different triangle count.
+
 A few properties of this backend are worth knowing before you wire it into something:
 
 - It is **single-threaded**: while a generation is running, that backend serves no other request. Another model on another port is unaffected, and the dashboard stays live (it reads logs and metrics, not the backend).

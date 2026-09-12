@@ -82,6 +82,9 @@ func TestAutogen_trellisDiscoverEmit(t *testing.T) {
 		"--birefnet " + `"` + filepath.ToSlash(pkgRemover) + `"`,
 		"--model-cache-budget-mib 8192",
 		"--port ${PORT}",
+		// The full mesh is ~5.5M triangles / ~180 MB; a served model wants the
+		// simplified one. Extra args land after this and win.
+		"--mesh-postprocess-simplify",
 		"checkEndpoint: /health",
 		"in: [image]",
 		"out: [3d]",
