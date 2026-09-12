@@ -87,6 +87,11 @@ func renderCapabilities(caps config.ModelCapConfig) (arch map[string]any, capsMa
 		if slices.Contains(caps.In, "image") && slices.Contains(caps.Out, "image") {
 			capsMap["image_to_image"] = true
 		}
+		// A mesh is not an image: out:[3d] is what tells a client (and the Models
+		// page's own category bucketing) that this model answers on the 3D route.
+		if slices.Contains(caps.In, "image") && slices.Contains(caps.Out, "3d") {
+			capsMap["image_to_3d"] = true
+		}
 	}
 
 	if caps.Tools {
