@@ -42,7 +42,7 @@ func TestAutogen_freeVramGBFromStats(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			gb, ok := freeVramGBFromStats(tc.stats)
+			gb, ok := freeVramGBFromStats(tc.stats, GpuPolicy{})
 			if ok != tc.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
 			}
@@ -84,7 +84,7 @@ func TestAutogen_resolveAutoVram_postconditions(t *testing.T) {
 	if s.TargetVramGB <= 0 {
 		t.Fatalf("TargetVramGB = %v, want > 0", s.TargetVramGB)
 	}
-	free, haveGPU := SampleFreeVramGB(autoVramSampleTimeout)
+	free, haveGPU := SampleFreeVramGB(autoVramSampleTimeout, GpuPolicy{})
 	if !haveGPU {
 		if s.TargetVramGB != static {
 			t.Fatalf("no GPU reading but target changed to %v (want static %v)", s.TargetVramGB, static)

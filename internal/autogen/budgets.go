@@ -62,8 +62,9 @@ func RecommendedVramGB() (float64, bool) {
 // device --main-gpu would pick. A user who has turned multiGpu off must not be
 // handed a budget that describes memory no single card has.
 func recommendedVramGB(multi bool) (float64, bool) {
+	policy := currentProbePolicy()
 	if !multi {
-		set, ok := SampleGpuSet(autoVramSampleTimeout, minInferenceVramGB)
+		set, ok := SampleGpuSet(autoVramSampleTimeout, policy)
 		if !ok {
 			return 0, false
 		}
@@ -78,7 +79,7 @@ func recommendedVramGB(multi bool) (float64, bool) {
 		}
 		return 0, false
 	}
-	gb, ok := SampleFreeVramGB(autoVramSampleTimeout)
+	gb, ok := SampleFreeVramGB(autoVramSampleTimeout, policy)
 	if !ok || gb < recommendedVramFloorGB {
 		return 0, false
 	}
@@ -143,6 +144,9 @@ func seedHardwareBudgets(s *Settings, vramUnset, ramUnset bool) {
 	// one card: a pooled figure is memory no single adapter has, and the sizer
 	// would plan every model past what fits.
 	seedMultiGpu.Store(s.MultiGpuEnabled())
+	// Same reason, same ordering: the probe also needs the shared-memory policy,
+	// or an APU would be seeded from its BIOS carveout alone (issue #37).
+	setProbePolicy(s.DevicePolicy())
 	vram, ram := hardwareBudgets()
 	if vramUnset && vram > 0 {
 		s.TargetVramGB = vram

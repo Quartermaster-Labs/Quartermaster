@@ -1,6 +1,8 @@
 package perf
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -211,4 +213,207 @@ func ParseMactopLine(line string) *GpuStat {
 		FanSpeedPct: fanSpeed,
 		PowerDrawW:  out.SocMetrics.GPUPower,
 	}
+}
+
+// parseRocmSmiLine parses one row of rocm-smi --csv output against its header,
+// matching columns by LABEL rather than position (the label set depends on which
+// flags were passed). Lives here, untagged, with the other pure parsers so it is
+// testable on every platform.
+//
+// The dedicated pool is "VRAM Total Memory (B)" — on an APU that is only the
+// BIOS carve-out. "GTT Total Memory (B)" is the shared pool (system RAM the GPU
+// can address) and fills SharedTotalMB/SharedUsedMB; see GpuStat for why the two
+// are kept apart instead of summed here.
+func parseRocmSmiLine(header string, line string) *GpuStat {
+	if header == "" || line == "" {
+		return nil
+	}
+	labels := strings.Split(header, ",")
+	fields := strings.Split(line, ",")
+	if len(labels) != len(fields) {
+		return nil
+	}
+
+	result := &GpuStat{
+		Timestamp: time.Now(),
+		ID:        -1,
+	}
+
+	var device string
+	var deviceName string
+	var cardSeries string
+	var gfxVersion string
+
+	const toMB = 1024 * 1024
+
+	for i, col := range labels {
+		val := strings.TrimSpace(fields[i])
+		switch col {
+		case "device":
+			device = val
+			id, err := strconv.Atoi(strings.TrimPrefix(val, "card"))
+			if err != nil {
+				return nil
+			}
+			result.ID = id
+		case "Device Name":
+			deviceName = val
+		case "GUID":
+			result.UUID = val
+		case "Temperature (Sensor edge) (C)":
+			tempC, _ := strconv.ParseFloat(val, 64)
+			result.TempC = int(tempC)
+		case "Temperature (Sensor memory) (C)":
+			vramTempC, _ := strconv.ParseFloat(val, 64)
+			result.VramTempC = int(vramTempC)
+		case "Fan speed (%)":
+			fanSpeed, _ := strconv.ParseFloat(val, 64)
+			result.FanSpeedPct = fanSpeed
+		case "Current Socket Graphics Package Power (W)":
+			fallthrough
+		case "Average Graphics Package Power (W)":
+			powerDraw, _ := strconv.ParseFloat(val, 64)
+			result.PowerDrawW = powerDraw
+		case "GPU use (%)":
+			gpuUtil, _ := strconv.ParseFloat(val, 64)
+			result.GpuUtilPct = gpuUtil
+		case "GPU Memory Allocated (VRAM%)":
+			memUtil, _ := strconv.ParseFloat(val, 64)
+			result.MemUtilPct = memUtil
+		case "VRAM Total Memory (B)":
+			memTotal, _ := strconv.ParseUint(val, 10, 64)
+			result.MemTotalMB = int(memTotal / toMB)
+		case "VRAM Total Used Memory (B)":
+			memUsed, _ := strconv.ParseUint(val, 10, 64)
+			result.MemUsedMB = int(memUsed / toMB)
+		case "GTT Total Memory (B)":
+			gttTotal, _ := strconv.ParseUint(val, 10, 64)
+			result.SharedTotalMB = int(gttTotal / toMB)
+		case "GTT Total Used Memory (B)":
+			gttUsed, _ := strconv.ParseUint(val, 10, 64)
+			result.SharedUsedMB = int(gttUsed / toMB)
+		case "Card Series":
+			cardSeries = val
+		case "GFX Version":
+			gfxVersion = val
+		default:
+			// Label-drift guard: some rocm-smi versions prefix these with "GPU"
+			// ("GPU GTT Total Memory (B)"). Only GTT is matched loosely — the
+			// VRAM columns are what every existing install depends on, and a
+			// loose match there could bind a future column to the wrong field.
+			// A dropped GTT column is what this fix exists to prevent; a
+			// mis-bound VRAM column is the bug it already had.
+			if strings.Contains(col, "GTT") {
+				if u, err := strconv.ParseUint(val, 10, 64); err == nil {
+					if strings.Contains(col, "Used") {
+						result.SharedUsedMB = int(u / toMB)
+					} else {
+						result.SharedTotalMB = int(u / toMB)
+					}
+				}
+			}
+		}
+	}
+
+	if result.ID == -1 {
+		return nil
+	}
+
+	name := device
+	if cardSeries != "" && cardSeries != "N/A" {
+		name = cardSeries + " " + device + " (" + gfxVersion + ")"
+	} else if deviceName != "" && deviceName != "N/A" {
+		name = deviceName + " " + device + " (" + gfxVersion + ")"
+	}
+	result.Name = name
+
+	return result
+}
+
+// mergeGpuStat folds two CSV rows that describe the SAME device. rocm-smi prints
+// one table per requested memory type, so vram and gtt can arrive as two rows
+// (sensor columns repeated in each) instead of one wide row. The merge FILLS
+// what the first row lacks and never adds, so it is correct both for a build
+// that reports both pools in one row and for one that splits them across two.
+func mergeGpuStat(cur, next GpuStat) GpuStat {
+	if cur.Name == "" {
+		cur.Name = next.Name
+	}
+	if cur.UUID == "" {
+		cur.UUID = next.UUID
+	}
+	if cur.TempC == 0 {
+		cur.TempC = next.TempC
+	}
+	if cur.VramTempC == 0 {
+		cur.VramTempC = next.VramTempC
+	}
+	if cur.GpuUtilPct == 0 {
+		cur.GpuUtilPct = next.GpuUtilPct
+	}
+	if cur.MemTotalMB == 0 {
+		cur.MemTotalMB = next.MemTotalMB
+	}
+	if cur.MemUsedMB == 0 {
+		cur.MemUsedMB = next.MemUsedMB
+	}
+	if cur.SharedTotalMB == 0 {
+		cur.SharedTotalMB = next.SharedTotalMB
+	}
+	if cur.SharedUsedMB == 0 {
+		cur.SharedUsedMB = next.SharedUsedMB
+	}
+	if cur.MemUtilPct == 0 {
+		cur.MemUtilPct = next.MemUtilPct
+	}
+	if cur.FanSpeedPct == 0 {
+		cur.FanSpeedPct = next.FanSpeedPct
+	}
+	if cur.PowerDrawW == 0 {
+		cur.PowerDrawW = next.PowerDrawW
+	}
+	return cur
+}
+
+// parseRocmSmiCSV turns rocm-smi's --csv output into one GpuStat per device.
+//
+// Rows are keyed by device id, not appended. rocm-smi may print a separate CSV
+// table, with its own "device," header, for each requested memory type rather
+// than one wide table, so the same device can arrive twice with part of its
+// memory picture in each row. Appending those would drop the second row
+// downstream, where gpuSetFromStats keeps the first sample per id on a timestamp
+// tie: a fix that looks right and reports nothing.
+func parseRocmSmiCSV(out []byte) []GpuStat {
+	byID := make(map[int]GpuStat)
+	order := make([]int, 0, 2)
+
+	scanner := bufio.NewScanner(bytes.NewReader(out))
+	var header string
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "device,") {
+			header = line
+			continue
+		}
+
+		stat := parseRocmSmiLine(header, line)
+		if stat == nil {
+			continue
+		}
+		if prev, seen := byID[stat.ID]; seen {
+			byID[stat.ID] = mergeGpuStat(prev, *stat)
+			continue
+		}
+		byID[stat.ID] = *stat
+		order = append(order, stat.ID)
+	}
+
+	stats := make([]GpuStat, 0, len(order))
+	for _, id := range order {
+		stats = append(stats, byID[id])
+	}
+	return stats
 }

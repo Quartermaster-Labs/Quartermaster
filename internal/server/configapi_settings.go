@@ -98,6 +98,13 @@ type gpuDeviceDTO struct {
 	Name    string  `json:"name"`
 	TotalGB float64 `json:"totalGB"`
 	FreeGB  float64 `json:"freeGB"`
+	// Integrated marks an APU's GPU: a device that allocates out of system
+	// memory. SharedFreeGB is how much of FreeGB is that memory, so the UI can
+	// say how much of the ceiling is really RAM rather than implying the box has
+	// a discrete card of this size (issue #37).
+	Integrated    bool    `json:"integrated"`
+	SharedTotalGB float64 `json:"sharedTotalGB"`
+	SharedFreeGB  float64 `json:"sharedFreeGB"`
 }
 
 // gpuCapacityDTO is the pooled eligible-adapter capacity, and it has to be
@@ -118,11 +125,12 @@ type gpuCapacityDTO struct {
 	Multi bool `json:"multi"`
 }
 
-// gpuCapacity reports the eligible adapters for the given multi-GPU setting.
+// gpuCapacity reports the eligible adapters for the given multi-GPU setting and
+// device policy (shared-memory mode, integrated pooling).
 // Empty (not an error) when telemetry has not answered yet; the dashboard then
 // keeps whatever ceiling it had rather than clamping against a zero.
-func (s *Server) gpuCapacity(multi bool) gpuCapacityDTO {
-	set := s.liveGpuSet(multi)
+func (s *Server) gpuCapacity(multi bool, policy autogen.GpuPolicy) gpuCapacityDTO {
+	set := s.liveGpuSet(multi, policy)
 	out := gpuCapacityDTO{
 		Devices: make([]gpuDeviceDTO, 0, len(set)),
 		TotalGB: set.TotalGB(),
@@ -132,6 +140,7 @@ func (s *Server) gpuCapacity(multi bool) gpuCapacityDTO {
 	for _, d := range set {
 		out.Devices = append(out.Devices, gpuDeviceDTO{
 			Index: d.Index, Name: d.Name, TotalGB: d.TotalGB, FreeGB: d.FreeGB,
+			Integrated: d.Integrated, SharedTotalGB: d.SharedTotalGB, SharedFreeGB: d.SharedFreeGB,
 		})
 	}
 	return out
@@ -279,7 +288,7 @@ func (s *Server) handleAPISettingsGet(w http.ResponseWriter, r *http.Request) {
 		Advanced:           advancedFromSettings(gf.Settings),
 		AdvancedDefaults:   advancedFromSettings(base),
 		AdvancedOverridden: advancedOverridden(patch),
-		Gpu:                s.gpuCapacity(gf.Settings.MultiGpuEnabled()),
+		Gpu:                s.gpuCapacity(gf.Settings.MultiGpuEnabled(), gf.Settings.DevicePolicy()),
 	})
 }
 

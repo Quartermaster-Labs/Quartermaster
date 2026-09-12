@@ -21,7 +21,7 @@ func TestAutogen_gpuSetFromStats(t *testing.T) {
 		{ID: 0, Name: "3060", MemTotalMB: 12288, MemUsedMB: 1024, Timestamp: now},
 		{ID: 2, Name: "iGPU", MemTotalMB: 2048, MemUsedMB: 0, Timestamp: now},
 		{ID: 3, Name: "no telemetry", MemTotalMB: 0, MemUsedMB: 0, Timestamp: now},
-	}, minInferenceVramGB)
+	}, GpuPolicy{})
 
 	if len(set) != 2 {
 		t.Fatalf("got %d devices %+v, want the two real cards", len(set), set)
@@ -51,14 +51,14 @@ func TestAutogen_gpuSetFromStats(t *testing.T) {
 	// going negative and poisoning the pooled sum.
 	one := gpuSetFromStats([]perf.GpuStat{
 		{ID: 0, MemTotalMB: 8192, MemUsedMB: 9000, Timestamp: now},
-	}, minInferenceVramGB)
+	}, GpuPolicy{})
 	if len(one) != 1 || one[0].FreeGB != 0 {
 		t.Fatalf("over-used card = %+v, want free clamped to 0", one)
 	}
 	if one.Multi() || one.MainIndex() != 0 {
 		t.Fatalf("single card reported Multi=%v main=%d", one.Multi(), one.MainIndex())
 	}
-	if set := gpuSetFromStats(nil, minInferenceVramGB); len(set) != 0 {
+	if set := gpuSetFromStats(nil, GpuPolicy{}); len(set) != 0 {
 		t.Fatalf("empty stats produced %+v", set)
 	}
 }
@@ -192,19 +192,19 @@ func TestAutogen_EligibleGpuStats(t *testing.T) {
 		{ID: 1, MemTotalMB: 16384, MemUsedMB: 4096, Timestamp: now},
 		{ID: 2, MemTotalMB: 2048, MemUsedMB: 0, Timestamp: now},
 	}
-	multi := EligibleGpuStats(hist, true)
+	multi := EligibleGpuStats(hist, true, GpuPolicy{})
 	if len(multi) != 2 || multi[0].ID != 0 || multi[1].ID != 1 || multi[1].MemUsedMB != 4096 {
 		t.Fatalf("EligibleGpuStats(multi) = %+v, want both cards' newest samples", multi)
 	}
-	single := EligibleGpuStats(hist, false)
+	single := EligibleGpuStats(hist, false, GpuPolicy{})
 	if len(single) != 1 || single[0].ID != 1 {
 		t.Fatalf("EligibleGpuStats(single) = %+v, want only the main device", single)
 	}
-	if got := EligibleGpuStats(nil, true); got != nil {
+	if got := EligibleGpuStats(nil, true, GpuPolicy{}); got != nil {
 		t.Fatalf("empty stats produced %+v", got)
 	}
 	// LiveGpuSet is the un-smoothed set the spawn guard retunes the split from.
-	if live := LiveGpuSet(hist, true); len(live) != 2 || live[1].FreeGB != 12 {
+	if live := LiveGpuSet(hist, true, GpuPolicy{}); len(live) != 2 || live[1].FreeGB != 12 {
 		t.Fatalf("LiveGpuSet = %+v, want raw per-device free", live)
 	}
 }
@@ -407,5 +407,185 @@ func TestAutogen_singleDeviceEnvFor_NoProbe(t *testing.T) {
 	setCudaGPU(t, false)
 	if pin, _ := singleDeviceEnvFor(missing, set); pin != "" {
 		t.Fatalf("non-CUDA with no probe = %q, want no pin", pin)
+	}
+}
+
+// An APU's "VRAM" is the BIOS carve-out; the pool the GPU actually allocates
+// from is the shared one (AMD's GTT). Before issue #37 the carve-out was the
+// whole reading, it sat under the 3GB floor, and the only GPU in the machine was
+// dropped from every budget in the program.
+func TestAutogen_IntegratedGpuCountsSharedPool(t *testing.T) {
+	now := time.Now()
+	set := gpuSetFromStats([]perf.GpuStat{{
+		ID: 0, Name: "AMD Radeon 780M card0 (gfx1103)",
+		MemTotalMB: 2048, MemUsedMB: 256,
+		SharedTotalMB: 16384, SharedUsedMB: 2048,
+		Timestamp: now,
+	}}, GpuPolicy{})
+
+	if len(set) != 1 {
+		t.Fatalf("got %+v, want the APU kept: a 2GB carve-out is under the floor, 2+16GB is not", set)
+	}
+	d := set[0]
+	if !d.Integrated {
+		t.Error("Integrated = false, want true")
+	}
+	if d.TotalGB != 18 || d.FreeGB != 15.75 {
+		t.Errorf("total/free = %.2f/%.2f, want 18/15.75 (carve-out + shared)", d.TotalGB, d.FreeGB)
+	}
+	if d.SharedFreeGB != 14 {
+		t.Errorf("SharedFreeGB = %.2f, want 14", d.SharedFreeGB)
+	}
+}
+
+// The same test from the other side, and the one that matters most: a discrete
+// card reports a host aperture (GTT) too, and counting it would budget layers
+// into PCIe memory. Its own 24GB is far above the shape test's bound, so only
+// the dedicated pool counts.
+func TestAutogen_DiscreteGpuIgnoresSharedPool(t *testing.T) {
+	now := time.Now()
+	set := gpuSetFromStats([]perf.GpuStat{{
+		ID: 0, Name: "AMD Radeon RX 7900 XTX",
+		MemTotalMB: 24576, MemUsedMB: 1024,
+		SharedTotalMB: 16384, SharedUsedMB: 512,
+		Timestamp: now,
+	}}, GpuPolicy{})
+
+	if len(set) != 1 {
+		t.Fatalf("got %+v, want one card", set)
+	}
+	d := set[0]
+	if d.Integrated {
+		t.Error("Integrated = true for a discrete card")
+	}
+	if d.TotalGB != 24 || d.SharedFreeGB != 0 {
+		t.Errorf("total/sharedFree = %.2f/%.2f, want 24/0 (aperture must not count)", d.TotalGB, d.SharedFreeGB)
+	}
+	if d.SharedTotalGB != 16 {
+		t.Errorf("SharedTotalGB = %.2f, want 16 reported (but not budgeted)", d.SharedTotalGB)
+	}
+}
+
+// A small discrete card in a big-RAM box reports the shape an APU does, minus
+// the ratio: an 8GB card with a 16GB aperture is only 2x. It must stay a
+// dedicated device, or the budget invents host memory for it.
+func TestAutogen_SmallDiscreteCardIsNotCalledIntegrated(t *testing.T) {
+	set := gpuSetFromStats([]perf.GpuStat{{
+		ID: 0, Name: "AMD Radeon RX 6600",
+		MemTotalMB: 8192, MemUsedMB: 0,
+		SharedTotalMB: 16384, SharedUsedMB: 0,
+	}}, GpuPolicy{})
+
+	if len(set) != 1 || set[0].Integrated || set[0].TotalGB != 8 {
+		t.Fatalf("got %+v, want one 8GB dedicated device", set)
+	}
+}
+
+// Name markers catch an APU whose carve-out is too large for the shape test
+// (an 8GB UMA setting) without ever matching a card's name.
+func TestAutogen_ApuNameMarker(t *testing.T) {
+	set := gpuSetFromStats([]perf.GpuStat{{
+		ID: 0, Name: "Ryzen 7 7840U w/ Radeon 780M card0 (gfx1103)",
+		MemTotalMB: 8192, MemUsedMB: 0,
+		SharedTotalMB: 16384, SharedUsedMB: 0,
+	}}, GpuPolicy{})
+
+	if len(set) != 1 || !set[0].Integrated || set[0].TotalGB != 24 {
+		t.Fatalf("got %+v, want the APU counted at 8+16GB", set)
+	}
+}
+
+// The two explicit modes exist because auto has to guess. off is the escape
+// hatch that restores the pre-#37 reading exactly; on budgets the pool for a
+// device auto refused, without also calling it integrated (topology is what the
+// pooling rule reads).
+func TestAutogen_SharedMemoryModes(t *testing.T) {
+	apu := perf.GpuStat{
+		ID: 0, Name: "AMD Radeon 780M card0 (gfx1103)",
+		MemTotalMB: 2048, MemUsedMB: 256,
+		SharedTotalMB: 16384, SharedUsedMB: 2048,
+	}
+	gpu := perf.GpuStat{
+		ID: 0, Name: "AMD Radeon RX 7900 XTX",
+		MemTotalMB: 24576, MemUsedMB: 1024,
+		SharedTotalMB: 16384, SharedUsedMB: 512,
+	}
+
+	if set := gpuSetFromStats([]perf.GpuStat{apu}, GpuPolicy{SharedMemory: SharedMemoryOff}); len(set) != 0 {
+		t.Fatalf("off = %+v, want the APU back under the floor (pre-#37 behaviour)", set)
+	}
+	if set := gpuSetFromStats([]perf.GpuStat{apu}, GpuPolicy{SharedMemory: SharedMemoryOn}); len(set) != 1 || set[0].TotalGB != 18 {
+		t.Fatalf("on = %+v, want the APU counted", set)
+	}
+	set := gpuSetFromStats([]perf.GpuStat{gpu}, GpuPolicy{SharedMemory: SharedMemoryOn})
+	if len(set) != 1 || set[0].TotalGB != 40 || set[0].Integrated {
+		t.Fatalf("on (discrete) = %+v, want 24+16GB budgeted but still a dedicated device", set)
+	}
+}
+
+// An APU beside a card is not a split target by default: real layers on an iGPU
+// are slower than not splitting at all. It is a PAIRING rule, so the APU still
+// gets the whole budget when it is the only GPU (see the tests above).
+func TestAutogen_IntegratedPairingNeedsTheToggle(t *testing.T) {
+	now := time.Now()
+	hist := []perf.GpuStat{
+		{
+			ID: 0, Name: "AMD Radeon 780M card0 (gfx1103)",
+			MemTotalMB: 2048, MemUsedMB: 256, SharedTotalMB: 16384, SharedUsedMB: 2048, Timestamp: now,
+		},
+		{ID: 1, Name: "NVIDIA GeForce RTX 4070 Ti SUPER", MemTotalMB: 16384, MemUsedMB: 4096, Timestamp: now},
+	}
+
+	got := gpuSetFromStats(hist, GpuPolicy{})
+	if len(got) != 1 || got[0].Index != 1 {
+		t.Fatalf("set = %+v, want only the card: an iGPU is not a split target by default", got)
+	}
+
+	got = gpuSetFromStats(hist, GpuPolicy{PoolIntegrated: true})
+	if len(got) != 2 || got[0].Index != 0 || !got[0].Integrated {
+		t.Fatalf("set = %+v, want both devices with the APU first", got)
+	}
+	// The pooled budget is the sum of both, and the APU's share of it is the
+	// shared pool, which is what the sizer's own log line reports.
+	if free := got.FreeGB(); free != 15.75+12 {
+		t.Fatalf("pooled free = %.2f, want 27.75", free)
+	}
+}
+
+// DescribeGpuStats is what cmd/monitor-test prints, and the reason it exists is
+// that the reporter of a device-specific bug has to be able to say which side of
+// the policy their machine landed on.
+func TestAutogen_DescribeGpuStats(t *testing.T) {
+	stats := []perf.GpuStat{
+		{
+			ID: 0, Name: "AMD Radeon 780M card0 (gfx1103)",
+			MemTotalMB: 2048, MemUsedMB: 256, SharedTotalMB: 16384, SharedUsedMB: 2048,
+		},
+		{ID: 1, Name: "AMD Radeon RX 6600", MemTotalMB: 8192, MemUsedMB: 0, SharedTotalMB: 16384},
+		{ID: 2, Name: "tiny", MemTotalMB: 1024, MemUsedMB: 0},
+	}
+
+	lines := DescribeGpuStats(stats, true, GpuPolicy{})
+	joined := strings.Join(lines, "\n")
+	for _, want := range []string{
+		"integrated",     // the APU's topology is named
+		"counted",        // ...and that its pool is part of the budget
+		"not counted",    // ...while the card's aperture is not
+		"18.0 GB usable", // the fold is shown, so 2GB -> 18GB is visible
+		"8.0 GB usable",  // the card keeps its own 8GB
+		"DROPPED (under the 3.0 GB floor)",
+		"EXCLUDED",     // the APU is unpairable beside a card by default
+		"8.0 GB total", // so the summary holds the card alone
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("output %q missing %q", joined, want)
+		}
+	}
+
+	// The escape hatch has to be visible in the diagnostic too, or a user
+	// comparing a pre-#37 report against a post-#37 one sees nothing change.
+	off := strings.Join(DescribeGpuStats(stats[:1], true, GpuPolicy{SharedMemory: SharedMemoryOff}), "\n")
+	if !strings.Contains(off, "not counted") || !strings.Contains(off, "no GPU counts") {
+		t.Fatalf("sharedMemory=off output = %q, want the pool uncounted and no budget", off)
 	}
 }

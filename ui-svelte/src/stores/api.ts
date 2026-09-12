@@ -717,11 +717,24 @@ export interface AppSettings {
   gpu: GpuCapacity;
 }
 
+// GpuDevice mirrors one row of the server's eligible-adapter set. `integrated`
+// marks an APU-style device: totalGB includes sharedTotalGB, which is system RAM
+// the GPU allocates from, not a dedicated card's own memory.
+export interface GpuDevice {
+  index: number;
+  name: string;
+  totalGB: number;
+  freeGB: number;
+  integrated?: boolean;
+  sharedTotalGB?: number;
+  sharedFreeGB?: number;
+}
+
 // GpuCapacity mirrors the server's eligible-adapter set. Empty devices means
 // telemetry has not answered yet, NOT "no GPU" - treat totalGB 0 as unknown and
 // leave the form uncapped rather than clamping every field to zero.
 export interface GpuCapacity {
-  devices: { index: number; name: string; totalGB: number; freeGB: number }[];
+  devices: GpuDevice[];
   totalGB: number;
   freeGB: number;
   multi: boolean; // more than one eligible adapter, with splitting enabled
@@ -742,7 +755,7 @@ export interface GuardSettings {
 }
 
 // The advanced sizer knobs. GET always returns effective values (defaults
-// included, never blank). On PUT, 0/"" means "unpin this one" — the server maps
+// included, never blank). On PUT, 0/"" means "unpin this one" - the server maps
 // it back to nil so the computed default applies again; it never stores a zero.
 export interface AdvancedSettings {
   computeBufFactor: number;
@@ -756,6 +769,13 @@ export interface AdvancedSettings {
   kvQuant: string; // "" = auto; else f32|f16|bf16|q8_0|q5_1|q5_0|q4_1|q4_0
   loraDir: string; // "" = the image model's own folder
   minGpuVramGB: number; // smallest adapter that counts as inference VRAM (0 = default 3)
+  // How a device's shared system-memory pool (AMD GTT) counts toward its budget:
+  // "auto" = only for an integrated device whose dedicated memory is under the
+  // floor, "on" = for any device, "off" = never. "" is auto.
+  sharedMemory: string;
+  // Allow an integrated device to be a split target beside a real card. An APU
+  // with no other GPU gets the whole budget either way.
+  poolIntegratedGpu: boolean;
 }
 
 // Backend executable paths (llama-server / sd-server / tts-server). Blank => the

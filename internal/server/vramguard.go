@@ -408,11 +408,11 @@ const vramGuardUnloadTimeout = 30 * time.Second
 // needs no per-device split either, since QueryComputeApps reports a pid's usage
 // across every adapter it touches.
 func (g *vramGuard) pooledGPU(gpus []perf.GpuStat) (perf.GpuStat, bool) {
-	return pooledGPUStat(gpus, g.settings().MultiGpuEnabled())
+	return pooledGPUStat(gpus, g.settings().MultiGpuEnabled(), g.settings().DevicePolicy())
 }
 
-func pooledGPUStat(gpus []perf.GpuStat, multi bool) (perf.GpuStat, bool) {
-	eligible := autogen.EligibleGpuStats(gpus, multi)
+func pooledGPUStat(gpus []perf.GpuStat, multi bool, policy autogen.GpuPolicy) (perf.GpuStat, bool) {
+	eligible := autogen.EligibleGpuStats(gpus, multi, policy)
 	if len(eligible) == 0 {
 		return perf.GpuStat{}, false
 	}

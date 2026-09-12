@@ -10,7 +10,7 @@ Live system and GPU/VRAM monitoring for the serving host. It samples CPU, memory
 |---|---|
 | `types.go` | Core data structs: `GpuStat`, `SysStat`, `NetIOStat`. No build tag. |
 | `monitor.go` | `Monitor` type, ring buffers, listener fan-out, `New`/`Start`/`Stop`/`UpdateConfig`/`Subscribe`/`Current`. Platform-agnostic; delegates to per-OS `getGpuStats`/`readSysStats`. |
-| `gpu_parse.go` | Pure parsers reused across platforms: `ParseNvidiaSmiLine` (nvidia-smi CSV), `ParseIoregOutput` / `ParseMactopLine` (Apple Silicon). No build tag. |
+| `gpu_parse.go` | Pure parsers reused across platforms: `ParseNvidiaSmiLine` (nvidia-smi CSV), `ParseIoregOutput` / `ParseMactopLine` (Apple Silicon), and the rocm-smi trio `parseRocmSmiLine` / `mergeGpuStat` / `parseRocmSmiCSV` (identical text cannot share a file across build tags without duplication). No build tag. |
 | `prometheus.go` | `Monitor.MetricsHandler()` and the Prometheus text-format writers (`quartermaster_*` gauges/counters). No build tag. |
 | `monitor_windows.go` | `//go:build` via filename. Windows `getGpuStats` (nvidia-smi loop, trimmed query → **DXGI fallback**) and `readSysStats`; `parseNvidiaSmiLineLite` (Windows-only CSV parser) overlays PDH util. |
 | `dxgi_windows.go` | `//go:build windows`. Vendor-neutral VRAM backend (AMD/Intel) via DXGI COM: `DXGI_ADAPTER_DESC1.DedicatedVideoMemory` = total. **Used comes from PDH** (`GPU Adapter Memory\Dedicated Usage`, system-wide), NOT DXGI's per-process `QueryVideoMemoryInfo`. Collapses the driver's mirror LUIDs into one adapter; filters iGPUs below `minInferenceVramMB`; overlays PDH util by LUID. No temp/fan/power. |
@@ -22,6 +22,8 @@ Live system and GPU/VRAM monitoring for the serving host. It samples CPU, memory
 ## Important types & functions
 
 - `GpuStat` (`types.go`) — one GPU snapshot. The offload-relevant fields are `MemUsedMB` and `MemTotalMB` (`types.go`); free VRAM is `MemTotalMB - MemUsedMB`. Also carries `GpuUtilPct`, `MemUtilPct`, `TempC`/`VramTempC`, `FanSpeedPct`, `PowerDrawW`, and an `ID`/`Name`/`UUID`.
+
+  `SharedTotalMB` / `SharedUsedMB` are the SECOND pool: system memory the device can address (AMD GTT, and the host aperture a discrete card maps too) — **not** the device's own memory. They are reported raw and NOT part of `MemTotalMB`; whether they count toward inference VRAM is a policy decision made in `internal/autogen` (`GpuPolicy.SharedMemory`), because the same signal means "this is the whole GPU" on an APU (issue #37) and "this is slow host memory" on a card. Only the rocm-smi backend fills them today, so on Windows they stay 0 and every consumer behaviour is unchanged there.
 - `SysStat` (`types.go`) — CPU per-core, memory, swap, load average, and network IO.
 - `Monitor` (`monitor.go`) — owns RW-locked ring buffers and listener sets.
   - `New` (`monitor.go`) — clamps `Every` to ≥100ms; sizes ring to ~1 hour of samples.
@@ -39,7 +41,7 @@ Live system and GPU/VRAM monitoring for the serving host. It samples CPU, memory
 |---|---|---|
 | Windows | nvidia-smi (loop; VRAM/temp/fan) → DXGI (VRAM only, any vendor) + PDH (util) | `monitor_windows.go`, `dxgi_windows.go`, `pdh_windows.go` |
 | darwin (Apple Silicon) | mactop (headless JSON) → ioreg (`IOGPU`) | `monitor_darwin.go`, `gpu_parse.go` |
-| unix (Linux/BSD) | LACT (unix socket) → nvidia-smi → rocm-smi → sysfs (unimplemented) | `monitor_unix.go`, `gpu_parse.go` |
+| unix (Linux/BSD) | LACT (unix socket) → nvidia-smi → rocm-smi (`--showmeminfo vram gtt`) → sysfs (unimplemented) | `monitor_unix.go`, `gpu_parse.go` |
 
 When no backend works, `getGpuStats` returns `ErrNoGpuTool` and the monitor logs at info and continues with sys stats only.
 
@@ -51,7 +53,11 @@ When no backend works, `getGpuStats` returns `ErrNoGpuTool` and the monitor logs
 - **Prometheus export.** `MetricsHandler` (`prometheus.go`) reads `Current()`, emits the latest `SysStat` plus `latestPerGPU` de-duplicated GPU rows as `quartermaster_*` metrics; label values go through `sanitizeLabel`. MB fields are converted to bytes via `mbToBytes`.
 - **mactop memory caveat.** mactop reports whole-system memory, so the darwin path overlays ioreg's GPU-attributed unified memory (`overlayIoregMem`) so both backends report consistent `MemUsedMB`/`MemTotalMB`.
 
+- **rocm-smi reads both pools, in one invocation.** `rocmSmiMemArgs` probes `--showmeminfo vram gtt` once per process (memoized, and resolved on the first poll so the extra invocation is never charged to a caller's sample timeout) and falls back to `vram` alone if the installed rocm-smi rejects the pair. `VRAM Total*` lands in `MemTotalMB`/`MemUsedMB`, `GTT Total*` in `SharedTotalMB`/`SharedUsedMB` (the fields above); the label match is a case-insensitive `Contains(col, "GTT")` in the parser's `default` branch, because the wording has changed between rocm-smi releases ("GTT Memory", "GTT Total Memory (B)"). `parseRocmSmiCSV` keys rows by device id through `mergeGpuStat` instead of appending: the tool may print ONE table per memory type, and appending produced two rows for device 0 — which downstream reading keeps only the FIRST of (on a timestamp tie `gpuSetFromStats` prefers the earlier row), silently throwing the GTT half away. The three functions are pure and live in `gpu_parse.go` so their tests run on Windows.
+
 - **DXGI backend (Windows, non-NVIDIA).** Only reached when `nvidia-smi` is absent. COM via raw vtable calls (`comCall`), no external tool. Two hazards guarded by `init()` panics: hand-written struct offsets (`DedicatedVideoMemory`@272, `AdapterLuid`@296, `DXGI_QUERY_VIDEO_MEMORY_INFO` size 32) — a wrong offset reads garbage VRAM silently. The AMD driver enumerates one physical card as **N mirror adapters** with distinct LUIDs but identical name/VRAM/budget; `openDxgiAdapters` collapses them by `name|totalMB` (keeping every LUID+interface) so the dashboard shows one GPU and `usedMB`/util take the **max across mirrors** (live usage can surface on any single mirror LUID). **Used VRAM MUST come from PDH `GPU Adapter Memory\Dedicated Usage` (system-wide), not DXGI `QueryVideoMemoryInfo` — the latter reports only the calling process's usage (≈0 for the monitor), which read as "0.0 used" on the gauge.** DXGI is total-only here. Unlike the nvidia-smi loop, DXGI is polled on a ticker in `tryDxgiWindows`; the sampler goroutine `LockOSThread`s because it holds COM pointers across ticks. iGPUs with nonzero dedicated VRAM appear too, but `freeVramGBFromStats` (autogen) picks the largest-total adapter.
+
+  **Windows does NOT fill `SharedTotalMB`/`SharedUsedMB` yet.** `DXGI_ADAPTER_DESC1.SharedSystemMemory` is a total with no matching usage counter, and the per-adapter usage lives in the PDH counter `\GPU Adapter Memory(*)\Shared Usage`, which the LUID-keyed `initPdhLuidCounter` helper does not open (it opens `Dedicated Usage`). So a Windows iGPU is still classified by the dedicated pool alone — `SharedMemory: auto` is a no-op there, and the WPAD/AMD-APU-on-Windows half of issue #37 is a follow-up. Fail closed if it is ever added: if the shared-usage counter is missing, set `SharedUsedMB = SharedTotalMB` rather than 0 (0 would report the whole aperture as free).
 
 ## Connections
 

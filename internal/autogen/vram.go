@@ -61,11 +61,16 @@ func DetectGpuCompute(logf func(string)) {
 }
 
 // SampleFreeVramGB takes a single GPU telemetry snapshot and returns the free
-// VRAM (in GB) of the adapter with the most total memory — the project's
-// single-GPU assumption. ok is false when no GPU telemetry is available within
-// timeout (no monitoring backend, headless box, driver unavailable), in which
-// case callers should fall back to the static targetVramGB.
-func SampleFreeVramGB(timeout time.Duration) (gb float64, ok bool) {
+// VRAM (in GB) of the eligible device set — the project's single-GPU assumption
+// on a box with one adapter, pooled across them otherwise. ok is false when no
+// GPU telemetry is available within timeout (no monitoring backend, headless
+// box, driver unavailable), in which case callers should fall back to the static
+// targetVramGB.
+//
+// policy decides which devices count and whether an integrated GPU's shared
+// system memory is part of the figure; a caller without settings should pass
+// currentProbePolicy().
+func SampleFreeVramGB(timeout time.Duration, policy GpuPolicy) (gb float64, ok bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -76,17 +81,17 @@ func SampleFreeVramGB(timeout time.Duration) (gb float64, ok bool) {
 	}
 	select {
 	case stats := <-gpuCh:
-		return freeVramGBFromStats(stats)
+		return freeVramGBFromStats(stats, policy)
 	case <-ctx.Done():
 		return 0, false
 	}
 }
 
 // SampleTotalVramGB takes a single GPU telemetry snapshot and returns the TOTAL
-// VRAM (in GB) of the adapter with the most total memory. Used by SAM placement
-// to compare the physical card against the primary-model budget. ok is false when
-// no GPU telemetry is available (headless/test), so callers fail open.
-func SampleTotalVramGB(timeout time.Duration) (gb float64, ok bool) {
+// VRAM (in GB) of the eligible device set. Used by SAM placement to compare the
+// physical card against the primary-model budget. ok is false when no GPU
+// telemetry is available (headless/test), so callers fail open.
+func SampleTotalVramGB(timeout time.Duration, policy GpuPolicy) (gb float64, ok bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -96,21 +101,23 @@ func SampleTotalVramGB(timeout time.Duration) (gb float64, ok bool) {
 	}
 	select {
 	case stats := <-gpuCh:
-		return totalVramGBFromStats(stats)
+		return totalVramGBFromStats(stats, policy)
 	case <-ctx.Done():
 		return 0, false
 	}
 }
 
-// totalVramGBFromStats returns the POOLED physical VRAM of every eligible
+// totalVramGBFromStats returns the POOLED total capacity of every eligible
 // adapter. Split out for unit testing without a real GPU.
 //
 // Was "the largest adapter's total". Pooling is what makes the figure mean the
 // same thing as the budget it is compared against (see freeVramGBFromStats);
-// adapters below the eligibility floor are excluded from both, so an iGPU's
-// slice of system memory never inflates either.
-func totalVramGBFromStats(stats []perf.GpuStat) (float64, bool) {
-	set := gpuSetFromStats(stats, minInferenceVramGB)
+// adapters below the eligibility floor are excluded from both, and the figure
+// folds in an integrated device's shared pool under the same policy the budget
+// uses — otherwise a total describing the carveout alone would read as smaller
+// than a budget derived from the carveout plus GTT.
+func totalVramGBFromStats(stats []perf.GpuStat, policy GpuPolicy) (float64, bool) {
+	set := gpuSetFromStats(stats, policy)
 	if len(set) == 0 {
 		return 0, false
 	}
@@ -199,7 +206,7 @@ func resolveAutoVram(s *Settings, logf func(string)) {
 	if len(s.Gpus) > 0 {
 		sampledGB, ok = s.Gpus.FreeGB(), true
 	} else {
-		sampledGB, ok = SampleFreeVramGB(autoVramSampleTimeout)
+		sampledGB, ok = SampleFreeVramGB(autoVramSampleTimeout, s.DevicePolicy())
 	}
 	// Budget against the idle high-water mark, never the raw sample: a sample
 	// taken while one of our own models is resident describes the leftovers, not
@@ -246,9 +253,11 @@ func resolveAutoVram(s *Settings, logf func(string)) {
 // overhead and the emitted --tensor-split matches the same per-device
 // remainders: see the header comment in gpuset.go. A caller that has turned
 // multiGpu off never reaches here with more than one device: ResolveGpuSet pins
-// the set to the main card first.
-func freeVramGBFromStats(stats []perf.GpuStat) (float64, bool) {
-	set := gpuSetFromStats(stats, minInferenceVramGB)
+// the set to the main card first. On a box whose only GPU is an APU the figure
+// includes the shared system-memory pool the device allocates from, folded in by
+// gpuSetFromStats under the same policy the budget uses (issue #37).
+func freeVramGBFromStats(stats []perf.GpuStat, policy GpuPolicy) (float64, bool) {
+	set := gpuSetFromStats(stats, policy)
 	if len(set) == 0 {
 		return 0, false
 	}

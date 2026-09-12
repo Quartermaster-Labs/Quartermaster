@@ -42,7 +42,7 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 | `hash.go` | Inputs hashing + hash-gated regen (`InputsHash`, `EnsureConfig`, `CurrentInputsHash`). |
 | `budgets.go` | Hardware-derived STARTING budgets: `RecommendedVramGB` (free VRAM) / `RecommendedRamGB` (available RAM), and `seedHardwareBudgets`, which `LoadGenerateFile` uses to replace `applyDefaults`' 7 GB/24 GB placeholders when neither the file nor the sidecar pinned them. One cached probe per process. |
 | `vram.go` | Live free-VRAM sampling via `internal/perf` (`SampleFreeVramGB`, `resolveAutoVram`) for the `autoVram` setting. POOLED across every eligible adapter since issue #4, via `gpuset.go`. Budgets against the **idle high-water mark** (`noteFreeVramGB`), never the raw sample — autoVram re-resolves on every `EnsureConfig` *and* every estimate preview, both of which run while models are loaded. |
-| `gpuset.go` | Multi-GPU device set (`GpuSet`, `GpuDevice`): eligibility (`gpuSetFromStats`, `EligibleGpuStats`, `LiveGpuSet`), pooled `FreeGB`/`TotalGB`, `MainIndex`, the `--tensor-split` ratio (`TensorSplit`, `FormatSplit`), the extra-device overhead the sizer must charge (`ExtraDeviceOverheadGB`), and `ResolveGpuSet` (60s-cached resolve into `Settings.Gpus`). The header comment carries the split math. |
+| `gpuset.go` | Multi-GPU device set (`GpuSet`, `GpuDevice`): eligibility (`gpuSetFromStats`, `EligibleGpuStats`, `LiveGpuSet`), the device policy (`GpuPolicy`, `SharedMemoryAuto/On/Off`, `detectedIntegrated`, `effectiveGpuStat`, `DescribeGpuStats`), pooled `FreeGB`/`TotalGB`, `MainIndex`, the `--tensor-split` ratio (`TensorSplit`, `FormatSplit`), the extra-device overhead the sizer must charge (`ExtraDeviceOverheadGB`), and `ResolveGpuSet` (60s-cached resolve into `Settings.Gpus`). The header comment carries the split math. |
 | `backenddev.go` | What the BACKEND calls each device (`ListBackendDevices` over `--list-devices`, memoised per binary), and the map from a resolved `GpuSet` onto those ids (`BackendIDs`, `DeviceFlagFor`). Refuses on any unmatched device so the caller degrades to unnamed placement. |
 | `liveoffload.go` | Spawn-time placement recompute (`LiveOffloadArgs`), including the live `--tensor-split` retune (`retuneTensorSplit`). → `liveoffload.md` |
 | `vllm.go` | Backend selection (`resolveBackend`, `resolveBackendPreferring`, `kindClass`) + the vllm emitter. → `backends.md` |
@@ -197,9 +197,25 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   of the ratio, and tipped layers onto the card least able to hold them. `generate.go` takes the
   main figure before adding the extras; `EstimatePlan` reports it as `FixedGB` and adds the
   extras to the pool afterwards, so the config and the spawn-time retune derive the same split.
-  Adapters below `minGpuVramGB` (3 GB) are dropped: an iGPU reports a slice of system RAM as
-  dedicated VRAM, and pooling it invents budget. `multiGpu: false` collapses everything back to
-  the single device `MainIndex` picks.
+  Adapters below `minGpuVramGB` (3 GB) are dropped, measured against the device's TOTAL **after**
+  the shared pool is folded in (see the device-policy bullet below); `multiGpu: false` collapses
+  everything back to the single device `MainIndex` picks.
+- **Which devices count is a POLICY (`GpuPolicy`), and it must be passed, never guessed.** The
+  same telemetry means opposite things on an APU and on a card: a 780M reports a 2 GB carve-out
+  plus a GTT several times larger, and that GTT *is* its GPU memory — while a discrete card
+  reports a host aperture that is slower than its own VRAM. There is no flag that tells them
+  apart, so `Settings.DevicePolicy()` (`SharedMemory`, `PoolIntegratedGpu`, `MinGpuVramGB`)
+  decides, and the sizer, the eligibility query and the router's spawn-time retune all take the
+  same struct. `SharedMemory: auto` (default) counts the pool only for a device that looks
+  integrated: a name marker (`ryzen`/`athlon`/`radeon graphics`) or dedicated ≤ 8 GB with shared
+  ≥ 3× dedicated. A device under the floor used to be dropped outright, which on an APU-only box
+  hid the ONLY GPU in the machine from every budget in the program (issue #37); the floor still
+  drops it, but the pool is folded first, and "do not PAIR an iGPU with a real card" is now a
+  separate rule applied to the resulting SET (`dropUnpooledIntegrated`) — an all-integrated set is
+  kept. One pair of functions owns the answer: `effectiveGpuStat` folds, `gpuSetFromStats` builds —
+  every consumer (including `internal/server`'s OOM guard) goes through those, so the sizer and the
+  guard cannot disagree about the budget. `cmd/monitor-test` prints `DescribeGpuStats` for a bug
+  report from a machine we do not have.
 - **Single-device backends need an explicit pin, and the ordinal in it is the BACKEND's.**
   sd-server, tts-server, whisper and the embedding server have no split of their own, so on a
   multi-GPU box `writeSingleDeviceEnv` pins each to the plan's main device. Without it the
