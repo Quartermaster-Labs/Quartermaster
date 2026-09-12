@@ -156,6 +156,17 @@ func (g *ghClient) Releases(ctx context.Context, repo string, force bool) ([]Rel
 	return out, nil
 }
 
+// noReleaseError explains why nothing resolved. An empty listing used to be
+// reported as `no release "" found in the last 30 releases`, which reads like a
+// bad version request when the truth is that the repo has published nothing yet
+// (a freshly tracked fork, or one whose CI has not run).
+func noReleaseError(c Component, rels []Release, version string) error {
+	if len(rels) == 0 {
+		return fmt.Errorf("%s: %s has no releases yet", c.ID, c.Repo)
+	}
+	return fmt.Errorf("%s: no release %q found in the last %d releases", c.ID, version, releasePage)
+}
+
 // pickRelease resolves a requested version: "" or "latest" => the newest
 // non-prerelease that actually carries an asset for this variant/OS, else the
 // exact tag.

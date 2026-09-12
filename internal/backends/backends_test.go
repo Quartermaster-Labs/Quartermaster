@@ -379,6 +379,24 @@ func TestBackends_PickRelease(t *testing.T) {
 	}
 }
 
+func TestBackends_NoReleaseError(t *testing.T) {
+	c := Component{ID: "trellis2-server", Repo: "Radu0120/trellis2.c"}
+
+	// The case a user hits with a freshly tracked repo: no releases at all. The
+	// old wording was `no release "" found in the last 30 releases`.
+	err := noReleaseError(c, nil, "")
+	if want := "trellis2-server: Radu0120/trellis2.c has no releases yet"; err.Error() != want {
+		t.Errorf("empty listing = %q, want %q", err.Error(), want)
+	}
+
+	// Releases exist but the requested tag is not among them: name the tag.
+	rels := []Release{{Tag: "server-v0.1.0"}}
+	err = noReleaseError(c, rels, "v0.9")
+	if !strings.Contains(err.Error(), `no release "v0.9" found`) {
+		t.Errorf("explicit tag = %q", err.Error())
+	}
+}
+
 func TestBackends_ValidateRepo(t *testing.T) {
 	for _, ok := range []string{"ggml-org/llama.cpp", "lemonade-sdk/llamacpp-rocm", "a_b/c-d.e"} {
 		if err := ValidateRepo(ok); err != nil {
