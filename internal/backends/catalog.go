@@ -282,6 +282,34 @@ var catalog = []Component{
 		},
 	},
 	{
+		// Tracked from the fork rather than upstream: Wimacs/trellis2.c publishes
+		// CLI archives but no build of the headless HTTP front end this backend
+		// drives, and the pull request carrying it upstream is still open. The
+		// assets come from the fork's own release workflow, which builds the
+		// server target alone (tools, tests and the raylib viewer are off).
+		ID:    "trellis2-server",
+		Name:  "TRELLIS.2 (3D)",
+		Blurb: "trellis2-server - one image in, a textured 3D mesh (GLB) out.",
+		Repo:  "Radu0120/trellis2.c",
+		Kind:  "trellis2",
+		Exe:   map[string]string{osWin: "trellis2-server.exe", "default": "trellis2-server"},
+		Variants: []Variant{
+			{
+				ID: "vulkan", Label: "Vulkan", Note: "Any GPU. The build for AMD and Intel cards.",
+				Patterns: map[string][]string{
+					osWin:   {`^trellis2-server-.*-win-x64-vulkan\.zip$`},
+					osLinux: {`^trellis2-server-.*-linux-x64-vulkan\.tar\.gz$`},
+				},
+			},
+			{
+				ID: "cuda", Label: "CUDA", Note: "NVIDIA only, Windows only. Still needs a working Vulkan driver: the texture baker and the mesh postprocessor are Vulkan in every build.",
+				Patterns: map[string][]string{
+					osWin: {`^trellis2-server-.*-win-x64-cuda\.zip$`},
+				},
+			},
+		},
+	},
+	{
 		ID:    "yt-dlp",
 		Name:  "yt-dlp",
 		Blurb: "Helper for the chat media_transcript tool. Not an inference backend.",
