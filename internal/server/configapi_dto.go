@@ -245,8 +245,9 @@ type modelConfigResp struct {
 	IsImage         bool   `json:"isImage"` // diffusion model (sd-server) => image config form
 	IsAudio         bool   `json:"isAudio"` // TTS or ASR model => audio config form
 	IsSam           bool   `json:"isSam"`   // SAM segmentation (sam3_server) => minimal segment form
+	Is3D            bool   `json:"is3d"`    // TRELLIS.2 image-to-mesh (trellis2-server) => minimal 3D form
 	// Class is the backend class this model resolves against (autogen kindClass):
-	// llm / image / tts / asr / segment. The UI filters the backend picker by it —
+	// llm / image / tts / asr / segment / 3d. The UI filters the backend picker by it —
 	// TTS and ASR share one config form but not their engines, so the form flags
 	// above cannot stand in for it.
 	Class       string `json:"class"`

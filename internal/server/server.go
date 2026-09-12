@@ -186,6 +186,15 @@ var modelPostFormRoutes = []string{
 	"/v1/images/edits",
 }
 
+// modelPostRawRoutes are POST endpoints whose body IS the payload rather than a
+// document naming a model, so the id arrives as ?model=<id>. The extractor only
+// reads the body for JSON and form content types; a raw image falls through to
+// form parsing, which still reads the query string, so no resolution code is
+// needed for these — the shape matches the audio/voices GET routes.
+var modelPostRawRoutes = []string{
+	"/v1/3d/generations", // TRELLIS.2 image-to-mesh; the body is the source image
+}
+
 // modelGetRoutes are model-dispatched GET endpoints (the model arrives as a
 // query parameter).
 var modelGetRoutes = []string{
@@ -248,7 +257,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	s.cfg.Store(&cfg)
 	lm := cfg.ListenerModelSets()
 	s.listenerModels.Store(&lm)
-	s.backendMetrics = newBackendMetricsMonitor(s.runningProxies, s.inflight.Current, s.local.Inflight, proxylog)
+	s.backendMetrics = newBackendMetricsMonitor(s.llamaProxies, s.inflight.Current, s.local.Inflight, proxylog)
 	go s.backendMetrics.run(s.shutdownCtx)
 	go s.trackSystemVram(s.shutdownCtx)
 	// slotParticipates/slotRecurrent read the LIVE config (s.config()) so a hot
@@ -680,6 +689,24 @@ func (s *Server) runningProxies() map[string]string {
 	return out
 }
 
+// llamaProxies is runningProxies narrowed to the backends the metrics monitor
+// can actually read. /metrics, /slots and /props are llama.cpp's API: scraping
+// them on any other backend is a 404 every 2s in that process's log, and on a
+// single-threaded one (trellis2-server) a connection held open for the length of
+// a generation. The slot cache keeps the unfiltered map -- it gates itself on
+// --slot-save-path, which only a llama-server command carries.
+func (s *Server) llamaProxies() map[string]string {
+	all := s.runningProxies()
+	models := s.config().Models
+	out := make(map[string]string, len(all))
+	for id, base := range all {
+		if mc, ok := models[id]; ok && runsLlamaServer(mc.Cmd) {
+			out[id] = base
+		}
+	}
+	return out
+}
+
 // localPeerHandler dispatches a model-routed request to the local or peer
 // router. The model is resolved once via shared.FetchContext.
 func (s *Server) localPeerHandler(w http.ResponseWriter, r *http.Request) {
@@ -801,6 +828,9 @@ func (s *Server) routes() {
 		mux.Handle("POST "+path, modelChain.Then(dispatch))
 	}
 	for _, path := range modelPostFormRoutes {
+		mux.Handle("POST "+path, modelChain.Then(dispatch))
+	}
+	for _, path := range modelPostRawRoutes {
 		mux.Handle("POST "+path, modelChain.Then(dispatch))
 	}
 	for _, path := range modelGetRoutes {

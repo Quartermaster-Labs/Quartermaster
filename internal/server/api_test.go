@@ -361,6 +361,21 @@ func TestServer_HandleListModels_Capabilities(t *testing.T) {
 		}
 	})
 
+	t.Run("image_to_3d", func(t *testing.T) {
+		m := getModel(t, newServer(config.ModelConfig{
+			Capabilities: config.ModelCapConfig{In: []string{"image"}, Out: []string{"3d"}},
+		}))
+		if m.Capabilities == nil || m.Capabilities["image_to_3d"] != true {
+			t.Error("expected image_to_3d: true")
+		}
+		// The modality pair rides along on the architecture block, which is what a
+		// client reads to know a mesh (not an image) comes back. Decoded from JSON,
+		// so the elements are any, not string.
+		if out, ok := m.Architecture["output_modalities"].([]any); !ok || len(out) != 1 || out[0] != "3d" {
+			t.Errorf("output_modalities = %v, want [3d]", m.Architecture["output_modalities"])
+		}
+	})
+
 	t.Run("empty_skip", func(t *testing.T) {
 		m := getModel(t, newServer(config.ModelConfig{}))
 		if m.Architecture != nil {

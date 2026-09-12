@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { loadedSegments, systemFloorMb, systemDetail } from "./vram";
+import { loadedSegments, systemFloorMb, systemDetail, llamaSized } from "./vram";
 import type { PlanEstimate } from "./api";
 
 // A plausible estimate: 10 GB total = 6 weights + 2 KV + 0.5 draft + 0.5
@@ -116,5 +116,24 @@ describe("systemFloorMb", () => {
   it("clamps to the used total and to zero", () => {
     expect(systemFloorMb({ ...base, guardForeignMb: 99 * 1024 }).mb).toBe(20 * 1024);
     expect(systemFloorMb({ ...base, guardForeignMb: 100, strayForeignMb: 900 }).mb).toBe(0);
+  });
+});
+
+describe("llamaSized", () => {
+  it("estimates llama models, with or without a capabilities block", () => {
+    expect(llamaSized({})).toBe(true);
+    expect(llamaSized({ capabilities: { vision: true, function_calling: true } })).toBe(true);
+    expect(llamaSized({ capabilities: { embeddings: true } })).toBe(true);
+  });
+
+  it("skips every non-llama backend the flags can name", () => {
+    // One flag each is enough: these are the marks the server puts on a backend
+    // that is not llama-server, and none of them has a llama load plan.
+    expect(llamaSized({ capabilities: { image_generation: true } })).toBe(false);
+    expect(llamaSized({ capabilities: { image_to_image: true } })).toBe(false);
+    expect(llamaSized({ capabilities: { image_to_3d: true, vision: true } })).toBe(false);
+    expect(llamaSized({ capabilities: { segmentation: true } })).toBe(false);
+    expect(llamaSized({ capabilities: { audio_speech: true } })).toBe(false);
+    expect(llamaSized({ capabilities: { audio_transcriptions: true } })).toBe(false);
   });
 });

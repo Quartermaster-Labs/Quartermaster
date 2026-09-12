@@ -189,6 +189,13 @@ func searchFilters(kind string) []string {
 		// mask-generation, not image-segmentation: it is what the SAM/BiRefNet
 		// GGUF repos quartermaster's segment backend loads are tagged with.
 		return []string{"gguf", "mask-generation"}
+	case "3d":
+		// Deliberately WITHOUT gguf: the 3D models this category exists for are
+		// component sets (safetensors plus json manifests), and adding the gguf
+		// tag would hide every one of them behind repos that mostly convert
+		// other people's work. image-to-3d is the real pipeline tag on
+		// microsoft/TRELLIS.2-4B and TRELLIS-image-large.
+		return []string{"image-to-3d"}
 	default:
 		return []string{strings.ToLower(strings.TrimSpace(kind))}
 	}
@@ -371,10 +378,8 @@ func (h *HF) Detail(ctx context.Context, repoID string) (ModelDetail, error) {
 	if det.ID == "" {
 		det.ID = repoID
 	}
+	all := make([]File, 0, len(raw.Sibs))
 	for _, s := range raw.Sibs {
-		if !IsModelFile(s.Path) {
-			continue
-		}
 		f := File{Path: s.Path, SizeBytes: s.Size, OID: s.Oid}
 		if s.LFS != nil {
 			if f.SizeBytes == 0 {
@@ -388,8 +393,11 @@ func (h *HF) Detail(ctx context.Context, repoID string) (ModelDetail, error) {
 			}
 		}
 		classify(&f)
-		det.Files = append(det.Files, f)
+		all = append(all, f)
 	}
+	// The listing policy needs the whole repo: a component set is decided by the
+	// ABSENCE of any quant file, and every file in one shares a group key.
+	det.Files = SelectFiles(det.ID, all)
 	sort.Slice(det.Files, func(i, j int) bool { return det.Files[i].Path < det.Files[j].Path })
 	det.Readme = h.readme(ctx, repoID)
 	cachePut(h, key, det)

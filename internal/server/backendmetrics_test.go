@@ -10,6 +10,38 @@ import (
 	"github.com/quartermaster-labs/quartermaster/internal/logmon"
 )
 
+func TestRunsLlamaServer(t *testing.T) {
+	yes := []string{
+		`llama-server -m x.gguf`,
+		`/usr/local/bin/llama-server --port 8080`,
+		`C:\bin\llama-server.exe -m x.gguf --metrics --props`,
+		`"D:/apps/custom-lemonade-sdk-llamacpp-rocm/b1326-llama-windows-rocm-gfx110x/llama-server.exe" -m x.gguf`,
+		`llama-server-rocm.exe -m x.gguf`,
+	}
+	for _, cmd := range yes {
+		if !runsLlamaServer(cmd) {
+			t.Errorf("runsLlamaServer(%q) = false, want true", cmd)
+		}
+	}
+
+	// Every other backend answers 404 to /metrics, /slots and /props.
+	no := []string{
+		``,
+		`   `,
+		`E:\bin\sd-server\master-841\sd-server.exe --diffusion-model D:/m/z-image.gguf`,
+		`E:\bin\trellis2-server\server-v0.1.0-vulkan\trellis2-server.exe --model D:/LLM/Models/3D/TRELLIS.2/TRELLIS.2-4B`,
+		`sam3_server.exe --checkpoint D:/m/sam3.gguf`,
+		`tts-server.exe -m D:/m/qwen3-tts.gguf`,
+		`parakeet-server.exe --model D:/m/parakeet`,
+		`vllm serve Qwen/Qwen3-8B`,
+	}
+	for _, cmd := range no {
+		if runsLlamaServer(cmd) {
+			t.Errorf("runsLlamaServer(%q) = true, want false", cmd)
+		}
+	}
+}
+
 func TestParsePrometheusInto(t *testing.T) {
 	body := `# HELP llamacpp:kv_cache_usage_ratio KV-cache usage
 # TYPE llamacpp:kv_cache_usage_ratio gauge

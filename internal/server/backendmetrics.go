@@ -17,6 +17,24 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+// runsLlamaServer reports whether a model's command runs llama-server, the only
+// backend this monitor can read: /metrics, /slots and /props are llama.cpp's own
+// API. Every other backend (sd-server, tts-server, sam3_server, trellis2-server,
+// vLLM) answers 404 to all three, so scraping one writes a 404 into that
+// process's log every tick -- and on a single-threaded server it is a
+// connection held open while a request is being served.
+func runsLlamaServer(cmd string) bool {
+	fields := strings.Fields(cmd)
+	if len(fields) == 0 {
+		return false
+	}
+	// The executable is the first token, quotes and all. A llama.cpp build keeps
+	// "llama-server" in its name whatever prefix the packaging adds
+	// (llama-server.exe, llama-server-rocm.exe, b1326-llama-windows-.../).
+	exe := strings.Trim(fields[0], `"'`)
+	return strings.Contains(strings.ToLower(exe), "llama-server")
+}
+
 // BackendMetrics is one running llama-server's live state, scraped from its
 // own /metrics (Prometheus) and /props endpoints. Quartermaster's per-request
 // metrics (metrics.go) can't see these — they are backend-internal gauges:

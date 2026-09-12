@@ -16,12 +16,13 @@ export function prettifyModelName(s: string): string {
     .join(" ");
 }
 
-export type ModelCategory = "llm" | "image" | "segment" | "tts" | "transcribe" | "embed";
+export type ModelCategory = "llm" | "image" | "3d" | "segment" | "tts" | "transcribe" | "embed";
 
 // Sub-menu order under the Models tab. LLM is the catch-all default.
 export const MODEL_CATEGORIES: { id: ModelCategory; label: string }[] = [
   { id: "llm", label: "LLM" },
   { id: "image", label: "Image" },
+  { id: "3d", label: "3D" },
   { id: "segment", label: "Segment" },
   { id: "tts", label: "TTS" },
   { id: "transcribe", label: "Transcribe" },
@@ -30,10 +31,13 @@ export const MODEL_CATEGORIES: { id: ModelCategory; label: string }[] = [
 
 // Bucket a model by its declared capabilities. Anything that isn't clearly an
 // image/audio/embedding model falls through to "llm". Segmentation is checked
-// BEFORE image because SAM also declares in:image/out:image (image_to_image).
+// BEFORE image because SAM also declares in:image/out:image (image_to_image),
+// and 3D before image for the same reason: a TRELLIS.2 model takes an image and
+// is not a diffusion one.
 export function modelCategory(m: Model): ModelCategory {
   const c = m.capabilities;
   if (c?.segmentation) return "segment";
+  if (c?.image_to_3d) return "3d";
   if (c?.image_generation || c?.image_to_image) return "image";
   if (c?.audio_speech) return "tts";
   if (c?.audio_transcriptions) return "transcribe";

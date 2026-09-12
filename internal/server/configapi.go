@@ -200,6 +200,14 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 	if isSam {
 		isImage, isAudio, isTTS, isASR = false, false, false, false
 	}
+	// TRELLIS.2 image-to-mesh (trellis2-server) gets a minimal form as well, and
+	// out:[3d] is its discriminator: nothing else produces a mesh. It has to win
+	// over the sniffs above for the same reason SAM does — this model consumes an
+	// image by design, so a capabilities-only read would call it a diffusion model.
+	is3D := hasMC && slices.Contains(mc.Capabilities.Out, "3d")
+	if is3D {
+		isImage, isAudio, isTTS, isASR = false, false, false, false
+	}
 	// Class is what the UI filters the backend picker by, so it must name the
 	// engine class autogen resolves against (kindClass), not just the form shape:
 	// TTS and ASR share the audio form but not their backends.
@@ -207,6 +215,8 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 	switch {
 	case isSam:
 		class = "segment"
+	case is3D:
+		class = "3d"
 	case isImage:
 		class = "image"
 	case isTTS:
@@ -214,7 +224,7 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 	case isASR:
 		class = "asr"
 	}
-	resp := modelConfigResp{Id: realID, Gguf: gguf, Cmd: strings.TrimSpace(cmd), IsImage: isImage, IsAudio: isAudio, IsSam: isSam, Class: class, HasOverride: existing != nil}
+	resp := modelConfigResp{Id: realID, Gguf: gguf, Cmd: strings.TrimSpace(cmd), IsImage: isImage, IsAudio: isAudio, IsSam: isSam, Is3D: is3D, Class: class, HasOverride: existing != nil}
 	if dn, err := autogen.LoadSidecarDisplayNames(s.autogen.GeneratePath); err == nil {
 		resp.DisplayName = dn[realID]
 	}
@@ -561,12 +571,19 @@ func (s *Server) handleAPIModelCmdPreview(w http.ResponseWriter, r *http.Request
 		writeJSON(w, map[string]string{"cmd": cmd})
 		return
 	}
-	meta, err := autogen.ReadGgufMetadataCached(gguf)
-	if err != nil {
+	row := autogen.GgufRow{FullPath: gguf}
+	var meta autogen.Metadata
+	// A TRELLIS.2 package is a directory with no gguf header to read: its command
+	// renders from the path alone (RenderSoloCmd takes the trellis branch before it
+	// touches the metadata), which is the same reason emitModel routes one before
+	// the metadata read. Anything else must parse, or the path is broken.
+	if autogen.IsTrellisPackageDir(gguf) {
+		row.IsTrellis = true
+	} else if meta, err = autogen.ReadGgufMetadataCached(gguf); err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, "reading gguf metadata failed: "+err.Error())
 		return
 	}
-	cmd, err := autogen.RenderSoloCmd(gf.Settings, meta, autogen.GgufRow{FullPath: gguf}, ov)
+	cmd, err := autogen.RenderSoloCmd(gf.Settings, meta, row, ov)
 	if err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, "rendering command failed: "+err.Error())
 		return
