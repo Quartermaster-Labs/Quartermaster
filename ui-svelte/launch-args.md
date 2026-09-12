@@ -214,6 +214,8 @@ the new meaning.
 
 1. **Go**: flag table, composition/reconcile, split DTO (`custom` / `generated` / `effective` /
    `tokens` / `issues`), shadowed-field zeroing in `applyOverrideDTO`, backend `--help` probe.
+   Done on `radu0120/launch-args` (`flagtable.go`, `customargs.go`, `backendhelp.go`);
+   `issues` waits for the validation phase.
 2. **Modal (llama form only)**: the two panes, verbatim editor, read-only provenance box; delete the
    blur parse. Issue #38 is fixed here.
 3. **Controls**: write tokens, presence-based pins, reset to auto, plumbing confirmations.
