@@ -193,7 +193,10 @@ const hashCacheSuffix = ".modelhash"
 //	     own (a 3D entry with an image-in / 3d-out capability line) instead of a
 //	     pile of files nothing serves, and a BiRefNet gguf stops being listed as
 //	     a language model. Inputs that did not change gain a model.
-const genVersion = "v67"
+//	v68: TRELLIS.2 models launch with --mesh-postprocess-simplify. The upstream
+//	     default keeps the full mesh (~5.5M triangles and ~180 MB at the 512
+//	     profile); a served model is more useful at ~1M triangles and ~40 MB.
+const genVersion = "v68"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the
