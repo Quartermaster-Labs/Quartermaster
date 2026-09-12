@@ -88,7 +88,7 @@
             : t.source === "custom"
               ? "text-success font-semibold"
               : "text-txtmain"}
-        >{t.text}</span>{#if i < layers.tokens.length - 1}<span> </span>{/if}{/each}
+        >{t.text}</span>{#if i < layers.tokens.length - 1}{' '}{/if}{/each}
     </div>
     <p class="text-xs text-txtsecondary mt-1">
       {#if layers.ownedKnobs?.length}
