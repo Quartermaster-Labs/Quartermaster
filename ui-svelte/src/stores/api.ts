@@ -297,6 +297,9 @@ export interface ModelVariant {
   threads?: number;
   parallel?: number;
   extraArgs?: string;
+  /** Verbatim launch-argument text for this variant. "" => inherit the model's,
+   *  "none" => run the variant with none. */
+  customArgs?: string;
   chatTemplateFile?: string; // .jinja path; "" => inherit model-wide
   // Only read on the reserved "vision" variant: the projector gguf this twin
   // loads. "" => inherit the model-wide mmprojFile; "none" => back to discovery.
@@ -389,7 +392,12 @@ export interface ModelOverride {
   threads?: number; // 0 => global default
   parallel?: number; // 0 => 1
   ub?: number; // 0 => auto (physical batch -ub/-b)
-  extraArgs?: string; // extra llama-server flags appended verbatim (passthrough)
+  extraArgs?: string; // LEGACY free-form bucket from the old two-way box; new saves use customArgs
+  /** Verbatim launch-argument text. Empty => the generated command runs as-is.
+   *  A flag written here replaces the generated flag for the same setting. */
+  customArgs?: string;
+  /** Keep customArgs stored but unapplied (the editor's enable toggle). */
+  customArgsOff?: boolean;
   chatTemplateFile?: string; // --chat-template-file path; "" => the gguf's baked-in template
   // --mmproj path. "" => whatever discovery pairs (dir-local, or a family
   // sibling's). Set => that file, and the "-vision" twin exists even when
@@ -654,10 +662,33 @@ export interface EstimateParams {
   actual?: boolean;
 }
 
-// Render the full launch command for a candidate override (no persistence).
-// Powers the editor's two-way launch-parameters box: form edits call this to
-// refresh the command text (computed -ngl/-c/--n-cpu-moe included).
-export async function previewCmd(model: string, override: ModelOverride): Promise<string> {
+// One token of a rendered launch command, with the provenance the editor needs
+// to render it without diffing strings. Suppressed tokens are generated tokens
+// a custom flag replaced; they are reported so the pane can strike them through.
+export interface CmdToken {
+  text: string;
+  source: "generated" | "custom";
+  knob?: string;
+  suppressed?: boolean;
+}
+
+// A rendered launch command in layers.
+export interface PreviewLayers {
+  /** The effective command (also returned as `cmd`). */
+  effective: string;
+  /** The command as the generator emitted it, no custom text. */
+  generated: string;
+  /** The user's text, unchanged. */
+  custom?: string;
+  /** Knobs the custom text sets, so the pane can say what it replaced. */
+  ownedKnobs?: string[];
+  tokens?: CmdToken[];
+}
+
+// Render the full launch command for a candidate override (no persistence), in
+// layers: what the generator emitted, what will actually run, and per-token
+// provenance for the editor's read-only pane.
+export async function previewCmd(model: string, override: ModelOverride): Promise<PreviewLayers> {
   const response = await fetch(`/api/models/${encodeURIComponent(model)}/preview`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -666,7 +697,7 @@ export async function previewCmd(model: string, override: ModelOverride): Promis
   if (!response.ok) {
     throw new Error(`Failed to preview command: ${response.status} ${await response.text()}`);
   }
-  return (await response.json()).cmd as string;
+  return await response.json();
 }
 
 export async function estimatePlan(model: string, p: EstimateParams): Promise<PlanEstimate> {

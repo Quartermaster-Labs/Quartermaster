@@ -217,7 +217,8 @@ the new meaning.
    Done on `radu0120/launch-args` (`flagtable.go`, `customargs.go`, `backendhelp.go`);
    `issues` waits for the validation phase.
 2. **Modal (llama form only)**: the two panes, verbatim editor, read-only provenance box; delete the
-   blur parse. Issue #38 is fixed here.
+   blur parse. Issue #38 is fixed here. Done on `radu0120/launch-args`
+   (`LaunchArgsPanes.svelte`; `parseCmdFields`, `IGNORE_VALUE`/`IGNORE_BOOL` and their tests deleted).
 3. **Controls**: write tokens, presence-based pins, reset to auto, plumbing confirmations.
 4. **Validation UI**: inline issues, autocomplete, startup check.
 5. **Later**: pins feed the sizer; the same panes for the image, audio and SAM forms with their own

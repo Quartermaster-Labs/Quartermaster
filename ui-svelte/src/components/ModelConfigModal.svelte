@@ -14,6 +14,7 @@
     type ModelOverride,
     type ModelVariant,
     type PlanEstimate,
+    type PreviewLayers,
     models,
   } from "../stores/api";
   import { get } from "svelte/store";
@@ -22,6 +23,7 @@
   import { tip } from "../lib/tooltip";
   import { askConfirm } from "../lib/confirm";
   import VramGauge from "./VramGauge.svelte";
+  import LaunchArgsPanes from "./LaunchArgsPanes.svelte";
   import Select, { type SelectOption } from "./Select.svelte";
   import Toggle from "./Toggle.svelte";
   import { estimateSegments } from "../stores/vram";
@@ -29,19 +31,15 @@
   import {
     IMG_SAMPLERS,
     fmtCtx,
-    genDefaultKv,
     genDefaultNum,
-    cmdNum,
     genDefaultSpec,
     hoistChatTemplate,
     hoistCms,
     nglDisplay,
     noNoMmap,
-    parseCmdFields,
     parseCtx,
     parseImageCmdFields,
     specToggle,
-    type ParsedCmd,
     type ParsedImg,
   } from "./modelCmdForm";
 
@@ -270,17 +268,14 @@
   // "" = nothing loaded yet, which must not read as dirty.
   let origOverride = $state("");
 
-  // Two-way launch-parameters box. cmdDraft is the editable command text. Form
-  // edits re-render it from the backend (renderCmd); editing the box parses known
-  // flags back into the form (parseCmd, on blur) and stashes anything autogen
-  // doesn't model into extraArgs (passthrough, appended to the emitted command).
+  // Launch arguments, two panes (ui-svelte/launch-args.md): the user's text is
+  // stored verbatim and never parsed back into fields, and the read-only pane
+  // renders the composed command the server returns. The image/audio/SAM forms
+  // keep the old two-way box (cmdDraft) until their emitters compose too.
+  let customArgs = $state("");
+  let customArgsOff = $state(false);
+  let cmdLayers = $state<PreviewLayers | null>(null);
   let cmdDraft = $state("");
-  // The command the render effect last produced, i.e. what the box held before
-  // the user touched it. A blur compares against this, not against the model's
-  // autogen baseline: for a flag the generator ALWAYS emits, the text alone
-  // cannot say whether a value is a pin or the computed default, so "the user
-  // did not touch it" is the only safe read of an unchanged value.
-  let cmdRendered = $state("");
   let extraArgs = $state("");
 
   // --- Backend selection (per-model) ---
@@ -342,76 +337,6 @@
   const isVllm = $derived(selectedKind === "vllm");
 
 
-  // Apply parsed flags to the Default form fields.
-  function applyParsedToDefault(p: ParsedCmd) {
-    flashOn = p.flashOn;
-    mmapOn = p.mmapOn;
-    mlock = p.mlock;
-    kvInRam = p.kvInRam;
-    reasoningOn = p.reasoningOn;
-    reasoningBudget = p.reasoningBudget;
-    kvK = p.kvK;
-    kvV = p.kvV;
-    spec = p.spec;
-    threads = p.threads;
-    parallel = p.parallel;
-    ub = p.ub;
-    dryOn = p.dryOn;
-    dryMultiplier = p.dryMultiplier;
-    dryBase = p.dryBase;
-    dryAllowedLength = p.dryAllowedLength;
-    specDraftNMax = p.specDraftNMax;
-    specDefault = p.specDefault;
-    specNgramSizeN = p.specNgramSizeN;
-    specNgramSizeM = p.specNgramSizeM;
-    specNgramMinHits = p.specNgramMinHits;
-    extraArgs = p.extraArgs;
-    ctxCheckpoints = ckptEdit(p.ctxCheckpoints, ctxCheckpoints);
-    adv.chatTemplateFile = p.chatTemplateFile;
-    adv.checkpointMinStep = cmsEdit(p.checkpointMinStep, adv.checkpointMinStep);
-    adv.temp = samplerDelta(p.temp, "--temp");
-    adv.topK = samplerDelta(p.topK, "--top-k");
-    adv.topP = samplerDelta(p.topP, "--top-p");
-    adv.minP = samplerDelta(p.minP, "--min-p");
-    adv.presencePenalty = samplerDelta(p.presencePenalty, "--presence-penalty");
-  }
-
-  // Capture a sampler value out of the launch box as a DELTA against what the
-  // generator already emits for this model (same trick as genDefaultKv for -ctk).
-  // Without it, blurring the box for any unrelated reason would convert autogen's
-  // arch-derived --top-k 20 / --min-p 0 baseline into an explicit per-model pin
-  // that then never tracks a future change to that baseline.
-  // --ctx-checkpoints out of the box. autogen ALWAYS emits this flag (llama-server
-  // otherwise keeps 32 snapshots and silently overflows VRAM), so "absent from the
-  // box" cannot round-trip as "absent from the command" - it means the user wants
-  // checkpointing off, which is the pinned 0. A value left exactly as rendered is
-  // treated as untouched and keeps whatever the field held (auto, or a pin), so a
-  // blur for some unrelated edit never freezes the computed default into a pin.
-  function ckptEdit(parsed: number | null, current: number | null): number | null {
-    const shown = cmdNum(cmdRendered, "--ctx-checkpoints");
-    if (parsed === null) return shown === "" ? current : 0;
-    if (parsed === shown) return current;
-    return parsed;
-  }
-
-  // -cms out of the box. Same shape as ckptEdit, and for the same reason:
-  // autogen ALWAYS emits this flag, so a value identical to the rendered one
-  // means "untouched" and must keep whatever the field held - otherwise a blur
-  // for some unrelated edit freezes the sizer's computed spacing into a pin that
-  // then never tracks a future change to it. There is no "no -cms" state to
-  // round-trip to, so deleting the flag reads as 0 (let the sizer pick) and the
-  // flag reappears on the next render.
-  function cmsEdit(parsed: number | "", current: number | ""): number | "" {
-    const shown = cmdNum(cmdRendered, "-cms");
-    if (parsed === "") return shown === "" ? current : 0;
-    if (parsed === shown) return current;
-    return parsed;
-  }
-
-  function samplerDelta(parsed: number | "", flag: string): number | "" {
-    return parsed === genDefaultNum(config, flag) ? "" : parsed;
-  }
-
   // Placeholder for an empty sampler box: what this model launches with today,
   // falling back to llama-server's own default when the flag isn't emitted at
   // all. Explicit `=== ""` rather than `||` — the arch baseline emits --min-p 0,
@@ -432,77 +357,17 @@
     extraArgs = p.extraArgs;
   }
 
-  // Apply parsed flags to the selected variant (string on/off knobs mirror the
-  // override encoding: "" = inherit/on, "off" = forced off).
-  function applyParsedToVariant(v: ModelVariant, p: ParsedCmd) {
-    // A variant is standalone, so the box renders generator-default base + the
-    // variant's fields. Model-specific flags (-ngl/-c/--n-cpu-moe/-m...) are
-    // skipped by IGNORE_VALUE, so nothing model-bound leaks. The only fields that
-    // would wrongly bake into a fleet-wide variant are kv and spec at their
-    // generator defaults (the model's own kv / draft-mtp|draft-dflash|ngram-mod): capture those
-    // as a delta vs the generator default so an unchanged value stays "inherit" ("").
-    const genSpec = genDefaultSpec(config);
-    v.flashAttn = p.flashOn ? "" : "off";
-    // mmap is tri-state ("" inherits the placement default: mmap only where
-    // weights sit on the CPU). Pin it only when the parsed cmd disagrees with
-    // that default. See save handler + inline variant editor.
-    v.mmap = p.mmapOn === variantMmapInherit(v) ? "" : p.mmapOn ? "on" : "off";
-    v.mlock = p.mlock;
-    v.kvInRam = p.kvInRam;
-    v.reasoningFmt = p.reasoningOn ? "" : "off";
-    const genKv = genDefaultKv(config);
-    v.kvK = p.kvK === genKv ? "" : p.kvK;
-    v.kvV = p.kvV === genKv ? "" : p.kvV;
-    v.spec = p.spec === genSpec ? "" : p.spec;
-    v.threads = p.threads === "" ? 0 : Number(p.threads);
-    v.parallel = p.parallel === "" ? 0 : Number(p.parallel);
-    v.ub = p.ub === "" ? 0 : Number(p.ub);
-    // Box edit is explicit: any --dry-* present => on, none => off (loses inherit).
-    v.dry = p.dryOn;
-    v.dryMultiplier = p.dryMultiplier === "" ? 0 : Number(p.dryMultiplier);
-    v.dryBase = p.dryBase === "" ? 0 : Number(p.dryBase);
-    v.dryAllowedLength = p.dryAllowedLength === "" ? 0 : Number(p.dryAllowedLength);
-    v.specDraftNMax = p.specDraftNMax === "" ? 0 : Number(p.specDraftNMax);
-    v.specDefault = p.specDefault;
-    v.specNgramSizeN = p.specNgramSizeN === "" ? 0 : Number(p.specNgramSizeN);
-    v.specNgramSizeM = p.specNgramSizeM === "" ? 0 : Number(p.specNgramSizeM);
-    v.specNgramMinHits = p.specNgramMinHits === "" ? 0 : Number(p.specNgramMinHits);
-    // Sampler defaults: "" (== the generator's own value) stays inherit → null.
-    const sv = (parsed: number | "", flag: string): number | null => {
-      const d = samplerDelta(parsed, flag);
-      return d === "" ? null : d;
-    };
-    v.temp = sv(p.temp, "--temp");
-    v.topK = sv(p.topK, "--top-k");
-    v.topP = sv(p.topP, "--top-p");
-    v.minP = sv(p.minP, "--min-p");
-    v.presencePenalty = sv(p.presencePenalty, "--presence-penalty");
-    // The variant box renders the INHERITED model-wide values too, so these are
-    // captured as a delta against the Default tab: unchanged stays "inherit"
-    // ("") instead of pinning, and deleting a flag the model-wide sets becomes
-    // an explicit "none" rather than silently inheriting it straight back.
-    v.ctxCheckpoints = ckptEdit(p.ctxCheckpoints, v.ctxCheckpoints ?? null);
-    v.checkpointMinStep = Number(cmsEdit(p.checkpointMinStep, v.checkpointMinStep ?? "")) || 0;
-    v.extraArgs = deltaStr(p.extraArgs.trim(), extraArgs);
-    v.chatTemplateFile = deltaStr(p.chatTemplateFile, adv.chatTemplateFile);
-  }
 
   function onCmdInput(e: Event) {
-    // Local-only while typing; the form fields (and thus the render effect) are
-    // untouched, so the box isn't overwritten mid-keystroke.
+    // Image box only: local while typing, folded back into the fields on blur.
+    // The llama panes edit customArgs directly, with no round trip through the
+    // generator (see ui-svelte/launch-args.md).
     cmdDraft = (e.currentTarget as HTMLTextAreaElement).value;
   }
   function onCmdBlur() {
-    // On blur, fold the edited command back into the active entry. Field changes
-    // trigger the render effect, which re-renders the canonical command.
-    if (imageMode) {
-      // Image box is Default-only (no variant box), sd-server flag set.
-      applyImageParsedToDefault(parseImageCmdFields(cmdDraft));
-      return;
-    }
-    const p = parseCmdFields(cmdDraft);
-    if (selectedV) applyParsedToVariant(selectedV, p);
-    else applyParsedToDefault(p);
+    if (!imageMode) return;
+    // Image box is Default-only (no variant box), sd-server flag set.
+    applyImageParsedToDefault(parseImageCmdFields(cmdDraft));
   }
 
   // Re-render the launch command from the active entry (Default or the selected
@@ -511,14 +376,14 @@
   $effect(() => {
     const deps = [
       open, config, selectedVariant,
-      ctx, ctxAuto, kvK, kvV, kvInRam, spec, reasoningOn, reasoningBudget, preserveThinking, flashOn, mmapOn, mlock, threads, parallel, ub, vramTarget, vramAuto, cpuOffload, cpuAuto, extraArgs, ctxCheckpoints,
+      ctx, ctxAuto, kvK, kvV, kvInRam, spec, reasoningOn, reasoningBudget, preserveThinking, flashOn, mmapOn, mlock, threads, parallel, ub, vramTarget, vramAuto, cpuOffload, cpuAuto, customArgs, customArgsOff, ctxCheckpoints,
       dryOn, dryMultiplier, dryBase, dryAllowedLength, specDraftNMax, specDefault, specNgramSizeN, specNgramSizeM, specNgramMinHits,
       vaePath, clipLPath, clipGPath, t5Path, textEncoderPath, offloadToCpu, teOnCpu, vaeOnCpu, vaeTiling, diffusionFa,
       defaultSteps, defaultCfg, defaultSampler, defaultWidth, defaultHeight,
       selectedV?.ctx, selectedV?.kvK, selectedV?.kvV, selectedV?.kvInRam, selectedV?.spec,
       selectedV?.reasoningFmt, selectedV?.flashAttn, selectedV?.mmap, selectedV?.mlock,
       selectedV?.threads, selectedV?.parallel, selectedV?.ub, selectedV?.vramTargetGB,
-      selectedV?.cpuOffload, selectedV?.ctxCheckpoints, selectedV?.dry, selectedV?.extraArgs, selectedV?.preserveThinking,
+      selectedV?.cpuOffload, selectedV?.ctxCheckpoints, selectedV?.dry, selectedV?.customArgs, selectedV?.preserveThinking,
       selectedV?.dryMultiplier, selectedV?.dryBase, selectedV?.dryAllowedLength,
       selectedV?.specDraftNMax, selectedV?.specDefault, selectedV?.specNgramSizeN, selectedV?.specNgramSizeM, selectedV?.specNgramMinHits,
       // Advanced knobs (Default via adv, variant via selectedV) — deep-read so any
@@ -531,8 +396,9 @@
     clearTimeout(cmdTimer);
     cmdTimer = setTimeout(async () => {
       try {
-        cmdDraft = await previewCmd(modelId!, ov);
-        cmdRendered = cmdDraft;
+        const layers = await previewCmd(modelId!, ov);
+        cmdLayers = layers;
+        cmdDraft = layers.effective;
       } catch {
         /* leave the last good command in the box */
       }
@@ -551,15 +417,6 @@
     if (v === "") return model ?? "";
     if (v.toLowerCase() === NONE_SENTINEL) return "";
     return variant ?? "";
-  }
-
-  // Inverse of inheritStr: turn a variant's fully-rendered value back into the
-  // delta the config file stores.
-  function deltaStr(parsed: string, model: string): string {
-    const m = (model ?? "").trim();
-    if (parsed === m) return "";
-    if (parsed === "" && m !== "") return NONE_SENTINEL;
-    return parsed;
   }
 
   // A named variant INHERITS the model-wide override (the Default tab) and layers
@@ -591,6 +448,7 @@
         defaultWidth: v.defaultWidth || base.defaultWidth,
         defaultHeight: v.defaultHeight || base.defaultHeight,
         extraArgs: inheritStr(v.extraArgs, base.extraArgs),
+        customArgs: "",
         unlisted: v.unlisted ?? false,
         variants: [],
       };
@@ -615,7 +473,10 @@
       threads: v.threads || base.threads || 0,
       parallel: v.parallel || base.parallel || 0,
       ub: v.ub || base.ub || 0,
-      extraArgs: inheritStr(v.extraArgs, base.extraArgs),
+      // llama-server composes customArgs; a vllm backend has no such
+      // composition and still reads the legacy passthrough bucket.
+      customArgs: isVllm ? "" : inheritStr(v.customArgs, base.customArgs),
+      extraArgs: isVllm ? inheritStr(v.customArgs, base.customArgs) : "",
       dry: v.dry ?? base.dry ?? null,
       dryMultiplier: v.dryMultiplier || base.dryMultiplier || 0,
       dryBase: v.dryBase || base.dryBase || 0,
@@ -914,24 +775,31 @@
     specNgramSizeM = o?.specNgramSizeM ? o.specNgramSizeM : "";
     specNgramMinHits = o?.specNgramMinHits ? o.specNgramMinHits : "";
     adv = advFromOverride(o);
-    extraArgs = o?.extraArgs ?? "";
-    // A template set through extraArgs (qm-tools, hand-edited sidecar) belongs in
-    // the advanced field — otherwise it renders nowhere in the form and the first
-    // launch-box blur silently drops it.
-    {
+    // Launch text. The new pane stores customArgs verbatim; a sidecar from the
+    // old box, qm-tools or a hand edit only has extraArgs, so seed the text from
+    // it and clear the legacy bucket in the form. The next save migrates it (the
+    // server still falls back to extraArgs for sidecars nobody opened).
+    if (imageMode || audioMode || samMode) {
+      extraArgs = o?.extraArgs ?? "";
+      // A template set through extraArgs (qm-tools, hand-edited sidecar) belongs
+      // in the advanced field; these forms still round-trip through the box.
       const h = hoistChatTemplate(extraArgs);
       if (h.path) {
         extraArgs = h.extra;
         if (!adv.chatTemplateFile) adv.chatTemplateFile = h.path;
       }
-      // Same for a -cms captured into extraArgs before the box parsed it: left
-      // there it is emitted a second time after the sizer's own copy, and grows
-      // by one more on every round trip through the launch box.
+      // Same for a -cms captured into extraArgs before the box parsed it.
       const c = hoistCms(extraArgs);
       if (c.step !== "") {
         extraArgs = c.extra;
         if (!adv.checkpointMinStep) adv.checkpointMinStep = c.step;
       }
+      customArgs = "";
+      customArgsOff = false;
+    } else {
+      customArgs = o?.customArgs || o?.extraArgs || "";
+      extraArgs = "";
+      customArgsOff = o?.customArgsOff ?? false;
     }
     unlisted = o?.unlisted ?? false;
     skip = o?.skip ?? false;
@@ -940,15 +808,22 @@
     ctxCheckpoints = o?.ctxCheckpoints ?? null;
     variants = (o?.variants ?? []).map((v) => {
       const c = { ...v };
-      const h = hoistChatTemplate(c.extraArgs ?? "");
-      if (h.path) {
-        c.extraArgs = h.extra;
-        if (!c.chatTemplateFile) c.chatTemplateFile = h.path;
-      }
-      const m = hoistCms(c.extraArgs ?? "");
-      if (m.step !== "") {
-        c.extraArgs = m.extra;
-        if (!c.checkpointMinStep) c.checkpointMinStep = m.step;
+      if (imageMode || audioMode || samMode) {
+        const h = hoistChatTemplate(c.extraArgs ?? "");
+        if (h.path) {
+          c.extraArgs = h.extra;
+          if (!c.chatTemplateFile) c.chatTemplateFile = h.path;
+        }
+        const m = hoistCms(c.extraArgs ?? "");
+        if (m.step !== "") {
+          c.extraArgs = m.extra;
+          if (!c.checkpointMinStep) c.checkpointMinStep = m.step;
+        }
+        c.customArgs = "";
+      } else {
+        // Verbatim text; an empty box inherited or a "none" clear both survive.
+        c.customArgs = c.customArgs || c.extraArgs || "";
+        c.extraArgs = "";
       }
       return c;
     });
@@ -980,7 +855,7 @@
       reasoningFmt: "", unlisted: false, ctxCheckpoints: null, dry: null, preserveThinking: null,
       slotCache: null,
       kvInRam: false, cpuOffload: 0, flashAttn: "", mmap: "", mlock: false,
-      threads: 0, parallel: 0, extraArgs: "", chatTemplateFile: "", mmprojFile: "",
+      threads: 0, parallel: 0, extraArgs: "", customArgs: "", chatTemplateFile: "", mmprojFile: "",
       dryMultiplier: 0, dryBase: 0, dryAllowedLength: 0,
       temp: null, topK: null, topP: null, minP: null, presencePenalty: null,
       specDraftNMax: 0, specDefault: false, specNgramSizeN: 0, specNgramSizeM: 0, specNgramMinHits: 0,
@@ -1011,7 +886,7 @@
       !v.vramTargetGB && !v.kvK && !v.kvV && !v.spec && !v.ub &&
       !v.reasoningFmt && !v.unlisted &&
       v.ctxCheckpoints == null && v.dry == null && v.preserveThinking == null && v.slotCache == null && !v.kvInRam && !v.cpuOffload &&
-      !v.flashAttn && !v.mmap && !v.mlock && !v.threads && !v.parallel && !v.extraArgs && !v.chatTemplateFile && !v.mmprojFile &&
+      !v.flashAttn && !v.mmap && !v.mlock && !v.threads && !v.parallel && !v.extraArgs && !v.customArgs && !v.chatTemplateFile && !v.mmprojFile &&
       !v.dryMultiplier && !v.dryBase && !v.dryAllowedLength &&
       v.temp == null && v.topK == null && v.topP == null && v.minP == null && v.presencePenalty == null &&
       !v.specDraftNMax && !v.specDefault && !v.specNgramSizeN && !v.specNgramSizeM && !v.specNgramMinHits
@@ -1040,7 +915,6 @@
       const o = cfg.override;
       autoCtx = parseCtx(cfg.cmd);
       cmdDraft = cfg.cmd; // render effect refreshes this to the canonical (${PORT}) form
-      cmdRendered = cfg.cmd;
       seedFromOverride(o);
       defaultVariants = (cfg.defaultVariants ?? []).map((v) => ({ ...v }));
       origDefaultVariants = JSON.stringify(defaultVariants);
@@ -1268,7 +1142,13 @@
       specNgramSizeM: specNgramSizeM === "" ? 0 : Number(specNgramSizeM),
       specNgramMinHits: specNgramMinHits === "" ? 0 : Number(specNgramMinHits),
       ...advToOverride(),
-      extraArgs,
+      // Launch text. llama-server composes customArgs; vllm and the image/audio/
+      // SAM emitters still read the legacy extraArgs bucket, so the same box
+      // feeds whichever applies. Off keeps the text saved but unapplied (vllm has
+      // no off switch server-side, so there it clears the passthrough).
+      extraArgs: isVllm ? (customArgsOff ? "" : customArgs) : extraArgs,
+      customArgs: imageMode || audioMode || samMode ? "" : customArgs,
+      customArgsOff: imageMode || audioMode || samMode ? false : customArgsOff,
       unlisted,
       skip,
       slotCache: slotCacheOn,
@@ -1323,7 +1203,7 @@
       dryMultiplier: o.dryMultiplier ?? 0, dryBase: o.dryBase ?? 0, dryAllowedLength: o.dryAllowedLength ?? 0,
       specDraftNMax: o.specDraftNMax ?? 0, specDefault: o.specDefault ?? false,
       specNgramSizeN: o.specNgramSizeN ?? 0, specNgramSizeM: o.specNgramSizeM ?? 0, specNgramMinHits: o.specNgramMinHits ?? 0,
-      extraArgs: o.extraArgs ?? "", unlisted: false, ctxCheckpoints: o.ctxCheckpoints ?? null,
+      extraArgs: o.extraArgs ?? "", customArgs: o.customArgs ?? "", unlisted: false, ctxCheckpoints: o.ctxCheckpoints ?? null,
       // Snapshot the Default tab's advanced knobs too (variant then drifts freely).
       ...advToOverride(),
     };
@@ -2636,29 +2516,11 @@
           </div>
         </details>
 
-        <!-- Launch command (editable, two-way) - collapsed at bottom. Form edits
-             re-render it; editing it (then blurring) folds known flags back into
-             the form and keeps unknown ones as passthrough. -->
-        <details class="group">
-          <summary class="cursor-pointer font-semibold text-sm uppercase tracking-wider text-txtsecondary hover:text-txtmain">
-            Launch parameters {config.hasOverride ? "(custom)" : "(autogen default)"}
-          </summary>
-          <textarea
-            value={cmdDraft}
-            oninput={onCmdInput}
-            onblur={onCmdBlur}
-            spellcheck="false"
-            rows="6"
-            class="mt-2 w-full bg-background rounded border border-card-border p-3 text-xs font-mono whitespace-pre-wrap break-all resize-y text-txtmain"
-          ></textarea>
-          <p class="text-xs text-txtsecondary mt-1">
-            Edits sync with the fields above on blur. Flags autogen doesn't model are kept verbatim;
-            <code>-c</code>/<code>-ngl</code>/<code>--n-cpu-moe</code>/<code>-b</code> stay
-            sizer-controlled and come back on the next render. <code>--ctx-checkpoints</code> is
-            always emitted: deleting it sets checkpoints to 0 rather than dropping the flag.
-          </p>
-          <p class="text-xs text-txtsecondary mt-1 font-mono break-all">{config.gguf}</p>
-        </details>
+        <!-- Launch arguments: the user's text verbatim, and the composed command
+             it produces. Both collapsed; the form fields keep owning their knobs
+             and the server composes the two layers (ui-svelte/launch-args.md). -->
+        <LaunchArgsPanes bind:customArgs bind:customArgsOff layers={cmdLayers} fallback={cmdDraft} />
+        <p class="text-xs text-txtsecondary mt-1 font-mono break-all">{config.gguf}</p>
         {:else if selectedV}
           {@const sv = selectedV}
           <p class="text-xs text-txtsecondary -mt-1">
@@ -3057,26 +2919,15 @@
             </div>
           </details>
 
-          <!-- Launch command for this variant (two-way, same as Default). -->
-          <details class="group">
-            <summary class="cursor-pointer font-semibold text-sm uppercase tracking-wider text-txtsecondary hover:text-txtmain">
-              Launch parameters (variant)
-            </summary>
-            <textarea
-              value={cmdDraft}
-              oninput={onCmdInput}
-              onblur={onCmdBlur}
-              spellcheck="false"
-              rows="6"
-              class="mt-2 w-full bg-background rounded border border-card-border p-3 text-xs font-mono whitespace-pre-wrap break-all resize-y text-txtmain"
-            ></textarea>
-            <p class="text-xs text-txtsecondary mt-1">
-              Edits sync with the fields above on blur. Flags autogen doesn't model are kept verbatim;
-              <code>-c</code>/<code>-ngl</code>/<code>--n-cpu-moe</code>/<code>-b</code> stay
-              sizer-controlled and come back on the next render. <code>--ctx-checkpoints</code> is
-              always emitted: deleting it sets checkpoints to 0 rather than dropping the flag.
-            </p>
-          </details>
+          <!-- Launch arguments for this variant: the text overrides the model's,
+               the composed command is read-only. -->
+          <LaunchArgsPanes
+            bind:customArgs={() => sv.customArgs ?? "", (v) => (sv.customArgs = v)}
+            customArgsOff={false}
+            layers={cmdLayers}
+            inherited={customArgs}
+            variant
+          />
         {/if}
         {/if}
       {/if}

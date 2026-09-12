@@ -1,30 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { parseCmdFields, genDefaultNum, cmdNum, specToggle, hoistCms } from "./modelCmdForm";
+import { genDefaultNum, cmdNum, specToggle, hoistCms } from "./modelCmdForm";
 import type { ModelConfig } from "../stores/api";
-
-// The sampler defaults are the one flag group where 0 is a real value, so the
-// parse path has to keep "absent" and "pinned to 0" apart. Everything else in
-// the form collapses 0 to "inherit", and getting this wrong either loses a
-// deliberate --min-p 0 or invents one.
-describe("parseCmdFields sampler defaults", () => {
-  it("keeps a pinned 0 distinct from an absent flag", () => {
-    const p = parseCmdFields("llama-server -m x.gguf --top-k 20 --min-p 0 --temp 1");
-    expect(p.topK).toBe(20);
-    expect(p.minP).toBe(0);
-    expect(p.temp).toBe(1);
-    expect(p.topP).toBe("");
-    expect(p.presencePenalty).toBe("");
-  });
-
-  it("does not leak sampler flags into extraArgs", () => {
-    const p = parseCmdFields("llama-server -m x.gguf --top-k 20 --min-p 0 --presence-penalty 1.5 --foo bar");
-    expect(p.extraArgs).toBe("--foo bar");
-  });
-
-  it("accepts llama's --temperature alias", () => {
-    expect(parseCmdFields("llama-server --temperature 0.7").temp).toBe(0.7);
-  });
-});
 
 describe("genDefaultNum", () => {
   const cfg = (cmd: string) => ({ cmd }) as ModelConfig;
@@ -62,53 +38,8 @@ describe("specToggle", () => {
   });
 });
 
-// The vision twin's projector flags are owned by the "Image projector" dropdown
-// (--no-mmproj-offload) and by sidecar discovery (--mmproj). Neither may land in
-// extraArgs: the emitter writes its own copy, so a leaked one double-emits from
-// the first blur of the launch box onward.
-describe("parseCmdFields mmproj flags", () => {
-  it("keeps --mmproj and --no-mmproj-offload out of extraArgs", () => {
-    const p = parseCmdFields(
-      "llama-server -m x.gguf --mmproj C:/models/mmproj.gguf --no-mmproj-offload --foo bar",
-    );
-    expect(p.extraArgs).toBe("--foo bar");
-  });
-});
-
-describe("parseCmdFields --ctx-checkpoints", () => {
-  it("captures the value instead of swallowing it", () => {
-    expect(parseCmdFields("llama-server -m x.gguf --ctx-checkpoints 2").ctxCheckpoints).toBe(2);
-    expect(parseCmdFields("llama-server -m x.gguf --ctx-checkpoints 0").ctxCheckpoints).toBe(0);
-  });
-  it("reports null when the user deleted the flag", () => {
-    expect(parseCmdFields("llama-server -m x.gguf -c 4096").ctxCheckpoints).toBeNull();
-  });
-  it("never bleeds into extraArgs", () => {
-    expect(parseCmdFields("llama-server -m x.gguf --ctx-checkpoints 2").extraArgs).toBe("");
-  });
-});
-
-// -cms is the flag that proved this whole class of bug: autogen emits it on
-// every text model, the box did not parse it, so it landed in extraArgs and was
-// re-appended after the generated copy - once more per round trip through the
-// launch box.
-describe("parseCmdFields -cms", () => {
-  it("captures both spellings", () => {
-    expect(parseCmdFields("llama-server -m x.gguf -cms 256").checkpointMinStep).toBe(256);
-    expect(parseCmdFields("llama-server -m x.gguf --checkpoint-min-step 512").checkpointMinStep).toBe(512);
-  });
-  it("reports \"\" when the user deleted the flag", () => {
-    expect(parseCmdFields("llama-server -m x.gguf -c 4096").checkpointMinStep).toBe("");
-  });
-  it("never bleeds into extraArgs", () => {
-    expect(parseCmdFields("llama-server -m x.gguf -cms 256 --foo bar").extraArgs).toBe("--foo bar");
-    expect(parseCmdFields("llama-server -m x.gguf --checkpoint-min-step 256").extraArgs).toBe("");
-  });
-});
-
-// Installs saved before the parse existed carry the flag inside extraArgs.
-// Hoisting it back into the field on load is what actually stops the duplicate
-// the user already has on disk.
+// Installs saved before the parse existed carry the flag inside extraArgs; the
+// image/audio/SAM forms still hoist it back into their structured field on load.
 describe("hoistCms", () => {
   it("pulls the flag out and returns the rest", () => {
     expect(hoistCms("-cms 256")).toEqual({ extra: "", step: 256 });
