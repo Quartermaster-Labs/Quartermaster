@@ -1,6 +1,7 @@
 import { derived, writable } from "svelte/store";
 import { vramTotals, foreignVram, systemVram, guardForeignVram } from "./perf";
 import { models, estimatePlan, type PlanEstimate } from "./api";
+import type { ModelCapabilities } from "../lib/types";
 
 // VRAM split: "system" (OS + other apps + game) vs the loaded llama-server.
 // Where per-process attribution exists (nvidia-smi, or the Windows PDH counter on
@@ -80,7 +81,12 @@ let estCache: Record<string, PlanEstimate> = {};
 const estInflight = new Set<string>();
 
 models.subscribe(($models) => {
-  const ready = $models.filter((m) => m.state === "ready").map((m) => m.id);
+  // Only the llama-server backends have a plan to estimate: the sizer reads a
+  // gguf and models llama's KV/offload. A diffusion/TTS/transcription/
+  // segmentation/3D backend has no llama plan at all (the TRELLIS.2 package is a
+  // DIRECTORY, not a gguf), so asking is a guaranteed error for every model that
+  // goes ready.
+  const ready = $models.filter((m) => m.state === "ready" && llamaSized(m)).map((m) => m.id);
   const readySet = new Set(ready);
   let dropped = false;
   for (const id of Object.keys(estCache)) {
@@ -113,6 +119,25 @@ models.subscribe(($models) => {
 export interface VramModelRef {
   id: string;
   name?: string;
+}
+
+// llamaSized reports whether a model's load plan is a llama one. The capability
+// flags are how the server marks a non-llama backend (image_generation for
+// sd-server, audio_speech for tts-server, image_to_3d for trellis2-server, ...);
+// a llama model carries none of them, and often no capabilities block at all.
+// vLLM is the exception the flags cannot see -- the server answers its estimate
+// request with a 400 instead, which the catch below drops.
+export function llamaSized(m: { capabilities?: ModelCapabilities }): boolean {
+  const c = m.capabilities;
+  if (!c) return true;
+  return !(
+    c.image_generation ||
+    c.image_to_image ||
+    c.image_to_3d ||
+    c.segmentation ||
+    c.audio_speech ||
+    c.audio_transcriptions
+  );
 }
 
 // loadedSegments splits the measured model slice (modelMb) into per-component
