@@ -691,6 +691,15 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 	if row.IsSam {
 		return strings.Join(samCmdLines(s, row, &ov), " "), nil
 	}
+	// TRELLIS.2 packages render a trellis2-server command (a directory, no
+	// metadata, matched by IsTrellis).
+	if row.IsTrellis {
+		lines, err := trellisCmdLines(s, row, &ov)
+		if err != nil {
+			return "", err
+		}
+		return strings.Join(lines, " "), nil
+	}
 	// Diffusion models render an sd-server command, not a llama-server one.
 	if imgArch := effectiveImageArch(meta); isImageArch(imgArch) {
 		lines, _, _, _ := imageCmdLines(s, row, &ov, imgArch, row.FullPath, meta.CondHidden)

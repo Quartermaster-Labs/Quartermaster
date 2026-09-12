@@ -175,6 +175,12 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		return nil
 	}
 
+	// TRELLIS.2 packages are directories served by trellis2-server, so they route
+	// before the metadata read for the same reason: there is no gguf to open.
+	if row.IsTrellis {
+		return emitTrellisModel(b, s, row, ov, name, emitted)
+	}
+
 	meta, err := ReadGgufMetadataCached(row.FullPath)
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)

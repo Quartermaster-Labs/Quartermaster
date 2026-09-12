@@ -157,7 +157,7 @@ func inheritSidecars(rows []GgufRow) {
 func inheritSidecarsWith(rows []GgufRow, readMeta func(string) (Metadata, error)) {
 	var draftDonors, mmprojDonors []int
 	for i := range rows {
-		if rows[i].IsSam {
+		if rows[i].skipsGgufPipeline() {
 			continue
 		}
 		if rows[i].DraftPath != "" {
@@ -179,7 +179,7 @@ func inheritSidecarsWith(rows []GgufRow, readMeta func(string) (Metadata, error)
 			return m
 		}
 		var m *Metadata
-		if !rows[i].IsSam {
+		if !rows[i].skipsGgufPipeline() {
 			if v, err := readMeta(rows[i].FullPath); err == nil {
 				m = &v
 			}
@@ -236,7 +236,7 @@ func inheritSidecarsWith(rows []GgufRow, readMeta func(string) (Metadata, error)
 	}
 
 	for i := range rows {
-		if rows[i].IsSam {
+		if rows[i].skipsGgufPipeline() {
 			continue
 		}
 		if rows[i].DraftPath == "" {
