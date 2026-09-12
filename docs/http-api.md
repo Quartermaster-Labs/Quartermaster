@@ -162,6 +162,14 @@ curl http://127.0.0.1:1250/v1/images/upscale \
   -d '{"image":"data:image/png;base64,<...>","scale":4}'
 ```
 
+**`POST /v1/3d/generations?model=<id>`** - image to 3D mesh (TRELLIS.2). The **image is the request body** (`--data-binary`), which is why the model id is a query parameter here and not a JSON field. Answers with the GLB itself (`model/gltf-binary`), or with `{"file","path","bytes","seconds"}` when `keep=1` / `format=json` is given. Query options: `steps`, `texture_size`, `pipeline`, `shape_only`, `seed`. Setup is more involved than most backends - see *3D generation*.
+
+```
+curl -X POST "http://127.0.0.1:1250/v1/3d/generations?model=trellis-2-4b" \
+  -H "Authorization: Bearer qm-..." -H "Content-Type: image/png" \
+  --data-binary @subject.png -o subject.glb
+```
+
 **`POST /v1/segment`** - SAM segmentation. `image` is bare base64 with no `data:` prefix. Prompt with `text` (a concept, can match several instances), or with `box` as `[x0,y0,x1,y1]` and/or `points` as `[[x,y,label]]` where label 1 is foreground. Returns `{width, height, masks:[{instance_id, score, iou_score, box, png}]}`, each `png` a white-on-black mask.
 
 ```
