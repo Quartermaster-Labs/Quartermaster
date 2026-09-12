@@ -72,6 +72,15 @@ func initPdhGpuMem() (*pdhGpuUtil, error) {
 	return initPdhLuidCounter(`\GPU Adapter Memory(*)\Dedicated Usage`, "GPU Adapter Memory", false)
 }
 
+// initPdhGpuSharedMem creates a PDH query for system-wide shared (system RAM)
+// usage by an adapter — the usage half of the aperture DXGI reports the size of.
+// Same counter family and same LUID instance names as Dedicated Usage, so the
+// adapter matching is identical; it can be absent on old Windows builds, and the
+// caller then reports the aperture as full rather than free (see sharedUsedMB).
+func initPdhGpuSharedMem() (*pdhGpuUtil, error) {
+	return initPdhLuidCounter(`\GPU Adapter Memory(*)\Shared Usage`, "GPU Adapter Memory", false)
+}
+
 // initPdhProcMem creates a PDH query for per-process dedicated VRAM usage
 // (bytes). Instance names embed the pid (e.g. "pid_1234_luid_0x..._phys_0"),
 // giving a vendor-neutral per-process VRAM source for foreign-VRAM detection on
