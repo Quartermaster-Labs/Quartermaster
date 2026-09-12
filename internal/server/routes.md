@@ -12,6 +12,10 @@ Everything is registered in `routes` (`server.go`). Model-dispatched routes (`mo
   `/completion`, `/v1/audio/speech`, `/v1/images/generations`, `/sdapi/v1/{txt2img,img2img}`,
   and the `/v/...` versionless equivalents.
 - **`POST` form** — `/v1/audio/transcriptions`, `/v1/images/edits`.
+- **`POST` raw** — `/v1/3d/generations`: the body IS the payload (the source image,
+  sent as-is), so the model id arrives as `?model=<id>` and the context extractor reaches
+  it through form parsing's query fallback rather than a body field. TRELLIS.2 image-to-3D
+  (`trellis2-server`); the generated GLB comes back from the upstream's `/output/<name>`.
 - **`GET`** — `/v1/audio/voices`, `/sdapi/v1/loras`.
 
 Auth-gated but **not** model-dispatched (`discoveryChain`):

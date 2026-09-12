@@ -14,6 +14,8 @@ var validModalities = map[string]struct{}{
 	"text":  {},
 	"audio": {},
 	"image": {},
+	// 3d is the mesh modality: TRELLIS.2 takes an image and returns a GLB.
+	"3d": {},
 }
 
 // ModelCapConfig defines what modalities and features a model supports.
@@ -52,12 +54,12 @@ func (c ModelCapConfig) Empty() bool {
 func (c ModelCapConfig) Validate() error {
 	for _, m := range c.In {
 		if _, ok := validModalities[m]; !ok {
-			return fmt.Errorf("capabilities.in: invalid modality %q, must be one of: text, audio, image", m)
+			return fmt.Errorf("capabilities.in: invalid modality %q, must be one of: text, audio, image, 3d", m)
 		}
 	}
 	for _, m := range c.Out {
 		if _, ok := validModalities[m]; !ok {
-			return fmt.Errorf("capabilities.out: invalid modality %q, must be one of: text, audio, image", m)
+			return fmt.Errorf("capabilities.out: invalid modality %q, must be one of: text, audio, image, 3d", m)
 		}
 	}
 	if c.Context < 0 {

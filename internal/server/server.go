@@ -186,6 +186,15 @@ var modelPostFormRoutes = []string{
 	"/v1/images/edits",
 }
 
+// modelPostRawRoutes are POST endpoints whose body IS the payload rather than a
+// document naming a model, so the id arrives as ?model=<id>. The extractor only
+// reads the body for JSON and form content types; a raw image falls through to
+// form parsing, which still reads the query string, so no resolution code is
+// needed for these — the shape matches the audio/voices GET routes.
+var modelPostRawRoutes = []string{
+	"/v1/3d/generations", // TRELLIS.2 image-to-mesh; the body is the source image
+}
+
 // modelGetRoutes are model-dispatched GET endpoints (the model arrives as a
 // query parameter).
 var modelGetRoutes = []string{
@@ -801,6 +810,9 @@ func (s *Server) routes() {
 		mux.Handle("POST "+path, modelChain.Then(dispatch))
 	}
 	for _, path := range modelPostFormRoutes {
+		mux.Handle("POST "+path, modelChain.Then(dispatch))
+	}
+	for _, path := range modelPostRawRoutes {
 		mux.Handle("POST "+path, modelChain.Then(dispatch))
 	}
 	for _, path := range modelGetRoutes {
