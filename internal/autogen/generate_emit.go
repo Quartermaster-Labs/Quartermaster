@@ -373,8 +373,13 @@ func emitProfile(b *strings.Builder, s Settings, meta Metadata, row GgufRow, pro
 	fmt.Fprintf(b, "\n  # arch=%s size=%gGB blocks=%d moe=%v\n", meta.Architecture, meta.FileSizeGB, meta.BlockCount, meta.IsMoE)
 	fmt.Fprintf(b, "  # est vram=%gGB ram=%gGB\n", plan.EstVramGB, plan.EstRamGB)
 	fmt.Fprintf(b, "  %q:\n", prof.Name)
+	// The user's custom launch arguments are the last layer of the emitted
+	// command: a knob the text sets drops the generated flags for that knob. A
+	// parse error cannot fail generation (this function has no error path), so
+	// ComposeCmd leaves the text appended and the spawn reports the problem.
+	composed, _ := ComposeCmd(buildCmdLines(s, meta, row, prof, ctx, ngl, ncpuMoe, kvK, kvV, kvInRam, ov), ov.CustomArgsText())
 	b.WriteString("    cmd: >\n")
-	for _, line := range buildCmdLines(s, meta, row, prof, ctx, ngl, ncpuMoe, kvK, kvV, kvInRam, ov) {
+	for _, line := range composed.Lines {
 		fmt.Fprintf(b, "      %s\n", line)
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)

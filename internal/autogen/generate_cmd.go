@@ -7,7 +7,6 @@ package autogen
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 )
 
@@ -240,10 +239,12 @@ func effectiveUb(meta Metadata, prof profile, ov *Override, ctx int, budgetGB fl
 	return ub
 }
 
-// buildCmdLines returns the launch command as a list of flag lines (no leading
-// indentation), shared by emitProfile (which writes them as a YAML `cmd: >`
-// block) and RenderSoloCmd (which joins them for the editor preview). Any
-// Override.ExtraArgs are appended verbatim as a final line.
+// buildCmdLines returns the generated launch command as a list of flag lines
+// (no leading indentation), shared by emitProfile (which writes them as a YAML
+// `cmd: >` block) and RenderSoloCmd (which joins them for the editor preview).
+// The user's custom launch arguments are NOT applied here: callers pass the
+// result through ComposeCmd, which drops the generated flags a custom knob owns
+// and appends the user's text last.
 // pinsOwnSplit reports whether the user hand-wrote the --tensor-split vector for
 // this model, in which case we must NOT emit --device.
 //
@@ -260,17 +261,6 @@ func pinsOwnSplit(ov *Override) bool {
 }
 
 func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ngl, ncpuMoe int, kvK, kvV string, kvInRam bool, ov *Override) []string {
-	// extraArgs is appended verbatim at the end, so anything in it that we also
-	// emit ourselves lands on the line TWICE. -cms is the one that actually
-	// happened: the launch-box editor did not parse it, so it survived a round
-	// trip into extraArgs, and every later trip appended one more copy. Hoist it
-	// back out here and treat it as the pin it was meant to be, so a config
-	// written by an older UI self-heals on the next generate.
-	extraArgs, extraCms := "", 0
-	if ov != nil {
-		extraArgs, extraCms = hoistCmsFromExtra(ov.ExtraArgs)
-	}
-
 	cpuMoeFlag := ""
 	if ncpuMoe > 0 {
 		cpuMoeFlag = fmt.Sprintf(" --n-cpu-moe %d", ncpuMoe)
@@ -524,9 +514,6 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		if stepProf.CheckpointMinStep == 0 && ov != nil {
 			stepProf.CheckpointMinStep = ov.CheckpointMinStep
 		}
-		if stepProf.CheckpointMinStep == 0 {
-			stepProf.CheckpointMinStep = extraCms
-		}
 		lines = append(lines, fmt.Sprintf("-cms %d", effectiveCheckpointMinStep(stepProf, ckptConstGB, ckptRecurrent)))
 	}
 	// DRY sampler: defaults to settings.DryDefault (nil => off) and a per-model
@@ -649,65 +636,52 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 			lines = append(lines, fmt.Sprintf("-ot %s", ov.OverrideTensor))
 		}
 	}
-	if extra := strings.TrimSpace(extraArgs); extra != "" {
-		lines = append(lines, extra)
-	}
 	return lines
-}
-
-// hoistCmsFromExtra splits a `-cms <n>` (or its `--checkpoint-min-step` alias)
-// out of a free-form extraArgs string, returning the rest and the value (0 when
-// absent). Only the FIRST is hoisted as a value; any further copies are dropped,
-// since a stale config can hold several and llama-server would just take the
-// last. Matched on whitespace boundaries so `--not-cms 256` is left alone.
-func hoistCmsFromExtra(extra string) (string, int) {
-	if !strings.Contains(extra, "cms") && !strings.Contains(extra, "checkpoint-min-step") {
-		return extra, 0
-	}
-	f := strings.Fields(extra)
-	out := make([]string, 0, len(f))
-	step := 0
-	for i := 0; i < len(f); i++ {
-		if f[i] != "-cms" && f[i] != "--checkpoint-min-step" {
-			out = append(out, f[i])
-			continue
-		}
-		if i+1 >= len(f) {
-			continue // dangling flag: drop it, we emit our own
-		}
-		if n, err := strconv.Atoi(f[i+1]); err == nil && step == 0 {
-			step = n
-		}
-		i++
-	}
-	return strings.Join(out, " "), step
 }
 
 // RenderSoloCmd previews the full launch command for a candidate override,
 // reusing the solo-profile sizer so the editor's launch-parameters box matches
 // what a save would emit. Returns the command on one line (with `${PORT}` intact).
 func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string, error) {
+	cc, err := RenderSoloCmdLayers(s, meta, row, ov)
+	if err != nil {
+		return "", err
+	}
+	return cc.Effective, nil
+}
+
+// plainCmd wraps a rendered command that has no composed layers: the non-llama
+// classes keep their emitter's own custom-text handling until their forms get
+// the same treatment (see ui-svelte/launch-args.md, non-goals).
+func plainCmd(cmd string) (ComposedCmd, error) {
+	return ComposedCmd{Generated: cmd, Effective: cmd}, nil
+}
+
+// RenderSoloCmdLayers is RenderSoloCmd with the layered view the config editor
+// needs: the generated command, the effective one a save would produce, and
+// per-token provenance for rendering it.
+func RenderSoloCmdLayers(s Settings, meta Metadata, row GgufRow, ov Override) (ComposedCmd, error) {
 	// SAM models render a sam3_server command (no metadata; matched by IsSam).
 	if row.IsSam {
-		return strings.Join(samCmdLines(s, row, &ov), " "), nil
+		return plainCmd(strings.Join(samCmdLines(s, row, &ov), " "))
 	}
 	// Diffusion models render an sd-server command, not a llama-server one.
 	if imgArch := effectiveImageArch(meta); isImageArch(imgArch) {
 		lines, _, _, _ := imageCmdLines(s, row, &ov, imgArch, row.FullPath, meta.CondHidden)
-		return strings.Join(lines, " "), nil
+		return plainCmd(strings.Join(lines, " "))
 	}
 	// Embedders render a minimal --embeddings command (no KV/spec sizing).
 	if IsEmbeddingModel(meta) {
-		return strings.Join(embeddingCmdLines(s, row, &ov, meta), " "), nil
+		return plainCmd(strings.Join(embeddingCmdLines(s, row, &ov, meta), " "))
 	}
 	// Speech models render a tts-server command: qwentts (talker + paired codec)
 	// or TTS.cpp (--model-path), whichever engine the model resolves to.
 	if IsTTSModel(meta, row.FileName) {
-		return strings.Join(ttsCmdLines(s, row, &ov, meta), " "), nil
+		return plainCmd(strings.Join(ttsCmdLines(s, row, &ov, meta), " "))
 	}
 	// Parakeet ASR models render a parakeet-server command (model + port only).
 	if IsASRModel(meta, row.FileName) {
-		return strings.Join(asrCmdLines(s, row, &ov), " "), nil
+		return plainCmd(strings.Join(asrCmdLines(s, row, &ov), " "))
 	}
 	// vllm-backed LLMs render a vllm command; a chosen llama build swaps the exe.
 	be := resolveBackend(s, &ov, "llm")
@@ -715,9 +689,9 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 		// Same refusal the emitter makes: vllm loads only the shard it is given,
 		// so there is no command to preview for a split set.
 		if isSplitGguf(row) {
-			return "", fmt.Errorf("vllm cannot load split gguf shards; merge %s with llama-gguf-split --merge or pick a llama backend", row.FileName)
+			return ComposedCmd{}, fmt.Errorf("vllm cannot load split gguf shards; merge %s with llama-gguf-split --merge or pick a llama backend", row.FileName)
 		}
-		return strings.Join(vllmCmdLines(s, row, &ov, row.FullPath, be, meta), " "), nil
+		return plainCmd(strings.Join(vllmCmdLines(s, row, &ov, row.FullPath, be, meta), " "))
 	}
 	if be.Exe != "" {
 		s.ServerExe = be.Exe
@@ -776,13 +750,14 @@ func RenderSoloCmd(s Settings, meta Metadata, row GgufRow, ov Override) (string,
 	prof.DraftSlopeGB = mtpDraftSlopeFor(meta, soloSpec, sdKvK, sdKvV, soloDraftGB)
 	ctx, plan, kvReserve, _, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, ov.KvInRam)
 	if err != nil {
-		return "", err
+		return ComposedCmd{}, err
 	}
 	ngl, ncpuMoe := forceLowActiveMoE(meta, plan, prof, kvReserve)
 	if ov.CpuOffload > 0 {
 		ngl, ncpuMoe = applyForcedOffload(meta, ov.CpuOffload)
 	}
-	return strings.Join(buildCmdLines(s, meta, row, prof, ctx, ngl, ncpuMoe, kvK, kvV, ov.KvInRam, &ov), " "), nil
+	lines := buildCmdLines(s, meta, row, prof, ctx, ngl, ncpuMoe, kvK, kvV, ov.KvInRam, &ov)
+	return ComposeCmd(lines, ov.CustomArgsText())
 }
 
 // specHas reports whether a "+"-joined spec list contains backend b.

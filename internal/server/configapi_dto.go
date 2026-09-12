@@ -43,6 +43,7 @@ type variantDTO struct {
 	Mlock            bool   `json:"mlock"`
 	Threads          int    `json:"threads"`
 	Parallel         int    `json:"parallel"`
+	CustomArgs       string `json:"customArgs"`
 	ExtraArgs        string `json:"extraArgs"`
 	ChatTemplateFile string `json:"chatTemplateFile"`
 	// MmprojFile pins the projector path; empty inherits the model-wide value,
@@ -140,7 +141,11 @@ type overrideDTO struct {
 	Threads          int    `json:"threads"`
 	Parallel         int    `json:"parallel"`
 	Ub               int    `json:"ub"`
-	ExtraArgs        string `json:"extraArgs"`
+	// CustomArgs is the user's verbatim launch-argument text; CustomArgsOff keeps
+	// it in the sidecar without applying it (the editor's enable toggle).
+	CustomArgs    string `json:"customArgs"`
+	CustomArgsOff bool   `json:"customArgsOff"`
+	ExtraArgs     string `json:"extraArgs"`
 	ChatTemplateFile string `json:"chatTemplateFile"`
 	MmprojFile       string `json:"mmprojFile"`
 	Unlisted         bool   `json:"unlisted"`
@@ -272,7 +277,7 @@ func variantToDTO(v autogen.VariantSpec) variantDTO {
 		Unlisted: v.Unlisted, PreserveThinking: v.PreserveThinking, SlotCache: v.SlotCache,
 		KvInRam: v.KvInRam, CpuOffload: v.CpuOffload,
 		FlashAttn: v.FlashAttn, Mmap: v.Mmap, Mlock: v.Mlock,
-		Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
+		Threads: v.Threads, Parallel: v.Parallel, CustomArgs: v.CustomArgs, ExtraArgs: v.ExtraArgs,
 		ChatTemplateFile: v.ChatTemplateFile, MmprojFile: v.MmprojFile, Mmproj: v.Mmproj,
 		DryMultiplier: v.DryMultiplier, DryBase: v.DryBase, DryAllowedLength: v.DryAllowedLength,
 		Temp: v.Temp, TopK: v.TopK, TopP: v.TopP, MinP: v.MinP, PresencePenalty: v.PresencePenalty,
@@ -301,6 +306,8 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		Spec: o.Spec, ReasoningFmt: o.ReasoningFmt, ReasoningBudget: o.ReasoningBudget,
 		FlashAttn: o.FlashAttn, Mmap: o.Mmap, Mlock: o.Mlock,
 		Threads: o.Threads, Parallel: o.Parallel, Ub: o.Ub,
+		CustomArgs:       o.CustomArgs,
+		CustomArgsOff:    o.CustomArgsOff,
 		ExtraArgs:        o.ExtraArgs,
 		ChatTemplateFile: o.ChatTemplateFile,
 		MmprojFile:       o.MmprojFile,
@@ -340,7 +347,7 @@ func toVariantSpec(v variantDTO) autogen.VariantSpec {
 		Unlisted: v.Unlisted, PreserveThinking: v.PreserveThinking, SlotCache: v.SlotCache,
 		KvInRam: v.KvInRam, CpuOffload: v.CpuOffload,
 		FlashAttn: v.FlashAttn, Mmap: v.Mmap, Mlock: v.Mlock,
-		Threads: v.Threads, Parallel: v.Parallel, ExtraArgs: v.ExtraArgs,
+		Threads: v.Threads, Parallel: v.Parallel, CustomArgs: v.CustomArgs, ExtraArgs: v.ExtraArgs,
 		ChatTemplateFile: v.ChatTemplateFile, MmprojFile: v.MmprojFile, Mmproj: v.Mmproj,
 		DryMultiplier: v.DryMultiplier, DryBase: v.DryBase, DryAllowedLength: v.DryAllowedLength,
 		Temp: v.Temp, TopK: v.TopK, TopP: v.TopP, MinP: v.MinP, PresencePenalty: v.PresencePenalty,
@@ -384,6 +391,9 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.Threads = body.Threads
 	ov.Parallel = body.Parallel
 	ov.Ub = body.Ub
+	// Verbatim: the whole point of the field is that the app never rewrites it.
+	ov.CustomArgs = body.CustomArgs
+	ov.CustomArgsOff = body.CustomArgsOff
 	ov.ExtraArgs = strings.TrimSpace(body.ExtraArgs)
 	ov.ChatTemplateFile = strings.TrimSpace(body.ChatTemplateFile)
 	ov.MmprojFile = strings.TrimSpace(body.MmprojFile)
@@ -457,6 +467,11 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	// the config file. The variants above are deliberately left alone - on a
 	// variant the sentinel is meaningful, not redundant.
 	autogen.NormalizeNone(ov)
+	// A custom flag owns its knob: zero the structured field it shadows, in the
+	// one place every save and preview goes through. Dropping the generated flag
+	// at emit time is not enough, since the stale pin would resurface the moment
+	// the user deletes the flag from the text (issue #38's mmap reset).
+	autogen.ClearOwnedFieldsFromText(ov)
 }
 
 // applyVariantPatch layers only the NON-ZERO fields of a variantDTO patch onto
@@ -521,6 +536,9 @@ func applyVariantPatch(ov *autogen.Override, p variantDTO) {
 	}
 	if p.Parallel != 0 {
 		ov.Parallel = p.Parallel
+	}
+	if strings.TrimSpace(p.CustomArgs) != "" {
+		ov.CustomArgs = p.CustomArgs
 	}
 	if strings.TrimSpace(p.ExtraArgs) != "" {
 		ov.ExtraArgs = strings.TrimSpace(p.ExtraArgs)

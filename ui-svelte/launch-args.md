@@ -137,21 +137,27 @@ resurfaces the moment the token is deleted, which is the issue #38 bug in anothe
 
 ### Provenance in the API
 
-`GET /api/models/{id}/config` and `POST /api/models/{id}/preview` return the command in layers:
+`POST /api/models/{id}/preview` returns the command in layers:
 
 ```json
 {
+  "cmd": "-m ... -cram 2048 --load-mode none",
   "custom": "--load-mode none -cram 2048",
   "generated": "-m ... -c 8192",
   "effective": "-m ... -cram 2048 --load-mode none",
+  "ownedKnobs": ["cacheRam", "loadMode"],
   "tokens": [
     {"text": "-m", "source": "generated"},
     {"text": "-cram", "source": "custom"},
     {"text": "2048", "source": "custom"}
-  ],
-  "issues": [{"token": 3, "severity": "warning", "message": "..."}]
+  ]
 }
 ```
+
+(`cmd` duplicates `effective` for callers that just want the string. `GET
+/api/models/{id}/config` keeps returning the saved `cmd` plus the override's `customArgs`: the
+stored command cannot be decomposed back into layers after the fact. Per-token `issues` arrives with
+the validation phase.)
 
 The browser renders provenance; it never diffs strings. `effective` is what gets copied and what the
 estimate consumes.

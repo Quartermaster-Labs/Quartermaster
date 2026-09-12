@@ -536,7 +536,8 @@ func (s *Server) handleAPIModelVariantPost(w http.ResponseWriter, r *http.Reques
 
 // handleAPIModelCmdPreview renders the full launch command for a candidate
 // override (the editor's current form state) without persisting anything. Powers
-// the two-way launch-parameters box: form edits POST here to refresh the command.
+// the launch-arguments panes: form edits POST here to refresh the composed
+// command and its per-token provenance.
 func (s *Server) handleAPIModelCmdPreview(w http.ResponseWriter, r *http.Request) {
 	_, gguf, _, ok := s.resolveModelGguf(w, r)
 	if !ok {
@@ -566,12 +567,17 @@ func (s *Server) handleAPIModelCmdPreview(w http.ResponseWriter, r *http.Request
 		shared.SendResponse(w, r, http.StatusInternalServerError, "reading gguf metadata failed: "+err.Error())
 		return
 	}
-	cmd, err := autogen.RenderSoloCmd(gf.Settings, meta, autogen.GgufRow{FullPath: gguf}, ov)
+	layers, err := autogen.RenderSoloCmdLayers(gf.Settings, meta, autogen.GgufRow{FullPath: gguf}, ov)
 	if err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, "rendering command failed: "+err.Error())
 		return
 	}
-	writeJSON(w, map[string]string{"cmd": cmd})
+	// `cmd` stays the effective command for callers that just want the string;
+	// the embedded layers carry custom/generated/effective plus token provenance.
+	writeJSON(w, struct {
+		Cmd string `json:"cmd"`
+		autogen.ComposedCmd
+	}{Cmd: layers.Effective, ComposedCmd: layers})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
