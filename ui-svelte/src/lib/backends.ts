@@ -35,6 +35,14 @@ export const BACKEND_CLASSES: BackendClassDef[] = [
     engines: [{ kind: "sd", label: "sd-server", hint: "stable-diffusion.cpp server." }],
   },
   {
+    id: "3d",
+    label: "3D generation",
+    blurb: "Image-to-3D mesh models (TRELLIS.2).",
+    engines: [
+      { kind: "trellis2", label: "trellis2-server", hint: "TRELLIS.2 - one image in, a textured GLB out." },
+    ],
+  },
+  {
     id: "tts",
     label: "Speech",
     blurb: "Text-to-speech models.",
@@ -99,6 +107,10 @@ export function backendClass(kind: string): string {
     case "sam3":
     case "segment":
       return "segment";
+    case "trellis2":
+    case "trellis":
+    case "3d":
+      return "3d";
     case "upscale":
     case "realesrgan":
     case "esrgan":

@@ -325,6 +325,11 @@
   // prompts are per-request (/v1/segment). CPU vs GPU is auto (VRAM-aware) or
   // pinned via extraArgs --no-gpu.
   const samMode = $derived(config?.isSam ?? false);
+  // TRELLIS.2 image-to-mesh (trellis2-server): minimal form, no KV/ctx/spec/
+  // estimate. The server streams its checkpoints through a bounded GPU stage
+  // cache and takes the source image per request, so the launch flags are the
+  // backend pick, the cache budget (emitted by autogen) and extraArgs.
+  const threeDMode = $derived(config?.is3d ?? false);
   // Which speech engine this model runs on. The two are not interchangeable
   // (TTS.cpp reads Kokoro/Parler/Orpheus ggufs, qwentts.cpp reads a talker +
   // paired codec), so the form blurb must not claim the wrong one.
@@ -335,7 +340,7 @@
   // The server names the class (it knows which emitter ran); the form flags are
   // only a fallback for an older backend, and they can't tell TTS from ASR.
   const modelClass = $derived(
-    config?.class || (imageMode ? "image" : audioMode ? "tts" : samMode ? "segment" : "llm"),
+    config?.class || (imageMode ? "image" : audioMode ? "tts" : samMode ? "segment" : threeDMode ? "3d" : "llm"),
   );
   const classBackends = $derived((config?.backends ?? []).filter((b) => backendClass(b.kind) === modelClass));
   const selectedKind = $derived(classBackends.find((b) => b.id === backend)?.kind ?? "");
@@ -1115,7 +1120,7 @@
     ];
     void deps;
     // Diffusion/TTS/vllm sizing isn't modeled by the llama sizer; skip the estimate.
-    if (!open || !config || !modelId || imageMode || audioMode || samMode || isVllm) return;
+    if (!open || !config || !modelId || imageMode || audioMode || samMode || threeDMode || isVllm) return;
     clearTimeout(estTimer);
     estTimer = setTimeout(runEstimate, 100);
   });
@@ -1568,7 +1573,7 @@
 
     <!-- Sticky live estimate: stays pinned above the scrolling form so the memory
          cost of the current tuning is always visible while editing. -->
-    {#if config && !loading && !imageMode && !audioMode && !samMode && !isVllm}
+    {#if config && !loading && !imageMode && !audioMode && !samMode && !threeDMode && !isVllm}
       <!-- data-shot: the crop anchor for the site's load-plan screenshot
            (scripts/shots.mjs, "model-config-vram"). Not a style hook. -->
       <div data-shot="load-plan" class="px-4 py-2 border-b border-card-border bg-background/60 shrink-0">
@@ -2082,6 +2087,53 @@
               {@render hint("Appended verbatim to the sam3_server command, for flags autogen doesn't model. Use --no-gpu to force CPU regardless of the auto placement.")}
             </span>
             <input type="text" bind:value={extraArgs} class="cfg-input" placeholder="e.g. --no-gpu" spellcheck="false" />
+          </label>
+          <label class="flex items-center gap-2 text-sm">
+            <Toggle size="sm" bind:checked={unlisted} />
+            <span class="text-txtsecondary flex items-center gap-1">
+              Unlisted
+              {@render hint("Hide from /v1/models listings, but still loadable by exact id.")}
+            </span>
+          </label>
+          <label class="flex items-center gap-2 text-sm">
+            <Toggle size="sm" bind:checked={skip} />
+            <span class="text-txtsecondary flex items-center gap-1">
+              Skip (don't emit)
+              {@render hint("Exclude this model from the generated config entirely.")}
+            </span>
+          </label>
+        </div>
+
+        <details class="group">
+          <summary class="cursor-pointer font-semibold text-sm uppercase tracking-wider text-txtsecondary hover:text-txtmain">
+            Launch parameters {config.hasOverride ? "(custom)" : "(autogen default)"}
+          </summary>
+          <textarea value={cmdDraft} readonly spellcheck="false" rows="4" class="mt-2 w-full bg-background rounded border border-card-border p-3 text-xs font-mono whitespace-pre-wrap break-all resize-y text-txtmain opacity-90"></textarea>
+          <p class="text-xs text-txtsecondary mt-1 font-mono break-all">{config.gguf}</p>
+        </details>
+        {:else if threeDMode}
+        <!-- TRELLIS.2 image-to-mesh (trellis2-server) form. No KV/ctx/spec/
+             estimate: the checkpoints are streamed through a bounded GPU stage
+             cache (--model-cache-budget-mib, emitted by autogen) and the source
+             image arrives per request, not as a launch flag. Resolution, steps
+             and texture size are per-request query options; extraArgs bakes a
+             different default in. -->
+        <div class="grid grid-cols-2 gap-3">
+          <p class="col-span-2 text-xs text-txtsecondary">
+            Served by <code>trellis2-server</code>
+            (<code>POST /v1/3d/generations?model=&lt;id&gt;</code> with the source image as the
+            body), which writes a textured GLB you fetch from
+            <code>/upstream/&lt;id&gt;/output/&lt;name&gt;</code> when <code>?keep=1</code> is set,
+            or receive as the response body when it is not.
+            The 512 profile is the tested default; <code>--pipeline 1024</code> resets RDNA3
+            drivers, so leave it alone on AMD.
+          </p>
+          <label class="flex flex-col gap-1 text-sm col-span-2">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Extra args
+              {@render hint("Appended verbatim to the trellis2-server command, for flags autogen doesn't model. --pipeline / --steps / --texture-size change the quality profile; --model-cache-budget-mib trades VRAM for speed.")}
+            </span>
+            <input type="text" bind:value={extraArgs} class="cfg-input" placeholder="e.g. --texture-size 2048" spellcheck="false" />
           </label>
           <label class="flex items-center gap-2 text-sm">
             <Toggle size="sm" bind:checked={unlisted} />

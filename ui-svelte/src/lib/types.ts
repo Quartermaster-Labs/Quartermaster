@@ -8,6 +8,8 @@ export interface ModelCapabilities {
   audio_speech?: boolean;
   image_generation?: boolean;
   image_to_image?: boolean;
+  // Image in, 3D mesh out (TRELLIS.2 on the /v1/3d/generations route).
+  image_to_3d?: boolean;
   function_calling?: boolean;
   reranker?: boolean;
   embeddings?: boolean;

@@ -494,7 +494,8 @@ export interface ModelConfig {
   isImage: boolean; // diffusion model => image config form
   isAudio: boolean; // TTS or ASR model => audio config form
   isSam?: boolean; // SAM segmentation (sam3_server) => minimal segment form
-  /** Backend class (autogen kindClass): llm/image/tts/asr/segment. Filters the
+  is3d?: boolean; // TRELLIS.2 image-to-mesh (trellis2-server) => minimal 3D form
+  /** Backend class (autogen kindClass): llm/image/tts/asr/segment/3d. Filters the
    *  backend picker — TTS and ASR share the audio form but not their engines. */
   class?: string;
   hasOverride: boolean;
