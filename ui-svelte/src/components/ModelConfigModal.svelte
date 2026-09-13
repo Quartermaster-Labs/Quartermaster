@@ -568,10 +568,14 @@
       // ub scales the compute buffer, -cms scales each checkpoint's KV term and
       // rope scaling decides the ctx ceiling: all three move the estimate.
       ub, adv.checkpointMinStep, adv.ropeScaling,
+      // Custom launch arguments and the slot count size the plan too (the server
+      // folds their pins in), so typing in the box is an edit like any field.
+      parallel, customArgs, customArgsOff,
       selectedV?.ctx, selectedV?.kvK, selectedV?.kvV, selectedV?.spec,
       selectedV?.vramTargetGB, selectedV?.ub, selectedV?.ctxCheckpoints,
       selectedV?.kvInRam, selectedV?.cpuOffload,
       selectedV?.checkpointMinStep, selectedV?.ropeScaling,
+      selectedV?.parallel, selectedV?.customArgs,
     ]);
   }
 
@@ -585,6 +589,10 @@
   // to Default. null = Default tab.
   let selectedV = $state<ModelVariant | null>(null);
   const selectedVariant = $derived(selectedV?.name ?? "");
+  // Slot count the estimate is charging (server clamps at MaxParallelSlots = 8).
+  // Used only for the CTX readout: the sizer works in per-slot windows, while -c
+  // is the pool, so a multi-slot launch reads "<per-slot>×<slots>".
+  const estSlots = $derived(Math.min(Math.max(Number(selectedV?.parallel || parallel) || 1, 1), 8));
   // The selected tab is a fleet-wide default variant (game) => edits save globally.
   const selectedIsDefault = $derived(
     !!selectedV && defaultVariants.includes(selectedV),
@@ -994,10 +1002,14 @@
       // ub scales the compute buffer, -cms scales each checkpoint's KV term and
       // rope scaling decides the ctx ceiling: all three move the estimate.
       ub, adv.checkpointMinStep, adv.ropeScaling,
+      // parallel charges every slot's KV share, and the custom text's pins win
+      // over the form fields server-side (see autogen/pins.go).
+      parallel, customArgs, customArgsOff,
       selectedV?.ctx, selectedV?.kvK, selectedV?.kvV, selectedV?.spec,
       selectedV?.vramTargetGB, selectedV?.ub, selectedV?.ctxCheckpoints,
       selectedV?.kvInRam, selectedV?.cpuOffload,
       selectedV?.checkpointMinStep, selectedV?.ropeScaling,
+      selectedV?.parallel, selectedV?.customArgs,
     ];
     void deps;
     // Diffusion/TTS/vllm sizing isn't modeled by the llama sizer; skip the estimate.
@@ -1066,6 +1078,13 @@
             checkpointMinStep: Number(selectedV.checkpointMinStep || adv.checkpointMinStep) || undefined,
             ub: Number(selectedV.ub || ub) || undefined,
             ropeScaling: selectedV.ropeScaling || adv.ropeScaling || undefined,
+            // Slot count: the variant's own, else the model-wide field. The
+            // server charges every slot's KV share of the shared -c pool.
+            parallel: Number(selectedV.parallel || parallel) || undefined,
+            // The text that applies to this tab: its own, else the model-wide one
+            // (blank inherits, "none" drops it) — same rule as the generator and
+            // the panes. Pins in it win over every field above, server-side.
+            custom: inheritStr(selectedV.customArgs, customArgsOff ? "" : customArgs) || undefined,
             actual,
           }
         : {
@@ -1082,6 +1101,8 @@
             checkpointMinStep: Number(adv.checkpointMinStep) || undefined,
             ub: Number(ub) || undefined,
             ropeScaling: adv.ropeScaling || undefined,
+            parallel: Number(parallel) || undefined,
+            custom: customArgsOff ? undefined : customArgs || undefined,
             actual,
           };
       const res = await estimatePlan(estId, params);
@@ -1514,7 +1535,7 @@
             <div class="flex gap-3 font-mono text-[0.7rem] tabular-nums shrink-0">
               <div class="text-center leading-tight">
                 <div class="text-micro font-medium uppercase tracking-wide text-txtsecondary">CTX</div>
-                <div class="text-txtmain">{fmtCtx(estimate.ctx)}</div>
+                <div class="text-txtmain" use:tip={estSlots > 1 ? `Per-slot window; the shared pool (-c) is ${estSlots} x this` : "Context window"}>{fmtCtx(estimate.ctx)}{estSlots > 1 ? `×${estSlots}` : ""}</div>
               </div>
               <div class="text-center leading-tight">
                 <div class="text-micro font-medium uppercase tracking-wide text-txtsecondary">RAM</div>

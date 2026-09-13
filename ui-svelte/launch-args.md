@@ -1,12 +1,16 @@
 # Launch arguments
 
-Status: **design, not implemented.** Supersedes the two-way launch-parameters box in
+Status: **implemented on `radu0120/launch-args`** (phases 1-5, see Phases below); the editor half is
+llama-only so far. Supersedes the two-way launch-parameters box in
 `ModelConfigModal.svelte`. Issue #38 (mmap flipping back on, `-cram` duplicating on each save) is one
 of the symptoms this shape removes.
 
 Goal: the user can write any backend flag, in their own order and spelling, and it is applied exactly
 as written. quartermaster keeps owning every flag the user did not touch, so generator and sizer
-improvements still reach the model after an upgrade.
+improvements still reach the model after an upgrade. A pinned flag is a constraint on the plan too:
+the sizer folds the values it understands into its own decisions (`internal/autogen/pins.go`), so the
+emitted flags, the baked `estVramGB`/`estRamGB` and the editor's memory panel describe the launch the
+text pins, not a second launch nobody runs.
 
 ## How it works today
 
@@ -126,6 +130,28 @@ control whose knob the text owns is disabled, dimmed, and badged with the exact 
 with the toggle position taken from the token's on/off where it parses. The text stays the only
 editor. The llama Default tab (including Advanced) does this today; the variant tab does not yet.
 
+### Pinned values feed the sizer
+
+Composition makes a flag win at spawn. Left at that, the plan around it described a different
+launch: `-c 5000` overrode the emitted `-c` while the baked `estVramGB` and the editor's memory panel
+still showed the sizer's pick. `internal/autogen/pins.go` closes that: the sizer reads the pinned
+knobs back and sizes around them, and the generated occurrence of each flag then says the same thing
+as the text that replaces it.
+
+- **Pinned knobs**: `-c`, `-ngl`, `--n-cpu-moe`, `-ctk`/`-ctv`, `--no-kv-offload`, `--parallel`,
+  `-ub`, `--spec-type`, `--rope-scaling`, `--ctx-checkpoints`, `-cms`. Anything else (samplers,
+  `-cram`, `--no-op-offload`, ...) still wins at spawn and does not move the plan.
+- **Where**: `emitModel` folds the model-wide scalars into its override copy before sizing, and a
+  per-profile pass does the same for each profile's own text (blank inherits, `none` drops it). The
+  preview path (`RenderSoloCmdLayers`) applies the same pins, so a preview equals the save.
+- **`-c` is the whole pool**: `profile.Ctx` is the per-slot window, so a pin divides by `--parallel`
+  and `buildCmdLines` multiplies it back out. A pinned window is used as-is, not rounded to a 4096
+  multiple. `-ngl <blocks>` means every layer on GPU, not "auto".
+- **Estimate**: the `/estimate` endpoint gained `custom` (the effective text) and `parallel` (slot
+  count) params; `Pins.ApplyToEstimate` folds the pins over the form fields, so the panel shows the
+  pinned ctx and the KV its pool actually reserves (`parallel` charges every slot's share, which the
+  preview used to under-report).
+
 ### The two panes
 
 - **Custom launch arguments**, collapsed by default, behind an "Enable custom launch arguments"
@@ -243,13 +269,18 @@ the new meaning.
    not.
 4. **Validation UI**: inline issues + save confirm done (2026-09-13); autocomplete and the startup
    check remain.
-5. **Later**: pins feed the sizer; the same panes for the image, audio and SAM forms with their own
-   tables.
+5. **Pins feed the sizer** (2026-09-13): `internal/autogen/pins.go` reads the composition-relevant
+   flags out of the custom text and folds them into the override copy (`emitModel`,
+   `RenderSoloCmdLayers`) and the estimate (`Pins.ApplyToEstimate`, applied server-side from the
+   `custom` query param). A pinned `-c`/`-ctk`/`-ctv`/`-ub`/`-ngl`/`--n-cpu-moe`/`--parallel`/
+   `--spec-type`/`--rope-scaling`/`--ctx-checkpoints`/`-cms`/`--no-kv-offload` is a constraint: the
+   plan is sized around it, so the emitted flags and the baked `estVramGB`/`estRamGB` describe the
+   launch that runs. Unmodeled knobs still only win at spawn. The `parallel` and `custom` estimate
+   params carry the slot count and the effective text from the editor.
+6. **Later**: the same panes for the image, audio and SAM forms with their own tables.
 
 ## Non-goals (this pass)
 
 - image, audio and SAM forms keep the read-only box;
-- pins override the emitted argv only; they do not feed the sizer. The estimate reports the
-  consequence instead;
 - no shell features: the command stays an argv split by shlex (`SanitizeCommand`), exactly as the
   process layer spawns it.

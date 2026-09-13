@@ -660,6 +660,13 @@ export interface EstimateParams {
   /** Seed the estimate from the model's loaded command (the running variant)
    * instead of re-sizing the solo profile with defaults. */
   actual?: boolean;
+  /** --parallel slot count. Each slot carries its own window over one shared -c
+   * pool, so the sizer charges Parallel x the per-slot KV. */
+  parallel?: number;
+  /** Custom launch arguments, verbatim. The server folds their pins over the
+   * other params (a pinned -c wins over ctx), so the panel shows the launch the
+   * text describes instead of the one the sizer would have picked alone. */
+  custom?: string;
 }
 
 // One token of a rendered launch command, with the provenance the editor needs
@@ -725,8 +732,10 @@ export async function estimatePlan(model: string, p: EstimateParams): Promise<Pl
   if (p.ctxCheckpoints != null) q.set("ctxCheckpoints", String(p.ctxCheckpoints));
   if (p.checkpointMinStep) q.set("checkpointMinStep", String(p.checkpointMinStep));
   if (p.ub) q.set("ub", String(p.ub));
+  if (p.parallel) q.set("parallel", String(p.parallel));
   if (p.ropeScaling) q.set("ropeScaling", p.ropeScaling);
   if (p.actual) q.set("actual", "true");
+  if (p.custom?.trim()) q.set("custom", p.custom);
   const response = await fetch(`/api/models/${encodeURIComponent(model)}/estimate?${q.toString()}`);
   if (!response.ok) {
     throw new Error(`Failed to estimate plan: ${response.status} ${await response.text()}`);
