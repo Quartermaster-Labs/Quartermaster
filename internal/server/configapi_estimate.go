@@ -225,6 +225,14 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	// modelFamily hands back whatever path the command names, and for a package
+	// model (TRELLIS.2) that is a DIRECTORY: the sizer would fail reading it as a
+	// gguf and answer 500. There is no llama load plan to preview for these, so
+	// say that instead -- the dashboard asks for every model that goes ready.
+	if fi, err := os.Stat(gguf); err == nil && fi.IsDir() {
+		shared.SendResponse(w, r, http.StatusBadRequest, "this model has no gguf payload to size")
+		return
+	}
 	gf, err := autogen.LoadGenerateFile(s.autogen.GeneratePath, s.autogen.ModelsDir)
 	if err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, "loading settings failed: "+err.Error())
@@ -235,7 +243,6 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 		shared.SendResponse(w, r, http.StatusInternalServerError, "reading gguf metadata failed: "+err.Error())
 		return
 	}
-
 	q := r.URL.Query()
 	// actual=true: seed from the loaded command, for surfaces that describe what is
 	// loaded RIGHT NOW (the dashboard's VRAM band, stores/vram.ts). Prefer the

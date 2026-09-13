@@ -186,6 +186,37 @@ func TestBackends_MatchAssets(t *testing.T) {
 		t.Errorf("sd default variant on darwin = %q want metal", got)
 	}
 
+	// The 3D backend is tracked from a fork: upstream publishes CLI archives but
+	// no build of the server this backend drives. Verbatim asset names from the
+	// fork's server-v0.1.0 release.
+	t2, _ := Find("trellis2-server")
+	t2Names := []string{
+		"trellis2-server-v0.1.0-linux-x64-vulkan.tar.gz",
+		"trellis2-server-v0.1.0-win-x64-cuda.zip",
+		"trellis2-server-v0.1.0-win-x64-vulkan.zip",
+	}
+	for _, c := range []struct{ variant, goos, want string }{
+		{"vulkan", osWin, "trellis2-server-v0.1.0-win-x64-vulkan.zip"},
+		{"cuda", osWin, "trellis2-server-v0.1.0-win-x64-cuda.zip"},
+		{"vulkan", osLinux, "trellis2-server-v0.1.0-linux-x64-vulkan.tar.gz"},
+	} {
+		got, _, err := t2.MatchAssets(c.variant, c.goos, t2Names)
+		if err != nil {
+			t.Fatalf("trellis2 %s/%s: %v", c.variant, c.goos, err)
+		}
+		if got != c.want {
+			t.Errorf("trellis2 %s/%s: got %q want %q", c.variant, c.goos, got, c.want)
+		}
+	}
+	// There is no Linux CUDA build and no macOS build at all, so asking must fail
+	// rather than fall through to another variant's asset.
+	if _, _, err := t2.MatchAssets("cuda", osLinux, t2Names); err == nil {
+		t.Error("trellis2 cuda/linux should have no published build")
+	}
+	if _, _, err := t2.MatchAssets("vulkan", osMac, t2Names); err == nil {
+		t.Error("trellis2 vulkan/darwin should have no published build")
+	}
+
 	// Real-ESRGAN's assets live on an older tag than its newest release.
 	up, _ := Find("upscaler")
 	if got, _, err := up.MatchAssets("any", osWin, []string{"realesrgan-ncnn-vulkan-20220424-windows.zip"}); err != nil || got != "realesrgan-ncnn-vulkan-20220424-windows.zip" {

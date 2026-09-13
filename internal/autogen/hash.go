@@ -204,7 +204,18 @@ const hashCacheSuffix = ".modelhash"
 //	     now carve-out + GTT, and the device is one the sizer can plan on, so
 //	     -ngl/--tensor-split/-c all change for inputs that did not.
 
-const genVersion = "v68"
+// v69: TRELLIS.2 package directories are discovered and emitted as 3D models.
+//
+//	A directory holding a pipeline.json plus ckpts/ is now a model of its
+//	own (a 3D entry with an image-in / 3d-out capability line) instead of a
+//	pile of files nothing serves, and a BiRefNet gguf stops being listed as
+//	a language model. Inputs that did not change gain a model.
+
+// v70: TRELLIS.2 models launch with --mesh-postprocess-simplify. The upstream
+//
+//	default keeps the full mesh (~5.5M triangles and ~180 MB at the 512
+//	profile); a served model is more useful at ~1M triangles and ~40 MB.
+const genVersion = "v70"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

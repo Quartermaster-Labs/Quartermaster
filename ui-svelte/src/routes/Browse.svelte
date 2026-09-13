@@ -234,12 +234,13 @@
     return "ready";
   }
 
-  // The Models page's categories plus "All". Every other tab pairs `gguf` with
-  // one of the hub's pipeline tags (see searchFilters in internal/hub/hf.go),
-  // so a repo tagged with something else — or with nothing — is invisible in
-  // all of them; "All" drops the filter entirely and is how you find it. The
-  // cost is honest: it also lists repos carrying no file we can load, which
-  // open with "this repo carries no GGUF files".
+  // The Models page's categories plus "All". Most tabs pair `gguf` with one of
+  // the hub's pipeline tags (see searchFilters in internal/hub/hf.go), so a repo
+  // tagged with something else — or with nothing — is invisible in all of them;
+  // "All" drops the filter entirely and is how you find it. The cost is honest:
+  // it also lists repos carrying no file we can load, which open with "this repo
+  // carries no loadable files". The 3D tab pairs no gguf tag at all: the models
+  // it exists for are component sets (safetensors plus json manifests).
   type BrowseCategory = ModelCategory | "any";
   const BROWSE_CATEGORIES: { id: BrowseCategory; label: string }[] = [{ id: "any", label: "All" }, ...MODEL_CATEGORIES];
 
@@ -625,7 +626,7 @@
         <Search class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-txtsecondary pointer-events-none" />
         <input
           class="w-full h-full pl-8 pr-7 py-0 rounded-full border border-card-border bg-background text-xs text-txtmain placeholder:text-txtsecondary focus:outline-none focus:border-primary transition-colors"
-          placeholder="Search Hugging Face for GGUF models…"
+          placeholder={kind === "3d" ? "Search Hugging Face for image-to-3D models…" : "Search Hugging Face for GGUF models…"}
           bind:value={query}
           oninput={onQueryInput}
           onkeydown={(e) => e.key === "Enter" && runSearch()}
@@ -774,7 +775,7 @@
             <button class="text-primary hover:underline" onclick={() => setFilter("trendy", false)}>Search the whole hub</button>.
           </div>
         {:else if !results.length}
-          <div class="p-3 text-xs text-txtsecondary">No GGUF repos matched that search.</div>
+          <div class="p-3 text-xs text-txtsecondary">{kind === "3d" ? "No 3D repos matched that search." : "No GGUF repos matched that search."}</div>
         {:else if !shown.length}
           <!-- Distinct from "nothing matched": the hub answered, the filters
                emptied it, and the fix is one click away rather than a re-word. -->
@@ -863,7 +864,7 @@
           <!-- File picker -->
           <div class="p-4 border-b border-card-border">
             {#if !repoFiles.length}
-              <div class="text-xs text-txtsecondary">This repo carries no GGUF files.</div>
+              <div class="text-xs text-txtsecondary">This repo carries no files {kind === "3d" ? "this can load (no safetensors or manifests)" : "quartermaster can load (no GGUF)"}.</div>
             {:else}
               <!-- data-table: the grid-free variant (index.css). This table had
                    the full cell grid AND zebra banding AND per-row borders -

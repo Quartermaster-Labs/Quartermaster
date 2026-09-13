@@ -45,7 +45,18 @@ type GgufRow struct {
 	// uses the raw ggml format, no metadata header) served by sam3_server. Routed
 	// before the gguf metadata read in emitModel, since ReadGgufMetadata can't parse it.
 	IsSam bool
+	// IsTrellis marks a TRELLIS.2 package: a DIRECTORY (pipeline.json plus
+	// ckpts/*.safetensors) served by trellis2-server, with FullPath naming the
+	// directory instead of a file. Like IsSam it routes before the gguf metadata
+	// read, which has no file to open here at all.
+	IsTrellis bool
 }
+
+// skipsGgufPipeline reports whether the row is served by a provider binary
+// rather than llama-server, so the gguf-only passes — the metadata read, family
+// pairing, sidecar inheritance — must leave it alone: SAM's *.ggml has no header
+// at all, and a TRELLIS.2 "model" is a directory.
+func (r GgufRow) skipsGgufPipeline() bool { return r.IsSam || r.IsTrellis }
 
 var (
 	shardRe      = regexp.MustCompile(`-(\d{5})-of-(\d{5})\.gguf$`)
@@ -170,6 +181,20 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 		if err != nil {
 			return nil // skip unreadable entries, matching -ErrorAction SilentlyContinue
 		}
+		// A TRELLIS.2 package is a directory, and nothing inside it is a model in
+		// its own right (the BiRefNet remover may well live under it): emit the
+		// package and stop, so ckpts/*.gguf or a vendored gguf cannot turn into
+		// separate models. The root itself never counts — pointing a scan root at
+		// a package must not swallow the walk.
+		if d.IsDir() {
+			if path != modelsRoot {
+				if IsTrellisPackageDir(path) {
+					rows = append(rows, trellisRow(path))
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
 		// SAM models are raw *.ggml (no gguf header); served by sam3_server. Emit a
 		// row by filename and skip the gguf pipeline (metadata/quant/shard logic).
 		if !d.IsDir() && strings.EqualFold(filepath.Ext(path), ".ggml") && samFileRe.MatchString(d.Name()) {
@@ -193,6 +218,13 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 			return nil
 		}
 		name := d.Name()
+		// BiRefNet is TRELLIS.2's background remover: a gguf, but not a language
+		// model, and llama-server cannot load it. Skipped rather than served so a
+		// scan over the weights folder does not offer it as a chat model; the
+		// trellis emitter picks the same file up as --birefnet instead.
+		if trellisBirefRe.MatchString(name) {
+			return nil
+		}
 		// Unloadable FastMTP head: not served, not paired. Checked ahead of the
 		// draft rules so it can never become a -md sidecar.
 		if fastMtpFileRe.MatchString(name) {
