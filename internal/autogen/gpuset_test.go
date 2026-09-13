@@ -481,6 +481,51 @@ func TestAutogen_SmallDiscreteCardIsNotCalledIntegrated(t *testing.T) {
 	}
 }
 
+// The kernel's own verdict outranks every heuristic, and it is the only signal
+// that catches a Strix Halo: a 16GB carve-out reads like a card's VRAM, the name
+// matches no APU marker, and the aperture ratio is under 3x, so all three
+// guesses say "discrete". KFD's local_mem_size says otherwise.
+func TestAutogen_KernelFlagClassifiesOversizedApu(t *testing.T) {
+	apu := perf.GpuStat{
+		ID: 0, Name: "AMD Radeon 8060S Graphics",
+		MemTotalMB: 16384, MemUsedMB: 0,
+		SharedTotalMB: 32768, SharedUsedMB: 0,
+		Integrated: true,
+	}
+	set := gpuSetFromStats([]perf.GpuStat{apu}, GpuPolicy{})
+	if len(set) != 1 || !set[0].Integrated {
+		t.Fatalf("got %+v, want the kernel's verdict honoured", set)
+	}
+	if set[0].TotalGB != 48 {
+		t.Errorf("TotalGB = %.1f, want 48 (carve-out + pool)", set[0].TotalGB)
+	}
+
+	// The same readings without the flag are a discrete card. That is the
+	// heuristic's blind spot, not a regression: nothing else can tell them apart.
+	apu.Integrated = false
+	set = gpuSetFromStats([]perf.GpuStat{apu}, GpuPolicy{})
+	if len(set) != 1 || set[0].Integrated || set[0].TotalGB != 16 {
+		t.Fatalf("without the flag = %+v, want a 16GB dedicated device", set)
+	}
+}
+
+// An APU with no carve-out at all has zero dedicated memory, and the floor would
+// drop it as "no GPU" if the pool were not folded first. The kernel flag is what
+// says the pool is its memory.
+func TestAutogen_KernelFlagCountsAnApuWithNoCarveout(t *testing.T) {
+	set := gpuSetFromStats([]perf.GpuStat{{
+		ID: 0, Name: "amdgpu [1002:15bf]", MemTotalMB: 0, MemUsedMB: 0,
+		SharedTotalMB: 16384, SharedUsedMB: 1024, Integrated: true,
+	}}, GpuPolicy{})
+
+	if len(set) != 1 {
+		t.Fatalf("got %+v, want the APU kept", set)
+	}
+	if set[0].TotalGB != 16 || set[0].FreeGB != 15 {
+		t.Errorf("total/free = %.2f/%.2f, want 16/15 (the pool is the whole GPU)", set[0].TotalGB, set[0].FreeGB)
+	}
+}
+
 // Name markers catch an APU whose carve-out is too large for the shape test
 // (an 8GB UMA setting) without ever matching a card's name.
 func TestAutogen_ApuNameMarker(t *testing.T) {

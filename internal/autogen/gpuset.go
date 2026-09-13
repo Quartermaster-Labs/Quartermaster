@@ -570,7 +570,18 @@ var apuNameMarkers = []string{"ryzen", "athlon", "radeon graphics"}
 // rule and the budget rule can differ (a user may budget a discrete card's host
 // aperture without wanting it treated as an iGPU).
 func detectedIntegrated(g perf.GpuStat) bool {
-	if g.MemTotalMB <= 0 || g.SharedTotalMB <= 0 {
+	if g.SharedTotalMB <= 0 {
+		return false
+	}
+	// The kernel said so: KFD's local_mem_size is zero, meaning the device has no
+	// memory of its own. That outranks every guess below, and it is the only
+	// signal that catches an APU whose carve-out is big enough to look like a
+	// card's VRAM (Strix Halo) or whose name matches nothing (Linux sysfs has no
+	// marketing name to match, so it reports a PCI id).
+	if g.Integrated {
+		return true
+	}
+	if g.MemTotalMB <= 0 {
 		return false
 	}
 	name := strings.ToLower(g.Name)

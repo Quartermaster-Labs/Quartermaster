@@ -206,12 +206,16 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   reports a host aperture that is slower than its own VRAM. There is no flag that tells them
   apart, so `Settings.DevicePolicy()` (`SharedMemory`, `PoolIntegratedGpu`, `MinGpuVramGB`)
   decides, and the sizer, the eligibility query and the router's spawn-time retune all take the
-  same struct. The READINGS come from the platform readers (rocm-smi's `GTT Total*` on Linux,
-  DXGI's `SharedSystemMemory` + PDH `Shared Usage` on Windows, nothing at all from nvidia-smi),
-  but they are raw fields on `perf.GpuStat` — no platform decides eligibility.
+  same struct. The READINGS come from the platform readers (rocm-smi's `GTT Total*` and the
+  kernel's own sysfs counters on Linux, DXGI's `SharedSystemMemory` + PDH `Shared Usage` on Windows,
+  nothing at all from nvidia-smi), but they are raw fields on `perf.GpuStat` — no platform decides
+  eligibility.
   `SharedMemory: auto` (default) counts the pool only for a device that looks
-  integrated: a name marker (`ryzen`/`athlon`/`radeon graphics`) or dedicated ≤ 8 GB with shared
-  ≥ 3× dedicated. A device under the floor used to be dropped outright, which on an APU-only box
+  integrated. Strongest signal first: `perf.GpuStat.Integrated`, which is KFD's
+  `local_mem_size == 0` (the kernel saying the device has no memory of its own, and the only thing
+  that classifies a Strix Halo, whose 16GB carve-out and unhelpful name look exactly like a card);
+  then a name marker (`ryzen`/`athlon`/`radeon graphics`, which cannot match the `amdgpu [1002:15bf]`
+  a sysfs read synthesizes); then dedicated ≤ 8 GB with shared ≥ 3× dedicated. A device under the floor used to be dropped outright, which on an APU-only box
   hid the ONLY GPU in the machine from every budget in the program (issue #37); the floor still
   drops it, but the pool is folded first, and "do not PAIR an iGPU with a real card" is now a
   separate rule applied to the resulting SET (`dropUnpooledIntegrated`) — an all-integrated set is

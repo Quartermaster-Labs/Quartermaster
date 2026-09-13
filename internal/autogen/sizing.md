@@ -39,6 +39,10 @@ Three details that are easy to get wrong:
   to the device's total **after** the shared system-memory pool is folded in, and only a device
   that looks integrated (an APU) has that pool counted at all (`settings.sharedMemory`, default
   `auto`) — a discrete card's host aperture is slower than its own VRAM, so it is never budget.
+  "Looks integrated" is decided in this order: `perf.GpuStat.Integrated`, which is the kernel's
+  KFD verdict (`local_mem_size == 0`) and the only signal that separates a Strix Halo's 16 GB
+  carve-out from a card; a name marker (`ryzen`, `athlon`, `radeon graphics`); then dedicated
+  ≤ 8 GB with shared ≥ 3× dedicated.
   Without this an APU's 2 GB BIOS carve-out sat under the floor and the only GPU in the machine
   was invisible to every budget (issue #37). Whether an integrated GPU may be a *split target*
   beside a real card is a separate, default-off knob (`poolIntegratedGpu`): an APU with no other

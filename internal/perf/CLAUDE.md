@@ -15,15 +15,18 @@ Live system and GPU/VRAM monitoring for the serving host. It samples CPU, memory
 | `monitor_windows.go` | `//go:build` via filename. Windows `getGpuStats` (nvidia-smi loop, trimmed query → **DXGI fallback**) and `readSysStats`; `parseNvidiaSmiLineLite` (Windows-only CSV parser) overlays PDH util. |
 | `dxgi_windows.go` | `//go:build windows`. Vendor-neutral VRAM backend (AMD/Intel) via DXGI COM: `DXGI_ADAPTER_DESC1.DedicatedVideoMemory` = total, `SharedSystemMemory` = the aperture. **Both usages come from PDH** (`GPU Adapter Memory\Dedicated Usage` and `\Shared Usage`, system-wide), NOT DXGI's per-process `QueryVideoMemoryInfo`. Collapses the driver's mirror LUIDs into one adapter; overlays PDH util by LUID. Reports **every** adapter with dedicated VRAM, iGPU included — eligibility is the device policy's job, not this file's. No temp/fan/power. |
 | `monitor_darwin.go` | macOS `getGpuStats` (mactop → ioreg fallback) and `readSysStats`. Filename-tagged for darwin. |
-| `monitor_unix.go` | `//go:build unix && !darwin`. Linux/BSD `getGpuStats` (LACT → nvidia-smi → rocm-smi → sysfs) and `readSysStats`; LACT socket protocol and rocm-smi CSV parsing. |
+| `monitor_unix.go` | `//go:build unix && !darwin`. Linux/BSD `getGpuStats` (LACT → nvidia-smi → rocm-smi → sysfs) and `readSysStats`; LACT socket protocol, rocm-smi CSV parsing, and the sysfs/KFD readers (`readSysfs`/`readSysfsFrom`, `kfdIsAPU`/`kfdIsAPUByBDF`, `kfdProcBytes`, `drmNodeAvailable`, `drmCardName`, `applyKFDIntegration`). |
+| `linux_parse.go` | No build tag. Pure parsers behind the Linux readers: a KFD node's `properties`, a DRM device's `uevent`, `/proc/<pid>/fdinfo` DRM client keys, and `sysfsGpuStat` (raw counters → `GpuStat`). Untagged so their tests run on any platform. |
 | `pdh_windows.go` | `//go:build windows`. PDH (`pdh.dll`) "GPU Engine" utilization counter — Task Manager's source, non-stalling. Provides `GpuUtilPct` for the Windows nvidia-smi path; defines `LUID`. |
-| `computeapps.go` | Per-process GPU VRAM attribution (`QueryComputeApps`, `parseComputeApps`, `GpuProc`). No build tag. NVIDIA: `nvidia-smi --query-compute-apps`; non-NVIDIA falls back to `computeAppsPlatform` (`computeapps_windows.go` = PDH "GPU Process Memory" per-pid VRAM + gopsutil name; `computeapps_other.go` = nil). Data source for the server's foreign-VRAM / OOM protection. |
+| `computeapps.go` | Per-process GPU VRAM attribution (`QueryComputeApps`, `parseComputeApps`, `GpuProc`). No build tag. NVIDIA: `nvidia-smi --query-compute-apps`; non-NVIDIA falls back to `computeAppsPlatform` (`computeapps_windows.go` = PDH "GPU Process Memory" per-pid VRAM + gopsutil name; `computeapps_linux.go` = DRM fdinfo + KFD per-process, no tool at all; `computeapps_other.go` = nil). Data source for the server's foreign-VRAM / OOM protection. |
 
 ## Important types & functions
 
 - `GpuStat` (`types.go`) — one GPU snapshot. The offload-relevant fields are `MemUsedMB` and `MemTotalMB` (`types.go`); free VRAM is `MemTotalMB - MemUsedMB`. Also carries `GpuUtilPct`, `MemUtilPct`, `TempC`/`VramTempC`, `FanSpeedPct`, `PowerDrawW`, and an `ID`/`Name`/`UUID`.
 
-  `SharedTotalMB` / `SharedUsedMB` are the SECOND pool: system memory the device can address (AMD GTT, and the host aperture a discrete card maps too) — **not** the device's own memory. They are reported raw and NOT part of `MemTotalMB`; whether they count toward inference VRAM is a policy decision made in `internal/autogen` (`GpuPolicy.SharedMemory`), because the same signal means "this is the whole GPU" on an APU (issue #37) and "this is slow host memory" on a card. Both platforms fill them: rocm-smi's `GTT Total*` columns, and on Windows DXGI's `SharedSystemMemory` (size) with PDH `\GPU Adapter Memory(*)\Shared Usage` (usage, by LUID). An nvidia-smi card reports none — NVML has no aperture figure — so the fields stay 0 there and every consumer behaves exactly as it did before.
+  `SharedTotalMB` / `SharedUsedMB` are the SECOND pool: system memory the device can address (AMD GTT, and the host aperture a discrete card maps too) — **not** the device's own memory. They are reported raw and NOT part of `MemTotalMB`; whether they count toward inference VRAM is a policy decision made in `internal/autogen` (`GpuPolicy.SharedMemory`), because the same signal means "this is the whole GPU" on an APU (issue #37) and "this is slow host memory" on a card. Every platform fills them where it can: rocm-smi's `GTT Total*` columns, the Linux sysfs reader's `mem_info_gtt_*`, and on Windows DXGI's `SharedSystemMemory` (size) with PDH `\GPU Adapter Memory(*)\Shared Usage` (usage, by LUID). An nvidia-smi card reports none — NVML has no aperture figure — so the fields stay 0 there and every consumer behaves exactly as it did before.
+
+  `Integrated` is the KERNEL's verdict rather than a size guess: on Linux the reader asks KFD, whose topology reports `local_mem_size == 0` for a device with no memory of its own. False also covers "no kernel source available" (Windows, NVIDIA, a container without KFD), so it only ever ADDS confidence — `internal/autogen` still runs its name/shape heuristics when it is false. `NodeID` is rocm-smi's `Node ID` column, carried (`json:"-"`) so the Linux poll loop can ask KFD about that node; -1 means the tool did not report one.
 - `SysStat` (`types.go`) — CPU per-core, memory, swap, load average, and network IO.
 - `Monitor` (`monitor.go`) — owns RW-locked ring buffers and listener sets.
   - `New` (`monitor.go`) — clamps `Every` to ≥100ms; sizes ring to ~1 hour of samples.
@@ -31,7 +34,7 @@ Live system and GPU/VRAM monitoring for the serving host. It samples CPU, memory
   - `Subscribe` (`monitor.go`) — returns `(sysChan, gpuChan, unsub)`; non-blocking sends (drops if a listener is slow).
   - `Current` (`monitor.go`) — returns a copy of buffered `[]SysStat` and a flattened `[]GpuStat` snapshot history. This is the read path for offload math and the UI.
 - `GpuProc` (`computeapps.go`) — one process's VRAM snapshot `{PID, Name, MemMB}`, distinct from the per-GPU `GpuStat`.
-- `QueryComputeApps` (`computeapps.go`) — runs `nvidia-smi --query-compute-apps=pid,used_memory,process_name` and parses (via `parseComputeApps`) the CSV into `[]GpuProc`. Uses NVML **process accounting** (not hw perf counters), so it does NOT stall in-flight generation — the same stall concern the D3DKMT/nvidia-smi note calls out for `utilization.gpu`/`power.draw`. When `nvidia-smi` is absent it falls back to `computeAppsPlatform`: on **Windows non-NVIDIA** (AMD/Intel) the PDH `\GPU Process Memory(*)\Dedicated Usage` counter (pid from the instance name, VRAM summed per pid, name via gopsutil) — so foreign-VRAM / OOM protection works on AMD; `nil` on darwin/unix → "no foreign processes".
+- `QueryComputeApps` (`computeapps.go`) — runs `nvidia-smi --query-compute-apps=pid,used_memory,process_name` and parses (via `parseComputeApps`) the CSV into `[]GpuProc`. Uses NVML **process accounting** (not hw perf counters), so it does NOT stall in-flight generation — the same stall concern the D3DKMT/nvidia-smi note calls out for `utilization.gpu`/`power.draw`. When `nvidia-smi` is absent it falls back to `computeAppsPlatform`: on **Windows non-NVIDIA** (AMD/Intel) the PDH `\GPU Process Memory(*)\Dedicated Usage` counter (pid from the instance name, VRAM summed per pid, name via gopsutil), and on **Linux** DRM fdinfo plus KFD's per-process counter (`computeapps_linux.go`) — so foreign-VRAM / OOM protection works on AMD on both platforms; `nil` on darwin and the BSDs → "no foreign processes".
 
 > **Windows GPU backend = nvidia-smi (VRAM/temp/fan) + PDH (util).** A full D3DKMT backend (raw gdi32 syscalls) was tried and removed: on Optimus/hybrid laptops the discrete GPU's dedicated VRAM is routed through the WDDM aperture and is invisible to D3DKMT segment queries (it reports phantom shared-memory totals and only the iGPU). nvidia-smi reads NVML directly and reports correct VRAM. Two NVML fields were also dropped from the query: `utilization.gpu` and `power.draw` force the driver to sample hardware perf counters, which preempts an in-flight llama.cpp generation and shows up as token-stream stalls / late requests. Util is recovered from PDH "GPU Engine" counters (WDDM scheduler accounting, no stall); **power is not reported on Windows** (no cheap non-stalling source). Non-NVIDIA Windows GPUs (AMD/Intel) are covered by the DXGI fallback (`dxgi_windows.go`) — VRAM total+used from DXGI, util from PDH, no temp/fan/power.
 
@@ -41,7 +44,7 @@ Live system and GPU/VRAM monitoring for the serving host. It samples CPU, memory
 |---|---|---|
 | Windows | nvidia-smi (loop; VRAM/temp/fan) → DXGI (VRAM only, any vendor) + PDH (util) | `monitor_windows.go`, `dxgi_windows.go`, `pdh_windows.go` |
 | darwin (Apple Silicon) | mactop (headless JSON) → ioreg (`IOGPU`) | `monitor_darwin.go`, `gpu_parse.go` |
-| unix (Linux/BSD) | LACT (unix socket) → nvidia-smi → rocm-smi (`--showmeminfo vram gtt`) → sysfs (unimplemented) | `monitor_unix.go`, `gpu_parse.go` |
+| unix (Linux/BSD) | LACT (unix socket) → nvidia-smi → rocm-smi (`--showmeminfo vram gtt`) → sysfs (kernel counters + KFD, no tool needed) | `monitor_unix.go`, `gpu_parse.go`, `linux_parse.go` |
 
 When no backend works, `getGpuStats` returns `ErrNoGpuTool` and the monitor logs at info and continues with sys stats only.
 
@@ -54,6 +57,34 @@ When no backend works, `getGpuStats` returns `ErrNoGpuTool` and the monitor logs
 - **mactop memory caveat.** mactop reports whole-system memory, so the darwin path overlays ioreg's GPU-attributed unified memory (`overlayIoregMem`) so both backends report consistent `MemUsedMB`/`MemTotalMB`.
 
 - **rocm-smi reads both pools, in one invocation.** `rocmSmiMemArgs` probes `--showmeminfo vram gtt` once per process (memoized, and resolved on the first poll so the extra invocation is never charged to a caller's sample timeout) and falls back to `vram` alone if the installed rocm-smi rejects the pair. `VRAM Total*` lands in `MemTotalMB`/`MemUsedMB`, `GTT Total*` in `SharedTotalMB`/`SharedUsedMB` (the fields above); the label match is a case-insensitive `Contains(col, "GTT")` in the parser's `default` branch, because the wording has changed between rocm-smi releases ("GTT Memory", "GTT Total Memory (B)"). `parseRocmSmiCSV` keys rows by device id through `mergeGpuStat` instead of appending: the tool may print ONE table per memory type, and appending produced two rows for device 0 — which downstream reading keeps only the FIRST of (on a timestamp tie `gpuSetFromStats` prefers the earlier row), silently throwing the GTT half away. The three functions are pure and live in `gpu_parse.go` so their tests run on Windows.
+
+- **The sysfs reader is the one that works in a container.** `readSysfsFrom` globs
+  `/sys/class/drm/card*/device/uevent`, keeps `DRIVER=amdgpu` only, and reads `mem_info_vram_*` into
+  `Mem*` plus `mem_info_gtt_*` into `Shared*` (along with `gpu_busy_percent` and hwmon temp/power).
+  No external tool is involved, which is the whole point: a ROCm image without `rocm-smi`, or a
+  container given only `--device=/dev/dri`, has these counters and nothing else (issue #37, the
+  Docker half — the box read as "no GPU", so every model was planned CPU-only). Two filters matter.
+  `drmNodeAvailable` requires the card to have a node in `/dev/dri`, because sysfs lists every card
+  the HOST has and a container must not budget GPUs it cannot open. And the name is synthesized when
+  the kernel has no `product_name` (an APU has none) — `amdgpu [1002:15bf]` — deliberately not
+  product-shaped, so the sizer's name heuristics cannot match a string this reader made up. The walk
+  is covered by a fixture-tree test (`sysfs_linux_test.go`), since CI has no AMD card.
+- **KFD is the only classification signal that comes from the kernel, and it wins.** An APU's KFD
+  node reports `local_mem_size == 0`; `applyKFDIntegration` (rocm-smi path, by `Node ID`) and
+  `kfdIsAPUByBDF` (sysfs path, by PCI address) set `GpuStat.Integrated` from it. That is what catches
+  the APUs no heuristic can: a Strix Halo with a 16GB carve-out reads like a card's VRAM, its name
+  matches no marker, and the aperture ratio is under 3x. "Not an APU" and "KFD cannot answer" are
+  separate returns — a missing file must not look like a discrete card. On the sysfs path an
+  integrated card's used GTT is also reconciled against `kfdProcBytes`, because ROCm can hand out
+  fine-grained unified memory that `mem_info_gtt_used` never sees: the LARGER of the two views wins,
+  never their sum, since both describe the same allocations. Over-reporting used is the safe
+  direction (it under-states free, so the sizer keeps a layer or two more on the CPU).
+- **Per-process attribution on Linux is `/proc/<pid>/fdinfo` plus KFD, not a tool.**
+  `drmFdinfoByPID` reads the `drm-driver`/`drm-memory-gtt`/`drm-memory-vram` keys of every fd and
+  dedups by `drm-client-id` (dup'ed fds share one client, and counting them twice invents VRAM);
+  `mergeKFDProcs` folds in the KFD per-process total, larger-view-wins. The consumer fails CLOSED: a
+  managed pid the source cannot see refuses the whole reading rather than counting our own child as
+  foreign (`internal/server/vramguard.go`).
 
 - **DXGI backend (Windows, non-NVIDIA).** Only reached when `nvidia-smi` is absent. COM via raw vtable calls (`comCall`), no external tool. Two hazards guarded by `init()` panics: hand-written struct offsets (`DedicatedVideoMemory`@272, `AdapterLuid`@296, `DXGI_QUERY_VIDEO_MEMORY_INFO` size 32) — a wrong offset reads garbage VRAM silently. The AMD driver enumerates one physical card as **N mirror adapters** with distinct LUIDs but identical name/VRAM/budget; `openDxgiAdapters` collapses them by `name|totalMB` (keeping every LUID+interface) so the dashboard shows one GPU and `usedMB`/util take the **max across mirrors** (live usage can surface on any single mirror LUID). **Used VRAM MUST come from PDH `GPU Adapter Memory\Dedicated Usage` (system-wide), not DXGI `QueryVideoMemoryInfo` — the latter reports only the calling process's usage (≈0 for the monitor), which read as "0.0 used" on the gauge.** DXGI is total-only here. Unlike the nvidia-smi loop, DXGI is polled on a ticker in `tryDxgiWindows`; the sampler goroutine `LockOSThread`s because it holds COM pointers across ticks. iGPUs with nonzero dedicated VRAM appear too (that 485 MB Ryzen entry on a box with a discrete card is expected, not a bug), and which of them count is `internal/autogen`'s device policy — `freeVramGBFromStats` there pools the ELIGIBLE set, and by default an integrated GPU is not a split target beside a real card.
 

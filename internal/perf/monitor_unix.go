@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -314,6 +315,7 @@ func tryRocmSmi(ctx context.Context, every time.Duration, logger *logmon.Monitor
 				}
 
 				stats := parseRocmSmiCSV(out)
+				applyKFDIntegration(stats)
 
 				if len(stats) > 0 {
 					select {
@@ -328,8 +330,196 @@ func tryRocmSmi(ctx context.Context, every time.Duration, logger *logmon.Monitor
 	return ch, nil
 }
 
+// trySysfs is the no-tool backend: it reads the kernel's own DRM counters, so
+// it is the only one that works in a container with neither rocm-smi nor ROCm
+// userspace (issue #37). It sits last in the chain because a CLI still reports a
+// marketing name and a few fields sysfs has not got; it is what runs when
+// nothing is installed.
 func trySysfs(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuStat, error) {
-	return nil, ErrNotImplemented
+	stats, err := readSysfs()
+	if err != nil {
+		return nil, err
+	}
+	if len(stats) == 0 {
+		return nil, ErrNoGpuTool
+	}
+	if every < time.Second {
+		every = time.Second
+	}
+
+	ch := make(chan []GpuStat, 1)
+	go func() {
+		defer close(ch)
+		ticker := time.NewTicker(every)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				stats, err := readSysfs()
+				if err != nil || len(stats) == 0 {
+					continue
+				}
+				select {
+				case ch <- stats:
+				default:
+				}
+			}
+		}
+	}()
+	return ch, nil
+}
+
+// applyKFDIntegration marks the stats whose KFD node has no local memory. That
+// is the kernel's own APU verdict, and it is what catches the APUs neither a
+// name nor a size ratio can: a Strix Halo whose carve-out is large enough to
+// look like a discrete card's VRAM.
+func applyKFDIntegration(stats []GpuStat) {
+	for i := range stats {
+		if apu, known := kfdIsAPU(stats[i].NodeID); known && apu {
+			stats[i].Integrated = true
+		}
+	}
+}
+
+// sysfsRoots is where the Linux reader looks. The real call uses the kernel's
+// own mount points; a test passes a fixture tree, which is the only way to cover
+// the walk on a machine without an AMD card (CI included).
+type sysfsRoots struct {
+	DRM    string
+	KFD    string
+	DevDRI string
+}
+
+// defaultSysfsRoots are the kernel's own paths.
+func defaultSysfsRoots() sysfsRoots {
+	return sysfsRoots{DRM: "/sys/class/drm", KFD: "/sys/class/kfd/kfd", DevDRI: "/dev/dri"}
+}
+
+// kfdIsAPU asks KFD whether the topology node rocm-smi numbered has no local
+// memory. The second return says whether KFD could answer at all (no KFD, no
+// such node, an older kernel): "this is not an APU" and "no idea" must not be
+// conflated, or a missing file would look like a discrete card.
+func kfdIsAPU(nodeID int) (bool, bool) {
+	return kfdIsAPUIn(defaultSysfsRoots().KFD, nodeID)
+}
+
+func kfdIsAPUIn(kfdRoot string, nodeID int) (bool, bool) {
+	if nodeID < 0 {
+		return false, false
+	}
+	b, err := os.ReadFile(filepath.Join(kfdRoot, "topology", "nodes", strconv.Itoa(nodeID), "properties"))
+	if err != nil {
+		return false, false
+	}
+	p := parseKFDProps(string(b))
+	if !p.HasGPU() || !p.HasLocalMem {
+		return false, false
+	}
+	return p.IsAPU(), true
+}
+
+// kfdIsAPUByBDF is kfdIsAPU for a card known only by its PCI address, which is
+// all the sysfs reader has to go on.
+func kfdIsAPUByBDF(kfdRoot, bdf string) (bool, bool) {
+	want, ok := kfdLocationID(bdf)
+	if !ok {
+		return false, false
+	}
+	paths, _ := filepath.Glob(filepath.Join(kfdRoot, "topology", "nodes", "*", "properties"))
+	for _, path := range paths {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		p := parseKFDProps(string(b))
+		if !p.HasGPU() || !p.HasLocalMem || p.LocationID != want {
+			continue
+		}
+		return p.IsAPU(), true
+	}
+	return false, false
+}
+
+// kfdProcBytes totals KFD's per-process memory across the box. KFD's proc view
+// is system-wide (it is sysfs, which is not namespaced), the same scope as the
+// DRM counters it is reconciled against.
+func kfdProcBytes(kfdRoot string) int64 {
+	procs, err := os.ReadDir(filepath.Join(kfdRoot, "proc"))
+	if err != nil {
+		return 0
+	}
+	var total int64
+	for _, p := range procs {
+		if !p.IsDir() {
+			continue
+		}
+		paths, _ := filepath.Glob(filepath.Join(kfdRoot, "proc", p.Name(), "vram_*"))
+		for _, path := range paths {
+			if v, ok := sysfsReadInt64(path); ok {
+				total += v
+			}
+		}
+	}
+	return total
+}
+
+// sysfsReadInt64 reads one integer from a sysfs file. ok is false when the
+// kernel, the driver, or the permissions do not offer it: a normal answer, not
+// an error worth propagating.
+func sysfsReadInt64(path string) (int64, bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+	return v, err == nil
+}
+
+// sysfsReadHwmon reads a hwmon attribute for a card ("temp1_input",
+// "power1_average"). The instance number is not fixed, so it is globbed.
+func sysfsReadHwmon(cardDir, attr string) (int64, bool) {
+	matches, _ := filepath.Glob(filepath.Join(cardDir, "hwmon", "hwmon*", attr))
+	if len(matches) == 0 {
+		return 0, false
+	}
+	return sysfsReadInt64(matches[0])
+}
+
+// drmNodeAvailable reports whether this process may actually open the card.
+// /sys/class/drm lists every card the HOST has, while /dev/dri lists what a
+// container was given, so without this check a container would budget GPUs it
+// cannot touch (the host's iGPU beside a passthrough card is the usual case).
+func drmNodeAvailable(devDRIRoot, cardDir string) bool {
+	cardName := filepath.Base(filepath.Dir(cardDir))
+	if _, err := os.Stat(filepath.Join(devDRIRoot, cardName)); err == nil {
+		return true
+	}
+	// A container given only --device=/dev/dri/renderD128 has no control node.
+	matches, _ := filepath.Glob(filepath.Join(cardDir, "drm", "renderD*"))
+	for _, m := range matches {
+		if _, err := os.Stat(filepath.Join(devDRIRoot, filepath.Base(m))); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// drmCardName names a sysfs card. product_name is the kernel's marketing string
+// where the ASIC has one (most discrete cards); an APU has none, and the PCI id
+// stands in. It is deliberately not shaped like a product name, so the sizer's
+// name heuristics cannot match a string this function made up.
+func drmCardName(cardDir, pciID string) string {
+	if b, err := os.ReadFile(filepath.Join(cardDir, "product_name")); err == nil {
+		if name := strings.TrimSpace(string(b)); name != "" {
+			return name
+		}
+	}
+	if pciID != "" {
+		return "amdgpu [" + pciID + "]"
+	}
+	return "amdgpu"
 }
 
 func lactSocketPath() string {
@@ -519,8 +709,67 @@ func lactGetDeviceStats(conn net.Conn, id string, name string, index int) (GpuSt
 	}, nil
 }
 
+// readSysfs reads every amdgpu card the kernel exposes: the dedicated counters,
+// the GTT pool, and the little else sysfs has (util, temperature, power). No
+// external tool is involved, which is the entire point of this backend.
 func readSysfs() ([]GpuStat, error) {
-	return nil, ErrNotImplemented
+	return readSysfsFrom(defaultSysfsRoots())
+}
+
+func readSysfsFrom(roots sysfsRoots) ([]GpuStat, error) {
+	ueventPaths, _ := filepath.Glob(filepath.Join(roots.DRM, "card*/device/uevent"))
+	if len(ueventPaths) == 0 {
+		return nil, ErrNoGpuTool
+	}
+
+	var stats []GpuStat
+	for _, ueventPath := range ueventPaths {
+		b, err := os.ReadFile(ueventPath)
+		if err != nil {
+			continue
+		}
+		uevent := parseDrmUevent(string(b))
+		if uevent.Driver != "amdgpu" {
+			continue
+		}
+		cardDir := filepath.Dir(ueventPath)
+		if !drmNodeAvailable(roots.DevDRI, cardDir) {
+			continue
+		}
+
+		var mem sysfsMem
+		mem.VramTotalB, _ = sysfsReadInt64(filepath.Join(cardDir, "mem_info_vram_total"))
+		mem.VramUsedB, _ = sysfsReadInt64(filepath.Join(cardDir, "mem_info_vram_used"))
+		mem.GttTotalB, _ = sysfsReadInt64(filepath.Join(cardDir, "mem_info_gtt_total"))
+		mem.GttUsedB, _ = sysfsReadInt64(filepath.Join(cardDir, "mem_info_gtt_used"))
+		if mem.VramTotalB == 0 && mem.GttTotalB == 0 {
+			continue
+		}
+
+		integrated, _ := kfdIsAPUByBDF(roots.KFD, uevent.PCISlot)
+		var kfdBytes int64
+		if integrated {
+			kfdBytes = kfdProcBytes(roots.KFD)
+		}
+
+		cardIndex, _ := strconv.Atoi(strings.TrimPrefix(filepath.Base(filepath.Dir(cardDir)), "card"))
+		stat := sysfsGpuStat(cardIndex, drmCardName(cardDir, uevent.PCIID), mem, integrated, kfdBytes)
+		if v, ok := sysfsReadInt64(filepath.Join(cardDir, "gpu_busy_percent")); ok {
+			stat.GpuUtilPct = float64(v)
+		}
+		if v, ok := sysfsReadHwmon(cardDir, "temp1_input"); ok {
+			stat.TempC = int(v / 1000)
+		}
+		if v, ok := sysfsReadHwmon(cardDir, "power1_average"); ok {
+			stat.PowerDrawW = float64(v) / 1_000_000
+		}
+		stats = append(stats, stat)
+	}
+
+	if len(stats) == 0 {
+		return nil, ErrNoGpuTool
+	}
+	return stats, nil
 }
 
 func readSysStats() (SysStat, error) {

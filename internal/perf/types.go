@@ -5,9 +5,19 @@ import "time"
 type GpuStat struct {
 	Timestamp time.Time `json:"timestamp"`
 
-	ID         int     `json:"id"`
-	Name       string  `json:"name"`
-	UUID       string  `json:"uuid"`
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+	UUID string `json:"uuid"`
+	// Integrated is the KERNEL's verdict that the adapter has no memory of its
+	// own: on Linux, KFD's topology reports local_mem_size == 0 for an APU, and
+	// /sys/class/kfd is asked when the card is read. It is not a size guess, but
+	// it IS a hint that can only add confidence: false also covers "no kernel
+	// source was available" (Windows, NVIDIA, a container without KFD), so the
+	// sizer still falls back to naming/shape heuristics when it is false.
+	Integrated bool `json:"integrated"`
+	// NodeID is rocm-smi's "Node ID" column (a KFD topology node), carried only
+	// so the Linux poll loop can look the node up in KFD. Not API surface.
+	NodeID     int     `json:"-"`
 	TempC      int     `json:"temp_c"`
 	VramTempC  int     `json:"vram_temp_c"`
 	GpuUtilPct float64 `json:"gpu_util_pct"`

@@ -237,6 +237,9 @@ func parseRocmSmiLine(header string, line string) *GpuStat {
 	result := &GpuStat{
 		Timestamp: time.Now(),
 		ID:        -1,
+		// -1, not the zero value: node 0 is a real KFD node (usually a CPU),
+		// and "no Node ID column" must not read as "ask about node 0".
+		NodeID: -1,
 	}
 
 	var device string
@@ -260,6 +263,9 @@ func parseRocmSmiLine(header string, line string) *GpuStat {
 			deviceName = val
 		case "GUID":
 			result.UUID = val
+		case "Node ID":
+			nodeID, _ := strconv.Atoi(val)
+			result.NodeID = nodeID
 		case "Temperature (Sensor edge) (C)":
 			tempC, _ := strconv.ParseFloat(val, 64)
 			result.TempC = int(tempC)
@@ -341,6 +347,9 @@ func mergeGpuStat(cur, next GpuStat) GpuStat {
 	}
 	if cur.UUID == "" {
 		cur.UUID = next.UUID
+	}
+	if cur.NodeID < 0 {
+		cur.NodeID = next.NodeID
 	}
 	if cur.TempC == 0 {
 		cur.TempC = next.TempC
