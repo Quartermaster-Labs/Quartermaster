@@ -666,6 +666,11 @@ func main() {
 			Reload:       reload,
 		}
 		initialSrv.SetAutogenAdmin(autogenAdmin)
+		// The hub's boot tasks - restoring downloads interrupted by the last
+		// shutdown, then sweeping dead partials - need the models root, which only
+		// exists now that the admin is attached. Run from server.New() they would
+		// see the empty string and quietly do nothing.
+		initialSrv.StartHubDownloads()
 	}
 	if playground != nil {
 		// Lets the turn runner find the backend registry (and with it the CPU

@@ -342,18 +342,6 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	hfSrc.Token = hubToken
 	s.hub = hub.NewManager(s.hubModelsRoot, noticeLogger(proxylog), hfSrc)
 	s.hub.OnComplete = func(hub.Job) error { return s.regenReload() }
-	// Sweep abandoned `.part` files once, in the background. The job list is in
-	// memory, so a crash or a kill leaves a partial nothing will ever mention
-	// again — but a partial is also resumable, hence the age gate: only ones
-	// untouched for hubPartialMaxAge go. Nothing is downloading yet at this
-	// point, and one process owns the models root (the multi-listener invariant),
-	// so nothing live can be in the way. Backgrounded because it walks the whole
-	// models tree, which is on a spinning disk often enough.
-	go func() {
-		if n, freed := hub.SweepPartials(s.hubModelsRoot(), hubPartialMaxAge, noticeLogger(proxylog)); n > 0 {
-			proxylog.Infof("hub: removed %d orphaned partial download(s), freeing %.1f GB", n, float64(freed)/(1<<30))
-		}
-	}()
 	s.updater = update.New(updateRepo, build.Version, noticeLogger(proxylog))
 	go s.updater.Run(s.shutdownCtx)
 	s.routes()
