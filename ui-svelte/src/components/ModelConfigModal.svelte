@@ -41,6 +41,7 @@
     noNoMmap,
     parseCtx,
     parseImageCmdFields,
+    planCustomArgsOff,
     specToggle,
     type ParsedImg,
   } from "./modelCmdForm";
@@ -570,7 +571,11 @@
       ub, adv.checkpointMinStep, adv.ropeScaling,
       // Custom launch arguments and the slot count size the plan too (the server
       // folds their pins in), so typing in the box is an edit like any field.
-      parallel, customArgs, customArgsOff,
+      // The enable toggle only counts when there is text to suppress (see
+      // planCustomArgsOff): flipping it over an empty box launches the same
+      // command, and counting it as an edit dropped the `actual` seed so the CTX
+      // readout jumped between the loaded window and the candidate plan.
+      parallel, customArgs, planCustomArgsOff(customArgs, customArgsOff),
       selectedV?.ctx, selectedV?.kvK, selectedV?.kvV, selectedV?.spec,
       selectedV?.vramTargetGB, selectedV?.ub, selectedV?.ctxCheckpoints,
       selectedV?.kvInRam, selectedV?.cpuOffload,

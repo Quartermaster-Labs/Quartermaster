@@ -150,7 +150,10 @@ as the text that replaces it.
 - **Estimate**: the `/estimate` endpoint gained `custom` (the effective text) and `parallel` (slot
   count) params; `Pins.ApplyToEstimate` folds the pins over the form fields, so the panel shows the
   pinned ctx and the KV its pool actually reserves (`parallel` charges every slot's share, which the
-  preview used to under-report).
+  preview used to under-report). `actual=true` instead seeds from the loaded command, and that
+  window is used exactly: `-c` is decoded as the total pool (`estimateInputFromCmd`) and never
+  re-rounded to the sizer's ladder. An empty text box and its enable toggle are one launch, so the
+  toggle only counts as an edit (dropping the `actual` seed) when there is text to suppress.
 
 ### The two panes
 
