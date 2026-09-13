@@ -50,6 +50,9 @@ type ComposedCmd struct {
 	Tokens []CmdToken `json:"tokens,omitempty"`
 	// Owned lists the knobs the custom text sets, sorted.
 	Owned []string `json:"ownedKnobs,omitempty"`
+	// Issues is what the editor's flag check found in Tokens. Empty for a
+	// command with no custom text, and never consumed by config emission.
+	Issues []CmdIssue `json:"issues,omitempty"`
 }
 
 // CustomArgsText returns the custom launch-argument text in effect: the new

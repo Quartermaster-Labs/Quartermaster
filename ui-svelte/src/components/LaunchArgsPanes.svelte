@@ -42,11 +42,23 @@
       : "e.g. --load-mode none -cram 2048",
   );
   const suppressed = $derived((layers?.tokens ?? []).filter((t) => t.suppressed).length);
+  // The flag check (table ∪ the backend's --help). An unknown flag only fails at
+  // spawn, after a save that looks successful, so it is shown as an error here
+  // and confirmed again on save; the other kinds are warnings.
+  const issues = $derived(layers?.issues ?? []);
+  const blocking = $derived(issues.some((i) => i.kind === "unknown"));
 </script>
 
 <details class="group">
   <summary class="cursor-pointer font-semibold text-sm uppercase tracking-wider text-txtsecondary hover:text-txtmain">
     Custom launch arguments {customArgs && !variant ? (customArgsOff ? "(saved, off)" : "(custom)") : ""}
+    {#if issues.length}
+      <span
+        class="ml-2 rounded px-1.5 py-0.5 text-[0.6rem] normal-case {blocking
+          ? 'bg-error/10 text-error'
+          : 'bg-warning/10 text-warning'}"
+      >{issues.length === 1 ? "1 issue" : `${issues.length} issues`}</span>
+    {/if}
   </summary>
   {#if variant}
     <p class="text-xs text-txtsecondary mt-2">
@@ -70,10 +82,23 @@
     rows="6"
     disabled={customArgsOff && !variant}
     placeholder={placeholder}
-    class="mt-2 w-full bg-background rounded border border-card-border p-3 text-xs font-mono whitespace-pre-wrap break-all resize-y text-txtmain {customArgsOff && !variant
+    class="mt-2 w-full bg-background rounded border {blocking
+      ? 'border-error'
+      : 'border-card-border'} p-3 text-xs font-mono whitespace-pre-wrap break-all resize-y text-txtmain {customArgsOff && !variant
       ? 'opacity-50'
       : ''}"
   ></textarea>
+  {#if issues.length}
+    <ul class="mt-2 space-y-1 text-xs">
+      {#each issues as issue}
+        <li class={issue.kind === "unknown" ? "text-error" : "text-warning"}>
+          <span class="font-mono">{issue.token}</span>: {issue.message}{#if issue.suggestions?.length}; did you mean <span
+              class="font-mono">{issue.suggestions.join(" or ")}</span
+            >?{/if}
+        </li>
+      {/each}
+    </ul>
+  {/if}
 </details>
 
 <details class="group">

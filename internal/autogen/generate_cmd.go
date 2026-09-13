@@ -757,7 +757,12 @@ func RenderSoloCmdLayers(s Settings, meta Metadata, row GgufRow, ov Override) (C
 		ngl, ncpuMoe = applyForcedOffload(meta, ov.CpuOffload)
 	}
 	lines := buildCmdLines(s, meta, row, prof, ctx, ngl, ncpuMoe, kvK, kvV, ov.KvInRam, &ov)
-	return ComposeCmd(lines, ov.CustomArgsText())
+	cc, err := ComposeCmd(lines, ov.CustomArgsText())
+	if err != nil {
+		return cc, err
+	}
+	cc.Issues = validateComposed(cc, be.Exe)
+	return cc, nil
 }
 
 // specHas reports whether a "+"-joined spec list contains backend b.

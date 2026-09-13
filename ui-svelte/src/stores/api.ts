@@ -672,6 +672,17 @@ export interface CmdToken {
   suppressed?: boolean;
 }
 
+// One complaint from the launch-argument flag check. "unknown" means neither
+// the flag table nor the selected backend's --help knows the flag, so the spawn
+// will die; "unverified" means the probe could not run; "backend-missing" means
+// the table has the flag but this build's help does not list it.
+export interface CmdIssue {
+  token: string;
+  kind: "unknown" | "unverified" | "backend-missing" | string;
+  message: string;
+  suggestions?: string[];
+}
+
 // A rendered launch command in layers.
 export interface PreviewLayers {
   /** The effective command (also returned as `cmd`). */
@@ -683,6 +694,8 @@ export interface PreviewLayers {
   /** Knobs the custom text sets, so the pane can say what it replaced. */
   ownedKnobs?: string[];
   tokens?: CmdToken[];
+  /** Flag check results, table ∪ the selected backend's --help. */
+  issues?: CmdIssue[];
 }
 
 // Render the full launch command for a candidate override (no persistence), in

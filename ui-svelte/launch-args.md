@@ -184,9 +184,21 @@ Two sources, unioned:
    budget as `ListBackendDevices` (`internal/autogen/backenddev.go`).
 
 Rules: unknown to both = error with a nearest-match suggestion; known to the table but not to this
-binary = warning ("this backend is older than the flag"); autocomplete comes from the union. The same
-check runs at startup against the generated command, so an emitter flag the installed binary no
-longer accepts becomes a visible notice instead of a spawn failure.
+binary = warning ("this backend is older than the flag"); a flag only the binary lists (newer build
+than the table) is accepted silently; autocomplete comes from the union. The same check runs at
+startup against the generated command, so an emitter flag the installed binary no longer accepts
+becomes a visible notice instead of a spawn failure.
+
+Enforcement is **warn + confirm, never a block** (decided 2026-09-13): the pane shows each issue
+inline, tints the box, and Save asks first when an unknown flag stands ("llama-server will refuse to
+start with --cms"), then stores the text if confirmed. The check runs against the override about to
+be PUT, so a debounced keystroke cannot make the confirm lie; the Default tab and every variant with
+its own text are checked. A flag the probe could not judge (backend `--help` unreadable) is a warning,
+never a confirm. Rationale: the text is the user's, the API is used by qm-tools and hand edits too,
+and a hard reject would trap a real flag the checked-in table has not learned yet.
+
+Implemented (`internal/autogen/validate.go`, `RenderSoloCmdLayers`; pane + save guard in
+`LaunchArgsPanes.svelte` / `ModelConfigModal.svelte`); autocomplete and the startup check are not.
 
 ### Variants
 
@@ -214,13 +226,14 @@ the new meaning.
 
 1. **Go**: flag table, composition/reconcile, split DTO (`custom` / `generated` / `effective` /
    `tokens` / `issues`), shadowed-field zeroing in `applyOverrideDTO`, backend `--help` probe.
-   Done on `radu0120/launch-args` (`flagtable.go`, `customargs.go`, `backendhelp.go`);
-   `issues` waits for the validation phase.
+   Done on `radu0120/launch-args` (`flagtable.go`, `customargs.go`, `backendhelp.go`,
+   `validate.go`).
 2. **Modal (llama form only)**: the two panes, verbatim editor, read-only provenance box; delete the
    blur parse. Issue #38 is fixed here. Done on `radu0120/launch-args`
    (`LaunchArgsPanes.svelte`; `parseCmdFields`, `IGNORE_VALUE`/`IGNORE_BOOL` and their tests deleted).
 3. **Controls**: write tokens, presence-based pins, reset to auto, plumbing confirmations.
-4. **Validation UI**: inline issues, autocomplete, startup check.
+4. **Validation UI**: inline issues + save confirm done (2026-09-13); autocomplete and the startup
+   check remain.
 5. **Later**: pins feed the sizer; the same panes for the image, audio and SAM forms with their own
    tables.
 

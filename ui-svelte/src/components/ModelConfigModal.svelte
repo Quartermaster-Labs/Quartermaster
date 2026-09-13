@@ -1358,11 +1358,43 @@
     dialogEl?.close();
   }
 
+  // An unknown launch flag only fails at spawn, after the save looks successful,
+  // so ask before storing one. The preview is the authority (flag table ∪ this
+  // backend's --help) and it runs against the very override about to be PUT, so
+  // a debounced keystroke cannot make the confirm lie. Checks the Default tab
+  // and every variant that carries its own text.
+  async function unknownLaunchFlags(): Promise<string[]> {
+    if (!modelId || isVllm || imageMode || audioMode || samMode) return [];
+    const ask = (ov: ModelOverride) =>
+      previewCmd(modelId!, ov)
+        .then((l) => (l.issues ?? []).filter((i) => i.kind === "unknown").map((i) => i.token))
+        .catch(() => []);
+    const checks: Promise<string[]>[] = [];
+    if (customArgs.trim() !== "") checks.push(ask(buildOverride()));
+    for (const v of variants) {
+      if ((v.customArgs ?? "").trim() !== "") checks.push(ask(variantToOverride(v)));
+    }
+    return [...new Set((await Promise.all(checks)).flat())];
+  }
+
   async function save() {
     if (!modelId) return;
     saving = true;
     error = null;
     try {
+      const unknown = await unknownLaunchFlags();
+      if (unknown.length) {
+        // Release the button so the dialog is the only thing to answer.
+        saving = false;
+        const ok = await askConfirm({
+          title: unknown.length === 1 ? "Unknown launch flag" : `${unknown.length} unknown launch flags`,
+          body: `llama-server will refuse to start with ${unknown.join(", ")} in the custom launch arguments.`,
+          confirmLabel: "Save anyway",
+          danger: true,
+        });
+        if (!ok) return;
+        saving = true;
+      }
       await putModelOverride(modelId, buildOverride());
       // Fleet-wide default variants saved separately (global) only when edited.
       if (JSON.stringify(defaultVariants) !== origDefaultVariants) {
