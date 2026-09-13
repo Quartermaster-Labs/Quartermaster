@@ -13,9 +13,9 @@ type EstimateInput struct {
 	// 4096 multiple the way an auto pick is.
 	CtxExact bool
 	KvK      string
-	KvV     string
-	KvInRam bool
-	Spec    string
+	KvV      string
+	KvInRam  bool
+	Spec     string
 	// RopeScaling ("linear"/"yarn") lets Ctx exceed the model's trained length —
 	// the preview must know, or it silently sizes a clamped window and reports a
 	// KV reserve the real launch won't have.

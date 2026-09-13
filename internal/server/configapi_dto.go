@@ -131,21 +131,21 @@ type overrideDTO struct {
 	CpuOffload         int     `json:"cpuOffload"`
 	// Mmproj places the vision twin's CLIP projector: "" auto | "gpu" | "ram"
 	// (--no-mmproj-offload) | "none" (no twin at all).
-	Mmproj           string `json:"mmproj"`
-	Spec             string `json:"spec"`
-	ReasoningFmt     string `json:"reasoningFmt"`
-	ReasoningBudget  int    `json:"reasoningBudget"`
-	FlashAttn        string `json:"flashAttn"`
-	Mmap             string `json:"mmap"`
-	Mlock            bool   `json:"mlock"`
-	Threads          int    `json:"threads"`
-	Parallel         int    `json:"parallel"`
-	Ub               int    `json:"ub"`
+	Mmproj          string `json:"mmproj"`
+	Spec            string `json:"spec"`
+	ReasoningFmt    string `json:"reasoningFmt"`
+	ReasoningBudget int    `json:"reasoningBudget"`
+	FlashAttn       string `json:"flashAttn"`
+	Mmap            string `json:"mmap"`
+	Mlock           bool   `json:"mlock"`
+	Threads         int    `json:"threads"`
+	Parallel        int    `json:"parallel"`
+	Ub              int    `json:"ub"`
 	// CustomArgs is the user's verbatim launch-argument text; CustomArgsOff keeps
 	// it in the sidecar without applying it (the editor's enable toggle).
-	CustomArgs    string `json:"customArgs"`
-	CustomArgsOff bool   `json:"customArgsOff"`
-	ExtraArgs     string `json:"extraArgs"`
+	CustomArgs       string `json:"customArgs"`
+	CustomArgsOff    bool   `json:"customArgsOff"`
+	ExtraArgs        string `json:"extraArgs"`
 	ChatTemplateFile string `json:"chatTemplateFile"`
 	MmprojFile       string `json:"mmprojFile"`
 	Unlisted         bool   `json:"unlisted"`
