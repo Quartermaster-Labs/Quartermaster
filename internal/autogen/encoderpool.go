@@ -404,14 +404,24 @@ func better(f, best ComponentFile) bool {
 // its vision tower does not fail, it silently conditions on nothing and emits an
 // unrelated image, which is worse than not starting at all.
 //
+// prefer is the declared settings.encoders.qwenLlm (empty when none declared).
+// A declared file that clears the same width and vision gates wins outright:
+// width only narrows the field, it does not name the file a publisher trained
+// against. Qwen3-4B-Instruct-2507 and Qwen3-VL-4B-Instruct are both 2560 wide
+// and round to the same size, so the tiebreak below will hand one of them to
+// either kind of DiT; a user who pinned the right one has answered the question.
+// A prefer that fails the gates (wrong width, no vision tower for a vision
+// model, a file the scan never saw) is ignored and the scan decides.
+//
 // Ties break by encoderArchRank, then file size, then path (see better).
-func (p *EncoderPool) Llm(hidden int64, wantVision bool) (path, mmproj string) {
+func (p *EncoderPool) Llm(hidden int64, wantVision bool, prefer string) (path, mmproj string) {
 	if p == nil {
 		return "", ""
 	}
 	if hidden <= 0 {
 		return "", ""
 	}
+	pin := config.PathKey(strings.TrimSpace(prefer))
 	var best ComponentFile
 	for _, f := range p.Files {
 		if f.Role != RoleLlm || f.Width != hidden {
@@ -419,6 +429,9 @@ func (p *EncoderPool) Llm(hidden int64, wantVision bool) (path, mmproj string) {
 		}
 		if wantVision && !f.Vision {
 			continue
+		}
+		if pin != "" && config.PathKey(f.Path) == pin {
+			return f.Path, f.Mmproj
 		}
 		if best.Path == "" || better(f, best) {
 			best = f

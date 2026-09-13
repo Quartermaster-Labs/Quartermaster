@@ -306,6 +306,10 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 - **`settings.encoders` is now a PIN, not the source.** Diffusion component paths are
   discovered structurally (`encoderpool.go`, see `classes.md`), and `fillEncoderSet` fills only
   the roles left blank, so a declared path always wins and no existing config changes behaviour.
+  `qwenLlm` was the exception until v71: the scan ignored a declared pin whenever it found any
+  encoder of the DiT's width, so the Qwen3-4B vs Qwen3-VL-4B tie silently overrode the user.
+  `EncoderPool.Llm` now takes the declaration as `prefer` and returns it when it clears the same
+  width/vision gates, which is why configs with a pin regen once.
   Two consequences worth remembering: the pool holds every ordinary chat gguf too (any decoder
   can be a text encoder), so a change to how candidates are ranked can silently re-point a
   working image model, and `resolveComponents` therefore takes both the pool and the DiT's
