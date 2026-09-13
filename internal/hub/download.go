@@ -212,6 +212,133 @@ func (m *Manager) Job(id string) (Job, bool) {
 	return *j, true
 }
 
+// Restore rebuilds the job list from the journals left next to unfinished
+// downloads, so a transfer that was in flight when the process died comes back
+// as a PAUSED job with its progress read off the disk — the same row Pause
+// produces, which is what makes the existing Resume button the way to continue
+// it. Nothing restarts on its own: a 40 GB pull that began before a reboot is
+// the user's to resume, not something to spend their line on unasked.
+//
+// It runs once, before the server serves requests. A record with no bytes
+// anywhere is cleared rather than shown as an empty row, and one whose files
+// are already complete on disk is dropped as done. maxPartialAge is the same
+// age gate SweepPartials uses: a `.part` at or beyond it is treated as gone, so
+// the two cannot disagree about which bytes survived.
+func (m *Manager) Restore(maxPartialAge time.Duration) int {
+	root := strings.TrimSpace(m.ModelsRoot())
+	if root == "" {
+		return 0
+	}
+	type found struct {
+		dir string
+		rec downloadRecord
+	}
+	var founds []found
+	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Name() != journalName {
+			return nil
+		}
+		for _, rec := range readJournal(filepath.Dir(p)).Jobs {
+			founds = append(founds, found{dir: filepath.Dir(p), rec: rec})
+		}
+		return nil
+	})
+	sort.Slice(founds, func(i, j int) bool { return founds[i].rec.Started.Before(founds[j].rec.Started) })
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, f := range founds {
+		if len(f.rec.Files) == 0 || f.rec.ID == "" {
+			continue
+		}
+		if _, dup := m.jobs[f.rec.ID]; dup {
+			continue
+		}
+		job, state := m.restoreJob(f.dir, f.rec, maxPartialAge)
+		switch state {
+		case restoreNothing:
+			// No bytes anywhere and nothing complete: whatever this job was, it
+			// has no work to continue (a `.part` the sweep took, or a queued job
+			// that never opened a file).
+			m.clearDownload(job.Dir, job.ID)
+			continue
+		case restoreComplete:
+			// Every file landed before the process died, possibly between the
+			// rename and the config refresh. The bytes are the truth; model
+			// discovery will pick them up without a row.
+			m.clearDownload(job.Dir, job.ID)
+			continue
+		}
+		m.jobs[job.ID] = job
+		m.order = append(m.order, job.ID)
+		n++
+	}
+	return n
+}
+
+// restoreState is what Restore decides to do with a record after looking at the
+// disk: there is work to resume, there is nothing there at all, or the download
+// is already complete.
+type restoreState int
+
+const (
+	restoreWork restoreState = iota
+	restoreNothing
+	restoreComplete
+)
+
+// restoreJob turns a journal record into a paused job, recomputing each file's
+// progress from the disk exactly the way run() would judge it on resume: a
+// complete file at the recorded revision counts as skipped, a `.part` counts
+// its bytes, and a file whose bytes predate the recorded revision counts as a
+// replacement about to happen (zero progress). No byte counter is trusted —
+// the disk is what survived the crash, not the journal.
+func (m *Manager) restoreJob(dir string, rec downloadRecord, maxPartialAge time.Duration) (*Job, restoreState) {
+	man := readManifest(dir)
+	files := make([]JobFile, 0, len(rec.Files))
+	var done, total int64
+	complete, touched := true, false
+	for _, rf := range rec.Files {
+		f := JobFile{Path: rf.Path, Size: rf.Size, OID: rf.OID}
+		dst := filepath.Join(dir, filepath.FromSlash(f.Path))
+		switch {
+		case m.haveCurrent(dir, f, man, rec.Force):
+			f.Skipped, f.Done = true, f.Size
+		case existingSize(dst) > 0:
+			// An older revision is on disk; the job refetches it from zero.
+			f.Replaced = true
+			touched = true
+		default:
+			if n := resumablePart(dst+partSuffix, maxPartialAge); n > 0 {
+				f.Done = n
+				if f.Size > 0 && f.Done > f.Size {
+					f.Done = f.Size
+				}
+				touched = true
+			}
+		}
+		if f.Size <= 0 || f.Done < f.Size {
+			complete = false
+		}
+		done += f.Done
+		total += f.Size
+		files = append(files, f)
+	}
+	job := &Job{
+		ID: rec.ID, Source: rec.Source, Repo: rec.Repo, Label: rec.Label,
+		Dir: dir, Files: files, Phase: PhasePaused, Downloaded: done, Total: total,
+		Force: rec.Force, Started: rec.Started,
+	}
+	switch {
+	case complete && total > 0:
+		return job, restoreComplete
+	case !touched && done == 0:
+		return job, restoreNothing
+	}
+	return job, restoreWork
+}
+
 func (m *Manager) update(id string, fn func(*Job)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -269,6 +396,13 @@ func (m *Manager) Cancel(id string) error {
 	// job, and deleting it would throw away someone else's bytes.
 	if !running && known && m.dequeueLocked(id) {
 		j.Phase, j.Finished = PhaseCanceled, time.Now()
+		// Nothing is discarded — a queued job never opened a file — but its
+		// journal record goes, and so do the empty folders Start created to hold
+		// it. Both removals only succeed while nothing else is using them.
+		m.clearDownload(j.Dir, id)
+		if os.Remove(j.Dir) == nil {
+			_ = os.Remove(filepath.Dir(j.Dir))
+		}
 		m.mu.Unlock()
 		return nil
 	}
@@ -428,6 +562,9 @@ func (m *Manager) discard(j Job) {
 	// A record for a file that is no longer there would be judged against the
 	// next download of the same name, which is a different file entirely.
 	m.forgetManifest(j.Dir, gone)
+	// The journal record goes with the bytes it described: nothing here is left
+	// to resume. Other jobs sharing this folder keep their own records.
+	m.clearDownload(j.Dir, j.ID)
 	// Both only succeed while empty, which is exactly when they should go — the
 	// repo folder, then the publisher folder it nests in.
 	if os.Remove(j.Dir) == nil {
@@ -531,6 +668,152 @@ func (m *Manager) forgetManifest(dir string, paths []string) {
 	}
 }
 
+// journalName is the per-repo record of downloads that have not finished. It
+// sits next to the bytes it describes, like the manifest, and is dotted for
+// the same reason: model discovery is looking for weights, not bookkeeping.
+//
+// The job list itself is deliberately in memory — a finished download needs no
+// history. But a job that was mid-transfer when the process died is not
+// finished, and its `.part` files are invisible to the UI: the bytes are on
+// disk (and a re-download resumes into them with Range), yet nothing mentions
+// them, so an interrupted 40 GB pull reads as if it never happened. This
+// journal is what lets Restore put those jobs back in the list as paused
+// transfers with a Resume button.
+const journalName = ".quartermaster-download.json"
+
+// downloadRecord is one unfinished job as written to the journal. It carries
+// only what the manager cannot rebuild: which hub and repo the bytes come from,
+// which files the job was fetching, and their revision ids. Progress is NOT
+// stored — Restore recomputes it from the sizes on disk, so a journal that
+// stopped being updated at the moment of a kill is still right.
+type downloadRecord struct {
+	ID      string       `json:"id"`
+	Source  string       `json:"source"`
+	Repo    string       `json:"repo"`
+	Label   string       `json:"label,omitempty"`
+	Force   bool         `json:"force,omitempty"`
+	Started time.Time    `json:"started"`
+	Files   []recordFile `json:"files"`
+}
+
+// recordFile is the persisted half of a JobFile: the identity of one file in
+// the job. The live counters (Done, Skipped, Replaced) are recomputed.
+type recordFile struct {
+	Path string `json:"path"`
+	Size int64  `json:"size"`
+	OID  string `json:"oid,omitempty"`
+}
+
+// downloadJournal is the file's shape: a LIST, because a repo may hold several
+// jobs at once (two quants, or a model and its projector) and they share one
+// folder, hence one journal.
+type downloadJournal struct {
+	Jobs []downloadRecord `json:"jobs"`
+}
+
+// journalMu serialises the read-modify-write of the journals, the way
+// manifestMu does for the manifests.
+var journalMu sync.Mutex
+
+// readJournal returns a repo folder's unfinished-download records, empty when
+// there are none. A missing or unparseable journal means "nothing to resume".
+func readJournal(dir string) downloadJournal {
+	var j downloadJournal
+	b, err := os.ReadFile(filepath.Join(dir, journalName))
+	if err != nil {
+		return downloadJournal{}
+	}
+	if json.Unmarshal(b, &j) != nil {
+		return downloadJournal{}
+	}
+	return j
+}
+
+// writeJournal writes the journal, removing the file when the last record is
+// gone so it cannot keep the repo folder alive. Best-effort: a failed write
+// costs the resume affordance for one job, never the download itself.
+func (m *Manager) writeJournal(dir string, j downloadJournal) {
+	path := filepath.Join(dir, journalName)
+	if len(j.Jobs) == 0 {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			m.log("hub: could not remove the download journal in " + dir + ": " + err.Error())
+		}
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		m.log("hub: could not create " + dir + " for the download journal: " + err.Error())
+		return
+	}
+	b, err := json.MarshalIndent(j, "", "  ")
+	if err == nil {
+		err = os.WriteFile(path, b, 0o644)
+	}
+	if err != nil {
+		m.log("hub: could not write the download journal in " + dir + ": " + err.Error())
+	}
+}
+
+// recordDownload adds or replaces one job's record. Replacing by id is what
+// makes this safe to call for a job already in the journal.
+func (m *Manager) recordDownload(dir string, rec downloadRecord) {
+	journalMu.Lock()
+	defer journalMu.Unlock()
+	j := readJournal(dir)
+	replaced := false
+	for i := range j.Jobs {
+		if j.Jobs[i].ID == rec.ID {
+			j.Jobs[i], replaced = rec, true
+			break
+		}
+	}
+	if !replaced {
+		j.Jobs = append(j.Jobs, rec)
+	}
+	m.writeJournal(dir, j)
+}
+
+// clearDownload forgets a job that reached a terminal state with nothing left
+// to resume — done, or canceled and discarded. A paused job and a failed one
+// keep their record: both left bytes on disk, and both are worth offering
+// again after a restart.
+func (m *Manager) clearDownload(dir, id string) {
+	journalMu.Lock()
+	defer journalMu.Unlock()
+	j := readJournal(dir)
+	kept := j.Jobs[:0]
+	for _, rec := range j.Jobs {
+		if rec.ID != id {
+			kept = append(kept, rec)
+		}
+	}
+	j.Jobs = kept
+	m.writeJournal(dir, j)
+}
+
+// resumablePart is the size of a fresh-enough `.part`, or 0 when the file is
+// missing or old enough that the startup sweep will delete it. Restore and
+// SweepPartials share the age test on purpose: counting swept bytes as progress
+// would raise a 40% row that resumes from zero.
+func resumablePart(path string, maxAge time.Duration) int64 {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return 0
+	}
+	if maxAge > 0 && !info.ModTime().After(time.Now().Add(-maxAge)) {
+		return 0
+	}
+	return info.Size()
+}
+
+// recordFiles is the persisted view of a job's file list.
+func recordFiles(files []JobFile) []recordFile {
+	out := make([]recordFile, 0, len(files))
+	for _, f := range files {
+		out = append(out, recordFile{Path: f.Path, Size: f.Size, OID: f.OID})
+	}
+	return out
+}
+
 // LocalFile is what this installation has for one repo-relative path: the size
 // actually on disk, and the content id it was fetched at when we know one.
 type LocalFile struct {
@@ -571,7 +854,7 @@ func (m *Manager) LocalFiles(repo string) map[string]LocalFile {
 		if err != nil || d.IsDir() {
 			return nil
 		}
-		if strings.HasSuffix(path, partSuffix) || d.Name() == manifestName {
+		if strings.HasSuffix(path, partSuffix) || d.Name() == manifestName || d.Name() == journalName {
 			return nil
 		}
 		rel, relErr := filepath.Rel(dir, path)
@@ -689,12 +972,21 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (string, error) {
 	key := src.ID() + "/" + req.Repo
 	m.seq++
 	id := fmt.Sprintf("dl-%d-%d", time.Now().UnixNano()/1e6, m.seq)
-	m.jobs[id] = &Job{
+	job := &Job{
 		ID: id, Source: src.ID(), Repo: req.Repo, Label: req.Label,
 		Dir: dir, Files: files, Phase: PhaseQueued, Total: total,
 		Force: req.Force, Started: time.Now(),
 	}
+	m.jobs[id] = job
 	m.order = append(m.order, id)
+	// Journal the job BEFORE it can run. run() is a goroutine that may finish a
+	// tiny file and clear the record before this function would otherwise have
+	// written it, and a record written after that clear would resurrect a
+	// finished download on the next start.
+	m.recordDownload(dir, downloadRecord{
+		ID: id, Source: job.Source, Repo: job.Repo, Label: job.Label,
+		Force: job.Force, Started: job.Started, Files: recordFiles(files),
+	})
 	// Trim finished jobs out of the history, never a running one.
 	for len(m.order) > maxJobs {
 		old := m.order[0]
@@ -801,6 +1093,13 @@ func (m *Manager) run(ctx context.Context, id string, src Source) {
 	man := readManifest(job.Dir)
 	need := job.Total
 	for i, f := range job.Files {
+		// Recompute, never inherit: this precheck also runs on a resume, and the
+		// flags from the previous pass describe the disk as it was before the
+		// pause (or before the restart Restore rebuilt them from). A file that
+		// was skipped can be gone by now, and a replacement can have already
+		// happened; a leftover flag would silently fetch or keep the wrong
+		// revision.
+		job.Files[i].Skipped, job.Files[i].Replaced = false, false
 		if m.haveCurrent(job.Dir, f, man, job.Force) {
 			job.Files[i].Skipped = true
 			need -= f.Size
@@ -881,6 +1180,7 @@ func (m *Manager) run(ctx context.Context, id string, src Source) {
 		if err := m.OnComplete(cur); err != nil {
 			// The files ARE on disk; only the config refresh failed. Say so
 			// rather than reporting a failed download the user would retry.
+			m.clearDownload(job.Dir, id)
 			m.update(id, func(j *Job) {
 				j.Phase, j.Finished = PhaseDone, time.Now()
 				j.Err = "downloaded, but refreshing the config failed: " + err.Error()
@@ -888,6 +1188,7 @@ func (m *Manager) run(ctx context.Context, id string, src Source) {
 			return
 		}
 	}
+	m.clearDownload(job.Dir, id)
 	m.update(id, func(j *Job) { j.Phase, j.Finished = PhaseDone, time.Now() })
 	m.log(fmt.Sprintf("hub: %s downloaded into %s", job.Repo, job.Dir))
 }

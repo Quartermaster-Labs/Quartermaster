@@ -75,6 +75,34 @@ func (s *Server) hubModelsRoot() string {
 	return set.ModelsRoot
 }
 
+// StartHubDownloads brings the model browser's transfer bookkeeping online at
+// boot: downloads that were in flight when the process last died are restored
+// as paused jobs, then orphaned `.part` files are swept. Called once by main
+// AFTER SetAutogenAdmin, because the models root is only knowable once the
+// admin is attached — run from New(), both would see the empty string and
+// quietly do nothing. Restore is synchronous (the first UI poll must already
+// see the restored rows); the sweep is backgrounded, since it walks the whole
+// models tree, which is on a spinning disk often enough.
+func (s *Server) StartHubDownloads() {
+	if s.hub == nil {
+		return
+	}
+	if n := s.hub.Restore(hubPartialMaxAge); n > 0 {
+		s.proxylog.Infof("hub: restored %d unfinished download(s) from disk", n)
+	}
+	// A partial is resumable, so a fresh one is left alone — the journal above
+	// brings it back as a paused row — while one nothing has touched for
+	// hubPartialMaxAge is garbage, journal or no journal. Nothing is
+	// transferring yet at this point (the listeners are not up), and one process
+	// owns the models root (the multi-listener invariant), so nothing live can
+	// be in the way.
+	go func() {
+		if n, freed := hub.SweepPartials(s.hubModelsRoot(), hubPartialMaxAge, noticeLogger(s.proxylog)); n > 0 {
+			s.proxylog.Infof("hub: removed %d orphaned partial download(s), freeing %.1f GB", n, float64(freed)/(1<<30))
+		}
+	}()
+}
+
 // hubToken supplies the credential for gated and private repos. For now it is
 // the standard environment variable the huggingface CLI already writes, so a
 // user who has logged in elsewhere on the box needs no extra setup; a stored,

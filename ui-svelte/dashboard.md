@@ -35,6 +35,11 @@ restated what the Models page already shows.
   `window.confirm()` because the byte count is the fact the decision turns on, and a native
   dialog can't show it (and can be suppressed by the browser). Escape backs out of the armed
   confirm before it closes the panel.
+- **A download interrupted by a restart comes back as a paused row.** The server journals
+  unfinished jobs beside the bytes (`internal/hub`), so reopening quartermaster lists what was
+  in flight with its progress reconstructed from the `.part` files — Resume is the same button,
+  and nothing restarts on its own. No UI code is involved: the restored job is an ordinary
+  `paused` job, which is exactly the state the row already renders.
 - Every verb refreshes the store immediately: after a pause nothing is polling, so the row
   proving it worked would otherwise never arrive.
 - Jobs live in a **store, not in the component**, because a 40 GB pull outlives whatever page

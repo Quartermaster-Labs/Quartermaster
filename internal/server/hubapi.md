@@ -6,8 +6,11 @@ The `/api/hub/*` surface over `internal/hub`, backing the UI's `/browse` page
 ## `hubapi.go`
 
 Search, repo detail, and download start/poll/pause/resume/cancel. `hubPartialMaxAge` is the age
-gate for the startup `hub.SweepPartials` orphan sweep, kicked off in `server.go` beside the
-`OnComplete` wiring.
+gate for both `hub.Manager.Restore(hubPartialMaxAge)` — which brings downloads that were in
+flight when the process last died back as paused jobs with their progress read off the `.part`
+files — and the `hub.SweepPartials` orphan sweep. Both run from `StartHubDownloads`, which
+`main` calls once the autogen admin (and with it the models root) is attached; run from
+`server.New` they would resolve an empty root and quietly do nothing.
 
 It owns the two things the engine deliberately doesn't:
 

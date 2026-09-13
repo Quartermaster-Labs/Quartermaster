@@ -147,6 +147,10 @@ func TestManager_DownloadsEveryFile(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "a-00001-of-00002.gguf"+partSuffix)); !os.IsNotExist(err) {
 		t.Error(".part file left behind after a successful download")
 	}
+	// Nor may the journal: there is nothing left to resume.
+	if _, err := os.Stat(filepath.Join(dir, journalName)); !os.IsNotExist(err) {
+		t.Error("the download journal survived a finished job")
+	}
 }
 
 func TestManager_ResumesAfterDroppedConnection(t *testing.T) {
@@ -560,6 +564,306 @@ func TestManager_CancelQueuedJob(t *testing.T) {
 	waitJob(t, m, first)
 }
 
+// waitForBytes waits until size(path) is positive, so a test can pause a held
+// transfer knowing some bytes really landed rather than racing the cancel.
+func waitForBytes(t *testing.T, path string) int64 {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if n := partSize(path); n > 0 {
+			return n
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("no bytes ever landed in %s", path)
+	return 0
+}
+
+// A download interrupted by a process kill leaves its `.part` and a journal
+// record beside it. Restore has to turn that back into a paused job whose
+// progress is read off the disk, and the existing Resume verb has to finish it
+// — this is the whole point of the journal.
+func TestManager_RestoreResumesPartial(t *testing.T) {
+	blob := blobOf(1 << 20)
+	srv, stop := heldServer(t, blob, 4096)
+
+	root := t.TempDir()
+	src := &fakeSource{base: srv.URL, files: []File{{Path: "m.gguf", SizeBytes: int64(len(blob))}}}
+	m := NewManager(func() string { return root }, nil, src)
+
+	id, err := m.Start(context.Background(), StartRequest{
+		Source: "fake", Repo: "o/r", Files: []string{"m.gguf"}, Label: "m.gguf",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	part := filepath.Join(root, "o", "r", "m.gguf"+partSuffix)
+	waitForBytes(t, part)
+	if err := m.Pause(id); err != nil {
+		t.Fatal(err)
+	}
+	waitPhase(t, m, id, PhasePaused)
+
+	// A fresh Manager over the same folder stands in for a restarted process:
+	// the old job list is gone, only the disk survived.
+	m2 := NewManager(func() string { return root }, nil, src)
+	if n := m2.Restore(24 * time.Hour); n != 1 {
+		t.Fatalf("Restore returned %d jobs, want 1", n)
+	}
+	job, ok := m2.Job(id)
+	if !ok {
+		t.Fatalf("the journaled job %s was not restored", id)
+	}
+	if job.Phase != PhasePaused {
+		t.Errorf("restored job is %q, want paused", job.Phase)
+	}
+	if job.Label != "m.gguf" || job.Repo != "o/r" || job.Source != "fake" {
+		t.Errorf("restored job lost its identity: %+v", job)
+	}
+	if job.Downloaded <= 0 || job.Downloaded >= job.Total {
+		t.Errorf("restored progress = %d/%d, want a partial count", job.Downloaded, job.Total)
+	}
+	if job.Files[0].Done != job.Downloaded {
+		t.Errorf("file progress %d disagrees with job progress %d", job.Files[0].Done, job.Downloaded)
+	}
+
+	// Resume against a server that answers in full; the bytes already on disk
+	// must carry over rather than being fetched again.
+	stop()
+	full := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Range") == "" {
+			t.Error("resume did not send a Range header")
+		}
+		serveBlob(w, r, blob, 0)
+	}))
+	defer full.Close()
+	src.base = full.URL
+
+	if err := m2.Resume(id); err != nil {
+		t.Fatal(err)
+	}
+	got := waitJob(t, m2, id)
+	if got.Phase != PhaseDone {
+		t.Fatalf("resumed job ended %q (%s), want done", got.Phase, got.Err)
+	}
+	b, err := os.ReadFile(filepath.Join(root, "o", "r", "m.gguf"))
+	if err != nil || !bytes.Equal(b, blob) {
+		t.Errorf("resumed file mismatch: err %v, %d bytes", err, len(b))
+	}
+}
+
+// Restore must rebuild per-file progress: a shard that finished before the kill
+// counts complete, the one that was running counts its `.part`, and the two add
+// up to the row's progress.
+func TestManager_RestoreKeepsFinishedFiles(t *testing.T) {
+	finished, running := blobOf(2048), blobOf(1<<20)
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "a.gguf") {
+			serveBlob(w, r, finished, 0)
+			return
+		}
+		w.Write(running[:4096])
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
+		<-release
+	}))
+	defer srv.Close()
+	defer close(release)
+	srv.Config.ErrorLog = discardLogger()
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "o", "r")
+	src := &fakeSource{base: srv.URL, files: []File{
+		{Path: "a.gguf", SizeBytes: int64(len(finished))},
+		{Path: "b.gguf", SizeBytes: int64(len(running))},
+	}}
+	m := NewManager(func() string { return root }, nil, src)
+	id, err := m.Start(context.Background(), StartRequest{
+		Source: "fake", Repo: "o/r", Files: []string{"a.gguf", "b.gguf"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Wait for a.gguf to land and b.gguf's partial to start, then stop mid-flight.
+	waitForBytes(t, filepath.Join(dir, "b.gguf"+partSuffix))
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) && existingSize(filepath.Join(dir, "a.gguf")) < int64(len(finished)) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if existingSize(filepath.Join(dir, "a.gguf")) != int64(len(finished)) {
+		t.Fatal("the first shard never landed")
+	}
+	if err := m.Pause(id); err != nil {
+		t.Fatal(err)
+	}
+	waitPhase(t, m, id, PhasePaused)
+
+	m2 := NewManager(func() string { return root }, nil, src)
+	if n := m2.Restore(24 * time.Hour); n != 1 {
+		t.Fatalf("Restore returned %d jobs, want 1", n)
+	}
+	job, _ := m2.Job(id)
+	if !job.Files[0].Skipped || job.Files[0].Done != int64(len(finished)) {
+		t.Errorf("finished shard not restored as complete: %+v", job.Files[0])
+	}
+	if job.Files[1].Done <= 0 || job.Files[1].Done >= int64(len(running)) {
+		t.Errorf("partial shard progress = %d, want a partial count", job.Files[1].Done)
+	}
+	if want := int64(len(finished)) + job.Files[1].Done; job.Downloaded != want {
+		t.Errorf("job progress = %d, want %d", job.Downloaded, want)
+	}
+	if job.Total != int64(len(finished)+len(running)) {
+		t.Errorf("job total = %d, want %d", job.Total, len(finished)+len(running))
+	}
+
+	// The finished shard is removed while the job is parked. Resume must refetch
+	// it rather than trust the restored Skipped flag — that flag described the
+	// disk at restore time, not now.
+	if err := os.Remove(filepath.Join(dir, "a.gguf")); err != nil {
+		t.Fatal(err)
+	}
+	full := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "a.gguf") {
+			serveBlob(w, r, finished, 0)
+			return
+		}
+		serveBlob(w, r, running, 0)
+	}))
+	defer full.Close()
+	src.base = full.URL
+	if err := m2.Resume(id); err != nil {
+		t.Fatal(err)
+	}
+	got := waitJob(t, m2, id)
+	if got.Phase != PhaseDone {
+		t.Fatalf("resumed job ended %q (%s), want done", got.Phase, got.Err)
+	}
+	for name, want := range map[string][]byte{"a.gguf": finished, "b.gguf": running} {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || !bytes.Equal(b, want) {
+			t.Errorf("%s after resume: err %v, %d bytes", name, err, len(b))
+		}
+	}
+}
+
+// Two jobs share one repo folder and therefore one journal file, and both have
+// to come back after a restart.
+func TestManager_RestoreKeepsBothJobsForOneRepo(t *testing.T) {
+	blob := blobOf(1 << 20)
+	srv, stop := heldServer(t, blob, 4096)
+	defer stop()
+
+	root := t.TempDir()
+	src := &fakeSource{base: srv.URL, files: []File{
+		{Path: "a.gguf", SizeBytes: int64(len(blob))},
+		{Path: "b.gguf", SizeBytes: int64(len(blob))},
+	}}
+	m := NewManager(func() string { return root }, nil, src)
+	first, err := m.Start(context.Background(), StartRequest{Source: "fake", Repo: "o/r", Files: []string{"a.gguf"}, Label: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := m.Start(context.Background(), StartRequest{Source: "fake", Repo: "o/r", Files: []string{"b.gguf"}, Label: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForBytes(t, filepath.Join(root, "o", "r", "a.gguf"+partSuffix))
+	if err := m.Pause(first); err != nil {
+		t.Fatal(err)
+	}
+	waitPhase(t, m, first, PhasePaused)
+	// The pause frees the repo, so the queued job starts on its own.
+	waitForBytes(t, filepath.Join(root, "o", "r", "b.gguf"+partSuffix))
+	if err := m.Pause(second); err != nil {
+		t.Fatal(err)
+	}
+	waitPhase(t, m, second, PhasePaused)
+
+	m2 := NewManager(func() string { return root }, nil, src)
+	if n := m2.Restore(24 * time.Hour); n != 2 {
+		t.Fatalf("Restore returned %d jobs, want 2", n)
+	}
+	for _, id := range []string{first, second} {
+		if _, ok := m2.Job(id); !ok {
+			t.Errorf("job %s was not restored", id)
+		}
+	}
+}
+
+// A record whose files are all on disk at their recorded revision is work that
+// already finished — the process died between the last rename and the journal
+// clear. It must not come back as a paused row.
+func TestManager_RestoreDropsFinishedRecord(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "o", "r")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	blob := blobOf(100)
+	if err := os.WriteFile(filepath.Join(dir, "m.gguf"), blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(func() string { return root }, nil)
+	m.recordManifest(dir, "m.gguf", manifestEntry{Size: int64(len(blob)), OID: "oid-1"})
+	m.recordDownload(dir, downloadRecord{
+		ID: "dl-finished", Source: "fake", Repo: "o/r", Started: time.Now(),
+		Files: []recordFile{{Path: "m.gguf", Size: int64(len(blob)), OID: "oid-1"}},
+	})
+	if n := m.Restore(24 * time.Hour); n != 0 {
+		t.Errorf("restored %d jobs for a finished download", n)
+	}
+	if _, err := os.Stat(filepath.Join(dir, journalName)); !os.IsNotExist(err) {
+		t.Error("the finished job's journal record survived restore")
+	}
+}
+
+// A record with no bytes anywhere has nothing to resume: a job killed before
+// its first byte, or a `.part` the sweep took. It is cleared, not rendered as
+// an empty paused row for the life of the install.
+func TestManager_RestoreDropsEmptyRecord(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "o", "r")
+	m := NewManager(func() string { return root }, nil)
+	m.recordDownload(dir, downloadRecord{
+		ID: "dl-empty", Source: "fake", Repo: "o/r", Started: time.Now(),
+		Files: []recordFile{{Path: "m.gguf", Size: 4096}},
+	})
+	if n := m.Restore(24 * time.Hour); n != 0 {
+		t.Errorf("restored %d jobs with no bytes on disk", n)
+	}
+	if _, err := os.Stat(filepath.Join(dir, journalName)); !os.IsNotExist(err) {
+		t.Error("an empty job's journal record survived restore")
+	}
+}
+
+// Restore and SweepPartials share the age gate: a `.part` old enough for the
+// sweep is not progress, or the row would promise bytes about to be deleted.
+func TestManager_RestoreIgnoresAgedPartial(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "o", "r")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	part := filepath.Join(dir, "m.gguf"+partSuffix)
+	if err := os.WriteFile(part, blobOf(100), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(part, old, old); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(func() string { return root }, nil)
+	m.recordDownload(dir, downloadRecord{
+		ID: "dl-old", Source: "fake", Repo: "o/r", Started: time.Now(),
+		Files: []recordFile{{Path: "m.gguf", Size: 4096}},
+	})
+	if n := m.Restore(24 * time.Hour); n != 0 {
+		t.Errorf("restored %d job(s) off a partial the sweep will delete", n)
+	}
+}
+
 // LocalFiles is what puts "downloaded" on a picker row, so it has to agree with
 // what the transfer actually leaves behind: a finished file counts, a `.part`
 // does not.
@@ -579,6 +883,12 @@ func TestManager_LocalFiles(t *testing.T) {
 		}
 	}
 	m := NewManager(func() string { return root }, nil)
+	// The journal is bookkeeping like the manifest: it must not read as a repo
+	// file, or the picker would show a row for it.
+	m.recordDownload(filepath.Join(root, "o", "r"), downloadRecord{
+		ID: "dl-x", Source: "fake", Repo: "o/r", Started: time.Now(),
+		Files: []recordFile{{Path: "done.gguf", Size: 2048}},
+	})
 	got := m.LocalFiles("o/r")
 	if got["done.gguf"].Size != 2048 {
 		t.Errorf("done.gguf = %d, want 2048", got["done.gguf"].Size)
@@ -588,6 +898,9 @@ func TestManager_LocalFiles(t *testing.T) {
 	}
 	if _, ok := got["half.gguf"]; ok {
 		t.Error("a .part was reported as a local file")
+	}
+	if _, ok := got[journalName]; ok {
+		t.Error("the download journal was reported as a local file")
 	}
 	// Nothing recorded these, so they carry no identity — which is what keeps
 	// a hand-copied file from ever being called stale.
