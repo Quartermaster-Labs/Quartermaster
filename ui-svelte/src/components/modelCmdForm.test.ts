@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { genDefaultNum, cmdNum, specToggle, hoistCms, knobTokens, lockedBool, planCustomArgsOff, type KnobToken } from "./modelCmdForm";
+import { genDefaultNum, cmdNum, specToggle, hoistCms, knobTokens, lockedBool, type KnobToken } from "./modelCmdForm";
 import type { CmdToken, ModelConfig } from "../stores/api";
 
 describe("genDefaultNum", () => {
@@ -106,17 +106,5 @@ describe("lockedBool", () => {
     expect(lockedBool(lock("--spec-default"))).toBe(true);
     expect(lockedBool(lock("--rope-scaling", "yarn"))).toBeNull();
     expect(lockedBool(undefined)).toBeNull();
-  });
-});
-
-describe("planCustomArgsOff", () => {
-  it("ignores the toggle while the box is empty", () => {
-    expect(planCustomArgsOff("", true)).toBe(false);
-    expect(planCustomArgsOff("   \n ", true)).toBe(false);
-  });
-
-  it("keeps the toggle once there is text to suppress", () => {
-    expect(planCustomArgsOff("-c 5000", true)).toBe(true);
-    expect(planCustomArgsOff("-c 5000", false)).toBe(false);
   });
 });

@@ -237,13 +237,16 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 	}
 
 	q := r.URL.Query()
-	// actual=true: seed from the loaded command so the preview reflects the variant
-	// that's really running. Prefer the RUNNING cmd (post spawn-time LiveOffloadArgs
-	// guard) over the config cmd: the guard can offload MORE layers than the baked
-	// plan against live free VRAM, so the config cmd's -ngl is pre-guard and would
-	// disagree with the staging area. Pin the estimate to the running placement so
-	// the settings menu matches what's actually loaded. Otherwise (config editor,
-	// unloaded, or an edited field) start blank so the sizer re-derives placement.
+	// actual=true: seed from the loaded command, for surfaces that describe what is
+	// loaded RIGHT NOW (the dashboard's VRAM band, stores/vram.ts). Prefer the
+	// RUNNING cmd (post spawn-time LiveOffloadArgs guard) over the config cmd: the
+	// guard can offload MORE layers than the baked plan against live free VRAM, so
+	// the config cmd's -ngl is pre-guard and would disagree with the staging area.
+	// The config editor does NOT send this: its panel is a candidate for the form,
+	// and a running process can be older than the config (a save applies without a
+	// restart), so seeding from it snapped the readout back to the old window right
+	// after a save. Without the flag the input starts blank and the sizer re-derives
+	// placement from the form fields.
 	var in autogen.EstimateInput
 	// Context the pinned placement below was actually measured at, so a preview of
 	// a DIFFERENT window can discard the pin (see the ctx param).

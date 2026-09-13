@@ -41,7 +41,6 @@
     noNoMmap,
     parseCtx,
     parseImageCmdFields,
-    planCustomArgsOff,
     specToggle,
     type ParsedImg,
   } from "./modelCmdForm";
@@ -551,38 +550,11 @@
   // already left behind.
   let estSeq = 0;
 
-  // Baseline of the memory-affecting fields as they were SEEDED (saved config).
-  // The estimate pins the layer split to the running argv only while the form
-  // still matches what's loaded; once any of these is edited the preview is a
-  // what-if and must re-derive placement, or the pin freezes -ngl at whatever
-  // the spawn guard picked and a ctx/kv change silently reports the old split
-  // (e.g. "GPU 62/65" with 1.6GB of the budget unspent). Plain lets, not $state:
-  // only runEstimate reads them, and making them reactive would re-trigger it.
-  let memBaseline: string | null = null;
-  let baselineVariant = "";
-
-  // The exact set the re-estimate effect below watches, serialized. Anything
-  // added to those deps that can change the load plan belongs here too.
-  function memKey(): string {
-    return JSON.stringify([
-      ctx, ctxAuto, kvK, kvV, kvInRam, spec, vramTarget, vramAuto, cpuOffload, cpuAuto, ctxCheckpoints,
-      // ub scales the compute buffer, -cms scales each checkpoint's KV term and
-      // rope scaling decides the ctx ceiling: all three move the estimate.
-      ub, adv.checkpointMinStep, adv.ropeScaling,
-      // Custom launch arguments and the slot count size the plan too (the server
-      // folds their pins in), so typing in the box is an edit like any field.
-      // The enable toggle only counts when there is text to suppress (see
-      // planCustomArgsOff): flipping it over an empty box launches the same
-      // command, and counting it as an edit dropped the `actual` seed so the CTX
-      // readout jumped between the loaded window and the candidate plan.
-      parallel, customArgs, planCustomArgsOff(customArgs, customArgsOff),
-      selectedV?.ctx, selectedV?.kvK, selectedV?.kvV, selectedV?.spec,
-      selectedV?.vramTargetGB, selectedV?.ub, selectedV?.ctxCheckpoints,
-      selectedV?.kvInRam, selectedV?.cpuOffload,
-      selectedV?.checkpointMinStep, selectedV?.ropeScaling,
-      selectedV?.parallel, selectedV?.customArgs,
-    ]);
-  }
+  // The estimate is a CANDIDATE: it describes the form as it would launch,
+  // never the running process. A process can be older than the config (a save
+  // applies without a restart), and seeding from its argv made the readout snap
+  // back to the old window right after a save. What IS loaded is the dashboard's
+  // job: its band asks the server for `actual=true` (stores/vram.ts).
 
   // Which entry the form edits: "" = the Default (base override, full field set);
   // a variant name = that variant (a subset of fields; the rest inherit Default).
@@ -757,9 +729,6 @@
   // Seed the structured form fields from a stored override (or autogen defaults
   // when null). Split out so "revert to auto" can re-seed without a refetch.
   function seedFromOverride(o: ModelOverride | null) {
-    // Fields are about to be (re)seeded from storage, so the next estimate
-    // re-takes the baseline instead of reading the seed itself as an edit.
-    memBaseline = null;
     ctxAuto = !o?.ctx;
     // Slider seeds from the override, else the sizer's effective ctx, else 8k.
     ctx = o?.ctx || autoCtx || Math.min(8192, config?.maxCtx || 8192);
@@ -1045,25 +1014,6 @@
         selV && get(models).some((m) => m.id === `${modelId}-${selV.name}`)
           ? `${modelId}-${selV.name}`
           : modelId;
-      // Pin the GPU/CPU layer split to the ACTUAL running argv (post spawn-time
-      // offload guard) when the model we're estimating (estId) is itself loaded, so
-      // the preview matches the staging area instead of re-deriving a rosier -ngl
-      // against the budget. Gate on estId — NOT modelId — so it fires whether the
-      // config was opened from the dashboard (modelId already the twin) or the base
-      // model's variant tab (estId resolves the twin). Suppressed only by a manual
-      // cpu-offload (variant field or model-wide), which is a genuine what-if.
-      const manualOffload = selectedV ? !!selectedV.cpuOffload || !cpuAuto : !cpuAuto;
-      // Re-baseline on the first estimate after a seed and on every variant
-      // switch (each tab carries its own saved fields), then treat any later
-      // difference as an edit.
-      const key = memKey();
-      if (memBaseline === null || selectedVariant !== baselineVariant) {
-        memBaseline = key;
-        baselineVariant = selectedVariant;
-      }
-      const edited = key !== memBaseline;
-      const actual =
-        !manualOffload && !edited && get(models).some((m) => m.id === estId && m.state === "ready");
       const params = selectedV
         ? {
             ctx: selectedV.ctx ? Number(selectedV.ctx) : ctxAuto ? undefined : Number(ctx),
@@ -1090,7 +1040,6 @@
             // (blank inherits, "none" drops it) — same rule as the generator and
             // the panes. Pins in it win over every field above, server-side.
             custom: inheritStr(selectedV.customArgs, customArgsOff ? "" : customArgs) || undefined,
-            actual,
           }
         : {
             ctx: ctxAuto ? undefined : Number(ctx),
@@ -1108,7 +1057,6 @@
             ropeScaling: adv.ropeScaling || undefined,
             parallel: Number(parallel) || undefined,
             custom: customArgsOff ? undefined : customArgs || undefined,
-            actual,
           };
       const res = await estimatePlan(estId, params);
       if (seq !== estSeq) return; // a newer request is in flight — drop this reply

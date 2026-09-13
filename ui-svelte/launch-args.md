@@ -150,10 +150,12 @@ as the text that replaces it.
 - **Estimate**: the `/estimate` endpoint gained `custom` (the effective text) and `parallel` (slot
   count) params; `Pins.ApplyToEstimate` folds the pins over the form fields, so the panel shows the
   pinned ctx and the KV its pool actually reserves (`parallel` charges every slot's share, which the
-  preview used to under-report). `actual=true` instead seeds from the loaded command, and that
-  window is used exactly: `-c` is decoded as the total pool (`estimateInputFromCmd`) and never
-  re-rounded to the sizer's ladder. An empty text box and its enable toggle are one launch, so the
-  toggle only counts as an edit (dropping the `actual` seed) when there is text to suppress.
+  preview used to under-report). The modal panel is a **candidate**: it always describes the form as
+  it would launch, never the running process. `actual=true` seeds from the loaded command (used by
+  the dashboard band in `stores/vram.ts`), and that window is used exactly: `-c` is decoded as the
+  total pool (`estimateInputFromCmd`) and never re-rounded to the sizer's ladder. Seeding the modal
+  from the running argv was dropped 2026-09-13: a process can be older than the config (a save
+  applies without a restart), so the readout snapped back to the old window right after a save.
 
 ### The two panes
 

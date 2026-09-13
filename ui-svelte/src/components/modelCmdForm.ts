@@ -259,12 +259,3 @@ export function lockedBool(lock: KnobToken | undefined, on: string[] = [], off: 
   if (["on", "true", "1"].includes(v) || on.includes(f) || on.includes(v)) return true;
   return v === "" ? true : null;
 }
-
-// The enable toggle only changes the launch when there is text for it to
-// suppress. An empty box emits the generated command in either state, so the
-// estimate's edit latch must not treat a flip as a plan change: it used to drop
-// the `actual` seed, making the CTX readout jump between the loaded process's
-// window and the candidate plan for a toggle that launches nothing new.
-export function planCustomArgsOff(text: string, off: boolean): boolean {
-  return text.trim() === "" ? false : off;
-}
