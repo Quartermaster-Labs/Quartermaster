@@ -297,6 +297,9 @@ export interface ModelVariant {
   threads?: number;
   parallel?: number;
   extraArgs?: string;
+  /** Verbatim launch-argument text for this variant. "" => inherit the model's,
+   *  "none" => run the variant with none. */
+  customArgs?: string;
   chatTemplateFile?: string; // .jinja path; "" => inherit model-wide
   // Only read on the reserved "vision" variant: the projector gguf this twin
   // loads. "" => inherit the model-wide mmprojFile; "none" => back to discovery.
@@ -389,7 +392,12 @@ export interface ModelOverride {
   threads?: number; // 0 => global default
   parallel?: number; // 0 => 1
   ub?: number; // 0 => auto (physical batch -ub/-b)
-  extraArgs?: string; // extra llama-server flags appended verbatim (passthrough)
+  extraArgs?: string; // LEGACY free-form bucket from the old two-way box; new saves use customArgs
+  /** Verbatim launch-argument text. Empty => the generated command runs as-is.
+   *  A flag written here replaces the generated flag for the same setting. */
+  customArgs?: string;
+  /** Keep customArgs stored but unapplied (the editor's enable toggle). */
+  customArgsOff?: boolean;
   chatTemplateFile?: string; // --chat-template-file path; "" => the gguf's baked-in template
   // --mmproj path. "" => whatever discovery pairs (dir-local, or a family
   // sibling's). Set => that file, and the "-vision" twin exists even when
@@ -652,12 +660,55 @@ export interface EstimateParams {
   /** Seed the estimate from the model's loaded command (the running variant)
    * instead of re-sizing the solo profile with defaults. */
   actual?: boolean;
+  /** --parallel slot count. Each slot carries its own window over one shared -c
+   * pool, so the sizer charges Parallel x the per-slot KV. */
+  parallel?: number;
+  /** Custom launch arguments, verbatim. The server folds their pins over the
+   * other params (a pinned -c wins over ctx), so the panel shows the launch the
+   * text describes instead of the one the sizer would have picked alone. */
+  custom?: string;
 }
 
-// Render the full launch command for a candidate override (no persistence).
-// Powers the editor's two-way launch-parameters box: form edits call this to
-// refresh the command text (computed -ngl/-c/--n-cpu-moe included).
-export async function previewCmd(model: string, override: ModelOverride): Promise<string> {
+// One token of a rendered launch command, with the provenance the editor needs
+// to render it without diffing strings. Suppressed tokens are generated tokens
+// a custom flag replaced; they are reported so the pane can strike them through.
+export interface CmdToken {
+  text: string;
+  source: "generated" | "custom";
+  knob?: string;
+  suppressed?: boolean;
+}
+
+// One complaint from the launch-argument flag check. "unknown" means neither
+// the flag table nor the selected backend's --help knows the flag, so the spawn
+// will die; "unverified" means the probe could not run; "backend-missing" means
+// the table has the flag but this build's help does not list it.
+export interface CmdIssue {
+  token: string;
+  kind: "unknown" | "unverified" | "backend-missing" | string;
+  message: string;
+  suggestions?: string[];
+}
+
+// A rendered launch command in layers.
+export interface PreviewLayers {
+  /** The effective command (also returned as `cmd`). */
+  effective: string;
+  /** The command as the generator emitted it, no custom text. */
+  generated: string;
+  /** The user's text, unchanged. */
+  custom?: string;
+  /** Knobs the custom text sets, so the pane can say what it replaced. */
+  ownedKnobs?: string[];
+  tokens?: CmdToken[];
+  /** Flag check results, table ∪ the selected backend's --help. */
+  issues?: CmdIssue[];
+}
+
+// Render the full launch command for a candidate override (no persistence), in
+// layers: what the generator emitted, what will actually run, and per-token
+// provenance for the editor's read-only pane.
+export async function previewCmd(model: string, override: ModelOverride): Promise<PreviewLayers> {
   const response = await fetch(`/api/models/${encodeURIComponent(model)}/preview`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -666,7 +717,7 @@ export async function previewCmd(model: string, override: ModelOverride): Promis
   if (!response.ok) {
     throw new Error(`Failed to preview command: ${response.status} ${await response.text()}`);
   }
-  return (await response.json()).cmd as string;
+  return await response.json();
 }
 
 export async function estimatePlan(model: string, p: EstimateParams): Promise<PlanEstimate> {
@@ -681,8 +732,10 @@ export async function estimatePlan(model: string, p: EstimateParams): Promise<Pl
   if (p.ctxCheckpoints != null) q.set("ctxCheckpoints", String(p.ctxCheckpoints));
   if (p.checkpointMinStep) q.set("checkpointMinStep", String(p.checkpointMinStep));
   if (p.ub) q.set("ub", String(p.ub));
+  if (p.parallel) q.set("parallel", String(p.parallel));
   if (p.ropeScaling) q.set("ropeScaling", p.ropeScaling);
   if (p.actual) q.set("actual", "true");
+  if (p.custom?.trim()) q.set("custom", p.custom);
   const response = await fetch(`/api/models/${encodeURIComponent(model)}/estimate?${q.toString()}`);
   if (!response.ok) {
     throw new Error(`Failed to estimate plan: ${response.status} ${await response.text()}`);

@@ -59,6 +59,7 @@ func clearNone(s string) string {
 func mergeInheritStrings(eff *Override, v *VariantSpec) {
 	eff.ChatTemplateFile = inheritStr(v.ChatTemplateFile, eff.ChatTemplateFile)
 	eff.MmprojFile = inheritStr(v.MmprojFile, eff.MmprojFile)
+	eff.CustomArgs = inheritStr(v.CustomArgs, eff.CustomArgs)
 	eff.ExtraArgs = inheritStr(v.ExtraArgs, eff.ExtraArgs)
 	eff.TensorSplit = inheritStr(v.TensorSplit, eff.TensorSplit)
 	eff.OverrideTensor = inheritStr(v.OverrideTensor, eff.OverrideTensor)
@@ -95,6 +96,7 @@ func mergeInheritImageStrings(o *Override, v *VariantSpec) {
 func NormalizeNone(o *Override) {
 	o.ChatTemplateFile = clearNone(o.ChatTemplateFile)
 	o.MmprojFile = clearNone(o.MmprojFile)
+	o.CustomArgs = clearNone(o.CustomArgs)
 	o.ExtraArgs = clearNone(o.ExtraArgs)
 	o.TensorSplit = clearNone(o.TensorSplit)
 	o.OverrideTensor = clearNone(o.OverrideTensor)

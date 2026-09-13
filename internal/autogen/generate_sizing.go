@@ -82,9 +82,16 @@ func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB fl
 			ctxBudgetRam = 0.5
 		}
 		maxCtxRam := MaxCtxForBudget(ctxBudgetRam, perTokGB, kvConstGB)
-		ctx = RoundedCtx(float64(min(modelMax, maxCtxRam)))
-		if prof.Ctx != 0 {
-			ctx = min(ctx, prof.Ctx)
+		if prof.CtxExact && prof.Ctx > 0 {
+			// A pinned window is what the launch really runs: charge the RAM budget
+			// in GetLoadPlan below instead of sizing a smaller cache under a -c the
+			// process will honor anyway.
+			ctx = min(modelMax, prof.Ctx)
+		} else {
+			ctx = RoundedCtx(float64(min(modelMax, maxCtxRam)))
+			if prof.Ctx != 0 {
+				ctx = min(ctx, prof.Ctx)
+			}
 		}
 		kvReserve = KvReserveGB(ctx, perTokGB, kvConstGB)
 
@@ -115,11 +122,15 @@ func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB fl
 		if meta.IsMoE {
 			overhead += ckpt
 			if prof.Ctx != 0 {
-				// Explicit ctx (a custom ctx tier / variant) is HARD: honor it and
-				// let GetLoadPlan below trade expert layers (--n-cpu-moe) for the
+				// Explicit ctx (a custom ctx tier / variant / pin) is HARD: honor it
+				// and let GetLoadPlan below trade expert layers (--n-cpu-moe) for the
 				// larger KV reserve, instead of shrinking ctx to whatever VRAM is
 				// free. "64k variant" means 64k context, capped only by modelMax.
-				ctx = RoundedCtx(float64(min(modelMax, prof.Ctx)))
+				if prof.CtxExact {
+					ctx = min(modelMax, prof.Ctx)
+				} else {
+					ctx = RoundedCtx(float64(min(modelMax, prof.Ctx)))
+				}
 			} else {
 				share := effectiveShare(meta, genMoeShareFor)
 				nonExpert := meta.FileSizeGB * (1.0 - share)
@@ -139,6 +150,11 @@ func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB fl
 					ctx = RoundedCtx(float64(min(min(modelMax, s.MoeCtxTarget), maxCtxVram)))
 				}
 			}
+		} else if prof.CtxExact && prof.Ctx > 0 {
+			// A pinned window skips the ladder: GetDenseCtx rounds every pick to a
+			// 4096 multiple, so it would size `-c 5000` at 4096.
+			ctx = min(modelMax, prof.Ctx)
+			placementCkpt = ckpt
 		} else {
 			ladder := s.DenseCtxLadder
 			minCtx := s.DenseMinCtx
@@ -166,9 +182,13 @@ func sizeProfile(meta Metadata, s Settings, prof profile, perTokGB, kvConstGB fl
 		}
 
 	default:
-		ctx = RoundedCtx(float64(min(modelMax, 32768)))
-		if prof.Ctx != 0 {
-			ctx = min(ctx, prof.Ctx)
+		if prof.CtxExact && prof.Ctx > 0 {
+			ctx = min(modelMax, prof.Ctx)
+		} else {
+			ctx = RoundedCtx(float64(min(modelMax, 32768)))
+			if prof.Ctx != 0 {
+				ctx = min(ctx, prof.Ctx)
+			}
 		}
 		kvReserve = 0
 		// No attention dims: planner uses its flat 1.0GB KV reserve default.

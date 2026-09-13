@@ -60,20 +60,14 @@ type BackendMetricsEvent struct {
 
 func (e BackendMetricsEvent) Type() uint32 { return shared.BackendMetricsEventID }
 
-// backendMetricsMonitor polls each running backend's /metrics + /slots on a
-// ticker (skipped while a request is in flight -- both share llama-server's
-// inference task queue), fetches /props once per process lifetime, caches the
-// latest snapshot, and emits a BackendMetricsEvent so the dashboard gets live
-// KV/slot/throughput gauges over SSE.
+// backendMetricsMonitor polls each running backend's /metrics + /slots + /props
+// on a ticker (the first two are skipped while a request is in flight -- they
+// share llama-server's inference task queue), caches the latest snapshot, and
+// emits a BackendMetricsEvent so the dashboard gets live KV/slot/throughput
+// gauges over SSE.
 type backendMetricsMonitor struct {
 	mu     sync.RWMutex
 	latest map[string]BackendMetrics
-
-	// props caches the static /props fields (NCtx, TotalSlots) per model, keyed
-	// by base URL -- constant for a process's whole lifetime, so one fetch per
-	// load is enough. A base-URL change (restart, new ${PORT}) invalidates it.
-	propsMu sync.Mutex
-	props   map[string]propsSnapshot
 
 	// running returns model-id -> resolved upstream base URL for every running
 	// local process (${PORT} already substituted in cfg.Models[id].Proxy).
@@ -91,16 +85,9 @@ type backendMetricsMonitor struct {
 	interval time.Duration
 }
 
-type propsSnapshot struct {
-	base       string
-	nCtx       int64
-	totalSlots int64
-}
-
 func newBackendMetricsMonitor(running func() map[string]string, inflight func() int64, modelInflight func(model string) (int64, bool), log *logmon.Monitor) *backendMetricsMonitor {
 	return &backendMetricsMonitor{
 		latest:        map[string]BackendMetrics{},
-		props:         map[string]propsSnapshot{},
 		running:       running,
 		inflight:      inflight,
 		modelInflight: modelInflight,
@@ -228,24 +215,21 @@ func (m *backendMetricsMonitor) scrapeOne(ctx context.Context, model, base strin
 		}
 	}
 
-	// /props (n_ctx, total_slots) is constant for a process's whole lifetime --
-	// no task queue involved either way (get_props posts no server_task, unlike
-	// get_metrics/get_slots), but re-fetching it every 2s forever was pointless.
-	// Fetch once per (model, base) and cache; a base-URL change means a new
-	// process (restart/reload), so that invalidates the cache naturally.
-	// Only a snapshot with a real n_ctx is worth caching (and worth clobbering the
-	// /slots-derived value with): a poll that lands while the process is still
-	// loading answers 503 with an error body, which parses to n_ctx 0. Caching that
-	// zero pinned the context maximum at 0 for the whole process lifetime, so the
-	// UI bar rendered "5k/0 tok".
-	if ps, ok := m.cachedProps(model, base); ok {
-		bm.NCtx, bm.TotalSlots = ps.nCtx, ps.totalSlots
-	} else if body, err := m.get(ctx, base+"/props"); err == nil {
+	// /props (n_ctx, total_slots) describes the CURRENT load, so it is read on
+	// every idle tick. It used to be cached per (model, base URL) on the assumption
+	// that a base change means a new process, but a model keeps its port across a
+	// reload, so a restart with different args kept serving the previous load's
+	// n_ctx (a live 118784 showed as the old 5120 in the playground's ctx bar and
+	// the dashboard inference box). /props posts no server_task, so unlike /metrics
+	// and /slots it is safe to ask on every non-busy poll.
+	//
+	// A body without a real n_ctx is ignored: a poll that lands while the process
+	// is still loading answers 503 with an error body, which parses to n_ctx 0,
+	// and that must neither clobber the /slots-derived value nor stick.
+	if body, err := m.get(ctx, base+"/props"); err == nil {
 		j := gjson.ParseBytes(body)
-		ps := propsSnapshot{base: base, nCtx: j.Get("default_generation_settings.n_ctx").Int(), totalSlots: j.Get("total_slots").Int()}
-		if ps.nCtx > 0 {
-			m.storeProps(model, ps)
-			bm.NCtx, bm.TotalSlots = ps.nCtx, ps.totalSlots
+		if nCtx := j.Get("default_generation_settings.n_ctx").Int(); nCtx > 0 {
+			bm.NCtx, bm.TotalSlots = nCtx, j.Get("total_slots").Int()
 		} else if bm.NCtx == 0 && hadPrev {
 			bm.NCtx, bm.TotalSlots = prev.NCtx, prev.TotalSlots
 		}
@@ -253,24 +237,6 @@ func (m *backendMetricsMonitor) scrapeOne(ctx context.Context, model, base strin
 		bm.NCtx, bm.TotalSlots = prev.NCtx, prev.TotalSlots
 	}
 	return bm
-}
-
-// cachedProps returns the cached /props fields for model if base still
-// matches the process that produced them.
-func (m *backendMetricsMonitor) cachedProps(model, base string) (propsSnapshot, bool) {
-	m.propsMu.Lock()
-	defer m.propsMu.Unlock()
-	ps, ok := m.props[model]
-	if !ok || ps.base != base {
-		return propsSnapshot{}, false
-	}
-	return ps, true
-}
-
-func (m *backendMetricsMonitor) storeProps(model string, ps propsSnapshot) {
-	m.propsMu.Lock()
-	defer m.propsMu.Unlock()
-	m.props[model] = ps
 }
 
 // previous returns the last cached snapshot for model, if any.

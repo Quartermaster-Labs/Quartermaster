@@ -18,7 +18,8 @@ import (
 // chosen ctx) for a candidate tuning without persisting anything. Query params:
 // ctx, kvK, kvV, spec, ropeScaling (strings), kvInRam (bool), vram (float target
 // GB), cpuOffload (int layers pinned to CPU), ctxCheckpoints, checkpointMinStep,
-// ub (ints).
+// ub, parallel (ints), custom (verbatim launch text whose pins are the last
+// word), actual=true (seed from the loaded command).
 // Powers the editor's live memory estimate.
 // cmdArgv splits a rendered launch command into argv exactly the way the
 // process layer will, so a quoted path containing spaces ("C:\Program
@@ -35,6 +36,8 @@ func cmdArgv(cmd string) []string {
 // profile with defaults. Unknown flags are ignored.
 func estimateInputFromCmd(cmd string) autogen.EstimateInput {
 	in := autogen.EstimateInput{}
+	ctxTotal := 0
+	ctxSet := false
 	toks := cmdArgv(cmd)
 	for i := 0; i < len(toks); i++ {
 		next := func() (string, bool) {
@@ -46,7 +49,13 @@ func estimateInputFromCmd(cmd string) autogen.EstimateInput {
 		switch toks[i] {
 		case "-c", "--ctx-size":
 			if v, ok := next(); ok {
-				in.Ctx, _ = strconv.Atoi(v)
+				if n, err := strconv.Atoi(v); err == nil {
+					ctxTotal, ctxSet = n, true
+				}
+			}
+		case "-np", "--parallel":
+			if v, ok := next(); ok {
+				in.Parallel, _ = strconv.Atoi(v)
 			}
 		case "--ctx-checkpoints":
 			if v, ok := next(); ok {
@@ -107,6 +116,23 @@ func estimateInputFromCmd(cmd string) autogen.EstimateInput {
 				}
 			}
 		}
+	}
+	if ctxSet {
+		// -c in a rendered command is the TOTAL pool (buildCmdLines emits
+		// prof.Ctx * slots); the estimate works per slot and multiplies the KV
+		// slope by Parallel, so decode it back the way the pin path does.
+		in.Ctx = ctxTotal / max(autogen.EffectiveParallel(&autogen.Override{Parallel: in.Parallel}), 1)
+		if in.Ctx < 1 {
+			in.Ctx = 1
+		}
+		// A window read off a real command is a decision, not a sizer pick: the
+		// process runs it whatever the ladder would have chosen. Marking it exact
+		// keeps the preview from re-rounding a live -c 5000 down to 4096 (and
+		// from shrinking a kv-in-RAM window to the RAM budget).
+		in.CtxExact = true
+	}
+	if in.Parallel > 0 {
+		in.Parallel = autogen.EffectiveParallel(&autogen.Override{Parallel: in.Parallel})
 	}
 	// A cmd with no checkpoint flags runs at llama-server's OWN defaults (32
 	// snapshots spaced 8192 apart), not at the arch defaults the generator would
@@ -211,13 +237,16 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 	}
 
 	q := r.URL.Query()
-	// actual=true: seed from the loaded command so the preview reflects the variant
-	// that's really running. Prefer the RUNNING cmd (post spawn-time LiveOffloadArgs
-	// guard) over the config cmd: the guard can offload MORE layers than the baked
-	// plan against live free VRAM, so the config cmd's -ngl is pre-guard and would
-	// disagree with the staging area. Pin the estimate to the running placement so
-	// the settings menu matches what's actually loaded. Otherwise (config editor,
-	// unloaded, or an edited field) start blank so the sizer re-derives placement.
+	// actual=true: seed from the loaded command, for surfaces that describe what is
+	// loaded RIGHT NOW (the dashboard's VRAM band, stores/vram.ts). Prefer the
+	// RUNNING cmd (post spawn-time LiveOffloadArgs guard) over the config cmd: the
+	// guard can offload MORE layers than the baked plan against live free VRAM, so
+	// the config cmd's -ngl is pre-guard and would disagree with the staging area.
+	// The config editor does NOT send this: its panel is a candidate for the form,
+	// and a running process can be older than the config (a save applies without a
+	// restart), so seeding from it snapped the readout back to the old window right
+	// after a save. Without the flag the input starts blank and the sizer re-derives
+	// placement from the form fields.
 	var in autogen.EstimateInput
 	// Context the pinned placement below was actually measured at, so a preview of
 	// a DIFFERENT window can discard the pin (see the ctx param).
@@ -259,6 +288,11 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 	if v := q.Get("ub"); v != "" {
 		in.Ub, _ = strconv.Atoi(v)
 	}
+	if v := q.Get("parallel"); v != "" {
+		// Slot count: each slot carries its own window over the shared -c pool, so
+		// the KV cost model has to know how many are resident.
+		in.Parallel, _ = strconv.Atoi(v)
+	}
 	if v := q.Get("ropeScaling"); v != "" {
 		// Decides whether the sizer may pick a ctx past the trained length; without
 		// it an editor preview of a rope-extended window silently sizes the clamped
@@ -266,7 +300,11 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 		in.RopeScaling = v
 	}
 	if v := q.Get("ctx"); v != "" {
+		// A form-field window is a sizer input, not a pin: it goes through the
+		// ladder (and the RAM-budget clamp) exactly as the save will, so it must
+		// not inherit the exactness of a command seeded above.
 		in.Ctx, _ = strconv.Atoi(v)
+		in.CtxExact = false
 	}
 	// The pinned layer split above describes ONE window: the one the process was
 	// launched with. The editor keeps sending actual=true while its own ctx field
@@ -327,6 +365,15 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 				in.MmprojGB = autogen.MmprojVramGB(mp, float64(fi.Size())/(1<<30), gf.Settings)
 			}
 		}
+	}
+
+	// Custom launch arguments are the last word, exactly as they are at spawn
+	// (ComposeCmd appends them last and llama-server keeps the last flag): fold
+	// their pins over the form params so the preview sizes the launch the text
+	// describes instead of the one the sizer would have picked alone. See
+	// autogen/pins.go; a knob the text does not pin is untouched.
+	if v := q.Get("custom"); v != "" {
+		autogen.PinsFromArgs(v).ApplyToEstimate(&in, meta)
 	}
 
 	res, err := autogen.EstimatePlan(gf.Settings, meta, in)

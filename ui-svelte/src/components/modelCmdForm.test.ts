@@ -1,30 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { parseCmdFields, genDefaultNum, cmdNum, specToggle, hoistCms } from "./modelCmdForm";
-import type { ModelConfig } from "../stores/api";
-
-// The sampler defaults are the one flag group where 0 is a real value, so the
-// parse path has to keep "absent" and "pinned to 0" apart. Everything else in
-// the form collapses 0 to "inherit", and getting this wrong either loses a
-// deliberate --min-p 0 or invents one.
-describe("parseCmdFields sampler defaults", () => {
-  it("keeps a pinned 0 distinct from an absent flag", () => {
-    const p = parseCmdFields("llama-server -m x.gguf --top-k 20 --min-p 0 --temp 1");
-    expect(p.topK).toBe(20);
-    expect(p.minP).toBe(0);
-    expect(p.temp).toBe(1);
-    expect(p.topP).toBe("");
-    expect(p.presencePenalty).toBe("");
-  });
-
-  it("does not leak sampler flags into extraArgs", () => {
-    const p = parseCmdFields("llama-server -m x.gguf --top-k 20 --min-p 0 --presence-penalty 1.5 --foo bar");
-    expect(p.extraArgs).toBe("--foo bar");
-  });
-
-  it("accepts llama's --temperature alias", () => {
-    expect(parseCmdFields("llama-server --temperature 0.7").temp).toBe(0.7);
-  });
-});
+import { genDefaultNum, cmdNum, specToggle, hoistCms, knobTokens, lockedBool, type KnobToken } from "./modelCmdForm";
+import type { CmdToken, ModelConfig } from "../stores/api";
 
 describe("genDefaultNum", () => {
   const cfg = (cmd: string) => ({ cmd }) as ModelConfig;
@@ -62,53 +38,8 @@ describe("specToggle", () => {
   });
 });
 
-// The vision twin's projector flags are owned by the "Image projector" dropdown
-// (--no-mmproj-offload) and by sidecar discovery (--mmproj). Neither may land in
-// extraArgs: the emitter writes its own copy, so a leaked one double-emits from
-// the first blur of the launch box onward.
-describe("parseCmdFields mmproj flags", () => {
-  it("keeps --mmproj and --no-mmproj-offload out of extraArgs", () => {
-    const p = parseCmdFields(
-      "llama-server -m x.gguf --mmproj C:/models/mmproj.gguf --no-mmproj-offload --foo bar",
-    );
-    expect(p.extraArgs).toBe("--foo bar");
-  });
-});
-
-describe("parseCmdFields --ctx-checkpoints", () => {
-  it("captures the value instead of swallowing it", () => {
-    expect(parseCmdFields("llama-server -m x.gguf --ctx-checkpoints 2").ctxCheckpoints).toBe(2);
-    expect(parseCmdFields("llama-server -m x.gguf --ctx-checkpoints 0").ctxCheckpoints).toBe(0);
-  });
-  it("reports null when the user deleted the flag", () => {
-    expect(parseCmdFields("llama-server -m x.gguf -c 4096").ctxCheckpoints).toBeNull();
-  });
-  it("never bleeds into extraArgs", () => {
-    expect(parseCmdFields("llama-server -m x.gguf --ctx-checkpoints 2").extraArgs).toBe("");
-  });
-});
-
-// -cms is the flag that proved this whole class of bug: autogen emits it on
-// every text model, the box did not parse it, so it landed in extraArgs and was
-// re-appended after the generated copy - once more per round trip through the
-// launch box.
-describe("parseCmdFields -cms", () => {
-  it("captures both spellings", () => {
-    expect(parseCmdFields("llama-server -m x.gguf -cms 256").checkpointMinStep).toBe(256);
-    expect(parseCmdFields("llama-server -m x.gguf --checkpoint-min-step 512").checkpointMinStep).toBe(512);
-  });
-  it("reports \"\" when the user deleted the flag", () => {
-    expect(parseCmdFields("llama-server -m x.gguf -c 4096").checkpointMinStep).toBe("");
-  });
-  it("never bleeds into extraArgs", () => {
-    expect(parseCmdFields("llama-server -m x.gguf -cms 256 --foo bar").extraArgs).toBe("--foo bar");
-    expect(parseCmdFields("llama-server -m x.gguf --checkpoint-min-step 256").extraArgs).toBe("");
-  });
-});
-
-// Installs saved before the parse existed carry the flag inside extraArgs.
-// Hoisting it back into the field on load is what actually stops the duplicate
-// the user already has on disk.
+// Installs saved before the parse existed carry the flag inside extraArgs; the
+// image/audio/SAM forms still hoist it back into their structured field on load.
 describe("hoistCms", () => {
   it("pulls the flag out and returns the rest", () => {
     expect(hoistCms("-cms 256")).toEqual({ extra: "", step: 256 });
@@ -128,5 +59,52 @@ describe("cmdNum", () => {
   it("reads a flag off any command text, not just the model baseline", () => {
     expect(cmdNum("llama-server --ctx-checkpoints 3 -c 8192", "--ctx-checkpoints")).toBe(3);
     expect(cmdNum("llama-server -c 8192", "--ctx-checkpoints")).toBe("");
+  });
+});
+
+// The form controls read the composed command's provenance so a custom flag can
+// disable the control it overrides and name itself in the badge.
+describe("knobTokens", () => {
+  const tok = (text: string, knob?: string, source: "generated" | "custom" = "custom"): CmdToken => ({ text, source, knob, suppressed: false });
+
+  it("pairs a flag with its following value token", () => {
+    expect(knobTokens([tok("-c", "ctx"), tok("32768")], "ctx")).toEqual([{ text: "-c 32768", flag: "-c", value: "32768" }]);
+  });
+
+  it("splits an inline --flag=value", () => {
+    expect(knobTokens([tok("--cache-ram=2048", "cacheRam")], "cacheRam")).toEqual([{ text: "--cache-ram 2048", flag: "--cache-ram", value: "2048" }]);
+  });
+
+  it("keeps a bare flag and ignores other knobs and generated tokens", () => {
+    const toks = [tok("-c", "ctx", "generated"), tok("-c", "ctx", "generated"), tok("8192"), tok("--no-mmap", "loadMode"), tok("--metrics", "metrics")];
+    expect(knobTokens(toks, "loadMode")).toEqual([{ text: "--no-mmap", flag: "--no-mmap", value: "" }]);
+    expect(knobTokens(toks, "parallel")).toEqual([]);
+  });
+
+  it("matches a group of knobs and keeps command order", () => {
+    const toks = [tok("--dry-base", "dryBase"), tok("1.1"), tok("--dry-multiplier", "dryMultiplier"), tok("0.8")];
+    expect(knobTokens(toks, ["dryMultiplier", "dryBase"]).map((k) => k.text)).toEqual(["--dry-base 1.1", "--dry-multiplier 0.8"]);
+    expect(knobTokens(undefined, "ctx")).toEqual([]);
+  });
+});
+
+describe("lockedBool", () => {
+  const lock = (flag: string, value = ""): KnobToken => ({ text: value ? `${flag} ${value}` : flag, flag, value });
+
+  it("reads on/off literals", () => {
+    expect(lockedBool(lock("-fa", "off"))).toBe(false);
+    expect(lockedBool(lock("-fa", "on"))).toBe(true);
+    expect(lockedBool(lock("--reasoning-format", "none"))).toBe(false);
+  });
+
+  it("takes extra spellings for bare flags", () => {
+    expect(lockedBool(lock("--no-mmap"), ["--mlock"], ["--no-mmap"])).toBe(false);
+    expect(lockedBool(lock("--no-kv-offload"), ["--no-kv-offload"])).toBe(true);
+  });
+
+  it("treats a bare flag as on, and says nothing otherwise", () => {
+    expect(lockedBool(lock("--spec-default"))).toBe(true);
+    expect(lockedBool(lock("--rope-scaling", "yarn"))).toBeNull();
+    expect(lockedBool(undefined)).toBeNull();
   });
 });

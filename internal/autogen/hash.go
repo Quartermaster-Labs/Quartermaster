@@ -188,7 +188,14 @@ const hashCacheSuffix = ".modelhash"
 //	     for that one sample used to bake a single-device plan that spawn time
 //	     could not repair, since the live retune rewrites an existing
 //	     --tensor-split and cannot add one.
-const genVersion = "v66"
+//	v67: custom launch arguments size the plan, not just the argv (autogen/pins.go).
+//	     A pinned -c/-ctk/-ub/-ngl/--n-cpu-moe/--parallel/... is folded into the
+//	     sizer, so the emitted flags and the baked estVramGB/estRamGB describe the
+//	     launch that actually runs instead of the one the sizer would have picked
+//	     alone. Every model whose sidecar carries customArgs changes -c/-ngl/
+//	     --n-cpu-moe, and a pinned window is no longer rounded to a 4096 multiple,
+//	     for inputs that did not.
+const genVersion = "v67"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the
