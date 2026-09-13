@@ -18,7 +18,8 @@ import (
 // chosen ctx) for a candidate tuning without persisting anything. Query params:
 // ctx, kvK, kvV, spec, ropeScaling (strings), kvInRam (bool), vram (float target
 // GB), cpuOffload (int layers pinned to CPU), ctxCheckpoints, checkpointMinStep,
-// ub (ints).
+// ub, parallel (ints), custom (verbatim launch text whose pins are the last
+// word), actual=true (seed from the loaded command).
 // Powers the editor's live memory estimate.
 // cmdArgv splits a rendered launch command into argv exactly the way the
 // process layer will, so a quoted path containing spaces ("C:\Program
@@ -35,6 +36,8 @@ func cmdArgv(cmd string) []string {
 // profile with defaults. Unknown flags are ignored.
 func estimateInputFromCmd(cmd string) autogen.EstimateInput {
 	in := autogen.EstimateInput{}
+	ctxTotal := 0
+	ctxSet := false
 	toks := cmdArgv(cmd)
 	for i := 0; i < len(toks); i++ {
 		next := func() (string, bool) {
@@ -46,7 +49,13 @@ func estimateInputFromCmd(cmd string) autogen.EstimateInput {
 		switch toks[i] {
 		case "-c", "--ctx-size":
 			if v, ok := next(); ok {
-				in.Ctx, _ = strconv.Atoi(v)
+				if n, err := strconv.Atoi(v); err == nil {
+					ctxTotal, ctxSet = n, true
+				}
+			}
+		case "-np", "--parallel":
+			if v, ok := next(); ok {
+				in.Parallel, _ = strconv.Atoi(v)
 			}
 		case "--ctx-checkpoints":
 			if v, ok := next(); ok {
@@ -107,6 +116,23 @@ func estimateInputFromCmd(cmd string) autogen.EstimateInput {
 				}
 			}
 		}
+	}
+	if ctxSet {
+		// -c in a rendered command is the TOTAL pool (buildCmdLines emits
+		// prof.Ctx * slots); the estimate works per slot and multiplies the KV
+		// slope by Parallel, so decode it back the way the pin path does.
+		in.Ctx = ctxTotal / max(autogen.EffectiveParallel(&autogen.Override{Parallel: in.Parallel}), 1)
+		if in.Ctx < 1 {
+			in.Ctx = 1
+		}
+		// A window read off a real command is a decision, not a sizer pick: the
+		// process runs it whatever the ladder would have chosen. Marking it exact
+		// keeps the preview from re-rounding a live -c 5000 down to 4096 (and
+		// from shrinking a kv-in-RAM window to the RAM budget).
+		in.CtxExact = true
+	}
+	if in.Parallel > 0 {
+		in.Parallel = autogen.EffectiveParallel(&autogen.Override{Parallel: in.Parallel})
 	}
 	// A cmd with no checkpoint flags runs at llama-server's OWN defaults (32
 	// snapshots spaced 8192 apart), not at the arch defaults the generator would
@@ -271,7 +297,11 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 		in.RopeScaling = v
 	}
 	if v := q.Get("ctx"); v != "" {
+		// A form-field window is a sizer input, not a pin: it goes through the
+		// ladder (and the RAM-budget clamp) exactly as the save will, so it must
+		// not inherit the exactness of a command seeded above.
 		in.Ctx, _ = strconv.Atoi(v)
+		in.CtxExact = false
 	}
 	// The pinned layer split above describes ONE window: the one the process was
 	// launched with. The editor keeps sending actual=true while its own ctx field

@@ -155,6 +155,50 @@ func TestEstimateInputFromCmd(t *testing.T) {
 	}
 }
 
+// Regression: /estimate?actual=true seeds from the LOADED command, whose -c is
+// the total pool and which the process really runs. Decoding it as a per-slot
+// sizer input and re-rounding it through the 4096 ladder reported "4k" for a
+// live `-c 5000` while the configured command said 126976: the panel disagreed
+// with both the running process and the final-args pane.
+func TestEstimateInputFromCmd_seededCtxIsExact(t *testing.T) {
+	in := estimateInputFromCmd("llama-server -m x.gguf -ngl 99 -c 5000 --parallel 1 --kv-unified")
+	if in.Ctx != 5000 {
+		t.Fatalf("Ctx=%d want 5000", in.Ctx)
+	}
+	if !in.CtxExact {
+		t.Fatal("CtxExact=false, want true for a window read off a real command")
+	}
+
+	// -c is the pool, so N slots divide it: the emitter writes ctx*parallel.
+	multi := estimateInputFromCmd("llama-server -m x.gguf -c 8192 --parallel 2")
+	if multi.Ctx != 4096 || multi.Parallel != 2 || !multi.CtxExact {
+		t.Fatalf("multi: Ctx=%d Parallel=%d exact=%v, want 4096/2/true", multi.Ctx, multi.Parallel, multi.CtxExact)
+	}
+	if alias := estimateInputFromCmd("llama-server -m x.gguf -np 4 -c 16384"); alias.Ctx != 4096 || alias.Parallel != 4 {
+		t.Fatalf("alias: Ctx=%d Parallel=%d, want 4096/4", alias.Ctx, alias.Parallel)
+	}
+	// No -c => the sizer is still free to pick.
+	if bare := estimateInputFromCmd("llama-server -m x.gguf -ngl 99"); bare.Ctx != 0 || bare.CtxExact {
+		t.Fatalf("bare: Ctx=%d exact=%v, want 0/false", bare.Ctx, bare.CtxExact)
+	}
+
+	// The number the panel shows: the same settings+metadata that rounded 5000 to
+	// 4096 (TestPinnedCtxIsExact) must report 5000 for the seeded input.
+	meta := autogen.Metadata{
+		Architecture: "llama", BlockCount: 32, HeadCountKv: 8,
+		KeyLength: 128, ValueLength: 128,
+		FileSizeGB: 4.0, ContextLength: 32768,
+	}
+	s := autogen.Settings{TargetVramGB: 40, VramOverheadGB: 1, ComputeBufFactor: 1}
+	plan, err := autogen.EstimatePlan(s, meta, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Ctx != 5000 {
+		t.Fatalf("seeded plan ctx = %d, want 5000 (unrounded)", plan.Ctx)
+	}
+}
+
 // Regression: these parsers used to whitespace-split the rendered command, so a
 // quoted model path containing a space (the norm on Windows — "C:\Program
 // Files\...", "D:\LLM\My Models\...") shredded into two tokens and every flag
