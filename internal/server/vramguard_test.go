@@ -363,17 +363,17 @@ func TestPooledGPUStat_SumsEligibleNewest(t *testing.T) {
 		{ID: 1, MemTotalMB: 24576, MemUsedMB: 999, Timestamp: now.Add(-time.Minute)},
 		{ID: 1, MemTotalMB: 24576, MemUsedMB: 4096, Timestamp: now},
 	}
-	got, ok := pooledGPUStat(hist, true)
+	got, ok := pooledGPUStat(hist, true, autogen.GpuPolicy{})
 	if !ok || got.MemTotalMB != 8192+24576 || got.MemUsedMB != 100+4096 {
 		t.Fatalf("pooledGPUStat(multi) = %+v ok=%v, want both cards' newest samples summed", got, ok)
 	}
 	// Single-device mode pins to the card with the most FREE memory: ID 1 has
 	// 20480 MiB free against ID 0's 8092.
-	got, ok = pooledGPUStat(hist, false)
+	got, ok = pooledGPUStat(hist, false, autogen.GpuPolicy{})
 	if !ok || got.MemTotalMB != 24576 || got.MemUsedMB != 4096 {
 		t.Fatalf("pooledGPUStat(single) = %+v ok=%v, want only the newest ID 1 sample", got, ok)
 	}
-	if _, ok := pooledGPUStat(nil, true); ok {
+	if _, ok := pooledGPUStat(nil, true, autogen.GpuPolicy{}); ok {
 		t.Fatal("empty history reported a GPU")
 	}
 	// An adapter under the inference floor (an iGPU slicing system RAM) is not
@@ -381,9 +381,35 @@ func TestPooledGPUStat_SumsEligibleNewest(t *testing.T) {
 	got, ok = pooledGPUStat([]perf.GpuStat{
 		{ID: 0, MemTotalMB: 2048, MemUsedMB: 128, Timestamp: now},
 		{ID: 1, MemTotalMB: 12288, MemUsedMB: 1024, Timestamp: now},
-	}, true)
+	}, true, autogen.GpuPolicy{})
 	if !ok || got.MemTotalMB != 12288 {
 		t.Fatalf("pooledGPUStat = %+v ok=%v, want the iGPU dropped", got, ok)
+	}
+}
+
+// An APU is the case where the guard and the sizer MUST agree: the device's
+// dedicated hole is far under the floor, so the only reason it is visible at all
+// is the shared pool the policy folds in. If the guard skipped that fold it would
+// read 2 GB where the sizer planned against 18 and refuse every load (issue #37).
+func TestPooledGPUStat_IntegratedDeviceFoldsSharedPool(t *testing.T) {
+	now := time.Now()
+	hist := []perf.GpuStat{{
+		ID: 0, Name: "AMD Radeon 780M card0 (gfx1103)",
+		MemTotalMB: 2048, MemUsedMB: 256, SharedTotalMB: 16384, SharedUsedMB: 2048, Timestamp: now,
+	}}
+
+	got, ok := pooledGPUStat(hist, true, autogen.GpuPolicy{})
+	if !ok {
+		t.Fatal("ok = false for an APU-only box, want the folded device")
+	}
+	if got.MemTotalMB != 2048+16384 || got.MemUsedMB != 256+2048 {
+		t.Fatalf("pooledGPUStat = %d/%d MB, want 18432/2304 (carve-out + shared)", got.MemTotalMB, got.MemUsedMB)
+	}
+
+	// sharedMemory: off is the escape hatch and must restore the pre-#37 reading
+	// exactly: the carve-out alone, under the floor, so no GPU at all.
+	if _, ok := pooledGPUStat(hist, true, autogen.GpuPolicy{SharedMemory: autogen.SharedMemoryOff}); ok {
+		t.Fatal("sharedMemory=off still reported a GPU, want the pre-#37 drop")
 	}
 }
 
@@ -397,20 +423,20 @@ func TestPooledVramStats_ReportsWholeMachine(t *testing.T) {
 		{ID: 0, MemTotalMB: 12288, MemUsedMB: 4, Timestamp: now},
 		{ID: 1, MemTotalMB: 16376, MemUsedMB: 4, Timestamp: now},
 	}
-	got := pooledVramStats(hist, true)
+	got := pooledVramStats(hist, true, autogen.GpuPolicy{})
 	if got == nil || got.TotalMB != 12288+16376 || got.UsedMB != 8 || got.Devices != 2 {
 		t.Fatalf("pooledVramStats(multi) = %+v, want both cards summed over 2 devices", got)
 	}
 	// multiGpu off is a real setting, not just a fallback: the gauge then has to
 	// show the one card the router will actually load on, or it promises VRAM the
 	// sizer will never plan against.
-	got = pooledVramStats(hist, false)
+	got = pooledVramStats(hist, false, autogen.GpuPolicy{})
 	if got == nil || got.TotalMB != 16376 || got.Devices != 1 {
 		t.Fatalf("pooledVramStats(single) = %+v, want only the main device", got)
 	}
 	// nil, not a zeroed bar: the UI renders "no GPU reading" for it, and a 0/0
 	// gauge would read as a card with nothing free.
-	if got := pooledVramStats(nil, true); got != nil {
+	if got := pooledVramStats(nil, true, autogen.GpuPolicy{}); got != nil {
 		t.Fatalf("pooledVramStats(no telemetry) = %+v, want nil", got)
 	}
 }

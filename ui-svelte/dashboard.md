@@ -66,7 +66,9 @@ Three save shapes, and the difference is worth knowing before adding a knob:
 - **Autosave (debounced ~900 ms)** — memory, guards. Cheap to get wrong, instantly visible.
 - **Explicit Apply** — the Advanced sizer knobs, behind a "don't touch this" warning with a
   *Restore defaults* button (`DELETE /api/settings/advanced`). A debounced regen fired on a
-  half-typed context ladder is exactly the failure the warning is about.
+  half-typed context ladder is exactly the failure the warning is about. It also holds the
+  **device-policy** knobs (`minGpuVramGB`, `sharedMemory`, `poolIntegratedGpu`), which are what
+  make an integrated GPU visible to the sizer at all — see `internal/autogen/CLAUDE.md`.
 - **Explicit Save, no reload** — the System tab's network/updates/token block
   (`GET`/`PUT /api/settings/app`). These are read by the process at startup, not by the config
   generator: the page diffs the saved values against `running` (what the process actually bound)

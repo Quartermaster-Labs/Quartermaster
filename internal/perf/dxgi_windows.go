@@ -62,17 +62,25 @@ type dxgiQueryVideoMemoryInfo struct {
 
 const dxgiAdapterFlagSoftware = 0x2
 
-// minInferenceVramMB filters out integrated GPUs / basic-render adapters (e.g.
-// an AMD iGPU's ~485MB carve-out) that aren't viable inference targets and would
-// otherwise clutter the dashboard — and, because the UI shows the last-listed
-// GPU, hide the real dGPU behind the iGPU. Any real discrete card exceeds this.
-const minInferenceVramMB = 1024
-
+// minInferenceVramMB is NOT an eligibility rule any more. It used to drop every
+// adapter under 1 GB of dedicated VRAM, which on an APU-only Windows box meant
+// dropping the machine's ONLY GPU before the policy layer ever saw it — the
+// Windows half of issue #37. Eligibility is a policy decision (internal/autogen,
+// GpuPolicy/SharedMemory), and it needs the reading to make it: what was rejected
+// here never reached it. Only adapters with no dedicated memory at all are
+// skipped, which is what keeps basic-render and virtual-display clutter out.
 func init() {
 	// Guard the hand-written struct layout: a wrong offset silently reads
 	// garbage VRAM numbers (same failure mode the PDH size assertion catches).
 	if got := unsafe.Offsetof(dxgiAdapterDesc1{}.DedicatedVideoMemory); got != 272 {
 		panic(fmt.Sprintf("dxgiAdapterDesc1.DedicatedVideoMemory offset %d != 272", got))
+	}
+	// SharedSystemMemory follows DedicatedVideoMemory AND DedicatedSystemMemory,
+	// which is easy to forget: 272 + 8 + 8. Asserting a wrong constant here is
+	// what caught exactly that (reading DedicatedSystemMemory as the aperture,
+	// which is 0 on most systems, would have looked like "no shared pool").
+	if got := unsafe.Offsetof(dxgiAdapterDesc1{}.SharedSystemMemory); got != 288 {
+		panic(fmt.Sprintf("dxgiAdapterDesc1.SharedSystemMemory offset %d != 288", got))
 	}
 	if got := unsafe.Offsetof(dxgiAdapterDesc1{}.AdapterLuid); got != 296 {
 		panic(fmt.Sprintf("dxgiAdapterDesc1.AdapterLuid offset %d != 296", got))
@@ -106,10 +114,11 @@ func comRelease(obj unsafe.Pointer) { comCall(obj, 2) }
 // they're collapsed into one adapter here, but every LUID/interface is retained
 // because live usage/utilization can surface on any one of the mirrors.
 type dxgiAdapter struct {
-	ptrs    []unsafe.Pointer // IDXGIAdapter3*, one per mirror LUID
-	luids   []LUID
-	name    string
-	totalMB int
+	ptrs     []unsafe.Pointer // IDXGIAdapter3*, one per mirror LUID
+	luids    []LUID
+	name     string
+	totalMB  int
+	sharedMB int // system memory the adapter can address (its aperture)
 }
 
 // usedMB returns system-wide dedicated VRAM usage from the PDH "GPU Adapter
@@ -148,6 +157,31 @@ func (a *dxgiAdapter) release() {
 	}
 }
 
+// sharedUsedMB returns system-wide usage of the adapter's SHARED pool from PDH
+// (max across mirror LUIDs, bytes→MB). DXGI reports the aperture's size but no
+// usage at all — QueryVideoMemoryInfo is per-process and only covers the
+// dedicated budget — so PDH is the only source.
+//
+// When the counter is unavailable (older Windows, or PDH failure) the pool is
+// reported as FULLY used rather than free. A free aperture would be budgeted as
+// memory the GPU can hold, and the sizer would plan layers into space we cannot
+// see; reporting it full costs those layers their place on the GPU and never
+// over-commits memory, which is the direction to be wrong in.
+func (a *dxgiAdapter) sharedUsedMB(mem map[LUID]float64, haveCounter bool) int {
+	if !haveCounter || len(mem) == 0 {
+		return a.sharedMB
+	}
+	best := 0
+	for _, l := range a.luids {
+		if b, ok := mem[l]; ok {
+			if mb := int(b / (1024 * 1024)); mb > best {
+				best = mb
+			}
+		}
+	}
+	return best
+}
+
 // openDxgiAdapters enumerates hardware adapters with dedicated VRAM. The
 // returned IDXGIAdapter3 pointers must be released by the caller.
 func openDxgiAdapters() ([]dxgiAdapter, error) {
@@ -184,10 +218,13 @@ func openDxgiAdapters() ([]dxgiAdapter, error) {
 
 		name := windows.UTF16ToString(desc.Description[:])
 		totalMB := int(uint64(desc.DedicatedVideoMemory) / (1024 * 1024))
+		sharedMB := int(uint64(desc.SharedSystemMemory) / (1024 * 1024))
 
-		// Skip the software (WARP) adapter and non-inference adapters (iGPU /
-		// basic-render) below the dedicated-VRAM floor.
-		if desc.Flags&dxgiAdapterFlagSoftware != 0 || totalMB < minInferenceVramMB {
+		// Skip the software (WARP) adapter and anything with no dedicated memory
+		// at all. Everything else is reported as-is and left to the device policy:
+		// an APU's iGPU belongs in the reading even when the default policy keeps
+		// it out of the budget.
+		if desc.Flags&dxgiAdapterFlagSoftware != 0 || totalMB <= 0 {
 			comRelease(ad3)
 			continue
 		}
@@ -202,10 +239,11 @@ func openDxgiAdapters() ([]dxgiAdapter, error) {
 		}
 		byKey[key] = len(adapters)
 		adapters = append(adapters, dxgiAdapter{
-			ptrs:    []unsafe.Pointer{ad3},
-			luids:   []LUID{desc.AdapterLuid},
-			name:    name,
-			totalMB: totalMB,
+			ptrs:     []unsafe.Pointer{ad3},
+			luids:    []LUID{desc.AdapterLuid},
+			name:     name,
+			totalMB:  totalMB,
+			sharedMB: sharedMB,
 		})
 	}
 	return adapters, nil
@@ -237,6 +275,13 @@ func tryDxgiWindows(ctx context.Context, every time.Duration, logger *logmon.Mon
 		logger.Info("using PDH performance counters for GPU VRAM usage")
 	}
 
+	pdhShared, sharedErr := initPdhGpuSharedMem()
+	if sharedErr != nil {
+		logger.Debugf("PDH GPU shared memory not available: %s (shared pools will report no free space)", sharedErr.Error())
+	} else {
+		logger.Info("using PDH performance counters for GPU shared memory usage")
+	}
+
 	ch := make(chan []GpuStat, 1)
 
 	go func() {
@@ -256,26 +301,34 @@ func tryDxgiWindows(ctx context.Context, every time.Duration, logger *logmon.Mon
 		if pdhMem != nil {
 			defer pdhMem.close()
 		}
+		if pdhShared != nil {
+			defer pdhShared.close()
+		}
 
 		emit := func() {
-			var util, mem map[LUID]float64
+			var util, mem, shared map[LUID]float64
 			if pdhUtil != nil {
 				util = pdhUtil.collect()
 			}
 			if pdhMem != nil {
 				mem = pdhMem.collect()
 			}
+			if pdhShared != nil {
+				shared = pdhShared.collect()
+			}
 			stats := make([]GpuStat, 0, len(adapters))
 			for i := range adapters {
 				a := &adapters[i]
 				used := a.usedMB(mem)
 				st := GpuStat{
-					Timestamp:  time.Now(),
-					ID:         i,
-					Name:       a.name,
-					UUID:       fmt.Sprintf("luid_%08x_%08x", uint32(a.luids[0].HighPart), a.luids[0].LowPart),
-					MemUsedMB:  used,
-					MemTotalMB: a.totalMB,
+					Timestamp:     time.Now(),
+					ID:            i,
+					Name:          a.name,
+					UUID:          fmt.Sprintf("luid_%08x_%08x", uint32(a.luids[0].HighPart), a.luids[0].LowPart),
+					MemUsedMB:     used,
+					MemTotalMB:    a.totalMB,
+					SharedTotalMB: a.sharedMB,
+					SharedUsedMB:  a.sharedUsedMB(shared, pdhShared != nil),
 				}
 				if a.totalMB > 0 {
 					st.MemUtilPct = float64(used) / float64(a.totalMB) * 100

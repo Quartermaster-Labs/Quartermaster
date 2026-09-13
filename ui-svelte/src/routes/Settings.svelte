@@ -380,6 +380,8 @@
   let aCompute = $state(1);
   let aVisionOverhead = $state(1);
   let aMinGpuVram = $state(3);
+  let aSharedMem = $state("auto");
+  let aPoolIntegrated = $state(false);
   let aVisionCtx = $state(8192);
   let aMoeCtx = $state(65536);
   let aDenseMin = $state(32768);
@@ -422,6 +424,8 @@
     aKv = s.advanced.kvQuant;
     aLora = s.advanced.loraDir;
     aMinGpuVram = s.advanced.minGpuVramGB;
+    aSharedMem = s.advanced.sharedMemory || "auto";
+    aPoolIntegrated = s.advanced.poolIntegratedGpu;
   }
 
   // A blank/garbage entry is dropped rather than sent as 0 - the endpoint
@@ -450,6 +454,8 @@
         kvQuant: aKv,
         loraDir: aLora.trim(),
         minGpuVramGB: Number(aMinGpuVram) || 0,
+        sharedMemory: aSharedMem === "auto" ? "" : aSharedMem,
+        poolIntegratedGpu: aPoolIntegrated,
       });
       await loadSettings();
       advSaved = true;
@@ -751,8 +757,12 @@
           <span class="text-micro text-txtsecondary">
             default {settings?.defaults.targetVramGB}{gpuMaxGb ? ` · max ${gpuMaxGb}` : ""}
             {#if gpus.length > 1}
-              <span use:tip={`Pooled across ${gpus.length} GPUs: ${gpus.map((g) => `${g.index}:${g.name} ${g.totalGB.toFixed(0)}GB`).join(", ")}. A model larger than one card is split over them with --tensor-split.`}
-                >({gpus.map((g) => g.totalGB.toFixed(0)).join(" + ")})</span
+              <span use:tip={`Pooled across ${gpus.length} GPUs: ${gpus.map((g) => `${g.index}:${g.name} ${g.totalGB.toFixed(0)}GB${g.integrated ? ` (incl. ${(g.sharedTotalGB ?? 0).toFixed(0)}GB shared system memory)` : ""}`).join(", ")}. A model larger than one card is split over them with --tensor-split.`}
+                >({gpus.map((g) => `${g.totalGB.toFixed(0)}${g.integrated ? "*" : ""}`).join(" + ")})</span
+              >
+            {:else if gpus.length === 1 && gpus[0].integrated}
+              <span use:tip={`${gpus[0].name} is an integrated GPU: ${(gpus[0].sharedTotalGB ?? 0).toFixed(1)}GB of this is system memory the GPU allocates from, and it competes with the RAM budget below.`}
+                >({(gpus[0].sharedTotalGB ?? 0) > 0 ? `incl. ${(gpus[0].sharedTotalGB ?? 0).toFixed(0)}GB shared` : "shared memory"})</span
               >
             {/if}
           </span>
@@ -922,7 +932,7 @@
         <span class="text-label">
           <span class="text-txtmain flex items-center gap-1">
             Split models across GPUs
-            {@render hint("Pools every eligible GPU into one VRAM budget and splits a model over them (-sm layer + --tensor-split), sized so no single card goes over. Turn it off to pin every model to one card, which is what a single-GPU box does anyway.")}
+            {@render hint("Pools every eligible GPU into one VRAM budget and splits a model over them (-sm layer + --tensor-split), sized so no single card goes over. Turn it off to pin every model to one card, which is what a single-GPU box does anyway. An integrated GPU counts as eligible here only if 'Pool integrated GPU' is on (Settings -> Advanced).")}
           </span>
           <span class="text-micro text-txtsecondary">Off: one card only, budgeted and loaded as a single GPU.</span>
         </span>
@@ -982,10 +992,32 @@
           <label class="flex flex-col gap-1">
             <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
               Min GPU VRAM (GB)
-              {@render hint("Smallest adapter that counts as inference VRAM. Below this a GPU is ignored entirely, so an integrated GPU reporting a slice of system memory as its own does not inflate the pooled budget or take a share of a split model.")}
+              {@render hint("Smallest adapter that counts as inference VRAM. Below this a GPU is normally ignored entirely. An integrated GPU is the exception: its own memory is a slice of system RAM, so its shared pool is what counts (see Shared memory below), and an APU with no other GPU keeps the whole budget instead of being dropped.")}
             </span>
             <input type="number" min="0" step="0.5" bind:value={aMinGpuVram} class="w-full font-mono rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary" />
             <span class="text-micro text-txtsecondary">default {settings?.advancedDefaults.minGpuVramGB}</span>
+          </label>
+          <label class="flex flex-col gap-1">
+            <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
+              Shared memory
+              {@render hint("How much of the system memory a GPU can address (AMD GTT, the aperture a card maps host RAM into) counts toward the VRAM budget. Auto counts it only for an integrated GPU, whose real usable pool is exactly that - a discrete card's aperture is far slower than its own memory and is not budget. On/Off override the guess.")}
+            </span>
+            <select bind:value={aSharedMem} class="w-full rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary">
+              <option value="auto">auto</option>
+              <option value="on">on</option>
+              <option value="off">off</option>
+            </select>
+            <span class="text-micro text-txtsecondary">default {settings?.advancedDefaults.sharedMemory || "auto"}</span>
+          </label>
+          <label class="flex flex-col gap-1">
+            <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
+              Pool integrated GPU
+              {@render hint("Let an integrated GPU be a split target beside a real card (-sm layer --tensor-split). Off by default: layers on an iGPU are slower than the RAM-bound ones they replace, so splitting across one costs more than it buys. An APU with no other GPU is used either way.")}
+            </span>
+            <div class="flex items-center h-8">
+              <Toggle size="sm" checked={aPoolIntegrated} onchange={(v: boolean) => (aPoolIntegrated = v)} />
+            </div>
+            <span class="text-micro text-txtsecondary">default off</span>
           </label>
           <label class="flex flex-col gap-1">
             <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
