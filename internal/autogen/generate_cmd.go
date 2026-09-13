@@ -696,6 +696,12 @@ func RenderSoloCmdLayers(s Settings, meta Metadata, row GgufRow, ov Override) (C
 	if be.Exe != "" {
 		s.ServerExe = be.Exe
 	}
+	// Custom launch arguments size the preview, not just its argv (pins.go): a
+	// pinned -c has to show up in the sized window and the memory numbers, or the
+	// box and the panel would disagree about the same command. ov is a local copy.
+	if pins := PinsFromArgs(ov.CustomArgsText()); !pins.Empty() {
+		ov = pins.ApplyToOverride(ov)
+	}
 	// Same default as emitModel — this used to hardcode q8_0 with no MoE branch,
 	// so the editor previewed a KV type the emitted config never used.
 	soloTarget := s.TargetVramGB
@@ -739,6 +745,9 @@ func RenderSoloCmdLayers(s Settings, meta Metadata, row GgufRow, ov Override) (C
 
 		CheckpointMinStep: ov.CheckpointMinStep,
 	}
+	// The pin's ctx/placement belong on the profile (per-slot window, exact
+	// rounding): the override copy above only carried the model-wide scalars.
+	pinsForProfile(&prof, ov, meta)
 	soloUb := effectiveUb(meta, prof, &ov, prof.Ctx, s.TargetVramGB)
 	// ...plus the second llama_context a baked-in MTP drafter runs, which
 	// allocates a graph of its own at that same ub (see mtpDraftComputeGB).
@@ -748,13 +757,21 @@ func RenderSoloCmdLayers(s Settings, meta Metadata, row GgufRow, ov Override) (C
 	// the slope the sizer solves ctx against (see mtpDraftSlopeFor).
 	sdKvK, sdKvV := draftKvPair(ov.KvKDraft, ov.KvVDraft, kvK, kvV)
 	prof.DraftSlopeGB = mtpDraftSlopeFor(meta, soloSpec, sdKvK, sdKvV, soloDraftGB)
+	// Multi-slot: every slot carries its own window over the one shared -c pool,
+	// so the sizer solves the per-slot ctx against N x the KV — same as emitModel.
+	// Sizing one slot here previewed a command that over-committed the pool.
+	if slots := profileParallel(prof, ov); slots > 1 {
+		perTokGB *= float64(slots)
+		kvConstGB *= float64(slots)
+		prof.DraftSlopeGB *= float64(slots)
+	}
 	ctx, plan, kvReserve, _, err := sizeProfile(meta, s, prof, perTokGB, kvConstGB, modelMax, ov.KvInRam)
 	if err != nil {
 		return ComposedCmd{}, err
 	}
 	ngl, ncpuMoe := forceLowActiveMoE(meta, plan, prof, kvReserve)
-	if ov.CpuOffload > 0 {
-		ngl, ncpuMoe = applyForcedOffload(meta, ov.CpuOffload)
+	if ov.CpuOffload > 0 || prof.CpuOffloadSet {
+		ngl, ncpuMoe = applyForcedOffload(meta, prof.CpuOffload)
 	}
 	lines := buildCmdLines(s, meta, row, prof, ctx, ngl, ncpuMoe, kvK, kvV, ov.KvInRam, &ov)
 	cc, err := ComposeCmd(lines, ov.CustomArgsText())

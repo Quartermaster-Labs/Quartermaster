@@ -36,6 +36,10 @@ type profile struct {
 	Overhead float64
 	Unlisted bool
 	Ctx      int // 0 = auto-size; >0 forces that ctx via the manual-cap path
+	// CtxExact marks a Ctx that came from a custom launch pin (-c): it is the
+	// window the process will run with, so the sizer must not round it to a
+	// 4096 multiple (RoundedCtx) the way it rounds its own picks.
+	CtxExact bool
 	// IsLong marks a profile whose context is pinned at or above
 	// longCtxThreshold (a ctx tier, a long named variant, or a long Ctx on the
 	// model itself). It tops the VRAM budget's safety slack up to
@@ -50,6 +54,10 @@ type profile struct {
 	ReasoningFmt string
 	Ub           int // physical batch size override (0 => default)
 	CpuOffload   int // >0 pins layers offloaded to CPU, overriding the sizer
+	// CpuOffloadSet distinguishes a pinned CpuOffload of 0 (every layer on GPU:
+	// `-ngl <blocks>` on a dense model) from "no pin". The field's zero value is
+	// otherwise indistinguishable from auto.
+	CpuOffloadSet bool
 	// CtxCheckpoints, when non-nil, emits --ctx-checkpoints N (0 disables the KV
 	// prompt-prefix checkpoint cache). nil => inherit the model-wide value, else
 	// the llama-server default (32). See effectiveCtxCheckpoints.
@@ -255,6 +263,18 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	}
 	if be.Exe != "" {
 		s.ServerExe = be.Exe // this model's chosen llama build wins (local copy)
+	}
+
+	// Custom launch arguments are sizing constraints, not only argv overrides: a
+	// pinned -c/-ctk/-ub/... plans the launch (pins.go), so the emitted flags and
+	// the baked estVramGB describe the process that will actually run. The text
+	// is still appended verbatim by ComposeCmd and still wins at spawn; ov here
+	// is a local copy, the caller's override is untouched.
+	if ov != nil {
+		if pins := PinsFromArgs(ov.CustomArgsText()); !pins.Empty() {
+			pinned := pins.ApplyToOverride(*ov)
+			ov = &pinned
+		}
 	}
 
 	// Charge the draft sidecar only when this spec chain actually attaches it as
@@ -506,6 +526,14 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		}
 	}
 
+	// Fold the pins of the text that applies to each profile into its sizing
+	// inputs: a named variant's own text sizes that variant, and a ctx tier's own
+	// window sizes that tier. Runs before the compute-buffer pass below, which
+	// reads the profile's -ub (and before sizing, which reads ctx/placement).
+	for i := range profiles {
+		pinsForProfile(&profiles[i], override, meta)
+	}
+
 	// Charge the GPU compute buffer (logits + activations + the GPU runtime
 	// constant) per profile; it scales with the physical batch and lives on the
 	// GPU regardless of CPU expert offload, so it's flat VRAM overhead. Replaces
@@ -613,7 +641,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 			return err
 		}
 		ngl, ncpuMoe := forceLowActiveMoE(meta, plan, prof, kvReserve)
-		if prof.CpuOffload > 0 {
+		if prof.CpuOffload > 0 || prof.CpuOffloadSet {
 			ngl, ncpuMoe = applyForcedOffload(meta, prof.CpuOffload)
 		}
 		// Re-price whenever the emitted placement is not the one GetLoadPlan

@@ -259,6 +259,11 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 	if v := q.Get("ub"); v != "" {
 		in.Ub, _ = strconv.Atoi(v)
 	}
+	if v := q.Get("parallel"); v != "" {
+		// Slot count: each slot carries its own window over the shared -c pool, so
+		// the KV cost model has to know how many are resident.
+		in.Parallel, _ = strconv.Atoi(v)
+	}
 	if v := q.Get("ropeScaling"); v != "" {
 		// Decides whether the sizer may pick a ctx past the trained length; without
 		// it an editor preview of a rope-extended window silently sizes the clamped
@@ -327,6 +332,15 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 				in.MmprojGB = autogen.MmprojVramGB(mp, float64(fi.Size())/(1<<30), gf.Settings)
 			}
 		}
+	}
+
+	// Custom launch arguments are the last word, exactly as they are at spawn
+	// (ComposeCmd appends them last and llama-server keeps the last flag): fold
+	// their pins over the form params so the preview sizes the launch the text
+	// describes instead of the one the sizer would have picked alone. See
+	// autogen/pins.go; a knob the text does not pin is untouched.
+	if v := q.Get("custom"); v != "" {
+		autogen.PinsFromArgs(v).ApplyToEstimate(&in, meta)
 	}
 
 	res, err := autogen.EstimatePlan(gf.Settings, meta, in)

@@ -7,8 +7,12 @@ package autogen
 // EstimateInput is the subset of editor fields that affect placement/memory.
 // Zero Ctx means "let the sizer pick". Zero TargetVramGB uses settings.
 type EstimateInput struct {
-	Ctx     int
-	KvK     string
+	Ctx int
+	// CtxExact marks Ctx as a custom launch pin (-c): the process runs that
+	// window whatever the sizer would have picked, so it is not rounded up to a
+	// 4096 multiple the way an auto pick is.
+	CtxExact bool
+	KvK      string
 	KvV     string
 	KvInRam bool
 	Spec    string
@@ -18,6 +22,7 @@ type EstimateInput struct {
 	RopeScaling    string
 	TargetVramGB   float64
 	CpuOffload     int  // >0 pins layers offloaded to CPU, overriding the sizer
+	CpuOffloadSet  bool // CpuOffload == 0 is a pin too (every layer on GPU)
 	CtxCheckpoints *int // nil => llama default (32); 0 disables; reserves checkpoint VRAM
 	// CheckpointMinStep pins -cms (checkpoint spacing in prompt tokens), which
 	// scales each snapshot's global-KV term. 0 => the arch default (wide on SWA).
@@ -35,6 +40,10 @@ type EstimateInput struct {
 	// must pass "f16" explicitly, because that is what llama uses there.
 	KvKDraft string
 	KvVDraft string
+	// Parallel is llama-server's slot count (--parallel). Every slot gets its own
+	// window over one shared pool, so the KV cost the sizer solves against is
+	// Parallel x the per-token slope. 0/1 => a single slot.
+	Parallel int
 	// DraftKind is the paired draft sidecar's kind ("mtp"/"dflash", "" for none),
 	// as DraftSidecarForDir reports it. Only consulted when Spec is empty, to
 	// resolve the same auto spec the emitter picks — see EstimatePlan.
@@ -118,6 +127,14 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 	if m := GetKvCostModel(meta, kvK, kvV); m.OK {
 		perTokGB, kvConstGB = m.SlopeGB, m.ConstGB
 	}
+	// N slots share one -c pool, each with its own KV, so charge N x. buildCmdLines
+	// multiplies the per-slot window back out for -c; charging one slot here
+	// under-sized the KV reserve and the admission figure by N.
+	slots := EffectiveParallel(&Override{Parallel: in.Parallel})
+	if slots > 1 {
+		perTokGB *= float64(slots)
+		kvConstGB *= float64(slots)
+	}
 
 	// Rope scaling lifts the trained-length ceiling; without it this is nativeCtx.
 	modelMax := ropeCeiling(meta, in.RopeScaling, in.Ctx)
@@ -137,12 +154,16 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 	// overhead would price it at a ctx the sizer had not picked yet.
 	dKvK, dKvV := draftKvPair(in.KvKDraft, in.KvVDraft, kvK, kvV)
 	draftSlopeGB := mtpDraftSlopeFor(meta, spec, dKvK, dKvV, draftGB)
+	if slots > 1 {
+		draftSlopeGB *= float64(slots)
+	}
 
 	prof := profile{
 		Name:     "estimate",
 		Target:   target,
 		Overhead: s.VramOverheadGB + specOh,
 		Ctx:      in.Ctx,
+		CtxExact: in.CtxExact,
 		Spec:     spec,
 		KvK:      kvK,
 		KvV:      kvV,
@@ -193,7 +214,7 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 	}
 
 	ngl, ncpuMoe := forceLowActiveMoE(meta, plan, prof, kvReserve)
-	if in.CpuOffload > 0 {
+	if in.CpuOffload > 0 || in.CpuOffloadSet {
 		ngl, ncpuMoe = applyForcedOffload(meta, in.CpuOffload)
 	}
 	// Any placement that differs from the one GetLoadPlan priced has to be
