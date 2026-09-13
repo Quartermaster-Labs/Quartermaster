@@ -200,6 +200,38 @@ func TestResolveComponents_LongCatFromPool(t *testing.T) {
 	}
 }
 
+// Width narrows the field, the declaration names the file. A pool holding both a
+// Qwen3-4B and a Qwen3-VL-4B of the same caption width (both are 2560) used to
+// resolve to the VL file on the size/path tiebreak no matter what
+// settings.encoders.qwenLlm pinned, which wired Z-Image to the encoder Krea-2
+// wants. Regression: 6aea9f5 (discover image encoders instead of declaring them).
+func TestResolveComponents_DeclaredLlmWins(t *testing.T) {
+	const pin = "/m/lmstudio/Qwen3-4B-Instruct-2507-Q8_0.gguf"
+	pool := &EncoderPool{Files: []ComponentFile{
+		{Path: "/m/QwenVL/Qwen3VL-4B-Instruct-Q8_0.gguf", Role: RoleLlm, Width: 2560, SizeGB: 3.99, Vision: true,
+			Mmproj: "/m/QwenVL/mmproj-Qwen3VL-4B-Instruct-F16.gguf"},
+		{Path: pin, Role: RoleLlm, Width: 2560, SizeGB: 3.99},
+	}}
+	enc := EncoderSet{ZimageVae: "/m/ae.safetensors", QwenLlm: pin}
+	c, m := resolveComponents(enc, nil, "lumina2", "Z-Image-Turbo", pool, 2560)
+	if len(m) != 0 {
+		t.Fatalf("missing = %v, want none", m)
+	}
+	if c.llm != pin {
+		t.Errorf("llm = %q, want the declared %q", c.llm, pin)
+	}
+	if c.vae != enc.ZimageVae {
+		t.Errorf("vae = %q", c.vae)
+	}
+	// Krea-2 is the model the VL file is right for, and a per-model override
+	// still beats both the declaration and the scan.
+	ov := &Override{TextEncoderPath: "/m/QwenVL/Qwen3VL-4B-Instruct-Q8_0.gguf"}
+	c2, _ := resolveComponents(enc, ov, "qwen_image", "krea2_turbo-Q8_0", pool, 2560)
+	if c2.llm != ov.TextEncoderPath {
+		t.Errorf("per-model override lost to the global pin: %q", c2.llm)
+	}
+}
+
 func TestMergeImageVariant(t *testing.T) {
 	base := Override{
 		VaePath: "ae.safetensors", TextEncoderPath: "qwen3.gguf",

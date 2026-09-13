@@ -203,20 +203,25 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *En
 	enc = fillEncoderSet(enc, pool)
 	// The text encoder is picked by MATCHING WIDTHS, not by name: the DiT states
 	// the encoder hidden size it was trained against, and each candidate reports
-	// its own. That beats the single global EncoderSet.QwenLlm field, which
-	// cannot be right for two models that want different encoders (Z-Image wants
-	// Qwen3-4B where LongCat wants Qwen2.5-VL-7B), so a structural match wins
-	// over the declared field. A per-model Override still wins over both, below.
+	// its own. A declared EncoderSet.QwenLlm of that width wins outright, because
+	// width is not an identity: Qwen3-4B-Instruct-2507 and Qwen3-VL-4B-Instruct
+	// are both 2560 wide, and only the declaration says which one a given DiT was
+	// trained against. Without one the scan's pick is used, since a single global
+	// field cannot be right for two models that want different encoders (Z-Image
+	// wants Qwen3-4B where LongCat wants Qwen2.5-VL-7B). A per-model Override
+	// still wins over both, below.
 	wantVision := wantsVisionEncoder(a, n, ov)
-	autoLlm, autoVision := pool.Llm(condHidden, wantVision)
+	autoLlm, autoVision := pool.Llm(condHidden, wantVision, enc.QwenLlm)
 	if autoLlm == "" && wantVision {
 		// No vision-capable encoder of that width: fall back to a text-only one
 		// rather than emitting nothing, and let the missing projector show up as
 		// the model producing unconditioned output rather than as a dead server.
-		autoLlm, autoVision = pool.Llm(condHidden, false)
+		autoLlm, autoVision = pool.Llm(condHidden, false, enc.QwenLlm)
 	}
 	llmDefault := autoLlm
 	if llmDefault == "" {
+		// A declared encoder the scan could not classify (kept outside the models
+		// root, say) is still the user's explicit choice.
 		llmDefault = enc.QwenLlm
 	}
 	if wantVision {

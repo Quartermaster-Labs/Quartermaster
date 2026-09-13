@@ -215,7 +215,16 @@ const hashCacheSuffix = ".modelhash"
 //
 //	default keeps the full mesh (~5.5M triangles and ~180 MB at the 512
 //	profile); a served model is more useful at ~1M triangles and ~40 MB.
-const genVersion = "v70"
+
+// v71: a declared settings.encoders.qwenLlm of the matching caption width wins
+//
+//	over the encoder scan's pick. The scan matches text encoders by hidden width
+//	and breaks ties on rank, then rounded size, then path, so a Qwen3-4B and a
+//	Qwen3-VL-4B file (both 2560 wide, both 3.99 GiB) resolved to whichever path
+//	sorted first: Z-Image was fed the VL file Krea-2 wants while the user's own
+//	qwenLlm pin named Qwen3-4B. Configs that declare qwenLlm change --llm for
+//	inputs that did not.
+const genVersion = "v71"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

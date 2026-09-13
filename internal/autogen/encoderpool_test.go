@@ -194,32 +194,71 @@ func TestAutogen_EncoderPoolLlm(t *testing.T) {
 		{Path: "/m/t5.gguf", Role: RoleT5, Width: 4096, SizeGB: 5},
 	}}
 	// Widest file wins at equal width...
-	if got, _ := p.Llm(3584, false); got != "/m/qwen25-7b.gguf" {
+	if got, _ := p.Llm(3584, false, ""); got != "/m/qwen25-7b.gguf" {
 		t.Errorf("llm(3584) = %q, want the largest", got)
 	}
 	// ...unless a vision tower is required, which excludes the bigger text-only
 	// file and drags the paired projector along.
-	got, proj := p.Llm(3584, true)
+	got, proj := p.Llm(3584, true, "")
 	if got != "/m/qwen25vl-q8.gguf" || proj != "/m/mmproj.gguf" {
 		t.Errorf("llm(3584, vision) = %q/%q", got, proj)
 	}
-	if got, _ := p.Llm(2560, false); got != "/m/qwen3-4b.gguf" {
+	if got, _ := p.Llm(2560, false, ""); got != "/m/qwen3-4b.gguf" {
 		t.Errorf("llm(2560) = %q", got)
 	}
 	// An unmatched width picks nothing rather than the closest: a mismatched
 	// encoder does not degrade, it fails to load.
-	if got, _ := p.Llm(4096, false); got != "" {
+	if got, _ := p.Llm(4096, false, ""); got != "" {
 		t.Errorf("llm(4096) = %q, want none (t5 is not an llm)", got)
 	}
-	if got, _ := p.Llm(0, false); got != "" {
+	if got, _ := p.Llm(0, false, ""); got != "" {
 		t.Errorf("llm(0) = %q, want none", got)
 	}
 	var nilPool *EncoderPool
-	if got, _ := nilPool.Llm(3584, true); got != "" {
+	if got, _ := nilPool.Llm(3584, true, ""); got != "" {
 		t.Error("nil pool must be inert")
 	}
 	if nilPool.Vae(VaeFamilyFlux) != "" || nilPool.Clip(768) != "" || nilPool.T5() != "" {
 		t.Error("nil pool must be inert for every getter")
+	}
+}
+
+// The real-world tie this pool has to break: Qwen3-4B-Instruct-2507 and
+// Qwen3-VL-4B-Instruct are both 2560 wide, and the Q8 quants of each round to
+// the same size, so the scan's own tiebreak (path) lands on the VL file. Only
+// the declared pin says which of them a given DiT was trained against.
+func TestAutogen_EncoderPoolLlmPrefer(t *testing.T) {
+	const (
+		vl   = "/m/QwenVL/Qwen3VL-4B-Instruct-Q8_0.gguf"
+		q3q8 = "/m/lmstudio-community/Qwen3-4B-Instruct-2507-GGUF/Qwen3-4B-Instruct-2507-Q8_0.gguf"
+		q3q4 = "/m/lmstudio-community/Qwen3-4B-Instruct-2507-GGUF/Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+	)
+	p := &EncoderPool{Files: []ComponentFile{
+		{Path: vl, Role: RoleLlm, Width: 2560, SizeGB: 3.99, Vision: true,
+			Mmproj: "/m/QwenVL/mmproj-Qwen3VL-4B-Instruct-F16.gguf"},
+		{Path: q3q8, Role: RoleLlm, Width: 2560, SizeGB: 3.99},
+		{Path: q3q4, Role: RoleLlm, Width: 2560, SizeGB: 2.32},
+	}}
+	// No declaration: the path tiebreak takes the VL file, which is how
+	// Z-Image ended up conditioned on Qwen3-VL.
+	if got, _ := p.Llm(2560, false, ""); got != vl {
+		t.Errorf("unpinned llm = %q, want %q", got, vl)
+	}
+	// A declared file of the matching width wins outright, even when the scan
+	// finds a larger candidate.
+	if got, _ := p.Llm(2560, false, q3q4); got != q3q4 {
+		t.Errorf("pinned llm = %q, want %q", got, q3q4)
+	}
+	// A pin without a vision tower cannot serve a vision model (the caller then
+	// retries text-only and gets it), and an unseen pin changes nothing.
+	if got, _ := p.Llm(2560, true, q3q4); got != vl {
+		t.Errorf("vision call took a text-only pin: %q", got)
+	}
+	if got, proj := p.Llm(2560, true, vl); got != vl || proj == "" {
+		t.Errorf("vision pin = %q/%q", got, proj)
+	}
+	if got, _ := p.Llm(2560, false, "/m/elsewhere/qwen3-4b.gguf"); got != vl {
+		t.Errorf("unseen pin = %q, want %q", got, vl)
 	}
 }
 

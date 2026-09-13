@@ -91,6 +91,13 @@ shipped knowledge about what DiTs are trained against, not per-machine tuning. D
 (`mtp-*`, dflash) and pooled embedders are excluded outright: their widths collide with real
 encoders and neither can condition anything.
 
+A declared `settings.encoders.qwenLlm` of the matching width wins outright (`EncoderPool.Llm`
+takes it as `prefer`), and a per-model `textEncoderPath` wins over even that: the scan narrows the
+field, the declaration names the file. Without one, two same-width Qwen candidates of the same
+rounded size are separated only by the path tiebreak, which is arbitrary. Qwen3-4B and Qwen3-VL-4B
+are both 2560 wide and their Q8 quants both round to 3.99 GiB, so that tiebreak handed Z-Image the
+VL file Krea-2 wants until the pin was given precedence.
+
 **`--llm_vision` pairs by directory.** `pairProjectors` attaches each encoder gguf to the
 `mmproj-*` beside it, the same convention `inheritSidecars` uses for vision LLMs, so the
 projector for a chosen `--llm` is simply its neighbour. Whether a model *wants* one is the one
