@@ -36,6 +36,54 @@ func TestApplyOverrideDTO(t *testing.T) {
 	}
 }
 
+// A custom flag owns its knob: the save path zeroes the structured field it
+// shadows, so deleting the flag later cannot resurrect a stale pin (the mmap
+// reset half of issue #38).
+func TestApplyOverrideDTO_CustomArgsZeroShadows(t *testing.T) {
+	var ov autogen.Override
+	applyOverrideDTO(&ov, overrideDTO{
+		Ctx:        8192,
+		Mmap:       "off",
+		Mlock:      true,
+		CacheRamMB: 4096,
+		CustomArgs: "--ctx-size 32768 --load-mode mmap",
+	})
+	if ov.Ctx != 0 {
+		t.Errorf("ctx shadowed by --ctx-size was not zeroed: %d", ov.Ctx)
+	}
+	if ov.Mmap != "" || ov.Mlock {
+		t.Errorf("load mode shadowed by --load-mode was not zeroed: %q/%v", ov.Mmap, ov.Mlock)
+	}
+	if ov.CacheRamMB != 4096 {
+		t.Errorf("unshadowed cacheRamMB was cleared: %d", ov.CacheRamMB)
+	}
+	if ov.CustomArgs != "--ctx-size 32768 --load-mode mmap" {
+		t.Errorf("CustomArgs was rewritten: %q", ov.CustomArgs)
+	}
+}
+
+// The legacy extraArgs bucket is an effective custom text too, so a save from
+// the old editor still zeroes what it shadows (-cram was the accumulation bug).
+func TestApplyOverrideDTO_LegacyExtraArgsZeroShadows(t *testing.T) {
+	var ov autogen.Override
+	applyOverrideDTO(&ov, overrideDTO{CacheRamMB: 4096, ExtraArgs: "-cram 2048"})
+	if ov.CacheRamMB != 0 {
+		t.Errorf("cacheRamMB shadowed by legacy extraArgs was not zeroed: %d", ov.CacheRamMB)
+	}
+}
+
+// The editor's off toggle keeps the text but applies and clears nothing.
+func TestApplyOverrideDTO_CustomArgsOffChangesNothing(t *testing.T) {
+	var ov autogen.Override
+	applyOverrideDTO(&ov, overrideDTO{Ctx: 8192, CustomArgs: "--ctx-size 32768", CustomArgsOff: true})
+	if ov.Ctx != 8192 {
+		t.Errorf("disabled custom text zeroed a field: %d", ov.Ctx)
+	}
+	if !ov.CustomArgsOff || ov.CustomArgs == "" {
+		t.Errorf("disabled text must be kept: %q off=%v", ov.CustomArgs, ov.CustomArgsOff)
+	}
+}
+
 // The override PUT seeds from the hand-authored file override (ResolveFileOverride)
 // so file-only fields the editor still doesn't model — quant — survive into the
 // sidecar row; applyOverrideDTO must leave Quant untouched. CtxVariants is now
@@ -104,6 +152,50 @@ func TestEstimateInputFromCmd(t *testing.T) {
 	}
 	if bare.KvInRam {
 		t.Error("KvInRam=true want false when --no-kv-offload absent")
+	}
+}
+
+// Regression: /estimate?actual=true seeds from the LOADED command, whose -c is
+// the total pool and which the process really runs. Decoding it as a per-slot
+// sizer input and re-rounding it through the 4096 ladder reported "4k" for a
+// live `-c 5000` while the configured command said 126976: the panel disagreed
+// with both the running process and the final-args pane.
+func TestEstimateInputFromCmd_seededCtxIsExact(t *testing.T) {
+	in := estimateInputFromCmd("llama-server -m x.gguf -ngl 99 -c 5000 --parallel 1 --kv-unified")
+	if in.Ctx != 5000 {
+		t.Fatalf("Ctx=%d want 5000", in.Ctx)
+	}
+	if !in.CtxExact {
+		t.Fatal("CtxExact=false, want true for a window read off a real command")
+	}
+
+	// -c is the pool, so N slots divide it: the emitter writes ctx*parallel.
+	multi := estimateInputFromCmd("llama-server -m x.gguf -c 8192 --parallel 2")
+	if multi.Ctx != 4096 || multi.Parallel != 2 || !multi.CtxExact {
+		t.Fatalf("multi: Ctx=%d Parallel=%d exact=%v, want 4096/2/true", multi.Ctx, multi.Parallel, multi.CtxExact)
+	}
+	if alias := estimateInputFromCmd("llama-server -m x.gguf -np 4 -c 16384"); alias.Ctx != 4096 || alias.Parallel != 4 {
+		t.Fatalf("alias: Ctx=%d Parallel=%d, want 4096/4", alias.Ctx, alias.Parallel)
+	}
+	// No -c => the sizer is still free to pick.
+	if bare := estimateInputFromCmd("llama-server -m x.gguf -ngl 99"); bare.Ctx != 0 || bare.CtxExact {
+		t.Fatalf("bare: Ctx=%d exact=%v, want 0/false", bare.Ctx, bare.CtxExact)
+	}
+
+	// The number the panel shows: the same settings+metadata that rounded 5000 to
+	// 4096 (TestPinnedCtxIsExact) must report 5000 for the seeded input.
+	meta := autogen.Metadata{
+		Architecture: "llama", BlockCount: 32, HeadCountKv: 8,
+		KeyLength: 128, ValueLength: 128,
+		FileSizeGB: 4.0, ContextLength: 32768,
+	}
+	s := autogen.Settings{TargetVramGB: 40, VramOverheadGB: 1, ComputeBufFactor: 1}
+	plan, err := autogen.EstimatePlan(s, meta, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Ctx != 5000 {
+		t.Fatalf("seeded plan ctx = %d, want 5000 (unrounded)", plan.Ctx)
 	}
 }
 

@@ -91,10 +91,16 @@ linux-arm64: ui
 #
 # Prerelease tags (v1.0.4-rc1) are filtered out: FixedFileInfo is four integers
 # with nowhere to put a suffix, and a dev build should not claim to BE the rc.
+# The filter cannot be a make pattern: only the FIRST '%' in a pattern is a
+# wildcard and the rest are literal, so `filter-out %-%` matches nothing and the
+# prerelease tag reaches -ver-patch, which goversioninfo rejects outright (a
+# build that worked while the newest tag was a release, and stops working the
+# moment an rc is cut). findstring over the list says what it means instead.
 # With no tags at all VI_FLAGS is empty and the JSON's own values are used --
 # note a 0.0.0.0 FixedFileInfo makes Windows drop the whole string table, which
 # is why the placeholder in the JSON is not zero.
-VI_TAG := $(firstword $(filter-out %-%,$(shell git tag --list "v[0-9]*.[0-9]*.[0-9]*" --sort=-v:refname)))
+VI_TAGS := $(shell git tag --list "v[0-9]*.[0-9]*.[0-9]*" --sort=-v:refname)
+VI_TAG := $(firstword $(foreach t,$(VI_TAGS),$(if $(findstring -,$(t)),,$(t))))
 VI_VER := $(patsubst v%,%,$(VI_TAG))
 VI_PARTS := $(subst ., ,$(VI_VER))
 ifneq ($(VI_VER),)

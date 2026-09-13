@@ -275,6 +275,25 @@ rounded UP to a half step) whenever a scaling type is set with no explicit facto
 fine-tuned for extension), i.e. the flag is on and does nothing. An explicit `ropeScale`
 always wins.
 
+## Pinned custom launch arguments
+
+A model's custom launch arguments are constraints on the plan, not only on the argv
+(`pins.go`; design in [`../ui-svelte/launch-args.md`](../ui-svelte/launch-args.md)). `PinsFromArgs`
+reads the flags the sizer models (`-c`, `-ngl`/`--n-cpu-moe`, `-ctk`/`-ctv`, `--no-kv-offload`,
+`--parallel`, `-ub`, `--spec-type`, `--rope-scaling`, `--ctx-checkpoints`, `-cms`), and `emitModel`,
+`RenderSoloCmdLayers` and `EstimatePlan` fold them in. The emitted occurrence of each flag then says
+the same thing as the text that replaces it, and `estVramGB`/`estRamGB` describe the launch that
+actually runs. Two conventions matter:
+
+- `-c` is the shared POOL. `profile.Ctx` is the per-slot window, so a pin divides by `--parallel`
+  (`buildCmdLines` multiplies it back out), and `EstimateInput.Parallel` makes the preview charge
+  every slot's share of the KV.
+- A pinned window is used EXACTLY (`profile.CtxExact`, `EstimateInput.CtxExact`): no `RoundedCtx`
+  floor to a 4096 multiple, the way an auto pick is rounded, and no shrink to the RAM budget in the
+  KV-in-RAM branch (the plan reports the overflow instead).
+
+Unmodeled flags (samplers, `-cram`, ...) still win at spawn and do not move the plan.
+
 ## Emitted footprint (`estVramGB` / `estRamGB`)
 
 **The sizer's footprint is emitted, not just a comment.** Every sizing emitter writes a

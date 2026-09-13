@@ -217,7 +217,7 @@ func (m *Manager) Resolve(ctx context.Context, comp, variant, version string) (r
 		// hint is worth the most. Fall back to the newest release so the caller
 		// gets something concrete to compare against instead of "not found".
 		if rel, ok = pickRelease(rels, version, true, nil); !ok {
-			return Release{}, "", "", 0, fmt.Errorf("no release found for %s", c.ID)
+			return Release{}, "", "", 0, noReleaseError(c, rels, version)
 		}
 	}
 	names := rel.AssetNames()
@@ -353,7 +353,7 @@ func (m *Manager) run(id string, c Component, variant, version string) {
 		return err == nil
 	})
 	if !ok {
-		fail(fmt.Errorf("%s: no release %q found in the last %d releases", c.ID, version, releasePage))
+		fail(noReleaseError(c, rels, version))
 		return
 	}
 	primary, extras, err := c.MatchAssets(variant, runtime.GOOS, rel.AssetNames())

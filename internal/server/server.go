@@ -348,6 +348,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	s.updater = update.New(updateRepo, build.Version, noticeLogger(proxylog))
 	go s.updater.Run(s.shutdownCtx)
 	s.routes()
+	s.checkLaunchFlags()
 	s.startPreload()
 	return s, nil
 }

@@ -20,6 +20,7 @@ port-gated into two apps** (`App.svelte` `onMount` fetches `GET /api/mode`):
 | [`playground-chat.md`](playground-chat.md) | `ChatInterface` / `ChatMessage` — server-run turns, reasoning headers, read-aloud, diagrams |
 | [`playground-tools.md`](playground-tools.md) | Modes, tools and the KV-prefix rules: web search, assistant tools, memory, ask wizard, shopping, file attachments |
 | [`playground-media.md`](playground-media.md) | The Image and Speech studios + `MaskEditor` |
+| [`launch-args.md`](launch-args.md) | Design note (not implemented): the two launch-argument panes, flag ownership and the flag-validation table |
 
 ## Tech stack & build
 

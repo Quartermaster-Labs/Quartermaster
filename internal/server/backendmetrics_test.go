@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -103,10 +104,14 @@ func TestScrapeOne_LoadingPropsDoesNotPinNCtxToZero(t *testing.T) {
 	}
 }
 
-// is in flight, and that /props is fetched only once per (model, base) --
-// never re-hit on later ticks unless the base URL changes (restart/reload).
+// is in flight, while /props (no task queue) is read on every non-busy tick so
+// the window tracks the CURRENT load: a model keeps its port across a restart,
+// and caching /props per (model, base) served the previous load's n_ctx forever
+// (the playground's ctx bar and the dashboard inference box read it).
 func TestScrapeOne_SkipsQueuedEndpointsWhenBusy(t *testing.T) {
 	var hits struct{ metrics, slots, props atomic.Int64 }
+	var nCtx atomic.Int64
+	nCtx.Store(4096)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/metrics":
@@ -117,7 +122,7 @@ func TestScrapeOne_SkipsQueuedEndpointsWhenBusy(t *testing.T) {
 			w.Write([]byte(`[]`))
 		case "/props":
 			hits.props.Add(1)
-			w.Write([]byte(`{"total_slots":1,"default_generation_settings":{"n_ctx":4096}}`))
+			fmt.Fprintf(w, `{"total_slots":1,"default_generation_settings":{"n_ctx":%d}}`, nCtx.Load())
 		}
 	}))
 	defer srv.Close()
@@ -143,26 +148,21 @@ func TestScrapeOne_SkipsQueuedEndpointsWhenBusy(t *testing.T) {
 	if hits.metrics.Load() != 1 || hits.slots.Load() != 1 {
 		t.Errorf("idle scrape hit metrics=%d slots=%d, want 1/1", hits.metrics.Load(), hits.slots.Load())
 	}
-	if hits.props.Load() != 1 {
-		t.Errorf("idle scrape props hits = %d, want still 1 (cached, same base)", hits.props.Load())
+	if hits.props.Load() != 2 {
+		t.Errorf("idle scrape props hits = %d, want 2 (read every idle tick)", hits.props.Load())
 	}
 	if idle.RequestsProcessing != 1 {
 		t.Errorf("idle scrape RequestsProcessing = %d, want fresh 1", idle.RequestsProcessing)
 	}
 	if idle.NCtx != 4096 {
-		t.Errorf("idle scrape NCtx = %d, want cached 4096", idle.NCtx)
+		t.Errorf("idle scrape NCtx = %d, want 4096", idle.NCtx)
 	}
 
-	// Base URL change (process restart on a new port) must invalidate the cache.
-	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/props" {
-			hits.props.Add(1)
-			w.Write([]byte(`{"total_slots":1,"default_generation_settings":{"n_ctx":4096}}`))
-		}
-	}))
-	defer srv2.Close()
-	m.scrapeOne(context.Background(), "m", srv2.URL, false, prev, true)
-	if hits.props.Load() != 2 {
-		t.Errorf("scrape after base change props hits = %d, want 2 (cache invalidated)", hits.props.Load())
+	// The model reloaded on the SAME port with a different window: the next tick
+	// must report the new n_ctx, not the one the previous process ran with.
+	nCtx.Store(118784)
+	reloaded := m.scrapeOne(context.Background(), "m", srv.URL, false, idle, true)
+	if reloaded.NCtx != 118784 {
+		t.Errorf("NCtx after an in-place reload = %d, want 118784", reloaded.NCtx)
 	}
 }

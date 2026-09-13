@@ -9,7 +9,7 @@
   import { isNative } from "../lib/native";
   import { openTab } from "../stores/appTabs";
   import { prettifyModelName, modelCategory, modelWeightGB, type ModelCategory } from "../lib/modelUtils";
-  import { Settings, Square, Image, MessageCircle, HelpCircle } from "lucide-svelte";
+  import { Settings, Square, Image, MessageCircle, HelpCircle, ChevronRight, Copy, Check } from "lucide-svelte";
   import type { Model } from "../lib/types";
   import ModelConfigModal from "./ModelConfigModal.svelte";
   import InferenceFeedback from "./InferenceFeedback.svelte";
@@ -33,6 +33,24 @@
   function closeConfig(): void {
     configOpen = false;
     configs = {}; // drop the id-keyed cache so edited params refetch
+  }
+
+  // The collapsed "Running arguments" section at the foot of each card expands
+  // into the argv the process ACTUALLY spawned with (m.runningCmd; the config
+  // cmd is the fallback until it reports ready), with a copy button. Parsed
+  // fields above answer the common questions; this is for reading or pasting
+  // the whole line.
+  let copiedId = $state("");
+  let copyTimer: ReturnType<typeof setTimeout> | null = null;
+  async function copyArgs(id: string, cmd: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(cmd);
+      copiedId = id;
+      if (copyTimer) clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => (copiedId = ""), 1200);
+    } catch {
+      // clipboard blocked (insecure context) - nothing useful to show
+    }
   }
 
   function isLive(m: Model): boolean {
@@ -281,10 +299,30 @@
               </div>
             {/if}
 
-            {#if cfg}
-              <details class="mt-2">
-                <summary class="text-micro text-txtsecondary cursor-pointer hover:text-txtmain">Launch command</summary>
-                <pre class="well mt-1 whitespace-pre-wrap break-all font-mono text-micro text-txtsecondary">{effCmd}</pre>
+            {#if effCmd}
+              <!-- Collapsed by default: the parsed fields above answer the common
+                   questions, this is for reading or pasting the whole line. The
+                   label keeps the two sources apart - m.runningCmd is what the
+                   process spawned with, the config cmd only stands in until it
+                   reports ready. -->
+              <details class="mt-2 group/args">
+                <summary
+                  class="inline-flex items-center gap-1.5 text-micro font-medium uppercase tracking-wide text-txtsecondary cursor-pointer select-none hover:text-txtmain transition-colors"
+                >
+                  <ChevronRight class="w-3 h-3 shrink-0 opacity-60 transition-transform group-open/args:rotate-90" />
+                  {m.runningCmd ? "Running arguments" : "Configured command"}
+                </summary>
+                <div class="mt-1 relative">
+                  <button
+                    class="absolute right-2 top-2 inline-flex items-center justify-center p-1 rounded border border-card-border bg-background text-txtsecondary hover:text-txtmain hover:bg-surface transition-colors"
+                    onclick={() => copyArgs(m.id, effCmd)}
+                    aria-label="Copy running arguments"
+                    use:tip={copiedId === m.id ? "Copied" : "Copy to clipboard"}
+                  >
+                    {#if copiedId === m.id}<Check size={13} class="text-success" />{:else}<Copy size={13} />{/if}
+                  </button>
+                  <pre class="well whitespace-pre-wrap break-all font-mono text-micro text-txtsecondary pr-9">{effCmd}</pre>
+                </div>
               </details>
             {/if}
           </div>

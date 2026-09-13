@@ -690,11 +690,20 @@ type Override struct {
 	TensorSplit          string  `yaml:"tensorSplit"`
 	MainGpu              int     `yaml:"mainGpu"`
 	OverrideTensor       string  `yaml:"overrideTensor"`
-	// ExtraArgs are additional llama-server flags appended verbatim to the emitted
-	// command, for knobs autogen doesn't model (e.g. --rope-freq-scale,
-	// --override-kv). The structured fields above still own the computed flags;
-	// these are pure passthrough. The UI captures anything it can't map from the
-	// editable launch-parameters box into here.
+	// CustomArgs is the user's launch-argument text, stored verbatim and applied
+	// as the last layer of the emitted command: for every knob the text sets, the
+	// generated occurrences are dropped, then the text is appended (last wins,
+	// which is llama-server's own rule for a repeated flag). The app never
+	// rewrites it. See internal/autogen/customargs.go and ui-svelte/launch-args.md.
+	CustomArgs string `yaml:"customArgs"`
+	// CustomArgsOff keeps CustomArgs in the sidecar but stops applying it, so the
+	// editor's enable toggle is reversible without retyping. Also suppresses
+	// ExtraArgs while set.
+	CustomArgsOff bool `yaml:"customArgsOff"`
+	// ExtraArgs is the LEGACY free-form bucket written by the old two-way
+	// launch-parameters box ("anything the parser could not map"). It is still
+	// applied when CustomArgs is empty, so sidecars keep working without a
+	// rewrite; a save through the new editor writes CustomArgs instead.
 	ExtraArgs string `yaml:"extraArgs"`
 	// ChatTemplateFile is a path to a .jinja chat template that replaces the
 	// gguf's baked-in one (--chat-template-file). Empty => the baked-in template.
@@ -839,6 +848,7 @@ type VariantSpec struct {
 	Mlock      bool   `yaml:"mlock"`
 	Threads    int    `yaml:"threads"`
 	Parallel   int    `yaml:"parallel"`
+	CustomArgs string `yaml:"customArgs"`
 	ExtraArgs  string `yaml:"extraArgs"`
 	// ChatTemplateFile mirrors Override; empty => inherit the model-wide value.
 	ChatTemplateFile string `yaml:"chatTemplateFile"`

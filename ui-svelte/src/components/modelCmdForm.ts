@@ -1,4 +1,4 @@
-import type { ModelConfig } from "../stores/api";
+import type { CmdToken, ModelConfig } from "../stores/api";
 
 // Pure launch-command <-> form-field helpers for ModelConfigModal: parsing a
 // rendered command back into form state, the flag sets the form owns, spec
@@ -22,84 +22,6 @@ export function loadModeMmap(mode: string): boolean {
 
 // sd.cpp sampling methods (mirrors the playground's SAMPLER_OPTIONS).
 export const IMG_SAMPLERS = ["", "euler_a", "euler", "heun", "dpm2", "dpmpp2s_a", "dpmpp2m", "dpmpp2mv2", "ipndm", "ipndm_v", "lcm", "ddim_trailing", "tcd"];
-
-// Flags autogen always emits and OWNS (computed or fixed): ignored when parsing
-// the box so editing them never flips a form "auto" toggle or pins a value.
-// Value-flags owned by other controls (sliders / toggles / sizer), swallowed
-// when parsing so they never bleed into extraArgs and double-emit:
-//   -c/-ngl/--n-cpu-moe/-b  sizer;
-//   --chat-template-kwargs  legacy preserve-thinking form, still swallowed so an
-//   older saved command does not bleed into extraArgs; -md  draft path;
-//   --slot-save-path  the slotCacheOn toggle.
-// --chat-template-file is NOT here: it has its own case below that captures the
-// path into the advanced field. Swallowing it silently dropped a template set
-// any other way (qm-tools/hand-edited extraArgs) on the first box blur.
-// --ctx-checkpoints is not here either, for the same reason: swallowing it made
-// the box lie, since deleting it from the text left the field (and so the next
-// render) untouched. It parses into ParsedCmd.ctxCheckpoints instead.
-export const IGNORE_VALUE = new Set(["-m", "--port", "--host", "--cors-origins", "-c", "-ngl", "--n-cpu-moe", "-b", "--chat-template-kwargs", "-md", "--slot-save-path", "--mmproj"]);
-// Legacy: an older build shipped this template in the package and autogen
-// pointed --chat-template-file at it. Neither is true any more (the folder is
-// gone, and templates are user-managed), but a config written by that build can
-// still carry the path — matched by suffix so an upgraded install does not
-// present a dead path as if the user had chosen it.
-export const BUILTIN_CHAT_TEMPLATE = "templates/qwen-fixed-chat-template.jinja";
-// Value-less flags owned elsewhere: --reasoning-preserve belongs to the
-// preserve-thinking toggle (which is read off the override, not the box), and
-// --no-mmproj-offload to the vision-projector dropdown. Its --mmproj partner is
-// in IGNORE_VALUE for the same reason: both are re-emitted from the projector
-// discovery + the override, so letting either bleed into extraArgs would
-// double-emit them on the first blur.
-export const IGNORE_BOOL = new Set(["--kv-unified", "--no-warmup", "--no-webui", "--no-ui", "--jinja", "--metrics", "--props", "--reasoning-preserve", "--no-reasoning-preserve", "--no-mmproj-offload"]);
-
-// Parsed launch-flag bundle shared by the Default form and a variant. Booleans
-// are normalized to the form's on/off sense; computed flags are dropped.
-export interface ParsedCmd {
-  flashOn: boolean;
-  mmapOn: boolean;
-  mlock: boolean;
-  kvInRam: boolean;
-  reasoningOn: boolean;
-  reasoningBudget: number | "";
-  kvK: string;
-  kvV: string;
-  spec: string;
-  threads: number | "";
-  parallel: number | "";
-  ub: number | "";
-  extraArgs: string;
-  // "" when the box carries no --chat-template-file, or carries the arch-derived
-  // built-in one (that stays owned by autogen, not pinned into the field).
-  chatTemplateFile: string;
-  // DRY: presence of any --dry-* flag => on; absence => off. Values "" => default.
-  dryOn: boolean;
-  dryMultiplier: number | "";
-  dryBase: number | "";
-  dryAllowedLength: number | "";
-  // Sampler defaults. "" => the flag is absent from the command (inherit /
-  // llama's default); a number is the pinned value, 0 included — --min-p 0 and
-  // --temp 0 are real settings, so these must never be collapsed to "" the way
-  // the zero-gated knobs above are.
-  temp: number | "";
-  topK: number | "";
-  topP: number | "";
-  minP: number | "";
-  presencePenalty: number | "";
-  // --ctx-checkpoints as it stands in the box: a number when present, null when
-  // the user deleted the flag. Kept as null rather than "" because the caller
-  // has to tell "not in the text" from the pinned 0 that disables checkpointing.
-  ctxCheckpoints: number | null;
-  // -cms as it stands in the box, "" when the flag is absent. autogen always
-  // emits it, so an unparsed copy would land in extraArgs and be appended a
-  // SECOND time on the next render - one more per round trip.
-  checkpointMinStep: number | "";
-  // Speculative sub-knobs (value "" / false => omit).
-  specDraftNMax: number | "";
-  specDefault: boolean;
-  specNgramSizeN: number | "";
-  specNgramSizeM: number | "";
-  specNgramMinHits: number | "";
-}
 
 // Pull a `--chat-template-file <path>` pair out of a free-form extraArgs string,
 // returning the remaining args plus the path (quotes stripped, "" when absent).
@@ -127,155 +49,6 @@ export function hoistCms(extra: string): { extra: string; step: number | "" } {
     step: Number(m[2]),
   };
 }
-
-// A flag value that keeps 0 distinct from absent: null/"" (flag not in the box)
-// => "", anything else => the number. The zero-gated knobs can use `x || ""`;
-// the sampler defaults cannot, since 0 is one of their meaningful values.
-function numFlag(s: string | null): number | "" {
-  return s !== null && s !== "" && !Number.isNaN(Number(s)) ? Number(s) : "";
-}
-
-// Parse a launch command into form fields + extraArgs passthrough. Computed
-// flags (-c/-ngl/--n-cpu-moe) are owned by the sliders, so they're ignored here.
-export function parseCmdFields(cmd: string): ParsedCmd {
-  const toks = cmd.trim().split(/\s+/);
-  let i = 0;
-  while (i < toks.length && !toks[i].startsWith("-")) i++; // skip the exe
-  const val = (): string => (i + 1 < toks.length && !toks[i + 1].startsWith("-") ? toks[++i] : "");
-  // A path value is emitted quoted (%q) because templates live in folders with
-  // spaces - rejoin what the whitespace split broke apart, then unquote.
-  const pathVal = (): string => {
-    let s = val();
-    if (!s.startsWith('"')) return s;
-    while (!(s.length > 1 && s.endsWith('"')) && i + 1 < toks.length) s += " " + toks[++i];
-    return s.replace(/^"|"$/g, "");
-  };
-  let fa: string | null = null,
-    ctk: string | null = null,
-    ctv: string | null = null,
-    t: string | null = null,
-    par: string | null = null,
-    u: string | null = null,
-    sp: string | null = null,
-    reason: string | null = null,
-    rBudget: string | null = null,
-    ctFile: string | null = null,
-    ckpt: string | null = null,
-    cms: string | null = null;
-  let noMmap = false,
-    mlockF = false,
-    noKv = false,
-    specDef = false;
-  let dMult: string | null = null,
-    dBase: string | null = null,
-    dAllow: string | null = null,
-    sNMax: string | null = null,
-    sNgN: string | null = null,
-    sNgM: string | null = null,
-    sNgHits: string | null = null,
-    temp: string | null = null,
-    topK: string | null = null,
-    topP: string | null = null,
-    minP: string | null = null,
-    presP: string | null = null;
-  const extras: string[] = [];
-  for (; i < toks.length; i++) {
-    const tk = toks[i];
-    switch (tk) {
-      case "-fa": fa = val(); break;
-      case "-ctk": ctk = val(); break;
-      case "-ctv": ctv = val(); break;
-      case "-t": t = val(); break;
-      case "--parallel": par = val(); break;
-      case "-ub": u = val(); break;
-      case "--spec-type": { const t = val(); sp = sp ? `${sp}+${t}` : t; break; } // chained backends accumulate
-      case "--chat-template-file": ctFile = pathVal(); break;
-      case "--reasoning-format": reason = val(); break;
-      case "--reasoning-budget": rBudget = val(); break;
-      case "--reasoning": if (val() === "off") reason = "off"; break;
-      case "--no-mmap": noMmap = true; break; // deprecated, still parsed for old saved commands
-      case "--mlock": mlockF = true; break;
-      // The enum that replaced all four. -dio is swallowed without setting a
-      // field: direct-IO lives on the advanced override, not in this bundle.
-      case "-lm":
-      case "--load-mode": {
-        const m = val();
-        // dio is the advanced override's own toggle and re-emits from there; it
-        // must not also stamp mmap "off" onto the form.
-        if (m !== "dio") noMmap = !loadModeMmap(m);
-        if (m.includes("mlock")) mlockF = true;
-        break;
-      }
-      case "-dio": break;
-      case "--no-kv-offload": noKv = true; break;
-      // Sampler defaults. Both spellings of each are accepted: the emitter uses
-      // the short form, but a hand-edited box (or a qm-tools write) may carry
-      // llama's long alias, and an unrecognised flag would bleed into extraArgs
-      // and then double-emit alongside the field's own copy.
-      case "--temp": case "--temperature": temp = val(); break;
-      case "--top-k": topK = val(); break;
-      case "--top-p": topP = val(); break;
-      case "--min-p": minP = val(); break;
-      case "--presence-penalty": presP = val(); break;
-      case "--dry-multiplier": dMult = val(); break;
-      case "--dry-base": dBase = val(); break;
-      case "--dry-allowed-length": dAllow = val(); break;
-      case "--ctx-checkpoints": ckpt = val(); break;
-      // Both spellings: the emitter writes the short one, a hand-edited box or a
-      // qm-tools write may carry llama's long alias.
-      case "-cms": case "--checkpoint-min-step": cms = val(); break;
-      case "--spec-draft-n-max": sNMax = val(); break;
-      case "--spec-default": specDef = true; break;
-      case "--spec-ngram-map-k4v-size-n": sNgN = val(); break;
-      case "--spec-ngram-map-k4v-size-m": sNgM = val(); break;
-      case "--spec-ngram-map-k4v-min-hits": sNgHits = val(); break;
-      default:
-        if (IGNORE_VALUE.has(tk)) val();
-        else if (IGNORE_BOOL.has(tk)) break;
-        else {
-          extras.push(tk);
-          const v = i + 1 < toks.length && !toks[i + 1].startsWith("-") ? toks[++i] : "";
-          if (v) extras.push(v);
-        }
-    }
-  }
-  return {
-    flashOn: fa !== null ? fa !== "off" : false,
-    mmapOn: !noMmap,
-    mlock: mlockF,
-    kvInRam: noKv,
-    reasoningOn: reason !== "none" && reason !== "off",
-    reasoningBudget: rBudget !== null && rBudget !== "" ? Number(rBudget) : "",
-    kvK: ctk ?? "",
-    kvV: ctv ?? "",
-    spec: sp ?? "",
-    threads: t !== null ? Number(t) : "",
-    parallel: par !== null ? Number(par) : "",
-    ub: u !== null ? Number(u) : "",
-    extraArgs: extras.join(" "),
-    // Drop the path an older build baked in (see BUILTIN_CHAT_TEMPLATE) rather
-    // than pinning a file we no longer ship into the user's field.
-    chatTemplateFile: ctFile && !ctFile.includes(BUILTIN_CHAT_TEMPLATE) ? ctFile : "",
-    // DRY is on iff any --dry-* flag survived in the box.
-    dryOn: dMult !== null || dBase !== null || dAllow !== null,
-    dryMultiplier: dMult !== null && dMult !== "" ? Number(dMult) : "",
-    dryBase: dBase !== null && dBase !== "" ? Number(dBase) : "",
-    dryAllowedLength: dAllow !== null && dAllow !== "" ? Number(dAllow) : "",
-    temp: numFlag(temp),
-    topK: numFlag(topK),
-    topP: numFlag(topP),
-    minP: numFlag(minP),
-    presencePenalty: numFlag(presP),
-    ctxCheckpoints: ckpt !== null && ckpt !== "" && !Number.isNaN(Number(ckpt)) ? Number(ckpt) : null,
-    checkpointMinStep: numFlag(cms),
-    specDraftNMax: sNMax !== null && sNMax !== "" ? Number(sNMax) : "",
-    specDefault: specDef,
-    specNgramSizeN: sNgN !== null && sNgN !== "" ? Number(sNgN) : "",
-    specNgramSizeM: sNgM !== null && sNgM !== "" ? Number(sNgM) : "",
-    specNgramMinHits: sNgHits !== null && sNgHits !== "" ? Number(sNgHits) : "",
-  };
-}
-
 
 // Owned by other controls / autogen - swallowed when parsing the image box so
 // they never bleed into extraArgs: -m modelPath, -l/--listen-port the socket,
@@ -432,4 +205,57 @@ export function nglDisplay(ngl: number, blocks: number): string {
 export function parseCtx(cmd: string): number {
   const m = cmd.match(/(?:^|\s)-c\s+(\d+)/);
   return m ? Number(m[1]) : 0;
+}
+
+// ---- Custom launch arguments vs. the form controls -------------------------
+// A control is "owned" when the custom text carries a flag for the same knob:
+// the text wins at spawn, so the control must not quietly disagree with it.
+// These read the composed command's provenance tokens; they never edit the
+// user's text, and are pure so the mapping stays unit-tested.
+
+export interface KnobToken {
+  /** Flag plus its value token, e.g. `-fa off` (what the badge shows). */
+  text: string;
+  /** Bare flag spelling, e.g. `-fa`. */
+  flag: string;
+  /** The value token, e.g. `off`; "" for a bare flag. */
+  value: string;
+}
+
+// The custom tokens that own any of the given knobs, in command order. A value
+// is either inline (`--flag=value`) or the next token when that token is not a
+// flag, matching the server's composition.
+export function knobTokens(tokens: CmdToken[] | undefined, knobs: string | string[]): KnobToken[] {
+  const want = typeof knobs === "string" ? [knobs] : knobs;
+  const toks = tokens ?? [];
+  const out: KnobToken[] = [];
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    if (t.source !== "custom" || !t.knob || !want.includes(t.knob)) continue;
+    let flag = t.text;
+    let value = "";
+    const eq = flag.startsWith("--") ? flag.indexOf("=") : -1;
+    if (eq >= 0) {
+      value = flag.slice(eq + 1);
+      flag = flag.slice(0, eq);
+    } else {
+      const next = toks[i + 1];
+      if (next && !next.knob && !next.text.startsWith("-")) value = next.text;
+    }
+    out.push({ text: value ? `${flag} ${value}` : flag, flag, value });
+  }
+  return out;
+}
+
+// A toggle's displayed state when the text owns its knob. `on`/`off` name extra
+// spellings (matched against the value or the bare flag) for knobs whose
+// meaning is not guessable from the token alone: `--no-mmap` turns mmap off.
+// null = the token does not say, so the caller keeps the form's value.
+export function lockedBool(lock: KnobToken | undefined, on: string[] = [], off: string[] = []): boolean | null {
+  if (!lock) return null;
+  const v = lock.value.toLowerCase();
+  const f = lock.flag.toLowerCase();
+  if (["off", "none", "false", "0"].includes(v) || off.includes(f) || off.includes(v)) return false;
+  if (["on", "true", "1"].includes(v) || on.includes(f) || on.includes(v)) return true;
+  return v === "" ? true : null;
 }
