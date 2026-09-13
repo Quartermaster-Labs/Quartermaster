@@ -1,4 +1,4 @@
-import type { ModelConfig } from "../stores/api";
+import type { CmdToken, ModelConfig } from "../stores/api";
 
 // Pure launch-command <-> form-field helpers for ModelConfigModal: parsing a
 // rendered command back into form state, the flag sets the form owns, spec
@@ -205,4 +205,57 @@ export function nglDisplay(ngl: number, blocks: number): string {
 export function parseCtx(cmd: string): number {
   const m = cmd.match(/(?:^|\s)-c\s+(\d+)/);
   return m ? Number(m[1]) : 0;
+}
+
+// ---- Custom launch arguments vs. the form controls -------------------------
+// A control is "owned" when the custom text carries a flag for the same knob:
+// the text wins at spawn, so the control must not quietly disagree with it.
+// These read the composed command's provenance tokens; they never edit the
+// user's text, and are pure so the mapping stays unit-tested.
+
+export interface KnobToken {
+  /** Flag plus its value token, e.g. `-fa off` (what the badge shows). */
+  text: string;
+  /** Bare flag spelling, e.g. `-fa`. */
+  flag: string;
+  /** The value token, e.g. `off`; "" for a bare flag. */
+  value: string;
+}
+
+// The custom tokens that own any of the given knobs, in command order. A value
+// is either inline (`--flag=value`) or the next token when that token is not a
+// flag, matching the server's composition.
+export function knobTokens(tokens: CmdToken[] | undefined, knobs: string | string[]): KnobToken[] {
+  const want = typeof knobs === "string" ? [knobs] : knobs;
+  const toks = tokens ?? [];
+  const out: KnobToken[] = [];
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    if (t.source !== "custom" || !t.knob || !want.includes(t.knob)) continue;
+    let flag = t.text;
+    let value = "";
+    const eq = flag.startsWith("--") ? flag.indexOf("=") : -1;
+    if (eq >= 0) {
+      value = flag.slice(eq + 1);
+      flag = flag.slice(0, eq);
+    } else {
+      const next = toks[i + 1];
+      if (next && !next.knob && !next.text.startsWith("-")) value = next.text;
+    }
+    out.push({ text: value ? `${flag} ${value}` : flag, flag, value });
+  }
+  return out;
+}
+
+// A toggle's displayed state when the text owns its knob. `on`/`off` name extra
+// spellings (matched against the value or the bare flag) for knobs whose
+// meaning is not guessable from the token alone: `--no-mmap` turns mmap off.
+// null = the token does not say, so the caller keeps the form's value.
+export function lockedBool(lock: KnobToken | undefined, on: string[] = [], off: string[] = []): boolean | null {
+  if (!lock) return null;
+  const v = lock.value.toLowerCase();
+  const f = lock.flag.toLowerCase();
+  if (["off", "none", "false", "0"].includes(v) || off.includes(f) || off.includes(v)) return false;
+  if (["on", "true", "1"].includes(v) || on.includes(f) || on.includes(v)) return true;
+  return v === "" ? true : null;
 }

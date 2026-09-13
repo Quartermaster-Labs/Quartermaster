@@ -35,6 +35,8 @@
     genDefaultSpec,
     hoistChatTemplate,
     hoistCms,
+    knobTokens,
+    lockedBool,
     nglDisplay,
     noNoMmap,
     parseCtx,
@@ -142,6 +144,16 @@
   function variantMmapOn(v: ModelVariant): boolean {
     return v.mmap ? v.mmap !== "off" : variantMmapInherit(v);
   }
+
+  // ---- Custom launch arguments own these controls ------------------------
+  // When the custom text sets a knob, it wins at spawn and the form control
+  // bound to that knob is ignored. The control says so instead of quietly
+  // disagreeing: badge the flag, disable and dim it, and (toggles) show the
+  // token's on/off. Read-only - the text stays the only editor.
+  const customKnobs = (knobs: string | string[]) => knobTokens(cmdLayers?.tokens, knobs);
+  const knobOwned = (knobs: string | string[]) => customKnobs(knobs).length > 0;
+  const lockedToggle = (knobs: string | string[], on: string[] = [], off: string[] = []) => lockedBool(customKnobs(knobs)[0], on, off);
+
   let mlock = $state(false);
   let threads = $state<number | "">(""); // "" = global default
   let parallel = $state<number | "">(""); // "" = 1
@@ -1540,6 +1552,19 @@
         </span>
       {/snippet}
 
+      <!-- A setting the custom launch arguments own: the flag is the truth and
+           the control under it is ignored. Paired with `disabled` at the site. -->
+      {#snippet knobBadge(knobs: string | string[])}
+        {@const locks = customKnobs(knobs)}
+        {#if locks.length}
+          <span
+            class="inline-flex shrink-0 items-center rounded bg-warning/10 px-1 py-0.5 font-mono text-[0.6rem] font-normal normal-case text-warning cursor-help"
+            use:tip={`Set by ${locks.map((l) => `"${l.text}"`).join(" and ")} in Custom launch arguments. This control is ignored until ${locks.length === 1 ? "that flag is" : "those flags are"} removed.`}
+            aria-label="set by custom launch arguments"
+          >{locks.map((l) => l.text).join(" ")}</span>
+        {/if}
+      {/snippet}
+
       <!-- "Borrowed" badge for a sidecar that is not in this model's folder: it
            came from a header-compatible family member (internal/autogen/family.go).
            Without it the draft-mtp / draft-dflash chips — and the vision twin —
@@ -1578,18 +1603,18 @@
            and nothing picked (stored as "none" = speculation off). "none" is a
            state rather than a chip of its own — as a peer checkbox it read like
            a backend you could combine with the others. -->
-      {#snippet specRow(cur: string | undefined, set: (v: string) => void)}
+      {#snippet specRow(cur: string | undefined, set: (v: string) => void, disabled = false)}
         {@const auto = (cur ?? "") === ""}
         {@const picked = activeSpecs(cur)}
-        <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <div class="flex flex-wrap items-center gap-x-2 gap-y-1 {disabled ? 'opacity-40' : ''}">
           <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
-            <Toggle size="sm" checked={auto} onchange={(on) => set(on ? "" : picked.length ? picked.join("+") : "none")} /> Auto
+            <Toggle size="sm" checked={auto} onchange={(on) => set(on ? "" : picked.length ? picked.join("+") : "none")} {disabled} /> Auto
           </label>
           {#if auto}
             <span class="font-mono text-xs text-txtsecondary">{picked.length ? picked.join(" + ") : "none"}</span>
           {:else}
             {#each specBackends as b}
-              <button type="button" class="chip-toggle" aria-pressed={picked.includes(b)} onclick={() => set(specToggle(cur, b, !picked.includes(b)))}>{b}</button>
+              <button type="button" class="chip-toggle disabled:opacity-40" aria-pressed={picked.includes(b)} disabled={disabled} onclick={() => set(specToggle(cur, b, !picked.includes(b)))}>{b}</button>
             {/each}
             {#if picked.length === 0}
               <span class="text-xs text-txtsecondary">none (speculation off)</span>
@@ -2114,14 +2139,15 @@
             <span class="text-txtsecondary flex items-center gap-1">
               Context window
               {@render hint("Tokens the model can attend to. Auto = the size the autogen sizer picked to fit free VRAM (shown). Slider ranges 4k to the model's trained max, or 4x that with RoPE extension on.")}
+              {@render knobBadge("ctx")}
               <span class="ml-auto font-mono {ctxOverNative ? 'text-warning' : 'text-txtmain'}">
-                {ctxAuto ? (autoCtx ? `auto · ${fmtCtx(autoCtx)}` : "auto") : fmtCtx(ctx)}
+                {customKnobs("ctx")[0]?.value || (ctxAuto ? (autoCtx ? `auto · ${fmtCtx(autoCtx)}` : "auto") : fmtCtx(ctx))}
                 {#if ctxOverNative}<span class="text-xs"> · {(ctx / nativeCtx).toFixed(2)}x native</span>{/if}
               </span>
             </span>
             <div class="flex items-center gap-3">
               <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
-                <Toggle size="sm" bind:checked={ctxAuto} /> Auto
+                <Toggle size="sm" bind:checked={ctxAuto} disabled={knobOwned("ctx")} /> Auto
               </label>
               <!-- The track carries a tick at the trained length; everything right
                    of it only works because RoPE is being stretched. -->
@@ -2141,7 +2167,7 @@
                   max={maxCtx}
                   step="4096"
                   bind:value={ctx}
-                  disabled={ctxAuto}
+                  disabled={ctxAuto || knobOwned("ctx")}
                   use:wheelAdjust
                   class="w-full disabled:opacity-40 {ctxOverNative ? 'accent-warning' : ''}"
                 />
@@ -2150,7 +2176,8 @@
                 class="flex items-center gap-1.5 text-xs whitespace-nowrap {ropeOn ? 'text-warning' : 'text-txtsecondary'}"
                 use:tip={`Extend past the model's trained ${fmtCtx(nativeCtx)} context with YaRN RoPE scaling (--rope-scaling yarn). The scale factor is derived from the ctx you pick. Quality degrades the further past native you go.`}
               >
-                <Toggle size="sm" checked={ropeOn} onchange={(on) => toggleRope(on)} /> RoPE
+                <Toggle size="sm" checked={ropeOn} onchange={(on) => toggleRope(on)} disabled={knobOwned("ropeScaling")} /> RoPE
+                {@render knobBadge("ropeScaling")}
               </label>
               <span class="text-xs text-txtsecondary font-mono whitespace-nowrap">max {fmtCtx(maxCtx)}</span>
             </div>
@@ -2182,13 +2209,14 @@
             <span class="text-txtsecondary flex items-center gap-1">
               Offloaded layers
               {@render hint("Force how many layers run on the CPU, overriding the auto sizer. Auto = let the sizer pick. MoE models offload expert layers (--n-cpu-moe); dense models drop GPU layers. More offload = less VRAM, slower.")}
+              {@render knobBadge(["ngl", "nCpuMoe"])}
               <span class="ml-auto font-mono text-txtmain">{cpuAuto ? "auto" : `${cpuOffload}/${maxOffload}`}</span>
             </span>
             <div class="flex items-center gap-3">
               <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
-                <Toggle size="sm" bind:checked={cpuAuto} /> Auto
+                <Toggle size="sm" bind:checked={cpuAuto} disabled={knobOwned(["ngl", "nCpuMoe"])} /> Auto
               </label>
-              <input type="range" min="0" max={maxOffload} step="1" bind:value={cpuOffload} disabled={cpuAuto} use:wheelAdjust class="flex-1 disabled:opacity-40" />
+              <input type="range" min="0" max={maxOffload} step="1" bind:value={cpuOffload} disabled={cpuAuto || knobOwned(["ngl", "nCpuMoe"])} use:wheelAdjust class="flex-1 disabled:opacity-40" />
               <span class="text-xs text-txtsecondary font-mono whitespace-nowrap">max {maxOffload}</span>
             </div>
           </label>
@@ -2197,15 +2225,17 @@
             <span class="text-txtsecondary flex items-center gap-1">
               KV cache K
               {@render hint("Quantization of the attention key cache. Lower bits = less VRAM, but quantized KV costs long-context recall well before it shows in perplexity. Default is f16, dropping to q8_0 only when f16 cannot reach the minimum context in the VRAM budget.")}
+              {@render knobBadge("kvK")}
             </span>
-            <Select bind:value={kvK} options={KV_SEL_DEFAULT} ariaLabel="KV cache K" />
+            <Select bind:value={kvK} options={KV_SEL_DEFAULT} ariaLabel="KV cache K" disabled={knobOwned("kvK")} />
           </label>
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               KV cache V
               {@render hint("Quantization of the attention value cache. Must match K for flash-attention. Same default as K.")}
+              {@render knobBadge("kvV")}
             </span>
-            <Select bind:value={kvV} options={KV_SEL_DEFAULT} ariaLabel="KV cache V" />
+            <Select bind:value={kvV} options={KV_SEL_DEFAULT} ariaLabel="KV cache V" disabled={knobOwned("kvV")} />
           </label>
 
           <div class="flex flex-col gap-1 text-sm">
@@ -2213,8 +2243,9 @@
               Speculative
               {@render hint("Speculative decoding backends. Auto = the generator's pick. Turn Auto off to chain them by hand (e.g. draft-mtp + ngram-map-k4v); draft-mtp and draft-dflash are exclusive since they share the one draft-model slot. No chip picked = speculation off. draft-mtp needs a model with MTP layers, draft-dflash a paired *-dflash-*.gguf sidecar; either may be inherited from a model in the same family.")}
               {@render borrowedDraft()}
+              {@render knobBadge("spec")}
             </span>
-            {@render specRow(spec, (v) => (spec = v))}
+            {@render specRow(spec, (v) => (spec = v), knobOwned("spec"))}
           </div>
 
           {#if mmprojResolved}
@@ -2223,8 +2254,9 @@
                 Image projector
                 {@render hint("Where this model's CLIP projector lives on its normal ids (default, context tiers, named variants) - every one of them loads it, so any of them takes images. In RAM (--no-mmproj-offload) is the default: no VRAM at all, so the context window and layer placement are exactly what they would be without images, paid for by a one-off CPU encode of each image sent. On GPU pins it in VRAM here too: fastest encode, and every request pays for it in context/offload whether it carries an image or not. None wires no projector anywhere and drops the vision twin. The twin is pinned separately, on its own tab.")}
                 {@render borrowedMmproj()}
+                {@render knobBadge("mmprojOffload")}
               </span>
-              <Select bind:value={mmprojMode} options={MMPROJ_SEL} ariaLabel="Image projector placement" />
+              <Select bind:value={mmprojMode} options={MMPROJ_SEL} ariaLabel="Image projector placement" disabled={knobOwned("mmprojOffload")} />
             </label>
           {/if}
 
@@ -2235,9 +2267,10 @@
               {@render borrowedMmproj()}
             </span>
             <div class="flex items-center gap-2">
-              <input type="text" bind:value={adv.mmprojFile} class="cfg-input flex-1 font-mono" placeholder={config?.mmprojPath || "D:/LLM/Models/mmproj/qwen3vl-mmproj-f16.gguf"} spellcheck="false" />
+              <input type="text" bind:value={adv.mmprojFile} disabled={knobOwned("mmprojFile")} class="cfg-input flex-1 font-mono disabled:opacity-40" placeholder={config?.mmprojPath || "D:/LLM/Models/mmproj/qwen3vl-mmproj-f16.gguf"} spellcheck="false" />
               <button
                 type="button" use:tip={"Browse for a projector .gguf"} aria-label="Browse for a vision projector file"
+                disabled={knobOwned("mmprojFile")}
                 class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
                 onclick={() => browseFile("mmproj", (p) => (adv.mmprojFile = p))}
               ><FolderOpen size={14} /></button>
@@ -2249,8 +2282,9 @@
               <span class="text-txtsecondary flex items-center gap-1">
                 Draft n-max
                 {@render hint(`--spec-draft-n-max. Max draft tokens proposed per step. Empty = ${effSpecs.includes("draft-dflash") ? "5 (draft-dflash)" : "2 (draft-mtp)"}.`)}
+                {@render knobBadge("specDraftNMax")}
               </span>
-              <input type="number" min="0" step="1" bind:value={specDraftNMax} use:wheelAdjust class="cfg-input" placeholder={effSpecs.includes("draft-dflash") ? "5" : "2"} />
+              <input type="number" min="0" step="1" bind:value={specDraftNMax} disabled={knobOwned("specDraftNMax")} use:wheelAdjust class="cfg-input disabled:opacity-40" placeholder={effSpecs.includes("draft-dflash") ? "5" : "2"} />
             </label>
           {/if}
           {#if effSpecs.includes("ngram-map-k4v")}
@@ -2258,39 +2292,48 @@
               <span class="text-txtsecondary flex items-center gap-1">
                 ngram size-n / size-m
                 {@render hint("--spec-ngram-map-k4v-size-n / -size-m. ngram map dimensions. Empty = llama-server default.")}
+                {@render knobBadge(["specNgramSizeN", "specNgramSizeM"])}
               </span>
               <div class="flex items-end gap-2">
-                <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">size-n<input type="number" min="0" step="1" bind:value={specNgramSizeN} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="n" /></span>
-                <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">size-m<input type="number" min="0" step="1" bind:value={specNgramSizeM} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="m" /></span>
+                <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">size-n<input type="number" min="0" step="1" bind:value={specNgramSizeN} disabled={knobOwned("specNgramSizeN")} use:wheelAdjust class="cfg-input w-full min-w-0 disabled:opacity-40" placeholder="n" /></span>
+                <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">size-m<input type="number" min="0" step="1" bind:value={specNgramSizeM} disabled={knobOwned("specNgramSizeM")} use:wheelAdjust class="cfg-input w-full min-w-0 disabled:opacity-40" placeholder="m" /></span>
               </div>
             </label>
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-txtsecondary flex items-center gap-1">
                 ngram min-hits
                 {@render hint("--spec-ngram-map-k4v-min-hits. Min ngram hits before drafting. Empty = default.")}
+                {@render knobBadge("specNgramMinHits")}
               </span>
-              <input type="number" min="0" step="1" bind:value={specNgramMinHits} use:wheelAdjust class="cfg-input" placeholder="default" />
+              <input type="number" min="0" step="1" bind:value={specNgramMinHits} disabled={knobOwned("specNgramMinHits")} use:wheelAdjust class="cfg-input disabled:opacity-40" placeholder="default" />
             </label>
             <label class="flex items-center gap-2 text-sm self-end">
-              <Toggle size="sm" bind:checked={specDefault} />
+              <Toggle size="sm" checked={lockedToggle("specDefault") ?? specDefault} onchange={(on) => (specDefault = on)} disabled={knobOwned("specDefault")} />
               <span class="text-txtsecondary flex items-center gap-1">
                 spec-default
                 {@render hint("--spec-default. Apply llama-server's built-in default speculative parameters.")}
+                {@render knobBadge("specDefault")}
               </span>
             </label>
           {/if}
 
           <label class="flex flex-col gap-1 text-sm col-span-2">
             <span class="text-txtsecondary flex items-center gap-1">
-              <Toggle size="sm" bind:checked={dryOn} />
+              <Toggle
+                size="sm"
+                checked={knobOwned(["dryMultiplier", "dryBase", "dryAllowedLength"]) ? true : dryOn}
+                onchange={(on) => (dryOn = on)}
+                disabled={knobOwned(["dryMultiplier", "dryBase", "dryAllowedLength"])}
+              />
               DRY sampler
               {@render hint("--dry-* repetition penalty. Off by default. Multiplier / base / allowed-length: empty = 0.8 / 1.75 / 3.")}
+              {@render knobBadge(["dryMultiplier", "dryBase", "dryAllowedLength"])}
             </span>
             {#if dryOn}
               <div class="flex items-end gap-2">
-                <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">multiplier<input type="number" min="0" step="0.05" bind:value={dryMultiplier} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="0.8" /></span>
-                <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">base<input type="number" min="0" step="0.05" bind:value={dryBase} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="1.75" /></span>
-                <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">allowed-len<input type="number" min="0" step="1" bind:value={dryAllowedLength} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder="3" /></span>
+                <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">multiplier<input type="number" min="0" step="0.05" bind:value={dryMultiplier} disabled={knobOwned("dryMultiplier")} use:wheelAdjust class="cfg-input w-full min-w-0 disabled:opacity-40" placeholder="0.8" /></span>
+                <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">base<input type="number" min="0" step="0.05" bind:value={dryBase} disabled={knobOwned("dryBase")} use:wheelAdjust class="cfg-input w-full min-w-0 disabled:opacity-40" placeholder="1.75" /></span>
+                <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">allowed-len<input type="number" min="0" step="1" bind:value={dryAllowedLength} disabled={knobOwned("dryAllowedLength")} use:wheelAdjust class="cfg-input w-full min-w-0 disabled:opacity-40" placeholder="3" /></span>
               </div>
             {/if}
           </label>
@@ -2299,13 +2342,14 @@
             <span class="text-txtsecondary flex items-center gap-1">
               Sampler defaults
               {@render hint("Server-side defaults, applied only to requests that omit the field. top-k and min-p have no OpenAI-API field, so a client cannot set them and these flags are the only thing that ever does; temperature / top-p / presence are overridden by almost every client request. Empty = the placeholder (what this model launches with today).")}
+              {@render knobBadge(["temp", "topK", "topP", "minP", "presencePenalty"])}
             </span>
             <div class="flex items-end gap-2">
-              <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">temp<input type="number" min="0" step="0.05" bind:value={adv.temp} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder={samplerPlaceholder("--temp", 0.8)} /></span>
-              <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">top-k<input type="number" min="0" step="1" bind:value={adv.topK} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder={samplerPlaceholder("--top-k", 40)} /></span>
-              <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">top-p<input type="number" min="0" max="1" step="0.01" bind:value={adv.topP} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder={samplerPlaceholder("--top-p", 0.95)} /></span>
-              <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">min-p<input type="number" min="0" max="1" step="0.01" bind:value={adv.minP} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder={samplerPlaceholder("--min-p", 0.05)} /></span>
-              <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">presence<input type="number" min="-2" max="2" step="0.1" bind:value={adv.presencePenalty} use:wheelAdjust class="cfg-input w-full min-w-0" placeholder={samplerPlaceholder("--presence-penalty", 0)} /></span>
+              <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">temp<input type="number" min="0" step="0.05" bind:value={adv.temp} disabled={knobOwned("temp")} use:wheelAdjust class="cfg-input w-full min-w-0 disabled:opacity-40" placeholder={samplerPlaceholder("--temp", 0.8)} /></span>
+              <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">top-k<input type="number" min="0" step="1" bind:value={adv.topK} disabled={knobOwned("topK")} use:wheelAdjust class="cfg-input w-full min-w-0 disabled:opacity-40" placeholder={samplerPlaceholder("--top-k", 40)} /></span>
+              <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">top-p<input type="number" min="0" max="1" step="0.01" bind:value={adv.topP} disabled={knobOwned("topP")} use:wheelAdjust class="cfg-input w-full min-w-0 disabled:opacity-40" placeholder={samplerPlaceholder("--top-p", 0.95)} /></span>
+              <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">min-p<input type="number" min="0" max="1" step="0.01" bind:value={adv.minP} disabled={knobOwned("minP")} use:wheelAdjust class="cfg-input w-full min-w-0 disabled:opacity-40" placeholder={samplerPlaceholder("--min-p", 0.05)} /></span>
+              <span class="flex flex-col gap-0.5 flex-1 min-w-0 text-xs text-txtsecondary">presence<input type="number" min="-2" max="2" step="0.1" bind:value={adv.presencePenalty} disabled={knobOwned("presencePenalty")} use:wheelAdjust class="cfg-input w-full min-w-0 disabled:opacity-40" placeholder={samplerPlaceholder("--presence-penalty", 0)} /></span>
             </div>
           </div>
 
@@ -2313,36 +2357,40 @@
             <span class="text-txtsecondary flex items-center gap-1">
               Parallel slots
               {@render hint("--parallel. Concurrent conversation slots, each holding its own chat. Empty = 1, max 8. The context above is the window ONE conversation gets: N slots reserve N x that KV, so raising this shrinks the auto-sized context rather than over-committing VRAM.")}
+              {@render knobBadge("parallel")}
             </span>
-            <input type="number" min="0" max="8" step="1" bind:value={parallel} use:wheelAdjust class="cfg-input" placeholder="1" />
+            <input type="number" min="0" max="8" step="1" bind:value={parallel} disabled={knobOwned("parallel")} use:wheelAdjust class="cfg-input disabled:opacity-40" placeholder="1" />
           </label>
 
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               Threads
               {@render hint("-t. CPU threads for token generation. Empty = the global default. Mostly matters for CPU-offloaded layers.")}
+              {@render knobBadge("threads")}
             </span>
-            <input type="number" min="0" step="1" bind:value={threads} use:wheelAdjust class="cfg-input" placeholder="global default" />
+            <input type="number" min="0" step="1" bind:value={threads} disabled={knobOwned("threads")} use:wheelAdjust class="cfg-input disabled:opacity-40" placeholder="global default" />
           </label>
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               Batch size
               {@render hint("-ub/-b physical batch. Empty = auto (1024, or 512 for ≥64k context). Larger = faster prompt processing, more VRAM.")}
+              {@render knobBadge("ub")}
             </span>
-            <input type="number" min="0" step="64" bind:value={ub} use:wheelAdjust class="cfg-input" placeholder="auto" />
+            <input type="number" min="0" step="64" bind:value={ub} disabled={knobOwned("ub")} use:wheelAdjust class="cfg-input disabled:opacity-40" placeholder="auto" />
           </label>
 
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               Context checkpoints
               {@render hint("--ctx-checkpoints. KV snapshots kept to restore a diverging prompt instead of reprocessing. Auto = the sizer's pick (llama default 32). 0 disables and reserves no checkpoint VRAM. Variants inherit this unless they set their own.")}
+              {@render knobBadge("ctxCheckpoints")}
             </span>
             <div class="flex items-center gap-2">
               <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
-                <Toggle size="sm" checked={ctxCheckpoints == null} onchange={(on) => (ctxCheckpoints = on ? null : 0)} /> Auto
+                <Toggle size="sm" checked={knobOwned("ctxCheckpoints") ? false : ctxCheckpoints == null} onchange={(on) => (ctxCheckpoints = on ? null : 0)} disabled={knobOwned("ctxCheckpoints")} /> Auto
               </label>
               {#if ctxCheckpoints != null}
-                <input type="number" min="0" step="1" bind:value={ctxCheckpoints} use:wheelAdjust class="cfg-input flex-1" />
+                <input type="number" min="0" step="1" bind:value={ctxCheckpoints} disabled={knobOwned("ctxCheckpoints")} use:wheelAdjust class="cfg-input flex-1 disabled:opacity-40" />
               {/if}
             </div>
           </label>
@@ -2353,53 +2401,75 @@
         <div>
           <div class="font-mono text-[0.6rem] uppercase tracking-wider text-txtsecondary mb-2">Toggles</div>
           <div class="grid grid-cols-2 gap-x-4 gap-y-2">
-            <label class="flex items-center gap-2 text-sm">
-              <Toggle size="sm" bind:checked={reasoningOn} />
+            <label class="flex items-center gap-2 text-sm" class:opacity-40={knobOwned("reasoningFmt")}>
+              <Toggle size="sm" checked={lockedToggle("reasoningFmt") ?? reasoningOn} onchange={(on) => (reasoningOn = on)} disabled={knobOwned("reasoningFmt")} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Reasoning
                 {@render hint("Chain-of-thought reasoning. On = llama.cpp auto-detects and exposes it (default). Off disables reasoning (--reasoning-format none).")}
+                {@render knobBadge("reasoningFmt")}
               </span>
             </label>
-            <label class="flex items-center gap-2 text-sm" class:opacity-40={!reasoningOn}>
-              <Toggle size="sm" bind:checked={preserveThinking} disabled={!reasoningOn} />
+            <label class="flex items-center gap-2 text-sm" class:opacity-40={!reasoningOn || knobOwned("reasoningPreserve")}>
+              <Toggle
+                size="sm"
+                checked={lockedToggle("reasoningPreserve", [], ["--no-reasoning-preserve"]) ?? preserveThinking}
+                onchange={(on) => (preserveThinking = on)}
+                disabled={!reasoningOn || knobOwned("reasoningPreserve")}
+              />
               <span class="text-txtsecondary flex items-center gap-1">
                 Preserve thinking
                 {@render hint("Keep prior-turn <think> blocks in chat history instead of stripping them (Qwen3.6+ via --reasoning-preserve). Avoids reasoning amnesia in multi-turn/agentic loops. Needs reasoning on, a template that supports preservation, and the client must send reasoning_content back.")}
+                {@render knobBadge("reasoningPreserve")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm" class:opacity-40={!reasoningOn}>
               <span class="text-txtsecondary flex items-center gap-1">
                 Reasoning budget
                 {@render hint("--reasoning-budget. Max thinking tokens before the model is forced to answer. Empty = no cap. Needs reasoning on.")}
+                {@render knobBadge("reasoningBudget")}
               </span>
-              <input type="number" min="0" step="1000" bind:value={reasoningBudget} use:wheelAdjust disabled={!reasoningOn} class="cfg-input w-24 ml-auto" placeholder="none" />
+              <input type="number" min="0" step="1000" bind:value={reasoningBudget} use:wheelAdjust disabled={!reasoningOn || knobOwned("reasoningBudget")} class="cfg-input w-24 ml-auto disabled:opacity-40" placeholder="none" />
             </label>
-            <label class="flex items-center gap-2 text-sm">
-              <Toggle size="sm" bind:checked={kvInRam} />
+            <label class="flex items-center gap-2 text-sm" class:opacity-40={knobOwned("kvInRam")}>
+              <Toggle size="sm" checked={lockedToggle("kvInRam", ["--no-kv-offload", "-nkvo"]) ?? kvInRam} onchange={(on) => (kvInRam = on)} disabled={knobOwned("kvInRam")} />
               <span class="text-txtsecondary flex items-center gap-1">
                 KV in RAM
                 {@render hint("Keep the KV cache in system RAM instead of VRAM (--no-kv-offload). Frees VRAM at the cost of speed.")}
+                {@render knobBadge("kvInRam")}
               </span>
             </label>
-            <label class="flex items-center gap-2 text-sm">
-              <Toggle size="sm" bind:checked={flashOn} />
+            <label class="flex items-center gap-2 text-sm" class:opacity-40={knobOwned("flashAttn")}>
+              <Toggle size="sm" checked={lockedToggle("flashAttn") ?? flashOn} onchange={(on) => (flashOn = on)} disabled={knobOwned("flashAttn")} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Flash attention
                 {@render hint("-fa. On by default and required for a quantized KV cache (q8_0 etc.). Turn off only with an f16 KV cache.")}
+                {@render knobBadge("flashAttn")}
               </span>
             </label>
-            <label class="flex items-center gap-2 text-sm">
-              <Toggle size="sm" bind:checked={mmapOn} />
+            <label class="flex items-center gap-2 text-sm" class:opacity-40={knobOwned("loadMode")}>
+              <Toggle
+                size="sm"
+                checked={lockedToggle("loadMode", ["mmap", "mlock", "mmap+mlock", "--mlock"], ["--no-mmap", "-dio", "--direct-io", "none", "dio"]) ?? mmapOn}
+                onchange={(on) => (mmapOn = on)}
+                disabled={knobOwned("loadMode")}
+              />
               <span class="text-txtsecondary flex items-center gap-1">
                 Memory-map (mmap)
                 {@render hint("Memory-map weights from disk. Follows the sizer's placement default: OFF (--load-mode none) when fully GPU-resident / expert-offloaded, ON when weights sit on CPU. Toggle to force either way.")}
+                {@render knobBadge("loadMode")}
               </span>
             </label>
-            <label class="flex items-center gap-2 text-sm">
-              <Toggle size="sm" bind:checked={mlock} />
+            <label class="flex items-center gap-2 text-sm" class:opacity-40={knobOwned("loadMode")}>
+              <Toggle
+                size="sm"
+                checked={lockedToggle("loadMode", ["mlock", "mmap+mlock", "--mlock"], ["none", "mmap", "dio"]) ?? mlock}
+                onchange={(on) => (mlock = on)}
+                disabled={knobOwned("loadMode")}
+              />
               <span class="text-txtsecondary flex items-center gap-1">
                 mlock
                 {@render hint("--mlock. Lock the model in RAM so the OS never swaps it out. Needs enough free RAM for the whole model.")}
+                {@render knobBadge("loadMode")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
@@ -2416,11 +2486,12 @@
                 {@render hint("Exclude this model from the generated config entirely.")}
               </span>
             </label>
-            <label class="flex items-center gap-2 text-sm">
-              <Toggle size="sm" bind:checked={slotCacheOn} />
+            <label class="flex items-center gap-2 text-sm" class:opacity-40={knobOwned("slotSavePath")}>
+              <Toggle size="sm" checked={knobOwned("slotSavePath") ? true : slotCacheOn} onchange={(on) => (slotCacheOn = on)} disabled={knobOwned("slotSavePath")} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Save KV cache to disk
                 {@render hint("Persist this model's conversations to disk (one file per chat) so a long chat survives being evicted from the slot, and is restored instead of reprocessed. Opt-in per model, and needs the global slot-cache toggle on (Settings -> KV cache) - otherwise every model in the fleet would start leaving snapshots behind.")}
+                {@render knobBadge("slotSavePath")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm {slotCacheOn ? '' : 'opacity-50'}">
@@ -2441,109 +2512,110 @@
           </summary>
           <div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Batch threads {@render hint("-tb. CPU threads for prompt/batch processing. Empty = same as -t.")}</span>
-              <input type="number" min="0" step="1" bind:value={adv.threadsBatch} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="auto" />
+              <span class="text-txtsecondary flex items-center gap-1">Batch threads {@render hint("-tb. CPU threads for prompt/batch processing. Empty = same as -t.")}{@render knobBadge("threadsBatch")}</span>
+              <input type="number" min="0" step="1" bind:value={adv.threadsBatch} disabled={knobOwned("threadsBatch")} use:wheelAdjust class="cfg-input w-20 ml-auto disabled:opacity-40" placeholder="auto" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Priority {@render hint("--prio. 0 normal, 1 medium, 2 high, 3 realtime.")}</span>
-              <input type="number" min="0" max="3" step="1" bind:value={adv.prio} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="0" />
+              <span class="text-txtsecondary flex items-center gap-1">Priority {@render hint("--prio. 0 normal, 1 medium, 2 high, 3 realtime.")}{@render knobBadge("prio")}</span>
+              <input type="number" min="0" max="3" step="1" bind:value={adv.prio} disabled={knobOwned("prio")} use:wheelAdjust class="cfg-input w-20 ml-auto disabled:opacity-40" placeholder="0" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Cache reuse {@render hint("--cache-reuse N. Min chunk reused from the prompt cache via KV-shifting. 0 = off.")}</span>
-              <input type="number" min="0" step="64" bind:value={adv.cacheReuse} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="off" />
+              <span class="text-txtsecondary flex items-center gap-1">Cache reuse {@render hint("--cache-reuse N. Min chunk reused from the prompt cache via KV-shifting. 0 = off.")}{@render knobBadge("cacheReuse")}</span>
+              <input type="number" min="0" step="64" bind:value={adv.cacheReuse} disabled={knobOwned("cacheReuse")} use:wheelAdjust class="cfg-input w-20 ml-auto disabled:opacity-40" placeholder="off" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Log verbosity {@render hint("-lv N. llama-server log verbosity threshold. Raise it to capture the load-time buffer-size report in the model log. Empty = backend default.")}</span>
-              <input type="number" min="0" step="1" bind:value={adv.logVerbosity} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="default" />
+              <span class="text-txtsecondary flex items-center gap-1">Log verbosity {@render hint("-lv N. llama-server log verbosity threshold. Raise it to capture the load-time buffer-size report in the model log. Empty = backend default.")}{@render knobBadge("logVerbosity")}</span>
+              <input type="number" min="0" step="1" bind:value={adv.logVerbosity} disabled={knobOwned("logVerbosity")} use:wheelAdjust class="cfg-input w-20 ml-auto disabled:opacity-40" placeholder="default" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Cache RAM (MiB) {@render hint("-cram. Max prompt-cache size in MiB. Empty = llama default (8192).")}</span>
-              <input type="number" min="0" step="512" bind:value={adv.cacheRamMB} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="8192" />
+              <span class="text-txtsecondary flex items-center gap-1">Cache RAM (MiB) {@render hint("-cram. Max prompt-cache size in MiB. Empty = llama default (8192).")}{@render knobBadge("cacheRam")}</span>
+              <input type="number" min="0" step="512" bind:value={adv.cacheRamMB} disabled={knobOwned("cacheRam")} use:wheelAdjust class="cfg-input w-20 ml-auto disabled:opacity-40" placeholder="8192" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Checkpoint spacing {@render hint("-cms. Min tokens between context checkpoints. Empty = llama default (8192).")}</span>
-              <input type="number" min="0" step="512" bind:value={adv.checkpointMinStep} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="8192" />
+              <span class="text-txtsecondary flex items-center gap-1">Checkpoint spacing {@render hint("-cms. Min tokens between context checkpoints. Empty = llama default (8192).")}{@render knobBadge("checkpointMinStep")}</span>
+              <input type="number" min="0" step="512" bind:value={adv.checkpointMinStep} disabled={knobOwned("checkpointMinStep")} use:wheelAdjust class="cfg-input w-20 ml-auto disabled:opacity-40" placeholder="8192" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Spec draft n-min {@render hint("--spec-draft-n-min. Minimum draft tokens per speculative step. 0 = default.")}</span>
-              <input type="number" min="0" step="1" bind:value={adv.specDraftNMin} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="0" />
+              <span class="text-txtsecondary flex items-center gap-1">Spec draft n-min {@render hint("--spec-draft-n-min. Minimum draft tokens per speculative step. 0 = default.")}{@render knobBadge("specDraftNMin")}</span>
+              <input type="number" min="0" step="1" bind:value={adv.specDraftNMin} disabled={knobOwned("specDraftNMin")} use:wheelAdjust class="cfg-input w-20 ml-auto disabled:opacity-40" placeholder="0" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Slot match {@render hint("-sps. Prompt-similarity threshold (0..1) to reuse a slot. 0 = omit.")}</span>
-              <input type="number" min="0" max="1" step="0.05" bind:value={adv.slotPromptSimilarity} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="off" />
+              <span class="text-txtsecondary flex items-center gap-1">Slot match {@render hint("-sps. Prompt-similarity threshold (0..1) to reuse a slot. 0 = omit.")}{@render knobBadge("slotPromptSimilarity")}</span>
+              <input type="number" min="0" max="1" step="0.05" bind:value={adv.slotPromptSimilarity} disabled={knobOwned("slotPromptSimilarity")} use:wheelAdjust class="cfg-input w-20 ml-auto disabled:opacity-40" placeholder="off" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Main GPU {@render hint("-mg. Primary GPU index. Applies only with split mode none or row; the default layer split ignores it. Empty = the device quartermaster picked (the one with the most capacity), not GPU 0.")}</span>
-              <input type="number" min="0" step="1" bind:value={adv.mainGpu} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="auto" />
+              <span class="text-txtsecondary flex items-center gap-1">Main GPU {@render hint("-mg. Primary GPU index. Applies only with split mode none or row; the default layer split ignores it. Empty = the device quartermaster picked (the one with the most capacity), not GPU 0.")}{@render knobBadge("mainGpu")}</span>
+              <input type="number" min="0" step="1" bind:value={adv.mainGpu} disabled={knobOwned("mainGpu")} use:wheelAdjust class="cfg-input w-20 ml-auto disabled:opacity-40" placeholder="auto" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Draft KV-K {@render hint("-ctkd. Draft/spec context K cache type, including a baked-in MTP head. Empty = match KV-K.")}</span>
-              <input type="text" bind:value={adv.kvKDraft} class="cfg-input w-20 ml-auto" placeholder="f16" />
+              <span class="text-txtsecondary flex items-center gap-1">Draft KV-K {@render hint("-ctkd. Draft/spec context K cache type, including a baked-in MTP head. Empty = match KV-K.")}{@render knobBadge("kvKDraft")}</span>
+              <input type="text" bind:value={adv.kvKDraft} disabled={knobOwned("kvKDraft")} class="cfg-input w-20 ml-auto disabled:opacity-40" placeholder="f16" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Draft KV-V {@render hint("-ctvd. Draft/spec context V cache type, including a baked-in MTP head. Empty = match KV-V.")}</span>
-              <input type="text" bind:value={adv.kvVDraft} class="cfg-input w-20 ml-auto" placeholder="f16" />
+              <span class="text-txtsecondary flex items-center gap-1">Draft KV-V {@render hint("-ctvd. Draft/spec context V cache type, including a baked-in MTP head. Empty = match KV-V.")}{@render knobBadge("kvVDraft")}</span>
+              <input type="text" bind:value={adv.kvVDraft} disabled={knobOwned("kvVDraft")} class="cfg-input w-20 ml-auto disabled:opacity-40" placeholder="f16" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Idle-slot cache {@render hint("--cache-idle-slots. Save idle slots to the prompt cache. inherit = llama default.")}</span>
-              <Select bind:value={adv.cacheIdleSlots} options={ONOFF_INHERIT} ariaLabel="Cache idle slots" class="ml-auto w-32" />
+              <span class="text-txtsecondary flex items-center gap-1">Idle-slot cache {@render hint("--cache-idle-slots. Save idle slots to the prompt cache. inherit = llama default.")}{@render knobBadge("cacheIdleSlots")}</span>
+              <Select bind:value={adv.cacheIdleSlots} options={ONOFF_INHERIT} ariaLabel="Cache idle slots" class="ml-auto w-32" disabled={knobOwned("cacheIdleSlots")} />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Context shift {@render hint("--context-shift. Slide the window on overflow. inherit = llama default (off).")}</span>
-              <Select bind:value={adv.contextShift} options={ONOFF_INHERIT} ariaLabel="Context shift" class="ml-auto w-32" />
+              <span class="text-txtsecondary flex items-center gap-1">Context shift {@render hint("--context-shift. Slide the window on overflow. inherit = llama default (off).")}{@render knobBadge("contextShift")}</span>
+              <Select bind:value={adv.contextShift} options={ONOFF_INHERIT} ariaLabel="Context shift" class="ml-auto w-32" disabled={knobOwned("contextShift")} />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">RoPE scaling {@render hint("--rope-scaling. Context-extension method. auto = from model.")}</span>
-              <Select bind:value={adv.ropeScaling} options={ROPE_SEL_AUTO} ariaLabel="RoPE scaling" class="ml-auto w-32" />
+              <span class="text-txtsecondary flex items-center gap-1">RoPE scaling {@render hint("--rope-scaling. Context-extension method. auto = from model.")}{@render knobBadge("ropeScaling")}</span>
+              <Select bind:value={adv.ropeScaling} options={ROPE_SEL_AUTO} ariaLabel="RoPE scaling" class="ml-auto w-32" disabled={knobOwned("ropeScaling")} />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Split mode {@render hint("-sm. Multi-GPU split strategy. auto = from model.")}</span>
-              <Select bind:value={adv.splitMode} options={SPLIT_SEL_AUTO} ariaLabel="Split mode" class="ml-auto w-32" />
+              <span class="text-txtsecondary flex items-center gap-1">Split mode {@render hint("-sm. Multi-GPU split strategy. auto = from model.")}{@render knobBadge("splitMode")}</span>
+              <Select bind:value={adv.splitMode} options={SPLIT_SEL_AUTO} ariaLabel="Split mode" class="ml-auto w-32" disabled={knobOwned("splitMode")} />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">RoPE scale {@render hint("--rope-scale. Context scaling factor (expand ctx by N). 0 = omit.")}</span>
-              <input type="number" min="0" step="0.5" bind:value={adv.ropeScale} use:wheelAdjust class="cfg-input w-20 ml-auto" placeholder="auto" />
+              <span class="text-txtsecondary flex items-center gap-1">RoPE scale {@render hint("--rope-scale. Context scaling factor (expand ctx by N). 0 = omit.")}{@render knobBadge("ropeScale")}</span>
+              <input type="number" min="0" step="0.5" bind:value={adv.ropeScale} disabled={knobOwned("ropeScale")} use:wheelAdjust class="cfg-input w-20 ml-auto disabled:opacity-40" placeholder="auto" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">RoPE freq base {@render hint("--rope-freq-base. NTK base frequency. 0 = from model.")}</span>
-              <input type="number" min="0" step="10000" bind:value={adv.ropeFreqBase} use:wheelAdjust class="cfg-input w-24 ml-auto" placeholder="auto" />
+              <span class="text-txtsecondary flex items-center gap-1">RoPE freq base {@render hint("--rope-freq-base. NTK base frequency. 0 = from model.")}{@render knobBadge("ropeFreqBase")}</span>
+              <input type="number" min="0" step="10000" bind:value={adv.ropeFreqBase} disabled={knobOwned("ropeFreqBase")} use:wheelAdjust class="cfg-input w-24 ml-auto disabled:opacity-40" placeholder="auto" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">YaRN orig ctx {@render hint("--yarn-orig-ctx. Model's original training context. 0 = from model.")}</span>
-              <input type="number" min="0" step="1024" bind:value={adv.yarnOrigCtx} use:wheelAdjust class="cfg-input w-24 ml-auto" placeholder="auto" />
+              <span class="text-txtsecondary flex items-center gap-1">YaRN orig ctx {@render hint("--yarn-orig-ctx. Model's original training context. 0 = from model.")}{@render knobBadge("yarnOrigCtx")}</span>
+              <input type="number" min="0" step="1024" bind:value={adv.yarnOrigCtx} disabled={knobOwned("yarnOrigCtx")} use:wheelAdjust class="cfg-input w-24 ml-auto disabled:opacity-40" placeholder="auto" />
             </label>
             <label class="flex items-center gap-2">
-              <span class="text-txtsecondary flex items-center gap-1">Tensor split {@render hint("-ts. Per-GPU proportion, comma list e.g. 3,1. Empty = the split quartermaster generated across your GPUs.")}</span>
-              <input type="text" bind:value={adv.tensorSplit} class="cfg-input w-24 ml-auto" placeholder="auto" />
+              <span class="text-txtsecondary flex items-center gap-1">Tensor split {@render hint("-ts. Per-GPU proportion, comma list e.g. 3,1. Empty = the split quartermaster generated across your GPUs.")}{@render knobBadge("tensorSplit")}</span>
+              <input type="text" bind:value={adv.tensorSplit} disabled={knobOwned("tensorSplit")} class="cfg-input w-24 ml-auto disabled:opacity-40" placeholder="auto" />
             </label>
             <label class="flex items-center gap-2 col-span-2">
-              <span class="text-txtsecondary flex items-center gap-1 shrink-0">Override tensor {@render hint("-ot. Manual tensor→buffer placement pattern, e.g. exps=CPU. Empty = omit.")}</span>
-              <input type="text" bind:value={adv.overrideTensor} class="cfg-input flex-1 ml-auto font-mono" placeholder="regex=BUFFER" />
+              <span class="text-txtsecondary flex items-center gap-1 shrink-0">Override tensor {@render hint("-ot. Manual tensor→buffer placement pattern, e.g. exps=CPU. Empty = omit.")}{@render knobBadge("overrideTensor")}</span>
+              <input type="text" bind:value={adv.overrideTensor} disabled={knobOwned("overrideTensor")} class="cfg-input flex-1 ml-auto font-mono disabled:opacity-40" placeholder="regex=BUFFER" />
             </label>
             <label class="flex items-center gap-2 col-span-2">
-              <span class="text-txtsecondary flex items-center gap-1 shrink-0">Chat template file {@render hint("--chat-template-file. Path to a .jinja chat template replacing the gguf's baked-in one - use a vendor-fixed template (e.g. Gemma, Qwen) without rebuilding the gguf. Empty = the baked-in template (or Quartermaster's built-in Qwen 3.5/3.6 fix).")}</span>
-              <input type="text" bind:value={adv.chatTemplateFile} class="cfg-input flex-1 ml-auto font-mono" placeholder="D:/LLM/Models/templates/gemma4.jinja" spellcheck="false" />
+              <span class="text-txtsecondary flex items-center gap-1 shrink-0">Chat template file {@render hint("--chat-template-file. Path to a .jinja chat template replacing the gguf's baked-in one - use a vendor-fixed template (e.g. Gemma, Qwen) without rebuilding the gguf. Empty = the baked-in template (or Quartermaster's built-in Qwen 3.5/3.6 fix).")}{@render knobBadge("chatTemplateFile")}</span>
+              <input type="text" bind:value={adv.chatTemplateFile} disabled={knobOwned("chatTemplateFile")} class="cfg-input flex-1 ml-auto font-mono disabled:opacity-40" placeholder="D:/LLM/Models/templates/gemma4.jinja" spellcheck="false" />
               <button
                 type="button" use:tip={"Browse for a .jinja template"} aria-label="Browse for a chat template file"
+                disabled={knobOwned("chatTemplateFile")}
                 class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
                 onclick={() => browseFile("template", (p) => (adv.chatTemplateFile = p))}
               ><FolderOpen size={14} /></button>
             </label>
             <label class="flex items-center gap-2">
-              <Toggle size="sm" bind:checked={adv.directIo} />
-              <span class="text-txtsecondary flex items-center gap-1">Direct I/O {@render hint("-dio. DirectIO for faster cold model load where supported.")}</span>
+              <Toggle size="sm" checked={lockedToggle("loadMode", ["-dio", "--direct-io", "dio"], ["--no-mmap", "none", "mmap", "mlock", "mmap+mlock"]) ?? adv.directIo} onchange={(on) => (adv.directIo = on)} disabled={knobOwned("loadMode")} />
+              <span class="text-txtsecondary flex items-center gap-1">Direct I/O {@render hint("-dio. DirectIO for faster cold model load where supported.")}{@render knobBadge("loadMode")}</span>
             </label>
             <label class="flex items-center gap-2">
-              <Toggle size="sm" bind:checked={adv.swaFull} />
-              <span class="text-txtsecondary flex items-center gap-1">Full SWA cache {@render hint("--swa-full. Keep the full sliding-window KV cache (Gemma etc.).")}</span>
+              <Toggle size="sm" checked={lockedToggle("swaFull") ?? adv.swaFull} onchange={(on) => (adv.swaFull = on)} disabled={knobOwned("swaFull")} />
+              <span class="text-txtsecondary flex items-center gap-1">Full SWA cache {@render hint("--swa-full. Keep the full sliding-window KV cache (Gemma etc.).")}{@render knobBadge("swaFull")}</span>
             </label>
             <label class="flex items-center gap-2">
-              <Toggle size="sm" bind:checked={adv.noOpOffload} />
-              <span class="text-txtsecondary flex items-center gap-1">No op-offload {@render hint("--no-op-offload. Keep host tensor ops on the CPU.")}</span>
+              <Toggle size="sm" checked={lockedToggle("noOpOffload") ?? adv.noOpOffload} onchange={(on) => (adv.noOpOffload = on)} disabled={knobOwned("noOpOffload")} />
+              <span class="text-txtsecondary flex items-center gap-1">No op-offload {@render hint("--no-op-offload. Keep host tensor ops on the CPU.")}{@render knobBadge("noOpOffload")}</span>
             </label>
             <label class="flex items-center gap-2">
-              <Toggle size="sm" bind:checked={adv.noRepack} />
-              <span class="text-txtsecondary flex items-center gap-1">No repack {@render hint("--no-repack. Disable weight repacking at load.")}</span>
+              <Toggle size="sm" checked={lockedToggle("noRepack") ?? adv.noRepack} onchange={(on) => (adv.noRepack = on)} disabled={knobOwned("noRepack")} />
+              <span class="text-txtsecondary flex items-center gap-1">No repack {@render hint("--no-repack. Disable weight repacking at load.")}{@render knobBadge("noRepack")}</span>
             </label>
           </div>
         </details>

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { genDefaultNum, cmdNum, specToggle, hoistCms } from "./modelCmdForm";
-import type { ModelConfig } from "../stores/api";
+import { genDefaultNum, cmdNum, specToggle, hoistCms, knobTokens, lockedBool, type KnobToken } from "./modelCmdForm";
+import type { CmdToken, ModelConfig } from "../stores/api";
 
 describe("genDefaultNum", () => {
   const cfg = (cmd: string) => ({ cmd }) as ModelConfig;
@@ -59,5 +59,52 @@ describe("cmdNum", () => {
   it("reads a flag off any command text, not just the model baseline", () => {
     expect(cmdNum("llama-server --ctx-checkpoints 3 -c 8192", "--ctx-checkpoints")).toBe(3);
     expect(cmdNum("llama-server -c 8192", "--ctx-checkpoints")).toBe("");
+  });
+});
+
+// The form controls read the composed command's provenance so a custom flag can
+// disable the control it overrides and name itself in the badge.
+describe("knobTokens", () => {
+  const tok = (text: string, knob?: string, source: "generated" | "custom" = "custom"): CmdToken => ({ text, source, knob, suppressed: false });
+
+  it("pairs a flag with its following value token", () => {
+    expect(knobTokens([tok("-c", "ctx"), tok("32768")], "ctx")).toEqual([{ text: "-c 32768", flag: "-c", value: "32768" }]);
+  });
+
+  it("splits an inline --flag=value", () => {
+    expect(knobTokens([tok("--cache-ram=2048", "cacheRam")], "cacheRam")).toEqual([{ text: "--cache-ram 2048", flag: "--cache-ram", value: "2048" }]);
+  });
+
+  it("keeps a bare flag and ignores other knobs and generated tokens", () => {
+    const toks = [tok("-c", "ctx", "generated"), tok("-c", "ctx", "generated"), tok("8192"), tok("--no-mmap", "loadMode"), tok("--metrics", "metrics")];
+    expect(knobTokens(toks, "loadMode")).toEqual([{ text: "--no-mmap", flag: "--no-mmap", value: "" }]);
+    expect(knobTokens(toks, "parallel")).toEqual([]);
+  });
+
+  it("matches a group of knobs and keeps command order", () => {
+    const toks = [tok("--dry-base", "dryBase"), tok("1.1"), tok("--dry-multiplier", "dryMultiplier"), tok("0.8")];
+    expect(knobTokens(toks, ["dryMultiplier", "dryBase"]).map((k) => k.text)).toEqual(["--dry-base 1.1", "--dry-multiplier 0.8"]);
+    expect(knobTokens(undefined, "ctx")).toEqual([]);
+  });
+});
+
+describe("lockedBool", () => {
+  const lock = (flag: string, value = ""): KnobToken => ({ text: value ? `${flag} ${value}` : flag, flag, value });
+
+  it("reads on/off literals", () => {
+    expect(lockedBool(lock("-fa", "off"))).toBe(false);
+    expect(lockedBool(lock("-fa", "on"))).toBe(true);
+    expect(lockedBool(lock("--reasoning-format", "none"))).toBe(false);
+  });
+
+  it("takes extra spellings for bare flags", () => {
+    expect(lockedBool(lock("--no-mmap"), ["--mlock"], ["--no-mmap"])).toBe(false);
+    expect(lockedBool(lock("--no-kv-offload"), ["--no-kv-offload"])).toBe(true);
+  });
+
+  it("treats a bare flag as on, and says nothing otherwise", () => {
+    expect(lockedBool(lock("--spec-default"))).toBe(true);
+    expect(lockedBool(lock("--rope-scaling", "yarn"))).toBeNull();
+    expect(lockedBool(undefined)).toBeNull();
   });
 });

@@ -121,6 +121,11 @@ On save the server **zeroes a structured field whose knob the custom text owns**
 `applyOverrideDTO`). Without this, a stale `mmap: "off"` sits invisibly under `--load-mode none` and
 resurfaces the moment the token is deleted, which is the issue #38 bug in another costume.
 
+The end state above is write-back. Until it lands the form is **mark + lock**, the read-only half: a
+control whose knob the text owns is disabled, dimmed, and badged with the exact flag (`-fa off`),
+with the toggle position taken from the token's on/off where it parses. The text stays the only
+editor. The llama Default tab (including Advanced) does this today; the variant tab does not yet.
+
 ### The two panes
 
 - **Custom launch arguments**, collapsed by default, behind an "Enable custom launch arguments"
@@ -231,7 +236,11 @@ the new meaning.
 2. **Modal (llama form only)**: the two panes, verbatim editor, read-only provenance box; delete the
    blur parse. Issue #38 is fixed here. Done on `radu0120/launch-args`
    (`LaunchArgsPanes.svelte`; `parseCmdFields`, `IGNORE_VALUE`/`IGNORE_BOOL` and their tests deleted).
-3. **Controls**: write tokens, presence-based pins, reset to auto, plumbing confirmations.
+3. **Controls**: write tokens, presence-based pins, reset to auto, plumbing confirmations. The
+   read-only half landed 2026-09-13 (`knobTokens`/`lockedBool` in `modelCmdForm.ts`, `knobBadge` in
+   `ModelConfigModal.svelte`): an owned control is disabled, dimmed and badged with the flag, and a
+   toggle follows the token's on/off. Default tab including Advanced is covered; the variant tab is
+   not.
 4. **Validation UI**: inline issues + save confirm done (2026-09-13); autocomplete and the startup
    check remain.
 5. **Later**: pins feed the sizer; the same panes for the image, audio and SAM forms with their own
