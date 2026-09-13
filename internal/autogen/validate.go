@@ -175,7 +175,8 @@ func suggestFlags(name string, backendFlags []string) []string {
 
 // validateComposed runs the editor's check over a composed command. Only a
 // command carrying custom text is checked: with an empty box the command is the
-// emitter's own, which the golden flag-table test already holds to the table.
+// emitter's own, which the golden flag-table test holds to the table and which
+// internal/server/flagcheck.go checks against the installed binary at boot.
 // When there IS custom text the whole command is walked, so a backend older than
 // the emitter shows up as a warning next to the user's own flags.
 func validateComposed(cc ComposedCmd, backendExe string) []CmdIssue {

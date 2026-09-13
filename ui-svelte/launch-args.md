@@ -232,7 +232,12 @@ never a confirm. Rationale: the text is the user's, the API is used by qm-tools 
 and a hard reject would trap a real flag the checked-in table has not learned yet.
 
 Implemented (`internal/autogen/validate.go`, `RenderSoloCmdLayers`; pane + save guard in
-`LaunchArgsPanes.svelte` / `ModelConfigModal.svelte`); autocomplete and the startup check are not.
+`LaunchArgsPanes.svelte` / `ModelConfigModal.svelte`). The startup check landed 2026-09-13
+(`internal/server/flagcheck.go`): at boot every llama-server command in the running config is
+validated against the installed binary's `--help`, and a flag the emitter writes that this build
+dropped (or a typo that got saved anyway) is logged as a warning naming the model, so the failure is
+visible before the spawn. Autocomplete was dropped 2026-09-13: not wanted, typing flags by hand is
+the point of the box.
 
 ### Variants
 
@@ -270,8 +275,8 @@ the new meaning.
    `ModelConfigModal.svelte`): an owned control is disabled, dimmed and badged with the flag, and a
    toggle follows the token's on/off. Default tab including Advanced is covered; the variant tab is
    not.
-4. **Validation UI**: inline issues + save confirm done (2026-09-13); autocomplete and the startup
-   check remain.
+4. **Validation UI**: inline issues + save confirm done (2026-09-13); the startup check landed the
+   same day (`internal/server/flagcheck.go`); autocomplete dropped (not needed).
 5. **Pins feed the sizer** (2026-09-13): `internal/autogen/pins.go` reads the composition-relevant
    flags out of the custom text and folds them into the override copy (`emitModel`,
    `RenderSoloCmdLayers`) and the estimate (`Pins.ApplyToEstimate`, applied server-side from the
