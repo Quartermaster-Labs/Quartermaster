@@ -39,6 +39,13 @@ func getGpuStats(ctx context.Context, every time.Duration, logger *logmon.Monito
 		logger.Debugf("nvidia-smi: %s", err.Error())
 	}
 
+	if ch, err := tryAmdSmi(ctx, every, logger); err == nil {
+		logger.Info("using amd-smi for GPU monitoring")
+		return ch, nil
+	} else {
+		logger.Debugf("amd-smi: %s", err.Error())
+	}
+
 	if ch, err := tryRocmSmi(ctx, every, logger); err == nil {
 		logger.Info("using rocm-smi for GPU monitoring")
 		return ch, nil
@@ -247,7 +254,7 @@ func tryRocmSmi(ctx context.Context, every time.Duration, logger *logmon.Monitor
 				return
 			case <-ticker.C:
 				pollCtx, cancel := context.WithTimeout(ctx, pollTimeout)
-				cmd := exec.CommandContext(pollCtx, "rocm-smi", "-i", "-P", "-t", "-f", "-u", "--showmemuse", "--showmeminfo", "vram", "--showproductname", "--csv")
+				cmd := exec.CommandContext(pollCtx, "rocm-smi", "-i", "-P", "-t", "-f", "-u", "--showmemuse", "--showmeminfo", "all", "--showproductname", "--csv")
 				out, err := cmd.Output()
 				timedOut := pollCtx.Err() == context.DeadlineExceeded
 				cancel()
@@ -309,6 +316,9 @@ func parseRocmSmiLine(header string, line string) *GpuStat {
 	var deviceName string
 	var cardSeries string
 	var gfxVersion string
+	var nodeID int = -1
+	var vramTotalB, vramUsedB uint64
+	var gttTotalB, gttUsedB uint64
 
 	const toMB = 1024 * 1024
 
@@ -347,11 +357,15 @@ func parseRocmSmiLine(header string, line string) *GpuStat {
 			memUtil, _ := strconv.ParseFloat(val, 64)
 			result.MemUtilPct = memUtil
 		case "VRAM Total Memory (B)":
-			memTotal, _ := strconv.ParseUint(val, 10, 64)
-			result.MemTotalMB = int(memTotal / toMB)
+			vramTotalB, _ = strconv.ParseUint(val, 10, 64)
 		case "VRAM Total Used Memory (B)":
-			memUsed, _ := strconv.ParseUint(val, 10, 64)
-			result.MemUsedMB = int(memUsed / toMB)
+			vramUsedB, _ = strconv.ParseUint(val, 10, 64)
+		case "GTT Total Memory (B)":
+			gttTotalB, _ = strconv.ParseUint(val, 10, 64)
+		case "GTT Total Used Memory (B)":
+			gttUsedB, _ = strconv.ParseUint(val, 10, 64)
+		case "Node ID":
+			nodeID, _ = strconv.Atoi(val)
 		case "Card Series":
 			cardSeries = val
 		case "GFX Version":
@@ -361,6 +375,17 @@ func parseRocmSmiLine(header string, line string) *GpuStat {
 
 	if result.ID == -1 {
 		return nil
+	}
+
+	// APUs have no dedicated local memory (KFD local_mem_size == 0) and run
+	// workloads in GTT (system RAM). Combine VRAM+GTT to report the real
+	// addressable budget; fall back to VRAM-only if KFD is unavailable.
+	if isAPU, ok := kfdIsAPU(nodeID); ok && isAPU {
+		result.MemTotalMB = int((vramTotalB + gttTotalB) / toMB)
+		result.MemUsedMB = int((vramUsedB + gttUsedB) / toMB)
+	} else {
+		result.MemTotalMB = int(vramTotalB / toMB)
+		result.MemUsedMB = int(vramUsedB / toMB)
 	}
 
 	name := device
@@ -374,8 +399,358 @@ func parseRocmSmiLine(header string, line string) *GpuStat {
 	return result
 }
 
+// kfdIsAPU reports whether the KFD topology node at nodeID has no dedicated
+// local memory (local_mem_size == 0), which is the kernel's explicit marker for
+// an APU / iGPU that uses shared system RAM rather than its own VRAM.
+// Returns (false, false) when KFD is unavailable or the field is absent.
+func kfdIsAPU(nodeID int) (bool, bool) {
+	if nodeID < 0 {
+		return false, false
+	}
+	path := fmt.Sprintf("/sys/class/kfd/kfd/topology/nodes/%d/properties", nodeID)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, false
+	}
+	var localMem uint64
+	var hasLocalMem bool
+	var simdCount uint64
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 2 {
+			continue
+		}
+		v, _ := strconv.ParseUint(f[1], 10, 64)
+		switch f[0] {
+		case "simd_count":
+			simdCount = v
+		case "local_mem_size":
+			localMem = v
+			hasLocalMem = true
+		}
+	}
+	if !hasLocalMem || simdCount == 0 {
+		return false, false
+	}
+	return localMem == 0, true
+}
+
+// kfdIsAPUByBDF looks up the KFD topology node for the GPU at the given PCIe
+// BDF (e.g. "0000:65:00.0") and returns whether it is an APU.
+// location_id in KFD properties encodes the BDF as (bus<<8)|(dev<<3)|fn.
+func kfdIsAPUByBDF(bdf string) (bool, bool) {
+	parts := strings.Split(bdf, ":")
+	if len(parts) < 2 {
+		return false, false
+	}
+	busStr := parts[len(parts)-2]
+	devFn := parts[len(parts)-1]
+	df := strings.SplitN(devFn, ".", 2)
+	if len(df) != 2 {
+		return false, false
+	}
+	bus, err1 := strconv.ParseUint(busStr, 16, 64)
+	dev, err2 := strconv.ParseUint(df[0], 16, 64)
+	fn, err3 := strconv.ParseUint(df[1], 16, 64)
+	if err1 != nil || err2 != nil || err3 != nil {
+		return false, false
+	}
+	wantLoc := (bus << 8) | (dev << 3) | fn
+
+	nodes, _ := filepath.Glob("/sys/class/kfd/kfd/topology/nodes/*/properties")
+	for _, p := range nodes {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var locationID, simdCount, localMem uint64
+		var hasLocalMem bool
+		for _, line := range strings.Split(string(data), "\n") {
+			f := strings.Fields(line)
+			if len(f) != 2 {
+				continue
+			}
+			v, _ := strconv.ParseUint(f[1], 10, 64)
+			switch f[0] {
+			case "location_id":
+				locationID = v
+			case "simd_count":
+				simdCount = v
+			case "local_mem_size":
+				localMem = v
+				hasLocalMem = true
+			}
+		}
+		if simdCount == 0 || locationID != wantLoc || !hasLocalMem {
+			continue
+		}
+		return localMem == 0, true
+	}
+	return false, false
+}
+
+// sysfsReadInt64 reads a single integer value from a sysfs file.
+func sysfsReadInt64(path string) (int64, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	return v, err == nil
+}
+
+// sysfsReadHwmon reads a hwmon attribute (e.g. "temp1_input") for a DRM card
+// device directory. It picks the first matching hwmon instance.
+func sysfsReadHwmon(cardDevDir, attr string) (int64, bool) {
+	matches, _ := filepath.Glob(cardDevDir + "/hwmon/hwmon*/" + attr)
+	if len(matches) == 0 {
+		return 0, false
+	}
+	return sysfsReadInt64(matches[0])
+}
+
+// findDRMCardByBDF returns the sysfs device directory for the DRM card whose
+// uevent PCI_SLOT_NAME matches bdf (e.g. "0000:65:00.0"), or "" if not found.
+func findDRMCardByBDF(bdf string) string {
+	ueventPaths, _ := filepath.Glob("/sys/class/drm/card*/device/uevent")
+	for _, p := range ueventPaths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.TrimSpace(line) == "PCI_SLOT_NAME="+bdf {
+				return filepath.Dir(p)
+			}
+		}
+	}
+	return ""
+}
+
+// amdSmiGPUMeta holds per-GPU static information built once at tryAmdSmi startup.
+type amdSmiGPUMeta struct {
+	index   int
+	name    string
+	uuid    string
+	isAPU   bool
+	cardDir string // /sys/class/drm/cardN/device
+}
+
+func tryAmdSmi(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuStat, error) {
+	if _, err := exec.LookPath("amd-smi"); err != nil {
+		return nil, ErrNoGpuTool
+	}
+	if every < time.Second {
+		every = time.Second
+	}
+
+	const probeTimeout = 5 * time.Second
+	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	metas, err := amdSmiEnumerate(probeCtx)
+	cancel()
+	if err != nil {
+		return nil, fmt.Errorf("amd-smi enumerate: %w", err)
+	}
+	if len(metas) == 0 {
+		return nil, fmt.Errorf("amd-smi found no GPUs")
+	}
+
+	// Verify the memory query path works before committing to this backend.
+	verifyCtx, cancel2 := context.WithTimeout(ctx, probeTimeout)
+	_, err = amdSmiQueryStats(verifyCtx, metas)
+	cancel2()
+	if err != nil {
+		return nil, fmt.Errorf("amd-smi mem query: %w", err)
+	}
+
+	const pollTimeout = 5 * time.Second
+	ch := make(chan []GpuStat, 1)
+	go func() {
+		defer close(ch)
+		ticker := time.NewTicker(every)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				pollCtx, cancel := context.WithTimeout(ctx, pollTimeout)
+				stats, err := amdSmiQueryStats(pollCtx, metas)
+				cancel()
+				if err != nil || len(stats) == 0 {
+					continue
+				}
+				select {
+				case ch <- stats:
+				default:
+				}
+			}
+		}
+	}()
+	return ch, nil
+}
+
+func amdSmiEnumerate(ctx context.Context) ([]amdSmiGPUMeta, error) {
+	listOut, err := exec.CommandContext(ctx, "amd-smi", "list", "--json").Output()
+	if err != nil {
+		return nil, err
+	}
+	var listEntries []struct {
+		GPU    int    `json:"gpu"`
+		BDF    string `json:"bdf"`
+		UUID   string `json:"uuid"`
+		NodeID int    `json:"node_id"`
+	}
+	if err := json.Unmarshal(listOut, &listEntries); err != nil {
+		return nil, err
+	}
+
+	// Fetch market names from the asic block; non-fatal if it fails.
+	nameMap := map[int]string{}
+	if staticOut, err := exec.CommandContext(ctx, "amd-smi", "static", "--asic", "--json").Output(); err == nil {
+		var staticResp struct {
+			GPUData []struct {
+				GPU  int `json:"gpu"`
+				ASIC struct {
+					MarketName string `json:"market_name"`
+				} `json:"asic"`
+			} `json:"gpu_data"`
+		}
+		if json.Unmarshal(staticOut, &staticResp) == nil {
+			for _, d := range staticResp.GPUData {
+				if d.ASIC.MarketName != "" && d.ASIC.MarketName != "N/A" {
+					nameMap[d.GPU] = d.ASIC.MarketName
+				}
+			}
+		}
+	}
+
+	metas := make([]amdSmiGPUMeta, 0, len(listEntries))
+	for _, e := range listEntries {
+		isAPU, _ := kfdIsAPU(e.NodeID)
+		name := nameMap[e.GPU]
+		if name == "" {
+			name = fmt.Sprintf("AMD GPU %d", e.GPU)
+		}
+		metas = append(metas, amdSmiGPUMeta{
+			index:   e.GPU,
+			name:    name,
+			uuid:    e.UUID,
+			isAPU:   isAPU,
+			cardDir: findDRMCardByBDF(e.BDF),
+		})
+	}
+	return metas, nil
+}
+
+func amdSmiQueryStats(ctx context.Context, metas []amdSmiGPUMeta) ([]GpuStat, error) {
+	out, err := exec.CommandContext(ctx, "amd-smi", "metric", "--mem-usage", "--json").Output()
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		GPUData []struct {
+			GPU      int `json:"gpu"`
+			MemUsage struct {
+				TotalVRAM struct{ Value int `json:"value"` } `json:"total_vram"`
+				UsedVRAM  struct{ Value int `json:"value"` } `json:"used_vram"`
+				TotalGTT  struct{ Value int `json:"value"` } `json:"total_gtt"`
+				UsedGTT   struct{ Value int `json:"value"` } `json:"used_gtt"`
+			} `json:"mem_usage"`
+		} `json:"gpu_data"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, err
+	}
+
+	metaByIdx := make(map[int]*amdSmiGPUMeta, len(metas))
+	for i := range metas {
+		metaByIdx[metas[i].index] = &metas[i]
+	}
+
+	stats := make([]GpuStat, 0, len(resp.GPUData))
+	for _, d := range resp.GPUData {
+		m, ok := metaByIdx[d.GPU]
+		if !ok {
+			continue
+		}
+		var totalMB, usedMB int
+		if m.isAPU {
+			totalMB = d.MemUsage.TotalVRAM.Value + d.MemUsage.TotalGTT.Value
+			usedMB = d.MemUsage.UsedVRAM.Value + d.MemUsage.UsedGTT.Value
+		} else {
+			totalMB = d.MemUsage.TotalVRAM.Value
+			usedMB = d.MemUsage.UsedVRAM.Value
+		}
+
+		var memUtil float64
+		if totalMB > 0 {
+			memUtil = float64(usedMB) / float64(totalMB) * 100
+		}
+
+		stat := GpuStat{
+			Timestamp:  time.Now(),
+			ID:         d.GPU,
+			Name:       m.name,
+			UUID:       m.uuid,
+			MemTotalMB: totalMB,
+			MemUsedMB:  usedMB,
+			MemUtilPct: memUtil,
+		}
+
+		// Supplement from sysfs: utilization, temperature, and power are not
+		// available via amd-smi on APUs (returns N/A).
+		if m.cardDir != "" {
+			if util, ok2 := sysfsReadInt64(m.cardDir + "/gpu_busy_percent"); ok2 {
+				stat.GpuUtilPct = float64(util)
+			}
+			if temp, ok2 := sysfsReadHwmon(m.cardDir, "temp1_input"); ok2 {
+				stat.TempC = int(temp / 1000)
+			}
+			if pwr, ok2 := sysfsReadHwmon(m.cardDir, "power1_average"); ok2 {
+				stat.PowerDrawW = float64(pwr) / 1_000_000
+			}
+		}
+
+		stats = append(stats, stat)
+	}
+	return stats, nil
+}
+
 func trySysfs(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuStat, error) {
-	return nil, ErrNotImplemented
+	stats, err := readSysfs()
+	if err != nil {
+		return nil, err
+	}
+	if len(stats) == 0 {
+		return nil, ErrNoGpuTool
+	}
+	if every < time.Second {
+		every = time.Second
+	}
+
+	ch := make(chan []GpuStat, 1)
+	go func() {
+		defer close(ch)
+		ticker := time.NewTicker(every)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				stats, err := readSysfs()
+				if err != nil || len(stats) == 0 {
+					continue
+				}
+				select {
+				case ch <- stats:
+				default:
+				}
+			}
+		}
+	}()
+	return ch, nil
 }
 
 func lactSocketPath() string {
@@ -566,7 +941,149 @@ func lactGetDeviceStats(conn net.Conn, id string, name string, index int) (GpuSt
 }
 
 func readSysfs() ([]GpuStat, error) {
-	return nil, ErrNotImplemented
+	ueventPaths, _ := filepath.Glob("/sys/class/drm/card*/device/uevent")
+	if len(ueventPaths) == 0 {
+		return nil, ErrNoGpuTool
+	}
+
+	var stats []GpuStat
+	for _, ueventPath := range ueventPaths {
+		data, err := os.ReadFile(ueventPath)
+		if err != nil {
+			continue
+		}
+
+		var driver, pciSlot, pciID string
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			switch {
+			case strings.HasPrefix(line, "DRIVER="):
+				driver = strings.TrimPrefix(line, "DRIVER=")
+			case strings.HasPrefix(line, "PCI_SLOT_NAME="):
+				pciSlot = strings.TrimPrefix(line, "PCI_SLOT_NAME=")
+			case strings.HasPrefix(line, "PCI_ID="):
+				pciID = strings.TrimPrefix(line, "PCI_ID=")
+			}
+		}
+		if driver != "amdgpu" {
+			continue
+		}
+
+		cardDevDir := filepath.Dir(ueventPath)
+		cardName := filepath.Base(filepath.Dir(cardDevDir))
+		cardIndex, _ := strconv.Atoi(strings.TrimPrefix(cardName, "card"))
+
+		vramTotal, _ := sysfsReadInt64(cardDevDir + "/mem_info_vram_total")
+		vramUsed, _ := sysfsReadInt64(cardDevDir + "/mem_info_vram_used")
+		gttTotal, _ := sysfsReadInt64(cardDevDir + "/mem_info_gtt_total")
+		gttUsed, _ := sysfsReadInt64(cardDevDir + "/mem_info_gtt_used")
+		if vramTotal == 0 && gttTotal == 0 {
+			continue
+		}
+
+		isAPU, _ := kfdIsAPUByBDF(pciSlot)
+
+		const toMB = 1024 * 1024
+		var totalMB, usedMB int
+		if isAPU {
+			totalMB = int((vramTotal + gttTotal) / toMB)
+			usedMB = int((vramUsed + gttUsed) / toMB)
+			// On AMD APU, ROCm/HIP can allocate "fine-grained unified memory"
+			// via KFD that bypasses DRM TTM entirely, leaving mem_info_gtt_used
+			// flat even as the model occupies gigabytes.  Add whatever the KFD
+			// per-process totals show beyond what gtt_used already accounts for.
+			usedMB += kfdExtraMemMB(gttUsed)
+		} else {
+			totalMB = int(vramTotal / toMB)
+			usedMB = int(vramUsed / toMB)
+		}
+
+		var memUtil float64
+		if totalMB > 0 {
+			memUtil = float64(usedMB) / float64(totalMB) * 100
+		}
+
+		var gpuUtil float64
+		if util, ok := sysfsReadInt64(cardDevDir + "/gpu_busy_percent"); ok {
+			gpuUtil = float64(util)
+		}
+
+		var tempC int
+		if t, ok := sysfsReadHwmon(cardDevDir, "temp1_input"); ok {
+			tempC = int(t / 1000)
+		}
+
+		var powerW float64
+		if p, ok := sysfsReadHwmon(cardDevDir, "power1_average"); ok {
+			powerW = float64(p) / 1_000_000
+		}
+
+		name := "amdgpu"
+		if pciID != "" {
+			name = "amdgpu [" + pciID + "]"
+		}
+
+		stats = append(stats, GpuStat{
+			Timestamp:  time.Now(),
+			ID:         cardIndex,
+			Name:       name,
+			TempC:      tempC,
+			GpuUtilPct: gpuUtil,
+			MemUtilPct: memUtil,
+			MemUsedMB:  usedMB,
+			MemTotalMB: totalMB,
+			PowerDrawW: powerW,
+		})
+	}
+
+	if len(stats) == 0 {
+		return nil, ErrNoGpuTool
+	}
+	return stats, nil
+}
+
+// kfdExtraMemMB returns the KFD fine-grained unified memory (in MB) that is
+// NOT already counted in the DRM gtt_used counter.  On AMD APU with ROCm, the
+// HIP runtime can allocate model weights through the KFD HSA driver using
+// fine-grained system memory that bypasses DRM TTM — those bytes never appear
+// in mem_info_gtt_used.  This function reads
+// /sys/class/kfd/kfd/proc/*/vram_* (Linux KFD sysfs), sums all per-process
+// KFD allocations, then returns max(0, kfdTotal − gttUsedBytes) so that only
+// the portion that the DRM counter misses is added to usedMB.  Returns 0 on
+// any system where the KFD sysfs path is absent (BSD, no ROCm, etc.).
+func kfdExtraMemMB(gttUsedBytes int64) int {
+	entries, err := os.ReadDir("/sys/class/kfd/kfd/proc")
+	if err != nil {
+		return 0
+	}
+	var kfdTotal int64
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		procDir := "/sys/class/kfd/kfd/proc/" + e.Name()
+		fds, err := os.ReadDir(procDir)
+		if err != nil {
+			continue
+		}
+		for _, fd := range fds {
+			if !strings.HasPrefix(fd.Name(), "vram_") {
+				continue
+			}
+			b, err := os.ReadFile(procDir + "/" + fd.Name())
+			if err != nil {
+				continue
+			}
+			v, _ := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+			kfdTotal += v
+		}
+	}
+	extra := kfdTotal - gttUsedBytes
+	if extra <= 0 {
+		return 0
+	}
+	const toMB = 1024 * 1024
+	return int(extra / toMB)
 }
 
 func readSysStats() (SysStat, error) {
