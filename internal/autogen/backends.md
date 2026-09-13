@@ -20,6 +20,12 @@ upscale / custom entries, each with a `Default` per-class flag), loaded from the
 The legacy `BackendExes`/`ServerExe`/`SdServerExe`/`TtsServerExe` are **derived** from the
 registry (first-per-kind, `deriveBackendExes`), so image/embedding/tts emit is untouched.
 
+`Settings.Backends` also carries the installer's **derived build rows** (`Build: true`, one per
+installed build of a managed component), which exist so a model can pin a specific build instead
+of taking the activated one. They are ordinary rows to resolution (step 1 pins one by id) and are
+appended behind the component's own row, so first-per-kind derivation and the implicit class
+default still land on the row the user activated.
+
 **Config is "keyed to backend" for free:** one `Override` holds both llama and vllm fields;
 each emitter reads only its own, so switching kind never wipes the dormant set.
 

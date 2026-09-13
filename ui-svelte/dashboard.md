@@ -279,7 +279,11 @@ activity (`ActivityStats.svelte`, `StatusRail.svelte`, `InferenceFeedback.svelte
 readout), the VRAM gauge, the request/response inspector (`CaptureDialog.svelte`), and the API-key
 page.
 
-**`ModelConfigModal.svelte`** does dynamic ctx / VRAM-target / variant tuning. The ctx slider's
+**`ModelConfigModal.svelte`** does dynamic ctx / VRAM-target / variant tuning. Its **Backend**
+dropdown lists every installed build of the model's class, labelled by variant with the version on
+the second line (the registry carries a derived row per build, not just the activated one);
+`hideDuplicateBuildRows` (`lib/backends.ts`) drops the derived row of a build another row already
+points at, while never dropping the row this model pins. The ctx slider's
 ceiling is the model's **trained** length, lifted to 4× by the **RoPE** checkbox beside it
 (`toggleRope` sets `adv.ropeScaling = "yarn"`; the Go sizer derives `--rope-scale` from the ctx
 picked). Past-native is marked on the track with a tick at the trained length plus a

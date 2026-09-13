@@ -27,7 +27,7 @@
   import Select, { type SelectOption } from "./Select.svelte";
   import Toggle from "./Toggle.svelte";
   import { estimateSegments } from "../stores/vram";
-  import { backendClass, engineLabel } from "../lib/backends";
+  import { backendClass, backendPickOptions, hideDuplicateBuildRows } from "../lib/backends";
   import {
     IMG_SAMPLERS,
     fmtCtx,
@@ -349,7 +349,7 @@
   const modelClass = $derived(
     config?.class || (imageMode ? "image" : audioMode ? "tts" : samMode ? "segment" : threeDMode ? "3d" : "llm"),
   );
-  const classBackends = $derived((config?.backends ?? []).filter((b) => backendClass(b.kind) === modelClass));
+  const classBackends = $derived(hideDuplicateBuildRows((config?.backends ?? []).filter((b) => backendClass(b.kind) === modelClass), backend));
   const selectedKind = $derived(classBackends.find((b) => b.id === backend)?.kind ?? "");
   const isVllm = $derived(selectedKind === "vllm");
 
@@ -663,11 +663,7 @@
   ];
   const backendSel = $derived<SelectOption[]>([
     { value: "", label: "Auto (default)" },
-    ...classBackends.map((b) => ({
-      value: b.id,
-      label: `${b.name || engineLabel(b.kind)}${b.default ? " ★" : ""}`,
-      detail: engineLabel(b.kind),
-    })),
+    ...backendPickOptions(classBackends),
   ]);
 
   // Slider ceiling = trained context length (fallback 32k). Floor 4k.

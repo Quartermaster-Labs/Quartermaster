@@ -129,3 +129,84 @@ export function engineLabel(kind: string): string {
   const def = backendClassDef(kind);
   return def?.engines.find((e) => e.kind === kind)?.label ?? kind;
 }
+
+// --- Picker labels ---------------------------------------------------------
+// A registry row carries more than one backend of the same engine: the
+// manager keeps a derived row per installed build (vulkan / rocm / cuda, one per
+// version), and the model editor has to tell them apart. BackendEntry
+// (stores/api) is structurally assignable to this, so these stay testable
+// without touching the store.
+export interface BackendPickEntry {
+  id: string;
+  kind: string;
+  name: string;
+  path: string;
+  default?: boolean;
+  managed?: boolean;
+  build?: boolean;
+  component?: string;
+  version?: string;
+  variant?: string;
+}
+
+// The closed trigger renders the label alone, so the half that decides whether a
+// build works at all (the variant) belongs in it. The version goes on the detail
+// line, where two builds of one variant stay distinguishable.
+export function backendOptionLabel(e: BackendPickEntry): string {
+  const name = (e.name ?? "").trim() || engineLabel(e.kind);
+  const variant = (e.variant ?? "").trim();
+  return `${name}${variant ? ` (${variant})` : ""}${e.default ? " ★" : ""}`;
+}
+
+// Second line of an option: the version, because two builds of one variant are
+// exactly the case the picker exists for.
+export function backendOptionDetail(e: BackendPickEntry): string {
+  const version = (e.version ?? "").trim();
+  const engine = engineLabel(e.kind);
+  return version ? `${version} · ${engine}` : engine;
+}
+
+export interface BackendPickOption {
+  value: string;
+  label: string;
+  detail: string;
+}
+
+// Pickable options for one class's rows. Labels have to stay unique on their
+// own, because the closed trigger shows the label and nothing else: with two
+// versions of one variant installed, both would read identically there. Only the
+// colliding rows grow a version suffix (usually none do).
+export function backendPickOptions(rows: BackendPickEntry[]): BackendPickOption[] {
+  const labels = rows.map(backendOptionLabel);
+  const seen = new Map<string, number>();
+  for (const l of labels) seen.set(l, (seen.get(l) ?? 0) + 1);
+  return rows.map((r, i) => {
+    const version = (r.version ?? "").trim();
+    const label = seen.get(labels[i])! > 1 && version ? `${labels[i]} · ${version}` : labels[i];
+    return { value: r.id, label, detail: backendOptionDetail(r) };
+  });
+}
+
+// Drop the derived row of a build some other row already names: the manager's
+// own row while that build is the active one, or a hand-entered row pointing at
+// the same exe. Without this, activating a build makes it appear twice with the
+// same label, once starred.
+//
+// keepId is the row the current model pins. It is never dropped, so a pin that
+// later becomes a duplicate still shows its own value instead of rendering an
+// empty select.
+export function hideDuplicateBuildRows<T extends BackendPickEntry>(rows: T[], keepId = ""): T[] {
+  const taken = new Set(
+    rows
+      .filter((r) => !r.build)
+      .map((r) => normExePath(r.path))
+      .filter(Boolean),
+  );
+  return rows.filter((r) => !r.build || r.id === keepId || !taken.has(normExePath(r.path)));
+}
+
+// Same file, same row, whichever slash the writer used (paths travel through
+// YAML written on Windows and read on Linux).
+function normExePath(path: string): string {
+  return (path ?? "").trim().replace(/\\/g, "/").toLowerCase();
+}

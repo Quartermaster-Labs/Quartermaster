@@ -20,7 +20,9 @@ import (
 )
 
 // AdoptInstalledBackends points the sidecar registry at any installed build
-// whose component has no usable row yet, and reports how many it adopted.
+// whose component has no usable row yet, and reports how many it adopted. It
+// also refreshes each component's derived Build rows (see syncBuildRows), so
+// every installed build is pinnable from the model editor on first boot.
 //
 // It is deliberately called before autogen.EnsureConfig rather than after the
 // server is up: the sidecar is folded into autogen's inputs hash, so writing it
@@ -43,25 +45,26 @@ func AdoptInstalledBackends(genPath string, mgr *backends.Manager, logf func(str
 		return 0, err
 	}
 
+	// Installed() is newest-first, which is the right pick for a component
+	// nothing has expressed a preference about.
+	installs := make(map[string][]backends.Installed)
 	adopted := 0
 	for _, comp := range mgr.Catalog() {
 		// No kind means a helper (yt-dlp): installed, never a backend row.
 		if comp.Kind == "" {
 			continue
 		}
+		installs[comp.ID] = mgr.Installed(comp.ID)
 		i := managedEntry(list, comp.ID)
 		if i >= 0 && list[i].Path != "" {
 			if st, err := os.Stat(list[i].Path); err == nil && !st.IsDir() {
 				continue // the row still works; leave the user's choice alone
 			}
 		}
-		// Installed() is newest-first, which is the right pick for a component
-		// nothing has expressed a preference about.
-		installs := mgr.Installed(comp.ID)
-		if len(installs) == 0 {
+		if len(installs[comp.ID]) == 0 {
 			continue
 		}
-		inst := installs[0]
+		inst := installs[comp.ID][0]
 		row := autogen.BackendEntry{
 			ID:        "managed-" + comp.ID,
 			Kind:      comp.Kind,
@@ -95,7 +98,22 @@ func AdoptInstalledBackends(genPath string, mgr *backends.Manager, logf func(str
 		}
 	}
 
-	if adopted == 0 {
+	// Derived Build rows come second, so each component's block lands after the
+	// Managed row it belongs to. Rows are read positionally (first entry of a
+	// kind feeds the legacy exe slots and the implicit class default), and a
+	// build row must never shadow the row the user activated.
+	rowsChanged := false
+	for _, comp := range mgr.Catalog() {
+		if comp.Kind == "" {
+			continue
+		}
+		next, changed := syncBuildRows(list, comp.ID, comp.Name, comp.Kind, installs[comp.ID])
+		if changed {
+			list, rowsChanged = next, true
+		}
+	}
+
+	if adopted == 0 && !rowsChanged {
 		return 0, nil
 	}
 	if err := autogen.UpsertSidecarBackendList(genPath, list); err != nil {

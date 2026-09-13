@@ -58,6 +58,19 @@ here 501s when `s.autogen == nil`** — they are the `-generate` surface. Route 
   2. `PUT /api/settings/backends` (the manual editor, which sends the whole list) **restores managed
      provenance from the stored row by id** rather than trusting the client — a manual save can't
      strip `Managed` or repoint the path away from the active build.
+  3. Beside that row the manager keeps one **derived `Build` row per installed build**
+     (`id: build-<component>-<version>-<variant>`, `Build: true`, written by `syncBuildRows` on
+     install, activate and startup adoption). Those are what the model editor's **Backend**
+     dropdown lists, so a model can pin, say, the ROCm build of sd-server while the class default
+     is the Vulkan one. The settings editor never renders them, so `mergeBackendList` re-attaches
+     the stored ones on every PUT — otherwise one save from the Backends tab would unpin every
+     model that named a build. `managedEntry` skips them, so activate / ★ / update keep
+     addressing the single row the manager owns.
+
+  The model editor receives the full row through `backendEntryToDTO` (one mapping shared with the
+  settings list: id, kind, name, path, default, managed, component, version, variant, build), and
+  labels each option by variant with the version on its second line (`lib/backends.ts`
+  `backendOptionLabel`/`backendOptionDetail`).
 
   Managed rows render read-only in the manual editor, and a managed row becomes the ★ class default
   only when its class is empty. `backendsapi.go` sits **alongside** the hand-entered rows, never
