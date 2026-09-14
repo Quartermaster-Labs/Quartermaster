@@ -92,6 +92,14 @@ type apiGenDefaults struct {
 	Sampler string  `json:"sampler,omitempty"`
 	Width   int     `json:"width,omitempty"`
 	Height  int     `json:"height,omitempty"`
+	// Frames and Fps are video-only (--video-frames / --fps). Present here
+	// rather than in a separate struct because the Video tab is a clone of the
+	// Images panel and reads the same object; an image model simply leaves them
+	// zero. Frames matters more than it looks: sd-server's own default is 1,
+	// i.e. a single still, so a Video tab that did not seed from this would ask
+	// for one frame unless the user thought to change it.
+	Frames int `json:"frames,omitempty"`
+	Fps    int `json:"fps,omitempty"`
 }
 
 // genDefaults reads the generation flags autogen emitted onto an image model's
@@ -114,6 +122,12 @@ func genDefaults(info *config.CmdInfo) *apiGenDefaults {
 	}
 	if v, ok := info.Value("--height", "-H"); ok {
 		g.Height, _ = strconv.Atoi(strings.TrimSpace(v))
+	}
+	if v, ok := info.Value("--video-frames"); ok {
+		g.Frames, _ = strconv.Atoi(strings.TrimSpace(v))
+	}
+	if v, ok := info.Value("--fps"); ok {
+		g.Fps, _ = strconv.Atoi(strings.TrimSpace(v))
 	}
 	if *g == (apiGenDefaults{}) {
 		return nil

@@ -258,6 +258,8 @@ type EncoderSet struct {
 	ZimageVae string `yaml:"zimageVae"` // --vae for z-image / lumina
 	QwenLlm   string `yaml:"qwenLlm"`   // --llm text encoder (z-image, qwen-image, flux.2 klein)
 	Flux2Vae  string `yaml:"flux2Vae"`  // --vae for flux.2 (32-ch latent, NOT flux.1's fluxVae)
+	VideoVae  string `yaml:"videoVae"`  // --vae for a 3D video model (MiniMax-H3's transformer VAE)
+	AudioVae  string `yaml:"audioVae"`  // --audio-vae: decodes the soundtrack latent of an audio-capable video model
 }
 
 // SlotCacheSettings mirrors config.SlotCacheConfig; zero values fall back to the
@@ -742,6 +744,9 @@ type Override struct {
 	ClipGPath       string `yaml:"clipGPath"`       // --clip_g
 	T5Path          string `yaml:"t5Path"`          // --t5xxl
 	TextEncoderPath string `yaml:"textEncoderPath"` // --llm (Z-Image / Lumina text encoder)
+	// AudioVaePath is --audio-vae, the second decoder an audio-capable video
+	// model needs to turn its soundtrack latent into PCM. Video models only.
+	AudioVaePath string `yaml:"audioVaePath"`
 	// LlmVision gates --llm_vision, the vision projector (mmproj) that pairs with
 	// the --llm text encoder. "" => auto: edit/reference models (name-detected, see
 	// wantsVisionEncoder) get the projector found beside their encoder, everything
@@ -781,8 +786,13 @@ type Override struct {
 	DefaultSampler string  `yaml:"defaultSampler"` // --sampling-method
 	DefaultWidth   int     `yaml:"defaultWidth"`   // --width
 	DefaultHeight  int     `yaml:"defaultHeight"`  // --height
-	Unlisted       bool    `yaml:"unlisted"`
-	Skip           bool    `yaml:"skip"`
+	// Video-only generation defaults. DefaultFrames is --video-frames: sd.cpp
+	// normalizes it DOWN to the largest 4n+1 it can sample, so 33 stays 33 and
+	// 34 becomes 33. 0 => the family default (see videoDefaultsFor).
+	DefaultFrames int  `yaml:"defaultFrames"` // --video-frames
+	DefaultFps    int  `yaml:"defaultFps"`    // --fps
+	Unlisted      bool `yaml:"unlisted"`
+	Skip          bool `yaml:"skip"`
 	// SlotCache opts this model into on-disk slot KV persistence: emits
 	// --slot-save-path so the server's slotCache can save/restore its conversation
 	// KV. OPT-IN: nil/absent => off, so enabling the dashboard master switch does
@@ -918,6 +928,7 @@ type VariantSpec struct {
 	ClipGPath       string  `yaml:"clipGPath"`
 	T5Path          string  `yaml:"t5Path"`
 	TextEncoderPath string  `yaml:"textEncoderPath"`
+	AudioVaePath    string  `yaml:"audioVaePath"`
 	RefEdit         string  `yaml:"refEdit"`
 	LlmVision       string  `yaml:"llmVision"`
 	LlmVisionPath   string  `yaml:"llmVisionPath"`
@@ -932,6 +943,8 @@ type VariantSpec struct {
 	DefaultSampler  string  `yaml:"defaultSampler"`
 	DefaultWidth    int     `yaml:"defaultWidth"`
 	DefaultHeight   int     `yaml:"defaultHeight"`
+	DefaultFrames   int     `yaml:"defaultFrames"`
+	DefaultFps      int     `yaml:"defaultFps"`
 }
 
 // applyDefaults fills zero-valued settings with the PowerShell defaults.

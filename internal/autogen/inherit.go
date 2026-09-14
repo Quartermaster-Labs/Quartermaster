@@ -77,6 +77,7 @@ func mergeInheritImageStrings(o *Override, v *VariantSpec) {
 	o.ClipGPath = inheritStr(v.ClipGPath, o.ClipGPath)
 	o.T5Path = inheritStr(v.T5Path, o.T5Path)
 	o.TextEncoderPath = inheritStr(v.TextEncoderPath, o.TextEncoderPath)
+	o.AudioVaePath = inheritStr(v.AudioVaePath, o.AudioVaePath)
 	o.LlmVisionPath = inheritStr(v.LlmVisionPath, o.LlmVisionPath)
 	o.LoraDir = inheritStr(v.LoraDir, o.LoraDir)
 }
@@ -107,6 +108,7 @@ func NormalizeNone(o *Override) {
 	o.ClipGPath = clearNone(o.ClipGPath)
 	o.T5Path = clearNone(o.T5Path)
 	o.TextEncoderPath = clearNone(o.TextEncoderPath)
+	o.AudioVaePath = clearNone(o.AudioVaePath)
 	o.LlmVisionPath = clearNone(o.LlmVisionPath)
 	o.LoraDir = clearNone(o.LoraDir)
 }

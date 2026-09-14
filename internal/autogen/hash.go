@@ -231,7 +231,7 @@ const hashCacheSuffix = ".modelhash"
 //	hand-declared extra image model carries its pin too, and the single-device
 //	env pin is derived from the resolved binary. Switching the ★ default no
 //	longer moves a model that named a backend.
-const genVersion = "v72"
+const genVersion = "v73"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

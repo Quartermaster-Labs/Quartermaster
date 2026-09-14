@@ -87,6 +87,28 @@ the wake lands on whichever deadline comes first.
 
 The **eviction policy** is decoupled from scheduling. `groupSwapper` (`group.go`) reads static group settings: same-group siblings are stopped when the group has `swap=true`; cross-group members are stopped only when the *target's* group is `exclusive`, and even then a running `persistent` group is left alone. (This deliberately preserves the legacy gotcha that loading a non-exclusive model does not evict exclusive groups.) `matrixSwapper` instead delegates to `matrixSolver.Solve` (`matrix_solver.go`), which picks the lowest-cost valid model set containing the target. For the fork's cross-port VRAM-exclusive behavior, model an `exclusive` group so loading any member evicts the others.
 
+### Leases — work that outlives its request
+
+`LocalRouter.Lease(modelID) (release func(), ok bool)` + `FIFO.OnLease`/`releaseInFlight`.
+
+Everything above assumes "in flight" means "an HTTP request is open". Async video generation
+(`internal/server/videojobs.go`) broke that: sd-server's job API answers the POST in milliseconds
+and renders for minutes afterwards, so the model reads as idle while the GPU is fully committed,
+and the next request for anything else evicts it mid-sample.
+
+A lease is an in-flight count the caller holds explicitly. It goes through the run loop like every
+other decision, increments the same counter `trackedServe` does, and is therefore honoured by
+**every** rule already written against it: a swap that would evict the model is deferred, the idle
+grace hold applies, and co-resident spawns see it as busy. `release` is idempotent and must be
+called exactly once per successful lease; `ok` is false for a model this router does not handle
+(peer-hosted) or a router that is shutting down, and the caller must not hold a release in that
+case.
+
+**A lease does NOT refresh process TTL.** TTL lives in `internal/process` and only `p.ServeHTTP`
+touches `lastUse`, so a lease alone would keep the scheduler happy while the process idled itself
+out from under the render. The video watcher's real upstream poll is what keeps TTL away; anything
+else taking a long lease needs its own keepalive.
+
 ## Gotchas / conventions
 
 - **One scheduler, shared by all listeners.** The architectural invariant of this fork: there must be exactly one `run()` loop / scheduler instance, and every HTTP listener routes through it. Two scheduler instances = two independent VRAM accountings = collisions on the single GPU. Never instantiate per-listener routers. (See the fork goal in the repo `CLAUDE.md`.)

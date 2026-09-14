@@ -20,6 +20,7 @@ re-implementing them.
 | [`configapi.md`](configapi.md) | The `-generate` config editor + managed backend installs (`configapi*.go`, `backendsapi.go`, the pickers) |
 | [`hubapi.md`](hubapi.md) | `/api/hub/*` — search, download jobs, the pre-download context sizer, reveal-folder |
 | [`slotcache.md`](slotcache.md) | Slot KV-cache persistence: preamble seeding, save/restore paths, pruning, the recurrent-arch seed skip |
+| `videojobs.go` (package comment) | Async video renders: the job registry, the scheduler lease, the watcher goroutine |
 | [`playground.md`](playground.md) | The playground app + the **server-owned turn runner**: tool loop, reasoning-box titles, tool-call replay, the quartermaster MCP, assistant memory |
 | [`tools.md`](tools.md) | The chat tools' fetch paths (executors in `internal/tools`): web-search chain, `fetch_page`/SSRF guard, YouTube, calc/units/datetime, weather, currency, feeds, imgproxy — and the `/v1/tools/*` execution API (`toolsapi.go`) |
 
@@ -44,6 +45,15 @@ Also here: `turns_design.md` — the turn runner's design notes.
 - **Every tool argument is model text.** URLs get the `fetch_page` SSRF guard, currency codes and
   video ids are validated or rebuilt before reaching a URL or argv, and `calculate` is a closed
   grammar rather than an evaluator.
+- **A video render OUTLIVES its request, and that breaks two router assumptions.** sd-server's
+  job API answers `POST /sdcpp/v1/vid_gen` in milliseconds and samples for minutes afterwards, so
+  (1) the model looks idle the instant the reply lands and gets evicted or TTL'd out from under the
+  render, and (2) `GET /sdcpp/v1/jobs/{id}` names no model and is unroutable. `videojobs.go` fixes
+  both with a scheduler **lease** held for the life of the job plus a job-id -> model-id registry,
+  and a watcher goroutine that polls to completion. **We poll, not the client**: a closed browser
+  tab would otherwise pin the model forever, and the watcher's poll doubles as the TTL keepalive
+  (only a real request through the process refreshes its `lastUse`). Terminal documents are served
+  from the watcher's cache for `videoJobGrace` because the lease is already gone by then.
 - **The config editor is `-generate`-only** — every handler 501s when `s.autogen == nil`.
 
 ## Connections

@@ -297,19 +297,22 @@ func TestConfig_ModelCapabilities_Validate(t *testing.T) {
 	})
 
 	t.Run("invalid_in_modality", func(t *testing.T) {
-		caps := ModelCapConfig{In: []string{"video"}}
+		// "video" is a REAL modality now (video-generation models declare
+		// out: [video]), so the invalid example has to be something that is
+		// genuinely not one.
+		caps := ModelCapConfig{In: []string{"hologram"}}
 		err := caps.Validate()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "capabilities.in")
-		assert.Contains(t, err.Error(), "video")
+		assert.Contains(t, err.Error(), "hologram")
 	})
 
 	t.Run("invalid_out_modality", func(t *testing.T) {
-		caps := ModelCapConfig{Out: []string{"video"}}
+		caps := ModelCapConfig{Out: []string{"hologram"}}
 		err := caps.Validate()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "capabilities.out")
-		assert.Contains(t, err.Error(), "video")
+		assert.Contains(t, err.Error(), "hologram")
 	})
 
 	t.Run("negative_context", func(t *testing.T) {
@@ -327,10 +330,10 @@ models:
     capabilities:
       in:
         - text
-        - video
+        - hologram
 `
 		_, err := LoadConfigFromReader(strings.NewReader(content))
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "video")
+		assert.Contains(t, err.Error(), "hologram")
 	})
 }

@@ -70,11 +70,14 @@ type FIFO struct {
 	inFlight map[string]int
 	queued   []HandlerReq
 
-	// imageModels is the set of model IDs whose Capabilities.Out includes
-	// "image" (sd-server diffusion models). Their render peak VRAM (sampler +
-	// VAE decode) runs above the steady-state --max-vram cap, so no other model
-	// may spawn alongside an in-flight render — see OnRequest step (3b).
-	imageModels map[string]bool
+	// renderModels is the set of model IDs whose Capabilities.Out includes
+	// "image" or "video" (sd-server diffusion models). Their render peak VRAM
+	// (sampler + VAE decode) runs above the steady-state --max-vram cap, so no
+	// other model may spawn alongside an in-flight render — see OnRequest step
+	// (3b). Video belongs here for the same reason and then some: a 3D VAE
+	// decodes a whole temporal tile at once, and the render runs for minutes
+	// rather than seconds.
+	renderModels map[string]bool
 
 	// useTick is a monotonic counter stamped into lastUse whenever a model is
 	// granted a handler or swapped in. It orders runningSet least-recently-used
@@ -98,29 +101,29 @@ type FIFO struct {
 // from models: each model's ConcurrencyLimit overrides defaultConcurrencyLimit
 // when set to a value greater than zero.
 func NewFIFO(name string, logger *logmon.Monitor, planner Swapper, cfg config.FifoConfig, models map[string]config.ModelConfig, eff Effects) *FIFO {
-	limits, imageModels := deriveModelParams(models)
+	limits, renderModels := deriveModelParams(models)
 	return &FIFO{
-		name:        name,
-		logger:      logger,
-		planner:     planner,
-		cfg:         cfg,
-		effects:     eff,
-		limits:      limits,
-		active:      make(map[string]*activeSwap),
-		inFlight:    make(map[string]int),
-		imageModels: imageModels,
-		lastUse:     make(map[string]int64),
-		hold:        make(map[string]time.Time),
-		holdFor:     make(map[string]time.Duration),
+		name:         name,
+		logger:       logger,
+		planner:      planner,
+		cfg:          cfg,
+		effects:      eff,
+		limits:       limits,
+		active:       make(map[string]*activeSwap),
+		inFlight:     make(map[string]int),
+		renderModels: renderModels,
+		lastUse:      make(map[string]int64),
+		hold:         make(map[string]time.Time),
+		holdFor:      make(map[string]time.Duration),
 	}
 }
 
-// deriveModelParams computes the per-model concurrency limits and the image-model
+// deriveModelParams computes the per-model concurrency limits and the render-model
 // set from a config's model map — the two purely config-derived lookups FIFO
 // keeps. Shared by NewFIFO and ApplyConfig.
-func deriveModelParams(models map[string]config.ModelConfig) (limits map[string]int, imageModels map[string]bool) {
+func deriveModelParams(models map[string]config.ModelConfig) (limits map[string]int, renderModels map[string]bool) {
 	limits = make(map[string]int, len(models))
-	imageModels = make(map[string]bool)
+	renderModels = make(map[string]bool)
 	for id, mc := range models {
 		limit := defaultConcurrencyLimit
 		if mc.ConcurrencyLimit > 0 {
@@ -128,13 +131,13 @@ func deriveModelParams(models map[string]config.ModelConfig) (limits map[string]
 		}
 		limits[id] = limit
 		for _, out := range mc.Capabilities.Out {
-			if out == "image" {
-				imageModels[id] = true
+			if out == "image" || out == "video" {
+				renderModels[id] = true
 				break
 			}
 		}
 	}
-	return limits, imageModels
+	return limits, renderModels
 }
 
 // ApplyConfig live-swaps the config-derived inputs while leaving active/queued/
@@ -142,7 +145,7 @@ func deriveModelParams(models map[string]config.ModelConfig) (limits map[string]
 func (s *FIFO) ApplyConfig(conf config.Config, planner Swapper) {
 	s.planner = planner
 	s.cfg = conf.Routing.Scheduler.Settings.Fifo
-	s.limits, s.imageModels = deriveModelParams(conf.Models)
+	s.limits, s.renderModels = deriveModelParams(conf.Models)
 }
 
 // OnRequest decides what to do with one incoming ServeHTTP request. It never
@@ -199,16 +202,18 @@ func (s *FIFO) OnRequest(req HandlerReq) {
 		return
 	}
 
-	// (3b) An image generation is rendering. It holds the GPU, and its true
-	// peak VRAM (sampler + VAE decode) runs above the steady-state --max-vram
-	// cap, so spawning any other model alongside it can OOM the render
-	// mid-sample. Defer every non-image spawn until the render's serve
-	// completes — independent of what EvictionFor computed, so a policy that
-	// fails to mark the image model for eviction (co-resident set, stale plan)
-	// still can't preempt it. The fast path above is exempt: it serves an
+	// (3b) A diffusion render (image or video) is running. It holds the GPU,
+	// and its true peak VRAM (sampler + VAE decode) runs above the steady-state
+	// --max-vram cap, so spawning any other model alongside it can OOM the
+	// render mid-sample. Defer every non-render spawn until it completes —
+	// independent of what EvictionFor computed, so a policy that fails to mark
+	// the render model for eviction (co-resident set, stale plan) still can't
+	// preempt it. For video the "serve" is the LEASE, not the HTTP request: the
+	// POST that starts a job returns a 202 in milliseconds and the render runs
+	// for minutes afterwards. The fast path above is exempt: it serves an
 	// already-ready model without a spawn, adding no VRAM pressure.
-	if s.imageRenderInFlight() && !s.imageModels[req.Model] {
-		s.logger.Debugf("%s: queuing request for model %s (image generation rendering)", s.name, req.Model)
+	if s.renderInFlight() && !s.renderModels[req.Model] {
+		s.logger.Debugf("%s: queuing request for model %s (diffusion render in progress)", s.name, req.Model)
 		s.enqueue(req)
 		return
 	}
@@ -252,6 +257,12 @@ func (s *FIFO) holdWindow(req HandlerReq) time.Duration {
 		}
 		return req.Hold
 	}
+	return s.defaultHoldWindow()
+}
+
+// defaultHoldWindow is the configured idle-grace window, for callers that carry
+// no request of their own to read an X-QM-Hold-Ms off.
+func (s *FIFO) defaultHoldWindow() time.Duration {
 	if s.cfg.HoldMs != nil {
 		return time.Duration(*s.cfg.HoldMs) * time.Millisecond
 	}
@@ -408,16 +419,52 @@ func (s *FIFO) OnSwapDone(ev SwapDone) {
 // OnServeDone decrements the per-model in-flight count and, when that drops to
 // zero, retries the queue: requests whose swap was deferred because they would
 // have evicted this (now-idle) process can now proceed.
-func (s *FIFO) OnServeDone(ev ServeDoneEvent) {
-	s.inFlight[ev.ModelID]--
-	if s.inFlight[ev.ModelID] <= 0 {
-		delete(s.inFlight, ev.ModelID)
+func (s *FIFO) OnServeDone(ev ServeDoneEvent) { s.releaseInFlight(ev.ModelID) }
+
+// OnLease acquires or releases a job lease: an in-flight count held by work that
+// is NOT an HTTP request of its own. sd-server's async video API is the reason
+// it exists — POST /sdcpp/v1/vid_gen returns a job id in milliseconds and the
+// render runs for minutes afterwards, so without a lease the model looks idle
+// the instant the 202 lands and the very next request may evict it mid-render.
+//
+// Acquire deliberately reuses the SAME counter a served request bumps rather
+// than a parallel "leases" map: everything that must respect a busy model
+// (conflictsWithInFlight, renderInFlight, the concurrency limit) already reads
+// inFlight, and a second map is a second thing to forget. Release runs the exact
+// drain-and-hold path a finished request runs, for the same reason.
+//
+// Acquire is unconditional: the caller has already been granted a handler and
+// has already started the upstream job, so refusing here would strand a render
+// nothing is protecting. The concurrency limit is enforced on the POST that
+// created the job, which is an ordinary request.
+func (s *FIFO) OnLease(ev LeaseEvent) {
+	if ev.Acquire {
+		s.inFlight[ev.ModelID]++
+		s.touch(ev.ModelID)
+		// The POST that created the job already recorded a window at grant
+		// time; this only covers a lease taken for a model that has somehow
+		// never been granted one.
+		if _, ok := s.holdFor[ev.ModelID]; !ok {
+			s.holdFor[ev.ModelID] = s.defaultHoldWindow()
+		}
+		return
+	}
+	s.releaseInFlight(ev.ModelID)
+}
+
+// releaseInFlight drops one in-flight count and, when that was the last one,
+// arms the idle-grace hold and retries the queue: requests whose swap was
+// deferred because they would have evicted this (now-idle) process can proceed.
+func (s *FIFO) releaseInFlight(modelID string) {
+	s.inFlight[modelID]--
+	if s.inFlight[modelID] <= 0 {
+		delete(s.inFlight, modelID)
 		// Going idle is the moment an agent loop is mid-tool-call, and the
 		// moment the scheduler used to hand the GPU away. Protect the model for
 		// one window, then drain anyway: a queued request that is out of
 		// patience still goes now, one that is not waits for the Wake.
-		if w := s.holdFor[ev.ModelID]; w > 0 {
-			s.hold[ev.ModelID] = time.Now().Add(w)
+		if w := s.holdFor[modelID]; w > 0 {
+			s.hold[modelID] = time.Now().Add(w)
 			s.effects.Wake(w)
 		}
 		s.drainQueue()
@@ -602,7 +649,7 @@ func (s *FIFO) drainQueue() {
 			s.grantHandler(req, req.Model)
 			continue
 		}
-		if s.imageRenderInFlight() && !s.imageModels[req.Model] {
+		if s.renderInFlight() && !s.renderModels[req.Model] {
 			remaining = append(remaining, req)
 			continue
 		}
@@ -745,12 +792,13 @@ func slicesOverlap(xs, ys []string) bool {
 	return false
 }
 
-// imageRenderInFlight reports whether any image-output model is currently
-// serving a request. While one is, its GPU/VRAM peak makes co-resident spawns
-// unsafe, so the scheduler defers other models' swaps (OnRequest step 3b).
-func (s *FIFO) imageRenderInFlight() bool {
+// renderInFlight reports whether any image- or video-output model is currently
+// serving a request (or holding a job lease). While one is, its GPU/VRAM peak
+// makes co-resident spawns unsafe, so the scheduler defers other models' swaps
+// (OnRequest step 3b).
+func (s *FIFO) renderInFlight() bool {
 	for m, n := range s.inFlight {
-		if n > 0 && s.imageModels[m] {
+		if n > 0 && s.renderModels[m] {
 			return true
 		}
 	}

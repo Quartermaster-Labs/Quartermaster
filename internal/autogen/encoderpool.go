@@ -52,9 +52,13 @@ type ComponentRole string
 const (
 	RoleNone ComponentRole = ""
 	RoleVae  ComponentRole = "vae"
-	RoleClip ComponentRole = "clip"
-	RoleT5   ComponentRole = "t5"
-	RoleLlm  ComponentRole = "llm"
+	// RoleAudioVae decodes an AUDIO latent, not a picture. Its own role rather
+	// than a VAE family because it is never a substitute for one: a video model
+	// that emits a soundtrack loads BOTH (--vae and --audio-vae).
+	RoleAudioVae ComponentRole = "audio-vae"
+	RoleClip     ComponentRole = "clip"
+	RoleT5       ComponentRole = "t5"
+	RoleLlm      ComponentRole = "llm"
 	// roleProj is a vision projector: paired to an llm, never picked alone.
 	roleProj ComponentRole = "mmproj"
 )
@@ -67,6 +71,10 @@ const (
 	VaeFamilyFlux  = "flux"  // 16 ch: flux.1 "ae", and every model that reuses it
 	VaeFamilyFlux2 = "flux2" // 32 ch: flux.2 / ERNIE (AutoencoderKLFlux2)
 	VaeFamilyWan3D = "wan3d" // Wan 2.1-derived 3D causal VAE (conv1 is 5-dim)
+	// VaeFamilyVideo3D is a transformer 3D video autoencoder (MiniMax-H3): the
+	// encoder patchifies RGB with a conv3d but the DECODER is a transformer, so
+	// it has neither decoder.conv_in nor Wan's bare conv1.
+	VaeFamilyVideo3D = "video3d"
 )
 
 // ComponentFile is one classified file on disk.
@@ -165,6 +173,21 @@ func classifySafetensors(h map[string]stTensor, sizeGB float64, path string) Com
 	case len(h["conv1.weight"].Shape) == 5:
 		c.Role = RoleVae
 		c.Family = VaeFamilyWan3D
+	// Transformer 3D video VAE (MiniMax-H3). Neither arm above sees it: the
+	// decoder is a transformer stack (decoder.x_embedder), so there is no
+	// decoder.conv_in and no bare conv1. What remains is the encoder's conv3d
+	// stem, encoder.conv_in.weight = [out, 3, t, h, w]. Deliberately placed
+	// AFTER the wan3d arm so a Wan VAE that also carries this tensor keeps its
+	// own family.
+	case len(h["encoder.conv_in.weight"].Shape) == 5:
+		c.Role = RoleVae
+		c.Family = VaeFamilyVideo3D
+	// Audio VAE (MiniMax-H3): a 1D conv stack, so the decoder input projection
+	// is [width, latent, 1]. Width here is the LATENT channel count, which is
+	// what has to match the DiT's audio_patch_proj.
+	case len(h["dec_in_proj.weight"].Shape) == 3:
+		c.Role = RoleAudioVae
+		c.Width = dim("dec_in_proj.weight", 1)
 	// CLIP text tower. token_embedding is [vocab, width]; 768 = CLIP-L, 1280 = G.
 	case dim("text_model.embeddings.token_embedding.weight", 1) > 0:
 		c.Role = RoleClip
@@ -314,6 +337,12 @@ func (p *EncoderPool) Vae(family string, hints ...string) string {
 			cands = append(cands, f)
 		}
 	}
+	return pickByHint(cands, hints)
+}
+
+// pickByHint returns the first candidate whose path contains one of the hints
+// (hints in priority order), else the first candidate, else "".
+func pickByHint(cands []ComponentFile, hints []string) string {
 	if len(cands) == 0 {
 		return ""
 	}
@@ -329,6 +358,22 @@ func (p *EncoderPool) Vae(family string, hints ...string) string {
 		}
 	}
 	return cands[0].Path
+}
+
+// AudioVae returns the discovered audio VAE, or "" when none is on disk. hints
+// work exactly as in Vae: path substrings preferred when more than one file
+// qualifies, otherwise the first in sorted order.
+func (p *EncoderPool) AudioVae(hints ...string) string {
+	if p == nil {
+		return ""
+	}
+	var cands []ComponentFile
+	for _, f := range p.Files {
+		if f.Role == RoleAudioVae {
+			cands = append(cands, f)
+		}
+	}
+	return pickByHint(cands, hints)
 }
 
 // Clip returns the discovered CLIP tower of a given width (768 = L, 1280 = G).
@@ -494,6 +539,10 @@ func fillEncoderSet(declared EncoderSet, p *EncoderPool) EncoderSet {
 	// fallback and one copy on disk serves both.
 	fill(&declared.ZimageVae, p.Vae(VaeFamilyFlux, "z-image", "zimage"))
 	fill(&declared.ZimageVae, declared.FluxVae)
+	// Video components. The 3D video VAE has no image-model consumer, so an
+	// unhinted pick is safe; the audio VAE is role-unique.
+	fill(&declared.VideoVae, p.Vae(VaeFamilyVideo3D))
+	fill(&declared.AudioVae, p.AudioVae())
 	fill(&declared.ClipL, p.Clip(768))
 	fill(&declared.ClipG, p.Clip(1280))
 	fill(&declared.T5, p.T5())

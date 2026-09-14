@@ -197,6 +197,10 @@ func (p *Playground) speechChatsPath(user string) string {
 	return filepath.Join(p.userDir(user), "speechchats.json")
 }
 
+func (p *Playground) videoChatsPath(user string) string {
+	return filepath.Join(p.userDir(user), "videochats.json")
+}
+
 func (p *Playground) mediaDir(user string) string { return filepath.Join(p.userDir(user), "media") }
 
 // dataURLRe matches an inline "data:<mime>;base64,<payload>" URL. base64's
@@ -291,6 +295,26 @@ func extMime(ext string) string {
 	return ""
 }
 
+// mediaMime resolves a stored file's media type from the folder it was bucketed
+// into plus its extension. The folder is load-bearing: "webm" is a container,
+// not a codec family, and the same extension is written for audio/webm and
+// video/webm. extMime alone would call a clip audio and browsers would refuse
+// to paint it. Empty means "let http.ServeFile guess".
+func mediaMime(kind, ext string) string {
+	if kind == "video" {
+		switch ext {
+		case "mp4":
+			return "video/mp4"
+		case "webm":
+			return "video/webm"
+		case "avi":
+			return "video/x-msvideo"
+		}
+		return ""
+	}
+	return extMime(ext)
+}
+
 // gcMedia deletes media files in the user's dir that no tab JSON references
 // (an orphan left after a chat/image/speech entry was deleted client-side).
 // MUST be called under p.mu and after the triggering write, so the union scan
@@ -306,7 +330,7 @@ func (p *Playground) gcMedia(user string) {
 		return
 	}
 	var refs []byte
-	for _, fn := range []func(string) string{p.chatsPath, p.imageChatsPath, p.speechChatsPath} {
+	for _, fn := range []func(string) string{p.chatsPath, p.imageChatsPath, p.speechChatsPath, p.videoChatsPath} {
 		b, _ := os.ReadFile(fn(user))
 		refs = append(refs, b...)
 	}
@@ -335,6 +359,8 @@ func mediaKind(mime string) string {
 		return "image"
 	case strings.HasPrefix(mime, "audio/"):
 		return "audio"
+	case strings.HasPrefix(mime, "video/"):
+		return "video"
 	default:
 		return "other"
 	}
@@ -361,6 +387,10 @@ func mimeExt(mime string) string {
 		return "webm"
 	case "audio/ogg":
 		return "ogg"
+	case "video/mp4":
+		return "mp4"
+	case "video/webm":
+		return "webm"
 	}
 	sub := mime[strings.LastIndexByte(mime, '/')+1:]
 	ext := strings.Map(func(r rune) rune {
@@ -387,6 +417,7 @@ func (p *Playground) Migrate() {
 		"chats":       p.chatsPath,
 		"imagechats":  p.imageChatsPath,
 		"speechchats": p.speechChatsPath,
+		"videochats":  p.videoChatsPath,
 		"prefs":       p.prefsPath,
 	}
 	p.mu.Lock()
@@ -709,6 +740,12 @@ func (s *Server) handlePlaygroundImageChats(w http.ResponseWriter, r *http.Reque
 	s.serveUserBlob(w, r, (*Playground).imageChatsPath, "[]")
 }
 
+// GET/PUT /api/videochats — the user's saved video threads. Same
+// client-owns-the-blob model as /api/chats, just a separate file.
+func (s *Server) handlePlaygroundVideoChats(w http.ResponseWriter, r *http.Request) {
+	s.serveUserBlob(w, r, (*Playground).videoChatsPath, "[]")
+}
+
 // GET/PUT /api/speechchats — the user's saved speech threads. Same
 // client-owns-the-blob model as /api/chats, just a separate file.
 func (s *Server) handlePlaygroundSpeechChats(w http.ResponseWriter, r *http.Request) {
@@ -742,6 +779,14 @@ func (s *Server) handlePlaygroundMedia(w http.ResponseWriter, r *http.Request) {
 	if file == "/" {
 		http.NotFound(w, r)
 		return
+	}
+	// Name the type ourselves where we can: Go's extension table is
+	// registry-backed on Windows, so .webm/.mp4 can come back as
+	// application/octet-stream and a <video> then refuses to play it.
+	if m := mediaRefRe.FindStringSubmatch("/api/media" + file); m != nil {
+		if ct := mediaMime(m[1], m[3]); ct != "" {
+			w.Header().Set("Content-Type", ct)
+		}
 	}
 	http.ServeFile(w, r, filepath.Join(p.mediaDir(user), filepath.FromSlash(file)))
 }

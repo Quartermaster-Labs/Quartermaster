@@ -92,6 +92,20 @@ func renderCapabilities(caps config.ModelCapConfig) (arch map[string]any, capsMa
 		if slices.Contains(caps.In, "image") && slices.Contains(caps.Out, "3d") {
 			capsMap["image_to_3d"] = true
 		}
+		// out:[video] routes to sd-server's ASYNC job API rather than to
+		// /sdapi txt2img, so it needs its own flag: an image client that saw
+		// only image_generation here would POST a synchronous request that
+		// takes minutes and returns a still.
+		if slices.Contains(caps.In, "text") && slices.Contains(caps.Out, "video") {
+			capsMap["video_generation"] = true
+			// A video model that also denoises an audio latent (MiniMax-H3)
+			// ships the soundtrack inside the same clip. Surfaced so the player
+			// can say so rather than leaving the user to wonder why it has
+			// sound when the image models never did.
+			if slices.Contains(caps.Out, "audio") {
+				capsMap["video_audio"] = true
+			}
+		}
 	}
 
 	if caps.Tools {
