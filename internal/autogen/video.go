@@ -81,19 +81,26 @@ type genDefaults struct {
 // videoDefaultsFor returns the family profile. An image model gets the zero
 // profile, i.e. exactly the behaviour that existed before video did.
 //
-// The H3 numbers come from the model card and two of them are load-bearing
-// rather than taste:
+// The H3 numbers are from leejet's own reference command, and two of them are
+// load-bearing rather than taste:
 //
-//   - cfg 1.0: H3 is a distilled 4-step model. sd.cpp ABORTS the sample when it
-//     is asked for guidance above 1.0, and the built-in default is 7.0, so a
-//     model launched without this pin fails every request.
-//   - frames 25: --video-frames defaults to 1, which is a single still. sd.cpp
-//     normalizes the count DOWN to the largest 4n+1 it can sample (34 becomes
-//     33, 32 becomes 29), so 25 is exact.
+//   - cfg 1.0: H3 conditions at guidance 1.0. sd-server's built-in default is
+//     7.0, so a model launched without this pin renders every clip wrong.
+//   - frames 56: --video-frames defaults to 1, which is a single still. H3
+//     aligns the count UP to the 17k+5 grid (5, 22, 39, 56, 73...), NOT to the
+//     4n+1 grid every other video family uses, so 56 is exact and the old 25
+//     would have silently become 39. sd.cpp: SDVersion-gated align_video_frames.
+//
+// steps is deliberately LEFT UNSET for H3. The base model is NOT distilled: it
+// samples at sd-server's default 20, and the 4-step figure everyone quotes
+// belongs to the turbo LoRAs (lightx2v et al), which arrive per REQUEST as
+// `lora: [{path, multiplier}]` or as <lora:name:1.0> in the prompt. A launch
+// flag cannot know whether a given request carries one, and pinning 4 here made
+// every LoRA-less render mush.
 func videoDefaultsFor(v videoInfo) genDefaults {
 	switch v.Kind {
 	case VideoFamilyMinimaxH3:
-		return genDefaults{steps: 4, cfg: 1.0, width: 640, height: 384, frames: 25, fps: 24}
+		return genDefaults{cfg: 1.0, width: 640, height: 384, frames: 56, fps: 24}
 	case VideoFamilyWan:
 		// Wan2.x is not distilled: leave steps/cfg at sd-server's defaults and
 		// pin only what is unusable by default (one frame) or wrong for the

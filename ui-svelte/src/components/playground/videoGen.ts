@@ -11,22 +11,50 @@ export { ASPECTS, aspectDims, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, fmtDur };
 export const VIDEO_SIZE_TIERS = [384, 512, 640, 720, 832, 960, 1280];
 export const VIDEO_DEFAULT_MAX_DIM = 960;
 
-// sd.cpp normalizes --video-frames DOWN to the largest 4n+1 it can sample (34
-// becomes 33), so offering anything else just silently changes the user's
-// number. These are exact.
+// Frame counts are NOT free-form, and an off-grid number is not rejected: it is
+// silently changed. sd.cpp ALIGNS --video-frames UP to the family's grid, and
+// there are two grids.
+//
+//   - MiniMax-H3: 17k+5, minimum 5, i.e. 5, 22, 39, 56, 73, 90, 107.
+//   - every other family: the largest 4n+1.
+//
+// So a user who asks H3 for 25 gets 39, a third longer than the clip they sized
+// their prompt for. Only exact values are offered. sd.cpp: align_video_frames,
+// gated on SDVersion.
 export const FRAME_OPTIONS = [13, 17, 25, 33, 49, 65, 81];
+export const H3_FRAME_OPTIONS = [5, 22, 39, 56, 73, 90, 107];
 
-/** Nearest valid 4n+1 frame count, clamped to a sane range. */
-export function snapFrames(n: number): number {
+/** True when the model id names a MiniMax-H3, the one family on the 17k+5 grid. */
+export function isH3(id: string): boolean {
+  const l = id.toLowerCase();
+  return l.includes("minimax") || l.includes("h3");
+}
+
+export function frameOptionsFor(id: string): number[] {
+  return isH3(id) ? H3_FRAME_OPTIONS : FRAME_OPTIONS;
+}
+
+/** Snap a frame count onto the model family's grid, the way the backend will. */
+export function snapFrames(n: number, id = ""): number {
   const clamped = Math.max(5, Math.min(241, Math.round(n)));
+  if (isH3(id)) return Math.max(5, Math.ceil((clamped - 5) / 17) * 17 + 5);
   return Math.round((clamped - 1) / 4) * 4 + 1;
 }
 
 export const FPS_OPTIONS = [8, 12, 16, 24, 30];
 
+// H3 is FIXED at 24 fps: sd.cpp's request handler overrides whatever was asked
+// for and logs a warning, so offering the other rows would be a lie.
+export function fpsOptionsFor(id: string): number[] {
+  return isH3(id) ? [24] : FPS_OPTIONS;
+}
+
 // Per-model defaults matched by id substring, same mechanism as IMAGE_DEFAULTS.
-// The H3 row is not taste: it is a 4-step distill that ABORTS when asked for
-// guidance above 1.0, and 640x384x25 is what the model card trains at.
+// The H3 row is not taste: the model conditions at cfg 1.0 (the generic 5 gives
+// mush), 640x384 is its training resolution, 56 is on its frame grid, and 24 fps
+// is the only rate it will run at. steps 20 is sd-server's own default and the
+// right number for the BASE model: the 4-step figure belongs to the turbo LoRAs,
+// which arrive per request via <lora:name:1.0> in the prompt, not at launch.
 export const VIDEO_DEFAULTS: {
   match: string;
   steps: number;
@@ -38,8 +66,8 @@ export const VIDEO_DEFAULTS: {
   fps?: number;
   maxDim?: number;
 }[] = [
-  { match: "minimax", steps: 4, cfg: 1.0, sampler: "euler", scheduler: "discrete", size: "640x384", frames: 25, fps: 24 },
-  { match: "h3", steps: 4, cfg: 1.0, sampler: "euler", scheduler: "discrete", size: "640x384", frames: 25, fps: 24 },
+  { match: "minimax", steps: 20, cfg: 1.0, sampler: "euler", scheduler: "discrete", size: "640x384", frames: 56, fps: 24 },
+  { match: "h3", steps: 20, cfg: 1.0, sampler: "euler", scheduler: "discrete", size: "640x384", frames: 56, fps: 24 },
   { match: "wan", steps: 20, cfg: 5, sampler: "euler", scheduler: "discrete", size: "832x480", frames: 81, fps: 16 },
 ];
 

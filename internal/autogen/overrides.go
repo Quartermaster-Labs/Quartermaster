@@ -786,9 +786,14 @@ type Override struct {
 	DefaultSampler string  `yaml:"defaultSampler"` // --sampling-method
 	DefaultWidth   int     `yaml:"defaultWidth"`   // --width
 	DefaultHeight  int     `yaml:"defaultHeight"`  // --height
-	// Video-only generation defaults. DefaultFrames is --video-frames: sd.cpp
-	// normalizes it DOWN to the largest 4n+1 it can sample, so 33 stays 33 and
-	// 34 becomes 33. 0 => the family default (see videoDefaultsFor).
+	// Video-only generation defaults. DefaultFrames is --video-frames, which
+	// sd.cpp ALIGNS UP to the family's grid: 17k+5 for MiniMax-H3 (5, 22, 39,
+	// 56...), the largest 4n+1 for everything else. Off-grid numbers are not
+	// rejected, they are silently changed, so prefer an exact one. 0 => the
+	// family default (see videoDefaultsFor).
+	//
+	// DefaultFps is --fps. H3 IGNORES it and logs an override warning: the model
+	// is fixed at 24 fps. It is honored by Wan.
 	DefaultFrames int  `yaml:"defaultFrames"` // --video-frames
 	DefaultFps    int  `yaml:"defaultFps"`    // --fps
 	Unlisted      bool `yaml:"unlisted"`

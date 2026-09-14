@@ -41,11 +41,11 @@ func TestEmitVideoModel_MinimaxH3(t *testing.T) {
 		"--audio-vae h3_audio_vae.safetensors",
 		"--llm qwen3vl32b.gguf",
 		// Both of these are load-bearing, not preferences: the built-in
-		// cfg-scale is 7.0 (H3 aborts above 1.0) and --video-frames is 1.
+		// cfg-scale is 7.0 (H3 conditions at 1.0) and --video-frames is 1.
+		// 56 is on H3's 17k+5 alignment grid; 25 would become 39.
 		"--cfg-scale 1",
-		"--video-frames 25",
+		"--video-frames 56",
 		"--fps 24",
-		"--steps 4",
 		"out: [video, audio]",
 		"family=minimax_h3",
 		"(none declared)",
@@ -57,6 +57,12 @@ func TestEmitVideoModel_MinimaxH3(t *testing.T) {
 	}
 	if strings.Contains(out, "WARNING") {
 		t.Errorf("complete component set should not warn:\n%s", out)
+	}
+	// H3 must NOT pin --steps. The base model is not distilled, so sd-server's
+	// own 20 has to stand: the 4-step figure belongs to the turbo LoRAs, which
+	// arrive per request and cannot be known at launch.
+	if strings.Contains(out, "--steps") {
+		t.Errorf("H3 must not pin --steps (base model is not distilled):\n%s", out)
 	}
 	// 8GB weights + 4GB video compute overhead fits a 23GB budget.
 	if strings.Contains(out, "--offload-to-cpu") {
@@ -128,7 +134,7 @@ func TestVideoDefaults_OverrideWins(t *testing.T) {
 			t.Errorf("override missing %q in: %s", want, joined)
 		}
 	}
-	if strings.Contains(joined, "--video-frames 25") {
+	if strings.Contains(joined, "--video-frames 56") {
 		t.Errorf("family default should have been replaced: %s", joined)
 	}
 }

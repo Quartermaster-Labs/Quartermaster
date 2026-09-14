@@ -35,8 +35,8 @@
     SCHEDULER_OPTIONS,
     VIDEO_SIZE_TIERS,
     VIDEO_DEFAULT_MAX_DIM,
-    FRAME_OPTIONS,
-    FPS_OPTIONS,
+    frameOptionsFor,
+    fpsOptionsFor,
     snapFrames,
     videoDefaultsFor,
     videoSettingsFor,
@@ -66,7 +66,7 @@
   const aspectStore = userPref<string>("playground-video-aspect", "16:9");
   const longEdgeStore = userPref<string>("playground-video-long", "640");
   const negativePromptStore = userPref<string>("playground-video-negative", "");
-  const stepsStore = userPref<number>("playground-video-steps", 4);
+  const stepsStore = userPref<number>("playground-video-steps", 20);
   const cfgScaleStore = userPref<number>("playground-video-cfg", 1);
   const seedStore = userPref<number>("playground-video-seed", -1);
   const framesStore = userPref<string>("playground-video-frames", "25");
@@ -170,9 +170,9 @@
   let threadEl = $state<HTMLDivElement | undefined>();
 
   // Switching models resets the settings panel to that model's defaults, same
-  // reasoning as the Images tab: a 4-step distill (MiniMax-H3) ABORTS at the
-  // generic cfg, and a frame count carried over from another family renders a
-  // clip the model was never trained to produce.
+  // reasoning as the Images tab: MiniMax-H3 conditions at cfg 1.0 and the
+  // generic 5 gives mush, and a frame count carried over from another family is
+  // silently realigned to a clip length the user did not ask for.
   const defaultsModelStore = userPref<string>("playground-video-defaults-model", "");
   $effect(() => {
     const id = $selectedModelStore;
@@ -262,6 +262,19 @@
   // nothing about how long the result plays, and the two knobs interact.
   let clipSeconds = $derived((Number($framesStore) || 1) / Math.max(1, Number($fpsStore) || 1));
 
+  // Both pickers are family-scoped: H3 aligns frames to 17k+5 and is hard-wired
+  // to 24 fps, everything else is 4n+1 and free. The snap effect exists because
+  // the stores are PERSISTED prefs, so a value picked under one family survives
+  // a switch to another and would otherwise leave the Select showing blank.
+  let frameOptions = $derived(frameOptionsFor($selectedModelStore));
+  let fpsOptions = $derived(fpsOptionsFor($selectedModelStore));
+  $effect(() => {
+    if (!frameOptions.includes(Number($framesStore))) {
+      $framesStore = String(snapFrames(Number($framesStore), $selectedModelStore));
+    }
+    if (!fpsOptions.includes(Number($fpsStore))) $fpsStore = String(fpsOptions[0]);
+  });
+
   $effect(() => {
     playgroundStores.videoGenerating.set(isGenerating);
   });
@@ -285,7 +298,7 @@
         negative_prompt: $negativePromptStore || undefined,
         width: w,
         height: h,
-        video_frames: snapFrames(Number($framesStore)),
+        video_frames: snapFrames(Number($framesStore), $selectedModelStore),
         fps: Number($fpsStore),
         seed: $seedStore,
         sample_params: {
@@ -607,13 +620,13 @@
             <div class="flex flex-col gap-1">
               <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
                 Frames
-                <span class="cursor-help opacity-60" use:tip={"Frames rendered. The backend snaps this to the nearest 4n+1 (25, 33, 49...), so only those are offered. Time and VRAM both scale with it."}>(?)</span>
+                <span class="cursor-help opacity-60" use:tip={"Frames rendered. The backend rounds this UP onto the model family grid (17k+5 for MiniMax-H3, 4n+1 for the rest), so only exact values are offered. Time and VRAM both scale with it."}>(?)</span>
               </span>
               <Select
                 bind:value={$framesStore}
                 disabled={isGenerating}
                 compact
-                options={FRAME_OPTIONS.map((f) => ({ value: String(f), label: String(f) }))}
+                options={frameOptions.map((f) => ({ value: String(f), label: String(f) }))}
               />
             </div>
             <div class="flex flex-col gap-1">
@@ -622,7 +635,7 @@
                 bind:value={$fpsStore}
                 disabled={isGenerating}
                 compact
-                options={FPS_OPTIONS.map((f) => ({ value: String(f), label: String(f) }))}
+                options={fpsOptions.map((f) => ({ value: String(f), label: String(f) }))}
               />
             </div>
           </div>

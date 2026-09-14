@@ -495,9 +495,9 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	// Generation defaults applied when a request omits them. An image model
 	// starts from nothing (sd-server's own defaults stand); a video model starts
 	// from its family profile, because two of those numbers are not preferences:
-	// --video-frames defaults to 1 (a single still), and H3 is a distilled
-	// 4-step model that REFUSES to sample above cfg-scale 1.0 while sd-server's
-	// built-in default is 7.0. Per-model overrides still win over both.
+	// --video-frames defaults to 1 (a single still), and H3 conditions at
+	// cfg-scale 1.0 while sd-server's built-in default is 7.0. Per-model
+	// overrides still win over both.
 	def := videoDefaultsFor(vid)
 	if ov != nil {
 		if ov.DefaultSteps > 0 {

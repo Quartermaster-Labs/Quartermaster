@@ -231,7 +231,13 @@ const hashCacheSuffix = ".modelhash"
 //	hand-declared extra image model carries its pin too, and the single-device
 //	env pin is derived from the resolved binary. Switching the ★ default no
 //	longer moves a model that named a backend.
-const genVersion = "v73"
+//
+// v74: MiniMax-H3 generation defaults corrected. --steps is no longer pinned at
+//
+//	4 (the base model is not distilled; 4 steps belongs to the turbo LoRAs,
+//	which arrive per request), and --video-frames moves 25 -> 56 because H3
+//	aligns UP to the 17k+5 grid and 25 was silently becoming 39.
+const genVersion = "v74"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the
