@@ -528,12 +528,6 @@
   let editContent = $state("");
   let showReasoning = $state(false);
   let modalImageUrl = $state<string | null>(null);
-  let textEl: HTMLDivElement | undefined = $state();
-  // A bare textarea has no intrinsic width from its content (only from `cols`,
-  // default 20ch), so it collapses the shrink-to-fit user bubble down to ~5
-  // words wide. Capture the rendered text's actual width before switching to
-  // edit mode and pin the textarea to it, so the bubble stays the size it was.
-  let editWidth = $state<number | null>(null);
 
   // Vary the source-pill max width so long titles don't all truncate to one
   // uniform block. Deterministic by title (stable across renders). Classes are
@@ -601,7 +595,6 @@
 
   function startEdit() {
     editContent = textContent;
-    editWidth = textEl?.clientWidth ?? null;
     isEditing = true;
   }
 
@@ -787,7 +780,7 @@
   <div
     onmousemove={role === "assistant" ? trackReply : undefined}
     class="relative group rounded-2xl px-3 py-2 text-[0.8125rem] {role === 'user'
-      ? 'max-w-[85%] bg-[#141414] text-[#ededee] rounded-br-none'
+      ? (isEditing ? 'w-[85%] ' : '') + 'max-w-[85%] bg-[#141414] text-[#ededee] rounded-br-none'
       : (rewriteOriginal != null ? 'w-full' : 'w-full sm:w-4/5') + ' rounded-bl-sm'}"
   >
     {#if role === "assistant"}
@@ -1117,10 +1110,9 @@
           <span class="opacity-90">{rewriteInstruction || "Rewrite this text"}</span>
         </div>
       {:else if isEditing}
-        <div class="flex flex-col gap-2 min-w-[300px]">
+        <div class="flex w-full min-w-0 flex-col gap-2">
           <textarea
-            class="{editWidth ? '' : 'w-full'} px-3 py-2 rounded border border-card-border bg-surface text-txtmain focus:outline-none focus:ring-2 focus:ring-primary resize-none overflow-hidden"
-            style={editWidth ? `width:${editWidth}px` : undefined}
+            class="w-full px-3 py-2 rounded border border-card-border bg-surface text-txtmain focus:outline-none focus:ring-2 focus:ring-primary resize-none overflow-hidden"
             rows="1"
             bind:value={editContent}
             use:autogrow
@@ -1184,7 +1176,7 @@
           </div>
         {/if}
         {#if displayContent}
-          <div class="prose prose-sm prose-invert max-w-none chat-prose user-msg-prose pr-8" bind:this={textEl} use:codeBlockCopy>
+          <div class="prose prose-sm prose-invert max-w-none chat-prose user-msg-prose pr-8" use:codeBlockCopy>
             {@html renderMarkdown(displayContent)}
           </div>
         {/if}
@@ -1333,6 +1325,13 @@
     border-radius: 0.375rem;
     padding: 0.75rem;
     padding-right: 2.5rem;
+    /* Code wraps instead of scrolling sideways: a model's 300-char line used to
+       push a horizontal scrollbar under every block. Wrapping (rather than
+       clipping) keeps the whole line readable; `overflow-x: auto` stays as the
+       escape hatch for the one thing that cannot wrap - a single unbroken token
+       wider than the bubble. */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
     overflow-x: auto;
     margin: 0.5rem 0;
   }

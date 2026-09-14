@@ -794,6 +794,22 @@
   background: none;
   padding: 0;
   border: 0;
+  /* Inherit the <pre>'s wrapping - typography sets `white-space: pre` on the
+     inner <code>, which would win and re-enable the sideways scroll. */
+  white-space: inherit;
+  overflow-wrap: inherit;
+}
+
+/* Long URLs, file paths and inline `identifiers` are the other source of a
+   sideways-scrolling bubble: they are single tokens, so plain word wrapping
+   cannot break them. */
+.chat-prose {
+  overflow-wrap: break-word;
+}
+
+.chat-prose :not(pre) > code,
+.chat-prose a {
+  overflow-wrap: anywhere;
 }
 
 /* Read-aloud position markers (lib/speechHighlight.ts). Painted through the CSS
