@@ -108,3 +108,24 @@ export function groupModels(models: Model[], capabilities?: string[], matchAny =
 
   return { local: localRest, localMatching, peersByProvider };
 }
+
+// Which playground tab a model opens in, and what the row's button says. Both
+// are keyed off modelCategory so the precedence rules live in ONE place: a video
+// model also advertises image_generation, and a TRELLIS.2 one advertises
+// image_to_image, so testing raw capability flags here (as the panels used to)
+// labelled them "Generate"/"Chat" for the wrong tab. null = no interactive UI:
+// embedders/rerankers are API-only, SAM segmenters are driven from the Images
+// playground's select tool, and 3D has no playground surface yet.
+const PLAYGROUND_TABS: Partial<Record<ModelCategory, { tab: string; label: string }>> = {
+  llm: { tab: "chat", label: "Chat" },
+  image: { tab: "images", label: "Generate" },
+  video: { tab: "video", label: "Generate" },
+  "3d": { tab: "3d", label: "Generate" },
+  tts: { tab: "speech", label: "Speak" },
+  transcribe: { tab: "audio", label: "Transcribe" },
+};
+
+export function playgroundTarget(m: Model): { tab: string; label: string } | null {
+  if (m.capabilities?.reranker) return null;
+  return PLAYGROUND_TABS[modelCategory(m)] ?? null;
+}
