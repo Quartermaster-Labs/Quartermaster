@@ -6,9 +6,16 @@
 import { ASPECTS, aspectDims, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, fmtDur } from "./imageGen";
 export { ASPECTS, aspectDims, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, fmtDur };
 
-// Long-edge tiers. Stops at 1280: above that a 25-frame clip does not fit a 24GB
-// card even before the 3D VAE decode, which is the real peak.
-export const VIDEO_SIZE_TIERS = [384, 512, 640, 720, 832, 960, 1280];
+// Long-edge tiers. 1360 is the top rung because 16:9 with a 768 short side is
+// MiniMax-H3's native output size (its model card: "the shorter side is set to
+// 768 pixels by default"), and 1365.33 has to round to a multiple of 16.
+//
+// Offered is not the same as reachable: VIDEO_DEFAULT_MAX_DIM stays at 960,
+// because above that a clip does not fit a 24GB card once the 3D VAE decode
+// peaks. The rungs above the cap unlock only for a model that LAUNCHES at a
+// larger size, which is a per-install decision (see modelMax in
+// VideoInterface.svelte).
+export const VIDEO_SIZE_TIERS = [384, 512, 640, 720, 832, 960, 1280, 1360];
 export const VIDEO_DEFAULT_MAX_DIM = 960;
 
 // Frame counts are NOT free-form, and an off-grid number is not rejected: it is
@@ -51,10 +58,17 @@ export function fpsOptionsFor(id: string): number[] {
 
 // Per-model defaults matched by id substring, same mechanism as IMAGE_DEFAULTS.
 // The H3 row is not taste: the model conditions at cfg 1.0 (the generic 5 gives
-// mush), 640x384 is its training resolution, 56 is on its frame grid, and 24 fps
-// is the only rate it will run at. steps 20 is sd-server's own default and the
-// right number for the BASE model: the 4-step figure belongs to the turbo LoRAs,
-// which arrive per request via <lora:name:1.0> in the prompt, not at launch.
+// mush), 56 is on its frame grid, and 24 fps is the only rate it will run at.
+//
+// 640x384 is NOT the model's native size. H3 outputs at a 768 short side, so
+// this row is a deliberate downscale that fits a mid-range card, and it is the
+// LOWEST-precedence source of a size: a box that can afford the real thing sets
+// defaultWidth/defaultHeight in the generate file, and those launch flags win
+// here (see videoSettingsFor) and also raise the Size picker's ceiling.
+//
+// steps 20 is sd-server's own default and the right number for the BASE model:
+// the 4-step figure belongs to the turbo LoRAs, which arrive per request via the
+// LoRA picker or <lora:name:1.0> in the prompt, not at launch.
 export const VIDEO_DEFAULTS: {
   match: string;
   steps: number;

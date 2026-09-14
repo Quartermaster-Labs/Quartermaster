@@ -253,10 +253,23 @@
   let modelDefaults = $derived(
     modelPreset || modelGen ? videoSettingsFor($selectedModelStore, modelGen) : undefined
   );
-  let modelMax = $derived(modelPreset?.maxDim ?? VIDEO_DEFAULT_MAX_DIM);
+  // Ceiling on the Size picker, FLOORED by the size the model actually launches
+  // with. A UI cap must never silently clamp a backend default: without this
+  // floor a model launched at 1360x768 was clamped to the generic 960 max and
+  // rendered 960x512, while the picker's label still said 1360.
+  let modelMax = $derived(
+    Math.max(modelPreset?.maxDim ?? VIDEO_DEFAULT_MAX_DIM, modelGen?.width ?? 0, modelGen?.height ?? 0)
+  );
   let aspectOptions = $derived(ASPECTS.map((a) => ({ value: a.value, label: a.label })));
+  // The tiers, plus the current long edge whenever it is off-grid. That last
+  // part is what keeps the control honest: a Select whose bound value matches no
+  // option falls back to rendering the raw value, which is how an off-tier
+  // backend default showed as a bare "1360" instead of "1360x768".
   let sizeOptions = $derived(
-    VIDEO_SIZE_TIERS.map((L) => {
+    (VIDEO_SIZE_TIERS.includes(Number($longEdgeStore))
+      ? VIDEO_SIZE_TIERS
+      : [...VIDEO_SIZE_TIERS, Number($longEdgeStore) || 640].sort((a, b) => a - b)
+    ).map((L) => {
       const [w, h] = aspectDims($aspectStore, L);
       return { value: String(L), label: `${w}x${h}`, disabled: L > modelMax };
     })
