@@ -231,14 +231,20 @@ type ExtraImageModel struct {
 	DefaultSampler string  `yaml:"defaultSampler"` // --sampling-method
 	DefaultWidth   int     `yaml:"defaultWidth"`
 	DefaultHeight  int     `yaml:"defaultHeight"`
-	DiffusionFa    string  `yaml:"diffusionFa"`  // "" => on, "off" => off
-	VaeTiling      string  `yaml:"vaeTiling"`    // "" => on, "off" => off
-	TeOnCpu        string  `yaml:"teOnCpu"`      // "" => on (te=cpu), "off" => keep on GPU
-	VaeOnCpu       string  `yaml:"vaeOnCpu"`     // "on" => add vae=cpu to --backend; "" => GPU
-	OffloadToCpu   string  `yaml:"offloadToCpu"` // "on" => --offload-to-cpu (+ --vae-on-cpu)
-	Threads        int     `yaml:"threads"`
-	ExtraArgs      string  `yaml:"extraArgs"`
-	Unlisted       bool    `yaml:"unlisted"`
+	DiffusionFa    string  `yaml:"diffusionFa"` // "" => on, "off" => off
+	VaeTiling      string  `yaml:"vaeTiling"`   // "" => on, "off" => off
+	// Video VRAM levers. "" means OFF here, NOT auto: an extra model is
+	// hand-declared and never goes through the gguf tensor scan, so nothing on
+	// this path can tell a video DiT from an image one. Set "on" explicitly.
+	// (The discovered path defaults both ON for video models: see Override.)
+	TemporalTiling string `yaml:"temporalTiling"` // "on" => --temporal-tiling
+	StreamLayers   string `yaml:"streamLayers"`   // "on" => --stream-layers
+	TeOnCpu        string `yaml:"teOnCpu"`        // "" => on (te=cpu), "off" => keep on GPU
+	VaeOnCpu       string `yaml:"vaeOnCpu"`       // "on" => add vae=cpu to --backend; "" => GPU
+	OffloadToCpu   string `yaml:"offloadToCpu"`   // "on" => --offload-to-cpu (+ --vae-on-cpu)
+	Threads        int    `yaml:"threads"`
+	ExtraArgs      string `yaml:"extraArgs"`
+	Unlisted       bool   `yaml:"unlisted"`
 	// Backend is the registry entry id this extra image model launches with,
 	// carried over from its Override. Empty => auto-pick the class default.
 	Backend string `yaml:"backend"`
@@ -773,11 +779,29 @@ type Override struct {
 	//   DiffusionFa:  "" => on  (--diffusion-fa)
 	//   VaeOnCpu:     "" => off (VAE decodes on GPU); "on" adds vae=cpu to --backend
 	//                 (bf16 VAE whitens on some GPU backends; CPU is the safe fallback)
+	//   TemporalTiling: "" => on for VIDEO models only (--temporal-tiling)
+	//   StreamLayers:   "" => on for VIDEO models only (--stream-layers)
 	OffloadToCpu string `yaml:"offloadToCpu"`
 	TeOnCpu      string `yaml:"teOnCpu"`
 	VaeOnCpu     string `yaml:"vaeOnCpu"`
 	VaeTiling    string `yaml:"vaeTiling"`
 	DiffusionFa  string `yaml:"diffusionFa"`
+	// Video-only VRAM levers, both on by default for a model the scan identified
+	// as a video DiT and emitted for nothing else.
+	//
+	// A video render has TWO peaks. --vae-tiling above caps the decode
+	// SPATIALLY, which is the whole story for a still; a clip's decode also grows
+	// along TIME with --video-frames, and --temporal-tiling is the only flag that
+	// chunks that axis (tune it with --extra-tiling-args
+	// temporal_tile_size=N,temporal_tile_overlap=N via ExtraArgs).
+	//
+	// --stream-layers attacks the other peak from the side: it streams the
+	// diffusion weights against the --max-vram budget with prefetch instead of
+	// pinning them resident, handing that headroom back to the sampler, which is
+	// what actually buys frame count. It is documented as a no-op without
+	// --max-vram, and every sd-server line emitted here sets one.
+	TemporalTiling string `yaml:"temporalTiling"`
+	StreamLayers   string `yaml:"streamLayers"`
 	// Generation defaults baked into the sd-server command (applied when a request
 	// omits them). 0/empty => omit (sd-server's own default). DefaultCfg matters:
 	// Z-Image-Turbo blurs unless cfg-scale is pinned to 1.0.
@@ -942,6 +966,8 @@ type VariantSpec struct {
 	TeOnCpu         string  `yaml:"teOnCpu"`
 	VaeOnCpu        string  `yaml:"vaeOnCpu"`
 	VaeTiling       string  `yaml:"vaeTiling"`
+	TemporalTiling  string  `yaml:"temporalTiling"`
+	StreamLayers    string  `yaml:"streamLayers"`
 	DiffusionFa     string  `yaml:"diffusionFa"`
 	DefaultSteps    int     `yaml:"defaultSteps"`
 	DefaultCfg      float64 `yaml:"defaultCfg"`

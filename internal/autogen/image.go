@@ -457,6 +457,22 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	if ov == nil || ov.VaeTiling != "off" {
 		lines = append(lines, "--vae-tiling")
 	}
+	// Video-only VRAM levers, on by default. --vae-tiling above chunks the decode
+	// spatially; a clip's decode also grows along TIME with --video-frames and
+	// only --temporal-tiling chunks that axis. --stream-layers streams the
+	// diffusion weights against --max-vram rather than pinning them resident,
+	// which hands that headroom to the sampler and is what buys frame count.
+	//
+	// Gated on vid.is() rather than emitted blindly: --temporal-tiling applies to
+	// a video VAE decode and nothing else, and an image model has no long-clip
+	// peak for --stream-layers to relieve, so on the image path both would be
+	// noise in the launch line at best.
+	if vid.is() && (ov == nil || ov.TemporalTiling != "off") {
+		lines = append(lines, "--temporal-tiling")
+	}
+	if vid.is() && (ov == nil || ov.StreamLayers != "off") {
+		lines = append(lines, "--stream-layers")
+	}
 	lines = append(lines, fmt.Sprintf("-t %d", threads))
 	// Park components on CPU via the sd-server --backend spec. te=cpu is the default
 	// (the text encoder runs once per generation, cheapest to keep off the GPU, and
@@ -580,6 +596,12 @@ func mergeImageVariant(base Override, v VariantSpec) Override {
 	if v.VaeTiling != "" {
 		o.VaeTiling = v.VaeTiling
 	}
+	if v.TemporalTiling != "" {
+		o.TemporalTiling = v.TemporalTiling
+	}
+	if v.StreamLayers != "" {
+		o.StreamLayers = v.StreamLayers
+	}
 	if v.DiffusionFa != "" {
 		o.DiffusionFa = v.DiffusionFa
 	}
@@ -684,6 +706,14 @@ func extraImageCmdLines(s Settings, m ExtraImageModel) []string {
 	if m.VaeTiling != "off" {
 		lines = append(lines, "--vae-tiling")
 	}
+	// Opt-in, unlike the discovered path above: an extra model is hand-declared
+	// and never scanned, so there is nothing here that knows it is a video model.
+	if m.TemporalTiling == "on" {
+		lines = append(lines, "--temporal-tiling")
+	}
+	if m.StreamLayers == "on" {
+		lines = append(lines, "--stream-layers")
+	}
 	lines = append(lines, fmt.Sprintf("-t %d", threads))
 	var beParts []string
 	if m.TeOnCpu != "off" {
@@ -752,6 +782,8 @@ func ExtraImageAsOverride(m ExtraImageModel) Override {
 		TeOnCpu:         m.TeOnCpu,
 		VaeOnCpu:        m.VaeOnCpu,
 		VaeTiling:       m.VaeTiling,
+		TemporalTiling:  m.TemporalTiling,
+		StreamLayers:    m.StreamLayers,
 		DiffusionFa:     m.DiffusionFa,
 		OffloadToCpu:    m.OffloadToCpu,
 		DefaultSteps:    m.DefaultSteps,
@@ -790,6 +822,8 @@ func ApplyOverrideToExtraImage(m ExtraImageModel, ov *Override) ExtraImageModel 
 	m.TeOnCpu = ov.TeOnCpu
 	m.VaeOnCpu = ov.VaeOnCpu
 	m.VaeTiling = ov.VaeTiling
+	m.TemporalTiling = ov.TemporalTiling
+	m.StreamLayers = ov.StreamLayers
 	m.DiffusionFa = ov.DiffusionFa
 	m.OffloadToCpu = ov.OffloadToCpu
 	m.DefaultSteps = ov.DefaultSteps

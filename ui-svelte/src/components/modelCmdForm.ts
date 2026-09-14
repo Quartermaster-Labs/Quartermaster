@@ -63,6 +63,7 @@ export const IMG_IGNORE_BOOL = new Set(["--vae-on-cpu"]);
 export interface ParsedImg {
   vaePath: string; clipLPath: string; clipGPath: string; t5Path: string; textEncoderPath: string;
   offloadToCpu: string; teOnCpu: string; vaeOnCpu: string; vaeTiling: string; diffusionFa: string;
+  temporalTiling: string; streamLayers: string;
   defaultSteps: number | ""; defaultCfg: number | ""; defaultSampler: string;
   defaultWidth: number | ""; defaultHeight: number | ""; threads: number | ""; extraArgs: string;
 }
@@ -73,6 +74,7 @@ export function parseImageCmdFields(cmd: string): ParsedImg {
   const val = (): string => (i + 1 < toks.length && !toks[i + 1].startsWith("-") ? toks[++i] : "");
   let vae = "", clipL = "", clipG = "", t5 = "", llm = "", steps = "", cfg = "", sampler = "", w = "", h = "", t = "";
   let sawFa = false, sawTiling = false, sawTeCpu = false, sawVaeCpu = false, sawOffload = false;
+  let sawTemporal = false, sawStream = false;
   const extras: string[] = [];
   for (; i < toks.length; i++) {
     const tk = toks[i];
@@ -84,6 +86,8 @@ export function parseImageCmdFields(cmd: string): ParsedImg {
       case "--llm": llm = val(); break;
       case "--diffusion-fa": sawFa = true; break;
       case "--vae-tiling": sawTiling = true; break;
+      case "--temporal-tiling": sawTemporal = true; break;
+      case "--stream-layers": sawStream = true; break;
       case "--offload-to-cpu": sawOffload = true; break;
       case "-t": t = val(); break;
       case "--steps": steps = val(); break;
@@ -120,6 +124,12 @@ export function parseImageCmdFields(cmd: string): ParsedImg {
     teOnCpu: sawTeCpu ? "" : "off",
     vaeOnCpu: sawVaeCpu ? "on" : "",
     vaeTiling: sawTiling ? "" : "off",
+    // Absent => "off", same rule as the other default-on toggles. For an IMAGE
+    // model the flag is never emitted anyway, so "off" is the accurate reading;
+    // for a video model it is the user having turned it off. Reading absence as
+    // "" (auto) instead would silently re-enable them on the next round-trip.
+    temporalTiling: sawTemporal ? "" : "off",
+    streamLayers: sawStream ? "" : "off",
     diffusionFa: sawFa ? "" : "off",
     defaultSteps: num(steps), defaultCfg: num(cfg), defaultSampler: sampler,
     defaultWidth: num(w), defaultHeight: num(h), threads: num(t), extraArgs: extras.join(" "),

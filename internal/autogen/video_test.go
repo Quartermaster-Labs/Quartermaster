@@ -154,3 +154,80 @@ func TestImageCmdLines_UntouchedByVideo(t *testing.T) {
 		}
 	}
 }
+
+// The two long-clip VRAM levers are ON by default for a video model and emitted
+// for nothing else. --vae-tiling caps the decode spatially, which is the whole
+// story for a still; a clip's decode also grows along TIME, and only
+// --temporal-tiling chunks that axis. --stream-layers frees the weight residency
+// the sampler then spends on latents.
+func TestVideoVramLevers_DefaultOnForVideoOnly(t *testing.T) {
+	s := Settings{SdServerExe: "sd-server", TargetVramGB: 24, VramOverheadGB: 1, Threads: 4,
+		Encoders: EncoderSet{VideoVae: "vae.safetensors", QwenLlm: "qwen.gguf"}}
+	row := GgufRow{FullPath: `D:\models\h3.gguf`, SizeGB: 8.0}
+	vid := videoInfo{Kind: VideoFamilyMinimaxH3, AudioOut: false}
+
+	lines, _, _, _ := imageCmdLines(s, row, &Override{}, "", "h3", 5120, vid)
+	joined := strings.Join(lines, " ")
+	for _, want := range []string{"--temporal-tiling", "--stream-layers"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("video cmd missing default %q: %s", want, joined)
+		}
+	}
+
+	// Each toggles off independently: they are separate knobs precisely because
+	// --stream-layers trades PCIe traffic for VRAM and --temporal-tiling does not.
+	off, _, _, _ := imageCmdLines(s, row, &Override{TemporalTiling: "off"}, "", "h3", 5120, vid)
+	j := strings.Join(off, " ")
+	if strings.Contains(j, "--temporal-tiling") {
+		t.Errorf("temporalTiling=off must suppress the flag: %s", j)
+	}
+	if !strings.Contains(j, "--stream-layers") {
+		t.Errorf("temporalTiling=off must not touch --stream-layers: %s", j)
+	}
+	off2, _, _, _ := imageCmdLines(s, row, &Override{StreamLayers: "off"}, "", "h3", 5120, vid)
+	j2 := strings.Join(off2, " ")
+	if strings.Contains(j2, "--stream-layers") {
+		t.Errorf("streamLayers=off must suppress the flag: %s", j2)
+	}
+	if !strings.Contains(j2, "--temporal-tiling") {
+		t.Errorf("streamLayers=off must not touch --temporal-tiling: %s", j2)
+	}
+
+	// An image model has no temporal axis to tile and no long-clip peak to
+	// relieve, so neither flag belongs in its launch line at all.
+	img := Settings{SdServerExe: "sd-server", TargetVramGB: 24, VramOverheadGB: 1, Threads: 4,
+		Encoders: EncoderSet{FluxVae: "ae.safetensors", ClipL: "cl.safetensors", T5: "t5.gguf"}}
+	imgRow := GgufRow{FullPath: `D:\models\flux.gguf`, SizeGB: 6.0}
+	iLines, _, _, _ := imageCmdLines(img, imgRow, &Override{}, "flux", "flux1-dev", 0, videoInfo{})
+	iJoined := strings.Join(iLines, " ")
+	for _, unwant := range []string{"--temporal-tiling", "--stream-layers"} {
+		if strings.Contains(iJoined, unwant) {
+			t.Errorf("image cmd should not carry %q: %s", unwant, iJoined)
+		}
+	}
+}
+
+// The hand-declared path has no tensor scan, so it cannot tell a video model
+// from an image one: there the levers are explicit opt-in, not default-on.
+func TestExtraImageVramLevers_OptIn(t *testing.T) {
+	s := Settings{SdServerExe: "sd-server", TargetVramGB: 24, VramOverheadGB: 1, Threads: 4}
+
+	plain := strings.Join(extraImageCmdLines(s, ExtraImageModel{
+		Name: "h3-st", ModelPath: `D:\models\h3.safetensors`, ModelFlag: "--diffusion-model",
+	}), " ")
+	for _, unwant := range []string{"--temporal-tiling", "--stream-layers"} {
+		if strings.Contains(plain, unwant) {
+			t.Errorf("extra model must not default %q on: %s", unwant, plain)
+		}
+	}
+
+	on := strings.Join(extraImageCmdLines(s, ExtraImageModel{
+		Name: "h3-st", ModelPath: `D:\models\h3.safetensors`, ModelFlag: "--diffusion-model",
+		TemporalTiling: "on", StreamLayers: "on",
+	}), " ")
+	for _, want := range []string{"--temporal-tiling", "--stream-layers"} {
+		if !strings.Contains(on, want) {
+			t.Errorf("extra model opt-in missing %q: %s", want, on)
+		}
+	}
+}

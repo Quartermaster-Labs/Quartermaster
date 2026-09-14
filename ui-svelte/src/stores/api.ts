@@ -356,6 +356,8 @@ export interface ModelVariant {
   teOnCpu?: string;
   vaeOnCpu?: string;
   vaeTiling?: string;
+  temporalTiling?: string;
+  streamLayers?: string;
   diffusionFa?: string;
   refEdit?: string;
   defaultSteps?: number;
@@ -471,6 +473,8 @@ export interface ModelOverride {
   teOnCpu?: string;
   vaeOnCpu?: string;
   vaeTiling?: string;
+  temporalTiling?: string;
+  streamLayers?: string;
   diffusionFa?: string;
   refEdit?: string;
   // Generation defaults (0/empty => sd-server default).

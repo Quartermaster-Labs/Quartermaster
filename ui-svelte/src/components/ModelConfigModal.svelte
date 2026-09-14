@@ -311,6 +311,10 @@
   let teOnCpu = $state(""); // "" on | "off"
   let vaeOnCpu = $state(""); // "" gpu (default) | "on" cpu
   let vaeTiling = $state(""); // "" on | "off"
+  // Video-only: emitted only for a model the backend scan called a video DiT,
+  // so on an image model these are inert whatever they read.
+  let temporalTiling = $state(""); // "" on | "off"
+  let streamLayers = $state(""); // "" on | "off"
   let diffusionFa = $state(""); // "" on | "off"
   // Reference edit: does this model take its source image as an edit reference
   // (extra conditioning tokens) rather than an img2img base? Not detectable from
@@ -368,6 +372,7 @@
     t5Path = p.t5Path; textEncoderPath = p.textEncoderPath;
     offloadToCpu = p.offloadToCpu; teOnCpu = p.teOnCpu; vaeOnCpu = p.vaeOnCpu;
     vaeTiling = p.vaeTiling; diffusionFa = p.diffusionFa;
+    temporalTiling = p.temporalTiling; streamLayers = p.streamLayers;
     defaultSteps = p.defaultSteps; defaultCfg = p.defaultCfg; defaultSampler = p.defaultSampler;
     defaultWidth = p.defaultWidth; defaultHeight = p.defaultHeight;
     threads = p.threads;
@@ -396,6 +401,7 @@
       ctx, ctxAuto, kvK, kvV, kvInRam, spec, reasoningOn, reasoningBudget, preserveThinking, flashOn, mmapOn, mlock, threads, parallel, ub, vramTarget, vramAuto, cpuOffload, cpuAuto, customArgs, customArgsOff, ctxCheckpoints,
       dryOn, dryMultiplier, dryBase, dryAllowedLength, specDraftNMax, specDefault, specNgramSizeN, specNgramSizeM, specNgramMinHits,
       vaePath, clipLPath, clipGPath, t5Path, textEncoderPath, offloadToCpu, teOnCpu, vaeOnCpu, vaeTiling, diffusionFa,
+      temporalTiling, streamLayers,
       defaultSteps, defaultCfg, defaultSampler, defaultWidth, defaultHeight,
       selectedV?.ctx, selectedV?.kvK, selectedV?.kvV, selectedV?.kvInRam, selectedV?.spec,
       selectedV?.reasoningFmt, selectedV?.flashAttn, selectedV?.mmap, selectedV?.mlock,
@@ -456,6 +462,8 @@
         teOnCpu: v.teOnCpu || base.teOnCpu,
         vaeOnCpu: v.vaeOnCpu || base.vaeOnCpu,
         vaeTiling: v.vaeTiling || base.vaeTiling,
+        temporalTiling: v.temporalTiling || base.temporalTiling,
+        streamLayers: v.streamLayers || base.streamLayers,
         diffusionFa: v.diffusionFa || base.diffusionFa,
         vramTargetGB: v.vramTargetGB || base.vramTargetGB,
         threads: v.threads || base.threads,
@@ -833,6 +841,8 @@
     teOnCpu = o?.teOnCpu ?? "";
     vaeOnCpu = o?.vaeOnCpu ?? "";
     vaeTiling = o?.vaeTiling ?? "";
+    temporalTiling = o?.temporalTiling ?? "";
+    streamLayers = o?.streamLayers ?? "";
     diffusionFa = o?.diffusionFa ?? "";
     refEdit = o?.refEdit ?? "";
     defaultSteps = o?.defaultSteps ? o.defaultSteps : "";
@@ -856,6 +866,7 @@
       specDraftNMax: 0, specDefault: false, specNgramSizeN: 0, specNgramSizeM: 0, specNgramMinHits: 0,
       vaePath: "", clipLPath: "", clipGPath: "", t5Path: "", textEncoderPath: "",
       offloadToCpu: "", teOnCpu: "", vaeOnCpu: "", vaeTiling: "", diffusionFa: "", refEdit: "",
+      temporalTiling: "", streamLayers: "",
       defaultSteps: 0, defaultCfg: 0, defaultSampler: "", defaultWidth: 0, defaultHeight: 0,
     };
   }
@@ -1157,6 +1168,8 @@
       teOnCpu,
       vaeOnCpu,
       vaeTiling,
+      temporalTiling,
+      streamLayers,
       diffusionFa,
       refEdit,
       defaultSteps: defaultSteps === "" ? 0 : Number(defaultSteps),
@@ -1801,6 +1814,20 @@
               <span class="text-txtsecondary flex items-center gap-1">
                 VAE tiling
                 {@render hint("--vae-tiling. Tile the VAE decode to cap its VRAM spike (on by default). Decoding a full latent whole can OOM on a tight card. Quality is steps/cfg, not this.")}
+              </span>
+            </label>
+            <label class="flex items-center gap-2 text-sm">
+              <Toggle size="sm" checked={temporalTiling !== "off"} onchange={(on) => (temporalTiling = on ? "" : "off")} />
+              <span class="text-txtsecondary flex items-center gap-1">
+                Temporal tiling <span class="text-[0.6rem] uppercase opacity-50">video</span>
+                {@render hint("--temporal-tiling. Tile the VAE decode along TIME as well (on by default, video models only). VAE tiling above chunks the decode spatially, which is all a still needs; a clip's decode also grows with frame count and this is the only flag that chunks that axis. Emitted only for video models, so it is inert here on an image model.")}
+              </span>
+            </label>
+            <label class="flex items-center gap-2 text-sm">
+              <Toggle size="sm" checked={streamLayers !== "off"} onchange={(on) => (streamLayers = on ? "" : "off")} />
+              <span class="text-txtsecondary flex items-center gap-1">
+                Stream layers <span class="text-[0.6rem] uppercase opacity-50">video</span>
+                {@render hint("--stream-layers. Stream the diffusion weights against the max-VRAM budget with prefetch instead of holding them resident (on by default, video models only). Hands that headroom back to the sampler, which is what buys longer clips. Turn off if renders that already fit get slower. Emitted only for video models.")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
