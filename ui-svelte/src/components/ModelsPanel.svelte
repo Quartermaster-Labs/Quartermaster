@@ -8,7 +8,7 @@
   import { playgroundPort } from "../stores/playgroundAuth";
   import { isNative } from "../lib/native";
   import { openTab } from "../stores/appTabs";
-  import { modelCategory, MODEL_CATEGORIES, type ModelCategory } from "../lib/modelUtils";
+  import { modelCategory, MODEL_CATEGORIES, playgroundTarget, type ModelCategory } from "../lib/modelUtils";
   import { nextSort, type SortDir, type SortKey, type StateFilter } from "../lib/modelTable";
   import type { Model } from "../lib/types";
   import ModelConfigModal from "./ModelConfigModal.svelte";
@@ -155,28 +155,18 @@
     return () => window.removeEventListener("pointerdown", onDown, true);
   });
 
-  // Every category except embed/segment has a playground tab (chat/images/
-  // speech/audio). Embedders and rerankers have no interactive UI (API only);
-  // SAM segmenters are driven from the Images playground's select tool.
+  // See playgroundTarget in modelUtils: category -> tab + button label, or null
+  // for models with no interactive UI (embed/segment/3D/rerankers).
   function playable(m: Model): boolean {
-    const cat = modelCategory(m);
-    return cat !== "embed" && cat !== "segment" && !m.capabilities?.reranker;
+    return playgroundTarget(m) !== null;
   }
 
   function playgroundTab(m: Model): string {
-    const c = m.capabilities;
-    if (c?.image_generation) return "images";
-    if (c?.audio_speech) return "speech";
-    if (c?.audio_transcriptions) return "audio";
-    return "chat";
+    return playgroundTarget(m)?.tab ?? "chat";
   }
 
   function playLabel(m: Model): string {
-    const c = m.capabilities;
-    if (c?.image_generation) return "Generate";
-    if (c?.audio_speech) return "Speak";
-    if (c?.audio_transcriptions) return "Transcribe";
-    return "Chat";
+    return playgroundTarget(m)?.label ?? "Chat";
   }
 
   // Playground is a separate app on its own port — open it with the model + tab

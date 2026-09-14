@@ -201,6 +201,10 @@ func (p *Playground) videoChatsPath(user string) string {
 	return filepath.Join(p.userDir(user), "videochats.json")
 }
 
+func (p *Playground) threeDChatsPath(user string) string {
+	return filepath.Join(p.userDir(user), "3dchats.json")
+}
+
 func (p *Playground) mediaDir(user string) string { return filepath.Join(p.userDir(user), "media") }
 
 // dataURLRe matches an inline "data:<mime>;base64,<payload>" URL. base64's
@@ -283,6 +287,8 @@ func extMime(ext string) string {
 		return "image/webp"
 	case "gif":
 		return "image/gif"
+	case "glb":
+		return "model/gltf-binary"
 	case "wav":
 		return "audio/wav"
 	case "mp3":
@@ -330,7 +336,7 @@ func (p *Playground) gcMedia(user string) {
 		return
 	}
 	var refs []byte
-	for _, fn := range []func(string) string{p.chatsPath, p.imageChatsPath, p.speechChatsPath, p.videoChatsPath} {
+	for _, fn := range []func(string) string{p.chatsPath, p.imageChatsPath, p.speechChatsPath, p.videoChatsPath, p.threeDChatsPath} {
 		b, _ := os.ReadFile(fn(user))
 		refs = append(refs, b...)
 	}
@@ -361,6 +367,8 @@ func mediaKind(mime string) string {
 		return "audio"
 	case strings.HasPrefix(mime, "video/"):
 		return "video"
+	case strings.HasPrefix(mime, "model/"):
+		return "model"
 	default:
 		return "other"
 	}
@@ -391,6 +399,8 @@ func mimeExt(mime string) string {
 		return "mp4"
 	case "video/webm":
 		return "webm"
+	case "model/gltf-binary":
+		return "glb"
 	}
 	sub := mime[strings.LastIndexByte(mime, '/')+1:]
 	ext := strings.Map(func(r rune) rune {
@@ -418,6 +428,7 @@ func (p *Playground) Migrate() {
 		"imagechats":  p.imageChatsPath,
 		"speechchats": p.speechChatsPath,
 		"videochats":  p.videoChatsPath,
+		"3dchats":     p.threeDChatsPath,
 		"prefs":       p.prefsPath,
 	}
 	p.mu.Lock()
@@ -744,6 +755,12 @@ func (s *Server) handlePlaygroundImageChats(w http.ResponseWriter, r *http.Reque
 // client-owns-the-blob model as /api/chats, just a separate file.
 func (s *Server) handlePlaygroundVideoChats(w http.ResponseWriter, r *http.Request) {
 	s.serveUserBlob(w, r, (*Playground).videoChatsPath, "[]")
+}
+
+// GET/PUT /api/3dchats — the user's saved 3D threads. Same
+// client-owns-the-blob model as /api/chats, just a separate file.
+func (s *Server) handlePlaygroundThreeDChats(w http.ResponseWriter, r *http.Request) {
+	s.serveUserBlob(w, r, (*Playground).threeDChatsPath, "[]")
 }
 
 // GET/PUT /api/speechchats — the user's saved speech threads. Same

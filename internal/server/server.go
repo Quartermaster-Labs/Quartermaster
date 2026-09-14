@@ -944,6 +944,8 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/imagechats", apiChain.ThenFunc(s.handlePlaygroundImageChats))
 	mux.Handle("GET /api/videochats", apiChain.ThenFunc(s.handlePlaygroundVideoChats))
 	mux.Handle("PUT /api/videochats", apiChain.ThenFunc(s.handlePlaygroundVideoChats))
+	mux.Handle("GET /api/3dchats", apiChain.ThenFunc(s.handlePlaygroundThreeDChats))
+	mux.Handle("PUT /api/3dchats", apiChain.ThenFunc(s.handlePlaygroundThreeDChats))
 	mux.Handle("GET /api/speechchats", apiChain.ThenFunc(s.handlePlaygroundSpeechChats))
 	mux.Handle("PUT /api/speechchats", apiChain.ThenFunc(s.handlePlaygroundSpeechChats))
 	mux.Handle("GET /api/media/{file...}", apiChain.ThenFunc(s.handlePlaygroundMedia))

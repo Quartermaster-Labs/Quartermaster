@@ -8,8 +8,8 @@
   import { playgroundPort } from "../stores/playgroundAuth";
   import { isNative } from "../lib/native";
   import { openTab } from "../stores/appTabs";
-  import { prettifyModelName, modelCategory, modelWeightGB, type ModelCategory } from "../lib/modelUtils";
-  import { Settings, Square, Image, MessageCircle, HelpCircle, ChevronRight, Copy, Check } from "lucide-svelte";
+  import { prettifyModelName, modelCategory, modelWeightGB, playgroundTarget, type ModelCategory } from "../lib/modelUtils";
+  import { Settings, Square, Image, Film, MessageCircle, HelpCircle, ChevronRight, Copy, Check } from "lucide-svelte";
   import type { Model } from "../lib/types";
   import ModelConfigModal from "./ModelConfigModal.svelte";
   import InferenceFeedback from "./InferenceFeedback.svelte";
@@ -90,26 +90,16 @@
     }
   });
 
-  // Every category except embed/segment has a playground tab. Embedders and
-  // rerankers have no UI (API only); SAM segmenters are driven from the Images
-  // playground select tool.
+  // See playgroundTarget in modelUtils: category -> tab + button label, or null
+  // for models with no interactive UI (embed/segment/3D/rerankers).
   function playable(m: Model): boolean {
-    const cat = modelCategory(m);
-    return cat !== "embed" && cat !== "segment" && !m.capabilities?.reranker;
+    return playgroundTarget(m) !== null;
   }
   function playgroundTab(m: Model): string {
-    const c = m.capabilities;
-    if (c?.image_generation) return "images";
-    if (c?.audio_speech) return "speech";
-    if (c?.audio_transcriptions) return "audio";
-    return "chat";
+    return playgroundTarget(m)?.tab ?? "chat";
   }
   function playLabel(m: Model): string {
-    const c = m.capabilities;
-    if (c?.image_generation) return "Generate";
-    if (c?.audio_speech) return "Speak";
-    if (c?.audio_transcriptions) return "Transcribe";
-    return "Chat";
+    return playgroundTarget(m)?.label ?? "Chat";
   }
   // Playground is a separate app on its own port — open it with model + tab.
   function chatWith(m: Model): void {
@@ -254,13 +244,14 @@
                     disabled={m.state !== "ready"}
                     use:tip={`Open this model in the ${playgroundTab(m)} playground`}
                   >
-                    {#if m.capabilities?.image_generation}
+                    {#if playgroundTab(m) === "video"}
+                      <Film size={13} class="shrink-0" />
+                    {:else if playgroundTab(m) === "images"}
                       <Image size={13} class="shrink-0" />
-                      Generate
                     {:else}
                       <MessageCircle size={13} class="shrink-0" />
-                      {playLabel(m)}
                     {/if}
+                    {playLabel(m)}
                   </button>
                 {/if}
                 <button

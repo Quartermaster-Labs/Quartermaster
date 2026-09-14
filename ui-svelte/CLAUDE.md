@@ -8,7 +8,7 @@ port-gated into two apps** (`App.svelte` `onMount` fetches `GET /api/mode`):
 - **Operator dashboard** (main listen port): model catalog and loading, per-model config tuning,
   live activity/metrics/logs, GPU memory, API-key management.
 - **Playground** (separate `-playground-port`): a login-gated, per-user interactive app (chat,
-  images, video, speech, transcription) with **server-backed** chat history + prefs. Rendered by
+  images, video, 3D, speech, transcription) with **server-backed** chat history + prefs. Rendered by
   `PlaygroundApp`, NOT mounted inside the dashboard.
 
 ## Which doc
@@ -20,6 +20,7 @@ port-gated into two apps** (`App.svelte` `onMount` fetches `GET /api/mode`):
 | [`playground-chat.md`](playground-chat.md) | `ChatInterface` / `ChatMessage` — server-run turns, reasoning headers, read-aloud, diagrams |
 | [`playground-tools.md`](playground-tools.md) | Modes, tools and the KV-prefix rules: web search, assistant tools, memory, ask wizard, shopping, file attachments |
 | [`playground-media.md`](playground-media.md) | The Image and Speech studios + `MaskEditor` |
+| [`playground-3d.md`](playground-3d.md) | The 3D tab: the promptless composer, the synchronous TRELLIS.2 route and the GLB viewer's disposal rules |
 | [`launch-args.md`](launch-args.md) | Design note (not implemented): the two launch-argument panes, flag ownership and the flag-validation table |
 
 ## Tech stack & build
@@ -57,7 +58,7 @@ changing anything under `ui-svelte/`.
 |---|---|
 | `src/main.ts`, `src/App.svelte` | Entry point + root. `App.svelte` fetches `/api/mode` and renders either the dashboard shell (Sidebar + StatusRail + Router) **or** the standalone `PlaygroundApp`. |
 | `src/routes/PlaygroundApp.svelte` | Playground root: gates the app behind login (`playgroundAuth` `me`), hydrates server-backed chats/prefs, then mounts `PlaygroundShell`. |
-| `src/routes/PlaygroundShell.svelte` | Playground shell: icon side-rail (Chat / Images / Video / Speech / Transcription, hover-expand), chat-history flyout, logout + username, and the playground Settings modal (**General / Memory / Search / Prompt**). |
+| `src/routes/PlaygroundShell.svelte` | Playground shell: icon side-rail (Chat / Images / Video / 3D / Speech / Transcription, hover-expand), chat-history flyout, logout + username, and the playground Settings modal (**General / Memory / Search / Prompt**). |
 | `src/routes/Login.svelte` | Playground username/password sign-in **and** sign-up (hashed; unknown users are rejected, not registered). Opens on the sign-up pane when `GET /auth/accounts` says no account exists yet. |
 | `src/routes/` | Top-level pages mounted by the router. |
 | `src/components/` | Reusable UI components (panels, modals, gauges, charts, tooltips). |
@@ -164,7 +165,7 @@ Tabs are what gets opened on top: today the playground, which lives on its own p
 
 ### Cross-document history convergence
 
-`lib/sessionSync.ts`. Each of the three history stores holds the **whole** list and PUTs the whole
+`lib/sessionSync.ts`. Each history store holds the **whole** list and PUTs the whole
 list, so two documents are two owners of one blob and the last flush wins — create a chat in one and
 the other's next PUT deletes it, taking its media (the server GCs a vanished session's files). This
 predates tabs; two browser tabs on the playground port always had it. Tabs make it routine.
