@@ -282,6 +282,24 @@
     if (!firstFrame && lastFrame) lastFrame = null;
   });
 
+  // A frame reference as bytes the backend can decode.
+  //
+  // A fresh pick is already a data: URL, but once the turn is persisted the
+  // server's extractMedia rewrites it to a /api/media/ path to keep the session
+  // JSON small. Regenerating such a turn would otherwise post a PATH as
+  // init_image, which sd-server drops without complaint: the render succeeds
+  // and quietly ignores the conditioning.
+  async function toDataUrl(url: string): Promise<string> {
+    if (url.startsWith("data:")) return url;
+    const blob = await (await fetch(url)).blob();
+    return await new Promise<string>((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result as string);
+      fr.onerror = rej;
+      fr.readAsDataURL(blob);
+    });
+  }
+
   function pickFrame(event: Event, which: "first" | "last") {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
@@ -463,8 +481,15 @@
 
   // One render, start to finish. Returns the playable data: URL, or throws with
   // whatever the backend said went wrong.
-  async function generate(promptText: string, signal: AbortSignal): Promise<{ src: string; job: VideoJob }> {
+  async function generate(promptText: string, refs: string[], signal: AbortSignal): Promise<{ src: string; job: VideoJob }> {
     const [w, h] = $selectedSizeStore.split("x").map(Number);
+    // refs[0] is always the start frame and refs[1] the optional end frame: an
+    // end frame cannot exist without a start, so the position is unambiguous.
+    // Resolved back to bytes here rather than at pick time because a turn
+    // reloaded from disk carries /api/media/ paths, and a path sent as
+    // init_image is not an error, it is dropped in silence.
+    const initRef = frameRefs && refs[0] ? await toDataUrl(refs[0]) : undefined;
+    const endRef = frameRefs && refs[1] ? await toDataUrl(refs[1]) : undefined;
     const job = await startVideoJob(
       {
         model: $selectedModelStore,
@@ -477,11 +502,9 @@
         seed: $seedStore,
         lora: activeLoras.length ? activeLoras : undefined,
         // Sent as the data: URL, unstripped: sd-server's own client posts
-        // `init_image: <dataUrl>` to this route. Gated on frameRefs as well as
-        // presence, so a stale pick left over from another model cannot ride
-        // along to a checkpoint that would ignore it.
-        init_image: (frameRefs && firstFrame) || undefined,
-        end_image: (frameRefs && lastFrame) || undefined,
+        // `init_image: <dataUrl>` to this route.
+        init_image: initRef,
+        end_image: endRef,
         sample_params: {
           sample_steps: $stepsStore,
           sample_method: $samplerStore || undefined,
@@ -516,11 +539,11 @@
     return { src: videoSrc(done.result), job: done };
   }
 
-  async function runTurn(id: string, ti: number, promptText: string, onAbort: () => void, prevTurns: Turn[]) {
+  async function runTurn(id: string, ti: number, promptText: string, refs: string[], onAbort: () => void, prevTurns: Turn[]) {
     genId = id;
     abortController = new AbortController();
     try {
-      const { src, job } = await generate(promptText, abortController.signal);
+      const { src, job } = await generate(promptText, refs, abortController.signal);
       updateTurn(id, ti, {
         videos: [src],
         secs: elapsed,
@@ -551,10 +574,23 @@
     const id = $activeVideoChatId;
     if (!sessionById(id)) return;
     prompt = "";
+    // The frames are CONSUMED by the send, like the prompt text: they move out
+    // of the composer and into the turn that used them. Leaving them in the
+    // composer would silently re-condition the next render on a frame belonging
+    // to the previous one, which is the opposite of what chaining wants.
+    const refs = frameRefs && firstFrame ? (lastFrame ? [firstFrame, lastFrame] : [firstFrame]) : [];
+    firstFrame = null;
+    lastFrame = null;
     const prevTurns = sessionById(id)!.turns;
     const ti = prevTurns.length;
-    appendTurn(id, { prompt: promptText, refs: [], videos: [], model: $selectedModelStore });
-    await runTurn(id, ti, promptText, () => { prompt = promptText; }, prevTurns);
+    appendTurn(id, { prompt: promptText, refs, videos: [], model: $selectedModelStore });
+    await runTurn(id, ti, promptText, refs, () => {
+      prompt = promptText;
+      // Put them back if the send was abandoned, so an aborted render does not
+      // cost the user their picks.
+      firstFrame = refs[0] ?? null;
+      lastFrame = refs[1] ?? null;
+    }, prevTurns);
   }
 
   async function saveEdit() {
@@ -568,8 +604,11 @@
     const s = sessionById(id);
     if (!s) return;
     const prevTurns = s.turns;
-    setTurns(id, [...prevTurns.slice(0, idx), { prompt: promptText, refs: [], videos: [], model: $selectedModelStore }], true);
-    await runTurn(id, idx, promptText, () => {}, prevTurns);
+    // Frame conditioning rides along with the edit: changing the words should
+    // not quietly change what the clip starts from.
+    const refs = prevTurns[idx].refs;
+    setTurns(id, [...prevTurns.slice(0, idx), { prompt: promptText, refs, videos: [], model: $selectedModelStore }], true);
+    await runTurn(id, idx, promptText, refs, () => {}, prevTurns);
   }
 
   async function regenerate(idx: number) {
@@ -579,8 +618,8 @@
     const t = s?.turns[idx];
     if (!s || !t) return;
     const prevTurns = s.turns;
-    setTurns(id, [...prevTurns.slice(0, idx), { prompt: t.prompt, refs: [], videos: [], model: $selectedModelStore }], true);
-    await runTurn(id, idx, t.prompt, () => {}, prevTurns);
+    setTurns(id, [...prevTurns.slice(0, idx), { prompt: t.prompt, refs: t.refs, videos: [], model: $selectedModelStore }], true);
+    await runTurn(id, idx, t.prompt, t.refs, () => {}, prevTurns);
   }
 
   function startEdit(idx: number) {
@@ -667,6 +706,21 @@
             <!-- User prompt (right) - same bubble as the Images tab. -->
             <div class="flex justify-end">
               <div class="group relative max-w-[85%] rounded-2xl rounded-br-none bg-[#141414] text-[#ededee] px-3.5 py-2 flex flex-col gap-2">
+                <!-- The frames this render was conditioned on, inside the bubble
+                     with the prompt: they were part of the message, so this is
+                     where they belong once it is sent. -->
+                {#if t.refs.length}
+                  <div class="flex flex-wrap gap-1.5">
+                    {#each t.refs as ref, ri (ri)}
+                      <div class="relative rounded-lg overflow-hidden border border-white/15">
+                        <img src={ref} alt={ri === 0 ? "start frame" : "end frame"} class="max-h-28 w-auto object-contain" />
+                        <span class="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[0.5625rem] text-center leading-tight">
+                          {ri === 0 ? "Start" : "End"}
+                        </span>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
                 {#if editingIdx === ti}
                   <div class="flex flex-col gap-2 min-w-[260px]">
                     <textarea
