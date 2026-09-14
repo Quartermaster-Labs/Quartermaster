@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -185,6 +186,15 @@ func searchFilters(kind string) []string {
 		return []string{"gguf", "automatic-speech-recognition"}
 	case "embed":
 		return []string{"gguf", "feature-extraction"}
+	case "video":
+		// `video` is a capability tag, not a pipeline one: the video-generation
+		// repos carry it, but so does every video-UNDERSTANDING VLM, which is
+		// how GLM Flash and MiniCPM-V ended up in this tab. The pipeline tags
+		// that would be exact (text-to-video, image-to-video) are split across
+		// the catalog — Wan's T2V repos carry one and its I2V repos the other —
+		// and HF ANDs its filters, so asking for either at the hub hides half
+		// the models. Broad tag here, pipelineKinds narrows the response.
+		return []string{"gguf", "video"}
 	case "segment":
 		// mask-generation, not image-segmentation: it is what the SAM/BiRefNet
 		// GGUF repos quartermaster's segment backend loads are tagged with.
@@ -229,7 +239,7 @@ func (h *HF) Search(ctx context.Context, q Query) (Page, error) {
 	// parameter-count filter and no created-after one — so ask for more rows
 	// than a page needs or a filtered page comes back nearly empty.
 	fetch := limit
-	if q.MaxParamsB > 0 || q.MaxAgeDays > 0 {
+	if q.MaxParamsB > 0 || q.MaxAgeDays > 0 || pipelineKinds(q.Kind) != nil {
 		fetch = min(limit*3, 100)
 	}
 
@@ -278,12 +288,44 @@ func (h *HF) Search(ctx context.Context, q Query) (Page, error) {
 func hfPage(raw []Model, q Query, fetch int) Page {
 	out := capParams(raw, q.MaxParamsB, 0)
 	out = capAge(out, q.MaxAgeDays)
+	out = capPipeline(out, pipelineKinds(q.Kind))
 	return Page{
 		Models:   out,
 		NextSkip: q.Skip + len(raw),
 		// A short page means the hub has nothing more under this query.
 		HasMore: len(raw) >= fetch && fetch > 0,
 	}
+}
+
+// pipelineKinds is the response-side half of searchFilters: the pipeline tags a
+// category accepts, for the categories whose hub filter is broader than the
+// category itself. nil means the hub filter was already exact and every row it
+// returned belongs in the tab.
+func pipelineKinds(kind string) []string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "video":
+		// Generation only. `image-text-to-text` is the tag on the VLMs that
+		// merely read video, and it is the bulk of what `filter=video` returns.
+		return []string{"text-to-video", "image-to-video", "image-text-to-video", "text-image-to-video"}
+	}
+	return nil
+}
+
+// capPipeline keeps only repos whose pipeline tag is one the category accepts.
+// A repo stating NO pipeline tag is kept, the same posture as an unreadable
+// parameter count or a missing creation date: it already passed the hub-side
+// tag filter, and hiding it for a gap in its metadata is the worse error.
+func capPipeline(in []Model, want []string) []Model {
+	if len(want) == 0 {
+		return in
+	}
+	out := make([]Model, 0, len(in))
+	for _, m := range in {
+		if m.Pipeline == "" || slices.Contains(want, m.Pipeline) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // capAge drops repos created longer than maxDays ago. A repo stating no

@@ -264,3 +264,46 @@ func TestWithinParams(t *testing.T) {
 		t.Error("the cap is exclusive: 120B must not pass a 120B cap")
 	}
 }
+
+// The Video tab asks the hub for the broad `video` tag, which also matches the
+// VLMs that merely read video, so the response-side pipeline filter is what
+// keeps the tab honest.
+func TestSearchFilters_Video(t *testing.T) {
+	got := searchFilters("video")
+	want := []string{"gguf", "video"}
+	if len(got) != len(want) {
+		t.Fatalf("searchFilters(video) = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("searchFilters(video) = %v, want %v", got, want)
+		}
+	}
+	if pipelineKinds("video") == nil {
+		t.Fatal("video needs a response-side pipeline filter")
+	}
+	if pipelineKinds("image") != nil {
+		t.Fatal("image's hub filter is exact; it must not be narrowed again")
+	}
+}
+
+func TestCapPipeline_VideoDropsVLMs(t *testing.T) {
+	in := []Model{
+		{ID: "QuantStack/Wan2.2-T2V-A14B-GGUF", Pipeline: "text-to-video"},
+		{ID: "city96/Wan2.1-I2V-14B-480P-gguf", Pipeline: "image-to-video"},
+		{ID: "openbmb/MiniCPM-V-4_5-gguf", Pipeline: "image-text-to-text"},
+		{ID: "some/quantizer-GGUF"}, // no pipeline tag: kept, like an unknown size
+	}
+	out := capPipeline(in, pipelineKinds("video"))
+	if len(out) != 3 {
+		t.Fatalf("kept %d rows, want 3: %v", len(out), out)
+	}
+	for _, m := range out {
+		if m.Pipeline == "image-text-to-text" {
+			t.Fatalf("video tab kept a video-understanding VLM: %s", m.ID)
+		}
+	}
+	if got := capPipeline(in, nil); len(got) != len(in) {
+		t.Fatal("a nil want list must not filter")
+	}
+}
