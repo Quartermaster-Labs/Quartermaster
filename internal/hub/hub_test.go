@@ -307,3 +307,51 @@ func TestCapPipeline_VideoDropsVLMs(t *testing.T) {
 		t.Fatal("a nil want list must not filter")
 	}
 }
+
+// MarkSelection lists the WHOLE repo: the curated files keep SelectFiles'
+// grouping, everything else comes back flagged and on its own row.
+func TestMarkSelection_ListsEverything(t *testing.T) {
+	files := []File{
+		{Path: "README.md"},
+		{Path: "Qwen3-8B-Q4_K_M.gguf"},
+		{Path: "mmproj-F16.gguf"},
+		{Path: "tokenizer.json"},
+		{Path: "vae/diffusion_pytorch_model.safetensors"},
+	}
+	got := MarkSelection("unsloth/Qwen3-8B-GGUF", files)
+	if len(got) != len(files) {
+		t.Fatalf("listed %d files, want all %d", len(got), len(files))
+	}
+	aux := map[string]bool{}
+	for _, f := range got {
+		aux[f.Path] = f.Aux
+		if f.Aux && f.Group != f.Path {
+			t.Errorf("%s: aux file grouped as %q, want its own path", f.Path, f.Group)
+		}
+	}
+	for p, want := range map[string]bool{
+		"Qwen3-8B-Q4_K_M.gguf": false,
+		"mmproj-F16.gguf":      false,
+		"README.md":            true,
+		"tokenizer.json":       true,
+		"vae/diffusion_pytorch_model.safetensors": true, // a quant repo: the gguf is the model
+	} {
+		if aux[p] != want {
+			t.Errorf("%s: aux=%v, want %v", p, aux[p], want)
+		}
+	}
+}
+
+// A repo with nothing loadable is still fully listed — that is the case the
+// old picker answered with "this repo carries no GGUF files" and no recourse.
+func TestMarkSelection_UnloadableRepo(t *testing.T) {
+	got := MarkSelection("someone/notes", []File{{Path: "README.md"}, {Path: "train.py"}})
+	if len(got) != 2 {
+		t.Fatalf("listed %d files, want 2", len(got))
+	}
+	for _, f := range got {
+		if !f.Aux {
+			t.Errorf("%s: want aux", f.Path)
+		}
+	}
+}

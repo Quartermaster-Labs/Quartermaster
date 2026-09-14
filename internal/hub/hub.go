@@ -122,6 +122,13 @@ type File struct {
 	// new revision as "already downloaded" and the user has to rename or delete
 	// the file by hand to get it. See Manager.LocalFiles.
 	Stale bool `json:"stale,omitempty"`
+	// Aux marks a file this project cannot load on its own: a README, a
+	// tokenizer, a config, the .safetensors original a quant was made from.
+	// It is LISTED rather than hidden — a repo's own files are the only way to
+	// get a sibling this project's rules don't know about yet (an image model's
+	// external VAE, a text encoder) — but the picker keeps it behind a toggle
+	// and never sizes it, because it is not a candidate for loading.
+	Aux bool `json:"aux,omitempty"`
 	// OID is the hub's content id for this revision of the file (for Hugging
 	// Face, the LFS sha256). It is compared as an opaque string and never
 	// computed here: hashing a 20 GB file to render a picker row is not on.
@@ -303,6 +310,41 @@ func ComponentSetFile(path string) bool {
 //     complete. Half a set is not a model: safetensors with no pipeline.json
 //     beside them cannot be loaded by anything, so offering the pieces
 //     separately would only invite exactly that.
+//
+// MarkSelection returns the WHOLE file list with SelectFiles' verdict recorded
+// on each entry rather than applied to it: the files SelectFiles keeps come back
+// carrying its grouping, everything else comes back Aux, grouped by its own
+// path so the picker can offer it as a single row.
+//
+// Listing everything is deliberate. The curated set is the right DEFAULT view,
+// but it is a set of rules about file names, and rules about file names are
+// always behind the publishers: an image model's external VAE or text encoder,
+// a repo that ships its projector as .safetensors, a file type no backend here
+// reads yet. Hiding those made the picker the reason a model could not be
+// assembled, with no recourse but a browser and a manual copy. It also widens
+// the download allowlist, since Manager.Start admits only paths the hub's own
+// listing named.
+func MarkSelection(repoID string, files []File) []File {
+	sel := map[string]File{}
+	for _, f := range SelectFiles(repoID, files) {
+		sel[f.Path] = f
+	}
+	out := make([]File, 0, len(files))
+	for _, f := range files {
+		if s, ok := sel[f.Path]; ok {
+			out = append(out, s)
+			continue
+		}
+		f.Aux = true
+		// Its own row: an aux file has no sibling relationship this package
+		// understands, so grouping it with anything would be a guess.
+		f.Group = f.Path
+		f.Shard, f.Shards = 0, 0
+		out = append(out, f)
+	}
+	return out
+}
+
 func SelectFiles(repoID string, files []File) []File {
 	quant := false
 	for _, f := range files {

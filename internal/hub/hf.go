@@ -439,7 +439,7 @@ func (h *HF) Detail(ctx context.Context, repoID string) (ModelDetail, error) {
 	}
 	// The listing policy needs the whole repo: a component set is decided by the
 	// ABSENCE of any quant file, and every file in one shares a group key.
-	det.Files = SelectFiles(det.ID, all)
+	det.Files = MarkSelection(det.ID, all)
 	sort.Slice(det.Files, func(i, j int) bool { return det.Files[i].Path < det.Files[j].Path })
 	det.Readme = h.readme(ctx, repoID)
 	cachePut(h, key, det)
