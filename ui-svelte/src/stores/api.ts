@@ -856,6 +856,10 @@ export interface BackendEntry {
   component?: string;
   version?: string;
   variant?: string;
+  // Set on a derived row: one installed build of a managed component, kept so a
+  // model can pin a specific build. Hidden from the backend editor, which is why
+  // the server re-attaches them on save.
+  build?: boolean;
 }
 
 // On-disk slot KV persistence knobs (dashboard slot-KV section). Zero values

@@ -52,7 +52,7 @@
     slotMaxDiskGB = s.slotCache.maxDiskGB;
     slotMaxSessions = s.slotCache.maxSessions;
     slotPreamble = s.slotCache.preambleCaches;
-    backends = s.backendList.map((b) => ({ ...b }));
+    backends = editableBackends(s.backendList);
     syncAdvancedForm(s);
   }
 
@@ -63,6 +63,15 @@
   // entry of a class is the auto-pick; per-model overrides live in the model
   // config editor.
   let backends = $state<BackendEntry[]>([]);
+
+  // What the editor edits = the registry minus the derived rows (one per
+  // installed build of a managed component). Those exist so a model can pin a
+  // build instead of taking the activated one; a save that echoed them back
+  // would let this tab rewrite rows other models point at, so the server
+  // re-attaches them and this list leaves them out.
+  function editableBackends(list: BackendEntry[]): BackendEntry[] {
+    return list.filter((b) => !b.build).map((b) => ({ ...b }));
+  }
 
   // Rows bucketed by class, in BACKEND_CLASSES order. Carries each row's index
   // in `backends` so the mutators stay index-based (ids are client-only).
@@ -109,7 +118,7 @@
     // Persist only complete rows; keep pathless ones as in-progress editor rows so
     // blurring the name field (before the path is typed) doesn't wipe the new row.
     const next = backends.filter((b) => b.path.trim()).map((b) => ({ ...b, name: b.name.trim(), path: b.path.trim() }));
-    if (JSON.stringify(next) === JSON.stringify(settings.backendList)) return;
+    if (JSON.stringify(next) === JSON.stringify(editableBackends(settings.backendList))) return;
     savingBackends = true;
     backendsErr = null;
     backendsSaved = false;

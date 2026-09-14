@@ -277,7 +277,7 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 			resp.DefaultVariants = append(resp.DefaultVariants, variantToDTO(v))
 		}
 		for _, e := range gf.Settings.Backends {
-			resp.Backends = append(resp.Backends, backendEntryDTO{ID: e.ID, Kind: e.Kind, Name: e.Name, Path: e.Path, Default: e.Default})
+			resp.Backends = append(resp.Backends, backendEntryToDTO(e))
 		}
 	}
 	writeJSON(w, resp)

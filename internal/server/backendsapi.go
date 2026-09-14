@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -111,14 +112,69 @@ type backendBuildRef struct {
 
 // --- registry write-back ---
 
-// managedEntry finds the registry row the manager owns for a component.
+// managedEntry finds the registry row the manager OWNS for a component: the one
+// it activates and updates. Derived Build rows share the component and the
+// Managed flag, so they are skipped here -- every caller wants the one row that
+// per-model overrides and the update path refer to.
 func managedEntry(list []autogen.BackendEntry, comp string) int {
 	for i, e := range list {
-		if e.Managed && strings.EqualFold(e.Component, comp) {
+		if e.Managed && !e.Build && strings.EqualFold(e.Component, comp) {
 			return i
 		}
 	}
 	return -1
+}
+
+// buildRowID names the derived registry row for one installed build of a
+// component. Stable across restarts, so a model's pin to it keeps resolving.
+func buildRowID(comp, version, variant string) string {
+	return "build-" + comp + "-" + version + "-" + variant
+}
+
+// syncBuildRows rewrites a component's derived Build rows so every installed
+// build is visible to the model editor, not just the activated one. Only rows
+// carrying the Build flag are touched: the block is rewritten where it already
+// sits (appended after the component's Managed row on first sync), installs
+// keep the manager's order (newest first), and a build that was removed from
+// disk loses its row.
+//
+// The bool reports whether anything changed, so a caller can skip a sidecar
+// write (and the config regen behind it) when the rows already match.
+func syncBuildRows(list []autogen.BackendEntry, comp, name, kind string, installs []backends.Installed) ([]autogen.BackendEntry, bool) {
+	want := make([]autogen.BackendEntry, 0, len(installs))
+	for _, inst := range installs {
+		want = append(want, autogen.BackendEntry{
+			ID:        buildRowID(comp, inst.Version, inst.Variant),
+			Kind:      kind,
+			Name:      name,
+			Path:      inst.Exe,
+			Managed:   true,
+			Build:     true,
+			Component: comp,
+			Version:   inst.Version,
+			Variant:   inst.Variant,
+		})
+	}
+	at := -1
+	out := make([]autogen.BackendEntry, 0, len(list)+len(want))
+	for _, e := range list {
+		if e.Build && strings.EqualFold(e.Component, comp) {
+			if at < 0 {
+				at = len(out)
+			}
+			continue
+		}
+		out = append(out, e)
+	}
+	if at < 0 {
+		at = len(out)
+	}
+	tail := append([]autogen.BackendEntry(nil), out[at:]...)
+	out = append(append(out[:at:at], want...), tail...)
+	if slices.Equal(list, out) {
+		return list, false
+	}
+	return out, true
 }
 
 // registerManagedBackend points the component's registry row at an installed
@@ -167,6 +223,10 @@ func (s *Server) registerManagedBackend(inst backends.Installed) error {
 		row.Default = !classTaken
 		list = append(list, row)
 	}
+	// Activation is also the moment the build list can change (a new install, a
+	// rollback), so the derived rows are refreshed here rather than in a
+	// separate step the caller could forget.
+	list, _ = syncBuildRows(list, comp.ID, comp.Name, comp.Kind, s.backends.Installed(comp.ID))
 	if err := autogen.UpsertSidecarBackendList(a.GeneratePath, list); err != nil {
 		return err
 	}
@@ -260,6 +320,33 @@ func setClassDefault(list []autogen.BackendEntry, id string) []autogen.BackendEn
 		}
 	}
 	return list
+}
+
+// pruneBuildRows drops the derived rows of builds that are no longer on disk:
+// after an uninstall, a model pinned to the removed build has to fall back to
+// its class default instead of launching a path that is gone. Reports whether
+// it wrote the sidecar (the config regen is the caller's).
+func (s *Server) pruneBuildRows(comp string) (bool, error) {
+	a := s.autogen
+	if a == nil || s.backends == nil {
+		return false, nil
+	}
+	c, ok := s.backends.Find(comp)
+	if !ok || c.Kind == "" {
+		return false, nil // a helper (yt-dlp) never had a registry row
+	}
+	list, err := autogen.LoadSidecarBackendList(a.GeneratePath)
+	if err != nil {
+		return false, err
+	}
+	next, changed := syncBuildRows(list, c.ID, c.Name, c.Kind, s.backends.Installed(c.ID))
+	if !changed {
+		return false, nil
+	}
+	if err := autogen.UpsertSidecarBackendList(a.GeneratePath, next); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // activeBuild returns the installed build the registry currently points at.
@@ -586,5 +673,17 @@ func (s *Server) handleAPIBackendUninstall(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.proxylog.Infof("backends: uninstalled %s %s (%s)", body.Component, body.Version, body.Variant)
+	// The removed build had a derived registry row, and a model may have pinned
+	// it. Reconcile so that pin falls back rather than launching a deleted exe.
+	// Failures here are logged, not returned: the bits are already gone, and a
+	// 500 would misreport an uninstall that did happen.
+	changed, err := s.pruneBuildRows(body.Component)
+	if err != nil {
+		s.proxylog.Warnf("backends: pruning build rows for %s failed: %v", body.Component, err)
+	} else if changed {
+		if err := s.regenReload(); err != nil {
+			s.proxylog.Warnf("backends: regenerating after removing %s failed: %v", body.Component, err)
+		}
+	}
 	writeJSON(w, map[string]string{"status": "removed"})
 }

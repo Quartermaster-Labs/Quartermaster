@@ -27,6 +27,12 @@ there is no vllm embedding emitter (`vllm.go` emits a generate command). The `en
 pin (`writeSingleDeviceEnv`) goes through the same resolver, so a pinned model does not pick up
 the default build's vendor variables either.
 
+`Settings.Backends` also carries the installer's **derived build rows** (`Build: true`, one per
+installed build of a managed component), which exist so a model can pin a specific build instead
+of taking the activated one. They are ordinary rows to resolution (step 1 pins one by id) and are
+appended behind the component's own row, so first-per-kind derivation and the implicit class
+default still land on the row the user activated.
+
 **Config is "keyed to backend" for free:** one `Override` holds both llama and vllm fields;
 each emitter reads only its own, so switching kind never wipes the dormant set.
 

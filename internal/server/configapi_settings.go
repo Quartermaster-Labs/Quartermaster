@@ -172,6 +172,29 @@ type backendEntryDTO struct {
 	Component string `json:"component,omitempty"`
 	Version   string `json:"version,omitempty"`
 	Variant   string `json:"variant,omitempty"`
+	// Build marks a derived row: one installed build of a component, kept in the
+	// registry so a model can pin any build rather than only the active one.
+	// The settings editor does not show these; a PUT re-attaches them server-side.
+	Build bool `json:"build,omitempty"`
+}
+
+// backendEntryToDTO is the one mapping from a registry row to its wire form: the
+// settings list, the config editor's model modal, and any future reader all see
+// the same fields, so a new row property can't silently go missing from one of
+// them (which is how per-build selection broke).
+func backendEntryToDTO(e autogen.BackendEntry) backendEntryDTO {
+	return backendEntryDTO{
+		ID:        e.ID,
+		Kind:      e.Kind,
+		Name:      e.Name,
+		Path:      e.Path,
+		Default:   e.Default,
+		Managed:   e.Managed,
+		Component: e.Component,
+		Version:   e.Version,
+		Variant:   e.Variant,
+		Build:     e.Build,
+	}
 }
 
 // slotCacheDTO mirrors autogen.SlotCacheSettings for the dashboard slot-KV
@@ -244,10 +267,7 @@ func (s *Server) handleAPISettingsGet(w http.ResponseWriter, r *http.Request) {
 		)
 	} else {
 		for _, e := range stored {
-			backendList = append(backendList, backendEntryDTO{
-				ID: e.ID, Kind: e.Kind, Name: e.Name, Path: e.Path, Default: e.Default,
-				Managed: e.Managed, Component: e.Component, Version: e.Version, Variant: e.Variant,
-			})
+			backendList = append(backendList, backendEntryToDTO(e))
 		}
 	}
 	writeJSON(w, settingsResp{
@@ -313,21 +333,7 @@ func (s *Server) handleAPIBackendsPut(w http.ResponseWriter, r *http.Request) {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
-	prov := make(map[string]autogen.BackendEntry, len(stored))
-	for _, e := range stored {
-		if e.Managed {
-			prov[e.ID] = e
-		}
-	}
-	list := make([]autogen.BackendEntry, 0, len(body))
-	for _, e := range body {
-		row := autogen.BackendEntry{ID: e.ID, Kind: e.Kind, Name: e.Name, Path: e.Path, Default: e.Default}
-		if p, ok := prov[e.ID]; ok {
-			row.Managed, row.Component, row.Version, row.Variant = true, p.Component, p.Version, p.Variant
-			row.Path = p.Path // the active build's exe, not an edited copy
-		}
-		list = append(list, row)
-	}
+	list := mergeBackendList(body, stored)
 	if err := autogen.UpsertSidecarBackendList(s.autogen.GeneratePath, list); err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
@@ -336,6 +342,41 @@ func (s *Server) handleAPIBackendsPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// mergeBackendList turns a settings-editor save into the registry list to store.
+// It is split out from the handler to be tested directly.
+//
+// Two kinds of row are server-owned and are restored rather than taken from the
+// body: Managed provenance (id -> Component/Version/Variant/Path), and the
+// derived Build rows, which the editor does not render at all. Reattaching the
+// latter matters: without it, any save from the Backends tab would delete the
+// rows models have pinned, and those models would silently fall back to their
+// class default.
+func mergeBackendList(body []backendEntryDTO, stored []autogen.BackendEntry) []autogen.BackendEntry {
+	prov := make(map[string]autogen.BackendEntry, len(stored))
+	for _, e := range stored {
+		if e.Managed {
+			prov[e.ID] = e
+		}
+	}
+	list := make([]autogen.BackendEntry, 0, len(body)+len(stored))
+	seen := make(map[string]bool, len(body))
+	for _, e := range body {
+		row := autogen.BackendEntry{ID: e.ID, Kind: e.Kind, Name: e.Name, Path: e.Path, Default: e.Default}
+		if p, ok := prov[e.ID]; ok {
+			row.Managed, row.Build, row.Component, row.Version, row.Variant = true, p.Build, p.Component, p.Version, p.Variant
+			row.Path = p.Path // the active build's exe, not an edited copy
+		}
+		list = append(list, row)
+		seen[e.ID] = true
+	}
+	for _, p := range stored {
+		if p.Build && !seen[p.ID] {
+			list = append(list, p)
+		}
+	}
+	return list
 }
 
 // handleAPISlotCachePut writes the dashboard's slot-KV settings to the sidecar

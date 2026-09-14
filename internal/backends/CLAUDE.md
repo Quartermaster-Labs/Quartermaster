@@ -17,7 +17,11 @@ of the fork's backends have no installable upstream release: `tts-server`
 the hand-patched sd-server carrying vendored gfx1100 Tensile kernels (distinct
 from upstream's stock ROCm build, which *is* installable). Managed installs
 therefore *coexist* with hand-entered rows in one registry, distinguished by
-`BackendEntry.Managed`.
+`BackendEntry.Managed`. An install also gets one **derived row per installed build**
+(`BackendEntry.Build`, written by `internal/server`'s `syncBuildRows`), so the model
+editor can pin a specific build instead of only the activated one; those rows sit
+behind the component's own row, which is what positional lookups (the legacy
+exe slots, the implicit class default) read.
 
 ## Key files
 

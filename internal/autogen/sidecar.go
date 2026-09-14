@@ -159,6 +159,12 @@ type BackendEntry struct {
 	Component string `yaml:"component,omitempty"`
 	Version   string `yaml:"version,omitempty"`
 	Variant   string `yaml:"variant,omitempty"`
+	// Build marks a DERIVED row: one build the manager has on disk, so the model
+	// editor can pin any installed build and not just the activated one. The
+	// installer keeps one row per build (same Component, differing Version and
+	// Variant), written alongside the Managed row, and the settings editor hides
+	// them: they exist to be referenced by Override.Backend, not edited.
+	Build bool `yaml:"build,omitempty"`
 }
 
 // BackendSource is one user-tracked GitHub repo: a backend the in-app installer
