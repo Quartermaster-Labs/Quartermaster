@@ -53,6 +53,16 @@ func IsASRModel(meta Metadata, fileName string) bool {
 	return isASRArch(meta.Architecture) || asrFileRe.MatchString(fileName)
 }
 
+// asrExe picks the binary this ASR model launches: its own backend pin when it
+// has one, else the class default, else the legacy derived slot. Same rule as
+// every other class -- only an auto model follows a later default switch.
+func asrExe(s Settings, ov *Override) string {
+	if rb := resolveBackend(s, ov, "asr"); rb.Exe != "" {
+		return rb.Exe
+	}
+	return s.AsrServerExe
+}
+
 // asrCmdLines builds the parakeet-server argv (exe first) for an ASR GGUF. Shared
 // by emitASRModel and RenderSoloCmd so the editor preview matches a save.
 //
@@ -64,7 +74,7 @@ func IsASRModel(meta Metadata, fileName string) bool {
 // config auto-derive the proxy URL.
 func asrCmdLines(s Settings, row GgufRow, ov *Override) []string {
 	lines := []string{
-		s.AsrServerExe,
+		asrExe(s, ov),
 		fmt.Sprintf("--model %s", strings.ReplaceAll(row.FullPath, "\\", "/")),
 		"--port ${PORT}",
 	}
@@ -91,7 +101,7 @@ func emitASRModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, nam
 		fmt.Fprintf(b, "      %s\n", line)
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
-	writeSingleDeviceEnv(b, s, s.AsrServerExe)
+	writeSingleDeviceEnv(b, s, asrExe(s, ov))
 	// No estVramGB: parakeet runs on the CPU unless a user opts into GPU via
 	// extraArgs, so it occupies no VRAM budget and must never cost a chat model
 	// its residency. A GPU opt-in under-charges — an accepted trade for not

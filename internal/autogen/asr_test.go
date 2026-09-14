@@ -28,6 +28,51 @@ func TestIsASRModel(t *testing.T) {
 	}
 }
 
+func TestASRCmdLines_BackendPin(t *testing.T) {
+	rows := []BackendEntry{
+		{ID: "managed-parakeet", Kind: "asr", Path: "C:/asr/new/parakeet-server.exe"},
+		{ID: "build-parakeet-0.4", Kind: "asr", Path: "C:/asr/old/parakeet-server.exe"},
+	}
+	withDefault := func(id string) []BackendEntry {
+		out := append([]BackendEntry(nil), rows...)
+		for i := range out {
+			out[i].Default = out[i].ID == id
+		}
+		return out
+	}
+	row := GgufRow{
+		FullPath: `C:\models\asr\parakeet-tdt-0.6b-v3-q8_0.gguf`,
+		FileName: "parakeet-tdt-0.6b-v3-q8_0.gguf",
+	}
+
+	cases := []struct {
+		name string
+		def  string
+		pin  string
+		want string
+	}{
+		// Same rule as every other class: only an auto model follows a ★ switch.
+		{"pin wins over the default", "managed-parakeet", "build-parakeet-0.4", "C:/asr/old/parakeet-server.exe"},
+		{"pin wins after the default switched", "build-parakeet-0.4", "managed-parakeet", "C:/asr/new/parakeet-server.exe"},
+		{"auto follows the default", "managed-parakeet", "", "C:/asr/new/parakeet-server.exe"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := Settings{AsrServerExe: "parakeet-server", Backends: withDefault(tc.def)}
+			got := asrCmdLines(s, row, &Override{Backend: tc.pin})[0]
+			if got != tc.want {
+				t.Errorf("exe = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	// Single-backend setup: nothing in the registry, legacy exe unchanged.
+	s := Settings{AsrServerExe: "parakeet-server"}
+	if got := asrCmdLines(s, row, nil)[0]; got != "parakeet-server" {
+		t.Errorf("legacy exe = %q, want parakeet-server", got)
+	}
+}
+
 func TestEmitASRModel(t *testing.T) {
 	s := Settings{AsrServerExe: "parakeet-server", TtlSec: 600}
 	row := GgufRow{
