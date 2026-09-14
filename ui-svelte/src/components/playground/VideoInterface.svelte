@@ -28,7 +28,7 @@
   import Select from "./Select.svelte";
   import Composer from "./Composer.svelte";
   import { autogrow } from "../../lib/autogrow";
-  import { Film, X, Download, Ban, Plus, Pencil, Save, RefreshCw, Type, Paintbrush, Sparkles, Maximize2, ChevronsRight } from "lucide-svelte";
+  import { Film, X, Download, Ban, Plus, Pencil, Save, RefreshCw, Type, Paintbrush, Sparkles, Maximize2, ChevronsRight, ImagePlus, FlagTriangleRight } from "lucide-svelte";
   import { scrollFade } from "../../lib/scrollFade";
   import { parseSdProgress } from "./imageGen";
   import {
@@ -278,6 +278,14 @@
     const i = url.indexOf(",");
     return i >= 0 ? url.slice(i + 1) : url;
   }
+
+  // An END frame alone is meaningless: sd.cpp's --end-img help calls it
+  // "required by flf2v", i.e. it pairs WITH a start frame. So dropping the start
+  // drops the end with it, rather than leaving a chip that would be sent and
+  // ignored.
+  $effect(() => {
+    if (!firstFrame && lastFrame) lastFrame = null;
+  });
 
   function pickFrame(event: Event, which: "first" | "last") {
     const input = event.target as HTMLInputElement;
@@ -857,59 +865,6 @@
               <Select bind:value={$schedulerStore} compact options={SCHEDULER_OPTIONS} />
             </div>
           </div>
-          <!-- First/last frame conditioning. Shown only for models that take it:
-               a text-to-video checkpoint DROPS these fields rather than
-               erroring, so offering the control there would be a picker that
-               silently does nothing. -->
-          {#if frameRefs}
-            <div class="flex flex-col gap-1 pt-1 border-t border-card-border">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
-                Start / end frame
-                <span class="cursor-help opacity-60" use:tip={"Images to condition on. A first frame alone animates a still; both together make the clip travel from one to the other. This is also the way past the length ceiling: render a clip, press the chain button under it, and the next render starts where that one ended, at the same VRAM cost per clip however long the finished video gets."}>(?)</span>
-              </span>
-              <div class="grid grid-cols-2 gap-2">
-                <div class="flex flex-col gap-1">
-                  <button
-                    type="button"
-                    class="h-16 rounded-md border border-dashed border-card-border hover:border-primary flex items-center justify-center overflow-hidden disabled:opacity-40"
-                    disabled={isGenerating}
-                    onclick={() => firstInput?.click()}
-                  >
-                    {#if firstFrame}
-                      <img src={firstFrame} alt="First frame" class="h-full w-full object-cover" />
-                    {:else}
-                      <span class="text-xs text-txtsecondary">First</span>
-                    {/if}
-                  </button>
-                  {#if firstFrame}
-                    <button class="text-[0.6875rem] text-txtsecondary hover:text-red-500" onclick={() => (firstFrame = null)}>Clear</button>
-                  {/if}
-                </div>
-                <div class="flex flex-col gap-1">
-                  <button
-                    type="button"
-                    class="h-16 rounded-md border border-dashed border-card-border hover:border-primary flex items-center justify-center overflow-hidden disabled:opacity-40"
-                    disabled={isGenerating}
-                    onclick={() => lastInput?.click()}
-                  >
-                    {#if lastFrame}
-                      <img src={lastFrame} alt="Last frame" class="h-full w-full object-cover" />
-                    {:else}
-                      <span class="text-xs text-txtsecondary">Last</span>
-                    {/if}
-                  </button>
-                  {#if lastFrame}
-                    <button class="text-[0.6875rem] text-txtsecondary hover:text-red-500" onclick={() => (lastFrame = null)}>Clear</button>
-                  {/if}
-                </div>
-              </div>
-              <input type="file" accept="image/*" class="hidden" bind:this={firstInput} onchange={(e) => pickFrame(e, "first")} />
-              <input type="file" accept="image/*" class="hidden" bind:this={lastInput} onchange={(e) => pickFrame(e, "last")} />
-              {#if frameRefError}
-                <p class="text-xs text-red-500">{frameRefError}</p>
-              {/if}
-            </div>
-          {/if}
           <!-- LoRAs. The list comes from the backend's --lora-model-dir, so it
                needs the model loaded: fetched on demand, never automatically.
                A turbo LoRA here is what makes a 4-step render correct, which is
@@ -983,6 +938,31 @@
       {/snippet}
 
       {#snippet videoLeftButtons()}
+        <!-- Frame conditioning lives in the COMPOSER, not the settings panel:
+             these are per-message inputs like an attachment, not a setting that
+             persists across renders. Shown only for checkpoints that condition
+             on frames, since a t2v model drops the fields rather than erroring,
+             which would leave a paperclip that silently does nothing. -->
+        {#if frameRefs}
+          <button
+            class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {firstFrame ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
+            onclick={() => firstInput?.click()}
+            disabled={isGenerating}
+            use:tip={"Start frame - the image the clip animates from"}
+          >
+            <ImagePlus class="w-[1.125rem] h-[1.125rem]" />
+          </button>
+          <button
+            class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {lastFrame ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
+            onclick={() => lastInput?.click()}
+            disabled={isGenerating || !firstFrame}
+            use:tip={firstFrame
+              ? "End frame - the clip travels from the start frame to this one"
+              : "End frame needs a start frame first - on its own there is nothing for the clip to travel from"}
+          >
+            <FlagTriangleRight class="w-[1.125rem] h-[1.125rem]" />
+          </button>
+        {/if}
         {#if !(showNegative || $negativePromptStore)}
           <button
             class="inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
@@ -1006,6 +986,31 @@
       {/snippet}
 
       <div class="shrink-0 relative w-full max-w-2xl mx-auto">
+        {#if frameRefs && (firstFrame || lastFrame)}
+          <div class="flex flex-wrap items-center gap-2 mb-2">
+            {#each [{ key: "first", src: firstFrame, label: "Start" }, { key: "last", src: lastFrame, label: "End" }] as slot (slot.key)}
+              {#if slot.src}
+                <div class="group relative w-14 h-14 rounded-lg overflow-hidden border border-card-border bg-secondary">
+                  <img src={slot.src} alt="{slot.label} frame" class="w-full h-full object-cover" />
+                  <span class="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[0.5625rem] text-center leading-tight">{slot.label}</span>
+                  <button
+                    class="absolute top-0 right-0 w-5 h-5 flex items-center justify-center bg-black/60 text-white rounded-bl opacity-0 group-hover:opacity-100 transition-opacity"
+                    onclick={() => (slot.key === "first" ? (firstFrame = null) : (lastFrame = null))}
+                    aria-label="Remove {slot.label.toLowerCase()} frame"
+                  ><X class="w-3 h-3" /></button>
+                </div>
+              {/if}
+            {/each}
+            <span class="text-xs text-txtsecondary">
+              {lastFrame ? "Travelling from the start frame to the end frame" : "Animating from the start frame"}
+            </span>
+          </div>
+        {/if}
+        {#if frameRefError}
+          <p class="text-xs text-red-500 mb-2 px-2">{frameRefError}</p>
+        {/if}
+        <input type="file" accept="image/*" class="hidden" bind:this={firstInput} onchange={(e) => pickFrame(e, "first")} />
+        <input type="file" accept="image/*" class="hidden" bind:this={lastInput} onchange={(e) => pickFrame(e, "last")} />
         <Composer
           bind:value={prompt}
           bind:textareaEl={promptEl}
