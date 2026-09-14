@@ -787,7 +787,13 @@
             <button class="text-primary hover:underline" onclick={() => setFilter("trendy", false)}>Search the whole hub</button>.
           </div>
         {:else if !results.length}
-          <div class="p-3 text-xs text-txtsecondary">{kind === "3d" ? "No 3D repos matched that search." : "No GGUF repos matched that search."}</div>
+          <!-- Name what was actually searched. The 3D and Video tabs do not
+               require a GGUF at all (their models ship as safetensors LoRAs and
+               component sets), so telling their user no GGUF matched describes
+               a filter that was never applied. -->
+          <div class="p-3 text-xs text-txtsecondary">
+            {kind === "3d" || kind === "video" ? "No repos matched that search." : "No GGUF repos matched that search."}
+          </div>
         {:else if !shown.length}
           <!-- Distinct from "nothing matched": the hub answered, the filters
                emptied it, and the fix is one click away rather than a re-word. -->

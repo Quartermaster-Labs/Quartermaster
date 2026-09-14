@@ -265,46 +265,60 @@ func TestWithinParams(t *testing.T) {
 	}
 }
 
-// The Video tab asks the hub for the broad `video` tag, which also matches the
-// VLMs that merely read video, so the response-side pipeline filter is what
-// keeps the tab honest.
-func TestSearchFilters_Video(t *testing.T) {
-	got := searchFilters("video")
-	want := []string{"gguf", "video"}
-	if len(got) != len(want) {
-		t.Fatalf("searchFilters(video) = %v, want %v", got, want)
+// The Video tab is the one category no single HF query describes: the exact
+// pipeline tags are split across the catalog and HF ANDs its filters, so it
+// asks twice and merges. `gguf` is deliberately absent — the useful video repos
+// are LoRAs and safetensors component sets.
+func TestSearchFilterSets_Video(t *testing.T) {
+	got := searchFilterSets("video")
+	if len(got) != 2 {
+		t.Fatalf("searchFilterSets(video) = %v, want two sets", got)
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("searchFilters(video) = %v, want %v", got, want)
+	for _, set := range got {
+		if len(set) != 1 {
+			t.Fatalf("set %v: want one filter per set, so neither hides the other", set)
+		}
+		if set[0] == "gguf" {
+			t.Fatal("video must not require gguf: LoRA and safetensors repos are the point")
 		}
 	}
-	if pipelineKinds("video") == nil {
-		t.Fatal("video needs a response-side pipeline filter")
+	if got[0][0] != "text-to-video" || got[1][0] != "image-to-video" {
+		t.Fatalf("searchFilterSets(video) = %v", got)
 	}
-	if pipelineKinds("image") != nil {
-		t.Fatal("image's hub filter is exact; it must not be narrowed again")
+	// Every other category is one set, unchanged.
+	if sets := searchFilterSets("image"); len(sets) != 1 || len(sets[0]) != 2 {
+		t.Fatalf("searchFilterSets(image) = %v, want one gguf+pipeline set", sets)
 	}
 }
 
-func TestCapPipeline_VideoDropsVLMs(t *testing.T) {
-	in := []Model{
-		{ID: "QuantStack/Wan2.2-T2V-A14B-GGUF", Pipeline: "text-to-video"},
-		{ID: "city96/Wan2.1-I2V-14B-480P-gguf", Pipeline: "image-to-video"},
-		{ID: "openbmb/MiniCPM-V-4_5-gguf", Pipeline: "image-text-to-text"},
-		{ID: "some/quantizer-GGUF"}, // no pipeline tag: kept, like an unknown size
+// A LoRA repo is a pile of ALTERNATIVES, not the parts of one model: grouping
+// it under the repo id offered a single row that downloaded all seventeen.
+func TestSelectFiles_LooseWeightsRepo(t *testing.T) {
+	files := []File{
+		{Path: "README.md"},
+		{Path: "minimax_h3_fl2v_turbo_4step_v1.1_768p_bf16.safetensors"},
+		{Path: "minimax_h3_fl2v_turbo_4step_v1.1_768p_fp8.safetensors"},
+		{Path: "minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors"},
 	}
-	out := capPipeline(in, pipelineKinds("video"))
-	if len(out) != 3 {
-		t.Fatalf("kept %d rows, want 3: %v", len(out), out)
+	for i := range files {
+		classify(&files[i])
 	}
-	for _, m := range out {
-		if m.Pipeline == "image-text-to-text" {
-			t.Fatalf("video tab kept a video-understanding VLM: %s", m.ID)
+	got := SelectFiles("lightx2v/Minimax-h3-Turbo", files)
+	if len(got) != 3 {
+		t.Fatalf("kept %d files, want the 3 safetensors: %v", len(got), got)
+	}
+	groups := map[string]bool{}
+	for _, f := range got {
+		if f.Group == "lightx2v/Minimax-h3-Turbo" {
+			t.Fatalf("%s: grouped as the whole repo, want its own row", f.Path)
 		}
+		if f.Group == "" {
+			t.Fatalf("%s: no group key", f.Path)
+		}
+		groups[f.Group] = true
 	}
-	if got := capPipeline(in, nil); len(got) != len(in) {
-		t.Fatal("a nil want list must not filter")
+	if len(groups) != 3 {
+		t.Fatalf("3 alternatives collapsed onto %d rows", len(groups))
 	}
 }
 
