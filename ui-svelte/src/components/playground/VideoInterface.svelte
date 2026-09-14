@@ -28,7 +28,7 @@
   import Select from "./Select.svelte";
   import Composer from "./Composer.svelte";
   import { autogrow } from "../../lib/autogrow";
-  import { Film, X, Download, Ban, Plus, Pencil, Save, RefreshCw, Type, Paintbrush, Sparkles, Maximize2 } from "lucide-svelte";
+  import { Film, X, Download, Ban, Plus, Pencil, Save, RefreshCw, Type, Paintbrush, Sparkles, Maximize2, ChevronsRight } from "lucide-svelte";
   import { scrollFade } from "../../lib/scrollFade";
   import { parseSdProgress } from "./imageGen";
   import {
@@ -39,6 +39,7 @@
     VIDEO_SIZE_TIERS,
     VIDEO_DEFAULT_MAX_DIM,
     clipLabel,
+    supportsFrameRefs,
     vramWarning,
     frameOptionsFor,
     fpsOptionsFor,
@@ -263,6 +264,83 @@
   let modelMax = $derived(
     Math.max(modelPreset?.maxDim ?? VIDEO_DEFAULT_MAX_DIM, modelGen?.width ?? 0, modelGen?.height ?? 0)
   );
+  // First/last frame conditioning. Held as data: URLs so the thumbnails can show
+  // them directly, and stripped to raw base64 at send time (sd-server wants
+  // bytes, not a URL) exactly as the Images tab does for its references.
+  let firstFrame = $state<string | null>(null);
+  let lastFrame = $state<string | null>(null);
+  let firstInput = $state<HTMLInputElement | null>(null);
+  let lastInput = $state<HTMLInputElement | null>(null);
+  let frameRefError = $state("");
+  let frameRefs = $derived(supportsFrameRefs($selectedModelStore));
+
+  function stripB64(url: string): string {
+    const i = url.indexOf(",");
+    return i >= 0 ? url.slice(i + 1) : url;
+  }
+
+  function pickFrame(event: Event, which: "first" | "last") {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const url = reader.result as string;
+        if (which === "first") firstFrame = url;
+        else lastFrame = url;
+        frameRefError = "";
+      };
+      reader.readAsDataURL(file);
+    }
+    input.value = "";
+  }
+
+  /**
+   * The final frame of a rendered clip, as a data: URL.
+   *
+   * Done in the browser rather than the backend because the clip is already
+   * here: a fresh render arrives as a data: URL and a saved one as a same-origin
+   * /api/media path, so neither taints the canvas and no round trip is needed.
+   */
+  async function lastFrameOf(src: string): Promise<string> {
+    const v = document.createElement("video");
+    v.src = src;
+    v.muted = true;
+    v.playsInline = true;
+    await new Promise<void>((res, rej) => {
+      v.onloadeddata = () => res();
+      v.onerror = () => rej(new Error("Could not read that clip."));
+    });
+    // A frame short of the end on purpose: seeking to exactly duration lands
+    // past the last sample on some decoders, which never fires seeked and would
+    // hang this promise forever.
+    await new Promise<void>((res, rej) => {
+      v.onseeked = () => res();
+      v.onerror = () => rej(new Error("Could not seek that clip."));
+      v.currentTime = Math.max(0, (v.duration || 0) - 1 / 30);
+    });
+    const c = document.createElement("canvas");
+    c.width = v.videoWidth;
+    c.height = v.videoHeight;
+    const ctx = c.getContext("2d");
+    if (!ctx || !c.width || !c.height) throw new Error("Could not decode that clip's frames.");
+    ctx.drawImage(v, 0, 0);
+    return c.toDataURL("image/png");
+  }
+
+  // Chain one clip onto the next: its last frame becomes the next render's first
+  // frame. Clears any END frame, which belonged to the render just finished and
+  // would otherwise pull the continuation back to where it started.
+  async function continueFrom(src: string) {
+    try {
+      firstFrame = await lastFrameOf(src);
+      lastFrame = null;
+      frameRefError = "";
+    } catch (e) {
+      frameRefError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   // The card's real size, for the feasibility warning. Falls back to 24GB when
   // the perf stream has not reported yet, which can only change the COLOUR of a
   // row, never whether it can be picked.
@@ -395,6 +473,10 @@
         fps: Number($fpsStore),
         seed: $seedStore,
         lora: activeLoras.length ? activeLoras : undefined,
+        // Gated on frameRefs as well as presence: a stale pick left over from
+        // another model must not ride along to a checkpoint that would ignore it.
+        init_image: frameRefs && firstFrame ? stripB64(firstFrame) : undefined,
+        end_image: frameRefs && lastFrame ? stripB64(lastFrame) : undefined,
         sample_params: {
           sample_steps: $stepsStore,
           sample_method: $samplerStore || undefined,
@@ -656,6 +738,16 @@
                     >
                       <Maximize2 class="w-4 h-4" />
                     </button>
+                    {#if frameRefs}
+                      <button
+                        class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary disabled:opacity-40"
+                        onclick={() => continueFrom(t.videos[0])}
+                        disabled={isGenerating}
+                        use:tip={"Continue from here: load this clip's last frame as the next render's first frame"}
+                      >
+                        <ChevronsRight class="w-4 h-4" />
+                      </button>
+                    {/if}
                     {#if t.frames}
                       <span class="flex items-center self-center text-[0.6875rem] text-txtsecondary tabular-nums">
                         {t.frames}f{#if t.fps} @ {t.fps}fps{/if}
@@ -765,6 +857,59 @@
               <Select bind:value={$schedulerStore} compact options={SCHEDULER_OPTIONS} />
             </div>
           </div>
+          <!-- First/last frame conditioning. Shown only for models that take it:
+               a text-to-video checkpoint DROPS these fields rather than
+               erroring, so offering the control there would be a picker that
+               silently does nothing. -->
+          {#if frameRefs}
+            <div class="flex flex-col gap-1 pt-1 border-t border-card-border">
+              <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
+                Start / end frame
+                <span class="cursor-help opacity-60" use:tip={"Images to condition on. A first frame alone animates a still; both together make the clip travel from one to the other. This is also the way past the length ceiling: render a clip, press the chain button under it, and the next render starts where that one ended, at the same VRAM cost per clip however long the finished video gets."}>(?)</span>
+              </span>
+              <div class="grid grid-cols-2 gap-2">
+                <div class="flex flex-col gap-1">
+                  <button
+                    type="button"
+                    class="h-16 rounded-md border border-dashed border-card-border hover:border-primary flex items-center justify-center overflow-hidden disabled:opacity-40"
+                    disabled={isGenerating}
+                    onclick={() => firstInput?.click()}
+                  >
+                    {#if firstFrame}
+                      <img src={firstFrame} alt="First frame" class="h-full w-full object-cover" />
+                    {:else}
+                      <span class="text-xs text-txtsecondary">First</span>
+                    {/if}
+                  </button>
+                  {#if firstFrame}
+                    <button class="text-[0.6875rem] text-txtsecondary hover:text-red-500" onclick={() => (firstFrame = null)}>Clear</button>
+                  {/if}
+                </div>
+                <div class="flex flex-col gap-1">
+                  <button
+                    type="button"
+                    class="h-16 rounded-md border border-dashed border-card-border hover:border-primary flex items-center justify-center overflow-hidden disabled:opacity-40"
+                    disabled={isGenerating}
+                    onclick={() => lastInput?.click()}
+                  >
+                    {#if lastFrame}
+                      <img src={lastFrame} alt="Last frame" class="h-full w-full object-cover" />
+                    {:else}
+                      <span class="text-xs text-txtsecondary">Last</span>
+                    {/if}
+                  </button>
+                  {#if lastFrame}
+                    <button class="text-[0.6875rem] text-txtsecondary hover:text-red-500" onclick={() => (lastFrame = null)}>Clear</button>
+                  {/if}
+                </div>
+              </div>
+              <input type="file" accept="image/*" class="hidden" bind:this={firstInput} onchange={(e) => pickFrame(e, "first")} />
+              <input type="file" accept="image/*" class="hidden" bind:this={lastInput} onchange={(e) => pickFrame(e, "last")} />
+              {#if frameRefError}
+                <p class="text-xs text-red-500">{frameRefError}</p>
+              {/if}
+            </div>
+          {/if}
           <!-- LoRAs. The list comes from the backend's --lora-model-dir, so it
                needs the model loaded: fetched on demand, never automatically.
                A turbo LoRA here is what makes a 4-step render correct, which is

@@ -99,6 +99,23 @@ export function vramWarning(width: number, height: number, frames: number, total
   );
 }
 
+/**
+ * Whether this model conditions on a first (and optionally last) frame.
+ *
+ * Matched on the checkpoint name because there is no capability bit for it: the
+ * distinction lives in the WEIGHTS, not in any metadata the gguf scan reads. The
+ * families that carry it spell it in the filename, which is why the local
+ * checkpoint is minimax_h3_FL2VA (first-last frame to video + audio) and Wan
+ * ships separate i2v/flf2v variants beside its t2v ones.
+ *
+ * Getting this wrong is cheap in one direction and not the other: a false
+ * negative hides a working control, while a false positive offers a picker whose
+ * images the backend silently drops, so the pattern stays narrow and explicit.
+ */
+export function supportsFrameRefs(id: string): boolean {
+  return /fl2v|flf2v|i2v/.test(id.toLowerCase());
+}
+
 /** Highest frame count the family's grid is offered up to. */
 export function maxFramesFor(id: string): number {
   return isH3(id) ? 345 : 241;

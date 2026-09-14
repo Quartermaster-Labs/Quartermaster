@@ -59,6 +59,21 @@ export interface VideoGenRequest {
   // --lora flag, only --lora-model-dir, so which adapters apply is decided per
   // request and never at process start.
   lora?: SdApiLoraRef[];
+  // First/last frame conditioning, RAW base64 (no data: prefix). The key names
+  // are the binary's own: sd-server carries "init_image" and "end_image" as JSON
+  // keys alongside the CLI's --init-img / --end-img, whose help calls --end-img
+  // "required by flf2v".
+  //
+  // These are what make total video length independent of VRAM. A clip's cost is
+  // fixed by its own size and frame count, so feeding the last frame of one
+  // render back as the next render's init_image chains clips end to end at a
+  // FLAT per-clip cost, however long the finished video gets. That is the only
+  // way past the ceiling the length warnings describe.
+  //
+  // A text-to-video checkpoint ignores both fields rather than erroring, which
+  // is why the UI offers them only for models that condition on them.
+  init_image?: string;
+  end_image?: string;
   sample_params?: {
     sample_steps?: number;
     sample_method?: string;
