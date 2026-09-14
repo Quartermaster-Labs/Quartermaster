@@ -37,6 +37,7 @@
     SCHEDULER_OPTIONS,
     VIDEO_SIZE_TIERS,
     VIDEO_DEFAULT_MAX_DIM,
+    clipLabel,
     frameOptionsFor,
     fpsOptionsFor,
     snapFrames,
@@ -278,10 +279,6 @@
     const [w, h] = aspectDims($aspectStore, Math.min(Number($longEdgeStore) || 640, modelMax));
     $selectedSizeStore = `${w}x${h}`;
   });
-  // Clip length in seconds, shown next to the frame picker: frames alone say
-  // nothing about how long the result plays, and the two knobs interact.
-  let clipSeconds = $derived((Number($framesStore) || 1) / Math.max(1, Number($fpsStore) || 1));
-
   // Both pickers are family-scoped: H3 aligns frames to 17k+5 and is hard-wired
   // to 24 fps, everything else is 4n+1 and free. The snap effect exists because
   // the stores are PERSISTED prefs, so a value picked under one family survives
@@ -688,18 +685,18 @@
           <div class="grid grid-cols-2 gap-3">
             <div class="flex flex-col gap-1">
               <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
-                Frames
-                <span class="cursor-help opacity-60" use:tip={"Frames rendered. The backend rounds this UP onto the model family grid (17k+5 for MiniMax-H3, 4n+1 for the rest), so only exact values are offered. Time and VRAM both scale with it."}>(?)</span>
+                Length
+                <span class="cursor-help opacity-60" use:tip={"How long the clip plays. Seconds are frames divided by fps, so the rungs are not round numbers: the backend's grid is defined in FRAMES (17k+5 for MiniMax-H3, 4n+1 for the rest) and it rounds anything off-grid UP, which is why only exact values are offered. Time and VRAM both scale with length."}>(?)</span>
               </span>
               <Select
                 bind:value={$framesStore}
                 disabled={isGenerating}
                 compact
-                options={frameOptions.map((f) => ({ value: String(f), label: String(f) }))}
+                options={frameOptions.map((f) => ({ value: String(f), label: clipLabel(f, Number($fpsStore) || 1) }))}
               />
             </div>
             <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">FPS · {clipSeconds.toFixed(1)}s</span>
+              <span class="text-xs uppercase tracking-wide text-txtsecondary">FPS</span>
               <Select
                 bind:value={$fpsStore}
                 disabled={isGenerating}

@@ -15,7 +15,9 @@ export { ASPECTS, aspectDims, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, fmtDur };
 // peaks. The rungs above the cap unlock only for a model that LAUNCHES at a
 // larger size, which is a per-install decision (see modelMax in
 // VideoInterface.svelte).
-export const VIDEO_SIZE_TIERS = [384, 512, 640, 720, 832, 960, 1280, 1360];
+export const VIDEO_SIZE_TIERS = [
+  384, 448, 512, 576, 640, 704, 768, 832, 896, 960, 1024, 1152, 1280, 1360,
+];
 export const VIDEO_DEFAULT_MAX_DIM = 960;
 
 // Frame counts are NOT free-form, and an off-grid number is not rejected: it is
@@ -28,8 +30,34 @@ export const VIDEO_DEFAULT_MAX_DIM = 960;
 // So a user who asks H3 for 25 gets 39, a third longer than the clip they sized
 // their prompt for. Only exact values are offered. sd.cpp: align_video_frames,
 // gated on SDVersion.
-export const FRAME_OPTIONS = [13, 17, 25, 33, 49, 65, 81];
-export const H3_FRAME_OPTIONS = [5, 22, 39, 56, 73, 90, 107];
+//
+// Both ladders run to the MODEL's ceiling, not the card's. H3 is documented for
+// clips up to 15 seconds, which at its fixed 24 fps is 345 frames, and the whole
+// 17k+5 grid up to there is offered. Whether a given rung FITS is a different
+// question that depends on resolution, and nothing here can answer it: a long
+// clip at a large canvas will run the backend out of VRAM. The picker's job is
+// to never offer a number the backend would silently change underneath you.
+export const FRAME_OPTIONS = [
+  13, 17, 21, 25, 29, 33, 41, 49, 57, 65, 73, 81, 97, 113, 129, 161, 193, 241,
+];
+export const H3_FRAME_OPTIONS = Array.from({ length: 21 }, (_, i) => 5 + i * 17);
+
+/** Highest frame count the family's grid is offered up to. */
+export function maxFramesFor(id: string): number {
+  return isH3(id) ? 345 : 241;
+}
+
+/**
+ * Clip length as a label. Seconds lead because that is the number a person is
+ * actually choosing; the frame count trails because it is what the backend
+ * takes and what the grid constrains. The two cannot be collapsed into one: the
+ * grid is defined in frames, so the seconds are whatever those frames divide
+ * into and are rarely round (H3's rungs land on 2.3s, 3.0s, 3.8s...).
+ */
+export function clipLabel(frames: number, fps: number): string {
+  const secs = frames / Math.max(1, fps);
+  return `${secs.toFixed(1)}s \u00b7 ${frames}f`;
+}
 
 /** True when the model id names a MiniMax-H3, the one family on the 17k+5 grid. */
 export function isH3(id: string): boolean {
@@ -43,7 +71,7 @@ export function frameOptionsFor(id: string): number[] {
 
 /** Snap a frame count onto the model family's grid, the way the backend will. */
 export function snapFrames(n: number, id = ""): number {
-  const clamped = Math.max(5, Math.min(241, Math.round(n)));
+  const clamped = Math.max(5, Math.min(maxFramesFor(id), Math.round(n)));
   if (isH3(id)) return Math.max(5, Math.ceil((clamped - 5) / 17) * 17 + 5);
   return Math.round((clamped - 1) / 4) * 4 + 1;
 }
