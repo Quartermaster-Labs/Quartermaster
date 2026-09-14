@@ -274,11 +274,6 @@
   let frameRefError = $state("");
   let frameRefs = $derived(supportsFrameRefs($selectedModelStore));
 
-  function stripB64(url: string): string {
-    const i = url.indexOf(",");
-    return i >= 0 ? url.slice(i + 1) : url;
-  }
-
   // An END frame alone is meaningless: sd.cpp's --end-img help calls it
   // "required by flf2v", i.e. it pairs WITH a start frame. So dropping the start
   // drops the end with it, rather than leaving a chip that would be sent and
@@ -481,10 +476,12 @@
         fps: Number($fpsStore),
         seed: $seedStore,
         lora: activeLoras.length ? activeLoras : undefined,
-        // Gated on frameRefs as well as presence: a stale pick left over from
-        // another model must not ride along to a checkpoint that would ignore it.
-        init_image: frameRefs && firstFrame ? stripB64(firstFrame) : undefined,
-        end_image: frameRefs && lastFrame ? stripB64(lastFrame) : undefined,
+        // Sent as the data: URL, unstripped: sd-server's own client posts
+        // `init_image: <dataUrl>` to this route. Gated on frameRefs as well as
+        // presence, so a stale pick left over from another model cannot ride
+        // along to a checkpoint that would ignore it.
+        init_image: (frameRefs && firstFrame) || undefined,
+        end_image: (frameRefs && lastFrame) || undefined,
         sample_params: {
           sample_steps: $stepsStore,
           sample_method: $samplerStore || undefined,

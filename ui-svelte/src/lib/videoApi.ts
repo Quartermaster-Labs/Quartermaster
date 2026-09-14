@@ -59,10 +59,14 @@ export interface VideoGenRequest {
   // --lora flag, only --lora-model-dir, so which adapters apply is decided per
   // request and never at process start.
   lora?: SdApiLoraRef[];
-  // First/last frame conditioning, RAW base64 (no data: prefix). The key names
-  // are the binary's own: sd-server carries "init_image" and "end_image" as JSON
-  // keys alongside the CLI's --init-img / --end-img, whose help calls --end-img
-  // "required by flf2v".
+  // First/last frame conditioning, as full data: URLs.
+  //
+  // Data URL rather than bare base64 because that is exactly what sd-server's
+  // OWN web UI sends to this route: its bundled client builds the vid_gen body
+  // with `init_image: e.init_image.dataUrl`. The /sdapi/* routes are A1111
+  // compatible and take bare base64, which is why the Images tab strips the
+  // prefix, but /v1/vid_gen is sd-server's native route and the shape its first
+  // party client uses is the one shape guaranteed to be accepted.
   //
   // These are what make total video length independent of VRAM. A clip's cost is
   // fixed by its own size and frame count, so feeding the last frame of one
