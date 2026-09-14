@@ -178,7 +178,7 @@ func resolveLoraDir(s Settings, ovDir, modelPath string) string {
 // imageComponents are the resolved VAE / text-encoder file paths for one
 // diffusion model. Empty = not attached (the family doesn't need it, or it's
 // missing from the pool — see resolveComponents' missing list).
-type imageComponents struct{ vae, clipL, clipG, t5, llm, llmVision string }
+type imageComponents struct{ vae, clipL, clipG, t5, llm, llmVision, audioVae string }
 
 // resolveComponents decides which component files a bare diffusion GGUF needs
 // from its architecture, draws them from the shared Settings.Encoders pool, then
@@ -194,7 +194,7 @@ type imageComponents struct{ vae, clipL, clipG, t5, llm, llmVision string }
 // ponytail: sd3 / qwen_image arms omitted — no such model on disk yet. Add an arm
 // (and any new EncoderSet field) when one lands; the "# arch=..." YAML comment on
 // the fallthrough names the arch to wire.
-func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *EncoderPool, condHidden int64) (c imageComponents, missing []string) {
+func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *EncoderPool, condHidden int64, vid videoInfo) (c imageComponents, missing []string) {
 	a := strings.ToLower(strings.TrimSpace(arch))
 	n := strings.ToLower(name)
 	// Fill every blank pool field from what is actually on disk before the arch
@@ -234,6 +234,12 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *En
 		return path
 	}
 	switch {
+	// Video DiTs come first and are matched STRUCTURALLY (vid is read off the
+	// tensor table, not the arch string): MiniMax-H3 carries no metadata at all,
+	// and the arch that does say "wan" belongs to ERNIE-Image-Turbo, an image
+	// model that must keep taking the flux.2 arm below.
+	case vid.is():
+		c.vae, c.audioVae, c.t5, c.llm = videoComponents(vid, enc, pool, llmDefault, &missing)
 	case strings.Contains(n, "chroma"): // flux-derived, CLIP stripped → T5 only
 		c.vae = req("vae", enc.FluxVae)
 		c.t5 = req("t5xxl", enc.T5)
@@ -316,6 +322,7 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *En
 		set("clip_g", ov.ClipGPath, &c.clipG)
 		set("t5xxl", ov.T5Path, &c.t5)
 		set("llm", ov.TextEncoderPath, &c.llm)
+		set("audio_vae", ov.AudioVaePath, &c.audioVae)
 		// An explicit projector path always wins; when the encoder itself was
 		// overridden the auto-paired projector belonged to a DIFFERENT file, so
 		// drop it unless the override supplies its own.
@@ -340,7 +347,7 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *En
 // by emitImageModel (YAML emit) and RenderSoloCmd (editor launch-parameters
 // preview), so the box matches a save. Also returns the resolved VRAM budget and
 // offload decision for the YAML comment, and any required-but-missing encoder roles.
-func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, condHidden int64) (lines []string, budget float64, offload bool, missing []string) {
+func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, condHidden int64, vid videoInfo) (lines []string, budget float64, offload bool, missing []string) {
 	modelPath := strings.ReplaceAll(row.FullPath, "\\", "/")
 
 	// Budget mirrors the LLM sizer: target minus headroom. A per-model
@@ -362,7 +369,14 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	// Offload when resident weights + compute peak can't fit the budget. The
 	// VAE/encoder are external (not in row.SizeGB); te=cpu covers the encoder,
 	// --offload-to-cpu pages the diffusion weights. A per-model override pins it.
-	offload = row.SizeGB+imageComputeOverheadGB > budget
+	// A video generation holds several frames of latent plus a 3D VAE decode
+	// buffer, so its non-weight peak is several times an image's. Charging it
+	// the image number would leave a model resident that cannot actually decode.
+	overhead := imageComputeOverheadGB
+	if vid.is() {
+		overhead = videoComputeOverheadGB
+	}
+	offload = row.SizeGB+overhead > budget
 	if ov != nil {
 		switch ov.OffloadToCpu {
 		case "on":
@@ -396,7 +410,7 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	// Split archs draw component files from the shared pool (per-model override wins).
 	var comp imageComponents
 	if !fullCkpt {
-		comp, missing = resolveComponents(s.Encoders, ov, arch, name, encoderPoolFor(s.RootList()), condHidden)
+		comp, missing = resolveComponents(s.Encoders, ov, arch, name, encoderPoolFor(s.RootList()), condHidden, vid)
 	}
 	if p := imageArg(comp.vae); p != "" {
 		lines = append(lines, "--vae "+p)
@@ -412,6 +426,11 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	}
 	if p := imageArg(comp.llm); p != "" {
 		lines = append(lines, "--llm "+p)
+	}
+	// The soundtrack decoder of an audio-capable video model. Without it the DiT
+	// still denoises an audio latent it then has no way to turn into samples.
+	if p := imageArg(comp.audioVae); p != "" {
+		lines = append(lines, "--audio-vae "+p)
 	}
 	// The vision tower of the text encoder, needed by edit pipelines that
 	// condition on a reference image. Auto-paired to the chosen --llm (its
@@ -437,6 +456,31 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	// on a tight (8GB) card, so keep it on by default. Quality is steps/cfg, not this.
 	if ov == nil || ov.VaeTiling != "off" {
 		lines = append(lines, "--vae-tiling")
+	}
+	// Video-only VRAM levers. --vae-tiling above chunks the decode spatially; a
+	// clip's decode also grows along TIME with --video-frames and only
+	// --temporal-tiling chunks that axis. --stream-layers streams the diffusion
+	// weights against --max-vram rather than pinning them resident, which hands
+	// that headroom to the sampler and is what buys frame count.
+	//
+	// Both are gated on vid.is(): --temporal-tiling applies to a video VAE decode
+	// and nothing else, and an image model has no long-clip peak for
+	// --stream-layers to relieve, so on the image path both would be noise in the
+	// launch line at best.
+	//
+	// --temporal-tiling is gated a second time, on the FAMILY, because only some
+	// video VAEs implement a tiled decode and the rest accept the flag and ignore
+	// it (see vaeTemporalTiling). An explicit "on" still forces it through, so a
+	// build that adds support for a family needs an override row rather than a
+	// recompile.
+	switch {
+	case ov != nil && ov.TemporalTiling == "on":
+		lines = append(lines, "--temporal-tiling")
+	case vid.is() && vaeTemporalTiling(vid) && (ov == nil || ov.TemporalTiling != "off"):
+		lines = append(lines, "--temporal-tiling")
+	}
+	if vid.is() && (ov == nil || ov.StreamLayers != "off") {
+		lines = append(lines, "--stream-layers")
 	}
 	lines = append(lines, fmt.Sprintf("-t %d", threads))
 	// Park components on CPU via the sd-server --backend spec. te=cpu is the default
@@ -473,23 +517,58 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 		// free and removes the crash. te=cpu only moves the text encoders.
 		lines = append(lines, "--vae-on-cpu")
 	}
-	// Generation defaults applied when a request omits them.
+	// Generation defaults applied when a request omits them. An image model
+	// starts from nothing (sd-server's own defaults stand); a video model starts
+	// from its family profile, because two of those numbers are not preferences:
+	// --video-frames defaults to 1 (a single still), and H3 conditions at
+	// cfg-scale 1.0 while sd-server's built-in default is 7.0. Per-model
+	// overrides still win over both.
+	def := videoDefaultsFor(vid)
 	if ov != nil {
 		if ov.DefaultSteps > 0 {
-			lines = append(lines, fmt.Sprintf("--steps %d", ov.DefaultSteps))
+			def.steps = ov.DefaultSteps
 		}
 		if ov.DefaultCfg > 0 {
-			lines = append(lines, fmt.Sprintf("--cfg-scale %g", ov.DefaultCfg))
+			def.cfg = ov.DefaultCfg
 		}
 		if ov.DefaultSampler != "" {
-			lines = append(lines, "--sampling-method "+ov.DefaultSampler)
+			def.sampler = ov.DefaultSampler
 		}
 		if ov.DefaultWidth > 0 {
-			lines = append(lines, fmt.Sprintf("--width %d", ov.DefaultWidth))
+			def.width = ov.DefaultWidth
 		}
 		if ov.DefaultHeight > 0 {
-			lines = append(lines, fmt.Sprintf("--height %d", ov.DefaultHeight))
+			def.height = ov.DefaultHeight
 		}
+		if ov.DefaultFrames > 0 {
+			def.frames = ov.DefaultFrames
+		}
+		if ov.DefaultFps > 0 {
+			def.fps = ov.DefaultFps
+		}
+	}
+	if def.steps > 0 {
+		lines = append(lines, fmt.Sprintf("--steps %d", def.steps))
+	}
+	if def.cfg > 0 {
+		lines = append(lines, fmt.Sprintf("--cfg-scale %g", def.cfg))
+	}
+	if def.sampler != "" {
+		lines = append(lines, "--sampling-method "+def.sampler)
+	}
+	if def.width > 0 {
+		lines = append(lines, fmt.Sprintf("--width %d", def.width))
+	}
+	if def.height > 0 {
+		lines = append(lines, fmt.Sprintf("--height %d", def.height))
+	}
+	if def.frames > 0 {
+		lines = append(lines, fmt.Sprintf("--video-frames %d", def.frames))
+	}
+	if def.fps > 0 {
+		lines = append(lines, fmt.Sprintf("--fps %d", def.fps))
+	}
+	if ov != nil {
 		if extra := strings.TrimSpace(ov.ExtraArgs); extra != "" {
 			lines = append(lines, extra)
 		}
@@ -526,6 +605,12 @@ func mergeImageVariant(base Override, v VariantSpec) Override {
 	if v.VaeTiling != "" {
 		o.VaeTiling = v.VaeTiling
 	}
+	if v.TemporalTiling != "" {
+		o.TemporalTiling = v.TemporalTiling
+	}
+	if v.StreamLayers != "" {
+		o.StreamLayers = v.StreamLayers
+	}
 	if v.DiffusionFa != "" {
 		o.DiffusionFa = v.DiffusionFa
 	}
@@ -549,6 +634,12 @@ func mergeImageVariant(base Override, v VariantSpec) Override {
 	}
 	if v.DefaultHeight > 0 {
 		o.DefaultHeight = v.DefaultHeight
+	}
+	if v.DefaultFrames > 0 {
+		o.DefaultFrames = v.DefaultFrames
+	}
+	if v.DefaultFps > 0 {
+		o.DefaultFps = v.DefaultFps
 	}
 	if v.ExtraArgs != "" {
 		o.ExtraArgs = v.ExtraArgs
@@ -624,6 +715,14 @@ func extraImageCmdLines(s Settings, m ExtraImageModel) []string {
 	if m.VaeTiling != "off" {
 		lines = append(lines, "--vae-tiling")
 	}
+	// Opt-in, unlike the discovered path above: an extra model is hand-declared
+	// and never scanned, so there is nothing here that knows it is a video model.
+	if m.TemporalTiling == "on" {
+		lines = append(lines, "--temporal-tiling")
+	}
+	if m.StreamLayers == "on" {
+		lines = append(lines, "--stream-layers")
+	}
 	lines = append(lines, fmt.Sprintf("-t %d", threads))
 	var beParts []string
 	if m.TeOnCpu != "off" {
@@ -692,6 +791,8 @@ func ExtraImageAsOverride(m ExtraImageModel) Override {
 		TeOnCpu:         m.TeOnCpu,
 		VaeOnCpu:        m.VaeOnCpu,
 		VaeTiling:       m.VaeTiling,
+		TemporalTiling:  m.TemporalTiling,
+		StreamLayers:    m.StreamLayers,
 		DiffusionFa:     m.DiffusionFa,
 		OffloadToCpu:    m.OffloadToCpu,
 		DefaultSteps:    m.DefaultSteps,
@@ -730,6 +831,8 @@ func ApplyOverrideToExtraImage(m ExtraImageModel, ov *Override) ExtraImageModel 
 	m.TeOnCpu = ov.TeOnCpu
 	m.VaeOnCpu = ov.VaeOnCpu
 	m.VaeTiling = ov.VaeTiling
+	m.TemporalTiling = ov.TemporalTiling
+	m.StreamLayers = ov.StreamLayers
 	m.DiffusionFa = ov.DiffusionFa
 	m.OffloadToCpu = ov.OffloadToCpu
 	m.DefaultSteps = ov.DefaultSteps
@@ -790,7 +893,7 @@ func emitExtraImageModels(b *strings.Builder, s Settings, overrides []Override, 
 }
 
 func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, name, arch string, bakedEnc bool, condHidden int64, emitted *[]string) {
-	lines, budget, offload, missing := imageCmdLines(s, row, ov, arch, name, condHidden)
+	lines, budget, offload, missing := imageCmdLines(s, row, ov, arch, name, condHidden, videoInfo{})
 
 	fmt.Fprintf(b, "\n  # arch=%s size=%gGB (image model, sd-server, max-vram=%gGB, offload=%t)\n", arch, row.SizeGB, budget, offload)
 	// SD/SDXL served as -m full checkpoints: if this gguf has no baked encoders it

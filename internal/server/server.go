@@ -120,6 +120,11 @@ type Server struct {
 	// SetRunningApp before serving; read-only afterwards.
 	runningApp RunningApp
 
+	// videoJobs tracks in-flight async video renders (sd-server's job API).
+	// It is what makes GET /sdcpp/v1/jobs/{id} routable at all (a job path names
+	// no model) and it owns each job's scheduler lease. See videojobs.go.
+	videoJobs *videoJobs
+
 	// variantMu serializes minting of synthetic per-request model variants
 	// (X-QM-Backend, ?ctx=N). Each mint is a read-modify-ApplyConfig cycle over
 	// the whole config, so without it two concurrent first-requests would each
@@ -251,6 +256,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		build:       build,
 		local:       local,
 		peer:        peer,
+		videoJobs:   newVideoJobs(),
 		shutdownCtx: shutdownCtx,
 		shutdownFn:  shutdownFn,
 	}
@@ -837,6 +843,17 @@ func (s *Server) routes() {
 		mux.Handle("DELETE "+path, modelChain.Then(dispatch))
 	}
 
+	// Async video generation, sd-server's native job API. The POST names its
+	// model in the JSON body like any other model route, so it rides the full
+	// model chain; handleVidGen wraps the dispatch to take a scheduler lease for
+	// the life of the render. The job endpoints that follow carry ONLY a job id,
+	// so they are unroutable by model extraction and are answered from the
+	// server-side registry instead. They sit on discoveryChain: authenticated
+	// like the inference API, but with no model to scope against. See videojobs.go.
+	mux.Handle("POST /sdcpp/v1/vid_gen", modelChain.ThenFunc(s.handleVidGen))
+	mux.Handle("GET /sdcpp/v1/jobs/{id}", discoveryChain.ThenFunc(s.handleVideoJob))
+	mux.Handle("POST /sdcpp/v1/jobs/{id}/cancel", discoveryChain.ThenFunc(s.handleVideoJobCancel))
+
 	// quartermaster API + custom endpoints.
 	mux.Handle("GET /v1/models", discoveryChain.ThenFunc(s.handleListModels))
 	// Standalone ESRGAN/RealESRGAN upscale (exec-per-request, not model-dispatched).
@@ -925,6 +942,8 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/prefs", apiChain.ThenFunc(s.handlePlaygroundPrefs))
 	mux.Handle("GET /api/imagechats", apiChain.ThenFunc(s.handlePlaygroundImageChats))
 	mux.Handle("PUT /api/imagechats", apiChain.ThenFunc(s.handlePlaygroundImageChats))
+	mux.Handle("GET /api/videochats", apiChain.ThenFunc(s.handlePlaygroundVideoChats))
+	mux.Handle("PUT /api/videochats", apiChain.ThenFunc(s.handlePlaygroundVideoChats))
 	mux.Handle("GET /api/speechchats", apiChain.ThenFunc(s.handlePlaygroundSpeechChats))
 	mux.Handle("PUT /api/speechchats", apiChain.ThenFunc(s.handlePlaygroundSpeechChats))
 	mux.Handle("GET /api/media/{file...}", apiChain.ThenFunc(s.handlePlaygroundMedia))

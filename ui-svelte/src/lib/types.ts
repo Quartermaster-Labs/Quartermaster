@@ -10,6 +10,13 @@ export interface ModelCapabilities {
   image_to_image?: boolean;
   // Image in, 3D mesh out (TRELLIS.2 on the /v1/3d/generations route).
   image_to_3d?: boolean;
+  // Text in, video out (sd-server's ASYNC job API, not /sdapi txt2img). Its own
+  // flag rather than a variant of image_generation because the ROUTE differs: a
+  // client that treated it as an image model would block for minutes on a POST
+  // that only ever returns a job id.
+  video_generation?: boolean;
+  // The video also carries a soundtrack (the DiT denoises an audio latent too).
+  video_audio?: boolean;
   function_calling?: boolean;
   reranker?: boolean;
   embeddings?: boolean;

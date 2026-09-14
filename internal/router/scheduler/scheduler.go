@@ -58,6 +58,13 @@ type Scheduler interface {
 	OnSwapDone(ev SwapDone)
 	// OnServeDone handles a tracked ServeHTTP finishing (in-flight decrement).
 	OnServeDone(ev ServeDoneEvent)
+	// OnLease acquires or releases a job lease: an in-flight count held by work
+	// that outlives the HTTP request which started it (sd-server's async video
+	// jobs). While a lease is held the model counts as busy for eviction, for
+	// co-resident spawns, and for the idle-grace hold, exactly as a served
+	// request does. Every acquire MUST be matched by a release or the model is
+	// pinned for the life of the process.
+	OnLease(ev LeaseEvent)
 	// OnWake handles a timer the scheduler asked for via Effects.Wake. It
 	// exists so a decision that is deferred until a WALL-CLOCK moment (a hold
 	// expiring, a waiter running out of patience) is re-examined even when no
@@ -170,4 +177,11 @@ type SwapDone struct {
 // ServeDoneEvent is reported when a tracked ServeHTTP handler returns.
 type ServeDoneEvent struct {
 	ModelID string
+}
+
+// LeaseEvent acquires (Acquire true) or releases a job lease on a model. See
+// Scheduler.OnLease.
+type LeaseEvent struct {
+	ModelID string
+	Acquire bool
 }

@@ -171,6 +171,29 @@ func (m hfModelJSON) toModel() Model {
 // ui-svelte/src/lib/modelUtils.ts) so browsing and the local catalog agree on
 // what "Image" or "TTS" means; each pairs `gguf` with the hub's pipeline tag,
 // since a repo we cannot load is not worth listing under any category.
+// searchFilterSets is what Search actually asks the hub: a UNION of filter
+// sets, each set ANDed by the API as usual. It exists for `video`, the one
+// category no single HF query describes.
+//
+// The exact pipeline tags are split across the catalog — Wan's T2V repos carry
+// `text-to-video`, its I2V repos `image-to-video`, and a repo carries the one
+// it is — so either alone hides half the models. The broad `video` tag is not
+// the answer either: it is a capability tag that every video-UNDERSTANDING VLM
+// carries (GLM Flash, MiniCPM-V) while plenty of generation repos do NOT carry
+// it at all (lightx2v/Minimax-h3-Turbo is tagged image-to-video and nothing
+// else). Two queries, merged and deduped, is the only shape that both finds
+// everything and keeps the VLMs out.
+//
+// `gguf` is deliberately absent here, unlike every other category: video is
+// where the useful repos are LoRAs, fp8 weights and component sets in
+// safetensors, and requiring a GGUF hid all of them. Same reasoning as `3d`.
+func searchFilterSets(kind string) [][]string {
+	if strings.ToLower(strings.TrimSpace(kind)) == "video" {
+		return [][]string{{"text-to-video"}, {"image-to-video"}}
+	}
+	return [][]string{searchFilters(kind)}
+}
+
 func searchFilters(kind string) []string {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "", "llm", "text", "gguf":
@@ -233,11 +256,49 @@ func (h *HF) Search(ctx context.Context, q Query) (Page, error) {
 		fetch = min(limit*3, 100)
 	}
 
+	sets := searchFilterSets(q.Kind)
+	seen := make(map[string]bool)
+	merged := []Model{}
+	// The hub offset advances by the LONGEST sub-query, not by the merged
+	// length: every set is asked at the same skip, so that is where the next
+	// page of each begins. Advancing by the deduped total would skip rows in
+	// whichever set returned fewer.
+	longest := 0
+	var firstErr error
+	for _, filters := range sets {
+		got, err := h.searchOnce(ctx, q, filters, sortBy, fetch)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		longest = max(longest, len(got))
+		for _, m := range got {
+			if !seen[m.ID] {
+				seen[m.ID] = true
+				merged = append(merged, m)
+			}
+		}
+	}
+	// One set failing out of several is a thinner page, not a failed search.
+	// Nothing at all is the error the caller has to see.
+	if firstErr != nil && len(merged) == 0 {
+		return Page{}, firstErr
+	}
+	if len(sets) > 1 {
+		sortModels(merged, sortBy)
+	}
+	return hfPage(merged, q, fetch, longest), nil
+}
+
+// searchOnce is one hub query: one filter set, its own cache entry.
+func (h *HF) searchOnce(ctx context.Context, q Query, filters []string, sortBy string, fetch int) ([]Model, error) {
 	v := url.Values{}
 	if s := strings.TrimSpace(q.Text); s != "" {
 		v.Set("search", s)
 	}
-	for _, f := range searchFilters(q.Kind) {
+	for _, f := range filters {
 		v.Add("filter", f)
 	}
 	for _, f := range hfExpand {
@@ -252,11 +313,11 @@ func (h *HF) Search(ctx context.Context, q Query) (Page, error) {
 
 	key := "search:" + v.Encode()
 	if hit, ok := cacheGet[[]Model](h, key); ok {
-		return hfPage(hit, q, fetch), nil
+		return hit, nil
 	}
 	var raw []hfModelJSON
 	if err := h.getJSON(ctx, hfAPI+"/api/models?"+v.Encode(), &raw); err != nil {
-		return Page{}, err
+		return nil, err
 	}
 	out := make([]Model, 0, len(raw))
 	for _, m := range raw {
@@ -265,7 +326,22 @@ func (h *HF) Search(ctx context.Context, q Query) (Page, error) {
 	// Cache what the hub said, filter after: the caps are a per-request view of
 	// the same page, so a capped search must not poison an uncapped one.
 	cachePut(h, key, out)
-	return hfPage(out, q, fetch), nil
+	return out, nil
+}
+
+// sortModels re-imposes the requested order on a MERGED result. Each sub-query
+// came back sorted, but concatenating two sorted lists does not.
+func sortModels(in []Model, sortBy string) {
+	sort.SliceStable(in, func(i, j int) bool {
+		switch sortBy {
+		case "likes":
+			return in[i].Likes > in[j].Likes
+		case "lastModified":
+			return in[i].Updated.After(in[j].Updated)
+		default:
+			return in[i].Downloads > in[j].Downloads
+		}
+	})
 }
 
 // hfPage applies the response-side filters and reports where the NEXT page
@@ -275,14 +351,14 @@ func (h *HF) Search(ctx context.Context, q Query) (Page, error) {
 // Nothing is trimmed to Limit: Limit sizes the fetch, and trimming the survivors
 // would throw away rows the caller has already paid a round trip for and would
 // then have to re-request under a different offset.
-func hfPage(raw []Model, q Query, fetch int) Page {
+func hfPage(raw []Model, q Query, fetch, advance int) Page {
 	out := capParams(raw, q.MaxParamsB, 0)
 	out = capAge(out, q.MaxAgeDays)
 	return Page{
 		Models:   out,
-		NextSkip: q.Skip + len(raw),
+		NextSkip: q.Skip + advance,
 		// A short page means the hub has nothing more under this query.
-		HasMore: len(raw) >= fetch && fetch > 0,
+		HasMore: advance >= fetch && fetch > 0,
 	}
 }
 
@@ -397,7 +473,7 @@ func (h *HF) Detail(ctx context.Context, repoID string) (ModelDetail, error) {
 	}
 	// The listing policy needs the whole repo: a component set is decided by the
 	// ABSENCE of any quant file, and every file in one shares a group key.
-	det.Files = SelectFiles(det.ID, all)
+	det.Files = MarkSelection(det.ID, all)
 	sort.Slice(det.Files, func(i, j int) bool { return det.Files[i].Path < det.Files[j].Path })
 	det.Readme = h.readme(ctx, repoID)
 	cachePut(h, key, det)

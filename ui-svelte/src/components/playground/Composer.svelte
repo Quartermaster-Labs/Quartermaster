@@ -71,17 +71,36 @@
     return { destroy: () => document.removeEventListener("click", onClick, true) };
   }
   let settingsToggleEl = $state<HTMLButtonElement>();
+
+  // Live height of the composer's bottom control row, measured rather than
+  // guessed: the row is one line in the image/video tabs and two in chat (the
+  // model selector stacks a context bar under itself), so any hardcoded offset
+  // would be wrong in one of them. bind:clientHeight installs a ResizeObserver,
+  // so this follows the row instead of being sampled once on mount.
+  let controlsH = $state(0);
 </script>
 
 {#if showSettings}
-  <!-- max-h/overflow: the image panel is tall enough to run past the top of a
+  <!-- Anchored to the composer's BOTTOM edge, floating OVER the textarea, not
+       stacked above the whole composer.
+       `bottom-full` anchored it to the composer's TOP, which is not a fixed
+       point: the textarea grows with the message up to max-h-[30rem], dragging
+       that edge upward until the panel opened entirely off the top of the
+       window and became unreachable. Capping the height could never fix that,
+       because the panel's bottom edge was already past the viewport. The
+       composer's bottom edge, by contrast, is pinned to the bottom of the pane
+       (the input area is `shrink-0`), so the panel now opens in the same place
+       whatever the composer is doing.
+       The offset clears the control row so the gear that opened it, and the
+       send button beside it, stay clickable underneath.
+       max-h/overflow: the image panel is tall enough to run past the top of a
        short window. It has to scroll itself, because the shell clips rather than
        letting the document grow a pair of scrollbars. 100vh needs the `zoom`
-       division (see index.css); 9rem leaves room for the composer below it. -->
+       division (see index.css). -->
   <div
     use:closeOnOutside
-    class="absolute bottom-full right-0 mb-2 w-80 z-20 flex flex-col gap-3 p-4 rounded-lg border border-card-border bg-surface shadow-lg text-[0.8125rem] overflow-y-auto overscroll-contain pretty-scroll"
-    style="max-height: calc(100vh / var(--qm-scale) - 9rem)"
+    class="absolute right-0 w-80 z-30 flex flex-col gap-3 p-4 rounded-lg border border-card-border bg-surface shadow-lg text-[0.8125rem] overflow-y-auto overscroll-contain pretty-scroll"
+    style="bottom: calc({controlsH}px + 1.25rem); max-height: calc(100vh / var(--qm-scale) - {controlsH}px - 4rem)"
   >
     <div class="flex items-center justify-between">
       <span class="font-medium text-txtmain">{settingsTitle}</span>
@@ -112,7 +131,7 @@
     onpaste={onPaste}
   ></textarea>
 
-  <div class="flex items-center justify-between">
+  <div class="flex items-center justify-between" bind:clientHeight={controlsH}>
     <div class="flex-1 min-w-0 flex items-center gap-1">
       {@render leftButtons?.()}
     </div>

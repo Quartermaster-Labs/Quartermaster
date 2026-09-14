@@ -62,18 +62,26 @@
     type ImageSession,
   } from "../stores/imageHistory";
   import {
+    videoSessions,
+    activeVideoChatId,
+    generatingVideoChatId,
+    newVideoChatId,
+    type VideoSession,
+  } from "../stores/videoHistory";
+  import {
     speechSessions,
     activeSpeechChatId,
     generatingSpeechChatId,
     newSpeechChatId,
     type SpeechSession,
   } from "../stores/speechHistory";
-  import { MessageSquare, Image, Volume2, Mic, LogOut, Plus, Trash2, Settings, HelpCircle, BookOpen, SlidersHorizontal, Search, FileText, Pencil, BrainCircuit, RefreshCw, Square } from "lucide-svelte";
+  import { MessageSquare, Image, Film, Volume2, Mic, LogOut, Plus, Trash2, Settings, HelpCircle, BookOpen, SlidersHorizontal, Search, FileText, Pencil, BrainCircuit, RefreshCw, Square } from "lucide-svelte";
   import WikiModal from "../components/WikiModal.svelte";
   import ChatInterface from "../components/playground/ChatInterface.svelte";
   import Select from "../components/Select.svelte";
   import Toggle from "../components/Toggle.svelte";
   import ImageInterface from "../components/playground/ImageInterface.svelte";
+  import VideoInterface from "../components/playground/VideoInterface.svelte";
   import AudioInterface from "../components/playground/AudioInterface.svelte";
   import SpeechInterface from "../components/playground/SpeechInterface.svelte";
 
@@ -85,20 +93,24 @@
   const tabs: { id: Tab; label: string; hint: string; icon: typeof MessageSquare }[] = [
     { id: "chat", label: "Chats", hint: "Text chat with tools, reasoning and web search", icon: MessageSquare },
     { id: "images", label: "Images", hint: "Generate, edit, mask and upscale images", icon: Image },
+    { id: "video", label: "Video", hint: "Generate short video clips from a prompt", icon: Film },
     { id: "speech", label: "Speech", hint: "Text to speech: pick a voice and read text aloud", icon: Volume2 },
     { id: "audio", label: "Transcription", hint: "Transcribe recorded or uploaded audio to text", icon: Mic },
   ];
 
   let onChats = $derived($selectedTabStore === "chat");
   let onImages = $derived($selectedTabStore === "images");
+  let onVideo = $derived($selectedTabStore === "video");
   let onSpeech = $derived($selectedTabStore === "speech");
   let historyOpen = $state(false);
   let sortedSessions = $derived([...$chatSessions].sort((a, b) => b.updatedAt - a.updatedAt));
   let sortedImageSessions = $derived([...$imageSessions].sort((a, b) => b.updatedAt - a.updatedAt));
+  let sortedVideoSessions = $derived([...$videoSessions].sort((a, b) => b.updatedAt - a.updatedAt));
   let sortedSpeechSessions = $derived([...$speechSessions].sort((a, b) => b.updatedAt - a.updatedAt));
 
-  // Chat + Images have a history flyout; Speech manages its own threads inline.
-  const hasHistory = (id: Tab) => id === "chat" || id === "images";
+  // Chat, Images and Video have a history flyout; Speech manages its own
+  // threads inline.
+  const hasHistory = (id: Tab) => id === "chat" || id === "images" || id === "video";
 
   function clickTab(id: Tab) {
     if (hasHistory(id)) {
@@ -135,6 +147,18 @@
     activeImageChatId.set(s.id);
   }
 
+  // Video threads: same pure-store ops as chats/images.
+  function newVideoChat() {
+    const cur = get(videoSessions).find((s) => s.id === get(activeVideoChatId));
+    if (cur && cur.turns.length === 0) {
+      activeVideoChatId.set(cur.id);
+      return;
+    }
+    const s: VideoSession = { id: newVideoChatId(), title: "New video", turns: [], updatedAt: Date.now() };
+    videoSessions.update((ss) => [s, ...ss]);
+    activeVideoChatId.set(s.id);
+  }
+
   // Speech threads: same pure-store ops as chats/images.
   function newSpeechChat() {
     const cur = get(speechSessions).find((s) => s.id === get(activeSpeechChatId));
@@ -160,6 +184,7 @@
 
   let confirmDeleteId = $state<string | null>(null);
   let confirmDeleteImageId = $state<string | null>(null);
+  let confirmDeleteVideoId = $state<string | null>(null);
   let confirmDeleteSpeechId = $state<string | null>(null);
   let showSettings = $state(false);
   // Which settings category the modal's side-nav has selected.
@@ -565,6 +590,23 @@
     }
   }
 
+  function deleteVideoChat(id: string) {
+    confirmDeleteVideoId = null;
+    const remaining = get(videoSessions).filter((s) => s.id !== id);
+    if (id !== get(activeVideoChatId)) {
+      videoSessions.set(remaining);
+      return;
+    }
+    if (remaining.length > 0) {
+      videoSessions.set(remaining);
+      activeVideoChatId.set(remaining[0].id);
+    } else {
+      const s: VideoSession = { id: newVideoChatId(), title: "New video", turns: [], updatedAt: Date.now() };
+      videoSessions.set([s]);
+      activeVideoChatId.set(s.id);
+    }
+  }
+
   function deleteSpeechChat(id: string) {
     confirmDeleteSpeechId = null;
     const remaining = get(speechSessions).filter((s) => s.id !== id);
@@ -618,6 +660,9 @@
             {/if}
             {#if tab.id === "images" && $generatingImageChatId}
               <span class="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary reason-glow" use:tooltip={"An image is generating"}></span>
+            {/if}
+            {#if tab.id === "video" && $generatingVideoChatId}
+              <span class="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary reason-glow" use:tooltip={"A video is generating"}></span>
             {/if}
             {#if tab.id === "speech" && $generatingSpeechChatId}
               <span class="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary reason-glow" use:tooltip={"Speech is generating"}></span>
@@ -684,6 +729,7 @@
   <main class="relative flex-1 min-w-0 rounded-tl-lg border-t border-l border-border bg-background px-4 pb-4">
     <div class="h-full" class:tab-hidden={$selectedTabStore !== "chat"}><ChatInterface /></div>
     <div class="h-full" class:tab-hidden={$selectedTabStore !== "images"}><ImageInterface /></div>
+    <div class="h-full" class:tab-hidden={$selectedTabStore !== "video"}><VideoInterface /></div>
     <div class="h-full" class:tab-hidden={$selectedTabStore !== "speech"}><SpeechInterface /></div>
     <div class="h-full" class:tab-hidden={$selectedTabStore !== "audio"}><AudioInterface /></div>
   </main>
@@ -716,6 +762,41 @@
         <button
           class="px-3 py-1.5 rounded-md text-sm bg-red-500 text-white hover:opacity-90 transition-opacity"
           onclick={() => confirmDeleteId && deleteChat(confirmDeleteId)}
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Delete video thread confirmation -->
+{#if confirmDeleteVideoId}
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+    onclick={() => (confirmDeleteVideoId = null)}
+    onkeydown={(e) => e.key === "Escape" && (confirmDeleteVideoId = null)}
+    role="button"
+    tabindex="-1"
+  >
+    <div
+      class="w-72 flex flex-col gap-3 p-4 rounded-lg border border-card-border bg-surface shadow-lg"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+      role="dialog"
+      tabindex="-1"
+    >
+      <p class="text-sm text-txtmain">Delete this video thread? This can't be undone.</p>
+      <div class="flex justify-end gap-2">
+        <button
+          class="px-3 py-1.5 rounded-md text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
+          onclick={() => (confirmDeleteVideoId = null)}
+        >
+          Cancel
+        </button>
+        <button
+          class="px-3 py-1.5 rounded-md text-sm bg-red-500 text-white hover:opacity-90 transition-opacity"
+          onclick={() => confirmDeleteVideoId && deleteVideoChat(confirmDeleteVideoId)}
         >
           Delete
         </button>
@@ -1443,7 +1524,7 @@
   </div>
 {/snippet}
 
-{#if historyOpen && (onChats || onImages || onSpeech)}
+{#if historyOpen && (onChats || onImages || onVideo || onSpeech)}
   <div class="fixed inset-0 z-30" onclick={() => (historyOpen = false)} role="presentation">
     <div
       class="absolute left-[12rem] top-4 w-72 max-h-[calc(80vh/var(--qm-scale))] flex flex-col p-2 rounded-lg border border-card-border bg-surface shadow-xl"
@@ -1454,6 +1535,8 @@
         {@render historyPanel(sortedSessions, $activeChatId, $generatingChatId, () => { newChat(); historyOpen = false; }, (id) => { activeChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteId = id), "New chat", "Chat history", "New chat")}
       {:else if onImages}
         {@render historyPanel(sortedImageSessions, $activeImageChatId, $generatingImageChatId, () => { newImageChat(); historyOpen = false; }, (id) => { activeImageChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteImageId = id), "New image", "Image history", "New image", imageThumbs)}
+      {:else if onVideo}
+        {@render historyPanel(sortedVideoSessions, $activeVideoChatId, $generatingVideoChatId, () => { newVideoChat(); historyOpen = false; }, (id) => { activeVideoChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteVideoId = id), "New video", "Video history", "New video")}
       {:else}
         {@render historyPanel(sortedSpeechSessions, $activeSpeechChatId, $generatingSpeechChatId, () => { newSpeechChat(); historyOpen = false; }, (id) => { activeSpeechChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteSpeechId = id), "New speech", "Speech history", "")}
       {/if}

@@ -38,6 +38,11 @@ export interface HubFile {
   // server-side (`Manager.LocalFiles`). A `.part` does not count — half a file
   // is not a model, and that row stays a download.
   local?: boolean;
+  // A file this project cannot load on its own: a README, a tokenizer, a
+  // config, the .safetensors original a quant was made from. Listed so a repo
+  // can always be assembled by hand, but kept behind the picker's "all files"
+  // toggle and never sized.
+  aux?: boolean;
   // Local, but the repo has since replaced this file under the same name: what
   // is on disk was fetched at a content id the hub no longer serves. Set only
   // when both ids are known, so it never fires on a hand-copied file we have
@@ -287,6 +292,7 @@ export interface FileOption {
   files: HubFile[]; // every shard of this file — one logical download
   sizeBytes: number;
   projector: boolean; // an mmproj companion, not a model on its own
+  aux: boolean; // see HubFile.aux — listed for completeness, never sized
   // Every shard is already on disk. Partly-downloaded sets are NOT local: one
   // shard of three is not a model, so the row keeps its download button (which
   // skips the shards already there).
@@ -316,7 +322,7 @@ export function groupFiles(files: HubFile[]): FileOption[] {
   for (const f of files) {
     let opt = by.get(f.group);
     if (!opt) {
-      opt = { group: f.group, label: baseName(f.group), files: [], sizeBytes: 0, projector: !!f.projector, local: true, stale: false };
+      opt = { group: f.group, label: baseName(f.group), files: [], sizeBytes: 0, projector: !!f.projector, aux: !!f.aux, local: true, stale: false };
       by.set(f.group, opt);
     }
     opt.files.push(f);
@@ -326,7 +332,10 @@ export function groupFiles(files: HubFile[]): FileOption[] {
   }
   const out = [...by.values()];
   for (const o of out) o.files.sort((a, b) => (a.shard ?? 0) - (b.shard ?? 0));
-  out.sort((a, b) => Number(a.projector) - Number(b.projector) || a.sizeBytes - b.sizeBytes);
+  // Aux last, then projectors, then by size. An aux file is not a candidate:
+  // sorting the repo's README between two quants by byte count would put it
+  // exactly where the eye is looking for the smallest model.
+  out.sort((a, b) => Number(a.aux) - Number(b.aux) || Number(a.projector) - Number(b.projector) || a.sizeBytes - b.sizeBytes);
   return out;
 }
 

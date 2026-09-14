@@ -138,29 +138,29 @@ func TestResolveComponents(t *testing.T) {
 	pool := EncoderSet{FluxVae: "ae", ClipL: "cl", ClipG: "cg", T5: "t5", ZimageVae: "zae", QwenLlm: "qwen"}
 
 	// flux: vae + clip_l + t5, nothing missing.
-	if c, m := resolveComponents(pool, nil, "flux", "flux1-schnell", nil, 0); c.vae != "ae" || c.clipL != "cl" || c.t5 != "t5" || c.clipG != "" || c.llm != "" || len(m) != 0 {
+	if c, m := resolveComponents(pool, nil, "flux", "flux1-schnell", nil, 0, videoInfo{}); c.vae != "ae" || c.clipL != "cl" || c.t5 != "t5" || c.clipG != "" || c.llm != "" || len(m) != 0 {
 		t.Errorf("flux: got %+v missing=%v", c, m)
 	}
 	// chroma (arch flux, name-detected): vae + t5, NO clip_l.
-	if c, m := resolveComponents(pool, nil, "flux", "Chroma1-HD-Q5_K_M", nil, 0); c.vae != "ae" || c.t5 != "t5" || c.clipL != "" || len(m) != 0 {
+	if c, m := resolveComponents(pool, nil, "flux", "Chroma1-HD-Q5_K_M", nil, 0, videoInfo{}); c.vae != "ae" || c.t5 != "t5" || c.clipL != "" || len(m) != 0 {
 		t.Errorf("chroma should be vae+t5 only: got %+v missing=%v", c, m)
 	}
 	// z-image (arch lumina2): vae + llm.
-	if c, m := resolveComponents(pool, nil, "lumina2", "Z-Image-Turbo", nil, 0); c.vae != "zae" || c.llm != "qwen" || c.clipL != "" || len(m) != 0 {
+	if c, m := resolveComponents(pool, nil, "lumina2", "Z-Image-Turbo", nil, 0, videoInfo{}); c.vae != "zae" || c.llm != "qwen" || c.clipL != "" || len(m) != 0 {
 		t.Errorf("z-image should be vae+llm: got %+v missing=%v", c, m)
 	}
 	// sdxl: full-checkpoint arch → never resolves external components (loads via -m).
 	// resolveComponents isn't called for it in emit, and falls through to attach nothing.
-	if c, m := resolveComponents(pool, nil, "sdxl", "animagineXLV31", nil, 0); c.vae != "" || c.clipL != "" || c.clipG != "" || len(m) != 0 {
+	if c, m := resolveComponents(pool, nil, "sdxl", "animagineXLV31", nil, 0, videoInfo{}); c.vae != "" || c.clipL != "" || c.clipG != "" || len(m) != 0 {
 		t.Errorf("sdxl should attach nothing (served via -m): got %+v missing=%v", c, m)
 	}
 	// empty pool: flux reports every required role missing.
-	if _, m := resolveComponents(EncoderSet{}, nil, "flux", "flux1-fill-dev", nil, 0); len(m) != 3 {
+	if _, m := resolveComponents(EncoderSet{}, nil, "flux", "flux1-fill-dev", nil, 0, videoInfo{}); len(m) != 3 {
 		t.Errorf("empty-pool flux should miss 3 roles, got %v", m)
 	}
 	// override supplies what the pool lacks → wins and clears the missing role.
 	ov := &Override{VaePath: "ov-ae", ClipLPath: "ov-cl", T5Path: "ov-t5"}
-	if c, m := resolveComponents(EncoderSet{}, ov, "flux", "flux1-fill-dev", nil, 0); c.vae != "ov-ae" || c.clipL != "ov-cl" || c.t5 != "ov-t5" || len(m) != 0 {
+	if c, m := resolveComponents(EncoderSet{}, ov, "flux", "flux1-fill-dev", nil, 0, videoInfo{}); c.vae != "ov-ae" || c.clipL != "ov-cl" || c.t5 != "ov-t5" || len(m) != 0 {
 		t.Errorf("override should win and clear missing: got %+v missing=%v", c, m)
 	}
 }
@@ -182,7 +182,7 @@ func TestResolveComponents_LongCatFromPool(t *testing.T) {
 	}}
 
 	// Edit variant: vae + llm + the paired projector, and NO clip_l/t5.
-	c, m := resolveComponents(EncoderSet{}, nil, "flux", "LongCat-Image-Edit-Turbo-Q8_0", pool, 3584)
+	c, m := resolveComponents(EncoderSet{}, nil, "flux", "LongCat-Image-Edit-Turbo-Q8_0", pool, 3584, videoInfo{})
 	if len(m) != 0 {
 		t.Fatalf("missing = %v, want none", m)
 	}
@@ -200,26 +200,26 @@ func TestResolveComponents_LongCatFromPool(t *testing.T) {
 	}
 
 	// Base (non-edit) LongCat: same encoder, no projector.
-	c2, _ := resolveComponents(EncoderSet{}, nil, "flux", "LongCat-Image-Q8_0", pool, 3584)
+	c2, _ := resolveComponents(EncoderSet{}, nil, "flux", "LongCat-Image-Q8_0", pool, 3584, videoInfo{})
 	if c2.llm != "/m/qwen25vl/model-Q8_0.gguf" || c2.llmVision != "" {
 		t.Errorf("base longcat: %+v", c2)
 	}
 
 	// A different caption width picks a different encoder with no name table.
-	c3, _ := resolveComponents(EncoderSet{}, nil, "lumina2", "Z-Image-Turbo", pool, 2560)
+	c3, _ := resolveComponents(EncoderSet{}, nil, "lumina2", "Z-Image-Turbo", pool, 2560, videoInfo{})
 	if c3.llm != "/m/qwen3-4b.gguf" {
 		t.Errorf("z-image llm = %q", c3.llm)
 	}
 
 	// A declared encoder still wins, and drags its own neighbour projector.
 	ov := &Override{TextEncoderPath: "/m/qwen25vl/model-Q8_0.gguf"}
-	c4, _ := resolveComponents(EncoderSet{}, ov, "flux", "LongCat-Image-Edit", pool, 3584)
+	c4, _ := resolveComponents(EncoderSet{}, ov, "flux", "LongCat-Image-Edit", pool, 3584, videoInfo{})
 	if c4.llm != ov.TextEncoderPath || c4.llmVision != "/m/qwen25vl/mmproj-F16.gguf" {
 		t.Errorf("declared encoder: %+v", c4)
 	}
 
 	// llmVision "off" drops the projector without touching the encoder pick.
-	c5, _ := resolveComponents(EncoderSet{}, &Override{LlmVision: "off"}, "flux", "LongCat-Image-Edit", pool, 3584)
+	c5, _ := resolveComponents(EncoderSet{}, &Override{LlmVision: "off"}, "flux", "LongCat-Image-Edit", pool, 3584, videoInfo{})
 	if c5.llm == "" || c5.llmVision != "" {
 		t.Errorf("llmVision off: %+v", c5)
 	}
@@ -238,7 +238,7 @@ func TestResolveComponents_DeclaredLlmWins(t *testing.T) {
 		{Path: pin, Role: RoleLlm, Width: 2560, SizeGB: 3.99},
 	}}
 	enc := EncoderSet{ZimageVae: "/m/ae.safetensors", QwenLlm: pin}
-	c, m := resolveComponents(enc, nil, "lumina2", "Z-Image-Turbo", pool, 2560)
+	c, m := resolveComponents(enc, nil, "lumina2", "Z-Image-Turbo", pool, 2560, videoInfo{})
 	if len(m) != 0 {
 		t.Fatalf("missing = %v, want none", m)
 	}
@@ -251,7 +251,7 @@ func TestResolveComponents_DeclaredLlmWins(t *testing.T) {
 	// Krea-2 is the model the VL file is right for, and a per-model override
 	// still beats both the declaration and the scan.
 	ov := &Override{TextEncoderPath: "/m/QwenVL/Qwen3VL-4B-Instruct-Q8_0.gguf"}
-	c2, _ := resolveComponents(enc, ov, "qwen_image", "krea2_turbo-Q8_0", pool, 2560)
+	c2, _ := resolveComponents(enc, ov, "qwen_image", "krea2_turbo-Q8_0", pool, 2560, videoInfo{})
 	if c2.llm != ov.TextEncoderPath {
 		t.Errorf("per-model override lost to the global pin: %q", c2.llm)
 	}

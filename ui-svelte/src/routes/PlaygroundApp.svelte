@@ -3,6 +3,7 @@
   import { me, checkMe } from "../stores/playgroundAuth";
   import { loadChats, clearChats, startChat, chatSessions, activeChatId, generatingChatId } from "../stores/chatHistory";
   import { loadImageChats, clearImageChats, imageSessions, activeImageChatId, generatingImageChatId } from "../stores/imageHistory";
+  import { loadVideoChats, clearVideoChats, videoSessions, activeVideoChatId, generatingVideoChatId } from "../stores/videoHistory";
   import { loadSpeechChats, clearSpeechChats, speechSessions, activeSpeechChatId, generatingSpeechChatId } from "../stores/speechHistory";
   import { loadPrefs, clearPrefs } from "../stores/prefs";
   import { migrateVoicesCache } from "../lib/voices";
@@ -24,9 +25,10 @@
     const tab = p.get("tab") as PlaygroundTab | null;
     // Ignore a tab that no longer exists (an old dashboard link, e.g. ?tab=rerank)
     // — an unknown value renders no panel at all.
-    if (tab && ["chat", "images", "speech", "audio"].includes(tab)) selectedTabStore.set(tab);
+    if (tab && ["chat", "images", "video", "speech", "audio"].includes(tab)) selectedTabStore.set(tab);
     if (model) {
       if (tab === "images") userPref<string>("playground-image-model", "").set(model);
+      else if (tab === "video") userPref<string>("playground-video-model", "").set(model);
       else {
         selectedModelStore.set(model);
         // Chat launches into a FRESH conversation pinned to this model, rather
@@ -67,7 +69,7 @@
   $effect(() => {
     if ($me) {
       chatsLoaded = false;
-      Promise.all([loadChats(), loadImageChats(), loadSpeechChats(), loadPrefs(), loadMemories()]).then(() => {
+      Promise.all([loadChats(), loadImageChats(), loadVideoChats(), loadSpeechChats(), loadPrefs(), loadMemories()]).then(() => {
         // The TTS voice lists used to live in localStorage; fold anything left
         // there into the now server-backed prefs blob. One-shot, post-hydration.
         migrateVoicesCache();
@@ -77,6 +79,7 @@
     } else {
       clearChats();
       clearImageChats();
+      clearVideoChats();
       clearSpeechChats();
       clearPrefs();
       clearMemories();
@@ -95,7 +98,7 @@
   // Any tab generating lights the bolt, not just the visible one -- the title is
   // read when the browser tab is in the background, where "which playground tab
   // was open" is exactly what you cannot see.
-  const busy = $derived(!!($generatingChatId || $generatingImageChatId || $generatingSpeechChatId));
+  const busy = $derived(!!($generatingChatId || $generatingImageChatId || $generatingVideoChatId || $generatingSpeechChatId));
 
   // The thread name follows the OPEN tab. Each tab keeps its own sessions +
   // active id; the audio tab has no threads, so it contributes no name.
@@ -103,6 +106,7 @@
     let t = "";
     if ($selectedTabStore === "chat") t = $chatSessions.find((c) => c.id === $activeChatId)?.title ?? "";
     else if ($selectedTabStore === "images") t = $imageSessions.find((c) => c.id === $activeImageChatId)?.title ?? "";
+    else if ($selectedTabStore === "video") t = $videoSessions.find((c) => c.id === $activeVideoChatId)?.title ?? "";
     else if ($selectedTabStore === "speech") t = $speechSessions.find((c) => c.id === $activeSpeechChatId)?.title ?? "";
     t = t.trim();
     return t.length > 48 ? t.slice(0, 47) + "\u2026" : t;

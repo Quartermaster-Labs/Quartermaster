@@ -85,6 +85,16 @@ type Metadata struct {
 	// a recognised caption projection.
 	CondHidden int64
 
+	// VideoKind is the video-diffusion family the tensor layout marks
+	// (VideoFamilyMinimaxH3 / VideoFamilyWan), or "" for everything that is not
+	// a video DiT. See tensorScan.videoKind: structural, because H3 has no
+	// metadata at all and arch=wan means ERNIE-Image-Turbo, an image model.
+	VideoKind string
+
+	// HasAudioOut is true when a video DiT also denoises an audio latent, i.e.
+	// it needs an --audio-vae and its output has a soundtrack.
+	HasAudioOut bool
+
 	// DiffusionKind is a tensor-name-sniffed diffusion arch ("sdxl"/"sd1"/"flux") for a
 	// UNet gguf that carries no general.architecture — stable-diffusion.cpp's
 	// `convert` strips the metadata KVs, so a converted SDXL UNet reports
@@ -1033,6 +1043,8 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 		GeneralName:       generalName,
 		DiffusionKind:     diffKind,
 		CondHidden:        scan.condHidden,
+		VideoKind:         scan.videoKind,
+		HasAudioOut:       scan.hasAudioOut,
 		HasBakedEncoders:  bakedEnc,
 		PoolingType:       deref(poolingType),
 		IsMoE:             expertCount != nil && *expertCount > 0,
@@ -1068,11 +1080,13 @@ func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err err
 	var diffKind string
 	var bakedEnc bool
 	var expertBytes, totalBytes int64
+	var videoKind string
 	var sawExpert, sawInputBlocks, sawLabelEmb, sawDoubleBlocks, unknownType bool
+	var sawVideoPatch, sawAudioPatch, sawTemporalPatch bool
 	condDims := map[string]int64{}
 	typeBytes := map[uint32]int64{}
 	out := func() tensorScan {
-		return tensorScan{expertShare: share, vocabElems: vocabElems, diffKind: diffKind, bakedEnc: bakedEnc, condHidden: condHiddenFrom(condDims), typeBytes: typeBytes}
+		return tensorScan{expertShare: share, vocabElems: vocabElems, diffKind: diffKind, bakedEnc: bakedEnc, condHidden: condHiddenFrom(condDims), videoKind: videoKind, hasAudioOut: sawAudioPatch, typeBytes: typeBytes}
 	}
 	for i := uint64(0); i < tensorCount; i++ {
 		name, err := r.str()
@@ -1144,6 +1158,25 @@ func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err err
 		if strings.Contains(name, "double_blocks.") {
 			sawDoubleBlocks = true
 		}
+		// Video-DiT markers. MiniMax-H3 patchifies a video latent through its
+		// own projection and, on the audio-capable weights, a second audio
+		// latent alongside it. This has to be read off the tensor table: H3's
+		// gguf carries ZERO metadata KVs, and the one arch string that does say
+		// "wan" belongs to ERNIE-Image-Turbo, which is an IMAGE model. Rerouting
+		// by arch name would have broken a working model.
+		if name == "video_patch_proj.weight" || strings.HasPrefix(name, "final_layer.video_out.") {
+			sawVideoPatch = true
+		}
+		if name == "audio_patch_proj.weight" || strings.HasPrefix(name, "final_layer.audio_out.") {
+			sawAudioPatch = true
+		}
+		// Wan2.x and the DiTs that copy its layout patchify with a conv3d, so
+		// the patch embedding is 5-dimensional (out, in, t, h, w). A 4-dim
+		// (image) patch embedding is not a match, and ERNIE ships no patch
+		// embedding tensor at all.
+		if strings.Contains(name, "patch_embedding") && nDims == 5 {
+			sawTemporalPatch = true
+		}
 		// Caption-projection width: the hidden size of the text encoder this DiT
 		// was trained against. Recorded by name here, ranked in condHiddenFrom.
 		if _, want := condTensors[name]; want && nDims > 0 {
@@ -1154,6 +1187,12 @@ func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err err
 		if strings.Contains(name, "conditioner.embedders.") || strings.Contains(name, "cond_stage_model.") {
 			bakedEnc = true
 		}
+	}
+	switch {
+	case sawVideoPatch:
+		videoKind = VideoFamilyMinimaxH3
+	case sawTemporalPatch:
+		videoKind = VideoFamilyWan
 	}
 	switch {
 	case sawInputBlocks:

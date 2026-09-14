@@ -1,13 +1,14 @@
 # autogen — non-LLM model classes
 
 `emitModel` / `RenderSoloCmd` **dispatch by model class**, in order:
-SAM (`.ggml`) → image → embedding → TTS → ASR → LLM (llama or vllm). This file covers
+SAM (`.ggml`) → TRELLIS → **video** → image → embedding → TTS → ASR → LLM (llama or vllm). This file covers
 everything that is not the LLM path. Backend *selection* is in
 [`backends.md`](backends.md); LLM sizing in [`sizing.md`](sizing.md).
 
 | File | Class |
 |---|---|
 | `sam.go` | SAM segmentation (`sam3_server`), `*.ggml` |
+| `video.go` | Video generation (sd-server's job API) |
 | `image.go` | Diffusion / image generation (sd-server) |
 | `embedding.go` | Text embedders |
 | `audio.go` | TTS — **two engines** (qwentts.cpp, TTS.cpp) |
@@ -31,6 +32,41 @@ qwentts stays in the exclusive group, where it belongs.
 **Placement is always CPU**: `LiveOffloadArgs` appends `--no-gpu` to every `.ggml` because the
 Vulkan SAM backend returns garbage on RX 7900 XTX (both PCS text and PVS box/point) while CPU
 is correct.
+
+## Video (`video.go`)
+
+Same backend as image (sd-server, `--diffusion-model` + components), a different **class**
+because the serving contract is different: a clip is rendered through the async job API, not
+returned from the request that asked for it. See `internal/server/CLAUDE.md` for that half.
+
+**Detection is structural, and it has to be** (`IsVideoModel`, fed by `Metadata.VideoKind` from
+the tensor walk in `gguf.go`). Two traps, both real, both asserted in `video_test.go`:
+
+- **MiniMax-H3 ships ZERO metadata KVs.** No arch, no name, nothing: every KV-based test
+  classifies it as "unknown gguf" and it falls through to the LLM path, where llama-server
+  rejects it. The tensor table is the only thing that identifies it.
+- **`arch=wan` is NOT video here.** The one model on disk declaring it is ERNIE-Image-Turbo, an
+  **image** model (see `ernie-image-turbo-runtime`). Classifying on that string alone would
+  silently move a working image model onto the video path. `isImageArch("wan")` stays true and
+  the video class never consults arch.
+
+Families (`VideoFamilyMinimaxH3`, `VideoFamilyWan`) carry the runtime defaults, because the
+generic sd-server ones are wrong for both: the built-in `--cfg-scale` is 7.0 and H3 is a 4-step
+distill that **aborts** above 1.0, and the built-in `--video-frames` is 1, which renders a still.
+`videoDefaultsFor` pins steps/cfg/size/frames/fps per family (H3: 4 / 1.0 / 640x384 / 25f / 24fps;
+Wan: 832x480 / 81f / 16fps, steps and cfg left to sd-server since Wan is not distilled).
+`Override.DefaultFrames`/`DefaultFps`/`DefaultCfg`/`AudioVaePath` still win over the family.
+
+`videoComponents` resolves the same encoder pool the image path uses, plus two video-only roles:
+`RoleAudioVae` (H3 has an audio branch, `--audio-vae`, and declares `out: [video, audio]`) and
+`VaeFamilyVideo3D` (a 3D VAE is not interchangeable with an image VAE). `CondHidden` 5120
+auto-pairs Qwen3-VL-32B as H3's text encoder. A missing component is emitted as a `WARNING`
+comment naming the role rather than a command that fails on the first request.
+
+Sizing reuses the image path with `videoComputeOverheadGB` (4.0) in place of the image figure.
+Known under-charge: `estVramGB` has **no temporal term**, so a 81-frame Wan clip is priced like a
+25-frame one. Accepted for v1 — the frame count is a request parameter, not a launch flag, so
+there is no single number to size against.
 
 ## Image (`image.go`)
 

@@ -61,6 +61,15 @@ type LocalRouter interface {
 	// Returns false when the model is not known to this router.
 	Inflight(modelID string) (int64, bool)
 
+	// Lease marks a model busy for work that outlives the HTTP request which
+	// started it (sd-server's async video jobs: the POST returns a job id in
+	// milliseconds, the render runs for minutes), and returns the release.
+	// While the lease is held the model is not evicted, no other model spawns
+	// alongside it, and its idle-grace hold does not start. ok is false when the
+	// model is unknown or the router is shutting down; release is always safe to
+	// call and is idempotent.
+	Lease(modelID string) (release func(), ok bool)
+
 	// LaunchedCmd returns the actual argv the named model's running process
 	// spawned with (post rewrite), or "" when it is not running. Returns false
 	// when the model is not known to this router.

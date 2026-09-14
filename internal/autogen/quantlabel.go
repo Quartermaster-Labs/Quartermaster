@@ -19,6 +19,18 @@ type tensorScan struct {
 	// with no recognised projection (every non-diffusion model).
 	condHidden int64
 
+	// videoKind names the video-diffusion family the tensor layout marks, or ""
+	// for anything that is not a video DiT. Structural, not metadata: MiniMax-H3
+	// ships a gguf with ZERO KVs (no general.architecture at all), and the one
+	// arch string that does say "wan" belongs to ERNIE-Image-Turbo, an IMAGE
+	// model. Only the tensor table can tell these apart.
+	videoKind string
+
+	// hasAudioOut is true when the video DiT also denoises an audio latent
+	// (MiniMax-H3's audio_patch_proj / final_layer.audio_out), i.e. it needs a
+	// second --audio-vae and produces a soundtrack.
+	hasAudioOut bool
+
 	// typeBytes is on-disk bytes per ggml type id. A type missing from
 	// ggmlTypeSize can't be weighed, so it is recorded with 0 bytes: its
 	// PRESENCE still has to be visible to quantLabelFrom, which reports an
@@ -128,6 +140,7 @@ var condTensorOrder = []string{
 	"txt_in.weight",
 	"cap_embedder.1.weight",
 	"text_proj.weight",
+	"condition_proj.weight",
 	"context_embedder.weight",
 	"txtfusion.layerwise_blocks.0.prenorm.scale",
 }

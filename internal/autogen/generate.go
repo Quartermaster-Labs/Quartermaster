@@ -194,6 +194,25 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		return fmt.Errorf("%s: %w", name, err)
 	}
 
+	// Video-generation GGUFs go to sd-server as their own class, and are tested
+	// BEFORE the image path: MiniMax-H3 ships with no metadata whatsoever, and
+	// the only arch string that would route a video model here ("wan") belongs
+	// to ERNIE-Image-Turbo, an image model. Detection is therefore structural
+	// (see video.go), and it has to win over isImageArch.
+	if vid := videoInfoFrom(meta); vid.is() {
+		emitVideoModel(b, s, row, ov, name, effectiveImageArch(meta), vid, meta.CondHidden, emitted)
+		if ov != nil {
+			for _, v := range ov.Variants {
+				if strings.TrimSpace(v.Name) == "" {
+					continue
+				}
+				vov := mergeImageVariant(*ov, v)
+				emitVideoModel(b, s, row, &vov, name+"-"+v.Name, effectiveImageArch(meta), vid, meta.CondHidden, emitted)
+			}
+		}
+		return nil
+	}
+
 	// Diffusion GGUFs go to sd-server, not llama-server: no KV cache / -ngl
 	// sizing applies. Detect by arch and emit a separate block. Unknown image
 	// archs fall through to the llama path, where the YAML "# arch=..." comment

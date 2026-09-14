@@ -264,3 +264,108 @@ func TestWithinParams(t *testing.T) {
 		t.Error("the cap is exclusive: 120B must not pass a 120B cap")
 	}
 }
+
+// The Video tab is the one category no single HF query describes: the exact
+// pipeline tags are split across the catalog and HF ANDs its filters, so it
+// asks twice and merges. `gguf` is deliberately absent — the useful video repos
+// are LoRAs and safetensors component sets.
+func TestSearchFilterSets_Video(t *testing.T) {
+	got := searchFilterSets("video")
+	if len(got) != 2 {
+		t.Fatalf("searchFilterSets(video) = %v, want two sets", got)
+	}
+	for _, set := range got {
+		if len(set) != 1 {
+			t.Fatalf("set %v: want one filter per set, so neither hides the other", set)
+		}
+		if set[0] == "gguf" {
+			t.Fatal("video must not require gguf: LoRA and safetensors repos are the point")
+		}
+	}
+	if got[0][0] != "text-to-video" || got[1][0] != "image-to-video" {
+		t.Fatalf("searchFilterSets(video) = %v", got)
+	}
+	// Every other category is one set, unchanged.
+	if sets := searchFilterSets("image"); len(sets) != 1 || len(sets[0]) != 2 {
+		t.Fatalf("searchFilterSets(image) = %v, want one gguf+pipeline set", sets)
+	}
+}
+
+// A LoRA repo is a pile of ALTERNATIVES, not the parts of one model: grouping
+// it under the repo id offered a single row that downloaded all seventeen.
+func TestSelectFiles_LooseWeightsRepo(t *testing.T) {
+	files := []File{
+		{Path: "README.md"},
+		{Path: "minimax_h3_fl2v_turbo_4step_v1.1_768p_bf16.safetensors"},
+		{Path: "minimax_h3_fl2v_turbo_4step_v1.1_768p_fp8.safetensors"},
+		{Path: "minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors"},
+	}
+	for i := range files {
+		classify(&files[i])
+	}
+	got := SelectFiles("lightx2v/Minimax-h3-Turbo", files)
+	if len(got) != 3 {
+		t.Fatalf("kept %d files, want the 3 safetensors: %v", len(got), got)
+	}
+	groups := map[string]bool{}
+	for _, f := range got {
+		if f.Group == "lightx2v/Minimax-h3-Turbo" {
+			t.Fatalf("%s: grouped as the whole repo, want its own row", f.Path)
+		}
+		if f.Group == "" {
+			t.Fatalf("%s: no group key", f.Path)
+		}
+		groups[f.Group] = true
+	}
+	if len(groups) != 3 {
+		t.Fatalf("3 alternatives collapsed onto %d rows", len(groups))
+	}
+}
+
+// MarkSelection lists the WHOLE repo: the curated files keep SelectFiles'
+// grouping, everything else comes back flagged and on its own row.
+func TestMarkSelection_ListsEverything(t *testing.T) {
+	files := []File{
+		{Path: "README.md"},
+		{Path: "Qwen3-8B-Q4_K_M.gguf"},
+		{Path: "mmproj-F16.gguf"},
+		{Path: "tokenizer.json"},
+		{Path: "vae/diffusion_pytorch_model.safetensors"},
+	}
+	got := MarkSelection("unsloth/Qwen3-8B-GGUF", files)
+	if len(got) != len(files) {
+		t.Fatalf("listed %d files, want all %d", len(got), len(files))
+	}
+	aux := map[string]bool{}
+	for _, f := range got {
+		aux[f.Path] = f.Aux
+		if f.Aux && f.Group != f.Path {
+			t.Errorf("%s: aux file grouped as %q, want its own path", f.Path, f.Group)
+		}
+	}
+	for p, want := range map[string]bool{
+		"Qwen3-8B-Q4_K_M.gguf": false,
+		"mmproj-F16.gguf":      false,
+		"README.md":            true,
+		"tokenizer.json":       true,
+		"vae/diffusion_pytorch_model.safetensors": true, // a quant repo: the gguf is the model
+	} {
+		if aux[p] != want {
+			t.Errorf("%s: aux=%v, want %v", p, aux[p], want)
+		}
+	}
+}
+
+// A repo with nothing loadable is still fully listed — that is the case the
+// old picker answered with "this repo carries no GGUF files" and no recourse.
+func TestMarkSelection_UnloadableRepo(t *testing.T) {
+	got := MarkSelection("someone/notes", []File{{Path: "README.md"}, {Path: "train.py"}})
+	if len(got) != 2 {
+		t.Fatalf("listed %d files, want 2", len(got))
+	}
+	for _, f := range got {
+		if !f.Aux {
+			t.Errorf("%s: want aux", f.Path)
+		}
+	}
+}

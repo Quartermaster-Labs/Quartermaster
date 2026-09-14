@@ -93,6 +93,7 @@ type baseRouter struct {
 	applyConfigCh chan applyConfigReq
 	swapDoneCh    chan scheduler.SwapDone
 	serveDoneCh   chan scheduler.ServeDoneEvent
+	leaseCh       chan scheduler.LeaseEvent
 	// wakeCh carries timer-driven re-examinations of the queue (see Wake).
 	// Buffered 1 and written non-blockingly, so overlapping timers collapse
 	// into one drain and a fired timer can never block its own goroutine.
@@ -131,6 +132,7 @@ func newBaseRouter(
 		applyConfigCh: make(chan applyConfigReq),
 		swapDoneCh:    make(chan scheduler.SwapDone),
 		serveDoneCh:   make(chan scheduler.ServeDoneEvent),
+		leaseCh:       make(chan scheduler.LeaseEvent),
 		wakeCh:        make(chan struct{}, 1),
 		runDone:       make(chan struct{}),
 	}
@@ -254,6 +256,9 @@ func (b *baseRouter) run() {
 
 		case ev := <-b.serveDoneCh:
 			b.schedule.OnServeDone(ev)
+
+		case ev := <-b.leaseCh:
+			b.schedule.OnLease(ev)
 
 		case <-b.wakeCh:
 			b.schedule.OnWake()
@@ -397,6 +402,46 @@ func (b *baseRouter) trackedServe(modelID string, p process.Process) http.Handle
 			}
 		}()
 		p.ServeHTTP(w, r)
+	}
+}
+
+// Lease marks modelID busy for work that outlives the HTTP request which asked
+// for it, and returns the release. Until release runs, the model counts as
+// in-flight: it will not be evicted for another model, no other model will spawn
+// alongside it, and its idle-grace hold arms only when the lease drops.
+//
+// sd-server's async video API is what this exists for. POST /sdcpp/v1/vid_gen
+// hands back a job id in milliseconds while the render runs for minutes, so the
+// serve-done that follows would otherwise mark a hard-working GPU idle.
+//
+// ok is false when modelID is not handled by this router, in which case release
+// is a no-op and must still be safe to call. release is idempotent: calling it
+// twice releases once, so a caller may defer it AND call it on the terminal poll
+// without double-decrementing a counter that gates eviction.
+func (b *baseRouter) Lease(modelID string) (release func(), ok bool) {
+	if _, exists := b.procs()[modelID]; !exists {
+		return func() {}, false
+	}
+	if !b.sendLease(scheduler.LeaseEvent{ModelID: modelID, Acquire: true}) {
+		// The run loop is gone: nothing is tracking in-flight any more, so
+		// there is nothing to release either.
+		return func() {}, false
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() { b.sendLease(scheduler.LeaseEvent{ModelID: modelID}) })
+	}, true
+}
+
+// sendLease posts a lease event to the run loop, reporting whether it landed.
+// Like trackedServe's deferred send, it gives up when the router is shutting
+// down rather than blocking its caller forever on a channel nobody reads.
+func (b *baseRouter) sendLease(ev scheduler.LeaseEvent) bool {
+	select {
+	case b.leaseCh <- ev:
+		return true
+	case <-b.shutdownCtx.Done():
+		return false
 	}
 }
 

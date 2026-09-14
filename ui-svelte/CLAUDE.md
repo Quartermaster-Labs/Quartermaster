@@ -8,7 +8,7 @@ port-gated into two apps** (`App.svelte` `onMount` fetches `GET /api/mode`):
 - **Operator dashboard** (main listen port): model catalog and loading, per-model config tuning,
   live activity/metrics/logs, GPU memory, API-key management.
 - **Playground** (separate `-playground-port`): a login-gated, per-user interactive app (chat,
-  images, speech, transcription) with **server-backed** chat history + prefs. Rendered by
+  images, video, speech, transcription) with **server-backed** chat history + prefs. Rendered by
   `PlaygroundApp`, NOT mounted inside the dashboard.
 
 ## Which doc
@@ -57,7 +57,7 @@ changing anything under `ui-svelte/`.
 |---|---|
 | `src/main.ts`, `src/App.svelte` | Entry point + root. `App.svelte` fetches `/api/mode` and renders either the dashboard shell (Sidebar + StatusRail + Router) **or** the standalone `PlaygroundApp`. |
 | `src/routes/PlaygroundApp.svelte` | Playground root: gates the app behind login (`playgroundAuth` `me`), hydrates server-backed chats/prefs, then mounts `PlaygroundShell`. |
-| `src/routes/PlaygroundShell.svelte` | Playground shell: icon side-rail (Chat / Images / Speech / Transcription, hover-expand), chat-history flyout, logout + username, and the playground Settings modal (**General / Memory / Search / Prompt**). |
+| `src/routes/PlaygroundShell.svelte` | Playground shell: icon side-rail (Chat / Images / Video / Speech / Transcription, hover-expand), chat-history flyout, logout + username, and the playground Settings modal (**General / Memory / Search / Prompt**). |
 | `src/routes/Login.svelte` | Playground username/password sign-in **and** sign-up (hashed; unknown users are rejected, not registered). Opens on the sign-up pane when `GET /auth/accounts` says no account exists yet. |
 | `src/routes/` | Top-level pages mounted by the router. |
 | `src/components/` | Reusable UI components (panels, modals, gauges, charts, tooltips). |

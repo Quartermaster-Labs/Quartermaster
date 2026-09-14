@@ -76,13 +76,13 @@
     // yesterday is not a new release, which is what `maxAgeDays` above answers.
     trendy: boolean;
   }
-  // Two filters default ON. The size cap, because an unfiltered top-downloads
-  // page is mostly frontier-size repos this box can't run, which buries
-  // everything it can — and trendy, because the same page is otherwise a
-  // permanent all-time chart where a model released this week never appears.
-  // The cost is real and worth knowing: a specific text search mostly returns
-  // repos older than two weeks, so the empty state offers to switch it off.
-  const DEFAULT_FILTERS: HubFilters = { maxParamsB: MAX_PARAMS_B, minDownloads: 0, maxAgeDays: 0, trendy: true };
+  // Only the size cap defaults ON, because an unfiltered top-downloads page is
+  // mostly frontier-size repos this box can't run, which buries everything it
+  // can. Trendy does NOT: it answers "what came out recently", which is a
+  // question the user has to ask, and defaulting it on silently hid every
+  // established model — the common case is searching for a specific repo by
+  // name, and those are nearly always older than the window.
+  const DEFAULT_FILTERS: HubFilters = { maxParamsB: MAX_PARAMS_B, minDownloads: 0, maxAgeDays: 0, trendy: false };
   let filters = $state<HubFilters>({ ...DEFAULT_FILTERS });
 
   // Page size, not a result cap: the list keeps loading as it is scrolled, so
@@ -133,7 +133,17 @@
     })
   );
 
-  const repoFiles = $derived<FileOption[]>(selected ? groupFiles(selected.files) : []);
+  // Every file the repo has, then the two halves of it. The server lists the
+  // whole repo now (hub.MarkSelection): the loadable files are the picker, and
+  // the rest is there so a repo whose sibling files this project doesn't know
+  // about yet — an external VAE, a text encoder — can still be assembled
+  // without leaving for a browser.
+  const allFiles = $derived<FileOption[]>(selected ? groupFiles(selected.files) : []);
+  const loadableFiles = $derived(allFiles.filter((o) => !o.aux));
+  // Sticky across repos on purpose: it is a way of working ("I assemble these
+  // by hand"), not a property of the repo that happens to be open.
+  let showAllFiles = $state(false);
+  const repoFiles = $derived(showAllFiles ? allFiles : loadableFiles);
   // The card is sanitized third-party HTML (see hubMarkdown.ts) and rendering
   // it is not free, so it is derived once per repo rather than per re-render.
   const cardHTML = $derived(selected?.readme ? renderModelCard(selected.readme, selected.id) : "");
@@ -440,7 +450,9 @@
     if (kind !== "llm" && !(kind === "any" && isTextRepo(det))) return;
     // A projector is charged on top of whichever file is picked, so sizing it on
     // its own answers the wrong question — the row says "companion".
-    const queue = groupFiles(det.files).filter((o) => !o.projector && o.files[0]?.path);
+    // Aux rows are excluded for a blunter reason than projectors: a Range read
+    // of tokenizer.json parses as no GGUF header at all.
+    const queue = groupFiles(det.files).filter((o) => !o.projector && !o.aux && o.files[0]?.path);
     let next = 0;
     const worker = async (): Promise<void> => {
       while (next < queue.length) {
@@ -775,7 +787,13 @@
             <button class="text-primary hover:underline" onclick={() => setFilter("trendy", false)}>Search the whole hub</button>.
           </div>
         {:else if !results.length}
-          <div class="p-3 text-xs text-txtsecondary">{kind === "3d" ? "No 3D repos matched that search." : "No GGUF repos matched that search."}</div>
+          <!-- Name what was actually searched. The 3D and Video tabs do not
+               require a GGUF at all (their models ship as safetensors LoRAs and
+               component sets), so telling their user no GGUF matched describes
+               a filter that was never applied. -->
+          <div class="p-3 text-xs text-txtsecondary">
+            {kind === "3d" || kind === "video" ? "No repos matched that search." : "No GGUF repos matched that search."}
+          </div>
         {:else if !shown.length}
           <!-- Distinct from "nothing matched": the hub answered, the filters
                emptied it, and the fix is one click away rather than a re-word. -->
@@ -864,7 +882,14 @@
           <!-- File picker -->
           <div class="p-4 border-b border-card-border">
             {#if !repoFiles.length}
-              <div class="text-xs text-txtsecondary">This repo carries no files {kind === "3d" ? "this can load (no safetensors or manifests)" : "quartermaster can load (no GGUF)"}.</div>
+              <div class="text-xs text-txtsecondary">
+                This repo carries no files {kind === "3d" ? "this can load (no safetensors or manifests)" : "quartermaster can load (no GGUF)"}.
+                {#if allFiles.length}
+                  <button class="text-primary hover:underline" onclick={() => (showAllFiles = true)}>
+                    List all {allFiles.length} files anyway
+                  </button>.
+                {/if}
+              </div>
             {:else}
               <!-- data-table: the grid-free variant (index.css). This table had
                    the full cell grid AND zebra banding AND per-row borders -
@@ -902,6 +927,14 @@
                             projector
                           </span>
                         {/if}
+                        {#if q.aux}
+                          <span
+                            class="ml-1 rounded bg-secondary px-1 py-0.5 text-micro font-medium uppercase tracking-wide text-txtsecondary"
+                            use:tip={"Not a model quartermaster loads on its own — a config, a tokenizer, or weights in a format no backend here reads. Downloadable in case you are assembling a model by hand."}
+                          >
+                            extra
+                          </span>
+                        {/if}
                         {#if q.files.length > 1}
                           <span class="text-[0.65rem] text-txtsecondary">· {q.files.length} parts</span>
                         {/if}
@@ -925,8 +958,11 @@
                       <!-- A projector is a companion file, so "fits in VRAM" is the
                            wrong question: it is charged on top of whichever file
                            the user picks, never sized on its own. -->
-                      <td class="py-2.5 px-3 align-top whitespace-nowrap {q.projector ? 'text-txtsecondary' : estimateClass(q, v)}" use:tip={q.projector ? "" : estimateTitle(q)}>
-                        {q.projector ? "companion" : estimateLabel(q, v)}
+                      <td
+                        class="py-2.5 px-3 align-top whitespace-nowrap {q.projector || q.aux ? 'text-txtsecondary' : estimateClass(q, v)}"
+                        use:tip={q.projector || q.aux ? "" : estimateTitle(q)}
+                      >
+                        {q.aux ? "—" : q.projector ? "companion" : estimateLabel(q, v)}
                       </td>
                       <td class="py-2.5 pl-3 pr-2 align-top text-right whitespace-nowrap">
                         <button
@@ -972,6 +1008,16 @@
                   {/each}
                 </tbody>
               </table>
+              {#if allFiles.length > loadableFiles.length}
+                <button
+                  class="mt-2 text-[0.65rem] text-primary hover:underline"
+                  onclick={() => (showAllFiles = !showAllFiles)}
+                >
+                  {showAllFiles
+                    ? `Show only the ${loadableFiles.length} loadable file${loadableFiles.length === 1 ? "" : "s"}`
+                    : `Show all ${allFiles.length} files in this repo`}
+                </button>
+              {/if}
               <p class="mt-2 text-[0.65rem] text-txtsecondary">
                 {#if kind === "llm" || (selected && isTextRepo(selected))}
                   Context figures come from each file's GGUF header, read off the hub without downloading it, planned against your

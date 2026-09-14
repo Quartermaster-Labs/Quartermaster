@@ -9,12 +9,12 @@ import { DEFAULT_SEARCH_PROVIDERS, type SearchProviderCfg } from "../lib/webSear
 // Shared singletons so other pages (e.g. the Models panel's "Chat" button) can
 // drive the always-mounted playground. persistentStore returns a fresh writable
 // per call, so these MUST be imported, not re-created, to stay in sync.
-export type PlaygroundTab = "chat" | "images" | "speech" | "audio";
+export type PlaygroundTab = "chat" | "images" | "video" | "speech" | "audio";
 
 export const selectedTabStore = persistentStore<PlaygroundTab>("playground-selected-tab", "chat");
 // A browser last parked on a tab that no longer exists (rerank / concurrency)
 // would render no panel at all — snap it back to chat once at load.
-if (!["chat", "images", "speech", "audio"].includes(get(selectedTabStore))) selectedTabStore.set("chat");
+if (!["chat", "images", "video", "speech", "audio"].includes(get(selectedTabStore))) selectedTabStore.set("chat");
 // Per-user (server-backed) so the chosen model follows the user, not the browser.
 export const selectedModelStore = userPref<string>("playground-selected-model", "");
 

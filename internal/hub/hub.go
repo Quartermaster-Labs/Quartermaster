@@ -122,6 +122,13 @@ type File struct {
 	// new revision as "already downloaded" and the user has to rename or delete
 	// the file by hand to get it. See Manager.LocalFiles.
 	Stale bool `json:"stale,omitempty"`
+	// Aux marks a file this project cannot load on its own: a README, a
+	// tokenizer, a config, the .safetensors original a quant was made from.
+	// It is LISTED rather than hidden — a repo's own files are the only way to
+	// get a sibling this project's rules don't know about yet (an image model's
+	// external VAE, a text encoder) — but the picker keeps it behind a toggle
+	// and never sizes it, because it is not a candidate for loading.
+	Aux bool `json:"aux,omitempty"`
 	// OID is the hub's content id for this revision of the file (for Hugging
 	// Face, the LFS sha256). It is compared as an opaque string and never
 	// computed here: hashing a 20 GB file to render a picker row is not on.
@@ -297,18 +304,26 @@ func ComponentSetFile(path string) bool {
 //   - A repo shipping any quant file is a QUANT repo: only those files are
 //     offered. This is the historical behaviour, and it is what keeps a llama
 //     repo's tokenizer and configs out of the picker.
-//   - A repo with none is a COMPONENT SET, where the weights and manifests ARE
-//     the model. Every listed file then shares one group key — the repo id — so
-//     the picker renders the whole set as a single row and downloads it
-//     complete. Half a set is not a model: safetensors with no pipeline.json
-//     beside them cannot be loaded by anything, so offering the pieces
-//     separately would only invite exactly that.
+//   - A repo with none but WITH a set manifest is a COMPONENT SET, where the
+//     weights and manifests ARE the model. Every listed file then shares one
+//     group key — the repo id — so the picker renders the whole set as a single
+//     row and downloads it complete. Half a set is not a model: safetensors
+//     with no pipeline.json beside them cannot be loaded by anything, so
+//     offering the pieces separately would only invite exactly that.
+//   - A repo with neither is a LOOSE WEIGHTS repo — a LoRA collection, a set of
+//     fp8/bf16 variants of one model — where each file is independently useful
+//     and the files are alternatives to each other, not parts of each other.
+//     Each keeps its own group key. Grouping them offered ONE row that
+//     downloaded the entire repo, which for lightx2v/Minimax-h3-Turbo is
+//     seventeen LoRAs you wanted one of.
 func SelectFiles(repoID string, files []File) []File {
-	quant := false
+	quant, manifest := false, false
 	for _, f := range files {
 		if IsModelFile(f.Path) {
 			quant = true
-			break
+		}
+		if setManifest(f.Path) {
+			manifest = true
 		}
 	}
 	out := make([]File, 0, len(files))
@@ -322,7 +337,67 @@ func SelectFiles(repoID string, files []File) []File {
 		if !ComponentSetFile(f.Path) {
 			continue
 		}
-		f.Group = repoID
+		if manifest {
+			f.Group = repoID
+		} else if f.Group == "" {
+			f.Group = f.Path
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+// setManifest reports whether path is one of the files that makes a repo a
+// COMPONENT SET rather than a pile of loose weights: a pipeline/config manifest
+// naming the other files, or a per-checkpoint manifest under ckpts/. It is the
+// same list ComponentSetFile accepts, minus the weights themselves — a repo of
+// nothing but .safetensors has no manifest saying they belong together, because
+// they don't.
+func setManifest(path string) bool {
+	lower := strings.ToLower(path)
+	if !strings.HasSuffix(lower, ".json") {
+		return false
+	}
+	base := lower
+	if i := strings.LastIndex(base, "/"); i >= 0 {
+		base = base[i+1:]
+	}
+	switch base {
+	case "config.json", "pipeline.json", "texturing_pipeline.json":
+		return true
+	}
+	return strings.Contains("/"+lower, "/ckpts/")
+}
+
+// MarkSelection returns the WHOLE file list with SelectFiles' verdict recorded
+// on each entry rather than applied to it: the files SelectFiles keeps come back
+// carrying its grouping, everything else comes back Aux, grouped by its own
+// path so the picker can offer it as a single row.
+//
+// Listing everything is deliberate. The curated set is the right DEFAULT view,
+// but it is a set of rules about file names, and rules about file names are
+// always behind the publishers: an image model's external VAE or text encoder,
+// a repo that ships its projector as .safetensors, a file type no backend here
+// reads yet. Hiding those made the picker the reason a model could not be
+// assembled, with no recourse but a browser and a manual copy. It also widens
+// the download allowlist, since Manager.Start admits only paths the hub's own
+// listing named.
+func MarkSelection(repoID string, files []File) []File {
+	sel := map[string]File{}
+	for _, f := range SelectFiles(repoID, files) {
+		sel[f.Path] = f
+	}
+	out := make([]File, 0, len(files))
+	for _, f := range files {
+		if s, ok := sel[f.Path]; ok {
+			out = append(out, s)
+			continue
+		}
+		f.Aux = true
+		// Its own row: an aux file has no sibling relationship this package
+		// understands, so grouping it with anything would be a guess.
+		f.Group = f.Path
+		f.Shard, f.Shards = 0, 0
 		out = append(out, f)
 	}
 	return out

@@ -231,14 +231,20 @@ type ExtraImageModel struct {
 	DefaultSampler string  `yaml:"defaultSampler"` // --sampling-method
 	DefaultWidth   int     `yaml:"defaultWidth"`
 	DefaultHeight  int     `yaml:"defaultHeight"`
-	DiffusionFa    string  `yaml:"diffusionFa"`  // "" => on, "off" => off
-	VaeTiling      string  `yaml:"vaeTiling"`    // "" => on, "off" => off
-	TeOnCpu        string  `yaml:"teOnCpu"`      // "" => on (te=cpu), "off" => keep on GPU
-	VaeOnCpu       string  `yaml:"vaeOnCpu"`     // "on" => add vae=cpu to --backend; "" => GPU
-	OffloadToCpu   string  `yaml:"offloadToCpu"` // "on" => --offload-to-cpu (+ --vae-on-cpu)
-	Threads        int     `yaml:"threads"`
-	ExtraArgs      string  `yaml:"extraArgs"`
-	Unlisted       bool    `yaml:"unlisted"`
+	DiffusionFa    string  `yaml:"diffusionFa"` // "" => on, "off" => off
+	VaeTiling      string  `yaml:"vaeTiling"`   // "" => on, "off" => off
+	// Video VRAM levers. "" means OFF here, NOT auto: an extra model is
+	// hand-declared and never goes through the gguf tensor scan, so nothing on
+	// this path can tell a video DiT from an image one. Set "on" explicitly.
+	// (The discovered path defaults both ON for video models: see Override.)
+	TemporalTiling string `yaml:"temporalTiling"` // "on" => --temporal-tiling
+	StreamLayers   string `yaml:"streamLayers"`   // "on" => --stream-layers
+	TeOnCpu        string `yaml:"teOnCpu"`        // "" => on (te=cpu), "off" => keep on GPU
+	VaeOnCpu       string `yaml:"vaeOnCpu"`       // "on" => add vae=cpu to --backend; "" => GPU
+	OffloadToCpu   string `yaml:"offloadToCpu"`   // "on" => --offload-to-cpu (+ --vae-on-cpu)
+	Threads        int    `yaml:"threads"`
+	ExtraArgs      string `yaml:"extraArgs"`
+	Unlisted       bool   `yaml:"unlisted"`
 	// Backend is the registry entry id this extra image model launches with,
 	// carried over from its Override. Empty => auto-pick the class default.
 	Backend string `yaml:"backend"`
@@ -258,6 +264,8 @@ type EncoderSet struct {
 	ZimageVae string `yaml:"zimageVae"` // --vae for z-image / lumina
 	QwenLlm   string `yaml:"qwenLlm"`   // --llm text encoder (z-image, qwen-image, flux.2 klein)
 	Flux2Vae  string `yaml:"flux2Vae"`  // --vae for flux.2 (32-ch latent, NOT flux.1's fluxVae)
+	VideoVae  string `yaml:"videoVae"`  // --vae for a 3D video model (MiniMax-H3's transformer VAE)
+	AudioVae  string `yaml:"audioVae"`  // --audio-vae: decodes the soundtrack latent of an audio-capable video model
 }
 
 // SlotCacheSettings mirrors config.SlotCacheConfig; zero values fall back to the
@@ -742,6 +750,9 @@ type Override struct {
 	ClipGPath       string `yaml:"clipGPath"`       // --clip_g
 	T5Path          string `yaml:"t5Path"`          // --t5xxl
 	TextEncoderPath string `yaml:"textEncoderPath"` // --llm (Z-Image / Lumina text encoder)
+	// AudioVaePath is --audio-vae, the second decoder an audio-capable video
+	// model needs to turn its soundtrack latent into PCM. Video models only.
+	AudioVaePath string `yaml:"audioVaePath"`
 	// LlmVision gates --llm_vision, the vision projector (mmproj) that pairs with
 	// the --llm text encoder. "" => auto: edit/reference models (name-detected, see
 	// wantsVisionEncoder) get the projector found beside their encoder, everything
@@ -768,11 +779,34 @@ type Override struct {
 	//   DiffusionFa:  "" => on  (--diffusion-fa)
 	//   VaeOnCpu:     "" => off (VAE decodes on GPU); "on" adds vae=cpu to --backend
 	//                 (bf16 VAE whitens on some GPU backends; CPU is the safe fallback)
+	//   TemporalTiling: "" => on for video families whose VAE implements it
+	//   StreamLayers:   "" => on for VIDEO models only (--stream-layers)
 	OffloadToCpu string `yaml:"offloadToCpu"`
 	TeOnCpu      string `yaml:"teOnCpu"`
 	VaeOnCpu     string `yaml:"vaeOnCpu"`
 	VaeTiling    string `yaml:"vaeTiling"`
 	DiffusionFa  string `yaml:"diffusionFa"`
+	// Video-only VRAM levers, both on by default for a model the scan identified
+	// as a video DiT and emitted for nothing else.
+	//
+	// A video render has TWO peaks. --vae-tiling above caps the decode
+	// SPATIALLY, which is the whole story for a still; a clip's decode also grows
+	// along TIME with --video-frames, and --temporal-tiling is the only flag that
+	// chunks that axis (tune it with --extra-tiling-args
+	// temporal_tile_size=N,temporal_tile_overlap=N via ExtraArgs).
+	//
+	// TemporalTiling "" is on only where the family's VAE actually implements a
+	// tiled decode (Wan today, not MiniMax-H3, which accepts the flag and
+	// processes the full temporal dimension anyway). "on" forces it regardless,
+	// for a backend build that has gained support since.
+	//
+	// --stream-layers attacks the other peak from the side: it streams the
+	// diffusion weights against the --max-vram budget with prefetch instead of
+	// pinning them resident, handing that headroom back to the sampler, which is
+	// what actually buys frame count. It is documented as a no-op without
+	// --max-vram, and every sd-server line emitted here sets one.
+	TemporalTiling string `yaml:"temporalTiling"`
+	StreamLayers   string `yaml:"streamLayers"`
 	// Generation defaults baked into the sd-server command (applied when a request
 	// omits them). 0/empty => omit (sd-server's own default). DefaultCfg matters:
 	// Z-Image-Turbo blurs unless cfg-scale is pinned to 1.0.
@@ -781,8 +815,18 @@ type Override struct {
 	DefaultSampler string  `yaml:"defaultSampler"` // --sampling-method
 	DefaultWidth   int     `yaml:"defaultWidth"`   // --width
 	DefaultHeight  int     `yaml:"defaultHeight"`  // --height
-	Unlisted       bool    `yaml:"unlisted"`
-	Skip           bool    `yaml:"skip"`
+	// Video-only generation defaults. DefaultFrames is --video-frames, which
+	// sd.cpp ALIGNS UP to the family's grid: 17k+5 for MiniMax-H3 (5, 22, 39,
+	// 56...), the largest 4n+1 for everything else. Off-grid numbers are not
+	// rejected, they are silently changed, so prefer an exact one. 0 => the
+	// family default (see videoDefaultsFor).
+	//
+	// DefaultFps is --fps. H3 IGNORES it and logs an override warning: the model
+	// is fixed at 24 fps. It is honored by Wan.
+	DefaultFrames int  `yaml:"defaultFrames"` // --video-frames
+	DefaultFps    int  `yaml:"defaultFps"`    // --fps
+	Unlisted      bool `yaml:"unlisted"`
+	Skip          bool `yaml:"skip"`
 	// SlotCache opts this model into on-disk slot KV persistence: emits
 	// --slot-save-path so the server's slotCache can save/restore its conversation
 	// KV. OPT-IN: nil/absent => off, so enabling the dashboard master switch does
@@ -918,6 +962,7 @@ type VariantSpec struct {
 	ClipGPath       string  `yaml:"clipGPath"`
 	T5Path          string  `yaml:"t5Path"`
 	TextEncoderPath string  `yaml:"textEncoderPath"`
+	AudioVaePath    string  `yaml:"audioVaePath"`
 	RefEdit         string  `yaml:"refEdit"`
 	LlmVision       string  `yaml:"llmVision"`
 	LlmVisionPath   string  `yaml:"llmVisionPath"`
@@ -926,12 +971,16 @@ type VariantSpec struct {
 	TeOnCpu         string  `yaml:"teOnCpu"`
 	VaeOnCpu        string  `yaml:"vaeOnCpu"`
 	VaeTiling       string  `yaml:"vaeTiling"`
+	TemporalTiling  string  `yaml:"temporalTiling"`
+	StreamLayers    string  `yaml:"streamLayers"`
 	DiffusionFa     string  `yaml:"diffusionFa"`
 	DefaultSteps    int     `yaml:"defaultSteps"`
 	DefaultCfg      float64 `yaml:"defaultCfg"`
 	DefaultSampler  string  `yaml:"defaultSampler"`
 	DefaultWidth    int     `yaml:"defaultWidth"`
 	DefaultHeight   int     `yaml:"defaultHeight"`
+	DefaultFrames   int     `yaml:"defaultFrames"`
+	DefaultFps      int     `yaml:"defaultFps"`
 }
 
 // applyDefaults fills zero-valued settings with the PowerShell defaults.

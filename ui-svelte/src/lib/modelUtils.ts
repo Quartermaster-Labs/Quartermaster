@@ -16,12 +16,13 @@ export function prettifyModelName(s: string): string {
     .join(" ");
 }
 
-export type ModelCategory = "llm" | "image" | "3d" | "segment" | "tts" | "transcribe" | "embed";
+export type ModelCategory = "llm" | "image" | "video" | "3d" | "segment" | "tts" | "transcribe" | "embed";
 
 // Sub-menu order under the Models tab. LLM is the catch-all default.
 export const MODEL_CATEGORIES: { id: ModelCategory; label: string }[] = [
   { id: "llm", label: "LLM" },
   { id: "image", label: "Image" },
+  { id: "video", label: "Video" },
   { id: "3d", label: "3D" },
   { id: "segment", label: "Segment" },
   { id: "tts", label: "TTS" },
@@ -38,6 +39,10 @@ export function modelCategory(m: Model): ModelCategory {
   const c = m.capabilities;
   if (c?.segmentation) return "segment";
   if (c?.image_to_3d) return "3d";
+  // Before image: a video model is an sd-server diffusion model like any other
+  // and may well advertise image capabilities alongside, but it answers on the
+  // job API, so bucketing it as "image" would put it in the wrong tab.
+  if (c?.video_generation) return "video";
   if (c?.image_generation || c?.image_to_image) return "image";
   if (c?.audio_speech) return "tts";
   if (c?.audio_transcriptions) return "transcribe";

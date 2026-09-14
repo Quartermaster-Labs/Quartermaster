@@ -60,7 +60,9 @@ func (s *stubRouter) ProcessLogger(modelID string) (*logmon.Monitor, bool) {
 	}
 	return nil, false
 }
-func (s *stubRouter) Inflight(_ string) (int64, bool)     { return 0, false }
+func (s *stubRouter) Inflight(_ string) (int64, bool) { return 0, false }
+
+func (s *stubRouter) Lease(_ string) (func(), bool)       { return func() {}, false }
 func (s *stubRouter) LaunchedCmd(_ string) (string, bool) { return "", false }
 
 // newTestServer wires a Server with stub routers and a built mux.

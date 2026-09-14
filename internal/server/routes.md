@@ -17,6 +17,10 @@ Everything is registered in `routes` (`server.go`). Model-dispatched routes (`mo
   it through form parsing's query fallback rather than a body field. TRELLIS.2 image-to-3D
   (`trellis2-server`); the generated GLB comes back from the upstream's `/output/<name>`.
 - **`GET`** — `/v1/audio/voices`, `/sdapi/v1/loras`.
+- **`POST /sdcpp/v1/vid_gen`** (`videojobs.go`) — starts an async video render. Model-dispatched
+  like any other generate route, but the response is a job id, not a video; the handler buffers
+  the upstream reply so it can take a scheduler **lease** before the client can poll. The two
+  follow-up routes below are NOT model-dispatched, because a job path names no model.
 
 Auth-gated but **not** model-dispatched (`discoveryChain`):
 
@@ -24,7 +28,11 @@ Auth-gated but **not** model-dispatched (`discoveryChain`):
 - `POST /v1/images/upscale` (`upscale.go` `handleUpscale`) — standalone ESRGAN upscale,
   exec-per-request, no scheduler entry and no VRAM swap. Distinct from `/v1/segment` (SAM),
   which IS a model-dispatched backend.
-- `POST /v1/tools/search`, `/v1/tools/youtube/transcript`, `/v1/tools/youtube/search`,
+- `GET /sdcpp/v1/jobs/{id}`, `POST /sdcpp/v1/jobs/{id}/cancel` (`videojobs.go`) — poll and cancel
+  a tracked render. They carry a job id and nothing else, so they are routable only through the
+  server-side `videoJobs` registry (job id → model id). The GET answers from the watcher's cached
+  document, never from the upstream: the lease drops the instant a render completes, so the model
+  may already be evicted by the time the client's last poll arrives. `/v1/tools/youtube/transcript`, `/v1/tools/youtube/search`,
   `/v1/tools/youtube/comments` (`toolsapi.go`) — tool **execution** for external AI projects:
   the executors from `internal/tools`, same API-key credential as the inference routes, model-ready
   JSON responses, OpenAI-shaped errors. Stateless per call (provider config in the body).
@@ -122,6 +130,6 @@ See [`hubapi.md`](hubapi.md).
 See [`playground.md`](playground.md).
 
 `GET /api/mode`; `POST /auth/login`, `/auth/logout`, `GET /auth/me`;
-`GET`/`PUT /api/{chats,imagechats,speechchats,prefs}`; `GET /api/media/{file...}`;
+`GET`/`PUT /api/{chats,imagechats,videochats,speechchats,prefs}`; `GET /api/media/{file...}`;
 assistant memory `GET`/`POST /api/memories` + `DELETE /api/memories/{id}` (`memories.go`);
 server-run turns `POST /api/chats/turn` + `/stream`, `/state`, `/approve` + `DELETE` (`turns.go`).
