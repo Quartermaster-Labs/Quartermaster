@@ -18,7 +18,14 @@ upscale / custom entries, each with a `Default` per-class flag), loaded from the
 4. else a zero value → **fall back to the legacy `ServerExe`** (single-backend setups unchanged).
 
 The legacy `BackendExes`/`ServerExe`/`SdServerExe`/`TtsServerExe` are **derived** from the
-registry (first-per-kind, `deriveBackendExes`), so image/embedding/tts emit is untouched.
+registry (first-per-kind, `deriveBackendExes`) and stay as the fallback when no registry row
+resolves. Every class runs the same precedence through its own resolver: `image` and `segment`
+call `resolveBackend`, `tts` calls `resolveBackendPreferring`, and embedding (class `llm`) and
+ASR resolve too. A per-model pin therefore wins everywhere, and **only an auto model follows a
+later ★ switch**. One dead end: a `vllm` pin on an embedder keeps the class default, because
+there is no vllm embedding emitter (`vllm.go` emits a generate command). The `env:` single-device
+pin (`writeSingleDeviceEnv`) goes through the same resolver, so a pinned model does not pick up
+the default build's vendor variables either.
 
 **Config is "keyed to backend" for free:** one `Override` holds both llama and vllm fields;
 each emitter reads only its own, so switching kind never wipes the dormant set.

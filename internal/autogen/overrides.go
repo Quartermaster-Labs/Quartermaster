@@ -239,6 +239,9 @@ type ExtraImageModel struct {
 	Threads        int     `yaml:"threads"`
 	ExtraArgs      string  `yaml:"extraArgs"`
 	Unlisted       bool    `yaml:"unlisted"`
+	// Backend is the registry entry id this extra image model launches with,
+	// carried over from its Override. Empty => auto-pick the class default.
+	Backend string `yaml:"backend"`
 }
 
 // EncoderSet is the pool of shared diffusion component files, each field one

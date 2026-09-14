@@ -113,7 +113,9 @@ states).
 
 `IsEmbeddingModel` is driven by the gguf `PoolingType` (the authoritative signal).
 Emits `--embeddings` / `--pooling auto`, caps ctx via `embeddingCtx`, sets
-`capabilities.embedding`.
+`capabilities.embedding`. Embedders are class `llm`, so `embeddingExe` honors the model's
+backend pin exactly like a chat model (only an auto model follows the ★ default; a `vllm`
+pin keeps the class default, since there is no vllm embedding emitter).
 
 ## TTS (`audio.go`) — two engines in one class
 
@@ -168,9 +170,10 @@ therefore ranks **kind-matches-the-model's-format above `Default`**, with an exp
 parakeet.cpp `parakeet-server`. `IsASRModel` = Parakeet/FastConformer/NeMo archs + `asrFileRe`
 filename fallback — deliberately narrow on `nemotron`, which also names NVIDIA *text* LLMs.
 `asrCmdLines`/`emitASRModel`. No KV/offload sizing (encoder-decoder transducer, no growing KV;
-20–36× realtime on CPU, so GPU is opt-in via `ExtraArgs`).
-`checkEndpoint: none` — parakeet-server documents no health route, so readiness = listen socket
-open. `capabilities in:[audio] out:[text]`.
+20–36× realtime on CPU, so GPU is opt-in via `ExtraArgs`). `asrExe` honors the model's backend
+pin: only an auto model follows the class default the ★ sets. `checkEndpoint: none` —
+parakeet-server documents no health route, so readiness = listen socket open.
+`capabilities in:[audio] out:[text]`.
 
 Placed in the persistent `asr` coexistence group (`coexistSets.ASR`) for the same reason it emits
 no `estVramGB`: dictating must not evict the chat model the transcript is headed for. A GPU

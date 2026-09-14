@@ -224,7 +224,14 @@ const hashCacheSuffix = ".modelhash"
 //	sorted first: Z-Image was fed the VL file Krea-2 wants while the user's own
 //	qwenLlm pin named Qwen3-4B. Configs that declare qwenLlm change --llm for
 //	inputs that did not.
-const genVersion = "v71"
+//
+// v72: a per-model backend pin now reaches every emitted class, not just chat,
+//
+//	image, tts and 3d: embedding and ASR launch the pinned entry, a
+//	hand-declared extra image model carries its pin too, and the single-device
+//	env pin is derived from the resolved binary. Switching the ★ default no
+//	longer moves a model that named a backend.
+const genVersion = "v72"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

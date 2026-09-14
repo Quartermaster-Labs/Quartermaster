@@ -383,12 +383,8 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 		modelFlag = "-m"
 	}
 	// Per-model backend pick from the config editor (Override.Backend) or the
-	// ★Default image entry; fall back to the legacy derived exe. Guard on class so
-	// a stray non-image backend id can't emit the wrong launcher.
-	sdExe := s.SdServerExe
-	if rb := resolveBackend(s, ov, "image"); rb.Exe != "" && kindClass(rb.Kind) == "image" {
-		sdExe = rb.Exe
-	}
+	// ★Default image entry; fall back to the legacy derived exe.
+	sdExe := imageExe(s, ov)
 	lines = []string{
 		sdExe,
 		fmt.Sprintf("%s %s", modelFlag, modelPath),
@@ -573,6 +569,17 @@ func extraImageBudget(s Settings, m ExtraImageModel) float64 {
 	return budget
 }
 
+// imageExe picks the sd-server binary this image model launches: its own backend
+// pin when it has one, else the class default the ★ picks, else the legacy slot.
+// Only an auto model follows a later default switch. The class guard keeps a
+// stray non-image id from emitting the wrong launcher.
+func imageExe(s Settings, ov *Override) string {
+	if rb := resolveBackend(s, ov, "image"); rb.Exe != "" && kindClass(rb.Kind) == "image" {
+		return rb.Exe
+	}
+	return s.SdServerExe
+}
+
 // extraImageCmdLines builds the sd-server argv for one hand-declared extra image
 // model (safetensors DiT). Shared by config emit and the editor's cmd preview so
 // both render identically — the gguf-scan RenderSoloCmd path can't serve these
@@ -587,7 +594,7 @@ func extraImageCmdLines(s Settings, m ExtraImageModel) []string {
 		modelFlag = strings.TrimSpace(m.ModelFlag)
 	}
 	lines := []string{
-		s.SdServerExe,
+		imageExe(s, &Override{Backend: m.Backend}),
 		fmt.Sprintf("%s %s", modelFlag, imageArg(m.ModelPath)),
 		"-l 127.0.0.1",
 		"--listen-port ${PORT}",
@@ -719,6 +726,7 @@ func ApplyOverrideToExtraImage(m ExtraImageModel, ov *Override) ExtraImageModel 
 	m.T5Path = ov.T5Path
 	m.LlmPath = ov.TextEncoderPath
 	m.LoraDir = ov.LoraDir
+	m.Backend = ov.Backend
 	m.TeOnCpu = ov.TeOnCpu
 	m.VaeOnCpu = ov.VaeOnCpu
 	m.VaeTiling = ov.VaeTiling
@@ -764,7 +772,7 @@ func emitExtraImageModels(b *strings.Builder, s Settings, overrides []Override, 
 			fmt.Fprintf(b, "      %s\n", line)
 		}
 		fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
-		writeSingleDeviceEnv(b, s, s.SdServerExe)
+		writeSingleDeviceEnv(b, s, imageExe(s, &Override{Backend: m.Backend}))
 		writeEstVram(b, extraImageBudget(s, m))
 		b.WriteString("    checkEndpoint: /\n")
 		if m.Unlisted {
@@ -799,7 +807,7 @@ func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, n
 		fmt.Fprintf(b, "      %s\n", line)
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
-	writeSingleDeviceEnv(b, s, s.SdServerExe)
+	writeSingleDeviceEnv(b, s, imageExe(s, ov))
 	// Admission estimate = the --max-vram cap sd-server is told to stay inside.
 	// True peak during sampling/VAE decode runs above it, which is why the
 	// scheduler additionally refuses to spawn anything while a render is in

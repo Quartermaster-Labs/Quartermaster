@@ -5,6 +5,31 @@ import (
 	"testing"
 )
 
+// A hand-declared extra image model carries its own backend pin (the model
+// editor offers the same sd rows), so the class default must not move it.
+func TestExtraImageCmdLines_BackendPin(t *testing.T) {
+	rows := []BackendEntry{
+		{ID: "managed-rocm", Kind: "sd", Path: "C:/rocm/sd-server.exe", Default: true},
+		{ID: "build-vulkan", Kind: "sd", Path: "C:/vulkan/sd-server.exe"},
+	}
+	s := Settings{SdServerExe: "C:/rocm/sd-server.exe", Backends: rows}
+	m := ExtraImageModel{ModelPath: "C:/models/dit.safetensors", Backend: "build-vulkan"}
+
+	if got := extraImageCmdLines(s, m)[0]; got != "C:/vulkan/sd-server.exe" {
+		t.Errorf("pinned exe = %q, want the vulkan build", got)
+	}
+	m.Backend = ""
+	if got := extraImageCmdLines(s, m)[0]; got != "C:/rocm/sd-server.exe" {
+		t.Errorf("auto exe = %q, want the class default", got)
+	}
+
+	// The editor reaches the same cmd by applying the override onto the model.
+	m = ApplyOverrideToExtraImage(m, &Override{Backend: "build-vulkan"})
+	if got := RenderExtraImageCmd(s, m); !strings.HasPrefix(got, "C:/vulkan/sd-server.exe ") {
+		t.Errorf("preview = %q, want the pinned build first", got)
+	}
+}
+
 func TestIsImageArch(t *testing.T) {
 	for _, a := range []string{"flux", "FLUX", "flux.1", "sd3", "sd3.5", "qwen_image", "z_image", " stable-diffusion "} {
 		if !isImageArch(a) {

@@ -71,6 +71,19 @@ func embeddingCtx(meta Metadata, ov *Override) int {
 	return ctx
 }
 
+// embeddingExe picks the binary this embedder launches. Embedders are class
+// "llm", so the model editor offers the same llama rows a chat model gets, and
+// a per-model pin has to win the same way it does there: only an auto model
+// follows the class default the ★ picks. A vllm pin is the one exception --
+// there is no vllm embedding emitter (vllm.go emits a generate command), so it
+// keeps the class default rather than handing llama flags to a vllm binary.
+func embeddingExe(s Settings, ov *Override) string {
+	if rb := resolveBackend(s, ov, "llm"); rb.Exe != "" && !strings.EqualFold(strings.TrimSpace(rb.Kind), "vllm") {
+		return rb.Exe
+	}
+	return s.ServerExe
+}
+
 // embeddingCmdLines builds the llama-server argv (exe first) for an embedding
 // gguf. Embedders are small and fully offloaded (-ngl 99); no KV-cost sizing,
 // spec-decode, or chat/jinja flags apply. --pooling auto lets llama-server read
@@ -82,7 +95,7 @@ func embeddingCmdLines(s Settings, row GgufRow, ov *Override, meta Metadata) []s
 		threads = ov.Threads
 	}
 	lines := []string{
-		s.ServerExe,
+		embeddingExe(s, ov),
 		fmt.Sprintf("-m %s", strings.ReplaceAll(row.FullPath, "\\", "/")),
 		"--port ${PORT}",
 		"--host 127.0.0.1",
@@ -113,7 +126,7 @@ func emitEmbeddingModel(b *strings.Builder, s Settings, row GgufRow, ov *Overrid
 		fmt.Fprintf(b, "      %s\n", line)
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
-	writeSingleDeviceEnv(b, s, s.ServerExe)
+	writeSingleDeviceEnv(b, s, embeddingExe(s, ov))
 	// Embedders are small, fully offloaded and their KV is one short sequence:
 	// weights plus a flat pad is close enough for admission.
 	writeEstVram(b, row.SizeGB+embeddingOverheadGB)
