@@ -21,6 +21,8 @@
     isPlayable,
     type VideoJob,
   } from "../../lib/videoApi";
+  import { fetchSdLoras } from "../../lib/sdApi";
+  import type { SdApiLora, SdApiLoraRef } from "../../lib/types";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import Select from "./Select.svelte";
   import Composer from "./Composer.svelte";
@@ -73,6 +75,11 @@
   const fpsStore = userPref<string>("playground-video-fps", "24");
   const samplerStore = userPref<string>("playground-video-sampler", "");
   const schedulerStore = userPref<string>("playground-video-scheduler", "");
+  // Selected LoRAs, keyed per model then per LoRA `path` -> strength. Keyed by
+  // `path` (what sd-server resolves against --lora-model-dir) and not by the
+  // display `name`, which the backend rejects as an invalid lora path. Per model
+  // because a LoRA is trained against one base and must not leak across a switch.
+  const videoLoraStore = userPref<Record<string, Record<string, number>>>("playground-video-loras", {});
 
   let prompt = $state("");
   let promptEl = $state<HTMLTextAreaElement>();
@@ -275,6 +282,54 @@
     if (!fpsOptions.includes(Number($fpsStore))) $fpsStore = String(fpsOptions[0]);
   });
 
+  // Available LoRAs for the selected model, from GET /sdapi/v1/loras. sd-server
+  // lists whatever sits in its --lora-model-dir, which autogen points at the
+  // model gguf's own folder, so a turbo LoRA dropped next to the checkpoint is
+  // zero-config. NOT fetched on model change: that route is model-dispatched, so
+  // listing would swap a multi-gigabyte video model in. The user asks for it.
+  let loraList = $state<SdApiLora[]>([]);
+  let loraListModel = $state("");
+  let loraLoading = $state(false);
+  let loraError = $state("");
+
+  async function loadLoras() {
+    const model = $selectedModelStore;
+    if (!model) return;
+    loraLoading = true;
+    loraError = "";
+    try {
+      loraList = await fetchSdLoras(model);
+      loraListModel = model;
+      // Drop saved selections the backend no longer lists (a deleted file, or a
+      // row the model-file filter now strips), which would fail the render.
+      const valid = new Set(loraList.map((l) => l.path));
+      const saved = $videoLoraStore[model] ?? {};
+      const kept = Object.fromEntries(Object.entries(saved).filter(([p]) => valid.has(p)));
+      if (Object.keys(kept).length !== Object.keys(saved).length) {
+        $videoLoraStore = { ...$videoLoraStore, [model]: kept };
+      }
+    } catch (e) {
+      loraError = e instanceof Error ? e.message : String(e);
+    } finally {
+      loraLoading = false;
+    }
+  }
+
+  // The refs sent with a render. multiplier 0 means "not applied", so it drops.
+  let activeLoras = $derived.by<SdApiLoraRef[]>(() =>
+    Object.entries($videoLoraStore[$selectedModelStore] ?? {})
+      .filter(([, mult]) => mult !== 0)
+      .map(([path, multiplier]) => ({ path, multiplier }))
+  );
+
+  function setLoraStrength(path: string, multiplier: number) {
+    const model = $selectedModelStore;
+    const forModel = { ...($videoLoraStore[model] ?? {}) };
+    if (multiplier === 0) delete forModel[path];
+    else forModel[path] = multiplier;
+    $videoLoraStore = { ...$videoLoraStore, [model]: forModel };
+  }
+
   $effect(() => {
     playgroundStores.videoGenerating.set(isGenerating);
   });
@@ -301,6 +356,7 @@
         video_frames: snapFrames(Number($framesStore), $selectedModelStore),
         fps: Number($fpsStore),
         seed: $seedStore,
+        lora: activeLoras.length ? activeLoras : undefined,
         sample_params: {
           sample_steps: $stepsStore,
           sample_method: $samplerStore || undefined,
@@ -647,7 +703,7 @@
             <div class="flex flex-col gap-1">
               <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
                 CFG
-                <span class="cursor-help opacity-60" use:tip={"Guidance. Distilled models (MiniMax-H3) require 1.0 - the backend refuses to sample above it."}>(?)</span>
+                <span class="cursor-help opacity-60" use:tip={"Guidance. MiniMax-H3 is conditioned at 1.0 and washes out above it; Wan wants about 5. Nothing rejects a bad value, it just renders badly."}>(?)</span>
               </span>
               <input type="number" min="1" max="30" step="0.5" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$cfgScaleStore} />
             </div>
@@ -670,6 +726,54 @@
               <span class="text-xs uppercase tracking-wide text-txtsecondary">Scheduler</span>
               <Select bind:value={$schedulerStore} compact options={SCHEDULER_OPTIONS} />
             </div>
+          </div>
+          <!-- LoRAs. The list comes from the backend's --lora-model-dir, so it
+               needs the model loaded: fetched on demand, never automatically.
+               A turbo LoRA here is what makes a 4-step render correct, which is
+               why Steps stays at the base model's 20 until one is selected. -->
+          <div class="flex flex-col gap-1 pt-1 border-t border-card-border">
+            <div class="flex items-center justify-between">
+              <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
+                LoRAs
+                <span class="cursor-help opacity-60" use:tip={"Adapters found next to the model file. Listing them loads the model. A turbo LoRA (4 or 8 step) also needs Steps lowered to match."}>(?)</span>
+              </span>
+              <button
+                class="text-xs text-primary hover:underline disabled:opacity-50"
+                onclick={loadLoras}
+                disabled={loraLoading || !$selectedModelStore}
+              >{loraLoading ? "Loading…" : loraListModel === $selectedModelStore ? "Refresh" : "Load list"}</button>
+            </div>
+            {#if loraError}
+              <p class="text-xs text-red-500">{loraError}</p>
+            {:else if loraListModel === $selectedModelStore && loraList.length === 0}
+              <p class="text-xs text-txtsecondary">No LoRAs in this model's folder.</p>
+            {:else if loraListModel === $selectedModelStore}
+              {#each loraList as lora (lora.path)}
+                {@const strength = $videoLoraStore[$selectedModelStore]?.[lora.path] ?? 0}
+                <div class="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    class="accent-primary"
+                    checked={strength !== 0}
+                    disabled={isGenerating}
+                    onchange={(e) => setLoraStrength(lora.path, (e.currentTarget as HTMLInputElement).checked ? 1 : 0)}
+                  />
+                  <span class="text-xs truncate flex-1" use:tip={lora.path}>{lora.name}</span>
+                  <input
+                    type="number"
+                    min="-2"
+                    max="2"
+                    step="0.05"
+                    class="w-16 px-1.5 py-0.5 text-xs rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary disabled:opacity-40"
+                    disabled={strength === 0 || isGenerating}
+                    value={strength}
+                    onchange={(e) => setLoraStrength(lora.path, Number((e.currentTarget as HTMLInputElement).value))}
+                  />
+                </div>
+              {/each}
+            {:else if activeLoras.length}
+              <p class="text-xs text-txtsecondary">{activeLoras.map((l) => `${l.path} @ ${l.multiplier}`).join(", ")}</p>
+            {/if}
           </div>
         </div>
       {/snippet}

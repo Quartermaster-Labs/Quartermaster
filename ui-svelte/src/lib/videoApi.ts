@@ -1,4 +1,5 @@
 import { inferenceHeaders } from "./inferenceAuth";
+import type { SdApiLoraRef } from "./types";
 
 // sd-server's NATIVE job API, which is what video generation runs on. Unlike
 // /sdapi txt2img (one request, one picture, minutes of waiting) a video render
@@ -53,6 +54,11 @@ export interface VideoGenRequest {
   fps: number;
   seed?: number;
   output_format?: string;
+  // Per-request LoRAs, the same {path, multiplier} shape /sdapi txt2img takes.
+  // This is the ONLY way a turbo LoRA reaches a render: there is no launch-time
+  // --lora flag, only --lora-model-dir, so which adapters apply is decided per
+  // request and never at process start.
+  lora?: SdApiLoraRef[];
   sample_params?: {
     sample_steps?: number;
     sample_method?: string;
