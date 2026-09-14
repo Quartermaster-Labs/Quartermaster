@@ -160,13 +160,16 @@ func TestImageCmdLines_UntouchedByVideo(t *testing.T) {
 // story for a still; a clip's decode also grows along TIME, and only
 // --temporal-tiling chunks that axis. --stream-layers frees the weight residency
 // the sampler then spends on latents.
+//
+// Wan is the family used here because it is the one whose VAE implements a tiled
+// decode: see TestTemporalTiling_GatedOnVaeSupport for the other half.
 func TestVideoVramLevers_DefaultOnForVideoOnly(t *testing.T) {
 	s := Settings{SdServerExe: "sd-server", TargetVramGB: 24, VramOverheadGB: 1, Threads: 4,
-		Encoders: EncoderSet{VideoVae: "vae.safetensors", QwenLlm: "qwen.gguf"}}
-	row := GgufRow{FullPath: `D:\models\h3.gguf`, SizeGB: 8.0}
-	vid := videoInfo{Kind: VideoFamilyMinimaxH3, AudioOut: false}
+		Encoders: EncoderSet{T5: "umt5.safetensors"}}
+	row := GgufRow{FullPath: `D:\models\wan2.2-t2v.gguf`, SizeGB: 8.0}
+	vid := videoInfo{Kind: VideoFamilyWan}
 
-	lines, _, _, _ := imageCmdLines(s, row, &Override{}, "", "h3", 5120, vid)
+	lines, _, _, _ := imageCmdLines(s, row, &Override{}, "", "wan", 0, vid)
 	joined := strings.Join(lines, " ")
 	for _, want := range []string{"--temporal-tiling", "--stream-layers"} {
 		if !strings.Contains(joined, want) {
@@ -176,7 +179,7 @@ func TestVideoVramLevers_DefaultOnForVideoOnly(t *testing.T) {
 
 	// Each toggles off independently: they are separate knobs precisely because
 	// --stream-layers trades PCIe traffic for VRAM and --temporal-tiling does not.
-	off, _, _, _ := imageCmdLines(s, row, &Override{TemporalTiling: "off"}, "", "h3", 5120, vid)
+	off, _, _, _ := imageCmdLines(s, row, &Override{TemporalTiling: "off"}, "", "wan", 0, vid)
 	j := strings.Join(off, " ")
 	if strings.Contains(j, "--temporal-tiling") {
 		t.Errorf("temporalTiling=off must suppress the flag: %s", j)
@@ -184,7 +187,7 @@ func TestVideoVramLevers_DefaultOnForVideoOnly(t *testing.T) {
 	if !strings.Contains(j, "--stream-layers") {
 		t.Errorf("temporalTiling=off must not touch --stream-layers: %s", j)
 	}
-	off2, _, _, _ := imageCmdLines(s, row, &Override{StreamLayers: "off"}, "", "h3", 5120, vid)
+	off2, _, _, _ := imageCmdLines(s, row, &Override{StreamLayers: "off"}, "", "wan", 0, vid)
 	j2 := strings.Join(off2, " ")
 	if strings.Contains(j2, "--stream-layers") {
 		t.Errorf("streamLayers=off must suppress the flag: %s", j2)
@@ -229,5 +232,35 @@ func TestExtraImageVramLevers_OptIn(t *testing.T) {
 		if !strings.Contains(on, want) {
 			t.Errorf("extra model opt-in missing %q: %s", want, on)
 		}
+	}
+}
+
+// --temporal-tiling is emitted only for a family whose VAE can actually decode
+// in windows along time. sd-server takes the flag from anyone and falls back
+// with "does not support temporal tiling ...; processing the full temporal
+// dimension", so an ungated flag would put a VRAM lever in the launch line that
+// the decode never applies: not an error, just a lie about what is running.
+func TestTemporalTiling_GatedOnVaeSupport(t *testing.T) {
+	s := Settings{SdServerExe: "sd-server", TargetVramGB: 24, VramOverheadGB: 1, Threads: 4,
+		Encoders: EncoderSet{VideoVae: "vae.safetensors", QwenLlm: "qwen.gguf"}}
+	row := GgufRow{FullPath: `D:\models\h3.gguf`, SizeGB: 8.0}
+	h3 := videoInfo{Kind: VideoFamilyMinimaxH3}
+
+	// H3's VAE is a transformer autoencoder with no tiled decode path.
+	def, _, _, _ := imageCmdLines(s, row, &Override{}, "", "h3", 5120, h3)
+	j := strings.Join(def, " ")
+	if strings.Contains(j, "--temporal-tiling") {
+		t.Errorf("H3 VAE cannot tile along time, flag must not be emitted: %s", j)
+	}
+	// The other lever is unaffected: it works on the weights, not the VAE.
+	if !strings.Contains(j, "--stream-layers") {
+		t.Errorf("--stream-layers must still default on for H3: %s", j)
+	}
+
+	// An explicit "on" forces it anyway, so a backend build that gains support
+	// needs an override row rather than a recompile.
+	on, _, _, _ := imageCmdLines(s, row, &Override{TemporalTiling: "on"}, "", "h3", 5120, h3)
+	if !strings.Contains(strings.Join(on, " "), "--temporal-tiling") {
+		t.Errorf("explicit temporalTiling=on must force the flag: %s", strings.Join(on, " "))
 	}
 }

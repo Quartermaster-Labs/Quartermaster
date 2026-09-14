@@ -779,7 +779,7 @@ type Override struct {
 	//   DiffusionFa:  "" => on  (--diffusion-fa)
 	//   VaeOnCpu:     "" => off (VAE decodes on GPU); "on" adds vae=cpu to --backend
 	//                 (bf16 VAE whitens on some GPU backends; CPU is the safe fallback)
-	//   TemporalTiling: "" => on for VIDEO models only (--temporal-tiling)
+	//   TemporalTiling: "" => on for video families whose VAE implements it
 	//   StreamLayers:   "" => on for VIDEO models only (--stream-layers)
 	OffloadToCpu string `yaml:"offloadToCpu"`
 	TeOnCpu      string `yaml:"teOnCpu"`
@@ -794,6 +794,11 @@ type Override struct {
 	// along TIME with --video-frames, and --temporal-tiling is the only flag that
 	// chunks that axis (tune it with --extra-tiling-args
 	// temporal_tile_size=N,temporal_tile_overlap=N via ExtraArgs).
+	//
+	// TemporalTiling "" is on only where the family's VAE actually implements a
+	// tiled decode (Wan today, not MiniMax-H3, which accepts the flag and
+	// processes the full temporal dimension anyway). "on" forces it regardless,
+	// for a backend build that has gained support since.
 	//
 	// --stream-layers attacks the other peak from the side: it streams the
 	// diffusion weights against the --max-vram budget with prefetch instead of

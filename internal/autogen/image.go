@@ -457,17 +457,26 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	if ov == nil || ov.VaeTiling != "off" {
 		lines = append(lines, "--vae-tiling")
 	}
-	// Video-only VRAM levers, on by default. --vae-tiling above chunks the decode
-	// spatially; a clip's decode also grows along TIME with --video-frames and
-	// only --temporal-tiling chunks that axis. --stream-layers streams the
-	// diffusion weights against --max-vram rather than pinning them resident,
-	// which hands that headroom to the sampler and is what buys frame count.
+	// Video-only VRAM levers. --vae-tiling above chunks the decode spatially; a
+	// clip's decode also grows along TIME with --video-frames and only
+	// --temporal-tiling chunks that axis. --stream-layers streams the diffusion
+	// weights against --max-vram rather than pinning them resident, which hands
+	// that headroom to the sampler and is what buys frame count.
 	//
-	// Gated on vid.is() rather than emitted blindly: --temporal-tiling applies to
-	// a video VAE decode and nothing else, and an image model has no long-clip
-	// peak for --stream-layers to relieve, so on the image path both would be
-	// noise in the launch line at best.
-	if vid.is() && (ov == nil || ov.TemporalTiling != "off") {
+	// Both are gated on vid.is(): --temporal-tiling applies to a video VAE decode
+	// and nothing else, and an image model has no long-clip peak for
+	// --stream-layers to relieve, so on the image path both would be noise in the
+	// launch line at best.
+	//
+	// --temporal-tiling is gated a second time, on the FAMILY, because only some
+	// video VAEs implement a tiled decode and the rest accept the flag and ignore
+	// it (see vaeTemporalTiling). An explicit "on" still forces it through, so a
+	// build that adds support for a family needs an override row rather than a
+	// recompile.
+	switch {
+	case ov != nil && ov.TemporalTiling == "on":
+		lines = append(lines, "--temporal-tiling")
+	case vid.is() && vaeTemporalTiling(vid) && (ov == nil || ov.TemporalTiling != "off"):
 		lines = append(lines, "--temporal-tiling")
 	}
 	if vid.is() && (ov == nil || ov.StreamLayers != "off") {

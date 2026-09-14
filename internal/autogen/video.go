@@ -110,6 +110,29 @@ func videoDefaultsFor(v videoInfo) genDefaults {
 	return genDefaults{}
 }
 
+// vaeTemporalTiling reports whether this family's VAE can actually decode in
+// windows along TIME, which is a property of the VAE implementation and not of
+// the flag.
+//
+// sd-server accepts --temporal-tiling for any model and silently falls back:
+// "%s does not support temporal tiling for %s; processing the full temporal
+// dimension". So an ungated flag is not an error, it is worse than one, a launch
+// line that claims a VRAM lever the decode never applies. Emitting it only where
+// it bites keeps the config honest about what is running.
+//
+// Only two implementations exist in the shipped binary, one per family:
+// WanVAERunner::_compute_temporal_tiled (stateful, carrying causal conv state
+// across windows) and LTXVideoVAE::decode_temporal_tiled_streaming. H3's VAE is
+// a transformer autoencoder with no tiled decode path at all, which is the same
+// structural difference that gives it its own family in the encoder pool.
+func vaeTemporalTiling(v videoInfo) bool {
+	switch v.Kind {
+	case VideoFamilyWan:
+		return true
+	}
+	return false
+}
+
 // videoComponents wires the component files a video DiT needs, drawing from the
 // same pool the image arms use. It returns the paths and appends to missing any
 // role the family REQUIRES that nothing supplied (surfaced as a YAML WARNING, so

@@ -1820,7 +1820,7 @@
               <Toggle size="sm" checked={temporalTiling !== "off"} onchange={(on) => (temporalTiling = on ? "" : "off")} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Temporal tiling <span class="text-[0.6rem] uppercase opacity-50">video</span>
-                {@render hint("--temporal-tiling. Tile the VAE decode along TIME as well (on by default, video models only). VAE tiling above chunks the decode spatially, which is all a still needs; a clip's decode also grows with frame count and this is the only flag that chunks that axis. Emitted only for video models, so it is inert here on an image model.")}
+                {@render hint("--temporal-tiling. Tile the VAE decode along TIME as well. VAE tiling above chunks the decode spatially, which is all a still needs; a clip's decode also grows with frame count and this is the only flag that chunks that axis. On by default only where the VAE can actually do it (Wan today, NOT MiniMax-H3, whose decode ignores the flag and processes every frame at once). Turning it on here forces it out anyway, for a backend build that has since gained support.")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
