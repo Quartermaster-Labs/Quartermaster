@@ -685,12 +685,12 @@
      and modals are `fixed` off <body>, so clipping here does not reach them. -->
 <div class="relative h-screen flex bg-chrome overflow-hidden">
   <!-- Side rail: icons only at rest; expands on hover. Same width hover or with the chat list open.
-       The slot reserves only the RESTING width - the rail itself is absolute inside it, so a
-       hover expansion draws over the tab like a curtain instead of reflowing it. Pinning the
-       chat list open still widens the slot: that one is a deliberate, persistent layout change. -->
-  <div class="relative shrink-0 z-40 {historyOpen ? 'w-44' : 'w-14'}">
+       The slot reserves only the RESTING width - the rail itself is absolute inside it, so
+       expanding draws over the tab like a curtain instead of reflowing it. That holds for the
+       pinned-open state too: opening the history flyout must not resize the tab beside it. -->
+  <div class="relative shrink-0 z-40 w-14">
   <nav
-    class="group/rail absolute inset-y-0 left-0 {historyOpen ? 'w-44' : 'w-14'} hover:w-44 transition-[width] duration-200 overflow-hidden flex flex-col bg-chrome pb-2 hover:shadow-xl hover:shadow-black/20"
+    class="group/rail absolute inset-y-0 left-0 {historyOpen ? 'w-48' : 'w-14'} hover:w-48 transition-[width] duration-200 overflow-hidden flex flex-col bg-chrome pb-2 hover:shadow-xl hover:shadow-black/20"
   >
     <!-- No brand block: the title bar carries the mark and the name, so the
          rail is nav and nothing else, starting at the top (mirrors the
@@ -701,7 +701,7 @@
       <button
         onclick={() => clickTab(tab.id)}
         use:tooltip={tab.hint}
-        class="relative w-full flex items-center gap-3 pr-3 h-10 shrink-0 text-sm transition-colors {active
+        class="relative w-full flex items-center pr-2 h-10 shrink-0 text-sm transition-colors {active
           ? 'text-txtmain bg-secondary/60'
           : 'text-txtsecondary hover:text-txtmain hover:bg-secondary/40'}"
       >
@@ -739,7 +739,7 @@
     <button
       onclick={() => { wikiArticleId = null; showWiki = true; }}
       use:tooltip={"The quartermaster wiki: loading, config, backends, troubleshooting"}
-      class="w-full flex items-center gap-3 pr-3 h-10 shrink-0 text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
+      class="w-full flex items-center pr-2 h-10 shrink-0 text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
       <span class="w-14 shrink-0 flex items-center justify-center"><BookOpen size={18} class="shrink-0" /></span>
       <span class="font-mono text-sm whitespace-nowrap {historyOpen ? 'opacity-100' : 'opacity-0'} group-hover/rail:opacity-100 transition-opacity">
@@ -749,7 +749,7 @@
     <button
       onclick={() => (showSettings = true)}
       use:tooltip={"Theme, memory, web search and the system prompt"}
-      class="w-full flex items-center gap-3 pr-3 h-10 shrink-0 text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
+      class="w-full flex items-center pr-2 h-10 shrink-0 text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
       <span class="w-14 shrink-0 flex items-center justify-center"><Settings size={18} class="shrink-0" /></span>
       <span class="font-mono text-sm whitespace-nowrap {historyOpen ? 'opacity-100' : 'opacity-0'} group-hover/rail:opacity-100 transition-opacity">
@@ -759,7 +759,7 @@
     <button
       onclick={() => (confirmLogout = true)}
       use:tooltip={`Log out (${$me})`}
-      class="w-full flex items-center gap-3 pr-3 h-10 shrink-0 text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
+      class="w-full flex items-center pr-2 h-10 shrink-0 text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
       <span class="w-14 shrink-0 flex items-center justify-center"><LogOut size={18} class="shrink-0" /></span>
       <span class="font-mono text-sm whitespace-nowrap truncate {historyOpen ? 'opacity-100' : 'opacity-0'} group-hover/rail:opacity-100 transition-opacity">
@@ -772,11 +772,12 @@
   <!-- The notch <main>'s rounded corner carves out shows the root's bg-chrome,
        the same tone as the rail. When the FIRST rail row is the active one its
        highlight is what belongs behind the notch, so paint that under there
-       too. Rail rows are h-10, so only the first can ever reach the corner.
+       too. Rail rows are h-10, so only the first can ever reach the corner. The rail never
+       reflows <main>, so this patch is always at the resting width.
        Sits before <main> in the DOM and <main> is `relative`, so it paints over
        this and leaves it showing only where the corner is cut away. -->
   {#if $selectedTabStore === tabs[0].id}
-    <span class="absolute top-0 h-10 w-4 bg-secondary/60 {historyOpen ? 'left-44' : 'left-14'}"></span>
+    <span class="absolute top-0 h-10 w-4 bg-secondary/60 left-14"></span>
   {/if}
 
   <!-- Tab content. Hairlines on its top and left edges are the whole separator
@@ -1620,7 +1621,7 @@
 {#if historyOpen && (onChats || onImages || onVideo || onThreeD || onSpeech)}
   <div class="fixed inset-0 z-30" onclick={() => (historyOpen = false)} role="presentation">
     <div
-      class="absolute left-[12rem] top-4 w-72 max-h-[calc(80vh/var(--qm-scale))] flex flex-col p-2 rounded-lg border border-card-border bg-surface shadow-xl"
+      class="absolute left-[13rem] top-4 w-72 max-h-[calc(80vh/var(--qm-scale))] flex flex-col p-2 rounded-lg border border-card-border bg-surface shadow-xl"
       onclick={(e) => e.stopPropagation()}
       role="presentation"
     >
