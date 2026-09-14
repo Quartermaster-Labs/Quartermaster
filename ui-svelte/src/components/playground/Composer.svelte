@@ -13,6 +13,7 @@
   let {
     value = $bindable(""),
     placeholder = "",
+    hideTextarea = false,
     textareaDisabled = false,
     textareaEl = $bindable(undefined),
     onFocus,
@@ -36,6 +37,11 @@
   }: {
     value?: string;
     placeholder?: string;
+    // Drops the prompt box, keeping the control row, the model picker and the
+    // settings popover. The 3D tab is the one generator with NO text input: its
+    // whole request is an image, so a textarea there would be a field nothing
+    // reads.
+    hideTextarea?: boolean;
     textareaDisabled?: boolean;
     textareaEl?: HTMLTextAreaElement;
     onFocus?: () => void;
@@ -118,18 +124,20 @@
 
 <div class="composer-shell">
   {@render topExtra?.()}
-  <textarea
-    bind:this={textareaEl}
-    class="composer-textarea pretty-scroll min-h-[3rem] max-h-[30rem]"
-    rows="2"
-    {placeholder}
-    disabled={textareaDisabled}
-    bind:value
-    onfocus={onFocus}
-    onblur={onBlur}
-    onkeydown={onKeydown}
-    onpaste={onPaste}
-  ></textarea>
+  {#if !hideTextarea}
+    <textarea
+      bind:this={textareaEl}
+      class="composer-textarea pretty-scroll min-h-[3rem] max-h-[30rem]"
+      rows="2"
+      {placeholder}
+      disabled={textareaDisabled}
+      bind:value
+      onfocus={onFocus}
+      onblur={onBlur}
+      onkeydown={onKeydown}
+      onpaste={onPaste}
+    ></textarea>
+  {/if}
 
   <div class="flex items-center justify-between" bind:clientHeight={controlsH}>
     <div class="flex-1 min-w-0 flex items-center gap-1">

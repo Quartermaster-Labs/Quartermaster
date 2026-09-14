@@ -69,19 +69,27 @@
     type VideoSession,
   } from "../stores/videoHistory";
   import {
+    threeDSessions,
+    activeThreeDChatId,
+    generatingThreeDChatId,
+    newThreeDChatId,
+    type ThreeDSession,
+  } from "../stores/threeDHistory";
+  import {
     speechSessions,
     activeSpeechChatId,
     generatingSpeechChatId,
     newSpeechChatId,
     type SpeechSession,
   } from "../stores/speechHistory";
-  import { MessageSquare, Image, Film, Volume2, Mic, LogOut, Plus, Trash2, Settings, HelpCircle, BookOpen, SlidersHorizontal, Search, FileText, Pencil, BrainCircuit, RefreshCw, Square } from "lucide-svelte";
+  import { MessageSquare, Image, Film, Box, Volume2, Mic, LogOut, Plus, Trash2, Settings, HelpCircle, BookOpen, SlidersHorizontal, Search, FileText, Pencil, BrainCircuit, RefreshCw, Square } from "lucide-svelte";
   import WikiModal from "../components/WikiModal.svelte";
   import ChatInterface from "../components/playground/ChatInterface.svelte";
   import Select from "../components/Select.svelte";
   import Toggle from "../components/Toggle.svelte";
   import ImageInterface from "../components/playground/ImageInterface.svelte";
   import VideoInterface from "../components/playground/VideoInterface.svelte";
+  import ThreeDInterface from "../components/playground/ThreeDInterface.svelte";
   import AudioInterface from "../components/playground/AudioInterface.svelte";
   import SpeechInterface from "../components/playground/SpeechInterface.svelte";
 
@@ -94,6 +102,7 @@
     { id: "chat", label: "Chats", hint: "Text chat with tools, reasoning and web search", icon: MessageSquare },
     { id: "images", label: "Images", hint: "Generate, edit, mask and upscale images", icon: Image },
     { id: "video", label: "Video", hint: "Generate short video clips from a prompt", icon: Film },
+    { id: "3d", label: "3D", hint: "Turn a picture into a 3D mesh you can orbit and download", icon: Box },
     { id: "speech", label: "Speech", hint: "Text to speech: pick a voice and read text aloud", icon: Volume2 },
     { id: "audio", label: "Transcription", hint: "Transcribe recorded or uploaded audio to text", icon: Mic },
   ];
@@ -101,16 +110,18 @@
   let onChats = $derived($selectedTabStore === "chat");
   let onImages = $derived($selectedTabStore === "images");
   let onVideo = $derived($selectedTabStore === "video");
+  let onThreeD = $derived($selectedTabStore === "3d");
   let onSpeech = $derived($selectedTabStore === "speech");
   let historyOpen = $state(false);
   let sortedSessions = $derived([...$chatSessions].sort((a, b) => b.updatedAt - a.updatedAt));
   let sortedImageSessions = $derived([...$imageSessions].sort((a, b) => b.updatedAt - a.updatedAt));
   let sortedVideoSessions = $derived([...$videoSessions].sort((a, b) => b.updatedAt - a.updatedAt));
+  let sortedThreeDSessions = $derived([...$threeDSessions].sort((a, b) => b.updatedAt - a.updatedAt));
   let sortedSpeechSessions = $derived([...$speechSessions].sort((a, b) => b.updatedAt - a.updatedAt));
 
-  // Chat, Images and Video have a history flyout; Speech manages its own
+  // Chat, Images, Video and 3D have a history flyout; Speech manages its own
   // threads inline.
-  const hasHistory = (id: Tab) => id === "chat" || id === "images" || id === "video";
+  const hasHistory = (id: Tab) => id === "chat" || id === "images" || id === "video" || id === "3d";
 
   function clickTab(id: Tab) {
     if (hasHistory(id)) {
@@ -159,6 +170,18 @@
     activeVideoChatId.set(s.id);
   }
 
+  // 3D threads: same pure-store ops as chats/images.
+  function newThreeDChat() {
+    const cur = get(threeDSessions).find((s) => s.id === get(activeThreeDChatId));
+    if (cur && cur.turns.length === 0) {
+      activeThreeDChatId.set(cur.id);
+      return;
+    }
+    const s: ThreeDSession = { id: newThreeDChatId(), title: "New mesh", turns: [], updatedAt: Date.now() };
+    threeDSessions.update((ss) => [s, ...ss]);
+    activeThreeDChatId.set(s.id);
+  }
+
   // Speech threads: same pure-store ops as chats/images.
   function newSpeechChat() {
     const cur = get(speechSessions).find((s) => s.id === get(activeSpeechChatId));
@@ -182,9 +205,23 @@
     return [];
   }
 
+  // A 3D thread's thumbnail is its SOURCE image, not its result: a GLB cannot
+  // be drawn in an <img>, and rendering a WebGL preview per history row would
+  // spend a real context on each. The source is also the better identifier -
+  // the title is never derived on this tab, so the picture is all a row has.
+  function threeDThumbs(id: string): string[] {
+    const s = $threeDSessions.find((x) => x.id === id);
+    if (!s) return [];
+    for (let i = s.turns.length - 1; i >= 0; i--) {
+      if (s.turns[i].image) return [s.turns[i].image];
+    }
+    return [];
+  }
+
   let confirmDeleteId = $state<string | null>(null);
   let confirmDeleteImageId = $state<string | null>(null);
   let confirmDeleteVideoId = $state<string | null>(null);
+  let confirmDeleteThreeDId = $state<string | null>(null);
   let confirmDeleteSpeechId = $state<string | null>(null);
   let showSettings = $state(false);
   // Which settings category the modal's side-nav has selected.
@@ -590,6 +627,23 @@
     }
   }
 
+  function deleteThreeDChat(id: string) {
+    confirmDeleteThreeDId = null;
+    const remaining = get(threeDSessions).filter((s) => s.id !== id);
+    if (id !== get(activeThreeDChatId)) {
+      threeDSessions.set(remaining);
+      return;
+    }
+    if (remaining.length > 0) {
+      threeDSessions.set(remaining);
+      activeThreeDChatId.set(remaining[0].id);
+    } else {
+      const s: ThreeDSession = { id: newThreeDChatId(), title: "New mesh", turns: [], updatedAt: Date.now() };
+      threeDSessions.set([s]);
+      activeThreeDChatId.set(s.id);
+    }
+  }
+
   function deleteVideoChat(id: string) {
     confirmDeleteVideoId = null;
     const remaining = get(videoSessions).filter((s) => s.id !== id);
@@ -664,6 +718,9 @@
             {#if tab.id === "video" && $generatingVideoChatId}
               <span class="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary reason-glow" use:tooltip={"A video is generating"}></span>
             {/if}
+            {#if tab.id === "3d" && $generatingThreeDChatId}
+              <span class="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary reason-glow" use:tooltip={"A mesh is generating"}></span>
+            {/if}
             {#if tab.id === "speech" && $generatingSpeechChatId}
               <span class="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary reason-glow" use:tooltip={"Speech is generating"}></span>
             {/if}
@@ -730,6 +787,7 @@
     <div class="h-full" class:tab-hidden={$selectedTabStore !== "chat"}><ChatInterface /></div>
     <div class="h-full" class:tab-hidden={$selectedTabStore !== "images"}><ImageInterface /></div>
     <div class="h-full" class:tab-hidden={$selectedTabStore !== "video"}><VideoInterface /></div>
+    <div class="h-full" class:tab-hidden={$selectedTabStore !== "3d"}><ThreeDInterface /></div>
     <div class="h-full" class:tab-hidden={$selectedTabStore !== "speech"}><SpeechInterface /></div>
     <div class="h-full" class:tab-hidden={$selectedTabStore !== "audio"}><AudioInterface /></div>
   </main>
@@ -762,6 +820,41 @@
         <button
           class="px-3 py-1.5 rounded-md text-sm bg-red-500 text-white hover:opacity-90 transition-opacity"
           onclick={() => confirmDeleteId && deleteChat(confirmDeleteId)}
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Delete 3D thread confirmation -->
+{#if confirmDeleteThreeDId}
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+    onclick={() => (confirmDeleteThreeDId = null)}
+    onkeydown={(e) => e.key === "Escape" && (confirmDeleteThreeDId = null)}
+    role="button"
+    tabindex="-1"
+  >
+    <div
+      class="w-72 flex flex-col gap-3 p-4 rounded-lg border border-card-border bg-surface shadow-lg"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+      role="dialog"
+      tabindex="-1"
+    >
+      <p class="text-sm text-txtmain">Delete this 3D thread? This can't be undone.</p>
+      <div class="flex justify-end gap-2">
+        <button
+          class="px-3 py-1.5 rounded-md text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
+          onclick={() => (confirmDeleteThreeDId = null)}
+        >
+          Cancel
+        </button>
+        <button
+          class="px-3 py-1.5 rounded-md text-sm bg-red-500 text-white hover:opacity-90 transition-opacity"
+          onclick={() => confirmDeleteThreeDId && deleteThreeDChat(confirmDeleteThreeDId)}
         >
           Delete
         </button>
@@ -1524,7 +1617,7 @@
   </div>
 {/snippet}
 
-{#if historyOpen && (onChats || onImages || onVideo || onSpeech)}
+{#if historyOpen && (onChats || onImages || onVideo || onThreeD || onSpeech)}
   <div class="fixed inset-0 z-30" onclick={() => (historyOpen = false)} role="presentation">
     <div
       class="absolute left-[12rem] top-4 w-72 max-h-[calc(80vh/var(--qm-scale))] flex flex-col p-2 rounded-lg border border-card-border bg-surface shadow-xl"
@@ -1537,6 +1630,8 @@
         {@render historyPanel(sortedImageSessions, $activeImageChatId, $generatingImageChatId, () => { newImageChat(); historyOpen = false; }, (id) => { activeImageChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteImageId = id), "New image", "Image history", "New image", imageThumbs)}
       {:else if onVideo}
         {@render historyPanel(sortedVideoSessions, $activeVideoChatId, $generatingVideoChatId, () => { newVideoChat(); historyOpen = false; }, (id) => { activeVideoChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteVideoId = id), "New video", "Video history", "New video")}
+      {:else if onThreeD}
+        {@render historyPanel(sortedThreeDSessions, $activeThreeDChatId, $generatingThreeDChatId, () => { newThreeDChat(); historyOpen = false; }, (id) => { activeThreeDChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteThreeDId = id), "New mesh", "3D history", "New mesh", threeDThumbs)}
       {:else}
         {@render historyPanel(sortedSpeechSessions, $activeSpeechChatId, $generatingSpeechChatId, () => { newSpeechChat(); historyOpen = false; }, (id) => { activeSpeechChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteSpeechId = id), "New speech", "Speech history", "")}
       {/if}
