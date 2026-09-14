@@ -42,6 +42,63 @@ export const FRAME_OPTIONS = [
 ];
 export const H3_FRAME_OPTIONS = Array.from({ length: 21 }, (_, i) => 5 + i * 17);
 
+// ---------------------------------------------------------------------------
+// Rough VRAM feasibility.
+//
+// Peak VRAM for a video render is dominated by the sampler, which holds the
+// latents for the WHOLE clip at once rather than a frame at a time. So the
+// honest proxy is the token count: the 3D VAE compresses 8x spatially and 4x
+// temporally, then a 2x2 patch embed halves each spatial axis again.
+//
+// The anchor is the one explicit claim on record: the tier ladder stopped at
+// 1280 because "above that a 25-frame clip does not fit a 24GB card". 1280x720
+// at 25 frames is 80 * 45 * 7 = 25200 tokens, so that is the last size believed
+// to fit and the budget is set there.
+//
+// Deliberately NOT anchored on 13440, which is where VIDEO_DEFAULT_MAX_DIM (960
+// long edge at 25f) and the H3 family default (640x384 at 56f) both land. Those
+// two agreeing is a nice check that the token proxy tracks something real, but
+// they are the CONSERVATIVE default, not the ceiling. Calibrating on them would
+// paint settings orange that render fine, and a warning nobody believes is worse
+// than no warning.
+//
+// Both figures are inherited judgements, not measurements. The model's WEIGHTS
+// sit outside this budget and are roughly fixed (~11GB for a Q4 video DiT), so
+// what scales with a bigger card is the leftover, not the total. Everything
+// downstream treats the result as a WARNING and never as a block: the estimate
+// ignores --vae-tiling, backend offload and latent quantisation, so a wrong
+// "unavailable" would hide a setting the card could actually manage.
+export const VIDEO_TOKEN_BUDGET_24GB = 25200;
+const VIDEO_WEIGHTS_GB = 11;
+
+/** Latent tokens the sampler holds for one clip at this size and length. */
+export function videoTokens(width: number, height: number, frames: number): number {
+  return Math.ceil(width / 16) * Math.ceil(height / 16) * Math.ceil(frames / 4);
+}
+
+/** Tokens a card of this size is estimated to hold, once weights are paid for. */
+export function videoTokenBudget(totalVramGB: number): number {
+  const head = Math.max(1, totalVramGB - VIDEO_WEIGHTS_GB);
+  return Math.round((VIDEO_TOKEN_BUDGET_24GB * head) / (24 - VIDEO_WEIGHTS_GB));
+}
+
+/**
+ * Warning text for a setting that is valid but probably will not fit, or "" when
+ * it is within budget. Returned as prose because it is shown as a tooltip on an
+ * orange row: the row stays selectable, it just says what it is likely to cost.
+ */
+export function vramWarning(width: number, height: number, frames: number, totalVramGB: number): string {
+  const t = videoTokens(width, height, frames);
+  const budget = videoTokenBudget(totalVramGB);
+  if (t <= budget) return "";
+  return (
+    `Probably will not fit. ${width}x${height} at ${frames} frames is ${t.toLocaleString()} latent tokens, ` +
+    `about ${(t / budget).toFixed(1)}x what ${Math.round(totalVramGB)}GB is estimated to hold ` +
+    `(~${budget.toLocaleString()}). Still selectable: this is an estimate that ignores VAE tiling and ` +
+    `backend offload. If the render fails, cut length or resolution.`
+  );
+}
+
 /** Highest frame count the family's grid is offered up to. */
 export function maxFramesFor(id: string): number {
   return isH3(id) ? 345 : 241;

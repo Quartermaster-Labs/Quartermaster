@@ -24,6 +24,7 @@
   import { fetchSdLoras } from "../../lib/sdApi";
   import type { SdApiLora, SdApiLoraRef } from "../../lib/types";
   import { playgroundStores } from "../../stores/playgroundActivity";
+  import { vramTotals } from "../../stores/perf";
   import Select from "./Select.svelte";
   import Composer from "./Composer.svelte";
   import { autogrow } from "../../lib/autogrow";
@@ -38,6 +39,7 @@
     VIDEO_SIZE_TIERS,
     VIDEO_DEFAULT_MAX_DIM,
     clipLabel,
+    vramWarning,
     frameOptionsFor,
     fpsOptionsFor,
     snapFrames,
@@ -261,6 +263,11 @@
   let modelMax = $derived(
     Math.max(modelPreset?.maxDim ?? VIDEO_DEFAULT_MAX_DIM, modelGen?.width ?? 0, modelGen?.height ?? 0)
   );
+  // The card's real size, for the feasibility warning. Falls back to 24GB when
+  // the perf stream has not reported yet, which can only change the COLOUR of a
+  // row, never whether it can be picked.
+  let vramGB = $derived(($vramTotals?.totalMb ?? 0) / 1024 || 24);
+
   let aspectOptions = $derived(ASPECTS.map((a) => ({ value: a.value, label: a.label })));
   // The tiers, plus the current long edge whenever it is off-grid. That last
   // part is what keeps the control honest: a Select whose bound value matches no
@@ -272,7 +279,14 @@
       : [...VIDEO_SIZE_TIERS, Number($longEdgeStore) || 640].sort((a, b) => a - b)
     ).map((L) => {
       const [w, h] = aspectDims($aspectStore, L);
-      return { value: String(L), label: `${w}x${h}`, disabled: L > modelMax };
+      const warn = vramWarning(w, h, Number($framesStore) || 1, vramGB);
+      return {
+        value: String(L),
+        label: `${w}x${h}`,
+        disabled: L > modelMax,
+        warn: !!warn,
+        title: warn || undefined,
+      };
     })
   );
   $effect(() => {
@@ -284,6 +298,20 @@
   // the stores are PERSISTED prefs, so a value picked under one family survives
   // a switch to another and would otherwise leave the Select showing blank.
   let frameOptions = $derived(frameOptionsFor($selectedModelStore));
+  // Length rungs, priced against the CURRENT canvas: the two knobs multiply, so
+  // which lengths are affordable changes every time the size does.
+  let lengthOptions = $derived(
+    frameOptions.map((f) => {
+      const [w, h] = $selectedSizeStore.split("x").map(Number);
+      const warn = vramWarning(w || 640, h || 384, f, vramGB);
+      return {
+        value: String(f),
+        label: clipLabel(f, Number($fpsStore) || 1),
+        warn: !!warn,
+        title: warn || undefined,
+      };
+    })
+  );
   let fpsOptions = $derived(fpsOptionsFor($selectedModelStore));
   $effect(() => {
     if (!frameOptions.includes(Number($framesStore))) {
@@ -692,7 +720,7 @@
                 bind:value={$framesStore}
                 disabled={isGenerating}
                 compact
-                options={frameOptions.map((f) => ({ value: String(f), label: clipLabel(f, Number($fpsStore) || 1) }))}
+                options={lengthOptions}
               />
             </div>
             <div class="flex flex-col gap-1">

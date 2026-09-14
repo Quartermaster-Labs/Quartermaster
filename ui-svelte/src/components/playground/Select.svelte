@@ -3,7 +3,10 @@
 
   interface Props {
     value: string;
-    options: { value: string; label: string; disabled?: boolean }[];
+    // warn marks an option that is valid but likely too heavy: it renders
+    // orange and keeps its title as a tooltip, but stays SELECTABLE. disabled is
+    // reserved for options the backend would actually refuse.
+    options: { value: string; label: string; disabled?: boolean; warn?: boolean; title?: string }[];
     disabled?: boolean;
     compact?: boolean;
   }
@@ -11,7 +14,8 @@
   let { value = $bindable(), options, disabled = false, compact = false }: Props = $props();
 
   let open = $state(false);
-  let selectedLabel = $derived(options.find((o) => o.value === value)?.label ?? value);
+  let selected = $derived(options.find((o) => o.value === value));
+  let selectedLabel = $derived(selected?.label ?? value);
 
   // Drop direction + height, measured against the viewport on every open. The
   // list lives inside popovers (the composer's settings panel) that are NOT
@@ -84,7 +88,7 @@
     onclick={toggle}
     onkeydown={(e) => e.key === "Escape" && (open = false)}
   >
-    <span class="truncate">{selectedLabel}</span>
+    <span class="truncate {selected?.warn ? 'text-orange-400' : ''}" title={selected?.title}>{selectedLabel}</span>
     <ChevronDown class="w-4 h-4 shrink-0 transition-transform {open ? 'rotate-180' : ''}" />
   </button>
 
@@ -99,12 +103,13 @@
         <button
           type="button"
           disabled={o.disabled}
+          title={o.title}
           class="w-full text-left whitespace-nowrap px-2.5 py-1.5 transition-colors {o.disabled
             ? 'text-txtsecondary opacity-40 cursor-not-allowed'
-            : `hover:bg-secondary ${o.value === value ? 'text-primary' : 'text-txtmain'}`}"
+            : `hover:bg-secondary ${o.warn ? 'text-orange-400' : o.value === value ? 'text-primary' : 'text-txtmain'}`}"
           onclick={() => !o.disabled && select(o.value)}
         >
-          {o.label}
+          {o.label}{#if o.warn}&nbsp;&#9888;{/if}
         </button>
       {/each}
     </div>
