@@ -42,6 +42,13 @@ export const FRAME_OPTIONS = [
 ];
 export const H3_FRAME_OPTIONS = Array.from({ length: 21 }, (_, i) => 5 + i * 17);
 
+// LTX-2.x is the third grid and the one exception to "rounds up": its VAE
+// compresses 8 frames into one latent frame, so the count is 8k+1 and sd.cpp
+// floors anything off-grid rather than raising it. 153 is a HARD ceiling, not a
+// taste call: the checkpoint's positional_embedding_max_pos caps the temporal
+// axis at 20 latent frames, and asking for more indexes past the table.
+export const LTX_FRAME_OPTIONS = Array.from({ length: 19 }, (_, i) => 9 + i * 8);
+
 // ---------------------------------------------------------------------------
 // Rough VRAM feasibility.
 //
@@ -71,8 +78,21 @@ export const H3_FRAME_OPTIONS = Array.from({ length: 21 }, (_, i) => 5 + i * 17)
 export const VIDEO_TOKEN_BUDGET_24GB = 25200;
 const VIDEO_WEIGHTS_GB = 11;
 
-/** Latent tokens the sampler holds for one clip at this size and length. */
-export function videoTokens(width: number, height: number, frames: number): number {
+/**
+ * Latent tokens the sampler holds for one clip at this size and length.
+ *
+ * The divisors are the model's actual compression, and LTX's are not the others'.
+ * Wan/H3 compress 8x spatially then patch-embed 2x2 on top (hence /16) and 4x
+ * along time; LTX's VAE goes 32x spatially and 8x temporally and then patchifies
+ * 1x1, so nothing halves again. That is a 4x difference per pixel and a 2x
+ * difference per frame, which is why LTX can be offered a 1280-wide default where
+ * H3 is capped at 640: charging it the /16 rate would paint every usable setting
+ * orange.
+ */
+export function videoTokens(width: number, height: number, frames: number, id = ""): number {
+  if (isLtx(id)) {
+    return Math.ceil(width / 32) * Math.ceil(height / 32) * Math.ceil(frames / 8);
+  }
   return Math.ceil(width / 16) * Math.ceil(height / 16) * Math.ceil(frames / 4);
 }
 
@@ -87,8 +107,8 @@ export function videoTokenBudget(totalVramGB: number): number {
  * it is within budget. Returned as prose because it is shown as a tooltip on an
  * orange row: the row stays selectable, it just says what it is likely to cost.
  */
-export function vramWarning(width: number, height: number, frames: number, totalVramGB: number): string {
-  const t = videoTokens(width, height, frames);
+export function vramWarning(width: number, height: number, frames: number, totalVramGB: number, id = ""): string {
+  const t = videoTokens(width, height, frames, id);
   const budget = videoTokenBudget(totalVramGB);
   if (t <= budget) return "";
   return (
@@ -113,11 +133,15 @@ export function vramWarning(width: number, height: number, frames: number, total
  * images the backend silently drops, so the pattern stays narrow and explicit.
  */
 export function supportsFrameRefs(id: string): boolean {
-  return /fl2v|flf2v|i2v/.test(id.toLowerCase());
+  // LTX is the one family that does not spell it in the filename: frame
+  // conditioning is in every LTX-2.x checkpoint rather than in a separate i2v
+  // variant, so the family name IS the capability here.
+  return /fl2v|flf2v|i2v|ltx/.test(id.toLowerCase());
 }
 
 /** Highest frame count the family's grid is offered up to. */
 export function maxFramesFor(id: string): number {
+  if (isLtx(id)) return 153;
   return isH3(id) ? 345 : 241;
 }
 
@@ -139,13 +163,24 @@ export function isH3(id: string): boolean {
   return l.includes("minimax") || l.includes("h3");
 }
 
+/** True when the model id names an LTX-2.x, the family on the 8k+1 grid. */
+export function isLtx(id: string): boolean {
+  return id.toLowerCase().includes("ltx");
+}
+
 export function frameOptionsFor(id: string): number[] {
+  if (isLtx(id)) return LTX_FRAME_OPTIONS;
   return isH3(id) ? H3_FRAME_OPTIONS : FRAME_OPTIONS;
 }
 
 /** Snap a frame count onto the model family's grid, the way the backend will. */
 export function snapFrames(n: number, id = ""): number {
   const clamped = Math.max(5, Math.min(maxFramesFor(id), Math.round(n)));
+  // LTX floors where the others align up, so snapping the same direction the
+  // backend does means rounding DOWN here: a value snapped up would be silently
+  // shortened again on arrival and the label would name a clip length the file
+  // never had.
+  if (isLtx(id)) return Math.max(9, Math.floor((clamped - 1) / 8) * 8 + 1);
   if (isH3(id)) return Math.max(5, Math.ceil((clamped - 5) / 17) * 17 + 5);
   return Math.round((clamped - 1) / 4) * 4 + 1;
 }
@@ -184,6 +219,14 @@ export const VIDEO_DEFAULTS: {
 }[] = [
   { match: "minimax", steps: 20, cfg: 1.0, sampler: "euler", scheduler: "discrete", size: "640x384", frames: 56, fps: 24 },
   { match: "h3", steps: 20, cfg: 1.0, sampler: "euler", scheduler: "discrete", size: "640x384", frames: 56, fps: 24 },
+  // LTX-2.x. Both rows share the framing (1280x704 is well inside budget at
+  // LTX's compression) and differ only in the schedule: the distilled
+  // checkpoint is genuinely 8-step and guidance-free, the dev one wants ~20
+  // euler steps at cfg 3.0. They are TENSOR-IDENTICAL, so the name is the only
+  // thing that can tell them apart - hence the explicit branch in
+  // videoDefaultsFor rather than a substring row, which cannot express
+  // "ltx AND distilled".
+  { match: "ltx", steps: 20, cfg: 3.0, sampler: "euler", scheduler: "discrete", size: "1280x704", frames: 121, fps: 24, maxDim: 1280 },
   { match: "wan", steps: 20, cfg: 5, sampler: "euler", scheduler: "discrete", size: "832x480", frames: 81, fps: 16 },
 ];
 
@@ -199,9 +242,14 @@ export const VIDEO_GENERIC_DEFAULTS = {
   size: "640x384",
 };
 
+/** LTX's distilled schedule, the twin of autogen's isDistilledName. */
+const LTX_DISTILLED = { steps: 8, cfg: 1.0 };
+
 export function videoDefaultsFor(id: string) {
   const l = id.toLowerCase();
-  return VIDEO_DEFAULTS.find((d) => l.includes(d.match));
+  const d = VIDEO_DEFAULTS.find((x) => l.includes(x.match));
+  if (d && isLtx(l) && /distill|turbo/.test(l)) return { ...d, ...LTX_DISTILLED };
+  return d;
 }
 
 // What the model is actually launched with, read off its argv by the server

@@ -211,12 +211,23 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *En
 	// wants Qwen3-4B where LongCat wants Qwen2.5-VL-7B). A per-model Override
 	// still wins over both, below.
 	wantVision := wantsVisionEncoder(a, n, ov)
-	autoLlm, autoVision := pool.Llm(condHidden, wantVision, enc.QwenLlm)
+	preferLlm := enc.QwenLlm
+	if vid.Kind == VideoFamilyLtxAV && strings.TrimSpace(preferLlm) == "" {
+		// LTX-2.x does not condition on a stock LLM. Its encoder is a
+		// Gemma-4-12B republished WITH the caption projection baked in, and a
+		// plain Gemma-3-12B is the same 3840 wide, so the width match alone is a
+		// coin flip that pool.Llm resolves by file size - which the stock model
+		// usually wins. The path hint breaks the tie; a miss falls straight
+		// through to the ordinary width-matched pick, and a declared qwenLlm
+		// still wins over both because it is an explicit choice.
+		preferLlm = pool.LlmHinted("ltx")
+	}
+	autoLlm, autoVision := pool.Llm(condHidden, wantVision, preferLlm)
 	if autoLlm == "" && wantVision {
 		// No vision-capable encoder of that width: fall back to a text-only one
 		// rather than emitting nothing, and let the missing projector show up as
 		// the model producing unconditioned output rather than as a dead server.
-		autoLlm, autoVision = pool.Llm(condHidden, false, enc.QwenLlm)
+		autoLlm, autoVision = pool.Llm(condHidden, false, preferLlm)
 	}
 	llmDefault := autoLlm
 	if llmDefault == "" {
@@ -523,7 +534,7 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	// --video-frames defaults to 1 (a single still), and H3 conditions at
 	// cfg-scale 1.0 while sd-server's built-in default is 7.0. Per-model
 	// overrides still win over both.
-	def := videoDefaultsFor(vid)
+	def := videoDefaultsFor(vid, name)
 	if ov != nil {
 		if ov.DefaultSteps > 0 {
 			def.steps = ov.DefaultSteps

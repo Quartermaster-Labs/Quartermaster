@@ -48,7 +48,7 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 | `liveoffload.go` | Spawn-time placement recompute (`LiveOffloadArgs`), including the live `--tensor-split` retune (`retuneTensorSplit`). → `liveoffload.md` |
 | `vllm.go` | Backend selection (`resolveBackend`, `resolveBackendPreferring`, `kindClass`) + the vllm emitter. → `backends.md` |
 | `rope.go` | `ropeCeiling`/`ropeFactor` — the only path that lifts the trained-ctx ceiling. → `sizing.md` |
-| `encoderpool.go` | Diffusion component auto-discovery: classifies every VAE / CLIP / T5 / text-encoder LLM on disk from its header (safetensors tensor table or gguf metadata), pairs each encoder with the mmproj beside it, and fills the blanks in `settings.encoders`. Matched to a DiT by `Metadata.CondHidden`. -> `classes.md` |
+| `encoderpool.go` | Diffusion component auto-discovery: classifies every VAE / CLIP / T5 / audio VAE / text-encoder LLM on disk from its header (safetensors tensor table or gguf metadata), pairs each encoder with the mmproj beside it, and fills the blanks in `settings.encoders`. Matched to a DiT by `Metadata.CondHidden`. VAEs and audio VAEs carry a FAMILY, and `Vae`/`AudioVae` are scoped by it: the shapes alone would let a model load a decoder for a latent it never produced. `LlmHinted` is the path-based escape for a family whose encoder is a republished copy of a common model (LTX). -> `classes.md` |
 | `audio.go`, `asr.go`, `sam.go`, `image.go`, `embedding.go` | Non-LLM class emitters. → `classes.md` |
 
 ## Important types & functions
@@ -315,6 +315,15 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   working image model, and `resolveComponents` therefore takes both the pool and the DiT's
   `CondHidden` - a caller that passes 0 gets the declared-only behaviour, which is exactly what
   the older tests assert.
+
+- **Video components are scoped by family, and the two audio VAEs do not cross-wire.**
+  `EncoderPool.AudioVae` takes a family first (empty matches any), `fillEncoderSet` fills the
+  single `VideoVae`/`AudioVae` pins with MiniMax-H3's `VaeFamilyVideo3D` pair only, and LTX
+  resolves its own `VaeFamilyLtx` pair in `videoComponents`: the two soundtrack decoders are
+  unrelated networks over unrelated latents, so a wrong pick fails the load. The text encoder is
+  the same trap one level up: LTX's is a Gemma-4-12B republished with the caption projection
+  grafted on, and a stock Gemma-3-12B is the same 3840 wide, which is why `resolveComponents`
+  feeds `pool.LlmHinted("ltx")` in as the `prefer` argument when no `qwenLlm` is declared.
 
 - **A new quant type needs THREE tables, and the header gate is why.** `quantRe` (`discover.go`)
   names it in a FILENAME, `ggmlTypeSize` (`gguf.go`) sizes its tensors, `ggmlTypeName`

@@ -8,6 +8,7 @@ package autogen
 import (
 	"bufio"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -621,6 +622,7 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 	var arch string
 	var genType string
 	var chatTmpl string
+	var diffConfig string
 	var blockCount, expertCount, expertUsed *int64
 	var contextLength, embeddingLength, headCount, headCountKv *int64
 	var headCountKvArr []int64
@@ -685,6 +687,20 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 				return Metadata{}, err
 			}
 			chatTmpl = s
+			matched = true
+		} else if key == "config" && t == ggufString {
+			// LTX ships its whole diffusers config as ONE json blob instead of
+			// typed KVs, and that blob is the only place the file states the
+			// text-encoder width it was trained against (caption_channels 3840
+			// = the projected Gemma-4-12B). The tensor table cannot answer it
+			// the way every other DiT's can: LTX's caption projection lives in
+			// the ENCODER gguf ("with-proj"), not in the DiT, so there is no
+			// txt_in/cap_embedder here for condHiddenFrom to measure.
+			_, _, str, err := r.readScalar(t)
+			if err != nil {
+				return Metadata{}, err
+			}
+			diffConfig = str
 			matched = true
 		} else if dst, ok := idKVs[key]; ok && t == ggufString {
 			_, _, s, err := r.readScalar(t)
@@ -1006,6 +1022,15 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 		return *p
 	}
 
+	// The caption projection is the primary signal (it is IN the weights); the
+	// config blob is the fallback for a family that keeps that projection in its
+	// encoder file. Never the other way round: a tensor shape is what the model
+	// will actually run with.
+	condHidden := scan.condHidden
+	if condHidden == 0 {
+		condHidden = captionChannelsFrom(diffConfig)
+	}
+
 	m := Metadata{
 		Path:              path,
 		FileSizeGB:        round(float64(sizeBytes)/gib, 3),
@@ -1042,7 +1067,7 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 		FineTune:          fineTune,
 		GeneralName:       generalName,
 		DiffusionKind:     diffKind,
-		CondHidden:        scan.condHidden,
+		CondHidden:        condHidden,
 		VideoKind:         scan.videoKind,
 		HasAudioOut:       scan.hasAudioOut,
 		HasBakedEncoders:  bakedEnc,
@@ -1082,7 +1107,7 @@ func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err err
 	var expertBytes, totalBytes int64
 	var videoKind string
 	var sawExpert, sawInputBlocks, sawLabelEmb, sawDoubleBlocks, unknownType bool
-	var sawVideoPatch, sawAudioPatch, sawTemporalPatch bool
+	var sawVideoPatch, sawAudioPatch, sawTemporalPatch, sawLtxPatch bool
 	condDims := map[string]int64{}
 	typeBytes := map[uint32]int64{}
 	out := func() tensorScan {
@@ -1170,6 +1195,17 @@ func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err err
 		if name == "audio_patch_proj.weight" || strings.HasPrefix(name, "final_layer.audio_out.") {
 			sawAudioPatch = true
 		}
+		// LTX-AV (arch "ltxv"): one flat DiT over a joint video+audio token
+		// stream, so it patchifies with a LINEAR layer rather than H3's conv
+		// stem or Wan's conv3d - neither marker above sees it. The audio half is
+		// a second projection in the same tower, and its presence is what makes
+		// --audio-vae required rather than optional.
+		if name == "patchify_proj.weight" {
+			sawLtxPatch = true
+		}
+		if name == "audio_patchify_proj.weight" {
+			sawAudioPatch = true
+		}
 		// Wan2.x and the DiTs that copy its layout patchify with a conv3d, so
 		// the patch embedding is 5-dimensional (out, in, t, h, w). A 4-dim
 		// (image) patch embedding is not a match, and ERNIE ships no patch
@@ -1189,6 +1225,8 @@ func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err err
 		}
 	}
 	switch {
+	case sawLtxPatch:
+		videoKind = VideoFamilyLtxAV
 	case sawVideoPatch:
 		videoKind = VideoFamilyMinimaxH3
 	case sawTemporalPatch:
@@ -1220,4 +1258,26 @@ const gib = 1024 * 1024 * 1024
 func round(v float64, places int) float64 {
 	p := math.Pow(10, float64(places))
 	return math.Round(v*p) / p
+}
+
+// captionChannelsFrom reads the text-encoder hidden width out of a diffusers
+// "config" json blob, i.e. transformer.caption_channels. Returns 0 for anything
+// that is not such a blob, so a gguf carrying an unrelated "config" string costs
+// one failed unmarshal and nothing else.
+func captionChannelsFrom(s string) int64 {
+	if !strings.Contains(s, "caption_channels") {
+		return 0
+	}
+	var c struct {
+		Transformer struct {
+			CaptionChannels int64 `json:"caption_channels"`
+		} `json:"transformer"`
+	}
+	if err := json.Unmarshal([]byte(s), &c); err != nil {
+		return 0
+	}
+	if c.Transformer.CaptionChannels < 0 {
+		return 0
+	}
+	return c.Transformer.CaptionChannels
 }

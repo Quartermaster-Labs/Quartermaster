@@ -75,6 +75,14 @@ const (
 	// encoder patchifies RGB with a conv3d but the DECODER is a transformer, so
 	// it has neither decoder.conv_in nor Wan's bare conv1.
 	VaeFamilyVideo3D = "video3d"
+	// VaeFamilyLtx is the LTX-2.x pair of autoencoders. Both halves carry this
+	// family: they ship as two files (video + audio) that are only ever loaded
+	// TOGETHER, and giving them one family is what keeps an LTX model from being
+	// handed MiniMax-H3's soundtrack decoder, which is a different role-mate
+	// entirely. The video half is a 128-channel 3D conv VAE whose convolutions
+	// are wrapped one level deeper than anyone else's (decoder.conv_in.CONV.
+	// weight), which is also why neither arm above sees it.
+	VaeFamilyLtx = "ltx"
 )
 
 // ComponentFile is one classified file on disk.
@@ -182,11 +190,30 @@ func classifySafetensors(h map[string]stTensor, sizeGB float64, path string) Com
 	case len(h["encoder.conv_in.weight"].Shape) == 5:
 		c.Role = RoleVae
 		c.Family = VaeFamilyVideo3D
+	// LTX-2.x video VAE. Its conv modules are wrapped (LTXVideoCausalConv3d),
+	// so the tensor is decoder.conv_in.CONV.weight = [out, latent, t, h, w] and
+	// neither the 2D arm nor the two 3D arms above match it. shape[1] is the
+	// latent channel count (128 for LTX-2.5), kept as the width so a future
+	// second latent size is a family mismatch rather than a silent bad decode.
+	case len(h["decoder.conv_in.conv.weight"].Shape) == 5:
+		c.Role = RoleVae
+		c.Family = VaeFamilyLtx
+		c.Width = dim("decoder.conv_in.conv.weight", 1)
+	// LTX-2.x audio VAE. One file, two stacks: the VAE proper under an
+	// audio_vae. prefix plus the vocoder that turns its mel output into samples.
+	// The decoder input projection is a 2D conv over the mel spectrogram
+	// ([width, latent, 3, 3]), NOT the 1D stack H3 uses, so it needs its own arm
+	// and carries the LTX family so the two audio decoders never cross-wire.
+	case len(h["audio_vae.decoder.conv_in.conv.weight"].Shape) == 4:
+		c.Role = RoleAudioVae
+		c.Family = VaeFamilyLtx
+		c.Width = dim("audio_vae.decoder.conv_in.conv.weight", 1)
 	// Audio VAE (MiniMax-H3): a 1D conv stack, so the decoder input projection
 	// is [width, latent, 1]. Width here is the LATENT channel count, which is
 	// what has to match the DiT's audio_patch_proj.
 	case len(h["dec_in_proj.weight"].Shape) == 3:
 		c.Role = RoleAudioVae
+		c.Family = VaeFamilyVideo3D
 		c.Width = dim("dec_in_proj.weight", 1)
 	// CLIP text tower. token_embedding is [vocab, width]; 768 = CLIP-L, 1280 = G.
 	case dim("text_model.embeddings.token_embedding.weight", 1) > 0:
@@ -360,20 +387,50 @@ func pickByHint(cands []ComponentFile, hints []string) string {
 	return cands[0].Path
 }
 
-// AudioVae returns the discovered audio VAE, or "" when none is on disk. hints
-// work exactly as in Vae: path substrings preferred when more than one file
-// qualifies, otherwise the first in sorted order.
-func (p *EncoderPool) AudioVae(hints ...string) string {
+// AudioVae returns the discovered audio VAE of a family, or "" when none is on
+// disk. An empty family matches any, which is what a box with a single audio
+// model wants; naming one is what keeps a machine holding BOTH an LTX and a
+// MiniMax-H3 checkpoint from handing either the other's soundtrack decoder (the
+// two are unrelated networks over unrelated latents, so a cross-wire is a load
+// failure at best). hints work exactly as in Vae.
+func (p *EncoderPool) AudioVae(family string, hints ...string) string {
 	if p == nil {
 		return ""
 	}
 	var cands []ComponentFile
 	for _, f := range p.Files {
-		if f.Role == RoleAudioVae {
+		if f.Role == RoleAudioVae && (family == "" || f.Family == family) {
 			cands = append(cands, f)
 		}
 	}
 	return pickByHint(cands, hints)
+}
+
+// LlmHinted returns the text-encoder LLM whose PATH matches one of the hints,
+// or "" when none does. Unlike Llm it never falls back to an arbitrary
+// candidate: it exists for a family whose encoder is a bespoke, republished file
+// (LTX ships a Gemma-4-12B with the caption projection grafted on), where the
+// width alone would also match every stock Gemma-3-12B on the disk. A miss here
+// is meant to fall through to the ordinary width-matched pick, not to guess.
+func (p *EncoderPool) LlmHinted(hints ...string) string {
+	if p == nil {
+		return ""
+	}
+	for _, h := range hints {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "" {
+			continue
+		}
+		for _, f := range p.Files {
+			if f.Role != RoleLlm {
+				continue
+			}
+			if strings.Contains(strings.ToLower(filepath.ToSlash(f.Path)), h) {
+				return f.Path
+			}
+		}
+	}
+	return ""
 }
 
 // Clip returns the discovered CLIP tower of a given width (768 = L, 1280 = G).
@@ -539,10 +596,14 @@ func fillEncoderSet(declared EncoderSet, p *EncoderPool) EncoderSet {
 	// fallback and one copy on disk serves both.
 	fill(&declared.ZimageVae, p.Vae(VaeFamilyFlux, "z-image", "zimage"))
 	fill(&declared.ZimageVae, declared.FluxVae)
-	// Video components. The 3D video VAE has no image-model consumer, so an
-	// unhinted pick is safe; the audio VAE is role-unique.
+	// Video components. Both fields describe the MiniMax-H3 pair: the 3D
+	// transformer VAE has no image-model consumer, so an unhinted pick within
+	// the family is safe. LTX's two VAEs are deliberately NOT filled here -
+	// there is one slot per role and the two families' files are not
+	// interchangeable, so LTX resolves its own pair structurally in
+	// videoComponents and leaves these pins meaning what they have always meant.
 	fill(&declared.VideoVae, p.Vae(VaeFamilyVideo3D))
-	fill(&declared.AudioVae, p.AudioVae())
+	fill(&declared.AudioVae, p.AudioVae(VaeFamilyVideo3D))
 	fill(&declared.ClipL, p.Clip(768))
 	fill(&declared.ClipG, p.Clip(1280))
 	fill(&declared.T5, p.T5())

@@ -15,14 +15,22 @@ A picture is one request. A clip is a **job**: `POST /sdcpp/v1/vid_gen` validate
 
 ## Models and what each one needs
 
-Video checkpoints are detected **structurally**, from the tensor table rather than from metadata: MiniMax-H3's gguf declares no architecture at all, and the one architecture string that reads `wan` in circulation belongs to an image model. Two families are supported, each with its own component set:
+Video checkpoints are detected **structurally**, from the tensor table rather than from metadata: MiniMax-H3's gguf declares no architecture at all, and the one architecture string that reads `wan` in circulation belongs to an image model. Three families are supported, each with its own component set:
 
 | Family | Default framing | Needs alongside the checkpoint |
 |---|---|---|
 | **MiniMax-H3** | 640x384, 56 frames at 24 fps | a video (3D transformer) VAE + a Qwen3-VL text encoder |
 | **Wan 2.x** | 832x480, 81 frames at 16 fps | the Wan 3D causal VAE + umT5-XXL |
+| **LTX 2.x** | 1280x704, 121 frames at 24 fps | **both** LTX autoencoders (video + audio) + the projected Gemma-4 encoder |
 
-A checkpoint that also denoises a soundtrack needs an **audio VAE** as well. If any required piece is missing, config generation still emits the model but writes a `WARNING:` line above it naming what it could not find - a half-wired model is visible rather than silently broken.
+**LTX is the reason the canvas defaults are so different.** Its autoencoder compresses 32x on each spatial axis and 8x along time, where the other two compress 8x spatially (then patch-embed 2x2 on top) and 4x temporally. That is four times fewer tokens per pixel and half as many per frame, so 1280x704 at 121 frames costs the sampler *less* than MiniMax-H3 at 640x384 does. A 22B checkpoint that renders a wider clip than a 14B one is not a mistake in the table.
+
+Two LTX quirks are worth knowing before you pick a file:
+
+- **Its text encoder is not a normal chat model.** LTX ships a Gemma-4-12B republished with the DiT's caption projection grafted on, named `*-with-proj-*`. A stock Gemma of the same width loads without complaint and then conditions on nothing, so Quartermaster matches the path, not just the width, and keeps the projected file out of the served-model list where it would otherwise appear as a strictly worse Gemma.
+- **Distilled and dev are the same tensors.** The two checkpoints are identical in shape and differ only in the schedule they were trained for: distilled is genuinely 8-step and guidance-free, dev wants around 20 euler steps at cfg 3.0. Nothing in the file says which one it is, so the **filename** decides. Keep `distilled` in the name of a distilled checkpoint, or it will be sampled as dev (and 8 steps at cfg 3.0 on the wrong one is either noise or a scorched clip).
+
+A checkpoint that also denoises a soundtrack needs an **audio VAE** as well, and the audio VAEs are **not interchangeable between families**: MiniMax-H3's and LTX's are unrelated networks over unrelated latents, so each is matched to its own family rather than to whichever one happens to be on disk. If any required piece is missing, config generation still emits the model but writes a `WARNING:` line above it naming what it could not find - a half-wired model is visible rather than silently broken.
 
 Find them under **Browse -> Video**, which lists safetensors video repos as well as GGUF ones.
 
@@ -32,7 +40,7 @@ Find them under **Browse -> Video**, which lists safetensors video repos as well
 
 Each prompt renders a fresh clip into the thread, the same way the Images tab works.
 
-**Framing and length**: pick an **aspect** and a **size**, then a **length in seconds**. The rungs are not round numbers on purpose - the backend's grid is defined in *frames* (17k+5 for MiniMax-H3, 4n+1 for everything else) and it rounds anything off-grid **up**, so only exact values are offered rather than letting a clip silently become longer than you asked for.
+**Framing and length**: pick an **aspect** and a **size**, then a **length in seconds**. The rungs are not round numbers on purpose - the backend's grid is defined in *frames*, there are three of them (17k+5 for MiniMax-H3, 8k+1 for LTX, 4n+1 for everything else), and an off-grid number is not rejected, it is silently changed. Only exact values are offered so a clip cannot quietly become a different length than you asked for. LTX is also the one family that rounds **down** rather than up, and it stops at **153 frames**: that is a hard ceiling in the checkpoint's own positional embedding table, not a VRAM judgement, so no card makes a longer single clip possible.
 
 A setting that probably will not fit turns **orange** with the arithmetic behind it: the latent-token count for that size and length against what your card is estimated to hold. It stays selectable, because the estimate ignores VAE tiling and backend offload. If a render does fail, cut length before resolution.
 
@@ -51,7 +59,7 @@ Models trained for it accept frame conditioning, offered only where it applies:
 
 The cogwheel on a video model carries two knobs the other classes do not:
 
-- **Temporal tiling** decodes the VAE in windows along time, which is the main lever on decode-time VRAM. It is emitted **only for Wan**, whose VAE actually implements it; MiniMax-H3's transformer autoencoder has no tiled decode path, and the backend would accept the flag and silently ignore it.
+- **Temporal tiling** decodes the VAE in windows along time, which is the main lever on decode-time VRAM. It is emitted **only for Wan and LTX**, whose VAEs actually implement it; MiniMax-H3's transformer autoencoder has no tiled decode path, and the backend would accept the flag and silently ignore it.
 - **Stream layers** streams the diffusion weights against the VRAM cap instead of pinning them resident, which hands that headroom to the sampler. It is what buys frame count.
 
 Both default to on, and both are emitted for video models only. Turning temporal tiling explicitly **on** forces the flag through even on a family that does not implement it, which is the escape hatch if a future backend build adds support before Quartermaster knows about it.
