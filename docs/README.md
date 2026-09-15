@@ -31,6 +31,7 @@ describes: see the subsystem table in [`CLAUDE.md`](../CLAUDE.md).
 - [Video & audio transcripts (YouTube and beyond)](youtube.md)
 - [Quartermaster tools (assistant self-service)](qm-tools.md)
 - [Image generation](images.md)
+- [Video generation](video.md)
 - [Upscaling images](upscale.md)
 - [Image segmentation (SAM)](segmentation.md)
 - [Speech and transcription](speech-audio.md)

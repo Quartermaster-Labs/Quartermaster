@@ -152,6 +152,10 @@ else installed in front of it.
   setup in front of it.
 - **Images in the same catalog.** Generate and edit against the same models list, LoRAs and reference
   images included.
+- **Video, rendered as a job.** Short clips from a prompt or from a starting image, on the same
+  diffusion backend. The render outlives the request that started it, so the model stays pinned
+  until the clip lands and closing the tab does not kill it; chain a clip's last frame into the
+  next to get past what one render can fit in VRAM.
 - **Speech without leaving the tab.** Text to speech against your local voices, and transcription
   back the other way.
 - **History is server-side per user**, not localStorage, so it survives a browser and follows the
