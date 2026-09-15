@@ -506,6 +506,11 @@ func better(f, best ComponentFile) bool {
 // its vision tower does not fail, it silently conditions on nothing and emits an
 // unrelated image, which is worse than not starting at all.
 //
+// "Matches" is captionFactor, not equality: a DiT that concatenates several
+// encoder hidden layers states a caption width that is a MULTIPLE of the encoder
+// it wants (flux.2 klein 9B: txt_in 12288 against a 4096-wide Qwen3-8B). An
+// exact match always outranks a concatenated one.
+//
 // prefer is the declared settings.encoders.qwenLlm (empty when none declared).
 // A declared file that clears the same width and vision gates wins outright:
 // width only narrows the field, it does not name the file a publisher trained
@@ -524,22 +529,83 @@ func (p *EncoderPool) Llm(hidden int64, wantVision bool, prefer string) (path, m
 		return "", ""
 	}
 	pin := config.PathKey(strings.TrimSpace(prefer))
-	var best ComponentFile
+	var best, pinned ComponentFile
+	var bestFactor, pinnedFactor int64
 	for _, f := range p.Files {
-		if f.Role != RoleLlm || f.Width != hidden {
+		if f.Role != RoleLlm {
+			continue
+		}
+		factor := captionFactor(hidden, f.Width)
+		if factor == 0 {
 			continue
 		}
 		if wantVision && !f.Vision {
 			continue
 		}
 		if pin != "" && config.PathKey(f.Path) == pin {
-			return f.Path, f.Mmproj
+			if pinnedFactor == 0 || factor < pinnedFactor {
+				pinned, pinnedFactor = f, factor
+			}
+			continue
 		}
-		if best.Path == "" || better(f, best) {
-			best = f
+		if bestFactor == 0 || factor < bestFactor || (factor == bestFactor && better(f, best)) {
+			best, bestFactor = f, factor
 		}
 	}
+	// The pin wins inside its tier, not across tiers: an exact-width scan hit
+	// beats a pin that only fits by concatenation, because k>1 is an inference
+	// about the model's layout and k==1 is not.
+	if pinnedFactor != 0 && (bestFactor == 0 || pinnedFactor <= bestFactor) {
+		return pinned.Path, pinned.Mmproj
+	}
 	return best.Path, best.Mmproj
+}
+
+// maxCaptionConcat caps how many encoder hidden layers a DiT may be assumed to
+// concatenate. 3 is the only value seen in the wild (flux.2); the spare rung is
+// slack for the next one. Keeping the cap low is what stops the divisibility
+// test below from degrading into "any sufficiently narrow encoder will do".
+const maxCaptionConcat = 4
+
+// captionFactor reports how many encoder hidden states of the given width this
+// DiT's caption projection consumes, or 0 when that encoder cannot be the one.
+//
+// Nearly every DiT projects a SINGLE encoder hidden state, so txt_in is exactly
+// the encoder width and the answer is 1. FLUX.2 is the exception: it conditions
+// on several hidden LAYERS of its LLM concatenated, so klein 9B states txt_in
+// 12288 against a 4096-wide Qwen3-8B. Matched on equality that finds nothing,
+// and the caller's pin fallback then substitutes an encoder of the wrong width
+// with no warning at all.
+//
+// Testing divisibility instead keeps this structural rather than a per-model
+// table: a future DiT that concatenates a different number of layers resolves
+// here with no new case. Exactness is still preferred by the caller.
+func captionFactor(hidden, width int64) int64 {
+	if hidden <= 0 || width <= 0 || hidden%width != 0 {
+		return 0
+	}
+	if k := hidden / width; k <= maxCaptionConcat {
+		return k
+	}
+	return 0
+}
+
+// knowsLlm reports whether the scan classified this exact path as a text-encoder
+// LLM, at ANY width. That is a different question from whether Llm would PICK it
+// for a given DiT: a pin the scan measured and rejected on width is a mismatch
+// worth reporting, while one the scan never saw (kept outside the models root,
+// say) is still the user's explicit choice and should be honoured.
+func (p *EncoderPool) knowsLlm(path string) bool {
+	key := config.PathKey(strings.TrimSpace(path))
+	if p == nil || key == "" {
+		return false
+	}
+	for _, f := range p.Files {
+		if f.Role == RoleLlm && config.PathKey(f.Path) == key {
+			return true
+		}
+	}
+	return false
 }
 
 // llmCandidate reports whether a declared pin would actually be HONOURED by Llm
@@ -550,13 +616,17 @@ func (p *EncoderPool) Llm(hidden int64, wantVision bool, prefer string) (path, m
 // for a video one. A family that carries its own path hint has to test for the
 // pin APPLYING, or a populated encoders block (every real install has one)
 // suppresses the hint without ever using the pin.
+//
+// The width test is captionFactor, not equality, for the same reason Llm's is:
+// a pin this mirror rejected on a width Llm would have accepted by concatenation
+// would fire the family's path hint over a pin that was about to be honoured.
 func (p *EncoderPool) llmCandidate(path string, hidden int64, wantVision bool) bool {
 	key := config.PathKey(strings.TrimSpace(path))
 	if p == nil || key == "" || hidden <= 0 {
 		return false
 	}
 	for _, f := range p.Files {
-		if f.Role != RoleLlm || f.Width != hidden || config.PathKey(f.Path) != key {
+		if f.Role != RoleLlm || captionFactor(hidden, f.Width) == 0 || config.PathKey(f.Path) != key {
 			continue
 		}
 		return !wantVision || f.Vision
