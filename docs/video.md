@@ -60,7 +60,7 @@ Models trained for it accept frame conditioning, offered only where it applies:
 The cogwheel on a video model carries two knobs the other classes do not:
 
 - **Temporal tiling** decodes the VAE in windows along time, which is the main lever on decode-time VRAM. It is emitted **only for Wan and LTX**, whose VAEs actually implement it; MiniMax-H3's transformer autoencoder has no tiled decode path, and the backend would accept the flag and silently ignore it.
-- **Stream layers** streams the diffusion weights against the VRAM cap instead of pinning them resident, which hands that headroom to the sampler. It is what buys frame count.
+- **Stream layers** streams the diffusion weights against the VRAM cap instead of pinning them resident, which hands that headroom to the sampler. It only does anything when the weights are offloaded to RAM in the first place: sd.cpp ignores the flag outright when they are resident on the card, so it is emitted alongside offload rather than for every clip.
 
 Both default to on, and both are emitted for video models only. Turning temporal tiling explicitly **on** forces the flag through even on a family that does not implement it, which is the escape hatch if a future backend build adds support before Quartermaster knows about it.
 

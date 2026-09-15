@@ -2,6 +2,7 @@ package autogen
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/quartermaster-labs/quartermaster/internal/config"
@@ -121,6 +122,68 @@ func isImageArch(arch string) bool {
 // if generations OOM; it only needs to be in the right GB ballpark to flip the
 // offload decision, since --max-vram does the fine-grained fitting in sd.cpp.
 const imageComputeOverheadGB = 1.5
+
+// fileGB is a component file's on-disk size in GiB, or 0 when it cannot be
+// stat'd. A missing file is charged nothing on purpose: the emitted config still
+// has to be produced for a box whose components are not downloaded yet, and
+// over-charging a path that does not exist would shrink --max-vram for a model
+// that is about to be reported as broken anyway (see the missing-roles WARNING).
+func fileGB(p string) float64 {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return 0
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		return 0
+	}
+	return float64(fi.Size()) / (1 << 30)
+}
+
+// graphBudget is the number handed to --max-vram, which is NOT a VRAM cap.
+//
+// sd-server: "maximum VRAM budget in GiB for graph-cut segmented execution". It
+// is the size one MERGED graph segment may reach, so a larger value fuses more
+// nodes into a single allocation. Handing it the whole card is therefore not the
+// safe direction, it is the dangerous one: the weights are already sitting in
+// that VRAM, so sd.cpp merges against space that does not exist and the
+// allocation fails at sampling, not at load (params load lazily: --eager-load is
+// off by default, so a model reports "ready" seconds before it tries this).
+//
+// That is a 24GB card OOMing on a 2.7GiB compute buffer while nominally holding
+// a 22.3GB budget, which is what LTX-2.5 (14.6GB resident + two VAEs) hit.
+//
+// So the budget is what is LEFT once everything we told sd-server to keep on the
+// GPU is paid for:
+//
+//   - offload=false: the diffusion weights are resident, so they come off.
+//   - offload=true: --offload-to-cpu puts them in RAM and --vae-on-cpu follows,
+//     so the card is free for the graph and the whole budget stands. This is
+//     also the only configuration in which --stream-layers does anything.
+//   - the text encoder is on CPU by default (te=cpu) and charged only when an
+//     override pins it back onto the GPU.
+//
+// Floored at 1 GiB rather than 0, because 0 has a meaning of its own here
+// ("disables graph splitting"), which is the opposite of what a card this tight
+// wants.
+func graphBudget(budget float64, row GgufRow, comp imageComponents, ov *Override, offload bool) float64 {
+	if offload {
+		return budget
+	}
+	resident := row.SizeGB
+	if ov == nil || ov.VaeOnCpu != "on" {
+		resident += fileGB(comp.vae) + fileGB(comp.audioVae)
+	}
+	if ov != nil && ov.TeOnCpu == "off" {
+		resident += fileGB(comp.clipL) + fileGB(comp.clipG) + fileGB(comp.t5) + fileGB(comp.llm) + fileGB(comp.llmVision)
+	}
+	if g := budget - resident; g >= 1 {
+		// One decimal: the YAML comment prints this number too, and a raw
+		// float64 subtraction renders as 7.689999999999999.
+		return float64(int(g*10)) / 10
+	}
+	return 1
+}
 
 // emitImageModel writes an sd-server YAML entry for a diffusion GGUF. The
 // capabilities in:[text] out:[image] block is what makes /v1/models report
@@ -378,7 +441,7 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *En
 // by emitImageModel (YAML emit) and RenderSoloCmd (editor launch-parameters
 // preview), so the box matches a save. Also returns the resolved VRAM budget and
 // offload decision for the YAML comment, and any required-but-missing encoder roles.
-func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, condHidden int64, vid videoInfo) (lines []string, budget float64, offload bool, missing []string) {
+func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, condHidden int64, vid videoInfo) (lines []string, budget, graph float64, offload bool, missing []string) {
 	modelPath := strings.ReplaceAll(row.FullPath, "\\", "/")
 
 	// Budget mirrors the LLM sizer: target minus headroom. A per-model
@@ -422,11 +485,21 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	// files (--vae / --llm / --clip_l / --t5xxl). SD1/SD2/SDXL are the exception:
 	// sd.cpp can't version-detect them split, so they must be an all-in-one
 	// checkpoint loaded via -m (encoders + VAE baked in, none wired externally).
+	//
+	// Full-checkpoint archs bake their encoders/VAE — wire nothing external.
+	// Split archs draw component files from the shared pool (per-model override
+	// wins). Resolved BEFORE the argv literal because --max-vram is priced off
+	// what these components weigh, not just off the diffusion gguf.
 	fullCkpt := isFullCheckpointArch(arch)
 	modelFlag := "--diffusion-model"
 	if fullCkpt {
 		modelFlag = "-m"
 	}
+	var comp imageComponents
+	if !fullCkpt {
+		comp, missing = resolveComponents(s.Encoders, ov, arch, name, encoderPoolFor(s.RootList()), condHidden, vid)
+	}
+	graph = graphBudget(budget, row, comp, ov, offload)
 	// Per-model backend pick from the config editor (Override.Backend) or the
 	// ★Default image entry; fall back to the legacy derived exe.
 	sdExe := imageExe(s, ov)
@@ -435,13 +508,7 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 		fmt.Sprintf("%s %s", modelFlag, modelPath),
 		"-l 127.0.0.1",
 		"--listen-port ${PORT}",
-		fmt.Sprintf("--max-vram %g", budget),
-	}
-	// Full-checkpoint archs bake their encoders/VAE — wire nothing external.
-	// Split archs draw component files from the shared pool (per-model override wins).
-	var comp imageComponents
-	if !fullCkpt {
-		comp, missing = resolveComponents(s.Encoders, ov, arch, name, encoderPoolFor(s.RootList()), condHidden, vid)
+		fmt.Sprintf("--max-vram %g", graph),
 	}
 	if p := imageArg(comp.vae); p != "" {
 		lines = append(lines, "--vae "+p)
@@ -492,7 +559,7 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	// clip's decode also grows along TIME with --video-frames and only
 	// --temporal-tiling chunks that axis. --stream-layers streams the diffusion
 	// weights against --max-vram rather than pinning them resident, which hands
-	// that headroom to the sampler and is what buys frame count.
+	// that headroom to the sampler.
 	//
 	// Both are gated on vid.is(): --temporal-tiling applies to a video VAE decode
 	// and nothing else, and an image model has no long-clip peak for
@@ -510,7 +577,19 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	case vid.is() && vaeTemporalTiling(vid) && (ov == nil || ov.TemporalTiling != "off"):
 		lines = append(lines, "--temporal-tiling")
 	}
-	if vid.is() && (ov == nil || ov.StreamLayers != "off") {
+	// --stream-layers is additionally gated on OFFLOAD, and that is not caution,
+	// it is the flag's actual precondition. sd.cpp: "--stream-layers has no
+	// effect unless diffusion params backend is cpu; ignoring" - streaming the
+	// weights in means they have to live somewhere to stream FROM. Only
+	// --offload-to-cpu puts them there ("place the weights in RAM to save VRAM,
+	// and automatically load them into VRAM when needed"), so emitting it beside
+	// resident weights logged an ignore line and bought nothing, while reading in
+	// the launch args like a VRAM lever that was already pulled. An explicit "on"
+	// still forces it, as the escape hatch for a build that widens the rule.
+	switch {
+	case ov != nil && ov.StreamLayers == "on":
+		lines = append(lines, "--stream-layers")
+	case vid.is() && offload && (ov == nil || ov.StreamLayers != "off"):
 		lines = append(lines, "--stream-layers")
 	}
 	lines = append(lines, fmt.Sprintf("-t %d", threads))
@@ -604,7 +683,7 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 			lines = append(lines, extra)
 		}
 	}
-	return lines, budget, offload, missing
+	return lines, budget, graph, offload, missing
 }
 
 // mergeImageVariant overlays an image variant onto its base override: the
@@ -924,9 +1003,9 @@ func emitExtraImageModels(b *strings.Builder, s Settings, overrides []Override, 
 }
 
 func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, name, arch string, bakedEnc bool, condHidden int64, emitted *[]string) {
-	lines, budget, offload, missing := imageCmdLines(s, row, ov, arch, name, condHidden, videoInfo{})
+	lines, budget, graph, offload, missing := imageCmdLines(s, row, ov, arch, name, condHidden, videoInfo{})
 
-	fmt.Fprintf(b, "\n  # arch=%s size=%gGB (image model, sd-server, max-vram=%gGB, offload=%t)\n", arch, row.SizeGB, budget, offload)
+	fmt.Fprintf(b, "\n  # arch=%s size=%gGB (image model, sd-server, budget=%gGB, max-vram=%gGB, offload=%t)\n", arch, row.SizeGB, budget, graph, offload)
 	// SD/SDXL served as -m full checkpoints: if this gguf has no baked encoders it
 	// is a bare UNet, which sd.cpp cannot load standalone (no split path for SDXL).
 	if isFullCheckpointArch(arch) && !bakedEnc {
@@ -942,7 +1021,10 @@ func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, n
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
 	writeSingleDeviceEnv(b, s, imageExe(s, ov))
-	// Admission estimate = the --max-vram cap sd-server is told to stay inside.
+	// Admission estimate = the whole budget this model was sized against, NOT the
+	// --max-vram it launches with: that one is only the graph-cut headroom left
+	// once the resident weights are paid for, so charging the scheduler that
+	// number would book a 14GB model as if it were the 7GB of slack around it.
 	// True peak during sampling/VAE decode runs above it, which is why the
 	// scheduler additionally refuses to spawn anything while a render is in
 	// flight (see FIFO.imageRenderInFlight) rather than trusting this number

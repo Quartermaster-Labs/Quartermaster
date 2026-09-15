@@ -234,7 +234,7 @@ func videoComponents(v videoInfo, enc EncoderSet, pool *EncoderPool, llmDefault 
 // overhead, and the declared capabilities, which is what routes the playground to
 // the Video tab and the async job API rather than to /sdapi txt2img.
 func emitVideoModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, name, arch string, vid videoInfo, condHidden int64, emitted *[]string) {
-	lines, budget, offload, missing := imageCmdLines(s, row, ov, arch, name, condHidden, vid)
+	lines, budget, graph, offload, missing := imageCmdLines(s, row, ov, arch, name, condHidden, vid)
 
 	archNote := strings.TrimSpace(arch)
 	if archNote == "" {
@@ -242,7 +242,7 @@ func emitVideoModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, n
 		// leaving the reader of the config to guess what happened.
 		archNote = "(none declared)"
 	}
-	fmt.Fprintf(b, "\n  # arch=%s family=%s size=%gGB (video model, sd-server, max-vram=%gGB, offload=%t)\n", archNote, vid.Kind, row.SizeGB, budget, offload)
+	fmt.Fprintf(b, "\n  # arch=%s family=%s size=%gGB (video model, sd-server, budget=%gGB, max-vram=%gGB, offload=%t)\n", archNote, vid.Kind, row.SizeGB, budget, graph, offload)
 	if len(missing) > 0 {
 		fmt.Fprintf(b, "  # WARNING: %s needs component(s) [%s] that aren't in settings.encoders - generation will fail until declared\n", name, strings.Join(missing, ", "))
 	}
@@ -253,7 +253,9 @@ func emitVideoModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, n
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
 	writeSingleDeviceEnv(b, s, imageExe(s, ov))
-	// Admission estimate = the --max-vram cap sd-server is told to stay inside,
+	// Admission estimate = the budget this model was sized against, not the
+	// --max-vram it launches with (that is only the graph headroom left once the
+	// resident weights are paid for),
 	// the same accepted under-charge the image path makes: the true peak during
 	// 3D VAE decode runs above it, and the scheduler's in-flight guard is what
 	// actually keeps a second process from spawning underneath a render.
