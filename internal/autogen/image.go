@@ -219,9 +219,17 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *En
 		autoLlm, autoVision = pool.Llm(condHidden, false, enc.QwenLlm)
 	}
 	llmDefault := autoLlm
-	if llmDefault == "" {
+	if llmDefault == "" && !pool.knowsLlm(enc.QwenLlm) {
 		// A declared encoder the scan could not classify (kept outside the models
 		// root, say) is still the user's explicit choice.
+		//
+		// A pin the scan DID classify is a different case: Llm already rejected it
+		// on width or vision, so substituting it here would wire a DiT to an
+		// encoder of the wrong shape and emit no warning, because req() only warns
+		// on an empty path. settings.encoders.qwenLlm is one global field shared by
+		// every diffusion model on the box, so that is not a hypothetical: it is
+		// what a Z-Image pin does to any model that wants a different encoder.
+		// Leaving it empty lets the missing-llm warning fire instead.
 		llmDefault = enc.QwenLlm
 	}
 	if wantVision {
@@ -246,10 +254,14 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *En
 	// Flux.2 Klein reports general.architecture "flux" too (verified against a
 	// real gguf header — sd.cpp didn't give it its own arch tag), so arch alone
 	// can't tell it apart from flux.1; name-detect like chroma. Klein drops
-	// clip_l/t5 for an LLM encoder (Qwen3 — same pool as z-image/qwen-image) and
-	// needs its own 32-ch-latent VAE, incompatible with flux.1's fluxVae.
-	// Flux.2-dev uses a Mistral LLM instead of Qwen3 — not wired, no dev model on
-	// disk yet; add a case here (and an EncoderSet field) when one lands.
+	// clip_l/t5 for an LLM encoder and needs its own 32-ch-latent VAE,
+	// incompatible with flux.1's fluxVae.
+	//
+	// WHICH LLM is not fixed across the family and is NOT decided here: klein 4B
+	// wants Qwen3-4B, klein 9B wants Qwen3-8B, and flux.2-dev wants Mistral-Small-3.
+	// All three fall out of the width match, because flux.2 states a caption width
+	// of 3x its encoder hidden size (klein 9B: txt_in 12288 = 3 x 4096) and
+	// captionFactor divides that out. Nothing needs adding here for a new variant.
 	case strings.Contains(n, "klein") || strings.Contains(n, "flux2") || strings.Contains(n, "flux-2"):
 		c.vae = req("vae", enc.Flux2Vae)
 		c.llm = req("llm", llmDefault)
