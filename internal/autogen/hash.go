@@ -237,7 +237,14 @@ const hashCacheSuffix = ".modelhash"
 //	4 (the base model is not distilled; 4 steps belongs to the turbo LoRAs,
 //	which arrive per request), and --video-frames moves 25 -> 56 because H3
 //	aligns UP to the 17k+5 grid and 25 was silently becoming 39.
-const genVersion = "v74"
+//
+// v75: text encoders match on captionFactor (exact width, or a whole fraction of
+//
+//	it for a DiT that concatenates encoder layers) instead of strict equality,
+//	and settings.encoders.qwenLlm is no longer substituted when the scan
+//	classified it and Llm rejected it. Flux.2 klein 9B now wires Qwen3-8B
+//	instead of silently taking the global Qwen3-4B pin.
+const genVersion = "v75"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

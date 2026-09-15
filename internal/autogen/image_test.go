@@ -278,3 +278,40 @@ func TestMergeImageVariant(t *testing.T) {
 		t.Errorf("merged override must clear Variants to avoid re-emit")
 	}
 }
+
+// Flux.2 is the only family whose caption width is not its encoder width: it
+// concatenates 3 LLM hidden layers, so klein 9B states txt_in 12288 for a
+// 4096-wide Qwen3-8B. The variants differ only in that arithmetic, which is why
+// none of them is named here -- the width match resolves all three.
+func TestResolveComponents_Flux2Klein(t *testing.T) {
+	enc := EncoderSet{Flux2Vae: "f2ae", QwenLlm: "/m/qwen3-4b.gguf"}
+	pool := &EncoderPool{Files: []ComponentFile{
+		{Path: "/m/qwen3-8b.gguf", Role: RoleLlm, Family: "qwen3", Width: 4096, SizeGB: 8},
+		{Path: "/m/qwen3-4b.gguf", Role: RoleLlm, Family: "qwen3", Width: 2560, SizeGB: 3},
+	}}
+	// klein 9B: the flux.2 VAE and the 8B encoder, no clip_l/t5.
+	if c, m := resolveComponents(enc, nil, "flux", "Flux2-Klein-9B-True-v2-Q8_0", pool, 12288, videoInfo{}); c.vae != "f2ae" || c.llm != "/m/qwen3-8b.gguf" || c.clipL != "" || c.t5 != "" || len(m) != 0 {
+		t.Errorf("klein 9B: got %+v missing=%v", c, m)
+	}
+	// klein 4B: same branch, 7680 = 3 x 2560, resolves to the smaller encoder
+	// with no extra case in resolveComponents.
+	if c, m := resolveComponents(enc, nil, "flux", "flux2-klein-4b-Q8_0", pool, 7680, videoInfo{}); c.llm != "/m/qwen3-4b.gguf" || len(m) != 0 {
+		t.Errorf("klein 4B: got %+v missing=%v", c, m)
+	}
+	// The encoder is not on disk. The global qwenLlm pin is 2560 wide and the
+	// scan classified it, so substituting it would wire a 12288-caption DiT to a
+	// 2560-wide encoder and emit NOTHING -- req only warns on an empty path.
+	// Report the role missing instead.
+	only4b := &EncoderPool{Files: []ComponentFile{
+		{Path: "/m/qwen3-4b.gguf", Role: RoleLlm, Family: "qwen3", Width: 2560, SizeGB: 3},
+	}}
+	if c, m := resolveComponents(enc, nil, "flux", "Flux2-Klein-9B-True-v2-Q8_0", only4b, 12288, videoInfo{}); c.llm != "" || len(m) != 1 || m[0] != "llm" {
+		t.Errorf("klein 9B without its encoder should report llm missing: got %+v missing=%v", c, m)
+	}
+	// A pin the scan never saw (kept outside the models root) is still honoured:
+	// that is the case the fallback exists for.
+	unseen := EncoderSet{Flux2Vae: "f2ae", QwenLlm: "/elsewhere/qwen3-8b.gguf"}
+	if c, m := resolveComponents(unseen, nil, "flux", "Flux2-Klein-9B-True-v2-Q8_0", only4b, 12288, videoInfo{}); c.llm != "/elsewhere/qwen3-8b.gguf" || len(m) != 0 {
+		t.Errorf("an unscanned pin should still be honoured: got %+v missing=%v", c, m)
+	}
+}

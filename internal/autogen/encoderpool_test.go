@@ -363,3 +363,92 @@ func TestAutogen_IsReferenceEditModel(t *testing.T) {
 		}
 	}
 }
+
+// Flux.2 states a caption width that is a MULTIPLE of its encoder's hidden size
+// (klein 9B: txt_in 12288 against a 4096-wide Qwen3-8B), so the pick has to
+// divide rather than compare. Exactness still outranks concatenation, and the
+// factor cap keeps the rule from matching arbitrarily narrow encoders.
+func TestAutogen_EncoderPoolLlmConcat(t *testing.T) {
+	p := &EncoderPool{Files: []ComponentFile{
+		{Path: "/m/qwen3-8b.gguf", Role: RoleLlm, Family: "qwen3", Width: 4096, SizeGB: 8},
+		{Path: "/m/qwen3-4b.gguf", Role: RoleLlm, Family: "qwen3", Width: 2560, SizeGB: 3},
+		{Path: "/m/tiny-1024.gguf", Role: RoleLlm, Family: "qwen3", Width: 1024, SizeGB: 1},
+	}}
+	// klein 9B: 12288 = 3 x 4096.
+	if got, _ := p.Llm(12288, false, ""); got != "/m/qwen3-8b.gguf" {
+		t.Errorf("llm(12288) = %q, want the 4096-wide encoder", got)
+	}
+	// The global pin is 2560 wide: 12288 is not a multiple of it, so it must not
+	// be dragged in. This is the exact shape of the klein-9B mis-wire.
+	if got, _ := p.Llm(12288, false, "/m/qwen3-4b.gguf"); got != "/m/qwen3-8b.gguf" {
+		t.Errorf("llm(12288, pin=4b) = %q, want the pin ignored", got)
+	}
+	// 12288/1024 = 12, past maxCaptionConcat: a narrow encoder is not a candidate
+	// just because the arithmetic works.
+	narrow := &EncoderPool{Files: []ComponentFile{
+		{Path: "/m/tiny-1024.gguf", Role: RoleLlm, Family: "qwen3", Width: 1024, SizeGB: 1},
+	}}
+	if got, _ := narrow.Llm(12288, false, ""); got != "" {
+		t.Errorf("llm(12288) over a 1024-wide pool = %q, want none", got)
+	}
+	// An exact match beats a concatenated one even when the concat candidate is
+	// bigger and would win the size tiebreak within a tier.
+	exact := &EncoderPool{Files: []ComponentFile{
+		{Path: "/m/wide-12288.gguf", Role: RoleLlm, Family: "qwen3", Width: 12288, SizeGB: 2},
+		{Path: "/m/qwen3-8b.gguf", Role: RoleLlm, Family: "qwen3", Width: 4096, SizeGB: 8},
+	}}
+	if got, _ := exact.Llm(12288, false, ""); got != "/m/wide-12288.gguf" {
+		t.Errorf("llm(12288) = %q, want the exact-width file", got)
+	}
+	// A pin only reachable by concat does not outrank an exact-width scan hit.
+	if got, _ := exact.Llm(12288, false, "/m/qwen3-8b.gguf"); got != "/m/wide-12288.gguf" {
+		t.Errorf("llm(12288, pin=concat) = %q, want the exact-width file", got)
+	}
+	// ...but a pin at the same tier still wins outright.
+	if got, _ := p.Llm(12288, false, "/m/qwen3-8b.gguf"); got != "/m/qwen3-8b.gguf" {
+		t.Errorf("llm(12288, pin=8b) = %q, want the pin", got)
+	}
+}
+
+func TestAutogen_captionFactor(t *testing.T) {
+	cases := []struct {
+		hidden, width, want int64
+	}{
+		{2560, 2560, 1},  // the ordinary case: one encoder hidden state
+		{12288, 4096, 3}, // flux.2 klein 9B
+		{7680, 2560, 3},  // flux.2 klein 4B
+		{15360, 5120, 3}, // flux.2 dev (Mistral-Small-3)
+		{12288, 2560, 0}, // not divisible
+		{12288, 1024, 0}, // divisible but past the concat cap
+		{4096, 0, 0},     // unmeasured encoder
+		{0, 4096, 0},     // unmeasured DiT
+		{-1, 4096, 0},    // defensive
+	}
+	for _, c := range cases {
+		if got := captionFactor(c.hidden, c.width); got != c.want {
+			t.Errorf("captionFactor(%d, %d) = %d, want %d", c.hidden, c.width, got, c.want)
+		}
+	}
+}
+
+func TestAutogen_knowsLlm(t *testing.T) {
+	p := &EncoderPool{Files: []ComponentFile{
+		{Path: "/m/qwen3-4b.gguf", Role: RoleLlm, Width: 2560},
+		{Path: "/m/t5.gguf", Role: RoleT5, Width: 4096},
+	}}
+	// Classified as an LLM: known at ANY width, which is what separates "the scan
+	// rejected this pin" from "the scan never saw it".
+	if !p.knowsLlm("/m/qwen3-4b.gguf") {
+		t.Error("a scanned llm should be known")
+	}
+	if p.knowsLlm("/m/t5.gguf") {
+		t.Error("a t5 is not an llm")
+	}
+	if p.knowsLlm("/m/never-scanned.gguf") || p.knowsLlm("") {
+		t.Error("an unscanned or empty path is not known")
+	}
+	var nilPool *EncoderPool
+	if nilPool.knowsLlm("/m/qwen3-4b.gguf") {
+		t.Error("nil pool knows nothing")
+	}
+}
