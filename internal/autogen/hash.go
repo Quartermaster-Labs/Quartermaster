@@ -250,7 +250,13 @@ const hashCacheSuffix = ".modelhash"
 //	VAEs and its own with-proj text encoder, generation defaults land on the
 //	8k+1 frame grid, and a distilled checkpoint is launched at its own step and
 //	cfg numbers instead of the generic video ones.
-const genVersion = "v76"
+//
+// v77: --max-vram is priced as the graph-cut headroom left after the resident
+//
+//	weights and GPU-side VAEs, not as the whole card, and --stream-layers is
+//	emitted only where the diffusion params are in RAM for it to stream from.
+//	Every sd-server line changes; a v76 config was generated before either.
+const genVersion = "v77"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the
