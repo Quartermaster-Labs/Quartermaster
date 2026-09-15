@@ -323,7 +323,26 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   unrelated networks over unrelated latents, so a wrong pick fails the load. The text encoder is
   the same trap one level up: LTX's is a Gemma-4-12B republished with the caption projection
   grafted on, and a stock Gemma-3-12B is the same 3840 wide, which is why `resolveComponents`
-  feeds `pool.LlmHinted("ltx")` in as the `prefer` argument when no `qwenLlm` is declared.
+  feeds `pool.LlmHinted("ltx")` in as the `prefer` argument.
+
+- **"A pin is declared" and "the pin applies here" are different questions.** `settings.encoders`
+  is ONE global set shared by every diffusion model on the box, and `EncoderPool.Llm` honours
+  `prefer` only for a candidate that clears the same width and vision gates: a `qwenLlm` aimed at
+  an image model (Qwen3-4B, 2560 wide) is silently dropped for a 3840-wide video one and decides
+  nothing. So a family carrying its own path hint must gate on `pool.llmCandidate(...)`, not on the
+  field being blank. Gating on blankness suppressed LTX's hint in the only configuration that
+  matters, a populated `encoders:` block, which every real install has, and the symptom is not an
+  error: LTX loads a stock Gemma of the right width and conditions on nothing.
+
+- **A gguf can have a full tensor table and ZERO hyperparameter KVs.** That is not just MiniMax-H3
+  (no `general.architecture` at all): LTX-2.5's text encoder declares arch `gemma4`, ships 686
+  tensors, and writes no `gemma4.embedding_length`, because it was converted by ComfyUI tooling
+  that keeps tensors and treats llama.cpp's KVs as optional. `readTensorScan` therefore records
+  `embedWidth` from ne[0] of `token_embd.weight` OR HF's `model.embed_tokens.weight`, and
+  `ReadGgufMetadata` uses it only when the KV is absent. Without it the width reads 0, which
+  `ScanEncoderPool` interprets as "a diffusion model or something with no hidden width" and drops
+  the file from the pool entirely: no warning, no row, just a missing encoder. Same shape as the
+  `captionChannelsFrom` fallback, and for the same reason.
 
 - **A new quant type needs THREE tables, and the header gate is why.** `quantRe` (`discover.go`)
   names it in a FILENAME, `ggmlTypeSize` (`gguf.go`) sizes its tensors, `ggmlTypeName`

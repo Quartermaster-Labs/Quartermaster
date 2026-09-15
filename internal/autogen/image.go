@@ -212,15 +212,23 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *En
 	// still wins over both, below.
 	wantVision := wantsVisionEncoder(a, n, ov)
 	preferLlm := enc.QwenLlm
-	if vid.Kind == VideoFamilyLtxAV && strings.TrimSpace(preferLlm) == "" {
+	if vid.Kind == VideoFamilyLtxAV && !pool.llmCandidate(preferLlm, condHidden, wantVision) {
 		// LTX-2.x does not condition on a stock LLM. Its encoder is a
 		// Gemma-4-12B republished WITH the caption projection baked in, and a
 		// plain Gemma-3-12B is the same 3840 wide, so the width match alone is a
 		// coin flip that pool.Llm resolves by file size - which the stock model
-		// usually wins. The path hint breaks the tie; a miss falls straight
-		// through to the ordinary width-matched pick, and a declared qwenLlm
-		// still wins over both because it is an explicit choice.
-		preferLlm = pool.LlmHinted("ltx")
+		// usually wins. The path hint breaks the tie.
+		//
+		// The test is "does the declared pin APPLY here", not "is one declared":
+		// settings.encoders.qwenLlm is a single global field, and pool.Llm honours
+		// it only when it clears the same width and vision gates. A pin aimed at
+		// an image model (Qwen3-4B, 2560 wide) is silently ignored for LTX, so
+		// treating its mere presence as an answer suppressed this hint in the one
+		// configuration that needs it: a populated encoders block, which is what
+		// every real install has.
+		if h := pool.LlmHinted("ltx"); h != "" {
+			preferLlm = h
+		}
 	}
 	autoLlm, autoVision := pool.Llm(condHidden, wantVision, preferLlm)
 	if autoLlm == "" && wantVision {

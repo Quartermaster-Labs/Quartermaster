@@ -1,6 +1,9 @@
 package autogen
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/binary"
 	"strings"
 	"testing"
 )
@@ -208,5 +211,128 @@ func TestAutogen_WithProjIsNotServed(t *testing.T) {
 		if encoderFileRe.MatchString(n) {
 			t.Errorf("%q should still be served as a model", n)
 		}
+	}
+}
+
+// A pinned qwenLlm aimed at some OTHER model must not suppress LTX's path hint.
+// settings.encoders is ONE global field: pool.Llm honours it only for candidates
+// that clear the same width gate, so a pin at 2560 (the Qwen3-4B every image
+// model here uses) is dropped for LTX's 3840 and decides nothing. Gating the
+// hint on "is a pin declared" rather than "does the pin apply" broke exactly the
+// configuration every real install has: a populated encoders block.
+func TestAutogen_LtxHintSurvivesUnrelatedPin(t *testing.T) {
+	pool := &EncoderPool{Files: []ComponentFile{
+		{Path: "/m/ltx/video-vae.safetensors", Role: RoleVae, Family: VaeFamilyLtx, Width: 128},
+		{Path: "/m/ltx/audio-vae.safetensors", Role: RoleAudioVae, Family: VaeFamilyLtx},
+		{Path: "/m/qwen3-4b-instruct-Q4_K_M.gguf", Role: RoleLlm, Width: 2560, SizeGB: 2.5},
+		{Path: "/m/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf", Role: RoleLlm, Width: 3840, SizeGB: 13},
+		{Path: "/m/elix3r/gemma4-12b-with-proj-ltx-2.5-Q5_K_M.gguf", Role: RoleLlm, Width: 3840, SizeGB: 8.9},
+	}}
+	vid := videoInfo{Kind: VideoFamilyLtxAV, AudioOut: true}
+	enc := EncoderSet{QwenLlm: "/m/qwen3-4b-instruct-Q4_K_M.gguf"}
+
+	c, missing := resolveComponents(enc, nil, "ltxv", "ltx-2.5-22b-distilled-transformer-Q4_K_M", pool, 3840, vid)
+	if len(missing) != 0 {
+		t.Fatalf("missing = %v, want none", missing)
+	}
+	if !strings.Contains(c.llm, "with-proj") {
+		t.Errorf("llm = %q, want the projected encoder: an unrelated 2560 pin must not\n"+
+			"suppress the hint and hand LTX the bigger stock Gemma", c.llm)
+	}
+
+	// A pin that DOES apply still wins: it is the user's explicit answer.
+	c2, _ := resolveComponents(EncoderSet{QwenLlm: "/m/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf"},
+		nil, "ltxv", "ltx-2.5-dev", pool, 3840, vid)
+	if c2.llm != "/m/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf" {
+		t.Errorf("an applicable pin must win, got %q", c2.llm)
+	}
+}
+
+// llmCandidate is the "would Llm honour this pin" test the hint gates on.
+func TestAutogen_LlmCandidate(t *testing.T) {
+	pool := &EncoderPool{Files: []ComponentFile{
+		{Path: "/m/a.gguf", Role: RoleLlm, Width: 2560},
+		{Path: "/m/b.gguf", Role: RoleLlm, Width: 3840},
+		{Path: "/m/c.gguf", Role: RoleLlm, Width: 3840, Vision: true},
+		{Path: "/m/vae.safetensors", Role: RoleVae, Width: 3840},
+	}}
+	for _, tc := range []struct {
+		path   string
+		width  int64
+		vision bool
+		want   bool
+	}{
+		{"/m/b.gguf", 3840, false, true},
+		{"/m/a.gguf", 3840, false, false}, // right file, wrong width
+		{"/m/b.gguf", 3840, true, false},  // no vision tower
+		{"/m/c.gguf", 3840, true, true},
+		{"/m/vae.safetensors", 3840, false, false}, // right width, not an LLM
+		{"/m/missing.gguf", 3840, false, false},
+		{"", 3840, false, false},
+		{"/m/b.gguf", 0, false, false},
+	} {
+		if got := pool.llmCandidate(tc.path, tc.width, tc.vision); got != tc.want {
+			t.Errorf("llmCandidate(%q, %d, vision=%v) = %v, want %v",
+				tc.path, tc.width, tc.vision, got, tc.want)
+		}
+	}
+}
+
+// tensorInfo encodes one gguf tensor-info record: name, ndims, dims, type, offset.
+func tensorInfo(name string, dims []uint64, typ uint32) []byte {
+	var b bytes.Buffer
+	binary.Write(&b, binary.LittleEndian, uint64(len(name)))
+	b.WriteString(name)
+	binary.Write(&b, binary.LittleEndian, uint32(len(dims)))
+	for _, d := range dims {
+		binary.Write(&b, binary.LittleEndian, d)
+	}
+	binary.Write(&b, binary.LittleEndian, typ)
+	binary.Write(&b, binary.LittleEndian, uint64(0))
+	return b.Bytes()
+}
+
+func scanTensors(t *testing.T, recs ...[]byte) tensorScan {
+	t.Helper()
+	var b bytes.Buffer
+	for _, r := range recs {
+		b.Write(r)
+	}
+	raw := b.Bytes()
+	r := &ggufReader{f: bytes.NewReader(raw), br: bufio.NewReader(bytes.NewReader(raw))}
+	scan, err := readTensorScan(r, uint64(len(recs)))
+	if err != nil {
+		t.Fatalf("readTensorScan: %v", err)
+	}
+	return scan
+}
+
+// A gguf converted outside llama.cpp can carry a full tensor table and no
+// hyperparameter KVs at all: LTX-2.5's Gemma-4 encoder declares arch "gemma4"
+// and 686 tensors, and not one gemma4.* key. Width 0 reads as "not a text
+// encoder" in ScanEncoderPool, so the file vanished from the pool entirely and
+// LTX was handed whichever stock Gemma happened to be the same 3840 wide.
+func TestAutogen_EmbedWidthFallback(t *testing.T) {
+	// HF / ComfyUI state-dict naming, as shipped. ne[0] is the hidden width.
+	hf := scanTensors(t, tensorInfo("model.embed_tokens.weight", []uint64{3840, 262144}, 0))
+	if hf.embedWidth != 3840 {
+		t.Errorf("model.embed_tokens.weight -> %d, want 3840", hf.embedWidth)
+	}
+	// llama.cpp's own naming has to work too, since the fallback is generic.
+	lc := scanTensors(t, tensorInfo("token_embd.weight", []uint64{5120, 152064}, 0))
+	if lc.embedWidth != 5120 {
+		t.Errorf("token_embd.weight -> %d, want 5120", lc.embedWidth)
+	}
+	// A diffusion transformer has no token embedding, so it gains nothing and
+	// keeps reading as width 0. That is what still lets ScanEncoderPool reject a
+	// DiT as "not a text encoder".
+	dit := scanTensors(t,
+		tensorInfo("patchify_proj.weight", []uint64{128, 4096}, 0),
+		tensorInfo("audio_patchify_proj.weight", []uint64{64, 4096}, 0))
+	if dit.embedWidth != 0 {
+		t.Errorf("a DiT must gain no width, got %d", dit.embedWidth)
+	}
+	if dit.videoKind != VideoFamilyLtxAV || !dit.hasAudioOut {
+		t.Errorf("ltx markers lost: kind=%q audio=%v", dit.videoKind, dit.hasAudioOut)
 	}
 }

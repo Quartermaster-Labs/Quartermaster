@@ -1031,6 +1031,16 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 		condHidden = captionChannelsFrom(diffConfig)
 	}
 
+	// A gguf converted outside llama.cpp can carry a full tensor table and NOT a
+	// single hyperparameter KV: LTX-2.5's Gemma-4 text encoder is exactly that
+	// (arch "gemma4", 686 tensors, no gemma4.embedding_length). Width 0 reads as
+	// "not a text encoder" in the encoder pool, so fall back to the width the
+	// token-embedding tensor states. KVs win whenever they exist.
+	embWidth := deref(embeddingLength)
+	if embWidth == 0 {
+		embWidth = scan.embedWidth
+	}
+
 	m := Metadata{
 		Path:              path,
 		FileSizeGB:        round(float64(sizeBytes)/gib, 3),
@@ -1040,7 +1050,7 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 		ExpertCount:       deref(expertCount),
 		ExpertUsed:        deref(expertUsed),
 		ContextLength:     deref(contextLength),
-		EmbeddingLength:   deref(embeddingLength),
+		EmbeddingLength:   embWidth,
 		HeadCount:         deref(headCount),
 		HeadCountKv:       deref(headCountKv),
 		HeadCountKvSum:    deref(kvHeadSum),
@@ -1108,10 +1118,11 @@ func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err err
 	var videoKind string
 	var sawExpert, sawInputBlocks, sawLabelEmb, sawDoubleBlocks, unknownType bool
 	var sawVideoPatch, sawAudioPatch, sawTemporalPatch, sawLtxPatch bool
+	var embedWidth int64
 	condDims := map[string]int64{}
 	typeBytes := map[uint32]int64{}
 	out := func() tensorScan {
-		return tensorScan{expertShare: share, vocabElems: vocabElems, diffKind: diffKind, bakedEnc: bakedEnc, condHidden: condHiddenFrom(condDims), videoKind: videoKind, hasAudioOut: sawAudioPatch, typeBytes: typeBytes}
+		return tensorScan{expertShare: share, vocabElems: vocabElems, diffKind: diffKind, bakedEnc: bakedEnc, condHidden: condHiddenFrom(condDims), videoKind: videoKind, hasAudioOut: sawAudioPatch, embedWidth: embedWidth, typeBytes: typeBytes}
 	}
 	for i := uint64(0); i < tensorCount; i++ {
 		name, err := r.str()
@@ -1165,6 +1176,14 @@ func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err err
 		// the tied/untied fallback (some models omit token_embd in the count).
 		if name == "token_embd.weight" || (vocabElems == 0 && name == "output.weight") {
 			vocabElems = elems
+		}
+		// ne[0] of the token-embedding tensor IS the hidden width. Read it for
+		// both namings: llama.cpp's own converter writes token_embd.weight, while
+		// a ComfyUI-layout conversion keeps HF's model.embed_tokens.weight. This
+		// is a FALLBACK only (see Metadata below) - when the KVs are present they
+		// remain authoritative.
+		if name == "token_embd.weight" || name == "model.embed_tokens.weight" {
+			embedWidth = firstDim
 		}
 		// SD/SDXL UNet markers, for a converted diffusion gguf that lost its
 		// general.architecture. input_blocks = a UNet; label_emb (the size/crop

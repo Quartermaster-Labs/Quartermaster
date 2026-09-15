@@ -542,6 +542,28 @@ func (p *EncoderPool) Llm(hidden int64, wantVision bool, prefer string) (path, m
 	return best.Path, best.Mmproj
 }
 
+// llmCandidate reports whether a declared pin would actually be HONOURED by Llm
+// at this width, which is a different question from whether one was declared.
+// settings.encoders.qwenLlm is a single global field shared by every diffusion
+// model on the box, and Llm applies it only to candidates that clear the same
+// width and vision gates, so a pin aimed at an image model is silently dropped
+// for a video one. A family that carries its own path hint has to test for the
+// pin APPLYING, or a populated encoders block (every real install has one)
+// suppresses the hint without ever using the pin.
+func (p *EncoderPool) llmCandidate(path string, hidden int64, wantVision bool) bool {
+	key := config.PathKey(strings.TrimSpace(path))
+	if p == nil || key == "" || hidden <= 0 {
+		return false
+	}
+	for _, f := range p.Files {
+		if f.Role != RoleLlm || f.Width != hidden || config.PathKey(f.Path) != key {
+			continue
+		}
+		return !wantVision || f.Vision
+	}
+	return false
+}
+
 // Pool scans are cached per root set: a regen happens on every settings save and
 // on every models-watcher tick, and re-walking the tree (plus re-reading every
 // safetensors header) each time would dominate. The TTL keeps a freshly

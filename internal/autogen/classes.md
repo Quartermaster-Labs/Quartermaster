@@ -174,10 +174,14 @@ field, the declaration names the file. Without one, two same-width Qwen candidat
 rounded size are separated only by the path tiebreak, which is arbitrary. Qwen3-4B and Qwen3-VL-4B
 are both 2560 wide and their Q8 quants both round to 3.99 GiB, so that tiebreak handed Z-Image the
 VL file Krea-2 wants until the pin was given precedence. LTX adds a path hint of its own:
-`resolveComponents` passes `pool.LlmHinted("ltx")` as the `prefer` argument whenever no `qwenLlm`
-is declared, because LTX's encoder is a Gemma-4-12B republished with the caption projection
-grafted on while a stock Gemma-3-12B is the same 3840 wide. A hint that misses returns `""` and
-falls through to the ordinary width match, so it narrows the field and never guesses.
+`resolveComponents` passes `pool.LlmHinted("ltx")` as the `prefer` argument whenever the declared
+`qwenLlm` is not itself a candidate at LTX's width, because LTX's encoder is a Gemma-4-12B
+republished with the caption projection grafted on while a stock Gemma-3-12B is the same 3840 wide.
+The test is `pool.llmCandidate`, i.e. "would `Llm` honour this pin", NOT "is a pin declared": one
+global field serves every diffusion model, so a `qwenLlm` set for an image model fails the width
+gate and decides nothing, and treating its presence as an answer would suppress the hint in every
+install that has an `encoders:` block. A hint that misses returns `""` and falls through to the
+ordinary width match, so it narrows the field and never guesses.
 
 **`--llm_vision` pairs by directory.** `pairProjectors` attaches each encoder gguf to the
 `mmproj-*` beside it, the same convention `inheritSidecars` uses for vision LLMs, so the
