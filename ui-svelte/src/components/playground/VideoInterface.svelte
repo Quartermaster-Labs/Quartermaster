@@ -378,7 +378,7 @@
       : [...VIDEO_SIZE_TIERS, Number($longEdgeStore) || 640].sort((a, b) => a - b)
     ).map((L) => {
       const [w, h] = aspectDims($aspectStore, L);
-      const warn = vramWarning(w, h, Number($framesStore) || 1, vramGB);
+      const warn = vramWarning(w, h, Number($framesStore) || 1, vramGB, $selectedModelStore);
       return {
         value: String(L),
         label: `${w}x${h}`,
@@ -393,7 +393,8 @@
     $selectedSizeStore = `${w}x${h}`;
   });
   // Both pickers are family-scoped: H3 aligns frames to 17k+5 and is hard-wired
-  // to 24 fps, everything else is 4n+1 and free. The snap effect exists because
+  // to 24 fps, LTX aligns DOWN to 8k+1 and stops at 153, everything else is 4n+1
+  // and free. The snap effect exists because
   // the stores are PERSISTED prefs, so a value picked under one family survives
   // a switch to another and would otherwise leave the Select showing blank.
   let frameOptions = $derived(frameOptionsFor($selectedModelStore));
@@ -402,7 +403,7 @@
   let lengthOptions = $derived(
     frameOptions.map((f) => {
       const [w, h] = $selectedSizeStore.split("x").map(Number);
-      const warn = vramWarning(w || 640, h || 384, f, vramGB);
+      const warn = vramWarning(w || 640, h || 384, f, vramGB, $selectedModelStore);
       return {
         value: String(f),
         label: clipLabel(f, Number($fpsStore) || 1),

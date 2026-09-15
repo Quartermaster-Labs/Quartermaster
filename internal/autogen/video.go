@@ -31,6 +31,12 @@ import (
 const (
 	VideoFamilyMinimaxH3 = "minimax_h3"
 	VideoFamilyWan       = "wan"
+	// VideoFamilyLtxAV is Lightricks LTX-2.x: ONE flat DiT over a joint
+	// video+audio token stream, so the soundtrack is not a bolted-on second
+	// tower but half the sequence. It patchifies with a LINEAR layer
+	// (patchify_proj.weight) rather than H3's conv stem or Wan's conv3d, which
+	// is why it needs its own marker rather than falling out of either.
+	VideoFamilyLtxAV = "ltxav"
 )
 
 // videoComputeOverheadGB approximates the non-weight VRAM a video generation
@@ -97,8 +103,32 @@ type genDefaults struct {
 // `lora: [{path, multiplier}]` or as <lora:name:1.0> in the prompt. A launch
 // flag cannot know whether a given request carries one, and pinning 4 here made
 // every LoRA-less render mush.
-func videoDefaultsFor(v videoInfo) genDefaults {
+//
+// LTX is the one family whose profile cannot be read off the weights. Its
+// distilled and dev checkpoints are TENSOR-IDENTICAL: same arch, same shapes,
+// same names, and they differ only in the schedule they were trained to run
+// (distilled carries 8 predefined sigmas and is guidance-free, dev wants ~20
+// euler steps at cfg 3.0). Nothing in the file distinguishes them, so the name
+// is the only signal there is, the same compromise chroma/klein already make on
+// the image side. A misread here is not subtle: 8 steps on dev is noise, and
+// cfg 3.0 on distilled is a scorched, over-saturated clip.
+func videoDefaultsFor(v videoInfo, name string) genDefaults {
 	switch v.Kind {
+	case VideoFamilyLtxAV:
+		// 1280x704 at 121 frames is ~14k latent tokens by LTX's own ratios (it
+		// compresses 32x spatially and 8x temporally, against the 8x/4x every
+		// other family here uses), so it is LIGHTER per pixel than H3 at
+		// 640x384 despite being four times the canvas. 121 is on the 8k+1 grid
+		// and sits under the 153-frame ceiling the checkpoint's own
+		// positional_embedding_max_pos imposes (20 latent frames).
+		d := genDefaults{width: 1280, height: 704, frames: 121, fps: 24}
+		if isDistilledName(name) {
+			d.steps, d.cfg = 8, 1.0
+		} else {
+			d.cfg = 3.0
+			d.sampler = "euler"
+		}
+		return d
 	case VideoFamilyMinimaxH3:
 		return genDefaults{cfg: 1.0, width: 640, height: 384, frames: 56, fps: 24}
 	case VideoFamilyWan:
@@ -127,10 +157,19 @@ func videoDefaultsFor(v videoInfo) genDefaults {
 // structural difference that gives it its own family in the encoder pool.
 func vaeTemporalTiling(v videoInfo) bool {
 	switch v.Kind {
-	case VideoFamilyWan:
+	case VideoFamilyWan, VideoFamilyLtxAV:
 		return true
 	}
 	return false
+}
+
+// isDistilledName reports whether a checkpoint's id names it as the distilled
+// (few-step, guidance-free) sibling of a family that ships both. Name matching
+// is a last resort everywhere else in this package, and it is used here only
+// because the two files are byte-for-byte the same SHAPE - see videoDefaultsFor.
+func isDistilledName(name string) bool {
+	l := strings.ToLower(name)
+	return strings.Contains(l, "distill") || strings.Contains(l, "turbo")
 }
 
 // videoComponents wires the component files a video DiT needs, drawing from the
@@ -154,6 +193,23 @@ func videoComponents(v videoInfo, enc EncoderSet, pool *EncoderPool, llmDefault 
 		// with the 2D AEs or with Wan's 3D causal VAE.
 		vae = req("vae", firstNonEmpty(enc.VideoVae, pool.Vae(VaeFamilyVideo3D)))
 		llm = req("llm", llmDefault)
+	case VideoFamilyLtxAV:
+		// Two autoencoders, always both: the video half decodes the picture
+		// latents, the audio half decodes the mel latents its joint token
+		// stream also produced. They are picked by FAMILY rather than by the
+		// enc.VideoVae/enc.AudioVae pins, which are one slot each and already
+		// mean H3's pair on a box that has one - see fillEncoderSet. Override
+		// .VaePath / .AudioVaePath remain the per-model escape hatch.
+		vae = req("vae", pool.Vae(VaeFamilyLtx))
+		// The text encoder is a Gemma-4-12B REPUBLISHED with LTX's caption
+		// projection grafted on, so a stock Gemma of the same width would load
+		// and then condition on nothing. The path hint is what separates them;
+		// resolveComponents feeds it in as llmDefault.
+		llm = req("llm", llmDefault)
+		// Deliberately NOT emitting --embeddings-connectors: the 2.5 checkpoint
+		// declares use_embeddings_connector and carries the connector layers
+		// itself (video_embeddings_connector.* / audio_embeddings_connector.*),
+		// so pointing the flag at an external file would load a second copy.
 	case VideoFamilyWan:
 		// Wan2.x decodes through the 3D causal VAE and conditions on umT5-XXL.
 		// The Wan-2.1 and Qwen-Image VAEs are structurally identical, so the
@@ -162,7 +218,12 @@ func videoComponents(v videoInfo, enc EncoderSet, pool *EncoderPool, llmDefault 
 		t5 = req("t5xxl", enc.T5)
 	}
 	if v.AudioOut {
-		audioVae = req("audio_vae", firstNonEmpty(enc.AudioVae, pool.AudioVae()))
+		switch v.Kind {
+		case VideoFamilyLtxAV:
+			audioVae = req("audio_vae", pool.AudioVae(VaeFamilyLtx))
+		default:
+			audioVae = req("audio_vae", firstNonEmpty(enc.AudioVae, pool.AudioVae(VaeFamilyVideo3D)))
+		}
 	}
 	return vae, audioVae, t5, llm
 }

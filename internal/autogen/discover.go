@@ -102,7 +102,13 @@ var (
 	// (a t5 encoder has no chat template and no decoder; it can't generate).
 	// Narrow on purpose: an "-encoder" tail or a known encoder/VAE stem only, so
 	// a real seq2seq LLM (flan-t5-*) is untouched.
-	encoderFileRe = regexp.MustCompile(`(?i)(^|[-_.])(t5xxl|t5[-_]?v1[-_.]?1|umt5|clip[-_]?[lg]|text[-_]?encoder|ae|vae|taesd\w*)([-_.]|\.gguf$)|[-_.]encoder([-_.]|\.gguf$)`)
+	//
+	// "with-proj" is the odd one out and it earns its place: LTX-2.x republishes
+	// an ordinary Gemma-4-12B with the DiT's caption projection grafted onto it
+	// and names the result *-with-proj-*. It parses as a perfectly good chat
+	// model, so without this it is SERVED as one, and the extra projection head
+	// makes it a strictly worse Gemma than the stock file beside it.
+	encoderFileRe = regexp.MustCompile(`(?i)(^|[-_.])(t5xxl|t5[-_]?v1[-_.]?1|umt5|clip[-_]?[lg]|text[-_]?encoder|ae|vae|taesd\w*)([-_.]|\.gguf$)|[-_.](encoder|with[-_]?proj)([-_.]|\.gguf$)`)
 	// GGUF architectures that are encoder-only diffusion components. "clip" is
 	// handled separately (it doubles as a vision projector and IS paired).
 	// Plain "t5" is deliberately absent: flan-t5 is a real seq2seq LLM

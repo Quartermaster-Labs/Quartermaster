@@ -50,18 +50,48 @@ the tensor walk in `gguf.go`). Two traps, both real, both asserted in `video_tes
   silently move a working image model onto the video path. `isImageArch("wan")` stays true and
   the video class never consults arch.
 
-Families (`VideoFamilyMinimaxH3`, `VideoFamilyWan`) carry the runtime defaults, because the
-generic sd-server ones are wrong for both: the built-in `--cfg-scale` is 7.0 and H3 is a 4-step
-distill that **aborts** above 1.0, and the built-in `--video-frames` is 1, which renders a still.
-`videoDefaultsFor` pins steps/cfg/size/frames/fps per family (H3: 4 / 1.0 / 640x384 / 25f / 24fps;
-Wan: 832x480 / 81f / 16fps, steps and cfg left to sd-server since Wan is not distilled).
-`Override.DefaultFrames`/`DefaultFps`/`DefaultCfg`/`AudioVaePath` still win over the family.
+LTX-2.x is the third family, and it is structural too: it declares `arch=ltxv`, and the class
+still ignores the string. Its marker is `patchify_proj.weight`, a LINEAR patch embedding where
+H3 has a conv stem and Wan a conv3d, so neither of their markers sees it.
+`audio_patchify_proj.weight` sets `HasAudioOut`, because LTX's audio half is a second projection
+in the same tower rather than a second model, and that is what makes `--audio-vae` required
+rather than optional.
 
-`videoComponents` resolves the same encoder pool the image path uses, plus two video-only roles:
-`RoleAudioVae` (H3 has an audio branch, `--audio-vae`, and declares `out: [video, audio]`) and
-`VaeFamilyVideo3D` (a 3D VAE is not interchangeable with an image VAE). `CondHidden` 5120
-auto-pairs Qwen3-VL-32B as H3's text encoder. A missing component is emitted as a `WARNING`
-comment naming the role rather than a command that fails on the first request.
+Families (`VideoFamilyMinimaxH3`, `VideoFamilyWan`, `VideoFamilyLtxAV`) carry the runtime
+defaults, because the generic sd-server ones are wrong for all three: the built-in
+`--video-frames` is 1, which renders a still, and the built-in `--cfg-scale` is 7.0, which no
+family here wants. `videoDefaultsFor` takes the family and the model name, pinning
+size/frames/fps plus whatever steps/cfg/sampler are load-bearing. H3: cfg 1.0, 640x384, 56
+frames (its 17k+5 grid, not the 4n+1 grid the other families use) and steps left to sd-server,
+because the 4-step figure belongs to per-request turbo LoRAs and pinning it made every LoRA-less
+render mush. Wan: 832x480 / 81f / 16fps, steps and cfg left to sd-server since it is not
+distilled. LTX: 1280x704 / 121f / 24fps, with the rest derived from the name, because its
+distilled and dev checkpoints are TENSOR-IDENTICAL and nothing in the file separates them:
+`isDistilledName` gets 8 steps at cfg 1.0, everything else cfg 3.0 + `euler` with steps
+unpinned. 121 is on LTX's 8k+1 grid (sd.cpp rounds LTX DOWN, where the other families round up)
+and under the 153-frame ceiling the checkpoint's own `positional_embedding_max_pos` imposes (20
+latent frames). `Override.DefaultFrames`/`DefaultFps`/`DefaultCfg`/`AudioVaePath` still win over
+the family.
+
+`videoComponents` resolves the same encoder pool the image path uses, keyed by family. H3 and
+LTX both have an audio branch, wired as `--audio-vae` with `out: [video, audio]`, so
+`EncoderPool.AudioVae` now takes the family first (empty matches any): two soundtrack decoders on
+one disk are unrelated networks over unrelated latents, and the family is what keeps a model from
+being handed the other's. H3's video VAE is `VaeFamilyVideo3D` (its transformer autoencoder is
+not interchangeable with an image VAE); LTX ships a video + audio pair under `VaeFamilyLtx` and
+always requires both, picked by family rather than through the single-slot `enc.VideoVae`/
+`enc.AudioVae` pins, which already mean H3's pair on a box that has one. `Override.VaePath`/
+`.AudioVaePath` remain the per-model escape hatch. `CondHidden` 5120 auto-pairs Qwen3-VL-32B as
+H3's text encoder; LTX conditions on a Gemma-4-12B republished with the caption projection
+grafted on, which `pool.LlmHinted("ltx")` picks by PATH because a stock Gemma-3-12B is the same
+3840 wide and would load clean and then condition on nothing. `--embeddings-connectors` is
+deliberately never emitted: LTX-2.5 declares `use_embeddings_connector` and carries the connector
+layers itself, so pointing the flag at an external file would load a second copy.
+`vaeTemporalTiling` gates `--temporal-tiling` on the families whose shipped VAE actually
+implements streaming decode, Wan and LTX (`LTXVideoVAE::decode_temporal_tiled_streaming`); H3's
+autoencoder has no tiled path, and sd-server silently falls back rather than erroring, so an
+ungated flag would claim a VRAM lever the decode never applies. A missing component is emitted
+as a `WARNING` comment naming the role rather than a command that fails on the first request.
 
 Sizing reuses the image path with `videoComputeOverheadGB` (4.0) in place of the image figure.
 Known under-charge: `estVramGB` has **no temporal term**, so a 81-frame Wan clip is priced like a
@@ -86,10 +116,13 @@ a llama-server row and shows up in the UI as an LLM ("T5 V1 1 Xxl Encoder") — 
 stack with no decoder and no chat template, which can't generate.
 
 `encoderFileRe` (`discover.go`) drops it by name (`t5xxl`, `t5-v1_1`, `umt5`, `clip_l`/`clip_g`,
-`text_encoder`, `ae`/`vae`/`taesd`, or any `-encoder` tail); `encoderArch` catches stragglers by
-header arch. **Both rules are deliberately narrow on `t5`**: bare arch `t5` and a name like
-`flan-t5-large` are a real seq2seq LLM llama.cpp serves, so only `t5encoder`/`umt5` and the
-encoder-shaped names are excluded.
+`text_encoder`, `ae`/`vae`/`taesd`, or any `-encoder` / `with-proj` segment); `encoderArch`
+catches stragglers by header arch. `with-proj` is the odd one: LTX republishes a Gemma-4-12B
+with the DiT's caption projection grafted on, and the result parses as a perfectly good chat
+model, so without the name match discovery serves it as one (a strictly worse Gemma than the
+stock file beside it). **Both rules are deliberately narrow on `t5`**: bare arch `t5` and a
+name like `flan-t5-large` are a real seq2seq LLM llama.cpp serves, so only `t5encoder`/`umt5`
+and the encoder-shaped names are excluded.
 
 ### Components are DISCOVERED, not declared (`encoderpool.go`)
 
@@ -106,6 +139,9 @@ dev box are all named `ae.safetensors`, and two of those are byte-identical copi
 |---|---|---|
 | VAE | `decoder.conv_in.weight` shape[1] | latent channels: 4 = SD/SDXL, 16 = flux.1 `ae`, 32 = flux.2/ERNIE |
 | VAE (3D) | `conv1.weight` is 5-dim | the Wan-2.1 causal VAE (Wan / Krea / Qwen-Image) |
+| VAE (H3) | `encoder.conv_in.weight` is 5-dim | MiniMax-H3's transformer autoencoder: no `decoder.conv_in` and no bare `conv1`, so it shares no shape table with either arm above |
+| VAE (LTX) | `decoder.conv_in.conv.weight` is 5-dim | the LTX-2.x video half: convs wrapped one level deeper (`LTXVideoCausalConv3d`), with shape[1] (128) kept as Width so a future second latent size is a family mismatch rather than a silent bad decode |
+| Audio VAE | `dec_in_proj.weight` is 3-dim (H3, 1D stack) or `audio_vae.decoder.conv_in.conv.weight` is 4-dim (LTX, 2D over mel) | the soundtrack decoder; the family on each arm is what stops the two from cross-wiring |
 | CLIP | `text_model.embeddings.token_embedding.weight` shape[1] | 768 = CLIP-L, 1280 = CLIP-G |
 | T5 | `encoder.block.0.layer.0.SelfAttention.q.weight` | widest wins (T5-XXL is 4096) |
 | LLM | gguf `embedding_length` / `model.embed_tokens` shape[1] | matched against the DiT (below) |
@@ -119,7 +155,12 @@ root set for 30s (`encoderPoolFor`), since a regen runs on every settings save a
 `txt_in.weight`, `cap_embedder.1.weight`, `text_proj.weight`, `context_embedder.weight` or
 LongCat's `txtfusion...prenorm.scale`, in that order. Matching it to an encoder's hidden width
 picks the right file with no name table: 3584 = Qwen2.5-VL-7B (LongCat, Qwen-Image-Edit),
-2560 = Qwen3-4B (Z-Image, Krea), 3072 = Ministral-3B (ERNIE), 4096 = T5-XXL (flux).
+2560 = Qwen3-4B (Z-Image, Krea), 3072 = Ministral-3B (ERNIE), 4096 = T5-XXL (flux). LTX is the
+one family whose DiT states no width: its caption projection lives in the ENCODER file, not the
+weights being scanned. `gguf.go` therefore also captures the diffusers `config` string KV and
+reads `transformer.caption_channels` (3840) out of it via `captionChannelsFrom`, but only when
+`scan.condHidden` is 0. A tensor shape is what the model actually runs with, so the config blob
+never overrules it.
 
 Width is **not** an identity on its own (five unrelated 2560-wide models are installed here), so
 ties break on `encoderArchRank` first: Qwen > Mistral > Gemma/Llama > unknown. That table is
@@ -132,7 +173,15 @@ takes it as `prefer`), and a per-model `textEncoderPath` wins over even that: th
 field, the declaration names the file. Without one, two same-width Qwen candidates of the same
 rounded size are separated only by the path tiebreak, which is arbitrary. Qwen3-4B and Qwen3-VL-4B
 are both 2560 wide and their Q8 quants both round to 3.99 GiB, so that tiebreak handed Z-Image the
-VL file Krea-2 wants until the pin was given precedence.
+VL file Krea-2 wants until the pin was given precedence. LTX adds a path hint of its own:
+`resolveComponents` passes `pool.LlmHinted("ltx")` as the `prefer` argument whenever the declared
+`qwenLlm` is not itself a candidate at LTX's width, because LTX's encoder is a Gemma-4-12B
+republished with the caption projection grafted on while a stock Gemma-3-12B is the same 3840 wide.
+The test is `pool.llmCandidate`, i.e. "would `Llm` honour this pin", NOT "is a pin declared": one
+global field serves every diffusion model, so a `qwenLlm` set for an image model fails the width
+gate and decides nothing, and treating its presence as an answer would suppress the hint in every
+install that has an `encoders:` block. A hint that misses returns `""` and falls through to the
+ordinary width match, so it narrows the field and never guesses.
 
 **`--llm_vision` pairs by directory.** `pairProjectors` attaches each encoder gguf to the
 `mmproj-*` beside it, the same convention `inheritSidecars` uses for vision LLMs, so the

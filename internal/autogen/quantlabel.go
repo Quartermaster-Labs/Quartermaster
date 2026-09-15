@@ -26,6 +26,15 @@ type tensorScan struct {
 	// model. Only the tensor table can tell these apart.
 	videoKind string
 
+	// embedWidth is the model's hidden size read off the token-embedding tensor
+	// (ne[0] of token_embd.weight, or of HF's model.embed_tokens.weight), and is
+	// the fallback for a text encoder whose gguf declares no hyperparameter KVs
+	// at all. LTX-2.5's Gemma-4 encoder is converted by ComfyUI tooling that
+	// keeps every tensor and writes NO gemma4.embedding_length: without this the
+	// file reads as width 0 and the encoder pool discards it as "not a text
+	// encoder", silently leaving an LTX model to condition on a stock Gemma.
+	embedWidth int64
+
 	// hasAudioOut is true when the video DiT also denoises an audio latent
 	// (MiniMax-H3's audio_patch_proj / final_layer.audio_out), i.e. it needs a
 	// second --audio-vae and produces a soundtrack.
