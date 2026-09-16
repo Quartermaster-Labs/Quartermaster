@@ -614,6 +614,34 @@ func UpsertSidecarRoot(generatePath, category, path string) (map[string]string, 
 	return sc.CategoryRoots, nil
 }
 
+// UpsertSidecarLoraDir sets (or, when path is "", clears) the per-category LoRA
+// folder in the UI-owned settings patch. Read-modify-write rather than a plain
+// Upsert: LoraDirs is one map holding every category, so writing just this key
+// would otherwise drop the others.
+//
+// The map is copied before mutation because LoadSidecarSettings hands back the
+// stored patch itself, and MergeSettingsPatch keeps the same map by reference —
+// mutating it in place would edit prev and next at once, making the "explicit
+// clear" case indistinguishable from "untouched".
+func UpsertSidecarLoraDir(generatePath, category, path string) error {
+	patch, err := LoadSidecarSettings(generatePath)
+	if err != nil {
+		return err
+	}
+	dirs := map[string]string{}
+	if patch != nil && patch.LoraDirs != nil {
+		for k, v := range *patch.LoraDirs {
+			dirs[k] = v
+		}
+	}
+	if strings.TrimSpace(path) == "" {
+		delete(dirs, category)
+	} else {
+		dirs[category] = path
+	}
+	return UpsertSidecarSettings(generatePath, SettingsPatch{LoraDirs: &dirs})
+}
+
 // LoadSidecarAPIKeys returns the sidecar's API-key list, or nil when none is
 // set (inherit the generate file's apiKeys).
 func LoadSidecarAPIKeys(generatePath string) ([]APIKeyEntry, error) {

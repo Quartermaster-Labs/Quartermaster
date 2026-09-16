@@ -77,7 +77,10 @@ flag-override cmd — no persistence, no reload); `PUT`/`DELETE /api/models/{mod
 `PUT`/`DELETE /api/settings/advanced`; `GET`/`PUT /api/settings/app` (**ports, dashboard access,
 update polling, HF token — the only settings route that neither regenerates nor reloads; it takes
 effect at the next start**); `PUT /api/default-variants`;
-`POST /api/pick-folder` + `POST /api/settings/root/pick`; `POST /api/pick-file` (whitelisted
+`POST /api/pick-folder` + `POST /api/settings/root/pick` + `POST /api/settings/loradir/pick`
+(the latter two are the Models page's per-category scan and LoRA folders; both 400 on a category
+outside `autogen.CategoryOrder`, and loradir takes `{clear:true}` to drop back to the default);
+`POST /api/pick-file` (whitelisted
 kinds only — `pickfile_spec.go`); `GET`/`POST /api/apikeys` + `DELETE /api/apikeys/{name}`.
 
 ## Managed backend installs (`backendsapi.go`, admin-gated)

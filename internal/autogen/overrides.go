@@ -25,8 +25,8 @@ type GenerateFile struct {
 // Generate-Config.ps1 parameter defaults; applyDefaults fills any zero value.
 type Settings struct {
 	ModelsRoot string `yaml:"modelsRoot"`
-	// CategoryRoots are optional per-UI-category extra scan folders
-	// ("llm"|"image"|"tts"|"transcribe" -> path). Discovery scans the union of
+	// CategoryRoots are optional per-UI-category extra scan folders (one key per
+	// CategoryOrder entry -> path). Discovery scans the union of
 	// ModelsRoot + these; capability detection still decides each model's
 	// category/engine, so a root is just additional scan scope (organizational),
 	// not a hard tag. Empty/absent => only ModelsRoot is scanned.
@@ -200,6 +200,17 @@ type Settings struct {
 	// a LoRA next to the checkpoint it was trained for is zero-config. A per-model
 	// Override.LoraDir still wins over both.
 	LoraDir string `yaml:"loraDir"`
+	// LoraDirs narrows LoraDir per UI category ("image"|"video" -> path), for the
+	// common case where image LoRAs and video LoRAs are two different trees (a
+	// ComfyUI install keeps models/loras and its video LoRAs apart, and a Wan
+	// LoRA is not loadable by an SDXL checkpoint anyway). Only these two keys
+	// mean anything today: --lora-model-dir is an sd-server flag, and sd-server
+	// is the only backend serving a category with a LoRA concept.
+	//
+	// Resolution order is Override.LoraDir -> LoraDirs[category] -> LoraDir ->
+	// the model gguf's own directory, so LoraDir stays the fleet-wide fallback
+	// for anyone who keeps one tree. Keys are CategoryOrder ids.
+	LoraDirs map[string]string `yaml:"loraDirs"`
 	// ExtraImageModels are sd-server image models that autogen's gguf scan can't
 	// discover or header-parse — chiefly single-file .safetensors DiTs whose weights
 	// exceed the gguf 4-dim tensor cap (HiDream-O1's 5-D vision patch-embed can't be
@@ -295,7 +306,24 @@ type APIKeyEntry struct {
 
 // CategoryOrder is the canonical UI-category order; RootList walks CategoryRoots
 // in this order for deterministic scanning + hashing.
-var CategoryOrder = []string{"llm", "image", "tts", "transcribe"}
+//
+// It MUST stay in sync with MODEL_CATEGORIES in ui-svelte/src/lib/modelUtils.ts:
+// the Models tab renders its folder picker on every tab and posts that tab's id
+// to /api/settings/root/pick, so a category missing here is a root the user can
+// set and see in the toolbar that is then never scanned. The pick handler
+// rejects anything not listed here so that failure is loud rather than silent.
+var CategoryOrder = []string{"llm", "image", "video", "3d", "segment", "tts", "transcribe", "embed"}
+
+// IsCategory reports whether name is a known UI category (i.e. a valid
+// CategoryRoots key).
+func IsCategory(name string) bool {
+	for _, c := range CategoryOrder {
+		if c == name {
+			return true
+		}
+	}
+	return false
+}
 
 // RootList returns the ordered, de-duplicated set of folders to scan: ModelsRoot
 // first, then each CategoryRoots value in CategoryOrder. Blank entries are
@@ -371,6 +399,11 @@ type SettingsPatch struct {
 	// --- Fleet-wide model knobs
 	KvQuant *string `yaml:"kvQuant,omitempty"`
 	LoraDir *string `yaml:"loraDir,omitempty"`
+	// LoraDirs is the per-category narrowing of LoraDir. A pointer like every
+	// other field here, so MergeSettingsPatch's nil-means-untouched contract
+	// holds: a bare map would be dropped by the next save from another section.
+	// A pointer to an empty map is the explicit clear.
+	LoraDirs *map[string]string `yaml:"loraDirs,omitempty"`
 }
 
 // MergeSettingsPatch overlays next onto prev field-wise: a nil field in next
@@ -480,6 +513,9 @@ func (p *SettingsPatch) apply(s *Settings) {
 	}
 	if p.LoraDir != nil {
 		s.LoraDir = *p.LoraDir
+	}
+	if p.LoraDirs != nil {
+		s.LoraDirs = *p.LoraDirs
 	}
 }
 

@@ -1042,6 +1042,9 @@ func (s *Server) routes() {
 	// Per-category scan folder (Models tab folder icon) — opens the host's native
 	// folder dialog, then sets settings.categoryRoots[category].
 	mux.Handle("POST /api/settings/root/pick", adminChain.ThenFunc(s.handleAPISettingsRootPick))
+	// Per-category LoRA folder (Models tab, beside the scan folder above) — sets
+	// settings.loraDirs[category], or clears it with {clear:true}.
+	mux.Handle("POST /api/settings/loradir/pick", adminChain.ThenFunc(s.handleAPISettingsLoraDirPick))
 	// Generic native folder dialog that returns the chosen path without persisting
 	// (slot-cache directory field binds it, then saves on demand).
 	mux.Handle("POST /api/pick-folder", adminChain.ThenFunc(s.handleAPIPickFolder))

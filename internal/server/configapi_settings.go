@@ -73,9 +73,13 @@ type settingsResp struct {
 	ModelsRoot     string           `json:"modelsRoot"` // the shared/fallback scan folder
 	// CategoryRoots is the effective per-category scan folder ("" => uses ModelsRoot).
 	CategoryRoots map[string]string `json:"categoryRoots"`
-	SlotCache     slotCacheDTO      `json:"slotCache"`   // on-disk slot KV persistence
-	Backends      backendsDTO       `json:"backends"`    // effective backend executable paths (legacy 3-slot view)
-	BackendList   []backendEntryDTO `json:"backendList"` // full backend registry (add/remove list)
+	// LoraDirs is the effective per-category LoRA folder ("" => falls back to the
+	// fleet-wide loraDir, then to each model's own directory). Only "image" and
+	// "video" are meaningful — sd-server is the only backend with a LoRA concept.
+	LoraDirs    map[string]string `json:"loraDirs"`
+	SlotCache   slotCacheDTO      `json:"slotCache"`   // on-disk slot KV persistence
+	Backends    backendsDTO       `json:"backends"`    // effective backend executable paths (legacy 3-slot view)
+	BackendList []backendEntryDTO `json:"backendList"` // full backend registry (add/remove list)
 
 	// Guards is the OOM-guard + GPU-usage section, Advanced the sizer knobs.
 	// Both carry EFFECTIVE values (defaults included, never blanks) and each has
@@ -285,6 +289,7 @@ func (s *Server) handleAPISettingsGet(w http.ResponseWriter, r *http.Request) {
 		},
 		ModelsRoot:    gf.Settings.ModelsRoot,
 		CategoryRoots: gf.Settings.CategoryRoots,
+		LoraDirs:      gf.Settings.LoraDirs,
 		SlotCache: slotCacheDTO{
 			Enable: gf.Settings.SlotCache.Enable,
 			// Surface the resolved default dir (".cache" next to the binary) so the
@@ -451,6 +456,14 @@ func (s *Server) handleAPISettingsRootPick(w http.ResponseWriter, r *http.Reques
 		shared.SendResponse(w, r, http.StatusBadRequest, "body must be {category: <non-empty>}")
 		return
 	}
+	// Reject an unknown category rather than storing a root RootList will never
+	// walk: the picker would report success and the folder would silently never
+	// be scanned. Keeps autogen.CategoryOrder and the UI's tab ids honest.
+	category := strings.TrimSpace(body.Category)
+	if !autogen.IsCategory(category) {
+		shared.SendResponse(w, r, http.StatusBadRequest, "unknown model category: "+category)
+		return
+	}
 	path, err := pickFolder()
 	if err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, "folder picker failed: "+err.Error())
@@ -460,7 +473,55 @@ func (s *Server) handleAPISettingsRootPick(w http.ResponseWriter, r *http.Reques
 		w.WriteHeader(http.StatusNoContent) // user cancelled
 		return
 	}
-	if _, err := autogen.UpsertSidecarRoot(s.autogen.GeneratePath, body.Category, path); err != nil {
+	if _, err := autogen.UpsertSidecarRoot(s.autogen.GeneratePath, category, path); err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !s.regenAndReload(w, r) {
+		return
+	}
+	writeJSON(w, map[string]string{"path": path})
+}
+
+// handleAPISettingsLoraDirPick sets the per-category LoRA folder for the given
+// UI category (body {category}), then regenerates + reloads. With {clear:true}
+// it removes the entry instead of opening a dialog, which is the only way back
+// to the fleet-wide default once one is set. 204 when the user cancels.
+//
+// It lives beside the scan-root picker, and both are driven from the Models
+// page, because a LoRA folder is a model-location question: the Settings page
+// keeps only the fleet-wide fallback, which has no category to belong to.
+func (s *Server) handleAPISettingsLoraDirPick(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAutogen(w, r) {
+		return
+	}
+	var body struct {
+		Category string `json:"category"`
+		Clear    bool   `json:"clear"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		shared.SendResponse(w, r, http.StatusBadRequest, "body must be {category: <non-empty>, clear?: bool}")
+		return
+	}
+	category := strings.TrimSpace(body.Category)
+	if !autogen.IsCategory(category) {
+		shared.SendResponse(w, r, http.StatusBadRequest, "unknown model category: "+category)
+		return
+	}
+	var path string
+	if !body.Clear {
+		p, err := pickFolder()
+		if err != nil {
+			shared.SendResponse(w, r, http.StatusInternalServerError, "folder picker failed: "+err.Error())
+			return
+		}
+		if strings.TrimSpace(p) == "" {
+			w.WriteHeader(http.StatusNoContent) // user cancelled
+			return
+		}
+		path = p
+	}
+	if err := autogen.UpsertSidecarLoraDir(s.autogen.GeneratePath, category, path); err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}

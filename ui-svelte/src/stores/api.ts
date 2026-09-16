@@ -760,6 +760,9 @@ export interface AppSettings {
   defaults: { targetVramGB: number; vramOverheadGB: number; maxRamGB: number; ttlSec: number };
   modelsRoot: string;
   categoryRoots: Record<string, string> | null;
+  // Per-category LoRA folder; only "image" and "video" are meaningful. A missing
+  // key falls back to advanced.loraDir, then to each model's own directory.
+  loraDirs: Record<string, string> | null;
   slotCache: SlotCacheSettings;
   backends: BackendExes;
   backendList: BackendEntry[];
@@ -826,6 +829,7 @@ export interface AdvancedSettings {
   healthCheckTimeout: number;
   kvQuant: string; // "" = auto; else f32|f16|bf16|q8_0|q5_1|q5_0|q4_1|q4_0
   loraDir: string; // "" = the image model's own folder
+
   minGpuVramGB: number; // smallest adapter that counts as inference VRAM (0 = default 3)
   // How a device's shared system-memory pool (AMD GTT) counts toward its budget:
   // "auto" = only for an integrated device whose dedicated memory is under the
@@ -1074,6 +1078,25 @@ export async function pickModelsFolder(category: string): Promise<string | null>
 }
 
 // Opens the host's native folder dialog and returns the chosen path (or null
+// pickLoraFolder sets the per-category LoRA folder (settings.loraDirs[category])
+// from the host's native folder dialog, or clears it back to the fleet-wide
+// default with clear=true. Returns the stored path ("" after a clear), or null
+// when the user cancelled the dialog. Persists and regenerates, like
+// pickModelsFolder.
+export async function pickLoraFolder(category: string, clear = false): Promise<string | null> {
+  const response = await fetch("/api/settings/loradir/pick", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category, clear }),
+  });
+  if (response.status === 204) return null;
+  if (!response.ok) {
+    throw new Error(`Failed to set LoRA folder: ${response.status} ${await response.text()}`);
+  }
+  const body = (await response.json()) as { path: string };
+  return body.path;
+}
+
 // when cancelled). Unlike pickModelsFolder it does not persist — the caller
 // binds the path into a form field.
 export async function pickFolder(): Promise<string | null> {

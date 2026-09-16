@@ -214,18 +214,28 @@ func imageArg(p string) string {
 	return p
 }
 
-// resolveLoraDir picks the `--lora-model-dir` for an image model: the per-model
-// override, else the fleet-wide settings.loraDir, else the directory the model
-// file itself sits in. The last fallback is what makes a LoRA dropped next to
-// its base checkpoint (D:/LLM/Models/flux1/<lora>.safetensors) show up in
-// /sdapi/v1/loras with no config at all — sd-server's default is the process
-// cwd, which never contains anything useful here.
+// resolveLoraDir picks the `--lora-model-dir` for one diffusion model: the
+// per-model override, else settings.loraDirs[category], else the fleet-wide
+// settings.loraDir, else the directory the model file itself sits in. The last
+// fallback is what makes a LoRA dropped next to its base checkpoint
+// (D:/LLM/Models/flux1/<lora>.safetensors) show up in /sdapi/v1/loras with no
+// config at all — sd-server's default is the process cwd, which never contains
+// anything useful here.
+//
+// category splits image from video, because sd-server takes ONE directory and a
+// video LoRA and an SDXL LoRA are not interchangeable: a single fleet-wide
+// folder forces whoever keeps them apart (every ComfyUI layout does) to fall
+// back to per-model overrides. The per-category entry is therefore checked
+// first and loraDir remains the fallback for a single-tree setup.
 //
 // Only the DIRECTORY is a launch flag; which LoRA (and at what strength) is
 // per-request — `lora: [{path, multiplier}]` on /sdapi/v1/{txt2img,img2img},
 // where path is the file's name inside this dir.
-func resolveLoraDir(s Settings, ovDir, modelPath string) string {
+func resolveLoraDir(s Settings, ovDir, category, modelPath string) string {
 	if d := strings.TrimSpace(ovDir); d != "" {
+		return d
+	}
+	if d := strings.TrimSpace(s.LoraDirs[category]); d != "" {
 		return d
 	}
 	if d := strings.TrimSpace(s.LoraDir); d != "" {
@@ -236,6 +246,15 @@ func resolveLoraDir(s Settings, ovDir, modelPath string) string {
 		return p[:i]
 	}
 	return ""
+}
+
+// loraCategory maps the emitter's image/video split onto the UI category ids
+// settings.loraDirs is keyed by, so the two cannot drift apart by spelling.
+func loraCategory(isVideo bool) string {
+	if isVideo {
+		return "video"
+	}
+	return "image"
 }
 
 // imageComponents are the resolved VAE / text-encoder file paths for one
@@ -542,7 +561,7 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	if ov != nil {
 		ovLoraDir = ov.LoraDir
 	}
-	if p := imageArg(resolveLoraDir(s, ovLoraDir, modelPath)); p != "" {
+	if p := imageArg(resolveLoraDir(s, ovLoraDir, loraCategory(vid.is()), modelPath)); p != "" {
 		lines = append(lines, "--lora-model-dir "+p)
 	}
 	// --diffusion-fa is a near-free VRAM saver, on unless turned off.
@@ -816,7 +835,11 @@ func extraImageCmdLines(s Settings, m ExtraImageModel) []string {
 	if p := imageArg(m.LlmPath); p != "" {
 		lines = append(lines, "--llm "+p)
 	}
-	if p := imageArg(resolveLoraDir(s, m.LoraDir, m.ModelPath)); p != "" {
+	// Hand-declared extras are scanned by nothing, so there is no videoInfo to
+	// read a category off (the same blind spot --temporal-tiling is opted into
+	// by hand below). They take the "image" entry; a video extra that needs the
+	// other tree sets its own loraDir, which wins over both.
+	if p := imageArg(resolveLoraDir(s, m.LoraDir, "image", m.ModelPath)); p != "" {
 		lines = append(lines, "--lora-model-dir "+p)
 	}
 	if m.DiffusionFa != "off" {

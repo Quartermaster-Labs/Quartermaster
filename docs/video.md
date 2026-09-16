@@ -44,7 +44,7 @@ Each prompt renders a fresh clip into the thread, the same way the Images tab wo
 
 A setting that probably will not fit turns **orange** with the arithmetic behind it: the latent-token count for that size and length against what your card is estimated to hold. It stays selectable, because the estimate ignores VAE tiling and backend offload. If a render does fail, cut length before resolution.
 
-**Controls**: steps, seed, sampler, scheduler, an optional negative prompt, and **LoRAs** from the model's own folder (**Load list** loads the model to enumerate them), each with its own strength.
+**Controls**: steps, seed, sampler, scheduler, an optional negative prompt, and **LoRAs** from the model's own folder (**Load list** loads the model to enumerate them), each with its own strength. Keeping video LoRAs in a tree of their own (a ComfyUI layout always does) is the **LoRA folder** button in the Models page toolbar while the Video tab is open: it applies to video models only and leaves image models on theirs. Settings -> Backends -> LoRA folder is the fallback for everything with no folder of its own.
 
 ## Starting from an image, and going past the VRAM ceiling
 

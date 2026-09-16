@@ -1584,7 +1584,7 @@
       <div class="mt-6">
         <div class="flex items-baseline gap-2 mb-1">
           <h6>LoRA folder</h6>
-          {@render hint("Where the image backend looks for LoRA files (--lora-model-dir), for every image model. Leave blank to use each model's own folder, which is the default. A per-model LoRA folder in the model config editor still wins over this.")}
+          {@render hint("Where the image backend looks for LoRA files (--lora-model-dir), for every image and video model that has no folder of its own. Highest wins: a per-model LoRA folder in the model config editor, then the per-category folder on the Models page, then this value, then each model's own folder, which is the default.")}
         </div>
         <div class="flex items-center gap-2 max-w-2xl">
           <input

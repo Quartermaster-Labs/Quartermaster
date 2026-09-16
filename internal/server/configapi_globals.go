@@ -57,6 +57,9 @@ type advancedDTO struct {
 	HealthCheckTimeout *int     `json:"healthCheckTimeout"`
 	KvQuant            *string  `json:"kvQuant"`
 	LoraDir            *string  `json:"loraDir"`
+	// LoraDirs narrows LoraDir per category ("image"|"video"). A blank or
+	// unknown-category entry is dropped rather than stored.
+	LoraDirs map[string]string `json:"loraDirs"`
 	// MinGpuVramGB is the floor an adapter must clear to count as inference
 	// VRAM at all. An iGPU reports a slice of system RAM as dedicated memory,
 	// and pooling that into the budget invents VRAM no card has.
@@ -122,6 +125,7 @@ func advancedFromSettings(s autogen.Settings) advancedDTO {
 		HealthCheckTimeout: &s.HealthCheckTimeout,
 		KvQuant:            &s.KvQuant,
 		LoraDir:            &s.LoraDir,
+		LoraDirs:           s.LoraDirs,
 		MinGpuVramGB:       &s.MinGpuVramGB,
 		SharedMemory:       &shared,
 		PoolIntegratedGpu:  &poolIntegrated,
@@ -137,6 +141,7 @@ func advancedOverridden(p *autogen.SettingsPatch) bool {
 	return p.ComputeBufFactor != nil || p.VisionOverheadGB != nil || p.VisionCtx != nil ||
 		p.MoeCtxTarget != nil || p.DenseMinCtx != nil || p.DenseCtxLadder != nil ||
 		p.Threads != nil || p.HealthCheckTimeout != nil || p.KvQuant != nil || p.LoraDir != nil ||
+		p.LoraDirs != nil ||
 		p.MinGpuVramGB != nil || p.SharedMemory != nil || p.PoolIntegrated != nil
 }
 
@@ -275,6 +280,23 @@ func (s *Server) handleAPIAdvancedPut(w http.ResponseWriter, r *http.Request) {
 	if patch.LoraDir != nil && strings.TrimSpace(*patch.LoraDir) == "" {
 		patch.LoraDir = nil
 	}
+	// Same for the per-category folders, plus a category whitelist: an unknown
+	// key would be stored and then matched by nothing, the silent no-op that
+	// per-category scan roots already had.
+	for cat, dir := range body.LoraDirs {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			continue
+		}
+		if !autogen.IsCategory(cat) {
+			shared.SendResponse(w, r, http.StatusBadRequest, "unknown model category: "+cat)
+			return
+		}
+		if patch.LoraDirs == nil {
+			patch.LoraDirs = &map[string]string{}
+		}
+		(*patch.LoraDirs)[cat] = dir
+	}
 	// Same for a blank sharedMemory: it is the default, and storing it would
 	// make the section report itself as customised.
 	if patch.SharedMemory != nil && strings.TrimSpace(*patch.SharedMemory) == "" {
@@ -338,6 +360,7 @@ func (s *Server) clearAdvancedPatch() error {
 	next.HealthCheckTimeout = nil
 	next.KvQuant = nil
 	next.LoraDir = nil
+	next.LoraDirs = nil
 	next.MinGpuVramGB = nil
 	next.SharedMemory = nil
 	next.PoolIntegrated = nil
@@ -401,6 +424,13 @@ func describeAdvanced(p autogen.SettingsPatch) string {
 	}
 	if p.LoraDir != nil {
 		parts = append(parts, "loraDir="+*p.LoraDir)
+	}
+	if p.LoraDirs != nil {
+		for _, cat := range autogen.CategoryOrder {
+			if d := (*p.LoraDirs)[cat]; d != "" {
+				parts = append(parts, "loraDirs."+cat+"="+d)
+			}
+		}
 	}
 	if p.SharedMemory != nil {
 		parts = append(parts, "sharedMemory="+*p.SharedMemory)
