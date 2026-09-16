@@ -16,6 +16,22 @@
   import Login from "./Login.svelte";
   import PlaygroundShell from "./PlaygroundShell.svelte";
 
+  // Every tab that picks its own model keeps that pick in its OWN pref, and the
+  // key is not derivable from the tab name (the images tab stores
+  // "playground-image-model"), so the mapping is written out. A tab MISSING from
+  // this table falls through to the chat store, which is what sent Speak and
+  // Transcribe to the wrong place: the dashboard's button opened the right tab
+  // and then pinned the TTS model onto a new chat thread, leaving the Speech
+  // tab on whatever it had before. Anything with a per-tab model store belongs
+  // here.
+  const TAB_MODEL_PREF: Record<string, string> = {
+    images: "playground-image-model",
+    video: "playground-video-model",
+    "3d": "playground-3d-model",
+    speech: "playground-speech-model",
+    audio: "playground-audio-model",
+  };
+
   // Launched from the dashboard's "Chat" button: ?model=<id>&tab=<tab>. Applied
   // after prefs load so it wins over the stored selection, then stripped from the
   // URL so a refresh doesn't re-pin. Each tab has its own model store — chat uses
@@ -28,9 +44,8 @@
     // — an unknown value renders no panel at all.
     if (tab && ["chat", "images", "video", "3d", "speech", "audio"].includes(tab)) selectedTabStore.set(tab);
     if (model) {
-      if (tab === "images") userPref<string>("playground-image-model", "").set(model);
-      else if (tab === "video") userPref<string>("playground-video-model", "").set(model);
-      else if (tab === "3d") userPref<string>("playground-3d-model", "").set(model);
+      const pref = TAB_MODEL_PREF[tab ?? ""];
+      if (pref) userPref<string>(pref, "").set(model);
       else {
         selectedModelStore.set(model);
         // Chat launches into a FRESH conversation pinned to this model, rather

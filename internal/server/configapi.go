@@ -118,7 +118,7 @@ func (s *Server) resolveModelGguf(w http.ResponseWriter, r *http.Request) (realI
 		return "", "", "", false
 	}
 	cmd = cfg.Models[realID].Cmd
-	gguf = modelFamily(cmd)
+	gguf = modelGguf(cfg.Models[realID])
 	if gguf == "" {
 		shared.SendResponse(w, r, http.StatusBadRequest, "model has no gguf path to override")
 		return "", "", "", false

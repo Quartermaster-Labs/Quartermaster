@@ -39,7 +39,9 @@ type CmdInfo struct {
 // A backend missing from this list has no family key, which is not cosmetic: the
 // config editor refuses to save an override for a model whose gguf it cannot
 // find ("model has no gguf path to override"), so every emitted backend's model
-// flag belongs here.
+// flag belongs here. audiocpp_server is the one backend that cannot be served by
+// this list at all - it has NO model flag, only a --config file - so its weights
+// are read off the model entry's audiocpp: block by server.modelGguf.
 var modelPathFlags = []string{"-m", "--model", "--model-path", "--diffusion-model"}
 
 // cmdInfoCache memoizes by raw command string. Commands are stable config data

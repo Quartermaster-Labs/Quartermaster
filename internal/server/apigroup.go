@@ -199,7 +199,7 @@ func (s *Server) modelStatus() []apiModel {
 				ctxSize /= n // -c is the shared pool; report the per-conversation share
 			}
 		}
-		family := modelFamily(mc.Cmd)
+		family := modelGguf(mc)
 		quantName, quantLabel, modelKey, familyKey := modelKeys(family, id)
 		models = append(models, apiModel{
 			Id:           id,

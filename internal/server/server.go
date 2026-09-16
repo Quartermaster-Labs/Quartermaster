@@ -303,7 +303,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		if !ok {
 			return false
 		}
-		gguf := modelFamily(mc.Cmd)
+		gguf := modelGguf(mc)
 		if gguf == "" {
 			return false
 		}
