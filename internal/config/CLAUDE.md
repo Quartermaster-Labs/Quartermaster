@@ -44,7 +44,9 @@ Routing has two equivalent input styles, normalized into the canonical `Config.R
 
 The two styles are mutually exclusive, and `groups` XOR `matrix` always holds. When neither groups nor matrix is given, `AddDefaultGroupToConfig` (`config.go`) places all orphan models in `(default)`. Scheduler is `routing.scheduler` (only `fifo` supported, with per-model priority).
 
-Each `models:` entry (`ModelConfig`) carries `cmd`, `cmdStop`, `proxy`, `aliases`, `env`, `checkEndpoint`, `ttl`, `unlisted`, `useModelName`, `name`, `description`, `concurrencyLimit`, `filters`, `macros`, `metadata`, `sendLoadingState`, `timeouts`, and `capabilities`.
+Each `models:` entry (`ModelConfig`) carries `cmd`, `cmdStop`, `proxy`, `aliases`, `env`, `checkEndpoint`, `ttl`, `unlisted`, `useModelName`, `name`, `description`, `concurrencyLimit`, `filters`, `macros`, `metadata`, `sendLoadingState`, `timeouts`, `capabilities`, and `audiocpp`.
+
+- **`audiocpp` (`AudioCppConfig`: `family`/`path`/`task`) is the one backend knob that is not on a command line**, because `audiocpp_server` has no `--model` flag at all: a model can only be named inside the JSON file it takes as `--config`. Keeping the entry here rather than writing a JSON file per model at generate time means one source of truth and nothing left behind when a model is renamed or removed; `internal/server/audiocppconfig.go` materializes the file at spawn. Pure data here, like `estVramGB` - the config layer only carries it.
 
 ## Gotchas / conventions
 

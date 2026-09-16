@@ -74,6 +74,14 @@ type Metadata struct {
 	FineTune    string
 	GeneralName string
 
+	// AudioFamily is audio.cpp's own "audiocpp.model_spec.family" KV: the family
+	// id (moss_tts_nano, qwen3_asr, ...) whose model_spec drives the load. Only
+	// audio.cpp's converter writes it, and it is the ONE field its server config
+	// cannot derive for itself, which is what makes it worth parsing here rather
+	// than guessing from a filename. Blank on a third-party "-orig" conversion
+	// that dropped the spec -- see audiocpp.go, which warns instead of guessing.
+	AudioFamily string
+
 	// GeneralType is the gguf "general.type" KV ("diffusion" for an image model,
 	// absent/"model" for a normal LLM). Some diffusion GGUFs (e.g. HiDream-O1,
 	// whose transformer is Qwen-based) report a non-image general.architecture
@@ -641,6 +649,7 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 	// file that does not depend on whoever renamed the download. Any of them can
 	// be absent, blank or junk - see identityFrom, which is what judges them.
 	var baseName, sizeLabel, fineTune, generalName string
+	var audioFamily string
 	idKVs := map[string]*string{
 		"general.basename":   &baseName,
 		"general.size_label": &sizeLabel,
@@ -669,6 +678,17 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 				return Metadata{}, err
 			}
 			arch = s
+			matched = true
+		} else if key == "audiocpp.model_spec.family" && t == ggufString {
+			// Sits beside audiocpp.model_spec.json, the whole spec inlined. The
+			// json is deliberately skipped: the server reads it out of the same
+			// file for itself, and it is the larger of the two by orders of
+			// magnitude.
+			_, _, s, err := r.readScalar(t)
+			if err != nil {
+				return Metadata{}, err
+			}
+			audioFamily = s
 			matched = true
 		} else if key == "general.type" && t == ggufString {
 			_, _, s, err := r.readScalar(t)
@@ -1076,6 +1096,7 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 		SizeLabel:         sizeLabel,
 		FineTune:          fineTune,
 		GeneralName:       generalName,
+		AudioFamily:       audioFamily,
 		DiffusionKind:     diffKind,
 		CondHidden:        condHidden,
 		VideoKind:         scan.videoKind,

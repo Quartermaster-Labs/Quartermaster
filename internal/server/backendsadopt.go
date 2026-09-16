@@ -82,14 +82,11 @@ func AdoptInstalledBackends(genPath string, mgr *backends.Manager, logf func(str
 		} else {
 			// Same rule as an interactive install: the first backend of a class
 			// becomes the auto-pick, and a populated class is never restolen.
-			classTaken := false
-			for _, e := range list {
-				if autogen.KindClass(e.Kind) == autogen.KindClass(comp.Kind) {
-					classTaken = true
-					break
-				}
-			}
-			row.Default = !classTaken
+			// ClassTaken, not a KindClass equality test: audio.cpp serves tts AND
+			// asr from one row, so "is this kind's class populated" is a question
+			// about a SET of classes, and an existing parakeet install has to be
+			// enough to stop it claiming the tts star it travels with.
+			row.Default = !autogen.ClassTaken(list, comp.Kind)
 			list = append(list, row)
 		}
 		adopted++

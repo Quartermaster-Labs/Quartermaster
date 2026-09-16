@@ -54,6 +54,13 @@ Also here: `turns_design.md` — the turn runner's design notes.
   tab would otherwise pin the model forever, and the watcher's poll doubles as the TTL keepalive
   (only a real request through the process refreshes its `lastUse`). Terminal documents are served
   from the watcher's cache for `videoJobGrace` because the lease is already gone by then.
+- **audio.cpp's `--config` is written at SPAWN, not at generate** (`audiocppconfig.go`).
+  `audiocpp_server` has no `--model` flag, so the model is named only inside a JSON file. The
+  generated YAML carries a typed `audiocpp:` block and the spawn hook materializes it under
+  `<CacheDir>/audiocpp/`, which keeps one source of truth and leaves no stale generated files
+  behind. It shares the process layer's ONE `SetSpawnArgs` slot with the live-VRAM placement
+  guard (`WireDynamicOffload`) and runs first, because it only ever appends. The file is
+  rewritten per spawn and deliberately not deleted on stop.
 - **The config editor is `-generate`-only** — every handler 501s when `s.autogen == nil`.
 
 ## Connections

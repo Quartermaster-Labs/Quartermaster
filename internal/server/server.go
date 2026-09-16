@@ -413,6 +413,11 @@ func (s *Server) offloadSettingsVal() autogen.Settings {
 // reading to act on). Call once after New (and after each hot-reload re-New).
 func (s *Server) WireDynamicOffload(settings autogen.Settings) {
 	if s.perf == nil {
+		// There is no live reading to place against, but the spawn slot has a
+		// second tenant that does not depend on one: audio.cpp's --config has to
+		// be materialized on every spawn regardless (audiocppconfig.go). Install
+		// that half alone rather than leaving the slot empty.
+		s.local.SetSpawnArgs(s.audioCppSpawnArgs)
 		return
 	}
 	s.offloadSettings.Store(&settings)
@@ -426,6 +431,14 @@ func (s *Server) WireDynamicOffload(settings autogen.Settings) {
 
 	s.local.SetSpawnArgs(func(modelID string, args []string) ([]string, error) {
 		logf := func(m string) { s.proxylog.Infof("<%s> %s", modelID, m) }
+		// audio.cpp first: it only ever APPENDS --config, and the placement
+		// rewriter below reads llama-style flags that an audiocpp_server argv
+		// does not carry, so the order costs nothing and keeps the file written
+		// before anything can refuse the spawn for VRAM.
+		args, err := s.audioCppSpawnArgs(modelID, args)
+		if err != nil {
+			return nil, err
+		}
 		freeGB, ok := s.freeVramGB()
 		// A model refused for lack of VRAM moments ago on a reading that has not
 		// improved will be refused again, so short-circuit instead of paying the

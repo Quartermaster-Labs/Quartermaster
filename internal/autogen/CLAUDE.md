@@ -50,6 +50,7 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 | `vllm.go` | Backend selection (`resolveBackend`, `resolveBackendPreferring`, `kindClass`) + the vllm emitter. → `backends.md` |
 | `rope.go` | `ropeCeiling`/`ropeFactor` — the only path that lifts the trained-ctx ceiling. → `sizing.md` |
 | `encoderpool.go` | Diffusion component auto-discovery: classifies every VAE / CLIP / T5 / audio VAE / text-encoder LLM on disk from its header (safetensors tensor table or gguf metadata), pairs each encoder with the mmproj beside it, and fills the blanks in `settings.encoders`. Matched to a DiT by `Metadata.CondHidden`. VAEs and audio VAEs carry a FAMILY, and `Vae`/`AudioVae` are scoped by it: the shapes alone would let a model load a decoder for a latent it never produced. `LlmHinted` is the path-based escape for a family whose encoder is a republished copy of a common model (LTX). -> `classes.md` |
+| `audiocpp.go` | audio.cpp emitter: the `IsAudioCppModel` gate (header-exact, no filename heuristics), the 72-family task table, the containment flags that stop audio.cpp's own model manager being a second scheduler, and the `audiocpp:` block the spawn-time `--config` materializer consumes. Also `withoutAudioCpp`, which hides its rows from the legacy speech resolvers. → `classes.md` |
 | `audio.go`, `asr.go`, `sam.go`, `image.go`, `embedding.go` | Non-LLM class emitters. → `classes.md` |
 
 ## Important types & functions

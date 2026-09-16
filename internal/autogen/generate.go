@@ -244,6 +244,18 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		return nil
 	}
 
+	// audio.cpp GGUFs go to audiocpp_server, and are tested ahead of both legacy
+	// speech engines: the header states the family outright (general.architecture
+	// = audiocpp), so there is nothing to disambiguate, and a qwentts or TTS.cpp
+	// command built for one would fail at load. The emitter can decline (a music
+	// family, or a conversion carrying no family id), in which case the model is
+	// deliberately dropped from the config with a comment saying why - no other
+	// engine here could serve it either.
+	if IsAudioCppModel(meta) {
+		emitAudioCppModel(b, s, row, ov, name, meta, emitted)
+		return nil
+	}
+
 	// Speech GGUFs go to a TTS server (OpenAI /v1/audio/speech), not llama-server:
 	// a Qwen3-TTS "talker" emits audio-codec tokens and loads with a paired codec
 	// gguf (qwentts.cpp), a TTS.cpp export is self-contained. Detect ahead of the

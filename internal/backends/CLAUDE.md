@@ -83,9 +83,14 @@ exe slots, the implicit class default) read.
   deliberately stays outside that volume: mounting one over it would shadow the
   newer binary on every image update.
 
-- **An install never steals ★ from an existing row.** `registerManagedBackend`
-  only marks the new row as its class default when no row of that class exists
-  yet, so a hand-entered backend the user set up earlier keeps winning and the
+- **An install never steals ★ from an existing row, and "its class" can be
+  PLURAL.** `registerManagedBackend` only marks the new row as its class default
+  when no row of that class exists yet. `audiocpp-server` is the first component
+  whose kind serves two classes (tts + asr), so that test goes through
+  `autogen.ClassTaken` (the whole set) rather than a `KindClass` equality — an
+  existing Parakeet row has to be enough to stop it claiming the tts ★ it travels
+  with. `backendsadopt.go` applies the same rule when it adopts an install found
+  on disk. Here, so a hand-entered backend the user set up earlier keeps winning and the
   managed build sits unused. That is the right default (their choice stands) but
   it is invisible, so the catalog DTO carries
   `isDefault`/`defaultOwner`/`defaultImplicit` and the card shows "Installed, but

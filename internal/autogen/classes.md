@@ -1,7 +1,7 @@
 # autogen — non-LLM model classes
 
 `emitModel` / `RenderSoloCmd` **dispatch by model class**, in order:
-SAM (`.ggml`) → TRELLIS → **video** → image → embedding → TTS → ASR → LLM (llama or vllm). This file covers
+SAM (`.ggml`) → TRELLIS → **video** → image → embedding → **audio.cpp** → TTS → ASR → LLM (llama or vllm). This file covers
 everything that is not the LLM path. Backend *selection* is in
 [`backends.md`](backends.md); LLM sizing in [`sizing.md`](sizing.md).
 
@@ -11,6 +11,7 @@ everything that is not the LLM path. Backend *selection* is in
 | `video.go` | Video generation (sd-server's job API) |
 | `image.go` | Diffusion / image generation (sd-server) |
 | `embedding.go` | Text embedders |
+| `audiocpp.go` | audio.cpp — one engine serving **two classes** (tts + asr), 72 families |
 | `audio.go` | TTS — **two engines** (qwentts.cpp, TTS.cpp) |
 | `asr.go` | Speech-to-text (parakeet.cpp) |
 
@@ -264,3 +265,68 @@ Placed in the persistent `asr` coexistence group (`coexistSets.ASR`) for the sam
 no `estVramGB`: dictating must not evict the chat model the transcript is headed for. A GPU
 opt-in through `ExtraArgs` keeps coexisting — the same accepted under-charge, and far cheaper
 than a full swap on every dictation.
+
+## audio.cpp (`audiocpp.go`) - one engine, two classes
+
+`audiocpp_server` (upstream `0xShug0/audio.cpp`, catalogued as the `audiocpp-server` component)
+serves 72 model families behind one binary. It is dispatched **before** both legacy speech
+engines, because the routing question is already answered in the file: an audio.cpp conversion
+writes `general.architecture = audiocpp` and `audiocpp.model_spec.family = <family>` into the
+GGUF header, so `IsAudioCppModel` is an exact test and the family needs no filename heuristic
+and no runtime read of upstream's `model_specs/`. `gguf.go` parses the family KV (and skips the
+`...model_spec.json` beside it, which is the whole spec inlined and orders of magnitude larger;
+the server reads it out of the same file for itself).
+
+`audioCppFamilies` maps every upstream family to the classes it serves. Three ways a model is
+**deliberately dropped with a comment instead of an entry**, since no other engine here could
+serve it either: no family id in the header (a third-party `-orig` conversion that dropped the
+spec - we warn rather than guess), a known family we do not serve yet (music, separation, voice
+conversion, codec, align, diar, midi, s2s), and an unknown family (upstream added one; the table
+needs a row).
+
+### It must never become a second scheduler
+
+audio.cpp ships its own model manager: lazy loading, a residency cap, idle unloads and a
+free-memory guard. All of it is a scheduler, and a second scheduler behind the router means
+residency decisions the VRAM budget never sees. It is contained rather than used:
+
+- **one model per generated config**, plus `--max-loaded-models 1` - a cap over a single model
+  has nothing to choose between;
+- `lazy_load: false`, so the listen socket opening means the weights are resident, which is what
+  makes `checkEndpoint: /health` a real readiness gate rather than a port check;
+- `idle_unload_ms: 0`, `min_free_memory_mb: 0` - TTL and eviction are the router's, exclusively;
+- `concurrencyLimit: 1` in the emitted YAML;
+- `/v1/models/load`, `/v1/models/unload` and `/v1/tasks/unload_models` are **never proxied**.
+
+### There is no `--model` flag (the `audiocpp:` block)
+
+A model can only be named inside the JSON file passed as `--config`; every other knob is an argv
+flag, and argv wins over the file. Writing one JSON per model at generate time would mean N
+generated files duplicating facts the config already holds, left behind on every rename or
+delete. Instead the emitted entry carries a typed `audiocpp:` block (`family`/`path`/`task`, see
+`config.AudioCppConfig`) and `internal/server/audiocppconfig.go` materializes it at **spawn**
+time into `<CacheDir>/audiocpp/<model>-<hash>.json` (atomic temp+rename; the hash is of the
+original model id, so two ids that sanitize alike cannot share one file). A failed write refuses
+the spawn - an empty `models` array would 400 every request and read as a broken model rather
+than a broken disk. A user-written `--config` in the launch box is left alone.
+
+### `--backend` is load-bearing
+
+audio.cpp's config defaults to **CUDA**, so a Vulkan or CPU build launched bare fails on a
+non-NVIDIA box. `audioCppFlavour` derives the flag from the installed build's variant; a
+hand-entered registry row records no variant, so the emit carries a `# NOTE` naming the cuda
+default instead of guessing.
+
+### First kind to serve two classes
+
+`kindClasses("audiocpp")` is `{tts, asr}`, which the registry's "an install never steals a
+populated class" rule has to reason about as a SET: an existing Parakeet install is enough to
+stop audio.cpp claiming the tts star it travels with (`ClassTaken`, used by the interactive
+install and by `backendsadopt.go`). In the other direction, an audio.cpp row holding a class star
+must not hand its binary to the legacy emitters - it reads neither engine's weights.
+`withoutAudioCpp` hides those rows from `ttsBackend`/`asrExe`, which is stronger than checking
+the answer afterwards: the star degrading to audio.cpp then falls through to the NEXT installed
+engine of that class, not past the registry to the legacy derived exe.
+
+Music (`ace_step`, `songbloom`, ...) is a follow-up: it needs a class of its own, a
+`/v1/tasks/run` base64-WAV translation handler and a UI tab.

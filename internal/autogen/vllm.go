@@ -36,32 +36,88 @@ const vllmOverheadGB = 1.5
 // to allocate KV for at startup.
 const vllmFallbackCtx = 32768
 
-// kindClass maps a backend kind to the model class it serves, so auto-pick can
-// match a model to a compatible backend. llama and vllm both serve LLMs.
-func kindClass(kind string) string {
+// kindClasses maps a backend kind to every model class it can serve, most
+// representative first, so auto-pick can match a model to a compatible backend.
+// llama and vllm both serve LLMs.
+//
+// Nearly every engine serves exactly one class, and the singular kindClass below
+// is what the UI labels a backend with. audio.cpp is the exception: one binary
+// that does speech synthesis AND transcription (and, later, music), so a single
+// registry row has to be resolvable from more than one class. Use
+// kindServesClass for "can this backend run that model", never an equality test
+// against kindClass.
+func kindClasses(kind string) []string {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "llama", "llama.cpp", "server", "vllm":
-		return "llm"
+		return []string{"llm"}
 	case "sd", "sd-server", "image":
-		return "image"
+		return []string{"image"}
 	case "tts", "tts-server", "speech", "ttscpp", "tts.cpp", "kokoro":
-		return "tts"
+		return []string{"tts"}
 	case "asr", "parakeet", "parakeet-server", "transcribe":
-		return "asr"
+		return []string{"asr"}
+	case "audiocpp", "audio.cpp", "audiocpp-server":
+		return []string{"tts", "asr"}
 	case "sam", "sam3", "segment":
-		return "segment"
+		return []string{"segment"}
 	case "upscale", "realesrgan", "esrgan":
-		return "upscale"
+		return []string{"upscale"}
 	case "trellis2", "trellis", "3d":
-		return "3d"
+		return []string{"3d"}
+	}
+	return nil
+}
+
+// kindClass is the class a backend is LABELLED with: the first one it serves.
+// Matching a model against a backend is kindServesClass's job.
+func kindClass(kind string) string {
+	if cs := kindClasses(kind); len(cs) > 0 {
+		return cs[0]
 	}
 	return ""
+}
+
+// kindServesClass reports whether a backend of this kind can run models of the
+// given class.
+func kindServesClass(kind, class string) bool {
+	for _, c := range kindClasses(kind) {
+		if c == class {
+			return true
+		}
+	}
+	return false
 }
 
 // KindClass exposes the kind→class mapping to callers outside this package (the
 // managed-backend installer needs it to decide whether a class already has an
 // entry before marking a freshly installed backend as the class default).
 func KindClass(kind string) string { return kindClass(kind) }
+
+// KindClasses exposes the full class set of a kind outside this package.
+func KindClasses(kind string) []string { return kindClasses(kind) }
+
+// KindServesClass exposes the class-membership test outside this package. It is
+// what callers deciding "is there already a backend for this class" must use:
+// an equality test against KindClass silently ignores every class a multi-class
+// engine serves beyond its first.
+func KindServesClass(kind, class string) bool { return kindServesClass(kind, class) }
+
+// ClassTaken reports whether the registry already holds an entry serving any
+// class the given kind would serve. It is the "an install never steals ★" test,
+// asked by all three registration paths (install, activate, first-run setup).
+// Shared because the multi-class case has to consider EVERY class the new
+// backend would serve: audio.cpp arriving on a box that already has parakeet
+// must not take the auto-pick just because nothing claimed the tts class yet.
+func ClassTaken(list []BackendEntry, kind string) bool {
+	for _, c := range kindClasses(kind) {
+		for _, e := range list {
+			if kindServesClass(e.Kind, c) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // resolvedBackend is the backend a model resolves to: its kind (drives which
 // emitter runs) and exe (the launcher). A zero value => no registry entry
@@ -92,7 +148,7 @@ func resolveBackend(s Settings, ov *Override, class string) resolvedBackend {
 	var first *BackendEntry
 	for i := range s.Backends {
 		e := &s.Backends[i]
-		if kindClass(e.Kind) != class {
+		if !kindServesClass(e.Kind, class) {
 			continue
 		}
 		if e.Default {
@@ -130,7 +186,7 @@ func resolveBackendPreferring(s Settings, ov *Override, class, preferKind string
 		var first *BackendEntry
 		for i := range s.Backends {
 			e := &s.Backends[i]
-			if kindClass(e.Kind) != class || !strings.EqualFold(strings.TrimSpace(e.Kind), preferKind) {
+			if !kindServesClass(e.Kind, class) || !strings.EqualFold(strings.TrimSpace(e.Kind), preferKind) {
 				continue
 			}
 			if e.Default {
