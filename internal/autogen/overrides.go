@@ -238,7 +238,7 @@ type ExtraImageModel struct {
 	// this path can tell a video DiT from an image one. Set "on" explicitly.
 	// (The discovered path defaults both ON for video models: see Override.)
 	TemporalTiling string `yaml:"temporalTiling"` // "on" => --temporal-tiling
-	StreamLayers   string `yaml:"streamLayers"`   // "on" => --stream-layers
+	StreamLayers   string `yaml:"streamLayers"`   // "on" => --stream-layers (ignored unless offloaded)
 	TeOnCpu        string `yaml:"teOnCpu"`        // "" => on (te=cpu), "off" => keep on GPU
 	VaeOnCpu       string `yaml:"vaeOnCpu"`       // "on" => add vae=cpu to --backend; "" => GPU
 	OffloadToCpu   string `yaml:"offloadToCpu"`   // "on" => --offload-to-cpu (+ --vae-on-cpu)
@@ -780,7 +780,7 @@ type Override struct {
 	//   VaeOnCpu:     "" => off (VAE decodes on GPU); "on" adds vae=cpu to --backend
 	//                 (bf16 VAE whitens on some GPU backends; CPU is the safe fallback)
 	//   TemporalTiling: "" => on for video families whose VAE implements it
-	//   StreamLayers:   "" => on for VIDEO models only (--stream-layers)
+	//   StreamLayers:   "" => on for VIDEO models that OFFLOAD (--stream-layers)
 	OffloadToCpu string `yaml:"offloadToCpu"`
 	TeOnCpu      string `yaml:"teOnCpu"`
 	VaeOnCpu     string `yaml:"vaeOnCpu"`
@@ -802,9 +802,16 @@ type Override struct {
 	//
 	// --stream-layers attacks the other peak from the side: it streams the
 	// diffusion weights against the --max-vram budget with prefetch instead of
-	// pinning them resident, handing that headroom back to the sampler, which is
-	// what actually buys frame count. It is documented as a no-op without
-	// --max-vram, and every sd-server line emitted here sets one.
+	// pinning them resident, handing that headroom back to the sampler.
+	//
+	// It has TWO preconditions, and the second one is the one that bites. The
+	// documented one is --max-vram, which every sd-server line emitted here sets.
+	// The undocumented one only shows up at runtime: "--stream-layers has no
+	// effect unless diffusion params backend is cpu; ignoring". Streaming the
+	// weights IN means they have to live somewhere to stream from, and only
+	// --offload-to-cpu puts them there. So "" follows the offload decision rather
+	// than the video one: a clip whose weights fit resident gets nothing from
+	// this flag except a line in the log saying so. "on" forces it regardless.
 	TemporalTiling string `yaml:"temporalTiling"`
 	StreamLayers   string `yaml:"streamLayers"`
 	// Generation defaults baked into the sd-server command (applied when a request

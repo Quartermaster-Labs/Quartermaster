@@ -360,6 +360,18 @@ const (
 // headroom pad, but only when that is TIGHTER than the baked budget. Ample free
 // VRAM, an unparseable value, or a baked budget already under the live ceiling
 // all return args unchanged.
+//
+// What this can and cannot correct for is worth being precise about, because it
+// looks like a safety net and is only half of one. --max-vram is sd.cpp's
+// graph-cut budget, and the baked value already has this model's own resident
+// weights subtracted (see graphBudget). freeGB is measured at LAUNCH, and
+// sd-server loads its params lazily (--eager-load defaults off), so at that
+// moment this model's weights are not in VRAM yet and the reading is flattering.
+//
+// So this corrects for OTHER tenants of the card, and never for the model being
+// launched. A baked budget that forgot its own weights would sail straight past
+// the tighten-only test here and OOM at first sample, which is exactly the shape
+// of the LTX-2.5 failure that put graphBudget in the emitter.
 func liveMaxVram(args []string, idx int, baked string, freeGB float64, logf func(string)) []string {
 	bakedGB, err := strconv.ParseFloat(baked, 64)
 	if err != nil {

@@ -679,12 +679,12 @@ func RenderSoloCmdLayers(s Settings, meta Metadata, row GgufRow, ov Override) (C
 	// reads as an image arch, and the video branch is what adds --audio-vae and
 	// the frames/fps profile.
 	if vid := videoInfoFrom(meta); vid.is() {
-		lines, _, _, _ := imageCmdLines(s, row, &ov, effectiveImageArch(meta), row.FullPath, meta.CondHidden, vid)
+		lines, _, _, _, _ := imageCmdLines(s, row, &ov, effectiveImageArch(meta), row.FullPath, meta.CondHidden, vid)
 		return plainCmd(strings.Join(lines, " "))
 	}
 	// Diffusion models render an sd-server command, not a llama-server one.
 	if imgArch := effectiveImageArch(meta); isImageArch(imgArch) {
-		lines, _, _, _ := imageCmdLines(s, row, &ov, imgArch, row.FullPath, meta.CondHidden, videoInfo{})
+		lines, _, _, _, _ := imageCmdLines(s, row, &ov, imgArch, row.FullPath, meta.CondHidden, videoInfo{})
 		return plainCmd(strings.Join(lines, " "))
 	}
 	// Embedders render a minimal --embeddings command (no KV/spec sizing).
