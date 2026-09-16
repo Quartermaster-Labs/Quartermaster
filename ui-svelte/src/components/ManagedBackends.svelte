@@ -300,6 +300,7 @@
     upscale: "Upscale",
     tts: "Speech",
     asr: "Transcription",
+    audio: "Audio", // audio.cpp: one install serving both of the two above
     segment: "Segmentation",
     tools: "Tools", // helper binaries (yt-dlp) — never registered as a backend
     custom: "Other",

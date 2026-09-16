@@ -100,6 +100,13 @@ ready/starting or streaming) so the first token doesn't wait on a cold swap. The
 button (`?model=`) opens a **fresh** session pinned to that model (`startChat(model)`) rather than
 repointing the open thread.
 
+`applyLaunchParams` (`PlaygroundApp.svelte`) routes that model by tab through `TAB_MODEL_PREF`, and
+only the **chat** tab falls through to `selectedModelStore` + `startChat`. Every other tab keeps its
+pick in a pref of its own, and the key is not derivable from the tab name (`images` stores
+`playground-image-model`), so a tab missing from that table silently lands its model on a new chat
+thread instead: that is what made the Models page's **Speak** and **Transcribe** buttons open the
+right tab with the wrong model selected.
+
 ### Autoscroll
 
 Follows the newest content off a **ResizeObserver on the message-list content wrapper**, not off

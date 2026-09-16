@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/quartermaster-labs/quartermaster/internal/autogen"
+	"github.com/quartermaster-labs/quartermaster/internal/config"
 	"github.com/quartermaster-labs/quartermaster/internal/quant"
 )
 
@@ -64,6 +65,27 @@ func modelIdentity(path string) autogen.Identity {
 // fallback for the files whose name says nothing: it names a hand-mixed build
 // "IQ4_XS mix" instead of leaving the pill blank, without ever fusing two
 // unrelated builds that happen to compute the same label.
+// engineScopedKey narrows a grouping key to the ENGINE that can read the file.
+//
+// Two engines' packagings of ONE model are not one model to the Models table.
+// audio.cpp ships its own gguf of e.g. Qwen3-TTS carrying the same header
+// identity as the qwentts.cpp conversion of the same weights, so the
+// header-derived modelKey fused the two onto a single row - and a row has ONE
+// config editor, whose backend picker is partitioned by weight format, so the
+// fused row could only ever offer the shorter-id member's engine. The audio.cpp
+// packaging then had no reachable editor at all, which read as "audio.cpp is
+// missing from the backend list".
+//
+// The formats are mutually unreadable, so they get separate rows. Only modelKey
+// is scoped: familyKey stays shared on purpose, because they ARE the same model
+// and that keeps both rows under one family heading, side by side.
+func engineScopedKey(modelKey string, mc config.ModelConfig) string {
+	if modelKey == "" || mc.AudioCpp.Empty() {
+		return modelKey
+	}
+	return modelKey + "@audiocpp"
+}
+
 func modelKeys(path, id string) (quant, quantLabel, modelKey, familyKey string) {
 	ident := modelIdentity(path)
 	quant = quantFromPath(path)

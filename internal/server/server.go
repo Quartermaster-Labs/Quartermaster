@@ -303,7 +303,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		if !ok {
 			return false
 		}
-		gguf := modelFamily(mc.Cmd)
+		gguf := modelGguf(mc)
 		if gguf == "" {
 			return false
 		}
@@ -413,6 +413,11 @@ func (s *Server) offloadSettingsVal() autogen.Settings {
 // reading to act on). Call once after New (and after each hot-reload re-New).
 func (s *Server) WireDynamicOffload(settings autogen.Settings) {
 	if s.perf == nil {
+		// There is no live reading to place against, but the spawn slot has a
+		// second tenant that does not depend on one: audio.cpp's --config has to
+		// be materialized on every spawn regardless (audiocppconfig.go). Install
+		// that half alone rather than leaving the slot empty.
+		s.local.SetSpawnArgs(s.audioCppSpawnArgs)
 		return
 	}
 	s.offloadSettings.Store(&settings)
@@ -426,6 +431,14 @@ func (s *Server) WireDynamicOffload(settings autogen.Settings) {
 
 	s.local.SetSpawnArgs(func(modelID string, args []string) ([]string, error) {
 		logf := func(m string) { s.proxylog.Infof("<%s> %s", modelID, m) }
+		// audio.cpp first: it only ever APPENDS --config, and the placement
+		// rewriter below reads llama-style flags that an audiocpp_server argv
+		// does not carry, so the order costs nothing and keeps the file written
+		// before anything can refuse the spawn for VRAM.
+		args, err := s.audioCppSpawnArgs(modelID, args)
+		if err != nil {
+			return nil, err
+		}
 		freeGB, ok := s.freeVramGB()
 		// A model refused for lack of VRAM moments ago on a reading that has not
 		// improved will be refused again, so short-circuit instead of paying the
@@ -821,7 +834,14 @@ func (s *Server) routes() {
 	dispatch := http.HandlerFunc(s.localPeerHandler)
 
 	for _, path := range modelPostJSONRoutes {
-		mux.Handle("POST "+path, modelChain.Then(dispatch))
+		var h http.Handler = dispatch
+		if path == "/v1/audio/voices" {
+			// audio.cpp has no POST voices route at all - a registered voice IS a
+			// wav in its --voice-dir - so quartermaster writes the file itself for
+			// those models and forwards everyone else's. See audiocppvoices.go.
+			h = s.handleAudioCppVoicePost(dispatch)
+		}
+		mux.Handle("POST "+path, modelChain.Then(h))
 	}
 	for _, path := range modelPostFormRoutes {
 		mux.Handle("POST "+path, modelChain.Then(dispatch))
@@ -837,10 +857,20 @@ func (s *Server) routes() {
 			// picker only offers things that are actually loadable as a LoRA.
 			h = s.filterLorasResponse(dispatch)
 		}
+		if path == "/v1/audio/voices" {
+			// For audio.cpp the list is two directories we own, so it is read
+			// straight off disk: no model load, and each name tagged with whether
+			// it is a clone or shipped with the model. See audiocppvoices.go.
+			h = s.handleAudioCppVoicesGet(dispatch)
+		}
 		mux.Handle("GET "+path, modelChain.Then(h))
 	}
 	for _, path := range modelDeleteRoutes {
-		mux.Handle("DELETE "+path, modelChain.Then(dispatch))
+		var h http.Handler = dispatch
+		if path == "/v1/audio/voices/{name}" {
+			h = s.handleAudioCppVoiceDelete(dispatch)
+		}
+		mux.Handle("DELETE "+path, modelChain.Then(h))
 	}
 
 	// Async video generation, sd-server's native job API. The POST names its
@@ -1034,6 +1064,9 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/hub/model/{id...}", adminChain.ThenFunc(s.handleAPIHubModel))
 	mux.Handle("GET /api/hub/avatar", adminChain.ThenFunc(s.handleAPIHubAvatar))
 	mux.Handle("GET /api/hub/estimate", adminChain.ThenFunc(s.handleAPIHubEstimate))
+	// The audio.cpp catalog: a curated view over the same downloader, built from
+	// the model_specs/ the installed backend ships (see audiocppcatalog.go).
+	mux.Handle("GET /api/hub/audiocpp", adminChain.ThenFunc(s.handleAPIHubAudioCpp))
 	mux.Handle("GET /api/hub/jobs", adminChain.ThenFunc(s.handleAPIHubJobs))
 	mux.Handle("POST /api/hub/download", adminChain.ThenFunc(s.handleAPIHubDownload))
 	mux.Handle("POST /api/hub/cancel", adminChain.ThenFunc(s.handleAPIHubCancel))

@@ -756,6 +756,17 @@ type Override struct {
 	TensorSplit          string  `yaml:"tensorSplit"`
 	MainGpu              int     `yaml:"mainGpu"`
 	OverrideTensor       string  `yaml:"overrideTensor"`
+	// AudioDevice pins which adapter an audio.cpp model loads onto
+	// (audiocpp_server --device N, an index within the --backend it was built
+	// for). nil => the generator reads the binary's own --list-devices and picks
+	// the first discrete GPU; a NEGATIVE value means "emit nothing", handing the
+	// choice back to audio.cpp's default. A pointer because 0 is the index most
+	// people would pin by hand, so it cannot double as "unset".
+	//
+	// Only audio.cpp reads this: every other backend here either takes a device
+	// LIST (llama's --device, see backenddev.go) or has one device by
+	// construction.
+	AudioDevice *int `yaml:"audioDevice"`
 	// CustomArgs is the user's launch-argument text, stored verbatim and applied
 	// as the last layer of the emitted command: for every knob the text sets, the
 	// generated occurrences are dropped, then the text is appended (last wins,

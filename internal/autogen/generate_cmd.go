@@ -695,6 +695,12 @@ func RenderSoloCmdLayers(s Settings, meta Metadata, row GgufRow, ov Override) (C
 	if IsEmbeddingModel(meta) {
 		return plainCmd(strings.Join(embeddingCmdLines(s, row, &ov, meta), " "))
 	}
+	// audio.cpp models render an audiocpp_server command. Tested ahead of the
+	// two legacy speech engines: an audio.cpp gguf names its own family in the
+	// header, so the match is exact and neither of the others could read it.
+	if IsAudioCppModel(meta) {
+		return plainCmd(strings.Join(audioCppCmdLines(s, row, &ov, audioCppClass(meta.AudioFamily)), " "))
+	}
 	// Speech models render a tts-server command: qwentts (talker + paired codec)
 	// or TTS.cpp (--model-path), whichever engine the model resolves to.
 	if IsTTSModel(meta, row.FileName) {

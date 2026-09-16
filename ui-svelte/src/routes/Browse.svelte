@@ -6,6 +6,7 @@
   import { onMount, onDestroy, tick } from "svelte";
   import { Search, Download, X, ExternalLink, Lock, AlertTriangle, Check, Heart, ArrowDownToLine, Clock, RefreshCw, SlidersHorizontal, FolderOpen } from "lucide-svelte";
   import HubAvatar from "../components/HubAvatar.svelte";
+  import AudioCppDetail from "../components/AudioCppDetail.svelte";
   import { hubJobs, refreshHubJobs, isRunningJob } from "../stores/hubJobs";
   import {
     getHubSources,
@@ -22,6 +23,8 @@
     MAX_PARAMS_B,
     TRENDY_DAYS,
     HubApiError,
+    getAudioCppCatalog,
+    type AudioCppFamily,
     type HubModel,
     type HubDetail,
     type FileOption,
@@ -186,6 +189,17 @@
     if (!first && sig) void reloadSelected(id);
   });
 
+  // Same idea for the audio.cpp rows, but keyed on the whole queue draining
+  // rather than on one repo: every family shares a handful of repos, so "a job
+  // for this repo finished" says nothing about which package it was.
+  let audioRunning = $derived($hubJobs.filter(isRunningJob).length);
+  let wasAudioRunning = $state(0);
+  $effect(() => {
+    const now = audioRunning;
+    if (wasAudioRunning > 0 && now === 0 && audioFams.length) void loadAudioCpp();
+    wasAudioRunning = now;
+  });
+
   // The footer note is news about a pull that just landed, not a state: the
   // server keeps finished jobs in its list (the Downloads menu reads them as
   // history), so a bare "any done job" stayed true until twenty newer jobs
@@ -279,6 +293,9 @@
       // Without a VRAM target the picker simply shows no fit verdict.
     }
     await refreshHubJobs();
+    // Not awaited: it is extra rows on two of the ten tabs, and the hub search
+    // below should not wait on a local directory read of the installed backend.
+    void loadAudioCpp();
     // Land on something to look at. An empty query is a valid search — the hub
     // answers it with its own top-by-downloads listing — so the page opens as a
     // browser rather than as an empty box demanding a query first.
@@ -298,14 +315,70 @@
     });
   }
 
+  // Every tab switch used to be a fresh round trip AND a page walk: runSearch
+  // asks the hub, then fillViewport pages up to MAX_AUTO_PAGES more times to
+  // overflow the pane, all sequential, all while the PREVIOUS tab's rows are
+  // still on screen (the list is only replaced once the answer lands). On a
+  // sparse category that is four hub requests before the page changes, which is
+  // why moving between tabs felt like the page was catching up with the click.
+  //
+  // So a tab keeps what it found. The snapshot is the whole list the user had
+  // scrolled up, not just its first page, plus where they were in it. Keyed by
+  // everything that changes the answer, so a filter change is a different list
+  // rather than a stale one.
+  const SEARCH_CACHE_MS = 5 * 60_000;
+  interface SearchSnapshot {
+    models: HubModel[];
+    nextSkip: number;
+    hasMore: boolean;
+    scrollTop: number;
+    at: number;
+  }
+  const searchCache = new Map<string, SearchSnapshot>();
+
+  function searchKey(): string {
+    return [kind, query.trim(), sort, filters.maxParamsB, filters.trendy ? 1 : 0].join("|");
+  }
+
+  // Called after anything that changes the list, and before leaving a tab: the
+  // scroll position is only knowable while the list is still mounted.
+  function snapshot(): void {
+    if (!searched) return;
+    searchCache.set(searchKey(), {
+      models: results,
+      nextSkip,
+      hasMore,
+      scrollTop: resultsEl?.scrollTop ?? 0,
+      at: searchCache.get(searchKey())?.at ?? Date.now(),
+    });
+  }
+
   // No "already searching, skip this one" guard: since the box searches as it is
   // typed, a search starting while one is in flight is the NORMAL case, and
   // dropping it would leave the list showing an older query's results. `searchSeq`
   // is what makes that safe — only the newest response is allowed to land, and
   // only it may clear the spinner.
-  async function runSearch(): Promise<void> {
+  // force is the refresh button: the same question asked again on purpose.
+  async function runSearch(force = false): Promise<void> {
     clearTimeout(typeTimer);
     lastSearched = query.trim();
+    const key = searchKey();
+    const hit = force ? undefined : searchCache.get(key);
+    if (hit && Date.now() - hit.at < SEARCH_CACHE_MS) {
+      // Bump the sequence so an older search still in flight cannot overwrite
+      // the list we just restored.
+      searchSeq++;
+      results = hit.models;
+      nextSkip = hit.nextSkip;
+      hasMore = hit.hasMore;
+      searched = true;
+      searching = false;
+      err = null;
+      void tick().then(() => {
+        if (resultsEl) resultsEl.scrollTop = hit.scrollTop;
+      });
+      return;
+    }
     searching = true;
     err = null;
     const seq = ++searchSeq;
@@ -318,6 +391,7 @@
       searched = true;
       selected = null;
       if (resultsEl) resultsEl.scrollTop = 0;
+      searchCache.set(key, { models: results, nextSkip, hasMore, scrollTop: 0, at: Date.now() });
       void fillViewport();
     } catch (e) {
       if (seq === searchSeq) err = e instanceof Error ? e.message : String(e);
@@ -362,6 +436,7 @@
         const fresh = page.models.filter((m) => !seen.has(m.id));
         if (fresh.length) {
           results = [...results, ...fresh];
+          snapshot();
           break;
         }
         if (!hasMore) break;
@@ -390,6 +465,65 @@
     if (resultsEl.scrollHeight - resultsEl.scrollTop - resultsEl.clientHeight < 240) void loadMore();
   }
 
+  // audio.cpp models live in the ordinary TTS and Transcribe tabs, not in a tab
+  // of their own: it is one more place a speech model comes from, and splitting
+  // the page by ENGINE would make the user know which engine a model is for
+  // before they can look for it. They cannot be hub search results, though -
+  // ~70 families are published into a handful of shared GGUF repos, so the hub
+  // answers with hundreds of loose file names and nothing saying which family a
+  // name belongs to. The server serves the catalog the installed backend ships
+  // instead (GET /api/hub/audiocpp), and these rows are prepended to the list.
+  let audioFams = $state<AudioCppFamily[]>([]);
+  let selectedAudio = $state<AudioCppFamily | null>(null);
+
+  async function loadAudioCpp(): Promise<void> {
+    try {
+      const c = await getAudioCppCatalog();
+      audioFams = c.families;
+      // Keep the open family's package rows in step with what just landed on
+      // disk; matching by id because the reload replaces every object.
+      if (selectedAudio) selectedAudio = audioFams.find((f) => f.family === selectedAudio?.family) ?? null;
+    } catch {
+      // Not installed, too old to ship a catalog, or a build without the model
+      // browser: all of them mean "no extra rows", and none of them is a reason
+      // to put an error over a working hub search.
+      audioFams = [];
+    }
+  }
+
+  // The tab decides which task is on show. audio.cpp's own word for
+  // transcription is "asr", which is also what the server annotates with.
+  const audioTask = $derived(kind === "tts" ? "tts" : kind === "transcribe" ? "asr" : "");
+  const audioShown = $derived(
+    audioTask === ""
+      ? []
+      : audioFams.filter((f) => {
+          if (f.task !== audioTask) return false;
+          const q = query.trim().toLowerCase();
+          if (!q) return true;
+          return (
+            f.displayName.toLowerCase().includes(q) ||
+            f.family.toLowerCase().includes(q) ||
+            (f.description ?? "").toLowerCase().includes(q) ||
+            (f.languages ?? []).some((l) => l.toLowerCase() === q)
+          );
+        })
+  );
+
+  // A family is published by whoever owns the repo its files come from, which
+  // is what makes the avatar and the author line work the same as every other
+  // row: these are ordinary Hugging Face repos, just curated ones.
+  function audioAuthor(f: AudioCppFamily): string {
+    return (f.packages[0]?.repo ?? "").split("/")[0] ?? "";
+  }
+
+  // The size the row shows is the RECOMMENDED build's, the one the server sorts
+  // first - the same promise the repo rows make, where the badge describes what
+  // you would most likely take rather than every file in the repo.
+  function audioSize(f: AudioCppFamily): number {
+    return f.packages[0]?.sizeBytes ?? 0;
+  }
+
   async function openModelsFolder(): Promise<void> {
     err = null;
     try {
@@ -407,10 +541,21 @@
 
   function setKind(id: BrowseCategory): void {
     if (kind === id) return;
+    snapshot();
     kind = id;
     // The open repo belongs to the category that was showing, so drop it rather
     // than leave a TTS model docked beside a page of image repos.
     selected = null;
+    selectedAudio = null;
+    // A tab with nothing cached has to ASK, and that takes as long as it takes -
+    // but the previous tab's rows must not sit under the new tab's heading while
+    // it does. Dropping them turns a page that looks stuck into one that is
+    // visibly loading. A cached tab never gets here: runSearch repaints it in
+    // the same frame.
+    if (!searchCache.has(searchKey())) {
+      results = [];
+      searched = false;
+    }
     runSearch();
   }
 
@@ -418,6 +563,7 @@
     loadingModel = true;
     err = null;
     estimates = {};
+    selectedAudio = null;
     try {
       selected = await getHubModel(m.id, m.source);
       void sizeRepo(selected);
@@ -753,7 +899,7 @@
            of what the page already did, not the toolbar's primary action. -->
       <button
         class="icon-btn h-7 shrink-0"
-        onclick={runSearch}
+        onclick={() => runSearch(true)}
         disabled={searching}
         use:tip={query.trim() ? "Re-run this search" : "Refresh the listing"}
         aria-label="Refresh"
@@ -773,7 +919,50 @@
          file/quant view separated by a divider rather than a gap. -->
     <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[22rem_1fr] border-t border-card-border bg-surface divide-y lg:divide-y-0 lg:divide-x divide-card-border">
       <div bind:this={resultsEl} onscroll={onResultsScroll} class="min-h-0 overflow-y-auto pretty-scroll">
-        {#if searching && !results.length}
+        <!-- audio.cpp's families lead the list, in the SAME row as every hub
+             result: they are ordinary Hugging Face repos, just curated ones, and
+             a row that announced its engine would make the user care which
+             engine a model is for before they have picked one. The two counters
+             a curated family has no answer for (downloads and likes belong to
+             the shared repo, not to the family) are left out rather than faked;
+             the size badge sits where the repo rows put theirs. -->
+        {#each audioShown as f (f.family)}
+          <button
+            class="w-full text-left px-3 py-2.5 border-b border-card-border-inner transition-colors relative {selectedAudio?.family === f.family
+              ? 'bg-secondary/60'
+              : 'hover:bg-secondary/40'}"
+            onclick={() => ((selectedAudio = f), (selected = null))}
+          >
+            {#if selectedAudio?.family === f.family}
+              <span class="absolute left-0 top-0 bottom-0 w-0.5 bg-primary"></span>
+            {/if}
+            <div class="flex items-start gap-2.5">
+              <HubAvatar author={audioAuthor(f)} source="hf" size="w-8 h-8" />
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-1.5">
+                  <span class="font-mono text-xs text-txtmain truncate">{f.displayName}</span>
+                  {#if f.packages.some((p) => p.gated)}<Lock class="w-3 h-3 text-warning shrink-0" />{/if}
+                </div>
+                <div class="text-[0.65rem] text-txtsecondary truncate">{audioAuthor(f)}</div>
+                <div class="mt-1 flex items-center gap-2 text-[0.65rem] text-txtsecondary tabular-nums">
+                  {#if audioSize(f)}
+                    <span class="font-mono px-1.5 py-px rounded bg-secondary/70 text-txtmain">{humanBytes(audioSize(f))}</span>
+                  {/if}
+                  <span>{f.packages.length} {f.packages.length === 1 ? "build" : "builds"}</span>
+                  {#if f.packages.some((p) => p.local)}
+                    <span class="ml-auto inline-flex items-center gap-0.5 shrink-0 text-success"><Check class="w-3 h-3" />downloaded</span>
+                  {/if}
+                </div>
+              </div>
+            </div>
+          </button>
+        {/each}
+        {#if (searching || loadingMore) && !results.length}
+          <!-- loadingMore counts here because fillViewport keeps paging after an
+               EMPTY first page: a sparse category answers page one with nothing
+               and hasMore, so without this the pane claims "nothing matched" for
+               the second and third request, then fills in. A wrong answer shown
+               confidently is worse than a spinner. -->
           <div class="p-3 text-xs text-txtsecondary">Loading Hugging Face…</div>
         {:else if !searched}
           <div class="p-3 text-xs text-txtsecondary">Search a hub to get started.</div>
@@ -847,7 +1036,9 @@
       </div>
 
       <div class="min-h-0 overflow-y-auto pretty-scroll">
-        {#if loadingModel}
+        {#if selectedAudio}
+          <AudioCppDetail family={selectedAudio} />
+        {:else if loadingModel}
           <div class="p-4 text-xs text-txtsecondary">Loading the model page…</div>
         {:else if !selected}
           <div class="p-4 text-xs text-txtsecondary">Pick a repo to see its files and model card.</div>

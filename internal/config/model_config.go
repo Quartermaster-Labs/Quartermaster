@@ -147,8 +147,42 @@ type ModelConfig struct {
 	// prefill) and is exempt from the LRU disk cap.
 	SlotCachePreamble *bool `yaml:"slotCachePreamble"`
 
+	// AudioCpp carries the one thing audiocpp_server cannot be told on its
+	// command line. It has no --model flag at all: the model is named only in a
+	// JSON config file passed as --config, while every other knob is an argv
+	// flag that overrides the file. Keeping the entry here instead of writing a
+	// JSON file per model at generate time means one source of truth, no
+	// generated files to keep in step with the config, and nothing left behind
+	// when a model is renamed or removed. The spawn hook materializes it (see
+	// internal/server/audiocppconfig.go).
+	AudioCpp AudioCppConfig `yaml:"audiocpp"`
+
 	// Copy of HealthCheckTimeout from global config
 	HealthCheckTimeout int `yaml:"healthCheckTimeout"`
+}
+
+// AudioCppConfig is ONE entry of audio.cpp's models[] array: the fields its
+// server requires (id comes from the model id) plus the task that selects which
+// route the model answers on. Deliberately not a passthrough for the rest of
+// that schema - lazy loading, the residency cap, idle unloads and the memory
+// guard are audio.cpp's own scheduler, which is contained rather than
+// configured here (see internal/autogen/audiocpp.go).
+type AudioCppConfig struct {
+	// Family is audio.cpp's model family id (moss_tts_nano, qwen3_asr, ...),
+	// read from the gguf's own audiocpp.model_spec.family header key.
+	Family string `yaml:"family"`
+	// Path is the gguf (or model directory) the server loads.
+	Path string `yaml:"path"`
+	// Task is "tts" or "asr" - which of the two surfaces this process serves.
+	// Blank lets audio.cpp apply its own default ("tts").
+	Task string `yaml:"task"`
+}
+
+// Empty reports whether this model carries no audio.cpp block at all. Family
+// and Path are both required by the server, so a half-filled block is as
+// unusable as an absent one and is treated the same way.
+func (a AudioCppConfig) Empty() bool {
+	return a.Family == "" || a.Path == ""
 }
 
 func (m *ModelConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {

@@ -33,6 +33,13 @@ of taking the activated one. They are ordinary rows to resolution (step 1 pins o
 appended behind the component's own row, so first-per-kind derivation and the implicit class
 default still land on the row the user activated.
 
+**A kind can serve more than one class, and `audiocpp` is the first that does** (`tts` + `asr`).
+Two consequences: "is this class already populated" is a question about a SET of classes
+(`ClassTaken`, not a `KindClass` equality test), and a resolver running on behalf of another
+engine has to drop those rows rather than test the answer (`withoutAudioCpp`, see
+[`classes.md`](classes.md)) - otherwise an audio.cpp star makes a Parakeet model skip an
+installed parakeet row and fall all the way back to the legacy derived exe.
+
 **Config is "keyed to backend" for free:** one `Override` holds both llama and vllm fields;
 each emitter reads only its own, so switching kind never wipes the dormant set.
 

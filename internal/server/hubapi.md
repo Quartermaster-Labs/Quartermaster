@@ -65,6 +65,35 @@ header five times. **Failures are not cached**, so one cancelled request can't a
 30-min cache keyed repo+path+source, with the VRAM target folded in, since that is the only input
 that moves the answer.
 
+## `audiocppcatalog.go` — `GET /api/hub/audiocpp`
+
+The one backend whose weights cannot be found by browsing. audio.cpp publishes ~70 families into a
+handful of shared GGUF repos, so a hub search answers with a few hundred loose file names and
+nothing saying which family a name belongs to, which files are alternatives to each other, or that
+an `f5_tts` gguf is useless without the `vocab.txt` beside it. Upstream's own answer is
+`model_specs/*.json`, which every release ships next to the binary, and this serves it as
+family -> packages -> the exact repo file set (`internal/audiocpp`). The UI folds these rows
+into the ordinary TTS and Transcribe tabs of `/browse` (`ui-svelte/browse.md`).
+
+Three deliberate choices:
+
+- **Read from the INSTALL, not from an embedded copy.** The catalog is then exactly as new as the
+  backend the user has, a backend update ships new families for free, and upstream's data has no
+  second copy here to drift. `audioCppInstall` finds the exe through autogen's backend registry,
+  preferring the ★ row over a derived per-build one.
+- **A VIEW over the existing downloader.** A package's files go to `/api/hub/download` as an
+  ordinary `hub.StartRequest`, so resume, pause, the journal, the manifest and the free-disk check
+  are all unchanged code. What this endpoint adds is *which files to ask for*. `local` is judged
+  per FILE off `hub.LocalFiles` (one walk per repo, not per package): a gguf present without its
+  sidecar is not installed. `sizeBytes` is the whole SET, priced from one `Source.Detail` call
+  per repo with the on-disk copy as the offline fallback; a set only partly priced reports 0,
+  since a partial sum reads as a small download for a large one.
+- **Servability comes from `autogen.AudioCppFamilySupport`, not from a second table.** A catalog
+  that decided this for itself would advertise families the emitter then refuses. Unsupported
+  families are listed with a `reason` rather than hidden, and the two failures read differently:
+  a known family with no class here (music, stem separation, codecs) is a roadmap item, while an
+  unknown one means the installed backend is newer than autogen's table.
+
 ## `revealfolder.go` — `POST /api/hub/reveal`
 
 Opens a downloaded model's folder in the OS file manager (Explorer / `open` / `xdg-open`), backing

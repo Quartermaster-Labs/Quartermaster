@@ -451,6 +451,10 @@ export interface ModelOverride {
   slotCachePreamble?: boolean | null;
   ctxVariants?: number[]; // per-model ctx tiers (e.g. 32768, 65536)
   ctxCheckpoints?: number | null; // model-wide --ctx-checkpoints; null/undefined => auto, 0 disables
+  // audio.cpp only: which adapter the model loads onto (--device N).
+  // null/undefined => the generator reads the backend's own --list-devices and
+  // picks the first discrete GPU; a negative value emits no flag at all.
+  audioDevice?: number | null;
   variants?: ModelVariant[];
   // Dry sampler: null/undefined => fleet default (off), true => on, false => off.
   dry?: boolean | null;
@@ -547,6 +551,11 @@ export interface ModelConfig {
   /** Backend class (autogen kindClass): llm/image/tts/asr/segment/3d. Filters the
    *  backend picker — TTS and ASR share the audio form but not their engines. */
   class?: string;
+  /** True when this gguf is an audio.cpp model (the generated config carries an
+   *  `audiocpp:` block). Splits tts/asr one level finer than `class`: audio.cpp
+   *  weights are its own format, so it and the legacy speech engines are not
+   *  interchangeable even though they share a class. */
+  isAudioCpp?: boolean;
   hasOverride: boolean;
   /** UI-set advertised name (cascades to variants); "" => unrenamed, shows id. */
   displayName?: string;

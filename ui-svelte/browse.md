@@ -26,6 +26,48 @@ in flight is now the normal case, and dropping it would leave an older query's r
 `searchSeq` is what makes that safe — only the newest response may land, and only it may clear
 the spinner.
 
+## audio.cpp models in the TTS and Transcribe tabs
+
+`components/AudioCppDetail.svelte`, fed by `GET /api/hub/audiocpp`
+(`internal/server/hubapi.md`). audio.cpp's families are listed in the ordinary category tabs, not
+in a tab of their own: it is one more place a speech model comes from, and splitting the page by
+ENGINE would make the user know which engine a model is for before they could look for it. The tab
+picks the task (`tts` -> `tts`, Transcribe -> audio.cpp's `asr`), and the page's own search box
+filters the rows alongside the hub query.
+
+They cannot be hub *search* results, though: ~70 families are published into a handful of shared
+GGUF repos, so the hub answers with hundreds of loose file names and nothing saying which family a
+name belongs to, which files are alternatives to each other, or that an `f5_tts` gguf is useless
+without the `vocab.txt` beside it. So they are served from the catalog and prepended to the
+listing, **in the same row markup as every hub result** - avatar, name, publisher, size badge.
+They are ordinary Hugging Face repos, just curated ones, and a row that announced its engine would
+make the user care which engine a model is for before they have picked one. Downloads and likes
+are the only things left out, because they belong to the shared repo rather than to the family;
+faking them would be worse than omitting them. Selecting one puts `AudioCppDetail` in the pane the
+repo page would occupy (same header, same `data-table` file picker), and `selected`/`selectedAudio`
+clear each other.
+
+**Sizes come from the hub, with the local copy as the fallback.** The server sums the whole file
+SET per package (`sizeBytes`), since the gguf alone understates a package that ships a sidecar, and
+a set it can only partly price reports 0 rather than a small-looking total. One `Detail` call per
+repo, not per package. The row badge shows the recommended build's size, the same promise the repo
+rows' params badge makes; the detail table prices every build. The **Estimate** column has no
+audio.cpp equivalent: the planner behind it is LLM-shaped (layers, KV, expert share), so a verdict
+for a TTS gguf would be a confident wrong number.
+
+- **The catalog comes from the INSTALLED backend**, so a build without audio.cpp simply has no
+  extra rows. A failed load is swallowed for the same reason: it means "no extra rows", and none
+  of its causes is worth putting an error over a working hub search.
+- **`inFlight` is keyed by FILE path, not by repo.** One repo holds every family, so a repo-level
+  "is this busy" would mark all 200-odd packages as downloading.
+- **A package downloads as one job**, sidecars included: an `f5_tts` `vocab.txt` is not an
+  alternative to the gguf, it is part of it.
+- **The rows re-load when the whole job queue drains**, not per repo: "downloaded" is judged off
+  disk server-side, and "a job for this repo finished" says nothing about which family it was.
+- **Families this build cannot serve still appear** if their task is `tts`/`asr`, with the
+  server's reason line in the detail pane. The engine being able to do something the app cannot
+  yet is information.
+
 ## Filters and sort
 
 A **Filters** popover (a `.seg` button carrying a count of how many knobs are off their default,
@@ -80,6 +122,27 @@ Two things a naive infinite scroll gets wrong here and this one handles:
   overflows its pane or the hub runs out.
 
 A `searchSeq` counter drops a page still in flight from a superseded query.
+
+### A tab keeps what it found
+
+Those two mechanisms are what made switching tabs feel slow: `setKind` re-asks the hub, and on a
+sparse category the first page comes back **empty with `hasMore`**, so `fillViewport` pages up to
+`MAX_AUTO_PAGES` more times before anything renders. Measured cold against a live instance, that is
+4 sequential requests at 150-350ms each, and `results` is only replaced on success, so the previous
+tab's rows sit under the new tab's heading the whole time.
+
+So each tab caches its list. `searchCache` (5 min, session only) is keyed by everything that
+changes the answer: kind, trimmed query, sort, `maxParamsB`, `trendy`. It stores the **whole**
+accumulated list plus `scrollTop`, so returning to a tab restores the pages that were paged in and
+the place in them. A hit bumps `searchSeq` (an older response must not overwrite what was just
+restored), repaints in the same frame and skips the network entirely; `loadMore` re-snapshots so a
+grown list is what you come back to. The refresh button passes `force` and always re-asks.
+
+On a cache MISS, `setKind` clears `results` first: the request takes as long as it takes, but the
+old tab's rows must not be what is on screen while it runs. This happens only on a tab switch, never
+on debounced typing, where a per-keystroke flash to empty would be worse than a slightly stale list.
+`loadingMore` also holds the loading line up, or the empty first page of the walk reads as
+"nothing matched" for a second before the rows appear.
 
 The category tab row carries an **open-models-folder** button at its right end (`revealFolder()` →
 `POST /api/hub/reveal`) — the footer line that merely *named* the path was a string to read and

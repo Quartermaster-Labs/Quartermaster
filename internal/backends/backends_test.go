@@ -228,6 +228,71 @@ func TestBackends_MatchAssets(t *testing.T) {
 	if err != nil || got != "yt-dlp.exe" {
 		t.Errorf("yt-dlp: got %q err %v", got, err)
 	}
+
+	// audio.cpp: two Metal builds (both macOS assets are accelerated), a separate
+	// cudart zip per toolkit, "-portable" baseline-CPU twins of the cpu and vulkan
+	// builds that must NOT be picked as the default, and a Colab-only Linux CUDA
+	// asset that must stay unmatched. Verbatim from release v0.8.0.
+	ac, _ := Find("audiocpp-server")
+	acNames := []string{
+		"asr_validation.tar.gz",
+		"audio-v0.8.0-bin-macos-arm64-metal.tar.gz",
+		"audio-v0.8.0-bin-macos-x64-metal.tar.gz",
+		"audio-v0.8.0-bin-ubuntu-x64-cpu-portable.tar.gz",
+		"audio-v0.8.0-bin-ubuntu-x64-cpu.tar.gz",
+		"audio-v0.8.0-bin-ubuntu-x64-cuda12.8-colab.tar.gz",
+		"audio-v0.8.0-bin-ubuntu-x64-vulkan-portable.tar.gz",
+		"audio-v0.8.0-bin-ubuntu-x64-vulkan.tar.gz",
+		"audio-v0.8.0-bin-windows-x64-cpu-portable.zip",
+		"audio-v0.8.0-bin-windows-x64-cpu.zip",
+		"audio-v0.8.0-bin-windows-x64-cuda12.4.zip",
+		"audio-v0.8.0-bin-windows-x64-cuda13.3.zip",
+		"audio-v0.8.0-bin-windows-x64-vulkan.zip",
+		"audio-v0.8.0-cudart-windows-x64-cuda12.4.zip",
+		"audio-v0.8.0-cudart-windows-x64-cuda13.3.zip",
+		"framework.tar.gz",
+		"model_manager.tar.gz",
+		"resources.tar.gz",
+	}
+	acCases := []struct {
+		variant, goos, want string
+		wantExtra           string
+	}{
+		{"vulkan", osWin, "audio-v0.8.0-bin-windows-x64-vulkan.zip", ""},
+		// Newest toolkit wins, paired with ITS cudart and not 12.4's.
+		{"cuda", osWin, "audio-v0.8.0-bin-windows-x64-cuda13.3.zip", "audio-v0.8.0-cudart-windows-x64-cuda13.3.zip"},
+		{"cpu", osWin, "audio-v0.8.0-bin-windows-x64-cpu.zip", ""},
+		{"cpu-portable", osWin, "audio-v0.8.0-bin-windows-x64-cpu-portable.zip", ""},
+		{"vulkan", osLinux, "audio-v0.8.0-bin-ubuntu-x64-vulkan.tar.gz", ""},
+		{"cpu", osLinux, "audio-v0.8.0-bin-ubuntu-x64-cpu.tar.gz", ""},
+		{"cpu-portable", osLinux, "audio-v0.8.0-bin-ubuntu-x64-cpu-portable.tar.gz", ""},
+		{"metal", osMac, "audio-v0.8.0-bin-macos-arm64-metal.tar.gz", ""},
+		{"metal-x64", osMac, "audio-v0.8.0-bin-macos-x64-metal.tar.gz", ""},
+	}
+	for _, c := range acCases {
+		got, extra, err := ac.MatchAssets(c.variant, c.goos, acNames)
+		if err != nil {
+			t.Fatalf("audiocpp %s/%s: %v", c.variant, c.goos, err)
+		}
+		if got != c.want {
+			t.Errorf("audiocpp %s/%s: got %q want %q", c.variant, c.goos, got, c.want)
+		}
+		if c.wantExtra == "" && len(extra) != 0 {
+			t.Errorf("audiocpp %s/%s: unexpected extras %v", c.variant, c.goos, extra)
+		}
+		if c.wantExtra != "" && (len(extra) != 1 || extra[0] != c.wantExtra) {
+			t.Errorf("audiocpp %s/%s: extras %v want [%s]", c.variant, c.goos, extra, c.wantExtra)
+		}
+	}
+	// Upstream publishes no ROCm build, and the Colab CUDA asset is deliberately
+	// not claimed by the cuda variant on Linux: both must fail rather than
+	// silently resolve to some other flavour's binary.
+	if _, _, err := ac.MatchAssets("cuda", osLinux, acNames); err == nil {
+		t.Error("audiocpp cuda/linux should not match the Colab-only asset")
+	}
+	if _, ok := ac.Variant("rocm"); ok {
+		t.Error("audiocpp has no upstream ROCm build; it must not offer the variant")
+	}
 }
 
 // A manual entry is catalogued so the UI can describe the engine, but it has no

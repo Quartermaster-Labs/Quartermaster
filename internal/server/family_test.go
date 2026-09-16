@@ -1,6 +1,10 @@
 package server
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/quartermaster-labs/quartermaster/internal/config"
+)
 
 func TestServer_modelFamily(t *testing.T) {
 	cases := []struct {
@@ -41,5 +45,28 @@ func TestServer_modelFamily_variantsCollapse(t *testing.T) {
 		if got := modelFamily(c); got != want {
 			t.Fatalf("modelFamily(%q) = %q, want %q", c, got, want)
 		}
+	}
+}
+
+// audiocpp_server has no --model flag, so the ONLY place its weights are named
+// is the typed audiocpp: block. Before the fallback this answered "", and the
+// config editor turned that into "model has no gguf path to override" - which
+// is what kept audio.cpp off the backend picker for its own models.
+func TestServer_modelGguf_audioCppBlock(t *testing.T) {
+	mc := config.ModelConfig{
+		Cmd:      "audiocpp_server --host 127.0.0.1 --port 1 --backend vulkan",
+		AudioCpp: config.AudioCppConfig{Family: "qwen3_tts", Path: "D:/models/qwen3-tts.gguf", Task: "tts"},
+	}
+	if got := modelGguf(mc); got != "D:/models/qwen3-tts.gguf" {
+		t.Fatalf("modelGguf(audio.cpp) = %q, want the audiocpp block path", got)
+	}
+	// The command still wins where it names one: every other backend keeps the
+	// key it has always had, block or no block.
+	mc.Cmd = "llama-server -m /models/qwen.gguf"
+	if got := modelGguf(mc); got != "/models/qwen.gguf" {
+		t.Fatalf("modelGguf(llama) = %q, want the -m path", got)
+	}
+	if got := modelGguf(config.ModelConfig{Cmd: "some-proxy --listen :8080"}); got != "" {
+		t.Fatalf("modelGguf(no model) = %q, want empty", got)
 	}
 }

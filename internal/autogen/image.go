@@ -794,7 +794,7 @@ func extraImageBudget(s Settings, m ExtraImageModel) float64 {
 // Only an auto model follows a later default switch. The class guard keeps a
 // stray non-image id from emitting the wrong launcher.
 func imageExe(s Settings, ov *Override) string {
-	if rb := resolveBackend(s, ov, "image"); rb.Exe != "" && kindClass(rb.Kind) == "image" {
+	if rb := resolveBackend(s, ov, "image"); rb.Exe != "" && kindServesClass(rb.Kind, "image") {
 		return rb.Exe
 	}
 	return s.SdServerExe

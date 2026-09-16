@@ -256,7 +256,18 @@ const hashCacheSuffix = ".modelhash"
 //	weights and GPU-side VAEs, not as the whole card, and --stream-layers is
 //	emitted only where the diffusion params are in RAM for it to stream from.
 //	Every sd-server line changes; a v76 config was generated before either.
-const genVersion = "v77"
+//
+// v78: audio.cpp is a backend. A gguf whose header names it
+// (general.architecture=audiocpp) now emits an audiocpp_server entry instead of
+// falling through to the chat path, with a new audiocpp: block carrying the
+// models[] entry its --config needs. A family we do not serve yet (music,
+// separation, voice conversion) emits no entry at all, only a comment.
+// v79: audio.cpp entries carry --device. Left alone the server takes device 0 of
+// its backend, which is the integrated GPU on any box that enumerates one first
+// (an APU desktop, a laptop), so the model lands in shared system memory with
+// nothing in the log saying so. The index comes from the binary's own
+// --list-devices, whose [GPU]/[IGPU] tag says which is discrete.
+const genVersion = "v79"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

@@ -3,7 +3,7 @@
   import { onMount } from "svelte";
   import { SlidersHorizontal, HardDrive, Cpu, FolderOpen, Trash2, Star, Plus, Power, HelpCircle, Palette } from "lucide-svelte";
   import { getSettings, putSettings, putSlotCache, putBackends, putGuards, putAdvanced, resetAdvanced, pickFolder, pickBackend, resetSettings, getAutostart, putAutostart, fetchProcessSettings, putProcessSettings, type AppSettings, type BackendEntry, type AutostartStatus, type ProcessSettingsResponse } from "../stores/api";
-  import { BACKEND_CLASSES, backendClass, type BackendClassDef } from "../lib/backends";
+  import { BACKEND_CLASSES, backendClass, backendClasses, backendServesClass, type BackendClassDef } from "../lib/backends";
   import ManagedBackends from "../components/ManagedBackends.svelte";
   import SoftwareUpdate from "../components/SoftwareUpdate.svelte";
   import Select from "../components/Select.svelte";
@@ -98,10 +98,15 @@
     backendsSaved = false;
   }
 
-  // Mark row i the auto-pick for its class, clearing the flag on its classmates.
+  // Mark row i the auto-pick for EVERY class it serves, clearing the flag on the
+  // incumbent of each. One ★ per class is the invariant, and audio.cpp covers
+  // two, so a group-equality test would leave the old Speech pick starred beside
+  // it (the server mirrors this in setClassDefault).
   async function setDefaultBackend(i: number): Promise<void> {
-    const cls = backendClass(backends[i].kind);
-    backends = backends.map((b, j) => (backendClass(b.kind) === cls ? { ...b, default: j === i } : b));
+    const classes = backendClasses(backends[i].kind);
+    backends = backends.map((b, j) =>
+      classes.some((c) => backendServesClass(b.kind, c)) ? { ...b, default: j === i } : b,
+    );
     await saveBackendsNow();
   }
 

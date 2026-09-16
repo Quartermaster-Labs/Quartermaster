@@ -219,6 +219,10 @@ type overrideDTO struct {
 	TensorSplit          string  `json:"tensorSplit"`
 	MainGpu              int     `json:"mainGpu"`
 	OverrideTensor       string  `json:"overrideTensor"`
+	// AudioDevice pins an audio.cpp model's adapter (--device N). nil => the
+	// generator probes the backend and picks the first discrete GPU; a negative
+	// value turns the flag off. Ignored by every other backend.
+	AudioDevice *int `json:"audioDevice"`
 	// Image (sd-server) knobs; ignored for llama models.
 	VaePath         string  `json:"vaePath"`
 	ClipLPath       string  `json:"clipLPath"`
@@ -266,8 +270,16 @@ type modelConfigResp struct {
 	// llm / image / tts / asr / segment / 3d. The UI filters the backend picker by it —
 	// TTS and ASR share one config form but not their engines, so the form flags
 	// above cannot stand in for it.
-	Class       string `json:"class"`
-	HasOverride bool   `json:"hasOverride"`
+	Class string `json:"class"`
+	// IsAudioCpp splits the tts/asr classes one level finer than Class can.
+	// audio.cpp serves both of them, but its weights are its own format: nothing
+	// else can read an audio.cpp gguf and it cannot read Kokoro's. A class-only
+	// filter therefore offers every speech model every speech engine, and picking
+	// the wrong one is a silent no-op (autogen resolves audio.cpp models among
+	// audio.cpp rows only, and the others through withoutAudioCpp). This flag lets
+	// the picker show only the engines that could actually run THIS file.
+	IsAudioCpp  bool `json:"isAudioCpp"`
+	HasOverride bool `json:"hasOverride"`
 	// DisplayName is the UI-chosen advertised name for this base id ("" => none;
 	// the model advertises its real id). Renaming cascades to variant ids.
 	DisplayName string       `json:"displayName"`
@@ -380,7 +392,8 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		SpecDraftNMin: o.SpecDraftNMin, SlotPromptSimilarity: o.SlotPromptSimilarity,
 		RopeScaling: o.RopeScaling, RopeScale: o.RopeScale, RopeFreqBase: o.RopeFreqBase, YarnOrigCtx: o.YarnOrigCtx,
 		SplitMode: o.SplitMode, TensorSplit: o.TensorSplit, MainGpu: o.MainGpu, OverrideTensor: o.OverrideTensor,
-		VaePath: o.VaePath, ClipLPath: o.ClipLPath, ClipGPath: o.ClipGPath,
+		AudioDevice: o.AudioDevice,
+		VaePath:     o.VaePath, ClipLPath: o.ClipLPath, ClipGPath: o.ClipGPath,
 		T5Path: o.T5Path, TextEncoderPath: o.TextEncoderPath,
 		OffloadToCpu: o.OffloadToCpu, TeOnCpu: o.TeOnCpu, VaeOnCpu: o.VaeOnCpu, VaeTiling: o.VaeTiling, TemporalTiling: o.TemporalTiling, StreamLayers: o.StreamLayers, DiffusionFa: o.DiffusionFa, RefEdit: o.RefEdit,
 		DefaultSteps: o.DefaultSteps, DefaultCfg: o.DefaultCfg, DefaultSampler: o.DefaultSampler,
@@ -457,6 +470,7 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.SlotCachePreamble = body.SlotCachePreamble
 	ov.CtxVariants = body.CtxVariants
 	ov.CtxCheckpoints = body.CtxCheckpoints
+	ov.AudioDevice = body.AudioDevice
 	ov.PreserveThinking = body.PreserveThinking
 	ov.Dry = body.Dry
 	ov.DryMultiplier = body.DryMultiplier

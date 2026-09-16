@@ -346,14 +346,7 @@ func registerBackend(genPath string, mgr *backends.Manager, comp backends.Compon
 		}
 	}
 	if !replaced {
-		classTaken := false
-		for _, e := range list {
-			if autogen.KindClass(e.Kind) == autogen.KindClass(comp.Kind) {
-				classTaken = true
-				break
-			}
-		}
-		row.Default = !classTaken
+		row.Default = !autogen.ClassTaken(list, comp.Kind)
 		list = append(list, row)
 	}
 	return autogen.UpsertSidecarBackendList(genPath, list)

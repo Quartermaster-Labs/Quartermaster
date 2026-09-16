@@ -109,6 +109,69 @@ export function getHubSources(): Promise<HubSources> {
   return hubFetch<HubSources>("/api/hub/sources");
 }
 
+// --- the audio.cpp catalog ---
+
+/** One downloadable set of repo files: a family at a precision. The files are
+ *  ONE download, not alternatives — several packages ship a sidecar (a vocab.txt)
+ *  the gguf is unusable without. */
+export interface AudioCppPackage {
+  id: string;
+  displayName: string;
+  description?: string;
+  precision?: string;
+  default?: boolean;
+  repo: string;
+  revision?: string;
+  gated?: boolean;
+  files: string[];
+  /** Every file already on disk. A partly-present set is NOT local. */
+  local: boolean;
+  /** Total download for the whole set, 0 when the hub could not be asked and
+   *  nothing is on disk to measure. */
+  sizeBytes?: number;
+}
+
+export interface AudioCppFamily {
+  family: string;
+  displayName: string;
+  description?: string;
+  category?: string;
+  status?: string;
+  tasks?: string[];
+  languages?: string[];
+  packages: AudioCppPackage[];
+  /** What a model of this family would be emitted as: "tts" | "asr" | "". */
+  task?: string;
+  /** False for a family audio.cpp can run and quartermaster cannot serve yet
+   *  (music, separation, codecs) or one newer than our family table; `reason`
+   *  says which, because they are different fixes. */
+  supported: boolean;
+  reason?: string;
+}
+
+export interface AudioCppCatalog {
+  installed: boolean;
+  backendId?: string;
+  backendName?: string;
+  specsDir?: string;
+  modelsRoot?: string;
+  families: AudioCppFamily[];
+  error?: string;
+}
+
+/**
+ * The audio.cpp catalog, read from the model_specs/ the INSTALLED backend ships.
+ *
+ * audio.cpp publishes its weights as a few shared GGUF repos rather than one
+ * repo per model, so a hub search for them answers with hundreds of loose file
+ * names. This is the same downloader (a package's files go to startHubDownload
+ * unchanged); what the catalog adds is which files belong together.
+ */
+export async function getAudioCppCatalog(): Promise<AudioCppCatalog> {
+  const c = await hubFetch<AudioCppCatalog>("/api/hub/audiocpp");
+  return { ...c, families: c?.families ?? [] };
+}
+
 /**
  * MAX_PARAMS_B is the default size cap, in billions of parameters.
  *

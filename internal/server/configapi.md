@@ -20,6 +20,15 @@ here 501s when `s.autogen == nil`** — they are the `-generate` surface. Route 
 
 ## Gotchas
 
+- **A model's gguf comes from `modelGguf`, not from the command alone.** Every editor route starts
+  at `resolveModelGguf`, which keys the sidecar override by the gguf the model loads. That is the
+  `-m`/`--model`/`--model-path`/`--diffusion-model` value for every backend but one: audiocpp_server
+  has no model flag at all (the model is named only in the `--config` JSON the spawn hook writes),
+  so its path is read off the model entry's `audiocpp:` block. Without the fallback the whole editor
+  400s with "model has no gguf path to override" on an audio.cpp model, which also means the
+  response carries no backend registry: audio.cpp was missing from the backend picker on exactly the
+  models it runs.
+
 - **`/api/settings/app` is the one settings route that does NOT regen or reload.** Ports, the
   dashboard access policy, update polling and the HF token are read by `main()` at startup
   (`internal/autogen/appsettings.go`), long before a `Server` exists — a bound socket cannot be

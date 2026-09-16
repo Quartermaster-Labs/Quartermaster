@@ -58,6 +58,18 @@ export const BACKEND_CLASSES: BackendClassDef[] = [
     engines: [{ kind: "asr", label: "parakeet-server", hint: "parakeet.cpp - runs faster than realtime on CPU alone." }],
   },
   {
+    id: "audio",
+    label: "Audio",
+    blurb: "One engine across speech, transcription (and music later).",
+    engines: [
+      {
+        kind: "audiocpp",
+        label: "audio.cpp",
+        hint: "audiocpp_server - 72 model families behind one binary; serves TTS and ASR from the same install.",
+      },
+    ],
+  },
+  {
     id: "segment",
     label: "Segmentation",
     blurb: "Mask / segment-anything models.",
@@ -77,46 +89,91 @@ export const BACKEND_CLASSES: BackendClassDef[] = [
   },
 ];
 
-// kind -> class. Accepts autogen's aliases so a hand-edited sidecar row still
-// lands in the right group. Unknown kinds fall back to "custom" so nothing is
-// hidden from the UI (autogen returns "" for those — it just won't auto-pick).
-export function backendClass(kind: string): string {
+// kind -> the MODEL classes it can serve. Mirrors autogen's `kindClasses`
+// (internal/autogen/vllm.go) and accepts the same aliases, so a hand-edited
+// sidecar row still lands in the right group. Nearly every engine serves one
+// class; audio.cpp serves two from one install, which is why this returns a
+// list. Unknown kinds return nothing (autogen returns no class for those — they
+// just never auto-pick).
+export function backendClasses(kind: string): string[] {
   switch ((kind ?? "").trim().toLowerCase()) {
     case "llama":
     case "llama.cpp":
     case "server":
     case "vllm":
-      return "llm";
+      return ["llm"];
     case "sd":
     case "sd-server":
     case "image":
-      return "image";
+      return ["image"];
     case "tts":
     case "tts-server":
     case "speech":
     case "ttscpp":
     case "tts.cpp":
     case "kokoro":
-      return "tts";
+      return ["tts"];
     case "asr":
     case "parakeet":
     case "parakeet-server":
     case "transcribe":
-      return "asr";
+      return ["asr"];
+    case "audiocpp":
+    case "audio.cpp":
+    case "audiocpp-server":
+      return ["tts", "asr"];
     case "sam":
     case "sam3":
     case "segment":
-      return "segment";
+      return ["segment"];
     case "trellis2":
     case "trellis":
     case "3d":
-      return "3d";
+      return ["3d"];
     case "upscale":
     case "realesrgan":
     case "esrgan":
-      return "upscale";
+      return ["upscale"];
   }
-  return "custom";
+  return [];
+}
+
+// Can a backend of this kind run a model of that class? The test to use
+// anywhere a model is matched against the registry — an equality check against
+// backendClass() silently hides a multi-class engine from every class but the
+// one it is grouped under, which is how audio.cpp went missing from the TTS and
+// ASR backend pickers.
+export function backendServesClass(kind: string, cls: string): boolean {
+  return backendClasses(kind).includes(cls);
+}
+
+// kind -> the group it is FILED under in the UI: a single bucket per row, since
+// a row can only be drawn once. That is the served class for a single-class
+// engine, and a group of its own for a multi-class one — audio.cpp belongs in
+// neither Speech nor Transcription because it is both, and filing it under
+// either would hide it from anyone looking for the other. Unknown kinds fall
+// back to "custom" so nothing vanishes from the UI.
+/** True for the audio.cpp engine under any of its kind spellings. Mirrors Go's
+ *  isAudioCppKind; used to split a class into the engines that can actually read
+ *  a given model's weights. */
+export function isAudioCppBackend(kind: string): boolean {
+  switch ((kind ?? "").trim().toLowerCase()) {
+    case "audiocpp":
+    case "audio.cpp":
+    case "audiocpp-server":
+      return true;
+  }
+  return false;
+}
+
+export function backendClass(kind: string): string {
+  switch ((kind ?? "").trim().toLowerCase()) {
+    case "audiocpp":
+    case "audio.cpp":
+    case "audiocpp-server":
+      return "audio";
+  }
+  return backendClasses(kind)[0] ?? "custom";
 }
 
 export function backendClassDef(kind: string): BackendClassDef | undefined {

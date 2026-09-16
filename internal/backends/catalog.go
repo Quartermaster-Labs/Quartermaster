@@ -264,6 +264,77 @@ var catalog = []Component{
 		},
 	},
 	{
+		ID:    "audiocpp-server",
+		Name:  "audio.cpp",
+		Blurb: "audiocpp_server - speech models on one ggml runtime: TTS, voice cloning and ASR.",
+		Repo:  "0xShug0/audio.cpp",
+		Kind:  "audiocpp",
+		Exe:   map[string]string{osWin: "audiocpp_server.exe", "default": "audiocpp_server"},
+		Variants: []Variant{
+			// Upstream publishes NO ROCm/HIP asset (its HIP support is a source or
+			// Nix build only), so an AMD card installs the Vulkan flavour here -
+			// the same answer llama.cpp's catalog gives on Linux.
+			{
+				ID: "vulkan", Label: "Vulkan", Note: "Any GPU (AMD / Intel / NVIDIA). The safe pick on non-NVIDIA hardware.",
+				Patterns: map[string][]string{
+					// The "-portable" assets are the same build with -CpuArch baseline
+					// and llamafile kernels off, for CPUs without AVX2. Listed second
+					// so they are a fallback, never the default pick.
+					osWin:   {`(?i)^audio-.*-bin-windows-x64-vulkan\.zip$`, `(?i)^audio-.*-bin-windows-x64-vulkan-portable\.zip$`},
+					osLinux: {`(?i)^audio-.*-bin-ubuntu-x64-vulkan\.tar\.gz$`, `(?i)^audio-.*-bin-ubuntu-x64-vulkan-portable\.tar\.gz$`},
+				},
+			},
+			{
+				ID: "cuda", Label: "CUDA", Note: "NVIDIA only, Windows only. Pulls the matching cudart runtime alongside. Upstream's one Linux CUDA asset is a Colab-specific build, so an NVIDIA card on Linux uses the Vulkan variant.",
+				Patterns: map[string][]string{
+					// Deliberately Windows-only. The release does carry
+					// audio-*-bin-ubuntu-x64-cuda12.8-colab.tar.gz, but it is built for
+					// Colab's toolkit and GPU set; auto-installing it as "the Linux CUDA
+					// build" would hand most machines a binary for someone else's box.
+					// Newest CUDA major first, as in llama.cpp above: upstream ships
+					// 12.x and 13.x of the same build and the newer toolkit is the
+					// better default on a current driver.
+					osWin: {`(?i)^audio-.*-bin-windows-x64-cuda13\..*\.zip$`, `(?i)^audio-.*-bin-windows-x64-cuda[0-9.]+\.zip$`},
+				},
+				PairKey: `(?i)-cuda([0-9.]+)\.zip$`,
+				Extra: map[string][]string{
+					osWin: {`(?i)^audio-.*-cudart-windows-x64-cuda{v}\.zip$`, `(?i)^audio-.*-cudart-windows-x64-cuda[0-9.]+\.zip$`},
+				},
+			},
+			{
+				// Unlike llama.cpp and stable-diffusion.cpp, BOTH macOS assets are
+				// Metal builds, and the catalog has no arch dimension to pick between
+				// them, so they are two variants rather than one. Installing the wrong
+				// one yields a binary that will not exec at all, which is at least a
+				// loud failure.
+				ID: "metal", Label: "Metal (Apple silicon)", Note: "Apple silicon (M-series) only. GPU-accelerated through Metal.",
+				Patterns: map[string][]string{
+					osMac: {`(?i)^audio-.*-bin-macos-arm64-metal\.tar\.gz$`},
+				},
+			},
+			{
+				ID: "metal-x64", Label: "Metal (Intel Mac)", Note: "Intel Macs only. Upstream builds Metal into the x64 asset too, so this is still GPU-accelerated.",
+				Patterns: map[string][]string{
+					osMac: {`(?i)^audio-.*-bin-macos-x64-metal\.tar\.gz$`},
+				},
+			},
+			{
+				ID: "cpu", Label: "CPU", Note: "No GPU acceleration. Workable for the small ASR and TTS models, slow for anything larger.",
+				Patterns: map[string][]string{
+					osWin:   {`(?i)^audio-.*-bin-windows-x64-cpu\.zip$`},
+					osLinux: {`(?i)^audio-.*-bin-ubuntu-x64-cpu\.tar\.gz$`},
+				},
+			},
+			{
+				ID: "cpu-portable", Label: "CPU (baseline)", Note: "No GPU acceleration, and built for CPUs without AVX2. Use this only if the plain CPU build crashes on startup with an illegal instruction.",
+				Patterns: map[string][]string{
+					osWin:   {`(?i)^audio-.*-bin-windows-x64-cpu-portable\.zip$`},
+					osLinux: {`(?i)^audio-.*-bin-ubuntu-x64-cpu-portable\.tar\.gz$`},
+				},
+			},
+		},
+	},
+	{
 		ID:    "upscaler",
 		Name:  "Real-ESRGAN (ncnn)",
 		Blurb: "realesrgan-ncnn-vulkan - the exec-per-request image upscaler.",

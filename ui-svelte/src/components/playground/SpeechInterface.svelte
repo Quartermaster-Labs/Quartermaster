@@ -75,6 +75,12 @@
   // A base model has no named speakers → its "" default is valid and it accepts
   // voice clones. A custom_voice model has speakers and REQUIRES a named voice.
   let isBaseModel = $derived(canClone && availableVoices.includes("") && !isVoiceDesign);
+  // Can the voice list be fetched without loading the model? Declared by the
+  // server: audio.cpp's list is two directories quartermaster reads itself, every
+  // other engine keeps it inside the process. Without this the list is only ever
+  // refreshed for a loaded model, so a clone registered against an idle one was
+  // written to disk and then left out of the picker.
+  let voicesOffline = $derived($models.find((m) => m.id === $selectedModelStore)?.capabilities?.voice_list_offline ?? false);
   let activePreset = $derived(allPresets.find((p) => p.name === $selectedPresetStore) ?? null);
   // Is the selected model actually loaded? When idle, the voice list is whatever
   // was cached last — cloned/designed voices only appear after a refresh loads
@@ -145,7 +151,7 @@
       // or the first generation (which loads the model anyway) fetches fresh.
       applyVoices(cachedVoices(model));
     }
-    if (model && ready && model !== lastFetchedModel) {
+    if (model && (ready || voicesOffline) && model !== lastFetchedModel) {
       lastFetchedModel = model;
       refreshVoices();
     }
@@ -182,9 +188,16 @@
   }
 
   // --- voice cloning (base models) -----------------------------------------
-  // POST /v1/audio/voices {model,name,wav_b64,ref_text?} → tts-server registers
-  // a cloned voice (base64 WAV, ref_text enables ICL clone mode). Path is
-  // rewritten to /v1/voices by the reverse proxy; auth via inferenceHeaders().
+  // POST /v1/audio/voices {model,name,wav_b64,ref_text} registers a cloned voice.
+  // Who answers depends on the engine: qwentts.cpp serves it at /v1/voices and the
+  // proxy rewrites the path, while audio.cpp has no such route at all and
+  // quartermaster writes the wav into its --voice-dir itself. Auth via
+  // inferenceHeaders().
+  //
+  // ref_text is REQUIRED, not a nicety. Cloning here is in-context learning: the
+  // engine conditions on the reference audio AND its transcript, so Qwen3 throws
+  // "voice clone ICL mode requires reference text" on a voice registered without
+  // one. The live-record path always has it because the passage is fixed.
   // Multi-step clone modal: step "choose" collects the name + method, then either
   // "live" (read a passage) or "clip" (upload a file).
   let showClone = $state(false);
@@ -652,8 +665,8 @@
               {isVoiceDesign ? "Voice preset" : "Voice"}
               {#if !isVoiceDesign}
                 <span
-                  class="w-1.5 h-1.5 rounded-full {modelReady ? 'bg-green-500' : 'bg-txtsecondary/40'}"
-                  use:tip={modelReady ? "Model loaded - voice list is live" : "Model not loaded - voice list is from cache"}
+                  class="w-1.5 h-1.5 rounded-full {modelReady || voicesOffline ? 'bg-green-500' : 'bg-txtsecondary/40'}"
+                  use:tip={modelReady || voicesOffline ? "Voice list is live" : "Model not loaded - voice list is from cache"}
                 ></span>
               {/if}
             </span>
@@ -669,7 +682,7 @@
             {/if}
           </div>
 
-          {#if !isVoiceDesign && !modelReady && $selectedModelStore}
+          {#if !isVoiceDesign && !modelReady && !voicesOffline && $selectedModelStore}
             <button
               class="shrink-0 text-left text-[0.6875rem] leading-tight text-txtsecondary hover:text-txtmain px-1 -mt-1"
               onclick={refreshVoices}
@@ -1016,16 +1029,20 @@
             <textarea
               class="w-full px-3 py-2 rounded-md border border-card-border bg-surface text-[0.8125rem] resize-none focus:outline-none focus:ring-2 focus:ring-primary/40"
               rows="2"
-              placeholder="Reference transcript (optional - improves cloning)"
+              placeholder="Type exactly what is said in the clip"
               bind:value={newVoiceRefText}
             ></textarea>
+            <span class="text-xs text-txtsecondary -mt-1">
+              Required. Voice cloning is in-context: the engine is shown the clip AND its
+              transcript, so a clip with no text is a voice that cannot be spoken with.
+            </span>
             {#if createVoiceError}<span class="text-red-500 text-xs">{createVoiceError}</span>{/if}
             <div class="flex justify-end gap-2">
               <button class="px-2.5 py-1 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary text-[0.8125rem] transition-colors" onclick={closeClone}>Cancel</button>
               <button
                 class="px-2.5 py-1 rounded-md bg-primary text-btn-primary-text text-[0.8125rem] font-medium hover:bg-primary-hover disabled:opacity-40 transition-colors"
                 onclick={createVoice}
-                disabled={creatingVoice || !newVoiceFile}
+                disabled={creatingVoice || !newVoiceFile || !newVoiceRefText.trim()}
               >
                 {creatingVoice ? "Cloning…" : "Clone voice"}
               </button>

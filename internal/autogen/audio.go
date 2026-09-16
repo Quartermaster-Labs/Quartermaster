@@ -124,19 +124,24 @@ func ttsBackend(s Settings, row GgufRow, ov *Override, meta Metadata) (kind, exe
 	if isTTSCppModel(meta, row.FileName) {
 		prefer = ttsKindTTSCpp
 	}
-	be := resolveBackendPreferring(s, ov, "tts", prefer)
-	kind = strings.ToLower(strings.TrimSpace(be.Kind))
-	if kindClass(kind) != "tts" {
+	be := resolveBackendPreferring(withoutAudioCpp(s), ov, "tts", prefer)
+	kind, exe = strings.ToLower(strings.TrimSpace(be.Kind)), be.Exe
+	// isAudioCppKind is a backstop, not the mechanism: withoutAudioCpp above
+	// already hid those rows, because audio.cpp reads neither legacy engine's
+	// weights and has its own emitter that generate.go dispatches to before this
+	// is ever reached. Both the kind AND the exe must read as "nothing matched"
+	// -- keeping the exe would wrap audiocpp_server in TTS.cpp's argv, the same
+	// mistake one flag later.
+	if !kindServesClass(kind, "tts") || isAudioCppKind(kind) {
 		// No registry entry matched (or a stale id resolved to nothing): keep the
 		// model's own family and the legacy derived exe, so single-backend setups
 		// behave exactly as before the registry existed.
-		kind = prefer
+		kind, exe = prefer, ""
 	} else if kind == "tts.cpp" || kind == "kokoro" {
 		kind = ttsKindTTSCpp
 	} else if kind == "tts-server" || kind == "speech" {
 		kind = ttsKindQwen
 	}
-	exe = be.Exe
 	if exe == "" {
 		// TtsServerExe is the qwentts exe; for TTS.cpp it is at best a same-named
 		// binary from a different project. emitTTSModel warns about that case

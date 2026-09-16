@@ -213,14 +213,7 @@ func (s *Server) registerManagedBackend(inst backends.Installed) error {
 	} else {
 		// The first backend of a class becomes the ★ auto-pick; if the class is
 		// already populated, leave whatever the user chose alone.
-		classTaken := false
-		for _, e := range list {
-			if autogen.KindClass(e.Kind) == autogen.KindClass(comp.Kind) {
-				classTaken = true
-				break
-			}
-		}
-		row.Default = !classTaken
+		row.Default = !autogen.ClassTaken(list, comp.Kind)
 		list = append(list, row)
 	}
 	// Activation is also the moment the build list can change (a new install, a
@@ -269,7 +262,36 @@ func (s *Server) classDefault(c backends.Component) (isDefault bool, owner strin
 	if err != nil {
 		return false, "", false
 	}
-	return classDefaultFor(list, autogen.KindClass(c.Kind), managedEntry(list, c.ID))
+	return classDefaultForKind(list, c.Kind, managedEntry(list, c.ID))
+}
+
+// classDefaultForKind aggregates classDefaultFor over every class the kind
+// serves. Only audio.cpp serves more than one, and for it the question the card
+// is really answering is "does this binary get launched": winning ONE of its
+// classes is enough for that, so a partial win still reports in use rather than
+// naming whoever owns the other class. A per-class breakdown would be a better
+// card, and needs a DTO and a UI that can show two answers at once.
+func classDefaultForKind(list []autogen.BackendEntry, kind string, mine int) (isDefault bool, owner string, implicit bool) {
+	classes := autogen.KindClasses(kind)
+	if len(classes) == 0 {
+		return false, "", false
+	}
+	won, allImplicit := false, true
+	for _, class := range classes {
+		is, _, imp := classDefaultFor(list, class, mine)
+		if !is {
+			continue
+		}
+		won = true
+		if !imp {
+			allImplicit = false
+		}
+	}
+	if won {
+		return true, "", allImplicit
+	}
+	// Lost every class it serves: name the owner of the one it is labelled with.
+	return classDefaultFor(list, classes[0], mine)
 }
 
 // classDefaultFor is classDefault's decision, split out from the sidecar read so
@@ -277,7 +299,7 @@ func (s *Server) classDefault(c backends.Component) (isDefault bool, owner strin
 func classDefaultFor(list []autogen.BackendEntry, class string, mine int) (isDefault bool, owner string, implicit bool) {
 	starred, first := -1, -1
 	for i, e := range list {
-		if autogen.KindClass(e.Kind) != class {
+		if !autogen.KindServesClass(e.Kind, class) {
 			continue
 		}
 		if first < 0 {
@@ -308,15 +330,21 @@ func classDefaultFor(list []autogen.BackendEntry, class string, mine int) (isDef
 
 // setClassDefault moves ★ within one class onto the given row.
 func setClassDefault(list []autogen.BackendEntry, id string) []autogen.BackendEntry {
-	class := ""
+	// Every class the target serves loses its ★, not just the one the target is
+	// labelled with: one ★ per class is the invariant, and a multi-class row
+	// taking the pick has to displace the incumbent of each class it covers.
+	var classes []string
 	for _, e := range list {
 		if e.ID == id {
-			class = autogen.KindClass(e.Kind)
+			classes = autogen.KindClasses(e.Kind)
 		}
 	}
 	for i := range list {
-		if autogen.KindClass(list[i].Kind) == class {
-			list[i].Default = list[i].ID == id
+		for _, class := range classes {
+			if autogen.KindServesClass(list[i].Kind, class) {
+				list[i].Default = list[i].ID == id
+				break
+			}
 		}
 	}
 	return list

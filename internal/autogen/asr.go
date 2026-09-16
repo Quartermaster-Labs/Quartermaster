@@ -57,7 +57,12 @@ func IsASRModel(meta Metadata, fileName string) bool {
 // has one, else the class default, else the legacy derived slot. Same rule as
 // every other class -- only an auto model follows a later default switch.
 func asrExe(s Settings, ov *Override) string {
-	if rb := resolveBackend(s, ov, "asr"); rb.Exe != "" {
+	// audio.cpp serves the asr class too, so it can be what the registry returns
+	// here, but it reads none of parakeet's weights and has its own emitter that
+	// generate.go dispatches to first. Handing its binary a parakeet argv would
+	// fail at spawn, so an audio.cpp row counts as "nothing matched" - the same
+	// rule ttsBackend applies on the other class this kind serves.
+	if rb := resolveBackend(withoutAudioCpp(s), ov, "asr"); rb.Exe != "" {
 		return rb.Exe
 	}
 	return s.AsrServerExe
