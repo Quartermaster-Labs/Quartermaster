@@ -219,6 +219,10 @@ type overrideDTO struct {
 	TensorSplit          string  `json:"tensorSplit"`
 	MainGpu              int     `json:"mainGpu"`
 	OverrideTensor       string  `json:"overrideTensor"`
+	// AudioDevice pins an audio.cpp model's adapter (--device N). nil => the
+	// generator probes the backend and picks the first discrete GPU; a negative
+	// value turns the flag off. Ignored by every other backend.
+	AudioDevice *int `json:"audioDevice"`
 	// Image (sd-server) knobs; ignored for llama models.
 	VaePath         string  `json:"vaePath"`
 	ClipLPath       string  `json:"clipLPath"`
@@ -388,7 +392,8 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		SpecDraftNMin: o.SpecDraftNMin, SlotPromptSimilarity: o.SlotPromptSimilarity,
 		RopeScaling: o.RopeScaling, RopeScale: o.RopeScale, RopeFreqBase: o.RopeFreqBase, YarnOrigCtx: o.YarnOrigCtx,
 		SplitMode: o.SplitMode, TensorSplit: o.TensorSplit, MainGpu: o.MainGpu, OverrideTensor: o.OverrideTensor,
-		VaePath: o.VaePath, ClipLPath: o.ClipLPath, ClipGPath: o.ClipGPath,
+		AudioDevice: o.AudioDevice,
+		VaePath:     o.VaePath, ClipLPath: o.ClipLPath, ClipGPath: o.ClipGPath,
 		T5Path: o.T5Path, TextEncoderPath: o.TextEncoderPath,
 		OffloadToCpu: o.OffloadToCpu, TeOnCpu: o.TeOnCpu, VaeOnCpu: o.VaeOnCpu, VaeTiling: o.VaeTiling, TemporalTiling: o.TemporalTiling, StreamLayers: o.StreamLayers, DiffusionFa: o.DiffusionFa, RefEdit: o.RefEdit,
 		DefaultSteps: o.DefaultSteps, DefaultCfg: o.DefaultCfg, DefaultSampler: o.DefaultSampler,
@@ -465,6 +470,7 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.SlotCachePreamble = body.SlotCachePreamble
 	ov.CtxVariants = body.CtxVariants
 	ov.CtxCheckpoints = body.CtxCheckpoints
+	ov.AudioDevice = body.AudioDevice
 	ov.PreserveThinking = body.PreserveThinking
 	ov.Dry = body.Dry
 	ov.DryMultiplier = body.DryMultiplier

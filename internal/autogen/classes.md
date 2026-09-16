@@ -317,6 +317,30 @@ non-NVIDIA box. `audioCppFlavour` derives the flag from the installed build's va
 hand-entered registry row records no variant, so the emit carries a `# NOTE` naming the cuda
 default instead of guessing.
 
+### `--device` too, and the index is probed (`audiocppdev.go`)
+
+`--backend` says which runtime; it does not say which adapter. Left alone audio.cpp takes device
+**0** of that backend, and on any box whose integrated GPU enumerates first that is a model
+running out of shared system memory, silently: nothing in the log distinguishes it from a card.
+There is no ROCm build to escape to either (v0.8.0 publishes `vulkan`, `cuda`, `cpu`,
+`cpu-portable` only), so on AMD the Vulkan listing is the whole device list.
+
+The index comes from the binary's own `--list-devices`, which prints
+`Vulkan:0 "AMD Radeon RX 7900 XTX" [GPU]` / `Vulkan:1 "AMD Radeon(TM) Graphics" [IGPU]` and tags
+each row `[GPU]` / `[IGPU]` / `[CPU]` - so "discrete" is read off upstream's own judgement rather
+than guessed from a marketing string. Neither shape `parseBackendDevices` reads matches it, hence
+a parser of its own; the listing is GLOBAL (every backend in one run, measured at 0.154s), so it
+is memoized per exe on the same `exe|size|mtime` key `ListBackendDevices` uses and filtered by
+flavour afterwards. It draws on the same shared `backendProbeBudget`, so an audio backend that
+hangs cannot spend the whole generate's allowance.
+
+`backenddev.go`'s refusal rule carries over: no flag is emitted for flavour `""` or `cpu`, for a
+backend listing a single device (nothing to choose), or when no row is tagged `[GPU]`. A wrong
+`--device` is a hard launch failure where a missing one is just the old behaviour.
+`Override.AudioDevice` (`*int`, the model editor's "GPU device" knob) wins over the probe and
+skips it; **negative means emit nothing**, which is how the knob is turned back off without
+having to know what the probe would have said.
+
 ### First kind to serve two classes
 
 `kindClasses("audiocpp")` is `{tts, asr}`, which the registry's "an install never steals a

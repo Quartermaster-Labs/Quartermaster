@@ -262,7 +262,12 @@ const hashCacheSuffix = ".modelhash"
 // falling through to the chat path, with a new audiocpp: block carrying the
 // models[] entry its --config needs. A family we do not serve yet (music,
 // separation, voice conversion) emits no entry at all, only a comment.
-const genVersion = "v78"
+// v79: audio.cpp entries carry --device. Left alone the server takes device 0 of
+// its backend, which is the integrated GPU on any box that enumerates one first
+// (an APU desktop, a laptop), so the model lands in shared system memory with
+// nothing in the log saying so. The index comes from the binary's own
+// --list-devices, whose [GPU]/[IGPU] tag says which is discrete.
+const genVersion = "v79"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

@@ -451,6 +451,10 @@ export interface ModelOverride {
   slotCachePreamble?: boolean | null;
   ctxVariants?: number[]; // per-model ctx tiers (e.g. 32768, 65536)
   ctxCheckpoints?: number | null; // model-wide --ctx-checkpoints; null/undefined => auto, 0 disables
+  // audio.cpp only: which adapter the model loads onto (--device N).
+  // null/undefined => the generator reads the backend's own --list-devices and
+  // picks the first discrete GPU; a negative value emits no flag at all.
+  audioDevice?: number | null;
   variants?: ModelVariant[];
   // Dry sampler: null/undefined => fleet default (off), true => on, false => off.
   dry?: boolean | null;

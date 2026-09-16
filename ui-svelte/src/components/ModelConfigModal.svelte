@@ -286,6 +286,9 @@
   // Model-wide --ctx-checkpoints default; null => auto (sizer/llama default),
   // explicit (incl. 0) pins it. Variants inherit this unless they set their own.
   let ctxCheckpoints = $state<number | null>(null);
+  // audio.cpp only: the --device pin. null => let the generator probe and pick
+  // the first discrete GPU, which is what the iGPU-enumerates-first case needs.
+  let audioDevice = $state<number | null>(null);
   let variants = $state<ModelVariant[]>([]);
   // Per-model ctx tiers (32k/64k…), seeded from override.ctxVariants ints as
   // editable variant entries. On save, tiers that only set ctx collapse back to
@@ -434,7 +437,7 @@
   $effect(() => {
     const deps = [
       open, config, selectedVariant,
-      ctx, ctxAuto, kvK, kvV, kvInRam, spec, reasoningOn, reasoningBudget, preserveThinking, flashOn, mmapOn, mlock, threads, parallel, ub, vramTarget, vramAuto, cpuOffload, cpuAuto, customArgs, customArgsOff, ctxCheckpoints,
+      ctx, ctxAuto, kvK, kvV, kvInRam, spec, reasoningOn, reasoningBudget, preserveThinking, flashOn, mmapOn, mlock, threads, parallel, ub, vramTarget, vramAuto, cpuOffload, cpuAuto, customArgs, customArgsOff, ctxCheckpoints, audioDevice,
       dryOn, dryMultiplier, dryBase, dryAllowedLength, specDraftNMax, specDefault, specNgramSizeN, specNgramSizeM, specNgramMinHits,
       vaePath, clipLPath, clipGPath, t5Path, textEncoderPath, offloadToCpu, teOnCpu, vaeOnCpu, vaeTiling, diffusionFa,
       temporalTiling, streamLayers,
@@ -848,6 +851,7 @@
     slotCacheOn = o?.slotCache ?? false;
     slotCachePreambleOn = o?.slotCachePreamble ?? true;
     ctxCheckpoints = o?.ctxCheckpoints ?? null;
+    audioDevice = o?.audioDevice ?? null;
     variants = (o?.variants ?? []).map((v) => {
       const c = { ...v };
       if (imageMode || audioMode || samMode) {
@@ -1221,6 +1225,7 @@
       // untouched model never freezes an explicit value into its override.
       slotCachePreamble: slotCachePreambleOn ? null : false,
       ctxCheckpoints,
+      audioDevice,
       // ctx tiers with nothing but a ctx stay compact ints; any with extra knobs
       // promote to named variants alongside the explicit ones.
       ctxVariants: ctxTiers.filter(ctxTierIsPure).map((v) => v.ctx ?? 0).filter((n) => n > 0),
@@ -2031,7 +2036,12 @@
              (base/customvoice/voicedesign ship as separate ggufs = separate models). -->
         <div class="grid grid-cols-2 gap-3">
           <p class="col-span-2 text-xs text-txtsecondary">
-            {#if ttscppMode}
+            {#if audioCppMode}
+              Served by audio.cpp <code>audiocpp_server</code> (OpenAI <code>/v1/audio/speech</code>
+              and <code>/v1/audio/transcriptions</code>). The model is named in a JSON config
+              written at spawn, not on the command line, so there is no <code>--model</code> flag
+              below; voice and sampling are chosen per request.
+            {:else if ttscppMode}
               Served by TTS.cpp <code>tts-server</code> (OpenAI <code>/v1/audio/speech</code>).
               Self-contained gguf, CPU only; voice is chosen per request.
             {:else}
@@ -2039,6 +2049,26 @@
               The talker loads with its paired codec gguf; voice is chosen per request.
             {/if}
           </p>
+          {#if audioCppMode}
+            <!-- Which adapter, not whether to use one. audio.cpp takes device 0 of
+                 its backend when left alone, and that is the integrated GPU on any
+                 box enumerating one first: the model quietly runs from shared
+                 system memory. Auto reads the backend's own --list-devices and
+                 pins the first discrete GPU. -->
+            <label class="flex flex-col gap-1 text-sm col-span-2">
+              <span class="text-txtsecondary flex items-center gap-1">
+                GPU device
+                {@render hint("Which adapter audio.cpp loads onto (--device N), numbered within the backend it was built for. Auto reads the backend's --list-devices and pins the first discrete GPU, so an integrated one that enumerates first is skipped. Set -1 to emit no flag and take audio.cpp's own default. The composed command below shows the result.")}
+              </span>
+              <div class="flex items-center gap-2">
+                <Toggle size="sm" checked={audioDevice == null} onchange={(on) => (audioDevice = on ? null : 0)} />
+                <span class="text-xs text-txtsecondary">Auto</span>
+                {#if audioDevice != null}
+                  <input type="number" min="-1" step="1" bind:value={audioDevice} use:wheelAdjust class="cfg-input flex-1" />
+                {/if}
+              </div>
+            </label>
+          {/if}
           <label class="flex flex-col gap-1 text-sm col-span-2">
             <span class="text-txtsecondary flex items-center gap-1">
               Extra args

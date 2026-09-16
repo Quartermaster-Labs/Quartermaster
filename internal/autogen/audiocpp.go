@@ -340,8 +340,14 @@ func audioCppCmdLines(s Settings, row GgufRow, ov *Override, class string) []str
 		"--host 127.0.0.1",
 		"--port ${PORT}",
 	}
-	if flavour := audioCppFlavour(s, be.ID); flavour != "" {
+	flavour := audioCppFlavour(s, be.ID)
+	if flavour != "" {
 		lines = append(lines, "--backend "+flavour)
+	}
+	// Which adapter, not just which runtime: left alone audio.cpp takes device 0,
+	// which is the iGPU on any box that enumerates it first. See audiocppdev.go.
+	if dev, ok := audioCppDeviceArg(exe, flavour, ov); ok {
+		lines = append(lines, dev)
 	}
 	// One model per process, so the LRU this bounds has nothing to choose
 	// between. It is emitted anyway as the belt to the config's braces: a hand
