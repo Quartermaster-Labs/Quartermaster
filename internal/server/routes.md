@@ -69,6 +69,8 @@ See [`configapi.md`](configapi.md).
 
 `GET /api/models/{model}/config`; `PUT`/`DELETE /api/models/{model}/override`;
 `PUT /api/models/{model}/variant`; `GET /api/models/{model}/estimate`;
+`GET /api/models/{model}/loras` (**the .gguf files in this model's resolved LLM LoRA folder, plus
+that folder, for the config editor's adapter picker; never errors on a missing folder**);
 `PUT /api/models/{model}/preview` (cmd preview); `PUT /api/models/{model}/adhoc-cmd` (one-off
 flag-override cmd — no persistence, no reload); `PUT`/`DELETE /api/models/{model}/adhoc-load`
 (inject that cmd into the LIVE router; in-memory only, DELETE or any file reload reverts);
@@ -79,7 +81,8 @@ update polling, HF token — the only settings route that neither regenerates no
 effect at the next start**); `PUT /api/default-variants`;
 `POST /api/pick-folder` + `POST /api/settings/root/pick` + `POST /api/settings/loradir/pick`
 (the latter two are the Models page's per-category scan and LoRA folders; both 400 on a category
-outside `autogen.CategoryOrder`, and loradir takes `{clear:true}` to drop back to the default);
+outside `autogen.CategoryOrder`, and BOTH take `{clear:true}` to drop back to the default -- a
+blank dialog result means "cancelled", so clearing cannot be expressed by the picker itself);
 `POST /api/pick-file` (whitelisted
 kinds only — `pickfile_spec.go`); `GET`/`POST /api/apikeys` + `DELETE /api/apikeys/{name}`.
 

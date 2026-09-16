@@ -72,20 +72,38 @@
   // per-category, so they belong together here rather than one here and one
   // buried in Settings -> Backends, which is a page about executables.
   let folderPath = $state("");
+  // Whether THIS tab owns a folder, as opposed to inheriting the shared root.
+  // folderPath alone cannot say: it is filled with the effective path either way.
+  let folderOwn = $state(false);
   let loraPath = $state("");
   let picking = $state(false);
-  // Only sd-server has a LoRA folder concept, and it serves exactly these two
-  // categories. Showing the control on the LLM or TTS tab would offer a setting
-  // that reaches no backend.
-  const LORA_TABS: ModelCategory[] = ["image", "video"];
+  // The three categories with a LoRA concept. The folder means two different
+  // things across them, which is why the tooltip below is derived rather than
+  // fixed:
+  //   image/video - sd-server's --lora-model-dir, a whole directory handed to
+  //     the backend, which lists it and lets each REQUEST pick from it.
+  //   llm - a base path only. llama.cpp has no directory flag; each adapter is
+  //     named at launch, per model, in the config editor. Setting this folder
+  //     emits nothing on its own - it is what those per-model entries resolve
+  //     bare filenames against, and what the editor's picker lists.
+  // Every other tab's backend has no LoRA concept at all, so the control would
+  // be a setting that reaches nothing.
+  const LORA_TABS: ModelCategory[] = ["llm", "image", "video"];
   const hasLora = $derived(LORA_TABS.includes(tab));
+  const loraTip = $derived(
+    tab === "llm"
+      ? `LoRA folder: ${loraPath || "the fleet-wide default"} - adapters here can be attached to a model in its config editor`
+      : `LoRA folder: ${loraPath || "the fleet-wide default"} - click to choose`,
+  );
   async function refreshFolder(): Promise<void> {
     try {
       const s = await getSettings();
       folderPath = s.categoryRoots?.[tab] || s.modelsRoot || "";
+      folderOwn = Boolean(s.categoryRoots?.[tab]);
       loraPath = s.loraDirs?.[tab] || "";
     } catch {
       folderPath = "";
+      folderOwn = false;
       loraPath = "";
     }
   }
@@ -93,12 +111,17 @@
     tab; // re-run when the tab changes
     refreshFolder();
   });
-  async function pickFolder(): Promise<void> {
+  // clear=true skips the dialog and drops back to the shared models folder.
+  // Re-picking can only ever REPLACE a path, so without this an inherited
+  // default is unreachable once a folder has been chosen once.
+  async function pickFolder(clear = false): Promise<void> {
     if (picking) return;
     picking = true;
     try {
-      const path = await pickModelsFolder(tab);
-      if (path) folderPath = path; // null => user cancelled; regen+reload already ran
+      const path = await pickModelsFolder(tab, clear);
+      // null => user cancelled; regen+reload already ran. A clear returns "",
+      // so re-read rather than assign: the effective path becomes the shared root.
+      if (path !== null) await refreshFolder();
     } catch (e) {
       console.error(e);
     } finally {
@@ -172,12 +195,13 @@
     queueMicrotask(measureBar);
   });
   // The CONTROL set is not fixed either: the LoRA buttons exist only on the
-  // image/video tabs, and the clear button only once a folder is set. ctrlFull
+  // image/video tabs, and either clear button only once a folder is set. ctrlFull
   // is sampled inside measureBar, which resize and $models alone would not
   // re-run here, so switching to a tab with more controls would overflow into
   // the second row this whole mechanism exists to prevent.
   $effect(() => {
     hasLora;
+    folderOwn;
     loraPath;
     queueMicrotask(measureBar);
   });
@@ -343,6 +367,12 @@
                   {#if folderPath}<span class="max-w-full truncate font-mono text-[0.6rem] text-txtsecondary">{folderPath}</span>{/if}
                 </span>
               </button>
+              {#if folderOwn}
+                <button class={MENU_ROW} role="menuitem" disabled={picking} onclick={() => { menuOpen = false; pickFolder(true); }}>
+                  <span class="w-3.5 shrink-0"></span>
+                  <span>Use the shared models folder</span>
+                </button>
+              {/if}
               {#if hasLora}
                 <button class={MENU_ROW} role="menuitem" disabled={picking} onclick={() => { menuOpen = false; pickLora(); }}>
                   <Layers class="w-3.5 h-3.5 shrink-0" />
@@ -376,20 +406,31 @@
       {:else}
         <button
           class="btn btn--sm inline-flex items-center justify-center disabled:opacity-50"
-          onclick={pickFolder}
+          onclick={() => pickFolder()}
           disabled={picking}
           aria-label="Set models folder"
           use:tip={`Models folder${folderPath ? ": " + folderPath : ""} - click to choose`}
         >
           <FolderOpen class="w-3.5 h-3.5" />
         </button>
+        {#if folderOwn}
+          <button
+            class="btn btn--sm inline-flex items-center justify-center disabled:opacity-50"
+            onclick={() => pickFolder(true)}
+            disabled={picking}
+            aria-label="Use the shared models folder"
+            use:tip={"Drop this category's models folder and use the shared one"}
+          >
+            <X class="w-3.5 h-3.5" />
+          </button>
+        {/if}
         {#if hasLora}
           <button
             class="btn btn--sm inline-flex items-center justify-center disabled:opacity-50"
             onclick={() => pickLora()}
             disabled={picking}
             aria-label="Set LoRA folder"
-            use:tip={`LoRA folder: ${loraPath || "the fleet-wide default"} - click to choose`}
+            use:tip={loraTip}
           >
             <Layers class="w-3.5 h-3.5" />
           </button>

@@ -367,6 +367,38 @@ export interface ModelVariant {
   defaultHeight?: number;
 }
 
+// LoraRef is one attached LoRA adapter. A bare `path` resolves against the LLM
+// LoRA folder (settings.loraDirs.llm, then advanced.loraDir, then the model's
+// own directory); an absolute path is used as written.
+//
+// scale is nullable rather than defaulted because 0 is a real value here:
+// llama.cpp loads a scale-0 adapter as present-but-inert, which a request can
+// then raise via "lora":[{id,scale}]. null => plain --lora at llama.cpp's own
+// 1.0.
+export interface LoraRef {
+  path: string;
+  scale: number | null;
+}
+
+// LoraListing is what the config editor's adapter picker offers: the .gguf
+// files in the folder the model's LoRA paths resolve against, plus that folder
+// itself so the UI can say where it looked when the list is empty or wrong.
+export interface LoraListing {
+  dir: string;
+  files: { name: string; sizeGB: number }[];
+}
+
+// getModelLoras lists the LoRA adapters available to one model. Never throws on
+// a missing or unreadable folder - the server answers with an empty list and
+// the directory it tried, which is the state the picker has to render anyway.
+export async function getModelLoras(model: string): Promise<LoraListing> {
+  const response = await fetch(`/api/models/${encodeURIComponent(model)}/loras`);
+  if (!response.ok) {
+    throw new Error(`Failed to list LoRA adapters: ${response.status}`);
+  }
+  return (await response.json()) as LoraListing;
+}
+
 export interface ModelOverride {
   // Backend registry entry id this model launches with ("" => auto-pick the class
   // default). Its kind decides which knobs below apply (llama vs vllm).
@@ -405,6 +437,11 @@ export interface ModelOverride {
   // sibling's). Set => that file, and the "-vision" twin exists even when
   // nothing was discovered.
   mmprojFile?: string;
+  // LoRA adapters bound into this model at spawn, one --lora/--lora-scaled each.
+  // llama-server models only: llama.cpp has no LoRA directory flag, so unlike
+  // the sd-server side the adapter set is a per-model launch decision and not a
+  // per-request one.
+  loras?: LoraRef[];
   unlisted?: boolean;
   skip?: boolean;
   slotCache?: boolean; // opt this model into on-disk slot KV persistence (opt-in; needs the global toggle on)
@@ -1062,12 +1099,14 @@ export async function putSlotCache(p: SlotCacheSettings): Promise<void> {
 }
 
 // Opens the host's native folder dialog and sets the scan folder for one
-// category. Returns the chosen path, or null when the user cancelled (204).
-export async function pickModelsFolder(category: string): Promise<string | null> {
+// category. With clear=true it skips the dialog and drops the category back to
+// the shared models folder instead. Returns the stored path ("" after a
+// clear), or null when the user cancelled (204).
+export async function pickModelsFolder(category: string, clear = false): Promise<string | null> {
   const response = await fetch("/api/settings/root/pick", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ category }),
+    body: JSON.stringify({ category, clear }),
   });
   if (response.status === 204) return null;
   if (!response.ok) {

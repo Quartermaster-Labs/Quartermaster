@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/quartermaster-labs/quartermaster/internal/autogen"
@@ -595,6 +596,81 @@ func (s *Server) handleAPIModelCmdPreview(w http.ResponseWriter, r *http.Request
 		Cmd string `json:"cmd"`
 		autogen.ComposedCmd
 	}{Cmd: layers.Effective, ComposedCmd: layers})
+}
+
+// loraListResp is the adapter picker's payload: the folder that was searched
+// (so the editor can say WHERE it looked when the list is empty) and the .gguf
+// files in it.
+type loraListResp struct {
+	Dir   string          `json:"dir"`
+	Files []loraFileEntry `json:"files"`
+}
+
+type loraFileEntry struct {
+	Name   string  `json:"name"` // basename, which is what an entry's Path stores
+	SizeGB float64 `json:"sizeGB"`
+}
+
+// handleAPIModelLoras lists the LoRA adapters available to one llama-server
+// model: the .gguf files sitting in autogen.LlmLoraDir for it.
+//
+// Non-recursive and unfiltered beyond the extension, which matters when no LoRA
+// folder is configured and the ladder falls through to the model's OWN
+// directory: the list is then the model's base weights and its sidecars, not
+// adapters. A LoRA gguf carries an `adapter.type` key that would separate the
+// two, but reading it means parsing the header of every file in a folder that
+// routinely holds tens of GB of multi-shard checkpoints, on a request that
+// blocks a modal opening. The response names the directory instead, so the
+// answer to a nonsense list is visible ("that is my models folder") and the fix
+// is the button right beside it.
+func (s *Server) handleAPIModelLoras(w http.ResponseWriter, r *http.Request) {
+	_, gguf, _, ok := s.resolveModelGguf(w, r)
+	if !ok {
+		return
+	}
+	gf, err := autogen.LoadGenerateFile(s.autogen.GeneratePath, s.autogen.ModelsDir)
+	if err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, "loading settings failed: "+err.Error())
+		return
+	}
+	dir := autogen.LlmLoraDir(gf.Settings, gguf)
+	out := loraListResp{Dir: dir}
+	out.Files = listLoraFiles(dir)
+	writeJSON(w, out)
+}
+
+// listLoraFiles returns the .gguf files directly in dir, name-sorted. Never an
+// error: a folder that has been moved, renamed or unplugged is an ordinary
+// state for a setting that points outside the app, and the caller renders the
+// empty list against the path it tried either way.
+//
+// Non-recursive on purpose. A LoRA folder pointed at a ComfyUI tree can hold
+// nested collections, but walking it would also walk a mis-set folder that is
+// really a models root, reading a directory tree of tens of gigabytes to open a
+// modal. One level is what the sd-server side lists too.
+func listLoraFiles(dir string) []loraFileEntry {
+	out := []loraFileEntry{}
+	if strings.TrimSpace(dir) == "" {
+		return out
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return out
+	}
+	for _, e := range ents {
+		if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ".gguf") {
+			continue
+		}
+		var gb float64
+		if info, err := e.Info(); err == nil {
+			gb = float64(info.Size()) / (1 << 30)
+		}
+		out = append(out, loraFileEntry{Name: e.Name(), SizeGB: gb})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
+	return out
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

@@ -979,6 +979,9 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/models/{model}/display-name", adminChain.ThenFunc(s.handleAPIModelDisplayNamePut))
 	mux.Handle("DELETE /api/models/{model}/display-name", adminChain.ThenFunc(s.handleAPIModelDisplayNameDelete))
 	mux.Handle("GET /api/models/{model}/estimate", adminChain.ThenFunc(s.handleAPIModelEstimate))
+	// LoRA adapters available to this model (the .gguf files in its resolved
+	// LoRA folder), for the config editor's adapter picker.
+	mux.Handle("GET /api/models/{model}/loras", adminChain.ThenFunc(s.handleAPIModelLoras))
 	mux.Handle("PUT /api/models/{model}/preview", adminChain.ThenFunc(s.handleAPIModelCmdPreview))
 	mux.Handle("PUT /api/models/{model}/adhoc-cmd", adminChain.ThenFunc(s.handleAPIModelAdhocCmd))
 	mux.Handle("PUT /api/models/{model}/adhoc-load", adminChain.ThenFunc(s.handleAPIModelAdhocLoad))

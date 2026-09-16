@@ -150,9 +150,16 @@ type overrideDTO struct {
 	ExtraArgs        string `json:"extraArgs"`
 	ChatTemplateFile string `json:"chatTemplateFile"`
 	MmprojFile       string `json:"mmprojFile"`
-	Unlisted         bool   `json:"unlisted"`
-	Skip             bool   `json:"skip"`
-	SlotCache        *bool  `json:"slotCache"` // opt this model into on-disk slot KV persistence; nil/absent => OFF (opt-in)
+	// Loras are the LoRA adapters bound into this model at spawn, one
+	// --lora/--lora-scaled each. Model-wide only, with no variantDTO twin:
+	// variants inherit the list for free through the struct copy in the merge,
+	// and a per-variant adapter set would mean a second llama-server process
+	// holding a second copy of the same base weights, which is the arrangement
+	// coexistence groups already cover better.
+	Loras     []loraRefDTO `json:"loras"`
+	Unlisted  bool         `json:"unlisted"`
+	Skip      bool         `json:"skip"`
+	SlotCache *bool        `json:"slotCache"` // opt this model into on-disk slot KV persistence; nil/absent => OFF (opt-in)
 	// SlotCachePreamble opts the model out of the preamble (shared system+tools
 	// seed) half only, keeping conversation snapshots. nil/absent => on.
 	SlotCachePreamble *bool `json:"slotCachePreamble"`
@@ -302,6 +309,46 @@ func variantToDTO(v autogen.VariantSpec) variantDTO {
 	}
 }
 
+// loraRefDTO is one attached LoRA adapter. Scale is a pointer for the same
+// reason autogen.LoraRef's is: 0 means "loaded but inert", which a request can
+// then raise, so it is a real value and not an absent one.
+type loraRefDTO struct {
+	Path  string   `json:"path"`
+	Scale *float64 `json:"scale"`
+}
+
+// toLoraRefDTOs / toLoraRefs are the two halves of the adapter-list mapping.
+// Both drop blank paths, so a row the editor left half-typed never reaches the
+// generate file (and never becomes a --lora with no filename).
+func toLoraRefDTOs(in []autogen.LoraRef) []loraRefDTO {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]loraRefDTO, 0, len(in))
+	for _, l := range in {
+		if strings.TrimSpace(l.Path) == "" {
+			continue
+		}
+		out = append(out, loraRefDTO{Path: l.Path, Scale: l.Scale})
+	}
+	return out
+}
+
+func toLoraRefs(in []loraRefDTO) []autogen.LoraRef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]autogen.LoraRef, 0, len(in))
+	for _, l := range in {
+		p := strings.TrimSpace(l.Path)
+		if p == "" {
+			continue
+		}
+		out = append(out, autogen.LoraRef{Path: p, Scale: l.Scale})
+	}
+	return out
+}
+
 func toOverrideDTO(o autogen.Override) *overrideDTO {
 	dto := &overrideDTO{
 		Backend: o.Backend, VllmGpuUtil: o.VllmGpuUtil, VllmTensorParallel: o.VllmTensorParallel,
@@ -316,6 +363,7 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		ExtraArgs:        o.ExtraArgs,
 		ChatTemplateFile: o.ChatTemplateFile,
 		MmprojFile:       o.MmprojFile,
+		Loras:            toLoraRefDTOs(o.Loras),
 		Unlisted:         o.Unlisted, Skip: o.Skip, SlotCache: o.SlotCache,
 		SlotCachePreamble: o.SlotCachePreamble,
 		CtxVariants:       o.CtxVariants, CtxCheckpoints: o.CtxCheckpoints,
@@ -402,6 +450,7 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.ExtraArgs = strings.TrimSpace(body.ExtraArgs)
 	ov.ChatTemplateFile = strings.TrimSpace(body.ChatTemplateFile)
 	ov.MmprojFile = strings.TrimSpace(body.MmprojFile)
+	ov.Loras = toLoraRefs(body.Loras)
 	ov.Unlisted = body.Unlisted
 	ov.Skip = body.Skip
 	ov.SlotCache = body.SlotCache

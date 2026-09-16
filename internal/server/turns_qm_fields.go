@@ -83,6 +83,7 @@ var qmFieldDocs = map[string]string{
 	"spec":             "speculative decoding spec (e.g. draft-mtp, draft-dflash, ngram-mod)",
 	"chatTemplateFile": "path to a .jinja chat template replacing the gguf's baked-in one (--chat-template-file). Use THIS field, never extraArgs",
 	"mmprojFile":       "path to the vision projector gguf (--mmproj) when it does not sit beside the model; also creates the -vision twin. Use THIS field, never extraArgs",
+	"loras":            "LoRA adapters bound in at spawn, [{path,scale}]; a bare path resolves against settings.loraDirs[\"llm\"]. scale null = --lora at llama.cpp's own 1.0, 0 = loaded but inert. Use THIS field, never extraArgs",
 	"customArgs":       "the user's launch-argument text, applied verbatim: a flag written here replaces the generated flag for the same setting. Prefer this over extraArgs",
 	"customArgsOff":    "true keeps customArgs stored but unapplied (the editor's enable toggle)",
 	"extraArgs":        "LEGACY free-form bucket written by the old launch-parameters box; only applied when customArgs is empty. New writes should use customArgs",
