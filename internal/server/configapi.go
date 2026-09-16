@@ -225,7 +225,11 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 	case isASR:
 		class = "asr"
 	}
-	resp := modelConfigResp{Id: realID, Gguf: gguf, Cmd: strings.TrimSpace(cmd), IsImage: isImage, IsAudio: isAudio, IsSam: isSam, Is3D: is3D, Class: class, HasOverride: existing != nil}
+	// The generated `audiocpp:` block is the authority on "this is an audio.cpp
+	// model": autogen writes it from the gguf header (general.architecture), so it
+	// is exact, and re-sniffing the file here could only disagree with the config
+	// the model will actually launch with.
+	resp := modelConfigResp{Id: realID, Gguf: gguf, Cmd: strings.TrimSpace(cmd), IsImage: isImage, IsAudio: isAudio, IsSam: isSam, Is3D: is3D, Class: class, IsAudioCpp: hasMC && !mc.AudioCpp.Empty(), HasOverride: existing != nil}
 	if dn, err := autogen.LoadSidecarDisplayNames(s.autogen.GeneratePath); err == nil {
 		resp.DisplayName = dn[realID]
 	}

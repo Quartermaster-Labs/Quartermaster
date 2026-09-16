@@ -4,6 +4,7 @@ import {
   backendClass,
   backendClasses,
   backendServesClass,
+  isAudioCppBackend,
   backendOptionLabel,
   backendOptionDetail,
   backendPickOptions,
@@ -159,6 +160,22 @@ describe("backend class taxonomy", () => {
   it("gives every class in the table a group it can be filed under", () => {
     for (const cls of BACKEND_CLASSES) {
       for (const eng of cls.engines) expect(backendClass(eng.kind)).toBe(cls.id);
+    }
+  });
+});
+
+describe("isAudioCppBackend", () => {
+  it("matches every spelling of the audio.cpp kind", () => {
+    for (const k of ["audiocpp", "audio.cpp", "AudioCPP-Server", " audiocpp "]) {
+      expect(isAudioCppBackend(k)).toBe(true);
+    }
+  });
+
+  // The picker splits the tts/asr classes with this: audio.cpp weights are its
+  // own format, so a Kokoro model must not be offered audio.cpp and vice versa.
+  it("does not match the legacy speech engines", () => {
+    for (const k of ["ttscpp", "tts.cpp", "kokoro", "parakeet", "llama", ""]) {
+      expect(isAudioCppBackend(k)).toBe(false);
     }
   });
 });

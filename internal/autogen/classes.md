@@ -328,5 +328,15 @@ must not hand its binary to the legacy emitters - it reads neither engine's weig
 the answer afterwards: the star degrading to audio.cpp then falls through to the NEXT installed
 engine of that class, not past the registry to the legacy derived exe.
 
+`onlyAudioCpp` is the mirror image, and it exists because the per-model backend picker can now
+name any engine of the class. A cross-engine pin has to be a NO-OP, not a broken launch:
+`audioCppBackend` resolves within the audio.cpp rows alone, so an `Override.Backend` pointing at
+a TTS.cpp row simply finds nothing and falls through to the installed audio.cpp build, while a
+pin at a specific audio.cpp BUILD (vulkan vs cuda) still wins. Without it the pin resolved to a
+zero row and the emitter fell to its "no audio.cpp backend registered" path: a bare
+`audiocpp_server` name that is not on PATH, with no `--backend` flavour. The editor stops
+offering the mismatch in the first place (`modelConfigResp.IsAudioCpp`, filled from the presence
+of the generated `audiocpp:` block), but the resolver does not rely on the client for that.
+
 Music (`ace_step`, `songbloom`, ...) is a follow-up: it needs a class of its own, a
 `/v1/tasks/run` base64-WAV translation handler and a UI tab.

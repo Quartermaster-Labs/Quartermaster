@@ -240,8 +240,27 @@ func withoutAudioCpp(s Settings) Settings {
 	return s
 }
 
+// onlyAudioCpp is withoutAudioCpp's mirror: the registry as an audio.cpp model
+// sees it. Filtering before resolution rather than checking the answer is what
+// makes a cross-engine pin a NO-OP instead of a broken launch - Override.Backend
+// is looked up in this list, so a row pinned to TTS.cpp resolves to nothing and
+// falls through to the installed audio.cpp build, while a pin at a specific
+// audio.cpp BUILD row (vulkan vs cuda) still wins, which is what pinning is for.
+// The model editor offers these ggufs no other engine anyway: audio.cpp weights
+// are its own format, and the header, not the pin, is what routes them here.
+func onlyAudioCpp(s Settings) Settings {
+	keep := make([]BackendEntry, 0, len(s.Backends))
+	for _, e := range s.Backends {
+		if isAudioCppKind(e.Kind) {
+			keep = append(keep, e)
+		}
+	}
+	s.Backends = keep
+	return s
+}
+
 func audioCppBackend(s Settings, ov *Override, class string) resolvedBackend {
-	be := resolveBackendPreferring(s, ov, class, audioCppKind)
+	be := resolveBackendPreferring(onlyAudioCpp(s), ov, class, audioCppKind)
 	if !isAudioCppKind(be.Kind) {
 		return resolvedBackend{}
 	}

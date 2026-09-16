@@ -30,7 +30,12 @@
   import Select, { type SelectOption } from "./Select.svelte";
   import Toggle from "./Toggle.svelte";
   import { estimateSegments } from "../stores/vram";
-  import { backendServesClass, backendPickOptions, hideDuplicateBuildRows } from "../lib/backends";
+  import {
+    backendServesClass,
+    backendPickOptions,
+    hideDuplicateBuildRows,
+    isAudioCppBackend,
+  } from "../lib/backends";
   import {
     IMG_SAMPLERS,
     fmtCtx,
@@ -370,9 +375,18 @@
   // backendServesClass, not an equality test against the row's group: audio.cpp
   // is filed under "Audio" but serves tts AND asr, so an equality test hid it
   // from the picker on exactly the models it can run.
+  //
+  // The second half of the filter splits the speech classes by ENGINE, mirroring
+  // what autogen does when it resolves: an audio.cpp model sees audio.cpp rows
+  // only (onlyAudioCpp) and every other model sees everything else
+  // (withoutAudioCpp), because the two formats are mutually unreadable. Offering
+  // a pin the resolver is going to ignore is worse than offering nothing.
+  const audioCppMode = $derived(config?.isAudioCpp ?? false);
   const classBackends = $derived(
     hideDuplicateBuildRows(
-      (config?.backends ?? []).filter((b) => backendServesClass(b.kind, modelClass)),
+      (config?.backends ?? []).filter(
+        (b) => backendServesClass(b.kind, modelClass) && isAudioCppBackend(b.kind) === audioCppMode,
+      ),
       backend,
     ),
   );

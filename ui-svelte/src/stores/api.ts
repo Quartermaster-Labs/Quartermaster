@@ -547,6 +547,11 @@ export interface ModelConfig {
   /** Backend class (autogen kindClass): llm/image/tts/asr/segment/3d. Filters the
    *  backend picker — TTS and ASR share the audio form but not their engines. */
   class?: string;
+  /** True when this gguf is an audio.cpp model (the generated config carries an
+   *  `audiocpp:` block). Splits tts/asr one level finer than `class`: audio.cpp
+   *  weights are its own format, so it and the legacy speech engines are not
+   *  interchangeable even though they share a class. */
+  isAudioCpp?: boolean;
   hasOverride: boolean;
   /** UI-set advertised name (cascades to variants); "" => unrenamed, shows id. */
   displayName?: string;

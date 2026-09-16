@@ -153,6 +153,19 @@ export function backendServesClass(kind: string, cls: string): boolean {
 // neither Speech nor Transcription because it is both, and filing it under
 // either would hide it from anyone looking for the other. Unknown kinds fall
 // back to "custom" so nothing vanishes from the UI.
+/** True for the audio.cpp engine under any of its kind spellings. Mirrors Go's
+ *  isAudioCppKind; used to split a class into the engines that can actually read
+ *  a given model's weights. */
+export function isAudioCppBackend(kind: string): boolean {
+  switch ((kind ?? "").trim().toLowerCase()) {
+    case "audiocpp":
+    case "audio.cpp":
+    case "audiocpp-server":
+      return true;
+  }
+  return false;
+}
+
 export function backendClass(kind: string): string {
   switch ((kind ?? "").trim().toLowerCase()) {
     case "audiocpp":

@@ -250,3 +250,30 @@ func TestASRExe_IgnoresAudioCppRow(t *testing.T) {
 		t.Errorf("exe = %q, want the registered parakeet row", exe)
 	}
 }
+
+// A pin at another engine's row must be a no-op, not a broken launch: audio.cpp
+// weights are its own format, so there is nothing for TTS.cpp to run here, and
+// falling back to the bare "audiocpp_server" name (not on PATH) while warning
+// that no backend is installed would be the worst of both.
+func TestAudioCppBackend_IgnoresCrossEnginePin(t *testing.T) {
+	s := audioCppSettings("vulkan", BackendEntry{
+		ID: "ttscpp-row", Kind: "ttscpp", Name: "tts.cpp", Path: "/backends/tts-server",
+	})
+	be := audioCppBackend(s, &Override{Backend: "ttscpp-row"}, "tts")
+	if be.Exe != "/backends/audiocpp_server" {
+		t.Errorf("exe = %q, want the installed audio.cpp build", be.Exe)
+	}
+
+	// A pin at a specific audio.cpp BUILD still wins, which is what pinning is for.
+	s.Backends = append(s.Backends, BackendEntry{
+		ID: "build-audiocpp-cuda", Kind: "audiocpp", Path: "/backends/cuda/audiocpp_server",
+		Managed: true, Build: true, Variant: "cuda",
+	})
+	be = audioCppBackend(s, &Override{Backend: "build-audiocpp-cuda"}, "tts")
+	if be.Exe != "/backends/cuda/audiocpp_server" {
+		t.Errorf("exe = %q, want the pinned cuda build", be.Exe)
+	}
+	if got := audioCppFlavour(s, be.ID); got != "cuda" {
+		t.Errorf("flavour = %q, want cuda from the pinned build row", got)
+	}
+}
