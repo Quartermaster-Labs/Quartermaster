@@ -248,6 +248,14 @@
   const ttsModelReady = $derived(
     !!$effectiveTtsModel && $models.some((m) => m.id === $effectiveTtsModel && m.state === "ready"),
   );
+  // Some engines' voice lists cost nothing to read: audio.cpp's is a directory
+  // quartermaster serves itself, so there is no model to swap in and the "only
+  // fetch when already loaded" rule above does not apply. Without this a voice
+  // cloned against an idle model never reached this dropdown, which left exactly
+  // one option in it and no way to pick the voice that had just been made.
+  const ttsVoicesOffline = $derived(
+    $models.find((m) => m.id === $effectiveTtsModel)?.capabilities?.voice_list_offline ?? false,
+  );
 
   let lastVoiceModel: string | null = null;
   let lastVoiceFetch: string | null = null;
@@ -265,7 +273,7 @@
     // placeholder for the rest of the session however long the model ran. Same
     // fix the Speech tab already carries.
     const key = `${model}|${ready}`;
-    if (model && ready && key !== lastVoiceFetch) {
+    if (model && (ready || ttsVoicesOffline) && key !== lastVoiceFetch) {
       lastVoiceFetch = key;
       void refreshTtsVoices();
     }
@@ -1124,7 +1132,7 @@
 
               <div class="flex flex-col gap-1">
                 <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">
-                  Voice {@render tip("Speaker the read-aloud button uses. Shared with the Speech tab - one person, one voice. Refresh loads the model to ask it for the full list, including any cloned voices.")}
+                  Voice {@render tip("Speaker the read-aloud button uses. Shared with the Speech tab - one person, one voice. Refresh asks the model for the full list, including any cloned voices; on engines that keep their voices in a folder that costs nothing, on the rest it loads the model.")}
                 </span>
                 <div class="flex items-center gap-2">
                   <Select
@@ -1151,7 +1159,7 @@
                   <button
                     type="button"
                     class="p-1.5 rounded-md border border-card-border text-txtsecondary hover:text-txtmain hover:border-primary/50 disabled:opacity-50 transition-colors"
-                    use:tooltip={"Refresh voices (loads the TTS model)"}
+                    use:tooltip={ttsVoicesOffline ? "Refresh voices" : "Refresh voices (loads the TTS model)"}
                     disabled={ttsVoicesLoading || !$effectiveTtsModel}
                     onclick={refreshTtsVoices}
                   >
