@@ -126,6 +126,9 @@ export interface AudioCppPackage {
   files: string[];
   /** Every file already on disk. A partly-present set is NOT local. */
   local: boolean;
+  /** Total download for the whole set, 0 when the hub could not be asked and
+   *  nothing is on disk to measure. */
+  sizeBytes?: number;
 }
 
 export interface AudioCppFamily {

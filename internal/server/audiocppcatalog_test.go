@@ -23,7 +23,8 @@ type catalogResp struct {
 		Reason    string `json:"reason"`
 		Packages  []struct {
 			audiocpp.Package
-			Local bool `json:"local"`
+			Local     bool  `json:"local"`
+			SizeBytes int64 `json:"sizeBytes"`
 		} `json:"packages"`
 	} `json:"families"`
 }
@@ -112,6 +113,14 @@ func TestHandleAPIHubAudioCpp_CatalogFromInstall(t *testing.T) {
 	}
 	if tts.Packages[1].Local {
 		t.Errorf("packages[1] = %+v, want not local", tts.Packages[1])
+	}
+	// No hub source in this test, so the size can only come from the copy on
+	// disk - which is exactly the offline fallback worth pinning down.
+	if tts.Packages[0].SizeBytes != int64(len("weights")) {
+		t.Errorf("packages[0].sizeBytes = %d, want the on-disk size", tts.Packages[0].SizeBytes)
+	}
+	if tts.Packages[1].SizeBytes != 0 {
+		t.Errorf("packages[1].sizeBytes = %d, want unknown rather than a partial sum", tts.Packages[1].SizeBytes)
 	}
 
 	// A family audio.cpp serves and we do not is listed with a reason, not hidden

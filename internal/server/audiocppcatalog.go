@@ -33,9 +33,10 @@ type audioCppPackageDTO struct {
 	// as installed rather than as a download button. Judged per FILE, because a
 	// package is a set - a gguf present without its vocab.txt is not installed.
 	Local bool `json:"local"`
-	// SizeBytes is the total the hub reports for the set, or 0 when we have not
-	// asked. The catalog deliberately does NOT fetch sizes: that is one hub
-	// request per repo per render, for a number the download job reports anyway.
+	// SizeBytes is the total download for the set, 0 when it cannot be known
+	// (no hub reachable and nothing on disk). "How big is it" is the first
+	// question asked of any model, and the answer has to be the whole SET: the
+	// gguf alone understates a package that ships a sidecar.
 	SizeBytes int64 `json:"sizeBytes,omitempty"`
 }
 
@@ -77,8 +78,10 @@ func (s *Server) handleAPIHubAudioCpp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// One LocalFiles walk per repo, not per package: the catalog's 200-odd
-	// packages share a handful of repos, and each call walks a directory tree.
+	// One walk and one hub call per REPO, not per package: the catalog's 200-odd
+	// packages share a handful of repos, and each would otherwise be a directory
+	// tree walk and a round trip. Both are memoized for the request; the hub
+	// adapter caches its detail response beyond it.
 	local := map[string]map[string]hub.LocalFile{}
 	localFor := func(repo string) map[string]hub.LocalFile {
 		if m, ok := local[repo]; ok {
@@ -86,6 +89,26 @@ func (s *Server) handleAPIHubAudioCpp(w http.ResponseWriter, r *http.Request) {
 		}
 		m := s.hub.LocalFiles(repo)
 		local[repo] = m
+		return m
+	}
+	src, haveSrc := s.hub.Source("")
+	remote := map[string]map[string]int64{}
+	remoteFor := func(repo string) map[string]int64 {
+		if m, ok := remote[repo]; ok {
+			return m
+		}
+		m := map[string]int64{}
+		if haveSrc {
+			// A failure here is not an error for the catalog: offline, rate
+			// limited or a repo that has moved all mean "no size to show", and
+			// the rest of the row is still true and still downloadable.
+			if det, err := src.Detail(r.Context(), repo); err == nil {
+				for _, f := range det.Files {
+					m[f.Path] = f.SizeBytes
+				}
+			}
+		}
+		remote[repo] = m
 		return m
 	}
 
@@ -103,18 +126,36 @@ func (s *Server) handleAPIHubAudioCpp(w http.ResponseWriter, r *http.Request) {
 		dto.Packages = make([]audioCppPackageDTO, 0, len(f.Packages))
 		for _, p := range f.Packages {
 			have := localFor(p.Repo)
+			sizes := remoteFor(p.Repo)
 			all := len(p.Files) > 0
+			total, sized := int64(0), len(p.Files) > 0
 			for _, rel := range p.Files {
 				// LocalFiles keys are repo-relative and slash-separated, which is
 				// what the spec states too; normalize anyway so a spec written
 				// with backslashes cannot read as "not downloaded" forever.
-				lf, ok := have[filepath.ToSlash(rel)]
+				key := filepath.ToSlash(rel)
+				lf, ok := have[key]
 				if !ok || lf.Size <= 0 {
 					all = false
-					break
+				}
+				// The hub is the authority on what a download costs; the copy on
+				// disk is the fallback, which is what keeps sizes on screen for
+				// an already-downloaded package with no network.
+				switch n := sizes[key]; {
+				case n > 0:
+					total += n
+				case lf.Size > 0:
+					total += lf.Size
+				default:
+					sized = false
 				}
 			}
-			dto.Packages = append(dto.Packages, audioCppPackageDTO{Package: p, Local: all})
+			// Partial is not a size: a set summed from the two files of three we
+			// could price reads as a small download for a large one.
+			if !sized {
+				total = 0
+			}
+			dto.Packages = append(dto.Packages, audioCppPackageDTO{Package: p, Local: all, SizeBytes: total})
 		}
 		out = append(out, dto)
 	}

@@ -85,7 +85,9 @@ Three deliberate choices:
   ordinary `hub.StartRequest`, so resume, pause, the journal, the manifest and the free-disk check
   are all unchanged code. What this endpoint adds is *which files to ask for*. `local` is judged
   per FILE off `hub.LocalFiles` (one walk per repo, not per package): a gguf present without its
-  sidecar is not installed.
+  sidecar is not installed. `sizeBytes` is the whole SET, priced from one `Source.Detail` call
+  per repo with the on-disk copy as the offline fallback; a set only partly priced reports 0,
+  since a partial sum reads as a small download for a large one.
 - **Servability comes from `autogen.AudioCppFamilySupport`, not from a second table.** A catalog
   that decided this for itself would advertise families the emitter then refuses. Unsupported
   families are listed with a `reason` rather than hidden, and the two failures read differently:

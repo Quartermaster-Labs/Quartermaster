@@ -35,14 +35,25 @@ ENGINE would make the user know which engine a model is for before they could lo
 picks the task (`tts` -> `tts`, Transcribe -> audio.cpp's `asr`), and the page's own search box
 filters the rows alongside the hub query.
 
-They cannot be hub search results, though, which is why they are their own rows rather than
-repos folded into the listing: ~70 families are published into a handful of shared GGUF repos, so
-the hub answers with hundreds of loose file names and nothing saying which family a name belongs
-to, which files are alternatives to each other, or that an `f5_tts` gguf is useless without the
-`vocab.txt` beside it. The rows sit above the hub's results under an `audio.cpp · N` label,
-because they behave differently: no downloads or likes to sort by, and what you pick is a curated
-file set instead of a quant off a repo page. Selecting one puts `AudioCppDetail` in the pane the
-repo page would occupy, and `selected`/`selectedAudio` clear each other.
+They cannot be hub *search* results, though: ~70 families are published into a handful of shared
+GGUF repos, so the hub answers with hundreds of loose file names and nothing saying which family a
+name belongs to, which files are alternatives to each other, or that an `f5_tts` gguf is useless
+without the `vocab.txt` beside it. So they are served from the catalog and prepended to the
+listing, **in the same row markup as every hub result** - avatar, name, publisher, size badge.
+They are ordinary Hugging Face repos, just curated ones, and a row that announced its engine would
+make the user care which engine a model is for before they have picked one. Downloads and likes
+are the only things left out, because they belong to the shared repo rather than to the family;
+faking them would be worse than omitting them. Selecting one puts `AudioCppDetail` in the pane the
+repo page would occupy (same header, same `data-table` file picker), and `selected`/`selectedAudio`
+clear each other.
+
+**Sizes come from the hub, with the local copy as the fallback.** The server sums the whole file
+SET per package (`sizeBytes`), since the gguf alone understates a package that ships a sidecar, and
+a set it can only partly price reports 0 rather than a small-looking total. One `Detail` call per
+repo, not per package. The row badge shows the recommended build's size, the same promise the repo
+rows' params badge makes; the detail table prices every build. The **Estimate** column has no
+audio.cpp equivalent: the planner behind it is LLM-shaped (layers, KV, expert share), so a verdict
+for a TTS gguf would be a confident wrong number.
 
 - **The catalog comes from the INSTALLED backend**, so a build without audio.cpp simply has no
   extra rows. A failed load is swallowed for the same reason: it means "no extra rows", and none

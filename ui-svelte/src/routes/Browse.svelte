@@ -452,6 +452,20 @@
         })
   );
 
+  // A family is published by whoever owns the repo its files come from, which
+  // is what makes the avatar and the author line work the same as every other
+  // row: these are ordinary Hugging Face repos, just curated ones.
+  function audioAuthor(f: AudioCppFamily): string {
+    return (f.packages[0]?.repo ?? "").split("/")[0] ?? "";
+  }
+
+  // The size the row shows is the RECOMMENDED build's, the one the server sorts
+  // first - the same promise the repo rows make, where the badge describes what
+  // you would most likely take rather than every file in the repo.
+  function audioSize(f: AudioCppFamily): number {
+    return f.packages[0]?.sizeBytes ?? 0;
+  }
+
   async function openModelsFolder(): Promise<void> {
     err = null;
     try {
@@ -837,48 +851,44 @@
          file/quant view separated by a divider rather than a gap. -->
     <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[22rem_1fr] border-t border-card-border bg-surface divide-y lg:divide-y-0 lg:divide-x divide-card-border">
       <div bind:this={resultsEl} onscroll={onResultsScroll} class="min-h-0 overflow-y-auto pretty-scroll">
-        <!-- audio.cpp's families, above the hub's results in the same list.
-             They are labelled rather than blended in because they behave
-             differently: no downloads or likes to sort by (they are one shared
-             repo), and what you pick is a curated file set instead of a quant
-             off a repo page. -->
-        {#if audioShown.length}
-          <div class="px-3 py-1.5 bg-secondary/40 border-b border-card-border font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary">
-            audio.cpp · {audioShown.length}
-          </div>
-          {#each audioShown as f (f.family)}
-            <button
-              class="w-full text-left px-3 py-2.5 border-b border-card-border-inner transition-colors relative {selectedAudio?.family === f.family
-                ? 'bg-secondary/60'
-                : 'hover:bg-secondary/40'}"
-              onclick={() => ((selectedAudio = f), (selected = null))}
-            >
-              {#if selectedAudio?.family === f.family}
-                <span class="absolute left-0 top-0 bottom-0 w-0.5 bg-primary"></span>
-              {/if}
-              <div class="flex items-start gap-2.5">
-                <div class="min-w-0 flex-1">
-                  <div class="flex items-center gap-1.5">
-                    <span class="font-mono text-xs text-txtmain truncate">{f.displayName}</span>
-                    {#if f.packages.some((p) => p.local)}
-                      <Check class="w-3 h-3 text-primary shrink-0" />
-                    {/if}
-                  </div>
-                  <div class="text-[0.65rem] text-txtsecondary truncate">{f.family}</div>
-                  <div class="mt-1 flex items-center gap-2 text-[0.65rem] text-txtsecondary tabular-nums">
-                    <span class="font-mono px-1.5 py-px rounded bg-secondary/70 text-txtmain">
-                      {f.packages.length}
-                      {f.packages.length === 1 ? "build" : "builds"}
-                    </span>
-                    {#if f.status && f.status !== "supported"}
-                      <span class="font-mono">{f.status}</span>
-                    {/if}
-                  </div>
+        <!-- audio.cpp's families lead the list, in the SAME row as every hub
+             result: they are ordinary Hugging Face repos, just curated ones, and
+             a row that announced its engine would make the user care which
+             engine a model is for before they have picked one. The two counters
+             a curated family has no answer for (downloads and likes belong to
+             the shared repo, not to the family) are left out rather than faked;
+             the size badge sits where the repo rows put theirs. -->
+        {#each audioShown as f (f.family)}
+          <button
+            class="w-full text-left px-3 py-2.5 border-b border-card-border-inner transition-colors relative {selectedAudio?.family === f.family
+              ? 'bg-secondary/60'
+              : 'hover:bg-secondary/40'}"
+            onclick={() => ((selectedAudio = f), (selected = null))}
+          >
+            {#if selectedAudio?.family === f.family}
+              <span class="absolute left-0 top-0 bottom-0 w-0.5 bg-primary"></span>
+            {/if}
+            <div class="flex items-start gap-2.5">
+              <HubAvatar author={audioAuthor(f)} source="hf" size="w-8 h-8" />
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-1.5">
+                  <span class="font-mono text-xs text-txtmain truncate">{f.displayName}</span>
+                  {#if f.packages.some((p) => p.gated)}<Lock class="w-3 h-3 text-warning shrink-0" />{/if}
+                </div>
+                <div class="text-[0.65rem] text-txtsecondary truncate">{audioAuthor(f)}</div>
+                <div class="mt-1 flex items-center gap-2 text-[0.65rem] text-txtsecondary tabular-nums">
+                  {#if audioSize(f)}
+                    <span class="font-mono px-1.5 py-px rounded bg-secondary/70 text-txtmain">{humanBytes(audioSize(f))}</span>
+                  {/if}
+                  <span>{f.packages.length} {f.packages.length === 1 ? "build" : "builds"}</span>
+                  {#if f.packages.some((p) => p.local)}
+                    <span class="ml-auto inline-flex items-center gap-0.5 shrink-0 text-success"><Check class="w-3 h-3" />downloaded</span>
+                  {/if}
                 </div>
               </div>
-            </button>
-          {/each}
-        {/if}
+            </div>
+          </button>
+        {/each}
         {#if searching && !results.length}
           <div class="p-3 text-xs text-txtsecondary">Loading Hugging Face…</div>
         {:else if !searched}
