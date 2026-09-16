@@ -182,9 +182,16 @@
   }
 
   // --- voice cloning (base models) -----------------------------------------
-  // POST /v1/audio/voices {model,name,wav_b64,ref_text?} → tts-server registers
-  // a cloned voice (base64 WAV, ref_text enables ICL clone mode). Path is
-  // rewritten to /v1/voices by the reverse proxy; auth via inferenceHeaders().
+  // POST /v1/audio/voices {model,name,wav_b64,ref_text} registers a cloned voice.
+  // Who answers depends on the engine: qwentts.cpp serves it at /v1/voices and the
+  // proxy rewrites the path, while audio.cpp has no such route at all and
+  // quartermaster writes the wav into its --voice-dir itself. Auth via
+  // inferenceHeaders().
+  //
+  // ref_text is REQUIRED, not a nicety. Cloning here is in-context learning: the
+  // engine conditions on the reference audio AND its transcript, so Qwen3 throws
+  // "voice clone ICL mode requires reference text" on a voice registered without
+  // one. The live-record path always has it because the passage is fixed.
   // Multi-step clone modal: step "choose" collects the name + method, then either
   // "live" (read a passage) or "clip" (upload a file).
   let showClone = $state(false);
@@ -1016,16 +1023,20 @@
             <textarea
               class="w-full px-3 py-2 rounded-md border border-card-border bg-surface text-[0.8125rem] resize-none focus:outline-none focus:ring-2 focus:ring-primary/40"
               rows="2"
-              placeholder="Reference transcript (optional - improves cloning)"
+              placeholder="Type exactly what is said in the clip"
               bind:value={newVoiceRefText}
             ></textarea>
+            <span class="text-xs text-txtsecondary -mt-1">
+              Required. Voice cloning is in-context: the engine is shown the clip AND its
+              transcript, so a clip with no text is a voice that cannot be spoken with.
+            </span>
             {#if createVoiceError}<span class="text-red-500 text-xs">{createVoiceError}</span>{/if}
             <div class="flex justify-end gap-2">
               <button class="px-2.5 py-1 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary text-[0.8125rem] transition-colors" onclick={closeClone}>Cancel</button>
               <button
                 class="px-2.5 py-1 rounded-md bg-primary text-btn-primary-text text-[0.8125rem] font-medium hover:bg-primary-hover disabled:opacity-40 transition-colors"
                 onclick={createVoice}
-                disabled={creatingVoice || !newVoiceFile}
+                disabled={creatingVoice || !newVoiceFile || !newVoiceRefText.trim()}
               >
                 {creatingVoice ? "Cloning…" : "Clone voice"}
               </button>
