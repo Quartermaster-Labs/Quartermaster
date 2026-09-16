@@ -315,14 +315,70 @@
     });
   }
 
+  // Every tab switch used to be a fresh round trip AND a page walk: runSearch
+  // asks the hub, then fillViewport pages up to MAX_AUTO_PAGES more times to
+  // overflow the pane, all sequential, all while the PREVIOUS tab's rows are
+  // still on screen (the list is only replaced once the answer lands). On a
+  // sparse category that is four hub requests before the page changes, which is
+  // why moving between tabs felt like the page was catching up with the click.
+  //
+  // So a tab keeps what it found. The snapshot is the whole list the user had
+  // scrolled up, not just its first page, plus where they were in it. Keyed by
+  // everything that changes the answer, so a filter change is a different list
+  // rather than a stale one.
+  const SEARCH_CACHE_MS = 5 * 60_000;
+  interface SearchSnapshot {
+    models: HubModel[];
+    nextSkip: number;
+    hasMore: boolean;
+    scrollTop: number;
+    at: number;
+  }
+  const searchCache = new Map<string, SearchSnapshot>();
+
+  function searchKey(): string {
+    return [kind, query.trim(), sort, filters.maxParamsB, filters.trendy ? 1 : 0].join("|");
+  }
+
+  // Called after anything that changes the list, and before leaving a tab: the
+  // scroll position is only knowable while the list is still mounted.
+  function snapshot(): void {
+    if (!searched) return;
+    searchCache.set(searchKey(), {
+      models: results,
+      nextSkip,
+      hasMore,
+      scrollTop: resultsEl?.scrollTop ?? 0,
+      at: searchCache.get(searchKey())?.at ?? Date.now(),
+    });
+  }
+
   // No "already searching, skip this one" guard: since the box searches as it is
   // typed, a search starting while one is in flight is the NORMAL case, and
   // dropping it would leave the list showing an older query's results. `searchSeq`
   // is what makes that safe — only the newest response is allowed to land, and
   // only it may clear the spinner.
-  async function runSearch(): Promise<void> {
+  // force is the refresh button: the same question asked again on purpose.
+  async function runSearch(force = false): Promise<void> {
     clearTimeout(typeTimer);
     lastSearched = query.trim();
+    const key = searchKey();
+    const hit = force ? undefined : searchCache.get(key);
+    if (hit && Date.now() - hit.at < SEARCH_CACHE_MS) {
+      // Bump the sequence so an older search still in flight cannot overwrite
+      // the list we just restored.
+      searchSeq++;
+      results = hit.models;
+      nextSkip = hit.nextSkip;
+      hasMore = hit.hasMore;
+      searched = true;
+      searching = false;
+      err = null;
+      void tick().then(() => {
+        if (resultsEl) resultsEl.scrollTop = hit.scrollTop;
+      });
+      return;
+    }
     searching = true;
     err = null;
     const seq = ++searchSeq;
@@ -335,6 +391,7 @@
       searched = true;
       selected = null;
       if (resultsEl) resultsEl.scrollTop = 0;
+      searchCache.set(key, { models: results, nextSkip, hasMore, scrollTop: 0, at: Date.now() });
       void fillViewport();
     } catch (e) {
       if (seq === searchSeq) err = e instanceof Error ? e.message : String(e);
@@ -379,6 +436,7 @@
         const fresh = page.models.filter((m) => !seen.has(m.id));
         if (fresh.length) {
           results = [...results, ...fresh];
+          snapshot();
           break;
         }
         if (!hasMore) break;
@@ -483,11 +541,21 @@
 
   function setKind(id: BrowseCategory): void {
     if (kind === id) return;
+    snapshot();
     kind = id;
     // The open repo belongs to the category that was showing, so drop it rather
     // than leave a TTS model docked beside a page of image repos.
     selected = null;
     selectedAudio = null;
+    // A tab with nothing cached has to ASK, and that takes as long as it takes -
+    // but the previous tab's rows must not sit under the new tab's heading while
+    // it does. Dropping them turns a page that looks stuck into one that is
+    // visibly loading. A cached tab never gets here: runSearch repaints it in
+    // the same frame.
+    if (!searchCache.has(searchKey())) {
+      results = [];
+      searched = false;
+    }
     runSearch();
   }
 
@@ -831,7 +899,7 @@
            of what the page already did, not the toolbar's primary action. -->
       <button
         class="icon-btn h-7 shrink-0"
-        onclick={runSearch}
+        onclick={() => runSearch(true)}
         disabled={searching}
         use:tip={query.trim() ? "Re-run this search" : "Refresh the listing"}
         aria-label="Refresh"
@@ -889,7 +957,12 @@
             </div>
           </button>
         {/each}
-        {#if searching && !results.length}
+        {#if (searching || loadingMore) && !results.length}
+          <!-- loadingMore counts here because fillViewport keeps paging after an
+               EMPTY first page: a sparse category answers page one with nothing
+               and hasMore, so without this the pane claims "nothing matched" for
+               the second and third request, then fills in. A wrong answer shown
+               confidently is worse than a spinner. -->
           <div class="p-3 text-xs text-txtsecondary">Loading Hugging Face…</div>
         {:else if !searched}
           <div class="p-3 text-xs text-txtsecondary">Search a hub to get started.</div>

@@ -123,6 +123,27 @@ Two things a naive infinite scroll gets wrong here and this one handles:
 
 A `searchSeq` counter drops a page still in flight from a superseded query.
 
+### A tab keeps what it found
+
+Those two mechanisms are what made switching tabs feel slow: `setKind` re-asks the hub, and on a
+sparse category the first page comes back **empty with `hasMore`**, so `fillViewport` pages up to
+`MAX_AUTO_PAGES` more times before anything renders. Measured cold against a live instance, that is
+4 sequential requests at 150-350ms each, and `results` is only replaced on success, so the previous
+tab's rows sit under the new tab's heading the whole time.
+
+So each tab caches its list. `searchCache` (5 min, session only) is keyed by everything that
+changes the answer: kind, trimmed query, sort, `maxParamsB`, `trendy`. It stores the **whole**
+accumulated list plus `scrollTop`, so returning to a tab restores the pages that were paged in and
+the place in them. A hit bumps `searchSeq` (an older response must not overwrite what was just
+restored), repaints in the same frame and skips the network entirely; `loadMore` re-snapshots so a
+grown list is what you come back to. The refresh button passes `force` and always re-asks.
+
+On a cache MISS, `setKind` clears `results` first: the request takes as long as it takes, but the
+old tab's rows must not be what is on screen while it runs. This happens only on a tab switch, never
+on debounced typing, where a per-keystroke flash to empty would be worse than a slightly stale list.
+`loadingMore` also holds the loading line up, or the empty first page of the walk reads as
+"nothing matched" for a second before the rows appear.
+
 The category tab row carries an **open-models-folder** button at its right end (`revealFolder()` →
 `POST /api/hub/reveal`) — the footer line that merely *named* the path was a string to read and
 retype, and is gone.
