@@ -659,9 +659,10 @@ func TestProcessCommand_ConcurrentRunStop(t *testing.T) {
 	}
 }
 
-// Both speech engines ship a binary named tts-server, but only qwentts.cpp keeps
-// its voice list at /v1/voices. Rewriting the path for TTS.cpp 404s its
-// /v1/audio/voices route, which the playground renders as "default voice only".
+// Only qwentts.cpp keeps its voice list at /v1/voices. Rewriting the path for any
+// other engine 404s its native /v1/audio/voices route, which the playground
+// renders as "default voice only" - it did that to TTS.cpp, and then to every
+// audio.cpp model, because the rule used to be "rewrite unless this is TTS.cpp".
 func TestProcessCommand_rewritesVoicesPath(t *testing.T) {
 	cases := []struct {
 		name string
@@ -669,11 +670,15 @@ func TestProcessCommand_rewritesVoicesPath(t *testing.T) {
 		want bool
 	}{
 		{"qwentts", []string{"tts-server", "--model", "talker.gguf", "--codec", "codec.gguf"}, true},
+		{"qwentts equals form", []string{"tts-server", "--model=talker.gguf", "--codec=codec.gguf"}, true},
 		{"ttscpp", []string{"tts-server", "--model-path", "Kokoro_Q8.gguf"}, false},
 		{"ttscpp equals form", []string{"tts-server", "--model-path=Kokoro_Q8.gguf"}, false},
-		{"llama-server", []string{"llama-server", "-m", "model.gguf"}, true},
+		// The regression this allowlist exists for: audiocpp_server serves
+		// /v1/audio/voices itself and has no /v1/voices.
+		{"audiocpp", []string{"audiocpp_server", "--config", "m.json", "--voice-dir", "voices"}, false},
+		{"llama-server", []string{"llama-server", "-m", "model.gguf"}, false},
 		// A path that merely mentions the flag is not the flag.
-		{"lookalike path", []string{"llama-server", "-m", "/models/--model-path/x.gguf"}, true},
+		{"lookalike path", []string{"tts-server", "--model", "/models/--codec/x.gguf"}, false},
 	}
 	for _, c := range cases {
 		if got := rewritesVoicesPath(c.args); got != c.want {

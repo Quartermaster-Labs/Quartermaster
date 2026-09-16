@@ -834,7 +834,14 @@ func (s *Server) routes() {
 	dispatch := http.HandlerFunc(s.localPeerHandler)
 
 	for _, path := range modelPostJSONRoutes {
-		mux.Handle("POST "+path, modelChain.Then(dispatch))
+		var h http.Handler = dispatch
+		if path == "/v1/audio/voices" {
+			// audio.cpp has no POST voices route at all - a registered voice IS a
+			// wav in its --voice-dir - so quartermaster writes the file itself for
+			// those models and forwards everyone else's. See audiocppvoices.go.
+			h = s.handleAudioCppVoicePost(dispatch)
+		}
+		mux.Handle("POST "+path, modelChain.Then(h))
 	}
 	for _, path := range modelPostFormRoutes {
 		mux.Handle("POST "+path, modelChain.Then(dispatch))
@@ -853,7 +860,11 @@ func (s *Server) routes() {
 		mux.Handle("GET "+path, modelChain.Then(h))
 	}
 	for _, path := range modelDeleteRoutes {
-		mux.Handle("DELETE "+path, modelChain.Then(dispatch))
+		var h http.Handler = dispatch
+		if path == "/v1/audio/voices/{name}" {
+			h = s.handleAudioCppVoiceDelete(dispatch)
+		}
+		mux.Handle("DELETE "+path, modelChain.Then(h))
 	}
 
 	// Async video generation, sd-server's native job API. The POST names its

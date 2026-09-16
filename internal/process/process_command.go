@@ -502,19 +502,30 @@ func (p *ProcessCommand) run() {
 }
 
 // rewritesVoicesPath reports whether this upstream needs /v1/audio/voices mapped
-// onto /v1/voices. Two different speech engines ship a binary called tts-server:
-// qwentts.cpp (loads a talker with --model plus a paired --codec, voices under
-// /v1/voices) and mmwillet/TTS.cpp (loads a self-contained gguf with
-// --model-path, voices under /v1/audio/voices). The flag is the only reliable
-// discriminator - the exe name is identical - and it is token-exact, so a path
-// that merely contains the string cannot trip it.
+// onto /v1/voices. Exactly ONE engine does: qwentts.cpp, whose tts-server keeps
+// its voice list at /v1/voices. Every other speech backend here serves the
+// OpenAI-style path itself, so for them the rewrite is a 404 the playground
+// renders as "default voice only".
+//
+// This is an ALLOWLIST on purpose. It was written the other way round - rewrite
+// unless the argv carries TTS.cpp's --model-path - and that shape is wrong by
+// construction: it assumes every engine that is not the one known exception
+// behaves like qwentts.cpp, so each new speech backend silently inherits a
+// rewrite it never asked for. audio.cpp then did exactly that. It serves GET
+// /v1/audio/voices and has no /v1/voices at all (app/server/runtime.cpp), so
+// every audio.cpp model showed an empty voice list, which for a clone-only
+// package like Qwen3-TTS Base means it cannot be spoken with at all.
+//
+// --codec is the qwentts tell: it loads a talker gguf plus a paired audio
+// tokenizer, and nothing else here takes that flag (configapi.go reads it the
+// same way). Token-exact, so a path that merely contains the string is not it.
 func rewritesVoicesPath(args []string) bool {
 	for _, a := range args {
-		if a == "--model-path" || strings.HasPrefix(a, "--model-path=") {
-			return false
+		if a == "--codec" || strings.HasPrefix(a, "--codec=") {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout time.Duration) startResult {

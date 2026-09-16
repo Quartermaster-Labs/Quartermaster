@@ -61,6 +61,12 @@ Also here: `turns_design.md` — the turn runner's design notes.
   behind. It shares the process layer's ONE `SetSpawnArgs` slot with the live-VRAM placement
   guard (`WireDynamicOffload`) and runs first, because it only ever appends. The file is
   rewritten per spawn and deliberately not deleted on stop.
+- **An audio.cpp voice IS a wav in `--voice-dir`** (`audiocppvoices.go`). audio.cpp serves GET
+  `/v1/audio/voices` by scanning that directory live and has no POST route, so quartermaster
+  answers the playground's clone POST itself: it writes `<voice-dir>/<name>.wav` plus a
+  `<name>|<transcript>` line in `prompt_text`, WITHOUT starting the model (the scan is per
+  request). Without this the clone-only packages, Qwen3-TTS Base among them, can be loaded but
+  never spoken with. Requests for every other speech engine pass straight through.
 - **The config editor is `-generate`-only** — every handler 501s when `s.autogen == nil`.
 
 ## Connections
