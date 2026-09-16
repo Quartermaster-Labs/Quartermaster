@@ -8,7 +8,6 @@
   // A dedicated strip rather than window buttons tucked into StatusRail,
   // because StatusRail only exists in dashboard mode. Loading, login and the
   // playground shell would otherwise be windows with no way to close them.
-  import { push } from "svelte-spa-router";
   import * as native from "../lib/native";
   import { tip } from "../lib/tooltip";
   import { appTitle, connectionState, isDarkMode } from "../stores/theme";
@@ -36,11 +35,13 @@
   let { home = false }: { home?: boolean } = $props();
 
   // The wordmark is the ONLY way back to the dashboard -- it is not a tab, it is
-  // what the window is, with tabs opened on top of it. So this both drops the
-  // active tab and puts the router back on the dashboard's own home page.
-  function goHome(): void {
+  // what the window is, with tabs opened on top of it. So it drops the active
+  // tab and nothing more: the dashboard is only hidden while a tab is up, never
+  // unmounted, so its router is still on whatever page the user left. Pushing
+  // "/" here would throw that page away and make every return trip land on the
+  // home page, which is not what "go back" means.
+  function goBack(): void {
     showDashboard();
-    push("/");
   }
 
   // The whole bar is a drag handle, and a drag is a mousedown the window
@@ -122,8 +123,8 @@
         class="cursor-pointer truncate text-micro font-medium tracking-wide text-txtsecondary transition-colors hover:text-txtmain"
         onmousedown={keepClickable}
         ondblclick={keepClickable}
-        onclick={goHome}
-        use:tip={"Go to the dashboard"}
+        onclick={goBack}
+        use:tip={"Back to the main window"}
       >
         {$appTitle}
       </button>
