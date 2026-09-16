@@ -165,7 +165,7 @@ func ComposeCmd(lines []string, custom string) (ComposedCmd, error) {
 			if known && def.Knob != "" && owned[def.Knob] {
 				dropped = true
 				appendGen(tok, def.Knob, true)
-				if def.Value && !inline && i+1 < len(toks) {
+				for n := 0; def.Value && !inline && n <= def.ExtraValues && i+1 < len(toks); n++ {
 					i++
 					appendGen(toks[i], def.Knob, true)
 				}
@@ -173,7 +173,7 @@ func ComposeCmd(lines []string, custom string) (ComposedCmd, error) {
 			}
 			kept = append(kept, tok)
 			appendGen(tok, TokenKnob(tok), false)
-			if known && def.Value && !inline && i+1 < len(toks) {
+			for n := 0; known && def.Value && !inline && n <= def.ExtraValues && i+1 < len(toks); n++ {
 				i++
 				kept = append(kept, toks[i])
 				appendGen(toks[i], "", false)

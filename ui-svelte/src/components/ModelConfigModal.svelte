@@ -10,6 +10,9 @@
     previewCmd,
     getSettings,
     pickFileOfKind,
+    getModelLoras,
+    type LoraListing,
+    type LoraRef,
     type ModelConfig,
     type ModelOverride,
     type ModelVariant,
@@ -19,7 +22,7 @@
   } from "../stores/api";
   import { get } from "svelte/store";
   import { tick } from "svelte";
-  import { FolderOpen, HelpCircle, X } from "lucide-svelte";
+  import { FolderOpen, HelpCircle, Plus, X } from "lucide-svelte";
   import { tip } from "../lib/tooltip";
   import { askConfirm } from "../lib/confirm";
   import VramGauge from "./VramGauge.svelte";
@@ -116,6 +119,17 @@
   // variants): "" / "ram" = host RAM, "gpu" = VRAM, "none" = no image input at
   // all. The -vision twin has its own pin on the reserved vision variant.
   let mmprojMode = $state("");
+  // LoRA adapters bound into this model at spawn. A list rather than a single
+  // path because llama-server accumulates --lora, and rather than free text in
+  // extraArgs because the emitter has to resolve bare names against the LoRA
+  // folder (and because --lora is Additive, a copy in extraArgs would ADD a
+  // second adapter rather than correct the first).
+  let loras = $state<LoraRef[]>([]);
+  // What sits in the folder those bare names resolve against, fetched per model.
+  // dir is carried so an empty or surprising list can say which folder it read;
+  // with no LoRA folder configured the ladder ends at the model's OWN directory,
+  // where the "adapters" on offer are really its base weights.
+  let loraList = $state<LoraListing>({ dir: "", files: [] });
   // Boolean toggles. Stored as strings on the override ("" = default-on, "off" =
   // forced off); surfaced here as plain on/off checkboxes (auto state dropped).
   let reasoningOn = $state(true); // false => reasoningFmt "off"
@@ -411,7 +425,7 @@
       selectedV?.specDraftNMax, selectedV?.specDefault, selectedV?.specNgramSizeN, selectedV?.specNgramSizeM, selectedV?.specNgramMinHits,
       // Advanced knobs (Default via adv, variant via selectedV) — deep-read so any
       // nested change re-renders the launch-command preview.
-      JSON.stringify(adv), JSON.stringify(selectedV),
+      JSON.stringify(adv), JSON.stringify(selectedV), JSON.stringify(loras),
     ];
     void deps;
     if (!open || !config || !modelId) return;
@@ -751,6 +765,9 @@
     spec = o?.spec ?? "";
     // "ram" and blank are the same placement; collapse so the select matches.
     mmprojMode = (o?.mmproj ?? "") === "ram" ? "" : (o?.mmproj ?? "");
+    // Copied, not aliased: the rows are edited in place and o is the loaded
+    // config, which the cancel path restores from.
+    loras = (o?.loras ?? []).map((l) => ({ path: l.path, scale: l.scale ?? null }));
     backend = o?.backend ?? "";
     vllmGpuUtil = o?.vllmGpuUtil ? o.vllmGpuUtil : "";
     vllmTensorParallel = o?.vllmTensorParallel ? o.vllmTensorParallel : "";
@@ -1004,6 +1021,30 @@
     estTimer = setTimeout(runEstimate, 100);
   });
 
+  // The adapter list is a property of the FOLDER, not of the form, so it is
+  // fetched once per model open rather than on every edit: re-reading a
+  // directory on each keystroke would be the same cost as the estimate for none
+  // of the benefit. Same mode guard as the estimate, because --lora is a
+  // llama-server flag and the other backends have their own LoRA stories (or
+  // none).
+  $effect(() => {
+    modelId;
+    open;
+    if (!open || !modelId || imageMode || audioMode || samMode || threeDMode || isVllm) {
+      loraList = { dir: "", files: [] };
+      return;
+    }
+    void (async () => {
+      try {
+        loraList = await getModelLoras(modelId);
+      } catch {
+        // A failed listing costs the picker its suggestions, nothing else: the
+        // path field still takes a typed name, so there is no error to raise.
+        loraList = { dir: "", files: [] };
+      }
+    })();
+  });
+
   async function runEstimate() {
     if (!modelId || !config) return;
     const seq = ++estSeq;
@@ -1139,6 +1180,10 @@
       specNgramSizeN: specNgramSizeN === "" ? 0 : Number(specNgramSizeN),
       specNgramSizeM: specNgramSizeM === "" ? 0 : Number(specNgramSizeM),
       specNgramMinHits: specNgramMinHits === "" ? 0 : Number(specNgramMinHits),
+      // Blank rows are dropped here as well as server-side: the launch-command
+      // preview re-renders on every keystroke, and a half-typed row would
+      // otherwise flash a --lora with no filename into the box.
+      loras: loras.filter((l) => l.path.trim() !== "").map((l) => ({ path: l.path.trim(), scale: l.scale })),
       ...advToOverride(),
       // Launch text. llama-server composes customArgs; vllm and the image/audio/
       // SAM emitters still read the legacy extraArgs bucket, so the same box
@@ -2325,6 +2370,64 @@
               ><FolderOpen size={14} /></button>
             </div>
           </label>
+
+          {#if !isVllm}
+            <div class="flex flex-col gap-1 text-sm col-span-2">
+              <span class="text-txtsecondary flex items-center gap-1">
+                LoRA adapters
+                {@render hint("--lora / --lora-scaled. Adapters merged into this model when it loads. llama.cpp has no LoRA folder flag - each adapter is named at launch and stays bound for the life of the process - so this is a per-model choice, not a per-request one like the image tab's. A bare filename resolves against the LLM LoRA folder (Models page, LLM tab); an absolute path is used as written. Leave the strength blank for llama.cpp's own 1.0. Zero is not the same as removing the row: the adapter still loads, inert, and a request can raise it with \"lora\":[{id,scale}].")}
+                <!-- No knobBadge: --lora is Additive, so a copy in the launch
+                     box ADDS an adapter rather than taking the knob over, and
+                     the "owned by custom args" state this badge reports can
+                     never happen for it. -->
+              </span>
+              {#each loras as l, i (i)}
+                <div class="flex items-center gap-2">
+                  <input
+                    type="text" list="lora-files" bind:value={l.path}
+                    class="cfg-input flex-1 font-mono" placeholder="adapter.gguf" spellcheck="false"
+                    aria-label="LoRA adapter path"
+                  />
+                  <input
+                    type="number" step="0.05"
+                    value={l.scale ?? ""}
+                    oninput={(e) => {
+                      const raw = (e.currentTarget as HTMLInputElement).value;
+                      // Emptying a number input hands back "", and Number("") is
+                      // 0 - which here means "load it inert", not "unset". Map
+                      // the empty box to null explicitly.
+                      l.scale = raw === "" ? null : Number(raw);
+                    }}
+                    class="cfg-input w-24 font-mono" placeholder="1.0"
+                    aria-label="LoRA strength"
+                  />
+                  <button
+                    type="button" use:tip={"Remove this adapter"} aria-label="Remove this LoRA adapter"
+                    class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
+                    onclick={() => (loras = loras.filter((_, n) => n !== i))}
+                  ><X size={14} /></button>
+                </div>
+              {/each}
+              <div class="flex items-center gap-2">
+                <button
+                  type="button" class="btn btn--sm inline-flex items-center gap-1"
+                  onclick={() => (loras = [...loras, { path: "", scale: null }])}
+                ><Plus size={14} /> Add adapter</button>
+                {#if loraList.dir}
+                  <span class="min-w-0 truncate font-mono text-[0.65rem] text-txtsecondary" title={loraList.dir}>
+                    {loraList.files.length} in {loraList.dir}
+                  </span>
+                {/if}
+              </div>
+              <!-- Shared by every row's input: the browser dedupes suggestions,
+                   and one list beats one per row when a folder holds dozens. -->
+              <datalist id="lora-files">
+                {#each loraList.files as f (f.name)}
+                  <option value={f.name}></option>
+                {/each}
+              </datalist>
+            </div>
+          {/if}
 
           {#if effSpecs.includes("draft-mtp") || effSpecs.includes("draft-dflash")}
             <label class="flex flex-col gap-1 text-sm">

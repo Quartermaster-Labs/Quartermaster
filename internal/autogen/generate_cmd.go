@@ -635,6 +635,10 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		if ov.OverrideTensor != "" {
 			lines = append(lines, fmt.Sprintf("-ot %s", ov.OverrideTensor))
 		}
+		// LoRA adapters, one flag each. Last so a user's extraArgs (appended
+		// after this whole block) can still add more: --lora is Additive in the
+		// flag table, so a custom occurrence does NOT drop these.
+		lines = append(lines, llmLoraLines(s, ov, row.FullPath)...)
 	}
 	return lines
 }

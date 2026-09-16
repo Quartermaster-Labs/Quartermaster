@@ -1584,7 +1584,7 @@
       <div class="mt-6">
         <div class="flex items-baseline gap-2 mb-1">
           <h6>LoRA folder</h6>
-          {@render hint("Where the image backend looks for LoRA files (--lora-model-dir), for every image and video model that has no folder of its own. Highest wins: a per-model LoRA folder in the model config editor, then the per-category folder on the Models page, then this value, then each model's own folder, which is the default.")}
+          {@render hint("The fallback LoRA folder for every category that has no folder of its own on the Models page. For image and video it is handed to the backend as --lora-model-dir, the folder it lists and each request picks from. For text models it is only a base path: llama.cpp names each adapter at launch, so the adapters themselves are attached per model in the config editor, and a bare filename there resolves against this folder. Highest wins: a per-model LoRA folder in the model config editor, then the per-category folder on the Models page, then this value, then each model's own folder, which is the default.")}
         </div>
         <div class="flex items-center gap-2 max-w-2xl">
           <input

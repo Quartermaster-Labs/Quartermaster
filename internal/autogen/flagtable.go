@@ -49,8 +49,14 @@ type FlagDef struct {
 	Name    string   // canonical spelling, as the emitter writes it
 	Aliases []string // other spellings llama-server accepts for the same knob
 	Knob    string   // setting the flag controls; "" = structural, no override field
-	Value   bool     // takes exactly one value token
-	Repeat  RepeatPolicy
+	Value   bool     // takes at least one value token
+	// ExtraValues is how many value tokens follow the first. Only
+	// --lora-scaled (FNAME SCALE) needs it today. It matters because the
+	// token walk in customargs.go consumes a flag's values along with it: an
+	// under-counted flag leaves its trailing value stranded as a bare token,
+	// which then looks like a positional argument to everything downstream.
+	ExtraValues int
+	Repeat      RepeatPolicy
 }
 
 // llamaFlagTable lists every llama-server flag quartermaster emits, plus the
@@ -166,6 +172,13 @@ var llamaFlagTable = []FlagDef{
 	{Name: "--rope-freq-base", Knob: "ropeFreqBase", Value: true},
 	{Name: "--yarn-orig-ctx", Knob: "yarnOrigCtx", Value: true},
 	{Name: "-ot", Aliases: []string{"--override-tensor"}, Knob: "overrideTensor", Value: true},
+
+	// LoRA adapters. Additive, unlike almost everything else here: llama-server
+	// accumulates --lora occurrences, so a user who adds one in custom args
+	// means "and this one too", not "instead of the model's". Both spellings
+	// share the knob so ownership is coherent either way.
+	{Name: "--lora", Knob: "loras", Value: true, Repeat: Additive},
+	{Name: "--lora-scaled", Knob: "loras", Value: true, ExtraValues: 1, Repeat: Additive},
 }
 
 // llamaFlagIndex maps every spelling (canonical name and alias) to its def.
@@ -232,11 +245,16 @@ func OwnedKnobs(tokens []string) map[string]bool {
 		if !ok {
 			continue
 		}
-		if d.Knob != "" {
+		// An Additive flag is never "owned": llama-server accumulates its
+		// occurrences, so a custom --lora means "and this one too". Marking it
+		// owned would drop every generated occurrence AND have
+		// ClearOwnedFields wipe the model's adapter list, turning an addition
+		// into a silent replacement.
+		if d.Knob != "" && d.Repeat != Additive {
 			owned[d.Knob] = true
 		}
 		if d.Value && !inline {
-			i++
+			i += 1 + d.ExtraValues
 		}
 	}
 	return owned

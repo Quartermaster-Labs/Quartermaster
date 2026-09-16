@@ -445,15 +445,18 @@ func (s *Server) handleAPISlotCachePut(w http.ResponseWriter, r *http.Request) {
 // handleAPISettingsRootPick opens the host's native folder dialog and, when the
 // user picks a folder, sets it as the scan folder for the given UI category
 // (body {category}), then regenerates + reloads. 204 when the user cancels.
+// With {clear:true} it drops the category back to the shared modelsRoot instead
+// of opening a dialog, which is the only way back once one is set.
 func (s *Server) handleAPISettingsRootPick(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAutogen(w, r) {
 		return
 	}
 	var body struct {
 		Category string `json:"category"`
+		Clear    bool   `json:"clear"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Category) == "" {
-		shared.SendResponse(w, r, http.StatusBadRequest, "body must be {category: <non-empty>}")
+		shared.SendResponse(w, r, http.StatusBadRequest, "body must be {category: <non-empty>, clear?: bool}")
 		return
 	}
 	// Reject an unknown category rather than storing a root RootList will never
@@ -464,14 +467,24 @@ func (s *Server) handleAPISettingsRootPick(w http.ResponseWriter, r *http.Reques
 		shared.SendResponse(w, r, http.StatusBadRequest, "unknown model category: "+category)
 		return
 	}
-	path, err := pickFolder()
-	if err != nil {
-		shared.SendResponse(w, r, http.StatusInternalServerError, "folder picker failed: "+err.Error())
-		return
-	}
-	if strings.TrimSpace(path) == "" {
-		w.WriteHeader(http.StatusNoContent) // user cancelled
-		return
+	// Clearing is a separate REQUEST rather than a blank dialog result, because
+	// the dialog cannot express it: an empty path back from pickFolder means the
+	// user cancelled, and treating that as "clear" would wipe the folder every
+	// time someone opened the picker and changed their mind. Without this branch
+	// the store's own clear path (UpsertSidecarRoot with "") is unreachable and
+	// a category root, once set, can only ever be swapped for another absolute
+	// path - never handed back to the shared modelsRoot.
+	var path string
+	if !body.Clear {
+		var err error
+		if path, err = pickFolder(); err != nil {
+			shared.SendResponse(w, r, http.StatusInternalServerError, "folder picker failed: "+err.Error())
+			return
+		}
+		if strings.TrimSpace(path) == "" {
+			w.WriteHeader(http.StatusNoContent) // user cancelled
+			return
+		}
 	}
 	if _, err := autogen.UpsertSidecarRoot(s.autogen.GeneratePath, category, path); err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())

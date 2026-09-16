@@ -200,12 +200,18 @@ type Settings struct {
 	// a LoRA next to the checkpoint it was trained for is zero-config. A per-model
 	// Override.LoraDir still wins over both.
 	LoraDir string `yaml:"loraDir"`
-	// LoraDirs narrows LoraDir per UI category ("image"|"video" -> path), for the
-	// common case where image LoRAs and video LoRAs are two different trees (a
-	// ComfyUI install keeps models/loras and its video LoRAs apart, and a Wan
-	// LoRA is not loadable by an SDXL checkpoint anyway). Only these two keys
-	// mean anything today: --lora-model-dir is an sd-server flag, and sd-server
-	// is the only backend serving a category with a LoRA concept.
+	// LoraDirs narrows LoraDir per UI category (category id -> path), for the
+	// common case where each kind of LoRA lives in its own tree (a ComfyUI
+	// install keeps models/loras and its video LoRAs apart, and a Wan LoRA is
+	// not loadable by an SDXL checkpoint anyway). Three keys mean something:
+	//
+	//   "image", "video" — the sd-server `--lora-model-dir`, whole-directory:
+	//     the backend lists everything in it and a REQUEST picks which to apply.
+	//   "llm"            — the folder a model's Override.Loras entries resolve
+	//     bare filenames against. llama-server has no directory flag at all
+	//     (`--lora FNAME` names one adapter file, baked in at spawn), so this
+	//     key is a browse root and a base path, NOT a flag. On its own it emits
+	//     nothing; it only has an effect once a model lists adapters.
 	//
 	// Resolution order is Override.LoraDir -> LoraDirs[category] -> LoraDir ->
 	// the model gguf's own directory, so LoraDir stays the fleet-wide fallback
@@ -538,6 +544,19 @@ type GroupSpec struct {
 	Coexist bool     `yaml:"coexist"`
 }
 
+// LoraRef is one llama-server LoRA adapter attached to a model.
+//
+// Scale is a POINTER because 0 is a meaningful value here, not an absent one:
+// llama.cpp loads an adapter at scale 0 as inert-but-present, which is the
+// documented way to keep several adapters available and pick between them with
+// a request's `"lora":[{"id":N,"scale":F}]`. Zero-gating would make that
+// arrangement unexpressible. nil => emit plain `--lora` and take llama.cpp's
+// own 1.0; set => emit `--lora-scaled <path> <scale>`.
+type LoraRef struct {
+	Path  string   `yaml:"path"`
+	Scale *float64 `yaml:"scale,omitempty"`
+}
+
 // Override supplies what gguf metadata can't, matched by a path glob against the
 // gguf's full path (first match wins; optional Quant scopes the match to one
 // quant of a multi-quant repo). Mirrors the PowerShell $Overrides rows.
@@ -807,7 +826,18 @@ type Override struct {
 	LlmVisionPath string `yaml:"llmVisionPath"`
 	// LoraDir is this model's `--lora-model-dir`. Empty => settings.loraDir, and
 	// if that is empty too, the directory the model gguf itself lives in.
+	// sd-server models only; the llama-server path uses Loras below.
 	LoraDir string `yaml:"loraDir"`
+	// Loras are the LoRA adapters attached to a LLAMA-SERVER model, emitted as
+	// one `--lora`/`--lora-scaled` per entry. Unlike the sd-server side there is
+	// no directory flag: llama.cpp binds adapters at spawn, so which adapters a
+	// model runs with is a per-model decision, not a per-request one.
+	//
+	// A relative Path resolves against settings.loraDirs["llm"], then
+	// settings.loraDir, then the model gguf's own directory (see
+	// resolveLlmLoraDir); an absolute Path is used as written. Empty => no flag,
+	// which is every existing model.
+	Loras []LoraRef `yaml:"loras"`
 	// Placement tri-states: "" => the generator default (shown), "on"/"off" pin it.
 	//   OffloadToCpu: "" => auto (sizer offloads when weights+compute don't fit)
 	//   TeOnCpu:      "" => on  (--backend te=cpu); "off" keeps the encoder on GPU
