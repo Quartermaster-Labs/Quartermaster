@@ -89,29 +89,44 @@ func TestServer_removePromptText(t *testing.T) {
 	}
 }
 
-func TestServer_annotateAudioCppVoices(t *testing.T) {
-	dir := t.TempDir()
+func TestServer_listAudioCppVoices(t *testing.T) {
+	root := t.TempDir()
+	model := filepath.Join(root, "model.gguf") // a file: embeddings/ hangs off the dir
+	voiceDir := filepath.Join(root, "voices")
+	if err := os.MkdirAll(filepath.Join(root, "embeddings"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"ethan.safetensors", "notes.txt"} {
+		if err := os.WriteFile(filepath.Join(root, "embeddings", n), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	wav := base64.StdEncoding.EncodeToString([]byte("RIFF"))
-	if err := writeAudioCppVoice(dir, audioCppVoiceReq{Name: "radu", WavB64: wav}); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	// audio.cpp flattens presets, embeddings and voice-dir wavs into one bare
-	// list, so "ethan" (a built-in) and "radu" (our clone) arrive identical.
-	got, ok := annotateAudioCppVoices([]byte(`{"voices":["ethan","radu"]}`), dir)
-	if !ok {
-		t.Fatal("well-formed voice list refused")
-	}
-	const want = `{"voices":[{"name":"ethan","kind":"speaker"},{"name":"radu","kind":"registered"}]}`
-	if string(got) != want {
-		t.Errorf("annotated = %s\nwant       %s", got, want)
+	for _, n := range []string{"radu", "aaa"} {
+		if err := writeAudioCppVoice(voiceDir, audioCppVoiceReq{Name: n, WavB64: wav}); err != nil {
+			t.Fatalf("write %s: %v", n, err)
+		}
 	}
 
-	// Anything that is not that shape passes through untouched rather than being
-	// rewritten into a valid-looking empty list.
-	if _, ok := annotateAudioCppVoices([]byte(`{"error":"nope"}`), dir); ok {
-		t.Error("an error payload was annotated")
+	// The model path names a gguf, so embeddings/ is looked for beside it.
+	got := listAudioCppVoices(voiceDir, filepath.Dir(model))
+	want := []audioCppVoice{
+		{Name: "aaa", Kind: "registered"},
+		{Name: "ethan", Kind: "speaker"},
+		{Name: "radu", Kind: "registered"},
 	}
-	if _, ok := annotateAudioCppVoices([]byte(`{"voices":[{"name":"a"}]}`), dir); ok {
-		t.Error("an already-annotated list was re-annotated")
+	if len(got) != len(want) {
+		t.Fatalf("listAudioCppVoices = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("voice %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	// prompt_text is not a voice, and a model with neither directory is not an
+	// error - it is a model nobody has cloned onto yet.
+	if v := listAudioCppVoices(filepath.Join(root, "nope"), filepath.Join(root, "nope")); len(v) != 0 {
+		t.Errorf("absent dirs listed %+v", v)
 	}
 }

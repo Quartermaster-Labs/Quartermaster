@@ -67,10 +67,14 @@ Also here: `turns_design.md` — the turn runner's design notes.
   `<name>|<transcript>` line in `prompt_text`, WITHOUT starting the model (the scan is per
   request). Without this the clone-only packages, Qwen3-TTS Base among them, can be loaded but
   never spoken with. Requests for every other speech engine pass straight through.
-  The GET is wrapped too: audio.cpp reports bare names, and the playground reads qwentts.cpp's
-  `kind` field to tell a clone from a built-in speaker. Unannotated, the first clone flipped a
-  clone-only model into "fixed pack" and removed the Clone and delete buttons. We own the
-  voice dir, so kind is a stat, not a guess.
+  The GET is **answered**, not forwarded: for our models the list is two directories on disk
+  (`--voice-dir` wavs and `<model path>/embeddings`), because we generate audio.cpp's config
+  and never emit `voice_presets`. That buys two things. Each name gets the `kind` qwentts.cpp
+  reports and audio.cpp does not, which the playground reads to tell a base model from a fixed
+  speaker pack (unannotated, the first clone flipped a clone-only model into "fixed pack" and
+  removed the Clone and delete buttons). And listing voices no longer loads the model, which is
+  surfaced as the `voice_list_offline` capability so the playground stops waiting for a running
+  model before it refreshes.
 - **The config editor is `-generate`-only** — every handler 501s when `s.autogen == nil`.
 
 ## Connections

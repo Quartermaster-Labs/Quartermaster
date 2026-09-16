@@ -186,6 +186,17 @@ func (s *Server) modelStatus() []apiModel {
 			runningCmd, _ = s.local.LaunchedCmd(id)
 		}
 		_, capsMap, _, _ := renderCapabilities(mc.Capabilities)
+		// Whether the voice list can be read WITHOUT loading the model. For every
+		// other speech engine the list lives inside the process, so the playground
+		// must not fetch it on tab open; for audio.cpp we answer it off disk
+		// (audiocppvoices.go), and gating on "model is ready" there is what hid a
+		// freshly cloned voice from the picker.
+		if !mc.AudioCpp.Empty() {
+			if capsMap == nil {
+				capsMap = map[string]any{}
+			}
+			capsMap["voice_list_offline"] = true
+		}
 		gid := modelGroup[id]
 		info := config.ParseCmd(mc.Cmd)
 		ctxSize := 0

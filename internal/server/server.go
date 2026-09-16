@@ -858,8 +858,9 @@ func (s *Server) routes() {
 			h = s.filterLorasResponse(dispatch)
 		}
 		if path == "/v1/audio/voices" {
-			// audio.cpp reports bare voice names; the playground needs to know
-			// which of them are clones it may delete. See audiocppvoices.go.
+			// For audio.cpp the list is two directories we own, so it is read
+			// straight off disk: no model load, and each name tagged with whether
+			// it is a clone or shipped with the model. See audiocppvoices.go.
 			h = s.handleAudioCppVoicesGet(dispatch)
 		}
 		mux.Handle("GET "+path, modelChain.Then(h))

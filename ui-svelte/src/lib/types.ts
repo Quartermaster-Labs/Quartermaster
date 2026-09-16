@@ -25,6 +25,11 @@ export interface ModelCapabilities {
   // (qwentts.cpp). Not implied by audio_speech: TTS.cpp/Kokoro synthesizes from a
   // fixed voice pack and has no clone route.
   voice_clone?: boolean;
+  // The voice list can be read WITHOUT loading the model, because quartermaster
+  // serves it off disk (audio.cpp: a voice is a wav in --voice-dir). Every other
+  // engine keeps the list inside the process, so fetching it there costs a full
+  // model load and the playground must wait until one is already running.
+  voice_list_offline?: boolean;
   // Effort levels this model's chat template validates, e.g. ["xhigh","medium",
   // "low"]. Absent = the template has no reasoning_effort ladder, so the
   // composer offers a plain on/off instead of levels. Sending anything off this

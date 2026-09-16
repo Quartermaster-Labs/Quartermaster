@@ -75,6 +75,12 @@
   // A base model has no named speakers → its "" default is valid and it accepts
   // voice clones. A custom_voice model has speakers and REQUIRES a named voice.
   let isBaseModel = $derived(canClone && availableVoices.includes("") && !isVoiceDesign);
+  // Can the voice list be fetched without loading the model? Declared by the
+  // server: audio.cpp's list is two directories quartermaster reads itself, every
+  // other engine keeps it inside the process. Without this the list is only ever
+  // refreshed for a loaded model, so a clone registered against an idle one was
+  // written to disk and then left out of the picker.
+  let voicesOffline = $derived($models.find((m) => m.id === $selectedModelStore)?.capabilities?.voice_list_offline ?? false);
   let activePreset = $derived(allPresets.find((p) => p.name === $selectedPresetStore) ?? null);
   // Is the selected model actually loaded? When idle, the voice list is whatever
   // was cached last — cloned/designed voices only appear after a refresh loads
@@ -145,7 +151,7 @@
       // or the first generation (which loads the model anyway) fetches fresh.
       applyVoices(cachedVoices(model));
     }
-    if (model && ready && model !== lastFetchedModel) {
+    if (model && (ready || voicesOffline) && model !== lastFetchedModel) {
       lastFetchedModel = model;
       refreshVoices();
     }
@@ -659,8 +665,8 @@
               {isVoiceDesign ? "Voice preset" : "Voice"}
               {#if !isVoiceDesign}
                 <span
-                  class="w-1.5 h-1.5 rounded-full {modelReady ? 'bg-green-500' : 'bg-txtsecondary/40'}"
-                  use:tip={modelReady ? "Model loaded - voice list is live" : "Model not loaded - voice list is from cache"}
+                  class="w-1.5 h-1.5 rounded-full {modelReady || voicesOffline ? 'bg-green-500' : 'bg-txtsecondary/40'}"
+                  use:tip={modelReady || voicesOffline ? "Voice list is live" : "Model not loaded - voice list is from cache"}
                 ></span>
               {/if}
             </span>
@@ -676,7 +682,7 @@
             {/if}
           </div>
 
-          {#if !isVoiceDesign && !modelReady && $selectedModelStore}
+          {#if !isVoiceDesign && !modelReady && !voicesOffline && $selectedModelStore}
             <button
               class="shrink-0 text-left text-[0.6875rem] leading-tight text-txtsecondary hover:text-txtmain px-1 -mt-1"
               onclick={refreshVoices}

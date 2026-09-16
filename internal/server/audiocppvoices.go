@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/quartermaster-labs/quartermaster/internal/config"
@@ -76,45 +77,38 @@ type audioCppVoiceReq struct {
 	RefText string `json:"ref_text"`
 }
 
-// handleAudioCppVoicesGet annotates audio.cpp's voice list with the `kind` field
-// the playground uses to tell a clone apart from a built-in speaker.
+// handleAudioCppVoicesGet ANSWERS the voice list for audio.cpp models instead of
+// proxying it, and does so without loading anything.
 //
-// audio.cpp answers {"voices":["a","b"]} - bare strings, no kind - because it
-// makes no such distinction: handle_voices unions the model's presets, its
-// embeddings/ dir and every *.wav in --voice-dir into one flat list. qwentts.cpp
-// DOES report kind, and the playground reads it to decide two things: a model
-// whose list is all built-in speakers is a fixed pack, so it offers no "Default"
-// entry, no Clone button and no delete; a model with no speakers is a base model,
-// which gets all three.
+// It can, because for our models the list is entirely on disk. handle_voices
+// unions three sources: the model's voice_presets, <model path>/embeddings/*.
+// safetensors, and every *.wav in --voice-dir. We generate audio.cpp's config
+// ourselves (audiocppconfig.go) and never emit voice_presets, so only the two
+// directory scans can contribute - and both are files we can read directly.
 //
-// Unannotated, every audio.cpp voice read as a built-in speaker. That is harmless
-// while the list is empty, and a trap the moment it is not: registering ONE clone
-// flipped a clone-only model into "fixed pack", which took away the very buttons
-// that had just been used. The first clone was also the last, and it could not be
-// deleted either.
+// Two things were wrong with forwarding it. The list came back as bare strings,
+// with no way to tell a clone from a built-in speaker; the playground reads
+// qwentts.cpp's `kind` field for that, and uses it to decide whether a model is a
+// fixed speaker pack (no Default entry, no cloning, no deleting) or a base model
+// (all three). Unannotated, registering ONE clone flipped a clone-only model into
+// "fixed pack" and withdrew the buttons that had just been used.
 //
-// We own --voice-dir, so the distinction is a stat, not a guess: a name backed by
-// <voice-dir>/<name>.wav is something registered here, anything else came from
-// the model itself.
+// And forwarding meant the list needed a RUNNING model, which cost a full load
+// just to read a directory. The playground will not pay that on tab open, so it
+// falls back to its cache, and a just-registered clone is not in the cache: the
+// post-clone refresh came back as the bare default, the new voice was not in the
+// picker, and the selection it had just been given was clamped away. The voice
+// existed on disk and was unreachable from the UI.
 func (s *Server) handleAudioCppVoicesGet(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		dir := s.audioCppVoiceDir(r.URL.Query().Get("model"))
+		id := r.URL.Query().Get("model")
+		dir := s.audioCppVoiceDir(id)
 		if dir == "" {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// A compressed body would fail to parse and pass through unannotated.
-		r.Header.Del("Accept-Encoding")
-		rec := &bufferedResponse{header: http.Header{}, status: http.StatusOK}
-		next.ServeHTTP(rec, r)
-
-		body := rec.body.Bytes()
-		if rec.status == http.StatusOK {
-			if annotated, ok := annotateAudioCppVoices(body, dir); ok {
-				body = annotated
-			}
-		}
-		writeBuffered(w, rec, body)
+		mc := s.config().Models[id]
+		writeJSON(w, map[string]any{"voices": listAudioCppVoices(dir, mc.AudioCpp.Path)})
 	})
 }
 
@@ -123,45 +117,52 @@ type audioCppVoice struct {
 	Kind string `json:"kind"`
 }
 
-// annotateAudioCppVoices rewrites {"voices":[string]} into {"voices":[{name,kind}]}.
-// ok=false means the body was not that shape - an error payload, or a future
-// response schema - and it passes through untouched rather than being mangled.
-func annotateAudioCppVoices(body []byte, dir string) ([]byte, bool) {
-	var envelope struct {
-		Voices *json.RawMessage `json:"voices"`
+// listAudioCppVoices reproduces handle_voices' two directory scans, sorted and
+// deduplicated the same way, and adds the kind audio.cpp does not track: a name
+// backed by a wav in the voice dir was registered here, an embedding shipped with
+// the model. modelPath may name a gguf rather than a directory, in which case
+// there is no embeddings/ sibling to find and the scan simply comes back empty.
+func listAudioCppVoices(voiceDir, modelPath string) []audioCppVoice {
+	kinds := map[string]string{}
+	for _, entry := range dirStems(modelPath, ".safetensors", "embeddings") {
+		kinds[entry] = "speaker"
 	}
-	// The key must be PRESENT, not merely absent-and-therefore-empty: an error
-	// payload unmarshals cleanly into a struct that only knows about "voices",
-	// and rewriting it into {"voices":[]} would hand the playground a valid-looking
-	// empty list that overwrites its cache.
-	if err := json.Unmarshal(body, &envelope); err != nil || envelope.Voices == nil {
-		return nil, false
+	// Voice dir wins a tie: the wav is what a speech request would actually
+	// resolve to, so calling it anything but registered would offer a delete that
+	// does not match what gets spoken.
+	for _, entry := range dirStems(voiceDir, ".wav") {
+		kinds[entry] = "registered"
 	}
-	var in struct {
-		Voices []string `json:"voices"`
+	names := make([]string, 0, len(kinds))
+	for name := range kinds {
+		names = append(names, name)
 	}
-	if err := json.Unmarshal(body, &in); err != nil {
-		return nil, false
+	sort.Strings(names)
+	out := make([]audioCppVoice, 0, len(names))
+	for _, name := range names {
+		out = append(out, audioCppVoice{Name: name, Kind: kinds[name]})
 	}
-	out := struct {
-		Voices []audioCppVoice `json:"voices"`
-	}{Voices: make([]audioCppVoice, 0, len(in.Voices))}
-	for _, name := range in.Voices {
-		kind := "speaker"
-		// validVoiceName first: a preset name that is not a legal file name can
-		// never have a wav, and must not be turned into a path to stat.
-		if validVoiceName(name) {
-			if st, err := os.Stat(filepath.Join(dir, name+".wav")); err == nil && st.Mode().IsRegular() {
-				kind = "registered"
-			}
-		}
-		out.Voices = append(out.Voices, audioCppVoice{Name: name, Kind: kind})
+	return out
+}
+
+// dirStems lists the base names of files with this extension, ignoring a missing
+// directory: neither scan is required to exist.
+func dirStems(dir, ext string, sub ...string) []string {
+	if strings.TrimSpace(dir) == "" {
+		return nil
 	}
-	encoded, err := json.Marshal(out)
+	entries, err := os.ReadDir(filepath.Join(append([]string{dir}, sub...)...))
 	if err != nil {
-		return nil, false
+		return nil
 	}
-	return encoded, true
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ext) {
+			continue
+		}
+		out = append(out, strings.TrimSuffix(e.Name(), filepath.Ext(e.Name())))
+	}
+	return out
 }
 
 // handleAudioCppVoicePost intercepts POST /v1/audio/voices for audio.cpp models
