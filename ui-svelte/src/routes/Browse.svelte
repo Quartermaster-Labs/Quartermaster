@@ -6,7 +6,7 @@
   import { onMount, onDestroy, tick } from "svelte";
   import { Search, Download, X, ExternalLink, Lock, AlertTriangle, Check, Heart, ArrowDownToLine, Clock, RefreshCw, SlidersHorizontal, FolderOpen } from "lucide-svelte";
   import HubAvatar from "../components/HubAvatar.svelte";
-  import AudioCppCatalog from "../components/AudioCppCatalog.svelte";
+  import AudioCppDetail from "../components/AudioCppDetail.svelte";
   import { hubJobs, refreshHubJobs, isRunningJob } from "../stores/hubJobs";
   import {
     getHubSources,
@@ -23,6 +23,8 @@
     MAX_PARAMS_B,
     TRENDY_DAYS,
     HubApiError,
+    getAudioCppCatalog,
+    type AudioCppFamily,
     type HubModel,
     type HubDetail,
     type FileOption,
@@ -187,6 +189,17 @@
     if (!first && sig) void reloadSelected(id);
   });
 
+  // Same idea for the audio.cpp rows, but keyed on the whole queue draining
+  // rather than on one repo: every family shares a handful of repos, so "a job
+  // for this repo finished" says nothing about which package it was.
+  let audioRunning = $derived($hubJobs.filter(isRunningJob).length);
+  let wasAudioRunning = $state(0);
+  $effect(() => {
+    const now = audioRunning;
+    if (wasAudioRunning > 0 && now === 0 && audioFams.length) void loadAudioCpp();
+    wasAudioRunning = now;
+  });
+
   // The footer note is news about a pull that just landed, not a state: the
   // server keeps finished jobs in its list (the Downloads menu reads them as
   // history), so a bare "any done job" stayed true until twenty newer jobs
@@ -280,6 +293,9 @@
       // Without a VRAM target the picker simply shows no fit verdict.
     }
     await refreshHubJobs();
+    // Not awaited: it is extra rows on two of the ten tabs, and the hub search
+    // below should not wait on a local directory read of the installed backend.
+    void loadAudioCpp();
     // Land on something to look at. An empty query is a valid search — the hub
     // answers it with its own top-by-downloads listing — so the page opens as a
     // browser rather than as an empty box demanding a query first.
@@ -391,6 +407,51 @@
     if (resultsEl.scrollHeight - resultsEl.scrollTop - resultsEl.clientHeight < 240) void loadMore();
   }
 
+  // audio.cpp models live in the ordinary TTS and Transcribe tabs, not in a tab
+  // of their own: it is one more place a speech model comes from, and splitting
+  // the page by ENGINE would make the user know which engine a model is for
+  // before they can look for it. They cannot be hub search results, though -
+  // ~70 families are published into a handful of shared GGUF repos, so the hub
+  // answers with hundreds of loose file names and nothing saying which family a
+  // name belongs to. The server serves the catalog the installed backend ships
+  // instead (GET /api/hub/audiocpp), and these rows are prepended to the list.
+  let audioFams = $state<AudioCppFamily[]>([]);
+  let selectedAudio = $state<AudioCppFamily | null>(null);
+
+  async function loadAudioCpp(): Promise<void> {
+    try {
+      const c = await getAudioCppCatalog();
+      audioFams = c.families;
+      // Keep the open family's package rows in step with what just landed on
+      // disk; matching by id because the reload replaces every object.
+      if (selectedAudio) selectedAudio = audioFams.find((f) => f.family === selectedAudio?.family) ?? null;
+    } catch {
+      // Not installed, too old to ship a catalog, or a build without the model
+      // browser: all of them mean "no extra rows", and none of them is a reason
+      // to put an error over a working hub search.
+      audioFams = [];
+    }
+  }
+
+  // The tab decides which task is on show. audio.cpp's own word for
+  // transcription is "asr", which is also what the server annotates with.
+  const audioTask = $derived(kind === "tts" ? "tts" : kind === "transcribe" ? "asr" : "");
+  const audioShown = $derived(
+    audioTask === ""
+      ? []
+      : audioFams.filter((f) => {
+          if (f.task !== audioTask) return false;
+          const q = query.trim().toLowerCase();
+          if (!q) return true;
+          return (
+            f.displayName.toLowerCase().includes(q) ||
+            f.family.toLowerCase().includes(q) ||
+            (f.description ?? "").toLowerCase().includes(q) ||
+            (f.languages ?? []).some((l) => l.toLowerCase() === q)
+          );
+        })
+  );
+
   async function openModelsFolder(): Promise<void> {
     err = null;
     try {
@@ -406,19 +467,13 @@
     runSearch();
   }
 
-  // The audio.cpp catalog is a tab on this page rather than a hub search,
-  // because its models cannot be found by searching: ~70 families live in a
-  // handful of shared repos, and the file names alone do not say which family a
-  // file belongs to. See AudioCppCatalog.svelte.
-  let mode = $state<"hub" | "audiocpp">("hub");
-
   function setKind(id: BrowseCategory): void {
-    mode = "hub";
     if (kind === id) return;
     kind = id;
     // The open repo belongs to the category that was showing, so drop it rather
     // than leave a TTS model docked beside a page of image repos.
     selected = null;
+    selectedAudio = null;
     runSearch();
   }
 
@@ -426,6 +481,7 @@
     loadingModel = true;
     err = null;
     estimates = {};
+    selectedAudio = null;
     try {
       selected = await getHubModel(m.id, m.source);
       void sizeRepo(selected);
@@ -618,17 +674,6 @@
           {c.label}
         </button>
       {/each}
-      <!-- A backend, not a model category, and deliberately in the same row: it
-           is another place models come from, and a second tab strip for one
-           entry would cost more height than it explains. -->
-      <button
-        class="inline-flex items-center px-3 -mb-px border-b-2 font-mono text-xs uppercase tracking-wide transition-colors {mode === 'audiocpp'
-          ? 'border-primary text-txtmain'
-          : 'border-transparent text-txtsecondary hover:text-txtmain'}"
-        onclick={() => (mode = "audiocpp")}
-      >
-        audio.cpp
-      </button>
       <!-- Where everything on this page ends up. It sits on the category row
            rather than in the footer because it is an action, and the footer line
            that merely NAMED the folder was a path to read and retype. -->
@@ -642,9 +687,6 @@
       </button>
     </div>
 
-    {#if mode === "audiocpp"}
-      <AudioCppCatalog />
-    {:else}
     <!-- Toolbar: one row, search left, controls right (mirrors the Models page).
          Every control is pinned to the SAME h-7 — .btn, .seg and a bare input
          each compute their own height from padding, which is how the refresh
@@ -795,6 +837,48 @@
          file/quant view separated by a divider rather than a gap. -->
     <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[22rem_1fr] border-t border-card-border bg-surface divide-y lg:divide-y-0 lg:divide-x divide-card-border">
       <div bind:this={resultsEl} onscroll={onResultsScroll} class="min-h-0 overflow-y-auto pretty-scroll">
+        <!-- audio.cpp's families, above the hub's results in the same list.
+             They are labelled rather than blended in because they behave
+             differently: no downloads or likes to sort by (they are one shared
+             repo), and what you pick is a curated file set instead of a quant
+             off a repo page. -->
+        {#if audioShown.length}
+          <div class="px-3 py-1.5 bg-secondary/40 border-b border-card-border font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary">
+            audio.cpp · {audioShown.length}
+          </div>
+          {#each audioShown as f (f.family)}
+            <button
+              class="w-full text-left px-3 py-2.5 border-b border-card-border-inner transition-colors relative {selectedAudio?.family === f.family
+                ? 'bg-secondary/60'
+                : 'hover:bg-secondary/40'}"
+              onclick={() => ((selectedAudio = f), (selected = null))}
+            >
+              {#if selectedAudio?.family === f.family}
+                <span class="absolute left-0 top-0 bottom-0 w-0.5 bg-primary"></span>
+              {/if}
+              <div class="flex items-start gap-2.5">
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-1.5">
+                    <span class="font-mono text-xs text-txtmain truncate">{f.displayName}</span>
+                    {#if f.packages.some((p) => p.local)}
+                      <Check class="w-3 h-3 text-primary shrink-0" />
+                    {/if}
+                  </div>
+                  <div class="text-[0.65rem] text-txtsecondary truncate">{f.family}</div>
+                  <div class="mt-1 flex items-center gap-2 text-[0.65rem] text-txtsecondary tabular-nums">
+                    <span class="font-mono px-1.5 py-px rounded bg-secondary/70 text-txtmain">
+                      {f.packages.length}
+                      {f.packages.length === 1 ? "build" : "builds"}
+                    </span>
+                    {#if f.status && f.status !== "supported"}
+                      <span class="font-mono">{f.status}</span>
+                    {/if}
+                  </div>
+                </div>
+              </div>
+            </button>
+          {/each}
+        {/if}
         {#if searching && !results.length}
           <div class="p-3 text-xs text-txtsecondary">Loading Hugging Face…</div>
         {:else if !searched}
@@ -869,7 +953,9 @@
       </div>
 
       <div class="min-h-0 overflow-y-auto pretty-scroll">
-        {#if loadingModel}
+        {#if selectedAudio}
+          <AudioCppDetail family={selectedAudio} />
+        {:else if loadingModel}
           <div class="p-4 text-xs text-txtsecondary">Loading the model page…</div>
         {:else if !selected}
           <div class="p-4 text-xs text-txtsecondary">Pick a repo to see its files and model card.</div>
@@ -1077,7 +1163,6 @@
           <X class="w-3 h-3" />
         </button>
       </div>
-    {/if}
     {/if}
   {/if}
 </div>

@@ -72,7 +72,8 @@ handful of shared GGUF repos, so a hub search answers with a few hundred loose f
 nothing saying which family a name belongs to, which files are alternatives to each other, or that
 an `f5_tts` gguf is useless without the `vocab.txt` beside it. Upstream's own answer is
 `model_specs/*.json`, which every release ships next to the binary, and this serves it as
-family -> packages -> the exact repo file set (`internal/audiocpp`).
+family -> packages -> the exact repo file set (`internal/audiocpp`). The UI folds these rows
+into the ordinary TTS and Transcribe tabs of `/browse` (`ui-svelte/browse.md`).
 
 Three deliberate choices:
 

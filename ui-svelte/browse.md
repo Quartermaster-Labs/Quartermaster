@@ -26,28 +26,36 @@ in flight is now the normal case, and dropping it would leave an older query's r
 `searchSeq` is what makes that safe — only the newest response may land, and only it may clear
 the spinner.
 
-## The audio.cpp tab
+## audio.cpp models in the TTS and Transcribe tabs
 
-`components/AudioCppCatalog.svelte`, fed by `GET /api/hub/audiocpp` (`internal/server/hubapi.md`).
-It sits in the category strip but is **not a category**: it is another place models come from, and
-a second tab strip for one entry would cost more height than it explains. `mode` switches the
-whole body; picking any real category switches it back.
+`components/AudioCppDetail.svelte`, fed by `GET /api/hub/audiocpp`
+(`internal/server/hubapi.md`). audio.cpp's families are listed in the ordinary category tabs, not
+in a tab of their own: it is one more place a speech model comes from, and splitting the page by
+ENGINE would make the user know which engine a model is for before they could look for it. The tab
+picks the task (`tts` -> `tts`, Transcribe -> audio.cpp's `asr`), and the page's own search box
+filters the rows alongside the hub query.
 
-It is a curated catalog rather than a search because audio.cpp's families cannot be searched for:
-~70 of them live in a handful of shared GGUF repos, and the file names alone do not say which
-family a file belongs to or which files belong together. The list comes out of the INSTALLED
-backend, so an empty one means "install audio.cpp from the Backends tab", which is what the
-not-installed card says instead of rendering a blank page.
+They cannot be hub search results, though, which is why they are their own rows rather than
+repos folded into the listing: ~70 families are published into a handful of shared GGUF repos, so
+the hub answers with hundreds of loose file names and nothing saying which family a name belongs
+to, which files are alternatives to each other, or that an `f5_tts` gguf is useless without the
+`vocab.txt` beside it. The rows sit above the hub's results under an `audio.cpp · N` label,
+because they behave differently: no downloads or likes to sort by, and what you pick is a curated
+file set instead of a quant off a repo page. Selecting one puts `AudioCppDetail` in the pane the
+repo page would occupy, and `selected`/`selectedAudio` clear each other.
 
-- **Families this build cannot serve are listed, not hidden**, under a "Not wired up" filter and
-  with the server's reason line. The engine being able to do something the app cannot yet is
-  information, and a catalog silently a quarter of its real length looks broken.
+- **The catalog comes from the INSTALLED backend**, so a build without audio.cpp simply has no
+  extra rows. A failed load is swallowed for the same reason: it means "no extra rows", and none
+  of its causes is worth putting an error over a working hub search.
 - **`inFlight` is keyed by FILE path, not by repo.** One repo holds every family, so a repo-level
   "is this busy" would mark all 200-odd packages as downloading.
 - **A package downloads as one job**, sidecars included: an `f5_tts` `vocab.txt` is not an
   alternative to the gguf, it is part of it.
-- **The catalog re-loads when the last running job lands**, because "downloaded" is judged off
-  disk server-side and the row that just finished would otherwise keep its button.
+- **The rows re-load when the whole job queue drains**, not per repo: "downloaded" is judged off
+  disk server-side, and "a job for this repo finished" says nothing about which family it was.
+- **Families this build cannot serve still appear** if their task is `tts`/`asr`, with the
+  server's reason line in the detail pane. The engine being able to do something the app cannot
+  yet is information.
 
 ## Filters and sort
 
