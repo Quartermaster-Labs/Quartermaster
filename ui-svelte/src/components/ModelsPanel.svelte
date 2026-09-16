@@ -2,8 +2,8 @@
   import { tip } from "../lib/tooltip";
   import { push } from "svelte-spa-router";
   import { get } from "svelte/store";
-  import { FolderOpen, MoreVertical } from "lucide-svelte";
-  import { models, loadModel, getSettings, pickModelsFolder } from "../stores/api";
+  import { FolderOpen, Layers, MoreVertical, X } from "lucide-svelte";
+  import { models, loadModel, getSettings, pickModelsFolder, pickLoraFolder } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
   import { playgroundPort } from "../stores/playgroundAuth";
   import { isNative } from "../lib/native";
@@ -67,15 +67,26 @@
     sortDirStore.set(next.dir);
   }
 
-  // Per-category scan folder (folder icon in the toolbar).
+  // Per-category scan folder (folder icon in the toolbar), and beside it the
+  // per-category LoRA folder. Both are model-LOCATION questions and both are
+  // per-category, so they belong together here rather than one here and one
+  // buried in Settings -> Backends, which is a page about executables.
   let folderPath = $state("");
+  let loraPath = $state("");
   let picking = $state(false);
+  // Only sd-server has a LoRA folder concept, and it serves exactly these two
+  // categories. Showing the control on the LLM or TTS tab would offer a setting
+  // that reaches no backend.
+  const LORA_TABS: ModelCategory[] = ["image", "video"];
+  const hasLora = $derived(LORA_TABS.includes(tab));
   async function refreshFolder(): Promise<void> {
     try {
       const s = await getSettings();
       folderPath = s.categoryRoots?.[tab] || s.modelsRoot || "";
+      loraPath = s.loraDirs?.[tab] || "";
     } catch {
       folderPath = "";
+      loraPath = "";
     }
   }
   $effect(() => {
@@ -88,6 +99,22 @@
     try {
       const path = await pickModelsFolder(tab);
       if (path) folderPath = path; // null => user cancelled; regen+reload already ran
+    } catch (e) {
+      console.error(e);
+    } finally {
+      picking = false;
+    }
+  }
+
+  // clear=true skips the dialog and drops back to the fleet-wide LoRA folder.
+  // Re-picking can only ever REPLACE a path, so without this an inherited
+  // default is unreachable once a folder has been chosen once.
+  async function pickLora(clear = false): Promise<void> {
+    if (picking) return;
+    picking = true;
+    try {
+      const path = await pickLoraFolder(tab, clear);
+      if (path !== null) loraPath = path; // null => user cancelled
     } catch (e) {
       console.error(e);
     } finally {
@@ -142,6 +169,16 @@
   // Tab labels carry counts, so the tabs' natural width changes as models appear.
   $effect(() => {
     $models;
+    queueMicrotask(measureBar);
+  });
+  // The CONTROL set is not fixed either: the LoRA buttons exist only on the
+  // image/video tabs, and the clear button only once a folder is set. ctrlFull
+  // is sampled inside measureBar, which resize and $models alone would not
+  // re-run here, so switching to a tab with more controls would overflow into
+  // the second row this whole mechanism exists to prevent.
+  $effect(() => {
+    hasLora;
+    loraPath;
     queueMicrotask(measureBar);
   });
 
@@ -306,6 +343,21 @@
                   {#if folderPath}<span class="max-w-full truncate font-mono text-[0.6rem] text-txtsecondary">{folderPath}</span>{/if}
                 </span>
               </button>
+              {#if hasLora}
+                <button class={MENU_ROW} role="menuitem" disabled={picking} onclick={() => { menuOpen = false; pickLora(); }}>
+                  <Layers class="w-3.5 h-3.5 shrink-0" />
+                  <span class="flex flex-col items-start min-w-0">
+                    <span>LoRA folder</span>
+                    <span class="max-w-full truncate font-mono text-[0.6rem] text-txtsecondary">{loraPath || "default"}</span>
+                  </span>
+                </button>
+                {#if loraPath}
+                  <button class={MENU_ROW} role="menuitem" disabled={picking} onclick={() => { menuOpen = false; pickLora(true); }}>
+                    <span class="w-3.5 shrink-0"></span>
+                    <span>Use the default LoRA folder</span>
+                  </button>
+                {/if}
+              {/if}
               <button
                 class={MENU_ROW}
                 role="menuitem"
@@ -331,6 +383,28 @@
         >
           <FolderOpen class="w-3.5 h-3.5" />
         </button>
+        {#if hasLora}
+          <button
+            class="btn btn--sm inline-flex items-center justify-center disabled:opacity-50"
+            onclick={() => pickLora()}
+            disabled={picking}
+            aria-label="Set LoRA folder"
+            use:tip={`LoRA folder: ${loraPath || "the fleet-wide default"} - click to choose`}
+          >
+            <Layers class="w-3.5 h-3.5" />
+          </button>
+          {#if loraPath}
+            <button
+              class="btn btn--sm inline-flex items-center justify-center disabled:opacity-50"
+              onclick={() => pickLora(true)}
+              disabled={picking}
+              aria-label="Use the default LoRA folder"
+              use:tip={"Drop this category's LoRA folder and use the default"}
+            >
+              <X class="w-3.5 h-3.5" />
+            </button>
+          {/if}
+        {/if}
         <button
           class="btn btn--sm uppercase tracking-wide"
           onclick={() => showIdorNameStore.update((p) => (p === "name" ? "id" : "name"))}

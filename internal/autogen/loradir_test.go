@@ -1,6 +1,10 @@
 package autogen
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // The resolution ladder: per-model override > per-category folder > fleet-wide
 // folder > the model gguf's own directory.
@@ -101,5 +105,68 @@ func TestMergeSettingsPatch_carriesForwardLoraDirs(t *testing.T) {
 	cleared := MergeSettingsPatch(prev, SettingsPatch{LoraDirs: &empty})
 	if cleared.LoraDirs == nil || len(*cleared.LoraDirs) != 0 {
 		t.Fatalf("explicit clear ignored: %v", cleared.LoraDirs)
+	}
+}
+
+// The dashboard writes one category at a time, so the helper must be a
+// read-modify-write over the single LoraDirs map rather than a plain overwrite.
+func TestUpsertSidecarLoraDir_setClearAndPreserve(t *testing.T) {
+	dir := t.TempDir()
+	gen := filepath.Join(dir, "generate.yaml")
+	if err := os.WriteFile(gen, []byte("settings:\n  modelsRoot: D:/Models\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := UpsertSidecarLoraDir(gen, "image", `D:/loras/image`); err != nil {
+		t.Fatal(err)
+	}
+	// Setting a SECOND category must not drop the first.
+	if err := UpsertSidecarLoraDir(gen, "video", `D:/loras/video`); err != nil {
+		t.Fatal(err)
+	}
+	gf, err := LoadGenerateFile(gen, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gf.Settings.LoraDirs["image"] != `D:/loras/image` || gf.Settings.LoraDirs["video"] != `D:/loras/video` {
+		t.Fatalf("after two sets: %v", gf.Settings.LoraDirs)
+	}
+
+	// Clearing one leaves the other alone.
+	if err := UpsertSidecarLoraDir(gen, "image", ""); err != nil {
+		t.Fatal(err)
+	}
+	gf, err = LoadGenerateFile(gen, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := gf.Settings.LoraDirs["image"]; ok {
+		t.Fatalf("image not cleared: %v", gf.Settings.LoraDirs)
+	}
+	if gf.Settings.LoraDirs["video"] != `D:/loras/video` {
+		t.Fatalf("clearing image dropped video: %v", gf.Settings.LoraDirs)
+	}
+}
+
+// An unrelated settings section saving afterwards must not wipe the folders.
+func TestUpsertSidecarLoraDir_survivesAnotherSectionSave(t *testing.T) {
+	dir := t.TempDir()
+	gen := filepath.Join(dir, "generate.yaml")
+	if err := os.WriteFile(gen, []byte("settings:\n  modelsRoot: D:/Models\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpsertSidecarLoraDir(gen, "video", `D:/loras/video`); err != nil {
+		t.Fatal(err)
+	}
+	vram := 24.0
+	if err := UpsertSidecarSettings(gen, SettingsPatch{TargetVramGB: &vram}); err != nil {
+		t.Fatal(err)
+	}
+	gf, err := LoadGenerateFile(gen, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gf.Settings.LoraDirs["video"] != `D:/loras/video` {
+		t.Fatalf("a memory-section save dropped the LoRA folder: %v", gf.Settings.LoraDirs)
 	}
 }

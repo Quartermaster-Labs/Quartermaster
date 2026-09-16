@@ -399,8 +399,6 @@
   let aHealth = $state(300);
   let aKv = $state("");
   let aLora = $state("");
-  let aLoraImage = $state("");
-  let aLoraVideo = $state("");
   let savingAdv = $state(false);
   let advErr = $state<string | null>(null);
   let advSaved = $state(false);
@@ -434,8 +432,6 @@
     aHealth = s.advanced.healthCheckTimeout;
     aKv = s.advanced.kvQuant;
     aLora = s.advanced.loraDir;
-    aLoraImage = s.advanced.loraDirs?.image ?? "";
-    aLoraVideo = s.advanced.loraDirs?.video ?? "";
     aMinGpuVram = s.advanced.minGpuVramGB;
     aSharedMem = s.advanced.sharedMemory || "auto";
     aPoolIntegrated = s.advanced.poolIntegratedGpu;
@@ -466,7 +462,6 @@
         healthCheckTimeout: Number(aHealth) || 0,
         kvQuant: aKv,
         loraDir: aLora.trim(),
-        loraDirs: { image: aLoraImage.trim(), video: aLoraVideo.trim() },
         minGpuVramGB: Number(aMinGpuVram) || 0,
         sharedMemory: aSharedMem === "auto" ? "" : aSharedMem,
         poolIntegratedGpu: aPoolIntegrated,
@@ -499,22 +494,6 @@
     const p = await pickFolder();
     if (p) {
       aLora = p;
-      await saveAdvanced();
-    }
-  }
-
-  async function browseLoraImageDir(): Promise<void> {
-    const p = await pickFolder();
-    if (p) {
-      aLoraImage = p;
-      await saveAdvanced();
-    }
-  }
-
-  async function browseLoraVideoDir(): Promise<void> {
-    const p = await pickFolder();
-    if (p) {
-      aLoraVideo = p;
       await saveAdvanced();
     }
   }
@@ -1605,9 +1584,8 @@
       <div class="mt-6">
         <div class="flex items-baseline gap-2 mb-1">
           <h6>LoRA folder</h6>
-          {@render hint("Where the image backend looks for LoRA files (--lora-model-dir), for image models. Highest wins: a per-model LoRA folder in the model config editor, then the per-category folder below, then this fleet-wide value, then each model's own folder, which is the default.")}
+          {@render hint("Where the image backend looks for LoRA files (--lora-model-dir), for every image and video model that has no folder of its own. Highest wins: a per-model LoRA folder in the model config editor, then the per-category folder on the Models page, then this value, then each model's own folder, which is the default.")}
         </div>
-        <span class="block text-micro text-txtsecondary mb-1">All models</span>
         <div class="flex items-center gap-2 max-w-2xl">
           <input
             type="text" bind:value={aLora} spellcheck="false" placeholder="each model's own folder"
@@ -1617,32 +1595,6 @@
           <button class="btn btn--sm" onclick={browseLoraDir} use:tip={"Choose a folder"} aria-label="Browse for LoRA folder">
             <FolderOpen size={14} />
           </button>
-        </div>
-        <div class="mt-2">
-          <span class="block text-micro text-txtsecondary mb-1">Image models</span>
-          <div class="flex items-center gap-2 max-w-2xl">
-            <input
-              type="text" bind:value={aLoraImage} spellcheck="false" placeholder="uses the folder above"
-              onblur={saveAdvanced}
-              class="flex-1 font-mono text-label rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
-            />
-            <button class="btn btn--sm" onclick={browseLoraImageDir} use:tip={"Choose a folder"} aria-label="Browse for image LoRA folder">
-              <FolderOpen size={14} />
-            </button>
-          </div>
-        </div>
-        <div class="mt-2">
-          <span class="block text-micro text-txtsecondary mb-1">Video models</span>
-          <div class="flex items-center gap-2 max-w-2xl">
-            <input
-              type="text" bind:value={aLoraVideo} spellcheck="false" placeholder="uses the folder above"
-              onblur={saveAdvanced}
-              class="flex-1 font-mono text-label rounded border border-card-border bg-surface px-2 py-1 text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
-            />
-            <button class="btn btn--sm" onclick={browseLoraVideoDir} use:tip={"Choose a folder"} aria-label="Browse for video LoRA folder">
-              <FolderOpen size={14} />
-            </button>
-          </div>
         </div>
       </div>
     </div>
