@@ -394,6 +394,19 @@
     ),
   );
   const selectedKind = $derived(classBackends.find((b) => b.id === backend)?.kind ?? "");
+
+  // Why the picker is missing the OTHER speech engine. The filter above is a
+  // hard partition by weight format, so on a box that has the same voice in
+  // both formats (Qwen3-TTS ships as a qwentts.cpp gguf AND as an audio.cpp
+  // package) the dropdown looks arbitrarily short with nothing saying why.
+  // Only audio classes split this way; every other class has one format.
+  const audioEngineNote = $derived(
+    !(modelClass === "tts" || modelClass === "asr")
+      ? ""
+      : audioCppMode
+        ? "These weights are an audio.cpp package, which no other speech engine can read, so only audio.cpp is listed."
+        : "audio.cpp is not listed: it reads only its own packaged GGUFs, and these weights are in another engine's format. The audio.cpp build of a model is a separate download in Browse.",
+  );
   const isVllm = $derived(selectedKind === "vllm");
 
 
@@ -1690,6 +1703,9 @@
             {@render hint("Which inference backend serves this model. Auto uses the ★ default for the model's class (Settings → Backends). Switching backend kind changes which knobs apply.")}
             <Select bind:value={backend} options={backendSel} ariaLabel="Backend" class="ml-auto w-56" />
           </div>
+          {#if audioEngineNote}
+            <p class="text-xs text-txtsecondary -mt-1">{audioEngineNote}</p>
+          {/if}
           {#if isVllm}
             <div class="rounded border border-card-border p-3 space-y-2">
               <p class="text-xs text-txtsecondary">vLLM backend - llama.cpp knobs below are ignored. Context sets <span class="font-mono">--max-model-len</span>; blank sizes it against the VRAM budget.</p>
