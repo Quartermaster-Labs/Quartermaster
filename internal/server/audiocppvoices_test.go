@@ -88,3 +88,30 @@ func TestServer_removePromptText(t *testing.T) {
 		t.Errorf("prompt_text survived its last entry: %v", err)
 	}
 }
+
+func TestServer_annotateAudioCppVoices(t *testing.T) {
+	dir := t.TempDir()
+	wav := base64.StdEncoding.EncodeToString([]byte("RIFF"))
+	if err := writeAudioCppVoice(dir, audioCppVoiceReq{Name: "radu", WavB64: wav}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// audio.cpp flattens presets, embeddings and voice-dir wavs into one bare
+	// list, so "ethan" (a built-in) and "radu" (our clone) arrive identical.
+	got, ok := annotateAudioCppVoices([]byte(`{"voices":["ethan","radu"]}`), dir)
+	if !ok {
+		t.Fatal("well-formed voice list refused")
+	}
+	const want = `{"voices":[{"name":"ethan","kind":"speaker"},{"name":"radu","kind":"registered"}]}`
+	if string(got) != want {
+		t.Errorf("annotated = %s\nwant       %s", got, want)
+	}
+
+	// Anything that is not that shape passes through untouched rather than being
+	// rewritten into a valid-looking empty list.
+	if _, ok := annotateAudioCppVoices([]byte(`{"error":"nope"}`), dir); ok {
+		t.Error("an error payload was annotated")
+	}
+	if _, ok := annotateAudioCppVoices([]byte(`{"voices":[{"name":"a"}]}`), dir); ok {
+		t.Error("an already-annotated list was re-annotated")
+	}
+}

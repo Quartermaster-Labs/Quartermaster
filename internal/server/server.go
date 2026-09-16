@@ -857,6 +857,11 @@ func (s *Server) routes() {
 			// picker only offers things that are actually loadable as a LoRA.
 			h = s.filterLorasResponse(dispatch)
 		}
+		if path == "/v1/audio/voices" {
+			// audio.cpp reports bare voice names; the playground needs to know
+			// which of them are clones it may delete. See audiocppvoices.go.
+			h = s.handleAudioCppVoicesGet(dispatch)
+		}
 		mux.Handle("GET "+path, modelChain.Then(h))
 	}
 	for _, path := range modelDeleteRoutes {

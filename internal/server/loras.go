@@ -33,17 +33,23 @@ func (s *Server) filterLorasResponse(next http.Handler) http.Handler {
 				body = filtered
 			}
 		}
-		for k, vs := range rec.header {
-			// Content-Length is recomputed below; the rest passes through.
-			if strings.EqualFold(k, "Content-Length") {
-				continue
-			}
-			w.Header()[k] = vs
-		}
-		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
-		w.WriteHeader(rec.status)
-		_, _ = w.Write(body)
+		writeBuffered(w, rec, body)
 	})
+}
+
+// writeBuffered replays a buffered upstream response with a rewritten body.
+// Content-Length is recomputed because the rewrite changed the length; every
+// other header passes through as upstream sent it.
+func writeBuffered(w http.ResponseWriter, rec *bufferedResponse, body []byte) {
+	for k, vs := range rec.header {
+		if strings.EqualFold(k, "Content-Length") {
+			continue
+		}
+		w.Header()[k] = vs
+	}
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(rec.status)
+	_, _ = w.Write(body)
 }
 
 // bufferedResponse collects an upstream response so the body can be rewritten
