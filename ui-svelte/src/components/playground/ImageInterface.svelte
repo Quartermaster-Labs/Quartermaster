@@ -997,7 +997,9 @@
                   <Sparkles class="w-3 h-3 shrink-0" />{t.model}
                 </span>
               {/if}
-              <div class="relative group rounded-2xl rounded-bl-sm px-3 py-2 text-[0.8125rem] w-fit max-w-full sm:max-w-[60%]">
+              <!-- A batch gets the full thread width (see the thumb row below); a
+                   single image keeps the narrower chat-like bubble. -->
+              <div class="relative group rounded-2xl rounded-bl-sm px-3 py-2 text-[0.8125rem] w-fit max-w-full {t.images.length > 1 ? '' : 'sm:max-w-[60%]'}">
                 {#if t.images.length && !isGenerating}
                   <button
                     class="absolute top-1/2 left-full ml-2 -translate-y-1/2 z-10 p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary opacity-0 group-hover:opacity-100 transition-opacity"
@@ -1010,11 +1012,15 @@
                 {#if t.error}
                   <div class="text-red-500">{t.error}</div>
                 {:else if t.images.length}
-                  <div class="flex flex-wrap gap-2">
+                  <!-- One row, never a column. A batch is sized by WIDTH (flex-1,
+                       min-w-0) so N images always divide the row whatever their
+                       aspect ratio; a lone image stays height-sized so a small
+                       render isn't stretched across the bubble. -->
+                  <div class="flex {t.images.length > 1 ? 'flex-nowrap' : 'flex-wrap'} gap-2 w-full">
                     {#each t.images as img, ii (ii)}
-                      <div class="relative">
-                        <button class="block rounded-xl overflow-hidden border {t.images.length > 1 && ii === picked ? 'border-primary' : 'border-card-border'} bg-secondary cursor-zoom-in focus:outline-none" onclick={() => (fullscreenImg = img)} aria-label="View image fullscreen">
-                          <img src={img} alt="generated {ti + 1}" class="max-h-56 w-auto object-contain" />
+                      <div class="relative {t.images.length > 1 ? 'flex-1 min-w-0' : ''}">
+                        <button class="block w-full rounded-xl overflow-hidden border {t.images.length > 1 && ii === picked ? 'border-primary' : 'border-card-border'} bg-secondary cursor-zoom-in focus:outline-none" onclick={() => (fullscreenImg = img)} aria-label="View image fullscreen">
+                          <img src={img} alt="generated {ti + 1}" class="{t.images.length > 1 ? 'w-full h-auto' : 'max-h-56 w-auto'} max-h-56 object-contain" />
                         </button>
                         {#if t.images.length > 1}
                           <!-- Batch picker. A separate badge, not the thumbnail itself:
@@ -1434,9 +1440,21 @@
     aria-modal="true"
     tabindex="-1"
   >
-    <button class="absolute top-4 right-4 text-white hover:text-gray-300 w-10 h-10 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors" onclick={() => (fullscreenImg = null)} aria-label="Close">
-      <X class="w-6 h-6" />
-    </button>
+    <!-- Actions sit inside the overlay, which closes on any click - so each one
+         stops propagation, otherwise downloading would also dismiss the viewer. -->
+    <div class="absolute top-4 right-4 flex items-center gap-1">
+      <button
+        class="text-white hover:text-gray-300 w-10 h-10 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors"
+        onclick={(e) => { e.stopPropagation(); if (fullscreenImg) downloadImage(fullscreenImg); }}
+        aria-label="Download image"
+        use:tip={"Download"}
+      >
+        <Download class="w-5 h-5" />
+      </button>
+      <button class="text-white hover:text-gray-300 w-10 h-10 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors" onclick={() => (fullscreenImg = null)} aria-label="Close">
+        <X class="w-6 h-6" />
+      </button>
+    </div>
     <img src={fullscreenImg} alt="fullscreen" class="max-w-full max-h-full object-contain" />
   </div>
 {/if}
