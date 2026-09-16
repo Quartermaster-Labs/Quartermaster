@@ -124,6 +124,9 @@ See [`hubapi.md`](hubapi.md).
   the caller draws a monogram either way.
 - `GET /api/hub/estimate` (`hubapi_estimate.go`) — per-file context sizing from the Range-fetched
   GGUF header. 501 without `-generate`: there is no VRAM target to size against.
+- `GET /api/hub/audiocpp` (`audiocppcatalog.go`) — the audio.cpp model catalog, read out of the
+  INSTALLED backend's `model_specs/`. A missing install is an empty catalog and a **200**, not an
+  error; 501 without `-generate`, since the registry that names the install is autogen's.
 - `GET /api/hub/jobs` — progress polling, same shape as the backends installer.
 - `POST /api/hub/download`, `/api/hub/pause`, `/api/hub/resume`, `/api/hub/cancel` — the three job
   verbs share one body shape and one handler body (`hubJobAction`); **cancel discards the bytes,

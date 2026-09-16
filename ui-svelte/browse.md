@@ -26,6 +26,29 @@ in flight is now the normal case, and dropping it would leave an older query's r
 `searchSeq` is what makes that safe — only the newest response may land, and only it may clear
 the spinner.
 
+## The audio.cpp tab
+
+`components/AudioCppCatalog.svelte`, fed by `GET /api/hub/audiocpp` (`internal/server/hubapi.md`).
+It sits in the category strip but is **not a category**: it is another place models come from, and
+a second tab strip for one entry would cost more height than it explains. `mode` switches the
+whole body; picking any real category switches it back.
+
+It is a curated catalog rather than a search because audio.cpp's families cannot be searched for:
+~70 of them live in a handful of shared GGUF repos, and the file names alone do not say which
+family a file belongs to or which files belong together. The list comes out of the INSTALLED
+backend, so an empty one means "install audio.cpp from the Backends tab", which is what the
+not-installed card says instead of rendering a blank page.
+
+- **Families this build cannot serve are listed, not hidden**, under a "Not wired up" filter and
+  with the server's reason line. The engine being able to do something the app cannot yet is
+  information, and a catalog silently a quarter of its real length looks broken.
+- **`inFlight` is keyed by FILE path, not by repo.** One repo holds every family, so a repo-level
+  "is this busy" would mark all 200-odd packages as downloading.
+- **A package downloads as one job**, sidecars included: an `f5_tts` `vocab.txt` is not an
+  alternative to the gguf, it is part of it.
+- **The catalog re-loads when the last running job lands**, because "downloaded" is judged off
+  disk server-side and the row that just finished would otherwise keep its button.
+
 ## Filters and sort
 
 A **Filters** popover (a `.seg` button carrying a count of how many knobs are off their default,

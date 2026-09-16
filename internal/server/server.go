@@ -1047,6 +1047,9 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/hub/model/{id...}", adminChain.ThenFunc(s.handleAPIHubModel))
 	mux.Handle("GET /api/hub/avatar", adminChain.ThenFunc(s.handleAPIHubAvatar))
 	mux.Handle("GET /api/hub/estimate", adminChain.ThenFunc(s.handleAPIHubEstimate))
+	// The audio.cpp catalog: a curated view over the same downloader, built from
+	// the model_specs/ the installed backend ships (see audiocppcatalog.go).
+	mux.Handle("GET /api/hub/audiocpp", adminChain.ThenFunc(s.handleAPIHubAudioCpp))
 	mux.Handle("GET /api/hub/jobs", adminChain.ThenFunc(s.handleAPIHubJobs))
 	mux.Handle("POST /api/hub/download", adminChain.ThenFunc(s.handleAPIHubDownload))
 	mux.Handle("POST /api/hub/cancel", adminChain.ThenFunc(s.handleAPIHubCancel))

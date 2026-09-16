@@ -208,6 +208,25 @@ func audioCppKnownFamily(family string) bool {
 	return ok
 }
 
+// IsAudioCppKind reports whether a registry row's kind is the audio.cpp engine.
+// Exported for the model browser, which has to find the INSTALLED audio.cpp to
+// read its shipped model catalog; the spelling set stays in one place.
+func IsAudioCppKind(kind string) bool { return isAudioCppKind(kind) }
+
+// AudioCppFamilySupport answers, for one audio.cpp family id, what this build
+// would do with a model of that family: the task it is emitted as ("tts"/"asr",
+// empty for a family we do not serve) and whether the family is in the table at
+// all. Exported for the model browser's audio.cpp catalog, which must offer only
+// downloads that become a working model row -- and must say WHY when it does
+// not, since "music, not wired up yet" and "newer than this backend's table" are
+// different answers for the user.
+//
+// One table for both callers on purpose: a catalog that decided this for itself
+// would start advertising families the emitter then refuses.
+func AudioCppFamilySupport(family string) (task string, known bool) {
+	return audioCppTask(family), audioCppKnownFamily(family)
+}
+
 // audioCppClass is the backend class the family is served under here.
 func audioCppClass(family string) string {
 	if audioCppTask(family) == "asr" {

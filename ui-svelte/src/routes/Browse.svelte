@@ -6,6 +6,7 @@
   import { onMount, onDestroy, tick } from "svelte";
   import { Search, Download, X, ExternalLink, Lock, AlertTriangle, Check, Heart, ArrowDownToLine, Clock, RefreshCw, SlidersHorizontal, FolderOpen } from "lucide-svelte";
   import HubAvatar from "../components/HubAvatar.svelte";
+  import AudioCppCatalog from "../components/AudioCppCatalog.svelte";
   import { hubJobs, refreshHubJobs, isRunningJob } from "../stores/hubJobs";
   import {
     getHubSources,
@@ -405,7 +406,14 @@
     runSearch();
   }
 
+  // The audio.cpp catalog is a tab on this page rather than a hub search,
+  // because its models cannot be found by searching: ~70 families live in a
+  // handful of shared repos, and the file names alone do not say which family a
+  // file belongs to. See AudioCppCatalog.svelte.
+  let mode = $state<"hub" | "audiocpp">("hub");
+
   function setKind(id: BrowseCategory): void {
+    mode = "hub";
     if (kind === id) return;
     kind = id;
     // The open repo belongs to the category that was showing, so drop it rather
@@ -610,6 +618,17 @@
           {c.label}
         </button>
       {/each}
+      <!-- A backend, not a model category, and deliberately in the same row: it
+           is another place models come from, and a second tab strip for one
+           entry would cost more height than it explains. -->
+      <button
+        class="inline-flex items-center px-3 -mb-px border-b-2 font-mono text-xs uppercase tracking-wide transition-colors {mode === 'audiocpp'
+          ? 'border-primary text-txtmain'
+          : 'border-transparent text-txtsecondary hover:text-txtmain'}"
+        onclick={() => (mode = "audiocpp")}
+      >
+        audio.cpp
+      </button>
       <!-- Where everything on this page ends up. It sits on the category row
            rather than in the footer because it is an action, and the footer line
            that merely NAMED the folder was a path to read and retype. -->
@@ -623,6 +642,9 @@
       </button>
     </div>
 
+    {#if mode === "audiocpp"}
+      <AudioCppCatalog />
+    {:else}
     <!-- Toolbar: one row, search left, controls right (mirrors the Models page).
          Every control is pinned to the SAME h-7 — .btn, .seg and a bare input
          each compute their own height from padding, which is how the refresh
@@ -1055,6 +1077,7 @@
           <X class="w-3 h-3" />
         </button>
       </div>
+    {/if}
     {/if}
   {/if}
 </div>
