@@ -105,6 +105,10 @@ func TestSettingsPatch_ApplyCoversEveryField(t *testing.T) {
 			elem.Elem().SetString("q8_0")
 		case reflect.Slice:
 			elem.Elem().Set(reflect.ValueOf([]int{4096}))
+		case reflect.Map:
+			m := reflect.MakeMap(elem.Elem().Type())
+			m.SetMapIndex(reflect.ValueOf("image"), reflect.ValueOf(`D:/loras`))
+			elem.Elem().Set(m)
 		default:
 			t.Fatalf("field %s has unhandled kind %s — extend this test", f.Name, elem.Elem().Kind())
 		}

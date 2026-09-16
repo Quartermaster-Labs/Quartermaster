@@ -200,6 +200,17 @@ type Settings struct {
 	// a LoRA next to the checkpoint it was trained for is zero-config. A per-model
 	// Override.LoraDir still wins over both.
 	LoraDir string `yaml:"loraDir"`
+	// LoraDirs narrows LoraDir per UI category ("image"|"video" -> path), for the
+	// common case where image LoRAs and video LoRAs are two different trees (a
+	// ComfyUI install keeps models/loras and its video LoRAs apart, and a Wan
+	// LoRA is not loadable by an SDXL checkpoint anyway). Only these two keys
+	// mean anything today: --lora-model-dir is an sd-server flag, and sd-server
+	// is the only backend serving a category with a LoRA concept.
+	//
+	// Resolution order is Override.LoraDir -> LoraDirs[category] -> LoraDir ->
+	// the model gguf's own directory, so LoraDir stays the fleet-wide fallback
+	// for anyone who keeps one tree. Keys are CategoryOrder ids.
+	LoraDirs map[string]string `yaml:"loraDirs"`
 	// ExtraImageModels are sd-server image models that autogen's gguf scan can't
 	// discover or header-parse — chiefly single-file .safetensors DiTs whose weights
 	// exceed the gguf 4-dim tensor cap (HiDream-O1's 5-D vision patch-embed can't be
@@ -388,6 +399,11 @@ type SettingsPatch struct {
 	// --- Fleet-wide model knobs
 	KvQuant *string `yaml:"kvQuant,omitempty"`
 	LoraDir *string `yaml:"loraDir,omitempty"`
+	// LoraDirs is the per-category narrowing of LoraDir. A pointer like every
+	// other field here, so MergeSettingsPatch's nil-means-untouched contract
+	// holds: a bare map would be dropped by the next save from another section.
+	// A pointer to an empty map is the explicit clear.
+	LoraDirs *map[string]string `yaml:"loraDirs,omitempty"`
 }
 
 // MergeSettingsPatch overlays next onto prev field-wise: a nil field in next
@@ -497,6 +513,9 @@ func (p *SettingsPatch) apply(s *Settings) {
 	}
 	if p.LoraDir != nil {
 		s.LoraDir = *p.LoraDir
+	}
+	if p.LoraDirs != nil {
+		s.LoraDirs = *p.LoraDirs
 	}
 }
 

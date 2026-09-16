@@ -826,6 +826,7 @@ export interface AdvancedSettings {
   healthCheckTimeout: number;
   kvQuant: string; // "" = auto; else f32|f16|bf16|q8_0|q5_1|q5_0|q4_1|q4_0
   loraDir: string; // "" = the image model's own folder
+  loraDirs: Record<string, string>; // per-category override of loraDir; keys "image" | "video"
   minGpuVramGB: number; // smallest adapter that counts as inference VRAM (0 = default 3)
   // How a device's shared system-memory pool (AMD GTT) counts toward its budget:
   // "auto" = only for an integrated device whose dedicated memory is under the
