@@ -451,6 +451,14 @@ func (s *Server) handleAPISettingsRootPick(w http.ResponseWriter, r *http.Reques
 		shared.SendResponse(w, r, http.StatusBadRequest, "body must be {category: <non-empty>}")
 		return
 	}
+	// Reject an unknown category rather than storing a root RootList will never
+	// walk: the picker would report success and the folder would silently never
+	// be scanned. Keeps autogen.CategoryOrder and the UI's tab ids honest.
+	category := strings.TrimSpace(body.Category)
+	if !autogen.IsCategory(category) {
+		shared.SendResponse(w, r, http.StatusBadRequest, "unknown model category: "+category)
+		return
+	}
 	path, err := pickFolder()
 	if err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, "folder picker failed: "+err.Error())
@@ -460,7 +468,7 @@ func (s *Server) handleAPISettingsRootPick(w http.ResponseWriter, r *http.Reques
 		w.WriteHeader(http.StatusNoContent) // user cancelled
 		return
 	}
-	if _, err := autogen.UpsertSidecarRoot(s.autogen.GeneratePath, body.Category, path); err != nil {
+	if _, err := autogen.UpsertSidecarRoot(s.autogen.GeneratePath, category, path); err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}

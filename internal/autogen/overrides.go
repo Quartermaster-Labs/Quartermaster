@@ -25,8 +25,8 @@ type GenerateFile struct {
 // Generate-Config.ps1 parameter defaults; applyDefaults fills any zero value.
 type Settings struct {
 	ModelsRoot string `yaml:"modelsRoot"`
-	// CategoryRoots are optional per-UI-category extra scan folders
-	// ("llm"|"image"|"tts"|"transcribe" -> path). Discovery scans the union of
+	// CategoryRoots are optional per-UI-category extra scan folders (one key per
+	// CategoryOrder entry -> path). Discovery scans the union of
 	// ModelsRoot + these; capability detection still decides each model's
 	// category/engine, so a root is just additional scan scope (organizational),
 	// not a hard tag. Empty/absent => only ModelsRoot is scanned.
@@ -295,7 +295,24 @@ type APIKeyEntry struct {
 
 // CategoryOrder is the canonical UI-category order; RootList walks CategoryRoots
 // in this order for deterministic scanning + hashing.
-var CategoryOrder = []string{"llm", "image", "tts", "transcribe"}
+//
+// It MUST stay in sync with MODEL_CATEGORIES in ui-svelte/src/lib/modelUtils.ts:
+// the Models tab renders its folder picker on every tab and posts that tab's id
+// to /api/settings/root/pick, so a category missing here is a root the user can
+// set and see in the toolbar that is then never scanned. The pick handler
+// rejects anything not listed here so that failure is loud rather than silent.
+var CategoryOrder = []string{"llm", "image", "video", "3d", "segment", "tts", "transcribe", "embed"}
+
+// IsCategory reports whether name is a known UI category (i.e. a valid
+// CategoryRoots key).
+func IsCategory(name string) bool {
+	for _, c := range CategoryOrder {
+		if c == name {
+			return true
+		}
+	}
+	return false
+}
 
 // RootList returns the ordered, de-duplicated set of folders to scan: ModelsRoot
 // first, then each CategoryRoots value in CategoryOrder. Blank entries are
