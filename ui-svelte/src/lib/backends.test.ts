@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
+  BACKEND_CLASSES,
+  backendClass,
+  backendClasses,
+  backendServesClass,
   backendOptionLabel,
   backendOptionDetail,
   backendPickOptions,
@@ -117,5 +121,44 @@ describe("hideDuplicateBuildRows", () => {
       "mine",
       "build-sd-server-841-rocm",
     ]);
+  });
+});
+
+describe("backend class taxonomy", () => {
+  it("files audio.cpp under Audio, not Other", () => {
+    for (const kind of ["audiocpp", "audio.cpp", "audiocpp-server", "AudioCpp"]) {
+      expect(backendClass(kind)).toBe("audio");
+    }
+    expect(BACKEND_CLASSES.find((c) => c.id === "audio")?.label).toBe("Audio");
+  });
+
+  it("serves both speech classes from the one row", () => {
+    expect(backendClasses("audiocpp")).toEqual(["tts", "asr"]);
+    expect(backendServesClass("audiocpp", "tts")).toBe(true);
+    expect(backendServesClass("audiocpp", "asr")).toBe(true);
+    expect(backendServesClass("audiocpp", "llm")).toBe(false);
+  });
+
+  it("leaves the single-class engines exactly where they were", () => {
+    expect(backendClass("llama")).toBe("llm");
+    expect(backendClass("vllm")).toBe("llm");
+    expect(backendClass("sd-server")).toBe("image");
+    expect(backendClass("ttscpp")).toBe("tts");
+    expect(backendClass("parakeet")).toBe("asr");
+    expect(backendClass("sam3")).toBe("segment");
+    expect(backendClass("trellis2")).toBe("3d");
+    expect(backendClass("esrgan")).toBe("upscale");
+  });
+
+  it("keeps an unknown kind visible rather than dropping it", () => {
+    expect(backendClass("brand-new-engine")).toBe("custom");
+    expect(backendClasses("brand-new-engine")).toEqual([]);
+    expect(backendServesClass("brand-new-engine", "llm")).toBe(false);
+  });
+
+  it("gives every class in the table a group it can be filed under", () => {
+    for (const cls of BACKEND_CLASSES) {
+      for (const eng of cls.engines) expect(backendClass(eng.kind)).toBe(cls.id);
+    }
   });
 });

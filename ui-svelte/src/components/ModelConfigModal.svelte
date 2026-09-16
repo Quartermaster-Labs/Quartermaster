@@ -30,7 +30,7 @@
   import Select, { type SelectOption } from "./Select.svelte";
   import Toggle from "./Toggle.svelte";
   import { estimateSegments } from "../stores/vram";
-  import { backendClass, backendPickOptions, hideDuplicateBuildRows } from "../lib/backends";
+  import { backendServesClass, backendPickOptions, hideDuplicateBuildRows } from "../lib/backends";
   import {
     IMG_SAMPLERS,
     fmtCtx,
@@ -367,7 +367,15 @@
   const modelClass = $derived(
     config?.class || (imageMode ? "image" : audioMode ? "tts" : samMode ? "segment" : threeDMode ? "3d" : "llm"),
   );
-  const classBackends = $derived(hideDuplicateBuildRows((config?.backends ?? []).filter((b) => backendClass(b.kind) === modelClass), backend));
+  // backendServesClass, not an equality test against the row's group: audio.cpp
+  // is filed under "Audio" but serves tts AND asr, so an equality test hid it
+  // from the picker on exactly the models it can run.
+  const classBackends = $derived(
+    hideDuplicateBuildRows(
+      (config?.backends ?? []).filter((b) => backendServesClass(b.kind, modelClass)),
+      backend,
+    ),
+  );
   const selectedKind = $derived(classBackends.find((b) => b.id === backend)?.kind ?? "");
   const isVllm = $derived(selectedKind === "vllm");
 
