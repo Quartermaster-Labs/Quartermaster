@@ -146,6 +146,12 @@ listed in [`routes.md`](routes.md).
   ctx/game/judge variants; `modelStatus` also tags each model with its swap group and exposing
   listeners. It is a thin memoized wrapper over `config.ParseCmd(cmd).ModelPath` (it runs per SSE
   status build and per slot-cache request).
+  The header-derived `modelKey` from `modelKeys` is the Models table's row axis, and
+  `engineScopedKey` (`modelmeta.go`) narrows it by ENGINE: audio.cpp's gguf of a model and
+  another engine's conversion of the same weights report the SAME header identity, and fusing
+  them onto one row left the audio.cpp packaging with no reachable config editor, since a row
+  has one editor and its backend picker is partitioned by weight format. `familyKey` stays
+  shared so the two rows still sit under one family heading.
 - **Embedded UI.** `ui_dist` is `//go:embed`-ed; the Makefile `ui` target copies the Svelte build
   in, and a placeholder keeps the embed valid before any build. Pre-compressed `.br`/`.gz` siblings
   are preferred; extensionless misses fall back to `index.html` for SPA routing.

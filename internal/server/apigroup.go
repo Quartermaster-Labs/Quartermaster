@@ -201,6 +201,7 @@ func (s *Server) modelStatus() []apiModel {
 		}
 		family := modelGguf(mc)
 		quantName, quantLabel, modelKey, familyKey := modelKeys(family, id)
+		modelKey = engineScopedKey(modelKey, mc)
 		models = append(models, apiModel{
 			Id:           id,
 			Name:         mc.Name,
