@@ -1383,9 +1383,16 @@
     max-width: 100%;
   }
 
-  .prose :global(.diagram-block .diagram-out:has(canvas)) {
-    height: 18rem;
+  /* Chart.js sizes its canvas from this box, so this box must never size itself
+     from the canvas: a plain block of a fixed height, not a flex item and not
+     shrink-to-fit, or the two chase each other on every frame. `min-width: 0`
+     keeps it from being widened by its own content inside the flex parent. */
+  .prose :global(.diagram-block .chart-box) {
     position: relative;
+    height: 18rem;
+    width: 100%;
+    min-width: 0;
+    flex: 0 0 auto;
   }
 
   .prose :global(.diagram-src-btn) {

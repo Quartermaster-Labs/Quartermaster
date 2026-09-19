@@ -18,6 +18,22 @@ import { get } from "svelte/store";
 import { isDarkMode } from "../stores/theme";
 import { sanitizeSvg } from "./svgSanitize";
 import { cssZoom } from "./uiZoom";
+// Types only: a value import here would defeat the lazy chunking below.
+import type { Chart as ChartJs, ChartConfiguration } from "chart.js";
+
+/**
+ * A model-authored Chart.js config. Only `type` is validated (against
+ * CHART_TYPES); the rest is passed straight through, so this describes it
+ * loosely enough to be honest about that and tightly enough to catch a typo in
+ * the theming below.
+ */
+interface ChartSource {
+  type?: string;
+  options?: {
+    plugins?: { legend?: object } & Record<string, unknown>;
+    scales?: { x?: object; y?: object };
+  } & Record<string, unknown>;
+}
 
 // Chart types we accept from a model-authored config. Chart.js will happily
 // build anything its registry knows; the allowlist keeps a malformed/hostile
@@ -112,18 +128,52 @@ async function renderMermaid(host: HTMLElement, src: string, dark: boolean) {
   }
 }
 
-async function renderChart(host: HTMLElement, src: string, dark: boolean) {
-  const cfg = JSON.parse(src);
-  if (!cfg || typeof cfg !== "object" || !CHART_TYPES.has(cfg.type)) {
+// Validate the model's config and pull in Chart.js, without touching the DOM.
+// Split from the drawing below because the draw has to happen with the host
+// already in the document, and everything that can throw belongs before that.
+async function prepareChart(src: string) {
+  const cfg: ChartSource = JSON.parse(src);
+  if (
+    !cfg ||
+    typeof cfg !== "object" ||
+    !cfg.type ||
+    !CHART_TYPES.has(cfg.type)
+  ) {
     throw new Error(`unsupported chart type: ${cfg?.type}`);
   }
   const { Chart, registerables } = await import("chart.js");
   Chart.register(...registerables);
+  return { cfg, Chart };
+}
 
+/**
+ * Draw a prepared chart. `host` MUST already be in the document.
+ *
+ * Synchronous on purpose: the caller puts the card on screen and fills it in
+ * the same frame, so there is no flash of an empty box.
+ */
+function drawChart(
+  host: HTMLElement,
+  cfg: ChartSource,
+  dark: boolean,
+  Chart: typeof ChartJs,
+) {
+  // A dedicated, plain block box of a fixed size, which is what Chart.js asks
+  // for and did not have. It sizes the canvas from the parent's content box, so
+  // a parent that sizes itself from the canvas makes the two chase each other:
+  // the canvas was a direct flex item of the centering `.diagram-out` box, and
+  // with `maintainAspectRatio: false` that is the documented resize loop. Every
+  // lap is a re-render, which is the flicker, and it resizes the message list
+  // under the reader on every frame.
+  const box = document.createElement("div");
+  box.className = "chart-box";
   const canvas = document.createElement("canvas");
-  host.appendChild(canvas);
+  box.appendChild(canvas);
+  host.appendChild(box);
   const grid = dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.1)";
   const text = dark ? "#d4d4d8" : "#3f3f46";
+  // Cast, because the config came out of a model and only its `type` has been
+  // checked: Chart.js validates the rest itself and draws nothing on garbage.
   new Chart(canvas, {
     ...cfg,
     options: {
@@ -133,9 +183,13 @@ async function renderChart(host: HTMLElement, src: string, dark: boolean) {
       // chart.js sizes the backing store from the canvas's LOCAL css size, so
       // its default ratio misses the interface zoom `--qm-scale` puts on :root
       // and the chart comes out a blurry upscale at any size above 100%. Same
-      // correction the dashboard's own charts make (PerformanceChart.svelte);
-      // the canvas is in the DOM by now, so its zoom is readable.
+      // correction the dashboard's own charts make (PerformanceChart.svelte).
+      // Reads correctly only because the host is already in the document: a
+      // detached element reports a zoom of 1 and the correction silently does
+      // nothing, which is what used to happen here.
       devicePixelRatio: (window.devicePixelRatio || 1) * cssZoom(canvas),
+      // Coalesce any resize storm into one redraw instead of one per frame.
+      resizeDelay: 100,
       // Theme last: a model config shouldn't be able to hand us unreadable
       // black-on-black axes.
       plugins: {
@@ -163,7 +217,7 @@ async function renderChart(host: HTMLElement, src: string, dark: boolean) {
               },
             },
     },
-  });
+  } as unknown as ChartConfiguration);
 }
 
 const COPY_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
@@ -351,10 +405,23 @@ export function diagramBlocks(node: HTMLElement) {
       const kind = code.classList.contains("language-mermaid")
         ? "diagram"
         : "chart";
+      // A chart has to be measured where it will live, so its card goes in
+      // first and comes back out if the draw throws. A diagram is drawn
+      // offscreen and only then swapped in, which keeps an empty card off the
+      // screen for the length of the draw.
+      let placed = false;
       try {
-        if (kind === "diagram") await renderMermaid(out, src, dark);
-        else await renderChart(out, src, dark);
+        if (kind === "diagram") {
+          await renderMermaid(out, src, dark);
+        } else {
+          const { cfg, Chart } = await prepareChart(src);
+          if (!pre.isConnected) continue;
+          pre.before(fig);
+          placed = true;
+          drawChart(out, cfg, dark, Chart);
+        }
       } catch (e) {
+        if (placed) fig.remove();
         // Already replaced by the streaming renderer: retrying this orphan is
         // wasted work and its error note would be invisible. The live copy is
         // unmarked and gets its own turn.
@@ -391,7 +458,10 @@ export function diagramBlocks(node: HTMLElement) {
       // The streaming renderer can replace the subtree this block came from
       // while the picture was being drawn. Inserting into the orphan would drop
       // it silently; the live copy is unmarked, so the next scan redraws it.
-      if (!pre.isConnected) continue;
+      if (!pre.isConnected) {
+        if (placed) fig.remove();
+        continue;
+      }
       // Rendered: swap the code block for the picture, with the source one
       // click away (the code-copy button still works on the hidden <pre>).
       const toggle = document.createElement("button");
@@ -405,7 +475,7 @@ export function diagramBlocks(node: HTMLElement) {
       });
       fig.appendChild(toggle);
       pre.style.display = "none";
-      pre.before(fig);
+      if (!placed) pre.before(fig);
     }
   }
 
