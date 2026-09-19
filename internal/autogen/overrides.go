@@ -1372,6 +1372,12 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 		// clear it once, centrally, so it can never reach the emitter as a path.
 		NormalizeNone(&gf.Overrides[i])
 	}
+	// Record the llama backend's compute runtime for the sizer's per-process VRAM
+	// constant. Here rather than at startup because this is the one function every
+	// sizing path shares - emit, the editor preview, the spawn-time guard - so all
+	// three charge the same constant even when the UI repoints the backend at
+	// runtime and no restart happens.
+	NoteBackendRuntime(gf.Settings.ServerExe)
 	return gf, nil
 }
 

@@ -59,15 +59,23 @@ func TestComputeBufferGB(t *testing.T) {
 		t.Errorf("missing dims: got %.3f, want fallback %.3f", fb, computeFallbackGB)
 	}
 
-	// A non-CUDA GPU (Vulkan/ROCm) swaps the runtime constant rather than
-	// dropping it: measured per-process, the HIP runtime reserves MORE than the
-	// CUDA one, so charging 0 there under-committed by ~0.4 GB per model.
+	// A non-CUDA GPU swaps the runtime constant rather than dropping it: measured
+	// per-process, both non-CUDA runtimes reserve MORE than the CUDA one, so
+	// charging 0 there under-committed by ~0.4 GB per model.
 	cudaGPU.Store(false)
 	defer cudaGPU.Store(true)
-	want := computeHipCtxGB - computeCudaCtxGB
+	want := computeVulkanCtxGB - computeCudaCtxGB
 	if d := computeBufferGB(meta, 1024, 1.0) - got; math.Abs(d-want) > 0.001 {
-		t.Errorf("non-CUDA should swap in the %.2f HIP-ctx constant (delta %+.2f), got %+.3f", computeHipCtxGB, want, d)
+		t.Errorf("non-CUDA should swap in the %.2f Vulkan-ctx constant (delta %+.2f), got %+.3f", computeVulkanCtxGB, want, d)
 	}
+	// ...and a ROCm/HIP backend on that same GPU swaps in the bigger one again.
+	rocmBackend.Store(true)
+	defer rocmBackend.Store(false)
+	wantRocm := computeRocmCtxGB - computeCudaCtxGB
+	if d := computeBufferGB(meta, 1024, 1.0) - got; math.Abs(d-wantRocm) > 0.001 {
+		t.Errorf("ROCm should swap in the %.2f ROCm-ctx constant (delta %+.2f), got %+.3f", computeRocmCtxGB, wantRocm, d)
+	}
+	rocmBackend.Store(false)
 	// The fallback is a whole-buffer figure, so it must not move with the backend.
 	if fb := computeBufferGB(Metadata{}, 1024, 1.0); fb != computeFallbackGB {
 		t.Errorf("non-CUDA fallback: got %.3f, want %.3f", fb, computeFallbackGB)
