@@ -66,13 +66,37 @@ async function getMermaid(dark: boolean) {
   return mermaid;
 }
 
+// Where mermaid is allowed to build a diagram before we take the finished SVG.
+//
+// Handed nothing, render() builds its scratch DOM in <body> -- and the app shell
+// is exactly one viewport tall, so a full-size diagram parked there makes the
+// document taller than the window and grows a SECOND, document-level scrollbar
+// for as long as the draw runs. While an answer streams, diagrams are drawn
+// over and over as the text grows, so that scrollbar flickers in and out and
+// shifts the whole app under the reader.
+//
+// `position: fixed` keeps the host out of the document's scrollable overflow,
+// so it can hold a diagram of any size without moving anything. It stays
+// visible to layout (opacity, not `display: none`) because mermaid measures
+// every label with getBBox, which reports zeros in an unrendered subtree and
+// would collapse the diagram. One host per draw, never a shared one: render()
+// clears the element it is given, so two concurrent draws would wipe each other.
+function scratchHost(): HTMLElement {
+  const el = document.createElement("div");
+  el.style.cssText =
+    "position:fixed;top:0;left:-100000px;width:1200px;opacity:0;pointer-events:none";
+  document.body.appendChild(el);
+  return el;
+}
+
 async function renderMermaid(host: HTMLElement, src: string, dark: boolean) {
   const mermaid = await getMermaid(dark);
   const id = `qm-diagram-${seq++}`;
+  const scratch = scratchHost();
   try {
     // parse() first: it reports a syntax error without ever entering render().
     await mermaid.parse(src);
-    const { svg } = await mermaid.render(id, src);
+    const { svg } = await mermaid.render(id, src, scratch);
     host.innerHTML = svg;
     const el = host.querySelector("svg");
     if (el) {
@@ -80,11 +104,11 @@ async function renderMermaid(host: HTMLElement, src: string, dark: boolean) {
       el.style.maxWidth = "100%";
     }
   } finally {
-    // Belt and braces for the scratch div `suppressErrorRendering` normally
-    // clears: mermaid only removes it on the two failure paths it guards, so a
-    // throw from anywhere else in render() would still leave an orphan sized to
-    // the diagram sitting in <body>.
-    document.getElementById(`d${id}`)?.remove();
+    // Takes mermaid's own scratch div with it, which is the belt and braces for
+    // `suppressErrorRendering`: mermaid clears that div only on the two failure
+    // paths it guards, so a throw from anywhere else in render() would leave an
+    // orphan sized to the diagram behind.
+    scratch.remove();
   }
 }
 
