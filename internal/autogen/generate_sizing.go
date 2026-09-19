@@ -450,20 +450,41 @@ func estForOffload(meta Metadata, prof profile, kvReserve, ckptGB float64, ngl, 
 const (
 	computeActCopies    = 8.0
 	computeCudaCtxGB    = 0.3
-	computeHipCtxGB     = 0.4
+	computeVulkanCtxGB  = 0.4
+	computeRocmCtxGB    = 0.8
 	computeLogitsTokens = 1024.0
 	computeFallbackGB   = 0.17 // vocab/embd dims missing => prior flat estimate
 )
 
-// computeHipCtxGB is the same fixed per-PROCESS runtime cost for a non-CUDA
-// (ROCm/HIP, Vulkan) build: the runtime's own context, its kernel code objects
+// computeVulkanCtxGB / computeRocmCtxGB are the same fixed per-PROCESS runtime
+// cost for a non-CUDA build: the runtime's own context, its kernel code objects
 // and the BLAS workspace, none of which the analytic graph term below covers.
 // It used to be charged as 0, on the reasoning that the CUDA figure would not
-// transfer. Measured on an RX 7900 XTX (ROCm gfx1100 build) against PDH
-// per-process dedicated VRAM: qwen3-4b-instruct Q6_K at ctx 16384 held 5.00 GiB
-// against 4.60 GiB of modeled components, and a Qwen3.8-27B measured earlier
-// left the same ~0.4 GiB unexplained. Two unrelated models landing on the same
-// figure is what promoted this from a ponytail to a constant.
+// transfer. It transfers and then some.
+//
+// The two are SPLIT because they are not the same number, and lumping them under
+// one "non-CUDA" constant made the sizer wrong on exactly one of the two:
+//
+//   - Vulkan, 0.4. Measured at PEAK on an RX 7900 XTX (b10405-vulkan,
+//     Qwen3.6-27B UD-Q4_K_XL, ctx 102400, -ngl 99): 20.27 GB dedicated + 2.11 GB
+//     shared = 22.38 GB real against a ~22.4 GB estimate charging 0.4. Residual
+//     ~0, so this side is calibrated.
+//   - ROCm/HIP, 0.8. Measured at PEAK on the same card (lemonade
+//     b1328-llama-windows-rocm-gfx110x, Qwen3.8-27B-GSQ-RCO IQ3_S + baked MTP,
+//     ctx 151552, -ngl 99): ~0.4 GB MORE than a 19.12 GB estimate that already
+//     charged 0.4. Same card, same measurement method, twice the constant.
+//
+// The mechanism is why the split is a model and not a fudge: hipBLASLt/rocBLAS
+// load Tensile kernel code objects for the target arch into VRAM, and Vulkan has
+// no equivalent (its shader pipelines are far smaller). The ROCm libraries load
+// them LAZILY, on the first real GEMM, which is also why the earlier ROCm
+// numbers that produced the 0.4 figure came in low: they were taken on an idle
+// process, before any kernel library had been paged in. See the PEAK warning
+// below - it applies to this constant's own derivation, not just to the graph
+// term.
+//
+// Each side is one measurement. A third data point on either runtime should
+// move the number rather than be explained away.
 
 // Do NOT scale this model down on Vulkan/ROCm without measuring PEAK, not idle.
 // An idle process (post-load, one short prompt) holds ~1.9GB less than the same
@@ -496,14 +517,23 @@ func computeGraphGB(meta Metadata, ub int, factor float64) (float64, bool) {
 }
 
 // runtimeCtxGB is the fixed per-PROCESS GPU-runtime cost, picked by the backend
-// actually in use: the two runtimes reserve different amounts, and both were
-// measured rather than assumed. Charged once per llama-server, NOT once per
+// actually in use: the three runtimes reserve different amounts, and all three
+// were measured rather than assumed. Charged once per llama-server, NOT once per
 // llama_context - a second context (the MTP drafter) shares the process.
+//
+// CUDA is decided by the GPU VENDOR (DetectGpuCompute), ROCm-vs-Vulkan by the
+// BACKEND BINARY (NoteBackendRuntime), because the same AMD card runs either and
+// they differ by 0.4 GB. Vulkan is the non-CUDA default: it is what the installer
+// picks for a discrete GPU, and it is the cheaper of the two, so an unrecognised
+// path never silently inflates every model's estimate.
 func runtimeCtxGB() float64 {
 	if usingCudaGPU() {
 		return computeCudaCtxGB
 	}
-	return computeHipCtxGB
+	if usingRocmBackend() {
+		return computeRocmCtxGB
+	}
+	return computeVulkanCtxGB
 }
 
 // computeBufferGB estimates the GPU compute buffer for a given physical batch
@@ -658,7 +688,7 @@ func mtpDraftSlopeFor(meta Metadata, spec, kvKDraft, kvVDraft string, draftSizeG
 // cover exactly this and was ~4x short. Measured against PDH per-process
 // dedicated VRAM on an RX 7900 XTX (ROCm), Qwen3.8-27B at ctx 114688 held
 // 15.82 GiB against 13.95 GiB of modeled components; ~0.4 of that gap is the
-// process runtime constant (computeHipCtxGB) and the drafter's graph is the
+// process runtime constant (runtimeCtxGB) and the drafter's graph is the
 // largest single piece of what is left. The pad stays on top for the second
 // context's non-graph allocations (its scheduler, its own state buffers).
 //

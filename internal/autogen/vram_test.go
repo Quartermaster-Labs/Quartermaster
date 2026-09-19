@@ -113,3 +113,56 @@ func TestAutogen_resolveAutoVram_postconditions(t *testing.T) {
 		t.Fatalf("target above free clamped to %v; want ~%v, not free minus the %v overhead", hi.TargetVramGB, free, hi.VramOverheadGB)
 	}
 }
+
+// TestClassifyBackendRuntime pins the path classifier that decides between the
+// 0.4 GB Vulkan and 0.8 GB ROCm per-process constants. Getting this wrong is
+// silent: it just mis-sizes every model on the box by 0.4 GB, in whichever
+// direction, so the "says nothing" case must stay UNKNOWN rather than defaulting.
+func TestClassifyBackendRuntime(t *testing.T) {
+	cases := []struct {
+		name       string
+		exe        string
+		rocm, know bool
+	}{
+		{"installer rocm layout", `E:\bin\custom-lemonade-sdk-llamacpp-rocm\b1328-llama-windows-rocm-gfx110x\llama-server.exe`, true, true},
+		{"hand-built hip", "/opt/llama.cpp/build-hip/bin/llama-server", true, true},
+		{"hipblas in path", "C:/llama/hipblas-b1300/llama-server.exe", true, true},
+		{"vulkan build", `E:\bin\llamacpp\b10405-llama-windows-vulkan\llama-server.exe`, false, true},
+		{"cuda build", `E:\bin\llamacpp\b10405-llama-windows-cuda-12.4\llama-server.exe`, false, true},
+		{"bare exe says nothing", "llama-server.exe", false, false},
+		{"empty", "  ", false, false},
+		// "hip" must not match inside an ordinary word, or every model on the box
+		// is charged 0.4 GB it never allocates.
+		{"hip inside a word", "D:/shipsets/llama/llama-server.exe", false, false},
+		{"chipset dir", `D:\chipset-tools\llama-server.exe`, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rocm, known := classifyBackendRuntime(tc.exe)
+			if rocm != tc.rocm || known != tc.know {
+				t.Fatalf("classifyBackendRuntime(%q) = (rocm=%v, known=%v), want (%v, %v)", tc.exe, rocm, known, tc.rocm, tc.know)
+			}
+		})
+	}
+}
+
+// TestNoteBackendRuntimeLatch covers the idempotence rule: an unreadable path
+// must leave the previous verdict standing (a bare exe is not evidence of
+// Vulkan), but a path that DOES name a runtime must be able to clear the flag
+// again when the UI repoints the registry at a different build.
+func TestNoteBackendRuntimeLatch(t *testing.T) {
+	t.Cleanup(func() { rocmBackend.Store(false) })
+
+	NoteBackendRuntime(`E:\bin\llamacpp-rocm\b1328-llama-windows-rocm-gfx110x\llama-server.exe`)
+	if !usingRocmBackend() {
+		t.Fatal("a rocm path should set the rocm backend flag")
+	}
+	NoteBackendRuntime("llama-server.exe")
+	if !usingRocmBackend() {
+		t.Fatal("an unrecognised path must leave the previous verdict alone, not clear it")
+	}
+	NoteBackendRuntime(`E:\bin\llamacpp\b10405-llama-windows-vulkan\llama-server.exe`)
+	if usingRocmBackend() {
+		t.Fatal("repointing at a vulkan build should clear the rocm flag")
+	}
+}
