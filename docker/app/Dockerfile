@@ -95,7 +95,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl jq unzip \
     && rm -rf /var/lib/apt/lists/*
 COPY docker/app/fetch-backends.sh /fetch-backends.sh
-RUN /fetch-backends.sh /out/backends
+# The secret is the GitHub API token the script authenticates its release
+# lookups with, mounted at /run/secrets/github_token for the length of this one
+# RUN and never written to a layer. Optional: a build that passes no --secret
+# still works, it just queries the API anonymously and can be rate limited.
+RUN --mount=type=secret,id=github_token /fetch-backends.sh /out/backends
 
 # ── Runtime ───────────────────────────────────────────────────────────
 #
