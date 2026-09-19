@@ -84,6 +84,12 @@ export interface HubSources {
   sources: { id: string; name: string }[];
   modelsRoot: string;
   hasToken: boolean;
+  /** Whether opening the models folder in the OS file manager can work for THIS
+   *  browser. False when quartermaster runs headless (a container has no
+   *  xdg-open) or when the dashboard is open from another machine, where the
+   *  server's file manager would appear on a screen nobody is watching. The UI
+   *  browses the tree in-app instead. */
+  canReveal?: boolean;
 }
 
 export class HubApiError extends Error {
@@ -242,6 +248,39 @@ export function revealFolder(path = ""): Promise<{ opened: string }> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path }),
   });
+}
+
+/** One entry in a models-folder listing. `size` is 0 for directories: a folder's
+ *  real size means walking it, which is not worth a stat storm on a models tree. */
+export interface HubFileEntry {
+  name: string;
+  path: string;
+  dir: boolean;
+  size: number;
+  modified?: string;
+}
+
+/** One directory under the models root. `parent` is empty AT the root, which is
+ *  how the UI knows not to offer a step up the server would refuse. */
+export interface HubFolder {
+  root: string;
+  path: string;
+  rel: string;
+  parent: string;
+  entries: HubFileEntry[];
+  truncated?: boolean;
+}
+
+/**
+ * listHubFolder reads one directory under the models root.
+ *
+ * The in-app answer to revealFolder: a headless server has no file manager to
+ * open, so the browser renders the listing itself. Read-only, and the server
+ * refuses any path outside the models root. No argument means the root.
+ */
+export function listHubFolder(path = ""): Promise<HubFolder> {
+  const v = path ? `?path=${encodeURIComponent(path)}` : "";
+  return hubFetch<HubFolder>(`/api/hub/files${v}`);
 }
 
 /**

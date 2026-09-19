@@ -18,7 +18,7 @@ re-implementing them.
 | [`routes.md`](routes.md) | The full route table: what is registered where, and on which middleware chain |
 | [`http-core.md`](http-core.md) | The mux, chains and dispatch — `Server`/`New`/`localPeerHandler`, auth + admin gating, per-listener scoping, metrics teeing, in-place reload, synthetic `?ctx=`/backend variants, VRAM protection, reasoning-effort translation, prompt canonicalization, the embedded UI |
 | [`configapi.md`](configapi.md) | The `-generate` config editor + managed backend installs (`configapi*.go`, `backendsapi.go`, the pickers) |
-| [`hubapi.md`](hubapi.md) | `/api/hub/*` — search, download jobs, the pre-download context sizer, reveal-folder |
+| [`hubapi.md`](hubapi.md) | `/api/hub/*` — search, download jobs, the pre-download context sizer, reveal-folder, the in-app models-folder listing |
 | [`slotcache.md`](slotcache.md) | Slot KV-cache persistence: preamble seeding, save/restore paths, pruning, the recurrent-arch seed skip |
 | `videojobs.go` (package comment) | Async video renders: the job registry, the scheduler lease, the watcher goroutine |
 | [`playground.md`](playground.md) | The playground app + the **server-owned turn runner**: tool loop, reasoning-box titles, tool-call replay, the quartermaster MCP, assistant memory |

@@ -31,6 +31,7 @@
     type FitVerdict,
     type HubEstimate,
   } from "../lib/hubApi";
+  import FolderBrowserModal from "../components/FolderBrowserModal.svelte";
   import LogSlider from "../components/LogSlider.svelte";
   import {
     SIZE_STOPS,
@@ -54,6 +55,11 @@
   let results = $state<HubModel[]>([]);
   let selected = $state<HubDetail | null>(null);
   let modelsRoot = $state("");
+  // Whether the SERVER can open a file manager for this browser. False on a
+  // headless host or from a remote machine, where the button browses the tree
+  // in-app instead of shelling out into a void (issue #66).
+  let canReveal = $state(true);
+  let folderOpen = $state(false);
   let targetVramGB = $state(0);
   let available = $state(true);
   let searching = $state(false);
@@ -278,6 +284,7 @@
     try {
       const s = await getHubSources();
       modelsRoot = s.modelsRoot;
+      canReveal = s.canReveal !== false;
     } catch (e) {
       // 501 is the one case where the feature genuinely isn't in this build;
       // anything else is a fault the user needs to see rather than a blank tab.
@@ -524,11 +531,25 @@
     return f.packages[0]?.sizeBytes ?? 0;
   }
 
+  // One button, two meanings. On the box itself it hands the folder to the OS
+  // file manager, which is what a local user wants; anywhere else that is a
+  // no-op at best, so the same click opens the in-app listing. The 409 retry
+  // covers the gap between the two: canReveal was read once at mount, and a
+  // reverse proxy or a reload can move this session to the other side of it.
   async function openModelsFolder(): Promise<void> {
     err = null;
+    if (!canReveal) {
+      folderOpen = true;
+      return;
+    }
     try {
       await revealFolder();
     } catch (e) {
+      if (e instanceof HubApiError && e.status === 409) {
+        canReveal = false;
+        folderOpen = true;
+        return;
+      }
       err = e instanceof Error ? e.message : String(e);
     }
   }
@@ -762,7 +783,7 @@
       <button
         class="icon-btn ml-auto mr-1 shrink-0 self-center"
         onclick={openModelsFolder}
-        use:tip={modelsRoot ? `Open ${modelsRoot}` : "Open the models folder"}
+        use:tip={modelsRoot ? `${canReveal ? "Open" : "Browse"} ${modelsRoot}` : "Open the models folder"}
         aria-label="Open the models folder"
       >
         <FolderOpen class="w-3.5 h-3.5" />
@@ -1249,6 +1270,10 @@
     {/if}
   {/if}
 </div>
+
+<!-- The headless half of the folder button: a read-only listing of the models
+     tree, for when there is no file manager on the other end of it. -->
+<FolderBrowserModal bind:open={folderOpen} />
 
 <style>
   /* Model cards are written for a full-width page on the hub; these scoped

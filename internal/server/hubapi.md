@@ -103,9 +103,33 @@ Shelling out on the SERVER is only sane because the dashboard is already `adminC
 browser cannot open a local folder, and quartermaster is a local tool whose UI and models tree
 share a box.
 
-Two guards: `revealTarget` requires the path to resolve **inside** the models root (`filepath.Rel`
-containment; a file resolves to its parent dir) and to already exist. An empty/absent body means
+Two guards: `revealTarget` requires the path to resolve **inside** the models root and to already
+exist. Containment compares the **resolved** paths (`filepath.EvalSymlinks` on both sides, via
+`realPath`) so a symlink under the root pointing at `/etc` cannot pass a textual prefix check; a
+file resolves to its parent dir. A **relative** path is relative to the models root, not the
+process CWD — that is the form the in-app browser's breadcrumbs send. An empty/absent body means
 the models root itself. The path is **one argv element**, never interpolated into a shell.
+
+`canReveal(r)` gates the whole thing: shelling out only helps a caller on **this** box with a
+**desktop session**. It is false for a non-loopback `RemoteAddr` (admin access can be widened past
+loopback with `-admin-allow`/`-admin-open`) and false on Linux with no `xdg-open` on `PATH` — the
+headless-container case from issue #66, where the old code spawned into the void or reported a
+missing binary. Such a request gets a **409**, and the same flag rides along on
+`GET /api/hub/sources` as `canReveal` so the UI knows before it offers the button.
+
+## `filebrowser.go` — `GET /api/hub/files?path=`
+
+The answer for everyone `canReveal` says no to: a **read-only** listing of one directory at or
+under the models root, which the browser renders itself. Nothing here renames, moves, deletes or
+serves file *content*; it reports names, sizes and mtimes, and reuses `revealTarget` as its one
+containment guard.
+
+The DTO carries `root`, `path`, `rel` (slash form, `""` at the root), `parent` (`""` **at** the
+root, so the UI cannot offer an "up" the server would refuse) and `entries`. Entries are folders
+first then case-insensitive by name (a models tree is repo dirs holding shards; the other order
+buries the dirs), a symlink reports what it *points at*, and a directory beyond
+`hubFilesMaxEntries` (4000) is cut with `truncated: true` rather than handed over as a 50 MB JSON
+document. `listFolderEntries` is split out so that shape is testable without a `Server`.
 
 `openInFileManager` **starts and never waits** — Explorer exits non-zero on successful opens and
 `xdg-open` can outlive the handler, so only a failure to *spawn* is reported (that is the case

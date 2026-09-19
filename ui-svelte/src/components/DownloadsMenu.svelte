@@ -11,11 +11,18 @@
   import { link } from "svelte-spa-router";
   import { ArrowDownToLine, X, AlertTriangle, Check, Ban, FolderOpen, Pause, Play } from "lucide-svelte";
   import HubAvatar from "./HubAvatar.svelte";
-  import { cancelHubDownload, pauseHubDownload, resumeHubDownload, revealFolder, humanBytes, type HubJob } from "../lib/hubApi";
+  import { cancelHubDownload, pauseHubDownload, resumeHubDownload, revealFolder, getHubSources, humanBytes, HubApiError, type HubJob } from "../lib/hubApi";
+  import FolderBrowserModal from "./FolderBrowserModal.svelte";
   import { hubJobs, hubRates, hubActiveCount, refreshHubJobs, isUnfinishedJob } from "../stores/hubJobs";
 
   let open = $state(false);
   let err = $state<string | null>(null);
+  // Headless fallback, same deal as the Browse page: when the server has no
+  // file manager to open (a container) or the dashboard is being driven from
+  // another machine, the folder link shows the tree in-app instead.
+  let canReveal = $state(true);
+  let folderOpen = $state(false);
+  let folderPath = $state("");
   // Job id whose Cancel is awaiting confirmation. One at a time: opening a
   // second confirm replaces the first, so there is never a second armed button
   // sitting off-screen in a scrolled list.
@@ -26,7 +33,14 @@
   // One check on load: a pull started before this reload (or from another tab)
   // has to show up in the count without anyone opening the panel first. The
   // store schedules its own polling from there and stops when nothing runs.
-  onMount(refreshHubJobs);
+  onMount(() => {
+    refreshHubJobs();
+    // Best effort: if this can't be read the button keeps its local behaviour
+    // and the 409 below still catches the headless case on first click.
+    getHubSources()
+      .then((s) => (canReveal = s.canReveal !== false))
+      .catch(() => {});
+  });
 
   // Running AND paused: a paused pull is outstanding work, not history.
   const active = $derived($hubJobs.filter(isUnfinishedJob));
@@ -111,11 +125,30 @@
   // No argument = the models root itself.
   async function reveal(dir = ""): Promise<void> {
     err = null;
+    if (!canReveal) {
+      showInApp(dir);
+      return;
+    }
     try {
       await revealFolder(dir);
     } catch (e) {
+      // 409 = the server knows it cannot help; fall through to the listing
+      // rather than report a failure the user can do nothing about.
+      if (e instanceof HubApiError && e.status === 409) {
+        canReveal = false;
+        showInApp(dir);
+        return;
+      }
       err = e instanceof Error ? e.message : String(e);
     }
+  }
+
+  // The panel closes behind the modal: it is a hover-ish menu on the status
+  // rail, and leaving it stacked under a dialog reads as two things open.
+  function showInApp(dir: string): void {
+    folderPath = dir;
+    folderOpen = true;
+    open = false;
   }
 </script>
 
@@ -264,7 +297,7 @@
             {#if j.phase === "done" && j.dir}
               <button
                 class="flex w-full cursor-pointer items-center gap-1 text-left text-[0.6rem] text-txtsecondary hover:text-primary hover:underline transition-colors"
-                use:tip={"Open this folder"}
+                use:tip={canReveal ? "Open this folder" : "Browse this folder"}
                 onclick={() => reveal(j.dir)}
               >
                 <FolderOpen class="w-3 h-3 shrink-0" /><span class="truncate">{j.dir}</span>
@@ -277,8 +310,10 @@
 
     <div class="px-3 py-1.5 border-t border-card-border text-[0.6rem]">
       <button class="inline-flex cursor-pointer items-center gap-1 text-primary hover:underline" onclick={() => reveal()}>
-        <FolderOpen class="w-3 h-3" /> Open models folder
+        <FolderOpen class="w-3 h-3" /> {canReveal ? "Open" : "Browse"} models folder
       </button>
     </div>
   </div>
 {/if}
+
+<FolderBrowserModal bind:open={folderOpen} startPath={folderPath} />

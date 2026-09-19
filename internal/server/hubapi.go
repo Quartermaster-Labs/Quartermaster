@@ -129,6 +129,10 @@ func (s *Server) handleAPIHubSources(w http.ResponseWriter, r *http.Request) {
 		"sources":    out,
 		"modelsRoot": s.hubModelsRoot(),
 		"hasToken":   hubToken() != "",
+		// Whether the "open the models folder" button can do anything for THIS
+		// caller: false for a remote browser or a host with no file manager, in
+		// which case the UI browses the tree in-app instead (filebrowser.go).
+		"canReveal": canReveal(r),
 	})
 }
 
