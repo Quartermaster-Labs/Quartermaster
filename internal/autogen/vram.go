@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -15,15 +16,85 @@ import (
 
 // cudaGPU records whether the serving GPU is CUDA (NVIDIA). It picks which
 // fixed per-process runtime constant runtimeCtxGB charges: computeCudaCtxGB for
-// the CUDA runtime + cuBLAS workspace, computeHipCtxGB for a Vulkan/ROCm one
-// (AMD/Intel), which measured LARGER, not zero. Defaults to true (assume CUDA)
-// so NVIDIA boxes and tests are unchanged until DetectGpuCompute flips it.
+// the CUDA runtime + cuBLAS workspace, or one of the non-CUDA constants, which
+// measured LARGER, not zero. Defaults to true (assume CUDA) so NVIDIA boxes and
+// tests are unchanged until DetectGpuCompute flips it.
 var cudaGPU atomic.Bool
+
+// rocmBackend records whether the llama backend BINARY is a ROCm/HIP build,
+// which is a different question from cudaGPU's: the same AMD card runs either a
+// Vulkan or a ROCm llama-server, and the two reserve 0.4 GB and 0.8 GB of
+// per-process VRAM respectively (see computeRocmCtxGB). The GPU vendor cannot
+// tell them apart, so this is set from the backend path by NoteBackendRuntime
+// rather than from telemetry.
+//
+// Deliberately SEPARATE state rather than a three-way enum: DetectGpuCompute
+// (startup telemetry) and NoteBackendRuntime (config load) run in either order
+// depending on the entry point, and one flat value would let whichever ran last
+// clobber the other's answer.
+var rocmBackend atomic.Bool
 
 func init() { cudaGPU.Store(true) }
 
 // usingCudaGPU reports the detected GPU class (default true until detected).
 func usingCudaGPU() bool { return cudaGPU.Load() }
+
+// usingRocmBackend reports whether the resolved llama backend is a ROCm/HIP
+// build (default false => Vulkan, the cheaper non-CUDA constant).
+func usingRocmBackend() bool { return rocmBackend.Load() }
+
+// rocmPathMarkers are the substrings a ROCm/HIP llama.cpp build carries in its
+// install path. The in-app installer names its directories after the catalog
+// variant id ("...-rocm/b1328-llama-windows-rocm-gfx110x"), and a hand-built
+// tree almost always says so too ("build-hip"). "hip" is matched only as a
+// delimited token, never bare: it is a substring of ordinary words ("ships",
+// "chipset") and a false positive here charges every model 0.4 GB it does not use.
+var rocmPathMarkers = []string{"rocm", "hipblas", "-hip", "_hip", "/hip", ".hip"}
+
+// vulkanPathMarkers / cudaPathMarkers mark a path as KNOWN non-ROCm, so pointing
+// the registry from a ROCm build at a Vulkan one clears the flag instead of
+// leaving it latched on from the previous load.
+var vulkanPathMarkers = []string{"vulkan", "kompute"}
+var cudaPathMarkers = []string{"cuda", "cublas"}
+
+// classifyBackendRuntime reads a backend executable path for the compute runtime
+// it was built against. known is false when the path says nothing either way, in
+// which case the caller must leave the current verdict alone: a bare
+// "llama-server.exe" is not evidence of Vulkan.
+func classifyBackendRuntime(exe string) (rocm, known bool) {
+	p := strings.ToLower(filepath.ToSlash(strings.TrimSpace(exe)))
+	if p == "" {
+		return false, false
+	}
+	for _, m := range rocmPathMarkers {
+		if strings.Contains(p, m) {
+			return true, true
+		}
+	}
+	for _, m := range append(append([]string{}, vulkanPathMarkers...), cudaPathMarkers...) {
+		if strings.Contains(p, m) {
+			return false, true
+		}
+	}
+	return false, false
+}
+
+// NoteBackendRuntime records the compute runtime of the resolved llama backend
+// so runtimeCtxGB can charge the right per-process constant. Called from
+// LoadGenerateFile, the one choke point every sizing and estimate path goes
+// through, so the emitter and the editor's preview always agree.
+//
+// Best-effort and idempotent: an unrecognised path leaves the previous verdict
+// standing, so a box that resolves its backend through some route this cannot
+// read keeps whatever DetectGpuCompute's class implies rather than flipping to a
+// wrong constant. Only the DEFAULT llama exe is read; a per-model backend
+// override pointing at a different flavour is not modelled (it would need the
+// constant threaded per profile, and no such mixed install has been seen).
+func NoteBackendRuntime(exe string) {
+	if rocm, known := classifyBackendRuntime(exe); known {
+		rocmBackend.Store(rocm)
+	}
+}
 
 // DetectGpuCompute samples the GPU once and records whether it is CUDA (NVIDIA),
 // so the sizer only charges the CUDA-context overhead on a CUDA GPU. Best-effort:

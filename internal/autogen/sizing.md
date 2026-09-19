@@ -63,14 +63,48 @@ and drove VRAM spillover.
   `llama_context` over the same model (the baked-in MTP drafter) allocates its
   own graph, see the drafter section below.
 - **`runtimeCtxGB` is per-PROCESS**, charged once per llama-server whatever the
-  context count: `computeCudaCtxGB=0.3` (CUDA runtime + cuBLAS workspace) when
-  `usingCudaGPU()`, else `computeHipCtxGB=0.4`. The non-CUDA figure used to be
-  **0**, on the reasoning that a CUDA number would not transfer. It transfers and
-  then some: measured against PDH per-process dedicated VRAM on an RX 7900 XTX
-  (ROCm gfx1100), qwen3-4b-instruct Q6_K at ctx 16384 held 5.00 GiB against
-  4.60 GiB of modeled components, and a Qwen3.8-27B left the same ~0.4 GiB
-  unexplained. Two unrelated models landing on the same figure is what promoted
-  it from a ponytail to a constant.
+  context count. Three values, because the three GPU runtimes reserve three
+  different amounts:
+
+  | Runtime | Constant | GB | Decided by |
+  |---|---|---|---|
+  | CUDA | `computeCudaCtxGB` | 0.3 | GPU vendor (`usingCudaGPU`, NVIDIA in the adapter name) |
+  | Vulkan | `computeVulkanCtxGB` | 0.4 | non-CUDA default |
+  | ROCm / HIP | `computeRocmCtxGB` | 0.8 | backend BINARY path (`usingRocmBackend`) |
+
+  The non-CUDA figure used to be **0**, on the reasoning that a CUDA number would
+  not transfer. It transfers and then some.
+
+  **ROCm-vs-Vulkan cannot be read off the GPU**, which is why this is the one
+  sizing input keyed to the executable rather than to telemetry: the same RX 7900
+  XTX runs either build, and they differ by 0.4 GB. `NoteBackendRuntime`
+  (`vram.go`) classifies `settings.serverExe` by path marker (`rocm`, `hipblas`,
+  a delimited `hip`) and is called from `LoadGenerateFile`, the choke point every
+  sizing path shares, so emit / editor preview / spawn guard never disagree. A
+  path that names no runtime leaves the previous verdict standing — a bare
+  `llama-server.exe` is not evidence of Vulkan — and Vulkan is the non-CUDA
+  default because it is both the installer's pick for a discrete GPU and the
+  cheaper of the two, so an unreadable path can never silently inflate the fleet.
+
+  Provenance, one PEAK measurement each on the same RX 7900 XTX (dedicated +
+  shared, mid-generation):
+
+  - **Vulkan 0.4** — b10405-vulkan, Qwen3.6-27B UD-Q4_K_XL, ctx 102400, `-ngl 99`:
+    20.27 GB dedicated + 2.11 GB shared = 22.38 GB real vs a ~22.4 GB estimate
+    already charging 0.4. Residual ~0.
+  - **ROCm 0.8** — lemonade b1328-llama-windows-rocm-gfx110x, Qwen3.8-27B-GSQ-RCO
+    IQ3_S + baked MTP, ctx 151552, `-ngl 99`: ~0.4 GB *over* a 19.12 GB estimate
+    that already charged 0.4.
+
+  The mechanism is why this is a model and not a fudge: hipBLASLt/rocBLAS page
+  Tensile kernel code objects for the target arch into VRAM and Vulkan has no
+  equivalent. They load **lazily, on the first real GEMM**, which also explains
+  why the older ROCm numbers that produced the original 0.4 came in low — they
+  were taken on an idle process. The PEAK warning below applies to this
+  constant's own derivation, not just to the graph term.
+
+  Each side is n=1. A third data point on either runtime should move the number
+  rather than be explained away.
 
 - **`computeLogitsTokens` is 1024, not 256.** llama.cpp sizes the output *tensor*
   by `n_outputs`, but the measured CUDA compute buffer still grows with the

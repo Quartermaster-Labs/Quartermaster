@@ -68,7 +68,7 @@ func TestAutogen_gpuSetFromStats(t *testing.T) {
 // that ratio every per-device constraint binds at once, which is what makes the
 // POOLED budget safe to size against.
 func TestAutogen_TensorSplit(t *testing.T) {
-	// Non-CUDA on purpose: perDeviceFixedGB is computeHipCtxGB (0.4), the case
+	// Non-CUDA on purpose: perDeviceFixedGB is computeVulkanCtxGB (0.4), the case
 	// that used to be charged 0 and hand a Vulkan/ROCm box a free extra device.
 	setCudaGPU(t, false)
 
@@ -106,8 +106,8 @@ func TestAutogen_TensorSplit(t *testing.T) {
 		t.Fatalf("single-device TensorSplit = %v, want nil", split)
 	}
 	// One extra device, so one runtime context, at the backend's own constant.
-	if got := set.ExtraDeviceOverheadGB(); got != computeHipCtxGB {
-		t.Fatalf("non-CUDA extra-device overhead = %.2f, want %.2f", got, computeHipCtxGB)
+	if got := set.ExtraDeviceOverheadGB(); got != computeVulkanCtxGB {
+		t.Fatalf("non-CUDA extra-device overhead = %.2f, want %.2f", got, computeVulkanCtxGB)
 	}
 
 	setCudaGPU(t, true)

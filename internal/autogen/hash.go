@@ -267,7 +267,11 @@ const hashCacheSuffix = ".modelhash"
 // (an APU desktop, a laptop), so the model lands in shared system memory with
 // nothing in the log saying so. The index comes from the binary's own
 // --list-devices, whose [GPU]/[IGPU] tag says which is discrete.
-const genVersion = "v79"
+// v80: the per-process GPU-runtime constant is split by BACKEND, not just by GPU
+// vendor - a ROCm/HIP llama-server reserves 0.8GB where the Vulkan one on the
+// same card reserves 0.4GB (computeRocmCtxGB). Every estVramGB on a ROCm box
+// moves by 0.4GB for unchanged inputs, so the hash has to force the regen.
+const genVersion = "v80"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the
