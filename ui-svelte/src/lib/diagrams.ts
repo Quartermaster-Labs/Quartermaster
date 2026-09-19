@@ -22,7 +22,16 @@ import { cssZoom } from "./uiZoom";
 // Chart types we accept from a model-authored config. Chart.js will happily
 // build anything its registry knows; the allowlist keeps a malformed/hostile
 // block from becoming a surprise.
-const CHART_TYPES = new Set(["bar", "line", "pie", "doughnut", "radar", "polarArea", "scatter", "bubble"]);
+const CHART_TYPES = new Set([
+  "bar",
+  "line",
+  "pie",
+  "doughnut",
+  "radar",
+  "polarArea",
+  "scatter",
+  "bubble",
+]);
 
 let mermaidReady: Promise<typeof import("mermaid").default> | null = null;
 let mermaidDark: boolean | null = null;
@@ -107,14 +116,27 @@ async function renderChart(host: HTMLElement, src: string, dark: boolean) {
       // black-on-black axes.
       plugins: {
         ...(cfg.options?.plugins ?? {}),
-        legend: { labels: { color: text }, ...(cfg.options?.plugins?.legend ?? {}) },
+        legend: {
+          labels: { color: text },
+          ...(cfg.options?.plugins?.legend ?? {}),
+        },
       },
       scales:
-        cfg.type === "pie" || cfg.type === "doughnut" || cfg.type === "polarArea"
+        cfg.type === "pie" ||
+        cfg.type === "doughnut" ||
+        cfg.type === "polarArea"
           ? undefined
           : {
-              x: { ticks: { color: text }, grid: { color: grid }, ...(cfg.options?.scales?.x ?? {}) },
-              y: { ticks: { color: text }, grid: { color: grid }, ...(cfg.options?.scales?.y ?? {}) },
+              x: {
+                ticks: { color: text },
+                grid: { color: grid },
+                ...(cfg.options?.scales?.x ?? {}),
+              },
+              y: {
+                ticks: { color: text },
+                grid: { color: grid },
+                ...(cfg.options?.scales?.y ?? {}),
+              },
             },
     },
   });
@@ -145,7 +167,12 @@ async function copyText(text: string): Promise<void> {
  * Source are modes of the same block, not a picture with the source tacked
  * underneath -- and only one of them is on screen at a time.
  */
-function renderSvgBlock(pre: HTMLElement, code: HTMLElement, src: string, id: number): boolean {
+function renderSvgBlock(
+  pre: HTMLElement,
+  code: HTMLElement,
+  src: string,
+  id: number,
+): boolean {
   const clean = sanitizeSvg(src, `qm-svg-${id}`);
   if (!clean) return false;
 
@@ -234,9 +261,17 @@ function renderSvgBlock(pre: HTMLElement, code: HTMLElement, src: string, id: nu
  * A picture the model drew in its first paragraph therefore appears there,
  * rather than after the last token of a long answer.
  */
+// How many times one block may be drawn before the failure is called final.
+// A diagram that throws mid-stream is routinely fine a moment later: the block
+// it was read from gets detached by the streaming renderer, and layout and
+// fonts are still settling. Mermaid also reports every draw-stage failure as
+// "Syntax error in text", so a first throw is no evidence the source is wrong.
+const MAX_TRIES = 3;
+
 export function diagramBlocks(node: HTMLElement) {
   let scanning = false;
   let dirty = false;
+  const timers = new Set<ReturnType<typeof setTimeout>>();
 
   // A token landing while we await mermaid must not be dropped: re-run instead.
   // Looped, not recursed — a fast stream can dirty every pass.
@@ -258,7 +293,7 @@ export function diagramBlocks(node: HTMLElement) {
 
   async function scanOnce() {
     const blocks = node.querySelectorAll<HTMLElement>(
-      "pre:not([data-open-fence]) > code.language-mermaid:not([data-diagram]), pre:not([data-open-fence]) > code.language-chart:not([data-diagram])"
+      "pre:not([data-open-fence]) > code.language-mermaid:not([data-diagram]), pre:not([data-open-fence]) > code.language-chart:not([data-diagram])",
     );
     const dark = get(isDarkMode);
 
@@ -267,13 +302,16 @@ export function diagramBlocks(node: HTMLElement) {
     // markup, and some write no language at all. A block that opens with
     // `<svg` and closes with `</svg>` is an SVG document whatever it was
     // labelled -- and nothing else is.
-    for (const code of node.querySelectorAll<HTMLElement>("pre:not([data-open-fence]) > code:not([data-svg])")) {
+    for (const code of node.querySelectorAll<HTMLElement>(
+      "pre:not([data-open-fence]) > code:not([data-svg])",
+    )) {
       const src = (code.textContent ?? "").trim();
       if (!/^<svg[\s>]/i.test(src) || !/<\/svg>$/i.test(src)) continue;
       const pre = code.parentElement;
       if (!pre) continue;
       code.setAttribute("data-svg", "done");
-      if (!renderSvgBlock(pre, code, src, svgSeq++)) code.setAttribute("data-svg", "error");
+      if (!renderSvgBlock(pre, code, src, svgSeq++))
+        code.setAttribute("data-svg", "error");
     }
     for (const code of blocks) {
       const pre = code.closest("pre");
@@ -286,21 +324,50 @@ export function diagramBlocks(node: HTMLElement) {
       const out = document.createElement("div");
       out.className = "diagram-out";
       fig.appendChild(out);
+      const kind = code.classList.contains("language-mermaid")
+        ? "diagram"
+        : "chart";
       try {
-        if (code.classList.contains("language-mermaid")) await renderMermaid(out, src, dark);
+        if (kind === "diagram") await renderMermaid(out, src, dark);
         else await renderChart(out, src, dark);
       } catch (e) {
+        // Already replaced by the streaming renderer: retrying this orphan is
+        // wasted work and its error note would be invisible. The live copy is
+        // unmarked and gets its own turn.
+        if (!pre.isConnected) continue;
+        console.error(`quartermaster: ${kind} draw failed`, e, src);
+        const tries =
+          Number(code.getAttribute("data-diagram-tries") ?? "0") + 1;
+        code.setAttribute("data-diagram-tries", String(tries));
+        if (tries < MAX_TRIES) {
+          // Back off and draw again rather than burning the block. Held at
+          // "retry", which the selector still excludes, until the timer clears
+          // it: otherwise the attribute write bounces straight off the observer
+          // and spends every attempt inside the same frame.
+          code.setAttribute("data-diagram", "retry");
+          const t = setTimeout(() => {
+            timers.delete(t);
+            code.removeAttribute("data-diagram");
+            void scan();
+          }, 300 * tries);
+          timers.add(t);
+          continue;
+        }
         // Keep the source visible instead of swallowing it — a diagram the
         // model got slightly wrong is still readable as text.
         code.setAttribute("data-diagram", "error");
         const msg = document.createElement("div");
         msg.className = "diagram-error";
-        msg.textContent = `Couldn't draw this ${code.classList.contains("language-mermaid") ? "diagram" : "chart"}: ${
+        msg.textContent = `Couldn't draw this ${kind}: ${
           e instanceof Error ? e.message.split("\n")[0] : String(e)
         }`;
         pre.before(msg);
         continue;
       }
+      // The streaming renderer can replace the subtree this block came from
+      // while the picture was being drawn. Inserting into the orphan would drop
+      // it silently; the live copy is unmarked, so the next scan redraws it.
+      if (!pre.isConnected) continue;
       // Rendered: swap the code block for the picture, with the source one
       // click away (the code-copy button still works on the hidden <pre>).
       const toggle = document.createElement("button");
@@ -323,6 +390,10 @@ export function diagramBlocks(node: HTMLElement) {
   mo.observe(node, { childList: true, subtree: true });
 
   return {
-    destroy: () => mo.disconnect(),
+    destroy: () => {
+      mo.disconnect();
+      for (const t of timers) clearTimeout(t);
+      timers.clear();
+    },
   };
 }
