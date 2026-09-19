@@ -42,6 +42,13 @@ async function getMermaid(dark: boolean) {
       // Model-authored source: strict keeps labels sanitized and blocks
       // click-handler/script directives in the diagram.
       securityLevel: "strict",
+      // Without this, a diagram that fails mid-render leaves mermaid's own
+      // "Syntax error in text" bomb graphic attached to <body>: render() builds
+      // its scratch div there, and its cleanup call sits AFTER the rethrow, so
+      // every bad block stacks another full-size banner onto the page. With it
+      // set, mermaid removes the scratch div and only throws, and the inline
+      // "Couldn't draw this diagram" note below is the sole error UI.
+      suppressErrorRendering: true,
       theme: dark ? "dark" : "default",
       fontFamily: "inherit",
     });
@@ -52,15 +59,23 @@ async function getMermaid(dark: boolean) {
 
 async function renderMermaid(host: HTMLElement, src: string, dark: boolean) {
   const mermaid = await getMermaid(dark);
-  // parse() first: a syntax error thrown by render() can leave mermaid's own
-  // error banner attached to the document body.
-  await mermaid.parse(src);
-  const { svg } = await mermaid.render(`qm-diagram-${seq++}`, src);
-  host.innerHTML = svg;
-  const el = host.querySelector("svg");
-  if (el) {
-    el.removeAttribute("height");
-    el.style.maxWidth = "100%";
+  const id = `qm-diagram-${seq++}`;
+  try {
+    // parse() first: it reports a syntax error without ever entering render().
+    await mermaid.parse(src);
+    const { svg } = await mermaid.render(id, src);
+    host.innerHTML = svg;
+    const el = host.querySelector("svg");
+    if (el) {
+      el.removeAttribute("height");
+      el.style.maxWidth = "100%";
+    }
+  } finally {
+    // Belt and braces for the scratch div `suppressErrorRendering` normally
+    // clears: mermaid only removes it on the two failure paths it guards, so a
+    // throw from anywhere else in render() would still leave an orphan sized to
+    // the diagram sitting in <body>.
+    document.getElementById(`d${id}`)?.remove();
   }
 }
 
