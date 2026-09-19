@@ -18,6 +18,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -57,6 +58,15 @@ func (s *Server) handleAPIHubReveal(w http.ResponseWriter, r *http.Request) {
 		shared.SendResponse(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Refuse rather than spawn into the void. The UI reads the same signal from
+	// /api/hub/sources and shows the in-app listing instead, so this is the
+	// belt-and-braces path for a client that asked anyway. The 409 is the part
+	// worth keying off: it means "not here", not "broken".
+	if !canReveal(r) {
+		shared.SendResponse(w, r, http.StatusConflict,
+			"this server cannot open a file manager for you (no desktop session, or the dashboard is open from another machine)")
+		return
+	}
 	if err := openInFileManager(target); err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, "could not open the folder: "+err.Error())
 		return
@@ -73,11 +83,28 @@ func revealTarget(rootAbs, want string) (string, error) {
 	want = strings.TrimSpace(want)
 	target := rootAbs
 	if want != "" {
-		abs, err := filepath.Abs(want)
+		// A relative path is relative to the MODELS ROOT, not to the process
+		// CWD: the UI walks the tree by the `rel` this package hands it back
+		// ("Qwen3-27B/gguf"), and resolving that against wherever the service
+		// happened to be started from would land outside the root and be
+		// refused. Absolute paths (what the download list carries) are
+		// unaffected.
+		abs := want
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(rootAbs, filepath.FromSlash(abs))
+		}
+		abs, err := filepath.Abs(abs)
 		if err != nil {
 			return "", fmt.Errorf("invalid path %q", want)
 		}
-		rel, err := filepath.Rel(rootAbs, abs)
+		// Compare the REAL paths: a models tree is full of user-made links, and
+		// a symlink under the root pointing at /etc passes a textual prefix
+		// check while resolving straight out of the sandbox. Both sides are
+		// resolved so the comparison stays apples-to-apples (on Windows this
+		// also normalises the on-disk casing of both, which a raw Rel does
+		// not). An unresolvable side falls back to its literal path, which can
+		// only ever be stricter than the resolved one.
+		rel, err := filepath.Rel(realPath(rootAbs), realPath(abs))
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return "", fmt.Errorf("refusing to open %q: it is outside the models folder", want)
 		}
@@ -91,6 +118,53 @@ func revealTarget(rootAbs, want string) (string, error) {
 		target = filepath.Dir(target)
 	}
 	return target, nil
+}
+
+// realPath resolves symlinks, falling back to the input when it cannot (a path
+// that does not exist yet, or a permission error partway down). Callers use it
+// for containment checks only, where the fallback is the conservative answer.
+func realPath(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
+}
+
+// canReveal reports whether opening a folder on the SERVER could do this caller
+// any good.
+//
+// Two ways it cannot. The browser may be on another machine — admin access can
+// be widened past loopback (-admin-allow/-admin-open), and then a file manager
+// on the server opens on a screen nobody is looking at. Or there may be no
+// desktop at all: a container has no `xdg-open`, which is how issue #66
+// surfaced. Either way the UI wants to know BEFORE it offers the button, so it
+// can show the in-app listing instead of a dead end.
+//
+// r.RemoteAddr on purpose, not the X-Forwarded-For-aware clientIP: a reverse
+// proxy on the box would otherwise make every remote browser look local.
+func canReveal(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	if !isLoopbackIP(strings.Trim(host, "[]")) {
+		return false
+	}
+	return fileManagerAvailable()
+}
+
+// fileManagerAvailable reports whether this OS has something to open a folder
+// WITH. Windows and macOS always do (explorer and open ship with the OS); a
+// Linux box only does if xdg-utils is installed, which a headless container
+// deliberately is not.
+func fileManagerAvailable() bool {
+	switch runtime.GOOS {
+	case "windows", "darwin":
+		return true
+	default:
+		_, err := exec.LookPath("xdg-open")
+		return err == nil
+	}
 }
 
 // openInFileManager hands one directory to the platform's file manager.
