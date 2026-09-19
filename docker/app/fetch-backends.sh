@@ -26,9 +26,43 @@ set -eu
 ROOT="${1:-/out/backends}"
 API="https://api.github.com/repos"
 
+# The GitHub API allows 60 anonymous calls an hour PER SOURCE IP, and a hosted
+# Actions runner shares its IP with every other job on that host, so an
+# unauthenticated release lookup is refused with a 403 at random: this image
+# built fine at 11:52 and was rejected at 16:19 the same day with nothing
+# changed. A token raises the ceiling to 1000/hour and the assets themselves are
+# public, so any token works, including the workflow's own GITHUB_TOKEN.
+#
+# It arrives as a BuildKit secret, not a build-arg: an ARG is recorded in the
+# image's layer history and `docker history` would hand the token to anyone who
+# pulls. Absent (a local `docker build` with no --secret), the fallback is the
+# old anonymous path, which is fine for the occasional developer build.
+TOKEN=""
+if [ -r /run/secrets/github_token ]; then
+  TOKEN="$(cat /run/secrets/github_token)"
+fi
+
+api_get() {
+  if [ -n "$TOKEN" ]; then
+    curl -fsSL -H "Authorization: Bearer ${TOKEN}" \
+      -H "X-GitHub-Api-Version: 2022-11-28" "$1"
+  else
+    curl -fsSL "$1"
+  fi
+}
+
 # find_asset <repo> <tag> <extended-regex> -> asset download URL
 find_asset() {
-  curl -fsSL "${API}/$1/releases/tags/$2" \
+  # Deliberately not `curl | jq`: a pipeline reports only the LAST command's
+  # status, so curl's -f failure was swallowed and the caller re-reported a 403
+  # as "no asset matching /.../", which sends whoever reads the log hunting for
+  # a renamed upstream asset that was never missing.
+  json="$(api_get "${API}/$1/releases/tags/$2")" || {
+    echo "ERROR: cannot read ${1}@${2} from the GitHub API" >&2
+    echo "       (rate limited without a token, or that tag no longer exists)" >&2
+    return 1
+  }
+  printf '%s' "$json" \
     | jq -r --arg re "$3" '.assets[] | select(.name | test($re; "i")) | .browser_download_url' \
     | head -1
 }

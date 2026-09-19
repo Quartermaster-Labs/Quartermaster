@@ -170,6 +170,12 @@ jobs:
           build-args: |
             QM_VERSION=${{ steps.meta.outputs.version }}
             QM_COMMIT=${{ github.sha }}
+          # Authenticates fetch-backends.sh against the GitHub API. A secret
+          # rather than a build-arg so it stays out of the image's layer
+          # history. Anonymous API calls are capped at 60/hour per runner IP,
+          # which failed this build at random.
+          secrets: |
+            github_token=${{ secrets.GITHUB_TOKEN }}
           # GitHub Actions cache, not a registry cache: the layers worth
           # keeping here are the npm and Go module downloads, which are small
           # enough that the 10 GB Actions cache holds them comfortably.
