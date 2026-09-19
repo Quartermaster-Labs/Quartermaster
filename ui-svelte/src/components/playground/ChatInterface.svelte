@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { nextScrolledUp } from "../../lib/followScroll";
   import { cssZoom } from "../../lib/uiZoom";
   import { tip as tooltip } from "../../lib/tooltip";
   import { get } from "svelte/store";
@@ -512,23 +513,22 @@
     }
   });
 
-  // Every scroll event just re-derives "is the view at the bottom" from the live
-  // position — no flag marking our own programmatic scrolls. A one-shot flag was
-  // worse than nothing here: assigning scrollTop to where it already is fires NO
-  // event, so the flag leaked and swallowed the user's next real scroll. Since
-  // the pin below is instant (never smooth), there are no intermediate positions
-  // to misread: after a pin we are at the bottom, which is exactly what the
-  // recomputation reports.
+  // Where the list sat at the last scroll event, so the handler can tell which
+  // way it moved. Only ever read by `handleMessagesScroll`.
+  let lastScrollTop = 0;
+
+  // Every scroll event re-derives the follow state from the live position — no
+  // flag marking our own programmatic scrolls. A one-shot flag was worse than
+  // nothing here: assigning scrollTop to where it already is fires NO event, so
+  // the flag leaked and swallowed the user's next real scroll. The pin below is
+  // instant (never smooth), so there are no intermediate positions to misread.
+  // `nextScrolledUp` (lib/followScroll.ts) owns the rule and why it needs the
+  // previous position rather than distance alone.
   function handleMessagesScroll() {
     selReply = null; // rects go stale once the list scrolls
     if (!messagesContainer) return;
-    const { scrollTop, scrollHeight, clientHeight } = messagesContainer;
-    // "At bottom" only means actually at the bottom — a small tolerance absorbs
-    // sub-pixel rounding. A wider band (this was 40px) read as a rubber band:
-    // the user scrolled up a little, was still inside the band, and the next
-    // streamed token snapped them hard to the end. 8px keeps follow-while-at-
-    // bottom stable without ever yanking a reader back down.
-    userScrolledUp = scrollHeight - scrollTop - clientHeight > 8;
+    userScrolledUp = nextScrolledUp(userScrolledUp, lastScrollTop, messagesContainer);
+    lastScrollTop = messagesContainer.scrollTop;
   }
 
   // Pin the view to the newest content unless the user has scrolled away.
@@ -560,10 +560,13 @@
     return () => ro.disconnect();
   });
 
-  // Follow the bottom again when switching conversations.
+  // Follow the bottom again when switching conversations. The direction
+  // baseline goes with it: the incoming chat restores a different scroll
+  // position, and comparing against the outgoing one reads as a jump.
   $effect(() => {
     $activeChatId;
     userScrolledUp = false;
+    lastScrollTop = 0;
   });
 
   // Rewrite mode: prose (userInput) + a "how to help" instruction. The user
