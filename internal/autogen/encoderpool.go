@@ -822,6 +822,20 @@ func wantsVisionEncoder(arch, name string, ov *Override) bool {
 		case "off":
 			return false
 		}
+		// refEdit on is the same statement from the other side: the user has
+		// said this model consumes a reference image, and for an llm-conditioned
+		// family the reference is READ by the encoder's vision tower. Pinning
+		// one without the other is the trap this closes: sd.cpp refuses the job
+		// outright ("Qwen Image 2.1 editing requires Qwen3-VL vision weights;
+		// provide --llm_vision or a combined encoder"), so a user who turns on
+		// reference editing and nothing else gets a model that cannot generate.
+		//
+		// Only the "on" direction implies anything. refEdit off does NOT mean no
+		// vision: an inpaint model is an edit that wants the masked img2img
+		// route, and it still needs the projector.
+		if ov.RefEdit == "on" {
+			return true
+		}
 	}
 	return editModelRe.MatchString(name) || unifiedEditRe.MatchString(name)
 }

@@ -281,7 +281,10 @@ const hashCacheSuffix = ".modelhash"
 // reference editing), so the edit-name heuristics missed it. It now matches
 // unifiedEditRe, which both pairs its vision projector (--llm_vision) and flips
 // the emitted capability to in: [text, image].
-const genVersion = "v82"
+// v83: refEdit "on" now implies --llm_vision. Pinning reference editing without
+// also pinning the projector produced a model that could not generate at all on
+// Qwen-Image 2.1, which errors rather than silently ignoring the reference.
+const genVersion = "v83"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

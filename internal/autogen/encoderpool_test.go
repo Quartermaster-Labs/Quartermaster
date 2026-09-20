@@ -333,6 +333,14 @@ func TestAutogen_wantsVisionEncoder(t *testing.T) {
 		{name: "credit-model", want: false},
 		{name: "LongCat-Image-Edit", ov: &Override{LlmVision: "off"}, want: false},
 		{name: "LongCat-Image", ov: &Override{LlmVision: "on"}, want: true},
+		// Turning on reference editing asks for the projector too: without it
+		// sd.cpp refuses the prompt on 2.1 rather than degrading.
+		{name: "some-unified-editor", ov: &Override{RefEdit: "on"}, want: true},
+		// ...but refEdit off does not mean no vision: an inpaint model wants the
+		// masked img2img route AND the projector.
+		{name: "sd15-inpaint", ov: &Override{RefEdit: "off"}, want: true},
+		// An explicit vision off still wins over the refEdit implication.
+		{name: "some-unified-editor", ov: &Override{RefEdit: "on", LlmVision: "off"}, want: false},
 		// Qwen-Image 2.1: one checkpoint does generation AND reference editing,
 		// so nothing in the name says "edit" and the version is the only tell.
 		{name: "qwen_image_2.1-q8_0", want: true},

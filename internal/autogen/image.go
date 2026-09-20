@@ -555,9 +555,11 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	}
 	// The vision tower of the text encoder, needed by edit pipelines that
 	// condition on a reference image. Auto-paired to the chosen --llm (its
-	// sibling mmproj), never hand-typed. Without it an edit model does not
-	// error: it reports "vision disabled" and emits an image unrelated to the
-	// reference, so a wrong-looking result is the only symptom.
+	// sibling mmproj), never hand-typed. Missing, most edit models do not error:
+	// they report "vision disabled" and emit an image unrelated to the
+	// reference, so a wrong-looking result is the only symptom. Qwen-Image 2.1
+	// is the exception and refuses the prompt outright ("editing requires
+	// Qwen3-VL vision weights"), which is the better behaviour of the two.
 	if p := imageArg(comp.llmVision); p != "" {
 		lines = append(lines, "--llm_vision "+p)
 	}
