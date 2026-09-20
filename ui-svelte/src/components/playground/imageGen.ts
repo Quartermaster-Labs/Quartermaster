@@ -76,7 +76,9 @@ export const IMAGE_DEFAULTS: { match: string; steps: number; cfg: number; sample
   // INVERTS the 20B line (true_cfg_scale 4.0, 50 steps, guidance_scale present)
   // which reports the same qwen_image arch tag, which is exactly why this needs
   // its own row instead of a shared qwen one. At cfg 1.0 the negative prompt is
-  // ignored server-side, so leaving it empty is honest. Native canvas is 2048
+  // ignored server-side, so leaving it empty is honest. Do NOT raise this after
+  // reading leejet's docs/qwen_image_2.1.md, whose example passes --cfg-scale
+  // 6.0: 1.0 is confirmed correct in practice on this model. Native canvas is 2048
   // (the card's 1:1); 1536 would silently cap the model's own resolution.
   // annotEdit: the card promises local edits "via circles, painted annotations,
   // or separate masks", i.e. the region is communicated through the reference
