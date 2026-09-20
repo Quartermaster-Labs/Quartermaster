@@ -146,6 +146,15 @@
   let maskData = $state<string | null>(null);
   let maskSource = $state<string | null>(null);
   let showMask = $state(false);
+  // Annotate mode (models with preset.annotEdit, i.e. Qwen-Image 2.1): the same
+  // painted region is sent as a TINTED OVERLAY REFERENCE instead of a latent
+  // mask, which is how that model is documented to take a local edit ("circles,
+  // painted annotations, or separate masks"). The trade is real in both
+  // directions, so it is a choice and not a replacement: latent masking
+  // preserves the unmasked pixels exactly but discards the model's reference
+  // conditioning, while annotating keeps the conditioning and lets the model
+  // redraw the whole frame.
+  let maskAnnotate = $state(false);
   // Style-transfer reference (data URL) for the NEXT message: appended as the LAST
   // ref image and scaffolds the prompt ("apply the style of the last reference").
   // Ref-edit models only (Qwen-Image-Edit multi-ref / Kontext); ignored elsewhere.
@@ -378,6 +387,9 @@
   // actually sets. maxDim has no launch-line equivalent, so it stays table-only.
   let modelGen = $derived($models.find((m) => m.id === $selectedModelStore)?.genDefaults);
   let modelPreset = $derived(defaultsFor($selectedModelStore));
+  // Annotate needs BOTH: a model that reads marked regions, and the reference
+  // path to carry the marked image in the first place.
+  let supportsAnnotEdit = $derived(supportsRefImages && modelPreset?.annotEdit === true);
   let modelDefaults = $derived(
     modelPreset || modelGen ? settingsFor($selectedModelStore, modelGen) : undefined
   );
@@ -557,10 +569,28 @@
     // origin (first turn) or on any canvas failure.
     // A painted mask forces the img2img+mask (inpaint) route below even for
     // ref-edit models — sd.cpp honors the mask there (unmasked region preserved),
-    // which the extra_images ref path can't do (it redraws the whole frame).
-    if (supportsRefImages && !mask) {
+    // which the extra_images ref path can't do (it redraws the whole frame). The
+    // one exception is annotate mode, directly below.
+    // Annotate mode: hand the model the region as a picture. Built up front so a
+    // canvas failure falls through to the latent inpaint route below with the
+    // mask intact, rather than silently sending a whole-frame edit that ignores
+    // the region the user painted.
+    let annotated: string | null = null;
+    if (mask && maskAnnotate && supportsAnnotEdit) {
+      try {
+        annotated = await buildMaskOverlay(src, mask);
+      } catch {
+        /* no overlay — keep the mask and inpaint instead */
+      }
+    }
+    if (supportsRefImages && (!mask || annotated)) {
       let anchored = refs;
-      if ($sdToneAnchorStore && origin && src !== origin) {
+      // Tone anchoring is skipped for an annotated base on purpose: the overlay
+      // tints a chunk of the frame pink, so matching its MEAN back to the origin
+      // would read the tint as drift and shift the whole image to cancel it.
+      if (annotated) {
+        anchored = [annotated, ...refs.slice(1)];
+      } else if ($sdToneAnchorStore && origin && src !== origin) {
         try {
           anchored = [await matchColorToRef(src, origin, false), ...refs.slice(1)];
         } catch {
@@ -1367,7 +1397,29 @@
             {/if}
             <div class="flex items-center gap-2 text-xs text-primary">
               <Brush class="w-3.5 h-3.5" />
-              <span>Inpaint mask set - only the highlighted area changes</span>
+              {#if supportsAnnotEdit && maskAnnotate}
+                <span>Region marked - the model is told what to change (it may redraw the rest)</span>
+              {:else}
+                <span>Inpaint mask set - only the highlighted area changes</span>
+              {/if}
+              {#if supportsAnnotEdit}
+                <!-- Two genuinely different mechanisms, so the user picks rather
+                     than the model deciding: Mask keeps every unmarked pixel but
+                     drops the reference conditioning, Annotate keeps the
+                     conditioning and lets the model reflow the frame. -->
+                <span class="inline-flex rounded-md overflow-hidden border border-card-border">
+                  <button
+                    class="px-1.5 py-0.5 {maskAnnotate ? 'text-txtsecondary hover:text-txtmain' : 'bg-secondary text-txtmain'}"
+                    onclick={() => (maskAnnotate = false)}
+                    use:tip={"Latent inpaint - regenerate only the masked pixels, keep the rest byte-for-byte"}
+                  >Mask</button>
+                  <button
+                    class="px-1.5 py-0.5 {maskAnnotate ? 'bg-secondary text-txtmain' : 'text-txtsecondary hover:text-txtmain'}"
+                    onclick={() => (maskAnnotate = true)}
+                    use:tip={"Annotate - send the highlighted image as a reference so the model targets that region itself"}
+                  >Annotate</button>
+                </span>
+              {/if}
               <button class="text-txtsecondary hover:text-txtmain" onclick={() => { maskData = null; maskSource = null; }}>clear</button>
             </div>
           </div>

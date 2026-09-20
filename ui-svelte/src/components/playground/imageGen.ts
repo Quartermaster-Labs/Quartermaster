@@ -54,7 +54,10 @@ export const DEFAULT_MAX_DIM = 1536;
 // unloading the model — a low cap keeps a fat-fingered value from parking the
 // GPU for an hour.
 export const MAX_BATCH = 8;
-export const IMAGE_DEFAULTS: { match: string; steps: number; cfg: number; sampler: string; scheduler: string; size?: string; negative?: string; denoise?: number; maxDim?: number }[] = [
+// annotEdit = the model targets a local edit SEMANTICALLY, by reading a region
+// marked on the image itself, rather than by latent masking. Unlocks the brush's
+// Annotate mode, which sends the tinted overlay as a reference instead of a mask.
+export const IMAGE_DEFAULTS: { match: string; steps: number; cfg: number; sampler: string; scheduler: string; size?: string; negative?: string; denoise?: number; maxDim?: number; annotEdit?: boolean }[] = [
   { match: "z-image", steps: 10, cfg: 1.0, sampler: "euler", scheduler: "discrete" },
   // Kontext: surgical edit — low denoise so it doesn't redraw the whole scene.
   { match: "kontext", steps: 24, cfg: 1.0, sampler: "euler", scheduler: "discrete", denoise: 0.55 },
@@ -75,7 +78,10 @@ export const IMAGE_DEFAULTS: { match: string; steps: number; cfg: number; sample
   // its own row instead of a shared qwen one. At cfg 1.0 the negative prompt is
   // ignored server-side, so leaving it empty is honest. Native canvas is 2048
   // (the card's 1:1); 1536 would silently cap the model's own resolution.
-  { match: "qwen-image-2.1", steps: 40, cfg: 1.0, sampler: "euler", scheduler: "discrete", maxDim: 2048 },
+  // annotEdit: the card promises local edits "via circles, painted annotations,
+  // or separate masks", i.e. the region is communicated through the reference
+  // path and read by the VLM, not by masking the latent.
+  { match: "qwen-image-2.1", steps: 40, cfg: 1.0, sampler: "euler", scheduler: "discrete", maxDim: 2048, annotEdit: true },
   // Fill: inpaint — always fully regenerates the masked area (denoise 1.0).
   // Guidance-distilled but NOT step-distilled (BFL reference is 50): 20 leaves
   // soft seams at mask edges on large fills, 25 is the practical knee.

@@ -133,6 +133,15 @@ describe("settingsFor", () => {
     expect(settingsFor("qwen_image_edit-q8_0").cfg).toBe(GENERIC_DEFAULTS.cfg);
   });
 
+  it("flags only the models that read a marked region as an annotation", () => {
+    // Qwen-Image 2.1 targets a local edit semantically, through the reference
+    // path. Kontext is a ref-edit model too but has no such mechanism, so its
+    // brush must stay a latent mask.
+    expect(defaultsFor("qwen_image_2.1-q8_0")?.annotEdit).toBe(true);
+    expect(defaultsFor("flux1-kontext-dev")?.annotEdit).toBeUndefined();
+    expect(defaultsFor("qwen-rapid-nsfw")?.annotEdit).toBeUndefined();
+  });
+
   it("takes a size only when both edges are named", () => {
     expect(settingsFor("z-image-turbo", { width: 1024, height: 768 }).size).toBe("1024x768");
     expect(settingsFor("illustrious-xl", { width: 1024 }).size).toBe("1024x1024");
