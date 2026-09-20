@@ -277,7 +277,11 @@ const hashCacheSuffix = ".modelhash"
 // VAE family records its latent channel count, so 2.1's 64-channel RGBA VAE and
 // the 16-channel Wan/Qwen-Image one stop being separable only by filename sort.
 // Both change the emitted --llm/--vae for qwen_image models.
-const genVersion = "v81"
+// v82: Qwen-Image 2.1 is a UNIFIED checkpoint (one file for generation and
+// reference editing), so the edit-name heuristics missed it. It now matches
+// unifiedEditRe, which both pairs its vision projector (--llm_vision) and flips
+// the emitted capability to in: [text, image].
+const genVersion = "v82"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

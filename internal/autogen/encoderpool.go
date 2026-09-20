@@ -757,6 +757,25 @@ func projectorBeside(llmPath string, p *EncoderPool) string {
 // override as the escape hatch when a publisher names something unhelpfully.
 var editModelRe = regexp.MustCompile(`(?i)(^|[-_. ])(edit|rapid|kontext|instruct[-_]?pix2pix|inpaint|redux)([-_. ]|$)`)
 
+// unifiedEditRe matches models where ONE checkpoint does both text-to-image and
+// reference editing, so the name carries no edit token to detect and the two
+// regexes above both miss. Qwen-Image 2.1 is the first of these: upstream
+// documents `-r ref.png` against the same weights used for plain generation,
+// and every 2.1 checkpoint is edit-capable, so this is a property of the model
+// version rather than of the individual file.
+//
+// Still matched by name, for the reason given above: the reference enters as
+// extra sequence tokens, so an edit-capable and a text-only checkpoint have the
+// same tensor shapes. The version number is the reliable part of the name here,
+// since both upstream releases (leejet's gguf, Comfy-Org's safetensors) spell
+// it in the filename, whereas neither says "edit" anywhere.
+//
+// Getting this wrong is a silent downgrade, not an error: the model would
+// declare `in: [text]`, the playground would fall through to img2img, and that
+// route scales the step count by the denoise strength and redraws the whole
+// frame instead of editing against a reference.
+var unifiedEditRe = regexp.MustCompile(`(?i)(^|[-_. ])qwen[-_. ]?image[-_. ]?2\.1([-_. ]|$)`)
+
 // wantsVisionEncoder reports whether this model should get --llm_vision. Only
 // llm-conditioned families are candidates: flux.1 edit models condition through
 // T5, which has no vision tower at all.
@@ -792,7 +811,7 @@ func IsReferenceEditModel(name string, ov *Override) bool {
 			return false
 		}
 	}
-	return refEditRe.MatchString(name)
+	return refEditRe.MatchString(name) || unifiedEditRe.MatchString(name)
 }
 
 func wantsVisionEncoder(arch, name string, ov *Override) bool {
@@ -804,5 +823,5 @@ func wantsVisionEncoder(arch, name string, ov *Override) bool {
 			return false
 		}
 	}
-	return editModelRe.MatchString(name)
+	return editModelRe.MatchString(name) || unifiedEditRe.MatchString(name)
 }

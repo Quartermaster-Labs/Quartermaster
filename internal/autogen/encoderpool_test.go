@@ -333,6 +333,14 @@ func TestAutogen_wantsVisionEncoder(t *testing.T) {
 		{name: "credit-model", want: false},
 		{name: "LongCat-Image-Edit", ov: &Override{LlmVision: "off"}, want: false},
 		{name: "LongCat-Image", ov: &Override{LlmVision: "on"}, want: true},
+		// Qwen-Image 2.1: one checkpoint does generation AND reference editing,
+		// so nothing in the name says "edit" and the version is the only tell.
+		{name: "qwen_image_2.1-q8_0", want: true},
+		{name: "Qwen-Image-2.1-Q4_K", want: true},
+		// The 20B line is a separate text-only checkpoint; its edit sibling is
+		// named for it, so 2.1 must not widen the match to every qwen image.
+		{name: "qwen_image-q8_0", want: false},
+		{name: "LongCat-Image", ov: &Override{LlmVision: "on"}, want: true},
 	}
 	for _, tc := range cases {
 		if got := wantsVisionEncoder("flux", tc.name, tc.ov); got != tc.want {
@@ -430,6 +438,12 @@ func TestAutogen_IsReferenceEditModel(t *testing.T) {
 		{name: "flux1-fill-dev", want: false},
 		{name: "LongCat-Image-Edit", ov: &Override{LlmVision: "off"}, want: false},
 		{name: "LongCat-Image", ov: &Override{LlmVision: "on"}, want: true},
+		// Unified checkpoint: edit-capable with no edit token in the name.
+		{name: "qwen_image_2.1-q8_0", want: true},
+		{name: "Qwen-Image-2.1-Q4_K", want: true},
+		{name: "qwen_image-q8_0", want: false},
+		// An explicit off still wins over the version match.
+		{name: "qwen_image_2.1-q8_0", ov: &Override{RefEdit: "off"}, want: false},
 	}
 	for _, tc := range cases {
 		if got := IsReferenceEditModel(tc.name, tc.ov); got != tc.want {
