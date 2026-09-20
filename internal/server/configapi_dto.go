@@ -263,9 +263,16 @@ type modelConfigResp struct {
 	MmprojInherited bool   `json:"mmprojInherited"`
 	MmprojPath      string `json:"mmprojPath,omitempty"`
 	IsImage         bool   `json:"isImage"` // diffusion model (sd-server) => image config form
-	IsAudio         bool   `json:"isAudio"` // TTS or ASR model => audio config form
-	IsSam           bool   `json:"isSam"`   // SAM segmentation (sam3_server) => minimal segment form
-	Is3D            bool   `json:"is3d"`    // TRELLIS.2 image-to-mesh (trellis2-server) => minimal 3D form
+	// IsVideo narrows IsImage: a video DiT runs on sd-server and takes the same
+	// config form, but a handful of its knobs (--stream-layers, --temporal-tiling)
+	// are emitted for video ONLY, so the form needs to know which it is or it
+	// renders inert toggles. out:[video] is the discriminator (autogen writes it
+	// from the tensor table, which is the only reliable tell: MiniMax-H3 carries
+	// no metadata and the arch that does say "wan" belongs to an image model).
+	IsVideo bool `json:"isVideo"`
+	IsAudio bool `json:"isAudio"` // TTS or ASR model => audio config form
+	IsSam   bool `json:"isSam"`   // SAM segmentation (sam3_server) => minimal segment form
+	Is3D    bool `json:"is3d"`    // TRELLIS.2 image-to-mesh (trellis2-server) => minimal 3D form
 	// Class is the backend class this model resolves against (autogen kindClass):
 	// llm / image / tts / asr / segment / 3d. The UI filters the backend picker by it —
 	// TTS and ASR share one config form but not their engines, so the form flags

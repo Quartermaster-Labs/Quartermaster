@@ -545,6 +545,7 @@ export interface ModelConfig {
   mmprojInherited?: boolean;
   mmprojPath?: string; // the projector the vision twin loads, wherever it lives
   isImage: boolean; // diffusion model => image config form
+  isVideo?: boolean; // ...and specifically a video DiT: same form, but the video-only knobs apply
   isAudio: boolean; // TTS or ASR model => audio config form
   isSam?: boolean; // SAM segmentation (sam3_server) => minimal segment form
   is3d?: boolean; // TRELLIS.2 image-to-mesh (trellis2-server) => minimal 3D form

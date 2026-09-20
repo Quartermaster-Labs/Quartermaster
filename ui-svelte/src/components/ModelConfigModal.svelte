@@ -350,6 +350,12 @@
   let defaultHeight = $state<number | "">("");
 
   const imageMode = $derived(config?.isImage ?? false);
+  // A video DiT takes the same form as a still, minus two knobs: the emitter
+  // gates --stream-layers and --temporal-tiling on vid.is(), so on an image
+  // model they cannot reach the command line at all. They used to render
+  // regardless, and because "" means auto they painted as ON, which reads as
+  // "this still image model is streaming its layers". Hide them instead.
+  const videoMode = $derived(config?.isVideo ?? false);
   // Qwen3-TTS talker (tts-server): minimal form, no KV/ctx/spec/estimate. The
   // talker + codec are tiny and fully resident; voice/temperature are per-request.
   const audioMode = $derived(config?.isAudio ?? false);
@@ -1904,20 +1910,22 @@
                 {@render hint("--vae-tiling. Tile the VAE decode to cap its VRAM spike (on by default). Decoding a full latent whole can OOM on a tight card. Quality is steps/cfg, not this.")}
               </span>
             </label>
-            <label class="flex items-center gap-2 text-sm">
-              <Toggle size="sm" checked={temporalTiling !== "off"} onchange={(on) => (temporalTiling = on ? "" : "off")} />
-              <span class="text-txtsecondary flex items-center gap-1">
-                Temporal tiling <span class="text-[0.6rem] uppercase opacity-50">video</span>
-                {@render hint("--temporal-tiling. Tile the VAE decode along TIME as well. VAE tiling above chunks the decode spatially, which is all a still needs; a clip's decode also grows with frame count and this is the only flag that chunks that axis. On by default only where the VAE can actually do it (Wan today, NOT MiniMax-H3, whose decode ignores the flag and processes every frame at once). Turning it on here forces it out anyway, for a backend build that has since gained support.")}
-              </span>
-            </label>
-            <label class="flex items-center gap-2 text-sm">
-              <Toggle size="sm" checked={streamLayers !== "off"} onchange={(on) => (streamLayers = on ? "" : "off")} />
-              <span class="text-txtsecondary flex items-center gap-1">
-                Stream layers <span class="text-[0.6rem] uppercase opacity-50">video</span>
-                {@render hint("--stream-layers. Stream the diffusion weights against the max-VRAM budget with prefetch instead of holding them resident (on by default, video models only). Hands that headroom back to the sampler, which is what buys longer clips. Turn off if renders that already fit get slower. Emitted only for video models.")}
-              </span>
-            </label>
+            {#if videoMode}
+              <label class="flex items-center gap-2 text-sm">
+                <Toggle size="sm" checked={temporalTiling !== "off"} onchange={(on) => (temporalTiling = on ? "" : "off")} />
+                <span class="text-txtsecondary flex items-center gap-1">
+                  Temporal tiling <span class="text-[0.6rem] uppercase opacity-50">video</span>
+                  {@render hint("--temporal-tiling. Tile the VAE decode along TIME as well. VAE tiling above chunks the decode spatially, which is all a still needs; a clip's decode also grows with frame count and this is the only flag that chunks that axis. On by default only where the VAE can actually do it (Wan today, NOT MiniMax-H3, whose decode ignores the flag and processes every frame at once). Turning it on here forces it out anyway, for a backend build that has since gained support.")}
+                </span>
+              </label>
+              <label class="flex items-center gap-2 text-sm">
+                <Toggle size="sm" checked={streamLayers !== "off"} onchange={(on) => (streamLayers = on ? "" : "off")} />
+                <span class="text-txtsecondary flex items-center gap-1">
+                  Stream layers <span class="text-[0.6rem] uppercase opacity-50">video</span>
+                  {@render hint("--stream-layers. Stream the diffusion weights against the max-VRAM budget with prefetch instead of holding them resident (on by default, video models only). Hands that headroom back to the sampler, which is what buys longer clips. Turn off if renders that already fit get slower. Emitted only for video models.")}
+                </span>
+              </label>
+            {/if}
             <label class="flex items-center gap-2 text-sm">
               <Toggle size="sm" checked={diffusionFa !== "off"} onchange={(on) => (diffusionFa = on ? "" : "off")} />
               <span class="text-txtsecondary flex items-center gap-1">
