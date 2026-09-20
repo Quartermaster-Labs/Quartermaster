@@ -1,7 +1,11 @@
 package server
 
 import (
+	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/quartermaster-labs/quartermaster/internal/autogen"
@@ -292,4 +296,47 @@ func TestPruneDeadKeyScopes(t *testing.T) {
 			t.Fatalf("models = %v changed=%v, want unscoped", got[0].Models, changed)
 		}
 	})
+}
+
+// A video DiT and a still both run on sd-server and both render the image form,
+// but --stream-layers / --temporal-tiling are emitted for video only, so the
+// response has to say which it is. out:[video] is the discriminator; the cmd
+// sniff cannot tell them apart (both carry --diffusion-model).
+func TestModelConfigGet_VideoFlag(t *testing.T) {
+	dir := t.TempDir()
+	newSrv := func(out ...string) *Server {
+		s := &Server{proxylog: logmon.NewWriter(io.Discard)}
+		s.SetAutogenAdmin(&AutogenAdmin{GeneratePath: filepath.Join(dir, "generate.yaml")})
+		s.cfg.Store(&config.Config{Models: map[string]config.ModelConfig{
+			"m": {
+				Cmd:          "sd-server --diffusion-model /m/x.gguf",
+				Capabilities: config.ModelCapConfig{In: []string{"text"}, Out: out},
+			},
+		}})
+		return s
+	}
+	get := func(s *Server) modelConfigResp {
+		t.Helper()
+		r := httptest.NewRequest("GET", "/api/models/m/config", nil)
+		r.SetPathValue("model", "m")
+		w := httptest.NewRecorder()
+		s.handleAPIModelConfigGet(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+		}
+		var got modelConfigResp
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return got
+	}
+
+	if got := get(newSrv("video")); !got.IsVideo || !got.IsImage {
+		t.Errorf("video model: isVideo=%v isImage=%v, want both true", got.IsVideo, got.IsImage)
+	}
+	// A still must NOT get the flag, or the video-only toggles reappear on every
+	// image model, which is the bug this closes.
+	if got := get(newSrv("image")); got.IsVideo || !got.IsImage {
+		t.Errorf("image model: isVideo=%v isImage=%v, want false/true", got.IsVideo, got.IsImage)
+	}
 }

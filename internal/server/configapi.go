@@ -187,6 +187,10 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 	if hasMC && slices.Contains(mc.Capabilities.Out, "image") {
 		isImage = true
 	}
+	isVideo := hasMC && slices.Contains(mc.Capabilities.Out, "video")
+	if isVideo {
+		isImage = true
+	}
 	// Speech models get the audio form: no KV/ctx/spec/estimate. The declared
 	// capability is the discriminator — out:[audio] is TTS, in:[audio] is ASR.
 	// This used to sniff `--model` off the rendered command, which broke twice: it
@@ -199,7 +203,7 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 	isASR := hasMC && slices.Contains(mc.Capabilities.In, "audio")
 	isAudio := isTTS || isASR
 	if isSam {
-		isImage, isAudio, isTTS, isASR = false, false, false, false
+		isImage, isVideo, isAudio, isTTS, isASR = false, false, false, false, false
 	}
 	// TRELLIS.2 image-to-mesh (trellis2-server) gets a minimal form as well, and
 	// out:[3d] is its discriminator: nothing else produces a mesh. It has to win
@@ -207,7 +211,7 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 	// image by design, so a capabilities-only read would call it a diffusion model.
 	is3D := hasMC && slices.Contains(mc.Capabilities.Out, "3d")
 	if is3D {
-		isImage, isAudio, isTTS, isASR = false, false, false, false
+		isImage, isVideo, isAudio, isTTS, isASR = false, false, false, false, false
 	}
 	// Class is what the UI filters the backend picker by, so it must name the
 	// engine class autogen resolves against (kindClass), not just the form shape:
@@ -229,7 +233,7 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 	// model": autogen writes it from the gguf header (general.architecture), so it
 	// is exact, and re-sniffing the file here could only disagree with the config
 	// the model will actually launch with.
-	resp := modelConfigResp{Id: realID, Gguf: gguf, Cmd: strings.TrimSpace(cmd), IsImage: isImage, IsAudio: isAudio, IsSam: isSam, Is3D: is3D, Class: class, IsAudioCpp: hasMC && !mc.AudioCpp.Empty(), HasOverride: existing != nil}
+	resp := modelConfigResp{Id: realID, Gguf: gguf, Cmd: strings.TrimSpace(cmd), IsImage: isImage, IsVideo: isVideo, IsAudio: isAudio, IsSam: isSam, Is3D: is3D, Class: class, IsAudioCpp: hasMC && !mc.AudioCpp.Empty(), HasOverride: existing != nil}
 	if dn, err := autogen.LoadSidecarDisplayNames(s.autogen.GeneratePath); err == nil {
 		resp.DisplayName = dn[realID]
 	}
