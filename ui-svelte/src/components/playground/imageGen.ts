@@ -57,7 +57,12 @@ export const MAX_BATCH = 8;
 // annotEdit = the model targets a local edit SEMANTICALLY, by reading a region
 // marked on the image itself, rather than by latent masking. Unlocks the brush's
 // Annotate mode, which sends the tinted overlay as a reference instead of a mask.
-export const IMAGE_DEFAULTS: { match: string; steps: number; cfg: number; sampler: string; scheduler: string; size?: string; negative?: string; denoise?: number; maxDim?: number; annotEdit?: boolean }[] = [
+// alphaPrompt = this model can render a real alpha channel, and the way to ask
+// for it is WORDING, not a flag: the phrasing wraps the user's subject. Verbatim
+// from the model card, because the trigger is a learned caption pattern and a
+// paraphrase is not guaranteed to hit it. Presence of the field is what puts the
+// transparency button in the composer, so a second such model is a data edit.
+export const IMAGE_DEFAULTS: { match: string; steps: number; cfg: number; sampler: string; scheduler: string; size?: string; negative?: string; denoise?: number; maxDim?: number; annotEdit?: boolean; alphaPrompt?: { prefix: string; suffix: string } }[] = [
   { match: "z-image", steps: 10, cfg: 1.0, sampler: "euler", scheduler: "discrete" },
   // Kontext: surgical edit — low denoise so it doesn't redraw the whole scene.
   { match: "kontext", steps: 24, cfg: 1.0, sampler: "euler", scheduler: "discrete", denoise: 0.55 },
@@ -83,7 +88,8 @@ export const IMAGE_DEFAULTS: { match: string; steps: number; cfg: number; sample
   // annotEdit: the card promises local edits "via circles, painted annotations,
   // or separate masks", i.e. the region is communicated through the reference
   // path and read by the VLM, not by masking the latent.
-  { match: "qwen-image-2.1", steps: 40, cfg: 1.0, sampler: "euler", scheduler: "discrete", maxDim: 2048, annotEdit: true },
+  { match: "qwen-image-2.1", steps: 40, cfg: 1.0, sampler: "euler", scheduler: "discrete", maxDim: 2048, annotEdit: true,
+    alphaPrompt: { prefix: "This is an RGBA image with transparency.", suffix: "The image has alpha channel and the background is transparent." } },
   // Fill: inpaint — always fully regenerates the masked area (denoise 1.0).
   // Guidance-distilled but NOT step-distilled (BFL reference is 50): 20 leaves
   // soft seams at mask edges on large fills, 25 is the practical knee.
@@ -92,6 +98,18 @@ export const IMAGE_DEFAULTS: { match: string; steps: number; cfg: number; sample
   { match: "animagine", steps: 28, cfg: 7, sampler: "euler_a", scheduler: "discrete", size: "1024x1024", negative: SDXL_ANIME_NEG },
   { match: "illustrious", steps: 28, cfg: 7, sampler: "euler_a", scheduler: "discrete", size: "1024x1024", negative: SDXL_ANIME_NEG },
 ];
+// Wrap a subject in the model's transparency phrasing. Split prefix/suffix
+// rather than a single prepended sentence because the card's example brackets
+// the subject on BOTH sides ("This is an RGBA image with transparency. <subject>
+// The image has alpha channel and the background is transparent."), and the
+// closing half is the one that names the alpha channel. Returns the text
+// unchanged when the model has no such mode, so callers need no branch.
+export function withAlphaPrompt(id: string, text: string): string {
+  const a = defaultsFor(id)?.alphaPrompt;
+  if (!a) return text;
+  return `${a.prefix} ${text.trim()} ${a.suffix}`.replace(/\s+/g, " ").trim();
+}
+
 export function defaultsFor(id: string) {
   // Ids are derived from filenames, so one model reaches us spelled either way
   // (qwen_image_2.1-q8_0 from the repo's own naming, qwen-image-2.1-Q8 from a

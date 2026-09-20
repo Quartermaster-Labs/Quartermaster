@@ -22,12 +22,12 @@
   import Toggle from "../Toggle.svelte";
   import Composer from "./Composer.svelte";
   import { autogrow } from "../../lib/autogrow";
-  import { Image as ImageIcon, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Palette, Reply, Maximize2, Loader2 } from "lucide-svelte";
+  import { Image as ImageIcon, Blend, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Palette, Reply, Maximize2, Loader2 } from "lucide-svelte";
   import { dropZone } from "../../lib/dropZone";
   import { classifyAttachment } from "../../lib/attachments";
   import { scrollFade } from "../../lib/scrollFade";
   import type { ImageApiMode, SdApiLora, SdApiLoraRef } from "../../lib/types";
-  import { ASPECTS, SIZE_TIERS, aspectDims, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, DEFAULT_MAX_DIM, MAX_BATCH, defaultsFor, settingsFor, parseSdProgress, fmtDur } from "./imageGen";
+  import { ASPECTS, SIZE_TIERS, aspectDims, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, DEFAULT_MAX_DIM, MAX_BATCH, defaultsFor, withAlphaPrompt, settingsFor, parseSdProgress, fmtDur } from "./imageGen";
 
   // A conversational image tab: each user prompt becomes a turn, and the model
   // replies with an image. Follow-up prompts tweak the last image — Kontext gets
@@ -155,6 +155,10 @@
   // conditioning, while annotating keeps the conditioning and lets the model
   // redraw the whole frame.
   let maskAnnotate = $state(false);
+  // Transparent-background mode. Sticky (unlike a mask or a style ref, which are
+  // per-send): stickers come in batches, so clearing it every turn would mean
+  // re-arming it for each one. It only wraps the prompt, so nothing goes stale.
+  let alphaBg = $state(false);
   // Style-transfer reference (data URL) for the NEXT message: appended as the LAST
   // ref image and scaffolds the prompt ("apply the style of the last reference").
   // Ref-edit models only (Qwen-Image-Edit multi-ref / Kontext); ignored elsewhere.
@@ -390,6 +394,9 @@
   // Annotate needs BOTH: a model that reads marked regions, and the reference
   // path to carry the marked image in the first place.
   let supportsAnnotEdit = $derived(supportsRefImages && modelPreset?.annotEdit === true);
+  // Only sd.cpp returns the raw PNG the alpha channel survives in; the OpenAI
+  // route re-encodes upstream, so the button would promise what it cannot do.
+  let supportsAlpha = $derived(isSdapi && !!modelPreset?.alphaPrompt);
   let modelDefaults = $derived(
     modelPreset || modelGen ? settingsFor($selectedModelStore, modelGen) : undefined
   );
@@ -717,12 +724,17 @@
     const sentPrompt = useStyle
       ? `Apply the artistic style, color palette, brushwork, and texture of the final reference image to the other image, keeping its content and composition. ${promptText}`.trim()
       : promptText;
+    // Transparency wraps LAST, so its closing sentence stays the final clause of
+    // the prompt (where the card puts it) even when a style instruction is also
+    // in play. Like the style text it is stored expanded, so regenerate and edit
+    // reproduce the exact prompt that produced the image.
+    const finalPrompt = alphaBg && supportsAlpha ? withAlphaPrompt($selectedModelStore, sentPrompt) : sentPrompt;
     // Composite base + mask now so the sent turn shows the region that changed.
     const maskPreview = useMask && base ? await buildMaskOverlay(base, useMask) : undefined;
     const prevTurns = sessionById(id)!.turns;
     const ti = prevTurns.length;
-    appendTurn(id, { prompt: sentPrompt, refs, images: [], maskPreview, model: $selectedModelStore });
-    await runTurn(id, ti, sentPrompt, refs, useMask, () => {
+    appendTurn(id, { prompt: finalPrompt, refs, images: [], maskPreview, model: $selectedModelStore });
+    await runTurn(id, ti, finalPrompt, refs, useMask, () => {
       prompt = promptText;
       attached = wasAttached;
       maskData = useMask;
@@ -1050,7 +1062,7 @@
                     {#each t.images as img, ii (ii)}
                       <div class="relative {t.images.length > 1 ? 'flex-1 min-w-0' : ''}">
                         <button class="block w-full rounded-xl overflow-hidden border {t.images.length > 1 && ii === picked ? 'border-primary' : 'border-card-border'} bg-secondary cursor-zoom-in focus:outline-none" onclick={() => (fullscreenImg = img)} aria-label="View image fullscreen">
-                          <img src={img} alt="generated {ti + 1}" class="{t.images.length > 1 ? 'w-full h-auto' : 'max-h-56 w-auto'} max-h-56 object-contain" />
+                          <img src={img} alt="generated {ti + 1}" class="{t.images.length > 1 ? 'w-full h-auto' : 'max-h-56 w-auto'} max-h-56 object-contain alpha-checker" />
                         </button>
                         {#if t.images.length > 1}
                           <!-- Batch picker. A separate badge, not the thumbnail itself:
@@ -1322,6 +1334,17 @@
             <Palette class="w-[1.125rem] h-[1.125rem]" />
           </button>
         {/if}
+        {#if supportsAlpha}
+          <button
+            class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {alphaBg ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
+            onclick={() => (alphaBg = !alphaBg)}
+            disabled={isGenerating}
+            use:tip={"Transparent background - renders a real alpha channel (PNG)"}
+            aria-pressed={alphaBg}
+          >
+            <Blend class="w-[1.125rem] h-[1.125rem]" />
+          </button>
+        {/if}
         {#if isSdapi && !(showNegative || $sdNegativePromptStore)}
           <button
             class="inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
@@ -1507,7 +1530,7 @@
         <X class="w-6 h-6" />
       </button>
     </div>
-    <img src={fullscreenImg} alt="fullscreen" class="max-w-full max-h-full object-contain" />
+    <img src={fullscreenImg} alt="fullscreen" class="max-w-full max-h-full object-contain alpha-checker" />
   </div>
 {/if}
 

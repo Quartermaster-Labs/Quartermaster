@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { GENERIC_DEFAULTS, SDXL_ANIME_NEG, aspectDims, defaultsFor, fmtDur, parseSdProgress, settingsFor } from "./imageGen";
+import { GENERIC_DEFAULTS, SDXL_ANIME_NEG, aspectDims, defaultsFor, withAlphaPrompt, fmtDur, parseSdProgress, settingsFor } from "./imageGen";
 
 describe("aspectDims", () => {
   it("keeps squares square", () => {
@@ -145,5 +145,30 @@ describe("settingsFor", () => {
   it("takes a size only when both edges are named", () => {
     expect(settingsFor("z-image-turbo", { width: 1024, height: 768 }).size).toBe("1024x768");
     expect(settingsFor("illustrious-xl", { width: 1024 }).size).toBe("1024x1024");
+  });
+});
+
+describe("withAlphaPrompt", () => {
+  // The card's example brackets the subject: opening sentence, subject, then the
+  // clause that names the alpha channel last.
+  it("wraps the subject in the card's verbatim phrasing", () => {
+    expect(withAlphaPrompt("qwen_image_2.1-q8_0", "A cute cartoon dragon sticker.")).toBe(
+      "This is an RGBA image with transparency. A cute cartoon dragon sticker. The image has alpha channel and the background is transparent.",
+    );
+  });
+
+  // No alphaPrompt in the preset (or no preset at all) => the prompt is the
+  // user's text untouched, so callers never need to branch.
+  it("leaves a model without a transparency mode alone", () => {
+    expect(withAlphaPrompt("qwen-rapid-nsfw", "a dragon")).toBe("a dragon");
+    expect(withAlphaPrompt("some-unknown-model", "a dragon")).toBe("a dragon");
+  });
+
+  // Ragged spacing from the composer must not survive into the prompt: the
+  // trigger is a caption pattern, and doubled spaces are needless drift from it.
+  it("collapses whitespace around the subject", () => {
+    expect(withAlphaPrompt("qwen-image-2.1", "  a  dragon \n")).toBe(
+      "This is an RGBA image with transparency. a dragon The image has alpha channel and the background is transparent.",
+    );
   });
 });
