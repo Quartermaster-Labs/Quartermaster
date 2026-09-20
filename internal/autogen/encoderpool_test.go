@@ -72,6 +72,30 @@ func TestAutogen_classifySafetensors(t *testing.T) {
 			wantFamily: VaeFamilyWan3D,
 		},
 		{
+			// Wan 2.1 and the Qwen-Image 20B VAE: 16-channel latent, and the
+			// decoder projection is what states it.
+			name: "wan 3d causal vae, 16-channel latent",
+			shapes: map[string][]int64{
+				"conv1.weight":         {32, 32, 1, 1, 1},
+				"decoder.conv1.weight": {384, 16, 3, 3, 3},
+			},
+			wantRole:   RoleVae,
+			wantFamily: VaeFamilyWan3D,
+			wantWidth:  16,
+		},
+		{
+			// Qwen-Image 2.1's RGBA autoencoder: same family, 64-channel latent.
+			name: "qwen-image 2.1 rgba vae",
+			shapes: map[string][]int64{
+				"conv1.weight":         {128, 128, 1, 1, 1},
+				"decoder.conv1.weight": {1152, 64, 1, 3, 3},
+				"encoder.conv1.weight": {96, 4, 1, 3, 3},
+			},
+			wantRole:   RoleVae,
+			wantFamily: VaeFamilyWan3D,
+			wantWidth:  64,
+		},
+		{
 			name:      "clip-l",
 			shapes:    map[string][]int64{"text_model.embeddings.token_embedding.weight": {49408, 768}},
 			wantRole:  RoleClip,
@@ -334,6 +358,56 @@ func TestAutogen_condHiddenFrom(t *testing.T) {
 	}
 	if got := condHiddenFrom(map[string]int64{"unrelated.weight": 99}); got != 0 {
 		t.Errorf("unrelated = %d, want 0", got)
+	}
+	// Qwen-Image 2.1 projects the caption through a two-layer MLP, so the width
+	// is on txt_in.in_layer and the bare txt_in the 20B line uses is absent.
+	// Missing this entry leaves the model with no stated encoder width at all.
+	if got := condHiddenFrom(map[string]int64{"txt_in.in_layer.weight": 4096}); got != 4096 {
+		t.Errorf("txt_in.in_layer = %d, want 4096", got)
+	}
+}
+
+func TestAutogen_wan3dLatent(t *testing.T) {
+	cases := []struct {
+		arch       string
+		condHidden int64
+		want       int64
+	}{
+		{"qwen_image", 4096, 64}, // Qwen-Image 2.1 + RGBA VAE
+		{"qwen_image", 3584, 16}, // Qwen-Image 20B / Qwen-Image-Edit
+		{"qwen_image", 2560, 16}, // Krea2 reports arch qwen_image too
+		{"wan", 0, 0},            // Wan video: no opinion, 2.2 TI2V is 48-channel
+		{"", 4096, 0},
+	}
+	for _, c := range cases {
+		if got := wan3dLatent(c.arch, c.condHidden); got != c.want {
+			t.Errorf("wan3dLatent(%q, %d) = %d, want %d", c.arch, c.condHidden, got, c.want)
+		}
+	}
+}
+
+func TestAutogen_EncoderPoolVaeOfWidth(t *testing.T) {
+	// Both files are family wan3d and both match the "qwen_image" hint, so
+	// before latent width was recorded the pick was decided by sorted path,
+	// which puts the 2.1 VAE ahead of the one the 20B line needs.
+	pool := &EncoderPool{Files: []ComponentFile{
+		{Role: RoleVae, Family: VaeFamilyWan3D, Width: 64, Path: "m/qwen_image_2.1_vae_bf16.safetensors"},
+		{Role: RoleVae, Family: VaeFamilyWan3D, Width: 16, Path: "m/qwen_image_vae.safetensors"},
+	}}
+	if got := pool.VaeOfWidth(VaeFamilyWan3D, 16, "qwen_image"); !strings.HasSuffix(got, "qwen_image_vae.safetensors") {
+		t.Errorf("want 16 = %q", got)
+	}
+	if got := pool.VaeOfWidth(VaeFamilyWan3D, 64, "qwen_image"); !strings.HasSuffix(got, "qwen_image_2.1_vae_bf16.safetensors") {
+		t.Errorf("want 64 = %q", got)
+	}
+	// want 0 keeps the old hint-then-sort behaviour.
+	if got := pool.Vae(VaeFamilyWan3D, "qwen_image"); !strings.HasSuffix(got, "qwen_image_2.1_vae_bf16.safetensors") {
+		t.Errorf("no opinion = %q", got)
+	}
+	// A width nothing carries falls back to the full list rather than to "",
+	// so a file that predates Width being recorded never drops the --vae flag.
+	if got := pool.VaeOfWidth(VaeFamilyWan3D, 48, "qwen_image"); got == "" {
+		t.Error("unmatched width returned empty, want fallback")
 	}
 }
 

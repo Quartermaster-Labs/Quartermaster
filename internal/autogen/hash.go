@@ -271,7 +271,13 @@ const hashCacheSuffix = ".modelhash"
 // vendor - a ROCm/HIP llama-server reserves 0.8GB where the Vulkan one on the
 // same card reserves 0.4GB (computeRocmCtxGB). Every estVramGB on a ROCm box
 // moves by 0.4GB for unchanged inputs, so the hash has to force the regen.
-const genVersion = "v80"
+// v81: Qwen-Image 2.1. Its caption projection is an MLP (txt_in.in_layer), so
+// condHiddenFrom can now measure it and the model wires a 4096-wide Qwen3-VL-8B
+// instead of emitting a permanent "needs encoder [llm]" warning; and the Wan-3D
+// VAE family records its latent channel count, so 2.1's 64-channel RGBA VAE and
+// the 16-channel Wan/Qwen-Image one stop being separable only by filename sort.
+// Both change the emitted --llm/--vae for qwen_image models.
+const genVersion = "v81"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

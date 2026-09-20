@@ -145,8 +145,16 @@ func fillerLabel(typeBytes map[uint32]int64) string {
 // flux (txt_in 4096 = T5-XXL), LongCat and Qwen-Image-Edit (txt_in 3584 =
 // Qwen2.5-VL-7B), Z-Image (cap_embedder 2560 = Qwen3-4B), ERNIE (text_proj 3072
 // = Ministral-3B) and Krea2 (txtfusion 2560 = Qwen3-VL-4B).
+//
+// Qwen-Image 2.1 is the first to wrap the projection in a two-layer MLP, so its
+// width lives in txt_in.IN_LAYER.weight (4096 = Qwen3-VL-8B) and the bare
+// txt_in.weight the 20B line uses is absent. Without this entry the file states
+// no width at all: its GGUF carries three KV pairs and no diffusers config blob,
+// so captionChannelsFrom has nothing to fall back on and the model is emitted
+// with a "needs encoder [llm]" warning that no download can clear.
 var condTensorOrder = []string{
 	"txt_in.weight",
+	"txt_in.in_layer.weight",
 	"cap_embedder.1.weight",
 	"text_proj.weight",
 	"condition_proj.weight",

@@ -175,12 +175,20 @@ func classifySafetensors(h map[string]stTensor, sizeGB float64, path string) Com
 		default:
 			return ComponentFile{}
 		}
-	// Wan 2.1-derived 3D causal VAE: conv1.weight is 5-dim. Qwen-Image's VAE has
-	// the identical shape table, so this family needs a path hint to pick between
-	// two files (see EncoderPool.Vae).
+	// Wan 2.1-derived 3D causal VAE: conv1.weight is 5-dim. Wan 2.1 and the
+	// Qwen-Image 20B line have the identical shape table, so those two need a
+	// path hint to pick between them (see EncoderPool.Vae).
+	//
+	// Width is the LATENT channel count, read off the decoder's input projection
+	// ([out, latent, t, h, w]). It is 16 for Wan 2.1 and Qwen-Image 20B, and 64
+	// for Qwen-Image 2.1's RGBA autoencoder, which is the first member of this
+	// family whose latent is a different size. A 64-channel VAE handed to a
+	// 16-channel DiT decodes to noise rather than failing, so the width is what
+	// keeps the filename sort in pickByHint from deciding it.
 	case len(h["conv1.weight"].Shape) == 5:
 		c.Role = RoleVae
 		c.Family = VaeFamilyWan3D
+		c.Width = dim("decoder.conv1.weight", 1)
 	// Transformer 3D video VAE (MiniMax-H3). Neither arm above sees it: the
 	// decoder is a transformer stack (decoder.x_embedder), so there is no
 	// decoder.conv_in and no bare conv1. What remains is the encoder's conv3d
@@ -355,14 +363,33 @@ func (p *EncoderPool) pairProjectors(projByDir map[string]ComponentFile) {
 // candidates and no hint match the pick is the first path in sorted order, which
 // is at least stable across regens.
 func (p *EncoderPool) Vae(family string, hints ...string) string {
+	return p.VaeOfWidth(family, 0, hints...)
+}
+
+// VaeOfWidth is Vae narrowed to a latent channel count. want 0 means "no
+// opinion" and behaves exactly like Vae, which is what every family with a
+// single latent size passes.
+//
+// A want that matches nothing falls back to the full candidate list rather than
+// returning "": a family whose files predate the width being recorded (Width 0)
+// would otherwise turn a working config into a missing-vae warning, and an
+// unfiltered pick is no worse than what this function did before.
+func (p *EncoderPool) VaeOfWidth(family string, want int64, hints ...string) string {
 	if p == nil {
 		return ""
 	}
-	var cands []ComponentFile
+	var cands, sized []ComponentFile
 	for _, f := range p.Files {
-		if f.Role == RoleVae && f.Family == family {
-			cands = append(cands, f)
+		if f.Role != RoleVae || f.Family != family {
+			continue
 		}
+		cands = append(cands, f)
+		if want > 0 && f.Width == want {
+			sized = append(sized, f)
+		}
+	}
+	if len(sized) > 0 {
+		return pickByHint(sized, hints)
 	}
 	return pickByHint(cands, hints)
 }
