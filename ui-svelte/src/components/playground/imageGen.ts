@@ -65,6 +65,17 @@ export const IMAGE_DEFAULTS: { match: string; steps: number; cfg: number; sample
   // sampler is what the few-step distill needs (plain euler undercooks at 8 →
   // needed 20 to compensate). Ref-image edit (extra_images), so denoise unused.
   { match: "qwen-rapid", steps: 8, cfg: 1.0, sampler: "euler_a", scheduler: "beta" },
+  // Qwen-Image 2.1 (the 7B single-stream base, NOT a distill): trained WITHOUT
+  // guidance, so cfg must be 1.0. Verified off the pipeline rather than inferred
+  // from the family: diffusers' QwenImage21Pipeline defaults true_cfg_scale to
+  // 1.0 ("meant to be sampled without guidance") and carries no guidance_scale
+  // parameter at all, and the model card passes neither, only steps=40. That
+  // INVERTS the 20B line (true_cfg_scale 4.0, 50 steps, guidance_scale present)
+  // which reports the same qwen_image arch tag, which is exactly why this needs
+  // its own row instead of a shared qwen one. At cfg 1.0 the negative prompt is
+  // ignored server-side, so leaving it empty is honest. Native canvas is 2048
+  // (the card's 1:1); 1536 would silently cap the model's own resolution.
+  { match: "qwen-image-2.1", steps: 40, cfg: 1.0, sampler: "euler", scheduler: "discrete", maxDim: 2048 },
   // Fill: inpaint — always fully regenerates the masked area (denoise 1.0).
   // Guidance-distilled but NOT step-distilled (BFL reference is 50): 20 leaves
   // soft seams at mask edges on large fills, 25 is the practical knee.
@@ -74,8 +85,14 @@ export const IMAGE_DEFAULTS: { match: string; steps: number; cfg: number; sample
   { match: "illustrious", steps: 28, cfg: 7, sampler: "euler_a", scheduler: "discrete", size: "1024x1024", negative: SDXL_ANIME_NEG },
 ];
 export function defaultsFor(id: string) {
-  const l = id.toLowerCase();
-  return IMAGE_DEFAULTS.find((d) => l.includes(d.match));
+  // Ids are derived from filenames, so one model reaches us spelled either way
+  // (qwen_image_2.1-q8_0 from the repo's own naming, qwen-image-2.1-Q8 from a
+  // rename). Normalise the separator on both sides rather than carrying a row
+  // per spelling, which would fail silently: a missed match is not an error,
+  // it is the generic cfg 7 quietly burning a guidance-free model.
+  const norm = (s: string) => s.toLowerCase().replace(/_/g, "-");
+  const l = norm(id);
+  return IMAGE_DEFAULTS.find((d) => l.includes(norm(d.match)));
 }
 
 // Fallback settings for a model with no entry above. Switching models must reset
