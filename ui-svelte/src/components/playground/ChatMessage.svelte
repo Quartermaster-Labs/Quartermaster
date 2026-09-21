@@ -605,6 +605,15 @@
     }
   }
 
+  // An image can go only if something is left to send: the turn is re-run, and a
+  // user message with no text and no picture is not a message.
+  let removableImages = $derived(imageUrls.length > 1 || textContent.trim().length > 0);
+
+  function removeSentImage(url: string) {
+    if (!onEdit) return;
+    onEdit(textContent.trim(), imageUrls.filter((u) => u !== url));
+  }
+
   function startEdit() {
     editContent = textContent;
     editImages = [...imageUrls];
@@ -1134,10 +1143,10 @@
           {#if editImages.length > 0}
             <div class="flex flex-wrap gap-2">
               {#each editImages as imageUrl (imageUrl)}
-                <div class="relative group/att">
+                <div class="relative">
                   <img src={imageUrl} alt="" class="max-h-24 rounded border border-white/20" />
                   <button
-                    class="absolute -top-1.5 -right-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-white opacity-0 transition-opacity group-hover/att:opacity-100 hover:bg-black/90"
+                    class="absolute -top-1.5 -right-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-white hover:bg-black/90"
                     onclick={() => (editImages = editImages.filter((u) => u !== imageUrl))}
                     use:tip={"Remove image"}
                   >
@@ -1175,16 +1184,32 @@
         {#if hasImages}
           <div class="mb-2 flex flex-wrap gap-2">
             {#each imageUrls as imageUrl, idx (idx)}
-              <button
-                onclick={() => openModal(imageUrl)}
-                class="cursor-pointer rounded border border-white/20 hover:opacity-80 transition-opacity"
-              >
-                <img
-                  src={imageUrl}
-                  alt="Image {idx + 1}"
-                  class="max-w-[200px] rounded"
-                />
-              </button>
+              <div class="relative">
+                <button
+                  onclick={() => openModal(imageUrl)}
+                  class="block cursor-pointer rounded border border-white/20 hover:opacity-80 transition-opacity"
+                >
+                  <img
+                    src={imageUrl}
+                    alt="Image {idx + 1}"
+                    class="max-w-[200px] rounded"
+                  />
+                </button>
+                <!-- Drop an attachment straight from a sent message. It goes
+                     through the same path as an edit, so the turn is re-run
+                     without that picture (and, like edit, does nothing while a
+                     turn is streaming). Not offered if removing it would leave
+                     the message with nothing in it. -->
+                {#if canEdit && removableImages}
+                  <button
+                    class="absolute -top-1.5 -right-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-white hover:bg-black/90"
+                    onclick={() => removeSentImage(imageUrl)}
+                    use:tip={"Remove image and answer again"}
+                  >
+                    <X class="w-3 h-3" />
+                  </button>
+                {/if}
+              </div>
             {/each}
           </div>
         {/if}
