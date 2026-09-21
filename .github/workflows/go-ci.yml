@@ -22,6 +22,11 @@ on:
   # Allows manual triggering of the workflow
   workflow_dispatch:
 
+# Read-only by default: none of these jobs write to the repo, and an
+# unset permissions block inherits the token's full write scope.
+permissions:
+  contents: read
+
 jobs:
   run-tests:
     runs-on: ubuntu-latest

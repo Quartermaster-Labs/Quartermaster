@@ -66,6 +66,12 @@ func SendError(w http.ResponseWriter, r *http.Request, err error) {
 
 // SendResponse detects what content type the client prefers and returns an error response in that format.
 func SendResponse(w http.ResponseWriter, r *http.Request, status int, message string) {
+	// message is an error string, and several callers build it from something
+	// the requester sent. The html branch escapes it, and the other two declare
+	// a non-html content type -- but a declared type only holds if the browser
+	// is told not to sniff past it, so say so once for all three.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+
 	acceptHeader := r.Header.Get("Accept")
 	if strings.Contains(acceptHeader, "text/plain") {
 		w.Header().Set("Content-Type", "text/plain")

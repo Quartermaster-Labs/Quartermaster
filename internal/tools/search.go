@@ -554,7 +554,9 @@ var ErrNoProviders = errors.New("no web search provider configured")
 
 // webSearchClient is the shared client for the key-based provider adapters
 // (brave/tavily/google). DDG and SearXNG build their own per timeout.
-var webSearchClient = &http.Client{Timeout: 15 * time.Second}
+// Its transport enforces the caller-origin rule in dialguard.go: dials made
+// under a context marked PublicOnly may only reach public addresses.
+var webSearchClient = &http.Client{Timeout: 15 * time.Second, Transport: newWebSearchTransport()}
 
 // ReadLimited reads up to n bytes from r. Used on search provider responses:
 // a hostile endpoint streaming gigabytes must not become a memory bill.

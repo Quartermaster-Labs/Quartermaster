@@ -1,12 +1,40 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"strings"
 
 	"github.com/quartermaster-labs/quartermaster/internal/tools"
 )
+
+// guardSearchCtx decides whether the search this request is about to run may
+// reach a private address, and records the answer on the context that every
+// dial underneath it will consult (internal/tools/dialguard.go).
+//
+// A search endpoint takes its target FROM the caller, which is the point (a
+// SearXNG instance is personal and normally lives on loopback or the LAN) and
+// also a forgery primitive. The split is by origin: the person at this machine
+// keeps the feature, and a caller arriving over the network -- the listener
+// binds 0.0.0.0 and this API takes no credential -- is held to public
+// addresses so it cannot use the server as a probe for the network around it.
+//
+// RemoteAddr on purpose, never X-Forwarded-For: that header is written by the
+// client on a direct connection. The corollary is that a reverse proxy in
+// front of this process makes every caller look local, so a deployment that
+// adds one has to re-establish the distinction itself.
+func guardSearchCtx(ctx context.Context, r *http.Request) context.Context {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil && ip.IsLoopback() {
+		return ctx
+	}
+	return tools.PublicOnly(ctx)
+}
 
 // handleAPIWebSearch runs a web search on the browser's behalf. Two shapes:
 //
@@ -19,9 +47,9 @@ import (
 // Either way it exists because SearXNG ships no CORS headers, so the browser
 // cannot reach it directly.
 //
-// ponytail: the GET form is an open forwarder — it fetches whatever ?url=
-// points at (SSRF). Fine for a local single-user tool; restrict to a configured
-// allowlist if ever exposed.
+// Both forms take their target from the caller, so both go through
+// guardSearchCtx: a loopback caller may still point them at a private SearXNG,
+// and a caller from the network may not.
 func (s *Server) handleAPIWebSearch(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		s.handleWebSearchChain(w, r)
@@ -35,7 +63,7 @@ func (s *Server) handleAPIWebSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := tools.SearxngJSON(r.Context(), base, q)
+	body, err := tools.SearxngJSON(guardSearchCtx(r.Context(), r), base, q)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -59,7 +87,7 @@ func (s *Server) handleWebSearchChain(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing q", http.StatusBadRequest)
 		return
 	}
-	results, provider, err := searchChain(r.Context(), req.Providers, req.Query, req.Limit)
+	results, provider, err := searchChain(guardSearchCtx(r.Context(), r), req.Providers, req.Query, req.Limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
