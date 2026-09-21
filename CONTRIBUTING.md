@@ -5,10 +5,12 @@ welcome, and the bar is "does it work and does it fit", not ceremony.
 
 ## Before you write code
 
-- **Bug?** Open a [bug report](.github/ISSUE_TEMPLATE/bug-report.md). The
-  template asks for your config plus proxy and upstream logs (copy from `/logs`)
-  because nearly every real bug here is a launch-command or VRAM-fit problem, and
-  those two things answer it immediately.
+- **Bug?** Open a [bug report](https://github.com/Quartermaster-Labs/Quartermaster/issues/new/choose).
+  The form asks for your config plus the Quartermaster and backend logs (copy
+  from the Logs tab) because nearly every real bug here is a launch-command or
+  VRAM-fit problem, and those two things answer it immediately.
+- **A specific model misbehaving?** Use the *model or backend support* form: it
+  asks for the generated launch command, which is usually the whole answer.
 - **Question?** Use Discussions, not an issue.
 - **Security bug?** Don't open an issue: see [`SECURITY.md`](SECURITY.md).
 - **Feature or refactor?** Open an issue first if it is more than an afternoon of
