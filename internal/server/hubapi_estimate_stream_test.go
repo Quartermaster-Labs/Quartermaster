@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/quartermaster-labs/quartermaster/internal/autogen"
@@ -14,10 +15,14 @@ import (
 )
 
 // stubSource is the minimum a sizing batch touches: it only ever calls Detail.
+//
+// The counter is ATOMIC because a batch sizes its rows concurrently — which is
+// the contract hub.Source states for real adapters, and a plain int here was a
+// race in the test rather than in the code under test.
 type stubSource struct {
 	detail hub.ModelDetail
 	err    error
-	calls  int
+	calls  atomic.Int64
 }
 
 func (s *stubSource) ID() string   { return "stub" }
@@ -26,7 +31,7 @@ func (s *stubSource) Search(context.Context, hub.Query) (hub.Page, error) {
 	return hub.Page{}, errors.New("not used")
 }
 func (s *stubSource) Detail(context.Context, string) (hub.ModelDetail, error) {
-	s.calls++
+	s.calls.Add(1)
 	return s.detail, s.err
 }
 func (s *stubSource) FileURL(repo, path string) (string, error) {
@@ -89,7 +94,7 @@ func TestServer_HubEstimateCached_NoTarget(t *testing.T) {
 	if row.Err == "" {
 		t.Errorf("row = %+v, want an explanatory err", row)
 	}
-	if src.calls != 0 {
-		t.Errorf("Detail called %d times, want none without a budget to size against", src.calls)
+	if n := src.calls.Load(); n != 0 {
+		t.Errorf("Detail called %d times, want none without a budget to size against", n)
 	}
 }
