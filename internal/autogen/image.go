@@ -396,16 +396,20 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *En
 	// CLIP/T5 at all. Their VAEs split by arch: the wan/qwen_image 3D causal VAE
 	// for the former, flux.2's 32-channel AE for ERNIE.
 	//
-	// The Wan-2.1 and Qwen-Image VAEs are structurally IDENTICAL (same 194
+	// The Wan-2.1 and Qwen-Image 20B VAEs are structurally IDENTICAL (same 194
 	// tensors, every dimension equal), so nothing in either file distinguishes
 	// them and the model name is the only signal available: hence the hints.
 	// Wrong pick here is a colour-shifted decode, not a crash.
+	//
+	// Qwen-Image 2.1's RGBA VAE is in the same family but is 64-channel, and
+	// THAT cross-wire is a bad decode rather than a tint, so it is excluded by
+	// latent width before the hints ever run (see wan3dLatent).
 	case a == "qwen_image" || a == "wan" || strings.Contains(n, "qwen-image") || strings.Contains(n, "qwen_image"):
 		if a == "wan" && !strings.Contains(n, "wan") {
 			// ERNIE-Image reports arch "wan" but is a flux.2-latent model.
 			c.vae = req("vae", firstNonEmpty(enc.Flux2Vae, pool.Vae(VaeFamilyFlux2)))
 		} else {
-			c.vae = req("vae", pool.Vae(VaeFamilyWan3D, wan3dHints(n)...))
+			c.vae = req("vae", pool.VaeOfWidth(VaeFamilyWan3D, wan3dLatent(a, condHidden), wan3dHints(n)...))
 		}
 		c.llm = req("llm", llmDefault)
 	}
@@ -551,9 +555,11 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	}
 	// The vision tower of the text encoder, needed by edit pipelines that
 	// condition on a reference image. Auto-paired to the chosen --llm (its
-	// sibling mmproj), never hand-typed. Without it an edit model does not
-	// error: it reports "vision disabled" and emits an image unrelated to the
-	// reference, so a wrong-looking result is the only symptom.
+	// sibling mmproj), never hand-typed. Missing, most edit models do not error:
+	// they report "vision disabled" and emit an image unrelated to the
+	// reference, so a wrong-looking result is the only symptom. Qwen-Image 2.1
+	// is the exception and refuses the prompt outright ("editing requires
+	// Qwen3-VL vision weights"), which is the better behaviour of the two.
 	if p := imageArg(comp.llmVision); p != "" {
 		lines = append(lines, "--llm_vision "+p)
 	}
@@ -1077,6 +1083,29 @@ func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, n
 // wan3dHints orders the two indistinguishable 3D causal VAEs by what the model
 // name says its lineage is. Wan/Krea take wan_2.1_vae, everything else in the
 // Qwen-Image family takes qwen_image_vae.
+// wan3dLatent is the VAE latent width a Wan-3D-family image DiT expects, or 0
+// for "no opinion" (match any, the behaviour every other model here relies on).
+//
+// It cannot be read off the DiT. Qwen-Image's img_in is [64, hidden] for BOTH
+// lines: the 20B patchifies a 16-channel latent 2x2 into 64, while 2.1 consumes
+// a 64-channel latent whole. The caption projection is what separates them, and
+// the file states it: the 20B line is 3584 wide (Qwen2.5-VL-7B) and pairs with
+// the 16-channel VAE, 2.1 is 4096 (Qwen3-VL-8B) and pairs with the 64-channel
+// RGBA one. Krea2 is arch qwen_image too and sits at 2560, i.e. 16-channel.
+//
+// Scoped to qwen_image on purpose: Wan VIDEO checkpoints share this family and
+// do not share this rule (Wan 2.2 TI2V ships a 48-channel VAE), so they keep
+// passing 0 and picking by hint.
+func wan3dLatent(arch string, condHidden int64) int64 {
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(arch)), "qwen_image") {
+		return 0
+	}
+	if condHidden == 4096 {
+		return 64
+	}
+	return 16
+}
+
 func wan3dHints(name string) []string {
 	if strings.Contains(name, "krea") || strings.Contains(name, "wan") {
 		return []string{"wan_2.1", "wan2.1", "wan"}

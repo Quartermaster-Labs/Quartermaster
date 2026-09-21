@@ -663,6 +663,21 @@
   .composer-textarea {
     @apply w-full bg-transparent text-[0.8125rem] leading-relaxed resize-none focus:outline-none placeholder:text-txtsecondary pt-2 transition-[height] duration-200 ease-out;
   }
+  /* Checkerboard behind an <img>, so a transparent PNG reads as transparent
+     instead of as "the same colour as the panel". Painted on the IMG itself,
+     not a wrapper: the element box hugs the bitmap there, so object-contain
+     letterboxing can never expose bare squares beside the picture. Harmless on
+     an opaque image, which covers it completely, so it needs no per-image flag. */
+  .alpha-checker {
+    background-image:
+      linear-gradient(45deg, rgb(0 0 0 / 0.22) 25%, transparent 25%),
+      linear-gradient(-45deg, rgb(0 0 0 / 0.22) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, rgb(0 0 0 / 0.22) 75%),
+      linear-gradient(-45deg, transparent 75%, rgb(0 0 0 / 0.22) 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  }
+
   .composer-icon-btn {
     @apply inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40;
   }

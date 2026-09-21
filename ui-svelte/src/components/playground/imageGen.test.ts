@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { SDXL_ANIME_NEG, aspectDims, defaultsFor, fmtDur, parseSdProgress, settingsFor } from "./imageGen";
+import { GENERIC_DEFAULTS, SDXL_ANIME_NEG, aspectDims, defaultsFor, withAlphaPrompt, fmtDur, parseSdProgress, settingsFor } from "./imageGen";
 
 describe("aspectDims", () => {
   it("keeps squares square", () => {
@@ -117,8 +117,58 @@ describe("settingsFor", () => {
     expect(d.size).toBe("1024x1024");
   });
 
+  it("matches a model id regardless of how its name is punctuated", () => {
+    // The emitted config key uses underscores; a renamed file uses hyphens.
+    for (const id of ["qwen_image_2.1-q8_0", "qwen-image-2.1-Q8"]) {
+      const d = settingsFor(id);
+      expect(d.cfg).toBe(1.0);
+      expect(d.steps).toBe(40);
+    }
+  });
+
+  it("does not hand the 2.1 preset to the 20B line that shares its arch", () => {
+    // Same qwen_image arch tag, opposite sampling regime (cfg 4-ish, 50 steps),
+    // so the edit/rapid models must keep their own rows.
+    expect(settingsFor("qwen-rapid-nsfw").steps).toBe(8);
+    expect(settingsFor("qwen_image_edit-q8_0").cfg).toBe(GENERIC_DEFAULTS.cfg);
+  });
+
+  it("flags only the models that read a marked region as an annotation", () => {
+    // Qwen-Image 2.1 targets a local edit semantically, through the reference
+    // path. Kontext is a ref-edit model too but has no such mechanism, so its
+    // brush must stay a latent mask.
+    expect(defaultsFor("qwen_image_2.1-q8_0")?.annotEdit).toBe(true);
+    expect(defaultsFor("flux1-kontext-dev")?.annotEdit).toBeUndefined();
+    expect(defaultsFor("qwen-rapid-nsfw")?.annotEdit).toBeUndefined();
+  });
+
   it("takes a size only when both edges are named", () => {
     expect(settingsFor("z-image-turbo", { width: 1024, height: 768 }).size).toBe("1024x768");
     expect(settingsFor("illustrious-xl", { width: 1024 }).size).toBe("1024x1024");
+  });
+});
+
+describe("withAlphaPrompt", () => {
+  // The card's example brackets the subject: opening sentence, subject, then the
+  // clause that names the alpha channel last.
+  it("wraps the subject in the card's verbatim phrasing", () => {
+    expect(withAlphaPrompt("qwen_image_2.1-q8_0", "A cute cartoon dragon sticker.")).toBe(
+      "This is an RGBA image with transparency. A cute cartoon dragon sticker. The image has alpha channel and the background is transparent.",
+    );
+  });
+
+  // No alphaPrompt in the preset (or no preset at all) => the prompt is the
+  // user's text untouched, so callers never need to branch.
+  it("leaves a model without a transparency mode alone", () => {
+    expect(withAlphaPrompt("qwen-rapid-nsfw", "a dragon")).toBe("a dragon");
+    expect(withAlphaPrompt("some-unknown-model", "a dragon")).toBe("a dragon");
+  });
+
+  // Ragged spacing from the composer must not survive into the prompt: the
+  // trigger is a caption pattern, and doubled spaces are needless drift from it.
+  it("collapses whitespace around the subject", () => {
+    expect(withAlphaPrompt("qwen-image-2.1", "  a  dragon \n")).toBe(
+      "This is an RGBA image with transparency. a dragon The image has alpha channel and the background is transparent.",
+    );
   });
 });
