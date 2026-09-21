@@ -401,12 +401,37 @@
   // What the enhancer produced, so the revert offer can tell an untouched
   // rewrite from one the user has since edited.
   let enhancedText = $state<string | null>(null);
+  // The aspect the enhancer moved the framing to, and what it was before. A
+  // structured enhancer returns the ratio it wrote the prompt FOR, so applying
+  // it keeps the two agreeing; but framing is a control the user sets by hand,
+  // so a silent change is a control moving on its own. Shown, and reverted with
+  // the prompt, so the whole rewrite undoes as one action.
+  let enhancedAspect = $state<string | null>(null);
+  let preEnhanceAspect = $state<string | null>(null);
   $effect(() => {
     if (preEnhance !== null && prompt !== enhancedText) {
       preEnhance = null;
       enhancedText = null;
+      // Deliberately NOT reverting the aspect here. Editing the rewritten text
+      // is accepting the rewrite and continuing from it, so the framing it was
+      // written for should stay; only an explicit revert puts it back.
+      enhancedAspect = null;
+      preEnhanceAspect = null;
     }
   });
+
+  // Nearest supported aspect to a free-form "W:H". The enhancer may answer with
+  // a ratio the picker has no entry for (Qwen's prompt derives things like
+  // "9:2" for panel grids), and refusing those would drop the field on exactly
+  // the layouts it exists to describe.
+  function snapAspect(ratio: string): string | null {
+    const [w, h] = ratio.split(":").map((n) => Number(n.trim()));
+    if (!(w > 0) || !(h > 0)) return null;
+    const r = w / h;
+    return ASPECTS.reduce((best, a) =>
+      Math.abs(a.w / a.h - r) < Math.abs(best.w / best.h - r) ? a : best
+    ).value;
+  }
 
   async function runEnhance() {
     if (!enhancer || enhancing || isGenerating) return;
@@ -422,6 +447,14 @@
       prompt = r.prompt;
       enhancedText = r.prompt;
       preEnhance = r.original;
+      // ratioFollow means "match an input image", which is what an img2img turn
+      // already does, so there is nothing to set and nothing to announce.
+      const snapped = r.ratio && !r.ratioFollow ? snapAspect(r.ratio) : null;
+      if (snapped && snapped !== $aspectStore) {
+        preEnhanceAspect = $aspectStore;
+        enhancedAspect = snapped;
+        $aspectStore = snapped;
+      }
     } catch (e) {
       enhanceError = e instanceof Error ? e.message : String(e);
     } finally {
@@ -434,6 +467,9 @@
     prompt = preEnhance;
     preEnhance = null;
     enhancedText = null;
+    if (preEnhanceAspect !== null) $aspectStore = preEnhanceAspect;
+    enhancedAspect = null;
+    preEnhanceAspect = null;
   }
 
   let modelGen = $derived($models.find((m) => m.id === $selectedModelStore)?.genDefaults);
@@ -1549,7 +1585,9 @@
               class="composer-icon-btn"
               onclick={revertEnhance}
               disabled={enhancing}
-              use:tip={"Revert to the prompt you wrote"}
+              use:tip={preEnhanceAspect !== null
+                ? `Revert to the prompt you wrote, and the aspect ratio back to ${preEnhanceAspect}`
+                : "Revert to the prompt you wrote"}
             >
               <Undo2 class="w-[1.125rem] h-[1.125rem]" />
             </button>
@@ -1694,6 +1732,19 @@
           <div class="mb-2 p-2 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded text-sm flex items-start gap-2">
             <span class="flex-1">{enhanceError}</span>
             <button class="shrink-0 opacity-70 hover:opacity-100" onclick={() => (enhanceError = "")} aria-label="Dismiss">
+              <X class="w-3.5 h-3.5" />
+            </button>
+          </div>
+        {/if}
+
+        <!-- A control moved on its own, so it says so. Without this the aspect
+             picker silently disagrees with what the user last set it to. -->
+        {#if enhancedAspect}
+          <div class="mb-2 p-2 bg-surface-2 border border-card-border text-txtsecondary rounded text-sm flex items-start gap-2">
+            <span class="flex-1">
+              {enhancer?.name ?? "The enhancer"} wrote this prompt for <strong class="text-txtmain">{enhancedAspect}</strong>, so the aspect ratio was changed to match.
+            </span>
+            <button class="shrink-0 opacity-70 hover:opacity-100" onclick={() => (enhancedAspect = null)} aria-label="Dismiss">
               <X class="w-3.5 h-3.5" />
             </button>
           </div>

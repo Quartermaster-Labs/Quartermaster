@@ -288,7 +288,11 @@ const hashCacheSuffix = ".modelhash"
 // per-image-model system prompt, so an image model can gain promptEnhancer,
 // promptEnhancerEdit and either prompt key with nothing on disk having changed;
 // PE ggufs also leave the text-encoder pool, which moves --llm on Qwen-Image.
-const genVersion = "v84"
+// v85: an i2i prompt enhancer auto-pairs to the model's "-vision" twin instead
+//      of the base profile, so promptEnhancerEdit gains a "-vision" suffix on
+//      models where nothing on disk changed. The base profile keeps its
+//      projector in RAM, and an i2i rewriter is handed an image on every call.
+const genVersion = "v85"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

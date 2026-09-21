@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { cleanEnhanced } from "./promptEnhance";
+import { cleanEnhanced, parseEnhanced } from "./promptEnhance";
 
 describe("cleanEnhanced", () => {
   it("passes a plain prompt through untouched", () => {
@@ -36,5 +36,53 @@ describe("cleanEnhanced", () => {
   it("returns empty for a response with no content left", () => {
     expect(cleanEnhanced("<think>hmm</think>")).toBe("");
     expect(cleanEnhanced("   ")).toBe("");
+  });
+});
+
+// Qwen's official PE system prompts mandate a JSON object, and these models
+// deliberate in plain PROSE (no <think> tags), so the trailing object is the
+// only reliable place the answer can be cut out of.
+describe("parseEnhanced", () => {
+  it("pulls the prompt out of a bare JSON envelope", () => {
+    const r = parseEnhanced('{"rewritten_prompt": "a red fox in snow", "wh_ratio": "16:9", "ratio_follow": ""}');
+    expect(r.prompt).toBe("a red fox in snow");
+    expect(r.ratio).toBe("16:9");
+    expect(r.ratioFollow).toBeUndefined();
+    expect(r.structured).toBe(true);
+  });
+
+  it("finds the object after hundreds of tokens of deliberation", () => {
+    const raw = `Let me think about what the user wants.
+Pose: keep standing facing camera, arms relaxed.
+\`\`\`json
+{"rewritten_prompt": "a red fox in snow, 35mm"}
+\`\`\``;
+    expect(parseEnhanced(raw).prompt).toBe("a red fox in snow, 35mm");
+  });
+
+  it("takes the LAST object, not an echoed schema example", () => {
+    const raw = `The format I must follow is {"rewritten_prompt": "<your prompt here>", "wh_ratio": "1:1"}.
+So: {"rewritten_prompt": "a red fox in snow", "wh_ratio": "3:4"}`;
+    const r = parseEnhanced(raw);
+    expect(r.prompt).toBe("a red fox in snow");
+    expect(r.ratio).toBe("3:4");
+  });
+
+  it("survives prose that happens to balance a brace", () => {
+    const raw = `Consider {this} and {that}.
+{"prompt": "a red fox in snow"}`;
+    expect(parseEnhanced(raw).prompt).toBe("a red fox in snow");
+  });
+
+  it("falls back to the cleaner when no envelope is present", () => {
+    const r = parseEnhanced("Enhanced prompt: a red fox in snow");
+    expect(r.prompt).toBe("a red fox in snow");
+    expect(r.structured).toBe(false);
+    expect(r.ratio).toBeUndefined();
+  });
+
+  it("ignores an object whose prompt key is empty", () => {
+    const r = parseEnhanced('{"rewritten_prompt": "   ", "wh_ratio": "16:9"}');
+    expect(r.structured).toBe(false);
   });
 });

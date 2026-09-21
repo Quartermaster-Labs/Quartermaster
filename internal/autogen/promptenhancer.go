@@ -140,7 +140,11 @@ type autoEnhancerPair struct {
 // row.ID, matching the name the emit loop gives a row unless two rows share an
 // ID, where the loop appends a publisher tag to the SECOND one; first-wins here
 // agrees with that.
-func detectEnhancers(rows []GgufRow) autoEnhancers {
+//
+// The exception is an i2i enhancer, which is auto-paired to the model's VISION
+// TWIN instead. See enhancerServedID: on that one direction the base id is the
+// wrong profile, every single time.
+func detectEnhancers(rows []GgufRow, s Settings, overrides []Override) autoEnhancers {
 	out := autoEnhancers{}
 	for _, row := range rows {
 		// An image/video/SAM row is never an enhancer, whatever it is called:
@@ -160,7 +164,7 @@ func detectEnhancers(rows []GgufRow) autoEnhancers {
 		switch dir {
 		case PEDirEdit:
 			if p.Edit == "" {
-				p.Edit = row.ID
+				p.Edit = enhancerServedID(row, s, overrides)
 			}
 		default:
 			if p.Text == "" {
@@ -169,6 +173,47 @@ func detectEnhancers(rows []GgufRow) autoEnhancers {
 		}
 	}
 	return out
+}
+
+// enhancerServedID picks WHICH profile of an i2i enhancer to auto-pair.
+//
+// Every other profile of a vision model carries its projector in system RAM
+// (--no-mmproj-offload), which costs no VRAM and changes neither the context
+// window nor the layer placement, paid for with a one-off host-side encode on
+// the requests that actually carry an image. That trade is right for a chat
+// model, where most requests are text. It inverts completely for an i2i
+// rewriter: EVERY call carries the image, by definition, so the base profile
+// pays the CPU encode every time and never once banks the saving. Measured, it
+// is the difference between seconds and minutes on a single reference image.
+//
+// So the twin is the correct pairing, and its extra VRAM is the price of the
+// feature working at all. Falls back to the base id whenever the emit loop
+// would not produce a twin, since pairing to an id that is never emitted hides
+// the button behind a 404 instead.
+func enhancerServedID(row GgufRow, s Settings, overrides []Override) string {
+	ov := ResolveOverride(row, overrides)
+	mmprojFile, modelPin := "", ""
+	if ov != nil {
+		mmprojFile = ov.MmprojFile
+		modelPin = strings.ToLower(strings.TrimSpace(ov.Mmproj))
+		// The reserved "vision" variant repins the TWIN's projector, and is the
+		// one place a "none" drops the twin while leaving the base ids vision
+		// capable. Mirrors the twin gate in generate.go.
+		variants := append(append([]VariantSpec{}, ov.Variants...), s.DefaultVariants...)
+		for i := range variants {
+			if strings.EqualFold(strings.TrimSpace(variants[i].Name), "vision") {
+				mmprojFile = inheritStr(variants[i].MmprojFile, mmprojFile)
+				break
+			}
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(mmprojFile), NoneSentinel) || modelPin == "none" {
+		return row.ID
+	}
+	if path, _ := mmprojFor(row, mmprojFile); path == "" {
+		return row.ID
+	}
+	return row.ID + "-vision"
 }
 
 // For returns the enhancers discovered for an image model id, or nil. The lookup

@@ -61,7 +61,7 @@ func TestAutogen_detectEnhancers_PairsAcrossQuants(t *testing.T) {
 		{ID: "qwen-image-2.1-pe-i2i-q5_k_m"},
 		{ID: "qwen3.6-27b-q4_k_m"},
 	}
-	auto := detectEnhancers(rows)
+	auto := detectEnhancers(rows, Settings{}, nil)
 
 	got := auto.For("qwen-image-2.1-q8_0")
 	if got == nil {
@@ -75,6 +75,42 @@ func TestAutogen_detectEnhancers_PairsAcrossQuants(t *testing.T) {
 	}
 	if auto.For("flux-dev-q8_0") != nil {
 		t.Error("paired an unrelated image model")
+	}
+}
+
+// The i2i half must pair to the VISION twin when the model ships a projector.
+// The base profile carries its mmproj in RAM (--no-mmproj-offload), and an i2i
+// rewriter is handed an image on every single call, so pairing it there pays a
+// host-side encode every time: measured in minutes, not seconds.
+func TestAutogen_detectEnhancers_PrefersVisionTwin(t *testing.T) {
+	rows := []GgufRow{
+		{ID: "qwen-image-2.1-pe-i2i-q5_k_m", FullPath: "/d/models/qwen-image-2.1-pe-i2i-q5_k_m.gguf", MmprojPath: "/d/models/pe-i2i.mmproj-bf16.gguf", MmprojSizeGB: 1.3},
+		// The t2i half ships a projector too (same base model), but it is never
+		// shown an image, so it must NOT be moved onto the twin and made to pay
+		// VRAM for a projector it will not use.
+		{ID: "qwen-image-2.1-pe-t2i-q5_k_m", FullPath: "/d/models/qwen-image-2.1-pe-t2i-q5_k_m.gguf", MmprojPath: "/d/models/pe-t2i.mmproj-bf16.gguf", MmprojSizeGB: 1.3},
+	}
+	got := detectEnhancers(rows, Settings{}, nil).For("qwen-image-2.1-q8_0")
+	if got == nil {
+		t.Fatal("no enhancers paired to the image model")
+	}
+	if got.Edit != "qwen-image-2.1-pe-i2i-q5_k_m-vision" {
+		t.Errorf("edit = %q, want the vision twin", got.Edit)
+	}
+	if got.Text != "qwen-image-2.1-pe-t2i-q5_k_m" {
+		t.Errorf("text = %q, want the base profile", got.Text)
+	}
+
+	// No projector => no twin is emitted, so pairing to one would be a 404.
+	bare := []GgufRow{{ID: "qwen-image-2.1-pe-i2i-q5_k_m"}}
+	if got := detectEnhancers(bare, Settings{}, nil).For("qwen-image-2.1-q8_0"); got.Edit != "qwen-image-2.1-pe-i2i-q5_k_m" {
+		t.Errorf("edit = %q, want the base id when there is no twin", got.Edit)
+	}
+
+	// "mmproj: none" drops the twin as well, same rule the emit loop uses.
+	pinned := []Override{{Match: "*pe-i2i*", Mmproj: "none"}}
+	if got := detectEnhancers(rows, Settings{}, pinned).For("qwen-image-2.1-q8_0"); got.Edit != "qwen-image-2.1-pe-i2i-q5_k_m" {
+		t.Errorf("edit = %q, want the base id when the twin is pinned off", got.Edit)
 	}
 }
 
@@ -96,7 +132,7 @@ func TestAutogen_resolveEnhancerIDs(t *testing.T) {
 	s := Settings{autoEnhancers: detectEnhancers([]GgufRow{
 		{ID: "qwen-image-2.1-pe-t2i-q5_k_m"},
 		{ID: "qwen-image-2.1-pe-i2i-q5_k_m"},
-	})}
+	}, Settings{}, nil)}
 
 	text, edit := resolveEnhancerIDs(s, "qwen-image-2.1-q8_0", "", "")
 	if text != "qwen-image-2.1-pe-t2i-q5_k_m" || edit != "qwen-image-2.1-pe-i2i-q5_k_m" {

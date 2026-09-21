@@ -169,6 +169,28 @@ machine edit.
 only when the same quote character appears nowhere inside, because `"OPEN" on a shop sign` is a
 prompt whose quotes are content. `lib/promptEnhance.test.ts` pins that case.
 
+`parseEnhanced` runs first and is the layer that matters in practice. Qwen's official PE system
+prompts mandate a JSON object (`{"rewritten_prompt", "wh_ratio", "ratio_follow"}`), and these
+models **deliberate in plain prose, not `<think>` tags**, so neither
+`chat_template_kwargs: {enable_thinking: false}` nor `--reasoning-format` can separate the
+thinking from the answer: the trailing object is the only reliable cut point. So it scans for
+balanced top-level objects (string- and escape-aware, since prose balances braces too) and takes
+the **LAST** one with a usable prompt key, because a model quoting its own schema back during
+deliberation puts an example object earlier in the stream. No object => fall through to
+`cleanEnhanced` on the raw text, which is what an ordinary non-Qwen rewriter needs.
+
+Two consequences of that deliberation being untaggable: `MAX_TOKENS` is 4096, not the 1024 this
+started with (a rewrite that never reached its JSON is a rewrite that never happened), and
+`finish_reason === "length"` with no structured object is reported as its own error naming the
+budget, instead of pasting several thousand tokens of raw reasoning into the prompt box.
+
+`wh_ratio` is applied, not just parsed: `ImageInterface.svelte` snaps it to the nearest entry in
+`ASPECTS` and sets the aspect control, but only when `ratio_follow` is empty (an img2img turn
+already matches its input) and only with a note above the box saying so, since a control that
+moves silently is worse than one that does not move. `revertEnhance` puts the prompt and the
+aspect back together; a manual edit to the prompt clears the offer for both, because editing the
+rewrite is accepting it.
+
 The enhancer is a normal catalog model, so on a single-GPU box it evicts the image model and the
 image model swaps back in to render. Slow, but correct: the alternative is a second scheduler,
 which the architecture forbids.

@@ -28,7 +28,22 @@ export interface EnhanceResult {
   prompt: string;
   // What was in the box before, so the caller can offer a one-click revert.
   original: string;
+  // Aspect ratio the enhancer asked for ("16:9"), when it returned the
+  // structured envelope. Advisory: the caller snaps it to a supported aspect.
+  ratio?: string;
+  // The enhancer asking to follow an INPUT image's ratio instead ("<image1>").
+  // Mutually exclusive with `ratio` per Qwen's schema, and the reason the two
+  // are separate fields rather than one nullable string.
+  ratioFollow?: string;
 }
+
+// These models deliberate in plain prose for hundreds of tokens before emitting
+// the answer, and the deliberation is NOT wrapped in <think>, so nothing can
+// separate it until the answer actually arrives. A budget that cuts them off
+// mid-thought yields a scratchpad with no prompt behind it, which reads as a
+// broken model rather than a truncated response. 1024 was not enough for a
+// single image plus a one-line instruction under Qwen's own PE system prompt.
+const MAX_TOKENS = 4096;
 
 // enhancePrompt rewrites `prompt` through `enhancer`. `refImages` are data or
 // http URLs; they are sent only when the enhancer is configured for vision, so
@@ -77,7 +92,7 @@ export async function enhancePrompt(
         // are tuned for chat, which is how the same prompt came back as three
         // different scenes on consecutive presses.
         temperature: 0.3,
-        max_tokens: 1024,
+        max_tokens: MAX_TOKENS,
         // These models emit the rewritten prompt directly. A <think> block just
         // eats the budget and can leave content empty, which reads as a silent
         // failure on a perfectly healthy model.
@@ -94,10 +109,100 @@ export async function enhancePrompt(
   }
 
   const json = await res.json();
-  const out = json.choices?.[0]?.message?.content;
-  const cleaned = typeof out === "string" ? cleanEnhanced(out) : "";
-  if (!cleaned) throw new EnhanceError("The enhancer returned nothing usable.");
-  return { prompt: cleaned, original };
+  const choice = json.choices?.[0];
+  const out = choice?.message?.content;
+  // "length" means the model was still talking when the budget ran out. On its
+  // own that is survivable, but combined with an unstructured result it means
+  // the answer never arrived and what we have is scratchpad.
+  const truncated = choice?.finish_reason === "length";
+  const parsed = typeof out === "string" ? parseEnhanced(out) : { prompt: "", structured: false };
+  if (!parsed.prompt || (truncated && !parsed.structured)) {
+    throw new EnhanceError(
+      truncated
+        ? `The enhancer ran out of output budget (${MAX_TOKENS} tokens) before it finished, so it never produced a prompt. Shorten its system prompt, or send fewer reference images.`
+        : "The enhancer returned nothing usable.",
+    );
+  }
+  return { prompt: parsed.prompt, original, ratio: parsed.ratio, ratioFollow: parsed.ratioFollow };
+}
+
+// The keys a structured enhancer puts its answer under. `rewritten_prompt` is
+// Qwen's own PE schema; the other two are what hand-written system prompts in
+// circulation use for the same field.
+const PROMPT_KEYS = ["rewritten_prompt", "enhanced_prompt", "prompt"];
+
+export interface ParsedEnhance {
+  prompt: string;
+  ratio?: string;
+  ratioFollow?: string;
+  // The answer came out of a JSON envelope rather than off the raw text. The
+  // caller needs this to tell "the model answered" from "the model was cut off
+  // and cleanEnhanced salvaged some prose".
+  structured: boolean;
+}
+
+// parseEnhanced pulls the rewritten prompt out of whatever the enhancer said.
+//
+// Two contracts are in play and the enhancer picks, not us: the system prompt
+// is the USER's, so it may ask for a bare prompt or, as Qwen's published PE
+// prompts do, for a JSON object with the prompt plus the aspect ratio to render
+// it at. Structured wins when present, because these models narrate their way
+// to the answer and the narration is indistinguishable from a prompt to any
+// text-shaped cleanup.
+export function parseEnhanced(raw: string): ParsedEnhance {
+  // Last, not first: the system prompt's own schema example can be echoed back
+  // during deliberation, and the real answer is always the final object.
+  for (const obj of jsonObjects(raw).reverse()) {
+    if (!obj || typeof obj !== "object") continue;
+    const rec = obj as Record<string, unknown>;
+    const key = PROMPT_KEYS.find((k) => typeof rec[k] === "string" && (rec[k] as string).trim());
+    if (!key) continue;
+    const ratio = typeof rec.wh_ratio === "string" ? rec.wh_ratio.trim() : "";
+    const follow = typeof rec.ratio_follow === "string" ? rec.ratio_follow.trim() : "";
+    return {
+      prompt: cleanEnhanced(rec[key] as string),
+      ratio: ratio || undefined,
+      ratioFollow: follow || undefined,
+      structured: true,
+    };
+  }
+  return { prompt: cleanEnhanced(raw), structured: false };
+}
+
+// jsonObjects returns every top-level balanced {...} in `s` that parses, in the
+// order they appear. Hand-rolled rather than a regex because the payload is a
+// prompt: it contains braces, quotes and escapes, and a regex either stops at
+// the first "}" inside a string or swallows the rest of the document.
+function jsonObjects(s: string): unknown[] {
+  const out: unknown[] = [];
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] !== "{") continue;
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (let j = i; j < s.length; j++) {
+      const c = s[j];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (c === "\\") esc = true;
+        else if (c === '"') inStr = false;
+        continue;
+      }
+      if (c === '"') inStr = true;
+      else if (c === "{") depth++;
+      else if (c === "}" && --depth === 0) {
+        try {
+          out.push(JSON.parse(s.slice(i, j + 1)));
+        } catch {
+          // Prose that happened to balance a brace. Not an error: the next
+          // candidate start is where the real object probably begins.
+        }
+        i = j;
+        break;
+      }
+    }
+  }
+  return out;
 }
 
 // cleanEnhanced strips the wrappers a rewrite model adds around the prompt: a

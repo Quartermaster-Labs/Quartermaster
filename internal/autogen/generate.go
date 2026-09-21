@@ -134,7 +134,7 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 	// own (see resolveEnhancerIDs). The other half of the same classifier keeps
 	// enhancers OUT of the text-encoder pool, where a same-arch, bigger-file PE
 	// otherwise outranks the real conditioner (see encoderpool.go).
-	s.autoEnhancers = detectEnhancers(rows)
+	s.autoEnhancers = detectEnhancers(rows, s, gf.Overrides)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Quartermaster config - generated %s\n", nowRFC)

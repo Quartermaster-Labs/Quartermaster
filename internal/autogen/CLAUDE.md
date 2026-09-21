@@ -31,7 +31,7 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 | `metacache.go` | In-memory metadata cache keyed by file size+mtime (`ReadGgufMetadataCached`). |
 | `kvcost.go` | KV-cache cost model (`GetKvCostModel`) + context-budget math (`MaxCtxForBudget`, `KvReserveGB`, `RoundedCtx`, `GetDenseCtx`, `defaultKvQuant`). → `sizing.md` |
 | `plan.go` | VRAM budget → placement: `-ngl`/`--n-cpu-moe` for dense and MoE (`GetLoadPlan`, `densePlacement`); MoE expert-share table + `effectiveShare`. → `sizing.md` |
-| `generate.go` | Top-level orchestration (`Generate`): builds per-model profiles (solo, ctx tiers, named variants), sizes each, emits the YAML. Before the emit loop it builds the name-detected prompt-enhancer table (`s.autoEnhancers = detectEnhancers(rows)`). `emitModel`/`RenderSoloCmd` **dispatch by model class** (SAM → image → embedding → TTS → ASR → LLM). This file is the profile loop; the three phases live in the siblings below. |
+| `generate.go` | Top-level orchestration (`Generate`): builds per-model profiles (solo, ctx tiers, named variants), sizes each, emits the YAML. Before the emit loop it builds the name-detected prompt-enhancer table (`s.autoEnhancers = detectEnhancers(rows, s, gf.Overrides)`). `emitModel`/`RenderSoloCmd` **dispatch by model class** (SAM → image → embedding → TTS → ASR → LLM). This file is the profile loop; the three phases live in the siblings below. |
 | `generate_sizing.go` | Phase 1 — sizing math: `sizeProfile`, `--ctx-checkpoints` count + `checkpointReserveGB`, `forceLowActiveMoE`/`applyForcedOffload`/`estForOffload`, `computeBufferGB`, `MmprojVramGB`, `draftOverheadGB`. Pure arithmetic over `Metadata` + `Settings`. → `sizing.md` |
 | `generate_cmd.go` | Phase 2 — command rendering: `buildCmdLines` (the per-class argv builder) and `RenderSoloCmd` (same with a `${PORT}` placeholder, for the UI preview + ad-hoc commands), plus `effectiveUb`, `effectiveSpec`/`specHas`, `cmdPath`, `needsQwenFixedChatTemplate`, `defaultSamplerFor`/`samplerLines`. |
 | `generate_emit.go` | Phase 3: YAML emission: non-model sections (`emitSlotCache`, `emitAPIKeys`, `emitPromptEnhancers`, `emitGroupsAndListeners`, `writeGroup`) and per-model bits (`emitProfile`, `writeDisplayName`, `writeEstVram`/`writeEstRam`, `writeEnhancerBlock`/`writeEnhancerPrompt`, `effortLevels`, `formatCtxTag`, `slugify`). |
@@ -50,7 +50,7 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 | `vllm.go` | Backend selection (`resolveBackend`, `resolveBackendPreferring`, `kindClass`) + the vllm emitter. → `backends.md` |
 | `rope.go` | `ropeCeiling`/`ropeFactor` — the only path that lifts the trained-ctx ceiling. → `sizing.md` |
 | `encoderpool.go` | Diffusion component auto-discovery: classifies every VAE / CLIP / T5 / audio VAE / text-encoder LLM on disk from its header (safetensors tensor table or gguf metadata), pairs each encoder with the mmproj beside it, and fills the blanks in `settings.encoders`. Matched to a DiT by `Metadata.CondHidden`. VAEs and audio VAEs carry a FAMILY, and `Vae`/`AudioVae` are scoped by it: the shapes alone would let a model load a decoder for a latent it never produced. `LlmHinted` is the path-based escape for a family whose encoder is a republished copy of a common model (LTX). Prompt-enhancer files (`IsPromptEnhancerFile`) are withheld from the text-encoder pool: a same-arch BF16 PE outranks the real encoder on file size in `better()`, and a mis-picked encoder fails as a confidently unrelated image. -> `classes.md` |
-| `promptenhancer.go` | Name-based prompt-enhancer classifier: `promptEnhancerName`/`PromptEnhancerID` (direction `PEDirText`/`PEDirEdit`, family key), `IsPromptEnhancerFile`, `detectEnhancers`/`autoEnhancers.For` (pairs a rewriter with the image model its name carries), `resolveEnhancerIDs`, and the `PEDisabled` (`"none"`) sentinel. NAME-only because a PE gguf reports `general.architecture=qwen3vl`, identical to every other VL chat model, so the arch gate the asr/tts/embedding classifiers use says nothing here. Narrow rule: a `pe` token must be immediately followed by a `t2i`/`i2i` token, or the name spells `promptenhanc`. |
+| `promptenhancer.go` | Name-based prompt-enhancer classifier: `promptEnhancerName`/`PromptEnhancerID` (direction `PEDirText`/`PEDirEdit`, family key), `IsPromptEnhancerFile`, `detectEnhancers`/`autoEnhancers.For` (pairs a rewriter with the image model its name carries), `resolveEnhancerIDs`, `enhancerServedID` (an i2i rewriter pairs to the `-vision` twin, because the base profile's RAM-side projector charges a host encode on every call and an i2i call always carries an image), and the `PEDisabled` (`"none"`) sentinel. NAME-only because a PE gguf reports `general.architecture=qwen3vl`, identical to every other VL chat model, so the arch gate the asr/tts/embedding classifiers use says nothing here. Narrow rule: a `pe` token must be immediately followed by a `t2i`/`i2i` token, or the name spells `promptenhanc`. |
 | `audiocpp.go` | audio.cpp emitter: the `IsAudioCppModel` gate (header-exact, no filename heuristics), the 72-family task table, the containment flags that stop audio.cpp's own model manager being a second scheduler, and the `audiocpp:` block the spawn-time `--config` materializer consumes. Also `withoutAudioCpp`/`onlyAudioCpp`, the mirrored filters that keep each engine's rows out of the other's resolver, and the exported `IsAudioCppKind`/`AudioCppFamilySupport` the model browser's catalog annotates itself with (`internal/server/audiocppcatalog.go`) - one table, so the catalog cannot advertise a family the emitter refuses. → `classes.md` |
 | `audiocppdev.go` | Which ADAPTER an audio.cpp model loads onto: the `--list-devices` parser for upstream's own `Vulkan:0 "name" [GPU]` shape (neither `backenddev.go` shape fits), the memoized probe sharing that file's budget, and `pickAudioCppDevice`, which takes the first `[GPU]` row of the emitted `--backend`. Refuses (emits no flag) for cpu/unknown flavours, a single-device backend, or a listing with no discrete GPU. `Override.AudioDevice` overrides it; negative means emit nothing. → `classes.md` |
 | `audio.go`, `asr.go`, `sam.go`, `image.go`, `embedding.go` | Non-LLM class emitters. → `classes.md` |
@@ -175,7 +175,7 @@ precise one before rendering. Five pieces, deliberately split:
   Top-level and not per-model because the payload is a multi-KB system prompt that several image
   models share verbatim.
 - `Settings.autoEnhancers` (unexported, `promptenhancer.go`): the pairing table `Generate` builds
-  from the rows it just discovered (`detectEnhancers(rows)`), keyed by the image model's base key
+  from the rows it just discovered (`detectEnhancers(rows, s, overrides)`), keyed by the image model's base key
   and holding one id per direction (`autoEnhancers.For`). Unexported because it is DERIVED from
   what is on disk this run: it must never round-trip through a settings file, so a `Settings`
   built anywhere else (the UI, a test) has none and auto-pairing is off rather than stale.
@@ -188,6 +188,18 @@ precise one before rendering. Five pieces, deliberately split:
   everything before the marker folded through `ModelBaseKey`, so every quant of an image model,
   and a rewriter republished at another quant, still pair. `IsSam`/`IsTrellis` rows are skipped:
   the rewriter is a chat model.
+- `enhancerServedID` (`promptenhancer.go`) picks WHICH PROFILE of an i2i enhancer gets paired,
+  and it is a latency fix, not a nicety. Every non-twin profile of a vision model keeps its
+  projector in system RAM (`--no-mmproj-offload`): no VRAM, unchanged ctx and layer placement,
+  paid as a one-off host-side encode on the requests that carry an image. That trade is right
+  for a chat model, where most requests are text, and it INVERTS for an i2i rewriter, which is
+  handed an image on every single call by definition: it pays the CPU encode every time and
+  never once banks the saving (measured at four minutes on one reference image). So the `i2i`
+  half auto-pairs to `<id>-vision` and the `t2i` half stays on the base id, since it is never
+  shown an image and should not pay VRAM for a projector it will not use. The fallback to the
+  base id mirrors the twin gate in `generate.go` exactly (override `MmprojFile`, the reserved
+  `vision` variant through `inheritStr`, `NoneSentinel`, `Mmproj: none`, an empty `mmprojFor`),
+  because naming a twin the emit loop never produces hides the button behind a 404 instead.
 - `Override.PromptEnhancer` / `Override.PromptEnhancerEdit`: which entry an image model opts
   into, **one per direction**. A **model id, never a path**: an enhancer is a model the ONE router
   schedules and evicts like any other, and a path would be a second loader outside the scheduler,
@@ -226,7 +238,7 @@ The encoder pool is the other half of the same classifier. `IsPromptEnhancerFile
 gguf from `ScanEncoderPool` outright and bars a safetensors copy from the LLM role, because
 `better()` breaks a same-arch tie on file size and a BF16 PE outranks the real Q8 encoder: the image model would condition on its
 own prompt rewriter and render a confidently unrelated picture. Emit output changed, so
-`genVersion` is v84.
+`genVersion` is v85.
 
 ## Gotchas / conventions
 
