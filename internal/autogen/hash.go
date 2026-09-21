@@ -284,7 +284,11 @@ const hashCacheSuffix = ".modelhash"
 // v83: refEdit "on" now implies --llm_vision. Pinning reference editing without
 // also pinning the projector produced a model that could not generate at all on
 // Qwen-Image 2.1, which errors rather than silently ignoring the reference.
-const genVersion = "v83"
+// v84: prompt enhancers are auto-paired by name (detectEnhancers) and carry a
+// per-image-model system prompt, so an image model can gain promptEnhancer,
+// promptEnhancerEdit and either prompt key with nothing on disk having changed;
+// PE ggufs also leave the text-encoder pool, which moves --llm on Qwen-Image.
+const genVersion = "v84"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

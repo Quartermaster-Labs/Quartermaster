@@ -171,6 +171,14 @@ type ModelConfig struct {
 	// PromptEnhancer covers both. See autogen.Override.PromptEnhancerEdit.
 	PromptEnhancerEdit string `yaml:"promptEnhancerEdit"`
 
+	// PromptEnhancerPrompt / PromptEnhancerEditPrompt are THIS model's system
+	// prompts for the two directions, overriding the shared
+	// Config.PromptEnhancers entry's. Empty => use the shared one. See
+	// autogen.Override.PromptEnhancerPrompt for why the prompt belongs to the
+	// image model rather than to the rewriter.
+	PromptEnhancerPrompt     string `yaml:"promptEnhancerPrompt"`
+	PromptEnhancerEditPrompt string `yaml:"promptEnhancerEditPrompt"`
+
 	// Copy of HealthCheckTimeout from global config
 	HealthCheckTimeout int `yaml:"healthCheckTimeout"`
 }

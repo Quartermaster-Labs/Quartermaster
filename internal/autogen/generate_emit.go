@@ -217,11 +217,24 @@ func ovPromptEnhancerEdit(ov *Override) string {
 	return ov.PromptEnhancerEdit
 }
 
+// ovEnhancerPrompt / ovEnhancerEditPrompt read the per-model system prompts,
+// same nil-safety.
+func ovEnhancerPrompt(ov *Override) string {
+	if ov == nil {
+		return ""
+	}
+	return ov.PromptEnhancerPrompt
+}
+
+func ovEnhancerEditPrompt(ov *Override) string {
+	if ov == nil {
+		return ""
+	}
+	return ov.PromptEnhancerEditPrompt
+}
+
 // writePromptEnhancer emits a model's `promptEnhancer:` line - the id of the
-// entry above that it delegates its prompt to. Written only when that id
-// actually resolves: a stale reference (the enhancer was renamed or removed from
-// settings) is dropped here rather than carried into the config for the client
-// to fail to look up.
+// rewrite model it delegates its prompt to.
 func writePromptEnhancer(b *strings.Builder, id string, byID map[string]PromptEnhancer) {
 	writeEnhancerKey(b, "promptEnhancer", id, byID)
 }
@@ -233,16 +246,60 @@ func writePromptEnhancerEdit(b *strings.Builder, id string, byID map[string]Prom
 	writeEnhancerKey(b, "promptEnhancerEdit", id, byID)
 }
 
+// writeEnhancerBlock emits a model's whole prompt-enhancer wiring: the id it
+// uses per direction, plus the system prompt IT wants that enhancer to run
+// under. imageID is the model's discovered id (not its emitted name), which is
+// what the detection table is keyed on.
+func writeEnhancerBlock(b *strings.Builder, s Settings, imageID, text, edit, textPrompt, editPrompt string) {
+	text, edit = resolveEnhancerIDs(s, imageID, text, edit)
+	byID := enhancerByID(s.PromptEnhancers)
+	writePromptEnhancer(b, text, byID)
+	writePromptEnhancerEdit(b, edit, byID)
+	writeEnhancerPrompt(b, "promptEnhancerPrompt", text, textPrompt)
+	writeEnhancerPrompt(b, "promptEnhancerEditPrompt", edit, editPrompt)
+}
+
+// writeEnhancerKey emits one enhancer id, as typed.
+//
+// A settings.promptEnhancers row is NOT required. It used to be - an id with no
+// row was dropped here - and that was wrong in both directions the feature grew:
+// an id can now be free text the user typed (the modal says so: "it will be
+// called with no system prompt") or one this package detected from a filename,
+// and in both cases the system prompt lives on the IMAGE model. Dropping the id
+// meant the client showed no button and nothing said why. A row, when there is
+// one, now only fixes up the canonical casing of the id it declares.
 func writeEnhancerKey(b *strings.Builder, key, id string, byID map[string]PromptEnhancer) {
 	id = strings.TrimSpace(id)
-	if id == "" {
+	if id == "" || enhancerDisabled(id) {
 		return
 	}
-	e, ok := byID[strings.ToLower(id)]
-	if !ok {
+	if e, ok := byID[strings.ToLower(id)]; ok {
+		id = strings.TrimSpace(e.Model)
+	}
+	fmt.Fprintf(b, "    %s: %q\n", key, id)
+}
+
+// writeEnhancerPrompt emits a model's OWN system prompt for one direction: the
+// text pasted into the model modal's prompt dialog. Skipped when the model has
+// no enhancer in that direction, since the prompt would have nothing to run
+// under.
+//
+// Marshalled rather than Fprintf'd for the same reason emitPromptEnhancers is: a
+// rewriter prompt is a multi-line document full of quotes, colons and
+// backslashes, and hand-rolling a block scalar for it works on the example and
+// corrupts the real thing.
+func writeEnhancerPrompt(b *strings.Builder, key, id, prompt string) {
+	if strings.TrimSpace(id) == "" || enhancerDisabled(id) || prompt == "" {
 		return
 	}
-	fmt.Fprintf(b, "    %s: %q\n", key, strings.TrimSpace(e.Model))
+	out, err := yaml.Marshal(map[string]string{key: prompt})
+	if err != nil {
+		// Unreachable for a one-string map, but a marshal error must not take the
+		// model with it: the enhancer falls back to the shared row's prompt.
+		fmt.Fprintf(b, "    # SKIPPED %s: %v\n", key, err)
+		return
+	}
+	b.WriteString(indentYAML(string(out), "    "))
 }
 
 // emitAPIKeys writes the apiKeys list and, for any key scoped to a model

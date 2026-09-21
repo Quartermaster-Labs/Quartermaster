@@ -1103,6 +1103,7 @@ func (s *Server) routes() {
 	// delegate its prompt to, each with its fixed system prompt. Whole-list PUT.
 	mux.Handle("GET /api/prompt-enhancers", adminChain.ThenFunc(s.handlePromptEnhancersGet))
 	mux.Handle("PUT /api/prompt-enhancers", adminChain.ThenFunc(s.handlePromptEnhancersPut))
+	mux.Handle("GET /api/prompt-enhancers/detected", adminChain.ThenFunc(s.handlePromptEnhancersDetected))
 
 	var h http.Handler = chain.New(CreateRequestLogMiddleware(s.proxylog), CreateCORSMiddleware()).Then(mux)
 	s.handler.Store(&h)

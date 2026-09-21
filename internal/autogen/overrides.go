@@ -237,6 +237,15 @@ type Settings struct {
 	// block from explicit paths; no VRAM planner or arch detection runs. Persisted
 	// here (not a runtime hack) so a regen keeps them.
 	ExtraImageModels []ExtraImageModel `yaml:"extraImageModels"`
+	// autoEnhancers is the name-based prompt-enhancer pairing table built by
+	// Generate from the rows it just discovered (see promptenhancer.go), read by
+	// the image emitters to pre-fill a model that names no enhancer of its own.
+	//
+	// Unexported on purpose: it is DERIVED from what is on disk this run, so it
+	// must never round-trip through the settings file a user edits. A Settings
+	// built anywhere else (the UI, a test) simply has none, and auto-pairing is
+	// then off rather than stale.
+	autoEnhancers autoEnhancers
 }
 
 // ExtraImageModel is one hand-declared sd-server image model (see
@@ -260,15 +269,19 @@ type ExtraImageModel struct {
 	PromptEnhancer string `yaml:"promptEnhancer"`
 	// PromptEnhancerEdit is the img2img half of the pair. See
 	// Override.PromptEnhancerEdit.
-	PromptEnhancerEdit string  `yaml:"promptEnhancerEdit"`
-	VramTargetGB       float64 `yaml:"vramTargetGB"`
-	DefaultCfg         float64 `yaml:"defaultCfg"`
-	DefaultSteps       int     `yaml:"defaultSteps"`
-	DefaultSampler     string  `yaml:"defaultSampler"` // --sampling-method
-	DefaultWidth       int     `yaml:"defaultWidth"`
-	DefaultHeight      int     `yaml:"defaultHeight"`
-	DiffusionFa        string  `yaml:"diffusionFa"` // "" => on, "off" => off
-	VaeTiling          string  `yaml:"vaeTiling"`   // "" => on, "off" => off
+	PromptEnhancerEdit string `yaml:"promptEnhancerEdit"`
+	// PromptEnhancerPrompt / PromptEnhancerEditPrompt are this model's own system
+	// prompts for the two directions. See Override.PromptEnhancerPrompt.
+	PromptEnhancerPrompt     string  `yaml:"promptEnhancerPrompt"`
+	PromptEnhancerEditPrompt string  `yaml:"promptEnhancerEditPrompt"`
+	VramTargetGB             float64 `yaml:"vramTargetGB"`
+	DefaultCfg               float64 `yaml:"defaultCfg"`
+	DefaultSteps             int     `yaml:"defaultSteps"`
+	DefaultSampler           string  `yaml:"defaultSampler"` // --sampling-method
+	DefaultWidth             int     `yaml:"defaultWidth"`
+	DefaultHeight            int     `yaml:"defaultHeight"`
+	DiffusionFa              string  `yaml:"diffusionFa"` // "" => on, "off" => off
+	VaeTiling                string  `yaml:"vaeTiling"`   // "" => on, "off" => off
 	// Video VRAM levers. "" means OFF here, NOT auto: an extra model is
 	// hand-declared and never goes through the gguf tensor scan, so nothing on
 	// this path can tell a video DiT from an image one. Set "on" explicitly.
@@ -906,6 +919,20 @@ type Override struct {
 	// model uses PromptEnhancer in both directions, which is what a single-model
 	// setup wants and what every model configured before this field existed does.
 	PromptEnhancerEdit string `yaml:"promptEnhancerEdit"`
+	// PromptEnhancerPrompt is the system prompt this model runs its txt2img
+	// enhancer under, winning over the settings.promptEnhancers row (if any).
+	//
+	// Per IMAGE MODEL rather than per enhancer, because that is where it earns its
+	// keep: one rewriter is reused across checkpoints that want very different
+	// output (an SDXL tag soup, a Flux paragraph, a Qwen instruction), and a
+	// rewrite is only ever as good as the target it was told to write for.
+	// Empty => fall back to the shared row, which is the pre-field behaviour.
+	PromptEnhancerPrompt string `yaml:"promptEnhancerPrompt"`
+	// PromptEnhancerEditPrompt is the img2img half, same precedence. Kept apart
+	// from the text one because the two directions are different jobs: one
+	// composes a scene, the other rewrites an instruction about a picture that
+	// already exists.
+	PromptEnhancerEditPrompt string `yaml:"promptEnhancerEditPrompt"`
 	// LoraDir is this model's `--lora-model-dir`. Empty => settings.loraDir, and
 	// if that is empty too, the directory the model gguf itself lives in.
 	// sd-server models only; the llama-server path uses Loras below.

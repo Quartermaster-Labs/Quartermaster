@@ -129,6 +129,13 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 		return rows[i].Publisher < rows[j].Publisher
 	})
 
+	// Name-based prompt-enhancer detection, over the same rows the emit loop is
+	// about to walk: it pre-fills an image model that names no enhancer of its
+	// own (see resolveEnhancerIDs). The other half of the same classifier keeps
+	// enhancers OUT of the text-encoder pool, where a same-arch, bigger-file PE
+	// otherwise outranks the real conditioner (see encoderpool.go).
+	s.autoEnhancers = detectEnhancers(rows)
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Quartermaster config - generated %s\n", nowRFC)
 	fmt.Fprintf(&b, "# TargetVramGB=%g  MaxRamGB=%g  Threads=%d\n", s.TargetVramGB, s.MaxRamGB, s.Threads)

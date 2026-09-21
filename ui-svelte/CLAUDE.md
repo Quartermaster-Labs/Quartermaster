@@ -109,13 +109,23 @@ Backend communication is centralized in `src/stores/api.ts`, with shared types i
 
 `lib/promptEnhance.ts` + the Enhance button in `playground/ImageInterface.svelte`.
 
-Both id fields (the Settings table and the per-model picker) are **free text with a `<datalist>`
-of suggestions, never a dropdown**. Nothing server-side validates the id against the catalog:
-`promptEnhancerFor` matches it only against the settings table, and the id is passed straight
-through as `model` on the chat request. A closed list would be a rule the UI invented and the
-server does not have, and it would block the ordinary case of naming a model you are about to
-install. The editor instead warns when an id has no Settings row, since that is the one thing free
-text makes easy to get silently wrong: such an enhancer is called with no system prompt.
+Both id fields (the Settings table, and the per-model picker in `ModelConfigModal.svelte`) are
+**free text with a `<datalist>` of suggestions, never a dropdown**. Nothing server-side validates
+the id against the catalog: `promptEnhancerFor` resolves any id, row or no row, and the id is
+passed straight through as `model` on the chat request. A closed list would be a rule the UI
+invented and the server does not have, and it would block the ordinary case of naming a model you
+are about to install.
+
+The picker's datalists merge two sources, configured rows first, deduped case-insensitively: the
+Settings entries, and the ids `listDetectedPromptEnhancers` reads from
+`GET /api/prompt-enhancers/detected` (`DetectedEnhancer` in `stores/api.ts`). Detection is keyed
+on the same family the model table groups by (`baseKey` of the id with `_` and spaces folded to
+`-`, matching the Go side), and a detected id whose name says no direction is offered for both
+fields. On an empty field whose family has a candidate, the candidate shows as the input's
+placeholder with a "Don't use one" action that writes the `none` sentinel, because autogen would
+otherwise fill the field again on every regen and leave no way to refuse (see
+`internal/autogen/CLAUDE.md`). The old "no Settings row" warning now fires only when the id has
+neither a row nor a per-model prompt; with a prompt it says which source will run instead.
 
 **The enhancer row does NOT take an mmproj.** A vision enhancer is a VL model plus a projector,
 but that pairing belongs to the model, not to the enhancer role: `generate.go` wires a discovered
@@ -127,13 +137,24 @@ false, which is the failure that otherwise looks like it worked.
 
 An image model can name a rewrite model in its config editor; the server resolves that id and
 ships it as `Model.promptEnhancer` on `/v1/models`, so the button renders only for models that
-have one (absent, not disabled: an enhancer is opt-in and most models never get one).
+have one (absent, not disabled: a model with no configured enhancer and none detected ships no
+field).
 
 It can name **two**, one per direction (`promptEnhancerEdit` for requests that carry a reference
 image), because Qwen ships PE-T2I and PE-I2I and they are not interchangeable. Two fields rather
 than a list: the direction is unambiguous at press time, so the composer picks for the user instead
-of asking. Either half alone still covers both directions, since hiding the button on a model that
-plainly has an enhancer reads as a bug, and the rewrite is reviewable in the box either way.
+of asking. Either half alone still covers both directions (an empty field is first filled by the
+detected candidate for its direction, then the other half stands in), since hiding the button on a
+model that plainly has an enhancer reads as a bug, and the rewrite is reviewable in the box either
+way.
+
+Each direction also has a **Prompt** button beside the id field, opening a dialog that edits this
+image model's own system prompt (`promptEnhancerPrompt` / `promptEnhancerEditPrompt`). It is a
+dialog rather than a textarea on the form because it is a multi-KB document written once and then
+rarely looked at; the button carries a dot when the model has one. The prompt is saved byte for
+byte (the server rejects only an all-whitespace one, since leading indentation and a trailing
+newline are often part of a published PE prompt), and it outranks the Settings row's at serve
+time; the status line under the id says so whenever it is set.
 
 The rewrite runs **here, on the client**, and lands back in the prompt box rather than being
 applied inside the image route. That is the whole design: these models fail by confidently

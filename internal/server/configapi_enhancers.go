@@ -12,6 +12,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/quartermaster-labs/quartermaster/internal/autogen"
@@ -90,4 +91,43 @@ func (s *Server) handlePromptEnhancersPut(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, list)
+}
+
+// detectedEnhancerDTO is one NAME-DETECTED rewriter: a catalog model whose id
+// says it is a prompt enhancer (see autogen.PromptEnhancerID).
+type detectedEnhancerDTO struct {
+	Model string `json:"model"`
+	// Direction is "t2i", "i2i", or "" when the name says enhancer but not which
+	// way. The model editor uses it to suggest the right id per field.
+	Direction string `json:"direction"`
+	// ImageModel is the family key of the image model the name was built from
+	// ("qwen-image-2.1"), which is what pairs the two without asking anyone.
+	ImageModel string `json:"imageModel"`
+}
+
+// handlePromptEnhancersDetected lists the enhancer candidates found by name.
+//
+// Read off the LOADED CONFIG rather than a fresh disk scan: every discovered
+// gguf is already a model entry, and an enhancer has to be one to be callable at
+// all (it is dispatched as the `model` of a chat request through the one
+// scheduler). So the catalog is both the cheapest and the most accurate source -
+// it can only suggest ids that actually resolve.
+//
+// Suggestions only. The model editor's enhancer fields stay free text, because
+// a classifier that works on every name a publisher will ever choose does not
+// exist, and being unable to type the id of a model you can see in the list
+// would be the worse failure.
+func (s *Server) handlePromptEnhancersDetected(w http.ResponseWriter, r *http.Request) {
+	cfg := s.config()
+	out := make([]detectedEnhancerDTO, 0, 4)
+	for id := range cfg.Models {
+		dir, family, ok := autogen.PromptEnhancerID(id)
+		if !ok {
+			continue
+		}
+		out = append(out, detectedEnhancerDTO{Model: id, Direction: dir, ImageModel: family})
+	}
+	// Stable order: the map iteration is random and this feeds a picker list.
+	sort.Slice(out, func(i, j int) bool { return out[i].Model < out[j].Model })
+	writeJSON(w, out)
 }

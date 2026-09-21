@@ -115,31 +115,56 @@ type apiPromptEnhancer struct {
 	Vision bool `json:"vision,omitempty"`
 }
 
-// promptEnhancerFor resolves a model's promptEnhancer id against the config's
-// top-level table. The lookup is case-insensitive because the ids are
-// filename-derived and get copied between the settings page and the model
-// editor by hand.
-func promptEnhancerFor(cfg config.Config, enhancerID string) *apiPromptEnhancer {
+// promptEnhancerFor resolves one of a model's enhancer ids into the payload the
+// client needs to make the rewrite call: the id, a label, and the system prompt
+// to run under. modelPrompt is the IMAGE MODEL's own prompt for this direction.
+//
+// The settings row is optional. An id can arrive from three places now - a
+// settings row, free text typed into the model editor, or name-based detection
+// on disk - and only the first has a row. An id with no row used to resolve to
+// nil, which hid the button with no explanation; it now resolves to itself, and
+// the prompt comes from whichever source has one:
+//
+//	the image model's own prompt  >  the shared row's  >  none
+//
+// The model wins because it is the more specific statement: the same rewriter is
+// reused across checkpoints that want very different output, and the prompt the
+// user pasted into THIS model's dialog is the one they wrote for it.
+//
+// The lookup is case-insensitive: the ids are filename-derived and get copied
+// between the settings page and the model editor by hand.
+func promptEnhancerFor(cfg config.Config, enhancerID, modelPrompt string) *apiPromptEnhancer {
 	id := strings.TrimSpace(enhancerID)
-	if id == "" || len(cfg.PromptEnhancers) == 0 {
+	if id == "" || strings.EqualFold(id, autogen.PEDisabled) {
 		return nil
 	}
+	out := &apiPromptEnhancer{Model: id, Name: id}
+	hasRow := false
 	for key, e := range cfg.PromptEnhancers {
 		if !strings.EqualFold(strings.TrimSpace(key), id) {
 			continue
 		}
-		name := strings.TrimSpace(e.Name)
-		if name == "" {
-			name = strings.TrimSpace(key)
+		hasRow = true
+		out.Model = strings.TrimSpace(key)
+		out.Name = strings.TrimSpace(e.Name)
+		if out.Name == "" {
+			out.Name = out.Model
 		}
-		return &apiPromptEnhancer{
-			Model:        strings.TrimSpace(key),
-			Name:         name,
-			SystemPrompt: e.SystemPrompt,
-			Vision:       e.Vision,
-		}
+		out.SystemPrompt = e.SystemPrompt
+		out.Vision = e.Vision
+		break
 	}
-	return nil
+	if p := strings.TrimSpace(modelPrompt); p != "" {
+		out.SystemPrompt = modelPrompt
+	}
+	// With no row there is nobody to declare vision, and the id itself is the only
+	// evidence. An "-i2i" rewriter is asked to rewrite an instruction ABOUT a
+	// picture, so withholding that picture is the worse default. A row that says
+	// vision: false is a deliberate statement and is left alone.
+	if dir, _, ok := autogen.PromptEnhancerID(id); !hasRow && ok && dir == autogen.PEDirEdit {
+		out.Vision = true
+	}
+	return out
 }
 
 // apiGenDefaults is the sd-server generation defaults carried on a model's
@@ -291,8 +316,8 @@ func (s *Server) modelStatus() []apiModel {
 			QuantLabel:         quantLabel,
 			SizeGB:             fileSizeGB(family),
 			GenDefaults:        genDefaults(info),
-			PromptEnhancer:     promptEnhancerFor(cfg, mc.PromptEnhancer),
-			PromptEnhancerEdit: promptEnhancerFor(cfg, mc.PromptEnhancerEdit),
+			PromptEnhancer:     promptEnhancerFor(cfg, mc.PromptEnhancer, mc.PromptEnhancerPrompt),
+			PromptEnhancerEdit: promptEnhancerFor(cfg, mc.PromptEnhancerEdit, mc.PromptEnhancerEditPrompt),
 			EstVramGB:          mc.EstVramGB,
 			EstRamGB:           mc.EstRamGB,
 			RunningCmd:         runningCmd,

@@ -66,7 +66,7 @@ func TestEmitPromptEnhancers_Empty(t *testing.T) {
 	}
 }
 
-func TestWritePromptEnhancer_DropsDanglingID(t *testing.T) {
+func TestWritePromptEnhancer_EmitsIDWithoutRow(t *testing.T) {
 	byID := enhancerByID([]PromptEnhancer{{Model: "PE-I2I", SystemPrompt: "x"}})
 
 	var b strings.Builder
@@ -76,13 +76,24 @@ func TestWritePromptEnhancer_DropsDanglingID(t *testing.T) {
 		t.Errorf("case-insensitive lookup failed, got %q", b.String())
 	}
 
-	// A reference to an enhancer that is no longer configured emits nothing
-	// rather than a line the client would fail to resolve.
+	// An id with NO settings row is emitted as typed. A row is a place to put a
+	// shared system prompt, not a registration: the id can come from free text or
+	// from name detection, and the prompt can live on the image model. Dropping it
+	// here used to hide the button with no explanation.
 	b.Reset()
-	writePromptEnhancer(&b, "deleted-model", byID)
+	writePromptEnhancer(&b, "typed-by-hand", byID)
+	if got := b.String(); got != "    promptEnhancer: \"typed-by-hand\"\n" {
+		t.Errorf("row-less id: got %q", got)
+	}
+
+	// Blank emits nothing, and so does the explicit "none": that one is how a user
+	// says no to an auto-detected candidate, so it must not reach the config as an
+	// id the client would try to call.
+	b.Reset()
 	writePromptEnhancer(&b, "", byID)
+	writePromptEnhancer(&b, " NONE ", byID)
 	if b.String() != "" {
-		t.Errorf("dangling/blank id should emit nothing, got %q", b.String())
+		t.Errorf("blank/none should emit nothing, got %q", b.String())
 	}
 }
 
@@ -208,12 +219,17 @@ func TestWritePromptEnhancer_BothDirections(t *testing.T) {
 		t.Errorf("edit alone: got %q", got)
 	}
 
-	// And a dangling edit id is dropped just like a dangling text one.
+	// And the edit half follows the same row-less rule as the text one.
 	b.Reset()
 	writePromptEnhancerEdit(&b, "pe-gone", byID)
+	if got := b.String(); got != "    promptEnhancerEdit: \"pe-gone\"\n" {
+		t.Errorf("row-less edit id: got %q", got)
+	}
+	b.Reset()
 	writePromptEnhancerEdit(&b, "", byID)
+	writePromptEnhancerEdit(&b, "none", byID)
 	if b.String() != "" {
-		t.Errorf("dangling/blank edit id should emit nothing, got %q", b.String())
+		t.Errorf("blank/none edit id should emit nothing, got %q", b.String())
 	}
 }
 

@@ -54,15 +54,23 @@ function flushLogs(): void {
   for (const [store, buf] of pendingLog) {
     store.update((prev) => {
       const updated = prev + buf;
-      return updated.length > LOG_LENGTH_LIMIT ? updated.slice(-LOG_LENGTH_LIMIT) : updated;
+      return updated.length > LOG_LENGTH_LIMIT
+        ? updated.slice(-LOG_LENGTH_LIMIT)
+        : updated;
     });
   }
   pendingLog.clear();
 }
 
-function appendLog(newData: string, store: typeof proxyLogs | typeof upstreamLogs): void {
+function appendLog(
+  newData: string,
+  store: typeof proxyLogs | typeof upstreamLogs,
+): void {
   const buf = (pendingLog.get(store) ?? "") + newData;
-  pendingLog.set(store, buf.length > LOG_LENGTH_LIMIT ? buf.slice(-LOG_LENGTH_LIMIT) : buf);
+  pendingLog.set(
+    store,
+    buf.length > LOG_LENGTH_LIMIT ? buf.slice(-LOG_LENGTH_LIMIT) : buf,
+  );
   if (!logFlushScheduled) {
     logFlushScheduled = true;
     requestAnimationFrame(flushLogs);
@@ -111,13 +119,17 @@ export function enableAPIEvents(enabled: boolean): void {
             const newModels = JSON.parse(message.data) as Model[];
             // Sort models by name and id
             newModels.sort((a, b) => {
-              return (a.name + a.id).localeCompare(b.name + b.id, undefined, { numeric: true });
+              return (a.name + a.id).localeCompare(b.name + b.id, undefined, {
+                numeric: true,
+              });
             });
             // Clear stale inference readout when a model just started loading:
             // any id newly entering "starting" means a (re)load is underway, so
             // the previous model's live token/KV stats no longer apply.
             const prevStarting = new Set(
-              prevModelStatus.filter((m) => m.state === "starting").map((m) => m.id),
+              prevModelStatus
+                .filter((m) => m.state === "starting")
+                .map((m) => m.id),
             );
             const nowStarting = newModels.filter(
               (m) => m.state === "starting" && !prevStarting.has(m.id),
@@ -167,7 +179,9 @@ export function enableAPIEvents(enabled: boolean): void {
           }
           case "backendMetrics": {
             const snapshot = JSON.parse(message.data) as BackendMetrics[];
-            backendMetrics.set(Object.fromEntries(snapshot.map((m) => [m.model, m])));
+            backendMetrics.set(
+              Object.fromEntries(snapshot.map((m) => [m.model, m])),
+            );
             break;
           }
         }
@@ -248,12 +262,18 @@ export async function unloadSingleModel(model: string): Promise<void> {
 
 // Per-model load tally, persisted. Powers "most-loaded first" ordering in the
 // dashboard quick-load picker.
-export const loadCounts = persistentStore<Record<string, number>>("loadCounts", {});
+export const loadCounts = persistentStore<Record<string, number>>(
+  "loadCounts",
+  {},
+);
 function recordLoad(model: string): void {
   loadCounts.update((c) => ({ ...c, [model]: (c[model] ?? 0) + 1 }));
 }
 
-export async function loadModel(model: string, signal?: AbortSignal): Promise<void> {
+export async function loadModel(
+  model: string,
+  signal?: AbortSignal,
+): Promise<void> {
   try {
     const response = await fetch(`/upstream/${model}/?_=${Date.now()}`, {
       method: "GET",
@@ -393,7 +413,9 @@ export interface LoraListing {
 // a missing or unreadable folder - the server answers with an empty list and
 // the directory it tried, which is the state the picker has to render anyway.
 export async function getModelLoras(model: string): Promise<LoraListing> {
-  const response = await fetch(`/api/models/${encodeURIComponent(model)}/loras`);
+  const response = await fetch(
+    `/api/models/${encodeURIComponent(model)}/loras`,
+  );
   if (!response.ok) {
     throw new Error(`Failed to list LoRA adapters: ${response.status}`);
   }
@@ -525,6 +547,12 @@ export interface ModelOverride {
   // Used instead of promptEnhancer when a reference image is attached. Empty =>
   // promptEnhancer covers both directions.
   promptEnhancerEdit?: string;
+  // This model's OWN system prompt for each direction, overriding the settings
+  // row's. Per image model because the same rewriter serves checkpoints that
+  // want very different output, and a rewrite is only as good as the target it
+  // was told to write for. Empty => use the settings row's, if there is one.
+  promptEnhancerPrompt?: string;
+  promptEnhancerEditPrompt?: string;
   // Generation defaults (0/empty => sd-server default).
   defaultSteps?: number;
   defaultCfg?: number;
@@ -575,74 +603,116 @@ export interface ModelConfig {
 }
 
 export async function getModelConfig(model: string): Promise<ModelConfig> {
-  const response = await fetch(`/api/models/${encodeURIComponent(model)}/config`);
+  const response = await fetch(
+    `/api/models/${encodeURIComponent(model)}/config`,
+  );
   if (!response.ok) {
-    throw new Error(`Failed to load model config: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to load model config: ${response.status} ${await response.text()}`,
+    );
   }
   return await response.json();
 }
 
-export async function putModelOverride(model: string, override: ModelOverride): Promise<void> {
-  const response = await fetch(`/api/models/${encodeURIComponent(model)}/override`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(override),
-  });
+export async function putModelOverride(
+  model: string,
+  override: ModelOverride,
+): Promise<void> {
+  const response = await fetch(
+    `/api/models/${encodeURIComponent(model)}/override`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(override),
+    },
+  );
   if (!response.ok) {
-    throw new Error(`Failed to save override: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to save override: ${response.status} ${await response.text()}`,
+    );
   }
 }
 
 export async function resetModelOverride(model: string): Promise<void> {
-  const response = await fetch(`/api/models/${encodeURIComponent(model)}/override`, {
-    method: "DELETE",
-  });
+  const response = await fetch(
+    `/api/models/${encodeURIComponent(model)}/override`,
+    {
+      method: "DELETE",
+    },
+  );
   if (!response.ok) {
-    throw new Error(`Failed to reset override: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to reset override: ${response.status} ${await response.text()}`,
+    );
   }
 }
 
-export async function putModelDisplayName(model: string, name: string): Promise<void> {
-  const response = await fetch(`/api/models/${encodeURIComponent(model)}/display-name`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
+export async function putModelDisplayName(
+  model: string,
+  name: string,
+): Promise<void> {
+  const response = await fetch(
+    `/api/models/${encodeURIComponent(model)}/display-name`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    },
+  );
   if (!response.ok) {
-    throw new Error(`Failed to rename model: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to rename model: ${response.status} ${await response.text()}`,
+    );
   }
 }
 
 export async function deleteModelDisplayName(model: string): Promise<void> {
-  const response = await fetch(`/api/models/${encodeURIComponent(model)}/display-name`, {
-    method: "DELETE",
-  });
+  const response = await fetch(
+    `/api/models/${encodeURIComponent(model)}/display-name`,
+    {
+      method: "DELETE",
+    },
+  );
   if (!response.ok) {
-    throw new Error(`Failed to reset model name: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to reset model name: ${response.status} ${await response.text()}`,
+    );
   }
 }
 
-export async function putModelVariant(model: string, variant: ModelVariant): Promise<void> {
-  const response = await fetch(`/api/models/${encodeURIComponent(model)}/variant`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(variant),
-  });
+export async function putModelVariant(
+  model: string,
+  variant: ModelVariant,
+): Promise<void> {
+  const response = await fetch(
+    `/api/models/${encodeURIComponent(model)}/variant`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(variant),
+    },
+  );
   if (!response.ok) {
-    throw new Error(`Failed to save variant: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to save variant: ${response.status} ${await response.text()}`,
+    );
   }
 }
 
 // Replace the fleet-wide default variants (e.g. game). Shared by every model, so
 // this is a global save distinct from a per-model override.
-export async function putDefaultVariants(variants: ModelVariant[]): Promise<void> {
+export async function putDefaultVariants(
+  variants: ModelVariant[],
+): Promise<void> {
   const response = await fetch(`/api/default-variants`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(variants),
   });
   if (!response.ok) {
-    throw new Error(`Failed to save default variants: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to save default variants: ${response.status} ${await response.text()}`,
+    );
   }
 }
 
@@ -653,29 +723,40 @@ export async function putDefaultVariants(variants: ModelVariant[]): Promise<void
 export async function listApiKeys(): Promise<ApiKey[]> {
   const response = await fetch("/api/apikeys");
   if (!response.ok) {
-    throw new Error(`Failed to load API keys: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to load API keys: ${response.status} ${await response.text()}`,
+    );
   }
   return (await response.json()) || [];
 }
 
 // Create (new name) or update (existing name keeps its secret) an API key.
 // `models` empty => full access. Returns the resulting key incl. its secret.
-export async function upsertApiKey(name: string, models: string[]): Promise<ApiKey> {
+export async function upsertApiKey(
+  name: string,
+  models: string[],
+): Promise<ApiKey> {
   const response = await fetch("/api/apikeys", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, models }),
   });
   if (!response.ok) {
-    throw new Error(`Failed to save API key: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to save API key: ${response.status} ${await response.text()}`,
+    );
   }
   return await response.json();
 }
 
 export async function deleteApiKey(name: string): Promise<void> {
-  const response = await fetch(`/api/apikeys/${encodeURIComponent(name)}`, { method: "DELETE" });
+  const response = await fetch(`/api/apikeys/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
   if (!response.ok) {
-    throw new Error(`Failed to delete API key: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to delete API key: ${response.status} ${await response.text()}`,
+    );
   }
 }
 
@@ -687,7 +768,9 @@ export async function deleteApiKey(name: string): Promise<void> {
 export async function listPromptEnhancers(): Promise<PromptEnhancerInfo[]> {
   const response = await fetch("/api/prompt-enhancers");
   if (!response.ok) {
-    throw new Error(`Failed to load prompt enhancers: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to load prompt enhancers: ${response.status} ${await response.text()}`,
+    );
   }
   return (await response.json()) || [];
 }
@@ -695,15 +778,45 @@ export async function listPromptEnhancers(): Promise<PromptEnhancerInfo[]> {
 // Replace the whole table. Rows with a blank model id are dropped server-side.
 // Triggers a config regenerate + reload, so it is not free: save once, not per
 // keystroke.
-export async function savePromptEnhancers(list: PromptEnhancerInfo[]): Promise<void> {
+export async function savePromptEnhancers(
+  list: PromptEnhancerInfo[],
+): Promise<void> {
   const response = await fetch("/api/prompt-enhancers", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(list),
   });
   if (!response.ok) {
-    throw new Error(`Failed to save prompt enhancers: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to save prompt enhancers: ${response.status} ${await response.text()}`,
+    );
   }
+}
+
+// DetectedEnhancer is a catalog model whose NAME says it is a prompt rewriter
+// (Qwen-Image-2.1-PE-I2I and friends). Suggestions only: the model editor's
+// enhancer fields stay free text, because no classifier covers every name a
+// publisher will ever pick, and being unable to type an id you can see in the
+// model list would be the worse failure.
+export interface DetectedEnhancer {
+  model: string;
+  // "t2i" | "i2i" | "" when the name says enhancer but not which direction.
+  direction: string;
+  // Family key of the image model the name was built from ("qwen-image-2.1"),
+  // which is what pairs the two without anyone configuring it.
+  imageModel: string;
+}
+
+// The enhancers found by name in the loaded catalog. Read off the config rather
+// than a disk scan, so it can only ever suggest ids that actually resolve.
+export async function listDetectedPromptEnhancers(): Promise<
+  DetectedEnhancer[]
+> {
+  const response = await fetch("/api/prompt-enhancers/detected");
+  if (!response.ok) {
+    throw new Error(`Failed to load detected enhancers: ${response.status}`);
+  }
+  return (await response.json()) || [];
 }
 
 // Live load-plan preview for a candidate tuning (no persistence). Powers the
@@ -794,19 +907,30 @@ export interface PreviewLayers {
 // Render the full launch command for a candidate override (no persistence), in
 // layers: what the generator emitted, what will actually run, and per-token
 // provenance for the editor's read-only pane.
-export async function previewCmd(model: string, override: ModelOverride): Promise<PreviewLayers> {
-  const response = await fetch(`/api/models/${encodeURIComponent(model)}/preview`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(override),
-  });
+export async function previewCmd(
+  model: string,
+  override: ModelOverride,
+): Promise<PreviewLayers> {
+  const response = await fetch(
+    `/api/models/${encodeURIComponent(model)}/preview`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(override),
+    },
+  );
   if (!response.ok) {
-    throw new Error(`Failed to preview command: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to preview command: ${response.status} ${await response.text()}`,
+    );
   }
   return await response.json();
 }
 
-export async function estimatePlan(model: string, p: EstimateParams): Promise<PlanEstimate> {
+export async function estimatePlan(
+  model: string,
+  p: EstimateParams,
+): Promise<PlanEstimate> {
   const q = new URLSearchParams();
   if (p.ctx) q.set("ctx", String(p.ctx));
   if (p.kvK) q.set("kvK", p.kvK);
@@ -815,16 +939,22 @@ export async function estimatePlan(model: string, p: EstimateParams): Promise<Pl
   if (p.spec) q.set("spec", p.spec);
   if (p.vram) q.set("vram", String(p.vram));
   if (p.cpuOffload) q.set("cpuOffload", String(p.cpuOffload));
-  if (p.ctxCheckpoints != null) q.set("ctxCheckpoints", String(p.ctxCheckpoints));
-  if (p.checkpointMinStep) q.set("checkpointMinStep", String(p.checkpointMinStep));
+  if (p.ctxCheckpoints != null)
+    q.set("ctxCheckpoints", String(p.ctxCheckpoints));
+  if (p.checkpointMinStep)
+    q.set("checkpointMinStep", String(p.checkpointMinStep));
   if (p.ub) q.set("ub", String(p.ub));
   if (p.parallel) q.set("parallel", String(p.parallel));
   if (p.ropeScaling) q.set("ropeScaling", p.ropeScaling);
   if (p.actual) q.set("actual", "true");
   if (p.custom?.trim()) q.set("custom", p.custom);
-  const response = await fetch(`/api/models/${encodeURIComponent(model)}/estimate?${q.toString()}`);
+  const response = await fetch(
+    `/api/models/${encodeURIComponent(model)}/estimate?${q.toString()}`,
+  );
   if (!response.ok) {
-    throw new Error(`Failed to estimate plan: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to estimate plan: ${response.status} ${await response.text()}`,
+    );
   }
   return await response.json();
 }
@@ -838,7 +968,12 @@ export interface AppSettings {
   ttlSec: number; // idle-eviction timeout baked into every model's ttl (0 = never)
   autoVram: boolean;
   overridden: boolean;
-  defaults: { targetVramGB: number; vramOverheadGB: number; maxRamGB: number; ttlSec: number };
+  defaults: {
+    targetVramGB: number;
+    vramOverheadGB: number;
+    maxRamGB: number;
+    ttlSec: number;
+  };
   modelsRoot: string;
   categoryRoots: Record<string, string> | null;
   // Per-category LoRA folder; only "image" and "video" are meaningful. A missing
@@ -967,7 +1102,9 @@ export interface SlotCacheSettings {
 export async function getSettings(): Promise<AppSettings> {
   const response = await fetch("/api/settings");
   if (!response.ok) {
-    throw new Error(`Failed to load settings: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to load settings: ${response.status} ${await response.text()}`,
+    );
   }
   return await response.json();
 }
@@ -984,7 +1121,9 @@ export async function putSettings(p: {
     body: JSON.stringify(p),
   });
   if (!response.ok) {
-    throw new Error(`Failed to save settings: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to save settings: ${response.status} ${await response.text()}`,
+    );
   }
 }
 
@@ -1004,14 +1143,19 @@ export interface AutostartStatus {
 export async function getAutostart(): Promise<AutostartStatus> {
   const response = await fetch("/api/autostart");
   if (!response.ok) {
-    throw new Error(`Failed to load autostart: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to load autostart: ${response.status} ${await response.text()}`,
+    );
   }
   return await response.json();
 }
 
 // Returns the fresh status on success. A 409 means another install owns the
 // entry — the caller re-sends with takeover:true after the user confirms.
-export async function putAutostart(enabled: boolean, takeover = false): Promise<AutostartStatus> {
+export async function putAutostart(
+  enabled: boolean,
+  takeover = false,
+): Promise<AutostartStatus> {
   const response = await fetch("/api/autostart", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -1034,7 +1178,9 @@ export async function putBackends(list: BackendEntry[]): Promise<void> {
     body: JSON.stringify(list),
   });
   if (!response.ok) {
-    throw new Error(`Failed to save backends: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to save backends: ${response.status} ${await response.text()}`,
+    );
   }
 }
 
@@ -1048,7 +1194,9 @@ export async function putGuards(p: GuardSettings): Promise<void> {
     body: JSON.stringify(p),
   });
   if (!response.ok) {
-    throw new Error(`Failed to save guard settings: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to save guard settings: ${response.status} ${await response.text()}`,
+    );
   }
 }
 
@@ -1060,7 +1208,9 @@ export async function putAdvanced(p: AdvancedSettings): Promise<void> {
     body: JSON.stringify(p),
   });
   if (!response.ok) {
-    throw new Error(`Failed to save advanced settings: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to save advanced settings: ${response.status} ${await response.text()}`,
+    );
   }
 }
 
@@ -1069,7 +1219,9 @@ export async function putAdvanced(p: AdvancedSettings): Promise<void> {
 export async function resetAdvanced(): Promise<void> {
   const response = await fetch("/api/settings/advanced", { method: "DELETE" });
   if (!response.ok) {
-    throw new Error(`Failed to reset advanced settings: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to reset advanced settings: ${response.status} ${await response.text()}`,
+    );
   }
 }
 
@@ -1127,7 +1279,9 @@ export async function putProcessSettings(p: ProcessSettings): Promise<void> {
     body: JSON.stringify(p),
   });
   if (!response.ok) {
-    throw new Error(`Failed to save app settings: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to save app settings: ${response.status} ${await response.text()}`,
+    );
   }
 }
 
@@ -1138,7 +1292,9 @@ export async function putSlotCache(p: SlotCacheSettings): Promise<void> {
     body: JSON.stringify(p),
   });
   if (!response.ok) {
-    throw new Error(`Failed to save slot-cache settings: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to save slot-cache settings: ${response.status} ${await response.text()}`,
+    );
   }
 }
 
@@ -1146,7 +1302,10 @@ export async function putSlotCache(p: SlotCacheSettings): Promise<void> {
 // category. With clear=true it skips the dialog and drops the category back to
 // the shared models folder instead. Returns the stored path ("" after a
 // clear), or null when the user cancelled (204).
-export async function pickModelsFolder(category: string, clear = false): Promise<string | null> {
+export async function pickModelsFolder(
+  category: string,
+  clear = false,
+): Promise<string | null> {
   const response = await fetch("/api/settings/root/pick", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1154,7 +1313,9 @@ export async function pickModelsFolder(category: string, clear = false): Promise
   });
   if (response.status === 204) return null;
   if (!response.ok) {
-    throw new Error(`Failed to set models folder: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to set models folder: ${response.status} ${await response.text()}`,
+    );
   }
   const body = (await response.json()) as { path: string };
   return body.path;
@@ -1166,7 +1327,10 @@ export async function pickModelsFolder(category: string, clear = false): Promise
 // default with clear=true. Returns the stored path ("" after a clear), or null
 // when the user cancelled the dialog. Persists and regenerates, like
 // pickModelsFolder.
-export async function pickLoraFolder(category: string, clear = false): Promise<string | null> {
+export async function pickLoraFolder(
+  category: string,
+  clear = false,
+): Promise<string | null> {
   const response = await fetch("/api/settings/loradir/pick", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1174,7 +1338,9 @@ export async function pickLoraFolder(category: string, clear = false): Promise<s
   });
   if (response.status === 204) return null;
   if (!response.ok) {
-    throw new Error(`Failed to set LoRA folder: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to set LoRA folder: ${response.status} ${await response.text()}`,
+    );
   }
   const body = (await response.json()) as { path: string };
   return body.path;
@@ -1186,7 +1352,9 @@ export async function pickFolder(): Promise<string | null> {
   const response = await fetch("/api/pick-folder", { method: "POST" });
   if (response.status === 204) return null;
   if (!response.ok) {
-    throw new Error(`Folder picker failed: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Folder picker failed: ${response.status} ${await response.text()}`,
+    );
   }
   const body = (await response.json()) as { path: string };
   return body.path;
@@ -1196,10 +1364,14 @@ export async function pickFolder(): Promise<string | null> {
 // Returns the path, or null when cancelled (204) or unsupported (501) — the
 // caller then leaves the field as-is for manual typing.
 export async function pickBackend(): Promise<string | null> {
-  const response = await fetch("/api/settings/backend/pick", { method: "POST" });
+  const response = await fetch("/api/settings/backend/pick", {
+    method: "POST",
+  });
   if (response.status === 204 || response.status === 501) return null;
   if (!response.ok) {
-    throw new Error(`File picker failed: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `File picker failed: ${response.status} ${await response.text()}`,
+    );
   }
   const body = (await response.json()) as { path: string };
   return body.path;
@@ -1210,10 +1382,15 @@ export async function pickBackend(): Promise<string | null> {
 // cancelled (204) or unsupported (501) — the caller leaves the field for
 // manual typing.
 export async function pickFileOfKind(kind: string): Promise<string | null> {
-  const response = await fetch(`/api/pick-file?kind=${encodeURIComponent(kind)}`, { method: "POST" });
+  const response = await fetch(
+    `/api/pick-file?kind=${encodeURIComponent(kind)}`,
+    { method: "POST" },
+  );
   if (response.status === 204 || response.status === 501) return null;
   if (!response.ok) {
-    throw new Error(`File picker failed: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `File picker failed: ${response.status} ${await response.text()}`,
+    );
   }
   const body = (await response.json()) as { path: string };
   return body.path;
@@ -1282,7 +1459,13 @@ export interface BackendJob {
   component: string;
   variant: string;
   version: string;
-  phase: "resolving" | "downloading" | "extracting" | "registering" | "done" | "error";
+  phase:
+    | "resolving"
+    | "downloading"
+    | "extracting"
+    | "registering"
+    | "done"
+    | "error";
   asset?: string;
   downloaded: number;
   total: number;
@@ -1344,18 +1527,27 @@ export async function getBackendCatalog(): Promise<BackendCatalog> {
 
 // Lists a component's upstream releases. Cached server-side for 10 minutes;
 // refresh forces a fresh check ("check for updates").
-export async function getBackendReleases(component: string, refresh = false): Promise<BackendRelease[]> {
+export async function getBackendReleases(
+  component: string,
+  refresh = false,
+): Promise<BackendRelease[]> {
   const url = `/api/backends/${encodeURIComponent(component)}/releases${refresh ? "?refresh=1" : ""}`;
   const response = await fetch(url);
   if (!response.ok) {
-    throw new Error(`Failed to list releases: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to list releases: ${response.status} ${await response.text()}`,
+    );
   }
   return await response.json();
 }
 
 // Starts a download+install and returns the job id; poll getBackendJobs for
 // progress. version "" installs the newest stable release.
-export async function installBackend(component: string, variant: string, version = ""): Promise<string> {
+export async function installBackend(
+  component: string,
+  variant: string,
+  version = "",
+): Promise<string> {
   const response = await fetch("/api/backends/install", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1377,7 +1569,11 @@ export async function getBackendJobs(): Promise<BackendJob[]> {
 }
 
 // Points the registry at an already-installed build (switch build / roll back).
-export async function activateBackend(component: string, version: string, variant: string): Promise<void> {
+export async function activateBackend(
+  component: string,
+  version: string,
+  variant: string,
+): Promise<void> {
   const response = await fetch("/api/backends/activate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1403,7 +1599,11 @@ export async function makeBackendDefault(component: string): Promise<void> {
 
 // Deletes one installed build. The active build is refused (409) — activate
 // another version first.
-export async function uninstallBackend(component: string, version: string, variant: string): Promise<void> {
+export async function uninstallBackend(
+  component: string,
+  version: string,
+  variant: string,
+): Promise<void> {
   const response = await fetch("/api/backends/uninstall", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1475,14 +1675,21 @@ export interface BackendResolved {
 export async function getBackendSources(): Promise<BackendSource[]> {
   const response = await fetch("/api/backends/sources");
   if (!response.ok) {
-    throw new BackendApiError(response.status, `Failed to load tracked repos: ${await response.text()}`);
+    throw new BackendApiError(
+      response.status,
+      `Failed to load tracked repos: ${await response.text()}`,
+    );
   }
   return (await response.json()) ?? [];
 }
 
 // Lists one release's assets for the picker. Works on an untracked repo, which
 // is what the add-a-repo form needs.
-export async function getBackendSourceAssets(repo: string, tag = "", refresh = false): Promise<BackendSourceAssets> {
+export async function getBackendSourceAssets(
+  repo: string,
+  tag = "",
+  refresh = false,
+): Promise<BackendSourceAssets> {
   const params = new URLSearchParams({ repo });
   if (tag) params.set("tag", tag);
   if (refresh) params.set("refresh", "1");
@@ -1498,7 +1705,9 @@ export async function getBackendSourceAssets(repo: string, tag = "", refresh = f
 
 // Creates or updates a tracked repo. Send the picked asset names and the tag
 // they came from; the server derives the match patterns.
-export async function saveBackendSource(src: BackendSource): Promise<BackendSource> {
+export async function saveBackendSource(
+  src: BackendSource,
+): Promise<BackendSource> {
   const response = await fetch("/api/backends/sources", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1522,10 +1731,16 @@ export async function deleteBackendSource(id: string): Promise<void> {
   }
 }
 
-export async function resolveBackendAsset(component: string, variant: string, version = ""): Promise<BackendResolved> {
+export async function resolveBackendAsset(
+  component: string,
+  variant: string,
+  version = "",
+): Promise<BackendResolved> {
   const params = new URLSearchParams({ variant });
   if (version) params.set("version", version);
-  const response = await fetch(`/api/backends/${encodeURIComponent(component)}/resolve?${params}`);
+  const response = await fetch(
+    `/api/backends/${encodeURIComponent(component)}/resolve?${params}`,
+  );
   if (!response.ok) {
     throw new BackendApiError(response.status, await response.text());
   }
@@ -1535,7 +1750,9 @@ export async function resolveBackendAsset(component: string, variant: string, ve
 export async function resetSettings(): Promise<void> {
   const response = await fetch("/api/settings", { method: "DELETE" });
   if (!response.ok) {
-    throw new Error(`Failed to reset settings: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to reset settings: ${response.status} ${await response.text()}`,
+    );
   }
 }
 
@@ -1664,9 +1881,13 @@ export async function fetchCanon(): Promise<CanonStats | null> {
   }
 }
 
-export async function fetchPerformance(after?: string): Promise<PerformanceResponse | null> {
+export async function fetchPerformance(
+  after?: string,
+): Promise<PerformanceResponse | null> {
   try {
-    const url = after ? `/api/performance?after=${encodeURIComponent(after)}` : "/api/performance";
+    const url = after
+      ? `/api/performance?after=${encodeURIComponent(after)}`
+      : "/api/performance";
     const response = await fetch(url);
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);

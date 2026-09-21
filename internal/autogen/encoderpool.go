@@ -283,7 +283,9 @@ func ScanEncoderPool(roots []string) *EncoderPool {
 				if e != nil {
 					return nil
 				}
-				if c := classifySafetensors(h, sizeGB, path); c.Role != RoleNone {
+				// Same exclusion as the gguf ladder below: a PE published as
+				// safetensors is still not an encoder.
+				if c := classifySafetensors(h, sizeGB, path); c.Role != RoleNone && !(c.Role == RoleLlm && IsPromptEnhancerFile(path)) {
 					seen[key] = true
 					p.Files = append(p.Files, c)
 				}
@@ -309,6 +311,13 @@ func ScanEncoderPool(roots []string) *EncoderPool {
 				case isImageArch(effectiveImageArch(meta)) || meta.EmbeddingLength == 0:
 					// A diffusion model, or something with no hidden width:
 					// not usable as a text encoder.
+				case IsPromptEnhancerFile(path):
+					// A prompt rewriter is a chat finetune NAMED AFTER the image
+					// model it serves, so it lands in that model's own width class
+					// while being the one file there that was never trained as its
+					// conditioner. Worse, it is usually the largest: better() breaks
+					// a same-arch tie on file size, so a BF16 PE outranks the real
+					// Q8_0 encoder and the model renders confident nonsense.
 				case isDraftSidecar(filepath.Base(path)):
 					// A drafter is a reduced head, not an encoder. Its width
 					// can coincide with a real encoder's (the Gemma-4 MTP
