@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { cleanEnhanced, parseEnhanced } from "./promptEnhance";
+import { cleanEnhanced, parseEnhanced, enhanceHttpError } from "./promptEnhance";
 
 describe("cleanEnhanced", () => {
   it("passes a plain prompt through untouched", () => {
@@ -84,5 +84,27 @@ So: {"rewritten_prompt": "a red fox in snow", "wh_ratio": "3:4"}`;
   it("ignores an object whose prompt key is empty", () => {
     const r = parseEnhanced('{"rewritten_prompt": "   ", "wh_ratio": "16:9"}');
     expect(r.structured).toBe(false);
+  });
+});
+
+describe("enhanceHttpError", () => {
+  it("names the real cause of a stb_image decode failure", () => {
+    const body = '{"error":{"code":400,"message":"Failed to load image or audio file","type":"invalid_request_error"}}';
+    expect(enhanceHttpError(400, body)).toMatch(/could not read the reference image/);
+    expect(enhanceHttpError(400, body)).toMatch(/WebP/);
+  });
+
+  it("unwraps the JSON envelope for anything else", () => {
+    expect(enhanceHttpError(500, '{"error":{"message":"context shift failed"}}')).toBe(
+      "Enhance failed: 500 context shift failed",
+    );
+  });
+
+  it("falls back to the raw body when it is not JSON", () => {
+    expect(enhanceHttpError(502, "upstream closed")).toBe("Enhance failed: 502 upstream closed");
+  });
+
+  it("explains a missing enhancer model", () => {
+    expect(enhanceHttpError(404, "{}")).toMatch(/not in the catalog/);
   });
 });

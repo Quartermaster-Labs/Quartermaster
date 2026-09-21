@@ -25,6 +25,7 @@
   import { Image as ImageIcon, Blend, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Reply, Maximize2, Loader2, Clock, Wand2, Undo2 } from "lucide-svelte";
   import { dropZone } from "../../lib/dropZone";
   import { classifyAttachment } from "../../lib/attachments";
+  import { normalizeImageFile, resolveImageDataUrl } from "../../lib/imageNormalize";
   import { enhancePrompt } from "../../lib/promptEnhance";
   import { scrollFade } from "../../lib/scrollFade";
   import type { ImageApiMode, SdApiLora, SdApiLoraRef } from "../../lib/types";
@@ -443,6 +444,8 @@
       const refs = [baseImage, ...attached.filter((a) => a !== baseImage)].filter(
         (x): x is string => !!x,
       );
+      // Refs may be /api/media/ paths rather than data URLs; enhancePrompt
+      // resolves them, the same way the render path's toB64 does.
       const r = await enhancePrompt(enhancer, prompt, refs);
       prompt = r.prompt;
       enhancedText = r.prompt;
@@ -627,15 +630,7 @@
   // source loaded from disk must be fetched back to bytes or it's sent as a path
   // and silently ignored.
   async function toB64(url: string): Promise<string> {
-    if (url.startsWith("data:")) return stripB64(url);
-    const blob = await (await fetch(url)).blob();
-    const dataUrl = await new Promise<string>((res, rej) => {
-      const fr = new FileReader();
-      fr.onload = () => res(fr.result as string);
-      fr.onerror = rej;
-      fr.readAsDataURL(blob);
-    });
-    return stripB64(dataUrl);
+    return stripB64(await resolveImageDataUrl(url));
   }
 
   async function genTxt2Img(promptText: string, refs: string[] | undefined, signal: AbortSignal, p: GenParams, dims?: [number, number]): Promise<string[]> {
@@ -1067,15 +1062,18 @@
     activeImageChatId.set(s.id);
   }
 
-  function attachFiles(files: File[]) {
+  // normalizeImageFile, not a bare FileReader: a WebP/AVIF attachment renders
+  // fine in the thumbnail and then 400s on every vision model, because
+  // llama.cpp decodes with stb_image and stb has never read WebP. See
+  // lib/imageNormalize.ts. Awaited as a batch rather than appended per reader
+  // callback so the list keeps the order the files were picked in: attached[0]
+  // is the edit target, so completion order silently chose the base image.
+  async function attachFiles(files: File[]) {
     skipBase = false; // picking a base overrides the fresh-gen opt-out
     maskData = null; // base changes → any painted mask is stale
     maskSource = null;
-    for (const file of files) {
-      const reader = new FileReader();
-      reader.onload = () => (attached = [...attached, reader.result as string]);
-      reader.readAsDataURL(file);
-    }
+    const urls = await Promise.all(files.map((f) => normalizeImageFile(f)));
+    attached = [...attached, ...urls.filter(Boolean)];
   }
 
   function onAttachFiles(event: Event) {

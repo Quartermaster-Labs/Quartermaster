@@ -1,5 +1,6 @@
 import { inferenceHeaders } from "./inferenceAuth";
 import type { PromptEnhancerInfo } from "./types";
+import { resolveImageDataUrl } from "./imageNormalize";
 
 // Prompt enhancement: hand the user's image prompt to a rewrite model (Qwen's
 // PE-I2I / PE-T2I and friends) and get back a more precise one.
@@ -63,7 +64,22 @@ export async function enhancePrompt(
     messages.push({ role: "system", content: enhancer.systemPrompt });
   }
 
-  const refs = enhancer.vision ? refImages.filter(Boolean).slice(0, MAX_REF_IMAGES) : [];
+  // Resolved HERE rather than at the call site because a caller cannot tell the
+  // two apart by looking: a synced session holds "/api/media/image/<hash>.png"
+  // where a fresh one holds a data URL, both render identically in an <img>,
+  // and only the model can tell the difference (by refusing the ref). One choke
+  // point is the only version of this that stays fixed.
+  let refs: string[] = [];
+  if (enhancer.vision) {
+    const picked = refImages.filter(Boolean).slice(0, MAX_REF_IMAGES);
+    try {
+      refs = await Promise.all(picked.map(resolveImageDataUrl));
+    } catch (e) {
+      throw new EnhanceError(
+        `Could not load the reference image to send it: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
   if (refs.length) {
     // Images first, instruction last: these models are trained on an
     // image-then-instruction ordering, and flipping it makes them describe the
@@ -105,7 +121,7 @@ export async function enhancePrompt(
     throw new EnhanceError(`Enhancer unreachable: ${e instanceof Error ? e.message : String(e)}`);
   }
   if (!res.ok) {
-    throw new EnhanceError(`Enhance failed: ${res.status} ${(await res.text()).slice(0, 300)}`);
+    throw new EnhanceError(enhanceHttpError(res.status, await res.text()));
   }
 
   const json = await res.json();
@@ -124,6 +140,34 @@ export async function enhancePrompt(
     );
   }
   return { prompt: parsed.prompt, original, ratio: parsed.ratio, ratioFollow: parsed.ratioFollow };
+}
+
+// enhanceHttpError turns a backend error body into something a user can act on.
+// The raw body is llama.cpp's JSON envelope, and pasting it into the UI made a
+// fixable cause read as an opaque 400.
+export function enhanceHttpError(status: number, body: string): string {
+  if (/load image or audio file/i.test(body)) {
+    // Now that refs are inlined before sending, the remaining way to earn this
+    // is a format llama.cpp's stb_image cannot decode.
+    return "The enhancer could not read the reference image. Save it as PNG or JPEG and re-attach it: the backend decodes with stb_image, which cannot read WebP, AVIF or HEIC.";
+  }
+  if (status === 404) {
+    return "The enhancer model is not in the catalog any more. Regenerate the config, or clear the enhancer on this model.";
+  }
+  const detail = jsonMessage(body) || body.trim();
+  return `Enhance failed: ${status}${detail ? ` ${detail.slice(0, 300)}` : ""}`;
+}
+
+// The body is llama.cpp's {"error":{"message":...}}, but a proxy or a panic can
+// put anything here, so a parse failure falls back to the raw text.
+function jsonMessage(body: string): string {
+  try {
+    const j = JSON.parse(body);
+    const m = j?.error?.message ?? j?.message;
+    return typeof m === "string" ? m : "";
+  } catch {
+    return "";
+  }
 }
 
 // The keys a structured enhancer puts its answer under. `rewritten_prompt` is
