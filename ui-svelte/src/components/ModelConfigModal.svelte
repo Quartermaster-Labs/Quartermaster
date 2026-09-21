@@ -11,6 +11,7 @@
     getSettings,
     pickFileOfKind,
     getModelLoras,
+    listPromptEnhancers,
     type LoraListing,
     type LoraRef,
     type ModelConfig,
@@ -20,6 +21,7 @@
     type PreviewLayers,
     models,
   } from "../stores/api";
+  import type { PromptEnhancerInfo } from "../lib/types";
   import { get } from "svelte/store";
   import { tick } from "svelte";
   import { FolderOpen, HelpCircle, Plus, X } from "lucide-svelte";
@@ -342,12 +344,33 @@
   // (extra conditioning tokens) rather than an img2img base? Not detectable from
   // the weights - a base and an edit checkpoint have identical tensor shapes.
   let refEdit = $state(""); // "" auto (name detection) | "on" | "off"
+  // Prompt enhancer: the id of a settings-wide promptEnhancers entry this model
+  // hands its prompt to before rendering. "" => none. The options come from
+  // Settings, not from the catalog, because an enhancer is only usable once its
+  // fixed system prompt has been configured there.
+  let promptEnhancer = $state("");
+  let enhancerOptions = $state<PromptEnhancerInfo[]>([]);
+
   // Generation defaults baked into the launch cmd; "" => sd-server default.
   let defaultSteps = $state<number | "">("");
   let defaultCfg = $state<number | "">("");
   let defaultSampler = $state("");
   let defaultWidth = $state<number | "">("");
   let defaultHeight = $state<number | "">("");
+
+  // "" (none) plus every configured enhancer. A stored id that Settings no
+  // longer knows is kept as a flagged option: dropping it would silently clear
+  // the model's setting just because someone opened the editor.
+  const enhancerSelect = $derived.by((): SelectOption[] => {
+    const opts: SelectOption[] = [{ value: "", label: "None" }];
+    for (const e of enhancerOptions) {
+      opts.push({ value: e.model, label: e.name || e.model, detail: e.vision ? "sees the reference image" : "text only" });
+    }
+    if (promptEnhancer && !enhancerOptions.some((e) => e.model === promptEnhancer)) {
+      opts.push({ value: promptEnhancer, label: promptEnhancer, detail: "not configured in Settings" });
+    }
+    return opts;
+  });
 
   const imageMode = $derived(config?.isImage ?? false);
   // A video DiT takes the same form as a still, minus two knobs: the emitter
@@ -907,6 +930,7 @@
     streamLayers = o?.streamLayers ?? "";
     diffusionFa = o?.diffusionFa ?? "";
     refEdit = o?.refEdit ?? "";
+    promptEnhancer = o?.promptEnhancer ?? "";
     defaultSteps = o?.defaultSteps ? o.defaultSteps : "";
     defaultCfg = o?.defaultCfg ? o.defaultCfg : "";
     defaultSampler = o?.defaultSampler ?? "";
@@ -979,6 +1003,17 @@
         globalTargetGB = (await getSettings()).targetVramGB || 0;
       } catch {
         globalTargetGB = 0;
+      }
+      // Only image models offer an enhancer, so only they pay for the fetch. A
+      // failure here is not fatal: the picker degrades to the stored id.
+      if (cfg.isImage) {
+        try {
+          enhancerOptions = await listPromptEnhancers();
+        } catch {
+          enhancerOptions = [];
+        }
+      } else {
+        enhancerOptions = [];
       }
       const o = cfg.override;
       autoCtx = parseCtx(cfg.cmd);
@@ -1263,6 +1298,7 @@
       streamLayers,
       diffusionFa,
       refEdit,
+      promptEnhancer,
       defaultSteps: defaultSteps === "" ? 0 : Number(defaultSteps),
       defaultCfg: defaultCfg === "" ? 0 : Number(defaultCfg),
       defaultSampler,
@@ -1874,6 +1910,14 @@
               {@render hint("Does this model take an input image as an edit reference (Kontext / Qwen-Image-Edit / LongCat) rather than an img2img base? Reference edits keep the full step count; img2img cuts it by the denoise strength, which is what causes heavy artifacting on a low-step turbo model. Auto detects it from the model name.")}
             </span>
             <Select bind:value={refEdit} options={REFEDIT_SEL_AUTO} ariaLabel="Reference edit" />
+          </label>
+
+          <label class="flex flex-col gap-1 text-sm col-span-2">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Prompt enhancer
+              {@render hint("A chat model that rewrites this model's prompt into a more precise one before rendering. Configure the enhancers (and their fixed system prompt) in Settings, then pick one here; the Images tab then offers an Enhance button that shows you the rewrite before you render it. Never applied automatically.")}
+            </span>
+            <Select bind:value={promptEnhancer} options={enhancerSelect} ariaLabel="Prompt enhancer" />
           </label>
 
           <label class="flex flex-col gap-1 text-sm">

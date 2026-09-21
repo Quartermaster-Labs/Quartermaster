@@ -22,9 +22,10 @@
   import Toggle from "../Toggle.svelte";
   import Composer from "./Composer.svelte";
   import { autogrow } from "../../lib/autogrow";
-  import { Image as ImageIcon, Blend, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Palette, Reply, Maximize2, Loader2 } from "lucide-svelte";
+  import { Image as ImageIcon, Blend, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Palette, Reply, Maximize2, Loader2, Wand2, Undo2 } from "lucide-svelte";
   import { dropZone } from "../../lib/dropZone";
   import { classifyAttachment } from "../../lib/attachments";
+  import { enhancePrompt } from "../../lib/promptEnhance";
   import { scrollFade } from "../../lib/scrollFade";
   import type { ImageApiMode, SdApiLora, SdApiLoraRef } from "../../lib/types";
   import { ASPECTS, SIZE_TIERS, aspectDims, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, DEFAULT_MAX_DIM, MAX_BATCH, defaultsFor, withAlphaPrompt, settingsFor, parseSdProgress, fmtDur } from "./imageGen";
@@ -389,6 +390,56 @@
   // The hint line under the settings panel shows the SAME resolution the reset
   // effect applies, so what it claims is the model default is what a switch
   // actually sets. maxDim has no launch-line equivalent, so it stays table-only.
+  // The rewrite model this image model opts into, resolved server-side. Absent
+  // => the button does not render at all, rather than rendering disabled: an
+  // enhancer is opt-in per model and most models will never have one.
+  let enhancer = $derived($models.find((m) => m.id === $selectedModelStore)?.promptEnhancer);
+  let enhancing = $state(false);
+  // Its own slot rather than dropError: that one is cleared on a 4s timer tied
+  // to a drop, and a failed rewrite should stay on screen until it is read.
+  let enhanceError = $state("");
+  // The pre-rewrite prompt, kept so one click undoes the rewrite. Cleared as
+  // soon as the user edits the box themselves or sends the turn, because after
+  // that "revert" would throw away work rather than undo a machine edit.
+  let preEnhance = $state<string | null>(null);
+  // What the enhancer produced, so the revert offer can tell an untouched
+  // rewrite from one the user has since edited.
+  let enhancedText = $state<string | null>(null);
+  $effect(() => {
+    if (preEnhance !== null && prompt !== enhancedText) {
+      preEnhance = null;
+      enhancedText = null;
+    }
+  });
+
+  async function runEnhance() {
+    if (!enhancer || enhancing || isGenerating) return;
+    enhancing = true;
+    enhanceError = "";
+    try {
+      // baseImage is the edit target; the remaining attachments are the extra
+      // refs. Text-only enhancers ignore the list entirely.
+      const refs = [baseImage, ...attached.filter((a) => a !== baseImage)].filter(
+        (x): x is string => !!x,
+      );
+      const r = await enhancePrompt(enhancer, prompt, refs);
+      prompt = r.prompt;
+      enhancedText = r.prompt;
+      preEnhance = r.original;
+    } catch (e) {
+      enhanceError = e instanceof Error ? e.message : String(e);
+    } finally {
+      enhancing = false;
+    }
+  }
+
+  function revertEnhance() {
+    if (preEnhance === null) return;
+    prompt = preEnhance;
+    preEnhance = null;
+    enhancedText = null;
+  }
+
   let modelGen = $derived($models.find((m) => m.id === $selectedModelStore)?.genDefaults);
   let modelPreset = $derived(defaultsFor($selectedModelStore));
   // Annotate needs BOTH: a model that reads marked regions, and the reference
@@ -1306,6 +1357,30 @@
       {/snippet}
 
       {#snippet imageLeftButtons()}
+        {#if enhancer}
+          <button
+            class="composer-icon-btn"
+            onclick={runEnhance}
+            disabled={enhancing || isGenerating || !prompt.trim()}
+            use:tip={`Enhance the prompt with ${enhancer.name}${enhancer.vision ? " (reads the reference image)" : ""}. Rewrites the box, so you can read and edit it before rendering.`}
+          >
+            {#if enhancing}
+              <Loader2 class="w-[1.125rem] h-[1.125rem] animate-spin" />
+            {:else}
+              <Wand2 class="w-[1.125rem] h-[1.125rem]" />
+            {/if}
+          </button>
+          {#if preEnhance !== null}
+            <button
+              class="composer-icon-btn"
+              onclick={revertEnhance}
+              disabled={enhancing || isGenerating}
+              use:tip={"Revert to the prompt you wrote"}
+            >
+              <Undo2 class="w-[1.125rem] h-[1.125rem]" />
+            </button>
+          {/if}
+        {/if}
         <button
           class="composer-icon-btn"
           onclick={() => fileInput?.click()}
@@ -1464,6 +1539,15 @@
         {#if dropError}
           <div class="mb-2 p-2 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded text-sm">
             {dropError}
+          </div>
+        {/if}
+
+        {#if enhanceError}
+          <div class="mb-2 p-2 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded text-sm flex items-start gap-2">
+            <span class="flex-1">{enhanceError}</span>
+            <button class="shrink-0 opacity-70 hover:opacity-100" onclick={() => (enhanceError = "")} aria-label="Dismiss">
+              <X class="w-3.5 h-3.5" />
+            </button>
           </div>
         {/if}
 

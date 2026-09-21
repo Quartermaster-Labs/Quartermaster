@@ -81,6 +81,60 @@ type apiModel struct {
 	// edit (new args apply on next load) or a spawn-time offload rewrite, so the
 	// UI shows what the model is REALLY loaded with, not the pending config.
 	RunningCmd string `json:"runningCmd,omitempty"`
+	// PromptEnhancer is the rewrite model this IMAGE model hands its prompt to
+	// before rendering, already joined to its system prompt. nil for every model
+	// that has not opted in, which is all of them by default. The playground
+	// shows an Enhance button only when this is present.
+	PromptEnhancer *apiPromptEnhancer `json:"promptEnhancer,omitempty"`
+}
+
+// apiPromptEnhancer is the resolved rewrite model an image model delegates its
+// prompt to: the model's `promptEnhancer` id joined to the top-level
+// promptEnhancers entry it names, so the client gets the id AND the fixed system
+// prompt in one payload instead of fetching a second document.
+//
+// Resolved here rather than shipped raw because a dangling id is a normal state
+// (the enhancer's gguf was deleted, the settings row was removed) and the client
+// has nothing useful to do with one. Unresolvable => nil, which the UI reads as
+// "this model has no enhancer" and hides the button.
+type apiPromptEnhancer struct {
+	Model string `json:"model"`
+	// Name is the display label; always filled, falling back to Model, so the
+	// UI never has to decide what to render.
+	Name string `json:"name"`
+	// SystemPrompt is the fixed instruction the enhancer runs under. Sent in
+	// full: the client builds the rewrite request itself, and a PE model without
+	// its prompt answers the instruction instead of rewriting it.
+	SystemPrompt string `json:"systemPrompt"`
+	// Vision: attach the reference image(s) to the rewrite request.
+	Vision bool `json:"vision,omitempty"`
+}
+
+// promptEnhancerFor resolves a model's promptEnhancer id against the config's
+// top-level table. The lookup is case-insensitive because the ids are
+// filename-derived and get copied between the settings page and the model
+// editor by hand.
+func promptEnhancerFor(cfg config.Config, mc config.ModelConfig) *apiPromptEnhancer {
+	id := strings.TrimSpace(mc.PromptEnhancer)
+	if id == "" || len(cfg.PromptEnhancers) == 0 {
+		return nil
+	}
+	for key, e := range cfg.PromptEnhancers {
+		if !strings.EqualFold(strings.TrimSpace(key), id) {
+			continue
+		}
+		name := strings.TrimSpace(e.Name)
+		if name == "" {
+			name = strings.TrimSpace(key)
+		}
+		return &apiPromptEnhancer{
+			Model:        strings.TrimSpace(key),
+			Name:         name,
+			SystemPrompt: e.SystemPrompt,
+			Vision:       e.Vision,
+		}
+	}
+	return nil
 }
 
 // apiGenDefaults is the sd-server generation defaults carried on a model's
@@ -214,27 +268,28 @@ func (s *Server) modelStatus() []apiModel {
 		quantName, quantLabel, modelKey, familyKey := modelKeys(family, id)
 		modelKey = engineScopedKey(modelKey, mc)
 		models = append(models, apiModel{
-			Id:           id,
-			Name:         mc.Name,
-			Description:  mc.Description,
-			State:        state,
-			Unlisted:     mc.Unlisted,
-			Aliases:      mc.Aliases,
-			Capabilities: capsMap,
-			Family:       family,
-			Group:        gid,
-			Listeners:    groupListeners[gid],
-			Ctx:          ctxSize,
-			Slots:        slots,
-			ModelKey:     modelKey,
-			FamilyKey:    familyKey,
-			Quant:        quantName,
-			QuantLabel:   quantLabel,
-			SizeGB:       fileSizeGB(family),
-			GenDefaults:  genDefaults(info),
-			EstVramGB:    mc.EstVramGB,
-			EstRamGB:     mc.EstRamGB,
-			RunningCmd:   runningCmd,
+			Id:             id,
+			Name:           mc.Name,
+			Description:    mc.Description,
+			State:          state,
+			Unlisted:       mc.Unlisted,
+			Aliases:        mc.Aliases,
+			Capabilities:   capsMap,
+			Family:         family,
+			Group:          gid,
+			Listeners:      groupListeners[gid],
+			Ctx:            ctxSize,
+			Slots:          slots,
+			ModelKey:       modelKey,
+			FamilyKey:      familyKey,
+			Quant:          quantName,
+			QuantLabel:     quantLabel,
+			SizeGB:         fileSizeGB(family),
+			GenDefaults:    genDefaults(info),
+			PromptEnhancer: promptEnhancerFor(cfg, mc),
+			EstVramGB:      mc.EstVramGB,
+			EstRamGB:       mc.EstRamGB,
+			RunningCmd:     runningCmd,
 		})
 	}
 

@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/quartermaster-labs/quartermaster/internal/apppaths"
 )
@@ -95,6 +98,132 @@ func emitSlotCache(b *strings.Builder, sc SlotCacheSettings) {
 		b.WriteString("  preambleCaches: false\n")
 	}
 	b.WriteString("\n")
+}
+
+// enhancerByID indexes settings.promptEnhancers by lowercased model id, which is
+// how both the emitter and the per-model resolver look one up. Later entries win
+// over earlier ones with the same id: a duplicate is an edit that was appended
+// rather than replaced, and the last word is the one the user just wrote.
+//
+// Entries naming no model are dropped rather than reported. The list is UI-owned
+// (the Settings page appends a blank row before it is filled in), so a half-typed
+// entry is a normal intermediate state, not a config error.
+func enhancerByID(list []PromptEnhancer) map[string]PromptEnhancer {
+	if len(list) == 0 {
+		return nil
+	}
+	out := make(map[string]PromptEnhancer, len(list))
+	for _, e := range list {
+		id := strings.ToLower(strings.TrimSpace(e.Model))
+		if id == "" {
+			continue
+		}
+		out[id] = e
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// emitPromptEnhancers writes the top-level promptEnhancers map: the rewrite
+// models an image model may hand its prompt to, each with the fixed system
+// prompt it was trained under.
+//
+// The body is marshalled by yaml.v3 rather than Fprintf'd like every other block
+// in this file, for one reason: a PE system prompt is a multi-KB, multi-line,
+// quote-and-backslash-bearing document the publisher ships verbatim, and
+// hand-rolling a block scalar for it is exactly the kind of quoting that works on
+// the example and corrupts the real thing. The marshaller picks a safe
+// representation (block scalar, quoted, whatever the content needs); we only
+// indent it.
+//
+// Emitted in sorted id order so a regeneration with no changes produces an
+// identical file - the config hash is what gates a reload.
+func emitPromptEnhancers(b *strings.Builder, list []PromptEnhancer) {
+	byID := enhancerByID(list)
+	if len(byID) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	b.WriteString("# prompt-rewrite models an image model may delegate to before it renders.\n")
+	b.WriteString("# Consumed by the CLIENT (the playground's Enhance button), never by the\n")
+	b.WriteString("# image route: a rewrite you cannot see or edit before it renders is worse\n")
+	b.WriteString("# than none. A model opts in with its own promptEnhancer: <id>.\n")
+	b.WriteString("promptEnhancers:\n")
+	for _, id := range ids {
+		e := byID[id]
+		body := struct {
+			Name         string `yaml:"name,omitempty"`
+			Vision       bool   `yaml:"vision,omitempty"`
+			SystemPrompt string `yaml:"systemPrompt,omitempty"`
+		}{Name: strings.TrimSpace(e.Name), Vision: e.Vision, SystemPrompt: e.SystemPrompt}
+		out, err := yaml.Marshal(body)
+		if err != nil {
+			// Unreachable for a struct of two strings and a bool, but a marshal
+			// error must not take the whole config with it: skip the entry and say
+			// so, leaving every other model generated and loadable.
+			fmt.Fprintf(b, "  # SKIPPED prompt enhancer %q: %v\n", e.Model, err)
+			continue
+		}
+		fmt.Fprintf(b, "  %q:\n", strings.TrimSpace(e.Model))
+		b.WriteString(indentYAML(string(out), "    "))
+	}
+	b.WriteString("\n")
+}
+
+// indentYAML shifts a marshalled block right by prefix. Blank lines are left
+// EMPTY rather than filled with the prefix: a block scalar's interior blank line
+// is part of its value, and padding it with spaces would silently add trailing
+// whitespace to a system prompt.
+func indentYAML(doc, prefix string) string {
+	var b strings.Builder
+	// TrimSuffix, not TrimRight: yaml.Marshal terminates the document with exactly
+	// one newline, and every newline before that one is CONTENT. A system prompt
+	// ending in a blank line marshals to a "|+" keep-indicator block, and trimming
+	// the run would silently drop the bytes that indicator exists to preserve.
+	for _, line := range strings.Split(strings.TrimSuffix(doc, "\n"), "\n") {
+		if line == "" {
+			b.WriteString("\n")
+			continue
+		}
+		b.WriteString(prefix)
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// ovPromptEnhancer reads an override's enhancer id nil-safely. Most emitters in
+// this package take *Override and a nil one is the ordinary "no rule matched"
+// case, not an error.
+func ovPromptEnhancer(ov *Override) string {
+	if ov == nil {
+		return ""
+	}
+	return ov.PromptEnhancer
+}
+
+// writePromptEnhancer emits a model's `promptEnhancer:` line - the id of the
+// entry above that it delegates its prompt to. Written only when that id
+// actually resolves: a stale reference (the enhancer was renamed or removed from
+// settings) is dropped here rather than carried into the config for the client
+// to fail to look up.
+func writePromptEnhancer(b *strings.Builder, id string, byID map[string]PromptEnhancer) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return
+	}
+	e, ok := byID[strings.ToLower(id)]
+	if !ok {
+		return
+	}
+	fmt.Fprintf(b, "    promptEnhancer: %q\n", strings.TrimSpace(e.Model))
 }
 
 // emitAPIKeys writes the apiKeys list and, for any key scoped to a model

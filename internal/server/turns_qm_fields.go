@@ -121,6 +121,7 @@ var qmFieldDocs = map[string]string{
 	"offloadToCpu":   "sd-server component offload spec",
 	"diffusionFa":    "'on' / 'off' - diffusion flash-attention",
 	"refEdit":        "'on' / 'off' - takes its source image as a reference edit rather than an img2img base",
+	"promptEnhancer": "model id of a settings.promptEnhancers entry; the playground offers to rewrite this model's prompt through it before rendering",
 	"defaultSteps":   "default sampling steps for this image model",
 	"defaultCfg":     "default CFG scale",
 	"defaultSampler": "default sampler name",

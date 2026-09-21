@@ -186,6 +186,30 @@ type Config struct {
 	// conversation survives eviction from the single live slot and is restored
 	// instead of reprefilled when it returns. Fork addition; off unless Enable.
 	SlotCache SlotCacheConfig `yaml:"slotCache"`
+
+	// PromptEnhancers are the prompt-rewrite models an image model may delegate
+	// to, keyed by the enhancer's own catalog model id. Declared once at the top
+	// level rather than inlined on each image model because the payload is a
+	// multi-KB system prompt: repeating it per model would dominate the generated
+	// file and make two image models sharing an enhancer able to disagree about
+	// what it is. A model points at one by id (ModelConfig.PromptEnhancer).
+	//
+	// Nothing in the server consumes these. They are carried to the CLIENT on the
+	// model listing, because the rewrite is a step the user sees and edits before
+	// rendering, not something the image route does behind their back.
+	PromptEnhancers map[string]PromptEnhancerConfig `yaml:"promptEnhancers"`
+}
+
+// PromptEnhancerConfig is one rewrite model: the fixed system prompt it was
+// trained under, plus whether it reads the input image. See
+// autogen.PromptEnhancer for why the prompt is not optional in practice.
+type PromptEnhancerConfig struct {
+	// Name is an optional display label; empty => the map key (the model id).
+	Name         string `yaml:"name"`
+	SystemPrompt string `yaml:"systemPrompt"`
+	// Vision: attach the reference image(s) to the rewrite request. True for an
+	// edit-direction enhancer (PE-I2I), false for text-to-image (PE-T2I).
+	Vision bool `yaml:"vision"`
 }
 
 // SlotCacheConfig configures on-disk slot KV persistence. When Enable is set the

@@ -224,24 +224,27 @@ type overrideDTO struct {
 	// value turns the flag off. Ignored by every other backend.
 	AudioDevice *int `json:"audioDevice"`
 	// Image (sd-server) knobs; ignored for llama models.
-	VaePath         string  `json:"vaePath"`
-	ClipLPath       string  `json:"clipLPath"`
-	ClipGPath       string  `json:"clipGPath"`
-	T5Path          string  `json:"t5Path"`
-	TextEncoderPath string  `json:"textEncoderPath"`
-	OffloadToCpu    string  `json:"offloadToCpu"`
-	TeOnCpu         string  `json:"teOnCpu"`
-	VaeOnCpu        string  `json:"vaeOnCpu"`
-	RefEdit         string  `json:"refEdit"`
-	VaeTiling       string  `json:"vaeTiling"`
-	TemporalTiling  string  `json:"temporalTiling"`
-	StreamLayers    string  `json:"streamLayers"`
-	DiffusionFa     string  `json:"diffusionFa"`
-	DefaultSteps    int     `json:"defaultSteps"`
-	DefaultCfg      float64 `json:"defaultCfg"`
-	DefaultSampler  string  `json:"defaultSampler"`
-	DefaultWidth    int     `json:"defaultWidth"`
-	DefaultHeight   int     `json:"defaultHeight"`
+	VaePath         string `json:"vaePath"`
+	ClipLPath       string `json:"clipLPath"`
+	ClipGPath       string `json:"clipGPath"`
+	T5Path          string `json:"t5Path"`
+	TextEncoderPath string `json:"textEncoderPath"`
+	OffloadToCpu    string `json:"offloadToCpu"`
+	TeOnCpu         string `json:"teOnCpu"`
+	VaeOnCpu        string `json:"vaeOnCpu"`
+	RefEdit         string `json:"refEdit"`
+	// PromptEnhancer is the settings.promptEnhancers model id this image model
+	// rewrites its prompt through. "" => none.
+	PromptEnhancer string  `json:"promptEnhancer"`
+	VaeTiling      string  `json:"vaeTiling"`
+	TemporalTiling string  `json:"temporalTiling"`
+	StreamLayers   string  `json:"streamLayers"`
+	DiffusionFa    string  `json:"diffusionFa"`
+	DefaultSteps   int     `json:"defaultSteps"`
+	DefaultCfg     float64 `json:"defaultCfg"`
+	DefaultSampler string  `json:"defaultSampler"`
+	DefaultWidth   int     `json:"defaultWidth"`
+	DefaultHeight  int     `json:"defaultHeight"`
 }
 
 type modelConfigResp struct {
@@ -403,7 +406,8 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		VaePath:     o.VaePath, ClipLPath: o.ClipLPath, ClipGPath: o.ClipGPath,
 		T5Path: o.T5Path, TextEncoderPath: o.TextEncoderPath,
 		OffloadToCpu: o.OffloadToCpu, TeOnCpu: o.TeOnCpu, VaeOnCpu: o.VaeOnCpu, VaeTiling: o.VaeTiling, TemporalTiling: o.TemporalTiling, StreamLayers: o.StreamLayers, DiffusionFa: o.DiffusionFa, RefEdit: o.RefEdit,
-		DefaultSteps: o.DefaultSteps, DefaultCfg: o.DefaultCfg, DefaultSampler: o.DefaultSampler,
+		PromptEnhancer: o.PromptEnhancer,
+		DefaultSteps:   o.DefaultSteps, DefaultCfg: o.DefaultCfg, DefaultSampler: o.DefaultSampler,
 		DefaultWidth: o.DefaultWidth, DefaultHeight: o.DefaultHeight,
 	}
 	for _, v := range o.Variants {
@@ -526,6 +530,7 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.TeOnCpu = body.TeOnCpu
 	ov.VaeOnCpu = body.VaeOnCpu
 	ov.RefEdit = body.RefEdit
+	ov.PromptEnhancer = strings.TrimSpace(body.PromptEnhancer)
 	ov.VaeTiling = body.VaeTiling
 	ov.TemporalTiling = body.TemporalTiling
 	ov.StreamLayers = body.StreamLayers

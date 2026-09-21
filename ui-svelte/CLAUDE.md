@@ -105,6 +105,31 @@ Backend communication is centralized in `src/stores/api.ts`, with shared types i
   process, and component-local state gave each its own poller and its own idea of whether an
   update was running.
 
+## Prompt enhancement (Images tab)
+
+`lib/promptEnhance.ts` + the Enhance button in `playground/ImageInterface.svelte`.
+
+An image model can name a rewrite model in its config editor; the server resolves that id and
+ships it as `Model.promptEnhancer` on `/v1/models`, so the button renders only for models that
+have one (absent, not disabled: an enhancer is opt-in and most models never get one).
+
+The rewrite runs **here, on the client**, and lands back in the prompt box rather than being
+applied inside the image route. That is the whole design: these models fail by confidently
+inventing details, and an invisible rewrite surfaces only as a picture that is subtly not what was
+asked for, with nothing to point at. `preEnhance` keeps the pre-rewrite text for a one-click
+revert, and an `$effect` drops the revert offer as soon as the prompt stops matching what the
+enhancer produced, since after a manual edit "revert" would throw work away rather than undo a
+machine edit.
+
+`cleanEnhanced` strips the wrappers these models add (a leaked `<think>` block, a code fence, a
+"Enhanced prompt:" label, wrapping quotes). The quote strip is deliberately conservative: it fires
+only when the same quote character appears nowhere inside, because `"OPEN" on a shop sign` is a
+prompt whose quotes are content. `lib/promptEnhance.test.ts` pins that case.
+
+The enhancer is a normal catalog model, so on a single-GPU box it evicts the image model and the
+image model swaps back in to render. Slow, but correct: the alternative is a second scheduler,
+which the architecture forbids.
+
 ## Chat compaction
 
 `lib/chatCompact.ts` + `ChatInterface.svelte` `compactNow()`. Folding is a **boundary move**, not a

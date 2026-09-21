@@ -137,6 +137,7 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 	emitVramBudget(&b, s)
 	emitSlotCache(&b, s.SlotCache)
 	emitAPIKeys(&b, s.APIKeys)
+	emitPromptEnhancers(&b, s.PromptEnhancers)
 	b.WriteString("models:\n")
 
 	var emitted []string

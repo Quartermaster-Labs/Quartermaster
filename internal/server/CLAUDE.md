@@ -34,6 +34,13 @@ Also here: `turns_design.md` — the turn runner's design notes.
 - **A new `/api/*` ops or editor route goes on `adminChain`, not `apiChain`.** API keys gate the
   inference API only — they never cover the admin surface, which is gated by remote address.
   Getting this wrong publishes the config editor to whatever the port is bound to.
+- **A prompt enhancer is resolved, never executed, server-side.** `promptEnhancerFor`
+  (`apigroup.go`) joins a model's `promptEnhancer` id to the settings table and ships the result
+  on `/v1/models` as `apiModel.promptEnhancer`; the rewrite request itself is made by the CLIENT
+  (`ui-svelte/src/lib/promptEnhance.ts`). Rewriting inside the image route would hide the rewrite:
+  these models fail by confidently inventing details, and the only symptom would be a picture that
+  is subtly not what was asked for. An unresolvable id yields `nil`, so "field present" means "the
+  Enhance button is usable" with no second lookup.
 - **Reload is in-place.** `Server.ApplyConfig` swaps the config pointer and the handler on the one
   long-lived `Server`; SSE streams, metrics history, saved KV and running processes survive. An
   invalid config touches nothing.

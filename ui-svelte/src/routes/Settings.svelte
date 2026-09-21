@@ -2,7 +2,8 @@
   import { tip } from "../lib/tooltip";
   import { onMount } from "svelte";
   import { SlidersHorizontal, HardDrive, Cpu, FolderOpen, Trash2, Star, Plus, Power, HelpCircle, Palette } from "lucide-svelte";
-  import { getSettings, putSettings, putSlotCache, putBackends, putGuards, putAdvanced, resetAdvanced, pickFolder, pickBackend, resetSettings, getAutostart, putAutostart, fetchProcessSettings, putProcessSettings, type AppSettings, type BackendEntry, type AutostartStatus, type ProcessSettingsResponse } from "../stores/api";
+  import { getSettings, putSettings, putSlotCache, putBackends, putGuards, putAdvanced, resetAdvanced, pickFolder, pickBackend, resetSettings, getAutostart, putAutostart, fetchProcessSettings, putProcessSettings, listPromptEnhancers, savePromptEnhancers, type AppSettings, type BackendEntry, type AutostartStatus, type ProcessSettingsResponse } from "../stores/api";
+  import type { PromptEnhancerInfo } from "../lib/types";
   import { BACKEND_CLASSES, backendClass, backendClasses, backendServesClass, type BackendClassDef } from "../lib/backends";
   import ManagedBackends from "../components/ManagedBackends.svelte";
   import SoftwareUpdate from "../components/SoftwareUpdate.svelte";
@@ -531,6 +532,56 @@
     }
   }
 
+  // --- Prompt enhancers (settings-wide prompt-rewrite models) ---
+  // A normal chat model the image pipeline can call to rewrite a prompt before
+  // rendering. Whole-table save rather than per-keystroke autosave: the server
+  // drops rows with a blank model id and regenerates the config on every write.
+  let enhancers = $state<PromptEnhancerInfo[]>([]);
+  let enhancersOpen = $state(false);
+  let savingEnhancers = $state(false);
+  let enhancersErr = $state<string | null>(null);
+  let enhancersSaved = $state(false);
+  let enhancersFlashTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function loadPromptEnhancers(): Promise<void> {
+    try {
+      enhancers = await listPromptEnhancers();
+    } catch (e) {
+      enhancersErr = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  function addEnhancer(): void {
+    enhancers = [...enhancers, { model: "", name: "", systemPrompt: "", vision: false }];
+    enhancersOpen = true;
+    enhancersSaved = false;
+  }
+
+  function removeEnhancer(i: number): void {
+    enhancers = enhancers.filter((_, j) => j !== i);
+    enhancersSaved = false;
+  }
+
+  async function saveEnhancers(): Promise<void> {
+    if (savingEnhancers) return;
+    savingEnhancers = true;
+    enhancersErr = null;
+    enhancersSaved = false;
+    try {
+      // Trim so stray whitespace cannot smuggle a row past the server's
+      // blank-model drop.
+      await savePromptEnhancers(enhancers.map((e) => ({ ...e, model: e.model.trim(), name: e.name.trim() })));
+      await loadPromptEnhancers(); // reflect what the server kept
+      enhancersSaved = true;
+      clearTimeout(enhancersFlashTimer);
+      enhancersFlashTimer = setTimeout(() => (enhancersSaved = false), 2500);
+    } catch (e) {
+      enhancersErr = e instanceof Error ? e.message : String(e);
+    } finally {
+      savingEnhancers = false;
+    }
+  }
+
   // Friendly readout for the idle-eviction seconds field.
   const ttlHuman = $derived(
     Number(tTtl) <= 0 ? "never auto-unload" : Number(tTtl) % 60 === 0 ? `${Number(tTtl) / 60} min` : `${tTtl}s`,
@@ -652,6 +703,7 @@
     loadSettings();
     loadAutostart();
     loadProcSettings();
+    loadPromptEnhancers();
   });
 </script>
 
@@ -1585,6 +1637,87 @@
         {/if}
       </div>
       {/if}
+
+      <!-- Prompt enhancers: the settings-wide rewrite models the image pipeline
+           can delegate to. Collapsed by default like the registry above; one
+           explicit Save because each write regenerates the config. -->
+      <div class="mt-6">
+        <div class="flex items-baseline gap-2 mb-1">
+          <button
+            class="flex items-baseline gap-2 text-txtsecondary hover:text-txtmain"
+            onclick={() => (enhancersOpen = !enhancersOpen)}
+            aria-expanded={enhancersOpen}
+          >
+            <h6 class="!m-0">Prompt enhancers</h6>
+            <span class="text-micro">{enhancersOpen ? "▾" : "▸"}</span>
+            <span class="text-micro font-mono text-txtsecondary">{enhancers.length}</span>
+          </button>
+          {@render hint("A prompt enhancer is a chat model that rewrites an image prompt into a more precise one before rendering. Configure it once here, then pick it per image model in that model's config editor. The playground Images tab shows an Enhance button for models that have one.")}
+          <button
+            type="button"
+            class="btn btn--sm ml-auto shrink-0 inline-flex items-center gap-1 uppercase tracking-wide hover:border-primary hover:text-primary"
+            onclick={addEnhancer}
+          ><Plus size={12} /> Add</button>
+        </div>
+
+        {#if enhancersOpen}
+        <p class="text-[0.7rem] text-txtsecondary mb-4">
+          Rows with a blank model id are dropped on save.
+        </p>
+
+        {#if enhancers.length === 0}
+          <p class="px-3 py-2.5 text-[0.7rem] text-txtsecondary">None configured.</p>
+        {:else}
+          <div class="flex flex-col gap-3">
+            {#each enhancers as e, i (i)}
+              <section class="rounded-md border border-card-border bg-surface/40 p-3 flex flex-col gap-2">
+                <div class="flex flex-wrap items-center gap-2">
+                  <input
+                    type="text" bind:value={e.model} spellcheck="false" placeholder="catalog model id, e.g. qwen-image-2.1-pe-i2i"
+                    class="flex-1 min-w-[16rem] font-mono text-label rounded border border-card-border bg-surface px-2 py-1 text-txtmain placeholder:text-txtsecondary/60 focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <input
+                    type="text" bind:value={e.name} placeholder="label (optional)"
+                    class="w-44 shrink-0 rounded border border-card-border bg-surface px-2 py-1 text-txtmain placeholder:text-txtsecondary/60 focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <label class="flex items-center gap-2 shrink-0 text-txtsecondary" use:tip={"Turn on when the enhancer should also see the reference image(s) it is rewriting."}>
+                    <input type="checkbox" class="accent-primary" bind:checked={e.vision} />
+                    <span class="text-micro uppercase tracking-wide">vision</span>
+                  </label>
+                  <button
+                    type="button" use:tip={"Remove enhancer"} aria-label="Remove enhancer"
+                    class="ml-auto shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-error hover:border-error transition-colors"
+                    onclick={() => removeEnhancer(i)}
+                  ><Trash2 size={14} /></button>
+                </div>
+                <textarea
+                  bind:value={e.systemPrompt} rows={6} spellcheck="false" placeholder="fixed system prompt"
+                  class="w-full font-mono text-label rounded border border-card-border bg-surface px-2 py-1 text-txtmain placeholder:text-txtsecondary/60 focus:outline-none focus:ring-2 focus:ring-primary resize-y"
+                ></textarea>
+              </section>
+            {/each}
+          </div>
+        {/if}
+
+        <div class="mt-3 flex items-center justify-between gap-3">
+          <span class="text-micro text-txtsecondary">Saves the whole table; regenerates the config and hot-reloads.</span>
+          <span class="flex items-center gap-3">
+            <span class="text-micro">
+              {#if enhancersErr}
+                <span class="text-error">{enhancersErr}</span>
+              {:else if savingEnhancers}
+                <span class="text-txtsecondary">Saving…</span>
+              {:else if enhancersSaved}
+                <span class="text-primary">Saved!</span>
+              {/if}
+            </span>
+            <button class="btn btn--sm" disabled={savingEnhancers} onclick={saveEnhancers}>
+              Save
+            </button>
+          </span>
+        </div>
+        {/if}
+      </div>
 
       <div class="mt-6">
         <div class="flex items-baseline gap-2 mb-1">

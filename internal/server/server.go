@@ -1099,6 +1099,11 @@ func (s *Server) routes() {
 	mux.Handle("POST /api/apikeys", adminChain.ThenFunc(s.handleAPIKeyUpsert))
 	mux.Handle("DELETE /api/apikeys/{name}", adminChain.ThenFunc(s.handleAPIKeyDelete))
 
+	// Prompt-enhancer manager (admin-only): the rewrite models an image model can
+	// delegate its prompt to, each with its fixed system prompt. Whole-list PUT.
+	mux.Handle("GET /api/prompt-enhancers", adminChain.ThenFunc(s.handlePromptEnhancersGet))
+	mux.Handle("PUT /api/prompt-enhancers", adminChain.ThenFunc(s.handlePromptEnhancersPut))
+
 	var h http.Handler = chain.New(CreateRequestLogMiddleware(s.proxylog), CreateCORSMiddleware()).Then(mux)
 	s.handler.Store(&h)
 }

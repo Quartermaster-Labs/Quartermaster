@@ -12,6 +12,7 @@ import type {
   BackendMetrics,
   PerformanceResponse,
   ApiKey,
+  PromptEnhancerInfo,
 } from "../lib/types";
 import { connectionState } from "./theme";
 
@@ -518,6 +519,9 @@ export interface ModelOverride {
   streamLayers?: string;
   diffusionFa?: string;
   refEdit?: string;
+  // Id of a settings-wide promptEnhancers entry. Empty => no enhancer. Not a
+  // path: the enhancer is a catalog model the one router schedules.
+  promptEnhancer?: string;
   // Generation defaults (0/empty => sd-server default).
   defaultSteps?: number;
   defaultCfg?: number;
@@ -669,6 +673,33 @@ export async function deleteApiKey(name: string): Promise<void> {
   const response = await fetch(`/api/apikeys/${encodeURIComponent(name)}`, { method: "DELETE" });
   if (!response.ok) {
     throw new Error(`Failed to delete API key: ${response.status} ${await response.text()}`);
+  }
+}
+
+// --- Prompt enhancers (admin-only) ---
+
+// The settings-wide rewrite-model table. Whole-list GET/PUT rather than
+// per-row: unlike an API key, an enhancer holds no server-minted secret, so
+// there is nothing to preserve across a replace.
+export async function listPromptEnhancers(): Promise<PromptEnhancerInfo[]> {
+  const response = await fetch("/api/prompt-enhancers");
+  if (!response.ok) {
+    throw new Error(`Failed to load prompt enhancers: ${response.status} ${await response.text()}`);
+  }
+  return (await response.json()) || [];
+}
+
+// Replace the whole table. Rows with a blank model id are dropped server-side.
+// Triggers a config regenerate + reload, so it is not free: save once, not per
+// keystroke.
+export async function savePromptEnhancers(list: PromptEnhancerInfo[]): Promise<void> {
+  const response = await fetch("/api/prompt-enhancers", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(list),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to save prompt enhancers: ${response.status} ${await response.text()}`);
   }
 }
 

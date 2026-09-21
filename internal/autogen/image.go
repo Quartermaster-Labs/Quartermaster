@@ -943,6 +943,7 @@ func ExtraImageAsOverride(m ExtraImageModel) Override {
 		Threads:         m.Threads,
 		ExtraArgs:       m.ExtraArgs,
 		Unlisted:        m.Unlisted,
+		PromptEnhancer:  m.PromptEnhancer,
 	}
 }
 
@@ -981,6 +982,7 @@ func ApplyOverrideToExtraImage(m ExtraImageModel, ov *Override) ExtraImageModel 
 	m.DefaultHeight = ov.DefaultHeight
 	m.ExtraArgs = ov.ExtraArgs
 	m.Unlisted = ov.Unlisted
+	m.PromptEnhancer = ov.PromptEnhancer
 	if ov.Threads > 0 {
 		m.Threads = ov.Threads
 	}
@@ -1017,6 +1019,7 @@ func emitExtraImageModels(b *strings.Builder, s Settings, overrides []Override, 
 		writeSingleDeviceEnv(b, s, imageExe(s, &Override{Backend: m.Backend}))
 		writeEstVram(b, extraImageBudget(s, m))
 		b.WriteString("    checkEndpoint: /\n")
+		writePromptEnhancer(b, m.PromptEnhancer, enhancerByID(s.PromptEnhancers))
 		if m.Unlisted {
 			b.WriteString("    unlisted: true\n")
 		}
@@ -1061,6 +1064,10 @@ func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, n
 	writeEstVram(b, budget)
 	// sd-server has no /health; the webui root returns 200 once loaded.
 	b.WriteString("    checkEndpoint: /\n")
+	// The enhancer is not a launch flag - sd-server has no such concept. It rides
+	// the model entry so the playground can read it off /api/models and offer the
+	// rewrite before the render, which is the only place a rewrite is reviewable.
+	writePromptEnhancer(b, ovPromptEnhancer(ov), enhancerByID(s.PromptEnhancers))
 	if ov != nil && ov.Unlisted {
 		b.WriteString("    unlisted: true\n")
 	}

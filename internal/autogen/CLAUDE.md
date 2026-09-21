@@ -34,7 +34,7 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 | `generate.go` | Top-level orchestration (`Generate`): builds per-model profiles (solo, ctx tiers, named variants), sizes each, emits the YAML. `emitModel`/`RenderSoloCmd` **dispatch by model class** (SAM → image → embedding → TTS → ASR → LLM). This file is the profile loop; the three phases live in the siblings below. |
 | `generate_sizing.go` | Phase 1 — sizing math: `sizeProfile`, `--ctx-checkpoints` count + `checkpointReserveGB`, `forceLowActiveMoE`/`applyForcedOffload`/`estForOffload`, `computeBufferGB`, `MmprojVramGB`, `draftOverheadGB`. Pure arithmetic over `Metadata` + `Settings`. → `sizing.md` |
 | `generate_cmd.go` | Phase 2 — command rendering: `buildCmdLines` (the per-class argv builder) and `RenderSoloCmd` (same with a `${PORT}` placeholder, for the UI preview + ad-hoc commands), plus `effectiveUb`, `effectiveSpec`/`specHas`, `cmdPath`, `needsQwenFixedChatTemplate`, `defaultSamplerFor`/`samplerLines`. |
-| `generate_emit.go` | Phase 3 — YAML emission: non-model sections (`emitSlotCache`, `emitAPIKeys`, `emitGroupsAndListeners`, `writeGroup`) and per-model bits (`emitProfile`, `writeDisplayName`, `writeEstVram`/`writeEstRam`, `effortLevels`, `formatCtxTag`, `slugify`). |
+| `generate_emit.go` | Phase 3 — YAML emission: non-model sections (`emitSlotCache`, `emitAPIKeys`, `emitPromptEnhancers`, `emitGroupsAndListeners`, `writeGroup`) and per-model bits (`emitProfile`, `writeDisplayName`, `writeEstVram`/`writeEstRam`, `effortLevels`, `formatCtxTag`, `slugify`). |
 | `llmlora.go` | llama-server LoRA adapters: `resolveLlmLoraDir` (the `loraDirs["llm"]` -> `loraDir` -> model's-own-dir ladder), `resolveLoraPath` (bare name joined onto it; `isAbsLoraPath` is hand-rolled, NOT `filepath.IsAbs`, so a config written on Windows still reads absolute on Linux) and `llmLoraLines` (`--lora` / `--lora-scaled`). **Deliberately not the sd-server shape**: sd-server takes a DIRECTORY and each request picks from it, llama.cpp binds named adapter FILES at spawn, so the folder here emits nothing on its own and only Override.Loras reaches the backend. `--lora` is the flag table's only `Additive` entry, which is what stops a user's own `--lora` in custom args from silently replacing the model's list. |
 | `estimate.go` | One-shot preview (`EstimatePlan`) of a candidate tuning for the web editor; reuses the solo-profile sizing path without writing config. |
 | `flagtable.go`, `customargs.go`, `pins.go`, `validate.go`, `backendhelp.go` | Custom launch arguments: one flag table drives knob suppression (`ComposeCmd`), the editor's ownership locks, and validation; `PinsFromArgs` folds a pinned `-c`/`-ctk`/`-ub`/`-ngl`/... into the sizer so emitted flags and estimates describe the launch that runs; `BackendFlags` probes a backend's `--help` for the union. → [`../ui-svelte/launch-args.md`](../ui-svelte/launch-args.md) |
@@ -116,6 +116,11 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   `LoadSidecarCategoryRoots`/`UpsertSidecarRoot`, `LoadSidecarBackends`/`UpsertSidecarBackends`
   (backend exe paths — top-level so a VRAM reset can't wipe them; overlaid onto `Settings`
   BEFORE `applyDefaults` so a blank sd/tts derives as a sibling of a UI-set llama exe),
+  `LoadSidecarPromptEnhancers`/`UpsertSidecarPromptEnhancers` (**the rewrite-model table**, also
+  top level for the same reason as backends. Whole-list replace, last-wins dedupe by lowercased
+  model id but keeping the FIRST position, so editing a row does not make it jump to the bottom
+  of the settings table. `SystemPrompt` is deliberately NOT trimmed: the leading indentation and
+  trailing newline of a published PE prompt are part of the prompt),
   `LoadSidecarAPIKeys`/`UpsertSidecarAPIKey`/`DeleteSidecarAPIKey`,
   `LoadSidecarBackendSources`/`UpsertSidecarBackendSources` (**tracked GitHub repos the in-app
   installer downloads builds from** — deliberately separate from `BackendList`: a
@@ -158,6 +163,30 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
    assignment (`coexistSets` → `sam` / `tts` / `asr`, one group per non-empty class) and emitted by
    `writeCoexistGroup` as `exclusive:false`, `persistent:true`, `swap:false`, so they neither evict
    nor are evicted, and are appended to every listener since they bind no port of their own.
+
+### Prompt enhancers
+
+An image model can name a **prompt enhancer**: a chat model that rewrites its prompt into a more
+precise one before rendering. Three pieces, deliberately split:
+
+- `Settings.PromptEnhancers []PromptEnhancer` (`overrides.go`) — the table, declared ONCE. Keyed
+  by catalog model id, carrying the fixed system prompt, a display name and a `vision` flag.
+  Top-level and not per-model because the payload is a multi-KB system prompt that several image
+  models share verbatim.
+- `Override.PromptEnhancer string` — which entry an image model opts into. A **model id, never a
+  path**: an enhancer is a model the ONE router schedules and evicts like any other, and a path
+  would be a second loader outside the scheduler, which the architectural invariant forbids.
+  Image variants inherit it for free through `o := base` in `mergeImageVariant`.
+- `emitPromptEnhancers` (`generate_emit.go`) writes the block with **`yaml.Marshal`, not
+  `Fprintf`**. A PE system prompt is a multi-line document with quotes, colons and backslashes in
+  it; a hand-rolled block scalar corrupts the real thing. `indentYAML` re-indents the marshalled
+  document and uses `TrimSuffix`, not `TrimRight` — every newline before the final document
+  terminator is content, and trimming the run silently eats the blank line a `|+` keep-indicator
+  block exists to preserve (`TestEmitPromptEnhancers_RoundTrips` covers exactly this).
+
+A dangling id (the enhancer was deleted in Settings) is **not an error**: `writePromptEnhancer`
+emits nothing, so the model just loses the button. The rewrite itself never happens server-side;
+see `internal/server/CLAUDE.md` and the playground's `lib/promptEnhance.ts`.
 
 ## Gotchas / conventions
 

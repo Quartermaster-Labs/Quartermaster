@@ -37,6 +37,24 @@ export interface ModelCapabilities {
   reasoning_effort?: string[];
 }
 
+// PromptEnhancerInfo is the rewrite model an image model delegates its prompt
+// to, resolved server-side from `promptEnhancer: <id>` + the settings-wide
+// promptEnhancers table. Present only when the id resolves, so the UI can treat
+// "field present" as "the Enhance button is usable" without a second lookup.
+export interface PromptEnhancerInfo {
+  // Catalog model id to send the rewrite request to. A normal chat model as far
+  // as the router is concerned, so it swaps and evicts like any other.
+  model: string;
+  // Display label, falls back to the model id server-side.
+  name: string;
+  // The fixed instruction, configured once in Settings. Sent as the system
+  // message on every rewrite; empty means the model was trained to need none.
+  systemPrompt: string;
+  // The enhancer reads the reference image(s) too, not just the text. Off for a
+  // text-to-image rewriter, on for an edit rewriter like Qwen's PE-I2I.
+  vision: boolean;
+}
+
 export interface ModelGenDefaults {
   steps?: number;
   cfg?: number;
@@ -57,6 +75,9 @@ export interface Model {
   // (--steps/--cfg-scale/--sampling-method/--width/--height). Absent for
   // non-image models, and per-field absent when the flag was not emitted.
   genDefaults?: ModelGenDefaults;
+  // Prompt-rewrite model this image model opts into. Absent => no enhancer
+  // configured, or the configured id no longer names a model.
+  promptEnhancer?: PromptEnhancerInfo;
   // Gguf path shared by a model's variants (ctx tiers, game, judge). Rows with
   // the same family are collapsed into one group. Empty => ungrouped.
   family?: string;
