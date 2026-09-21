@@ -117,6 +117,14 @@ server does not have, and it would block the ordinary case of naming a model you
 install. The editor instead warns when an id has no Settings row, since that is the one thing free
 text makes easy to get silently wrong: such an enhancer is called with no system prompt.
 
+**The enhancer row does NOT take an mmproj.** A vision enhancer is a VL model plus a projector,
+but that pairing belongs to the model, not to the enhancer role: `generate.go` wires a discovered
+(or override-named) projector onto EVERY profile of a model, `--no-mmproj-offload`, so the plain
+id already accepts images. A second projector field here would be a competing place to wire one,
+and the two would disagree. The `-vision` twin is the same pair with the projector GPU-resident.
+The Settings row instead flags `vision` ticked on a catalog model whose `capabilities.vision` is
+false, which is the failure that otherwise looks like it worked.
+
 An image model can name a rewrite model in its config editor; the server resolves that id and
 ships it as `Model.promptEnhancer` on `/v1/models`, so the button renders only for models that
 have one (absent, not disabled: an enhancer is opt-in and most models never get one).

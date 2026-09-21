@@ -543,6 +543,18 @@
   let enhancersSaved = $state(false);
   let enhancersFlashTimer: ReturnType<typeof setTimeout> | undefined;
 
+  // A ticked vision box on a model with no projector is the one mistake here
+  // that looks like it worked: the request is accepted and the images are
+  // dropped (or the chat template 500s), so the rewrite silently ignores the
+  // picture it was supposed to read. An id this install does not serve says
+  // nothing, since there is no projector to check for.
+  function visionMismatch(e: PromptEnhancerInfo): boolean {
+    if (!e.vision) return false;
+    const id = e.model.trim().toLowerCase();
+    const m = $models.find((x) => x.id.toLowerCase() === id);
+    return !!m && m.capabilities?.vision !== true;
+  }
+
   async function loadPromptEnhancers(): Promise<void> {
     try {
       enhancers = await listPromptEnhancers();
@@ -1662,7 +1674,10 @@
 
         {#if enhancersOpen}
         <p class="text-[0.7rem] text-txtsecondary mb-4">
-          Rows with a blank model id are dropped on save.
+          Rows with a blank model id are dropped on save. A vision enhancer needs no separate
+          projector entry: Quartermaster wires a model's mmproj on every profile of that model, so
+          naming the model is enough. Its <span class="font-mono">-vision</span> id is the same
+          pair with the projector held in VRAM, which encodes faster but costs the VRAM.
         </p>
 
         {#if enhancers.length === 0}
@@ -1684,6 +1699,11 @@
                     <input type="checkbox" class="accent-primary" bind:checked={e.vision} />
                     <span class="text-micro uppercase tracking-wide">vision</span>
                   </label>
+                  {#if visionMismatch(e)}
+                    <span class="text-micro text-warning shrink-0" use:tip={"This model has no mmproj projector wired, so the images will be ignored. Quartermaster pairs a projector automatically when it sits beside the weights; otherwise point the model's own config editor at one."}>
+                      no projector
+                    </span>
+                  {/if}
                   <button
                     type="button" use:tip={"Remove enhancer"} aria-label="Remove enhancer"
                     class="ml-auto shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-error hover:border-error transition-colors"
