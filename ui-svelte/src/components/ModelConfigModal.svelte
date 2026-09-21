@@ -349,6 +349,10 @@
   // Settings, not from the catalog, because an enhancer is only usable once its
   // fixed system prompt has been configured there.
   let promptEnhancer = $state("");
+  // The img2img half. Qwen ships PE-T2I and PE-I2I as a pair: one composes a
+  // scene from nothing, the other rewrites an instruction about a picture that
+  // already exists. Left empty, the text one covers both directions.
+  let promptEnhancerEdit = $state("");
   let enhancerOptions = $state<PromptEnhancerInfo[]>([]);
 
   // Generation defaults baked into the launch cmd; "" => sd-server default.
@@ -364,6 +368,9 @@
   // have. The datalist suggests the configured ones; anything else is allowed.
   const enhancerMatch = $derived(
     enhancerOptions.find((e) => e.model.toLowerCase() === promptEnhancer.trim().toLowerCase()),
+  );
+  const enhancerEditMatch = $derived(
+    enhancerOptions.find((e) => e.model.toLowerCase() === promptEnhancerEdit.trim().toLowerCase()),
   );
 
   const imageMode = $derived(config?.isImage ?? false);
@@ -925,6 +932,7 @@
     diffusionFa = o?.diffusionFa ?? "";
     refEdit = o?.refEdit ?? "";
     promptEnhancer = o?.promptEnhancer ?? "";
+    promptEnhancerEdit = o?.promptEnhancerEdit ?? "";
     defaultSteps = o?.defaultSteps ? o.defaultSteps : "";
     defaultCfg = o?.defaultCfg ? o.defaultCfg : "";
     defaultSampler = o?.defaultSampler ?? "";
@@ -1293,6 +1301,7 @@
       diffusionFa,
       refEdit,
       promptEnhancer,
+      promptEnhancerEdit,
       defaultSteps: defaultSteps === "" ? 0 : Number(defaultSteps),
       defaultCfg: defaultCfg === "" ? 0 : Number(defaultCfg),
       defaultSampler,
@@ -1909,7 +1918,7 @@
           <label class="flex flex-col gap-1 text-sm col-span-2">
             <span class="text-txtsecondary flex items-center gap-1">
               Prompt enhancer
-              {@render hint("Id of a chat model that rewrites this model's prompt into a more precise one before rendering. Any model id is accepted; the suggestions are the enhancers configured in Settings, which is also where each one's fixed system prompt lives. The Images tab then offers an Enhance button that shows you the rewrite before you render it. Never applied automatically.")}
+              {@render hint("Id of a chat model that rewrites this model's prompt into a more precise one before rendering. Used for txt2img, and for edits too unless the field below names a different one. Any model id is accepted; the suggestions are the enhancers configured in Settings, which is also where each one's fixed system prompt lives. The Images tab then offers an Enhance button that shows you the rewrite before you render it. Never applied automatically.")}
             </span>
             <input
               type="text"
@@ -1937,6 +1946,35 @@
                 {enhancerMatch.vision ? "Reads the reference image." : "Text only."}
                 {enhancerMatch.systemPrompt.trim() ? "" : "No system prompt configured."}
               </span>
+            {/if}
+          </label>
+
+          <label class="flex flex-col gap-1 text-sm col-span-2">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Prompt enhancer (edit)
+              {@render hint("Used instead of the one above when the request carries a reference image. Qwen ships the pair (PE-T2I, PE-I2I) and they are not interchangeable: the edit one rewrites an instruction about an existing picture, the text one composes a scene from nothing. Leave empty to use the same enhancer for both directions.")}
+            </span>
+            <input
+              type="text"
+              bind:value={promptEnhancerEdit}
+              list="prompt-enhancers"
+              spellcheck="false"
+              placeholder={promptEnhancer.trim() ? "same as above" : "none"}
+              class="cfg-input font-mono"
+              aria-label="Prompt enhancer for edits"
+            />
+            {#if promptEnhancerEdit.trim() && !enhancerEditMatch}
+              <span class="text-micro text-warning">
+                No Settings row for this id: it will be called with no system prompt.
+              </span>
+            {:else if enhancerEditMatch && !enhancerEditMatch.vision}
+              <!-- An edit rewriter that cannot see the picture it is rewriting an
+                   instruction about is the pairing most likely to be wrong. -->
+              <span class="text-micro text-warning">
+                This enhancer is text only, so it will not see the image being edited.
+              </span>
+            {:else if enhancerEditMatch}
+              <span class="text-micro text-txtsecondary">Reads the reference image.</span>
             {/if}
           </label>
 

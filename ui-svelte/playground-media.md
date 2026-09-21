@@ -16,7 +16,11 @@ actions act on.
 
 **Prompt enhance** (`runEnhance` -> `lib/promptEnhance.enhancePrompt` -> `POST
 /v1/chat/completions`): wand button in the composer's left cluster, rendered only when the
-selected model carries a `promptEnhancer` (server-resolved, see `../CLAUDE.md`). Rewrites the
+selected model carries an enhancer (server-resolved, see `../CLAUDE.md`). A model may name one per
+direction, so the pick follows the mode the render itself will use: `promptEnhancerEdit` when a
+`baseImage` is attached, `promptEnhancer` otherwise, each half standing in for a missing other.
+The tooltip names which one is about to run, since the button silently changes meaning once an
+image is attached. Rewrites the
 prompt box IN PLACE, with an undo button next to it that survives until the user edits the box
 themselves. A vision enhancer is also handed `baseImage` plus the other attachments, capped at
 `MAX_REF_IMAGES`, images first because these models are trained on image-then-instruction order

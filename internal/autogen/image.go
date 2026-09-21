@@ -920,30 +920,31 @@ func FindExtraImageModel(s Settings, p string) (ExtraImageModel, bool) {
 // unedited extra model shows blank fields and the first save wipes the base).
 func ExtraImageAsOverride(m ExtraImageModel) Override {
 	return Override{
-		Match:           m.ModelPath,
-		VaePath:         m.VaePath,
-		ClipLPath:       m.ClipLPath,
-		ClipGPath:       m.ClipGPath,
-		T5Path:          m.T5Path,
-		TextEncoderPath: m.LlmPath,
-		LoraDir:         m.LoraDir,
-		TeOnCpu:         m.TeOnCpu,
-		VaeOnCpu:        m.VaeOnCpu,
-		VaeTiling:       m.VaeTiling,
-		TemporalTiling:  m.TemporalTiling,
-		StreamLayers:    m.StreamLayers,
-		DiffusionFa:     m.DiffusionFa,
-		OffloadToCpu:    m.OffloadToCpu,
-		DefaultSteps:    m.DefaultSteps,
-		DefaultCfg:      m.DefaultCfg,
-		DefaultSampler:  m.DefaultSampler,
-		DefaultWidth:    m.DefaultWidth,
-		DefaultHeight:   m.DefaultHeight,
-		VramTargetGB:    m.VramTargetGB,
-		Threads:         m.Threads,
-		ExtraArgs:       m.ExtraArgs,
-		Unlisted:        m.Unlisted,
-		PromptEnhancer:  m.PromptEnhancer,
+		Match:              m.ModelPath,
+		VaePath:            m.VaePath,
+		ClipLPath:          m.ClipLPath,
+		ClipGPath:          m.ClipGPath,
+		T5Path:             m.T5Path,
+		TextEncoderPath:    m.LlmPath,
+		LoraDir:            m.LoraDir,
+		TeOnCpu:            m.TeOnCpu,
+		VaeOnCpu:           m.VaeOnCpu,
+		VaeTiling:          m.VaeTiling,
+		TemporalTiling:     m.TemporalTiling,
+		StreamLayers:       m.StreamLayers,
+		DiffusionFa:        m.DiffusionFa,
+		OffloadToCpu:       m.OffloadToCpu,
+		DefaultSteps:       m.DefaultSteps,
+		DefaultCfg:         m.DefaultCfg,
+		DefaultSampler:     m.DefaultSampler,
+		DefaultWidth:       m.DefaultWidth,
+		DefaultHeight:      m.DefaultHeight,
+		VramTargetGB:       m.VramTargetGB,
+		Threads:            m.Threads,
+		ExtraArgs:          m.ExtraArgs,
+		Unlisted:           m.Unlisted,
+		PromptEnhancer:     m.PromptEnhancer,
+		PromptEnhancerEdit: m.PromptEnhancerEdit,
 	}
 }
 
@@ -983,6 +984,7 @@ func ApplyOverrideToExtraImage(m ExtraImageModel, ov *Override) ExtraImageModel 
 	m.ExtraArgs = ov.ExtraArgs
 	m.Unlisted = ov.Unlisted
 	m.PromptEnhancer = ov.PromptEnhancer
+	m.PromptEnhancerEdit = ov.PromptEnhancerEdit
 	if ov.Threads > 0 {
 		m.Threads = ov.Threads
 	}
@@ -1020,6 +1022,7 @@ func emitExtraImageModels(b *strings.Builder, s Settings, overrides []Override, 
 		writeEstVram(b, extraImageBudget(s, m))
 		b.WriteString("    checkEndpoint: /\n")
 		writePromptEnhancer(b, m.PromptEnhancer, enhancerByID(s.PromptEnhancers))
+		writePromptEnhancerEdit(b, m.PromptEnhancerEdit, enhancerByID(s.PromptEnhancers))
 		if m.Unlisted {
 			b.WriteString("    unlisted: true\n")
 		}
@@ -1068,6 +1071,7 @@ func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, n
 	// the model entry so the playground can read it off /api/models and offer the
 	// rewrite before the render, which is the only place a rewrite is reviewable.
 	writePromptEnhancer(b, ovPromptEnhancer(ov), enhancerByID(s.PromptEnhancers))
+	writePromptEnhancerEdit(b, ovPromptEnhancerEdit(ov), enhancerByID(s.PromptEnhancers))
 	if ov != nil && ov.Unlisted {
 		b.WriteString("    unlisted: true\n")
 	}

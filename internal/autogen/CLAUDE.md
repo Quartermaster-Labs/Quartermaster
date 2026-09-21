@@ -173,10 +173,15 @@ precise one before rendering. Three pieces, deliberately split:
   by catalog model id, carrying the fixed system prompt, a display name and a `vision` flag.
   Top-level and not per-model because the payload is a multi-KB system prompt that several image
   models share verbatim.
-- `Override.PromptEnhancer string` — which entry an image model opts into. A **model id, never a
-  path**: an enhancer is a model the ONE router schedules and evicts like any other, and a path
-  would be a second loader outside the scheduler, which the architectural invariant forbids.
-  Image variants inherit it for free through `o := base` in `mergeImageVariant`.
+- `Override.PromptEnhancer` / `Override.PromptEnhancerEdit` — which entry an image model opts
+  into, **one per direction**. A **model id, never a path**: an enhancer is a model the ONE router
+  schedules and evicts like any other, and a path would be a second loader outside the scheduler,
+  which the architectural invariant forbids. Image variants inherit both for free through
+  `o := base` in `mergeImageVariant`. Qwen ships the pair (PE-T2I, PE-I2I) and they are NOT
+  interchangeable: the edit one rewrites an instruction about a picture that already exists, the
+  text one composes a scene from nothing. `PromptEnhancerEdit` empty means "same in both
+  directions", which is what a single-model setup wants and what every model configured before the
+  field existed already says.
 - `emitPromptEnhancers` (`generate_emit.go`) writes the block with **`yaml.Marshal`, not
   `Fprintf`**. A PE system prompt is a multi-line document with quotes, colons and backslashes in
   it; a hand-rolled block scalar corrupts the real thing. `indentYAML` re-indents the marshalled

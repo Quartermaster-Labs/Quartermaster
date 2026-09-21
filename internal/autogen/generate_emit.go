@@ -209,12 +209,31 @@ func ovPromptEnhancer(ov *Override) string {
 	return ov.PromptEnhancer
 }
 
+// ovPromptEnhancerEdit is the img2img half, same nil-safety.
+func ovPromptEnhancerEdit(ov *Override) string {
+	if ov == nil {
+		return ""
+	}
+	return ov.PromptEnhancerEdit
+}
+
 // writePromptEnhancer emits a model's `promptEnhancer:` line - the id of the
 // entry above that it delegates its prompt to. Written only when that id
 // actually resolves: a stale reference (the enhancer was renamed or removed from
 // settings) is dropped here rather than carried into the config for the client
 // to fail to look up.
 func writePromptEnhancer(b *strings.Builder, id string, byID map[string]PromptEnhancer) {
+	writeEnhancerKey(b, "promptEnhancer", id, byID)
+}
+
+// writePromptEnhancerEdit emits the img2img half. Written independently of the
+// text one: a model may configure either, both or neither, and the client falls
+// back to whichever is present.
+func writePromptEnhancerEdit(b *strings.Builder, id string, byID map[string]PromptEnhancer) {
+	writeEnhancerKey(b, "promptEnhancerEdit", id, byID)
+}
+
+func writeEnhancerKey(b *strings.Builder, key, id string, byID map[string]PromptEnhancer) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return
@@ -223,7 +242,7 @@ func writePromptEnhancer(b *strings.Builder, id string, byID map[string]PromptEn
 	if !ok {
 		return
 	}
-	fmt.Fprintf(b, "    promptEnhancer: %q\n", strings.TrimSpace(e.Model))
+	fmt.Fprintf(b, "    %s: %q\n", key, strings.TrimSpace(e.Model))
 }
 
 // emitAPIKeys writes the apiKeys list and, for any key scoped to a model

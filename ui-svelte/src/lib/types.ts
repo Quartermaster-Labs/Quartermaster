@@ -78,6 +78,9 @@ export interface Model {
   // Prompt-rewrite model this image model opts into. Absent => no enhancer
   // configured, or the configured id no longer names a model.
   promptEnhancer?: PromptEnhancerInfo;
+  // The img2img half of the pair, used instead of promptEnhancer when the
+  // request carries a reference image. Absent => promptEnhancer covers both.
+  promptEnhancerEdit?: PromptEnhancerInfo;
   // Gguf path shared by a model's variants (ctx tiers, game, judge). Rows with
   // the same family are collapsed into one group. Empty => ungrouped.
   family?: string;

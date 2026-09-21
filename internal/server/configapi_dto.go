@@ -235,16 +235,17 @@ type overrideDTO struct {
 	RefEdit         string `json:"refEdit"`
 	// PromptEnhancer is the settings.promptEnhancers model id this image model
 	// rewrites its prompt through. "" => none.
-	PromptEnhancer string  `json:"promptEnhancer"`
-	VaeTiling      string  `json:"vaeTiling"`
-	TemporalTiling string  `json:"temporalTiling"`
-	StreamLayers   string  `json:"streamLayers"`
-	DiffusionFa    string  `json:"diffusionFa"`
-	DefaultSteps   int     `json:"defaultSteps"`
-	DefaultCfg     float64 `json:"defaultCfg"`
-	DefaultSampler string  `json:"defaultSampler"`
-	DefaultWidth   int     `json:"defaultWidth"`
-	DefaultHeight  int     `json:"defaultHeight"`
+	PromptEnhancer     string  `json:"promptEnhancer"`
+	PromptEnhancerEdit string  `json:"promptEnhancerEdit"`
+	VaeTiling          string  `json:"vaeTiling"`
+	TemporalTiling     string  `json:"temporalTiling"`
+	StreamLayers       string  `json:"streamLayers"`
+	DiffusionFa        string  `json:"diffusionFa"`
+	DefaultSteps       int     `json:"defaultSteps"`
+	DefaultCfg         float64 `json:"defaultCfg"`
+	DefaultSampler     string  `json:"defaultSampler"`
+	DefaultWidth       int     `json:"defaultWidth"`
+	DefaultHeight      int     `json:"defaultHeight"`
 }
 
 type modelConfigResp struct {
@@ -406,8 +407,9 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		VaePath:     o.VaePath, ClipLPath: o.ClipLPath, ClipGPath: o.ClipGPath,
 		T5Path: o.T5Path, TextEncoderPath: o.TextEncoderPath,
 		OffloadToCpu: o.OffloadToCpu, TeOnCpu: o.TeOnCpu, VaeOnCpu: o.VaeOnCpu, VaeTiling: o.VaeTiling, TemporalTiling: o.TemporalTiling, StreamLayers: o.StreamLayers, DiffusionFa: o.DiffusionFa, RefEdit: o.RefEdit,
-		PromptEnhancer: o.PromptEnhancer,
-		DefaultSteps:   o.DefaultSteps, DefaultCfg: o.DefaultCfg, DefaultSampler: o.DefaultSampler,
+		PromptEnhancer:     o.PromptEnhancer,
+		PromptEnhancerEdit: o.PromptEnhancerEdit,
+		DefaultSteps:       o.DefaultSteps, DefaultCfg: o.DefaultCfg, DefaultSampler: o.DefaultSampler,
 		DefaultWidth: o.DefaultWidth, DefaultHeight: o.DefaultHeight,
 	}
 	for _, v := range o.Variants {
@@ -531,6 +533,7 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.VaeOnCpu = body.VaeOnCpu
 	ov.RefEdit = body.RefEdit
 	ov.PromptEnhancer = strings.TrimSpace(body.PromptEnhancer)
+	ov.PromptEnhancerEdit = strings.TrimSpace(body.PromptEnhancerEdit)
 	ov.VaeTiling = body.VaeTiling
 	ov.TemporalTiling = body.TemporalTiling
 	ov.StreamLayers = body.StreamLayers

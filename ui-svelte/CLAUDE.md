@@ -129,6 +129,12 @@ An image model can name a rewrite model in its config editor; the server resolve
 ships it as `Model.promptEnhancer` on `/v1/models`, so the button renders only for models that
 have one (absent, not disabled: an enhancer is opt-in and most models never get one).
 
+It can name **two**, one per direction (`promptEnhancerEdit` for requests that carry a reference
+image), because Qwen ships PE-T2I and PE-I2I and they are not interchangeable. Two fields rather
+than a list: the direction is unambiguous at press time, so the composer picks for the user instead
+of asking. Either half alone still covers both directions, since hiding the button on a model that
+plainly has an enhancer reads as a bug, and the rewrite is reviewable in the box either way.
+
 The rewrite runs **here, on the client**, and lands back in the prompt box rather than being
 applied inside the image route. That is the whole design: these models fail by confidently
 inventing details, and an invisible rewrite surfaces only as a picture that is subtly not what was

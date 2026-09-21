@@ -522,6 +522,9 @@ export interface ModelOverride {
   // Id of a settings-wide promptEnhancers entry. Empty => no enhancer. Not a
   // path: the enhancer is a catalog model the one router schedules.
   promptEnhancer?: string;
+  // Used instead of promptEnhancer when a reference image is attached. Empty =>
+  // promptEnhancer covers both directions.
+  promptEnhancerEdit?: string;
   // Generation defaults (0/empty => sd-server default).
   defaultSteps?: number;
   defaultCfg?: number;

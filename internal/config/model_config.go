@@ -166,6 +166,11 @@ type ModelConfig struct {
 	// over a rewrite convenience would be the wrong trade.
 	PromptEnhancer string `yaml:"promptEnhancer"`
 
+	// PromptEnhancerEdit is the enhancer used when the request carries a
+	// reference image, replacing PromptEnhancer for that direction only. Empty =>
+	// PromptEnhancer covers both. See autogen.Override.PromptEnhancerEdit.
+	PromptEnhancerEdit string `yaml:"promptEnhancerEdit"`
+
 	// Copy of HealthCheckTimeout from global config
 	HealthCheckTimeout int `yaml:"healthCheckTimeout"`
 }

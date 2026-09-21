@@ -35,8 +35,9 @@ Also here: `turns_design.md` — the turn runner's design notes.
   inference API only — they never cover the admin surface, which is gated by remote address.
   Getting this wrong publishes the config editor to whatever the port is bound to.
 - **A prompt enhancer is resolved, never executed, server-side.** `promptEnhancerFor`
-  (`apigroup.go`) joins a model's `promptEnhancer` id to the settings table and ships the result
-  on `/v1/models` as `apiModel.promptEnhancer`; the rewrite request itself is made by the CLIENT
+  (`apigroup.go`) joins a model's `promptEnhancer` / `promptEnhancerEdit` ids to the settings
+  table and ships both on `/v1/models` as `apiModel.promptEnhancer` and `.promptEnhancerEdit`
+  (the same helper, called twice); the rewrite request itself is made by the CLIENT
   (`ui-svelte/src/lib/promptEnhance.ts`). Rewriting inside the image route would hide the rewrite:
   these models fail by confidently inventing details, and the only symptom would be a picture that
   is subtly not what was asked for. An unresolvable id yields `nil`, so "field present" means "the

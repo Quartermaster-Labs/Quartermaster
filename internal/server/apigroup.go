@@ -86,6 +86,11 @@ type apiModel struct {
 	// that has not opted in, which is all of them by default. The playground
 	// shows an Enhance button only when this is present.
 	PromptEnhancer *apiPromptEnhancer `json:"promptEnhancer,omitempty"`
+	// PromptEnhancerEdit is the enhancer for the img2img direction (Qwen ships
+	// PE-T2I and PE-I2I as a pair and they are not interchangeable). Resolved the
+	// same way; nil when the model named none, in which case the client falls
+	// back to PromptEnhancer for both directions.
+	PromptEnhancerEdit *apiPromptEnhancer `json:"promptEnhancerEdit,omitempty"`
 }
 
 // apiPromptEnhancer is the resolved rewrite model an image model delegates its
@@ -114,8 +119,8 @@ type apiPromptEnhancer struct {
 // top-level table. The lookup is case-insensitive because the ids are
 // filename-derived and get copied between the settings page and the model
 // editor by hand.
-func promptEnhancerFor(cfg config.Config, mc config.ModelConfig) *apiPromptEnhancer {
-	id := strings.TrimSpace(mc.PromptEnhancer)
+func promptEnhancerFor(cfg config.Config, enhancerID string) *apiPromptEnhancer {
+	id := strings.TrimSpace(enhancerID)
 	if id == "" || len(cfg.PromptEnhancers) == 0 {
 		return nil
 	}
@@ -268,28 +273,29 @@ func (s *Server) modelStatus() []apiModel {
 		quantName, quantLabel, modelKey, familyKey := modelKeys(family, id)
 		modelKey = engineScopedKey(modelKey, mc)
 		models = append(models, apiModel{
-			Id:             id,
-			Name:           mc.Name,
-			Description:    mc.Description,
-			State:          state,
-			Unlisted:       mc.Unlisted,
-			Aliases:        mc.Aliases,
-			Capabilities:   capsMap,
-			Family:         family,
-			Group:          gid,
-			Listeners:      groupListeners[gid],
-			Ctx:            ctxSize,
-			Slots:          slots,
-			ModelKey:       modelKey,
-			FamilyKey:      familyKey,
-			Quant:          quantName,
-			QuantLabel:     quantLabel,
-			SizeGB:         fileSizeGB(family),
-			GenDefaults:    genDefaults(info),
-			PromptEnhancer: promptEnhancerFor(cfg, mc),
-			EstVramGB:      mc.EstVramGB,
-			EstRamGB:       mc.EstRamGB,
-			RunningCmd:     runningCmd,
+			Id:                 id,
+			Name:               mc.Name,
+			Description:        mc.Description,
+			State:              state,
+			Unlisted:           mc.Unlisted,
+			Aliases:            mc.Aliases,
+			Capabilities:       capsMap,
+			Family:             family,
+			Group:              gid,
+			Listeners:          groupListeners[gid],
+			Ctx:                ctxSize,
+			Slots:              slots,
+			ModelKey:           modelKey,
+			FamilyKey:          familyKey,
+			Quant:              quantName,
+			QuantLabel:         quantLabel,
+			SizeGB:             fileSizeGB(family),
+			GenDefaults:        genDefaults(info),
+			PromptEnhancer:     promptEnhancerFor(cfg, mc.PromptEnhancer),
+			PromptEnhancerEdit: promptEnhancerFor(cfg, mc.PromptEnhancerEdit),
+			EstVramGB:          mc.EstVramGB,
+			EstRamGB:           mc.EstRamGB,
+			RunningCmd:         runningCmd,
 		})
 	}
 

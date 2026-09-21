@@ -174,3 +174,55 @@ func TestAutogen_Sidecar_PromptEnhancerSurvivesOverrideWrite(t *testing.T) {
 		t.Fatalf("enhancers lost across an override write: %#v", got)
 	}
 }
+
+// A model may name a different enhancer per direction (Qwen ships PE-T2I and
+// PE-I2I, which are not interchangeable), either alone, or neither.
+func TestWritePromptEnhancer_BothDirections(t *testing.T) {
+	byID := enhancerByID([]PromptEnhancer{
+		{Model: "pe-t2i", SystemPrompt: "compose"},
+		{Model: "pe-i2i", SystemPrompt: "edit", Vision: true},
+	})
+
+	var b strings.Builder
+	writePromptEnhancer(&b, "pe-t2i", byID)
+	writePromptEnhancerEdit(&b, "pe-i2i", byID)
+	got := b.String()
+	if want := "    promptEnhancer: \"pe-t2i\"\n    promptEnhancerEdit: \"pe-i2i\"\n"; got != want {
+		t.Errorf("pair:\n got %q\nwant %q", got, want)
+	}
+
+	// The keys must not collide: promptEnhancerEdit has to be its own key, not a
+	// second promptEnhancer line that the YAML loader would silently collapse.
+	var parsed map[string]string
+	if err := yaml.Unmarshal([]byte(got), &parsed); err != nil {
+		t.Fatalf("pair does not parse: %v", err)
+	}
+	if len(parsed) != 2 {
+		t.Errorf("want 2 distinct keys, got %#v", parsed)
+	}
+
+	// Either half alone is valid: one enhancer covers both directions.
+	b.Reset()
+	writePromptEnhancerEdit(&b, "pe-i2i", byID)
+	if got := b.String(); got != "    promptEnhancerEdit: \"pe-i2i\"\n" {
+		t.Errorf("edit alone: got %q", got)
+	}
+
+	// And a dangling edit id is dropped just like a dangling text one.
+	b.Reset()
+	writePromptEnhancerEdit(&b, "pe-gone", byID)
+	writePromptEnhancerEdit(&b, "", byID)
+	if b.String() != "" {
+		t.Errorf("dangling/blank edit id should emit nothing, got %q", b.String())
+	}
+}
+
+func TestOvPromptEnhancer_NilSafe(t *testing.T) {
+	if ovPromptEnhancer(nil) != "" || ovPromptEnhancerEdit(nil) != "" {
+		t.Error("a nil override is the ordinary no-rule-matched case, not a panic")
+	}
+	ov := &Override{PromptEnhancer: "t", PromptEnhancerEdit: "i"}
+	if ovPromptEnhancer(ov) != "t" || ovPromptEnhancerEdit(ov) != "i" {
+		t.Error("the two directions must not read the same field")
+	}
+}

@@ -59,3 +59,35 @@ func TestConfig_PromptEnhancerAbsent(t *testing.T) {
 		t.Errorf("want no enhancers, got %#v", cfg.PromptEnhancers)
 	}
 }
+
+// The two directions are distinct keys on the model, so a model can send a
+// txt2img prompt to PE-T2I and an edit instruction to PE-I2I.
+func TestConfig_PromptEnhancerPairLoads(t *testing.T) {
+	cfg, err := LoadConfigFromReader(strings.NewReader(`
+promptEnhancers:
+  "pe-t2i":
+    systemPrompt: "compose"
+  "pe-i2i":
+    vision: true
+    systemPrompt: "edit"
+models:
+  "both":
+    cmd: sd-server --port ${PORT}
+    promptEnhancer: "pe-t2i"
+    promptEnhancerEdit: "pe-i2i"
+  "text-only":
+    cmd: sd-server --port ${PORT}
+    promptEnhancer: "pe-t2i"
+`))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := cfg.Models["both"]; got.PromptEnhancer != "pe-t2i" || got.PromptEnhancerEdit != "pe-i2i" {
+		t.Errorf("pair = %q / %q", got.PromptEnhancer, got.PromptEnhancerEdit)
+	}
+	// Naming only one leaves the other empty; the client reads that as "this one
+	// covers both directions" rather than "no enhancer for edits".
+	if got := cfg.Models["text-only"]; got.PromptEnhancerEdit != "" {
+		t.Errorf("unset edit enhancer = %q, want empty", got.PromptEnhancerEdit)
+	}
+}

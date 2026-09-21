@@ -257,15 +257,18 @@ type ExtraImageModel struct {
 	LoraDir   string `yaml:"loraDir"`   // --lora-model-dir ("" => settings.loraDir, else the model's own dir)
 	// PromptEnhancer names the settings.promptEnhancers entry this model sends
 	// its prompt through before rendering. "" => none. See Override.PromptEnhancer.
-	PromptEnhancer string  `yaml:"promptEnhancer"`
-	VramTargetGB   float64 `yaml:"vramTargetGB"`
-	DefaultCfg     float64 `yaml:"defaultCfg"`
-	DefaultSteps   int     `yaml:"defaultSteps"`
-	DefaultSampler string  `yaml:"defaultSampler"` // --sampling-method
-	DefaultWidth   int     `yaml:"defaultWidth"`
-	DefaultHeight  int     `yaml:"defaultHeight"`
-	DiffusionFa    string  `yaml:"diffusionFa"` // "" => on, "off" => off
-	VaeTiling      string  `yaml:"vaeTiling"`   // "" => on, "off" => off
+	PromptEnhancer string `yaml:"promptEnhancer"`
+	// PromptEnhancerEdit is the img2img half of the pair. See
+	// Override.PromptEnhancerEdit.
+	PromptEnhancerEdit string  `yaml:"promptEnhancerEdit"`
+	VramTargetGB       float64 `yaml:"vramTargetGB"`
+	DefaultCfg         float64 `yaml:"defaultCfg"`
+	DefaultSteps       int     `yaml:"defaultSteps"`
+	DefaultSampler     string  `yaml:"defaultSampler"` // --sampling-method
+	DefaultWidth       int     `yaml:"defaultWidth"`
+	DefaultHeight      int     `yaml:"defaultHeight"`
+	DiffusionFa        string  `yaml:"diffusionFa"` // "" => on, "off" => off
+	VaeTiling          string  `yaml:"vaeTiling"`   // "" => on, "off" => off
 	// Video VRAM levers. "" means OFF here, NOT auto: an extra model is
 	// hand-declared and never goes through the gguf tensor scan, so nothing on
 	// this path can tell a video DiT from an image one. Set "on" explicitly.
@@ -896,6 +899,13 @@ type Override struct {
 	// It rides the generated config purely so the playground can read it off the
 	// model listing.
 	PromptEnhancer string `yaml:"promptEnhancer"`
+	// PromptEnhancerEdit is the enhancer used INSTEAD of PromptEnhancer when the
+	// request carries a reference image. Qwen ships the pair (PE-T2I, PE-I2I) and
+	// they are not interchangeable: the edit one rewrites an instruction about an
+	// existing picture, the text one composes a scene from nothing. Empty => the
+	// model uses PromptEnhancer in both directions, which is what a single-model
+	// setup wants and what every model configured before this field existed does.
+	PromptEnhancerEdit string `yaml:"promptEnhancerEdit"`
 	// LoraDir is this model's `--lora-model-dir`. Empty => settings.loraDir, and
 	// if that is empty too, the directory the model gguf itself lives in.
 	// sd-server models only; the llama-server path uses Loras below.

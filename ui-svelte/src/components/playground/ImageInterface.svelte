@@ -390,10 +390,6 @@
   // The hint line under the settings panel shows the SAME resolution the reset
   // effect applies, so what it claims is the model default is what a switch
   // actually sets. maxDim has no launch-line equivalent, so it stays table-only.
-  // The rewrite model this image model opts into, resolved server-side. Absent
-  // => the button does not render at all, rather than rendering disabled: an
-  // enhancer is opt-in per model and most models will never have one.
-  let enhancer = $derived($models.find((m) => m.id === $selectedModelStore)?.promptEnhancer);
   let enhancing = $state(false);
   // Its own slot rather than dropError: that one is cleared on a 4s timer tied
   // to a drop, and a failed rewrite should stay on screen until it is read.
@@ -475,6 +471,22 @@
   // (unless the user opted out via skipBase).
   let baseImage = $derived(
     attached[0] ?? (skipBase ? null : [...turns].reverse().find((t) => t.images.length)?.images[0]) ?? null
+  );
+
+  // The rewrite model this image model opts into, resolved server-side. Absent
+  // => the button does not render at all, rather than rendering disabled: an
+  // enhancer is opt-in per model and most models will never have one.
+  //
+  // A model may name one per DIRECTION (Qwen ships PE-T2I and PE-I2I, which are
+  // not interchangeable), so the pick follows the mode the render itself will
+  // use: a reference image attached means this is an edit. Either half alone
+  // covers both directions, since dropping the button on a model that clearly
+  // has an enhancer reads as a bug, and the rewrite is reviewable anyway.
+  let enhancerPair = $derived($models.find((m) => m.id === $selectedModelStore));
+  let enhancer = $derived(
+    baseImage
+      ? (enhancerPair?.promptEnhancerEdit ?? enhancerPair?.promptEnhancer)
+      : (enhancerPair?.promptEnhancer ?? enhancerPair?.promptEnhancerEdit),
   );
 
   $effect(() => {
@@ -1362,7 +1374,7 @@
             class="composer-icon-btn"
             onclick={runEnhance}
             disabled={enhancing || isGenerating || !prompt.trim()}
-            use:tip={`Enhance the prompt with ${enhancer.name}${enhancer.vision ? " (reads the reference image)" : ""}. Rewrites the box, so you can read and edit it before rendering.`}
+            use:tip={`Enhance the prompt with ${enhancer.name}${baseImage ? " (edit rewrite)" : " (text-to-image rewrite)"}${enhancer.vision && baseImage ? ", which reads the reference image" : ""}. Rewrites the box, so you can read and edit it before rendering.`}
           >
             {#if enhancing}
               <Loader2 class="w-[1.125rem] h-[1.125rem] animate-spin" />
