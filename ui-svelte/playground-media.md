@@ -6,7 +6,7 @@
 ## `ImageInterface.svelte`
 
 Full SD image-gen UI: txt2img/img2img (`ImageGenMode`), denoise/hires (`enable_hr`), reference
-images (`extra_images`, Kontext), per-model defaults, style presets, seed modes.
+images (`extra_images`, Kontext), per-model defaults, seed modes.
 
 **Batch** (Settings → Batch, `sdapi batch_size` → sd.cpp `batch_count`, capped at `MAX_BATCH`):
 N images per prompt, rendered sequentially with the seed incrementing per image — the step bar

@@ -22,7 +22,7 @@
   import Toggle from "../Toggle.svelte";
   import Composer from "./Composer.svelte";
   import { autogrow } from "../../lib/autogrow";
-  import { Image as ImageIcon, Blend, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Palette, Reply, Maximize2, Loader2, Clock } from "lucide-svelte";
+  import { Image as ImageIcon, Blend, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Reply, Maximize2, Loader2, Clock } from "lucide-svelte";
   import { dropZone } from "../../lib/dropZone";
   import { classifyAttachment } from "../../lib/attachments";
   import { scrollFade } from "../../lib/scrollFade";
@@ -155,15 +155,10 @@
   // conditioning, while annotating keeps the conditioning and lets the model
   // redraw the whole frame.
   let maskAnnotate = $state(false);
-  // Transparent-background mode. Sticky (unlike a mask or a style ref, which are
-  // per-send): stickers come in batches, so clearing it every turn would mean
+  // Transparent-background mode. Sticky (unlike a mask, which is per-send):
+  // stickers come in batches, so clearing it every turn would mean
   // re-arming it for each one. It only wraps the prompt, so nothing goes stale.
   let alphaBg = $state(false);
-  // Style-transfer reference (data URL) for the NEXT message: appended as the LAST
-  // ref image and scaffolds the prompt ("apply the style of the last reference").
-  // Ref-edit models only (Qwen-Image-Edit multi-ref / Kontext); ignored elsewhere.
-  let styleRef = $state<string | null>(null);
-  let styleInput = $state<HTMLInputElement | undefined>();
   // A segmentation-capable model (SAM) unlocks the AI-select tools (box/point/
   // lasso) inside the inpaint MaskEditor — same mask output, loaded on demand via
   // /v1/segment. "" = brush-only.
@@ -777,10 +772,9 @@
   // behind it; `refs === null` is the one deliberate exception — see runJob.
   type QueuedJob = {
     sessionId: string;
-    prompt: string; // expanded (style scaffold + transparency clause)
+    prompt: string; // expanded (transparency clause)
     raw: string; // what the user typed, for the queue chip and for a restore
     attached: string[];
-    style: string | null;
     mask: string | null;
     maskBase: string | null;
     maskPreview?: string;
@@ -807,22 +801,17 @@
 
     const base = baseImage;
     const wasAttached = attached;
-    // Style transfer needs the second-image ref slot, so it's ref-edit only.
-    const useStyle = params.refEdit ? styleRef : null;
     // Use the mask only if it was painted on this exact base (else it's stale).
-    // A style ref forces the whole-frame ref path, so drop any pending mask.
-    const useMask = !useStyle && maskSource === base ? maskData : null;
+    const useMask = maskSource === base ? maskData : null;
     const wasSkipBase = skipBase;
     prompt = "";
     attached = [];
     skipBase = false;
     maskData = null;
     maskSource = null;
-    styleRef = null;
 
     // Record what actually feeds this turn: attachments if present, else the
-    // reused base image. A style ref rides last (the scaffold points at it).
-    // OpenAI route ignores sources, so none there.
+    // reused base image. OpenAI route ignores sources, so none there.
     //
     // `null` means "the thread's newest image, resolved when this job actually
     // runs". A follow-up typed while a render is in flight means the picture that
@@ -833,20 +822,13 @@
     const lateBase = params.sdapi && !wasAttached.length && !useMask && !wasSkipBase;
     let refs: string[] | null = null;
     if (!lateBase) {
-      const contentRefs = !params.sdapi ? [] : wasAttached.length ? wasAttached : base ? [base] : [];
-      refs = useStyle ? [...contentRefs, useStyle] : contentRefs;
+      refs = !params.sdapi ? [] : wasAttached.length ? wasAttached : base ? [base] : [];
     }
 
-    // Prepend the style instruction so the model applies the last ref's look to
-    // the rest. Stored into the turn so regenerate/edit reproduce it verbatim.
-    const sentPrompt = useStyle
-      ? `Apply the artistic style, color palette, brushwork, and texture of the final reference image to the other image, keeping its content and composition. ${promptText}`.trim()
-      : promptText;
-    // Transparency wraps LAST, so its closing sentence stays the final clause of
-    // the prompt (where the card puts it) even when a style instruction is also
-    // in play. Like the style text it is stored expanded, so regenerate and edit
+    // The transparency sentence is appended where the model card puts it, at the
+    // very end of the prompt, and is stored EXPANDED so regenerate and edit
     // reproduce the exact prompt that produced the image.
-    const finalPrompt = alphaBg && supportsAlpha ? withAlphaPrompt(params.model, sentPrompt) : sentPrompt;
+    const finalPrompt = alphaBg && supportsAlpha ? withAlphaPrompt(params.model, promptText) : promptText;
     // Composite base + mask now so the sent turn shows the region that changed.
     const maskPreview = useMask && base ? await buildMaskOverlay(base, useMask) : undefined;
 
@@ -855,7 +837,6 @@
       prompt: finalPrompt,
       raw: promptText,
       attached: wasAttached,
-      style: useStyle,
       mask: useMask,
       maskBase: useMask ? base : null,
       maskPreview,
@@ -875,7 +856,6 @@
     attached = job.attached;
     maskData = job.mask;
     maskSource = job.maskBase;
-    styleRef = job.style;
   }
 
   // Append the job's turn and render it. Late-bound sources (refs === null) are
@@ -887,7 +867,6 @@
     if (refs === null) {
       const base = [...s.turns].reverse().find((t) => t.images.length)?.images[0] ?? null;
       refs = base ? [base] : [];
-      if (job.style) refs = [...refs, job.style];
     }
     const prevTurns = s.turns;
     const ti = prevTurns.length;
@@ -1003,17 +982,6 @@
   function onAttachFiles(event: Event) {
     const input = event.target as HTMLInputElement;
     attachFiles(Array.from(input.files ?? []));
-    input.value = "";
-  }
-
-  function onAttachStyle(event: Event) {
-    const input = event.target as HTMLInputElement;
-    const file = input.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = () => (styleRef = reader.result as string);
-      reader.readAsDataURL(file);
-    }
     input.value = "";
   }
 
@@ -1514,15 +1482,6 @@
             <Brush class="w-[1.125rem] h-[1.125rem]" />
           </button>
         {/if}
-        {#if isSdapi && supportsRefImages}
-          <button
-            class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {styleRef ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
-            onclick={() => styleInput?.click()}
-            use:tip={"Style transfer - apply the look of a reference image to the edit"}
-          >
-            <Palette class="w-[1.125rem] h-[1.125rem]" />
-          </button>
-        {/if}
         {#if supportsAlpha}
           <button
             class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {alphaBg ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
@@ -1636,19 +1595,6 @@
           </div>
         {/if}
 
-        {#if styleRef && supportsRefImages}
-          <div class="flex items-center gap-2.5 mb-2 px-2">
-            <div class="relative w-14 h-14 rounded-lg overflow-hidden border border-primary bg-secondary shrink-0">
-              <img src={styleRef} alt="style reference" class="w-full h-full object-cover" />
-            </div>
-            <div class="flex items-center gap-2 text-xs text-primary">
-              <Palette class="w-3.5 h-3.5" />
-              <span>Style reference set - its look is applied to the edit</span>
-              <button class="text-txtsecondary hover:text-txtmain" onclick={() => (styleRef = null)}>clear</button>
-            </div>
-          </div>
-        {/if}
-
         {#if dropError}
           <div class="mb-2 p-2 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded text-sm">
             {dropError}
@@ -1656,7 +1602,6 @@
         {/if}
 
         <input type="file" accept="image/*" multiple class="hidden" bind:this={fileInput} onchange={onAttachFiles} />
-        <input type="file" accept="image/*" class="hidden" bind:this={styleInput} onchange={onAttachStyle} />
 
         <Composer
           bind:value={prompt}
