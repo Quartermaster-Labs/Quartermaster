@@ -225,17 +225,21 @@ chip, since a projector is charged on top of whichever file you pick rather than
 "fits, 92k context" / "fits, max context" / "partly on CPU, 32k context" — because a quant that
 fits is only useful at a window you can actually use.
 
-- It comes from `estimateHubFile()` → `GET /api/hub/estimate`, which Range-fetches that file's
+- It comes from `estimateHubFiles()` → `GET /api/hub/estimate`, which Range-fetches each file's
   GGUF header server-side and runs the real sizer against the configured VRAM target (see
   `internal/server/hubapi.md`).
 - `verdictFor()` — size-only, and a **hint rather than an estimate** — is what the cell shows
   until the header lands, or permanently if it can't be read, so the column never blocks on a
   network call. The `title` says which of the two is on screen.
-- `sizeRepo()` kicks the sizings off when a repo is opened: through a small worker pool
-  (`SIZE_CONCURRENCY` 5 — serial filled in one row per second and the table was still settling
-  long after the user had read it, while firing a dozen at once just makes them queue on the
-  browser's per-host connection budget; server-side the concurrent rows collapse into ONE header
-  fetch per model). It skips projectors, aborts if the user opened a different repo mid-flight,
+- `sizeRepo()` kicks the sizings off when a repo is opened, as **one request for the whole repo**:
+  `estimateHubFiles()` sends a repeated `path=` and reads the NDJSON stream back, painting each row
+  as its line arrives. It used to run a pool of five per-row requests, and that was the wrong unit
+  to parallelise in — a browser allows six connections per origin, `/api/events` permanently holds
+  one, and every row waits on a multi-MB CDN round trip, so **while a repo was sizing the page had
+  no socket left and clicking Download appeared to do nothing**. Nothing was gained by spending
+  them either: server-side the rows of a repo already collapse into ONE header fetch per model.
+  Rows arrive in completion order, so the callback matches `e.path` back to its group rather than
+  trusting position. It skips projectors, aborts if the user opened a different repo mid-flight,
   and runs **only on the `llm` tab** — the planner is LLM-shaped (layers, KV, expert share), so
   asking it about a diffusion or TTS gguf would produce a confidently wrong number.
 - The model's own config page remains the authority once the file is on disk.

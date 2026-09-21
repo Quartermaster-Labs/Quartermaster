@@ -307,6 +307,67 @@ export async function estimateHubFile(repo: string, path: string, source = "hf")
   return hubFetch<HubEstimate>(`/api/hub/estimate?${v}`);
 }
 
+/**
+ * estimateHubFiles sizes a whole repo over ONE connection, calling back per row
+ * as the server resolves it.
+ *
+ * Deliberately not `Promise.all` over estimateHubFile: a browser allows six
+ * connections per origin and the /api/events stream holds one for the life of
+ * the page, so a pool of five per-row requests left the page with no socket at
+ * all — pressing Download did nothing until a header fetch completed. The
+ * server answers a repeated `path=` with NDJSON, one object per line, so this
+ * costs one socket and still paints rows as they land instead of all at the end.
+ *
+ * Rows arrive in COMPLETION order, which is why the caller matches on
+ * `e.path` rather than on the order it asked in.
+ */
+export async function estimateHubFiles(
+  repo: string,
+  paths: string[],
+  source: string,
+  onRow: (e: HubEstimate) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  if (paths.length === 0) return;
+  if (paths.length === 1) {
+    // One row is still a plain JSON answer, and asking for it that way keeps the
+    // common single-file case off the streaming path entirely.
+    onRow(await estimateHubFile(repo, paths[0], source));
+    return;
+  }
+  const v = new URLSearchParams({ repo, source });
+  for (const p of paths) v.append("path", p);
+  const res = await fetch(`/api/hub/estimate?${v}`, { signal });
+  if (!res.ok) throw new HubApiError(res.status, (await res.text()) || res.statusText);
+  if (!res.body) return;
+
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  const drain = (last: boolean): void => {
+    // A chunk boundary can fall mid-line, so the tail is held back until the
+    // newline that ends it arrives — except on the final flush.
+    const lines = buf.split("\n");
+    buf = last ? "" : (lines.pop() ?? "");
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        onRow(JSON.parse(line) as HubEstimate);
+      } catch {
+        // A truncated or malformed line costs that row its number, nothing more.
+      }
+    }
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    drain(false);
+  }
+  buf += dec.decode();
+  drain(true);
+}
+
 /** 131072 → "128k". Context windows are quoted in k everywhere else in this UI. */
 export function humanCtx(n: number): string {
   if (!n) return "";
