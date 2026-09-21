@@ -22,7 +22,7 @@
   import Toggle from "../Toggle.svelte";
   import Composer from "./Composer.svelte";
   import { autogrow } from "../../lib/autogrow";
-  import { Image as ImageIcon, Blend, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Palette, Reply, Maximize2, Loader2 } from "lucide-svelte";
+  import { Image as ImageIcon, Blend, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Reply, Maximize2, Loader2, Clock } from "lucide-svelte";
   import { dropZone } from "../../lib/dropZone";
   import { classifyAttachment } from "../../lib/attachments";
   import { scrollFade } from "../../lib/scrollFade";
@@ -155,15 +155,10 @@
   // conditioning, while annotating keeps the conditioning and lets the model
   // redraw the whole frame.
   let maskAnnotate = $state(false);
-  // Transparent-background mode. Sticky (unlike a mask or a style ref, which are
-  // per-send): stickers come in batches, so clearing it every turn would mean
+  // Transparent-background mode. Sticky (unlike a mask, which is per-send):
+  // stickers come in batches, so clearing it every turn would mean
   // re-arming it for each one. It only wraps the prompt, so nothing goes stale.
   let alphaBg = $state(false);
-  // Style-transfer reference (data URL) for the NEXT message: appended as the LAST
-  // ref image and scaffolds the prompt ("apply the style of the last reference").
-  // Ref-edit models only (Qwen-Image-Edit multi-ref / Kontext); ignored elsewhere.
-  let styleRef = $state<string | null>(null);
-  let styleInput = $state<HTMLInputElement | undefined>();
   // A segmentation-capable model (SAM) unlocks the AI-select tools (box/point/
   // lasso) inside the inpaint MaskEditor — same mask output, loaded on demand via
   // /v1/segment. "" = brush-only.
@@ -214,6 +209,11 @@
   // so the rail can flag the generating row. One thread generates at a time.
   let genId = $state<string | null>(null);
   let isGenerating = $derived(genId !== null);
+  // The settings the RUNNING job was dispatched with. The panel is live during a
+  // render, so anything describing what is currently happening (the step bar's
+  // total, the batch counter) has to read this and not the stores — otherwise
+  // retuning the panel for the next prompt rewrites the progress of this one.
+  let runningParams = $state<GenParams | null>(null);
   $effect(() => {
     generatingImageChatId.set(genId);
   });
@@ -338,7 +338,7 @@
       stagePhase = null;
       return;
     }
-    const p = parseSdProgress($upstreamLogs.slice(-6000), $sdStepsStore);
+    const p = parseSdProgress($upstreamLogs.slice(-6000), runningParams?.steps ?? $sdStepsStore);
     stageLabel = p.label;
     stagePhase = p.phase;
     step = p.step;
@@ -441,6 +441,58 @@
     if (threadEl) threadEl.scrollTop = threadEl.scrollHeight;
   });
 
+  // Every setting one dispatch reads, captured the moment the user hits send.
+  //
+  // The settings panel stays live during a generation (so the next prompt can be
+  // set up while this one renders), which only works if a job carries its own
+  // copy of the knobs: reading the stores at dispatch time would mean a queued
+  // prompt silently renders at whatever size/steps the panel happens to show
+  // when it finally starts, not what was on screen when it was queued.
+  type GenParams = {
+    sdapi: boolean;
+    model: string;
+    size: string; // "WxH"
+    negative: string;
+    steps: number;
+    cfg: number;
+    seed: number;
+    batch: number;
+    sampler: string;
+    scheduler: string;
+    loras: SdApiLoraRef[];
+    denoise: number;
+    keepRes: boolean;
+    toneAnchor: boolean;
+    // Model capabilities are snapshotted too: the model picker is live as well,
+    // so a queued job must route (ref-edit vs img2img) by the model it was
+    // queued for, not by whichever one is selected when it runs.
+    refEdit: boolean;
+    annotEdit: boolean;
+    maxDim: number;
+  };
+
+  function captureParams(): GenParams {
+    return {
+      sdapi: isSdapi,
+      model: $selectedModelStore,
+      size: $selectedSizeStore,
+      negative: $sdNegativePromptStore,
+      steps: $sdStepsStore,
+      cfg: $sdCfgScaleStore,
+      seed: $sdSeedStore,
+      batch: batchCount,
+      sampler: $sdSamplerStore,
+      scheduler: $sdSchedulerStore,
+      loras: activeLoras,
+      denoise: $sdDenoiseStore,
+      keepRes: $sdKeepResStore,
+      toneAnchor: $sdToneAnchorStore,
+      refEdit: supportsRefImages,
+      annotEdit: supportsAnnotEdit,
+      maxDim: modelMax,
+    };
+  }
+
   const stripB64 = (dataUrl: string) => dataUrl.replace(/^data:[^,]+,/, "");
 
   // Decode an image's native pixel dims (for keep-resolution edits), snapped to
@@ -448,7 +500,7 @@
   // frame when output dims don't align to the VAE/patch grid, so an off-grid
   // native size (e.g. 1023×769) causes a full redraw instead of a local edit.
   // Accepts a data: URL or a same-origin media path.
-  function imgDims(url: string): Promise<[number, number]> {
+  function imgDims(url: string, maxDim: number): Promise<[number, number]> {
     return new Promise((res, rej) => {
       const im = new Image();
       im.onload = () => {
@@ -457,8 +509,8 @@
         // Clamp the long edge to the model cap so a big source (phone photo)
         // doesn't balloon the gen canvas → slow / VRAM spill. Preserve aspect.
         const long = Math.max(w, h);
-        if (long > modelMax) {
-          const s = modelMax / long;
+        if (long > maxDim) {
+          const s = maxDim / long;
           w = Math.round(w * s);
           h = Math.round(h * s);
         }
@@ -487,54 +539,54 @@
     return stripB64(dataUrl);
   }
 
-  async function genTxt2Img(promptText: string, refs: string[] | undefined, signal: AbortSignal, dims?: [number, number]): Promise<string[]> {
-    const [w, h] = dims ?? $selectedSizeStore.split("x").map(Number);
+  async function genTxt2Img(promptText: string, refs: string[] | undefined, signal: AbortSignal, p: GenParams, dims?: [number, number]): Promise<string[]> {
+    const [w, h] = dims ?? p.size.split("x").map(Number);
     const response = await generateSdImage(
       {
-        model: $selectedModelStore,
+        model: p.model,
         prompt: promptText,
-        negative_prompt: $sdNegativePromptStore || undefined,
+        negative_prompt: p.negative || undefined,
         width: w,
         height: h,
-        steps: $sdStepsStore,
-        cfg_scale: $sdCfgScaleStore,
-        seed: $sdSeedStore,
-        batch_size: batchCount > 1 ? batchCount : undefined,
-        sampler_name: $sdSamplerStore || undefined,
-        scheduler: $sdSchedulerStore || undefined,
+        steps: p.steps,
+        cfg_scale: p.cfg,
+        seed: p.seed,
+        batch_size: p.batch > 1 ? p.batch : undefined,
+        sampler_name: p.sampler || undefined,
+        scheduler: p.scheduler || undefined,
         extra_images: refs && refs.length ? refs : undefined,
-        lora: activeLoras.length ? activeLoras : undefined,
+        lora: p.loras.length ? p.loras : undefined,
       },
       signal
     );
     return (response.images ?? []).map((img) => `data:image/png;base64,${img}`);
   }
 
-  async function genImg2Img(promptText: string, initB64: string, mask: string | null, signal: AbortSignal): Promise<string[]> {
-    let [w, h] = $selectedSizeStore.split("x").map(Number);
-    if ($sdKeepResStore) {
+  async function genImg2Img(promptText: string, initB64: string, mask: string | null, signal: AbortSignal, p: GenParams): Promise<string[]> {
+    let [w, h] = p.size.split("x").map(Number);
+    if (p.keepRes) {
       try {
-        [w, h] = await imgDims(`data:image/png;base64,${initB64}`);
+        [w, h] = await imgDims(`data:image/png;base64,${initB64}`, p.maxDim);
       } catch {
         /* unreadable — fall back to selected size */
       }
     }
     const response = await generateSdImg2Img(
       {
-        model: $selectedModelStore,
+        model: p.model,
         prompt: promptText,
-        negative_prompt: $sdNegativePromptStore || undefined,
+        negative_prompt: p.negative || undefined,
         init_images: [initB64],
-        denoising_strength: $sdDenoiseStore,
+        denoising_strength: p.denoise,
         width: w,
         height: h,
-        steps: $sdStepsStore,
-        cfg_scale: $sdCfgScaleStore,
-        seed: $sdSeedStore,
-        batch_size: batchCount > 1 ? batchCount : undefined,
-        sampler_name: $sdSamplerStore || undefined,
-        scheduler: $sdSchedulerStore || undefined,
-        lora: activeLoras.length ? activeLoras : undefined,
+        steps: p.steps,
+        cfg_scale: p.cfg,
+        seed: p.seed,
+        batch_size: p.batch > 1 ? p.batch : undefined,
+        sampler_name: p.sampler || undefined,
+        scheduler: p.scheduler || undefined,
+        lora: p.loras.length ? p.loras : undefined,
         // Inpaint: only the white-painted region regenerates (invert 0 = as painted).
         ...(mask ? { mask: stripB64(mask), inpainting_mask_invert: 0 } : {}),
       },
@@ -543,8 +595,8 @@
     return (response.images ?? []).map((img) => `data:image/png;base64,${img}`);
   }
 
-  async function genOpenAi(promptText: string, signal: AbortSignal): Promise<string[]> {
-    const response = await generateImage($selectedModelStore, promptText, $selectedSizeStore, signal);
+  async function genOpenAi(promptText: string, signal: AbortSignal, p: GenParams): Promise<string[]> {
+    const response = await generateImage(p.model, promptText, p.size, signal);
     const d = response.data?.[0];
     if (!d) return [];
     if (d.b64_json) return [`data:image/png;base64,${d.b64_json}`];
@@ -563,10 +615,10 @@
   // Dispatch a single generation from a prompt + the source images that feed it.
   // refs = attachments / the reused base (data URLs); empty = fresh txt2img.
   // origin = thread anchor for tone matching (null = nothing to match / this is it).
-  async function generate(promptText: string, refs: string[], origin: string | null, mask: string | null, signal: AbortSignal): Promise<string[]> {
-    if (!isSdapi) return genOpenAi(promptText, signal); // OpenAI route ignores sources
+  async function generate(promptText: string, refs: string[], origin: string | null, mask: string | null, signal: AbortSignal, p: GenParams): Promise<string[]> {
+    if (!p.sdapi) return genOpenAi(promptText, signal, p); // OpenAI route ignores sources
     const src = refs[0];
-    if (!src) return genTxt2Img(promptText, undefined, signal);
+    if (!src) return genTxt2Img(promptText, undefined, signal, p);
     // Ref-edit models (Kontext, Qwen-Image-Edit) re-run off the previous output
     // each turn, and the model/VAE round-trip drifts brightness a little every
     // round → a chain darkens (or brightens) and compounds. Anchor the reused
@@ -583,21 +635,21 @@
     // mask intact, rather than silently sending a whole-frame edit that ignores
     // the region the user painted.
     let annotated: string | null = null;
-    if (mask && maskAnnotate && supportsAnnotEdit) {
+    if (mask && p.annotEdit) {
       try {
         annotated = await buildMaskOverlay(src, mask);
       } catch {
         /* no overlay — keep the mask and inpaint instead */
       }
     }
-    if (supportsRefImages && (!mask || annotated)) {
+    if (p.refEdit && (!mask || annotated)) {
       let anchored = refs;
       // Tone anchoring is skipped for an annotated base on purpose: the overlay
       // tints a chunk of the frame pink, so matching its MEAN back to the origin
       // would read the tint as drift and shift the whole image to cancel it.
       if (annotated) {
         anchored = [annotated, ...refs.slice(1)];
-      } else if ($sdToneAnchorStore && origin && src !== origin) {
+      } else if (p.toneAnchor && origin && src !== origin) {
         try {
           anchored = [await matchColorToRef(src, origin, false), ...refs.slice(1)];
         } catch {
@@ -605,37 +657,39 @@
         }
       }
       let dims: [number, number] | undefined;
-      if ($sdKeepResStore) {
+      if (p.keepRes) {
         try {
-          dims = await imgDims(src);
+          dims = await imgDims(src, p.maxDim);
         } catch {
           /* unreadable — fall back to selected size */
         }
       }
-      return genTxt2Img(promptText, await Promise.all(anchored.map(toB64)), signal, dims);
+      return genTxt2Img(promptText, await Promise.all(anchored.map(toB64)), signal, p, dims);
     }
     // img2img re-encodes the base into latent each turn → brightness/contrast
     // drift compounds. Anchor the base back to the origin's tone first (skipped
     // when src IS the origin or on any canvas failure — fall back raw).
     let base = src;
-    if ($sdToneAnchorStore && origin && src !== origin) {
+    if (p.toneAnchor && origin && src !== origin) {
       try {
         base = await matchColorToRef(src, origin);
       } catch {
         /* keep the un-normalized base */
       }
     }
-    return genImg2Img(promptText, await toB64(base), mask, signal);
+    return genImg2Img(promptText, await toB64(base), mask, signal, p);
   }
 
   // Run a turn already appended at index ti of session `id` and fold its result /
   // error back into the store. Writes by session id, so the reply lands even if
   // the user switched threads mid-generation. genId gates one turn at a time.
-  async function runTurn(id: string, ti: number, promptText: string, refs: string[], mask: string | null, onAbort: () => void, prevTurns: Turn[]) {
+  async function runTurn(id: string, ti: number, promptText: string, refs: string[], mask: string | null, onAbort: () => void, prevTurns: Turn[], p: GenParams) {
     genId = id;
+    runningParams = p;
     abortController = new AbortController();
+    const signal = abortController.signal;
     try {
-      const images = await generate(promptText, refs, originOf(id), mask, abortController.signal);
+      const images = await generate(promptText, refs, originOf(id), mask, signal, p);
       updateTurn(id, ti, { images, secs: elapsed });
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
@@ -650,7 +704,25 @@
       }
     } finally {
       genId = null;
+      runningParams = null;
       abortController = null;
+    }
+
+    // Drain the next queued prompt, whose own runTurn drains the one after it —
+    // a backlog renders in order. Skipped after a Stop: the leftover queue is the
+    // user's to resend or clear, the same rule the chat tab's queue follows.
+    if (!signal.aborted) await drainQueue();
+  }
+
+  // Start the next runnable queued job. Entries whose thread was deleted while
+  // they waited are dropped here rather than stalling everything behind them.
+  async function drainQueue() {
+    while (queue.length > 0) {
+      const [next, ...rest] = queue;
+      queue = rest;
+      if (!sessionById(next.sessionId)) continue;
+      await runJob(next.sessionId, next);
+      return;
     }
   }
 
@@ -695,52 +767,123 @@
     return c.toDataURL("image/png");
   }
 
-  async function send() {
+  // A prompt waiting its turn. Everything that shapes the render is decided when
+  // the user hits send (see GenParams) so the settings panel can keep moving
+  // behind it; `refs === null` is the one deliberate exception — see runJob.
+  type QueuedJob = {
+    sessionId: string;
+    prompt: string; // expanded (transparency clause)
+    raw: string; // what the user typed, for the queue chip and for a restore
+    attached: string[];
+    mask: string | null;
+    maskBase: string | null;
+    maskPreview?: string;
+    refs: string[] | null;
+    params: GenParams;
+  };
+
+  // Prompts typed while a render was running, sent one-by-one as it drains.
+  let queue = $state<QueuedJob[]>([]);
+  // Queue entries belonging to the thread on screen, with their index in the
+  // real queue so the chip's remove button targets the right one.
+  let queuedHere = $derived(
+    queue.map((job, qi) => ({ job, qi })).filter(({ job }) => job.sessionId === $activeImageChatId),
+  );
+
+  // Take the composer's current contents as a job and clear it. Returns null if
+  // there is nothing to send.
+  async function buildJob(): Promise<QueuedJob | null> {
     const promptText = prompt.trim();
-    if (!$selectedModelStore || isGenerating || !promptText) return;
+    const params = captureParams();
+    if (!params.model || !promptText) return null;
     const id = $activeImageChatId;
-    if (!sessionById(id)) return;
+    if (!sessionById(id)) return null;
 
     const base = baseImage;
     const wasAttached = attached;
-    // Style transfer needs the second-image ref slot, so it's ref-edit only.
-    const useStyle = supportsRefImages ? styleRef : null;
     // Use the mask only if it was painted on this exact base (else it's stale).
-    // A style ref forces the whole-frame ref path, so drop any pending mask.
-    const useMask = !useStyle && maskSource === base ? maskData : null;
+    const useMask = maskSource === base ? maskData : null;
+    const wasSkipBase = skipBase;
     prompt = "";
     attached = [];
     skipBase = false;
     maskData = null;
     maskSource = null;
-    styleRef = null;
+
     // Record what actually feeds this turn: attachments if present, else the
-    // reused base image. A style ref rides last (the scaffold points at it).
-    // OpenAI route ignores sources, so none there.
-    const contentRefs = !isSdapi ? [] : wasAttached.length ? wasAttached : base ? [base] : [];
-    const refs = useStyle ? [...contentRefs, useStyle] : contentRefs;
-    // Prepend the style instruction so the model applies the last ref's look to
-    // the rest. Stored into the turn so regenerate/edit reproduce it verbatim.
-    const sentPrompt = useStyle
-      ? `Apply the artistic style, color palette, brushwork, and texture of the final reference image to the other image, keeping its content and composition. ${promptText}`.trim()
-      : promptText;
-    // Transparency wraps LAST, so its closing sentence stays the final clause of
-    // the prompt (where the card puts it) even when a style instruction is also
-    // in play. Like the style text it is stored expanded, so regenerate and edit
+    // reused base image. OpenAI route ignores sources, so none there.
+    //
+    // `null` means "the thread's newest image, resolved when this job actually
+    // runs". A follow-up typed while a render is in flight means the picture that
+    // render is about to produce, not the one on screen now — pinning the base at
+    // queue time would edit the wrong image. Anything the user pinned explicitly
+    // (an attachment, a painted mask, or an opted-out base) is snapshotted, since
+    // those name their source.
+    const lateBase = params.sdapi && !wasAttached.length && !useMask && !wasSkipBase;
+    let refs: string[] | null = null;
+    if (!lateBase) {
+      refs = !params.sdapi ? [] : wasAttached.length ? wasAttached : base ? [base] : [];
+    }
+
+    // The transparency sentence is appended where the model card puts it, at the
+    // very end of the prompt, and is stored EXPANDED so regenerate and edit
     // reproduce the exact prompt that produced the image.
-    const finalPrompt = alphaBg && supportsAlpha ? withAlphaPrompt($selectedModelStore, sentPrompt) : sentPrompt;
+    const finalPrompt = alphaBg && supportsAlpha ? withAlphaPrompt(params.model, promptText) : promptText;
     // Composite base + mask now so the sent turn shows the region that changed.
     const maskPreview = useMask && base ? await buildMaskOverlay(base, useMask) : undefined;
-    const prevTurns = sessionById(id)!.turns;
+
+    return {
+      sessionId: id,
+      prompt: finalPrompt,
+      raw: promptText,
+      attached: wasAttached,
+      mask: useMask,
+      maskBase: useMask ? base : null,
+      maskPreview,
+      refs,
+      params,
+    };
+  }
+
+  // Put an aborted job back where the user can act on it: into the composer if
+  // it is free, else at the head of the queue. Never silently dropped.
+  function restoreJob(job: QueuedJob) {
+    if (prompt.trim() || attached.length) {
+      queue = [job, ...queue];
+      return;
+    }
+    prompt = job.raw;
+    attached = job.attached;
+    maskData = job.mask;
+    maskSource = job.maskBase;
+  }
+
+  // Append the job's turn and render it. Late-bound sources (refs === null) are
+  // resolved here, against the thread as it stands at THIS moment.
+  async function runJob(id: string, job: QueuedJob) {
+    const s = sessionById(id);
+    if (!s) return; // thread deleted under it (drainQueue filters these out)
+    let refs = job.refs;
+    if (refs === null) {
+      const base = [...s.turns].reverse().find((t) => t.images.length)?.images[0] ?? null;
+      refs = base ? [base] : [];
+    }
+    const prevTurns = s.turns;
     const ti = prevTurns.length;
-    appendTurn(id, { prompt: finalPrompt, refs, images: [], maskPreview, model: $selectedModelStore });
-    await runTurn(id, ti, finalPrompt, refs, useMask, () => {
-      prompt = promptText;
-      attached = wasAttached;
-      maskData = useMask;
-      maskSource = useMask ? base : null;
-      styleRef = useStyle;
-    }, prevTurns);
+    appendTurn(id, { prompt: job.prompt, refs, images: [], maskPreview: job.maskPreview, model: job.params.model });
+    await runTurn(id, ti, job.prompt, refs, job.mask, () => restoreJob(job), prevTurns, job.params);
+  }
+
+  async function send() {
+    const job = await buildJob();
+    if (!job) return;
+    // Busy: queue it. The composer is already cleared, so the next prompt can be
+    // typed (and the settings retuned for it) while this one waits.
+    if (isGenerating) {
+      queue = [...queue, job];
+      return;
+    }
+    await runJob(job.sessionId, job);
   }
 
   // Edit a past prompt: rewrite it, drop that turn + everything after, re-run from
@@ -757,8 +900,9 @@
     if (!s) return;
     const prevTurns = s.turns;
     const refs = prevTurns[idx].refs;
-    setTurns(id, [...prevTurns.slice(0, idx), { prompt: promptText, refs, images: [], model: $selectedModelStore }], true);
-    await runTurn(id, idx, promptText, refs, null, () => {}, prevTurns);
+    const params = captureParams();
+    setTurns(id, [...prevTurns.slice(0, idx), { prompt: promptText, refs, images: [], model: params.model }], true);
+    await runTurn(id, idx, promptText, refs, null, () => {}, prevTurns, params);
   }
 
   // Re-run a turn with its same prompt + sources, dropping everything after it
@@ -774,8 +918,9 @@
     // Label with the model that will ACTUALLY run this — generate() always uses
     // the current picker, so keeping the turn's old id after a model switch
     // credits the new image to the wrong model.
-    setTurns(id, [...prevTurns.slice(0, idx), { prompt: t.prompt, refs: t.refs, images: [], model: $selectedModelStore }], true);
-    await runTurn(id, idx, t.prompt, t.refs, null, () => {}, prevTurns);
+    const params = captureParams();
+    setTurns(id, [...prevTurns.slice(0, idx), { prompt: t.prompt, refs: t.refs, images: [], model: params.model }], true);
+    await runTurn(id, idx, t.prompt, t.refs, null, () => {}, prevTurns, params);
   }
 
   function startEdit(idx: number) {
@@ -804,7 +949,11 @@
   // generation halts now. Cost: next gen cold-loads (~30-60s).
   function cancelGeneration() {
     abortController?.abort();
-    const model = $selectedModelStore;
+    // Unload the model that is ACTUALLY rendering, not the one in the picker:
+    // the picker stays live during a generation, so a user who switched it to
+    // set up the next prompt would otherwise unload an idle model and leave the
+    // running one grinding on.
+    const model = runningParams?.model ?? $selectedModelStore;
     if (model) unloadSingleModel(model).catch(() => {});
   }
 
@@ -833,17 +982,6 @@
   function onAttachFiles(event: Event) {
     const input = event.target as HTMLInputElement;
     attachFiles(Array.from(input.files ?? []));
-    input.value = "";
-  }
-
-  function onAttachStyle(event: Event) {
-    const input = event.target as HTMLInputElement;
-    const file = input.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = () => (styleRef = reader.result as string);
-      reader.readAsDataURL(file);
-    }
     input.value = "";
   }
 
@@ -1129,10 +1267,10 @@
                         <span class="inline-block w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></span>
                       {/if}
                       <span class="reason-shimmer-white font-medium">{stageLabel || "Generating…"}</span>
-                      {#if batchCount > 1}
+                      {#if (runningParams?.batch ?? batchCount) > 1}
                         <!-- The step bar restarts once per batch image; say so, or a
                              bar going back to 0/N looks like a stall/restart. -->
-                        <span class="text-[0.6875rem] tabular-nums">×{batchCount}</span>
+                        <span class="text-[0.6875rem] tabular-nums">×{runningParams?.batch ?? batchCount}</span>
                       {/if}
                     </div>
                     {#if totalSteps > 0}
@@ -1160,7 +1298,6 @@
               <span class="text-xs uppercase tracking-wide text-txtsecondary">API</span>
               <Select
                 bind:value={$apiModeStore}
-                disabled={isGenerating}
                 compact
                 options={[
                   { value: "openai", label: "OpenAI" },
@@ -1170,11 +1307,11 @@
             </div>
             <div class="flex flex-col gap-1">
               <span class="text-xs uppercase tracking-wide text-txtsecondary">Aspect</span>
-              <Select bind:value={$aspectStore} disabled={isGenerating} compact options={aspectOptions} />
+              <Select bind:value={$aspectStore} compact options={aspectOptions} />
             </div>
             <div class="flex flex-col gap-1">
               <span class="text-xs uppercase tracking-wide text-txtsecondary">Size</span>
-              <Select bind:value={$longEdgeStore} disabled={isGenerating} compact options={sizeOptions} />
+              <Select bind:value={$longEdgeStore} compact options={sizeOptions} />
             </div>
           </div>
           {#if isSdapi}
@@ -1285,6 +1422,30 @@
       {/snippet}
 
       {#snippet imageTopExtra()}
+        <!-- Prompts queued while this thread renders. Only this thread's: a job
+             keeps the session it was queued for and lands there whichever thread
+             is on screen when it runs. -->
+        {#if queuedHere.length > 0}
+          <div class="flex flex-col gap-1 pb-2">
+            {#each queuedHere as { job, qi } (qi)}
+              <div class="flex items-center gap-2 rounded-2xl bg-secondary/60 border border-card-border px-3 py-1.5 text-[0.8125rem]">
+                <Clock class="w-3.5 h-3.5 shrink-0 text-txtsecondary" />
+                <span class="truncate" use:tip={job.raw}>{job.raw}</span>
+                <span class="ml-auto shrink-0 text-[0.6875rem] tabular-nums text-txtsecondary" use:tip={"Settings captured when this was queued"}>
+                  {job.params.size}{#if job.params.sdapi} · {job.params.steps} steps · cfg {job.params.cfg}{/if}
+                </span>
+                <button
+                  class="shrink-0 p-0.5 rounded-full text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
+                  onclick={() => (queue = queue.filter((_, i) => i !== qi))}
+                  use:tip={"Remove from queue"}
+                  aria-label="Remove from queue"
+                >
+                  <X class="w-3.5 h-3.5" />
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/if}
         {#if isSdapi && (showNegative || $sdNegativePromptStore)}
           <div class="flex items-start gap-2 pb-2 border-b border-card-border">
             <Ban class="w-3.5 h-3.5 mt-1.5 shrink-0 text-txtsecondary" />
@@ -1293,7 +1454,6 @@
               rows="1"
               placeholder="Negative - elements to avoid…"
               bind:value={$sdNegativePromptStore}
-              disabled={isGenerating}
             ></textarea>
             <button
               class="mt-1 shrink-0 text-txtsecondary hover:text-txtmain transition-colors"
@@ -1309,7 +1469,6 @@
         <button
           class="composer-icon-btn"
           onclick={() => fileInput?.click()}
-          disabled={isGenerating}
           use:tip={supportsRefImages ? "Attach reference image(s)" : "Attach a source image to edit"}
         >
           <Paperclip class="w-[1.125rem] h-[1.125rem]" />
@@ -1318,27 +1477,15 @@
           <button
             class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {maskData && maskSource === baseImage ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
             onclick={() => (showMask = true)}
-            disabled={isGenerating}
             use:tip={segmentModel ? "Inpaint - mask a region to change (brush or AI select)" : "Inpaint - mask a region to change (keeps the rest)"}
           >
             <Brush class="w-[1.125rem] h-[1.125rem]" />
-          </button>
-        {/if}
-        {#if isSdapi && supportsRefImages}
-          <button
-            class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {styleRef ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
-            onclick={() => styleInput?.click()}
-            disabled={isGenerating}
-            use:tip={"Style transfer - apply the look of a reference image to the edit"}
-          >
-            <Palette class="w-[1.125rem] h-[1.125rem]" />
           </button>
         {/if}
         {#if supportsAlpha}
           <button
             class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {alphaBg ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
             onclick={() => (alphaBg = !alphaBg)}
-            disabled={isGenerating}
             use:tip={"Transparent background - renders a real alpha channel (PNG)"}
             aria-pressed={alphaBg}
           >
@@ -1448,19 +1595,6 @@
           </div>
         {/if}
 
-        {#if styleRef && supportsRefImages}
-          <div class="flex items-center gap-2.5 mb-2 px-2">
-            <div class="relative w-14 h-14 rounded-lg overflow-hidden border border-primary bg-secondary shrink-0">
-              <img src={styleRef} alt="style reference" class="w-full h-full object-cover" />
-            </div>
-            <div class="flex items-center gap-2 text-xs text-primary">
-              <Palette class="w-3.5 h-3.5" />
-              <span>Style reference set - its look is applied to the edit</span>
-              <button class="text-txtsecondary hover:text-txtmain" onclick={() => (styleRef = null)}>clear</button>
-            </div>
-          </div>
-        {/if}
-
         {#if dropError}
           <div class="mb-2 p-2 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded text-sm">
             {dropError}
@@ -1468,19 +1602,18 @@
         {/if}
 
         <input type="file" accept="image/*" multiple class="hidden" bind:this={fileInput} onchange={onAttachFiles} />
-        <input type="file" accept="image/*" class="hidden" bind:this={styleInput} onchange={onAttachStyle} />
 
         <Composer
           bind:value={prompt}
           bind:textareaEl={promptEl}
-          placeholder={turns.length ? "Describe a change…" : "Describe the image you want…"}
-          textareaDisabled={isGenerating}
+          placeholder={isGenerating ? "Queue a prompt…" : turns.length ? "Describe a change…" : "Describe the image you want…"}
           onKeydown={handleKeyDown}
           onPaste={handlePaste}
           bind:modelValue={$selectedModelStore}
           modelPlaceholder="Select an image model..."
           category="image"
           busy={isGenerating}
+          modelDisabled={false}
           onStop={cancelGeneration}
           stopTitle="Stop (unloads the model to interrupt)"
           bind:showSettings

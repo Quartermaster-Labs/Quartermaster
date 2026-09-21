@@ -25,8 +25,23 @@ reasoning-title mop-up (up to `titlegenMopupBudget`, 2.5s of CPU model) and the 
 on `done` meant the footer, Sources, the ask wizard and every rendered diagram appeared seconds
 after the last token, which reads as a hang.
 
-The **composer** deliberately still gates on `genId` (`isStreaming` in `ChatInterface`): the server
-runs one turn per user, so the next send has to wait for the real end of this one.
+The **composer** no longer blocks on `genId`: the server runs one turn per user, so a send during a
+live turn is **queued** instead of rejected (see below).
+
+### The send queue
+
+`queued: QueuedMsg[]` (`{ content, preview }`). `sendMessage()` builds the full multimodal content
+first (document `<file>` blocks, image parts, the reply quote) and only then decides: if a turn is
+in flight **for this chat** it pushes the built message and clears the composer, so attachments and
+the quote are never stranded. A send aimed at a *different* chat while one is streaming still
+toasts and bails: the server runs one turn per user. `runTurn`'s tail drains the queue unless the
+turn was aborted, so **Stop** keeps the backlog instead of firing it. The chips above the composer
+show `preview` (text, else doc names, else "N images") plus a paperclip when the queued content
+carries images.
+
+Temperature, the tool menu and attach stay live during a turn because they are read at dispatch.
+The **model picker** is still locked: chat has no per-message model snapshot, so switching mid-turn
+would retarget the queued messages. (The image tab solves this differently: it snapshots.)
 
 ### Generation is server-run
 

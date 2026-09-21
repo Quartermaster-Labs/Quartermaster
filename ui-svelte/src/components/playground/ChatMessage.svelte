@@ -15,6 +15,7 @@
   import YouTubeEmbed from "./YouTubeEmbed.svelte";
   import { extractYouTubeIds } from "../../lib/youtube";
   import { autogrow } from "../../lib/autogrow";
+  import { portal } from "../../lib/portal";
   import { splitAsk } from "../../lib/askBlock";
   import AskWizard from "./AskWizard.svelte";
   import { splitProducts, repairProductUrls } from "../../lib/productBlock";
@@ -49,7 +50,9 @@
     busyLabel?: string;
     modelReady?: boolean;
     hasVisionInput?: boolean;
-    onEdit?: (newContent: string) => void;
+    // `images` is the kept attachment list: the edit UI can drop images, so a
+    // save carries the survivors, not just the text.
+    onEdit?: (newContent: string, images: string[]) => void;
     onRegenerate?: () => void;
     onReply?: () => void;
     // Set only on the last finished assistant turn: enables the ```ask wizard,
@@ -111,10 +114,11 @@
   let ytIds = $derived(extractYouTubeIds(stripThinking(displayContent)));
   let imageUrls = $derived(getImageUrls(content));
   let hasImages = $derived(imageUrls.length > 0);
-  // Editing rewrites the whole message string; with attachments that would put
-  // the raw document text in the textarea (or drop it on save), so it is off for
-  // those messages exactly as it already is for images.
-  let canEdit = $derived(onEdit !== undefined && !hasImages && (userFiles?.files.length ?? 0) === 0);
+  // Editing rewrites the whole message string; for a <file> block that would put
+  // the raw document text in the textarea (or drop it on save), so it stays off
+  // for documents. Images are fine: they are separate content parts, shown as
+  // removable thumbnails in the editor and handed back to onEdit on save.
+  let canEdit = $derived(onEdit !== undefined && (userFiles?.files.length ?? 0) === 0);
   let openFile = $state<string | null>(null);
 
   // The assistant turn is one string holding, in order: inline <think> blocks
@@ -504,6 +508,11 @@
 
   // Leaving the page mid-clip must not keep the audio (or its object URL) alive.
   $effect(() => () => stopSpeak());
+  // The lightbox locks body scroll; if this bubble is torn down while it is open
+  // (switching chats, a session reload) nothing else would ever unlock it.
+  $effect(() => () => {
+    if (modalImageUrl) document.body.style.overflow = "";
+  });
   // Vertical offset (px, relative to the bubble top) the reply button tracks to.
   // Snaps to the CENTER of the text line under the cursor (via caret hit-testing)
   // so it steps line-by-line, and is clamped inside the bubble so it can't drift
@@ -526,6 +535,9 @@
   let overAsk = $state(false);
   let isEditing = $state(false);
   let editContent = $state("");
+  // Attachments the edit keeps. Local copy so cancelling restores the original
+  // set — the message itself is only rewritten on save.
+  let editImages = $state<string[]>([]);
   let showReasoning = $state(false);
   let modalImageUrl = $state<string | null>(null);
 
@@ -593,22 +605,35 @@
     }
   }
 
+  // An image can go only if something is left to send: the turn is re-run, and a
+  // user message with no text and no picture is not a message.
+  let removableImages = $derived(imageUrls.length > 1 || textContent.trim().length > 0);
+
+  function removeSentImage(url: string) {
+    if (!onEdit) return;
+    onEdit(textContent.trim(), imageUrls.filter((u) => u !== url));
+  }
+
   function startEdit() {
     editContent = textContent;
+    editImages = [...imageUrls];
     isEditing = true;
   }
 
   function cancelEdit() {
     isEditing = false;
     editContent = "";
+    editImages = [];
   }
 
   function saveEdit() {
     // Save = re-prompt: editMessage slices off later turns and regenerates from
-    // here. Always fire (even unchanged text → a retry), never a silent no-op.
-    if (onEdit) onEdit(editContent.trim());
+    // this message, so the edited text (and whatever images survived) is what
+    // the model sees.
+    if (onEdit) onEdit(editContent.trim(), [...editImages]);
     isEditing = false;
     editContent = "";
+    editImages = [];
   }
 
   function openModal(imageUrl: string) {
@@ -1111,6 +1136,26 @@
         </div>
       {:else if isEditing}
         <div class="flex w-full min-w-0 flex-col gap-2">
+          <!-- Attachments, each with its own remove button: an edit that can't
+               drop a picture leaves the model looking at an image the rewritten
+               text no longer talks about. Keyed by url so removing one doesn't
+               re-render (and re-decode) the others. -->
+          {#if editImages.length > 0}
+            <div class="flex flex-wrap gap-2">
+              {#each editImages as imageUrl (imageUrl)}
+                <div class="relative">
+                  <img src={imageUrl} alt="" class="max-h-24 rounded border border-white/20" />
+                  <button
+                    class="absolute -top-1.5 -right-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-white hover:bg-black/90"
+                    onclick={() => (editImages = editImages.filter((u) => u !== imageUrl))}
+                    use:tip={"Remove image"}
+                  >
+                    <X class="w-3 h-3" />
+                  </button>
+                </div>
+              {/each}
+            </div>
+          {/if}
           <textarea
             class="w-full px-3 py-2 rounded border border-card-border bg-surface text-txtmain focus:outline-none focus:ring-2 focus:ring-primary resize-none overflow-hidden"
             rows="1"
@@ -1139,16 +1184,32 @@
         {#if hasImages}
           <div class="mb-2 flex flex-wrap gap-2">
             {#each imageUrls as imageUrl, idx (idx)}
-              <button
-                onclick={() => openModal(imageUrl)}
-                class="cursor-pointer rounded border border-white/20 hover:opacity-80 transition-opacity"
-              >
-                <img
-                  src={imageUrl}
-                  alt="Image {idx + 1}"
-                  class="max-w-[200px] rounded"
-                />
-              </button>
+              <div class="relative">
+                <button
+                  onclick={() => openModal(imageUrl)}
+                  class="block cursor-pointer rounded border border-white/20 hover:opacity-80 transition-opacity"
+                >
+                  <img
+                    src={imageUrl}
+                    alt="Image {idx + 1}"
+                    class="max-w-[200px] rounded"
+                  />
+                </button>
+                <!-- Drop an attachment straight from a sent message. It goes
+                     through the same path as an edit, so the turn is re-run
+                     without that picture (and, like edit, does nothing while a
+                     turn is streaming). Not offered if removing it would leave
+                     the message with nothing in it. -->
+                {#if canEdit && removableImages}
+                  <button
+                    class="absolute -top-1.5 -right-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-white hover:bg-black/90"
+                    onclick={() => removeSentImage(imageUrl)}
+                    use:tip={"Remove image and answer again"}
+                  >
+                    <X class="w-3 h-3" />
+                  </button>
+                {/if}
+              </div>
             {/each}
           </div>
         {/if}
@@ -1237,8 +1298,13 @@
 
 <!-- Full-size image modal -->
 {#if modalImageUrl}
+  <!-- use:portal is load-bearing: the chat scroller carries a mask-image
+       (.scroll-fade-b), which makes it the containing block for fixed-position
+       descendants — declared in place, this "full-screen" overlay sized to the
+       message list and got clipped by the fade. See lib/portal.ts. -->
   <div
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-6"
+    use:portal
     onclick={(e) => closeModal(e)}
     onkeydown={handleModalKeyDown}
     role="button"
@@ -1254,7 +1320,7 @@
     <img
       src={modalImageUrl}
       alt=""
-      class="max-w-full max-h-full rounded pointer-events-none"
+      class="max-w-full max-h-full object-contain rounded pointer-events-none"
     />
   </div>
 {/if}
