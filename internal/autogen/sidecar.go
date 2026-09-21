@@ -125,8 +125,14 @@ type sidecar struct {
 	// SettingsPatch for the usual reason — a VRAM reset must not change which
 	// socket the next start binds — and read by main() before the config exists.
 	// See appsettings.go.
-	App       *AppSettings `yaml:"app,omitempty"`
-	Overrides []Override   `yaml:"overrides"`
+	// PromptEnhancers, when non-nil, replaces the generate file's
+	// settings.promptEnhancers wholesale (the Settings page sends the full list).
+	// Top-level for the usual reason - a dashboard VRAM reset must not delete the
+	// user's system prompts - and omitempty so removing the last enhancer reverts
+	// to whatever the generate file declares.
+	PromptEnhancers []PromptEnhancer `yaml:"promptEnhancers,omitempty"`
+	App             *AppSettings     `yaml:"app,omitempty"`
+	Overrides       []Override       `yaml:"overrides"`
 }
 
 // BackendExes holds the dashboard-editable backend executable paths. Empty field
@@ -259,6 +265,57 @@ func UpsertSidecarBackendSources(generatePath string, list []BackendSource) erro
 		sc.BackendSources = nil
 	} else {
 		sc.BackendSources = cleaned
+	}
+	return writeSidecar(generatePath, sc)
+}
+
+// LoadSidecarPromptEnhancers returns the UI-owned prompt-enhancer list, or nil
+// when the sidecar has none (in which case the generate file's own
+// settings.promptEnhancers stands).
+func LoadSidecarPromptEnhancers(generatePath string) ([]PromptEnhancer, error) {
+	sc, err := loadSidecar(generatePath)
+	if err != nil {
+		return nil, err
+	}
+	return sc.PromptEnhancers, nil
+}
+
+// UpsertSidecarPromptEnhancers replaces the enhancer list wholesale (the
+// Settings page sends all of it).
+//
+// Rows naming no model are dropped, and a duplicate model id keeps the LAST
+// occurrence: the list is keyed by model id downstream (one enhancer per model),
+// so two rows for one id are an edit that was appended rather than replaced, and
+// letting both persist would make the generated config depend on map iteration
+// order. Order is otherwise preserved, since the UI renders the list as written.
+//
+// The system prompt is NOT trimmed. Leading indentation and a trailing newline
+// are part of a published PE prompt, and quietly reshaping it changes what the
+// model was trained to see.
+func UpsertSidecarPromptEnhancers(generatePath string, list []PromptEnhancer) error {
+	sc, err := loadSidecar(generatePath)
+	if err != nil {
+		return err
+	}
+	seen := map[string]int{}
+	cleaned := make([]PromptEnhancer, 0, len(list))
+	for _, e := range list {
+		e.Model = strings.TrimSpace(e.Model)
+		e.Name = strings.TrimSpace(e.Name)
+		if e.Model == "" {
+			continue
+		}
+		if at, dup := seen[strings.ToLower(e.Model)]; dup {
+			cleaned[at] = e
+			continue
+		}
+		seen[strings.ToLower(e.Model)] = len(cleaned)
+		cleaned = append(cleaned, e)
+	}
+	if len(cleaned) == 0 {
+		sc.PromptEnhancers = nil
+	} else {
+		sc.PromptEnhancers = cleaned
 	}
 	return writeSidecar(generatePath, sc)
 }

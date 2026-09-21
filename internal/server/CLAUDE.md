@@ -34,6 +34,26 @@ Also here: `turns_design.md` — the turn runner's design notes.
 - **A new `/api/*` ops or editor route goes on `adminChain`, not `apiChain`.** API keys gate the
   inference API only — they never cover the admin surface, which is gated by remote address.
   Getting this wrong publishes the config editor to whatever the port is bound to.
+- **A prompt enhancer is resolved, never executed, server-side.** `promptEnhancerFor`
+  (`apigroup.go`) turns a model's `promptEnhancer` / `promptEnhancerEdit` ids into the payloads
+  shipped on `/v1/models` as `apiModel.promptEnhancer` and `.promptEnhancerEdit` (the same helper,
+  called twice); the rewrite request itself is made by the CLIENT
+  (`ui-svelte/src/lib/promptEnhance.ts`). Rewriting inside the image route would hide the rewrite:
+  these models fail by confidently inventing details, and the only symptom would be a picture that
+  is subtly not what was asked for. A blank id, or `autogen.PEDisabled` (`"none"`), yields `nil`
+  and hides the button; every other id resolves: to its settings row when there is one (canonical
+  casing, name, system prompt, `vision`) and to itself when there is not. The system prompt ranks
+  the image model's own `promptEnhancerPrompt` / `promptEnhancerEditPrompt` (`ModelConfig`) above
+  the row's, because one rewriter serves checkpoints that want very different output, and a
+  row-less id whose NAME says `i2i` (`autogen.PromptEnhancerID`) is sent the reference image
+  (`vision: true`); a row's explicit `vision: false` is a deliberate statement and is left alone.
+- **Name-detected candidates are served from the loaded catalog.**
+  `GET /api/prompt-enhancers/detected` (`configapi_enhancers.go`, adminChain) reports every
+  `cfg.Models` id `autogen.PromptEnhancerID` recognises as `{model, direction, imageModel}`,
+  stable-sorted because map iteration is not. It reads the LOADED config rather than rescanning
+  disk, so it can only suggest ids that actually resolve, and it needs no `-generate` (the table's
+  own GET/PUT do). Suggestions only: the model editor's fields stay free text, because no
+  classifier covers every publisher's naming.
 - **Reload is in-place.** `Server.ApplyConfig` swaps the config pointer and the handler on the one
   long-lived `Server`; SSE streams, metrics history, saved KV and running processes survive. An
   invalid config touches nothing.

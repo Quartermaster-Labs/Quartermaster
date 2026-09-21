@@ -22,9 +22,10 @@
   import Toggle from "../Toggle.svelte";
   import Composer from "./Composer.svelte";
   import { autogrow } from "../../lib/autogrow";
-  import { Image as ImageIcon, Blend, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Reply, Maximize2, Loader2, Clock } from "lucide-svelte";
+  import { Image as ImageIcon, Blend, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Reply, Maximize2, Loader2, Clock, Wand2, Undo2 } from "lucide-svelte";
   import { dropZone } from "../../lib/dropZone";
   import { classifyAttachment } from "../../lib/attachments";
+  import { enhancePrompt } from "../../lib/promptEnhance";
   import { scrollFade } from "../../lib/scrollFade";
   import type { ImageApiMode, SdApiLora, SdApiLoraRef } from "../../lib/types";
   import { ASPECTS, SIZE_TIERS, aspectDims, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, DEFAULT_MAX_DIM, MAX_BATCH, defaultsFor, withAlphaPrompt, settingsFor, parseSdProgress, fmtDur } from "./imageGen";
@@ -389,6 +390,88 @@
   // The hint line under the settings panel shows the SAME resolution the reset
   // effect applies, so what it claims is the model default is what a switch
   // actually sets. maxDim has no launch-line equivalent, so it stays table-only.
+  let enhancing = $state(false);
+  // Its own slot rather than dropError: that one is cleared on a 4s timer tied
+  // to a drop, and a failed rewrite should stay on screen until it is read.
+  let enhanceError = $state("");
+  // The pre-rewrite prompt, kept so one click undoes the rewrite. Cleared as
+  // soon as the user edits the box themselves or sends the turn, because after
+  // that "revert" would throw away work rather than undo a machine edit.
+  let preEnhance = $state<string | null>(null);
+  // What the enhancer produced, so the revert offer can tell an untouched
+  // rewrite from one the user has since edited.
+  let enhancedText = $state<string | null>(null);
+  // The aspect the enhancer moved the framing to, and what it was before. A
+  // structured enhancer returns the ratio it wrote the prompt FOR, so applying
+  // it keeps the two agreeing; but framing is a control the user sets by hand,
+  // so a silent change is a control moving on its own. Shown, and reverted with
+  // the prompt, so the whole rewrite undoes as one action.
+  let enhancedAspect = $state<string | null>(null);
+  let preEnhanceAspect = $state<string | null>(null);
+  $effect(() => {
+    if (preEnhance !== null && prompt !== enhancedText) {
+      preEnhance = null;
+      enhancedText = null;
+      // Deliberately NOT reverting the aspect here. Editing the rewritten text
+      // is accepting the rewrite and continuing from it, so the framing it was
+      // written for should stay; only an explicit revert puts it back.
+      enhancedAspect = null;
+      preEnhanceAspect = null;
+    }
+  });
+
+  // Nearest supported aspect to a free-form "W:H". The enhancer may answer with
+  // a ratio the picker has no entry for (Qwen's prompt derives things like
+  // "9:2" for panel grids), and refusing those would drop the field on exactly
+  // the layouts it exists to describe.
+  function snapAspect(ratio: string): string | null {
+    const [w, h] = ratio.split(":").map((n) => Number(n.trim()));
+    if (!(w > 0) || !(h > 0)) return null;
+    const r = w / h;
+    return ASPECTS.reduce((best, a) =>
+      Math.abs(a.w / a.h - r) < Math.abs(best.w / best.h - r) ? a : best
+    ).value;
+  }
+
+  async function runEnhance() {
+    if (!enhancer || enhancing || isGenerating) return;
+    enhancing = true;
+    enhanceError = "";
+    try {
+      // baseImage is the edit target; the remaining attachments are the extra
+      // refs. Text-only enhancers ignore the list entirely.
+      const refs = [baseImage, ...attached.filter((a) => a !== baseImage)].filter(
+        (x): x is string => !!x,
+      );
+      const r = await enhancePrompt(enhancer, prompt, refs);
+      prompt = r.prompt;
+      enhancedText = r.prompt;
+      preEnhance = r.original;
+      // ratioFollow means "match an input image", which is what an img2img turn
+      // already does, so there is nothing to set and nothing to announce.
+      const snapped = r.ratio && !r.ratioFollow ? snapAspect(r.ratio) : null;
+      if (snapped && snapped !== $aspectStore) {
+        preEnhanceAspect = $aspectStore;
+        enhancedAspect = snapped;
+        $aspectStore = snapped;
+      }
+    } catch (e) {
+      enhanceError = e instanceof Error ? e.message : String(e);
+    } finally {
+      enhancing = false;
+    }
+  }
+
+  function revertEnhance() {
+    if (preEnhance === null) return;
+    prompt = preEnhance;
+    preEnhance = null;
+    enhancedText = null;
+    if (preEnhanceAspect !== null) $aspectStore = preEnhanceAspect;
+    enhancedAspect = null;
+    preEnhanceAspect = null;
+  }
+
   let modelGen = $derived($models.find((m) => m.id === $selectedModelStore)?.genDefaults);
   let modelPreset = $derived(defaultsFor($selectedModelStore));
   // Annotate needs BOTH: a model that reads marked regions, and the reference
@@ -424,6 +507,22 @@
   // (unless the user opted out via skipBase).
   let baseImage = $derived(
     attached[0] ?? (skipBase ? null : [...turns].reverse().find((t) => t.images.length)?.images[0]) ?? null
+  );
+
+  // The rewrite model this image model opts into, resolved server-side. Absent
+  // => the button does not render at all, rather than rendering disabled: an
+  // enhancer is opt-in per model and most models will never have one.
+  //
+  // A model may name one per DIRECTION (Qwen ships PE-T2I and PE-I2I, which are
+  // not interchangeable), so the pick follows the mode the render itself will
+  // use: a reference image attached means this is an edit. Either half alone
+  // covers both directions, since dropping the button on a model that clearly
+  // has an enhancer reads as a bug, and the rewrite is reviewable anyway.
+  let enhancerPair = $derived($models.find((m) => m.id === $selectedModelStore));
+  let enhancer = $derived(
+    baseImage
+      ? (enhancerPair?.promptEnhancerEdit ?? enhancerPair?.promptEnhancer)
+      : (enhancerPair?.promptEnhancer ?? enhancerPair?.promptEnhancerEdit),
   );
 
   $effect(() => {
@@ -1466,6 +1565,34 @@
       {/snippet}
 
       {#snippet imageLeftButtons()}
+        {#if enhancer}
+          <button
+            class="composer-icon-btn"
+            onclick={runEnhance}
+            disabled={enhancing || isGenerating || !prompt.trim()}
+            use:tip={isGenerating
+              ? "Wait for this render to finish: the enhancer is a separate model, and starting it now would make it queue behind the image model."
+              : `Enhance the prompt with ${enhancer.name}${baseImage ? " (img2img rewrite)" : " (txt2img rewrite)"}${enhancer.vision && baseImage ? ", which reads the reference image" : ""}. Rewrites the box, so you can read and edit it before rendering.`}
+          >
+            {#if enhancing}
+              <Loader2 class="w-[1.125rem] h-[1.125rem] animate-spin" />
+            {:else}
+              <Wand2 class="w-[1.125rem] h-[1.125rem]" />
+            {/if}
+          </button>
+          {#if preEnhance !== null}
+            <button
+              class="composer-icon-btn"
+              onclick={revertEnhance}
+              disabled={enhancing}
+              use:tip={preEnhanceAspect !== null
+                ? `Revert to the prompt you wrote, and the aspect ratio back to ${preEnhanceAspect}`
+                : "Revert to the prompt you wrote"}
+            >
+              <Undo2 class="w-[1.125rem] h-[1.125rem]" />
+            </button>
+          {/if}
+        {/if}
         <button
           class="composer-icon-btn"
           onclick={() => fileInput?.click()}
@@ -1598,6 +1725,28 @@
         {#if dropError}
           <div class="mb-2 p-2 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded text-sm">
             {dropError}
+          </div>
+        {/if}
+
+        {#if enhanceError}
+          <div class="mb-2 p-2 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded text-sm flex items-start gap-2">
+            <span class="flex-1">{enhanceError}</span>
+            <button class="shrink-0 opacity-70 hover:opacity-100" onclick={() => (enhanceError = "")} aria-label="Dismiss">
+              <X class="w-3.5 h-3.5" />
+            </button>
+          </div>
+        {/if}
+
+        <!-- A control moved on its own, so it says so. Without this the aspect
+             picker silently disagrees with what the user last set it to. -->
+        {#if enhancedAspect}
+          <div class="mb-2 p-2 bg-surface-2 border border-card-border text-txtsecondary rounded text-sm flex items-start gap-2">
+            <span class="flex-1">
+              {enhancer?.name ?? "The enhancer"} wrote this prompt for <strong class="text-txtmain">{enhancedAspect}</strong>, so the aspect ratio was changed to match.
+            </span>
+            <button class="shrink-0 opacity-70 hover:opacity-100" onclick={() => (enhancedAspect = null)} aria-label="Dismiss">
+              <X class="w-3.5 h-3.5" />
+            </button>
           </div>
         {/if}
 

@@ -193,6 +193,19 @@ type Settings struct {
 	// none of these; archComponents (image.go) maps each family to the fields it
 	// needs. A per-model Override component path still wins over the pool.
 	Encoders EncoderSet `yaml:"encoders"`
+	// PromptEnhancers are the rewrite models an image model may hand its prompt
+	// to before rendering (Qwen ships one per direction: PE-I2I for edits, PE-T2I
+	// for text-to-image). Declared ONCE here, keyed by the catalog model id,
+	// because the thing that makes an enhancer usable is the fixed system prompt
+	// it was trained against: it is a property of the enhancer, not of the image
+	// model, and pasting it into every image model's override would be the same
+	// string twenty times. An image model names one via Override.PromptEnhancer.
+	//
+	// The model id is NOT validated here. Generation must not fail because an
+	// enhancer was renamed or its gguf removed - the entry simply resolves to
+	// nothing and the image model renders without one, which is the pre-feature
+	// behaviour.
+	PromptEnhancers []PromptEnhancer `yaml:"promptEnhancers"`
 	// LoraDir is the fleet-wide `--lora-model-dir` for image models: the folder
 	// sd-server scans for LoRA .safetensors, which is what `/sdapi/v1/loras`
 	// lists and what a request's `lora: [{path,multiplier}]` refs resolve against.
@@ -224,6 +237,15 @@ type Settings struct {
 	// block from explicit paths; no VRAM planner or arch detection runs. Persisted
 	// here (not a runtime hack) so a regen keeps them.
 	ExtraImageModels []ExtraImageModel `yaml:"extraImageModels"`
+	// autoEnhancers is the name-based prompt-enhancer pairing table built by
+	// Generate from the rows it just discovered (see promptenhancer.go), read by
+	// the image emitters to pre-fill a model that names no enhancer of its own.
+	//
+	// Unexported on purpose: it is DERIVED from what is on disk this run, so it
+	// must never round-trip through the settings file a user edits. A Settings
+	// built anywhere else (the UI, a test) simply has none, and auto-pairing is
+	// then off rather than stale.
+	autoEnhancers autoEnhancers
 }
 
 // ExtraImageModel is one hand-declared sd-server image model (see
@@ -233,23 +255,33 @@ type Settings struct {
 // that still needs an external VAE (HiDream-O1 bakes its text model but no VAE)
 // just sets VaePath. Placement tri-states mirror Override ("" => on).
 type ExtraImageModel struct {
-	Name           string  `yaml:"name"`
-	ModelPath      string  `yaml:"modelPath"`
-	ModelFlag      string  `yaml:"modelFlag"` // "" => "-m"; or "--diffusion-model"
-	VaePath        string  `yaml:"vaePath"`   // --vae
-	LlmPath        string  `yaml:"llmPath"`   // --llm
-	ClipLPath      string  `yaml:"clipLPath"` // --clip_l
-	ClipGPath      string  `yaml:"clipGPath"` // --clip_g
-	T5Path         string  `yaml:"t5Path"`    // --t5xxl
-	LoraDir        string  `yaml:"loraDir"`   // --lora-model-dir ("" => settings.loraDir, else the model's own dir)
-	VramTargetGB   float64 `yaml:"vramTargetGB"`
-	DefaultCfg     float64 `yaml:"defaultCfg"`
-	DefaultSteps   int     `yaml:"defaultSteps"`
-	DefaultSampler string  `yaml:"defaultSampler"` // --sampling-method
-	DefaultWidth   int     `yaml:"defaultWidth"`
-	DefaultHeight  int     `yaml:"defaultHeight"`
-	DiffusionFa    string  `yaml:"diffusionFa"` // "" => on, "off" => off
-	VaeTiling      string  `yaml:"vaeTiling"`   // "" => on, "off" => off
+	Name      string `yaml:"name"`
+	ModelPath string `yaml:"modelPath"`
+	ModelFlag string `yaml:"modelFlag"` // "" => "-m"; or "--diffusion-model"
+	VaePath   string `yaml:"vaePath"`   // --vae
+	LlmPath   string `yaml:"llmPath"`   // --llm
+	ClipLPath string `yaml:"clipLPath"` // --clip_l
+	ClipGPath string `yaml:"clipGPath"` // --clip_g
+	T5Path    string `yaml:"t5Path"`    // --t5xxl
+	LoraDir   string `yaml:"loraDir"`   // --lora-model-dir ("" => settings.loraDir, else the model's own dir)
+	// PromptEnhancer names the settings.promptEnhancers entry this model sends
+	// its prompt through before rendering. "" => none. See Override.PromptEnhancer.
+	PromptEnhancer string `yaml:"promptEnhancer"`
+	// PromptEnhancerEdit is the img2img half of the pair. See
+	// Override.PromptEnhancerEdit.
+	PromptEnhancerEdit string `yaml:"promptEnhancerEdit"`
+	// PromptEnhancerPrompt / PromptEnhancerEditPrompt are this model's own system
+	// prompts for the two directions. See Override.PromptEnhancerPrompt.
+	PromptEnhancerPrompt     string  `yaml:"promptEnhancerPrompt"`
+	PromptEnhancerEditPrompt string  `yaml:"promptEnhancerEditPrompt"`
+	VramTargetGB             float64 `yaml:"vramTargetGB"`
+	DefaultCfg               float64 `yaml:"defaultCfg"`
+	DefaultSteps             int     `yaml:"defaultSteps"`
+	DefaultSampler           string  `yaml:"defaultSampler"` // --sampling-method
+	DefaultWidth             int     `yaml:"defaultWidth"`
+	DefaultHeight            int     `yaml:"defaultHeight"`
+	DiffusionFa              string  `yaml:"diffusionFa"` // "" => on, "off" => off
+	VaeTiling                string  `yaml:"vaeTiling"`   // "" => on, "off" => off
 	// Video VRAM levers. "" means OFF here, NOT auto: an extra model is
 	// hand-declared and never goes through the gguf tensor scan, so nothing on
 	// this path can tell a video DiT from an image one. Set "on" explicitly.
@@ -283,6 +315,37 @@ type EncoderSet struct {
 	Flux2Vae  string `yaml:"flux2Vae"`  // --vae for flux.2 (32-ch latent, NOT flux.1's fluxVae)
 	VideoVae  string `yaml:"videoVae"`  // --vae for a 3D video model (MiniMax-H3's transformer VAE)
 	AudioVae  string `yaml:"audioVae"`  // --audio-vae: decodes the soundtrack latent of an audio-capable video model
+}
+
+// PromptEnhancer is one rewrite model: a catalog model id plus the fixed system
+// prompt it was trained to run under.
+//
+// The system prompt is REQUIRED in practice even though nothing enforces it. A
+// PE model without its own prompt is not a weaker enhancer, it is a generic
+// chat model that answers the instruction ("make her smile" -> "Sure, here's how
+// you could...") instead of rewriting it, and that answer would be pasted
+// straight into the prompt box. Qwen ships the exact text as system_prompt.txt
+// in each PE repo.
+type PromptEnhancer struct {
+	// Model is the catalog model id, exactly as it appears in the generated
+	// config and /v1/models. Case-insensitive on lookup, since the ids are
+	// filename-derived and the UI copies them around.
+	Model string `yaml:"model"`
+	// Name is an optional display label for the picker ("Qwen PE - edits").
+	// Empty => the UI shows Model.
+	Name string `yaml:"name"`
+	// SystemPrompt is the fixed instruction the model runs under. Multi-line;
+	// written as a YAML block scalar.
+	SystemPrompt string `yaml:"systemPrompt"`
+	// Vision declares that this enhancer reads the INPUT IMAGE as well as the
+	// instruction, so the client attaches the reference image(s) to the rewrite
+	// request. True for PE-I2I, false for PE-T2I, which has no image to look at.
+	//
+	// Declared rather than detected: whether a model has a projector is a fact
+	// about the gguf, but whether it was TRAINED to condition the rewrite on the
+	// picture is a fact about the finetune, and a vision-capable model handed an
+	// image it does not expect rewrites worse, not better.
+	Vision bool `yaml:"vision"`
 }
 
 // SlotCacheSettings mirrors config.SlotCacheConfig; zero values fall back to the
@@ -835,6 +898,41 @@ type Override struct {
 	// LlmVisionPath pins the --llm_vision projector file, winning over the
 	// directory pairing. Empty => auto (see LlmVision).
 	LlmVisionPath string `yaml:"llmVisionPath"`
+	// PromptEnhancer names the settings.promptEnhancers entry this image model
+	// sends its prompt through before rendering. Empty => no enhancer, the
+	// prompt is rendered as typed.
+	//
+	// A model ID rather than a file path, and that is the whole design: an
+	// enhancer is a llama-server model the ONE router schedules, sized and
+	// evicted alongside everything else. A path here would mean a second
+	// inference process outside the scheduler, with no shared VRAM accounting.
+	//
+	// Consumed by the CLIENT, not by sd-server: it has no such flag, and a
+	// rewrite the user cannot see or edit before it renders is worse than none.
+	// It rides the generated config purely so the playground can read it off the
+	// model listing.
+	PromptEnhancer string `yaml:"promptEnhancer"`
+	// PromptEnhancerEdit is the enhancer used INSTEAD of PromptEnhancer when the
+	// request carries a reference image. Qwen ships the pair (PE-T2I, PE-I2I) and
+	// they are not interchangeable: the edit one rewrites an instruction about an
+	// existing picture, the text one composes a scene from nothing. Empty => the
+	// model uses PromptEnhancer in both directions, which is what a single-model
+	// setup wants and what every model configured before this field existed does.
+	PromptEnhancerEdit string `yaml:"promptEnhancerEdit"`
+	// PromptEnhancerPrompt is the system prompt this model runs its txt2img
+	// enhancer under, winning over the settings.promptEnhancers row (if any).
+	//
+	// Per IMAGE MODEL rather than per enhancer, because that is where it earns its
+	// keep: one rewriter is reused across checkpoints that want very different
+	// output (an SDXL tag soup, a Flux paragraph, a Qwen instruction), and a
+	// rewrite is only ever as good as the target it was told to write for.
+	// Empty => fall back to the shared row, which is the pre-field behaviour.
+	PromptEnhancerPrompt string `yaml:"promptEnhancerPrompt"`
+	// PromptEnhancerEditPrompt is the img2img half, same precedence. Kept apart
+	// from the text one because the two directions are different jobs: one
+	// composes a scene, the other rewrites an instruction about a picture that
+	// already exists.
+	PromptEnhancerEditPrompt string `yaml:"promptEnhancerEditPrompt"`
 	// LoraDir is this model's `--lora-model-dir`. Empty => settings.loraDir, and
 	// if that is empty too, the directory the model gguf itself lives in.
 	// sd-server models only; the llama-server path uses Loras below.
@@ -1351,6 +1449,15 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 	}
 	if sideKeys != nil {
 		gf.Settings.APIKeys = sideKeys
+	}
+	// UI-owned prompt enhancers replace the file's list wholesale, same contract
+	// as apiKeys above.
+	sideEnh, err := LoadSidecarPromptEnhancers(path)
+	if err != nil {
+		return GenerateFile{}, err
+	}
+	if sideEnh != nil {
+		gf.Settings.PromptEnhancers = sideEnh
 	}
 	// UI-owned slot-KV block overlays the generate file's settings.slotCache.
 	sideSlot, err := LoadSidecarSlotCache(path)

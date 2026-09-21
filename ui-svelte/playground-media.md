@@ -14,6 +14,19 @@ therefore restarts per image (the in-flight row shows `×N`). Each turn keeps a 
 index (numbered badge on the thumbnails, batch>1 only) that the reply/copy/download/upscale
 actions act on.
 
+**Prompt enhance** (`runEnhance` -> `lib/promptEnhance.enhancePrompt` -> `POST
+/v1/chat/completions`): wand button in the composer's left cluster, rendered only when the
+selected model carries an enhancer (server-resolved, see `../CLAUDE.md`). A model may name one per
+direction, so the pick follows the mode the render itself will use: `promptEnhancerEdit` when a
+`baseImage` is attached, `promptEnhancer` otherwise, each half standing in for a missing other.
+The tooltip names which one is about to run, since the button silently changes meaning once an
+image is attached. Rewrites the
+prompt box IN PLACE, with an undo button next to it that survives until the user edits the box
+themselves. A vision enhancer is also handed `baseImage` plus the other attachments, capped at
+`MAX_REF_IMAGES`, images first because these models are trained on image-then-instruction order
+and flipping it makes them describe the picture instead of rewriting the request. Failures go to
+their own dismissible banner, not `dropError`: that one self-clears on a 4 second timer.
+
 **ESRGAN upscale** (`runUpscale` → `lib/imageApi.upscaleImage` → `POST /v1/images/upscale`):
 ⤢ button on any result-image action row AND on each composer attachment (hover); posts the 4×
 result as a new turn. `toB64(img)` first — a saved image is a `/api/media/<hash>` URL, not a data

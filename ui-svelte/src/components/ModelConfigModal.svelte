@@ -11,6 +11,9 @@
     getSettings,
     pickFileOfKind,
     getModelLoras,
+    listPromptEnhancers,
+    listDetectedPromptEnhancers,
+    type DetectedEnhancer,
     type LoraListing,
     type LoraRef,
     type ModelConfig,
@@ -20,6 +23,8 @@
     type PreviewLayers,
     models,
   } from "../stores/api";
+  import type { PromptEnhancerInfo } from "../lib/types";
+  import { baseKey } from "../lib/modelTable";
   import { get } from "svelte/store";
   import { tick } from "svelte";
   import { FolderOpen, HelpCircle, Plus, X } from "lucide-svelte";
@@ -342,12 +347,93 @@
   // (extra conditioning tokens) rather than an img2img base? Not detectable from
   // the weights - a base and an edit checkpoint have identical tensor shapes.
   let refEdit = $state(""); // "" auto (name detection) | "on" | "off"
+  // Prompt enhancer: the id of a settings-wide promptEnhancers entry this model
+  // hands its prompt to before rendering. "" => none. The options come from
+  // Settings, not from the catalog, because an enhancer is only usable once its
+  // fixed system prompt has been configured there.
+  let promptEnhancer = $state("");
+  // The img2img half. Qwen ships PE-T2I and PE-I2I as a pair: one composes a
+  // scene from nothing, the other rewrites an instruction about a picture that
+  // already exists. Left empty, the text one covers both directions.
+  let promptEnhancerEdit = $state("");
+  let enhancerOptions = $state<PromptEnhancerInfo[]>([]);
+  // The enhancers the server RECOGNISED BY NAME in the catalog. Suggestions, not
+  // a filter: the fields below stay free text.
+  let detectedEnhancers = $state<DetectedEnhancer[]>([]);
+  // This model's own system prompt per direction, pasted in through the dialog
+  // below. Overrides the Settings row's, because one rewriter serves checkpoints
+  // that want very different output and the prompt is written for the target.
+  let promptEnhancerPrompt = $state("");
+  let promptEnhancerEditPrompt = $state("");
+  // "" => the prompt dialog is closed; otherwise the direction being edited.
+  let promptDialogDir = $state<"" | "t2i" | "i2i">("");
+  let promptDraft = $state("");
+
   // Generation defaults baked into the launch cmd; "" => sd-server default.
   let defaultSteps = $state<number | "">("");
   let defaultCfg = $state<number | "">("");
   let defaultSampler = $state("");
   let defaultWidth = $state<number | "">("");
   let defaultHeight = $state<number | "">("");
+
+  // The Settings row the typed id resolves to, or undefined. Free text, NOT a
+  // dropdown: the enhancer id is just a string the chat request is made with,
+  // so restricting it to a list would be a UI-invented rule the server does not
+  // have. The datalist suggests the configured ones; anything else is allowed.
+  const enhancerMatch = $derived(
+    enhancerOptions.find((e) => e.model.toLowerCase() === promptEnhancer.trim().toLowerCase()),
+  );
+  const enhancerEditMatch = $derived(
+    enhancerOptions.find((e) => e.model.toLowerCase() === promptEnhancerEdit.trim().toLowerCase()),
+  );
+
+  // The enhancer detection pairs on the image model's base key, the same key the
+  // model table groups quants under, so every quant of a checkpoint finds the
+  // enhancer published beside it. Separators are folded first: publishers mix
+  // "-", "_" and " " and the Go side folds them too.
+  const modelFamily = $derived(baseKey((modelId ?? "").toLowerCase().replace(/[_ ]/g, "-")));
+  // What the server WOULD fill in for a field left empty (autogen does the same
+  // resolution at generate time; this only mirrors it so the user can see it).
+  const autoText = $derived(
+    detectedEnhancers.find((d) => d.imageModel === modelFamily && d.direction !== "i2i")?.model ??
+      "",
+  );
+  const autoEdit = $derived(
+    detectedEnhancers.find((d) => d.imageModel === modelFamily && d.direction === "i2i")?.model ??
+      "",
+  );
+
+  // Configured rows first, then anything detected that is not already one of
+  // them. A detection with no direction in its name is offered for both fields,
+  // since that is exactly what "we cannot tell" means.
+  function enhancerSuggestions(dir: "t2i" | "i2i") {
+    const out = enhancerOptions.map((e) => ({ model: e.model, label: e.name || e.model }));
+    const have = new Set(out.map((o) => o.model.toLowerCase()));
+    for (const d of detectedEnhancers) {
+      if (have.has(d.model.toLowerCase()) || (d.direction && d.direction !== dir)) continue;
+      out.push({ model: d.model, label: d.imageModel ? `detected for ${d.imageModel}` : "detected" });
+    }
+    return out;
+  }
+  const suggestT2I = $derived(enhancerSuggestions("t2i"));
+  const suggestI2I = $derived(enhancerSuggestions("i2i"));
+
+  // "none" is a real value, not a blank: with detection filling an empty field,
+  // clearing the box would otherwise be undone by the next regeneration and
+  // there would be no way at all to say no.
+  const ENHANCER_NONE = "none";
+  const textDisabled = $derived(promptEnhancer.trim().toLowerCase() === ENHANCER_NONE);
+  const editDisabled = $derived(promptEnhancerEdit.trim().toLowerCase() === ENHANCER_NONE);
+
+  function openPromptDialog(dir: "t2i" | "i2i") {
+    promptDraft = dir === "t2i" ? promptEnhancerPrompt : promptEnhancerEditPrompt;
+    promptDialogDir = dir;
+  }
+  function savePromptDialog() {
+    if (promptDialogDir === "t2i") promptEnhancerPrompt = promptDraft;
+    else promptEnhancerEditPrompt = promptDraft;
+    promptDialogDir = "";
+  }
 
   const imageMode = $derived(config?.isImage ?? false);
   // A video DiT takes the same form as a still, minus two knobs: the emitter
@@ -907,6 +993,10 @@
     streamLayers = o?.streamLayers ?? "";
     diffusionFa = o?.diffusionFa ?? "";
     refEdit = o?.refEdit ?? "";
+    promptEnhancer = o?.promptEnhancer ?? "";
+    promptEnhancerEdit = o?.promptEnhancerEdit ?? "";
+    promptEnhancerPrompt = o?.promptEnhancerPrompt ?? "";
+    promptEnhancerEditPrompt = o?.promptEnhancerEditPrompt ?? "";
     defaultSteps = o?.defaultSteps ? o.defaultSteps : "";
     defaultCfg = o?.defaultCfg ? o.defaultCfg : "";
     defaultSampler = o?.defaultSampler ?? "";
@@ -979,6 +1069,23 @@
         globalTargetGB = (await getSettings()).targetVramGB || 0;
       } catch {
         globalTargetGB = 0;
+      }
+      // Only image models offer an enhancer, so only they pay for the fetch. A
+      // failure here is not fatal: the picker degrades to the stored id.
+      if (cfg.isImage) {
+        try {
+          enhancerOptions = await listPromptEnhancers();
+        } catch {
+          enhancerOptions = [];
+        }
+        try {
+          detectedEnhancers = await listDetectedPromptEnhancers();
+        } catch {
+          detectedEnhancers = [];
+        }
+      } else {
+        enhancerOptions = [];
+        detectedEnhancers = [];
       }
       const o = cfg.override;
       autoCtx = parseCtx(cfg.cmd);
@@ -1263,6 +1370,10 @@
       streamLayers,
       diffusionFa,
       refEdit,
+      promptEnhancer,
+      promptEnhancerEdit,
+      promptEnhancerPrompt,
+      promptEnhancerEditPrompt,
       defaultSteps: defaultSteps === "" ? 0 : Number(defaultSteps),
       defaultCfg: defaultCfg === "" ? 0 : Number(defaultCfg),
       defaultSampler,
@@ -1633,6 +1744,25 @@
 
       <!-- A setting the custom launch arguments own: the flag is the truth and
            the control under it is ignored. Paired with `disabled` at the site. -->
+      <!-- The per-model system prompt lives behind a button rather than in a
+           textarea on the form: it is a multi-KB document that would push every
+           other image knob off the screen, and it is written once and then never
+           looked at again. The dot is the only thing the form has to say about
+           it - whether there is one. -->
+      {#snippet enhancerPromptBtn(dir: "t2i" | "i2i", value: string, off: boolean)}
+        <button
+          type="button"
+          class="px-2 py-1 rounded text-xs shrink-0 border transition-colors {value.trim()
+            ? 'border-info text-info hover:bg-info hover:text-btn-primary-text'
+            : 'border-card-border text-txtsecondary hover:text-txtmain'}"
+          disabled={off}
+          onclick={() => openPromptDialog(dir)}
+          use:tip={"The system prompt this model runs its enhancer under, overriding the Settings row's. Qwen ships the exact text as system_prompt.txt in each PE repo; paste it here."}
+        >
+          {value.trim() ? "Prompt ●" : "Prompt"}
+        </button>
+      {/snippet}
+
       {#snippet knobBadge(knobs: string | string[])}
         {@const locks = customKnobs(knobs)}
         {#if locks.length}
@@ -1874,6 +2004,116 @@
               {@render hint("Does this model take an input image as an edit reference (Kontext / Qwen-Image-Edit / LongCat) rather than an img2img base? Reference edits keep the full step count; img2img cuts it by the denoise strength, which is what causes heavy artifacting on a low-step turbo model. Auto detects it from the model name.")}
             </span>
             <Select bind:value={refEdit} options={REFEDIT_SEL_AUTO} ariaLabel="Reference edit" />
+          </label>
+
+          <label class="flex flex-col gap-1 text-sm col-span-2">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Prompt enhancer (txt2img)
+              {@render hint("Id of a chat model that rewrites this model's prompt into a more precise one before rendering. Used when the request carries no reference image, and for img2img too unless the field below names a different one. Any model id is accepted; the suggestions are the enhancers configured in Settings, which is also where each one's fixed system prompt lives. The Images tab then offers an Enhance button that shows you the rewrite before you render it. Never applied automatically.")}
+            </span>
+            <div class="flex items-center gap-1">
+              <input
+                type="text"
+                bind:value={promptEnhancer}
+                list="prompt-enhancers-t2i"
+                spellcheck="false"
+                placeholder={autoText ? `${autoText} (detected)` : "none"}
+                class="cfg-input font-mono flex-1 min-w-0"
+                aria-label="Prompt enhancer for txt2img"
+              />
+              {@render enhancerPromptBtn("t2i", promptEnhancerPrompt, textDisabled)}
+            </div>
+            <datalist id="prompt-enhancers-t2i">
+              {#each suggestT2I as e (e.model)}
+                <option value={e.model} label={e.label}></option>
+              {/each}
+            </datalist>
+            <!-- Say what this id actually resolves to. Free text plus detection
+                 means three different sources end up in one box, and which one
+                 won is the thing that is otherwise invisible. -->
+            {#if textDisabled}
+              <span class="text-micro text-txtsecondary">
+                No enhancer: the prompt renders exactly as typed.
+              </span>
+            {:else if !promptEnhancer.trim() && autoText}
+              <span class="text-micro text-txtsecondary">
+                Auto-detected beside this model. <button
+                  type="button"
+                  class="underline hover:text-txtmain"
+                  onclick={() => (promptEnhancer = ENHANCER_NONE)}>Don't use one</button
+                >
+              </span>
+            {:else if promptEnhancer.trim() && !enhancerMatch}
+              <span class="text-micro {promptEnhancerPrompt.trim() ? 'text-txtsecondary' : 'text-warning'}">
+                {promptEnhancerPrompt.trim()
+                  ? "Using this model's own system prompt."
+                  : "No Settings row and no system prompt here: it will be called with none."}
+              </span>
+            {:else if enhancerMatch}
+              <span class="text-micro text-txtsecondary">
+                {enhancerMatch.vision ? "Reads the reference image." : "Text only."}
+                {promptEnhancerPrompt.trim()
+                  ? "This model's own system prompt overrides the Settings one."
+                  : enhancerMatch.systemPrompt.trim()
+                    ? ""
+                    : "No system prompt configured."}
+              </span>
+            {/if}
+          </label>
+
+          <label class="flex flex-col gap-1 text-sm col-span-2">
+            <span class="text-txtsecondary flex items-center gap-1">
+              Prompt enhancer (img2img)
+              {@render hint("Used instead of the one above when the request carries a reference image. Qwen ships the pair (PE-T2I, PE-I2I) and they are not interchangeable: the img2img one rewrites an instruction about a picture that already exists, the txt2img one composes a scene from nothing. Leave empty to use the txt2img enhancer in both directions.")}
+            </span>
+            <div class="flex items-center gap-1">
+              <input
+                type="text"
+                bind:value={promptEnhancerEdit}
+                list="prompt-enhancers-i2i"
+                spellcheck="false"
+                placeholder={autoEdit
+                  ? `${autoEdit} (detected)`
+                  : promptEnhancer.trim()
+                    ? "same as above"
+                    : "none"}
+                class="cfg-input font-mono flex-1 min-w-0"
+                aria-label="Prompt enhancer for img2img"
+              />
+              {@render enhancerPromptBtn("i2i", promptEnhancerEditPrompt, editDisabled)}
+            </div>
+            <datalist id="prompt-enhancers-i2i">
+              {#each suggestI2I as e (e.model)}
+                <option value={e.model} label={e.label}></option>
+              {/each}
+            </datalist>
+            {#if editDisabled}
+              <span class="text-micro text-txtsecondary">
+                No enhancer for edits, even if the txt2img one is set.
+              </span>
+            {:else if !promptEnhancerEdit.trim() && autoEdit}
+              <span class="text-micro text-txtsecondary">
+                Auto-detected beside this model. <button
+                  type="button"
+                  class="underline hover:text-txtmain"
+                  onclick={() => (promptEnhancerEdit = ENHANCER_NONE)}>Don't use one</button
+                >
+              </span>
+            {:else if promptEnhancerEdit.trim() && !enhancerEditMatch}
+              <span class="text-micro {promptEnhancerEditPrompt.trim() ? 'text-txtsecondary' : 'text-warning'}">
+                {promptEnhancerEditPrompt.trim()
+                  ? "Using this model's own system prompt."
+                  : "No Settings row and no system prompt here: it will be called with none."}
+              </span>
+            {:else if enhancerEditMatch && !enhancerEditMatch.vision}
+              <!-- An edit rewriter that cannot see the picture it is rewriting an
+                   instruction about is the pairing most likely to be wrong. -->
+              <span class="text-micro text-warning">
+                This enhancer is text only, so it will not see the image being edited.
+              </span>
+            {:else if enhancerEditMatch}
+              <span class="text-micro text-txtsecondary">Reads the reference image.</span>
+            {/if}
           </label>
 
           <label class="flex flex-col gap-1 text-sm">
@@ -3275,6 +3515,60 @@
       </div>
     </div>
   </div>
+
+  <!-- Nested inside the <dialog> so it shares the top layer: a sibling overlay
+       would paint UNDER the model editor no matter what z-index it carried. -->
+  {#if promptDialogDir}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
+      <!-- bg-surface, not bg-card: there is no --color-card token, so bg-card
+           resolves to nothing and the panel (and everything on it) shows the
+           editor through the scrim. -->
+      <div
+        class="w-full max-w-2xl rounded-lg border border-card-border bg-surface text-txtmain shadow-xl p-4 flex flex-col gap-3"
+      >
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-semibold">
+            System prompt: {promptDialogDir === "t2i" ? "txt2img" : "img2img"} enhancer
+          </h3>
+          <button
+            type="button"
+            class="text-txtsecondary hover:text-txtmain"
+            aria-label="Close"
+            onclick={() => (promptDialogDir = "")}><X size={16} /></button
+          >
+        </div>
+        <p class="text-micro text-txtsecondary">
+          Sent as the system message of the rewrite request, for this image model only. Empty falls
+          back to the Settings row's prompt, and a rewriter with no prompt at all answers the
+          instruction instead of rewriting it.
+        </p>
+        <textarea
+          bind:value={promptDraft}
+          spellcheck="false"
+          rows="14"
+          class="cfg-input font-mono text-xs resize-y bg-background"
+          aria-label="Enhancer system prompt"
+        ></textarea>
+        <div class="flex justify-end gap-2">
+          <button
+            type="button"
+            class="px-2.5 py-1 rounded text-xs text-txtsecondary hover:text-txtmain"
+            onclick={() => (promptDraft = "")}>Clear</button
+          >
+          <button
+            type="button"
+            class="px-2.5 py-1 rounded text-xs text-txtsecondary hover:text-txtmain"
+            onclick={() => (promptDialogDir = "")}>Cancel</button
+          >
+          <button
+            type="button"
+            class="px-2.5 py-1 rounded text-xs font-semibold bg-primary text-white"
+            onclick={savePromptDialog}>Apply</button
+          >
+        </div>
+      </div>
+    </div>
+  {/if}
 </dialog>
 
 <style>

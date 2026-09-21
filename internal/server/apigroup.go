@@ -81,6 +81,90 @@ type apiModel struct {
 	// edit (new args apply on next load) or a spawn-time offload rewrite, so the
 	// UI shows what the model is REALLY loaded with, not the pending config.
 	RunningCmd string `json:"runningCmd,omitempty"`
+	// PromptEnhancer is the rewrite model this IMAGE model hands its prompt to
+	// before rendering, already joined to its system prompt. nil for every model
+	// that has not opted in, which is all of them by default. The playground
+	// shows an Enhance button only when this is present.
+	PromptEnhancer *apiPromptEnhancer `json:"promptEnhancer,omitempty"`
+	// PromptEnhancerEdit is the enhancer for the img2img direction (Qwen ships
+	// PE-T2I and PE-I2I as a pair and they are not interchangeable). Resolved the
+	// same way; nil when the model named none, in which case the client falls
+	// back to PromptEnhancer for both directions.
+	PromptEnhancerEdit *apiPromptEnhancer `json:"promptEnhancerEdit,omitempty"`
+}
+
+// apiPromptEnhancer is the resolved rewrite model an image model delegates its
+// prompt to: the model's `promptEnhancer` id joined to the top-level
+// promptEnhancers entry it names, so the client gets the id AND the fixed system
+// prompt in one payload instead of fetching a second document.
+//
+// Resolved here rather than shipped raw because a dangling id is a normal state
+// (the enhancer's gguf was deleted, the settings row was removed) and the client
+// has nothing useful to do with one. Unresolvable => nil, which the UI reads as
+// "this model has no enhancer" and hides the button.
+type apiPromptEnhancer struct {
+	Model string `json:"model"`
+	// Name is the display label; always filled, falling back to Model, so the
+	// UI never has to decide what to render.
+	Name string `json:"name"`
+	// SystemPrompt is the fixed instruction the enhancer runs under. Sent in
+	// full: the client builds the rewrite request itself, and a PE model without
+	// its prompt answers the instruction instead of rewriting it.
+	SystemPrompt string `json:"systemPrompt"`
+	// Vision: attach the reference image(s) to the rewrite request.
+	Vision bool `json:"vision,omitempty"`
+}
+
+// promptEnhancerFor resolves one of a model's enhancer ids into the payload the
+// client needs to make the rewrite call: the id, a label, and the system prompt
+// to run under. modelPrompt is the IMAGE MODEL's own prompt for this direction.
+//
+// The settings row is optional. An id can arrive from three places now - a
+// settings row, free text typed into the model editor, or name-based detection
+// on disk - and only the first has a row. An id with no row used to resolve to
+// nil, which hid the button with no explanation; it now resolves to itself, and
+// the prompt comes from whichever source has one:
+//
+//	the image model's own prompt  >  the shared row's  >  none
+//
+// The model wins because it is the more specific statement: the same rewriter is
+// reused across checkpoints that want very different output, and the prompt the
+// user pasted into THIS model's dialog is the one they wrote for it.
+//
+// The lookup is case-insensitive: the ids are filename-derived and get copied
+// between the settings page and the model editor by hand.
+func promptEnhancerFor(cfg config.Config, enhancerID, modelPrompt string) *apiPromptEnhancer {
+	id := strings.TrimSpace(enhancerID)
+	if id == "" || strings.EqualFold(id, autogen.PEDisabled) {
+		return nil
+	}
+	out := &apiPromptEnhancer{Model: id, Name: id}
+	hasRow := false
+	for key, e := range cfg.PromptEnhancers {
+		if !strings.EqualFold(strings.TrimSpace(key), id) {
+			continue
+		}
+		hasRow = true
+		out.Model = strings.TrimSpace(key)
+		out.Name = strings.TrimSpace(e.Name)
+		if out.Name == "" {
+			out.Name = out.Model
+		}
+		out.SystemPrompt = e.SystemPrompt
+		out.Vision = e.Vision
+		break
+	}
+	if p := strings.TrimSpace(modelPrompt); p != "" {
+		out.SystemPrompt = modelPrompt
+	}
+	// With no row there is nobody to declare vision, and the id itself is the only
+	// evidence. An "-i2i" rewriter is asked to rewrite an instruction ABOUT a
+	// picture, so withholding that picture is the worse default. A row that says
+	// vision: false is a deliberate statement and is left alone.
+	if dir, _, ok := autogen.PromptEnhancerID(id); !hasRow && ok && dir == autogen.PEDirEdit {
+		out.Vision = true
+	}
+	return out
 }
 
 // apiGenDefaults is the sd-server generation defaults carried on a model's
@@ -214,27 +298,29 @@ func (s *Server) modelStatus() []apiModel {
 		quantName, quantLabel, modelKey, familyKey := modelKeys(family, id)
 		modelKey = engineScopedKey(modelKey, mc)
 		models = append(models, apiModel{
-			Id:           id,
-			Name:         mc.Name,
-			Description:  mc.Description,
-			State:        state,
-			Unlisted:     mc.Unlisted,
-			Aliases:      mc.Aliases,
-			Capabilities: capsMap,
-			Family:       family,
-			Group:        gid,
-			Listeners:    groupListeners[gid],
-			Ctx:          ctxSize,
-			Slots:        slots,
-			ModelKey:     modelKey,
-			FamilyKey:    familyKey,
-			Quant:        quantName,
-			QuantLabel:   quantLabel,
-			SizeGB:       fileSizeGB(family),
-			GenDefaults:  genDefaults(info),
-			EstVramGB:    mc.EstVramGB,
-			EstRamGB:     mc.EstRamGB,
-			RunningCmd:   runningCmd,
+			Id:                 id,
+			Name:               mc.Name,
+			Description:        mc.Description,
+			State:              state,
+			Unlisted:           mc.Unlisted,
+			Aliases:            mc.Aliases,
+			Capabilities:       capsMap,
+			Family:             family,
+			Group:              gid,
+			Listeners:          groupListeners[gid],
+			Ctx:                ctxSize,
+			Slots:              slots,
+			ModelKey:           modelKey,
+			FamilyKey:          familyKey,
+			Quant:              quantName,
+			QuantLabel:         quantLabel,
+			SizeGB:             fileSizeGB(family),
+			GenDefaults:        genDefaults(info),
+			PromptEnhancer:     promptEnhancerFor(cfg, mc.PromptEnhancer, mc.PromptEnhancerPrompt),
+			PromptEnhancerEdit: promptEnhancerFor(cfg, mc.PromptEnhancerEdit, mc.PromptEnhancerEditPrompt),
+			EstVramGB:          mc.EstVramGB,
+			EstRamGB:           mc.EstRamGB,
+			RunningCmd:         runningCmd,
 		})
 	}
 

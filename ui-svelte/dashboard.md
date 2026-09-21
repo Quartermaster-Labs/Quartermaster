@@ -69,7 +69,7 @@ restated what the Models page already shows.
 the global config knobs, in a category side-nav: **Appearance**, **General** (memory budget —
 target VRAM / headroom / max RAM — **idle unload (ttl)** on its own row, the OOM guard, GPU usage,
 and the Advanced disclosure), **KV cache** (fleet-wide KV type + the slot KV-cache disk-save
-section), **Backends** (managed installs, the manual registry, LoRA folder) and **System**
+section), **Backends** (managed installs, the manual registry, **prompt enhancers**, LoRA folder) and **System**
 (software update, Windows startup, network, models-folder watching, Quartermaster update checks, HF token). All
 501-gated on `-generate`.
 
@@ -89,6 +89,21 @@ Three save shapes, and the difference is worth knowing before adding a knob:
 
 The first two regenerate the config + hot-reload; the third cannot, because a bound socket cannot
 be moved under a live server.
+
+**Prompt enhancers** (Backends tab, `GET`/`PUT /api/prompt-enhancers`) is a fourth shape: an
+explicit whole-table Save. Each row is a chat model that rewrites an image prompt, plus the fixed
+system prompt it needs and a `vision` flag for whether it is shown the reference images. A model
+opts in from its own config editor. The table is whole-list replace because an enhancer, unlike an
+API key, holds no server-minted secret to preserve; a blank model id is dropped server-side. The
+system prompt is a multi-KB document, which is why it can live here once rather than per model.
+
+A row is **optional** in both directions now. The model editor's two enhancer fields (txt2img /
+img2img) are free text and accept any catalog model id, their suggestion lists merge these rows
+with what `GET /api/prompt-enhancers/detected` found by name (`Qwen-Image-2.1-PE-I2I` and friends),
+and each field has a **Prompt** button that stores a system prompt on THAT image model, overriding
+the row's. Per model because one rewriter is reused across checkpoints that want very different
+output. An empty field is filled at generate time with the enhancer detected beside the model, so
+`none` (not blank) is how you say no: blank means "use what was found".
 
 **Don't re-group the OOM guard card.** *Reserve (GB)* sits above the "shed idle models" toggle and
 is never disabled by it, because the two are read by different halves of `vramGuard`: the toggle

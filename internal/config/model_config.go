@@ -157,6 +157,28 @@ type ModelConfig struct {
 	// internal/server/audiocppconfig.go).
 	AudioCpp AudioCppConfig `yaml:"audiocpp"`
 
+	// PromptEnhancer names the Config.PromptEnhancers entry this IMAGE model
+	// sends its prompt through before rendering. Empty (every non-image model,
+	// and every image model that has not opted in) => none.
+	//
+	// A dangling id is not an error: an enhancer whose model was deleted resolves
+	// to nothing and the model renders the prompt as typed. Failing config load
+	// over a rewrite convenience would be the wrong trade.
+	PromptEnhancer string `yaml:"promptEnhancer"`
+
+	// PromptEnhancerEdit is the enhancer used when the request carries a
+	// reference image, replacing PromptEnhancer for that direction only. Empty =>
+	// PromptEnhancer covers both. See autogen.Override.PromptEnhancerEdit.
+	PromptEnhancerEdit string `yaml:"promptEnhancerEdit"`
+
+	// PromptEnhancerPrompt / PromptEnhancerEditPrompt are THIS model's system
+	// prompts for the two directions, overriding the shared
+	// Config.PromptEnhancers entry's. Empty => use the shared one. See
+	// autogen.Override.PromptEnhancerPrompt for why the prompt belongs to the
+	// image model rather than to the rewriter.
+	PromptEnhancerPrompt     string `yaml:"promptEnhancerPrompt"`
+	PromptEnhancerEditPrompt string `yaml:"promptEnhancerEditPrompt"`
+
 	// Copy of HealthCheckTimeout from global config
 	HealthCheckTimeout int `yaml:"healthCheckTimeout"`
 }

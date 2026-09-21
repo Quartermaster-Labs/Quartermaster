@@ -105,6 +105,96 @@ Backend communication is centralized in `src/stores/api.ts`, with shared types i
   process, and component-local state gave each its own poller and its own idea of whether an
   update was running.
 
+## Prompt enhancement (Images tab)
+
+`lib/promptEnhance.ts` + the Enhance button in `playground/ImageInterface.svelte`.
+
+Both id fields (the Settings table, and the per-model picker in `ModelConfigModal.svelte`) are
+**free text with a `<datalist>` of suggestions, never a dropdown**. Nothing server-side validates
+the id against the catalog: `promptEnhancerFor` resolves any id, row or no row, and the id is
+passed straight through as `model` on the chat request. A closed list would be a rule the UI
+invented and the server does not have, and it would block the ordinary case of naming a model you
+are about to install.
+
+The picker's datalists merge two sources, configured rows first, deduped case-insensitively: the
+Settings entries, and the ids `listDetectedPromptEnhancers` reads from
+`GET /api/prompt-enhancers/detected` (`DetectedEnhancer` in `stores/api.ts`). Detection is keyed
+on the same family the model table groups by (`baseKey` of the id with `_` and spaces folded to
+`-`, matching the Go side), and a detected id whose name says no direction is offered for both
+fields. On an empty field whose family has a candidate, the candidate shows as the input's
+placeholder with a "Don't use one" action that writes the `none` sentinel, because autogen would
+otherwise fill the field again on every regen and leave no way to refuse (see
+`internal/autogen/CLAUDE.md`). The old "no Settings row" warning now fires only when the id has
+neither a row nor a per-model prompt; with a prompt it says which source will run instead.
+
+**The enhancer row does NOT take an mmproj.** A vision enhancer is a VL model plus a projector,
+but that pairing belongs to the model, not to the enhancer role: `generate.go` wires a discovered
+(or override-named) projector onto EVERY profile of a model, `--no-mmproj-offload`, so the plain
+id already accepts images. A second projector field here would be a competing place to wire one,
+and the two would disagree. The `-vision` twin is the same pair with the projector GPU-resident.
+The Settings row instead flags `vision` ticked on a catalog model whose `capabilities.vision` is
+false, which is the failure that otherwise looks like it worked.
+
+An image model can name a rewrite model in its config editor; the server resolves that id and
+ships it as `Model.promptEnhancer` on `/v1/models`, so the button renders only for models that
+have one (absent, not disabled: a model with no configured enhancer and none detected ships no
+field).
+
+It can name **two**, one per direction (`promptEnhancerEdit` for requests that carry a reference
+image), because Qwen ships PE-T2I and PE-I2I and they are not interchangeable. Two fields rather
+than a list: the direction is unambiguous at press time, so the composer picks for the user instead
+of asking. Either half alone still covers both directions (an empty field is first filled by the
+detected candidate for its direction, then the other half stands in), since hiding the button on a
+model that plainly has an enhancer reads as a bug, and the rewrite is reviewable in the box either
+way.
+
+Each direction also has a **Prompt** button beside the id field, opening a dialog that edits this
+image model's own system prompt (`promptEnhancerPrompt` / `promptEnhancerEditPrompt`). It is a
+dialog rather than a textarea on the form because it is a multi-KB document written once and then
+rarely looked at; the button carries a dot when the model has one. The prompt is saved byte for
+byte (the server rejects only an all-whitespace one, since leading indentation and a trailing
+newline are often part of a published PE prompt), and it outranks the Settings row's at serve
+time; the status line under the id says so whenever it is set.
+
+The rewrite runs **here, on the client**, and lands back in the prompt box rather than being
+applied inside the image route. That is the whole design: these models fail by confidently
+inventing details, and an invisible rewrite surfaces only as a picture that is subtly not what was
+asked for, with nothing to point at. `preEnhance` keeps the pre-rewrite text for a one-click
+revert, and an `$effect` drops the revert offer as soon as the prompt stops matching what the
+enhancer produced, since after a manual edit "revert" would throw work away rather than undo a
+machine edit.
+
+`cleanEnhanced` strips the wrappers these models add (a leaked `<think>` block, a code fence, a
+"Enhanced prompt:" label, wrapping quotes). The quote strip is deliberately conservative: it fires
+only when the same quote character appears nowhere inside, because `"OPEN" on a shop sign` is a
+prompt whose quotes are content. `lib/promptEnhance.test.ts` pins that case.
+
+`parseEnhanced` runs first and is the layer that matters in practice. Qwen's official PE system
+prompts mandate a JSON object (`{"rewritten_prompt", "wh_ratio", "ratio_follow"}`), and these
+models **deliberate in plain prose, not `<think>` tags**, so neither
+`chat_template_kwargs: {enable_thinking: false}` nor `--reasoning-format` can separate the
+thinking from the answer: the trailing object is the only reliable cut point. So it scans for
+balanced top-level objects (string- and escape-aware, since prose balances braces too) and takes
+the **LAST** one with a usable prompt key, because a model quoting its own schema back during
+deliberation puts an example object earlier in the stream. No object => fall through to
+`cleanEnhanced` on the raw text, which is what an ordinary non-Qwen rewriter needs.
+
+Two consequences of that deliberation being untaggable: `MAX_TOKENS` is 4096, not the 1024 this
+started with (a rewrite that never reached its JSON is a rewrite that never happened), and
+`finish_reason === "length"` with no structured object is reported as its own error naming the
+budget, instead of pasting several thousand tokens of raw reasoning into the prompt box.
+
+`wh_ratio` is applied, not just parsed: `ImageInterface.svelte` snaps it to the nearest entry in
+`ASPECTS` and sets the aspect control, but only when `ratio_follow` is empty (an img2img turn
+already matches its input) and only with a note above the box saying so, since a control that
+moves silently is worse than one that does not move. `revertEnhance` puts the prompt and the
+aspect back together; a manual edit to the prompt clears the offer for both, because editing the
+rewrite is accepting it.
+
+The enhancer is a normal catalog model, so on a single-GPU box it evicts the image model and the
+image model swaps back in to render. Slow, but correct: the alternative is a second scheduler,
+which the architecture forbids.
+
 ## Chat compaction
 
 `lib/chatCompact.ts` + `ChatInterface.svelte` `compactNow()`. Folding is a **boundary move**, not a
