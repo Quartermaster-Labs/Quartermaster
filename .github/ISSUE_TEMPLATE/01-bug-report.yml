@@ -1,0 +1,135 @@
+name: Bug report
+description: Something in Quartermaster itself is broken
+labels: ["bug", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Questions and "how do I" go in [Discussions Q&A](https://github.com/Quartermaster-Labs/Quartermaster/discussions/categories/q-a).
+        Security bugs go through [Security Advisories](https://github.com/Quartermaster-Labs/Quartermaster/security/advisories/new), never here.
+
+        If a *model* fails to load or runs with the wrong flags, use the **Model or backend support** form instead.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, and what Quartermaster did instead.
+      placeholder: Clicked Load on a 30B Q4_K_M model; the process exits immediately and the card returns to Stopped.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The shortest path from a fresh start to the failure.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Quartermaster version
+      description: From `quartermaster -version`, `GET /api/version`, or the footer of the dashboard. Please confirm it is reproducible on the latest release.
+      placeholder: v0.9.3 (commit abc1234)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How it was installed
+      options:
+        - Windows installer
+        - Bare binary (portable / no installer)
+        - Docker image
+        - Built from source
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - Linux
+        - macOS (Apple silicon)
+        - macOS (Intel)
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver
+      description: Model, VRAM and driver version. Say "CPU only" if there is no GPU. For multi-GPU boxes, list every card.
+      placeholder: AMD RX 7900 XTX 24 GB, Adrenalin 25.3.1
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Which backend is involved
+      description: Pick the acceleration variant too if you know it (Vulkan / CUDA / ROCm / Metal / CPU).
+      multiple: true
+      options:
+        - llama.cpp (text)
+        - stable-diffusion.cpp (image / video)
+        - audio.cpp (TTS / ASR / music)
+        - Real-ESRGAN (upscale)
+        - TRELLIS.2 (3D)
+        - vLLM
+        - None - core proxy, router or config
+        - None - web UI / playground
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: The relevant part of your config (and of `quartermaster-generate.yaml` if autogen produced it). Redact API keys.
+      render: yaml
+    validations:
+      required: true
+
+  - type: textarea
+    id: qm-log
+    attributes:
+      label: Quartermaster log
+      description: From the Logs tab, or `<data>/logs/quartermaster.log`. Include the lines around the failure, not just the last one.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: upstream-log
+    attributes:
+      label: Backend log
+      description: The upstream process output (llama-server, sd-server, ...) from the Logs tab. Leave blank if no backend was running.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate
+          required: true
+        - label: I reproduced this on the latest release
+          required: true
