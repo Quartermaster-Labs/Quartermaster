@@ -35,6 +35,13 @@ restated what the Models page already shows.
   `window.confirm()` because the byte count is the fact the decision turns on, and a native
   dialog can't show it (and can be suppressed by the browser). Escape backs out of the armed
   confirm before it closes the panel.
+- **Clear dismisses history and deletes nothing.** The footer's `Clear N finished`
+  (`POST /api/hub/clear`) drops the done/failed/canceled rows from the job list, which before
+  this could only be emptied by restarting quartermaster: a canceled download sat in the panel
+  forever. It is deliberately NOT a bulk cancel, so it is not confirmed — no bytes are touched,
+  and an errored job keeps its `.part` and its journal record, which means it returns as a
+  resumable **paused** row after the next restart rather than being quietly destroyed by a
+  tidy-up button. The count is of **every** finished job, not the 8 the list shows.
 - **A download interrupted by a restart comes back as a paused row.** The server journals
   unfinished jobs beside the bytes (`internal/hub`), so reopening quartermaster lists what was
   in flight with its progress reconstructed from the `.part` files — Resume is the same button,

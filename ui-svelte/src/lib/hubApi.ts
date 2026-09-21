@@ -447,6 +447,20 @@ export function resumeHubDownload(jobId: string): Promise<unknown> {
   return jobAction("/api/hub/resume", jobId);
 }
 
+/**
+ * clearFinishedDownloads dismisses the finished rows — done, errored and
+ * canceled — from the downloads panel, and answers how many went.
+ *
+ * History only: nothing running or paused is touched and NO bytes are deleted,
+ * which is the whole difference from cancel. An errored job keeps its partial
+ * and its journal record, so it returns as a resumable paused row on the next
+ * start rather than being silently destroyed by a tidy-up button.
+ */
+export async function clearFinishedDownloads(): Promise<number> {
+  const r = await hubFetch<{ cleared: number }>("/api/hub/clear", { method: "POST" });
+  return r.cleared;
+}
+
 // --- shaping the file list for the picker ---
 
 export interface FileOption {

@@ -339,6 +339,35 @@ func (m *Manager) restoreJob(dir string, rec downloadRecord, maxPartialAge time.
 	return job, restoreWork
 }
 
+// ClearFinished drops every terminal job (done, error, canceled) from the list
+// and reports how many went. Running, paused and queued jobs are untouched:
+// this is the history being dismissed, not work being stopped.
+//
+// It removes ROWS, not bytes. A canceled job already discarded its partials and
+// a finished one is on disk where it belongs, so the only case with anything
+// left is an errored job, whose `.part` and journal record stay exactly as they
+// were — clearing the row must not quietly destroy resumable bytes when Cancel
+// is right there and says so. The consequence is honest and worth stating: that
+// download comes back as a resumable paused row on the next start (Restore),
+// because it genuinely is one.
+func (m *Manager) ClearFinished() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	kept := m.order[:0]
+	n := 0
+	for _, id := range m.order {
+		if j, ok := m.jobs[id]; ok && j.Done() {
+			delete(m.jobs, id)
+			delete(m.stop, id)
+			n++
+			continue
+		}
+		kept = append(kept, id)
+	}
+	m.order = kept
+	return n
+}
+
 func (m *Manager) update(id string, fn func(*Job)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

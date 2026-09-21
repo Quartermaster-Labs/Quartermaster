@@ -5,7 +5,9 @@ The `/api/hub/*` surface over `internal/hub`, backing the UI's `/browse` page
 
 ## `hubapi.go`
 
-Search, repo detail, and download start/poll/pause/resume/cancel. `hubPartialMaxAge` is the age
+Search, repo detail, and download start/poll/pause/resume/cancel, plus `POST /api/hub/clear`
+(`handleAPIHubClear` → `Manager.ClearFinished`), which dismisses the terminal rows from the job
+list — history only, no bytes, nothing running or paused touched. `hubPartialMaxAge` is the age
 gate for both `hub.Manager.Restore(hubPartialMaxAge)` — which brings downloads that were in
 flight when the process last died back as paused jobs with their progress read off the `.part`
 files — and the `hub.SweepPartials` orphan sweep. Both run from `StartHubDownloads`, which

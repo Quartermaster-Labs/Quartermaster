@@ -307,6 +307,18 @@ func (s *Server) handleAPIHubResume(w http.ResponseWriter, r *http.Request) {
 	s.hubJobAction(w, r, s.hub.Resume, "resuming")
 }
 
+// handleAPIHubClear dismisses the finished rows — done, errored and canceled —
+// from the job list. History only: nothing running or paused is touched and no
+// bytes are deleted, which is what separates it from Cancel. Without it a
+// canceled or failed download sat in the panel with no way to be rid of it
+// short of restarting quartermaster.
+func (s *Server) handleAPIHubClear(w http.ResponseWriter, r *http.Request) {
+	if !s.requireHub(w, r) {
+		return
+	}
+	writeJSON(w, map[string]int{"cleared": s.hub.ClearFinished()})
+}
+
 // hubJobAction is the shared body-decode + dispatch for the three job verbs,
 // which differ only in which manager method they call.
 func (s *Server) hubJobAction(w http.ResponseWriter, r *http.Request, do func(string) error, status string) {

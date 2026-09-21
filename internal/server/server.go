@@ -1072,6 +1072,7 @@ func (s *Server) routes() {
 	mux.Handle("POST /api/hub/cancel", adminChain.ThenFunc(s.handleAPIHubCancel))
 	mux.Handle("POST /api/hub/pause", adminChain.ThenFunc(s.handleAPIHubPause))
 	mux.Handle("POST /api/hub/resume", adminChain.ThenFunc(s.handleAPIHubResume))
+	mux.Handle("POST /api/hub/clear", adminChain.ThenFunc(s.handleAPIHubClear))
 	mux.Handle("POST /api/hub/reveal", adminChain.ThenFunc(s.handleAPIHubReveal))
 	mux.Handle("GET /api/hub/files", adminChain.ThenFunc(s.handleAPIHubFiles))
 	mux.Handle("GET /api/kvcache", adminChain.ThenFunc(s.handleAPIKvCache))
