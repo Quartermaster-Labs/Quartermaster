@@ -11,6 +11,20 @@ import (
 func postTool(t *testing.T, s *Server, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	// httptest's default RemoteAddr is 192.0.2.1, which guardSearchCtx reads as
+	// a caller from the network and holds to public addresses. These cases are
+	// about the tool API itself, so they speak as the local user.
+	r.RemoteAddr = "127.0.0.1:34567"
+	w := httptest.NewRecorder()
+	s.toolHandler(path)(w, r)
+	return w
+}
+
+// postToolFrom is postTool for a caller arriving over the network.
+func postToolFrom(t *testing.T, s *Server, remote, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	r.RemoteAddr = remote
 	w := httptest.NewRecorder()
 	s.toolHandler(path)(w, r)
 	return w
@@ -127,4 +141,24 @@ func TestToolsAPI_YouTubeValidation(t *testing.T) {
 		t.Errorf("search {}: status=%d msg=%q", w.Code, toolErrMessage(t, w))
 	}
 
+}
+
+// A search is aimed by the caller, so a caller from the network must not be
+// able to aim it at this machine's own network. The local user still can --
+// that is what postTool covers above.
+func TestToolsAPI_SearchFromNetworkCannotReachPrivate(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("a caller from the network reached a loopback address")
+	}))
+	defer up.Close()
+
+	s := &Server{}
+	req := `{"q":"alpha one","limit":1,"providers":[{"id":"searxng","enabled":true,"baseUrl":"` + up.URL + `"}]}`
+	w := postToolFrom(t, s, "192.168.1.50:44321", "/v1/tools/search", req)
+	if w.Code == http.StatusOK {
+		t.Fatalf("remote caller got 200, want a refusal: %s", w.Body.String())
+	}
+	if msg := w.Body.String(); !strings.Contains(msg, "blocked non-public address") {
+		t.Errorf("refused for the wrong reason: %s", msg)
+	}
 }

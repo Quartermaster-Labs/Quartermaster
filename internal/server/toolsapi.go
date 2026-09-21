@@ -61,7 +61,7 @@ func (s *Server) handleToolSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := firstNonZero(req.Limit, req.Count)
 
-	res, provider, err := tools.Search(r.Context(), req.Providers, query, limit)
+	res, provider, err := tools.Search(guardSearchCtx(r.Context(), r), req.Providers, query, limit)
 	if err != nil {
 		if errors.Is(err, tools.ErrNoProviders) {
 			toolError(w, http.StatusBadRequest, err.Error()+": pass a providers array, e.g. [{\"id\":\"searxng\",\"enabled\":true,\"baseUrl\":\"http://localhost:8080\"}]")

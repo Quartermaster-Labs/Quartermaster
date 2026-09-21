@@ -530,7 +530,9 @@ func (s *Server) handleTurnStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a turn is already running", http.StatusConflict)
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	// Detached from the request, so the caller-origin verdict has to be taken
+	// here while r still exists: the tools this turn dispatches run later.
+	ctx, cancel := context.WithCancel(guardSearchCtx(context.Background(), r))
 	at := &activeTurn{user: user, chatID: start.ChatID, cancel: cancel, authKey: s.pickSelfKey(start.Model)}
 	tm.active[user] = at
 	tm.mu.Unlock()
