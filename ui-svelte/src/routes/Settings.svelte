@@ -2,7 +2,7 @@
   import { tip } from "../lib/tooltip";
   import { onMount } from "svelte";
   import { SlidersHorizontal, HardDrive, Cpu, FolderOpen, Trash2, Star, Plus, Power, HelpCircle, Palette } from "lucide-svelte";
-  import { getSettings, putSettings, putSlotCache, putBackends, putGuards, putAdvanced, resetAdvanced, pickFolder, pickBackend, resetSettings, getAutostart, putAutostart, fetchProcessSettings, putProcessSettings, listPromptEnhancers, savePromptEnhancers, type AppSettings, type BackendEntry, type AutostartStatus, type ProcessSettingsResponse } from "../stores/api";
+  import { getSettings, putSettings, putSlotCache, putBackends, putGuards, putAdvanced, resetAdvanced, pickFolder, pickBackend, resetSettings, getAutostart, putAutostart, fetchProcessSettings, putProcessSettings, listPromptEnhancers, savePromptEnhancers, models, type AppSettings, type BackendEntry, type AutostartStatus, type ProcessSettingsResponse } from "../stores/api";
   import type { PromptEnhancerInfo } from "../lib/types";
   import { BACKEND_CLASSES, backendClass, backendClasses, backendServesClass, type BackendClassDef } from "../lib/backends";
   import ManagedBackends from "../components/ManagedBackends.svelte";
@@ -1673,7 +1673,7 @@
               <section class="rounded-md border border-card-border bg-surface/40 p-3 flex flex-col gap-2">
                 <div class="flex flex-wrap items-center gap-2">
                   <input
-                    type="text" bind:value={e.model} spellcheck="false" placeholder="catalog model id, e.g. qwen-image-2.1-pe-i2i"
+                    type="text" bind:value={e.model} spellcheck="false" list="enhancer-model-ids" placeholder="model id, e.g. qwen-image-2.1-pe-i2i"
                     class="flex-1 min-w-[16rem] font-mono text-label rounded border border-card-border bg-surface px-2 py-1 text-txtmain placeholder:text-txtsecondary/60 focus:outline-none focus:ring-2 focus:ring-primary"
                   />
                   <input
@@ -1697,6 +1697,14 @@
               </section>
             {/each}
           </div>
+          <!-- Suggestions only. Any id is accepted, including one this install
+               does not serve: the id is simply what the rewrite request is made
+               with, so a model added later works without touching this table. -->
+          <datalist id="enhancer-model-ids">
+            {#each $models as m (m.id)}
+              <option value={m.id}></option>
+            {/each}
+          </datalist>
         {/if}
 
         <div class="mt-3 flex items-center justify-between gap-3">

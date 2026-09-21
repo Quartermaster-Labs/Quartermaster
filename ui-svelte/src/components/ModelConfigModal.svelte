@@ -358,19 +358,13 @@
   let defaultWidth = $state<number | "">("");
   let defaultHeight = $state<number | "">("");
 
-  // "" (none) plus every configured enhancer. A stored id that Settings no
-  // longer knows is kept as a flagged option: dropping it would silently clear
-  // the model's setting just because someone opened the editor.
-  const enhancerSelect = $derived.by((): SelectOption[] => {
-    const opts: SelectOption[] = [{ value: "", label: "None" }];
-    for (const e of enhancerOptions) {
-      opts.push({ value: e.model, label: e.name || e.model, detail: e.vision ? "sees the reference image" : "text only" });
-    }
-    if (promptEnhancer && !enhancerOptions.some((e) => e.model === promptEnhancer)) {
-      opts.push({ value: promptEnhancer, label: promptEnhancer, detail: "not configured in Settings" });
-    }
-    return opts;
-  });
+  // The Settings row the typed id resolves to, or undefined. Free text, NOT a
+  // dropdown: the enhancer id is just a string the chat request is made with,
+  // so restricting it to a list would be a UI-invented rule the server does not
+  // have. The datalist suggests the configured ones; anything else is allowed.
+  const enhancerMatch = $derived(
+    enhancerOptions.find((e) => e.model.toLowerCase() === promptEnhancer.trim().toLowerCase()),
+  );
 
   const imageMode = $derived(config?.isImage ?? false);
   // A video DiT takes the same form as a still, minus two knobs: the emitter
@@ -1915,9 +1909,35 @@
           <label class="flex flex-col gap-1 text-sm col-span-2">
             <span class="text-txtsecondary flex items-center gap-1">
               Prompt enhancer
-              {@render hint("A chat model that rewrites this model's prompt into a more precise one before rendering. Configure the enhancers (and their fixed system prompt) in Settings, then pick one here; the Images tab then offers an Enhance button that shows you the rewrite before you render it. Never applied automatically.")}
+              {@render hint("Id of a chat model that rewrites this model's prompt into a more precise one before rendering. Any model id is accepted; the suggestions are the enhancers configured in Settings, which is also where each one's fixed system prompt lives. The Images tab then offers an Enhance button that shows you the rewrite before you render it. Never applied automatically.")}
             </span>
-            <Select bind:value={promptEnhancer} options={enhancerSelect} ariaLabel="Prompt enhancer" />
+            <input
+              type="text"
+              bind:value={promptEnhancer}
+              list="prompt-enhancers"
+              spellcheck="false"
+              placeholder="none"
+              class="cfg-input font-mono"
+              aria-label="Prompt enhancer"
+            />
+            <datalist id="prompt-enhancers">
+              {#each enhancerOptions as e (e.model)}
+                <option value={e.model} label={e.name || e.model}></option>
+              {/each}
+            </datalist>
+            <!-- Say which row the id landed on. An id with no Settings row still
+                 works, it just has no system prompt to send, and that is the one
+                 thing free text makes easy to get silently wrong. -->
+            {#if promptEnhancer.trim() && !enhancerMatch}
+              <span class="text-micro text-warning">
+                No Settings row for this id: it will be called with no system prompt.
+              </span>
+            {:else if enhancerMatch}
+              <span class="text-micro text-txtsecondary">
+                {enhancerMatch.vision ? "Reads the reference image." : "Text only."}
+                {enhancerMatch.systemPrompt.trim() ? "" : "No system prompt configured."}
+              </span>
+            {/if}
           </label>
 
           <label class="flex flex-col gap-1 text-sm">

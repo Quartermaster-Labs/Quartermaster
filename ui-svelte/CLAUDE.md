@@ -109,6 +109,14 @@ Backend communication is centralized in `src/stores/api.ts`, with shared types i
 
 `lib/promptEnhance.ts` + the Enhance button in `playground/ImageInterface.svelte`.
 
+Both id fields (the Settings table and the per-model picker) are **free text with a `<datalist>`
+of suggestions, never a dropdown**. Nothing server-side validates the id against the catalog:
+`promptEnhancerFor` matches it only against the settings table, and the id is passed straight
+through as `model` on the chat request. A closed list would be a rule the UI invented and the
+server does not have, and it would block the ordinary case of naming a model you are about to
+install. The editor instead warns when an id has no Settings row, since that is the one thing free
+text makes easy to get silently wrong: such an enhancer is called with no system prompt.
+
 An image model can name a rewrite model in its config editor; the server resolves that id and
 ships it as `Model.promptEnhancer` on `/v1/models`, so the button renders only for models that
 have one (absent, not disabled: an enhancer is opt-in and most models never get one).
