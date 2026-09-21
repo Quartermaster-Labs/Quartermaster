@@ -1917,8 +1917,8 @@
 
           <label class="flex flex-col gap-1 text-sm col-span-2">
             <span class="text-txtsecondary flex items-center gap-1">
-              Prompt enhancer
-              {@render hint("Id of a chat model that rewrites this model's prompt into a more precise one before rendering. Used for txt2img, and for edits too unless the field below names a different one. Any model id is accepted; the suggestions are the enhancers configured in Settings, which is also where each one's fixed system prompt lives. The Images tab then offers an Enhance button that shows you the rewrite before you render it. Never applied automatically.")}
+              Prompt enhancer (txt2img)
+              {@render hint("Id of a chat model that rewrites this model's prompt into a more precise one before rendering. Used when the request carries no reference image, and for img2img too unless the field below names a different one. Any model id is accepted; the suggestions are the enhancers configured in Settings, which is also where each one's fixed system prompt lives. The Images tab then offers an Enhance button that shows you the rewrite before you render it. Never applied automatically.")}
             </span>
             <input
               type="text"
@@ -1927,7 +1927,7 @@
               spellcheck="false"
               placeholder="none"
               class="cfg-input font-mono"
-              aria-label="Prompt enhancer"
+              aria-label="Prompt enhancer for txt2img"
             />
             <datalist id="prompt-enhancers">
               {#each enhancerOptions as e (e.model)}
@@ -1951,8 +1951,8 @@
 
           <label class="flex flex-col gap-1 text-sm col-span-2">
             <span class="text-txtsecondary flex items-center gap-1">
-              Prompt enhancer (edit)
-              {@render hint("Used instead of the one above when the request carries a reference image. Qwen ships the pair (PE-T2I, PE-I2I) and they are not interchangeable: the edit one rewrites an instruction about an existing picture, the text one composes a scene from nothing. Leave empty to use the same enhancer for both directions.")}
+              Prompt enhancer (img2img)
+              {@render hint("Used instead of the one above when the request carries a reference image. Qwen ships the pair (PE-T2I, PE-I2I) and they are not interchangeable: the img2img one rewrites an instruction about a picture that already exists, the txt2img one composes a scene from nothing. Leave empty to use the txt2img enhancer in both directions.")}
             </span>
             <input
               type="text"
@@ -1961,7 +1961,7 @@
               spellcheck="false"
               placeholder={promptEnhancer.trim() ? "same as above" : "none"}
               class="cfg-input font-mono"
-              aria-label="Prompt enhancer for edits"
+              aria-label="Prompt enhancer for img2img"
             />
             {#if promptEnhancerEdit.trim() && !enhancerEditMatch}
               <span class="text-micro text-warning">

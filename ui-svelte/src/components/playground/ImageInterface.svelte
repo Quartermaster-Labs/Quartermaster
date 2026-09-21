@@ -1536,7 +1536,7 @@
             disabled={enhancing || isGenerating || !prompt.trim()}
             use:tip={isGenerating
               ? "Wait for this render to finish: the enhancer is a separate model, and starting it now would make it queue behind the image model."
-              : `Enhance the prompt with ${enhancer.name}${baseImage ? " (edit rewrite)" : " (text-to-image rewrite)"}${enhancer.vision && baseImage ? ", which reads the reference image" : ""}. Rewrites the box, so you can read and edit it before rendering.`}
+              : `Enhance the prompt with ${enhancer.name}${baseImage ? " (img2img rewrite)" : " (txt2img rewrite)"}${enhancer.vision && baseImage ? ", which reads the reference image" : ""}. Rewrites the box, so you can read and edit it before rendering.`}
           >
             {#if enhancing}
               <Loader2 class="w-[1.125rem] h-[1.125rem] animate-spin" />
