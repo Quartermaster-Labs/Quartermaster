@@ -5,7 +5,9 @@ The `/api/hub/*` surface over `internal/hub`, backing the UI's `/browse` page
 
 ## `hubapi.go`
 
-Search, repo detail, and download start/poll/pause/resume/cancel. `hubPartialMaxAge` is the age
+Search, repo detail, and download start/poll/pause/resume/cancel, plus `POST /api/hub/clear`
+(`handleAPIHubClear` → `Manager.ClearFinished`), which dismisses the terminal rows from the job
+list — history only, no bytes, nothing running or paused touched. `hubPartialMaxAge` is the age
 gate for both `hub.Manager.Restore(hubPartialMaxAge)` — which brings downloads that were in
 flight when the process last died back as paused jobs with their progress read off the `.part`
 files — and the `hub.SweepPartials` orphan sweep. Both run from `StartHubDownloads`, which
@@ -64,6 +66,22 @@ Since the picker sizes a repo's rows concurrently, the entry is a **single-fligh
 header five times. **Failures are not cached**, so one cancelled request can't answer for the repo.
 30-min cache keyed repo+path+source, with the VRAM target folded in, since that is the only input
 that moves the answer.
+
+### One request per REPO, not per row
+
+`path` may be **repeated**, and that is what the picker sends: the batch answers **NDJSON**, one
+`hubEstimateResp` per line, flushed as each row resolves (`streamHubEstimates`, fan-out
+`hubEstimateFanout` = 4, capped at `hubEstimateMaxPaths`). A single `path` still gets the plain
+JSON object it always did.
+
+The reason is the **browser**, not the server. A page gets six connections per origin over
+HTTP/1.1, `/api/events` holds one for the life of the session, and each sizing row waits on a CDN
+round trip of several MB — so the picker's old pool of five per-row requests left the page with no
+socket at all, and **pressing Download did nothing until a header fetch finished**. Server-side
+the batch is nearly free: the rows share one header fetch via `hubMetaJob` either way, so all the
+fan-out does is keep two unrelated models in a repo from serializing. Rows come back in
+**completion order**, which is why each one repeats its `repo`/`path` and the client matches on
+those. A dead client is noticed at the feeder (`r.Context()`), not by writing into a closed socket.
 
 ## `audiocppcatalog.go` — `GET /api/hub/audiocpp`
 

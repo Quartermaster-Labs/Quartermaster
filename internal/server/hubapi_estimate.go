@@ -10,6 +10,7 @@ package server
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -69,11 +70,29 @@ var (
 
 const hubEstTTL = 30 * time.Minute
 
-// handleAPIHubEstimate sizes one candidate file before it is downloaded.
+// hubEstimateFanout bounds how many rows one batch sizes at a time. It is not
+// a throughput knob: a repo's quants share ONE header fetch (see hubMetaJob),
+// so all but the first worker is parked on that fetch anyway. It is there so a
+// repo of two unrelated models does not open a fetch per model at once.
+const hubEstimateFanout = 4
+
+// hubEstimateMaxPaths caps one batch. A picker never shows this many rows; the
+// cap is for a request that did not come from it.
+const hubEstimateMaxPaths = 64
+
+// handleAPIHubEstimate sizes candidate files before they are downloaded.
 //
 // Sharded models are sized as a SET: `bytes` is summed over every file sharing
 // the candidate's group, taken from the hub's own listing rather than the
 // request, because shard 1's own length would price a fifth of the weights.
+//
+// `path` MAY BE REPEATED, and that is the form the picker uses. One row per
+// request was the obvious shape and the wrong one: a browser allows six
+// connections per origin, one of which the /api/events stream holds forever,
+// so a repo sized five rows at a time left no socket for anything else on the
+// page — clicking Download did nothing until a header fetch finished. A batch
+// answers the whole repo over ONE connection, streaming NDJSON so rows still
+// fill in as they resolve rather than landing together at the end.
 func (s *Server) handleAPIHubEstimate(w http.ResponseWriter, r *http.Request) {
 	if !s.requireHub(w, r) {
 		return
@@ -89,10 +108,13 @@ func (s *Server) handleAPIHubEstimate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	repo := strings.Trim(q.Get("repo"), "/")
-	path := q.Get("path")
-	if repo == "" || path == "" {
+	paths := q["path"]
+	if repo == "" || len(paths) == 0 || paths[0] == "" {
 		shared.SendResponse(w, r, http.StatusBadRequest, "repo and path are required")
 		return
+	}
+	if len(paths) > hubEstimateMaxPaths {
+		paths = paths[:hubEstimateMaxPaths]
 	}
 
 	// LoadGenerateFile, NOT LoadBaseSettings: the base file carries the
@@ -108,19 +130,82 @@ func (s *Server) handleAPIHubEstimate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	set := gf.Settings
+
+	// A single path keeps the plain-JSON answer it always had: the batch form is
+	// an addition, not a replacement, and one row is still asked for on its own.
+	if len(paths) == 1 {
+		writeJSON(w, s.hubEstimateCached(r, src, repo, paths[0], set))
+		return
+	}
+	s.streamHubEstimates(w, r, src, repo, paths, set)
+}
+
+// streamHubEstimates writes one JSON object per line as each row resolves.
+//
+// NDJSON rather than one array at the end because the point of the batch is to
+// stop holding five sockets, NOT to make the table land later: the first row
+// still appears as soon as the shared header parses. Order is completion order,
+// which is why every row repeats its own repo+path.
+func (s *Server) streamHubEstimates(w http.ResponseWriter, r *http.Request, src hub.Source, repo string, paths []string, set autogen.Settings) {
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+
+	var mu sync.Mutex // serializes the writer; workers finish in any order
+	enc := json.NewEncoder(w)
+	emit := func(row hubEstimateResp) {
+		mu.Lock()
+		defer mu.Unlock()
+		if err := enc.Encode(row); err != nil {
+			return
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+
+	work := make(chan string)
+	var wg sync.WaitGroup
+	n := min(hubEstimateFanout, len(paths))
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for path := range work {
+				emit(s.hubEstimateCached(r, src, repo, path, set))
+			}
+		}()
+	}
+feed:
+	for _, path := range paths {
+		select {
+		case work <- path:
+		case <-r.Context().Done():
+			// The user closed the repo or navigated away. Nothing left to write
+			// this to, so stop handing out work.
+			break feed
+		}
+	}
+	close(work)
+	wg.Wait()
+}
+
+// hubEstimateCached is one row, memoized. Failures are answered as a row with
+// Err set, never as an HTTP error: the picker still renders that row, just
+// without a context figure, and in a batch one bad path must not sink the rest.
+func (s *Server) hubEstimateCached(r *http.Request, src hub.Source, repo, path string, set autogen.Settings) hubEstimateResp {
 	if set.TargetVramGB <= 0 {
 		// No budget, nothing to size against. Not an error — the picker simply
 		// keeps showing sizes.
-		writeJSON(w, hubEstimateResp{Repo: repo, Path: path, Err: "no VRAM target configured"})
-		return
+		return hubEstimateResp{Repo: repo, Path: path, Err: "no VRAM target configured"}
 	}
 
 	key := repo + "\x00" + path + "\x00" + src.ID()
 	hubEstMu.Lock()
 	if e, ok := hubEstCache[key]; ok && time.Since(e.at) < hubEstTTL && e.resp.Target == set.TargetVramGB {
 		hubEstMu.Unlock()
-		writeJSON(w, e.resp)
-		return
+		return e.resp
 	}
 	hubEstMu.Unlock()
 
@@ -128,7 +213,7 @@ func (s *Server) handleAPIHubEstimate(w http.ResponseWriter, r *http.Request) {
 	hubEstMu.Lock()
 	hubEstCache[key] = hubEstCacheEntry{resp: out, at: time.Now()}
 	hubEstMu.Unlock()
-	writeJSON(w, out)
+	return out
 }
 
 // hubEstimate does the work: total the shard set, pull the header, size it.

@@ -15,7 +15,7 @@
     startHubDownload,
     groupFiles,
     verdictFor,
-    estimateHubFile,
+    estimateHubFiles,
     humanBytes,
     humanCount,
     humanCtx,
@@ -601,14 +601,14 @@
   // "92k context" rather than "fits" — the window comes from KV geometry in the
   // header, which file size cannot imply.
   //
-  // Each row is a CDN round trip plus a few MB of header, so a repo offering a
-  // dozen quants filled in one row per second when this ran serially — the whole
-  // table was still settling long after the user had read it. A small pool runs
-  // them together instead; the cap is there because these are multi-MB requests
-  // sharing the browser's per-host connection budget with the rest of the page,
-  // and firing twelve at once mostly makes them queue somewhere less visible.
-  const SIZE_CONCURRENCY = 5;
-
+  // The whole repo goes in ONE request. Sizing used to run a pool of five
+  // per-row requests, which was the wrong unit to parallelise in: a browser
+  // allows six connections per origin, the /api/events stream permanently holds
+  // one, and each row waits on a CDN round trip of several MB — so while a repo
+  // was sizing the page had no socket left and clicking Download appeared to do
+  // nothing. The server sizes the batch itself (its quants share a single header
+  // fetch either way) and streams a row back as each resolves, so the table
+  // still fills in progressively at the cost of one connection.
   async function sizeRepo(det: HubDetail): Promise<void> {
     // The planner is LLM-shaped (layers, KV, expert share). A diffusion or TTS
     // gguf has none of that, so asking would produce a confident wrong number.
@@ -620,23 +620,22 @@
     // Aux rows are excluded for a blunter reason than projectors: a Range read
     // of tokenizer.json parses as no GGUF header at all.
     const queue = groupFiles(det.files).filter((o) => !o.projector && !o.aux && o.files[0]?.path);
-    let next = 0;
-    const worker = async (): Promise<void> => {
-      while (next < queue.length) {
-        const opt = queue[next++];
-        try {
-          const e = await estimateHubFile(det.id, opt.files[0].path, det.source);
-          // The user may have moved on while this was in flight; a late answer
-          // must not paint a number onto a different repo's table.
-          if (selected?.id !== det.id) return;
-          estimates = { ...estimates, [opt.group]: e };
-        } catch {
-          // Best-effort: the row keeps the size-only verdict it already had.
-          if (selected?.id !== det.id) return;
-        }
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(SIZE_CONCURRENCY, queue.length) }, worker));
+    if (queue.length === 0) return;
+    // Rows come back in completion order, so the row a result belongs to is
+    // found by the path that was asked for, not by position.
+    const byPath = new Map(queue.map((o) => [o.files[0].path, o.group]));
+    try {
+      await estimateHubFiles(det.id, [...byPath.keys()], det.source, (e) => {
+        // The user may have moved on while this was in flight; a late answer
+        // must not paint a number onto a different repo's table.
+        if (selected?.id !== det.id) return;
+        const group = byPath.get(e.path);
+        if (!group) return;
+        estimates = { ...estimates, [group]: e };
+      });
+    } catch {
+      // Best-effort: the rows keep the size-only verdict they already had.
+    }
   }
 
   // Which repos the LLM sizer is allowed to be pointed at when the category tab

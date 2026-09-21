@@ -1007,3 +1007,41 @@ func TestManager_NoModelsRootIsAClearError(t *testing.T) {
 		t.Errorf("err = %v, want a models-folder message", err)
 	}
 }
+
+// Clearing the panel's history drops the terminal rows and nothing else: a
+// paused pull is outstanding work, and losing it from the list would be the
+// same as losing the download.
+func TestManager_ClearFinishedKeepsUnfinishedJobs(t *testing.T) {
+	m := NewManager(func() string { return t.TempDir() }, nil)
+	seed := func(id, phase string) {
+		m.jobs[id] = &Job{ID: id, Phase: phase}
+		m.order = append(m.order, id)
+	}
+	seed("a", PhaseDone)
+	seed("b", PhaseDownloading)
+	seed("c", PhaseCanceled)
+	seed("d", PhasePaused)
+	seed("e", PhaseError)
+	seed("f", PhaseQueued)
+
+	if n := m.ClearFinished(); n != 3 {
+		t.Errorf("cleared %d, want the 3 terminal jobs", n)
+	}
+	var left []string
+	for _, j := range m.Jobs() {
+		left = append(left, j.ID)
+	}
+	want := []string{"b", "d", "f"}
+	if len(left) != len(want) {
+		t.Fatalf("left = %v, want %v", left, want)
+	}
+	for i, id := range want {
+		if left[i] != id {
+			t.Fatalf("left = %v, want %v (order preserved)", left, want)
+		}
+	}
+	// A second pass has nothing to do rather than something to break.
+	if n := m.ClearFinished(); n != 0 {
+		t.Errorf("second clear removed %d, want 0", n)
+	}
+}

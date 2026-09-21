@@ -9,9 +9,9 @@
   // stores/hubJobs.ts; this component only draws it.
   import { onMount } from "svelte";
   import { link } from "svelte-spa-router";
-  import { ArrowDownToLine, X, AlertTriangle, Check, Ban, FolderOpen, Pause, Play } from "lucide-svelte";
+  import { ArrowDownToLine, X, AlertTriangle, Check, Ban, FolderOpen, Pause, Play, Trash2 } from "lucide-svelte";
   import HubAvatar from "./HubAvatar.svelte";
-  import { cancelHubDownload, pauseHubDownload, resumeHubDownload, revealFolder, getHubSources, humanBytes, HubApiError, type HubJob } from "../lib/hubApi";
+  import { cancelHubDownload, clearFinishedDownloads, pauseHubDownload, resumeHubDownload, revealFolder, getHubSources, humanBytes, HubApiError, type HubJob } from "../lib/hubApi";
   import FolderBrowserModal from "./FolderBrowserModal.svelte";
   import { hubJobs, hubRates, hubActiveCount, refreshHubJobs, isUnfinishedJob } from "../stores/hubJobs";
 
@@ -29,6 +29,9 @@
   let confirming = $state<string | null>(null);
   // Ids with a verb in flight, so a double-click can't send pause twice.
   let busy = $state<Record<string, boolean>>({});
+  // The footer's Clear, in flight. Its own flag rather than a member of `busy`:
+  // it belongs to no job id and it is the only verb that acts on the list.
+  let clearing = $state(false);
 
   // One check on load: a pull started before this reload (or from another tab)
   // has to show up in the count without anyone opening the panel first. The
@@ -44,10 +47,13 @@
 
   // Running AND paused: a paused pull is outstanding work, not history.
   const active = $derived($hubJobs.filter(isUnfinishedJob));
+  // Every finished row, uncapped — what Clear acts on. The list below shows
+  // only the newest few, so the button must not count what is on screen: a
+  // panel showing 8 of 20 canceled rows still has to clear all 20.
+  const finished = $derived($hubJobs.filter((j) => !isUnfinishedJob(j)));
   // Newest first, and capped: this is a recent-activity list, not an archive.
   const history = $derived(
-    $hubJobs
-      .filter((j) => !isUnfinishedJob(j))
+    finished
       .slice()
       .sort((a, b) => (b.finished ?? b.started).localeCompare(a.finished ?? a.started))
       .slice(0, 8)
@@ -93,6 +99,24 @@
   function cancel(j: HubJob): void {
     confirming = null;
     void act(j, cancelHubDownload);
+  }
+
+  // Clear is NOT a bulk cancel: it dismisses finished rows and deletes nothing,
+  // so it needs no confirmation the way the per-job Cancel does. The one row it
+  // can bring back is an errored download, which still has resumable bytes on
+  // disk and returns as a paused row after a restart.
+  async function clearFinished(): Promise<void> {
+    if (clearing) return;
+    err = null;
+    clearing = true;
+    try {
+      await clearFinishedDownloads();
+      await refreshHubJobs();
+    } catch (e) {
+      err = e instanceof Error ? e.message : String(e);
+    } finally {
+      clearing = false;
+    }
   }
 
   function pct(j: HubJob): number {
@@ -308,10 +332,23 @@
       {/each}
     </div>
 
-    <div class="px-3 py-1.5 border-t border-card-border text-[0.6rem]">
+    <div class="flex items-center gap-2 px-3 py-1.5 border-t border-card-border text-[0.6rem]">
       <button class="inline-flex cursor-pointer items-center gap-1 text-primary hover:underline" onclick={() => reveal()}>
         <FolderOpen class="w-3 h-3" /> {canReveal ? "Open" : "Browse"} models folder
       </button>
+      <!-- Only when there is history to clear: a permanently disabled button in
+           a four-row panel is noise. Muted rather than primary — tidying up is
+           not the thing this footer is for. -->
+      {#if finished.length > 0}
+        <button
+          class="ml-auto inline-flex cursor-pointer items-center gap-1 text-txtsecondary hover:text-txtmain hover:underline disabled:cursor-default disabled:opacity-50 disabled:no-underline"
+          onclick={clearFinished}
+          disabled={clearing}
+          use:tip={"Dismiss finished, failed and canceled downloads. Deletes no files."}
+        >
+          <Trash2 class="w-3 h-3" /> Clear {finished.length} finished
+        </button>
+      {/if}
     </div>
   </div>
 {/if}
