@@ -226,8 +226,13 @@
   );
 
   let userInput = $state("");
-  // Messages typed while a turn is streaming; sent one-by-one once it finishes.
-  let queued = $state<string[]>([]);
+  // Messages composed while a turn is streaming, sent one-by-one once it drains.
+  // The whole message is built at queue time (documents inlined, images attached,
+  // reply quote prepended) rather than just the text: the composer is cleared
+  // when the message is queued, so anything left behind would be lost or, worse,
+  // silently ride along with whatever is typed next. `preview` is the chip label.
+  type QueuedMsg = { content: string | ContentPart[]; preview: string };
+  let queued = $state<QueuedMsg[]>([]);
 
   // Reply target: a past assistant message the next send quotes. The whole
   // conversation is already resent to the model, so the quote is just a short
@@ -574,7 +579,13 @@
   // assistant turn can render a side-by-side diff against its rewrite.
   async function sendRewrite() {
     const prose = userInput.trim();
-    if (!prose || !$selectedModelStore || isStreaming) return;
+    if (!prose || !$selectedModelStore) return;
+    // Rewrites aren't queueable: the diff view pairs one instruction with one
+    // answer, so say why instead of swallowing the Enter.
+    if (isStreaming) {
+      showToast("Wait for the current response to finish");
+      return;
+    }
     const id = $activeChatId;
     userScrolledUp = false;
     appendMessage(id, { role: "user", content: prose, rewriteInstruction: $rewriteInstructionStore.trim() });
@@ -607,18 +618,11 @@
     }
     const id = $activeChatId;
 
-    // A turn is in flight. If it's THIS chat's turn, queue the text and send it
-    // once the turn drains. If it's another chat generating in the background,
-    // the backend only serves one turn at a time — tell the user to wait.
-    if (isStreaming) {
-      if (genId === id) {
-        if (trimmedInput) {
-          queued = [...queued, trimmedInput];
-          userInput = "";
-        }
-      } else {
-        showToast("Wait for the current response to finish");
-      }
+    // Another chat is generating in the background. The backend serves one turn
+    // at a time and this message belongs to a different thread, so there is
+    // nothing sane to queue it behind — tell the user to wait.
+    if (isStreaming && genId !== id) {
+      showToast("Wait for the current response to finish");
       return;
     }
 
@@ -652,12 +656,28 @@
       content = text;
     }
 
-    appendMessage(id, { role: "user", content });
+    // Label for the queue chip, read before the composer is cleared: a message
+    // can be pure attachment, and an empty chip says nothing about what is
+    // waiting.
+    const nImages = attachedImages.length;
+    const preview =
+      trimmedInput ||
+      readyDocs.map((d) => d.name).join(", ") ||
+      (nImages ? `${nImages} image${nImages > 1 ? "s" : ""}` : "");
     userInput = "";
     attachedImages = [];
     attachedDocs = [];
     imageError = null;
 
+    // This chat is mid-turn: park the finished message and let the turn's own
+    // drain send it. Everything it carries (images, documents, quote) is already
+    // folded into `content`, so the composer is free for the next one.
+    if (isStreaming) {
+      queued = [...queued, { content, preview }];
+      return;
+    }
+
+    appendMessage(id, { role: "user", content });
     await regenerateFromIndex(id, sessionById(id)!.messages.length - 1);
   }
 
@@ -976,7 +996,7 @@
     if (queued.length > 0 && !signal.aborted) {
       const [next, ...rest] = queued;
       queued = rest;
-      appendMessage(id, { role: "user", content: next });
+      appendMessage(id, { role: "user", content: next.content });
       await regenerateFromIndex(id, sessionById(id)!.messages.length - 1);
     }
   }
@@ -1596,7 +1616,6 @@
             class="w-full accent-primary"
             value={nearestTempIdx($temperatureStore)}
             oninput={(e) => temperatureStore.set(TEMP_STEPS[+e.currentTarget.value])}
-            disabled={isStreaming}
           />
           <div class="flex justify-between text-xs text-txtsecondary">
             <span>Precise</span>
@@ -1782,7 +1801,10 @@
           {#each queued as q, qi (qi)}
             <div class="flex items-center gap-2 self-end max-w-[80%] rounded-2xl bg-secondary/60 border border-card-border px-3 py-1.5 text-[0.8125rem]">
               <Clock class="w-3.5 h-3.5 shrink-0 text-txtsecondary" />
-              <span class="truncate" use:tooltip={q}>{q}</span>
+              {#if getImageUrls(q.content).length > 0}
+                <Paperclip class="w-3.5 h-3.5 shrink-0 text-txtsecondary" />
+              {/if}
+              <span class="truncate" use:tooltip={q.preview}>{q.preview}</span>
               <button
                 class="shrink-0 p-0.5 rounded-full text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
                 onclick={() => (queued = queued.filter((_, i) => i !== qi))}
@@ -1830,7 +1852,7 @@
       {/snippet}
 
       {#snippet chatLeftButtons()}
-        <ToolMenu items={toolMenuItems} disabled={isStreaming} />
+        <ToolMenu items={toolMenuItems} />
         <!-- Always shown so the composer row doesn't reshuffle per model. It is no
              longer gated on vision: documents are read into text in the browser,
              so every model can take one; only the image half of the accept list
@@ -1838,7 +1860,7 @@
         <button
           class="composer-icon-btn"
           onclick={openAttach}
-          disabled={isStreaming || !$selectedModelStore}
+          disabled={!$selectedModelStore}
           use:tooltip={!$selectedModelStore
             ? "Pick a model first"
             : canAttach

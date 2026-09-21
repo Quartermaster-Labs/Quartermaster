@@ -19,6 +19,21 @@ actions act on.
 result as a new turn. `toB64(img)` first — a saved image is a `/api/media/<hash>` URL, not a data
 URL. Busy key `m<turn>`/`a<idx>` serializes runs to one at a time.
 
+**Prompt queue + live settings.** Every control except the per-turn actions (edit prompt,
+regenerate, upscale, new thread) stays enabled while a render runs, so a send during generation
+enqueues a `QueuedJob` instead of being refused. The job carries a **snapshot** of every setting
+(`captureParams()` → `GenParams`: model, size, steps, cfg, seed, sampler, scheduler, LoRAs,
+denoise, negative, batch, the edit-mode flags), so changing the panel afterwards only affects the
+*next* job you queue. `runningParams` is the snapshot of the in-flight job and is what the progress
+parser, the `×N` batch badge and `cancelGeneration()`'s unload read - never the live panel, which
+the user may have already retargeted at another model.
+
+A queued job whose source image is implicit (no attachment, no mask, no skip-base) stores
+`refs: null` = "whatever the running render produces", resolved at dispatch, so a queued follow-up
+edits the image it was written about. **Stop** returns the aborted job to the composer (or to the
+head of the queue if the composer is busy) and does not drain; `drainQueue()` skips jobs whose
+thread was deleted rather than stalling on them.
+
 Pure helpers live beside it in `imageGen.ts`: `ASPECTS`/`SIZE_TIERS`/`aspectDims`,
 `SAMPLER_OPTIONS`/`SCHEDULER_OPTIONS`, the `IMAGE_DEFAULTS` per-model preset table + `defaultsFor`,
 `fmtDur`, and `parseSdProgress` — the sd-server stdout phase/step parser, spec'd in
