@@ -1,0 +1,14 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question or "how do I..."
+    url: https://github.com/Quartermaster-Labs/Quartermaster/discussions/categories/q-a
+    about: Setup help, config questions and "is this supposed to work" go in Discussions Q&A, not in an issue.
+  - name: Idea or general discussion
+    url: https://github.com/Quartermaster-Labs/Quartermaster/discussions
+    about: Half-formed ideas, hardware reports and show-and-tell. Open an issue once there is something concrete to build.
+  - name: Security vulnerability
+    url: https://github.com/Quartermaster-Labs/Quartermaster/security/advisories/new
+    about: Report privately through GitHub Security Advisories. Never in a public issue - see SECURITY.md.
+  - name: Documentation
+    url: https://github.com/Quartermaster-Labs/Quartermaster/tree/main/docs
+    about: Config reference, autogen, backends, GPU memory, HTTP API and known issues.

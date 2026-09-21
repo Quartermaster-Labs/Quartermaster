@@ -15,8 +15,10 @@ The Images tab drives **stable-diffusion.cpp** models as a thread: every prompt 
 **Editing an image**:
 
 - **Reply** on any image reuses it as the source for the next prompt.
-- **Reference images** (Kontext / Qwen-Image-Edit class): attach one or more images the model conditions on while the prompt drives the edit; the palette button does the same for **style transfer**.
+- **Reference images** (Kontext / Qwen-Image-Edit class): attach one or more images the model conditions on while the prompt drives the edit. For a style transfer, attach the style image last and say so in the prompt ("apply the artistic style, color palette and brushwork of the final reference image to the other image").
 - **Inpainting**: the brush button opens the mask editor - paint the area to change with a brush or lasso, and with a segmentation model configured you can also select by box, by point, or by text ("the sky"). Only the masked region is redrawn.
+
+**Queueing prompts**: you don't have to wait for a render to finish. Type the next prompt and press Enter and it is queued, shown as a chip above the composer; it starts the moment the current one ends. Every setting stays editable while a generation runs, because a queued prompt **captures the settings as they were when you queued it** - size, steps, CFG, seed, sampler, LoRAs, even the model - so you can retune the panel for the next idea without changing what is already waiting. The chip shows the size/steps/CFG it will use. Removing a chip drops that prompt; **Stop** cancels the running render and leaves the rest of the queue alone. A follow-up queued with no attachment or mask edits *the image the running render is about to produce*, not the one on screen when you typed it.
 
 While a generation runs you get the live phase (encoding, prompt, sampling, decoding), step count, ETA and elapsed time. Each finished image has actions for regenerate, edit the prompt, copy, download, and **upscale x4** - see the Upscaling article.
 

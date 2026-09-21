@@ -19,6 +19,7 @@
     onFocus,
     onBlur,
     busy = false,
+    modelDisabled = undefined,
     onStop,
     stopTitle = "Stop",
     modelValue = $bindable(""),
@@ -47,6 +48,10 @@
     onFocus?: () => void;
     onBlur?: () => void;
     busy?: boolean;
+    // Model picker lock. Defaults to `busy`; a tab that snapshots its settings
+    // per request (the image tab) passes false so the model can be switched for
+    // the NEXT/queued job while one is still running.
+    modelDisabled?: boolean;
     onStop?: () => void;
     stopTitle?: string;
     modelValue?: string;
@@ -145,7 +150,7 @@
     </div>
 
     <div class="min-w-0 px-2 flex flex-col items-center gap-1">
-      <ModelSelector bind:value={modelValue} placeholder={modelPlaceholder} disabled={busy} {category} onChange={onModelChange} ghost dropUp />
+      <ModelSelector bind:value={modelValue} placeholder={modelPlaceholder} disabled={modelDisabled ?? busy} {category} onChange={onModelChange} ghost dropUp />
       {@render ctxBar?.()}
     </div>
 

@@ -1,0 +1,120 @@
+name: Model or backend support
+description: A model won't load, runs with the wrong flags, or produces garbage
+labels: ["model support", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this when a specific model or architecture misbehaves: it fails to load, autogen picks flags
+        that don't fit VRAM, or the output is broken. Quartermaster computes the launch command per model,
+        so the **generated command** below is usually the whole answer.
+
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      description: Link the exact Hugging Face repo and name the quant file.
+      placeholder: https://huggingface.co/unsloth/Qwen3-30B-A3B-GGUF - Qwen3-30B-A3B-Q4_K_M.gguf
+    validations:
+      required: true
+
+  - type: dropdown
+    id: symptom
+    attributes:
+      label: Symptom
+      options:
+        - Not discovered - the model never appears in the list
+        - Fails to load - the process exits or never becomes healthy
+        - Loads, but the computed flags are wrong (ctx, offload, KV, ...)
+        - Loads, but output is garbage / corrupt / silent
+        - Too slow, or spills to system RAM unexpectedly
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend and acceleration
+      multiple: true
+      options:
+        - llama.cpp - Vulkan
+        - llama.cpp - CUDA
+        - llama.cpp - ROCm / HIP
+        - llama.cpp - Metal
+        - llama.cpp - CPU
+        - stable-diffusion.cpp - Vulkan
+        - stable-diffusion.cpp - CUDA
+        - stable-diffusion.cpp - ROCm / HIP
+        - stable-diffusion.cpp - Metal
+        - stable-diffusion.cpp - CPU
+        - audio.cpp
+        - Real-ESRGAN (upscale)
+        - TRELLIS.2 (3D)
+        - vLLM
+    validations:
+      required: true
+
+  - type: input
+    id: backend-version
+    attributes:
+      label: Backend version
+      description: The upstream release Quartermaster installed for that backend, from the Backends page.
+      placeholder: llama.cpp b9620 (vulkan)
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Generated launch command
+      description: The actual arguments the model was launched with - the model card shows this once it has run. If it never launched, paste the command shown on the staging card.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU, VRAM and driver
+      placeholder: NVIDIA RTX 4090 24 GB, driver 566.36
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Quartermaster version
+      placeholder: v0.9.3
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant config
+      description: The model's entry, plus the autogen settings if it was generated. Redact API keys.
+      render: yaml
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Quartermaster log and backend log from the Logs tab, around the failure.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: works-elsewhere
+    attributes:
+      label: Does it work outside Quartermaster?
+      description: If you can run the same weights directly (llama-server, sd-server, ...), say so and paste the command that works. That separates an upstream bug from ours.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and docs/known-issues.md
+          required: true

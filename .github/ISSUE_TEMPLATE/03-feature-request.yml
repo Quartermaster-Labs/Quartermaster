@@ -1,0 +1,56 @@
+name: Feature request
+description: Propose a change or a new capability
+labels: ["enhancement", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Quartermaster has opinions about its architecture (see [CONTRIBUTING.md](https://github.com/Quartermaster-Labs/Quartermaster/blob/main/CONTRIBUTING.md#things-that-will-get-a-pr-sent-back)).
+        Proposing before building is cheaper than discovering it in review. Vague ideas are welcome in
+        [Discussions](https://github.com/Quartermaster-Labs/Quartermaster/discussions) instead.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What can't you do today, and what did you have to do instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: "What should happen. Be concrete about the surface: a flag, a config key, a route, a UI control."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Config / autogen (VRAM fit, generated flags)
+        - Backends (install, update, new backend)
+        - Router / scheduler / eviction
+        - HTTP API (OpenAI / Anthropic compatible)
+        - Web UI / playground
+        - Model hub (search and download)
+        - Packaging, installer or Docker
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including whether existing config can already express it.
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I'm willing to open a PR for this
