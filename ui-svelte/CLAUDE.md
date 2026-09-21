@@ -197,24 +197,40 @@ which the architecture forbids.
 
 ## Image attachment intake
 
-`lib/imageNormalize.ts`, called from `ImageInterface.attachFiles` and `chatHelpers.fileToDataUrl`,
-which are the only two places a user's file becomes a data URL.
+`lib/imageNormalize.ts` is the one place an "image" the UI holds becomes bytes a backend can read.
+Two different things break here, and they look identical on screen.
 
-**The browser and the backends do not agree on what an image is.** `accept="image/*"` plus
+**1. A media ref is not an image.** An image in the playground has two representations. Fresh ones
+(an attachment, a just-rendered result) are inline `data:` URLs. The moment a session syncs,
+`playground.go extractMedia` splits every inline blob out to disk and rewrites it to
+`/api/media/image/<hash>.png`, and the client's copy comes back holding that ref. An `<img>` renders
+a ref perfectly, because the BROWSER resolves it, so nothing on screen distinguishes the two until
+one is handed to a model: llama.cpp treats the string as bytes to decode and answers
+`400 Failed to load image or audio file`, sd-server ignores it silently. The Chat tab never hits
+this because the SERVER inlines refs on replay (`turns.go inlineMedia`) - exactly the step a
+client-built request skips. `resolveImageDataUrl(url)` is the fix and the choke point: pass-through
+for a `data:` URL, fetch-and-inline for anything else. Called inside `enhancePrompt` rather than at
+its call sites, and by `ImageInterface.toB64` on the render path.
+
+**2. The browser and the backends do not agree on what an image is.** `accept="image/*"` plus
 Chromium's codecs let WebP, AVIF and HEIC in, and they render perfectly in the thumbnail.
 llama.cpp decodes an attached image with **stb_image**, whose formats are PNG / JPEG / BMP / GIF /
-PSD / PIC / PNM / TGA, so a WebP reaches a vision model as bytes it cannot parse and returns
-`400 Failed to load image or audio file` in a few milliseconds, naming neither the file nor the
-format. WebP is what "Save image as" hands you for much of the web, so this is reachable by doing
-the obvious thing, and `chatHelpers.ACCEPTED_IMAGE_FORMATS` even advertises WEBP.
+PSD / PIC / PNM / TGA, so a WebP reaches a vision model as bytes it cannot parse and returns the
+same 400, naming neither the file nor the format. WebP is what "Save image as" hands you for much
+of the web, and `chatHelpers.ACCEPTED_IMAGE_FORMATS` even advertises WEBP.
 
-So intake re-encodes anything that is not PNG or JPEG through a canvas. The browser has already
-decoded it for the thumbnail, so the cost is one draw. Target is PNG, not JPEG, because an
-attachment can carry alpha and flattening it onto an invented background changes what the model is
-shown. `normalizeImageFile` NEVER rejects: a failed transcode falls back to the original bytes, so
-a browser refusing its own attachment surfaces as the backend's real error instead of the image
-being dropped here. `attachFiles` awaits the batch with `Promise.all` rather than appending per
-reader callback, because `attached[0]` is the edit target and completion order was choosing it.
+So intake re-encodes anything that is not PNG or JPEG through a canvas, in `normalizeImageFile`,
+called from `ImageInterface.attachFiles` and `chatHelpers.fileToDataUrl` - the only two places a
+user's FILE becomes a data URL. The browser has already decoded it for the thumbnail, so the cost
+is one draw. Target is PNG, not JPEG, because an attachment can carry alpha and flattening it onto
+an invented background changes what the model is shown. `normalizeImageFile` NEVER rejects: a
+failed transcode falls back to the original bytes, so a browser refusing its own attachment
+surfaces as the backend's real error instead of the image being dropped here. `attachFiles` awaits
+the batch with `Promise.all` rather than appending per reader callback, because `attached[0]` is
+the edit target and completion order was choosing it.
+
+`imageNormalize.test.ts` runs under `// @vitest-environment jsdom`: `toDataUrl` uses `FileReader`,
+which node has no global for (it has `Blob`, which is why the failure reads as a surprise).
 
 `enhanceHttpError` (`lib/promptEnhance.ts`) maps the backend body to something actionable: the raw
 llama.cpp envelope in the UI made this exact, fixable cause read as an opaque 400.

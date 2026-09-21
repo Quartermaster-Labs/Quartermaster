@@ -37,6 +37,29 @@ export function needsTranscode(type: string): boolean {
   return !PASSTHROUGH.has(type.trim().toLowerCase());
 }
 
+// resolveImageDataUrl turns anything the UI holds as an "image" into bytes a
+// model can actually read.
+//
+// An image in the playground has TWO representations and they are not
+// interchangeable. Fresh ones (an attachment, a just-rendered result) are inline
+// `data:` URLs. The moment a session syncs, `playground.go extractMedia` splits
+// every inline blob out to disk and rewrites it to `/api/media/image/<hash>.png`,
+// and the client's copy comes back holding that ref. An <img> renders a ref
+// perfectly, because the BROWSER resolves it, so the two look identical on
+// screen and behave identically everywhere until something hands one to a model.
+//
+// A backend cannot resolve it. llama.cpp answers a ref with
+// `400 Failed to load image or audio file` (it treats the string as bytes to
+// decode, not a URL to fetch) and sd-server silently ignores it. The chat tab
+// never hits this because the server inlines refs on replay (turns.go
+// inlineMedia), which is exactly the step a client-built request skips.
+export async function resolveImageDataUrl(url: string): Promise<string> {
+  if (url.startsWith("data:")) return url;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`could not load ${url}: ${res.status}`);
+  return toDataUrl(await res.blob());
+}
+
 // toDataUrl reads a file as-is, which is the fast path and the fallback.
 function toDataUrl(file: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
