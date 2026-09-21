@@ -293,6 +293,24 @@ func waitPhase(t *testing.T, m *Manager, id, phase string) Job {
 	return Job{}
 }
 
+// waitPartial waits until there are real bytes in the .part file. Neither of
+// the job's own signals can say that: PhaseDownloading is set before the
+// connection is even made (so the UI says "downloading" rather than sitting on
+// "resolving" through DNS and TLS), and Downloaded is reported at most once per
+// progressEvery, so a transfer smaller than a MiB never bumps it off zero. The
+// file on disk is the thing this test is actually about.
+func waitPartial(t *testing.T, part string) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if st, err := os.Stat(part); err == nil && st.Size() > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("no bytes landed in %s", part)
+}
+
 func TestManager_PauseKeepsPartialAndResumeFinishes(t *testing.T) {
 	blob := blobOf(1 << 20)
 	srv, stop := heldServer(t, blob, 4096)
@@ -305,14 +323,14 @@ func TestManager_PauseKeepsPartialAndResumeFinishes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitPhase(t, m, id, PhaseDownloading)
+	part := filepath.Join(root, "o", "r", "m.gguf"+partSuffix)
+	waitPartial(t, part)
 	if err := m.Pause(id); err != nil {
 		t.Fatal(err)
 	}
 	waitPhase(t, m, id, PhasePaused)
 
 	// The partial must survive — that is the entire difference from cancel.
-	part := filepath.Join(root, "o", "r", "m.gguf"+partSuffix)
 	st, err := os.Stat(part)
 	if err != nil {
 		t.Fatalf("pause discarded the partial file: %v", err)
