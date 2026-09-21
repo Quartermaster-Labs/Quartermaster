@@ -1246,12 +1246,22 @@
     }
   }
 
-  async function editMessage(idx: number, newContent: string) {
+  async function editMessage(idx: number, newContent: string, images: string[] = []) {
     if (isStreaming || !$selectedModelStore) return;
     const id = $activeChatId;
+    // Rebuild the content the same way sendMessage does: multimodal parts while
+    // any attachment survived the edit, a plain string once they are all gone,
+    // so a message whose last image was removed stops being a vision turn.
+    let content: string | ContentPart[] = newContent;
+    if (images.length > 0) {
+      const parts: ContentPart[] = [];
+      if (newContent) parts.push({ type: "text", text: newContent });
+      for (const url of images) parts.push({ type: "image_url", image_url: { url } });
+      content = parts;
+    }
     // Update the user message at the specified index
     patchSession(id, {
-      messages: sessionById(id)!.messages.map((msg, i) => (i === idx ? { ...msg, content: newContent } : msg)),
+      messages: sessionById(id)!.messages.map((msg, i) => (i === idx ? { ...msg, content } : msg)),
     });
     // Trigger a new chat request with the updated messages
     await regenerateFromIndex(id, idx);
@@ -1511,7 +1521,7 @@
             {busyLabel}
             modelReady={modelReady}
             hasVisionInput={message.role === "assistant" && idx > 0 && getImageUrls(messages[idx - 1].content).length > 0}
-            onEdit={message.role === "user" && message.rewriteInstruction == null ? (newContent) => editMessage(idx, newContent) : undefined}
+            onEdit={message.role === "user" && message.rewriteInstruction == null ? (newContent, images) => editMessage(idx, newContent, images) : undefined}
             onRegenerate={message.role === "assistant" && idx > 0 && messages[idx - 1].role === "user"
               ? () => regenerateFromIndex($activeChatId, idx - 1)
               : undefined}
