@@ -2,6 +2,8 @@
 // Nothing here reads component state — the component owns the $state/$derived
 // and calls into these.
 
+import { normalizeImageFile } from "../../lib/imageNormalize";
+
 // One entry in the composer's tool menu (ToolMenu.svelte). Lives here rather
 // than in the component because a Svelte instance script can't export types.
 // The icon type is borrowed from a lucide icon (they are still legacy class
@@ -87,11 +89,10 @@ export function validateImageFile(file: File): string | null {
   return null;
 }
 
+// Routed through normalizeImageFile because ACCEPTED_IMAGE_FORMATS above
+// advertises WEBP, and llama.cpp decodes an attached image with stb_image,
+// which has never read WebP: accepting it and then 400ing on send is the worst
+// of both. See lib/imageNormalize.ts.
 export function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(new Error("Failed to read file"));
-    reader.readAsDataURL(file);
-  });
+  return normalizeImageFile(file);
 }

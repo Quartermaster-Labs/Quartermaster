@@ -105,7 +105,7 @@ export async function enhancePrompt(
     throw new EnhanceError(`Enhancer unreachable: ${e instanceof Error ? e.message : String(e)}`);
   }
   if (!res.ok) {
-    throw new EnhanceError(`Enhance failed: ${res.status} ${(await res.text()).slice(0, 300)}`);
+    throw new EnhanceError(enhanceHttpError(res.status, await res.text()));
   }
 
   const json = await res.json();
@@ -129,6 +129,33 @@ export async function enhancePrompt(
 // The keys a structured enhancer puts its answer under. `rewritten_prompt` is
 // Qwen's own PE schema; the other two are what hand-written system prompts in
 // circulation use for the same field.
+// enhanceHttpError turns a backend error body into something a user can act on.
+// The raw body is llama.cpp's JSON envelope, and pasting it into the UI made a
+// known, fixable cause ("Failed to load image or audio file", which is stb_image
+// refusing a WebP/AVIF reference) read as an opaque 400.
+export function enhanceHttpError(status: number, body: string): string {
+  if (/load image or audio file/i.test(body)) {
+    return "The enhancer could not read the reference image. Re-attach it, or save it as PNG or JPEG first: the backend decodes with stb_image, which cannot read WebP, AVIF or HEIC.";
+  }
+  if (status === 404) {
+    return "The enhancer model is not in the catalog any more. Regenerate the config, or clear the enhancer on this model.";
+  }
+  const detail = jsonMessage(body) || body.trim();
+  return `Enhance failed: ${status}${detail ? ` ${detail.slice(0, 300)}` : ""}`;
+}
+
+// The body is llama.cpp's {"error":{"message":...}}, but a proxy or a panic can
+// put anything here, so a parse failure falls back to the raw text.
+function jsonMessage(body: string): string {
+  try {
+    const j = JSON.parse(body);
+    const m = j?.error?.message ?? j?.message;
+    return typeof m === "string" ? m : "";
+  } catch {
+    return "";
+  }
+}
+
 const PROMPT_KEYS = ["rewritten_prompt", "enhanced_prompt", "prompt"];
 
 export interface ParsedEnhance {
