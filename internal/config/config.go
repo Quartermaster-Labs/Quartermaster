@@ -734,7 +734,10 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 			return Config{}, fmt.Errorf("empty api key found in apiKeys")
 		}
 		if strings.Contains(apikey, " ") {
-			return Config{}, fmt.Errorf("api key cannot contain spaces: `%s`", apikey)
+			// The position, never the value: a load error is logged by main and
+			// replayed on /logs, and echoing the key there would publish the one
+			// secret in this file to anyone who can read the log.
+			return Config{}, fmt.Errorf("apiKeys[%d] cannot contain spaces", i)
 		}
 		config.RequiredAPIKeys[i] = apikey
 	}
