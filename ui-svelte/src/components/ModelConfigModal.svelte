@@ -393,6 +393,31 @@
     enhancerOptions.find((e) => e.model.toLowerCase() === promptEnhancerEdit.trim().toLowerCase()),
   );
 
+  // Does the typed id name a model this install actually serves? A Settings row
+  // and a system prompt say nothing about that, and an id that resolves to
+  // nothing fails only later, at the Enhance button, as a bare 404 from the
+  // composer - far from the field that caused it. Still a warning and not a
+  // block: naming a model you are about to install is a legitimate thing to do.
+  function enhancerMissing(id: string): boolean {
+    const v = id.trim().toLowerCase();
+    if (!v || v === ENHANCER_NONE) return false;
+    return !$models.some((m) => m.id.toLowerCase() === v);
+  }
+  // The mistake this catches in practice is a TRUNCATED id: the catalog names a
+  // model by family plus quant, and "gemma-4-e2b-it-qat" looks complete next to
+  // "gemma-4-e2b-it-qat-ud-q4_k_xl". So prefer a prefix hit, and offer it as a
+  // one-click fix rather than as prose.
+  function enhancerDidYouMean(id: string): string {
+    const v = id.trim().toLowerCase();
+    if (!v) return "";
+    const ids = $models.map((m) => m.id);
+    return (
+      ids.find((m) => m.toLowerCase().startsWith(v)) ?? ids.find((m) => m.toLowerCase().includes(v)) ?? ""
+    );
+  }
+  const textMissing = $derived(enhancerMissing(promptEnhancer));
+  const editMissing = $derived(enhancerMissing(promptEnhancerEdit));
+
   // The enhancer detection pairs on the image model's base key, the same key the
   // model table groups quants under, so every quant of a checkpoint finds the
   // enhancer published beside it. Separators are folded first: publishers mix
@@ -2052,6 +2077,18 @@
                   onclick={() => (promptEnhancer = ENHANCER_NONE)}>Don't use one</button
                 >
               </span>
+            {:else if textMissing}
+              {@const near = enhancerDidYouMean(promptEnhancer)}
+              <span class="text-micro text-warning">
+                No model with this id is in the catalog: Enhance will fail with a 404.
+                {#if near}
+                  <button
+                    type="button"
+                    class="underline hover:text-txtmain"
+                    onclick={() => (promptEnhancer = near)}>Use {near}</button
+                  >
+                {/if}
+              </span>
             {:else if promptEnhancer.trim() && !enhancerMatch}
               <span class="text-micro {promptEnhancerPrompt.trim() ? 'text-txtsecondary' : 'text-warning'}">
                 {promptEnhancerPrompt.trim()
@@ -2105,6 +2142,18 @@
                   class="underline hover:text-txtmain"
                   onclick={() => (promptEnhancerEdit = ENHANCER_NONE)}>Don't use one</button
                 >
+              </span>
+            {:else if editMissing}
+              {@const near = enhancerDidYouMean(promptEnhancerEdit)}
+              <span class="text-micro text-warning">
+                No model with this id is in the catalog: Enhance will fail with a 404.
+                {#if near}
+                  <button
+                    type="button"
+                    class="underline hover:text-txtmain"
+                    onclick={() => (promptEnhancerEdit = near)}>Use {near}</button
+                  >
+                {/if}
               </span>
             {:else if promptEnhancerEdit.trim() && !enhancerEditMatch}
               <span class="text-micro {promptEnhancerEditPrompt.trim() ? 'text-txtsecondary' : 'text-warning'}">
