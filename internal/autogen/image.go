@@ -895,7 +895,15 @@ func extraImageBudget(s Settings, m ExtraImageModel) float64 {
 // tile needed in the runs that succeeded, with the 9.1GB figure above being the
 // same clip at temporal_tile_frames=8, which did not.
 func videoVaeResidentPlan(exe string, s Settings, row GgufRow, comp imageComponents, ov *Override, vid videoInfo, budget float64, offload bool) string {
-	if !vid.is() || offload || len(s.Gpus) == 0 {
+	// Single-GPU only, and not for tidiness: the plan names one device for every
+	// module, which on a two-card box overrules placements auto-fit can make and
+	// we cannot. Its params order is "compute device -> RAM -> other GPU -> disk",
+	// so it can park the text encoder in GPU1's VRAM where this says RAM. And
+	// offload=false is decided against the budget for the WHOLE set, so a model
+	// that fits only when spread would be pinned onto one card that cannot hold
+	// it. A measured 40s on one box does not justify guessing on hardware the
+	// measurement never covered.
+	if !vid.is() || offload || len(s.Gpus) != 1 {
 		return ""
 	}
 	if ov != nil && ov.VaeOnCpu == "on" {

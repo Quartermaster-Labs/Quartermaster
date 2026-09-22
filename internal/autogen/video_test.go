@@ -392,6 +392,16 @@ func TestVideoVaeResidentPlan_KeepsAResidentVaeOnTheGpu(t *testing.T) {
 	if p := videoVaeResidentPlan(exe, s, row, comp, nil, ltx, 18.0, false); p != "" {
 		t.Errorf("no-headroom card got a plan %q, want auto-fit left alone", p)
 	}
+	// A second card changes who should decide. auto-fit can put the text encoder
+	// in GPU1's VRAM, which this plan cannot express, and offload=false was
+	// decided against the whole set's budget.
+	two := Settings{Gpus: GpuSet{
+		{Index: 0, Name: "AMD Radeon RX 7900 XTX", TotalGB: 23.95, FreeGB: 23},
+		{Index: 1, Name: "AMD Radeon RX 7900 XTX", TotalGB: 23.95, FreeGB: 23},
+	}}
+	if p := videoVaeResidentPlan(exe, two, row, comp, nil, ltx, 23.0, false); p != "" {
+		t.Errorf("multi-GPU box got a plan %q, want auto-fit left alone", p)
+	}
 	// VaeOnCpu is the escape hatch for a backend that whitens the VAE; it wins.
 	if p := videoVaeResidentPlan(exe, s, row, comp, &Override{VaeOnCpu: "on"}, ltx, 23.0, false); p != "" {
 		t.Errorf("VaeOnCpu=on got a plan %q, want the VAE left on the CPU", p)
