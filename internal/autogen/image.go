@@ -657,7 +657,19 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 		// the sequence), that spike overcommits shared VRAM and hard-hangs
 		// Windows. The VAE runs once per image, so parking it on CPU is nearly
 		// free and removes the crash. te=cpu only moves the text encoders.
-		lines = append(lines, "--vae-on-cpu")
+		//
+		// "Nearly free" is an IMAGE claim and does not survive the move to video.
+		// A 3D VAE decodes every frame of the clip rather than one picture, so on
+		// CPU it stops being a rounding error and becomes a large share of the
+		// whole render. The premise fails too: the spike was dangerous precisely
+		// because offloading an IMAGE model left ~1.5GB of headroom, but a video
+		// model that offloads hands its ENTIRE budget to the graph (graphBudget
+		// returns the full budget when offload is set), so the decode has room on
+		// the GPU it was being protected from. Override .VaeOnCpu = "on" is still
+		// there for a box that wants it anyway.
+		if !vid.is() {
+			lines = append(lines, "--vae-on-cpu")
+		}
 	}
 	// Generation defaults applied when a request omits them. An image model
 	// starts from nothing (sd-server's own defaults stand); a video model starts
