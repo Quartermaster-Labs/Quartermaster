@@ -23,8 +23,9 @@
     type PreviewLayers,
     models,
   } from "../stores/api";
-  import type { PromptEnhancerInfo } from "../lib/types";
+  import type { Model, PromptEnhancerInfo } from "../lib/types";
   import { baseKey } from "../lib/modelTable";
+  import { modelCategory } from "../lib/modelUtils";
   import { get } from "svelte/store";
   import { tick } from "svelte";
   import { FolderOpen, HelpCircle, Plus, X } from "lucide-svelte";
@@ -33,6 +34,7 @@
   import VramGauge from "./VramGauge.svelte";
   import LaunchArgsPanes from "./LaunchArgsPanes.svelte";
   import Select, { type SelectOption } from "./Select.svelte";
+  import Combobox, { type ComboOption } from "./Combobox.svelte";
   import Toggle from "./Toggle.svelte";
   import { estimateSegments } from "../stores/vram";
   import {
@@ -140,6 +142,11 @@
   // with no LoRA folder configured the ladder ends at the model's OWN directory,
   // where the "adapters" on offer are really its base weights.
   let loraList = $state<LoraListing>({ dir: "", files: [] });
+  // One suggestion list for every adapter row. Size is the detail line because
+  // a folder of adapters is told apart by size far more often than by name.
+  const loraSuggestions = $derived<ComboOption[]>(
+    loraList.files.map((f) => ({ value: f.name, detail: `${f.sizeGB.toFixed(2)} GB` })),
+  );
   // Boolean toggles. Stored as strings on the override ("" = default-on, "off" =
   // forced off); surfaced here as plain on/off checkboxes (auto state dropped).
   let reasoningOn = $state(true); // false => reasoningFmt "off"
@@ -379,13 +386,38 @@
   // The Settings row the typed id resolves to, or undefined. Free text, NOT a
   // dropdown: the enhancer id is just a string the chat request is made with,
   // so restricting it to a list would be a UI-invented rule the server does not
-  // have. The datalist suggests the configured ones; anything else is allowed.
+  // have. The combobox suggests the configured ones; anything else is allowed.
   const enhancerMatch = $derived(
     enhancerOptions.find((e) => e.model.toLowerCase() === promptEnhancer.trim().toLowerCase()),
   );
   const enhancerEditMatch = $derived(
     enhancerOptions.find((e) => e.model.toLowerCase() === promptEnhancerEdit.trim().toLowerCase()),
   );
+
+  // Does the typed id name a model this install actually serves? A Settings row
+  // and a system prompt say nothing about that, and an id that resolves to
+  // nothing fails only later, at the Enhance button, as a bare 404 from the
+  // composer - far from the field that caused it. Still a warning and not a
+  // block: naming a model you are about to install is a legitimate thing to do.
+  function enhancerMissing(id: string): boolean {
+    const v = id.trim().toLowerCase();
+    if (!v || v === ENHANCER_NONE) return false;
+    return !$models.some((m) => m.id.toLowerCase() === v);
+  }
+  // The mistake this catches in practice is a TRUNCATED id: the catalog names a
+  // model by family plus quant, and "gemma-4-e2b-it-qat" looks complete next to
+  // "gemma-4-e2b-it-qat-ud-q4_k_xl". So prefer a prefix hit, and offer it as a
+  // one-click fix rather than as prose.
+  function enhancerDidYouMean(id: string): string {
+    const v = id.trim().toLowerCase();
+    if (!v) return "";
+    const ids = $models.map((m) => m.id);
+    return (
+      ids.find((m) => m.toLowerCase().startsWith(v)) ?? ids.find((m) => m.toLowerCase().includes(v)) ?? ""
+    );
+  }
+  const textMissing = $derived(enhancerMissing(promptEnhancer));
+  const editMissing = $derived(enhancerMissing(promptEnhancerEdit));
 
   // The enhancer detection pairs on the image model's base key, the same key the
   // model table groups quants under, so every quant of a checkpoint finds the
@@ -406,12 +438,46 @@
   // Configured rows first, then anything detected that is not already one of
   // them. A detection with no direction in its name is offered for both fields,
   // since that is exactly what "we cannot tell" means.
-  function enhancerSuggestions(dir: "t2i" | "i2i") {
-    const out = enhancerOptions.map((e) => ({ model: e.model, label: e.name || e.model }));
-    const have = new Set(out.map((o) => o.model.toLowerCase()));
+  // An enhancer is a CHAT model: text in, text out. Everything else in the
+  // catalog answers on some other route entirely (a diffusion sampler, a TTS
+  // engine), so offering it here could only ever produce a request its backend
+  // cannot serve. modelCategory is the app's own bucketing, reused rather than
+  // re-derived: a second capability ladder here would drift from the one the
+  // Models tab sections by. A reranker is the one thing it buckets as "llm"
+  // that cannot hold a conversation, so it is dropped by name.
+  function isChatModel(m: Model): boolean {
+    return modelCategory(m) === "llm" && !m.capabilities?.reranker;
+  }
+
+  function enhancerSuggestions(dir: "t2i" | "i2i"): ComboOption[] {
+    // detail, not a second column: the id IS the value, so a label that merely
+    // repeats it would be noise. Drop it in that case.
+    const out: ComboOption[] = enhancerOptions.map((e) => ({
+      value: e.model,
+      detail: e.name && e.name !== e.model ? e.name : undefined,
+      group: "Configured enhancers",
+    }));
+    const have = new Set(out.map((o) => o.value.toLowerCase()));
     for (const d of detectedEnhancers) {
       if (have.has(d.model.toLowerCase()) || (d.direction && d.direction !== dir)) continue;
-      out.push({ model: d.model, label: d.imageModel ? `detected for ${d.imageModel}` : "detected" });
+      have.add(d.model.toLowerCase());
+      out.push({
+        value: d.model,
+        detail: d.imageModel ? `beside ${d.imageModel}` : undefined,
+        group: "Detected",
+      });
+    }
+    // The rest of the catalog, last. This field takes a plain model id and any
+    // chat model is a legal one, so leaving the catalog out meant typing an id
+    // from memory - and an id carries its quant, so a remembered one comes out
+    // truncated ("gemma-4-e2b-it-qat" for "gemma-4-e2b-it-qat-ud-q4_k_xl") and
+    // 404s at the Enhance button. Offering them is what stops that being typed
+    // in the first place.
+    for (const m of $models) {
+      if (have.has(m.id.toLowerCase()) || !isChatModel(m)) continue;
+      have.add(m.id.toLowerCase());
+      const bits = [m.name && m.name !== m.id ? m.name : "", m.capabilities?.vision ? "vision" : ""];
+      out.push({ value: m.id, detail: bits.filter(Boolean).join(" · ") || undefined, group: "Catalog" });
     }
     return out;
   }
@@ -2008,26 +2074,24 @@
 
           <label class="flex flex-col gap-1 text-sm col-span-2">
             <span class="text-txtsecondary flex items-center gap-1">
-              Prompt enhancer (txt2img)
-              {@render hint("Id of a chat model that rewrites this model's prompt into a more precise one before rendering. Used when the request carries no reference image, and for img2img too unless the field below names a different one. Any model id is accepted; the suggestions are the enhancers configured in Settings, which is also where each one's fixed system prompt lives. The Images tab then offers an Enhance button that shows you the rewrite before you render it. Never applied automatically.")}
+              Prompt enhancer ({videoMode ? "text-to-video" : "txt2img"})
+              {@render hint(
+                videoMode
+                  ? "Id of a chat model that rewrites this model's prompt into a more precise one before rendering. Used when the request carries no first-frame reference, and for first-frame renders too unless the field below names a different one. Any model id is accepted; the suggestions are the enhancers configured in Settings, which is also where each one's fixed system prompt lives. The Video tab then offers an Enhance button that shows you the rewrite before you render it. Never applied automatically. Worth setting for LTX, which was trained on long single-paragraph audio-visual captions and degrades on a short prompt: Lightricks drives it with a stock Gemma-4-E2B-it and ships the two system prompts (gemma4_t2v / gemma4_i2v) in the LTX-2 repo."
+                  : "Id of a chat model that rewrites this model's prompt into a more precise one before rendering. Used when the request carries no reference image, and for img2img too unless the field below names a different one. Any model id is accepted; the suggestions are the enhancers configured in Settings, which is also where each one's fixed system prompt lives. The Images tab then offers an Enhance button that shows you the rewrite before you render it. Never applied automatically.",
+              )}
             </span>
             <div class="flex items-center gap-1">
-              <input
-                type="text"
+              <Combobox
                 bind:value={promptEnhancer}
-                list="prompt-enhancers-t2i"
-                spellcheck="false"
+                options={suggestT2I}
+                mono
                 placeholder={autoText ? `${autoText} (detected)` : "none"}
-                class="cfg-input font-mono flex-1 min-w-0"
-                aria-label="Prompt enhancer for txt2img"
+                class="flex-1 min-w-0"
+                ariaLabel="Prompt enhancer for txt2img"
               />
               {@render enhancerPromptBtn("t2i", promptEnhancerPrompt, textDisabled)}
             </div>
-            <datalist id="prompt-enhancers-t2i">
-              {#each suggestT2I as e (e.model)}
-                <option value={e.model} label={e.label}></option>
-              {/each}
-            </datalist>
             <!-- Say what this id actually resolves to. Free text plus detection
                  means three different sources end up in one box, and which one
                  won is the thing that is otherwise invisible. -->
@@ -2042,6 +2106,18 @@
                   class="underline hover:text-txtmain"
                   onclick={() => (promptEnhancer = ENHANCER_NONE)}>Don't use one</button
                 >
+              </span>
+            {:else if textMissing}
+              {@const near = enhancerDidYouMean(promptEnhancer)}
+              <span class="text-micro text-warning">
+                No model with this id is in the catalog: Enhance will fail with a 404.
+                {#if near}
+                  <button
+                    type="button"
+                    class="underline hover:text-txtmain"
+                    onclick={() => (promptEnhancer = near)}>Use {near}</button
+                  >
+                {/if}
               </span>
             {:else if promptEnhancer.trim() && !enhancerMatch}
               <span class="text-micro {promptEnhancerPrompt.trim() ? 'text-txtsecondary' : 'text-warning'}">
@@ -2063,30 +2139,28 @@
 
           <label class="flex flex-col gap-1 text-sm col-span-2">
             <span class="text-txtsecondary flex items-center gap-1">
-              Prompt enhancer (img2img)
-              {@render hint("Used instead of the one above when the request carries a reference image. Qwen ships the pair (PE-T2I, PE-I2I) and they are not interchangeable: the img2img one rewrites an instruction about a picture that already exists, the txt2img one composes a scene from nothing. Leave empty to use the txt2img enhancer in both directions.")}
+              Prompt enhancer ({videoMode ? "first frame" : "img2img"})
+              {@render hint(
+                videoMode
+                  ? "Used instead of the one above when the request carries a first-frame reference. The two are not interchangeable: this one has to describe a frame that already exists and narrate forward from it, the other composes a shot from nothing. It should be a vision enhancer, since it is shown the frame. Leave empty to use the text-to-video enhancer in both directions."
+                  : "Used instead of the one above when the request carries a reference image. Qwen ships the pair (PE-T2I, PE-I2I) and they are not interchangeable: the img2img one rewrites an instruction about a picture that already exists, the txt2img one composes a scene from nothing. Leave empty to use the txt2img enhancer in both directions.",
+              )}
             </span>
             <div class="flex items-center gap-1">
-              <input
-                type="text"
+              <Combobox
                 bind:value={promptEnhancerEdit}
-                list="prompt-enhancers-i2i"
-                spellcheck="false"
+                options={suggestI2I}
+                mono
                 placeholder={autoEdit
                   ? `${autoEdit} (detected)`
                   : promptEnhancer.trim()
                     ? "same as above"
                     : "none"}
-                class="cfg-input font-mono flex-1 min-w-0"
-                aria-label="Prompt enhancer for img2img"
+                class="flex-1 min-w-0"
+                ariaLabel="Prompt enhancer for img2img"
               />
               {@render enhancerPromptBtn("i2i", promptEnhancerEditPrompt, editDisabled)}
             </div>
-            <datalist id="prompt-enhancers-i2i">
-              {#each suggestI2I as e (e.model)}
-                <option value={e.model} label={e.label}></option>
-              {/each}
-            </datalist>
             {#if editDisabled}
               <span class="text-micro text-txtsecondary">
                 No enhancer for edits, even if the txt2img one is set.
@@ -2098,6 +2172,18 @@
                   class="underline hover:text-txtmain"
                   onclick={() => (promptEnhancerEdit = ENHANCER_NONE)}>Don't use one</button
                 >
+              </span>
+            {:else if editMissing}
+              {@const near = enhancerDidYouMean(promptEnhancerEdit)}
+              <span class="text-micro text-warning">
+                No model with this id is in the catalog: Enhance will fail with a 404.
+                {#if near}
+                  <button
+                    type="button"
+                    class="underline hover:text-txtmain"
+                    onclick={() => (promptEnhancerEdit = near)}>Use {near}</button
+                  >
+                {/if}
               </span>
             {:else if promptEnhancerEdit.trim() && !enhancerEditMatch}
               <span class="text-micro {promptEnhancerEditPrompt.trim() ? 'text-txtsecondary' : 'text-warning'}">
@@ -2699,10 +2785,10 @@
               </span>
               {#each loras as l, i (i)}
                 <div class="flex items-center gap-2">
-                  <input
-                    type="text" list="lora-files" bind:value={l.path}
-                    class="cfg-input flex-1 font-mono" placeholder="adapter.gguf" spellcheck="false"
-                    aria-label="LoRA adapter path"
+                  <Combobox
+                    bind:value={l.path} options={loraSuggestions} mono
+                    class="flex-1 min-w-0" placeholder="adapter.gguf"
+                    ariaLabel="LoRA adapter path"
                   />
                   <input
                     type="number" step="0.05"
@@ -2735,13 +2821,6 @@
                   </span>
                 {/if}
               </div>
-              <!-- Shared by every row's input: the browser dedupes suggestions,
-                   and one list beats one per row when a folder holds dozens. -->
-              <datalist id="lora-files">
-                {#each loraList.files as f (f.name)}
-                  <option value={f.name}></option>
-                {/each}
-              </datalist>
             </div>
           {/if}
 

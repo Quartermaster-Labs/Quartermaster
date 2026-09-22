@@ -121,7 +121,7 @@ export async function enhancePrompt(
     throw new EnhanceError(`Enhancer unreachable: ${e instanceof Error ? e.message : String(e)}`);
   }
   if (!res.ok) {
-    throw new EnhanceError(enhanceHttpError(res.status, await res.text()));
+    throw new EnhanceError(enhanceHttpError(res.status, await res.text(), enhancer.model));
   }
 
   const json = await res.json();
@@ -145,14 +145,22 @@ export async function enhancePrompt(
 // enhanceHttpError turns a backend error body into something a user can act on.
 // The raw body is llama.cpp's JSON envelope, and pasting it into the UI made a
 // fixable cause read as an opaque 400.
-export function enhanceHttpError(status: number, body: string): string {
+export function enhanceHttpError(status: number, body: string, model = ""): string {
   if (/load image or audio file/i.test(body)) {
     // Now that refs are inlined before sending, the remaining way to earn this
     // is a format llama.cpp's stb_image cannot decode.
     return "The enhancer could not read the reference image. Save it as PNG or JPEG and re-attach it: the backend decodes with stb_image, which cannot read WebP, AVIF or HEIC.";
   }
   if (status === 404) {
-    return "The enhancer model is not in the catalog any more. Regenerate the config, or clear the enhancer on this model.";
+    // Two different 404s reach here and the remedies are opposite ones, so the
+    // id has to be named either way: this is a string typed into another
+    // model's config, and the one thing the user cannot see from the composer
+    // is WHICH id failed.
+    const named = model ? ` (${model})` : "";
+    if (/on this listener/i.test(body)) {
+      return `The enhancer model${named} is not exposed on this port. Add it to this listener's model list, or name one that is.`;
+    }
+    return `No model with that id${named} is in the catalog, so the enhancer could not be called. Check it on the image model's config editor - a missing quant suffix is the usual cause - or clear the field.`;
   }
   const detail = jsonMessage(body) || body.trim();
   return `Enhance failed: ${status}${detail ? ` ${detail.slice(0, 300)}` : ""}`;

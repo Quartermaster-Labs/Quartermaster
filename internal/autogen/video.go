@@ -261,6 +261,18 @@ func emitVideoModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, n
 	// actually keeps a second process from spawning underneath a render.
 	writeEstVram(b, budget)
 	b.WriteString("    checkEndpoint: /\n")
+	// Same wiring as the image path, and it rides the model entry for the same
+	// reason: the rewrite is not a launch flag (sd-server has no such concept), so
+	// the playground reads it off /api/models and offers the rewrite BEFORE the job
+	// is posted, which is the only place a rewrite is reviewable.
+	//
+	// The two directions read t2v / i2v on this path: the Video tab's edit
+	// direction is a FIRST-FRAME reference, not an img2img base. Video wants the
+	// rewrite more than images do - LTX is trained on single-paragraph audio-visual
+	// captions of 150-220 words and degrades on a short prompt, so a bare prompt is
+	// out of distribution rather than merely vague - and pays less for it: the
+	// enhancer swaps in once, ahead of a render measured in minutes.
+	writeEnhancerBlock(b, s, row.ID, ovPromptEnhancer(ov), ovPromptEnhancerEdit(ov), ovEnhancerPrompt(ov), ovEnhancerEditPrompt(ov))
 	if ov != nil && ov.Unlisted {
 		b.WriteString("    unlisted: true\n")
 	}

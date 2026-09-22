@@ -104,7 +104,18 @@ describe("enhanceHttpError", () => {
     expect(enhanceHttpError(502, "upstream closed")).toBe("Enhance failed: 502 upstream closed");
   });
 
-  it("explains a missing enhancer model", () => {
-    expect(enhanceHttpError(404, "{}")).toMatch(/not in the catalog/);
+  it("names the id when the enhancer model is not in the catalog", () => {
+    const msg = enhanceHttpError(404, "{}", "gemma-4-e2b-it-qat");
+    expect(msg).toMatch(/No model with that id/);
+    // The id is the whole diagnosis: a truncated one (a dropped quant suffix)
+    // looks perfectly plausible until it is put beside the catalog.
+    expect(msg).toMatch(/gemma-4-e2b-it-qat/);
+  });
+
+  it("tells a listener-scoping 404 apart from an unknown model", () => {
+    const body = '{"error":{"message":"model \"pe-i2i\" is not available on this listener"}}';
+    const msg = enhanceHttpError(404, body, "pe-i2i");
+    expect(msg).toMatch(/not exposed on this port/);
+    expect(msg).not.toMatch(/No model with that id/);
   });
 });

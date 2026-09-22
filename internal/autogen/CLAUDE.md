@@ -167,8 +167,8 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 
 ### Prompt enhancers
 
-An image model can name a **prompt enhancer**: a chat model that rewrites its prompt into a more
-precise one before rendering. Five pieces, deliberately split:
+An image **or video** model can name a **prompt enhancer**: a chat model that rewrites its prompt
+into a more precise one before rendering. Five pieces, deliberately split:
 
 - `Settings.PromptEnhancers []PromptEnhancer` (`overrides.go`): the table, declared ONCE. Keyed
   by catalog model id, carrying the fixed system prompt, a display name and a `vision` flag.

@@ -16,6 +16,22 @@ export const ASPECTS = [
 ];
 export const SIZE_TIERS = [512, 768, 1024, 1280, 1536, 2048];
 
+/**
+ * The ASPECTS entry closest to a free-form width/height ratio.
+ *
+ * Lives here rather than in either playground tab because three callers need
+ * the same answer and they must agree: a prompt enhancer can return a ratio the
+ * picker has no entry for (Qwen's system prompt derives things like "9:2" for
+ * panel grids), and a model's own default size is an arbitrary WxH too. Refusing
+ * an unlisted ratio would drop the framing on exactly the layouts the field
+ * exists to describe, so the nearest rung is used instead.
+ */
+export function nearestAspect(ratio: number): string {
+  return ASPECTS.reduce((best, a) =>
+    Math.abs(a.w / a.h - ratio) < Math.abs(best.w / best.h - ratio) ? a : best,
+  ).value;
+}
+
 // Concrete [w,h] for an aspect id + long edge. Short edge snapped to /64.
 export function aspectDims(aspectValue: string, longEdge: number): [number, number] {
   const a = ASPECTS.find((x) => x.value === aspectValue) ?? ASPECTS[0];

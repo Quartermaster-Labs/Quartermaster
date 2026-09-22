@@ -28,12 +28,14 @@
   import Select from "./Select.svelte";
   import Composer from "./Composer.svelte";
   import { autogrow } from "../../lib/autogrow";
-  import { Film, X, Download, Ban, Plus, Pencil, Save, RefreshCw, Type, Paintbrush, Sparkles, Maximize2, ChevronsRight, ImagePlus, FlagTriangleRight } from "lucide-svelte";
+  import { Film, X, Download, Ban, Plus, Pencil, Save, RefreshCw, Type, Paintbrush, Sparkles, Maximize2, ChevronsRight, ImagePlus, FlagTriangleRight, Loader2, Wand2, Undo2 } from "lucide-svelte";
   import { scrollFade } from "../../lib/scrollFade";
   import { parseSdProgress } from "./imageGen";
+  import { enhancePrompt } from "../../lib/promptEnhance";
   import {
     ASPECTS,
     aspectDims,
+    nearestAspect,
     SAMPLER_OPTIONS,
     SCHEDULER_OPTIONS,
     VIDEO_SIZE_TIERS,
@@ -199,10 +201,7 @@
     $fpsStore = String(d.fps);
     if (d.size) {
       const [w, h] = d.size.split("x").map(Number);
-      const r = w / h;
-      $aspectStore = ASPECTS.reduce((best, a) =>
-        Math.abs(a.w / a.h - r) < Math.abs(best.w / best.h - r) ? a : best
-      ).value;
+      $aspectStore = nearestAspect(w / h);
       $longEdgeStore = String(Math.max(w, h));
     }
   });
@@ -281,6 +280,107 @@
   $effect(() => {
     if (!firstFrame && lastFrame) lastFrame = null;
   });
+
+  // Prompt enhancement: the Images tab's rewrite button, wired to the video
+  // directions. A first frame set means the render conditions on an image, so
+  // the edit enhancer is the one that knows what to do with it; otherwise the
+  // text enhancer. Either half alone covers both directions, since dropping the
+  // button on a model that clearly has an enhancer reads as a bug, and the
+  // rewrite is reviewable anyway.
+  let enhancing = $state(false);
+  // Its own slot rather than frameRefError: that one is cleared by the next
+  // frame pick, and a failed rewrite should stay on screen until it is read.
+  let enhanceError = $state("");
+  // The pre-rewrite prompt, kept so one click undoes the rewrite. Cleared as
+  // soon as the user edits the box themselves or sends, because after that
+  // "revert" would throw away work rather than undo a machine edit.
+  let preEnhance = $state<string | null>(null);
+  // What the enhancer produced, so the revert offer can tell an untouched
+  // rewrite from one the user has since edited.
+  let enhancedText = $state<string | null>(null);
+  // The aspect the enhancer moved the framing to, and what it was before. A
+  // structured enhancer returns the ratio it wrote the prompt FOR, so applying
+  // it keeps the two agreeing; but framing is a control the user sets by hand,
+  // so a silent change is a control moving on its own. Shown, and reverted with
+  // the prompt, so the whole rewrite undoes as one action.
+  let enhancedAspect = $state<string | null>(null);
+  let preEnhanceAspect = $state<string | null>(null);
+  $effect(() => {
+    if (preEnhance !== null && prompt !== enhancedText) {
+      preEnhance = null;
+      enhancedText = null;
+      // Deliberately NOT reverting the aspect here. Editing the rewritten text
+      // is accepting the rewrite and continuing from it, so the framing it was
+      // written for should stay; only an explicit revert puts it back.
+      enhancedAspect = null;
+      preEnhanceAspect = null;
+    }
+  });
+
+  // The rewrite model this video model opts into, resolved server-side. Absent
+  // => the button does not render at all, rather than rendering disabled: an
+  // enhancer is opt-in per model and most models will never have one.
+  //
+  // A model may name one per DIRECTION (Qwen ships PE-T2I and PE-I2I, which are
+  // not interchangeable), so the pick follows the mode the render itself will
+  // use: a first frame set means this is an image-to-video render.
+  let enhancerPair = $derived($models.find((m) => m.id === $selectedModelStore));
+  let enhancer = $derived(
+    firstFrame
+      ? (enhancerPair?.promptEnhancerEdit ?? enhancerPair?.promptEnhancer)
+      : (enhancerPair?.promptEnhancer ?? enhancerPair?.promptEnhancerEdit),
+  );
+
+  // Nearest supported aspect to a free-form "W:H" the enhancer may answer with.
+  // It can return a ratio the picker has no entry for, and refusing those would
+  // drop the framing on exactly the layouts the field exists to describe.
+  function snapAspect(ratio: string): string | null {
+    const [w, h] = ratio.split(":").map((n) => Number(n.trim()));
+    if (!(w > 0) || !(h > 0)) return null;
+    return nearestAspect(w / h);
+  }
+
+  async function runEnhance() {
+    if (!enhancer || enhancing || isGenerating) return;
+    enhancing = true;
+    enhanceError = "";
+    try {
+      // The frames are what this render conditions on, so a vision enhancer
+      // gets to see them. A text-only rewriter ignores the list entirely.
+      const refs = enhancer.vision
+        ? [firstFrame, lastFrame].filter((x): x is string => !!x)
+        : [];
+      // Refs may be /api/media/ paths from a reloaded turn rather than data
+      // URLs; enhancePrompt resolves them, the same way the render path's
+      // toDataUrl does.
+      const r = await enhancePrompt(enhancer, prompt, refs);
+      prompt = r.prompt;
+      enhancedText = r.prompt;
+      preEnhance = r.original;
+      // ratioFollow means "match an input frame", which the render already
+      // does, so there is nothing to set and nothing to announce.
+      const snapped = r.ratio && !r.ratioFollow ? snapAspect(r.ratio) : null;
+      if (snapped && snapped !== $aspectStore) {
+        preEnhanceAspect = $aspectStore;
+        enhancedAspect = snapped;
+        $aspectStore = snapped;
+      }
+    } catch (e) {
+      enhanceError = e instanceof Error ? e.message : String(e);
+    } finally {
+      enhancing = false;
+    }
+  }
+
+  function revertEnhance() {
+    if (preEnhance === null) return;
+    prompt = preEnhance;
+    preEnhance = null;
+    enhancedText = null;
+    if (preEnhanceAspect !== null) $aspectStore = preEnhanceAspect;
+    enhancedAspect = null;
+    preEnhanceAspect = null;
+  }
 
   // A frame reference as bytes the backend can decode.
   //
@@ -990,6 +1090,34 @@
       {/snippet}
 
       {#snippet videoLeftButtons()}
+        {#if enhancer}
+          <button
+            class="composer-icon-btn"
+            onclick={runEnhance}
+            disabled={enhancing || isGenerating || !prompt.trim()}
+            use:tip={isGenerating
+              ? "Wait for this render to finish: the enhancer is a separate model, and starting it now would make it queue behind the video model."
+              : `Enhance the prompt with ${enhancer.name}${firstFrame ? " (first-frame rewrite)" : " (text-to-video rewrite)"}${enhancer.vision && firstFrame ? ", which reads the reference frame" : ""}. Rewrites the box, so you can read and edit it before rendering.`}
+          >
+            {#if enhancing}
+              <Loader2 class="w-[1.125rem] h-[1.125rem] animate-spin" />
+            {:else}
+              <Wand2 class="w-[1.125rem] h-[1.125rem]" />
+            {/if}
+          </button>
+          {#if preEnhance !== null}
+            <button
+              class="composer-icon-btn"
+              onclick={revertEnhance}
+              disabled={enhancing}
+              use:tip={preEnhanceAspect !== null
+                ? `Revert to the prompt you wrote, and the aspect ratio back to ${preEnhanceAspect}`
+                : "Revert to the prompt you wrote"}
+            >
+              <Undo2 class="w-[1.125rem] h-[1.125rem]" />
+            </button>
+          {/if}
+        {/if}
         <!-- Frame conditioning lives in the COMPOSER, not the settings panel:
              these are per-message inputs like an attachment, not a setting that
              persists across renders. Shown only for checkpoints that condition
@@ -1061,6 +1189,29 @@
         {#if frameRefError}
           <p class="text-xs text-red-500 mb-2 px-2">{frameRefError}</p>
         {/if}
+
+        {#if enhanceError}
+          <div class="mb-2 p-2 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded text-sm flex items-start gap-2">
+            <span class="flex-1">{enhanceError}</span>
+            <button class="shrink-0 opacity-70 hover:opacity-100" onclick={() => (enhanceError = "")} aria-label="Dismiss">
+              <X class="w-3.5 h-3.5" />
+            </button>
+          </div>
+        {/if}
+
+        <!-- A control moved on its own, so it says so. Without this the aspect
+             picker silently disagrees with what the user last set it to. -->
+        {#if enhancedAspect}
+          <div class="mb-2 p-2 bg-surface-2 border border-card-border text-txtsecondary rounded text-sm flex items-start gap-2">
+            <span class="flex-1">
+              {enhancer?.name ?? "The enhancer"} wrote this prompt for <strong class="text-txtmain">{enhancedAspect}</strong>, so the aspect ratio was changed to match.
+            </span>
+            <button class="shrink-0 opacity-70 hover:opacity-100" onclick={() => (enhancedAspect = null)} aria-label="Dismiss">
+              <X class="w-3.5 h-3.5" />
+            </button>
+          </div>
+        {/if}
+
         <input type="file" accept="image/*" class="hidden" bind:this={firstInput} onchange={(e) => pickFrame(e, "first")} />
         <input type="file" accept="image/*" class="hidden" bind:this={lastInput} onchange={(e) => pickFrame(e, "last")} />
         <Composer

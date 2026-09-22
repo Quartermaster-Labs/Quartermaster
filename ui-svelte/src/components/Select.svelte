@@ -15,7 +15,7 @@
 </script>
 
 <script lang="ts">
-  import { cssZoom } from "../lib/uiZoom";
+  import { placePopup, popupStyle, type PopupPos } from "../lib/popupPlace";
   import { ChevronDown, Check } from "lucide-svelte";
   import { tip } from "../lib/tooltip";
 
@@ -58,41 +58,15 @@
   let trigger = $state<HTMLButtonElement | undefined>();
   let list = $state<HTMLUListElement | undefined>();
 
-  // The popup is position:fixed rather than absolute so it escapes the modal
-  // body's overflow clipping. It still lives inside this component's DOM, which
-  // matters: a showModal() <dialog> paints in the browser's top layer, so a
-  // popup portalled to <body> would be painted *under* the dialog it belongs to.
-  // All local (post-zoom) pixels - place() converts. viewportH rides along so an
-  // upward-flipped list can anchor with `bottom` in the same units.
-  let pos = $state({ left: 0, top: 0, width: 0, maxHeight: 240, above: false, viewportH: 0 });
+  // Where the list sits. placePopup() owns the measuring, the zoom correction
+  // and the flip rule - see lib/popupPlace.ts.
+  let pos = $state<PopupPos>({ left: 0, top: 0, width: 0, maxHeight: 240, above: false, viewportH: 0 });
 
   const selected = $derived(options.findIndex((o) => o.value === (value ?? "")));
   const label = $derived(selected >= 0 ? options[selected].label : placeholder);
 
-  const GAP = 4;
-  const EDGE = 8;
-
   function place(): void {
-    if (!trigger) return;
-    const r = trigger.getBoundingClientRect();
-    // Rect and viewport are visual pixels; the list's own left/top/width are
-    // local ones. Divide by the interface zoom or the list drifts off its
-    // trigger - see lib/uiZoom.ts.
-    const z = cssZoom(trigger);
-    const below = window.innerHeight - r.bottom - GAP - EDGE;
-    const above = r.top - GAP - EDGE;
-    // Flip up only when the gap below is genuinely too small AND above is
-    // roomier — a list that jumps sides on every few pixels of scroll is worse
-    // than one that scrolls internally.
-    const flip = below < 160 && above > below;
-    pos = {
-      left: Math.max(EDGE, Math.min(r.left, window.innerWidth - r.width - EDGE)) / z,
-      top: (flip ? r.top - GAP : r.bottom + GAP) / z,
-      width: r.width / z,
-      maxHeight: Math.max(120, Math.min(280, flip ? above : below)) / z,
-      above: flip,
-      viewportH: window.innerHeight / z,
-    };
+    if (trigger) pos = placePopup(trigger);
   }
 
   function openList(): void {
@@ -235,15 +209,13 @@
       role="listbox"
       tabindex="-1"
       aria-label={ariaLabel}
-      class="qm-select-list pretty-scroll {mono ? 'font-mono' : ''}"
-      style="left:{pos.left}px; width:{pos.width}px; max-height:{pos.maxHeight}px; {pos.above
-        ? `bottom:${pos.viewportH - pos.top}px`
-        : `top:${pos.top}px`}"
+      class="qm-popup pretty-scroll {mono ? 'font-mono' : ''}"
+      style={popupStyle(pos)}
       onkeydown={onKeydown}
     >
       {#each options as o, i (o.value)}
         {#if o.group && o.group !== options[i - 1]?.group}
-          <li role="presentation" class="qm-select-group">{o.group}</li>
+          <li role="presentation" class="qm-popup-group">{o.group}</li>
         {/if}
         <!-- Keyboard selection is handled on the listbox (arrows + Enter), which
              is the ARIA combobox pattern — a per-option key handler would never
@@ -253,7 +225,7 @@
           role="option"
           aria-selected={i === selected}
           aria-disabled={o.disabled}
-          class="qm-select-option"
+          class="qm-popup-option"
           class:is-active={i === active}
           class:is-selected={i === selected}
           class:is-disabled={o.disabled}
@@ -270,7 +242,7 @@
         </li>
       {/each}
       {#if options.length === 0}
-        <li class="px-2 py-1.5 text-xs text-txtsecondary">No options</li>
+        <li class="qm-popup-empty">No options</li>
       {/if}
     </ul>
   {/if}
@@ -305,53 +277,6 @@
   }
   .qm-select-trigger:disabled {
     opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .qm-select-list {
-    position: fixed;
-    z-index: 60;
-    overflow-y: auto;
-    margin: 0;
-    padding: 0.25rem;
-    list-style: none;
-    border-radius: 6px;
-    border: 1px solid var(--color-card-border);
-    background: var(--color-surface-2, var(--color-surface));
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
-  }
-
-  .qm-select-group {
-    padding: 0.375rem 0.5rem 0.125rem;
-    font-size: 0.6875rem;
-    font-weight: 500;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    color: var(--color-txtsecondary);
-  }
-  .qm-select-group:not(:first-child) {
-    margin-top: 0.25rem;
-    border-top: 1px solid var(--color-card-border-inner);
-  }
-
-  .qm-select-option {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.85rem;
-    color: var(--color-txtmain);
-    cursor: pointer;
-  }
-  .qm-select-option.is-active {
-    background: var(--color-secondary);
-  }
-  .qm-select-option.is-selected {
-    color: var(--color-primary);
-  }
-  .qm-select-option.is-disabled {
-    opacity: 0.45;
     cursor: not-allowed;
   }
 </style>

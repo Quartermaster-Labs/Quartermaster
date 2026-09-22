@@ -105,23 +105,43 @@ Backend communication is centralized in `src/stores/api.ts`, with shared types i
   process, and component-local state gave each its own poller and its own idea of whether an
   update was running.
 
-## Prompt enhancement (Images tab)
+## Prompt enhancement (Images and Video tabs)
 
-`lib/promptEnhance.ts` + the Enhance button in `playground/ImageInterface.svelte`.
+`lib/promptEnhance.ts` + the Enhance button in `playground/ImageInterface.svelte` and
+`playground/VideoInterface.svelte`.
 
 Both id fields (the Settings table, and the per-model picker in `ModelConfigModal.svelte`) are
-**free text with a `<datalist>` of suggestions, never a dropdown**. Nothing server-side validates
+**free text with a suggestion list, never a dropdown**. Nothing server-side validates
 the id against the catalog: `promptEnhancerFor` resolves any id, row or no row, and the id is
 passed straight through as `model` on the chat request. A closed list would be a rule the UI
 invented and the server does not have, and it would block the ordinary case of naming a model you
 are about to install.
 
-The picker's datalists merge two sources, configured rows first, deduped case-insensitively: the
-Settings entries, and the ids `listDetectedPromptEnhancers` reads from
+The list is `Combobox.svelte`, not a native `<datalist>`. A datalist is drawn by the BROWSER, so it
+reads none of the theme tokens and, worse, ignores `zoom` - which is how interface scale is
+implemented here, so at any scale but 100% it painted at the wrong size beside the field it belongs
+to. Combobox is `Select.svelte` with the list left open-ended: the two share the popup chrome
+(`.qm-popup*` in `index.css`) and the placement rules (`lib/popupPlace.ts`, the fixed positioning,
+the zoom division and the flip-up threshold) so they cannot drift into looking like two widgets.
+What it does NOT share is the commit rule - nothing is highlighted when the list opens, and every
+keystroke drops the highlight, so Enter commits what was TYPED unless the user has walked onto a
+suggestion with an arrow key. The same component backs the LoRA adapter rows and the Settings
+table's id field (`inputClass` swaps its chrome for that form's).
+
+The picker's suggestions merge three sources into one grouped list, deduped case-insensitively and
+in this order: the Settings entries, the ids `listDetectedPromptEnhancers` reads from
 `GET /api/prompt-enhancers/detected` (`DetectedEnhancer` in `stores/api.ts`). Detection is keyed
 on the same family the model table groups by (`baseKey` of the id with `_` and spaces folded to
 `-`, matching the Go side), and a detected id whose name says no direction is offered for both
-fields. On an empty field whose family has a candidate, the candidate shows as the input's
+fields, and finally **every chat model in the catalog** (`modelCategory(m) === "llm"`, minus
+rerankers - reused rather than re-derived, so it cannot drift from the bucketing the Models tab
+sections by). That last group is what makes this field self-correcting: the id carries a quant, so
+one typed from memory comes out truncated (`gemma-4-e2b-it-qat` for
+`gemma-4-e2b-it-qat-ud-q4_k_xl`), saves clean, and 404s later at the Enhance button with nothing
+on screen connecting the two. The config editor also warns outright when the typed id is in no
+catalog model, offering the nearest prefix match as a one-click fix, and `enhanceHttpError` names
+the id in the 404 and separates "no such model" from "a restricted listener does not expose it".
+On an empty field whose family has a candidate, the candidate shows as the input's
 placeholder with a "Don't use one" action that writes the `none` sentinel, because autogen would
 otherwise fill the field again on every regen and leave no way to refuse (see
 `internal/autogen/CLAUDE.md`). The old "no Settings row" warning now fires only when the id has
@@ -194,6 +214,15 @@ rewrite is accepting it.
 The enhancer is a normal catalog model, so on a single-GPU box it evicts the image model and the
 image model swaps back in to render. Slow, but correct: the alternative is a second scheduler,
 which the architecture forbids.
+
+**The Video tab is the same code with one substitution.** `VideoInterface.svelte` picks the
+direction off the **start frame** rather than an img2img base: a start frame present means the
+edit enhancer (`promptEnhancerEdit`), absent means the text one, with the same fall back to
+whichever is configured. The frames are what get attached as reference images, and only to a
+vision enhancer. The swap is also a better trade here than on the Images tab, which is why the
+button is offered at all: one rewrite ahead of a render measured in minutes, and LTX genuinely
+needs it (it is trained on long single-paragraph audio-visual captions and degrades on a short
+prompt, so a bare prompt is out of distribution rather than merely vague).
 
 ## Image attachment intake
 
@@ -389,8 +418,8 @@ corpse. Tested in `lib/sessionSync.test.ts`, including that race.
   multiplies by that same zoom again. `el.style.left = rect.left + "px"` therefore lands at
   `rect.left * scale` — right at 100%, and drifting further from the target the further it sits from
   the top-left corner. That is what untethered every tooltip and popup at any other interface size.
-  `lib/uiZoom.ts` (`cssZoom`, `toLocalPx`) is the correction; `lib/tooltip.ts`, `Select`,
-  `MetadataTooltip` and the chat reply anchors all go through it. Ratio math like
+  `lib/uiZoom.ts` (`cssZoom`, `toLocalPx`) is the correction; `lib/tooltip.ts`, `lib/popupPlace.ts` (`Select` +
+  `Combobox`), `MetadataTooltip` and the chat reply anchors all go through it. Ratio math like
   `(e.clientX - r.left) / r.width` is already zoom-safe — both operands are visual — and needs none
   of this.
 - **`h-screen` is shortened, not threaded.** The app measures full-height roots in `h-screen` in six

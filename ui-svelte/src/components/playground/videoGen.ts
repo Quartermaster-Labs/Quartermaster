@@ -3,8 +3,8 @@
 // roughly a quarter of an image model's (the sampler holds one latent PER FRAME)
 // and it has two knobs no image has, frame count and fps.
 
-import { ASPECTS, aspectDims, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, fmtDur } from "./imageGen";
-export { ASPECTS, aspectDims, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, fmtDur };
+import { ASPECTS, aspectDims, nearestAspect, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, fmtDur } from "./imageGen";
+export { ASPECTS, aspectDims, nearestAspect, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, fmtDur };
 
 // Long-edge tiers. 1360 is the top rung because 16:9 with a 768 short side is
 // MiniMax-H3's native output size (its model card: "the shorter side is set to
