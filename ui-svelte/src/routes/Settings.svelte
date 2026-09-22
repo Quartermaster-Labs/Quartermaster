@@ -12,6 +12,7 @@
   import Toggle from "../components/Toggle.svelte";
   import UIScaleControl from "../components/UIScaleControl.svelte";
   import { themeMode, type ThemeMode } from "../stores/theme";
+  import { modelCategory } from "../lib/modelUtils";
   import { latestSys, vramTotals } from "../stores/perf";
 
   // Category side-nav — mirrors the playground settings modal's pattern.
@@ -546,8 +547,15 @@
 
   // Suggestions only. Any id is accepted, including one this install does not
   // serve: the id is simply what the rewrite request is made with, so a model
-  // added later works without touching this table.
-  const enhancerIdOptions = $derived<ComboOption[]>($models.map((m) => ({ value: m.id })));
+  // added later works without touching this table. Narrowed to chat models
+  // because that is the only thing a rewrite request can be answered by, and
+  // marked for vision, which is the one property that decides whether ticking
+  // the box beside it will do anything.
+  const enhancerIdOptions = $derived<ComboOption[]>(
+    $models
+      .filter((m) => modelCategory(m) === "llm" && !m.capabilities?.reranker)
+      .map((m) => ({ value: m.id, detail: m.capabilities?.vision ? "vision" : undefined })),
+  );
 
   // A ticked vision box on a model with no projector is the one mistake here
   // that looks like it worked: the request is accepted and the images are

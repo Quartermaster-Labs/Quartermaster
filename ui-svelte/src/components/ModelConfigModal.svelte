@@ -23,8 +23,9 @@
     type PreviewLayers,
     models,
   } from "../stores/api";
-  import type { PromptEnhancerInfo } from "../lib/types";
+  import type { Model, PromptEnhancerInfo } from "../lib/types";
   import { baseKey } from "../lib/modelTable";
+  import { modelCategory } from "../lib/modelUtils";
   import { get } from "svelte/store";
   import { tick } from "svelte";
   import { FolderOpen, HelpCircle, Plus, X } from "lucide-svelte";
@@ -437,17 +438,46 @@
   // Configured rows first, then anything detected that is not already one of
   // them. A detection with no direction in its name is offered for both fields,
   // since that is exactly what "we cannot tell" means.
+  // An enhancer is a CHAT model: text in, text out. Everything else in the
+  // catalog answers on some other route entirely (a diffusion sampler, a TTS
+  // engine), so offering it here could only ever produce a request its backend
+  // cannot serve. modelCategory is the app's own bucketing, reused rather than
+  // re-derived: a second capability ladder here would drift from the one the
+  // Models tab sections by. A reranker is the one thing it buckets as "llm"
+  // that cannot hold a conversation, so it is dropped by name.
+  function isChatModel(m: Model): boolean {
+    return modelCategory(m) === "llm" && !m.capabilities?.reranker;
+  }
+
   function enhancerSuggestions(dir: "t2i" | "i2i"): ComboOption[] {
     // detail, not a second column: the id IS the value, so a label that merely
     // repeats it would be noise. Drop it in that case.
     const out: ComboOption[] = enhancerOptions.map((e) => ({
       value: e.model,
       detail: e.name && e.name !== e.model ? e.name : undefined,
+      group: "Configured enhancers",
     }));
     const have = new Set(out.map((o) => o.value.toLowerCase()));
     for (const d of detectedEnhancers) {
       if (have.has(d.model.toLowerCase()) || (d.direction && d.direction !== dir)) continue;
-      out.push({ value: d.model, detail: d.imageModel ? `detected for ${d.imageModel}` : "detected" });
+      have.add(d.model.toLowerCase());
+      out.push({
+        value: d.model,
+        detail: d.imageModel ? `beside ${d.imageModel}` : undefined,
+        group: "Detected",
+      });
+    }
+    // The rest of the catalog, last. This field takes a plain model id and any
+    // chat model is a legal one, so leaving the catalog out meant typing an id
+    // from memory - and an id carries its quant, so a remembered one comes out
+    // truncated ("gemma-4-e2b-it-qat" for "gemma-4-e2b-it-qat-ud-q4_k_xl") and
+    // 404s at the Enhance button. Offering them is what stops that being typed
+    // in the first place.
+    for (const m of $models) {
+      if (have.has(m.id.toLowerCase()) || !isChatModel(m)) continue;
+      have.add(m.id.toLowerCase());
+      const bits = [m.name && m.name !== m.id ? m.name : "", m.capabilities?.vision ? "vision" : ""];
+      out.push({ value: m.id, detail: bits.filter(Boolean).join(" · ") || undefined, group: "Catalog" });
     }
     return out;
   }

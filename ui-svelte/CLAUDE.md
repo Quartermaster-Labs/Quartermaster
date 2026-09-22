@@ -128,12 +128,20 @@ keystroke drops the highlight, so Enter commits what was TYPED unless the user h
 suggestion with an arrow key. The same component backs the LoRA adapter rows and the Settings
 table's id field (`inputClass` swaps its chrome for that form's).
 
-The picker's suggestions merge two sources, configured rows first, deduped case-insensitively: the
-Settings entries, and the ids `listDetectedPromptEnhancers` reads from
+The picker's suggestions merge three sources into one grouped list, deduped case-insensitively and
+in this order: the Settings entries, the ids `listDetectedPromptEnhancers` reads from
 `GET /api/prompt-enhancers/detected` (`DetectedEnhancer` in `stores/api.ts`). Detection is keyed
 on the same family the model table groups by (`baseKey` of the id with `_` and spaces folded to
 `-`, matching the Go side), and a detected id whose name says no direction is offered for both
-fields. On an empty field whose family has a candidate, the candidate shows as the input's
+fields, and finally **every chat model in the catalog** (`modelCategory(m) === "llm"`, minus
+rerankers - reused rather than re-derived, so it cannot drift from the bucketing the Models tab
+sections by). That last group is what makes this field self-correcting: the id carries a quant, so
+one typed from memory comes out truncated (`gemma-4-e2b-it-qat` for
+`gemma-4-e2b-it-qat-ud-q4_k_xl`), saves clean, and 404s later at the Enhance button with nothing
+on screen connecting the two. The config editor also warns outright when the typed id is in no
+catalog model, offering the nearest prefix match as a one-click fix, and `enhanceHttpError` names
+the id in the 404 and separates "no such model" from "a restricted listener does not expose it".
+On an empty field whose family has a candidate, the candidate shows as the input's
 placeholder with a "Don't use one" action that writes the `none` sentinel, because autogen would
 otherwise fill the field again on every regen and leave no way to refuse (see
 `internal/autogen/CLAUDE.md`). The old "no Settings row" warning now fires only when the id has
