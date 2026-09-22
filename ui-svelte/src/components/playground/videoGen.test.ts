@@ -64,7 +64,7 @@ describe("snapFrames", () => {
   // Clamping happens before snapping, so an over-large request lands ON the
   // ceiling rather than one rung below it or one rung past the table.
   it("clamps to the family ceiling without overshooting it", () => {
-    expect(snapFrames(10_000, ltx)).toBe(153);
+    expect(snapFrames(10_000, ltx)).toBe(481);
     expect(snapFrames(10_000, h3)).toBe(345);
     expect(snapFrames(10_000, wan)).toBe(241);
   });
@@ -75,19 +75,37 @@ describe("snapFrames", () => {
   });
 });
 
-// 153 is not a taste call and a future edit should have to argue with this test:
-// the LTX checkpoint's positional_embedding_max_pos caps the temporal axis at 20
-// latent frames, its VAE packs 8 pixel frames per latent frame with the first
-// standing alone, and (20 - 1) * 8 + 1 is where that lands.
-describe("the LTX ceiling is the checkpoint's RoPE table", () => {
-  const LTX_MAX_LATENT_FRAMES = 20;
+// This block used to assert a 153-frame ceiling as "not a taste call", derived
+// from reading positional_embedding_max_pos[0]=20 as 20 latent frames. Both
+// halves were wrong: max_pos is the DIVISOR in LTX's normalized-fractional rope
+// (get_fractional_positions divides the index grid by it), so there is no table
+// to index past, and the 20 pairs with an identical
+// audio_positional_embedding_max_pos on latents that share no frame count, which
+// only makes sense as seconds. LTX-2.5 is specified for 6-20 seconds.
+//
+// The real invariants are the grid and the specified duration, so that is what
+// this checks now.
+describe("the LTX ceiling is the specified 20-second duration", () => {
+  const LTX_MAX_SECONDS = 20;
+  const LTX_DEFAULT_FPS = 24;
 
-  it("is 20 latent frames expressed in pixel frames", () => {
-    expect(maxFramesFor("ltx-2.5-22b")).toBe((LTX_MAX_LATENT_FRAMES - 1) * 8 + 1);
+  it("is 20 seconds expressed on the 8k+1 grid", () => {
+    const max = maxFramesFor("ltx-2.5-22b");
+    expect(max).toBe(LTX_MAX_SECONDS * LTX_DEFAULT_FPS + 1);
+    expect((max - 1) % 8).toBe(0);
   });
 
-  it("is 6.4 seconds at the family's default rate", () => {
-    expect(clipLabel(153, 24)).toBe("6.4s \u00b7 153f");
+  it("labels the round second marks at the family's default rate", () => {
+    expect(clipLabel(121, 24)).toBe("5.0s \u00b7 121f");
+    expect(clipLabel(241, 24)).toBe("10.0s \u00b7 241f");
+    expect(clipLabel(361, 24)).toBe("15.0s \u00b7 361f");
+    expect(clipLabel(481, 24)).toBe("20.0s \u00b7 481f");
+  });
+
+  it("offers every round second mark as a rung", () => {
+    for (const f of [121, 241, 361, 481]) {
+      expect(LTX_FRAME_OPTIONS).toContain(f);
+    }
   });
 });
 

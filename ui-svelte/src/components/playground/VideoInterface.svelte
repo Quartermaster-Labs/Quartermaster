@@ -493,8 +493,8 @@
     $selectedSizeStore = `${w}x${h}`;
   });
   // Both pickers are family-scoped: H3 aligns frames to 17k+5 and is hard-wired
-  // to 24 fps, LTX aligns DOWN to 8k+1 and stops at 153, everything else is 4n+1
-  // and free. The snap effect exists because
+  // to 24 fps, LTX aligns DOWN to 8k+1 and runs to its specified 20s (481f at
+  // 24 fps), everything else is 4n+1 and free. The snap effect exists because
   // the stores are PERSISTED prefs, so a value picked under one family survives
   // a switch to another and would otherwise leave the Select showing blank.
   let frameOptions = $derived(frameOptionsFor($selectedModelStore));

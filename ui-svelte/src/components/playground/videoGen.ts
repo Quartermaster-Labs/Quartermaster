@@ -44,10 +44,32 @@ export const H3_FRAME_OPTIONS = Array.from({ length: 21 }, (_, i) => 5 + i * 17)
 
 // LTX-2.x is the third grid and the one exception to "rounds up": its VAE
 // compresses 8 frames into one latent frame, so the count is 8k+1 and sd.cpp
-// floors anything off-grid rather than raising it. 153 is a HARD ceiling, not a
-// taste call: the checkpoint's positional_embedding_max_pos caps the temporal
-// axis at 20 latent frames, and asking for more indexes past the table.
-export const LTX_FRAME_OPTIONS = Array.from({ length: 19 }, (_, i) => 9 + i * 8);
+// floors anything off-grid rather than raising it.
+//
+// This ladder used to stop at 153, described as a HARD ceiling from the
+// checkpoint's positional_embedding_max_pos capping the temporal axis at 20
+// latent frames. That was wrong on both halves. LTX's positional embedding is
+// rope over fractional coordinates NORMALIZED by max_pos - the reference
+// get_fractional_positions DIVIDES the index grid by it - so it is a divisor,
+// not the length of a table there is anything to index past. And the 20 is
+// almost certainly seconds rather than latent frames: the same config carries
+// audio_positional_embedding_max_pos of 20, and the audio and video latents do
+// not share a frame count, so a matching 20 on both only makes sense on a shared
+// time axis. LTX-2.5 is specified for 6-20 SECONDS, which at 24 fps is 481
+// frames, and past 10s it wants 720p/1080p at 24/25 fps.
+//
+// Curated rather than the whole grid, like FRAME_OPTIONS and unlike H3's: 9 to
+// 481 in steps of 8 is 60 rungs, which is not a picker. Dense where people
+// actually choose, sparse above, and landing exactly on the round second marks
+// at 24 fps (121 = 5s, 241 = 10s, 361 = 15s, 481 = 20s).
+//
+// Offering a rung is not promising it fits. Whether a 20s clip fits this card is
+// vramWarning's job, and it prices LTX at its own 32x/8x rate (see videoTokens),
+// so the long rungs come up orange on a 24GB card rather than vanishing.
+export const LTX_FRAME_OPTIONS = [
+  9, 17, 25, 33, 41, 49, 57, 65, 73, 81, 97, 113, 121, 137, 153, 185, 217, 241,
+  289, 337, 361, 409, 481,
+];
 
 // ---------------------------------------------------------------------------
 // Rough VRAM feasibility.
@@ -139,9 +161,15 @@ export function supportsFrameRefs(id: string): boolean {
   return /fl2v|flf2v|i2v|ltx/.test(id.toLowerCase());
 }
 
-/** Highest frame count the family's grid is offered up to. */
+/**
+ * Highest frame count the family's grid is offered up to.
+ *
+ * LTX is 481, which is its specified 20-second maximum at 24 fps, NOT a
+ * positional-embedding limit - see LTX_FRAME_OPTIONS for why the old 153 was a
+ * misreading. H3 is 345, its documented 15s at a fixed 24 fps.
+ */
 export function maxFramesFor(id: string): number {
-  if (isLtx(id)) return 153;
+  if (isLtx(id)) return 481;
   return isH3(id) ? 345 : 241;
 }
 
