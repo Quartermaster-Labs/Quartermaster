@@ -34,11 +34,14 @@
   import { enhancePrompt } from "../../lib/promptEnhance";
   import {
     ASPECTS,
-    aspectDims,
+    tierDims,
+    tierLabel,
+    nearestTier,
+    fitTier,
     nearestAspect,
     SAMPLER_OPTIONS,
     SCHEDULER_OPTIONS,
-    VIDEO_SIZE_TIERS,
+    VIDEO_TIERS,
     VIDEO_DEFAULT_MAX_DIM,
     clipLabel,
     supportsFrameRefs,
@@ -72,7 +75,10 @@
   const selectedModelStore = userPref<string>("playground-video-model", "");
   const selectedSizeStore = userPref<string>("playground-video-size", "640x384");
   const aspectStore = userPref<string>("playground-video-aspect", "16:9");
-  const longEdgeStore = userPref<string>("playground-video-long", "640");
+  // Keyed apart from the retired "playground-video-long" pref on purpose: that
+  // one held a LONG edge, and reading a stored 640 as a 640p TIER would silently
+  // promote an existing user from 640x384 to 1136x640 on first load.
+  const tierStore = userPref<string>("playground-video-tier", "480");
   const negativePromptStore = userPref<string>("playground-video-negative", "");
   const stepsStore = userPref<number>("playground-video-steps", 20);
   const cfgScaleStore = userPref<number>("playground-video-cfg", 1);
@@ -202,7 +208,7 @@
     if (d.size) {
       const [w, h] = d.size.split("x").map(Number);
       $aspectStore = nearestAspect(w / h);
-      $longEdgeStore = String(Math.max(w, h));
+      $tierStore = String(nearestTier(Math.min(w, h)));
     }
   });
 
@@ -468,33 +474,33 @@
   let vramGB = $derived(($vramTotals?.totalMb ?? 0) / 1024 || 24);
 
   let aspectOptions = $derived(ASPECTS.map((a) => ({ value: a.value, label: a.label })));
-  // The tiers, plus the current long edge whenever it is off-grid. That last
-  // part is what keeps the control honest: a Select whose bound value matches no
-  // option falls back to rendering the raw value, which is how an off-tier
-  // backend default showed as a bare "1360" instead of "1360x768".
+  // Every tier is listed; the ones this install cannot reach are disabled rather
+  // than hidden, so the ceiling is visible instead of mysterious. No off-grid
+  // fallback rung is needed any more: a model's launched size is adopted as the
+  // NEAREST TIER, so the bound value is always one of these.
   let sizeOptions = $derived(
-    (VIDEO_SIZE_TIERS.includes(Number($longEdgeStore))
-      ? VIDEO_SIZE_TIERS
-      : [...VIDEO_SIZE_TIERS, Number($longEdgeStore) || 640].sort((a, b) => a - b)
-    ).map((L) => {
-      const [w, h] = aspectDims($aspectStore, L);
+    VIDEO_TIERS.map((t) => {
+      const [w, h] = tierDims($aspectStore, t, $selectedModelStore);
       const warn = vramWarning(w, h, Number($framesStore) || 1, vramGB, $selectedModelStore);
       return {
-        value: String(L),
-        label: `${w}x${h}`,
-        disabled: L > modelMax,
+        value: String(t),
+        label: tierLabel($aspectStore, t, $selectedModelStore),
+        disabled: Math.max(w, h) > modelMax,
         warn: !!warn,
         title: warn || undefined,
       };
     })
   );
   $effect(() => {
-    const [w, h] = aspectDims($aspectStore, Math.min(Number($longEdgeStore) || 640, modelMax));
+    // Fit a whole tier rather than clamping the pixels: clamping mid-calculation
+    // is what once rendered 960x512 under a label reading 1360.
+    const t = fitTier($aspectStore, Number($tierStore) || 480, $selectedModelStore, modelMax);
+    const [w, h] = tierDims($aspectStore, t, $selectedModelStore);
     $selectedSizeStore = `${w}x${h}`;
   });
   // Both pickers are family-scoped: H3 aligns frames to 17k+5 and is hard-wired
-  // to 24 fps, LTX aligns DOWN to 8k+1 and stops at 153, everything else is 4n+1
-  // and free. The snap effect exists because
+  // to 24 fps, LTX aligns DOWN to 8k+1 and runs to its specified 20s (481f at
+  // 24 fps), everything else is 4n+1 and free. The snap effect exists because
   // the stores are PERSISTED prefs, so a value picked under one family survives
   // a switch to another and would otherwise leave the Select showing blank.
   let frameOptions = $derived(frameOptionsFor($selectedModelStore));
@@ -959,7 +965,7 @@
             </div>
             <div class="flex flex-col gap-1">
               <span class="text-xs uppercase tracking-wide text-txtsecondary">Size</span>
-              <Select bind:value={$longEdgeStore} disabled={isGenerating} compact options={sizeOptions} />
+              <Select bind:value={$tierStore} disabled={isGenerating} compact options={sizeOptions} />
             </div>
           </div>
           <div class="grid grid-cols-2 gap-3">

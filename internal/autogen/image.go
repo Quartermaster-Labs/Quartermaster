@@ -489,9 +489,16 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	// A video generation holds several frames of latent plus a 3D VAE decode
 	// buffer, so its non-weight peak is several times an image's. Charging it
 	// the image number would leave a model resident that cannot actually decode.
+	//
+	// The profile resolves HERE, above the placement decision, because a video
+	// model's non-weight peak is priced off the resolution and frame count it
+	// will actually launch with. The same def is what emits --width/--height/
+	// --video-frames at the end of the argv, so a DefaultFrames override cannot
+	// lengthen the clip without also re-sizing the placement for it.
+	def := resolveGenDefaults(vid, name, ov)
 	overhead := imageComputeOverheadGB
 	if vid.is() {
-		overhead = videoComputeOverheadGB
+		overhead = videoComputeOverhead(vid, name, def)
 	}
 	offload = row.SizeGB+overhead > budget
 	if ov != nil {
@@ -650,7 +657,19 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 		// the sequence), that spike overcommits shared VRAM and hard-hangs
 		// Windows. The VAE runs once per image, so parking it on CPU is nearly
 		// free and removes the crash. te=cpu only moves the text encoders.
-		lines = append(lines, "--vae-on-cpu")
+		//
+		// "Nearly free" is an IMAGE claim and does not survive the move to video.
+		// A 3D VAE decodes every frame of the clip rather than one picture, so on
+		// CPU it stops being a rounding error and becomes a large share of the
+		// whole render. The premise fails too: the spike was dangerous precisely
+		// because offloading an IMAGE model left ~1.5GB of headroom, but a video
+		// model that offloads hands its ENTIRE budget to the graph (graphBudget
+		// returns the full budget when offload is set), so the decode has room on
+		// the GPU it was being protected from. Override .VaeOnCpu = "on" is still
+		// there for a box that wants it anyway.
+		if !vid.is() {
+			lines = append(lines, "--vae-on-cpu")
+		}
 	}
 	// Generation defaults applied when a request omits them. An image model
 	// starts from nothing (sd-server's own defaults stand); a video model starts
@@ -658,30 +677,8 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	// --video-frames defaults to 1 (a single still), and H3 conditions at
 	// cfg-scale 1.0 while sd-server's built-in default is 7.0. Per-model
 	// overrides still win over both.
-	def := videoDefaultsFor(vid, name)
-	if ov != nil {
-		if ov.DefaultSteps > 0 {
-			def.steps = ov.DefaultSteps
-		}
-		if ov.DefaultCfg > 0 {
-			def.cfg = ov.DefaultCfg
-		}
-		if ov.DefaultSampler != "" {
-			def.sampler = ov.DefaultSampler
-		}
-		if ov.DefaultWidth > 0 {
-			def.width = ov.DefaultWidth
-		}
-		if ov.DefaultHeight > 0 {
-			def.height = ov.DefaultHeight
-		}
-		if ov.DefaultFrames > 0 {
-			def.frames = ov.DefaultFrames
-		}
-		if ov.DefaultFps > 0 {
-			def.fps = ov.DefaultFps
-		}
-	}
+	//
+	// def was resolved far above, next to the placement decision it also feeds.
 	if def.steps > 0 {
 		lines = append(lines, fmt.Sprintf("--steps %d", def.steps))
 	}

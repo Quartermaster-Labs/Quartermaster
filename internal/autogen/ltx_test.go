@@ -110,14 +110,18 @@ func TestAutogen_LtxDistilledVsDev(t *testing.T) {
 	if dev.steps != 0 || dev.cfg != 3.0 {
 		t.Errorf("dev = steps %d cfg %v, want unpinned / 3.0", dev.steps, dev.cfg)
 	}
-	// Framing is shared, and 121 is on the 8k+1 grid under the 153-frame
-	// positional-embedding ceiling.
+	// Framing is shared. 121 is on the 8k+1 grid the checkpoint requires, and it
+	// is a conservative DEFAULT, not a ceiling: LTX-2.5 is specified to 20s
+	// (481 frames at 24fps). An earlier revision asserted frames <= 153 here,
+	// from misreading positional_embedding_max_pos[0]=20 as a hard latent-frame
+	// bound; it is a rope normalisation divisor. The grid is the real invariant,
+	// so that is all this checks.
 	for _, g := range []genDefaults{d, dev} {
 		if g.width != 1280 || g.height != 704 || g.frames != 121 || g.fps != 24 {
 			t.Errorf("framing = %dx%d %df @%d, want 1280x704 121f @24", g.width, g.height, g.frames, g.fps)
 		}
-		if (g.frames-1)%8 != 0 || g.frames > 153 {
-			t.Errorf("frames %d is off LTX's 8k+1 grid or past the 153 ceiling", g.frames)
+		if (g.frames-1)%8 != 0 {
+			t.Errorf("frames %d is off LTX's 8k+1 grid", g.frames)
 		}
 	}
 	// The other families must be untouched by the new name argument.
@@ -334,5 +338,110 @@ func TestAutogen_EmbedWidthFallback(t *testing.T) {
 	}
 	if dit.videoKind != VideoFamilyLtxAV || !dit.hasAudioOut {
 		t.Errorf("ltx markers lost: kind=%q audio=%v", dit.videoKind, dit.hasAudioOut)
+	}
+}
+
+// The video compute overhead has to price the profile a model ACTUALLY launches
+// with. The flat constant it replaced put a 22B LTX (14.6GB) under a 24GB card's
+// 22.3GB budget at EVERY clip length, so the model stayed resident and
+// graphBudget handed the sampler only the 5.9GB left over - to run a graph whose
+// token count grows linearly with --video-frames. That is a silent spill into
+// shared memory, and LTX-2.5 is specified to 20s, so the miss is ~3x at the top
+// of the model's own range.
+func TestAutogen_VideoComputeOverheadScalesWithProfile(t *testing.T) {
+	vid := videoInfo{Kind: VideoFamilyLtxAV, AudioOut: true}
+	const name = "ltx-2.5-22b-distilled-transformer-Q4_K_M"
+
+	// The default profile must price EXACTLY at the reference constant: scaling
+	// is relative, so a model left alone cannot have its placement moved by this.
+	base := videoComputeOverhead(vid, name, resolveGenDefaults(vid, name, nil))
+	if base != videoComputeOverheadGB {
+		t.Errorf("default profile = %vGB, want the %vGB reference unchanged", base, videoComputeOverheadGB)
+	}
+
+	// 15s at 24fps is 361 frames, which is 46 latent frames against the 121-frame
+	// default's 16 - 2.875x the tokens at identical resolution.
+	long := videoComputeOverhead(vid, name, resolveGenDefaults(vid, name, &Override{DefaultFrames: 361}))
+	if want := videoComputeOverheadGB * 46.0 / 16.0; long != want {
+		t.Errorf("361-frame overhead = %vGB, want %vGB", long, want)
+	}
+
+	// Halving the canvas halves the overhead: area enters linearly.
+	half := videoComputeOverhead(vid, name, resolveGenDefaults(vid, name, &Override{DefaultWidth: 640}))
+	if want := videoComputeOverheadGB / 2; half != want {
+		t.Errorf("half-width overhead = %vGB, want %vGB", half, want)
+	}
+
+	// The point of all of it: a 15s clip must flip a 22B LTX off resident on a
+	// 24GB card, while the default clip still fits.
+	const weights, budget = 14.61, 22.3
+	if weights+base > budget {
+		t.Errorf("default should stay resident: %v+%v exceeds %v", weights, base, budget)
+	}
+	if weights+long <= budget {
+		t.Errorf("15s should force offload: %v+%v fits under %v", weights, long, budget)
+	}
+}
+
+// latentFrames must follow each family's own k*c+1 grid, since the overhead
+// ratio is computed from it.
+func TestAutogen_LatentFrames(t *testing.T) {
+	for _, c := range []struct {
+		frames, comp, want int
+	}{
+		{121, 8, 16}, // LTX default, 5s at 24fps
+		{241, 8, 31}, // 10s
+		{361, 8, 46}, // 15s
+		{481, 8, 61}, // 20s, the specified maximum
+		{81, 4, 21},  // Wan default
+		{1, 8, 1},    // a single still
+		{0, 8, 1},    // unset frames must not divide by anything silly
+	} {
+		if got := latentFrames(c.frames, c.comp); got != c.want {
+			t.Errorf("latentFrames(%d, %d) = %d, want %d", c.frames, c.comp, got, c.want)
+		}
+	}
+}
+
+// LTX-2.5 ships two video decoders of one family and one latent width, so
+// nothing about the tensor table separates them and the pick falls to sorted
+// path order - which prefers the slow one. This pins the hint that overrides it.
+func TestAutogen_LtxPrefersConvVideoVae(t *testing.T) {
+	const dir = "D:/LLM/Models/Lightricks/LTX-2.5/vae/"
+	conv := dir + "ltx-2.5-video-vae-conv-bf16.safetensors"
+	attn := dir + "ltx-2.5-video-vae-bf16.safetensors"
+	audio := dir + "ltx-2.5-audio-vae-bf16.safetensors"
+
+	pool := &EncoderPool{Files: []ComponentFile{
+		// deliberately in sorted order, because that ordering IS the bug
+		{Path: audio, Role: RoleAudioVae, Family: VaeFamilyLtx, Width: 128},
+		{Path: attn, Role: RoleVae, Family: VaeFamilyLtx, Width: 128},
+		{Path: conv, Role: RoleVae, Family: VaeFamilyLtx, Width: 128},
+	}}
+
+	var missing []string
+	vae, audioVae, _, _ := videoComponents(
+		videoInfo{Kind: VideoFamilyLtxAV, AudioOut: true}, EncoderSet{}, pool, "gemma", &missing)
+	if vae != conv {
+		t.Errorf("video vae = %q, want the conv decoder %q", vae, conv)
+	}
+	if audioVae != audio {
+		t.Errorf("audio vae = %q, want %q", audioVae, audio)
+	}
+
+	// A box that only ever downloaded one of the two must still get it, so the
+	// hint has to stay a preference and never become a filter.
+	only := &EncoderPool{Files: []ComponentFile{
+		{Path: audio, Role: RoleAudioVae, Family: VaeFamilyLtx, Width: 128},
+		{Path: attn, Role: RoleVae, Family: VaeFamilyLtx, Width: 128},
+	}}
+	missing = nil
+	vae, _, _, _ = videoComponents(
+		videoInfo{Kind: VideoFamilyLtxAV, AudioOut: true}, EncoderSet{}, only, "gemma", &missing)
+	if vae != attn {
+		t.Errorf("sole vae = %q, want the only file on disk %q", vae, attn)
+	}
+	if len(missing) != 0 {
+		t.Errorf("missing = %v, want none", missing)
 	}
 }
