@@ -402,3 +402,46 @@ func TestAutogen_LatentFrames(t *testing.T) {
 		}
 	}
 }
+
+// LTX-2.5 ships two video decoders of one family and one latent width, so
+// nothing about the tensor table separates them and the pick falls to sorted
+// path order - which prefers the slow one. This pins the hint that overrides it.
+func TestAutogen_LtxPrefersConvVideoVae(t *testing.T) {
+	const dir = "D:/LLM/Models/Lightricks/LTX-2.5/vae/"
+	conv := dir + "ltx-2.5-video-vae-conv-bf16.safetensors"
+	attn := dir + "ltx-2.5-video-vae-bf16.safetensors"
+	audio := dir + "ltx-2.5-audio-vae-bf16.safetensors"
+
+	pool := &EncoderPool{Files: []ComponentFile{
+		// deliberately in sorted order, because that ordering IS the bug
+		{Path: audio, Role: RoleAudioVae, Family: VaeFamilyLtx, Width: 128},
+		{Path: attn, Role: RoleVae, Family: VaeFamilyLtx, Width: 128},
+		{Path: conv, Role: RoleVae, Family: VaeFamilyLtx, Width: 128},
+	}}
+
+	var missing []string
+	vae, audioVae, _, _ := videoComponents(
+		videoInfo{Kind: VideoFamilyLtxAV, AudioOut: true}, EncoderSet{}, pool, "gemma", &missing)
+	if vae != conv {
+		t.Errorf("video vae = %q, want the conv decoder %q", vae, conv)
+	}
+	if audioVae != audio {
+		t.Errorf("audio vae = %q, want %q", audioVae, audio)
+	}
+
+	// A box that only ever downloaded one of the two must still get it, so the
+	// hint has to stay a preference and never become a filter.
+	only := &EncoderPool{Files: []ComponentFile{
+		{Path: audio, Role: RoleAudioVae, Family: VaeFamilyLtx, Width: 128},
+		{Path: attn, Role: RoleVae, Family: VaeFamilyLtx, Width: 128},
+	}}
+	missing = nil
+	vae, _, _, _ = videoComponents(
+		videoInfo{Kind: VideoFamilyLtxAV, AudioOut: true}, EncoderSet{}, only, "gemma", &missing)
+	if vae != attn {
+		t.Errorf("sole vae = %q, want the only file on disk %q", vae, attn)
+	}
+	if len(missing) != 0 {
+		t.Errorf("missing = %v, want none", missing)
+	}
+}

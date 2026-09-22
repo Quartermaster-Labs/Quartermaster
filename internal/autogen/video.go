@@ -335,7 +335,23 @@ func videoComponents(v videoInfo, enc EncoderSet, pool *EncoderPool, llmDefault 
 		// enc.VideoVae/enc.AudioVae pins, which are one slot each and already
 		// mean H3's pair on a box that has one - see fillEncoderSet. Override
 		// .VaePath / .AudioVaePath remain the per-model escape hatch.
-		vae = req("vae", pool.Vae(VaeFamilyLtx))
+		//
+		// The "-conv" hint is load-bearing, not cosmetic. LTX-2.5 publishes TWO
+		// video decoders of the same family and latent width, and with no hint
+		// pickByHint falls back to the first path in sorted order, which is the
+		// SLOW one ("...-vae-bf16" sorts before "...-vae-conv-bf16"). Measured on
+		// a 24GB card, same prompts, only the decoder swapped:
+		//
+		//	0.4MP @  7s	 76s ->	32s
+		//	1.0MP @  5s	376s ->	53s
+		//	0.3MP @ 13s	437s ->	45s
+		//
+		// The ratio is 2.4x on the one case that was NOT already spilling and up
+		// to 9.7x on the worst, which is the shape of a memory cliff being
+		// removed rather than a faster kernel: the conv decoder's peak is flat in
+		// the latent grid, so the decode stops overflowing into host memory.
+		// A box holding only one of the two still gets it, hint or no hint.
+		vae = req("vae", pool.Vae(VaeFamilyLtx, "-conv"))
 		// The text encoder is a Gemma-4-12B REPUBLISHED with LTX's caption
 		// projection grafted on, so a stock Gemma of the same width would load
 		// and then condition on nothing. The path hint is what separates them;
