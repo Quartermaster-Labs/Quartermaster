@@ -123,6 +123,7 @@ func probeAudioCppDevices(exe string) []audioCppDevice {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, exe, "--list-devices")
+	hideConsole(cmd)
 	cmd.Env = probeEnv()
 	// The listing and the ggml banner land on different streams, and which is
 	// which has moved between releases. Read the pair.

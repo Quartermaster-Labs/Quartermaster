@@ -171,6 +171,7 @@ func probeBackendDevices(exe string) ([]BackendDevice, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, exe, "--list-devices")
+	hideConsole(cmd)
 	// The probe MUST enumerate the way the launch will. Every multi-GPU config
 	// we emit carries CUDA_DEVICE_ORDER=PCI_BUS_ID (generate_emit.go, and
 	// writeSingleDeviceEnv), but the CUDA runtime defaults to FASTEST_FIRST, so

@@ -88,6 +88,7 @@ func probeBackendFlags(exe string) ([]string, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, exe, "--help")
+	hideConsole(cmd)
 	// Which stream gets the usage has moved across releases, and some builds
 	// exit non-zero after printing it. Read the pair.
 	out, err := cmd.CombinedOutput()
