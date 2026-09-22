@@ -6,19 +6,110 @@
 import { ASPECTS, aspectDims, nearestAspect, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, fmtDur } from "./imageGen";
 export { ASPECTS, aspectDims, nearestAspect, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, fmtDur };
 
-// Long-edge tiers. 1360 is the top rung because 16:9 with a 768 short side is
-// MiniMax-H3's native output size (its model card: "the shorter side is set to
-// 768 pixels by default"), and 1365.33 has to round to a multiple of 16.
+// Standard video tiers, named by SHORT edge, because that is what a video
+// resolution name means: "720p" is 1280x720 landscape and 720x1280 portrait.
+// The Images tab is long-edge driven and that is right for images, which have no
+// standard sizes; video does, and hiding them behind a long-edge number was the
+// whole complaint.
 //
-// Offered is not the same as reachable: VIDEO_DEFAULT_MAX_DIM stays at 960,
-// because above that a clip does not fit a 24GB card once the 3D VAE decode
-// peaks. The rungs above the cap unlock only for a model that LAUNCHES at a
-// larger size, which is a per-install decision (see modelMax in
-// VideoInterface.svelte).
-export const VIDEO_SIZE_TIERS = [
-  384, 448, 512, 576, 640, 704, 768, 832, 896, 960, 1024, 1152, 1280, 1360,
-];
+// This replaces a long-edge ladder that ran through aspectDims, whose short edge
+// snapped to a multiple of 64. 64 is an SD-latent convention and far too coarse
+// here: 720/64 = 11.25 rounds to 11, so "16:9" at 1280 produced 1280x704, and
+// exactly ONE rung of the fourteen (1024x576) was truly 16:9. The aspect picker
+// was lying on the other thirteen.
+//
+// 768 is a tier because it is MiniMax-H3's native short side (its model card:
+// "the shorter side is set to 768 pixels by default"); at stride 16 it lands on
+// 1360x768, which is exactly the size H3 documents and the number the old
+// ladder's top rung existed to reach.
+//
+// 1440p and 4K are deliberately absent. LTX documents both, but they are its
+// hosted API's range; nothing local reaches them on a consumer card and a rung
+// that is permanently disabled is noise, not an option.
+//
+// Offered is still not the same as reachable: VIDEO_DEFAULT_MAX_DIM stays at
+// 960, because above that a clip does not fit a 24GB card once the 3D VAE decode
+// peaks. Tiers above the cap unlock only for a model that LAUNCHES at a larger
+// size, a per-install decision (see modelMax in VideoInterface.svelte).
+export const VIDEO_TIERS = [240, 360, 480, 576, 720, 768, 1080];
 export const VIDEO_DEFAULT_MAX_DIM = 960;
+
+/**
+ * Pixel stride each edge must be a multiple of, which is a property of the
+ * family's VAE and not a preference.
+ *
+ * These are the SAME divisors videoTokens already prices with: LTX's VAE
+ * compresses 32x spatially and patchifies 1x1, while Wan and H3 compress 8x and
+ * patch-embed 2x2 on top. Neither is 64.
+ *
+ * The visible consequence is that the families disagree about 720p and both are
+ * right: 720 is a multiple of 16, so Wan/H3 hit 1280x720 exactly, while LTX
+ * cannot express it (720/32 = 22.5) and rounds to 1280x736 - which is the size
+ * LTX's own local-inference resolution list names for the 0.9mp tier, alongside
+ * 1920x1088 for 1080p.
+ */
+export function videoStride(id: string): number {
+  return isLtx(id) ? 32 : 16;
+}
+
+/**
+ * Concrete [w,h] for an aspect + tier on a given model's grid.
+ *
+ * Both edges are derived from the NOMINAL tier and snapped independently, rather
+ * than deriving the long edge from the already-snapped short one. Chaining the
+ * two compounds the rounding error, which is how a 16:9 ladder drifted as far as
+ * 2.00 and 1.60 at its ends.
+ *
+ * Rounds to nearest, which means a tier is a NAME and not a guarantee: 1080 at
+ * stride 16 rounds up to 1088 (the same pad H.264 has always applied to 1080),
+ * but LTX at stride 32 rounds 360 DOWN to 352. Half a stride either way is the
+ * price of holding the aspect ratio, and holding the aspect ratio is the point.
+ * Forcing every tier to round up instead would put LTX's 360p short edge at 384
+ * against a 640 long edge, turning a "16:9" request into 1.67 - exactly the kind
+ * of quiet lie the long-edge ladder was retired for.
+ */
+export function tierDims(aspectValue: string, p: number, id = ""): [number, number] {
+  const a = ASPECTS.find((x) => x.value === aspectValue) ?? ASPECTS[0];
+  const stride = videoStride(id);
+  const snap = (n: number) => Math.max(stride, Math.round(n / stride) * stride);
+  const short = snap(p);
+  if (a.w === a.h) return [short, short];
+  const long = snap((p * Math.max(a.w, a.h)) / Math.min(a.w, a.h));
+  return a.w > a.h ? [long, short] : [short, long];
+}
+
+/** Tier label plus the concrete size it resolves to on this model's grid. */
+export function tierLabel(aspectValue: string, p: number, id = ""): string {
+  const [w, h] = tierDims(aspectValue, p, id);
+  return `${p}p \u00b7 ${w}x${h}`;
+}
+
+/**
+ * The tier closest to a short edge, for adopting a model's launched size.
+ *
+ * Matched on the SHORT edge because that is what a tier names; passing a long
+ * edge here would land several rungs high.
+ */
+export function nearestTier(shortEdge: number): number {
+  return VIDEO_TIERS.reduce((best, t) =>
+    Math.abs(t - shortEdge) < Math.abs(best - shortEdge) ? t : best,
+  );
+}
+
+/**
+ * The requested tier, or the largest one that fits within a long-edge cap.
+ *
+ * A UI cap must never silently clamp to a size the picker is not showing, which
+ * is the bug modelMax's floor already exists to prevent: the old code clamped
+ * the long edge mid-calculation and rendered 960x512 while the label still said
+ * 1360. Choosing a whole TIER keeps the label and the render the same thing.
+ */
+export function fitTier(aspectValue: string, p: number, id: string, maxDim: number): number {
+  const fits = (t: number) => Math.max(...tierDims(aspectValue, t, id)) <= maxDim;
+  if (fits(p)) return p;
+  const under = VIDEO_TIERS.filter(fits);
+  return under.length ? Math.max(...under) : Math.min(...VIDEO_TIERS);
+}
 
 // Frame counts are NOT free-form, and an off-grid number is not rejected: it is
 // silently changed. sd.cpp ALIGNS --video-frames UP to the family's grid, and
