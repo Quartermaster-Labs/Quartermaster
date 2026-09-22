@@ -144,9 +144,15 @@ func (s *Server) handleAPIModelAdhocUnload(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, map[string]string{"status": "reverted", "model": realID})
 }
 
-// portFromCmd extracts the value following --port / -port in a launch command
-// (already-allocated concrete port from config load). Empty if not found.
+// portFromCmd extracts the already-allocated concrete port from a launch
+// command. Empty if not found.
+//
+// It has to know both spellings: llama-server takes --port, sd-server takes
+// --listen-port (its -l is --listen-ip, NOT a port). Asking only for --port
+// meant every diffusion model failed ad-hoc load with "could not determine
+// model port from base cmd", which reads as a config problem rather than as a
+// flag this function never looked for.
 func portFromCmd(cmd string) string {
-	v, _ := config.ParseCmd(cmd).Value("--port", "-port")
+	v, _ := config.ParseCmd(cmd).Value("--port", "-port", "--listen-port")
 	return v
 }

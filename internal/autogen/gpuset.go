@@ -885,12 +885,24 @@ func LiveGpuSet(stats []perf.GpuStat, multi bool, policy GpuPolicy) GpuSet {
 // enumerated first. singleDeviceEnvFor asks the binary instead, so the pin is
 // derived rather than assumed.
 //
-// A no-op on a single-GPU box (nothing to disambiguate), when the device set was
-// never resolved, and when neither the probe nor the CUDA fallback can name the
-// device.
+// It is NOT a no-op on a single-GPU plan, because "single GPU" is telemetry's
+// count, not the backend's. Telemetry drops an integrated adapter (no dedicated
+// VRAM worth planning against), while ROCm and Vulkan enumerate it happily: an
+// RX 7900 XTX box lists one GPU here and TWO to sd-server, the second being a
+// gfx1036 iGPU advertising 12 GiB of SHARED SYSTEM memory as if it were VRAM.
+// That phantom card is worse than a wasted entry. sd-server's --auto-fit planner
+// sizes placements against the pair, and any work that lands on it runs kernels
+// a gfx1100-only build never compiled, which surfaces as a HIP fault naming no
+// device at all ("unspecified launch failure, current device: -1") rather than
+// as a fit error. So pin whenever the BACKEND sees more adapters than the plan
+// does, single-GPU or not.
+//
+// A no-op when the device set was never resolved, when the backend agrees with
+// telemetry about the device count, and when neither the probe nor the CUDA
+// fallback can name the device.
 func writeSingleDeviceEnv(b *strings.Builder, s Settings, exe string) {
 	set := s.GpuSetOrEmpty()
-	if !set.Multi() {
+	if len(set) == 0 {
 		return
 	}
 	pin, isCuda := singleDeviceEnvFor(exe, set)
@@ -919,7 +931,7 @@ func writeSingleDeviceEnv(b *strings.Builder, s Settings, exe string) {
 // Everything else refuses, which is the behaviour that shipped.
 func singleDeviceEnvFor(exe string, set GpuSet) (string, bool) {
 	main := set.PlanMainIndex()
-	if devs, err := ListBackendDevices(exe); err == nil {
+	if devs, err := ListBackendDevices(exe); err == nil && (set.Multi() || len(devs) > len(set)) {
 		if ids := set.BackendIDs(devs); len(ids) == len(set) {
 			for i, d := range set {
 				if d.Index != main {
@@ -932,7 +944,12 @@ func singleDeviceEnvFor(exe string, set GpuSet) (string, bool) {
 			}
 		}
 	}
-	if usingCudaGPU() {
+	// The CUDA fallback stays multi-only. It trusts the TELEMETRY index, which
+	// is the right ordinal only because CUDA_DEVICE_ORDER=PCI_BUS_ID rides along
+	// with it; on a single-GPU plan there is nothing it could disambiguate that
+	// the probe above did not already, and firing it would put a pin on every
+	// single-card CUDA box for no reason.
+	if set.Multi() && usingCudaGPU() {
 		return fmt.Sprintf("CUDA_VISIBLE_DEVICES=%d", main), true
 	}
 	return "", false
