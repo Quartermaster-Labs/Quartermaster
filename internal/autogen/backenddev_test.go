@@ -237,6 +237,7 @@ func TestAutogen_SingleGpu_EmitsNothingNew(t *testing.T) {
 		t.Fatalf("single-GPU writeSingleDeviceEnv emitted %q, want nothing", b.String())
 	}
 }
+
 // The other single-GPU box: telemetry counts one card, the backend counts two.
 // An integrated adapter has no dedicated VRAM to plan against so the GPU set
 // drops it, but ROCm and Vulkan list it anyway, advertising shared system
