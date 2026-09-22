@@ -29,7 +29,7 @@
   import { enhancePrompt } from "../../lib/promptEnhance";
   import { scrollFade } from "../../lib/scrollFade";
   import type { ImageApiMode, SdApiLora, SdApiLoraRef } from "../../lib/types";
-  import { ASPECTS, SIZE_TIERS, aspectDims, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, DEFAULT_MAX_DIM, MAX_BATCH, defaultsFor, withAlphaPrompt, settingsFor, parseSdProgress, fmtDur } from "./imageGen";
+  import { ASPECTS, SIZE_TIERS, aspectDims, nearestAspect, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, DEFAULT_MAX_DIM, MAX_BATCH, defaultsFor, withAlphaPrompt, settingsFor, parseSdProgress, fmtDur } from "./imageGen";
 
   // A conversational image tab: each user prompt becomes a turn, and the model
   // replies with an image. Follow-up prompts tweak the last image — Kontext gets
@@ -428,10 +428,7 @@
   function snapAspect(ratio: string): string | null {
     const [w, h] = ratio.split(":").map((n) => Number(n.trim()));
     if (!(w > 0) || !(h > 0)) return null;
-    const r = w / h;
-    return ASPECTS.reduce((best, a) =>
-      Math.abs(a.w / a.h - r) < Math.abs(best.w / best.h - r) ? a : best
-    ).value;
+    return nearestAspect(w / h);
   }
 
   async function runEnhance() {

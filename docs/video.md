@@ -46,6 +46,12 @@ A setting that probably will not fit turns **orange** with the arithmetic behind
 
 **Controls**: steps, seed, sampler, scheduler, an optional negative prompt, and **LoRAs** from the model's own folder (**Load list** loads the model to enumerate them), each with its own strength. Keeping video LoRAs in a tree of their own (a ComfyUI layout always does) is the **LoRA folder** button in the Models page toolbar while the Video tab is open: it applies to video models only and leaves image models on theirs. Settings -> Backends -> LoRA folder is the fallback for everything with no folder of its own.
 
+**Prompt enhancer**: if the model names one (the cogwheel, same two fields the Images tab uses), an **Enhance** button appears next to the prompt. It hands your prompt to a chat model, and the rewrite lands back in the box for you to read and edit before anything renders. Nothing is ever rewritten automatically.
+
+It matters more here than for stills. LTX is trained on **long single-paragraph audio-visual captions**, so a six-word prompt is not merely vague, it is outside the distribution the model was conditioned on, and the result degrades accordingly. Lightricks handles this on their own side the same way: a stock instruct model (`google/gemma-4-E2B-it`, not the projected Gemma that conditions the DiT) driven by one of two system prompts, shipped as `gemma4_t2v_system_prompt.txt` and `gemma4_i2v_system_prompt.txt` in the LTX-2 repo. Those two map onto the two fields: the text one for a prompt with no start frame, the **first frame** one for a prompt that has one, where the caption has to open on the frame that already exists. Paste the text you want into the prompt dialog beside each field; a vision model is the right pick for the first-frame direction, since it is shown the frame.
+
+The enhancer is a normal catalog model, so it loads and swaps through the one scheduler like everything else. On a single-GPU box it evicts the video model and the video model comes back to render, which is one swap ahead of a render measured in minutes.
+
 ## Starting from an image, and going past the VRAM ceiling
 
 Models trained for it accept frame conditioning, offered only where it applies:

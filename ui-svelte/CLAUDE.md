@@ -105,9 +105,10 @@ Backend communication is centralized in `src/stores/api.ts`, with shared types i
   process, and component-local state gave each its own poller and its own idea of whether an
   update was running.
 
-## Prompt enhancement (Images tab)
+## Prompt enhancement (Images and Video tabs)
 
-`lib/promptEnhance.ts` + the Enhance button in `playground/ImageInterface.svelte`.
+`lib/promptEnhance.ts` + the Enhance button in `playground/ImageInterface.svelte` and
+`playground/VideoInterface.svelte`.
 
 Both id fields (the Settings table, and the per-model picker in `ModelConfigModal.svelte`) are
 **free text with a `<datalist>` of suggestions, never a dropdown**. Nothing server-side validates
@@ -194,6 +195,15 @@ rewrite is accepting it.
 The enhancer is a normal catalog model, so on a single-GPU box it evicts the image model and the
 image model swaps back in to render. Slow, but correct: the alternative is a second scheduler,
 which the architecture forbids.
+
+**The Video tab is the same code with one substitution.** `VideoInterface.svelte` picks the
+direction off the **start frame** rather than an img2img base: a start frame present means the
+edit enhancer (`promptEnhancerEdit`), absent means the text one, with the same fall back to
+whichever is configured. The frames are what get attached as reference images, and only to a
+vision enhancer. The swap is also a better trade here than on the Images tab, which is why the
+button is offered at all: one rewrite ahead of a render measured in minutes, and LTX genuinely
+needs it (it is trained on long single-paragraph audio-visual captions and degrades on a short
+prompt, so a bare prompt is out of distribution rather than merely vague).
 
 ## Image attachment intake
 

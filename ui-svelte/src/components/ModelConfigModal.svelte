@@ -2008,8 +2008,12 @@
 
           <label class="flex flex-col gap-1 text-sm col-span-2">
             <span class="text-txtsecondary flex items-center gap-1">
-              Prompt enhancer (txt2img)
-              {@render hint("Id of a chat model that rewrites this model's prompt into a more precise one before rendering. Used when the request carries no reference image, and for img2img too unless the field below names a different one. Any model id is accepted; the suggestions are the enhancers configured in Settings, which is also where each one's fixed system prompt lives. The Images tab then offers an Enhance button that shows you the rewrite before you render it. Never applied automatically.")}
+              Prompt enhancer ({videoMode ? "text-to-video" : "txt2img"})
+              {@render hint(
+                videoMode
+                  ? "Id of a chat model that rewrites this model's prompt into a more precise one before rendering. Used when the request carries no first-frame reference, and for first-frame renders too unless the field below names a different one. Any model id is accepted; the suggestions are the enhancers configured in Settings, which is also where each one's fixed system prompt lives. The Video tab then offers an Enhance button that shows you the rewrite before you render it. Never applied automatically. Worth setting for LTX, which was trained on long single-paragraph audio-visual captions and degrades on a short prompt: Lightricks drives it with a stock Gemma-4-E2B-it and ships the two system prompts (gemma4_t2v / gemma4_i2v) in the LTX-2 repo."
+                  : "Id of a chat model that rewrites this model's prompt into a more precise one before rendering. Used when the request carries no reference image, and for img2img too unless the field below names a different one. Any model id is accepted; the suggestions are the enhancers configured in Settings, which is also where each one's fixed system prompt lives. The Images tab then offers an Enhance button that shows you the rewrite before you render it. Never applied automatically.",
+              )}
             </span>
             <div class="flex items-center gap-1">
               <input
@@ -2063,8 +2067,12 @@
 
           <label class="flex flex-col gap-1 text-sm col-span-2">
             <span class="text-txtsecondary flex items-center gap-1">
-              Prompt enhancer (img2img)
-              {@render hint("Used instead of the one above when the request carries a reference image. Qwen ships the pair (PE-T2I, PE-I2I) and they are not interchangeable: the img2img one rewrites an instruction about a picture that already exists, the txt2img one composes a scene from nothing. Leave empty to use the txt2img enhancer in both directions.")}
+              Prompt enhancer ({videoMode ? "first frame" : "img2img"})
+              {@render hint(
+                videoMode
+                  ? "Used instead of the one above when the request carries a first-frame reference. The two are not interchangeable: this one has to describe a frame that already exists and narrate forward from it, the other composes a shot from nothing. It should be a vision enhancer, since it is shown the frame. Leave empty to use the text-to-video enhancer in both directions."
+                  : "Used instead of the one above when the request carries a reference image. Qwen ships the pair (PE-T2I, PE-I2I) and they are not interchangeable: the img2img one rewrites an instruction about a picture that already exists, the txt2img one composes a scene from nothing. Leave empty to use the txt2img enhancer in both directions.",
+              )}
             </span>
             <div class="flex items-center gap-1">
               <input
