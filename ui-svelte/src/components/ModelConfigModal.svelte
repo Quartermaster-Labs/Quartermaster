@@ -55,9 +55,7 @@
     nglDisplay,
     noNoMmap,
     parseCtx,
-    parseImageCmdFields,
     specToggle,
-    type ParsedImg,
   } from "./modelCmdForm";
 
   interface Props {
@@ -316,8 +314,11 @@
 
   // Launch arguments, two panes (ui-svelte/launch-args.md): the user's text is
   // stored verbatim and never parsed back into fields, and the read-only pane
-  // renders the composed command the server returns. The image/audio/SAM forms
-  // keep the old two-way box (cmdDraft) until their emitters compose too.
+  // renders the composed command the server returns. Diffusion models compose
+  // the same way, against sd-server's own flag table
+  // (internal/autogen/flagtable_sd.go); only the audio and SAM forms still use
+  // the old two-way box (cmdDraft), because their emitters still append
+  // extraArgs verbatim.
   let customArgs = $state("");
   let customArgsOff = $state(false);
   let cmdLayers = $state<PreviewLayers | null>(null);
@@ -575,31 +576,6 @@
   function samplerPlaceholder(flag: string, llamaDefault: number): string {
     const v = genDefaultNum(config, flag);
     return String(v === "" ? llamaDefault : v);
-  }
-
-  function applyImageParsedToDefault(p: ParsedImg) {
-    vaePath = p.vaePath; clipLPath = p.clipLPath; clipGPath = p.clipGPath;
-    t5Path = p.t5Path; textEncoderPath = p.textEncoderPath;
-    offloadToCpu = p.offloadToCpu; teOnCpu = p.teOnCpu; vaeOnCpu = p.vaeOnCpu;
-    vaeTiling = p.vaeTiling; diffusionFa = p.diffusionFa;
-    temporalTiling = p.temporalTiling; streamLayers = p.streamLayers;
-    defaultSteps = p.defaultSteps; defaultCfg = p.defaultCfg; defaultSampler = p.defaultSampler;
-    defaultWidth = p.defaultWidth; defaultHeight = p.defaultHeight;
-    threads = p.threads;
-    extraArgs = p.extraArgs;
-  }
-
-
-  function onCmdInput(e: Event) {
-    // Image box only: local while typing, folded back into the fields on blur.
-    // The llama panes edit customArgs directly, with no round trip through the
-    // generator (see ui-svelte/launch-args.md).
-    cmdDraft = (e.currentTarget as HTMLTextAreaElement).value;
-  }
-  function onCmdBlur() {
-    if (!imageMode) return;
-    // Image box is Default-only (no variant box), sd-server flag set.
-    applyImageParsedToDefault(parseImageCmdFields(cmdDraft));
   }
 
   // Re-render the launch command from the active entry (Default or the selected
@@ -995,7 +971,7 @@
     // old box, qm-tools or a hand edit only has extraArgs, so seed the text from
     // it and clear the legacy bucket in the form. The next save migrates it (the
     // server still falls back to extraArgs for sidecars nobody opened).
-    if (imageMode || audioMode || samMode) {
+    if (audioMode || samMode) {
       extraArgs = o?.extraArgs ?? "";
       // A template set through extraArgs (qm-tools, hand-edited sidecar) belongs
       // in the advanced field; these forms still round-trip through the box.
@@ -1025,7 +1001,7 @@
     audioDevice = o?.audioDevice ?? null;
     variants = (o?.variants ?? []).map((v) => {
       const c = { ...v };
-      if (imageMode || audioMode || samMode) {
+      if (audioMode || samMode) {
         const h = hoistChatTemplate(c.extraArgs ?? "");
         if (h.path) {
           c.extraArgs = h.extra;
@@ -1403,13 +1379,15 @@
       // otherwise flash a --lora with no filename into the box.
       loras: loras.filter((l) => l.path.trim() !== "").map((l) => ({ path: l.path.trim(), scale: l.scale })),
       ...advToOverride(),
-      // Launch text. llama-server composes customArgs; vllm and the image/audio/
-      // SAM emitters still read the legacy extraArgs bucket, so the same box
-      // feeds whichever applies. Off keeps the text saved but unapplied (vllm has
-      // no off switch server-side, so there it clears the passthrough).
+      // Launch text. llama-server and sd-server both compose customArgs; vllm
+      // and the audio/SAM emitters still read the legacy extraArgs bucket, so the
+      // same box feeds whichever applies. Off keeps the text saved but unapplied
+      // (vllm has no off switch server-side, so there it clears the passthrough).
+      // A diffusion model saves extraArgs as "" on purpose: the load path moved
+      // its text into customArgs, and leaving the old copy behind would emit both.
       extraArgs: isVllm ? (customArgsOff ? "" : customArgs) : extraArgs,
-      customArgs: imageMode || audioMode || samMode ? "" : customArgs,
-      customArgsOff: imageMode || audioMode || samMode ? false : customArgsOff,
+      customArgs: audioMode || samMode ? "" : customArgs,
+      customArgsOff: audioMode || samMode ? false : customArgsOff,
       unlisted,
       skip,
       slotCache: slotCacheOn,
@@ -1632,7 +1610,7 @@
   // a debounced keystroke cannot make the confirm lie. Checks the Default tab
   // and every variant that carries its own text.
   async function unknownLaunchFlags(): Promise<string[]> {
-    if (!modelId || isVllm || imageMode || audioMode || samMode) return [];
+    if (!modelId || isVllm || audioMode || samMode) return [];
     const ask = (ov: ModelOverride) =>
       previewCmd(modelId!, ov)
         .then((l) => (l.issues ?? []).filter((i) => i.kind === "unknown").map((i) => i.token))
@@ -1970,42 +1948,48 @@
             <span class="text-txtsecondary flex items-center gap-1">
               VAE
               {@render hint("--vae. External VAE file (decodes the latent to pixels). A diffusion-only GGUF needs this supplied separately.")}
+              {@render knobBadge("vaePath")}
             </span>
-            <input type="text" bind:value={vaePath} class="cfg-input" placeholder="e.g. /models/ae.safetensors" spellcheck="false" />
+            <input type="text" bind:value={vaePath} class="cfg-input" placeholder="e.g. /models/ae.safetensors" spellcheck="false" disabled={knobOwned("vaePath")} />
           </label>
           <label class="flex flex-col gap-1 text-sm col-span-2">
             <span class="text-txtsecondary flex items-center gap-1">
               Text encoder (LLM)
               {@render hint("--llm. Text-encoder model for Z-Image / Lumina-family diffusion (e.g. a Qwen3 GGUF). Use this OR the CLIP/T5 encoders below, per the model family.")}
+              {@render knobBadge("textEncoderPath")}
             </span>
-            <input type="text" bind:value={textEncoderPath} class="cfg-input" placeholder="e.g. /models/qwen3-4b-q8_0.gguf" spellcheck="false" />
+            <input type="text" bind:value={textEncoderPath} class="cfg-input" placeholder="e.g. /models/qwen3-4b-q8_0.gguf" spellcheck="false" disabled={knobOwned("textEncoderPath")} />
           </label>
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               CLIP-L
               {@render hint("--clip_l. CLIP-L text encoder (SD/SDXL/Flux).")}
+              {@render knobBadge("clipLPath")}
             </span>
-            <input type="text" bind:value={clipLPath} class="cfg-input" placeholder="clip_l.safetensors" spellcheck="false" />
+            <input type="text" bind:value={clipLPath} class="cfg-input" placeholder="clip_l.safetensors" spellcheck="false" disabled={knobOwned("clipLPath")} />
           </label>
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               CLIP-G
               {@render hint("--clip_g. CLIP-G text encoder (SDXL).")}
+              {@render knobBadge("clipGPath")}
             </span>
-            <input type="text" bind:value={clipGPath} class="cfg-input" placeholder="clip_g.safetensors" spellcheck="false" />
+            <input type="text" bind:value={clipGPath} class="cfg-input" placeholder="clip_g.safetensors" spellcheck="false" disabled={knobOwned("clipGPath")} />
           </label>
           <label class="flex flex-col gap-1 text-sm col-span-2">
             <span class="text-txtsecondary flex items-center gap-1">
               T5-XXL
               {@render hint("--t5xxl. T5-XXL text encoder (Flux / SD3).")}
+              {@render knobBadge("t5Path")}
             </span>
-            <input type="text" bind:value={t5Path} class="cfg-input" placeholder="t5xxl.safetensors" spellcheck="false" />
+            <input type="text" bind:value={t5Path} class="cfg-input" placeholder="t5xxl.safetensors" spellcheck="false" disabled={knobOwned("t5Path")} />
           </label>
 
           <label class="flex flex-col gap-1 text-sm col-span-2">
             <span class="text-txtsecondary flex items-center gap-1">
               Target VRAM
               {@render hint("How much VRAM to size this model against (--max-vram). Auto = the global target. sd.cpp graph-cuts to fit it; lower it to leave headroom for other apps.")}
+              {@render knobBadge("maxVram")}
               <span class="ml-auto font-mono text-txtmain">
                 {vramAuto ? (globalTargetGB ? `auto · ${globalTargetGB.toFixed(1)} GB` : "auto") : `${Number(vramTarget).toFixed(1)} GB`}
               </span>
@@ -2014,7 +1998,7 @@
               <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
                 <Toggle size="sm" bind:checked={vramAuto} /> Auto
               </label>
-              <input type="range" min="0" max={maxVram} step="0.5" bind:value={vramTarget} disabled={vramAuto} use:wheelAdjust class="flex-1 disabled:opacity-40" />
+              <input type="range" min="0" max={maxVram} step="0.5" bind:value={vramTarget} disabled={vramAuto || knobOwned("maxVram")} use:wheelAdjust class="flex-1 disabled:opacity-40" />
               <span class="text-xs text-txtsecondary font-mono whitespace-nowrap">max {maxVram.toFixed(0)}G</span>
             </div>
           </label>
@@ -2024,44 +2008,50 @@
             <span class="text-txtsecondary flex items-center gap-1">
               Steps
               {@render hint("--steps. Default sampling steps when a request omits it. Turbo/LCM models need few (e.g. 8); standard models 20-30. Empty = sd-server default.")}
+              {@render knobBadge("defaultSteps")}
             </span>
-            <input type="number" min="0" step="1" bind:value={defaultSteps} use:wheelAdjust class="cfg-input" placeholder="default" />
+            <input type="number" min="0" step="1" bind:value={defaultSteps} use:wheelAdjust class="cfg-input" placeholder="default" disabled={knobOwned("defaultSteps")} />
           </label>
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               CFG scale
               {@render hint("--cfg-scale. Prompt-adherence strength. Turbo/distilled models REQUIRE 1.0 (higher blurs output); standard models ~7. Empty = sd-server default.")}
+              {@render knobBadge("defaultCfg")}
             </span>
-            <input type="number" min="0" step="0.5" bind:value={defaultCfg} use:wheelAdjust class="cfg-input" placeholder="default" />
+            <input type="number" min="0" step="0.5" bind:value={defaultCfg} use:wheelAdjust class="cfg-input" placeholder="default" disabled={knobOwned("defaultCfg")} />
           </label>
           <label class="flex flex-col gap-1 text-sm col-span-2">
             <span class="text-txtsecondary flex items-center gap-1">
               Sampler
               {@render hint("--sampling-method. Default sampling method when a request omits it. Empty = sd-server default.")}
+              {@render knobBadge("defaultSampler")}
             </span>
-            <Select bind:value={defaultSampler} options={SAMPLER_SEL_DEFAULT} ariaLabel="Default sampler" />
+            <Select bind:value={defaultSampler} options={SAMPLER_SEL_DEFAULT} ariaLabel="Default sampler" disabled={knobOwned("defaultSampler")} />
           </label>
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               Default width
               {@render hint("--width. Default image width in px when a request omits it. Empty = sd-server default (512).")}
+              {@render knobBadge("defaultWidth")}
             </span>
-            <input type="number" min="0" step="64" bind:value={defaultWidth} use:wheelAdjust class="cfg-input" placeholder="default" />
+            <input type="number" min="0" step="64" bind:value={defaultWidth} use:wheelAdjust class="cfg-input" placeholder="default" disabled={knobOwned("defaultWidth")} />
           </label>
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">
               Default height
               {@render hint("--height. Default image height in px when a request omits it. Empty = sd-server default (512).")}
+              {@render knobBadge("defaultHeight")}
             </span>
-            <input type="number" min="0" step="64" bind:value={defaultHeight} use:wheelAdjust class="cfg-input" placeholder="default" />
+            <input type="number" min="0" step="64" bind:value={defaultHeight} use:wheelAdjust class="cfg-input" placeholder="default" disabled={knobOwned("defaultHeight")} />
           </label>
 
           <label class="flex flex-col gap-1 text-sm col-span-2">
             <span class="text-txtsecondary flex items-center gap-1">
               CPU offload
               {@render hint("--offload-to-cpu. Page the diffusion weights to RAM (loaded to VRAM on use) to fit a tight budget. Auto = the sizer offloads when weights + compute don't fit the target.")}
+              {@render knobBadge("offloadToCpu")}
             </span>
-            <Select bind:value={offloadToCpu} options={OFFLOAD_SEL_AUTO} ariaLabel="Offload to CPU" />
+            <Select bind:value={offloadToCpu} options={OFFLOAD_SEL_AUTO} ariaLabel="Offload to CPU" disabled={knobOwned("offloadToCpu")} />
           </label>
 
           <label class="flex flex-col gap-1 text-sm col-span-2">
@@ -2206,8 +2196,9 @@
             <span class="text-txtsecondary flex items-center gap-1">
               Threads
               {@render hint("-t. CPU threads. Empty = the global default. Matters for the CPU-side text encoder / offloaded weights.")}
+              {@render knobBadge("threads")}
             </span>
-            <input type="number" min="0" step="1" bind:value={threads} use:wheelAdjust class="cfg-input" placeholder="global default" />
+            <input type="number" min="0" step="1" bind:value={threads} use:wheelAdjust class="cfg-input" placeholder="global default" disabled={knobOwned("threads")} />
           </label>
         </div>
 
@@ -2216,47 +2207,53 @@
           <div class="font-mono text-[0.6rem] uppercase tracking-wider text-txtsecondary mb-2">Toggles</div>
           <div class="grid grid-cols-2 gap-x-4 gap-y-2">
             <label class="flex items-center gap-2 text-sm">
-              <Toggle size="sm" checked={teOnCpu !== "off"} onchange={(on) => (teOnCpu = on ? "" : "off")} />
+              <Toggle size="sm" checked={lockedToggle("sdBackend") ?? (teOnCpu !== "off")} onchange={(on) => (teOnCpu = on ? "" : "off")} disabled={knobOwned("sdBackend")} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Text encoder on CPU
                 {@render hint("--backend te=cpu. Run the text encoder on the CPU (on by default). It runs once per generation, so it's the cheapest component to keep off the GPU. Turn off only if you have VRAM headroom.")}
+                {@render knobBadge("sdBackend")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
-              <Toggle size="sm" checked={vaeOnCpu === "on"} onchange={(on) => (vaeOnCpu = on ? "on" : "")} />
+              <Toggle size="sm" checked={lockedToggle(["sdBackend", "vaeOnCpu"]) ?? (vaeOnCpu === "on")} onchange={(on) => (vaeOnCpu = on ? "on" : "")} disabled={knobOwned(["sdBackend", "vaeOnCpu"])} />
               <span class="text-txtsecondary flex items-center gap-1">
                 VAE on CPU
                 {@render hint("--backend vae=cpu. Force the VAE decoder onto the CPU (off by default - it decodes on the GPU). Turn on if the GPU VAE outputs a blank/white image (a bf16 VAE whitens on some backends); costs decode speed.")}
+                {@render knobBadge(["sdBackend", "vaeOnCpu"])}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
-              <Toggle size="sm" checked={vaeTiling !== "off"} onchange={(on) => (vaeTiling = on ? "" : "off")} />
+              <Toggle size="sm" checked={lockedToggle("vaeTiling") ?? (vaeTiling !== "off")} onchange={(on) => (vaeTiling = on ? "" : "off")} disabled={knobOwned("vaeTiling")} />
               <span class="text-txtsecondary flex items-center gap-1">
                 VAE tiling
                 {@render hint("--vae-tiling. Tile the VAE decode to cap its VRAM spike (on by default). Decoding a full latent whole can OOM on a tight card. Quality is steps/cfg, not this.")}
+                {@render knobBadge("vaeTiling")}
               </span>
             </label>
             {#if videoMode}
               <label class="flex items-center gap-2 text-sm">
-                <Toggle size="sm" checked={temporalTiling !== "off"} onchange={(on) => (temporalTiling = on ? "" : "off")} />
+                <Toggle size="sm" checked={lockedToggle("temporalTiling") ?? (temporalTiling !== "off")} onchange={(on) => (temporalTiling = on ? "" : "off")} disabled={knobOwned("temporalTiling")} />
                 <span class="text-txtsecondary flex items-center gap-1">
                   Temporal tiling <span class="text-[0.6rem] uppercase opacity-50">video</span>
                   {@render hint("--temporal-tiling. Tile the VAE decode along TIME as well. VAE tiling above chunks the decode spatially, which is all a still needs; a clip's decode also grows with frame count and this is the only flag that chunks that axis. On by default only where the VAE can actually do it (Wan today, NOT MiniMax-H3, whose decode ignores the flag and processes every frame at once). Turning it on here forces it out anyway, for a backend build that has since gained support.")}
+                  {@render knobBadge("temporalTiling")}
                 </span>
               </label>
               <label class="flex items-center gap-2 text-sm">
-                <Toggle size="sm" checked={streamLayers !== "off"} onchange={(on) => (streamLayers = on ? "" : "off")} />
+                <Toggle size="sm" checked={lockedToggle("streamLayers") ?? (streamLayers !== "off")} onchange={(on) => (streamLayers = on ? "" : "off")} disabled={knobOwned("streamLayers")} />
                 <span class="text-txtsecondary flex items-center gap-1">
                   Stream layers <span class="text-[0.6rem] uppercase opacity-50">video</span>
                   {@render hint("--stream-layers. Stream the diffusion weights against the max-VRAM budget with prefetch instead of holding them resident (on by default, video models only). Hands that headroom back to the sampler, which is what buys longer clips. Turn off if renders that already fit get slower. Emitted only for video models.")}
+                  {@render knobBadge("streamLayers")}
                 </span>
               </label>
             {/if}
             <label class="flex items-center gap-2 text-sm">
-              <Toggle size="sm" checked={diffusionFa !== "off"} onchange={(on) => (diffusionFa = on ? "" : "off")} />
+              <Toggle size="sm" checked={lockedToggle("diffusionFa") ?? (diffusionFa !== "off")} onchange={(on) => (diffusionFa = on ? "" : "off")} disabled={knobOwned("diffusionFa")} />
               <span class="text-txtsecondary flex items-center gap-1">
                 Diffusion flash-attn
                 {@render hint("--diffusion-fa. Flash attention for the diffusion model (on by default). Near-free VRAM saver.")}
+                {@render knobBadge("diffusionFa")}
               </span>
             </label>
             <label class="flex items-center gap-2 text-sm">
@@ -2276,26 +2273,12 @@
           </div>
         </div>
 
-        <!-- Launch command (editable, two-way). Form edits re-render it; editing the
-             box parses sd-server flags back into the fields (on blur), unknown flags
-             stashed into extraArgs. Mirrors the LLM tab. -->
-        <details class="group">
-          <summary class="cursor-pointer font-semibold text-sm uppercase tracking-wider text-txtsecondary hover:text-txtmain">
-            Launch parameters {config.hasOverride ? "(custom)" : "(autogen default)"}
-          </summary>
-          <textarea
-            value={cmdDraft}
-            oninput={onCmdInput}
-            onblur={onCmdBlur}
-            spellcheck="false"
-            rows="6"
-            class="mt-2 w-full bg-background rounded border border-card-border p-3 text-xs font-mono whitespace-pre-wrap break-all resize-y text-txtmain"
-          ></textarea>
-          <p class="text-xs text-txtsecondary mt-1">
-            Two-way: known sd-server flags parse back into the fields on blur; anything else lands in <code>extraArgs</code>.
-          </p>
-          <p class="text-xs text-txtsecondary mt-1 font-mono break-all">{config.gguf}</p>
-        </details>
+        <!-- Launch arguments: the user's text verbatim, and the composed command
+             it produces. Same one-way composition as the LLM tab, resolved against
+             sd-server's flag table, so a pinned flag REPLACES the generated one
+             instead of being appended beside it (ui-svelte/launch-args.md). -->
+        <LaunchArgsPanes bind:customArgs bind:customArgsOff layers={cmdLayers} fallback={cmdDraft} />
+        <p class="text-xs text-txtsecondary mt-1 font-mono break-all">{config.gguf}</p>
         {:else if selectedV}
           {@const sv = selectedV}
           <p class="text-xs text-txtsecondary -mt-1">
@@ -2370,13 +2353,15 @@
             </label>
           </div>
 
-          <details class="group">
-            <summary class="cursor-pointer font-semibold text-sm uppercase tracking-wider text-txtsecondary hover:text-txtmain">
-              Launch parameters (preset)
-            </summary>
-            <textarea value={cmdDraft} readonly spellcheck="false" rows="6" class="mt-2 w-full bg-background rounded border border-card-border p-3 text-xs font-mono whitespace-pre-wrap break-all resize-y text-txtmain opacity-90"></textarea>
-            <p class="text-xs text-txtsecondary mt-1">Re-renders from the fields above; empty fields inherit the model default.</p>
-          </details>
+          <!-- Launch arguments for this preset: the text overrides the model's,
+               the composed command is read-only. -->
+          <LaunchArgsPanes
+            bind:customArgs={() => sv.customArgs ?? "", (v) => (sv.customArgs = v)}
+            customArgsOff={false}
+            layers={cmdLayers}
+            inherited={customArgs}
+            variant
+          />
         {/if}
         {:else if audioMode}
         <!-- Audio (Qwen3-TTS / qwentts.cpp tts-server) form. No KV/ctx/spec/estimate:

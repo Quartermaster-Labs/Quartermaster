@@ -385,7 +385,8 @@ func videoComponents(v videoInfo, enc EncoderSet, pool *EncoderPool, llmDefault 
 // overhead, and the declared capabilities, which is what routes the playground to
 // the Video tab and the async job API rather than to /sdapi txt2img.
 func emitVideoModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, name, arch string, vid videoInfo, condHidden int64, emitted *[]string) {
-	lines, budget, graph, offload, missing := imageCmdLines(s, row, ov, arch, name, condHidden, vid)
+	cmd, budget, graph, offload, missing := imageCmdLines(s, row, ov, arch, name, condHidden, vid)
+	lines := cmd.Lines
 
 	archNote := strings.TrimSpace(arch)
 	if archNote == "" {

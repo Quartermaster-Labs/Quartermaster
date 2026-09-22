@@ -464,7 +464,7 @@ func resolveComponents(enc EncoderSet, ov *Override, arch, name string, pool *En
 // by emitImageModel (YAML emit) and RenderSoloCmd (editor launch-parameters
 // preview), so the box matches a save. Also returns the resolved VRAM budget and
 // offload decision for the YAML comment, and any required-but-missing encoder roles.
-func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, condHidden int64, vid videoInfo) (lines []string, budget, graph float64, offload bool, missing []string) {
+func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, condHidden int64, vid videoInfo) (cmd ComposedCmd, budget, graph float64, offload bool, missing []string) {
 	modelPath := strings.ReplaceAll(row.FullPath, "\\", "/")
 
 	// Budget mirrors the LLM sizer: target minus headroom. A per-model
@@ -533,7 +533,7 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	// Per-model backend pick from the config editor (Override.Backend) or the
 	// ★Default image entry; fall back to the legacy derived exe.
 	sdExe := imageExe(s, ov)
-	lines = []string{
+	lines := []string{
 		sdExe,
 		fmt.Sprintf("%s %s", modelFlag, modelPath),
 		"-l 127.0.0.1",
@@ -700,12 +700,26 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	if def.fps > 0 {
 		lines = append(lines, fmt.Sprintf("--fps %d", def.fps))
 	}
+	// Custom launch arguments go through the SAME composer llama-server uses,
+	// against sd-server's own flag table. The old code appended ov.ExtraArgs
+	// verbatim here, which is the whole reported bug: a pinned --video-frames
+	// landed NEXT TO the generated one instead of replacing it, and because the
+	// editor's two-way box parsed what it recognised back into the structured
+	// fields and left the rest in the text, every save re-emitted both copies
+	// and grew the line again. One LTX sidecar reached five.
+	//
+	// ComposeCmd is one-way by construction: it drops each generated flag whose
+	// knob the custom text owns, then appends the text once. A parse failure
+	// returns the lines with the text appended anyway, which is exactly what
+	// this code did unconditionally before, so a command the spawner cannot
+	// split still fails with sd-server's own message rather than silently
+	// losing the user's flags here.
+	custom := ""
 	if ov != nil {
-		if extra := strings.TrimSpace(ov.ExtraArgs); extra != "" {
-			lines = append(lines, extra)
-		}
+		custom = ov.CustomArgsText()
 	}
-	return lines, budget, graph, offload, missing
+	cc, _ := SdFlags.ComposeCmd(lines, custom)
+	return cc, budget, graph, offload, missing
 }
 
 // mergeImageVariant overlays an image variant onto its base override: the
@@ -773,7 +787,13 @@ func mergeImageVariant(base Override, v VariantSpec) Override {
 	if v.DefaultFps > 0 {
 		o.DefaultFps = v.DefaultFps
 	}
-	if v.ExtraArgs != "" {
+	// Both launch-argument buckets inherit, and a variant that sets EITHER
+	// replaces BOTH. They are two spellings of one setting (CustomArgsText
+	// prefers the new one), so letting a variant override only the new field
+	// while the base's legacy text stayed behind would leave the old text
+	// applying to a variant that had plainly replaced it.
+	if v.CustomArgs != "" || v.ExtraArgs != "" {
+		o.CustomArgs = v.CustomArgs
 		o.ExtraArgs = v.ExtraArgs
 	}
 	return o
@@ -807,7 +827,7 @@ func imageExe(s Settings, ov *Override) string {
 // model (safetensors DiT). Shared by config emit and the editor's cmd preview so
 // both render identically — the gguf-scan RenderSoloCmd path can't serve these
 // (a safetensors DiT has no gguf header to arch-detect from).
-func extraImageCmdLines(s Settings, m ExtraImageModel) []string {
+func extraImageCmdLines(s Settings, m ExtraImageModel) ComposedCmd {
 	threads := s.Threads
 	if m.Threads > 0 {
 		threads = m.Threads
@@ -888,16 +908,18 @@ func extraImageCmdLines(s Settings, m ExtraImageModel) []string {
 	if m.DefaultHeight > 0 {
 		lines = append(lines, fmt.Sprintf("--height %d", m.DefaultHeight))
 	}
-	if extra := strings.TrimSpace(m.ExtraArgs); extra != "" {
-		lines = append(lines, extra)
-	}
-	return lines
+	// Same composition as imageCmdLines above. An ExtraImageModel carries the
+	// text on its own field rather than on an Override, so it is borrowed into
+	// one for the composer: CustomArgsText is the only thing read, and it is
+	// what resolves the new customArgs field against the legacy bucket.
+	cc, _ := SdFlags.ComposeCmd(lines, (&Override{CustomArgs: m.CustomArgs, CustomArgsOff: m.CustomArgsOff, ExtraArgs: m.ExtraArgs}).CustomArgsText())
+	return cc
 }
 
 // RenderExtraImageCmd renders the full sd-server command for one extra image
 // model as a single line (the editor's cmd-preview endpoint uses this).
 func RenderExtraImageCmd(s Settings, m ExtraImageModel) string {
-	return strings.Join(extraImageCmdLines(s, m), " ")
+	return extraImageCmdLines(s, m).Effective
 }
 
 // FindExtraImageModel returns the settings entry whose model path matches p
@@ -938,6 +960,8 @@ func ExtraImageAsOverride(m ExtraImageModel) Override {
 		DefaultHeight:            m.DefaultHeight,
 		VramTargetGB:             m.VramTargetGB,
 		Threads:                  m.Threads,
+		CustomArgs:               m.CustomArgs,
+		CustomArgsOff:            m.CustomArgsOff,
 		ExtraArgs:                m.ExtraArgs,
 		Unlisted:                 m.Unlisted,
 		PromptEnhancer:           m.PromptEnhancer,
@@ -980,6 +1004,8 @@ func ApplyOverrideToExtraImage(m ExtraImageModel, ov *Override) ExtraImageModel 
 	m.DefaultSampler = ov.DefaultSampler
 	m.DefaultWidth = ov.DefaultWidth
 	m.DefaultHeight = ov.DefaultHeight
+	m.CustomArgs = ov.CustomArgs
+	m.CustomArgsOff = ov.CustomArgsOff
 	m.ExtraArgs = ov.ExtraArgs
 	m.Unlisted = ov.Unlisted
 	m.PromptEnhancer = ov.PromptEnhancer
@@ -1010,7 +1036,7 @@ func emitExtraImageModels(b *strings.Builder, s Settings, overrides []Override, 
 
 		ov := ResolveOverride(GgufRow{FullPath: m.ModelPath}, overrides)
 		m = ApplyOverrideToExtraImage(m, ov)
-		lines := extraImageCmdLines(s, m)
+		lines := extraImageCmdLines(s, m).Lines
 
 		fmt.Fprintf(b, "\n  # extra image model (safetensors, sd-server, max-vram=%gGB) - hand-declared, no gguf scan\n", extraImageBudget(s, m))
 		fmt.Fprintf(b, "  %q:\n", name)
@@ -1038,7 +1064,8 @@ func emitExtraImageModels(b *strings.Builder, s Settings, overrides []Override, 
 }
 
 func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, name, arch string, bakedEnc bool, condHidden int64, emitted *[]string) {
-	lines, budget, graph, offload, missing := imageCmdLines(s, row, ov, arch, name, condHidden, videoInfo{})
+	cmd, budget, graph, offload, missing := imageCmdLines(s, row, ov, arch, name, condHidden, videoInfo{})
+	lines := cmd.Lines
 
 	fmt.Fprintf(b, "\n  # arch=%s size=%gGB (image model, sd-server, budget=%gGB, max-vram=%gGB, offload=%t)\n", arch, row.SizeGB, budget, graph, offload)
 	// SD/SDXL served as -m full checkpoints: if this gguf has no baked encoders it

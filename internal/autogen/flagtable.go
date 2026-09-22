@@ -181,26 +181,50 @@ var llamaFlagTable = []FlagDef{
 	{Name: "--lora-scaled", Knob: "loras", Value: true, ExtraValues: 1, Repeat: Additive},
 }
 
-// llamaFlagIndex maps every spelling (canonical name and alias) to its def.
-var llamaFlagIndex = func() map[string]FlagDef {
-	m := make(map[string]FlagDef, len(llamaFlagTable)*2)
-	for _, d := range llamaFlagTable {
-		m[d.Name] = d
+// FlagTable is ONE backend's flag vocabulary: the ordered defs plus an index
+// over every spelling they accept. There are two of them (llama-server here,
+// sd-server in flagtable_sd.go) because a spelling only means something against
+// a specific binary: -H is --height to sd-server and --hf-repo to llama-server,
+// and -l is --listen-ip to one and nothing at all to the other. Resolving a
+// diffusion command against the llama table is not a near miss, it is how every
+// sd-server flag read as unknown, owned no knob, suppressed nothing, and left
+// the user's text to pile up beside the generated copy.
+type FlagTable struct {
+	Backend string // the binary these spellings belong to, for error text
+	Defs    []FlagDef
+	index   map[string]FlagDef
+}
+
+// newFlagTable builds the spelling index once, at package init.
+func newFlagTable(backend string, defs []FlagDef) *FlagTable {
+	t := &FlagTable{Backend: backend, Defs: defs, index: make(map[string]FlagDef, len(defs)*2)}
+	for _, d := range defs {
+		t.index[d.Name] = d
 		for _, a := range d.Aliases {
-			m[a] = d
+			t.index[a] = d
 		}
 	}
-	return m
-}()
+	return t
+}
 
-// LookupFlag resolves a flag spelling to its definition. ok is false for a flag
-// the table does not know, which is not an error by itself: it may be a
-// user-written flag with no emitter counterpart (phase 4 checks those against
-// the backend's --help).
-func LookupFlag(name string) (FlagDef, bool) {
-	d, ok := llamaFlagIndex[name]
+// Lookup resolves a flag spelling to its definition. ok is false for a flag the
+// table does not know, which is not an error by itself: it may be a
+// user-written flag with no emitter counterpart (validate.go checks those
+// against the backend's --help).
+func (t *FlagTable) Lookup(name string) (FlagDef, bool) {
+	if t == nil {
+		return FlagDef{}, false
+	}
+	d, ok := t.index[name]
 	return d, ok
 }
+
+// LookupFlag resolves a spelling against the llama-server table. It and the
+// other three package-level wrappers below exist so the dozen llama-only
+// callers (pins.go, validate.go, the estimate preview) read exactly as they did
+// before the table became a parameter; anything that can serve either backend
+// takes a *FlagTable instead.
+func LookupFlag(name string) (FlagDef, bool) { return LlamaFlags.Lookup(name) }
 
 // SplitFlagToken splits a token into flag name and inline value, accepting
 // llama's `--flag=value` form. hasValue is true when the value was inline, so
@@ -218,22 +242,25 @@ func SplitFlagToken(tok string) (name, value string, hasValue bool) {
 // TokenKnob returns the knob a command token belongs to, resolving both
 // spellings and the --flag=value form. "" for values, for structural flags, and
 // for anything the table does not know.
-func TokenKnob(tok string) string {
+func (t *FlagTable) TokenKnob(tok string) string {
 	if !strings.HasPrefix(tok, "-") {
 		return ""
 	}
 	name, _, _ := SplitFlagToken(tok)
-	if d, ok := LookupFlag(name); ok {
+	if d, ok := t.Lookup(name); ok {
 		return d.Knob
 	}
 	return ""
 }
 
+// TokenKnob resolves against the llama-server table.
+func TokenKnob(tok string) string { return LlamaFlags.TokenKnob(tok) }
+
 // OwnedKnobs returns the knobs a token list sets. Flag tokens carry their knob;
 // an unknown flag contributes nothing (it cannot suppress a generated flag the
 // table cannot map it to). The token after a known value-taking flag is skipped
 // even when it starts with "-", so a negative value never reads as a flag.
-func OwnedKnobs(tokens []string) map[string]bool {
+func (t *FlagTable) OwnedKnobs(tokens []string) map[string]bool {
 	owned := map[string]bool{}
 	for i := 0; i < len(tokens); i++ {
 		tok := tokens[i]
@@ -241,7 +268,7 @@ func OwnedKnobs(tokens []string) map[string]bool {
 			continue
 		}
 		name, _, inline := SplitFlagToken(tok)
-		d, ok := LookupFlag(name)
+		d, ok := t.Lookup(name)
 		if !ok {
 			continue
 		}
@@ -259,6 +286,9 @@ func OwnedKnobs(tokens []string) map[string]bool {
 	}
 	return owned
 }
+
+// OwnedKnobs resolves against the llama-server table.
+func OwnedKnobs(tokens []string) map[string]bool { return LlamaFlags.OwnedKnobs(tokens) }
 
 // ClearOwnedFields zeroes every structured override field whose knob the custom
 // text owns, and returns the knobs it cleared (sorted by the caller). The
@@ -356,5 +386,37 @@ func ClearOwnedFields(ov *Override, owned map[string]bool) []string {
 	clear("mmprojFile", &ov.MmprojFile)
 	clear("mmprojOffload", &ov.Mmproj)
 	clear("slotSavePath", &ov.SlotCache)
+
+	// sd-server knobs. They share this switch rather than getting a twin of it
+	// because an Override carries BOTH backends' fields and only one table is
+	// ever consulted for a given model, so a llama knob set can never name one of
+	// these. Flags with no field behind them (--max-vram, --params-backend,
+	// --auto-fit) are absent on purpose: they suppress their generated copy
+	// through the table and have nothing to clear.
+	clear("vaePath", &ov.VaePath)
+	clear("audioVaePath", &ov.AudioVaePath)
+	clear("clipLPath", &ov.ClipLPath)
+	clear("clipGPath", &ov.ClipGPath)
+	clear("t5Path", &ov.T5Path)
+	clear("textEncoderPath", &ov.TextEncoderPath)
+	// llm_vision owns the gate as well as the path: leaving LlmVision "on" under
+	// a hand-written --llm_vision would re-derive a projector beside the encoder
+	// and emit a second copy of the flag.
+	clear("llmVisionPath", &ov.LlmVisionPath, &ov.LlmVision)
+	clear("loraDir", &ov.LoraDir)
+	clear("offloadToCpu", &ov.OffloadToCpu)
+	clear("vaeOnCpu", &ov.VaeOnCpu)
+	clear("teOnCpu", &ov.TeOnCpu)
+	clear("streamLayers", &ov.StreamLayers)
+	clear("diffusionFa", &ov.DiffusionFa)
+	clear("vaeTiling", &ov.VaeTiling)
+	clear("temporalTiling", &ov.TemporalTiling)
+	clear("defaultSteps", &ov.DefaultSteps)
+	clear("defaultCfg", &ov.DefaultCfg)
+	clear("defaultSampler", &ov.DefaultSampler)
+	clear("defaultWidth", &ov.DefaultWidth)
+	clear("defaultHeight", &ov.DefaultHeight)
+	clear("defaultFrames", &ov.DefaultFrames)
+	clear("defaultFps", &ov.DefaultFps)
 	return cleared
 }

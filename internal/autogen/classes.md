@@ -108,6 +108,14 @@ Per-model image knobs live on `Override` (`VaePath`/`ClipLPath`/`ClipGPath`/`T5P
 `TextEncoderPath`/`OffloadToCpu`/`TeOnCpu`/`VaeTiling`/`DiffusionFa`/`DefaultSteps`/`DefaultCfg`/
 `DefaultSampler`/`DefaultWidth`/`DefaultHeight`), merged via `mergeImageVariant`.
 
+**The argv is COMPOSED, not concatenated.** `imageCmdLines` returns a `ComposedCmd`
+(`SdFlags.ComposeCmd`, `flagtable_sd.go`), so a flag the user pins in `customArgs` suppresses the
+generated one for that knob instead of being appended beside it, and `ClearOwnedFields` zeroes the
+structured field behind it. The legacy `extraArgs` bucket still loads (the editor migrates it into
+`customArgs` the first time a model is opened and saved) but nothing appends it raw any more: that
+was the bug where every save added another copy of the same `--audio-vae/--video-frames/--fps`
+run. `extraImageCmdLines` composes the same way for the hand-declared `extraImageModels`.
+
 ### Diffusion encoders/VAEs are dropped at discovery, not paired
 
 A T5-XXL / UMT5 / CLIP-L/G / VAE gguf is a *component* of an image model:
@@ -191,7 +199,7 @@ thing that cannot be read off the weights: LongCat-Image-Edit and plain LongCat-
 identical `img_in`/`txt_in` shapes (the reference image enters as extra sequence tokens, not
 extra input channels), so `editModelRe` name-detects it, with `llmVision: on|off` and
 `llmVisionPath` as the escape hatches. Sampling knobs stay hand-wired: LongCat-Edit still wants
-`extraArgs: "--flow-shift 3.16"`, which has no structural tell (the value is
+`customArgs: "--flow-shift 3.16"`, which has no structural tell (the value is
 exp(base_shift) from the model's own scheduler config, not something the gguf
 states).
 

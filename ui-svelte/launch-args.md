@@ -1,7 +1,8 @@
 # Launch arguments
 
-Status: **implemented on `radu0120/launch-args`** (phases 1-5, see Phases below); the editor half is
-llama-only so far. Supersedes the two-way launch-parameters box in
+Status: **implemented** (phases 1-6, see Phases below); the editor half covers llama-server and
+sd-server, and only the audio and SAM forms are still on the old box. Supersedes the two-way
+launch-parameters box in
 `ModelConfigModal.svelte`. Issue #38 (mmap flipping back on, `-cram` duplicating on each save) is one
 of the symptoms this shape removes.
 
@@ -98,7 +99,7 @@ Suppression is per **knob**, driven by the flag table below:
 
 ### The flag table
 
-One checked-in Go table, exported to the UI through the DTO, with a row per flag:
+One checked-in Go table **per backend**, exported to the UI through the DTO, with a row per flag:
 
 | Column | Example |
 |---|---|
@@ -106,6 +107,15 @@ One checked-in Go table, exported to the UI through the DTO, with a row per flag
 | knob | `ctx` |
 | value-taking / boolean | value |
 | repeatable policy | replace-all, first-wins |
+
+There is one table per backend binary, not one merged table, because the spellings genuinely
+disagree: `-t` is threads in both, but `-l` is `--listen-ip` to sd-server and nothing to
+llama-server, and `-H` is `--height` to one and `--hf-repo` to the other. Which table applies is a
+property of the binary the model launches, so the caller picks it (`LlamaFlags` / `SdFlags`); nothing
+infers it from the flags. Suppression must use exactly one table, since it decides the argv. Clearing
+the shadowed FIELDS is the exception (`ClearOwnedFieldsFromText` unions both), because an `Override`
+carries both backends' knobs and zeroing a field the other emitter never reads is inert: the
+alternative would be a gguf header read on every keystroke of the live preview.
 
 It is the single source for suppression (which generated token to drop), for the ownership rule
 below, and for validation. A unit test walks golden commands produced by every emitter and asserts
@@ -250,6 +260,8 @@ Unchanged: blank custom text inherits the model-wide text, the `none` sentinel c
 
 - the blur-parse path: `onCmdBlur`, `parseCmdFields`, `IGNORE_VALUE` / `IGNORE_BOOL`, the chat
   template and `-cms` hoists;
+- the diffusion half of the same path: `parseImageCmdFields`, `ParsedImg`, `IMG_IGNORE_VALUE` /
+  `IMG_IGNORE_BOOL`, `applyImageParsedToDefault` (deleted in phase 6);
 - the delta helpers (`cmsEdit`, `ckptEdit`, `samplerDelta`, `genDefaultKv`, `genDefaultNum`);
 - the tri-state inference (`mmapInheritOn`, `variantMmapInherit`) and, once provenance comes from the
   DTO, the per-variant command fetches;
@@ -287,10 +299,20 @@ the new meaning.
    plan is sized around it, so the emitted flags and the baked `estVramGB`/`estRamGB` describe the
    launch that runs. Unmodeled knobs still only win at spawn. The `parallel` and `custom` estimate
    params carry the slot count and the effective text from the editor.
-6. **Later**: the same panes for the image, audio and SAM forms with their own tables.
+6. **Diffusion forms** (2026-09-22): `internal/autogen/flagtable_sd.go` is sd-server's table, and
+   `imageCmdLines`/`extraImageCmdLines` now return a `ComposedCmd` instead of a joined string, so
+   the image and video forms get the same two panes, the same knob badges and the same one-way
+   composition. This is what fixes the **accumulation** case the old box had here: the diffusion
+   emitters appended `ov.ExtraArgs` verbatim beside their own flags with no suppression, and the box
+   re-parsed what it recognized while leaving the rest in the text, so every save added another
+   copy (a real LTX-2.5 sidecar reached five concatenated copies of the same
+   `--audio-vae/--lora-model-dir/--video-frames/--fps` run). The load path now seeds `customArgs`
+   from the legacy `extraArgs` and the save writes `extraArgs: ""`, so a model migrates the first
+   time it is opened and saved. `genVersion` v87.
+7. **Later**: the same panes for the audio and SAM forms with their own tables.
 
 ## Non-goals (this pass)
 
-- image, audio and SAM forms keep the read-only box;
+- audio and SAM forms keep the read-only box;
 - no shell features: the command stays an argv split by shlex (`SanitizeCommand`), exactly as the
   process layer spawns it.

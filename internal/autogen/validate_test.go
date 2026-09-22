@@ -115,8 +115,8 @@ func TestSuggestFlags(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := suggestFlags(c.tok, c.help); !slices.Equal(got, c.want) {
-				t.Errorf("suggestFlags(%q, %v) = %v, want %v", c.tok, c.help, got, c.want)
+			if got := LlamaFlags.suggestFlags(c.tok, c.help); !slices.Equal(got, c.want) {
+				t.Errorf("LlamaFlags.suggestFlags(%q, %v) = %v, want %v", c.tok, c.help, got, c.want)
 			}
 		})
 	}
