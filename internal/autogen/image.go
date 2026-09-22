@@ -673,6 +673,31 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	if ov != nil && ov.VaeOnCpu == "on" {
 		beParts = append(beParts, "vae=cpu")
 	}
+	// A resident video VAE wants its PARAMS on the GPU, and sd-server's own
+	// planner will not put them there. Left alone, auto-fit picks
+	//   --backend "diffusion=ROCm0,te=ROCm0,vae=ROCm0" --params-backend "te=cpu,vae=cpu"
+	// even with room to spare: on a 24GB card holding the 14960MB LTX-2.5 DiT it
+	// still demotes the 1384MB VAE to RAM, because its priority order is
+	// "diffusion > te > vae" and it spends headroom top-down rather than keeping
+	// a cheap tenant that earns its place.
+	//
+	// It earns its place on VIDEO. An image VAE decodes one picture per
+	// generation, so streaming its weights from RAM is a rounding error. A 3D VAE
+	// decodes every tile of every frame, so the same streaming is paid per tile.
+	// Measured at 1280x704x73, 8 steps, two runs each, sampling unchanged either
+	// way at 101.4s: params in RAM decodes in 85.0s, params on the GPU in 44.6s.
+	// That is 40s off a 197s render for 1384MB of VRAM.
+	//
+	// Restating the plan is the only way to say it, since --params-backend names
+	// what to demote and there is no "keep" form, and a bare --params-backend
+	// would leave the compute placement unstated. So this emits auto-fit's own
+	// answer verbatim minus the vae=cpu clause. te=cpu stays unconditional: the
+	// 8966MB text encoder cannot be resident beside the DiT, and TeOnCpu governs
+	// COMPUTE placement, which --backend te=<dev> still honours.
+	if plan := videoVaeResidentPlan(sdExe, s, row, comp, ov, vid, budget, offload); plan != "" {
+		lines = append(lines, plan)
+		beParts = nil
+	}
 	if len(beParts) > 0 {
 		lines = append(lines, "--backend "+strings.Join(beParts, ","))
 	}
@@ -851,6 +876,50 @@ func extraImageBudget(s Settings, m ExtraImageModel) float64 {
 // pin when it has one, else the class default the ★ picks, else the legacy slot.
 // Only an auto model follows a later default switch. The class guard keeps a
 // stray non-image id from emitting the wrong launcher.
+// videoVaeResidentPlan returns an explicit sd-server placement that keeps a video
+// model's VAE params on the compute device, or "" to leave auto-fit alone.
+//
+// Every gate here is a refusal. The plan disables auto-fit, so it is only worth
+// emitting when we are confident we can reproduce the planner's answer: a video
+// model, weights that already fit (offload=false means the DiT is resident), a
+// GpuSet the BACKEND agrees with by name, and room left for the decode graph.
+//
+// The headroom gate is not a guess. sd-server prices the decode graph and says so
+// when it cannot serve it:
+//
+//	model manager cannot make enough memory available on ROCm0:
+//	  need 9062.89 MB device, available 8162.31 MB device
+//
+// "available" there is the card minus the resident DiT, so pinning the VAE spends
+// from the same pot the decode graph draws on. 5GiB is what a 0.5x0.5 relative
+// tile needed in the runs that succeeded, with the 9.1GB figure above being the
+// same clip at temporal_tile_frames=8, which did not.
+func videoVaeResidentPlan(exe string, s Settings, row GgufRow, comp imageComponents, ov *Override, vid videoInfo, budget float64, offload bool) string {
+	if !vid.is() || offload || len(s.Gpus) == 0 {
+		return ""
+	}
+	if ov != nil && ov.VaeOnCpu == "on" {
+		return ""
+	}
+	vaeGB := fileGB(comp.vae) + fileGB(comp.audioVae)
+	if vaeGB <= 0 || budget-row.SizeGB-vaeGB < 5 {
+		return ""
+	}
+	devs, err := ListBackendDevices(exe)
+	if err != nil {
+		return ""
+	}
+	ids := s.Gpus.BackendIDs(devs)
+	if len(ids) != len(s.Gpus) {
+		return ""
+	}
+	dev := ids[s.Gpus.PlanMainIndex()]
+	if dev == "" {
+		return ""
+	}
+	return fmt.Sprintf("--backend \"diffusion=%s,te=%s,vae=%s\" --params-backend \"te=cpu\"", dev, dev, dev)
+}
+
 func imageExe(s Settings, ov *Override) string {
 	if rb := resolveBackend(s, ov, "image"); rb.Exe != "" && kindServesClass(rb.Kind, "image") {
 		return rb.Exe
