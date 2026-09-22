@@ -40,16 +40,91 @@ const (
 )
 
 // videoComputeOverheadGB approximates the non-weight VRAM a video generation
-// needs on top of the resident diffusion weights. It is imageComputeOverheadGB's
-// sibling and is deliberately much larger: the sampler holds a latent for every
-// frame at once, and the 3D VAE decode at the end is the real peak (it
-// reconstructs a whole temporal tile, not one picture).
+// needs on top of the resident diffusion weights, AT THE FAMILY'S OWN DEFAULT
+// PROFILE. It is imageComputeOverheadGB's sibling and is deliberately much
+// larger: the sampler holds a latent for every frame at once, and the 3D VAE
+// decode at the end is the real peak (it reconstructs a whole temporal tile,
+// not one picture).
 //
-// ponytail: flat, like the image number, so it does not scale with
-// --video-frames or resolution. It only has to be in the right GB ballpark to
-// flip the offload decision; --max-vram does the fine fitting inside sd.cpp.
-// Raise it (or pin vramTargetGB) if a clip OOMs at decode.
+// This is a REFERENCE point, not the number the sizer uses: videoComputeOverhead
+// scales it by how far the resolved profile sits from that default. Raise it (or
+// pin vramTargetGB) if a clip OOMs at decode on DEFAULT framing.
 const videoComputeOverheadGB = 4.0
+
+// videoTemporalCompression is how many source frames one latent frame covers.
+// Only the RATIO of two profiles in the SAME family is ever computed from it
+// (see videoComputeOverhead), so it has to be right per family but never has to
+// agree across them.
+//
+// LTX compresses 8x along time, the same 8 its frames%8==1 grid exposes. The
+// others land on 4 (Wan's 4n+1 grid). H3 aligns to 17k+5 and is not a clean
+// power of two, but 4 is the closest honest stand-in and the +1 slack below
+// keeps the difference sub-percent at any length worth pricing.
+func videoTemporalCompression(v videoInfo) int {
+	if v.Kind == VideoFamilyLtxAV {
+		return 8
+	}
+	return 4
+}
+
+// latentFrames is how many latent frames a source frame count occupies. Every
+// family's grid is k*c+1: one keyframe plus k compressed windows.
+func latentFrames(frames, comp int) int {
+	if frames < 1 {
+		frames = 1
+	}
+	if comp < 1 {
+		comp = 1
+	}
+	return (frames-1)/comp + 1
+}
+
+// videoComputeOverhead prices the non-weight peak for the profile a model will
+// ACTUALLY launch with, rather than the flat constant that used to stand here.
+//
+// The flat number was wrong in a way that only bites big models. A 22B LTX at
+// Q4 is 14.6GB, and 14.6+4.0 fits inside a 24GB card's ~22.3GB budget, so the
+// sizer concluded "resident", set offload=false, and graphBudget then handed
+// --max-vram whatever was LEFT - 5.9GB - to run a 14k-token joint audio+video
+// graph in. sd.cpp graph-cuts to fit, fails, and the driver backs the
+// allocation with host memory: a silent spill into shared memory rather than an
+// error. It gets worse the longer the clip, and LTX-2.5 is specified to 20s, so
+// the flat constant is off by ~3x at the top of the model's own range.
+//
+// Scaling is RELATIVE to the family's own default profile, deliberately:
+//
+//   - a model left on its defaults prices EXACTLY as it did before, so this
+//     cannot regress an H3/Wan placement that works today;
+//   - per-family spatial compression cancels out of a same-family ratio
+//     entirely, so no absolute calibration is needed - only
+//     videoTemporalCompression, and only for the +1 slack.
+//
+// Tokens go as (W/c)*(H/c)*latentFrames, so area and latent length both enter
+// linearly. Floored at the image overhead: a video model asked for one small
+// still still owns a 3D VAE.
+func videoComputeOverhead(v videoInfo, name string, def genDefaults) float64 {
+	base := videoDefaultsFor(v, name)
+	if base.width <= 0 || base.height <= 0 || base.frames <= 0 {
+		return videoComputeOverheadGB
+	}
+	w, h, f := def.width, def.height, def.frames
+	if w <= 0 {
+		w = base.width
+	}
+	if h <= 0 {
+		h = base.height
+	}
+	if f <= 0 {
+		f = base.frames
+	}
+	comp := videoTemporalCompression(v)
+	area := (float64(w) * float64(h)) / (float64(base.width) * float64(base.height))
+	length := float64(latentFrames(f, comp)) / float64(latentFrames(base.frames, comp))
+	if got := videoComputeOverheadGB * area * length; got > imageComputeOverheadGB {
+		return got
+	}
+	return imageComputeOverheadGB
+}
 
 // videoInfo is what the tensor scan concluded about a diffusion gguf's temporal
 // nature. The zero value means "not a video model", which is what every image
@@ -119,8 +194,29 @@ func videoDefaultsFor(v videoInfo, name string) genDefaults {
 		// compresses 32x spatially and 8x temporally, against the 8x/4x every
 		// other family here uses), so it is LIGHTER per pixel than H3 at
 		// 640x384 despite being four times the canvas. 121 is on the 8k+1 grid
-		// and sits under the 153-frame ceiling the checkpoint's own
-		// positional_embedding_max_pos imposes (20 latent frames).
+		// the checkpoint requires (frames % 8 == 1).
+		//
+		// 121 is a CONSERVATIVE default, NOT a ceiling. LTX-2.5 is specified for
+		// 6-20 seconds, and past 10s it wants 720p/1080p at 24/25fps, which
+		// 1280x704 @24 already is. An earlier version of this comment claimed a
+		// 153-frame ceiling, read off positional_embedding_max_pos[0]=20 as "20
+		// latent frames". That was wrong twice over:
+		//
+		//   - LTX's positional embedding is rope over fractional coordinates
+		//     NORMALIZED by max_pos: get_fractional_positions divides the index
+		//     grid BY it. max_pos is a divisor, not the length of a learned
+		//     table, so there is no array to run off the end of. Past it you are
+		//     extrapolating, which costs coherence, not a hard failure.
+		//   - the 20 is almost certainly SECONDS. The same config carries
+		//     audio_positional_embedding_max_pos [20], and the audio and video
+		//     latents do not share a frame count, so an identical 20 on both
+		//     only makes sense on a shared time axis - which is exactly what a
+		//     joint AV transformer with use_audio_video_cross_attention needs.
+		//     It matches the specified 20s maximum exactly.
+		//
+		// So clip length here is a VRAM question (see videoComputeOverhead), not
+		// a model-capability one. Override.DefaultFrames 241 / 361 / 481 buys
+		// 10 / 15 / 20 seconds at 24fps.
 		d := genDefaults{width: 1280, height: 704, frames: 121, fps: 24}
 		if isDistilledName(name) {
 			d.steps, d.cfg = 8, 1.0
@@ -138,6 +234,45 @@ func videoDefaultsFor(v videoInfo, name string) genDefaults {
 		return genDefaults{width: 832, height: 480, frames: 81, fps: 16}
 	}
 	return genDefaults{}
+}
+
+// resolveGenDefaults is the family profile with the per-model Override applied,
+// i.e. the generation settings the model will actually launch with.
+//
+// Split out of imageCmdLines because it now has TWO readers inside that one
+// function and the order between them matters: the video compute overhead is
+// priced off this result (so it must resolve BEFORE the offload decision), while
+// the --steps/--width/--video-frames argv is emitted at the very end. Resolving
+// it twice would let a DefaultFrames override change the emitted clip length
+// without changing the placement that clip was sized for, which is precisely the
+// mismatch that makes a render spill into shared memory.
+func resolveGenDefaults(v videoInfo, name string, ov *Override) genDefaults {
+	def := videoDefaultsFor(v, name)
+	if ov == nil {
+		return def
+	}
+	if ov.DefaultSteps > 0 {
+		def.steps = ov.DefaultSteps
+	}
+	if ov.DefaultCfg > 0 {
+		def.cfg = ov.DefaultCfg
+	}
+	if ov.DefaultSampler != "" {
+		def.sampler = ov.DefaultSampler
+	}
+	if ov.DefaultWidth > 0 {
+		def.width = ov.DefaultWidth
+	}
+	if ov.DefaultHeight > 0 {
+		def.height = ov.DefaultHeight
+	}
+	if ov.DefaultFrames > 0 {
+		def.frames = ov.DefaultFrames
+	}
+	if ov.DefaultFps > 0 {
+		def.fps = ov.DefaultFps
+	}
+	return def
 }
 
 // vaeTemporalTiling reports whether this family's VAE can actually decode in
