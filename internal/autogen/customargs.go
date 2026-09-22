@@ -74,6 +74,17 @@ func (o *Override) CustomArgsText() string {
 // ownership rule: dropping the generated flag at emit time is not enough, since
 // the stale field would resurface the moment the user deletes the flag from the
 // text (issue #38's mmap reset). Unparseable text clears nothing.
+//
+// It resolves against BOTH flag tables, unlike ComposeCmd, which must be handed
+// exactly one. The two answer different questions. Suppression decides what a
+// specific binary is launched with, so guessing the table there would emit the
+// wrong argv; clearing only zeroes fields on an Override that carries both
+// backends' knobs and never uses more than one set, so resolving a diffusion
+// model's -H against the llama table's --hf-repo costs nothing but a blank
+// field nothing reads. That matters because the save and preview endpoints see
+// the JSON body before anything has read the gguf header, and making them
+// arch-detect first would put a header read on every keystroke of the editor's
+// live preview.
 func ClearOwnedFieldsFromText(ov *Override) []string {
 	text := ov.CustomArgsText()
 	if strings.TrimSpace(text) == "" {
@@ -83,7 +94,13 @@ func ClearOwnedFieldsFromText(ov *Override) []string {
 	if err != nil {
 		return nil
 	}
-	return ClearOwnedFields(ov, OwnedKnobs(toks))
+	owned := LlamaFlags.OwnedKnobs(toks)
+	for k, v := range SdFlags.OwnedKnobs(toks) {
+		if v {
+			owned[k] = true
+		}
+	}
+	return ClearOwnedFields(ov, owned)
 }
 
 // ComposeCmd applies custom launch arguments to generated command lines. An
@@ -94,7 +111,7 @@ func ClearOwnedFieldsFromText(ov *Override) []string {
 // Unparseable custom text is returned as an error with the command left
 // unchanged; the caller decides whether to surface it (the preview does) or to
 // emit it anyway and let the spawn fail as it would have before.
-func ComposeCmd(lines []string, custom string) (ComposedCmd, error) {
+func (ft *FlagTable) ComposeCmd(lines []string, custom string) (ComposedCmd, error) {
 	gen := strings.Join(lines, " ")
 	cc := ComposedCmd{Generated: gen, Effective: gen, Lines: lines, Custom: custom}
 
@@ -107,7 +124,7 @@ func ComposeCmd(lines []string, custom string) (ComposedCmd, error) {
 	// suppress nothing and must not turn into an empty-command error.
 	if strings.TrimSpace(config.StripComments(custom)) == "" {
 		for _, t := range genToks {
-			appendGen(t, TokenKnob(t), false)
+			appendGen(t, ft.TokenKnob(t), false)
 		}
 		return cc, nil
 	}
@@ -115,7 +132,7 @@ func ComposeCmd(lines []string, custom string) (ComposedCmd, error) {
 	customToks, err := config.SanitizeCommand(custom)
 	if err != nil {
 		// Emit the text unchanged (what the old extraArgs path did) so the
-		// spawn fails with llama-server's own message; callers that can show a
+		// spawn fails with the backend's own message; callers that can show a
 		// dialog (the preview) surface err instead.
 		if len(lines) > 0 {
 			cc.Lines = append(append([]string{}, lines...), splitCustomLines(custom)...)
@@ -125,12 +142,12 @@ func ComposeCmd(lines []string, custom string) (ComposedCmd, error) {
 	}
 	if len(customToks) == 0 { // comment-only text
 		for _, t := range genToks {
-			appendGen(t, TokenKnob(t), false)
+			appendGen(t, ft.TokenKnob(t), false)
 		}
 		return cc, nil
 	}
 
-	owned := OwnedKnobs(customToks)
+	owned := ft.OwnedKnobs(customToks)
 	for k := range owned {
 		cc.Owned = append(cc.Owned, k)
 	}
@@ -147,7 +164,7 @@ func ComposeCmd(lines []string, custom string) (ComposedCmd, error) {
 			// let the same failure happen at spawn time.
 			out = append(out, line)
 			for _, t := range toks {
-				appendGen(t, TokenKnob(t), false)
+				appendGen(t, ft.TokenKnob(t), false)
 			}
 			continue
 		}
@@ -161,7 +178,7 @@ func ComposeCmd(lines []string, custom string) (ComposedCmd, error) {
 				continue
 			}
 			name, _, inline := SplitFlagToken(tok)
-			def, known := LookupFlag(name)
+			def, known := ft.Lookup(name)
 			if known && def.Knob != "" && owned[def.Knob] {
 				dropped = true
 				appendGen(tok, def.Knob, true)
@@ -172,7 +189,7 @@ func ComposeCmd(lines []string, custom string) (ComposedCmd, error) {
 				continue
 			}
 			kept = append(kept, tok)
-			appendGen(tok, TokenKnob(tok), false)
+			appendGen(tok, ft.TokenKnob(tok), false)
 			for n := 0; known && def.Value && !inline && n <= def.ExtraValues && i+1 < len(toks); n++ {
 				i++
 				kept = append(kept, toks[i])
@@ -195,7 +212,7 @@ func ComposeCmd(lines []string, custom string) (ComposedCmd, error) {
 		out = append(out, line)
 	}
 	for _, t := range customToks {
-		cc.Tokens = append(cc.Tokens, CmdToken{Text: t, Source: SourceCustom, Knob: TokenKnob(t)})
+		cc.Tokens = append(cc.Tokens, CmdToken{Text: t, Source: SourceCustom, Knob: ft.TokenKnob(t)})
 	}
 	if len(out) == 0 {
 		return cc, nil
@@ -203,6 +220,12 @@ func ComposeCmd(lines []string, custom string) (ComposedCmd, error) {
 	cc.Lines = out
 	cc.Effective = strings.Join(out, " ")
 	return cc, nil
+}
+
+// ComposeCmd composes against the llama-server table, which is what every
+// llama-server caller wants and what the tests were written against.
+func ComposeCmd(lines []string, custom string) (ComposedCmd, error) {
+	return LlamaFlags.ComposeCmd(lines, custom)
 }
 
 // splitCustomLines prepares the user's text for the YAML cmd block: one

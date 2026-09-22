@@ -683,13 +683,20 @@ func RenderSoloCmdLayers(s Settings, meta Metadata, row GgufRow, ov Override) (C
 	// reads as an image arch, and the video branch is what adds --audio-vae and
 	// the frames/fps profile.
 	if vid := videoInfoFrom(meta); vid.is() {
-		lines, _, _, _, _ := imageCmdLines(s, row, &ov, effectiveImageArch(meta), row.FullPath, meta.CondHidden, vid)
-		return plainCmd(strings.Join(lines, " "))
+		// The sd path composes inside imageCmdLines, so the layered view comes
+		// back already carrying custom/generated/effective and per-token
+		// provenance: the editor's panes light up for a diffusion model exactly
+		// as they do for llama-server, instead of falling back to plainCmd's
+		// bare string, which owns no knobs and badges nothing on the form.
+		cmd, _, _, _, _ := imageCmdLines(s, row, &ov, effectiveImageArch(meta), row.FullPath, meta.CondHidden, vid)
+		cmd.Issues = validateComposedWith(SdFlags, cmd, imageExe(s, &ov))
+		return cmd, nil
 	}
 	// Diffusion models render an sd-server command, not a llama-server one.
 	if imgArch := effectiveImageArch(meta); isImageArch(imgArch) {
-		lines, _, _, _, _ := imageCmdLines(s, row, &ov, imgArch, row.FullPath, meta.CondHidden, videoInfo{})
-		return plainCmd(strings.Join(lines, " "))
+		cmd, _, _, _, _ := imageCmdLines(s, row, &ov, imgArch, row.FullPath, meta.CondHidden, videoInfo{})
+		cmd.Issues = validateComposedWith(SdFlags, cmd, imageExe(s, &ov))
+		return cmd, nil
 	}
 	// Embedders render a minimal --embeddings command (no KV/spec sizing).
 	if IsEmbeddingModel(meta) {

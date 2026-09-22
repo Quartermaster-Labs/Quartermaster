@@ -128,7 +128,7 @@ func TestVideoDefaults_OverrideWins(t *testing.T) {
 	ov := &Override{DefaultFrames: 49, DefaultFps: 30, DefaultCfg: 1.5, AudioVaePath: "ov_audio.safetensors"}
 
 	lines, _, _, _, _ := imageCmdLines(s, row, ov, "", "h3", 5120, videoInfo{Kind: VideoFamilyMinimaxH3, AudioOut: true})
-	joined := strings.Join(lines, " ")
+	joined := lines.Effective
 	for _, want := range []string{"--video-frames 49", "--fps 30", "--cfg-scale 1.5", "--audio-vae ov_audio.safetensors"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("override missing %q in: %s", want, joined)
@@ -147,7 +147,7 @@ func TestImageCmdLines_UntouchedByVideo(t *testing.T) {
 	row := GgufRow{FullPath: `D:\models\flux.gguf`, SizeGB: 6.0}
 
 	lines, _, _, _, _ := imageCmdLines(s, row, &Override{}, "flux", "flux1-dev", 0, videoInfo{})
-	joined := strings.Join(lines, " ")
+	joined := lines.Effective
 	for _, unwant := range []string{"--video-frames", "--fps", "--audio-vae", "--cfg-scale", "--steps"} {
 		if strings.Contains(joined, unwant) {
 			t.Errorf("image cmd should not carry %q: %s", unwant, joined)
@@ -176,7 +176,7 @@ func TestVideoVramLevers_DefaultOnForVideoOnly(t *testing.T) {
 	vid := videoInfo{Kind: VideoFamilyWan}
 
 	lines, _, _, _, _ := imageCmdLines(s, row, &Override{}, "", "wan", 0, vid)
-	joined := strings.Join(lines, " ")
+	joined := lines.Effective
 	for _, want := range []string{"--temporal-tiling", "--stream-layers"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("video cmd missing default %q: %s", want, joined)
@@ -186,7 +186,7 @@ func TestVideoVramLevers_DefaultOnForVideoOnly(t *testing.T) {
 	// Each toggles off independently: they are separate knobs precisely because
 	// --stream-layers trades PCIe traffic for VRAM and --temporal-tiling does not.
 	off, _, _, _, _ := imageCmdLines(s, row, &Override{TemporalTiling: "off"}, "", "wan", 0, vid)
-	j := strings.Join(off, " ")
+	j := off.Effective
 	if strings.Contains(j, "--temporal-tiling") {
 		t.Errorf("temporalTiling=off must suppress the flag: %s", j)
 	}
@@ -194,7 +194,7 @@ func TestVideoVramLevers_DefaultOnForVideoOnly(t *testing.T) {
 		t.Errorf("temporalTiling=off must not touch --stream-layers: %s", j)
 	}
 	off2, _, _, _, _ := imageCmdLines(s, row, &Override{StreamLayers: "off"}, "", "wan", 0, vid)
-	j2 := strings.Join(off2, " ")
+	j2 := off2.Effective
 	if strings.Contains(j2, "--stream-layers") {
 		t.Errorf("streamLayers=off must suppress the flag: %s", j2)
 	}
@@ -208,7 +208,7 @@ func TestVideoVramLevers_DefaultOnForVideoOnly(t *testing.T) {
 		Encoders: EncoderSet{FluxVae: "ae.safetensors", ClipL: "cl.safetensors", T5: "t5.gguf"}}
 	imgRow := GgufRow{FullPath: `D:\models\flux.gguf`, SizeGB: 6.0}
 	iLines, _, _, _, _ := imageCmdLines(img, imgRow, &Override{}, "flux", "flux1-dev", 0, videoInfo{})
-	iJoined := strings.Join(iLines, " ")
+	iJoined := iLines.Effective
 	for _, unwant := range []string{"--temporal-tiling", "--stream-layers"} {
 		if strings.Contains(iJoined, unwant) {
 			t.Errorf("image cmd should not carry %q: %s", unwant, iJoined)
@@ -221,19 +221,19 @@ func TestVideoVramLevers_DefaultOnForVideoOnly(t *testing.T) {
 func TestExtraImageVramLevers_OptIn(t *testing.T) {
 	s := Settings{SdServerExe: "sd-server", TargetVramGB: 24, VramOverheadGB: 1, Threads: 4}
 
-	plain := strings.Join(extraImageCmdLines(s, ExtraImageModel{
+	plain := extraImageCmdLines(s, ExtraImageModel{
 		Name: "h3-st", ModelPath: `D:\models\h3.safetensors`, ModelFlag: "--diffusion-model",
-	}), " ")
+	}).Effective
 	for _, unwant := range []string{"--temporal-tiling", "--stream-layers"} {
 		if strings.Contains(plain, unwant) {
 			t.Errorf("extra model must not default %q on: %s", unwant, plain)
 		}
 	}
 
-	on := strings.Join(extraImageCmdLines(s, ExtraImageModel{
+	on := extraImageCmdLines(s, ExtraImageModel{
 		Name: "h3-st", ModelPath: `D:\models\h3.safetensors`, ModelFlag: "--diffusion-model",
 		TemporalTiling: "on", StreamLayers: "on",
-	}), " ")
+	}).Effective
 	for _, want := range []string{"--temporal-tiling", "--stream-layers"} {
 		if !strings.Contains(on, want) {
 			t.Errorf("extra model opt-in missing %q: %s", want, on)
@@ -254,7 +254,7 @@ func TestTemporalTiling_GatedOnVaeSupport(t *testing.T) {
 
 	// H3's VAE is a transformer autoencoder with no tiled decode path.
 	def, _, _, _, _ := imageCmdLines(s, row, &Override{}, "", "h3", 5120, h3)
-	j := strings.Join(def, " ")
+	j := def.Effective
 	if strings.Contains(j, "--temporal-tiling") {
 		t.Errorf("H3 VAE cannot tile along time, flag must not be emitted: %s", j)
 	}
@@ -268,8 +268,8 @@ func TestTemporalTiling_GatedOnVaeSupport(t *testing.T) {
 	// An explicit "on" forces it anyway, so a backend build that gains support
 	// needs an override row rather than a recompile.
 	on, _, _, _, _ := imageCmdLines(s, row, &Override{TemporalTiling: "on"}, "", "h3", 5120, h3)
-	if !strings.Contains(strings.Join(on, " "), "--temporal-tiling") {
-		t.Errorf("explicit temporalTiling=on must force the flag: %s", strings.Join(on, " "))
+	if !strings.Contains(on.Effective, "--temporal-tiling") {
+		t.Errorf("explicit temporalTiling=on must force the flag: %s", on.Effective)
 	}
 }
 
@@ -318,7 +318,7 @@ func TestStreamLayers_FollowsOffload(t *testing.T) {
 
 // mustLines drops imageCmdLines' sizing returns, which these tests read off the
 // rendered argv instead.
-func mustLines(lines []string, _, _ float64, _ bool, _ []string) []string { return lines }
+func mustLines(cmd ComposedCmd, _, _ float64, _ bool, _ []string) []string { return cmd.Lines }
 
 // --max-vram is a graph-cut budget, not a VRAM cap, so it prices the headroom
 // left AFTER everything we told sd-server to keep on the card. Handing it the

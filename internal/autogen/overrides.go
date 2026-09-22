@@ -292,8 +292,14 @@ type ExtraImageModel struct {
 	VaeOnCpu       string `yaml:"vaeOnCpu"`       // "on" => add vae=cpu to --backend; "" => GPU
 	OffloadToCpu   string `yaml:"offloadToCpu"`   // "on" => --offload-to-cpu (+ --vae-on-cpu)
 	Threads        int    `yaml:"threads"`
-	ExtraArgs      string `yaml:"extraArgs"`
-	Unlisted       bool   `yaml:"unlisted"`
+	// CustomArgs / CustomArgsOff / ExtraArgs mirror Override's trio, because an
+	// extra image model is edited through the same launch-argument panes and
+	// composed by the same ComposeCmd. ExtraArgs is the legacy bucket, read only
+	// when CustomArgs is empty (see Override.CustomArgsText).
+	CustomArgs    string `yaml:"customArgs"`
+	CustomArgsOff bool   `yaml:"customArgsOff"`
+	ExtraArgs     string `yaml:"extraArgs"`
+	Unlisted      bool   `yaml:"unlisted"`
 	// Backend is the registry entry id this extra image model launches with,
 	// carried over from its Override. Empty => auto-pick the class default.
 	Backend string `yaml:"backend"`

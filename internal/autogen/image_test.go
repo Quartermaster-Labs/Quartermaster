@@ -15,11 +15,11 @@ func TestExtraImageCmdLines_BackendPin(t *testing.T) {
 	s := Settings{SdServerExe: "C:/rocm/sd-server.exe", Backends: rows}
 	m := ExtraImageModel{ModelPath: "C:/models/dit.safetensors", Backend: "build-vulkan"}
 
-	if got := extraImageCmdLines(s, m)[0]; got != "C:/vulkan/sd-server.exe" {
+	if got := extraImageCmdLines(s, m).Lines[0]; got != "C:/vulkan/sd-server.exe" {
 		t.Errorf("pinned exe = %q, want the vulkan build", got)
 	}
 	m.Backend = ""
-	if got := extraImageCmdLines(s, m)[0]; got != "C:/rocm/sd-server.exe" {
+	if got := extraImageCmdLines(s, m).Lines[0]; got != "C:/rocm/sd-server.exe" {
 		t.Errorf("auto exe = %q, want the class default", got)
 	}
 

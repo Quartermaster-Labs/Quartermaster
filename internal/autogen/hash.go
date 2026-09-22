@@ -296,7 +296,7 @@ const hashCacheSuffix = ".modelhash"
 // did, so a video model whose override already named an enhancer (saved from the
 // model modal, silently dropped at emit) gains promptEnhancer /
 // promptEnhancerEdit and either prompt key with nothing on disk having changed.
-const genVersion = "v86"
+const genVersion = "v87"
 
 // InputsHash digests everything that can change the generated config: the set of
 // gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the

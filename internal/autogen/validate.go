@@ -47,7 +47,7 @@ type CmdIssue struct {
 // is consumed (inline --flag=value included), so a negative number never reads
 // as a flag. A flag the binary lists but the table does not is fine: the table
 // describes what quartermaster emits, the union describes what will run.
-func ValidateTokens(tokens []CmdToken, backendFlags []string) []CmdIssue {
+func (ft *FlagTable) ValidateTokens(tokens []CmdToken, backendFlags []string) []CmdIssue {
 	var help map[string]bool
 	if backendFlags != nil {
 		help = make(map[string]bool, len(backendFlags))
@@ -62,7 +62,7 @@ func ValidateTokens(tokens []CmdToken, backendFlags []string) []CmdIssue {
 			continue
 		}
 		name, _, inline := SplitFlagToken(tok)
-		if def, known := LookupFlag(name); known {
+		if def, known := ft.Lookup(name); known {
 			if help != nil && !anySpellingInHelp(def, help) {
 				issues = append(issues, CmdIssue{
 					Token:   name,
@@ -80,17 +80,24 @@ func ValidateTokens(tokens []CmdToken, backendFlags []string) []CmdIssue {
 			// takes a value is unknown, so do not consume the next token.
 			continue
 		}
-		issue := CmdIssue{Token: name, Suggestions: suggestFlags(name, backendFlags)}
+		issue := CmdIssue{Token: name, Suggestions: ft.suggestFlags(name, backendFlags)}
 		if help == nil {
 			issue.Kind = IssueUnverified
 			issue.Message = "not a flag quartermaster knows; the backend --help could not be read"
 		} else {
 			issue.Kind = IssueUnknown
-			issue.Message = "llama-server does not accept this flag, so it will refuse to start"
+			issue.Message = ft.Backend + " does not accept this flag, so it will refuse to start"
 		}
 		issues = append(issues, issue)
 	}
 	return issues
+}
+
+// ValidateTokens checks a llama-server command. The diffusion path calls the
+// method with SdFlags instead, so an sd-server flag is checked against
+// sd-server's table and its --help rather than being reported as unknown.
+func ValidateTokens(tokens []CmdToken, backendFlags []string) []CmdIssue {
+	return LlamaFlags.ValidateTokens(tokens, backendFlags)
 }
 
 // anySpellingInHelp reports whether the binary advertises any of a known flag's
@@ -113,14 +120,14 @@ func anySpellingInHelp(def FlagDef, help map[string]bool) bool {
 // -cram, --cache-ram, since llama.cpp pairs those names); otherwise the closest
 // names by edit distance, capped so a wild guess is never dressed up as a
 // suggestion. backendFlags may be nil.
-func suggestFlags(name string, backendFlags []string) []string {
+func (ft *FlagTable) suggestFlags(name string, backendFlags []string) []string {
 	want := strings.ToLower(strings.TrimLeft(name, "-"))
 	if want == "" {
 		return nil
 	}
 	// Dash-count mistakes: same letters, one knob. Return every spelling the
 	// union offers for it so the user sees both the short and the long form.
-	for _, d := range llamaFlagTable {
+	for _, d := range ft.Defs {
 		spellings := append([]string{d.Name}, d.Aliases...)
 		for _, sp := range spellings {
 			if strings.ToLower(strings.TrimLeft(sp, "-")) == want {
@@ -141,7 +148,7 @@ func suggestFlags(name string, backendFlags []string) []string {
 		seen[sp] = true
 		cands = append(cands, cand{spelling: sp, dist: editDistance(want, strings.ToLower(strings.TrimLeft(sp, "-")))})
 	}
-	for _, d := range llamaFlagTable {
+	for _, d := range ft.Defs {
 		add(d.Name)
 		for _, a := range d.Aliases {
 			add(a)
@@ -179,7 +186,7 @@ func suggestFlags(name string, backendFlags []string) []string {
 // internal/server/flagcheck.go checks against the installed binary at boot.
 // When there IS custom text the whole command is walked, so a backend older than
 // the emitter shows up as a warning next to the user's own flags.
-func validateComposed(cc ComposedCmd, backendExe string) []CmdIssue {
+func validateComposedWith(ft *FlagTable, cc ComposedCmd, backendExe string) []CmdIssue {
 	if len(cc.Tokens) == 0 || strings.TrimSpace(cc.Custom) == "" {
 		return nil
 	}
@@ -187,7 +194,12 @@ func validateComposed(cc ComposedCmd, backendExe string) []CmdIssue {
 	if fs, err := BackendFlags(backendExe); err == nil {
 		flags = fs
 	}
-	return ValidateTokens(cc.Tokens, flags)
+	return ft.ValidateTokens(cc.Tokens, flags)
+}
+
+// validateComposed is the llama-server spelling, kept for its callers.
+func validateComposed(cc ComposedCmd, backendExe string) []CmdIssue {
+	return validateComposedWith(LlamaFlags, cc, backendExe)
 }
 
 // editDistance is the Levenshtein distance, two rows of DP. Flags are short and
