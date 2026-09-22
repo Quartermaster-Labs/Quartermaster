@@ -111,13 +111,24 @@ Backend communication is centralized in `src/stores/api.ts`, with shared types i
 `playground/VideoInterface.svelte`.
 
 Both id fields (the Settings table, and the per-model picker in `ModelConfigModal.svelte`) are
-**free text with a `<datalist>` of suggestions, never a dropdown**. Nothing server-side validates
+**free text with a suggestion list, never a dropdown**. Nothing server-side validates
 the id against the catalog: `promptEnhancerFor` resolves any id, row or no row, and the id is
 passed straight through as `model` on the chat request. A closed list would be a rule the UI
 invented and the server does not have, and it would block the ordinary case of naming a model you
 are about to install.
 
-The picker's datalists merge two sources, configured rows first, deduped case-insensitively: the
+The list is `Combobox.svelte`, not a native `<datalist>`. A datalist is drawn by the BROWSER, so it
+reads none of the theme tokens and, worse, ignores `zoom` - which is how interface scale is
+implemented here, so at any scale but 100% it painted at the wrong size beside the field it belongs
+to. Combobox is `Select.svelte` with the list left open-ended: the two share the popup chrome
+(`.qm-popup*` in `index.css`) and the placement rules (`lib/popupPlace.ts`, the fixed positioning,
+the zoom division and the flip-up threshold) so they cannot drift into looking like two widgets.
+What it does NOT share is the commit rule - nothing is highlighted when the list opens, and every
+keystroke drops the highlight, so Enter commits what was TYPED unless the user has walked onto a
+suggestion with an arrow key. The same component backs the LoRA adapter rows and the Settings
+table's id field (`inputClass` swaps its chrome for that form's).
+
+The picker's suggestions merge two sources, configured rows first, deduped case-insensitively: the
 Settings entries, and the ids `listDetectedPromptEnhancers` reads from
 `GET /api/prompt-enhancers/detected` (`DetectedEnhancer` in `stores/api.ts`). Detection is keyed
 on the same family the model table groups by (`baseKey` of the id with `_` and spaces folded to
@@ -399,8 +410,8 @@ corpse. Tested in `lib/sessionSync.test.ts`, including that race.
   multiplies by that same zoom again. `el.style.left = rect.left + "px"` therefore lands at
   `rect.left * scale` — right at 100%, and drifting further from the target the further it sits from
   the top-left corner. That is what untethered every tooltip and popup at any other interface size.
-  `lib/uiZoom.ts` (`cssZoom`, `toLocalPx`) is the correction; `lib/tooltip.ts`, `Select`,
-  `MetadataTooltip` and the chat reply anchors all go through it. Ratio math like
+  `lib/uiZoom.ts` (`cssZoom`, `toLocalPx`) is the correction; `lib/tooltip.ts`, `lib/popupPlace.ts` (`Select` +
+  `Combobox`), `MetadataTooltip` and the chat reply anchors all go through it. Ratio math like
   `(e.clientX - r.left) / r.width` is already zoom-safe — both operands are visual — and needs none
   of this.
 - **`h-screen` is shortened, not threaded.** The app measures full-height roots in `h-screen` in six

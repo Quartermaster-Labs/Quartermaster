@@ -33,6 +33,7 @@
   import VramGauge from "./VramGauge.svelte";
   import LaunchArgsPanes from "./LaunchArgsPanes.svelte";
   import Select, { type SelectOption } from "./Select.svelte";
+  import Combobox, { type ComboOption } from "./Combobox.svelte";
   import Toggle from "./Toggle.svelte";
   import { estimateSegments } from "../stores/vram";
   import {
@@ -140,6 +141,11 @@
   // with no LoRA folder configured the ladder ends at the model's OWN directory,
   // where the "adapters" on offer are really its base weights.
   let loraList = $state<LoraListing>({ dir: "", files: [] });
+  // One suggestion list for every adapter row. Size is the detail line because
+  // a folder of adapters is told apart by size far more often than by name.
+  const loraSuggestions = $derived<ComboOption[]>(
+    loraList.files.map((f) => ({ value: f.name, detail: `${f.sizeGB.toFixed(2)} GB` })),
+  );
   // Boolean toggles. Stored as strings on the override ("" = default-on, "off" =
   // forced off); surfaced here as plain on/off checkboxes (auto state dropped).
   let reasoningOn = $state(true); // false => reasoningFmt "off"
@@ -379,7 +385,7 @@
   // The Settings row the typed id resolves to, or undefined. Free text, NOT a
   // dropdown: the enhancer id is just a string the chat request is made with,
   // so restricting it to a list would be a UI-invented rule the server does not
-  // have. The datalist suggests the configured ones; anything else is allowed.
+  // have. The combobox suggests the configured ones; anything else is allowed.
   const enhancerMatch = $derived(
     enhancerOptions.find((e) => e.model.toLowerCase() === promptEnhancer.trim().toLowerCase()),
   );
@@ -406,12 +412,17 @@
   // Configured rows first, then anything detected that is not already one of
   // them. A detection with no direction in its name is offered for both fields,
   // since that is exactly what "we cannot tell" means.
-  function enhancerSuggestions(dir: "t2i" | "i2i") {
-    const out = enhancerOptions.map((e) => ({ model: e.model, label: e.name || e.model }));
-    const have = new Set(out.map((o) => o.model.toLowerCase()));
+  function enhancerSuggestions(dir: "t2i" | "i2i"): ComboOption[] {
+    // detail, not a second column: the id IS the value, so a label that merely
+    // repeats it would be noise. Drop it in that case.
+    const out: ComboOption[] = enhancerOptions.map((e) => ({
+      value: e.model,
+      detail: e.name && e.name !== e.model ? e.name : undefined,
+    }));
+    const have = new Set(out.map((o) => o.value.toLowerCase()));
     for (const d of detectedEnhancers) {
       if (have.has(d.model.toLowerCase()) || (d.direction && d.direction !== dir)) continue;
-      out.push({ model: d.model, label: d.imageModel ? `detected for ${d.imageModel}` : "detected" });
+      out.push({ value: d.model, detail: d.imageModel ? `detected for ${d.imageModel}` : "detected" });
     }
     return out;
   }
@@ -2016,22 +2027,16 @@
               )}
             </span>
             <div class="flex items-center gap-1">
-              <input
-                type="text"
+              <Combobox
                 bind:value={promptEnhancer}
-                list="prompt-enhancers-t2i"
-                spellcheck="false"
+                options={suggestT2I}
+                mono
                 placeholder={autoText ? `${autoText} (detected)` : "none"}
-                class="cfg-input font-mono flex-1 min-w-0"
-                aria-label="Prompt enhancer for txt2img"
+                class="flex-1 min-w-0"
+                ariaLabel="Prompt enhancer for txt2img"
               />
               {@render enhancerPromptBtn("t2i", promptEnhancerPrompt, textDisabled)}
             </div>
-            <datalist id="prompt-enhancers-t2i">
-              {#each suggestT2I as e (e.model)}
-                <option value={e.model} label={e.label}></option>
-              {/each}
-            </datalist>
             <!-- Say what this id actually resolves to. Free text plus detection
                  means three different sources end up in one box, and which one
                  won is the thing that is otherwise invisible. -->
@@ -2075,26 +2080,20 @@
               )}
             </span>
             <div class="flex items-center gap-1">
-              <input
-                type="text"
+              <Combobox
                 bind:value={promptEnhancerEdit}
-                list="prompt-enhancers-i2i"
-                spellcheck="false"
+                options={suggestI2I}
+                mono
                 placeholder={autoEdit
                   ? `${autoEdit} (detected)`
                   : promptEnhancer.trim()
                     ? "same as above"
                     : "none"}
-                class="cfg-input font-mono flex-1 min-w-0"
-                aria-label="Prompt enhancer for img2img"
+                class="flex-1 min-w-0"
+                ariaLabel="Prompt enhancer for img2img"
               />
               {@render enhancerPromptBtn("i2i", promptEnhancerEditPrompt, editDisabled)}
             </div>
-            <datalist id="prompt-enhancers-i2i">
-              {#each suggestI2I as e (e.model)}
-                <option value={e.model} label={e.label}></option>
-              {/each}
-            </datalist>
             {#if editDisabled}
               <span class="text-micro text-txtsecondary">
                 No enhancer for edits, even if the txt2img one is set.
@@ -2707,10 +2706,10 @@
               </span>
               {#each loras as l, i (i)}
                 <div class="flex items-center gap-2">
-                  <input
-                    type="text" list="lora-files" bind:value={l.path}
-                    class="cfg-input flex-1 font-mono" placeholder="adapter.gguf" spellcheck="false"
-                    aria-label="LoRA adapter path"
+                  <Combobox
+                    bind:value={l.path} options={loraSuggestions} mono
+                    class="flex-1 min-w-0" placeholder="adapter.gguf"
+                    ariaLabel="LoRA adapter path"
                   />
                   <input
                     type="number" step="0.05"
@@ -2743,13 +2742,6 @@
                   </span>
                 {/if}
               </div>
-              <!-- Shared by every row's input: the browser dedupes suggestions,
-                   and one list beats one per row when a folder holds dozens. -->
-              <datalist id="lora-files">
-                {#each loraList.files as f (f.name)}
-                  <option value={f.name}></option>
-                {/each}
-              </datalist>
             </div>
           {/if}
 

@@ -8,6 +8,7 @@
   import ManagedBackends from "../components/ManagedBackends.svelte";
   import SoftwareUpdate from "../components/SoftwareUpdate.svelte";
   import Select from "../components/Select.svelte";
+  import Combobox, { type ComboOption } from "../components/Combobox.svelte";
   import Toggle from "../components/Toggle.svelte";
   import UIScaleControl from "../components/UIScaleControl.svelte";
   import { themeMode, type ThemeMode } from "../stores/theme";
@@ -542,6 +543,11 @@
   let enhancersErr = $state<string | null>(null);
   let enhancersSaved = $state(false);
   let enhancersFlashTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // Suggestions only. Any id is accepted, including one this install does not
+  // serve: the id is simply what the rewrite request is made with, so a model
+  // added later works without touching this table.
+  const enhancerIdOptions = $derived<ComboOption[]>($models.map((m) => ({ value: m.id })));
 
   // A ticked vision box on a model with no projector is the one mistake here
   // that looks like it worked: the request is accepted and the images are
@@ -1687,9 +1693,12 @@
             {#each enhancers as e, i (i)}
               <section class="rounded-md border border-card-border bg-surface/40 p-3 flex flex-col gap-2">
                 <div class="flex flex-wrap items-center gap-2">
-                  <input
-                    type="text" bind:value={e.model} spellcheck="false" list="enhancer-model-ids" placeholder="model id, e.g. qwen-image-2.1-pe-i2i"
-                    class="flex-1 min-w-[16rem] font-mono text-label rounded border border-card-border bg-surface px-2 py-1 text-txtmain placeholder:text-txtsecondary/60 focus:outline-none focus:ring-2 focus:ring-primary"
+                  <Combobox
+                    bind:value={e.model} options={enhancerIdOptions} mono
+                    placeholder="model id, e.g. qwen-image-2.1-pe-i2i"
+                    ariaLabel="Enhancer model id"
+                    class="flex-1 min-w-[16rem]"
+                    inputClass="w-full text-label rounded border border-card-border bg-surface pl-2 pr-6 py-1 text-txtmain placeholder:text-txtsecondary/60 focus:outline-none focus:ring-2 focus:ring-primary"
                   />
                   <input
                     type="text" bind:value={e.name} placeholder="label (optional)"
@@ -1717,14 +1726,6 @@
               </section>
             {/each}
           </div>
-          <!-- Suggestions only. Any id is accepted, including one this install
-               does not serve: the id is simply what the rewrite request is made
-               with, so a model added later works without touching this table. -->
-          <datalist id="enhancer-model-ids">
-            {#each $models as m (m.id)}
-              <option value={m.id}></option>
-            {/each}
-          </datalist>
         {/if}
 
         <div class="mt-3 flex items-center justify-between gap-3">
