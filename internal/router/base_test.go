@@ -427,3 +427,38 @@ func TestBaseRouter_ProgressHeaders(t *testing.T) {
 		t.Errorf("warm X-QM-Model-Loaded=%q want 0", got)
 	}
 }
+
+// A lease must be visible to Inflight(), not just to the scheduler. The VRAM
+// watchdog decides whether a model may be shed by asking Inflight() from a
+// sampling goroutine that cannot reach the run loop, so a render that is
+// invisible here gets killed mid-job: the process is unloaded, restarted, and
+// the poll for the job it was running answers 404.
+func TestBaseRouter_InflightCountsLeases(t *testing.T) {
+	p := newFakeProcess("vid")
+	p.markReady()
+	b := newTestBase(t, map[string]process.Process{"vid": p}, &stubPlanner{})
+
+	// fakeProcess.Inflight() is always 0, so whatever we read is the lease.
+	if n, ok := b.Inflight("vid"); !ok || n != 0 {
+		t.Fatalf("Inflight before lease = (%d, %v), want (0, true)", n, ok)
+	}
+
+	release, ok := b.Lease("vid")
+	if !ok {
+		t.Fatal("Lease(vid) not granted")
+	}
+	if n, _ := b.Inflight("vid"); n != 1 {
+		t.Errorf("Inflight while leased = %d, want 1: a rendering model reads as idle", n)
+	}
+
+	release()
+	if n, _ := b.Inflight("vid"); n != 0 {
+		t.Errorf("Inflight after release = %d, want 0", n)
+	}
+	// Release is documented as idempotent, so a caller that both defers it and
+	// calls it on the terminal poll must not drive the count negative.
+	release()
+	if n, _ := b.Inflight("vid"); n != 0 {
+		t.Errorf("Inflight after double release = %d, want 0", n)
+	}
+}

@@ -315,8 +315,8 @@ func (g *vramGuard) watchdog() {
 // Selection mirrors budgetEviction's accounting so the two halves agree on what
 // "fits" means, with four exclusions: persistent-group members (never
 // evictable), models with no estVramGB (ASR/SAM/TTS run on the CPU — unloading
-// them frees no VRAM), models with a request in flight, and models that are
-// still STARTING. A starting model reports no in-flight requests because its
+// them frees no VRAM), models with a request in flight OR an async job lease,
+// and models that are still STARTING. A starting model reports no in-flight requests because its
 // caller is parked on the swap rather than on the upstream, so shedding it would
 // silently kill the very load the user just asked for. It is still CHARGED — it
 // is claiming VRAM as it loads. Largest-first among what is left, so the fewest
@@ -350,7 +350,11 @@ func (g *vramGuard) sheddable(ceilingGB float64) ([]string, float64) {
 			continue
 		}
 		if n, ok := g.s.local.Inflight(id); ok && n > 0 {
-			continue // busy: a failed request is worse than a slow one
+			// Busy: a failed request is worse than a slow one. Inflight counts
+			// job leases as well as open requests, which is what keeps a video
+			// render safe here - it answers its POST immediately and then works
+			// for minutes with no request of its own to be seen.
+			continue
 		}
 		cands = append(cands, cand{id, gb})
 	}
