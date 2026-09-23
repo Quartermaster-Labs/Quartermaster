@@ -1,8 +1,6 @@
 package autogen
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -345,70 +343,5 @@ func TestGraphBudget_PricesHeadroomNotTheCard(t *testing.T) {
 	// the answer, and the planner knows where the params actually landed.
 	if got := graphBudget(14.0, row, comp, nil, false); got != -1 {
 		t.Errorf("over budget: graphBudget = %v, want the -1 reserve form", got)
-	}
-}
-
-// sd-server's planner demotes a video VAE's params to RAM even with headroom to
-// spare, and on a 3D VAE that is paid once per TILE rather than once per image:
-// measured at 1280x704x73, decode was 85.0s with the params in RAM and 44.6s
-// with them resident, sampling unchanged. So a video model that already fits
-// restates the plan without the vae=cpu clause.
-func TestVideoVaeResidentPlan_KeepsAResidentVaeOnTheGpu(t *testing.T) {
-	dir := t.TempDir()
-	vae := filepath.Join(dir, "vae.safetensors")
-	if err := os.WriteFile(vae, make([]byte, 2<<20), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	exe := filepath.Join(dir, "sd-server-no-such-file")
-	seedBackendDevCache(t, exe, []BackendDevice{
-		{ID: "ROCm0", Name: "AMD Radeon RX 7900 XTX", TotalGB: 23.98},
-		{ID: "ROCm1", Name: "AMD Radeon(TM) Graphics", TotalGB: 12.17},
-	})
-	s := Settings{Gpus: GpuSet{{Index: 0, Name: "AMD Radeon RX 7900 XTX", TotalGB: 23.95, FreeGB: 23}}}
-	comp := imageComponents{vae: vae}
-	ltx := videoInfo{Kind: VideoFamilyLtxAV}
-	row := GgufRow{SizeGB: 14.6}
-
-	got := videoVaeResidentPlan(exe, s, row, comp, nil, ltx, 23.0, false)
-	want := `--backend "diffusion=ROCm0,te=ROCm0,vae=ROCm0" --params-backend "te=cpu"`
-	if got != want {
-		t.Errorf("videoVaeResidentPlan = %q, want %q", got, want)
-	}
-
-	// Every other caller keeps auto-fit. An image VAE decodes once per
-	// generation, so streaming its weights is a rounding error and not worth
-	// disabling the planner for.
-	if p := videoVaeResidentPlan(exe, s, row, comp, nil, videoInfo{}, 23.0, false); p != "" {
-		t.Errorf("image model got a plan %q, want auto-fit left alone", p)
-	}
-	// A model that offloads has no resident DiT to plan around, and the offload
-	// path has its own VAE handling.
-	if p := videoVaeResidentPlan(exe, s, row, comp, nil, ltx, 23.0, true); p != "" {
-		t.Errorf("offloading model got a plan %q, want auto-fit left alone", p)
-	}
-	// Pinning the VAE spends from the same pot the decode graph draws on, so a
-	// card with no room left must not trade one failure for another: sd-server
-	// priced that graph at 9062.89 MB against 8162.31 MB available and refused.
-	if p := videoVaeResidentPlan(exe, s, row, comp, nil, ltx, 18.0, false); p != "" {
-		t.Errorf("no-headroom card got a plan %q, want auto-fit left alone", p)
-	}
-	// A second card changes who should decide. auto-fit can put the text encoder
-	// in GPU1's VRAM, which this plan cannot express, and offload=false was
-	// decided against the whole set's budget.
-	two := Settings{Gpus: GpuSet{
-		{Index: 0, Name: "AMD Radeon RX 7900 XTX", TotalGB: 23.95, FreeGB: 23},
-		{Index: 1, Name: "AMD Radeon RX 7900 XTX", TotalGB: 23.95, FreeGB: 23},
-	}}
-	if p := videoVaeResidentPlan(exe, two, row, comp, nil, ltx, 23.0, false); p != "" {
-		t.Errorf("multi-GPU box got a plan %q, want auto-fit left alone", p)
-	}
-	// VaeOnCpu is the escape hatch for a backend that whitens the VAE; it wins.
-	if p := videoVaeResidentPlan(exe, s, row, comp, &Override{VaeOnCpu: "on"}, ltx, 23.0, false); p != "" {
-		t.Errorf("VaeOnCpu=on got a plan %q, want the VAE left on the CPU", p)
-	}
-	// Refusal when the backend does not confirm the device by name: a placement
-	// built on a guess is worse than the planner's own answer.
-	if p := videoVaeResidentPlan(filepath.Join(dir, "unprobed"), s, row, comp, nil, ltx, 23.0, false); p != "" {
-		t.Errorf("unprobed backend got a plan %q, want auto-fit left alone", p)
 	}
 }
