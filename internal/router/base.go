@@ -101,6 +101,16 @@ type baseRouter struct {
 
 	runDone chan struct{}
 
+	// leaseMu guards leases, a mirror of the lease counts the scheduler keeps
+	// in its own inFlight map. The scheduler's copy is the one that gates
+	// eviction, but it may only be touched from the run loop, and Inflight()
+	// is called from sampling goroutines that have no way onto it. Rather than
+	// leave those callers to discover that a rendering model reads as idle,
+	// this mirror lets Inflight() answer for leases too. Writes happen once
+	// per video job, so a plain mutex is cheaper than it looks.
+	leaseMu sync.Mutex
+	leases  map[string]int64
+
 	// testProcessed, when non-nil, receives one event after each handlerReq
 	// or swapDone has been fully processed by run(). Tests use it to wait
 	// for run() to reach a deterministic state without sleeping. serveDone
@@ -422,15 +432,46 @@ func (b *baseRouter) Lease(modelID string) (release func(), ok bool) {
 	if _, exists := b.procs()[modelID]; !exists {
 		return func() {}, false
 	}
+	// Count it before the event lands, not after. sendLease blocks until the run
+	// loop takes it, and a sampler that reads Inflight() in that window must not
+	// see an idle model: that window is exactly when the render is starting.
+	b.addLease(modelID, 1)
 	if !b.sendLease(scheduler.LeaseEvent{ModelID: modelID, Acquire: true}) {
 		// The run loop is gone: nothing is tracking in-flight any more, so
 		// there is nothing to release either.
+		b.addLease(modelID, -1)
 		return func() {}, false
 	}
 	var once sync.Once
 	return func() {
-		once.Do(func() { b.sendLease(scheduler.LeaseEvent{ModelID: modelID}) })
+		once.Do(func() {
+			b.sendLease(scheduler.LeaseEvent{ModelID: modelID})
+			b.addLease(modelID, -1)
+		})
 	}, true
+}
+
+// addLease adjusts the lease mirror, dropping the key when it reaches zero so a
+// model that is not rendering leaves nothing behind.
+func (b *baseRouter) addLease(modelID string, delta int64) {
+	b.leaseMu.Lock()
+	defer b.leaseMu.Unlock()
+	if b.leases == nil {
+		b.leases = make(map[string]int64)
+	}
+	n := b.leases[modelID] + delta
+	if n <= 0 {
+		delete(b.leases, modelID)
+		return
+	}
+	b.leases[modelID] = n
+}
+
+// leaseCount reports how many leases are held on modelID.
+func (b *baseRouter) leaseCount(modelID string) int64 {
+	b.leaseMu.Lock()
+	defer b.leaseMu.Unlock()
+	return b.leases[modelID]
 }
 
 // sendLease posts a lease event to the run loop, reporting whether it landed.
@@ -575,12 +616,20 @@ func (b *baseRouter) ProcessLogger(modelID string) (*logmon.Monitor, bool) {
 	return nil, false
 }
 
-// Inflight returns the named model's current in-flight request count. The
-// processes map keys are fixed at construction and Inflight() reads an
-// atomic, so this is safe to call without the run loop.
+// Inflight returns how much work the named model is carrying: open ServeHTTP
+// calls plus held leases. The processes map keys are fixed at construction and
+// Inflight() reads an atomic, so this is safe to call without the run loop.
+//
+// Leases are counted because callers ask this question to decide whether a model
+// may be disturbed, and an async video render answers its POST in milliseconds
+// and then works for minutes. Left at the process count alone, a model three
+// minutes into a render reports zero and the VRAM watchdog sheds it, killing the
+// job and 404-ing the poll that was waiting on it. The scheduler already refuses
+// to evict a leased model; this is how everything outside the run loop learns
+// the same thing.
 func (b *baseRouter) Inflight(modelID string) (int64, bool) {
 	if p, ok := b.procs()[modelID]; ok {
-		return p.Inflight(), true
+		return p.Inflight() + b.leaseCount(modelID), true
 	}
 	return 0, false
 }

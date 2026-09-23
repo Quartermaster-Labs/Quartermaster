@@ -104,6 +104,14 @@ called exactly once per successful lease; `ok` is false for a model this router 
 (peer-hosted) or a router that is shutting down, and the caller must not hold a release in that
 case.
 
+**A lease is also counted by `Inflight()`.** The scheduler's copy of the count gates eviction, but
+it may only be read from the run loop, and everything that samples a model's business from outside
+(`internal/server/vramguard.go`) calls `LocalRouter.Inflight`. That used to return the *process*
+count of open `ServeHTTP` calls only, so a model three minutes into a render read as perfectly idle
+and the VRAM watchdog shed it, killing the job and 404-ing the poll waiting on it. `baseRouter`
+therefore mirrors lease counts in `leases` (guarded by `leaseMu`) and folds them into `Inflight()`.
+Anything new that asks "may I disturb this model" should ask `Inflight()`, not the process.
+
 **A lease does NOT refresh process TTL.** TTL lives in `internal/process` and only `p.ServeHTTP`
 touches `lastUse`, so a lease alone would keep the scheduler happy while the process idled itself
 out from under the render. The video watcher's real upstream poll is what keeps TTL away; anything
