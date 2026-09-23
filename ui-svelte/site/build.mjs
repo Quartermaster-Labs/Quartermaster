@@ -39,7 +39,7 @@ const CATEGORIES = path.join(UI, "src", "lib", "wiki-categories.json");
 const IMAGES = path.join(ROOT, "docs", "assets");
 const FONTS = path.join(UI, "node_modules", "@fontsource");
 
-const { REPO, UPSTREAM, HERO, PILLS, SECTIONS, STORY, ICONS, BRAND_ICONS, SHOWCASE, MORE, INSTALL, INSTALL_NOTE } =
+const { REPO, UPSTREAM, HERO, HERO_PLAN, STATS, HARDWARE, SECTIONS, STORY, ICONS, BRAND_ICONS, SHOWCASE, MORE, DOORS, HOME, CLIENTS, COMPARE, FAQ, FEEDBACK, INSTALL, INSTALL_NOTE } =
   await import("./content.mjs");
 
 // ── args ───────────────────────────────────────────────────────────────────
@@ -122,7 +122,10 @@ ${THEME_BOOT}
   <div class="wrap">
     <a class="brand" href="${up}index.html">${MARK} Quartermaster</a>
     <nav class="site-nav">
+      <a href="${up}index.html#home" class="hide-sm">Chat app</a>
+      <a href="${up}index.html#compare" class="hide-sm">Compare</a>
       <a href="${up}index.html#features" class="hide-sm">Features</a>
+      <a href="${up}index.html#faq" class="hide-sm">FAQ</a>
       <a href="${up}index.html#install" class="hide-sm">Install</a>
       <a href="${up}docs/index.html">Docs</a>
       <a href="${REPO}">GitHub</a>
@@ -132,12 +135,33 @@ ${THEME_BOOT}
 </header>
 ${body}
 <footer class="site-footer">
-  <div class="wrap">
-    <span>MIT licensed. Originally forked from <a href="${UPSTREAM}">llama-swap</a>.</span>
-    <span class="spacer"><a href="${REPO}">Source</a></span>
-    <span><a href="${REPO}/releases">Releases</a></span>
-    <span><a href="${up}docs/index.html">User guide</a></span>
+  <div class="wrap foot-grid">
+    <div class="foot-brand">
+      <a class="brand" href="${up}index.html">${MARK} Quartermaster</a>
+      <p>Local inference, sized to the hardware it runs on.</p>
+    </div>
+    <div class="foot-col">
+      <h4>Product</h4>
+      <a href="${up}index.html#features">Features</a>
+      <a href="${up}index.html#faq">FAQ</a>
+      <a href="${up}index.html#install">Install</a>
+      <a href="${REPO}/releases">Releases</a>
+    </div>
+    <div class="foot-col">
+      <h4>Guide</h4>
+      <a href="${up}docs/index.html">User guide</a>
+      <a href="${up}docs/http-api.html">HTTP API</a>
+      <a href="${up}docs/troubleshooting.html">Troubleshooting</a>
+    </div>
+    <div class="foot-col">
+      <h4>Project</h4>
+      <a href="${REPO}">Source</a>
+      <a href="${REPO}/issues">Issues</a>
+      <a href="${REPO}/discussions">Discussions</a>
+      <a href="${REPO}/blob/main/LICENSE.md">MIT license</a>
+    </div>
   </div>
+  <div class="wrap foot-base">Originally forked from <a href="${UPSTREAM}">llama-swap</a>.</div>
 </footer>
 ${THEME_SCRIPT}
 ${extraScripts}
@@ -267,18 +291,16 @@ function latestRelease() {
 
 // ── landing page ───────────────────────────────────────────────────────────
 
-// One centred masthead per section: accent eyebrow with its icon, the heading,
-// and an optional sub-lede. Sections are keyed by DOM id so the copy lives in
-// content.mjs and the markup is identical everywhere.
+// One masthead per section: a mono label, the heading, and an optional sub-lede
+// beside it on a wide screen. Left-aligned on purpose: a long page of centred
+// blocks reads as a template, and a left edge gives the eye one line to run down.
 function sectionHead(key) {
   const s = SECTIONS[key];
   if (!s) return "";
-  // The eyebrow is optional: a section whose heading already says the thing does
-  // not need a smaller line above saying it again.
-  return `<div class="section-head" data-reveal>
-      ${s.eyebrow ? `<span class="eyebrow">${icon(s.icon, 15)} ${esc(s.eyebrow)}</span>` : ""}
+  return `<div class="section-head${s.sub ? "" : " no-sub"}" data-reveal>
+      ${s.eyebrow ? `<p class="label">${esc(s.eyebrow)}</p>` : ""}
       <h2>${esc(s.title)}</h2>
-      ${s.sub ? `<p>${esc(s.sub)}</p>` : ""}
+      ${s.sub ? `<p class="sub">${esc(s.sub)}</p>` : ""}
     </div>`;
 }
 
@@ -403,6 +425,70 @@ function renderEmbers(n = 7) {
   return `<div class="embers" aria-hidden="true">${streaks}</div>`;
 }
 
+/**
+ * The hero figure: one load plan, drawn as markup.
+ *
+ * This replaced two layers of ambient decoration (a drifting gradient mesh and
+ * the ember streaks). Both were carefully engineered and both said nothing; this
+ * says the product's one claim in the product's own terms, and it is static, so
+ * it costs no compositor time at the fold. The ember ramp survives as the bar's
+ * colours.
+ *
+ * Segments are flex-grown by their GB, so the bar is proportional without any
+ * percentage arithmetic here, and the system slice sits after a gap: it is on the
+ * card, but it was never Quartermaster's to spend.
+ */
+// The hero bar's fill: 2.2s along cubic-bezier(0.3, 0, 0.3, 1), an even S that
+// spends most of its time visibly moving. sweepTime inverts it (progress to
+// time, by bisection) so renderPlan can hand each segment its own slice.
+const PLAN_FILL_MS = 2200;
+function sweepTime(p) {
+  const bez = (s, a, b) => 3 * (1 - s) ** 2 * s * a + 3 * (1 - s) * s ** 2 * b + s ** 3;
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 30; i++) {
+    const mid = (lo + hi) / 2;
+    if (bez(mid, 0, 1) < p) lo = mid;
+    else hi = mid;
+  }
+  return bez((lo + hi) / 2, 0.3, 0.3);
+}
+
+function renderPlan(plan) {
+  const budget = plan.segments.filter((s) => !s.system);
+  const system = plan.segments.filter((s) => s.system);
+  const used = budget.reduce((a, s) => a + s.gb, 0);
+  // No spacer before the system segment: its hatching already says "not ours",
+  // and a gap in the bar read as a rendering glitch.
+  const order = [...budget, ...system];
+  const total = order.reduce((a, s) => a + s.gb, 0);
+  // Each segment's slot of the fill sweep (see .plan-bar.plan-armed in
+  // styles.css): where the eased curve reaches its left edge, and how long it
+  // takes to cross it. Linear inside a segment, eased across the bar.
+  let at = 0;
+  const seg = (s) => {
+    const t0 = sweepTime(at / total);
+    at += s.gb;
+    const t1 = sweepTime(at / total);
+    const ms = (t) => `${Math.round(t * PLAN_FILL_MS)}ms`;
+    return `<i class="seg seg-${s.key}" style="flex:${s.gb};--d:${ms(t0)};--t:${ms(t1 - t0)}"></i>`;
+  };
+  const bar = order.map(seg).join("");
+  const legend = plan.segments
+    .map((s) => `<li><i class="seg seg-${s.key}"></i>${esc(s.label)}<span>${s.gb.toFixed(1)}</span></li>`)
+    .join("");
+  const stats = plan.stats.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("");
+  const cmd = esc(plan.cmd).replace(/\[\[(.+?)\]\]/g, "<em>$1</em>");
+  return `<figure class="plan" aria-label="Example load plan: ${esc(plan.model)} fitted to a ${esc(plan.gpu)}">
+      <div class="plan-head"><span class="label">Load plan</span><code>${esc(plan.model)}</code></div>
+      <div class="plan-total"><b>${used.toFixed(1)}</b><span>/ ${plan.card.toFixed(1)} GB</span><small>${esc(plan.gpu)}</small></div>
+      <div class="plan-bar">${bar}</div>${PLAN_ARM}
+      <ul class="plan-legend">${legend}</ul>
+      <dl class="plan-stats">${stats}</dl>
+      <div class="plan-cmd"><span class="label">Generated</span><pre><code>${cmd}</code></pre></div>
+    </figure>`;
+}
+
 // The download button comes in three, one per platform, and all but Windows
 // ship `hidden`; OS_SCRIPT unhides the one that matches. Rendering all three
 // rather than rewriting one in JS keeps the platform mark an <svg> the
@@ -445,60 +531,71 @@ const macNote = (release) => {
 
 function renderHero(release, hero) {
   const primary = renderDownloads(release);
+  const tag = release ? `${esc(release.tag)}${release.prerelease ? " pre-release" : ""}` : "Latest release";
   const note = release
-    ? `${esc(release.tag)}${release.prerelease ? " (pre-release)" : ""} · <a href="${REPO}/releases">all releases</a> · Docker and source below`
-    : `See <a href="${REPO}/releases">releases</a> for builds, or install with Docker or from source below.`;
+    ? `${esc(release.tag)} · <a href="${REPO}/releases">all releases</a> · <a href="#install">Docker and other platforms</a>`
+    : `See <a href="${REPO}/releases">releases</a> for builds, or <a href="#install">install with Docker</a>.`;
 
-  const pills = PILLS.map((p) => `<li>${esc(p)}</li>`).join("");
+  const facts = STATS.map((s) => `<li><b>${esc(s.value)}</b><span>${esc(s.label)}</span></li>`).join("");
 
-  // The mesh is three blurred gradient blobs drifting on long, offset CSS
-  // keyframes: no canvas, no rAF loop, nothing repainting on the main thread,
-  // and `prefers-reduced-motion` parks them where they start.
   return `<section class="hero">
-  <div class="mesh" aria-hidden="true"><i></i><i></i><i></i></div>
   ${renderEmbers()}
-  <div class="wrap">
-    ${HERO.eyebrow ? `<span class="eyebrow"><b>◆</b> ${esc(HERO.eyebrow)}</span>` : ""}
-    <h1>${esc(hero[0])} <span class="accent">${esc(hero[1])}</span> ${esc(hero[2])}</h1>
-    <p class="lede">${esc(HERO.lede)}</p>
-    <div class="cta-row">
-      ${primary}
-      <a class="btn btn-ghost" href="#install">Other install options</a>
-      <a class="btn btn-ghost" href="docs/index.html">${icon("book", 18)} Read the guide</a>
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <p class="label hero-tag"><i class="live"></i>${tag} · Windows, Linux, macOS, Docker</p>
+      <h1>${esc(hero[0])} <span class="accent">${esc(hero[1])}</span></h1>
+      <p class="lede">${esc(HERO.lede)}</p>
+      <div class="cta-row">
+        ${primary}
+        <a class="btn btn-ghost" href="docs/index.html">Read the guide</a>
+      </div>
+      <p class="cta-note">${note}</p>
+      ${macNote(release)}
     </div>
-    <ul class="pills">${pills}</ul>
-    <p class="cta-note">${note}</p>
-    ${macNote(release)}
+    <div class="hero-figure">${renderPlan(HERO_PLAN)}</div>
   </div>
+  <div class="wrap"><ul class="facts">${facts}</ul><p class="hw">${esc(HARDWARE)}</p></div>
 </section>`;
 }
 
-// The hero image is the one picture on the page that is already on screen when
-// you arrive, so it loads eagerly and at high priority. Left lazy it decodes on
-// the first scroll instead, and a screenshot is a big bitmap to decode and
-// upload in the middle of a gesture: that alone is a visible stutter.
-const eagerImg = (html) =>
-  html.replace(/ loading="lazy" decoding="async"/g, ' loading="eager" fetchpriority="high" decoding="async"');
+// The hero image is the first picture below the fold, so it jumps the queue.
+// It stays loading="lazy" on purpose: it sits well inside the browser's
+// lazy-load margin, so the visible variant still starts fetching at page load,
+// and lazy is what keeps the OTHER theme's variant (display:none, so it never
+// intersects anything) from being downloaded at all. Eager would fetch both.
+const eagerImg = (html) => html.replace(/ loading="lazy" decoding="async"/g, ' loading="lazy" fetchpriority="high" decoding="async"');
 
-// One capture per shot, always the dark one. The site used to ship a light
-// sibling for every screenshot and swap them by theme; that doubled the asset
-// weight of the page to spare a light-mode visitor the sight of a dark
-// rectangle, which is what a screenshot of a dark app looks like anywhere.
+// Every shot has a dark capture and, when --adopt found one, a light sibling
+// named `<name>-light.webp`; the CSS shows whichever matches the site's theme.
+// Both are loading="lazy", and a display:none image never intersects the
+// viewport, so a visitor downloads only their own theme's set (and the other
+// one on demand, if they flip the toggle). A shot with no light capture just
+// stays dark in both themes.
 //
 // `dims` comes from SHOT_DIMS (the webp header, read at build time). It does two
 // things: the width/height attributes give the browser the aspect ratio before
 // the bytes arrive, so a page of half-megapixel screenshots doesn't reflow as
 // they land; and a taller-than-wide shot gets `.portrait`, which stops the CSS
 // from stretching a cropped modal across the full 1120px column.
-function shotFrame(file, alt, label) {
+// A crop (anything captured below the full-window MAX_SHOT_WIDTH) is shown no
+// wider than its own CSS size: it was shot at 2x, and stretched across the stage
+// a cropped modal renders soft and twice its real size. `--nat` carries that cap.
+function shotFrame(file, alt) {
   const d = SHOT_DIMS.get(file);
-  const size = d ? ` width="${d.w}" height="${d.h}"` : "";
-  const cls = d && d.h > d.w ? "shot portrait" : "shot";
-  return `<div class="${cls}">
-    <div class="shot-bar"><i></i><i></i><i></i><span>${esc(label)}</span></div>
-    <img src="assets/img/${esc(file)}" alt="${esc(alt)}"${size} loading="lazy" decoding="async">
+  const crop = d && d.w < MAX_SHOT_WIDTH ? ` is-crop" style="--nat:${Math.round(d.w / 2)}px` : "";
+  const img = (f, cls) => {
+    const dd = SHOT_DIMS.get(f);
+    const size = dd ? ` width="${dd.w}" height="${dd.h}"` : "";
+    return `<img${cls} src="assets/img/${esc(f)}" alt="${esc(alt)}"${size} loading="lazy" decoding="async">`;
+  };
+  const light = lightName(file);
+  const imgs = SHOT_DIMS.has(light) ? `${img(file, ' class="v-dark"')}\n    ${img(light, ' class="v-light"')}` : img(file, "");
+  return `<div class="shot${crop}">
+    ${imgs}
   </div>`;
 }
+
+const lightName = (file) => file.replace(/\.webp$/, "-light.webp");
 
 // Pixel dimensions of every shot in docs/assets, by filename. Filled once at
 // build time by measureShots().
@@ -568,90 +665,86 @@ const GALLERY_SCRIPT = `<script>
 })();
 </script>`;
 
-// Two or more shots become a gallery: one large frame, a labelled tab per shot
-// under it, and the frame itself advances to the next on click.
+// A labelled tab set: a segmented control over one panel at a time. Shared by
+// the screenshot galleries and the install section, and driven by GALLERY_SCRIPT.
 //
 // Every panel is in the markup and the first is current, so with JS off this is
-// a screenshot with a caption rather than an empty box. The tabs are real
-// buttons in a tablist, so this is reachable from the keyboard and not just from
-// a pointer.
-function renderShotGallery(id, shots) {
-  const panels = shots
+// the first panel rather than an empty box. The tabs are real buttons in a
+// tablist, so it is reachable from the keyboard and not just from a pointer.
+function tabset(id, label, items) {
+  const tabs = items
     .map(
-      (s, i) => `<div class="gal-panel${i === 0 ? " is-current" : ""}" id="${id}-p${i}" role="tabpanel"
-        aria-labelledby="${id}-t${i}"${i === 0 ? "" : " hidden"}>
-        ${shotFrame(s.file, `${s.label}: ${s.caption}`, s.label)}
-        <p class="gal-caption"><b>${esc(s.label)}</b>${esc(s.caption)}</p>
-      </div>`,
+      (it, i) => `<button class="gal-tab${i === 0 ? " is-current" : ""}" type="button" role="tab"
+        id="${id}-t${i}" aria-controls="${id}-p${i}" aria-selected="${i === 0}" tabindex="${i === 0 ? 0 : -1}"${it.attrs ?? ""}>${it.tab}</button>`,
     )
     .join("\n");
-
-  const tabs = shots
+  const panels = items
     .map(
-      (s, i) => `<button class="gal-tab${i === 0 ? " is-current" : ""}" type="button" role="tab"
-        id="${id}-t${i}" aria-controls="${id}-p${i}" aria-selected="${i === 0}" tabindex="${i === 0 ? 0 : -1}">
-        <span class="gal-n">${i + 1}</span>${esc(s.label)}</button>`,
+      (it, i) => `<div class="gal-panel${i === 0 ? " is-current" : ""}" id="${id}-p${i}" role="tabpanel"
+        aria-labelledby="${id}-t${i}"${i === 0 ? "" : " hidden"}>${it.panel}</div>`,
     )
     .join("\n");
-
   return `<div class="gal" data-gal>
+    <div class="gal-tabs" role="tablist" aria-label="${esc(label)}">${tabs}</div>
     <div class="gal-stage">${panels}</div>
-    <div class="gal-tabs" role="tablist" aria-label="Screenshots">${tabs}</div>
   </div>`;
 }
 
-// Each showcase is its own scroll-into block. A single shot sits beside the
-// copy and the side alternates down the page; a gallery needs the full width, so
-// the copy goes above it instead.
+const caption = (s) => `<p class="gal-caption"><b>${esc(s.label)}</b> ${esc(s.caption)}</p>`;
+
+// Clicking a screenshot advances to the next one, which is what people try first.
+function renderShotGallery(id, shots) {
+  return tabset(
+    id,
+    "Screenshots",
+    shots.map((s) => ({ tab: esc(s.label), panel: shotFrame(s.file, `${s.label}: ${s.caption}`) + caption(s) })),
+  );
+}
+
+// Every showcase has the same shape, so the page has a rhythm rather than a
+// shuffle: a numbered label, the claim and its paragraph side by side, then the
+// evidence on a full-width stage, then the specifics in a row underneath. The old
+// alternating split squeezed every screenshot into half the column, which is
+// where a dense UI capture is least legible.
 function renderShowcase(entry, index) {
   const { id, shots = [] } = entry;
-  const gallery = shots.length > 1;
+  const n = String(index + 1).padStart(2, "0");
+  const head = `<div class="sc-head" data-reveal>
+      <p class="label"><span class="num">${n}</span>${esc(entry.eyebrow)}</p>
+      <h3>${esc(entry.title)}</h3>
+      <p class="sub">${esc(entry.body)}</p>
+    </div>`;
+
+  const media = !shots.length
+    ? ""
+    : shots.length > 1
+      ? renderShotGallery(id, shots)
+      : shotFrame(shots[0].file, `${shots[0].label}: ${shots[0].caption}`) + caption(shots[0]);
+
   const points = entry.points?.length
-    ? `<ul class="sc-points">${entry.points.map((p) => `<li>${icon("check", 15)}<span>${esc(p)}</span></li>`).join("")}</ul>`
+    ? `<ul class="sc-points" data-reveal>${entry.points.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>`
     : "";
 
-  const copy = `<div class="sc-copy" data-reveal>
-      <span class="eyebrow">${icon(entry.icon, 15)} ${esc(entry.eyebrow)}</span>
-      <h3>${esc(entry.title)}</h3>
-      <p>${esc(entry.body)}</p>
-      ${points}
-    </div>`;
-
-  // A section whose shots have not been captured yet still says its piece.
-  if (!shots.length) return `<section class="sc sc-bare" id="${id}"><div class="wrap narrow">${copy}</div></section>`;
-
-  if (gallery) {
-    return `<section class="sc sc-wide" id="${id}">
+  return `<section class="sc" id="${id}">
   <div class="wrap">
-    ${copy}
-    <div data-reveal>${renderShotGallery(id, shots)}</div>
-  </div>
-</section>`;
-  }
-
-  const media = `<div class="sc-media" data-reveal>
-      ${shotFrame(shots[0].file, `${shots[0].label}: ${shots[0].caption}`, shots[0].label)}
-      <p class="gal-caption"><b>${esc(shots[0].label)}</b>${esc(shots[0].caption)}</p>
-    </div>`;
-
-  return `<section class="sc sc-split${index % 2 ? " is-flipped" : ""}" id="${id}">
-  <div class="wrap">
-    <div class="sc-row">${copy}${media}</div>
+    ${head}
+    ${media ? `<div class="stage" data-reveal>${media}</div>` : ""}
+    ${points}
   </div>
 </section>`;
 }
 
 function renderFeatures(showcase) {
   const blocks = showcase.map(renderShowcase).join("\n");
-  const cards = MORE.map(
-    (f, i) => `<article class="card" data-reveal style="--d:${(i % 3) * 60}ms">
-      <div class="ico">${icon(f.icon)}</div>
+  const items = MORE.map(
+    (f, i) => `<article class="more-item" data-reveal style="--d:${(i % 3) * 60}ms">
+      ${icon(f.icon, 18)}
       <h3>${esc(f.title)}</h3>
       <p>${esc(f.body)}</p>
     </article>`,
   ).join("\n");
 
-  return `<section id="features">
+  return `<section id="features" class="intro">
   <div class="wrap">
     ${sectionHead("features")}
   </div>
@@ -660,13 +753,14 @@ ${blocks}
 <section id="more">
   <div class="wrap">
     ${sectionHead("more")}
-    <div class="grid">${cards}</div>
+    <div class="more-grid">${items}</div>
   </div>
 </section>`;
 }
 
-// The one section written in the first person. It sits between the screenshots
-// and the docs so the page has somewhere to stop being a spec sheet.
+// The one section written in the first person. It sits between the features
+// and the install so the page has somewhere to stop being a spec sheet, and it is
+// set larger than the body copy because it is meant to be read, not scanned.
 function renderStory() {
   // Upstream gets a link on its first mention in the prose rather than a button
   // underneath: the sentence already says what llama-swap is to us, so a
@@ -682,7 +776,7 @@ function renderStory() {
   }).join("\n      ");
 
   return `<section id="story">
-  <div class="wrap narrow">
+  <div class="wrap story-grid">
     ${sectionHead("story")}
     <div class="story" data-reveal>${paras}</div>
   </div>
@@ -693,7 +787,7 @@ function renderStory() {
 // trailing comments, and a Copy button. The prompt and the comment styling are
 // markup, never text: the button copies `code` verbatim, so what lands on the
 // clipboard is exactly what you'd type.
-function terminal(code, label) {
+function terminal(code, label, plain = false) {
   const lines = code.split("\n");
   const html = lines
     .map((line, i) => {
@@ -703,8 +797,8 @@ function terminal(code, label) {
       return `<span class="ln${cont ? " cont" : ""}">${body}</span>`;
     })
     .join("");
-  return `<div class="term">
-        <div class="term-bar"><i></i><i></i><i></i><span>${esc(label)}</span>
+  return `<div class="term${plain ? " term-plain" : ""}">
+        <div class="term-bar"><span>${esc(label)}</span>
           <button class="copy" type="button" data-copy="${esc(code)}">${icon("copy", 13)}<b>Copy</b></button>
         </div>
         <pre><code>${html}</code></pre>
@@ -738,37 +832,43 @@ const COPY_SCRIPT = `<script>
 })();
 </script>`;
 
+// One tab per platform instead of three cards side by side: the three bodies
+// differ in length by a factor of three, so a card row was mostly empty space
+// with the actions stranded at different heights. OS_SCRIPT preselects the tab
+// for the visitor's platform via data-install-os.
 function renderInstall(release) {
-  const cards = INSTALL.map((c, i) => {
+  const items = INSTALL.map((c) => {
     let action = "";
     if (c.download) {
       action = release
-        ? `<a class="btn btn-primary" href="${release.url}">Download ${esc(release.tag)} · ${fmtSize(release.size)}</a>`
+        ? `<div class="inst-dl">
+            <a class="btn btn-primary" href="${release.url}">${icon("windows", 18)} Download ${esc(release.tag)}</a>
+            <span>${fmtSize(release.size)} · per-user · no admin rights</span>
+          </div>`
         : `<a class="btn btn-primary" href="${REPO}/releases/latest">Go to releases</a>`;
     } else if (c.code) {
       action = terminal(c.code, c.title.toLowerCase());
-    } else if (c.link) {
-      // A platform whose asset name we cannot resolve to one file (linux/mac
-      // ship a wizard and a bare binary per arch): link the releases page and
-      // let the reader pick, rather than guessing an arch for them.
-      action = `<a class="btn btn-ghost" href="${c.link.href}">${esc(c.link.label)}</a>`;
     }
-    // A card can carry more than one mark: "Linux and macOS" is ONE download
+    // A platform whose asset name we cannot resolve to one file (linux/mac
+    // ship a wizard and a bare binary per arch): link the releases page and
+    // let the reader pick, rather than guessing an arch for them.
+    const link = c.link ? `<a class="more-link" href="${c.link.href}">${esc(c.link.label)} →</a>` : "";
+    // A tab can carry more than one mark: "Linux and macOS" is ONE download
     // and two platforms, and splitting it in two so each gets its own icon
     // would claim they are two different builds.
-    const marks = (c.icons ?? [c.icon]).map((n) => icon(n)).join("");
-    return `<article class="card" data-reveal style="--d:${i * 60}ms">
-      <div class="ico">${marks}</div>
-      <h3>${esc(c.title)}</h3>
-      <p>${esc(c.body)}</p>
-      ${action}
-    </article>`;
-  }).join("\n");
+    const marks = (c.icons ?? [c.icon]).map((n) => icon(n, 15)).join("");
+    return {
+      tab: `${marks}<span>${esc(c.tab ?? c.title)}</span>`,
+      attrs: c.os ? ` data-install-os="${esc(c.os)}"` : "",
+      panel: `<div class="inst-panel">
+        <div class="inst-copy"><h3>${esc(c.title)}</h3><p>${esc(c.body)}</p>${link}</div>
+        <div class="inst-action">${action}</div>
+      </div>`,
+    };
+  });
 
   // Building from source is a fourth thing you can do but not a fourth
-  // audience, and the grid fits three cards at this width, and a fourth sits alone
-  // on a row of its own, which is a lot of furniture for the path fewest
-  // readers take. It gets a line under the grid pointing at the instructions.
+  // audience: it gets a line under the tabs pointing at the instructions.
   const note = INSTALL_NOTE
     ? `<p class="install-note" data-reveal>${esc(INSTALL_NOTE.before)}<a href="${INSTALL_NOTE.href}">${esc(INSTALL_NOTE.link)}</a>${esc(INSTALL_NOTE.after)}</p>`
     : "";
@@ -776,8 +876,106 @@ function renderInstall(release) {
   return `<section id="install">
   <div class="wrap">
     ${sectionHead("install")}
-    <div class="grid">${cards}</div>
+    <div class="install" data-reveal>${tabset("install", "Platform", items)}</div>
     ${note}
+  </div>
+</section>`;
+}
+
+// Two cards straight under the hero, each an anchor into its half of the page.
+function renderDoors() {
+  const cards = DOORS.map(
+    (d) => `<a class="door" href="${d.href}">
+        <p class="label">${esc(d.label)}</p>
+        <h3>${esc(d.title)}</h3>
+        <p>${esc(d.body)}</p>
+        <span class="more-link">${esc(d.link)} ↓</span>
+      </a>`,
+  ).join("");
+  return `<section class="doors"><div class="wrap doors-grid">${cards}</div></section>`;
+}
+
+// The non-technical pitch. Same frame as a showcase entry so the page keeps one
+// visual rhythm, minus the number: it is not item one of a feature list.
+function renderHome(home) {
+  const shots = home.shots;
+  const media = !shots.length
+    ? ""
+    : shots.length > 1
+      ? renderShotGallery(home.id, shots)
+      : shotFrame(shots[0].file, `${shots[0].label}: ${shots[0].caption}`) + caption(shots[0]);
+  return `<section class="sc home" id="${home.id}">
+  <div class="wrap">
+    <div class="sc-head" data-reveal>
+      <p class="label">${esc(home.eyebrow)}</p>
+      <h2>${esc(home.title)}</h2>
+      <p class="sub">${esc(home.body)}</p>
+    </div>
+    ${media ? `<div class="stage" data-reveal>${media}</div>` : ""}
+    <ul class="sc-points" data-reveal>${home.points.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>
+    <p class="home-need" data-reveal>${esc(home.need)}</p>
+  </div>
+</section>`;
+}
+
+// Native <details>, so it opens without a line of script and every answer is
+// in the markup for search engines and find-in-page.
+function renderFaq() {
+  const items = FAQ.map(
+    (f) => `<details class="faq-item"><summary>${esc(f.q)}</summary><p>${esc(f.a)}</p></details>`,
+  ).join("");
+  const links = FEEDBACK.links.map((l) => `<a class="more-link" href="${l.href}">${esc(l.label)} →</a>`).join("");
+  return `<section id="faq">
+  <div class="wrap">
+    ${sectionHead("faq")}
+    <div class="faq" data-reveal>${items}</div>
+    <div class="feedback" data-reveal><p>${esc(FEEDBACK.text)}</p><div>${links}</div></div>
+  </div>
+</section>`;
+}
+
+// Same tab-and-panel shape as the install section, so the page has one way of
+// showing "pick your case, copy this".
+function renderClients() {
+  const items = CLIENTS.map((c) => ({
+    tab: `<span>${esc(c.tab)}</span>`,
+    panel: `<div class="inst-panel">
+        <div class="inst-copy"><h3>${esc(c.title)}</h3><p>${esc(c.body)}</p></div>
+        <div class="inst-action">${terminal(c.code, c.label, c.plain)}</div>
+      </div>`,
+  }));
+  return `<section id="clients">
+  <div class="wrap">
+    ${sectionHead("clients")}
+    <div class="install" data-reveal>${tabset("clients", "Client", items)}</div>
+  </div>
+</section>`;
+}
+
+// A real table, not a card grid: the point is reading across a row. Each cell
+// is a mark plus an optional short note, because "partial" with no reason is
+// exactly the kind of cell nobody believes.
+const MARKS = { yes: ["check", "Yes"], part: ["part", "Partly"], no: ["no", "No"] };
+function renderCompare() {
+  if (!COMPARE) return "";
+  const head = COMPARE.cols.map((c, i) => `<th scope="col"${i === 0 ? ' class="us"' : ""}>${esc(c)}</th>`).join("");
+  const rows = COMPARE.rows
+    .map((r) => {
+      const cells = r.cells
+        .map(([mark, note], i) => {
+          const [cls, word] = MARKS[mark];
+          return `<td class="${i === 0 ? "us " : ""}m-${cls}"><span class="mark" aria-label="${word}"></span>${note ? `<small>${esc(note)}</small>` : ""}</td>`;
+        })
+        .join("");
+      return `<tr><th scope="row">${esc(r.label)}</th>${cells}</tr>`;
+    })
+    .join("\n");
+  return `<section id="compare">
+  <div class="wrap">
+    ${sectionHead("compare")}
+    <div class="cmp-wrap" data-reveal>
+      <table class="cmp"><thead><tr><td></td>${head}</tr></thead><tbody>${rows}</tbody></table>
+    </div>
   </div>
 </section>`;
 }
@@ -807,6 +1005,32 @@ const OS_SCRIPT = `<script>
     : /linux|android|cros/i.test(p + ua) ? "linux"
     : "windows";
   els.forEach(function (el) { el.hidden = el.dataset.os !== os; });
+  // GALLERY_SCRIPT has already wired the tabs, so a click is the whole job.
+  var tab = document.querySelector('[data-install-os~="' + os + '"]');
+  if (tab) tab.click();
+})();
+</script>`;
+
+// The hero bar's fill. A CSS animation alone runs on the document clock from
+// the moment styles resolve, so on a cold load most of it played before the
+// first paint and the bar appeared to blink from empty to full. PLAN_ARM runs
+// inline right after the bar, so it is hidden before it can ever paint full;
+// PLAN_SCRIPT starts the fill once the page has loaded and painted. No JS or
+// reduced motion: never armed, and the bar is simply full.
+const PLAN_ARM = `<script>if (!matchMedia("(prefers-reduced-motion: reduce)").matches) document.currentScript.previousElementSibling.classList.add("plan-armed");</script>`;
+
+const PLAN_SCRIPT = `<script>
+(function () {
+  var bar = document.querySelector(".plan-bar.plan-armed");
+  if (!bar) return;
+  var go = function () {
+    if (bar.classList.contains("plan-go")) return;
+    requestAnimationFrame(function () { requestAnimationFrame(function () { bar.classList.add("plan-go"); }); });
+  };
+  if (document.readyState === "complete") go();
+  else addEventListener("load", go);
+  // A slow hero image must not hold the bar empty indefinitely.
+  setTimeout(go, 1500);
 })();
 </script>`;
 
@@ -829,26 +1053,28 @@ const REVEAL_SCRIPT = `<script>
 })();
 </script>`;
 
+// The manual's table of contents as a sitemap: a column per category, plain
+// links under a hairline. Cards around lists of links were a box per box.
 function renderDocsTeaser(articles, categories) {
   const byId = new Map(articles.map((a) => [a.id, a]));
-  const cards = categories
+  const cols = categories
     .map((c) => {
       const links = c.ids
         .map((id) => byId.get(id))
         .filter(Boolean)
         .map((a) => `<li><a href="docs/${a.id}.html">${esc(a.title)}</a></li>`)
         .join("");
-      return `<article class="card" data-reveal>
+      return `<div class="docs-col" data-reveal>
       <h3>${esc(c.title)}</h3>
-      <ul class="topic-list">${links}</ul>
-    </article>`;
+      <ul>${links}</ul>
+    </div>`;
     })
     .join("\n");
 
   return `<section id="docs">
   <div class="wrap">
     ${sectionHead("docs")}
-    <div class="grid">${cards}</div>
+    <div class="docs-cols">${cols}</div>
   </div>
 </section>`;
 }
@@ -950,11 +1176,11 @@ const FONT_FILES = [
 // but doesn't have are named on stdout rather than shipped as broken images: a
 // section with nothing left renders as copy alone and the page still holds
 // together, so the site is publishable before the capture run happens.
-async function collectShowcase() {
+async function collectShowcase(entries) {
   const have = new Set(await readdir(IMAGES).catch(() => []));
   const missing = [];
 
-  const resolved = SHOWCASE.map((entry) => ({
+  const resolved = entries.map((entry) => ({
     ...entry,
     // A copy-only section (no shots captured, or none intended) is legal here
     // exactly as it is in renderShowcase, which defaults the same way.
@@ -985,7 +1211,7 @@ async function collectShowcase() {
   return resolved;
 }
 
-// Copy the dark demo capture of each gallery shot out of a .shots run and into
+// Copy the demo captures (both themes) of each gallery shot out of a .shots run and into
 // docs/assets under the site's own name. .shots/ is gitignored (local visual
 // diffing); the site's images have to be committed because the Pages build has
 // no running instance to capture from.
@@ -1068,15 +1294,16 @@ async function adopt(dir) {
     throw new Error(`no such shots directory: ${from}`);
   });
   const jobs = [];
-  // Dark only. The harness still captures both themes -- they are the same run
-  // and the light ones are worth having when reviewing a shot -- but the site
-  // ships one picture per screenshot.
+  // Both themes: the dark capture under the site's name, the light one beside
+  // it as `<name>-light.webp` for shotFrame to swap in.
   for (const [target, shot] of Object.entries(SHOT_SOURCE)) {
-    // Prefer the demo capture (a model loaded, traffic behind it) over an empty one.
-    const match =
-      files.find((f) => f.startsWith(`${shot}--dark--`) && f.endsWith("--demo.png")) ||
-      files.find((f) => f.startsWith(`${shot}--dark--`) && f.endsWith(".png"));
-    if (match) jobs.push([match, target]);
+    for (const [theme, name] of [["dark", target], ["light", lightName(target)]]) {
+      // Prefer the demo capture (a model loaded, traffic behind it) over an empty one.
+      const match =
+        files.find((f) => f.startsWith(`${shot}--${theme}--`) && f.endsWith("--demo.png")) ||
+        files.find((f) => f.startsWith(`${shot}--${theme}--`) && f.endsWith(".png"));
+      if (match) jobs.push([match, name]);
+    }
   }
   if (!jobs.length) throw new Error(`no matching shots in ${from} (expected e.g. dashboard--dark--1440--demo.png)`);
   const n = await optimizeInto(jobs, from);
@@ -1113,29 +1340,38 @@ async function main() {
   console.log(release ? `release: ${release.tag} (${release.url})` : "release: none found, CTA falls back to /releases/latest");
 
   await measureShots();
-  const showcase = await collectShowcase();
+  const [home, ...showcase] = await collectShowcase([HOME, ...SHOWCASE]);
   const haveImages = new Set(await readdir(IMAGES).catch(() => []));
   const heroFile = "dashboard.webp";
   const hero = haveImages.has(heroFile)
     ? { file: heroFile }
     : null;
-  const galleries = showcase.some((s) => s.shots.length > 1);
 
   const landing = page({
     title: "Quartermaster · run any local model, on demand",
     description: HERO.lede,
     ogImage: hero?.file,
-    extraScripts: [COPY_SCRIPT, galleries ? GALLERY_SCRIPT : "", OS_SCRIPT, REVEAL_SCRIPT].join("\n"),
+    // GALLERY_SCRIPT is unconditional: the install section is a tab set too.
+    // It must run before OS_SCRIPT, which clicks the visitor's platform tab.
+    extraScripts: [COPY_SCRIPT, GALLERY_SCRIPT, OS_SCRIPT, REVEAL_SCRIPT, PLAN_SCRIPT].join("\n"),
     body: [
       renderHero(release, HERO.title),
+      renderDoors(),
+      renderHome(home),
       hero
         // Deliberately not revealed: it is a full-width PNG right at the fold,
         // and fading a texture that size in mid-scroll is the one thing on this
         // page heavy enough to drop frames. It is already on screen anyway.
-        ? `<div class="wrap">${eagerImg(shotFrame(hero.file, "The Quartermaster dashboard", "Dashboard"))}</div>`
+        ? `<div class="wrap hero-shot">${eagerImg(shotFrame(hero.file, "The Quartermaster dashboard"))}</div>`
         : "",
+      // The comparison answers the first question a visitor arrives with ("why
+      // not Ollama?"), so it comes straight after the hero rather than after
+      // six screens of features; the showcase below is the evidence for it.
+      renderCompare(),
+      renderClients(),
       renderFeatures(showcase),
       renderStory(),
+      renderFaq(),
       renderInstall(release),
       renderDocsTeaser(articles, categories),
     ].join("\n"),
