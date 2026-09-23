@@ -228,22 +228,28 @@ const SHOTS = [
     prepare: async (p) => {
       const note = await openModelConfig(p);
       if (note) return note;
-      const fold = p.locator('dialog details:has(> summary:has-text("Launch parameters"))').first();
-      if (!(await fold.count())) return "no Launch parameters fold — the modal opened on a non-llama backend";
-      await fold.evaluate((d) => (d.open = true));
+      // Two panes since the launch-args rework (ui-svelte/launch-args.md): the
+      // user's own text, and the composed command it produces. The second is
+      // the picture; the first is opened so the shot shows where edits go.
+      const custom = p.locator('dialog details:has(> summary:has-text("Custom launch arguments"))').first();
+      const final = p.locator('dialog details:has(> summary:has-text("Final launch arguments"))').first();
+      if (!(await final.count())) return "no Final launch arguments pane — the modal opened on a non-llama backend";
+      if (await custom.count()) await custom.evaluate((d) => (d.open = true));
+      await final.evaluate((d) => (d.open = true));
       await p.waitForTimeout(400);
-      // The textarea defaults to 6 rows and the command is longer than that,
-      // so it photographed cut off mid-flag. Growing it to its content is a
-      // state the field already has -- it is resize-y, and this is the drag a
-      // reader would do themselves.
-      await fold.locator("textarea").evaluate((t) => {
-        t.style.height = "auto";
-        t.style.height = `${t.scrollHeight}px`;
-      });
+      // The composed command sits in a max-h-56 scroller and is longer than
+      // that, so it photographed cut off mid-flag. Letting it run to its full
+      // height is the scroll a reader would do themselves.
+      await final.locator("div.overflow-auto").first().evaluate((el) => {
+        el.style.maxHeight = "none";
+      }).catch(() => {});
+      // The panes render their contents only once open, after openModelConfig
+      // has already masked the rest.
+      await maskPaths(p);
       await p.waitForTimeout(300);
-      // block:"end" rather than "center": the fold sits last in the form, so
-      // centring it leaves half the crop on empty space below the command.
-      await fold.evaluate((d) => d.scrollIntoView({ block: "end" }));
+      // block:"end" rather than "center": the panes sit last in the form, so
+      // centring them leaves half the crop on empty space below the command.
+      await final.evaluate((d) => d.scrollIntoView({ block: "end" }));
       await p.waitForTimeout(600);
     },
   },
@@ -382,12 +388,34 @@ async function clipOf(page, spec) {
   };
 }
 
-// Shared by the two model-config shots: open the first model's parameter modal.
+// Shared by the model-config shots: open the first model's parameter modal.
 async function openModelConfig(p) {
   const cog = p.getByRole("button", { name: "Edit parameters" }).first();
   if (!(await cog.count())) return "skipped: no models in the catalog";
   await cog.click();
   await p.waitForTimeout(1200);
+  await maskPaths(p);
+}
+
+// The modal shows the operator's real config, so it carries their install and
+// models paths (the projector file, the LoRA folder, the composed command),
+// which have no business on a public page. Each absolute path shrinks to its
+// last component, in the DOM of the shot only: `-m Qwen3.8-27B-UD3-IQ4_XS.gguf`
+// still says everything the picture is for. Text nodes AND form values, since a
+// path field is an <input>. Call again after revealing anything that renders
+// lazily.
+async function maskPaths(p) {
+  await p.evaluate(() => {
+    const root = document.querySelector("dialog");
+    if (!root) return;
+    const abs = /(?:[A-Za-z]:[\\/]|\/)(?:[^\s\\/]+[\\/])+([^\s\\/]*)/g;
+    const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) n.nodeValue = n.nodeValue.replace(abs, "$1");
+    for (const el of root.querySelectorAll("input, textarea")) {
+      el.value = el.value.replace(abs, "$1");
+      if (el.placeholder) el.placeholder = el.placeholder.replace(abs, "$1");
+    }
+  });
 }
 
 async function main() {

@@ -40,7 +40,7 @@
  * is not in the catalog, so the harness still produces something sensible on a
  * machine that has never heard of it.
  */
-export const PREFERRED_MODEL = "qwen3.8-27b-ud-q4_k_xl";
+export const PREFERRED_MODEL = "qwen3.8-27b-ud3-iq4_xs";
 
 // Throughput the fake traffic is generated around. These are screenshots of a
 // real product: numbers that cannot be reproduced on the hardware in the shot
@@ -49,6 +49,13 @@ export const PREFERRED_MODEL = "qwen3.8-27b-ud-q4_k_xl";
 // -- pass --demo-tps / --demo-pps when shooting on something else.
 export const DEFAULT_TPS = 58; // decode, tokens/s
 export const DEFAULT_PPS = 820; // prefill, tokens/s
+
+// Chat ids the fallback must not land on: the id is printed in the config
+// dialog's title and in the dashboard's traffic rows, and it goes on a public
+// landing page verbatim. The largest model on a machine is often a finetune whose
+// name advertises what it was tuned to stop refusing. Same reasoning as
+// IMAGE_SHOT_AVOID below.
+const CHAT_SHOT_AVOID = /nsfw|uncensored|abliterat|heretic/i;
 
 /** Variant suffixes autogen emits for one gguf. The star of a shot is the plain one. */
 const VARIANT = /-(?:\d+k|game|judge|vision|base)$/;
@@ -74,7 +81,7 @@ export function pickModel(models, wanted = PREFERRED_MODEL) {
   const exact = models.find((m) => m.id === wanted);
   if (exact) return exact;
   const fits = models
-    .filter((m) => isChat(m) && !VARIANT.test(m.id) && !m.unlisted && !m.estRamGB)
+    .filter((m) => isChat(m) && !VARIANT.test(m.id) && !m.unlisted && !m.estRamGB && !CHAT_SHOT_AVOID.test(m.id))
     .sort((a, b) => (b.sizeGB ?? 0) - (a.sizeGB ?? 0));
   return fits[0] ?? models[0];
 }
@@ -315,22 +322,43 @@ export function buildDemo(models, perf, opts = {}) {
 function doctorPerf(perf, star) {
   if (!perf) return perf;
   const resident = Math.round((star.estVramGB ?? 12) * 1024);
-  const gpu = (perf.gpu_stats ?? []).map((s, i, arr) => {
+  const samples = perf.gpu_stats ?? [];
+  // The samples interleave every adapter the monitor sees (a discrete card and
+  // an iGPU on the dev box), so the load goes on the largest one only: the card
+  // the sizer planned against. Doctoring every entry put a 16 GB model on a
+  // 485 MB iGPU.
+  const card = samples.reduce((a, s) => ((s.mem_total_mb ?? 0) > (a?.mem_total_mb ?? -1) ? s : a), null)?.id;
+  const count = samples.filter((s) => s.id === card).length;
+  let k = 0;
+  let before = 0;
+  let after = 0;
+  const gpu = samples.map((s) => {
+    if (s.id !== card) return s;
     // Ramp the first few samples so the chart shows the model coming up rather
     // than a suspiciously flat line.
-    const load = Math.min(1, (i + 1) / Math.max(1, Math.min(6, arr.length)));
+    const load = Math.min(1, (k + 1) / Math.max(1, Math.min(6, count)));
     // max(), not baseline + resident: the sizer's estimate is a budget for the
     // whole card, system usage included, so adding the idle floor on top
     // over-commits it -- which the dashboard faithfully reported as -0.3G free.
     const used = Math.round(Math.max(s.mem_used_mb ?? 0, resident * load));
+    before = s.mem_used_mb ?? 0;
+    after = used;
+    const util = Number((72 + ((k * 7) % 23)).toFixed(2));
+    k++;
     return {
       ...s,
       mem_used_mb: used,
       mem_util_pct: s.mem_total_mb ? (used / s.mem_total_mb) * 100 : s.mem_util_pct,
-      gpu_util_pct: Number((72 + ((i * 7) % 23)).toFixed(2)),
+      gpu_util_pct: util,
     };
   });
-  return { ...perf, gpu_stats: gpu };
+  // vramTotals (stores/perf.ts) reads the pooled total ahead of any single
+  // device, so it has to move by the same amount the card did, or the status
+  // rail reports an idle card under a READY model.
+  const pooled = perf.gpu_pooled
+    ? { ...perf.gpu_pooled, used_mb: Math.max(0, perf.gpu_pooled.used_mb + after - before) }
+    : perf.gpu_pooled;
+  return { ...perf, gpu_stats: gpu, gpu_pooled: pooled };
 }
 
 const b64 = (s) => Buffer.from(s, "utf8").toString("base64");

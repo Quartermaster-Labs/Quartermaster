@@ -13,51 +13,170 @@ export const HERO = {
   // Left empty on purpose. An eyebrow above the <h1> is a boxed, monospaced,
   // accented line, so it wins the first glance whatever it says, which is the
   // wrong order: the headline is the claim. The reach it carried (text, image
-  // and audio) is in the pills and in the lede.
+  // and audio) is in the lede and the comparison table.
   eyebrow: "",
-  // `accent` is rendered as gradient text inside the <h1>.
-  title: ["Run any model", "without tuning", "a single flag"],
+  // [plain, accent]: the accent half is set on its own line in the brand colour.
+  title: ["Run any model", "without tuning a single flag."],
   lede:
-    "Quartermaster is an all-in-one local inference platform. Point it at your models folder: it " +
-    "works out what fits in your VRAM, launches each model with computed flags, and hot-swaps " +
-    "between them on demand behind one OpenAI- and Anthropic-compatible API.",
+    "Quartermaster runs AI on your own computer: chat, images and voice, for you or for everyone " +
+    "at home. Point it at your models folder and it works out what fits in your VRAM, launches each " +
+    "model with computed flags, and hot-swaps between them behind one OpenAI- and " +
+    "Anthropic-compatible API.",
 };
 
-// Under the hero CTAs: the five things someone is scanning for before they
-// decide to read further. Short enough to take in without reading.
-export const PILLS = [
-  "Runs on your hardware",
-  "Bring your own models",
-  "OpenAI + Anthropic API",
-  "Text · image · audio",
-  "No telemetry",
+// The strip under the hero: measured results, not adjectives. Every number
+// here has to be one we can reproduce on request, so each carries where it
+// came from. Update the value AND the source together, or drop the entry.
+//   - resume: exact KV restore after an eviction, 27B hybrid, 19.7k of 19.8k
+//     tokens reused, 34.4 s re-prefill vs 0.35 s restore.
+//   - context: HERO_PLAN below, the model-config.webp capture.
+//   - mtp: MTP draft depth 2 on the dense 27B, 1.59x, 58 t/s (LLM Benchmarks repo).
+export const STATS = [
+  { value: "0.35 s", label: "to pick a 20k-token chat back up after its model was swapped out, instead of 34 s re-reading it" },
+  { value: "100k", label: "tokens of context for a 27B model on one 24 GB card, all on the GPU, nothing set by hand" },
+  { value: "1.6x", label: "faster generation from speculative decoding, switched on when the model ships a draft head" },
 ];
 
-// Each section opens with an accent eyebrow, a centred heading and a sub-lede.
+// One line under the stats. Named per vendor because "runs on your hardware"
+// answers nothing; the backend in brackets is what actually does the work.
+export const HARDWARE =
+  "NVIDIA (CUDA), AMD (ROCm or Vulkan), Intel Arc (Vulkan) and Apple Silicon (Metal). No GPU works too, just slower.";
+
+// The hero's right-hand figure: one load plan, drawn in HTML rather than shown
+// as a screenshot, because it IS the pitch: what fits, where it goes, and the
+// flags that fell out of it. Numbers are the model-config.webp capture's own
+// (a 27B dense IQ4_XS on a 24 GB card, 22.8 GB of it usable), so the figure
+// and the screenshot further down agree; `cmd` is an excerpt of that model's
+// real generated command. Re-read them from the modal after re-shooting.
+// `system` is outside the budget: the card holds it before Quartermaster
+// starts. In `cmd`, [[value]] marks a computed number.
+export const HERO_PLAN = {
+  model: "qwen3.8-27b-ud3-iq4_xs",
+  gpu: "24 GB card",
+  card: 24.0,
+  segments: [
+    { key: "weights", label: "Weights", gb: 15.7 },
+    { key: "kv", label: "KV cache", gb: 3.5 },
+    { key: "compute", label: "Compute", gb: 1.4 },
+    { key: "extra", label: "Draft + checkpoints", gb: 1.2 },
+    { key: "headroom", label: "Headroom", gb: 0.5 },
+    { key: "system", label: "System", gb: 1.2, system: true },
+  ],
+  stats: [
+    ["Context", "100k"],
+    ["GPU layers", "65 / 65"],
+    ["Offload", "none"],
+  ],
+  cmd: "llama-server -m Qwen3.8-27B-UD3-IQ4_XS.gguf \\\n  -c [[102400]] -ngl [[99]] --port ${PORT}",
+};
+
+// Two doors under the hero, one per kind of visitor. Both lead into the same
+// page (anchors, not a toggle): a switch that swaps content hides half the
+// page from anyone who never clicks it, crawlers included.
+export const DOORS = [
+  {
+    label: "Private AI at home",
+    title: "I want my own ChatGPT",
+    body:
+      "Chat, web search, pictures and voice, running on your computer. Your conversations stay " +
+      "with you, and everyone at home gets their own login.",
+    href: "#home",
+    link: "See the chat app",
+  },
+  {
+    label: "Models and tooling",
+    title: "I run models and build on them",
+    body:
+      "One OpenAI and Anthropic endpoint for every model you own, with context, offload and KV cache " +
+      "sized to your VRAM. Works with Claude Code, Open WebUI and the SDKs.",
+    href: "#compare",
+    link: "Compare with Ollama and LM Studio",
+  },
+];
+
+// The chat app, pitched to someone who has never heard of a GGUF. No jargon in
+// here at all: every word in this block has to make sense to a person who uses
+// ChatGPT and nothing else. The technical side of the same app is in MORE.
+export const HOME = {
+  id: "home",
+  eyebrow: "The chat app",
+  title: "Your own ChatGPT, on your own computer",
+  body:
+    "Quartermaster comes with a chat app that works like the ones you already know: type a " +
+    "question, get an answer. The difference is where it runs. The AI is on your computer, your " +
+    "conversations are saved there, and nobody is reading them, training on them or charging you " +
+    "for them by the month.",
+  points: [
+    "Ask it anything. When the answer needs today's news, prices or weather, it searches the web " +
+      "and shows you what it looked at.",
+    "Describe a picture and it draws it, or hand it a photo to change.",
+    "Talk to it instead of typing, and have answers read out loud.",
+    "Shopping mode compares prices across stores and lists what it found.",
+    "Everyone in the house gets their own login and their own chat history, from any phone or " +
+      "laptop on your home network.",
+    "Stuck on a setting? Ask it. The manual is one of the things it can look things up in.",
+  ],
+  need:
+    "What you need: a PC with a graphics card that has 8 GB of memory or more, or a Mac with Apple " +
+    "Silicon. The built-in model browser shows which models fit your machine before you download one.",
+  shots: [
+    { file: "pg-chat.webp", label: "Chat", caption: "An ordinary conversation. The model's thinking is tucked away, the answer is not." },
+    { file: "pg-tools.webp", label: "Web search", caption: "Looking something up mid-conversation and reading the page it found." },
+    { file: "pg-image.webp", label: "Pictures", caption: "Make an image from a description, or change one you already have." },
+    { file: "pg-speech.webp", label: "Voice", caption: "Have text read aloud, or turn a recording into text." },
+  ],
+};
+
+// Each section opens with a mono label, a heading and a sub-lede.
 // Keyed by the section's DOM id so build.mjs can render them uniformly.
 export const SECTIONS = {
   features: {
-    eyebrow: "",
+    eyebrow: "Features",
     icon: "box",
     title: "It works the machine out for you",
     sub:
-      "One endpoint in front of every model you own, the sizing decisions made for you instead " +
-      "of by you, and a front end for all of it.",
+      "One endpoint in front of every model you own: llama-server, stable-diffusion.cpp, speech, " +
+      "transcription, rerank, embeddings, upscaling. The sizing is decided for you instead of by " +
+      "you, and the chat app sits on top of all of it.",
   },
   more: {
-    eyebrow: "",
+    eyebrow: "Also in the box",
     icon: "box",
-    title: "And much more",
-    sub: "A plethora of features to make it a breeze to run your models the way you want to",
+    title: "The parts you notice on day thirty",
+    sub: "Less visible than a gauge, and the reason it keeps working once it is part of your setup.",
+  },
+  clients: {
+    eyebrow: "Your tools",
+    icon: "terminal",
+    title: "Point what you already use at it",
+    sub:
+      "One port answers both the OpenAI and the Anthropic API, so anything with a base URL setting " +
+      "works unchanged: Claude Code, Open WebUI, Continue, Cline, SillyTavern, the OpenAI SDKs. The " +
+      "model field picks the model, and if it isn't loaded, that request loads it.",
+  },
+  compare: {
+    eyebrow: "Compared",
+    icon: "layers",
+    title: "Where it differs from Ollama and LM Studio",
+    sub:
+      "Both are good at getting one model running. Quartermaster is built for the box that runs " +
+      "several, of different kinds, on a fixed amount of VRAM. Checked against their docs as of " +
+      "September 2026; tell us if something here has gone stale.",
   },
   install: {
-    eyebrow: "",
+    eyebrow: "Install",
     icon: "terminal",
-    title: "Installations",
+    title: "One binary, every platform",
     sub:
       "Windows, Linux, macOS and Docker, from the same single binary. The installer and the Docker " +
       "image bring the inference backends with them; everywhere else you install them from Settings " +
       "on first run, or point at ones you already have.",
+  },
+  faq: {
+    eyebrow: "Questions",
+    icon: "book",
+    title: "Before you download",
+    sub: null,
   },
   story: {
     eyebrow: "How it started",
@@ -180,9 +299,9 @@ export const SHOWCASE = [
         file: "model-config-args.webp",
         label: "Fully customizable",
         caption:
-          "The whole llama-server command line is right there and editable. Edits fold back into the fields " +
-          "above, and flags Quartermaster doesn't model are kept verbatim, the UI is a layer over the flags, " +
-          "not a replacement for them.",
+          "The whole llama-server command line, and your own flags on top of it. A flag you set replaces the " +
+          "one Quartermaster computed rather than landing beside it, and the final command shows which is which: " +
+          "the UI is a layer over the flags, not a replacement for them.",
       },
     ],
   },
@@ -207,35 +326,6 @@ export const SHOWCASE = [
         label: "VRAM breakdown",
         caption: "One bar per segment: weights, KV cache, compute buffer, and what the rest of the system already holds.",
       },
-    ],
-  },
-  {
-    id: "playground",
-    icon: "play",
-    eyebrow: "Text, image and audio",
-    title: "A playground, not just a proxy",
-    body:
-      "It orchestrates llama-server, stable-diffusion.cpp, TTS and transcription servers, rerank and " +
-      "embedding models, upscaling and segmentation, all behind one OpenAI-compatible surface. Then " +
-      "it gives you a front end for them, on its own port with per-user login and server-side " +
-      "history, so a model is not just reachable the moment it is discovered, it is useful, with " +
-      "nothing else installed in front of it.",
-    points: [
-      "An everyday helper: a shopping assistant mode to help you browse the internet and compare prices, then lists you the options, tell " +
-        "you what the weather does tomorrow, rewrite a piece of text according to your instructions, and inspect the diff, " +
-        "or even tell you to help you with your model config",
-      "Web search and tool calling are wired in, so the answer isn't limited to what the weights " +
-        "happen to remember, and the reasoning stream can be collapsed or hidden.",
-      "It can explain Quartermaster itself. The help articles are one of its tools, so \"why did my " +
-        "model get evicted?\" is a question you can ask in the chat.",
-      "Generate and edit images against the same catalog, LoRAs and reference images included.",
-      "Speak and transcribe without leaving the tab.",
-    ],
-    shots: [
-      { file: "pg-chat.webp", label: "Chat", caption: "An ordinary conversation, with the thinking stream kept out of the answer." },
-      { file: "pg-tools.webp", label: "Tools and web search", caption: "The model calling out mid-conversation and reading a result in full." },
-      { file: "pg-image.webp", label: "Image generation", caption: "Diffusion models in the same catalog, driven from the same UI." },
-      { file: "pg-speech.webp", label: "Speech", caption: "Text to speech and transcription against your local voices." },
     ],
   },
   {
@@ -337,9 +427,130 @@ export const MORE = [
   },
 ];
 
+// Copy-paste starting points, one per kind of client. 1250 is the default port
+// of a desktop install (the Docker line in INSTALL maps the same one). `plain`
+// drops the shell prompt glyph for code that is not a shell session.
+export const CLIENTS = [
+  {
+    tab: "Claude Code",
+    title: "Claude Code on your own GPU",
+    body:
+      "Claude Code talks to the Anthropic API, and so does Quartermaster. Set the base URL and name a " +
+      "local model for both of its slots, so its background calls do not ask for a Claude model you " +
+      "do not have. The token is only checked if you have created API keys.",
+    label: "shell",
+    code:
+      "export ANTHROPIC_BASE_URL=http://127.0.0.1:1250\n" +
+      "export ANTHROPIC_AUTH_TOKEN=qm-...  # any value if you have no keys\n" +
+      `export ANTHROPIC_MODEL=${HERO_PLAN.model}\n` +
+      `export ANTHROPIC_DEFAULT_HAIKU_MODEL=${HERO_PLAN.model}\n` +
+      "claude",
+  },
+  {
+    tab: "OpenAI SDK",
+    title: "Any OpenAI client",
+    body:
+      "Scripts, notebooks and agent frameworks built on the OpenAI SDK need two changes: the base URL " +
+      "and the model name. The same holds for Open WebUI, Continue, Cline and SillyTavern, where it is " +
+      "a field in their connection settings.",
+    label: "python",
+    plain: true,
+    code:
+      "from openai import OpenAI\n" +
+      "\n" +
+      'client = OpenAI(base_url="http://127.0.0.1:1250/v1", api_key="qm-...")\n' +
+      "reply = client.chat.completions.create(\n" +
+      `    model="${HERO_PLAN.model}",\n` +
+      '    messages=[{"role": "user", "content": "Hello"}],\n' +
+      ")",
+  },
+  {
+    tab: "curl",
+    title: "Images and audio too",
+    body:
+      "It is the same port for everything in the catalog. Image generation, speech, transcription, " +
+      "embeddings and rerank sit on their usual OpenAI paths, so a request for an image model swaps " +
+      "it in the same way a chat request does.",
+    label: "shell",
+    code:
+      "curl http://127.0.0.1:1250/v1/images/generations \\\n" +
+      '  -H "Content-Type: application/json" \\\n' +
+      "  -d '{\"model\": \"z-image-turbo\", \"prompt\": \"a lighthouse at dusk\"}'",
+  },
+];
+
+// The objections that stop a download, answered where the decision is made
+// (right before Install). Plain words: this is read by both halves of the
+// audience. Every answer is a claim about the product, so keep them checkable:
+//   - models folder: autogen/discover.go walks the folder recursively for .gguf;
+//     Ollama's store keeps them as extensionless blobs, which it will not see.
+//   - outbound: internal/update (release builds only), the hub, the backend
+//     installer, the titlegen asset, and the chat tools (search, fetchpage,
+//     youtube, weather via open-meteo, currency via frankfurter/er-api).
+export const FAQ = [
+  {
+    q: "Is it free?",
+    a:
+      "Yes. It is open source under the MIT license, with no account, no subscription and no paid " +
+      "tier. The models are free to download too.",
+  },
+  {
+    q: "Does it send my data anywhere?",
+    a:
+      "Your chats, pictures and recordings stay on your computer, and there is no telemetry. It goes " +
+      "online to check for a newer version of itself and to download the models and components you " +
+      "pick. In a chat, the web tools make outside requests when the model uses them: a web search, " +
+      "a page it opens, a news feed, the weather or an exchange rate. Only the lookup goes out, " +
+      "never the conversation.",
+  },
+  {
+    q: "Will it be as good as ChatGPT?",
+    a:
+      "Not quite, and it is better to know that up front. The models that fit on a home graphics card " +
+      "are smaller than the ones behind ChatGPT or Claude. On a 24 GB card they handle everyday " +
+      "questions, writing, summaries and coding help well; on an 8 GB card expect something closer to " +
+      "a capable assistant than an expert. What you get in return is privacy and no monthly bill.",
+  },
+  {
+    q: "I already use Ollama or LM Studio. Do I start over?",
+    a:
+      "Not with LM Studio: its models folder is plain GGUF files, so point Quartermaster at it and " +
+      "they show up. Ollama keeps its models renamed inside its own store, so those need downloading " +
+      "again, which the built-in browser does in a few clicks. Both can stay installed; just don't " +
+      "run them at the same time, since they would be sharing one graphics card.",
+  },
+  {
+    q: "What happens if a model is too big for my graphics card?",
+    a:
+      "It still runs: the part that does not fit goes to your regular memory and processor, which " +
+      "is slower. The model browser marks what fits your card before you download, so this is " +
+      "usually a choice rather than a surprise.",
+  },
+  {
+    q: "Can other people in my house use it?",
+    a:
+      "Yes. The chat app has its own address on your home network, and each person signs up with " +
+      "their own login and gets their own history. It runs on the one computer with the graphics " +
+      "card; everyone else just opens it in a browser.",
+  },
+];
+
+// Closes the FAQ. Links rather than a form: a form on a static site means a
+// third-party service, and the page promises no outside requests.
+export const FEEDBACK = {
+  text: "Question not here, or something broken?",
+  links: [
+    { href: REPO + "/discussions", label: "Ask or suggest in Discussions" },
+    { href: REPO + "/issues/new/choose", label: "Report a bug" },
+  ],
+};
+
 export const INSTALL = [
   {
     icon: "windows",
+    // Which visitor platforms this tab is preselected for (OS_SCRIPT).
+    os: "windows",
+    tab: "Windows",
     title: "Windows installer",
     body:
       "A per-user install, no admin rights needed. The first-run wizard fetches the inference backends, " +
@@ -349,6 +560,8 @@ export const INSTALL = [
   },
   {
     icons: ["linux", "apple"],
+    os: "linux mac",
+    tab: "Linux and macOS",
     title: "Linux and macOS",
     body:
       "The same wizard, in your browser: it fetches a verified binary, the backends for your GPU, and " +
@@ -364,6 +577,7 @@ export const INSTALL = [
   },
   {
     icon: "docker",
+    tab: "Docker",
     title: "Docker",
     body:
       "One image, for linux/amd64 and linux/arm64, and it serves the moment it starts: llama-server " +
@@ -384,4 +598,119 @@ export const INSTALL_NOTE = {
   href: REPO + "#building-from-source",
   link: "Building from source",
   after: " takes Go 1.26+ and Node 24 for the UI, one binary out the other end.",
+};
+
+// Fact-checked 2026-09-23 against Ollama v0.34.3 and LM Studio 0.4.25, from
+// their own docs and changelogs (docs.ollama.com/faq, /context-length,
+// /api/anthropic-compatibility, ollama v0.32.6 release notes;
+// lmstudio.ai/docs ttl-and-auto-evict, anthropic-compat, app-privacy,
+// changelog). Re-check before touching a cell: a stale "No" against a
+// competitor is the fastest way to lose a reader's trust. The rows where they
+// win stay in on purpose, for the same reason.
+//
+// Each cell is [mark, note]; mark is yes | part | no. The first cell is ours.
+export const COMPARE = {
+  cols: ["Quartermaster", "Ollama", "LM Studio"],
+  rows: [
+    {
+      label: "Context length fitted to your VRAM, per model",
+      cells: [
+        ["yes", "Computed from the GGUF and what is free"],
+        ["part", "One default by total VRAM: 4k under 24 GB"],
+        ["no", "Fixed default, set by hand"],
+      ],
+    },
+    {
+      label: "KV cache and MoE experts placed for you",
+      cells: [
+        ["yes", null],
+        ["no", "KV type is an env var, no expert offload"],
+        ["no", "Both are manual toggles"],
+      ],
+    },
+    {
+      label: "Several models, swapped in by the request",
+      cells: [
+        ["yes", "Evicts only what no longer fits"],
+        ["yes", null],
+        ["part", "One on-demand model at a time"],
+      ],
+    },
+    {
+      label: "A long chat survives its model being swapped out",
+      cells: [
+        ["yes", "KV cache saved to disk and restored"],
+        ["no", "Not in their docs"],
+        ["no", "Not in their docs"],
+      ],
+    },
+    {
+      label: "Image generation, speech and transcription",
+      cells: [
+        ["yes", "Same catalog, same API"],
+        ["no", "Image generation was removed in 0.32.6"],
+        ["no", null],
+      ],
+    },
+    {
+      label: "Uses your GGUF files where they already are",
+      cells: [
+        ["yes", null],
+        ["no", "Imported and copied into its own store"],
+        ["part", "Expects its own folder layout"],
+      ],
+    },
+    {
+      label: "Chat UI for the rest of the house, with logins",
+      cells: [
+        ["yes", "Web search, images and voice included"],
+        ["no", "API only over the network"],
+        ["no", "API only over the network"],
+      ],
+    },
+    {
+      label: "Run your own llama.cpp build",
+      cells: [
+        ["yes", "Or follow any GitHub repo's releases"],
+        ["no", "Engine is bundled"],
+        ["part", "Choose among its runtime versions"],
+      ],
+    },
+    {
+      label: "OpenAI and Anthropic APIs",
+      cells: [["yes", null], ["yes", null], ["yes", null]],
+    },
+    {
+      label: "Speculative decoding",
+      cells: [
+        ["yes", "MTP picked automatically"],
+        ["part", "Apple Silicon only"],
+        ["yes", null],
+      ],
+    },
+    {
+      label: "Curated model library, one click to pull",
+      cells: [
+        ["part", "Hugging Face search, no curated list"],
+        ["yes", null],
+        ["yes", null],
+      ],
+    },
+    {
+      label: "MLX engine on Apple Silicon",
+      cells: [
+        ["no", "llama.cpp with Metal"],
+        ["yes", null],
+        ["yes", null],
+      ],
+    },
+    {
+      label: "Open source",
+      cells: [
+        ["yes", "MIT"],
+        ["yes", "MIT"],
+        ["part", "App is closed, SDKs are MIT"],
+      ],
+    },
+  ],
 };

@@ -138,12 +138,17 @@
   src: url("fonts/jetbrains-mono-700.woff2") format("woff2");
 }
 
-/* Mono for headings and every bit of chrome (nav, buttons, labels, tabs); Inter
- * for anything you actually read a paragraph of. The app is a console for a
- * machine (its typography should say so), but a docs page set in mono is a
- * docs page nobody finishes. */
+/* Inter carries the display type and everything you read; mono is the
+ * instrument voice, kept for what the app itself sets in mono: labels, numbers,
+ * commands and chrome. Headings used to be mono too, and a 3.4rem monospace
+ * headline at 700 is what made the page read heavy and wide. */
 :root {
   --mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+  --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --radius: 0.75rem;
+  /* Compute buffer's segment colour: the one hue in the load plan that is not
+     on the ember ramp, same as in the app's gauge. */
+  --seg-compute: rgb(45 190 140);
 }
 
 *,
@@ -155,35 +160,19 @@
 html {
   scroll-behavior: smooth;
   /* Anchors land below the sticky header rather than under it. */
-  scroll-padding-top: 5.5rem;
+  scroll-padding-top: 5rem;
 }
 
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--sans);
   font-size: 16px;
-  line-height: 1.65;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-}
-
-/* The dotted ground the app uses on its own empty states, at page scale.
- *
- * A fixed element under scrolling content is repainted with the scroll unless
- * it owns a compositor layer, and a 22px gradient tile across the viewport is
- * not a cheap repaint. translateZ promotes it once; after that the scroll is a
- * matrix change on the layers above it and this one is never touched. */
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -2;
-  background-image: radial-gradient(var(--dot) 1px, transparent 1px);
-  background-size: 22px 22px;
-  pointer-events: none;
-  transform: translateZ(0);
+  font-feature-settings: "cv11", "ss01";
 }
 
 a {
@@ -200,20 +189,35 @@ pre {
 h1,
 h2,
 h3,
-.brand,
-.btn,
-.eyebrow,
-.pills li,
-.docs-nav h4,
-.site-nav,
-.shot-bar span,
-.cta-note {
-  font-family: var(--mono);
+h4 {
+  font-family: var(--sans);
+  font-weight: 600;
+  text-wrap: balance;
 }
 
 .wrap {
-  width: min(100% - 2.5rem, 1120px);
+  width: min(100% - 2.5rem, 1180px);
   margin-inline: auto;
+}
+
+/* The instrument label: small mono caps, muted, with an optional orange index.
+ * It replaces the boxed pill eyebrows: a pill with an icon in it is a button
+ * shape that does nothing, and there were a dozen of them. */
+.label {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.label .num {
+  color: var(--primary);
 }
 
 /* ── Header ──────────────────────────────────────────────────────────────── */
@@ -223,10 +227,11 @@ h3,
   top: 0;
   z-index: 20;
   /* No backdrop-filter. A frosted header re-blurs whatever is beneath it on
-   * every single scrolled frame, and what scrolls beneath this one is a
-   * full-bleed screenshot: the most expensive backdrop there is. A nearly
-   * opaque bar reads the same at a glance and costs one composite. */
-  background: color-mix(in srgb, var(--bg) 94%, transparent);
+   * every scrolled frame, and what scrolls beneath this one is a full-bleed
+   * screenshot: the most expensive backdrop there is. A nearly opaque bar reads
+   * the same at a glance and costs one composite. Opaque, not 94%: at 94% the
+   * large headings scrolling under it were still legible through the bar. */
+  background: var(--bg);
   border-bottom: 1px solid var(--border-soft);
 }
 
@@ -234,16 +239,16 @@ h3,
   display: flex;
   align-items: center;
   gap: 1.5rem;
-  height: 4rem;
+  height: 3.5rem;
 }
 
 .brand {
   display: flex;
   align-items: center;
   gap: 0.55rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  font-size: 0.98rem;
 }
 
 .brand svg {
@@ -253,10 +258,14 @@ h3,
 .site-nav {
   display: flex;
   align-items: center;
-  gap: 1.25rem;
+  gap: 1.5rem;
   margin-left: auto;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   color: var(--muted);
+}
+
+.site-nav a {
+  transition: color 0.15s;
 }
 
 .site-nav a:hover {
@@ -269,7 +278,7 @@ h3,
   width: 2rem;
   height: 2rem;
   border-radius: 0.5rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -277,7 +286,7 @@ h3,
 
 .icon-btn:hover {
   color: var(--text);
-  background: var(--surface);
+  border-color: var(--border);
 }
 
 /* The toggle shows the theme you'd switch TO, so exactly one glyph is live. */
@@ -310,26 +319,24 @@ h3,
 .btn {
   display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.7rem 1.25rem;
-  border-radius: 0.7rem;
+  gap: 0.55rem;
+  height: 2.75rem;
+  padding: 0 1.15rem;
+  border-radius: 0.6rem;
   border: 1px solid transparent;
-  font-weight: 500;
-  font-size: 0.85rem;
+  font-weight: 600;
+  font-size: 0.9rem;
   letter-spacing: -0.01em;
-  line-height: 1.2;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, transform 0.1s;
-}
-
-.btn:active {
-  transform: translateY(1px);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 
 .btn-primary {
   background: var(--primary);
   color: var(--on-primary);
-  box-shadow: 0 8px 24px -10px var(--primary);
+  /* An inner top highlight instead of a coloured glow under the button: it
+     reads as a physical key rather than a neon sign. */
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.18), 0 1px 2px rgb(0 0 0 / 0.3);
 }
 
 .btn-primary:hover {
@@ -345,16 +352,41 @@ h3,
   background: var(--surface);
 }
 
+.more-link {
+  display: inline-block;
+  margin-top: 1rem;
+  color: var(--primary);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.more-link:hover {
+  color: var(--primary-hover);
+}
+
 /* ── Hero ────────────────────────────────────────────────────────────────── */
 
 .hero {
   position: relative;
-  padding: clamp(3.5rem, 9vw, 7rem) 0 3rem;
-  text-align: center;
+  padding: clamp(3.5rem, 8vw, 6.5rem) 0 0;
   overflow: clip;
 }
 
-/* Ember streaks: the hero's one piece of decoration, in the colours the app
+/* One static glow, placed behind the load-plan figure. Painted once; nothing
+ * about it animates, so it never touches the compositor after first paint. */
+.hero::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: -12rem;
+  right: -10rem;
+  width: 52rem;
+  height: 40rem;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--primary) 14%, transparent), transparent);
+  pointer-events: none;
+}
+
+/* Ember streaks: the hero's one moving decoration, in the colours the app
  * paints while a model is decoding. Markup comes from renderEmbers() in
  * build.mjs, which hands each streak its own --top/--w/--h/--dur/--delay/--peak.
  *
@@ -445,171 +477,73 @@ h3,
   }
 }
 
-.eyebrow {
-  display: inline-flex;
+.hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.3rem 0.8rem;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 0.8rem;
-  font-weight: 600;
+  gap: clamp(2.5rem, 6vw, 5rem);
+}
+
+.hero-tag {
+  text-transform: none;
   letter-spacing: 0.01em;
 }
 
-.eyebrow b {
-  color: var(--primary);
-  font-weight: 700;
+/* The status dot the app shows beside a READY model. */
+.hero-tag .live {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: var(--seg-compute);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--seg-compute) 22%, transparent);
 }
 
-/* Mono runs wide, so the display sizes come down a notch from the Inter-era
- * values and the tracking backs off: negative tracking that flatters a
- * grotesque just smears a monospace face. */
 h1 {
-  margin: 1.4rem auto 0;
-  max-width: 17ch;
-  font-size: clamp(2rem, 5.2vw, 3.4rem);
-  line-height: 1.08;
-  letter-spacing: -0.02em;
-  font-weight: 700;
+  margin: 1.4rem 0 0;
+  font-size: clamp(2.6rem, 5.6vw, 4.5rem);
+  line-height: 1.02;
+  letter-spacing: -0.045em;
+  font-weight: 600;
 }
 
+/* Solid, and on its own line. The gradient-clipped text it replaces is the most
+ * recognisable template move there is. */
 h1 .accent {
-  background: linear-gradient(100deg, var(--primary), var(--primary-hover));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  display: block;
+  color: var(--primary);
 }
 
 .lede {
-  margin: 1.25rem auto 0;
-  max-width: 62ch;
+  margin: 1.5rem 0 0;
+  max-width: 34rem;
   color: var(--muted);
-  font-size: clamp(1rem, 1.6vw, 1.15rem);
+  font-size: clamp(1.02rem, 1.4vw, 1.12rem);
+  line-height: 1.6;
 }
 
 .cta-row {
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
   gap: 0.75rem;
-  margin-top: 2rem;
-}
-
-/* The five things someone scans for before reading anything. */
-.pills {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 0.4rem;
-  margin: 1.6rem 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.pills li {
-  padding: 0.28rem 0.7rem;
-  border-radius: 999px;
-  border: 1px solid var(--border-soft);
-  background: color-mix(in srgb, var(--surface) 70%, transparent);
-  color: var(--muted);
-  font-size: 0.72rem;
-  letter-spacing: -0.01em;
-}
-
-.pills li::before {
-  content: "▪ ";
-  color: var(--primary);
+  margin-top: 2.1rem;
 }
 
 .cta-note {
-  margin-top: 0.9rem;
+  margin: 1rem 0 0;
   color: var(--muted);
+  font-family: var(--mono);
   font-size: 0.75rem;
 }
 
-/* Three soft blobs on long, offset drifts: a gradient mesh made of three divs
- * and two keyframes.
- *
- * The softness is a radial-gradient that fades to transparent, NOT filter:
- * blur(), and the container has no mask. Both of those are per-frame GPU work
- * on a layer that overlaps the sticky header and the hero screenshot, and that
- * showed up as stutter in the first screen of scrolling. A gradient is painted
- * once into a texture and then only translated. */
-.mesh {
-  position: absolute;
-  z-index: -1;
-  inset: -10% -5% auto;
-  height: 46rem;
-  overflow: hidden;
-  pointer-events: none;
-  contain: strict;
+.cta-note a {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--border);
+  text-underline-offset: 3px;
 }
 
-/* Dimmer than it was: with the ember streaks carrying the hero, the mesh is now
-   the ambient ground they cross rather than the effect itself. */
-.mesh i {
-  position: absolute;
-  display: block;
-  opacity: 0.45;
-  will-change: transform;
-}
-
-.mesh i:nth-child(1) {
-  top: -6%;
-  left: 14%;
-  width: 46rem;
-  height: 36rem;
-  background: radial-gradient(closest-side, color-mix(in srgb, var(--primary) 34%, transparent), transparent);
-  animation: drift-a 26s ease-in-out infinite alternate;
-}
-
-.mesh i:nth-child(2) {
-  top: 8%;
-  right: 6%;
-  width: 42rem;
-  height: 34rem;
-  background: radial-gradient(closest-side, color-mix(in srgb, var(--primary-hover) 26%, transparent), transparent);
-  animation: drift-b 34s ease-in-out infinite alternate;
-}
-
-.mesh i:nth-child(3) {
-  top: 22%;
-  left: 38%;
-  width: 36rem;
-  height: 28rem;
-  background: radial-gradient(closest-side, color-mix(in srgb, var(--text) 10%, transparent), transparent);
-  animation: drift-a 41s ease-in-out infinite alternate-reverse;
-}
-
-/* Translation only. Scaling a blurred layer makes the compositor re-rasterize
- * the blur every frame, which is exactly the kind of work that shows up as a
- * stutter the moment you start scrolling; moving one is a matrix change and
- * costs nothing. */
-@keyframes drift-a {
-  from {
-    transform: translate3d(-7%, -5%, 0);
-  }
-  to {
-    transform: translate3d(9%, 7%, 0);
-  }
-}
-
-@keyframes drift-b {
-  from {
-    transform: translate3d(6%, 4%, 0);
-  }
-  to {
-    transform: translate3d(-8%, -6%, 0);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .mesh i {
-    animation: none;
-  }
+.cta-note a:hover {
+  text-decoration-color: currentColor;
 }
 
 .cta-note code {
@@ -621,43 +555,300 @@ h1 .accent {
   user-select: all;
 }
 
-.cta-note a {
-  text-decoration: underline;
-  text-underline-offset: 3px;
+/* The five scan-before-reading facts, as a ruled strip rather than pills. */
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  margin: clamp(3rem, 6vw, 4.5rem) 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
 }
 
-/* ── Screenshot frame ────────────────────────────────────────────────────── */
+.facts li {
+  flex: 1 1 14rem;
+  padding: 1.35rem 1.4rem 1.4rem;
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.facts b {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: var(--text);
+  font-size: clamp(1.7rem, 3vw, 2.2rem);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.facts li:first-child b {
+  color: var(--primary);
+}
+
+.hw {
+  margin: 1rem 0 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+.facts li + li {
+  border-left: 1px solid var(--border-soft);
+}
+
+/* ── Load plan (hero figure) ─────────────────────────────────────────────── */
+
+.plan {
+  margin: 0;
+  padding: 1.35rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  box-shadow: var(--shadow);
+  font-family: var(--mono);
+}
+
+.plan-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.plan-head code {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-total {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-top: 1.2rem;
+}
+
+.plan-total b {
+  font-size: 2.4rem;
+  font-weight: 500;
+  letter-spacing: -0.04em;
+  line-height: 1;
+}
+
+.plan-total span {
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.plan-total small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.plan-bar {
+  display: flex;
+  gap: 2px;
+  height: 0.7rem;
+  margin-top: 1rem;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+/* The bar fills left to right once on load, the way a model's weights land on
+ * the card. The resting state is the finished bar; only JS arms the empty state
+ * (PLAN_ARM in build.mjs) and starts the fill after the page has painted.
+ *
+ * Each segment grows from its left edge with scaleX, in turn: renderPlan gives
+ * every segment its slot of the sweep (--d delay, --t duration), cut from one
+ * eased curve, so the leading edge travels the bar as one continuous fill.
+ * Transform, not a clip-path on the whole bar: a clip-path animation is
+ * main-thread or, in newer Chromium, a composited path that some builds get
+ * wrong. Vivaldi ran it (the animation reported running) but painted only the
+ * first and last frame, so it "blinked in". Transforms composite everywhere.
+ *
+ * Timing was measured from painted frames (CDP screencast), not computed
+ * style: the 0.4s hold lets the bar register as empty before it is seen to
+ * fill, or the fill disappears into the page's own pop-in. */
+.plan-bar.plan-armed .seg {
+  transform: scaleX(0);
+  transform-origin: left center;
+}
+
+.plan-bar.plan-armed.plan-go .seg {
+  animation: seg-grow var(--t) linear calc(0.4s + var(--d)) both;
+}
+
+@keyframes seg-grow {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plan-bar.plan-armed .seg {
+    transform: none;
+    animation: none;
+  }
+}
+
+.seg {
+  display: block;
+  min-width: 3px;
+}
+
+.seg-weights { background: var(--ember-core); }
+.seg-kv { background: var(--ember-tip); }
+.seg-compute { background: var(--seg-compute); }
+.seg-extra { background: var(--ember-tail); }
+.seg-headroom { background: color-mix(in srgb, var(--text) 22%, transparent); }
+.seg-system {
+  background: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--text) 18%, transparent) 0 3px,
+    transparent 3px 6px
+  );
+}
+
+.plan-legend {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem 1.5rem;
+  margin: 1.1rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.plan-legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.plan-legend .seg {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 2px;
+  flex: none;
+}
+
+.plan-legend span {
+  margin-left: auto;
+  color: var(--text);
+}
+
+.plan-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 1.2rem 0 0;
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.plan-stats div {
+  padding: 0.75rem 0;
+}
+
+.plan-stats div + div {
+  padding-left: 1rem;
+  border-left: 1px solid var(--border-soft);
+}
+
+.plan-stats dt {
+  color: var(--muted);
+  font-size: 0.66rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.plan-stats dd {
+  margin: 0.2rem 0 0;
+  font-size: 0.95rem;
+}
+
+.plan-cmd {
+  margin-top: 1rem;
+}
+
+.plan-cmd pre {
+  margin: 0.55rem 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 0.74rem;
+  line-height: 1.7;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A computed value: what the load plan above just decided. */
+.plan-cmd em {
+  font-style: normal;
+  font-weight: 700;
+  color: var(--primary);
+}
+
+/* The dashboard, hung under the hero on a stage like every other screenshot. */
+.hero-shot {
+  margin-top: clamp(3rem, 6vw, 4.5rem);
+}
+
+/* ── Screenshots ─────────────────────────────────────────────────────────── */
+
+/* The stage: one recessed panel that every screenshot sits on, with the ember
+ * ramp as a hairline across its top edge. Fake window chrome (the three grey
+ * dots) is gone: these are captures of a web app, not of a Mac. */
+.stage,
+.hero-shot .shot {
+  position: relative;
+}
+
+.stage {
+  margin-top: 2.5rem;
+  padding: clamp(1rem, 3vw, 2.25rem);
+  border-radius: 1.1rem;
+  border: 1px solid var(--border-soft);
+  background:
+    radial-gradient(60% 50% at 50% 0%, color-mix(in srgb, var(--primary) 7%, transparent), transparent),
+    color-mix(in srgb, var(--surface) 55%, transparent);
+}
+
+.stage::before,
+.hero-shot::before {
+  content: "";
+  display: block;
+  height: 1px;
+  margin: 0 12% -1px;
+  background: linear-gradient(90deg, transparent, var(--ember-core), var(--ember-tip), transparent);
+  opacity: calc(0.7 * var(--ember-a));
+}
+
+.stage::before {
+  position: absolute;
+  inset: -1px 0 auto;
+  margin: 0 12%;
+}
 
 .shot {
-  margin-top: 3.5rem;
-  border-radius: 0.9rem;
+  margin-inline: auto;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--surface);
   box-shadow: var(--shadow);
   overflow: hidden;
-}
-
-.shot-bar {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.6rem 0.85rem;
-  border-bottom: 1px solid var(--border-soft);
-  background: var(--surface);
-}
-
-.shot-bar i {
-  width: 0.6rem;
-  height: 0.6rem;
-  border-radius: 999px;
-  background: var(--border);
-}
-
-.shot-bar span {
-  margin-left: 0.5rem;
-  color: var(--muted);
-  font-size: 0.72rem;
-  font-family: "JetBrains Mono", monospace;
 }
 
 .shot img {
@@ -666,58 +857,97 @@ h1 .accent {
   height: auto;
 }
 
-/* A cropped modal is taller than it is wide. Stretched across the full column
- * it renders about twice its captured size - soft, and too tall to take in at
- * a glance - so the frame hugs it at roughly the width it was shot at instead
- * of the width the column offers. */
-.shot.portrait {
-  width: min(100%, 32rem);
-  margin-inline: auto;
+.shot.is-crop {
+  width: min(100%, var(--nat));
+}
+
+/* A shot with a light capture carries both; the theme picks one. The hidden
+ * one is display:none AND loading="lazy", which together mean it is never
+ * fetched until the toggle makes it visible (see shotFrame in build.mjs). */
+.shot .v-light {
+  display: none;
+}
+
+:root[data-theme="light"] .shot .v-dark {
+  display: none;
+}
+
+:root[data-theme="light"] .shot .v-light {
+  display: block;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .shot .v-dark {
+    display: none;
+  }
+
+  :root:not([data-theme="dark"]) .shot .v-light {
+    display: block;
+  }
+}
+
+.gal-caption {
+  max-width: 44rem;
+  margin: 1.1rem auto 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  text-align: center;
+}
+
+.gal-caption b {
+  color: var(--text);
+  font-weight: 600;
 }
 
 /* ── Sections ────────────────────────────────────────────────────────────── */
 
 section {
-  padding: clamp(3rem, 7vw, 5.5rem) 0;
+  padding: clamp(4rem, 8vw, 7rem) 0;
 }
 
-/* Centred mastheads: eyebrow, heading, sub-lede. Centring is what makes a long
- * page read as a sequence of chapters rather than one column of left-aligned
- * text that never announces a new subject. */
+/* Masthead: the label on its own row, then the heading and the sub-lede side by
+ * side, top-aligned: the docs sub runs six lines, and bottom alignment left its
+ * heading floating halfway down the block. */
 .section-head {
-  max-width: 62ch;
-  margin: 0 auto 2.75rem;
-  text-align: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: clamp(2rem, 6vw, 5rem);
+  row-gap: 1.1rem;
+  align-items: start;
+  margin-bottom: 3rem;
 }
 
-.section-head .eyebrow {
-  margin-bottom: 1rem;
-  padding: 0.22rem 0.7rem;
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--primary);
-  background: color-mix(in srgb, var(--primary) 10%, transparent);
-  border-color: color-mix(in srgb, var(--primary) 28%, transparent);
-}
-
-.section-head .eyebrow svg {
-  opacity: 0.85;
+.section-head .label {
+  grid-column: 1 / -1;
 }
 
 .section-head h2 {
   margin: 0;
-  font-size: clamp(1.45rem, 2.9vw, 1.95rem);
-  letter-spacing: -0.02em;
-  line-height: 1.2;
+  font-size: clamp(1.9rem, 3.6vw, 2.9rem);
+  letter-spacing: -0.035em;
+  line-height: 1.08;
 }
 
-.section-head p {
-  margin: 0.85rem auto 0;
-  max-width: 58ch;
+.section-head .sub {
+  margin: 0.45rem 0 0;
+  max-width: 34rem;
   color: var(--muted);
-  font-size: 0.95rem;
+  font-size: 1rem;
+}
+
+.section-head.no-sub {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* The features masthead introduces the run below it; it does not need a
+ * section's worth of air under it before the first block. */
+.intro {
+  padding-bottom: 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+.intro .section-head {
+  margin-bottom: 0;
 }
 
 /* Scroll reveals. The hidden state only exists once JS has added `.reveal`, so
@@ -726,10 +956,10 @@ section {
  * difference between "arrives" and "was already there". */
 .reveal {
   opacity: 0;
-  transform: translateY(14px);
+  transform: translateY(12px);
   transition:
-    opacity 0.55s cubic-bezier(0.22, 1, 0.36, 1) var(--d, 0ms),
-    transform 0.55s cubic-bezier(0.22, 1, 0.36, 1) var(--d, 0ms);
+    opacity 0.6s cubic-bezier(0.22, 1, 0.36, 1) var(--d, 0ms),
+    transform 0.6s cubic-bezier(0.22, 1, 0.36, 1) var(--d, 0ms);
 }
 
 .reveal.in {
@@ -737,83 +967,448 @@ section {
   transform: none;
 }
 
-.grid {
+/* ── Showcase blocks ─────────────────────────────────────────────────────── */
+
+.sc {
+  padding: clamp(3.5rem, 7vw, 6rem) 0 0;
+}
+
+.sc-head {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: clamp(2rem, 6vw, 5rem);
+  row-gap: 1rem;
+  align-items: start;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border-soft);
+}
+
+.sc-head .label {
+  grid-column: 1 / -1;
+}
+
+.sc-head h3 {
+  margin: 0;
+  font-size: clamp(1.5rem, 2.6vw, 2.1rem);
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+
+.sc-head .sub {
+  margin: 0.3rem 0 0;
+  color: var(--muted);
+  font-size: 0.98rem;
+}
+
+/* ── Doors and the chat-app section ──────────────────────────────────────── */
+
+.doors {
+  padding: clamp(2rem, 4vw, 3rem) 0 0;
+}
+
+.doors-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  /* Cards stretch to a common height per row. Ragged bottoms read as broken
-   * layout even when the copy lengths honestly differ. */
-  align-items: stretch;
 }
 
-.card {
-  display: flex;
-  flex-direction: column;
-  padding: 1.4rem;
-  border-radius: 0.85rem;
-  border: 1px solid var(--border-soft);
-  background: var(--surface);
-  transition: border-color 0.15s, transform 0.15s;
+.door {
+  display: block;
+  padding: 1.6rem 1.7rem 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  transition: border-color 0.2s, transform 0.2s;
 }
 
-.card:hover {
-  border-color: var(--border);
+.door:hover {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
   transform: translateY(-2px);
 }
 
-.card h3 {
-  margin: 0.9rem 0 0.4rem;
-  font-size: 0.92rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  line-height: 1.35;
+.door h3 {
+  margin: 0.6rem 0 0.5rem;
+  font-size: clamp(1.25rem, 2vw, 1.5rem);
+  letter-spacing: -0.025em;
 }
 
-.card p {
+.door p:not(.label) {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.93rem;
+}
+
+.door .more-link {
+  margin-top: 1.1rem;
+}
+
+.home {
+  padding-bottom: clamp(3rem, 6vw, 4.5rem);
+}
+
+.home .sc-head {
+  border-top: 0;
+}
+
+.home .sc-head h2 {
+  margin: 0;
+  font-size: clamp(1.9rem, 3.6vw, 2.8rem);
+  letter-spacing: -0.035em;
+  line-height: 1.1;
+}
+
+.home-need {
+  margin: 2.25rem 0 0;
+  padding: 1rem 1.2rem;
+  border-left: 2px solid var(--primary);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  border-radius: 0 0.5rem 0.5rem 0;
+  font-size: 0.92rem;
+}
+
+@media (max-width: 700px) {
+  .doors-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .door:hover {
+    transform: none;
+  }
+}
+
+/* The specifics, as a row of short ruled columns under the evidence. */
+.sc-points {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1.5rem 2rem;
+  margin: 2.25rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sc-points li {
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+/* ── Tab sets (galleries + install) ──────────────────────────────────────── */
+
+/* One segmented control: a recessed track with the current tab raised out of it,
+ * the way the app draws its own mode switches. */
+.gal-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto 1.5rem;
+  padding: 0.25rem;
+  border-radius: 0.7rem;
+  border: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+}
+
+.gal-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 0.84rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.gal-tab:hover {
+  color: var(--text);
+}
+
+.gal-tab.is-current {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--border-soft);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+}
+
+.gal-tab:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.gal-panel.is-current {
+  animation: gal-in 0.3s ease both;
+}
+
+@keyframes gal-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Only advertise the click once the script that handles it is running. */
+.shot.is-clickable {
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gal-panel.is-current {
+    animation: none;
+  }
+}
+
+/* ── More (hairline grid) ────────────────────────────────────────────────── */
+
+/* Cells separated by 1px of the grid's own background showing through the gaps:
+ * a ruled table with no per-card border, shadow or hover lift. */
+.more-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--border-soft);
+  overflow: hidden;
+}
+
+.more-item {
+  padding: 1.75rem 1.6rem 1.9rem;
+  background: var(--bg);
+}
+
+.more-item svg {
+  color: var(--primary);
+}
+
+.more-item h3 {
+  margin: 1.1rem 0 0.45rem;
+  font-size: 1rem;
+  letter-spacing: -0.015em;
+}
+
+.more-item p {
   margin: 0;
   color: var(--muted);
   font-size: 0.9rem;
 }
 
-/* Flex, not a single grid cell: a card may carry two marks (Linux + Apple are
-   one download), and the badge grows sideways to hold them instead of stacking
-   the second one out of the box. min-width keeps the single-mark case square. */
-.card .ico {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.4rem;
-  width: fit-content;
-  min-width: 2.25rem;
-  height: 2.25rem;
-  padding-inline: 0.45rem;
-  border-radius: 0.6rem;
-  background: color-mix(in srgb, var(--primary) 14%, transparent);
+/* ── Story ───────────────────────────────────────────────────────────────── */
+
+#story {
+  border-top: 1px solid var(--border-soft);
+}
+
+.story-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: clamp(2rem, 6vw, 5rem);
+  align-items: start;
+}
+
+.story-grid .section-head {
+  margin: 0;
+  position: sticky;
+  top: 6rem;
+}
+
+.story p {
+  margin: 0 0 1.4rem;
+  color: var(--muted);
+  font-size: clamp(1.05rem, 1.5vw, 1.2rem);
+  line-height: 1.65;
+}
+
+.story p:first-child {
+  color: var(--text);
+}
+
+.story p:last-child {
+  margin-bottom: 0;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.story a {
   color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 /* ── Install ─────────────────────────────────────────────────────────────── */
 
-#install .card {
-  display: flex;
-  flex-direction: column;
-  gap: 0.9rem;
+#install,
+#clients,
+#compare {
+  border-top: 1px solid var(--border-soft);
 }
 
-#install .card p {
-  flex: 1;
+/* ── Comparison table ────────────────────────────────────────────────────── */
+
+.cmp-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+}
+
+.cmp {
+  width: 100%;
+  min-width: 40rem;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.cmp th,
+.cmp td {
+  padding: 0.85rem 1rem;
+  border: 0;
+  border-bottom: 1px solid var(--border-soft);
+  text-align: left;
+  vertical-align: top;
+}
+
+.cmp tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.cmp thead th {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.cmp thead th.us {
+  color: var(--primary);
+}
+
+.cmp tbody th {
+  width: 34%;
+  font-weight: 500;
+}
+
+.cmp td {
+  width: 22%;
+}
+
+/* The column being sold gets a faint wash so the eye can run down it. */
+.cmp .us {
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
+}
+
+.cmp .mark {
+  display: inline-block;
+  width: 0.95rem;
+  height: 0.95rem;
+  vertical-align: -0.12rem;
+  border-radius: 50%;
+}
+
+.cmp .m-check .mark {
+  background: var(--primary);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.cmp .m-part .mark {
+  border: 2px solid var(--muted);
+  background: linear-gradient(90deg, var(--muted) 50%, transparent 50%);
+}
+
+.cmp .m-no .mark {
+  width: 0.7rem;
+  height: 2px;
+  margin: 0 0.12rem;
+  vertical-align: 0.25rem;
+  border-radius: 1px;
+  background: var(--border);
+}
+
+.cmp small {
+  display: block;
+  margin-top: 0.3rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+/* Code in a terminal frame that is not a shell session: no prompt glyph. */
+.term-plain .ln::before,
+.term-plain .ln.cont::before {
+  content: none;
+}
+
+.term-plain .ln {
+  padding-left: 0;
+  text-indent: 0;
+}
+
+.install {
+  padding: clamp(1rem, 3vw, 2rem);
+  border-radius: 1.1rem;
+  border: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
+}
+
+.install .gal-tabs {
+  margin-left: 0;
+}
+
+.install .gal-tab svg {
+  flex: none;
+}
+
+.inst-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: clamp(1.5rem, 4vw, 3rem);
+  align-items: start;
+  padding: 0.5rem 0.25rem 0.25rem;
+}
+
+.inst-copy h3 {
+  margin: 0 0 0.6rem;
+  font-size: 1.2rem;
+  letter-spacing: -0.02em;
+}
+
+.inst-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.93rem;
+}
+
+.inst-dl {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.7rem;
+}
+
+.inst-dl span {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.74rem;
 }
 
 .install-note {
   margin: 1.25rem 0 0;
-  text-align: center;
   font-size: 0.88rem;
   color: var(--muted);
 }
 
 .install-note a {
   color: var(--primary);
-  text-decoration: none;
   border-bottom: 1px solid color-mix(in srgb, var(--primary) 45%, transparent);
 }
 
@@ -850,15 +1445,7 @@ pre {
   background: color-mix(in srgb, var(--surface) 60%, transparent);
 }
 
-.term-bar i {
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 999px;
-  background: var(--border);
-}
-
 .term-bar > span {
-  margin-left: 0.35rem;
   color: var(--muted);
   font-family: var(--mono);
   font-size: 0.68rem;
@@ -932,310 +1519,6 @@ pre {
   opacity: 0.75;
 }
 
-/* ── Story ───────────────────────────────────────────────────────────────── */
-
-.wrap.narrow {
-  width: min(100% - 2.5rem, 720px);
-}
-
-.story {
-  position: relative;
-  padding-left: 1.4rem;
-  border-left: 2px solid color-mix(in srgb, var(--primary) 45%, transparent);
-}
-
-.story p {
-  margin: 0 0 1.1rem;
-  color: var(--muted);
-  font-size: 1.02rem;
-}
-
-.story p:first-child {
-  color: var(--text);
-}
-
-.story p:last-child {
-  margin-bottom: 0;
-  color: var(--text);
-  font-weight: 600;
-}
-
-.story a {
-  color: var(--primary);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
-/* ── Showcase sections ───────────────────────────────────────────────────── */
-
-/* Four claims that earn a picture, each its own scroll-into block. The rhythm
- * comes from alternating which side the screenshot lands on; a section whose
- * shots need the full width (a gallery) breaks that rhythm on purpose, which is
- * what keeps eight screens of page from reading as one long list. */
-.sc {
-  padding: clamp(2.5rem, 5.5vw, 4.5rem) 0;
-}
-
-/* The masthead already introduced the run, so the first block does not need to
- * restate the gap between them. */
-#features + .sc {
-  padding-top: 0;
-}
-
-.sc-row {
-  display: grid;
-  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
-  align-items: center;
-  gap: clamp(2rem, 5vw, 4rem);
-}
-
-/* Flipped by DOM order, not by direction: `order` keeps the copy first in the
- * source, so a screen reader and the keyboard still meet the claim before the
- * evidence on every block. */
-.sc-split.is-flipped .sc-copy {
-  order: 2;
-}
-
-.sc-copy h3 {
-  margin: 0.75rem 0 0.6rem;
-  font-size: clamp(1.35rem, 2.6vw, 1.9rem);
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1.2;
-}
-
-.sc-copy > p {
-  margin: 0;
-  max-width: 54ch;
-  color: var(--muted);
-  font-size: 0.98rem;
-}
-
-/* Centred copy: a gallery section leads with it above the full-width frame, and
- * a section whose shots are not captured yet falls back to the same shape so a
- * missing screenshot reads as a paragraph rather than as a hole. */
-.sc-wide .sc-copy,
-.sc-bare .sc-copy {
-  max-width: 62ch;
-  margin: 0 auto 2.5rem;
-  text-align: center;
-}
-
-.sc-bare .sc-copy {
-  margin-bottom: 0;
-}
-
-.sc-wide .sc-copy > p,
-.sc-bare .sc-copy > p {
-  margin: 0 auto;
-}
-
-.sc-points {
-  margin: 1.35rem 0 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: 0.6rem;
-  text-align: left;
-}
-
-.sc-wide .sc-points,
-.sc-bare .sc-points {
-  max-width: 58ch;
-  margin-inline: auto;
-}
-
-.sc-points li {
-  display: flex;
-  gap: 0.6rem;
-  align-items: start;
-  color: var(--muted);
-  font-size: 0.9rem;
-  line-height: 1.55;
-}
-
-.sc-points svg {
-  flex: none;
-  margin-top: 0.28rem;
-  color: var(--primary);
-}
-
-/* The frame carries its own top margin for the hero, where it hangs below the
- * CTAs; inside a showcase it is already in a grid cell. */
-.sc-media .shot,
-.gal-panel .shot {
-  margin-top: 0;
-}
-
-.gal-caption {
-  margin: 0.9rem 0 0;
-  color: var(--muted);
-  font-size: 0.86rem;
-}
-
-.gal-caption b {
-  display: block;
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 0.78rem;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-}
-
-.sc-wide .gal-caption {
-  text-align: center;
-}
-
-/* ── Screenshot gallery ──────────────────────────────────────────────────── */
-
-/* One frame at a time with a labelled tab per shot. Panels are all in the
- * markup and hidden with the `hidden` attribute rather than built on demand, so
- * the section is a screenshot with a caption before any script runs. */
-.gal-stage {
-  position: relative;
-}
-
-.gal-panel[hidden] {
-  display: none;
-}
-
-.gal-panel.is-current {
-  animation: gal-in 0.35s ease both;
-}
-
-@keyframes gal-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-}
-
-/* Only advertise the click once the script that handles it is running. */
-.shot.is-clickable {
-  cursor: pointer;
-}
-
-.gal-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 0.5rem;
-  margin-top: 1.5rem;
-}
-
-.gal-tab {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.42rem 0.85rem 0.42rem 0.5rem;
-  border: 1px solid var(--border-soft);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 0.76rem;
-  letter-spacing: 0.01em;
-  cursor: pointer;
-  transition: color 0.2s, border-color 0.2s, background 0.2s;
-}
-
-.gal-tab:hover {
-  color: var(--text);
-  border-color: var(--border);
-}
-
-.gal-tab.is-current {
-  color: var(--primary);
-  border-color: color-mix(in srgb, var(--primary) 45%, transparent);
-  background: color-mix(in srgb, var(--primary) 10%, transparent);
-}
-
-.gal-tab:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
-}
-
-.gal-n {
-  display: grid;
-  place-items: center;
-  width: 1.35rem;
-  height: 1.35rem;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--text) 8%, transparent);
-  font-size: 0.68rem;
-}
-
-.gal-tab.is-current .gal-n {
-  background: color-mix(in srgb, var(--primary) 22%, transparent);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .gal-panel.is-current {
-    animation: none;
-  }
-}
-
-/* Side by side needs two columns' worth of room. Below that the screenshot goes
- * under the copy it illustrates, which is the order it is already in. */
-@media (max-width: 900px) {
-  .sc-row {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 1.75rem;
-  }
-
-  .sc-split.is-flipped .sc-copy {
-    order: 0;
-  }
-}
-
-/* ── Docs teaser + footer ────────────────────────────────────────────────── */
-
-.topic-list {
-  margin: 0.9rem 0 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-}
-
-.topic-list a {
-  display: inline-block;
-  padding: 0.25rem 0.6rem;
-  border-radius: 0.45rem;
-  border: 1px solid var(--border-soft);
-  color: var(--muted);
-  font-size: 0.82rem;
-}
-
-.topic-list a:hover {
-  color: var(--primary);
-  border-color: var(--primary);
-}
-
-.site-footer {
-  border-top: 1px solid var(--border-soft);
-  padding: 2.5rem 0;
-  color: var(--muted);
-  font-size: 0.85rem;
-}
-
-.site-footer .wrap {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1rem 2rem;
-  align-items: center;
-}
-
-.site-footer a {
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
-.site-footer .spacer {
-  margin-left: auto;
-}
-
 /* ── Docs pages ──────────────────────────────────────────────────────────── */
 
 .docs-layout {
@@ -1255,6 +1538,7 @@ pre {
 }
 
 .docs-nav h4 {
+  font-family: var(--mono);
   margin: 1.4rem 0 0.5rem;
   font-size: 0.68rem;
   font-weight: 700;
@@ -1300,6 +1584,7 @@ pre {
   margin: 0 0 1.5rem;
   max-width: none;
   font-size: clamp(1.9rem, 4vw, 2.5rem);
+  letter-spacing: -0.03em;
   text-align: left;
 }
 
@@ -1427,4 +1712,276 @@ pre {
   .site-nav .hide-sm {
     display: none;
   }
+}
+
+/* ── Docs teaser (sitemap) ───────────────────────────────────────────────── */
+
+#docs {
+  border-top: 1px solid var(--border-soft);
+}
+
+.docs-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 2.25rem 2rem;
+}
+
+.docs-col h3 {
+  margin: 0 0 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.docs-col ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.docs-col li + li {
+  margin-top: 0.45rem;
+}
+
+.docs-col a {
+  font-size: 0.92rem;
+  transition: color 0.15s;
+}
+
+.docs-col a:hover {
+  color: var(--primary);
+}
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+
+.site-footer {
+  padding: 3.5rem 0 2rem;
+  border-top: 1px solid var(--border-soft);
+  font-size: 0.88rem;
+}
+
+.foot-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) repeat(3, minmax(0, 1fr));
+  gap: 2rem;
+}
+
+.foot-brand p {
+  margin: 0.75rem 0 0;
+  max-width: 22rem;
+  color: var(--muted);
+}
+
+.foot-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.foot-col h4 {
+  margin: 0 0 0.35rem;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.foot-col a {
+  color: var(--text);
+  opacity: 0.85;
+}
+
+.foot-col a:hover {
+  color: var(--primary);
+  opacity: 1;
+}
+
+.foot-base {
+  margin-top: 3rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border-soft);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+
+.foot-base a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ── Motion and small screens ────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
+@media (max-width: 1000px) {
+  .hero-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .plan {
+    max-width: 34rem;
+  }
+
+  .more-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .section-head,
+  .sc-head,
+  .story-grid,
+  .inst-panel {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .story-grid .section-head {
+    position: static;
+  }
+
+  .foot-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .foot-brand {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 600px) {
+  .more-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .facts li {
+    flex-basis: 50%;
+    text-align: left;
+  }
+
+  .facts li + li {
+    border-left: 0;
+  }
+
+  .plan-legend {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .stage {
+    padding: 0.6rem;
+    border-radius: 0.8rem;
+  }
+
+  .gal-tabs {
+    width: 100%;
+  }
+
+  .gal-tab {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+}
+
+/* Six points: three across, so the grid closes instead of leaving two strays. */
+.home .sc-points {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 900px) {
+  .home .sc-points {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ── FAQ ─────────────────────────────────────────────────────────────────── */
+
+#faq {
+  border-top: 1px solid var(--border-soft);
+}
+
+.faq {
+  border-top: 1px solid var(--border-soft);
+}
+
+.faq-item {
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.faq-item summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.15rem 0.25rem;
+  cursor: pointer;
+  list-style: none;
+  font-weight: 500;
+  font-size: 1.02rem;
+}
+
+.faq-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.faq-item summary::after {
+  content: "+";
+  flex: none;
+  color: var(--primary);
+  font-family: var(--mono);
+  transition: transform 0.2s;
+}
+
+.faq-item[open] summary::after {
+  transform: rotate(45deg);
+}
+
+.faq-item summary:hover {
+  color: var(--primary);
+}
+
+.faq-item p {
+  max-width: 46rem;
+  margin: 0;
+  padding: 0 0.25rem 1.3rem;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.feedback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 2rem;
+  margin-top: 2.5rem;
+}
+
+.feedback p {
+  margin: 0;
+}
+
+.feedback div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1.75rem;
+}
+
+.feedback .more-link {
+  margin-top: 0;
 }
