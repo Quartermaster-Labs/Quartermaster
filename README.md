@@ -14,45 +14,45 @@ a badge is ever stuck on stale data, bump this number rather than waiting. -->
 # Quartermaster
 
 **Run any model without tuning a single flag.**
-*Text, image and audio, all on one machine.*
+*Chat, images and voice, all on one machine.*
 
 Quartermaster is an all-in-one local inference platform. Point it at your models folder: it works
 out what fits in your VRAM, launches each model with computed flags, and hot-swaps between them on
 demand behind one OpenAI- and Anthropic-compatible API.
 
+It also ships with a chat app of its own, which makes it a private ChatGPT for the household: web
+search, image generation and voice, with a login per person, reachable from any phone or laptop on
+your network.
+
 It is a single Go binary and one YAML file. It does not run models itself: it orchestrates the
 inference servers you already trust (llama-server, stable-diffusion.cpp, whisper.cpp, vLLM, TabbyAPI
-and anything else that speaks HTTP), decides what fits in your VRAM, launches them with computed
-flags, and tears them down when they are idle.
+and anything else that speaks HTTP), and tears them down when they are idle.
 
 ![Quartermaster dashboard](docs/assets/dashboard.webp)
 
 - Runs on your hardware
 - Bring your own models
+- Chat app with logins
 - OpenAI + Anthropic API
-- Text, image and audio
 - No telemetry
+
+## Quick start
+
+Take the setup program for your platform from the
+**[latest release](https://github.com/Quartermaster-Labs/Quartermaster/releases/latest)** and run
+it. It asks where to install, where your models live and which compute backend you need, fetches
+that backend, and launches Quartermaster. The built-in browser downloads models from there, marking
+which ones fit your GPU.
+
+- **Windows:** `quartermaster-setup-windows-amd64.exe`
+- **Linux and macOS:** `chmod +x` the `quartermaster-setup-` file for your platform, then run it
+
+Docker, the bare server binary and building from source are under
+[Installation](#installation).
 
 **Website: [quartermaster-labs.github.io/Quartermaster](https://quartermaster-labs.github.io/Quartermaster/)**
 for downloads, screenshots and the full user guide.
 **[User guide](docs/):** the same help wiki the app ships with, readable before you install anything.
-
-## Contents
-
-- [Why this exists](#why-this-exists)
-- [Automatic configuration](#automatic-configuration)
-- [Load planning](#load-planning)
-- [The playground](#the-playground)
-- [Finding and keeping models](#finding-and-keeping-models)
-- [Bring your own backend](#bring-your-own-backend)
-- [And much more](#and-much-more)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [How it works](#how-it-works)
-- [API surface](#api-surface)
-- [Operations](#operations)
-- [FAQ](#faq)
-- [License and origins](#license-and-origins)
 
 ## Why this exists
 
