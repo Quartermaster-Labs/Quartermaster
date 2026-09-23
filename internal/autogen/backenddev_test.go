@@ -223,8 +223,9 @@ func TestAutogen_ProbeEnv_PinsBusOrder(t *testing.T) {
 	}
 }
 
-// A single-GPU box is the population that never asked for any of this. It must
-// get no probe, no --device and no env block: byte-identical to what shipped.
+// A single-GPU box whose BACKEND also sees one GPU is the population that never
+// asked for any of this. It must get no probe, no --device and no env block:
+// byte-identical to what shipped.
 func TestAutogen_SingleGpu_EmitsNothingNew(t *testing.T) {
 	one := GpuSet{{Index: 0, Name: "NVIDIA GeForce RTX 4090", TotalGB: 24, FreeGB: 23}}
 	if devs, order := DeviceFlagFor(filepath.Join(t.TempDir(), "nope"), one, 0); devs != "" || order != nil {
@@ -235,6 +236,47 @@ func TestAutogen_SingleGpu_EmitsNothingNew(t *testing.T) {
 	if b.String() != "" {
 		t.Fatalf("single-GPU writeSingleDeviceEnv emitted %q, want nothing", b.String())
 	}
+}
+
+// The other single-GPU box: telemetry counts one card, the backend counts two.
+// An integrated adapter has no dedicated VRAM to plan against so the GPU set
+// drops it, but ROCm and Vulkan list it anyway, advertising shared system
+// memory as VRAM. Left unpinned, sd-server's own placement planner sizes against
+// a card whose kernels the build does not contain. Pin the real one.
+func TestAutogen_SingleGpu_PinsWhenBackendSeesMore(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "sd-server-no-such-file")
+	seedBackendDevCache(t, exe, []BackendDevice{
+		{ID: "ROCm0", Name: "AMD Radeon RX 7900 XTX", TotalGB: 23.98},
+		{ID: "ROCm1", Name: "AMD Radeon(TM) Graphics", TotalGB: 12.17},
+	})
+
+	one := GpuSet{{Index: 0, Name: "AMD Radeon RX 7900 XTX", TotalGB: 23.95, FreeGB: 23}}
+	var b strings.Builder
+	writeSingleDeviceEnv(&b, Settings{Gpus: one}, exe)
+
+	got := b.String()
+	if !strings.Contains(got, "HIP_VISIBLE_DEVICES=0") {
+		t.Fatalf("writeSingleDeviceEnv = %q, want a HIP pin to device 0", got)
+	}
+	// CUDA_DEVICE_ORDER means nothing to HIP and would be noise in the config.
+	if strings.Contains(got, "CUDA_DEVICE_ORDER") {
+		t.Fatalf("writeSingleDeviceEnv = %q, want no CUDA ordering for a ROCm pin", got)
+	}
+}
+
+// seedBackendDevCache plants a listing for an exe that will never run, so the
+// mapping is assertable without a backend binary. The cache key is the plain
+// path when the file does not exist (see ListBackendDevices).
+func seedBackendDevCache(t *testing.T, exe string, devs []BackendDevice) {
+	t.Helper()
+	backendDevMu.Lock()
+	backendDevCache[exe] = devs
+	backendDevMu.Unlock()
+	t.Cleanup(func() {
+		backendDevMu.Lock()
+		delete(backendDevCache, exe)
+		backendDevMu.Unlock()
+	})
 }
 
 // A generate reaches up to five distinct backend binaries. The per-probe window

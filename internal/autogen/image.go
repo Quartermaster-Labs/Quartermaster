@@ -163,9 +163,20 @@ func fileGB(p string) float64 {
 //   - the text encoder is on CPU by default (te=cpu) and charged only when an
 //     override pins it back onto the GPU.
 //
-// Floored at 1 GiB rather than 0, because 0 has a meaning of its own here
-// ("disables graph splitting"), which is the opposite of what a card this tight
-// wants.
+// When that subtraction leaves less than 1 GiB the answer is NOT a small
+// positive number. A literal --max-vram 1 is a one-gigabyte graph budget, which
+// is both the tightest legal value and an immediate GGML_ASSERT on a video
+// model, and 0 means something else again ("disables graph splitting"). So the
+// floor hands the question to sd-server instead, as --max-vram -1: a negative
+// value is the RESERVE, i.e. "use live free VRAM, sparing 1 GiB".
+//
+// Delegating is not a cop-out here, it is the more accurate answer. The
+// arithmetic above prices every component as GPU-resident, but sd-server's own
+// placement planner routinely parks the text encoder's and the VAE's params in
+// RAM, so `resident` overcharges by several GB and the budget it derives is far
+// below what the card will actually have free. Measured on LTX-2.5 (14.6GB DiT
+// + two VAEs on a 24GB card): the computed floor emitted --max-vram 1 and
+// crashed, while --max-vram -1 yielded a 23386 MiB budget and generated.
 func graphBudget(budget float64, row GgufRow, comp imageComponents, ov *Override, offload bool) float64 {
 	if offload {
 		return budget
@@ -182,7 +193,7 @@ func graphBudget(budget float64, row GgufRow, comp imageComponents, ov *Override
 		// float64 subtraction renders as 7.689999999999999.
 		return float64(int(g*10)) / 10
 	}
-	return 1
+	return -1
 }
 
 // emitImageModel writes an sd-server YAML entry for a diffusion GGUF. The
@@ -586,6 +597,30 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	// on a tight (8GB) card, so keep it on by default. Quality is steps/cfg, not this.
 	if ov == nil || ov.VaeTiling != "off" {
 		lines = append(lines, "--vae-tiling")
+	}
+	// A video VAE needs the tile SIZED as well as switched on, and the default
+	// is wrong for it by two orders of magnitude of memory.
+	//
+	// --vae-tile-size is in LATENT units and defaults to 32x32. On an image VAE
+	// (8x spatial compression) that is a 256x256 pixel tile, which is the small
+	// tile it reads as. LTX's video VAE compresses 32x spatially, so the SAME
+	// default is a 1024x1024 pixel tile, and its decode graph asks for ~12.8GB.
+	// Measured: a 24GB card with the DiT resident cannot serve that, and the
+	// failure is not an OOM message but "ltx_video_vae segment 1/1 (graph)
+	// failed during weight preparation" -> "generate_video returned no results",
+	// i.e. tiling is nominally ON and the clip still never decodes.
+	//
+	// So express the tile as a FRACTION of the frame instead, which is
+	// compression-ratio independent: --vae-relative-tile-size takes <1 as a
+	// fraction, and 0.5x0.5 is four spatial tiles whatever the VAE's stride.
+	// Halves rather than quarters because per-tile graph overhead dominates once
+	// the tiles are small - measured at 1280x704x49, 0.25x0.25 decoded in 47.1s
+	// across 42 tiles and 0.5x0.5 in 23.1s across 6.
+	//
+	// Image models are left on the default: 256x256 tiles are what the rest of
+	// sd.cpp's VAE handling is tuned around, and nothing there is failing.
+	if vid.is() && (ov == nil || ov.VaeTiling != "off") {
+		lines = append(lines, "--vae-relative-tile-size 0.5x0.5")
 	}
 	// Video-only VRAM levers. --vae-tiling above chunks the decode spatially; a
 	// clip's decode also grows along TIME with --video-frames and only

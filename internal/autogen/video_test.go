@@ -336,9 +336,12 @@ func TestGraphBudget_PricesHeadroomNotTheCard(t *testing.T) {
 	if got := graphBudget(22.3, row, comp, nil, true); got != 22.3 {
 		t.Errorf("offloaded: graphBudget = %v, want 22.3", got)
 	}
-	// Never 0: that value means "disable graph splitting" to sd.cpp, which is
-	// the opposite of what a card with no headroom left wants.
-	if got := graphBudget(14.0, row, comp, nil, false); got != 1 {
-		t.Errorf("over budget: graphBudget = %v, want the 1GB floor", got)
+	// No headroom left hands the question to sd-server rather than guessing a
+	// small positive number: -1 is the RESERVE form ("live free VRAM, sparing
+	// 1 GiB"). Neither 0 (which means "disable graph splitting") nor a literal
+	// 1 (a one-gigabyte graph budget, which GGML_ASSERTs on a video model) is
+	// the answer, and the planner knows where the params actually landed.
+	if got := graphBudget(14.0, row, comp, nil, false); got != -1 {
+		t.Errorf("over budget: graphBudget = %v, want the -1 reserve form", got)
 	}
 }
