@@ -3,13 +3,14 @@
   import { push } from "svelte-spa-router";
   import { get } from "svelte/store";
   import { FolderOpen, Layers, MoreVertical, X } from "lucide-svelte";
-  import { models, loadModel, getSettings, pickModelsFolder, pickLoraFolder } from "../stores/api";
+  import { models, loadModel, getSettings, pickModelsFolder, pickLoraFolder, getModelDeletePlan, deleteModelFiles } from "../stores/api";
+  import { askConfirm, notify } from "../lib/confirm";
   import { persistentStore } from "../stores/persistent";
   import { playgroundPort } from "../stores/playgroundAuth";
   import { isNative } from "../lib/native";
   import { openTab } from "../stores/appTabs";
   import { modelCategory, MODEL_CATEGORIES, playgroundTarget, type ModelCategory } from "../lib/modelUtils";
-  import { nextSort, type SortDir, type SortKey, type StateFilter } from "../lib/modelTable";
+  import { nextSort, fmtGB, type SortDir, type SortKey, type StateFilter } from "../lib/modelTable";
   import type { Model } from "../lib/types";
   import ModelConfigModal from "./ModelConfigModal.svelte";
   import ModelsTable from "./ModelsTable.svelte";
@@ -254,6 +255,39 @@
     chatWith(m);
   }
 
+  // Trash button: ask the server what the delete would remove (the same
+  // function the DELETE runs), spell it out, and only then remove.
+  const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;
+  const gb = (bytes: number) => `${fmtGB(bytes / 2 ** 30)} GB`;
+  const fileList = (files: { path: string }[]) => files.map((f) => `• ${baseName(f.path)}`).join("\n");
+  async function deleteModel(m: Model): Promise<void> {
+    let plan;
+    try {
+      plan = await getModelDeletePlan(m.id);
+    } catch (e) {
+      await notify("Cannot delete this model", e instanceof Error ? e.message : String(e));
+      return;
+    }
+    const parts = [`Deletes from disk (${gb(plan.bytes)}):\n${fileList(plan.files)}`];
+    parts.push(`Removes from the catalog: ${plan.removes.join(", ")}`);
+    if (plan.running?.length) parts.push(`Unloads first: ${plan.running.join(", ")}`);
+    if (plan.usedBy?.length) parts.push(`Also named by ${plan.usedBy.join(", ")} (e.g. as a draft model), which will lose it.`);
+    if (plan.kept?.length) parts.push(`Kept in the folder:\n${fileList(plan.kept)}`);
+    parts.push("This cannot be undone.");
+    const ok = await askConfirm({
+      title: `Delete ${baseName(plan.files[0]?.path ?? m.id)}?`,
+      body: parts.join("\n\n"),
+      confirmLabel: `Delete ${gb(plan.bytes)}`,
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await deleteModelFiles(m.id);
+    } catch (e) {
+      await notify("Delete failed", e instanceof Error ? e.message : String(e));
+    }
+  }
+
   async function handleLoadModel(modelId: string): Promise<void> {
     if (pendingLoads[modelId]) return;
     const controller = new AbortController();
@@ -477,6 +511,7 @@
     canPlay={playable}
     {playLabel}
     onConfig={openConfig}
+    onDelete={deleteModel}
     {onSort}
   />
 

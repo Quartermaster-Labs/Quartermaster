@@ -680,6 +680,32 @@ export async function deleteModelDisplayName(model: string): Promise<void> {
   }
 }
 
+// What deleting a model's weights would remove (internal/server/modeldelete.go).
+export interface ModelDeletePlan {
+  model: string;
+  files: { path: string; size: number }[];
+  bytes: number;
+  removes: string[];
+  running?: string[];
+  usedBy?: string[];
+  kept?: { path: string; size: number }[];
+}
+
+export async function getModelDeletePlan(model: string): Promise<ModelDeletePlan> {
+  const response = await fetch(`/api/models/${encodeURIComponent(model)}/delete-plan`);
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return response.json();
+}
+
+export async function deleteModelFiles(model: string): Promise<void> {
+  const response = await fetch(`/api/models/${encodeURIComponent(model)}/files`, { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+}
+
 export async function putModelVariant(
   model: string,
   variant: ModelVariant,
