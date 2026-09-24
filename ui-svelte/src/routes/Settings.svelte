@@ -2,7 +2,7 @@
   import { tip } from "../lib/tooltip";
   import { onMount } from "svelte";
   import { SlidersHorizontal, HardDrive, Cpu, FolderOpen, Trash2, Star, Plus, Power, HelpCircle, Palette } from "lucide-svelte";
-  import { getSettings, putSettings, putSlotCache, putBackends, putGuards, putAdvanced, resetAdvanced, pickFolder, pickBackend, resetSettings, getAutostart, putAutostart, fetchProcessSettings, putProcessSettings, listPromptEnhancers, savePromptEnhancers, models, type AppSettings, type BackendEntry, type AutostartStatus, type ProcessSettingsResponse } from "../stores/api";
+  import { getSettings, putSettings, putSlotCache, putBackends, putGuards, putAdvanced, resetAdvanced, pickFolder, pickBackend, resetSettings, getAutostart, putAutostart, fetchProcessSettings, putProcessSettings, listPromptEnhancers, savePromptEnhancers, listExtraModels, saveExtraModels, pickFileOfKind, models, type AppSettings, type BackendEntry, type AutostartStatus, type ProcessSettingsResponse, type ExtraModelInfo } from "../stores/api";
   import type { PromptEnhancerInfo } from "../lib/types";
   import { BACKEND_CLASSES, backendClass, backendClasses, backendServesClass, type BackendClassDef } from "../lib/backends";
   import ManagedBackends from "../components/ManagedBackends.svelte";
@@ -608,6 +608,99 @@
     }
   }
 
+  // --- Manual image models (hand-declared diffusion checkpoints) ---
+  // Same shape as the enhancer table: one whole-table save, because each write
+  // regenerates the config. Rows the generate file owns are read-only here and
+  // never sent back; only "ui" rows save.
+  let extraModels = $state<ExtraModelInfo[]>([]);
+  let extraOpen = $state(false);
+  let savingExtra = $state(false);
+  let extraErr = $state<string | null>(null);
+  let extraSaved = $state(false);
+  let extraFlashTimer: ReturnType<typeof setTimeout> | undefined;
+
+  type ExtraPathField = "modelPath" | "vaePath" | "llmPath" | "clipLPath" | "clipGPath" | "t5Path";
+  const EXTRA_PATH_FIELDS: [ExtraPathField, string][] = [
+    ["modelPath", "Model file"],
+    ["vaePath", "VAE"],
+    ["llmPath", "LLM encoder"],
+    ["clipLPath", "CLIP-L"],
+    ["clipGPath", "CLIP-G"],
+    ["t5Path", "T5-XXL"],
+  ];
+
+  async function loadExtraModels(): Promise<void> {
+    try {
+      extraModels = await listExtraModels();
+    } catch (e) {
+      extraErr = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  function addExtraModel(): void {
+    extraModels = [
+      ...extraModels,
+      {
+        name: "",
+        modelPath: "",
+        modelFlag: "--diffusion-model",
+        vaePath: "",
+        llmPath: "",
+        clipLPath: "",
+        clipGPath: "",
+        t5Path: "",
+        source: "ui",
+      },
+    ];
+    extraOpen = true;
+    extraSaved = false;
+  }
+
+  function removeExtraModel(i: number): void {
+    extraModels = extraModels.filter((_, j) => j !== i);
+    extraSaved = false;
+  }
+
+  async function saveExtra(): Promise<void> {
+    if (savingExtra) return;
+    savingExtra = true;
+    extraErr = null;
+    extraSaved = false;
+    try {
+      // Trim so stray whitespace cannot sneak past the server's path checks.
+      const uiRows = extraModels
+        .filter((m) => m.source === "ui")
+        .map((m) => ({
+          ...m,
+          name: m.name.trim(),
+          modelPath: m.modelPath.trim(),
+          vaePath: m.vaePath.trim(),
+          llmPath: m.llmPath.trim(),
+          clipLPath: m.clipLPath.trim(),
+          clipGPath: m.clipGPath.trim(),
+          t5Path: m.t5Path.trim(),
+        }));
+      await saveExtraModels(uiRows);
+      await loadExtraModels(); // reflect what the server kept
+      extraSaved = true;
+      clearTimeout(extraFlashTimer);
+      extraFlashTimer = setTimeout(() => (extraSaved = false), 2500);
+    } catch (e) {
+      extraErr = e instanceof Error ? e.message : String(e);
+    } finally {
+      savingExtra = false;
+    }
+  }
+
+  async function browse(i: number, field: ExtraPathField): Promise<void> {
+    try {
+      const path = await pickFileOfKind("weights");
+      if (path !== null) extraModels[i][field] = path;
+    } catch (e) {
+      extraErr = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   // Friendly readout for the idle-eviction seconds field.
   const ttlHuman = $derived(
     Number(tTtl) <= 0 ? "never auto-unload" : Number(tTtl) % 60 === 0 ? `${Number(tTtl) / 60} min` : `${tTtl}s`,
@@ -730,6 +823,7 @@
     loadAutostart();
     loadProcSettings();
     loadPromptEnhancers();
+    loadExtraModels();
   });
 </script>
 
@@ -1749,6 +1843,105 @@
               {/if}
             </span>
             <button class="btn btn--sm" disabled={savingEnhancers} onclick={saveEnhancers}>
+              Save
+            </button>
+          </span>
+        </div>
+        {/if}
+      </div>
+
+      <!-- Manual image models: hand-wired safetensors the scan cannot
+           classify. Collapsed by default like the tables above; rows the
+           generate file owns are shown read-only. -->
+      <div class="mt-6">
+        <div class="flex items-baseline gap-2 mb-1">
+          <button
+            class="flex items-baseline gap-2 text-txtsecondary hover:text-txtmain"
+            onclick={() => (extraOpen = !extraOpen)}
+            aria-expanded={extraOpen}
+          >
+            <h6 class="!m-0">Manual image models</h6>
+            <span class="text-micro">{extraOpen ? "▾" : "▸"}</span>
+            <span class="text-micro font-mono text-txtsecondary">{extraModels.length}</span>
+          </button>
+          {@render hint("For image models Quartermaster cannot detect on its own, typically single-file .safetensors diffusion models that need a separate VAE and text encoder. Each row becomes a normal model entry; tune cfg, steps and offload in that model's config editor.")}
+          <button
+            type="button"
+            class="btn btn--sm ml-auto shrink-0 inline-flex items-center gap-1 uppercase tracking-wide hover:border-primary hover:text-primary"
+            onclick={addExtraModel}
+          ><Plus size={12} /> Add</button>
+        </div>
+
+        {#if extraOpen}
+        <p class="text-[0.7rem] text-txtsecondary mb-4">
+          Use --diffusion-model for a bare DiT with separate encoders, -m for an all-in-one
+          checkpoint. Rows from the generate file are read-only here.
+        </p>
+
+        {#if extraModels.length === 0}
+          <p class="px-3 py-2.5 text-[0.7rem] text-txtsecondary">None configured.</p>
+        {:else}
+          <div class="flex flex-col gap-3">
+            {#each extraModels as m, i (i)}
+              <section class="rounded-md border border-card-border bg-surface/40 p-3 flex flex-col gap-2">
+                <div class="flex flex-wrap items-center gap-2">
+                  <input
+                    type="text" bind:value={m.name} placeholder="served id, e.g. my-flux-dit"
+                    disabled={m.source === "file"}
+                    class="flex-1 min-w-[16rem] font-mono text-label rounded border border-card-border bg-surface px-2 py-1 text-txtmain placeholder:text-txtsecondary/60 focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  {#if m.source === "file"}
+                    <span class="shrink-0 text-micro text-txtsecondary">generate file</span>
+                  {/if}
+                  <select
+                    bind:value={m.modelFlag} disabled={m.source === "file"}
+                    aria-label="Model flag"
+                    class="shrink-0 rounded border border-card-border bg-surface px-2 py-1 text-label text-txtmain focus:outline-none focus:ring-2 focus:ring-primary"
+                  >
+                    <option value="--diffusion-model">--diffusion-model</option>
+                    <option value="-m">all-in-one (-m)</option>
+                  </select>
+                  {#if m.source !== "file"}
+                    <button
+                      type="button" use:tip={"Remove model"} aria-label="Remove model"
+                      class="ml-auto shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-error hover:border-error transition-colors"
+                      onclick={() => removeExtraModel(i)}
+                    ><Trash2 size={14} /></button>
+                  {/if}
+                </div>
+
+                <div class="grid grid-cols-[6rem_1fr_auto] gap-2 items-center">
+                  {#each EXTRA_PATH_FIELDS as [field, label] (field)}
+                    <span class="text-micro text-txtsecondary">{label}</span>
+                    <input
+                      type="text" bind:value={m[field]} disabled={m.source === "file"} aria-label={label}
+                      class="w-full font-mono text-label rounded border border-card-border bg-surface px-2 py-1 text-txtmain placeholder:text-txtsecondary/60 focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                    {#if m.source === "file"}
+                      <span></span>
+                    {:else}
+                      <button type="button" class="btn btn--sm" onclick={() => browse(i, field)}>Browse</button>
+                    {/if}
+                  {/each}
+                </div>
+              </section>
+            {/each}
+          </div>
+        {/if}
+
+        <div class="mt-3 flex items-center justify-between gap-3">
+          <span class="text-micro text-txtsecondary">Saves the whole table; regenerates the config and hot-reloads.</span>
+          <span class="flex items-center gap-3">
+            <span class="text-micro">
+              {#if extraErr}
+                <span class="text-error">{extraErr}</span>
+              {:else if savingExtra}
+                <span class="text-txtsecondary">Saving…</span>
+              {:else if extraSaved}
+                <span class="text-primary">Saved!</span>
+              {/if}
+            </span>
+            <button class="btn btn--sm" disabled={savingExtra} onclick={saveExtra}>
               Save
             </button>
           </span>

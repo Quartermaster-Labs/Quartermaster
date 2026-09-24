@@ -123,6 +123,12 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   model id but keeping the FIRST position, so editing a row does not make it jump to the bottom
   of the settings table. `SystemPrompt` is deliberately NOT trimmed: the leading indentation and
   trailing newline of a published PE prompt are part of the prompt),
+  `LoadSidecarExtraImageModels`/`UpsertSidecarExtraImageModels` (**the "Add model manually"
+  table**. Unlike every other top-level list this one EXTENDS the generate file's
+  `settings.extraImageModels` instead of replacing it (`mergeExtraImageModels`): a UI row
+  replaces the file row of the same name in place, the rest append. Replace semantics would
+  either hide a power user's hand-written rows from generation or copy them into the sidecar on
+  the first save),
   `LoadSidecarAPIKeys`/`UpsertSidecarAPIKey`/`DeleteSidecarAPIKey`,
   `LoadSidecarBackendSources`/`UpsertSidecarBackendSources` (**tracked GitHub repos the in-app
   installer downloads builds from** — deliberately separate from `BackendList`: a

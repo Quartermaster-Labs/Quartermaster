@@ -79,6 +79,7 @@ flag-override cmd — no persistence, no reload); `PUT`/`DELETE /api/models/{mod
 `PUT`/`DELETE /api/settings/advanced`; `GET`/`PUT /api/settings/app` (**ports, dashboard access,
 update polling, HF token — the only settings route that neither regenerates nor reloads; it takes
 effect at the next start**); `PUT /api/default-variants`;
+`GET`/`PUT /api/extra-models` (the manual image-model table, see `configapi.md`);
 `POST /api/pick-folder` + `POST /api/settings/root/pick` + `POST /api/settings/loradir/pick`
 (the latter two are the Models page's per-category scan and LoRA folders; both 400 on a category
 outside `autogen.CategoryOrder`, and BOTH take `{clear:true}` to drop back to the default -- a

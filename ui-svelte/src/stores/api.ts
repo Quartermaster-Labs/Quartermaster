@@ -793,6 +793,47 @@ export async function savePromptEnhancers(
   }
 }
 
+// ExtraModelInfo is one hand-declared image model (Settings > "Add model
+// manually"): a safetensors DiT the scan can't classify, wired from explicit
+// paths. source "file" rows come from the generate file and are read-only in
+// the UI; only "ui" rows are sent back on save. Tuning (cfg, steps, offload)
+// is done in the model's own config editor, not here.
+export interface ExtraModelInfo {
+  name: string;
+  modelPath: string;
+  modelFlag: "" | "-m" | "--diffusion-model";
+  vaePath: string;
+  llmPath: string;
+  clipLPath: string;
+  clipGPath: string;
+  t5Path: string;
+  source: "ui" | "file";
+}
+
+export async function listExtraModels(): Promise<ExtraModelInfo[]> {
+  const response = await fetch("/api/extra-models");
+  if (!response.ok) {
+    throw new Error(
+      `Failed to load manual models: ${response.status} ${await response.text()}`,
+    );
+  }
+  return (await response.json()) || [];
+}
+
+// Replace the UI-owned rows (pass only source "ui" rows). The server checks
+// every path exists and refuses a name a discovered model already uses (409),
+// then regenerates + reloads.
+export async function saveExtraModels(list: ExtraModelInfo[]): Promise<void> {
+  const response = await fetch("/api/extra-models", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(list),
+  });
+  if (!response.ok) {
+    throw new Error(`Save failed: ${(await response.text()).trim()}`);
+  }
+}
+
 // DetectedEnhancer is a catalog model whose NAME says it is a prompt rewriter
 // (Qwen-Image-2.1-PE-I2I and friends). Suggestions only: the model editor's
 // enhancer fields stay free text, because no classifier covers every name a

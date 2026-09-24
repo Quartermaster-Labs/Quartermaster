@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/quartermaster-labs/quartermaster/internal/config"
@@ -131,8 +132,15 @@ type sidecar struct {
 	// user's system prompts - and omitempty so removing the last enhancer reverts
 	// to whatever the generate file declares.
 	PromptEnhancers []PromptEnhancer `yaml:"promptEnhancers,omitempty"`
-	App             *AppSettings     `yaml:"app,omitempty"`
-	Overrides       []Override       `yaml:"overrides"`
+	// ExtraImageModels are image models added by hand from the Settings page
+	// (safetensors DiTs the scan cannot classify). Unlike promptEnhancers these
+	// EXTEND the generate file's settings.extraImageModels instead of replacing
+	// it: a file entry is a power user's hand-written block the UI never showed
+	// as its own, so saving the table must not copy it here or delete it. A
+	// sidecar row whose name matches a file row wins (see mergeExtraImageModels).
+	ExtraImageModels []ExtraImageModel `yaml:"extraImageModels,omitempty"`
+	App              *AppSettings      `yaml:"app,omitempty"`
+	Overrides        []Override        `yaml:"overrides"`
 }
 
 // BackendExes holds the dashboard-editable backend executable paths. Empty field
@@ -318,6 +326,69 @@ func UpsertSidecarPromptEnhancers(generatePath string, list []PromptEnhancer) er
 		sc.PromptEnhancers = cleaned
 	}
 	return writeSidecar(generatePath, sc)
+}
+
+// LoadSidecarExtraImageModels returns the UI-added image models, or nil when
+// the sidecar has none.
+func LoadSidecarExtraImageModels(generatePath string) ([]ExtraImageModel, error) {
+	sc, err := loadSidecar(generatePath)
+	if err != nil {
+		return nil, err
+	}
+	return sc.ExtraImageModels, nil
+}
+
+// UpsertSidecarExtraImageModels replaces the UI-owned extra-model list
+// wholesale. Rows missing a name or model path are dropped, and a duplicate
+// name keeps the LAST occurrence in the first one's position, for the same
+// reason as UpsertSidecarPromptEnhancers: the served id is the key downstream.
+func UpsertSidecarExtraImageModels(generatePath string, list []ExtraImageModel) error {
+	sc, err := loadSidecar(generatePath)
+	if err != nil {
+		return err
+	}
+	seen := map[string]int{}
+	cleaned := make([]ExtraImageModel, 0, len(list))
+	for _, m := range list {
+		m.Name = strings.TrimSpace(m.Name)
+		m.ModelPath = strings.TrimSpace(m.ModelPath)
+		if m.Name == "" || m.ModelPath == "" {
+			continue
+		}
+		key := strings.ToLower(m.Name)
+		if at, dup := seen[key]; dup {
+			cleaned[at] = m
+			continue
+		}
+		seen[key] = len(cleaned)
+		cleaned = append(cleaned, m)
+	}
+	if len(cleaned) == 0 {
+		sc.ExtraImageModels = nil
+	} else {
+		sc.ExtraImageModels = cleaned
+	}
+	return writeSidecar(generatePath, sc)
+}
+
+// mergeExtraImageModels overlays the UI-added models on the generate file's:
+// a UI row replaces the file row of the same name in place, the rest append.
+func mergeExtraImageModels(file, side []ExtraImageModel) []ExtraImageModel {
+	if len(side) == 0 {
+		return file
+	}
+	out := slices.Clone(file)
+	for _, m := range side {
+		at := slices.IndexFunc(out, func(f ExtraImageModel) bool {
+			return strings.EqualFold(strings.TrimSpace(f.Name), m.Name)
+		})
+		if at >= 0 {
+			out[at] = m
+		} else {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // loadSidecar reads the whole sidecar, returning a zero value when absent.

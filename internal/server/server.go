@@ -1105,6 +1105,8 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/prompt-enhancers", adminChain.ThenFunc(s.handlePromptEnhancersGet))
 	mux.Handle("PUT /api/prompt-enhancers", adminChain.ThenFunc(s.handlePromptEnhancersPut))
 	mux.Handle("GET /api/prompt-enhancers/detected", adminChain.ThenFunc(s.handlePromptEnhancersDetected))
+	mux.Handle("GET /api/extra-models", adminChain.ThenFunc(s.handleExtraModelsGet))
+	mux.Handle("PUT /api/extra-models", adminChain.ThenFunc(s.handleExtraModelsPut))
 
 	var h http.Handler = chain.New(CreateRequestLogMiddleware(s.proxylog), CreateCORSMiddleware()).Then(mux)
 	s.handler.Store(&h)

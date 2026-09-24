@@ -1465,6 +1465,13 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 	if sideEnh != nil {
 		gf.Settings.PromptEnhancers = sideEnh
 	}
+	// UI-added image models EXTEND the file's list (not replace): see the
+	// sidecar field's comment for why.
+	sideExtra, err := LoadSidecarExtraImageModels(path)
+	if err != nil {
+		return GenerateFile{}, err
+	}
+	gf.Settings.ExtraImageModels = mergeExtraImageModels(gf.Settings.ExtraImageModels, sideExtra)
 	// UI-owned slot-KV block overlays the generate file's settings.slotCache.
 	sideSlot, err := LoadSidecarSlotCache(path)
 	if err != nil {
