@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -330,7 +331,7 @@ func HFWeightBytes(dir string) int64 {
 func emitHFModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, name string, emitted *[]string) error {
 	be := resolveBackendPreferring(s, ov, "llm", "vllm")
 	if !strings.EqualFold(be.Kind, "vllm") {
-		return fmt.Errorf("safetensors model folder needs a vllm backend (add one under Settings > Backends); llama.cpp loads gguf only")
+		return fmt.Errorf("safetensors model folder needs a vllm backend; llama.cpp loads gguf only. %s", hfSkipHint(runtime.GOOS))
 	}
 	meta, err := ReadHFMetadata(row.FullPath)
 	if err != nil {
@@ -345,4 +346,14 @@ func emitHFModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, name
 func hfLayerHasKV(layerType string) bool {
 	lt := strings.ToLower(layerType)
 	return !strings.Contains(lt, "linear") && !strings.Contains(lt, "mamba") && !strings.Contains(lt, "ssm")
+}
+
+// hfSkipHint is the next step a skipped HF folder's comment points at. vllm is
+// Linux-only, so on Windows "add a vllm backend" is advice nobody can follow:
+// the one real way to run the model there is a gguf conversion of it.
+func hfSkipHint(goos string) string {
+	if goos == "windows" {
+		return "vllm does not run on Windows: download a GGUF build of this model instead"
+	}
+	return "Add one under Settings > Backends"
 }

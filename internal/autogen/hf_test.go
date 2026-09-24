@@ -339,3 +339,12 @@ func TestInputsHash_SeesHFFolders(t *testing.T) {
 		t.Error("adding an HF folder left the inputs hash unchanged")
 	}
 }
+
+func TestHFSkipHint_WindowsPointsAtGguf(t *testing.T) {
+	if h := hfSkipHint("windows"); !strings.Contains(h, "GGUF") || strings.Contains(h, "Settings > Backends") {
+		t.Errorf("windows hint must point at a gguf, not an uninstallable backend: %q", h)
+	}
+	if h := hfSkipHint("linux"); !strings.Contains(h, "Settings > Backends") {
+		t.Errorf("linux hint must point at the backends page: %q", h)
+	}
+}
