@@ -203,10 +203,11 @@ func resolveBackendPreferring(s Settings, ov *Override, class, preferKind string
 	return resolveBackend(s, ov, class)
 }
 
-// vllmCmdLines builds the vllm argv (exe first) for a gguf served through vllm.
-// Shared by emitVllmModel (YAML emit) and RenderSoloCmd (editor preview) so the
-// launch-parameters box matches a save. vllm loads the SAME gguf QM discovered
-// (--quantization gguf); no per-model VRAM sizing — vllm's allocator fits inside
+// vllmCmdLines builds the vllm argv (exe first) for a gguf or an HF folder
+// served through vllm. Shared by emitVllmModel (YAML emit) and RenderSoloCmd
+// (editor preview) so the launch-parameters box matches a save. vllm loads the
+// SAME file QM discovered (--quantization gguf for a gguf; an HF folder names its
+// own quantization in config.json); no per-model VRAM sizing — vllm's allocator fits inside
 // --gpu-memory-utilization. Ctx maps to --max-model-len (caps the KV window).
 func vllmCmdLines(s Settings, row GgufRow, ov *Override, name string, be resolvedBackend, meta Metadata) []string {
 	modelPath := strings.ReplaceAll(row.FullPath, "\\", "/")
@@ -224,9 +225,13 @@ func vllmCmdLines(s Settings, row GgufRow, ov *Override, name string, be resolve
 		"--host 127.0.0.1",
 		"--port ${PORT}",
 		"--served-model-name " + imageArg(name),
-		"--quantization gguf",
-		fmt.Sprintf("--gpu-memory-utilization %g", round2(util)),
 	}
+	// An HF folder carries its own quantization_config (or none), which vllm reads
+	// itself; forcing gguf there makes it look for a .gguf that is not in it.
+	if !row.IsHF {
+		lines = append(lines, "--quantization gguf")
+	}
+	lines = append(lines, fmt.Sprintf("--gpu-memory-utilization %g", round2(util)))
 	if ctx > 0 {
 		lines = append(lines, fmt.Sprintf("--max-model-len %d", ctx))
 	}
@@ -257,7 +262,7 @@ func vllmCmdLines(s Settings, row GgufRow, ov *Override, name string, be resolve
 // default /health probe fits vllm too). Named/ctx-tier variants are NOT emitted
 // for vllm: the llama profile/KV sizing that produces them doesn't apply here.
 func emitVllmModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, name string, be resolvedBackend, meta Metadata, emitted *[]string) {
-	if isSplitGguf(row) {
+	if !row.IsHF && isSplitGguf(row) {
 		// Discovery represents a split set by shard 1 alone, which is all
 		// llama.cpp needs — it opens the sibling shards itself. vllm does not:
 		// it would load a fifth of the weights and fail somewhere downstream.
@@ -270,8 +275,12 @@ func emitVllmModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, na
 	lines := vllmCmdLines(s, row, ov, name, be, meta)
 	ctx, ctxNote := vllmMaxModelLen(s, ov, row, meta)
 	util, utilNote := vllmGpuUtil(s, ov)
-	fmt.Fprintf(b, "\n  # arch=%s size=%gGB (vllm, gguf, gpu-util=%g [%s], max-model-len=%d [%s])\n",
-		meta.Architecture, row.SizeGB, round2(util), utilNote, ctx, ctxNote)
+	format := "gguf"
+	if row.IsHF {
+		format = "safetensors"
+	}
+	fmt.Fprintf(b, "\n  # arch=%s size=%gGB (vllm, %s, gpu-util=%g [%s], max-model-len=%d [%s])\n",
+		meta.Architecture, row.SizeGB, format, round2(util), utilNote, ctx, ctxNote)
 	fmt.Fprintf(b, "  %q:\n", name)
 	b.WriteString("    cmd: >\n")
 	for _, line := range lines {

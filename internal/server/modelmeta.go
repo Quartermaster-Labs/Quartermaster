@@ -149,6 +149,9 @@ func statSizeGB(path string) float64 {
 			return -1
 		}
 		total = fi.Size()
+		if fi.IsDir() {
+			total = autogen.HFWeightBytes(path) // a vllm-served HF folder
+		}
 	}
 	return float64(total) / (1024 * 1024 * 1024)
 }

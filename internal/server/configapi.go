@@ -259,7 +259,8 @@ func (s *Server) handleAPIModelConfigGet(w http.ResponseWriter, r *http.Request)
 	}
 	// Read trained ctx + MTP capability from the gguf header (cheap; header only).
 	// Non-fatal: a missing/unreadable gguf just leaves the slider ceiling at 0.
-	if meta, err := autogen.ReadGgufMetadataCached(gguf); err == nil {
+	// An HF folder answers from its config.json.
+	if meta, err := autogen.ReadModelMetadata(gguf); err == nil {
 		resp.MaxCtx = int(meta.ContextLength)
 		resp.BlockCount = int(meta.BlockCount)
 		// MTP-capable via baked-in nextn layers, a paired mtp-* sidecar, or an
@@ -587,8 +588,16 @@ func (s *Server) handleAPIModelCmdPreview(w http.ResponseWriter, r *http.Request
 	// renders from the path alone (RenderSoloCmd takes the trellis branch before it
 	// touches the metadata), which is the same reason emitModel routes one before
 	// the metadata read. Anything else must parse, or the path is broken.
+	// An HF folder is the same kind of case, except its config.json stands in for
+	// the header, since the vllm window is sized from it.
 	if autogen.IsTrellisPackageDir(gguf) {
 		row.IsTrellis = true
+	} else if hf, ok := autogen.HFRowFor(gguf); ok {
+		row = hf
+		if meta, err = autogen.ReadHFMetadata(gguf); err != nil {
+			shared.SendResponse(w, r, http.StatusInternalServerError, "reading config.json failed: "+err.Error())
+			return
+		}
 	} else if meta, err = autogen.ReadGgufMetadataCached(gguf); err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, "reading gguf metadata failed: "+err.Error())
 		return

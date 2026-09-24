@@ -47,7 +47,8 @@ each emitter reads only its own, so switching kind never wipes the dormant set.
 
 Kind `vllm` → `emitVllmModel`, a totally different arg set: llama's KV / `-ngl` / spec / DRY
 knobs are ignored; only `Ctx`→`--max-model-len`, `VllmGpuUtil`, `VllmTensorParallel`,
-`VllmTokenizer` apply. It serves the SAME discovered gguf (`--quantization gguf`), and there
+`VllmTokenizer` apply. It serves the SAME discovered gguf (`--quantization gguf`) or HF
+folder (below), and there
 are **no ctx-tier or named variants** for vllm (the llama profile loop that makes them is
 skipped). A chosen `llama` build just swaps `s.ServerExe` (local copy) through the normal path.
 
@@ -70,6 +71,47 @@ skipped). A chosen `llama` build just swaps `s.ServerExe` (local copy) through t
 which is all llama.cpp needs (it opens the siblings itself) — vllm would load a fifth of the
 weights. `emitVllmModel` writes a `# skipped` comment and leaves the model out of `emitted`;
 `RenderSoloCmd` errors for the same case (`isSplitGguf`).
+
+### Hugging Face folders (`hf.go`)
+
+An unconverted HF model (`config.json` + `*.safetensors`) is a `GgufRow` with `IsHF` and
+`FullPath` = the FOLDER, which is what `vllm serve` takes. Detection is deliberately narrow,
+because a models tree is full of folders that look like this and are not chat models (TRELLIS's
+DINOv3 backbone, ModernBERT classifiers, diffusion components). A folder qualifies only when
+all three rules hold:
+
+1. `config.json` names `*ForCausalLM`, or `*ForConditionalGeneration` with a `text_config`
+   or `vision_config`. Seq2seq models (T5, Whisper) share that suffix and carry neither.
+2. There is at least one direct `*.safetensors`.
+3. There is no direct `*.gguf`. A conversion kept beside its source is the same model twice,
+   and the gguf is the file every backend can run.
+
+The walk does NOT stop at an HF folder, so a gguf in a subfolder is still found.
+
+- **Routing.** `emitHFModel` resolves with `resolveBackendPreferring(..., "llm", "vllm")`, so
+  vllm wins over a ★ llama default. llama.cpp cannot read safetensors at all. With no vllm
+  entry the model is `# SKIPPED` with the reason, never emitted as a llama command. An HF row
+  skips the gguf pipeline (`skipsGgufPipeline`), including dir-local and family sidecar
+  pairing. `filepath.Dir` of a folder is its PARENT, whose projector belongs to another model.
+- **Metadata.** `ReadHFMetadata` maps config.json onto `Metadata`, so `vllmMaxModelLen` runs
+  the same KV math, reading the nested `text_config` for multimodal wrappers. It is
+  conservative where config.json is ambiguous:
+  - sliding-window layers are charged as full-attention layers;
+  - `layer_types` linear/mamba/ssm layers carry no KV;
+  - a `layer_types` list whose length disagrees with the layer count is ignored.
+
+  `TestVllmMaxModelLen_HFParityWithGguf` pins the mapping against the gguf shape.
+- **Args.** No `--quantization gguf`, because an HF folder names its own
+  `quantization_config`. `hfQuant` labels the row: the AWQ/GPTQ/FP8 method, else the BF16/F16
+  dtype. The id is the folder name plus the quant.
+- **HF cache layout.** In `models--<owner>--<repo>/snapshots/<commit>/` the folder name is a
+  commit hash, so `hfCacheRepo` takes the id from the grandparent instead. Weights there are
+  symlinks, so sizes are `os.Stat`, not `DirEntry.Info`.
+- **Server side.** `ReadModelMetadata` and `HFRowFor` let path-holding callers (the editor
+  preview, the trained-ctx read) handle a folder without a `GgufRow`. `config.ParseCmd` reads
+  vllm's positional `serve <model>` as `ModelPath`, without which no vllm entry could be saved
+  from the editor. The regen hash also stats `.safetensors` and `config.json`
+  (`hashedInput`), or a new folder would never trigger a regen.
 
 **`--tokenizer` is never guessed.** Upstream recommends the base model's tokenizer over the
 one converted out of the gguf, but `GgufRow.Repo` is the local folder name, not a verified HF

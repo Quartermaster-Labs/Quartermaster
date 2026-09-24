@@ -50,13 +50,18 @@ type GgufRow struct {
 	// directory instead of a file. Like IsSam it routes before the gguf metadata
 	// read, which has no file to open here at all.
 	IsTrellis bool
+	// IsHF marks a Hugging Face model folder (config.json + *.safetensors, see
+	// hf.go): FullPath is the DIRECTORY `vllm serve` takes, and metadata comes
+	// from config.json. Only vllm can load one, so it routes before the gguf
+	// metadata read and never reaches the llama path.
+	IsHF bool
 }
 
 // skipsGgufPipeline reports whether the row is served by a provider binary
 // rather than llama-server, so the gguf-only passes — the metadata read, family
 // pairing, sidecar inheritance — must leave it alone: SAM's *.ggml has no header
-// at all, and a TRELLIS.2 "model" is a directory.
-func (r GgufRow) skipsGgufPipeline() bool { return r.IsSam || r.IsTrellis }
+// at all, and a TRELLIS.2 package or an HF folder is a directory.
+func (r GgufRow) skipsGgufPipeline() bool { return r.IsSam || r.IsTrellis || r.IsHF }
 
 var (
 	shardRe      = regexp.MustCompile(`-(\d{5})-of-(\d{5})\.gguf$`)
@@ -198,6 +203,12 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 					rows = append(rows, trellisRow(path))
 					return filepath.SkipDir
 				}
+			}
+			// An HF folder is a row, but NOT a stop: unlike a TRELLIS package its
+			// subfolders are ordinary (a repo that also ships a gguf/ subfolder keeps
+			// those rows), and the root may itself be the folder.
+			if c, ok := hfModelDir(path); ok {
+				rows = append(rows, hfRow(path, c))
 			}
 			return nil
 		}
@@ -343,6 +354,11 @@ func DiscoverGgufModels(modelsRoot string, skipPatterns ...string) ([]GgufRow, e
 	// one model per dir). Enables --spec-type draft-mtp/draft-dflash + -md
 	// without hand config.
 	for i := range rows {
+		// A directory row's filepath.Dir is its PARENT, so a sidecar found there
+		// belongs to some other model; and none of these backends load one anyway.
+		if rows[i].skipsGgufPipeline() {
+			continue
+		}
 		dir := filepath.Dir(rows[i].FullPath)
 		if d, ok := draftByDir[dir]; ok {
 			rows[i].DraftPath = d.path

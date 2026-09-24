@@ -216,6 +216,12 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		return emitTrellisModel(b, s, row, ov, name, emitted)
 	}
 
+	// HF folders (config.json + safetensors) are a directory with no gguf header,
+	// and vllm is the only backend here that can load one.
+	if row.IsHF {
+		return emitHFModel(b, s, row, ov, name, emitted)
+	}
+
 	meta, err := ReadGgufMetadataCached(row.FullPath)
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
