@@ -288,6 +288,13 @@ deep-links preselect the matching tab.
 
 Create / scope / reveal / delete inference API keys. Only when the server runs with `-generate`.
 
+Scope is picked with `components/MultiCombobox.svelte`: a tag-input field (selected ids as
+removable chips) over the shared `.qm-popup` list, with tick rows grouped by `MODEL_CATEGORIES`.
+Toggling keeps the list open and the query intact, so one search can take several models. A group
+header toggles only the rows the current filter shows ("type qwen, click LLM"). Selected ids the
+catalog no longer lists still render as chips, since hiding them would hide a live grant. Past 12
+chips the field collapses to "+N more".
+
 ## `/test` — Playground stub (`routes/PlaygroundStub.svelte`)
 
 The dashboard no longer hosts the playground; this page links out to the standalone playground app
