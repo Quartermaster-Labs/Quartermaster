@@ -4,10 +4,12 @@ package server
 // (single-file safetensors DiTs with a separate VAE / text encoder), declared
 // from explicit paths and persisted in the sidecar so a regen keeps them.
 //
-// Whole-list GET/PUT like the prompt-enhancer manager. The difference is
-// ownership: the UI owns only ITS rows. Rows from the generate file's
-// settings.extraImageModels are listed with source "file" so the table can show
-// them read-only, and the client sends back only its "ui" rows. Tuning (cfg,
+// Whole-list GET/PUT like the prompt-enhancer manager, with one twist: rows
+// from the generate file's settings.extraImageModels (source "file") are shown
+// read-only but CAN be deleted. The generate file is the user's hand-edited
+// source and is never rewritten, so deleting a file row records its name in
+// the sidecar's removed list instead. The PUT body is the table as shown:
+// its "ui" rows are stored, its "file" rows are only a presence check. Tuning (cfg,
 // steps, FA, offload...) is not in this table at all: an extra model is a normal
 // catalog entry, so the model config editor edits it through an override keyed
 // by its model path, same as a discovered one.
@@ -17,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/quartermaster-labs/quartermaster/internal/autogen"
@@ -36,8 +39,16 @@ type extraModelDTO struct {
 	ClipGPath string `json:"clipGPath"`
 	T5Path    string `json:"t5Path"`
 	// Source is "ui" (sidecar, editable) or "file" (the generate file,
-	// read-only here). Ignored on PUT.
+	// read-only here). On PUT a "file" row is kept as-is and never copied.
 	Source string `json:"source"`
+}
+
+func sideNames(side []autogen.ExtraImageModel) []string {
+	out := make([]string, 0, len(side))
+	for _, m := range side {
+		out = append(out, m.Name)
+	}
+	return out
 }
 
 func extraModelToDTO(m autogen.ExtraImageModel, source string) extraModelDTO {
@@ -79,7 +90,9 @@ func (s *Server) handleExtraModelsGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
-// handleExtraModelsPut replaces the UI-owned list, then regenerates + reloads.
+// handleExtraModelsPut stores the table as shown, then regenerates + reloads.
+// A file row missing from the body is deleted (added to the removed list); a
+// name that comes back as a "ui" row is no longer removed.
 //
 // Validation happens HERE rather than only in the emitter, because the emitter's
 // answer to a bad row is a "# SKIPPED" comment in a file the user never opens:
@@ -95,21 +108,47 @@ func (s *Server) handleExtraModelsPut(w http.ResponseWriter, r *http.Request) {
 		shared.SendResponse(w, r, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	gf, err := autogen.LoadGenerateFile(s.autogen.GeneratePath, s.autogen.ModelsDir)
+	side, err := autogen.LoadSidecarExtraImageModels(s.autogen.GeneratePath)
 	if err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// Names that are extras today: re-saving one of them is not a clash with
-	// "the model already served under that id", since that model IS this row.
+	removed, err := autogen.LoadSidecarRemovedExtraImageModels(s.autogen.GeneratePath)
+	if err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+	fileNames, err := autogen.FileExtraImageModelNames(s.autogen.GeneratePath)
+	if err != nil {
+		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Names that are extras today, or were until deleted here: re-saving one is
+	// not a clash with "the model already served under that id", since that
+	// model IS this row.
 	current := map[string]bool{}
-	for _, m := range gf.Settings.ExtraImageModels {
-		current[strings.ToLower(strings.TrimSpace(m.Name))] = true
+	for _, n := range append(append(slices.Clone(removed), fileNames...), sideNames(side)...) {
+		current[strings.ToLower(n)] = true
+	}
+	// A file row absent from the body was deleted in the table. That includes
+	// one a UI row was shadowing: trashing the row the user sees must not bring
+	// the file's version back. Upsert drops any name the body still keeps.
+	inBody := map[string]bool{}
+	for _, e := range body {
+		inBody[strings.ToLower(strings.TrimSpace(e.Name))] = true
+	}
+	for _, n := range fileNames {
+		if !inBody[strings.ToLower(n)] {
+			removed = append(removed, n)
+		}
 	}
 	served := s.config().Models
 
 	list := make([]autogen.ExtraImageModel, 0, len(body))
 	for _, e := range body {
+		if e.Source == "file" {
+			continue // presence only: never copied into the sidecar
+		}
 		name := strings.TrimSpace(e.Name)
 		path := strings.TrimSpace(e.ModelPath)
 		if name == "" && path == "" {
@@ -148,7 +187,7 @@ func (s *Server) handleExtraModelsPut(w http.ResponseWriter, r *http.Request) {
 		}
 		list = append(list, m)
 	}
-	if err := autogen.UpsertSidecarExtraImageModels(s.autogen.GeneratePath, list); err != nil {
+	if err := autogen.UpsertSidecarExtraImageModels(s.autogen.GeneratePath, list, removed); err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}

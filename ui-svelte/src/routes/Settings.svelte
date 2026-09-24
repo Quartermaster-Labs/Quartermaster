@@ -610,8 +610,9 @@
 
   // --- Manual image models (hand-declared diffusion checkpoints) ---
   // Same shape as the enhancer table: one whole-table save, because each write
-  // regenerates the config. Rows the generate file owns are read-only here and
-  // never sent back; only "ui" rows save.
+  // regenerates the config. Rows the generate file owns are read-only but can be
+  // deleted: the save sends the table as shown, and a file row missing from it
+  // is hidden via the sidecar (the generate file itself is never rewritten).
   let extraModels = $state<ExtraModelInfo[]>([]);
   let extraOpen = $state(false);
   let savingExtra = $state(false);
@@ -668,9 +669,7 @@
     extraSaved = false;
     try {
       // Trim so stray whitespace cannot sneak past the server's path checks.
-      const uiRows = extraModels
-        .filter((m) => m.source === "ui")
-        .map((m) => ({
+      const rows = extraModels.map((m) => ({
           ...m,
           name: m.name.trim(),
           modelPath: m.modelPath.trim(),
@@ -680,7 +679,7 @@
           clipGPath: m.clipGPath.trim(),
           t5Path: m.t5Path.trim(),
         }));
-      await saveExtraModels(uiRows);
+      await saveExtraModels(rows);
       await loadExtraModels(); // reflect what the server kept
       extraSaved = true;
       clearTimeout(extraFlashTimer);
@@ -1875,7 +1874,7 @@
         {#if extraOpen}
         <p class="text-[0.7rem] text-txtsecondary mb-4">
           Use --diffusion-model for a bare DiT with separate encoders, -m for an all-in-one
-          checkpoint. Rows from the generate file are read-only here.
+          checkpoint. Rows from the generate file are read-only here, but you can remove them.
         </p>
 
         {#if extraModels.length === 0}
@@ -1901,13 +1900,13 @@
                     <option value="--diffusion-model">--diffusion-model</option>
                     <option value="-m">all-in-one (-m)</option>
                   </select>
-                  {#if m.source !== "file"}
-                    <button
-                      type="button" use:tip={"Remove model"} aria-label="Remove model"
-                      class="ml-auto shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-error hover:border-error transition-colors"
-                      onclick={() => removeExtraModel(i)}
-                    ><Trash2 size={14} /></button>
-                  {/if}
+                  <button
+                    type="button"
+                    use:tip={m.source === "file" ? "Remove model. It stays in quartermaster-generate.yaml but is no longer served; add a row with the same name to bring it back." : "Remove model"}
+                    aria-label="Remove model"
+                    class="ml-auto shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-error hover:border-error transition-colors"
+                    onclick={() => removeExtraModel(i)}
+                  ><Trash2 size={14} /></button>
                 </div>
 
                 <div class="grid grid-cols-[6rem_1fr_auto] gap-2 items-center">

@@ -69,7 +69,9 @@ func TestExtraModelsAPI(t *testing.T) {
 	}
 
 	ok := extraModelDTO{Name: "my-dit", ModelPath: dit, ModelFlag: "--diffusion-model", VaePath: vae}
-	if w := put([]extraModelDTO{ok, {}}); w.Code != http.StatusOK {
+	// The UI sends the table as shown, file rows included.
+	fileRow := extraModelDTO{Name: "file-model", ModelPath: dit, Source: "file"}
+	if w := put([]extraModelDTO{fileRow, ok, {}}); w.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d: %s", w.Code, w.Body.String())
 	}
 	got := get()
@@ -102,7 +104,7 @@ func TestExtraModelsAPI(t *testing.T) {
 		{"bad flag", extraModelDTO{Name: "x", ModelPath: dit, ModelFlag: "--vae"}, http.StatusBadRequest},
 		{"discovered id", extraModelDTO{Name: "discovered", ModelPath: dit}, http.StatusConflict},
 	} {
-		if w := put([]extraModelDTO{ok, tc.row}); w.Code != tc.code {
+		if w := put([]extraModelDTO{fileRow, ok, tc.row}); w.Code != tc.code {
 			t.Errorf("%s: status = %d, want %d (%s)", tc.name, w.Code, tc.code, w.Body.String())
 		}
 	}
@@ -110,16 +112,52 @@ func TestExtraModelsAPI(t *testing.T) {
 	if side, _ := autogen.LoadSidecarExtraImageModels(gen); len(side) != 1 {
 		t.Fatalf("sidecar changed by a refused save: %+v", side)
 	}
-	// Re-saving under an existing extra's name (including the file's own) is
-	// an edit of that row, not a clash.
-	if w := put([]extraModelDTO{ok, {Name: "file-model", ModelPath: dit}}); w.Code != http.StatusOK {
-		t.Fatalf("overriding the file row: status = %d: %s", w.Code, w.Body.String())
+	// Sending the file row back as shown keeps it and never copies it.
+	if w := put([]extraModelDTO{ok, fileRow}); w.Code != http.StatusOK {
+		t.Fatalf("resave: status = %d: %s", w.Code, w.Body.String())
 	}
-	// Deleting every UI row empties the sidecar and the file row stays.
-	if w := put([]extraModelDTO{}); w.Code != http.StatusOK {
+	if side, _ := autogen.LoadSidecarExtraImageModels(gen); len(side) != 1 {
+		t.Fatalf("file row copied into the sidecar: %+v", side)
+	}
+	// Deleting every UI row empties the sidecar list and the file row stays.
+	if w := put([]extraModelDTO{fileRow}); w.Code != http.StatusOK {
 		t.Fatalf("clear: status = %d: %s", w.Code, w.Body.String())
 	}
 	if got := get(); len(got) != 1 || got[0].Name != "file-model" || got[0].Source != "file" {
 		t.Fatalf("after clear GET = %+v, want only the file row", got)
+	}
+
+	genBefore, _ := os.ReadFile(gen)
+	// Deleting the FILE row hides it everywhere without touching the file.
+	if w := put([]extraModelDTO{}); w.Code != http.StatusOK {
+		t.Fatalf("delete file row: status = %d: %s", w.Code, w.Body.String())
+	}
+	if got := get(); len(got) != 0 {
+		t.Fatalf("after deleting the file row GET = %+v, want none", got)
+	}
+	if out, _ := os.ReadFile(cfgPath); strings.Contains(string(out), `"file-model":`) {
+		t.Fatal("deleted file row is still in the generated config")
+	}
+	if genAfter, _ := os.ReadFile(gen); !bytes.Equal(genBefore, genAfter) {
+		t.Fatal("deleting a file row rewrote the generate file")
+	}
+	// Adding a row back under that name undoes the delete (and is not a 409:
+	// it was one of ours).
+	if w := put([]extraModelDTO{{Name: "file-model", ModelPath: dit, Source: "ui"}}); w.Code != http.StatusOK {
+		t.Fatalf("re-add: status = %d: %s", w.Code, w.Body.String())
+	}
+	if removed, _ := autogen.LoadSidecarRemovedExtraImageModels(gen); len(removed) != 0 {
+		t.Fatalf("removed list = %v after re-adding, want empty", removed)
+	}
+	if got := get(); len(got) != 1 || got[0].Source != "ui" {
+		t.Fatalf("after re-add GET = %+v, want one ui row", got)
+	}
+	// Trashing a UI row that shadows a file row removes both: the file's
+	// version must not reappear from under it.
+	if w := put([]extraModelDTO{}); w.Code != http.StatusOK {
+		t.Fatalf("delete shadow: status = %d: %s", w.Code, w.Body.String())
+	}
+	if got := get(); len(got) != 0 {
+		t.Fatalf("after deleting the shadowing row GET = %+v, want none", got)
 	}
 }

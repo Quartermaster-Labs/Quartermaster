@@ -128,7 +128,9 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   `settings.extraImageModels` instead of replacing it (`mergeExtraImageModels`): a UI row
   replaces the file row of the same name in place, the rest append. Replace semantics would
   either hide a power user's hand-written rows from generation or copy them into the sidecar on
-  the first save),
+  the first save. Deleting a FILE row from the table records its name in
+  `removedExtraImageModels` (`LoadSidecarRemovedExtraImageModels`), which the merge drops at load;
+  a kept row of the same name clears the entry),
   `LoadSidecarAPIKeys`/`UpsertSidecarAPIKey`/`DeleteSidecarAPIKey`,
   `LoadSidecarBackendSources`/`UpsertSidecarBackendSources` (**tracked GitHub repos the in-app
   installer downloads builds from** — deliberately separate from `BackendList`: a

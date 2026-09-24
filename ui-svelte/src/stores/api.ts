@@ -796,7 +796,8 @@ export async function savePromptEnhancers(
 // ExtraModelInfo is one hand-declared image model (Settings > "Add model
 // manually"): a safetensors DiT the scan can't classify, wired from explicit
 // paths. source "file" rows come from the generate file and are read-only in
-// the UI; only "ui" rows are sent back on save. Tuning (cfg, steps, offload)
+// the UI but deletable. Save sends the table as shown; a file row missing from
+// it is hidden (the generate file is never rewritten). Tuning (cfg, steps, offload)
 // is done in the model's own config editor, not here.
 export interface ExtraModelInfo {
   name: string;
@@ -820,7 +821,7 @@ export async function listExtraModels(): Promise<ExtraModelInfo[]> {
   return (await response.json()) || [];
 }
 
-// Replace the UI-owned rows (pass only source "ui" rows). The server checks
+// Save the table as shown, file rows included. The server checks
 // every path exists and refuses a name a discovered model already uses (409),
 // then regenerates + reloads.
 export async function saveExtraModels(list: ExtraModelInfo[]): Promise<void> {

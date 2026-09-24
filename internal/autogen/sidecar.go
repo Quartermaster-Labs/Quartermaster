@@ -139,8 +139,12 @@ type sidecar struct {
 	// as its own, so saving the table must not copy it here or delete it. A
 	// sidecar row whose name matches a file row wins (see mergeExtraImageModels).
 	ExtraImageModels []ExtraImageModel `yaml:"extraImageModels,omitempty"`
-	App              *AppSettings      `yaml:"app,omitempty"`
-	Overrides        []Override        `yaml:"overrides"`
+	// RemovedExtraImageModels are generate-file extra models deleted from the
+	// Settings table. The file is the user's hand-edited source and is never
+	// rewritten, so a delete is recorded here and applied at load instead.
+	RemovedExtraImageModels []string     `yaml:"removedExtraImageModels,omitempty"`
+	App                     *AppSettings `yaml:"app,omitempty"`
+	Overrides               []Override   `yaml:"overrides"`
 }
 
 // BackendExes holds the dashboard-editable backend executable paths. Empty field
@@ -338,11 +342,23 @@ func LoadSidecarExtraImageModels(generatePath string) ([]ExtraImageModel, error)
 	return sc.ExtraImageModels, nil
 }
 
-// UpsertSidecarExtraImageModels replaces the UI-owned extra-model list
-// wholesale. Rows missing a name or model path are dropped, and a duplicate
-// name keeps the LAST occurrence in the first one's position, for the same
-// reason as UpsertSidecarPromptEnhancers: the served id is the key downstream.
-func UpsertSidecarExtraImageModels(generatePath string, list []ExtraImageModel) error {
+// LoadSidecarRemovedExtraImageModels returns the names of generate-file extra
+// models the Settings table deleted.
+func LoadSidecarRemovedExtraImageModels(generatePath string) ([]string, error) {
+	sc, err := loadSidecar(generatePath)
+	if err != nil {
+		return nil, err
+	}
+	return sc.RemovedExtraImageModels, nil
+}
+
+// UpsertSidecarExtraImageModels replaces the UI-owned extra-model list and the
+// removed-file-row list wholesale. Rows missing a name or model path are
+// dropped, and a duplicate name keeps the LAST occurrence in the first one's
+// position, for the same reason as UpsertSidecarPromptEnhancers: the served id
+// is the key downstream. A removed name that is also a kept row is dropped from
+// the removed list, since re-adding a row under that name undoes the delete.
+func UpsertSidecarExtraImageModels(generatePath string, list []ExtraImageModel, removed []string) error {
 	sc, err := loadSidecar(generatePath)
 	if err != nil {
 		return err
@@ -368,16 +384,50 @@ func UpsertSidecarExtraImageModels(generatePath string, list []ExtraImageModel) 
 	} else {
 		sc.ExtraImageModels = cleaned
 	}
+	sc.RemovedExtraImageModels = nil
+	for _, n := range removed {
+		n = strings.TrimSpace(n)
+		if _, kept := seen[strings.ToLower(n)]; n == "" || kept ||
+			slices.ContainsFunc(sc.RemovedExtraImageModels, func(r string) bool { return strings.EqualFold(r, n) }) {
+			continue
+		}
+		sc.RemovedExtraImageModels = append(sc.RemovedExtraImageModels, n)
+	}
 	return writeSidecar(generatePath, sc)
 }
 
-// mergeExtraImageModels overlays the UI-added models on the generate file's:
-// a UI row replaces the file row of the same name in place, the rest append.
-func mergeExtraImageModels(file, side []ExtraImageModel) []ExtraImageModel {
-	if len(side) == 0 {
+// FileExtraImageModelNames returns the names the generate file itself declares
+// under settings.extraImageModels, before any sidecar row shadows or removes
+// one. The Settings table needs them to tell "deleted a file row" apart from
+// "deleted a UI row", which LoadGenerateFile's merged view cannot.
+func FileExtraImageModelNames(generatePath string) ([]string, error) {
+	data, err := os.ReadFile(generatePath)
+	if err != nil {
+		return nil, err
+	}
+	var gf GenerateFile
+	if err := yaml.Unmarshal(data, &gf); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", generatePath, err)
+	}
+	names := make([]string, 0, len(gf.Settings.ExtraImageModels))
+	for _, m := range gf.Settings.ExtraImageModels {
+		if n := strings.TrimSpace(m.Name); n != "" {
+			names = append(names, n)
+		}
+	}
+	return names, nil
+}
+
+// mergeExtraImageModels drops the file rows the Settings table deleted, then
+// overlays the UI-added models: a UI row replaces the file row of the same name
+// in place, the rest append.
+func mergeExtraImageModels(file, side []ExtraImageModel, removed []string) []ExtraImageModel {
+	if len(side) == 0 && len(removed) == 0 {
 		return file
 	}
-	out := slices.Clone(file)
+	out := slices.DeleteFunc(slices.Clone(file), func(f ExtraImageModel) bool {
+		return slices.ContainsFunc(removed, func(r string) bool { return strings.EqualFold(r, strings.TrimSpace(f.Name)) })
+	})
 	for _, m := range side {
 		at := slices.IndexFunc(out, func(f ExtraImageModel) bool {
 			return strings.EqualFold(strings.TrimSpace(f.Name), m.Name)

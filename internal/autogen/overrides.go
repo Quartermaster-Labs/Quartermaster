@@ -1471,7 +1471,11 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 	if err != nil {
 		return GenerateFile{}, err
 	}
-	gf.Settings.ExtraImageModels = mergeExtraImageModels(gf.Settings.ExtraImageModels, sideExtra)
+	removedExtra, err := LoadSidecarRemovedExtraImageModels(path)
+	if err != nil {
+		return GenerateFile{}, err
+	}
+	gf.Settings.ExtraImageModels = mergeExtraImageModels(gf.Settings.ExtraImageModels, sideExtra, removedExtra)
 	// UI-owned slot-KV block overlays the generate file's settings.slotCache.
 	sideSlot, err := LoadSidecarSlotCache(path)
 	if err != nil {
