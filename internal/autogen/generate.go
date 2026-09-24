@@ -2,6 +2,7 @@ package autogen
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -156,11 +157,7 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 		if ov != nil && ov.Skip {
 			continue
 		}
-		name := row.ID
-		if seen[name] {
-			pubTag := slugify(row.Publisher)
-			name = fmt.Sprintf("%s-%s", row.ID, pubTag)
-		}
+		name := uniqueModelName(row, func(n string) bool { return seen[n] || slices.Contains(emitted, n) })
 		seen[name] = true
 
 		// A single unparseable/misdetected gguf must not nuke the whole config
@@ -179,6 +176,28 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 
 	emitGroupsAndListeners(&b, s, emitted, coexist)
 	return b.String(), nil
+}
+
+// uniqueModelName picks the served id for a discovered row: its own id, else
+// qualified by publisher, then by repo folder, then numbered. Every candidate is
+// re-checked, since copies of one quant under one publisher derive the same
+// publisher tag too, and a reused key makes the loader keep one block and drop
+// the other. Rows arrive sorted, so the same tree always yields the same names.
+func uniqueModelName(row GgufRow, taken func(string) bool) string {
+	name := row.ID
+	for _, tag := range []string{row.Publisher, row.Publisher + "-" + row.Repo} {
+		if !taken(name) {
+			return name
+		}
+		if t := slugify(tag); t != "" {
+			name = row.ID + "-" + t
+		}
+	}
+	base := name
+	for n := 2; taken(name); n++ {
+		name = fmt.Sprintf("%s-%d", base, n)
+	}
+	return name
 }
 
 // emitModel reads metadata once and emits every profile (solo, ctx tiers, game)
