@@ -105,10 +105,15 @@
           segments={$vramBreakdown?.segments}
           showLabel={false}
           showLegend={false}
-          height="0.4rem"
+          height="0.5rem"
         />
       </div>
-      <span class="font-mono text-micro text-txtmain tabular-nums shrink-0">
+      <!-- Free on hover: the Dashboard's "VRAM free" tile was retired in favour
+           of this bar, and free is the number you want when deciding what fits. -->
+      <span
+        class="font-mono text-micro text-txtmain tabular-nums shrink-0"
+        use:tip={`${(($vramTotals.totalMb - $vramTotals.usedMb) / 1024).toFixed(1)}G free${$vramTotals.devices > 1 ? ` across ${$vramTotals.devices} GPUs` : ""}, as reported by the GPU`}
+      >
         {($vramTotals.usedMb / 1024).toFixed(1)}/{($vramTotals.totalMb / 1024).toFixed(1)}G
       </span>
     {:else}

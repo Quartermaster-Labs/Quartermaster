@@ -184,8 +184,8 @@
     <HelpCircle size={12} />
   </span>
 {/snippet}
-{#snippet roField(label: string, value: string, help: string)}
-  <div>
+{#snippet roField(label: string, value: string, help: string, cls = "")}
+  <div class={cls}>
     <div class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">{label} {@render hint(help)}</div>
     <div class="font-mono text-txtmain tabular-nums pt-1.5 break-all">{value}</div>
   </div>
@@ -279,13 +279,17 @@
                 {@render roField("CPU offload", effCmd.includes("--offload-to-cpu") ? "on" : "off", "Page diffusion weights to RAM (--offload-to-cpu): saves VRAM, slower per step.")}
               </div>
             {:else if cfg}
-              <div class="mt-2 grid grid-cols-3 gap-x-3 gap-y-2 text-label">
+              <!-- Four across on a wide half, KV pair side by side and Spec on two
+                   cells: seven fields in two rows, so the band's fixed height holds
+                   them and the launch-command toggle without a scrollbar, even
+                   with the model tab strip on top. -->
+              <div class="mt-2 grid grid-cols-3 xl:grid-cols-4 gap-x-3 gap-y-2 text-label">
                 {@render roField("Ctx", flags.ctx ?? "-", "Context window (tokens) this model loaded with (-c), as sized by the autogen sizer to fit free VRAM.")}
                 {@render roField("GPU layers", nglDisplay(flags.ngl, cfg.blockCount ?? 0), "Layers resident on the GPU (-ngl), as chosen by the sizer for the current plan.")}
-                {@render roField("CPU MoE", flags.cpuMoe ?? "-", "Expert layers offloaded to the CPU (--n-cpu-moe) for MoE models.")}
                 {@render roField("KV K", flags.kvK ?? "-", "Quantization of the attention key cache (-ctk). Lower bits = less VRAM, slightly less accuracy.")}
                 {@render roField("KV V", flags.kvV ?? "-", "Quantization of the attention value cache (-ctv). Lower bits = less VRAM.")}
-                {@render roField("Spec", specList(effCmd), "Speculative decoding chain (--spec-type), one entry per backend. none = disabled.")}
+                {@render roField("CPU MoE", flags.cpuMoe ?? "-", "Expert layers offloaded to the CPU (--n-cpu-moe) for MoE models.")}
+                {@render roField("Spec", specList(effCmd), "Speculative decoding chain (--spec-type), one entry per backend. none = disabled.", "xl:col-span-2")}
                 {@render roField("Reasoning", reasonDefault(flags), "How the model's chain-of-thought is parsed (--reasoning-format). auto = llama.cpp detects it; off = reasoning disabled.")}
               </div>
             {/if}

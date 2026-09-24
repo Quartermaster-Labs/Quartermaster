@@ -15,6 +15,9 @@
   import { inFlightRequests, metrics, liveTokens, upstreamLogs, backendMetrics } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
   import type { Model, ActivityLogEntry } from "../lib/types";
+  import type { FireMode } from "../lib/fireField";
+  import { formatRelativeTime } from "../lib/activityFormat";
+  import FireField from "./FireField.svelte";
 
   interface Props {
     // The active (loaded/staged) models shown in the top panel. Used to pick the
@@ -71,11 +74,8 @@
   // backed by an in-flight request (not just a model load winding down).
   const busy = $derived(activeHold && !loading && sawInflight);
 
-  // Width of the single-line idle scanner. Kept a touch under the data-stream
-  // footprint (STREAM_W=26) so the wider ●/• marker glyphs don't overrun the
-  // card and clip at the edges.
-  const WIDTH = 22;
   let phase = $state(0);
+  let now = $state(Date.now());
   let elapsedMs = $state(0);
   let startMs = $state(0);
   // Elapsed since the load began, derived from the module-scoped start so it is
@@ -91,16 +91,18 @@
     }
   });
 
-  // ONE stable interval drives every animation. It reads busy/loading/startMs
-  // inside the (async) callback, which Svelte does not track as dependencies —
-  // so the effect has no reactive deps, runs once, and never rebuilds. That
-  // keeps the tick rate constant (no overlapping intervals speeding it up).
+  // ONE stable interval drives the text readouts (the fire runs its own frame
+  // loop). It reads busy/loading/startMs inside the (async) callback, which
+  // Svelte does not track as dependencies — so the effect has no reactive deps,
+  // runs once, and never rebuilds. That keeps the tick rate constant (no
+  // overlapping intervals speeding it up).
   $effect(() => {
     const t = setInterval(() => {
       phase = (phase + 1) % 1_000_000;
+      now = Date.now();
       elapsedMs = busy || loading ? Date.now() - startMs : 0;
       loadElapsedMs = loading && gLoadStart ? Date.now() - gLoadStart : 0;
-    }, 90);
+    }, 225);
     return () => clearInterval(t);
   });
 
@@ -146,94 +148,6 @@
     if (!loading || expLoadMs <= 0) return -1;
     return Math.min(99, Math.max(3, (loadElapsedMs / expLoadMs) * 100));
   });
-
-  // Bar width tracks the data-stream footprint so loading reads at the same size
-  // as the generating animation.
-  const BAR_W = 24;
-  const PARTIAL = " ▏▎▍▌▋▊▉█";
-  // Indeterminate (no learned time): a 4-cell block sweeping over a dim track.
-  function sweepAt(p: number): string {
-    const span = 4;
-    const pos = Math.round(((Math.sin(p * 0.12) + 1) / 2) * (BAR_W - span));
-    let s = "";
-    for (let i = 0; i < BAR_W; i++) s += i >= pos && i < pos + span ? "█" : "░";
-    return s;
-  }
-  const loadSweep = $derived(sweepAt(phase));
-  // Determinate: split bright fill from dim track so the two render in different
-  // colours (filled = primary, track = muted) rather than one flat band.
-  const loadFilled = $derived.by<string>(() => {
-    if (loadPct < 0) return "";
-    const filled = (loadPct / 100) * BAR_W;
-    const full = Math.floor(filled);
-    let s = "█".repeat(Math.min(full, BAR_W));
-    if (full < BAR_W) s += PARTIAL[Math.floor((filled - full) * 8)];
-    return s;
-  });
-  const loadTrack = $derived.by<string>(() => {
-    if (loadPct < 0) return "";
-    const used = loadFilled.length;
-    return "░".repeat(Math.max(0, BAR_W - used));
-  });
-
-  // Idle "standby" scanner: a single marker drifting slowly back and forth over
-  // a dim dotted track. Distinct from the loading wave so idle never reads as a
-  // frozen animation.
-  function scannerAt(p: number): string {
-    const pos = Math.round(((Math.sin(p * 0.06) + 1) / 2) * (WIDTH - 1));
-    let s = "";
-    for (let i = 0; i < WIDTH; i++) {
-      s += i === pos ? "●" : Math.abs(i - pos) === 1 ? "•" : "·";
-    }
-    return s;
-  }
-  const idleScan = $derived(scannerAt(phase));
-
-  // Data-stream animation for active generation: a horizontal band of braille
-  // glyphs whose dot-density flows leftward each tick (sampling the field at
-  // c + p makes features drift toward lower columns). Reads as live throughput.
-  const STREAM_W = 26;
-  const STREAM_H = 3;
-  // U+2800 BRAILLE PATTERN BLANK, not an ASCII space: the other six glyphs come
-  // from the braille block, and a space is a DIFFERENT advance width in most
-  // monospace faces (it falls back to another font). Since the number of blank
-  // cells changes every tick, each row's rendered width changed with it - and a
-  // centred <pre> re-centres on every frame, which is the side-to-side wobble.
-  const STREAM_RAMP = "⠀⠂⠆⠖⠶⠷⠿"; // sparse → dense braille
-  // Warm gradient keyed to dot-density: dim ember → red → orange → amber → hot
-  // yellow. Indexed by the ramp position so denser glyphs read "hotter".
-  const STREAM_HEAT = [
-    "text-orange-900/40",
-    "text-red-700",
-    "text-red-500",
-    "text-orange-600",
-    "text-orange-400",
-    "text-amber-400",
-    "text-yellow-300",
-  ];
-  type Cell = { ch: string; cls: string };
-  function streamAt(p: number): Cell[][] {
-    const rows: Cell[][] = [];
-    for (let r = 0; r < STREAM_H; r++) {
-      const line: Cell[] = [];
-      for (let c = 0; c < STREAM_W; c++) {
-        const x = c + p * 1.5; // advancing phase scrolls the field left
-        // Horizontal shimmer (texture flowing left).
-        const flow = (Math.sin(x * 0.5 + r * 1.7) + Math.sin(x * 0.27 - r * 1.1)) / 2; // -1..1
-        // Per-column vertical wave: the hot band's boundary licks up and down
-        // over time, so the stream reads like a flame rather than a flat field.
-        const wave = (Math.sin(c * 0.55 + p * 0.3) + Math.sin(c * 0.27 - p * 0.19)) / 2; // -1..1
-        // Vertical gradient: hotter toward the bottom row, boundary shifted by the wave.
-        const vert = (r - 1 + wave * 1.2) / (STREAM_H - 1); // ~0 top .. ~1 bottom
-        const v = vert * 1.3 + flow * 0.5; // combine heat sources
-        const idx = Math.min(STREAM_RAMP.length - 1, Math.max(0, Math.floor(((v + 1) / 2) * STREAM_RAMP.length)));
-        line.push({ ch: STREAM_RAMP[idx], cls: STREAM_HEAT[idx] });
-      }
-      rows.push(line);
-    }
-    return rows;
-  }
-  const stream = $derived(streamAt(phase));
 
   // Live decode tokens/sec. The server pushes CUMULATIVE tokens + elapsed +
   // measured time-to-first-token. Dividing the post-first-token count by the
@@ -295,20 +209,37 @@
   // the first token, so it's the accurate TTFT). -1 => not yet known.
   const liveTtftMs = $derived($liveTokens && $liveTokens.first_token_ms >= 0 ? $liveTokens.first_token_ms : -1);
 
-  type Stat = { label: string; value: string; live: boolean };
-  const stats = $derived.by<Stat[]>(() => {
+  // Each readout is a value and its unit, kept apart so the unit can sit small
+  // beside a large number. "-" with no unit = not known yet.
+  type Stat = { value: string; unit: string };
+  const NONE: Stat = { value: "-", unit: "" };
+  function speed(n: number): Stat {
+    return n > 0 ? { value: n.toFixed(1), unit: "tok/s" } : NONE;
+  }
+  function dur(ms: number): Stat {
+    if (ms < 0) return NONE;
+    const [v, u] = fmtDur(ms).match(/^([\d.]+)(\D+)$/)!.slice(1);
+    return { value: v, unit: u };
+  }
+  const stats = $derived.by(() => {
     const lt = $liveTokens;
     const t = last?.tokens;
-    return [
-      // The three the operator watches: TTFT, prefill rate, decode rate.
-      { label: "TTFT", value: busy ? (liveTtftMs >= 0 ? fmtDur(liveTtftMs) : "-") : t && t.time_to_first_ms >= 0 ? fmtDur(t.time_to_first_ms) : "-", live: true },
-      { label: "Prompt", value: busy ? fmtSpeed(activeBackend?.prompt_tokens_seconds ?? -1) : fmtSpeed(t?.prompt_per_second ?? -1), live: true },
-      { label: "Gen", value: fmtSpeed(busy ? liveTps : (t?.tokens_per_second ?? -1)), live: true },
-      { label: "Duration", value: busy ? (elapsedMs > 0 ? fmtDur(elapsedMs) : "-") : last ? fmtDur(last.duration_ms) : "-", live: true },
-      { label: "In", value: busy ? (activeBackend?.prompt_tokens ? String(activeBackend.prompt_tokens) : "-") : String(t?.input_tokens ?? 0), live: true },
-      { label: "Out", value: busy ? String(lt?.output_tokens ?? 0) : String(t?.output_tokens ?? 0), live: true },
-    ];
+    return {
+      // The three the operator watches: decode rate (the hero), TTFT, prefill rate.
+      gen: speed(busy ? liveTps : (t?.tokens_per_second ?? -1)),
+      ttft: busy ? dur(liveTtftMs) : t ? dur(t.time_to_first_ms) : NONE,
+      prompt: speed(busy ? (activeBackend?.prompt_tokens_seconds ?? -1) : (t?.prompt_per_second ?? -1)),
+      duration: busy ? (elapsedMs > 0 ? fmtDur(elapsedMs) : "-") : last ? fmtDur(last.duration_ms) : "-",
+      input: busy ? (activeBackend?.prompt_tokens ? activeBackend.prompt_tokens.toLocaleString() : "-") : (t?.input_tokens ?? 0).toLocaleString(),
+      output: (busy ? (lt?.output_tokens ?? 0) : (t?.output_tokens ?? 0)).toLocaleString(),
+    };
   });
+
+  // What the fire is doing. Prefill ends at the first token, which is also where
+  // the determinate prompt progress stops being reported.
+  const decoding = $derived(($liveTokens?.output_tokens ?? 0) > 0);
+  const fireMode = $derived<FireMode>(loading ? "loading" : !busy ? "idle" : decoding ? "generating" : "prefill");
+  const fireProgress = $derived(loading ? (loadPct >= 0 ? loadPct / 100 : -1) : promptProgress);
 
   // Most recent completed request for any active model (highest id = newest).
   const last = $derived.by<ActivityLogEntry | null>(() => {
@@ -334,18 +265,6 @@
     return null;
   });
   const kvPct = $derived(activeBackend ? Math.min(100, Math.max(0, activeBackend.kv_cache_usage_ratio * 100)) : -1);
-  // Compact partial-block bar for the header row, mirroring the loading bar's
-  // glyph set but narrow enough to sit beside the status label.
-  const HEAD_KV_W = 12;
-  const kvBarHead = $derived.by<string>(() => {
-    if (kvPct < 0) return "";
-    const filled = (kvPct / 100) * HEAD_KV_W;
-    const full = Math.floor(filled);
-    let s = "█".repeat(Math.min(full, HEAD_KV_W));
-    if (full < HEAD_KV_W) s += PARTIAL[Math.floor((filled - full) * 8)];
-    return s + "░".repeat(Math.max(0, HEAD_KV_W - s.length));
-  });
-  const kvHeadFill = $derived(kvPct >= 0 ? Math.round((kvPct / 100) * HEAD_KV_W) : 0);
   // Token counts, abbreviated: 65536 -> "64k", 1.5M -> "1.5M". Always k once >=1k
   // so the readout reads "1k/100k", never "1000/100k".
   function fmtK(n: number): string {
@@ -354,13 +273,10 @@
     return String(n);
   }
 
-  // Header status + animated ellipsis (0–3 dots, ~450ms/step) for active states.
+  // Header status + animated ellipsis (0–3 dots, 450ms/step) for active states.
   const statusText = $derived(loading ? "Loading" : busy ? "Inferencing" : "Idle");
-  const dots = $derived(".".repeat(Math.floor(phase / 5) % 4));
+  const dots = $derived(".".repeat(Math.floor(phase / 2) % 4));
 
-  function fmtSpeed(n: number): string {
-    return n > 0 ? `${n.toFixed(1)} tok/s` : "-";
-  }
   // Promote the unit once the count would hit triple digits: ms -> s -> m -> h,
   // so the readout never grows past "99.9" in any unit.
   function fmtDur(ms: number): string {
@@ -373,58 +289,66 @@
   }
 </script>
 
+{#snippet hero(label: string, st: Stat, size: string, help: string)}
+  <div class="min-w-0">
+    <div class="text-micro font-medium uppercase tracking-wide text-txtsecondary truncate" use:tip={help}>{label}</div>
+    <div class="font-mono tabular-nums leading-tight whitespace-nowrap {size} {busy && st.value !== '-' ? 'text-primary' : 'text-txtmain'}">
+      {st.value}<span class="ml-1 text-micro text-txtsecondary">{st.unit}</span>
+    </div>
+  </div>
+{/snippet}
+
 <div class="h-full flex flex-col min-h-0">
   <!-- min-h matches the staging card's header row, whose icon buttons make it
        taller than text alone — so the dot/label baselines line up across cards. -->
-  <div class="relative flex items-center gap-2 shrink-0 min-h-[30px]">
+  <div class="flex items-center gap-2 shrink-0 min-h-[30px]">
     <span class="inline-block w-2.5 h-2.5 rounded-full {busy || loading ? 'bg-primary animate-pulse' : 'bg-txtsecondary'}"></span>
     <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">
       {statusText}{#if busy || loading}<span class="inline-block w-3 text-left text-primary">{dots}</span>{/if}
     </span>
-    <!-- Progress %: model load while loading, prompt-processing (prefill) while
-         generating. Decode has no determinate signal, so the corner clears once
-         tokens stream — the elapsed duration lives in the stat grid (shown once,
-         not duplicated here). -->
-    {#if busy && promptProgress >= 0}
-      <span class="ml-auto font-mono text-micro tabular-nums text-primary" use:tip={"Prompt processing"}>{Math.round(promptProgress * 100)}%</span>
-    {/if}
-    <!-- Live backend KV-cache fill (from llama-server /slots): how full the
-         context window is — the "about to evict / truncate" signal the
-         per-request stats can't see. X/Y tok rides on the bar line. -->
-    {#if activeBackend}
-      <div class="absolute left-1/2 -translate-x-1/2 flex items-center gap-1.5 font-mono text-micro" use:tip={"KV cache fill"}>
-        <pre class="m-0 leading-none whitespace-pre"><span class="text-primary">{kvBarHead.slice(0, kvHeadFill)}</span><span class="text-txtsecondary/30">{kvBarHead.slice(kvHeadFill)}</span></pre>
-        <span class="tabular-nums text-txtsecondary">{fmtK(activeBackend.kv_cache_tokens)}/{fmtK(activeBackend.n_ctx)} tok</span>
-        {#if activeBackend.requests_deferred > 0}<span class="tabular-nums text-amber-400">· {activeBackend.requests_deferred} q</span>{/if}
-      </div>
+    <!-- Right corner: a determinate percentage while there is one (model load,
+         then prompt processing), otherwise how long ago the last request ended.
+         Decode has no determinate signal, so it shows neither. -->
+    {#if loading}
+      <span class="ml-auto font-mono text-micro tabular-nums text-primary" use:tip={"Model load, estimated from past load times"}>{loadPct >= 0 ? `${loadPct.toFixed(0)}%` : "loading…"}</span>
+    {:else if busy && promptProgress >= 0}
+      <span class="ml-auto font-mono text-micro tabular-nums text-primary" use:tip={"Prompt processing"}>prompt {Math.round(promptProgress * 100)}%</span>
+    {:else if !busy && last}
+      <span class="ml-auto text-micro font-medium uppercase tracking-wide text-txtsecondary">Last request · {formatRelativeTime(last.timestamp, now)}</span>
     {/if}
   </div>
 
-  <div class="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 overflow-hidden">
-    <!-- Animation: flame while generating, wave while loading, scanner when idle.
-         Fixed-height box keeps the multi-row flame from being clipped. -->
-    <div class="flex items-center justify-center h-24 shrink-0">
-      {#if loading}
-        <div class="flex flex-col items-center justify-center gap-2 select-none">
-          <pre class="font-mono text-2xl leading-none tracking-tight m-0 whitespace-pre">{#if loadPct < 0}<span class="text-primary">{loadSweep}</span>{:else}<span class="text-primary">{loadFilled}</span><span class="text-txtsecondary/30">{loadTrack}</span>{/if}</pre>
-          <span class="font-mono text-primary text-sm tabular-nums">{loadPct >= 0 ? `${loadPct.toFixed(0)}%` : "loading…"}</span>
-        </div>
-      {:else if busy}
-        <pre class="font-mono text-3xl leading-tight tracking-tight select-none m-0 whitespace-pre">{#each stream as row, ri (ri)}{#if ri > 0}{"\n"}{/if}{#each row as cell, ci (ci)}<span class={cell.cls}>{cell.ch}</span>{/each}{/each}</pre>
-      {:else}
-        <pre class="font-mono text-txtsecondary/50 text-3xl leading-tight tracking-tight select-none m-0 whitespace-pre">{idleScan}</pre>
-      {/if}
-    </div>
+  <!-- The fire (lib/fireField.ts): takes whatever height the band has left, so
+       the numbers below stay put and the animation absorbs the slack. -->
+  <FireField mode={fireMode} progress={fireProgress} tps={liveTps} tokens={$liveTokens?.output_tokens ?? 0} class="flex-1 min-h-10 my-1" />
 
-<!-- Always-on stat grid. Live metrics (gen/duration/out) glow accent while
-         generating; otherwise everything is neutral. -->
-    <div class="grid grid-cols-3 gap-x-4 gap-y-2 text-xs text-center shrink-0 w-full max-w-xs">
-      {#each stats as s (s.label)}
-        <div>
-          <div class="text-micro font-medium uppercase tracking-wide text-txtsecondary">{s.label}</div>
-          <div class="font-mono tabular-nums {busy && s.live ? 'text-primary' : 'text-txtmain'}">{s.value}</div>
-        </div>
-      {/each}
+  <div class="grid grid-cols-[1.3fr_1fr_1fr] gap-x-4 shrink-0">
+    {@render hero("Generation", stats.gen, "text-3xl", "Decode speed: live while generating, else the last request")}
+    {@render hero("Time to first token", stats.ttft, "text-xl mt-1.5", "Queue + prompt processing, until the first token streamed")}
+    {@render hero("Prompt", stats.prompt, "text-xl mt-1.5", "Prompt processing (prefill) speed")}
+  </div>
+
+  <!-- Live backend KV-cache fill (from llama-server /slots): how full the
+       context window is — the "about to evict / truncate" signal the
+       per-request stats can't see. -->
+  {#if activeBackend}
+    <div class="mt-3 shrink-0" use:tip={"KV cache fill"}>
+      <div class="flex items-center gap-2 text-micro">
+        <span class="font-medium uppercase tracking-wide text-txtsecondary">Context in use</span>
+        <span class="ml-auto font-mono tabular-nums text-txtmain">
+          {fmtK(activeBackend.kv_cache_tokens)}<span class="text-txtsecondary"> / {fmtK(activeBackend.n_ctx)} tok · {Math.round(kvPct)}%</span>
+        </span>
+        {#if activeBackend.requests_deferred > 0}<span class="font-mono tabular-nums text-warning">· {activeBackend.requests_deferred} queued</span>{/if}
+      </div>
+      <div class="mt-1.5 h-1.5 rounded-full bg-secondary overflow-hidden">
+        <div class="h-full rounded-full transition-[width] duration-500 {kvPct >= 90 ? 'bg-warning' : 'bg-primary'}" style="width: {kvPct}%"></div>
+      </div>
     </div>
+  {/if}
+
+  <div class="mt-2.5 flex gap-4 shrink-0 font-mono text-micro tabular-nums text-txtsecondary">
+    <span>in <span class="text-txtmain">{stats.input}</span></span>
+    <span>out <span class={busy ? "text-primary" : "text-txtmain"}>{stats.output}</span></span>
+    <span>wall <span class={busy ? "text-primary" : "text-txtmain"}>{stats.duration}</span></span>
   </div>
 </div>
