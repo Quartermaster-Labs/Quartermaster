@@ -1,6 +1,7 @@
 package autogen
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -90,23 +91,23 @@ func TestVllmGpuUtil_DerivedFromBudget(t *testing.T) {
 
 	// The budget is the fraction of the card we hand vllm — not a flat 0.90 that
 	// ignores the operator asking for a smaller share.
-	if got, _ := vllmGpuUtil(Settings{TargetVramGB: 12}, nil); round2(got) != 0.5 {
+	if got, _ := vllmGpuUtil(Settings{TargetVramGB: 12}, nil, 12); round2(got) != 0.5 {
 		t.Errorf("12GB of a 24GB card = %g, want 0.5", got)
 	}
 	// A per-model cap wins over the fleet budget, same precedence as llama sizing.
-	if got, _ := vllmGpuUtil(Settings{TargetVramGB: 12}, &Override{VramTargetGB: 6}); round2(got) != 0.25 {
+	if got, _ := vllmGpuUtil(Settings{TargetVramGB: 12}, &Override{VramTargetGB: 6}, 6); round2(got) != 0.25 {
 		t.Errorf("per-model 6GB cap = %g, want 0.25", got)
 	}
 	// Clamped at both ends: a tiny budget still needs room for weights, and a
 	// budget at/over the card size must leave the desktop something.
-	if got, _ := vllmGpuUtil(Settings{TargetVramGB: 0.5}, nil); got != vllmMinGpuUtil {
+	if got, _ := vllmGpuUtil(Settings{TargetVramGB: 0.5}, nil, 0.5); got != vllmMinGpuUtil {
 		t.Errorf("tiny budget = %g, want the floor %g", got, vllmMinGpuUtil)
 	}
-	if got, _ := vllmGpuUtil(Settings{TargetVramGB: 32}, nil); got != vllmMaxGpuUtil {
+	if got, _ := vllmGpuUtil(Settings{TargetVramGB: 32}, nil, 32); got != vllmMaxGpuUtil {
 		t.Errorf("oversized budget = %g, want the ceiling %g", got, vllmMaxGpuUtil)
 	}
 	// An explicit knob is passed through untouched, clamps included.
-	if got, _ := vllmGpuUtil(Settings{TargetVramGB: 12}, &Override{VllmGpuUtil: 0.99}); got != 0.99 {
+	if got, _ := vllmGpuUtil(Settings{TargetVramGB: 12}, &Override{VllmGpuUtil: 0.99}, 12); got != 0.99 {
 		t.Errorf("pinned util = %g, want 0.99", got)
 	}
 }
@@ -148,6 +149,63 @@ func TestVllmMaxModelLen_SizedToBudget(t *testing.T) {
 	tiny, note := vllmMaxModelLen(Settings{TargetVramGB: 4}, nil, row, meta)
 	if tiny != 4096 || !strings.Contains(note, "exceed") {
 		t.Errorf("over-budget model = (%d, %q), want (4096, an exceeds-budget note)", tiny, note)
+	}
+}
+
+// A small model whose whole trained window fits with room to spare must be
+// granted only what it needs. vllm preallocates its full share, so handing it
+// the budget makes a 0.5B model hold 22.8GB and the router evict everything
+// else to admit it.
+func TestVllmFootprint_SmallModelTakesOnlyWhatItNeeds(t *testing.T) {
+	withCard(t, 24, true)
+	// Qwen2.5-0.5B-Instruct as read from its config.json.
+	meta := Metadata{
+		Architecture: "qwen2", ContextLength: 32768, BlockCount: 24,
+		HeadCount: 14, HeadCountKv: 2, EmbeddingLength: 896,
+		KeyLength: 64, ValueLength: 64,
+	}
+	row := GgufRow{FullPath: "/m/qwen2.5-0.5b", IsHF: true, SizeGB: 0.92}
+	s := Settings{TargetVramGB: 22.8, Backends: []BackendEntry{{ID: "v", Kind: "vllm", Path: "vllm", Default: true}}}
+
+	ctx, _ := vllmMaxModelLen(s, nil, row, meta)
+	if ctx != 32768 {
+		t.Fatalf("ctx = %d, want the trained 32768", ctx)
+	}
+	m := GetKvCostModel(meta, "f16", "f16")
+	need := row.SizeGB + KvReserveGB(ctx, m.SlopeGB, m.ConstGB) + vllmOverheadGB
+	foot := vllmFootprintGB(s, nil, row, meta, ctx)
+	if foot != need || foot > 4 {
+		t.Fatalf("footprint = %.2fGB, want weights+KV+overhead = %.2fGB (a few GB, not the budget)", foot, need)
+	}
+	util, _ := vllmGpuUtil(s, nil, foot)
+	// Rounded UP: printed at 2 decimals, the share must still cover the need.
+	if round2(util)*24 < need {
+		t.Errorf("util %g of 24GB = %.2fGB, under the %.2fGB needed", util, round2(util)*24, need)
+	}
+
+	var b strings.Builder
+	var emitted []string
+	emitVllmModel(&b, s, row, nil, "q", resolveBackend(s, nil, "llm"), meta, &emitted)
+	out := b.String()
+	if !strings.Contains(out, fmt.Sprintf("--gpu-memory-utilization %g", round2(util))) {
+		t.Errorf("emitted util != %g:\n%s", round2(util), out)
+	}
+	if !strings.Contains(out, fmt.Sprintf("estVramGB: %g", round2(util*24))) {
+		t.Errorf("estVramGB must charge the granted share %g:\n%s", round2(util*24), out)
+	}
+
+	// A model whose window was sized TO the budget still gets the budget: that
+	// is what the window was computed to fill.
+	big := Metadata{
+		Architecture: "qwen3", ContextLength: 262144, BlockCount: 48,
+		HeadCount: 32, HeadCountKv: 8, EmbeddingLength: 4096,
+		KeyLength: 128, ValueLength: 128,
+	}
+	bigRow := GgufRow{FullPath: "/m/q.gguf", SizeGB: 8}
+	bs := Settings{TargetVramGB: 16}
+	bctx, _ := vllmMaxModelLen(bs, nil, bigRow, big)
+	if got := vllmFootprintGB(bs, nil, bigRow, big, bctx); got < 15 || got > 16 {
+		t.Errorf("budget-sized model footprint = %.2fGB, want about the 16GB budget", got)
 	}
 }
 

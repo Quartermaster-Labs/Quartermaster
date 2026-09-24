@@ -301,7 +301,9 @@ const hashCacheSuffix = ".modelhash"
 // leaves a "# SKIPPED" comment instead of vanishing.
 // v89: Hugging Face model folders (config.json + safetensors) are discovered
 // and served through vllm, or leave a "# SKIPPED" comment with no vllm backend.
-const genVersion = "v89"
+// v90: vllm's --gpu-memory-utilization and estVramGB are sized to weights + KV
+// + overhead when that is under the budget, not to the whole budget.
+const genVersion = "v90"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight

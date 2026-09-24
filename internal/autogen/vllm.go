@@ -217,7 +217,7 @@ func vllmCmdLines(s Settings, row GgufRow, ov *Override, name string, be resolve
 	}
 
 	ctx, _ := vllmMaxModelLen(s, ov, row, meta)
-	util, _ := vllmGpuUtil(s, ov)
+	util, _ := vllmGpuUtil(s, ov, vllmFootprintGB(s, ov, row, meta, ctx))
 
 	lines := []string{
 		exe,
@@ -274,7 +274,8 @@ func emitVllmModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, na
 
 	lines := vllmCmdLines(s, row, ov, name, be, meta)
 	ctx, ctxNote := vllmMaxModelLen(s, ov, row, meta)
-	util, utilNote := vllmGpuUtil(s, ov)
+	footprint := vllmFootprintGB(s, ov, row, meta, ctx)
+	util, utilNote := vllmGpuUtil(s, ov, footprint)
 	format := "gguf"
 	if row.IsHF {
 		format = "safetensors"
@@ -288,9 +289,9 @@ func emitVllmModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, na
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
 	// vllm allocates its whole pool (weights + KV) up front from
-	// --gpu-memory-utilization, so its footprint IS the budget it was sized
-	// against, not a computed weights+KV sum.
-	writeEstVram(b, vllmBudgetGB(s, ov))
+	// --gpu-memory-utilization, so its footprint is whatever that flag grants,
+	// not a weights+KV sum: the router must charge what vllm will really hold.
+	writeEstVram(b, vllmReservedGB(util, footprint))
 	if ov != nil && ov.Unlisted {
 		b.WriteString("    unlisted: true\n")
 	}
@@ -354,13 +355,38 @@ func vllmMaxModelLen(s Settings, ov *Override, row GgufRow, meta Metadata) (ctx 
 	return ctx, note
 }
 
-// vllmGpuUtil derives --gpu-memory-utilization from the VRAM budget and the
-// card's real size. The old flat 0.90 was a fraction of TOTAL memory regardless
-// of what the budget said or what the desktop already holds, so it both ignored
-// a deliberately small budget and could exceed what is actually free. Falls back
-// to the flat default when the card's size can't be read (headless, no GPU
-// telemetry) — there is nothing to take a fraction of.
-func vllmGpuUtil(s Settings, ov *Override) (util float64, note string) {
+// vllmFootprintGB is the VRAM this model should be granted: weights + the KV
+// pool for the chosen --max-model-len + the flat overhead, capped at the budget.
+//
+// vllm preallocates its whole --gpu-memory-utilization share and fills whatever
+// is left after the weights with KV blocks, so handing it the full budget makes
+// a small model hold the full budget. A 0.5B model with a 32k trained window
+// needs ~3GB but would have taken 22.8GB of a 24GB card, and the router (which
+// charges estVramGB) would evict everything else to admit it. When the window
+// was sized TO the budget this returns the budget anyway, since that is what the
+// window was computed to fill. No KV cost model => the budget: without one there
+// is nothing to size a smaller share from.
+func vllmFootprintGB(s Settings, ov *Override, row GgufRow, meta Metadata, ctx int) float64 {
+	budget := vllmBudgetGB(s, ov)
+	m := GetKvCostModel(meta, "f16", "f16")
+	if !m.OK || ctx <= 0 {
+		return budget
+	}
+	need := row.SizeGB + KvReserveGB(ctx, m.SlopeGB, m.ConstGB) + vllmOverheadGB
+	return math.Min(need, budget)
+}
+
+// vllmGpuUtil derives --gpu-memory-utilization from the model's footprint (see
+// vllmFootprintGB) and the card's real size. The old flat 0.90 was a fraction of
+// TOTAL memory regardless of what the budget said or what the desktop already
+// holds, so it both ignored a deliberately small budget and could exceed what is
+// actually free. Falls back to the flat default when the card's size can't be
+// read (headless, no GPU telemetry) - there is nothing to take a fraction of.
+//
+// Rounded UP to the 2 decimals the flag is printed with: rounding a derived
+// share to nearest can land under the footprint, and a model sized to fit
+// exactly then refuses to start for lack of KV blocks.
+func vllmGpuUtil(s Settings, ov *Override, footprintGB float64) (util float64, note string) {
 	if ov != nil && ov.VllmGpuUtil > 0 {
 		return ov.VllmGpuUtil, "pinned"
 	}
@@ -368,14 +394,27 @@ func vllmGpuUtil(s Settings, ov *Override) (util float64, note string) {
 	if !ok || total <= 0 {
 		return vllmDefaultGpuUtil, "no GPU reading"
 	}
-	util = vllmBudgetGB(s, ov) / total
+	util = math.Ceil(footprintGB/total*100-1e-9) / 100
 	if util < vllmMinGpuUtil {
 		util = vllmMinGpuUtil
 	}
 	if util > vllmMaxGpuUtil {
 		util = vllmMaxGpuUtil
 	}
-	return util, fmt.Sprintf("%.1fGB budget of %.1fGB card", vllmBudgetGB(s, ov), total)
+	if budget := vllmBudgetGB(s, ov); footprintGB < budget {
+		return util, fmt.Sprintf("%.1fGB needed (weights+KV+overhead) of %.1fGB card, under the %.1fGB budget", footprintGB, total, budget)
+	}
+	return util, fmt.Sprintf("%.1fGB budget of %.1fGB card", footprintGB, total)
+}
+
+// vllmReservedGB is what vllm will actually hold: the granted share of the
+// card when its size is known (so the floor clamp and a pinned util are
+// charged too), else the computed footprint.
+func vllmReservedGB(util, footprintGB float64) float64 {
+	if total, ok := cachedTotalVramGB(); ok && total > 0 {
+		return round2(util * total)
+	}
+	return footprintGB
 }
 
 // cachedTotalVramGB probes the card once per process. Sizing runs per model and

@@ -52,7 +52,7 @@ folder (below), and there
 are **no ctx-tier or named variants** for vllm (the llama profile loop that makes them is
 skipped). A chosen `llama` build just swaps `s.ServerExe` (local copy) through the normal path.
 
-**Both VRAM-facing flags are budget-derived, not flat:**
+**Both VRAM-facing flags are derived from the budget, not flat:**
 
 - `vllmMaxModelLen` — vllm allocates its KV pool up front from `--max-model-len`, so handing
   it the model's trained window (262144 on a Qwen3.6) is a refused or OOMing startup, not a
@@ -61,7 +61,13 @@ skipped). A chosen `llama` build just swaps `s.ServerExe` (local copy) through t
   not a model) against llama's f16 KV cost model, `RoundedCtx`es the result, and caps it at the
   trained length. A pinned `Override.Ctx` always wins; weights-over-budget emits the 4096 floor
   plus a note rather than a window implying it fits.
-- `vllmGpuUtil` — `budget / total card`, clamped to [0.10, 0.95]. The old flat 0.90 was a
+- `vllmGpuUtil` — `footprint / total card`, rounded UP to 2 decimals and clamped to
+  [0.10, 0.95]. The footprint (`vllmFootprintGB`) is `min(budget, weights + KvReserveGB(ctx) +
+  vllmOverheadGB)`: vllm PREALLOCATES its whole share and fills the rest with KV blocks, so
+  handing a 0.5B model the budget made it grab 22.8 GB and the router charge that much. A
+  model whose ctx is capped by the trained length now takes only what it needs; a big model
+  still lands at the budget. `estVramGB` charges `util × card` (what vllm actually takes after
+  rounding), or the footprint when there is no card reading. The old flat 0.90 was a
   fraction of TOTAL memory that both ignored a deliberately small budget and could exceed what
   is actually free (vllm validates against free memory and refuses). The card is probed once
   per process via `cachedTotalVramGB` (a `sync.OnceValues` func var — the seam tests stub); no
