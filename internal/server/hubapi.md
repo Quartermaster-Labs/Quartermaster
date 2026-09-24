@@ -112,6 +112,19 @@ Three deliberate choices:
   a known family with no class here (music, stem separation, codecs) is a roadmap item, while an
   unknown one means the installed backend is newer than autogen's table.
 
+## `diskusage.go` — `GET /api/hub/disk-usage`
+
+Backs the dashboard's "On disk" tile: `filepath.WalkDir` over the models root, summing the
+apparent size of every regular file (shards, projectors, VAEs, `.part` files, all of it), so the
+number agrees with Explorer / Finder / `du --apparent-size`. It replaced a sum over catalog rows,
+which overcounted ~2.3x: every ctx tier and `-vision` twin is a LISTED row over the same gguf.
+
+Symlinks are not followed (no loops, no double counting); a root that is itself a link is
+resolved first, or the walk would see one leaf and report 0. Unreadable entries are counted in
+`skipped` rather than failing the walk. The result is cached per root for `diskUsageTTL` under a
+mutex held across the walk, so concurrent dashboards share one walk. 501 with no models root; the
+UI then falls back to the catalog sum, deduped by `family`.
+
 ## `revealfolder.go` — `POST /api/hub/reveal`
 
 Opens a downloaded model's folder in the OS file manager (Explorer / `open` / `xdg-open`), backing

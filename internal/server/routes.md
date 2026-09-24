@@ -133,6 +133,8 @@ See [`hubapi.md`](hubapi.md).
   pause does not** (see `internal/hub/CLAUDE.md`).
 - `POST /api/hub/reveal` (`revealfolder.go`) — opens a folder inside the models root in the OS file
   manager; empty path = the root.
+- `GET /api/hub/disk-usage` (`diskusage.go`) — total bytes of every file under the models root, for
+  the dashboard's "On disk" tile. Cached 2 min per root; `?refresh=1` forces a rewalk.
 
 ## Playground app (on `-playground-port`, `playground.go`)
 

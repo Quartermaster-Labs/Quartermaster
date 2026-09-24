@@ -9,6 +9,8 @@
   import ActiveModelsPanel from "../components/ActiveModelsPanel.svelte";
   import { ArrowRight } from "lucide-svelte";
   import type { Model } from "../lib/types";
+  import { onMount } from "svelte";
+  import { getHubDiskUsage, type HubDiskUsage } from "../lib/hubApi";
 
   // Sum the load tally across a model's whole family so loading ANY variant (not
   // only the default) floats the family up. The tally is keyed by the exact id
@@ -45,9 +47,19 @@
   // Local, listed models only: peers live on someone else's disk, and unlisted
   // entries are variants the catalog deliberately hides.
   const listed = $derived($models.filter((m) => !m.unlisted && !m.peerID));
-  // An approximation, and labelled as one: sizeGB is per catalog ROW, so a model
-  // whose quants are separate rows counts each of them.
-  const catalogGB = $derived(listed.reduce((sum, m) => sum + (m.sizeGB ?? 0), 0));
+  // The real figure is the models folder walked server-side, which agrees with
+  // the OS file manager. The catalog sum is only the fallback for a build with
+  // no models root, and it must count each FILE once: every ctx tier and the
+  // -vision twin are listed rows over the same gguf, and summing rows counted
+  // one file up to five times (956 GB shown for a 420 GB folder).
+  let disk = $state<HubDiskUsage | null>(null);
+  onMount(() => {
+    getHubDiskUsage().then((d) => (disk = d)).catch(() => {});
+  });
+  const catalogGB = $derived(
+    [...new Map(listed.map((m) => [m.family || m.id, m.sizeGB ?? 0])).values()].reduce((a, b) => a + b, 0),
+  );
+  const diskGB = $derived(disk ? disk.bytes / 1024 ** 3 : catalogGB);
   const catBreakdown = $derived(
     MODEL_CATEGORIES.map((c) => ({ label: c.label, n: listed.filter((m) => modelCategory(m) === c.id).length }))
       .filter((c) => c.n > 0),
@@ -150,9 +162,17 @@
         </span>
       </div>
       <div class="tile">
-        <span class="tile__label" use:tip={"Sum of the on-disk size of every listed row. A model with several quants counts each of them."}>On disk</span>
-        <span class="tile__value">{catalogGB >= 1024 ? (catalogGB / 1024).toFixed(2) + " TB" : catalogGB.toFixed(0) + " GB"}</span>
-        <span class="tile__sub">approx.</span>
+        <span
+          class="tile__label"
+          use:tip={disk
+            ? `Every file under ${disk.root}, the same total the OS file manager shows. Rescanned every few minutes.`
+            : "Weights of the listed models, each file counted once. Projectors, drafts, VAEs and encoders are not included."}
+          >On disk</span
+        >
+        <span class="tile__value">{diskGB >= 1024 ? (diskGB / 1024).toFixed(2) + " TB" : diskGB.toFixed(0) + " GB"}</span>
+        <span class="tile__sub truncate">
+          {disk ? `${disk.files} files${disk.skipped ? `, ${disk.skipped} unreadable` : ""}` : "catalog weights"}
+        </span>
       </div>
       <div class="tile">
         <span class="tile__label" use:tip={"VRAM not currently allocated, as reported by the GPU - not an estimate of what will fit. The big number is what is FREE; the line below it is what is in use."}>VRAM free</span>
