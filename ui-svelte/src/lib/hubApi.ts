@@ -283,6 +283,23 @@ export function listHubFolder(path = ""): Promise<HubFolder> {
   return hubFetch<HubFolder>(`/api/hub/files${v}`);
 }
 
+/** Total size of every file under the models root, as the OS file manager
+ *  would add it up. `skipped` > 0 means some entries were unreadable, so
+ *  `bytes` is a floor. */
+export interface HubDiskUsage {
+  root: string;
+  bytes: number;
+  files: number;
+  skipped?: number;
+  scannedAt: string;
+}
+
+/** Walks the models folder server-side (cached there for a couple of minutes).
+ *  Rejects with a 501 HubApiError when there is no models root. */
+export function getHubDiskUsage(): Promise<HubDiskUsage> {
+  return hubFetch<HubDiskUsage>("/api/hub/disk-usage");
+}
+
 /**
  * HubEstimate is the REAL pre-download sizing, from the candidate's GGUF header
  * (Range-fetched server-side) run through the same planner the config editor
