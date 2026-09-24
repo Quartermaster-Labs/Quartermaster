@@ -1016,6 +1016,10 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/models/{model}/adhoc-cmd", adminChain.ThenFunc(s.handleAPIModelAdhocCmd))
 	mux.Handle("PUT /api/models/{model}/adhoc-load", adminChain.ThenFunc(s.handleAPIModelAdhocLoad))
 	mux.Handle("DELETE /api/models/{model}/adhoc-load", adminChain.ThenFunc(s.handleAPIModelAdhocUnload))
+	// Delete a model's weight file(s) from disk: GET is the dry run the
+	// confirmation dialog renders, DELETE unloads, removes and regenerates.
+	mux.Handle("GET /api/models/{model}/delete-plan", adminChain.ThenFunc(s.handleAPIModelDeletePlan))
+	mux.Handle("DELETE /api/models/{model}/files", adminChain.ThenFunc(s.handleAPIModelDeleteFiles))
 
 	// Global settings editor (dashboard GPU-memory card): read effective
 	// settings + defaults, save a manual VRAM target/headroom patch, reset it.

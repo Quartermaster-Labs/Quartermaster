@@ -270,6 +270,14 @@ the button (`headCls`): ★ carries a Star glyph (+ `sr-only` text), the family 
 the action column `Actions`. A blank header reads as a rendering bug, and these are exactly the
 columns whose purpose isn't self-evident.
 
+**Actions are a 2x2 grid**, `[Chat][gear]` over `[Load][trash]`, so the column is `w-32` rather
+than the `w-56` one inline run needed (that width came out of the Model column). Expanded quant
+sub-rows keep a single line (no Chat). The trash button deletes the SELECTED quant's weights: the
+page fetches `GET /api/models/{id}/delete-plan` and renders it in `askConfirm` (files + size, the
+catalog ids that vanish with the file, what gets unloaded, other models naming it as a draft, and
+the companion files left in the folder) before `DELETE /api/models/{id}/files`. The plan and the
+delete share one server function, so the dialog cannot describe a different set than it removes.
+
 ### Where the numbers come from
 
 Quant, Size and Est RAM are **server-side additions**: `internal/server/modelmeta.go` derives quant

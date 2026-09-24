@@ -74,7 +74,10 @@ that folder, for the config editor's adapter picker; never errors on a missing f
 `PUT /api/models/{model}/preview` (cmd preview); `PUT /api/models/{model}/adhoc-cmd` (one-off
 flag-override cmd — no persistence, no reload); `PUT`/`DELETE /api/models/{model}/adhoc-load`
 (inject that cmd into the LIVE router; in-memory only, DELETE or any file reload reverts);
-`PUT`/`DELETE /api/models/{model}/display-name`; `GET`/`PUT`/`DELETE /api/settings`;
+`PUT`/`DELETE /api/models/{model}/display-name`; `GET /api/models/{model}/delete-plan` +
+`DELETE /api/models/{model}/files` (**`modeldelete.go`: remove one quant's weight file(s), every
+shard, then unload/regen/reload; refuses anything outside the models roots, keeps companion files
+(projector, encoders, other quants) and says so in the plan**); `GET`/`PUT`/`DELETE /api/settings`;
 `PUT /api/settings/slotcache`; `PUT /api/settings/backends`; `PUT /api/settings/guards`;
 `PUT`/`DELETE /api/settings/advanced`; `GET`/`PUT /api/settings/app` (**ports, dashboard access,
 update polling, HF token — the only settings route that neither regenerates nor reloads; it takes
