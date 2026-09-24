@@ -106,6 +106,25 @@
 }
 
 @layer theme {
+  /* A plain rule, not @theme: Tailwind emits only the @theme variables a
+     utility class uses, and these are read through var() in component styles,
+     so under @theme the light values were silently dropped. */
+  :root {
+    /* Model categories (lib/modelUtils MODEL_CATEGORIES), for the Dashboard's
+       catalog and request views. Chat models get gold, NOT the orange accent: the
+       accent already means "active / your attention", and LLMs are most of any
+       catalog, so orange there would paint the whole page as a call to action.
+       Segment, speech and embedding share "other" - they are a handful of rows
+       each and five hues is already the limit of what reads at a glance. */
+    --color-cat-llm: rgb(150, 110, 30);
+    --color-cat-image: rgb(122, 82, 196);
+    --color-cat-video: rgb(22, 132, 136);
+    --color-cat-3d: rgb(48, 108, 196);
+    --color-cat-other: rgb(140, 130, 120);
+  }
+}
+
+@layer theme {
   /* over ride theme for dark mode */
   [data-theme="dark"] {
     /* Dark — warm near-black (#22201e) + flame accent. Surface (#2c2a26)
@@ -152,10 +171,23 @@
     --color-dot: rgba(180, 180, 190, 0.09);
     --color-cite-bg: rgba(18, 17, 16, 1);
     --color-cite-text: rgba(237, 237, 238, 1);
+    --color-cat-llm: rgb(226, 186, 106);
+    --color-cat-image: rgb(176, 140, 255);
+    --color-cat-video: rgb(72, 196, 200);
+    --color-cat-3d: rgb(110, 168, 255);
+    --color-cat-other: rgb(150, 150, 156);
   }
 }
 
 @layer base {
+  /* Tailwind v4's preflight dropped v3's pointer cursor on buttons, so every
+     plain <button> without a class that sets one (Quick load rows, the
+     "Activity log" link-button) looked like text. Restored once here, as the
+     v4 upgrade guide suggests, rather than remembered at each call site. */
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
   body {
     /* Sans is the DEFAULT; data opts into mono explicitly. Most value-bearing
        markup in the app already carries `font-mono` at the call site, so this
