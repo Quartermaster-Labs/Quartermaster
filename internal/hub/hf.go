@@ -354,6 +354,9 @@ func sortModels(in []Model, sortBy string) {
 func hfPage(raw []Model, q Query, fetch, advance int) Page {
 	out := capParams(raw, q.MaxParamsB, 0)
 	out = capAge(out, q.MaxAgeDays)
+	if isTextKind(q.Kind) {
+		out = keepText(out)
+	}
 	return Page{
 		Models:   out,
 		NextSkip: q.Skip + advance,
@@ -378,6 +381,93 @@ func capAge(in []Model, maxDays int) []Model {
 		}
 	}
 	return out
+}
+
+// isTextKind reports whether a Query.Kind is the LLM tab. "gguf" is not: it
+// asks for every GGUF repo, which is exactly what this tab must no longer be.
+func isTextKind(kind string) bool {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "", "llm", "text":
+		return true
+	}
+	return false
+}
+
+// textTasks are the HF pipeline tags of a model llama-server runs as a chat
+// model. VLMs are `image-text-to-text` and Gemma's omni builds `any-to-any`, so
+// `text-generation` alone would lose most of today's catalog.
+var textTasks = map[string]bool{
+	"text-generation":           true,
+	"text2text-generation":      true,
+	"conversational":            true,
+	"image-text-to-text":        true,
+	"any-to-any":                true,
+	"audio-text-to-text":        true,
+	"video-text-to-text":        true,
+	"visual-question-answering": true,
+	"image-to-text":             true,
+}
+
+// otherTasks are the pipeline tags that name a DIFFERENT job. Only consulted
+// for a repo with no pipeline_tag, where a task in its plain tag list is the
+// only statement it makes about itself.
+var otherTasks = map[string]bool{
+	"text-to-speech":               true,
+	"text-to-audio":                true,
+	"audio-to-audio":               true,
+	"automatic-speech-recognition": true,
+	"audio-classification":         true,
+	"voice-activity-detection":     true,
+	"text-to-image":                true,
+	"image-to-image":               true,
+	"text-to-video":                true,
+	"image-to-video":               true,
+	"image-text-to-video":          true,
+	"video-to-video":               true,
+	"image-to-3d":                  true,
+	"text-to-3d":                   true,
+	"feature-extraction":           true,
+	"sentence-similarity":          true,
+	"text-ranking":                 true,
+	"mask-generation":              true,
+	"image-segmentation":           true,
+	"object-detection":             true,
+	"depth-estimation":             true,
+	"image-classification":         true,
+	"token-classification":         true,
+	"text-classification":          true,
+}
+
+// keepText is the LLM tab's filter. The hub query is plain `gguf`, since no
+// hub-side tag describes "an LLM": half the popular quant repos (unsloth's and
+// lmstudio-community's among them) carry no pipeline_tag at all, so filtering
+// on one at the hub would hide them. It is therefore an EXCLUSION, applied
+// here: a repo is dropped only when it says it is something else. Otherwise
+// every GGUF-shipping speech, video and embedding repo (audio.cpp,
+// transcribe.cpp, Wan) was listed as an LLM.
+func keepText(in []Model) []Model {
+	out := make([]Model, 0, len(in))
+	for _, m := range in {
+		if isText(m) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func isText(m Model) bool {
+	if p := strings.ToLower(m.Pipeline); p != "" {
+		return textTasks[p]
+	}
+	other := false
+	for _, t := range m.Tags {
+		t = strings.ToLower(t)
+		if textTasks[t] {
+			return true
+		}
+		other = other || otherTasks[t]
+	}
+	return !other
 }
 
 // capParams applies the size cap and trims to the requested page size.
