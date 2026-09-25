@@ -3,7 +3,7 @@
   import { persistentStore } from "../stores/persistent";
   import { calculateHistogramData } from "../lib/histogram";
   import { ChevronDown, ChevronUp, Hash, Database, ArrowDownToLine, ArrowUpFromLine, Gauge } from "lucide-svelte";
-  import TokenHistogram from "./TokenHistogram.svelte";
+  import SpeedBars, { type SpeedPoint } from "./SpeedBars.svelte";
   import type { ActivityLogEntry } from "../lib/types";
 
   interface Props {
@@ -31,6 +31,10 @@
     const totalCacheTokens = ms.reduce((sum, m) => sum + Math.max(0, m.tokens.cache_tokens), 0);
     const promptPerSecond = ms.filter((m) => m.tokens.prompt_per_second > 0).map((m) => m.tokens.prompt_per_second);
     const tokensPerSecond = ms.filter((m) => m.tokens.tokens_per_second > 0).map((m) => m.tokens.tokens_per_second);
+    // Oldest first, for the per-request bars.
+    const byId = [...ms].sort((a, b) => a.id - b.id);
+    const series = (pick: (m: ActivityLogEntry) => number): SpeedPoint[] =>
+      byId.filter((m) => pick(m) > 0).map((m) => ({ id: m.id, model: m.model, value: pick(m) }));
 
     return {
       totalRequests: ms.length,
@@ -43,8 +47,8 @@
       inFlightRequests: $inFlightRequests,
       medPrompt: median(promptPerSecond),
       medGen: median(tokensPerSecond),
-      promptPerSecond,
-      tokensPerSecond,
+      promptSeries: series((m) => m.tokens.prompt_per_second),
+      genSeries: series((m) => m.tokens.tokens_per_second),
       promptHistogramData: promptPerSecond.length > 0 ? calculateHistogramData(promptPerSecond) : null,
       genHistogramData: tokensPerSecond.length > 0 ? calculateHistogramData(tokensPerSecond) : null,
     };
@@ -87,7 +91,7 @@
     </div>
   </div>
 
-  <!-- Speed distributions -->
+  <!-- Speed per request -->
   <div class="mt-2 border-t border-card-border-inner pt-1">
     <button
       class="w-full flex items-center gap-1.5 py-1 font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary hover:text-txtmain transition-colors"
@@ -95,7 +99,7 @@
       aria-expanded={!$histogramCollapsed}
     >
       {#if $histogramCollapsed}<ChevronDown size={12} />{:else}<ChevronUp size={12} />{/if}
-      Speed distribution
+      Speed per request
     </button>
 
     {#if !$histogramCollapsed}
@@ -104,12 +108,12 @@
            both re-tune with the theme. -->
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4 mt-1 pb-1">
         {#if stats.promptHistogramData}
-          <TokenHistogram label="Prompt processing" data={stats.promptHistogramData} values={stats.promptPerSecond} barClass="bg-txtsecondary/35 hover:bg-txtsecondary/60" />
+          <SpeedBars label="Prompt processing" points={stats.promptSeries} p50={stats.promptHistogramData.p50} p95={stats.promptHistogramData.p95} barClass="bg-txtsecondary/35 hover:bg-txtsecondary/60" />
         {:else}
           <div class="py-6 text-center font-mono text-micro uppercase tracking-wide text-txtsecondary">No prompt speed data yet</div>
         {/if}
         {#if stats.genHistogramData}
-          <TokenHistogram label="Token generation" data={stats.genHistogramData} values={stats.tokensPerSecond} />
+          <SpeedBars label="Token generation" points={stats.genSeries} p50={stats.genHistogramData.p50} p95={stats.genHistogramData.p95} />
         {:else}
           <div class="py-6 text-center font-mono text-micro uppercase tracking-wide text-txtsecondary">No generation speed data yet</div>
         {/if}
