@@ -43,6 +43,8 @@
       inFlightRequests: $inFlightRequests,
       medPrompt: median(promptPerSecond),
       medGen: median(tokensPerSecond),
+      promptPerSecond,
+      tokensPerSecond,
       promptHistogramData: promptPerSecond.length > 0 ? calculateHistogramData(promptPerSecond) : null,
       genHistogramData: tokensPerSecond.length > 0 ? calculateHistogramData(tokensPerSecond) : null,
     };
@@ -102,12 +104,12 @@
            both re-tune with the theme. -->
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4 mt-1 pb-1">
         {#if stats.promptHistogramData}
-          <TokenHistogram label="Prompt processing" data={stats.promptHistogramData} barClass="bg-txtsecondary/35 hover:bg-txtsecondary/60" />
+          <TokenHistogram label="Prompt processing" data={stats.promptHistogramData} values={stats.promptPerSecond} barClass="bg-txtsecondary/35 hover:bg-txtsecondary/60" />
         {:else}
           <div class="py-6 text-center font-mono text-micro uppercase tracking-wide text-txtsecondary">No prompt speed data yet</div>
         {/if}
         {#if stats.genHistogramData}
-          <TokenHistogram label="Token generation" data={stats.genHistogramData} />
+          <TokenHistogram label="Token generation" data={stats.genHistogramData} values={stats.tokensPerSecond} />
         {:else}
           <div class="py-6 text-center font-mono text-micro uppercase tracking-wide text-txtsecondary">No generation speed data yet</div>
         {/if}
