@@ -454,6 +454,10 @@ func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble st
 		sc.record(kvEvent{Model: model, Slot: idx, Op: "recurrent-skip-seed"})
 	} else if seq, ok := sc.ensurePreambleSeed(ctx, base, model, idx, preamble); ok {
 		sc.pushAwait(model, "preamble", seq)
+	} else {
+		// Nothing on disk and no preamble to seed: a full prefill. Recorded so the
+		// warm path reports its misses the way the cold path always has.
+		sc.record(kvEvent{Model: model, Slot: idx, Op: "miss", Key: short(key)})
 	}
 	return idx, release
 }

@@ -128,8 +128,11 @@ win that never happened, for the three minutes it took the prefill to finish.
 ## Logging
 
 Every `record()` event is mirrored into the proxy log by `logEvent` (`slotcache_stats.go`):
-`save` / `restore-hit` / `restore-seed` and the `confirm` / `confirm-miss` that settle them at INFO,
-everything else (misses, preamble bookkeeping) at DEBUG. A restore line is explicitly marked
+every op that decides whether a turn prefills in full is INFO: `save`, the loads (`restore-hit` /
+`restore-seed` / `preamble-hit` / `preamble-mint`), the `confirm` / `confirm-miss` that settle them,
+and the misses (`miss`, `recurrent-skip-seed`, `recurrent-skip-shorter`, `preamble-warm`), each
+suffixed with what it costs ("no saved KV, full prefill"). The warm path records a `miss` too when
+it has neither a snapshot nor a preamble to seed; it used to record nothing. A load line is explicitly marked
 `- awaiting reuse confirmation`: on its own it reports a file read, and the confirm line a few
 seconds (or minutes) later is the one that says whether it was worth anything. `error` events are
 skipped there — the call sites already Warn with the cause, so logging them twice would just
