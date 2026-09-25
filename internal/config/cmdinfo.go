@@ -26,7 +26,8 @@ type CmdInfo struct {
 	// Argv is the sanitized token list, nil if the command could not be split.
 	Argv []string
 	// ModelPath is the model file the command loads: the value of -m / --model /
-	// --diffusion-model, slash-normalized. "" when the command names none (a
+	// --diffusion-model, or vllm's positional `serve <model>` (a gguf or an HF
+	// folder), slash-normalized. "" when the command names none (a
 	// non-llama.cpp upstream). This is the fork's model "family" key — every
 	// variant of one model (ctx tiers, game/judge profiles) is the same file
 	// launched with different placement flags.
@@ -74,6 +75,8 @@ func ParseCmd(cmd string) *CmdInfo {
 	}
 	if v, ok := info.Value(modelPathFlags...); ok {
 		info.ModelPath = filepath.ToSlash(strings.TrimSpace(v))
+	} else if v, ok := info.servePositional(); ok {
+		info.ModelPath = filepath.ToSlash(strings.TrimSpace(v))
 	}
 
 	cmdInfoMu.Lock()
@@ -83,6 +86,16 @@ func ParseCmd(cmd string) *CmdInfo {
 	cmdInfoCache[cmd] = info
 	cmdInfoMu.Unlock()
 	return info
+}
+
+// servePositional reads the model of a `<exe> serve <model>` command. vllm
+// takes its model positionally, so modelPathFlags alone left every vllm entry
+// with no family key and no way to be saved from the config editor.
+func (c *CmdInfo) servePositional() (string, bool) {
+	if len(c.Argv) < 3 || c.Argv[1] != "serve" || strings.HasPrefix(c.Argv[2], "-") {
+		return "", false
+	}
+	return c.Argv[2], true
 }
 
 // Has reports whether any of the given flags appears as its own token (or in

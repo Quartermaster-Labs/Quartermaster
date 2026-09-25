@@ -48,6 +48,7 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 | `backenddev.go` | What the BACKEND calls each device (`ListBackendDevices` over `--list-devices`, memoised per binary), and the map from a resolved `GpuSet` onto those ids (`BackendIDs`, `DeviceFlagFor`). Refuses on any unmatched device so the caller degrades to unnamed placement. |
 | `liveoffload.go` | Spawn-time placement recompute (`LiveOffloadArgs`), including the live `--tensor-split` retune (`retuneTensorSplit`). → `liveoffload.md` |
 | `vllm.go` | Backend selection (`resolveBackend`, `resolveBackendPreferring`, `kindClass`) + the vllm emitter. → `backends.md` |
+| `hf.go` | Hugging Face model folders (`config.json` + safetensors): the three-rule detector (`hfModelDir`), the `IsHF` row, `ReadHFMetadata` (config.json → `Metadata` for vllm sizing), `emitHFModel` (vllm-preferred, `# SKIPPED` without one), and `ReadModelMetadata`/`HFRowFor` for server callers holding a path. → `backends.md` |
 | `rope.go` | `ropeCeiling`/`ropeFactor` — the only path that lifts the trained-ctx ceiling. → `sizing.md` |
 | `encoderpool.go` | Diffusion component auto-discovery: classifies every VAE / CLIP / T5 / audio VAE / text-encoder LLM on disk from its header (safetensors tensor table or gguf metadata), pairs each encoder with the mmproj beside it, and fills the blanks in `settings.encoders`. Matched to a DiT by `Metadata.CondHidden`. VAEs and audio VAEs carry a FAMILY, and `Vae`/`AudioVae` are scoped by it: the shapes alone would let a model load a decoder for a latent it never produced. `LlmHinted` is the path-based escape for a family whose encoder is a republished copy of a common model (LTX). Prompt-enhancer files (`IsPromptEnhancerFile`) are withheld from the text-encoder pool: a same-arch BF16 PE outranks the real encoder on file size in `better()`, and a mis-picked encoder fails as a confidently unrelated image. -> `classes.md` |
 | `promptenhancer.go` | Name-based prompt-enhancer classifier: `promptEnhancerName`/`PromptEnhancerID` (direction `PEDirText`/`PEDirEdit`, family key), `IsPromptEnhancerFile`, `detectEnhancers`/`autoEnhancers.For` (pairs a rewriter with the image model its name carries), `resolveEnhancerIDs`, `enhancerServedID` (an i2i rewriter pairs to the `-vision` twin, because the base profile's RAM-side projector charges a host encode on every call and an i2i call always carries an image), and the `PEDisabled` (`"none"`) sentinel. NAME-only because a PE gguf reports `general.architecture=qwen3vl`, identical to every other VL chat model, so the arch gate the asr/tts/embedding classifiers use says nothing here. Narrow rule: a `pe` token must be immediately followed by a `t2i`/`i2i` token, or the name spells `promptenhanc`. |
@@ -122,6 +123,14 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
   model id but keeping the FIRST position, so editing a row does not make it jump to the bottom
   of the settings table. `SystemPrompt` is deliberately NOT trimmed: the leading indentation and
   trailing newline of a published PE prompt are part of the prompt),
+  `LoadSidecarExtraImageModels`/`UpsertSidecarExtraImageModels` (**the "Add model manually"
+  table**. Unlike every other top-level list this one EXTENDS the generate file's
+  `settings.extraImageModels` instead of replacing it (`mergeExtraImageModels`): a UI row
+  replaces the file row of the same name in place, the rest append. Replace semantics would
+  either hide a power user's hand-written rows from generation or copy them into the sidecar on
+  the first save. Deleting a FILE row from the table records its name in
+  `removedExtraImageModels` (`LoadSidecarRemovedExtraImageModels`), which the merge drops at load;
+  a kept row of the same name clears the entry),
   `LoadSidecarAPIKeys`/`UpsertSidecarAPIKey`/`DeleteSidecarAPIKey`,
   `LoadSidecarBackendSources`/`UpsertSidecarBackendSources` (**tracked GitHub repos the in-app
   installer downloads builds from** — deliberately separate from `BackendList`: a

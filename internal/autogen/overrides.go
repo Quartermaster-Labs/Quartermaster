@@ -656,8 +656,13 @@ type Override struct {
 	// folder name, not a verified Hugging Face repo id, so a guess here would bake
 	// a wrong remote reference into a launch command. A repo id or a local path.
 	VllmTokenizer string `yaml:"vllmTokenizer"`
-	Spec          string `yaml:"spec"`         // "draft-mtp" | "draft-dflash" | "" (=> ngram-mod); chainable with "+"
-	ReasoningFmt  string `yaml:"reasoningFmt"` // "auto" | "off" | "" (=> auto)
+	// VllmToolParser => --enable-auto-tool-choice --tool-call-parser X. "" =>
+	// picked from the architecture (vllmToolParser), "none" => off. vLLM refuses
+	// every request that carries `tools` without one, and the parser is
+	// per-family, so it cannot be a fleet-wide default.
+	VllmToolParser string `yaml:"vllmToolParser"`
+	Spec           string `yaml:"spec"`         // "draft-mtp" | "draft-dflash" | "" (=> ngram-mod); chainable with "+"
+	ReasoningFmt   string `yaml:"reasoningFmt"` // "auto" | "off" | "" (=> auto)
 	// ReasoningBudget caps thinking tokens (--reasoning-budget N). 0 => omit (no
 	// cap). Inherited by ctx-tier variants; named variants are standalone.
 	ReasoningBudget int    `yaml:"reasoningBudget"`
@@ -1471,6 +1476,17 @@ func LoadGenerateFile(path, modelsDirOverride string) (GenerateFile, error) {
 	if sideEnh != nil {
 		gf.Settings.PromptEnhancers = sideEnh
 	}
+	// UI-added image models EXTEND the file's list (not replace): see the
+	// sidecar field's comment for why.
+	sideExtra, err := LoadSidecarExtraImageModels(path)
+	if err != nil {
+		return GenerateFile{}, err
+	}
+	removedExtra, err := LoadSidecarRemovedExtraImageModels(path)
+	if err != nil {
+		return GenerateFile{}, err
+	}
+	gf.Settings.ExtraImageModels = mergeExtraImageModels(gf.Settings.ExtraImageModels, sideExtra, removedExtra)
 	// UI-owned slot-KV block overlays the generate file's settings.slotCache.
 	sideSlot, err := LoadSidecarSlotCache(path)
 	if err != nil {

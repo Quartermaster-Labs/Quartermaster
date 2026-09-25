@@ -47,11 +47,12 @@ each emitter reads only its own, so switching kind never wipes the dormant set.
 
 Kind `vllm` → `emitVllmModel`, a totally different arg set: llama's KV / `-ngl` / spec / DRY
 knobs are ignored; only `Ctx`→`--max-model-len`, `VllmGpuUtil`, `VllmTensorParallel`,
-`VllmTokenizer` apply. It serves the SAME discovered gguf (`--quantization gguf`), and there
+`VllmTokenizer` apply. It serves the SAME discovered gguf (`--quantization gguf`) or HF
+folder (below), and there
 are **no ctx-tier or named variants** for vllm (the llama profile loop that makes them is
 skipped). A chosen `llama` build just swaps `s.ServerExe` (local copy) through the normal path.
 
-**Both VRAM-facing flags are budget-derived, not flat:**
+**Both VRAM-facing flags are derived from the budget, not flat:**
 
 - `vllmMaxModelLen` — vllm allocates its KV pool up front from `--max-model-len`, so handing
   it the model's trained window (262144 on a Qwen3.6) is a refused or OOMing startup, not a
@@ -60,16 +61,76 @@ skipped). A chosen `llama` build just swaps `s.ServerExe` (local copy) through t
   not a model) against llama's f16 KV cost model, `RoundedCtx`es the result, and caps it at the
   trained length. A pinned `Override.Ctx` always wins; weights-over-budget emits the 4096 floor
   plus a note rather than a window implying it fits.
-- `vllmGpuUtil` — `budget / total card`, clamped to [0.10, 0.95]. The old flat 0.90 was a
+- `vllmGpuUtil` — `footprint / total card`, rounded UP to 2 decimals and clamped to
+  [0.10, 0.95]. The footprint (`vllmFootprintGB`) is `min(budget, weights + KvReserveGB(ctx) +
+  vllmOverheadGB)`: vllm PREALLOCATES its whole share and fills the rest with KV blocks, so
+  handing a 0.5B model the budget made it grab 22.8 GB and the router charge that much. A
+  model whose ctx is capped by the trained length now takes only what it needs; a big model
+  still lands at the budget. `estVramGB` charges `util × card` (what vllm actually takes after
+  rounding), or the footprint when there is no card reading. The old flat 0.90 was a
   fraction of TOTAL memory that both ignored a deliberately small budget and could exceed what
   is actually free (vllm validates against free memory and refuses). The card is probed once
   per process via `cachedTotalVramGB` (a `sync.OnceValues` func var — the seam tests stub); no
   GPU reading falls back to the flat 0.90, since there is nothing to take a fraction of.
 
+**Tool calling needs a parser, per family.** vLLM rejects every request carrying `tools` with a
+400 unless it was launched with `--enable-auto-tool-choice --tool-call-parser X` (issue #93), and
+the parser is the model family's tool-call format, not a server setting. `vllmToolParser` picks
+it: `Override.VllmToolParser` when set (`none` turns it off), else `vllmToolParsers` keyed on
+`Metadata.Architecture` (HF `model_type` or gguf arch, both spellings listed), with a Qwen3
+`coder` name switching `hermes` to `qwen3_coder`. The table is short on purpose: a WRONG parser
+does not fail, it leaves tool calls unparsed in the reply text, which is worse than the 400. A
+parser already in `ExtraArgs` (the pre-knob workaround) suppresses ours. A model with a parser is
+emitted with `capabilities.tools: true` (`function_calling` in `/v1/models`); one without gets a
+YAML comment saying why. Nothing probes `vllm serve --help=tool-call-parser` for the list: the
+editor's field is free text with the upstream names as suggestions, since plugin parsers
+(`--tool-parser-plugin`) are valid names no probe lists.
+
 **Split ggufs are skipped, not emitted.** Discovery represents a shard set by shard 1 alone,
 which is all llama.cpp needs (it opens the siblings itself) — vllm would load a fifth of the
 weights. `emitVllmModel` writes a `# skipped` comment and leaves the model out of `emitted`;
 `RenderSoloCmd` errors for the same case (`isSplitGguf`).
+
+### Hugging Face folders (`hf.go`)
+
+An unconverted HF model (`config.json` + `*.safetensors`) is a `GgufRow` with `IsHF` and
+`FullPath` = the FOLDER, which is what `vllm serve` takes. Detection is deliberately narrow,
+because a models tree is full of folders that look like this and are not chat models (TRELLIS's
+DINOv3 backbone, ModernBERT classifiers, diffusion components). A folder qualifies only when
+all three rules hold:
+
+1. `config.json` names `*ForCausalLM`, or `*ForConditionalGeneration` with a `text_config`
+   or `vision_config`. Seq2seq models (T5, Whisper) share that suffix and carry neither.
+2. There is at least one direct `*.safetensors`.
+3. There is no direct `*.gguf`. A conversion kept beside its source is the same model twice,
+   and the gguf is the file every backend can run.
+
+The walk does NOT stop at an HF folder, so a gguf in a subfolder is still found.
+
+- **Routing.** `emitHFModel` resolves with `resolveBackendPreferring(..., "llm", "vllm")`, so
+  vllm wins over a ★ llama default. llama.cpp cannot read safetensors at all. With no vllm
+  entry the model is `# SKIPPED` with the reason, never emitted as a llama command. An HF row
+  skips the gguf pipeline (`skipsGgufPipeline`), including dir-local and family sidecar
+  pairing. `filepath.Dir` of a folder is its PARENT, whose projector belongs to another model.
+- **Metadata.** `ReadHFMetadata` maps config.json onto `Metadata`, so `vllmMaxModelLen` runs
+  the same KV math, reading the nested `text_config` for multimodal wrappers. It is
+  conservative where config.json is ambiguous:
+  - sliding-window layers are charged as full-attention layers;
+  - `layer_types` linear/mamba/ssm layers carry no KV;
+  - a `layer_types` list whose length disagrees with the layer count is ignored.
+
+  `TestVllmMaxModelLen_HFParityWithGguf` pins the mapping against the gguf shape.
+- **Args.** No `--quantization gguf`, because an HF folder names its own
+  `quantization_config`. `hfQuant` labels the row: the AWQ/GPTQ/FP8 method, else the BF16/F16
+  dtype. The id is the folder name plus the quant.
+- **HF cache layout.** In `models--<owner>--<repo>/snapshots/<commit>/` the folder name is a
+  commit hash, so `hfCacheRepo` takes the id from the grandparent instead. Weights there are
+  symlinks, so sizes are `os.Stat`, not `DirEntry.Info`.
+- **Server side.** `ReadModelMetadata` and `HFRowFor` let path-holding callers (the editor
+  preview, the trained-ctx read) handle a folder without a `GgufRow`. `config.ParseCmd` reads
+  vllm's positional `serve <model>` as `ModelPath`, without which no vllm entry could be saved
+  from the editor. The regen hash also stats `.safetensors` and `config.json`
+  (`hashedInput`), or a new folder would never trigger a regen.
 
 **`--tokenizer` is never guessed.** Upstream recommends the base model's tokenizer over the
 one converted out of the gguf, but `GgufRow.Repo` is the local folder name, not a verified HF

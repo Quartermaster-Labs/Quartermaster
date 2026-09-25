@@ -203,10 +203,11 @@ func resolveBackendPreferring(s Settings, ov *Override, class, preferKind string
 	return resolveBackend(s, ov, class)
 }
 
-// vllmCmdLines builds the vllm argv (exe first) for a gguf served through vllm.
-// Shared by emitVllmModel (YAML emit) and RenderSoloCmd (editor preview) so the
-// launch-parameters box matches a save. vllm loads the SAME gguf QM discovered
-// (--quantization gguf); no per-model VRAM sizing — vllm's allocator fits inside
+// vllmCmdLines builds the vllm argv (exe first) for a gguf or an HF folder
+// served through vllm. Shared by emitVllmModel (YAML emit) and RenderSoloCmd
+// (editor preview) so the launch-parameters box matches a save. vllm loads the
+// SAME file QM discovered (--quantization gguf for a gguf; an HF folder names its
+// own quantization in config.json); no per-model VRAM sizing — vllm's allocator fits inside
 // --gpu-memory-utilization. Ctx maps to --max-model-len (caps the KV window).
 func vllmCmdLines(s Settings, row GgufRow, ov *Override, name string, be resolvedBackend, meta Metadata) []string {
 	modelPath := strings.ReplaceAll(row.FullPath, "\\", "/")
@@ -216,7 +217,7 @@ func vllmCmdLines(s Settings, row GgufRow, ov *Override, name string, be resolve
 	}
 
 	ctx, _ := vllmMaxModelLen(s, ov, row, meta)
-	util, _ := vllmGpuUtil(s, ov)
+	util, _ := vllmGpuUtil(s, ov, vllmFootprintGB(s, ov, row, meta, ctx))
 
 	lines := []string{
 		exe,
@@ -224,9 +225,13 @@ func vllmCmdLines(s Settings, row GgufRow, ov *Override, name string, be resolve
 		"--host 127.0.0.1",
 		"--port ${PORT}",
 		"--served-model-name " + imageArg(name),
-		"--quantization gguf",
-		fmt.Sprintf("--gpu-memory-utilization %g", round2(util)),
 	}
+	// An HF folder carries its own quantization_config (or none), which vllm reads
+	// itself; forcing gguf there makes it look for a .gguf that is not in it.
+	if !row.IsHF {
+		lines = append(lines, "--quantization gguf")
+	}
+	lines = append(lines, fmt.Sprintf("--gpu-memory-utilization %g", round2(util)))
 	if ctx > 0 {
 		lines = append(lines, fmt.Sprintf("--max-model-len %d", ctx))
 	}
@@ -239,6 +244,9 @@ func vllmCmdLines(s Settings, row GgufRow, ov *Override, name string, be resolve
 		if tok := strings.TrimSpace(ov.VllmTokenizer); tok != "" {
 			lines = append(lines, "--tokenizer "+imageArg(tok))
 		}
+	}
+	if parser, _ := vllmToolParser(ov, meta, name); parser != "" && !vllmExtraSetsToolParser(ov) {
+		lines = append(lines, "--enable-auto-tool-choice", "--tool-call-parser "+parser)
 	}
 	if ov != nil && ov.VllmTensorParallel > 1 {
 		lines = append(lines, fmt.Sprintf("--tensor-parallel-size %d", ov.VllmTensorParallel))
@@ -257,7 +265,7 @@ func vllmCmdLines(s Settings, row GgufRow, ov *Override, name string, be resolve
 // default /health probe fits vllm too). Named/ctx-tier variants are NOT emitted
 // for vllm: the llama profile/KV sizing that produces them doesn't apply here.
 func emitVllmModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, name string, be resolvedBackend, meta Metadata, emitted *[]string) {
-	if isSplitGguf(row) {
+	if !row.IsHF && isSplitGguf(row) {
 		// Discovery represents a split set by shard 1 alone, which is all
 		// llama.cpp needs — it opens the sibling shards itself. vllm does not:
 		// it would load a fifth of the weights and fail somewhere downstream.
@@ -269,9 +277,14 @@ func emitVllmModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, na
 
 	lines := vllmCmdLines(s, row, ov, name, be, meta)
 	ctx, ctxNote := vllmMaxModelLen(s, ov, row, meta)
-	util, utilNote := vllmGpuUtil(s, ov)
-	fmt.Fprintf(b, "\n  # arch=%s size=%gGB (vllm, gguf, gpu-util=%g [%s], max-model-len=%d [%s])\n",
-		meta.Architecture, row.SizeGB, round2(util), utilNote, ctx, ctxNote)
+	footprint := vllmFootprintGB(s, ov, row, meta, ctx)
+	util, utilNote := vllmGpuUtil(s, ov, footprint)
+	format := "gguf"
+	if row.IsHF {
+		format = "safetensors"
+	}
+	fmt.Fprintf(b, "\n  # arch=%s size=%gGB (vllm, %s, gpu-util=%g [%s], max-model-len=%d [%s])\n",
+		meta.Architecture, row.SizeGB, format, round2(util), utilNote, ctx, ctxNote)
 	fmt.Fprintf(b, "  %q:\n", name)
 	b.WriteString("    cmd: >\n")
 	for _, line := range lines {
@@ -279,14 +292,73 @@ func emitVllmModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, na
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
 	// vllm allocates its whole pool (weights + KV) up front from
-	// --gpu-memory-utilization, so its footprint IS the budget it was sized
-	// against, not a computed weights+KV sum.
-	writeEstVram(b, vllmBudgetGB(s, ov))
+	// --gpu-memory-utilization, so its footprint is whatever that flag grants,
+	// not a weights+KV sum: the router must charge what vllm will really hold.
+	writeEstVram(b, vllmReservedGB(util, footprint))
 	if ov != nil && ov.Unlisted {
 		b.WriteString("    unlisted: true\n")
 	}
 	writeDisplayName(b, s, name)
+	// Advertised in /v1/models as function_calling, so a client can tell a
+	// model that will take `tools` from one vLLM will 400 on.
+	if parser, parserNote := vllmToolParser(ov, meta, name); parser != "" || vllmExtraSetsToolParser(ov) {
+		b.WriteString("    capabilities:\n      tools: true\n")
+	} else {
+		fmt.Fprintf(b, "    # no tool-call parser (%s): vllm rejects requests carrying tools\n", parserNote)
+	}
 	*emitted = append(*emitted, name)
+}
+
+// vllmToolParsers maps an architecture (HF config.json model_type, or a gguf's
+// general.architecture) to the vLLM --tool-call-parser for its family's
+// tool-call format. Deliberately short: a wrong parser does not fail, it
+// silently leaves tool calls unparsed in the text, which is worse than the 400
+// an unmapped model gets. Anything else is picked per model in the editor.
+var vllmToolParsers = map[string]string{
+	"qwen2": "hermes", "qwen2_moe": "hermes", "qwen2moe": "hermes",
+	"qwen3": "hermes", "qwen3_moe": "hermes", "qwen3moe": "hermes",
+	"qwen3_next": "hermes", "qwen3next": "hermes",
+	// Qwen3.5 moved to the XML tool format Qwen3-Coder introduced.
+	"qwen3_5": "qwen3_coder", "qwen3_5_moe": "qwen3_coder", "qwen35": "qwen3_coder", "qwen35moe": "qwen3_coder",
+	"llama":   "llama3_json",
+	"mistral": "mistral", "mistral3": "mistral",
+	"gemma4":   "gemma4",
+	"glm4_moe": "glm45", "glm4moe": "glm45",
+	"deepseek_v3": "deepseek_v3",
+	"granite":     "granite", "granitemoe": "granite",
+	"minimax_m2": "minimax_m2",
+	"olmo3":      "olmo3",
+}
+
+// vllmToolParser is the --tool-call-parser for a model and why: the override
+// when set ("none" turns it off), else the architecture's entry. Qwen3 coder
+// finetunes share model_type with the chat models but emit the XML format, so
+// the served name breaks that tie.
+func vllmToolParser(ov *Override, meta Metadata, name string) (parser, note string) {
+	if ov != nil {
+		switch p := strings.TrimSpace(ov.VllmToolParser); {
+		case strings.EqualFold(p, "none"):
+			return "", "turned off"
+		case p != "":
+			return p, "pinned"
+		}
+	}
+	arch := strings.ToLower(strings.TrimSpace(meta.Architecture))
+	p, ok := vllmToolParsers[arch]
+	if !ok {
+		return "", fmt.Sprintf("no parser known for arch %q; pick one in the model editor", meta.Architecture)
+	}
+	if p == "hermes" && strings.HasPrefix(arch, "qwen3") && strings.Contains(strings.ToLower(name), "coder") {
+		p = "qwen3_coder"
+	}
+	return p, "auto"
+}
+
+// vllmExtraSetsToolParser reports whether the model's hand-written extra args
+// already name a parser: the workaround before this knob existed. Their pick
+// stands, and a second copy of the flag in the launch preview reads as a bug.
+func vllmExtraSetsToolParser(ov *Override) bool {
+	return ov != nil && strings.Contains(ov.ExtraArgs, "--tool-call-parser")
 }
 
 // isSplitGguf reports whether the row's file is one shard of a split set.
@@ -345,13 +417,38 @@ func vllmMaxModelLen(s Settings, ov *Override, row GgufRow, meta Metadata) (ctx 
 	return ctx, note
 }
 
-// vllmGpuUtil derives --gpu-memory-utilization from the VRAM budget and the
-// card's real size. The old flat 0.90 was a fraction of TOTAL memory regardless
-// of what the budget said or what the desktop already holds, so it both ignored
-// a deliberately small budget and could exceed what is actually free. Falls back
-// to the flat default when the card's size can't be read (headless, no GPU
-// telemetry) — there is nothing to take a fraction of.
-func vllmGpuUtil(s Settings, ov *Override) (util float64, note string) {
+// vllmFootprintGB is the VRAM this model should be granted: weights + the KV
+// pool for the chosen --max-model-len + the flat overhead, capped at the budget.
+//
+// vllm preallocates its whole --gpu-memory-utilization share and fills whatever
+// is left after the weights with KV blocks, so handing it the full budget makes
+// a small model hold the full budget. A 0.5B model with a 32k trained window
+// needs ~3GB but would have taken 22.8GB of a 24GB card, and the router (which
+// charges estVramGB) would evict everything else to admit it. When the window
+// was sized TO the budget this returns the budget anyway, since that is what the
+// window was computed to fill. No KV cost model => the budget: without one there
+// is nothing to size a smaller share from.
+func vllmFootprintGB(s Settings, ov *Override, row GgufRow, meta Metadata, ctx int) float64 {
+	budget := vllmBudgetGB(s, ov)
+	m := GetKvCostModel(meta, "f16", "f16")
+	if !m.OK || ctx <= 0 {
+		return budget
+	}
+	need := row.SizeGB + KvReserveGB(ctx, m.SlopeGB, m.ConstGB) + vllmOverheadGB
+	return math.Min(need, budget)
+}
+
+// vllmGpuUtil derives --gpu-memory-utilization from the model's footprint (see
+// vllmFootprintGB) and the card's real size. The old flat 0.90 was a fraction of
+// TOTAL memory regardless of what the budget said or what the desktop already
+// holds, so it both ignored a deliberately small budget and could exceed what is
+// actually free. Falls back to the flat default when the card's size can't be
+// read (headless, no GPU telemetry) - there is nothing to take a fraction of.
+//
+// Rounded UP to the 2 decimals the flag is printed with: rounding a derived
+// share to nearest can land under the footprint, and a model sized to fit
+// exactly then refuses to start for lack of KV blocks.
+func vllmGpuUtil(s Settings, ov *Override, footprintGB float64) (util float64, note string) {
 	if ov != nil && ov.VllmGpuUtil > 0 {
 		return ov.VllmGpuUtil, "pinned"
 	}
@@ -359,14 +456,27 @@ func vllmGpuUtil(s Settings, ov *Override) (util float64, note string) {
 	if !ok || total <= 0 {
 		return vllmDefaultGpuUtil, "no GPU reading"
 	}
-	util = vllmBudgetGB(s, ov) / total
+	util = math.Ceil(footprintGB/total*100-1e-9) / 100
 	if util < vllmMinGpuUtil {
 		util = vllmMinGpuUtil
 	}
 	if util > vllmMaxGpuUtil {
 		util = vllmMaxGpuUtil
 	}
-	return util, fmt.Sprintf("%.1fGB budget of %.1fGB card", vllmBudgetGB(s, ov), total)
+	if budget := vllmBudgetGB(s, ov); footprintGB < budget {
+		return util, fmt.Sprintf("%.1fGB needed (weights+KV+overhead) of %.1fGB card, under the %.1fGB budget", footprintGB, total, budget)
+	}
+	return util, fmt.Sprintf("%.1fGB budget of %.1fGB card", footprintGB, total)
+}
+
+// vllmReservedGB is what vllm will actually hold: the granted share of the
+// card when its size is known (so the floor clamp and a pinned util are
+// charged too), else the computed footprint.
+func vllmReservedGB(util, footprintGB float64) float64 {
+	if total, ok := cachedTotalVramGB(); ok && total > 0 {
+		return round2(util * total)
+	}
+	return footprintGB
 }
 
 // cachedTotalVramGB probes the card once per process. Sizing runs per model and

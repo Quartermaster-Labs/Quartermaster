@@ -332,6 +332,18 @@
   let vllmGpuUtil = $state<number | "">("");
   let vllmTensorParallel = $state<number | "">("");
   let vllmTokenizer = $state("");
+  let vllmToolParser = $state("");
+  // vLLM's built-in --tool-call-parser names (`vllm serve --help=tool-call-parser`).
+  // Suggestions only: a --tool-parser-plugin registers names no list can know.
+  const VLLM_TOOL_PARSERS: ComboOption[] = [
+    { value: "none", detail: "No tool calling; requests with tools are rejected" },
+    ...["apertus", "cohere_command3", "cohere_command4", "deepseek_v3", "deepseek_v31", "deepseek_v32", "deepseek_v4",
+      "ernie45", "functiongemma", "gemma4", "gigachat3", "glm45", "glm47", "granite", "granite-20b-fc", "granite4",
+      "hermes", "hunyuan_a13b", "hy_v3", "internlm", "jamba", "kimi_k2", "lfm2", "llama3_json", "llama4_json",
+      "llama4_pythonic", "longcat", "mimo", "minicpm5", "minimax_m2", "minimax_m3", "mistral", "olmo3", "openai",
+      "phi4_mini_json", "poolside_v1", "pythonic", "qwen3_coder", "qwen3_xml", "seed_oss", "step3", "step3p5", "xlam",
+    ].map((value) => ({ value })),
+  ];
 
   // --- Image (diffusion / sd-server) fields. Only used when config.isImage. ---
   // Component paths (external VAE + text encoders); "" => omit the flag.
@@ -944,6 +956,7 @@
     vllmGpuUtil = o?.vllmGpuUtil ? o.vllmGpuUtil : "";
     vllmTensorParallel = o?.vllmTensorParallel ? o.vllmTensorParallel : "";
     vllmTokenizer = o?.vllmTokenizer ?? "";
+    vllmToolParser = o?.vllmToolParser ?? "";
     reasoningOn = (o?.reasoningFmt ?? "") !== "off";
     reasoningBudget = o?.reasoningBudget ? o.reasoningBudget : "";
     preserveThinking = o?.preserveThinking ?? true;
@@ -1349,6 +1362,7 @@
       vllmGpuUtil: vllmGpuUtil === "" ? 0 : Number(vllmGpuUtil),
       vllmTensorParallel: vllmTensorParallel === "" ? 0 : Number(vllmTensorParallel),
       vllmTokenizer,
+      vllmToolParser: vllmToolParser.trim(),
       spec,
       mmproj: mmprojMode,
       reasoningFmt: reasoningOn ? "" : "off",
@@ -1904,6 +1918,11 @@
                 {@render hint("--tokenizer: the base model's tokenizer (Hugging Face repo id or a local path). vLLM recommends this over the one converted out of the GGUF, which is slow and unstable. Blank omits the flag - it is never guessed, since the discovered model only knows its local folder name.")}
                 <input type="text" bind:value={vllmTokenizer} class="cfg-input flex-1 ml-auto" placeholder="Qwen/Qwen3-8B" />
               </label>
+              <div class="flex items-center gap-2 text-sm">
+                <span>Tool-call parser</span>
+                {@render hint("--tool-call-parser (with --enable-auto-tool-choice): the model family's tool-call format. vLLM rejects every request carrying tools without one. Blank picks it from the architecture when known (the launch parameters show the result); 'none' turns tool calling off. A wrong parser does not error, it leaves tool calls as plain text in the reply.")}
+                <Combobox bind:value={vllmToolParser} options={VLLM_TOOL_PARSERS} class="flex-1 ml-auto" placeholder="auto" mono ariaLabel="vLLM tool-call parser" />
+              </div>
             </div>
           {/if}
         {/if}

@@ -125,6 +125,7 @@ type overrideDTO struct {
 	VllmGpuUtil        float64 `json:"vllmGpuUtil"`
 	VllmTensorParallel int     `json:"vllmTensorParallel"`
 	VllmTokenizer      string  `json:"vllmTokenizer"`
+	VllmToolParser     string  `json:"vllmToolParser"`
 	Ctx                int     `json:"ctx"`
 	KvK                string  `json:"kvK"`
 	KvV                string  `json:"kvV"`
@@ -384,8 +385,8 @@ func toLoraRefs(in []loraRefDTO) []autogen.LoraRef {
 func toOverrideDTO(o autogen.Override) *overrideDTO {
 	dto := &overrideDTO{
 		Backend: o.Backend, VllmGpuUtil: o.VllmGpuUtil, VllmTensorParallel: o.VllmTensorParallel,
-		VllmTokenizer: o.VllmTokenizer,
-		Ctx:           o.Ctx, KvK: o.KvK, KvV: o.KvV, KvInRam: o.KvInRam,
+		VllmTokenizer: o.VllmTokenizer, VllmToolParser: o.VllmToolParser,
+		Ctx: o.Ctx, KvK: o.KvK, KvV: o.KvV, KvInRam: o.KvInRam,
 		VramTargetGB: o.VramTargetGB, CpuOffload: o.CpuOffload, Mmproj: o.Mmproj,
 		Spec: o.Spec, ReasoningFmt: o.ReasoningFmt, ReasoningBudget: o.ReasoningBudget,
 		FlashAttn: o.FlashAttn, Mmap: o.Mmap, Mlock: o.Mlock,
@@ -465,6 +466,12 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.VllmGpuUtil = body.VllmGpuUtil
 	ov.VllmTensorParallel = body.VllmTensorParallel
 	ov.VllmTokenizer = strings.TrimSpace(body.VllmTokenizer)
+	// One bare parser name. It lands on a command line, so a pasted "hermes --foo"
+	// must not smuggle in a second flag; extra args already have their own field.
+	ov.VllmToolParser = ""
+	if f := strings.Fields(body.VllmToolParser); len(f) > 0 {
+		ov.VllmToolParser = f[0]
+	}
 	ov.Ctx = body.Ctx
 	ov.KvK = body.KvK
 	ov.KvV = body.KvV
