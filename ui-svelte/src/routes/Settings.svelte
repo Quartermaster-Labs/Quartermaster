@@ -89,10 +89,14 @@
   let backendsErr = $state<string | null>(null);
   let backendsSaved = $state(false); // brief "Saved" flash after a successful write
 
-  // ponytail: cheap id, only needs to be stable within this list. crypto.randomUUID
-  // is on every browser we target.
+  // ponytail: cheap id, only needs to be stable within this list. NOT
+  // crypto.randomUUID: browsers expose it only in a secure context (https or
+  // localhost), so a headless box reached over plain http on the LAN had it
+  // undefined and the Add button threw (issue #93). getRandomValues has no such
+  // gate.
   function newBackendId(): string {
-    return crypto.randomUUID();
+    const b = crypto.getRandomValues(new Uint8Array(16));
+    return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
   }
 
   // Add an empty row to one class, seeded with that class's first engine. Not
