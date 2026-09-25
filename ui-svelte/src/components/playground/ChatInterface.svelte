@@ -19,6 +19,7 @@
     searxngUrlStore,
     searchProvidersStore,
     searchMaxPerTurnStore,
+    SHOPPING_MIN_SEARCHES,
     searchThrottleMsStore,
     searchDedupeStore,
     rewriteStore,
@@ -932,7 +933,9 @@
           webSearch: webEnabled,
           searxngUrl: $searxngUrlStore, // legacy field: the server falls back to it when the chain is empty
           searchProviders: normalizeProviders($searchProvidersStore, $searxngUrlStore).filter(providerReady),
-          maxSearches: $searchMaxPerTurnStore,
+          // Shopping searches candidates, then shops, then reviews: the chat cap
+          // starves it. Raise the floor, never lower a larger user setting.
+          maxSearches: shoppingPrefs !== false ? Math.max($searchMaxPerTurnStore, SHOPPING_MIN_SEARCHES) : $searchMaxPerTurnStore,
           throttleMs: $searchThrottleMsStore,
           dedupe: $searchDedupeStore,
         }),

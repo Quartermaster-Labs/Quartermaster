@@ -102,6 +102,9 @@ export const searxngUrlStore = userPref<string>("playground-searxng-url", "http:
 export const searchProvidersStore = userPref<SearchProviderCfg[]>("playground-search-providers", DEFAULT_SEARCH_PROVIDERS);
 // Web-search rate controls (protect self-hosted SearXNG from runaway agents).
 export const searchMaxPerTurnStore = userPref<number>("playground-search-max-per-turn", 5);
+// Shopping mode's floor on the cap above: a shortlist needs candidate, shop and
+// review searches, which a chat-sized 5 cuts off mid-research.
+export const SHOPPING_MIN_SEARCHES = 12;
 export const searchThrottleMsStore = userPref<number>("playground-search-throttle-ms", 500);
 export const searchDedupeStore = userPref<boolean>("playground-search-dedupe", true);
 

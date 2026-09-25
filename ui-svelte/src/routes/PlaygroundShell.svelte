@@ -1366,7 +1366,7 @@
 
                 <div class="grid grid-cols-2 gap-2">
                   <label class="flex flex-col gap-1 text-xs uppercase tracking-wide text-txtsecondary" for="search-max">
-                    <span class="flex items-center gap-1.5">Max / Turn {@render tip("Cap on web searches per message. Once hit, the model must answer with what it found - protects SearXNG from runaway agents.")}</span>
+                    <span class="flex items-center gap-1.5">Max / Turn {@render tip("Cap on web searches per message. Once hit, the model must answer with what it found - protects SearXNG from runaway agents. Shopping mode raises it to at least 12.")}</span>
                     <input id="search-max" type="number" min="1" max="50" class="px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$searchMaxPerTurnStore} />
                   </label>
                   <label class="flex flex-col gap-1 text-xs uppercase tracking-wide text-txtsecondary" for="search-throttle">
