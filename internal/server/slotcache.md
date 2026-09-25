@@ -225,6 +225,10 @@ duplicate.
   *estimate* cannot do this — the case that motivated the check was a 40-token gap on a 32k prompt.
   Fails safe: `>=` always restores, and a missing/unparsable `.len` (files from an older build)
   restores. Plain attention is never gated — it trims happily and benefits from the partial hit.
+  A skip also **deletes** the snapshot (`dropSnapshot`, warm and cold path alike): the conversation
+  has gone backwards past it and only grows from there, so the file can never serve it again and
+  would otherwise hold several GB of the byte cap until LRU reached it. The usual trigger is
+  playground compaction, which replaces the history's head with a summary.
 - **Warm-slot skip (`preamble-warm`).** `onSwitch` does NOT restore the disk preamble when the slot
   already holds that exact preamble live — that would clobber valid live state, and skipping lets
   upstream reuse the prefix natively. The disk preamble earns its keep on a genuinely cold load,

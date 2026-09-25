@@ -277,6 +277,17 @@ full transcript stays on disk and on screen (a divider marks the boundary).
   name. **No KV threshold**: asking for it by hand means compacting *before* the window fills, so a
   "not full enough" refusal would defeat the point. Toasts what it did.
 
+**The summary is one more user turn on the live conversation** (`summarizeLive` ->
+`summarizeInPlace` -> `POST /api/chats/compact`). It sends what the next turn would: `turnSetup()`'s
+system prompt and tool list (the same function `regenerateFromIndex` builds them with, so the two
+cannot drift), `messages.slice(compactedCount)`, then `compactInPlacePrompt` as a final user
+message naming where the kept tail begins. The server keys it to the chat's own
+`X-Conversation-Id`, so the slot's KV is reused. The old standalone request (older messages only,
+no tools, no conversation id) was a different conversation to the slot cache: it evicted the chat
+it was summarizing, a multi-GB snapshot save on a hybrid model. It survives only as the fallback
+when the in-place call fails. A user message, not a system one: Qwen templates reject a system
+message anywhere but first.
+
 The summary call runs with `enable_thinking: false` and strips any `<think>` block anyway: with
 reasoning on, the model can spend the whole `max_tokens` budget thinking and return an empty
 `content`, which used to surface as an intermittent "Compaction failed" on a healthy model. The

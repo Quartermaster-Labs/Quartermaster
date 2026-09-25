@@ -150,4 +150,5 @@ See [`playground.md`](playground.md).
 `GET /api/mode`; `POST /auth/login`, `/auth/logout`, `GET /auth/me`;
 `GET`/`PUT /api/{chats,imagechats,videochats,speechchats,prefs}`; `GET /api/media/{file...}`;
 assistant memory `GET`/`POST /api/memories` + `DELETE /api/memories/{id}` (`memories.go`);
-server-run turns `POST /api/chats/turn` + `/stream`, `/state`, `/approve` + `DELETE` (`turns.go`).
+server-run turns `POST /api/chats/turn` + `/stream`, `/state`, `/approve` + `DELETE` (`turns.go`);
+chat compaction `POST /api/chats/compact` (`turnscompact.go`).

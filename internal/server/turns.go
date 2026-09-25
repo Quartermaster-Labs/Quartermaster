@@ -702,9 +702,11 @@ func (at *activeTurn) isDone() bool {
 // Ports ChatInterface.svelte's regenerateFromIndex turn loop. The client still
 // assembles messages + tool defs and POSTs them; the server drives the rounds,
 // dispatches web/wiki tools, numbers citations, and runs the reasoning-budget
-// finalize. Compaction + title-gen deliberately STAY client-side (they run
-// AFTER the answer, so the viewer does them on completion/reconnect — a closed
-// tab just catches up next turn; nothing mid-answer is lost).
+// finalize. Title-gen and the DECISION to compact stay client-side (they run
+// AFTER the answer, so the viewer does them on completion/reconnect: a closed
+// tab just catches up next turn, nothing mid-answer is lost). The compaction
+// request itself goes through handleTurnCompact (turnscompact.go) so it rides
+// this conversation's KV instead of evicting it.
 
 // toolCall is one assembled tool call from a streamed round.
 type toolCall struct {
@@ -1521,11 +1523,33 @@ const (
 // with an empty state the moment real data arrives, since a first token ends
 // every wait by definition.
 func (tm *turnManager) streamSSE(ctx context.Context, body map[string]any, chatID, authKey string, onContent func(string), onReasoning func(string), onTool func(int, string, string, string), onProgress func(), onStatus func(string, int)) (string, error) {
+	req, err := tm.selfCompletionRequest(ctx, body, chatID, authKey)
+	if err != nil {
+		return "", err
+	}
+	resp, err := tm.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		snippet, _ := readLimited(resp.Body, 1<<12)
+		return "", fmt.Errorf("upstream %s: %s", resp.Status, snippet)
+	}
+	return tm.readSSE(resp, onContent, onReasoning, onTool, onProgress, onStatus)
+}
+
+// selfCompletionRequest builds the loopback /v1/chat/completions request every
+// playground call to the chat model goes out on. Shared by the turn rounds and
+// compaction (turnscompact.go) because the headers are cache state: the
+// conversation id is the slot cache's anchor, and a call without it is a
+// different conversation that evicts this one from its slot.
+func (tm *turnManager) selfCompletionRequest(ctx context.Context, body map[string]any, chatID, authKey string) (*http.Request, error) {
 	buf, _ := json.Marshal(body)
 	url := strings.TrimRight(tm.pg.SelfBase, "/") + "/v1/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(buf))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Conversation-Id", chatID) // key the slot KV cache by conversation
@@ -1547,16 +1571,12 @@ func (tm *turnManager) streamSSE(ctx context.Context, body map[string]any, chatI
 	if authKey != "" {
 		req.Header.Set("Authorization", "Bearer "+authKey) // authenticate the loopback (API keys gate /v1)
 	}
-	resp, err := tm.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		snippet, _ := readLimited(resp.Body, 1<<12)
-		return "", fmt.Errorf("upstream %s: %s", resp.Status, snippet)
-	}
+	return req, nil
+}
 
+// readSSE consumes a streaming completion, dispatching deltas to the callbacks.
+// Returns the finish reason.
+func (tm *turnManager) readSSE(resp *http.Response, onContent func(string), onReasoning func(string), onTool func(int, string, string, string), onProgress func(), onStatus func(string, int)) (string, error) {
 	finish := ""
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)

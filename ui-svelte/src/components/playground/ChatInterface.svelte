@@ -4,7 +4,7 @@
   import { tip as tooltip } from "../../lib/tooltip";
   import { get } from "svelte/store";
   import { models, backendMetrics, loadModel } from "../../stores/api";
-  import { summarizeConversation, generateTitle, COMPACT_AT, KEEP_RECENT } from "../../lib/chatCompact";
+  import { summarizeConversation, summarizeInPlace, compactInPlacePrompt, generateTitle, COMPACT_AT, KEEP_RECENT } from "../../lib/chatCompact";
   import {
     selectedModelStore,
     selectedTabStore,
@@ -762,52 +762,11 @@
   }
 
 
-  async function regenerateFromIndex(id: string, idx: number) {
-    // Only one turn in flight at a time. Without this, the "Generate response"
-    // pill / edit-save (which call here directly, bypassing send()'s isStreaming
-    // guard) could fire while a turn is already streaming — overwriting genId and
-    // abortController while the old stream keeps running on its captured signal,
-    // so two requests hit the backend at once (slot collision, non-consecutive
-    // token positions). Refuse instead.
-    if (genId !== null) {
-      showToast("Wait for the current response to finish");
-      return;
-    }
-    // Capture the model now — the user may switch chats/models while this turn
-    // streams in the background; the turn must stay on the model it started on.
-    const modelId = $selectedModelStore;
-    if (!modelId || !sessionById(id)) return;
-    // The chat now belongs to this model — reopening it re-selects it.
-    rememberModel(modelId);
-
-    // Editing/regenerating inside the already-summarized region would make the
-    // summary describe messages that no longer match — drop compaction and resend
-    // the full history from the start in that case.
-    let curSummary = sessionById(id)!.summary ?? "";
-    let curCompacted = sessionById(id)!.compactedCount ?? 0;
-    if (idx < curCompacted) {
-      curSummary = "";
-      curCompacted = 0;
-      patchSession(id, { summary: undefined, compactedCount: undefined });
-    }
-    // Remove all messages after the edited user message
-    patchSession(id, { messages: sessionById(id)!.messages.slice(0, idx + 1) });
-
-    // Rewrite turn? The user message at idx carries the rewrite instruction;
-    // its content is the original prose to diff the model's output against.
-    const reqUser = sessionById(id)!.messages[idx];
-    const rwInstr = reqUser?.rewriteInstruction;
-    const isRewrite = typeof rwInstr === "string";
-    const original = isRewrite ? getTextContent(reqUser.content) : "";
-
-    genId = id;
-    answerDone = false;
-    isReasoning = false;
-    busyLabel = "";
-    reasoningStartTime = 0;
-    abortController = new AbortController();
-    const signal = abortController.signal;
-
+  // The per-turn prompt head: the advertised tool set and the system prompt.
+  // Shared by the turn itself and by compaction, which must send these exact
+  // bytes so its request continues the chat's resident KV instead of evicting
+  // it (see compactNow). Anything that differs here is a full re-prefill.
+  function turnSetup(id: string, modelId: string, isRewrite: boolean, curSummary: string) {
     // No tools during a rewrite — it's a self-contained text transform.
     // Web search is opt-in (needs SearXNG); the local help wiki is always on so
     // models can answer quartermaster questions.
@@ -856,20 +815,6 @@
       ...(ytSearchEnabled ? [YOUTUBE_SEARCH_TOOL, YOUTUBE_COMMENTS_TOOL] : []),
     ];
 
-    // Thinking budget: soft cumulative-thinking cap so models can't loop forever
-    // before answering. 0 = off. Enforced server-side at round boundaries — once
-    // total thinking passes the budget, thinking is turned off for later rounds
-    // (never a mid-generation hard close, which derails a tool-using model
-    // mid-search). Rewrites think too: the transform is the hard part of the turn
-    // (tone, register, what to keep), and a no-reasoning rewrite is visibly worse.
-    const reasoningBudget = $reasoningBudgetStore;
-    // One assistant bubble holds the whole turn: reasoning, any web searches
-    // (as collapsible sections), and the final reply. The server writes into
-    // this bubble (last message) as it streams; the tool plumbing it sends to
-    // the model stays server-side and is never shown here.
-    appendMessage(id, { role: "assistant", content: "", model: modelId, ...(isRewrite ? { rewriteOriginal: original } : {}) });
-    const genStart = Date.now();
-
     const sys = [
       basePrompt(webEnabled, wikiEnabled, qmEnabled, ytEnabled, modelId, fetchEnabled, shoppingPrefs, assistantEnabled, extrasEnabled, memoryEnabled),
       sessionById(id)?.instructions?.trim(),
@@ -888,6 +833,70 @@
     ]
       .filter(Boolean)
       .join("\n\n");
+    return { sys, turnTools, webEnabled, shoppingPrefs };
+  }
+
+  async function regenerateFromIndex(id: string, idx: number) {
+    // Only one turn in flight at a time. Without this, the "Generate response"
+    // pill / edit-save (which call here directly, bypassing send()'s isStreaming
+    // guard) could fire while a turn is already streaming — overwriting genId and
+    // abortController while the old stream keeps running on its captured signal,
+    // so two requests hit the backend at once (slot collision, non-consecutive
+    // token positions). Refuse instead.
+    if (genId !== null) {
+      showToast("Wait for the current response to finish");
+      return;
+    }
+    // Capture the model now — the user may switch chats/models while this turn
+    // streams in the background; the turn must stay on the model it started on.
+    const modelId = $selectedModelStore;
+    if (!modelId || !sessionById(id)) return;
+    // The chat now belongs to this model — reopening it re-selects it.
+    rememberModel(modelId);
+
+    // Editing/regenerating inside the already-summarized region would make the
+    // summary describe messages that no longer match — drop compaction and resend
+    // the full history from the start in that case.
+    let curSummary = sessionById(id)!.summary ?? "";
+    let curCompacted = sessionById(id)!.compactedCount ?? 0;
+    if (idx < curCompacted) {
+      curSummary = "";
+      curCompacted = 0;
+      patchSession(id, { summary: undefined, compactedCount: undefined });
+    }
+    // Remove all messages after the edited user message
+    patchSession(id, { messages: sessionById(id)!.messages.slice(0, idx + 1) });
+
+    // Rewrite turn? The user message at idx carries the rewrite instruction;
+    // its content is the original prose to diff the model's output against.
+    const reqUser = sessionById(id)!.messages[idx];
+    const rwInstr = reqUser?.rewriteInstruction;
+    const isRewrite = typeof rwInstr === "string";
+    const original = isRewrite ? getTextContent(reqUser.content) : "";
+
+    genId = id;
+    answerDone = false;
+    isReasoning = false;
+    busyLabel = "";
+    reasoningStartTime = 0;
+    abortController = new AbortController();
+    const signal = abortController.signal;
+
+    // Thinking budget: soft cumulative-thinking cap so models can't loop forever
+    // before answering. 0 = off. Enforced server-side at round boundaries — once
+    // total thinking passes the budget, thinking is turned off for later rounds
+    // (never a mid-generation hard close, which derails a tool-using model
+    // mid-search). Rewrites think too: the transform is the hard part of the turn
+    // (tone, register, what to keep), and a no-reasoning rewrite is visibly worse.
+    const reasoningBudget = $reasoningBudgetStore;
+    // One assistant bubble holds the whole turn: reasoning, any web searches
+    // (as collapsible sections), and the final reply. The server writes into
+    // this bubble (last message) as it streams; the tool plumbing it sends to
+    // the model stays server-side and is never shown here.
+    appendMessage(id, { role: "assistant", content: "", model: modelId, ...(isRewrite ? { rewriteOriginal: original } : {}) });
+    const genStart = Date.now();
+
+    const { sys, turnTools, webEnabled, shoppingPrefs } = turnSetup(id, modelId, isRewrite, curSummary);
     const base: ChatMessage[] = [];
     if (sys) base.push({ role: "system", content: sys });
     // History up to (not incl.) the live assistant bubble.
@@ -1227,11 +1236,9 @@
     while (boundary < msgs.length && msgs[boundary].role !== "user") boundary++;
     if (boundary <= curCompacted) return 0; // nothing new to summarize
 
-    // Summarize only the newly-folded slice; `summary` already covers the prefix.
-    const fresh = msgs.slice(curCompacted, boundary);
     compactingId = id;
     try {
-      const next = await summarizeConversation(modelId, fresh, s.summary ?? "", signal);
+      const next = await summarizeLive(id, modelId, boundary, signal);
       if (signal.aborted) return 0;
       patchSession(id, { summary: next, compactedCount: boundary });
       return boundary - curCompacted;
@@ -1242,6 +1249,37 @@
       return -1;
     } finally {
       compactingId = "";
+    }
+  }
+
+  // The summary as one more user turn on the conversation the model already
+  // holds: the same system prompt, tools and history the next turn would send,
+  // under the same chat id, so the slot's KV is reused instead of evicted (and,
+  // on a hybrid model, a multi-GB snapshot is not written for it). A rewrite turn
+  // sent different bytes for its last message, so after one the reuse is partial;
+  // that costs prefill, not correctness.
+  //
+  // Falls back to the standalone summary request if this fails: that one evicts
+  // the chat, but it still compacts, and a chat that cannot compact overflows.
+  async function summarizeLive(id: string, modelId: string, boundary: number, signal: AbortSignal): Promise<string> {
+    const s = sessionById(id)!;
+    const summary = s.summary ?? "";
+    const curCompacted = s.compactedCount ?? 0;
+    const { sys, turnTools } = turnSetup(id, modelId, false, summary);
+    const messages: ChatMessage[] = [];
+    if (sys) messages.push({ role: "system", content: sys });
+    messages.push(...(s.messages.slice(curCompacted) as ChatMessage[]));
+    messages.push({ role: "user", content: compactInPlacePrompt(!!summary, getTextContent(s.messages[boundary].content)) });
+    try {
+      return await summarizeInPlace(
+        { chatId: id, model: modelId, messages, tools: turnTools.length ? turnTools : undefined },
+        signal,
+      );
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") throw e;
+      console.warn("in-place compaction failed, falling back:", e);
+      // Summarize only the newly-folded slice; `summary` already covers the prefix.
+      return summarizeConversation(modelId, s.messages.slice(curCompacted, boundary) as ChatMessage[], summary, signal);
     }
   }
 
