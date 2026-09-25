@@ -1,145 +1,71 @@
 <script lang="ts">
+  import { tip } from "../lib/tooltip";
   import type { HistogramData } from "../lib/types";
 
+  // HTML bars, not an SVG viewBox: a viewBox scales its text with the chart's
+  // width, so at page width the axis numbers came out several times the size of
+  // the table beside them, in the SVG's own sans font. Here the labels are
+  // ordinary text on the page's type scale and only the bars stretch.
   let {
     data,
-    unit = "tokens/sec",
-    colorClass = "text-blue-500 dark:text-blue-400",
+    label,
+    unit = "t/s",
+    barClass = "bg-primary/45 hover:bg-primary/75",
   }: {
     data: HistogramData;
+    label: string;
     unit?: string;
-    colorClass?: string;
+    barClass?: string;
   } = $props();
 
-  const height = 250;
-  const padding = { top: 30, right: 20, bottom: 40, left: 75 };
-  const viewBoxWidth = 1200;
-  const chartWidth = viewBoxWidth - padding.left - padding.right;
-  const chartHeight = height - padding.top - padding.bottom;
-
-  let maxCount = $derived(Math.max(...data.bins));
-  let barWidth = $derived(chartWidth / data.bins.length);
+  let maxCount = $derived(Math.max(1, ...data.bins));
+  let total = $derived(data.bins.reduce((a, b) => a + b, 0));
   let range = $derived(data.max - data.min);
 
-  function getXPosition(value: number): number {
-    return padding.left + ((value - data.min) / range) * chartWidth;
+  function fmt(v: number): string {
+    return v >= 100 ? v.toFixed(0) : v.toFixed(1);
+  }
+
+  // A single-valued sample has no range to place a marker in; centre it over
+  // the one bar rather than pinning it to the left edge.
+  function pos(v: number): number {
+    return range > 0 ? ((v - data.min) / range) * 100 : 50;
+  }
+
+  function binTip(i: number): string {
+    const lo = data.min + i * data.binSize;
+    const n = data.bins[i];
+    const span = data.binSize > 0 ? `${fmt(lo)}-${fmt(lo + data.binSize)}` : fmt(lo);
+    return `${span} ${unit} · ${n} request${n === 1 ? "" : "s"}`;
   }
 </script>
 
-<div class="mt-2 w-full">
-  <svg viewBox="0 0 {viewBoxWidth} {height}" class="w-full h-auto" preserveAspectRatio="xMidYMid meet">
-    <!-- Y-axis -->
-    <line
-      x1={padding.left}
-      y1={padding.top}
-      x2={padding.left}
-      y2={height - padding.bottom}
-      stroke="currentColor"
-      stroke-width="1"
-      opacity="0.3"
-    />
+<div class="min-w-0">
+  <div class="flex items-baseline gap-2 mb-1.5 font-mono text-micro uppercase tracking-wide text-txtsecondary tabular-nums">
+    <span>{label}</span>
+    <span class="ml-auto normal-case tracking-normal">
+      p50 <span class="text-txtmain">{fmt(data.p50)}</span>
+      · p95 <span class="text-txtmain">{fmt(data.p95)}</span>
+      {unit} · n {total}
+    </span>
+  </div>
 
-    <!-- Y-axis ticks and labels -->
-    {#each [0, 0.5, 1] as fraction}
-      {@const tickCount = Math.round(maxCount * fraction)}
-      {@const tickY = height - padding.bottom - fraction * chartHeight}
-      <line
-        x1={padding.left - 8}
-        y1={tickY}
-        x2={padding.left}
-        y2={tickY}
-        stroke="currentColor"
-        stroke-width="1"
-        opacity="0.4"
-      />
-      <text x={padding.left - 10} y={tickY + 10} font-size="26" fill="currentColor" opacity="0.8" text-anchor="end">
-        {tickCount}
-      </text>
-    {/each}
-
-    <!-- X-axis -->
-    <line
-      x1={padding.left}
-      y1={height - padding.bottom}
-      x2={viewBoxWidth - padding.right}
-      y2={height - padding.bottom}
-      stroke="currentColor"
-      stroke-width="1"
-      opacity="0.3"
-    />
-
-    <!-- Histogram bars -->
+  <div class="relative h-16 flex items-end gap-1 border-b border-card-border">
     {#each data.bins as count, i}
-      {@const barHeight = maxCount > 0 ? (count / maxCount) * chartHeight : 0}
-      {@const x = padding.left + i * barWidth}
-      {@const y = height - padding.bottom - barHeight}
-      {@const binStart = data.min + i * data.binSize}
-      {@const binEnd = binStart + data.binSize}
-      <g>
-        <rect
-          {x}
-          {y}
-          width={Math.max(barWidth - 1, 1)}
-          height={barHeight}
-          fill="currentColor"
-          opacity="0.6"
-          class="{colorClass} hover:opacity-90 transition-opacity cursor-pointer"
-        />
-        <title>{`${binStart.toFixed(1)} - ${binEnd.toFixed(1)} ${unit}\nCount: ${count}`}</title>
-      </g>
+      <div class="flex-1 h-full flex items-end" use:tip={binTip(i)}>
+        {#if count > 0}
+          <div class="w-full rounded-t-sm transition-colors {barClass}" style="height:{(count / maxCount) * 100}%"></div>
+        {/if}
+      </div>
     {/each}
 
-    <!-- Percentile lines -->
-    <line
-      x1={getXPosition(data.p50)}
-      y1={padding.top}
-      x2={getXPosition(data.p50)}
-      y2={height - padding.bottom}
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-dasharray="4 2"
-      opacity="0.7"
-      class="text-gray-600 dark:text-gray-400"
-    />
+    <!-- The median is the one marker worth a line: p95 is already in the
+         header, and a second rule over a dozen bars reads as another bar. -->
+    <div class="pointer-events-none absolute -top-1 bottom-0 w-px bg-txtmain/50" style="left:{pos(data.p50)}%"></div>
+  </div>
 
-    <line
-      x1={getXPosition(data.p95)}
-      y1={padding.top}
-      x2={getXPosition(data.p95)}
-      y2={height - padding.bottom}
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-dasharray="4 2"
-      opacity="0.7"
-      class="text-orange-500 dark:text-orange-400"
-    />
-
-    <line
-      x1={getXPosition(data.p99)}
-      y1={padding.top}
-      x2={getXPosition(data.p99)}
-      y2={height - padding.bottom}
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-dasharray="4 2"
-      opacity="0.7"
-      class="text-green-500 dark:text-green-400"
-    />
-
-    <!-- X-axis labels -->
-    <text x={padding.left} y={height - 8} font-size="26" fill="currentColor" opacity="0.8" text-anchor="start">
-      {data.min.toFixed(1)}
-    </text>
-
-    <text
-      x={viewBoxWidth - padding.right}
-      y={height - 8}
-      font-size="26"
-      fill="currentColor"
-      opacity="0.8"
-      text-anchor="end"
-    >
-      {data.max.toFixed(1)}
-    </text>
-  </svg>
+  <div class="flex justify-between mt-1 font-mono text-micro text-txtsecondary tabular-nums">
+    <span>{fmt(data.min)}</span>
+    <span>{fmt(data.max)}</span>
+  </div>
 </div>

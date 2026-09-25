@@ -80,7 +80,7 @@
     </div>
     <div class="tile">
       <span class="tile__label"><Gauge size={11} /> Median speed</span>
-      <span class="tile__value">{stats.medGen > 0 ? stats.medGen.toFixed(1) : "-"}<span class="text-xs text-txtsecondary"> t/s gen</span></span>
+      <span class="tile__value">{stats.medGen > 0 ? stats.medGen.toFixed(1) : "-"}<span class="ml-1 text-xs text-txtsecondary">t/s gen</span></span>
       <span class="tile__sub">{stats.medPrompt > 0 ? `${stats.medPrompt.toFixed(0)} t/s prompt` : "no prompt data"}</span>
     </div>
   </div>
@@ -97,23 +97,20 @@
     </button>
 
     {#if !$histogramCollapsed}
-      <div class="flex flex-col sm:flex-row gap-6 mt-1">
-        <div class="w-full sm:w-1/2 min-w-0">
-          <div class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary mb-1">Prompt processing</div>
-          {#if stats.promptHistogramData}
-            <TokenHistogram data={stats.promptHistogramData} unit="prompt tokens/sec" colorClass="text-amber-500 dark:text-amber-400" />
-          {:else}
-            <div class="py-6 text-center text-sm text-txtsecondary">No prompt speed data yet</div>
-          {/if}
-        </div>
-        <div class="w-full sm:w-1/2 min-w-0">
-          <div class="font-mono text-[0.6rem] uppercase tracking-wide text-txtsecondary mb-1">Token generation</div>
-          {#if stats.genHistogramData}
-            <TokenHistogram data={stats.genHistogramData} unit="tokens/sec" />
-          {:else}
-            <div class="py-6 text-center text-sm text-txtsecondary">No generation speed data yet</div>
-          {/if}
-        </div>
+      <!-- Generation in the accent, prompt neutral: gen t/s is the number the
+           tiles lead with, and theme tokens rather than Tailwind's palette so
+           both re-tune with the theme. -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4 mt-1 pb-1">
+        {#if stats.promptHistogramData}
+          <TokenHistogram label="Prompt processing" data={stats.promptHistogramData} barClass="bg-txtsecondary/35 hover:bg-txtsecondary/60" />
+        {:else}
+          <div class="py-6 text-center font-mono text-micro uppercase tracking-wide text-txtsecondary">No prompt speed data yet</div>
+        {/if}
+        {#if stats.genHistogramData}
+          <TokenHistogram label="Token generation" data={stats.genHistogramData} />
+        {:else}
+          <div class="py-6 text-center font-mono text-micro uppercase tracking-wide text-txtsecondary">No generation speed data yet</div>
+        {/if}
       </div>
     {/if}
   </div>

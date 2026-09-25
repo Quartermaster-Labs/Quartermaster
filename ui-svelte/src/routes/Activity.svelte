@@ -10,7 +10,7 @@
   import { observeWindowIdx, OBSERVE_WINDOWS } from "../stores/observe";
   import { onMount } from "svelte";
   import { Search, X, Columns3, GripVertical } from "lucide-svelte";
-  import type { ReqRespCapture } from "../lib/types";
+  import type { ActivityLogEntry, ReqRespCapture } from "../lib/types";
 
   type ColumnKey = string;
 
@@ -181,6 +181,15 @@
   // Numeric cells get right-aligned tabular figures so magnitudes line up.
   const NUMERIC = new Set(["id", "cached", "prompt", "generated", "prompt_speed", "gen_speed", "duration", "resp_status_code"]);
 
+  function tokenCell(m: ActivityLogEntry, key: ColumnKey): number {
+    switch (key) {
+      case "prompt": return m.tokens.input_tokens;
+      case "generated": return m.tokens.output_tokens;
+      case "prompt_speed": return m.tokens.prompt_per_second;
+      default: return m.tokens.tokens_per_second;
+    }
+  }
+
   function statusClass(code: number): string {
     if (!code) return "text-txtsecondary";
     if (code >= 500) return "text-error";
@@ -319,7 +328,7 @@
                   {#if key === "id"}
                     <span class="text-txtsecondary">{metric.id + 1}</span>
                   {:else if key === "time"}
-                    <span class="text-txtsecondary" use:tip={new Date(metric.timestamp).toLocaleString()}>{formatRelativeTime(metric.timestamp)}</span>
+                    <span class="font-mono text-xs text-txtsecondary tabular-nums" use:tip={new Date(metric.timestamp).toLocaleString()}>{formatRelativeTime(metric.timestamp)}</span>
                   {:else if key === "model"}
                     <span class="font-mono text-xs">{metric.model}</span>
                   {:else if key === "req_path"}
@@ -334,14 +343,15 @@
                     {:else}
                       <span class="text-txtsecondary">-</span>
                     {/if}
-                  {:else if key === "prompt"}
-                    {metric.tokens.input_tokens.toLocaleString()}
-                  {:else if key === "generated"}
-                    {metric.tokens.output_tokens.toLocaleString()}
-                  {:else if key === "prompt_speed"}
-                    {formatSpeed(metric.tokens.prompt_per_second)}
-                  {:else if key === "gen_speed"}
-                    {formatSpeed(metric.tokens.tokens_per_second)}
+                  {:else if key === "prompt" || key === "generated" || key === "prompt_speed" || key === "gen_speed"}
+                    <!-- An image or speech request has no tokens: a column of
+                         0 / 0.0 beside it read as a measurement of zero. -->
+                    {@const v = tokenCell(metric, key)}
+                    {#if v > 0}
+                      {key.endsWith("_speed") ? formatSpeed(v) : v.toLocaleString()}
+                    {:else}
+                      <span class="text-txtsecondary">-</span>
+                    {/if}
                   {:else if key === "duration"}
                     {formatDuration(metric.duration_ms)}
                   {:else if key === "capture"}
@@ -349,7 +359,7 @@
                       <button
                         onclick={() => viewCapture(metric.id)}
                         disabled={loadingCaptureId === metric.id}
-                        class="btn btn--sm"
+                        class="btn btn--sm btn--quiet"
                       >
                         {loadingCaptureId === metric.id ? "..." : "View"}
                       </button>
