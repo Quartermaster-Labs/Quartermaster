@@ -480,7 +480,7 @@
     { key: "content", label: "System Prompt", def: DEFAULT_BUILTIN_PROMPT, blank: "No system prompt", note: "The persona and instructions. Blank means no system prompt.", vars: true },
     { key: "search", label: "Web Search", def: DEFAULT_SEARCH_PROMPT, blank: "Shipped default", note: "Appended when Web Search is on. Blank uses the shipped default.", vars: false },
     { key: "wiki", label: "Wiki", def: DEFAULT_WIKI_PROMPT, blank: "Shipped default", note: "Appended when the help wiki tool is active (always on in chat). Blank uses the shipped default.", vars: false },
-    { key: "youtube", label: "YouTube", def: DEFAULT_YOUTUBE_PROMPT, blank: "Shipped default", note: "Appended when the YouTube tools are active (transcript, search and comments - always on in chat). Blank uses the shipped default.", vars: false },
+    { key: "youtube", label: "YouTube", def: DEFAULT_YOUTUBE_PROMPT, blank: "Shipped default", note: "Appended in every chat (the transcript tool is always on; YouTube search and comments ride Web Search). Blank uses the shipped default.", vars: false },
     { key: "cite", label: "Citations", def: DEFAULT_CITE_PROMPT, blank: "Shipped default", note: "Appended when a citing tool is on - how to cite [n]. Blank uses the shipped default.", vars: false },
   ] as const;
   let presetEditor = $state<null | {
