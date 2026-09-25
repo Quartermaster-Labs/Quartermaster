@@ -73,6 +73,19 @@ skipped). A chosen `llama` build just swaps `s.ServerExe` (local copy) through t
   per process via `cachedTotalVramGB` (a `sync.OnceValues` func var — the seam tests stub); no
   GPU reading falls back to the flat 0.90, since there is nothing to take a fraction of.
 
+**Tool calling needs a parser, per family.** vLLM rejects every request carrying `tools` with a
+400 unless it was launched with `--enable-auto-tool-choice --tool-call-parser X` (issue #93), and
+the parser is the model family's tool-call format, not a server setting. `vllmToolParser` picks
+it: `Override.VllmToolParser` when set (`none` turns it off), else `vllmToolParsers` keyed on
+`Metadata.Architecture` (HF `model_type` or gguf arch, both spellings listed), with a Qwen3
+`coder` name switching `hermes` to `qwen3_coder`. The table is short on purpose: a WRONG parser
+does not fail, it leaves tool calls unparsed in the reply text, which is worse than the 400. A
+parser already in `ExtraArgs` (the pre-knob workaround) suppresses ours. A model with a parser is
+emitted with `capabilities.tools: true` (`function_calling` in `/v1/models`); one without gets a
+YAML comment saying why. Nothing probes `vllm serve --help=tool-call-parser` for the list: the
+editor's field is free text with the upstream names as suggestions, since plugin parsers
+(`--tool-parser-plugin`) are valid names no probe lists.
+
 **Split ggufs are skipped, not emitted.** Discovery represents a shard set by shard 1 alone,
 which is all llama.cpp needs (it opens the siblings itself) — vllm would load a fifth of the
 weights. `emitVllmModel` writes a `# skipped` comment and leaves the model out of `emitted`;

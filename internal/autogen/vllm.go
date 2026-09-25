@@ -245,6 +245,9 @@ func vllmCmdLines(s Settings, row GgufRow, ov *Override, name string, be resolve
 			lines = append(lines, "--tokenizer "+imageArg(tok))
 		}
 	}
+	if parser, _ := vllmToolParser(ov, meta, name); parser != "" && !vllmExtraSetsToolParser(ov) {
+		lines = append(lines, "--enable-auto-tool-choice", "--tool-call-parser "+parser)
+	}
 	if ov != nil && ov.VllmTensorParallel > 1 {
 		lines = append(lines, fmt.Sprintf("--tensor-parallel-size %d", ov.VllmTensorParallel))
 	}
@@ -296,7 +299,66 @@ func emitVllmModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, na
 		b.WriteString("    unlisted: true\n")
 	}
 	writeDisplayName(b, s, name)
+	// Advertised in /v1/models as function_calling, so a client can tell a
+	// model that will take `tools` from one vLLM will 400 on.
+	if parser, parserNote := vllmToolParser(ov, meta, name); parser != "" || vllmExtraSetsToolParser(ov) {
+		b.WriteString("    capabilities:\n      tools: true\n")
+	} else {
+		fmt.Fprintf(b, "    # no tool-call parser (%s): vllm rejects requests carrying tools\n", parserNote)
+	}
 	*emitted = append(*emitted, name)
+}
+
+// vllmToolParsers maps an architecture (HF config.json model_type, or a gguf's
+// general.architecture) to the vLLM --tool-call-parser for its family's
+// tool-call format. Deliberately short: a wrong parser does not fail, it
+// silently leaves tool calls unparsed in the text, which is worse than the 400
+// an unmapped model gets. Anything else is picked per model in the editor.
+var vllmToolParsers = map[string]string{
+	"qwen2": "hermes", "qwen2_moe": "hermes", "qwen2moe": "hermes",
+	"qwen3": "hermes", "qwen3_moe": "hermes", "qwen3moe": "hermes",
+	"qwen3_next": "hermes", "qwen3next": "hermes",
+	// Qwen3.5 moved to the XML tool format Qwen3-Coder introduced.
+	"qwen3_5": "qwen3_coder", "qwen3_5_moe": "qwen3_coder", "qwen35": "qwen3_coder", "qwen35moe": "qwen3_coder",
+	"llama":   "llama3_json",
+	"mistral": "mistral", "mistral3": "mistral",
+	"gemma4":   "gemma4",
+	"glm4_moe": "glm45", "glm4moe": "glm45",
+	"deepseek_v3": "deepseek_v3",
+	"granite":     "granite", "granitemoe": "granite",
+	"minimax_m2": "minimax_m2",
+	"olmo3":      "olmo3",
+}
+
+// vllmToolParser is the --tool-call-parser for a model and why: the override
+// when set ("none" turns it off), else the architecture's entry. Qwen3 coder
+// finetunes share model_type with the chat models but emit the XML format, so
+// the served name breaks that tie.
+func vllmToolParser(ov *Override, meta Metadata, name string) (parser, note string) {
+	if ov != nil {
+		switch p := strings.TrimSpace(ov.VllmToolParser); {
+		case strings.EqualFold(p, "none"):
+			return "", "turned off"
+		case p != "":
+			return p, "pinned"
+		}
+	}
+	arch := strings.ToLower(strings.TrimSpace(meta.Architecture))
+	p, ok := vllmToolParsers[arch]
+	if !ok {
+		return "", fmt.Sprintf("no parser known for arch %q; pick one in the model editor", meta.Architecture)
+	}
+	if p == "hermes" && strings.HasPrefix(arch, "qwen3") && strings.Contains(strings.ToLower(name), "coder") {
+		p = "qwen3_coder"
+	}
+	return p, "auto"
+}
+
+// vllmExtraSetsToolParser reports whether the model's hand-written extra args
+// already name a parser: the workaround before this knob existed. Their pick
+// stands, and a second copy of the flag in the launch preview reads as a bug.
+func vllmExtraSetsToolParser(ov *Override) bool {
+	return ov != nil && strings.Contains(ov.ExtraArgs, "--tool-call-parser")
 }
 
 // isSplitGguf reports whether the row's file is one shard of a split set.

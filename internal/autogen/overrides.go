@@ -656,8 +656,13 @@ type Override struct {
 	// folder name, not a verified Hugging Face repo id, so a guess here would bake
 	// a wrong remote reference into a launch command. A repo id or a local path.
 	VllmTokenizer string `yaml:"vllmTokenizer"`
-	Spec          string `yaml:"spec"`         // "draft-mtp" | "draft-dflash" | "" (=> ngram-mod); chainable with "+"
-	ReasoningFmt  string `yaml:"reasoningFmt"` // "auto" | "off" | "" (=> auto)
+	// VllmToolParser => --enable-auto-tool-choice --tool-call-parser X. "" =>
+	// picked from the architecture (vllmToolParser), "none" => off. vLLM refuses
+	// every request that carries `tools` without one, and the parser is
+	// per-family, so it cannot be a fleet-wide default.
+	VllmToolParser string `yaml:"vllmToolParser"`
+	Spec           string `yaml:"spec"`         // "draft-mtp" | "draft-dflash" | "" (=> ngram-mod); chainable with "+"
+	ReasoningFmt   string `yaml:"reasoningFmt"` // "auto" | "off" | "" (=> auto)
 	// ReasoningBudget caps thinking tokens (--reasoning-budget N). 0 => omit (no
 	// cap). Inherited by ctx-tier variants; named variants are standalone.
 	ReasoningBudget int    `yaml:"reasoningBudget"`

@@ -303,7 +303,7 @@ const hashCacheSuffix = ".modelhash"
 // and served through vllm, or leave a "# SKIPPED" comment with no vllm backend.
 // v90: vllm's --gpu-memory-utilization and estVramGB are sized to weights + KV
 // + overhead when that is under the budget, not to the whole budget.
-const genVersion = "v90"
+const genVersion = "v91"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight

@@ -235,3 +235,55 @@ func TestEmitVllmModel_SkipsSplitShards(t *testing.T) {
 		t.Errorf("single-file model should emit, got %v:\n%s", emitted, b.String())
 	}
 }
+
+func TestVllmToolParser_PickAndOverride(t *testing.T) {
+	cases := []struct {
+		name, arch string
+		ov         *Override
+		want       string
+	}{
+		{"qwen3-8b", "qwen3", nil, "hermes"},
+		{"qwen3-coder-30b", "qwen3_moe", nil, "qwen3_coder"},
+		{"qwen3.6-27b", "qwen3_5", nil, "qwen3_coder"},
+		{"llama-3.1-8b", "llama", nil, "llama3_json"},
+		{"mystery", "somearch", nil, ""},
+		{"qwen3-8b", "qwen3", &Override{VllmToolParser: "none"}, ""},
+		{"mystery", "somearch", &Override{VllmToolParser: "minicpm5"}, "minicpm5"},
+	}
+	for _, c := range cases {
+		got, _ := vllmToolParser(c.ov, Metadata{Architecture: c.arch}, c.name)
+		if got != c.want {
+			t.Errorf("%s (%s) => %q, want %q", c.name, c.arch, got, c.want)
+		}
+	}
+}
+
+func TestVllmCmdLines_ToolParserFlags(t *testing.T) {
+	s := Settings{Backends: []BackendEntry{{ID: "v", Kind: "vllm", Path: "vllm", Default: true}}}
+	row := GgufRow{FullPath: "/m/q", SizeGB: 4, IsHF: true}
+	meta := Metadata{Architecture: "qwen3", ContextLength: 32768}
+	be := resolveBackend(s, nil, "llm")
+
+	cmd := strings.Join(vllmCmdLines(s, row, &Override{Ctx: 8192}, "q", be, meta), " ")
+	if !strings.Contains(cmd, "--enable-auto-tool-choice --tool-call-parser hermes") {
+		t.Errorf("auto parser missing: %s", cmd)
+	}
+	// A parser already in extra args (the pre-knob workaround) is not doubled.
+	ov := &Override{Ctx: 8192, ExtraArgs: "--enable-auto-tool-choice --tool-call-parser minicpm5"}
+	cmd = strings.Join(vllmCmdLines(s, row, ov, "q", be, meta), " ")
+	if n := strings.Count(cmd, "--tool-call-parser"); n != 1 {
+		t.Errorf("--tool-call-parser appears %d times: %s", n, cmd)
+	}
+	// Unknown arch: no flag, and the emitted entry does not advertise tools.
+	var b strings.Builder
+	var emitted []string
+	emitVllmModel(&b, s, row, &Override{Ctx: 8192}, "m", be, Metadata{Architecture: "somearch"}, &emitted)
+	if strings.Contains(b.String(), "--tool-call-parser") || strings.Contains(b.String(), "tools: true") {
+		t.Errorf("unknown arch got a parser:\n%s", b.String())
+	}
+	b.Reset()
+	emitVllmModel(&b, s, row, &Override{Ctx: 8192}, "q", be, meta, &emitted)
+	if !strings.Contains(b.String(), "tools: true") {
+		t.Errorf("mapped arch not advertised as tools-capable:\n%s", b.String())
+	}
+}

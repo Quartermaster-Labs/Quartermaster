@@ -429,6 +429,7 @@ export interface ModelOverride {
   vllmGpuUtil?: number; // --gpu-memory-utilization (0/undefined => derived from the VRAM budget)
   vllmTensorParallel?: number; // --tensor-parallel-size (>1 emits the flag)
   vllmTokenizer?: string; // --tokenizer: base-model repo id or path (never guessed)
+  vllmToolParser?: string; // --tool-call-parser ("" => picked from the arch, "none" => off)
   ctx?: number;
   kvK?: string;
   kvV?: string;
