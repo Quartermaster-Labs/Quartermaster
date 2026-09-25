@@ -1,14 +1,23 @@
 <script lang="ts">
   import { tip } from "../lib/tooltip";
   import { push } from "svelte-spa-router";
-  import { models, inFlightRequests, unloadAllModels } from "../stores/api";
+  import {
+    models,
+    inFlightRequests,
+    unloadAllModels,
+    fetchInflight,
+    fetchInflightRequest,
+    type InflightRequest,
+  } from "../stores/api";
   import { latestSys, vramTotals } from "../stores/perf";
   import { vramBreakdown } from "../stores/vram";
   import { prettifyModelName, modelCategory, largestModel, modelWeightGB } from "../lib/modelUtils";
-  import type { Model } from "../lib/types";
+  import type { Model, ReqRespCapture } from "../lib/types";
+  import { toLocalPx } from "../lib/uiZoom";
   import { ChevronDown } from "lucide-svelte";
   import VramGauge from "./VramGauge.svelte";
   import DownloadsMenu from "./DownloadsMenu.svelte";
+  import CaptureDialog from "./CaptureDialog.svelte";
 
   // Models currently occupying the GPU (or about to). The whole tool is
   // VRAM-exclusive single-model, so this is the headline state.
@@ -80,6 +89,72 @@
   const othersMoving = $derived(
     liveModels.some((m) => m.id !== head?.id && (m.state === "starting" || m.state === "stopping")),
   );
+
+  // In-flight panel: the requests behind the count, for the ones that run long
+  // enough to click (a short chat turn is gone before the panel opens, and
+  // lands in Activity on its own). Click, not hover: a hover panel with
+  // clickable rows closes as the pointer crosses the gap to reach it.
+  let flightOpen = $state(false);
+  let flightBtn: HTMLButtonElement | undefined = $state();
+  let flightLeft = $state(0);
+  let flights = $state<InflightRequest[]>([]);
+  let flightNote = $state<string | null>(null);
+  let now = $state(Date.now());
+  let viewCapture = $state<ReqRespCapture | null>(null);
+  let viewOpen = $state(false);
+
+  function toggleFlights(): void {
+    if (flightOpen) {
+      flightOpen = false;
+      return;
+    }
+    // Anchored under the readout. Fixed, like the model picker, because the
+    // rail is an overflow-x strip that would clip an absolute child; the rect
+    // is visual px, so it goes through toLocalPx (see lib/uiZoom.ts).
+    if (flightBtn) {
+      const left = toLocalPx(flightBtn.getBoundingClientRect().left, flightBtn);
+      const maxLeft = toLocalPx(window.innerWidth, flightBtn) - 25 * 16;
+      flightLeft = Math.max(8, Math.min(left, maxLeft));
+    }
+    flightNote = null;
+    flightOpen = true;
+  }
+
+  // While open, re-list every second. That both ticks the elapsed column and
+  // picks up the model name, which the server only learns once the request
+  // gets as far as resolving one - a list fetched once on open would keep it
+  // blank.
+  $effect(() => {
+    if (!flightOpen) return;
+    const tick = async (): Promise<void> => {
+      now = Date.now();
+      flights = await fetchInflight();
+    };
+    void tick();
+    const t = setInterval(() => void tick(), 1000);
+    return () => clearInterval(t);
+  });
+
+  async function openFlight(f: InflightRequest): Promise<void> {
+    const d = await fetchInflightRequest(f.id);
+    if (!d) {
+      flightNote = "That one just finished - it's in Activity now.";
+      return;
+    }
+    viewCapture = d.capture;
+    viewOpen = true;
+    flightOpen = false;
+  }
+
+  function openActivity(): void {
+    flightOpen = false;
+    push("/activity");
+  }
+
+  function elapsed(started: string): string {
+    const s = Math.max(0, Math.floor((now - Date.parse(started)) / 1000));
+    return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+  }
 
   // Still used by the multi-model picker, where several rows need telling apart
   // at a glance and there is no dashboard card doing it for them.
@@ -180,12 +255,20 @@
        count goes accent with a pulse. Only colour changes - never opacity on
        the group, which faded the label too until the whole readout looked
        absent and seemed to appear from nowhere on the first request. The dot's
-       slot is always there so the count doesn't shift when it lights. -->
-  <div class="flex items-center gap-1.5 shrink-0">
+       slot is always there so the count doesn't shift when it lights.
+       Clickable only while there is something to list; -mx cancels the hover
+       wash's padding so the label stays where it was. -->
+  <button
+    bind:this={flightBtn}
+    class="-mx-1.5 flex items-center gap-1.5 shrink-0 rounded px-1.5 py-0.5 transition-colors enabled:cursor-pointer enabled:hover:bg-secondary {flightOpen ? 'bg-secondary' : ''}"
+    disabled={$inFlightRequests === 0 && !flightOpen}
+    onclick={toggleFlights}
+    use:tip={$inFlightRequests > 0 ? "Show running requests" : "No requests running"}
+  >
     <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">In-flight</span>
     <span class="font-mono text-micro tabular-nums {$inFlightRequests > 0 ? 'text-primary' : 'text-txtsecondary'}">{$inFlightRequests}</span>
     <span class="inline-block w-1.5 h-1.5 rounded-full {$inFlightRequests > 0 ? 'bg-primary animate-pulse' : 'bg-transparent'}"></span>
-  </div>
+  </button>
 
   <!-- Unload sits LEFT of Downloads, so Downloads holds the right edge and
        never moves: the button comes and goes into the empty middle of the
@@ -208,7 +291,60 @@
   </div>
 </div>
 
-<svelte:window onkeydown={(e) => e.key === "Escape" && (pickerOpen = false)} />
+<svelte:window
+  onkeydown={(e) => {
+    if (e.key === "Escape") {
+      pickerOpen = false;
+      flightOpen = false;
+    }
+  }}
+/>
+
+{#if flightOpen}
+  <button class="fixed inset-0 z-40 cursor-default" aria-label="Close request list" onclick={() => (flightOpen = false)}></button>
+  <div
+    class="fixed top-11 z-50 w-96 max-w-[calc(100vw/var(--qm-scale)-1rem)] rounded-md border border-card-border bg-surface shadow-xl overflow-hidden"
+    style:left="{flightLeft}px"
+  >
+    <div class="flex items-center gap-2 px-3 h-10 border-b border-card-border-inner">
+      <h6>In flight</h6>
+      <span class="ml-auto font-mono text-micro text-txtsecondary tabular-nums">{flights.length}</span>
+    </div>
+    {#if flights.length === 0}
+      <!-- Stays open when the list empties rather than vanishing under the
+           pointer; the request that just ended is one click away. -->
+      <div class="px-3 py-3 text-micro text-txtsecondary">
+        Nothing running. Finished requests are in
+        <button class="text-primary hover:underline cursor-pointer" onclick={openActivity}>Activity</button>.
+      </div>
+    {:else}
+      <div class="divide-y divide-card-border-inner max-h-80 overflow-y-auto pretty-scroll">
+        {#each flights as f (f.id)}
+          <!-- No body = a GET, or captures off (captureBuffer: 0): nothing to
+               open, so the row is inert rather than a dead click. -->
+          <button
+            class="w-full flex items-center gap-3 px-3 py-2 text-left transition-colors enabled:hover:bg-secondary enabled:cursor-pointer"
+            disabled={!f.has_body}
+            onclick={() => openFlight(f)}
+            use:tip={f.has_body ? "Open the request" : "No request body captured"}
+          >
+            <span class="w-14 shrink-0 font-mono text-micro text-primary tabular-nums">{elapsed(f.started)}</span>
+            <span class="font-mono text-micro text-txtmain truncate min-w-0 flex-1">{f.model ? prettifyModelName(f.model) : "-"}</span>
+            <span class="shrink-0 font-mono text-micro text-txtsecondary">{f.path.replace(/^\/v1\//, "")}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
+    {#if flightNote}
+      <div class="px-3 py-2 border-t border-card-border-inner text-micro text-txtsecondary">
+        {flightNote}
+        <button class="text-primary hover:underline cursor-pointer" onclick={openActivity}>Open Activity</button>
+      </div>
+    {/if}
+  </div>
+{/if}
+
+<CaptureDialog capture={viewCapture} open={viewOpen} pending onclose={() => (viewOpen = false)} />
 
 {#if pickerOpen}
   <!-- Scrim: catches the click that dismisses the panel, and nothing else. -->

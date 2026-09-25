@@ -948,6 +948,10 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/update/status", adminChain.ThenFunc(s.handleAPIUpdateStatus))
 	mux.Handle("POST /api/update/check", adminChain.ThenFunc(s.handleAPIUpdateCheck))
 	mux.Handle("GET /api/captures/{id}", adminChain.ThenFunc(s.handleAPICapture))
+	// Running requests, for the status rail's in-flight panel. Admin-only: the
+	// detail route returns request bodies, i.e. other people's prompts.
+	mux.Handle("GET /api/inflight", adminChain.ThenFunc(s.handleAPIInflight))
+	mux.Handle("GET /api/inflight/{id}", adminChain.ThenFunc(s.handleAPIInflightRequest))
 	// Chat-tool fetch paths: the playground calls all four from the browser, so
 	// they sit on pgChain. Each is a bounded outbound fetch (fetch_page's SSRF
 	// guard, a YouTube/FX API, an image proxy) rather than an ops endpoint.
