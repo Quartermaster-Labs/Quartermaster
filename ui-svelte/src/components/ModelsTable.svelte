@@ -203,12 +203,12 @@
 
 {#snippet loadBtn(m: Model)}
   {#if pending[m.id]}
-    <button class="btn btn--sm inline-flex items-center gap-1" onclick={() => onCancel(m.id)}>
+    <button class="btn btn--sm btn--quiet inline-flex items-center gap-1" onclick={() => onCancel(m.id)}>
       <X class="w-3 h-3" />
       Cancel
     </button>
   {:else}
-    <button class="btn btn--sm inline-flex items-center gap-1" onclick={() => onLoad(m.id)}>
+    <button class="btn btn--sm btn--quiet inline-flex items-center gap-1" onclick={() => onLoad(m.id)}>
       <Play class="w-3 h-3" />
       Load
     </button>
@@ -217,7 +217,7 @@
 
 {#snippet gearBtn(m: Model, base: Model)}
   <button
-    class="btn btn--sm btn--icon"
+    class="btn btn--sm btn--quiet btn--icon"
     onclick={() => onConfig(base.id, m.id)}
     aria-label="Edit parameters"
     use:tip={"Edit parameters / variants"}
@@ -229,7 +229,7 @@
 {#snippet trashBtn(m: Model)}
   {#if onDelete}
     <button
-      class="btn btn--sm btn--icon btn--danger-hover"
+      class="btn btn--sm btn--quiet btn--icon btn--danger-hover"
       onclick={() => onDelete?.(m)}
       aria-label="Delete model"
       use:tip={"Delete this quant's weights from disk"}
@@ -257,7 +257,7 @@
     <div class="grid grid-cols-[auto_auto] justify-end gap-1 [&>*]:justify-center">
       {#if onPlay && (canPlay?.(m) ?? true)}
         <button
-          class="btn btn--sm inline-flex items-center gap-1.5"
+          class="btn btn--sm btn--quiet inline-flex items-center gap-1.5"
           onclick={() => onPlay?.(m)}
           use:tip={"Load and open in the playground"}
         >

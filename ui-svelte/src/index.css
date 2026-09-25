@@ -590,6 +590,16 @@
     @apply border-transparent bg-secondary text-txtmain;
   }
 
+  /* The .seg look on a standalone button: muted label on a hairline, a
+     neutral fill on hover instead of the accent. For per-row actions in a
+     long list, where N accent-lit outlines would out-shout the data. */
+  .btn--quiet {
+    @apply border-card-border text-txtsecondary text-micro font-medium;
+  }
+  .btn--quiet:hover:not(:disabled) {
+    @apply border-card-border bg-secondary text-txtmain;
+  }
+
   /* The confirm half of a destructive pair. Filled, not outlined: it sits next
      to a plain "keep" button and the two must not read as equal choices. */
   .btn--danger {
