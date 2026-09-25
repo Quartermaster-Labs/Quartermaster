@@ -26,8 +26,9 @@ import (
 //
 // Deliberately NOT a browser: no JS execution, no clicking. Shops that render
 // their price client-side fail loudly here (the text simply won't hold a price)
-// rather than being guessed at. A headless-browser fallback is the planned
-// upgrade path (TODO 9b), not a prerequisite.
+// rather than being guessed at, unless the page ships its data as embedded
+// JSON, which fetchpage_offers.go reads. A headless-browser fallback is the
+// planned upgrade path (TODO 9b), not a prerequisite.
 
 const (
 	pageTimeout  = 25 * time.Second
@@ -42,6 +43,12 @@ const (
 	pageMaxImages  = 3
 	pageImgCandMax = 24
 	pageUserAgent  = "Mozilla/5.0 (compatible; quartermaster/1.0; +local assistant)"
+	// pageBrowserUA is what fetch_page and the image proxy send. Both read a
+	// page a person asked about, at a person's pace, and shops rate-limit a
+	// self-declared bot UA outright (elgiganten.dk answered the one above with
+	// 429 and a real browser string with 200). The API-shaped fetchers (feeds,
+	// currency) keep identifying as quartermaster.
+	pageBrowserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
 
 	// maxFetches caps pages read per turn. At pageMaxChars each this is already
 	// ~24k tokens of tool output, which is most of a 32k window — a shopping
@@ -54,6 +61,7 @@ type pageDoc struct {
 	Title     string
 	Text      string
 	Data      string // compacted JSON-LD, when the page carries any
+	Offers    string // name | price lines harvested from embedded app-state JSON
 	Images    []string
 	FetchedAt time.Time
 	Truncated bool
@@ -156,8 +164,8 @@ func fetchPage(ctx context.Context, raw string) (*pageDoc, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", pageUserAgent)
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,text/plain;q=0.8")
+	req.Header.Set("User-Agent", pageBrowserUA)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5")
 	req.Header.Set("Accept-Language", "en;q=0.9,*;q=0.5")
 
 	resp, err := pageClient().Do(req)
@@ -168,6 +176,12 @@ func fetchPage(ctx context.Context, raw string) (*pageDoc, error) {
 	if resp.StatusCode != http.StatusOK {
 		// 403/429 here usually means the shop bot-blocks plain HTTP clients. Say
 		// so plainly — that is a real, actionable outcome, not a transient blip.
+		// It is not the UA (we send a browser's): elgiganten.dk still 429s us
+		// while answering curl with the same headers, i.e. it gates on the TLS
+		// fingerprint. Retrying cannot help; a comparison site usually can.
+		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
+			return nil, fmt.Errorf("HTTP %d from %s: this site refuses automated readers, so retrying will not help - get its price from a price-comparison site's listing instead, or use another shop", resp.StatusCode, u.Host)
+		}
 		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, u.Host)
 	}
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
@@ -184,9 +198,11 @@ func fetchPage(ctx context.Context, raw string) (*pageDoc, error) {
 	if strings.Contains(ct, "text/plain") {
 		doc.Text = strings.TrimSpace(string(body))
 	} else {
-		doc.Title, doc.Text, doc.Data, doc.Images = extractHTML(body, resp.Request.URL)
+		x := extractHTML(body, resp.Request.URL)
+		doc.Title, doc.Text, doc.Data, doc.Images = x.Title, x.Text, x.Data, x.Images
+		doc.Offers = harvestOffers(x.State, resp.Request.URL)
 	}
-	if doc.Text == "" && doc.Data == "" {
+	if doc.Text == "" && doc.Data == "" && doc.Offers == "" {
 		return nil, errors.New("page carried no readable text (likely rendered by JavaScript)")
 	}
 	if len(doc.Text) > pageMaxChars {
@@ -206,10 +222,12 @@ func fetchPage(ctx context.Context, raw string) (*pageDoc, error) {
 // --- extraction -------------------------------------------------------------
 
 // Chrome/nav/legal furniture: dropping these is what turns 12k chars of shop
-// page into 12k chars of actual product.
+// page into 12k chars of actual product. NOT `form`: on a shop listing every
+// product tile's price sits inside its add-to-basket form (proshop.dk), so
+// skipping the tag dropped every price on the page.
 var skipTags = map[string]bool{
 	"script": true, "style": true, "noscript": true, "svg": true, "canvas": true,
-	"nav": true, "footer": true, "header": true, "aside": true, "form": true,
+	"nav": true, "footer": true, "header": true, "aside": true,
 	"iframe": true, "template": true, "select": true, "button": true,
 }
 
@@ -221,15 +239,25 @@ var blockTags = map[string]bool{
 	"section": true, "article": true, "dt": true, "dd": true, "hr": true, "table": true,
 }
 
-// extractHTML walks the parse tree and returns (title, text, json-ld, images).
-// The JSON-LD is kept because schema.org Product/Offer blocks carry the price,
-// currency and availability as DATA — far more reliable than reading them out
-// of rendered text, and present on most real shops.
-func extractHTML(body []byte, base *url.URL) (string, string, string, []string) {
+// extracted is what one pass over a page's HTML yields.
+type extracted struct {
+	Title  string
+	Text   string
+	Data   string   // schema.org JSON-LD, capped at pageMaxLD
+	Images []string // at most pageMaxImages, hero images first
+	State  []string // raw embedded app-state JSON blobs, for harvestOffers
+}
+
+// extractHTML walks the parse tree once. The JSON-LD is kept because
+// schema.org Product/Offer blocks carry the price, currency and availability
+// as DATA — far more reliable than reading them out of rendered text, and
+// present on most real shops.
+func extractHTML(body []byte, base *url.URL) extracted {
 	root, err := html.Parse(strings.NewReader(string(body)))
 	if err != nil {
-		return "", "", "", nil
+		return extracted{}
 	}
+	var state []string
 	var title, ld strings.Builder
 	var text strings.Builder
 	var inTitle bool
@@ -246,10 +274,17 @@ func extractHTML(body []byte, base *url.URL) (string, string, string, []string) 
 		if n.Type == html.ElementNode {
 			name := strings.ToLower(n.Data)
 			if name == "script" {
-				if attrVal(n, "type") == "application/ld+json" && ld.Len() < pageMaxLD {
-					if s := strings.TrimSpace(nodeText(n)); s != "" {
-						ld.WriteString(s)
-						ld.WriteString("\n")
+				switch attrVal(n, "type") {
+				case "application/ld+json":
+					if ld.Len() < pageMaxLD {
+						if s := strings.TrimSpace(nodeText(n)); s != "" {
+							ld.WriteString(s)
+							ld.WriteString("\n")
+						}
+					}
+				case "application/json":
+					if s := strings.TrimSpace(nodeText(n)); strings.HasPrefix(s, "{") || strings.HasPrefix(s, "[") {
+						state = append(state, s)
 					}
 				}
 				return
@@ -306,7 +341,13 @@ func extractHTML(body []byte, base *url.URL) (string, string, string, []string) 
 	if len(data) > pageMaxLD {
 		data = strings.ToValidUTF8(data[:pageMaxLD], "") + "\n…(truncated)"
 	}
-	return collapseSpace(strings.TrimSpace(title.String())), squeezeLines(text.String()), data, pickImages(docBase, hero, imgs)
+	return extracted{
+		Title:  collapseSpace(strings.TrimSpace(title.String())),
+		Text:   squeezeLines(text.String()),
+		Data:   data,
+		Images: pickImages(docBase, hero, imgs),
+		State:  state,
+	}
 }
 
 // attrVal returns an attribute LOWERCASED — for comparing against known keywords
@@ -484,6 +525,11 @@ func formatPage(doc *pageDoc, n int) string {
 	if doc.Data != "" {
 		b.WriteString("\nStructured data on the page (schema.org JSON-LD - prices/availability here are the page's own machine-readable values):\n")
 		b.WriteString(doc.Data)
+		b.WriteString("\n")
+	}
+	if doc.Offers != "" {
+		b.WriteString("\nProducts and prices from the page's embedded data (the listing the page draws itself from; name | price | shop | stock | link):\n")
+		b.WriteString(doc.Offers)
 		b.WriteString("\n")
 	}
 	if len(doc.Images) > 0 {

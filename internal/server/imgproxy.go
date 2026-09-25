@@ -48,7 +48,7 @@ func (s *Server) handleAPIImageProxy(w http.ResponseWriter, r *http.Request) {
 	// No Referer on purpose: sending this box's own origin is what gets the
 	// request refused by hotlink protection, and sending the shop's own page URL
 	// would be a forgery. Absent reads as a direct hit, which CDNs allow.
-	req.Header.Set("User-Agent", pageUserAgent)
+	req.Header.Set("User-Agent", pageBrowserUA)
 	req.Header.Set("Accept", "image/avif,image/webp,image/*;q=0.8")
 
 	resp, err := pageClient().Do(req)

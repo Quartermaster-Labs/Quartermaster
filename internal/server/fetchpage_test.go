@@ -56,7 +56,8 @@ func TestExtractHTML(t *testing.T) {
 <table><tr><td>Weight</td><td>1.2 kg</td></tr></table>
 <footer>© shop</footer></body></html>`
 
-	title, text, ld, _ := extractHTML([]byte(page), mustURL(t, "https://shop.example/p/widget"))
+	x := extractHTML([]byte(page), mustURL(t, "https://shop.example/p/widget"))
+	title, text, ld := x.Title, x.Text, x.Data
 	if title != "Widget Pro" {
 		t.Errorf("title = %q", title)
 	}
@@ -101,7 +102,7 @@ func TestExtractHTML_Images(t *testing.T) {
 <img srcset="https://cdn.example/g2-320.jpg 320w, https://cdn.example/g2-640.jpg 640w">
 </body></html>`
 
-	_, _, _, imgs := extractHTML([]byte(page), mustURL(t, "https://shop.example/p/widget"))
+	imgs := extractHTML([]byte(page), mustURL(t, "https://shop.example/p/widget")).Images
 	if len(imgs) == 0 {
 		t.Fatal("no images extracted")
 	}
@@ -128,7 +129,7 @@ func TestExtractHTML_Images(t *testing.T) {
 func TestExtractHTML_ImagesBaseTag(t *testing.T) {
 	page := `<html><head><base href="https://cdn.example/assets/">
 <meta property="og:image" content="hero.png"></head><body><p>x</p></body></html>`
-	_, _, _, imgs := extractHTML([]byte(page), mustURL(t, "https://shop.example/p/widget"))
+	imgs := extractHTML([]byte(page), mustURL(t, "https://shop.example/p/widget")).Images
 	if len(imgs) != 1 || imgs[0] != "https://cdn.example/assets/hero.png" {
 		t.Errorf("base href ignored: %v", imgs)
 	}
