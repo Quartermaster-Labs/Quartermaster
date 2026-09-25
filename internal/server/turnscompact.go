@@ -20,10 +20,9 @@ import (
 // history and tools), with the instruction as the last user message, and the
 // history goes through the same server-side assembly a turn round gets
 // (inlineMedia, replayToolCalls) under the same X-Conversation-Id. The prompt is
-// then the resident KV plus one user message, and nothing is evicted. (The
-// last answer is re-prefilled too: its thinking is in the KV but not in the
-// re-rendered history, so llama-server rolls back to a checkpoint before it,
-// exactly as it does for the next ordinary turn.)
+// then the resident KV plus one user message, and nothing is evicted. Whatever
+// part of the history the next ordinary turn would re-prefill, this does too:
+// the two send the same bytes up to the appended instruction.
 //
 // Rules that keep that true:
 //   - tools ride along unchanged and tool_choice is left unset. llama.cpp

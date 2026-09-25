@@ -176,8 +176,8 @@ export function compactInPlacePrompt(hasPriorSummary: boolean, keepFrom: string)
 // conversation it already holds (POST /api/chats/compact). `turn` is the body a
 // turn would send, messages already ending with compactInPlacePrompt. The server
 // assembles the history exactly as a turn does and keys the request to the same
-// conversation, so the prefill is the instruction (plus the last answer, whose
-// thinking the history drops) and the chat's KV is neither evicted nor saved (internal/server/turnscompact.go).
+// conversation, so it reuses the KV exactly as far as the next turn would, and
+// the chat's KV is neither evicted nor saved (internal/server/turnscompact.go).
 export async function summarizeInPlace(turn: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
   const res = await fetch("/api/chats/compact", {
     method: "POST",
