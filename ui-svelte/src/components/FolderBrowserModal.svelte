@@ -148,7 +148,7 @@
         {#if loading}
           <p class="px-4 py-3 text-xs text-txtsecondary">Loading...</p>
         {:else if error}
-          <p class="px-4 py-3 text-xs text-rose-400">{error}</p>
+          <p class="px-4 py-3 text-xs text-error">{error}</p>
         {:else if folder && folder.entries.length === 0}
           <p class="px-4 py-3 text-xs text-txtsecondary">This folder is empty.</p>
         {:else if folder}

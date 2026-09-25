@@ -1744,7 +1744,7 @@
           {#each attachedDocs as doc (doc.id)}
             <div
               class="group flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[0.8125rem] max-w-[18rem] {doc.status === 'error'
-                ? 'border-red-500/50 bg-red-500/10 text-red-600 dark:text-red-400'
+                ? 'border-error/50 bg-error/10 text-error'
                 : 'border-card-border bg-surface text-txtsecondary'}"
               use:tooltip={doc.status === "error" ? doc.error : `${doc.name}${doc.note ? ` · ${doc.note}` : ""}`}
             >
@@ -1780,7 +1780,7 @@
 
       <!-- Error message -->
       {#if imageError}
-        <div class="mb-2 p-2 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded text-sm">
+        <div class="mb-2 p-2 bg-error/10 text-error rounded text-sm">
           {imageError}
         </div>
       {/if}

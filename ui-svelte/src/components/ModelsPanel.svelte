@@ -439,7 +439,7 @@
         </div>
       {:else}
         <button
-          class="btn btn--sm inline-flex items-center justify-center disabled:opacity-50"
+          class="btn btn--sm btn--icon"
           onclick={() => pickFolder()}
           disabled={picking}
           aria-label="Set models folder"
@@ -449,7 +449,7 @@
         </button>
         {#if folderOwn}
           <button
-            class="btn btn--sm inline-flex items-center justify-center disabled:opacity-50"
+            class="btn btn--sm btn--icon"
             onclick={() => pickFolder(true)}
             disabled={picking}
             aria-label="Use the shared models folder"
@@ -460,7 +460,7 @@
         {/if}
         {#if hasLora}
           <button
-            class="btn btn--sm inline-flex items-center justify-center disabled:opacity-50"
+            class="btn btn--sm btn--icon"
             onclick={() => pickLora()}
             disabled={picking}
             aria-label="Set LoRA folder"
@@ -470,7 +470,7 @@
           </button>
           {#if loraPath}
             <button
-              class="btn btn--sm inline-flex items-center justify-center disabled:opacity-50"
+              class="btn btn--sm btn--icon"
               onclick={() => pickLora(true)}
               disabled={picking}
               aria-label="Use the default LoRA folder"
@@ -481,13 +481,13 @@
           {/if}
         {/if}
         <button
-          class="btn btn--sm uppercase tracking-wide"
+          class="btn btn--sm"
           onclick={() => showIdorNameStore.update((p) => (p === "name" ? "id" : "name"))}
           use:tip={"Toggle id / name display"}
         >
           {$showIdorNameStore === "id" ? "ID" : "Name"}
         </button>
-        <button class="btn btn--sm uppercase tracking-wide" onclick={() => showUnlistedStore.update((p) => !p)} use:tip={"Show or hide unlisted models"}>
+        <button class="btn btn--sm" onclick={() => showUnlistedStore.update((p) => !p)} use:tip={"Show or hide unlisted models"}>
           {$showUnlistedStore ? "Hide unlisted" : "Show unlisted"}
         </button>
       {/if}

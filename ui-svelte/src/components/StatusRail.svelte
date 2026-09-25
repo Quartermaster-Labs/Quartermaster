@@ -278,7 +278,7 @@
   <div class="ml-auto flex items-center gap-3 shrink-0">
     {#if liveModels.length > 0}
       <button
-        class="btn btn--sm uppercase tracking-wide text-error border-error/50 hover:bg-error/10 hover:border-error"
+        class="btn btn--sm btn--danger-outline"
         onclick={handleUnloadAll}
         disabled={unloading}
       >

@@ -239,7 +239,7 @@
                 </button>
                 {#if playable(m)}
                   <button
-                    class="btn btn--sm py-1.5 inline-flex items-center gap-1.5 uppercase tracking-wide hover:border-primary hover:text-primary"
+                    class="btn btn--sm py-1.5 inline-flex items-center gap-1.5"
                     onclick={() => chatWith(m)}
                     disabled={m.state !== "ready"}
                     use:tip={`Open this model in the ${playgroundTab(m)} playground`}
@@ -255,7 +255,7 @@
                   </button>
                 {/if}
                 <button
-                  class="btn btn--sm py-1.5 inline-flex items-center gap-1.5 uppercase tracking-wide hover:border-error hover:text-error"
+                  class="btn btn--sm btn--danger-hover py-1.5 inline-flex items-center gap-1.5"
                   onclick={() => unloadSingleModel(m.id)}
                   disabled={m.state !== "ready"}
                 >

@@ -174,7 +174,7 @@
       <HelpCircle size={14} />
     </button>
     {#if available}
-      <button class="btn btn--sm btn--primary ml-auto shrink-0 uppercase tracking-wide" onclick={startCreate} disabled={creating}>
+      <button class="btn btn--sm btn--primary ml-auto shrink-0" onclick={startCreate} disabled={creating}>
         <Plus size={14} class="mr-1 inline-block -mt-px" />New key
       </button>
     {/if}
@@ -210,7 +210,7 @@
                 onkeydown={(e) => e.key === "Enter" && create()}
               />
             </label>
-            <button class="btn btn--sm btn--primary ml-auto uppercase tracking-wide" onclick={create} disabled={saving}>
+            <button class="btn btn--sm btn--primary ml-auto" onclick={create} disabled={saving}>
               <Plus size={14} class="mr-1 inline-block -mt-px" />Create
             </button>
           </div>
@@ -225,7 +225,7 @@
           <KeyRound size={26} class="text-txtsecondary/50" />
           <p class="text-sm text-txtsecondary">No API keys yet.</p>
           {#if !creating}
-            <button class="btn btn--sm uppercase tracking-wide" onclick={startCreate}><Plus size={14} class="mr-1 inline-block -mt-px" />Create one</button>
+            <button class="btn btn--sm" onclick={startCreate}><Plus size={14} class="mr-1 inline-block -mt-px" />Create one</button>
           {/if}
         </div>
       {:else}
@@ -270,8 +270,8 @@
             {#if editingScope === k.name}
               {@render picker(editScope, (next) => (editScope = next))}
               <div class="mt-3 flex gap-2">
-                <button class="btn btn--sm btn--primary uppercase tracking-wide" onclick={() => saveScope(k.name)} disabled={saving}>Save scope</button>
-                <button class="btn btn--sm uppercase tracking-wide" onclick={() => (editingScope = null)}>Cancel</button>
+                <button class="btn btn--sm btn--primary" onclick={() => saveScope(k.name)} disabled={saving}>Save scope</button>
+                <button class="btn btn--sm" onclick={() => (editingScope = null)}>Cancel</button>
               </div>
             {:else if scoped}
               <div class="mt-2 flex flex-wrap items-center gap-1.5 pl-6">

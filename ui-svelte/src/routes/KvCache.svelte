@@ -55,7 +55,7 @@
   // op -> tailwind text color + label, for the event log.
   const opStyle: Record<string, { cls: string; label: string }> = {
     confirm: { cls: "text-green-500", label: "reuse" },
-    "confirm-miss": { cls: "text-red-500", label: "no reuse" },
+    "confirm-miss": { cls: "text-error", label: "no reuse" },
     "restore-hit": { cls: "text-sky-500", label: "load" },
     "restore-seed": { cls: "text-sky-500", label: "seed" },
     "seed-pending": { cls: "text-sky-400", label: "seed?" },
@@ -63,7 +63,7 @@
     "preamble-mint": { cls: "text-purple-400", label: "pre mint" },
     save: { cls: "text-amber-500", label: "save" },
     miss: { cls: "text-txtsecondary", label: "miss" },
-    error: { cls: "text-red-500", label: "error" },
+    error: { cls: "text-error", label: "error" },
   };
 
   // Reading a KV file off disk is NOT a cache hit - the upstream can load it and
@@ -73,7 +73,7 @@
   const outcomeStyle: Record<string, { cls: string; note: string }> = {
     pending: { cls: "text-amber-500", note: "awaiting reuse" },
     reused: { cls: "text-green-500", note: "reused" },
-    "no-reuse": { cls: "text-red-500", note: "reprefilled anyway" },
+    "no-reuse": { cls: "text-error", note: "reprefilled anyway" },
     unconfirmed: { cls: "text-txtsecondary", note: "unconfirmed - model stopped first" },
   };
 
