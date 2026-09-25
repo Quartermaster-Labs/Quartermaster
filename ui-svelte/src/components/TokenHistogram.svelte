@@ -13,86 +13,95 @@
     unit = "t/s",
     barClass = "bg-primary/45 hover:bg-primary/75",
   }: {
+    // Percentiles for the header; the bars are binned here from `values`.
     data: HistogramData;
-    // The raw samples behind `data`; with fewer than STRIP_BELOW of them the
-    // chart draws one tick per sample instead of bins.
-    values?: number[];
+    values: number[];
     label: string;
     unit?: string;
     barClass?: string;
   } = $props();
 
-  const STRIP_BELOW = 10;
+  // Fine bins, one chart at every sample count: a handful of requests land as
+  // separate thin ticks, a few hundred build up into a histogram. The old
+  // 5-bin chart drew 11 samples as fat slabs and 2 as a pair at the edges.
+  const BINS = 40;
+  // The axis spans at least this share of the median. Fitting it to min..max
+  // stretched 896 vs 901 t/s (0.5% apart, i.e. noise) across the full width,
+  // as if they were far apart. With the floor, a tight cluster reads as tight.
+  const MIN_SPAN = 0.2;
 
-  let maxCount = $derived(Math.max(1, ...data.bins));
-  let total = $derived(data.bins.reduce((a, b) => a + b, 0));
-  let range = $derived(data.max - data.min);
+  function niceStep(raw: number): number {
+    const mag = 10 ** Math.floor(Math.log10(raw));
+    const f = raw / mag;
+    return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * mag;
+  }
+
+  let axis = $derived.by(() => {
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const span = Math.max(max - min, data.p50 * MIN_SPAN, 1e-9);
+    const mid = (min + max) / 2;
+    const step = niceStep(span / 4);
+    const lo = Math.max(0, Math.floor((mid - span / 2) / step) * step);
+    const hi = Math.ceil((mid + span / 2) / step) * step;
+    return { lo, hi, range: hi - lo };
+  });
+
+  let bins = $derived.by(() => {
+    const b = new Array(BINS).fill(0);
+    for (const v of values) {
+      b[Math.min(BINS - 1, Math.floor(((v - axis.lo) / axis.range) * BINS))]++;
+    }
+    return b;
+  });
+  let maxCount = $derived(Math.max(1, ...bins));
 
   function fmt(v: number): string {
     return v >= 100 ? v.toFixed(0) : v.toFixed(1);
   }
 
-  // A single-valued sample has no range to place a marker in; centre it over
-  // the one bar rather than pinning it to the left edge.
   function pos(v: number): number {
-    return range > 0 ? ((v - data.min) / range) * 100 : 50;
-  }
-
-  // Strip mode only: the extremes ARE the axis ends, so with two samples both
-  // ticks sat on the frame and vanished into it. Pull them 2% inside.
-  function inset(p: number): number {
-    return 2 + p * 0.96;
+    return ((v - axis.lo) / axis.range) * 100;
   }
 
   function binTip(i: number): string {
-    const lo = data.min + i * data.binSize;
-    const n = data.bins[i];
-    const span = data.binSize > 0 ? `${fmt(lo)}-${fmt(lo + data.binSize)}` : fmt(lo);
-    return `${span} ${unit} · ${n} request${n === 1 ? "" : "s"}`;
+    const w = axis.range / BINS;
+    const lo = axis.lo + i * w;
+    const n = bins[i];
+    return `${fmt(lo)}-${fmt(lo + w)} ${unit} · ${n} request${n === 1 ? "" : "s"}`;
   }
 </script>
 
 <div class="min-w-0">
-  <div class="flex items-baseline gap-2 mb-1.5 font-mono text-micro uppercase tracking-wide text-txtsecondary tabular-nums">
+  <div class="flex items-baseline gap-2 mb-2 font-mono text-micro uppercase tracking-wide text-txtsecondary tabular-nums">
     <span>{label}</span>
     <span class="ml-auto normal-case tracking-normal">
       p50 <span class="text-txtmain">{fmt(data.p50)}</span>
       · p95 <span class="text-txtmain">{fmt(data.p95)}</span>
-      {unit} · n {total}
+      {unit} · n {values.length}
     </span>
   </div>
 
-  <!-- Same 64px box in both modes, so the page doesn't jump as requests land. -->
-  <div class="relative h-16 flex items-end gap-1 border-b border-card-border">
-    {#if values && values.length < STRIP_BELOW}
-      <!-- Too few samples to bin: calculateHistogramData always makes at
-           least 5 bins, so two requests drew as two full-height slabs at the
-           edges with nothing between. One tick per request is the honest
-           picture until there are enough to show a shape. -->
-      {#each values as v, i (i)}
-        <div
-          class="absolute bottom-0 h-full w-1 -translate-x-1/2 rounded-t-sm transition-colors {barClass}"
-          style="left:{inset(pos(v))}%"
-          use:tip={`${fmt(v)} ${unit}`}
-        ></div>
-      {/each}
-    {:else}
-      {#each data.bins as count, i}
-        <div class="flex-1 h-full flex items-end" use:tip={binTip(i)}>
-          {#if count > 0}
-            <div class="w-full rounded-t-sm transition-colors {barClass}" style="height:{(count / maxCount) * 100}%"></div>
-          {/if}
-        </div>
-      {/each}
-    {/if}
+  <div class="relative h-16 flex items-end gap-0.5 border-b border-card-border">
+    {#each bins as count, i}
+      <div class="flex-1 h-full flex items-end" use:tip={count > 0 ? binTip(i) : undefined}>
+        {#if count > 0}
+          <!-- Floor at 12% so a lone sample in a busy chart stays visible. -->
+          <div class="w-full rounded-t-[1px] transition-colors {barClass}" style="height:{Math.max(12, (count / maxCount) * 100)}%"></div>
+        {/if}
+      </div>
+    {/each}
 
-    <!-- The median is the one marker worth a line: p95 is already in the
-         header, and a second rule over a dozen bars reads as another bar. -->
-    <div class="pointer-events-none absolute -top-1 bottom-0 w-px bg-txtmain/50" style="left:{values && values.length < STRIP_BELOW ? inset(pos(data.p50)) : pos(data.p50)}%"></div>
+    <!-- Median: dashed and capped, so it can't be read as one more sample. -->
+    <div class="pointer-events-none absolute -top-1.5 bottom-0 -translate-x-1/2 flex flex-col items-center" style="left:{pos(data.p50)}%">
+      <div class="size-1.5 rounded-full bg-txtmain/70"></div>
+      <div class="flex-1 border-l border-dashed border-txtmain/50"></div>
+    </div>
   </div>
 
   <div class="flex justify-between mt-1 font-mono text-micro text-txtsecondary tabular-nums">
-    <span>{fmt(data.min)}</span>
-    <span>{fmt(data.max)}</span>
+    <span>{fmt(axis.lo)}</span>
+    <span>{fmt(axis.lo + axis.range / 2)}</span>
+    <span>{fmt(axis.hi)}</span>
   </div>
 </div>
