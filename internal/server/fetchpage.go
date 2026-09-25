@@ -182,6 +182,11 @@ func fetchPage(ctx context.Context, raw string) (*pageDoc, error) {
 		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
 			return nil, fmt.Errorf("HTTP %d from %s: this site refuses automated readers, so retrying will not help - get its price from a price-comparison site's listing instead, or use another shop", resp.StatusCode, u.Host)
 		}
+		// Models invent search paths (pricerunner.dk/soeg/..., /da-dk/search?...)
+		// and burn the per-turn read cap on them; say what to do instead.
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("HTTP 404 from %s: no such page - if you built this URL yourself, do not guess another path; take the URL from web_search results or from a page you read", u.Host)
+		}
 		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, u.Host)
 	}
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
