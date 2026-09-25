@@ -60,7 +60,14 @@ type turnRecord struct {
 	// once inside the recorded tool_calls message, once at the front of the
 	// answer. trimSpoken takes it back off.
 	spoken []string
-	size   int
+	// final is the answering round's message verbatim (assistantRound), nil when
+	// the turn ended before answering. Replayed in place of the client's stored
+	// answer, which cannot stand in for it: the UI merges every round's thinking
+	// into one reasoning box plus inline <think> spans, so the final round's own
+	// reasoning is not recoverable from it, and without it the next turn's
+	// prompt diverges at the answer (see assistantRound).
+	final json.RawMessage
+	size  int
 }
 
 // trimSpoken removes the prose already present in the recorded messages from the
@@ -180,7 +187,7 @@ func replayRecordKey(chatID string, searches []turnSearch) string {
 // byte-for-byte instead of rebuilding an approximation. Called from runLoop's
 // defer, i.e. also on error/cancel: a turn that died after two searches still
 // gets those two results replayed exactly.
-func (tm *turnManager) recordTurn(at *activeTurn, chatID string, tail []json.RawMessage, spoken []string) {
+func (tm *turnManager) recordTurn(at *activeTurn, chatID string, tail []json.RawMessage, spoken []string, final json.RawMessage) {
 	if tm == nil || tm.replays == nil || len(tail) == 0 {
 		return
 	}
@@ -194,7 +201,9 @@ func (tm *turnManager) recordTurn(at *activeTurn, chatID string, tail []json.Raw
 	rec := &turnRecord{
 		msgs:   append([]json.RawMessage(nil), tail...),
 		spoken: append([]string(nil), spoken...),
+		final:  final,
 	}
+	rec.size += len(final)
 	for _, m := range rec.msgs {
 		rec.size += len(m)
 	}

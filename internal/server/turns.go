@@ -778,9 +778,12 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 	// order; the record needs it to know how much of the client's one stored
 	// answer was already sent inside the tail (turnsrecord.go, trimSpoken).
 	var spoken []string
+	// final is the answering round's message exactly as the model produced it,
+	// reasoning included; nil if the turn never got there.
+	var final json.RawMessage
 	// Record on EVERY exit, error and cancel included: a turn that died after two
 	// searches still gets those two results replayed exactly next time.
-	defer func() { tm.recordTurn(at, start.ChatID, apiTail, spoken) }()
+	defer func() { tm.recordTurn(at, start.ChatID, apiTail, spoken, final) }()
 
 	useTools := len(start.Tools) > 0
 	// Put previous turns' tool calls and results back into the history the model
@@ -901,6 +904,8 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 				at.mu.Unlock()
 			}
 
+			final = assistantRound(roundContent, roundReasoning, nil)
+
 			// Last line of defence: links to videos that came from neither the
 			// conversation nor any tool result this turn are invented. Cannot be
 			// unsaid — already streamed — so it gets labelled.
@@ -916,9 +921,7 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 		}
 
 		// Record this round's calls so the model sees them next round.
-		apiTail = append(apiTail, mustJSON(map[string]any{
-			"role": "assistant", "content": roundContent, "tool_calls": rawToolCalls(calls),
-		}))
+		apiTail = append(apiTail, assistantRound(roundContent, roundReasoning, calls))
 		spoken = append(spoken, roundContent)
 
 		contentLen, reasoningLen, during := at.lens()
@@ -1693,6 +1696,25 @@ func buildBody(start turnStart, msgs []json.RawMessage, maxTokens int, think boo
 }
 
 func mustJSON(v any) json.RawMessage { b, _ := json.Marshal(v); return b }
+
+// assistantRound is one round's assistant message as it goes back upstream.
+// reasoning_content is load-bearing, not decoration: templates that keep prior
+// thinking (Qwen3.8 does by default, and every Qwen keeps it for the rounds
+// after the last user message, i.e. the tool rounds of the turn in progress)
+// render an absent one as an EMPTY <think></think>, while the KV holds the real
+// thought. The prompt then diverges right there and llama-server re-prefills
+// from its last checkpoint before that round, once per round and again on the
+// next turn. Measured on Qwen3.8-27B: 606/606 reused with it, 546/606 without.
+func assistantRound(content, reasoning string, calls []toolCall) json.RawMessage {
+	m := map[string]any{"role": "assistant", "content": content}
+	if reasoning != "" {
+		m["reasoning_content"] = reasoning
+	}
+	if len(calls) > 0 {
+		m["tool_calls"] = rawToolCalls(calls)
+	}
+	return mustJSON(m)
+}
 
 func rawToolCalls(calls []toolCall) []map[string]any {
 	out := make([]map[string]any, len(calls))

@@ -234,7 +234,15 @@ and the next turn splices those bytes back in.
 - **`spoken` / `trimSpoken`.** The client concatenates every round's content into ONE stored
   message, so replaying it whole would send the round prose twice — once inside the recorded
   `tool_calls` message, once at the front of the answer. The record carries what it already said and
-  takes it back off.
+  takes it back off. That is now only the fallback for a record with no `final`.
+- **`reasoning_content` is part of the bytes** (`assistantRound`). Qwen templates render an
+  assistant message's thinking as `<think>` + `reasoning_content`, so a message without the field
+  goes up as an EMPTY think block while the KV holds the real one. Every tool-round message carries
+  its round's reasoning, and the record keeps the answering round verbatim as `final`, which the
+  replay sends instead of the client's stored answer (that one merges all rounds' thinking into one
+  box plus inline `<think>` spans in `content`, so the final round's reasoning is not recoverable
+  from it). Measured on qwen3.8-27b, one tool round: 606/606 tokens reused with the field, 546/606
+  without, and the loss recurred every round and again at the next turn.
 - **In memory, LRU-bounded** (`replayStoreMaxEntries` / `replayStoreMaxBytes`). Persisting it would
   put megabytes of tool output into chats.json for the client to sync on every read, to save one
   reprefill per conversation per restart. A miss — restart, eviction, an imported chat — falls back
