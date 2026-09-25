@@ -65,9 +65,13 @@ func replayToolCalls(msgs []json.RawMessage, lookup func([]turnSearch) *turnReco
 				// its real tool-call ids, its untruncated results and their cite
 				// reminders, exactly as upstream saw them.
 				out = append(out, rec.msgs...)
-				out = append(out, mustJSON(map[string]any{
-					"role": "assistant", "content": rec.trimSpoken(m.Content),
-				}))
+				if rec.final != nil {
+					out = append(out, rec.final)
+				} else {
+					out = append(out, mustJSON(map[string]any{
+						"role": "assistant", "content": rec.trimSpoken(m.Content),
+					}))
+				}
 				continue
 			}
 		}

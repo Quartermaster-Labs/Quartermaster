@@ -582,18 +582,49 @@ func TestSlotCache_StaleRestoreSkipsShorterOnRecurrent(t *testing.T) {
 		t.Error("a snapshot with no .len must not be skipped")
 	}
 
-	// End to end through the cold path: shorter body => no pending restore.
+	// End to end through the cold path: longer body => restore.
+	sc2 := mk(true)
+	sc2.markPendingRestore("m", "c", "", 6000)
+	sc2.restoreOnLoad("m")
+	if sc2.counters.RestoreHits != 1 {
+		t.Fatalf("longer body must restore, got %+v", sc2.counters)
+	}
+	// Shorter body => no pending restore, and the snapshot is deleted: the
+	// conversation cannot grow back into it, so it would only squat in the cap.
 	sc := mk(true)
 	sc.markPendingRestore("m", "c", "", 4990)
 	sc.restoreOnLoad("m")
 	if sc.counters.RestoreHits != 0 {
 		t.Fatalf("shorter body must not restore, got %+v", sc.counters)
 	}
-	sc2 := mk(true)
-	sc2.markPendingRestore("m", "c", "", 6000)
-	sc2.restoreOnLoad("m")
-	if sc2.counters.RestoreHits != 1 {
-		t.Fatalf("longer body must restore, got %+v", sc2.counters)
+	if !hasOp(sc, "recurrent-skip-shorter") {
+		t.Error("cold stale skip recorded no recurrent-skip-shorter event")
+	}
+	for _, ext := range []string{".bin", ".len"} {
+		if _, err := os.Stat(filepath.Join(dir, sanitize("m")+"__c"+ext)); !os.IsNotExist(err) {
+			t.Errorf("stale snapshot %s not deleted (err=%v)", ext, err)
+		}
+	}
+}
+
+// Warm path: a backwards conversation arriving at a loaded model drops its
+// snapshot too, not just skips it.
+func TestSlotCache_WarmStaleSkipDropsSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	srv := fakeBackend(t, 0, dir)
+	sc := newEvictTestCache(dir, srv.URL)
+	sc.recurrent = func(string) bool { return true }
+	if err := os.WriteFile(filepath.Join(dir, fileName("m", "c")), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sc.writeSavedLen("m", "c", 5000)
+
+	switchSlot(sc, context.Background(), "m", srv.URL, "c", "", 4000)
+	if sc.counters.RestoreHits != 0 || !hasOp(sc, "recurrent-skip-shorter") {
+		t.Fatalf("expected a stale skip, got %+v", sc.counters)
+	}
+	if sc.fileExists("m", "c") {
+		t.Error("stale snapshot survived the warm skip")
 	}
 }
 

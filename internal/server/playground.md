@@ -30,6 +30,17 @@ Endpoints: `POST /api/chats/turn`, `GET .../stream` (SSE snapshot + tail), `/sta
 (stop), `POST .../approve`. The self-call loops back through the normal proxy with the configured
 API key injected. See `turns_design.md` for the full design.
 
+- **Compaction rides the chat's own KV** (`POST /api/chats/compact`, `turnscompact.go`). The client
+  posts the exact turn body it would send next (system prompt, history, tools) with the summary
+  instruction appended as a final **user** message (Qwen templates reject a non-first system
+  message); the server runs the same `inlineMedia` + `replayToolCalls` assembly under the same
+  `X-Conversation-Id` (shared `selfCompletionRequest`), so the prefill is just the instruction.
+  The old standalone summary request was a different conversation to the slot cache: it evicted
+  the chat (multi-GB save on a hybrid) and the next turn restored a snapshot longer than the
+  compacted body, which `staleRestore` then had to throw away. Tools stay in the body and
+  `tool_choice` stays unset: llama.cpp drops the tool list for `"none"`, which rewrites the system
+  block and voids the whole prefix. Synchronous, not persisted: the client still owns `summary` +
+  `compactedCount`.
 - **The client MUST call `DELETE` to stop.** Aborting the SSE fetch only detaches the viewer.
   `handleTurnStop` blocks until the runner is actually done, so an immediate re-send can't race into
   a 409.
@@ -223,7 +234,15 @@ and the next turn splices those bytes back in.
 - **`spoken` / `trimSpoken`.** The client concatenates every round's content into ONE stored
   message, so replaying it whole would send the round prose twice — once inside the recorded
   `tool_calls` message, once at the front of the answer. The record carries what it already said and
-  takes it back off.
+  takes it back off. That is now only the fallback for a record with no `final`.
+- **`reasoning_content` is part of the bytes** (`assistantRound`). Qwen templates render an
+  assistant message's thinking as `<think>` + `reasoning_content`, so a message without the field
+  goes up as an EMPTY think block while the KV holds the real one. Every tool-round message carries
+  its round's reasoning, and the record keeps the answering round verbatim as `final`, which the
+  replay sends instead of the client's stored answer (that one merges all rounds' thinking into one
+  box plus inline `<think>` spans in `content`, so the final round's reasoning is not recoverable
+  from it). Measured on qwen3.8-27b, one tool round: 606/606 tokens reused with the field, 546/606
+  without, and the loss recurred every round and again at the next turn.
 - **In memory, LRU-bounded** (`replayStoreMaxEntries` / `replayStoreMaxBytes`). Persisting it would
   put megabytes of tool output into chats.json for the client to sync on every read, to save one
   reprefill per conversation per restart. A miss — restart, eviction, an imported chat — falls back

@@ -127,6 +127,14 @@ export async function summarizeConversation(
     }),
     signal,
   });
+  return readSummary(res);
+}
+
+// readSummary pulls the summary out of a non-streaming completion, or throws
+// saying which kind of empty it got: a template that ignored enable_thinking
+// and thought anyway reads very differently from a backend that returned
+// nothing at all, and the toast is the only place the user sees it.
+async function readSummary(res: Response): Promise<string> {
   if (!res.ok) {
     throw new Error(`the model returned ${res.status}`);
   }
@@ -134,14 +142,48 @@ export async function summarizeConversation(
   const choice = json.choices?.[0];
   const text = typeof choice?.message?.content === "string" ? stripThink(choice.message.content) : "";
   if (!text) {
-    // Say which empty this was: a template that ignored enable_thinking and
-    // thought anyway reads very differently from a backend that returned
-    // nothing at all, and the toast is the only place the user sees it.
     throw new Error(
-      choice?.message?.reasoning_content
-        ? "the model produced only reasoning, no summary"
-        : `the model returned no summary (finish: ${choice?.finish_reason ?? "unknown"})`,
+      choice?.message?.tool_calls?.length
+        ? "the model called a tool instead of summarizing"
+        : choice?.message?.reasoning_content
+          ? "the model produced only reasoning, no summary"
+          : `the model returned no summary (finish: ${choice?.finish_reason ?? "unknown"})`,
     );
   }
   return text;
+}
+
+// compactInPlacePrompt is the instruction appended to the live conversation.
+// The model sees the whole history (the kept tail included, since that is what
+// its KV holds), so it is told where to stop: the tail stays verbatim and a
+// summary that repeats it just wastes context. The earlier summary lives in the
+// system prompt, so it has to be folded in by name.
+export function compactInPlacePrompt(hasPriorSummary: boolean, keepFrom: string): string {
+  const snippet = keepFrom.replace(/\s+/g, " ").trim().slice(0, 120);
+  return (
+    "Context is running out, so the older part of this conversation is about to be replaced by a summary. " +
+    "Write that summary now: a concise brief that preserves every fact, decision, name, number, code snippet, " +
+    "and open question needed to continue seamlessly. Use compact bullet points. " +
+    (hasPriorSummary ? "Fold in everything from the \"Summary of earlier conversation\" in the system prompt. " : "") +
+    (snippet
+      ? `Cover only the messages BEFORE the user message that begins "${snippet}"; that message and everything after it are kept word for word, so leave them out. `
+      : "") +
+    "Do not call any tools and do not answer anything above. Output only the summary."
+  );
+}
+
+// summarizeInPlace asks the model for the summary as one more user turn on the
+// conversation it already holds (POST /api/chats/compact). `turn` is the body a
+// turn would send, messages already ending with compactInPlacePrompt. The server
+// assembles the history exactly as a turn does and keys the request to the same
+// conversation, so it reuses the KV exactly as far as the next turn would, and
+// the chat's KV is neither evicted nor saved (internal/server/turnscompact.go).
+export async function summarizeInPlace(turn: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+  const res = await fetch("/api/chats/compact", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...turn, temperature: 0.3, max_tokens: 1536 }),
+    signal,
+  });
+  return readSummary(res);
 }
