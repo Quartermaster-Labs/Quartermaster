@@ -2,7 +2,7 @@
   // Canvas host for lib/fireField.ts. Owns sizing, the frame loop and the theme;
   // the simulation itself is pure and lives in the .ts.
   import { onMount } from "svelte";
-  import { FireField, renderFire, paletteRamp, DARK_PALETTE, LIGHT_PALETTE, type FireMode } from "../lib/fireField";
+  import { FireField, renderFire, paletteRamp, GLOW_REACH, DARK_PALETTE, LIGHT_PALETTE, type FireMode } from "../lib/fireField";
   import { pixelRatio } from "../stores/pixelRatio";
   import { isDarkMode } from "../stores/theme";
   import { cssZoom } from "../lib/uiZoom";
@@ -42,7 +42,10 @@
     canvas.width = Math.max(1, Math.round(w * ratio));
     canvas.height = Math.max(1, Math.round(h * ratio));
     canvas.getContext("2d")?.setTransform(ratio, 0, 0, ratio, 0, 0);
-    field.resize(Math.floor(w / PITCH), Math.floor(h / PITCH));
+    // Inset the grid by the halo reach (+1px of antialiasing): a halo on an
+    // outer dot that overhangs the canvas is clipped to a hard straight edge.
+    const inset = 2 * (PITCH * GLOW_REACH + 1);
+    field.resize(Math.max(1, Math.floor((w - inset) / PITCH) + 1), Math.max(1, Math.floor((h - inset) / PITCH) + 1));
   }
 
   $effect(() => {
