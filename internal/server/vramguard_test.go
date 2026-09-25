@@ -19,14 +19,14 @@ import (
 type guardRouter struct {
 	stubRouter
 	inflight map[string]int64
-	pids     []int
+	pids     map[string]int
 }
 
 func (g *guardRouter) Inflight(id string) (int64, bool) {
 	n, ok := g.inflight[id]
 	return n, ok
 }
-func (g *guardRouter) RunningPIDs() []int { return g.pids }
+func (g *guardRouter) RunningPIDs() map[string]int { return g.pids }
 
 // newGuard builds a guard over a config of model→estVramGB with the named
 // models resident, plus whichever of them are persistent / busy.
@@ -157,7 +157,7 @@ func TestVramGuard_SheddableNothingLeftToShed(t *testing.T) {
 func TestVramGuard_ForeignAllWhenNothingResident(t *testing.T) {
 	g := newGuard(t, nil, nil, nil)
 	stat := perf.GpuStat{ID: 0, MemTotalMB: 24576, MemUsedMB: 8192}
-	got, ok := g.foreignMB4(context.Background(), stat)
+	got, _, ok := g.foreignMB4(context.Background(), stat)
 	if !ok || got != 8192 {
 		t.Fatalf("foreign %v ok=%v, want 8192 true", got, ok)
 	}
@@ -167,9 +167,9 @@ func TestVramGuard_ForeignAllWhenNothingResident(t *testing.T) {
 // is exactly the mistake that evicts everything — the whole reading is refused.
 func TestVramGuard_UnattributableReadingRefused(t *testing.T) {
 	g := newGuard(t, map[string]float64{"a": 10}, nil, nil)
-	g.s.local.(*guardRouter).pids = []int{999999} // no such compute app
+	g.s.local.(*guardRouter).pids = map[string]int{"a": 999999} // no such compute app
 	stat := perf.GpuStat{ID: 0, MemTotalMB: 24576, MemUsedMB: 20000}
-	if _, ok := g.foreignMB4(context.Background(), stat); ok {
+	if _, _, ok := g.foreignMB4(context.Background(), stat); ok {
 		t.Fatal("expected the reading to be refused when our pid isn't attributable")
 	}
 }
@@ -568,5 +568,36 @@ func TestVramGuard_UpdateOffloadSettingsUnwired(t *testing.T) {
 	s.UpdateOffloadSettings(autogen.Settings{TargetVramGB: 22.8})
 	if s.offloadSettings.Load() != nil {
 		t.Error("unwired server stored offload settings")
+	}
+}
+
+// The false shed that prompted measured charging: a model planned at 22.2GB but
+// actually holding 20.1GB was unloaded as "resident 22.2GB over a 21.5GB live
+// ceiling" with 2.3GB of the card free. A ready model is charged what it holds.
+func TestVramGuard_SheddableChargesMeasured(t *testing.T) {
+	g := newGuard(t, map[string]float64{"a": 22.2}, nil, nil)
+	g.measuredMB = map[string]int64{"a": 20582} // 20.1GB
+	got, total := g.sheddable(21.5)
+	if len(got) != 0 {
+		t.Fatalf("shed %v, want nothing (20.1GB measured fits 21.5GB)", got)
+	}
+	if total < 20.0 || total > 20.2 {
+		t.Fatalf("resident total %v, want the measured ~20.1", total)
+	}
+}
+
+// A starting model is still allocating, so its reading undercounts what it is
+// about to claim: it is charged the larger of the estimate and the measurement.
+// A model with no measurement falls back to its estimate.
+func TestVramGuard_ChargeStartingAndUnmeasured(t *testing.T) {
+	g := newGuard(t, map[string]float64{"loading": 10, "unseen": 4}, nil, nil)
+	g.s.local.(*guardRouter).running["loading"] = process.StateStarting
+	g.measuredMB = map[string]int64{"loading": 2048}
+	if _, total := g.sheddable(100); total != 14 {
+		t.Fatalf("resident total %v, want 14 (estimate for both)", total)
+	}
+	g.measuredMB = map[string]int64{"loading": 12288}
+	if _, total := g.sheddable(100); total != 16 {
+		t.Fatalf("resident total %v, want 16 (measured 12 beats a 10 estimate)", total)
 	}
 }

@@ -659,19 +659,20 @@ func (b *baseRouter) RunningModels() map[string]process.ProcessState {
 	return running
 }
 
-// RunningPIDs returns the OS pids of every non-stopped local process. Used to
-// distinguish our own llama-server children from foreign ones when accounting
-// GPU memory. State() is a snapshot and PID() reads an atomic, so this is safe
-// to call without the run loop.
-func (b *baseRouter) RunningPIDs() []int {
-	var pids []int
-	for _, p := range b.procs() {
+// RunningPIDs returns the OS pid of every non-stopped local process, keyed by
+// model ID. Used to distinguish our own llama-server children from foreign ones
+// when accounting GPU memory, and to attribute measured VRAM to a model. State()
+// is a snapshot and PID() reads an atomic, so this is safe to call without the
+// run loop.
+func (b *baseRouter) RunningPIDs() map[string]int {
+	pids := make(map[string]int)
+	for id, p := range b.procs() {
 		switch p.State() {
 		case process.StateStopped, process.StateShutdown:
 			continue
 		}
 		if pid := p.PID(); pid > 0 {
-			pids = append(pids, pid)
+			pids[id] = pid
 		}
 	}
 	return pids
