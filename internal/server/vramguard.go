@@ -316,7 +316,9 @@ func (g *vramGuard) watchdog() {
 		victims, residentGB, ceiling, float64(g.foreignMB.Load())/1024.0)
 	// Asynchronous: Unload blocks until each process has stopped, and the sampler
 	// goroutine also feeds the ceiling the router reads while it evicts.
-	go g.s.local.Unload(vramGuardUnloadTimeout, victims...)
+	// StopEvict, not the manual Unload: the victim's user did not ask for this and
+	// will be back, so the pre-stop hook saves its slot KV like any eviction.
+	go g.s.local.UnloadWithReason(process.StopEvict, vramGuardUnloadTimeout, victims...)
 }
 
 // sheddable returns the models to unload so the resident set fits ceilingGB, and

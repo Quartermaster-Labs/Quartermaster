@@ -54,6 +54,7 @@
     slotMinTokens = s.slotCache.minSaveTokens;
     slotMaxDiskGB = s.slotCache.maxDiskGB;
     slotMaxSessions = s.slotCache.maxSessions;
+    slotMaxIdleDays = s.slotCache.maxIdleDays;
     slotPreamble = s.slotCache.preambleCaches;
     backends = editableBackends(s.backendList);
     syncAdvancedForm(s);
@@ -162,6 +163,7 @@
   let slotMinTokens = $state(0); // 0 => server default (30000)
   let slotMaxDiskGB = $state(0); // 0 => server default (10)
   let slotMaxSessions = $state(0); // 0 => server default (20)
+  let slotMaxIdleDays = $state(0); // 0 => server default (7)
   // Preamble caches: the shared system+tools seed, minted per agent without the
   // user asking. Separate switch because it is the half that appears unprompted
   // and is exempt from the LRU caps above. Default on (a fresh config has no key).
@@ -176,6 +178,7 @@
         Number(slotMinTokens) !== settings.slotCache.minSaveTokens ||
         Number(slotMaxDiskGB) !== settings.slotCache.maxDiskGB ||
         Number(slotMaxSessions) !== settings.slotCache.maxSessions ||
+        Number(slotMaxIdleDays) !== settings.slotCache.maxIdleDays ||
         slotPreamble !== settings.slotCache.preambleCaches),
   );
 
@@ -201,6 +204,7 @@
         minSaveTokens: Number(slotMinTokens) || 0,
         maxDiskGB: Number(slotMaxDiskGB) || 0,
         maxSessions: Number(slotMaxSessions) || 0,
+        maxIdleDays: Number(slotMaxIdleDays) || 0,
         preambleCaches: slotPreamble,
       });
       await loadSettings();
@@ -1535,6 +1539,17 @@
             class="w-full font-mono rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
           />
           <span class="text-micro text-txtsecondary">files · default 20</span>
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
+            Delete unused after (days)
+            {@render hint("Snapshots not restored or saved for this many days are deleted. 0 = 7.")}
+          </span>
+          <input
+            type="number" min="0" step="1" bind:value={slotMaxIdleDays} disabled={!slotEnable}
+            class="w-full font-mono rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+          />
+          <span class="text-micro text-txtsecondary">days · default 7</span>
         </label>
         <label class="col-span-2 flex items-center gap-2 pt-1">
           <Toggle size="sm" bind:checked={slotPreamble} disabled={!slotEnable} />

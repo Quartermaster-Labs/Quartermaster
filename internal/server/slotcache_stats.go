@@ -39,7 +39,7 @@ type kvEvent struct {
 	// Slot is the llama-server slot the op targeted. Always 0 on a single-slot
 	// model (the default), so the UI shows the column only when a model runs more.
 	Slot   int    `json:"slot"`
-	Op     string `json:"op"` // save | restore-hit | restore-seed | seed-pending | miss | error
+	Op     string `json:"op"` // save | save-skip | restore-hit | restore-seed | seed-pending | miss | error
 	Key    string `json:"key"`
 	Detail string `json:"detail,omitempty"`
 	Bytes  int64  `json:"bytes,omitempty"`
@@ -143,6 +143,8 @@ func (sc *slotCache) logEvent(ev kvEvent) {
 		sc.log.Info(line + " - conversation went backwards, snapshot unusable, full prefill")
 	case "preamble-warm":
 		sc.log.Info(line + " - shared preamble already live in the slot")
+	case "save-skip":
+		sc.log.Info(line + " - not saved, next load of this chat is a full prefill")
 	default:
 		sc.log.Debug(line)
 	}

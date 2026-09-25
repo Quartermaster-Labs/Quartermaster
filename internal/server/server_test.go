@@ -44,10 +44,13 @@ func (s *stubRouter) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	w.Write([]byte(s.response))
 }
 
-func (s *stubRouter) RunningModels() map[string]process.ProcessState          { return s.running }
-func (s *stubRouter) RunningPIDs() map[string]int                             { return nil }
-func (s *stubRouter) SetLiveVramBudget(fn router.LiveVramFn)                  {}
-func (s *stubRouter) Unload(_ time.Duration, _ ...string)                     { s.unloadCalls.Add(1) }
+func (s *stubRouter) RunningModels() map[string]process.ProcessState { return s.running }
+func (s *stubRouter) RunningPIDs() map[string]int                    { return nil }
+func (s *stubRouter) SetLiveVramBudget(fn router.LiveVramFn)         {}
+func (s *stubRouter) Unload(_ time.Duration, _ ...string)            { s.unloadCalls.Add(1) }
+func (s *stubRouter) UnloadWithReason(_ process.StopReason, _ time.Duration, _ ...string) {
+	s.unloadCalls.Add(1)
+}
 func (s *stubRouter) SetPreEvict(_ func(string, process.StopReason))          {}
 func (s *stubRouter) SetPostLoad(_ func(string))                              {}
 func (s *stubRouter) SetSpawnArgs(_ func(string, []string) ([]string, error)) {}

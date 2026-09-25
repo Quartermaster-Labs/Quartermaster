@@ -365,6 +365,9 @@ type SlotCacheSettings struct {
 	RecurrentSeeds bool    `yaml:"recurrentSeeds"`
 	MaxDiskGB      float64 `yaml:"maxDiskGB"`
 	MaxSessions    int     `yaml:"maxSessions"`
+	// MaxIdleDays deletes a snapshot nobody has restored or saved for this many
+	// days. 0 => server default (7).
+	MaxIdleDays int `yaml:"maxIdleDays"`
 	// PreambleCaches mirrors config.SlotCacheConfig.PreambleCaches: the fleet-wide
 	// switch for the preamble (system+tools seed) half of the cache. nil => on.
 	PreambleCaches *bool `yaml:"preambleCaches"`
@@ -1313,6 +1316,9 @@ func (s *Settings) applyDefaults() {
 	}
 	if s.SlotCache.MaxSessions == 0 {
 		s.SlotCache.MaxSessions = 20
+	}
+	if s.SlotCache.MaxIdleDays == 0 {
+		s.SlotCache.MaxIdleDays = 7
 	}
 }
 

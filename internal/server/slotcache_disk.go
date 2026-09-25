@@ -52,6 +52,43 @@ func (sc *slotCache) prunePreambleFiles(model string) {
 	}
 }
 
+// expireIdle deletes every snapshot, preamble caches included, whose mtime is
+// older than maxIdle. mtime is last use: save writes it, restore touches it. The
+// byte and count caps only bite when the disk fills; this is what clears out the
+// chats nobody is coming back to.
+func (sc *slotCache) expireIdle() {
+	if sc.maxIdle <= 0 {
+		return
+	}
+	sc.diskMu.Lock() // see enforceCaps
+	defer sc.diskMu.Unlock()
+	entries, err := os.ReadDir(sc.dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-sc.maxIdle)
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".bin") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		path := filepath.Join(sc.dir, name)
+		if os.Remove(path) != nil {
+			continue
+		}
+		_ = os.Remove(strings.TrimSuffix(path, ".bin") + ".meta")
+		_ = os.Remove(strings.TrimSuffix(path, ".bin") + ".len")
+		if sc.log != nil {
+			sc.log.Infof("slotcache: expired %s (unused since %s, %.1f GB)",
+				name, info.ModTime().Format("2006-01-02"), float64(info.Size())/(1<<30))
+		}
+	}
+}
+
 func (sc *slotCache) fileExists(model, key string) bool {
 	_, err := os.Stat(filepath.Join(sc.dir, fileName(model, key)))
 	return err == nil
@@ -61,6 +98,7 @@ func (sc *slotCache) fileExists(model, key string) bool {
 // the byte budget and the file-count cap. The just-saved file (newest) is never
 // the eviction target. keepKey/keepModel name it so it is also skipped explicitly.
 func (sc *slotCache) enforceCaps(keepModel, keepKey string) {
+	sc.expireIdle()
 	// Directory-wide scan-and-delete: callers hold different per-model locks, so
 	// this needs its own to keep two models from racing over the same files.
 	sc.diskMu.Lock()

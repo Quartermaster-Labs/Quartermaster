@@ -223,6 +223,10 @@ export const LIGHT_PALETTE: FirePalette = {
 
 const LEVELS = 48;
 
+/** Glow halo radius, in pitches. The host must keep the outer dots at least this
+ *  far from the canvas edge, or the halos are cut off square by its bounds. */
+export const GLOW_REACH = 0.95;
+
 function lerpStops(p: FirePalette, h: number): [number, number, number] {
   const s = p.stops;
   if (h <= s[0][0]) return s[0][1];
@@ -304,7 +308,7 @@ export function renderFire(ctx: CanvasRenderingContext2D, f: FireField, w: numbe
       ctx.fillStyle = ramp[lv];
       ctx.globalAlpha = palette.glowAlpha * (heat - 0.4);
       ctx.beginPath();
-      ctx.arc(ox + c * pitch, oy + r * pitch, pitch * 0.95, 0, Math.PI * 2);
+      ctx.arc(ox + c * pitch, oy + r * pitch, pitch * GLOW_REACH, 0, Math.PI * 2);
       ctx.fill();
     }
   }

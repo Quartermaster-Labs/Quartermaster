@@ -62,6 +62,7 @@
     "preamble-hit": { cls: "text-sky-500", label: "pre load" },
     "preamble-mint": { cls: "text-purple-400", label: "pre mint" },
     save: { cls: "text-amber-500", label: "save" },
+    "save-skip": { cls: "text-txtsecondary", label: "not saved" },
     miss: { cls: "text-txtsecondary", label: "miss" },
     error: { cls: "text-error", label: "error" },
   };

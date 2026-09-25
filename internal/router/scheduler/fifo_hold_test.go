@@ -172,7 +172,7 @@ func TestFIFO_HoldReleasedWhenModelStops(t *testing.T) {
 
 	// Unloading stops the process. Protecting a model that no longer exists
 	// would keep queued requests waiting for nothing.
-	s.OnUnload([]string{"a"}, time.Second)
+	s.OnUnload([]string{"a"}, time.Second, process.StopManual)
 	if _, held := s.hold["a"]; held {
 		t.Fatal("hold survived the model being unloaded")
 	}
