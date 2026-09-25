@@ -683,7 +683,7 @@
   function estimateClass(opt: FileOption, v: FitVerdict): string {
     const e = estimates[opt.group];
     if (!e || e.err) return verdictClass(v);
-    if (!e.fits) return "text-red-500";
+    if (!e.fits) return "text-error";
     return e.offload ? "text-amber-500" : "text-emerald-500";
   }
 
@@ -719,7 +719,7 @@
       case "spills":
         return "text-amber-500";
       case "toobig":
-        return "text-red-500";
+        return "text-error";
       default:
         return "text-txtsecondary";
     }

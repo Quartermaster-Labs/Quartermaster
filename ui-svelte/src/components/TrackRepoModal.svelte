@@ -215,7 +215,7 @@
           />
           <button
             type="button"
-            class="btn btn--sm inline-flex items-center gap-1 uppercase tracking-wide hover:border-primary hover:text-primary disabled:opacity-50"
+            class="btn btn--sm inline-flex items-center gap-1"
             disabled={loading || !repo.trim()}
             onclick={() => find("")}><Search size={12} /> {assets ? "Reload" : "Find releases"}</button
           >
@@ -392,10 +392,10 @@
           {picked.length} build{picked.length === 1 ? "" : "s"} selected
         </span>
       {/if}
-      <button type="button" class="btn btn--sm ml-auto uppercase tracking-wide" onclick={onclose}>Cancel</button>
+      <button type="button" class="btn btn--sm ml-auto" onclick={onclose}>Cancel</button>
       <button
         type="button"
-        class="btn btn--sm inline-flex items-center gap-1 uppercase tracking-wide border-primary text-primary hover:bg-primary/10 disabled:opacity-50"
+        class="btn btn--sm btn--primary-outline inline-flex items-center gap-1"
         disabled={!canSave}
         onclick={save}><Plus size={12} /> {source ? "Save" : "Track this repo"}</button
       >

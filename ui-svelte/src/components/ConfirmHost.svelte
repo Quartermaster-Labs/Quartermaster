@@ -57,8 +57,9 @@
         <p class="text-sm font-semibold text-txtmain">{req.title}</p>
         {#if req.body}
           <!-- whitespace-pre-line: callers pass the same "\n\n" separated text
-               they used to hand window.confirm(). -->
-          <p class="text-label whitespace-pre-line text-txtsecondary">{req.body}</p>
+               they used to hand window.confirm(). overflow-wrap:anywhere so a
+               long unbroken token (a gguf file name) wraps inside the box. -->
+          <p class="text-label whitespace-pre-line [overflow-wrap:anywhere] text-txtsecondary">{req.body}</p>
         {/if}
       </div>
     </div>

@@ -1284,7 +1284,7 @@
                   </button>
                 {/if}
                 {#if t.error}
-                  <div class="text-red-500">{t.error}</div>
+                  <div class="text-error">{t.error}</div>
                 {:else if t.images.length}
                   <!-- One row, never a column. A batch is sized by WIDTH (flex-1,
                        min-w-0) so N images always divide the row whatever their
@@ -1348,7 +1348,7 @@
                     {/if}
                   </div>
                 {:else if genId !== $activeImageChatId || ti !== turns.length - 1}
-                  <div class="text-red-500">No image returned.</div>
+                  <div class="text-error">No image returned.</div>
                 {:else}
                   <!-- In-flight: per-phase glowing icon + label, progress bar, then a
                        divider and the steps/time row (divider matches the finished
@@ -1479,7 +1479,7 @@
                 >{loraLoading ? "Loading…" : loraListModel === $selectedModelStore ? "Refresh" : "Load list"}</button>
               </div>
               {#if loraError}
-                <p class="text-xs text-red-500">{loraError}</p>
+                <p class="text-xs text-error">{loraError}</p>
               {:else if loraListModel === $selectedModelStore && loraList.length === 0}
                 <p class="text-xs text-txtsecondary">No LoRAs in this model's folder.</p>
               {:else if loraListModel === $selectedModelStore}
@@ -1718,13 +1718,13 @@
         {/if}
 
         {#if dropError}
-          <div class="mb-2 p-2 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded text-sm">
+          <div class="mb-2 p-2 bg-error/10 text-error rounded text-sm">
             {dropError}
           </div>
         {/if}
 
         {#if enhanceError}
-          <div class="mb-2 p-2 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded text-sm flex items-start gap-2">
+          <div class="mb-2 p-2 bg-error/10 text-error rounded text-sm flex items-start gap-2">
             <span class="flex-1">{enhanceError}</span>
             <button class="shrink-0 opacity-70 hover:opacity-100" onclick={() => (enhanceError = "")} aria-label="Dismiss">
               <X class="w-3.5 h-3.5" />

@@ -16,7 +16,7 @@ export const YOUTUBE_TOOL: ToolDef = {
   function: {
     name: "media_transcript",
     description:
-      "Fetch the transcript (captions/subtitles) of a video, talk, stream or podcast episode so you can analyse, summarise, quote or fact-check it. Works on YouTube and on hundreds of other sites - Vimeo, TED, Dailymotion, Twitch VODs, Rumble, PeerTube, SoundCloud, conference and news-site players, most podcast episode pages. Call this whenever the user gives a link to a recording or asks about a specific one - you cannot watch or listen, but this gives you what was said, in timestamped paragraphs. Not every page has captions and long recordings may come back truncated; the result says so explicitly, and you say so too rather than guessing.",
+      "Fetch the timestamped transcript of a video, talk, stream or podcast episode - YouTube and most other video/audio sites (Vimeo, TED, Twitch VODs, SoundCloud, podcast and news players). Call it whenever the user links a recording or asks about a specific one. Not every page has captions and long recordings may be truncated; the result says so.",
     parameters: {
       type: "object",
       properties: {
@@ -46,7 +46,7 @@ export const YOUTUBE_SEARCH_TOOL: ToolDef = {
   function: {
     name: "youtube_search",
     description:
-      "Find YouTube videos: pass `query` to search all of YouTube, or `channel` to list what one channel has posted (newest first). Returns titles, links, channel, duration, upload date and view count - metadata only, never what was said in a video. Use it to find a video when the user has not given a link, to check what a channel recently covered, or to pick a video worth reading; then call media_transcript on the one you chose.",
+      "Find YouTube videos: `query` searches all of YouTube, `channel` lists what one channel posted (newest first). Use it instead of telling the user to search YouTube themselves. Returns titles and metadata only, never what a video says - call media_transcript on the one you pick before summarising or judging it.",
     parameters: {
       type: "object",
       properties: {

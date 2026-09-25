@@ -367,7 +367,7 @@
               <div class="shrink-0 flex items-center gap-3">
                 {#if listening}
                   <button
-                    class="shrink-0 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-600 text-white text-[0.8125rem] font-medium hover:bg-red-700 transition-colors"
+                    class="shrink-0 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-error text-white text-[0.8125rem] font-medium hover:bg-error/90 transition-colors"
                     onclick={stopListening}
                   >
                     <Square class="w-4 h-4" fill="currentColor" /> Stop
@@ -400,7 +400,7 @@
                 {/if}
               </div>
 
-              {#if micError}<span class="shrink-0 text-red-500 text-xs">{micError}</span>{/if}
+              {#if micError}<span class="shrink-0 text-error text-xs">{micError}</span>{/if}
 
               <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll rounded-xl border border-card-border bg-surface p-3">
                 {#if liveText}
@@ -466,12 +466,12 @@
               {/if}
             </div>
             {#if isTranscribing}
-              <button class="shrink-0 self-end text-[0.8125rem] text-red-500 hover:underline" onclick={cancelFile}>Cancel</button>
+              <button class="shrink-0 self-end text-[0.8125rem] text-error hover:underline" onclick={cancelFile}>Cancel</button>
             {/if}
             <input type="file" accept={ACCEPTED_FORMATS.join(",")} class="hidden" onchange={handleFileSelect} bind:this={fileInput} />
           {/if}
 
-          {#if error}<span class="shrink-0 text-red-500 text-xs px-1">{error}</span>{/if}
+          {#if error}<span class="shrink-0 text-error text-xs px-1">{error}</span>{/if}
         </div>
 
         <!-- Model picker in the composer shell, matching the speech tab. -->
@@ -514,7 +514,7 @@
                     <button class="shrink-0 p-1 rounded hover:bg-secondary text-txtsecondary" onclick={() => downloadEntry(e)} use:tip={"Download .txt"}>
                       <Download class="w-4 h-4" />
                     </button>
-                    <button class="shrink-0 p-1 rounded hover:bg-secondary text-txtsecondary hover:text-red-500" onclick={() => deleteEntry(e.id)} use:tip={"Delete"}>
+                    <button class="shrink-0 p-1 rounded hover:bg-secondary text-txtsecondary hover:text-error" onclick={() => deleteEntry(e.id)} use:tip={"Delete"}>
                       <Trash2 class="w-4 h-4" />
                     </button>
                   </div>

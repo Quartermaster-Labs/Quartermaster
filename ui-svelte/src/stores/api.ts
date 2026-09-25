@@ -680,6 +680,32 @@ export async function deleteModelDisplayName(model: string): Promise<void> {
   }
 }
 
+// What deleting a model's weights would remove (internal/server/modeldelete.go).
+export interface ModelDeletePlan {
+  model: string;
+  files: { path: string; size: number }[];
+  bytes: number;
+  removes: string[];
+  running?: string[];
+  usedBy?: string[];
+  kept?: { path: string; size: number }[];
+}
+
+export async function getModelDeletePlan(model: string): Promise<ModelDeletePlan> {
+  const response = await fetch(`/api/models/${encodeURIComponent(model)}/delete-plan`);
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return response.json();
+}
+
+export async function deleteModelFiles(model: string): Promise<void> {
+  const response = await fetch(`/api/models/${encodeURIComponent(model)}/files`, { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+}
+
 export async function putModelVariant(
   model: string,
   variant: ModelVariant,
@@ -1136,6 +1162,7 @@ export interface SlotCacheSettings {
   minSaveTokens: number;
   maxDiskGB: number;
   maxSessions: number;
+  maxIdleDays: number;
   // Fleet-wide switch for the preamble half (the shared system+tools seed minted
   // per agent). Sessions keep saving when this is off.
   preambleCaches: boolean;
@@ -1919,6 +1946,40 @@ export async function fetchCanon(): Promise<CanonStats | null> {
     return await response.json();
   } catch (error) {
     console.error("Failed to fetch canonicalization stats:", error);
+    return null;
+  }
+}
+
+// A request the server is still working on (the status rail's in-flight
+// panel). model is absent until the request reaches the point where the server
+// resolves it; has_body is false for a GET, or with captures off.
+export interface InflightRequest {
+  id: number;
+  method: string;
+  path: string;
+  model?: string;
+  started: string;
+  has_body: boolean;
+}
+
+export async function fetchInflight(): Promise<InflightRequest[]> {
+  try {
+    const r = await fetch("/api/inflight");
+    return r.ok ? await r.json() : [];
+  } catch {
+    return [];
+  }
+}
+
+// null = it finished between the list and the click; the caller points at
+// Activity instead.
+export async function fetchInflightRequest(
+  id: number,
+): Promise<(InflightRequest & { capture: ReqRespCapture }) | null> {
+  try {
+    const r = await fetch(`/api/inflight/${id}`);
+    return r.ok ? await r.json() : null;
+  } catch {
     return null;
   }
 }

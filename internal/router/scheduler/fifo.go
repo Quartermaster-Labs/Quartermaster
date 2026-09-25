@@ -481,7 +481,7 @@ func (s *FIFO) OnWake() {
 // OnUnload reconciles router-owned state with the impending Stop, performs the
 // Stop (synchronously, via Effects) so callers of Unload remain blocked until
 // each targeted process has exited, then drains the queue.
-func (s *FIFO) OnUnload(targets []string, timeout time.Duration) {
+func (s *FIFO) OnUnload(targets []string, timeout time.Duration, reason process.StopReason) {
 	unloadErr := fmt.Errorf("%s: model unloaded", s.name)
 
 	targetSet := make(map[string]bool, len(targets))
@@ -521,7 +521,7 @@ func (s *FIFO) OnUnload(targets []string, timeout time.Duration) {
 	// rely on "after Unload returns, the process is stopped". inFlight is
 	// intentionally NOT cleared here: each dying handler will fire its tracked
 	// serve and reach OnServeDone in the normal way.
-	s.effects.StopProcesses(timeout, targets)
+	s.effects.StopProcesses(timeout, reason, targets)
 	for _, id := range targets {
 		s.releaseHold(id)
 	}

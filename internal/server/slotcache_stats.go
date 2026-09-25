@@ -39,7 +39,7 @@ type kvEvent struct {
 	// Slot is the llama-server slot the op targeted. Always 0 on a single-slot
 	// model (the default), so the UI shows the column only when a model runs more.
 	Slot   int    `json:"slot"`
-	Op     string `json:"op"` // save | restore-hit | restore-seed | seed-pending | miss | error
+	Op     string `json:"op"` // save | save-skip | restore-hit | restore-seed | seed-pending | miss | error
 	Key    string `json:"key"`
 	Detail string `json:"detail,omitempty"`
 	Bytes  int64  `json:"bytes,omitempty"`
@@ -107,7 +107,8 @@ func (sc *slotCache) record(ev kvEvent) uint64 {
 // open at that second. The ops that move real work land at Info, and so do the
 // confirmations that say whether that work paid off: a bare "restore-hit" in the
 // log is a file read, not a hit, and reading it as one is exactly the mistake
-// this pairing exists to prevent. Bookkeeping stays at Debug.
+// this pairing exists to prevent. Everything that decides whether a turn prefills
+// in full (hit, seed, miss, skip) is Info; only unknown bookkeeping stays at Debug.
 func (sc *slotCache) logEvent(ev kvEvent) {
 	if sc.log == nil || ev.Op == "error" {
 		return // errors are already logged, with their cause, at the call site
@@ -125,11 +126,25 @@ func (sc *slotCache) logEvent(ev kvEvent) {
 	if ev.Detail != "" {
 		line += " [" + ev.Detail + "]"
 	}
+	// Misses sit at Info beside the hits: a log that shows only the wins cannot say
+	// why a turn took minutes. The suffix says what the op costs in prefill.
 	switch ev.Op {
-	case "restore-hit", "restore-seed":
+	case "restore-hit", "restore-seed", "preamble-hit", "preamble-mint":
 		sc.log.Info(line + " - awaiting reuse confirmation")
-	case "save", "confirm", "confirm-miss":
+	case "save", "confirm":
 		sc.log.Info(line)
+	case "confirm-miss":
+		sc.log.Info(line + " - KV loaded but not reused, full prefill")
+	case "miss":
+		sc.log.Info(line + " - no saved KV, full prefill")
+	case "recurrent-skip-seed":
+		sc.log.Info(line + " - no saved KV and hybrid model cannot seed, full prefill")
+	case "recurrent-skip-shorter":
+		sc.log.Info(line + " - conversation went backwards, snapshot unusable, full prefill")
+	case "preamble-warm":
+		sc.log.Info(line + " - shared preamble already live in the slot")
+	case "save-skip":
+		sc.log.Info(line + " - not saved, next load of this chat is a full prefill")
 	default:
 		sc.log.Debug(line)
 	}

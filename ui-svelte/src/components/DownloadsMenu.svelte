@@ -231,14 +231,19 @@
       <div class="px-3 py-2 text-[0.65rem] text-error border-b border-card-border">{err}</div>
     {/if}
 
-    <div class="max-h-[24rem] overflow-y-auto pretty-scroll">
-      {#if !active.length && !history.length}
-        <div class="px-3 py-4 text-[0.65rem] text-txtsecondary">
-          Nothing downloaded this session. Pick a quant on the
-          <a href="/browse" use:link class="text-primary underline" onclick={() => (open = false)}>Browse</a> page.
-        </div>
-      {/if}
-
+    <!-- The empty state sits OUTSIDE the scroller, and the scroller only exists
+         with rows in it. Under the app's `zoom` (and Windows display scaling)
+         a two-line block inside an overflow-y-auto box rounds a pixel taller
+         than the box at most scales, and Chromium draws a scrollbar for that
+         sliver. overflow-x-hidden for the same reason sideways: a sub-pixel
+         horizontal bar would steal height and drag in the vertical one. -->
+    {#if !active.length && !history.length}
+      <div class="px-3 py-4 text-[0.65rem] text-txtsecondary">
+        Nothing downloaded this session. Pick a quant on the
+        <a href="/browse" use:link class="text-primary underline" onclick={() => (open = false)}>Browse</a> page.
+      </div>
+    {:else}
+    <div class="max-h-[24rem] overflow-y-auto overflow-x-hidden pretty-scroll">
       {#each active as j (j.id)}
         <div class="px-3 py-2.5 border-b border-card-border-inner flex flex-col gap-1.5">
           <div class="flex items-center gap-2">
@@ -331,6 +336,7 @@
         </div>
       {/each}
     </div>
+    {/if}
 
     <div class="flex items-center gap-2 px-3 py-1.5 border-t border-card-border text-[0.6rem]">
       <button class="inline-flex cursor-pointer items-center gap-1 text-primary hover:underline" onclick={() => reveal()}>

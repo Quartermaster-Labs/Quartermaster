@@ -106,6 +106,25 @@
 }
 
 @layer theme {
+  /* A plain rule, not @theme: Tailwind emits only the @theme variables a
+     utility class uses, and these are read through var() in component styles,
+     so under @theme the light values were silently dropped. */
+  :root {
+    /* Model categories (lib/modelUtils MODEL_CATEGORIES), for the Dashboard's
+       catalog and request views. Chat models get gold, NOT the orange accent: the
+       accent already means "active / your attention", and LLMs are most of any
+       catalog, so orange there would paint the whole page as a call to action.
+       Segment, speech and embedding share "other" - they are a handful of rows
+       each and five hues is already the limit of what reads at a glance. */
+    --color-cat-llm: rgb(150, 110, 30);
+    --color-cat-image: rgb(122, 82, 196);
+    --color-cat-video: rgb(22, 132, 136);
+    --color-cat-3d: rgb(48, 108, 196);
+    --color-cat-other: rgb(140, 130, 120);
+  }
+}
+
+@layer theme {
   /* over ride theme for dark mode */
   [data-theme="dark"] {
     /* Dark — warm near-black (#22201e) + flame accent. Surface (#2c2a26)
@@ -145,6 +164,10 @@
     --color-btn-primary-text: rgba(255, 250, 245, 1);
     --color-card-border: rgba(168, 168, 176, 0.15);
     --color-card-border-inner: rgba(168, 168, 176, 0.11);
+    /* Without this dark mode inherited the light theme's brown-black and every
+       resting .btn lost its outline. One step above card-border (0.15), the
+       same step light mode keeps, so a button still reads on a card. */
+    --color-btn-border: rgba(168, 168, 176, 0.25);
     --color-composer-ring: rgba(255, 255, 255, 0.15);
     --color-composer-border: rgba(168, 168, 176, 0.15);
     --button-border-secondary: rgba(168, 168, 176, 0.18);
@@ -152,10 +175,23 @@
     --color-dot: rgba(180, 180, 190, 0.09);
     --color-cite-bg: rgba(18, 17, 16, 1);
     --color-cite-text: rgba(237, 237, 238, 1);
+    --color-cat-llm: rgb(226, 186, 106);
+    --color-cat-image: rgb(176, 140, 255);
+    --color-cat-video: rgb(72, 196, 200);
+    --color-cat-3d: rgb(110, 168, 255);
+    --color-cat-other: rgb(150, 150, 156);
   }
 }
 
 @layer base {
+  /* Tailwind v4's preflight dropped v3's pointer cursor on buttons, so every
+     plain <button> without a class that sets one (Quick load rows, the
+     "Activity log" link-button) looked like text. Restored once here, as the
+     v4 upgrade guide suggests, rather than remembered at each call site. */
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
   body {
     /* Sans is the DEFAULT; data opts into mono explicitly. Most value-bearing
        markup in the app already carries `font-mono` at the call site, so this
@@ -498,24 +534,70 @@
     @apply bg-error/10 text-error;
   }
 
-  /* Buttons */
+  /* Buttons.
+     One hover for every plain button: the outline and label lift to the
+     accent. It used to be opt-in per call site (hover:border-primary
+     hover:text-primary), so half the buttons had it and the rest did not
+     react at all. Every hover below is :not(:disabled), and the variants
+     repeat that so they tie on specificity with this rule and win by order.
+
+     Destructive styling, by how reversible the action is:
+       .btn--danger          filled: the confirm half of an irreversible pair
+       .btn--danger-outline  red at rest: a destructive verb reachable from
+                             every page (Unload all)
+       .btn--danger-hover    plain until hovered: removing one row's item */
   .btn {
     @apply bg-surface py-2 px-4 text-sm rounded-md border transition-colors duration-200 border-btn-border;
   }
-
-  .btn:hover {
-    cursor: pointer;
+  .btn:hover:not(:disabled) {
+    @apply cursor-pointer border-primary text-primary;
   }
 
+  /* Small buttons are commands, so uppercase is part of the size rather than
+     something each call site remembers (30 of 51 did). */
   .btn--sm {
-    @apply px-2 py-0.5 text-xs;
+    @apply px-2 py-0.5 text-xs uppercase tracking-wide;
+  }
+
+  /* Icon-only .btn: square padding, glyph centred. Keeps the border, so it
+     lines up with the text buttons beside it (unlike .icon-btn). */
+  .btn--icon {
+    @apply inline-flex items-center justify-center px-1.5;
   }
 
   .btn--primary {
     @apply bg-primary text-btn-primary-text border-primary;
   }
-  .btn--primary:hover {
-    @apply bg-primary-hover border-primary-hover;
+  .btn--primary:hover:not(:disabled) {
+    @apply bg-primary-hover border-primary-hover text-btn-primary-text;
+  }
+
+  /* The emphasised action where a filled button would be too loud: the one
+     affirmative verb in a row of plain ones (Install, Check for updates). */
+  .btn--primary-outline {
+    @apply border-primary text-primary;
+  }
+  .btn--primary-outline:hover:not(:disabled) {
+    @apply bg-primary/10;
+  }
+
+  /* Borderless until hovered, for low-emphasis actions that would otherwise
+     add another outline to a busy row. */
+  .btn--ghost {
+    @apply border-transparent bg-transparent;
+  }
+  .btn--ghost:hover:not(:disabled) {
+    @apply border-transparent bg-secondary text-txtmain;
+  }
+
+  /* The .seg look on a standalone button: muted label on a hairline, a
+     neutral fill on hover instead of the accent. For per-row actions in a
+     long list, where N accent-lit outlines would out-shout the data. */
+  .btn--quiet {
+    @apply border-card-border text-txtsecondary text-micro font-medium;
+  }
+  .btn--quiet:hover:not(:disabled) {
+    @apply border-card-border bg-secondary text-txtmain;
   }
 
   /* The confirm half of a destructive pair. Filled, not outlined: it sits next
@@ -523,8 +605,19 @@
   .btn--danger {
     @apply bg-error text-btn-primary-text border-error;
   }
-  .btn--danger:hover {
-    @apply opacity-90;
+  .btn--danger:hover:not(:disabled) {
+    @apply opacity-90 border-error text-btn-primary-text;
+  }
+
+  .btn--danger-outline {
+    @apply text-error border-error/50;
+  }
+  .btn--danger-outline:hover:not(:disabled) {
+    @apply bg-error/10 border-error text-error;
+  }
+
+  .btn--danger-hover:hover:not(:disabled) {
+    @apply border-error text-error;
   }
 
   .btn:disabled {

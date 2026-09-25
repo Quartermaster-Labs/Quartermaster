@@ -11,7 +11,7 @@
         return "bg-amber-500";
       case "disconnected":
       default:
-        return "bg-red-500";
+        return "bg-error";
     }
   });
 

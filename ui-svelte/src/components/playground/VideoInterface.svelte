@@ -24,7 +24,7 @@
   import { fetchSdLoras } from "../../lib/sdApi";
   import type { SdApiLora, SdApiLoraRef } from "../../lib/types";
   import { playgroundStores } from "../../stores/playgroundActivity";
-  import { vramTotals } from "../../stores/perf";
+  import { cardTotalMb } from "../../stores/perf";
   import Select from "./Select.svelte";
   import Composer from "./Composer.svelte";
   import { autogrow } from "../../lib/autogrow";
@@ -468,10 +468,10 @@
     }
   }
 
-  // The card's real size, for the feasibility warning. Falls back to 24GB when
-  // the perf stream has not reported yet, which can only change the COLOUR of a
-  // row, never whether it can be picked.
-  let vramGB = $derived(($vramTotals?.totalMb ?? 0) / 1024 || 24);
+  // The card's real size, for the feasibility warning, read once per page load
+  // (cardTotalMb). Falls back to 24GB until it answers, which can only change the
+  // COLOUR of a row, never whether it can be picked.
+  let vramGB = $derived($cardTotalMb / 1024 || 24);
 
   let aspectOptions = $derived(ASPECTS.map((a) => ({ value: a.value, label: a.label })));
   // Every tier is listed; the ones this install cannot reach are disabled rather
@@ -865,7 +865,7 @@
               {/if}
               <div class="relative group rounded-2xl rounded-bl-sm px-3 py-2 text-[0.8125rem] w-fit max-w-full sm:max-w-[60%]">
                 {#if t.error}
-                  <div class="text-red-500">{t.error}</div>
+                  <div class="text-error">{t.error}</div>
                 {:else if t.videos.length}
                   <!-- The clip itself: native controls, loop on, and
                        preload="metadata" so a thread of saved clips does not
@@ -924,7 +924,7 @@
                     {/if}
                   </div>
                 {:else if genId !== $activeVideoChatId || ti !== turns.length - 1}
-                  <div class="text-red-500">No video returned.</div>
+                  <div class="text-error">No video returned.</div>
                 {:else}
                   <!-- In-flight. The bar only appears once sd-server prints a
                        sampler line; until then the status label plus the elapsed
@@ -1040,7 +1040,7 @@
               >{loraLoading ? "Loading…" : loraListModel === $selectedModelStore ? "Refresh" : "Load list"}</button>
             </div>
             {#if loraError}
-              <p class="text-xs text-red-500">{loraError}</p>
+              <p class="text-xs text-error">{loraError}</p>
             {:else if loraListModel === $selectedModelStore && loraList.length === 0}
               <p class="text-xs text-txtsecondary">No LoRAs in this model's folder.</p>
             {:else if loraListModel === $selectedModelStore}
@@ -1193,11 +1193,11 @@
           </div>
         {/if}
         {#if frameRefError}
-          <p class="text-xs text-red-500 mb-2 px-2">{frameRefError}</p>
+          <p class="text-xs text-error mb-2 px-2">{frameRefError}</p>
         {/if}
 
         {#if enhanceError}
-          <div class="mb-2 p-2 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded text-sm flex items-start gap-2">
+          <div class="mb-2 p-2 bg-error/10 text-error rounded text-sm flex items-start gap-2">
             <span class="flex-1">{enhanceError}</span>
             <button class="shrink-0 opacity-70 hover:opacity-100" onclick={() => (enhanceError = "")} aria-label="Dismiss">
               <X class="w-3.5 h-3.5" />

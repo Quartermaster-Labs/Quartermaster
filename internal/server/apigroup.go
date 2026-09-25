@@ -386,6 +386,24 @@ func (s *Server) handleAPIBackendMetrics(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(s.backendMetrics.snapshot())
 }
 
+// handleAPIVramTotal answers the one thing the playground needs from the GPU
+// monitor: how big the card (pool) is, for the Video tab's fit warning. It is on
+// pgChain so a remote playground can ask once, where /api/performance is admin
+// only (a denied poll logged a WARN every 2s). Total only, on purpose: live
+// usage and the desktop's other VRAM holders stay behind the admin gate.
+// total_mb is 0 when there is no GPU telemetry.
+func (s *Server) handleAPIVramTotal(w http.ResponseWriter, r *http.Request) {
+	total := 0
+	if s.perf != nil {
+		_, gpuStats := s.perf.Current()
+		if p := pooledVramStats(gpuStats, s.offloadSettingsVal().MultiGpuEnabled(), s.offloadSettingsVal().DevicePolicy()); p != nil {
+			total = p.TotalMB
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]int{"total_mb": total})
+}
+
 // handleAPIPerformance serves the buffered system/GPU stats, optionally
 // filtered to samples after the ?after=<RFC3339> timestamp.
 func (s *Server) handleAPIPerformance(w http.ResponseWriter, r *http.Request) {

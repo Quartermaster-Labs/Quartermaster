@@ -3,20 +3,25 @@
   import { formatSpeed, formatDuration, formatRelativeTime } from "../lib/activityFormat";
   import { metrics, getCapture } from "../stores/api";
   import ActivityStats from "../components/ActivityStats.svelte";
-  import Tooltip from "../components/Tooltip.svelte";
   import MetadataTooltip from "../components/MetadataTooltip.svelte";
   import CaptureDialog from "../components/CaptureDialog.svelte";
   import { persistentStore } from "../stores/persistent";
   import { observeWindowIdx, OBSERVE_WINDOWS } from "../stores/observe";
   import { onMount } from "svelte";
-  import { Search, X, Columns3, GripVertical } from "lucide-svelte";
-  import type { ReqRespCapture } from "../lib/types";
+  import { Search, X, Columns3, GripVertical, Eye, Loader2 } from "lucide-svelte";
+  import type { ActivityLogEntry, ReqRespCapture } from "../lib/types";
 
   type ColumnKey = string;
 
   interface ColumnDef {
     key: ColumnKey;
+    // Full name, used by the column picker.
     label: string;
+    // Header text when it differs from `label`. Headers are what sized the
+    // numeric columns (GENERATED is wider than any count under it), so they
+    // are short here and `hint` carries the full meaning.
+    head?: string;
+    hint?: string;
     defaultVisible: boolean;
   }
 
@@ -27,13 +32,13 @@
     { key: "req_path", label: "Path", defaultVisible: false },
     { key: "resp_status_code", label: "Status", defaultVisible: false },
     { key: "resp_content_type", label: "Content-Type", defaultVisible: false },
-    { key: "cached", label: "Cached", defaultVisible: true },
-    { key: "prompt", label: "Prompt", defaultVisible: true },
-    { key: "generated", label: "Generated", defaultVisible: true },
-    { key: "prompt_speed", label: "Prompt t/s", defaultVisible: true },
-    { key: "gen_speed", label: "Gen t/s", defaultVisible: true },
-    { key: "duration", label: "Duration", defaultVisible: true },
-    { key: "capture", label: "Capture", defaultVisible: true },
+    { key: "cached", label: "Cached", hint: "prompt tokens from cache", defaultVisible: true },
+    { key: "prompt", label: "Prompt", hint: "new prompt tokens processed", defaultVisible: true },
+    { key: "generated", label: "Generated", head: "Gen", hint: "tokens generated", defaultVisible: true },
+    { key: "prompt_speed", label: "Prompt t/s", head: "PP t/s", hint: "prompt processing speed", defaultVisible: true },
+    { key: "gen_speed", label: "Gen t/s", head: "TG t/s", hint: "token generation speed", defaultVisible: true },
+    { key: "duration", label: "Duration", head: "Dur", hint: "wall time of the request", defaultVisible: true },
+    { key: "capture", label: "Capture", head: "", defaultVisible: true },
     { key: "meta", label: "Meta", defaultVisible: false },
   ];
 
@@ -145,7 +150,7 @@
       .map((c) => c.key)
   );
 
-  let columnLabelMap = $derived(Object.fromEntries(columns.map((c) => [c.key, c.label])));
+  const columnByKey = Object.fromEntries(columns.map((c) => [c.key, c]));
 
   $effect(() => {
     const staticKeys = new Set(columns.map((c) => c.key));
@@ -180,6 +185,15 @@
 
   // Numeric cells get right-aligned tabular figures so magnitudes line up.
   const NUMERIC = new Set(["id", "cached", "prompt", "generated", "prompt_speed", "gen_speed", "duration", "resp_status_code"]);
+
+  function tokenCell(m: ActivityLogEntry, key: ColumnKey): number {
+    switch (key) {
+      case "prompt": return m.tokens.input_tokens;
+      case "generated": return m.tokens.output_tokens;
+      case "prompt_speed": return m.tokens.prompt_per_second;
+      default: return m.tokens.tokens_per_second;
+    }
+  }
 
   function statusClass(code: number): string {
     if (!code) return "text-txtsecondary";
@@ -292,13 +306,14 @@
       <thead>
         <tr class="rule text-left text-micro uppercase tracking-wide text-txtsecondary">
           {#each activeVisibleColumns as key (key)}
-            <th class="sticky top-0 z-[1] bg-surface px-3 py-2 font-medium whitespace-nowrap {NUMERIC.has(key) ? 'text-right' : ''}">
-              {#if key === "cached"}
-                Cached <Tooltip content="prompt tokens from cache" />
-              {:else if key === "prompt"}
-                Prompt <Tooltip content="new prompt tokens processed" />
+            {@const col = columnByKey[key]}
+            <th class="sticky top-0 z-[1] bg-surface px-2 first:pl-3 last:pr-3 py-2 font-medium whitespace-nowrap {NUMERIC.has(key) ? 'text-right' : ''}">
+              <!-- The hint rides on the label, not a (?) glyph: an icon per
+                   header was a dozen pixels per column on a width-bound table. -->
+              {#if col?.hint}
+                <span class="cursor-help underline decoration-dotted decoration-txtsecondary/50 underline-offset-2" use:tip={col.hint}>{col.head ?? col.label}</span>
               {:else}
-                {columnLabelMap[key] ?? key}
+                {col?.head ?? col?.label ?? key}
               {/if}
             </th>
           {/each}
@@ -313,17 +328,19 @@
           </tr>
         {:else}
           {#each sortedMetrics as metric (metric.id)}
-            <tr class="rule whitespace-nowrap text-sm hover:bg-secondary/40 transition-colors">
+            <tr class="rule whitespace-nowrap font-mono text-xs hover:bg-secondary/40 transition-colors">
               {#each activeVisibleColumns as key (key)}
-                <td class="px-3 py-2 {NUMERIC.has(key) ? 'text-right font-mono tabular-nums' : ''}">
+                <td class="px-2 first:pl-3 last:pr-3 py-2 {NUMERIC.has(key) ? 'text-right tabular-nums' : ''}">
                   {#if key === "id"}
                     <span class="text-txtsecondary">{metric.id + 1}</span>
                   {:else if key === "time"}
-                    <span class="text-txtsecondary" use:tip={new Date(metric.timestamp).toLocaleString()}>{formatRelativeTime(metric.timestamp)}</span>
+                    <span class="text-txtsecondary tabular-nums" use:tip={new Date(metric.timestamp).toLocaleString()}>{formatRelativeTime(metric.timestamp)}</span>
                   {:else if key === "model"}
-                    <span class="font-mono text-xs">{metric.model}</span>
+                    <!-- Capped and truncated: a long quant id set the whole table's minimum
+                         width, and that is what pushed it into a sideways scroll. -->
+                    <span class="block max-w-[18rem] truncate" use:tip={metric.model}>{metric.model}</span>
                   {:else if key === "req_path"}
-                    <span class="font-mono text-xs text-txtsecondary">{metric.req_path || "-"}</span>
+                    <span class="text-txtsecondary">{metric.req_path || "-"}</span>
                   {:else if key === "resp_status_code"}
                     <span class={statusClass(metric.resp_status_code)}>{metric.resp_status_code || "-"}</span>
                   {:else if key === "resp_content_type"}
@@ -334,14 +351,15 @@
                     {:else}
                       <span class="text-txtsecondary">-</span>
                     {/if}
-                  {:else if key === "prompt"}
-                    {metric.tokens.input_tokens.toLocaleString()}
-                  {:else if key === "generated"}
-                    {metric.tokens.output_tokens.toLocaleString()}
-                  {:else if key === "prompt_speed"}
-                    {formatSpeed(metric.tokens.prompt_per_second)}
-                  {:else if key === "gen_speed"}
-                    {formatSpeed(metric.tokens.tokens_per_second)}
+                  {:else if key === "prompt" || key === "generated" || key === "prompt_speed" || key === "gen_speed"}
+                    <!-- An image or speech request has no tokens: a column of
+                         0 / 0.0 beside it read as a measurement of zero. -->
+                    {@const v = tokenCell(metric, key)}
+                    {#if v > 0}
+                      {key.endsWith("_speed") ? formatSpeed(v) : v.toLocaleString()}
+                    {:else}
+                      <span class="text-txtsecondary">-</span>
+                    {/if}
                   {:else if key === "duration"}
                     {formatDuration(metric.duration_ms)}
                   {:else if key === "capture"}
@@ -349,9 +367,11 @@
                       <button
                         onclick={() => viewCapture(metric.id)}
                         disabled={loadingCaptureId === metric.id}
-                        class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary"
+                        class="btn btn--sm btn--quiet btn--icon"
+                        aria-label="View request and response"
+                        use:tip={"View request and response"}
                       >
-                        {loadingCaptureId === metric.id ? "..." : "View"}
+                        {#if loadingCaptureId === metric.id}<Loader2 size={12} class="animate-spin" />{:else}<Eye size={12} />{/if}
                       </button>
                     {:else}
                       <span class="text-txtsecondary">-</span>

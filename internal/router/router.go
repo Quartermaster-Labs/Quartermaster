@@ -43,14 +43,19 @@ type LocalRouter interface {
 	// stopped or shut down, keyed by model ID.
 	RunningModels() map[string]process.ProcessState
 
-	// RunningPIDs returns the OS pids of every non-stopped local process, so
-	// callers can tell our own llama-server children apart from foreign GPU
-	// processes.
-	RunningPIDs() []int
+	// RunningPIDs returns the OS pid of every non-stopped local process, keyed
+	// by model ID, so callers can tell our own llama-server children apart from
+	// foreign GPU processes and attribute measured VRAM to a model.
+	RunningPIDs() map[string]int
 
 	// Unload stops the named models, or every running model when none are
 	// named. It blocks until each targeted process has stopped.
 	Unload(timeout time.Duration, models ...string)
+
+	// UnloadWithReason is Unload tagged with why, which the pre-stop hook sees:
+	// an automatic unload the owner of the model did not ask for (the VRAM
+	// guard) passes process.StopEvict so its slot KV is saved like any eviction.
+	UnloadWithReason(reason process.StopReason, timeout time.Duration, models ...string)
 
 	// ProcessLogger returns the log monitor for the named model's process.
 	// modelID must be a real (non-alias) config key. Returns false when the

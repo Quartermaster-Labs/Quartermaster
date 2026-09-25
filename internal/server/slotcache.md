@@ -10,14 +10,14 @@ preamble, returns.
 |---|---|
 | `slotcache.go` | The state machine: `middleware`, `onSwitch`, `restoreOnLoad`, `saveOnEvict`, `ensurePreambleSeed`, `synthPrefill`, plus the `/slots` HTTP calls. |
 | `slotcache_anchor.go` | How a request becomes a cache key: `sessionAnchor` (conversation id + stable system+tools preamble), `normalizeTimestamps`, `preambleHash`/`preambleKey`. |
-| `slotcache_disk.go` | Snapshot-directory layout and the pruning passes: `fileName`/`splitFileName`, `enforceCaps` (LRU by mtime), `prunePreambleFiles`, `dropStalePreambles`, `bestSeed`. Guarded by `diskMu`. |
+| `slotcache_disk.go` | Snapshot-directory layout and the pruning passes: `fileName`/`splitFileName`, `expireIdle` (unused for `maxIdleDays`), `enforceCaps` (LRU by mtime), `prunePreambleFiles`, `dropStalePreambles`, `bestSeed`. Guarded by `diskMu`. |
 | `slotcache_slots.go` | Multi-slot mechanics: `sk`/`modelOf`/`slotIndexOf` (bookkeeping keys), `slotCount` (reads `-np/--parallel` off the configured cmd), `slotStates` (one `GET /slots` scrape), `acquire` (conversation → slot assignment) and `pinSlot` (`id_slot` body injection). |
 | `slotcache_stats.go` | Observability: `kvCounters`, the `kvEvent` ring (each event carries a `Seq` and, for loads, an `Outcome`), the pending-confirm queue (`pushAwait`/`confirmReuse`/`dropAwait`/`setOutcome`) pairing a restore with llama-server's reported reuse, and the `stats()` snapshot. Own `statsMu`. |
 | `kvcacheapi.go` | `GET /api/kvcache` — the monitoring snapshot (counters, recent events, on-disk files) for the Observe → KV Cache tab. |
 
 ## When it's active
 
-Two gates: `cfg.SlotCache.Enable` (global; `dir`/`minSaveTokens`/`maxDiskGB`/`maxSessions`) **and**
+Two gates: `cfg.SlotCache.Enable` (global; `dir`/`minSaveTokens`/`maxDiskGB`/`maxSessions`/`maxIdleDays`) **and**
 per-model `participates(model)`, true only when the model's cmd carries `--slot-save-path`.
 Non-participating models are left alone; a disabled cache is a branchless no-op middleware.
 
@@ -69,17 +69,18 @@ runs for teardowns nobody is waiting through:
 | Reason | Saves | Why |
 |---|---|---|
 | `StopTTL` | yes | The model went idle on its own; nobody is watching, and the next request for it is a cold load the snapshot turns into a restore. |
-| `StopEvict` | yes | The model did not choose to leave. This is the **hand-off** case this cache exists for: two people sharing one GPU, each evicting the other's model between turns. Seconds of snapshot against a full cold reprefill on the way back. |
+| `StopEvict` | yes | The model did not choose to leave. This is the **hand-off** case this cache exists for: two people sharing one GPU, each evicting the other's model between turns. Seconds of snapshot against a full cold reprefill on the way back. The VRAM guard's unload (`vramguard.go`) is tagged `StopEvict` too, via `UnloadWithReason`: other GPU apps pushed the model out, and its user never asked. |
+| `StopShutdown` | yes | An app restart (update, rebuild) is the most routine way a loaded model dies, and every chat comes back after it. Runs inside the 30 s shutdown budget; a large snapshot takes ~15-25 s, so a restart with a long in-flight generation can run out of budget, and the next restore of that file fails with an `error` and reprefills. |
 | `StopManual` | no | The operator pressed Unload and is watching the model refuse to go away. |
-| `StopShutdown` / `StopConfig` | no | The app is quitting, or the model is gone from the config — a person is waiting on a snapshot that may never be read. |
+| `StopConfig` | no | The model is gone from the config; nothing will read the snapshot. |
 
-The split is "did somebody ASK for this teardown". A swap and a TTL expiry both end with the model
-being wanted again; an Unload, a quit and a config removal end with a person watching a progress
-bar for a cache they did not request.
+The split is "will this model be wanted again without anyone asking". A swap, a TTL expiry, a VRAM
+shed and a restart all end with the model coming back; an Unload and a config removal do not.
 
 When a save is skipped the bookkeeping still runs: pending restores are resolved (`dropAwait`) and
 the model's occupants are forgotten (`dropOccupants`), because the slots die with the process
-either way.
+either way. Every conversation lost that way, and every one under `minSaveTokens`, is recorded as a
+`save-skip` event with the reason, so the next load's full prefill has a visible cause.
 
 ## Restore / seed path (preamble caches + Tier-1)
 
@@ -114,8 +115,13 @@ can load a 3.5 GB state whose token list matches the request exactly (llama-serv
 `f_keep = 1.000`) and still reprefill all 97k tokens; a green "hit" recorded at read time claimed a
 win that never happened, for the three minutes it took the prefill to finish.
 
-## Pruning (three mechanisms)
+## Pruning (four mechanisms)
 
+mtime means **last use**: `save` writes it and `restore` touches it, so a chat restored daily never
+looks old.
+
+- **`expireIdle`** — deletes every `.bin` (preamble caches included) plus sidecars whose mtime is
+  older than `maxIdleDays` (default 7). Runs at startup and at the top of every `enforceCaps`.
 - **`enforceCaps`** — LRU by mtime within `maxDiskGB` / `maxSessions`. Preamble caches are
   **exempt** (sticky shared seeds).
 - **`prunePreambleFiles`** — backstop: keep the newest `maxPreambleGenerations` (3) per model.
@@ -128,8 +134,11 @@ win that never happened, for the three minutes it took the prefill to finish.
 ## Logging
 
 Every `record()` event is mirrored into the proxy log by `logEvent` (`slotcache_stats.go`):
-`save` / `restore-hit` / `restore-seed` and the `confirm` / `confirm-miss` that settle them at INFO,
-everything else (misses, preamble bookkeeping) at DEBUG. A restore line is explicitly marked
+every op that decides whether a turn prefills in full is INFO: `save`, the loads (`restore-hit` /
+`restore-seed` / `preamble-hit` / `preamble-mint`), the `confirm` / `confirm-miss` that settle them,
+and the misses (`miss`, `save-skip`, `recurrent-skip-seed`, `recurrent-skip-shorter`, `preamble-warm`), each
+suffixed with what it costs ("no saved KV, full prefill"). The warm path records a `miss` too when
+it has neither a snapshot nor a preamble to seed; it used to record nothing. A load line is explicitly marked
 `- awaiting reuse confirmation`: on its own it reports a file read, and the confirm line a few
 seconds (or minutes) later is the one that says whether it was worth anything. `error` events are
 skipped there — the call sites already Warn with the cause, so logging them twice would just

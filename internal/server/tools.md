@@ -38,8 +38,22 @@ conversation at midnight. `searchDate` is a var so tests can pin it; mirrored in
 ## Fetching pages
 
 **`fetchpage.go`** — the `fetch_page` tool. GETs ONE page and reduces it to text + schema.org
-JSON-LD (`extractHTML` drops script/style/nav/footer/form chrome; block elements become newlines
-so table and spec rows stay separable).
+JSON-LD (`extractHTML` drops script/style/nav/footer/button chrome; block elements become newlines
+so table and spec rows stay separable). `<form>` is deliberately **not** skipped: shop listings put
+each tile's price inside its add-to-basket form.
+
+**Embedded app state** (`fetchpage_offers.go`): `<script type="application/json">` blobs (Next.js,
+React-Query, PriceRunner's `initial_payload`) hold the listing a JS-built page draws itself from.
+`harvestOffers` walks them (map keys sorted, arrays in order, so output is deterministic) and keeps
+one `name | price currency | shop | shipping | stock | link` line per object carrying both a name and a
+price, capped at `pageMaxOffers` / `pageMaxOfferChars`. A `merchantId` is named via an id→name
+index of the whole blob; UPPER_SNAKE names (filter facets) are skipped.
+
+**Headers:** `fetch_page` and the image proxy send a real browser UA (`pageBrowserUA`); shops
+429 a self-declared bot. Feeds and currency keep `pageUserAgent`. Some shops (elgiganten.dk) gate
+on the **TLS fingerprint** and still refuse Go: the 403/429 error tells the model to use a
+comparison site instead. Spoofing the ClientHello (uTLS) is a deliberate non-goal; the
+real-browser fallback (TODO 9b) is the answer if that gap matters.
 
 The **SSRF guard is load-bearing** — the URL comes from the model, so a `net.Dialer.Control` hook
 (`guardDial`/`isPublicIP`) rejects loopback/private/link-local/CGNAT/reserved destinations on the

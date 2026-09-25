@@ -480,7 +480,7 @@
     { key: "content", label: "System Prompt", def: DEFAULT_BUILTIN_PROMPT, blank: "No system prompt", note: "The persona and instructions. Blank means no system prompt.", vars: true },
     { key: "search", label: "Web Search", def: DEFAULT_SEARCH_PROMPT, blank: "Shipped default", note: "Appended when Web Search is on. Blank uses the shipped default.", vars: false },
     { key: "wiki", label: "Wiki", def: DEFAULT_WIKI_PROMPT, blank: "Shipped default", note: "Appended when the help wiki tool is active (always on in chat). Blank uses the shipped default.", vars: false },
-    { key: "youtube", label: "YouTube", def: DEFAULT_YOUTUBE_PROMPT, blank: "Shipped default", note: "Appended when the YouTube tools are active (transcript, search and comments - always on in chat). Blank uses the shipped default.", vars: false },
+    { key: "youtube", label: "YouTube", def: DEFAULT_YOUTUBE_PROMPT, blank: "Shipped default", note: "Appended in every chat (the transcript tool is always on; YouTube search and comments ride Web Search). Blank uses the shipped default.", vars: false },
     { key: "cite", label: "Citations", def: DEFAULT_CITE_PROMPT, blank: "Shipped default", note: "Appended when a citing tool is on - how to cite [n]. Blank uses the shipped default.", vars: false },
   ] as const;
   let presetEditor = $state<null | {
@@ -827,7 +827,7 @@
           Cancel
         </button>
         <button
-          class="px-3 py-1.5 rounded-md text-sm bg-red-500 text-white hover:opacity-90 transition-opacity"
+          class="px-3 py-1.5 rounded-md text-sm bg-error text-white hover:opacity-90 transition-opacity"
           onclick={() => confirmDeleteId && deleteChat(confirmDeleteId)}
         >
           Delete
@@ -862,7 +862,7 @@
           Cancel
         </button>
         <button
-          class="px-3 py-1.5 rounded-md text-sm bg-red-500 text-white hover:opacity-90 transition-opacity"
+          class="px-3 py-1.5 rounded-md text-sm bg-error text-white hover:opacity-90 transition-opacity"
           onclick={() => confirmDeleteThreeDId && deleteThreeDChat(confirmDeleteThreeDId)}
         >
           Delete
@@ -897,7 +897,7 @@
           Cancel
         </button>
         <button
-          class="px-3 py-1.5 rounded-md text-sm bg-red-500 text-white hover:opacity-90 transition-opacity"
+          class="px-3 py-1.5 rounded-md text-sm bg-error text-white hover:opacity-90 transition-opacity"
           onclick={() => confirmDeleteVideoId && deleteVideoChat(confirmDeleteVideoId)}
         >
           Delete
@@ -932,7 +932,7 @@
           Cancel
         </button>
         <button
-          class="px-3 py-1.5 rounded-md text-sm bg-red-500 text-white hover:opacity-90 transition-opacity"
+          class="px-3 py-1.5 rounded-md text-sm bg-error text-white hover:opacity-90 transition-opacity"
           onclick={() => confirmDeleteImageId && deleteImageChat(confirmDeleteImageId)}
         >
           Delete
@@ -967,7 +967,7 @@
           Cancel
         </button>
         <button
-          class="px-3 py-1.5 rounded-md text-sm bg-red-500 text-white hover:opacity-90 transition-opacity"
+          class="px-3 py-1.5 rounded-md text-sm bg-error text-white hover:opacity-90 transition-opacity"
           onclick={() => confirmDeleteSpeechId && deleteSpeechChat(confirmDeleteSpeechId)}
         >
           Delete
@@ -1002,7 +1002,7 @@
           Cancel
         </button>
         <button
-          class="px-3 py-1.5 rounded-md text-sm bg-red-500 text-white hover:opacity-90 transition-opacity"
+          class="px-3 py-1.5 rounded-md text-sm bg-error text-white hover:opacity-90 transition-opacity"
           onclick={() => { confirmLogout = false; logout(); }}
         >
           Log out
@@ -1167,7 +1167,7 @@
                   </button>
                 </div>
                 {#if ttsTestError}
-                  <p class="text-xs text-red-400">{ttsTestError}</p>
+                  <p class="text-xs text-error">{ttsTestError}</p>
                 {/if}
                 <!-- Without this, a substituted voice looks like a mislabelled
                      one: the name stays on screen and someone else speaks. -->
@@ -1197,7 +1197,7 @@
             </p>
 
             {#if memError}
-              <p class="text-xs text-red-400">{memError}</p>
+              <p class="text-xs text-error">{memError}</p>
             {/if}
 
             {#if memEditId === ""}
@@ -1246,7 +1246,7 @@
                     <button type="button" class="shrink-0 p-1.5 rounded text-txtsecondary hover:text-txtmain" use:tooltip={"Edit"} onclick={() => startEditMemory(m)}>
                       <Pencil class="w-3.5 h-3.5" />
                     </button>
-                    <button type="button" class="shrink-0 p-1.5 rounded text-txtsecondary hover:text-red-400" use:tooltip={"Delete"} disabled={memBusy} onclick={() => removeMemory(m.id)}>
+                    <button type="button" class="shrink-0 p-1.5 rounded text-txtsecondary hover:text-error" use:tooltip={"Delete"} disabled={memBusy} onclick={() => removeMemory(m.id)}>
                       <Trash2 class="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -1347,7 +1347,7 @@
                           {#if probe?.state === "ok"}
                             <span class="text-xs text-green-500 min-w-0 truncate">{probe.msg}</span>
                           {:else if probe?.state === "fail"}
-                            <span class="text-xs text-red-500 min-w-0 truncate" use:tooltip={probe.msg}>{probe.msg}</span>
+                            <span class="text-xs text-error min-w-0 truncate" use:tooltip={probe.msg}>{probe.msg}</span>
                           {:else if meta.signupUrl}
                             <a class="text-xs text-txtsecondary hover:text-primary underline" href={meta.signupUrl} target="_blank" rel="noopener noreferrer">Get a key</a>
                           {/if}
@@ -1366,7 +1366,7 @@
 
                 <div class="grid grid-cols-2 gap-2">
                   <label class="flex flex-col gap-1 text-xs uppercase tracking-wide text-txtsecondary" for="search-max">
-                    <span class="flex items-center gap-1.5">Max / Turn {@render tip("Cap on web searches per message. Once hit, the model must answer with what it found - protects SearXNG from runaway agents.")}</span>
+                    <span class="flex items-center gap-1.5">Max / Turn {@render tip("Cap on web searches per message. Once hit, the model must answer with what it found - protects SearXNG from runaway agents. Shopping mode raises it to at least 12.")}</span>
                     <input id="search-max" type="number" min="1" max="50" class="px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$searchMaxPerTurnStore} />
                   </label>
                   <label class="flex flex-col gap-1 text-xs uppercase tracking-wide text-txtsecondary" for="search-throttle">
@@ -1501,7 +1501,7 @@
       <div class="flex items-center justify-between gap-2 shrink-0">
         {#if presetEditor.presetId !== null}
           <button
-            class="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-card-border text-txtsecondary hover:text-red-500 hover:border-red-500 transition-colors text-sm"
+            class="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-card-border text-txtsecondary hover:text-error hover:border-error transition-colors text-sm"
             onclick={deletePreset}
             use:tooltip={"Delete this preset"}
           >
@@ -1615,7 +1615,7 @@
           {session.title || emptyLabel}
         </button>
         <button
-          class="shrink-0 p-0.5 rounded text-txtsecondary opacity-0 group-hover/row:opacity-100 hover:text-red-500 transition-opacity"
+          class="shrink-0 p-0.5 rounded text-txtsecondary opacity-0 group-hover/row:opacity-100 hover:text-error transition-opacity"
           onclick={(e) => { e.stopPropagation(); onDelete(session.id); }}
           use:tooltip={"Delete"}
         >

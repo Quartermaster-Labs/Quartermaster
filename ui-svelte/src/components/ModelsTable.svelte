@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tip } from "../lib/tooltip";
-  import { ChevronRight, Settings, Play, X, MessageCircle, Star, Search } from "lucide-svelte";
+  import { ChevronRight, Settings, Play, X, MessageCircle, Star, Search, Trash2 } from "lucide-svelte";
   import type { Model } from "../lib/types";
   import {
     buildRows,
@@ -37,6 +37,8 @@
     canPlay?: (m: Model) => boolean;
     playLabel?: (m: Model) => string;
     onConfig: (family: string, openFor: string) => void;
+    // Delete a quant's weights from disk; the page owns the confirmation.
+    onDelete?: (m: Model) => void;
     onSort: (key: SortKey) => void;
     onFavorite: (key: string) => void;
   }
@@ -57,6 +59,7 @@
     canPlay,
     playLabel,
     onConfig,
+    onDelete,
     onSort,
     onFavorite,
   }: Props = $props();
@@ -198,41 +201,77 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-{#snippet actions(m: Model, base: Model, compact: boolean)}
-  <!-- items-stretch, not items-center: the three actions are one control group,
-       so the icon-only cogwheel must match the labelled buttons' height rather
-       than shrink to its glyph. -->
-  <div class="flex items-stretch justify-end gap-1">
-    {#if !compact && onPlay && (canPlay?.(m) ?? true)}
-      <button
-        class="btn btn--sm inline-flex items-center gap-1.5 hover:border-primary hover:text-primary"
-        onclick={() => onPlay?.(m)}
-        use:tip={"Load and open in the playground"}
-      >
-        <MessageCircle class="w-3 h-3 shrink-0" />
-        {playLabel?.(m) ?? "Chat"}
-      </button>
-    {/if}
-    {#if pending[m.id]}
-      <button class="btn btn--sm inline-flex items-center gap-1" onclick={() => onCancel(m.id)}>
-        <X class="w-3 h-3" />
-        Cancel
-      </button>
-    {:else}
-      <button class="btn btn--sm inline-flex items-center gap-1 hover:border-primary hover:text-primary" onclick={() => onLoad(m.id)}>
-        <Play class="w-3 h-3" />
-        Load
-      </button>
-    {/if}
-    <button
-      class="btn btn--sm inline-flex items-center justify-center px-1.5 hover:border-primary hover:text-primary"
-      onclick={() => onConfig(base.id, m.id)}
-      aria-label="Edit parameters"
-      use:tip={"Edit parameters / variants"}
-    >
-      <Settings class="w-3.5 h-3.5" />
+{#snippet loadBtn(m: Model)}
+  {#if pending[m.id]}
+    <button class="btn btn--sm btn--quiet inline-flex items-center gap-1" onclick={() => onCancel(m.id)}>
+      <X class="w-3 h-3" />
+      Cancel
     </button>
-  </div>
+  {:else}
+    <button class="btn btn--sm btn--quiet inline-flex items-center gap-1" onclick={() => onLoad(m.id)}>
+      <Play class="w-3 h-3" />
+      Load
+    </button>
+  {/if}
+{/snippet}
+
+{#snippet gearBtn(m: Model, base: Model)}
+  <button
+    class="btn btn--sm btn--quiet btn--icon"
+    onclick={() => onConfig(base.id, m.id)}
+    aria-label="Edit parameters"
+    use:tip={"Edit parameters / variants"}
+  >
+    <Settings class="w-3.5 h-3.5" />
+  </button>
+{/snippet}
+
+{#snippet trashBtn(m: Model)}
+  {#if onDelete}
+    <button
+      class="btn btn--sm btn--quiet btn--icon btn--danger-hover"
+      onclick={() => onDelete?.(m)}
+      aria-label="Delete model"
+      use:tip={"Delete this quant's weights from disk"}
+    >
+      <Trash2 class="w-3.5 h-3.5" />
+    </button>
+  {/if}
+{/snippet}
+
+{#snippet actions(m: Model, base: Model, compact: boolean)}
+  {#if compact}
+    <!-- Quant sub-rows stay one line tall: no Chat, and the icons trail. -->
+    <div class="flex items-stretch justify-end gap-1">
+      {@render loadBtn(m)}
+      {@render gearBtn(m, base)}
+      {@render trashBtn(m)}
+    </div>
+  {:else}
+    <!-- Two rows, not one: [Chat][gear] over [Load][trash]. One inline run of
+         four buttons held the column at w-56, and that width came out of the
+         Model column, whose names then wrapped. Any row with quant or variant
+         pills is two lines tall already, so the stack is free there. The grid
+         makes Chat and Load one width and the icons one column; a row with no
+         Chat keeps an empty cell so the gear still lines up. -->
+    <div class="grid grid-cols-[auto_auto] justify-end gap-1 [&>*]:justify-center">
+      {#if onPlay && (canPlay?.(m) ?? true)}
+        <button
+          class="btn btn--sm btn--quiet inline-flex items-center gap-1.5"
+          onclick={() => onPlay?.(m)}
+          use:tip={"Load and open in the playground"}
+        >
+          <MessageCircle class="w-3 h-3 shrink-0" />
+          {playLabel?.(m) ?? "Chat"}
+        </button>
+      {:else}
+        <span></span>
+      {/if}
+      {@render gearBtn(m, base)}
+      {@render loadBtn(m)}
+      {@render trashBtn(m)}
+    </div>
+  {/if}
 {/snippet}
 
 <div class="flex-1 min-h-0 overflow-auto pretty-scroll">
@@ -300,7 +339,7 @@
             </div>
           </th>
         {/each}
-        <th class="w-56 {thCls} {headCls} px-3 text-center">Actions</th>
+        <th class="w-32 {thCls} {headCls} px-3 text-center">Actions</th>
       </tr>
     </thead>
     <tbody>

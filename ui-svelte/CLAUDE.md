@@ -359,6 +359,15 @@ corpse. Tested in `lib/sessionSync.test.ts`, including that race.
   utility** — a `.collapse` of our own inherited `visibility: collapse` and hid the chat boxes.
   Boolean settings use the `Toggle.svelte` switch (`size="sm"` in dense config grids), not a raw
   `<input type="checkbox">`; tick boxes are only for multi-select lists (pick N of M).
+- **Buttons are `.btn` plus modifiers (`index.css`), never hand-rolled hover/case utilities.**
+  `.btn--sm` is always uppercase (confirm dialogs included). `.btn--icon` for glyph-only buttons.
+  Colour: `--primary` (filled), `--primary-outline`, `--ghost`, `--quiet` (the `.seg` look:
+  muted label, neutral hover; for per-row actions in a long list). Destructive has three weights:
+  `--danger` (filled red) only for an irreversible confirm, `--danger-outline` for a globally
+  reachable destructive action (Unload all), `--danger-hover` for removing one row item. Variant
+  hovers are written `:hover:not(:disabled)` so they tie `.btn`'s own hover on specificity and win
+  by source order; a bare `:hover` loses to it and the button turns orange. Use `error`, never
+  Tailwind's `red-*`/`rose-*`: the token is re-tuned per theme, the palette is not.
 - **One hairline L separates the chrome from the page.** `--color-chrome` (title bar + both apps'
   side rails) is the same tone as `--color-surface`, so the chrome reads as a raised plane with the
   page recessed into it. The rule lives on the elements BELOW-RIGHT of the chrome, never on the

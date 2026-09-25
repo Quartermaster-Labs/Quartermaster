@@ -25,6 +25,7 @@ type shutdownReq struct {
 type unloadReq struct {
 	targets []string
 	timeout time.Duration
+	reason  process.StopReason
 	respond chan struct{}
 }
 
@@ -252,7 +253,7 @@ func (b *baseRouter) run() {
 			b.notifyProcessed()
 
 		case req := <-b.unloadCh:
-			b.schedule.OnUnload(req.targets, req.timeout)
+			b.schedule.OnUnload(req.targets, req.timeout, req.reason)
 			close(req.respond)
 			b.notifyProcessed()
 
@@ -374,7 +375,7 @@ func (b *baseRouter) Wake(d time.Duration) {
 
 // StopProcesses stops the named processes in parallel and blocks until all
 // parallel and blocking until all have stopped.
-func (b *baseRouter) StopProcesses(timeout time.Duration, ids []string) {
+func (b *baseRouter) StopProcesses(timeout time.Duration, reason process.StopReason, ids []string) {
 	var wg sync.WaitGroup
 	procs := b.procs()
 	for _, id := range ids {
@@ -385,7 +386,7 @@ func (b *baseRouter) StopProcesses(timeout time.Duration, ids []string) {
 		wg.Add(1)
 		go func(id string, p process.Process) {
 			defer wg.Done()
-			if err := p.Stop(timeout); err != nil {
+			if err := p.StopWithReason(reason, timeout); err != nil {
 				b.logger.Warnf("%s: stopping %s failed: %v", b.name, id, err)
 			}
 		}(id, p)
@@ -659,19 +660,20 @@ func (b *baseRouter) RunningModels() map[string]process.ProcessState {
 	return running
 }
 
-// RunningPIDs returns the OS pids of every non-stopped local process. Used to
-// distinguish our own llama-server children from foreign ones when accounting
-// GPU memory. State() is a snapshot and PID() reads an atomic, so this is safe
-// to call without the run loop.
-func (b *baseRouter) RunningPIDs() []int {
-	var pids []int
-	for _, p := range b.procs() {
+// RunningPIDs returns the OS pid of every non-stopped local process, keyed by
+// model ID. Used to distinguish our own llama-server children from foreign ones
+// when accounting GPU memory, and to attribute measured VRAM to a model. State()
+// is a snapshot and PID() reads an atomic, so this is safe to call without the
+// run loop.
+func (b *baseRouter) RunningPIDs() map[string]int {
+	pids := make(map[string]int)
+	for id, p := range b.procs() {
 		switch p.State() {
 		case process.StateStopped, process.StateShutdown:
 			continue
 		}
 		if pid := p.PID(); pid > 0 {
-			pids = append(pids, pid)
+			pids[id] = pid
 		}
 	}
 	return pids
@@ -691,6 +693,11 @@ func (b *baseRouter) RunningPIDs() []int {
 // reverse proxy surfaces and may retry. Their trackedServe defers fire
 // normally and decrement inFlight as the dying handlers return.
 func (b *baseRouter) Unload(timeout time.Duration, models ...string) {
+	b.UnloadWithReason(process.StopManual, timeout, models...)
+}
+
+// UnloadWithReason implements LocalRouter.UnloadWithReason.
+func (b *baseRouter) UnloadWithReason(reason process.StopReason, timeout time.Duration, models ...string) {
 	targets := models
 	if len(targets) == 0 {
 		procs := b.procs()
@@ -703,7 +710,7 @@ func (b *baseRouter) Unload(timeout time.Duration, models ...string) {
 		return
 	}
 
-	req := unloadReq{targets: targets, timeout: timeout, respond: make(chan struct{})}
+	req := unloadReq{targets: targets, timeout: timeout, reason: reason, respond: make(chan struct{})}
 	select {
 	case b.unloadCh <- req:
 	case <-b.runDone:

@@ -713,7 +713,7 @@
                   </button>
                   {#if !isDefaultPreset(p.name)}
                     <button
-                      class="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 {$selectedPresetStore === p.name ? 'text-white/70 hover:text-white' : 'text-txtsecondary hover:text-red-500'}"
+                      class="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 {$selectedPresetStore === p.name ? 'text-white/70 hover:text-white' : 'text-txtsecondary hover:text-error'}"
                       onclick={() => deletePreset(p.name)}
                       use:tip={"Delete preset"}
                     >
@@ -740,7 +740,7 @@
                   </button>
                   {#if isBaseModel && v}
                     <button
-                      class="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 {$selectedVoiceStore === v ? 'text-white/70 hover:text-white' : 'text-txtsecondary hover:text-red-500'}"
+                      class="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 {$selectedVoiceStore === v ? 'text-white/70 hover:text-white' : 'text-txtsecondary hover:text-error'}"
                       onclick={() => deleteVoice(v)}
                       use:tip={"Delete voice"}
                     >
@@ -852,7 +852,7 @@
                             <RefreshCw class="w-3.5 h-3.5" /> Regenerate
                           </button>
                           <button
-                            class="flex items-center gap-2 px-3 py-1.5 text-left text-red-500 hover:bg-secondary disabled:opacity-40"
+                            class="flex items-center gap-2 px-3 py-1.5 text-left text-error hover:bg-secondary disabled:opacity-40"
                             onclick={() => { menuIdx = null; deleteTurn(ti); }}
                             disabled={isGenerating}
                           >
@@ -866,7 +866,7 @@
                     <p class="font-serif text-xs leading-snug tracking-tight text-txtmain/90 whitespace-pre-wrap line-clamp-2 pr-6">{t.text}</p>
 
                     {#if t.error}
-                      <div class="text-red-500 text-[0.8125rem]">{t.error}</div>
+                      <div class="text-error text-[0.8125rem]">{t.error}</div>
                     {:else if t.audio}
                       <div class="flex items-center gap-1.5">
                         <div class="flex-1 min-w-0">
@@ -882,7 +882,7 @@
                         </button>
                       </div>
                     {:else if genId !== $activeSpeechChatId || ti !== turns.length - 1}
-                      <div class="text-red-500 text-[0.8125rem]">No audio returned.</div>
+                      <div class="text-error text-[0.8125rem]">No audio returned.</div>
                     {:else}
                       <!-- In-flight: spinner + label + elapsed. -->
                       <div class="flex items-center justify-between gap-2">
@@ -986,12 +986,12 @@
             <div class="rounded-lg border border-card-border bg-black/5 p-3 text-[0.8125rem] leading-relaxed font-serif text-txtmain max-h-40 overflow-y-auto pretty-scroll">
               {RECORD_SCRIPT}
             </div>
-            {#if recError}<span class="text-red-500 text-xs">{recError}</span>{/if}
-            {#if createVoiceError}<span class="text-red-500 text-xs">{createVoiceError}</span>{/if}
+            {#if recError}<span class="text-error text-xs">{recError}</span>{/if}
+            {#if createVoiceError}<span class="text-error text-xs">{createVoiceError}</span>{/if}
             <div class="flex items-center gap-3">
               {#if recording}
                 <button
-                  class="shrink-0 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-600 text-white text-[0.8125rem] font-medium hover:bg-red-700 transition-colors"
+                  class="shrink-0 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-error text-white text-[0.8125rem] font-medium hover:bg-error/90 transition-colors"
                   onclick={stopRecording}
                 >
                   <Square class="w-4 h-4" fill="currentColor" /> Stop
@@ -1036,7 +1036,7 @@
               Required. Voice cloning is in-context: the engine is shown the clip AND its
               transcript, so a clip with no text is a voice that cannot be spoken with.
             </span>
-            {#if createVoiceError}<span class="text-red-500 text-xs">{createVoiceError}</span>{/if}
+            {#if createVoiceError}<span class="text-error text-xs">{createVoiceError}</span>{/if}
             <div class="flex justify-end gap-2">
               <button class="px-2.5 py-1 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary text-[0.8125rem] transition-colors" onclick={closeClone}>Cancel</button>
               <button

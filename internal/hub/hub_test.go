@@ -2,6 +2,7 @@ package hub
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -367,5 +368,47 @@ func TestMarkSelection_UnloadableRepo(t *testing.T) {
 		if !f.Aux {
 			t.Errorf("%s: want aux", f.Path)
 		}
+	}
+}
+
+// Rows as the hub returned them under filter=gguf: the LLM tab must drop the
+// ones that say they are another job, and keep the untagged quant repos.
+func TestHFPage_LLMTabDropsOtherTasks(t *testing.T) {
+	raw := []Model{
+		{ID: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF", Pipeline: "text-generation"},
+		{ID: "unsloth/Qwen3.8-27B-GGUF", Tags: []string{"gguf", "conversational"}},
+		{ID: "poolside/Laguna-S-2.1-GGUF", Tags: []string{"gguf"}},
+		{ID: "unsloth/Qwen3.6-27B-GGUF", Pipeline: "image-text-to-text"},
+		{ID: "google/gemma-4-12B-it-qat-q4_0-gguf", Pipeline: "any-to-any"},
+		{ID: "audio-cpp/audio.cpp-gguf", Pipeline: "text-to-speech"},
+		{ID: "handy-computer/parakeet-tdt-0.6b-v3-gguf", Pipeline: "automatic-speech-recognition"},
+		{ID: "QuantStack/Wan2.2-T2V-A14B-GGUF", Pipeline: "text-to-video"},
+		{ID: "mixedbread-ai/mxbai-embed-large-v1", Pipeline: "feature-extraction"},
+		{ID: "untagged/video", Tags: []string{"gguf", "image-to-video"}},
+	}
+	want := []string{
+		"unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF",
+		"unsloth/Qwen3.8-27B-GGUF",
+		"poolside/Laguna-S-2.1-GGUF",
+		"unsloth/Qwen3.6-27B-GGUF",
+		"google/gemma-4-12B-it-qat-q4_0-gguf",
+	}
+	for _, kind := range []string{"llm", ""} {
+		p := hfPage(raw, Query{Kind: kind}, len(raw), len(raw))
+		var got []string
+		for _, m := range p.Models {
+			got = append(got, m.ID)
+		}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("kind %q: got %v, want %v", kind, got, want)
+		}
+		// The offset counts hub rows, not survivors.
+		if p.NextSkip != len(raw) {
+			t.Errorf("kind %q: NextSkip %d, want %d", kind, p.NextSkip, len(raw))
+		}
+	}
+	// Other tabs are the hub's own verdict and pass through untouched.
+	if p := hfPage(raw, Query{Kind: "any"}, len(raw), len(raw)); len(p.Models) != len(raw) {
+		t.Errorf("kind any: %d rows, want %d", len(p.Models), len(raw))
 	}
 }

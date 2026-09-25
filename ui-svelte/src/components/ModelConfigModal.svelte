@@ -3573,7 +3573,7 @@
       <button onclick={reset} class="btn btn--sm" disabled={saving || !config?.hasOverride}>Reset to default</button>
       <div class="flex gap-2">
         <button onclick={requestClose} class="btn btn--sm">Close</button>
-        <button onclick={save} class="btn btn--sm btn--primary !text-white" disabled={saving || loading}>
+        <button onclick={save} class="btn btn--sm btn--primary" disabled={saving || loading}>
           {saving ? "Saving…" : saved ? "Saved ✓" : "Save & reload"}
         </button>
       </div>

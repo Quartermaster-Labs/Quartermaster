@@ -19,6 +19,7 @@
     searxngUrlStore,
     searchProvidersStore,
     searchMaxPerTurnStore,
+    SHOPPING_MIN_SEARCHES,
     searchThrottleMsStore,
     searchDedupeStore,
     rewriteStore,
@@ -818,6 +819,10 @@
     // (yt-dlp is resolved server-side) and only fires when the user actually
     // brings up a video. A missing yt-dlp comes back as a clear tool error.
     const ytEnabled = !isRewrite;
+    // Finding videos and reading comments are web lookups the user did not bring
+    // up, so they ride the web-search toggle instead of costing prefix in every
+    // chat. The transcript tool above stays: it fires on a link the user pasted.
+    const ytSearchEnabled = ytEnabled && webEnabled;
     // Reading a page pairs with searching: search finds the URL, fetch_page reads
     // the real thing off it. On its own (no search) the model has no way to find
     // a URL, so it rides the same toggle. Shopping mode needs it outright — a
@@ -847,7 +852,8 @@
       ...(memoryEnabled ? MEMORY_TOOLS : []),
       ...(wikiEnabled ? [WIKI_TOOL] : []),
       ...(qmEnabled ? [QM_INSPECT_TOOL, QM_CONFIGURE_TOOL] : []),
-      ...(ytEnabled ? [YOUTUBE_TOOL, YOUTUBE_SEARCH_TOOL, YOUTUBE_COMMENTS_TOOL] : []),
+      ...(ytEnabled ? [YOUTUBE_TOOL] : []),
+      ...(ytSearchEnabled ? [YOUTUBE_SEARCH_TOOL, YOUTUBE_COMMENTS_TOOL] : []),
     ];
 
     // Thinking budget: soft cumulative-thinking cap so models can't loop forever
@@ -927,7 +933,9 @@
           webSearch: webEnabled,
           searxngUrl: $searxngUrlStore, // legacy field: the server falls back to it when the chain is empty
           searchProviders: normalizeProviders($searchProvidersStore, $searxngUrlStore).filter(providerReady),
-          maxSearches: $searchMaxPerTurnStore,
+          // Shopping searches candidates, then shops, then reviews: the chat cap
+          // starves it. Raise the floor, never lower a larger user setting.
+          maxSearches: shoppingPrefs !== false ? Math.max($searchMaxPerTurnStore, SHOPPING_MIN_SEARCHES) : $searchMaxPerTurnStore,
           throttleMs: $searchThrottleMsStore,
           dedupe: $searchDedupeStore,
         }),
@@ -1744,7 +1752,7 @@
           {#each attachedDocs as doc (doc.id)}
             <div
               class="group flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[0.8125rem] max-w-[18rem] {doc.status === 'error'
-                ? 'border-red-500/50 bg-red-500/10 text-red-600 dark:text-red-400'
+                ? 'border-error/50 bg-error/10 text-error'
                 : 'border-card-border bg-surface text-txtsecondary'}"
               use:tooltip={doc.status === "error" ? doc.error : `${doc.name}${doc.note ? ` · ${doc.note}` : ""}`}
             >
@@ -1780,7 +1788,7 @@
 
       <!-- Error message -->
       {#if imageError}
-        <div class="mb-2 p-2 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded text-sm">
+        <div class="mb-2 p-2 bg-error/10 text-error rounded text-sm">
           {imageError}
         </div>
       {/if}

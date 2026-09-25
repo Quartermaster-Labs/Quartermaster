@@ -936,6 +936,8 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/events", pgChain.ThenFunc(s.handleAPIEvents))
 	// Inference key for logged-in playground browsers (see playground.go).
 	mux.Handle("GET /api/inference-key", pgChain.ThenFunc(s.handlePlaygroundInferenceKey))
+	// Card size only, for the playground Video tab (see handleAPIVramTotal).
+	mux.Handle("GET /api/vram-total", pgChain.ThenFunc(s.handleAPIVramTotal))
 	mux.Handle("GET /api/metrics", adminChain.ThenFunc(s.handleAPIMetrics))
 	mux.Handle("GET /api/backend-metrics", adminChain.ThenFunc(s.handleAPIBackendMetrics))
 	mux.Handle("GET /api/performance", adminChain.ThenFunc(s.handleAPIPerformance))
@@ -948,6 +950,10 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/update/status", adminChain.ThenFunc(s.handleAPIUpdateStatus))
 	mux.Handle("POST /api/update/check", adminChain.ThenFunc(s.handleAPIUpdateCheck))
 	mux.Handle("GET /api/captures/{id}", adminChain.ThenFunc(s.handleAPICapture))
+	// Running requests, for the status rail's in-flight panel. Admin-only: the
+	// detail route returns request bodies, i.e. other people's prompts.
+	mux.Handle("GET /api/inflight", adminChain.ThenFunc(s.handleAPIInflight))
+	mux.Handle("GET /api/inflight/{id}", adminChain.ThenFunc(s.handleAPIInflightRequest))
 	// Chat-tool fetch paths: the playground calls all four from the browser, so
 	// they sit on pgChain. Each is a bounded outbound fetch (fetch_page's SSRF
 	// guard, a YouTube/FX API, an image proxy) rather than an ops endpoint.
@@ -1016,6 +1022,10 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/models/{model}/adhoc-cmd", adminChain.ThenFunc(s.handleAPIModelAdhocCmd))
 	mux.Handle("PUT /api/models/{model}/adhoc-load", adminChain.ThenFunc(s.handleAPIModelAdhocLoad))
 	mux.Handle("DELETE /api/models/{model}/adhoc-load", adminChain.ThenFunc(s.handleAPIModelAdhocUnload))
+	// Delete a model's weight file(s) from disk: GET is the dry run the
+	// confirmation dialog renders, DELETE unloads, removes and regenerates.
+	mux.Handle("GET /api/models/{model}/delete-plan", adminChain.ThenFunc(s.handleAPIModelDeletePlan))
+	mux.Handle("DELETE /api/models/{model}/files", adminChain.ThenFunc(s.handleAPIModelDeleteFiles))
 
 	// Global settings editor (dashboard GPU-memory card): read effective
 	// settings + defaults, save a manual VRAM target/headroom patch, reset it.
@@ -1075,6 +1085,7 @@ func (s *Server) routes() {
 	mux.Handle("POST /api/hub/clear", adminChain.ThenFunc(s.handleAPIHubClear))
 	mux.Handle("POST /api/hub/reveal", adminChain.ThenFunc(s.handleAPIHubReveal))
 	mux.Handle("GET /api/hub/files", adminChain.ThenFunc(s.handleAPIHubFiles))
+	mux.Handle("GET /api/hub/disk-usage", adminChain.ThenFunc(s.handleAPIHubDiskUsage))
 	mux.Handle("GET /api/kvcache", adminChain.ThenFunc(s.handleAPIKvCache))
 	mux.Handle("GET /api/canon", adminChain.ThenFunc(s.handleAPICanon))
 	// Per-category scan folder (Models tab folder icon) — opens the host's native

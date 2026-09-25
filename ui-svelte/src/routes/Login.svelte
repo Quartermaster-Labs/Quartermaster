@@ -107,10 +107,10 @@
     {#if tooShort}
       <p class="text-xs text-txtsecondary">Use at least 6 characters.</p>
     {:else if mismatch}
-      <p class="text-xs text-red-500">Passwords do not match.</p>
+      <p class="text-xs text-error">Passwords do not match.</p>
     {/if}
     {#if error}
-      <p class="text-xs text-red-500">{error}</p>
+      <p class="text-xs text-error">{error}</p>
     {/if}
     <button
       type="submit"

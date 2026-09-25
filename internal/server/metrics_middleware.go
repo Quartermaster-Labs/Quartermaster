@@ -48,6 +48,10 @@ func CreateMetricsMiddleware(mm *metricsMonitor, cfg config.Config) chain.Middle
 				}
 			}
 
+			// Let the status rail's in-flight list name the model and open the
+			// request while it runs. Same buffers as the capture, no extra copy.
+			inflightEntryFrom(r.Context()).attach(data.ModelID, reqHeaders, reqBody)
+
 			// Restrict Accept-Encoding to encodings we can decompress so the
 			// buffered response body stays parseable.
 			if ae := r.Header.Get("Accept-Encoding"); ae != "" {

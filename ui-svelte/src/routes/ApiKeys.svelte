@@ -3,6 +3,8 @@
   import { onMount } from "svelte";
   import { Eye, EyeOff, Copy, Trash2, Plus, Check, KeyRound, X, SlidersHorizontal, HelpCircle } from "lucide-svelte";
 
+  import MultiCombobox, { type ComboOption } from "../components/MultiCombobox.svelte";
+
   import { models, listApiKeys, upsertApiKey, deleteApiKey } from "../stores/api";
   import { refreshInferenceKey } from "../lib/inferenceAuth";
   import { modelCategory, MODEL_CATEGORIES } from "../lib/modelUtils";
@@ -29,7 +31,6 @@
   let newName = $state("");
   let newScope = $state<Set<string>>(new Set());
   let creating = $state(false); // the new-key form is a row of the list, not a permanent box
-  let showPicker = $state(false); // model scope picker is collapsed until opened
   let saving = $state(false);
   let formErr = $state<string | null>(null);
 
@@ -39,15 +40,18 @@
   let editingScope = $state<string | null>(null);
   let editScope = $state<Set<string>>(new Set());
 
-  // Listable models grouped by category, in MODEL_CATEGORIES order; empty groups dropped.
+  // Listable models tagged with their category, in MODEL_CATEGORIES order.
   // Unlisted vision twins ARE included: they're callable model ids a scoped key must be
   // able to reach, even though they're hidden from the operator model picker.
-  const grouped = $derived.by(() => {
+  const scopeOptions = $derived.by((): ComboOption[] => {
     const listed = ($models || []).filter((m) => !m.peerID && (!m.unlisted || m.capabilities?.vision));
-    return MODEL_CATEGORIES.map((c) => ({
-      label: c.label,
-      ids: listed.filter((m) => modelCategory(m) === c.id).map((m) => m.id).sort(),
-    })).filter((g) => g.ids.length > 0);
+    return MODEL_CATEGORIES.flatMap((c) =>
+      listed
+        .filter((m) => modelCategory(m) === c.id)
+        .map((m) => m.id)
+        .sort()
+        .map((id) => ({ value: id, group: c.label })),
+    );
   });
 
   async function load(): Promise<void> {
@@ -86,7 +90,6 @@
       await upsertApiKey(newName.trim(), [...newScope]);
       newName = "";
       newScope = new Set();
-      showPicker = false;
       creating = false;
       await load();
     } catch (e) {
@@ -141,16 +144,6 @@
     formErr = null;
     newName = "";
     newScope = new Set();
-    showPicker = false;
-  }
-
-  // Whole-category select: picking "every vision model" one chip at a time is
-  // the tedious half of scoping a key.
-  function toggleGroup(sel: Set<string>, ids: string[], set: (n: Set<string>) => void): void {
-    const all = ids.every((id) => sel.has(id));
-    const next = new Set(sel);
-    for (const id of ids) all ? next.delete(id) : next.add(id);
-    set(next);
   }
 
   function scopeLabel(k: ApiKey): string {
@@ -181,7 +174,7 @@
       <HelpCircle size={14} />
     </button>
     {#if available}
-      <button class="btn btn--sm btn--primary ml-auto shrink-0 uppercase tracking-wide" onclick={startCreate} disabled={creating}>
+      <button class="btn btn--sm btn--primary ml-auto shrink-0" onclick={startCreate} disabled={creating}>
         <Plus size={14} class="mr-1 inline-block -mt-px" />New key
       </button>
     {/if}
@@ -217,25 +210,12 @@
                 onkeydown={(e) => e.key === "Enter" && create()}
               />
             </label>
-            <button
-              type="button"
-              class="btn btn--sm uppercase tracking-wide"
-              onclick={() => (showPicker = !showPicker)}
-              disabled={grouped.length === 0}
-            >
-              <SlidersHorizontal size={13} class="mr-1 inline-block -mt-px" />Scope
-              <span class="normal-case text-txtsecondary">({newScope.size === 0 ? "full access" : `${newScope.size} selected`})</span>
-            </button>
-            <button class="btn btn--sm btn--primary ml-auto uppercase tracking-wide" onclick={create} disabled={saving}>
+            <button class="btn btn--sm btn--primary ml-auto" onclick={create} disabled={saving}>
               <Plus size={14} class="mr-1 inline-block -mt-px" />Create
             </button>
           </div>
 
-          {#if grouped.length === 0}
-            <p class="mt-2 text-xs text-txtsecondary">No models in the catalog yet.</p>
-          {:else if showPicker}
-            {@render picker(newScope, (next) => (newScope = next))}
-          {/if}
+          {@render picker(newScope, (next) => (newScope = next))}
           {#if formErr}<p class="mt-2 text-xs text-error">{formErr}</p>{/if}
         </div>
       {/if}
@@ -245,7 +225,7 @@
           <KeyRound size={26} class="text-txtsecondary/50" />
           <p class="text-sm text-txtsecondary">No API keys yet.</p>
           {#if !creating}
-            <button class="btn btn--sm uppercase tracking-wide" onclick={startCreate}><Plus size={14} class="mr-1 inline-block -mt-px" />Create one</button>
+            <button class="btn btn--sm" onclick={startCreate}><Plus size={14} class="mr-1 inline-block -mt-px" />Create one</button>
           {/if}
         </div>
       {:else}
@@ -290,8 +270,8 @@
             {#if editingScope === k.name}
               {@render picker(editScope, (next) => (editScope = next))}
               <div class="mt-3 flex gap-2">
-                <button class="btn btn--sm btn--primary uppercase tracking-wide" onclick={() => saveScope(k.name)} disabled={saving}>Save scope</button>
-                <button class="btn btn--sm uppercase tracking-wide" onclick={() => (editingScope = null)}>Cancel</button>
+                <button class="btn btn--sm btn--primary" onclick={() => saveScope(k.name)} disabled={saving}>Save scope</button>
+                <button class="btn btn--sm" onclick={() => (editingScope = null)}>Cancel</button>
               </div>
             {:else if scoped}
               <div class="mt-2 flex flex-wrap items-center gap-1.5 pl-6">
@@ -307,30 +287,18 @@
   {/if}
 </div>
 
-<!-- Model picker grouped by category. `sel` is the current Set; `set` swaps in a new one. -->
+<!-- Scope field: search-and-tick dropdown. `sel` is the current Set; `set` swaps in a new one. -->
 {#snippet picker(sel: Set<string>, set: (next: Set<string>) => void)}
-  <div class="mt-3 rounded-md border border-card-border-inner bg-surface-2 p-3">
-    <p class="mb-2 text-[0.7rem] uppercase tracking-wide text-txtsecondary">
-      Allowed models <span class="normal-case">(none selected = full access)</span>
+  <div class="mt-3 max-w-3xl">
+    <p class="mb-1 text-[0.7rem] uppercase tracking-wide text-txtsecondary">
+      Allowed models <span class="normal-case">({sel.size === 0 ? "none selected = full access" : `${sel.size} selected`})</span>
     </p>
-    <div class="space-y-2">
-      {#each grouped as g (g.label)}
-        <div>
-          <button
-            type="button"
-            class="mb-1 text-[0.7rem] uppercase tracking-wide text-txtsecondary hover:cursor-pointer hover:text-primary"
-            onclick={() => toggleGroup(sel, g.ids, set)}
-            use:tip={"Select or clear the whole category"}
-          >
-            {g.label} <span class="tabular-nums">({g.ids.filter((id) => sel.has(id)).length}/{g.ids.length})</span>
-          </button>
-          <div class="flex flex-wrap gap-1.5">
-            {#each g.ids as id (id)}
-              <button type="button" class="chip-toggle" aria-pressed={sel.has(id)} onclick={() => set(toggle(sel, id))}>{id}</button>
-            {/each}
-          </div>
-        </div>
-      {/each}
-    </div>
+    <MultiCombobox
+      selected={sel}
+      options={scopeOptions}
+      onchange={set}
+      ariaLabel="Allowed models"
+      placeholder={scopeOptions.length ? "Search models, or leave empty for full access" : "No models in the catalog yet"}
+    />
   </div>
 {/snippet}

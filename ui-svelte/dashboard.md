@@ -8,10 +8,53 @@ Routing is hash-based (`svelte-spa-router`); the router table lives in `App.svel
 
 ## `/` — Dashboard (`routes/Dashboard.svelte`)
 
-Landing page: the shared live-models panel (`components/ActiveModelsPanel.svelte` — launch
-params + `InferenceFeedback` for whatever is loaded) plus the quick-load picker, ranked by
-per-**family** load tally so loading any variant floats the family up. No GPU/activity
-duplication of the StatusRail/Observe; the config knobs live in Settings.
+Landing page, three bands top to bottom:
+
+1. **Running**: the shared live-models panel (`components/ActiveModelsPanel.svelte`, launch
+   params + `InferenceFeedback` for whatever is loaded), or an idle placeholder. The panel's
+   height is fixed (`h-72`) so switching model tabs never moves the page; the LLM param grid goes
+   four across at `xl` precisely so seven fields plus the launch-command toggle fit it without a
+   scrollbar, even under the tab strip.
+2. **At a glance**: four `.tile`s, each a number, one small picture and one detail line. Catalog
+   and On disk are stacked bars by category; On disk's total is the server's folder walk, but
+   its bar splits by what the *catalog* weighs per category, since the walk has no idea what a
+   file is. Requests is a 2-minute histogram over 30 minutes; Avg speed is a sparkline of the
+   last 24 rates. All session-scoped (`$metrics` resets on reconnect). There is deliberately
+   **no VRAM tile**: the status rail shows the same bar on every page, with free VRAM on its
+   tooltip. The rail and the config editor's load plan share `VramGauge`, whose segments sit
+   2px apart on a rounded track with a floor width, so a sliver stays visible.
+3. **Quick load | Recent**, side by side from `lg`. Quick load is one row per **`modelKey`**
+   (the server's "same model" key), not per quant: it loads the most-loaded variant (tie: the
+   smallest), shows its quant as a badge (and strips it from the name), and `+N` counts the other
+   *files*: ctx tiers and `-vision` twins share a gguf and do not count. Rows are grouped by
+   category and ranked by the load tally summed across the group. Recent colours each model by
+   category and labels the endpoint from its path, not from the model's category (an LLM can
+   answer an embeddings call).
+
+**Category colours** are `--color-cat-{llm,image,video,3d,other}` in `index.css`. Five hues for
+eight categories: segment/tts/transcribe/embed share "other" (icons still differ). Chat is gold,
+not the orange accent, which already means "active". The light values sit in a plain `:root`
+rule, **not** in `@theme`: Tailwind v4 only emits `@theme` variables some utility class uses,
+and these are read through `var()`, so under `@theme` they silently vanished in light mode.
+
+### `InferenceFeedback` and the fire field
+
+The right half of the running band. The activity strip is `components/FireField.svelte` (canvas
+host: sizing, frame loop, theme) over `lib/fireField.ts` (pure simulation + renderer, tested in
+`fireField.test.ts`): Doom-style fire propagation on a dot grid. Modes map from the existing
+state: `loading` lights the base up to the learned load % (a sweeping patch when there is no
+estimate), `prefill` does the same from the parsed prompt progress, `generating` burns full width
+with heat and wind scaled by live tok/s, and every new output token throws a spark. `liveTokens`
+arrives every ~200 ms (`liveEmitInterval`), so a burst of tokens is released over the next
+interval rather than on one frame, and a token count that goes backwards (new request) drops the
+backlog.
+
+- The backing store is `clientWidth × $pixelRatio × cssZoom`, the PerformanceChart rule, or the
+  dots are a blurry upscale at any interface size above 100%.
+- The loop skips when the canvas has no `offsetParent` (a hidden app-window tab), and steps at
+  14 Hz idle / 32 Hz active. `prefers-reduced-motion` drops it to 6 Hz with no sparks.
+- Dark draws with additive `lighter` glow; light uses `source-over` with a saturated red-orange
+  ramp, since additive blending onto cream washes out to white.
 
 ## Downloads menu (`components/DownloadsMenu.svelte`, state in `stores/hubJobs.ts`)
 
@@ -270,6 +313,14 @@ the button (`headCls`): ★ carries a Star glyph (+ `sr-only` text), the family 
 the action column `Actions`. A blank header reads as a rendering bug, and these are exactly the
 columns whose purpose isn't self-evident.
 
+**Actions are a 2x2 grid**, `[Chat][gear]` over `[Load][trash]`, so the column is `w-32` rather
+than the `w-56` one inline run needed (that width came out of the Model column). Expanded quant
+sub-rows keep a single line (no Chat). The trash button deletes the SELECTED quant's weights: the
+page fetches `GET /api/models/{id}/delete-plan` and renders it in `askConfirm` (files + size, the
+catalog ids that vanish with the file, what gets unloaded, other models naming it as a draft, and
+the companion files left in the folder) before `DELETE /api/models/{id}/files`. The plan and the
+delete share one server function, so the dialog cannot describe a different set than it removes.
+
 ### Where the numbers come from
 
 Quant, Size and Est RAM are **server-side additions**: `internal/server/modelmeta.go` derives quant
@@ -287,6 +338,13 @@ deep-links preselect the matching tab.
 ## `/api-keys` — API Keys (`routes/ApiKeys.svelte`)
 
 Create / scope / reveal / delete inference API keys. Only when the server runs with `-generate`.
+
+Scope is picked with `components/MultiCombobox.svelte`: a tag-input field (selected ids as
+removable chips) over the shared `.qm-popup` list, with tick rows grouped by `MODEL_CATEGORIES`.
+Toggling keeps the list open and the query intact, so one search can take several models. A group
+header toggles only the rows the current filter shows ("type qwen, click LLM"). Selected ids the
+catalog no longer lists still render as chips, since hiding them would hide a live grant. Past 12
+chips the field collapses to "+N more".
 
 ## `/test` — Playground stub (`routes/PlaygroundStub.svelte`)
 

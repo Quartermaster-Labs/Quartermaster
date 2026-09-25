@@ -54,6 +54,7 @@
     slotMinTokens = s.slotCache.minSaveTokens;
     slotMaxDiskGB = s.slotCache.maxDiskGB;
     slotMaxSessions = s.slotCache.maxSessions;
+    slotMaxIdleDays = s.slotCache.maxIdleDays;
     slotPreamble = s.slotCache.preambleCaches;
     backends = editableBackends(s.backendList);
     syncAdvancedForm(s);
@@ -162,6 +163,7 @@
   let slotMinTokens = $state(0); // 0 => server default (30000)
   let slotMaxDiskGB = $state(0); // 0 => server default (10)
   let slotMaxSessions = $state(0); // 0 => server default (20)
+  let slotMaxIdleDays = $state(0); // 0 => server default (7)
   // Preamble caches: the shared system+tools seed, minted per agent without the
   // user asking. Separate switch because it is the half that appears unprompted
   // and is exempt from the LRU caps above. Default on (a fresh config has no key).
@@ -176,6 +178,7 @@
         Number(slotMinTokens) !== settings.slotCache.minSaveTokens ||
         Number(slotMaxDiskGB) !== settings.slotCache.maxDiskGB ||
         Number(slotMaxSessions) !== settings.slotCache.maxSessions ||
+        Number(slotMaxIdleDays) !== settings.slotCache.maxIdleDays ||
         slotPreamble !== settings.slotCache.preambleCaches),
   );
 
@@ -201,6 +204,7 @@
         minSaveTokens: Number(slotMinTokens) || 0,
         maxDiskGB: Number(slotMaxDiskGB) || 0,
         maxSessions: Number(slotMaxSessions) || 0,
+        maxIdleDays: Number(slotMaxIdleDays) || 0,
         preambleCaches: slotPreamble,
       });
       await loadSettings();
@@ -914,7 +918,7 @@
           {/if}
         </div>
         <button
-          class="btn btn--sm uppercase tracking-wide"
+          class="btn btn--sm"
           onclick={resetSettingsToDefault}
           disabled={savingSettings || !settings?.overridden}
           use:tip={"Revert to the generate file's values"}
@@ -1268,14 +1272,14 @@
           </span>
           <span class="flex items-center gap-2">
             <button
-              class="btn btn--sm uppercase tracking-wide"
+              class="btn btn--sm"
               onclick={resetAdvancedToDefault}
               disabled={savingAdv || !settings?.advancedOverridden}
               use:tip={"Restore every knob in this section to its computed default. Leaves the memory and guard settings alone."}
             >
               Restore defaults
             </button>
-            <button class="btn btn--sm btn--primary uppercase tracking-wide" onclick={saveAdvanced} disabled={savingAdv}>
+            <button class="btn btn--sm btn--primary" onclick={saveAdvanced} disabled={savingAdv}>
               Apply
             </button>
           </span>
@@ -1316,7 +1320,7 @@
               <div class="flex items-center justify-between gap-2">
                 <span class="text-warning">⚠ Owned by another Quartermaster install</span>
                 <button
-                  class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary"
+                  class="btn btn--sm"
                   disabled={autostartBusy}
                   onclick={() => toggleAutostart(true, true)}
                 >
@@ -1485,7 +1489,7 @@
           </label>
           {#if proc?.settings.hfTokenSet}
             <button
-              class="btn btn--sm uppercase tracking-wide hover:border-error hover:text-error"
+              class="btn btn--sm btn--danger-hover"
               disabled={savingProc}
               onclick={() => saveProc({ clearToken: true })}
             >
@@ -1508,7 +1512,7 @@
 
     <div class="mt-4 flex items-center gap-3">
       <button
-        class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary"
+        class="btn btn--sm"
         disabled={savingProc || !procDirty}
         onclick={() => saveProc()}
       >
@@ -1588,7 +1592,7 @@
             />
             <button
               type="button"
-              class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary disabled:opacity-50"
+              class="btn btn--sm"
               onclick={browseSlotDir}
               disabled={!slotEnable}
             >
@@ -1628,6 +1632,17 @@
             class="w-full font-mono rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
           />
           <span class="text-micro text-txtsecondary">files · default 20</span>
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-txtsecondary uppercase tracking-wide flex items-center gap-1">
+            Delete unused after (days)
+            {@render hint("Snapshots not restored or saved for this many days are deleted. 0 = 7.")}
+          </span>
+          <input
+            type="number" min="0" step="1" bind:value={slotMaxIdleDays} disabled={!slotEnable}
+            class="w-full font-mono rounded border border-card-border bg-surface px-2 py-1 text-txtmain tabular-nums focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+          />
+          <span class="text-micro text-txtsecondary">days · default 7</span>
         </label>
         <label class="col-span-2 flex items-center gap-2 pt-1">
           <Toggle size="sm" bind:checked={slotPreamble} disabled={!slotEnable} />
@@ -1683,7 +1698,7 @@
               <span class="text-[0.7rem] text-txtsecondary truncate">{g.cls.blurb}</span>
               <button
                 type="button"
-                class="btn btn--sm ml-auto shrink-0 inline-flex items-center gap-1 uppercase tracking-wide hover:border-primary hover:text-primary"
+                class="btn btn--sm ml-auto shrink-0 inline-flex items-center gap-1"
                 onclick={() => addBackend(g.cls)}
               ><Plus size={12} /> Add</button>
             </header>
@@ -1774,7 +1789,7 @@
           {@render hint("A prompt enhancer is a chat model that rewrites an image prompt into a more precise one before rendering. Configure it once here, then pick it per image model in that model's config editor. The playground Images tab shows an Enhance button for models that have one.")}
           <button
             type="button"
-            class="btn btn--sm ml-auto shrink-0 inline-flex items-center gap-1 uppercase tracking-wide hover:border-primary hover:text-primary"
+            class="btn btn--sm ml-auto shrink-0 inline-flex items-center gap-1"
             onclick={addEnhancer}
           ><Plus size={12} /> Add</button>
         </div>

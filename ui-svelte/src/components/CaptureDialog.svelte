@@ -5,9 +5,12 @@
     capture: ReqRespCapture | null;
     open: boolean;
     onclose: () => void;
+    // A request that is still running (opened from the status rail's in-flight
+    // panel): same viewer, but there is no response yet to show.
+    pending?: boolean;
   }
 
-  let { capture, open, onclose }: Props = $props();
+  let { capture, open, onclose, pending = false }: Props = $props();
 
   let dialogEl: HTMLDialogElement | undefined = $state();
 
@@ -200,7 +203,7 @@
       <div
         class="flex justify-between items-center p-4 border-b border-card-border"
       >
-        <h2 class="text-xl font-bold pb-0">Capture #{capture.id + 1}{#if capture.req_path} <span class="text-base font-mono font-normal text-txtsecondary">{capture.req_path}</span>{/if}</h2>
+        <h2 class="text-xl font-bold pb-0">{pending ? "In flight" : `Capture #${capture.id + 1}`}{#if capture.req_path} <span class="text-base font-mono font-normal text-txtsecondary">{capture.req_path}</span>{/if}</h2>
         <button
           onclick={() => dialogEl?.close()}
           class="text-txtsecondary hover:text-txtmain text-2xl leading-none"
@@ -287,6 +290,11 @@
           {/if}
         </details>
 
+        {#if pending}
+          <p class="text-sm text-txtsecondary">
+            Still running - no response yet. It lands in Activity when it finishes.
+          </p>
+        {:else}
         <!-- Response Headers -->
         <details class="group" open>
           <summary
@@ -421,6 +429,7 @@
             </div>
           {/if}
         </details>
+        {/if}
       </div>
 
       <div class="p-4 border-t border-card-border flex justify-end">

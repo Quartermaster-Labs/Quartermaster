@@ -208,7 +208,7 @@
   {/if}
 
   {#if error}
-    <div class="absolute inset-0 flex items-center justify-center p-3 text-center text-xs text-red-500">{error}</div>
+    <div class="absolute inset-0 flex items-center justify-center p-3 text-center text-xs text-error">{error}</div>
   {:else if !loading}
     <button
       class="absolute bottom-1.5 right-1.5 p-1 rounded bg-black/40 text-white/80 hover:text-white hover:bg-black/60 transition-colors"

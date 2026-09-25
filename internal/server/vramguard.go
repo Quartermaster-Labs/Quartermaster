@@ -64,6 +64,13 @@ type vramGuard struct {
 	// It gates the cooldown that keeps a shed from becoming a loop. Same
 	// goroutine as overSince.
 	lastShed time.Time
+	// measuredMB is the VRAM (MiB) each of our models' processes actually holds,
+	// from the same per-process reading that splits off foreignMB. sheddable
+	// charges a ready model this instead of its estVramGB: the estimate is a
+	// planning figure with pads, and judging a running model against it shed a
+	// 20.1GB-resident model as "22.2GB over a 21.5GB ceiling" with 2.3GB of the
+	// card free. Nil until a trusted reading; same goroutine as overSince.
+	measuredMB map[string]int64
 
 	refusals vramRefusals
 }
@@ -195,8 +202,9 @@ func (g *vramGuard) sample(ctx context.Context, gpus []perf.GpuStat) {
 		return
 	}
 
-	foreign, ok := g.foreignMB4(ctx, best)
+	foreign, measured, ok := g.foreignMB4(ctx, best)
 	if !ok {
+		g.measuredMB = nil
 		// Per-process attribution doesn't cover our own children, so every MiB
 		// they hold would read as foreign and collapse the ceiling. Publish
 		// "unknown" instead; the router falls back to the static budget.
@@ -208,6 +216,7 @@ func (g *vramGuard) sample(ctx context.Context, gpus []perf.GpuStat) {
 		return
 	}
 	g.untrusted = false
+	g.measuredMB = measured
 
 	g.foreignMB.Store(foreign)
 	g.totalMB.Store(int64(best.MemTotalMB))
@@ -221,40 +230,42 @@ func (g *vramGuard) sample(ctx context.Context, gpus []perf.GpuStat) {
 }
 
 // foreignMB4 attributes the GPU's used memory between our children and everyone
-// else, returning the foreign share. ok=false when the attribution can't be
-// trusted: we have processes running but the per-process source doesn't list
-// them (no source at all on darwin/unix-non-NVIDIA, or a pid that hasn't claimed
-// VRAM yet mid-start).
-func (g *vramGuard) foreignMB4(ctx context.Context, best perf.GpuStat) (int64, bool) {
+// else, returning the foreign share and each of our models' measured share.
+// ok=false when the attribution can't be trusted: we have processes running but
+// the per-process source doesn't list them (no source at all on
+// darwin/unix-non-NVIDIA, or a pid that hasn't claimed VRAM yet mid-start).
+func (g *vramGuard) foreignMB4(ctx context.Context, best perf.GpuStat) (int64, map[string]int64, bool) {
 	pids := g.s.local.RunningPIDs()
 	if len(pids) == 0 {
 		// Nothing of ours is on the card, so all of it is foreign. This needs no
 		// per-process source at all and is the one reading we can always trust.
-		return int64(best.MemUsedMB), true
+		return int64(best.MemUsedMB), nil, true
 	}
 	procs := perf.QueryComputeApps(ctx)
 	if len(procs) == 0 {
-		return 0, false
+		return 0, nil, false
 	}
 	byPID := make(map[int]int, len(procs))
 	for _, p := range procs {
 		byPID[p.PID] += p.MemMB
 	}
 	var ours int64
-	for _, pid := range pids {
+	measured := make(map[string]int64, len(pids))
+	for id, pid := range pids {
 		mb, seen := byPID[pid]
 		if !seen {
 			// A child the source can't see would be counted as foreign, which is
 			// exactly the mistake that evicts everything. Refuse the whole reading.
-			return 0, false
+			return 0, nil, false
 		}
 		ours += int64(mb)
+		measured[id] = int64(mb)
 	}
 	foreign := int64(best.MemUsedMB) - ours
 	if foreign < 0 {
 		foreign = 0
 	}
-	return foreign, true
+	return foreign, measured, true
 }
 
 // watchdog sheds resident models when foreign VRAM has grown into their
@@ -305,12 +316,19 @@ func (g *vramGuard) watchdog() {
 		victims, residentGB, ceiling, float64(g.foreignMB.Load())/1024.0)
 	// Asynchronous: Unload blocks until each process has stopped, and the sampler
 	// goroutine also feeds the ceiling the router reads while it evicts.
-	go g.s.local.Unload(vramGuardUnloadTimeout, victims...)
+	// StopEvict, not the manual Unload: the victim's user did not ask for this and
+	// will be back, so the pre-stop hook saves its slot KV like any eviction.
+	go g.s.local.UnloadWithReason(process.StopEvict, vramGuardUnloadTimeout, victims...)
 }
 
 // sheddable returns the models to unload so the resident set fits ceilingGB, and
-// the resident set's current estimated footprint. Empty victims means it already
-// fits (or nothing may be shed).
+// the resident set's current footprint. Empty victims means it already fits (or
+// nothing may be shed).
+//
+// A model is charged what it MEASURABLY holds (chargeGB), falling back to its
+// estVramGB only where there is no measurement. The ceiling is derived from a
+// live reading, so the resident side has to be one too: comparing a planning
+// estimate against a measured ceiling sheds models that fit.
 //
 // Selection mirrors budgetEviction's accounting so the two halves agree on what
 // "fits" means, with four exclusions: persistent-group members (never
@@ -338,10 +356,11 @@ func (g *vramGuard) sheddable(ceilingGB float64) ([]string, float64) {
 	var total float64
 	var cands []cand
 	for id, st := range g.s.local.RunningModels() {
-		gb := cfg.Models[id].EstVramGB
-		if gb <= 0 {
+		est := cfg.Models[id].EstVramGB
+		if est <= 0 {
 			continue // CPU-resident: holds no VRAM to reclaim
 		}
+		gb := g.chargeGB(id, st, est)
 		total += gb
 		if st != process.StateReady {
 			continue // starting/stopping: not ours to interrupt
@@ -373,6 +392,24 @@ func (g *vramGuard) sheddable(ceilingGB float64) ([]string, float64) {
 		victims = append(victims, c.id)
 	}
 	return victims, total
+}
+
+// chargeGB is what one resident model counts for against the shed ceiling. A
+// ready model is charged its measured usage: that is the VRAM unloading it would
+// actually hand back. A model still STARTING is mid-allocation, so its reading
+// undercounts what it is about to claim; it is charged the larger of the two.
+// With no measurement at all (an untrusted or not-yet-taken reading) the
+// estimate is the only number there is.
+func (g *vramGuard) chargeGB(id string, st process.ProcessState, estGB float64) float64 {
+	mb, ok := g.measuredMB[id]
+	if !ok {
+		return estGB
+	}
+	gb := float64(mb) / 1024.0
+	if st == process.StateStarting && estGB > gb {
+		return estGB
+	}
+	return gb
 }
 
 // vramGuardShedSlackGB is how far the resident set may exceed the shed ceiling
