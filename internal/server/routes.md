@@ -49,6 +49,10 @@ Auth-gated but **not** model-dispatched (`discoveryChain`):
   remote LAN clients can't read the admin-gated `/api/apikeys` list, and without a key their
   direct `/v1` calls (titles, compaction, images, speech) would 401. Local callers read it
   without a login cookie, like the rest of the admin surface.
+- `GET /api/vram-total` (pgChain) — `{total_mb}`, the pooled card size and nothing else, read
+  once by the playground Video tab. `/api/performance` stays admin-only (live usage, the
+  desktop's other VRAM holders); the playground polling it logged a denied-request WARN every
+  2s from any remote browser.
 - `GET /api/catalog` — the whole local catalog as JSON (the `/api/events` `modelStatus` payload,
   pullable). Unlike `/v1/models` it **keeps unlisted variants and is NOT filtered by an API key's
   model scope**, which is why `quartermaster_inspect` reads it.

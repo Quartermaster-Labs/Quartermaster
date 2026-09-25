@@ -24,7 +24,7 @@
   import { fetchSdLoras } from "../../lib/sdApi";
   import type { SdApiLora, SdApiLoraRef } from "../../lib/types";
   import { playgroundStores } from "../../stores/playgroundActivity";
-  import { vramTotals } from "../../stores/perf";
+  import { cardTotalMb } from "../../stores/perf";
   import Select from "./Select.svelte";
   import Composer from "./Composer.svelte";
   import { autogrow } from "../../lib/autogrow";
@@ -468,11 +468,10 @@
     }
   }
 
-  // The card's real size, for the feasibility warning. The playground app never
-  // polls /api/performance (admin-only; App.svelte), so here this is normally the
-  // 24GB fallback, which can only change the COLOUR of a row, never whether it
-  // can be picked.
-  let vramGB = $derived(($vramTotals?.totalMb ?? 0) / 1024 || 24);
+  // The card's real size, for the feasibility warning, read once per page load
+  // (cardTotalMb). Falls back to 24GB until it answers, which can only change the
+  // COLOUR of a row, never whether it can be picked.
+  let vramGB = $derived($cardTotalMb / 1024 || 24);
 
   let aspectOptions = $derived(ASPECTS.map((a) => ({ value: a.value, label: a.label })));
   // Every tier is listed; the ones this install cannot reach are disabled rather
