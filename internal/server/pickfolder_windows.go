@@ -10,6 +10,9 @@ import (
 	"time"
 )
 
+// nativePickerPresent: Windows always has the WinForms dialogs.
+func nativePickerPresent() bool { return true }
+
 // pickerPrelude sets up a foreground native dialog. QM runs as a windowsgui/tray
 // process with no console and is NOT the foreground app, so Windows' foreground
 // lock keeps a plain ShowDialog window BEHIND the browser (it opens but you can't
