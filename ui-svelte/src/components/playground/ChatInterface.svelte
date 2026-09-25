@@ -818,6 +818,10 @@
     // (yt-dlp is resolved server-side) and only fires when the user actually
     // brings up a video. A missing yt-dlp comes back as a clear tool error.
     const ytEnabled = !isRewrite;
+    // Finding videos and reading comments are web lookups the user did not bring
+    // up, so they ride the web-search toggle instead of costing prefix in every
+    // chat. The transcript tool above stays: it fires on a link the user pasted.
+    const ytSearchEnabled = ytEnabled && webEnabled;
     // Reading a page pairs with searching: search finds the URL, fetch_page reads
     // the real thing off it. On its own (no search) the model has no way to find
     // a URL, so it rides the same toggle. Shopping mode needs it outright — a
@@ -847,7 +851,8 @@
       ...(memoryEnabled ? MEMORY_TOOLS : []),
       ...(wikiEnabled ? [WIKI_TOOL] : []),
       ...(qmEnabled ? [QM_INSPECT_TOOL, QM_CONFIGURE_TOOL] : []),
-      ...(ytEnabled ? [YOUTUBE_TOOL, YOUTUBE_SEARCH_TOOL, YOUTUBE_COMMENTS_TOOL] : []),
+      ...(ytEnabled ? [YOUTUBE_TOOL] : []),
+      ...(ytSearchEnabled ? [YOUTUBE_SEARCH_TOOL, YOUTUBE_COMMENTS_TOOL] : []),
     ];
 
     // Thinking budget: soft cumulative-thinking cap so models can't loop forever

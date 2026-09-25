@@ -88,7 +88,7 @@ export const FETCH_FEED_TOOL: ToolDef = {
   function: {
     name: "fetch_feed",
     description:
-      "Read one RSS or Atom feed and return its newest entries in order. Use it for \"what's new on X\" when the site publishes a feed - a search engine ranks by relevance and will hand you last year's article, while a feed is ordered by time. Returns headlines and blurbs only: call fetch_page on an entry's link before summarising what it says.",
+      "Read one RSS or Atom feed and return its newest entries in order. Use it for \"what's new on X\" when the site publishes a feed - a search engine ranks by relevance and will hand you last year's article, while a feed is ordered by time. Returns headlines and blurbs only, not the articles: never present a blurb as what the article says.",
     parameters: {
       type: "object",
       properties: {

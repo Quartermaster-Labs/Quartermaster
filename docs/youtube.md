@@ -6,7 +6,7 @@ Paste a link to a video, talk, stream or podcast episode in Chat and the model c
 
 **Not just YouTube.** yt-dlp extracts from around 1800 sites, so Vimeo, TED, Dailymotion, Twitch VODs, Rumble, PeerTube, SoundCloud, conference players and most podcast episode pages work the same way - anywhere subtitles are published. Pages with no captions at all come back saying so, and the model should tell you that rather than guess.
 
-**Finding videos.** The model can also *search* YouTube (`youtube_search`) and list a channel's or playlist's videos, so "find me a recent video about X and tell me what it says" works without you pasting a link first.
+**Finding videos.** With **Web Search** on, the model can also *search* YouTube (`youtube_search`) and list a channel's or playlist's videos, so "find me a recent video about X and tell me what it says" works without you pasting a link first.
 
 **Comments.** With `youtube_comments` the model can read a video's top comments - useful for "what do people say about this?", spotting corrections the creator never made, or gauging whether a tutorial actually worked for anyone. Comments are presented to the model as *audience opinions*, explicitly not as the video's own claims, so it shouldn't quote a comment as fact.
 
