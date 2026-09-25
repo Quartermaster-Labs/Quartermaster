@@ -361,7 +361,8 @@ corpse. Tested in `lib/sessionSync.test.ts`, including that race.
   `<input type="checkbox">`; tick boxes are only for multi-select lists (pick N of M).
 - **Buttons are `.btn` plus modifiers (`index.css`), never hand-rolled hover/case utilities.**
   `.btn--sm` is always uppercase (confirm dialogs included). `.btn--icon` for glyph-only buttons.
-  Colour: `--primary` (filled), `--primary-outline`, `--ghost`. Destructive has three weights:
+  Colour: `--primary` (filled), `--primary-outline`, `--ghost`, `--quiet` (the `.seg` look:
+  muted label, neutral hover; for per-row actions in a long list). Destructive has three weights:
   `--danger` (filled red) only for an irreversible confirm, `--danger-outline` for a globally
   reachable destructive action (Unload all), `--danger-hover` for removing one row item. Variant
   hovers are written `:hover:not(:disabled)` so they tie `.btn`'s own hover on specificity and win
