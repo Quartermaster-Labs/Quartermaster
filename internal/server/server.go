@@ -1100,6 +1100,10 @@ func (s *Server) routes() {
 	// Generic native open-file dialog, kind-whitelisted (?kind=template) — the
 	// chat-template-file field binds the returned path.
 	mux.Handle("POST /api/pick-file", adminChain.ThenFunc(s.handleAPIPickFile))
+	// Browser-rendered picker for when the two above 501 (headless server, or
+	// a dashboard open from another machine). Read-only, confined to the models
+	// and backends folders.
+	mux.Handle("GET /api/pick/browse", adminChain.ThenFunc(s.handleAPIPickBrowse))
 
 	// Fleet-wide default variants (e.g. game) — surfaced per-model in the editor
 	// but saved globally to settings.defaultVariants.

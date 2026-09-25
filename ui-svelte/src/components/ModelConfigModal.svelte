@@ -271,11 +271,11 @@
   // Native open-file dialog for a path field (the dialog opens on the server
   // host — the operator's own machine for a local install). The kind is a
   // server-side whitelist key (pickfile_spec.go), never a filter built here.
-  // Returns null on cancel or on a platform with no picker, leaving the field
-  // alone.
-  async function browseFile(kind: string, apply: (path: string) => void): Promise<void> {
+  // Falls back to the web picker when no native dialog can reach this browser.
+  // Returns null on cancel, leaving the field alone.
+  async function browseFile(kind: string, apply: (path: string) => void, start = ""): Promise<void> {
     try {
-      const picked = await pickFileOfKind(kind);
+      const picked = await pickFileOfKind(kind, start);
       if (picked) apply(picked);
     } catch {
       // picker failed — the field stays typable, no need to nag
@@ -2772,7 +2772,7 @@
                 type="button" use:tip={"Browse for a projector .gguf"} aria-label="Browse for a vision projector file"
                 disabled={knobOwned("mmprojFile")}
                 class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
-                onclick={() => browseFile("mmproj", (p) => (adv.mmprojFile = p))}
+                onclick={() => browseFile("mmproj", (p) => (adv.mmprojFile = p), adv.mmprojFile)}
               ><FolderOpen size={14} /></button>
             </div>
           </label>
@@ -3149,7 +3149,7 @@
                 type="button" use:tip={"Browse for a .jinja template"} aria-label="Browse for a chat template file"
                 disabled={knobOwned("chatTemplateFile")}
                 class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
-                onclick={() => browseFile("template", (p) => (adv.chatTemplateFile = p))}
+                onclick={() => browseFile("template", (p) => (adv.chatTemplateFile = p), adv.chatTemplateFile)}
               ><FolderOpen size={14} /></button>
             </label>
             <label class="flex items-center gap-2">
@@ -3263,7 +3263,7 @@
                   <button
                     type="button" use:tip={"Browse for a projector .gguf"} aria-label="Browse for a vision projector file"
                     class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
-                    onclick={() => browseFile("mmproj", (p) => (sv.mmprojFile = p))}
+                    onclick={() => browseFile("mmproj", (p) => (sv.mmprojFile = p), sv.mmprojFile)}
                   ><FolderOpen size={14} /></button>
                   <button
                     type="button"
@@ -3545,7 +3545,7 @@
                 <button
                   type="button" use:tip={"Browse for a .jinja template"} aria-label="Browse for a chat template file"
                   class="shrink-0 p-1.5 rounded border border-transparent text-txtsecondary hover:text-primary hover:border-primary transition-colors"
-                  onclick={() => browseFile("template", (p) => (sv.chatTemplateFile = p))}
+                  onclick={() => browseFile("template", (p) => (sv.chatTemplateFile = p), sv.chatTemplateFile)}
                 ><FolderOpen size={14} /></button>
                 <button
                   type="button"

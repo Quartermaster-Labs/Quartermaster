@@ -18,7 +18,8 @@ here 501s when `s.autogen == nil`** — they are the `-generate` surface. Route 
 | `backendsapi.go` | Managed backend installs — the `/api/backends/*` surface over `internal/backends` (catalog, upstream releases, install job start + poll, activate/rollback, uninstall) plus the registry write-back `registerManagedBackend`. |
 | `backendsources.go` | Tracked custom backend repos — `/api/backends/sources*` (list, one release's assets, save, delete) plus `/api/backends/{component}/resolve`. Converts `autogen.BackendSource` rows into `backends.Component`s via the `Manager.Sources` hook, and **derives every asset pattern server-side** from the asset the user picked. |
 | `pickfolder_{windows,linux,other}.go` | Native folder-picker dialog (`pickFolder()` — WinForms / zenity / unsupported) backing `POST /api/pick-folder` and `POST /api/settings/root/pick`. |
-| `pickfile_spec.go` | `pickSpecs`, the **server-side whitelist** of open-file dialog kinds (`backend`, `template`) with their Windows/zenity filter strings. |
+| `pickfile_spec.go` | `pickSpecs`, the **server-side whitelist** of open-file dialog kinds (`backend`, `template`, `mmproj`) with their Windows/zenity filter strings and the `Exts` the web picker filters by. |
+| `pickbrowse.go` | The web picker: `GET /api/pick/browse` lists one folder under the picker roots (models folder, per-category scan folders, backends install root), plus `runNativePick` / `runFolderPick`, the shared front half of every native pick handler. |
 
 ## Gotchas
 
@@ -60,6 +61,17 @@ here 501s when `s.autogen == nil`** — they are the `-generate` surface. Route 
 - **A spec must never be built from request data.** The platform `pickFile` implementations
   interpolate `pickSpecs` entries into a shell/PowerShell command line, so `/api/pick-file` rejects
   any kind not in that map.
+- **A native dialog is only opened for a loopback browser on a box with a desktop.** Otherwise it
+  pops on a screen nobody is looking at (dashboard open from another machine) or fails outright
+  (headless, no zenity; zenity with no display exits like a cancel). `runNativePick` answers 501
+  up front instead, and the UI (`stores/api.ts`) opens the web picker on any 501. The two
+  persisting folder routes (`root/pick`, `loradir/pick`) then take the chosen folder as `{path}`,
+  validated absolute and on disk.
+- **The web picker never browses outside its roots.** The dashboard has no login, so a whole-disk
+  listing would be one for whoever reaches the admin listener. `GET /api/pick/browse` resolves
+  through `revealTarget` (real-path containment, so `..` and symlinks cannot escape) and filters
+  files by the kind's `Exts`, never by a client-supplied pattern. A path outside the roots stays a
+  typed one: the dialog has a path field for that.
 - **Managed and manual backends share ONE registry.** `registerManagedBackend` upserts a normal
   `autogen.BackendEntry` row (`id: managed-<component>`) flagged `Managed` with
   `Component`/`Version`/`Variant`, so per-model pinning, the ★ class default and `deriveBackendExes`

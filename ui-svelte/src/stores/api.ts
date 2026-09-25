@@ -15,6 +15,7 @@ import type {
   PromptEnhancerInfo,
 } from "../lib/types";
 import { connectionState } from "./theme";
+import { openWebPicker, type WebPickRequest } from "../lib/webPicker";
 
 const LOG_LENGTH_LIMIT = 1024 * 100; /* 100KB of log data */
 
@@ -1368,102 +1369,119 @@ export async function putSlotCache(p: SlotCacheSettings): Promise<void> {
   }
 }
 
-// Opens the host's native folder dialog and sets the scan folder for one
-// category. With clear=true it skips the dialog and drops the category back to
-// the shared models folder instead. Returns the stored path ("" after a
-// clear), or null when the user cancelled (204).
-export async function pickModelsFolder(
-  category: string,
-  clear = false,
-): Promise<string | null> {
-  const response = await fetch("/api/settings/root/pick", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ category, clear }),
-  });
-  if (response.status === 204) return null;
+// Every Browse button asks the server for a NATIVE dialog first. 501 means none
+// can reach this browser (headless server, or the dashboard open from another
+// machine), and the web picker (lib/webPicker.ts) takes over. 204 is a cancel.
+type PickOutcome = { path: string | null } | { web: true };
+
+async function readPick(
+  response: Response,
+  what: string,
+  allowWeb: boolean,
+): Promise<PickOutcome> {
+  if (response.status === 501 && allowWeb) return { web: true };
+  if (response.status === 204) return { path: null };
   if (!response.ok) {
-    throw new Error(
-      `Failed to set models folder: ${response.status} ${await response.text()}`,
-    );
+    throw new Error(`${what}: ${response.status} ${await response.text()}`);
   }
   const body = (await response.json()) as { path: string };
-  return body.path;
+  return { path: body.path };
 }
 
-// Opens the host's native folder dialog and returns the chosen path (or null
+// A persisting folder pick: the server opens its dialog, or, on 501, is sent
+// the path the web picker chose instead. Clearing never opens either.
+async function pickAndStoreFolder(
+  url: string,
+  category: string,
+  clear: boolean,
+  what: string,
+  web: WebPickRequest,
+): Promise<string | null> {
+  const post = (path?: string) =>
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ category, clear, path }),
+    });
+  const out = await readPick(await post(), what, !clear);
+  if (!("web" in out)) return out.path;
+  const chosen = await openWebPicker(web);
+  if (!chosen) return null;
+  const stored = await readPick(await post(chosen), what, false);
+  return "web" in stored ? null : stored.path;
+}
+
+// Sets the scan folder for one category from a folder dialog. With clear=true
+// it skips the dialog and drops the category back to the shared models folder
+// instead. Returns the stored path ("" after a clear), or null when the user
+// cancelled.
+export function pickModelsFolder(
+  category: string,
+  clear = false,
+  start = "",
+): Promise<string | null> {
+  return pickAndStoreFolder(
+    "/api/settings/root/pick",
+    category,
+    clear,
+    "Failed to set models folder",
+    { kind: "folder", title: `Scan folder (${category})`, start },
+  );
+}
+
 // pickLoraFolder sets the per-category LoRA folder (settings.loraDirs[category])
-// from the host's native folder dialog, or clears it back to the fleet-wide
-// default with clear=true. Returns the stored path ("" after a clear), or null
-// when the user cancelled the dialog. Persists and regenerates, like
-// pickModelsFolder.
-export async function pickLoraFolder(
+// from a folder dialog, or clears it back to the fleet-wide default with
+// clear=true. Returns the stored path ("" after a clear), or null when the user
+// cancelled. Persists and regenerates, like pickModelsFolder.
+export function pickLoraFolder(
   category: string,
   clear = false,
+  start = "",
 ): Promise<string | null> {
-  const response = await fetch("/api/settings/loradir/pick", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ category, clear }),
-  });
-  if (response.status === 204) return null;
-  if (!response.ok) {
-    throw new Error(
-      `Failed to set LoRA folder: ${response.status} ${await response.text()}`,
-    );
-  }
-  const body = (await response.json()) as { path: string };
-  return body.path;
+  return pickAndStoreFolder(
+    "/api/settings/loradir/pick",
+    category,
+    clear,
+    "Failed to set LoRA folder",
+    { kind: "folder", title: `LoRA folder (${category})`, start },
+  );
 }
 
-// when cancelled). Unlike pickModelsFolder it does not persist — the caller
-// binds the path into a form field.
-export async function pickFolder(): Promise<string | null> {
+// Opens a folder dialog and returns the chosen path (or null when cancelled).
+// Unlike pickModelsFolder it does not persist: the caller binds the path into
+// a form field.
+export async function pickFolder(start = ""): Promise<string | null> {
   const response = await fetch("/api/pick-folder", { method: "POST" });
-  if (response.status === 204) return null;
-  if (!response.ok) {
-    throw new Error(
-      `Folder picker failed: ${response.status} ${await response.text()}`,
-    );
-  }
-  const body = (await response.json()) as { path: string };
-  return body.path;
+  const out = await readPick(response, "Folder picker failed", true);
+  if (!("web" in out)) return out.path;
+  return openWebPicker({ kind: "folder", title: "Select folder", start });
 }
 
-// Opens the host's native open-file dialog to pick a backend executable.
-// Returns the path, or null when cancelled (204) or unsupported (501) — the
-// caller then leaves the field as-is for manual typing.
-export async function pickBackend(): Promise<string | null> {
+// Opens a file dialog to pick a backend executable. Returns the path, or null
+// when cancelled; the caller then leaves the field as-is for manual typing.
+export async function pickBackend(start = ""): Promise<string | null> {
   const response = await fetch("/api/settings/backend/pick", {
     method: "POST",
   });
-  if (response.status === 204 || response.status === 501) return null;
-  if (!response.ok) {
-    throw new Error(
-      `File picker failed: ${response.status} ${await response.text()}`,
-    );
-  }
-  const body = (await response.json()) as { path: string };
-  return body.path;
+  const out = await readPick(response, "File picker failed", true);
+  if (!("web" in out)) return out.path;
+  return openWebPicker({ kind: "backend", title: "Select backend executable", start });
 }
 
-// Opens the host's native open-file dialog for a whitelisted kind (e.g.
-// "template" for a .jinja chat template). Returns the path, or null when
-// cancelled (204) or unsupported (501) — the caller leaves the field for
-// manual typing.
-export async function pickFileOfKind(kind: string): Promise<string | null> {
+// Opens a file dialog for a whitelisted kind (e.g. "template" for a .jinja
+// chat template). Returns the path, or null when cancelled; the caller leaves
+// the field for manual typing.
+export async function pickFileOfKind(
+  kind: string,
+  start = "",
+): Promise<string | null> {
   const response = await fetch(
     `/api/pick-file?kind=${encodeURIComponent(kind)}`,
     { method: "POST" },
   );
-  if (response.status === 204 || response.status === 501) return null;
-  if (!response.ok) {
-    throw new Error(
-      `File picker failed: ${response.status} ${await response.text()}`,
-    );
-  }
-  const body = (await response.json()) as { path: string };
-  return body.path;
+  const out = await readPick(response, "File picker failed", true);
+  if (!("web" in out)) return out.path;
+  return openWebPicker({ kind, title: "Select file", start });
 }
 
 // ---- Managed backend installs (Settings → Backends) ----

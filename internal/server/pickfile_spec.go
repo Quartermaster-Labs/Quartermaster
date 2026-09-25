@@ -10,6 +10,10 @@ type filePickSpec struct {
 	WinFilter string
 	// ZenityPatterns are zenity --file-filter values ("Label | *.ext").
 	ZenityPatterns []string
+	// Exts is what the browser-rendered picker (pickbrowse.go) lists by default:
+	// lower-case extensions with the dot. Empty lists every file, which is what
+	// an executable needs off Windows, where binaries carry no extension.
+	Exts []string
 }
 
 // pickSpecs maps the UI's file-picker kinds to their dialog config. The
@@ -24,6 +28,7 @@ var pickSpecs = map[string]filePickSpec{
 		Title:          "Select chat template file",
 		WinFilter:      "Chat templates (*.jinja;*.j2;*.jinja2)|*.jinja;*.j2;*.jinja2|All files (*.*)|*.*",
 		ZenityPatterns: []string{"Chat templates | *.jinja *.j2 *.jinja2", "All files | *"},
+		Exts:           []string{".jinja", ".j2", ".jinja2"},
 	},
 	"weights": {
 		Title:          "Select model weights",
@@ -34,5 +39,6 @@ var pickSpecs = map[string]filePickSpec{
 		Title:          "Select vision projector (mmproj gguf)",
 		WinFilter:      "GGUF models (*.gguf)|*.gguf|All files (*.*)|*.*",
 		ZenityPatterns: []string{"GGUF models | *.gguf", "All files | *"},
+		Exts:           []string{".gguf"},
 	},
 }
