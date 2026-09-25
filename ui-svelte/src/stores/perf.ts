@@ -1,4 +1,4 @@
-import { derived, writable } from "svelte/store";
+import { derived, readable, writable } from "svelte/store";
 import type { GpuStat, PooledVram, SysStat } from "../lib/types";
 import { fetchPerformance } from "./api";
 
@@ -7,6 +7,20 @@ import { fetchPerformance } from "./api";
 // which screen is open.
 export const latestGpu = writable<GpuStat | null>(null);
 export const latestSys = writable<SysStat | null>(null);
+
+// The card (pool) size in MiB, read ONCE per page load from /api/vram-total on
+// first subscribe; 0 until it answers or when there is no GPU telemetry. For the
+// playground, which never runs startPerfPolling: /api/performance is admin-only,
+// and a size does not change, so polling for it only bought a denied-request
+// WARN every 2s from any remote browser.
+export const cardTotalMb = readable(0, (set) => {
+  fetch("/api/vram-total")
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => {
+      if (j && typeof j.total_mb === "number") set(j.total_mb);
+    })
+    .catch(() => {});
+});
 
 // VRAM pooled across every inference-eligible adapter, straight from the server.
 export const pooledVram = writable<PooledVram | null>(null);

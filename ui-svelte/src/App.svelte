@@ -102,7 +102,11 @@
     const cleanupSystemTheme = initSystemThemeListener();
     enableAPIEvents(true);
     refreshInferenceKey(); // auto-attach a key to Playground inference when keys are on
-    const cleanupPerf = startPerfPolling();
+    // Perf polling starts once /api/mode says "dashboard" (see below), never
+    // before: /api/performance is admin-only, so a playground opened from
+    // another machine got a 403 and a WARN log line every 2 seconds.
+    let cleanupPerf = () => {};
+    let disposed = false;
 
     // Decide which app this port serves.
     (async () => {
@@ -120,12 +124,14 @@
       } catch {
         mode = "dashboard";
       }
+      if (mode === "dashboard" && !disposed) cleanupPerf = startPerfPolling();
     })();
 
     return () => {
       cleanupScreenWidth();
       cleanupSystemTheme();
       enableAPIEvents(false);
+      disposed = true;
       cleanupPerf();
     };
   });
