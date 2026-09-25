@@ -352,7 +352,7 @@
            rule is worked out from it. -->
       <button
         type="button"
-        class="btn btn--sm ml-auto shrink-0 inline-flex items-center gap-1 uppercase tracking-wide hover:border-primary hover:text-primary"
+        class="btn btn--sm ml-auto shrink-0 inline-flex items-center gap-1"
         use:tip={"Install builds from a GitHub repo that isn't in the list"}
         onclick={() => {
           editing = null;
@@ -534,7 +534,7 @@
 
                 <button
                   type="button"
-                  class="btn btn--sm inline-flex items-center gap-1 uppercase tracking-wide border-primary text-primary hover:bg-primary/10 disabled:opacity-50"
+                  class="btn btn--sm btn--primary-outline inline-flex items-center gap-1"
                   disabled={!!job}
                   use:tip={"Download the selected flavour and version, then switch to it"}
                   onclick={() => install(comp)}
@@ -542,7 +542,7 @@
 
                 <button
                   type="button"
-                  class="btn btn--sm inline-flex items-center gap-1 uppercase tracking-wide hover:border-primary hover:text-primary"
+                  class="btn btn--sm inline-flex items-center gap-1"
                   use:tip={"Re-check upstream for new releases"}
                   disabled={!!loadingRel[comp.id]}
                   onclick={() => loadReleases(comp, true)}
@@ -619,7 +619,7 @@
                   </span>
                   <button
                     type="button"
-                    class="btn btn--sm ml-auto inline-flex items-center gap-1 uppercase tracking-wide hover:border-primary hover:text-primary"
+                    class="btn btn--sm ml-auto inline-flex items-center gap-1"
                     use:tip={"Make this the ★ auto-pick for its group. Models pinned to another backend keep their pin."}
                     disabled={!!busy[comp.id]}
                     onclick={() => makeDefault(comp)}
@@ -655,7 +655,7 @@
                       {:else if comp.kind !== ""}
                         <button
                           type="button"
-                          class="ml-auto btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary"
+                          class="ml-auto btn btn--sm"
                           use:tip={"Use this build"}
                           disabled={!!busy[comp.id]}
                           onclick={() => activate(comp, b.version, b.variant)}

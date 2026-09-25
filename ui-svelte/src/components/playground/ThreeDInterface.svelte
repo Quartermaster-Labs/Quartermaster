@@ -346,7 +346,7 @@
               {/if}
               <div class="relative group rounded-2xl rounded-bl-sm px-3 py-2 text-[0.8125rem] w-fit max-w-full sm:max-w-[60%]">
                 {#if t.error}
-                  <div class="text-red-500">{t.error}</div>
+                  <div class="text-error">{t.error}</div>
                 {:else if t.meshes.length}
                   <div class="w-64 sm:w-72">
                     <GlbViewer src={t.meshes[0]} />
@@ -382,7 +382,7 @@
                     {/if}
                   </div>
                 {:else if genId !== $activeThreeDChatId || ti !== turns.length - 1}
-                  <div class="text-red-500">No mesh returned.</div>
+                  <div class="text-error">No mesh returned.</div>
                 {:else}
                   <!-- In-flight. No progress field exists on this route, so the
                        readout is the elapsed counter against a rough estimate
@@ -506,7 +506,7 @@
 
       <div class="shrink-0 relative w-full max-w-2xl mx-auto">
         {#if pickError}
-          <p class="text-xs text-red-500 mb-2 px-2">{pickError}</p>
+          <p class="text-xs text-error mb-2 px-2">{pickError}</p>
         {/if}
         <input type="file" accept="image/*" class="hidden" bind:this={fileInput} onchange={pickImage} />
         <Composer

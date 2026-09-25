@@ -108,7 +108,7 @@
       <div class="flex flex-wrap items-center gap-2 font-mono text-xs">
         <button
           type="button"
-          class="btn btn--sm inline-flex items-center gap-1 uppercase tracking-wide hover:border-primary hover:text-primary disabled:opacity-50"
+          class="btn btn--sm inline-flex items-center gap-1"
           disabled={$updateChecking || !checks}
           use:tip={checks
             ? "Ask GitHub now instead of waiting for the six-hourly check"
@@ -122,7 +122,7 @@
         {#if available && !blocked}
           <button
             type="button"
-            class="btn btn--sm inline-flex items-center gap-1 uppercase tracking-wide border-primary text-primary hover:bg-primary/10 disabled:opacity-50"
+            class="btn btn--sm btn--primary-outline inline-flex items-center gap-1"
             disabled={$updateBusy}
             use:tip={manualRestart
               ? "Install it now; this install is supervised, so it switches over on the next service restart"

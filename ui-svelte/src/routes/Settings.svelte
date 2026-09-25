@@ -821,7 +821,7 @@
           {/if}
         </div>
         <button
-          class="btn btn--sm uppercase tracking-wide"
+          class="btn btn--sm"
           onclick={resetSettingsToDefault}
           disabled={savingSettings || !settings?.overridden}
           use:tip={"Revert to the generate file's values"}
@@ -1175,14 +1175,14 @@
           </span>
           <span class="flex items-center gap-2">
             <button
-              class="btn btn--sm uppercase tracking-wide"
+              class="btn btn--sm"
               onclick={resetAdvancedToDefault}
               disabled={savingAdv || !settings?.advancedOverridden}
               use:tip={"Restore every knob in this section to its computed default. Leaves the memory and guard settings alone."}
             >
               Restore defaults
             </button>
-            <button class="btn btn--sm btn--primary uppercase tracking-wide" onclick={saveAdvanced} disabled={savingAdv}>
+            <button class="btn btn--sm btn--primary" onclick={saveAdvanced} disabled={savingAdv}>
               Apply
             </button>
           </span>
@@ -1223,7 +1223,7 @@
               <div class="flex items-center justify-between gap-2">
                 <span class="text-warning">⚠ Owned by another Quartermaster install</span>
                 <button
-                  class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary"
+                  class="btn btn--sm"
                   disabled={autostartBusy}
                   onclick={() => toggleAutostart(true, true)}
                 >
@@ -1392,7 +1392,7 @@
           </label>
           {#if proc?.settings.hfTokenSet}
             <button
-              class="btn btn--sm uppercase tracking-wide hover:border-error hover:text-error"
+              class="btn btn--sm btn--danger-hover"
               disabled={savingProc}
               onclick={() => saveProc({ clearToken: true })}
             >
@@ -1415,7 +1415,7 @@
 
     <div class="mt-4 flex items-center gap-3">
       <button
-        class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary"
+        class="btn btn--sm"
         disabled={savingProc || !procDirty}
         onclick={() => saveProc()}
       >
@@ -1495,7 +1495,7 @@
             />
             <button
               type="button"
-              class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary disabled:opacity-50"
+              class="btn btn--sm"
               onclick={browseSlotDir}
               disabled={!slotEnable}
             >
@@ -1590,7 +1590,7 @@
               <span class="text-[0.7rem] text-txtsecondary truncate">{g.cls.blurb}</span>
               <button
                 type="button"
-                class="btn btn--sm ml-auto shrink-0 inline-flex items-center gap-1 uppercase tracking-wide hover:border-primary hover:text-primary"
+                class="btn btn--sm ml-auto shrink-0 inline-flex items-center gap-1"
                 onclick={() => addBackend(g.cls)}
               ><Plus size={12} /> Add</button>
             </header>
@@ -1681,7 +1681,7 @@
           {@render hint("A prompt enhancer is a chat model that rewrites an image prompt into a more precise one before rendering. Configure it once here, then pick it per image model in that model's config editor. The playground Images tab shows an Enhance button for models that have one.")}
           <button
             type="button"
-            class="btn btn--sm ml-auto shrink-0 inline-flex items-center gap-1 uppercase tracking-wide hover:border-primary hover:text-primary"
+            class="btn btn--sm ml-auto shrink-0 inline-flex items-center gap-1"
             onclick={addEnhancer}
           ><Plus size={12} /> Add</button>
         </div>

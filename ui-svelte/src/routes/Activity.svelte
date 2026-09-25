@@ -349,7 +349,7 @@
                       <button
                         onclick={() => viewCapture(metric.id)}
                         disabled={loadingCaptureId === metric.id}
-                        class="btn btn--sm uppercase tracking-wide hover:border-primary hover:text-primary"
+                        class="btn btn--sm"
                       >
                         {loadingCaptureId === metric.id ? "..." : "View"}
                       </button>

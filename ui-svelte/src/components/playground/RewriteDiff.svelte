@@ -22,7 +22,7 @@
     <div class="mb-1.5 text-xs font-medium text-txtsecondary">Original</div>
     <div class="whitespace-pre-wrap break-words leading-relaxed">
       {#each leftOps as op, i (i)}
-        {#if op.type === "delete"}<span class="bg-red-500/20 text-red-700 dark:text-red-300 rounded-[2px]">{op.value}</span>{:else}<span>{op.value}</span>{/if}
+        {#if op.type === "delete"}<span class="bg-error/20 text-error rounded-[2px]">{op.value}</span>{:else}<span>{op.value}</span>{/if}
       {/each}
     </div>
   </div>
