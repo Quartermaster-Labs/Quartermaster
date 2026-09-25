@@ -468,9 +468,10 @@
     }
   }
 
-  // The card's real size, for the feasibility warning. Falls back to 24GB when
-  // the perf stream has not reported yet, which can only change the COLOUR of a
-  // row, never whether it can be picked.
+  // The card's real size, for the feasibility warning. The playground app never
+  // polls /api/performance (admin-only; App.svelte), so here this is normally the
+  // 24GB fallback, which can only change the COLOUR of a row, never whether it
+  // can be picked.
   let vramGB = $derived(($vramTotals?.totalMb ?? 0) / 1024 || 24);
 
   let aspectOptions = $derived(ASPECTS.map((a) => ({ value: a.value, label: a.label })));
