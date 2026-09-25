@@ -219,9 +219,14 @@ Four pieces, all surfaced through `/api/performance`:
   reserve on both sides made the halves disagree about one model — a 21.8 GB resident under a
   22.8 GB budget went over the shed ceiling the moment a browser tab took 0.2 GB, and the spawn
   guard (which sizes against live *free* VRAM) reloaded it unchanged on the next request: an
-  endless unload/reload cycle that reads like a too-short `ttl`. Two further brakes: shedding needs
-  the overshoot to clear `vramGuardShedSlackGB` (estVramGB is an estimate, not a measurement), and
-  after a shed the guard sits out `cooldown()` (2× grace, ≥1 min) before shedding again.
+  endless unload/reload cycle that reads like a too-short `ttl`. The resident side is **measured**,
+  not estimated: `chargeGB` bills a ready model the VRAM its pid actually holds (the same
+  per-process reading that splits off the foreign share, keyed by `RunningPIDs()`'s model→pid map),
+  a starting model the larger of that and `estVramGB` (it is still allocating), and falls back to
+  `estVramGB` only with no reading. Charging the estimate against a live ceiling shed a model
+  planned at 22.2 GB but holding 20.1 GB while 2.3 GB of the card sat free. Two further brakes:
+  shedding needs the overshoot to clear `vramGuardShedSlackGB`, and after a shed the guard sits out
+  `cooldown()` (2× grace, ≥1 min) before shedding again.
 
 ## Reasoning effort: advertised, then translated (fork)
 
