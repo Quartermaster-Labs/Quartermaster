@@ -43,6 +43,9 @@ type slotCache struct {
 	minTokens int64
 	maxBytes  int64
 	maxFiles  int
+	// maxIdle expires a snapshot not restored or saved for this long. mtime is
+	// the clock: save writes it and restore touches it (see restore).
+	maxIdle time.Duration
 
 	running func() map[string]string // model id -> resolved upstream base URL
 	// participates reports whether a model opted into slot persistence (its
@@ -206,10 +209,19 @@ func newSlotCache(cfg config.SlotCacheConfig, running func() map[string]string, 
 	if sc.maxFiles <= 0 {
 		sc.maxFiles = 20
 	}
+	idleDays := cfg.MaxIdleDays
+	if idleDays <= 0 {
+		idleDays = 7
+	}
+	sc.maxIdle = time.Duration(idleDays) * 24 * time.Hour
 	if err := os.MkdirAll(sc.dir, 0o755); err != nil {
 		sc.log.Warnf("slotcache: cannot create %s: %v - disabling", sc.dir, err)
 		sc.enabled = false
+		return sc
 	}
+	// Saves also expire idle files (enforceCaps), but a box that stops saving
+	// would keep a week-old snapshot forever; sweep once at startup too.
+	sc.expireIdle()
 	return sc
 }
 
@@ -424,6 +436,8 @@ func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble st
 				sc.enforceCaps(model, prev.key)
 				sc.record(kvEvent{Model: model, Slot: idx, Op: "save", Key: short(prev.key), Tokens: toks})
 			}
+		} else {
+			sc.recordSkip(model, idx, prev.key, toks, sc.belowMin())
 		}
 	}
 
@@ -638,12 +652,10 @@ func (sc *slotCache) ensurePreambleSeed(ctx context.Context, base, model string,
 			sc.record(kvEvent{Model: model, Slot: idx, Op: "error", Key: short(hash), Detail: "preamble-restore"})
 			return 0, false
 		}
+		// restore touched mtime, so prunePreambleFiles is LRU-by-use, not LRU-by-mint:
+		// a preamble minted once but restored often (pi's stable prompt) must not look
+		// "oldest" and get evicted when another environment mints on the same model.
 		seq := sc.record(kvEvent{Model: model, Slot: idx, Op: "preamble-hit", Key: short(hash)})
-		// Touch mtime so prunePreambleFiles is LRU-by-use, not LRU-by-mint: a preamble
-		// minted once but restored often (pi's stable prompt) must not look "oldest" and
-		// get evicted when another environment mints on the same model.
-		now := time.Now()
-		_ = os.Chtimes(filepath.Join(sc.dir, fileName(model, pkey)), now, now)
 		return seq, true
 	}
 	// Mint: a synthetic system+tools-only prefill leaves the preamble KV in the
@@ -730,7 +742,9 @@ var hookLockWait = 10 * time.Second
 //     back. Those are pure dead time.
 func worthSavingOn(reason process.StopReason) bool {
 	switch reason {
-	case process.StopTTL, process.StopEvict:
+	case process.StopTTL, process.StopEvict, process.StopShutdown:
+		// Shutdown too: the app restarting (an update, a rebuild) is the most
+		// routine way a loaded model dies, and every chat comes back after it.
 		return true
 	default:
 		return false
@@ -766,7 +780,7 @@ func (sc *slotCache) saveOnEvict(model string, reason process.StopReason) {
 	// the reuse would sit "pending" forever.
 	defer sc.dropAwait(model)
 	if !worthSavingOn(reason) {
-		sc.dropOccupants(model)
+		sc.dropOccupants(model, stopReasonText(reason))
 		return
 	}
 	base, running := sc.running()[model]
@@ -802,7 +816,9 @@ func (sc *slotCache) saveSlotOnEvict(ctx context.Context, base, model string, id
 	if occ == nil || !occDirty {
 		return // nothing ran since the last save (or nothing resident)
 	}
-	if toks >= sc.minTokens {
+	if toks < sc.minTokens {
+		sc.recordSkip(model, idx, occKey, toks, sc.belowMin())
+	} else {
 		if err := sc.save(ctx, base, model, idx, occKey, occPreamble, occ.bodyBytes); err != nil {
 			sc.log.Warnf("slotcache: evict-save %s/%s: %v", model, occKey, err)
 			sc.record(kvEvent{Model: model, Slot: idx, Op: "error", Key: short(occKey), Detail: "evict-save"})
@@ -819,14 +835,50 @@ func (sc *slotCache) saveSlotOnEvict(ctx context.Context, base, model string, id
 // dropOccupants forgets every slot this model owned, without saving them. Used
 // when a teardown is not worth a snapshot: the slots die with the process, and a
 // stale occupant would otherwise make the next load think a conversation is
-// still resident.
-func (sc *slotCache) dropOccupants(model string) {
+// still resident. A conversation that ran since its last save is lost here, so
+// it is logged with why.
+func (sc *slotCache) dropOccupants(model, why string) {
+	type lost struct {
+		idx int
+		key string
+	}
+	var dropped []lost
 	sc.stateMu.Lock()
-	defer sc.stateMu.Unlock()
-	for k := range sc.occupant {
-		if modelOf(k) == model {
-			delete(sc.occupant, k)
+	for k, occ := range sc.occupant {
+		if modelOf(k) != model {
+			continue
 		}
+		if occ != nil && occ.dirty {
+			dropped = append(dropped, lost{slotIndexOf(k), occ.key})
+		}
+		delete(sc.occupant, k)
+	}
+	sc.stateMu.Unlock()
+	for _, d := range dropped {
+		sc.recordSkip(model, d.idx, d.key, 0, why)
+	}
+}
+
+// recordSkip logs a conversation that ran since its last save but is not being
+// saved now, so its next turn after a reload is a full prefill. Without it a
+// skipped save is silent and the later miss has no visible cause.
+func (sc *slotCache) recordSkip(model string, idx int, key string, toks int64, why string) {
+	sc.record(kvEvent{Model: model, Slot: idx, Op: "save-skip", Key: short(key), Tokens: toks, Detail: why})
+}
+
+func (sc *slotCache) belowMin() string {
+	return fmt.Sprintf("under minSaveTokens %d", sc.minTokens)
+}
+
+// stopReasonText names a teardown that worthSavingOn refuses, for the log.
+func stopReasonText(r process.StopReason) string {
+	switch r {
+	case process.StopManual:
+		return "manual unload"
+	case process.StopConfig:
+		return "model removed by config reload"
+	default:
+		return fmt.Sprintf("stop reason %d", r)
 	}
 }
 
@@ -872,8 +924,16 @@ func (sc *slotCache) save(ctx context.Context, base, model string, idx int, key,
 	return nil
 }
 
+// restore also touches the file's mtime, which is what "last used" means to the
+// LRU caps and the idle expiry: a snapshot restored every day must not age out a
+// week after it was first written.
 func (sc *slotCache) restore(ctx context.Context, base, model string, idx int, key string) error {
-	return sc.slotAction(ctx, base, idx, "restore", fileName(model, key))
+	if err := sc.slotAction(ctx, base, idx, "restore", fileName(model, key)); err != nil {
+		return err
+	}
+	now := time.Now()
+	_ = os.Chtimes(filepath.Join(sc.dir, fileName(model, key)), now, now)
+	return nil
 }
 
 // slotAction calls llama-server's POST /slots/<idx>?action=save|restore. The

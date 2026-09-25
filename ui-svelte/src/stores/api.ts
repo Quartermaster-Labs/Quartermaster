@@ -1120,6 +1120,7 @@ export interface SlotCacheSettings {
   minSaveTokens: number;
   maxDiskGB: number;
   maxSessions: number;
+  maxIdleDays: number;
   // Fleet-wide switch for the preamble half (the shared system+tools seed minted
   // per agent). Sessions keep saving when this is off.
   preambleCaches: boolean;
