@@ -225,6 +225,9 @@ type SlotCacheConfig struct {
 	// oldest (LRU) snapshots are evicted on save. 0 => 10 GB / 20 sessions.
 	MaxDiskGB   float64 `yaml:"maxDiskGB"`
 	MaxSessions int     `yaml:"maxSessions"`
+	// MaxIdleDays deletes a snapshot nobody has restored or saved for this many
+	// days, whatever the byte and count caps say. 0 => 7.
+	MaxIdleDays int `yaml:"maxIdleDays"`
 	// RecurrentSeeds also runs the PARTIAL-prefix paths (preamble cache, Tier-1 seed)
 	// on hybrid/recurrent archs. Off by default: a rolling recurrent state can only be
 	// continued forward from its exact saved position, and a partial seed would need a

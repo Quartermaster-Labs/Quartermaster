@@ -93,6 +93,9 @@ func emitSlotCache(b *strings.Builder, sc SlotCacheSettings) {
 	if sc.MaxSessions > 0 {
 		fmt.Fprintf(b, "  maxSessions: %d\n", sc.MaxSessions)
 	}
+	if sc.MaxIdleDays > 0 {
+		fmt.Fprintf(b, "  maxIdleDays: %d\n", sc.MaxIdleDays)
+	}
 	// Only the off case is emitted: absent means on, matching config's *bool.
 	if sc.PreambleCaches != nil && !*sc.PreambleCaches {
 		b.WriteString("  preambleCaches: false\n")

@@ -1011,9 +1011,10 @@ func TestSlotCache_RestoreOnLoad_GivesUpOnHeldGate(t *testing.T) {
 
 // A hand-pressed Unload must not spend seconds writing a snapshot: the operator
 // is standing there waiting for the model to go away. The occupant must still be
-// forgotten, because the slot dies with the process either way.
+// forgotten, because the slot dies with the process either way, and the lost
+// conversation is reported as a save-skip so the next load's miss has a cause.
 func TestSlotCache_ManualUnloadSkipsSave(t *testing.T) {
-	for _, reason := range []process.StopReason{process.StopManual, process.StopShutdown, process.StopConfig} {
+	for _, reason := range []process.StopReason{process.StopManual, process.StopConfig} {
 		dir := t.TempDir()
 		srv := fakeBackend(t, 35000, dir) // well above the save threshold
 		sc := newEvictTestCache(dir, srv.URL)
@@ -1027,14 +1028,72 @@ func TestSlotCache_ManualUnloadSkipsSave(t *testing.T) {
 		if sc.occupant["m"] != nil {
 			t.Errorf("reason %d: occupant survived a teardown", reason)
 		}
+		if !hasOp(sc, "save-skip") {
+			t.Errorf("reason %d: dirty conversation dropped without a save-skip event", reason)
+		}
 	}
 }
 
-// The two teardowns worth waiting for: an idle TTL unload (nobody is watching)
-// and an eviction (the evicted model did not choose to go, and whoever was using
-// it will be back to a full cold prefill without this).
+// A conversation under minSaveTokens is not written, and says so.
+func TestSlotCache_EvictBelowMinRecordsSkip(t *testing.T) {
+	dir := t.TempDir()
+	srv := fakeBackend(t, 100, dir) // far below the threshold
+	sc := newEvictTestCache(dir, srv.URL)
+	sc.occupant["m"] = &occInfo{key: "abc", dirty: true}
+
+	sc.saveOnEvict("m", process.StopEvict)
+
+	if _, err := os.Stat(filepath.Join(dir, fileName("m", "abc"))); err == nil {
+		t.Error("wrote a snapshot below minSaveTokens")
+	}
+	if !hasOp(sc, "save-skip") {
+		t.Error("below-min eviction recorded no save-skip")
+	}
+}
+
+func hasOp(sc *slotCache, op string) bool {
+	sc.statsMu.Lock()
+	defer sc.statsMu.Unlock()
+	for _, e := range sc.events {
+		if e.Op == op {
+			return true
+		}
+	}
+	return false
+}
+
+// Snapshots unused for longer than maxIdle go, preamble caches included, with
+// their sidecars; anything used inside the window stays whatever its age.
+func TestSlotCache_ExpireIdle(t *testing.T) {
+	dir := t.TempDir()
+	old := time.Now().Add(-8 * 24 * time.Hour)
+	for _, k := range []string{"stale", preambleKey("p"), "fresh"} {
+		for _, ext := range []string{".bin", ".meta", ".len"} {
+			p := filepath.Join(dir, strings.TrimSuffix(fileName("m", k), ".bin")+ext)
+			os.WriteFile(p, []byte("x"), 0o644)
+			if k != "fresh" {
+				os.Chtimes(p, old, old)
+			}
+		}
+	}
+	sc := &slotCache{dir: dir, maxIdle: 7 * 24 * time.Hour}
+	sc.expireIdle()
+
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 3 {
+		t.Fatalf("expected only fresh's 3 files to survive, got %d", len(entries))
+	}
+	if _, err := os.Stat(filepath.Join(dir, fileName("m", "fresh"))); err != nil {
+		t.Error("recently used snapshot was expired")
+	}
+}
+
+// The teardowns worth waiting for: an idle TTL unload (nobody is watching), an
+// eviction (the evicted model did not choose to go, and whoever was using it will
+// be back to a full cold prefill without this), and an app shutdown (a restart
+// is the most routine way a loaded model dies, and every chat comes back).
 func TestSlotCache_TTLAndEvictSave(t *testing.T) {
-	for _, reason := range []process.StopReason{process.StopTTL, process.StopEvict} {
+	for _, reason := range []process.StopReason{process.StopTTL, process.StopEvict, process.StopShutdown} {
 		dir := t.TempDir()
 		srv := fakeBackend(t, 35000, dir)
 		sc := newEvictTestCache(dir, srv.URL)

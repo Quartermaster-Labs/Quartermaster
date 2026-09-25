@@ -209,6 +209,7 @@ type slotCacheDTO struct {
 	MinSaveTokens int     `json:"minSaveTokens"`
 	MaxDiskGB     float64 `json:"maxDiskGB"`
 	MaxSessions   int     `json:"maxSessions"`
+	MaxIdleDays   int     `json:"maxIdleDays"`
 	// PreambleCaches is the preamble (shared system+tools seed) half of the
 	// feature. Plain bool, not a tri-state: the dashboard always sends a value,
 	// and true is what an absent config key means anyway.
@@ -298,6 +299,7 @@ func (s *Server) handleAPISettingsGet(w http.ResponseWriter, r *http.Request) {
 			MinSaveTokens: gf.Settings.SlotCache.MinSaveTokens,
 			MaxDiskGB:     gf.Settings.SlotCache.MaxDiskGB,
 			MaxSessions:   gf.Settings.SlotCache.MaxSessions,
+			MaxIdleDays:   gf.Settings.SlotCache.MaxIdleDays,
 			// nil (never saved / hand-authored file) => on.
 			PreambleCaches: gf.Settings.SlotCache.PreambleCaches == nil || *gf.Settings.SlotCache.PreambleCaches,
 		},
@@ -395,8 +397,8 @@ func (s *Server) handleAPISlotCachePut(w http.ResponseWriter, r *http.Request) {
 		shared.SendResponse(w, r, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if body.MinSaveTokens < 0 || body.MaxDiskGB < 0 || body.MaxSessions < 0 {
-		shared.SendResponse(w, r, http.StatusBadRequest, "minSaveTokens, maxDiskGB, maxSessions must be >= 0")
+	if body.MinSaveTokens < 0 || body.MaxDiskGB < 0 || body.MaxSessions < 0 || body.MaxIdleDays < 0 {
+		shared.SendResponse(w, r, http.StatusBadRequest, "minSaveTokens, maxDiskGB, maxSessions, maxIdleDays must be >= 0")
 		return
 	}
 	// The UI displays the resolved default path (slotCachePathOrDefault) in the
@@ -427,6 +429,7 @@ func (s *Server) handleAPISlotCachePut(w http.ResponseWriter, r *http.Request) {
 		MinSaveTokens:  body.MinSaveTokens,
 		MaxDiskGB:      body.MaxDiskGB,
 		MaxSessions:    body.MaxSessions,
+		MaxIdleDays:    body.MaxIdleDays,
 		RecurrentSeeds: recurrentSeeds,
 		PreambleCaches: &body.PreambleCaches,
 	})
@@ -434,8 +437,8 @@ func (s *Server) handleAPISlotCachePut(w http.ResponseWriter, r *http.Request) {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.proxylog.Infof("slot cache: enabled=%v minSaveTokens=%d maxDisk=%gGB maxSessions=%d preambleCaches=%v",
-		body.Enable, body.MinSaveTokens, body.MaxDiskGB, body.MaxSessions, body.PreambleCaches)
+	s.proxylog.Infof("slot cache: enabled=%v minSaveTokens=%d maxDisk=%gGB maxSessions=%d maxIdleDays=%d preambleCaches=%v",
+		body.Enable, body.MinSaveTokens, body.MaxDiskGB, body.MaxSessions, body.MaxIdleDays, body.PreambleCaches)
 	if !s.regenAndReload(w, r) {
 		return
 	}
