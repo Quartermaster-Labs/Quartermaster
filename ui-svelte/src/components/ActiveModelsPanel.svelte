@@ -241,7 +241,6 @@
                   <button
                     class="btn btn--sm py-1.5 inline-flex items-center gap-1.5"
                     onclick={() => chatWith(m)}
-                    disabled={m.state !== "ready"}
                     use:tip={`Open this model in the ${playgroundTab(m)} playground`}
                   >
                     {#if playgroundTab(m) === "video"}
@@ -257,7 +256,7 @@
                 <button
                   class="btn btn--sm btn--danger-hover py-1.5 inline-flex items-center gap-1.5"
                   onclick={() => unloadSingleModel(m.id)}
-                  disabled={m.state !== "ready"}
+                  disabled={m.state === "stopping"}
                 >
                   <Square size={12} class="shrink-0" fill="currentColor" />
                   Unload
