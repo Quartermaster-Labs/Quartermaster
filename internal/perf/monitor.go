@@ -121,6 +121,31 @@ func (m *Monitor) Start() {
 	m.stopCtx, m.stopCancel = context.WithCancel(context.Background())
 
 	go func() {
+		sample := func() {
+			s, err := ReadSysStats()
+			if err != nil {
+				if err != ErrNotImplemented {
+					m.log.Errorf("failed to read sys stats: %s", err.Error())
+				}
+				return
+			}
+			m.mutex.Lock()
+			m.sysRing.Push(s)
+			for l := range m.sysListeners {
+				select {
+				case l <- s:
+				default:
+				}
+			}
+			m.mutex.Unlock()
+		}
+
+		// Sample once up front: a ticker's first tick lands a whole period
+		// (5s by default) after Start, and until then the ring is empty, so
+		// the UI's RAM readout sat blank for seconds after every restart while
+		// VRAM, whose reader samples immediately, was already showing.
+		sample()
+
 		tick := time.NewTicker(m.conf.Every)
 		defer tick.Stop()
 		for {
@@ -128,22 +153,7 @@ func (m *Monitor) Start() {
 			case <-m.stopCtx.Done():
 				return
 			case <-tick.C:
-				s, err := ReadSysStats()
-				if err != nil {
-					if err != ErrNotImplemented {
-						m.log.Errorf("failed to read sys stats: %s", err.Error())
-					}
-					continue
-				}
-				m.mutex.Lock()
-				m.sysRing.Push(s)
-				for l := range m.sysListeners {
-					select {
-					case l <- s:
-					default:
-					}
-				}
-				m.mutex.Unlock()
+				sample()
 			}
 		}
 	}()
