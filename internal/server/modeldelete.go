@@ -6,9 +6,11 @@ package server
 // backend variant of a model launches the same gguf, so "delete this id" and
 // "delete this file" are the same act, and the plan names every id that goes
 // with it. Companion files in the same folder (a projector, an encoder, another
-// quant) are deliberately left alone and listed as kept: a projector is shared
-// by every quant beside it and an encoder by every image model that names it,
-// and nothing here can prove the last user of one is gone.
+// quant) are left alone by default and listed as kept: a projector is shared by
+// every quant beside it and an encoder by every image model that names it. The
+// one case the catalog CAN settle is offered as opt-in Companions: a kept file
+// the doomed ids launch with and no surviving id names. A companion no catalog
+// id ever named (a hand-copied file) is never offered.
 //
 // The plan is served on its own (GET) so the confirmation dialog shows exactly
 // what the DELETE will remove, computed by the same function.
@@ -46,6 +48,10 @@ type deletePlan struct {
 	UsedBy []string `json:"usedBy,omitempty"`
 	// Files left in the folder, for the dialog to say what is NOT removed.
 	Kept []deleteFile `json:"kept,omitempty"`
+	// Files among Kept that only Removes ids launch with (the quant's own
+	// mmproj, typically): nothing left in the catalog would load them, so
+	// the dialog offers to take them too.
+	Companions []deleteFile `json:"companions,omitempty"`
 }
 
 // planModelDelete resolves what deleting realID would remove. roots are the
@@ -100,7 +106,29 @@ func planModelDelete(cfg config.Config, realID string, roots []string, running m
 	}
 	sort.Strings(plan.Running)
 	plan.Kept = keptSiblings(filepath.Dir(filepath.FromSlash(weights)), plan.Files)
+	for _, k := range plan.Kept {
+		if orphanedBy(cfg, ids, removes, k) {
+			plan.Companions = append(plan.Companions, k)
+		}
+	}
 	return plan, nil
+}
+
+// orphanedBy reports whether f is named by at least one id in removes and by
+// no other id, i.e. the delete takes away its last catalog user.
+func orphanedBy(cfg config.Config, ids []string, removes map[string]bool, f deleteFile) bool {
+	one := []deleteFile{f}
+	named := false
+	for _, id := range ids {
+		if !cmdNamesAny(cfg.Models[id].Cmd, one) {
+			continue
+		}
+		if !removes[id] {
+			return false
+		}
+		named = true
+	}
+	return named
 }
 
 // weightFiles is the file set one model path stands for: every shard of a
@@ -228,7 +256,8 @@ func (s *Server) handleAPIModelDeletePlan(w http.ResponseWriter, r *http.Request
 // handleAPIModelDeleteFiles unloads every process serving the file, removes it
 // (all shards), drops the folder if that emptied it, and regenerates + reloads
 // so the catalog loses the rows. The unload comes first because Windows refuses
-// to delete a file a running server has mapped.
+// to delete a file a running server has mapped. ?companions=1 also removes
+// plan.Companions; the client opts in to the set, it never names files.
 func (s *Server) handleAPIModelDeleteFiles(w http.ResponseWriter, r *http.Request) {
 	plan, ok := s.resolveDeletePlan(w, r)
 	if !ok {
@@ -237,9 +266,15 @@ func (s *Server) handleAPIModelDeleteFiles(w http.ResponseWriter, r *http.Reques
 	if len(plan.Running) > 0 {
 		s.local.Unload(apiUnloadTimeout, plan.Running...)
 	}
+	targets := plan.Files
+	kept := len(plan.Kept)
+	if r.URL.Query().Get("companions") == "1" {
+		targets = append(append([]deleteFile(nil), plan.Files...), plan.Companions...)
+		kept -= len(plan.Companions)
+	}
 	var freed int64
 	var failed []string
-	for _, f := range plan.Files {
+	for _, f := range targets {
 		if err := os.Remove(f.Path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			failed = append(failed, f.Path+": "+err.Error())
 			continue
@@ -248,7 +283,7 @@ func (s *Server) handleAPIModelDeleteFiles(w http.ResponseWriter, r *http.Reques
 		sizeCache.Delete(filepath.ToSlash(f.Path))
 		sizeCache.Delete(f.Path)
 	}
-	if len(plan.Files) > 0 && len(plan.Kept) == 0 {
+	if len(plan.Files) > 0 && kept == 0 {
 		// A hub download nests <owner>/<repo>; take the owner folder too once
 		// its last repo is gone, but never a models root itself.
 		dir := filepath.Dir(plan.Files[0].Path)
@@ -256,7 +291,7 @@ func (s *Server) handleAPIModelDeleteFiles(w http.ResponseWriter, r *http.Reques
 			removeEmptyDir(filepath.Dir(dir), s.modelsRoots())
 		}
 	}
-	s.proxylog.Infof("deleted model %s: %d file(s), %d bytes freed", plan.Model, len(plan.Files)-len(failed), freed)
+	s.proxylog.Infof("deleted model %s: %d file(s), %d bytes freed", plan.Model, len(targets)-len(failed), freed)
 	// Regenerate even after a partial failure: whatever did go is gone, and the
 	// catalog must stop offering a model with a missing shard.
 	if !s.regenAndReload(w, r) {

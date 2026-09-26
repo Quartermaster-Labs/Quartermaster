@@ -4,7 +4,7 @@
   import { get } from "svelte/store";
   import { FolderOpen, Layers, MoreVertical, X } from "lucide-svelte";
   import { models, loadModel, getSettings, pickModelsFolder, pickLoraFolder, getModelDeletePlan, deleteModelFiles } from "../stores/api";
-  import { askConfirm, notify } from "../lib/confirm";
+  import { askConfirmOption, notify } from "../lib/confirm";
   import { persistentStore } from "../stores/persistent";
   import { playgroundPort } from "../stores/playgroundAuth";
   import { isNative } from "../lib/native";
@@ -272,17 +272,26 @@
     parts.push(`Removes from the catalog: ${plan.removes.join(", ")}`);
     if (plan.running?.length) parts.push(`Unloads first: ${plan.running.join(", ")}`);
     if (plan.usedBy?.length) parts.push(`Also named by ${plan.usedBy.join(", ")} (e.g. as a draft model), which will lose it.`);
-    if (plan.kept?.length) parts.push(`Kept in the folder:\n${fileList(plan.kept)}`);
+    // Companions (the quant's own mmproj) are offered as a tick box rather than
+    // listed as kept; the server only offers files nothing else in the catalog
+    // launches with, so a projector shared with a sibling quant never shows here.
+    const companions = plan.companions ?? [];
+    const kept = (plan.kept ?? []).filter((f) => !companions.some((c) => c.path === f.path));
+    if (kept.length) parts.push(`Kept in the folder:\n${fileList(kept)}`);
     parts.push("This cannot be undone.");
-    const ok = await askConfirm({
+    const extra = companions.reduce((n, f) => n + f.size, 0);
+    const { ok, checked } = await askConfirmOption({
       title: `Delete ${baseName(plan.files[0]?.path ?? m.id)}?`,
       body: parts.join("\n\n"),
+      option: companions.length
+        ? { label: `Also delete (${gb(extra)}), unused by any other model:\n${fileList(companions)}` }
+        : undefined,
       confirmLabel: `Delete ${gb(plan.bytes)}`,
       danger: true,
     });
     if (!ok) return;
     try {
-      await deleteModelFiles(m.id);
+      await deleteModelFiles(m.id, checked);
     } catch (e) {
       await notify("Delete failed", e instanceof Error ? e.message : String(e));
     }

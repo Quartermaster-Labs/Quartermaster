@@ -689,6 +689,9 @@ export interface ModelDeletePlan {
   running?: string[];
   usedBy?: string[];
   kept?: { path: string; size: number }[];
+  // Subset of kept that only this model's ids launch with (its own mmproj);
+  // deleteModelFiles(..., true) removes them too.
+  companions?: { path: string; size: number }[];
 }
 
 export async function getModelDeletePlan(model: string): Promise<ModelDeletePlan> {
@@ -699,8 +702,9 @@ export async function getModelDeletePlan(model: string): Promise<ModelDeletePlan
   return response.json();
 }
 
-export async function deleteModelFiles(model: string): Promise<void> {
-  const response = await fetch(`/api/models/${encodeURIComponent(model)}/files`, { method: "DELETE" });
+export async function deleteModelFiles(model: string, companions = false): Promise<void> {
+  const q = companions ? "?companions=1" : "";
+  const response = await fetch(`/api/models/${encodeURIComponent(model)}/files${q}`, { method: "DELETE" });
   if (!response.ok) {
     throw new Error(await response.text());
   }
