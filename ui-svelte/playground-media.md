@@ -8,14 +8,21 @@
 Full SD image-gen UI: txt2img/img2img (`ImageGenMode`), denoise/hires (`enable_hr`), reference
 images (`extra_images`, Kontext), per-model defaults, seed modes.
 
+**Layout.** A params panel on the left (prompt box with Enhance / inpaint / alpha and the model
+picker, `+ Negative` / `+ Reference` chips, aspect + size segments, steps/CFG/seed/batch, an
+Advanced fold for the API, denoise, sampler, tone anchor, keep-res and LoRAs, then Generate) and a
+canvas on the right showing ONE turn big, with a thumbnail strip of the thread underneath.
+`selTurn` pins an older turn from the strip; `null` follows the newest, and it resets to `null`
+whenever the turn count or the thread changes, so a new render or a regenerate always lands in view.
+
 **Batch** (Settings → Batch, `sdapi batch_size` → sd.cpp `batch_count`, capped at `MAX_BATCH`):
 N images per prompt, rendered sequentially with the seed incrementing per image — the step bar
 therefore restarts per image (the in-flight row shows `×N`). Each turn keeps a **picked** image
-index (numbered badge on the thumbnails, batch>1 only) that the reply/copy/download/upscale
+index (numbered segment in the canvas toolbar, batch>1 only) that the reply/copy/download/upscale
 actions act on.
 
 **Prompt enhance** (`runEnhance` -> `lib/promptEnhance.enhancePrompt` -> `POST
-/v1/chat/completions`): wand button in the composer's left cluster, rendered only when the
+/v1/chat/completions`): Enhance button in the prompt box's bottom bar, rendered only when the
 selected model carries an enhancer (server-resolved, see `../CLAUDE.md`). A model may name one per
 direction, so the pick follows the mode the render itself will use: `promptEnhancerEdit` when a
 `baseImage` is attached, `promptEnhancer` otherwise, each half standing in for a missing other.
@@ -28,7 +35,7 @@ and flipping it makes them describe the picture instead of rewriting the request
 their own dismissible banner, not `dropError`: that one self-clears on a 4 second timer.
 
 **ESRGAN upscale** (`runUpscale` → `lib/imageApi.upscaleImage` → `POST /v1/images/upscale`):
-⤢ button on any result-image action row AND on each composer attachment (hover); posts the 4×
+⤢ button in the canvas toolbar AND on each attached reference (hover); posts the 4×
 result as a new turn. `toB64(img)` first — a saved image is a `/api/media/<hash>` URL, not a data
 URL. Busy key `m<turn>`/`a<idx>` serializes runs to one at a time.
 

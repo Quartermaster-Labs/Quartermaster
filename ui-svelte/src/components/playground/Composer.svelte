@@ -30,6 +30,7 @@
     onPaste,
     showSettings = $bindable(false),
     settingsTitle = "Settings",
+    settingsExternal = false,
     topExtra,
     leftButtons,
     extraRightButtons,
@@ -64,6 +65,9 @@
     onPaste?: (e: ClipboardEvent) => void;
     showSettings?: boolean;
     settingsTitle?: string;
+    // The tab renders its settings somewhere else (chat's config sidebar): the
+    // sliders button still toggles `showSettings`, but no popover opens here.
+    settingsExternal?: boolean;
     topExtra?: Snippet;
     leftButtons?: Snippet;
     extraRightButtons?: Snippet;
@@ -91,7 +95,7 @@
   let controlsH = $state(0);
 </script>
 
-{#if showSettings}
+{#if showSettings && !settingsExternal}
   <!-- Anchored to the composer's BOTTOM edge, floating OVER the textarea, not
        stacked above the whole composer.
        `bottom-full` anchored it to the composer's TOP, which is not a fixed
@@ -161,6 +165,7 @@
         class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors {showSettings ? 'bg-secondary text-txtmain shadow-inner' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
         onclick={() => (showSettings = !showSettings)}
         use:tip={settingsTitle}
+        aria-pressed={showSettings}
       >
         <SlidersHorizontal class="w-[1.125rem] h-[1.125rem]" />
       </button>

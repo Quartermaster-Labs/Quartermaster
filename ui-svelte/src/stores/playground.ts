@@ -108,6 +108,6 @@ export const SHOPPING_MIN_SEARCHES = 12;
 export const searchThrottleMsStore = userPref<number>("playground-search-throttle-ms", 500);
 export const searchDedupeStore = userPref<boolean>("playground-search-dedupe", true);
 
-// Chat history sidebar collapsed state. Shared so the side-rail Chat icon can
-// toggle the ChatInterface's own history panel when chat is already active.
-export const chatSidebarCollapsed = persistentStore<boolean>("playground-chat-sidebar-collapsed", false);
+// History drawer open state, one for every tab. Shared so the rail icon (click
+// the active tab again) and each pane's header toggle drive the same drawer.
+export const historyOpenStore = persistentStore<boolean>("playground-history-open", false);

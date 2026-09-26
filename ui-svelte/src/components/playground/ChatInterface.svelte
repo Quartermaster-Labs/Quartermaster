@@ -51,7 +51,7 @@
   import { getTextContent, getImageUrls } from "../../lib/types";
   import { buildBasePrompt } from "../../lib/systemPrompt";
   import type { ChatMessage, ContentPart } from "../../lib/types";
-  import { Paperclip, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle, Wrench, Reply, Quote, ShoppingCart, CloudSun, BrainCircuit, FileText, Loader2, AlertTriangle } from "lucide-svelte";
+  import { Paperclip, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle, Wrench, Reply, Quote, ShoppingCart, CloudSun, BrainCircuit, FileText, Loader2, AlertTriangle, SlidersHorizontal } from "lucide-svelte";
   import {
     acceptAttr,
     buildFileBlock,
@@ -69,6 +69,9 @@
   import { transcribeAudio } from "../../lib/audioApi";
   import ChatMessageComponent from "./ChatMessage.svelte";
   import Composer from "./Composer.svelte";
+  import PaneHeader from "./PaneHeader.svelte";
+  import { newChat } from "../../lib/playgroundThreads";
+  import { slide } from "svelte/transition";
   import ToolMenu from "./ToolMenu.svelte";
   import { modelCategory } from "../../lib/modelUtils";
   import { EFFORT_OFF, effortOptions, resolveEffort, requestEffort } from "../../lib/effort";
@@ -1337,6 +1340,9 @@
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       sendMessage();
+    } else if (event.key === "Escape" && isStreaming) {
+      event.preventDefault();
+      cancelStreaming();
     }
   }
 
@@ -1500,6 +1506,150 @@
   }
 </script>
 
+{#snippet cfgTip(text: string)}
+  <span class="inline-flex shrink-0 cursor-help text-txtsecondary/70 hover:text-txtsecondary" use:tooltip={text}>
+    <HelpCircle class="w-3.5 h-3.5" />
+  </span>
+{/snippet}
+
+{#snippet toolRow(id: string, Icon: typeof Search, name: string, desc: string, help: string, checked: boolean, set: (v: boolean) => void)}
+  <label class="grid grid-cols-[1rem_1fr_auto] gap-2.5 items-start py-2 cursor-pointer" for={id}>
+    <Icon class="w-4 h-4 mt-0.5 text-txtsecondary" />
+    <span class="min-w-0">
+      <span class="flex items-center gap-1.5 text-[0.8125rem] text-txtmain">{name} {@render cfgTip(help)}</span>
+      <span class="block text-micro leading-snug text-txtsecondary mt-0.5">{desc}</span>
+    </span>
+    <Toggle {id} {checked} onchange={set} />
+  </label>
+{/snippet}
+
+<!-- Config sidebar: the chat's per-user knobs, docked right of the thread. It
+     pushes the column rather than floating over it, so the last message and the
+     composer stay readable while a knob is being turned. -->
+{#snippet chatSettingsPanel()}
+  <aside class="w-[18.75rem] h-full flex flex-col min-h-0 bg-rail border-l border-card-border-inner">
+    <div class="flex items-center gap-2 pl-4 pr-2 h-10 border-b border-card-border-inner shrink-0">
+      <SlidersHorizontal class="w-3.5 h-3.5 text-txtsecondary" />
+      <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Configs</span>
+      <button class="icon-btn ml-auto" onclick={() => (showSettings = false)} use:tooltip={"Close"} aria-label="Close configs">
+        <X class="w-4 h-4" />
+      </button>
+    </div>
+
+    <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll">
+      <div class="px-4 py-3.5 border-b border-card-border-inner">
+        <label class="flex items-center gap-1.5 mb-2.5 text-micro font-medium uppercase tracking-wide text-txtsecondary" for="temperature">
+          Temperature {@render cfgTip("Higher gives the model more freedom to be creative and varied; lower keeps it focused and predictable.")}
+          <span class="ml-auto normal-case tracking-normal text-xs font-medium text-txtmain">{TEMP_LABELS[nearestTempIdx($temperatureStore)]}</span>
+        </label>
+        <input
+          id="temperature"
+          type="range"
+          min="0"
+          max={TEMP_STEPS.length - 1}
+          step="1"
+          class="w-full accent-primary"
+          value={nearestTempIdx($temperatureStore)}
+          oninput={(e) => temperatureStore.set(TEMP_STEPS[+e.currentTarget.value])}
+        />
+        <!-- One tick per stop: the slider is a 5-way choice, not a continuum. -->
+        <div class="flex justify-between px-[0.4rem] -mt-0.5" aria-hidden="true">
+          {#each TEMP_STEPS as _, i (i)}
+            <span class="w-1 h-1 rounded-full {i <= nearestTempIdx($temperatureStore) ? 'bg-primary' : 'bg-txtsecondary/50'}"></span>
+          {/each}
+        </div>
+        <div class="flex justify-between mt-1.5 text-micro text-txtsecondary">
+          <span>{TEMP_LABELS[0]}</span>
+          <span>{TEMP_LABELS[TEMP_LABELS.length - 1]}</span>
+        </div>
+      </div>
+
+      <div class="px-4 py-3.5 border-b border-card-border-inner">
+        <div class="flex items-center gap-1.5 mb-2.5 text-micro font-medium uppercase tracking-wide text-txtsecondary">
+          <Brain class="w-3.5 h-3.5" /> Reasoning {@render cfgTip(
+            effortLadder.length > 0
+              ? "How hard this model thinks before answering. The levels come from the model's own chat template. Changing it rewrites the top of the system prompt, so it re-reads the conversation, so pick one and stay on it. Thinking Budget does not apply at these levels."
+              : "Let the model think before answering (for reasoning-capable models). This model's template has no effort levels, so it is on or off.",
+          )}
+        </div>
+        <!-- A segmented row reads at a glance; past five rungs the labels stop
+             fitting 300px, so a long ladder falls back to the dropdown. -->
+        {#if effortChoices.length <= 5}
+          <div class="seg w-full" role="group" aria-label="Reasoning effort">
+            {#each effortChoices as opt (opt.value)}
+              <button class="flex-1" aria-pressed={effort === opt.value} onclick={() => reasoningEffortStore.set(opt.value)}>{opt.label}</button>
+            {/each}
+          </div>
+        {:else}
+          <Select
+            value={effort}
+            onchange={(v) => reasoningEffortStore.set(v)}
+            ariaLabel="Reasoning effort"
+            class="w-full normal-case"
+            options={effortChoices.map((opt) => ({ value: opt.value, label: opt.label }))}
+          />
+        {/if}
+      </div>
+
+      <div class="px-4 py-2.5 border-b border-card-border-inner">
+        <div class="mt-1 mb-0.5 text-micro font-medium uppercase tracking-wide text-txtsecondary">Tools</div>
+        {@render toolRow("chat-websearch", Search, "Web search", "Search the web for fresh facts.", "Let the model search the web (via SearXNG) for fresh facts. Needs a tool-calling model. URL + rate limits are in the side-rail Settings.", $webSearchStore, (v) => webSearchStore.set(v))}
+        {@render toolRow("chat-extratools", CloudSun, "Weather & feeds", "Live weather and any RSS/Atom feed.", "Let the model read the live weather (Open-Meteo) and any RSS/Atom feed.", $extraToolsStore, (v) => extraToolsStore.set(v))}
+        {@render toolRow("chat-memory", BrainCircuit, "Memory", "Remember lasting facts about you across chats.", "Let the model remember lasting facts about you across conversations. Remembered facts are added to every chat's system prompt; read, edit and delete them in Settings → Memory.", $memoryStore, (v) => memoryStore.set(v))}
+        {@render toolRow("chat-qmtools", Wrench, "QM tools", "Inspect and tune this Quartermaster.", "Let the model inspect and tune this Quartermaster instance - list installed models, read live VRAM/config, and change settings (hot-reloads, no eviction). Needs a tool-calling model. Requires -generate for edits.", $qmToolsStore, (v) => qmToolsStore.set(v))}
+      </div>
+
+      <div class="px-4 py-3.5 border-b border-card-border-inner">
+        <div class="flex items-center gap-1.5 mb-2.5 text-micro font-medium uppercase tracking-wide text-txtsecondary">
+          Instructions {@render cfgTip("Standing instructions for THIS chat only, layered on top of the built-in prompt. Saved with the conversation.")}
+        </div>
+        <button
+          type="button"
+          class="w-full text-left px-3 py-2.5 rounded-lg border border-dashed border-btn-border text-xs leading-snug hover:border-primary transition-colors {activeSession?.instructions?.trim() ? 'text-txtmain' : 'text-txtsecondary'}"
+          onclick={openSysPrompt}
+        >
+          <span class="line-clamp-3">{activeSession?.instructions?.trim() || "Add instructions for this chat…"}</span>
+        </button>
+      </div>
+
+      {#if $shoppingStore}
+        <div class="px-4 py-3.5 border-b border-card-border-inner">
+          <label class="flex items-center gap-1.5 mb-2.5 text-micro font-medium uppercase tracking-wide text-txtsecondary" for="chat-shopping-prefs">
+            <ShoppingCart class="w-3.5 h-3.5" /> Shopping preferences
+            {@render cfgTip("Where you buy: country, currency and the shops you prefer. Standing setting - the assistant searches these first instead of asking every time.")}
+          </label>
+          <input
+            id="chat-shopping-prefs"
+            type="text"
+            class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-background focus:outline-none focus:border-primary text-xs"
+            placeholder="e.g. Romania, RON, prefer emag.ro and altex.ro"
+            bind:value={$shoppingPrefsStore}
+          />
+        </div>
+      {/if}
+    </div>
+  </aside>
+{/snippet}
+
+{#snippet chatHeaderRight()}
+  <!-- Context-window usage (yellow → orange → red) with the used/max readout.
+       Clicking compacts on demand, the same as typing /compact. -->
+  {#if ctxN > 0}
+    <button
+      type="button"
+      class="flex items-center gap-2 px-1.5 h-7 rounded hover:bg-secondary transition-colors"
+      onclick={() => runManualCompact($activeChatId)}
+      use:tooltip={`Context ${fmtTokens(ctxUsed)} / ${fmtTokens(ctxN)} tokens (${Math.round(ctxRatio * 100)}%) · click to compact now`}
+    >
+      <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Ctx</span>
+      <span class="h-1 w-16 rounded-full bg-secondary overflow-hidden">
+        <span class="block h-full rounded-full transition-all" style="width: {Math.max(ctxRatio * 100, 3)}%; background: {ctxColor};"></span>
+      </span>
+      <span class="font-mono text-micro tabular-nums text-txtsecondary">{fmtTokens(ctxUsed)}/{fmtTokens(ctxN)}</span>
+    </button>
+  {/if}
+{/snippet}
+
 <div
   class="relative flex flex-col h-full"
   use:dropZone={{ onFiles: handleDrop, onActive: (v) => (dropActive = v), enabled: hasModels }}
@@ -1516,6 +1666,15 @@
       </span>
     </div>
   {/if}
+
+  <PaneHeader
+    title={activeSession?.title || "New chat"}
+    meta={messages.length ? `${messages.length} msg${messages.length === 1 ? "" : "s"}` : ""}
+    updatedAt={messages.length ? activeSession?.updatedAt : undefined}
+    newLabel="New chat"
+    onNew={newChat}
+    right={chatHeaderRight}
+  />
 
   <!-- Empty state for no models configured -->
   {#if !hasModels}
@@ -1536,9 +1695,10 @@
         <Quote class="w-3.5 h-3.5" />
       </button>
     {/if}
+    <div class="flex-1 min-h-0 flex">
     <!-- Chat column — full-width so the whole pane scrolls; the message list and
          composer are width-constrained and centered inside. -->
-    <div class="flex-1 flex flex-col min-w-0 min-h-0 w-full">
+    <div class="flex-1 flex flex-col min-w-0 min-h-0 px-4 pb-3">
     <!-- Messages area — scrolls across the full width; content centered within. -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
@@ -1640,97 +1800,6 @@
           </div>
         </div>
       {/if}
-
-      {#snippet chatSettingsPanel()}
-        {#snippet tip(text: string)}
-          <span class="inline-flex shrink-0 cursor-help text-txtsecondary/70 hover:text-txtsecondary" use:tooltip={text}>
-            <HelpCircle class="w-3.5 h-3.5" />
-          </span>
-        {/snippet}
-
-        <div class="flex flex-col gap-1.5">
-          <label class="flex justify-between text-xs uppercase tracking-wide text-txtsecondary" for="temperature">
-            <span class="flex items-center gap-1.5">Temperature {@render tip("Higher gives the model more freedom to be creative and varied; lower keeps it focused and predictable.")}</span>
-            <span class="text-txtmain normal-case">{TEMP_LABELS[nearestTempIdx($temperatureStore)]}</span>
-          </label>
-          <input
-            id="temperature"
-            type="range"
-            min="0"
-            max={TEMP_STEPS.length - 1}
-            step="1"
-            class="w-full accent-primary"
-            value={nearestTempIdx($temperatureStore)}
-            oninput={(e) => temperatureStore.set(TEMP_STEPS[+e.currentTarget.value])}
-          />
-          <div class="flex justify-between text-xs text-txtsecondary">
-            <span>Precise</span>
-            <span>Creative</span>
-          </div>
-        </div>
-
-        <div class="flex items-center justify-between gap-2 text-xs uppercase tracking-wide text-txtsecondary">
-          <span class="flex items-center gap-1.5"><Brain class="w-3.5 h-3.5" /> Reasoning {@render tip(
-            effortLadder.length > 0
-              ? "How hard this model thinks before answering. The levels come from the model's own chat template. Changing it rewrites the top of the system prompt, so it re-reads the conversation, so pick one and stay on it. Thinking Budget does not apply at these levels."
-              : "Let the model think before answering (for reasoning-capable models). This model's template has no effort levels, so it is on or off.",
-          )}</span>
-          <Select
-            value={effort}
-            onchange={(v) => reasoningEffortStore.set(v)}
-            ariaLabel="Reasoning effort"
-            class="w-32 normal-case"
-            options={effortChoices.map((opt) => ({ value: opt.value, label: opt.label }))}
-          />
-        </div>
-
-        <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-websearch">
-          <span class="flex items-center gap-1.5"><Search class="w-3.5 h-3.5" /> Web Search {@render tip("Let the model search the web (via SearXNG) for fresh facts. Needs a tool-calling model. URL + rate limits are in the side-rail Settings.")}</span>
-          <Toggle id="chat-websearch" bind:checked={$webSearchStore} />
-        </label>
-
-        <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-extratools">
-          <span class="flex items-center gap-1.5"><CloudSun class="w-3.5 h-3.5" /> Weather & Feeds {@render tip("Let the model read the live weather (Open-Meteo) and any RSS/Atom feed.")}</span>
-          <Toggle id="chat-extratools" bind:checked={$extraToolsStore} />
-        </label>
-
-        <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-memory">
-          <span class="flex items-center gap-1.5"><BrainCircuit class="w-3.5 h-3.5" /> Memory {@render tip("Let the model remember lasting facts about you across conversations. Remembered facts are added to every chat's system prompt; read, edit and delete them in Settings → Memory.")}</span>
-          <Toggle id="chat-memory" bind:checked={$memoryStore} />
-        </label>
-
-        <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-qmtools">
-          <span class="flex items-center gap-1.5"><Wrench class="w-3.5 h-3.5" /> QM Tools {@render tip("Let the model inspect and tune this Quartermaster instance - list installed models, read live VRAM/config, and change settings (hot-reloads, no eviction). Needs a tool-calling model. Requires -generate for edits.")}</span>
-          <Toggle id="chat-qmtools" bind:checked={$qmToolsStore} />
-        </label>
-
-        <div class="flex flex-col gap-1">
-          <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">Instructions {@render tip("Standing instructions for THIS chat only, layered on top of the built-in prompt. Saved with the conversation.")}</span>
-          <button
-            type="button"
-            class="w-full text-left px-2.5 py-1.5 rounded-md border border-card-border bg-surface hover:border-primary transition-colors {activeSession?.instructions?.trim() ? 'text-txtmain' : 'text-txtsecondary'}"
-            onclick={openSysPrompt}
-          >
-            <span class="line-clamp-2">{activeSession?.instructions?.trim() || "Add instructions for this chat…"}</span>
-          </button>
-        </div>
-
-        {#if $shoppingStore}
-          <div class="flex flex-col gap-1">
-            <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">
-              <ShoppingCart class="w-3.5 h-3.5" /> Shopping preferences
-              {@render tip("Where you buy: country, currency and the shops you prefer. Standing setting - the assistant searches these first instead of asking every time.")}
-            </span>
-            <input
-              type="text"
-              class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary text-[0.8125rem]"
-              placeholder="e.g. Romania, RON, prefer emag.ro and altex.ro"
-              bind:value={$shoppingPrefsStore}
-            />
-          </div>
-        {/if}
-
-      {/snippet}
 
       <!-- System-prompt editor: roomier modal to write/save the standing prompt. -->
       {#if showSysPrompt}
@@ -1919,28 +1988,6 @@
         </button>
       {/snippet}
 
-      {#snippet chatCtxBar()}
-        <!-- Context-window usage: thin line (yellow → orange → red) plus the
-             used/max token readout, so the bar says how much room is left and
-             not just "some". Clicking it compacts on demand — the same thing
-             typing /compact does, but findable: the moment you want it is the
-             moment you are looking at this bar. -->
-        {#if ctxN > 0}
-          <button
-            type="button"
-            class="flex items-center gap-1.5 hover:opacity-80 transition-opacity"
-            onclick={() => runManualCompact($activeChatId)}
-            use:tooltip={`Context ${fmtTokens(ctxUsed)} / ${fmtTokens(ctxN)} tokens (${Math.round(ctxRatio * 100)}%) · click to compact now`}
-          >
-            <div class="h-0.5 w-16 rounded-full bg-secondary overflow-hidden">
-              <div class="h-full rounded-full transition-all" style="width: {Math.max(ctxRatio * 100, 3)}%; background: {ctxColor};"></div>
-            </div>
-            <span class="font-mono text-micro tabular-nums text-txtsecondary leading-none">
-              {fmtTokens(ctxUsed)}/{fmtTokens(ctxN)}
-            </span>
-          </button>
-        {/if}
-      {/snippet}
 
       <Composer
         bind:value={userInput}
@@ -1955,13 +2002,24 @@
         busy={isStreaming}
         onStop={cancelStreaming}
         bind:showSettings
+        settingsExternal
         settingsTitle="Configs"
         topExtra={chatTopExtra}
         leftButtons={chatLeftButtons}
-        ctxBar={chatCtxBar}
-        settingsPanel={chatSettingsPanel}
       />
+      <div class="flex justify-center gap-4 mt-2 text-micro text-txtsecondary select-none">
+        <span><kbd class="font-mono">Enter</kbd> send</span>
+        <span><kbd class="font-mono">Shift+Enter</kbd> new line</span>
+        <span><kbd class="font-mono">Esc</kbd> stop</span>
+        <span><kbd class="font-mono">/compact</kbd> fold context</span>
+      </div>
     </div>
+    </div>
+    {#if showSettings}
+      <div class="shrink-0 h-full overflow-hidden" transition:slide={{ axis: "x", duration: 200 }}>
+        {@render chatSettingsPanel()}
+      </div>
+    {/if}
     </div>
   {/if}
 </div>
