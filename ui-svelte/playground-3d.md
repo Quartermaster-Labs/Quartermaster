@@ -4,8 +4,8 @@
 `lib/threeDApi.ts`, `stores/threeDHistory.ts`.
 
 Image in, orbitable mesh out, via TRELLIS.2 (`trellis2-server`). Deliberately the same tab shape as
-the Images and Video studios — a thread of turns, a server-backed history flyout, a settings popover
-on the composer — so the only things worth documenting here are where it *has* to differ.
+the Images and Video studios (a params panel on the left, the selected mesh big on a canvas, the
+thread as a thumbnail strip underneath, a server-backed history drawer), so the only things worth documenting here are where it *has* to differ.
 
 ## The route decides the design
 
@@ -13,7 +13,7 @@ on the composer — so the only things worth documenting here are where it *has*
 
 - **The image is the raw request body.** There is no JSON document, so the model id and every knob
   ride as query parameters and `Content-Type` is the image's own mime, which is how the backend
-  decides how to decode it. One image per request, which is why the composer holds one pending
+  decides how to decode it. One image per request, which is why the panel holds one pending
   picture rather than the image tab's chip row.
 - **It is synchronous.** Unlike video (a job id in milliseconds, polled for minutes) the request
   stays open for the whole generation: roughly 90s at the 512 profile, plus the first request's
@@ -26,20 +26,19 @@ on the composer — so the only things worth documenting here are where it *has*
 - **There is no cancel route.** Stop aborts the `fetch`, which abandons the *response*; the render
   runs to completion and the backend stays busy until it does. The stop tooltip says that outright
   rather than implying the GPU came back, and the abandoned turn's source image is put back into the
-  composer so an abort costs nothing.
+  panel so an abort costs nothing.
 
 ## No prompt
 
-The whole request is one image, so `Composer.svelte` grows a `hideTextarea` prop and this is its only
-user. Consequences that are easy to trip over:
+The whole request is one image, so the image picker takes the slot the other tabs give their prompt
+box. Consequences that are easy to trip over:
 
-- **There is no Enter to send on**, so the tab adds an explicit send button to
-  `extraRightButtons`. Without it the composer has no way to start a generation.
+- **There is no Enter to send on**, so Generate is the only way to start one.
 - **Paste is bound to the window**, not to a field, because with no textarea there is nothing for a
   paste to land in.
 - **A title is never derived.** `deriveThreeDTitle()` always returns `"New mesh"`; a thread is named
-  by renaming it, and its history row is identified by a thumbnail of the *source* image
-  (`threeDThumbs` in `PlaygroundShell`). A result thumbnail is not an option: a GLB cannot be drawn
+  by renaming it, and both its history row and its thread-strip tile are identified by a thumbnail
+  of the *source* image (`threeDThumbs` in `PlaygroundShell`). A result thumbnail is not an option: a GLB cannot be drawn
   in an `<img>`, and a WebGL preview per history row would spend a real context on each.
 
 ## Storage
@@ -94,5 +93,5 @@ the backend's own documented CLI defaults (`docs/three-d-generation.md`), not pe
 - **Seed `-1`** means random, and the backend's random is what you get by *omitting* the parameter.
   Sending `-1` would be a literal seed.
 - `estimateSeconds()` is anchored on the one figure on record (~90s at 12 steps, 512 profile,
-  discrete GPU) and is deliberately coarse. It exists so the composer can say "about a minute and a
+  discrete GPU) and is deliberately coarse. It exists so the panel can say "about a minute and a
   half" before a user commits the whole backend, not to be accurate to the second.
