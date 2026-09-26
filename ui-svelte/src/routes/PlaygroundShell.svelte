@@ -21,6 +21,7 @@
     chatTtsVoiceStore,
     memoryStore,
     selectedModelStore,
+    historyOpenStore,
   } from "../stores/playground";
   import { cachedVoices, fetchVoices, hasCachedVoices, voiceLabel, voiceSubstitution } from "../lib/voices";
   import { generateSpeech } from "../lib/speechApi";
@@ -92,6 +93,9 @@
   import ThreeDInterface from "../components/playground/ThreeDInterface.svelte";
   import AudioInterface from "../components/playground/AudioInterface.svelte";
   import SpeechInterface from "../components/playground/SpeechInterface.svelte";
+  import HistoryDrawer, { type DrawerSession } from "../components/playground/HistoryDrawer.svelte";
+  import { newChat, newImageChat, newVideoChat, newThreeDChat, newSpeechChat } from "../lib/playgroundThreads";
+  import { slide } from "svelte/transition";
 
   type Tab = PlaygroundTab;
 
@@ -112,97 +116,31 @@
   let onVideo = $derived($selectedTabStore === "video");
   let onThreeD = $derived($selectedTabStore === "3d");
   let onSpeech = $derived($selectedTabStore === "speech");
-  let historyOpen = $state(false);
-  let sortedSessions = $derived([...$chatSessions].sort((a, b) => b.updatedAt - a.updatedAt));
-  let sortedImageSessions = $derived([...$imageSessions].sort((a, b) => b.updatedAt - a.updatedAt));
-  let sortedVideoSessions = $derived([...$videoSessions].sort((a, b) => b.updatedAt - a.updatedAt));
-  let sortedThreeDSessions = $derived([...$threeDSessions].sort((a, b) => b.updatedAt - a.updatedAt));
-  let sortedSpeechSessions = $derived([...$speechSessions].sort((a, b) => b.updatedAt - a.updatedAt));
+  // Rows for the history drawer, per tab. Sorting and grouping live in the drawer.
+  let chatRows = $derived<DrawerSession[]>($chatSessions.map((x) => ({ id: x.id, title: x.title, updatedAt: x.updatedAt, count: x.messages.length })));
+  let imageRows = $derived<DrawerSession[]>($imageSessions.map((x) => ({ id: x.id, title: x.title, updatedAt: x.updatedAt, count: x.turns.length })));
+  let videoRows = $derived<DrawerSession[]>($videoSessions.map((x) => ({ id: x.id, title: x.title, updatedAt: x.updatedAt, count: x.turns.length })));
+  let threeDRows = $derived<DrawerSession[]>($threeDSessions.map((x) => ({ id: x.id, title: x.title, updatedAt: x.updatedAt, count: x.turns.length })));
+  let speechRows = $derived<DrawerSession[]>($speechSessions.map((x) => ({ id: x.id, title: x.title, updatedAt: x.updatedAt, count: x.turns.length })));
 
-  // Chat, Images, Video and 3D have a history flyout; Speech manages its own
-  // threads inline.
-  const hasHistory = (id: Tab) => id === "chat" || id === "images" || id === "video" || id === "3d";
+  // Every tab but transcription keeps threads, so every tab but transcription
+  // has the history drawer. Clicking the tab you are already on toggles it; the
+  // pane headers toggle the same store.
+  const hasHistory = (id: Tab) => id !== "audio";
 
   function clickTab(id: Tab) {
-    if (hasHistory(id)) {
-      historyOpen = $selectedTabStore === id ? !historyOpen : true;
-    } else {
-      historyOpen = false; // non-history tab (speech, audio, …) never shows the flyout
-    }
+    if (hasHistory(id) && $selectedTabStore === id) historyOpenStore.update((v) => !v);
     selectedTabStore.set(id);
   }
 
-  // History actions are pure store ops — ChatInterface reacts to activeChatId,
-  // loading/persisting the working messages itself.
-  function newChat() {
-    const cur = get(chatSessions).find((s) => s.id === get(activeChatId));
-    if (cur && cur.messages.length === 0) {
-      activeChatId.set(cur.id); // already on a blank chat — don't stack another
-      return;
-    }
-    const s: ChatSession = { id: newChatId(), title: "New chat", messages: [], updatedAt: Date.now() };
-    chatSessions.update((ss) => [s, ...ss]);
-    activeChatId.set(s.id);
-  }
-
-  // Image threads: same pure-store ops as chats. ImageInterface reacts to
-  // activeImageChatId, showing the matching thread's turns.
-  function newImageChat() {
-    const cur = get(imageSessions).find((s) => s.id === get(activeImageChatId));
-    if (cur && cur.turns.length === 0) {
-      activeImageChatId.set(cur.id);
-      return;
-    }
-    const s: ImageSession = { id: newImageChatId(), title: "New image", turns: [], updatedAt: Date.now() };
-    imageSessions.update((ss) => [s, ...ss]);
-    activeImageChatId.set(s.id);
-  }
-
-  // Video threads: same pure-store ops as chats/images.
-  function newVideoChat() {
-    const cur = get(videoSessions).find((s) => s.id === get(activeVideoChatId));
-    if (cur && cur.turns.length === 0) {
-      activeVideoChatId.set(cur.id);
-      return;
-    }
-    const s: VideoSession = { id: newVideoChatId(), title: "New video", turns: [], updatedAt: Date.now() };
-    videoSessions.update((ss) => [s, ...ss]);
-    activeVideoChatId.set(s.id);
-  }
-
-  // 3D threads: same pure-store ops as chats/images.
-  function newThreeDChat() {
-    const cur = get(threeDSessions).find((s) => s.id === get(activeThreeDChatId));
-    if (cur && cur.turns.length === 0) {
-      activeThreeDChatId.set(cur.id);
-      return;
-    }
-    const s: ThreeDSession = { id: newThreeDChatId(), title: "New mesh", turns: [], updatedAt: Date.now() };
-    threeDSessions.update((ss) => [s, ...ss]);
-    activeThreeDChatId.set(s.id);
-  }
-
-  // Speech threads: same pure-store ops as chats/images.
-  function newSpeechChat() {
-    const cur = get(speechSessions).find((s) => s.id === get(activeSpeechChatId));
-    if (cur && cur.turns.length === 0) {
-      activeSpeechChatId.set(cur.id);
-      return;
-    }
-    const s: SpeechSession = { id: newSpeechChatId(), title: "New speech", turns: [], updatedAt: Date.now() };
-    speechSessions.update((ss) => [s, ...ss]);
-    activeSpeechChatId.set(s.id);
-  }
-
-  // Small thumbnails for an image thread's history row: the last turn's images
-  // (most recent result first), capped at 2 so the row stays compact.
+  // Thumbnail strip for an image thread's drawer row: the newest results first,
+  // across turns, capped at 4 so the strip fits the drawer width.
   function imageThumbs(id: string): string[] {
     const s = $imageSessions.find((x) => x.id === id);
     if (!s) return [];
-    for (let i = s.turns.length - 1; i >= 0; i--) {
-      if (s.turns[i].images.length) return s.turns[i].images.slice(0, 2);
-    }
-    return [];
+    const out: string[] = [];
+    for (let i = s.turns.length - 1; i >= 0 && out.length < 4; i--) out.push(...s.turns[i].images.slice(0, 4 - out.length));
+    return out;
   }
 
   // A 3D thread's thumbnail is its SOURCE image, not its result: a GLB cannot
@@ -692,13 +630,12 @@
      that would otherwise show up as document scrollbars on both axes. Tooltips
      and modals are `fixed` off <body>, so clipping here does not reach them. -->
 <div class="relative h-screen flex bg-chrome overflow-hidden">
-  <!-- Side rail: icons only at rest; expands on hover. Same width hover or with the chat list open.
+  <!-- Side rail: icons only at rest; expands on hover.
        The slot reserves only the RESTING width - the rail itself is absolute inside it, so
-       expanding draws over the tab like a curtain instead of reflowing it. That holds for the
-       pinned-open state too: opening the history flyout must not resize the tab beside it. -->
+       expanding draws over the tab like a curtain instead of reflowing it. -->
   <div class="relative shrink-0 z-40 w-14">
   <nav
-    class="group/rail absolute inset-y-0 left-0 {historyOpen ? 'w-48' : 'w-14'} hover:w-48 transition-[width] duration-200 overflow-hidden flex flex-col bg-chrome pb-2 hover:shadow-xl hover:shadow-black/20"
+    class="group/rail absolute inset-y-0 left-0 w-14 hover:w-48 transition-[width] duration-200 overflow-hidden flex flex-col bg-chrome pb-2 hover:shadow-xl hover:shadow-black/20"
   >
     <!-- No brand block: the title bar carries the mark and the name, so the
          rail is nav and nothing else, starting at the top (mirrors the
@@ -734,7 +671,7 @@
             {/if}
           </span>
         </span>
-        <span class="font-mono text-sm whitespace-nowrap {historyOpen ? 'opacity-100' : 'opacity-0'} group-hover/rail:opacity-100 transition-opacity">
+        <span class="font-mono text-sm whitespace-nowrap opacity-0 group-hover/rail:opacity-100 transition-opacity">
           {tab.label}
         </span>
       </button>
@@ -750,7 +687,7 @@
       class="w-full flex items-center pr-2 h-10 shrink-0 text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
       <span class="w-14 shrink-0 flex items-center justify-center"><BookOpen size={18} class="shrink-0" /></span>
-      <span class="font-mono text-sm whitespace-nowrap {historyOpen ? 'opacity-100' : 'opacity-0'} group-hover/rail:opacity-100 transition-opacity">
+      <span class="font-mono text-sm whitespace-nowrap opacity-0 group-hover/rail:opacity-100 transition-opacity">
         Help
       </span>
     </button>
@@ -760,7 +697,7 @@
       class="w-full flex items-center pr-2 h-10 shrink-0 text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
       <span class="w-14 shrink-0 flex items-center justify-center"><Settings size={18} class="shrink-0" /></span>
-      <span class="font-mono text-sm whitespace-nowrap {historyOpen ? 'opacity-100' : 'opacity-0'} group-hover/rail:opacity-100 transition-opacity">
+      <span class="font-mono text-sm whitespace-nowrap opacity-0 group-hover/rail:opacity-100 transition-opacity">
         Settings
       </span>
     </button>
@@ -770,7 +707,7 @@
       class="w-full flex items-center pr-2 h-10 shrink-0 text-sm text-txtsecondary hover:text-txtmain hover:bg-secondary/40 transition-colors"
     >
       <span class="w-14 shrink-0 flex items-center justify-center"><LogOut size={18} class="shrink-0" /></span>
-      <span class="font-mono text-sm whitespace-nowrap truncate {historyOpen ? 'opacity-100' : 'opacity-0'} group-hover/rail:opacity-100 transition-opacity">
+      <span class="font-mono text-sm whitespace-nowrap truncate opacity-0 group-hover/rail:opacity-100 transition-opacity">
         {$me}
       </span>
     </button>
@@ -792,13 +729,36 @@
        from the title bar above and the rail beside it, meeting in the rounded
        corner - the same L the dashboard draws around its status rail. The 8px
        radius sits inside the 16px gutter, so no child can square it off. -->
-  <main class="relative flex-1 min-w-0 rounded-tl-lg border-t border-l border-border bg-background px-4 pb-4">
-    <div class="h-full" class:tab-hidden={$selectedTabStore !== "chat"}><ChatInterface /></div>
-    <div class="h-full" class:tab-hidden={$selectedTabStore !== "images"}><ImageInterface /></div>
-    <div class="h-full" class:tab-hidden={$selectedTabStore !== "video"}><VideoInterface /></div>
-    <div class="h-full" class:tab-hidden={$selectedTabStore !== "3d"}><ThreeDInterface /></div>
-    <div class="h-full" class:tab-hidden={$selectedTabStore !== "speech"}><SpeechInterface /></div>
-    <div class="h-full" class:tab-hidden={$selectedTabStore !== "audio"}><AudioInterface /></div>
+  <!-- The history drawer docks at the left edge of <main> and PUSHES the pane
+       (a flex sibling, not an overlay), so the thread stays readable beside the
+       list. It slides on the x axis; the drawer's fixed width keeps its rows
+       from reflowing while the wrapper's width animates. -->
+  <main class="relative flex-1 min-w-0 flex rounded-tl-lg border-t border-l border-border bg-background overflow-hidden">
+    {#if $historyOpenStore && hasHistory($selectedTabStore)}
+      <div class="shrink-0 h-full overflow-hidden" transition:slide={{ axis: "x", duration: 200 }}>
+        {#if onChats}
+          <HistoryDrawer heading="Chats" sessions={chatRows} activeId={$activeChatId} generatingId={$generatingChatId} unit="msg" emptyLabel="New chat" newTip="New chat" onNew={newChat} onOpen={(id) => activeChatId.set(id)} onDelete={(id) => (confirmDeleteId = id)} />
+        {:else if onImages}
+          <HistoryDrawer heading="Image threads" sessions={imageRows} activeId={$activeImageChatId} generatingId={$generatingImageChatId} unit="turn" emptyLabel="New image" newTip="New image" onNew={newImageChat} onOpen={(id) => activeImageChatId.set(id)} onDelete={(id) => (confirmDeleteImageId = id)} thumbsFor={imageThumbs} />
+        {:else if onVideo}
+          <HistoryDrawer heading="Videos" sessions={videoRows} activeId={$activeVideoChatId} generatingId={$generatingVideoChatId} unit="clip" emptyLabel="New video" newTip="New video" onNew={newVideoChat} onOpen={(id) => activeVideoChatId.set(id)} onDelete={(id) => (confirmDeleteVideoId = id)} />
+        {:else if onThreeD}
+          <HistoryDrawer heading="Meshes" sessions={threeDRows} activeId={$activeThreeDChatId} generatingId={$generatingThreeDChatId} unit="mesh" emptyLabel="New mesh" newTip="New mesh" onNew={newThreeDChat} onOpen={(id) => activeThreeDChatId.set(id)} onDelete={(id) => (confirmDeleteThreeDId = id)} thumbsFor={threeDThumbs} />
+        {:else if onSpeech}
+          <HistoryDrawer heading="Speech" sessions={speechRows} activeId={$activeSpeechChatId} generatingId={$generatingSpeechChatId} unit="take" emptyLabel="New speech" newTip="New speech" onNew={newSpeechChat} onOpen={(id) => activeSpeechChatId.set(id)} onDelete={(id) => (confirmDeleteSpeechId = id)} />
+        {/if}
+      </div>
+    {/if}
+    <!-- Chat, Images and Speech draw their own edge-to-edge header band, so they
+         own their padding; the older tabs keep the 16px gutter here. -->
+    <div class="relative flex-1 min-w-0 h-full">
+      <div class="h-full" class:tab-hidden={$selectedTabStore !== "chat"}><ChatInterface /></div>
+      <div class="h-full" class:tab-hidden={$selectedTabStore !== "images"}><ImageInterface /></div>
+      <div class="h-full px-4 pb-4" class:tab-hidden={$selectedTabStore !== "video"}><VideoInterface /></div>
+      <div class="h-full px-4 pb-4" class:tab-hidden={$selectedTabStore !== "3d"}><ThreeDInterface /></div>
+      <div class="h-full" class:tab-hidden={$selectedTabStore !== "speech"}><SpeechInterface /></div>
+      <div class="h-full px-4 pb-4" class:tab-hidden={$selectedTabStore !== "audio"}><AudioInterface /></div>
+    </div>
   </main>
 </div>
 
@@ -1558,92 +1518,6 @@
           <button class="px-3 py-1.5 rounded-md bg-primary text-white hover:opacity-90 transition-opacity text-sm" onclick={saveSection}>Save</button>
         </div>
       </div>
-    </div>
-  </div>
-{/if}
-
-<!-- History popup: previous chats / image threads. Opens off the active Chats or
-     Images rail tab; click outside dismisses, selecting a row opens it. -->
-{#snippet historyPanel(
-  sessions: { id: string; title: string }[],
-  activeId: string | null,
-  generatingId: string | null,
-  onNew: () => void,
-  onOpen: (id: string) => void,
-  onDelete: (id: string) => void,
-  emptyLabel: string,
-  heading: string,
-  newTip: string,
-  thumbsFor?: (id: string) => string[],
-)}
-  <div class="flex items-center justify-between gap-2 px-1 shrink-0">
-    <span class="text-[0.8125rem] font-medium text-txtmain truncate">{heading}</span>
-    <!-- No newTip = no button: speech threads start from the composer, not here. -->
-    {#if newTip}
-      <button
-        class="shrink-0 grid place-items-center w-6 h-6 rounded-md bg-[#141414] text-[#ededee] border border-card-border hover:bg-[#1e1e1e] hover:text-white transition-colors"
-        onclick={onNew}
-        use:tooltip={newTip}
-        aria-label={newTip}
-      >
-        <Plus class="w-3.5 h-3.5" />
-      </button>
-    {/if}
-  </div>
-  <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll flex flex-col gap-px mt-1.5">
-    {#each sessions as session (session.id)}
-      {@const sActive = session.id === activeId}
-      <div
-        class="group/row flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-[0.8125rem] transition-colors {sActive
-          ? 'text-txtmain bg-white/5'
-          : 'text-txtsecondary hover:text-txtmain hover:bg-white/[0.03]'}"
-      >
-        {#if session.id === generatingId}
-          <span class="w-1.5 h-1.5 shrink-0 rounded-full bg-primary reason-glow" use:tooltip={"Generating…"}></span>
-        {/if}
-        {#if thumbsFor}
-          {@const thumbs = thumbsFor(session.id)}
-          {#if thumbs.length}
-            <span class="flex -space-x-1.5 shrink-0">
-              {#each thumbs as th, ti (ti)}
-                <img src={th} alt="" class="w-6 h-6 rounded object-cover border border-card-border bg-secondary" />
-              {/each}
-            </span>
-          {/if}
-        {/if}
-        <button class="flex-1 min-w-0 text-left truncate" onclick={() => onOpen(session.id)} use:tooltip={session.title || emptyLabel}>
-          {session.title || emptyLabel}
-        </button>
-        <button
-          class="shrink-0 p-0.5 rounded text-txtsecondary opacity-0 group-hover/row:opacity-100 hover:text-error transition-opacity"
-          onclick={(e) => { e.stopPropagation(); onDelete(session.id); }}
-          use:tooltip={"Delete"}
-        >
-          <Trash2 class="w-3.5 h-3.5" />
-        </button>
-      </div>
-    {/each}
-  </div>
-{/snippet}
-
-{#if historyOpen && (onChats || onImages || onVideo || onThreeD || onSpeech)}
-  <div class="fixed inset-0 z-30" onclick={() => (historyOpen = false)} role="presentation">
-    <div
-      class="absolute left-[13rem] top-4 w-72 max-h-[calc(80vh/var(--qm-scale))] flex flex-col p-2 rounded-lg border border-card-border bg-surface shadow-xl"
-      onclick={(e) => e.stopPropagation()}
-      role="presentation"
-    >
-      {#if onChats}
-        {@render historyPanel(sortedSessions, $activeChatId, $generatingChatId, () => { newChat(); historyOpen = false; }, (id) => { activeChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteId = id), "New chat", "Chat history", "New chat")}
-      {:else if onImages}
-        {@render historyPanel(sortedImageSessions, $activeImageChatId, $generatingImageChatId, () => { newImageChat(); historyOpen = false; }, (id) => { activeImageChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteImageId = id), "New image", "Image history", "New image", imageThumbs)}
-      {:else if onVideo}
-        {@render historyPanel(sortedVideoSessions, $activeVideoChatId, $generatingVideoChatId, () => { newVideoChat(); historyOpen = false; }, (id) => { activeVideoChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteVideoId = id), "New video", "Video history", "New video")}
-      {:else if onThreeD}
-        {@render historyPanel(sortedThreeDSessions, $activeThreeDChatId, $generatingThreeDChatId, () => { newThreeDChat(); historyOpen = false; }, (id) => { activeThreeDChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteThreeDId = id), "New mesh", "3D history", "New mesh", threeDThumbs)}
-      {:else}
-        {@render historyPanel(sortedSpeechSessions, $activeSpeechChatId, $generatingSpeechChatId, () => { newSpeechChat(); historyOpen = false; }, (id) => { activeSpeechChatId.set(id); historyOpen = false; }, (id) => (confirmDeleteSpeechId = id), "New speech", "Speech history", "")}
-      {/if}
     </div>
   </div>
 {/if}

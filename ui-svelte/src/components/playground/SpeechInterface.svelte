@@ -18,16 +18,18 @@
   import { DEFAULT_VOICES, cachedVoices, fetchVoices } from "../../lib/voices";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import ModelSelector from "./ModelSelector.svelte";
-  import { Volume2, VolumeX, Download, RefreshCw, Plus, Pencil, X, Save, Upload, Square, Check, MoreVertical, Trash2, Mic, ChevronLeft } from "lucide-svelte";
+  import { Volume2, VolumeX, Download, RefreshCw, Plus, Pencil, X, Save, Upload, Square, Check, MoreVertical, Trash2, Mic, ChevronLeft, Search, Play } from "lucide-svelte";
   import { scrollFade } from "../../lib/scrollFade";
   import { askConfirm } from "../../lib/confirm";
   import AudioPlayer from "./AudioPlayer.svelte";
+  import PaneHeader from "./PaneHeader.svelte";
+  import { newSpeechChat } from "../../lib/playgroundThreads";
 
-  // Speech studio. Left column (60%): a voice panel that fills the height (voice
-  // list + cloning) above a chat-composer-style text input. Right column (40%):
-  // every generated clip as a waveform card, with an always-visible volume slider
-  // pinned at the bottom. Threads still persist per user via speechSessions; this
-  // tab renders one session's turns as a paginated clip library.
+  // Speech studio. Left: a voice panel that fills the height (voice list +
+  // cloning). Right: every generated clip as a card in a two-column takes grid,
+  // with volume + auto-play in the grid's header and a compact composer below.
+  // Threads still persist per user via speechSessions; this tab renders one
+  // session's turns as a paginated clip library.
 
   const selectedModelStore = userPref<string>("playground-speech-model", "");
   const selectedVoiceStore = userPref<string>("playground-speech-voice", "");
@@ -63,6 +65,11 @@
 
   let availableVoices = $state<string[]>(defaultVoices);
   let isLoadingVoices = $state(false);
+  let voiceQuery = $state("");
+  let shownVoices = $derived.by(() => {
+    const q = voiceQuery.trim().toLowerCase();
+    return q ? availableVoices.filter((v) => (v || "default").toLowerCase().includes(q)) : availableVoices;
+  });
   // voice_design models also expose no named speakers, but reject voice refs
   // ("voice references are only valid for base models"), so they must NOT show
   // cloning. Detect them by the talker-gguf suffix baked into the model id.
@@ -648,192 +655,226 @@
 </script>
 
 <div class="flex flex-col h-full">
+  <PaneHeader
+    title={activeSession?.title || "New speech"}
+    meta={turns.length ? `${turns.length} take${turns.length === 1 ? "" : "s"}` : ""}
+    updatedAt={turns.length ? activeSession?.updatedAt : undefined}
+    newLabel="New"
+    onNew={newSpeechChat}
+  />
   {#if !hasModels}
     <div class="flex-1 flex flex-col items-center justify-center gap-3 text-txtsecondary">
       <Volume2 class="w-10 h-10 opacity-40" strokeWidth={1.5} />
       <p>No models configured. Add models to your configuration to generate speech.</p>
     </div>
   {:else}
-    <div class="flex-1 flex flex-col md:flex-row gap-4 min-h-0 w-full py-4">
-      <!-- LEFT (60%): voice panel fills the height, composer pinned below -------- -->
-      <div class="w-full md:w-3/5 shrink-0 flex flex-col gap-3 min-h-0">
-        <!-- Voice panel — borderless table. voice_design lists user presets; every
-             other model type lists the server's voices. -->
-        <div class="flex-1 min-h-0 flex flex-col gap-2 px-1">
-          <div class="flex items-center justify-between shrink-0">
-            <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">
-              {isVoiceDesign ? "Voice preset" : "Voice"}
-              {#if !isVoiceDesign}
-                <span
-                  class="w-1.5 h-1.5 rounded-full {modelReady || voicesOffline ? 'bg-green-500' : 'bg-txtsecondary/40'}"
-                  use:tip={modelReady || voicesOffline ? "Voice list is live" : "Model not loaded - voice list is from cache"}
-                ></span>
-              {/if}
-            </span>
-            {#if !isVoiceDesign}
-              <button
-                class="p-1 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
-                onclick={refreshVoices}
-                disabled={isLoadingVoices || !$selectedModelStore}
-                use:tip={"Load the voices this model actually offers"}
-              >
-                <RefreshCw class="w-3.5 h-3.5 {isLoadingVoices ? 'animate-spin' : ''}" />
-              </button>
-            {/if}
-          </div>
-
-          {#if !isVoiceDesign && !modelReady && !voicesOffline && $selectedModelStore}
+    <div class="flex-1 min-h-0 flex">
+      <!-- LEFT: voice panel. voice_design lists user presets; every other model
+           type lists the server's voices. -->
+      <aside class="w-[19.375rem] shrink-0 flex flex-col min-h-0 bg-rail border-r border-card-border-inner">
+        <div class="flex items-center gap-2 pl-4 pr-2 h-10 border-b border-card-border-inner shrink-0">
+          <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">{isVoiceDesign ? "Voice preset" : "Voice"}</span>
+          {#if !isVoiceDesign}
+            <span
+              class="w-1.5 h-1.5 rounded-full {modelReady || voicesOffline ? 'bg-green-500' : 'bg-txtsecondary/40'}"
+              use:tip={modelReady || voicesOffline ? "Voice list is live" : "Model not loaded - voice list is from cache"}
+            ></span>
+          {/if}
+          <span class="font-mono text-micro text-txtsecondary tabular-nums">{isVoiceDesign ? allPresets.length : availableVoices.length}</span>
+          {#if !isVoiceDesign}
             <button
-              class="shrink-0 text-left text-[0.6875rem] leading-tight text-txtsecondary hover:text-txtmain px-1 -mt-1"
+              class="icon-btn ml-auto"
               onclick={refreshVoices}
-              disabled={isLoadingVoices}
+              disabled={isLoadingVoices || !$selectedModelStore}
+              use:tip={"Load the voices this model actually offers"}
+              aria-label="Refresh voices"
             >
-              Model idle - showing cached voices. Click to load &amp; sync clones.
+              <RefreshCw class="w-3.5 h-3.5 {isLoadingVoices ? 'animate-spin' : ''}" />
             </button>
-          {/if}
-
-          {#if isVoiceDesign}
-            <!-- Design presets: pick one like a voice; each is a saved style desc. -->
-            <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll flex flex-col">
-              {#each allPresets as p (p.name)}
-                <div
-                  class="group flex items-center gap-2 pr-1 rounded-md {$selectedPresetStore === p.name ? 'bg-[#141414] text-white' : 'text-txtmain hover:bg-secondary'}"
-                >
-                  <button class="flex-1 min-w-0 flex flex-col items-start px-3 py-1.5 text-left" onclick={() => selectedPresetStore.set(p.name)}>
-                    <span class="truncate w-full text-[0.8125rem] font-medium">{p.name}</span>
-                    <span class="truncate w-full text-[0.6875rem] {$selectedPresetStore === p.name ? 'text-white/60' : 'text-txtsecondary'}">{p.instructions}</span>
-                  </button>
-                  {#if $selectedPresetStore === p.name}<Check class="w-4 h-4 shrink-0" />{/if}
-                  <button
-                    class="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 {$selectedPresetStore === p.name ? 'text-white/70 hover:text-white' : 'text-txtsecondary hover:text-primary'}"
-                    onclick={() => openPreset(p)}
-                    use:tip={"Edit preset"}
-                  >
-                    <Pencil class="w-3.5 h-3.5" />
-                  </button>
-                  {#if !isDefaultPreset(p.name)}
-                    <button
-                      class="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 {$selectedPresetStore === p.name ? 'text-white/70 hover:text-white' : 'text-txtsecondary hover:text-error'}"
-                      onclick={() => deletePreset(p.name)}
-                      use:tip={"Delete preset"}
-                    >
-                      <Trash2 class="w-3.5 h-3.5" />
-                    </button>
-                  {/if}
-                </div>
-              {/each}
-            </div>
-            <button class="shrink-0 inline-flex items-center gap-1.5 text-[0.8125rem] text-primary hover:underline" onclick={() => openPreset()}>
-              <Plus class="w-4 h-4" /> Design a voice
-            </button>
-          {:else}
-            <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll flex flex-col">
-              {#each availableVoices as v (v)}
-                <div
-                  class="group flex items-center gap-2 pr-1 rounded-md {$selectedVoiceStore === v ? 'bg-[#141414] text-white' : 'text-txtmain hover:bg-secondary'}"
-                >
-                  <button
-                    class="flex-1 min-w-0 flex items-center justify-between gap-2 px-3 py-1.5 text-[0.8125rem] text-left"
-                    onclick={() => selectedVoiceStore.set(v)}
-                  >
-                    <span class="truncate">{v || "Default"}</span>
-                  </button>
-                  {#if isBaseModel && v}
-                    <button
-                      class="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 {$selectedVoiceStore === v ? 'text-white/70 hover:text-white' : 'text-txtsecondary hover:text-error'}"
-                      onclick={() => deleteVoice(v)}
-                      use:tip={"Delete voice"}
-                    >
-                      <Trash2 class="w-3.5 h-3.5" />
-                    </button>
-                  {/if}
-                </div>
-              {/each}
-            </div>
-
-            <!-- Voice cloning (base models). tts-server accepts a clone on any model,
-                 but only base models need it — custom_voice ships its own speakers. -->
-            {#if isBaseModel}
-              <button
-                class="shrink-0 inline-flex items-center gap-1.5 text-[0.8125rem] text-primary hover:underline"
-                onclick={openClone}
-              >
-                <Plus class="w-4 h-4" /> Clone a voice
-              </button>
-            {/if}
           {/if}
         </div>
 
-        <!-- Text input — chat composer chrome: model picker centered. Enter sends. -->
-        <div class="composer-shell shrink-0">
-          <textarea
-            bind:this={promptEl}
-            class="composer-textarea pretty-scroll min-h-[3.5rem] max-h-[calc(50vh/var(--qm-scale))]"
-            rows="2"
-            placeholder={turns.length ? "Add another line to speak…" : "Enter text to convert to speech…"}
-            disabled={isGenerating}
-            bind:value={prompt}
-            onkeydown={handleKeyDown}
-          ></textarea>
+        {#if !isVoiceDesign && !modelReady && !voicesOffline && $selectedModelStore}
+          <button
+            class="shrink-0 text-left text-micro leading-tight text-txtsecondary hover:text-txtmain px-4 pt-2.5"
+            onclick={refreshVoices}
+            disabled={isLoadingVoices}
+          >
+            Model idle - showing cached voices. Click to load &amp; sync clones.
+          </button>
+        {/if}
 
-          <div class="flex items-center justify-between gap-2">
-            <div class="flex-1 min-w-0 flex justify-center">
-              <ModelSelector
-                bind:value={$selectedModelStore}
-                placeholder="Select a speech model…"
-                disabled={isGenerating}
-                category="tts"
-                ghost
-                dropUp
-              />
-            </div>
+        {#if !isVoiceDesign && availableVoices.length > 8}
+          <div class="relative px-3 pt-2.5 shrink-0">
+            <Search class="absolute left-5 top-[calc(50%+0.3125rem)] -translate-y-1/2 w-3.5 h-3.5 text-txtsecondary pointer-events-none" />
+            <input
+              bind:value={voiceQuery}
+              type="text"
+              placeholder="Filter voices…"
+              onkeydown={(e) => e.key === "Escape" && (voiceQuery = "")}
+              class="w-full rounded border border-card-border bg-background pl-7 pr-2 py-1 text-xs focus:outline-none focus:border-primary"
+            />
+          </div>
+        {/if}
 
-            {#if isGenerating}
-              <button class="composer-icon-btn shrink-0" onclick={cancelGeneration} use:tip={"Stop"}>
-                <Square class="w-[1.125rem] h-[1.125rem]" fill="currentColor" />
+        {#if isVoiceDesign}
+          <!-- Design presets: pick one like a voice; each is a saved style desc. -->
+          <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll flex flex-col p-2">
+            {#each allPresets as p (p.name)}
+              <div
+                class="group flex items-center gap-2 pr-1 rounded-md {$selectedPresetStore === p.name ? 'bg-secondary text-txtmain shadow-[inset_2px_0_var(--color-primary)]' : 'text-txtmain hover:bg-secondary/50'}"
+              >
+                <button class="flex-1 min-w-0 flex flex-col items-start px-3 py-1.5 text-left" onclick={() => selectedPresetStore.set(p.name)}>
+                  <span class="truncate w-full text-[0.8125rem] font-medium">{p.name}</span>
+                  <span class="truncate w-full text-micro text-txtsecondary">{p.instructions}</span>
+                </button>
+                {#if $selectedPresetStore === p.name}<Check class="w-4 h-4 shrink-0 text-primary" />{/if}
+                <button
+                  class="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 text-txtsecondary hover:text-primary"
+                  onclick={() => openPreset(p)}
+                  use:tip={"Edit preset"}
+                >
+                  <Pencil class="w-3.5 h-3.5" />
+                </button>
+                {#if !isDefaultPreset(p.name)}
+                  <button
+                    class="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 text-txtsecondary hover:text-error"
+                    onclick={() => deletePreset(p.name)}
+                    use:tip={"Delete preset"}
+                  >
+                    <Trash2 class="w-3.5 h-3.5" />
+                  </button>
+                {/if}
+              </div>
+            {/each}
+          </div>
+          <div class="shrink-0 px-4 py-2.5 border-t border-card-border-inner">
+            <button class="btn btn--sm inline-flex items-center gap-1.5" onclick={() => openPreset()}>
+              <Plus class="w-3.5 h-3.5" /> Design a voice
+            </button>
+          </div>
+        {:else}
+          <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll flex flex-col p-2">
+            {#each shownVoices as v (v)}
+              <div
+                class="group flex items-center gap-2 pr-1 rounded-md {$selectedVoiceStore === v ? 'bg-secondary text-txtmain shadow-[inset_2px_0_var(--color-primary)]' : 'text-txtmain hover:bg-secondary/50'}"
+              >
+                <button
+                  class="flex-1 min-w-0 flex items-center justify-between gap-2 px-3 py-1.5 text-[0.8125rem] text-left"
+                  onclick={() => selectedVoiceStore.set(v)}
+                >
+                  <span class="truncate">{v || "Default"}</span>
+                  {#if $selectedVoiceStore === v}<Check class="w-3.5 h-3.5 shrink-0 text-primary" />{/if}
+                </button>
+                {#if isBaseModel && v}
+                  <button
+                    class="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 text-txtsecondary hover:text-error"
+                    onclick={() => deleteVoice(v)}
+                    use:tip={"Delete voice"}
+                  >
+                    <Trash2 class="w-3.5 h-3.5" />
+                  </button>
+                {/if}
+              </div>
+            {:else}
+              <p class="px-3 py-4 text-xs text-txtsecondary text-center">No voices match.</p>
+            {/each}
+          </div>
+
+          <!-- Voice cloning (base models). tts-server accepts a clone on any model,
+               but only base models need it — custom_voice ships its own speakers. -->
+          {#if isBaseModel}
+            <div class="shrink-0 px-4 py-2.5 border-t border-card-border-inner">
+              <button class="btn btn--sm inline-flex items-center gap-1.5" onclick={openClone}>
+                <Plus class="w-3.5 h-3.5" /> Clone a voice
               </button>
-            {/if}
+            </div>
+          {/if}
+        {/if}
+      </aside>
+
+      <!-- RIGHT: takes grid over the composer. -->
+      <div class="flex-1 min-w-0 flex flex-col min-h-0 px-6">
+        <!-- Takes header: playback volume + auto-play live with the clips they act on. -->
+        <div class="flex items-center gap-2.5 h-10 shrink-0">
+          <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Takes</span>
+          <span class="font-mono text-micro text-txtsecondary tabular-nums">{turns.length}</span>
+          <div class="ml-auto flex items-center gap-2">
+            <VolumeX class="w-3.5 h-3.5 text-txtsecondary shrink-0" />
+            <input type="range" min="0" max="1" step="0.01" bind:value={$volumeStore} class="w-24 accent-primary" aria-label="Playback volume" />
+            <Volume2 class="w-3.5 h-3.5 text-txtsecondary shrink-0" />
+            <span class="font-mono text-micro text-txtsecondary tabular-nums w-9 text-right">{Math.round($volumeStore * 100)}%</span>
+            <label class="shrink-0 flex items-center gap-1.5 pl-3 ml-1 border-l border-card-border-inner text-micro font-medium uppercase tracking-wide text-txtsecondary cursor-pointer" use:tip={"Auto-play new clips"}>
+              <Toggle size="sm" bind:checked={$autoPlayStore} />
+              Auto-play
+            </label>
           </div>
         </div>
-      </div>
 
-      <!-- RIGHT (40%): clip library + always-visible volume ---------------------- -->
-      <div class="flex-1 min-w-0 flex flex-col min-h-0">
         <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll scroll-fade-b" use:scrollFade>
           {#if turns.length === 0 && !isGenerating}
             <div class="h-full flex flex-col items-center justify-center gap-3 text-txtsecondary">
               <Volume2 class="w-10 h-10 opacity-40" strokeWidth={1.5} />
-              <p>Generated clips appear here. Enter text on the left to start.</p>
+              <p>Pick a voice, type a line below and press Enter. Each take lands here.</p>
             </div>
           {:else}
-            <div class="flex flex-col gap-3 pb-6 px-1">
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-2.5 content-start pb-4">
               {#each pagedTurns as item (item.ti)}
                 {@const t = item.t}
                 {@const ti = item.ti}
-                <div class="relative rounded-xl border border-card-border bg-surface p-2 flex flex-col gap-1.5 {menuIdx === ti ? 'z-30' : ''}">
+                <div class="relative min-w-0 rounded-[0.625rem] border border-card-border bg-surface p-3 flex flex-col gap-2 {menuIdx === ti ? 'z-30' : ''}">
                   {#if editingIdx === ti}
                     <!-- Edit mode: textarea replaces the card body. -->
                     <div class="flex flex-col gap-2">
                       <textarea
-                        class="w-full px-2.5 py-1.5 rounded-lg border border-card-border bg-surface text-[0.8125rem] resize-none focus:outline-none focus:ring-2 focus:ring-primary/40"
-                        rows="2"
+                        class="w-full px-2.5 py-1.5 rounded-lg border border-card-border bg-background text-[0.8125rem] resize-none focus:outline-none focus:border-primary"
+                        rows="3"
                         bind:value={editText}
                         onkeydown={editKeyDown}
                       ></textarea>
                       <div class="flex justify-end gap-1.5">
-                        <button class="p-1.5 rounded hover:bg-secondary text-txtsecondary" onclick={cancelEdit} use:tip={"Cancel"}><X class="w-4 h-4" /></button>
-                        <button class="p-1.5 rounded hover:bg-secondary text-txtsecondary" onclick={saveEdit} use:tip={"Save & regenerate"}><Save class="w-4 h-4" /></button>
+                        <button class="icon-btn" onclick={cancelEdit} use:tip={"Cancel"}><X class="w-4 h-4" /></button>
+                        <button class="icon-btn" onclick={saveEdit} use:tip={"Save & regenerate"}><Save class="w-4 h-4" /></button>
                       </div>
                     </div>
                   {:else}
+                    <p class="text-[0.8125rem] leading-snug text-txtmain whitespace-pre-wrap line-clamp-2 min-h-[2.25rem] pr-6">{t.text}</p>
+
+                    {#if t.error}
+                      <div class="text-error text-xs">{t.error}</div>
+                    {:else if t.audio}
+                      <AudioPlayer src={t.audio} volume={$volumeStore} bind:this={audioEls[ti]} />
+                    {:else if genId !== $activeSpeechChatId || ti !== turns.length - 1}
+                      <div class="text-error text-xs">No audio returned.</div>
+                    {:else}
+                      <!-- In-flight: spinner + label + elapsed. -->
+                      <div class="flex items-center justify-between gap-2 h-8">
+                        <div class="flex items-center gap-2 text-txtsecondary">
+                          <span class="inline-block w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></span>
+                          <span class="reason-shimmer-white font-medium text-xs">Generating speech…</span>
+                        </div>
+                        <span class="font-mono text-micro text-txtsecondary tabular-nums">{fmtDur(elapsed)}</span>
+                      </div>
+                    {/if}
+
+                    <div class="flex items-center gap-2 min-w-0">
+                      <span class="truncate rounded border border-card-border px-1.5 py-px font-mono text-micro text-txtsecondary">{t.voice || "Default"}</span>
+                      {#if t.secs}
+                        <span class="shrink-0 font-mono text-micro text-txtsecondary tabular-nums" use:tip={"Generation time"}>{t.secs.toFixed(1)}s</span>
+                      {/if}
+                      <div class="ml-auto flex items-center shrink-0">
+                        {#if t.audio}
+                          <button class="icon-btn" onclick={() => downloadAudio(t)} use:tip={"Download"} aria-label="Download">
+                            <Download class="w-3.5 h-3.5" />
+                          </button>
+                        {/if}
+                      </div>
+                    </div>
+
                     <!-- Three-dot menu pinned to the card's top-right corner. -->
-                    <div class="absolute top-1.5 right-1.5 z-20">
-                      <button
-                        class="p-1 rounded hover:bg-secondary text-txtsecondary disabled:opacity-40"
-                        onclick={() => (menuIdx = menuIdx === ti ? null : ti)}
-                        use:tip={"More"}
-                      >
-                        <MoreVertical class="w-4 h-4" />
+                    <div class="absolute top-2 right-2 z-20">
+                      <button class="icon-btn !w-6 !h-6" onclick={() => (menuIdx = menuIdx === ti ? null : ti)} use:tip={"More"} aria-label="More">
+                        <MoreVertical class="w-3.5 h-3.5" />
                       </button>
                       {#if menuIdx === ti}
                         <div class="absolute right-0 top-full mt-1 min-w-[8rem] flex flex-col rounded-lg border border-card-border bg-surface shadow-lg py-1 text-[0.8125rem]">
@@ -861,38 +902,6 @@
                         </div>
                       {/if}
                     </div>
-
-                    <!-- Transcript (2 lines); pr-6 clears the corner menu. -->
-                    <p class="font-serif text-xs leading-snug tracking-tight text-txtmain/90 whitespace-pre-wrap line-clamp-2 pr-6">{t.text}</p>
-
-                    {#if t.error}
-                      <div class="text-error text-[0.8125rem]">{t.error}</div>
-                    {:else if t.audio}
-                      <div class="flex items-center gap-1.5">
-                        <div class="flex-1 min-w-0">
-                          <AudioPlayer src={t.audio} volume={$volumeStore} label={t.voice || "Default"} bind:this={audioEls[ti]} />
-                        </div>
-                        <!-- Download, bottom-right. -->
-                        <button
-                          class="shrink-0 self-end p-1 rounded hover:bg-secondary text-txtsecondary"
-                          onclick={() => downloadAudio(t)}
-                          use:tip={"Download"}
-                        >
-                          <Download class="w-4 h-4" />
-                        </button>
-                      </div>
-                    {:else if genId !== $activeSpeechChatId || ti !== turns.length - 1}
-                      <div class="text-error text-[0.8125rem]">No audio returned.</div>
-                    {:else}
-                      <!-- In-flight: spinner + label + elapsed. -->
-                      <div class="flex items-center justify-between gap-2">
-                        <div class="flex items-center gap-2 text-txtsecondary">
-                          <span class="inline-block w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></span>
-                          <span class="reason-shimmer-white font-medium text-[0.8125rem]">Generating speech…</span>
-                        </div>
-                        <span class="text-[0.6875rem] text-txtsecondary tabular-nums">{fmtDur(elapsed)}</span>
-                      </div>
-                    {/if}
                   {/if}
                 </div>
               {/each}
@@ -901,35 +910,65 @@
         </div>
 
         {#if pageCount > 1}
-          <div class="shrink-0 flex items-center justify-center gap-3 pt-3 text-[0.8125rem]">
-            <button
-              class="px-2.5 py-1 rounded-md border border-card-border text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
-              onclick={() => (page = Math.max(1, page - 1))}
-              disabled={page <= 1}
-            >
-              Prev
-            </button>
-            <span class="text-txtsecondary tabular-nums">{page} / {pageCount}</span>
-            <button
-              class="px-2.5 py-1 rounded-md border border-card-border text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors disabled:opacity-40"
-              onclick={() => (page = Math.min(pageCount, page + 1))}
-              disabled={page >= pageCount}
-            >
-              Next
-            </button>
+          <div class="shrink-0 flex items-center justify-center gap-3 pt-2">
+            <button class="btn btn--sm" onclick={() => (page = Math.max(1, page - 1))} disabled={page <= 1}>Prev</button>
+            <span class="font-mono text-micro text-txtsecondary tabular-nums">{page} / {pageCount}</span>
+            <button class="btn btn--sm" onclick={() => (page = Math.min(pageCount, page + 1))} disabled={page >= pageCount}>Next</button>
           </div>
         {/if}
 
-        <!-- Playback volume + auto-play — always visible, pinned at the bottom. -->
-        <div class="shrink-0 flex items-center gap-2 pt-3 mt-2 border-t border-card-border">
-          <VolumeX class="w-4 h-4 text-txtsecondary shrink-0" />
-          <input type="range" min="0" max="1" step="0.01" bind:value={$volumeStore} class="flex-1 accent-primary" />
-          <Volume2 class="w-4 h-4 text-txtsecondary shrink-0" />
-          <span class="text-[0.6875rem] text-txtsecondary tabular-nums w-9 text-right">{Math.round($volumeStore * 100)}%</span>
-          <label class="shrink-0 flex items-center gap-1.5 pl-2 ml-1 border-l border-card-border text-[0.6875rem] uppercase tracking-wide text-txtsecondary cursor-pointer" use:tip={"Auto-play new clips"}>
-            <Toggle size="sm" bind:checked={$autoPlayStore} />
-            Auto-play
-          </label>
+        <!-- Composer: text, then one control row (voice, model, length, speak). -->
+        <div class="shrink-0 pt-2.5 pb-3">
+          <div class="rounded-[1.125rem] border border-composer-border bg-surface hover:ring-1 hover:ring-composer-ring focus-within:border-primary transition-all">
+            <textarea
+              bind:this={promptEl}
+              class="block w-full bg-transparent px-4 pt-3.5 pb-1.5 text-sm leading-relaxed resize-none focus:outline-none placeholder:text-txtsecondary pretty-scroll min-h-[3rem] max-h-[calc(40vh/var(--qm-scale))]"
+              rows="2"
+              placeholder={turns.length ? "Add another line to speak…" : "Enter text to convert to speech…"}
+              disabled={isGenerating}
+              bind:value={prompt}
+              onkeydown={handleKeyDown}
+            ></textarea>
+            <div class="flex items-center gap-2.5 pl-3 pr-2 pb-2 pt-1 min-w-0">
+              <span
+                class="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border border-card-border text-xs text-txtmain max-w-[12rem] shrink-0"
+                use:tip={"Pick the voice in the list on the left"}
+              >
+                <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"></span>
+                <span class="truncate">{isVoiceDesign ? activePreset?.name || "No preset" : $selectedVoiceStore || "Default"}</span>
+              </span>
+              <div class="min-w-0">
+                <ModelSelector
+                  bind:value={$selectedModelStore}
+                  placeholder="Select a speech model…"
+                  disabled={isGenerating}
+                  category="tts"
+                  ghost
+                  dropUp
+                />
+              </div>
+              <span class="ml-auto shrink-0 font-mono text-micro text-txtsecondary tabular-nums">{prompt.length} chars</span>
+              {#if isGenerating}
+                <button class="btn btn--icon !rounded-full w-8 h-8 shrink-0" onclick={cancelGeneration} use:tip={"Stop"} aria-label="Stop">
+                  <Square class="w-3.5 h-3.5" fill="currentColor" />
+                </button>
+              {:else}
+                <button
+                  class="btn btn--primary btn--icon !rounded-full w-8 h-8 shrink-0"
+                  onclick={send}
+                  disabled={!prompt.trim() || !$selectedModelStore}
+                  use:tip={"Speak"}
+                  aria-label="Speak"
+                >
+                  <Play class="w-3.5 h-3.5" fill="currentColor" />
+                </button>
+              {/if}
+            </div>
+          </div>
+          <div class="flex justify-center gap-4 mt-2 text-micro text-txtsecondary select-none">
+            <span><kbd class="font-mono">Enter</kbd> speak</span>
+            <span><kbd class="font-mono">Shift+Enter</kbd> new line</span>
+          </div>
         </div>
       </div>
     </div>
