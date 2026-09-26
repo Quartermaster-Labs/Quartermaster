@@ -62,7 +62,9 @@ Pure helpers live beside it in `imageGen.ts`: `ASPECTS`/`SIZE_TIERS`/`aspectDims
 ## `VideoInterface.svelte`
 
 The Video studio, deliberately a close sibling of `ImageInterface` (same thread/turn model, same
-bubbles, same composer chrome, a `<video controls loop>` where the `<img>` was). Store in
+params panel + canvas + thread strip layout, a `<video controls loop>` where the `<img>` was; the
+Start/End frame chips sit where Image has `+ Reference`, and the strip's tiles are `<video
+preload="metadata">` nudged to 0.1s so they paint a frame). Store in
 `stores/videoHistory.ts`, API client in `lib/videoApi.ts`, pure helpers in `videoGen.ts` (which
 re-exports the aspect/sampler/`fmtDur` tables from `imageGen.ts` rather than forking them).
 

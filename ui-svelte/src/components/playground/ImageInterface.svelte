@@ -1209,7 +1209,7 @@
       title={activeSession?.title || "New image"}
       meta={`${turns.length} turn${turns.length === 1 ? "" : "s"}`}
       updatedAt={activeSession?.updatedAt}
-      newLabel="New image"
+      newLabel="New thread"
       onNew={newThread}
     />
 
