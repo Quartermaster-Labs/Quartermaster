@@ -548,3 +548,73 @@ func TestAutogen_knowsLlm(t *testing.T) {
 		t.Error("nil pool knows nothing")
 	}
 }
+
+// writeGgufKVs lays down a gguf carrying only its header and the given KVs (no
+// tensors). String values are written as gguf strings, int64 as uint32, which is
+// all the pool's classification ladder reads. Keys are written in order, so
+// general.architecture must come first for the arch-prefixed keys to match.
+func writeGgufKVs(t *testing.T, path string, kvs [][2]any) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	le := binary.LittleEndian
+	str := func(s string) {
+		binary.Write(f, le, uint64(len(s)))
+		f.WriteString(s)
+	}
+	f.WriteString("GGUF")
+	binary.Write(f, le, uint32(3))
+	binary.Write(f, le, uint64(0))
+	binary.Write(f, le, uint64(len(kvs)))
+	for _, kv := range kvs {
+		str(kv[0].(string))
+		switch v := kv[1].(type) {
+		case string:
+			binary.Write(f, le, uint32(8))
+			str(v)
+		case int:
+			binary.Write(f, le, uint32(4))
+			binary.Write(f, le, uint32(v))
+		default:
+			t.Fatalf("unsupported kv value %T", v)
+		}
+	}
+}
+
+// A recurrent LLM can never be a diffusion text encoder, so it must not enter
+// the pool even when it would win its width class. The hybrid paths sort first,
+// so with equal sizes and arch rank the old tiebreak handed Qwen-Image 2.1 the
+// hybrid (the MiMo-V2.6-Distill-Qwen-9B incident).
+func TestAutogen_EncoderPoolSkipsRecurrentLlm(t *testing.T) {
+	root := t.TempDir()
+	writeGgufKVs(t, filepath.Join(root, "a-hybrid", "MiMo-Distill-Qwen-9B-Q8_0.gguf"), [][2]any{
+		{"general.architecture", "qwen35"},
+		{"qwen35.embedding_length", 4096},
+		{"qwen35.full_attention_interval", 4},
+	})
+	writeGgufKVs(t, filepath.Join(root, "b-ssm", "Granite-Hybrid-Q8_0.gguf"), [][2]any{
+		{"general.architecture", "granitehybrid"},
+		{"granitehybrid.embedding_length", 4096},
+		{"granitehybrid.ssm.state_size", 128},
+	})
+	writeGgufKVs(t, filepath.Join(root, "c-vl", "Qwen3VL-8B-Instruct-Q8_0.gguf"), [][2]any{
+		{"general.architecture", "qwen3vl"},
+		{"qwen3vl.embedding_length", 4096},
+	})
+
+	p := ScanEncoderPool([]string{root})
+	for _, f := range p.Files {
+		if f.Role == RoleLlm && !strings.Contains(f.Path, "Qwen3VL") {
+			t.Errorf("recurrent llm in pool: %s", f.Path)
+		}
+	}
+	if got, _ := p.Llm(4096, false, ""); !strings.Contains(got, "Qwen3VL") {
+		t.Errorf("llm(4096) = %q, want the Qwen3-VL encoder", got)
+	}
+}

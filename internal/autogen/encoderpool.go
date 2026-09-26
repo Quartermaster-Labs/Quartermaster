@@ -326,6 +326,13 @@ func ScanEncoderPool(roots []string) *EncoderPool {
 				case IsEmbeddingModel(meta):
 					// A pooled embedder emits one vector for the whole prompt,
 					// not the per-token sequence a DiT cross-attends to.
+				case isRecurrentLlm(meta):
+					// sd.cpp's conditioner is a plain transformer stack, so a
+					// hybrid cannot load at all. Left in the pool it still
+					// wins its width class: MiMo-V2.6-Distill-Qwen-9B (a
+					// Qwen3.5 hybrid) is 4096 wide, arch qwen*, has an mmproj
+					// and outweighs Qwen3-VL-8B, so it took Qwen-Image 2.1
+					// and sd-server died on "model metadata validation failed".
 				default:
 					seen[key] = true
 					p.Files = append(p.Files, ComponentFile{
@@ -340,6 +347,15 @@ func ScanEncoderPool(roots []string) *EncoderPool {
 	p.pairProjectors(projByDir)
 	sort.Slice(p.Files, func(i, j int) bool { return p.Files[i].Path < p.Files[j].Path })
 	return p
+}
+
+// isRecurrentLlm reports whether an LLM gguf carries recurrent (linear/SSM)
+// layers: a GatedDeltaNet hybrid like Qwen3.5/3.6 states full_attention_interval,
+// and a Mamba-style model or hybrid states its ssm.* sizes. No diffusion model
+// conditions on one, and the same keys already drive the recurrent KV and
+// checkpoint sizing, so this is no new identity table.
+func isRecurrentLlm(meta Metadata) bool {
+	return meta.FullAttnInterval > 0 || meta.SsmStateSize > 0 || meta.SsmInnerSize > 0
 }
 
 // isDraftSidecar reports whether a gguf filename is one of the speculation
