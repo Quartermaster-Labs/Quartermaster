@@ -4,7 +4,7 @@
 </script>
 
 <script lang="ts">
-  import { Plus, Search, Trash2, X } from "lucide-svelte";
+  import { Search, Trash2, X } from "lucide-svelte";
   import { tip } from "../../lib/tooltip";
   import { dayBucket, relTime, type DayBucket } from "../../lib/playgroundThreads";
 
@@ -16,15 +16,13 @@
     // "msg" / "turn" / "take": pluralised with a plain "s".
     unit: string;
     emptyLabel: string;
-    newTip?: string;
-    onNew?: () => void;
     onOpen: (id: string) => void;
     onDelete: (id: string) => void;
     // Image-like tabs show a strip of results under the title.
     thumbsFor?: (id: string) => string[];
   }
 
-  let { heading, sessions, activeId, generatingId, unit, emptyLabel, newTip, onNew, onOpen, onDelete, thumbsFor }: Props = $props();
+  let { heading, sessions, activeId, generatingId, unit, emptyLabel, onOpen, onDelete, thumbsFor }: Props = $props();
 
   let query = $state("");
 
@@ -59,11 +57,6 @@
   <div class="flex items-center gap-2 pl-4 pr-2 h-10 border-b border-card-border-inner shrink-0">
     <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">{heading}</span>
     <span class="font-mono text-micro text-txtsecondary tabular-nums">{sessions.length}</span>
-    {#if onNew && newTip}
-      <button class="btn btn--sm btn--icon ml-auto h-7" onclick={onNew} use:tip={newTip} aria-label={newTip}>
-        <Plus class="w-3.5 h-3.5" />
-      </button>
-    {/if}
   </div>
 
   <div class="px-3 py-2 shrink-0">

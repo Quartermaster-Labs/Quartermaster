@@ -94,7 +94,6 @@
   import AudioInterface from "../components/playground/AudioInterface.svelte";
   import SpeechInterface from "../components/playground/SpeechInterface.svelte";
   import HistoryDrawer, { type DrawerSession } from "../components/playground/HistoryDrawer.svelte";
-  import { newChat, newImageChat, newVideoChat, newThreeDChat, newSpeechChat } from "../lib/playgroundThreads";
   import { slide } from "svelte/transition";
 
   type Tab = PlaygroundTab;
@@ -737,15 +736,15 @@
     {#if $historyOpenStore && hasHistory($selectedTabStore)}
       <div class="shrink-0 h-full overflow-hidden" transition:slide={{ axis: "x", duration: 200 }}>
         {#if onChats}
-          <HistoryDrawer heading="Chats" sessions={chatRows} activeId={$activeChatId} generatingId={$generatingChatId} unit="msg" emptyLabel="New chat" newTip="New chat" onNew={newChat} onOpen={(id) => activeChatId.set(id)} onDelete={(id) => (confirmDeleteId = id)} />
+          <HistoryDrawer heading="Chats" sessions={chatRows} activeId={$activeChatId} generatingId={$generatingChatId} unit="msg" emptyLabel="New chat" onOpen={(id) => activeChatId.set(id)} onDelete={(id) => (confirmDeleteId = id)} />
         {:else if onImages}
-          <HistoryDrawer heading="Image threads" sessions={imageRows} activeId={$activeImageChatId} generatingId={$generatingImageChatId} unit="turn" emptyLabel="New image" newTip="New image" onNew={newImageChat} onOpen={(id) => activeImageChatId.set(id)} onDelete={(id) => (confirmDeleteImageId = id)} thumbsFor={imageThumbs} />
+          <HistoryDrawer heading="Image threads" sessions={imageRows} activeId={$activeImageChatId} generatingId={$generatingImageChatId} unit="turn" emptyLabel="New image" onOpen={(id) => activeImageChatId.set(id)} onDelete={(id) => (confirmDeleteImageId = id)} thumbsFor={imageThumbs} />
         {:else if onVideo}
-          <HistoryDrawer heading="Videos" sessions={videoRows} activeId={$activeVideoChatId} generatingId={$generatingVideoChatId} unit="clip" emptyLabel="New video" newTip="New video" onNew={newVideoChat} onOpen={(id) => activeVideoChatId.set(id)} onDelete={(id) => (confirmDeleteVideoId = id)} />
+          <HistoryDrawer heading="Videos" sessions={videoRows} activeId={$activeVideoChatId} generatingId={$generatingVideoChatId} unit="clip" emptyLabel="New video" onOpen={(id) => activeVideoChatId.set(id)} onDelete={(id) => (confirmDeleteVideoId = id)} />
         {:else if onThreeD}
-          <HistoryDrawer heading="Meshes" sessions={threeDRows} activeId={$activeThreeDChatId} generatingId={$generatingThreeDChatId} unit="mesh" emptyLabel="New mesh" newTip="New mesh" onNew={newThreeDChat} onOpen={(id) => activeThreeDChatId.set(id)} onDelete={(id) => (confirmDeleteThreeDId = id)} thumbsFor={threeDThumbs} />
+          <HistoryDrawer heading="Meshes" sessions={threeDRows} activeId={$activeThreeDChatId} generatingId={$generatingThreeDChatId} unit="mesh" emptyLabel="New mesh" onOpen={(id) => activeThreeDChatId.set(id)} onDelete={(id) => (confirmDeleteThreeDId = id)} thumbsFor={threeDThumbs} />
         {:else if onSpeech}
-          <HistoryDrawer heading="Speech" sessions={speechRows} activeId={$activeSpeechChatId} generatingId={$generatingSpeechChatId} unit="take" emptyLabel="New speech" newTip="New speech" onNew={newSpeechChat} onOpen={(id) => activeSpeechChatId.set(id)} onDelete={(id) => (confirmDeleteSpeechId = id)} />
+          <HistoryDrawer heading="Speech" sessions={speechRows} activeId={$activeSpeechChatId} generatingId={$generatingSpeechChatId} unit="take" emptyLabel="New speech" onOpen={(id) => activeSpeechChatId.set(id)} onDelete={(id) => (confirmDeleteSpeechId = id)} />
         {/if}
       </div>
     {/if}

@@ -1,14 +1,10 @@
 import { get } from "svelte/store";
 import { chatSessions, activeChatId, newChatId, type ChatSession } from "../stores/chatHistory";
-import { imageSessions, activeImageChatId, newImageChatId, type ImageSession } from "../stores/imageHistory";
-import { videoSessions, activeVideoChatId, newVideoChatId, type VideoSession } from "../stores/videoHistory";
-import { threeDSessions, activeThreeDChatId, newThreeDChatId, type ThreeDSession } from "../stores/threeDHistory";
 import { speechSessions, activeSpeechChatId, newSpeechChatId, type SpeechSession } from "../stores/speechHistory";
 
-// "New thread" for every playground tab. Pure store ops: each interface reacts
-// to its active id, loading/persisting the working state itself. Shared here so
-// the history drawer (in the shell) and each pane's own header button start a
-// thread the same way. A blank active thread is reused, never stacked.
+// "New thread" for the Chat and Speech panes. Pure store ops: each interface
+// reacts to its active id, loading/persisting the working state itself. A blank
+// active thread is reused, never stacked.
 
 export function newChat() {
   const cur = get(chatSessions).find((s) => s.id === get(activeChatId));
@@ -19,39 +15,6 @@ export function newChat() {
   const s: ChatSession = { id: newChatId(), title: "New chat", messages: [], updatedAt: Date.now() };
   chatSessions.update((ss) => [s, ...ss]);
   activeChatId.set(s.id);
-}
-
-export function newImageChat() {
-  const cur = get(imageSessions).find((s) => s.id === get(activeImageChatId));
-  if (cur && cur.turns.length === 0) {
-    activeImageChatId.set(cur.id);
-    return;
-  }
-  const s: ImageSession = { id: newImageChatId(), title: "New image", turns: [], updatedAt: Date.now() };
-  imageSessions.update((ss) => [s, ...ss]);
-  activeImageChatId.set(s.id);
-}
-
-export function newVideoChat() {
-  const cur = get(videoSessions).find((s) => s.id === get(activeVideoChatId));
-  if (cur && cur.turns.length === 0) {
-    activeVideoChatId.set(cur.id);
-    return;
-  }
-  const s: VideoSession = { id: newVideoChatId(), title: "New video", turns: [], updatedAt: Date.now() };
-  videoSessions.update((ss) => [s, ...ss]);
-  activeVideoChatId.set(s.id);
-}
-
-export function newThreeDChat() {
-  const cur = get(threeDSessions).find((s) => s.id === get(activeThreeDChatId));
-  if (cur && cur.turns.length === 0) {
-    activeThreeDChatId.set(cur.id);
-    return;
-  }
-  const s: ThreeDSession = { id: newThreeDChatId(), title: "New mesh", turns: [], updatedAt: Date.now() };
-  threeDSessions.update((ss) => [s, ...ss]);
-  activeThreeDChatId.set(s.id);
 }
 
 export function newSpeechChat() {
