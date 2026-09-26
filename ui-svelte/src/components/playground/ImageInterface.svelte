@@ -20,14 +20,15 @@
   import MaskEditor from "./MaskEditor.svelte";
   import Select from "./Select.svelte";
   import Toggle from "../Toggle.svelte";
-  import Composer from "./Composer.svelte";
+  import ModelSelector from "./ModelSelector.svelte";
+  import PaneHeader from "./PaneHeader.svelte";
+  import { slide } from "svelte/transition";
   import { autogrow } from "../../lib/autogrow";
-  import { Image as ImageIcon, Blend, X, Download, Paperclip, Ban, Plus, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Reply, Maximize2, Loader2, Clock, Wand2, Undo2 } from "lucide-svelte";
+  import { Image as ImageIcon, Blend, X, Download, Ban, Pencil, Save, Copy, Check, RefreshCw, ImageDown, Type, Paintbrush, Sparkles, Brush, Reply, Maximize2, Loader2, Clock, Wand2, Undo2, ImagePlus, Dices, HelpCircle, ChevronDown, Square, Expand } from "lucide-svelte";
   import { dropZone } from "../../lib/dropZone";
   import { classifyAttachment } from "../../lib/attachments";
   import { normalizeImageFile, resolveImageDataUrl } from "../../lib/imageNormalize";
   import { enhancePrompt } from "../../lib/promptEnhance";
-  import { scrollFade } from "../../lib/scrollFade";
   import type { ImageApiMode, SdApiLora, SdApiLoraRef } from "../../lib/types";
   import { ASPECTS, SIZE_TIERS, aspectDims, nearestAspect, SAMPLER_OPTIONS, SCHEDULER_OPTIONS, DEFAULT_MAX_DIM, MAX_BATCH, defaultsFor, withAlphaPrompt, settingsFor, parseSdProgress, fmtDur } from "./imageGen";
 
@@ -255,14 +256,7 @@
   let abortController = $state<AbortController | null>(null);
   let editingIdx = $state<number | null>(null);
   let editText = $state("");
-  // Refs to each turn's rendered prompt span, so startEdit can capture its
-  // actual width (see editWidth below).
-  let promptEls: (HTMLElement | null)[] = $state([]);
-  // A bare textarea has no intrinsic width from its content (only from `cols`,
-  // default 20ch), so it collapses the shrink-to-fit user bubble down to ~5
-  // words wide. Pin the textarea to the rendered prompt's width instead, so
-  // the bubble stays the size it was.
-  let editWidth = $state<number | null>(null);
+  // Advanced section of the params panel.
   let showSettings = $state(false);
   let showNegative = $state(false);
   let fullscreenImg = $state<string | null>(null);
@@ -275,7 +269,19 @@
   let secPerIt = $state(0);
   let stageLabel = $state("");
   let stagePhase = $state<"encode" | "cond" | "sample" | "decode" | null>(null);
+  // The thumbnail strip under the canvas (the thread, oldest first).
   let threadEl = $state<HTMLDivElement | undefined>();
+  // Which turn the canvas shows. null = follow the newest, which is what a new
+  // prompt, a regenerate or a thread switch should land on; clicking the strip
+  // pins an older one until the next of those.
+  let selTurn = $state<number | null>(null);
+  let sel = $derived(selTurn !== null && selTurn < turns.length ? selTurn : turns.length - 1);
+  let cur = $derived(turns[sel] as Turn | undefined);
+  $effect(() => {
+    void turns.length;
+    void $activeImageChatId;
+    selTurn = null;
+  });
   let fileInput = $state<HTMLInputElement | undefined>();
 
   // Switching models resets the settings panel to that model's defaults — every
@@ -485,7 +491,6 @@
   );
   // Largest long edge the current model handles (tiers above are greyed out).
   let modelMax = $derived(modelPreset?.maxDim ?? DEFAULT_MAX_DIM);
-  let aspectOptions = $derived(ASPECTS.map((a) => ({ value: a.value, label: a.label })));
   // Size tiers for the chosen aspect, labelled with the concrete WxH; tiers over
   // the model's cap are disabled.
   let sizeOptions = $derived(
@@ -529,15 +534,11 @@
     playgroundStores.imageGenerating.set(isGenerating);
   });
 
-  // Autoscroll the thread as turns/progress grow. stageLabel/totalSteps are deps
-  // too: the in-flight bubble changes height when the stage text swaps and the
-  // progress bar toggles, which would otherwise drift it into the bottom fade.
+  // Keep the newest turn in view on the strip as the thread grows.
   $effect(() => {
     void turns.length;
     void isGenerating;
-    void stageLabel;
-    void totalSteps;
-    if (threadEl) threadEl.scrollTop = threadEl.scrollHeight;
+    if (threadEl) threadEl.scrollLeft = threadEl.scrollWidth;
   });
 
   // Every setting one dispatch reads, captured the moment the user hits send.
@@ -1018,7 +1019,6 @@
     if (isGenerating) return;
     editingIdx = idx;
     editText = turns[idx].prompt;
-    editWidth = promptEls[idx]?.clientWidth ?? null;
   }
 
   function cancelEdit() {
@@ -1179,6 +1179,12 @@
   }
 </script>
 
+{#snippet hint(text: string)}
+  <span class="inline-flex shrink-0 cursor-help text-txtsecondary/70 hover:text-txtsecondary normal-case tracking-normal" use:tip={text}>
+    <HelpCircle class="w-3.5 h-3.5" />
+  </span>
+{/snippet}
+
 <div
   class="relative flex flex-col h-full"
   use:dropZone={{ onFiles: handleDrop, onActive: (v) => (dropActive = v), enabled: hasModels }}
@@ -1187,7 +1193,7 @@
        events becomes the drag target and flickers itself off. -->
   {#if dropActive}
     <div class="pointer-events-none absolute inset-2 z-30 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-primary bg-surface/85 backdrop-blur-[2px]">
-      <Paperclip class="w-7 h-7 text-primary" />
+      <ImagePlus class="w-7 h-7 text-primary" />
       <span class="text-sm font-medium text-txtmain">Drop to use as the base image</span>
       <span class="text-xs text-txtsecondary">Images only</span>
     </div>
@@ -1199,334 +1205,407 @@
       <p>No models configured. Add models to your configuration to generate images.</p>
     </div>
   {:else}
-    <!-- Chat column — full-width so the pane scrolls; thread and composer are
-         width-constrained and centered inside, matching the chat tab. -->
-    <div class="flex-1 flex flex-col min-w-0 min-h-0 w-full">
-      <!-- Thread -->
-      <div bind:this={threadEl} class="flex-1 min-h-0 overflow-y-auto pretty-scroll scroll-fade-b mb-2" use:scrollFade>
-        <div class="w-full max-w-3xl mx-auto px-2 pt-4 flex flex-col gap-4 pb-2 {turns.length === 0 && !isGenerating ? 'h-full' : ''}">
-          {#if turns.length === 0 && !isGenerating}
-            <div class="h-full flex flex-col items-center justify-center gap-3 text-txtsecondary">
-              <ImageIcon class="w-10 h-10 opacity-40" strokeWidth={1.5} />
-              <p>Describe an image to start. Keep prompting to tweak it.</p>
-            </div>
-          {/if}
+    <PaneHeader
+      title={activeSession?.title || "New image"}
+      meta={`${turns.length} turn${turns.length === 1 ? "" : "s"}`}
+      updatedAt={activeSession?.updatedAt}
+      newLabel="New image"
+      onNew={newThread}
+    />
 
-          {#each turns as t, ti (ti)}
-            <!-- picked = which image of a batch the reply/copy/download/upscale
-                 actions act on; clamped so a shorter regenerated turn can't act
-                 on a stale index. -->
-            {@const picked = Math.min(pickedImg[ti] ?? 0, Math.max(0, t.images.length - 1))}
-            <!-- User prompt (right) — matches chat: black bubble, no avatar. Source
-                 / reference images fed into this turn ride inside the bubble. -->
-            <div class="flex justify-end">
-              <div class="group relative max-w-[85%] rounded-2xl rounded-br-none bg-[#141414] text-[#ededee] px-3.5 py-2 flex flex-col gap-2">
-                {#if t.maskPreview}
-                  <!-- Inpaint mask: base with the regenerated region highlighted
-                       (replaces the plain reference — it IS the base image). -->
-                  <button class="block self-start rounded-lg overflow-hidden border border-white/15 cursor-zoom-in focus:outline-none" onclick={() => (fullscreenImg = t.maskPreview ?? null)} aria-label="View inpaint mask">
-                    <img src={t.maskPreview} alt="inpaint mask" class="max-h-28 w-auto object-contain" />
-                  </button>
-                {:else if t.refs.length}
-                  <div class="flex flex-wrap gap-1.5">
-                    {#each t.refs as ref, ri (ri)}
-                      <button class="block rounded-lg overflow-hidden border border-white/15 cursor-zoom-in focus:outline-none" onclick={() => (fullscreenImg = ref)} aria-label="View reference image">
-                        <img src={ref} alt="reference {ri + 1}" class="max-h-28 w-auto object-contain" />
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
-                {#if editingIdx === ti}
-                  <div class="flex flex-col gap-2 min-w-[260px]">
-                    <textarea
-                      class="{editWidth ? '' : 'w-full'} px-2.5 py-1.5 rounded-lg bg-white/10 text-white text-[0.8125rem] resize-none overflow-hidden focus:outline-none focus:ring-2 focus:ring-white/40"
-                      style={editWidth ? `width:${editWidth}px` : undefined}
-                      rows="1"
-                      bind:value={editText}
-                      use:autogrow
-                      onkeydown={editKeyDown}
-                    ></textarea>
-                    <div class="flex justify-end gap-1.5">
-                      <button class="p-1.5 rounded hover:bg-white/20" onclick={cancelEdit} use:tip={"Cancel"}><X class="w-4 h-4" /></button>
-                      <button class="p-1.5 rounded hover:bg-white/20" onclick={saveEdit} use:tip={"Save & regenerate"}><Save class="w-4 h-4" /></button>
-                    </div>
-                  </div>
-                {:else}
-                  <span class="text-[0.8125rem] leading-relaxed whitespace-pre-wrap pr-6" bind:this={promptEls[ti]}>{t.prompt}</span>
+    <div class="flex-1 min-h-0 flex">
+      <!-- Params: everything that shapes the NEXT render. The prompt sits on
+           top because it is what changes every turn; the knobs below it change
+           rarely, and the rarest live under Advanced. -->
+      <aside class="w-[25rem] shrink-0 flex flex-col min-h-0 bg-rail border-r border-card-border-inner">
+        <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll">
+          <div class="px-4 py-3.5 border-b border-card-border-inner flex flex-col gap-2.5">
+            <div class="rounded-xl border border-composer-border bg-surface hover:ring-1 hover:ring-composer-ring focus-within:border-primary transition-colors flex flex-col">
+              <textarea
+                bind:this={promptEl}
+                bind:value={prompt}
+                onkeydown={handleKeyDown}
+                onpaste={handlePaste}
+                rows="5"
+                placeholder={isGenerating ? "Queue a prompt…" : turns.length ? "Describe a change…" : "Describe the image you want…"}
+                class="w-full min-h-[8.5rem] resize-none bg-transparent px-3.5 pt-3 pb-1 text-[0.8125rem] leading-relaxed text-txtmain placeholder:text-txtsecondary focus:outline-none pretty-scroll"
+              ></textarea>
+              <div class="flex items-center gap-1 px-2 pb-2 min-w-0">
+                {#if enhancer}
                   <button
-                    class="absolute top-1.5 right-1.5 p-1 rounded-full opacity-0 group-hover:opacity-100 transition-all bg-white/10 text-white/70 hover:text-white hover:bg-white/25 disabled:hidden"
-                    onclick={() => startEdit(ti)}
-                    disabled={isGenerating}
-                    use:tip={"Edit prompt"}
+                    class="btn btn--sm btn--ghost inline-flex items-center gap-1.5 h-7"
+                    onclick={runEnhance}
+                    disabled={enhancing || isGenerating || !prompt.trim()}
+                    use:tip={isGenerating
+                      ? "Wait for this render to finish: the enhancer is a separate model, and starting it now would make it queue behind the image model."
+                      : `Enhance the prompt with ${enhancer.name}${baseImage ? " (img2img rewrite)" : " (txt2img rewrite)"}${enhancer.vision && baseImage ? ", which reads the reference image" : ""}. Rewrites the box, so you can read and edit it before rendering.`}
                   >
-                    <Pencil class="w-3 h-3" />
+                    {#if enhancing}<Loader2 class="w-3.5 h-3.5 animate-spin" />{:else}<Wand2 class="w-3.5 h-3.5" />{/if}
+                    Enhance
+                  </button>
+                  {#if preEnhance !== null}
+                    <button
+                      class="icon-btn"
+                      onclick={revertEnhance}
+                      disabled={enhancing}
+                      use:tip={preEnhanceAspect !== null
+                        ? `Revert to the prompt you wrote, and the aspect ratio back to ${preEnhanceAspect}`
+                        : "Revert to the prompt you wrote"}
+                      aria-label="Revert enhance"
+                    >
+                      <Undo2 class="w-4 h-4" />
+                    </button>
+                  {/if}
+                {/if}
+                {#if isSdapi && baseImage}
+                  <button
+                    class="icon-btn"
+                    aria-pressed={!!maskData && maskSource === baseImage}
+                    onclick={() => (showMask = true)}
+                    use:tip={segmentModel ? "Inpaint - mask a region to change (brush or AI select)" : "Inpaint - mask a region to change (keeps the rest)"}
+                    aria-label="Inpaint"
+                  >
+                    <Brush class="w-4 h-4" />
                   </button>
                 {/if}
+                {#if supportsAlpha}
+                  <button
+                    class="icon-btn"
+                    aria-pressed={alphaBg}
+                    onclick={() => (alphaBg = !alphaBg)}
+                    use:tip={"Transparent background - renders a real alpha channel (PNG)"}
+                    aria-label="Transparent background"
+                  >
+                    <Blend class="w-4 h-4" />
+                  </button>
+                {/if}
+                <div class="ml-auto min-w-0 max-w-[60%]">
+                  <ModelSelector bind:value={$selectedModelStore} placeholder="Select an image model…" category="image" ghost />
+                </div>
               </div>
             </div>
-            <!-- Image reply (left) — matches chat: surface bubble, no avatar. -->
-            <div class="flex flex-col items-start">
-              {#if t.model}
-                <span class="flex items-center gap-1 mb-1 px-3 text-[0.6875rem] font-medium text-txtsecondary">
-                  <Sparkles class="w-3 h-3 shrink-0" />{t.model}
-                </span>
+
+            <div class="flex items-center gap-2 flex-wrap">
+              {#if isSdapi}
+                <button
+                  class="chip-toggle !font-sans gap-1.5"
+                  aria-pressed={showNegative || !!$sdNegativePromptStore}
+                  onclick={() => { if (!$sdNegativePromptStore) showNegative = !showNegative; }}
+                  use:tip={"Elements to keep out of the image"}
+                >
+                  <Ban class="w-3 h-3" /> Negative
+                </button>
               {/if}
-              <!-- A batch gets the full thread width (see the thumb row below); a
-                   single image keeps the narrower chat-like bubble. -->
-              <div class="relative group rounded-2xl rounded-bl-sm px-3 py-2 text-[0.8125rem] w-fit max-w-full {t.images.length > 1 ? '' : 'sm:max-w-[60%]'}">
-                {#if t.images.length && !isGenerating}
-                  <button
-                    class="absolute top-1/2 left-full ml-2 -translate-y-1/2 z-10 p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary opacity-0 group-hover:opacity-100 transition-opacity"
-                    onclick={() => replyWithImage(t.images[picked])}
-                    use:tip={"Reply - use this image as the source/reference"}
-                  >
-                    <Reply class="w-4 h-4" />
-                  </button>
-                {/if}
-                {#if t.error}
-                  <div class="text-error">{t.error}</div>
-                {:else if t.images.length}
-                  <!-- One row, never a column. A batch is sized by WIDTH (flex-1,
-                       min-w-0) so N images always divide the row whatever their
-                       aspect ratio; a lone image stays height-sized so a small
-                       render isn't stretched across the bubble. -->
-                  <div class="flex {t.images.length > 1 ? 'flex-nowrap' : 'flex-wrap'} gap-2 w-full">
-                    {#each t.images as img, ii (ii)}
-                      <div class="relative {t.images.length > 1 ? 'flex-1 min-w-0' : ''}">
-                        <button class="block w-full rounded-xl overflow-hidden border {t.images.length > 1 && ii === picked ? 'border-primary' : 'border-card-border'} bg-secondary cursor-zoom-in focus:outline-none" onclick={() => (fullscreenImg = img)} aria-label="View image fullscreen">
-                          <img src={img} alt="generated {ti + 1}" class="{t.images.length > 1 ? 'w-full h-auto' : 'max-h-56 w-auto'} max-h-56 object-contain alpha-checker" />
-                        </button>
-                        {#if t.images.length > 1}
-                          <!-- Batch picker. A separate badge, not the thumbnail itself:
-                               clicking the image already means zoom, and stealing that
-                               would break the single-image case. -->
-                          <button
-                            class="absolute top-1 left-1 min-w-5 px-1 py-0.5 rounded text-[0.625rem] font-medium tabular-nums {ii === picked ? 'bg-primary text-white' : 'bg-black/50 text-white/80 hover:bg-black/70'}"
-                            onclick={() => (pickedImg[ti] = ii)}
-                            use:tip={"Use this one for the actions below"}
-                          >{ii + 1}</button>
-                        {/if}
-                      </div>
-                    {/each}
-                  </div>
-                  <!-- Actions + timing, matching the chat tab's footer: divider, buttons
-                       left, elapsed on the right. Acts on the picked image of the batch
-                       (the first one unless a badge was clicked). -->
-                  <div class="flex flex-wrap items-center gap-1 mt-2 pt-1 border-t border-card-border">
+              <button
+                class="chip-toggle !font-sans gap-1.5"
+                onclick={() => fileInput?.click()}
+                use:tip={supportsRefImages ? "Attach reference image(s)" : "Attach a source image to edit"}
+              >
+                <ImagePlus class="w-3 h-3" /> Reference
+              </button>
+            </div>
+
+            {#if isSdapi && (showNegative || $sdNegativePromptStore)}
+              <div class="flex items-start gap-2 rounded-lg border border-card-border bg-surface px-3 py-2">
+                <Ban class="w-3.5 h-3.5 mt-1 shrink-0 text-txtsecondary" />
+                <textarea
+                  class="w-full bg-transparent text-[0.8125rem] leading-relaxed resize-none focus:outline-none placeholder:text-txtsecondary min-h-[1.5rem] max-h-40 pretty-scroll"
+                  rows="2"
+                  placeholder="Negative - elements to avoid…"
+                  bind:value={$sdNegativePromptStore}
+                ></textarea>
+                <button
+                  class="mt-0.5 shrink-0 text-txtsecondary hover:text-txtmain transition-colors"
+                  onclick={() => { $sdNegativePromptStore = ""; showNegative = false; }}
+                  use:tip={"Remove negative prompt"}
+                  aria-label="Remove negative prompt"
+                ><X class="w-3.5 h-3.5" /></button>
+              </div>
+            {/if}
+
+            {#if attached.length}
+              <div class="flex flex-wrap gap-2">
+                {#each attached as img, i (i)}
+                  <div class="group relative w-14 h-14 rounded-lg overflow-hidden border border-card-border bg-secondary">
+                    <img src={img} alt="attachment {i + 1}" class="w-full h-full object-cover" />
                     <button
-                      class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary disabled:opacity-40"
-                      onclick={() => regenerate(ti)}
-                      disabled={isGenerating}
-                      use:tip={"Regenerate"}
-                    >
-                      <RefreshCw class="w-4 h-4" />
-                    </button>
+                      class="absolute top-0 right-0 w-5 h-5 flex items-center justify-center bg-black/60 text-white rounded-bl opacity-0 group-hover:opacity-100 transition-opacity"
+                      onclick={() => (attached = attached.filter((_, j) => j !== i))}
+                      aria-label="Remove attachment {i + 1}"
+                    ><X class="w-3 h-3" /></button>
                     <button
-                      class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary"
-                      onclick={() => copyImage(t.images[picked], ti)}
-                      use:tip={copiedIdx === ti ? "Copied!" : "Copy image"}
-                    >
-                      {#if copiedIdx === ti}<Check class="w-4 h-4 text-green-500" />{:else}<Copy class="w-4 h-4" />{/if}
-                    </button>
-                    <button
-                      class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary"
-                      onclick={() => downloadImage(t.images[picked])}
-                      use:tip={"Download"}
-                    >
-                      <Download class="w-4 h-4" />
-                    </button>
-                    <button
-                      class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary disabled:opacity-40"
-                      onclick={() => runUpscale(t.images[picked], "m" + ti)}
+                      class="absolute top-0 left-0 w-5 h-5 flex items-center justify-center bg-black/60 text-white rounded-br opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-40 disabled:cursor-default"
+                      onclick={() => runUpscale(img, "a" + i)}
                       disabled={upscaling !== null || isGenerating}
                       use:tip={"Upscale ×4"}
                     >
-                      {#if upscaling === "m" + ti}<Loader2 class="w-4 h-4 animate-spin" />{:else}<Maximize2 class="w-4 h-4" />{/if}
+                      {#if upscaling === "a" + i}<Loader2 class="w-3 h-3 animate-spin" />{:else}<Maximize2 class="w-3 h-3" />{/if}
                     </button>
-                    {#if t.secs != null}
-                      <span class="ml-auto flex items-center self-center text-[0.6875rem] text-txtsecondary tabular-nums">{fmtDur(t.secs)}</span>
-                    {/if}
-                  </div>
-                {:else if genId !== $activeImageChatId || ti !== turns.length - 1}
-                  <div class="text-error">No image returned.</div>
-                {:else}
-                  <!-- In-flight: per-phase glowing icon + label, progress bar, then a
-                       divider and the steps/time row (divider matches the finished
-                       footer so the bubble keeps the same shape while generating). -->
-                  <div class="flex flex-col gap-1.5 min-w-52">
-                    <div class="flex items-center gap-2 text-txtsecondary">
-                      {#if StageIcon}
-                        <StageIcon class="w-4 h-4 reason-glow shrink-0" />
-                      {:else}
-                        <span class="inline-block w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></span>
-                      {/if}
-                      <span class="reason-shimmer-white font-medium">{stageLabel || "Generating…"}</span>
-                      {#if (runningParams?.batch ?? batchCount) > 1}
-                        <!-- The step bar restarts once per batch image; say so, or a
-                             bar going back to 0/N looks like a stall/restart. -->
-                        <span class="text-[0.6875rem] tabular-nums">×{runningParams?.batch ?? batchCount}</span>
-                      {/if}
-                    </div>
-                    {#if totalSteps > 0}
-                      <div class="h-1.5 w-full rounded bg-card-border overflow-hidden">
-                        <div class="h-full bg-primary transition-all" style="width: {Math.round((step / totalSteps) * 100)}%"></div>
-                      </div>
-                    {/if}
-                    <div class="flex items-center justify-between text-[0.6875rem] text-txtsecondary tabular-nums mt-1 pt-1 border-t border-card-border">
-                      <span>{#if totalSteps > 0}{step}/{totalSteps} steps{/if}{#if etaSec > 0} · ~{fmtDur(etaSec)} left{/if}{#if totalSteps <= 0 && etaSec <= 0}&nbsp;{/if}</span>
-                      <span>{fmtDur(elapsed)}</span>
-                    </div>
-                  </div>
-                {/if}
-              </div>
-            </div>
-          {/each}
-        </div>
-      </div>
-
-      <!-- Composer — narrower than the thread, centered. -->
-      {#snippet imageSettingsPanel()}
-        <div class="flex flex-col gap-2">
-          <div class="grid grid-cols-3 gap-3">
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">API</span>
-              <Select
-                bind:value={$apiModeStore}
-                compact
-                options={[
-                  { value: "openai", label: "OpenAI" },
-                  { value: "sdapi", label: "SDAPI" },
-                ]}
-              />
-            </div>
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">Aspect</span>
-              <Select bind:value={$aspectStore} compact options={aspectOptions} />
-            </div>
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">Size</span>
-              <Select bind:value={$longEdgeStore} compact options={sizeOptions} />
-            </div>
-          </div>
-          {#if isSdapi}
-            <div class="grid grid-cols-2 gap-3">
-              <div class="flex flex-col gap-1">
-                <span class="text-xs uppercase tracking-wide text-txtsecondary">Steps</span>
-                <input type="number" min="1" max="150" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdStepsStore} />
-              </div>
-              <div class="flex flex-col gap-1">
-                <span class="text-xs uppercase tracking-wide text-txtsecondary">CFG</span>
-                <input type="number" min="1" max="30" step="0.5" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdCfgScaleStore} />
-              </div>
-              <div class="flex flex-col gap-1">
-                <span class="text-xs uppercase tracking-wide text-txtsecondary">Seed</span>
-                <input type="number" min="-1" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdSeedStore} />
-              </div>
-              <div class="flex flex-col gap-1">
-                <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
-                  Batch
-                  <span class="cursor-help opacity-60" use:tip={`Images rendered per prompt (max ${MAX_BATCH}). They render one after another - N images take N× the time - and the seed increments per image, so a pinned seed reproduces the first one.`}>(?)</span>
-                </span>
-                <input type="number" min="1" max={MAX_BATCH} step="1" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$sdBatchStore} />
-              </div>
-            </div>
-            {#if modelDefaults}
-              <p class="text-xs text-txtsecondary -mt-1">Model default · {modelDefaults.steps} steps · cfg {modelDefaults.cfg}{modelDefaults.sampler ? ` · ${modelDefaults.sampler}` : ""}</p>
-            {/if}
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
-                Tweak strength · {$sdDenoiseStore.toFixed(2)}
-                <span class="cursor-help opacity-60" use:tip={"How far each follow-up may stray from the previous image (non-Kontext models)."}>(?)</span>
-              </span>
-              <input type="range" min="0" max="1" step="0.05" class="w-full accent-primary" bind:value={$sdDenoiseStore} />
-            </div>
-            <div class="grid grid-cols-2 gap-3">
-              <div class="flex flex-col gap-1">
-                <span class="text-xs uppercase tracking-wide text-txtsecondary">Sampler</span>
-                <Select bind:value={$sdSamplerStore} compact options={SAMPLER_OPTIONS} />
-              </div>
-              <div class="flex flex-col gap-1">
-                <span class="text-xs uppercase tracking-wide text-txtsecondary">Scheduler</span>
-                <Select bind:value={$sdSchedulerStore} compact options={SCHEDULER_OPTIONS} />
-              </div>
-            </div>
-            <label class="flex items-center gap-2 cursor-pointer">
-              <Toggle size="sm" bind:checked={$sdToneAnchorStore} />
-              <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
-                Tone anchor
-                <span class="cursor-help opacity-60" use:tip={"Pin reused-source brightness to the thread's first image so chained edits don't drift darker/brighter. Off = raw model output."}>(?)</span>
-              </span>
-            </label>
-            <label class="flex items-center gap-2 cursor-pointer">
-              <Toggle size="sm" bind:checked={$sdKeepResStore} />
-              <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
-                Keep resolution
-                <span class="cursor-help opacity-60" use:tip={"Edit at the source image's native size instead of resizing to the selected size."}>(?)</span>
-              </span>
-            </label>
-            <!-- LoRAs. The list comes from the backend's --lora-model-dir, so it
-                 needs the model loaded — fetched on demand, never automatically. -->
-            <div class="flex flex-col gap-1 pt-1 border-t border-card-border">
-              <div class="flex items-center justify-between">
-                <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
-                  LoRAs
-                  <span class="cursor-help opacity-60" use:tip={"Adapters found next to the model file. Listing them loads the model."}>(?)</span>
-                </span>
-                <button
-                  class="text-xs text-primary hover:underline disabled:opacity-50"
-                  onclick={loadLoras}
-                  disabled={loraLoading || !$selectedModelStore}
-                >{loraLoading ? "Loading…" : loraListModel === $selectedModelStore ? "Refresh" : "Load list"}</button>
-              </div>
-              {#if loraError}
-                <p class="text-xs text-error">{loraError}</p>
-              {:else if loraListModel === $selectedModelStore && loraList.length === 0}
-                <p class="text-xs text-txtsecondary">No LoRAs in this model's folder.</p>
-              {:else if loraListModel === $selectedModelStore}
-                {#each loraList as lora (lora.path)}
-                  {@const strength = $sdLoraStore[$selectedModelStore]?.[lora.path] ?? 0}
-                  <div class="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      class="accent-primary"
-                      checked={strength !== 0}
-                      onchange={(e) => setLoraStrength(lora.path, (e.currentTarget as HTMLInputElement).checked ? 1 : 0)}
-                    />
-                    <span class="text-xs truncate flex-1" use:tip={lora.path}>{lora.name}</span>
-                    <input
-                      type="number"
-                      min="-2"
-                      max="2"
-                      step="0.05"
-                      class="w-16 px-1.5 py-0.5 text-xs rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary disabled:opacity-40"
-                      disabled={strength === 0}
-                      value={strength}
-                      onchange={(e) => setLoraStrength(lora.path, Number((e.currentTarget as HTMLInputElement).value))}
-                    />
                   </div>
                 {/each}
-              {:else if activeLoras.length}
-                <p class="text-xs text-txtsecondary">{activeLoras.map((l) => `${l.path} @ ${l.multiplier}`).join(", ")}</p>
+              </div>
+            {:else if baseImage && turns.length > 0}
+              <p class="flex items-center gap-1.5 text-xs text-txtsecondary">
+                <span>{supportsRefImages ? "Editing the last image (reference)" : isSdapi ? "Editing the last image (img2img)" : "Fresh generation each turn"}</span>
+                {#if isSdapi}
+                  <button class="hover:text-txtmain transition-colors" onclick={() => (skipBase = true)} use:tip={"New image instead - don't edit the last one"}>
+                    <X class="w-3.5 h-3.5" />
+                  </button>
+                {/if}
+              </p>
+            {:else if skipBase && turns.length > 0 && isSdapi}
+              <p class="flex items-center gap-1.5 text-xs text-txtsecondary">
+                <span>New image - not editing the last one</span>
+                <button class="hover:text-txtmain transition-colors" onclick={() => (skipBase = false)} use:tip={"Edit the last image instead"}>
+                  <RefreshCw class="w-3.5 h-3.5" />
+                </button>
+              </p>
+            {/if}
+
+            {#if maskData && maskSource === baseImage}
+              <div class="flex items-center gap-2.5">
+                {#if pendingMaskPreview}
+                  <button
+                    class="block rounded-lg overflow-hidden border border-card-border shrink-0 cursor-zoom-in focus:outline-none"
+                    onclick={() => (fullscreenImg = pendingMaskPreview)}
+                    aria-label="View inpaint mask"
+                  >
+                    <img src={pendingMaskPreview} alt="inpaint mask preview" class="h-14 w-auto object-contain" />
+                  </button>
+                {/if}
+                <div class="flex flex-wrap items-center gap-2 text-xs text-primary">
+                  <Brush class="w-3.5 h-3.5" />
+                  {#if supportsAnnotEdit && maskAnnotate}
+                    <span>Region marked - the model is told what to change (it may redraw the rest)</span>
+                  {:else}
+                    <span>Inpaint mask set - only the highlighted area changes</span>
+                  {/if}
+                  {#if supportsAnnotEdit}
+                    <!-- Two genuinely different mechanisms, so the user picks rather
+                         than the model deciding: Mask keeps every unmarked pixel but
+                         drops the reference conditioning, Annotate keeps the
+                         conditioning and lets the model reflow the frame. -->
+                    <span class="seg">
+                      <button
+                        aria-pressed={!maskAnnotate}
+                        onclick={() => (maskAnnotate = false)}
+                        use:tip={"Latent inpaint - regenerate only the masked pixels, keep the rest byte-for-byte"}
+                      >Mask</button>
+                      <button
+                        aria-pressed={maskAnnotate}
+                        onclick={() => (maskAnnotate = true)}
+                        use:tip={"Annotate - send the highlighted image as a reference so the model targets that region itself"}
+                      >Annotate</button>
+                    </span>
+                  {/if}
+                  <button class="text-txtsecondary hover:text-txtmain" onclick={() => { maskData = null; maskSource = null; }}>clear</button>
+                </div>
+              </div>
+            {/if}
+
+            {#if dropError}
+              <div class="p-2 bg-error/10 text-error rounded text-sm">{dropError}</div>
+            {/if}
+
+            {#if enhanceError}
+              <div class="p-2 bg-error/10 text-error rounded text-sm flex items-start gap-2">
+                <span class="flex-1">{enhanceError}</span>
+                <button class="shrink-0 opacity-70 hover:opacity-100" onclick={() => (enhanceError = "")} aria-label="Dismiss">
+                  <X class="w-3.5 h-3.5" />
+                </button>
+              </div>
+            {/if}
+
+            <!-- A control moved on its own, so it says so. Without this the aspect
+                 picker silently disagrees with what the user last set it to. -->
+            {#if enhancedAspect}
+              <div class="p-2 bg-surface-2 border border-card-border text-txtsecondary rounded text-sm flex items-start gap-2">
+                <span class="flex-1">
+                  {enhancer?.name ?? "The enhancer"} wrote this prompt for <strong class="text-txtmain">{enhancedAspect}</strong>, so the aspect ratio was changed to match.
+                </span>
+                <button class="shrink-0 opacity-70 hover:opacity-100" onclick={() => (enhancedAspect = null)} aria-label="Dismiss">
+                  <X class="w-3.5 h-3.5" />
+                </button>
+              </div>
+            {/if}
+
+            <input type="file" accept="image/*" multiple class="hidden" bind:this={fileInput} onchange={onAttachFiles} />
+          </div>
+
+          <div class="px-4 py-3.5 border-b border-card-border-inner flex flex-col gap-3">
+            <div class="flex flex-col gap-2">
+              <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Aspect</span>
+              <div class="seg w-full" role="group" aria-label="Aspect ratio">
+                {#each ASPECTS as a (a.value)}
+                  <button class="flex-1 !px-0 font-mono !normal-case !tracking-normal" aria-pressed={$aspectStore === a.value} onclick={() => ($aspectStore = a.value)} use:tip={a.label}>{a.value}</button>
+                {/each}
+              </div>
+            </div>
+            <div class="flex flex-col gap-2">
+              <span class="flex items-center gap-1.5 text-micro font-medium uppercase tracking-wide text-txtsecondary">
+                Size
+                <span class="ml-auto font-mono normal-case tracking-normal tabular-nums text-txtmain">{$selectedSizeStore.replace("x", "×")}</span>
+              </span>
+              <!-- Long edge; the short one follows the aspect. Tiers past the
+                   model's cap are disabled, not hidden, so the ladder keeps its shape. -->
+              <div class="seg w-full" role="group" aria-label="Long edge">
+                {#each sizeOptions as o (o.value)}
+                  <button
+                    class="flex-1 !px-0 font-mono !normal-case !tracking-normal disabled:opacity-40 disabled:pointer-events-none"
+                    aria-pressed={$longEdgeStore === o.value}
+                    disabled={o.disabled}
+                    onclick={() => ($longEdgeStore = o.value)}
+                    use:tip={o.disabled ? `${o.label} - over this model's limit` : o.label}
+                  >{o.value}</button>
+                {/each}
+              </div>
+            </div>
+          </div>
+
+          {#if isSdapi}
+            <div class="px-4 py-3.5 border-b border-card-border-inner flex flex-col gap-2.5">
+              <div class="grid grid-cols-2 gap-x-3 gap-y-2.5">
+                <label class="flex flex-col gap-1.5">
+                  <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Steps</span>
+                  <input type="number" min="1" max="150" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface font-mono text-xs tabular-nums focus:outline-none focus:border-primary" bind:value={$sdStepsStore} />
+                </label>
+                <label class="flex flex-col gap-1.5">
+                  <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">CFG</span>
+                  <input type="number" min="1" max="30" step="0.5" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface font-mono text-xs tabular-nums focus:outline-none focus:border-primary" bind:value={$sdCfgScaleStore} />
+                </label>
+                <div class="flex flex-col gap-1.5">
+                  <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Seed</span>
+                  <div class="flex items-stretch gap-1.5">
+                    <input type="number" min="-1" aria-label="Seed" class="w-full min-w-0 px-2.5 py-1.5 rounded-md border border-card-border bg-surface font-mono text-xs tabular-nums focus:outline-none focus:border-primary" bind:value={$sdSeedStore} />
+                    <button class="btn btn--sm btn--icon shrink-0" aria-pressed={$sdSeedStore === -1} onclick={() => ($sdSeedStore = -1)} use:tip={"Random seed each render (-1)"} aria-label="Random seed">
+                      <Dices class="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+                <label class="flex flex-col gap-1.5">
+                  <span class="flex items-center gap-1.5 text-micro font-medium uppercase tracking-wide text-txtsecondary">
+                    Batch {@render hint(`Images rendered per prompt (max ${MAX_BATCH}). They render one after another - N images take N× the time - and the seed increments per image, so a pinned seed reproduces the first one.`)}
+                  </span>
+                  <input type="number" min="1" max={MAX_BATCH} step="1" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface font-mono text-xs tabular-nums focus:outline-none focus:border-primary" bind:value={$sdBatchStore} />
+                </label>
+              </div>
+              {#if modelDefaults}
+                <p class="font-mono text-micro text-txtsecondary tabular-nums">Model default · {modelDefaults.steps} steps · cfg {modelDefaults.cfg}{modelDefaults.sampler ? ` · ${modelDefaults.sampler}` : ""}</p>
               {/if}
             </div>
-          {:else}
-            <p class="text-xs text-txtsecondary">OpenAI image route generates fresh each turn - it can't tweak a previous image. Switch to SDAPI for the edit loop.</p>
           {/if}
-        </div>
-      {/snippet}
 
-      {#snippet imageTopExtra()}
+          <!-- Advanced: the route, and the knobs most renders never touch. -->
+          <div class="border-b border-card-border-inner">
+            <button
+              class="w-full flex items-center gap-1.5 px-4 h-10 text-micro font-medium uppercase tracking-wide text-txtsecondary hover:text-txtmain transition-colors"
+              aria-expanded={showSettings}
+              onclick={() => (showSettings = !showSettings)}
+            >
+              Advanced
+              <ChevronDown class="w-3.5 h-3.5 ml-auto transition-transform {showSettings ? 'rotate-180' : ''}" />
+            </button>
+            {#if showSettings}
+              <div class="px-4 pb-3.5 flex flex-col gap-3" transition:slide={{ duration: 150 }}>
+                <div class="flex flex-col gap-1.5">
+                  <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">API</span>
+                  <div class="seg w-full" role="group" aria-label="Image API">
+                    <button class="flex-1" aria-pressed={$apiModeStore === "sdapi"} onclick={() => ($apiModeStore = "sdapi")}>SDAPI</button>
+                    <button class="flex-1" aria-pressed={$apiModeStore === "openai"} onclick={() => ($apiModeStore = "openai")}>OpenAI</button>
+                  </div>
+                </div>
+                {#if isSdapi}
+                  <div class="flex flex-col gap-1.5">
+                    <span class="flex items-center gap-1.5 text-micro font-medium uppercase tracking-wide text-txtsecondary">
+                      Tweak strength {@render hint("How far each follow-up may stray from the previous image (non-Kontext models).")}
+                      <span class="ml-auto font-mono normal-case tracking-normal tabular-nums text-txtmain">{$sdDenoiseStore.toFixed(2)}</span>
+                    </span>
+                    <input type="range" min="0" max="1" step="0.05" class="w-full accent-primary" bind:value={$sdDenoiseStore} />
+                  </div>
+                  <div class="grid grid-cols-2 gap-3">
+                    <div class="flex flex-col gap-1.5">
+                      <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Sampler</span>
+                      <Select bind:value={$sdSamplerStore} compact options={SAMPLER_OPTIONS} />
+                    </div>
+                    <div class="flex flex-col gap-1.5">
+                      <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Scheduler</span>
+                      <Select bind:value={$sdSchedulerStore} compact options={SCHEDULER_OPTIONS} />
+                    </div>
+                  </div>
+                  <label class="flex items-center gap-2 cursor-pointer">
+                    <span class="flex items-center gap-1.5 text-micro font-medium uppercase tracking-wide text-txtsecondary">
+                      Tone anchor {@render hint("Pin reused-source brightness to the thread's first image so chained edits don't drift darker/brighter. Off = raw model output.")}
+                    </span>
+                    <span class="ml-auto"><Toggle size="sm" bind:checked={$sdToneAnchorStore} /></span>
+                  </label>
+                  <label class="flex items-center gap-2 cursor-pointer">
+                    <span class="flex items-center gap-1.5 text-micro font-medium uppercase tracking-wide text-txtsecondary">
+                      Keep resolution {@render hint("Edit at the source image's native size instead of resizing to the selected size.")}
+                    </span>
+                    <span class="ml-auto"><Toggle size="sm" bind:checked={$sdKeepResStore} /></span>
+                  </label>
+                  <!-- LoRAs. The list comes from the backend's --lora-model-dir, so it
+                       needs the model loaded — fetched on demand, never automatically. -->
+                  <div class="flex flex-col gap-1.5 pt-2.5 border-t border-card-border-inner">
+                    <div class="flex items-center gap-1.5">
+                      <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">LoRAs</span>
+                      {@render hint("Adapters found next to the model file. Listing them loads the model.")}
+                      <button
+                        class="btn btn--sm btn--ghost ml-auto h-6"
+                        onclick={loadLoras}
+                        disabled={loraLoading || !$selectedModelStore}
+                      >{loraLoading ? "Loading…" : loraListModel === $selectedModelStore ? "Refresh" : "Load list"}</button>
+                    </div>
+                    {#if loraError}
+                      <p class="text-xs text-error">{loraError}</p>
+                    {:else if loraListModel === $selectedModelStore && loraList.length === 0}
+                      <p class="text-xs text-txtsecondary">No LoRAs in this model's folder.</p>
+                    {:else if loraListModel === $selectedModelStore}
+                      {#each loraList as lora (lora.path)}
+                        {@const strength = $sdLoraStore[$selectedModelStore]?.[lora.path] ?? 0}
+                        <div class="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            class="accent-primary"
+                            checked={strength !== 0}
+                            onchange={(e) => setLoraStrength(lora.path, (e.currentTarget as HTMLInputElement).checked ? 1 : 0)}
+                          />
+                          <span class="text-xs truncate flex-1" use:tip={lora.path}>{lora.name}</span>
+                          <input
+                            type="number"
+                            min="-2"
+                            max="2"
+                            step="0.05"
+                            class="w-16 px-1.5 py-0.5 font-mono text-xs tabular-nums rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary disabled:opacity-40"
+                            disabled={strength === 0}
+                            value={strength}
+                            onchange={(e) => setLoraStrength(lora.path, Number((e.currentTarget as HTMLInputElement).value))}
+                          />
+                        </div>
+                      {/each}
+                    {:else if activeLoras.length}
+                      <p class="text-xs text-txtsecondary">{activeLoras.map((l) => `${l.path} @ ${l.multiplier}`).join(", ")}</p>
+                    {/if}
+                  </div>
+                {:else}
+                  <p class="text-xs text-txtsecondary">OpenAI image route generates fresh each turn - it can't tweak a previous image. Switch to SDAPI for the edit loop.</p>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        </div>
+
         <!-- Prompts queued while this thread renders. Only this thread's: a job
              keeps the session it was queued for and lands there whichever thread
              is on screen when it runs. -->
         {#if queuedHere.length > 0}
-          <div class="flex flex-col gap-1 pb-2">
+          <div class="shrink-0 px-4 pt-2.5 flex flex-col gap-1 border-t border-card-border-inner">
             {#each queuedHere as { job, qi } (qi)}
-              <div class="flex items-center gap-2 rounded-2xl bg-secondary/60 border border-card-border px-3 py-1.5 text-[0.8125rem]">
+              <div class="flex items-center gap-2 rounded-lg bg-surface border border-card-border px-2.5 py-1 text-xs">
                 <Clock class="w-3.5 h-3.5 shrink-0 text-txtsecondary" />
                 <span class="truncate" use:tip={job.raw}>{job.raw}</span>
-                <span class="ml-auto shrink-0 text-[0.6875rem] tabular-nums text-txtsecondary" use:tip={"Settings captured when this was queued"}>
-                  {job.params.size}{#if job.params.sdapi} · {job.params.steps} steps · cfg {job.params.cfg}{/if}
+                <span class="ml-auto shrink-0 font-mono text-micro tabular-nums text-txtsecondary" use:tip={"Settings captured when this was queued"}>
+                  {job.params.size}{#if job.params.sdapi} · {job.params.steps}st{/if}
                 </span>
                 <button
                   class="shrink-0 p-0.5 rounded-full text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
@@ -1540,234 +1619,200 @@
             {/each}
           </div>
         {/if}
-        {#if isSdapi && (showNegative || $sdNegativePromptStore)}
-          <div class="flex items-start gap-2 pb-2 border-b border-card-border">
-            <Ban class="w-3.5 h-3.5 mt-1.5 shrink-0 text-txtsecondary" />
-            <textarea
-              class="w-full bg-transparent text-[0.8125rem] leading-relaxed resize-none focus:outline-none placeholder:text-txtsecondary min-h-[1.5rem] max-h-40 pretty-scroll"
-              rows="1"
-              placeholder="Negative - elements to avoid…"
-              bind:value={$sdNegativePromptStore}
-            ></textarea>
-            <button
-              class="mt-1 shrink-0 text-txtsecondary hover:text-txtmain transition-colors"
-              onclick={() => { $sdNegativePromptStore = ""; showNegative = false; }}
-              use:tip={"Remove negative prompt"}
-              aria-label="Remove negative prompt"
-            ><X class="w-3.5 h-3.5" /></button>
-          </div>
-        {/if}
-      {/snippet}
 
-      {#snippet imageLeftButtons()}
-        {#if enhancer}
-          <button
-            class="composer-icon-btn"
-            onclick={runEnhance}
-            disabled={enhancing || isGenerating || !prompt.trim()}
-            use:tip={isGenerating
-              ? "Wait for this render to finish: the enhancer is a separate model, and starting it now would make it queue behind the image model."
-              : `Enhance the prompt with ${enhancer.name}${baseImage ? " (img2img rewrite)" : " (txt2img rewrite)"}${enhancer.vision && baseImage ? ", which reads the reference image" : ""}. Rewrites the box, so you can read and edit it before rendering.`}
-          >
-            {#if enhancing}
-              <Loader2 class="w-[1.125rem] h-[1.125rem] animate-spin" />
-            {:else}
-              <Wand2 class="w-[1.125rem] h-[1.125rem]" />
-            {/if}
-          </button>
-          {#if preEnhance !== null}
-            <button
-              class="composer-icon-btn"
-              onclick={revertEnhance}
-              disabled={enhancing}
-              use:tip={preEnhanceAspect !== null
-                ? `Revert to the prompt you wrote, and the aspect ratio back to ${preEnhanceAspect}`
-                : "Revert to the prompt you wrote"}
-            >
-              <Undo2 class="w-[1.125rem] h-[1.125rem]" />
+        <div class="shrink-0 px-4 py-3 flex flex-col gap-2 {queuedHere.length ? '' : 'border-t border-card-border-inner'}">
+          <div class="flex items-center gap-2">
+            <button class="btn btn--primary flex-1 inline-flex items-center justify-center gap-2 h-9" onclick={send} disabled={!prompt.trim() || !$selectedModelStore}>
+              {#if isGenerating}<Clock class="w-4 h-4" /> Queue{:else}<Sparkles class="w-4 h-4" /> Generate{/if}
             </button>
-          {/if}
-        {/if}
-        <button
-          class="composer-icon-btn"
-          onclick={() => fileInput?.click()}
-          use:tip={supportsRefImages ? "Attach reference image(s)" : "Attach a source image to edit"}
-        >
-          <Paperclip class="w-[1.125rem] h-[1.125rem]" />
-        </button>
-        {#if isSdapi && baseImage}
-          <button
-            class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {maskData && maskSource === baseImage ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
-            onclick={() => (showMask = true)}
-            use:tip={segmentModel ? "Inpaint - mask a region to change (brush or AI select)" : "Inpaint - mask a region to change (keeps the rest)"}
-          >
-            <Brush class="w-[1.125rem] h-[1.125rem]" />
-          </button>
-        {/if}
-        {#if supportsAlpha}
-          <button
-            class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {alphaBg ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
-            onclick={() => (alphaBg = !alphaBg)}
-            use:tip={"Transparent background - renders a real alpha channel (PNG)"}
-            aria-pressed={alphaBg}
-          >
-            <Blend class="w-[1.125rem] h-[1.125rem]" />
-          </button>
-        {/if}
-        {#if isSdapi && !(showNegative || $sdNegativePromptStore)}
-          <button
-            class="inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
-            onclick={() => (showNegative = true)}
-            use:tip={"Add negative prompt"}
-          >
-            <Ban class="w-[1.125rem] h-[1.125rem]" />
-          </button>
-        {/if}
-      {/snippet}
+            {#if isGenerating}
+              <button class="btn btn--danger-outline inline-flex items-center gap-1.5 h-9" onclick={cancelGeneration} use:tip={"Stop (unloads the model to interrupt)"}>
+                <Square class="w-3.5 h-3.5" /> Stop
+              </button>
+            {/if}
+          </div>
+          <div class="flex items-center gap-3 text-micro text-txtsecondary">
+            <span><kbd class="font-mono">Enter</kbd> generate</span>
+            <span><kbd class="font-mono">Shift+Enter</kbd> new line</span>
+          </div>
+        </div>
+      </aside>
 
-      {#snippet imageExtraRightButtons()}
-        <button
-          class="composer-icon-btn"
-          onclick={newThread}
-          disabled={isGenerating || turns.length === 0}
-          use:tip={"New thread"}
-        >
-          <Plus class="w-[1.125rem] h-[1.125rem]" />
-        </button>
-      {/snippet}
-
-      <div class="shrink-0 relative w-full max-w-2xl mx-auto">
-        {#if attached.length}
-          <div class="flex flex-wrap gap-2 mb-2">
-            {#each attached as img, i (i)}
-              <div class="group relative w-14 h-14 rounded-lg overflow-hidden border border-card-border bg-secondary">
-                <img src={img} alt="attachment {i + 1}" class="w-full h-full object-cover" />
-                <button
-                  class="absolute top-0 right-0 w-5 h-5 flex items-center justify-center bg-black/60 text-white rounded-bl opacity-0 group-hover:opacity-100 transition-opacity"
-                  onclick={() => (attached = attached.filter((_, j) => j !== i))}
-                  aria-label="Remove attachment {i + 1}"
-                ><X class="w-3 h-3" /></button>
-                <button
-                  class="absolute top-0 left-0 w-5 h-5 flex items-center justify-center bg-black/60 text-white rounded-br opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-40 disabled:cursor-default"
-                  onclick={() => runUpscale(img, "a" + i)}
-                  disabled={upscaling !== null || isGenerating}
-                  use:tip={"Upscale ×4"}
-                >
-                  {#if upscaling === "a" + i}<Loader2 class="w-3 h-3 animate-spin" />{:else}<Maximize2 class="w-3 h-3" />{/if}
+      <!-- Canvas: one turn at a time, big. The strip underneath is the thread. -->
+      <section class="flex-1 min-w-0 flex flex-col min-h-0">
+        {#if turns.length === 0 && !isGenerating}
+          <div class="flex-1 flex flex-col items-center justify-center gap-3 text-txtsecondary">
+            <ImageIcon class="w-10 h-10 opacity-40" strokeWidth={1.5} />
+            <p>Describe an image to start. Keep prompting to tweak it.</p>
+          </div>
+        {:else if cur}
+          {@const t = cur}
+          {@const ti = sel}
+          <!-- picked = which image of a batch the actions act on; clamped so a
+               shorter regenerated turn can't act on a stale index. -->
+          {@const picked = Math.min(pickedImg[ti] ?? 0, Math.max(0, t.images.length - 1))}
+          {@const inFlight = !t.images.length && !t.error && genId === $activeImageChatId && ti === turns.length - 1}
+          <div class="shrink-0 flex items-center gap-2 px-6 h-10 min-w-0">
+            <span class="font-mono text-micro text-txtsecondary tabular-nums">{ti + 1}/{turns.length}</span>
+            {#if t.model}
+              <span class="flex items-center gap-1 min-w-0 text-micro font-medium text-txtsecondary">
+                <Sparkles class="w-3 h-3 shrink-0" /><span class="truncate">{t.model}</span>
+              </span>
+            {/if}
+            {#if t.secs != null}
+              <span class="font-mono text-micro text-txtsecondary tabular-nums">· {fmtDur(t.secs)}</span>
+            {/if}
+            {#if t.images.length > 1}
+              <!-- Batch picker: which image the actions act on. Clicking an image
+                   itself means zoom, so the pick lives here. -->
+              <span class="seg ml-2" role="group" aria-label="Pick image">
+                {#each t.images as _, ii (ii)}
+                  <button class="font-mono !px-2" aria-pressed={ii === picked} onclick={() => (pickedImg[ti] = ii)}>{ii + 1}</button>
+                {/each}
+              </span>
+            {/if}
+            {#if t.images.length}
+              <div class="ml-auto flex items-center gap-0.5 shrink-0">
+                <button class="icon-btn" onclick={() => replyWithImage(t.images[picked])} disabled={isGenerating} use:tip={"Reply - use this image as the source/reference"} aria-label="Reply with image">
+                  <Reply class="w-4 h-4" />
+                </button>
+                <button class="icon-btn" onclick={() => regenerate(ti)} disabled={isGenerating} use:tip={"Regenerate"} aria-label="Regenerate">
+                  <RefreshCw class="w-4 h-4" />
+                </button>
+                <button class="icon-btn" onclick={() => copyImage(t.images[picked], ti)} use:tip={copiedIdx === ti ? "Copied!" : "Copy image"} aria-label="Copy image">
+                  {#if copiedIdx === ti}<Check class="w-4 h-4 text-green-500" />{:else}<Copy class="w-4 h-4" />{/if}
+                </button>
+                <button class="icon-btn" onclick={() => runUpscale(t.images[picked], "m" + ti)} disabled={upscaling !== null || isGenerating} use:tip={"Upscale ×4"} aria-label="Upscale">
+                  {#if upscaling === "m" + ti}<Loader2 class="w-4 h-4 animate-spin" />{:else}<Maximize2 class="w-4 h-4" />{/if}
+                </button>
+                <button class="icon-btn" onclick={() => downloadImage(t.images[picked])} use:tip={"Download"} aria-label="Download">
+                  <Download class="w-4 h-4" />
+                </button>
+                <button class="icon-btn" onclick={() => (fullscreenImg = t.images[picked])} use:tip={"Fullscreen"} aria-label="Fullscreen">
+                  <Expand class="w-4 h-4" />
                 </button>
               </div>
-            {/each}
+            {/if}
           </div>
-        {:else if baseImage && turns.length > 0}
-          <p class="flex items-center gap-1.5 text-xs text-txtsecondary mb-2 px-2">
-            <span>{supportsRefImages ? "Editing the last image (reference)" : isSdapi ? "Editing the last image (img2img)" : "Fresh generation each turn"}</span>
-            {#if isSdapi}
-              <button class="hover:text-txtmain transition-colors" onclick={() => (skipBase = true)} use:tip={"New image instead - don't edit the last one"}>
-                <X class="w-3.5 h-3.5" />
-              </button>
-            {/if}
-          </p>
-        {:else if skipBase && turns.length > 0 && isSdapi}
-          <p class="flex items-center gap-1.5 text-xs text-txtsecondary mb-2 px-2">
-            <span>New image - not editing the last one</span>
-            <button class="hover:text-txtmain transition-colors" onclick={() => (skipBase = false)} use:tip={"Edit the last image instead"}>
-              <RefreshCw class="w-3.5 h-3.5" />
-            </button>
-          </p>
-        {/if}
 
-        {#if maskData && maskSource === baseImage}
-          <div class="flex items-center gap-2.5 mb-2 px-2">
-            {#if pendingMaskPreview}
-              <button
-                class="block rounded-lg overflow-hidden border border-card-border shrink-0 cursor-zoom-in focus:outline-none"
-                onclick={() => (fullscreenImg = pendingMaskPreview)}
-                aria-label="View inpaint mask"
-              >
-                <img src={pendingMaskPreview} alt="inpaint mask preview" class="h-14 w-auto object-contain" />
-              </button>
+          <div class="flex-1 min-h-0 flex items-center justify-center gap-3 px-6 pb-3">
+            {#if t.error}
+              <div class="max-w-lg p-3 rounded-lg bg-error/10 text-error text-sm">{t.error}</div>
+            {:else if t.images.length}
+              {#each t.images as img, ii (ii)}
+                <button
+                  class="h-full min-w-0 flex items-center justify-center cursor-zoom-in focus:outline-none {t.images.length > 1 ? 'flex-1' : 'w-full'}"
+                  onclick={() => (fullscreenImg = img)}
+                  aria-label="View image fullscreen"
+                >
+                  <img
+                    src={img}
+                    alt="generated {ti + 1}"
+                    class="max-h-full max-w-full object-contain rounded-lg border alpha-checker {t.images.length > 1 && ii === picked ? 'border-primary' : 'border-card-border'}"
+                  />
+                </button>
+              {/each}
+            {:else if inFlight}
+              <!-- In-flight: per-phase glowing icon + label, progress bar, then
+                   the steps/time row. -->
+              <div class="w-72 flex flex-col gap-2 rounded-xl border border-card-border bg-surface px-4 py-3.5">
+                <div class="flex items-center gap-2 text-sm text-txtsecondary">
+                  {#if StageIcon}
+                    <StageIcon class="w-4 h-4 reason-glow shrink-0" />
+                  {:else}
+                    <span class="inline-block w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></span>
+                  {/if}
+                  <span class="reason-shimmer-white font-medium">{stageLabel || "Generating…"}</span>
+                  {#if (runningParams?.batch ?? batchCount) > 1}
+                    <!-- The step bar restarts once per batch image; say so, or a
+                         bar going back to 0/N looks like a stall/restart. -->
+                    <span class="font-mono text-micro tabular-nums">×{runningParams?.batch ?? batchCount}</span>
+                  {/if}
+                </div>
+                {#if totalSteps > 0}
+                  <div class="h-1.5 w-full rounded bg-card-border overflow-hidden">
+                    <div class="h-full bg-primary transition-all" style="width: {Math.round((step / totalSteps) * 100)}%"></div>
+                  </div>
+                {/if}
+                <div class="flex items-center justify-between font-mono text-micro text-txtsecondary tabular-nums pt-1.5 border-t border-card-border-inner">
+                  <span>{#if totalSteps > 0}{step}/{totalSteps} steps{/if}{#if etaSec > 0} · ~{fmtDur(etaSec)} left{/if}{#if totalSteps <= 0 && etaSec <= 0}&nbsp;{/if}</span>
+                  <span>{fmtDur(elapsed)}</span>
+                </div>
+              </div>
+            {:else}
+              <div class="text-sm text-error">No image returned.</div>
             {/if}
-            <div class="flex items-center gap-2 text-xs text-primary">
-              <Brush class="w-3.5 h-3.5" />
-              {#if supportsAnnotEdit && maskAnnotate}
-                <span>Region marked - the model is told what to change (it may redraw the rest)</span>
+          </div>
+
+          <!-- The prompt that made this turn, with what it was fed. -->
+          <div class="shrink-0 px-6 pb-3">
+            <div class="group relative max-w-3xl mx-auto flex items-start gap-3 rounded-xl border border-card-border bg-surface px-3.5 py-2.5">
+              {#if t.maskPreview}
+                <button class="block shrink-0 rounded-md overflow-hidden border border-card-border cursor-zoom-in focus:outline-none" onclick={() => (fullscreenImg = t.maskPreview ?? null)} aria-label="View inpaint mask">
+                  <img src={t.maskPreview} alt="inpaint mask" class="h-12 w-auto object-contain" />
+                </button>
+              {:else if t.refs.length}
+                <div class="flex shrink-0 gap-1.5">
+                  {#each t.refs as ref, ri (ri)}
+                    <button class="block rounded-md overflow-hidden border border-card-border cursor-zoom-in focus:outline-none" onclick={() => (fullscreenImg = ref)} aria-label="View reference image">
+                      <img src={ref} alt="reference {ri + 1}" class="h-12 w-auto object-contain" />
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+              {#if editingIdx === ti}
+                <div class="flex-1 min-w-0 flex flex-col gap-2">
+                  <textarea
+                    class="w-full px-2.5 py-1.5 rounded-lg border border-card-border bg-background text-[0.8125rem] leading-relaxed resize-none overflow-hidden focus:outline-none focus:border-primary"
+                    rows="1"
+                    bind:value={editText}
+                    use:autogrow
+                    onkeydown={editKeyDown}
+                  ></textarea>
+                  <div class="flex justify-end gap-1">
+                    <button class="icon-btn" onclick={cancelEdit} use:tip={"Cancel"} aria-label="Cancel edit"><X class="w-4 h-4" /></button>
+                    <button class="icon-btn" onclick={saveEdit} use:tip={"Save & regenerate"} aria-label="Save and regenerate"><Save class="w-4 h-4" /></button>
+                  </div>
+                </div>
               {:else}
-                <span>Inpaint mask set - only the highlighted area changes</span>
+                <span class="flex-1 min-w-0 text-[0.8125rem] leading-relaxed whitespace-pre-wrap line-clamp-3" use:tip={t.prompt.length > 200 ? t.prompt : ""}>{t.prompt}</span>
+                <button class="icon-btn shrink-0 -mr-1 -mt-0.5" onclick={() => startEdit(ti)} disabled={isGenerating} use:tip={"Edit prompt"} aria-label="Edit prompt">
+                  <Pencil class="w-3.5 h-3.5" />
+                </button>
               {/if}
-              {#if supportsAnnotEdit}
-                <!-- Two genuinely different mechanisms, so the user picks rather
-                     than the model deciding: Mask keeps every unmarked pixel but
-                     drops the reference conditioning, Annotate keeps the
-                     conditioning and lets the model reflow the frame. -->
-                <span class="inline-flex rounded-md overflow-hidden border border-card-border">
-                  <button
-                    class="px-1.5 py-0.5 {maskAnnotate ? 'text-txtsecondary hover:text-txtmain' : 'bg-secondary text-txtmain'}"
-                    onclick={() => (maskAnnotate = false)}
-                    use:tip={"Latent inpaint - regenerate only the masked pixels, keep the rest byte-for-byte"}
-                  >Mask</button>
-                  <button
-                    class="px-1.5 py-0.5 {maskAnnotate ? 'bg-secondary text-txtmain' : 'text-txtsecondary hover:text-txtmain'}"
-                    onclick={() => (maskAnnotate = true)}
-                    use:tip={"Annotate - send the highlighted image as a reference so the model targets that region itself"}
-                  >Annotate</button>
-                </span>
-              {/if}
-              <button class="text-txtsecondary hover:text-txtmain" onclick={() => { maskData = null; maskSource = null; }}>clear</button>
             </div>
           </div>
         {/if}
 
-        {#if dropError}
-          <div class="mb-2 p-2 bg-error/10 text-error rounded text-sm">
-            {dropError}
+        {#if turns.length > 0}
+          <div class="shrink-0 flex items-center gap-3 px-6 py-2.5 border-t border-card-border-inner min-w-0">
+            <span class="shrink-0 text-micro font-medium uppercase tracking-wide text-txtsecondary">This thread</span>
+            <div bind:this={threadEl} class="flex-1 min-w-0 flex gap-2 overflow-x-auto pretty-scroll py-0.5">
+              {#each turns as tt, i (i)}
+                <button
+                  class="relative shrink-0 w-16 h-12 rounded-md overflow-hidden border bg-secondary flex items-center justify-center transition-shadow {i === sel ? 'border-primary ring-1 ring-primary' : 'border-card-border hover:border-txtsecondary'}"
+                  onclick={() => (selTurn = i)}
+                  use:tip={tt.prompt}
+                  aria-label="Turn {i + 1}"
+                >
+                  {#if tt.images.length}
+                    <img src={tt.images[0]} alt="" class="w-full h-full object-cover" />
+                    {#if tt.images.length > 1}
+                      <span class="absolute bottom-0.5 right-0.5 px-1 rounded bg-black/60 font-mono text-[0.625rem] text-white tabular-nums">×{tt.images.length}</span>
+                    {/if}
+                  {:else if tt.error}
+                    <X class="w-4 h-4 text-error" />
+                  {:else if genId === $activeImageChatId && i === turns.length - 1}
+                    <Loader2 class="w-4 h-4 text-primary animate-spin" />
+                  {:else}
+                    <ImageIcon class="w-4 h-4 text-txtsecondary opacity-60" />
+                  {/if}
+                </button>
+              {/each}
+            </div>
           </div>
         {/if}
-
-        {#if enhanceError}
-          <div class="mb-2 p-2 bg-error/10 text-error rounded text-sm flex items-start gap-2">
-            <span class="flex-1">{enhanceError}</span>
-            <button class="shrink-0 opacity-70 hover:opacity-100" onclick={() => (enhanceError = "")} aria-label="Dismiss">
-              <X class="w-3.5 h-3.5" />
-            </button>
-          </div>
-        {/if}
-
-        <!-- A control moved on its own, so it says so. Without this the aspect
-             picker silently disagrees with what the user last set it to. -->
-        {#if enhancedAspect}
-          <div class="mb-2 p-2 bg-surface-2 border border-card-border text-txtsecondary rounded text-sm flex items-start gap-2">
-            <span class="flex-1">
-              {enhancer?.name ?? "The enhancer"} wrote this prompt for <strong class="text-txtmain">{enhancedAspect}</strong>, so the aspect ratio was changed to match.
-            </span>
-            <button class="shrink-0 opacity-70 hover:opacity-100" onclick={() => (enhancedAspect = null)} aria-label="Dismiss">
-              <X class="w-3.5 h-3.5" />
-            </button>
-          </div>
-        {/if}
-
-        <input type="file" accept="image/*" multiple class="hidden" bind:this={fileInput} onchange={onAttachFiles} />
-
-        <Composer
-          bind:value={prompt}
-          bind:textareaEl={promptEl}
-          placeholder={isGenerating ? "Queue a prompt…" : turns.length ? "Describe a change…" : "Describe the image you want…"}
-          onKeydown={handleKeyDown}
-          onPaste={handlePaste}
-          bind:modelValue={$selectedModelStore}
-          modelPlaceholder="Select an image model..."
-          category="image"
-          busy={isGenerating}
-          modelDisabled={false}
-          onStop={cancelGeneration}
-          stopTitle="Stop (unloads the model to interrupt)"
-          bind:showSettings
-          settingsTitle="Settings"
-          topExtra={imageTopExtra}
-          leftButtons={imageLeftButtons}
-          extraRightButtons={imageExtraRightButtons}
-          settingsPanel={imageSettingsPanel}
-        />
-      </div>
+      </section>
     </div>
   {/if}
 </div>
