@@ -11,11 +11,17 @@
   // opened later goes on top of one opened earlier, so this always wins.
   let dialogEl = $state<HTMLDialogElement | null>(null);
   let confirmBtn = $state<HTMLButtonElement | null>(null);
+  // req.option's tick box; re-seeded per request so one dialog's choice never
+  // carries into the next.
+  let checked = $state(false);
+  $effect(() => {
+    checked = $pendingConfirm?.option?.checked ?? false;
+  });
 
   function settle(ok: boolean): void {
     const req = $pendingConfirm;
     pendingConfirm.set(null);
-    req?.resolve(ok);
+    req?.resolve(ok, ok && checked);
   }
 
   // Open/close follows the store, and the confirm button takes focus so Enter
@@ -60,6 +66,12 @@
                they used to hand window.confirm(). overflow-wrap:anywhere so a
                long unbroken token (a gguf file name) wraps inside the box. -->
           <p class="text-label whitespace-pre-line [overflow-wrap:anywhere] text-txtsecondary">{req.body}</p>
+        {/if}
+        {#if req.option}
+          <label class="mt-2 flex items-start gap-2 text-label text-txtmain [overflow-wrap:anywhere]">
+            <input type="checkbox" class="mt-0.5 shrink-0" bind:checked />
+            <span class="whitespace-pre-line">{req.option.label}</span>
+          </label>
         {/if}
       </div>
     </div>
