@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { cleanTitle, compactInPlacePrompt } from "./chatCompact";
+import { cleanTitle, compactInPlacePrompt, estimateKeptTokens } from "./chatCompact";
 
 describe("cleanTitle", () => {
   it("returns a plain title unchanged", () => {
@@ -37,5 +37,17 @@ describe("compactInPlacePrompt", () => {
 
   it("drops the boundary clause for a text-less kept message", () => {
     expect(compactInPlacePrompt(false, "   ")).not.toContain("begins");
+  });
+});
+
+describe("estimateKeptTokens", () => {
+  it("scales the kept prompt by the measured tokens-per-char", () => {
+    // 90k tokens over 300k chars held; the kept prompt is 30k chars -> 9k.
+    expect(estimateKeptTokens(90_000, 300_000, 30_000)).toBe(9_000);
+  });
+
+  it("falls back to a flat ratio with nothing measured", () => {
+    expect(estimateKeptTokens(0, 0, 4_000)).toBe(1_000);
+    expect(estimateKeptTokens(500, 0, 4_000)).toBe(1_000);
   });
 });

@@ -15,6 +15,10 @@ export interface ChatSession {
   // from `compactedCount` onward go to the model, so it never overflows.
   summary?: string;
   compactedCount?: number;
+  // How many messages the chat held when it was last compacted: the compaction
+  // marker is drawn there, i.e. where the conversation ended at the time, with
+  // the kept tail (compactedCount..compactedAt) above it.
+  compactedAt?: number;
   // Set once the model has named the chat (see generateTitle). Until then the
   // title is the first-message heuristic and is recomputed on every save.
   titled?: boolean;

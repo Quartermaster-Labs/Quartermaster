@@ -4,7 +4,7 @@
   import { tip as tooltip } from "../../lib/tooltip";
   import { get } from "svelte/store";
   import { models, backendMetrics, loadModel } from "../../stores/api";
-  import { summarizeConversation, summarizeInPlace, compactInPlacePrompt, generateTitle, COMPACT_AT, KEEP_RECENT } from "../../lib/chatCompact";
+  import { summarizeConversation, summarizeInPlace, compactInPlacePrompt, estimateKeptTokens, generateTitle, COMPACT_AT, KEEP_RECENT } from "../../lib/chatCompact";
   import {
     selectedModelStore,
     selectedTabStore,
@@ -209,6 +209,10 @@
   let activeSession = $derived($chatSessions.find((s) => s.id === $activeChatId));
   let messages = $derived(activeSession?.messages ?? []);
   let compactedCount = $derived(activeSession?.compactedCount ?? 0);
+  // Where the compaction marker goes, and how many kept messages sit above it.
+  // Chats compacted before compactedAt existed fall back to the boundary itself.
+  let compactMarkAt = $derived(Math.min(activeSession?.compactedAt ?? compactedCount, messages.length));
+  let compactKept = $derived(Math.max(0, compactMarkAt - compactedCount));
   // Id of the chat currently being compacted, or "" — an id rather than a bool
   // so the banner shows for a manual /compact too, which has no turn (and so no
   // genId) to hang off.
@@ -221,10 +225,22 @@
   // Live context-window usage for the selected model (from backend KV metrics).
   // The bar fills with kv_cache_usage_ratio; colour steps yellow → orange → red
   // as it nears COMPACT_AT (the auto-compaction threshold).
+  //
+  // Right after a compaction the live reading is stale in the one way that
+  // matters: the KV still holds the whole pre-fold conversation until the next
+  // turn replaces it with summary + kept tail. pendingCtx carries an estimate of
+  // that next prompt for the chat it was computed for; the next turn clears it
+  // and the live reading takes over again.
+  let pendingCtx = $state<{ chatId: string; model: string; tokens: number } | null>(null);
   let ctxMetrics = $derived($backendMetrics[$selectedModelStore]);
   let ctxN = $derived(ctxMetrics?.n_ctx ?? 0);
-  let ctxUsed = $derived(ctxMetrics?.kv_cache_tokens ?? 0);
-  let ctxRatio = $derived(ctxN ? Math.min(1, ctxMetrics!.kv_cache_usage_ratio) : 0);
+  let ctxEstimate = $derived(
+    pendingCtx && pendingCtx.chatId === $activeChatId && pendingCtx.model === $selectedModelStore ? pendingCtx.tokens : null,
+  );
+  let ctxUsed = $derived(ctxEstimate ?? ctxMetrics?.kv_cache_tokens ?? 0);
+  let ctxRatio = $derived(
+    ctxN ? Math.min(1, ctxEstimate != null ? ctxEstimate / ctxN : ctxMetrics!.kv_cache_usage_ratio) : 0,
+  );
   let ctxColor = $derived(
     ctxRatio >= COMPACT_AT ? "#ef4444" : ctxRatio >= 0.6 ? "#f97316" : "#eab308",
   );
@@ -867,8 +883,10 @@
     if (idx < curCompacted) {
       curSummary = "";
       curCompacted = 0;
-      patchSession(id, { summary: undefined, compactedCount: undefined });
+      patchSession(id, { summary: undefined, compactedCount: undefined, compactedAt: undefined });
     }
+    // This turn measures the real prompt; the post-compaction estimate is done.
+    if (pendingCtx?.chatId === id) pendingCtx = null;
     // Remove all messages after the edited user message
     patchSession(id, { messages: sessionById(id)!.messages.slice(0, idx + 1) });
 
@@ -1032,6 +1050,8 @@
     const res = await fetch(`/api/chats/turn/stream?chatId=${encodeURIComponent(id)}`, { signal });
     if (res.status === 204 || !res.body) return;
     if (!res.ok) throw new Error(`stream failed: ${res.status}`);
+    // A turn is running on the folded prompt: the live KV reading is real again.
+    if (pendingCtx?.chatId === id) pendingCtx = null;
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
@@ -1157,7 +1177,7 @@
       if (!r.ok) return;
       const arr = await r.json();
       const sess = Array.isArray(arr) ? arr.find((s: any) => s.id === id) : null;
-      if (sess) patchSession(id, { messages: sess.messages, summary: sess.summary, compactedCount: sess.compactedCount });
+      if (sess) patchSession(id, { messages: sess.messages, summary: sess.summary, compactedCount: sess.compactedCount, compactedAt: sess.compactedAt });
     } catch {}
   }
 
@@ -1243,9 +1263,12 @@
 
     compactingId = id;
     try {
-      const next = await summarizeLive(id, modelId, boundary, signal);
+      const { text, heldTokens, heldChars } = await summarizeLive(id, modelId, boundary, signal);
       if (signal.aborted) return 0;
-      patchSession(id, { summary: next, compactedCount: boundary });
+      const len = sessionById(id)?.messages.length ?? msgs.length;
+      patchSession(id, { summary: text, compactedCount: boundary, compactedAt: len });
+      const kept = promptChars(id, modelId, text, msgs.slice(boundary));
+      pendingCtx = { chatId: id, model: modelId, tokens: estimateKeptTokens(heldTokens, heldChars, kept) };
       return boundary - curCompacted;
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") throw e;
@@ -1266,7 +1289,16 @@
   //
   // Falls back to the standalone summary request if this fails: that one evicts
   // the chat, but it still compacts, and a chat that cannot compact overflows.
-  async function summarizeLive(id: string, modelId: string, boundary: number, signal: AbortSignal): Promise<string> {
+  //
+  // Also returns the exchange's measured size (heldTokens over heldChars) for
+  // the context-bar estimate; the fallback measures nothing the next turn will
+  // resemble, so it returns 0 tokens and the estimate uses a flat ratio.
+  async function summarizeLive(
+    id: string,
+    modelId: string,
+    boundary: number,
+    signal: AbortSignal,
+  ): Promise<{ text: string; heldTokens: number; heldChars: number }> {
     const s = sessionById(id)!;
     const summary = s.summary ?? "";
     const curCompacted = s.compactedCount ?? 0;
@@ -1274,18 +1306,41 @@
     const messages: ChatMessage[] = [];
     if (sys) messages.push({ role: "system", content: sys });
     messages.push(...(s.messages.slice(curCompacted) as ChatMessage[]));
-    messages.push({ role: "user", content: compactInPlacePrompt(!!summary, getTextContent(s.messages[boundary].content)) });
+    // `?.`: a tail with no user message in it snaps the boundary to the end.
+    messages.push({ role: "user", content: compactInPlacePrompt(!!summary, getTextContent(s.messages[boundary]?.content ?? "")) });
     try {
-      return await summarizeInPlace(
+      const r = await summarizeInPlace(
         { chatId: id, model: modelId, messages, tools: turnTools.length ? turnTools : undefined },
         signal,
       );
+      const heldChars = JSON.stringify(turnTools).length + textChars(messages) + r.text.length;
+      return { text: r.text, heldTokens: r.tokens, heldChars };
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") throw e;
       console.warn("in-place compaction failed, falling back:", e);
       // Summarize only the newly-folded slice; `summary` already covers the prefix.
-      return summarizeConversation(modelId, s.messages.slice(curCompacted, boundary) as ChatMessage[], summary, signal);
+      const text = await summarizeConversation(modelId, s.messages.slice(curCompacted, boundary) as ChatMessage[], summary, signal);
+      return { text, heldTokens: 0, heldChars: 0 };
     }
+  }
+
+  // Characters of what a message list puts in front of the model: text plus
+  // tool-call arguments. Only ever compared against another count made the same
+  // way, so the template's own framing tokens cancel out of the ratio.
+  function textChars(messages: ChatMessage[]): number {
+    let n = 0;
+    for (const m of messages) {
+      n += getTextContent(m.content ?? "").length;
+      if (m.tool_calls?.length) n += JSON.stringify(m.tool_calls).length;
+    }
+    return n;
+  }
+
+  // Characters of the prompt the next turn sends after a fold: the system prompt
+  // rebuilt around the new summary, the tools, and the kept tail.
+  function promptChars(id: string, modelId: string, summary: string, kept: ChatMessage[]): number {
+    const { sys, turnTools } = turnSetup(id, modelId, false, summary);
+    return (sys?.length ?? 0) + JSON.stringify(turnTools).length + textChars(kept);
   }
 
   // Manual compaction: "/compact" typed into the composer. Same fold as the
@@ -1633,6 +1688,21 @@
   </aside>
 {/snippet}
 
+<!-- Drawn where the chat ended when it was compacted, so a fresh /compact shows
+     up as the newest line instead of somewhere far up the scrollback. -->
+{#snippet compactMarker()}
+  <div
+    class="flex items-center gap-2 my-3 text-[0.7rem] uppercase tracking-wide text-txtsecondary"
+    use:tooltip={`The first ${compactedCount} messages are summarized for the model; they're still shown here but not resent.`}
+  >
+    <span class="flex-1 h-px bg-card-border"></span>
+    <span class="inline-flex items-center gap-1">
+      <Brain class="w-3 h-3" /> Compacted - model sees a summary{compactKept > 0 ? ` + the last ${compactKept} message${compactKept === 1 ? "" : "s"}` : ""}
+    </span>
+    <span class="flex-1 h-px bg-card-border"></span>
+  </div>
+{/snippet}
+
 {#snippet chatHeaderRight()}
   <!-- Context-window usage (yellow → orange → red) with the used/max readout.
        Clicking compacts on demand, the same as typing /compact. -->
@@ -1641,13 +1711,15 @@
       type="button"
       class="flex items-center gap-2 px-1.5 h-7 rounded hover:bg-secondary transition-colors"
       onclick={() => runManualCompact($activeChatId)}
-      use:tooltip={`Context ${fmtTokens(ctxUsed)} / ${fmtTokens(ctxN)} tokens (${Math.round(ctxRatio * 100)}%) · click to compact now`}
+      use:tooltip={ctxEstimate != null
+        ? `Context ~${fmtTokens(ctxUsed)} / ${fmtTokens(ctxN)} tokens (~${Math.round(ctxRatio * 100)}%), estimated for the next message after compaction · click to compact now`
+        : `Context ${fmtTokens(ctxUsed)} / ${fmtTokens(ctxN)} tokens (${Math.round(ctxRatio * 100)}%) · click to compact now`}
     >
       <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Ctx</span>
       <span class="h-1 w-16 rounded-full bg-secondary overflow-hidden">
         <span class="block h-full rounded-full transition-all" style="width: {Math.max(ctxRatio * 100, 3)}%; background: {ctxColor};"></span>
       </span>
-      <span class="font-mono text-micro tabular-nums text-txtsecondary">{fmtTokens(ctxUsed)}/{fmtTokens(ctxN)}</span>
+      <span class="font-mono text-micro tabular-nums text-txtsecondary">{ctxEstimate != null ? "~" : ""}{fmtTokens(ctxUsed)}/{fmtTokens(ctxN)}</span>
     </button>
   {/if}
 {/snippet}
@@ -1719,12 +1791,8 @@
         </div>
       {:else}
         {#each messages as message, idx (idx)}
-          {#if idx === compactedCount && compactedCount > 0}
-            <div class="flex items-center gap-2 my-3 text-[0.7rem] uppercase tracking-wide text-txtsecondary" use:tooltip={"Messages above are summarized for the model; they're still shown here but not resent."}>
-              <span class="flex-1 h-px bg-card-border"></span>
-              <span class="inline-flex items-center gap-1"><Brain class="w-3 h-3" /> Compacted - model sees a summary above</span>
-              <span class="flex-1 h-px bg-card-border"></span>
-            </div>
+          {#if idx === compactMarkAt && compactedCount > 0}
+            {@render compactMarker()}
           {/if}
           <div data-role={message.role}>
           <ChatMessageComponent
@@ -1760,6 +1828,9 @@
           />
           </div>
         {/each}
+        {#if compactMarkAt === messages.length && compactedCount > 0}
+          {@render compactMarker()}
+        {/if}
       {/if}
       <!-- Compaction status. Inside the scrolled column and after the last
            message, not a strip at the top of the pane: it is the same kind of
