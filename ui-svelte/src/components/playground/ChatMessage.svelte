@@ -22,6 +22,9 @@
   import ProductReport from "./ProductReport.svelte";
   import { diagramBlocks } from "../../lib/diagrams";
   import { openWikiArticle } from "../../stores/wiki";
+  import { untrack } from "svelte";
+  import QmMark from "../QmMark.svelte";
+  import { batchEnd, planSweep, pathAt, BurnTracker, BURN_MS, POLL_MS, type PathPt, type WordBox } from "../../lib/burnReveal";
 
   interface Props {
     role: "user" | "assistant" | "system" | "tool";
@@ -68,7 +71,37 @@
     return typeof v === "string" ? v : JSON.stringify(v);
   }
 
-  let textContent = $derived(getTextContent(content));
+  let rawText = $derived(getTextContent(content));
+
+  // --- paced reveal (lib/burnReveal) -----------------------------------------
+  // An assistant turn shows its text in batches rather than token by token:
+  // the next batch (everything received meanwhile, cut at a word) is released
+  // only once the mark has finished pressing the previous one, so batch size
+  // follows generation speed while the mark's speed stays fixed. `pacing` spans the stream
+  // plus the short drain after it; outside it the full text shows as-is, so
+  // history, edits and reloads never animate. It adopts whatever text already
+  // exists when the stream starts: a reattach to a background generation must
+  // not replay the whole answer.
+  let shownLen = $state(untrack(() => rawText.length));
+  let pacing = $state(false);
+  $effect(() => {
+    if (role === "assistant" && isStreaming && !untrack(() => pacing)) {
+      shownLen = untrack(() => rawText.length);
+      pacing = true;
+    }
+  });
+  $effect(() => {
+    if (!pacing) return;
+    const id = setInterval(() => {
+      const text = rawText;
+      // Shrank (regenerate) or jumped by a whole snapshot: no point pacing it.
+      if (shownLen > text.length || text.length - shownLen > 4000) shownLen = text.length;
+      else if (shownLen < text.length && performance.now() >= sweepUntil) shownLen = batchEnd(shownLen, text, !isStreaming);
+      if (!isStreaming && shownLen >= text.length) pacing = false;
+    }, POLL_MS);
+    return () => clearInterval(id);
+  });
+  let textContent = $derived(pacing && shownLen < rawText.length ? rawText.slice(0, shownLen) : rawText);
   // A ```ask block turns into the click-through wizard below the answer, and is
   // taken out of the prose so the raw JSON never shows — including mid-stream,
   // where the half-written fence becomes a "writing options" label. The wizard
@@ -325,7 +358,7 @@
   // diagram/SVG card already on screen the moment the answer landed.
   function renderTextSeg(seg: { text: string; idx: number }): { blocks: RenderedBlock[]; pendingHtml: string } {
     if (seg.idx === lastTextIdx) {
-      if (isStreaming) return renderStreamingMarkdown(seg.text, streamingCache, citations ?? []);
+      if (isStreaming || pacing) return renderStreamingMarkdown(seg.text, streamingCache, citations ?? []);
       return { blocks: finalizeStreamingMarkdown(seg.text, streamingCache, citations ?? []), pendingHtml: "" };
     }
     return { blocks: [{ id: -1, html: renderMarkdown(seg.text, citations ?? []) }], pendingHtml: "" };
@@ -361,6 +394,80 @@
   // any audio plays: the reply is static by then, and re-walking the DOM per
   // chunk would cost a full alignment pass every few seconds.
   let proseEl = $state<HTMLElement | null>(null);
+
+  // --- burn-in -----------------------------------------------------------------
+  // After every paced render the new batch's words are wrapped, laid out and
+  // planned (lib/burnReveal planSweep): each cools in from a hot glow
+  // (.qm-burn in index.css) as an invisible sweep reaches it, left to right,
+  // line by line. Positions are in the prose box's local pixels (cssZoom:
+  // rects are visual, style px are local).
+  const burn = new BurnTracker();
+  // The sweep's path and when it is free for the next batch (performance.now()).
+  // Plain variables: only this effect and the reveal poll read them.
+  let sweepPath: PathPt[] = [];
+  let sweepUntil = 0;
+  $effect(() => {
+    void textContent;
+    const live = pacing;
+    const el = proseEl;
+    if (!el || role !== "assistant") return;
+    if (!live && !burn.active) {
+      sweepPath = [];
+      return;
+    }
+    const now = performance.now();
+    const spans = burn.update(el, now, live);
+    if (!live || spans.length === 0) return;
+    const box = el.getBoundingClientRect();
+    const z = cssZoom(el);
+    const words: WordBox[] = [];
+    let prev: WordBox = { x0: 0, x1: 0, y: 0 };
+    for (const s of spans) {
+      // First line box with any width: a word followed by a newline in a code
+      // block reports a second, empty rect on the next line.
+      const r = [...s.getClientRects()].find((c) => c.width > 0);
+      if (r) prev = { x0: (r.left - box.left) / z, x1: (r.right - box.left) / z, y: (r.top + r.height / 2 - box.top) / z };
+      words.push(prev);
+    }
+    const plan = planSweep(words, pathAt(sweepPath, now), now);
+    burn.setTimes(spans, plan.ignite, now);
+    sweepPath = plan.path;
+    sweepUntil = plan.end;
+  });
+  // The mark rides under the line the sweep is on: vertical only, eased by a
+  // CSS transition (.qm-follow), so it steps down a line as the text wraps.
+  let followEl = $state<HTMLElement | null>(null);
+  $effect(() => {
+    const el = followEl;
+    const prose = proseEl;
+    if (!el || !prose) return;
+    // One line below the sweep's line centre: the wheel sits in the next line's
+    // slot, which is still empty (or holds words not yet lit).
+    const lineH = parseFloat(getComputedStyle(prose).lineHeight) || 24;
+    let raf = 0;
+    let at = NaN;
+    const frame = () => {
+      const p = pathAt(sweepPath, performance.now());
+      const y = p ? Math.round(p.y + lineH) : NaN;
+      if (y !== at && !Number.isNaN(y)) {
+        el.style.transform = `translateY(${y}px)`;
+        el.style.visibility = "visible";
+        at = y;
+      }
+      raf = requestAnimationFrame(frame);
+    };
+    frame();
+    return () => cancelAnimationFrame(raf);
+  });
+  // Once the stream is over and the last word has cooled, drop the burn spans
+  // so a finished answer is plain markup again.
+  $effect(() => {
+    if (pacing || role !== "assistant") return;
+    const el = proseEl;
+    if (!el || !el.querySelector(".qm-burn")) return;
+    const id = setTimeout(() => burn.settle(el), Math.max(0, sweepUntil - performance.now()) + BURN_MS + 50);
+    return () => clearTimeout(id);
+  });
   let speakRanges: (Range | null)[] = [];
   // Identity token for the global CSS.highlights registry — stopping THIS
   // message must not clear a highlight another message just installed.
@@ -516,7 +623,11 @@
   // Vertical offset (px, relative to the bubble top) the reply button tracks to.
   // Snaps to the CENTER of the text line under the cursor (via caret hit-testing)
   // so it steps line-by-line, and is clamped inside the bubble so it can't drift
-  // past the text bounds.
+  // past the text bounds. The clamp is taken at mousemove, and the bubble can
+  // shrink after it (a reasoning box collapsing as the answer ends), so the
+  // style clamps again against the bubble's live height: an invisible button
+  // left 1000px down still counts as scrollable overflow, and the pin-to-bottom
+  // at the end of a turn then scrolled the user into a screen of blank space.
   let replyY = $state(0);
   function trackReply(e: MouseEvent) {
     const el = e.currentTarget as HTMLElement;
@@ -812,7 +923,7 @@
       {#if onReply && !isStreaming && !overAsk}
         <button
           class="absolute left-full ml-2 -translate-y-1/2 z-10 p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary opacity-0 group-hover:opacity-100 transition-opacity"
-          style="top: {replyY}px"
+          style="top: min({replyY}px, calc(100% - 10px))"
           onclick={onReply}
           use:tip={"Reply to this message"}
         >
@@ -892,7 +1003,7 @@
       {#if rewriteOriginal != null}
         <RewriteDiff original={rewriteOriginal} rewritten={stripThinking(displayContent)} {isStreaming} {modelReady} />
       {:else}
-        <div class="prose prose-sm dark:prose-invert max-w-none chat-prose" bind:this={proseEl} use:codeBlockCopy use:wikiCiteClick use:diagramBlocks>
+        <div class="relative prose prose-sm dark:prose-invert max-w-none chat-prose" bind:this={proseEl} use:codeBlockCopy use:wikiCiteClick use:diagramBlocks>
           <!-- Ordered timeline: inline think boxes, search blocks, and answer text. -->
           {#each timeline as seg, si (si)}
             {#if seg.kind === "search"}
@@ -942,7 +1053,7 @@
           {#if isSearching && !isReasoning && !openThink}
             <!-- Post-reasoning search (answer phase). A mid-think search instead
                  shows its "Searching" label on the reasoning box itself. -->
-            <span class="inline-flex items-center gap-2 text-sm italic">
+            <span class="inline-flex items-center gap-2 text-sm italic" data-burn-skip>
               <span class="w-1.5 h-1.5 bg-primary rounded-full reason-glow"></span>
               <span class="reason-shimmer-white thinking-dots font-medium">{busyLabel || "Searching the web"}</span>
             </span>
@@ -953,10 +1064,20 @@
                  loaded-but-silent vision turn.
                  ponytail: heuristic — no real encode event; revisit if llama.cpp
                  ever surfaces one. -->
-            <span class="inline-flex items-center gap-2 italic">
-              <span class="w-1.5 h-1.5 bg-primary rounded-full reason-glow"></span>
-              <span class="reason-shimmer-white font-medium">{!modelReady ? "Loading model…" : hasVisionInput ? "Processing image…" : "Generating…"}</span>
+            <!-- The mark spins while nothing has arrived, beside the usual
+                 shimmering label: a cold model swap and a one-second prefill
+                 look identical as a bare spinner, and the first can take a
+                 minute. -->
+            <span class="inline-flex items-center gap-2 italic" data-burn-skip>
+              <!-- Glow on a wrapper: one element can run only one animation. -->
+              <span class="reason-glow inline-flex"><QmMark class="w-5 h-5 qm-spin {modelReady ? '' : 'qm-spin--slow'}" /></span>
+              <span class="reason-shimmer-white thinking-dots font-medium">{!modelReady ? "Loading model" : hasVisionInput ? "Processing image" : "Generating"}</span>
             </span>
+          {:else if pacing && !openThink && !isReasoning}
+            <!-- Text is arriving: the same mark keeps spinning under the line
+                 being written, so the reply reads as unfinished until the last
+                 word lands. Positioned by the follow effect above. -->
+            <div class="qm-follow" data-burn-skip bind:this={followEl}><span class="reason-glow inline-flex"><QmMark class="w-5 h-5 qm-spin" /></span></div>
           {/if}
         </div>
       {/if}

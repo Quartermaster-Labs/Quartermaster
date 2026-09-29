@@ -879,31 +879,35 @@
     -webkit-text-fill-color: transparent;
     animation: reason-sweep 1.8s linear infinite;
   }
-  /* Animated "..." after a live status word (Thinking...). Cycles 0→3 dots.
+  /* Animated "..." after a live status word (Thinking...): . -> .. -> ...
 
-     The content is ALWAYS "..." and the dots are revealed by clipping from the
-     right — never grown by swapping `content` per keyframe. Swapping the string
-     changes the pseudo-element's box on every step, and the glyphs re-lay out
-     inside it, so the dots visibly slide right as they appear instead of just
-     appearing. Three identical glyphs means three equal advances, so clipping at
-     thirds lands exactly on a dot boundary, and the box is one fixed width for
-     the whole cycle. */
+     The dots are grown by swapping `content` per keyframe, inside a box of one
+     fixed width with the text left-aligned, so the word never shifts and the
+     dots never slide. Clipping a constant "..." does NOT work here: every label
+     carrying this class is also a shimmer, whose background-clip:text paints
+     the gradient into every glyph in the box, the pseudo-element's included,
+     and a clip-path on the pseudo hides only its own paint. All three dots
+     showed on every frame. */
   .thinking-dots::after {
     content: "...";
     display: inline-block;
-    /* Opt the dots out of the parent shimmer's background-clip:text + transparent
-       fill, else the sweeping gradient makes them fade/vanish. Solid color. */
+    /* "..." is ~0.91em in the UI font; nowrap so a wider fallback font
+       overflows the box instead of wrapping a dot onto a line above. */
+    width: 1em;
+    white-space: nowrap;
+    text-align: left;
+    /* Opt the dots out of the parent shimmer's transparent fill, else the
+       sweeping gradient makes them fade/vanish. Solid color. */
     color: var(--color-txtsecondary);
     -webkit-text-fill-color: var(--color-txtsecondary);
-    clip-path: inset(0 100% 0 0);
-    animation: thinking-dots 1.4s steps(1, end) infinite;
+    animation: thinking-dots 1.2s steps(1, end) infinite;
   }
+  /* . -> .. -> ... and round again; never an empty frame. */
   @keyframes thinking-dots {
-    0% { clip-path: inset(0 100% 0 0); }
-    25% { clip-path: inset(0 66.667% 0 0); }
-    50% { clip-path: inset(0 33.334% 0 0); }
-    75% { clip-path: inset(0 0 0 0); }
-    100% { clip-path: inset(0 100% 0 0); }
+    0% { content: "."; }
+    33.333% { content: ".."; }
+    66.667% { content: "..."; }
+    100% { content: "."; }
   }
   .reason-glow {
     color: var(--color-primary);
@@ -920,6 +924,58 @@
       opacity: 1;
     }
   }
+  /* Streaming answer text, "branded" in (lib/burnReveal.ts). Each chunk lands
+     warm amber with a faint glow and cools through orange to the normal
+     text colour. There is deliberately no 100% keyframe: the browser then
+     animates to the element's own computed colour, which is the prose body,
+     a heading, a link or a highlighted code token as the case may be. The
+     duration must match BURN_MS. A word waiting its turn is held at the 0%
+     keyframe (transparent) by the `backwards` fill. */
+  .qm-burn {
+    animation: qm-burn 700ms cubic-bezier(0.25, 0.6, 0.3, 1) backwards;
+  }
+  @keyframes qm-burn {
+    0% {
+      color: rgba(255, 214, 180, 0);
+      text-shadow: 0 0 3px rgba(255, 106, 43, 0);
+    }
+    15% {
+      color: #f2b48a;
+      text-shadow: 0 0 3px rgba(255, 106, 43, 0.3);
+    }
+    50% {
+      color: #d9926a;
+      text-shadow: 0 0 0 rgba(255, 106, 43, 0);
+    }
+  }
+  /* The mark under the line being written. ChatMessage sets its translateY
+     each time the sweep changes line; the transition eases the step down. */
+  .qm-follow {
+    position: absolute;
+    left: 0;
+    top: -10px;
+    visibility: hidden;
+    pointer-events: none;
+    transition: transform 160ms ease-out;
+  }
+  /* The mark spinning in place while the model loads, prefills or streams. */
+  .qm-spin {
+    animation: qm-spin 1.1s linear infinite;
+  }
+  .qm-spin--slow {
+    animation-duration: 2.4s;
+  }
+  @keyframes qm-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .qm-burn,
+    .qm-spin {
+      animation: none;
+    }
+  }
   @media (prefers-reduced-motion: reduce) {
     .reason-shimmer,
     .reason-shimmer-white,
@@ -929,7 +985,6 @@
     }
     .thinking-dots::after {
       content: "…";
-      clip-path: none;
     }
   }
 }
