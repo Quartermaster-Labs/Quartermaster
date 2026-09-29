@@ -292,10 +292,12 @@
   // Transient toast shown just above the composer (e.g. toggling reasoning/search).
   let toast = $state("");
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
-  function showToast(msg: string) {
+  // `ms` is for the outcome of something slow (a manual compaction runs for tens
+  // of seconds): a toggle echo can blink, a result the user waited for cannot.
+  function showToast(msg: string, ms = 1500) {
     toast = msg;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => (toast = ""), 1500);
+    toastTimer = setTimeout(() => (toast = ""), ms);
   }
   let isStreaming = $derived(genId !== null);
   // The prose of the live turn is final, but the turn itself hasn't ended: the
@@ -1307,11 +1309,11 @@
     compactError = "";
     const moved = await compactNow(id, modelId, new AbortController().signal);
     if (moved > 0) {
-      showToast(`Compacted ${moved} message${moved === 1 ? "" : "s"}`);
+      showToast(`Compacted ${moved} message${moved === 1 ? "" : "s"}`, 5000);
     } else if (moved === 0) {
-      showToast(`Nothing to compact; the last ${KEEP_RECENT} messages always stay verbatim`);
+      showToast(`Nothing to compact; the last ${KEEP_RECENT} messages always stay verbatim`, 5000);
     } else {
-      showToast(`Compaction failed: ${compactError || "the conversation is unchanged"}`);
+      showToast(`Compaction failed: ${compactError || "the conversation is unchanged"}`, 5000);
     }
   }
 

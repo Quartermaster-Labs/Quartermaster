@@ -152,12 +152,21 @@ function keepable(sessions: ChatSession[], keepId?: string): ChatSession[] {
   return sessions.filter((s) => s.id === live || !isDisposable(s));
 }
 
+// The browser caps ALL in-flight keepalive bodies at 64 KiB combined and rejects
+// a request over it outright, before it leaves the tab. A real history is
+// megabytes, so an unconditional keepalive meant EVERY debounced save failed into
+// the .catch below, and only the pre-turn saveChatsNow ever reached disk: a
+// rename, delete or /compact was lost unless a turn followed it. Margin under the
+// cap for anything else in flight.
+const KEEPALIVE_MAX = 60 * 1024;
+
 function pushChats(sessions: ChatSession[]): void {
+  const body = JSON.stringify(keepable(sessions));
   fetch("/api/chats", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(keepable(sessions)),
-    keepalive: true,
+    body,
+    keepalive: new Blob([body]).size <= KEEPALIVE_MAX,
   }).catch(() => {});
 }
 
@@ -177,9 +186,9 @@ chatSessions.subscribe((sessions) => {
 });
 
 // Best-effort tail flush: capture whatever streamed since the last periodic
-// push when the tab is hidden/closed. keepalive bodies are capped ~64 KB, so a
-// very large history may not make it — the periodic flush above is the real
-// guarantee; this just tightens the last few seconds.
+// push when the tab is hidden/closed. Only a history under KEEPALIVE_MAX gets
+// keepalive, so a large one may not survive an actual close; the periodic flush
+// above is the real guarantee, this just tightens the last few seconds.
 if (typeof window !== "undefined") {
   const flush = () => {
     if (synced && latest) pushChats(latest);
