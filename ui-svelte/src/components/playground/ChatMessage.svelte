@@ -852,7 +852,10 @@
             onclick={() => showReasoning = !showReasoning}
           >
             <ChevronRight class="w-3.5 h-3.5 transition-transform {showReasoning ? 'rotate-90' : ''}" />
-            {#if isSearching}
+            <!-- Only a mid-think search belongs here. Once the reasoning has
+                 ended, the body's post-reasoning line owns the label, and
+                 showing it here too drew the same search twice. -->
+            {#if isSearching && isReasoning}
               <span class="font-medium reason-shimmer-white thinking-dots min-w-0">{busyLabel || "Searching"}</span>
             {:else if isReasoning}
               <span class="font-medium reason-shimmer-white thinking-dots">Thinking</span>
