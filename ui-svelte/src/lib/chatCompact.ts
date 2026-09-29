@@ -127,14 +127,16 @@ export async function summarizeConversation(
     }),
     signal,
   });
-  return readSummary(res);
+  return (await readSummary(res)).text;
 }
 
 // readSummary pulls the summary out of a non-streaming completion, or throws
 // saying which kind of empty it got: a template that ignored enable_thinking
 // and thought anyway reads very differently from a backend that returned
-// nothing at all, and the toast is the only place the user sees it.
-async function readSummary(res: Response): Promise<string> {
+// nothing at all, and the toast is the only place the user sees it. `tokens`
+// is the whole exchange (prompt + summary) per the backend's usage block, 0
+// when it sent none.
+async function readSummary(res: Response): Promise<{ text: string; tokens: number }> {
   if (!res.ok) {
     throw new Error(`the model returned ${res.status}`);
   }
@@ -150,7 +152,25 @@ async function readSummary(res: Response): Promise<string> {
           : `the model returned no summary (finish: ${choice?.finish_reason ?? "unknown"})`,
     );
   }
-  return text;
+  const u = json.usage;
+  const tokens = (Number(u?.prompt_tokens) || 0) + (Number(u?.completion_tokens) || 0);
+  return { text, tokens };
+}
+
+// Rough chars-per-token for when there is no measured exchange to calibrate on.
+const CHARS_PER_TOKEN = 4;
+
+// estimateKeptTokens sizes the prompt the next turn will send after a fold,
+// before any turn has measured it. The live KV reading still holds the whole
+// pre-fold conversation until then, so the context bar would otherwise sit at
+// "nearly full" right after the user compacted. Calibrated on the compaction
+// exchange itself: `heldTokens` real tokens spanned `heldChars` characters, and
+// the kept prompt is scaled by the same ratio. Characters are an imperfect
+// proxy (code and images tokenize differently), which is why the bar marks
+// it as an estimate.
+export function estimateKeptTokens(heldTokens: number, heldChars: number, keptChars: number): number {
+  if (heldTokens > 0 && heldChars > 0) return Math.round((heldTokens * keptChars) / heldChars);
+  return Math.round(keptChars / CHARS_PER_TOKEN);
 }
 
 // compactInPlacePrompt is the instruction appended to the live conversation.
@@ -178,7 +198,10 @@ export function compactInPlacePrompt(hasPriorSummary: boolean, keepFrom: string)
 // assembles the history exactly as a turn does and keys the request to the same
 // conversation, so it reuses the KV exactly as far as the next turn would, and
 // the chat's KV is neither evicted nor saved (internal/server/turnscompact.go).
-export async function summarizeInPlace(turn: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+export async function summarizeInPlace(
+  turn: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<{ text: string; tokens: number }> {
   const res = await fetch("/api/chats/compact", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
