@@ -223,8 +223,9 @@
   let compactError = "";
 
   // Live context-window usage for the selected model (from backend KV metrics).
-  // The bar fills with kv_cache_usage_ratio; colour steps yellow → orange → red
-  // as it nears COMPACT_AT (the auto-compaction threshold).
+  // The bar fills with kv_cache_usage_ratio; it stays neutral until there is
+  // something to say, then steps to warning and error as it nears COMPACT_AT (the
+  // auto-compaction threshold). Theme tokens, so both themes get their own tones.
   //
   // Right after a compaction the live reading is stale in the one way that
   // matters: the KV still holds the whole pre-fold conversation until the next
@@ -242,7 +243,11 @@
     ctxN ? Math.min(1, ctxEstimate != null ? ctxEstimate / ctxN : ctxMetrics!.kv_cache_usage_ratio) : 0,
   );
   let ctxColor = $derived(
-    ctxRatio >= COMPACT_AT ? "#ef4444" : ctxRatio >= 0.6 ? "#f97316" : "#eab308",
+    ctxRatio >= COMPACT_AT
+      ? "var(--color-error)"
+      : ctxRatio >= 0.6
+        ? "var(--color-warning)"
+        : "var(--color-txtsecondary)",
   );
 
   let userInput = $state("");
@@ -297,6 +302,23 @@
     const z = cssZoom(document.body);
     selReply = { text, x: rect.right / z, y: rect.bottom / z };
   }
+  // A touch selection is made by long-press and dragged handles, which end in no
+  // pointerup on the thread, so on touch follow the selection itself. Settled for
+  // a beat, so the button does not chase every handle move.
+  let lastPointer = "mouse";
+  $effect(() => {
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const onChange = () => {
+      if (lastPointer !== "touch") return;
+      clearTimeout(t);
+      t = setTimeout(onSelection, 250);
+    };
+    document.addEventListener("selectionchange", onChange);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener("selectionchange", onChange);
+    };
+  });
   function replyToSelection() {
     if (!selReply) return;
     replyingTo = selReply.text;
@@ -350,6 +372,17 @@
     patchSession($activeChatId, { instructions: sysPromptDraft });
     showSysPrompt = false;
   }
+  // A native modal <dialog> brings Esc, the focus trap and focus return for
+  // free. It mounts only while open, so opening is the one thing to drive; the
+  // caret goes straight into the text, which is why the editor was opened.
+  let sysPromptEl = $state<HTMLDialogElement | null>(null);
+  let sysPromptArea = $state<HTMLTextAreaElement | null>(null);
+  $effect(() => {
+    if (showSysPrompt && sysPromptEl && !sysPromptEl.open) {
+      sysPromptEl.showModal();
+      sysPromptArea?.focus();
+    }
+  });
   let attachedImages = $state<string[]>([]);
   // Documents (text/code, PDF, DOCX, transcribed audio). Unlike images these
   // become TEXT in the user's message, so they need no vision model and no
@@ -1760,7 +1793,7 @@
     <!-- Highlight-to-reply popup, anchored above the current text selection. -->
     {#if selReply}
       <button
-        class="fixed z-30 inline-flex items-center justify-center rounded-lg bg-[#141414] text-[#ededee] p-1.5 shadow-lg hover:opacity-90 transition-opacity"
+        class="fixed z-30 inline-flex items-center justify-center rounded-lg bg-cite-bg text-cite-text p-1.5 [@media(pointer:coarse)]:p-3 shadow-lg hover:opacity-90 transition-opacity"
         style="left: {selReply.x + 4}px; top: {selReply.y + 4}px"
         use:tooltip={"Reply to selection"}
         onmousedown={(e) => e.preventDefault()}
@@ -1779,8 +1812,11 @@
       class="flex-1 min-h-0 overflow-y-auto [overflow-anchor:none] pretty-scroll scroll-fade-b"
       bind:this={messagesContainer}
       onscroll={handleMessagesScroll}
-      onmousedown={() => (selReply = null)}
-      onmouseup={onSelection}
+      onpointerdown={(e) => {
+        lastPointer = e.pointerType;
+        selReply = null;
+      }}
+      onpointerup={onSelection}
       use:scrollFade
     >
       <div class="w-full max-w-3xl mx-auto px-2 pt-4 pb-2 {messages.length === 0 ? 'h-full' : ''}" bind:this={messagesInner}>
@@ -1838,14 +1874,18 @@
            reading it where the conversation ended. It cannot ride ChatMessage's
            busyLabel prop, because a compaction (manual especially) runs with no
            assistant message in flight to hang the label on. -->
-      {#if compactingId === $activeChatId}
-        <div class="flex items-center gap-2 mt-1 mb-2">
-          <span class="inline-flex items-center gap-1.5 text-xs italic">
-            <span class="w-1.5 h-1.5 bg-primary rounded-full reason-glow"></span>
-            <span class="reason-shimmer-white font-medium">Compacting conversation…</span>
-          </span>
-        </div>
-      {/if}
+      <!-- The live region stays mounted: screen readers announce a change inside
+           an existing one, not a region that appears already filled. -->
+      <div role="status" aria-live="polite">
+        {#if compactingId === $activeChatId}
+          <div class="flex items-center gap-2 mt-1 mb-2">
+            <span class="inline-flex items-center gap-1.5 text-xs italic">
+              <span class="w-1.5 h-1.5 bg-primary rounded-full reason-glow"></span>
+              <span class="reason-shimmer-white font-medium">Compacting conversation…</span>
+            </span>
+          </div>
+        {/if}
+      </div>
       </div>
     </div>
 
@@ -1856,7 +1896,7 @@
         <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 z-20">
           <button
             onclick={() => regenerateFromIndex($activeChatId, messages.length - 1)}
-            class="inline-flex items-center gap-1.5 rounded-full bg-primary text-white px-3.5 py-1.5 text-xs font-medium shadow-lg hover:opacity-90 transition-opacity"
+            class="inline-flex items-center gap-1.5 rounded-full bg-primary text-btn-primary-text px-3.5 py-1.5 text-xs font-medium shadow-lg hover:bg-primary-hover transition-colors"
             use:tooltip={"Generate a response for the last message"}
           >
             <Sparkles class="w-3.5 h-3.5" />
@@ -1866,40 +1906,48 @@
       {/if}
 
       <!-- Transient toggle toast -->
-      {#if toast}
-        <div class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-3 z-20">
+      <div role="status" aria-live="polite" class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-3 z-20">
+        {#if toast}
           <div class="rounded-full bg-txtmain text-surface px-3 py-1 text-xs font-medium shadow-lg whitespace-nowrap">
             {toast}
           </div>
-        </div>
-      {/if}
+        {/if}
+      </div>
 
       <!-- System-prompt editor: roomier modal to write/save the standing prompt. -->
       {#if showSysPrompt}
-        <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4" onclick={() => (showSysPrompt = false)} role="presentation">
-          <div
-            class="flex w-full max-w-xl flex-col gap-3 rounded-lg border border-card-border bg-surface p-4 shadow-xl"
-            onclick={(e) => e.stopPropagation()}
-            role="presentation"
-          >
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+        <dialog
+          bind:this={sysPromptEl}
+          class="bg-surface text-txtmain rounded-lg border border-card-border shadow-xl w-full max-w-xl p-0 backdrop:bg-black/40 m-auto"
+          aria-labelledby="sysprompt-title"
+          oncancel={(e) => {
+            e.preventDefault();
+            showSysPrompt = false;
+          }}
+          onclick={(e) => e.target === sysPromptEl && (showSysPrompt = false)}
+        >
+          <div class="flex flex-col gap-3 p-4">
             <div class="flex items-center justify-between">
-              <span class="font-medium text-txtmain">Instructions</span>
-              <button class="inline-flex items-center justify-center p-1 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors" onclick={() => (showSysPrompt = false)} use:tooltip={"Close"}>
+              <span id="sysprompt-title" class="font-medium">Instructions</span>
+              <button class="icon-btn" onclick={() => (showSysPrompt = false)} use:tooltip={"Close"}>
                 <X class="w-4 h-4" />
               </button>
             </div>
-            <p class="text-xs text-txtsecondary">Standing instructions for this chat only - layered on top of the built-in prompt.</p>
+            <p class="text-xs text-txtsecondary">Standing instructions for this chat only, layered on top of the built-in prompt.</p>
             <textarea
+              bind:this={sysPromptArea}
               class="w-full h-64 px-3 py-2 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary resize-none text-sm"
+              aria-labelledby="sysprompt-title"
               placeholder="e.g. Answer as a senior Rust engineer. Be terse."
               bind:value={sysPromptDraft}
             ></textarea>
             <div class="flex justify-end gap-2">
-              <button class="px-3 py-1.5 rounded-md border border-card-border text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors text-sm" onclick={() => (showSysPrompt = false)}>Cancel</button>
-              <button class="px-3 py-1.5 rounded-md bg-primary text-white hover:opacity-90 transition-opacity text-sm" onclick={saveSysPrompt}>Save</button>
+              <button class="btn" onclick={() => (showSysPrompt = false)}>Cancel</button>
+              <button class="btn btn--primary" onclick={saveSysPrompt}>Save</button>
             </div>
           </div>
-        </div>
+        </dialog>
       {/if}
 
       <!-- Image preview strip -->
@@ -1913,7 +1961,7 @@
                 class="h-full w-full object-cover"
               />
               <button
-                class="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/75"
+                class="absolute right-1 top-1 inline-flex h-5 w-5 [@media(pointer:coarse)]:h-7 [@media(pointer:coarse)]:w-7 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 hover:bg-black/75"
                 onclick={() => removeImage(idx)}
                 use:tooltip={"Remove image"}
               >
@@ -1950,7 +1998,7 @@
                 <span class="shrink-0 text-txtsecondary/70">reading…</span>
               {/if}
               <button
-                class="shrink-0 p-0.5 rounded-full hover:bg-secondary transition-colors"
+                class="shrink-0 p-1.5 -m-1 rounded-full hover:bg-secondary transition-colors"
                 onclick={() => removeDoc(doc.id)}
                 use:tooltip={"Remove file"}
               >
@@ -1994,7 +2042,7 @@
               {/if}
               <span class="truncate" use:tooltip={q.preview}>{q.preview}</span>
               <button
-                class="shrink-0 p-0.5 rounded-full text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
+                class="shrink-0 p-1.5 -m-1 rounded-full text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
                 onclick={() => (queued = queued.filter((_, i) => i !== qi))}
                 use:tooltip={"Remove from queue"}
               >
@@ -2011,7 +2059,7 @@
           <Reply class="w-3.5 h-3.5 shrink-0 text-primary" />
           <span class="truncate text-txtsecondary" use:tooltip={replyingTo}>Replying to: {replyingTo}</span>
           <button
-            class="shrink-0 p-0.5 rounded-full text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
+            class="shrink-0 p-1.5 -m-1 rounded-full text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
             onclick={() => (replyingTo = null)}
             use:tooltip={"Cancel reply"}
           >
@@ -2080,7 +2128,7 @@
         topExtra={chatTopExtra}
         leftButtons={chatLeftButtons}
       />
-      <div class="flex justify-center gap-4 mt-2 text-micro text-txtsecondary select-none">
+      <div class="hidden sm:flex justify-center gap-4 mt-2 text-micro text-txtsecondary select-none">
         <span><kbd class="font-mono">Enter</kbd> send</span>
         <span><kbd class="font-mono">Shift+Enter</kbd> new line</span>
         <span><kbd class="font-mono">Esc</kbd> stop</span>
@@ -2088,8 +2136,20 @@
       </div>
     </div>
     </div>
+    <!-- Docked beside the thread from md up. Below that there is no room to push
+         the column, so it floats over the thread as a sheet from the right edge,
+         with a scrim that closes it. -->
     {#if showSettings}
-      <div class="shrink-0 h-full overflow-hidden" transition:slide={{ axis: "x", duration: 200 }}>
+      <button
+        class="md:hidden fixed inset-0 z-40 bg-black/40 cursor-default"
+        aria-label="Close configs"
+        tabindex="-1"
+        onclick={() => (showSettings = false)}
+      ></button>
+      <div
+        class="shrink-0 h-full overflow-hidden max-md:fixed max-md:inset-y-0 max-md:right-0 max-md:z-40 max-md:max-w-full max-md:shadow-xl"
+        transition:slide={{ axis: "x", duration: 200 }}
+      >
         {@render chatSettingsPanel()}
       </div>
     {/if}
