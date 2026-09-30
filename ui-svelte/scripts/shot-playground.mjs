@@ -295,10 +295,12 @@ export const SPEECH_ID = "shot-speech";
  *
  * `model`/`imageModel`/`speechModel` come from the live catalog (see
  * shot-demo.mjs) so the model names in the picture are models this box has.
- * `imageTurn` is `{ prompt, dataUrl }` or null -- see the note at the top about
- * the one thing that cannot be faked.
+ * `imageTurns` is a list of `{ prompt, dataUrl, secs?, model? }`, empty to leave
+ * the image thread out -- see the note at the top about the one thing that
+ * cannot be faked. Each turn after the first is an edit of the one before it,
+ * so it carries that picture as its reference, as a follow-up prompt does.
  */
-export function buildPlayground({ model, imageModel, speechModel, imageTurn } = {}) {
+export function buildPlayground({ model, imageModel, speechModel, imageTurns = [] } = {}) {
   const now = Date.now();
   const id = model?.id ?? "";
   const stamp = (m) => (m.role === "assistant" ? { ...m, model: m.model || id } : m);
@@ -326,25 +328,36 @@ export function buildPlayground({ model, imageModel, speechModel, imageTurn } = 
     { id: "shot-old-2", title: "What is actually in mineral sunscreen?", titled: true, model: id, updatedAt: now - 26 * 3600_000, messages: CHAT_TURNS.map(stamp) },
   ];
 
-  const imageChats = imageTurn
+  const imageChats = imageTurns.length
     ? [
         {
           id: IMAGE_ID,
-          title: imageTurn.prompt.slice(0, 48),
+          title: imageTurns[0].prompt.slice(0, 48),
           titled: true,
           updatedAt: now - 2 * 60_000,
-          turns: [
-            {
-              prompt: imageTurn.prompt,
-              refs: [],
-              images: [imageTurn.dataUrl],
-              secs: imageTurn.secs ?? 21.4,
-              model: imageModel?.id,
-            },
-          ],
+          turns: imageTurns.map((t, i) => ({
+            prompt: t.prompt,
+            refs: i ? [imageTurns[i - 1].dataUrl] : [],
+            images: [t.dataUrl],
+            // Whole seconds: the app floors its timer, and a fraction here
+            // renders as "4m 14.099999999999994s".
+            secs: Math.round(t.secs ?? 21),
+            model: t.model ?? imageModel?.id,
+          })),
         },
       ]
     : [];
+  // The composer names the model the NEXT prompt goes to: after an edit, that
+  // is the edit model, not the one that drew the first picture.
+  const nextImageModel = imageTurns.at(-1)?.model ?? imageModel?.id ?? "";
+  // Aspect + long edge of the last picture, when it could be read (PNG only).
+  const lastSize = imageTurns.at(-1)?.size;
+  const sizePrefs = lastSize
+    ? {
+        "playground-image-long": String(Math.max(lastSize.width, lastSize.height)),
+        ...(lastSize.width === lastSize.height ? { "playground-image-aspect": "1:1" } : {}),
+      }
+    : {};
 
   const speechChats = [
     {
@@ -365,7 +378,8 @@ export function buildPlayground({ model, imageModel, speechModel, imageTurn } = 
   // default, which is what a real user sees on their first day anyway.
   const prefs = {
     "playground-selected-model": id,
-    "playground-image-model": imageModel?.id ?? "",
+    "playground-image-model": nextImageModel,
+    ...sizePrefs,
     // Two different keys, on purpose: the Speech studio's own picker
     // (playground-speech-model) and the read-aloud voice the chat tab uses
     // (playground-chat-tts-model). Seeding only the latter left the studio
