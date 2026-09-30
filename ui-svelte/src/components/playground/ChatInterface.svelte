@@ -1776,7 +1776,7 @@
     <!-- Messages area — scrolls across the full width; content centered within. -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="flex-1 min-h-0 overflow-y-auto [overflow-anchor:none] pretty-scroll scroll-fade-b mb-2"
+      class="flex-1 min-h-0 overflow-y-auto [overflow-anchor:none] pretty-scroll scroll-fade-b"
       bind:this={messagesContainer}
       onscroll={handleMessagesScroll}
       onmousedown={() => (selReply = null)}

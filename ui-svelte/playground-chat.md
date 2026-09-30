@@ -169,6 +169,50 @@ model streamed the first answer, so it is already resident.
 its count churns with every tool round. "Done" here means the server's `answer` delta, not `done`:
 see [Finished before the turn is](#finished-before-the-turn-is).
 
+## `ChatMessage.svelte`: paced reveal, burn-in and the spinning mark
+
+`lib/burnReveal.ts` + the `pacing` / `burn` blocks in `ChatMessage.svelte`, `.qm-burn` /
+`.qm-follow` / `.qm-spin` in `index.css`, the mark itself in `components/QmMark.svelte`.
+
+- **Paced reveal, in batches.** An assistant turn shows `rawText.slice(0, shownLen)`. Every
+  `POLL_MS` the reveal checks whether the sweep is free (`sweepUntil`); if so, `batchEnd` releases
+  everything received meanwhile, cut at the last complete word (a half-received word is held back
+  unless it has run past 40 chars). So the batch size follows generation speed: a slow model
+  shows about a word at a time, a fast one a couple of lines. `pacing` covers the stream plus the
+  drain after it, and the live-segment renderer treats it like `isStreaming`. It adopts the text
+  that exists when the stream starts, and snaps on a shrink or a jump over 4000 chars, so a
+  reattach or a regenerate never replays an answer.
+- **Why batches, and why the sweep speeds up.** Words light left to right as an invisible sweep
+  reaches them. It cannot chase the write head token by token: at ~58 tok/s the head already
+  moves ~1500 px/s. So `planSweep` traces each batch word
+  by word, hopping at line breaks, at `WHEEL_PX_S` (1400 px/s, quick: it only has to read as left
+  to right) when it can, and faster only when the batch would otherwise take longer than
+  `MAX_TRACE_MS` (350 ms). The text trails
+  a fast model by at most about that. It started at 600 px/s and 700 ms, which held text back
+  for no benefit once nothing was riding the sweep. A version that pressed long batches as one column across
+  all their lines kept the speed fixed, but several lines appearing at once read wrong.
+- **Burn-in.** The live block is re-rendered through `{@html}` every batch, so wrapped spans are
+  thrown away constantly. `BurnTracker` records each batch in RENDERED-text offsets, hands back
+  its word spans for the component to lay out and plan, and stores each word's planned ignition
+  (`setTimes`). Every pass re-wraps whatever is still pending or cooling, one span per word, with
+  an `animation-delay` of `ignition - now`: negative for a word already cooling (it resumes
+  mid-animation), positive for one the sweep has not reached (held transparent by `backwards` fill).
+  The keyframes have no 100% on purpose, so each word cools to whatever its own computed colour
+  is (body, heading, link, hljs token). It never splits text sitting directly under the prose
+  root: that whitespace is what Svelte walks to remove a `{@html}` block. `details`, `svg`,
+  `.katex`, `button` and `[data-burn-skip]` are left alone. Once the stream is over and the last
+  word has cooled, `settle` unwraps every span: a completed block is never re-rendered, so its
+  spent spans would otherwise stay in the finished answer for good.
+- **The mark.** Before the first token it spins (slower while the model loads) beside the usual
+  shimmering, dot-cycling label. The label stays: a cold swap and a one-second prefill are
+  indistinguishable as a bare spinner. Once text arrives the label goes and the mark keeps
+  spinning at the left edge, one line below the line the sweep is on (`pathAt(sweepPath, now)`
+  in a rAF loop, eased by a CSS transition), until the reveal drains; hidden while reasoning or
+  searching. It moves only vertically. In flow under the text it looked fixed on screen, since
+  autoscroll keeps the bottom of the list at the bottom of the view. An earlier version rolled it along the text ahead of each word; on a fast model it
+  was a blur, and the geared-roll and strobe math it needed was not worth what it added.
+- `prefers-reduced-motion` turns off the burn and the spin; the pacing stays.
+
 ## `ChatMessage.svelte` — read-aloud
 
 The speaker button under an assistant reply POSTs `/v1/audio/speech` (`lib/speechApi.ts`) with
