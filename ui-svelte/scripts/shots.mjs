@@ -53,6 +53,11 @@ function parseArgs(argv) {
     playgroundUrl: process.env.QUARTERMASTER_PLAYGROUND_URL || "",
     playgroundImage: "",
     playgroundPrompt: "",
+    playgroundSecs: undefined,
+    playgroundEdit: "",
+    playgroundEditPrompt: "",
+    playgroundEditModel: "",
+    playgroundEditSecs: undefined,
   };
   for (let i = 0; i < argv.length; i++) {
     const [flag, inline] = argv[i].split(/=(.*)/s);
@@ -77,6 +82,14 @@ function parseArgs(argv) {
       // image works — it is inlined as a data URL into the canned image thread.
       case "--playground-image": out.playground = true; out.playgroundImage = path.resolve(val()); break;
       case "--playground-prompt": out.playgroundPrompt = val(); break;
+      case "--playground-secs": out.playgroundSecs = Number(val()); break;
+      // Optional second turn: an edit of the first picture, fed it as its
+      // reference. Same rule as the first: a real render, with the prompt and
+      // the model that made it (an edit is often a different model).
+      case "--playground-edit": out.playgroundEdit = path.resolve(val()); break;
+      case "--playground-edit-prompt": out.playgroundEditPrompt = val(); break;
+      case "--playground-edit-model": out.playgroundEditModel = val(); break;
+      case "--playground-edit-secs": out.playgroundEditSecs = Number(val()); break;
       default:
         if (flag.startsWith("--")) throw new Error(`unknown flag: ${flag}`);
     }
@@ -350,6 +363,20 @@ const SHOTS = [
  * --playground-prompt, or name the file after the prompt and let the stem stand
  * in for it.
  */
+async function loadImageTurns(opts, models) {
+  const first = await loadImageTurn(opts.playgroundImage, opts.playgroundPrompt);
+  if (!first) return [];
+  first.secs = opts.playgroundSecs;
+  const edit = await loadImageTurn(opts.playgroundEdit, opts.playgroundEditPrompt);
+  if (!edit) return [first];
+  if (opts.playgroundEditModel && !models.some((m) => m.id === opts.playgroundEditModel)) {
+    throw new Error(`--playground-edit-model: ${opts.playgroundEditModel} is not in the catalog`);
+  }
+  edit.model = opts.playgroundEditModel || undefined;
+  edit.secs = opts.playgroundEditSecs;
+  return [first, edit];
+}
+
 async function loadImageTurn(file, prompt) {
   if (!file) return null;
   const MIME = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp" };
@@ -357,9 +384,13 @@ async function loadImageTurn(file, prompt) {
   const mime = MIME[ext];
   if (!mime) throw new Error(`--playground-image: unsupported type ${ext || file}`);
   const bytes = await readFile(file);
+  // A PNG says its own size in the IHDR chunk, so the Size control can show
+  // what the picture actually is instead of the store's 512 default.
+  const png = ext === ".png" && bytes.length > 24 ? { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) } : null;
   return {
     prompt: prompt || path.basename(file, ext).replace(/[-_]+/g, " "),
     dataUrl: `data:${mime};base64,${bytes.toString("base64")}`,
+    size: png,
   };
 }
 
@@ -521,7 +552,7 @@ async function main() {
         model: demo?.model ?? pickModel(models),
         imageModel: pickImageModel(models),
         speechModel: models.find((m) => m.capabilities?.audio_speech),
-        imageTurn: await loadImageTurn(opts.playgroundImage, opts.playgroundPrompt),
+        imageTurns: await loadImageTurns(opts, models),
       });
       console.log(`  playground: ${opts.playgroundUrl} as "${playground.user}" (canned threads, writes refused)`);
     }
