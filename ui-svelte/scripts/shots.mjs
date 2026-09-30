@@ -213,7 +213,7 @@ const SHOTS = [
     // small to read -- and the rest of the frame is the models table, which is
     // already its own screenshot. The pad keeps a sliver of dimmed page so it
     // still reads as a dialog rather than a floating form.
-    clip: { selector: "dialog", pad: 12 },
+    clip: { selector: "dialog[open]", pad: 12 },
   },
   // The escape hatch: the whole llama-server command line, editable, with the
   // form's own fields folded into it. The point of the picture is that the UI
@@ -224,15 +224,15 @@ const SHOTS = [
     name: "model-config-args",
     at: "#/models",
     wait: "table",
-    clip: { selector: "dialog", pad: 12 },
+    clip: { selector: "dialog[open]", pad: 12 },
     prepare: async (p) => {
       const note = await openModelConfig(p);
       if (note) return note;
       // Two panes since the launch-args rework (ui-svelte/launch-args.md): the
       // user's own text, and the composed command it produces. The second is
       // the picture; the first is opened so the shot shows where edits go.
-      const custom = p.locator('dialog details:has(> summary:has-text("Custom launch arguments"))').first();
-      const final = p.locator('dialog details:has(> summary:has-text("Final launch arguments"))').first();
+      const custom = p.locator('dialog[open] details:has(> summary:has-text("Custom launch arguments"))').first();
+      const final = p.locator('dialog[open] details:has(> summary:has-text("Final launch arguments"))').first();
       if (!(await final.count())) return "no Final launch arguments pane — the modal opened on a non-llama backend";
       if (await custom.count()) await custom.evaluate((d) => (d.open = true));
       await final.evaluate((d) => (d.open = true));
@@ -406,7 +406,7 @@ async function openModelConfig(p) {
 // lazily.
 async function maskPaths(p) {
   await p.evaluate(() => {
-    const root = document.querySelector("dialog");
+    const root = document.querySelector("dialog[open]");
     if (!root) return;
     const abs = /(?:[A-Za-z]:[\\/]|\/)(?:[^\s\\/]+[\\/])+([^\s\\/]*)/g;
     const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
