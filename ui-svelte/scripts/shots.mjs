@@ -188,9 +188,21 @@ const SHOTS = [
       await p.getByRole("button", { name: "Settings" }).first().click();
       await p.waitForTimeout(600);
       await p.getByRole("button", { name: "Backends", exact: true }).first().click();
-      // Managed cards resolve their catalog over the network; give it longer
-      // than a tab switch would need or the shot catches the empty state.
-      await p.waitForTimeout(1800);
+      // Managed cards resolve their catalog over the network (upstream release
+      // feeds), so a fixed sleep raced it and shot the pulsing skeleton. Wait
+      // for the skeleton to be replaced; say so rather than shoot it.
+      // "detached" is satisfied at once by a skeleton not mounted YET, so let
+      // it appear first (it may not, on a warm catalog cache).
+      const skeleton = p.locator("[role=dialog] .animate-pulse").first();
+      await skeleton.waitFor({ state: "attached", timeout: 3000 }).catch(() => {});
+      try {
+        await skeleton.waitFor({ state: "detached", timeout: 30000 });
+      } catch {
+        return "backend catalog still loading after 30s: the shot would show skeleton cards";
+      }
+      // The header names the install folder: an operator path on a public page.
+      await maskPaths(p, "[role=dialog]");
+      await p.waitForTimeout(300);
     },
     clip: { selector: "[role=dialog]", pad: 12 },
   },
@@ -404,9 +416,9 @@ async function openModelConfig(p) {
 // still says everything the picture is for. Text nodes AND form values, since a
 // path field is an <input>. Call again after revealing anything that renders
 // lazily.
-async function maskPaths(p) {
-  await p.evaluate(() => {
-    const root = document.querySelector("dialog[open]");
+async function maskPaths(p, selector = "dialog[open]") {
+  await p.evaluate((selector) => {
+    const root = document.querySelector(selector);
     if (!root) return;
     const abs = /(?:[A-Za-z]:[\\/]|\/)(?:[^\s\\/]+[\\/])+([^\s\\/]*)/g;
     const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -415,7 +427,7 @@ async function maskPaths(p) {
       el.value = el.value.replace(abs, "$1");
       if (el.placeholder) el.placeholder = el.placeholder.replace(abs, "$1");
     }
-  });
+  }, selector);
 }
 
 async function main() {
