@@ -137,7 +137,7 @@
     if (picking) return;
     picking = true;
     try {
-      const path = await pickLoraFolder(tab, clear);
+      const path = await pickLoraFolder(tab, clear, loraPath);
       if (path !== null) loraPath = path; // null => user cancelled
     } catch (e) {
       console.error(e);

@@ -4,6 +4,10 @@ package server
 
 import "errors"
 
+// nativePickerPresent: this platform has no native dialog, so every Browse
+// goes to the web picker (pickbrowse.go).
+func nativePickerPresent() bool { return false }
+
 // pickFolder has no native dialog on this platform (e.g. darwin). Add an
 // osascript-backed implementation when serving from one. The handler maps this
 // error to a 501 so the UI can fall back to editing categoryRoots by hand.

@@ -4,9 +4,22 @@ package server
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"strings"
 )
+
+// nativePickerPresent reports whether zenity could open a dialog here: it has
+// to be installed AND there has to be a display to open it on. Without the
+// display check a headless box with zenity installed "cancels" every pick,
+// because zenity's no-display failure exits the same way a cancel does.
+func nativePickerPresent() bool {
+	if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+		return false
+	}
+	_, err := exec.LookPath("zenity")
+	return err == nil
+}
 
 // pickFolder opens a native folder-selection dialog via zenity and returns the
 // chosen absolute path ("" when the user cancels). ponytail: requires zenity on
