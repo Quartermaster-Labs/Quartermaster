@@ -4,7 +4,7 @@
   import { tip as tooltip } from "../../lib/tooltip";
   import { get } from "svelte/store";
   import { models, backendMetrics, loadModel } from "../../stores/api";
-  import { summarizeConversation, generateTitle, COMPACT_AT, KEEP_RECENT } from "../../lib/chatCompact";
+  import { summarizeConversation, summarizeInPlace, compactInPlacePrompt, estimateKeptTokens, generateTitle, COMPACT_AT, KEEP_RECENT } from "../../lib/chatCompact";
   import {
     selectedModelStore,
     selectedTabStore,
@@ -51,7 +51,7 @@
   import { getTextContent, getImageUrls } from "../../lib/types";
   import { buildBasePrompt } from "../../lib/systemPrompt";
   import type { ChatMessage, ContentPart } from "../../lib/types";
-  import { Paperclip, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle, Wrench, Reply, Quote, ShoppingCart, CloudSun, BrainCircuit, FileText, Loader2, AlertTriangle } from "lucide-svelte";
+  import { Paperclip, MessagesSquare, X, Search, Brain, Clock, PenLine, Sparkles, HelpCircle, Wrench, Reply, Quote, ShoppingCart, CloudSun, BrainCircuit, FileText, Loader2, AlertTriangle, SlidersHorizontal } from "lucide-svelte";
   import {
     acceptAttr,
     buildFileBlock,
@@ -69,6 +69,9 @@
   import { transcribeAudio } from "../../lib/audioApi";
   import ChatMessageComponent from "./ChatMessage.svelte";
   import Composer from "./Composer.svelte";
+  import PaneHeader from "./PaneHeader.svelte";
+  import { newChat } from "../../lib/playgroundThreads";
+  import { slide } from "svelte/transition";
   import ToolMenu from "./ToolMenu.svelte";
   import { modelCategory } from "../../lib/modelUtils";
   import { EFFORT_OFF, effortOptions, resolveEffort, requestEffort } from "../../lib/effort";
@@ -206,6 +209,10 @@
   let activeSession = $derived($chatSessions.find((s) => s.id === $activeChatId));
   let messages = $derived(activeSession?.messages ?? []);
   let compactedCount = $derived(activeSession?.compactedCount ?? 0);
+  // Where the compaction marker goes, and how many kept messages sit above it.
+  // Chats compacted before compactedAt existed fall back to the boundary itself.
+  let compactMarkAt = $derived(Math.min(activeSession?.compactedAt ?? compactedCount, messages.length));
+  let compactKept = $derived(Math.max(0, compactMarkAt - compactedCount));
   // Id of the chat currently being compacted, or "" — an id rather than a bool
   // so the banner shows for a manual /compact too, which has no turn (and so no
   // genId) to hang off.
@@ -216,14 +223,31 @@
   let compactError = "";
 
   // Live context-window usage for the selected model (from backend KV metrics).
-  // The bar fills with kv_cache_usage_ratio; colour steps yellow → orange → red
-  // as it nears COMPACT_AT (the auto-compaction threshold).
+  // The bar fills with kv_cache_usage_ratio; it stays neutral until there is
+  // something to say, then steps to warning and error as it nears COMPACT_AT (the
+  // auto-compaction threshold). Theme tokens, so both themes get their own tones.
+  //
+  // Right after a compaction the live reading is stale in the one way that
+  // matters: the KV still holds the whole pre-fold conversation until the next
+  // turn replaces it with summary + kept tail. pendingCtx carries an estimate of
+  // that next prompt for the chat it was computed for; the next turn clears it
+  // and the live reading takes over again.
+  let pendingCtx = $state<{ chatId: string; model: string; tokens: number } | null>(null);
   let ctxMetrics = $derived($backendMetrics[$selectedModelStore]);
   let ctxN = $derived(ctxMetrics?.n_ctx ?? 0);
-  let ctxUsed = $derived(ctxMetrics?.kv_cache_tokens ?? 0);
-  let ctxRatio = $derived(ctxN ? Math.min(1, ctxMetrics!.kv_cache_usage_ratio) : 0);
+  let ctxEstimate = $derived(
+    pendingCtx && pendingCtx.chatId === $activeChatId && pendingCtx.model === $selectedModelStore ? pendingCtx.tokens : null,
+  );
+  let ctxUsed = $derived(ctxEstimate ?? ctxMetrics?.kv_cache_tokens ?? 0);
+  let ctxRatio = $derived(
+    ctxN ? Math.min(1, ctxEstimate != null ? ctxEstimate / ctxN : ctxMetrics!.kv_cache_usage_ratio) : 0,
+  );
   let ctxColor = $derived(
-    ctxRatio >= COMPACT_AT ? "#ef4444" : ctxRatio >= 0.6 ? "#f97316" : "#eab308",
+    ctxRatio >= COMPACT_AT
+      ? "var(--color-error)"
+      : ctxRatio >= 0.6
+        ? "var(--color-warning)"
+        : "var(--color-txtsecondary)",
   );
 
   let userInput = $state("");
@@ -278,6 +302,23 @@
     const z = cssZoom(document.body);
     selReply = { text, x: rect.right / z, y: rect.bottom / z };
   }
+  // A touch selection is made by long-press and dragged handles, which end in no
+  // pointerup on the thread, so on touch follow the selection itself. Settled for
+  // a beat, so the button does not chase every handle move.
+  let lastPointer = "mouse";
+  $effect(() => {
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const onChange = () => {
+      if (lastPointer !== "touch") return;
+      clearTimeout(t);
+      t = setTimeout(onSelection, 250);
+    };
+    document.addEventListener("selectionchange", onChange);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener("selectionchange", onChange);
+    };
+  });
   function replyToSelection() {
     if (!selReply) return;
     replyingTo = selReply.text;
@@ -289,10 +330,12 @@
   // Transient toast shown just above the composer (e.g. toggling reasoning/search).
   let toast = $state("");
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
-  function showToast(msg: string) {
+  // `ms` is for the outcome of something slow (a manual compaction runs for tens
+  // of seconds): a toggle echo can blink, a result the user waited for cannot.
+  function showToast(msg: string, ms = 1500) {
     toast = msg;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => (toast = ""), 1500);
+    toastTimer = setTimeout(() => (toast = ""), ms);
   }
   let isStreaming = $derived(genId !== null);
   // The prose of the live turn is final, but the turn itself hasn't ended: the
@@ -329,6 +372,17 @@
     patchSession($activeChatId, { instructions: sysPromptDraft });
     showSysPrompt = false;
   }
+  // A native modal <dialog> brings Esc, the focus trap and focus return for
+  // free. It mounts only while open, so opening is the one thing to drive; the
+  // caret goes straight into the text, which is why the editor was opened.
+  let sysPromptEl = $state<HTMLDialogElement | null>(null);
+  let sysPromptArea = $state<HTMLTextAreaElement | null>(null);
+  $effect(() => {
+    if (showSysPrompt && sysPromptEl && !sysPromptEl.open) {
+      sysPromptEl.showModal();
+      sysPromptArea?.focus();
+    }
+  });
   let attachedImages = $state<string[]>([]);
   // Documents (text/code, PDF, DOCX, transcribed audio). Unlike images these
   // become TEXT in the user's message, so they need no vision model and no
@@ -762,52 +816,11 @@
   }
 
 
-  async function regenerateFromIndex(id: string, idx: number) {
-    // Only one turn in flight at a time. Without this, the "Generate response"
-    // pill / edit-save (which call here directly, bypassing send()'s isStreaming
-    // guard) could fire while a turn is already streaming — overwriting genId and
-    // abortController while the old stream keeps running on its captured signal,
-    // so two requests hit the backend at once (slot collision, non-consecutive
-    // token positions). Refuse instead.
-    if (genId !== null) {
-      showToast("Wait for the current response to finish");
-      return;
-    }
-    // Capture the model now — the user may switch chats/models while this turn
-    // streams in the background; the turn must stay on the model it started on.
-    const modelId = $selectedModelStore;
-    if (!modelId || !sessionById(id)) return;
-    // The chat now belongs to this model — reopening it re-selects it.
-    rememberModel(modelId);
-
-    // Editing/regenerating inside the already-summarized region would make the
-    // summary describe messages that no longer match — drop compaction and resend
-    // the full history from the start in that case.
-    let curSummary = sessionById(id)!.summary ?? "";
-    let curCompacted = sessionById(id)!.compactedCount ?? 0;
-    if (idx < curCompacted) {
-      curSummary = "";
-      curCompacted = 0;
-      patchSession(id, { summary: undefined, compactedCount: undefined });
-    }
-    // Remove all messages after the edited user message
-    patchSession(id, { messages: sessionById(id)!.messages.slice(0, idx + 1) });
-
-    // Rewrite turn? The user message at idx carries the rewrite instruction;
-    // its content is the original prose to diff the model's output against.
-    const reqUser = sessionById(id)!.messages[idx];
-    const rwInstr = reqUser?.rewriteInstruction;
-    const isRewrite = typeof rwInstr === "string";
-    const original = isRewrite ? getTextContent(reqUser.content) : "";
-
-    genId = id;
-    answerDone = false;
-    isReasoning = false;
-    busyLabel = "";
-    reasoningStartTime = 0;
-    abortController = new AbortController();
-    const signal = abortController.signal;
-
+  // The per-turn prompt head: the advertised tool set and the system prompt.
+  // Shared by the turn itself and by compaction, which must send these exact
+  // bytes so its request continues the chat's resident KV instead of evicting
+  // it (see compactNow). Anything that differs here is a full re-prefill.
+  function turnSetup(id: string, modelId: string, isRewrite: boolean, curSummary: string) {
     // No tools during a rewrite — it's a self-contained text transform.
     // Web search is opt-in (needs SearXNG); the local help wiki is always on so
     // models can answer quartermaster questions.
@@ -856,20 +869,6 @@
       ...(ytSearchEnabled ? [YOUTUBE_SEARCH_TOOL, YOUTUBE_COMMENTS_TOOL] : []),
     ];
 
-    // Thinking budget: soft cumulative-thinking cap so models can't loop forever
-    // before answering. 0 = off. Enforced server-side at round boundaries — once
-    // total thinking passes the budget, thinking is turned off for later rounds
-    // (never a mid-generation hard close, which derails a tool-using model
-    // mid-search). Rewrites think too: the transform is the hard part of the turn
-    // (tone, register, what to keep), and a no-reasoning rewrite is visibly worse.
-    const reasoningBudget = $reasoningBudgetStore;
-    // One assistant bubble holds the whole turn: reasoning, any web searches
-    // (as collapsible sections), and the final reply. The server writes into
-    // this bubble (last message) as it streams; the tool plumbing it sends to
-    // the model stays server-side and is never shown here.
-    appendMessage(id, { role: "assistant", content: "", model: modelId, ...(isRewrite ? { rewriteOriginal: original } : {}) });
-    const genStart = Date.now();
-
     const sys = [
       basePrompt(webEnabled, wikiEnabled, qmEnabled, ytEnabled, modelId, fetchEnabled, shoppingPrefs, assistantEnabled, extrasEnabled, memoryEnabled),
       sessionById(id)?.instructions?.trim(),
@@ -888,6 +887,72 @@
     ]
       .filter(Boolean)
       .join("\n\n");
+    return { sys, turnTools, webEnabled, shoppingPrefs };
+  }
+
+  async function regenerateFromIndex(id: string, idx: number) {
+    // Only one turn in flight at a time. Without this, the "Generate response"
+    // pill / edit-save (which call here directly, bypassing send()'s isStreaming
+    // guard) could fire while a turn is already streaming — overwriting genId and
+    // abortController while the old stream keeps running on its captured signal,
+    // so two requests hit the backend at once (slot collision, non-consecutive
+    // token positions). Refuse instead.
+    if (genId !== null) {
+      showToast("Wait for the current response to finish");
+      return;
+    }
+    // Capture the model now — the user may switch chats/models while this turn
+    // streams in the background; the turn must stay on the model it started on.
+    const modelId = $selectedModelStore;
+    if (!modelId || !sessionById(id)) return;
+    // The chat now belongs to this model — reopening it re-selects it.
+    rememberModel(modelId);
+
+    // Editing/regenerating inside the already-summarized region would make the
+    // summary describe messages that no longer match — drop compaction and resend
+    // the full history from the start in that case.
+    let curSummary = sessionById(id)!.summary ?? "";
+    let curCompacted = sessionById(id)!.compactedCount ?? 0;
+    if (idx < curCompacted) {
+      curSummary = "";
+      curCompacted = 0;
+      patchSession(id, { summary: undefined, compactedCount: undefined, compactedAt: undefined });
+    }
+    // This turn measures the real prompt; the post-compaction estimate is done.
+    if (pendingCtx?.chatId === id) pendingCtx = null;
+    // Remove all messages after the edited user message
+    patchSession(id, { messages: sessionById(id)!.messages.slice(0, idx + 1) });
+
+    // Rewrite turn? The user message at idx carries the rewrite instruction;
+    // its content is the original prose to diff the model's output against.
+    const reqUser = sessionById(id)!.messages[idx];
+    const rwInstr = reqUser?.rewriteInstruction;
+    const isRewrite = typeof rwInstr === "string";
+    const original = isRewrite ? getTextContent(reqUser.content) : "";
+
+    genId = id;
+    answerDone = false;
+    isReasoning = false;
+    busyLabel = "";
+    reasoningStartTime = 0;
+    abortController = new AbortController();
+    const signal = abortController.signal;
+
+    // Thinking budget: soft cumulative-thinking cap so models can't loop forever
+    // before answering. 0 = off. Enforced server-side at round boundaries — once
+    // total thinking passes the budget, thinking is turned off for later rounds
+    // (never a mid-generation hard close, which derails a tool-using model
+    // mid-search). Rewrites think too: the transform is the hard part of the turn
+    // (tone, register, what to keep), and a no-reasoning rewrite is visibly worse.
+    const reasoningBudget = $reasoningBudgetStore;
+    // One assistant bubble holds the whole turn: reasoning, any web searches
+    // (as collapsible sections), and the final reply. The server writes into
+    // this bubble (last message) as it streams; the tool plumbing it sends to
+    // the model stays server-side and is never shown here.
+    appendMessage(id, { role: "assistant", content: "", model: modelId, ...(isRewrite ? { rewriteOriginal: original } : {}) });
+    const genStart = Date.now();
+
+    const { sys, turnTools, webEnabled, shoppingPrefs } = turnSetup(id, modelId, isRewrite, curSummary);
     const base: ChatMessage[] = [];
     if (sys) base.push({ role: "system", content: sys });
     // History up to (not incl.) the live assistant bubble.
@@ -1018,6 +1083,8 @@
     const res = await fetch(`/api/chats/turn/stream?chatId=${encodeURIComponent(id)}`, { signal });
     if (res.status === 204 || !res.body) return;
     if (!res.ok) throw new Error(`stream failed: ${res.status}`);
+    // A turn is running on the folded prompt: the live KV reading is real again.
+    if (pendingCtx?.chatId === id) pendingCtx = null;
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
@@ -1143,7 +1210,7 @@
       if (!r.ok) return;
       const arr = await r.json();
       const sess = Array.isArray(arr) ? arr.find((s: any) => s.id === id) : null;
-      if (sess) patchSession(id, { messages: sess.messages, summary: sess.summary, compactedCount: sess.compactedCount });
+      if (sess) patchSession(id, { messages: sess.messages, summary: sess.summary, compactedCount: sess.compactedCount, compactedAt: sess.compactedAt });
     } catch {}
   }
 
@@ -1227,13 +1294,14 @@
     while (boundary < msgs.length && msgs[boundary].role !== "user") boundary++;
     if (boundary <= curCompacted) return 0; // nothing new to summarize
 
-    // Summarize only the newly-folded slice; `summary` already covers the prefix.
-    const fresh = msgs.slice(curCompacted, boundary);
     compactingId = id;
     try {
-      const next = await summarizeConversation(modelId, fresh, s.summary ?? "", signal);
+      const { text, heldTokens, heldChars } = await summarizeLive(id, modelId, boundary, signal);
       if (signal.aborted) return 0;
-      patchSession(id, { summary: next, compactedCount: boundary });
+      const len = sessionById(id)?.messages.length ?? msgs.length;
+      patchSession(id, { summary: text, compactedCount: boundary, compactedAt: len });
+      const kept = promptChars(id, modelId, text, msgs.slice(boundary));
+      pendingCtx = { chatId: id, model: modelId, tokens: estimateKeptTokens(heldTokens, heldChars, kept) };
       return boundary - curCompacted;
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") throw e;
@@ -1243,6 +1311,69 @@
     } finally {
       compactingId = "";
     }
+  }
+
+  // The summary as one more user turn on the conversation the model already
+  // holds: the same system prompt, tools and history the next turn would send,
+  // under the same chat id, so the slot's KV is reused instead of evicted (and,
+  // on a hybrid model, a multi-GB snapshot is not written for it). A rewrite turn
+  // sent different bytes for its last message, so after one the reuse is partial;
+  // that costs prefill, not correctness.
+  //
+  // Falls back to the standalone summary request if this fails: that one evicts
+  // the chat, but it still compacts, and a chat that cannot compact overflows.
+  //
+  // Also returns the exchange's measured size (heldTokens over heldChars) for
+  // the context-bar estimate; the fallback measures nothing the next turn will
+  // resemble, so it returns 0 tokens and the estimate uses a flat ratio.
+  async function summarizeLive(
+    id: string,
+    modelId: string,
+    boundary: number,
+    signal: AbortSignal,
+  ): Promise<{ text: string; heldTokens: number; heldChars: number }> {
+    const s = sessionById(id)!;
+    const summary = s.summary ?? "";
+    const curCompacted = s.compactedCount ?? 0;
+    const { sys, turnTools } = turnSetup(id, modelId, false, summary);
+    const messages: ChatMessage[] = [];
+    if (sys) messages.push({ role: "system", content: sys });
+    messages.push(...(s.messages.slice(curCompacted) as ChatMessage[]));
+    // `?.`: a tail with no user message in it snaps the boundary to the end.
+    messages.push({ role: "user", content: compactInPlacePrompt(!!summary, getTextContent(s.messages[boundary]?.content ?? "")) });
+    try {
+      const r = await summarizeInPlace(
+        { chatId: id, model: modelId, messages, tools: turnTools.length ? turnTools : undefined },
+        signal,
+      );
+      const heldChars = JSON.stringify(turnTools).length + textChars(messages) + r.text.length;
+      return { text: r.text, heldTokens: r.tokens, heldChars };
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") throw e;
+      console.warn("in-place compaction failed, falling back:", e);
+      // Summarize only the newly-folded slice; `summary` already covers the prefix.
+      const text = await summarizeConversation(modelId, s.messages.slice(curCompacted, boundary) as ChatMessage[], summary, signal);
+      return { text, heldTokens: 0, heldChars: 0 };
+    }
+  }
+
+  // Characters of what a message list puts in front of the model: text plus
+  // tool-call arguments. Only ever compared against another count made the same
+  // way, so the template's own framing tokens cancel out of the ratio.
+  function textChars(messages: ChatMessage[]): number {
+    let n = 0;
+    for (const m of messages) {
+      n += getTextContent(m.content ?? "").length;
+      if (m.tool_calls?.length) n += JSON.stringify(m.tool_calls).length;
+    }
+    return n;
+  }
+
+  // Characters of the prompt the next turn sends after a fold: the system prompt
+  // rebuilt around the new summary, the tools, and the kept tail.
+  function promptChars(id: string, modelId: string, summary: string, kept: ChatMessage[]): number {
+    const { sys, turnTools } = turnSetup(id, modelId, false, summary);
+    return (sys?.length ?? 0) + JSON.stringify(turnTools).length + textChars(kept);
   }
 
   // Manual compaction: "/compact" typed into the composer. Same fold as the
@@ -1266,11 +1397,11 @@
     compactError = "";
     const moved = await compactNow(id, modelId, new AbortController().signal);
     if (moved > 0) {
-      showToast(`Compacted ${moved} message${moved === 1 ? "" : "s"}`);
+      showToast(`Compacted ${moved} message${moved === 1 ? "" : "s"}`, 5000);
     } else if (moved === 0) {
-      showToast(`Nothing to compact; the last ${KEEP_RECENT} messages always stay verbatim`);
+      showToast(`Nothing to compact; the last ${KEEP_RECENT} messages always stay verbatim`, 5000);
     } else {
-      showToast(`Compaction failed: ${compactError || "the conversation is unchanged"}`);
+      showToast(`Compaction failed: ${compactError || "the conversation is unchanged"}`, 5000);
     }
   }
 
@@ -1299,6 +1430,9 @@
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       sendMessage();
+    } else if (event.key === "Escape" && isStreaming) {
+      event.preventDefault();
+      cancelStreaming();
     }
   }
 
@@ -1462,6 +1596,167 @@
   }
 </script>
 
+{#snippet cfgTip(text: string)}
+  <span class="inline-flex shrink-0 cursor-help text-txtsecondary/70 hover:text-txtsecondary" use:tooltip={text}>
+    <HelpCircle class="w-3.5 h-3.5" />
+  </span>
+{/snippet}
+
+{#snippet toolRow(id: string, Icon: typeof Search, name: string, desc: string, help: string, checked: boolean, set: (v: boolean) => void)}
+  <label class="grid grid-cols-[1rem_1fr_auto] gap-2.5 items-start py-2 cursor-pointer" for={id}>
+    <Icon class="w-4 h-4 mt-0.5 text-txtsecondary" />
+    <span class="min-w-0">
+      <span class="flex items-center gap-1.5 text-[0.8125rem] text-txtmain">{name} {@render cfgTip(help)}</span>
+      <span class="block text-micro leading-snug text-txtsecondary mt-0.5">{desc}</span>
+    </span>
+    <Toggle {id} {checked} onchange={set} />
+  </label>
+{/snippet}
+
+<!-- Config sidebar: the chat's per-user knobs, docked right of the thread. It
+     pushes the column rather than floating over it, so the last message and the
+     composer stay readable while a knob is being turned. -->
+{#snippet chatSettingsPanel()}
+  <aside class="w-[18.75rem] h-full flex flex-col min-h-0 bg-rail border-l border-card-border-inner">
+    <div class="flex items-center gap-2 pl-4 pr-2 h-10 border-b border-card-border-inner shrink-0">
+      <SlidersHorizontal class="w-3.5 h-3.5 text-txtsecondary" />
+      <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Configs</span>
+      <button class="icon-btn ml-auto" onclick={() => (showSettings = false)} use:tooltip={"Close"} aria-label="Close configs">
+        <X class="w-4 h-4" />
+      </button>
+    </div>
+
+    <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll">
+      <div class="px-4 py-3.5 border-b border-card-border-inner">
+        <label class="flex items-center gap-1.5 mb-2.5 text-micro font-medium uppercase tracking-wide text-txtsecondary" for="temperature">
+          Temperature {@render cfgTip("Higher gives the model more freedom to be creative and varied; lower keeps it focused and predictable.")}
+          <span class="ml-auto normal-case tracking-normal text-xs font-medium text-txtmain">{TEMP_LABELS[nearestTempIdx($temperatureStore)]}</span>
+        </label>
+        <input
+          id="temperature"
+          type="range"
+          min="0"
+          max={TEMP_STEPS.length - 1}
+          step="1"
+          class="w-full accent-primary"
+          value={nearestTempIdx($temperatureStore)}
+          oninput={(e) => temperatureStore.set(TEMP_STEPS[+e.currentTarget.value])}
+        />
+        <!-- One tick per stop: the slider is a 5-way choice, not a continuum. -->
+        <div class="flex justify-between px-[0.4rem] -mt-0.5" aria-hidden="true">
+          {#each TEMP_STEPS as _, i (i)}
+            <span class="w-1 h-1 rounded-full {i <= nearestTempIdx($temperatureStore) ? 'bg-primary' : 'bg-txtsecondary/50'}"></span>
+          {/each}
+        </div>
+        <div class="flex justify-between mt-1.5 text-micro text-txtsecondary">
+          <span>{TEMP_LABELS[0]}</span>
+          <span>{TEMP_LABELS[TEMP_LABELS.length - 1]}</span>
+        </div>
+      </div>
+
+      <div class="px-4 py-3.5 border-b border-card-border-inner">
+        <div class="flex items-center gap-1.5 mb-2.5 text-micro font-medium uppercase tracking-wide text-txtsecondary">
+          <Brain class="w-3.5 h-3.5" /> Reasoning {@render cfgTip(
+            effortLadder.length > 0
+              ? "How hard this model thinks before answering. The levels come from the model's own chat template. Changing it rewrites the top of the system prompt, so it re-reads the conversation, so pick one and stay on it. Thinking Budget does not apply at these levels."
+              : "Let the model think before answering (for reasoning-capable models). This model's template has no effort levels, so it is on or off.",
+          )}
+        </div>
+        <!-- A segmented row reads at a glance; past five rungs the labels stop
+             fitting 300px, so a long ladder falls back to the dropdown. -->
+        {#if effortChoices.length <= 5}
+          <div class="seg w-full" role="group" aria-label="Reasoning effort">
+            {#each effortChoices as opt (opt.value)}
+              <button class="flex-1" aria-pressed={effort === opt.value} onclick={() => reasoningEffortStore.set(opt.value)}>{opt.label}</button>
+            {/each}
+          </div>
+        {:else}
+          <Select
+            value={effort}
+            onchange={(v) => reasoningEffortStore.set(v)}
+            ariaLabel="Reasoning effort"
+            class="w-full normal-case"
+            options={effortChoices.map((opt) => ({ value: opt.value, label: opt.label }))}
+          />
+        {/if}
+      </div>
+
+      <div class="px-4 py-2.5 border-b border-card-border-inner">
+        <div class="mt-1 mb-0.5 text-micro font-medium uppercase tracking-wide text-txtsecondary">Tools</div>
+        {@render toolRow("chat-websearch", Search, "Web search", "Search the web for fresh facts.", "Let the model search the web (via SearXNG) for fresh facts. Needs a tool-calling model. URL + rate limits are in the side-rail Settings.", $webSearchStore, (v) => webSearchStore.set(v))}
+        {@render toolRow("chat-extratools", CloudSun, "Weather & feeds", "Live weather and any RSS/Atom feed.", "Let the model read the live weather (Open-Meteo) and any RSS/Atom feed.", $extraToolsStore, (v) => extraToolsStore.set(v))}
+        {@render toolRow("chat-memory", BrainCircuit, "Memory", "Remember lasting facts about you across chats.", "Let the model remember lasting facts about you across conversations. Remembered facts are added to every chat's system prompt; read, edit and delete them in Settings → Memory.", $memoryStore, (v) => memoryStore.set(v))}
+        {@render toolRow("chat-qmtools", Wrench, "QM tools", "Inspect and tune this Quartermaster.", "Let the model inspect and tune this Quartermaster instance - list installed models, read live VRAM/config, and change settings (hot-reloads, no eviction). Needs a tool-calling model. Requires -generate for edits.", $qmToolsStore, (v) => qmToolsStore.set(v))}
+      </div>
+
+      <div class="px-4 py-3.5 border-b border-card-border-inner">
+        <div class="flex items-center gap-1.5 mb-2.5 text-micro font-medium uppercase tracking-wide text-txtsecondary">
+          Instructions {@render cfgTip("Standing instructions for THIS chat only, layered on top of the built-in prompt. Saved with the conversation.")}
+        </div>
+        <button
+          type="button"
+          class="w-full text-left px-3 py-2.5 rounded-lg border border-dashed border-btn-border text-xs leading-snug hover:border-primary transition-colors {activeSession?.instructions?.trim() ? 'text-txtmain' : 'text-txtsecondary'}"
+          onclick={openSysPrompt}
+        >
+          <span class="line-clamp-3">{activeSession?.instructions?.trim() || "Add instructions for this chat…"}</span>
+        </button>
+      </div>
+
+      {#if $shoppingStore}
+        <div class="px-4 py-3.5 border-b border-card-border-inner">
+          <label class="flex items-center gap-1.5 mb-2.5 text-micro font-medium uppercase tracking-wide text-txtsecondary" for="chat-shopping-prefs">
+            <ShoppingCart class="w-3.5 h-3.5" /> Shopping preferences
+            {@render cfgTip("Where you buy: country, currency and the shops you prefer. Standing setting - the assistant searches these first instead of asking every time.")}
+          </label>
+          <input
+            id="chat-shopping-prefs"
+            type="text"
+            class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-background focus:outline-none focus:border-primary text-xs"
+            placeholder="e.g. Romania, RON, prefer emag.ro and altex.ro"
+            bind:value={$shoppingPrefsStore}
+          />
+        </div>
+      {/if}
+    </div>
+  </aside>
+{/snippet}
+
+<!-- Drawn where the chat ended when it was compacted, so a fresh /compact shows
+     up as the newest line instead of somewhere far up the scrollback. -->
+{#snippet compactMarker()}
+  <div
+    class="flex items-center gap-2 my-3 text-[0.7rem] uppercase tracking-wide text-txtsecondary"
+    use:tooltip={`The first ${compactedCount} messages are summarized for the model; they're still shown here but not resent.`}
+  >
+    <span class="flex-1 h-px bg-card-border"></span>
+    <span class="inline-flex items-center gap-1">
+      <Brain class="w-3 h-3" /> Compacted - model sees a summary{compactKept > 0 ? ` + the last ${compactKept} message${compactKept === 1 ? "" : "s"}` : ""}
+    </span>
+    <span class="flex-1 h-px bg-card-border"></span>
+  </div>
+{/snippet}
+
+{#snippet chatHeaderRight()}
+  <!-- Context-window usage (yellow → orange → red) with the used/max readout.
+       Clicking compacts on demand, the same as typing /compact. -->
+  {#if ctxN > 0}
+    <button
+      type="button"
+      class="flex items-center gap-2 px-1.5 h-7 rounded hover:bg-secondary transition-colors"
+      onclick={() => runManualCompact($activeChatId)}
+      use:tooltip={ctxEstimate != null
+        ? `Context ~${fmtTokens(ctxUsed)} / ${fmtTokens(ctxN)} tokens (~${Math.round(ctxRatio * 100)}%), estimated for the next message after compaction · click to compact now`
+        : `Context ${fmtTokens(ctxUsed)} / ${fmtTokens(ctxN)} tokens (${Math.round(ctxRatio * 100)}%) · click to compact now`}
+    >
+      <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Ctx</span>
+      <span class="h-1 w-16 rounded-full bg-secondary overflow-hidden">
+        <span class="block h-full rounded-full transition-all" style="width: {Math.max(ctxRatio * 100, 3)}%; background: {ctxColor};"></span>
+      </span>
+      <span class="font-mono text-micro tabular-nums text-txtsecondary">{ctxEstimate != null ? "~" : ""}{fmtTokens(ctxUsed)}/{fmtTokens(ctxN)}</span>
+    </button>
+  {/if}
+{/snippet}
+
 <div
   class="relative flex flex-col h-full"
   use:dropZone={{ onFiles: handleDrop, onActive: (v) => (dropActive = v), enabled: hasModels }}
@@ -1479,6 +1774,15 @@
     </div>
   {/if}
 
+  <PaneHeader
+    title={activeSession?.title || "New chat"}
+    meta={messages.length ? `${messages.length} msg${messages.length === 1 ? "" : "s"}` : ""}
+    updatedAt={messages.length ? activeSession?.updatedAt : undefined}
+    newLabel="New chat"
+    onNew={newChat}
+    right={chatHeaderRight}
+  />
+
   <!-- Empty state for no models configured -->
   {#if !hasModels}
     <div class="flex-1 flex flex-col items-center justify-center gap-3 text-txtsecondary">
@@ -1489,7 +1793,7 @@
     <!-- Highlight-to-reply popup, anchored above the current text selection. -->
     {#if selReply}
       <button
-        class="fixed z-30 inline-flex items-center justify-center rounded-lg bg-[#141414] text-[#ededee] p-1.5 shadow-lg hover:opacity-90 transition-opacity"
+        class="fixed z-30 inline-flex items-center justify-center rounded-lg bg-cite-bg text-cite-text p-1.5 [@media(pointer:coarse)]:p-3 shadow-lg hover:opacity-90 transition-opacity"
         style="left: {selReply.x + 4}px; top: {selReply.y + 4}px"
         use:tooltip={"Reply to selection"}
         onmousedown={(e) => e.preventDefault()}
@@ -1498,17 +1802,21 @@
         <Quote class="w-3.5 h-3.5" />
       </button>
     {/if}
+    <div class="flex-1 min-h-0 flex">
     <!-- Chat column — full-width so the whole pane scrolls; the message list and
          composer are width-constrained and centered inside. -->
-    <div class="flex-1 flex flex-col min-w-0 min-h-0 w-full">
+    <div class="flex-1 flex flex-col min-w-0 min-h-0 px-4 pb-3">
     <!-- Messages area — scrolls across the full width; content centered within. -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="flex-1 min-h-0 overflow-y-auto [overflow-anchor:none] pretty-scroll scroll-fade-b mb-2"
+      class="flex-1 min-h-0 overflow-y-auto [overflow-anchor:none] pretty-scroll scroll-fade-b"
       bind:this={messagesContainer}
       onscroll={handleMessagesScroll}
-      onmousedown={() => (selReply = null)}
-      onmouseup={onSelection}
+      onpointerdown={(e) => {
+        lastPointer = e.pointerType;
+        selReply = null;
+      }}
+      onpointerup={onSelection}
       use:scrollFade
     >
       <div class="w-full max-w-3xl mx-auto px-2 pt-4 pb-2 {messages.length === 0 ? 'h-full' : ''}" bind:this={messagesInner}>
@@ -1519,12 +1827,8 @@
         </div>
       {:else}
         {#each messages as message, idx (idx)}
-          {#if idx === compactedCount && compactedCount > 0}
-            <div class="flex items-center gap-2 my-3 text-[0.7rem] uppercase tracking-wide text-txtsecondary" use:tooltip={"Messages above are summarized for the model; they're still shown here but not resent."}>
-              <span class="flex-1 h-px bg-card-border"></span>
-              <span class="inline-flex items-center gap-1"><Brain class="w-3 h-3" /> Compacted - model sees a summary above</span>
-              <span class="flex-1 h-px bg-card-border"></span>
-            </div>
+          {#if idx === compactMarkAt && compactedCount > 0}
+            {@render compactMarker()}
           {/if}
           <div data-role={message.role}>
           <ChatMessageComponent
@@ -1560,6 +1864,9 @@
           />
           </div>
         {/each}
+        {#if compactMarkAt === messages.length && compactedCount > 0}
+          {@render compactMarker()}
+        {/if}
       {/if}
       <!-- Compaction status. Inside the scrolled column and after the last
            message, not a strip at the top of the pane: it is the same kind of
@@ -1567,14 +1874,18 @@
            reading it where the conversation ended. It cannot ride ChatMessage's
            busyLabel prop, because a compaction (manual especially) runs with no
            assistant message in flight to hang the label on. -->
-      {#if compactingId === $activeChatId}
-        <div class="flex items-center gap-2 mt-1 mb-2">
-          <span class="inline-flex items-center gap-1.5 text-xs italic">
-            <span class="w-1.5 h-1.5 bg-primary rounded-full reason-glow"></span>
-            <span class="reason-shimmer-white font-medium">Compacting conversation…</span>
-          </span>
-        </div>
-      {/if}
+      <!-- The live region stays mounted: screen readers announce a change inside
+           an existing one, not a region that appears already filled. -->
+      <div role="status" aria-live="polite">
+        {#if compactingId === $activeChatId}
+          <div class="flex items-center gap-2 mt-1 mb-2">
+            <span class="inline-flex items-center gap-1.5 text-xs italic">
+              <span class="w-1.5 h-1.5 bg-primary rounded-full reason-glow"></span>
+              <span class="reason-shimmer-white font-medium">Compacting conversation…</span>
+            </span>
+          </div>
+        {/if}
+      </div>
       </div>
     </div>
 
@@ -1585,7 +1896,7 @@
         <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 z-20">
           <button
             onclick={() => regenerateFromIndex($activeChatId, messages.length - 1)}
-            class="inline-flex items-center gap-1.5 rounded-full bg-primary text-white px-3.5 py-1.5 text-xs font-medium shadow-lg hover:opacity-90 transition-opacity"
+            class="inline-flex items-center gap-1.5 rounded-full bg-primary text-btn-primary-text px-3.5 py-1.5 text-xs font-medium shadow-lg hover:bg-primary-hover transition-colors"
             use:tooltip={"Generate a response for the last message"}
           >
             <Sparkles class="w-3.5 h-3.5" />
@@ -1595,131 +1906,48 @@
       {/if}
 
       <!-- Transient toggle toast -->
-      {#if toast}
-        <div class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-3 z-20">
+      <div role="status" aria-live="polite" class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-3 z-20">
+        {#if toast}
           <div class="rounded-full bg-txtmain text-surface px-3 py-1 text-xs font-medium shadow-lg whitespace-nowrap">
             {toast}
           </div>
-        </div>
-      {/if}
-
-      {#snippet chatSettingsPanel()}
-        {#snippet tip(text: string)}
-          <span class="inline-flex shrink-0 cursor-help text-txtsecondary/70 hover:text-txtsecondary" use:tooltip={text}>
-            <HelpCircle class="w-3.5 h-3.5" />
-          </span>
-        {/snippet}
-
-        <div class="flex flex-col gap-1.5">
-          <label class="flex justify-between text-xs uppercase tracking-wide text-txtsecondary" for="temperature">
-            <span class="flex items-center gap-1.5">Temperature {@render tip("Higher gives the model more freedom to be creative and varied; lower keeps it focused and predictable.")}</span>
-            <span class="text-txtmain normal-case">{TEMP_LABELS[nearestTempIdx($temperatureStore)]}</span>
-          </label>
-          <input
-            id="temperature"
-            type="range"
-            min="0"
-            max={TEMP_STEPS.length - 1}
-            step="1"
-            class="w-full accent-primary"
-            value={nearestTempIdx($temperatureStore)}
-            oninput={(e) => temperatureStore.set(TEMP_STEPS[+e.currentTarget.value])}
-          />
-          <div class="flex justify-between text-xs text-txtsecondary">
-            <span>Precise</span>
-            <span>Creative</span>
-          </div>
-        </div>
-
-        <div class="flex items-center justify-between gap-2 text-xs uppercase tracking-wide text-txtsecondary">
-          <span class="flex items-center gap-1.5"><Brain class="w-3.5 h-3.5" /> Reasoning {@render tip(
-            effortLadder.length > 0
-              ? "How hard this model thinks before answering. The levels come from the model's own chat template. Changing it rewrites the top of the system prompt, so it re-reads the conversation, so pick one and stay on it. Thinking Budget does not apply at these levels."
-              : "Let the model think before answering (for reasoning-capable models). This model's template has no effort levels, so it is on or off.",
-          )}</span>
-          <Select
-            value={effort}
-            onchange={(v) => reasoningEffortStore.set(v)}
-            ariaLabel="Reasoning effort"
-            class="w-32 normal-case"
-            options={effortChoices.map((opt) => ({ value: opt.value, label: opt.label }))}
-          />
-        </div>
-
-        <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-websearch">
-          <span class="flex items-center gap-1.5"><Search class="w-3.5 h-3.5" /> Web Search {@render tip("Let the model search the web (via SearXNG) for fresh facts. Needs a tool-calling model. URL + rate limits are in the side-rail Settings.")}</span>
-          <Toggle id="chat-websearch" bind:checked={$webSearchStore} />
-        </label>
-
-        <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-extratools">
-          <span class="flex items-center gap-1.5"><CloudSun class="w-3.5 h-3.5" /> Weather & Feeds {@render tip("Let the model read the live weather (Open-Meteo) and any RSS/Atom feed.")}</span>
-          <Toggle id="chat-extratools" bind:checked={$extraToolsStore} />
-        </label>
-
-        <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-memory">
-          <span class="flex items-center gap-1.5"><BrainCircuit class="w-3.5 h-3.5" /> Memory {@render tip("Let the model remember lasting facts about you across conversations. Remembered facts are added to every chat's system prompt; read, edit and delete them in Settings → Memory.")}</span>
-          <Toggle id="chat-memory" bind:checked={$memoryStore} />
-        </label>
-
-        <label class="flex items-center justify-between text-xs uppercase tracking-wide text-txtsecondary" for="chat-qmtools">
-          <span class="flex items-center gap-1.5"><Wrench class="w-3.5 h-3.5" /> QM Tools {@render tip("Let the model inspect and tune this Quartermaster instance - list installed models, read live VRAM/config, and change settings (hot-reloads, no eviction). Needs a tool-calling model. Requires -generate for edits.")}</span>
-          <Toggle id="chat-qmtools" bind:checked={$qmToolsStore} />
-        </label>
-
-        <div class="flex flex-col gap-1">
-          <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">Instructions {@render tip("Standing instructions for THIS chat only, layered on top of the built-in prompt. Saved with the conversation.")}</span>
-          <button
-            type="button"
-            class="w-full text-left px-2.5 py-1.5 rounded-md border border-card-border bg-surface hover:border-primary transition-colors {activeSession?.instructions?.trim() ? 'text-txtmain' : 'text-txtsecondary'}"
-            onclick={openSysPrompt}
-          >
-            <span class="line-clamp-2">{activeSession?.instructions?.trim() || "Add instructions for this chat…"}</span>
-          </button>
-        </div>
-
-        {#if $shoppingStore}
-          <div class="flex flex-col gap-1">
-            <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">
-              <ShoppingCart class="w-3.5 h-3.5" /> Shopping preferences
-              {@render tip("Where you buy: country, currency and the shops you prefer. Standing setting - the assistant searches these first instead of asking every time.")}
-            </span>
-            <input
-              type="text"
-              class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary text-[0.8125rem]"
-              placeholder="e.g. Romania, RON, prefer emag.ro and altex.ro"
-              bind:value={$shoppingPrefsStore}
-            />
-          </div>
         {/if}
-
-      {/snippet}
+      </div>
 
       <!-- System-prompt editor: roomier modal to write/save the standing prompt. -->
       {#if showSysPrompt}
-        <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4" onclick={() => (showSysPrompt = false)} role="presentation">
-          <div
-            class="flex w-full max-w-xl flex-col gap-3 rounded-lg border border-card-border bg-surface p-4 shadow-xl"
-            onclick={(e) => e.stopPropagation()}
-            role="presentation"
-          >
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+        <dialog
+          bind:this={sysPromptEl}
+          class="bg-surface text-txtmain rounded-lg border border-card-border shadow-xl w-full max-w-xl p-0 backdrop:bg-black/40 m-auto"
+          aria-labelledby="sysprompt-title"
+          oncancel={(e) => {
+            e.preventDefault();
+            showSysPrompt = false;
+          }}
+          onclick={(e) => e.target === sysPromptEl && (showSysPrompt = false)}
+        >
+          <div class="flex flex-col gap-3 p-4">
             <div class="flex items-center justify-between">
-              <span class="font-medium text-txtmain">Instructions</span>
-              <button class="inline-flex items-center justify-center p-1 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors" onclick={() => (showSysPrompt = false)} use:tooltip={"Close"}>
+              <span id="sysprompt-title" class="font-medium">Instructions</span>
+              <button class="icon-btn" onclick={() => (showSysPrompt = false)} use:tooltip={"Close"}>
                 <X class="w-4 h-4" />
               </button>
             </div>
-            <p class="text-xs text-txtsecondary">Standing instructions for this chat only - layered on top of the built-in prompt.</p>
+            <p class="text-xs text-txtsecondary">Standing instructions for this chat only, layered on top of the built-in prompt.</p>
             <textarea
+              bind:this={sysPromptArea}
               class="w-full h-64 px-3 py-2 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary resize-none text-sm"
+              aria-labelledby="sysprompt-title"
               placeholder="e.g. Answer as a senior Rust engineer. Be terse."
               bind:value={sysPromptDraft}
             ></textarea>
             <div class="flex justify-end gap-2">
-              <button class="px-3 py-1.5 rounded-md border border-card-border text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors text-sm" onclick={() => (showSysPrompt = false)}>Cancel</button>
-              <button class="px-3 py-1.5 rounded-md bg-primary text-white hover:opacity-90 transition-opacity text-sm" onclick={saveSysPrompt}>Save</button>
+              <button class="btn" onclick={() => (showSysPrompt = false)}>Cancel</button>
+              <button class="btn btn--primary" onclick={saveSysPrompt}>Save</button>
             </div>
           </div>
-        </div>
+        </dialog>
       {/if}
 
       <!-- Image preview strip -->
@@ -1733,7 +1961,7 @@
                 class="h-full w-full object-cover"
               />
               <button
-                class="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/75"
+                class="absolute right-1 top-1 inline-flex h-5 w-5 [@media(pointer:coarse)]:h-7 [@media(pointer:coarse)]:w-7 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 hover:bg-black/75"
                 onclick={() => removeImage(idx)}
                 use:tooltip={"Remove image"}
               >
@@ -1770,7 +1998,7 @@
                 <span class="shrink-0 text-txtsecondary/70">reading…</span>
               {/if}
               <button
-                class="shrink-0 p-0.5 rounded-full hover:bg-secondary transition-colors"
+                class="shrink-0 p-1.5 -m-1 rounded-full hover:bg-secondary transition-colors"
                 onclick={() => removeDoc(doc.id)}
                 use:tooltip={"Remove file"}
               >
@@ -1814,7 +2042,7 @@
               {/if}
               <span class="truncate" use:tooltip={q.preview}>{q.preview}</span>
               <button
-                class="shrink-0 p-0.5 rounded-full text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
+                class="shrink-0 p-1.5 -m-1 rounded-full text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
                 onclick={() => (queued = queued.filter((_, i) => i !== qi))}
                 use:tooltip={"Remove from queue"}
               >
@@ -1831,7 +2059,7 @@
           <Reply class="w-3.5 h-3.5 shrink-0 text-primary" />
           <span class="truncate text-txtsecondary" use:tooltip={replyingTo}>Replying to: {replyingTo}</span>
           <button
-            class="shrink-0 p-0.5 rounded-full text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
+            class="shrink-0 p-1.5 -m-1 rounded-full text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
             onclick={() => (replyingTo = null)}
             use:tooltip={"Cancel reply"}
           >
@@ -1881,28 +2109,6 @@
         </button>
       {/snippet}
 
-      {#snippet chatCtxBar()}
-        <!-- Context-window usage: thin line (yellow → orange → red) plus the
-             used/max token readout, so the bar says how much room is left and
-             not just "some". Clicking it compacts on demand — the same thing
-             typing /compact does, but findable: the moment you want it is the
-             moment you are looking at this bar. -->
-        {#if ctxN > 0}
-          <button
-            type="button"
-            class="flex items-center gap-1.5 hover:opacity-80 transition-opacity"
-            onclick={() => runManualCompact($activeChatId)}
-            use:tooltip={`Context ${fmtTokens(ctxUsed)} / ${fmtTokens(ctxN)} tokens (${Math.round(ctxRatio * 100)}%) · click to compact now`}
-          >
-            <div class="h-0.5 w-16 rounded-full bg-secondary overflow-hidden">
-              <div class="h-full rounded-full transition-all" style="width: {Math.max(ctxRatio * 100, 3)}%; background: {ctxColor};"></div>
-            </div>
-            <span class="font-mono text-micro tabular-nums text-txtsecondary leading-none">
-              {fmtTokens(ctxUsed)}/{fmtTokens(ctxN)}
-            </span>
-          </button>
-        {/if}
-      {/snippet}
 
       <Composer
         bind:value={userInput}
@@ -1917,13 +2123,36 @@
         busy={isStreaming}
         onStop={cancelStreaming}
         bind:showSettings
+        settingsExternal
         settingsTitle="Configs"
         topExtra={chatTopExtra}
         leftButtons={chatLeftButtons}
-        ctxBar={chatCtxBar}
-        settingsPanel={chatSettingsPanel}
       />
+      <div class="hidden sm:flex justify-center gap-4 mt-2 text-micro text-txtsecondary select-none">
+        <span><kbd class="font-mono">Enter</kbd> send</span>
+        <span><kbd class="font-mono">Shift+Enter</kbd> new line</span>
+        <span><kbd class="font-mono">Esc</kbd> stop</span>
+        <span><kbd class="font-mono">/compact</kbd> fold context</span>
+      </div>
     </div>
+    </div>
+    <!-- Docked beside the thread from md up. Below that there is no room to push
+         the column, so it floats over the thread as a sheet from the right edge,
+         with a scrim that closes it. -->
+    {#if showSettings}
+      <button
+        class="md:hidden fixed inset-0 z-40 bg-black/40 cursor-default"
+        aria-label="Close configs"
+        tabindex="-1"
+        onclick={() => (showSettings = false)}
+      ></button>
+      <div
+        class="shrink-0 h-full overflow-hidden max-md:fixed max-md:inset-y-0 max-md:right-0 max-md:z-40 max-md:max-w-full max-md:shadow-xl"
+        transition:slide={{ axis: "x", duration: 200 }}
+      >
+        {@render chatSettingsPanel()}
+      </div>
+    {/if}
     </div>
   {/if}
 </div>

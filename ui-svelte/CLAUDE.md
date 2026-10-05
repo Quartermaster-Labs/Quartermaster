@@ -58,7 +58,7 @@ changing anything under `ui-svelte/`.
 |---|---|
 | `src/main.ts`, `src/App.svelte` | Entry point + root. `App.svelte` fetches `/api/mode` and renders either the dashboard shell (Sidebar + StatusRail + Router) **or** the standalone `PlaygroundApp`. |
 | `src/routes/PlaygroundApp.svelte` | Playground root: gates the app behind login (`playgroundAuth` `me`), hydrates server-backed chats/prefs, then mounts `PlaygroundShell`. |
-| `src/routes/PlaygroundShell.svelte` | Playground shell: icon side-rail (Chat / Images / Video / 3D / Speech / Transcription, hover-expand), chat-history flyout, logout + username, and the playground Settings modal (**General / Memory / Search / Prompt**). |
+| `src/routes/PlaygroundShell.svelte` | Playground shell: icon side-rail (Chat / Images / Video / 3D / Speech / Transcription, hover-expand), the history drawer (`HistoryDrawer`, slides in and pushes the pane, every tab but Transcription, open state in `historyOpenStore`), logout + username, and the playground Settings modal (**General / Memory / Search / Prompt**). |
 | `src/routes/Login.svelte` | Playground username/password sign-in **and** sign-up (hashed; unknown users are rejected, not registered). Opens on the sign-up pane when `GET /auth/accounts` says no account exists yet. |
 | `src/routes/` | Top-level pages mounted by the router. |
 | `src/components/` | Reusable UI components (panels, modals, gauges, charts, tooltips). |
@@ -276,6 +276,17 @@ full transcript stays on disk and on screen (a divider marks the boundary).
   `sendMessage()`, exact match only, no attachments) or clicking the context bar next to the model
   name. **No KV threshold**: asking for it by hand means compacting *before* the window fills, so a
   "not full enough" refusal would defeat the point. Toasts what it did.
+
+**The summary is one more user turn on the live conversation** (`summarizeLive` ->
+`summarizeInPlace` -> `POST /api/chats/compact`). It sends what the next turn would: `turnSetup()`'s
+system prompt and tool list (the same function `regenerateFromIndex` builds them with, so the two
+cannot drift), `messages.slice(compactedCount)`, then `compactInPlacePrompt` as a final user
+message naming where the kept tail begins. The server keys it to the chat's own
+`X-Conversation-Id`, so the slot's KV is reused. The old standalone request (older messages only,
+no tools, no conversation id) was a different conversation to the slot cache: it evicted the chat
+it was summarizing, a multi-GB snapshot save on a hybrid model. It survives only as the fallback
+when the in-place call fails. A user message, not a system one: Qwen templates reject a system
+message anywhere but first.
 
 The summary call runs with `enable_thinking: false` and strips any `<think>` block anyway: with
 reasoning on, the model can spend the whole `max_tokens` budget thinking and return an empty

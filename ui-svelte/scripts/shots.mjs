@@ -53,6 +53,11 @@ function parseArgs(argv) {
     playgroundUrl: process.env.QUARTERMASTER_PLAYGROUND_URL || "",
     playgroundImage: "",
     playgroundPrompt: "",
+    playgroundSecs: undefined,
+    playgroundEdit: "",
+    playgroundEditPrompt: "",
+    playgroundEditModel: "",
+    playgroundEditSecs: undefined,
   };
   for (let i = 0; i < argv.length; i++) {
     const [flag, inline] = argv[i].split(/=(.*)/s);
@@ -77,6 +82,14 @@ function parseArgs(argv) {
       // image works — it is inlined as a data URL into the canned image thread.
       case "--playground-image": out.playground = true; out.playgroundImage = path.resolve(val()); break;
       case "--playground-prompt": out.playgroundPrompt = val(); break;
+      case "--playground-secs": out.playgroundSecs = Number(val()); break;
+      // Optional second turn: an edit of the first picture, fed it as its
+      // reference. Same rule as the first: a real render, with the prompt and
+      // the model that made it (an edit is often a different model).
+      case "--playground-edit": out.playgroundEdit = path.resolve(val()); break;
+      case "--playground-edit-prompt": out.playgroundEditPrompt = val(); break;
+      case "--playground-edit-model": out.playgroundEditModel = val(); break;
+      case "--playground-edit-secs": out.playgroundEditSecs = Number(val()); break;
       default:
         if (flag.startsWith("--")) throw new Error(`unknown flag: ${flag}`);
     }
@@ -188,9 +201,21 @@ const SHOTS = [
       await p.getByRole("button", { name: "Settings" }).first().click();
       await p.waitForTimeout(600);
       await p.getByRole("button", { name: "Backends", exact: true }).first().click();
-      // Managed cards resolve their catalog over the network; give it longer
-      // than a tab switch would need or the shot catches the empty state.
-      await p.waitForTimeout(1800);
+      // Managed cards resolve their catalog over the network (upstream release
+      // feeds), so a fixed sleep raced it and shot the pulsing skeleton. Wait
+      // for the skeleton to be replaced; say so rather than shoot it.
+      // "detached" is satisfied at once by a skeleton not mounted YET, so let
+      // it appear first (it may not, on a warm catalog cache).
+      const skeleton = p.locator("[role=dialog] .animate-pulse").first();
+      await skeleton.waitFor({ state: "attached", timeout: 3000 }).catch(() => {});
+      try {
+        await skeleton.waitFor({ state: "detached", timeout: 30000 });
+      } catch {
+        return "backend catalog still loading after 30s: the shot would show skeleton cards";
+      }
+      // The header names the install folder: an operator path on a public page.
+      await maskPaths(p, "[role=dialog]");
+      await p.waitForTimeout(300);
     },
     clip: { selector: "[role=dialog]", pad: 12 },
   },
@@ -213,7 +238,7 @@ const SHOTS = [
     // small to read -- and the rest of the frame is the models table, which is
     // already its own screenshot. The pad keeps a sliver of dimmed page so it
     // still reads as a dialog rather than a floating form.
-    clip: { selector: "dialog", pad: 12 },
+    clip: { selector: "dialog[open]", pad: 12 },
   },
   // The escape hatch: the whole llama-server command line, editable, with the
   // form's own fields folded into it. The point of the picture is that the UI
@@ -224,15 +249,15 @@ const SHOTS = [
     name: "model-config-args",
     at: "#/models",
     wait: "table",
-    clip: { selector: "dialog", pad: 12 },
+    clip: { selector: "dialog[open]", pad: 12 },
     prepare: async (p) => {
       const note = await openModelConfig(p);
       if (note) return note;
       // Two panes since the launch-args rework (ui-svelte/launch-args.md): the
       // user's own text, and the composed command it produces. The second is
       // the picture; the first is opened so the shot shows where edits go.
-      const custom = p.locator('dialog details:has(> summary:has-text("Custom launch arguments"))').first();
-      const final = p.locator('dialog details:has(> summary:has-text("Final launch arguments"))').first();
+      const custom = p.locator('dialog[open] details:has(> summary:has-text("Custom launch arguments"))').first();
+      const final = p.locator('dialog[open] details:has(> summary:has-text("Final launch arguments"))').first();
       if (!(await final.count())) return "no Final launch arguments pane — the modal opened on a non-llama backend";
       if (await custom.count()) await custom.evaluate((d) => (d.open = true));
       await final.evaluate((d) => (d.open = true));
@@ -338,6 +363,20 @@ const SHOTS = [
  * --playground-prompt, or name the file after the prompt and let the stem stand
  * in for it.
  */
+async function loadImageTurns(opts, models) {
+  const first = await loadImageTurn(opts.playgroundImage, opts.playgroundPrompt);
+  if (!first) return [];
+  first.secs = opts.playgroundSecs;
+  const edit = await loadImageTurn(opts.playgroundEdit, opts.playgroundEditPrompt);
+  if (!edit) return [first];
+  if (opts.playgroundEditModel && !models.some((m) => m.id === opts.playgroundEditModel)) {
+    throw new Error(`--playground-edit-model: ${opts.playgroundEditModel} is not in the catalog`);
+  }
+  edit.model = opts.playgroundEditModel || undefined;
+  edit.secs = opts.playgroundEditSecs;
+  return [first, edit];
+}
+
 async function loadImageTurn(file, prompt) {
   if (!file) return null;
   const MIME = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp" };
@@ -345,9 +384,13 @@ async function loadImageTurn(file, prompt) {
   const mime = MIME[ext];
   if (!mime) throw new Error(`--playground-image: unsupported type ${ext || file}`);
   const bytes = await readFile(file);
+  // A PNG says its own size in the IHDR chunk, so the Size control can show
+  // what the picture actually is instead of the store's 512 default.
+  const png = ext === ".png" && bytes.length > 24 ? { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) } : null;
   return {
     prompt: prompt || path.basename(file, ext).replace(/[-_]+/g, " "),
     dataUrl: `data:${mime};base64,${bytes.toString("base64")}`,
+    size: png,
   };
 }
 
@@ -404,9 +447,9 @@ async function openModelConfig(p) {
 // still says everything the picture is for. Text nodes AND form values, since a
 // path field is an <input>. Call again after revealing anything that renders
 // lazily.
-async function maskPaths(p) {
-  await p.evaluate(() => {
-    const root = document.querySelector("dialog");
+async function maskPaths(p, selector = "dialog[open]") {
+  await p.evaluate((selector) => {
+    const root = document.querySelector(selector);
     if (!root) return;
     const abs = /(?:[A-Za-z]:[\\/]|\/)(?:[^\s\\/]+[\\/])+([^\s\\/]*)/g;
     const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -415,7 +458,7 @@ async function maskPaths(p) {
       el.value = el.value.replace(abs, "$1");
       if (el.placeholder) el.placeholder = el.placeholder.replace(abs, "$1");
     }
-  });
+  }, selector);
 }
 
 async function main() {
@@ -509,7 +552,7 @@ async function main() {
         model: demo?.model ?? pickModel(models),
         imageModel: pickImageModel(models),
         speechModel: models.find((m) => m.capabilities?.audio_speech),
-        imageTurn: await loadImageTurn(opts.playgroundImage, opts.playgroundPrompt),
+        imageTurns: await loadImageTurns(opts, models),
       });
       console.log(`  playground: ${opts.playgroundUrl} as "${playground.user}" (canned threads, writes refused)`);
     }

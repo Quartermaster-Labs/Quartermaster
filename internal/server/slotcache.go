@@ -447,6 +447,7 @@ func (sc *slotCache) onSwitch(ctx context.Context, model, base, key, preamble st
 	// conversation on a warm model still reuses the shared prefix — the same Tier-1
 	// seed the cold path does, not just cold loads.
 	if sc.fileExists(model, key) && sc.staleRestore(model, key, bodyBytes) {
+		sc.dropSnapshot(model, key)
 		sc.record(kvEvent{Model: model, Slot: idx, Op: "recurrent-skip-shorter", Key: short(key)})
 	} else if sc.fileExists(model, key) {
 		if err := sc.restore(ctx, base, model, idx, key); err != nil {
@@ -491,10 +492,17 @@ func (sc *slotCache) markPendingRestore(model, key, preamble string, bodyBytes i
 	if same {
 		return idx // already pinned here by an earlier request in this cold window
 	}
+	exists := sc.fileExists(model, key)
+	if exists && sc.staleRestore(model, key, bodyBytes) {
+		// Outside stateMu: a file delete is I/O.
+		sc.dropSnapshot(model, key)
+		sc.record(kvEvent{Model: model, Slot: idx, Op: "recurrent-skip-shorter", Key: short(key)})
+		exists = false
+	}
 	sc.stateMu.Lock()
 	defer sc.stateMu.Unlock()
 	slot := sk(model, idx)
-	if sc.fileExists(model, key) && !sc.staleRestore(model, key, bodyBytes) {
+	if exists {
 		sc.pending[slot] = key
 		sc.pendingSeed[slot] = false
 		delete(sc.pendingPreamble, slot)

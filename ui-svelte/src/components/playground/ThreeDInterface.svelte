@@ -15,12 +15,12 @@
   } from "../../stores/threeDHistory";
   import { generateMesh, fmtBytes } from "../../lib/threeDApi";
   import { playgroundStores } from "../../stores/playgroundActivity";
-  import Select from "./Select.svelte";
-  import Composer from "./Composer.svelte";
+  import Toggle from "../Toggle.svelte";
+  import ModelSelector from "./ModelSelector.svelte";
+  import PaneHeader from "./PaneHeader.svelte";
   import GlbViewer from "./GlbViewer.svelte";
   import { dropZone } from "../../lib/dropZone";
-  import { scrollFade } from "../../lib/scrollFade";
-  import { Box, X, Download, Plus, RefreshCw, Sparkles, Maximize2, ImagePlus, Send } from "lucide-svelte";
+  import { Box, X, Download, RefreshCw, Sparkles, ImagePlus, Loader2, HelpCircle, Dices, Square, Expand } from "lucide-svelte";
   import {
     THREED_DEFAULTS,
     TEXTURE_SIZE_OPTIONS,
@@ -31,13 +31,13 @@
 
   // The 3D tab: TRELLIS.2 image-to-mesh, in the thread shape the Images and
   // Video tabs use. A close sibling of VideoInterface.svelte on purpose (same
-  // store helpers, same bubbles, same composer chrome).
+  // store helpers, same params panel + canvas + thread strip).
   //
   // What is genuinely different, and why:
   //
-  //   - THERE IS NO PROMPT. The whole request is one image, so the composer
-  //     drops its textarea (Composer's `hideTextarea`) and grows an explicit
-  //     Generate button: with no text field there is no Enter to send on.
+  //   - THERE IS NO PROMPT. The whole request is one image, so the image
+  //     picker takes the prompt box's slot and Generate is the only way to
+  //     send: with no text field there is no Enter to send on.
   //     A thread's title is therefore never derived, only defaulted or renamed.
   //   - THE REQUEST IS SYNCHRONOUS and has no cancel route (see lib/threeDApi).
   //     Stop abandons the RESPONSE; the backend keeps rendering to completion
@@ -118,9 +118,19 @@
   }
 
   let abortController = $state<AbortController | null>(null);
-  let showSettings = $state(false);
   let elapsed = $state(0);
+  // The thumbnail strip under the canvas (the thread, oldest first).
   let threadEl = $state<HTMLDivElement | undefined>();
+  // Which turn the canvas shows. null = follow the newest; clicking the strip
+  // pins an older one until the next send, regenerate or thread switch.
+  let selTurn = $state<number | null>(null);
+  let sel = $derived(selTurn !== null && selTurn < turns.length ? selTurn : turns.length - 1);
+  let cur = $derived(turns[sel] as Turn | undefined);
+  $effect(() => {
+    void turns.length;
+    void $activeThreeDChatId;
+    selTurn = null;
+  });
   let fullscreenMesh = $state<string | null>(null);
   let dropActive = $state(false);
 
@@ -150,11 +160,10 @@
     return () => clearInterval(id);
   });
 
+  // Keep the newest mesh in view on the strip as the thread grows.
   $effect(() => {
     void turns.length;
-    void isGenerating;
-    void elapsed;
-    if (threadEl) threadEl.scrollTop = threadEl.scrollHeight;
+    if (threadEl) threadEl.scrollLeft = threadEl.scrollWidth;
   });
 
   let estLabel = $derived(estimateLabel(Number($stepsStore) || THREED_DEFAULTS.steps, Number($pipelineStore), $shapeOnlyStore));
@@ -304,6 +313,12 @@
   });
 </script>
 
+{#snippet hint(text: string)}
+  <span class="inline-flex shrink-0 cursor-help text-txtsecondary/70 hover:text-txtsecondary normal-case tracking-normal" use:tip={text}>
+    <HelpCircle class="w-3.5 h-3.5" />
+  </span>
+{/snippet}
+
 <div
   class="relative flex flex-col h-full"
   use:dropZone={{ onFiles: handleDrop, onActive: (v) => (dropActive = v), enabled: hasModels && !isGenerating }}
@@ -314,223 +329,254 @@
       <p>No models configured. Add models to your configuration to generate meshes.</p>
     </div>
   {:else}
-    <div class="flex-1 flex flex-col min-w-0 min-h-0 w-full">
-      <!-- Thread -->
-      <div bind:this={threadEl} class="flex-1 min-h-0 overflow-y-auto pretty-scroll scroll-fade-b mb-2" use:scrollFade>
-        <div class="w-full max-w-3xl mx-auto px-2 pt-4 flex flex-col gap-4 pb-2 {turns.length === 0 && !isGenerating ? 'h-full' : ''}">
-          {#if turns.length === 0 && !isGenerating}
-            <div class="h-full flex flex-col items-center justify-center gap-3 text-txtsecondary text-center px-6">
-              <Box class="w-10 h-10 opacity-40" strokeWidth={1.5} />
-              <p>Drop or pick an image to turn it into a 3D mesh.</p>
-              <p class="text-xs max-w-sm">
-                Works best on a single, well-lit subject filling the frame against a plain background.
-                A cluttered photo comes back as a flat shell rather than a solid.
-              </p>
-            </div>
-          {/if}
+    <PaneHeader
+      title={activeSession?.title || "New mesh"}
+      meta={`${turns.length} mesh${turns.length === 1 ? "" : "es"}`}
+      updatedAt={activeSession?.updatedAt}
+      newLabel="New thread"
+      onNew={newThread}
+    />
 
-          {#each turns as t, ti (ti)}
-            <!-- Source image (right). The 3D tab's "message" IS the picture, so
-                 it fills the bubble the other tabs give to prompt text. -->
-            <div class="flex justify-end">
-              <div class="relative max-w-[85%] rounded-2xl rounded-br-none bg-[#141414] p-1.5">
-                <img src={t.image} alt="source" class="max-h-40 w-auto rounded-xl object-contain" />
-              </div>
-            </div>
-            <!-- Mesh reply (left). -->
-            <div class="flex flex-col items-start">
-              {#if t.model}
-                <span class="flex items-center gap-1 mb-1 px-3 text-[0.6875rem] font-medium text-txtsecondary">
-                  <Sparkles class="w-3 h-3 shrink-0" />{t.model}
-                </span>
+    <div class="flex-1 min-h-0 flex">
+      <!-- Params. There is no prompt: the source image IS the request, so it
+           takes the slot the other tabs give their prompt box. -->
+      <aside class="w-[25rem] shrink-0 flex flex-col min-h-0 bg-rail border-r border-card-border-inner">
+        <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll">
+          <div class="px-4 py-3.5 border-b border-card-border-inner flex flex-col gap-2.5">
+            <div class="rounded-xl border border-composer-border bg-surface hover:ring-1 hover:ring-composer-ring transition-colors flex flex-col">
+              {#if pending}
+                <div class="group relative m-2 mb-0 h-[8.5rem] rounded-lg overflow-hidden bg-secondary flex items-center justify-center">
+                  <img src={pending} alt="Source" class="max-h-full max-w-full object-contain" />
+                  <button
+                    class="absolute top-1.5 right-1.5 w-6 h-6 flex items-center justify-center rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                    onclick={() => { pending = null; pendingName = ""; }}
+                    aria-label="Remove image"
+                  ><X class="w-3.5 h-3.5" /></button>
+                </div>
+              {:else}
+                <button
+                  class="m-2 mb-0 h-[8.5rem] rounded-lg border border-dashed border-card-border flex flex-col items-center justify-center gap-2 text-[0.8125rem] text-txtsecondary hover:text-txtmain hover:border-txtsecondary transition-colors"
+                  onclick={() => fileInput?.click()}
+                  disabled={isGenerating}
+                >
+                  <ImagePlus class="w-5 h-5" />
+                  Pick an image, or drop or paste one
+                </button>
               {/if}
-              <div class="relative group rounded-2xl rounded-bl-sm px-3 py-2 text-[0.8125rem] w-fit max-w-full sm:max-w-[60%]">
-                {#if t.error}
-                  <div class="text-error">{t.error}</div>
-                {:else if t.meshes.length}
-                  <div class="w-64 sm:w-72">
-                    <GlbViewer src={t.meshes[0]} />
-                  </div>
-                  <div class="flex flex-wrap items-center gap-1 mt-2 pt-1 border-t border-card-border">
-                    <button
-                      class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary disabled:opacity-40"
-                      onclick={() => regenerate(ti)}
-                      disabled={isGenerating}
-                      use:tip={"Regenerate"}
-                    >
-                      <RefreshCw class="w-4 h-4" />
-                    </button>
-                    <button
-                      class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary"
-                      onclick={() => downloadMesh(t.meshes[0], ti)}
-                      use:tip={"Download GLB"}
-                    >
-                      <Download class="w-4 h-4" />
-                    </button>
-                    <button
-                      class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary"
-                      onclick={() => (fullscreenMesh = t.meshes[0])}
-                      use:tip={"View large"}
-                    >
-                      <Maximize2 class="w-4 h-4" />
-                    </button>
-                    {#if t.bytes}
-                      <span class="flex items-center self-center text-[0.6875rem] text-txtsecondary tabular-nums">{fmtBytes(t.bytes)}</span>
-                    {/if}
-                    {#if t.secs != null}
-                      <span class="ml-auto flex items-center self-center text-[0.6875rem] text-txtsecondary tabular-nums">{fmtDur(t.secs)}</span>
-                    {/if}
-                  </div>
-                {:else if genId !== $activeThreeDChatId || ti !== turns.length - 1}
-                  <div class="text-error">No mesh returned.</div>
-                {:else}
-                  <!-- In-flight. No progress field exists on this route, so the
-                       readout is the elapsed counter against a rough estimate
-                       and nothing finer. A percentage here would be invented. -->
-                  <div class="flex flex-col gap-1.5 min-w-52">
-                    <div class="flex items-center gap-2 text-txtsecondary">
-                      <span class="inline-block w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></span>
-                      <span class="reason-shimmer-white font-medium">Building mesh…</span>
-                    </div>
-                    <div class="flex items-center justify-between text-[0.6875rem] text-txtsecondary tabular-nums mt-1 pt-1 border-t border-card-border">
-                      <span>usually {estLabel}</span>
-                      <span>{fmtDur(elapsed)}</span>
-                    </div>
-                  </div>
+              <div class="flex items-center gap-1 px-2 py-2 min-w-0">
+                {#if pending}
+                  <span class="min-w-0 truncate px-1 text-xs text-txtsecondary" use:tip={pendingName}>{pendingName}</span>
                 {/if}
+                <div class="ml-auto min-w-0 max-w-[60%]">
+                  <ModelSelector bind:value={$selectedModelStore} placeholder="Select a 3D model…" category="3d" ghost />
+                </div>
               </div>
             </div>
-          {/each}
-        </div>
-      </div>
-
-      <!-- Composer -->
-      {#snippet threeDSettingsPanel()}
-        <div class="flex flex-col gap-2">
-          <div class="grid grid-cols-2 gap-3">
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">Steps</span>
-              <input type="number" min="1" max="100" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$stepsStore} />
-            </div>
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">Seed</span>
-              <input type="number" min="-1" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$seedStore} />
-            </div>
+            {#if pickError}
+              <div class="p-2 bg-error/10 text-error rounded text-sm">{pickError}</div>
+            {/if}
+            <p class="text-xs text-txtsecondary">
+              Works best on a single, well-lit subject filling the frame against a plain background. A cluttered photo comes back as a flat shell rather than a solid.
+            </p>
+            <input type="file" accept="image/*" class="hidden" bind:this={fileInput} onchange={pickImage} />
           </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
-                Profile
-                <span class="cursor-help opacity-60" use:tip={"The coordinate resolution the model works at. 1024 is the higher-quality profile and is not safe on every GPU: it can exhaust VRAM or fail the texture bake."}>(?)</span>
+
+          <div class="px-4 py-3.5 border-b border-card-border-inner flex flex-col gap-3">
+            <div class="flex flex-col gap-2">
+              <span class="flex items-center gap-1.5 text-micro font-medium uppercase tracking-wide text-txtsecondary">
+                Profile {@render hint("The coordinate resolution the model works at. 1024 is the higher-quality profile and is not safe on every GPU: it can exhaust VRAM or fail the texture bake.")}
               </span>
-              <Select bind:value={$pipelineStore} disabled={isGenerating} compact options={PIPELINE_OPTIONS} />
+              <div class="seg w-full" role="group" aria-label="Profile">
+                {#each PIPELINE_OPTIONS as o (o.value)}
+                  <button
+                    class="flex-1 font-mono !normal-case !tracking-normal {o.warn ? '!text-orange-400' : ''}"
+                    aria-pressed={$pipelineStore === o.value}
+                    disabled={isGenerating}
+                    onclick={() => ($pipelineStore = o.value)}
+                    use:tip={o.title ?? ""}
+                  >{o.label}</button>
+                {/each}
+              </div>
             </div>
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">Texture</span>
-              <Select bind:value={$textureSizeStore} disabled={isGenerating || $shapeOnlyStore} compact options={TEXTURE_SIZE_OPTIONS} />
+            <div class="flex flex-col gap-2">
+              <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Texture</span>
+              <div class="seg w-full" role="group" aria-label="Texture size">
+                {#each TEXTURE_SIZE_OPTIONS as o (o.value)}
+                  <button
+                    class="flex-1 font-mono !normal-case !tracking-normal disabled:opacity-40 disabled:pointer-events-none"
+                    aria-pressed={$textureSizeStore === o.value}
+                    disabled={isGenerating || $shapeOnlyStore}
+                    onclick={() => ($textureSizeStore = o.value)}
+                  >{o.label}</button>
+                {/each}
+              </div>
+            </div>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <span class="flex items-center gap-1.5 text-micro font-medium uppercase tracking-wide text-txtsecondary">
+                Shape only {@render hint("Geometry with no texture bake. Much faster, and the resulting GLB is a fraction of the size.")}
+              </span>
+              <span class="ml-auto"><Toggle size="sm" bind:checked={$shapeOnlyStore} /></span>
+            </label>
+          </div>
+
+          <div class="px-4 py-3.5 border-b border-card-border-inner flex flex-col gap-2.5">
+            <div class="grid grid-cols-2 gap-x-3 gap-y-2.5">
+              <label class="flex flex-col gap-1.5">
+                <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Steps</span>
+                <input type="number" min="1" max="100" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface font-mono text-xs tabular-nums focus:outline-none focus:border-primary" bind:value={$stepsStore} />
+              </label>
+              <div class="flex flex-col gap-1.5">
+                <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Seed</span>
+                <div class="flex items-stretch gap-1.5">
+                  <input type="number" min="-1" aria-label="Seed" class="w-full min-w-0 px-2.5 py-1.5 rounded-md border border-card-border bg-surface font-mono text-xs tabular-nums focus:outline-none focus:border-primary" bind:value={$seedStore} />
+                  <button class="btn btn--sm btn--icon shrink-0" aria-pressed={$seedStore === -1} onclick={() => ($seedStore = -1)} use:tip={"Random seed each run (-1)"} aria-label="Random seed">
+                    <Dices class="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+            <p class="font-mono text-micro text-txtsecondary tabular-nums">
+              Backend default · {THREED_DEFAULTS.steps} steps · {THREED_DEFAULTS.pipeline} profile · {THREED_DEFAULTS.textureSize} texture
+            </p>
+          </div>
+        </div>
+
+        <div class="shrink-0 px-4 py-3 flex flex-col gap-2 border-t border-card-border-inner">
+          <div class="flex items-center gap-2">
+            <button
+              class="btn btn--primary flex-1 inline-flex items-center justify-center gap-2 h-9"
+              onclick={send}
+              disabled={!canSend}
+              use:tip={!$selectedModelStore ? "Select a 3D model first" : !pending ? "Pick an image first" : ""}
+            >
+              <Sparkles class="w-4 h-4" /> Generate
+            </button>
+            {#if isGenerating}
+              <button
+                class="btn btn--danger-outline inline-flex items-center gap-1.5 h-9"
+                onclick={cancelGeneration}
+                use:tip={"Stop waiting for this mesh. The backend has no cancel route: it keeps rendering and stays busy until it finishes."}
+              >
+                <Square class="w-3.5 h-3.5" /> Stop
+              </button>
+            {/if}
+          </div>
+          <div class="font-mono text-micro text-txtsecondary tabular-nums">
+            Takes {estLabel}{$shapeOnlyStore ? " · shape only" : ""}
+          </div>
+        </div>
+      </aside>
+
+      <!-- Canvas: one mesh at a time, big. The strip underneath is the thread. -->
+      <section class="flex-1 min-w-0 flex flex-col min-h-0">
+        {#if turns.length === 0 && !isGenerating}
+          <div class="flex-1 flex flex-col items-center justify-center gap-3 text-txtsecondary">
+            <Box class="w-10 h-10 opacity-40" strokeWidth={1.5} />
+            <p>Drop or pick an image to turn it into a 3D mesh.</p>
+          </div>
+        {:else if cur}
+          {@const t = cur}
+          {@const ti = sel}
+          {@const inFlight = !t.meshes.length && !t.error && genId === $activeThreeDChatId && ti === turns.length - 1}
+          <div class="shrink-0 flex items-center gap-2 px-6 h-10 min-w-0">
+            <span class="font-mono text-micro text-txtsecondary tabular-nums">{ti + 1}/{turns.length}</span>
+            {#if t.model}
+              <span class="flex items-center gap-1 min-w-0 text-micro font-medium text-txtsecondary">
+                <Sparkles class="w-3 h-3 shrink-0" /><span class="truncate">{t.model}</span>
+              </span>
+            {/if}
+            {#if t.bytes}
+              <span class="font-mono text-micro text-txtsecondary tabular-nums">· {fmtBytes(t.bytes)}</span>
+            {/if}
+            {#if t.secs != null}
+              <span class="font-mono text-micro text-txtsecondary tabular-nums">· {fmtDur(t.secs)}</span>
+            {/if}
+            {#if t.meshes.length}
+              <div class="ml-auto flex items-center gap-0.5 shrink-0">
+                <button class="icon-btn" onclick={() => regenerate(ti)} disabled={isGenerating} use:tip={"Regenerate"} aria-label="Regenerate">
+                  <RefreshCw class="w-4 h-4" />
+                </button>
+                <button class="icon-btn" onclick={() => downloadMesh(t.meshes[0], ti)} use:tip={"Download GLB"} aria-label="Download GLB">
+                  <Download class="w-4 h-4" />
+                </button>
+                <button class="icon-btn" onclick={() => (fullscreenMesh = t.meshes[0])} use:tip={"Fullscreen"} aria-label="Fullscreen">
+                  <Expand class="w-4 h-4" />
+                </button>
+              </div>
+            {/if}
+          </div>
+
+          <div class="flex-1 min-h-0 flex items-center justify-center px-6 pb-3">
+            {#if t.error}
+              <div class="max-w-lg p-3 rounded-lg bg-error/10 text-error text-sm">{t.error}</div>
+            {:else if t.meshes.length}
+              <!-- GlbViewer is sized for a bubble (square, capped); here it
+                   fills the canvas instead. Keyed so switching turns gives each
+                   mesh a fresh camera rather than inheriting the last one's. -->
+              <div class="w-full h-full [&>div]:h-full [&>div]:max-h-none [&>div]:aspect-auto">
+                {#key t.meshes[0]}
+                  <GlbViewer src={t.meshes[0]} />
+                {/key}
+              </div>
+            {:else if inFlight}
+              <!-- No progress field exists on this route, so the readout is the
+                   elapsed counter against a rough estimate and nothing finer. A
+                   percentage here would be invented. -->
+              <div class="w-72 flex flex-col gap-2 rounded-xl border border-card-border bg-surface px-4 py-3.5">
+                <div class="flex items-center gap-2 text-sm text-txtsecondary">
+                  <span class="inline-block w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></span>
+                  <span class="reason-shimmer-white font-medium">Building mesh…</span>
+                </div>
+                <div class="flex items-center justify-between font-mono text-micro text-txtsecondary tabular-nums pt-1.5 border-t border-card-border-inner">
+                  <span>usually {estLabel}</span>
+                  <span>{fmtDur(elapsed)}</span>
+                </div>
+              </div>
+            {:else}
+              <div class="text-sm text-error">No mesh returned.</div>
+            {/if}
+          </div>
+
+          <!-- The image this mesh was built from: the 3D tab's "prompt". -->
+          <div class="shrink-0 px-6 pb-3">
+            <div class="max-w-3xl mx-auto flex items-center gap-3 rounded-xl border border-card-border bg-surface px-3.5 py-2.5">
+              <img src={t.image} alt="source" class="h-12 w-auto rounded-md border border-card-border object-contain" />
+              <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Source image</span>
             </div>
           </div>
-          <label class="flex items-center gap-2 pt-1">
-            <input type="checkbox" class="accent-primary" bind:checked={$shapeOnlyStore} disabled={isGenerating} />
-            <span class="text-xs">Shape only</span>
-            <span class="cursor-help opacity-60 text-xs" use:tip={"Geometry with no texture bake. Much faster, and the resulting GLB is a fraction of the size."}>(?)</span>
-          </label>
-          <p class="text-xs text-txtsecondary">
-            Backend default · {THREED_DEFAULTS.steps} steps · {THREED_DEFAULTS.pipeline} profile · {THREED_DEFAULTS.textureSize} texture
-          </p>
-        </div>
-      {/snippet}
-
-      {#snippet threeDTopExtra()}
-        <!-- The pending image lives at the TOP of the composer, where the other
-             tabs put their prompt: it is the message, not an attachment to one. -->
-        <div class="flex items-center gap-3 pb-2 {pending ? 'border-b border-card-border' : ''}">
-          {#if pending}
-            <div class="group relative w-16 h-16 shrink-0 rounded-lg overflow-hidden border border-card-border bg-secondary">
-              <img src={pending} alt="Source" class="w-full h-full object-cover" />
-              <button
-                class="absolute top-0 right-0 w-5 h-5 flex items-center justify-center bg-black/60 text-white rounded-bl opacity-0 group-hover:opacity-100 transition-opacity"
-                onclick={() => { pending = null; pendingName = ""; }}
-                aria-label="Remove image"
-              ><X class="w-3 h-3" /></button>
-            </div>
-            <div class="min-w-0 flex flex-col gap-0.5">
-              <span class="text-[0.8125rem] truncate">{pendingName}</span>
-              <span class="text-xs text-txtsecondary">Takes {estLabel}{$shapeOnlyStore ? " · shape only" : ""}</span>
-            </div>
-          {:else}
-            <button
-              class="flex items-center gap-2 text-[0.8125rem] text-txtsecondary hover:text-txtmain transition-colors"
-              onclick={() => fileInput?.click()}
-              disabled={isGenerating}
-            >
-              <ImagePlus class="w-4 h-4" />
-              Pick an image, or drop or paste one
-            </button>
-          {/if}
-        </div>
-      {/snippet}
-
-      {#snippet threeDLeftButtons()}
-        <button
-          class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {pending ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
-          onclick={() => fileInput?.click()}
-          disabled={isGenerating}
-          use:tip={"Choose the image to turn into a mesh"}
-        >
-          <ImagePlus class="w-[1.125rem] h-[1.125rem]" />
-        </button>
-      {/snippet}
-
-      {#snippet threeDExtraRightButtons()}
-        <button
-          class="composer-icon-btn"
-          onclick={newThread}
-          disabled={isGenerating || turns.length === 0}
-          use:tip={"New thread"}
-        >
-          <Plus class="w-[1.125rem] h-[1.125rem]" />
-        </button>
-        <!-- The tab has no textarea, so there is no Enter to send on: this
-             button is the ONLY way to start a generation. -->
-        <button
-          class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {canSend ? 'text-primary hover:bg-secondary' : 'text-txtsecondary'}"
-          onclick={send}
-          disabled={!canSend}
-          use:tip={!$selectedModelStore ? "Select a 3D model first" : !pending ? "Pick an image first" : "Generate the mesh"}
-          aria-label="Generate mesh"
-        >
-          <Send class="w-[1.125rem] h-[1.125rem]" />
-        </button>
-      {/snippet}
-
-      <div class="shrink-0 relative w-full max-w-2xl mx-auto">
-        {#if pickError}
-          <p class="text-xs text-error mb-2 px-2">{pickError}</p>
         {/if}
-        <input type="file" accept="image/*" class="hidden" bind:this={fileInput} onchange={pickImage} />
-        <Composer
-          hideTextarea
-          bind:modelValue={$selectedModelStore}
-          modelPlaceholder="Select a 3D model..."
-          category="3d"
-          busy={isGenerating}
-          onStop={cancelGeneration}
-          stopTitle="Stop waiting for this mesh. The backend has no cancel route: it keeps rendering and stays busy until it finishes."
-          bind:showSettings
-          settingsTitle="Settings"
-          topExtra={threeDTopExtra}
-          leftButtons={threeDLeftButtons}
-          extraRightButtons={threeDExtraRightButtons}
-          settingsPanel={threeDSettingsPanel}
-        />
-      </div>
+
+        {#if turns.length > 0}
+          <div class="shrink-0 flex items-center gap-3 px-6 py-2.5 border-t border-card-border-inner min-w-0">
+            <span class="shrink-0 text-micro font-medium uppercase tracking-wide text-txtsecondary">This thread</span>
+            <div bind:this={threadEl} class="flex-1 min-w-0 flex gap-2 overflow-x-auto pretty-scroll py-0.5">
+              {#each turns as tt, i (i)}
+                <!-- Thumbnailed by the SOURCE image: a mesh has no cheap still,
+                     and the source is what tells the turns apart anyway. -->
+                <button
+                  class="relative shrink-0 w-16 h-12 rounded-md overflow-hidden border bg-secondary flex items-center justify-center transition-shadow {i === sel ? 'border-primary ring-1 ring-primary' : 'border-card-border hover:border-txtsecondary'}"
+                  onclick={() => (selTurn = i)}
+                  aria-label="Mesh {i + 1}"
+                >
+                  <img src={tt.image} alt="" class="w-full h-full object-cover {tt.meshes.length ? '' : 'opacity-50'}" />
+                  {#if tt.error}
+                    <span class="absolute inset-0 flex items-center justify-center"><X class="w-4 h-4 text-error" /></span>
+                  {:else if !tt.meshes.length && genId === $activeThreeDChatId && i === turns.length - 1}
+                    <span class="absolute inset-0 flex items-center justify-center"><Loader2 class="w-4 h-4 text-primary animate-spin" /></span>
+                  {/if}
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      </section>
     </div>
   {/if}
 
   {#if dropActive}
-    <div class="absolute inset-0 z-20 flex items-center justify-center bg-surface/80 border-2 border-dashed border-primary rounded-lg pointer-events-none">
-      <span class="text-sm font-medium text-primary">Drop an image to turn it into a mesh</span>
+    <div class="pointer-events-none absolute inset-2 z-30 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-primary bg-surface/85 backdrop-blur-[2px]">
+      <ImagePlus class="w-7 h-7 text-primary" />
+      <span class="text-sm font-medium text-txtmain">Drop an image to turn it into a mesh</span>
     </div>
   {/if}
 </div>

@@ -57,6 +57,20 @@ func TestModelDelete_planCoversShardsVariantsAndKept(t *testing.T) {
 	if len(plan.Kept) != 2 {
 		t.Fatalf("kept = %+v, want projector + other quant, no dotfile", plan.Kept)
 	}
+	if len(plan.Companions) != 1 || !config.PathEqual(plan.Companions[0].Path, proj) {
+		t.Fatalf("companions = %+v, want the projector only big-vision named", plan.Companions)
+	}
+
+	// Once the surviving quant launches with the projector too, it is shared
+	// and must not be offered.
+	cfg.Models["big-q8"] = config.ModelConfig{Cmd: "llama-server -m " + filepath.ToSlash(other) + " --mmproj " + filepath.ToSlash(proj)}
+	plan, err = planModelDelete(cfg, "big", []string{root}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Companions) != 0 {
+		t.Fatalf("companions = %+v, want none: big-q8 still uses the projector", plan.Companions)
+	}
 }
 
 func TestModelDelete_refusesOutsideRoots(t *testing.T) {

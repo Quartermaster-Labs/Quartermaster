@@ -999,6 +999,7 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/chats/turn/state", apiChain.ThenFunc(s.handleTurnState))
 	mux.Handle("DELETE /api/chats/turn", apiChain.ThenFunc(s.handleTurnStop))
 	mux.Handle("POST /api/chats/turn/approve", apiChain.ThenFunc(s.handleTurnApprove))
+	mux.Handle("POST /api/chats/compact", apiChain.ThenFunc(s.handleTurnCompact))
 
 	// Conversation titles off the vendored CPU title model, so naming a chat never
 	// swaps or contends for a GPU model. Falls back to the chat model client-side

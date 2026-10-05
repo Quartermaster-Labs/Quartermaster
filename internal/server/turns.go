@@ -702,9 +702,11 @@ func (at *activeTurn) isDone() bool {
 // Ports ChatInterface.svelte's regenerateFromIndex turn loop. The client still
 // assembles messages + tool defs and POSTs them; the server drives the rounds,
 // dispatches web/wiki tools, numbers citations, and runs the reasoning-budget
-// finalize. Compaction + title-gen deliberately STAY client-side (they run
-// AFTER the answer, so the viewer does them on completion/reconnect — a closed
-// tab just catches up next turn; nothing mid-answer is lost).
+// finalize. Title-gen and the DECISION to compact stay client-side (they run
+// AFTER the answer, so the viewer does them on completion/reconnect: a closed
+// tab just catches up next turn, nothing mid-answer is lost). The compaction
+// request itself goes through handleTurnCompact (turnscompact.go) so it rides
+// this conversation's KV instead of evicting it.
 
 // toolCall is one assembled tool call from a streamed round.
 type toolCall struct {
@@ -776,9 +778,12 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 	// order; the record needs it to know how much of the client's one stored
 	// answer was already sent inside the tail (turnsrecord.go, trimSpoken).
 	var spoken []string
+	// final is the answering round's message exactly as the model produced it,
+	// reasoning included; nil if the turn never got there.
+	var final json.RawMessage
 	// Record on EVERY exit, error and cancel included: a turn that died after two
 	// searches still gets those two results replayed exactly next time.
-	defer func() { tm.recordTurn(at, start.ChatID, apiTail, spoken) }()
+	defer func() { tm.recordTurn(at, start.ChatID, apiTail, spoken, final) }()
 
 	useTools := len(start.Tools) > 0
 	// Put previous turns' tool calls and results back into the history the model
@@ -899,6 +904,8 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 				at.mu.Unlock()
 			}
 
+			final = assistantRound(roundContent, roundReasoning, nil)
+
 			// Last line of defence: links to videos that came from neither the
 			// conversation nor any tool result this turn are invented. Cannot be
 			// unsaid — already streamed — so it gets labelled.
@@ -914,9 +921,7 @@ func (tm *turnManager) runLoop(ctx context.Context, at *activeTurn, start turnSt
 		}
 
 		// Record this round's calls so the model sees them next round.
-		apiTail = append(apiTail, mustJSON(map[string]any{
-			"role": "assistant", "content": roundContent, "tool_calls": rawToolCalls(calls),
-		}))
+		apiTail = append(apiTail, assistantRound(roundContent, roundReasoning, calls))
 		spoken = append(spoken, roundContent)
 
 		contentLen, reasoningLen, during := at.lens()
@@ -1521,11 +1526,33 @@ const (
 // with an empty state the moment real data arrives, since a first token ends
 // every wait by definition.
 func (tm *turnManager) streamSSE(ctx context.Context, body map[string]any, chatID, authKey string, onContent func(string), onReasoning func(string), onTool func(int, string, string, string), onProgress func(), onStatus func(string, int)) (string, error) {
+	req, err := tm.selfCompletionRequest(ctx, body, chatID, authKey)
+	if err != nil {
+		return "", err
+	}
+	resp, err := tm.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		snippet, _ := readLimited(resp.Body, 1<<12)
+		return "", fmt.Errorf("upstream %s: %s", resp.Status, snippet)
+	}
+	return tm.readSSE(resp, onContent, onReasoning, onTool, onProgress, onStatus)
+}
+
+// selfCompletionRequest builds the loopback /v1/chat/completions request every
+// playground call to the chat model goes out on. Shared by the turn rounds and
+// compaction (turnscompact.go) because the headers are cache state: the
+// conversation id is the slot cache's anchor, and a call without it is a
+// different conversation that evicts this one from its slot.
+func (tm *turnManager) selfCompletionRequest(ctx context.Context, body map[string]any, chatID, authKey string) (*http.Request, error) {
 	buf, _ := json.Marshal(body)
 	url := strings.TrimRight(tm.pg.SelfBase, "/") + "/v1/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(buf))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Conversation-Id", chatID) // key the slot KV cache by conversation
@@ -1547,16 +1574,12 @@ func (tm *turnManager) streamSSE(ctx context.Context, body map[string]any, chatI
 	if authKey != "" {
 		req.Header.Set("Authorization", "Bearer "+authKey) // authenticate the loopback (API keys gate /v1)
 	}
-	resp, err := tm.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		snippet, _ := readLimited(resp.Body, 1<<12)
-		return "", fmt.Errorf("upstream %s: %s", resp.Status, snippet)
-	}
+	return req, nil
+}
 
+// readSSE consumes a streaming completion, dispatching deltas to the callbacks.
+// Returns the finish reason.
+func (tm *turnManager) readSSE(resp *http.Response, onContent func(string), onReasoning func(string), onTool func(int, string, string, string), onProgress func(), onStatus func(string, int)) (string, error) {
 	finish := ""
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
@@ -1673,6 +1696,25 @@ func buildBody(start turnStart, msgs []json.RawMessage, maxTokens int, think boo
 }
 
 func mustJSON(v any) json.RawMessage { b, _ := json.Marshal(v); return b }
+
+// assistantRound is one round's assistant message as it goes back upstream.
+// reasoning_content is load-bearing, not decoration: templates that keep prior
+// thinking (Qwen3.8 does by default, and every Qwen keeps it for the rounds
+// after the last user message, i.e. the tool rounds of the turn in progress)
+// render an absent one as an EMPTY <think></think>, while the KV holds the real
+// thought. The prompt then diverges right there and llama-server re-prefills
+// from its last checkpoint before that round, once per round and again on the
+// next turn. Measured on Qwen3.8-27B: 606/606 reused with it, 546/606 without.
+func assistantRound(content, reasoning string, calls []toolCall) json.RawMessage {
+	m := map[string]any{"role": "assistant", "content": content}
+	if reasoning != "" {
+		m["reasoning_content"] = reasoning
+	}
+	if len(calls) > 0 {
+		m["tool_calls"] = rawToolCalls(calls)
+	}
+	return mustJSON(m)
+}
 
 func rawToolCalls(calls []toolCall) []map[string]any {
 	out := make([]map[string]any, len(calls))

@@ -36,7 +36,7 @@ func recSearches() []turnSearch {
 func TestTurnRecordReplaysVerbatim(t *testing.T) {
 	tm := &turnManager{replays: newReplayStore()}
 	tail, spoken := recTail()
-	tm.recordTurn(&activeTurn{searches: recSearches()}, "chat-1", tail, spoken)
+	tm.recordTurn(&activeTurn{searches: recSearches()}, "chat-1", tail, spoken, nil)
 
 	in := []json.RawMessage{
 		json.RawMessage(`{"role":"user","content":"what are these?"}`),
@@ -78,7 +78,7 @@ func TestTurnRecordReplaysVerbatim(t *testing.T) {
 func TestTurnRecordFallsBackToRebuild(t *testing.T) {
 	tm := &turnManager{replays: newReplayStore()}
 	tail, spoken := recTail()
-	tm.recordTurn(&activeTurn{searches: recSearches()}, "chat-1", tail, spoken)
+	tm.recordTurn(&activeTurn{searches: recSearches()}, "chat-1", tail, spoken, nil)
 
 	in := []json.RawMessage{
 		mustJSON(map[string]any{"role": "assistant", "content": "They are the docs. [1]", "searches": recSearches()}),
@@ -150,9 +150,48 @@ func TestReplayStoreBounds(t *testing.T) {
 func TestTurnRecordSkipsEmpty(t *testing.T) {
 	tm := &turnManager{replays: newReplayStore()}
 	tail, spoken := recTail()
-	tm.recordTurn(&activeTurn{}, "chat-1", tail, spoken) // no searches → no key
-	tm.recordTurn(&activeTurn{searches: recSearches()}, "chat-1", nil, nil)
+	tm.recordTurn(&activeTurn{}, "chat-1", tail, spoken, nil) // no searches → no key
+	tm.recordTurn(&activeTurn{searches: recSearches()}, "chat-1", nil, nil, nil)
 	if n := len(tm.replays.items); n != 0 {
 		t.Errorf("store holds %d records, want 0", n)
+	}
+}
+
+// With the answering round recorded, the replay sends it verbatim (its own
+// reasoning_content included) instead of the client's merged view, whose
+// thinking is spliced into content as <think> spans and could not match the KV.
+func TestTurnRecordReplaysFinalRoundVerbatim(t *testing.T) {
+	tm := &turnManager{replays: newReplayStore()}
+	tail, spoken := recTail()
+	final := assistantRound("They are the docs. [1]", "weighing it up", nil)
+	tm.recordTurn(&activeTurn{searches: recSearches()}, "chat-1", tail, spoken, final)
+
+	in := []json.RawMessage{
+		json.RawMessage(`{"role":"user","content":"what are these?"}`),
+		mustJSON(map[string]any{
+			"role":              "assistant",
+			"content":           "Let me read the docs first.\n\n\n\n<think>weighing it up</think>They are the docs. [1]",
+			"reasoning_content": "first round thought",
+			"searches":          recSearches(),
+		}),
+	}
+	got := replayToolCalls(in, tm.replayLookup("chat-1"))
+	if last := got[len(got)-1]; string(last) != string(final) {
+		t.Errorf("final answer not verbatim:\n got %s\nwant %s", last, final)
+	}
+}
+
+// A tool round's message carries its reasoning; without it the template renders
+// an empty <think></think> where the KV holds the thought.
+func TestAssistantRoundKeepsReasoning(t *testing.T) {
+	var m map[string]any
+	_ = json.Unmarshal(assistantRound("", "look it up", []toolCall{{ID: "c1", Name: "web_search", Args: `{}`}}), &m)
+	if m["reasoning_content"] != "look it up" || m["tool_calls"] == nil {
+		t.Errorf("round message = %v", m)
+	}
+	m = nil
+	_ = json.Unmarshal(assistantRound("hi", "", nil), &m)
+	if _, ok := m["reasoning_content"]; ok {
+		t.Error("empty reasoning must be omitted, not sent as \"\"")
 	}
 }

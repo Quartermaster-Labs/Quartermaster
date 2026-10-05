@@ -89,6 +89,20 @@ func (sc *slotCache) expireIdle() {
 	}
 }
 
+// dropSnapshot deletes one conversation's snapshot and its sidecars. Used when
+// staleRestore proves the file can never serve this conversation again: it went
+// backwards (compaction, history edit) past the saved state, and a conversation
+// only grows from there, so the multi-GB file would sit in the byte cap until LRU
+// got round to it.
+func (sc *slotCache) dropSnapshot(model, key string) {
+	sc.diskMu.Lock() // see enforceCaps
+	defer sc.diskMu.Unlock()
+	base := filepath.Join(sc.dir, strings.TrimSuffix(fileName(model, key), ".bin"))
+	_ = os.Remove(base + ".bin")
+	_ = os.Remove(base + ".meta")
+	_ = os.Remove(base + ".len")
+}
+
 func (sc *slotCache) fileExists(model, key string) bool {
 	_, err := os.Stat(filepath.Join(sc.dir, fileName(model, key)))
 	return err == nil

@@ -296,14 +296,19 @@ const hashCacheSuffix = ".modelhash"
 // did, so a video model whose override already named an enhancer (saved from the
 // model modal, silently dropped at emit) gains promptEnhancer /
 // promptEnhancerEdit and either prompt key with nothing on disk having changed.
-// v88: a third same-id row falls back to -<publisher>-<repo> then -N instead of
+// v88: recurrent LLMs (GatedDeltaNet hybrids, SSMs) leave the text-encoder
+// pool: sd.cpp cannot load one as a conditioner, yet a same-width hybrid could
+// outrank the real encoder on file size and move --llm with nothing on disk
+// having changed for the image model.
+// v89: a third same-id row falls back to -<publisher>-<repo> then -N instead of
 // reusing the second's key, and a clashing or incomplete extraImageModels entry
 // leaves a "# SKIPPED" comment instead of vanishing.
-// v89: Hugging Face model folders (config.json + safetensors) are discovered
+// v90: Hugging Face model folders (config.json + safetensors) are discovered
 // and served through vllm, or leave a "# SKIPPED" comment with no vllm backend.
-// v90: vllm's --gpu-memory-utilization and estVramGB are sized to weights + KV
+// v91: vllm's --gpu-memory-utilization and estVramGB are sized to weights + KV
 // + overhead when that is under the budget, not to the whole budget.
-const genVersion = "v91"
+// v92: vllm models get --enable-auto-tool-choice and a --tool-call-parser.
+const genVersion = "v92"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight

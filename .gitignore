@@ -58,3 +58,7 @@ internal/server/assets/*.gguf
 # local debugging sessions. Working state for whoever is driving the agent,
 # never an input to a build, so it stays out of the tree.
 .pi/
+
+# UI scratch: screenshots, .bak copies and one-off edit scripts from design
+# sessions. Never an input to a build.
+.shots/

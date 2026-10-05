@@ -26,10 +26,11 @@
   import { playgroundStores } from "../../stores/playgroundActivity";
   import { cardTotalMb } from "../../stores/perf";
   import Select from "./Select.svelte";
-  import Composer from "./Composer.svelte";
+  import ModelSelector from "./ModelSelector.svelte";
+  import PaneHeader from "./PaneHeader.svelte";
+  import { slide } from "svelte/transition";
   import { autogrow } from "../../lib/autogrow";
-  import { Film, X, Download, Ban, Plus, Pencil, Save, RefreshCw, Type, Paintbrush, Sparkles, Maximize2, ChevronsRight, ImagePlus, FlagTriangleRight, Loader2, Wand2, Undo2 } from "lucide-svelte";
-  import { scrollFade } from "../../lib/scrollFade";
+  import { Film, X, Download, Ban, Pencil, Save, RefreshCw, Type, Paintbrush, Sparkles, ChevronsRight, ImagePlus, FlagTriangleRight, Loader2, Wand2, Undo2, Dices, HelpCircle, ChevronDown, Square, Expand } from "lucide-svelte";
   import { parseSdProgress } from "./imageGen";
   import { enhancePrompt } from "../../lib/promptEnhance";
   import {
@@ -57,7 +58,8 @@
 
   // The Video tab: the Images tab's thread model with a clip in place of the
   // picture. Deliberately a close sibling of ImageInterface.svelte (same store
-  // shape, same bubbles, same composer chrome) so the two stay recognisable.
+  // shape, same params panel + canvas + thread strip) so the two stay
+  // recognisable.
   //
   // What is genuinely different, and why:
   //
@@ -175,8 +177,6 @@
   let queuePos = $state(0);
   let editingIdx = $state<number | null>(null);
   let editText = $state("");
-  let promptEls: (HTMLElement | null)[] = $state([]);
-  let editWidth = $state<number | null>(null);
   let showSettings = $state(false);
   let showNegative = $state(false);
   let fullscreenVid = $state<string | null>(null);
@@ -186,7 +186,19 @@
   let secPerIt = $state(0);
   let stageLabel = $state("");
   let stagePhase = $state<"encode" | "cond" | "sample" | "decode" | null>(null);
+  // The thumbnail strip under the canvas (the thread, oldest first).
   let threadEl = $state<HTMLDivElement | undefined>();
+  // Which turn the canvas shows. null = follow the newest, which is what a new
+  // prompt, a regenerate or a thread switch should land on; clicking the strip
+  // pins an older one until the next of those.
+  let selTurn = $state<number | null>(null);
+  let sel = $derived(selTurn !== null && selTurn < turns.length ? selTurn : turns.length - 1);
+  let cur = $derived(turns[sel] as Turn | undefined);
+  $effect(() => {
+    void turns.length;
+    void $activeVideoChatId;
+    selTurn = null;
+  });
 
   // Switching models resets the settings panel to that model's defaults, same
   // reasoning as the Images tab: MiniMax-H3 conditions at cfg 1.0 and the
@@ -473,7 +485,6 @@
   // COLOUR of a row, never whether it can be picked.
   let vramGB = $derived($cardTotalMb / 1024 || 24);
 
-  let aspectOptions = $derived(ASPECTS.map((a) => ({ value: a.value, label: a.label })));
   // Every tier is listed; the ones this install cannot reach are disabled rather
   // than hidden, so the ceiling is visible instead of mysterious. No off-grid
   // fallback rung is needed any more: a model's launched size is adopted as the
@@ -578,12 +589,11 @@
     playgroundStores.videoGenerating.set(isGenerating);
   });
 
+  // Keep the newest clip in view on the strip as the thread grows.
   $effect(() => {
     void turns.length;
     void isGenerating;
-    void stageLabel;
-    void totalSteps;
-    if (threadEl) threadEl.scrollTop = threadEl.scrollHeight;
+    if (threadEl) threadEl.scrollLeft = threadEl.scrollWidth;
   });
 
   // One render, start to finish. Returns the playable data: URL, or throws with
@@ -733,7 +743,6 @@
     if (isGenerating) return;
     editingIdx = idx;
     editText = turns[idx].prompt;
-    editWidth = promptEls[idx]?.clientWidth ?? null;
   }
 
   function cancelEdit() {
@@ -791,6 +800,12 @@
   }
 </script>
 
+{#snippet hint(text: string)}
+  <span class="inline-flex shrink-0 cursor-help text-txtsecondary/70 hover:text-txtsecondary normal-case tracking-normal" use:tip={text}>
+    <HelpCircle class="w-3.5 h-3.5" />
+  </span>
+{/snippet}
+
 <div class="relative flex flex-col h-full">
   {#if !hasModels}
     <div class="flex-1 flex flex-col items-center justify-center gap-3 text-txtsecondary">
@@ -798,448 +813,503 @@
       <p>No models configured. Add models to your configuration to generate video.</p>
     </div>
   {:else}
-    <div class="flex-1 flex flex-col min-w-0 min-h-0 w-full">
-      <!-- Thread -->
-      <div bind:this={threadEl} class="flex-1 min-h-0 overflow-y-auto pretty-scroll scroll-fade-b mb-2" use:scrollFade>
-        <div class="w-full max-w-3xl mx-auto px-2 pt-4 flex flex-col gap-4 pb-2 {turns.length === 0 && !isGenerating ? 'h-full' : ''}">
-          {#if turns.length === 0 && !isGenerating}
-            <div class="h-full flex flex-col items-center justify-center gap-3 text-txtsecondary">
-              <Film class="w-10 h-10 opacity-40" strokeWidth={1.5} />
-              <p>Describe a scene to start. Each prompt renders a fresh clip.</p>
-            </div>
-          {/if}
+    <PaneHeader
+      title={activeSession?.title || "New video"}
+      meta={`${turns.length} clip${turns.length === 1 ? "" : "s"}`}
+      updatedAt={activeSession?.updatedAt}
+      newLabel="New thread"
+      onNew={newThread}
+    />
 
-          {#each turns as t, ti (ti)}
-            <!-- User prompt (right) - same bubble as the Images tab. -->
-            <div class="flex justify-end">
-              <div class="group relative max-w-[85%] rounded-2xl rounded-br-none bg-[#141414] text-[#ededee] px-3.5 py-2 flex flex-col gap-2">
-                <!-- The frames this render was conditioned on, inside the bubble
-                     with the prompt: they were part of the message, so this is
-                     where they belong once it is sent. -->
-                {#if t.refs.length}
-                  <div class="flex flex-wrap gap-1.5">
-                    {#each t.refs as ref, ri (ri)}
-                      <div class="relative rounded-lg overflow-hidden border border-white/15">
-                        <img src={ref} alt={ri === 0 ? "start frame" : "end frame"} class="max-h-28 w-auto object-contain" />
-                        <span class="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[0.5625rem] text-center leading-tight">
-                          {ri === 0 ? "Start" : "End"}
-                        </span>
+    <div class="flex-1 min-h-0 flex">
+      <!-- Params: the Images tab's panel, with frames in place of references.
+           The prompt sits on top because it is what changes every render. -->
+      <aside class="w-[25rem] shrink-0 flex flex-col min-h-0 bg-rail border-r border-card-border-inner">
+        <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll">
+          <div class="px-4 py-3.5 border-b border-card-border-inner flex flex-col gap-2.5">
+            <div class="rounded-xl border border-composer-border bg-surface hover:ring-1 hover:ring-composer-ring focus-within:border-primary transition-colors flex flex-col">
+              <textarea
+                bind:this={promptEl}
+                bind:value={prompt}
+                onkeydown={handleKeyDown}
+                rows="5"
+                disabled={isGenerating}
+                placeholder={turns.length ? "Describe another scene…" : "Describe the video you want…"}
+                class="w-full min-h-[8.5rem] resize-none bg-transparent px-3.5 pt-3 pb-1 text-[0.8125rem] leading-relaxed text-txtmain placeholder:text-txtsecondary focus:outline-none pretty-scroll disabled:opacity-60"
+              ></textarea>
+              <div class="flex items-center gap-1 px-2 pb-2 min-w-0">
+                {#if enhancer}
+                  <button
+                    class="btn btn--sm btn--ghost inline-flex items-center gap-1.5 h-7"
+                    onclick={runEnhance}
+                    disabled={enhancing || isGenerating || !prompt.trim()}
+                    use:tip={isGenerating
+                      ? "Wait for this render to finish: the enhancer is a separate model, and starting it now would make it queue behind the video model."
+                      : `Enhance the prompt with ${enhancer.name}${firstFrame ? " (first-frame rewrite)" : " (text-to-video rewrite)"}${enhancer.vision && firstFrame ? ", which reads the reference frame" : ""}. Rewrites the box, so you can read and edit it before rendering.`}
+                  >
+                    {#if enhancing}<Loader2 class="w-3.5 h-3.5 animate-spin" />{:else}<Wand2 class="w-3.5 h-3.5" />{/if}
+                    Enhance
+                  </button>
+                  {#if preEnhance !== null}
+                    <button
+                      class="icon-btn"
+                      onclick={revertEnhance}
+                      disabled={enhancing}
+                      use:tip={preEnhanceAspect !== null
+                        ? `Revert to the prompt you wrote, and the aspect ratio back to ${preEnhanceAspect}`
+                        : "Revert to the prompt you wrote"}
+                      aria-label="Revert enhance"
+                    >
+                      <Undo2 class="w-4 h-4" />
+                    </button>
+                  {/if}
+                {/if}
+                <div class="ml-auto min-w-0 max-w-[60%]">
+                  <ModelSelector bind:value={$selectedModelStore} placeholder="Select a video model…" category="video" ghost />
+                </div>
+              </div>
+            </div>
+
+            <!-- Frame conditioning sits with the prompt, not in the settings:
+                 frames are per-render inputs like a reference, consumed by the
+                 send. Only offered for checkpoints that condition on frames, since
+                 a t2v model drops the fields rather than erroring. -->
+            <div class="flex items-center gap-2 flex-wrap">
+              <button
+                class="chip-toggle !font-sans gap-1.5"
+                aria-pressed={showNegative || !!$negativePromptStore}
+                onclick={() => { if (!$negativePromptStore) showNegative = !showNegative; }}
+                use:tip={"Elements to keep out of the clip"}
+              >
+                <Ban class="w-3 h-3" /> Negative
+              </button>
+              {#if frameRefs}
+                <button
+                  class="chip-toggle !font-sans gap-1.5"
+                  aria-pressed={!!firstFrame}
+                  onclick={() => firstInput?.click()}
+                  disabled={isGenerating}
+                  use:tip={"Start frame - the image the clip animates from"}
+                >
+                  <ImagePlus class="w-3 h-3" /> Start frame
+                </button>
+                <button
+                  class="chip-toggle !font-sans gap-1.5 disabled:opacity-40"
+                  aria-pressed={!!lastFrame}
+                  onclick={() => lastInput?.click()}
+                  disabled={isGenerating || !firstFrame}
+                  use:tip={firstFrame
+                    ? "End frame - the clip travels from the start frame to this one"
+                    : "End frame needs a start frame first - on its own there is nothing for the clip to travel from"}
+                >
+                  <FlagTriangleRight class="w-3 h-3" /> End frame
+                </button>
+              {/if}
+            </div>
+
+            {#if showNegative || $negativePromptStore}
+              <div class="flex items-start gap-2 rounded-lg border border-card-border bg-surface px-3 py-2">
+                <Ban class="w-3.5 h-3.5 mt-1 shrink-0 text-txtsecondary" />
+                <textarea
+                  class="w-full bg-transparent text-[0.8125rem] leading-relaxed resize-none focus:outline-none placeholder:text-txtsecondary min-h-[1.5rem] max-h-40 pretty-scroll"
+                  rows="2"
+                  placeholder="Negative - elements to avoid…"
+                  bind:value={$negativePromptStore}
+                  disabled={isGenerating}
+                ></textarea>
+                <button
+                  class="mt-0.5 shrink-0 text-txtsecondary hover:text-txtmain transition-colors"
+                  onclick={() => { $negativePromptStore = ""; showNegative = false; }}
+                  use:tip={"Remove negative prompt"}
+                  aria-label="Remove negative prompt"
+                ><X class="w-3.5 h-3.5" /></button>
+              </div>
+            {/if}
+
+            {#if frameRefs && (firstFrame || lastFrame)}
+              <div class="flex flex-wrap items-center gap-2">
+                {#each [{ key: "first", src: firstFrame, label: "Start" }, { key: "last", src: lastFrame, label: "End" }] as slot (slot.key)}
+                  {#if slot.src}
+                    <div class="group relative w-14 h-14 rounded-lg overflow-hidden border border-card-border bg-secondary">
+                      <img src={slot.src} alt="{slot.label} frame" class="w-full h-full object-cover" />
+                      <span class="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[0.5625rem] text-center leading-tight">{slot.label}</span>
+                      <button
+                        class="absolute top-0 right-0 w-5 h-5 flex items-center justify-center bg-black/60 text-white rounded-bl opacity-0 group-hover:opacity-100 transition-opacity"
+                        onclick={() => (slot.key === "first" ? (firstFrame = null) : (lastFrame = null))}
+                        aria-label="Remove {slot.label.toLowerCase()} frame"
+                      ><X class="w-3 h-3" /></button>
+                    </div>
+                  {/if}
+                {/each}
+                <span class="text-xs text-txtsecondary">
+                  {lastFrame ? "Travelling from the start frame to the end frame" : "Animating from the start frame"}
+                </span>
+              </div>
+            {/if}
+
+            {#if frameRefError}
+              <div class="p-2 bg-error/10 text-error rounded text-sm">{frameRefError}</div>
+            {/if}
+
+            {#if enhanceError}
+              <div class="p-2 bg-error/10 text-error rounded text-sm flex items-start gap-2">
+                <span class="flex-1">{enhanceError}</span>
+                <button class="shrink-0 opacity-70 hover:opacity-100" onclick={() => (enhanceError = "")} aria-label="Dismiss">
+                  <X class="w-3.5 h-3.5" />
+                </button>
+              </div>
+            {/if}
+
+            <!-- A control moved on its own, so it says so. Without this the aspect
+                 picker silently disagrees with what the user last set it to. -->
+            {#if enhancedAspect}
+              <div class="p-2 bg-surface-2 border border-card-border text-txtsecondary rounded text-sm flex items-start gap-2">
+                <span class="flex-1">
+                  {enhancer?.name ?? "The enhancer"} wrote this prompt for <strong class="text-txtmain">{enhancedAspect}</strong>, so the aspect ratio was changed to match.
+                </span>
+                <button class="shrink-0 opacity-70 hover:opacity-100" onclick={() => (enhancedAspect = null)} aria-label="Dismiss">
+                  <X class="w-3.5 h-3.5" />
+                </button>
+              </div>
+            {/if}
+
+            <input type="file" accept="image/*" class="hidden" bind:this={firstInput} onchange={(e) => pickFrame(e, "first")} />
+            <input type="file" accept="image/*" class="hidden" bind:this={lastInput} onchange={(e) => pickFrame(e, "last")} />
+          </div>
+
+          <div class="px-4 py-3.5 border-b border-card-border-inner flex flex-col gap-3">
+            <div class="flex flex-col gap-2">
+              <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Aspect</span>
+              <div class="seg w-full" role="group" aria-label="Aspect ratio">
+                {#each ASPECTS as a (a.value)}
+                  <button class="flex-1 !px-0 font-mono !normal-case !tracking-normal" aria-pressed={$aspectStore === a.value} disabled={isGenerating} onclick={() => ($aspectStore = a.value)} use:tip={a.label}>{a.value}</button>
+                {/each}
+              </div>
+            </div>
+            <div class="flex flex-col gap-2">
+              <span class="flex items-center gap-1.5 text-micro font-medium uppercase tracking-wide text-txtsecondary">
+                Size
+                <span class="ml-auto font-mono normal-case tracking-normal tabular-nums text-txtmain">{$selectedSizeStore.replace("x", "×")}</span>
+              </span>
+              <!-- Short-edge tiers. Past the model's cap they are disabled, not
+                   hidden, so the ceiling is visible; orange = likely too heavy
+                   for this card at the current length. -->
+              <div class="seg w-full" role="group" aria-label="Size tier">
+                {#each sizeOptions as o (o.value)}
+                  <button
+                    class="flex-1 !px-0 font-mono !normal-case !tracking-normal disabled:opacity-40 disabled:pointer-events-none {o.warn && !o.disabled ? '!text-orange-400' : ''}"
+                    aria-pressed={$tierStore === o.value}
+                    disabled={o.disabled || isGenerating}
+                    onclick={() => ($tierStore = o.value)}
+                    use:tip={o.disabled ? `${o.label} - over this model's limit` : o.title ? `${o.label} - ${o.title}` : o.label}
+                  >{o.value}</button>
+                {/each}
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div class="flex flex-col gap-1.5">
+                <span class="flex items-center gap-1.5 text-micro font-medium uppercase tracking-wide text-txtsecondary">
+                  Length {@render hint("How long the clip plays. Seconds are frames divided by fps, so the rungs are not round numbers: the backend's grid is defined in FRAMES (17k+5 for MiniMax-H3, 4n+1 for the rest) and it rounds anything off-grid UP, which is why only exact values are offered. Time and VRAM both scale with length.")}
+                </span>
+                <Select bind:value={$framesStore} disabled={isGenerating} compact options={lengthOptions} />
+              </div>
+              <div class="flex flex-col gap-1.5">
+                <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">FPS</span>
+                <div class="seg w-full" role="group" aria-label="Frames per second">
+                  {#each fpsOptions as f (f)}
+                    <button class="flex-1 !px-0 font-mono" aria-pressed={$fpsStore === String(f)} disabled={isGenerating} onclick={() => ($fpsStore = String(f))}>{f}</button>
+                  {/each}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="px-4 py-3.5 border-b border-card-border-inner flex flex-col gap-2.5">
+            <div class="grid grid-cols-2 gap-x-3 gap-y-2.5">
+              <label class="flex flex-col gap-1.5">
+                <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Steps</span>
+                <input type="number" min="1" max="150" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface font-mono text-xs tabular-nums focus:outline-none focus:border-primary" bind:value={$stepsStore} />
+              </label>
+              <label class="flex flex-col gap-1.5">
+                <span class="flex items-center gap-1.5 text-micro font-medium uppercase tracking-wide text-txtsecondary">
+                  CFG {@render hint("Guidance. MiniMax-H3 is conditioned at 1.0 and washes out above it; Wan wants about 5. Nothing rejects a bad value, it just renders badly.")}
+                </span>
+                <input type="number" min="1" max="30" step="0.5" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface font-mono text-xs tabular-nums focus:outline-none focus:border-primary" bind:value={$cfgScaleStore} />
+              </label>
+              <div class="col-span-2 flex flex-col gap-1.5">
+                <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Seed</span>
+                <div class="flex items-stretch gap-1.5">
+                  <input type="number" min="-1" aria-label="Seed" class="w-full min-w-0 px-2.5 py-1.5 rounded-md border border-card-border bg-surface font-mono text-xs tabular-nums focus:outline-none focus:border-primary" bind:value={$seedStore} />
+                  <button class="btn btn--sm btn--icon shrink-0" aria-pressed={$seedStore === -1} onclick={() => ($seedStore = -1)} use:tip={"Random seed each render (-1)"} aria-label="Random seed">
+                    <Dices class="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+            {#if modelDefaults}
+              <p class="font-mono text-micro text-txtsecondary tabular-nums">
+                Model default · {modelDefaults.steps} steps · cfg {modelDefaults.cfg} · {modelDefaults.frames}f @ {modelDefaults.fps}fps{modelDefaults.size ? ` · ${modelDefaults.size}` : ""}
+              </p>
+            {/if}
+          </div>
+
+          <!-- Advanced: the knobs most renders never touch. -->
+          <div class="border-b border-card-border-inner">
+            <button
+              class="w-full flex items-center gap-1.5 px-4 h-10 text-micro font-medium uppercase tracking-wide text-txtsecondary hover:text-txtmain transition-colors"
+              aria-expanded={showSettings}
+              onclick={() => (showSettings = !showSettings)}
+            >
+              Advanced
+              <ChevronDown class="w-3.5 h-3.5 ml-auto transition-transform {showSettings ? 'rotate-180' : ''}" />
+            </button>
+            {#if showSettings}
+              <div class="px-4 pb-3.5 flex flex-col gap-3" transition:slide={{ duration: 150 }}>
+                <div class="grid grid-cols-2 gap-3">
+                  <div class="flex flex-col gap-1.5">
+                    <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Sampler</span>
+                    <Select bind:value={$samplerStore} compact options={SAMPLER_OPTIONS} />
+                  </div>
+                  <div class="flex flex-col gap-1.5">
+                    <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">Scheduler</span>
+                    <Select bind:value={$schedulerStore} compact options={SCHEDULER_OPTIONS} />
+                  </div>
+                </div>
+                <!-- LoRAs. The list comes from the backend's --lora-model-dir, so it
+                     needs the model loaded: fetched on demand, never automatically.
+                     A turbo LoRA here is what makes a 4-step render correct, which
+                     is why Steps stays at the base model's 20 until one is selected. -->
+                <div class="flex flex-col gap-1.5 pt-2.5 border-t border-card-border-inner">
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-micro font-medium uppercase tracking-wide text-txtsecondary">LoRAs</span>
+                    {@render hint("Adapters found next to the model file. Listing them loads the model. A turbo LoRA (4 or 8 step) also needs Steps lowered to match.")}
+                    <button
+                      class="btn btn--sm btn--ghost ml-auto h-6"
+                      onclick={loadLoras}
+                      disabled={loraLoading || !$selectedModelStore}
+                    >{loraLoading ? "Loading…" : loraListModel === $selectedModelStore ? "Refresh" : "Load list"}</button>
+                  </div>
+                  {#if loraError}
+                    <p class="text-xs text-error">{loraError}</p>
+                  {:else if loraListModel === $selectedModelStore && loraList.length === 0}
+                    <p class="text-xs text-txtsecondary">No LoRAs in this model's folder.</p>
+                  {:else if loraListModel === $selectedModelStore}
+                    {#each loraList as lora (lora.path)}
+                      {@const strength = $videoLoraStore[$selectedModelStore]?.[lora.path] ?? 0}
+                      <div class="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          class="accent-primary"
+                          checked={strength !== 0}
+                          disabled={isGenerating}
+                          onchange={(e) => setLoraStrength(lora.path, (e.currentTarget as HTMLInputElement).checked ? 1 : 0)}
+                        />
+                        <span class="text-xs truncate flex-1" use:tip={lora.path}>{lora.name}</span>
+                        <input
+                          type="number"
+                          min="-2"
+                          max="2"
+                          step="0.05"
+                          class="w-16 px-1.5 py-0.5 font-mono text-xs tabular-nums rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary disabled:opacity-40"
+                          disabled={strength === 0 || isGenerating}
+                          value={strength}
+                          onchange={(e) => setLoraStrength(lora.path, Number((e.currentTarget as HTMLInputElement).value))}
+                        />
                       </div>
                     {/each}
-                  </div>
-                {/if}
-                {#if editingIdx === ti}
-                  <div class="flex flex-col gap-2 min-w-[260px]">
-                    <textarea
-                      class="{editWidth ? '' : 'w-full'} px-2.5 py-1.5 rounded-lg bg-white/10 text-white text-[0.8125rem] resize-none overflow-hidden focus:outline-none focus:ring-2 focus:ring-white/40"
-                      style={editWidth ? `width:${editWidth}px` : undefined}
-                      rows="1"
-                      bind:value={editText}
-                      use:autogrow
-                      onkeydown={editKeyDown}
-                    ></textarea>
-                    <div class="flex justify-end gap-1.5">
-                      <button class="p-1.5 rounded hover:bg-white/20" onclick={cancelEdit} use:tip={"Cancel"}><X class="w-4 h-4" /></button>
-                      <button class="p-1.5 rounded hover:bg-white/20" onclick={saveEdit} use:tip={"Save & regenerate"}><Save class="w-4 h-4" /></button>
-                    </div>
-                  </div>
-                {:else}
-                  <span class="text-[0.8125rem] leading-relaxed whitespace-pre-wrap pr-6" bind:this={promptEls[ti]}>{t.prompt}</span>
+                  {:else if activeLoras.length}
+                    <p class="text-xs text-txtsecondary">{activeLoras.map((l) => `${l.path} @ ${l.multiplier}`).join(", ")}</p>
+                  {/if}
+                </div>
+              </div>
+            {/if}
+          </div>
+        </div>
+
+        <div class="shrink-0 px-4 py-3 flex flex-col gap-2 border-t border-card-border-inner">
+          <div class="flex items-center gap-2">
+            <button class="btn btn--primary flex-1 inline-flex items-center justify-center gap-2 h-9" onclick={send} disabled={isGenerating || !prompt.trim() || !$selectedModelStore}>
+              <Sparkles class="w-4 h-4" /> Generate
+            </button>
+            {#if isGenerating}
+              <button class="btn btn--danger-outline inline-flex items-center gap-1.5 h-9" onclick={cancelGeneration} use:tip={"Cancel this render (model stays loaded)"}>
+                <Square class="w-3.5 h-3.5" /> Stop
+              </button>
+            {/if}
+          </div>
+          <div class="flex items-center gap-3 text-micro text-txtsecondary">
+            <span><kbd class="font-mono">Enter</kbd> generate</span>
+            <span><kbd class="font-mono">Shift+Enter</kbd> new line</span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Canvas: one clip at a time, big. The strip underneath is the thread. -->
+      <section class="flex-1 min-w-0 flex flex-col min-h-0">
+        {#if turns.length === 0 && !isGenerating}
+          <div class="flex-1 flex flex-col items-center justify-center gap-3 text-txtsecondary">
+            <Film class="w-10 h-10 opacity-40" strokeWidth={1.5} />
+            <p>Describe a scene to start. Each prompt renders a fresh clip.</p>
+          </div>
+        {:else if cur}
+          {@const t = cur}
+          {@const ti = sel}
+          {@const inFlight = !t.videos.length && !t.error && genId === $activeVideoChatId && ti === turns.length - 1}
+          <div class="shrink-0 flex items-center gap-2 px-6 h-10 min-w-0">
+            <span class="font-mono text-micro text-txtsecondary tabular-nums">{ti + 1}/{turns.length}</span>
+            {#if t.model}
+              <span class="flex items-center gap-1 min-w-0 text-micro font-medium text-txtsecondary">
+                <Sparkles class="w-3 h-3 shrink-0" /><span class="truncate">{t.model}</span>
+              </span>
+            {/if}
+            {#if t.frames}
+              <span class="font-mono text-micro text-txtsecondary tabular-nums">· {t.frames}f{#if t.fps} @ {t.fps}fps{/if}</span>
+            {/if}
+            {#if t.secs != null}
+              <span class="font-mono text-micro text-txtsecondary tabular-nums">· {fmtDur(t.secs)}</span>
+            {/if}
+            {#if t.videos.length}
+              <div class="ml-auto flex items-center gap-0.5 shrink-0">
+                {#if frameRefs}
                   <button
-                    class="absolute top-1.5 right-1.5 p-1 rounded-full opacity-0 group-hover:opacity-100 transition-all bg-white/10 text-white/70 hover:text-white hover:bg-white/25 disabled:hidden"
-                    onclick={() => startEdit(ti)}
+                    class="icon-btn"
+                    onclick={() => continueFrom(t.videos[0])}
                     disabled={isGenerating}
-                    use:tip={"Edit prompt"}
+                    use:tip={"Continue from here: load this clip's last frame as the next render's first frame"}
+                    aria-label="Continue from here"
                   >
-                    <Pencil class="w-3 h-3" />
+                    <ChevronsRight class="w-4 h-4" />
                   </button>
                 {/if}
+                <button class="icon-btn" onclick={() => regenerate(ti)} disabled={isGenerating} use:tip={"Regenerate"} aria-label="Regenerate">
+                  <RefreshCw class="w-4 h-4" />
+                </button>
+                <button class="icon-btn" onclick={() => downloadVideo(t.videos[0], t)} use:tip={"Download"} aria-label="Download">
+                  <Download class="w-4 h-4" />
+                </button>
+                <button class="icon-btn" onclick={() => (fullscreenVid = t.videos[0])} use:tip={"Fullscreen"} aria-label="Fullscreen">
+                  <Expand class="w-4 h-4" />
+                </button>
               </div>
-            </div>
-            <!-- Video reply (left). -->
-            <div class="flex flex-col items-start">
-              {#if t.model}
-                <span class="flex items-center gap-1 mb-1 px-3 text-[0.6875rem] font-medium text-txtsecondary">
-                  <Sparkles class="w-3 h-3 shrink-0" />{t.model}
-                </span>
-              {/if}
-              <div class="relative group rounded-2xl rounded-bl-sm px-3 py-2 text-[0.8125rem] w-fit max-w-full sm:max-w-[60%]">
-                {#if t.error}
-                  <div class="text-error">{t.error}</div>
-                {:else if t.videos.length}
-                  <!-- The clip itself: native controls, loop on, and
-                       preload="metadata" so a thread of saved clips does not
-                       pull every byte back through /api/media at once. -->
-                  <div class="rounded-xl overflow-hidden border border-card-border bg-secondary">
-                    <!-- svelte-ignore a11y_media_has_caption -->
-                    <video
-                      src={t.videos[0]}
-                      class="max-h-72 w-auto max-w-full"
-                      controls
-                      loop
-                      playsinline
-                      preload="metadata"
-                    ></video>
-                  </div>
-                  <div class="flex flex-wrap items-center gap-1 mt-2 pt-1 border-t border-card-border">
-                    <button
-                      class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary disabled:opacity-40"
-                      onclick={() => regenerate(ti)}
-                      disabled={isGenerating}
-                      use:tip={"Regenerate"}
-                    >
-                      <RefreshCw class="w-4 h-4" />
-                    </button>
-                    <button
-                      class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary"
-                      onclick={() => downloadVideo(t.videos[0], t)}
-                      use:tip={"Download"}
-                    >
-                      <Download class="w-4 h-4" />
-                    </button>
-                    <button
-                      class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary"
-                      onclick={() => (fullscreenVid = t.videos[0])}
-                      use:tip={"View large"}
-                    >
-                      <Maximize2 class="w-4 h-4" />
-                    </button>
-                    {#if frameRefs}
-                      <button
-                        class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-txtsecondary disabled:opacity-40"
-                        onclick={() => continueFrom(t.videos[0])}
-                        disabled={isGenerating}
-                        use:tip={"Continue from here: load this clip's last frame as the next render's first frame"}
-                      >
-                        <ChevronsRight class="w-4 h-4" />
-                      </button>
-                    {/if}
-                    {#if t.frames}
-                      <span class="flex items-center self-center text-[0.6875rem] text-txtsecondary tabular-nums">
-                        {t.frames}f{#if t.fps} @ {t.fps}fps{/if}
-                      </span>
-                    {/if}
-                    {#if t.secs != null}
-                      <span class="ml-auto flex items-center self-center text-[0.6875rem] text-txtsecondary tabular-nums">{fmtDur(t.secs)}</span>
-                    {/if}
-                  </div>
-                {:else if genId !== $activeVideoChatId || ti !== turns.length - 1}
-                  <div class="text-error">No video returned.</div>
-                {:else}
-                  <!-- In-flight. The bar only appears once sd-server prints a
-                       sampler line; until then the status label plus the elapsed
-                       counter carry the whole signal. -->
-                  <div class="flex flex-col gap-1.5 min-w-52">
-                    <div class="flex items-center gap-2 text-txtsecondary">
-                      {#if StageIcon}
-                        <StageIcon class="w-4 h-4 reason-glow shrink-0" />
-                      {:else}
-                        <span class="inline-block w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></span>
-                      {/if}
-                      <span class="reason-shimmer-white font-medium">{stageLabel || "Generating…"}</span>
-                    </div>
-                    {#if totalSteps > 0}
-                      <div class="h-1.5 w-full rounded bg-card-border overflow-hidden">
-                        <div class="h-full bg-primary transition-all" style="width: {Math.round((step / totalSteps) * 100)}%"></div>
-                      </div>
-                    {/if}
-                    <div class="flex items-center justify-between text-[0.6875rem] text-txtsecondary tabular-nums mt-1 pt-1 border-t border-card-border">
-                      <span>{#if totalSteps > 0}{step}/{totalSteps} steps{/if}{#if etaSec > 0} · ~{fmtDur(etaSec)} left{/if}{#if totalSteps <= 0 && etaSec <= 0}&nbsp;{/if}</span>
-                      <span>{fmtDur(elapsed)}</span>
-                    </div>
+            {/if}
+          </div>
+
+          <div class="flex-1 min-h-0 flex items-center justify-center px-6 pb-3">
+            {#if t.error}
+              <div class="max-w-lg p-3 rounded-lg bg-error/10 text-error text-sm">{t.error}</div>
+            {:else if t.videos.length}
+              <!-- preload="metadata" so opening a thread of saved clips does not
+                   pull every byte back through /api/media at once. -->
+              <!-- svelte-ignore a11y_media_has_caption -->
+              <video
+                src={t.videos[0]}
+                class="max-h-full max-w-full object-contain rounded-lg border border-card-border bg-secondary"
+                controls
+                loop
+                playsinline
+                preload="metadata"
+              ></video>
+            {:else if inFlight}
+              <!-- In-flight. The bar only appears once sd-server prints a sampler
+                   line; until then the status label plus the elapsed counter carry
+                   the whole signal. -->
+              <div class="w-72 flex flex-col gap-2 rounded-xl border border-card-border bg-surface px-4 py-3.5">
+                <div class="flex items-center gap-2 text-sm text-txtsecondary">
+                  {#if StageIcon}
+                    <StageIcon class="w-4 h-4 reason-glow shrink-0" />
+                  {:else}
+                    <span class="inline-block w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></span>
+                  {/if}
+                  <span class="reason-shimmer-white font-medium">{stageLabel || "Generating…"}</span>
+                </div>
+                {#if totalSteps > 0}
+                  <div class="h-1.5 w-full rounded bg-card-border overflow-hidden">
+                    <div class="h-full bg-primary transition-all" style="width: {Math.round((step / totalSteps) * 100)}%"></div>
                   </div>
                 {/if}
-              </div>
-            </div>
-          {/each}
-        </div>
-      </div>
-
-      <!-- Composer -->
-      {#snippet videoSettingsPanel()}
-        <div class="flex flex-col gap-2">
-          <div class="grid grid-cols-2 gap-3">
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">Aspect</span>
-              <Select bind:value={$aspectStore} disabled={isGenerating} compact options={aspectOptions} />
-            </div>
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">Size</span>
-              <Select bind:value={$tierStore} disabled={isGenerating} compact options={sizeOptions} />
-            </div>
-          </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
-                Length
-                <span class="cursor-help opacity-60" use:tip={"How long the clip plays. Seconds are frames divided by fps, so the rungs are not round numbers: the backend's grid is defined in FRAMES (17k+5 for MiniMax-H3, 4n+1 for the rest) and it rounds anything off-grid UP, which is why only exact values are offered. Time and VRAM both scale with length."}>(?)</span>
-              </span>
-              <Select
-                bind:value={$framesStore}
-                disabled={isGenerating}
-                compact
-                options={lengthOptions}
-              />
-            </div>
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">FPS</span>
-              <Select
-                bind:value={$fpsStore}
-                disabled={isGenerating}
-                compact
-                options={fpsOptions.map((f) => ({ value: String(f), label: String(f) }))}
-              />
-            </div>
-          </div>
-          <div class="grid grid-cols-3 gap-3">
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">Steps</span>
-              <input type="number" min="1" max="150" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$stepsStore} />
-            </div>
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
-                CFG
-                <span class="cursor-help opacity-60" use:tip={"Guidance. MiniMax-H3 is conditioned at 1.0 and washes out above it; Wan wants about 5. Nothing rejects a bad value, it just renders badly."}>(?)</span>
-              </span>
-              <input type="number" min="1" max="30" step="0.5" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$cfgScaleStore} />
-            </div>
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">Seed</span>
-              <input type="number" min="-1" class="w-full px-2.5 py-1.5 rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary" bind:value={$seedStore} />
-            </div>
-          </div>
-          {#if modelDefaults}
-            <p class="text-xs text-txtsecondary -mt-1">
-              Model default · {modelDefaults.steps} steps · cfg {modelDefaults.cfg} · {modelDefaults.frames}f @ {modelDefaults.fps}fps{modelDefaults.size ? ` · ${modelDefaults.size}` : ""}
-            </p>
-          {/if}
-          <div class="grid grid-cols-2 gap-3">
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">Sampler</span>
-              <Select bind:value={$samplerStore} compact options={SAMPLER_OPTIONS} />
-            </div>
-            <div class="flex flex-col gap-1">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">Scheduler</span>
-              <Select bind:value={$schedulerStore} compact options={SCHEDULER_OPTIONS} />
-            </div>
-          </div>
-          <!-- LoRAs. The list comes from the backend's --lora-model-dir, so it
-               needs the model loaded: fetched on demand, never automatically.
-               A turbo LoRA here is what makes a 4-step render correct, which is
-               why Steps stays at the base model's 20 until one is selected. -->
-          <div class="flex flex-col gap-1 pt-1 border-t border-card-border">
-            <div class="flex items-center justify-between">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary flex items-center gap-1">
-                LoRAs
-                <span class="cursor-help opacity-60" use:tip={"Adapters found next to the model file. Listing them loads the model. A turbo LoRA (4 or 8 step) also needs Steps lowered to match."}>(?)</span>
-              </span>
-              <button
-                class="text-xs text-primary hover:underline disabled:opacity-50"
-                onclick={loadLoras}
-                disabled={loraLoading || !$selectedModelStore}
-              >{loraLoading ? "Loading…" : loraListModel === $selectedModelStore ? "Refresh" : "Load list"}</button>
-            </div>
-            {#if loraError}
-              <p class="text-xs text-error">{loraError}</p>
-            {:else if loraListModel === $selectedModelStore && loraList.length === 0}
-              <p class="text-xs text-txtsecondary">No LoRAs in this model's folder.</p>
-            {:else if loraListModel === $selectedModelStore}
-              {#each loraList as lora (lora.path)}
-                {@const strength = $videoLoraStore[$selectedModelStore]?.[lora.path] ?? 0}
-                <div class="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    class="accent-primary"
-                    checked={strength !== 0}
-                    disabled={isGenerating}
-                    onchange={(e) => setLoraStrength(lora.path, (e.currentTarget as HTMLInputElement).checked ? 1 : 0)}
-                  />
-                  <span class="text-xs truncate flex-1" use:tip={lora.path}>{lora.name}</span>
-                  <input
-                    type="number"
-                    min="-2"
-                    max="2"
-                    step="0.05"
-                    class="w-16 px-1.5 py-0.5 text-xs rounded-md border border-card-border bg-surface focus:outline-none focus:border-primary disabled:opacity-40"
-                    disabled={strength === 0 || isGenerating}
-                    value={strength}
-                    onchange={(e) => setLoraStrength(lora.path, Number((e.currentTarget as HTMLInputElement).value))}
-                  />
+                <div class="flex items-center justify-between font-mono text-micro text-txtsecondary tabular-nums pt-1.5 border-t border-card-border-inner">
+                  <span>{#if totalSteps > 0}{step}/{totalSteps} steps{/if}{#if etaSec > 0} · ~{fmtDur(etaSec)} left{/if}{#if totalSteps <= 0 && etaSec <= 0}&nbsp;{/if}</span>
+                  <span>{fmtDur(elapsed)}</span>
                 </div>
-              {/each}
-            {:else if activeLoras.length}
-              <p class="text-xs text-txtsecondary">{activeLoras.map((l) => `${l.path} @ ${l.multiplier}`).join(", ")}</p>
-            {/if}
-          </div>
-        </div>
-      {/snippet}
-
-      {#snippet videoTopExtra()}
-        {#if showNegative || $negativePromptStore}
-          <div class="flex items-start gap-2 pb-2 border-b border-card-border">
-            <Ban class="w-3.5 h-3.5 mt-1.5 shrink-0 text-txtsecondary" />
-            <textarea
-              class="w-full bg-transparent text-[0.8125rem] leading-relaxed resize-none focus:outline-none placeholder:text-txtsecondary min-h-[1.5rem] max-h-40 pretty-scroll"
-              rows="1"
-              placeholder="Negative - elements to avoid…"
-              bind:value={$negativePromptStore}
-              disabled={isGenerating}
-            ></textarea>
-            <button
-              class="mt-1 shrink-0 text-txtsecondary hover:text-txtmain transition-colors"
-              onclick={() => { $negativePromptStore = ""; showNegative = false; }}
-              use:tip={"Remove negative prompt"}
-              aria-label="Remove negative prompt"
-            ><X class="w-3.5 h-3.5" /></button>
-          </div>
-        {/if}
-      {/snippet}
-
-      {#snippet videoLeftButtons()}
-        {#if enhancer}
-          <button
-            class="composer-icon-btn"
-            onclick={runEnhance}
-            disabled={enhancing || isGenerating || !prompt.trim()}
-            use:tip={isGenerating
-              ? "Wait for this render to finish: the enhancer is a separate model, and starting it now would make it queue behind the video model."
-              : `Enhance the prompt with ${enhancer.name}${firstFrame ? " (first-frame rewrite)" : " (text-to-video rewrite)"}${enhancer.vision && firstFrame ? ", which reads the reference frame" : ""}. Rewrites the box, so you can read and edit it before rendering.`}
-          >
-            {#if enhancing}
-              <Loader2 class="w-[1.125rem] h-[1.125rem] animate-spin" />
+              </div>
             {:else}
-              <Wand2 class="w-[1.125rem] h-[1.125rem]" />
+              <div class="text-sm text-error">No video returned.</div>
             {/if}
-          </button>
-          {#if preEnhance !== null}
-            <button
-              class="composer-icon-btn"
-              onclick={revertEnhance}
-              disabled={enhancing}
-              use:tip={preEnhanceAspect !== null
-                ? `Revert to the prompt you wrote, and the aspect ratio back to ${preEnhanceAspect}`
-                : "Revert to the prompt you wrote"}
-            >
-              <Undo2 class="w-[1.125rem] h-[1.125rem]" />
-            </button>
-          {/if}
-        {/if}
-        <!-- Frame conditioning lives in the COMPOSER, not the settings panel:
-             these are per-message inputs like an attachment, not a setting that
-             persists across renders. Shown only for checkpoints that condition
-             on frames, since a t2v model drops the fields rather than erroring,
-             which would leave a paperclip that silently does nothing. -->
-        {#if frameRefs}
-          <button
-            class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {firstFrame ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
-            onclick={() => firstInput?.click()}
-            disabled={isGenerating}
-            use:tip={"Start frame - the image the clip animates from"}
-          >
-            <ImagePlus class="w-[1.125rem] h-[1.125rem]" />
-          </button>
-          <button
-            class="inline-flex items-center justify-center p-1.5 rounded-md transition-colors disabled:opacity-40 {lastFrame ? 'text-primary bg-secondary' : 'text-txtsecondary hover:text-txtmain hover:bg-secondary'}"
-            onclick={() => lastInput?.click()}
-            disabled={isGenerating || !firstFrame}
-            use:tip={firstFrame
-              ? "End frame - the clip travels from the start frame to this one"
-              : "End frame needs a start frame first - on its own there is nothing for the clip to travel from"}
-          >
-            <FlagTriangleRight class="w-[1.125rem] h-[1.125rem]" />
-          </button>
-        {/if}
-        {#if !(showNegative || $negativePromptStore)}
-          <button
-            class="inline-flex items-center justify-center p-1.5 rounded-md text-txtsecondary hover:text-txtmain hover:bg-secondary transition-colors"
-            onclick={() => (showNegative = true)}
-            use:tip={"Add negative prompt"}
-          >
-            <Ban class="w-[1.125rem] h-[1.125rem]" />
-          </button>
-        {/if}
-      {/snippet}
+          </div>
 
-      {#snippet videoExtraRightButtons()}
-        <button
-          class="composer-icon-btn"
-          onclick={newThread}
-          disabled={isGenerating || turns.length === 0}
-          use:tip={"New thread"}
-        >
-          <Plus class="w-[1.125rem] h-[1.125rem]" />
-        </button>
-      {/snippet}
-
-      <div class="shrink-0 relative w-full max-w-2xl mx-auto">
-        {#if frameRefs && (firstFrame || lastFrame)}
-          <div class="flex flex-wrap items-center gap-2 mb-2">
-            {#each [{ key: "first", src: firstFrame, label: "Start" }, { key: "last", src: lastFrame, label: "End" }] as slot (slot.key)}
-              {#if slot.src}
-                <div class="group relative w-14 h-14 rounded-lg overflow-hidden border border-card-border bg-secondary">
-                  <img src={slot.src} alt="{slot.label} frame" class="w-full h-full object-cover" />
-                  <span class="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[0.5625rem] text-center leading-tight">{slot.label}</span>
-                  <button
-                    class="absolute top-0 right-0 w-5 h-5 flex items-center justify-center bg-black/60 text-white rounded-bl opacity-0 group-hover:opacity-100 transition-opacity"
-                    onclick={() => (slot.key === "first" ? (firstFrame = null) : (lastFrame = null))}
-                    aria-label="Remove {slot.label.toLowerCase()} frame"
-                  ><X class="w-3 h-3" /></button>
+          <!-- The prompt that made this clip, with the frames it was fed. -->
+          <div class="shrink-0 px-6 pb-3">
+            <div class="group relative max-w-3xl mx-auto flex items-start gap-3 rounded-xl border border-card-border bg-surface px-3.5 py-2.5">
+              {#if t.refs.length}
+                <div class="flex shrink-0 gap-1.5">
+                  {#each t.refs as ref, ri (ri)}
+                    <div class="relative rounded-md overflow-hidden border border-card-border">
+                      <img src={ref} alt={ri === 0 ? "start frame" : "end frame"} class="h-12 w-auto object-contain" />
+                      <span class="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[0.5625rem] text-center leading-tight">{ri === 0 ? "Start" : "End"}</span>
+                    </div>
+                  {/each}
                 </div>
               {/if}
-            {/each}
-            <span class="text-xs text-txtsecondary">
-              {lastFrame ? "Travelling from the start frame to the end frame" : "Animating from the start frame"}
-            </span>
-          </div>
-        {/if}
-        {#if frameRefError}
-          <p class="text-xs text-error mb-2 px-2">{frameRefError}</p>
-        {/if}
-
-        {#if enhanceError}
-          <div class="mb-2 p-2 bg-error/10 text-error rounded text-sm flex items-start gap-2">
-            <span class="flex-1">{enhanceError}</span>
-            <button class="shrink-0 opacity-70 hover:opacity-100" onclick={() => (enhanceError = "")} aria-label="Dismiss">
-              <X class="w-3.5 h-3.5" />
-            </button>
-          </div>
-        {/if}
-
-        <!-- A control moved on its own, so it says so. Without this the aspect
-             picker silently disagrees with what the user last set it to. -->
-        {#if enhancedAspect}
-          <div class="mb-2 p-2 bg-surface-2 border border-card-border text-txtsecondary rounded text-sm flex items-start gap-2">
-            <span class="flex-1">
-              {enhancer?.name ?? "The enhancer"} wrote this prompt for <strong class="text-txtmain">{enhancedAspect}</strong>, so the aspect ratio was changed to match.
-            </span>
-            <button class="shrink-0 opacity-70 hover:opacity-100" onclick={() => (enhancedAspect = null)} aria-label="Dismiss">
-              <X class="w-3.5 h-3.5" />
-            </button>
+              {#if editingIdx === ti}
+                <div class="flex-1 min-w-0 flex flex-col gap-2">
+                  <textarea
+                    class="w-full px-2.5 py-1.5 rounded-lg border border-card-border bg-background text-[0.8125rem] leading-relaxed resize-none overflow-hidden focus:outline-none focus:border-primary"
+                    rows="1"
+                    bind:value={editText}
+                    use:autogrow
+                    onkeydown={editKeyDown}
+                  ></textarea>
+                  <div class="flex justify-end gap-1">
+                    <button class="icon-btn" onclick={cancelEdit} use:tip={"Cancel"} aria-label="Cancel edit"><X class="w-4 h-4" /></button>
+                    <button class="icon-btn" onclick={saveEdit} use:tip={"Save & regenerate"} aria-label="Save and regenerate"><Save class="w-4 h-4" /></button>
+                  </div>
+                </div>
+              {:else}
+                <span class="flex-1 min-w-0 text-[0.8125rem] leading-relaxed whitespace-pre-wrap line-clamp-3" use:tip={t.prompt.length > 200 ? t.prompt : ""}>{t.prompt}</span>
+                <button class="icon-btn shrink-0 -mr-1 -mt-0.5" onclick={() => startEdit(ti)} disabled={isGenerating} use:tip={"Edit prompt"} aria-label="Edit prompt">
+                  <Pencil class="w-3.5 h-3.5" />
+                </button>
+              {/if}
+            </div>
           </div>
         {/if}
 
-        <input type="file" accept="image/*" class="hidden" bind:this={firstInput} onchange={(e) => pickFrame(e, "first")} />
-        <input type="file" accept="image/*" class="hidden" bind:this={lastInput} onchange={(e) => pickFrame(e, "last")} />
-        <Composer
-          bind:value={prompt}
-          bind:textareaEl={promptEl}
-          placeholder={turns.length ? "Describe another scene…" : "Describe the video you want…"}
-          textareaDisabled={isGenerating}
-          onKeydown={handleKeyDown}
-          bind:modelValue={$selectedModelStore}
-          modelPlaceholder="Select a video model..."
-          category="video"
-          busy={isGenerating}
-          onStop={cancelGeneration}
-          stopTitle="Cancel this render (model stays loaded)"
-          bind:showSettings
-          settingsTitle="Settings"
-          topExtra={videoTopExtra}
-          leftButtons={videoLeftButtons}
-          extraRightButtons={videoExtraRightButtons}
-          settingsPanel={videoSettingsPanel}
-        />
-      </div>
+        {#if turns.length > 0}
+          <div class="shrink-0 flex items-center gap-3 px-6 py-2.5 border-t border-card-border-inner min-w-0">
+            <span class="shrink-0 text-micro font-medium uppercase tracking-wide text-txtsecondary">This thread</span>
+            <div bind:this={threadEl} class="flex-1 min-w-0 flex gap-2 overflow-x-auto pretty-scroll py-0.5">
+              {#each turns as tt, i (i)}
+                <button
+                  class="relative shrink-0 w-16 h-12 rounded-md overflow-hidden border bg-secondary flex items-center justify-center transition-shadow {i === sel ? 'border-primary ring-1 ring-primary' : 'border-card-border hover:border-txtsecondary'}"
+                  onclick={() => (selTurn = i)}
+                  use:tip={tt.prompt}
+                  aria-label="Clip {i + 1}"
+                >
+                  {#if tt.videos.length}
+                    <!-- A poster frame without a poster: metadata only, then a
+                         nudge past 0 so the element paints a real frame instead
+                         of staying black. -->
+                    <video
+                      src={tt.videos[0]}
+                      class="w-full h-full object-cover pointer-events-none"
+                      muted
+                      playsinline
+                      preload="metadata"
+                      onloadedmetadata={(e) => ((e.currentTarget as HTMLVideoElement).currentTime = 0.1)}
+                    ></video>
+                  {:else if tt.error}
+                    <X class="w-4 h-4 text-error" />
+                  {:else if genId === $activeVideoChatId && i === turns.length - 1}
+                    <Loader2 class="w-4 h-4 text-primary animate-spin" />
+                  {:else}
+                    <Film class="w-4 h-4 text-txtsecondary opacity-60" />
+                  {/if}
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      </section>
     </div>
   {/if}
 </div>
