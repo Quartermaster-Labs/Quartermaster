@@ -72,6 +72,20 @@ skipped). A chosen `llama` build just swaps `s.ServerExe` (local copy) through t
   is actually free (vllm validates against free memory and refuses). The card is probed once
   per process via `cachedTotalVramGB` (a `sync.OnceValues` func var — the seam tests stub); no
   GPU reading falls back to the flat 0.90, since there is nothing to take a fraction of.
+- `vllmKvCacheGB` — **the KV pool is pinned with `--kv-cache-memory-bytes`** (issue #93). Without
+  it vllm sizes KV as `util × card` minus everything else it measured (weights, the profiling
+  run's activation peak, CUDA graphs, non-torch allocations), so every GB `vllmOverheadGB`
+  guesses low comes out of KV, until the pool cannot hold one `--max-model-len` sequence and
+  vllm refuses to start (MiniCPM in the issue needed a hand-raised utilization). The pin is
+  `KvReserveGB(ctx) × 1.10 + 0.25 GB` (paged blocks and hybrid page sizes do not match the
+  llama cost model byte for byte); vllm then allocates exactly that and its overhead is whatever
+  it really is. **`--gpu-memory-utilization` is still emitted beside it**: vllm's
+  `request_memory` checks `free >= util × card` at startup whether or not the pool is pinned, so
+  dropping the flag would leave the 0.9 default and refuse to start on any shared card. With
+  the pin the footprint is uncapped (`weights + pinned KV + overhead`), since that is what the
+  process holds. No pin when the user pinned a utilization (fill-the-share semantics, and the
+  escape hatch for vllm < 0.11, which lacks the flag), when extra args already carry either
+  flag (`vllmExtraSetsMemory`; theirs stands), or with no KV cost model / window.
 
 **Tool calling needs a parser, per family.** vLLM rejects every request carrying `tools` with a
 400 unless it was launched with `--enable-auto-tool-choice --tool-call-parser X` (issue #93), and

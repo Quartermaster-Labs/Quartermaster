@@ -2,6 +2,7 @@ package autogen
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 )
@@ -172,7 +173,8 @@ func TestVllmFootprint_SmallModelTakesOnlyWhatItNeeds(t *testing.T) {
 		t.Fatalf("ctx = %d, want the trained 32768", ctx)
 	}
 	m := GetKvCostModel(meta, "f16", "f16")
-	need := row.SizeGB + KvReserveGB(ctx, m.SlopeGB, m.ConstGB) + vllmOverheadGB
+	kv := KvReserveGB(ctx, m.SlopeGB, m.ConstGB)*(1+vllmKvMarginFrac) + vllmKvMarginGB
+	need := row.SizeGB + kv + vllmOverheadGB
 	foot := vllmFootprintGB(s, nil, row, meta, ctx)
 	if foot != need || foot > 4 {
 		t.Fatalf("footprint = %.2fGB, want weights+KV+overhead = %.2fGB (a few GB, not the budget)", foot, need)
@@ -193,9 +195,12 @@ func TestVllmFootprint_SmallModelTakesOnlyWhatItNeeds(t *testing.T) {
 	if !strings.Contains(out, fmt.Sprintf("estVramGB: %g", round2(util*24))) {
 		t.Errorf("estVramGB must charge the granted share %g:\n%s", round2(util*24), out)
 	}
+	if want := fmt.Sprintf("--kv-cache-memory-bytes %d", int64(math.Ceil(kv*gib))); !strings.Contains(out, want) {
+		t.Errorf("KV pool not pinned, want %q:\n%s", want, out)
+	}
 
-	// A model whose window was sized TO the budget still gets the budget: that
-	// is what the window was computed to fill.
+	// A model whose window was sized TO the budget is charged the budget plus the
+	// KV margin: the pinned pool is held whatever the window was sized against.
 	big := Metadata{
 		Architecture: "qwen3", ContextLength: 262144, BlockCount: 48,
 		HeadCount: 32, HeadCountKv: 8, EmbeddingLength: 4096,
@@ -204,8 +209,44 @@ func TestVllmFootprint_SmallModelTakesOnlyWhatItNeeds(t *testing.T) {
 	bigRow := GgufRow{FullPath: "/m/q.gguf", SizeGB: 8}
 	bs := Settings{TargetVramGB: 16}
 	bctx, _ := vllmMaxModelLen(bs, nil, bigRow, big)
-	if got := vllmFootprintGB(bs, nil, bigRow, big, bctx); got < 15 || got > 16 {
-		t.Errorf("budget-sized model footprint = %.2fGB, want about the 16GB budget", got)
+	if got := vllmFootprintGB(bs, nil, bigRow, big, bctx); got < 15 || got > 17.5 {
+		t.Errorf("budget-sized model footprint = %.2fGB, want the 16GB budget plus the KV margin", got)
+	}
+}
+
+// Issue #93: vllm sized KV as utilization x card minus its own measured
+// overhead, so a low overhead guess left MiniCPM without room for one sequence.
+// The pool is pinned instead, and the two ways a user already owns the memory
+// (a utilization pin, or the flags in extra args) turn the pin off.
+func TestVllmKvCachePin(t *testing.T) {
+	withCard(t, 24, true)
+	meta := Metadata{
+		Architecture: "qwen3", ContextLength: 32768, BlockCount: 36,
+		HeadCount: 32, HeadCountKv: 8, EmbeddingLength: 4096,
+		KeyLength: 128, ValueLength: 128,
+	}
+	row := GgufRow{FullPath: "/m/q", IsHF: true, SizeGB: 8}
+	s := Settings{TargetVramGB: 22, Backends: []BackendEntry{{ID: "v", Kind: "vllm", Path: "vllm", Default: true}}}
+	be := resolveBackend(s, nil, "llm")
+	cmd := func(ov *Override) string { return strings.Join(vllmCmdLines(s, row, ov, "m", be, meta), " ") }
+
+	auto := cmd(nil)
+	if !strings.Contains(auto, "--kv-cache-memory-bytes ") || !strings.Contains(auto, "--gpu-memory-utilization ") {
+		t.Errorf("auto: want the KV pin AND a utilization (vllm's startup free check reads it): %s", auto)
+	}
+	pinned := cmd(&Override{VllmGpuUtil: 0.8})
+	if strings.Contains(pinned, "--kv-cache-memory-bytes") || !strings.Contains(pinned, "--gpu-memory-utilization 0.8") {
+		t.Errorf("a pinned utilization must leave KV to vllm: %s", pinned)
+	}
+	for _, extra := range []string{"--gpu-memory-utilization 0.85", "--kv-cache-memory-bytes 4000000000"} {
+		got := cmd(&Override{ExtraArgs: extra})
+		if strings.Count(got, "--gpu-memory-utilization")+strings.Count(got, "--kv-cache-memory-bytes") != 1 {
+			t.Errorf("extra args %q own the memory, want only theirs: %s", extra, got)
+		}
+	}
+	// No KV cost model: nothing to pin from, vllm sizes KV itself.
+	if bare := strings.Join(vllmCmdLines(s, row, nil, "m", be, Metadata{Architecture: "qwen3"}), " "); strings.Contains(bare, "--kv-cache-memory-bytes") {
+		t.Errorf("no KV model, yet a pin: %s", bare)
 	}
 }
 

@@ -1905,7 +1905,7 @@
               <p class="text-xs text-txtsecondary">vLLM backend - llama.cpp knobs below are ignored. Context sets <span class="font-mono">--max-model-len</span>; blank sizes it against the VRAM budget.</p>
               <label class="flex items-center gap-2 text-sm">
                 <span>GPU memory utilization</span>
-                {@render hint("--gpu-memory-utilization: fraction of each GPU vLLM may fill (weights + KV + activations). Blank derives it from the VRAM budget and the card's size.")}
+                {@render hint("--gpu-memory-utilization: fraction of each GPU vLLM may fill (weights + KV + activations). Blank derives it from the VRAM budget and the card's size, and pins the KV pool with --kv-cache-memory-bytes. Setting it hands KV sizing back to vLLM (needed for vLLM older than 0.11).")}
                 <input type="number" min="0.1" max="1" step="0.05" bind:value={vllmGpuUtil} class="cfg-input w-24 ml-auto" placeholder="0.90" />
               </label>
               <label class="flex items-center gap-2 text-sm">

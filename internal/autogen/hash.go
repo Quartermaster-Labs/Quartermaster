@@ -308,7 +308,8 @@ const hashCacheSuffix = ".modelhash"
 // v91: vllm's --gpu-memory-utilization and estVramGB are sized to weights + KV
 // + overhead when that is under the budget, not to the whole budget.
 // v92: vllm models get --enable-auto-tool-choice and a --tool-call-parser.
-const genVersion = "v92"
+// v93: vllm models pin their KV pool with --kv-cache-memory-bytes (issue #93).
+const genVersion = "v93"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight

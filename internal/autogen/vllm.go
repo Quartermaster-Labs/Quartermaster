@@ -231,7 +231,12 @@ func vllmCmdLines(s Settings, row GgufRow, ov *Override, name string, be resolve
 	if !row.IsHF {
 		lines = append(lines, "--quantization gguf")
 	}
-	lines = append(lines, fmt.Sprintf("--gpu-memory-utilization %g", round2(util)))
+	if !vllmExtraSetsMemory(ov) {
+		lines = append(lines, fmt.Sprintf("--gpu-memory-utilization %g", round2(util)))
+		if kv, ok := vllmKvCacheGB(ov, meta, ctx); ok {
+			lines = append(lines, fmt.Sprintf("--kv-cache-memory-bytes %d", int64(math.Ceil(kv*gib))))
+		}
+	}
 	if ctx > 0 {
 		lines = append(lines, fmt.Sprintf("--max-model-len %d", ctx))
 	}
@@ -283,8 +288,12 @@ func emitVllmModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, na
 	if row.IsHF {
 		format = "safetensors"
 	}
-	fmt.Fprintf(b, "\n  # arch=%s size=%gGB (vllm, %s, gpu-util=%g [%s], max-model-len=%d [%s])\n",
-		meta.Architecture, row.SizeGB, format, round2(util), utilNote, ctx, ctxNote)
+	kvNote := "kv=vllm-sized"
+	if kv, ok := vllmKvCacheGB(ov, meta, ctx); ok {
+		kvNote = fmt.Sprintf("kv=%.2fGB pinned", kv)
+	}
+	fmt.Fprintf(b, "\n  # arch=%s size=%gGB (vllm, %s, gpu-util=%g [%s], %s, max-model-len=%d [%s])\n",
+		meta.Architecture, row.SizeGB, format, round2(util), utilNote, kvNote, ctx, ctxNote)
 	fmt.Fprintf(b, "  %q:\n", name)
 	b.WriteString("    cmd: >\n")
 	for _, line := range lines {
@@ -428,7 +437,15 @@ func vllmMaxModelLen(s Settings, ov *Override, row GgufRow, meta Metadata) (ctx 
 // was sized TO the budget this returns the budget anyway, since that is what the
 // window was computed to fill. No KV cost model => the budget: without one there
 // is nothing to size a smaller share from.
+//
+// With the KV pool pinned (vllmKvCacheGB) the cap is dropped: vllm will hold the
+// pinned pool however the window was sized, so the honest figure is the sum, and
+// a share rounded down to the budget would fail vllm's startup free-memory check
+// less often but charge the router less than the process takes.
 func vllmFootprintGB(s Settings, ov *Override, row GgufRow, meta Metadata, ctx int) float64 {
+	if kv, ok := vllmKvCacheGB(ov, meta, ctx); ok {
+		return row.SizeGB + kv + vllmOverheadGB
+	}
 	budget := vllmBudgetGB(s, ov)
 	m := GetKvCostModel(meta, "f16", "f16")
 	if !m.OK || ctx <= 0 {
@@ -436,6 +453,55 @@ func vllmFootprintGB(s Settings, ov *Override, row GgufRow, meta Metadata, ctx i
 	}
 	need := row.SizeGB + KvReserveGB(ctx, m.SlopeGB, m.ConstGB) + vllmOverheadGB
 	return math.Min(need, budget)
+}
+
+// vllmKvMarginFrac and vllmKvMarginGB pad the KV pool handed to vllm over what
+// the llama KV cost model predicts for --max-model-len. vllm refuses to start
+// when the pool cannot hold one full-length sequence, and its paged layout
+// (16-token blocks, per-group page sizes on hybrid models) does not match the
+// llama model byte for byte. A few hundred MB of slack is cheap next to a model
+// that will not start.
+const (
+	vllmKvMarginFrac = 0.10
+	vllmKvMarginGB   = 0.25
+)
+
+// vllmKvCacheGB is the KV pool to pin with --kv-cache-memory-bytes: what one
+// --max-model-len sequence needs, plus the margin above.
+//
+// Why pin it at all: without the flag vllm sizes KV as utilization x card minus
+// everything else it measured (weights, the profiling run's activation peak,
+// CUDA graphs, non-torch allocations). We can only guess that "everything else"
+// (vllmOverheadGB), and every GB guessed low comes straight out of KV until the
+// pool cannot hold one sequence and vllm refuses to start (issue #93: MiniCPM
+// needed a hand-raised utilization). With the pool pinned, vllm skips that
+// subtraction and allocates exactly this much KV; the overhead is whatever it
+// really is. --gpu-memory-utilization is still emitted beside it because vllm
+// checks free memory >= utilization x card at startup regardless of this flag.
+//
+// Not pinned (ok=false) when the user pinned a utilization (they asked vllm to
+// fill that share with KV, the pre-#93 behaviour and the escape hatch for a vllm
+// older than 0.11, which lacks the flag) or when there is no KV cost model or
+// window to size from.
+func vllmKvCacheGB(ov *Override, meta Metadata, ctx int) (gb float64, ok bool) {
+	if ov != nil && ov.VllmGpuUtil > 0 {
+		return 0, false
+	}
+	m := GetKvCostModel(meta, "f16", "f16")
+	if !m.OK || ctx <= 0 {
+		return 0, false
+	}
+	kv := KvReserveGB(ctx, m.SlopeGB, m.ConstGB)
+	return kv*(1+vllmKvMarginFrac) + vllmKvMarginGB, true
+}
+
+// vllmExtraSetsMemory reports whether the hand-written extra args already size
+// vllm's memory, the workaround before the KV pin existed. Their numbers stand:
+// emitting ours too would let --kv-cache-memory-bytes silently override the
+// utilization the user raised to get the model to start.
+func vllmExtraSetsMemory(ov *Override) bool {
+	return ov != nil && (strings.Contains(ov.ExtraArgs, "--gpu-memory-utilization") ||
+		strings.Contains(ov.ExtraArgs, "--kv-cache-memory"))
 }
 
 // vllmGpuUtil derives --gpu-memory-utilization from the model's footprint (see
