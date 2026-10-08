@@ -152,7 +152,7 @@
   async function browseBackend(i: number): Promise<void> {
     backendsErr = null;
     try {
-      const picked = await pickBackend();
+      const picked = await pickBackend(backends[i].path);
       if (!picked) return; // cancelled / unsupported — keep the text field
       backends[i].path = picked;
       await saveBackendsNow();
@@ -188,7 +188,7 @@
 
   async function browseSlotDir(): Promise<void> {
     try {
-      const picked = await pickFolder();
+      const picked = await pickFolder(slotPath);
       if (picked) slotPath = picked;
     } catch (e) {
       slotErr = e instanceof Error ? e.message : String(e);
@@ -507,7 +507,7 @@
   }
 
   async function browseLoraDir(): Promise<void> {
-    const p = await pickFolder();
+    const p = await pickFolder(aLora);
     if (p) {
       aLora = p;
       await saveAdvanced();

@@ -43,13 +43,8 @@ func isDefaultSlotCachePath(p string) bool {
 // chosen path ({path}); 204 when the user cancels. Unlike the category root
 // picker it does NOT persist — the caller binds the path into a form field.
 func (s *Server) handleAPIPickFolder(w http.ResponseWriter, r *http.Request) {
-	path, err := pickFolder()
-	if err != nil {
-		shared.SendResponse(w, r, http.StatusInternalServerError, "folder picker failed: "+err.Error())
-		return
-	}
-	if strings.TrimSpace(path) == "" {
-		w.WriteHeader(http.StatusNoContent)
+	path, ok := runNativePick(w, r, pickFolder)
+	if !ok {
 		return
 	}
 	writeJSON(w, map[string]string{"path": path})
@@ -457,6 +452,9 @@ func (s *Server) handleAPISettingsRootPick(w http.ResponseWriter, r *http.Reques
 	var body struct {
 		Category string `json:"category"`
 		Clear    bool   `json:"clear"`
+		// Path skips the native dialog: the web picker's answer on a box with
+		// no desktop (see runFolderPick).
+		Path string `json:"path"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Category) == "" {
 		shared.SendResponse(w, r, http.StatusBadRequest, "body must be {category: <non-empty>, clear?: bool}")
@@ -479,13 +477,8 @@ func (s *Server) handleAPISettingsRootPick(w http.ResponseWriter, r *http.Reques
 	// path - never handed back to the shared modelsRoot.
 	var path string
 	if !body.Clear {
-		var err error
-		if path, err = pickFolder(); err != nil {
-			shared.SendResponse(w, r, http.StatusInternalServerError, "folder picker failed: "+err.Error())
-			return
-		}
-		if strings.TrimSpace(path) == "" {
-			w.WriteHeader(http.StatusNoContent) // user cancelled
+		var ok bool
+		if path, ok = runFolderPick(w, r, body.Path); !ok {
 			return
 		}
 	}
@@ -514,6 +507,7 @@ func (s *Server) handleAPISettingsLoraDirPick(w http.ResponseWriter, r *http.Req
 	var body struct {
 		Category string `json:"category"`
 		Clear    bool   `json:"clear"`
+		Path     string `json:"path"` // skips the native dialog, as on root/pick
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		shared.SendResponse(w, r, http.StatusBadRequest, "body must be {category: <non-empty>, clear?: bool}")
@@ -526,16 +520,10 @@ func (s *Server) handleAPISettingsLoraDirPick(w http.ResponseWriter, r *http.Req
 	}
 	var path string
 	if !body.Clear {
-		p, err := pickFolder()
-		if err != nil {
-			shared.SendResponse(w, r, http.StatusInternalServerError, "folder picker failed: "+err.Error())
+		var ok bool
+		if path, ok = runFolderPick(w, r, body.Path); !ok {
 			return
 		}
-		if strings.TrimSpace(p) == "" {
-			w.WriteHeader(http.StatusNoContent) // user cancelled
-			return
-		}
-		path = p
 	}
 	if err := autogen.UpsertSidecarLoraDir(s.autogen.GeneratePath, category, path); err != nil {
 		shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
@@ -550,15 +538,11 @@ func (s *Server) handleAPISettingsLoraDirPick(w http.ResponseWriter, r *http.Req
 // handleAPIBackendPick opens the host's native open-file dialog and returns the
 // chosen executable path. Does NOT persist — the Backends UI drops it into the
 // field and autosaves via PUT /api/settings/backends. 204 when the user
-// cancels; 501 when the platform has no native picker (UI keeps the text field).
+// cancels; 501 when no native picker can reach this browser (the UI opens the
+// web picker instead).
 func (s *Server) handleAPIBackendPick(w http.ResponseWriter, r *http.Request) {
-	path, err := pickFile(pickSpecs["backend"])
-	if err != nil {
-		shared.SendResponse(w, r, http.StatusNotImplemented, "file picker unavailable: "+err.Error())
-		return
-	}
-	if strings.TrimSpace(path) == "" {
-		w.WriteHeader(http.StatusNoContent) // cancelled
+	path, ok := runNativePick(w, r, func() (string, error) { return pickFile(pickSpecs["backend"]) })
+	if !ok {
 		return
 	}
 	writeJSON(w, map[string]string{"path": path})
@@ -569,7 +553,7 @@ func (s *Server) handleAPIBackendPick(w http.ResponseWriter, r *http.Request) {
 // the caller drops it into a form field. The kind is looked up in the
 // server-side pickSpecs whitelist; the dialog config is never taken from the
 // request (it is interpolated into a shell command line). 204 on cancel, 501
-// when the platform has no native picker (UI keeps the text field).
+// when no native picker can reach this browser (the UI opens the web picker).
 func (s *Server) handleAPIPickFile(w http.ResponseWriter, r *http.Request) {
 	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
 	spec, ok := pickSpecs[kind]
@@ -577,13 +561,8 @@ func (s *Server) handleAPIPickFile(w http.ResponseWriter, r *http.Request) {
 		shared.SendResponse(w, r, http.StatusBadRequest, "unknown file picker kind: "+kind)
 		return
 	}
-	path, err := pickFile(spec)
-	if err != nil {
-		shared.SendResponse(w, r, http.StatusNotImplemented, "file picker unavailable: "+err.Error())
-		return
-	}
-	if strings.TrimSpace(path) == "" {
-		w.WriteHeader(http.StatusNoContent) // cancelled
+	path, ok := runNativePick(w, r, func() (string, error) { return pickFile(spec) })
+	if !ok {
 		return
 	}
 	writeJSON(w, map[string]string{"path": path})

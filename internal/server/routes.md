@@ -92,7 +92,10 @@ effect at the next start**); `PUT /api/default-variants`;
 outside `autogen.CategoryOrder`, and BOTH take `{clear:true}` to drop back to the default -- a
 blank dialog result means "cancelled", so clearing cannot be expressed by the picker itself);
 `POST /api/pick-file` (whitelisted
-kinds only — `pickfile_spec.go`); `GET`/`POST /api/apikeys` + `DELETE /api/apikeys/{name}`.
+kinds only — `pickfile_spec.go`); every pick route 501s when no native dialog can reach the
+browser, and the UI falls back to `GET /api/pick/browse?root=&path=&kind=&all=` (`pickbrowse.go`,
+read-only listing confined to the models and backends folders); `GET`/`POST /api/apikeys` +
+`DELETE /api/apikeys/{name}`.
 
 ## Managed backend installs (`backendsapi.go`, admin-gated)
 

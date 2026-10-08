@@ -4,6 +4,7 @@
   import Sidebar from "./components/Sidebar.svelte";
   import StatusRail from "./components/StatusRail.svelte";
   import ConfirmHost from "./components/ConfirmHost.svelte";
+  import WebPickerHost from "./components/WebPickerHost.svelte";
   import TitleBar from "./components/TitleBar.svelte";
   import Dashboard from "./routes/Dashboard.svelte";
   import Models from "./routes/Models.svelte";
@@ -139,6 +140,8 @@
 
 <!-- One dialog host per app root; askConfirm() from anywhere renders here. -->
 <ConfirmHost />
+<!-- Browse buttons fall back here when no native dialog can reach this browser. -->
+<WebPickerHost />
 
 <!-- The title bar sits OUTSIDE the mode switch on purpose: loading, the
      playground login and the playground shell are all states the window can be
