@@ -3,6 +3,7 @@ package autogen
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/quartermaster-labs/quartermaster/internal/config"
@@ -1060,11 +1061,22 @@ func ApplyOverrideToExtraImage(m ExtraImageModel, ov *Override) ExtraImageModel 
 // (safetensors DiTs autogen's gguf scan can't see). Unlike emitImageModel these
 // wire components verbatim from explicit paths — no arch detection, no VRAM
 // planner. A matching override (sidecar UI edit or file rule) is overlaid so the
-// config editor can tune these. Names are deduped against emitted models via seen.
+// config editor can tune these.
+//
+// A name already served (any discovered model's id OR any profile it emitted:
+// ctx tiers, variants, the vision twin) keeps its owner: renaming the discovered
+// model would flip which process answers an id the user already calls. The
+// extra is skipped with an in-band reason rather than dropped silently, since it
+// was declared on purpose and a quiet no-op reads as the feature not working.
 func emitExtraImageModels(b *strings.Builder, s Settings, overrides []Override, seen map[string]bool, emitted *[]string) {
 	for _, m := range s.ExtraImageModels {
 		name := strings.TrimSpace(m.Name)
-		if strings.TrimSpace(m.ModelPath) == "" || name == "" || seen[name] {
+		if strings.TrimSpace(m.ModelPath) == "" || name == "" {
+			fmt.Fprintf(b, "\n  # SKIPPED extra image model %q: name and modelPath are both required\n", name)
+			continue
+		}
+		if seen[name] || slices.Contains(*emitted, name) {
+			fmt.Fprintf(b, "\n  # SKIPPED extra image model %q: that name is already served by another model\n", name)
 			continue
 		}
 		seen[name] = true

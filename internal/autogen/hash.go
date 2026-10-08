@@ -300,10 +300,30 @@ const hashCacheSuffix = ".modelhash"
 // pool: sd.cpp cannot load one as a conditioner, yet a same-width hybrid could
 // outrank the real encoder on file size and move --llm with nothing on disk
 // having changed for the image model.
-const genVersion = "v88"
+// v89: a third same-id row falls back to -<publisher>-<repo> then -N instead of
+// reusing the second's key, and a clashing or incomplete extraImageModels entry
+// leaves a "# SKIPPED" comment instead of vanishing.
+// v90: Hugging Face model folders (config.json + safetensors) are discovered
+// and served through vllm, or leave a "# SKIPPED" comment with no vllm backend.
+// v91: vllm's --gpu-memory-utilization and estVramGB are sized to weights + KV
+// + overhead when that is under the budget, not to the whole budget.
+// v92: vllm models get --enable-auto-tool-choice and a --tool-call-parser.
+// v93: vllm models pin their KV pool with --kv-cache-memory-bytes (issue #93).
+const genVersion = "v93"
+
+// hashedInput reports whether a file under a models root can change what
+// discovery sees: a gguf, a safetensors (encoder pool components and HF weight
+// files), or an HF folder's config.json.
+func hashedInput(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".gguf", ".safetensors":
+		return true
+	}
+	return strings.EqualFold(name, hfConfigFile)
+}
 
 // InputsHash digests everything that can change the generated config: the set of
-// gguf files under modelsRoot (path + size + mtime) plus the raw bytes of the
+// model files under modelsRoot (path + size + mtime, see hashedInput) plus the raw bytes of the
 // generate control file. A stable hash means a regen would produce the same
 // config, so it can be skipped.
 func InputsHash(modelsRoot string, generateFileBytes []byte) (string, error) {
@@ -328,7 +348,7 @@ func InputsHashRoots(roots []string, generateFileBytes []byte) (string, error) {
 			if err != nil {
 				return nil
 			}
-			if d.IsDir() || !strings.EqualFold(filepath.Ext(path), ".gguf") {
+			if d.IsDir() || !hashedInput(d.Name()) {
 				return nil
 			}
 			fi, e := d.Info()

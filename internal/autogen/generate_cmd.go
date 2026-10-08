@@ -678,6 +678,16 @@ func RenderSoloCmdLayers(s Settings, meta Metadata, row GgufRow, ov Override) (C
 		}
 		return plainCmd(strings.Join(lines, " "))
 	}
+	// HF folders render a vllm command or nothing: the same refusal emitHFModel
+	// makes when no vllm backend is registered. meta is the caller's
+	// ReadHFMetadata, since the folder has no gguf header.
+	if row.IsHF {
+		be := resolveBackendPreferring(s, &ov, "llm", "vllm")
+		if !strings.EqualFold(be.Kind, "vllm") {
+			return ComposedCmd{}, fmt.Errorf("%s is a safetensors model folder and needs a vllm backend; llama.cpp loads gguf only", row.FileName)
+		}
+		return plainCmd(strings.Join(vllmCmdLines(s, row, &ov, row.FullPath, be, meta), " "))
+	}
 	// Video DiTs render the same sd-server command shape as an image model, but
 	// have to be tested FIRST: their arch (when they declare one at all) still
 	// reads as an image arch, and the video branch is what adds --audio-vae and
