@@ -5,6 +5,7 @@ import { modelCategory } from "../lib/modelUtils";
 import { userPref } from "./prefs";
 import type { SystemPreset } from "../lib/systemPrompt";
 import { DEFAULT_SEARCH_PROVIDERS, type SearchProviderCfg } from "../lib/webSearch";
+import { pickedVoice } from "../lib/voices";
 
 // Shared singletons so other pages (e.g. the Models panel's "Chat" button) can
 // drive the always-mounted playground. persistentStore returns a fresh writable
@@ -59,10 +60,18 @@ export const memoryStore = userPref<boolean>("playground-memory", true);
 export const reasoningEffortStore = userPref<string>("playground-reasoning-effort", "medium");
 // Read-aloud: the TTS model the chat tab's speaker button uses. Empty = the
 // button is inert (nothing picked yet). Separate from the Speech tab's model so
-// reading a reply out doesn't hijack whatever that tab is set up for, but the
-// VOICE is shared — it is the same person's voice either way.
+// reading a reply out doesn't hijack whatever that tab is set up for.
 export const chatTtsModelStore = userPref<string>("playground-chat-tts-model", "");
-export const chatTtsVoiceStore = userPref<string>("playground-speech-voice", "");
+// The voice is kept PER MODEL (see lib/voices pickedVoice): read-aloud and the
+// Speech tab agree whenever they use the same model, and never fight over a
+// name only one of them can speak. The old single pref is read as the fallback
+// for a model with no pick yet, and never written again.
+export const legacyVoiceStore = userPref<string>("playground-speech-voice", "");
+export const voiceByModelStore = userPref<Record<string, string>>("playground-voice-by-model", {});
+export function setModelVoice(model: string, voice: string) {
+  if (!model) return;
+  voiceByModelStore.update((m) => ({ ...(m && typeof m === "object" ? m : {}), [model]: voice }));
+}
 // Playback shaping for read-aloud, live on the <audio> element rather than a
 // synthesis parameter: neither engine takes a rate or a gain, and re-synthesising
 // to change either would throw away the replay cache. Shared across messages and
@@ -79,6 +88,10 @@ export const chatTtsRateStore = userPref<number>("playground-speech-rate", 1);
 export const ttsModels = derived(models, ($m) => $m.filter((x) => modelCategory(x) === "tts"));
 export const effectiveTtsModel = derived([chatTtsModelStore, ttsModels], ([$pick, $tts]) =>
   $tts.some((m) => m.id === $pick) ? $pick : ($tts[0]?.id ?? ""),
+);
+// The voice read-aloud speaks in: the pick for the read-aloud model.
+export const chatTtsVoiceStore = derived([voiceByModelStore, effectiveTtsModel, legacyVoiceStore], ([$map, $model, $legacy]) =>
+  pickedVoice($map, $model, $legacy),
 );
 // Rewrite mode: composer becomes a two-field (instructions + prose) rewriter
 // whose output renders as a side-by-side diff. Toggle + last-used instruction.

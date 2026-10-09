@@ -268,8 +268,13 @@ The speaker button under an assistant reply POSTs `/v1/audio/speech` (`lib/speec
 - **Model**: the explicit `chatTtsModelStore` pick from the side-rail **Settings → General**, else
   the first installed TTS model (auto-picked so read-aloud works without a setup step). The button
   is not rendered at all when no TTS model is installed.
-- **Voice**: `chatTtsVoiceStore` = the same `playground-speech-voice` pref key — one person, one
-  voice. The list comes from `lib/voices.ts` (`cachedVoices`/`fetchVoices`/`voiceLabel`), shared
+- **Voice**: `chatTtsVoiceStore` is derived: the pick for the read-aloud model in
+  `voiceByModelStore` (`playground-voice-by-model`), shared with the Speech tab for the same model.
+  It used to be ONE name for every model, clamped by each surface against its own model's list;
+  the always-mounted Settings clamp then snapped any Speech-tab pick outside Kokoro's pack back to
+  Kokoro's first speaker, so audio.cpp clones could never stay selected. The old
+  `playground-speech-voice` key is read only as the fallback for a model with no pick yet
+  (`pickedVoice`), and every clamp writes only its own model's entry. The list comes from `lib/voices.ts` (`cachedVoices`/`fetchVoices`/`voiceLabel`), shared
   with the Speech tab so one normalization serves both qwentts's `{voices:[{name,kind}]}` **and**
   TTS.cpp's `{<model id>: [names]}` map.
 

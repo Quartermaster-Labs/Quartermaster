@@ -19,6 +19,7 @@
     effectiveTtsModel,
     ttsModels,
     chatTtsVoiceStore,
+    setModelVoice,
     memoryStore,
     selectedModelStore,
     historyOpenStore,
@@ -226,10 +227,11 @@
   // Keep the stored pick inside the list, so the <select> never sits on a value
   // it can't show (a voice cloned on another model, say) while sending it.
   // Gated on ttsVoicesKnown: clamping against the [""] placeholder wipes the
-  // saved voice pref for every model whose list hasn't been fetched yet.
+  // saved voice pref for every model whose list hasn't been fetched yet. Writes
+  // only the read-aloud model's own pick, never another model's.
   $effect(() => {
     if (ttsVoicesKnown && ttsVoices.length && !ttsVoices.includes($chatTtsVoiceStore)) {
-      chatTtsVoiceStore.set(ttsVoices[0]);
+      setModelVoice(get(effectiveTtsModel), ttsVoices[0]);
     }
   });
 
@@ -343,17 +345,32 @@
   // URL alive.
   $effect(() => () => stopVoiceTest());
 
+  // A refresh asked for while one is in flight is queued, not dropped: the
+  // in-flight one may be for the model the user just switched away from.
+  let ttsRefetch = false;
   async function refreshTtsVoices() {
     const model = get(effectiveTtsModel);
-    if (!model || ttsVoicesLoading) return;
+    if (!model) return;
+    if (ttsVoicesLoading) {
+      ttsRefetch = true;
+      return;
+    }
     ttsVoicesLoading = true;
     try {
-      ttsVoices = await fetchVoices(model);
+      const voices = await fetchVoices(model);
+      // Another model's list: applying it would clamp this model's pick
+      // against the wrong voice pack.
+      if (get(effectiveTtsModel) !== model) return;
+      ttsVoices = voices;
       // fetchVoices caches on success and returns DEFAULT_VOICES on failure, so
       // the cache — not the return value — is what says whether we really know.
       ttsVoicesKnown = hasCachedVoices(model);
     } finally {
       ttsVoicesLoading = false;
+      if (ttsRefetch) {
+        ttsRefetch = false;
+        void refreshTtsVoices();
+      }
     }
   }
 
@@ -1091,11 +1108,12 @@
 
               <div class="flex flex-col gap-1">
                 <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide text-txtsecondary">
-                  Voice {@render tip("Speaker the read-aloud button uses. Shared with the Speech tab - one person, one voice. Refresh asks the model for the full list, including any cloned voices; on engines that keep their voices in a folder that costs nothing, on the rest it loads the model.")}
+                  Voice {@render tip("Speaker the read-aloud button uses. Remembered per model, and the same pick the Speech tab uses for that model. Refresh asks the model for the full list, including any cloned voices; on engines that keep their voices in a folder that costs nothing, on the rest it loads the model.")}
                 </span>
                 <div class="flex items-center gap-2">
                   <Select
-                    bind:value={$chatTtsVoiceStore}
+                    value={$chatTtsVoiceStore}
+                    onchange={(v) => setModelVoice($effectiveTtsModel, v)}
                     ariaLabel="Voice"
                     class="flex-1 min-w-0"
                     options={ttsVoices.map((v) => ({ value: v, label: voiceLabel(v) }))}

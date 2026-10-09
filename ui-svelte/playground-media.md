@@ -109,6 +109,23 @@ Voice-list normalization (`lib/voices.ts`) is shared with chat read-aloud — se
 [`playground-chat.md`](playground-chat.md) for the `safeVoice` / substitution-warning rules, which
 apply to both surfaces.
 
+**Playing a take lifts it into the spotlight** (`TakeSpotlight.svelte`), above the grid: whole
+text, voice + model chips, its own player, and the sentence being spoken painted like chat
+read-aloud (`--color-speak`, spoken text dimmed). A card's play button never plays in place: its
+`AudioPlayer` gets `onplayrequest` and hands its position to the spotlight. `focus` pins the take
+by index AND audio string, so a delete, regenerate, edit or thread switch drops the spotlight
+instead of showing one take's text over another's clip. Each new take records `model`; older takes
+have none and show no chip.
+
+**The highlight timing is estimated, not reported.** Chat knows the playing sentence because it
+synthesises one chunk per request; a take is ONE wav and no engine returns timing. Chunking the
+take instead was rejected (it costs cross-sentence prosody and voice consistency, and the download
+would be stitched), and a forced-aligner model would evict the TTS model on one GPU.
+`lib/takeTiming.ts` splits sentences (long ones at commas), weights them by letters plus a
+punctuation pause, spreads them over the voiced part of the decoded clip, and snaps each boundary
+to the nearest real pause, re-estimating the rest from where it landed so drift does not
+accumulate. Sentence-level only: a length model is not good enough for words.
+
 ## `MaskEditor.svelte`
 
 Canvas brush painter producing a PNG mask data URL for sd-server inpainting.

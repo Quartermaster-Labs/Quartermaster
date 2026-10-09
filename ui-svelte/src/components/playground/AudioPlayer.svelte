@@ -6,7 +6,34 @@
   // palette, primary fill) — replaces the ugly native <audio controls>. Shows a
   // real waveform decoded from the clip; the played portion fills primary.
   // Parent auto-play still works via the exported play().
-  let { src, volume = 1, label = "" }: { src: string; volume?: number; label?: string } = $props();
+  //
+  // The Speech studio's spotlight drives a read-along off this player, which is
+  // what the optional hooks are for: `onplayrequest` turns a grid card's play
+  // button into "open this take in the spotlight from here" instead of playing
+  // in place, `startAt`/`autoplay` let the spotlight pick up where the card was,
+  // and `ontime`/`ondecoded` feed the highlight its clock and its pause map.
+  let {
+    src,
+    volume = 1,
+    label = "",
+    wide = false,
+    startAt = 0,
+    autoplay = false,
+    onplayrequest,
+    ontime,
+    ondecoded,
+  }: {
+    src: string;
+    volume?: number;
+    label?: string;
+    wide?: boolean;
+    startAt?: number;
+    autoplay?: boolean;
+    onplayrequest?: (at: number) => void;
+    /** Playback position; 0 again once the clip has ended. */
+    ontime?: (t: number) => void;
+    ondecoded?: (samples: Float32Array, rate: number) => void;
+  } = $props();
 
   const BARS = 48;
 
@@ -23,15 +50,26 @@
     audioEl?.play().catch(() => {});
   }
 
+  export function pause() {
+    audioEl?.pause();
+  }
+
   function toggle() {
     if (!audioEl) return;
     if (playing) audioEl.pause();
+    else if (onplayrequest) onplayrequest(audioEl.currentTime);
     else audioEl.play().catch(() => {});
   }
 
   function onMeta() {
     // wav duration is finite; guard NaN/Infinity from odd encodes.
     dur = Number.isFinite(audioEl?.duration ?? NaN) ? audioEl!.duration : 0;
+    if (!audioEl) return;
+    if (startAt > 0 && startAt < dur) {
+      audioEl.currentTime = startAt;
+      cur = startAt;
+    }
+    if (autoplay) audioEl.play().catch(() => {});
   }
 
   const frac = $derived(dur > 0 ? Math.min(1, cur / dur) : 0);
@@ -55,6 +93,7 @@
         ctx.close();
         if (cancelled) return;
         peaks = computePeaks(audio.getChannelData(0), BARS);
+        ondecoded?.(audio.getChannelData(0), audio.sampleRate);
       } catch {
         if (!cancelled) peaks = [];
       }
@@ -89,6 +128,7 @@
     const f = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
     audioEl.currentTime = f * dur;
     cur = f * dur;
+    ontime?.(cur);
   }
 
   function onPointerDown(e: PointerEvent) {
@@ -111,15 +151,15 @@
   }
 </script>
 
-<div class="flex items-center gap-2.5 w-72 max-w-full">
+<div class="flex items-center gap-2.5 {wide ? 'w-full' : 'w-72'} max-w-full">
   <audio
     bind:this={audioEl}
     {src}
     onloadedmetadata={onMeta}
-    ontimeupdate={() => { if (!seeking) cur = audioEl?.currentTime ?? 0; }}
+    ontimeupdate={() => { if (!seeking) cur = audioEl?.currentTime ?? 0; ontime?.(audioEl?.currentTime ?? 0); }}
     onplay={() => (playing = true)}
     onpause={() => (playing = false)}
-    onended={() => { playing = false; cur = 0; }}
+    onended={() => { playing = false; cur = 0; ontime?.(0); }}
   ></audio>
 
   <button
