@@ -485,7 +485,8 @@
   let supportsAnnotEdit = $derived(supportsRefImages && modelPreset?.annotEdit === true);
   // Only sd.cpp returns the raw PNG the alpha channel survives in; the OpenAI
   // route re-encodes upstream, so the button would promise what it cannot do.
-  let supportsAlpha = $derived(isSdapi && !!modelPreset?.alphaPrompt);
+  let modelAlpha = $derived($models.find((m) => m.id === $selectedModelStore)?.alphaPrompt);
+  let supportsAlpha = $derived(isSdapi && !!modelAlpha);
   let modelDefaults = $derived(
     modelPreset || modelGen ? settingsFor($selectedModelStore, modelGen) : undefined
   );
@@ -920,7 +921,7 @@
     // The transparency sentence is appended where the model card puts it, at the
     // very end of the prompt, and is stored EXPANDED so regenerate and edit
     // reproduce the exact prompt that produced the image.
-    const finalPrompt = alphaBg && supportsAlpha ? withAlphaPrompt(params.model, promptText) : promptText;
+    const finalPrompt = alphaBg && supportsAlpha ? withAlphaPrompt(modelAlpha, promptText) : promptText;
     // Composite base + mask now so the sent turn shows the region that changed.
     const maskPreview = useMask && base ? await buildMaskOverlay(base, useMask) : undefined;
 

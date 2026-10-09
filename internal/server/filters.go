@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -72,6 +73,21 @@ func CreateFilterMiddleware(cfg config.Config) chain.Middleware {
 				if realName, found := cfg.RealModelName(data.Model); found && isSDServerCmd(cfg.Models[realName].Cmd) {
 					body, err = applyImageSeed(body)
 					if err != nil {
+						shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+						return
+					}
+				}
+			}
+
+			// Only for sd-server: the qwen-image-2.1 PE rewrite models (llama-server)
+			// share the id prefix that selects the wording.
+			if r.URL.Path == "/sdapi/v1/txt2img" || r.URL.Path == "/sdapi/v1/img2img" {
+				if realName, found := cfg.RealModelName(data.Model); found && isSDServerCmd(cfg.Models[realName].Cmd) {
+					body, err = applyImageTransparent(body, realName)
+					if errors.Is(err, errAlphaUnsupported) {
+						shared.SendResponse(w, r, http.StatusBadRequest, err.Error())
+						return
+					} else if err != nil {
 						shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 						return
 					}
