@@ -41,6 +41,11 @@ export interface ModelCapabilities {
 // to, resolved server-side from `promptEnhancer: <id>` + the settings-wide
 // promptEnhancers table. Present only when the id resolves, so the UI can treat
 // "field present" as "the Enhance button is usable" without a second lookup.
+export interface AlphaPrompt {
+  prefix: string;
+  suffix: string;
+}
+
 export interface PromptEnhancerInfo {
   // Catalog model id to send the rewrite request to. A normal chat model as far
   // as the router is concerned, so it swaps and evicts like any other.
@@ -81,6 +86,10 @@ export interface Model {
   // The img2img half of the pair, used instead of promptEnhancer when the
   // request carries a reference image. Absent => promptEnhancer covers both.
   promptEnhancerEdit?: PromptEnhancerInfo;
+  // Model-card wording that asks this image model for a transparent background.
+  // Absent => no such mode. Server-owned (internal/server/imagealpha.go), the
+  // same table that expands `transparent: true` for API callers.
+  alphaPrompt?: AlphaPrompt;
   // Gguf path shared by a model's variants (ctx tiers, game, judge). Rows with
   // the same family are collapsed into one group. Empty => ungrouped.
   family?: string;

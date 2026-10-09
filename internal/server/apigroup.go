@@ -91,6 +91,10 @@ type apiModel struct {
 	// same way; nil when the model named none, in which case the client falls
 	// back to PromptEnhancer for both directions.
 	PromptEnhancerEdit *apiPromptEnhancer `json:"promptEnhancerEdit,omitempty"`
+	// AlphaPrompt is the model-card wording that asks this image model for a
+	// transparent background (see imagealpha.go). nil = no such mode; the
+	// playground shows its transparency button only when this is present.
+	AlphaPrompt *alphaPrompt `json:"alphaPrompt,omitempty"`
 }
 
 // apiPromptEnhancer is the resolved rewrite model an image model delegates its
@@ -318,6 +322,7 @@ func (s *Server) modelStatus() []apiModel {
 			GenDefaults:        genDefaults(info),
 			PromptEnhancer:     promptEnhancerFor(cfg, mc.PromptEnhancer, mc.PromptEnhancerPrompt),
 			PromptEnhancerEdit: promptEnhancerFor(cfg, mc.PromptEnhancerEdit, mc.PromptEnhancerEditPrompt),
+			AlphaPrompt:        modelAlphaPrompt(id, mc.Cmd),
 			EstVramGB:          mc.EstVramGB,
 			EstRamGB:           mc.EstRamGB,
 			RunningCmd:         runningCmd,
