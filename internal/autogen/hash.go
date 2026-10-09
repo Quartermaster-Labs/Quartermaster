@@ -309,7 +309,10 @@ const hashCacheSuffix = ".modelhash"
 // + overhead when that is under the budget, not to the whole budget.
 // v92: vllm models get --enable-auto-tool-choice and a --tool-call-parser.
 // v93: vllm models pin their KV pool with --kv-cache-memory-bytes (issue #93).
-const genVersion = "v93"
+// v94: a prompt enhancer is emitted as ONE profile (no fleet variants, no
+// -vision twin, 32k window, projector in VRAM for i2i and absent for t2i), and
+// promptEnhancerEdit pairs to that base id instead of the retired twin.
+const genVersion = "v94"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight
