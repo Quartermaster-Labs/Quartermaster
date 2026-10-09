@@ -141,10 +141,9 @@ type autoEnhancerPair struct {
 // ID, where the loop appends a publisher tag to the SECOND one; first-wins here
 // agrees with that.
 //
-// The exception is an i2i enhancer, which is auto-paired to the model's VISION
-// TWIN instead. See enhancerServedID: on that one direction the base id is the
-// wrong profile, every single time.
-func detectEnhancers(rows []GgufRow, s Settings, overrides []Override) autoEnhancers {
+// The base id is the only profile an enhancer gets (see enhancerCtx), so it is
+// what both directions pair to.
+func detectEnhancers(rows []GgufRow) autoEnhancers {
 	out := autoEnhancers{}
 	for _, row := range rows {
 		// An image/video/SAM row is never an enhancer, whatever it is called:
@@ -164,7 +163,7 @@ func detectEnhancers(rows []GgufRow, s Settings, overrides []Override) autoEnhan
 		switch dir {
 		case PEDirEdit:
 			if p.Edit == "" {
-				p.Edit = enhancerServedID(row, s, overrides)
+				p.Edit = row.ID
 			}
 		default:
 			if p.Text == "" {
@@ -175,46 +174,13 @@ func detectEnhancers(rows []GgufRow, s Settings, overrides []Override) autoEnhan
 	return out
 }
 
-// enhancerServedID picks WHICH profile of an i2i enhancer to auto-pair.
-//
-// Every other profile of a vision model carries its projector in system RAM
-// (--no-mmproj-offload), which costs no VRAM and changes neither the context
-// window nor the layer placement, paid for with a one-off host-side encode on
-// the requests that actually carry an image. That trade is right for a chat
-// model, where most requests are text. It inverts completely for an i2i
-// rewriter: EVERY call carries the image, by definition, so the base profile
-// pays the CPU encode every time and never once banks the saving. Measured, it
-// is the difference between seconds and minutes on a single reference image.
-//
-// So the twin is the correct pairing, and its extra VRAM is the price of the
-// feature working at all. Falls back to the base id whenever the emit loop
-// would not produce a twin, since pairing to an id that is never emitted hides
-// the button behind a 404 instead.
-func enhancerServedID(row GgufRow, s Settings, overrides []Override) string {
-	ov := ResolveOverride(row, overrides)
-	mmprojFile, modelPin := "", ""
-	if ov != nil {
-		mmprojFile = ov.MmprojFile
-		modelPin = strings.ToLower(strings.TrimSpace(ov.Mmproj))
-		// The reserved "vision" variant repins the TWIN's projector, and is the
-		// one place a "none" drops the twin while leaving the base ids vision
-		// capable. Mirrors the twin gate in generate.go.
-		variants := append(append([]VariantSpec{}, ov.Variants...), s.DefaultVariants...)
-		for i := range variants {
-			if strings.EqualFold(strings.TrimSpace(variants[i].Name), "vision") {
-				mmprojFile = inheritStr(variants[i].MmprojFile, mmprojFile)
-				break
-			}
-		}
-	}
-	if strings.EqualFold(strings.TrimSpace(mmprojFile), NoneSentinel) || modelPin == "none" {
-		return row.ID
-	}
-	if path, _ := mmprojFor(row, mmprojFile); path == "" {
-		return row.ID
-	}
-	return row.ID + "-vision"
-}
+// enhancerCtx is the context window a prompt enhancer is emitted with when
+// nothing pins one. Its whole job fits in a few thousand tokens (the system
+// prompt, a reference image, a paragraph out, plus reasoning), and the sizer's
+// default of "as much as the budget allows" put a 262k window and ~16GB of VRAM
+// behind a rewrite, which is also what made every press evict the image model.
+// 32k leaves room for a large reference image and long reasoning.
+const enhancerCtx = 32768
 
 // For returns the enhancers discovered for an image model id, or nil. The lookup
 // is on the model's base key, so every quant of an image model finds the same
@@ -254,7 +220,7 @@ func enhancerDisabled(id string) bool {
 // A configured id always wins, including the PEDisabled sentinel, so a user who
 // has said no is never overruled by a filename.
 func resolveEnhancerIDs(s Settings, imageID, text, edit string) (string, string) {
-	text, edit = strings.TrimSpace(text), strings.TrimSpace(edit)
+	text, edit = enhancerBaseID(text), enhancerBaseID(edit)
 	if text != "" && edit != "" {
 		return text, edit
 	}
@@ -269,6 +235,20 @@ func resolveEnhancerIDs(s Settings, imageID, text, edit string) (string, string)
 		edit = auto.Edit
 	}
 	return text, edit
+}
+
+// enhancerBaseID maps a configured "<enhancer>-vision" id to the enhancer's base
+// id. Enhancers used to get a vision twin, and an i2i one was paired to it; the
+// twin is no longer emitted (the base profile carries the projector in VRAM), so
+// a pin saved back then would otherwise name a model that does not exist.
+func enhancerBaseID(id string) string {
+	id = strings.TrimSpace(id)
+	if base, ok := strings.CutSuffix(id, "-vision"); ok {
+		if _, _, isPE := promptEnhancerName(base); isPE {
+			return base
+		}
+	}
+	return id
 }
 
 // PromptEnhancerID is the exported classifier: whether a catalog model id names

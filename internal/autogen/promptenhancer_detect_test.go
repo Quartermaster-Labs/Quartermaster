@@ -61,7 +61,7 @@ func TestAutogen_detectEnhancers_PairsAcrossQuants(t *testing.T) {
 		{ID: "qwen-image-2.1-pe-i2i-q5_k_m"},
 		{ID: "qwen3.6-27b-q4_k_m"},
 	}
-	auto := detectEnhancers(rows, Settings{}, nil)
+	auto := detectEnhancers(rows)
 
 	got := auto.For("qwen-image-2.1-q8_0")
 	if got == nil {
@@ -78,39 +78,17 @@ func TestAutogen_detectEnhancers_PairsAcrossQuants(t *testing.T) {
 	}
 }
 
-// The i2i half must pair to the VISION twin when the model ships a projector.
-// The base profile carries its mmproj in RAM (--no-mmproj-offload), and an i2i
-// rewriter is handed an image on every single call, so pairing it there pays a
-// host-side encode every time: measured in minutes, not seconds.
-func TestAutogen_detectEnhancers_PrefersVisionTwin(t *testing.T) {
-	rows := []GgufRow{
-		{ID: "qwen-image-2.1-pe-i2i-q5_k_m", FullPath: "/d/models/qwen-image-2.1-pe-i2i-q5_k_m.gguf", MmprojPath: "/d/models/pe-i2i.mmproj-bf16.gguf", MmprojSizeGB: 1.3},
-		// The t2i half ships a projector too (same base model), but it is never
-		// shown an image, so it must NOT be moved onto the twin and made to pay
-		// VRAM for a projector it will not use.
-		{ID: "qwen-image-2.1-pe-t2i-q5_k_m", FullPath: "/d/models/qwen-image-2.1-pe-t2i-q5_k_m.gguf", MmprojPath: "/d/models/pe-t2i.mmproj-bf16.gguf", MmprojSizeGB: 1.3},
+// Enhancers used to get a "-vision" twin and an i2i one was paired to it. The
+// twin is gone (the base profile holds the projector in VRAM), so a pin saved
+// back then must land on the base id instead of naming a model that no longer
+// exists. A non-enhancer "-vision" id is a real twin and is left alone.
+func TestAutogen_resolveEnhancerIDs_LegacyVisionPin(t *testing.T) {
+	text, edit := resolveEnhancerIDs(Settings{}, "qwen-image-2.1-q8_0", "qwen3-vl-8b-vision", "qwen-image-2.1-pe-i2i-q5_k_m-vision")
+	if edit != "qwen-image-2.1-pe-i2i-q5_k_m" {
+		t.Errorf("edit = %q, want the base id", edit)
 	}
-	got := detectEnhancers(rows, Settings{}, nil).For("qwen-image-2.1-q8_0")
-	if got == nil {
-		t.Fatal("no enhancers paired to the image model")
-	}
-	if got.Edit != "qwen-image-2.1-pe-i2i-q5_k_m-vision" {
-		t.Errorf("edit = %q, want the vision twin", got.Edit)
-	}
-	if got.Text != "qwen-image-2.1-pe-t2i-q5_k_m" {
-		t.Errorf("text = %q, want the base profile", got.Text)
-	}
-
-	// No projector => no twin is emitted, so pairing to one would be a 404.
-	bare := []GgufRow{{ID: "qwen-image-2.1-pe-i2i-q5_k_m"}}
-	if got := detectEnhancers(bare, Settings{}, nil).For("qwen-image-2.1-q8_0"); got.Edit != "qwen-image-2.1-pe-i2i-q5_k_m" {
-		t.Errorf("edit = %q, want the base id when there is no twin", got.Edit)
-	}
-
-	// "mmproj: none" drops the twin as well, same rule the emit loop uses.
-	pinned := []Override{{Match: "*pe-i2i*", Mmproj: "none"}}
-	if got := detectEnhancers(rows, Settings{}, pinned).For("qwen-image-2.1-q8_0"); got.Edit != "qwen-image-2.1-pe-i2i-q5_k_m" {
-		t.Errorf("edit = %q, want the base id when the twin is pinned off", got.Edit)
+	if text != "qwen3-vl-8b-vision" {
+		t.Errorf("text = %q, a non-enhancer twin must be kept", text)
 	}
 }
 
@@ -132,7 +110,7 @@ func TestAutogen_resolveEnhancerIDs(t *testing.T) {
 	s := Settings{autoEnhancers: detectEnhancers([]GgufRow{
 		{ID: "qwen-image-2.1-pe-t2i-q5_k_m"},
 		{ID: "qwen-image-2.1-pe-i2i-q5_k_m"},
-	}, Settings{}, nil)}
+	})}
 
 	text, edit := resolveEnhancerIDs(s, "qwen-image-2.1-q8_0", "", "")
 	if text != "qwen-image-2.1-pe-t2i-q5_k_m" || edit != "qwen-image-2.1-pe-i2i-q5_k_m" {
@@ -181,5 +159,49 @@ func TestAutogen_writeEnhancerPrompt(t *testing.T) {
 	writeEnhancerPrompt(&b, "promptEnhancerPrompt", "pe-t2i", "")
 	if b.String() != "" {
 		t.Errorf("expected nothing, got %q", b.String())
+	}
+}
+
+// An enhancer is emitted as ONE profile shaped for the job: no fleet tiers, no
+// vision twin, a capped window, and the projector placed by direction (i2i in
+// VRAM because every call carries an image, t2i none at all). Gated on the real
+// models tree holding a Qwen PE pair.
+func TestAutogen_Generate_PromptEnhancerSingleProfile(t *testing.T) {
+	if realModelsRoot == "" {
+		t.Skip("no real models tree")
+	}
+	gf := GenerateFile{Settings: Settings{ModelsRoot: realModelsRoot}}
+	gf.Settings.applyDefaults()
+	gf.Settings.DefaultVariants = []VariantSpec{{Name: "32k", Ctx: 32768}, {Name: "game", Ctx: 16384}}
+	out, err := Generate(gf, "T")
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	seen := map[string]bool{}
+	for id, cmd := range modelBlocks(out) {
+		dir, _, ok := promptEnhancerName(id)
+		if !ok {
+			continue
+		}
+		if !strings.Contains(cmd, "-c 32768") {
+			t.Errorf("%s: want the enhancer window -c 32768", id)
+		}
+		if strings.HasSuffix(id, "-vision") || strings.HasSuffix(id, "-32k") || strings.HasSuffix(id, "-game") {
+			t.Errorf("%s: enhancer must emit no extra profiles", id)
+		}
+		switch dir {
+		case PEDirEdit:
+			if strings.Contains(cmd, "--mmproj ") && strings.Contains(cmd, "--no-mmproj-offload") {
+				t.Errorf("%s: i2i projector must be in VRAM", id)
+			}
+		case PEDirText:
+			if strings.Contains(cmd, "--mmproj ") {
+				t.Errorf("%s: t2i is never shown an image, want no projector", id)
+			}
+		}
+		seen[dir] = true
+	}
+	if !seen[PEDirEdit] && !seen[PEDirText] {
+		t.Skip("no prompt enhancer in the models tree")
 	}
 }

@@ -135,7 +135,7 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 	// own (see resolveEnhancerIDs). The other half of the same classifier keeps
 	// enhancers OUT of the text-encoder pool, where a same-arch, bigger-file PE
 	// otherwise outranks the real conditioner (see encoderpool.go).
-	s.autoEnhancers = detectEnhancers(rows, s, gf.Overrides)
+	s.autoEnhancers = detectEnhancers(rows)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Quartermaster config - generated %s\n", nowRFC)
@@ -389,6 +389,9 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		override = *ov
 		ctxVariants = ov.CtxVariants
 	}
+	// A prompt enhancer is emitted as ONE profile shaped for its job (see
+	// enhancerCtx): none of the fleet's default variants, no vision twin.
+	peDir, _, isPE := promptEnhancerName(row.ID)
 
 	// Build the profile set: solo + optional ctx tiers.
 	// Per-model VRAM budget: an override caps it below the fleet default.
@@ -410,6 +413,9 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		CtxCheckpoints:    override.CtxCheckpoints,
 		CheckpointMinStep: override.CheckpointMinStep,
 	}}
+	if isPE && profiles[0].Ctx == 0 {
+		profiles[0].Ctx = enhancerCtx
+	}
 	for _, cv := range ctxVariants {
 		profiles = append(profiles, profile{
 			Name: fmt.Sprintf("%s-%s", name, formatCtxTag(cv)),
@@ -428,7 +434,14 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	// settings.DefaultVariants, each emitting "<model>-<slug>" with its own
 	// ctx/VRAM/kv/spec; zero fields inherit. Spec affects the VRAM overhead, so
 	// bake the per-variant overhead here.
-	variantSpecs := append(append([]VariantSpec{}, override.Variants...), s.DefaultVariants...)
+	fleetVariants := s.DefaultVariants
+	if isPE {
+		// The fleet's tiers (32k/64k/game) are sized for chat models; on a
+		// rewriter they are three more ids to pick wrong. Per-model variants are
+		// the user asking, and stay.
+		fleetVariants = nil
+	}
+	variantSpecs := append(append([]VariantSpec{}, override.Variants...), fleetVariants...)
 	var visionSpec *VariantSpec
 	for i := range variantSpecs {
 		v := variantSpecs[i]
@@ -499,6 +512,11 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	}
 	mmprojPath, mmprojSizeGB := mmprojFor(row, mmprojFile)
 	modelPin := strings.ToLower(strings.TrimSpace(override.Mmproj))
+	// A t2i rewriter is never shown an image, so by default it wires no
+	// projector at all; an explicit pin still wins.
+	if isPE && peDir == PEDirText && modelPin == "" {
+		modelPin = "none"
+	}
 	if mmprojPath != "" && modelPin != "none" {
 		mmprojOh := MmprojVramGB(mmprojPath, mmprojSizeGB, s)
 		// Every OTHER profile of this model loads the projector too, in RAM
@@ -513,6 +531,13 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		defPin := modelPin
 		if defPin == "" {
 			defPin = "ram"
+			// An i2i rewriter is handed an image on EVERY call, so the RAM-side
+			// projector never banks its saving and pays a host encode each time
+			// (measured: minutes per reference image). Its one profile holds the
+			// projector in VRAM instead of leaving that to a twin.
+			if isPE {
+				defPin = "gpu"
+			}
 		}
 		for i := range profiles {
 			p := &profiles[i]
@@ -591,7 +616,7 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		}
 		// "none" from the vision variant lands here rather than at the gate above,
 		// which only sees the model-wide value; either way no twin is emitted.
-		if vp.MmprojPin != "none" {
+		if vp.MmprojPin != "none" && !isPE {
 			profiles = append(profiles, vp)
 		}
 	}
