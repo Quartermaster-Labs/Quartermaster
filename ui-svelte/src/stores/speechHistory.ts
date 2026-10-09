@@ -8,7 +8,16 @@ import { syncSessions } from "../lib/sessionSync";
 // `voice` is the display label (speaker name, preset name, or "Default").
 // `instructions` is the voice_design style description actually sent (empty for
 // base/custom_voice); kept so regenerate reuses the same design.
-export type Turn = { text: string; voice: string; instructions?: string; audio?: string; error?: string; secs?: number };
+// `model` is the model id that spoke it; absent on takes made before it was kept.
+export type Turn = {
+  text: string;
+  voice: string;
+  model?: string;
+  instructions?: string;
+  audio?: string;
+  error?: string;
+  secs?: number;
+};
 
 export interface SpeechSession {
   id: string;

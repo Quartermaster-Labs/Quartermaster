@@ -125,9 +125,9 @@ export async function fetchVoices(model: string): Promise<string[]> {
 // This is not cosmetic: TTS.cpp's Kokoro runner calls TTS_ABORT on an unknown
 // voice, which kills the whole tts-server process (the request comes back as a
 // 502 and the model has to be relaunched), while an empty voice is defined —
-// both engines fall back to their own default speaker. The voice pref is one
-// per user, shared across models, so a name picked for one engine WILL be sent
-// to the other.
+// both engines fall back to their own default speaker. The pick is stored per
+// model now (pickedVoice), but the old shared pref is still the fallback for a
+// model with no pick, so a name picked for one engine CAN reach the other.
 //
 // An unknown model (nothing cached) yields "" rather than the requested name:
 // we cannot tell a valid clone from a foreign engine's speaker, and the cost of
@@ -152,6 +152,18 @@ export function voiceSubstitution(model: string, voice: string): string {
     return `${voice} isn't confirmed for this model yet - speaking in the model's default voice until its list loads.`;
   }
   return `${voice} isn't one of this model's voices - speaking as ${voiceLabel(sent)} instead.`;
+}
+
+// pickedVoice is the voice chosen FOR this model. Voices are per engine (a
+// Kokoro speaker, a wav cloned into one audio.cpp model's folder), so the pick
+// is stored per model id. One shared name used to be clamped by every surface
+// against its own model's list: the always-mounted read-aloud settings snapped
+// any Speech-tab pick outside Kokoro's pack back to Kokoro's first speaker, so
+// only Kokoro voices could ever be selected. `fallback` is the old shared pref,
+// used until a model has a pick of its own.
+export function pickedVoice(map: Record<string, string> | null | undefined, model: string, fallback: string): string {
+  if (map && typeof map === "object" && Object.hasOwn(map, model) && typeof map[model] === "string") return map[model];
+  return fallback ?? "";
 }
 
 // voiceLabel renders "" as the model's default speaker rather than a blank row.

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { VOICES_CACHE_KEY, saveVoicesCache, getVoicesCache, migrateVoicesCache, fetchVoices, safeVoice, voiceLabel, hasCachedVoices, cachedVoices, voiceSubstitution } from "./voices";
+import { VOICES_CACHE_KEY, saveVoicesCache, getVoicesCache, migrateVoicesCache, fetchVoices, safeVoice, voiceLabel, hasCachedVoices, cachedVoices, voiceSubstitution, pickedVoice } from "./voices";
 import { clearPrefs } from "../stores/prefs";
 
 // The cache lives in the server-backed prefs blob now; clearPrefs() is the reset.
@@ -122,5 +122,22 @@ describe("voices", () => {
   it("labels the empty voice", () => {
     expect(voiceLabel("")).toBe("Default voice");
     expect(voiceLabel("af_heart")).toBe("af_heart");
+  });
+});
+
+describe("pickedVoice", () => {
+  it("keeps one pick per model, so two engines never overwrite each other", () => {
+    const map = { kokoro: "af_heart", moss: "Edi" };
+    expect(pickedVoice(map, "kokoro", "")).toBe("af_heart");
+    expect(pickedVoice(map, "moss", "")).toBe("Edi");
+  });
+
+  it("falls back to the old shared pref for a model with no pick yet", () => {
+    expect(pickedVoice({ kokoro: "af_heart" }, "moss", "af_bella")).toBe("af_bella");
+    expect(pickedVoice(undefined, "moss", "af_bella")).toBe("af_bella");
+  });
+
+  it("treats an explicit Default ('') as a pick, not a missing one", () => {
+    expect(pickedVoice({ moss: "" }, "moss", "af_bella")).toBe("");
   });
 });

@@ -15,13 +15,15 @@
   } from "../../stores/speechHistory";
   import { generateSpeech } from "../../lib/speechApi";
   import { inferenceHeaders } from "../../lib/inferenceAuth";
-  import { DEFAULT_VOICES, cachedVoices, fetchVoices } from "../../lib/voices";
+  import { DEFAULT_VOICES, cachedVoices, fetchVoices, pickedVoice } from "../../lib/voices";
+  import { voiceByModelStore, legacyVoiceStore, setModelVoice } from "../../stores/playground";
   import { playgroundStores } from "../../stores/playgroundActivity";
   import ModelSelector from "./ModelSelector.svelte";
   import { Volume2, VolumeX, Download, RefreshCw, Plus, Pencil, X, Save, Upload, Square, Check, MoreVertical, Trash2, Mic, ChevronLeft, Search, Play } from "lucide-svelte";
   import { scrollFade } from "../../lib/scrollFade";
   import { askConfirm } from "../../lib/confirm";
   import AudioPlayer from "./AudioPlayer.svelte";
+  import TakeSpotlight from "./TakeSpotlight.svelte";
   import PaneHeader from "./PaneHeader.svelte";
   import { newSpeechChat } from "../../lib/playgroundThreads";
 
@@ -32,7 +34,9 @@
   // session's turns as a paginated clip library.
 
   const selectedModelStore = userPref<string>("playground-speech-model", "");
-  const selectedVoiceStore = userPref<string>("playground-speech-voice", "");
+  // The voice pick is per model (stores/playground voiceByModelStore), shared
+  // with read-aloud for the same model.
+  let selectedVoice = $derived(pickedVoice($voiceByModelStore, $selectedModelStore, $legacyVoiceStore));
   const autoPlayStore = userPref<boolean>("playground-speech-autoplay", false);
   const volumeStore = userPref<number>("playground-speech-volume", 1);
 
@@ -64,7 +68,6 @@
   const defaultVoices = DEFAULT_VOICES;
 
   let availableVoices = $state<string[]>(defaultVoices);
-  let isLoadingVoices = $state(false);
   let voiceQuery = $state("");
   let shownVoices = $derived.by(() => {
     const q = voiceQuery.trim().toLowerCase();
@@ -106,7 +109,7 @@
         label: activePreset?.name ?? fallback?.voice ?? "Custom",
       };
     }
-    const v = $selectedVoiceStore;
+    const v = selectedVoice;
     return { sendVoice: v, instructions: "", label: v || "Default" };
   }
 
@@ -135,9 +138,9 @@
   // Apply a voice list and keep the selection valid — a custom_voice model has
   // named speakers and REQUIRES one (no "Default"), so an out-of-list selection
   // (e.g. "" carried over from a base model) is snapped to the first speaker.
-  function applyVoices(voices: string[]) {
+  function applyVoices(model: string, voices: string[]) {
     availableVoices = voices;
-    if (!voices.includes(get(selectedVoiceStore))) selectedVoiceStore.set(voices[0] ?? "");
+    if (!voices.includes(selectedVoice)) setModelVoice(model, voices[0] ?? "");
   }
 
   // Restore cached voices for the selected model, else auto-fetch its real list.
@@ -156,7 +159,7 @@
       // ALREADY loaded — GET /v1/audio/voices proxies to tts-server and would
       // otherwise force a model load just from opening the tab. A manual refresh
       // or the first generation (which loads the model anyway) fetches fresh.
-      applyVoices(cachedVoices(model));
+      applyVoices(model, cachedVoices(model));
     }
     if (model && (ready || voicesOffline) && model !== lastFetchedModel) {
       lastFetchedModel = model;
@@ -164,14 +167,20 @@
     }
   });
 
+  // Keyed by model rather than a plain busy flag: a fetch still in flight for
+  // the previous model used to swallow the new model's fetch, then paint the old
+  // model's list (and clamp the pick against it) after the switch.
+  let loadingVoicesFor = $state("");
+  let isLoadingVoices = $derived(loadingVoicesFor !== "" && loadingVoicesFor === $selectedModelStore);
   async function refreshVoices() {
     const model = $selectedModelStore;
-    if (!model || isLoadingVoices) return;
-    isLoadingVoices = true;
+    if (!model || loadingVoicesFor === model) return;
+    loadingVoicesFor = model;
     try {
-      applyVoices(await fetchVoices(model));
+      const voices = await fetchVoices(model);
+      if (get(selectedModelStore) === model) applyVoices(model, voices);
     } finally {
-      isLoadingVoices = false;
+      if (loadingVoicesFor === model) loadingVoicesFor = "";
     }
   }
 
@@ -187,7 +196,7 @@
         headers: inferenceHeaders(),
       });
       if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
-      if (get(selectedVoiceStore) === name) selectedVoiceStore.set("");
+      if (pickedVoice(get(voiceByModelStore), model, get(legacyVoiceStore)) === name) setModelVoice(model, "");
       await refreshVoices();
     } catch (e) {
       console.error("delete voice failed", e);
@@ -362,7 +371,7 @@
       });
       if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
       await refreshVoices();
-      selectedVoiceStore.set(name);
+      setModelVoice(model, name);
       return true;
     } catch (e) {
       createVoiceError = e instanceof Error ? e.message : "Voice creation failed";
@@ -501,8 +510,19 @@
   let editingIdx = $state<number | null>(null);
   let editText = $state("");
   let menuIdx = $state<number | null>(null); // open three-dot menu (turn index)
-  // AudioPlayer component instances (expose play() for auto-play on completion).
-  let audioEls: (AudioPlayer | null)[] = $state([]);
+  // The take in the spotlight (TakeSpotlight): playing a card's clip lifts it
+  // there instead of playing in place, so a long take can be read along with.
+  // Pinned to the clip's audio as well as its index: a delete, regenerate, edit
+  // or thread switch changes what sits at `ti`, and a stale spotlight would
+  // show one take's text over another's audio. `nonce` remounts the player so
+  // pressing play on the already-focused card restarts from that card's spot.
+  let focus = $state<{ ti: number; audio: string; at: number; nonce: number } | null>(null);
+  let focused = $derived(focus && turns[focus.ti]?.audio === focus.audio ? turns[focus.ti] : null);
+  function focusTake(ti: number, at: number) {
+    const audio = turns[ti]?.audio;
+    if (!audio) return;
+    focus = { ti, audio, at, nonce: (focus?.nonce ?? 0) + 1 };
+  }
 
   let hasModels = $derived($models.some((m) => !m.unlisted));
 
@@ -545,9 +565,7 @@
       const blob = await generateSpeech($selectedModelStore, text, voice, abortController.signal, instructions);
       const audio = await blobToDataUrl(blob);
       updateTurn(id, ti, { audio, secs: elapsed });
-      if (get(autoPlayStore) && id === get(activeSpeechChatId)) {
-        queueMicrotask(() => audioEls[ti]?.play());
-      }
+      if (get(autoPlayStore) && id === get(activeSpeechChatId)) focusTake(ti, 0);
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         const s = sessionById(id);
@@ -571,7 +589,7 @@
     const { sendVoice, instructions, label } = resolveGen();
     prompt = "";
     const ti = sessionById(id)!.turns.length;
-    appendTurn(id, { text, voice: label, instructions, audio: undefined });
+    appendTurn(id, { text, voice: label, model: $selectedModelStore, instructions, audio: undefined });
     await runTurn(id, ti, text, sendVoice, instructions, () => {
       prompt = text;
     });
@@ -586,7 +604,7 @@
     const t = s?.turns[idx];
     if (!s || !t) return;
     const { sendVoice, instructions, label } = resolveGen(t);
-    setTurns(id, [...s.turns.slice(0, idx), { text: t.text, voice: label, instructions, audio: undefined }], true);
+    setTurns(id, [...s.turns.slice(0, idx), { text: t.text, voice: label, model: $selectedModelStore, instructions, audio: undefined }], true);
     await runTurn(id, idx, t.text, sendVoice, instructions, () => {});
   }
 
@@ -610,7 +628,7 @@
     const s = sessionById(id);
     if (!s) return;
     const { sendVoice, instructions, label } = resolveGen(s.turns[idx]);
-    setTurns(id, [...s.turns.slice(0, idx), { text, voice: label, instructions, audio: undefined }], true);
+    setTurns(id, [...s.turns.slice(0, idx), { text, voice: label, model: $selectedModelStore, instructions, audio: undefined }], true);
     await runTurn(id, idx, text, sendVoice, instructions, () => {});
   }
   function editKeyDown(event: KeyboardEvent) {
@@ -757,14 +775,14 @@
           <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll flex flex-col p-2">
             {#each shownVoices as v (v)}
               <div
-                class="group flex items-center gap-2 pr-1 rounded-md {$selectedVoiceStore === v ? 'bg-secondary text-txtmain shadow-[inset_2px_0_var(--color-primary)]' : 'text-txtmain hover:bg-secondary/50'}"
+                class="group flex items-center gap-2 pr-1 rounded-md {selectedVoice === v ? 'bg-secondary text-txtmain shadow-[inset_2px_0_var(--color-primary)]' : 'text-txtmain hover:bg-secondary/50'}"
               >
                 <button
                   class="flex-1 min-w-0 flex items-center justify-between gap-2 px-3 py-1.5 text-[0.8125rem] text-left"
-                  onclick={() => selectedVoiceStore.set(v)}
+                  onclick={() => setModelVoice($selectedModelStore, v)}
                 >
                   <span class="truncate">{v || "Default"}</span>
-                  {#if $selectedVoiceStore === v}<Check class="w-3.5 h-3.5 shrink-0 text-primary" />{/if}
+                  {#if selectedVoice === v}<Check class="w-3.5 h-3.5 shrink-0 text-primary" />{/if}
                 </button>
                 {#if isBaseModel && v}
                   <button
@@ -811,6 +829,12 @@
           </div>
         </div>
 
+        {#if focus && focused}
+          {#key focus.nonce}
+            <TakeSpotlight turn={focused} volume={$volumeStore} startAt={focus.at} onclose={() => (focus = null)} />
+          {/key}
+        {/if}
+
         <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll scroll-fade-b" use:scrollFade>
           {#if turns.length === 0 && !isGenerating}
             <div class="h-full flex flex-col items-center justify-center gap-3 text-txtsecondary">
@@ -822,7 +846,7 @@
               {#each pagedTurns as item (item.ti)}
                 {@const t = item.t}
                 {@const ti = item.ti}
-                <div class="relative min-w-0 rounded-[0.625rem] border border-card-border bg-surface p-3 flex flex-col gap-2 {menuIdx === ti ? 'z-30' : ''}">
+                <div class="relative min-w-0 rounded-[0.625rem] border bg-surface p-3 flex flex-col gap-2 {focused && focus?.ti === ti ? 'border-primary/50' : 'border-card-border'} {menuIdx === ti ? 'z-30' : ''}">
                   {#if editingIdx === ti}
                     <!-- Edit mode: textarea replaces the card body. -->
                     <div class="flex flex-col gap-2">
@@ -843,7 +867,7 @@
                     {#if t.error}
                       <div class="text-error text-xs">{t.error}</div>
                     {:else if t.audio}
-                      <AudioPlayer src={t.audio} volume={$volumeStore} bind:this={audioEls[ti]} />
+                      <AudioPlayer src={t.audio} volume={$volumeStore} onplayrequest={(at) => focusTake(ti, at)} />
                     {:else if genId !== $activeSpeechChatId || ti !== turns.length - 1}
                       <div class="text-error text-xs">No audio returned.</div>
                     {:else}
@@ -859,6 +883,9 @@
 
                     <div class="flex items-center gap-2 min-w-0">
                       <span class="truncate rounded border border-card-border px-1.5 py-px font-mono text-micro text-txtsecondary">{t.voice || "Default"}</span>
+                      {#if t.model}
+                        <span class="truncate min-w-0 rounded border border-card-border px-1.5 py-px font-mono text-micro text-txtsecondary" use:tip={t.model}>{t.model}</span>
+                      {/if}
                       {#if t.secs}
                         <span class="shrink-0 font-mono text-micro text-txtsecondary tabular-nums" use:tip={"Generation time"}>{t.secs.toFixed(1)}s</span>
                       {/if}
@@ -935,7 +962,7 @@
                 use:tip={"Pick the voice in the list on the left"}
               >
                 <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"></span>
-                <span class="truncate">{isVoiceDesign ? activePreset?.name || "No preset" : $selectedVoiceStore || "Default"}</span>
+                <span class="truncate">{isVoiceDesign ? activePreset?.name || "No preset" : selectedVoice || "Default"}</span>
               </span>
               <div class="min-w-0">
                 <ModelSelector

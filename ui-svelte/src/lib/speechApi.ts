@@ -55,8 +55,9 @@ async function speechRequest(
     model,
     input,
     // One choke point for every caller (Speech tab, read-aloud, voice preview):
-    // the voice pref is shared across models, and a name one engine knows can
-    // ABORT the other's server process. See safeVoice.
+    // a model with no voice pick of its own falls back to the old shared pref,
+    // and a name one engine knows can ABORT the other's server process. See
+    // safeVoice.
     voice: safeVoice(model, voice),
     response_format: "wav",
     // voice_design models design a voice from this style description; the
