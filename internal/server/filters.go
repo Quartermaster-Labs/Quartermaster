@@ -66,6 +66,18 @@ func CreateFilterMiddleware(cfg config.Config) chain.Middleware {
 				return
 			}
 
+			// After the configured filters too, so a setParams seed is the one
+			// that gets carried into sd-server's prompt block.
+			if r.URL.Path == "/v1/images/generations" {
+				if realName, found := cfg.RealModelName(data.Model); found && isSDServerCmd(cfg.Models[realName].Cmd) {
+					body, err = applyImageSeed(body)
+					if err != nil {
+						shared.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+						return
+					}
+				}
+			}
+
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			r.Header.Del("Transfer-Encoding")
 			r.Header.Set("Content-Length", strconv.Itoa(len(body)))
