@@ -18,6 +18,9 @@ type ReqRespCapture struct {
 	ReqBody     []byte            `json:"req_body"`
 	RespHeaders map[string]string `json:"resp_headers"`
 	RespBody    []byte            `json:"resp_body"`
+	// RespThumbs holds downscaled copies of the images an image route
+	// returned, whose full body is not stored (capturethumbs.go).
+	RespThumbs []captureThumb `json:"resp_thumbs,omitempty"`
 }
 
 // captureFields is a bitmask controlling what a route stores in a ReqRespCapture.
@@ -28,6 +31,7 @@ const (
 	captureReqBody
 	captureRespHeaders
 	captureRespBody
+	captureRespThumbs
 )
 
 const (
@@ -42,10 +46,10 @@ var captureFieldsByPath = map[string]captureFields{
 	"/v1/audio/speech":         captureReqAll | captureRespHeaders,
 	"/v1/audio/voices":         captureReqHeaders | captureRespAll,
 	"/v1/audio/transcriptions": captureReqHeaders | captureRespHeaders | captureRespBody,
-	"/v1/images/generations":   captureReqAll | captureRespHeaders,
-	"/v1/images/edits":         captureReqHeaders | captureRespHeaders,
-	"/sdapi/v1/txt2img":        captureReqAll | captureRespHeaders,
-	"/sdapi/v1/img2img":        captureReqHeaders | captureRespHeaders,
+	"/v1/images/generations":   captureReqAll | captureRespHeaders | captureRespThumbs,
+	"/v1/images/edits":         captureReqHeaders | captureRespHeaders | captureRespThumbs,
+	"/sdapi/v1/txt2img":        captureReqAll | captureRespHeaders | captureRespThumbs,
+	"/sdapi/v1/img2img":        captureReqHeaders | captureRespHeaders | captureRespThumbs,
 }
 
 // captureFieldsFor returns the capture mask for a request path. Unlisted routes

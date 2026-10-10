@@ -155,6 +155,8 @@ export interface ReqRespCapture {
   req_body: string; // base64 encoded bytes
   resp_headers: Record<string, string>;
   resp_body: string; // base64 encoded bytes
+  // Image routes store downscaled copies of the result instead of the body.
+  resp_thumbs?: { mime: string; data: string }[]; // data is base64
 }
 
 export interface LogData {
