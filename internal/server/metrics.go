@@ -231,6 +231,9 @@ func (mp *metricsMonitor) record(modelID string, r *http.Request, recorder *resp
 		if cf&captureRespBody != 0 {
 			capture.RespBody = body
 		}
+		if cf&captureRespThumbs != 0 {
+			capture.RespThumbs = responseThumbs(body)
+		}
 		if mp.addCapture(capture) {
 			tm.HasCapture = true
 		}

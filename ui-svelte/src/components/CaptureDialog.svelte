@@ -327,7 +327,21 @@
           >
             Response Body
           </summary>
-          {#if isResponseImage && capture.resp_body}
+          {#if capture.resp_thumbs?.length}
+            <!-- Image routes keep a thumbnail per result rather than the
+                 megabytes of base64 the body carried (capturethumbs.go).
+                 The checkerboard shows a cut-out's alpha as alpha. -->
+            <div class="mt-2 bg-background rounded border border-card-border p-3 flex flex-wrap justify-center gap-3">
+              {#each capture.resp_thumbs as thumb, i (i)}
+                <img
+                  src={`data:${thumb.mime};base64,${thumb.data}`}
+                  alt="Result {i + 1}"
+                  class="thumb-checker max-w-full h-auto rounded"
+                />
+              {/each}
+            </div>
+            <p class="mt-1 text-xs text-txtsecondary">Preview, downscaled. The full image is not kept.</p>
+          {:else if isResponseImage && capture.resp_body}
             <div
               class="mt-2 bg-background rounded border border-card-border overflow-auto max-h-96 pretty-scroll"
             >
@@ -448,6 +462,9 @@
 </dialog>
 
 <style>
+  .thumb-checker {
+    background: repeating-conic-gradient(var(--color-secondary) 0% 25%, transparent 0% 50%) 0 0 / 16px 16px;
+  }
   .tab-btn {
     padding: 2px 10px;
     font-size: 0.75rem;
