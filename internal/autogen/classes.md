@@ -108,6 +108,11 @@ Per-model image knobs live on `Override` (`VaePath`/`ClipLPath`/`ClipGPath`/`T5P
 `TextEncoderPath`/`OffloadToCpu`/`TeOnCpu`/`VaeTiling`/`DiffusionFa`/`DefaultSteps`/`DefaultCfg`/
 `DefaultSampler`/`DefaultWidth`/`DefaultHeight`), merged via `mergeImageVariant`.
 
+**Built-in generation defaults are qwen_image-only** (`imageDefaultsFor`): a name containing
+`turbo`/`distill` gets `--steps 8 --cfg-scale 1` (Qwen-Image 2.1 Turbo, Krea2 Turbo), and Qwen-Image
+2.1 base (`condHidden` 4096) gets `--steps 40 --cfg-scale 1`. The 20B line is untouched (it wants cfg
+4.0). Every other image arch keeps sd-server's built-ins; the `Default*` override fields win over all.
+
 **The argv is COMPOSED, not concatenated.** `imageCmdLines` returns a `ComposedCmd`
 (`SdFlags.ComposeCmd`, `flagtable_sd.go`), so a flag the user pins in `customArgs` suppresses the
 generated one for that knob instead of being appended beside it, and `ClearOwnedFields` zeroes the

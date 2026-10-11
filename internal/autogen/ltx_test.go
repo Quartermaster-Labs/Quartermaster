@@ -354,20 +354,20 @@ func TestAutogen_VideoComputeOverheadScalesWithProfile(t *testing.T) {
 
 	// The default profile must price EXACTLY at the reference constant: scaling
 	// is relative, so a model left alone cannot have its placement moved by this.
-	base := videoComputeOverhead(vid, name, resolveGenDefaults(vid, name, nil))
+	base := videoComputeOverhead(vid, name, resolveGenDefaults(vid, "", name, 0, nil))
 	if base != videoComputeOverheadGB {
 		t.Errorf("default profile = %vGB, want the %vGB reference unchanged", base, videoComputeOverheadGB)
 	}
 
 	// 15s at 24fps is 361 frames, which is 46 latent frames against the 121-frame
 	// default's 16 - 2.875x the tokens at identical resolution.
-	long := videoComputeOverhead(vid, name, resolveGenDefaults(vid, name, &Override{DefaultFrames: 361}))
+	long := videoComputeOverhead(vid, name, resolveGenDefaults(vid, "", name, 0, &Override{DefaultFrames: 361}))
 	if want := videoComputeOverheadGB * 46.0 / 16.0; long != want {
 		t.Errorf("361-frame overhead = %vGB, want %vGB", long, want)
 	}
 
 	// Halving the canvas halves the overhead: area enters linearly.
-	half := videoComputeOverhead(vid, name, resolveGenDefaults(vid, name, &Override{DefaultWidth: 640}))
+	half := videoComputeOverhead(vid, name, resolveGenDefaults(vid, "", name, 0, &Override{DefaultWidth: 640}))
 	if want := videoComputeOverheadGB / 2; half != want {
 		t.Errorf("half-width overhead = %vGB, want %vGB", half, want)
 	}

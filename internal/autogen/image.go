@@ -507,7 +507,7 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	// will actually launch with. The same def is what emits --width/--height/
 	// --video-frames at the end of the argv, so a DefaultFrames override cannot
 	// lengthen the clip without also re-sizing the placement for it.
-	def := resolveGenDefaults(vid, name, ov)
+	def := resolveGenDefaults(vid, arch, name, condHidden, ov)
 	overhead := imageComputeOverheadGB
 	if vid.is() {
 		overhead = videoComputeOverhead(vid, name, def)
@@ -713,8 +713,10 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 		// there for a box that wants it anyway.
 	}
 	// Generation defaults applied when a request omits them. An image model
-	// starts from nothing (sd-server's own defaults stand); a video model starts
-	// from its family profile, because two of those numbers are not preferences:
+	// starts from its arch profile, which is empty except where sd-server's
+	// built-in steps/cfg are wrong for the model (see imageDefaultsFor); a video
+	// model starts from its family profile, because two of those numbers are not
+	// preferences:
 	// --video-frames defaults to 1 (a single still), and H3 conditions at
 	// cfg-scale 1.0 while sd-server's built-in default is 7.0. Per-model
 	// overrides still win over both.
@@ -1195,6 +1197,38 @@ func wan3dLatent(arch string, condHidden int64) int64 {
 		return 64
 	}
 	return 16
+}
+
+// imageDefaultsFor is the image-side counterpart of videoDefaultsFor: the
+// steps/cfg an image model launches with when sd-server's built-ins (20 steps,
+// cfg 7.0) would render it wrong. Everything else gets the zero profile.
+//
+// Scoped to the qwen_image arch, the one family here where BOTH built-ins are
+// wrong out of the box:
+//
+//   - A turbo checkpoint (Qwen-Image 2.1 Turbo, Krea2 Turbo) is distilled to 8
+//     steps and guidance-free. 20 steps wastes 2.5x the time and cfg 7.0
+//     scorches it.
+//   - Qwen-Image 2.1 BASE (caption projection 4096 wide, see wan3dLatent) is
+//     trained without guidance: diffusers' QwenImage21Pipeline defaults
+//     true_cfg_scale=1.0 at 40 steps. This inverts the 20B line (cfg 4.0, 50
+//     steps) despite the shared arch tag, so the 20B line is left alone.
+//
+// Turbo vs base is a NAME read for the same reason as LTX's distilled/dev pair
+// (isDistilledName): the turbo is a fine-tune with the base's exact tensor
+// table, so nothing in the file separates them. Override.DefaultSteps/
+// DefaultCfg still win.
+func imageDefaultsFor(arch, name string, condHidden int64) genDefaults {
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(arch)), "qwen_image") {
+		return genDefaults{}
+	}
+	switch {
+	case isDistilledName(name):
+		return genDefaults{steps: 8, cfg: 1.0}
+	case condHidden == 4096:
+		return genDefaults{steps: 40, cfg: 1.0}
+	}
+	return genDefaults{}
 }
 
 func wan3dHints(name string) []string {
