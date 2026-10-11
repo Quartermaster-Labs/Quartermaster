@@ -312,7 +312,10 @@ const hashCacheSuffix = ".modelhash"
 // v94: a prompt enhancer is emitted as ONE profile (no fleet variants, no
 // -vision twin, 32k window, projector in VRAM for i2i and absent for t2i), and
 // promptEnhancerEdit pairs to that base id instead of the retired twin.
-const genVersion = "v95"
+// v96: qwen_image models get built-in generation defaults (imageDefaultsFor):
+// a turbo checkpoint launches at --steps 8 --cfg-scale 1, Qwen-Image 2.1 base
+// at --steps 40 --cfg-scale 1, instead of sd-server's 20 steps at cfg 7.0.
+const genVersion = "v96"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight

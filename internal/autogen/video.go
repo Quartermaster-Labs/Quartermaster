@@ -160,7 +160,7 @@ type genDefaults struct {
 }
 
 // videoDefaultsFor returns the family profile. An image model gets the zero
-// profile, i.e. exactly the behaviour that existed before video did.
+// profile here; its own (much shorter) table is imageDefaultsFor.
 //
 // The H3 numbers are from leejet's own reference command, and two of them are
 // load-bearing rather than taste:
@@ -236,8 +236,8 @@ func videoDefaultsFor(v videoInfo, name string) genDefaults {
 	return genDefaults{}
 }
 
-// resolveGenDefaults is the family profile with the per-model Override applied,
-// i.e. the generation settings the model will actually launch with.
+// resolveGenDefaults is the family profile (video) or the arch profile (image)
+// with the per-model Override applied, i.e. the generation settings the model will actually launch with.
 //
 // Split out of imageCmdLines because it now has TWO readers inside that one
 // function and the order between them matters: the video compute overhead is
@@ -246,8 +246,11 @@ func videoDefaultsFor(v videoInfo, name string) genDefaults {
 // it twice would let a DefaultFrames override change the emitted clip length
 // without changing the placement that clip was sized for, which is precisely the
 // mismatch that makes a render spill into shared memory.
-func resolveGenDefaults(v videoInfo, name string, ov *Override) genDefaults {
+func resolveGenDefaults(v videoInfo, arch, name string, condHidden int64, ov *Override) genDefaults {
 	def := videoDefaultsFor(v, name)
+	if !v.is() {
+		def = imageDefaultsFor(arch, name, condHidden)
+	}
 	if ov == nil {
 		return def
 	}

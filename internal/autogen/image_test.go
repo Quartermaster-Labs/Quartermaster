@@ -338,3 +338,29 @@ func TestResolveComponents_Flux2Klein(t *testing.T) {
 		t.Errorf("an unscanned pin should still be honoured: got %+v missing=%v", c, m)
 	}
 }
+
+func TestImageDefaultsFor(t *testing.T) {
+	cases := []struct {
+		name, arch, model string
+		cond              int64
+		steps             int
+		cfg               float64
+	}{
+		{"2.1 turbo", "qwen_image", "qwen_image_2.1_turbo-q8_0", 4096, 8, 1.0},
+		{"krea2 turbo", "qwen_image", "krea2_turbo-q8_0", 2560, 8, 1.0},
+		{"2.1 base", "qwen_image", "qwen_image_2.1-q8_0", 4096, 40, 1.0},
+		{"20B line untouched", "qwen_image", "qwen-image-edit-q4_k_m", 3584, 0, 0},
+		{"other arch untouched", "flux", "flux1-schnell-turbo", 4096, 0, 0},
+	}
+	for _, c := range cases {
+		d := imageDefaultsFor(c.arch, c.model, c.cond)
+		if d.steps != c.steps || d.cfg != c.cfg {
+			t.Errorf("%s: got steps %d cfg %g, want %d / %g", c.name, d.steps, d.cfg, c.steps, c.cfg)
+		}
+	}
+	// The override still wins over the arch profile.
+	d := resolveGenDefaults(videoInfo{}, "qwen_image", "qwen_image_2.1_turbo-q8_0", 4096, &Override{DefaultSteps: 12})
+	if d.steps != 12 || d.cfg != 1.0 {
+		t.Errorf("override: got steps %d cfg %g, want 12 / 1", d.steps, d.cfg)
+	}
+}
