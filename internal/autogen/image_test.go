@@ -5,6 +5,25 @@ import (
 	"testing"
 )
 
+// Issue #57: an offloaded extra model places its VAE through the one --backend
+// spec, not the deprecated --vae-on-cpu beside it.
+func TestExtraImageCmdLines_OffloadVaeInBackendSpec(t *testing.T) {
+	s := Settings{SdServerExe: "sd-server"}
+	m := ExtraImageModel{ModelPath: "C:/models/dit.safetensors", OffloadToCpu: "on"}
+	cmd := strings.Join(extraImageCmdLines(s, m).Lines, " ")
+	if !strings.Contains(cmd, "--backend te=cpu,vae=cpu") || !strings.Contains(cmd, "--offload-to-cpu") {
+		t.Errorf("offloaded extra model should carry te=cpu,vae=cpu:\n%s", cmd)
+	}
+	if strings.Contains(cmd, "--vae-on-cpu") {
+		t.Errorf("deprecated --vae-on-cpu still emitted:\n%s", cmd)
+	}
+	// Both knobs on must not duplicate the assignment.
+	m.VaeOnCpu = "on"
+	if cmd = strings.Join(extraImageCmdLines(s, m).Lines, " "); strings.Count(cmd, "vae=cpu") != 1 {
+		t.Errorf("vae=cpu should appear once:\n%s", cmd)
+	}
+}
+
 // A hand-declared extra image model carries its own backend pin (the model
 // editor offers the same sd rows), so the class default must not move it.
 func TestExtraImageCmdLines_BackendPin(t *testing.T) {
@@ -54,10 +73,14 @@ func TestEmitImageModel(t *testing.T) {
 	big := GgufRow{FullPath: `C:\models\flux.gguf`, SizeGB: 6.5}
 	emitImageModel(&b, s, big, &Override{}, "flux-q4", "flux", false, 0, &emitted)
 	out := b.String()
-	for _, want := range []string{"sd-server", "--diffusion-model C:/models/flux.gguf", "--listen-port ${PORT}", "--max-vram 6.5", "--vae ae.safetensors", "--clip_l clip_l.safetensors", "--t5xxl t5xxl.gguf", "--diffusion-fa", "--vae-tiling", "--offload-to-cpu", "--vae-on-cpu", "--backend te=cpu", "offload=true", "checkEndpoint: /", "out: [image]", "in: [text]", "ttl: 600"} {
+	for _, want := range []string{"sd-server", "--diffusion-model C:/models/flux.gguf", "--listen-port ${PORT}", "--max-vram 6.5", "--vae ae.safetensors", "--clip_l clip_l.safetensors", "--t5xxl t5xxl.gguf", "--diffusion-fa", "--vae-tiling", "--offload-to-cpu", "--backend te=cpu,vae=cpu", "offload=true", "checkEndpoint: /", "out: [image]", "in: [text]", "ttl: 600"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("emit missing %q:\n%s", want, out)
 		}
+	}
+	// One --backend spec carries the VAE placement; the deprecated flag is gone.
+	if strings.Contains(out, "--vae-on-cpu") {
+		t.Errorf("offload should place the VAE via --backend, not --vae-on-cpu:\n%s", out)
 	}
 	if strings.Contains(out, "WARNING") {
 		t.Errorf("complete pool should not warn:\n%s", out)
@@ -102,8 +125,8 @@ func TestEmitImageModel(t *testing.T) {
 	if strings.Contains(out2, "--offload-to-cpu") || strings.Contains(out2, "offload=true") {
 		t.Errorf("small model should not offload:\n%s", out2)
 	}
-	// --vae-on-cpu rides with offload only; a resident model keeps VAE on GPU.
-	if strings.Contains(out2, "--vae-on-cpu") {
+	// vae=cpu rides with offload only; a resident model keeps VAE on GPU.
+	if strings.Contains(out2, "vae=cpu") || strings.Contains(out2, "--vae-on-cpu") {
 		t.Errorf("resident model should not force vae-on-cpu:\n%s", out2)
 	}
 	// vae-tiling is always on (caps the VAE decode VRAM spike), even when resident.

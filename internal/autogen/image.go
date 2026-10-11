@@ -158,7 +158,7 @@ func fileGB(p string) float64 {
 // GPU is paid for:
 //
 //   - offload=false: the diffusion weights are resident, so they come off.
-//   - offload=true: --offload-to-cpu puts them in RAM and --vae-on-cpu follows,
+//   - offload=true: --offload-to-cpu puts them in RAM (an image model's VAE follows),
 //     so the card is free for the graph and the whole budget stands. This is
 //     also the only configuration in which --stream-layers does anything.
 //   - the text encoder is on CPU by default (te=cpu) and charged only when an
@@ -665,13 +665,20 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 	// (the text encoder runs once per generation, cheapest to keep off the GPU, and
 	// its VRAM is NOT in row.SizeGB — leaving it resident lets a "fits" diffusion
 	// model thrash the whole graph through --max-vram). "off" keeps it on the GPU.
-	// vae=cpu is opt-in: the bf16 VAE decodes on the GPU by default, but some
-	// backends whiten it — CPU is the safe (slower) fallback.
+	// vae=cpu: the bf16 VAE decodes on the GPU by default, but some backends
+	// whiten it, so "on" pins it to CPU as the safe (slower) fallback. An
+	// offloaded IMAGE model also gets it, for the decode-spike reason given at
+	// --offload-to-cpu below.
+	//
+	// It goes in this one --backend spec rather than the deprecated
+	// --vae-on-cpu. sd.cpp folds the old flag into the same assignment string
+	// anyway (prepare_backend_assignments prepends "vae=cpu"), so the two were
+	// equivalent; the spec is the spelling the binary still supports.
 	var beParts []string
 	if ov == nil || ov.TeOnCpu != "off" {
 		beParts = append(beParts, "te=cpu")
 	}
-	if ov != nil && ov.VaeOnCpu == "on" {
+	if (ov != nil && ov.VaeOnCpu == "on") || (offload && !vid.is()) {
 		beParts = append(beParts, "vae=cpu")
 	}
 	if len(beParts) > 0 {
@@ -692,7 +699,8 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 		// headroom) with a token-heavy model like Kontext (reference image ~2x
 		// the sequence), that spike overcommits shared VRAM and hard-hangs
 		// Windows. The VAE runs once per image, so parking it on CPU is nearly
-		// free and removes the crash. te=cpu only moves the text encoders.
+		// free and removes the crash. That is the vae=cpu in --backend above;
+		// te=cpu only moves the text encoders.
 		//
 		// "Nearly free" is an IMAGE claim and does not survive the move to video.
 		// A 3D VAE decodes every frame of the clip rather than one picture, so on
@@ -703,9 +711,6 @@ func imageCmdLines(s Settings, row GgufRow, ov *Override, arch, name string, con
 		// returns the full budget when offload is set), so the decode has room on
 		// the GPU it was being protected from. Override .VaeOnCpu = "on" is still
 		// there for a box that wants it anyway.
-		if !vid.is() {
-			lines = append(lines, "--vae-on-cpu")
-		}
 	}
 	// Generation defaults applied when a request omits them. An image model
 	// starts from nothing (sd-server's own defaults stand); a video model starts
@@ -920,14 +925,16 @@ func extraImageCmdLines(s Settings, m ExtraImageModel) ComposedCmd {
 	if m.TeOnCpu != "off" {
 		beParts = append(beParts, "te=cpu")
 	}
-	if m.VaeOnCpu == "on" {
+	// Offload carries vae=cpu, as on the discovered path. Unlike there it is not
+	// skipped for video: nothing here knows this is a video model.
+	if m.VaeOnCpu == "on" || m.OffloadToCpu == "on" {
 		beParts = append(beParts, "vae=cpu")
 	}
 	if len(beParts) > 0 {
 		lines = append(lines, "--backend "+strings.Join(beParts, ","))
 	}
 	if m.OffloadToCpu == "on" {
-		lines = append(lines, "--offload-to-cpu", "--vae-on-cpu")
+		lines = append(lines, "--offload-to-cpu")
 	}
 	if m.DefaultSteps > 0 {
 		lines = append(lines, fmt.Sprintf("--steps %d", m.DefaultSteps))
