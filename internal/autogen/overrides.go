@@ -290,7 +290,7 @@ type ExtraImageModel struct {
 	StreamLayers   string `yaml:"streamLayers"`   // "on" => --stream-layers (ignored unless offloaded)
 	TeOnCpu        string `yaml:"teOnCpu"`        // "" => on (te=cpu), "off" => keep on GPU
 	VaeOnCpu       string `yaml:"vaeOnCpu"`       // "on" => add vae=cpu to --backend; "" => GPU
-	OffloadToCpu   string `yaml:"offloadToCpu"`   // "on" => --offload-to-cpu (+ --vae-on-cpu)
+	OffloadToCpu   string `yaml:"offloadToCpu"`   // "on" => --offload-to-cpu (+ vae=cpu in --backend)
 	Threads        int    `yaml:"threads"`
 	// CustomArgs / CustomArgsOff / ExtraArgs mirror Override's trio, because an
 	// extra image model is edited through the same launch-argument panes and
