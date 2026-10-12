@@ -108,6 +108,13 @@ Per-model image knobs live on `Override` (`VaePath`/`ClipLPath`/`ClipGPath`/`T5P
 `TextEncoderPath`/`OffloadToCpu`/`TeOnCpu`/`VaeTiling`/`DiffusionFa`/`DefaultSteps`/`DefaultCfg`/
 `DefaultSampler`/`DefaultWidth`/`DefaultHeight`), merged via `mergeImageVariant`.
 
+**Classification falls back to the tensor table** (`effectiveImageArch` ← `Metadata.DiffusionKind`)
+when the header names no image arch: `input_blocks` = SD/SDXL UNet, `double_blocks` = BFL flux layout,
+`img_in` + `txt_in` + `transformer_blocks` = Qwen-Image. Every marker matches the BARE tensor name:
+ComfyUI-layout quants (unsloth's and AtomicChat's Qwen-Image 2.1) keep the `model.diffusion_model.`
+prefix, and AtomicChat's also ship zero KVs, so without the strip the first lost its caption width
+(wrong encoder, 16-channel VAE) and the second was served by llama-server as a chat model.
+
 **Built-in generation defaults are qwen_image-only** (`imageDefaultsFor`): a name containing
 `turbo`/`distill` gets `--steps 8 --cfg-scale 1` (Qwen-Image 2.1 Turbo, Krea2 Turbo), and Qwen-Image
 2.1 base (`condHidden` 4096) gets `--steps 40 --cfg-scale 1`. The 20B line is untouched (it wants cfg

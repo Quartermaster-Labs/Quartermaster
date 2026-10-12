@@ -104,7 +104,7 @@ type Metadata struct {
 	// it needs an --audio-vae and its output has a soundtrack.
 	HasAudioOut bool
 
-	// DiffusionKind is a tensor-name-sniffed diffusion arch ("sdxl"/"sd1"/"flux") for a
+	// DiffusionKind is a tensor-name-sniffed diffusion arch ("sdxl"/"sd1"/"flux"/"qwen_image") for a
 	// UNet gguf that carries no general.architecture — stable-diffusion.cpp's
 	// `convert` strips the metadata KVs, so a converted SDXL UNet reports
 	// Architecture="" but still has input_blocks/label_emb tensors. Empty when the
@@ -1125,8 +1125,9 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 // count of the token_embd.weight (or output.weight) tensor (= n_embd*n_vocab,
 // for vocab sizing). Share is 0 when no expert tensors are found or any tensor
 // uses an unknown ggml type; vocabElems is 0 when neither tensor is present.
-// diffKind is "sdxl"/"sd1" when the tensor names mark a diffusion UNet, or
-// "flux" when they mark a BFL-format MMDiT (double_blocks), for a
+// diffKind is "sdxl"/"sd1" when the tensor names mark a diffusion UNet,
+// "flux" when they mark a BFL-format MMDiT (double_blocks), or "qwen_image"
+// for the Qwen-Image MMDiT layout, for a
 // metadata-stripped converted model; else "". bakedEnc is true when the file
 // also carries its text encoder(s) (conditioner.embedders/cond_stage_model),
 // i.e. it's a full checkpoint rather than a bare UNet.
@@ -1138,6 +1139,7 @@ func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err err
 	var expertBytes, totalBytes int64
 	var videoKind string
 	var sawExpert, sawInputBlocks, sawLabelEmb, sawDoubleBlocks, unknownType bool
+	var sawImgIn, sawTxtIn, sawTransformerBlocks bool
 	var sawVideoPatch, sawAudioPatch, sawTemporalPatch, sawLtxPatch bool
 	var embedWidth int64
 	condDims := map[string]int64{}
@@ -1206,6 +1208,13 @@ func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err err
 		if name == "token_embd.weight" || name == "model.embed_tokens.weight" {
 			embedWidth = firstDim
 		}
+		// Every diffusion marker below is matched on the BARE name. ComfyUI-layout
+		// conversions (unsloth's and AtomicChat's Qwen-Image 2.1 quants, the two
+		// most downloaded) keep the checkpoint's model.diffusion_model. prefix,
+		// and an exact-name match against the prefixed form misses the caption
+		// projection: condHidden reads 0 and the model is wired to the wrong text
+		// encoder and the 16-channel VAE. sd.cpp strips the prefix itself.
+		name = strings.TrimPrefix(name, "model.diffusion_model.")
 		// SD/SDXL UNet markers, for a converted diffusion gguf that lost its
 		// general.architecture. input_blocks = a UNet; label_emb (the size/crop
 		// conditioning) is SDXL-only, absent in SD1.
@@ -1222,6 +1231,19 @@ func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err err
 		// families that share the layout but not the encoders.
 		if strings.Contains(name, "double_blocks.") {
 			sawDoubleBlocks = true
+		}
+		// Qwen-Image MMDiT marker (20B, Edit, 2.1). AtomicChat's 2.1 quants ship
+		// ZERO KVs, so without it the file falls through to the LLM path and
+		// loads as a chat model. img_in + txt_in + transformer_blocks together is
+		// the Qwen-Image layout: diffusers flux names its input x_embedder, and
+		// the BFL families above use double_blocks.
+		switch {
+		case name == "img_in.weight":
+			sawImgIn = true
+		case name == "txt_in.weight" || name == "txt_in.in_layer.weight":
+			sawTxtIn = true
+		case strings.HasPrefix(name, "transformer_blocks."):
+			sawTransformerBlocks = true
 		}
 		// Video-DiT markers. MiniMax-H3 patchifies a video latent through its
 		// own projection and, on the audio-capable weights, a second audio
@@ -1281,6 +1303,8 @@ func readTensorScan(r *ggufReader, tensorCount uint64) (scan tensorScan, err err
 		}
 	case sawDoubleBlocks:
 		diffKind = "flux"
+	case sawImgIn && sawTxtIn && sawTransformerBlocks:
+		diffKind = "qwen_image"
 	}
 	// An untabulated type makes the ratio meaningless (the missing tensors are
 	// exactly the ones whose share we would be reporting), so the share alone
