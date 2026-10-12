@@ -399,7 +399,7 @@ func emitVideoModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, n
 	}
 	fmt.Fprintf(b, "\n  # arch=%s family=%s size=%gGB (video model, sd-server, budget=%gGB, max-vram=%gGB, offload=%t)\n", archNote, vid.Kind, row.SizeGB, budget, graph, offload)
 	if len(missing) > 0 {
-		fmt.Fprintf(b, "  # WARNING: %s needs component(s) [%s] that aren't in settings.encoders - generation will fail until declared\n", name, strings.Join(missing, ", "))
+		fmt.Fprintf(b, "  # WARNING: %s needs component(s) [%s] that were not found on disk - generation will fail until they are downloaded or declared\n", name, strings.Join(missing, ", "))
 	}
 	fmt.Fprintf(b, "  %q:\n", name)
 	b.WriteString("    cmd: >\n")
@@ -407,6 +407,7 @@ func emitVideoModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, n
 		fmt.Fprintf(b, "      %s\n", line)
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
+	writeMissingComponents(b, missing)
 	writeSingleDeviceEnv(b, s, imageExe(s, ov))
 	// Admission estimate = the budget this model was sized against, not the
 	// --max-vram it launches with (that is only the graph headroom left once the

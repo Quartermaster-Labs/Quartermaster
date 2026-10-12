@@ -73,6 +73,21 @@ models:
 	}
 }
 
+func TestConfig_ModelMissingComponents(t *testing.T) {
+	content := `
+models:
+  image:
+    cmd: path/to/cmd --port ${PORT}
+    missingComponents: [vae, llm]
+  complete:
+    cmd: path/to/cmd --port ${PORT}
+`
+	config, err := LoadConfigFromReader(strings.NewReader(content))
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"vae", "llm"}, config.Models["image"].MissingComponents)
+	assert.Empty(t, config.Models["complete"].MissingComponents)
+}
+
 func TestConfig_SetParamsByIDAutoAlias(t *testing.T) {
 	content := `
 models:

@@ -1119,6 +1119,17 @@ func emitExtraImageModels(b *strings.Builder, s Settings, overrides []Override, 
 	}
 }
 
+// writeMissingComponents carries the roles resolveComponents could not fill
+// into the model entry itself. The YAML comment above it is for someone
+// reading config.yaml; this field is what the process layer logs at Load,
+// which is where a user who downloaded only the DiT is actually looking.
+func writeMissingComponents(b *strings.Builder, missing []string) {
+	if len(missing) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "    missingComponents: [%s]\n", strings.Join(missing, ", "))
+}
+
 func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, name, arch string, bakedEnc bool, condHidden int64, emitted *[]string) {
 	cmd, budget, graph, offload, missing := imageCmdLines(s, row, ov, arch, name, condHidden, videoInfo{})
 	lines := cmd.Lines
@@ -1130,7 +1141,7 @@ func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, n
 		fmt.Fprintf(b, "  # WARNING: %s looks UNet-only (no baked text encoder) - sd.cpp can't load SD/SDXL split; supply an all-in-one checkpoint\n", name)
 	}
 	if len(missing) > 0 {
-		fmt.Fprintf(b, "  # WARNING: %s needs encoder(s) [%s] that aren't in settings.encoders - generation will fail until declared\n", name, strings.Join(missing, ", "))
+		fmt.Fprintf(b, "  # WARNING: %s needs component(s) [%s] that were not found on disk - generation will fail until they are downloaded or declared\n", name, strings.Join(missing, ", "))
 	}
 	fmt.Fprintf(b, "  %q:\n", name)
 	b.WriteString("    cmd: >\n")
@@ -1138,6 +1149,7 @@ func emitImageModel(b *strings.Builder, s Settings, row GgufRow, ov *Override, n
 		fmt.Fprintf(b, "      %s\n", line)
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
+	writeMissingComponents(b, missing)
 	writeSingleDeviceEnv(b, s, imageExe(s, ov))
 	// Admission estimate = the whole budget this model was sized against, NOT the
 	// --max-vram it launches with: that one is only the graph-cut headroom left

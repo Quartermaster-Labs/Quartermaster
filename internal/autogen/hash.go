@@ -318,7 +318,9 @@ const hashCacheSuffix = ".modelhash"
 // v97: diffusion tensor markers match the bare name (ComfyUI's
 // model.diffusion_model. prefix stripped), and a zero-KV Qwen-Image gguf is
 // sniffed as qwen_image instead of falling through to llama-server.
-const genVersion = "v97"
+// v98: image/video models with unresolved components carry
+// missingComponents: [...] so the Load path can log what is missing.
+const genVersion = "v98"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight

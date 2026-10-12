@@ -94,6 +94,12 @@ type ModelConfig struct {
 	Unlisted      bool     `yaml:"unlisted"`
 	UseModelName  string   `yaml:"useModelName"`
 
+	// MissingComponents names the diffusion components (vae, llm, t5xxl, ...)
+	// autogen could not find on disk for this model. Pure data: the process
+	// layer only reports it, because sd-server dies within seconds without
+	// them and its own log is the only other place that says why.
+	MissingComponents []string `yaml:"missingComponents"`
+
 	// #179 for /v1/models
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`

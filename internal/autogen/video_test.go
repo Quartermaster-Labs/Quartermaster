@@ -88,6 +88,10 @@ func TestEmitVideoModel_MissingComponents(t *testing.T) {
 			t.Errorf("missing-component emit should name %q:\n%s", want, out)
 		}
 	}
+	// The roles also travel as data, so the Load path can log them.
+	if !strings.Contains(out, "missingComponents: [vae, llm, audio_vae]") {
+		t.Errorf("missing roles should be emitted as missingComponents:\n%s", out)
+	}
 	// 8GB + 4GB video overhead blows a 7GB budget.
 	if !strings.Contains(out, "--offload-to-cpu") {
 		t.Errorf("oversized video model should offload:\n%s", out)
