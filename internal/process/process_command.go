@@ -645,6 +645,10 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 	// health check passed.
 	startedAt := time.Now()
 	p.proxyLogger.Infof("<%s> starting %s", p.id, filepath.Base(resolveExe(args[0])))
+	missingNote := missingComponentsNote(cfg.MissingComponents)
+	if missingNote != "" {
+		p.proxyLogger.Warnf("<%s> %s", p.id, missingNote)
+	}
 
 	cmdDone := make(chan struct{})
 	if err := cmd.Start(); err != nil {
@@ -692,6 +696,11 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		if hint := peimports.Hint(resolveExe(args[0])); hint != "" {
 			p.proxyLogger.Errorf("<%s> %s", p.id, hint)
 			return startResult{err: fmt.Errorf("upstream command exited prematurely: %s", hint)}
+		}
+		// Same idea for a diffusion model launched without its VAE/encoder: the
+		// generator already knew, so say it again at the point of failure.
+		if missingNote != "" {
+			return startResult{err: fmt.Errorf("upstream command exited prematurely: %s", missingNote)}
 		}
 		return startResult{err: fmt.Errorf("upstream command exited prematurely")}
 	}

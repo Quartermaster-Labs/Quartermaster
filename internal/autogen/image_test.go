@@ -82,7 +82,7 @@ func TestEmitImageModel(t *testing.T) {
 	if strings.Contains(out, "--vae-on-cpu") {
 		t.Errorf("offload should place the VAE via --backend, not --vae-on-cpu:\n%s", out)
 	}
-	if strings.Contains(out, "WARNING") {
+	if strings.Contains(out, "WARNING") || strings.Contains(out, "missingComponents") {
 		t.Errorf("complete pool should not warn:\n%s", out)
 	}
 	if len(emitted) != 1 || emitted[0] != "flux-q4" {
