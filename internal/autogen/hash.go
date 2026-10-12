@@ -315,7 +315,10 @@ const hashCacheSuffix = ".modelhash"
 // v96: qwen_image models get built-in generation defaults (imageDefaultsFor):
 // a turbo checkpoint launches at --steps 8 --cfg-scale 1, Qwen-Image 2.1 base
 // at --steps 40 --cfg-scale 1, instead of sd-server's 20 steps at cfg 7.0.
-const genVersion = "v96"
+// v97: diffusion tensor markers match the bare name (ComfyUI's
+// model.diffusion_model. prefix stripped), and a zero-KV Qwen-Image gguf is
+// sniffed as qwen_image instead of falling through to llama-server.
+const genVersion = "v97"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight
