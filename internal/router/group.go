@@ -98,11 +98,102 @@ type groupSwapper struct {
 	liveVram *liveVramHolder
 }
 
+// EvictionFor splits the residents by memory pool (GroupConfig.Pool). A
+// ram-pool (CPU-only) model holds no VRAM, so it is invisible to the VRAM
+// admission and never evicted for it, and it never evicts a vram-pool model in
+// turn: the two pools only meet in the RAM check, where a GPU model's offloaded
+// share (EstRamGB) can push CPU models out but not the other way round.
 func (p *groupSwapper) EvictionFor(target string, running []string) []string {
-	if evict, ok := p.budgetEviction(target, running); ok {
-		return evict
+	var cpuRunning, gpuRunning []string
+	for _, id := range running {
+		if p.inRAMPool(id) {
+			cpuRunning = append(cpuRunning, id)
+		} else {
+			gpuRunning = append(gpuRunning, id)
+		}
+	}
+	if p.inRAMPool(target) {
+		if evict, ok := p.ramEviction(target, running, nil); ok {
+			return evict
+		}
+		return p.staticEviction(target, cpuRunning)
 	}
 
+	evict, ok := p.budgetEviction(target, gpuRunning)
+	if !ok {
+		evict = p.staticEviction(target, gpuRunning)
+	}
+	if more, ok := p.ramEviction(target, running, evict); ok {
+		evict = append(evict, more...)
+	}
+	return evict
+}
+
+// inRAMPool reports whether a model's group is admitted against the RAM budget.
+func (p *groupSwapper) inRAMPool(id string) bool {
+	return p.config.Routing.Router.Settings.Groups[p.modelToGroup[id]].IsRAMPool()
+}
+
+// ramEviction is budgetEviction over system memory: the target's EstRamGB plus
+// every resident's (both pools, minus those already being evicted) must fit
+// RamBudgetGB, and only ram-pool, non-persistent residents are evicted to make
+// it, least-recently-used first. A ram-pool resident with no estimate is
+// evicted outright when the TARGET is ram-pool (same rule as the VRAM side);
+// when a GPU model is loading it is left alone, since an unmeasured CPU model
+// is no reason to tear down something the GPU load does not collide with.
+//
+// ok=false: no RAM budget, or a ram-pool target with no estimate. The caller
+// then falls back to the static group rule (ram-pool target) or adds nothing
+// (GPU target).
+func (p *groupSwapper) ramEviction(target string, running, already []string) ([]string, bool) {
+	budget := p.config.RamBudgetGB
+	if budget <= 0 {
+		return nil, false
+	}
+	targetRAM := p.inRAMPool(target)
+	targetGB := p.config.Models[target].EstRamGB
+	if targetRAM && targetGB <= 0 {
+		return nil, false
+	}
+
+	skip := map[string]struct{}{target: {}}
+	for _, id := range already {
+		skip[id] = struct{}{}
+	}
+	total := targetGB
+	var victims, candidates []string
+	for _, id := range running {
+		if _, dup := skip[id]; dup {
+			continue
+		}
+		skip[id] = struct{}{}
+		estGB := p.config.Models[id].EstRamGB
+		gcfg := p.config.Routing.Router.Settings.Groups[p.modelToGroup[id]]
+		switch {
+		case !gcfg.IsRAMPool() || gcfg.Persistent:
+			total += estGB
+		case estGB <= 0:
+			if targetRAM {
+				victims = append(victims, id)
+			}
+		default:
+			total += estGB
+			candidates = append(candidates, id)
+		}
+	}
+	for _, id := range candidates {
+		if total <= budget {
+			break
+		}
+		total -= p.config.Models[id].EstRamGB
+		victims = append(victims, id)
+	}
+	return victims, true
+}
+
+// staticEviction is the legacy group policy, used when no budget applies. The
+// caller has already narrowed running to the target's pool where that matters.
+func (p *groupSwapper) staticEviction(target string, running []string) []string {
 	tg := p.modelToGroup[target]
 	tgCfg := p.config.Routing.Router.Settings.Groups[tg]
 
@@ -124,7 +215,7 @@ func (p *groupSwapper) EvictionFor(target string, running []string) []string {
 		// when loading a non-exclusive model. This maintains that gotcha
 		// for backwards compatibility. The newer swap matrix approach does not
 		// have this issue.
-		case og != tg && tgCfg.Exclusive:
+		case og != tg && tgCfg.Exclusive && !p.inRAMPool(mID):
 			if ogCfg := p.config.Routing.Router.Settings.Groups[og]; !ogCfg.Persistent {
 				seen[mID] = struct{}{}
 				result = append(result, mID)

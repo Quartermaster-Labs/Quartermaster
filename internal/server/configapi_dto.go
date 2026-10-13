@@ -132,6 +132,10 @@ type overrideDTO struct {
 	KvInRam            bool    `json:"kvInRam"`
 	VramTargetGB       float64 `json:"vramTargetGB"`
 	CpuOffload         int     `json:"cpuOffload"`
+	// Device "" or "gpu" runs normally, "cpu" runs on the CPU only. SwapGroup picks the
+	// admission pool: "" follows Device, "gpu" or "cpu". Model-wide, not per variant.
+	Device    string `json:"device,omitempty"`
+	SwapGroup string `json:"swapGroup,omitempty"`
 	// Mmproj places the vision twin's CLIP projector: "" auto | "gpu" | "ram"
 	// (--no-mmproj-offload) | "none" (no twin at all).
 	Mmproj          string `json:"mmproj"`
@@ -388,6 +392,7 @@ func toOverrideDTO(o autogen.Override) *overrideDTO {
 		VllmTokenizer: o.VllmTokenizer, VllmToolParser: o.VllmToolParser,
 		Ctx: o.Ctx, KvK: o.KvK, KvV: o.KvV, KvInRam: o.KvInRam,
 		VramTargetGB: o.VramTargetGB, CpuOffload: o.CpuOffload, Mmproj: o.Mmproj,
+		Device: o.Device, SwapGroup: o.SwapGroup,
 		Spec: o.Spec, ReasoningFmt: o.ReasoningFmt, ReasoningBudget: o.ReasoningBudget,
 		FlashAttn: o.FlashAttn, Mmap: o.Mmap, Mlock: o.Mlock,
 		Threads: o.Threads, Parallel: o.Parallel, Ub: o.Ub,
@@ -478,6 +483,8 @@ func applyOverrideDTO(ov *autogen.Override, body overrideDTO) {
 	ov.KvInRam = body.KvInRam
 	ov.VramTargetGB = body.VramTargetGB
 	ov.CpuOffload = body.CpuOffload
+	ov.Device = body.Device
+	ov.SwapGroup = body.SwapGroup
 	ov.Mmproj = body.Mmproj
 	ov.Spec = body.Spec
 	ov.ReasoningFmt = body.ReasoningFmt

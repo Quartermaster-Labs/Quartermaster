@@ -24,6 +24,9 @@ type EstimateInput struct {
 	CpuOffload     int  // >0 pins layers offloaded to CPU, overriding the sizer
 	CpuOffloadSet  bool // CpuOffload == 0 is a pin too (every layer on GPU)
 	CtxCheckpoints *int // nil => llama default (32); 0 disables; reserves checkpoint VRAM
+	// CpuDevice previews a `device: cpu` pin (--device none): the same ngl-0
+	// footprint generate prices, all of it charged to RAM.
+	CpuDevice bool
 	// CheckpointMinStep pins -cms (checkpoint spacing in prompt tokens), which
 	// scales each snapshot's global-KV term. 0 => the arch default (wide on SWA).
 	CheckpointMinStep int
@@ -217,17 +220,26 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 	if in.CpuOffload > 0 || in.CpuOffloadSet {
 		ngl, ncpuMoe = applyForcedOffload(meta, in.CpuOffload)
 	}
+	if in.CpuDevice {
+		ngl, ncpuMoe = 0, 0
+	}
 	// Any placement that differs from the one GetLoadPlan priced has to be
 	// re-priced: forceLowActiveMoE rewrites -ngl/--n-cpu-moe in place and used to
 	// leave plan.EstVramGB describing the placement it just discarded.
-	if ngl != plan.Ngl || ncpuMoe != plan.NCpuMoe {
+	if ngl != plan.Ngl || ncpuMoe != plan.NCpuMoe || in.CpuDevice {
 		plan.EstVramGB, plan.EstRamGB = estForOffload(meta, prof, kvReserve, planCkptGB, ngl, ncpuMoe)
+		if in.CpuDevice {
+			plan.EstVramGB, plan.EstRamGB = 0, plan.EstVramGB+plan.EstRamGB
+		}
 		plan.RamExceeded = s.MaxRamGB > 0 && plan.EstRamGB > s.MaxRamGB
 	}
 
 	// Dense checkpoints are split GPU/RAM by the layer placement (see sizeProfile),
 	// so the VRAM portion is only the GPU-resident fraction. Scale the reported
 	// figure to match EstVramGB. MoE keeps KV (and checkpoints) fully in VRAM.
+	if in.CpuDevice {
+		checkpointGB = 0
+	}
 	if checkpointGB > 0 && !meta.IsMoE && meta.BlockCount > 0 {
 		gpuFrac := float64(min(ngl, int(meta.BlockCount))) / float64(meta.BlockCount)
 		if gpuFrac < 0 {
@@ -248,7 +260,7 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		kvReserve -= draftKvGB
 	}
 
-	return EstimateResult{
+	res := EstimateResult{
 		Ctx:          ctx,
 		Ngl:          ngl,
 		NCpuMoe:      ncpuMoe,
@@ -265,5 +277,13 @@ func EstimatePlan(s Settings, meta Metadata, in EstimateInput) (EstimateResult, 
 		FixedGB:      mainFixedGB,
 		RamExceeded:  plan.RamExceeded,
 		IsMoE:        meta.IsMoE,
-	}, nil
+	}
+	// A CPU-device pin has no GPU, so every VRAM component is zero, not just the
+	// total: the UI draws each one as its own segment of the VRAM bar, and the
+	// spawn guard charges FixedGB to the main card.
+	if in.CpuDevice {
+		res.KvReserveGB, res.DraftGB, res.ComputeBufGB = 0, 0, 0
+		res.MmprojGB, res.OverheadGB, res.FixedGB = 0, 0, 0
+	}
+	return res, nil
 }

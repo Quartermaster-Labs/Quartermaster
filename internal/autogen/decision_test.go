@@ -60,6 +60,28 @@ func TestDecisionCmdLines(t *testing.T) {
 	if !strings.Contains(ov, "-c 16384") {
 		t.Errorf("ctx override ignored: %s", ov)
 	}
+
+	// A pinned CPU offload reaches -ngl (it used to be dropped for -ngl 99).
+	dense := Metadata{DecisionType: "kev", ContextLength: 40960, BlockCount: 32}
+	all := strings.Join(decisionCmdLines(s, row, &Override{CpuOffload: 32}, dense), " ")
+	if !strings.Contains(all, "-ngl 0 ") {
+		t.Errorf("cpuOffload 32/32 should emit -ngl 0: %s", all)
+	}
+	half := strings.Join(decisionCmdLines(s, row, &Override{CpuOffload: 8}, dense), " ")
+	if !strings.Contains(half, "-ngl 24 ") {
+		t.Errorf("cpuOffload 8/32 should emit -ngl 24: %s", half)
+	}
+}
+
+func TestDecisionEstVramGB_CpuOffload(t *testing.T) {
+	s := Settings{}
+	row := GgufRow{SizeGB: 4}
+	meta := Metadata{DecisionType: "kev", ContextLength: 8192, BlockCount: 32}
+	gpu := decisionEstVramGB(s, row, nil, meta)
+	cpu := decisionEstVramGB(s, row, &Override{CpuOffload: 32}, meta)
+	if gpu-cpu < 3.9 {
+		t.Errorf("full CPU offload should drop the weights from VRAM: gpu=%.2f cpu=%.2f", gpu, cpu)
+	}
 }
 
 func TestEmitDecisionModel_Capabilities(t *testing.T) {

@@ -679,6 +679,17 @@ type Override struct {
 	// sizer. 0 => auto. MoE models offload expert layers (--n-cpu-moe N); dense
 	// models drop GPU layers (-ngl = blocks-N).
 	CpuOffload int `yaml:"cpuOffload"`
+	// Device is where the model RUNS: "" / "gpu" = the sized placement above,
+	// "cpu" = -ngl 0 --device none, no GPU context at all (llama-server classes
+	// only). Distinct from CpuOffload at max, which still lets llama.cpp borrow
+	// the GPU for large-batch matmuls (op offload) and so still holds VRAM.
+	Device string `yaml:"device,omitempty"`
+	// SwapGroup is which memory pool the model is admitted against and evicts
+	// within: "" = follow Device, "gpu" = the VRAM-budgeted exclusive group,
+	// "cpu" = the RAM-budgeted cpu group (never evicts or is evicted by a GPU
+	// model for VRAM). A GPU device in the cpu group is refused: it would hold
+	// VRAM the router never charges.
+	SwapGroup string `yaml:"swapGroup,omitempty"`
 	// Mmproj places the CLIP image projector on this model's DEFAULT profile and
 	// its ctx tiers / named variants (the "-vision" twin has its own pin, on the
 	// reserved vision variant). Only meaningful for a model that has a projector

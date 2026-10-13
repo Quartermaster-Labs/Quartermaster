@@ -441,6 +441,8 @@ export interface ModelOverride {
   kvInRam?: boolean;
   vramTargetGB?: number;
   cpuOffload?: number;
+  device?: string; // "" or "gpu" = normal, "cpu" = CPU only (model-wide)
+  swapGroup?: string; // "" follows device, "gpu" or "cpu" (model-wide)
   spec?: string;
   reasoningFmt?: string;
   reasoningBudget?: number; // --reasoning-budget token cap; 0/undefined => no cap
@@ -925,6 +927,9 @@ export interface EstimateParams {
   spec?: string;
   vram?: number;
   cpuOffload?: number;
+  /** "cpu" previews a CPU-device pin (everything in RAM); "gpu" overrides a
+   * seeded `--device none`. Undefined leaves the seed alone. */
+  device?: string;
   /** null/undefined => llama default (32); 0 disables. */
   ctxCheckpoints?: number | null;
   /** -cms checkpoint spacing: scales each snapshot's KV term. 0 => arch default. */
@@ -1017,6 +1022,7 @@ export async function estimatePlan(
   if (p.spec) q.set("spec", p.spec);
   if (p.vram) q.set("vram", String(p.vram));
   if (p.cpuOffload) q.set("cpuOffload", String(p.cpuOffload));
+  if (p.device) q.set("device", p.device);
   if (p.ctxCheckpoints != null)
     q.set("ctxCheckpoints", String(p.ctxCheckpoints));
   if (p.checkpointMinStep)

@@ -94,6 +94,10 @@ func embeddingCmdLines(s Settings, row GgufRow, ov *Override, meta Metadata) []s
 	if ov != nil && ov.Threads > 0 {
 		threads = ov.Threads
 	}
+	placement := "-ngl 99"
+	if ov.CpuDevice() {
+		placement = "-ngl 0 --device none"
+	}
 	lines := []string{
 		embeddingExe(s, ov),
 		fmt.Sprintf("-m %s", strings.ReplaceAll(row.FullPath, "\\", "/")),
@@ -102,7 +106,7 @@ func embeddingCmdLines(s Settings, row GgufRow, ov *Override, meta Metadata) []s
 		corsOriginsFlag,
 		"--embeddings",
 		"--pooling auto",
-		"-ngl 99",
+		placement,
 		fmt.Sprintf("-c %d", embeddingCtx(meta, ov)),
 		fmt.Sprintf("-t %d", threads),
 		"--no-warmup --no-ui --metrics --props",
@@ -128,8 +132,13 @@ func emitEmbeddingModel(b *strings.Builder, s Settings, row GgufRow, ov *Overrid
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
 	writeSingleDeviceEnv(b, s, embeddingExe(s, ov))
 	// Embedders are small, fully offloaded and their KV is one short sequence:
-	// weights plus a flat pad is close enough for admission.
-	writeEstVram(b, row.SizeGB+embeddingOverheadGB)
+	// weights plus a flat pad is close enough for admission. A CPU-device pin
+	// moves the same figure to the RAM pool.
+	if ov.CpuDevice() {
+		writeEstRam(b, row.SizeGB+embeddingOverheadGB)
+	} else {
+		writeEstVram(b, row.SizeGB+embeddingOverheadGB)
+	}
 	if ov != nil && ov.Unlisted {
 		b.WriteString("    unlisted: true\n")
 	}

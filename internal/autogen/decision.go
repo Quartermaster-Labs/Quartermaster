@@ -100,6 +100,30 @@ func decisionAttnScoresGB(meta Metadata, ub int) float64 {
 	return heads * float64(ub) * float64(ub) * 4.0 / gib
 }
 
+// decisionPlacement is the -ngl / --n-cpu-moe pair: every layer on the GPU
+// unless the user pinned a CPU offload, which goes through the same
+// applyForcedOffload an LLM's pin does.
+func decisionPlacement(meta Metadata, ov *Override) (ngl, ncpuMoe int) {
+	if ov.CpuDevice() {
+		return 0, 0
+	}
+	if ov != nil && ov.CpuOffload > 0 {
+		return applyForcedOffload(meta, ov.CpuOffload)
+	}
+	return 99, 0
+}
+
+// decisionGpuShare is the fraction of the weights and KV a dense placement
+// keeps in VRAM (a CPU layer holds its own KV). MoE expert offload is left at
+// 1: the experts are most of the file, but a decision model is never one.
+func decisionGpuShare(meta Metadata, ov *Override) float64 {
+	ngl, _ := decisionPlacement(meta, ov)
+	if meta.IsMoE || meta.BlockCount <= 0 || int64(ngl) >= meta.BlockCount {
+		return 1
+	}
+	return float64(ngl) / float64(meta.BlockCount)
+}
+
 // decisionCmdLines builds the llama-server argv (exe first). Shared by
 // emitDecisionModel and RenderSoloCmdLayers so the editor preview matches a
 // save. The exe is the class "llm" pick, with the same vllm exception
@@ -110,15 +134,22 @@ func decisionCmdLines(s Settings, row GgufRow, ov *Override, meta Metadata) []st
 		threads = ov.Threads
 	}
 	ctx := decisionCtx(meta, ov)
+	ngl, ncpuMoe := decisionPlacement(meta, ov)
 	lines := []string{
 		embeddingExe(s, ov),
 		fmt.Sprintf("-m %s", strings.ReplaceAll(row.FullPath, "\\", "/")),
 		"--port ${PORT}",
 		"--host 127.0.0.1",
 		corsOriginsFlag,
-		"-ngl 99",
-		fmt.Sprintf("-c %d", ctx),
+		fmt.Sprintf("-ngl %d", ngl),
 	}
+	if ncpuMoe > 0 {
+		lines = append(lines, fmt.Sprintf("--n-cpu-moe %d", ncpuMoe))
+	}
+	if ov.CpuDevice() {
+		lines = append(lines, "--device none")
+	}
+	lines = append(lines, fmt.Sprintf("-c %d", ctx))
 	if ub, whole := decisionUb(meta, ov); whole {
 		lines = append(lines, fmt.Sprintf("-b %d -ub %d", ub, ub))
 	}
@@ -145,17 +176,35 @@ func decisionCmdLines(s Settings, row GgufRow, ov *Override, meta Metadata) []st
 // pad cannot follow that; those also pay decisionAttnScoresGB.
 func decisionEstVramGB(s Settings, row GgufRow, ov *Override, meta Metadata) float64 {
 	ub, whole := decisionUb(meta, ov)
-	est := row.SizeGB + computeBufferGB(meta, ub, s.ComputeBufFactor)
+	share := decisionGpuShare(meta, ov)
+	est := row.SizeGB*share + computeBufferGB(meta, ub, s.ComputeBufFactor)
 	if whole {
 		est += decisionAttnScoresGB(meta, ub)
 	}
 	if kv := GetKvCostModel(meta, "f16", "f16"); kv.OK {
-		est += kv.SlopeGB*float64(decisionCtx(meta, ov)) + kv.ConstGB
+		est += (kv.SlopeGB*float64(decisionCtx(meta, ov)) + kv.ConstGB) * share
 	}
 	if p, gb := decisionMmproj(row, ov); p != "" {
 		est += MmprojVramGB(p, gb, s)
 	}
 	return est
+}
+
+// decisionEstGB splits the footprint between VRAM and RAM. A CPU-device pin
+// moves all of it (compute buffer included) to RAM; a partial offload leaves
+// the offloaded share of the weights and KV there.
+func decisionEstGB(s Settings, row GgufRow, ov *Override, meta Metadata) (vram, ram float64) {
+	if ov == nil || (!ov.CpuDevice() && ov.CpuOffload <= 0) {
+		return decisionEstVramGB(s, row, ov, meta), 0
+	}
+	gpu := *ov
+	gpu.Device, gpu.CpuOffload = "", 0
+	full := decisionEstVramGB(s, row, &gpu, meta)
+	if ov.CpuDevice() {
+		return 0, full
+	}
+	vram = decisionEstVramGB(s, row, ov, meta)
+	return vram, full - vram
 }
 
 // emitDecisionModel writes the YAML entry. capabilities.decision is what
@@ -171,7 +220,9 @@ func emitDecisionModel(b *strings.Builder, s Settings, row GgufRow, ov *Override
 	}
 	fmt.Fprintf(b, "    ttl: %d\n", s.TtlSec)
 	writeSingleDeviceEnv(b, s, embeddingExe(s, ov))
-	writeEstVram(b, decisionEstVramGB(s, row, ov, meta))
+	vram, ram := decisionEstGB(s, row, ov, meta)
+	writeEstVram(b, vram)
+	writeEstRam(b, ram)
 	if ov != nil && ov.Unlisted {
 		b.WriteString("    unlisted: true\n")
 	}

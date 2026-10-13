@@ -67,6 +67,9 @@ func LiveOffloadArgs(s Settings, args []string, freeGB float64, freeOK bool, log
 	if !strings.HasSuffix(lower, ".gguf") {
 		return args, nil // not a llama.cpp model load (sd-server, custom cmd, …)
 	}
+	if dev, i := argVal(args, "--device", "-dev"); i >= 0 && strings.EqualFold(dev, "none") {
+		return args, nil // CPU-device pin: no GPU placement to retune
+	}
 	nglStr, nglIdx := argVal(args, "-ngl", "--n-gpu-layers", "--gpu-layers")
 	if nglIdx < 0 {
 		return args, nil // no offload knob to tune

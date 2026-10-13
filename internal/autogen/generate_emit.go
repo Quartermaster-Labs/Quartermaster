@@ -51,6 +51,18 @@ func emitVramBudget(b *strings.Builder, s Settings) {
 	fmt.Fprintf(b, "vramBudgetGB: %g\n\n", round2(s.TargetVramGB))
 }
 
+// emitRamBudget writes ramBudgetGB, the RAM pool's admission budget (see
+// config.Config.RamBudgetGB), from settings.maxRamGB. Same multiResident gate
+// as the VRAM one.
+func emitRamBudget(b *strings.Builder, s Settings) {
+	if !multiResidentOn(s) || s.MaxRamGB <= 0 {
+		return
+	}
+	b.WriteString("# CPU-pool models are admitted while every resident's estRamGB fits\n")
+	b.WriteString("# this budget; over it, the least-recently-used CPU-pool ones go.\n")
+	fmt.Fprintf(b, "ramBudgetGB: %g\n\n", round2(s.MaxRamGB))
+}
+
 // writeEstVram emits a model's predicted VRAM footprint, the admission input for
 // vramBudgetGB. Omitted when the caller has no estimate (0), which the router
 // reads as "unknown" and handles conservatively.
@@ -62,8 +74,9 @@ func writeEstVram(b *strings.Builder, estGB float64) {
 }
 
 // writeEstRam emits the sizer's predicted RAM share (weights the GPU could not
-// take). Informational only — the dashboard shows it beside estVramGB — so it
-// is omitted for a fully-offloaded model rather than written as 0.
+// take, or the whole footprint of a CPU-device model). It is the admission
+// input for ramBudgetGB, and is omitted for a fully-offloaded model rather than
+// written as 0.
 func writeEstRam(b *strings.Builder, estGB float64) {
 	if estGB <= 0 {
 		return
@@ -376,7 +389,7 @@ func emitGroupsAndListeners(b *strings.Builder, s Settings, emitted []string, cs
 		b.WriteString("\ngroups:\n")
 		writeGroup(b, "exclusive", swappable, false)
 		for _, g := range groups {
-			writeCoexistGroup(b, g.name, g.members)
+			writeCoexistGroup(b, g.name, g.members, g.ramPool)
 		}
 		return
 	}
@@ -426,7 +439,7 @@ func emitGroupsAndListeners(b *strings.Builder, s Settings, emitted []string, cs
 		writeGroup(b, name, members[name], coexist[name])
 	}
 	for _, g := range groups {
-		writeCoexistGroup(b, g.name, g.members)
+		writeCoexistGroup(b, g.name, g.members, g.ramPool)
 	}
 
 	// listeners: address -> the groups it exposes (a group with no Listen binds
@@ -468,6 +481,11 @@ type coexistSets struct {
 	Sam []string // SAM segmentation (*.ggml, sam3_server)
 	TTS []string // TTS.cpp voices (Kokoro & friends) — CPU-only, no CUDA/ROCm path
 	ASR []string // Parakeet transcription — CPU-only by default
+	// CPU holds models the user pinned to the RAM pool (Override.InCpuPool). Not
+	// a never-evict group like the three above: its members can be big, so they
+	// are admitted against ramBudgetGB and evict each other LRU-first, but never
+	// evict, and are never evicted by, a GPU model for VRAM.
+	CPU []string
 }
 
 // coexistGroup is one emitted never-evicting group. Empty ones are dropped, so a
@@ -475,17 +493,19 @@ type coexistSets struct {
 type coexistGroup struct {
 	name    string
 	members []string
+	ramPool bool // the RAM-budgeted cpu group, see writeCoexistGroup
 }
 
 func (cs coexistSets) groups(s Settings) []coexistGroup {
 	var out []coexistGroup
 	for _, g := range []coexistGroup{
-		{"sam", cs.Sam},
-		{"tts", cs.TTS},
-		{"asr", cs.ASR},
+		{"sam", cs.Sam, false},
+		{"tts", cs.TTS, false},
+		{"asr", cs.ASR, false},
+		{cpuGroupName, cs.CPU, true},
 	} {
 		if len(g.members) > 0 {
-			out = append(out, coexistGroup{freeGroupName(s, g.name), g.members})
+			out = append(out, coexistGroup{freeGroupName(s, g.name), g.members, g.ramPool})
 		}
 	}
 	return out
@@ -508,14 +528,26 @@ func freeGroupName(s Settings, want string) string {
 // persistent:true so an exclusive LLM/image load never evicts the members,
 // swap:false so several members coexist (they're all tiny). Nothing is emitted when
 // the group has no members.
-func writeCoexistGroup(b *strings.Builder, name string, members []string) {
+//
+// The cpu group (ramPool) differs: swap:true and not persistent, so without a
+// RAM budget its members still swap among themselves (one resident) instead of
+// piling up in RAM forever, and with one the router admits them by fit. pool:
+// ram is what keeps a GPU load from ever evicting them for VRAM.
+func writeCoexistGroup(b *strings.Builder, name string, members []string, ramPool bool) {
 	if len(members) == 0 {
 		return
 	}
 	fmt.Fprintf(b, "  %s:\n", name)
-	b.WriteString("    swap: false\n")
-	b.WriteString("    exclusive: false\n")
-	b.WriteString("    persistent: true\n")
+	if ramPool {
+		b.WriteString("    swap: true\n")
+		b.WriteString("    exclusive: false\n")
+		b.WriteString("    persistent: false\n")
+		b.WriteString("    pool: ram\n")
+	} else {
+		b.WriteString("    swap: false\n")
+		b.WriteString("    exclusive: false\n")
+		b.WriteString("    persistent: true\n")
+	}
 	b.WriteString("    members:\n")
 	for _, n := range members {
 		fmt.Fprintf(b, "      - %q\n", n)
