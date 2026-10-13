@@ -322,7 +322,9 @@ const hashCacheSuffix = ".modelhash"
 // missingComponents: [...] so the Load path can log what is missing.
 // v99: llama.cpp decision models (<arch>.decision.type) emit their own
 // /v1/systemone block instead of an LLM or embedder one.
-const genVersion = "v99"
+// v100: decision models charge computeBufferGB at their real -ub (plus the
+// n_head x ub^2 score matrix for whole-batch types) instead of a flat pad.
+const genVersion = "v100"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight
