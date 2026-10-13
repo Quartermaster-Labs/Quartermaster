@@ -48,6 +48,17 @@ func renderCapabilities(caps config.ModelCapConfig) (arch map[string]any, capsMa
 		return
 	}
 
+	// A decision model's output is answers, not text: llama-server marks it with
+	// output_modalities ["decisions"] on its own /v1/models, and clients (the UI
+	// category among them) key on that, so we say the same. Copied, never
+	// appended in place: caps.Out aliases the live config.
+	if caps.Decision && !slices.Contains(caps.Out, "decisions") {
+		caps.Out = append(slices.Clone(caps.Out), "decisions")
+		if len(caps.In) == 0 {
+			caps.In = []string{"text"}
+		}
+	}
+
 	hasIn := len(caps.In) > 0
 	hasOut := len(caps.Out) > 0
 
@@ -65,7 +76,7 @@ func renderCapabilities(caps config.ModelCapConfig) (arch map[string]any, capsMa
 	}
 
 	// Build capabilities map only if there's something to put in it.
-	if hasIn || hasOut || caps.Tools || caps.Reranker || caps.Embedding || caps.Segmentation || caps.VoiceClone || len(caps.ReasoningEffort) > 0 {
+	if hasIn || hasOut || caps.Tools || caps.Reranker || caps.Embedding || caps.Decision || caps.Segmentation || caps.VoiceClone || len(caps.ReasoningEffort) > 0 {
 		capsMap = make(map[string]any)
 	}
 
@@ -123,6 +134,16 @@ func renderCapabilities(caps config.ModelCapConfig) (arch map[string]any, capsMa
 
 	if caps.Segmentation {
 		capsMap["segmentation"] = true
+	}
+
+	// decision_type names the head (kev, laya, lfm2-d1, ...): what it accepts
+	// varies by type (a null state, image files, questions without
+	// instructions), so the playground reads it to shape its form.
+	if caps.Decision {
+		capsMap["decisions"] = true
+		if caps.DecisionType != "" {
+			capsMap["decision_type"] = caps.DecisionType
+		}
 	}
 
 	// Speech engines differ in what they can do beyond synthesis: qwentts.cpp

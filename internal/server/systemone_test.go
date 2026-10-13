@@ -3,8 +3,11 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/quartermaster-labs/quartermaster/internal/config"
 )
 
 // /v1/systemone is a plain model-dispatched route: the body goes to
@@ -39,4 +42,33 @@ func TestServer_SystemoneRoute(t *testing.T) {
 			t.Fatalf("status = %d, want 404", w.Code)
 		}
 	})
+}
+
+// A decision model is advertised the way llama-server advertises it, with
+// "decisions" as its output modality, and the config's Out slice is not
+// mutated by the rendering (it aliases the live config).
+func TestRenderCapabilities_Decision(t *testing.T) {
+	caps := config.ModelCapConfig{In: []string{"text", "image"}, Decision: true, DecisionType: "lfm2-d1", Context: 4096}
+	arch, capsMap, _, ctx := renderCapabilities(caps)
+	if out, _ := arch["output_modalities"].([]string); !slices.Equal(out, []string{"decisions"}) {
+		t.Errorf("output_modalities = %v, want [decisions]", arch["output_modalities"])
+	}
+	if arch["modality"] != "text+image->decisions" {
+		t.Errorf("modality = %v", arch["modality"])
+	}
+	if capsMap["decisions"] != true || capsMap["decision_type"] != "lfm2-d1" || capsMap["vision"] != true {
+		t.Errorf("capabilities = %v", capsMap)
+	}
+	if ctx != 4096 {
+		t.Errorf("context_length = %d", ctx)
+	}
+	if len(caps.Out) != 0 {
+		t.Errorf("config Out mutated: %v", caps.Out)
+	}
+
+	// No declared inputs: text is implied, and no vision flag.
+	arch, capsMap, _, _ = renderCapabilities(config.ModelCapConfig{Decision: true})
+	if in, _ := arch["input_modalities"].([]string); !slices.Equal(in, []string{"text"}) || capsMap["vision"] != nil {
+		t.Errorf("arch = %v caps = %v", arch, capsMap)
+	}
 }
