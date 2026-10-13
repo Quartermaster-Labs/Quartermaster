@@ -269,6 +269,14 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		return nil
 	}
 
+	// Decision models go to llama-server's /v1/systemone. Tested ahead of the
+	// embedder check: one built on an encoder can bake a pooling_type, and the
+	// --embeddings launch it would get there serves the wrong API. See decision.go.
+	if IsDecisionModel(meta) {
+		emitDecisionModel(b, s, row, ov, name, meta, emitted)
+		return nil
+	}
+
 	// Text embedders (BERT-family or any model baking a pooling_type) go to
 	// llama-server with --embeddings: no KV/ctx-tier/spec sizing, and the
 	// embedding capability buckets them out of the chat-able LLM catalog.

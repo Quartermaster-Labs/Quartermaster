@@ -21,6 +21,14 @@ export interface ModelCapabilities {
   reranker?: boolean;
   embeddings?: boolean;
   segmentation?: boolean;
+  // llama.cpp decision model served by POST /v1/systemone (TypeSafe System One).
+  // Answers questions about a state with probabilities instead of chatting.
+  decisions?: boolean;
+  // Which decision family the model is ("kev", "laya", "openjev", "lfm2-d1-omni").
+  decision_type?: string;
+  // The llama.cpp build this decision model launches with predates
+  // /v1/systemone (dashboard catalog only). See lib/decisionBackend.ts.
+  decision_backend_outdated?: boolean;
   // Speech model that can REGISTER a new voice from a reference clip
   // (qwentts.cpp). Not implied by audio_speech: TTS.cpp/Kokoro synthesizes from a
   // fixed voice pack and has no clone route.

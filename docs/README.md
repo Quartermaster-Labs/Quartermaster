@@ -35,6 +35,7 @@ describes: see the subsystem table in [`CLAUDE.md`](../CLAUDE.md).
 - [Upscaling images](upscale.md)
 - [Image segmentation (SAM)](segmentation.md)
 - [Speech and transcription](speech-audio.md)
+- [Decision models (System One)](decision-models.md)
 - [Rerank and embeddings](rerank-embed.md)
 - [Playground settings](settings.md)
 

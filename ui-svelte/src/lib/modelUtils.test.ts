@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { matchesCapabilities, groupModels, modelWeightGB, largestModel } from "./modelUtils";
+import { matchesCapabilities, groupModels, modelWeightGB, largestModel, modelCategory, playgroundTarget } from "./modelUtils";
 import type { Model } from "./types";
 
 function makeModel(overrides: Partial<Model> = {}): Model {
@@ -145,5 +145,17 @@ describe("largestModel", () => {
     const list = [a, b];
     largestModel(list);
     expect(list[0].id).toBe("aaa");
+  });
+});
+
+describe("decision models", () => {
+  it("bucket as decision, ahead of embeddings and the llm fallback", () => {
+    expect(modelCategory(makeModel({ capabilities: { decisions: true } }))).toBe("decision");
+    expect(modelCategory(makeModel({ capabilities: { decisions: true, embeddings: true, vision: true } }))).toBe("decision");
+    expect(modelCategory(makeModel({ capabilities: { vision: true } }))).toBe("llm");
+  });
+
+  it("open in the decision playground tab", () => {
+    expect(playgroundTarget(makeModel({ capabilities: { decisions: true } }))?.tab).toBe("decision");
   });
 });

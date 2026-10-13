@@ -10,6 +10,7 @@ Everything is registered in `routes` (`server.go`). Model-dispatched routes (`mo
 - **`POST` JSON** — `/v1/chat/completions`, `/v1/responses`, `/v1/completions`,
   `/v1/messages`(+`/count_tokens`), `/v1/embeddings`, `/rerank`(+variants), `/infill`,
   `/completion`, `/v1/audio/speech`, `/v1/images/generations`, `/sdapi/v1/{txt2img,img2img}`,
+  `/v1/systemone` (llama.cpp decision models; llama-server validates the body),
   and the `/v/...` versionless equivalents.
 - **`POST` form** — `/v1/audio/transcriptions`, `/v1/images/edits`.
 - **`POST` raw** — `/v1/3d/generations`: the body IS the payload (the source image,

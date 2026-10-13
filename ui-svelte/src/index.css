@@ -114,7 +114,7 @@
        catalog and request views. Chat models get gold, NOT the orange accent: the
        accent already means "active / your attention", and LLMs are most of any
        catalog, so orange there would paint the whole page as a call to action.
-       Segment, speech and embedding share "other" - they are a handful of rows
+       Segment, speech, embedding and decision share "other" - they are a handful of rows
        each and five hues is already the limit of what reads at a glance. */
     --color-cat-llm: rgb(150, 110, 30);
     --color-cat-image: rgb(122, 82, 196);

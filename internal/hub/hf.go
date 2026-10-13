@@ -187,9 +187,19 @@ func (m hfModelJSON) toModel() Model {
 // `gguf` is deliberately absent here, unlike every other category: video is
 // where the useful repos are LoRAs, fp8 weights and component sets in
 // safetensors, and requiring a GGUF hid all of them. Same reasoning as `3d`.
+//
+// Decision models (llama.cpp /v1/systemone) have no pipeline tag of their own:
+// their repos say text-classification, text-generation or nothing. The tag
+// they share is `decision-model` (413 gguf repos in Oct 2026); `typed-decisions`
+// and `system-one` each catch a few dozen more that skip it. The plain
+// `decision` and `decision-making` tags were measured and left out: they add
+// LoRAs and ordinary chat models, not decision heads.
 func searchFilterSets(kind string) [][]string {
-	if strings.ToLower(strings.TrimSpace(kind)) == "video" {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "video":
 		return [][]string{{"text-to-video"}, {"image-to-video"}}
+	case "decision":
+		return [][]string{{"gguf", "decision-model"}, {"gguf", "typed-decisions"}, {"gguf", "system-one"}}
 	}
 	return [][]string{searchFilters(kind)}
 }
@@ -208,6 +218,9 @@ func searchFilters(kind string) []string {
 		return []string{"gguf", "automatic-speech-recognition"}
 	case "embed":
 		return []string{"gguf", "feature-extraction"}
+	case "decision":
+		// The primary of searchFilterSets' three decision queries.
+		return []string{"gguf", "decision-model"}
 	case "segment":
 		// mask-generation, not image-segmentation: it is what the SAM/BiRefNet
 		// GGUF repos quartermaster's segment backend loads are tagged with.
@@ -455,7 +468,17 @@ func keepText(in []Model) []Model {
 	return out
 }
 
+// decisionTags mark a llama.cpp decision model (searchFilterSets). Checked
+// before the pipeline tag because many of those repos declare text-generation
+// and would otherwise be offered as chat models.
+var decisionTags = map[string]bool{"decision-model": true, "typed-decisions": true, "system-one": true}
+
 func isText(m Model) bool {
+	for _, t := range m.Tags {
+		if decisionTags[strings.ToLower(t)] {
+			return false
+		}
+	}
 	if p := strings.ToLower(m.Pipeline); p != "" {
 		return textTasks[p]
 	}

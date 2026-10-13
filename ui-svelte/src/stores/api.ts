@@ -1,4 +1,5 @@
-import { writable } from "svelte/store";
+import { get, writable } from "svelte/store";
+import { confirmDecisionBackend } from "../lib/decisionBackend";
 import { persistentStore } from "./persistent";
 import type {
   Model,
@@ -275,6 +276,9 @@ export async function loadModel(
   model: string,
   signal?: AbortSignal,
 ): Promise<void> {
+  // Every load button comes through here, so this is the one place the
+  // outdated-backend warning has to live.
+  if (!(await confirmDecisionBackend(get(models).find((m) => m.id === model)))) return;
   try {
     const response = await fetch(`/upstream/${model}/?_=${Date.now()}`, {
       method: "GET",

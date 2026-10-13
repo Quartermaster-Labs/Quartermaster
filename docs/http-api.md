@@ -114,6 +114,14 @@ curl http://127.0.0.1:1250/v1/rerank \
   -d '{"model":"bge-reranker","query":"how do I evict a model","documents":["unloading frees VRAM","cats are nice"],"top_n":2}'
 ```
 
+## Decision models
+
+**`POST /v1/systemone`** - typed questions about a state, answered with probabilities. Needs a llama.cpp with System One (upstream b11361+, lemonade ROCm b1343+); see the Decision models article for the question types and the reply shape.
+
+```
+curl http://127.0.0.1:1250/v1/systemone   -H "Authorization: Bearer qm-..." -H "Content-Type: application/json"   -d '{"model":"kev-4b","state":"The build failed on Linux only.","questions":{"area":{"type":"choice","instructions":"Which part broke?","criteria":{"tests":null,"packaging":null,"code":null}}}}'
+```
+
 ## Images
 
 **`POST /v1/images/generations`** - the OpenAI shape. Returns base64 images in `data`.

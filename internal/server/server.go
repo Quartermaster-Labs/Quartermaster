@@ -160,6 +160,7 @@ var modelPostJSONRoutes = []string{
 	"/v1/messages",
 	"/v1/messages/count_tokens",
 	"/v1/embeddings",
+	"/v1/systemone",
 	"/reranking",
 	"/rerank",
 	"/v1/rerank",

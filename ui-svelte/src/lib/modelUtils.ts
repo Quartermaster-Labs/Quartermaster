@@ -16,7 +16,7 @@ export function prettifyModelName(s: string): string {
     .join(" ");
 }
 
-export type ModelCategory = "llm" | "image" | "video" | "3d" | "segment" | "tts" | "transcribe" | "embed";
+export type ModelCategory = "llm" | "image" | "video" | "3d" | "segment" | "tts" | "transcribe" | "embed" | "decision";
 
 // Sub-menu order under the Models tab. LLM is the catch-all default.
 export const MODEL_CATEGORIES: { id: ModelCategory; label: string }[] = [
@@ -28,6 +28,7 @@ export const MODEL_CATEGORIES: { id: ModelCategory; label: string }[] = [
   { id: "tts", label: "TTS" },
   { id: "transcribe", label: "Transcribe" },
   { id: "embed", label: "Embed" },
+  { id: "decision", label: "Decision" },
 ];
 
 // Bucket a model by its declared capabilities. Anything that isn't clearly an
@@ -46,6 +47,10 @@ export function modelCategory(m: Model): ModelCategory {
   if (c?.image_generation || c?.image_to_image) return "image";
   if (c?.audio_speech) return "tts";
   if (c?.audio_transcriptions) return "transcribe";
+  // Before embeddings and the llm fallback: a decision model is a llama-server model
+  // like any other (it may even advertise vision), but it answers /v1/systemone, not
+  // chat, so bucketing it as "llm" would offer it in every chat picker.
+  if (c?.decisions) return "decision";
   if (c?.embeddings) return "embed";
   return "llm";
 }
@@ -123,6 +128,7 @@ const PLAYGROUND_TABS: Partial<Record<ModelCategory, { tab: string; label: strin
   "3d": { tab: "3d", label: "Generate" },
   tts: { tab: "speech", label: "Speak" },
   transcribe: { tab: "audio", label: "Transcribe" },
+  decision: { tab: "decision", label: "Decide" },
 };
 
 export function playgroundTarget(m: Model): { tab: string; label: string } | null {

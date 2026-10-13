@@ -84,7 +84,7 @@
     newSpeechChatId,
     type SpeechSession,
   } from "../stores/speechHistory";
-  import { MessageSquare, Image, Film, Box, Volume2, Mic, LogOut, Plus, Trash2, Settings, HelpCircle, BookOpen, SlidersHorizontal, Search, FileText, Pencil, BrainCircuit, RefreshCw, Square } from "lucide-svelte";
+  import { MessageSquare, Image, Film, Box, Volume2, Mic, LogOut, Plus, Trash2, Settings, HelpCircle, BookOpen, SlidersHorizontal, Search, FileText, Pencil, BrainCircuit, RefreshCw, Square, Split } from "lucide-svelte";
   import WikiModal from "../components/WikiModal.svelte";
   import ChatInterface from "../components/playground/ChatInterface.svelte";
   import Select from "../components/Select.svelte";
@@ -93,6 +93,7 @@
   import VideoInterface from "../components/playground/VideoInterface.svelte";
   import ThreeDInterface from "../components/playground/ThreeDInterface.svelte";
   import AudioInterface from "../components/playground/AudioInterface.svelte";
+  import DecisionInterface from "../components/playground/DecisionInterface.svelte";
   import SpeechInterface from "../components/playground/SpeechInterface.svelte";
   import HistoryDrawer, { type DrawerSession } from "../components/playground/HistoryDrawer.svelte";
   import { slide } from "svelte/transition";
@@ -109,6 +110,7 @@
     { id: "3d", label: "3D", hint: "Turn a picture into a 3D mesh you can orbit and download", icon: Box },
     { id: "speech", label: "Speech", hint: "Text to speech: pick a voice and read text aloud", icon: Volume2 },
     { id: "audio", label: "Transcription", hint: "Transcribe recorded or uploaded audio to text", icon: Mic },
+    { id: "decision", label: "Decision", hint: "Ask a decision model questions about a situation and read its probabilities", icon: Split },
   ];
 
   let onChats = $derived($selectedTabStore === "chat");
@@ -123,10 +125,11 @@
   let threeDRows = $derived<DrawerSession[]>($threeDSessions.map((x) => ({ id: x.id, title: x.title, updatedAt: x.updatedAt, count: x.turns.length })));
   let speechRows = $derived<DrawerSession[]>($speechSessions.map((x) => ({ id: x.id, title: x.title, updatedAt: x.updatedAt, count: x.turns.length })));
 
-  // Every tab but transcription keeps threads, so every tab but transcription
-  // has the history drawer. Clicking the tab you are already on toggles it; the
+  // Every tab but transcription and decision keeps threads, so only those two
+  // have no history drawer (a decision run is stateless: the question set is a
+  // saved pref, the answers are not kept). Clicking the tab you are already on toggles it; the
   // pane headers toggle the same store.
-  const hasHistory = (id: Tab) => id !== "audio";
+  const hasHistory = (id: Tab) => id !== "audio" && id !== "decision";
 
   function clickTab(id: Tab) {
     if (hasHistory(id) && $selectedTabStore === id) historyOpenStore.update((v) => !v);
@@ -774,6 +777,7 @@
       <div class="h-full px-4 pb-4" class:tab-hidden={$selectedTabStore !== "3d"}><ThreeDInterface /></div>
       <div class="h-full" class:tab-hidden={$selectedTabStore !== "speech"}><SpeechInterface /></div>
       <div class="h-full px-4 pb-4" class:tab-hidden={$selectedTabStore !== "audio"}><AudioInterface /></div>
+      <div class="h-full px-4 pb-4" class:tab-hidden={$selectedTabStore !== "decision"}><DecisionInterface /></div>
     </div>
   </main>
 </div>

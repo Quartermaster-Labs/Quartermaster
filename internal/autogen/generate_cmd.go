@@ -708,6 +708,11 @@ func RenderSoloCmdLayers(s Settings, meta Metadata, row GgufRow, ov Override) (C
 		cmd.Issues = validateComposedWith(SdFlags, cmd, imageExe(s, &ov))
 		return cmd, nil
 	}
+	// Decision models render their /v1/systemone command, ahead of the embedder
+	// check for the same reason as in emitModel.
+	if IsDecisionModel(meta) {
+		return plainCmd(strings.Join(decisionCmdLines(s, row, &ov, meta), " "))
+	}
 	// Embedders render a minimal --embeddings command (no KV/spec sizing).
 	if IsEmbeddingModel(meta) {
 		return plainCmd(strings.Join(embeddingCmdLines(s, row, &ov, meta), " "))

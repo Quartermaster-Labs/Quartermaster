@@ -292,6 +292,30 @@ func TestSearchFilterSets_Video(t *testing.T) {
 	}
 }
 
+// Decision models share no pipeline tag, so the tab unions three tag queries,
+// each still requiring a GGUF.
+func TestSearchFilterSets_Decision(t *testing.T) {
+	got := searchFilterSets("decision")
+	if len(got) != 3 {
+		t.Fatalf("searchFilterSets(decision) = %v, want three sets", got)
+	}
+	for i, want := range []string{"decision-model", "typed-decisions", "system-one"} {
+		if len(got[i]) != 2 || got[i][0] != "gguf" || got[i][1] != want {
+			t.Errorf("set %d = %v, want [gguf %s]", i, got[i], want)
+		}
+	}
+}
+
+// A decision repo tagged text-generation is still not an LLM.
+func TestIsText_DecisionRepoExcluded(t *testing.T) {
+	if isText(Model{Pipeline: "text-generation", Tags: []string{"gguf", "decision-model"}}) {
+		t.Error("decision-model repo kept in the LLM tab")
+	}
+	if !isText(Model{Pipeline: "text-generation", Tags: []string{"gguf"}}) {
+		t.Error("plain text-generation repo dropped")
+	}
+}
+
 // A LoRA repo is a pile of ALTERNATIVES, not the parts of one model: grouping
 // it under the repo id offered a single row that downloaded all seventeen.
 func TestSelectFiles_LooseWeightsRepo(t *testing.T) {

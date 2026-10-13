@@ -8,7 +8,7 @@ port-gated into two apps** (`App.svelte` `onMount` fetches `GET /api/mode`):
 - **Operator dashboard** (main listen port): model catalog and loading, per-model config tuning,
   live activity/metrics/logs, GPU memory, API-key management.
 - **Playground** (separate `-playground-port`): a login-gated, per-user interactive app (chat,
-  images, video, 3D, speech, transcription) with **server-backed** chat history + prefs. Rendered by
+  images, video, 3D, speech, transcription, decision) with **server-backed** chat history + prefs. Rendered by
   `PlaygroundApp`, NOT mounted inside the dashboard.
 
 ## Which doc
@@ -58,7 +58,7 @@ changing anything under `ui-svelte/`.
 |---|---|
 | `src/main.ts`, `src/App.svelte` | Entry point + root. `App.svelte` fetches `/api/mode` and renders either the dashboard shell (Sidebar + StatusRail + Router) **or** the standalone `PlaygroundApp`. |
 | `src/routes/PlaygroundApp.svelte` | Playground root: gates the app behind login (`playgroundAuth` `me`), hydrates server-backed chats/prefs, then mounts `PlaygroundShell`. |
-| `src/routes/PlaygroundShell.svelte` | Playground shell: icon side-rail (Chat / Images / Video / 3D / Speech / Transcription, hover-expand), the history drawer (`HistoryDrawer`, slides in and pushes the pane, every tab but Transcription, open state in `historyOpenStore`), logout + username, and the playground Settings modal (**General / Memory / Search / Prompt**). |
+| `src/routes/PlaygroundShell.svelte` | Playground shell: icon side-rail (Chat / Images / Video / 3D / Speech / Transcription / Decision, hover-expand), the history drawer (`HistoryDrawer`, slides in and pushes the pane, every tab but Transcription and Decision, open state in `historyOpenStore`), logout + username, and the playground Settings modal (**General / Memory / Search / Prompt**). |
 | `src/routes/Login.svelte` | Playground username/password sign-in **and** sign-up (hashed; unknown users are rejected, not registered). Opens on the sign-up pane when `GET /auth/accounts` says no account exists yet. |
 | `src/routes/` | Top-level pages mounted by the router. |
 | `src/components/` | Reusable UI components (panels, modals, gauges, charts, tooltips). |
@@ -92,7 +92,7 @@ Backend communication is centralized in `src/stores/api.ts`, with shared types i
   load-plan preview; global tuning `/api/settings`; Observe `/api/kvcache` + `/api/canon`; API keys
   `listApiKeys`/`upsertApiKey`/`deleteApiKey`; self-update `versionInfo` + `/api/update`. Playground
   interfaces call the OpenAI-compatible / SD endpoints through their own `lib/*Api.ts` modules
-  (`chatApi`, `imageApi`, `audioApi`, `speechApi`, `rerankApi`, `sdApi`).
+  (`chatApi`, `imageApi`, `audioApi`, `speechApi`, `rerankApi`, `sdApi`, `decisionApi`).
 - **Persistence:** `stores/persistent.ts` (`persistentStore`, localStorage) for dashboard prefs and
   tallies. Playground state is **server-backed**: `stores/chatHistory.ts`
   (`chatSessions`/`activeChatId`/`generatingChatId`, `loadChats` + debounced `PUT /api/chats`),
@@ -296,6 +296,49 @@ manual toast now carries the reason.
 Both keep the last `KEEP_RECENT` (6) messages verbatim and snap the boundary forward to a `user`
 message, so the kept slice never starts on an orphaned assistant/tool reply whose `tool_calls` were
 summarized away.
+
+## Decision tab
+
+`playground/DecisionInterface.svelte` + `lib/decisionApi.ts` (+ `decisionApi.test.ts`). A **decision
+model** is a llama.cpp model served on `POST /v1/systemone` (TypeSafe System One): it is shown a
+state and asked questions, and answers each with a probability distribution, not prose. The
+catalog marks one with `capabilities.decisions` (and `decision_type`), which `modelCategory`
+checks **before** embeddings and the llm fallback, so the category `decision` ("Decision" in
+`MODEL_CATEGORIES`, mirrored by Go `autogen.CategoryOrder`, which a test pins) keeps these out of
+every chat picker (those filter on `=== "llm"`). `playgroundTarget` opens them in the `decision`
+tab; the Dashboard labels `/v1/systemone` requests "decision"; the HF browser filters on the
+`decision` tag (`internal/hub/hf.go`).
+
+The layout is a form, not a builder: a **Prompt** (the state), one **Question** with a 3-way
+Choice / Score / True-false toggle, and the answers that type allows (options, levels, or what
+true and false mean). The API takes many questions per request, the tab asks one, sent under the
+fixed id `answer` (an older saved list keeps only its first entry). It renders the same with no
+decision model on the box: the composer shows an empty "No decision model" slot and Run is
+disabled, instead of a placeholder screen hiding what the tab does.
+
+The tab is stateless: no history drawer (`hasHistory` excludes it), no per-run record. The prompt,
+the question and the model are per-user prefs (`playground-decision-*`), so a tuned question
+survives a reload and the answer does not. Request shaping is all in `decisionApi.ts`: the Prompt
+box and each question's instructions are sent as JSON when they parse to an object or array and
+as the typed string otherwise (a bare `42` stays prose); blank choice rows are dropped; an empty
+state is `null`, and blank instructions are omitted. `validate` only stops the structurally
+broken (no model, no question, a missing or duplicate id, fewer than 2 named options, an
+undescribed score level). It never demands a state or instructions: lfm2-d1/-omni and vllm-d3 take
+a null state and vllm-d3 questions without instructions, and llama-server is the one that knows
+which model may; everything else is the server's 400, shown verbatim (`errorMessage`
+unwraps llama-server's `{error:{message}}` and tolerates plain text, with a hint for 501).
+Attachments follow `capabilities.vision` (a paired projector): the dashboard catalog has no
+`architecture` block, and no audio-reading decision model is emitted yet. Without it the
+control is hidden.
+
+Before a run, and before any load (`stores/api.ts` `loadModel`), `lib/decisionBackend.ts` checks
+`capabilities.decision_backend_outdated`: the server found no `systemone` in the model's
+llama.cpp build (`internal/server/decisionsupport.go`). It asks once per model per session,
+with "Load anyway" for a build the scan cannot read. Images go through `normalizeImageFile` like every other tab.
+
+Answers render per type: choice as probability bars sorted descending with the winner filled,
+score as a bar per level (labels from `legend`) under a scale strip carrying the expected-score
+marker, noul as one false/true gauge.
 
 ## App-window tabs
 

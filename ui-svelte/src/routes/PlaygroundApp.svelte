@@ -30,6 +30,7 @@
     "3d": "playground-3d-model",
     speech: "playground-speech-model",
     audio: "playground-audio-model",
+    decision: "playground-decision-model",
   };
 
   // Launched from the dashboard's "Chat" button: ?model=<id>&tab=<tab>. Applied
@@ -42,7 +43,7 @@
     const tab = p.get("tab") as PlaygroundTab | null;
     // Ignore a tab that no longer exists (an old dashboard link, e.g. ?tab=rerank)
     // — an unknown value renders no panel at all.
-    if (tab && ["chat", "images", "video", "3d", "speech", "audio"].includes(tab)) selectedTabStore.set(tab);
+    if (tab && ["chat", "images", "video", "3d", "speech", "audio", "decision"].includes(tab)) selectedTabStore.set(tab);
     if (model) {
       const pref = TAB_MODEL_PREF[tab ?? ""];
       if (pref) userPref<string>(pref, "").set(model);

@@ -32,6 +32,12 @@ type ModelCapConfig struct {
 	Reranker     bool     `yaml:"reranker"`
 	Embedding    bool     `yaml:"embedding"`
 	Segmentation bool     `yaml:"segmentation"`
+	// Decision marks a llama.cpp decision model: it answers typed questions on
+	// /v1/systemone and cannot chat. DecisionType is its "<arch>.decision.type"
+	// (kev, laya, openjev, ...), which decides per-model limits upstream such as
+	// the number of choice options, so clients get to see it.
+	Decision     bool   `yaml:"decision"`
+	DecisionType string `yaml:"decisionType"`
 	// VoiceClone marks a speech model that can register NEW voices from a
 	// reference clip (qwentts.cpp). It is not implied by out:[audio] — a
 	// fixed-voice-pack engine like TTS.cpp/Kokoro serves speech but has no
@@ -50,7 +56,7 @@ type ModelCapConfig struct {
 
 // Empty returns true when all fields are at their zero values.
 func (c ModelCapConfig) Empty() bool {
-	return len(c.In) == 0 && len(c.Out) == 0 && !c.Tools && !c.Reranker && !c.Embedding && !c.Segmentation && !c.VoiceClone && len(c.ReasoningEffort) == 0 && c.Context == 0
+	return len(c.In) == 0 && len(c.Out) == 0 && !c.Tools && !c.Reranker && !c.Embedding && !c.Segmentation && !c.Decision && c.DecisionType == "" && !c.VoiceClone && len(c.ReasoningEffort) == 0 && c.Context == 0
 }
 
 // Validate checks that all modality values are recognized and context is

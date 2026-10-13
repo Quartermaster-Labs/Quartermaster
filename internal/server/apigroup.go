@@ -287,6 +287,14 @@ func (s *Server) modelStatus() []apiModel {
 		}
 		gid := modelGroup[id]
 		info := config.ParseCmd(mc.Cmd)
+		// A decision model on a llama-server from before /v1/systemone existed
+		// cannot serve it. The UI asks for a backend update before loading one
+		// (decisionsupport.go); unknown (exe not found) claims nothing.
+		if mc.Capabilities.Decision && len(info.Argv) > 0 {
+			if ok, known := backendServesSystemOne(info.Argv[0]); known && !ok {
+				capsMap["decision_backend_outdated"] = true
+			}
+		}
 		ctxSize := 0
 		if v, ok := info.Value("-c", "--ctx-size"); ok {
 			ctxSize, _ = strconv.Atoi(strings.TrimSpace(v))
