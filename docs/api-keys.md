@@ -2,7 +2,7 @@
 
 # API keys and access
 
-Quartermaster serves an **OpenAI-compatible API**, so existing clients work by pointing at your server's URL: `/v1/chat/completions`, `/v1/responses`, `/v1/completions`, `/v1/messages`, `/v1/embeddings`, `/v1/rerank`, `/v1/audio/speech` and `/v1/audio/transcriptions`, `/v1/images/generations` and `/v1/images/edits`, the `/sdapi/v1/*` image routes, `/v1/segment`, `/v1/images/upscale`, and the `/v1/tools/*` executors.
+Quartermaster serves an **OpenAI-compatible API**, so existing clients work by pointing at your server's URL: `/v1/chat/completions`, `/v1/responses`, `/v1/completions`, `/v1/messages`, `/v1/embeddings`, `/v1/rerank`, `/v1/systemone`, `/v1/audio/speech` and `/v1/audio/transcriptions`, `/v1/images/generations` and `/v1/images/edits`, the `/sdapi/v1/*` image routes, `/v1/segment`, `/v1/images/upscale`, and the `/v1/tools/*` executors.
 
 **Keys.** The **API Keys** page (dashboard) creates a named key and shows it masked with reveal/copy, and you can delete one at any time. Managing keys needs the server running with config editing enabled (`-generate`). A key is accepted as `Authorization: Bearer <key>`, as the password half of Basic auth, or as an `x-api-key` header. When no keys are configured the API is open.
 

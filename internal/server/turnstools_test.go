@@ -51,6 +51,10 @@ func TestTurns_searchWiki(t *testing.T) {
 	if len(res) == 0 || res[0].ID != "tools-api" {
 		t.Errorf("top result = %v, want tools-api", res)
 	}
+	res = searchWiki("how do I use a systemone decision model")
+	if len(res) == 0 || res[0].ID != "decision-models" {
+		t.Errorf("top result = %v, want decision-models", res)
+	}
 	// No alphanumeric terms → no results.
 	if r := searchWiki("!!!"); r != nil {
 		t.Errorf("expected nil for term-less query, got %v", r)
