@@ -81,3 +81,22 @@ func TestEmitDecisionModel_Capabilities(t *testing.T) {
 		t.Errorf("emitted = %v", emitted)
 	}
 }
+
+func TestDecisionEstVramGB_ScalesWithWholeBatch(t *testing.T) {
+	s := Settings{ComputeBufFactor: 1}
+	row := GgufRow{SizeGB: 0.3}
+	enc := Metadata{Architecture: "modernbert", DecisionType: "laya", ContextLength: 8192, HeadCount: 12, EmbeddingLength: 768, VocabSize: 50368}
+	small := decisionEstVramGB(s, row, &Override{Ctx: 1024}, enc)
+	big := decisionEstVramGB(s, row, nil, enc)
+	// 12 heads x 8192^2 x 4 bytes is 3GB of scores alone; a flat pad charged 0.5.
+	if big-row.SizeGB < 3 {
+		t.Errorf("laya at 8192 charged %.2fGB over weights, want >= 3 for the score matrix", big-row.SizeGB)
+	}
+	if big <= small*2 {
+		t.Errorf("estimate should grow with -ub: 1024 -> %.2fGB, 8192 -> %.2fGB", small, big)
+	}
+	kev := Metadata{Architecture: "qwen3", DecisionType: "kev", ContextLength: 40960, HeadCount: 32, EmbeddingLength: 2560, VocabSize: 151936}
+	if ub, whole := decisionUb(kev, nil); whole || ub != llamaDefaultUb {
+		t.Errorf("kev ub = %d whole=%v, want %d false", ub, whole, llamaDefaultUb)
+	}
+}

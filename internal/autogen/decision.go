@@ -14,9 +14,9 @@ import (
 // saving, spec decoding, chat templates and samplers all do nothing here or,
 // worse, change how the prompt is batched.
 
-// decisionOverheadGB pads a decision model's estimate for the compute buffer
-// and, for vision models, nothing else: the projector is charged separately.
-const decisionOverheadGB = 0.5
+// llamaDefaultUb is llama-server's -ub when none is passed: the physical batch a
+// causal decision model (kev, openjev) runs its compute graph at.
+const llamaDefaultUb = 512
 
 // decisionMaxCtx bounds the default window. The state is a ticket, a message or
 // a document excerpt, not a conversation, and a decision model with a long
@@ -74,6 +74,32 @@ func decisionMmproj(row GgufRow, ov *Override) (path string, sizeGB float64) {
 	return mmprojFor(row, file)
 }
 
+// decisionUb is the physical batch the model runs at: the whole window for the
+// types that must read the prompt in one batch, llama-server's default
+// otherwise. The launch flag and the VRAM estimate both read it, so they cannot
+// disagree about how big the compute graph is.
+func decisionUb(meta Metadata, ov *Override) (ub int, wholeBatch bool) {
+	if decisionWholeBatchTypes[strings.ToLower(strings.TrimSpace(meta.DecisionType))] {
+		return decisionCtx(meta, ov), true
+	}
+	return llamaDefaultUb, false
+}
+
+// decisionAttnScoresGB is the attention-score matrix (n_head x ub x ub, f32) a
+// whole-batch model materializes when flash attention does not run. llama.cpp
+// picks FA per backend at load (-fa auto) and computeGraphGB assumes it ran, which
+// holds for the 512-token batches of a causal model but not for an encoder
+// reading 8192 tokens at once: 12 heads at 8192 is 3.2GB. Charged as the peak
+// because an under-charge here is a spill into shared memory, and an over-charge
+// only keeps a second model from co-residing with a small encoder.
+func decisionAttnScoresGB(meta Metadata, ub int) float64 {
+	heads := float64(meta.HeadCount)
+	if heads <= 0 {
+		heads = 12 // ModernBERT-base, the smallest common decision encoder
+	}
+	return heads * float64(ub) * float64(ub) * 4.0 / gib
+}
+
 // decisionCmdLines builds the llama-server argv (exe first). Shared by
 // emitDecisionModel and RenderSoloCmdLayers so the editor preview matches a
 // save. The exe is the class "llm" pick, with the same vllm exception
@@ -93,8 +119,8 @@ func decisionCmdLines(s Settings, row GgufRow, ov *Override, meta Metadata) []st
 		"-ngl 99",
 		fmt.Sprintf("-c %d", ctx),
 	}
-	if decisionWholeBatchTypes[strings.ToLower(strings.TrimSpace(meta.DecisionType))] {
-		lines = append(lines, fmt.Sprintf("-b %d -ub %d", ctx, ctx))
+	if ub, whole := decisionUb(meta, ov); whole {
+		lines = append(lines, fmt.Sprintf("-b %d -ub %d", ub, ub))
 	}
 	if p, _ := decisionMmproj(row, ov); p != "" {
 		lines = append(lines, fmt.Sprintf("--mmproj %s", strings.ReplaceAll(p, "\\", "/")))
@@ -111,12 +137,18 @@ func decisionCmdLines(s Settings, row GgufRow, ov *Override, meta Metadata) []st
 	return lines
 }
 
-// decisionEstVramGB is weights + the window's KV at f16 + a flat pad, plus the
-// projector when one loads. Unlike an embedder, a causal decision model (kev,
-// openjev) keeps a real KV cache over the whole state, so the flat pad alone
-// would under-charge it.
+// decisionEstVramGB is weights + the window's KV at f16 + the compute buffer at
+// the model's real -ub, plus the projector when one loads. Unlike an embedder, a
+// causal decision model (kev, openjev) keeps a real KV cache over the whole
+// state. The compute buffer is the same model every llama profile is charged
+// with (computeBufferGB), because a whole-batch type runs at -ub = ctx and a flat
+// pad cannot follow that; those also pay decisionAttnScoresGB.
 func decisionEstVramGB(s Settings, row GgufRow, ov *Override, meta Metadata) float64 {
-	est := row.SizeGB + decisionOverheadGB
+	ub, whole := decisionUb(meta, ov)
+	est := row.SizeGB + computeBufferGB(meta, ub, s.ComputeBufFactor)
+	if whole {
+		est += decisionAttnScoresGB(meta, ub)
+	}
 	if kv := GetKvCostModel(meta, "f16", "f16"); kv.OK {
 		est += kv.SlopeGB*float64(decisionCtx(meta, ov)) + kv.ConstGB
 	}
