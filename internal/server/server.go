@@ -500,8 +500,7 @@ func (s *Server) WireDynamicOffload(settings autogen.Settings) {
 // without a GPU.
 func offloadWithReclaim(orig []string, freeGB float64, ok bool,
 	offload func(free float64, freeOK bool) ([]string, error),
-	sample func() (float64, bool), sleep func(), tries int,
-) ([]string, error) {
+	sample func() (float64, bool), sleep func(), tries int) ([]string, error) {
 	out, err := offload(freeGB, ok)
 	// Fast path: no telemetry to second-guess, or the guard trusted the baked
 	// plan as-is (ample VRAM). Only a refusal or an actual offload change means
@@ -842,12 +841,6 @@ func (s *Server) routes() {
 			// wav in its --voice-dir - so quartermaster writes the file itself for
 			// those models and forwards everyone else's. See audiocppvoices.go.
 			h = s.handleAudioCppVoicePost(dispatch)
-		}
-		if path == "/v1/systemone" {
-			// Validate the state/questions body before dispatch pays for a model
-			// load; the upstream serves /v1/systemone natively, so everything else
-			// is pass-through. See systemone.go.
-			h = s.systemoneGuard(h)
 		}
 		mux.Handle("POST "+path, modelChain.Then(h))
 	}
