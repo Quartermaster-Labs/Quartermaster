@@ -586,11 +586,12 @@
       </div>
 
       {#if result?.usage && !running}
-        <div class="shrink-0 flex items-center gap-2 px-4 py-2 border-t border-card-border text-[0.6875rem] text-txtsecondary tabular-nums">
+        <!-- No model name: llama-server echoes the gguf PATH as `model`, and the
+             picker in the composer already names it. -->
+        <div class="shrink-0 flex items-center gap-2 px-4 py-2 border-t border-card-border text-[0.6875rem] text-txtsecondary tabular-nums whitespace-nowrap">
           <span>{result.usage.input_tokens ?? 0} tokens in</span>
           <span>·</span>
           <span>{result.usage.output_tokens ?? 0} out</span>
-          {#if result.model}<span class="ml-auto font-mono truncate">{result.model}</span>{/if}
         </div>
       {/if}
     </div>
