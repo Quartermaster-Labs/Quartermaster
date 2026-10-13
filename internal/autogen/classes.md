@@ -1,7 +1,7 @@
 # autogen — non-LLM model classes
 
 `emitModel` / `RenderSoloCmd` **dispatch by model class**, in order:
-SAM (`.ggml`) → TRELLIS → **video** → image → embedding → **audio.cpp** → TTS → ASR → LLM (llama or vllm). This file covers
+SAM (`.ggml`) → TRELLIS → **video** → image → **decision** → embedding → **audio.cpp** → TTS → ASR → LLM (llama or vllm). This file covers
 everything that is not the LLM path. Backend *selection* is in
 [`backends.md`](backends.md); LLM sizing in [`sizing.md`](sizing.md).
 
@@ -10,6 +10,7 @@ everything that is not the LLM path. Backend *selection* is in
 | `sam.go` | SAM segmentation (`sam3_server`), `*.ggml` |
 | `video.go` | Video generation (sd-server's job API) |
 | `image.go` | Diffusion / image generation (sd-server) |
+| `decision.go` | llama.cpp decision models (`/v1/systemone`) |
 | `embedding.go` | Text embedders |
 | `audiocpp.go` | audio.cpp — one engine serving **two classes** (tts + asr), 72 families |
 | `audio.go` | TTS — **two engines** (qwentts.cpp, TTS.cpp) |
@@ -214,6 +215,19 @@ extra input channels), so `editModelRe` name-detects it, with `llmVision: on|off
 `customArgs: "--flow-shift 3.16"`, which has no structural tell (the value is
 exp(base_shift) from the model's own scheduler config, not something the gguf
 states).
+
+## Decision (`decision.go`)
+
+`IsDecisionModel` is the gguf string `<arch>.decision.type` (kev, openjev, laya, clef,
+lfm2-d1, ...). llama-server reads the same key, switches itself into decision mode and serves
+`POST /v1/systemone`, so the launch carries NO mode flag: `--embeddings`, pooling, chat
+template, spec decoding and slot saving are all left out. Checked before the embedder test,
+because a decision model can bake a `pooling_type` too. ctx is the trained window capped at
+8192 (`decisionMaxCtx`); laya, clef, vllm-d3 and lfm2-d1-omni read the whole prompt in one
+ubatch, so they get `-b`/`-ub` = ctx. The projector pairs like an LLM's (`mmprojFor`). Estimate
+is weights + f16 KV over the window + 0.5 GB + projector. Emits `capabilities.decision` and
+`decisionType`, which `/v1/models` turns into llama-server's own `"decisions"` output modality.
+Class `llm`, sharing `embeddingExe`. Excluded from the diffusion encoder pool.
 
 ## Embedding (`embedding.go`)
 

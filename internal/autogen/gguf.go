@@ -155,6 +155,12 @@ type Metadata struct {
 	// states into one sentence vector); generative models leave it unset.
 	PoolingType int64
 
+	// DecisionType is the gguf "<arch>.decision.type" (e.g. "kev", "laya",
+	// "lfm2-d1-omni"): set only on llama.cpp decision models, which llama-server
+	// serves on /v1/systemone. They carry an ordinary LLM or encoder arch and may
+	// also bake a pooling_type, so this key is the only reliable signal.
+	DecisionType string
+
 	IsMoE bool
 
 	// IsMTP is true when the model carries multi-token-prediction / nextn
@@ -642,6 +648,7 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 	var slidingWindow, slidingWinPattern, keyLengthSwa, valueLengthSwa *int64
 	var fullAttnInterval, ssmInnerSize, ssmConvKernel, ssmStateSize *int64
 	var nextnLayers, poolingType *int64
+	var decisionType string
 	var visImageSize, visPatchSize, visEmbd, visFFN, visBlocks, visHeads, visMerge *int64
 
 	// The publisher's own words for what this file IS. Written by convert_hf_
@@ -904,6 +911,13 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 				}
 				poolingType = pi(v)
 				matched = true
+			case key == pfx+"decision.type" && t == ggufString:
+				v, err := readStr()
+				if err != nil {
+					return Metadata{}, err
+				}
+				decisionType = v
+				matched = true
 			// Vision (CLIP mmproj) hparams — present only when arch == "clip"
 			// (the projector gguf). Drive the per-projector CLIP compute-buffer
 			// model in clipComputeBufferGB.
@@ -1103,6 +1117,7 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 		HasAudioOut:       scan.hasAudioOut,
 		HasBakedEncoders:  bakedEnc,
 		PoolingType:       deref(poolingType),
+		DecisionType:      decisionType,
 		IsMoE:             expertCount != nil && *expertCount > 0,
 		IsMTP:             nextnLayers != nil && *nextnLayers > 0,
 		NextnLayers:       deref(nextnLayers),

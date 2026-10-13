@@ -323,6 +323,10 @@ func ScanEncoderPool(roots []string) *EncoderPool {
 					// can coincide with a real encoder's (the Gemma-4 MTP
 					// sidecars are the case), so leaving it in the pool risks
 					// conditioning a diffusion model on a speculation head.
+				case IsDecisionModel(meta):
+					// A decision model is a classifier head over its LM; its
+					// width can match a real encoder's (kev is a Qwen3), but it
+					// was never trained to condition anything.
 				case IsEmbeddingModel(meta):
 					// A pooled embedder emits one vector for the whole prompt,
 					// not the per-token sequence a DiT cross-attends to.

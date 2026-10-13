@@ -320,7 +320,9 @@ const hashCacheSuffix = ".modelhash"
 // sniffed as qwen_image instead of falling through to llama-server.
 // v98: image/video models with unresolved components carry
 // missingComponents: [...] so the Load path can log what is missing.
-const genVersion = "v98"
+// v99: llama.cpp decision models (<arch>.decision.type) emit their own
+// /v1/systemone block instead of an LLM or embedder one.
+const genVersion = "v99"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight
