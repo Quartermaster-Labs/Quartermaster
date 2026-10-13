@@ -16,7 +16,6 @@
     buildRequest,
     levelProbs,
     newQuestion,
-    nextQuestionId,
     normalizeDrafts,
     pct,
     readAsDataUrl,
@@ -26,31 +25,34 @@
     validate,
     type Answer,
     type DraftQuestion,
-    type QuestionType,
     type SystemOneResponse,
   } from "../../lib/decisionApi";
   import ModelSelector from "./ModelSelector.svelte";
   import { scrollFade } from "../../lib/scrollFade";
-  import { Split, Play, Square, Plus, Trash2, X, ChevronUp, ChevronDown, Paperclip, FileAudio } from "lucide-svelte";
+  import { Split, Play, Square, Plus, X, ChevronUp, ChevronDown, Paperclip, FileAudio } from "lucide-svelte";
 
-  // Decision studio. A decision model does not chat: it is shown a STATE (text,
-  // JSON, images) and asked QUESTIONS, and answers each with a probability
-  // distribution (POST /v1/systemone). Left column is the request: state,
-  // attachments, the question builder, and the model + Run pinned below. Right
-  // column is the answer, one card per question. Nothing is kept per run: the
-  // question set and state text are per-user prefs so a tuned set survives a
-  // reload, and the answers are only on screen.
+  // Decision studio. A decision model does not chat: it is shown a PROMPT (the
+  // state: text, JSON, images) and asked a question, and answers with a
+  // probability distribution (POST /v1/systemone). Left column is the request:
+  // prompt, attachments, the question with its 3-way output toggle and the
+  // answers it may give, and the model + Run pinned below. Right column is the
+  // answer. The layout is the same with no model on the box, so the tab shows
+  // what it does before there is anything to run. The API takes several
+  // questions per request; the studio asks one, which is what keeps it a form
+  // and not a builder. Prompt and question are per-user prefs, the answer is
+  // only on screen.
+
+  // The id the one question is sent under. Never shown: with one question the
+  // answer card needs no name.
+  const QID = "answer";
 
   const selectedModelStore = userPref<string>("playground-decision-model", "");
   const stateStore = userPref<string>("playground-decision-state", "");
   const questionsStore = userPref<DraftQuestion[]>("playground-decision-questions", []);
 
   let stateText = $state(get(stateStore));
-  let questions = $state<DraftQuestion[]>(initialQuestions());
-  function initialQuestions(): DraftQuestion[] {
-    const saved = normalizeDrafts(get(questionsStore));
-    return saved.length ? saved : [newQuestion("q1")];
-  }
+  // Older builds saved a list; its first entry is the question carried over.
+  let q = $state<DraftQuestion>(normalizeDrafts(get(questionsStore))[0] ?? newQuestion(QID));
 
   // Prefs save debounced, so writing on every keystroke is cheap. snapshot()
   // reads the whole tree, which is what makes the effect track nested edits.
@@ -58,11 +60,11 @@
     stateStore.set(stateText);
   });
   $effect(() => {
-    questionsStore.set($state.snapshot(questions));
+    questionsStore.set([$state.snapshot(q)]);
   });
 
   // The picker hard-filters to decision models and renders nothing when none
-  // exist, so gate on that list here too.
+  // exist, so the composer draws an empty slot of its own in that case.
   let decisionModels = $derived($models.filter((m) => !m.unlisted && modelCategory(m) === "decision"));
   let hasModels = $derived(decisionModels.length > 0);
   let model = $derived($models.find((m) => m.id === $selectedModelStore));
@@ -128,16 +130,7 @@
     if (canAttach) attachFiles(e.dataTransfer?.files);
   }
 
-  // --- question builder -----------------------------------------------------
-  function addQuestion() {
-    questions = [...questions, newQuestion(nextQuestionId(questions))];
-  }
-  function removeQuestion(uid: string) {
-    questions = questions.filter((q) => q.uid !== uid);
-  }
-  function setType(q: DraftQuestion, type: QuestionType) {
-    q.type = type;
-  }
+  // --- question -------------------------------------------------------------
   function addChoice(q: DraftQuestion) {
     q.choices.push({ option: "", description: "" });
   }
@@ -170,7 +163,8 @@
   });
 
   async function run() {
-    if (running) return;
+    if (running || !hasModels) return;
+    const questions = [{ ...q, id: QID }];
     const problems = validate($selectedModelStore, questions);
     if (problems.length) {
       error = problems.join("\n");
@@ -182,7 +176,7 @@
     running = true;
     abort = new AbortController();
     const asked: Record<string, string> = {};
-    for (const q of questions) asked[q.id.trim()] = q.instructions.trim();
+    asked[QID] = q.instructions.trim();
     try {
       const req = buildRequest(
         $selectedModelStore,
@@ -209,6 +203,12 @@
     }
   }
 
+  const QUESTION_HINT: Record<DraftQuestion["type"], string> = {
+    choice: "What should the model pick? e.g. What does the customer want?",
+    score: "What should the model rate? e.g. How urgent is this?",
+    noul: "A statement to judge true or false. e.g. The customer is angry.",
+  };
+
   let answerList = $derived(result ? (Object.entries(result.answers) as [string, Answer][]) : []);
 
   const field =
@@ -233,24 +233,18 @@
 {/snippet}
 
 <div class="flex flex-col h-full">
-  {#if !hasModels}
-    <div class="flex-1 flex flex-col items-center justify-center gap-3 text-txtsecondary text-center px-6">
-      <Split class="w-10 h-10 opacity-40" strokeWidth={1.5} />
-      <p>No decision model configured. Add a decision model (served on /v1/systemone) to ask it questions about a situation.</p>
-    </div>
-  {:else}
-    <div class="flex-1 flex flex-col md:flex-row gap-4 min-h-0 w-full py-4">
+  <div class="flex-1 flex flex-col md:flex-row gap-4 min-h-0 w-full py-4">
       <!-- LEFT (60%): the request, with model + Run pinned below ---------------- -->
       <div class="w-full md:w-3/5 shrink-0 flex flex-col gap-3 min-h-0">
         <div class="flex-1 min-h-0 overflow-y-auto pretty-scroll scroll-fade-b flex flex-col gap-4 px-1 pb-4" use:scrollFade>
-          <!-- State -->
+          <!-- Prompt (the state the model judges) -->
           <section class="flex flex-col gap-1.5">
-            <label for="decision-state" class="text-xs uppercase tracking-wide text-txtsecondary">State</label>
+            <label for="decision-state" class="text-xs uppercase tracking-wide text-txtsecondary">Prompt</label>
             <textarea
               id="decision-state"
               class="{field} resize-y min-h-[6rem] leading-relaxed"
               rows="6"
-              placeholder={'What is going on. Plain text, or a JSON object / array (sent as structured data).'}
+              placeholder={'The situation to judge. Plain text, or a JSON object / array (sent as structured data).'}
               bind:value={stateText}
               onkeydown={onStateKey}
               disabled={running}
@@ -305,107 +299,71 @@
             </section>
           {/if}
 
-          <!-- Questions -->
+          <!-- Question: what to ask, what kind of answer, and the answers allowed -->
           <section class="flex flex-col gap-2">
-            <div class="flex items-center justify-between">
-              <span class="text-xs uppercase tracking-wide text-txtsecondary">Questions</span>
-              <button class="btn btn--sm inline-flex items-center gap-1" onclick={addQuestion} disabled={running}>
-                <Plus class="w-3 h-3" /> Add question
-              </button>
-            </div>
-
-            {#each questions as q, qi (q.uid)}
-              <div class="rounded-xl border border-card-border bg-surface p-3 flex flex-col gap-2.5">
-                <div class="flex items-center gap-2 flex-wrap">
-                  <span class="font-mono text-micro text-txtsecondary tabular-nums">{qi + 1}</span>
-                  <input
-                    class="{field} !w-40 font-mono"
-                    placeholder="question id"
-                    aria-label="Question id"
-                    spellcheck="false"
-                    bind:value={q.id}
-                    disabled={running}
-                  />
-                  <div class="seg">
-                    {#each QUESTION_TYPES as t (t.id)}
-                      <button aria-pressed={q.type === t.id} onclick={() => setType(q, t.id)} disabled={running} use:tip={t.hint}>{t.label}</button>
-                    {/each}
-                  </div>
-                  <button
-                    class="ml-auto icon-btn hover:!text-error"
-                    onclick={() => removeQuestion(q.uid)}
-                    disabled={running}
-                    use:tip={"Remove question"}
-                    aria-label="Remove question"
-                  >
-                    <Trash2 class="w-4 h-4" />
-                  </button>
-                </div>
-
-                <textarea
-                  class="{field} resize-y leading-relaxed"
-                  rows="2"
-                  placeholder="Instructions: what should the model decide? (plain text, or JSON)"
-                  aria-label="Instructions"
-                  bind:value={q.instructions}
-                  disabled={running}
-                ></textarea>
-
-                {#if q.type === "choice"}
-                  <div class="flex flex-col gap-1.5">
-                    <span class="text-micro uppercase tracking-wide text-txtsecondary">Options (at least {MIN_CHOICES}; a description is optional)</span>
-                    {#each q.choices as c, ci (ci)}
-                      <div class="flex items-center gap-1.5">
-                        <input class="{field} !w-40 font-mono" placeholder="option" aria-label="Option name" spellcheck="false" bind:value={c.option} disabled={running} />
-                        <input class="{field} flex-1 min-w-0" placeholder="description (optional)" aria-label="Option description" bind:value={c.description} disabled={running} />
-                        <button class="icon-btn hover:!text-error" onclick={() => removeChoice(q, ci)} disabled={running || q.choices.length <= MIN_CHOICES} aria-label="Remove option">
-                          <X class="w-4 h-4" />
-                        </button>
-                      </div>
-                    {/each}
-                    <button class="self-start text-[0.75rem] text-primary hover:underline inline-flex items-center gap-1" onclick={() => addChoice(q)} disabled={running}>
-                      <Plus class="w-3 h-3" /> Add option
-                    </button>
-                  </div>
-                {:else if q.type === "score"}
-                  <div class="flex flex-col gap-1.5">
-                    <span class="text-micro uppercase tracking-wide text-txtsecondary">Levels, lowest first ({MIN_LEVELS} to {MAX_LEVELS})</span>
-                    {#each q.levels as _, li (li)}
-                      <div class="flex items-center gap-1.5">
-                        <span class="shrink-0 w-5 text-right font-mono text-micro text-txtsecondary tabular-nums">{li}</span>
-                        <input class="{field} flex-1 min-w-0" placeholder="what this level means" aria-label="Level {li} description" bind:value={q.levels[li]} disabled={running} />
-                        <button class="icon-btn" onclick={() => moveLevel(q, li, -1)} disabled={running || li === 0} aria-label="Move level up">
-                          <ChevronUp class="w-4 h-4" />
-                        </button>
-                        <button class="icon-btn" onclick={() => moveLevel(q, li, 1)} disabled={running || li === q.levels.length - 1} aria-label="Move level down">
-                          <ChevronDown class="w-4 h-4" />
-                        </button>
-                        <button class="icon-btn hover:!text-error" onclick={() => removeLevel(q, li)} disabled={running || q.levels.length <= MIN_LEVELS} aria-label="Remove level">
-                          <X class="w-4 h-4" />
-                        </button>
-                      </div>
-                    {/each}
-                    <button
-                      class="self-start text-[0.75rem] text-primary hover:underline inline-flex items-center gap-1 disabled:opacity-40 disabled:no-underline"
-                      onclick={() => addLevel(q)}
-                      disabled={running || q.levels.length >= MAX_LEVELS}
-                    >
-                      <Plus class="w-3 h-3" /> Add level
-                    </button>
-                  </div>
-                {:else}
-                  <div class="flex flex-col gap-1.5">
-                    <span class="text-micro uppercase tracking-wide text-txtsecondary">What true and false mean (optional)</span>
-                    <input class="{field}" placeholder="true means..." aria-label="True description" bind:value={q.trueDesc} disabled={running} />
-                    <input class="{field}" placeholder="false means..." aria-label="False description" bind:value={q.falseDesc} disabled={running} />
-                  </div>
-                {/if}
+            <div class="flex items-center justify-between gap-2 flex-wrap">
+              <label for="decision-question" class="text-xs uppercase tracking-wide text-txtsecondary">Question</label>
+              <div class="seg" role="group" aria-label="Answer type">
+                {#each QUESTION_TYPES as t (t.id)}
+                  <button aria-pressed={q.type === t.id} onclick={() => (q.type = t.id)} disabled={running} use:tip={t.hint}>{t.label}</button>
+                {/each}
               </div>
-            {/each}
+            </div>
+            <textarea
+              id="decision-question"
+              class="{field} resize-y leading-relaxed"
+              rows="2"
+              placeholder={QUESTION_HINT[q.type]}
+              bind:value={q.instructions}
+              onkeydown={onStateKey}
+              disabled={running}
+            ></textarea>
 
-            {#if questions.length === 0}
-              <p class="text-[0.8125rem] text-txtsecondary px-1">No questions yet. Add one to ask the model something.</p>
-            {/if}
+            <div class="rounded-xl border border-card-border bg-surface p-3 flex flex-col gap-1.5">
+              {#if q.type === "choice"}
+                <span class="text-micro uppercase tracking-wide text-txtsecondary">Options (at least {MIN_CHOICES}; a description is optional)</span>
+                {#each q.choices as c, ci (ci)}
+                  <div class="flex items-center gap-1.5">
+                    <input class="{field} !w-40 font-mono" placeholder="option" aria-label="Option name" spellcheck="false" bind:value={c.option} disabled={running} />
+                    <input class="{field} flex-1 min-w-0" placeholder="description (optional)" aria-label="Option description" bind:value={c.description} disabled={running} />
+                    <button class="icon-btn hover:!text-error" onclick={() => removeChoice(q, ci)} disabled={running || q.choices.length <= MIN_CHOICES} aria-label="Remove option">
+                      <X class="w-4 h-4" />
+                    </button>
+                  </div>
+                {/each}
+                <button class="self-start text-[0.75rem] text-primary hover:underline inline-flex items-center gap-1" onclick={() => addChoice(q)} disabled={running}>
+                  <Plus class="w-3 h-3" /> Add option
+                </button>
+              {:else if q.type === "score"}
+                <span class="text-micro uppercase tracking-wide text-txtsecondary">Levels, lowest first ({MIN_LEVELS} to {MAX_LEVELS})</span>
+                {#each q.levels as _, li (li)}
+                  <div class="flex items-center gap-1.5">
+                    <span class="shrink-0 w-5 text-right font-mono text-micro text-txtsecondary tabular-nums">{li}</span>
+                    <input class="{field} flex-1 min-w-0" placeholder="what this level means" aria-label="Level {li} description" bind:value={q.levels[li]} disabled={running} />
+                    <button class="icon-btn" onclick={() => moveLevel(q, li, -1)} disabled={running || li === 0} aria-label="Move level up">
+                      <ChevronUp class="w-4 h-4" />
+                    </button>
+                    <button class="icon-btn" onclick={() => moveLevel(q, li, 1)} disabled={running || li === q.levels.length - 1} aria-label="Move level down">
+                      <ChevronDown class="w-4 h-4" />
+                    </button>
+                    <button class="icon-btn hover:!text-error" onclick={() => removeLevel(q, li)} disabled={running || q.levels.length <= MIN_LEVELS} aria-label="Remove level">
+                      <X class="w-4 h-4" />
+                    </button>
+                  </div>
+                {/each}
+                <button
+                  class="self-start text-[0.75rem] text-primary hover:underline inline-flex items-center gap-1 disabled:opacity-40 disabled:no-underline"
+                  onclick={() => addLevel(q)}
+                  disabled={running || q.levels.length >= MAX_LEVELS}
+                >
+                  <Plus class="w-3 h-3" /> Add level
+                </button>
+              {:else}
+                <span class="text-micro uppercase tracking-wide text-txtsecondary">What true and false mean (optional)</span>
+                <input class="{field}" placeholder="true means..." aria-label="True description" bind:value={q.trueDesc} disabled={running} />
+                <input class="{field}" placeholder="false means..." aria-label="False description" bind:value={q.falseDesc} disabled={running} />
+              {/if}
+            </div>
           </section>
         </div>
 
@@ -416,14 +374,18 @@
         <!-- Model picker + Run in the composer shell, matching the other tabs. -->
         <div class="composer-shell shrink-0">
           <div class="flex items-center justify-center gap-2">
-            <ModelSelector bind:value={$selectedModelStore} placeholder="Select a decision model…" disabled={running} category="decision" ghost dropUp />
+            {#if hasModels}
+              <ModelSelector bind:value={$selectedModelStore} placeholder="Select a decision model…" disabled={running} category="decision" ghost dropUp />
+            {:else}
+              <span class="px-2 text-[0.8125rem] text-txtsecondary truncate" use:tip={"Download one from Browse > Decision"}>No decision model</span>
+            {/if}
             <div class="flex-1"></div>
             {#if running}
               <button class="btn btn--sm btn--danger-outline inline-flex items-center gap-1.5" onclick={() => abort?.abort()}>
                 <Square class="w-3 h-3" fill="currentColor" /> Cancel
               </button>
             {:else}
-              <button class="btn btn--sm btn--primary inline-flex items-center gap-1.5" onclick={run} use:tip={"Run (Ctrl+Enter in the state box)"}>
+              <button class="btn btn--sm btn--primary inline-flex items-center gap-1.5" onclick={run} disabled={!hasModels} use:tip={"Run (Ctrl+Enter)"}>
                 <Play class="w-3 h-3" fill="currentColor" /> Run
               </button>
             {/if}
@@ -442,7 +404,7 @@
           {:else if !result}
             <div class="h-full flex flex-col items-center justify-center gap-3 text-txtsecondary text-center px-4">
               <Split class="w-10 h-10 opacity-40" strokeWidth={1.5} />
-              <p>Answers appear here as probabilities. Describe a state, add questions and press Run.</p>
+              <p>Answers appear here as probabilities. Write a prompt, ask a question and press Run.</p>
             </div>
           {:else}
             <div class="flex flex-col gap-3 pb-6 px-1">
@@ -528,5 +490,4 @@
         {/if}
       </div>
     </div>
-  {/if}
 </div>

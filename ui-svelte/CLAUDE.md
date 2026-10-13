@@ -309,9 +309,16 @@ every chat picker (those filter on `=== "llm"`). `playgroundTarget` opens them i
 tab; the Dashboard labels `/v1/systemone` requests "decision"; the HF browser filters on the
 `decision` tag (`internal/hub/hf.go`).
 
-The tab is stateless: no history drawer (`hasHistory` excludes it), no per-run record. The state
-text, the question set and the model are per-user prefs (`playground-decision-*`), so a tuned set
-survives a reload and the answers do not. Request shaping is all in `decisionApi.ts`: the State
+The layout is a form, not a builder: a **Prompt** (the state), one **Question** with a 3-way
+Choice / Score / True-false toggle, and the answers that type allows (options, levels, or what
+true and false mean). The API takes many questions per request, the tab asks one, sent under the
+fixed id `answer` (an older saved list keeps only its first entry). It renders the same with no
+decision model on the box: the composer shows an empty "No decision model" slot and Run is
+disabled, instead of a placeholder screen hiding what the tab does.
+
+The tab is stateless: no history drawer (`hasHistory` excludes it), no per-run record. The prompt,
+the question and the model are per-user prefs (`playground-decision-*`), so a tuned question
+survives a reload and the answer does not. Request shaping is all in `decisionApi.ts`: the Prompt
 box and each question's instructions are sent as JSON when they parse to an object or array and
 as the typed string otherwise (a bare `42` stays prose); blank choice rows are dropped; an empty
 state is `null`, and blank instructions are omitted. `validate` only stops the structurally
