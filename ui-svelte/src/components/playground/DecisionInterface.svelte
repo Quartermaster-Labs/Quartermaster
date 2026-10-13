@@ -168,6 +168,8 @@
   let running = $state(false);
   let error = $state<string | null>(null);
   let result = $state<SystemOneResponse | null>(null);
+  let latency = $state<{ ms: number; cold: boolean } | null>(null);
+  const fmtLatency = (ms: number) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`);
   // The instructions as they were when the run started: the cards beside the
   // answers should describe what was asked, not what is being edited now.
   let askedWith = $state<Record<string, string>>({});
@@ -192,6 +194,10 @@
     abort = new AbortController();
     const asked: Record<string, string> = {};
     asked[QID] = q.instructions.trim();
+    // Wall-clock round trip. A model that was not resident yet loads inside this
+    // request, so that run is flagged rather than passed off as decision time.
+    const cold = model?.state !== "ready";
+    const t0 = performance.now();
     try {
       const req = buildRequest(
         $selectedModelStore,
@@ -200,6 +206,7 @@
         attached.map((a) => a.url),
       );
       result = await runDecision(req, abort.signal);
+      latency = { ms: performance.now() - t0, cold };
       askedWith = asked;
     } catch (e) {
       if (!(e instanceof Error && e.name === "AbortError")) {
@@ -585,13 +592,16 @@
         {/if}
       </div>
 
-      {#if result?.usage && !running}
+      {#if result && latency && !running}
         <!-- No model name: llama-server echoes the gguf PATH as `model`, and the
-             picker in the composer already names it. -->
+             picker in the composer already names it. No output-token count either:
+             a decision reads distributions, not generated text, so it is always 0 or 1. -->
         <div class="shrink-0 flex items-center gap-2 px-4 py-2 border-t border-card-border text-[0.6875rem] text-txtsecondary tabular-nums whitespace-nowrap">
-          <span>{result.usage.input_tokens ?? 0} tokens in</span>
-          <span>·</span>
-          <span>{result.usage.output_tokens ?? 0} out</span>
+          <span>{fmtLatency(latency.ms)}{latency.cold ? " incl. model load" : ""}</span>
+          {#if result.usage}
+            <span>·</span>
+            <span>{result.usage.input_tokens ?? 0} tokens in</span>
+          {/if}
         </div>
       {/if}
     </div>
