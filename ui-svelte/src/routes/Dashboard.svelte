@@ -6,7 +6,7 @@
   import { prettifyModelName, modelCategory, MODEL_CATEGORIES, type ModelCategory } from "../lib/modelUtils";
   import { formatSpeed, formatDuration, formatRelativeTime, shortReqPath } from "../lib/activityFormat";
   import ActiveModelsPanel from "../components/ActiveModelsPanel.svelte";
-  import { ArrowRight, MessageSquare, Image, Film, Box, Volume2, Mic, Layers, ScanLine, Scale } from "lucide-svelte";
+  import { ArrowRight, MessageSquare, Image, Film, Box, Volume2, Mic, Layers, ScanLine, Split } from "lucide-svelte";
   import type { Model } from "../lib/types";
   import { onMount } from "svelte";
   import { getHubDiskUsage, type HubDiskUsage } from "../lib/hubApi";
@@ -25,7 +25,7 @@
   const HUES: Hue[] = ["llm", "image", "video", "3d", "other"];
   const ICON = {
     llm: MessageSquare, image: Image, video: Film, "3d": Box,
-    segment: ScanLine, tts: Volume2, transcribe: Mic, embed: Layers, decision: Scale,
+    segment: ScanLine, tts: Volume2, transcribe: Mic, embed: Layers, decision: Split,
   } satisfies Record<ModelCategory, unknown>;
   const hueVar = (h: Hue) => `var(--color-cat-${h})`;
 
@@ -193,7 +193,7 @@
     if (p.includes("transcriptions")) return { label: "transcribe", icon: Mic };
     if (p.includes("audio") || p.includes("speech")) return { label: "speech", icon: Volume2 };
     if (p.includes("embeddings")) return { label: "embed", icon: Layers };
-    if (p.includes("systemone")) return { label: "decision", icon: Scale };
+    if (p.includes("systemone")) return { label: "decision", icon: Split };
     if (p.includes("segment")) return { label: "segment", icon: ScanLine };
     if (p.includes("3d")) return { label: "3d", icon: Box };
     if (p.includes("rerank")) return { label: "rerank", icon: Layers };

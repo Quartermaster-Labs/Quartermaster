@@ -84,7 +84,7 @@
     newSpeechChatId,
     type SpeechSession,
   } from "../stores/speechHistory";
-  import { MessageSquare, Image, Film, Box, Volume2, Mic, LogOut, Plus, Trash2, Settings, HelpCircle, BookOpen, SlidersHorizontal, Search, FileText, Pencil, BrainCircuit, RefreshCw, Square, Scale } from "lucide-svelte";
+  import { MessageSquare, Image, Film, Box, Volume2, Mic, LogOut, Plus, Trash2, Settings, HelpCircle, BookOpen, SlidersHorizontal, Search, FileText, Pencil, BrainCircuit, RefreshCw, Square, Split } from "lucide-svelte";
   import WikiModal from "../components/WikiModal.svelte";
   import ChatInterface from "../components/playground/ChatInterface.svelte";
   import Select from "../components/Select.svelte";
@@ -110,7 +110,7 @@
     { id: "3d", label: "3D", hint: "Turn a picture into a 3D mesh you can orbit and download", icon: Box },
     { id: "speech", label: "Speech", hint: "Text to speech: pick a voice and read text aloud", icon: Volume2 },
     { id: "audio", label: "Transcription", hint: "Transcribe recorded or uploaded audio to text", icon: Mic },
-    { id: "decision", label: "Decision", hint: "Ask a decision model questions about a situation and read its probabilities", icon: Scale },
+    { id: "decision", label: "Decision", hint: "Ask a decision model questions about a situation and read its probabilities", icon: Split },
   ];
 
   let onChats = $derived($selectedTabStore === "chat");

@@ -31,7 +31,7 @@
   } from "../../lib/decisionApi";
   import ModelSelector from "./ModelSelector.svelte";
   import { scrollFade } from "../../lib/scrollFade";
-  import { Scale, Play, Square, Plus, Trash2, X, ChevronUp, ChevronDown, Paperclip, FileAudio } from "lucide-svelte";
+  import { Split, Play, Square, Plus, Trash2, X, ChevronUp, ChevronDown, Paperclip, FileAudio } from "lucide-svelte";
 
   // Decision studio. A decision model does not chat: it is shown a STATE (text,
   // JSON, images) and asked QUESTIONS, and answers each with a probability
@@ -235,7 +235,7 @@
 <div class="flex flex-col h-full">
   {#if !hasModels}
     <div class="flex-1 flex flex-col items-center justify-center gap-3 text-txtsecondary text-center px-6">
-      <Scale class="w-10 h-10 opacity-40" strokeWidth={1.5} />
+      <Split class="w-10 h-10 opacity-40" strokeWidth={1.5} />
       <p>No decision model configured. Add a decision model (served on /v1/systemone) to ask it questions about a situation.</p>
     </div>
   {:else}
@@ -441,7 +441,7 @@
             </div>
           {:else if !result}
             <div class="h-full flex flex-col items-center justify-center gap-3 text-txtsecondary text-center px-4">
-              <Scale class="w-10 h-10 opacity-40" strokeWidth={1.5} />
+              <Split class="w-10 h-10 opacity-40" strokeWidth={1.5} />
               <p>Answers appear here as probabilities. Describe a state, add questions and press Run.</p>
             </div>
           {:else}
