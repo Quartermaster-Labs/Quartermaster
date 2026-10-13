@@ -208,6 +208,10 @@ func searchFilters(kind string) []string {
 		return []string{"gguf", "automatic-speech-recognition"}
 	case "embed":
 		return []string{"gguf", "feature-extraction"}
+	case "decision":
+		// llama.cpp decision models (TypeSafe System One, POST /v1/systemone). No
+		// pipeline tag describes them, so this is the plain `decision` tag.
+		return []string{"gguf", "decision"}
 	case "segment":
 		// mask-generation, not image-segmentation: it is what the SAM/BiRefNet
 		// GGUF repos quartermaster's segment backend loads are tagged with.

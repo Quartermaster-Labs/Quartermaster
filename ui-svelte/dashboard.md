@@ -29,10 +29,10 @@ Landing page, three bands top to bottom:
    *files*: ctx tiers and `-vision` twins share a gguf and do not count. Rows are grouped by
    category and ranked by the load tally summed across the group. Recent colours each model by
    category and labels the endpoint from its path, not from the model's category (an LLM can
-   answer an embeddings call).
+   answer an embeddings call; `/v1/systemone` is labelled "decision").
 
 **Category colours** are `--color-cat-{llm,image,video,3d,other}` in `index.css`. Five hues for
-eight categories: segment/tts/transcribe/embed share "other" (icons still differ). Chat is gold,
+nine categories: segment/tts/transcribe/embed/decision share "other" (icons still differ). Chat is gold,
 not the orange accent, which already means "active". The light values sit in a plain `:root`
 rule, **not** in `@theme`: Tailwind v4 only emits `@theme` variables some utility class uses,
 and these are read through `var()`, so under `@theme` they silently vanished in light mode.
