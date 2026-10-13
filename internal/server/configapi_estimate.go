@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/quartermaster-labs/quartermaster/internal/autogen"
 	"github.com/quartermaster-labs/quartermaster/internal/config"
@@ -210,6 +211,18 @@ func cmdHasFlag(cmd, flag string) bool {
 	return false
 }
 
+// cmdDeviceNone reports whether a launch command pins llama.cpp to no GPU at
+// all (`--device none`, the `device: cpu` override).
+func cmdDeviceNone(cmd string) bool {
+	toks := cmdArgv(cmd)
+	for i := 0; i+1 < len(toks); i++ {
+		if (toks[i] == "--device" || toks[i] == "-dev") && strings.EqualFold(toks[i+1], "none") {
+			return true
+		}
+	}
+	return false
+}
+
 func mmprojPathFromCmd(cmd string) string {
 	toks := cmdArgv(cmd)
 	for i := 0; i+1 < len(toks); i++ {
@@ -270,6 +283,10 @@ func (s *Server) handleAPIModelEstimate(w http.ResponseWriter, r *http.Request) 
 		if n, ok := forcedOffloadFromCmd(seedCmd, meta); ok {
 			in.CpuOffload = n
 		}
+		in.CpuDevice = cmdDeviceNone(seedCmd)
+	}
+	if v := q.Get("device"); v != "" {
+		in.CpuDevice = v == "cpu"
 	}
 	// Explicit query params override the seed (the config editor's form fields).
 	if v := q.Get("kvK"); v != "" {

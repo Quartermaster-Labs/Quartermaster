@@ -344,6 +344,10 @@ func (s *Server) handleAPIModelOverridePut(w http.ResponseWriter, r *http.Reques
 		shared.SendResponse(w, r, http.StatusBadRequest, msg)
 		return
 	}
+	if err := autogen.SwapGroupErr(body.Device, body.SwapGroup); err != nil {
+		shared.SendResponse(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
 	// Base the sidecar row on the hand-authored FILE override so its file-only
 	// fields (ctxVariants, quant) survive — the sidecar row shadows the file row
 	// wholesale, so anything the editor doesn't carry would otherwise be lost. The

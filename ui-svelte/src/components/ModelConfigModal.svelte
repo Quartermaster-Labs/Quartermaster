@@ -123,6 +123,14 @@
   let vramAuto = $state(true);
   let cpuOffload = $state<number>(0);
   let cpuAuto = $state(true);
+  // Model-wide placement: device "gpu" is stored as "" so existing configs stay unchanged.
+  let device = $state<string>("gpu");
+  let swapGroup = $state<string>("");
+  const SWAP_GROUP_SEL = $derived<SelectOption[]>([
+    { value: "", label: "auto (follows device)" },
+    { value: "gpu", label: "GPU (VRAM budget)" },
+    { value: "cpu", label: "CPU (RAM budget)", disabled: device !== "cpu" },
+  ]);
   let globalTargetGB = $state(0); // global VRAM budget; slider ceiling for vramTarget
   let spec = $state("");
   // Projector placement for this model's TEXT ids (default + ctx tiers + named
@@ -596,7 +604,7 @@
   $effect(() => {
     const deps = [
       open, config, selectedVariant,
-      ctx, ctxAuto, kvK, kvV, kvInRam, spec, reasoningOn, reasoningBudget, preserveThinking, flashOn, mmapOn, mlock, threads, parallel, ub, vramTarget, vramAuto, cpuOffload, cpuAuto, customArgs, customArgsOff, ctxCheckpoints, audioDevice,
+      ctx, ctxAuto, kvK, kvV, kvInRam, spec, reasoningOn, reasoningBudget, preserveThinking, flashOn, mmapOn, mlock, threads, parallel, ub, vramTarget, vramAuto, cpuOffload, cpuAuto, device, swapGroup, customArgs, customArgsOff, ctxCheckpoints, audioDevice,
       dryOn, dryMultiplier, dryBase, dryAllowedLength, specDraftNMax, specDefault, specNgramSizeN, specNgramSizeM, specNgramMinHits,
       vaePath, clipLPath, clipGPath, t5Path, textEncoderPath, offloadToCpu, teOnCpu, vaeOnCpu, vaeTiling, diffusionFa,
       temporalTiling, streamLayers,
@@ -847,6 +855,10 @@
   const ROPE_SEL_INHERIT = optList(["", "none", "linear", "yarn"], "inherit");
   const SPLIT_SEL_AUTO = optList(["", "none", "layer", "row", "tensor"], "auto");
   const SPLIT_SEL_INHERIT = optList(["", "none", "layer", "row", "tensor"], "inherit");
+  const DEVICE_SEL: SelectOption[] = [
+    { value: "gpu", label: "GPU" },
+    { value: "cpu", label: "CPU only" },
+  ];
   const OFFLOAD_SEL_AUTO: SelectOption[] = [
     { value: "", label: "auto (sizer decides)" },
     { value: "on", label: "on (force offload)" },
@@ -946,6 +958,8 @@
     vramTarget = o?.vramTargetGB || globalTargetGB || 0;
     cpuAuto = !o?.cpuOffload;
     cpuOffload = o?.cpuOffload || 0;
+    device = o?.device === "cpu" ? "cpu" : "gpu";
+    swapGroup = o?.swapGroup ?? "";
     spec = o?.spec ?? "";
     // "ram" and blank are the same placement; collapse so the select matches.
     mmprojMode = (o?.mmproj ?? "") === "ram" ? "" : (o?.mmproj ?? "");
@@ -1209,6 +1223,7 @@
     const deps = [
       open, config, selectedVariant,
       ctx, ctxAuto, kvK, kvV, kvInRam, spec, vramTarget, vramAuto, cpuOffload, cpuAuto, ctxCheckpoints,
+      device,
       // ub scales the compute buffer, -cms scales each checkpoint's KV term and
       // rope scaling decides the ctx ceiling: all three move the estimate.
       ub, adv.checkpointMinStep, adv.ropeScaling,
@@ -1286,6 +1301,8 @@
             spec: vEffSpecs.length ? vEffSpecs.join("+") : "none",
             vram: selectedV.vramTargetGB ? Number(selectedV.vramTargetGB) : vramAuto ? undefined : Number(vramTarget),
             cpuOffload: selectedV.cpuOffload ? Number(selectedV.cpuOffload) : cpuAuto ? undefined : Number(cpuOffload),
+            // Model-wide: a CPU-device pin moves every profile to RAM.
+            device: device === "cpu" ? "cpu" : "gpu",
             ctxCheckpoints: selectedV.ctxCheckpoints ?? undefined,
             // Variant fields inherit the Default when blank, exactly as the
             // generator merges them — send the resolved value or the preview
@@ -1311,6 +1328,8 @@
             spec: effSpecs.length ? effSpecs.join("+") : "none",
             vram: vramAuto ? undefined : Number(vramTarget),
             cpuOffload: cpuAuto ? undefined : Number(cpuOffload),
+            // Model-wide: a CPU-device pin moves every profile to RAM.
+            device: device === "cpu" ? "cpu" : "gpu",
             ctxCheckpoints: ctxCheckpoints ?? undefined,
             checkpointMinStep: Number(adv.checkpointMinStep) || undefined,
             ub: Number(ub) || undefined,
@@ -1358,6 +1377,8 @@
       kvInRam,
       vramTargetGB: vramAuto ? 0 : Number(vramTarget),
       cpuOffload: cpuAuto ? 0 : Number(cpuOffload),
+      device: device === "cpu" ? "cpu" : "",
+      swapGroup: device === "cpu" || swapGroup !== "cpu" ? swapGroup : "",
       backend,
       vllmGpuUtil: vllmGpuUtil === "" ? 0 : Number(vllmGpuUtil),
       vllmTensorParallel: vllmTensorParallel === "" ? 0 : Number(vllmTensorParallel),
@@ -2714,12 +2735,41 @@
             </span>
             <div class="flex items-center gap-3">
               <label class="flex items-center gap-1.5 text-xs text-txtsecondary whitespace-nowrap">
-                <Toggle size="sm" bind:checked={cpuAuto} disabled={knobOwned(["ngl", "nCpuMoe"])} /> Auto
+                <Toggle size="sm" bind:checked={cpuAuto} disabled={device === "cpu" || knobOwned(["ngl", "nCpuMoe"])} /> Auto
               </label>
-              <input type="range" min="0" max={maxOffload} step="1" bind:value={cpuOffload} disabled={cpuAuto || knobOwned(["ngl", "nCpuMoe"])} use:wheelAdjust class="flex-1 disabled:opacity-40" />
+              <input type="range" min="0" max={maxOffload} step="1" bind:value={cpuOffload} disabled={cpuAuto || device === "cpu" || knobOwned(["ngl", "nCpuMoe"])} use:wheelAdjust class="flex-1 disabled:opacity-40" />
               <span class="text-xs text-txtsecondary font-mono whitespace-nowrap">max {maxOffload}</span>
             </div>
           </label>
+
+          <div class="grid grid-cols-2 gap-3 col-span-2">
+            <label class="flex flex-col gap-1 text-sm">
+              <span class="text-txtsecondary flex items-center gap-1">
+                Device
+                {@render hint("Where the model runs. CPU only launches with no GPU at all (--device none): every layer, the KV cache and the compute buffer live in RAM.")}
+              </span>
+              <Select
+                bind:value={device}
+                options={DEVICE_SEL}
+                ariaLabel="Device"
+                onchange={(v) => {
+                  if (v !== "cpu" && swapGroup === "cpu") swapGroup = "";
+                }}
+              />
+            </label>
+            <label class="flex flex-col gap-1 text-sm">
+              <span class="text-txtsecondary flex items-center gap-1">
+                Swap group
+                {@render hint("Which pool this model is admitted against. A CPU group is checked against the RAM budget and never evicts GPU models. Auto follows the device.")}
+              </span>
+              <Select bind:value={swapGroup} options={SWAP_GROUP_SEL} ariaLabel="Swap group" />
+            </label>
+            {#if device === "cpu"}
+              <p class="col-span-2 text-xs text-txtsecondary">
+                Runs with no GPU at all (--device none). CPU swap group models are admitted against the RAM budget and never evict GPU models.
+              </p>
+            {/if}
+          </div>
 
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-txtsecondary flex items-center gap-1">

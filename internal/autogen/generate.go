@@ -143,6 +143,7 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 	b.WriteString("# Regen: Quartermaster startup (hash-gated)\n\n")
 	fmt.Fprintf(&b, "healthCheckTimeout: %d\n\n", s.HealthCheckTimeout)
 	emitVramBudget(&b, s)
+	emitRamBudget(&b, s)
 	emitSlotCache(&b, s.SlotCache)
 	emitAPIKeys(&b, s.APIKeys)
 	emitPromptEnhancers(&b, s.PromptEnhancers)
@@ -274,6 +275,9 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	// --embeddings launch it would get there serves the wrong API. See decision.go.
 	if IsDecisionModel(meta) {
 		emitDecisionModel(b, s, row, ov, name, meta, emitted)
+		if ov.InCpuPool() {
+			coexist.CPU = append(coexist.CPU, name)
+		}
 		return nil
 	}
 
@@ -282,6 +286,9 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	// embedding capability buckets them out of the chat-able LLM catalog.
 	if IsEmbeddingModel(meta) {
 		emitEmbeddingModel(b, s, row, ov, name, meta, emitted)
+		if ov.InCpuPool() {
+			coexist.CPU = append(coexist.CPU, name)
+		}
 		return nil
 	}
 
@@ -341,6 +348,12 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 	}
 	if be.Exe != "" {
 		s.ServerExe = be.Exe // this model's chosen llama build wins (local copy)
+	}
+	// Every profile this model emits (solo, ctx tiers, variants, vision twin)
+	// runs on the same device, so a CPU-pool pin files them all in the cpu group.
+	if ov.InCpuPool() {
+		start := len(*emitted)
+		defer func() { coexist.CPU = append(coexist.CPU, (*emitted)[start:]...) }()
 	}
 
 	// Custom launch arguments are sizing constraints, not only argv overrides: a
@@ -747,11 +760,21 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		if prof.CpuOffload > 0 || prof.CpuOffloadSet {
 			ngl, ncpuMoe = applyForcedOffload(meta, prof.CpuOffload)
 		}
+		// A CPU-device pin: nothing on the GPU, so the whole footprint the
+		// offload model prices for ngl 0 (its VRAM half is the compute buffer
+		// and overhead, which now live in RAM too) is charged to RAM.
+		cpuDev := override.CpuDevice()
+		if cpuDev {
+			ngl, ncpuMoe = 0, 0
+		}
 		// Re-price whenever the emitted placement is not the one GetLoadPlan
 		// costed, so the baked estVramGB/estRamGB describe the flags we actually
 		// write (forceLowActiveMoE rewrites them without touching the estimate).
-		if ngl != plan.Ngl || ncpuMoe != plan.NCpuMoe {
+		if ngl != plan.Ngl || ncpuMoe != plan.NCpuMoe || cpuDev {
 			plan.EstVramGB, plan.EstRamGB = estForOffload(meta, prof, kvReserve, planCkptGB, ngl, ncpuMoe)
+			if cpuDev {
+				plan.EstVramGB, plan.EstRamGB = 0, plan.EstVramGB+plan.EstRamGB
+			}
 			plan.RamExceeded = s.MaxRamGB > 0 && plan.EstRamGB > s.MaxRamGB
 		}
 

@@ -176,6 +176,17 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
    assignment (`coexistSets` → `sam` / `tts` / `asr`, one group per non-empty class) and emitted by
    `writeCoexistGroup` as `exclusive:false`, `persistent:true`, `swap:false`, so they neither evict
    nor are evicted, and are appended to every listener since they bind no port of their own.
+   The fourth coexist set, **`cpu`**, is different: `Override.Device: cpu` (`cpudevice.go`) emits
+   `-ngl 0 --device none` on every profile (LLM, decision, embedding), prices the whole footprint
+   (compute buffer included) as `estRamGB` with no `estVramGB`, and `Override.SwapGroup` (blank
+   follows the device) puts the model's profiles in `coexist.CPU`. That group is emitted
+   `swap:true`, `persistent:false`, `pool: ram`, and `emitRamBudget` writes `ramBudgetGB`
+   (= `MaxRamGB`, multiResident only), so the router packs as many CPU models as RAM holds (see
+   `internal/router/CLAUDE.md`, "Two pools"). `SwapGroupErr` refuses a GPU-device model in the cpu
+   group (it would hold VRAM the RAM pool never accounts for). `LiveOffloadArgs` leaves a
+   `--device none` argv alone, and the estimate preview takes `device=cpu` (or reads
+   `--device none` off a seeded argv) via `EstimateInput.CpuDevice`. Context is still sized by the
+   VRAM-based ladder for CPU models.
 
 ### Prompt enhancers
 

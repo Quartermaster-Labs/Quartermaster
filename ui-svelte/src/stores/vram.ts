@@ -160,6 +160,11 @@ export function loadedSegments(
   if (ests.some((e) => !e)) return null;
 
   const parts = ests.map((e) => {
+    // A model with no VRAM estimate (a CPU-device pin) owns none of the bar,
+    // whatever reserve figures ride along with it.
+    if (e.estVramGB <= 0) {
+      return { kv: 0, ckpt: 0, draft: 0, compute: 0, mmproj: 0, headroom: 0, total: 0, weights: 0, ctx: e.ctx };
+    }
     const kv = Math.max(0, e.kvReserveGB * 1024);
     const ckpt = Math.max(0, (e.checkpointGB ?? 0) * 1024);
     // Draft/MTP is charged in VRAM whatever the KV placement, so it is its own

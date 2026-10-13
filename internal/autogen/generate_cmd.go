@@ -356,6 +356,12 @@ func buildCmdLines(s Settings, meta Metadata, row GgufRow, prof profile, ctx, ng
 		fmt.Sprintf("-fa %s -ctk %s -ctv %s", fa, kvK, kvV),
 		fmt.Sprintf("--parallel %d %s%s--kv-unified --no-warmup --no-ui --metrics --props", parallel, loadModeFlag, kvoFlag),
 	}
+	if ov.CpuDevice() {
+		// -ngl 0 alone still opens the GPU: a compute buffer and runtime context
+		// stay resident and op offload borrows it for large batches. --device none
+		// is what makes a CPU pin hold no VRAM, which the cpu pool assumes.
+		lines = append(lines, "--device none")
+	}
 	// Multi-GPU: split the layers (and, under -sm layer, their KV with them)
 	// across every eligible card, pinning the buffers that do NOT split to the
 	// device with the most free memory. Emitted only when the sizer actually

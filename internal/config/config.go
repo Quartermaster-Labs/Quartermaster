@@ -78,7 +78,19 @@ type GroupConfig struct {
 	Exclusive  bool     `yaml:"exclusive"`
 	Persistent bool     `yaml:"persistent"`
 	Members    []string `yaml:"members"`
+	// Pool is the memory the group's members are admitted against when a budget
+	// is configured: "" / "vram" = VramBudgetGB (the default, and every group
+	// that existed before this field), "ram" = RamBudgetGB. A ram-pool member is
+	// never evicted to make VRAM room and never evicts a vram-pool member; see
+	// internal/router/group.go.
+	Pool string `yaml:"pool,omitempty"`
 }
+
+// GroupPoolRAM marks a group whose members run on the CPU (GroupConfig.Pool).
+const GroupPoolRAM = "ram"
+
+// IsRAMPool reports whether the group is admitted against the RAM budget.
+func (c GroupConfig) IsRAMPool() bool { return c.Pool == GroupPoolRAM }
 
 var (
 	macroNameRegex    = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
@@ -134,6 +146,14 @@ type Config struct {
 	// static swap/exclusive behaviour. Fork addition; emitted by autogen from
 	// settings.targetVramGB.
 	VramBudgetGB float64 `yaml:"vramBudgetGB"`
+
+	// RamBudgetGB is VramBudgetGB's twin for the "ram" pool: the system memory the
+	// resident set may occupy, summed over ModelConfig.EstRamGB of EVERY resident
+	// (a partially offloaded GPU model holds RAM too). Only ram-pool members are
+	// ever evicted for it. 0 disables RAM admission: ram-pool models then evict
+	// within their group by the static swap rule. Emitted by autogen from
+	// settings.targetRamGB.
+	RamBudgetGB float64 `yaml:"ramBudgetGB"`
 
 	// routing is the canonical source for swap/scheduling configuration.
 	// New code must read Routing, never the backwards-compat fields below.
