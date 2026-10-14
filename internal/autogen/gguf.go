@@ -161,6 +161,14 @@ type Metadata struct {
 	// also bake a pooling_type, so this key is the only reliable signal.
 	DecisionType string
 
+	// NonCausal is "<arch>.attention.causal" = false: every token attends to the
+	// whole sequence (a BERT-style encoder), so the model cannot generate text.
+	// ClassifierHead is set when "<arch>.classifier.output_labels" exists: the
+	// file ends in a label head, not an LM head. Either one without a
+	// DecisionType or pooling_type is a classifier llama-server cannot serve.
+	NonCausal      bool
+	ClassifierHead bool
+
 	IsMoE bool
 
 	// IsMTP is true when the model carries multi-token-prediction / nextn
@@ -649,6 +657,7 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 	var fullAttnInterval, ssmInnerSize, ssmConvKernel, ssmStateSize *int64
 	var nextnLayers, poolingType *int64
 	var decisionType string
+	var nonCausal, classifierHead bool
 	var visImageSize, visPatchSize, visEmbd, visFFN, visBlocks, visHeads, visMerge *int64
 
 	// The publisher's own words for what this file IS. Written by convert_hf_
@@ -918,6 +927,16 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 				}
 				decisionType = v
 				matched = true
+			case key == pfx+"attention.causal" && t == ggufBool:
+				v, err := readInt()
+				if err != nil {
+					return Metadata{}, err
+				}
+				nonCausal = v == 0
+				matched = true
+			case key == pfx+"classifier.output_labels":
+				// Presence is the signal; the labels themselves are skipped below.
+				classifierHead = true
 			// Vision (CLIP mmproj) hparams — present only when arch == "clip"
 			// (the projector gguf). Drive the per-projector CLIP compute-buffer
 			// model in clipComputeBufferGB.
@@ -1118,6 +1137,8 @@ func ReadGgufMetadataFrom(rs io.ReadSeeker, path string, sizeBytes int64) (Metad
 		HasBakedEncoders:  bakedEnc,
 		PoolingType:       deref(poolingType),
 		DecisionType:      decisionType,
+		NonCausal:         nonCausal,
+		ClassifierHead:    classifierHead,
 		IsMoE:             expertCount != nil && *expertCount > 0,
 		IsMTP:             nextnLayers != nil && *nextnLayers > 0,
 		NextnLayers:       deref(nextnLayers),

@@ -581,6 +581,20 @@ func writeGgufKVs(t *testing.T, path string, kvs [][2]any) {
 		case int:
 			binary.Write(f, le, uint32(4))
 			binary.Write(f, le, uint32(v))
+		case bool:
+			binary.Write(f, le, uint32(7))
+			var b uint8
+			if v {
+				b = 1
+			}
+			binary.Write(f, le, b)
+		case []string:
+			binary.Write(f, le, uint32(9))
+			binary.Write(f, le, uint32(8))
+			binary.Write(f, le, uint64(len(v)))
+			for _, e := range v {
+				str(e)
+			}
 		default:
 			t.Fatalf("unsupported kv value %T", v)
 		}

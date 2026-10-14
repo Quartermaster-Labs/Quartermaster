@@ -62,7 +62,7 @@ pre-generating config variants by hand. Kept deliberately separable for clean up
 - `Metadata` (`gguf.go`) — parsed subset of a GGUF header (arch, block count, expert count,
   attention dims, RoPE/SWA/SSM fields, `IsMoE`, `IsMTP`, `ExpertWeightShare`, `PoolingType`,
   `ChatTemplatePreservesThinking`/`ChatTemplateEffortLevels`). Optional fields are 0 when
-  absent; consumers guard on `> 0`. `PoolingType` is the authoritative embedder signal, `DecisionType` the decision-model one.
+  absent; consumers guard on `> 0`. `PoolingType` is the authoritative embedder signal, `DecisionType` the decision-model one. `NonCausal` (`attention.causal=false`) or `ClassifierHead` (`classifier.output_labels`) with neither of those is a classifier llama-server cannot serve: `emitModel` drops it as `# SKIPPED` before the LLM path (von-1.2, a ModernBERT converted without `decision.type`). DFlash drafters are also non-causal but never get here: discovery pairs them by filename.
   `Metadata` also carries what the file says about ITSELF: `QuantLabel` (tensor-derived, see
   `quantlabel.go`) and the raw identity KVs `BaseName`/`SizeLabel`/`FineTune`/`GeneralName`.
   Those four are unjudged - frequently absent, occasionally a commit hash - so read them through
