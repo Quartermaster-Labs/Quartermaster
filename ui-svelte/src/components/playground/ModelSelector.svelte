@@ -158,6 +158,12 @@
     return out;
   });
 
+  // The first section's heading carries the search box, so it is fixed off the
+  // UNFILTERED catalog: typing must not rename the row the cursor sits in.
+  let headLabel = $derived(
+    grouped.local.length > 0 ? "Local" : `Peer: ${Object.keys(grouped.peersByProvider).sort()[0]}`,
+  );
+
   function toggle() {
     open = !open;
     if (open) {
@@ -284,12 +290,13 @@
           ? 'left-1/2 -translate-x-1/2 min-w-[22rem] max-w-[30rem]'
           : 'left-0 right-0'} {dropUp ? 'bottom-full mb-1' : 'top-full mt-1'}"
       >
-        <!-- Sticky so it stays reachable while scrolling a long catalog. The
-             list's top padding lives here instead of on the scroller, or rows
-             would show through a gap above the stuck box. -->
-        <div class="sticky top-0 z-10 bg-surface px-2 pt-1.5 pb-1">
-          <div class="relative">
-            <Search class="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-txtsecondary pointer-events-none" />
+        <!-- The first section heading, with the search box filling the rest of
+             its row. Sticky so it stays reachable while scrolling a long
+             catalog; that section's own heading is skipped below. -->
+        <div class="sticky top-0 z-10 bg-surface flex items-center gap-2 pl-2.5 pr-2 pt-1.5 pb-1">
+          <span class="shrink-0 text-[0.65rem] uppercase tracking-wide text-txtsecondary">{headLabel}</span>
+          <div class="relative flex-1 min-w-0">
+            <Search class="absolute left-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-txtsecondary pointer-events-none" />
             <input
               bind:this={searchEl}
               bind:value={query}
@@ -297,7 +304,7 @@
               placeholder="Search models…"
               aria-label="Search models"
               onkeydown={onSearchKey}
-              class="w-full rounded border border-card-border bg-background pl-7 pr-6 py-1 text-xs focus:outline-none focus:border-primary"
+              class="w-full rounded border border-card-border bg-background pl-6 pr-6 py-0.5 text-xs focus:outline-none focus:border-primary"
             />
             {#if query}
               <button
@@ -315,7 +322,9 @@
           <p class="px-3 py-4 text-xs text-txtsecondary text-center">No matches.</p>
         {/if}
         {#each sections as sec (sec.label)}
-          <div class="px-2.5 py-1 text-[0.65rem] uppercase tracking-wide text-txtsecondary">{sec.label}</div>
+          {#if sec.label !== headLabel}
+            <div class="px-2.5 py-1 text-[0.65rem] uppercase tracking-wide text-txtsecondary">{sec.label}</div>
+          {/if}
           {#each sec.families as fam (fam.key)}
             {#if fam.groups.length > 1}
               <!-- Finetune family: one rail + heading over its members, same
