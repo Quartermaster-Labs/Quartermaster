@@ -3,7 +3,7 @@
   import { models } from "../../stores/api";
   import { groupModels, modelCategory, matchesCapabilities, prettifyModelName, type ModelCategory } from "../../lib/modelUtils";
   import { baseKey, familyOf } from "../../lib/modelTable";
-  import { ChevronDown, Star } from "lucide-svelte";
+  import { ChevronDown, Search, Star, X } from "lucide-svelte";
   import { userPref } from "../../stores/prefs";
   import type { Model } from "../../lib/types";
 
@@ -56,6 +56,19 @@
   let hasModels = $derived(grouped.local.length > 0 || Object.keys(grouped.peersByProvider).length > 0);
 
   let open = $state(false);
+  // Search narrows whole groups: a hit on any variant id keeps its model (and
+  // all its pills) on screen, so typing "64k" still shows which model it is.
+  // Every whitespace-separated term must appear somewhere in the group's ids or
+  // display name, case-insensitively. Cleared on every open.
+  let query = $state("");
+  let searchEl = $state<HTMLInputElement | null>(null);
+  let terms = $derived(query.toLowerCase().split(/\s+/).filter(Boolean));
+  let nameById = $derived(new Map($models.map((m) => [m.id, m.name ?? ""])));
+  function groupMatches(g: Group): boolean {
+    if (terms.length === 0) return true;
+    const hay = [g.base.value, nameById.get(g.base.value) ?? "", ...g.variants.map((v) => v.value)].join(" ").toLowerCase();
+    return terms.every((t) => hay.includes(t));
+  }
 
   type Pick = { value: string; label: string };
   type Group = { base: Pick; variants: Pick[] };
@@ -136,13 +149,40 @@
 
   let sections = $derived.by(() => {
     const out: { label: string; families: Family[] }[] = [];
-    const build = (arr: Model[]) => families(pinned(buildGroups(arr)));
-    if (grouped.local.length > 0) out.push({ label: "Local", families: build(grouped.local) });
+    const build = (arr: Model[]) => families(pinned(buildGroups(arr).filter(groupMatches)));
+    const push = (label: string, fams: Family[]) => fams.length > 0 && out.push({ label, families: fams });
+    if (grouped.local.length > 0) push("Local", build(grouped.local));
     for (const [peerId, peerModels] of Object.entries(grouped.peersByProvider).sort(([a], [b]) => a.localeCompare(b))) {
-      out.push({ label: `Peer: ${peerId}`, families: build(peerModels) });
+      push(`Peer: ${peerId}`, build(peerModels));
     }
     return out;
   });
+
+  // The first section's heading carries the search box, so it is fixed off the
+  // UNFILTERED catalog: typing must not rename the row the cursor sits in.
+  let headLabel = $derived(
+    grouped.local.length > 0 ? "Local" : `Peer: ${Object.keys(grouped.peersByProvider).sort()[0]}`,
+  );
+
+  function toggle() {
+    open = !open;
+    if (open) {
+      query = "";
+      queueMicrotask(() => searchEl?.focus());
+    }
+  }
+
+  // Enter takes the first visible model's default, so "type a few letters,
+  // press Enter" works without the mouse.
+  function onSearchKey(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      if (query) query = "";
+      else open = false;
+    } else if (e.key === "Enter") {
+      const first = sections[0]?.families[0]?.groups[0];
+      if (first) select(first.base.value);
+    }
+  }
 
   function select(v: string) {
     value = v;
@@ -158,7 +198,7 @@
         : "border-card-border text-txtsecondary hover:text-txtmain hover:border-primary/50"
     }`;
 
-  // ponytail: mouse + Escape only; no arrow-key listbox nav. Add if asked.
+  // ponytail: search + Enter/Escape only; no arrow-key listbox nav. Add if asked.
   function clickOutside(node: HTMLElement) {
     function onClick(e: MouseEvent) {
       if (!node.contains(e.target as Node)) open = false;
@@ -221,7 +261,7 @@
         type="button"
         {disabled}
         class="max-w-full flex items-center gap-1 text-xs font-medium text-txtsecondary hover:text-txtmain focus:outline-none disabled:opacity-50 transition-colors"
-        onclick={() => (open = !open)}
+        onclick={toggle}
         onkeydown={(e) => e.key === "Escape" && (open = false)}
         use:tip={value || placeholder}
       >
@@ -235,7 +275,7 @@
         class="w-full flex items-center justify-between gap-2 rounded border border-card-border bg-surface text-left focus:outline-none focus:border-primary disabled:opacity-50 {compact
           ? 'px-2.5 py-1.5 text-[0.8125rem]'
           : 'px-3 py-2'}"
-        onclick={() => (open = !open)}
+        onclick={toggle}
         onkeydown={(e) => e.key === "Escape" && (open = false)}
         use:tip={value || placeholder}
       >
@@ -246,12 +286,45 @@
 
     {#if open}
       <div
-        class="absolute z-30 max-h-80 overflow-y-auto pretty-scroll rounded-md border border-card-border bg-surface shadow-lg py-1.5 text-[0.8125rem] {ghost
+        class="absolute z-30 max-h-80 overflow-y-auto pretty-scroll rounded-md border border-card-border bg-surface shadow-lg pb-1.5 text-[0.8125rem] {ghost
           ? 'left-1/2 -translate-x-1/2 min-w-[22rem] max-w-[30rem]'
           : 'left-0 right-0'} {dropUp ? 'bottom-full mb-1' : 'top-full mt-1'}"
       >
+        <!-- The first section heading, with the search box filling the rest of
+             its row. Sticky so it stays reachable while scrolling a long
+             catalog; that section's own heading is skipped below. -->
+        <div class="sticky top-0 z-10 bg-surface flex items-center gap-2 pl-2.5 pr-2 pt-1.5 pb-1">
+          <span class="shrink-0 text-[0.65rem] uppercase tracking-wide text-txtsecondary">{headLabel}</span>
+          <div class="relative flex-1 min-w-0">
+            <Search class="absolute left-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-txtsecondary pointer-events-none" />
+            <input
+              bind:this={searchEl}
+              bind:value={query}
+              type="text"
+              placeholder="Search models…"
+              aria-label="Search models"
+              onkeydown={onSearchKey}
+              class="w-full rounded border border-card-border bg-background pl-6 pr-6 py-0.5 text-xs focus:outline-none focus:border-primary"
+            />
+            {#if query}
+              <button
+                type="button"
+                class="absolute right-1 top-1/2 -translate-y-1/2 p-0.5 text-txtsecondary hover:text-txtmain"
+                onclick={() => (query = "", searchEl?.focus())}
+                aria-label="Clear search"
+              >
+                <X class="w-3 h-3" />
+              </button>
+            {/if}
+          </div>
+        </div>
+        {#if sections.length === 0}
+          <p class="px-3 py-4 text-xs text-txtsecondary text-center">No matches.</p>
+        {/if}
         {#each sections as sec (sec.label)}
-          <div class="px-2.5 py-1 text-[0.65rem] uppercase tracking-wide text-txtsecondary">{sec.label}</div>
+          {#if sec.label !== headLabel}
+            <div class="px-2.5 py-1 text-[0.65rem] uppercase tracking-wide text-txtsecondary">{sec.label}</div>
+          {/if}
           {#each sec.families as fam (fam.key)}
             {#if fam.groups.length > 1}
               <!-- Finetune family: one rail + heading over its members, same
