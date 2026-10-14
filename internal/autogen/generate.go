@@ -336,6 +336,16 @@ func emitModel(b *strings.Builder, s Settings, gf GenerateFile, row GgufRow, ov 
 		return nil
 	}
 
+	// Everything left is launched as a chat LLM, which a non-causal encoder or a
+	// classifier-headed file can never be: it attends both ways and ends in a
+	// label head, so it has nothing to generate with. The decision and embedder
+	// checks above already took the ones llama-server knows how to serve, so
+	// this is a classifier converted without decision.type. Drop it with the
+	// reason rather than list a chat model that answers garbage.
+	if meta.NonCausal || meta.ClassifierHead {
+		return fmt.Errorf("non-causal classifier (arch=%s) with no decision.type: llama-server cannot serve it as chat or on /v1/systemone; re-convert it as a decision model", meta.Architecture)
+	}
+
 	// Resolve which backend serves this LLM. A "vllm" (or other non-llama) kind
 	// emits through its own path — different engine, different args, no KV/-ngl
 	// sizing. A chosen "llama" build just swaps the exe threaded through the llama

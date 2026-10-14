@@ -122,3 +122,52 @@ func TestDecisionEstVramGB_ScalesWithWholeBatch(t *testing.T) {
 		t.Errorf("kev ub = %d whole=%v, want %d false", ub, whole, llamaDefaultUb)
 	}
 }
+
+// A ModernBERT sequence classifier converted without decision.type (von-1.2)
+// has no LM head and no mode llama-server serves it in, so it is dropped with
+// the reason instead of listed as a chat model. An encoder that bakes a
+// pooling_type is still an embedder: that check runs first.
+func TestEmitModel_SkipsNonCausalClassifier(t *testing.T) {
+	dir := t.TempDir()
+	von := filepath.Join(dir, "von-1.2-f16.gguf")
+	writeGgufKVs(t, von, [][2]any{
+		{"general.architecture", "modern-bert"},
+		{"modern-bert.context_length", 2048},
+		{"modern-bert.attention.causal", false},
+		{"modern-bert.classifier.output_labels", []string{"a", "b", "c"}},
+	})
+	meta, err := ReadGgufMetadata(von)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !meta.NonCausal || !meta.ClassifierHead {
+		t.Fatalf("NonCausal=%v ClassifierHead=%v, want both", meta.NonCausal, meta.ClassifierHead)
+	}
+
+	var b strings.Builder
+	var emitted []string
+	var coexist coexistSets
+	row := GgufRow{FullPath: von, FileName: "von-1.2-f16.gguf", SizeGB: 0.8}
+	err = emitModel(&b, Settings{ServerExe: "llama-server"}, GenerateFile{}, row, nil, "von-1.2", &emitted, &coexist)
+	if err == nil || !strings.Contains(err.Error(), "decision.type") {
+		t.Fatalf("err = %v, want a non-causal classifier skip", err)
+	}
+	if len(emitted) != 0 || b.Len() != 0 {
+		t.Errorf("classifier was emitted: %v\n%s", emitted, b.String())
+	}
+
+	emb := filepath.Join(dir, "bge-small-f16.gguf")
+	writeGgufKVs(t, emb, [][2]any{
+		{"general.architecture", "bert"},
+		{"bert.attention.causal", false},
+		{"bert.pooling_type", 2},
+	})
+	b.Reset()
+	row = GgufRow{FullPath: emb, FileName: "bge-small-f16.gguf", SizeGB: 0.1}
+	if err := emitModel(&b, Settings{ServerExe: "llama-server"}, GenerateFile{}, row, nil, "bge-small", &emitted, &coexist); err != nil {
+		t.Fatalf("embedder skipped: %v", err)
+	}
+	if !strings.Contains(b.String(), "--embeddings") {
+		t.Errorf("embedder not routed to --embeddings:\n%s", b.String())
+	}
+}
