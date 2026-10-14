@@ -174,6 +174,7 @@ func Generate(gf GenerateFile, nowRFC string) (string, error) {
 	}
 
 	emitExtraImageModels(&b, s, gf.Overrides, seen, &emitted)
+	emitExtraModels(&b, s, seen, &emitted)
 
 	emitGroupsAndListeners(&b, s, emitted, coexist)
 	return b.String(), nil

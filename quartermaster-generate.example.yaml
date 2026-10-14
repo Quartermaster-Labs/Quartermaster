@@ -55,6 +55,22 @@ settings:
   # groups:
   #   - { name: variants,  listen: 0.0.0.0:1251, match: ["*-game", "*-judge"] }
   #   - { name: assistant, listen: 0.0.0.0:1250, match: ["*"] }
+  # extraModels: hand-written model blocks for a server autogen has no backend
+  # kind for (any OpenAI-compatible engine, e.g. Strata). Same shape as a
+  # config.yaml model entry, copied into the generated config as written so a
+  # regen keeps it. Nothing is sized for you: cmd and estVramGB (or estRamGB for
+  # a CPU-only server) are required, since the estimate is all the scheduler
+  # knows about it. Entries join the swap groups like any discovered model. A
+  # bad entry (unknown key, name already taken) is skipped with a
+  # "# SKIPPED" comment in config.yaml instead of breaking startup.
+  # extraModels:
+  #   strata-qwen3-32b:
+  #     cmd: >
+  #       D:/strata/strata-server.exe --port ${PORT}
+  #       --model D:/models/Qwen3-32B
+  #     proxy: http://127.0.0.1:${PORT}
+  #     checkEndpoint: /v1/models
+  #     estVramGB: 20
 
 # Per-model overrides — optional. Each entry matches discovered gguf paths by
 # glob (first match wins). Fields: quant (pick a quant when several exist),
