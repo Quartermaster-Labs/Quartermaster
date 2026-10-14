@@ -324,7 +324,9 @@ const hashCacheSuffix = ".modelhash"
 // /v1/systemone block instead of an LLM or embedder one.
 // v100: decision models charge computeBufferGB at their real -ub (plus the
 // n_head x ub^2 score matrix for whole-batch types) instead of a flat pad.
-const genVersion = "v101"
+// v102: a non-causal classifier with no decision.type or pooling_type is
+// skipped instead of emitted as a chat LLM.
+const genVersion = "v102"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight
