@@ -237,6 +237,13 @@ type Settings struct {
 	// block from explicit paths; no VRAM planner or arch detection runs. Persisted
 	// here (not a runtime hack) so a regen keeps them.
 	ExtraImageModels []ExtraImageModel `yaml:"extraImageModels"`
+	// ExtraModels are hand-written config.yaml model blocks (name -> block),
+	// emitted as written so a server autogen has no backend kind for (any
+	// OpenAI-compatible engine) survives a regen. Kept as a yaml.Node so the
+	// user's key order and scalar styles round-trip. Generate-file only, never
+	// the sidecar: a UI-editable block is an arbitrary command line. See
+	// extramodels.go.
+	ExtraModels yaml.Node `yaml:"extraModels" json:"-"`
 	// autoEnhancers is the name-based prompt-enhancer pairing table built by
 	// Generate from the rows it just discovered (see promptenhancer.go), read by
 	// the image emitters to pre-fill a model that names no enhancer of its own.

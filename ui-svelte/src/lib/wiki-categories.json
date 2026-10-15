@@ -1,6 +1,6 @@
 [
   { "title": "Getting started", "ids": ["overview", "updating"] },
-  { "title": "Models & config", "ids": ["loading-models", "model-config", "config-variants", "autogen", "backends", "three-d-generation", "multi-listener"] },
+  { "title": "Models & config", "ids": ["loading-models", "model-config", "config-variants", "autogen", "backends", "extra-models", "three-d-generation", "multi-listener"] },
   { "title": "Playground", "ids": ["playground-chat", "playground-login", "web-search", "youtube", "qm-tools", "images", "video", "upscale", "segmentation", "speech-audio", "decision-models", "rerank-embed", "settings"] },
   { "title": "Monitoring & VRAM", "ids": ["observe", "gpu-memory", "slot-kv-cache"] },
   { "title": "API & access", "ids": ["http-api", "api-keys", "tools-api"] },

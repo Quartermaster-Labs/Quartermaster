@@ -5,3 +5,5 @@
 Rather than hand-writing a config per model, Quartermaster **auto-generates** one at startup: it scans your model folders for GGUF/checkpoint files, estimates each model's VRAM footprint (weights + KV + compute buffers), and derives runtime flags (context, GPU offload, KV type) that fit your hardware.
 
 This means adding a model is usually just dropping the file in the watched folder - no manual YAML. You can still override any of it per-model in the cogwheel editor, and those overrides survive regeneration.
+
+A server Quartermaster has no backend for can still be added by hand: see **Hand-written models (other engines)**.
