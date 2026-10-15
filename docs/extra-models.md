@@ -35,12 +35,14 @@ settings:
       # capabilities: { in: [text, image], out: [text] }
 ```
 
-On Linux the program is `/path/to/Strata/.venv/bin/python` and the paths change to match. Restart Quartermaster and `strata` is in the model list.
+On Linux the program is `/path/to/Strata/.venv/bin/python` and the paths change to match. Save the file and `strata` appears in the model list within a few seconds: Quartermaster watches the file and reloads on its own, no restart needed.
 
 - **`--config` must be an absolute path.** Strata reads it from the folder it was started in, and Quartermaster starts it in its own.
 - **Loading takes 1.5-2 minutes.** Strata answers `/health` only once the model is in memory, so `healthCheckTimeout: 300` gives it room. Do not add Strata's `--lazy` or `--idle-unload`: the first makes the health check pass before anything is loaded, and Quartermaster's `ttl` already unloads it when idle.
 - **`estVramGB` should be your whole card.** Strata fills free VRAM with its expert cache and needs the GPU to itself, so this makes Quartermaster unload every other model before starting it. Stopping it ends the server and its engine together and frees the card.
 - **"Host ... is not allowed (DNS rebinding protection)"**: Strata only answers to host names it knows, and Quartermaster passes on the name the client used. Requests to `localhost` or an IP address work; from another machine using this PC's name they fail with a 403. Put the names your clients use in `STRATA_ALLOWED_HOSTS` (comma-separated), or in `"allowed_hosts"` in the Strata json.
 - Strata accepts any model name, so requests sent to `strata` reach it unchanged.
+- **Reasoning levels (Qwen3.8):** add `reasoningEffort: [xhigh, medium, low]` under `capabilities`. A client's `reasoning_effort` is only passed on to a model that lists its levels, so without it the setting is silently dropped.
+- **Also start Strata by hand sometimes?** Quartermaster gives its copy a port of its own, so nothing stops a hand-started Strata and Quartermaster's from running at once and loading the model onto the card twice. Point `cmd` at a small wrapper script instead of `server.py`: it exits with an error when your hand-started Strata is already up (its usual port is taken), and otherwise starts `server.py` with the same arguments. The wrapper is still a program, not a shell line, so run a script through Strata's own python.
 
 Strata keeps a page of its own on running behind llama-swap, which Quartermaster grew out of: [docs/LLAMA_SWAP.md](https://github.com/Niko1221/Strata/blob/main/docs/LLAMA_SWAP.md).
