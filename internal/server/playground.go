@@ -10,6 +10,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -18,6 +21,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -85,6 +89,19 @@ const pgCookie = "pg_user"
 // legitimately carry many inline data: URLs before extractMedia splits them
 // out, and a speech thread carries audio. Real threads land far below this.
 const maxBlobBytes = 128 << 20
+
+// maxMediaUploadBytes caps one POST /api/media body. The music tab is the
+// caller: a five-minute 48 kHz stereo PCM16 song is ~58 MB, and a separation
+// uploads each stem on its own, so this leaves room without letting one
+// request hold a gigabyte in RAM.
+const maxMediaUploadBytes = 256 << 20
+
+// mediaGCGrace is how young a media file has to be for gcMedia to leave it
+// alone. POST /api/media writes a file BEFORE any tab JSON names it (the client
+// uploads, then its debounced PUT lands the ref), so a PUT from another tab in
+// that window would otherwise see an orphan and delete it. A variable so tests
+// can turn it off.
+var mediaGCGrace = 10 * time.Minute
 
 var pgUserRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
 
@@ -203,6 +220,10 @@ func (p *Playground) videoChatsPath(user string) string {
 
 func (p *Playground) threeDChatsPath(user string) string {
 	return filepath.Join(p.userDir(user), "3dchats.json")
+}
+
+func (p *Playground) musicChatsPath(user string) string {
+	return filepath.Join(p.userDir(user), "musicchats.json")
 }
 
 func (p *Playground) mediaDir(user string) string { return filepath.Join(p.userDir(user), "media") }
@@ -336,7 +357,7 @@ func (p *Playground) gcMedia(user string) {
 		return
 	}
 	var refs []byte
-	for _, fn := range []func(string) string{p.chatsPath, p.imageChatsPath, p.speechChatsPath, p.videoChatsPath, p.threeDChatsPath} {
+	for _, fn := range []func(string) string{p.chatsPath, p.imageChatsPath, p.speechChatsPath, p.videoChatsPath, p.threeDChatsPath, p.musicChatsPath} {
 		b, _ := os.ReadFile(fn(user))
 		refs = append(refs, b...)
 	}
@@ -348,6 +369,9 @@ func (p *Playground) gcMedia(user string) {
 		files, _ := os.ReadDir(dir)
 		for _, f := range files {
 			if f.IsDir() {
+				continue
+			}
+			if info, err := f.Info(); err == nil && time.Since(info.ModTime()) < mediaGCGrace {
 				continue
 			}
 			if !bytes.Contains(refs, []byte("/api/media/"+k.Name()+"/"+f.Name())) {
@@ -429,6 +453,7 @@ func (p *Playground) Migrate() {
 		"speechchats": p.speechChatsPath,
 		"videochats":  p.videoChatsPath,
 		"3dchats":     p.threeDChatsPath,
+		"musicchats":  p.musicChatsPath,
 		"prefs":       p.prefsPath,
 	}
 	p.mu.Lock()
@@ -767,6 +792,75 @@ func (s *Server) handlePlaygroundThreeDChats(w http.ResponseWriter, r *http.Requ
 // client-owns-the-blob model as /api/chats, just a separate file.
 func (s *Server) handlePlaygroundSpeechChats(w http.ResponseWriter, r *http.Request) {
 	s.serveUserBlob(w, r, (*Playground).speechChatsPath, "[]")
+}
+
+func (s *Server) handlePlaygroundMusicChats(w http.ResponseWriter, r *http.Request) {
+	s.serveUserBlob(w, r, (*Playground).musicChatsPath, "[]")
+}
+
+// POST /api/media — stores one raw audio or image body in the logged-in user's
+// media dir and answers {"url": "/api/media/<kind>/<hash>.<ext>"}, the same ref
+// extractMedia writes. Content-addressed, so a re-upload is a no-op that only
+// refreshes the file's mtime (which is what keeps it inside mediaGCGrace until
+// the client's PUT names it).
+//
+// Exists for the music tab. Every other tab sends media inline and lets the
+// blob PUT split it out, but the client keeps its inline copy until a reload,
+// so every later PUT re-sends all of it. That is fine for a few seconds of
+// speech and not for songs: four of them would pass maxBlobBytes and the save
+// would start failing, silently. Music threads hold refs from the start.
+func (s *Server) handlePlaygroundMediaUpload(w http.ResponseWriter, r *http.Request) {
+	p := s.playground
+	if p == nil {
+		http.Error(w, "playground not enabled", http.StatusNotImplemented)
+		return
+	}
+	user := p.userFromRequest(r)
+	if user == "" {
+		http.Error(w, "not logged in", http.StatusUnauthorized)
+		return
+	}
+	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	kind := mediaKind(mt)
+	if err != nil || (kind != "audio" && kind != "image") {
+		http.Error(w, "Content-Type must be an audio/* or image/* type", http.StatusUnsupportedMediaType)
+		return
+	}
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxMediaUploadBytes))
+	if err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			http.Error(w, "media too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if len(data) == 0 {
+		http.Error(w, "empty body", http.StatusBadRequest)
+		return
+	}
+	sum := sha256.Sum256(data)
+	name := hex.EncodeToString(sum[:8]) + "." + mimeExt(mt)
+	dir := filepath.Join(p.mediaDir(user), kind)
+	path := filepath.Join(dir, name)
+	// Under p.mu: gcMedia runs under it too, so it sees either no file or one
+	// with a fresh mtime, never the gap between the two.
+	p.mu.Lock()
+	if _, err = os.Stat(path); err != nil {
+		if err = os.MkdirAll(dir, 0o755); err == nil {
+			err = os.WriteFile(path, data, 0o644)
+		}
+	} else {
+		now := time.Now()
+		err = os.Chtimes(path, now, now)
+	}
+	p.mu.Unlock()
+	if err != nil {
+		http.Error(w, "could not save media", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"url": "/api/media/" + kind + "/" + name})
 }
 
 // GET/PUT /api/prefs — the user's playground settings (opaque JSON object:

@@ -131,6 +131,7 @@ const PLAYGROUND_TABS: Partial<Record<ModelCategory, { tab: string; label: strin
   video: { tab: "video", label: "Generate" },
   "3d": { tab: "3d", label: "Generate" },
   tts: { tab: "speech", label: "Speak" },
+  music: { tab: "music", label: "Compose" },
   transcribe: { tab: "audio", label: "Transcribe" },
   decision: { tab: "decision", label: "Decide" },
 };

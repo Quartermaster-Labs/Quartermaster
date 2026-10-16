@@ -992,6 +992,9 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/3dchats", apiChain.ThenFunc(s.handlePlaygroundThreeDChats))
 	mux.Handle("GET /api/speechchats", apiChain.ThenFunc(s.handlePlaygroundSpeechChats))
 	mux.Handle("PUT /api/speechchats", apiChain.ThenFunc(s.handlePlaygroundSpeechChats))
+	mux.Handle("GET /api/musicchats", apiChain.ThenFunc(s.handlePlaygroundMusicChats))
+	mux.Handle("PUT /api/musicchats", apiChain.ThenFunc(s.handlePlaygroundMusicChats))
+	mux.Handle("POST /api/media", apiChain.ThenFunc(s.handlePlaygroundMediaUpload))
 	mux.Handle("GET /api/media/{file...}", apiChain.ThenFunc(s.handlePlaygroundMedia))
 	// Assistant memory is server-owned (model AND browser write it) — per-entry
 	// CRUD, not the whole-blob PUT the other per-user files use. See memories.go.

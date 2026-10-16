@@ -1,4 +1,4 @@
-# ui-svelte — playground image, video & speech studios
+# ui-svelte — playground image, video, speech & music studios
 
 `src/components/playground/`. The chat surface is in
 [`playground-chat.md`](playground-chat.md).
@@ -125,6 +125,40 @@ would be stitched), and a forced-aligner model would evict the TTS model on one 
 punctuation pause, spreads them over the voiced part of the decoded clip, and snaps each boundary
 to the nearest real pause, re-estimating the rest from where it landed so drift does not
 accumulate. Sentence-level only: a length model is not good enough for words.
+
+## `MusicInterface.svelte`
+
+The Speech studio's layout (settings rail left, takes grid right, composer under it) with three
+modes on a segmented control, one per route family in `lib/musicApi.ts`:
+
+- **Create**: text to music (`/v1/music/generations`, ACE-Step and MiniMax Music 3).
+- **Edit**: repaint a time window, complete, or cover an existing clip (`/v1/music/edits`,
+  ACE-Step only). The repaint window is dragged across a bar or typed in seconds.
+- **Stems**: four-stem split (`/v1/audio/separations`, HTDemucs). No prompt.
+
+Each mode keeps its **own** model pick (`playground-music-model` / `-edit-model` /
+`-stems-model`), filtered by capability (`music_generation`, `music_edit`, `audio_separation`),
+so switching modes can never leave a model the route would refuse. A mode with no model is
+hidden. `playground-music-model` is also what the dashboard's launch link writes, so an effect
+moves a separator that lands there into the stems pick and switches mode.
+
+**Every audio field on a take is a `/api/media` ref.** Results are uploaded as they land
+(`uploadMedia`) and the thread holds refs only; see `internal/server/playground.md` for why and
+for the GC grace that covers the gap. A picked source file is uploaded at RUN time, not pick
+time, so a user who takes longer than the grace before pressing play does not lose it. A source
+taken from a take's menu ("Edit this take", "Split into stems") is already a ref.
+
+The source is converted to WAV in the browser (`toWav`): a WAV passes through byte for byte,
+anything else is decoded and re-encoded as stereo PCM16 (`lib/wav.ts` is mono, which suits speech
+and flattens a song). MiniMax is recognised by model id (`/minimax/i`) to require lyrics and hide
+ACE-Step's options; the server's family check is the backstop. Edits over ~24 s fail only on AMD
+Vulkan (the VAE encoder's 2 GB buffer), so the client does not block them and shows the server's
+message instead.
+
+Takes are a library, not a conversation: a new take, "New take, new seed" included, is always
+appended and nothing after it is dropped. `execute` reads the stored take rather than the form, so
+a regenerate replays exactly that take's settings. The seed shown on a card is the one the server
+**echoed** (`X-Seed`), so a random-seed take can be pinned and reproduced; clicking it pins it.
 
 ## `MaskEditor.svelte`
 
