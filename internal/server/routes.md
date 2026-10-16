@@ -23,7 +23,10 @@ Everything is registered in `routes` (`server.go`). Model-dispatched routes (`mo
   `POST /v1/tasks/run` and dispatched through the same `localPeerHandler`, so the one-big-model
   swap applies. Synchronous: the upstream proxy has no response-header timeout. Generations
   return `audio/wav` (or `b64_json`) with the seed in `X-Seed`; separations return
-  `{"stems":[{name, sample_rate, channels, audio}]}`.
+  `{"stems":[{name, sample_rate, channels, audio}]}`. An edit whose source is too long for the
+  backend's VAE encoder (audio.cpp's bare "VAE encoder backend buffer allocation failed" 500;
+  about 24 s on AMD Vulkan's 2 GB buffer cap) comes back as a **400** naming the source length
+  (`musicCapacityError`). No length limit is enforced: the cap is the driver's.
 - **`POST /sdcpp/v1/vid_gen`** (`videojobs.go`) — starts an async video render. Model-dispatched
   like any other generate route, but the response is a job id, not a video; the handler buffers
   the upstream reply so it can take a scheduler **lease** before the client can poll. The two

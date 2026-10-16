@@ -215,11 +215,50 @@ func (s *Server) handleMusic(route musicRoute) http.HandlerFunc {
 			return
 		}
 		if buf.code >= http.StatusBadRequest {
+			if msg, ok := musicCapacityError(route, buf.body.Bytes(), req.audioBytes); ok {
+				shared.SendResponse(w, r, http.StatusBadRequest, msg)
+				return
+			}
 			buf.flushTo(w)
 			return
 		}
 		writeMusicResponse(w, r, route, req.ResponseFormat, seed, buf.body.Bytes())
 	}
+}
+
+// musicCapacityError turns audio.cpp's bare allocation failure for an ACE-Step
+// edit into an answer the caller can act on. The VAE encoder runs over the
+// whole source in one graph (decode is chunked, encode is not, as of audio.cpp
+// v0.9.2), and its largest activation grows by about 86 MB per second of
+// audio. A Vulkan driver that caps one buffer at 2 GB (AMD's) therefore fails
+// every source longer than about 24 s, with a 500 that names neither cause.
+// No limit is enforced here: the cap is the driver's, and CUDA or CPU builds
+// encode far longer sources. Anything else passes through untouched.
+func musicCapacityError(route musicRoute, upstreamBody, source []byte) (string, bool) {
+	if route != musicEdit {
+		return "", false
+	}
+	msg := string(upstreamBody)
+	var doc struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(upstreamBody, &doc) == nil && doc.Error.Message != "" {
+		msg = doc.Error.Message
+	}
+	if !strings.Contains(msg, "VAE encoder") || !strings.Contains(msg, "allocation failed") {
+		return "", false
+	}
+	length := ""
+	if info, err := parseWAV(source); err == nil && info.bitsPerSample > 0 {
+		frames := len(info.data) / (info.channels * info.bitsPerSample / 8)
+		length = fmt.Sprintf(" This source is %.1f s.", float64(frames)/float64(info.sampleRate))
+	}
+	return fmt.Sprintf("the backend could not allocate GPU memory to encode the source audio (%s). "+
+		"The ACE-Step VAE encoder needs about 86 MB per second of source in one buffer, so on a Vulkan "+
+		"driver that caps a buffer at 2 GB (AMD) sources longer than about 24 s fail.%s "+
+		"Trim the source, or serve the model from a CUDA or CPU build.", msg, length), true
 }
 
 // musicRouteMismatch reports why a model cannot serve route, or "" if it can.

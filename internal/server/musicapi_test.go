@@ -330,3 +330,30 @@ func TestWriteMusicResponse(t *testing.T) {
 		t.Error("separation echoed a seed")
 	}
 }
+
+func TestMusicCapacityError(t *testing.T) {
+	src := pcm16WAV(make([]int16, 2*48000*30), 2, 48000) // 30 s stereo
+	upstream := []byte(`{"error":{"message":"ACE-Step VAE encoder backend buffer allocation failed","type":"server_error"}}`)
+
+	msg, ok := musicCapacityError(musicEdit, upstream, src)
+	if !ok {
+		t.Fatal("VAE encoder allocation failure on an edit was not translated")
+	}
+	for _, want := range []string{"VAE encoder backend buffer allocation failed", "30.0 s", "24 s", "Trim the source"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message lacks %q: %s", want, msg)
+		}
+	}
+
+	if _, ok := musicCapacityError(musicGenerate, upstream, nil); ok {
+		t.Error("a generation failure must pass through untouched")
+	}
+	if _, ok := musicCapacityError(musicEdit, []byte(`{"error":{"message":"model load failed"}}`), src); ok {
+		t.Error("an unrelated edit failure must pass through untouched")
+	}
+	// A body that is not JSON still matches on its text, and a bad source drops only the length.
+	msg, ok = musicCapacityError(musicEdit, []byte("ACE-Step VAE encoder backend buffer allocation failed"), []byte("junk"))
+	if !ok || strings.Contains(msg, "This source is") {
+		t.Errorf("plain-text body: ok=%v msg=%s", ok, msg)
+	}
+}
