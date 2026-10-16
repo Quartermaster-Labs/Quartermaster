@@ -179,6 +179,17 @@ var audioCppClones = map[string]bool{
 // (repaint / complete / cover), which gates /v1/music/edits.
 var audioCppMusicEdits = map[string]bool{"ace_step": true}
 
+// audioCppFamilySessionOptions are session options a single-file family always
+// gets. ace_step.mem_saver frees the per-request graph buffers instead of
+// keeping the largest ones warm: without it a render that follows a LONGER one
+// in the same process comes out different (corr 0.9999, not byte-equal) from
+// the same seed rendered fresh, so a seed stopped reproducing a result. With it
+// every render matches audiocpp_cli byte for byte, at no measurable cost on
+// warm requests (Vulkan, 20 s @ 8 steps: ~40 s either way).
+var audioCppFamilySessionOptions = map[string]map[string]string{
+	"ace_step": {"ace_step.mem_saver": "true"},
+}
+
 // audioCppDirFamilies are the families whose model is a DIRECTORY of component
 // ggufs rather than one file, keyed to the component that anchors the emit.
 // MiniMax Music 3 ships a language model, an RVQ depth decoder and a flow
@@ -455,7 +466,7 @@ func emitAudioCppModel(b *strings.Builder, s Settings, row GgufRow, ov *Override
 	if task == "gen" {
 		overhead = audioCppMusicOverheadGB
 	}
-	writeAudioCppEntry(b, s, row, ov, name, family, task, strings.ReplaceAll(row.FullPath, "\\", "/"), nil, row.SizeGB, row.SizeGB+overhead)
+	writeAudioCppEntry(b, s, row, ov, name, family, task, strings.ReplaceAll(row.FullPath, "\\", "/"), audioCppFamilySessionOptions[family], row.SizeGB, row.SizeGB+overhead)
 	*emitted = append(*emitted, name)
 }
 

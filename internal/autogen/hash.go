@@ -326,7 +326,9 @@ const hashCacheSuffix = ".modelhash"
 // n_head x ub^2 score matrix for whole-batch types) instead of a flat pad.
 // v102: a non-causal classifier with no decision.type or pooling_type is
 // skipped instead of emitted as a chat LLM.
-const genVersion = "v103"
+// v104: ace_step models carry sessionOptions ace_step.mem_saver, which makes a
+// seed reproduce byte for byte regardless of what the process rendered before.
+const genVersion = "v104"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight

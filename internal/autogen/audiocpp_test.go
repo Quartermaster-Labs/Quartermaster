@@ -291,7 +291,9 @@ func TestEmitAudioCppModel_MusicGen(t *testing.T) {
 	emitAudioCppModel(&b, s, row, &Override{}, "acestep-v15-turbo-bf16", meta, &emitted)
 	out := b.String()
 
-	for _, want := range []string{`task: "gen"`, `family: "ace_step"`, "music: true", "musicEdit: true"} {
+	for _, want := range []string{`task: "gen"`, `family: "ace_step"`, "music: true", "musicEdit: true",
+		// Without mem_saver a seed stops reproducing after a longer render.
+		"sessionOptions:", `ace_step.mem_saver: "true"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("emitted YAML missing %q:\n%s", want, out)
 		}
@@ -320,6 +322,9 @@ func TestEmitAudioCppModel_Separation(t *testing.T) {
 
 	if !strings.Contains(out, `task: "sep"`) || !strings.Contains(out, "separation: true") {
 		t.Errorf("separation entry missing task/capability:\n%s", out)
+	}
+	if strings.Contains(out, "mem_saver") {
+		t.Errorf("separation entry carries an ace_step option:\n%s", out)
 	}
 	if strings.Contains(out, "music: true") {
 		t.Errorf("separation entry advertises music:\n%s", out)

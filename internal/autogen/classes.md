@@ -408,6 +408,12 @@ with no row there would accept nothing but a prompt.
 A music generator is charged `audioCppMusicOverheadGB` (1 GB, an estimate: a song's latents and
 activations are larger than a sentence's) instead of the speech overhead.
 
+**ACE-Step always gets `ace_step.mem_saver: "true"`** (`audioCppFamilySessionOptions`). Without
+it a render that follows a LONGER one in the same process differs from the same seed rendered
+fresh (corr 0.9999, not byte-equal), so a seed stopped being a reproduction key. With it every
+render matched `audiocpp_cli` byte for byte, cold, warm and after a 30 s render, at no measurable
+cost on warm requests (Vulkan, 20 s: ~40 s either way).
+
 **MiniMax Music 3 is a DIRECTORY, not a file.** Only the shared `vocoder.gguf` /
 `condition_encoder.gguf` carry the family id; the per-quant `language_model_<q>.gguf`,
 `transformer_<q>.gguf` and `rvq_depth_decoder_<q>.gguf` carry none. `audioCppDirPackageFamily`
