@@ -389,9 +389,9 @@ func TestEmitAudioCppModel_MiniMaxDirectory(t *testing.T) {
 
 	for _, want := range []string{
 		`"minimax-music-3-q8_0":`,
-		`language_model_gguf: "language_model_q8_0.gguf"`,
-		`flow_transformer_gguf: "transformer_q8_0.gguf"`,
-		`rvq_depth_decoder_gguf: "rvq_depth_decoder_q8_0.gguf"`,
+		`minimax_music3.language_model_gguf: "language_model_q8_0.gguf"`,
+		`minimax_music3.flow_transformer_gguf: "transformer_q8_0.gguf"`,
+		`minimax_music3.rvq_depth_decoder_gguf: "rvq_depth_decoder_q8_0.gguf"`,
 		"sessionOptions:",
 		"music: true",
 		`path: "` + filepath.ToSlash(dir) + `"`,

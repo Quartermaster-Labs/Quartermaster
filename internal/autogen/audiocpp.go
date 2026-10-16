@@ -473,6 +473,10 @@ func emitAudioCppModel(b *strings.Builder, s Settings, row GgufRow, ov *Override
 // writeAudioCppEntry writes one audiocpp_server model entry. path is what the
 // audio.cpp config names (a gguf, or a package directory), sessionOptions its
 // session_options, sizeGB the weights on disk and estGB the admission estimate.
+// A session option key carries its family prefix ("minimax_music3.language_model_gguf"),
+// unlike a per-request option: model_specs lists the bare name, but the server
+// looks session options up prefixed and silently ignores a bare key, falling
+// back to the spec default (MiniMax then asks for language_model_q4_0.gguf).
 func writeAudioCppEntry(b *strings.Builder, s Settings, row GgufRow, ov *Override, name, family, task, path string, sessionOptions map[string]string, sizeGB, estGB float64) {
 	class := audioCppClass(family)
 	be := audioCppBackend(s, ov, class)
@@ -598,9 +602,9 @@ func emitAudioCppDirModel(b *strings.Builder, s Settings, row GgufRow, ov *Overr
 		}
 		weights := shared + lmGB + trGB + rvqGB
 		opts := map[string]string{
-			"language_model_gguf":    lm,
-			"rvq_depth_decoder_gguf": rvq,
-			"flow_transformer_gguf":  transformer,
+			family + ".language_model_gguf":    lm,
+			family + ".rvq_depth_decoder_gguf": rvq,
+			family + ".flow_transformer_gguf":  transformer,
 		}
 		writeAudioCppEntry(b, s, row, ov, name, family, task, strings.ReplaceAll(dir, "\\", "/"), opts, round(weights, 2), weights+audioCppMusicOverheadGB)
 		*emitted = append(*emitted, name)

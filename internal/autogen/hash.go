@@ -328,7 +328,9 @@ const hashCacheSuffix = ".modelhash"
 // skipped instead of emitted as a chat LLM.
 // v104: ace_step models carry sessionOptions ace_step.mem_saver, which makes a
 // seed reproduce byte for byte regardless of what the process rendered before.
-const genVersion = "v104"
+// v105: MiniMax Music 3 session options carry the family prefix audio.cpp
+// looks them up by; bare keys were ignored and the server wanted q4_0 files.
+const genVersion = "v105"
 
 // hashedInput reports whether a file under a models root can change what
 // discovery sees: a gguf, a safetensors (encoder pool components and HF weight

@@ -419,7 +419,9 @@ cost on warm requests (Vulkan, 20 s: ~40 s either way).
 `transformer_<q>.gguf` and `rvq_depth_decoder_<q>.gguf` carry none. `audioCppDirPackageFamily`
 recognises the package from its shared file, and `emitAudioCppDirModel` emits ONE model per
 complete quant (`<dir base minus -gguf>-<q>`), with `path` set to the directory and the quant's
-components named through `audiocpp.sessionOptions` (`language_model_gguf`,
-`rvq_depth_decoder_gguf`, `flow_transformer_gguf`). A quant missing its language model or
+components named through `audiocpp.sessionOptions` (`minimax_music3.language_model_gguf`,
+`.rvq_depth_decoder_gguf`, `.flow_transformer_gguf`). **Session option keys carry the family
+prefix**, though `model_specs` lists them bare: the server ignores a bare key and falls back to
+the spec default (`language_model_q4_0.gguf`), failing the load with "file does not exist". A quant missing its language model or
 transformer is not emitted; with none complete the package is a `# SKIPPED ... no complete quant`
 comment, which is also what a half-finished download looks like.
